@@ -39,6 +39,8 @@ set(foxsdr_slint_sources main.cpp host_logic.cpp host_duties.cpp kit_logic.cpp p
 list(APPEND foxsdr_slint_sources workspace_logic.cpp workspace_publish.cpp workspace_testseam.cpp)
 # THE STRIP, THE AUDIO MIX, THE STATUS CHIPS AND THE ADD-A-RADIO CARD (docs/multi-radio-records/screen-s4.md): their logic and their publisher into the window
 list(APPEND foxsdr_slint_sources radio_mix_logic.cpp radio_mix_publish.cpp)
+# SCREEN STAGE S5 (docs/multi-radio-records/screen-s5.md): Link tuning (link_logic) and what the screen remembers of the workspace (workspace_prefs, in the setting the 3D views use)
+list(APPEND foxsdr_slint_sources link_logic.cpp workspace_prefs.cpp)
 list(APPEND foxsdr_slint_sources globe_scene.cpp solar_ephemeris.cpp globe_logic.cpp globe_draw.cpp globe_compositor.cpp globe_publish.cpp)
 if(WIN32)
     enable_language(RC)

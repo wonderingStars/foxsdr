@@ -1,0 +1,81 @@
+#! frames=1500 size=1600x900
+# link-follow: LINK TUNING with three LIVE radios (screen stage S5; docs/multi-radio-records/screen-s5.md). Radio 1 is the engine's (100.300 MHz), radios 2 and 3 are GENERATOR radios opened through the
+# real RADIO_ADD (100.000 MHz each). Link is OFF by default: tuning radio 1 by one step (the tuneStepUp key, Ctrl+Up: 12.5 kHz in WFM, the engine's own raster) moves nobody. With "Link tuning" on, one step on radio 1 moves radios 2 and 3 by
+# the same step, so the gaps are kept; selecting radio 3 (Ctrl+3, the new chord) and tuning it one step down moves the others one step down. A radio taken out of the group by its pane's link key is not moved and
+# does not move the others; put back, it takes the gap it has then. Link off again leaves everything where it is. Every frequency is read back from the engine's own state of that radio.
+10 state workspace.radios == 1
+state workspace.link == 0
++1 radio add 2 60000
++1 radio add 3 90000
++30 state workspace.radios == 3
++1 click "2 x 2"
++15 state workspace.shown == 2
+state workspace.link == 0
+state workspace.r.1.tuned == 100300000
+state workspace.r.2.tuned == 100000000
+state workspace.r.3.tuned == 100000000
++1 expect "Link tuning" checked equals "false"
+state workspace.link.1 == 0
+# Link off: one step on radio 1 moves radio 1 only
++1 key ctrl+up
++12 state workspace.r.1.tuned == 100312500
+state workspace.r.2.tuned == 100000000
+state workspace.r.3.tuned == 100000000
+# Link on: every open radio joins (the key shows it; each pane carries a link key)
++1 click "Link tuning"
++6 state workspace.link == 1
+state workspace.linked == "1,2,3"
+expect "Link tuning" checked equals "true"
+expect "Link Radio 1" checked equals "true"
+expect "Link Radio 2" checked equals "true"
+expect "Link Radio 3" checked equals "true"
+state workspace.link.2 == 1
++1 key ctrl+up
++14 state workspace.r.1.tuned == 100325000
+state workspace.r.2.tuned == 100012500
+state workspace.r.3.tuned == 100012500
++1 shot "link-follow-on.png"
+# selecting radio 3 by chord and tuning it one step down moves the others one step down
++1 key ctrl+3
++8 state workspace.selected == 3
++1 key ctrl+down
++14 state workspace.r.3.tuned == 100000000
+state workspace.r.1.tuned == 100312500
+state workspace.r.2.tuned == 100000000
+# radio 3 out of the group by its pane's link key: not moved, does not move the others
++1 click "Link Radio 3"
++6 state workspace.link.3 == 0
+state workspace.linked == "1,2"
+expect "Link Radio 3" checked equals "false"
++1 key ctrl+1
++8 state workspace.selected == 1
++1 key ctrl+up
++14 state workspace.r.1.tuned == 100325000
+state workspace.r.2.tuned == 100012500
+state workspace.r.3.tuned == 100000000
++1 key ctrl+3
++8 state workspace.selected == 3
++1 key ctrl+up
++14 state workspace.r.3.tuned == 100012500
+state workspace.r.1.tuned == 100325000
+state workspace.r.2.tuned == 100012500
+# radio 3 back in: the gap it has at that moment (radios 2 and 3 level at 100.0125 MHz, radio 1 at 100.325) is kept from here on
++1 click "Link Radio 3"
++6 state workspace.link.3 == 1
+state workspace.linked == "1,2,3"
++1 key ctrl+1
++8 state workspace.selected == 1
++1 key ctrl+up
++14 state workspace.r.1.tuned == 100337500
+state workspace.r.2.tuned == 100025000
+state workspace.r.3.tuned == 100025000
++1 shot "link-follow-three.png"
+# Link off again: nothing moves, the pane keys go, tuning radio 1 moves radio 1 only
++1 click "Link tuning"
++6 state workspace.link == 0
+state workspace.linked == ""
+expect "Link tuning" checked equals "false"
++1 key ctrl+up
++14 state workspace.r.1.tuned == 100350000
+state workspace.r.2.tuned == 100025000
+state workspace.r.3.tuned == 100025000

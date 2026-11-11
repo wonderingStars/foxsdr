@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <thread>
 #include <type_traits>
 #include <cmath>
 #include <cstdio>
@@ -80,6 +81,8 @@
 #include "workspace_publish.hpp"
 #include "radio_mix_logic.hpp"
 #include "radio_mix_publish.hpp"
+#include "link_logic.hpp"
+#include "workspace_prefs.hpp"
 #include "workspace_testseam.hpp"
 #include "plugin_kit.hpp"
 #include "signal_publish.hpp"
@@ -358,6 +361,13 @@ int main(int argc, char** argv) {
     std::array<FoxReceiverState, kMaxRadios> deckStates{};
     std::array<bool, kMaxRadios> deckHave{};
     std::vector<int> chipRadios;               // the radio of each status chip the deck put in front of today's (a click on the chip selects it)
+    // STAGE S5 (docs/multi-radio-records/screen-s5.md): Link tuning (linked radios move together and keep their gaps), what the screen remembers of the workspace (the saved layout, in the 3D views' interface-half
+    // setting), a bounded run's tuning ranges (the product cannot ask a device for its range) and the note Start together leaves for the record (the time between the radios' first frames, measured in a bounded run).
+    LinkGroup linkGroup;
+    WorkspaceMemory wsMemory;
+    std::array<LinkRange, kMaxRadios> testRanges{};
+    long wsSaveSince = -1;
+    std::string togetherNote = "no start together yet";
     // TEST ONLY (workspace_testseam.hpp): a BOUNDED run's FOXSDR_SLINT_TEST_RADIOS=<2..8> makes radios 2 to N from made-up answers, so the drive harness can show, drive and shoot the panes before stage 4
     // has live radios. Never in a session: the gate is the bounded run, and no control reaches it.
     std::unique_ptr<SeamRadios> seam;
@@ -608,10 +618,14 @@ int main(int argc, char** argv) {
             }
         } else if (r.op == FOXAPI_OP_RADIO_REMOVE || r.op == FOXAPI_OP_RADIO_ADD || r.op == FOXAPI_OP_RADIO_AUDIO) {
             refreshRadios();
+            if (r.op == FOXAPI_OP_RADIO_REMOVE && r.status == FOXAPI_OK && wsMemory.userSelected(workspace.selectedRadio(), workspace.page())) { wsSaveSince = static_cast<long>(tickNo); }
         }
     };
     // Selecting a radio is the session's focus (design 3.2): the engine is asked, and the window's selection follows when it says yes.
-    const auto selectRadio = [&](int radio) { (void)workspace.select(radio, engineReads); };
+    // (a selection the USER made is part of the saved layout; one the engine forced - a radio went away - is not: workspace_prefs.hpp)
+    const auto selectRadio = [&](int radio) {
+        if (workspace.select(radio, engineReads)) { if (wsMemory.userSelected(workspace.selectedRadio(), workspace.page())) { wsSaveSince = static_cast<long>(tickNo); } }
+    };
     const auto setFrequency = [&](double hz) { FoxCommand c = op(FOXAPI_OP_SET_FREQUENCY); c.num[0] = hz; submit(c); };
     const auto stepTune = [&](int dir, double step) { FoxCommand c = op(FOXAPI_OP_STEP_TUNE); c.ival[0] = dir; c.num[0] = step; submit(c); };
     const auto setMode = [&](std::uint32_t demod) { FoxCommand c = op(FOXAPI_OP_SET_MODE); c.ival[0] = static_cast<int64_t>(demod); submit(c); };
@@ -1024,7 +1038,7 @@ int main(int argc, char** argv) {
         const auto viewOf = [&](int radio) -> RadioView& { return radios.at(radio - 1); };
         paneGestures = std::make_unique<PaneGestures>(radios, [&](const FoxCommand& c, std::uint32_t radio) { submit(c, radio); });
         wm.on_layout_selected([&](int l) { workspace.setLayout(l); });
-        wm.on_page_selected([&](int p) { workspace.setPage(p); });
+        wm.on_page_selected([&](int p) { workspace.setPage(p); if (wsMemory.userPage(workspace.page())) { wsSaveSince = static_cast<long>(tickNo); } });
         wm.on_select_requested([&](int r) { selectRadio(r); });
         wm.on_stop_clicked([&](int r) { paneGestures->stop(r); });
         const auto paneHoverAt = [&](int r, float x, float y) { paneHover[static_cast<std::size_t>(std::clamp(r - 1, 0, kMaxRadios - 1))] = (x >= 0 && y >= 0) ? std::make_pair(x, y) : std::make_pair(-1.f, -1.f); };
@@ -1101,14 +1115,84 @@ int main(int argc, char** argv) {
         wm.on_remove_requested([&](int r) {
             if (r < 2) { return; }
             if (removeNeedsConfirm(stateOf(r))) { removeConfirm = r; return; }
+            linkGroup.forget(r - 1);
             FoxCommand c = op(FOXAPI_OP_RADIO_REMOVE); c.ival[0] = r; submit(c);
         });
         wm.on_remove_confirmed([&] {
-            if (removeConfirm >= 2) { FoxCommand c = op(FOXAPI_OP_RADIO_REMOVE); c.ival[0] = removeConfirm; submit(c); }
+            if (removeConfirm >= 2) { linkGroup.forget(removeConfirm - 1); FoxCommand c = op(FOXAPI_OP_RADIO_REMOVE); c.ival[0] = removeConfirm; submit(c); }
             removeConfirm = 0;
         });
         wm.on_remove_cancelled([&] { removeConfirm = 0; });
         ui->on_status_clicked([&](int i) { if (i >= 0 && i < static_cast<int>(chipRadios.size())) { selectRadio(chipRadios[static_cast<std::size_t>(i)]); } });
+    }
+    // ---- STAGE S5: Link tuning, Start together and the saved layout (docs/multi-radio-records/screen-s5.md) ----
+    {
+        auto& wm = ui->global<WorkspaceModel>();
+        // WHAT WAS SAVED comes back at the start: the chosen layout, each radio's splitter, Link and the radios left out of the group. The selected radio and the page wait for their radios (restoreDue, in the
+        // tick). Nothing here writes: the record is changed only by what the user does from now on (a restart that comes back with one radio leaves the saved eight-radio layout as it was).
+        wsMemory.load(duties.interfaceHalf().view3d);
+        const SavedWorkspace& sv = wsMemory.saved();
+        if (sv.present) {
+            workspace.setLayout(sv.layout);
+            std::vector<float> sp(sv.splits.begin(), sv.splits.end());
+            wm.set_splits(std::make_shared<slint::VectorModel<float>>(std::move(sp)));
+            linkGroup.restore(sv.linkOn, sv.excluded);
+        }
+        wm.on_link_toggled([&] { linkGroup.setOn(!linkGroup.on(), workspace.mask()); });
+        wm.on_pane_link_clicked([&](int r) { (void)linkGroup.setLinked(r - 1, !linkGroup.linked(r - 1, workspace.mask()), workspace.mask()); });
+        // START TOGETHER is ONE command, RUN 1 aimed at every radio (FOXAPI_TARGET_ALL_RADIOS), which the engine applies in one pass. In a bounded run the host also MEASURES what "together" came to: the engine
+        // stamps each frame with its own clock (FoxSpectrumInfo.unixMs), so the first frame each started radio publishes afterwards is read as soon as it is there and the spread between the first and the
+        // last radio's is the answer (state workspace.together). The product does not measure: it sends the command.
+        wm.on_together_clicked([&] {
+            const bool probe = bounded.bounded() && FOXAPI_HAS(api, read_radio_spectrum);
+            std::array<std::uint64_t, kMaxRadios> before{};
+            std::array<bool, kMaxRadios> want{};
+            float one[1] = {0.f};
+            int expected = 0;
+            if (probe) {
+                for (int s = 0; s < kMaxRadios; ++s) {
+                    if (!workspace.occupied(s) || (deckStates[static_cast<std::size_t>(s)].flags & FOXAPI_RX_RUNNING) != 0u) { continue; }
+                    FoxSpectrumInfo info{}; info.structSize = sizeof(info);
+                    (void)api->read_radio_spectrum(session, static_cast<std::uint32_t>(s) + 1u, 0, &info, one, 1);
+                    before[static_cast<std::size_t>(s)] = info.seq;
+                    want[static_cast<std::size_t>(s)] = true;
+                    ++expected;
+                }
+            }
+            const auto t0 = std::chrono::steady_clock::now();
+            FoxCommand c = op(FOXAPI_OP_RUN); c.ival[0] = 1;
+            submit(c, FOXAPI_TARGET_ALL_RADIOS);
+            if (!probe) { return; }
+            std::array<long long, kMaxRadios> engineMs{};
+            std::array<double, kMaxRadios> hostMs{};
+            std::array<bool, kMaxRadios> got{};
+            int have = 0;
+            while (have < expected && std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(3000)) {
+                for (int s = 0; s < kMaxRadios; ++s) {
+                    if (!want[static_cast<std::size_t>(s)] || got[static_cast<std::size_t>(s)]) { continue; }
+                    FoxSpectrumInfo info{}; info.structSize = sizeof(info);
+                    const int32_t rc = api->read_radio_spectrum(session, static_cast<std::uint32_t>(s) + 1u, before[static_cast<std::size_t>(s)], &info, one, 1);
+                    if (rc >= 0 && rc != FOXAPI_NO_CHANGE && info.seq > before[static_cast<std::size_t>(s)]) {
+                        got[static_cast<std::size_t>(s)] = true;
+                        engineMs[static_cast<std::size_t>(s)] = info.unixMs;
+                        hostMs[static_cast<std::size_t>(s)] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+                        ++have;
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+            }
+            long long eMin = 0, eMax = 0; double hMin = 0, hMax = 0; bool first = true;
+            for (int s = 0; s < kMaxRadios; ++s) {
+                if (!got[static_cast<std::size_t>(s)]) { continue; }
+                if (first) { eMin = eMax = engineMs[static_cast<std::size_t>(s)]; hMin = hMax = hostMs[static_cast<std::size_t>(s)]; first = false; }
+                eMin = std::min(eMin, engineMs[static_cast<std::size_t>(s)]); eMax = std::max(eMax, engineMs[static_cast<std::size_t>(s)]);
+                hMin = std::min(hMin, hostMs[static_cast<std::size_t>(s)]); hMax = std::max(hMax, hostMs[static_cast<std::size_t>(s)]);
+            }
+            char b[200];
+            std::snprintf(b, sizeof(b), "radios=%d first=%d engineSpreadMs=%lld hostFirstMs=%.1f hostLastMs=%.1f hostSpreadMs=%.1f", expected, have, eMax - eMin, hMin, hMax, hMax - hMin);
+            togetherNote = b;
+            std::fprintf(stderr, "foxsdr-slint: start together: %s\n", b);
+        });
     }
     // The status bar's two keys open the SYSTEM bank's report sheet through the report-open effect (system_publish.cpp: applyReportOpen -> the page of that kind).
     ui->on_feature_request_clicked([&] { ui->global<SystemEvents>().invoke_report_open(0); });
@@ -1200,6 +1284,16 @@ int main(int argc, char** argv) {
         else if (id == "bankView") { bankIndex = 2; ui->set_bank_index(2); } else if (id == "bankExtend") { bankIndex = 3; ui->set_bank_index(3); }
         else if (id == "bankSystem") { bankIndex = 4; ui->set_bank_index(4); }
         else if (id == "openSettings") { bankIndex = 4; ui->set_bank_index(4); openSections[4].insert(5); }
+        // STAGE S5: Ctrl+1 to Ctrl+8 select a radio (one that is not open is left alone), Alt+PageUp / Alt+PageDown turn the page of radios (where One is shown, they select the neighbouring radio)
+        else if (id.size() == 12 && id.rfind("selectRadio", 0) == 0 && id[11] >= '1' && id[11] <= '8') { const int r = id[11] - '0'; if (workspace.occupied(r - 1)) { selectRadio(r); } }
+        else if (id == "radioPagePrev" || id == "radioPageNext") {
+            const int dW = static_cast<int>(ui->get_win_w()), dH = static_cast<int>(ui->get_win_h());
+            const bool oneShown = workspace.shownLayout(dW, dH) == kLayoutOne;
+            if (workspace.stepPage(id == "radioPagePrev" ? -1 : 1, dW, dH, engineReads)) {
+                const bool saved = oneShown ? wsMemory.userSelected(workspace.selectedRadio(), workspace.page()) : wsMemory.userPage(workspace.page());
+                if (saved) { wsSaveSince = static_cast<long>(tickNo); }
+            }
+        }
         else if (id == "escape" && scopeBank.radarOn() && !ui->get_editing() && !ui->get_about_open()) { scopeBank.leaveRadar(); }   // the radar scope's second way out (aw.cpp 13589): not while a field is being edited
         else if (id == "escape") {
             // ONE LAYER A PRESS (docs 6.61, key_dispatch.hpp escapeStep): the import dialog, then the Plugin store's plugin page (back to the grid), else the overlays
@@ -1584,7 +1678,34 @@ int main(int argc, char** argv) {
             deck.addOpen = addOpen;
             deck.removeConfirm = removeConfirm;
             if (removeConfirm != 0 && !workspace.occupied(removeConfirm - 1)) { removeConfirm = 0; deck.removeConfirm = 0; }
+            deck.linkOn = linkGroup.on();
             deckPublisher.publish(deck);
+            // LINK TUNING (link_logic.hpp): every open radio's tuned frequency is read (above, once a tick); a move of one linked radio is asked of the others as SET_FREQUENCY aimed at each follower, so the gaps are
+            // kept. A radio at a limit stays where its device leaves it (the pane says so), the others move.
+            {
+                std::array<LinkReading, kMaxRadios> rd{};
+                for (int s = 0; s < kMaxRadios; ++s) { rd[static_cast<std::size_t>(s)].valid = workspace.occupied(s) && deckHave[static_cast<std::size_t>(s)]; rd[static_cast<std::size_t>(s)].tunedHz = deckStates[static_cast<std::size_t>(s)].tunedHz; }
+                for (const LinkMove& m : linkGroup.step(rd, workspace.mask(), [&](int slot) { return testRanges[static_cast<std::size_t>(std::clamp(slot, 0, kMaxRadios - 1))]; })) {
+                    FoxCommand c = op(FOXAPI_OP_SET_FREQUENCY);
+                    c.num[0] = m.hz;
+                    submit(c, static_cast<std::uint32_t>(m.slot) + 1u);
+                }
+            }
+            // THE SAVED LAYOUT: a saved selection comes back when its radio is open (inside the first ten seconds); then what the user changed is kept, a moment after the last change
+            {
+                int rr = 0, rp = 0;
+                if (wsMemory.restoreDue(static_cast<long>(tickNo), workspace.mask(), rr, rp)) { (void)workspace.select(rr, engineReads); workspace.setPage(rp); }
+                std::array<float, 8> sp{};
+                const auto splits = ui->global<WorkspaceModel>().get_splits();
+                for (std::size_t i = 0; i < sp.size(); ++i) { sp[i] = splits && i < splits->row_count() ? splits->row_data(i).value_or(kPaneSplitDefault) : kPaneSplitDefault; }
+                if (wsMemory.observe(workspace.layout(), sp, linkGroup.on(), linkGroup.excluded())) { wsSaveSince = static_cast<long>(tickNo); }
+                if (wsMemory.dirty() && static_cast<long>(tickNo) - wsSaveSince >= 15) {
+                    cascade::core::AppConfig half = duties.interfaceHalf();
+                    const std::string text = wsMemory.text(half.view3d);
+                    if (text != half.view3d) { half.view3d = text; (void)duties.saveInterfaceHalf(half); }
+                    wsMemory.markWritten();
+                }
+            }
         }
         // the status bar
         HostExtras x;
@@ -1602,7 +1723,28 @@ int main(int argc, char** argv) {
             // With more than four radios, or in a window narrower than 1500 px, the chip is the radio's tag and its lamp only (the status bar has no room for the state words beside today's chips and its two
             // keys); the state word and the figures are its detail lines, which a click on a chip opens
             const bool terse = workspace.radioCount() > 4 || static_cast<int>(ui->get_win_w()) < 1500;
-            for (const RadioChipData& rc : deckPublisher.chips(deck)) {
+            // STAGE S5 (found in the 1280 x 720 shot with eight radios: the status bar's last key was cut off): with more than four radios in a window under 1500 px even the tag-and-lamp chips are too many for the
+            // bar, so they become ONE chip, "Radios 1-8", with the worst state's lamp and one line per radio (state, frequency, mode) that a click opens; the MASTER lamps in the bar over the view say the same
+            // and select (the chip no longer does).
+            const bool collapse = workspace.radioCount() > 4 && static_cast<int>(ui->get_win_w()) < 1500;
+            if (collapse) {
+                const std::vector<RadioChipData> chips = deckPublisher.chips(deck);
+                std::vector<slint::SharedString> chipLines;
+                bool anyRun = false, anyFail = false;
+                std::string sig = "radios";
+                for (const RadioChipData& rc : chips) {
+                    anyRun = anyRun || (rc.lampLit && !rc.lampRed);
+                    anyFail = anyFail || rc.lampRed;
+                    chipLines.push_back(ss(rc.key + "  " + rc.value + "  " + rc.detail));
+                    sig += "|" + rc.key + rc.value + rc.detail;
+                }
+                const std::string key = pageLabel(chips.empty() ? 1 : chips.front().radio, chips.empty() ? 1 : chips.back().radio);
+                chipRadios.push_back(0);
+                cardSig += key + sig + (anyRun ? "G" : "-") + (anyFail ? "R" : "-") + ";";
+                cards.push_back({ss(key), ss(""), ss(""), anyFail ? ChipTone::Err : ChipTone::Neutral, anyFail ? LampState::Red : anyRun ? LampState::Green : LampState::Off, true,
+                                 std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(chipLines))});
+            }
+            for (const RadioChipData& rc : collapse ? std::vector<RadioChipData>() : deckPublisher.chips(deck)) {
                 chipRadios.push_back(rc.radio);
                 const std::string chipValue = terse ? std::string() : rc.value;
                 cardSig += rc.key + "|" + chipValue + "|" + (terse ? rc.value + "," + rc.detail : rc.detail) + "|" + std::to_string(rc.tone) + (rc.lampLit ? "L" : "-") + (rc.lampRed ? "R" : "-") + ";";
@@ -1673,6 +1815,13 @@ int main(int argc, char** argv) {
                 const auto h = paneHover[static_cast<std::size_t>(slot)];
                 ctx.hoverX = h.first;
                 if (h.first >= 0) { ctx.cursorText = cursorText(rv.hzAtFrac(h.first), rv.dbAtFrac(h.first)); }
+                ctx.linkShown = linkGroup.on();
+                {
+                    const LinkState ls = linkGroup.stateOf(slot, workspace.mask());
+                    ctx.link = static_cast<int>(ls);
+                    ctx.linkLabel = paneLinkLabel(slot + 1);
+                    ctx.linkTip = ls == LinkState::CouldNotFollow ? couldNotFollowTip(slot + 1, fmtMHz(rv.state.tunedHz)) : paneLinkTip(ls == LinkState::Linked);
+                }
                 workspacePublisher.publishPane(rv, ctx);
             }
         }
@@ -2000,6 +2149,26 @@ int main(int argc, char** argv) {
                 double sum = 0; for (const double x : v) { sum += x; }
                 out = what == "tickn" ? std::to_string(v.size()) : what == "tickms" ? fmt("%.2f", sum / static_cast<double>(v.size())) : fmt("%.2f", v[static_cast<std::size_t>(static_cast<double>(v.size() - 1) * 0.95)]);
             }
+            // STAGE S5: link (Link tuning is on, 0/1), linked (the radios in the group), link.<n> (0 left out or Link off, 1 linked, 2 could not follow), intended.<n> (the frequency the group wants of radio n, Hz),
+            // together (what the last Start together measured, a bounded run), saved (the saved layout's text as the screen holds it), savedview (the interface half's whole setting text, as it would be written)
+            else if (what == "link") { out = linkGroup.on() ? "1" : "0"; }
+            else if (what == "linked") { out.clear(); for (int s = 0; s < kMaxRadios; ++s) { if (linkGroup.linked(s, workspace.mask())) { if (!out.empty()) { out += ","; } out += std::to_string(s + 1); } } }
+            else if (what.rfind("link.", 0) == 0) { out = std::to_string(static_cast<int>(linkGroup.stateOf(slotOf(what.substr(5)), workspace.mask()))); }
+            else if (what.rfind("intended.", 0) == 0) { out = fmt("%.0f", linkGroup.intendedHz(slotOf(what.substr(9)))); }
+            else if (what == "pagekeys") { const auto pl = ui->global<WorkspaceModel>().get_page_labels(); out = std::to_string(pl ? pl->row_count() : 0); }   // (no model has been set until the first page key is offered)   // the page keys the bar has (0 where One is shown)
+            else if (what == "together") { out = togetherNote; }
+            else if (what == "togetherms") {   // the engine-clock spread of the first frames of the last Start together, in ms ("" until one has been measured)
+                const std::size_t at = togetherNote.find("engineSpreadMs=");
+                if (at == std::string::npos) { return std::string("no start together has been measured yet"); }
+                out = std::to_string(std::atoll(togetherNote.c_str() + at + 15));
+            }
+            else if (what.rfind("split.", 0) == 0) {   // a radio's splitter share as the pane's model holds it, in percent
+                const auto sp = ui->global<WorkspaceModel>().get_splits();
+                const std::size_t i = static_cast<std::size_t>(slotOf(what.substr(6)));
+                out = std::to_string(static_cast<int>(std::lround(static_cast<double>(sp && i < sp->row_count() ? sp->row_data(i).value_or(kPaneSplitDefault) : kPaneSplitDefault) * 100.0)));
+            }
+            else if (what == "saved") { out = workspaceBody(wsMemory.saved()); }
+            else if (what == "savedview") { out = duties.interfaceHalf().view3d; }
             else if (what == "solo") { out = std::to_string(soloRadio); }
             else if (what == "chips") { out.clear(); for (const int r : chipRadios) { if (!out.empty()) { out += ","; } out += std::to_string(r); } }
             else if (what == "free") { out = std::to_string(kMaxRadios - workspace.radioCount()); }
@@ -2018,7 +2187,15 @@ int main(int argc, char** argv) {
         return "no state named " + name;
     };
     // The drive script's `radio add|remove` (input_script.hpp; a bounded run only): a GENERATOR radio opened or removed through the engine's real RADIO_ADD / RADIO_REMOVE, started running.
-    const foxsdr::slintdrive::RadioHook radioHook = [&](const std::string& what, int n, double toneHz) -> std::string {
+    const foxsdr::slintdrive::RadioHook radioHook = [&](const std::string& what, int n, double toneHz, double hz2) -> std::string {
+        if (what == "range") {   // `radio range <n> <lo> <hi>`: a made-up tuning range for Link tuning (0 0 takes it away)
+            if (n < 1 || n > kMaxRadios) { return "radio range takes a radio from 1 to 8"; }
+            LinkRange& lr = testRanges[static_cast<std::size_t>(n - 1)];
+            lr.known = hz2 > 0.0;
+            lr.loHz = toneHz;
+            lr.hiHz = hz2;
+            return std::string();
+        }
         FoxCommand c = op(what == "add" ? FOXAPI_OP_RADIO_ADD : FOXAPI_OP_RADIO_REMOVE);
         c.ival[0] = n;
         if (what == "add") { c.ival[1] = 1; std::snprintf(c.text, sizeof(c.text), "generator"); c.num[0] = toneHz; }

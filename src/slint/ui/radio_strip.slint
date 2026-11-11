@@ -1,6 +1,6 @@
 // FoxSDR Slint front end - THE MULTI-RADIO STRIP, AUDIO MIX AND SECTIONS TAG (docs/multi-radio-screen-design.md 3.4, built in stage S4; docs/multi-radio-records/screen-s4.md).
 //
-//   RadioStripBlock   the block at the left of the receiver strip (a window of 1760 px or more) or one row of the 30 px workspace bar (a narrower window), shown only when more than one radio is open:
+//   RadioStripBlock   the block at the left of the receiver strip (a window of 1760 px or more; a narrower window carries its three pieces in the workspace bar, on every tab), shown only when more than one radio is open:
 //                     "Controls follow" with the radios of the page shown, STOP Rn and STOP ALL / START ALL, and the MASTER lamps (one per open radio, a click selects it and turns the page to it)
 //   AudioMixBlock     the foot of the sections panel, only with more than one radio: per radio the route (both, left, right, none), MUTE, SOLO and the volume
 //   RadioTag          the R-tag over the sections panel's header: the radio the panel and the banks show
@@ -62,7 +62,7 @@ component MasterLampKey inherits Rectangle {
 }
 
 // The three groups of the block, shared by its tall form (the strip) and its flat form (the workspace bar).
-component SelectorKeys inherits SegGroup {
+export component SelectorKeys inherits SegGroup {
     small: true;
     HorizontalLayout {
         padding: 2px;
@@ -78,7 +78,7 @@ component SelectorKeys inherits SegGroup {
         }
     }
 }
-component StopKeys inherits HorizontalLayout {
+export component StopKeys inherits HorizontalLayout {
     spacing: 6px;
     alignment: start;
     Key {
@@ -98,7 +98,7 @@ component StopKeys inherits HorizontalLayout {
         clicked => { WorkspaceModel.stop-all-clicked(); }
     }
 }
-component MasterLamps inherits HorizontalLayout {
+export component MasterLamps inherits HorizontalLayout {
     spacing: 0px;
     alignment: start;
     for m in WorkspaceModel.masters : MasterLampKey {
@@ -112,8 +112,8 @@ component MasterLamps inherits HorizontalLayout {
     }
 }
 
-// THE BLOCK, in two forms that read the same model. RadioStripBlock is the strip's (four rows: "Controls follow", the selector, STOP Rn and STOP ALL, MASTER and the lamps), 262 px wide, for a
-// window of 1760 px or more. RadioStripRow is one row for the 30 px workspace bar, with no captions: the strip of a narrower window has no room for a block of its own (at 1440 it pushed BIAS TEE out).
+// THE BLOCK. RadioStripBlock is the strip's (four rows: "Controls follow", the selector, STOP Rn and STOP ALL, MASTER and the lamps), 262 px wide, for a window of 1760 px or more. A narrower window's strip has
+// no room for a block of its own (at 1440 it pushed BIAS TEE out): there the three pieces above are three groups of the workspace bar (workspace.slint), which wraps them onto as many rows as the width asks.
 export component RadioStripBlock inherits Rectangle {
     min-width: 262px;
     preferred-width: 262px;
@@ -132,21 +132,6 @@ export component RadioStripBlock inherits Rectangle {
             VerticalLayout { alignment: center; Caption { label: @tr("MASTER"); } }
             MasterLamps { }
         }
-    }
-}
-
-export component RadioStripRow inherits Rectangle {
-    min-width: row.min-width;
-    preferred-width: row.preferred-width;
-    max-width: row.preferred-width;
-    accessible-role: groupbox;
-    accessible-label: @tr("Controls follow");
-    row := HorizontalLayout {
-        spacing: 10px;
-        alignment: start;
-        VerticalLayout { alignment: center; SelectorKeys { } }
-        VerticalLayout { alignment: center; StopKeys { } }
-        VerticalLayout { alignment: center; MasterLamps { } }
     }
 }
 

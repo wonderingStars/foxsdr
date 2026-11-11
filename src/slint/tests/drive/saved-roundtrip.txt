@@ -1,0 +1,25 @@
+#! frames=1500 size=1600x900
+# saved-roundtrip, the first half: WHAT THE USER DOES IS SAVED (screen stage S5; docs/multi-radio-records/screen-s5.md). Four live radios; Side by side, Link tuning on, radio 2 taken out of the group, radio 3
+# selected by Ctrl+3. A moment after the last change the screen writes its record into the interface half (the setting the 3D views use) and the engine's table holds it: the text below is what saved-restore.txt is
+# seeded with (fixtures/saved-workspace-roundtrip.json), and the text of that seed's 3D view entry ("radar:...") is not part of this run, so only the workspace entry is compared. The one-radio window writes
+# nothing until the user acts: the first assertion.
+10 state workspace.radios == 1
+state workspace.savedview == ""
++1 radio add 2 60000
++1 radio add 3 90000
++1 radio add 4 120000
++30 state workspace.radios == 4
++40 state workspace.savedview == ""
++1 click "Side by side"
++15 state workspace.layout == 1
++1 click "Link tuning"
++6 state workspace.link == 1
++1 click "Link Radio 2"
++6 state workspace.link.2 == 0
++1 key ctrl+3
++8 state workspace.selected == 3
+state workspace.page == 1
++40 state workspace.saved == "lay=1,pg=1,sel=3,lk=1,ex=2,sp=45.45.45.45.45.45.45.45"
+state workspace.savedview == "workspace:lay=1,pg=1,sel=3,lk=1,ex=2,sp=45.45.45.45.45.45.45.45"
+state fact.config.interface contains "workspace:lay=1,pg=1,sel=3,lk=1,ex=2,sp=45.45.45.45.45.45.45.45"
++1 shot "saved-roundtrip-written.png"

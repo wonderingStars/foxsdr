@@ -1,0 +1,49 @@
+#! frames=1900 size=1280x720 bank=4 sections=4:0
+# bar-tabs: THE RADIOS' ROW ON EVERY TAB (screen stage S5; docs/multi-radio-records/screen-s5.md). In stage S4 the radios' selector, STOP keys and MASTER lamps were over the RECEIVER view only, so in a window under
+# 1760 px there was no STOP ALL in sight on the PATCH and SCOPE tabs. Now the bar is over every tab and the view under it starts below it. Three LIVE radios; on each tab a MASTER lamp and STOP ALL are operated with a
+# pointer click at their centre and the effect read back from the engine.
+10 state workspace.radios == 1
++1 radio add 2 60000
++1 radio add 3 90000
++30 state workspace.radios == 3
++1 click "SCOPE"
++10 state view == 2
++1 shot "bar-tabs-scope-workbench.png"
++1 press "Radio 3 master"
++8 state workspace.selected == 3
++1 press "Controls follow Radio 2"
++8 state workspace.selected == 2
++1 press "STOP ALL"
++15 state workspace.r.1.running == 0
+state workspace.r.2.running == 0
+state workspace.r.3.running == 0
++1 press "START ALL"
++15 state workspace.r.1.running == 1
+state workspace.r.2.running == 1
++1 click "PATCH"
++15 state view == 1
++1 shot "bar-tabs-patch-workbench.png"
++1 press "Radio 2 master"
++8 state workspace.selected == 2
++1 press "STOP R2"
++12 state workspace.r.2.running == 0
++1 press "STOP ALL"
++15 state workspace.r.3.running == 0
++1 click "RECEIVER"
++15 state view == 0
++1 shot "bar-tabs-receiver-workbench.png"
+# the same in Night Watch: the PATCH and SCOPE tabs with the radios' row over them
++1 choose "Theme" "Night Watch"
++12 state look.bg != "#15171b"
++1 click "SCOPE"
++10 state view == 2
++1 press "Radio 3 master"
++8 state workspace.selected == 3
++1 shot "bar-tabs-scope-night.png"
++1 click "PATCH"
++15 state view == 1
++1 press "Radio 2 master"
++8 state workspace.selected == 2
++1 shot "bar-tabs-patch-night.png"
++1 click "RECEIVER"
++15 state view == 0

@@ -1,0 +1,41 @@
+#! frames=1900 size=1600x900
+# link-remove: what happens to the group when a linked radio is REMOVED and when a radio is ADDED while Link is on (screen stage S5; docs/multi-radio-records/screen-s5.md), with LIVE radios. Radio 1 (100.300 MHz),
+# generator radios 2 and 3 (100.000 MHz each), Link on. Removing radio 2 (the real RADIO_REMOVE) leaves radios 1 and 3 a group: one step (12.5 kHz) on radio 1 still moves radio 3 and nothing else is disturbed (radio 3 keeps its
+# own frequency through the removal). Removing radio 3 too leaves one radio: tuning moves it alone. A radio added while Link is on (radio 2 again, 100.000 MHz) joins the group at once, with the gap it has: the next
+# step on radio 1 moves it by the same 12.5 kHz. Link stays on throughout.
+10 state workspace.radios == 1
++1 radio add 2 60000
++1 radio add 3 90000
++30 state workspace.radios == 3
++1 click "2 x 2"
++15 state workspace.shown == 2
++1 click "Link tuning"
++6 state workspace.link == 1
+state workspace.linked == "1,2,3"
++1 radio remove 2
++25 state workspace.radios == 2
+state workspace.cells == "1,0,3,0"
+state workspace.linked == "1,3"
+state workspace.link == 1
+state workspace.r.3.tuned == 100000000
+state workspace.r.1.tuned == 100300000
++1 key ctrl+up
++14 state workspace.r.1.tuned == 100312500
+state workspace.r.3.tuned == 100012500
++1 radio remove 3
++25 state workspace.radios == 1
+state workspace.linked == "1"
++1 key ctrl+up
++10 state workspace.r.1.tuned == 100325000
+# a radio added while Link is on joins the group: radio 2 comes back at 100.000 MHz
++1 radio add 2 60000
++30 state workspace.radios == 2
++1 click "Side by side"
++15 state workspace.shown == 1
+state workspace.linked == "1,2"
+state workspace.r.2.tuned == 100000000
++1 key ctrl+up
++14 state workspace.r.1.tuned == 100337500
+state workspace.r.2.tuned == 100012500
+state workspace.link == 1
++1 shot "link-remove-rejoined.png"

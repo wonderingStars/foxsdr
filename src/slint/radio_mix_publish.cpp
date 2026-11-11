@@ -4,6 +4,7 @@
 
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
+#include "link_logic.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -152,6 +153,23 @@ void DeckPublisher::publish(const DeckInputs& in) {
             g.set_remove_explain(ss(r > 0 ? removeExplain(st) : std::string()));
             g.set_remove_yes(ss(cascade::i18n::tr("Remove")));
             g.set_remove_no(ss(cascade::i18n::tr("Cancel")));
+        }
+    }
+    // ---- STAGE S5: the bar's Link tuning and Start together ----
+    {
+        bool anyStopped = false;
+        for (int s = 0; s < kMaxRadios; ++s) {
+            if (((in.mask >> s) & 1u) != 0u && (in.states[static_cast<std::size_t>(s)].flags & FOXAPI_RX_RUNNING) == 0u) { anyStopped = true; }
+        }
+        const std::string sig = std::string(in.linkOn ? "L" : "-") + (anyStopped ? "s" : "-");
+        if (sig != linkSig_) {
+            linkSig_ = sig;
+            g.set_link_on(in.linkOn);
+            g.set_link_text(ss(linkKeyLabel()));
+            g.set_link_tip(ss(linkKeyTip()));
+            g.set_together_text(ss(startTogetherLabel()));
+            g.set_together_tip(ss(startTogetherTip()));
+            g.set_together_enabled(anyStopped);
         }
     }
     // ---- the sections panel's tag ----

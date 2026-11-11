@@ -38,8 +38,8 @@ namespace foxsdr::slintdrive {
 // `state`: the host's read-back by name ("" when served, else the refusal); `shot`: the host's screenshot to a file.
 using StateReader = std::function<std::string(const std::string& name, std::string& out)>;
 using ShotWriter = std::function<std::string(const std::string& file)>;
-// `radio`: the host's test-only add/remove of a radio ("" when sent, else the refusal).
-using RadioHook = std::function<std::string(const std::string& what, int n, double toneHz)>;
+// `radio`: the host's test-only add/remove/range of a radio ("" when sent, else the refusal).
+using RadioHook = std::function<std::string(const std::string& what, int n, double toneHz, double hz2)>;
 
 template <class W>
 class SlintDriveTarget : public DriveTarget {
@@ -89,12 +89,45 @@ public:
 
     std::string key(const std::string& name) override {
         namespace kc = slint::platform::key_codes;
-        if (name.size() == 6 && name.rfind("ctrl+", 0) == 0) {
-            const char letter[2] = {name[5], '\0'};
-            keyDown(kc::Control);
-            keyTap(std::u8string(reinterpret_cast<const char8_t*>(letter)));
-            keyUp(kc::Control);
-            return std::string();
+        // A CHORD (ctrl+ shift+ alt+ in front of the key, docs 6.47 and screen stage S5): the modifiers are held, the key tapped, the modifiers let go
+        {
+            std::string rest = name;
+            bool ctrl = false, shift = false, alt = false;
+            if (rest.rfind("ctrl+", 0) == 0) { ctrl = true; rest.erase(0, 5); }
+            if (rest.rfind("shift+", 0) == 0) { shift = true; rest.erase(0, 6); }
+            if (rest.rfind("alt+", 0) == 0) { alt = true; rest.erase(0, 4); }
+            if ((ctrl || shift || alt) && !rest.empty()) {
+                std::u8string key;
+                if (rest.size() == 1) { key = std::u8string(1, static_cast<char8_t>(rest[0])); }
+                else if (rest == "pageup") { key = kc::PageUp; }
+                else if (rest == "pagedown") { key = kc::PageDown; }
+                else if (rest == "home") { key = kc::Home; }
+                else if (rest == "end") { key = kc::End; }
+                else if (rest == "up") { key = kc::UpArrow; }
+                else if (rest == "down") { key = kc::DownArrow; }
+                else if (rest == "left") { key = kc::LeftArrow; }
+                else if (rest == "right") { key = kc::RightArrow; }
+                else if (rest == "enter" || rest == "return") { key = kc::Return; }
+                else if (rest == "escape") { key = kc::Escape; }
+                else if (rest == "tab") { key = kc::Tab; }
+                else if (rest == "backspace") { key = kc::Backspace; }
+                else if (rest == "delete") { key = kc::Delete; }
+                else if (rest == "space") { key = kc::Space; }
+                else if (rest.size() >= 2 && rest[0] == 'f') {
+                    static const std::u8string_view fk[12] = {kc::F1, kc::F2, kc::F3, kc::F4, kc::F5, kc::F6, kc::F7, kc::F8, kc::F9, kc::F10, kc::F11, kc::F12};
+                    const int n = std::atoi(rest.c_str() + 1);
+                    if (n < 1 || n > 12) { return "no key named " + name; }
+                    key = std::u8string(fk[n - 1]);
+                } else { return "no key named " + name; }
+                if (ctrl) { keyDown(kc::Control); }
+                if (shift) { keyDown(kc::Shift); }
+                if (alt) { keyDown(kc::Alt); }
+                keyTap(key);
+                if (alt) { keyUp(kc::Alt); }
+                if (shift) { keyUp(kc::Shift); }
+                if (ctrl) { keyUp(kc::Control); }
+                return std::string();
+            }
         }
         std::u8string code;
         if (name.size() == 1) { code = std::u8string(1, static_cast<char8_t>(name[0])); }   // one character, as typed
@@ -108,6 +141,10 @@ public:
         else if (name == "down") { code = kc::DownArrow; }
         else if (name == "left") { code = kc::LeftArrow; }
         else if (name == "right") { code = kc::RightArrow; }
+        else if (name == "pageup") { code = kc::PageUp; }
+        else if (name == "pagedown") { code = kc::PageDown; }
+        else if (name == "home") { code = kc::Home; }
+        else if (name == "end") { code = kc::End; }
         else if (name.size() >= 2 && name[0] == 'f') {
             static const std::u8string_view fkeys[12] = {kc::F1, kc::F2, kc::F3, kc::F4, kc::F5, kc::F6, kc::F7, kc::F8, kc::F9, kc::F10, kc::F11, kc::F12};
             const int n = std::atoi(name.c_str() + 1);
@@ -128,6 +165,22 @@ public:
         const float x = pos.x + static_cast<float>(frac) * size.width;
         const float y = pos.y + size.height / 2;
         pointerClick(x, y);
+        return std::string();
+    }
+
+    // A drag from the control's centre by (dx, dy): the pointer goes down, moves in four steps and comes up at the end (a DragArea reports each move).
+    std::string drag(const std::string& labelSpec, double dx, double dy) override {
+        std::optional<slint::testing::ElementHandle> e;
+        std::string why = find(labelSpec, e);
+        if (!why.empty()) { return why; }
+        float x = 0, y = 0;
+        why = centre(labelSpec, *e, x, y);
+        if (!why.empty()) { return why; }
+        auto& w = ui_->window();
+        w.dispatch_pointer_move_event(slint::LogicalPosition({x, y}));
+        w.dispatch_pointer_press_event(slint::LogicalPosition({x, y}), slint::PointerEventButton::Left);
+        for (int i = 1; i <= 4; ++i) { w.dispatch_pointer_move_event(slint::LogicalPosition({x + static_cast<float>(dx) * static_cast<float>(i) / 4.f, y + static_cast<float>(dy) * static_cast<float>(i) / 4.f})); }
+        w.dispatch_pointer_release_event(slint::LogicalPosition({x + static_cast<float>(dx), y + static_cast<float>(dy)}), slint::PointerEventButton::Left);
         return std::string();
     }
 
@@ -180,7 +233,7 @@ public:
 
     std::string state(const std::string& name, std::string& out) override { return state_ ? state_(name, out) : "no state reader"; }
     std::string shot(const std::string& file) override { return shot_ ? shot_(file) : "no screenshot writer"; }
-    std::string radio(const std::string& what, int n, double toneHz) override { return radio_ ? radio_(what, n, toneHz) : "no radio hook"; }
+    std::string radio(const std::string& what, int n, double toneHz, double hz2) override { return radio_ ? radio_(what, n, toneHz, hz2) : "no radio hook"; }
 
     std::string dumpControls() override {
         int n = 0, all = 0, withRole = 0;

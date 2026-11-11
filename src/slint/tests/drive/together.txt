@@ -1,0 +1,41 @@
+#! frames=1500 size=1600x900
+# together: START TOGETHER with four LIVE radios (screen stage S5; docs/multi-radio-records/screen-s5.md). The bar's "Start together" key is live only while some radio is stopped. STOP ALL stops all four; one press
+# of "Start together" sends RUN to every open radio as one command (FOXAPI_TARGET_ALL_RADIOS) and all four run. In a bounded run the host measures what "together" came to: the engine stamps each frame with its own
+# clock, the first frame each started radio publishes afterwards is read as soon as it is there (state workspace.together, workspace.togetherms = the spread between the first and the last radio's first frame, in ms,
+# on the engine's clock). The figure is printed in the run's log.
+10 state workspace.radios == 1
++1 radio add 2 60000
++1 radio add 3 90000
++1 radio add 4 110000
++30 state workspace.radios == 4
++1 click "2 x 2"
++10 state workspace.shown == 2
++1 expect "Start together" enabled equals "false"
++1 click "STOP ALL"
++20 state workspace.r.1.running == 0
+state workspace.r.2.running == 0
+state workspace.r.3.running == 0
+state workspace.r.4.running == 0
++1 expect "Start together" enabled equals "true"
++1 click "Start together"
++30 state workspace.r.1.running == 1
+state workspace.r.2.running == 1
+state workspace.r.3.running == 1
+state workspace.r.4.running == 1
+state workspace.together contains "first=4"
+state workspace.togetherms < 100
++1 expect "Start together" enabled equals "false"
++1 shot "together-started.png"
+# a second time, from three stopped radios (R2 R3 R4 stopped by their own keys): only those are started, radio 1 is not disturbed
++1 click "Stop Radio 2"
++1 click "Stop Radio 3"
++1 click "Stop Radio 4"
++15 state workspace.r.2.running == 0
+state workspace.r.3.running == 0
+state workspace.r.4.running == 0
++1 click "Start together"
++30 state workspace.r.2.running == 1
+state workspace.r.3.running == 1
+state workspace.r.4.running == 1
+state workspace.r.1.running == 1
+state workspace.together contains "first=3"

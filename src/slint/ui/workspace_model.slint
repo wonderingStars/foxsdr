@@ -86,6 +86,15 @@ export global WorkspaceModel {
     in property <string> remove-explain;
     in property <string> remove-yes;
     in property <string> remove-no;
+    // ---- stage S5: Link tuning and Start together (docs/multi-radio-records/screen-s5.md) ----
+    in property <bool> link-on;                      // Link tuning is on: the panes carry a link key of their own
+    in property <string> link-text;                  // "Link tuning"
+    in property <string> link-tip;
+    in property <string> together-text;              // "Start together"
+    in property <string> together-tip;
+    in property <bool> together-enabled;             // some open radio is stopped
+    // the bar's own height: it wraps its groups onto as many 30 px rows as the width asks (written by the bar; the views under it start below it)
+    in-out property <length> bar-h: 30px;
     // the splitter of each radio's pane, kept here so it survives a page change
     in-out property <[float]> splits: [0.45, 0.45, 0.45, 0.45, 0.45, 0.45, 0.45, 0.45];
     // ---- written by the workspace: the size one pane has, for the host to fit the pictures to ----
@@ -123,6 +132,9 @@ export global WorkspaceModel {
     callback add-rescan-clicked();
     callback add-open-requested();
     callback add-dismissed();
+    callback link-toggled();                         // the bar's "Link tuning"
+    callback together-clicked();                     // the bar's "Start together"
+    callback pane-link-clicked(int);                 // a pane's link key: radio
     callback remove-requested(int);                  // the pane's close key
     callback remove-confirmed();
     callback remove-cancelled();

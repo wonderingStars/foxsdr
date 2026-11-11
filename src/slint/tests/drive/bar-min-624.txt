@@ -1,0 +1,40 @@
+#! frames=2200 size=624x400 bank=4 sections=4:0
+# bar-min-624: THE SMALLEST WINDOW (624 x 400, the minimum the resize handler enforces; screen stage S5, docs/multi-radio-records/screen-s5.md), the sections panel open (the centre column is 264 px wide), with EIGHT live
+# radios: every control of the bar is reachable with a POINTER click at its centre (refused when outside the window), the last lamp, the page keys, Link tuning, Start together, STOP ALL; the bar is five rows
+# tall here and leaves little of the receiver view (looked at: the shot). The panel's fold key gives the view its width back (the bar then needs fewer rows).
+10 state workspace.radios == 1
++1 radio add 2 60000
++1 radio add 3 90000
++1 radio add 4 120000
++1 radio add 5 150000
++1 radio add 6 180000
++1 radio add 7 210000
++1 radio add 8 240000
++40 state workspace.radios == 8
++5 state look.width == 624
++1 shot "bar-624-eight-workbench.png"
++1 press "Radio 8 master"
++8 state workspace.selected == 8
++1 press "Radio 1 master"
++8 state workspace.selected == 1
++1 press "Controls follow Radio 3"
++8 state workspace.selected == 3
++1 press "STOP ALL"
++20 state workspace.r.8.running == 0
++1 press "Start together"
++40 state workspace.r.8.running == 1
++1 press "Link tuning"
++6 state workspace.link == 1
++1 press "Link tuning"
++6 state workspace.link == 0
++1 press "2 x 2"
++10 state workspace.layout == 2
+state workspace.pagekeys == 0
++1 press "One"
++10 state workspace.layout == 0
++1 shot "bar-624-eight-after-workbench.png"
++1 choose "Theme" "Night Watch"
++12 state look.bg != "#15171b"
++1 press "Radio 5 master"
++8 state workspace.selected == 5
++1 shot "bar-624-eight-night.png"

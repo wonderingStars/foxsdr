@@ -478,8 +478,14 @@ std::string serialPortsChip(std::size_t count);             // NONE, 1 PORT, N P
 std::string cleanPortName(const std::string& typed);        // core::sanitiseSerialPortName
 std::string gpsKeyLabel(bool listening);
 // Key bindings (the host copy of gui/key_bindings.*).
-constexpr int kKeyActionCount = 32;
-struct KeyActionInfo { const char* id; const char* name; const char* group; const char* stock; };
+// The first kClassicKeyActionCount rows are the ImGui window's table (gui/key_bindings.*, held equal by test_slint_host_system); the rows after them are THIS window's own (screen stage S5, docs/multi-radio-records/screen-s5.md):
+// selecting a radio (Ctrl+1 to Ctrl+8) and turning the page of radios (Alt+PageUp / Alt+PageDown). The ImGui window neither lists nor answers them and keeps what it finds in a saved file.
+constexpr int kClassicKeyActionCount = 32;
+constexpr int kSelectRadioActions = 8;
+constexpr int kKeyActionCount = kClassicKeyActionCount + kSelectRadioActions + 2;
+// `number` is the radio of a "Select Radio %d" row (1-based), 0 for every other row: the row's name is a sentence with the number in it (formatText over the translated name).
+struct KeyActionInfo { const char* id; const char* name; const char* group; const char* stock; int number = 0; };
+std::string keyActionName(int index);                       // the row's name in the interface language ("Select Radio 3" for a numbered row)
 const KeyActionInfo& keyAction(int index);                  // by the enum's order
 int keyActionIndexOf(const std::string& id);                // -1 when the id table does not carry it
 struct Chord {

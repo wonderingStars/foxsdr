@@ -189,17 +189,17 @@ AddOutcome addOutcome(std::int32_t status, const char* message) {
 std::string addCardTitle() { return cascade::i18n::tr("Add a radio"); }
 std::string addCardHint() { return cascade::i18n::tr("Choose a radio to open in this pane."); }
 std::string addCardRescan() { return cascade::i18n::tr("Look for radios again"); }
-std::string addCardNone() { return "No other radio found."; }   // English only, needs translation: not in the prepared set
+std::string addCardNone() { return cascade::i18n::tr("No other radio found."); }
 std::string addCardSlotName(int slot) { return fmt1(cascade::i18n::tr("Add a radio to pane %d"), slot); }
 
 bool removeNeedsConfirm(const FoxReceiverState& st) {
     return (st.flags & (FOXAPI_RX_RUNNING | FOXAPI_RX_RECORDING_IQ | FOXAPI_RX_RECORDING_AUDIO)) != 0u;
 }
-std::string removeQuestion(int radio) { return "Remove Radio " + std::to_string(radio) + "?"; }   // English only, needs translation
+std::string removeQuestion(int radio) { return cascade::core::formatText(cascade::i18n::tr("Remove Radio %d?"), radio); }
 std::string removeExplain(const FoxReceiverState& st) {   // English only, needs translation
     const bool rec = (st.flags & (FOXAPI_RX_RECORDING_IQ | FOXAPI_RX_RECORDING_AUDIO)) != 0u;
-    if (rec) { return "This radio is recording. Removing it ends the recording and lets go of its device."; }
-    return "This radio is running. Removing it stops it and lets go of its device.";
+    if (rec) { return cascade::i18n::tr("This radio is recording. Removing it ends the recording and lets go of its device."); }
+    return cascade::i18n::tr("This radio is running. Removing it stops it and lets go of its device.");
 }
 
 }  // namespace foxsdr::slinthost

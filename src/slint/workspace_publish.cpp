@@ -79,12 +79,13 @@ void WorkspacePublisher::publishLayout(const Workspace& ws, int winW, int winH, 
     if (ribbonSize != ribbon_) { ribbon_ = ribbonSize; g.set_ribbon_size(ribbonSize); }
     const std::string notice = ws.fellBack(winW, winH) ? smallWindowNotice() : std::string();
     if (notice != notice_) { notice_ = notice; g.set_notice(ss(notice)); }
-    // the page keys: one per page of the chosen layout, only when there is more than one
+    // the page keys: one per page of the chosen layout, only when there is more than one AND a multi-pane layout is on screen (screen stage S5): where One is shown (the layout, or a window under 1280 x 720)
+    // a page is a radio and the keys would be "Radios 1-1" ... "Radios 8-8", eight keys that do what the selector, the lamps and Ctrl+1 to Ctrl+8 do and are wider than the bar of a small window
     std::string sig;
     std::vector<slint::SharedString> labels, tips;
     const int pages = ws.pageCount();
     const int size = pageSizeOf(ws.layout());
-    if (pages > 1) {
+    if (pages > 1 && shown != kLayoutOne) {
         for (int p = 0; p < pages; ++p) {
             const int first = p * size + 1, last = std::min(kMaxRadios, p * size + size);
             const std::string l = pageLabel(first, last), t = pageTip(first, last);
@@ -118,7 +119,7 @@ void WorkspacePublisher::publishPane(RadioView& rv, const PaneContext& ctx) {
     {
         const std::string sig = t.prefix + "|" + t.selectLabel + "|" + t.stopLabel + "|" + t.spectrumLabel + "|" + t.waterfallLabel + "|" + t.resizeLabel + "|" + t.closeLabel + "|" + t.runTip + "|" + t.decTip + "|" +
                                 t.muteTip + "|" + t.failTip + "|" + t.device + "|" + t.frequency + "|" + t.mode + "|" + t.gain + "|" + t.squelch + "|" + t.volume + "|" + t.rate + "|" + ctx.decoder + "|" +
-                                (t.running ? "r" : "-") + (t.decoding ? "d" : "-") + (t.muted ? "m" : "-") + (t.failed ? "f" : "-") + (t.biasTee ? "b" : "-") + std::to_string(ctx.traceMode);
+                                (t.running ? "r" : "-") + (t.decoding ? "d" : "-") + (t.muted ? "m" : "-") + (t.failed ? "f" : "-") + (t.biasTee ? "b" : "-") + std::to_string(ctx.traceMode) + "|" + (ctx.linkShown ? "L" : "-") + std::to_string(ctx.link) + ctx.linkLabel + "|" + ctx.linkTip;
         if (sg.changed("pane.words", sig)) {
             d.radio = slot + 1;
             d.prefix = ss(t.prefix);
@@ -147,6 +148,10 @@ void WorkspacePublisher::publishPane(RadioView& rv, const PaneContext& ctx) {
             d.bias_tee = t.biasTee;
             d.decoder = ss(ctx.decoder);
             d.trace_mode = ctx.traceMode;
+            d.link_shown = ctx.linkShown;
+            d.link = ctx.link;
+            d.link_label = ss(ctx.linkLabel);
+            d.link_tip = ss(ctx.linkTip);
             dirty = true;
         }
     }

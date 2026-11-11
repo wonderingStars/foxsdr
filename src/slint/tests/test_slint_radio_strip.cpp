@@ -311,7 +311,7 @@ int main() {
     skinRun("workbench", workbench);
     skinRun("night", night);
 
-    // ---- the FLAT form (a compact window's workspace bar): the same keys and lamps as one 30 px row, in both skins ----
+    // ---- the FLAT form (a compact window's workspace bar, radios' groups alone, as on the PATCH and SCOPE tabs): the same keys and lamps in one 30 px row, in both skins ----
     {
         ui->set_flat(true);
         for (const char* skinName : {"workbench", "night"}) {
@@ -322,7 +322,7 @@ int main() {
             if (sel1 && lamp3) {
                 const float w = lamp3->absolute_position().x + lamp3->size().width - sel1->absolute_position().x;
                 std::printf("   flat row: %.0f px wide, %.0f high\n", static_cast<double>(w), static_cast<double>(lamp3->size().height));
-                CHECKV(w <= 420.f && w > 150.f, "%s (flat): the row is %.0f px wide", skinName, static_cast<double>(w));
+                CHECKV(w <= 480.f && w > 150.f, "%s (flat): the row is %.0f px wide", skinName, static_cast<double>(w));
                 CHECKV(lamp3->absolute_position().y >= 0.f && lamp3->absolute_position().y + lamp3->size().height <= 30.f, "%s (flat): the lamps are inside the 30 px bar", skinName);
             }
             press("Controls follow Radio 3", "selector", 3);

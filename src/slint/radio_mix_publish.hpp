@@ -30,6 +30,7 @@ struct DeckInputs {
     std::string addNote;                                      // the engine's refusal, unchanged
     bool addOpen = false;
     int removeConfirm = 0;                                    // 1-based radio awaiting a yes, 0 none
+    bool linkOn = false;                                      // stage S5: Link tuning is on
 };
 
 class DeckPublisher {
@@ -42,7 +43,7 @@ public:
 
 private:
     MainWindow& ui_;
-    std::string selectorSig_, stripSig_, masterSig_, mixSig_, addSig_, removeSig_, tagSig_;
+    std::string selectorSig_, stripSig_, masterSig_, mixSig_, addSig_, removeSig_, tagSig_, linkSig_;
 };
 
 }  // namespace foxsdr::slintworkspace

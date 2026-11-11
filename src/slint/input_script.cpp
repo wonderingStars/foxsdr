@@ -4,6 +4,7 @@
 
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <sstream>
 
@@ -68,7 +69,7 @@ bool isNumber(const std::string& t, double& v) {
 }
 
 bool knownKey(const std::string& k) {
-    static const char* const names[] = {"enter", "return", "escape", "tab", "backspace", "delete", "space", "up", "down", "left", "right"};
+    static const char* const names[] = {"enter", "return", "escape", "tab", "backspace", "delete", "space", "up", "down", "left", "right", "pageup", "pagedown", "home", "end"};
     for (const char* n : names) { if (k == n) { return true; } }
     if (k.size() >= 2 && k[0] == 'f') {
         const int n = std::atoi(k.c_str() + 1);
@@ -77,7 +78,17 @@ bool knownKey(const std::string& k) {
         return digits && n >= 1 && n <= 12;
     }
     if (k.size() == 1 && std::isprint(static_cast<unsigned char>(k[0])) && k[0] != ' ') { return true; }   // one character, typed as itself
-    return k.size() == 6 && k.rfind("ctrl+", 0) == 0 && std::isalnum(static_cast<unsigned char>(k[5]));   // ctrl+<letter> or ctrl+<digit> (Ctrl+0, docs 6.61)
+    // A CHORD: ctrl+ shift+ alt+ (in that order, each at most once, at least one) in front of a named key, a function key or one letter or digit (ctrl+<letter|digit> is Ctrl+0, docs 6.61;
+    // ctrl+pagedown, alt+pageup and ctrl+8 are screen stage S5's)
+    std::string rest = k;
+    int mods = 0;
+    for (const char* m : {"ctrl+", "shift+", "alt+"}) {
+        if (rest.rfind(m, 0) == 0) { rest.erase(0, std::strlen(m)); ++mods; }
+    }
+    if (mods == 0 || rest.empty()) { return false; }
+    if (rest.size() == 1) { return std::isalnum(static_cast<unsigned char>(rest[0])) != 0; }
+    if (rest.rfind("ctrl+", 0) == 0 || rest.rfind("shift+", 0) == 0 || rest.rfind("alt+", 0) == 0) { return false; }   // the modifiers are in the order ctrl, shift, alt, once each
+    return knownKey(rest);
 }
 
 }  // namespace
@@ -90,6 +101,7 @@ const char* verbName(Verb v) {
         case Verb::Key: return "key";
         case Verb::Slider: return "slider";
         case Verb::Scroll: return "scroll";
+        case Verb::Drag: return "drag";
         case Verb::Choose: return "choose";
         case Verb::Expect: return "expect";
         case Verb::State: return "state";
@@ -192,6 +204,14 @@ Script parseInputScript(const std::string& text) {
             const std::string num = c.word();
             if (!isNumber(num, v) || v == 0.0 || std::fabs(v) > 100000.0) { bad("scroll takes a number of pixels, not 0: \"" + num + "\""); continue; }
             st.number = v;
+        } else if (verb == "drag") {
+            st.verb = Verb::Drag;
+            if (!c.quoted(st.label) || st.label.empty()) { bad("drag takes a quoted label"); continue; }
+            double dx = 0, dy = 0;
+            const std::string a = c.word(), b = c.word();
+            if (!isNumber(a, dx) || !isNumber(b, dy) || (dx == 0.0 && dy == 0.0) || std::fabs(dx) > 5000.0 || std::fabs(dy) > 5000.0) { bad("drag takes the offset right and down in pixels, not both 0: \"" + a + "\" \"" + b + "\""); continue; }
+            st.number = dx;
+            st.number2 = dy;
         } else if (verb == "choose") {
             st.verb = Verb::Choose;
             if (!c.quoted(st.label) || st.label.empty()) { bad("choose takes a quoted label"); continue; }
@@ -222,7 +242,7 @@ Script parseInputScript(const std::string& text) {
         } else if (verb == "radio") {
             st.verb = Verb::Radio;
             st.label = c.word();
-            if (st.label != "add" && st.label != "remove") { bad("radio takes add or remove, not \"" + st.label + "\""); continue; }
+            if (st.label != "add" && st.label != "remove" && st.label != "range") { bad("radio takes add, remove or range, not \"" + st.label + "\""); continue; }
             double v = 0;
             std::string num = c.word();
             if (!num.empty()) {
@@ -230,10 +250,19 @@ Script parseInputScript(const std::string& text) {
                 st.radioNo = static_cast<int>(v);
             }
             if (st.label == "remove" && st.radioNo < 2) { bad("radio remove takes the number of a radio from 2 to 8"); continue; }
-            num = c.word();
-            if (!num.empty()) {
-                if (st.label == "remove" || !isNumber(num, v) || std::fabs(v) > 1.0e7) { bad("radio add takes a tone in Hz last: \"" + num + "\""); continue; }
-                st.number = v;
+            if (st.label == "range") {
+                if (st.radioNo < 1) { bad("radio range takes the number of a radio from 1 to 8"); continue; }
+                double lo = 0, hi = 0;
+                const std::string a = c.word(), b = c.word();
+                if (!isNumber(a, lo) || !isNumber(b, hi) || lo < 0.0 || hi < lo || hi > 1.0e12) { bad("radio range takes a low and a high end in Hz, low not above high: \"" + a + "\" \"" + b + "\""); continue; }
+                st.number = lo;
+                st.number2 = hi;
+            } else {
+                num = c.word();
+                if (!num.empty()) {
+                    if (st.label == "remove" || !isNumber(num, v) || std::fabs(v) > 1.0e7) { bad("radio add takes a tone in Hz last: \"" + num + "\""); continue; }
+                    st.number = v;
+                }
             }
         } else {
             bad("unknown verb \"" + verb + "\"");
@@ -242,7 +271,7 @@ Script parseInputScript(const std::string& text) {
         if (ok && !c.atEnd()) { bad("trailing words after the " + verb); continue; }
         int index = 1;
         std::string probe = st.label;
-        if ((st.verb == Verb::Click || st.verb == Verb::Press || st.verb == Verb::Type || st.verb == Verb::Slider || st.verb == Verb::Choose || st.verb == Verb::Expect) && !splitLabelIndex(probe, index)) {
+        if ((st.verb == Verb::Click || st.verb == Verb::Press || st.verb == Verb::Type || st.verb == Verb::Slider || st.verb == Verb::Drag || st.verb == Verb::Choose || st.verb == Verb::Expect) && !splitLabelIndex(probe, index)) {
             bad("a label's #index counts from 1: \"" + st.label + "\"");
             continue;
         }
@@ -297,6 +326,7 @@ void Driver::tick(long tick, const std::function<void(const std::string&)>& say)
             case Verb::Type: head += " \"" + st.label + "\" \"" + st.text + "\""; why = target_.type(st.label, st.text); break;
             case Verb::Key: head += " " + st.text; why = target_.key(st.text); break;
             case Verb::Slider: head += " \"" + st.label + "\" " + std::to_string(st.number); why = target_.slider(st.label, st.number); break;
+            case Verb::Drag: head += " \"" + st.label + "\" " + std::to_string(st.number) + " " + std::to_string(st.number2); why = target_.drag(st.label, st.number, st.number2); break;
             case Verb::Scroll: head += " \"" + st.label + "\" " + std::to_string(st.number); why = target_.scroll(st.label, st.number); break;
             case Verb::Choose:
                 head += " \"" + st.label + "\" \"" + st.text + "\"";
@@ -320,7 +350,7 @@ void Driver::tick(long tick, const std::function<void(const std::string&)>& say)
             case Verb::Dump: why = target_.dumpControls(); break;
             case Verb::Radio:
                 head += " " + st.label + " " + std::to_string(st.radioNo);
-                why = target_.radio(st.label, st.radioNo, st.number);
+                why = target_.radio(st.label, st.radioNo, st.number, st.number2);
                 break;
         }
         if (why.empty()) {

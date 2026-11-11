@@ -1,12 +1,12 @@
 // The multi-radio strip block, the Audio mix, the sections panel's tag and the Add-a-radio card as the main window places them (docs/multi-radio-records/screen-s4.md), fed with fake data by the
 // test (tests/test_slint_radio_strip.cpp) through the WorkspaceModel global, in every skin, without the host.
 //
-//   y 0, h 104     the receiver strip (Theme.strip) with the radios' block at x 16 (or, with `flat`, the 30 px bar with the block as one row)
+//   y 0, h 104     the receiver strip (Theme.strip) with the radios' block at x 16 (or, with `flat`, the workspace bar carrying the block as its radios' groups)
 //   y 104, h 400   the sections panel (296 wide, Theme.panel-alt): the R-tag at the top, the Audio mix at the foot
 //   x 320          the card "Add a radio" in an empty cell (titled), and x 740 the sheet's untitled card
 import { Theme, Skin, Workbench, NightWatch } from "../theme.slint";
-import { WorkspaceModel, StripRadio, MasterLamp, MixRow, AddChoice, AddRadioCard } from "../workspace.slint";
-import { RadioStripBlock, RadioStripRow, AudioMixBlock, RadioTag } from "../radio_strip.slint";
+import { WorkspaceModel, StripRadio, MasterLamp, MixRow, AddChoice, AddRadioCard, WorkspaceBar } from "../workspace.slint";
+import { RadioStripBlock, AudioMixBlock, RadioTag } from "../radio_strip.slint";
 import { TipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench, NightWatch, WorkspaceModel, StripRadio, MasterLamp, MixRow, AddChoice }
 
@@ -21,10 +21,7 @@ export component RadioStripSpecimen inherits Window {
         x: 0px; y: 0px; width: root.width; height: 104px; background: Theme.strip;
         HorizontalLayout { padding-left: 16px; RadioStripBlock { horizontal-stretch: 0; } }
     }
-    if root.flat : Rectangle {
-        x: 0px; y: 0px; width: root.width; height: 30px; background: Theme.strip;
-        HorizontalLayout { padding-left: 8px; RadioStripRow { horizontal-stretch: 0; } }
-    }
+    if root.flat : WorkspaceBar { x: 0px; y: 0px; width: root.width; compact: true; receiver: false; }   // a compact window's radios' groups, as the main window places them on the PATCH and SCOPE tabs
     Rectangle {
         x: 0px; y: 104px; width: 296px; height: 400px; background: Theme.panel-alt;
         VerticalLayout {
