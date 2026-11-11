@@ -23,7 +23,7 @@
 //   3 it is a third-party packet (data type '}') whose third-party header holds TCPIP or TCPXX, 4 it is a generic query (data type '?'),
 //   5 its header holds TCPIP, TCPXX, NOGATE or RFONLY (the page marks the last two optional; both are applied),
 // and: a third-party packet without TCPXX/TCPIP is gated with the RF header and the '}' removed (6); the path is never modified except
-// to append `,qAR,IGATECALL` (7), or `,qAO,IGATECALL` for a receive-only IGate (8); `q` constructs and the `I` construct never appear on
+// to append `,qAO,IGATECALL` (7, 8): FoxSDR never transmits, so this is a receive-only IGate and the pages require qAO; qAR is NOT offered anywhere (the choice was removed 2026-11-11 on the orchestrator's correction); `q` constructs and the `I` construct never appear on
 // RF, so an RF packet that carries one is malformed and is refused (9, 10). Added here, not from the page: a packet containing CR, LF
 // or NUL, a nested third-party packet, an unparsable header, and a result over 510 bytes are refused.
 //
@@ -47,8 +47,6 @@ namespace cascade::net {
 inline constexpr std::uint16_t kAprsIsFilterPort = 14580;  // the user-defined-filter feed (Connecting page)
 inline constexpr std::size_t kAprsMaxLineBytes = 512;      // including CR LF
 
-enum class GateConstruct { QAR, QAO };
-
 struct AprsIsConfig {
     std::string host;                         // dotted quad or a host name (resolved on the worker thread); empty = not chosen: start() refuses
     std::uint16_t port = kAprsIsFilterPort;
@@ -58,7 +56,6 @@ struct AprsIsConfig {
     std::string filter;                       // e.g. "r/33/-96/25"; empty = none (the server then sends almost nothing)
     bool gateway = false;                     // OFF: nothing but the login is ever written
     std::string passcode;                     // the user's; used only when gateway is on; never generated here
-    GateConstruct construct = GateConstruct::QAR;  // QAO for an IGate that never gates to RF (the IGate Details page)
     int connectTimeoutMs = 5000;
     int loginWaitMs = 5000;                   // wait this long for the server's identification line before logging in anyway
     int idleTimeoutMs = 120000;               // no byte from the server (not even a # line) for this long: reconnect
@@ -121,7 +118,7 @@ struct GateDecision {
     std::string line;  // when Gated: the line to send to APRS-IS, without CR LF
 };
 // Applies the rules above. `igateCall` must already be a normalised callsign.
-GateDecision aprsGate(const GateInput& in, const std::string& igateCall, GateConstruct construct);
+GateDecision aprsGate(const GateInput& in, const std::string& igateCall);
 
 // ---- the client --------------------------------------------------------------------------------------------------------------------
 

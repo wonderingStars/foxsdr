@@ -232,7 +232,7 @@ const char* aprsGateReasonName(GateReason r) {
     return "?";
 }
 
-GateDecision aprsGate(const GateInput& in, const std::string& igateCall, GateConstruct construct) {
+GateDecision aprsGate(const GateInput& in, const std::string& igateCall) {
     GateDecision d;
     if (!in.controlPidOk) { d.reason = GateReason::NotUiFrame; return d; }
     if (in.tncPassAll) { d.reason = GateReason::PassAll; return d; }
@@ -271,7 +271,7 @@ GateDecision aprsGate(const GateInput& in, const std::string& igateCall, GateCon
         out = inner;
     }
     const std::size_t c3 = out.find(':');
-    out = out.substr(0, c3) + (construct == GateConstruct::QAO ? ",qAO," : ",qAR,") + igateCall + out.substr(c3);
+    out = out.substr(0, c3) + ",qAO," + igateCall + out.substr(c3);
     if (out.size() > kMaxGatedLine) { d.reason = GateReason::TooLong; return d; }
     d.reason = GateReason::Gated;
     d.line = out;
@@ -368,7 +368,7 @@ GateReason AprsIsClient::forward(const GateInput& in) {
     if (!cfg_.gateway) { return refuse(GateReason::GatewayOff); }
     if (state_.load() != AprsState::Online) { return refuse(GateReason::NotOnline); }
     if (!verified_.load() || unverified_.load()) { return refuse(GateReason::NotVerified); }
-    const GateDecision d = aprsGate(in, cfg_.callsign, cfg_.construct);
+    const GateDecision d = aprsGate(in, cfg_.callsign);
     if (d.reason != GateReason::Gated) { return refuse(d.reason); }
     if (!out_.push(d.line.data(), d.line.size())) { return refuse(GateReason::QueueFull); }
     return GateReason::Gated;

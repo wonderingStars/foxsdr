@@ -179,28 +179,29 @@ void testBackoff() {
 
 // ---- the gate rules ----------------------------------------------------------------------------------------------------------------
 
-GateDecision gate(const std::string& tnc2, bool ctl = true, bool passall = false, GateConstruct k = GateConstruct::QAR) {
+GateDecision gate(const std::string& tnc2, bool ctl = true, bool passall = false) {
     GateInput in;
     in.tnc2 = tnc2;
     in.controlPidOk = ctl;
     in.tncPassAll = passall;
-    return aprsGate(in, "N0GATE-10", k);
+    return aprsGate(in, "N0GATE-10");
 }
 
 void testGateRules() {
-    // the control case: a plain position report is gated, path unchanged except ",qAR,IGATE" appended to the header
+    // the control case: a plain position report is gated, path unchanged except ",qAO,IGATE" appended to the header
     GateDecision d = gate("N0CALL-9>APRS,WIDE1-1*,WIDE2-1:!4903.50N/07201.75W-Test");
     CHECK(d.reason == GateReason::Gated);
-    CHECK(d.line == "N0CALL-9>APRS,WIDE1-1*,WIDE2-1,qAR,N0GATE-10:!4903.50N/07201.75W-Test");
-    // a receive-only IGate uses qAO
-    d = gate("N0CALL-9>APRS,WIDE1-1*:>status", true, false, GateConstruct::QAO);
+    CHECK(d.line == "N0CALL-9>APRS,WIDE1-1*,WIDE2-1,qAO,N0GATE-10:!4903.50N/07201.75W-Test");
+    CHECK(d.line.find("qAR") == std::string::npos);
+    // FoxSDR never transmits: a receive-only IGate uses qAO, and qAR is never produced
+    d = gate("N0CALL-9>APRS,WIDE1-1*:>status");
     CHECK(d.reason == GateReason::Gated && d.line == "N0CALL-9>APRS,WIDE1-1*,qAO,N0GATE-10:>status");
     // no path at all
     d = gate("N0CALL>APRS:>hi");
-    CHECK(d.reason == GateReason::Gated && d.line == "N0CALL>APRS,qAR,N0GATE-10:>hi");
+    CHECK(d.reason == GateReason::Gated && d.line == "N0CALL>APRS,qAO,N0GATE-10:>hi");
     // the information field is carried untouched, even when it holds colons, commas and non-ASCII bytes
     d = gate("N0CALL>APRS:=:a,b:c\xE2\x80\x94" "d");
-    CHECK(d.reason == GateReason::Gated && d.line == "N0CALL>APRS,qAR,N0GATE-10:=:a,b:c\xE2\x80\x94" "d");
+    CHECK(d.reason == GateReason::Gated && d.line == "N0CALL>APRS,qAO,N0GATE-10:=:a,b:c\xE2\x80\x94" "d");
 
     // RULE 1: no control 0x03 / PID 0xF0
     CHECK(gate("N0CALL>APRS:>hi", false).reason == GateReason::NotUiFrame);
@@ -230,7 +231,7 @@ void testGateRules() {
     // RULE 6: third party WITHOUT them: the RF header and the '}' are removed, the inner packet is what goes out (with the append)
     d = gate("N0RF>APRS,WIDE1-1*:}N0INT>APRS,WIDE2-1:>inner status");
     CHECK(d.reason == GateReason::Gated);
-    CHECK(d.line == "N0INT>APRS,WIDE2-1,qAR,N0GATE-10:>inner status");
+    CHECK(d.line == "N0INT>APRS,WIDE2-1,qAO,N0GATE-10:>inner status");
     CHECK(d.line.find("N0RF") == std::string::npos && d.line.find('}') == std::string::npos);
     // third party: a NOGATE/RFONLY or q construct in the inner header is refused too; a generic query inside is refused; nesting is refused
     CHECK(gate("N0RF>APRS:}N0INT>APRS,NOGATE:>x").reason == GateReason::ForbiddenPathElement);
@@ -256,7 +257,7 @@ void testGateRules() {
     const std::string tooLong(500, 'x');
     CHECK(gate("N0CALL>APRS:>" + tooLong).reason == GateReason::TooLong);
     // exact boundary: a gated line of 510 bytes is allowed, 511 is not
-    const std::string base = "N0CALL>APRS,qAR,N0GATE-10:>";
+    const std::string base = "N0CALL>APRS,qAO,N0GATE-10:>";
     const std::string fit(510 - base.size(), 'y');
     CHECK(gate("N0CALL>APRS:>" + fit).reason == GateReason::Gated);
     CHECK(gate("N0CALL>APRS:>" + fit + "z").reason == GateReason::TooLong);
@@ -583,7 +584,7 @@ void testGatewayMode() {
     CHECK(srv.received(0).find("N0CALL-9") == std::string::npos);
     cl.stop();
 
-    // verified login: packets are gated with ,qAR,N0GATE-10, one per line, CRLF
+    // verified login: packets are gated with ,qAO,N0GATE-10, one per line, CRLF
     nettest::StandInServer srv2;
     srv2.setGreeting("# hello\r\n");
     CHECK(srv2.start());
@@ -613,7 +614,7 @@ void testGatewayMode() {
     bad.controlPidOk = true;
     bad.tnc2 = "N0RF>APRS:}N0INT>APRS,TCPXX*:>x";
     CHECK(cl2.forward(bad) == GateReason::ThirdPartyInternet);
-    const std::string want = "N0CALL-9>APRS,WIDE1-1*,qAR,N0GATE-10:>status\r\nN0INT>APRS,WIDE2-1,qAR,N0GATE-10:>third party\r\n";
+    const std::string want = "N0CALL-9>APRS,WIDE1-1*,qAO,N0GATE-10:>status\r\nN0INT>APRS,WIDE2-1,qAO,N0GATE-10:>third party\r\n";
     CHECK(waitFor([&] { return srv2.received(0).size() >= std::string("user N0GATE-10 pass 13579 vers FoxSDR 1.2.3 filter r/33/-96/25\r\n").size() + want.size(); }, 3000));
     const std::string all = srv2.received(0);
     CHECK(all == "user N0GATE-10 pass 13579 vers FoxSDR 1.2.3 filter r/33/-96/25\r\n" + want);
@@ -622,13 +623,12 @@ void testGatewayMode() {
     CHECK(cl2.redactedLogin().find("13579") == std::string::npos);
     CHECK(cl2.lastError().find("13579") == std::string::npos);
 
-    // the QAO setting
+    // qAO and never qAR
     nettest::StandInServer srv3;
     srv3.setGreeting("# hello\r\n");
     CHECK(srv3.start());
     AprsIsConfig c3 = c;
     c3.port = srv3.port();
-    c3.construct = GateConstruct::QAO;
     AprsIsClient cl3(c3);
     CHECK(cl3.start(err));
     CHECK(waitFor([&] { return !srv3.received(0).empty(); }, 3000));
