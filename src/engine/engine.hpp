@@ -39,6 +39,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -211,7 +212,10 @@ private:
     const char* radioStateWord(std::uint32_t radio);
     std::string radioLabel();
     // The source generation of radio `radio` (a live one): the guard that drops a command asked of a radio that has gone since.
-    std::uint64_t receiverSourceGen(std::uint32_t radio) const { return receivers_[radio - 1u]->sourceGen_.load(); }
+    std::uint64_t receiverSourceGen(std::uint32_t radio) const {
+        std::shared_lock<std::shared_mutex> lk(receiverSlotsMutex_);
+        return receivers_[radio - 1u] ? receivers_[radio - 1u]->sourceGen_.load() : 0u;
+    }
 
     // THE RECEIVER AN ENGINE FUNCTION ACTS ON (multi-radio stage 4). Every function of the engine that touches "the radio" names it through rx(): the
     // receiver slot the calling thread has selected with a SlotScope, or slot 0 (the receiver every client has always used) when none is. The control
@@ -240,6 +244,85 @@ private:
         const Engine* prevEngine_;
         std::size_t prevSlot_;
     };
+    // A RADIO'S WORK: a SlotScope, plus - for a radio other than the first - the swap of the engine-wide mirrors that are one radio's (Receiver::*_wide_:
+    // the Source list's selected row, the I/Q file's path, the two saved-config device spellings), so that what a command addressed to radio 3 writes there
+    // is radio 3's and the first radio's are put back when the call ends. Not nested: a RadioWork inside another on the same engine only moves the slot.
+    class RadioWork {
+    public:
+        RadioWork(Engine& e, std::size_t slot) : e_(e), scope_(&e, slot), slot_(slot) {
+            if (slot_ != 0u && !tlsWorkSwapped_) {
+                swap();
+                tlsWorkSwapped_ = true;
+                swapped_ = true;
+            }
+        }
+        ~RadioWork() {
+            if (swapped_) {
+                swap();
+                tlsWorkSwapped_ = false;
+            }
+        }
+        RadioWork(const RadioWork&) = delete;
+        RadioWork& operator=(const RadioWork&) = delete;
+    private:
+        void swap() {
+            Receiver& r = *e_.receivers_[slot_];
+            std::swap(e_.sourceSel_, r.sourceSel_wide_);
+            std::swap(e_.iqOpenPath_, r.iqOpenPath_wide_);
+            std::swap(e_.cfgSoapyArgs_, r.cfgSoapyArgs_wide_);
+            std::swap(e_.cfgNativeArgs_, r.cfgNativeArgs_wide_);
+            std::swap(e_.biasTeePanel_, r.biasTeePanel_wide_);
+            std::swap(e_.manualGainsBeforeAgc_, r.manualGainsBeforeAgc_wide_);
+            std::swap(e_.ppmRadioApplied_, r.ppmRadioApplied_wide_);
+        }
+        Engine& e_;
+        SlotScope scope_;
+        std::size_t slot_;
+        bool swapped_ = false;
+    };
+    inline static thread_local bool tlsWorkSwapped_ = false;
+
+    // WHO A COMMAND WITH NO TARGET IS FOR (set by the API host for the length of one apply: the sending session's focus, or the number it resolved), read by
+    // applyCommand when no RadioWork is active. 1 = the first radio, which is what a command with no session (the window's queue, a test's direct call) means.
+    std::uint32_t commandFocus_ = 1;
+    // A lock for the readers that are NOT the pass (the API host's threads) of a slot other than the first: held shared while they touch receivers_[n] and
+    // exclusively by the pass only for the instant a slot is put in or taken out (the Receiver itself is built before and destroyed after, outside it).
+    mutable std::shared_mutex receiverSlotsMutex_;
+    // The radio a SCANNER_RUN last started the one scanner on (slot index): the scanner's frame, its tunes and its flag belong to that radio.
+    std::size_t scannerSlot_ = 0;
+    // The lists fingerprint of the last publish of the first radio's state, which every other radio's state carries (the lists are the engine's, one set).
+    std::uint64_t lastListsFingerprint_ = 0;
+    // The solo rule: the radio number that is heard alone (0 = none: every radio plays by its own route and mute). Pass thread only.
+    std::uint32_t soloRadio_ = 0;
+
+    // Runs `f` once for each radio there is, in slot order, each under its own RadioWork (the teardown and the shutdown steps, which are every radio's).
+    template <class F>
+    void forEachReceiver(F&& f) {
+        for (std::size_t slot = 0; slot < kMaxReceivers; ++slot) {
+            if (!receivers_[slot]) { continue; }
+            RadioWork w(*this, slot);
+            f();
+        }
+    }
+    // --- radios 2 to 8 (engine_radios.cpp) ---
+    // RADIO_ADD / RADIO_REMOVE / RADIO_AUDIO / RADIO_SOLO, applied by applyCommand (res is the command's result so far; the answer is returned).
+    FoxCommandResult radioAddOp(const FoxCommand& c, const std::string& text, FoxCommandResult res);
+    FoxCommandResult radioRemoveOp(const FoxCommand& c, FoxCommandResult res);
+    FoxCommandResult radioAudioOp(const FoxCommand& c, FoxCommandResult res);
+    FoxCommandResult radioSoloOp(const FoxCommand& c, FoxCommandResult res);
+    // Closes radio `slot` (index): stops it, ends its takes, lets go of its device, joins its threads. The slot is empty after.
+    void removeReceiverSlot(std::size_t slot);
+    // The housekeeping and the publish of every radio but the first, once a pass (the first radio's are the pass's own functions, unchanged).
+    void pumpExtraReceivers();
+    void publishExtraReceivers();
+    // What the solo rule says each radio's sink does (AudioOut::setSilenced) and each radio's route (AudioOut::setRoute), from soloRadio_ and the routes.
+    void applyAudioRoutes();
+    // The slot's device-open poll (the tail of pollSourceAsync, which the first radio still runs from there).
+    void pollDeviceOpen();
+    // The prefix a take's file name carries ("" for the first radio while it is the only one).
+    std::string takePrefix(bool iq);
+    // A radio's snapshot, taken under the slot lock so a reader on another thread never meets a slot being closed (null for a radio that is not there).
+    std::shared_ptr<cascade::core::ReceiverSnapshot> snapshotOf(std::uint32_t radio) const;
 
     // NO DEFAULT MEMBER INITIALISERS, on purpose: GCC refuses them on a
     // nested struct used by an inline static member of the enclosing class
@@ -3620,6 +3703,8 @@ private:
 // controls, the radar scope's gain knob and the bias tee key): a queued one
 // is dropped when the radio it was asked of has gone since.
 bool isDeviceScopedOp(std::uint32_t op);
+// The word for an audio route (fact.radio.<n>.audio): both, left, right, none (engine_radios.cpp).
+const char* radioRouteWord(int route);
 
 }  // namespace cascade::engine
 

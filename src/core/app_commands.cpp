@@ -96,6 +96,10 @@ constexpr OpEntry kOps[] = {
     {FOXAPI_OP_SCAN_SERIAL_PORTS, "SCAN_SERIAL_PORTS", true},
     {FOXAPI_OP_SERVER_CONFIG, "SERVER_CONFIG", true},
     {FOXAPI_OP_UPDATE_CHECK, "UPDATE_CHECK", false},
+    {FOXAPI_OP_RADIO_ADD, "RADIO_ADD", true},
+    {FOXAPI_OP_RADIO_REMOVE, "RADIO_REMOVE", true},
+    {FOXAPI_OP_RADIO_AUDIO, "RADIO_AUDIO", true},
+    {FOXAPI_OP_RADIO_SOLO, "RADIO_SOLO", true},
     {FOXAPI_OP_RADIO_FOCUS, "RADIO_FOCUS", false},   // a SESSION's op: the API host applies it (like SETTING_SET and the key ops), not applyCommand
     // --- extensions ---
     {FOXAPP_OP_VFO_TO_ABSOLUTE, "APP_VFO_TO_ABSOLUTE", true},

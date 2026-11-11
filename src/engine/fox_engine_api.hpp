@@ -155,6 +155,9 @@ public:
     // An end the ENGINE makes, whoever asked for it (Engine::applyCommand's
     // RUN 0, TX_OPEN and TX_CLOSE): opens the key and marks a latch.
     void endKeyFromEngine(const char* why);
+    // A radio other than the first has been taken out of its slot (multi-radio stage 4): the spectrum ring and the audio feed it had are retired, so a read of
+    // the slot shows nothing of it until a radio put there publishes its own frames.
+    void radioClosed(std::size_t slot);
     // (The web remote's PTT, keep-alive and "the server stopped" - webRemotePtt, webRemoteBeat, webRemoteStopped - were here until stage 5d:
     // the web server's engine session keys through the table like any client's, its heartbeat is the page's status poll, and its close is
     // the server stopping. docs/engine-stage4.md 6.12.)

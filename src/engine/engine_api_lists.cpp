@@ -172,8 +172,10 @@ void Engine::refreshApiPluginKeys() {
 // THE WORD FOR A RADIO'S STATE (fact.radio.<n>.state): lent while the patch page has its radio, opening while its device is being opened, faulted while its
 // pipeline says it has failed, running while it runs, else stopped. (A radio that is not there has no word: its facts are absent.)
 const char* Engine::radioStateWord(std::uint32_t radio) {
-    if (radio != 1u) { return "stopped"; }
-    if (patchMainKeep_.valid) { return "lent"; }
+    if (!receiverLive(radio)) { return "stopped"; }
+    // (Read under the slot's scope: the pass is the only caller, and the slot is there.)
+    SlotScope scope(this, static_cast<std::size_t>(radio) - 1u);
+    if (radio == 1u && patchMainKeep_.valid) { return "lent"; }
     if (rx().deviceOpenPending_) { return "opening"; }
     if (!rx().apiFaultText_.empty()) { return "faulted"; }
     return rx().pipeline_.running() ? "running" : "stopped";
@@ -181,7 +183,7 @@ const char* Engine::radioStateWord(std::uint32_t radio) {
 
 // The open radio's name for a person: its model, else what the receiver is on instead of a radio.
 std::string Engine::radioLabel() {
-    if (patchMainKeep_.valid) { return patchMainKeep_.label; }
+    if (scopedSlot() == 0u && patchMainKeep_.valid) { return patchMainKeep_.label; }
     if (rx().device_ != nullptr) { return rx().deviceModel_; }
     if (rx().sourceKind_ == "file") { return "I/Q file"; }
     return "Signal generator";
@@ -546,7 +548,12 @@ std::uint64_t Engine::apiListsFingerprint() {
     }
     f.value(receiverMask_.load(std::memory_order_acquire));
     for (std::uint32_t n = 1; n <= kMaxReceivers; ++n) {
-        if (receiverLive(n)) { f.text(radioStateWord(n)); }
+        if (!receiverLive(n)) { continue; }
+        f.text(radioStateWord(n));
+        // (stage 4) what the other radio facts say: the route and the device the radio holds move the block too.
+        f.value(receivers_[n - 1u]->audioRoute_);
+        f.text(receivers_[n - 1u]->claimedKey_);
+        f.text(receivers_[n - 1u]->refusal_);
     }
     // The I/Q recordings the Radio's device list offers (API 0.3 8.12: PATCH_DEVICES, with each one's rate): by what each
     // names, not their number - a relisting that finds other files must rebuild the list.
@@ -1237,9 +1244,15 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         if (!receiverLive(n)) { continue; }
         const std::string pre = "radio." + std::to_string(n) + ".";
         fact(pre + "state", radioStateWord(n));
-        fact(pre + "device", n == 1u ? patchReceiverRadioKey() : std::string());
-        fact(pre + "label", n == 1u ? radioLabel() : std::string());
-        fact(pre + "audio", "both");
+        {
+            SlotScope scope(this, static_cast<std::size_t>(n) - 1u);
+            fact(pre + "device", n == 1u ? patchReceiverRadioKey()
+                                         : (rx().device_ != nullptr ? cascade::core::patch::makeDeviceKey(rx().sourceKind_, rx().deviceArgs_) : std::string()));
+            fact(pre + "label", radioLabel());
+            fact(pre + "audio", radioRouteWord(rx().audioRoute_));
+            if (!rx().refusal_.empty()) { fact(pre + "refusal", rx().refusal_); }
+        }
+        // (The first radio's route is read from its own slot like any other's.)
         std::string running;
         for (const ApiListBlock::Plugin& p : b.plugins) {
             if (!p.decoder || !p.running) { continue; }

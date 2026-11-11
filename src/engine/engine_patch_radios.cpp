@@ -172,6 +172,8 @@ std::string Engine::patchReceiverRadioKey() const {
 // device claims it, in graph order and whether or not it is switched on (a node that is off still names the device: the plan's DeviceTwice rule); a node counts
 // toward the limit on open radios only while it is on and the patch runs. A refused claim is kept, in words that name the holder, and the node is never opened.
 void Engine::rebuildDeviceLedger() {
+    // The first radio's books are read as the first radio's, whichever radio's work this is called from (a command addressed to radio 3 asks the ledger).
+    SlotScope firstRadio(this, 0);
     deviceLedger_.clear();
     patchLedgerRefusal_.clear();
     for (std::size_t slot = 0; slot < receivers_.size(); ++slot) {
@@ -185,6 +187,9 @@ void Engine::rebuildDeviceLedger() {
                 if (held.take) { key = pc::makeDeviceKey(held.kind, held.args); }
             }
         }
+        // A radio other than the first holds what it asked for when it was added or last pointed at a device (Receiver::claimedKey_, cleared by its own
+        // pass when an open did not take): it is on the books whether it is on a device or the generator.
+        if (slot != 0) { key = receivers_[slot]->claimedKey_; }
         deviceLedger_.claim(key, DeviceHolder::receiver(slot), true);
     }
     if (patchMainKeep_.valid) {

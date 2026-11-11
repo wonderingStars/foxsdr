@@ -3186,6 +3186,47 @@ void transmitterOps(AppWindow& a) {
     CHECK(!A::haveTx(a));
 }
 
+// --- the radios (multi-radio stage 4: the engine's fuller coverage is tests/test_engine_api_multi_radio.cpp) -----------------------------------------------------
+
+void radioOps(AppWindow& a) {
+    covering(FOXAPI_OP_RADIO_ADD);
+    {
+        // radio 1 is always there; a number past the limit is no number; a test radio on the generator is added at the lowest free number.
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_RADIO_ADD, 1)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_RADIO_ADD, 9)), FOXAPI_OUT_OF_RANGE));
+        FoxCommand c = ints(FOXAPI_OP_RADIO_ADD, 0, 0);
+        c.num[0] = 150000.0;
+        const FoxCommandResult r = A::apply(a, c);
+        CHECK(ok(r));
+        CHECK(r.applied[0] == 2.0);
+        // open already: nothing changes, and it says so.
+        CHECK(A::apply(a, ints(FOXAPI_OP_RADIO_ADD, 2)).status == FOXAPI_NO_CHANGE);
+    }
+    covering(FOXAPI_OP_RADIO_AUDIO);
+    {
+        // radio 2: left (an ok), the same again (nothing changes), a route that is none, a radio that is not there.
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_RADIO_AUDIO, 2, 1))));
+        CHECK(A::apply(a, ints(FOXAPI_OP_RADIO_AUDIO, 2, 1)).status == FOXAPI_NO_CHANGE);
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_RADIO_AUDIO, 2, 9)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_RADIO_AUDIO, 5, 1)), FOXAPI_NO_DEVICE));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_RADIO_AUDIO, 2, 0))));
+    }
+    covering(FOXAPI_OP_RADIO_SOLO);
+    {
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_RADIO_SOLO, 2))));
+        CHECK(A::apply(a, ints(FOXAPI_OP_RADIO_SOLO, 2)).status == FOXAPI_NO_CHANGE);
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_RADIO_SOLO, 6)), FOXAPI_NO_DEVICE));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_RADIO_SOLO, 0))));
+    }
+    covering(FOXAPI_OP_RADIO_REMOVE);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_RADIO_REMOVE, 1)), FOXAPI_UNSUPPORTED));
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_RADIO_REMOVE, 5)), FOXAPI_NO_DEVICE));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_RADIO_REMOVE, 2))));
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_RADIO_REMOVE, 2)), FOXAPI_NO_DEVICE));
+    }
+}
+
 void otherOps(AppWindow& a) {
     covering(FOXAPI_OP_AUDIO_DEVICE);
     {
@@ -3457,6 +3498,7 @@ int main() {
         airbandOps(app);
         markerOps(app);
         transmitterOps(app);
+        radioOps(app);
         otherOps(app);
         statusLineOps(app);
         queueDrainsInOrder(app);

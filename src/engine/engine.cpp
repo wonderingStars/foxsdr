@@ -856,8 +856,11 @@ void Engine::pollDspMinute() {
     {
         const std::uint64_t droppedNow = rx().pipeline_.ringDroppedSamples();
         const std::uint64_t readNow = rx().pipeline_.sourceSamplesRead();
-        cascade::core::setRingCounters(droppedNow, readNow);
-        publishRingFigures();
+        // THE BUNDLE'S COUNTERS ARE THE FIRST RADIO'S (one set, process-wide); an added radio keeps its own in its Receiver and says so in its minute line.
+        if (scopedSlot() == 0u) {
+            cascade::core::setRingCounters(droppedNow, readNow);
+            publishRingFigures();
+        }
     }
     const double now = clockS();
     if (now - rx().lastDspLogSec_ >= 60.0) {
@@ -871,6 +874,7 @@ void Engine::pollDspMinute() {
 // the ring's depth in samples and in milliseconds of the source's rate, the fullest it has been this session, and the longest the DSP thread
 // spent on one block - the maxima of the minutes closed so far and of the minute still open. Sizes and times, nothing about the signal.
 void Engine::publishRingFigures() {
+    if (scopedSlot() != 0u) { return; }   // the bundle's figures are the first radio's
     cascade::core::RingFigures f;
     f.capacitySamples = rx().pipeline_.ringCapacity();
     const double sourceRate = rx().pipeline_.activeSource().sampleRateHz();
@@ -908,9 +912,11 @@ void Engine::closeDspMinute() {
     // (DiagLog::kLineBytes), which a cut line would be masked whole by the scrub.
     if (dropped == 0) { return; }
     const std::string share = cascade::core::droppedShareText(dropped, read);
-    cascade::core::diagLogf("dsp: %llu samples dropped between the source and the DSP in the last minute (%s)",
+    // WHICH RADIO, once there are several (the design: every receiver reports its own ring drops); the line of a lone radio is as it always was.
+    const std::string radioTag = receiverCount() > 1u ? " [radio " + std::to_string(scopedSlot() + 1u) + "]" : std::string();
+    cascade::core::diagLogf("dsp: %llu samples dropped between the source and the DSP in the last minute (%s)%s",
                             static_cast<unsigned long long>(dropped),
-                            share.empty() ? "share unknown" : share.c_str());
+                            share.empty() ? "share unknown" : share.c_str(), radioTag.c_str());
     // THE FEED ROW, behind the severity floor (core/diag_report.hpp,
     // ringDropWorthAReport): a minute that lost a hearable share files the
     // `ringdrop` issue report, once a session; a start-of-stream blip does
@@ -928,11 +934,11 @@ void Engine::closeDspMinute() {
     // the bundle, for the minutes that did not. 112 characters at the widest.
     const std::size_t capacity = rx().pipeline_.ringCapacity();
     const std::size_t pct = capacity == 0 ? 0 : std::min<std::size_t>(100, highWater * 100 / capacity);
-    cascade::core::diagLogf("dsp: ring high water %llu%% of %llu samples, %llu writes cut, longest DSP block %llu ms",
+    cascade::core::diagLogf("dsp: ring high water %llu%% of %llu samples, %llu writes cut, longest DSP block %llu ms%s",
                             static_cast<unsigned long long>(pct),
                             static_cast<unsigned long long>(capacity),
                             static_cast<unsigned long long>(cut),
-                            static_cast<unsigned long long>(blockNs / 1000000u));
+                            static_cast<unsigned long long>(blockNs / 1000000u), radioTag.c_str());
 }
 
 void Engine::setAudioBufferMs(int ms) {
@@ -1434,6 +1440,12 @@ void Engine::pollSourceAsync() {
         }
     }
 
+    // THE RADIO'S OWN HALF - a finished device open - is pollDeviceOpen's: the added radios run it from their own pass (pumpExtraReceivers).
+    pollDeviceOpen();
+}
+
+void Engine::pollDeviceOpen() {
+    constexpr auto kNoWait = std::chrono::seconds(0);
     if (rx().deviceOpenPending_ && rx().deviceOpenFuture_.valid() &&
         rx().deviceOpenFuture_.wait_for(kNoWait) == std::future_status::ready) {
         // THE MODULE TABLE, REBUILT BECAUSE THE OPEN LOADED CODE.
@@ -4634,7 +4646,8 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         }
     }
     // RUNNING is fed with the receiver running; stopped, nothing is fed.
-    const std::uint32_t fedModules = running ? matchedModules : 0u;
+    // (Decoder plugins run on the first radio only until stage 6: an added radio is fed none.)
+    const std::uint32_t fedModules = (running && scopedSlot() == 0u) ? matchedModules : 0u;
 
     // THE RECEIVER RAIL'S READOUTS (API 0.3 8.4), each read ONCE: the flag word,
     // the members below and /api/status's extension (AppStateExt) all take
@@ -4649,7 +4662,7 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     cascade::core::RxFlagSources fs;
     fs.running = running;
     fs.deviceOpen = rx().device_ != nullptr;
-    fs.faulted = rx().pipeline_.faulted() || !testFault_.empty();
+    fs.faulted = rx().pipeline_.faulted() || (scopedSlot() == 0u && !testFault_.empty());
     fs.muted = rx().userMuted_;
     fs.stereoEnabled = rx().stereoEnabled_;
     fs.stereoActive = rx().pipeline_.stereoActive();
@@ -4660,9 +4673,9 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     fs.agcSupported = rx().deviceAgcSupported_;
     fs.recordingIq = rx().iqRecorder_.recording();
     fs.recordingAudio = rx().audioRecorder_.recording();
-    fs.scannerActive = scanner_.active();
+    fs.scannerActive = scanner_.active() && scannerSlot_ == scopedSlot();
     // The DEC lamp's own predicate (drawToolbar's MASTER cluster).
-    fs.decoderActive = running && runnerActive > 0;
+    fs.decoderActive = scopedSlot() == 0u && running && runnerActive > 0;
     // THE KEY, as the engine API's rules decided it this pass (stage 4).
     const ApiHost::TxFacts key = api_->txFacts();
     fs.txAvailable = transmitter_.haveSink();
@@ -4688,7 +4701,7 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     fs.pilotLocked = pilotLocked;
     // The radio's own centre, for the CONVERTERS list to read live (8.3): one
     // atomic store a pass. (Defined beside the converter's other readbacks.)
-    converterRadioCentre_.store(converterRadioCentreHz(), std::memory_order_relaxed);
+    if (scopedSlot() == 0u) { converterRadioCentre_.store(converterRadioCentreHz(), std::memory_order_relaxed); }
     // Handed over by the front end (OPEN 4), not asked of it while publishing.
     const FrontEndFacts facts = frontEndFacts();
     // ...except whether the web server listens: the server is the engine's own since 5b, so the bit is its host's answer, not a fact the
@@ -4889,7 +4902,8 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     }
     e.iqBytes = rx().iqRecorder_.bytesWritten();
     e.audioBytes = rx().audioRecorder_.bytesWritten();
-    switch (scanner_.state()) {
+    // THE SCANNER BELONGS TO THE RADIO IT WAS STARTED ON (one scanner, bound to it): another radio's state shows it idle.
+    switch (scopedSlot() == scannerSlot_ ? scanner_.state() : cascade::core::Scanner::State::Idle) {
         case cascade::core::Scanner::State::Idle: e.scannerState = cascade::core::kScannerIdle; break;
         case cascade::core::Scanner::State::Scanning: e.scannerState = cascade::core::kScannerScanning; break;
         case cascade::core::Scanner::State::Paused: e.scannerState = cascade::core::kScannerPaused; break;
@@ -4908,7 +4922,7 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
                       cascade::core::kScannerHolding == FOXAPI_SCANNER_HOLDING,
                   "the state words are the scanner's, as /api/status names them");
     r.scannerState = e.scannerState;
-    r.scanCurrentHz = scanner_.currentHz();
+    r.scanCurrentHz = scopedSlot() == scannerSlot_ ? scanner_.currentHz() : 0.0;
     r.scanStartHz = e.scanStartHz;
     r.scanStopHz = e.scanStopHz;
     r.scanStepHz = e.scanStepHz;
@@ -5650,15 +5664,19 @@ void Engine::pollRecordFinishes() {
 
 bool Engine::drainRecordFinishes(std::chrono::steady_clock::time_point deadline) {
     // A Record queued behind a finish is not started at quit: the window is closing.
-    rx().iqStartQueued_ = false;
-    rx().audioStartQueued_ = false;
+    forEachReceiver([this] {
+        rx().iqStartQueued_ = false;
+        rx().audioStartQueued_ = false;
+    });
     const bool landed = cascade::core::RecordFinisher::drain(deadline);
     if (!landed) {
         cascade::core::diagLogf(
             "recorder: a take's file was still being closed at exit - the disk did not answer in time; it keeps the header it was opened with");
     }
-    collectFinish(rx().iqFinish_, "I/Q");
-    collectFinish(rx().audioFinish_, "audio");
+    forEachReceiver([this] {
+        collectFinish(rx().iqFinish_, "I/Q");
+        collectFinish(rx().audioFinish_, "audio");
+    });
     return landed;
 }
 
@@ -5899,7 +5917,7 @@ bool Engine::startAudioRecording() {
     // and a slow one froze it (see gui/record_start.hpp). The cheap half stays: a refusal that needs no disk is reported at once.
     std::string err;
     cascade::core::Recorder::OpenRequest req;
-    if (!rx().audioRecorder_.prepare(cascade::core::RecordKind::Audio, recordDir_, cascade::core::Pipeline::kAudioRateHz, std::string{}, req,
+    if (!rx().audioRecorder_.prepare(cascade::core::RecordKind::Audio, recordDir_, cascade::core::Pipeline::kAudioRateHz, takePrefix(false), req,
                                 err)) {
         rx().recordError_ = err;
         return false;
@@ -5921,7 +5939,7 @@ bool Engine::startIqRecording() {
     const double rate = rx().pipeline_.inputRateHz();
     std::string err;
     cascade::core::Recorder::OpenRequest req;
-    if (!rx().iqRecorder_.prepare(cascade::core::RecordKind::BasebandIq, recordDir_, rate, std::string{}, req, err)) {
+    if (!rx().iqRecorder_.prepare(cascade::core::RecordKind::BasebandIq, recordDir_, rate, takePrefix(true), req, err)) {
         rx().recordError_ = err;
         return false;
     }
@@ -6274,7 +6292,7 @@ void Engine::tuneAbsoluteHz(double absHz, bool isPluginPreset) {
     retuneSourceHz(absHz - rx().pipeline_.vfoOffsetHz(), isPluginPreset);
     // A MANUAL TUNE gives an audio-output decoder its first chance to play (an independent wake signal before it has an instance to
     // report as the playing plugin); the pass's lifecycle step consumes it (engine_plugin_run.cpp).
-    if (rx().pipeline_.running() && !scanner_.active() && !isPluginPreset) { audioOutputTunePending_ = true; }
+    if (scopedSlot() == 0u && rx().pipeline_.running() && !scanner_.active() && !isPluginPreset) { audioOutputTunePending_ = true; }
 }
 
 void Engine::retuneSourceHz(double centerHz, bool isPluginPreset) {
@@ -6297,7 +6315,7 @@ void Engine::retuneSourceHz(double centerHz, bool isPluginPreset) {
     // A SOURCE WITH NO TUNER (a sound card) is tuned by its VFO instead - see
     // gui::tuneWithFixedCentre.
     if (retuneFixedCentre(centerHz)) { return; }
-    if (rx().device_ == nullptr || scanner_.active()) {
+    if (rx().device_ == nullptr || (scanner_.active() && scannerSlot_ == scopedSlot())) {
         applyRetuneNow(centerHz, isPluginPreset);
         return;
     }
@@ -6336,7 +6354,8 @@ void Engine::applyRetuneNow(double centerHz, bool isPluginPreset) {
     // trusting the requested value, because a device may land on a nearby
     // tuning step and the decoder should be told where it actually is.
     const double landedHz = src.centerFrequencyHz();
-    pluginRunner_.retune(landedHz);
+    // (The decoders run on the first radio only until stage 6: another radio's retune is none of theirs.)
+    if (scopedSlot() == 0u) { pluginRunner_.retune(landedHz); }
 
     // SAY WHEN THE RADIO CANNOT TUNE THERE. Measured on a USRP B200: a request
     // for 7.000 MHz landed at 30.800 MHz with sourceError_, faultMessage and
@@ -6575,6 +6594,7 @@ double Engine::publishReceiverState() {
     // The engine API's lists, handed over BEFORE the state whose listSeq
     // says they changed.
     ps.app.listsFingerprint = publishApiLists();
+    lastListsFingerprint_ = ps.app.listsFingerprint;
     std::shared_ptr<cascade::net::RadioStatus> lists = std::make_shared<cascade::net::RadioStatus>();
     std::vector<std::uint64_t> bookmarkIds;
     fillStatusLists(*lists, faultMessage, rds, bookmarkIds);
@@ -6818,7 +6838,9 @@ void Engine::submitCommand(const FoxCommand& c) {
 void Engine::submitCommand(cascade::core::cmd::QueuedCommand q) {
     LocalCommand lc;
     lc.q = std::move(q);
-    lc.sourceGen = rx().sourceGen_.load();
+    // The generation of the radio the command is addressed to (the first radio's for one that names none): the guard is per radio.
+    lc.sourceGen = (lc.q.c.target >= 1u && lc.q.c.target != FOXAPI_TARGET_ALL_RADIOS && receiverLive(lc.q.c.target)) ? receiverSourceGen(lc.q.c.target)
+                                                                                                                     : receivers_[0]->sourceGen_.load();
     {
         std::lock_guard<std::mutex> lk(localCommandsMutex_);
         localCommands_.push_back(std::move(lc));
@@ -6905,7 +6927,11 @@ void Engine::drainLocalCommands() {
         // replaced by one that opened in between - sourceGen_ moves with
         // every device_ change, including one made earlier in this batch) is
         // dropped: it was drawn for that radio, never for this one.
-        if (lc.sourceGen != rx().sourceGen_ && isDeviceScoped(lc.q.c.op)) { continue; }
+        {
+            const std::uint32_t t = lc.q.c.target;
+            const std::uint64_t gen = (t >= 1u && t != FOXAPI_TARGET_ALL_RADIOS && receiverLive(t)) ? receiverSourceGen(t) : receivers_[0]->sourceGen_.load();
+            if (lc.sourceGen != gen && isDeviceScoped(lc.q.c.op)) { continue; }
+        }
         commandFromWindow_ = true;
         (void)applyCommand(lc.q.c, lc.q.longText);
         commandFromWindow_ = false;
@@ -6932,15 +6958,41 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
     // THE RADIO THE COMMAND IS FOR (multi-radio stage 3, engine/radio_scope.hpp): an op that addresses one radio, sent with a target that names no radio
     // the engine has, is refused NO_DEVICE here, for every way a command arrives (the API host has already said so at the submit, with the sender's own
     // focus; a local command has none, so it is the first radio's). Only slot 0 carries a receiver until RADIO_ADD (stage 4), and every handler below acts on it.
+    // STAGE 4: the radio is the one the sender's focus names (commandFocus_, set by the API host for the length of the apply; 1 for a command with no
+    // session), or - for a call made from inside another radio's work (the scanner's tune of the radio it is bound to) - the radio that work is on. The
+    // handlers below then run under a RadioWork for that slot, so every rx() in them and in everything they call is that radio's. A target of ALL radios
+    // (RUN alone) is applied to each radio there is, in order, each as the command it would be with that number as its target.
+    RadioPick pick;
     {
-        const RadioPick pick = pickRadio(c.op, c.target, 1u, [this](std::uint32_t n) { return receiverLive(n); });
+        const std::uint32_t focus = tlsScopeEngine_ == this ? static_cast<std::uint32_t>(tlsScopeSlot_) + 1u : commandFocus_;
+        pick = pickRadio(c.op, c.target, focus, [this](std::uint32_t n) { return receiverLive(n); });
         if (pick.status == FOXAPI_NO_DEVICE) { return refuse(FOXAPI_NO_DEVICE, "there is no radio with that number"); }
         if (pick.status != FOXAPI_OK) { return refuse(pick.status, "a target of all radios is for RUN alone"); }
     }
+    if (pick.radio == FOXAPI_TARGET_ALL_RADIOS) {
+        FoxCommandResult all = res;
+        for (std::uint32_t n = 1; n <= kMaxReceivers; ++n) {
+            if (!receiverLive(n)) { continue; }
+            FoxCommand one = c;
+            one.target = n;
+            all = applyCommand(one, longText);
+        }
+        return all;
+    }
+    RadioWork radioWork(*this, isRadioScopedOp(c.op) ? static_cast<std::size_t>(pick.radio) - 1u : scopedSlot());
     const bool on = c.ival[0] != 0;
     const std::string text = cmd::textOf(c, longText);
 
     switch (c.op) {
+        // --- the radios (multi-radio stage 4; engine_radios.cpp) ---------------
+        case FOXAPI_OP_RADIO_ADD:
+            return radioAddOp(c, text, res);
+        case FOXAPI_OP_RADIO_REMOVE:
+            return radioRemoveOp(c, res);
+        case FOXAPI_OP_RADIO_AUDIO:
+            return radioAudioOp(c, res);
+        case FOXAPI_OP_RADIO_SOLO:
+            return radioSoloOp(c, res);
         // --- the receiver ----------------------------------------------------
         case FOXAPI_OP_RUN:
             // The dome, the Start/Stop key, the scope's POWER, the web remote
@@ -6953,7 +7005,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 // THE KEY NEVER SURVIVES A STOP (API 0.2): whoever asked -
                 // the dome, a key binding, a browser, a remote session - a
                 // stop opens any key and marks a latch's principal.
-                api_->endKeyFromEngine("the receiver was stopped");
+                // (The transmitter follows the first radio's device until the screen says otherwise: another radio's stop is not the key's end.)
+                if (scopedSlot() == 0u) { api_->endKeyFromEngine("the receiver was stopped"); }
                 // THE TEST SEAM OF FOXSDR_HOLD_AUDIO_LOCK, taken HERE so that the stop below runs while the audio mutex is held - for a control
                 // request's stop only (the web remote's and a plugin's), as it always was.
                 if (!commandFromWindow_ && holdAudioLockMs_ > 0 && !holdAudioLockDone_ && rx().pipeline_.running()) { holdAudioLockForTest(); }
@@ -7316,8 +7369,33 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             return res;
         case FOXAPI_OP_SELECT_SOURCE:
             if (text.empty()) { return refuse(FOXAPI_BAD_ARGUMENT, "no source named"); }
+            // The sound card is the Source section's one shared card (its list, its open and its live state are the engine's): the first radio's.
+            if (scopedSlot() != 0u && (text == "row:soundcard" || text == "soundcard:open")) {
+                return refuse(FOXAPI_UNSUPPORTED, "the sound card is the first radio's source");
+            }
+            // A DEVICE ANOTHER RADIO HOLDS IS REFUSED BY NAME (multi-radio stage 4): the ledger knows every open radio, receivers and patch radios, and who has
+            // which; a scanned device's id is "<kind>:<args>", the same spelling its key has.
+            if (const std::size_t colon = text.find(':'); colon != std::string::npos) {
+                const std::string kind = text.substr(0, colon);
+                if (kind != "file" && kind != "open-pluto" && kind != "open-rtltcp" && kind != "row" && kind != "soundcard") {
+                    const std::string key = cascade::core::patch::makeDeviceKey(kind, text.substr(colon + 1));
+                    rebuildDeviceLedger();
+                    const DeviceHolder holder = deviceLedger_.holderOf(key);
+                    if (!holder.none() && holder != DeviceHolder::receiver(scopedSlot())) {
+                        return refuse(FOXAPI_BUSY, ("in use by " + holder.describe()).c_str());
+                    }
+                }
+            }
             if (!selectSourceById(text)) {
                 return refuse(FOXAPI_NOT_FOUND, "no scanned device matches that id");
+            }
+            if (scopedSlot() != 0u) {
+                // This radio now names the device it opens (the ledger reads it): the id's own key, or none when it went to the generator.
+                const std::size_t colon = text.find(':');
+                rx().claimedKey_ = (colon != std::string::npos && text.compare(0, colon, "file") != 0 && text.compare(0, colon, "row") != 0 &&
+                                    text.compare(0, colon, "soundcard") != 0)
+                                       ? cascade::core::patch::makeDeviceKey(text.substr(0, colon), text.substr(colon + 1))
+                                       : std::string();
             }
             return res;
         case FOXAPI_OP_SET_SAMPLE_RATE: {
@@ -7660,6 +7738,10 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 // the Airband monitor stands down (stub campaign B6).
                 scanTicked_ = false;
                 if (airbandListening_ || airbandStartPending_) { airbandStop(std::string()); }
+                // ONE SCANNER, BOUND TO THE RADIO IT WAS STARTED ON: started on another radio, it moves there (it stops first, so it does not tune the
+                // radio it left).
+                if (scanner_.active() && scannerSlot_ != scopedSlot()) { scanner_.stop(); }
+                scannerSlot_ = scopedSlot();
                 configureScanner();
                 scanner_.start(clockS() * 1000.0);
             } else {
@@ -9590,7 +9672,7 @@ void Engine::teardown() {
     stopControlThread();
     // Same problem, no cancel to reach for: a device open may still be inside
     // SoapySDR::Device::make(). See reapPendingDeviceOpen for the semantics.
-    reapPendingDeviceOpen();
+    forEachReceiver([this] { reapPendingDeviceOpen(); });
     // The sound card's list and open, on the same terms.
     reapSoundCardWorkers();
 
@@ -9600,7 +9682,7 @@ void Engine::teardown() {
     // call. reap() spends a short grace and then abandons the worker; it is
     // safe to abandon because the opener holds the sink alive by shared_ptr
     // (see Pipeline::audioOpener).
-    rx().audioOpen_.reap();
+    forEachReceiver([this] { rx().audioOpen_.reap(); });
     // The microphone's gate, same argument: waveInOpen has no timeout either,
     // and Transmitter::microphoneOpener owns the microphone it opens.
     micOpen_.reap();
@@ -9647,8 +9729,12 @@ void Engine::teardown() {
     // the recorder members are destroyed before pipeline_ (reverse
     // declaration order), so any tap still installed must be uninstalled
     // first — stop*Recording clears the pipeline pointer, then finalizes.
-    stopIqRecording();
-    stopAudioRecording();
+    forEachReceiver([this] {
+        stopIqRecording();
+        stopAudioRecording();
+    });
+    // (Every added radio's pipeline is stopped by shutdownStop's loop, or - for an engine torn down without it - by its Receiver's destructor, which joins
+    // the pipeline's threads.)
 }
 
 // --- THE PER-FRAME PUMP (engine stage 3a) ------------------------------------
@@ -9697,12 +9783,25 @@ void Engine::pumpPlugins() {
     // WHICH PLUGINS RUN THIS PASS (0.99.73): wake what has just been wanted, put to sleep what has not been for 30 seconds. After the
     // commands (a window's report, a START, a preset) have landed, before the publish, so what the publish says is the plugins that exist.
     updatePluginLifecycle();
-    scannerFrame();
+    // THE SCANNER'S FRAME IS ON THE RADIO IT IS BOUND TO (stage 4).
+    {
+        RadioWork scannerWork(*this, receivers_[scannerSlot_] ? scannerSlot_ : 0u);
+        scannerFrame();
+    }
     // THE AIRBAND MONITOR'S STEP, for the scanner's reason and in its place: a retune made this pass is already applied when it looks (stub
     // campaign B6). Inert while nothing listens.
     airbandFrame();
     // AUTOMATIC SQUELCH (stub campaign B12): after the monitor's step, so the channel levels its rule reads are this pass's. Inert while the switch is off.
     squelchAutoFrame();
+    // ...and each added radio's own (the switch and the tracker are each radio's; the airband monitor's rule belongs to the first radio, so while it listens an
+    // added radio's automatic squelch waits).
+    if (!airbandListening_) {
+        for (std::size_t slot = 1; slot < kMaxReceivers; ++slot) {
+            if (!receivers_[slot]) { continue; }
+            RadioWork w(*this, slot);
+            squelchAutoFrame();
+        }
+    }
 }
 
 double Engine::pumpPublish() {
@@ -9720,6 +9819,8 @@ double Engine::pumpPublish() {
     // N-1 (a red source-error line beside a RUN flag that has not moved yet); published this way, and read in that order, the lines
     // can only be OLDER than the state, which is the lag every status line already had. test_look_order holds it with a hook in the gap.
     const double centre = publishReceiverState();
+    // EVERY OTHER RADIO'S STATE, after the first radio's (the lists fingerprint they carry is the one it took) and before the status lines (stage 4).
+    publishExtraReceivers();
     if (testHooks_.betweenPublishes != nullptr) { testHooks_.betweenPublishes(); }
     // The status lines as this frame's commands left them, before any panel
     // draws (OPEN 3).
@@ -9872,8 +9973,10 @@ void Engine::shutdownQuiesce() {
     // Closing the window mid-take finalizes both recordings cleanly (same
     // contract as the toolbar Stop): taps out, then headers patched — before
     // the pipeline teardown below ends the sample flow they were taping.
-    stopIqRecording();
-    stopAudioRecording();
+    forEachReceiver([this] {
+        stopIqRecording();
+        stopAudioRecording();
+    });
 
     // THE BOUNDED RUN'S PLUGIN STATUS REPORT (CASCADE_PLUGIN_STATUS; shell retirement R4), where the window used to call reportPluginStatus - right
     // after this first phase, so it reports the state the run finished in. The plugin UI's half rode in on the front end's last hand-over
@@ -9896,7 +9999,7 @@ void Engine::shutdownStop() {
     // ended further up this teardown ("Closing the window mid-take"), and
     // this is the one pipeline_.stop() tests/test_stop_ends_recordings allows
     // outside it.
-    rx().pipeline_.stop();
+    forEachReceiver([this] { rx().pipeline_.stop(); });
 }
 
 void Engine::shutdownDrain(std::chrono::steady_clock::time_point drainDeadline) {
@@ -10263,6 +10366,8 @@ void Engine::runPassPart(PassPart part) {
         case PassPart::Back:
             pumpWorkers();
             pumpAudio();
+            // THE ADDED RADIOS' OWN HOUSEKEEPING (stage 4): each under its own scope, after the first radio's.
+            pumpExtraReceivers();
             break;
     }
 }
