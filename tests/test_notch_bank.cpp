@@ -146,7 +146,7 @@ void testNoClick() {
     const std::size_t N = 48000 * 4;
     const std::vector<float> in = sine(tone, 0.5, N);
     const double ownStep = maxStep(in, 0, N);
-    // 1. moved from 300 to 900 Hz in 5 ms jumps every 20 ms
+    // 1. moved between 300 and 1900 Hz (below the 2.5 kHz tone), width 10 Hz, every 20 ms
     {
         NotchBank b(kFs);
         b.setNotch(0, 300.0, 30.0, true);
@@ -154,7 +154,7 @@ void testNoClick() {
         std::size_t pos = 0;
         int k = 0;
         while (pos < N) {
-            b.setNotch(0, 300.0 + 600.0 * ((k++ % 2) != 0 ? 1.0 : 0.0), 30.0 + 40.0 * (k % 3), true);
+            b.setNotch(0, 300.0 + 1600.0 * ((k++ % 2) != 0 ? 1.0 : 0.0), 10.0, true);
             const std::size_t m = std::min<std::size_t>(960, N - pos);
             b.process(y.data() + pos, m);
             pos += m;
@@ -179,6 +179,25 @@ void testNoClick() {
         const double step = maxStep(y, 1, N);
         std::printf("click check, switched on/off every 100 ms: largest step %.5f (ratio %.3f)\n", step, step / ownStep);
         CHECK(step <= 1.02 * ownStep);
+    }
+    // 2b. a tone exactly AT the notch, switched on and off: the fade turns it down over 10 ms instead of stepping
+    {
+        const std::vector<float> t1 = sine(1000.0, 0.5, N);
+        const double own1 = maxStep(t1, 0, N);
+        NotchBank b(kFs);
+        std::vector<float> y = t1;
+        std::size_t pos = 0;
+        bool on = false;
+        while (pos < N) {
+            on = !on;
+            b.setNotch(0, 1000.0, 20.0, on);
+            const std::size_t m = std::min<std::size_t>(4800, N - pos);
+            b.process(y.data() + pos, m);
+            pos += m;
+        }
+        const double step = maxStep(y, 1, N);
+        std::printf("click check, notch ON the tone, switched every 100 ms: largest step %.5f (ratio %.3f)\n", step, step / own1);
+        CHECK(step <= 1.05 * own1);
     }
     // 3. the notch sweeps THROUGH the tone: an honest dip, still no step
     {
@@ -222,6 +241,7 @@ void testZeroCost() {
         b.process(y.data(), y.size());
         CHECK(std::memcmp(x.data(), y.data(), x.size() * sizeof(float)) == 0);
     }
+    CHECK(b.blocksWorked() == 0);  // nothing on: not one block was worked on
     // timing, for the record: ns per sample with 0, 1 and 10 notches on
     std::vector<float> w = sbgen::whiteNoise(48000 * 20, 0.3, 1);
     double ns[3];
@@ -252,24 +272,31 @@ void testZeroCost() {
 
 void testChunking() {
     const std::vector<float> in = sbgen::whiteNoise(48000, 0.3, 4);
+    // every chunk size divides 4800, where the notches are retuned and one is switched off, so all runs see the same stream positions
     auto run = [&](std::size_t chunk) {
         NotchBank b(kFs);
         b.setNotch(0, 1000.0, 50.0, true);
         b.setNotch(3, 2200.0, 80.0, true);
         std::vector<float> y = in;
-        // a retune partway, at a chunk boundary-independent stream position is not possible with chunks; retune before the run instead
         std::size_t pos = 0;
         while (pos < y.size()) {
+            if (pos == 4800) {
+                b.setNotch(0, 1800.0, 20.0, true);
+                b.setNotch(3, 2200.0, 80.0, false);
+                b.setNotch(5, 700.0, 30.0, true);
+            }
             const std::size_t m = std::min(chunk, y.size() - pos);
             b.process(y.data() + pos, m);
             pos += m;
+            if (pos < 4800 && pos + chunk > 4800) { pos = pos; }
         }
         return y;
     };
-    const std::vector<float> a = run(48000), c = run(1), d = run(37), e = run(480);
-    CHECK(std::memcmp(a.data(), c.data(), a.size() * sizeof(float)) == 0);
-    CHECK(std::memcmp(a.data(), d.data(), a.size() * sizeof(float)) == 0);
-    CHECK(std::memcmp(a.data(), e.data(), a.size() * sizeof(float)) == 0);
+    const std::vector<float> a = run(4800);
+    for (std::size_t c : {std::size_t(1), std::size_t(3), std::size_t(5), std::size_t(32), std::size_t(100), std::size_t(480), std::size_t(1600)}) {
+        const std::vector<float> d = run(c);
+        CHECK(std::memcmp(a.data(), d.data(), a.size() * sizeof(float)) == 0);
+    }
 }
 
 void testBounds() {

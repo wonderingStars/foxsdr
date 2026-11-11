@@ -86,6 +86,9 @@ public:
         }
     }
 
+    // Blocks of 16 samples the bank has worked on (stays 0 while nothing is on: the zero-cost proof for the tests).
+    std::uint64_t blocksWorked() const { return blocks_; }
+
     // DSP thread: forget all filter memory and glides (next change of a slot starts clean).
     void reset() {
         for (auto& s : slot_) { s.reset(); }
@@ -115,6 +118,7 @@ private:
     };
 
     void updateBlock(std::uint32_t wanted) {
+        ++blocks_;
         int fading = 0;
         for (int i = 0; i < kMaxNotches; ++i) {
             Slot& s = slot_[static_cast<std::size_t>(i)];
@@ -174,6 +178,7 @@ private:
     std::atomic<std::uint32_t> mask_{0};
     std::size_t blockPos_ = 0;
     int fadingOut_ = 0;
+    std::uint64_t blocks_ = 0;
 };
 
 }  // namespace cascade::dsp
