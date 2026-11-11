@@ -232,6 +232,7 @@ void testGoldenRecord() {
     // The notes line above has its own '\n' before the next field; the CR LF is inside the 12 characters.
     const std::size_t at = text.find("<SWL");
     CHECK(at != std::string::npos);
+    if (at == std::string::npos) { return; }
     CHECK(text.substr(at) == want);
 }
 
