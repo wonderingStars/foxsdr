@@ -1718,6 +1718,27 @@ typedef struct CascadeStreamInfo {
 #define CASCADE_MARKER_SPAN 1u      /* a shaded band freqHz .. freqHz+widthHz */
 #define CASCADE_MARKER_FLAG_DASHED 0x00000001u
 #define CASCADE_MARKER_FLAG_SPECTRUM_ONLY 0x00000002u /* not on the waterfall */
+/* ---- A hint for the host's schedule: "this will be worth recording" (timed recordings, appended after host API level 2; no grant) ----------
+ * A plugin that can PREDICT something - the satellites plugin's next passes - tells the host when and where, and the USER decides: the host lists the hints
+ * and records one only when the user picks it (docs/API.md 6.23). A hint changes nothing by itself. At most CASCADE_MAX_SCHEDULE_HINTS_PER_PLUGIN per plugin,
+ * replaced by id, forgotten when the plugin stops or unloads (the marker contract). All times are Unix milliseconds, UTC; demodMode is a CASCADE_DEMOD_*. */
+#define CASCADE_SCHEDULE_LABEL_CHARS 32
+#define CASCADE_MAX_SCHEDULE_HINTS_PER_PLUGIN 16u
+#define CASCADE_SCHEDULE_HINT_PASS 1u /* a satellite pass: aosUnixMs..losUnixMs with a peak elevation */
+typedef struct CascadeScheduleHint {
+    uint32_t structSize;   /* sizeof(CascadeScheduleHint) as the plugin compiled it */
+    uint32_t id;           /* the plugin's own number; the same id replaces */
+    uint32_t kind;         /* CASCADE_SCHEDULE_HINT_* */
+    uint32_t demodMode;    /* CASCADE_DEMOD_* to tune to; 0 = leave the mode alone */
+    int64_t aosUnixMs;     /* when it starts (acquisition of signal) */
+    int64_t losUnixMs;     /* when it ends (loss of signal): after aosUnixMs, at most 24 h later */
+    double maxElDeg;       /* the highest elevation of a pass, degrees 0..90 (0 when not a pass) */
+    double freqHz;         /* the frequency to tune to; above 0 and below 6 GHz */
+    double bandwidthHz;    /* 0 = leave the bandwidth alone */
+    char label[CASCADE_SCHEDULE_LABEL_CHARS];       /* "NOAA 19", "METEOR-M2 4"; UTF-8 */
+    char decoderName[CASCADE_SCHEDULE_LABEL_CHARS]; /* the plugin the user would want started with it, "" none (informational: the host does not start it) */
+} CascadeScheduleHint;
+
 #define CASCADE_MARKER_LABEL_CHARS 32
 #define CASCADE_MAX_MARKERS_PER_PLUGIN 64u
 typedef struct CascadeMarker {
@@ -1907,6 +1928,14 @@ typedef struct CascadeHostApi {
      * user's behalf, exactly the way tuneSeq etc. report changes the user
      * made through the host's own controls, not through request_tune. */
     uint64_t (*settings_seq)(void *ctx);
+
+    /* ---- Schedule hints (appended after host API level 2: check CASCADE_HOST_HAS(host, set_schedule_hint)). Any thread, no grant. ------------ */
+
+    /* Adds, or replaces by id, one hint. OK; BAD_ARGUMENT (NULL, a short struct, a non-finite number, losUnixMs not after aosUnixMs); OUT_OF_RANGE (kind,
+     * frequency, elevation, a span over 24 h, a mode over 8); LIMIT past CASCADE_MAX_SCHEDULE_HINTS_PER_PLUGIN. The struct and its text are copied. */
+    int32_t (*set_schedule_hint)(void *ctx, const CascadeScheduleHint *hint);
+    /* Removes all of this plugin's hints. The host also removes them when the plugin is stopped or unloaded. */
+    int32_t (*clear_schedule_hints)(void *ctx);
 } CascadeHostApi;
 
 /*

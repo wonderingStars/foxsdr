@@ -80,6 +80,35 @@ void Engine::loadSchedule(const std::vector<sched::Entry>& entries) {
 
 std::vector<sched::Entry> Engine::scheduleEntries() const { return schedule_.entries(); }
 
+// A plugin's hint, picked by the user, made into an ordinary entry (FOXAPP_OP_SCHEDULE_FROM_HINT). The plugin never makes an entry itself: it only says what it expects.
+std::int32_t Engine::scheduleFromHint(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why) {
+    const long long n = c.ival[0];
+    if (n < 1 || n > static_cast<long long>(pluginHints_.size())) {
+        why = "there is no plugin hint with that number";
+        return FOXAPI_NOT_FOUND;
+    }
+    const CascadeScheduleHint& h = pluginHints_[static_cast<std::size_t>(n - 1)].hint;
+    const int radio = c.ival[1] == 0 ? 1 : static_cast<int>(c.ival[1]);
+    json j;
+    j["name"] = text.empty() ? std::string(h.label) : text.substr(0, static_cast<std::size_t>(sched::kMaxNameChars));
+    j["radio"] = radio;
+    j["startUnix"] = h.aosUnixMs / 1000 - 60;    // a minute before it starts
+    j["lengthS"] = static_cast<int>(std::min<std::int64_t>(sched::kMaxLengthS, (h.losUnixMs - h.aosUnixMs + 999) / 1000 + 120));
+    j["repeat"] = "once";
+    j["tune"] = true;
+    j["freqHz"] = h.freqHz;
+    j["mode"] = static_cast<int>(h.demodMode == 8u ? 0u : h.demodMode);
+    j["bandwidthHz"] = h.bandwidthHz;
+    j["recordAudio"] = false;
+    j["recordIq"] = true;
+    j["returnToWhereIWas"] = true;
+    FoxCommand set = c;
+    set.op = FOXAPP_OP_SCHEDULE_SET;
+    set.ival[0] = 0;
+    set.ival[1] = 0;
+    return applyScheduleOp(set, j.dump(), res, why);
+}
+
 std::int32_t Engine::applyScheduleOp(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why) {
     const std::int64_t nowMs = scheduleNowMs();
     const std::int64_t nowS = nowMs / 1000;
@@ -92,6 +121,7 @@ std::int32_t Engine::applyScheduleOp(const FoxCommand& c, const std::string& tex
     };
     const std::uint32_t id = (c.ival[0] > 0 && c.ival[0] < 0x7FFFFFFF) ? static_cast<std::uint32_t>(c.ival[0]) : 0u;
     switch (c.op) {
+        case FOXAPP_OP_SCHEDULE_FROM_HINT: return scheduleFromHint(c, text, res, why);
         case FOXAPP_OP_SCHEDULE_SET: {
             sched::Entry e;
             const bool replace = id != 0;
@@ -457,6 +487,24 @@ void Engine::scheduleFacts(const std::function<void(const std::string&, const st
     put("schedule.missed", std::to_string(missed));
     put("schedule.max", std::to_string(sched::kMaxEntries));
     put("schedule.next", std::to_string(nextS));
+    // WHAT PLUGINS PREDICT, for the user to pick (FOXAPP_OP_SCHEDULE_FROM_HINT): one JSON document per hint, numbered from 1 in the order the plugins gave them.
+    put("schedule.hint.count", std::to_string(pluginHints_.size()));
+    for (std::size_t i = 0; i < pluginHints_.size(); ++i) {
+        const CascadeScheduleHint& h = pluginHints_[i].hint;
+        json hj;
+        hj["plugin"] = pluginHints_[i].plugin;
+        hj["id"] = h.id;
+        hj["kind"] = h.kind == CASCADE_SCHEDULE_HINT_PASS ? "pass" : "other";
+        hj["label"] = std::string(h.label);
+        hj["aosUnix"] = h.aosUnixMs / 1000;
+        hj["losUnix"] = h.losUnixMs / 1000;
+        hj["maxElDeg"] = h.maxElDeg;
+        hj["freqHz"] = h.freqHz;
+        hj["mode"] = h.demodMode;
+        hj["bandwidthHz"] = h.bandwidthHz;
+        hj["decoder"] = std::string(h.decoderName);
+        put("schedule.hint." + std::to_string(i + 1), hj.dump());
+    }
     for (const sched::Entry& e : list) {
         json j;
         j["id"] = e.id;

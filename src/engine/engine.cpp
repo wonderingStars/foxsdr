@@ -5128,6 +5128,13 @@ void Engine::applyPluginApi() {
         pluginMarkersSeq_ = ms;
         api.markers(pluginMarkers_);
     }
+    // --- 5. What plugins predicted (schedule hints) ------------------------------------
+    const std::uint64_t hs = api.scheduleHintsSeq();
+    if (hs != pluginHintsSeq_) {
+        pluginHintsSeq_ = hs;
+        api.scheduleHints(pluginHints_);
+        ++scheduleVersion_;   // the facts carry them
+    }
 
     // (What plugins may READ is the one receiver snapshot, published by
     // publishReceiverState later in this frame - after the scanner and before
@@ -7934,7 +7941,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         case FOXAPP_OP_SCHEDULE_REMOVE:
         case FOXAPP_OP_SCHEDULE_ENABLE:
         case FOXAPP_OP_SCHEDULE_RUN_NOW:
-        case FOXAPP_OP_SCHEDULE_SKIP: {
+        case FOXAPP_OP_SCHEDULE_SKIP:
+        case FOXAPP_OP_SCHEDULE_FROM_HINT: {
             std::string why;
             const std::int32_t st = applyScheduleOp(c, text, res, why);
             if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }

@@ -386,6 +386,16 @@ public:
     std::int32_t setMarker(const PluginApiClient& c, const CascadeMarker* m);
     std::int32_t removeMarker(const PluginApiClient& c, std::uint32_t id);
     std::int32_t clearMarkers(const PluginApiClient& c);
+    // SCHEDULE HINTS (timed recordings; plugin_abi.h CascadeScheduleHint): what a plugin predicts, for the user to pick. Copied, validated, replaced by id,
+    // at most CASCADE_MAX_SCHEDULE_HINTS_PER_PLUGIN a plugin, forgotten when the plugin is detached.
+    std::int32_t setScheduleHint(const PluginApiClient& c, const CascadeScheduleHint* h);
+    std::int32_t clearScheduleHints(const PluginApiClient& c);
+    std::uint64_t scheduleHintsSeq() const;
+    struct HostScheduleHint {
+        std::string plugin;           // the module file name
+        CascadeScheduleHint hint;
+    };
+    void scheduleHints(std::vector<HostScheduleHint>& out) const;
 
     std::int32_t settingsGet(const PluginApiClient& c, const char* key, char* buf,
                              std::size_t cap) const;
@@ -441,6 +451,7 @@ private:
     // at client creation so a plugin's call never allocates.
     struct ClientState {
         std::vector<CascadeMarker> markers;  // capacity CASCADE_MAX_MARKERS_PER_PLUGIN
+        std::vector<CascadeScheduleHint> hints;  // capacity CASCADE_MAX_SCHEDULE_HINTS_PER_PLUGIN
         std::array<CommandSlot, CASCADE_MAX_COMMANDS_PER_PLUGIN> commands{};
         std::size_t commandCount = 0;
         std::array<std::uint32_t, kPressQueue> presses{};
@@ -482,6 +493,7 @@ private:
     std::size_t logCount_ = 0;
     std::uint64_t logDropped_ = 0;
     std::uint64_t markersSeq_ = 1;
+    std::uint64_t hintsSeq_ = 1;
     // The legacy request_tune's records and queue (see the public block): under mutex_, except the sequence.
     std::vector<std::string> tuneRequesters_;
     std::string lastDenied_;

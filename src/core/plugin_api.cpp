@@ -242,6 +242,7 @@ PluginApiClient& PluginApiCore::client(const std::string& key, const std::string
     c->index = clients_.size();
     ClientState st;
     st.markers.reserve(CASCADE_MAX_MARKERS_PER_PLUGIN);
+    st.hints.reserve(CASCADE_MAX_SCHEDULE_HINTS_PER_PLUGIN);
     state_.push_back(std::move(st));
     refreshGrantsLocked(*c);
     clients_.push_back(std::move(c));
@@ -258,6 +259,10 @@ void PluginApiCore::clearClientLocked(std::size_t index) {
     if (!st.markers.empty()) {
         st.markers.clear();
         ++markersSeq_;
+    }
+    if (!st.hints.empty()) {
+        st.hints.clear();
+        ++hintsSeq_;
     }
     if (st.commandCount != 0) { commandsSeq_.fetch_add(1, std::memory_order_release); }
     st.commandCount = 0;
@@ -1005,6 +1010,74 @@ std::int32_t PluginApiCore::clearMarkers(const PluginApiClient& c) {
         ++markersSeq_;
     }
     return CASCADE_API_OK;
+}
+
+std::int32_t PluginApiCore::setScheduleHint(const PluginApiClient& c, const CascadeScheduleHint* h) {
+    const std::int32_t g = gate(c);
+    if (g != CASCADE_API_OK) { return g; }
+    if (h == nullptr || h->structSize < sizeof(CascadeScheduleHint)) { return CASCADE_API_BAD_ARGUMENT; }
+    // Copied FIRST: everything after this line reads the host's own copy.
+    CascadeScheduleHint x{};
+    std::memcpy(&x, h, std::min<std::size_t>(h->structSize, sizeof(CascadeScheduleHint)));
+    x.structSize = static_cast<std::uint32_t>(sizeof(CascadeScheduleHint));
+    if (!finite(x.maxElDeg) || !finite(x.freqHz) || !finite(x.bandwidthHz)) { return CASCADE_API_BAD_ARGUMENT; }
+    if (x.losUnixMs <= x.aosUnixMs) { return CASCADE_API_BAD_ARGUMENT; }
+    if (x.kind != CASCADE_SCHEDULE_HINT_PASS) { return CASCADE_API_OUT_OF_RANGE; }
+    if (!(x.freqHz > 0.0 && x.freqHz < 6.0e9)) { return CASCADE_API_OUT_OF_RANGE; }
+    if (x.losUnixMs - x.aosUnixMs > 24LL * 3600LL * 1000LL) { return CASCADE_API_OUT_OF_RANGE; }
+    if (x.aosUnixMs < 1577836800000LL || x.aosUnixMs > 4102444800000LL) { return CASCADE_API_OUT_OF_RANGE; }
+    if (x.maxElDeg < 0.0 || x.maxElDeg > 90.0) { return CASCADE_API_OUT_OF_RANGE; }
+    if (x.bandwidthHz < 0.0 || x.bandwidthHz > 20.0e6) { return CASCADE_API_OUT_OF_RANGE; }
+    if (x.demodMode > 8u) { return CASCADE_API_OUT_OF_RANGE; }
+    // The texts are fixed arrays in the PLUGIN's struct, which it may have filled to the last byte: re-terminate, cut back to a whole character.
+    char text[CASCADE_SCHEDULE_LABEL_CHARS];
+    std::memcpy(text, x.label, sizeof(text));
+    text[CASCADE_SCHEDULE_LABEL_CHARS - 1] = '\0';
+    copyBoundedUtf8(x.label, sizeof(x.label), text);
+    std::memcpy(text, x.decoderName, sizeof(text));
+    text[CASCADE_SCHEDULE_LABEL_CHARS - 1] = '\0';
+    copyBoundedUtf8(x.decoderName, sizeof(x.decoderName), text);
+
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (!c.live.load(std::memory_order_acquire)) { return CASCADE_API_DETACHED; }   // (as setMarker: re-checked under the lock)
+    ClientState& st = state_[c.index];
+    for (CascadeScheduleHint& e : st.hints) {
+        if (e.id == x.id) {
+            e = x;
+            ++hintsSeq_;
+            return CASCADE_API_OK;
+        }
+    }
+    if (st.hints.size() >= CASCADE_MAX_SCHEDULE_HINTS_PER_PLUGIN) { return CASCADE_API_LIMIT; }
+    st.hints.push_back(x);   // within the reserved capacity: no allocation
+    ++hintsSeq_;
+    return CASCADE_API_OK;
+}
+
+std::int32_t PluginApiCore::clearScheduleHints(const PluginApiClient& c) {
+    const std::int32_t g = gate(c);
+    if (g != CASCADE_API_OK) { return g; }
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (!c.live.load(std::memory_order_acquire)) { return CASCADE_API_DETACHED; }
+    std::vector<CascadeScheduleHint>& v = state_[c.index].hints;
+    if (!v.empty()) {
+        v.clear();
+        ++hintsSeq_;
+    }
+    return CASCADE_API_OK;
+}
+
+std::uint64_t PluginApiCore::scheduleHintsSeq() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return hintsSeq_;
+}
+
+void PluginApiCore::scheduleHints(std::vector<HostScheduleHint>& out) const {
+    out.clear();
+    std::lock_guard<std::mutex> lk(mutex_);
+    for (std::size_t i = 0; i < clients_.size() && i < state_.size(); ++i) {
+        for (const CascadeScheduleHint& h : state_[i].hints) { out.push_back(HostScheduleHint{clients_[i]->key, h}); }
+    }
 }
 
 std::int32_t PluginApiCore::settingsGet(const PluginApiClient& c, const char* key, char* buf,

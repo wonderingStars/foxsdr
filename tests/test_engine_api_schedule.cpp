@@ -652,6 +652,57 @@ void testOps() {
     }
 }
 
+void testHintHandoff() {
+    // WHAT A PLUGIN PREDICTS BECOMES AN ENTRY ONLY WHEN THE USER PICKS IT (docs/API.md 6.23, the pass hand-off): the hint is injected by the test hook that stands in for
+    // a plugin's set_schedule_hint (tests/test_plugin_schedule_hint.cpp holds the plugin's side).
+    Rig r("k9");
+    const FoxReceiverState before = r.rx();
+    r.clockS(T0);
+    const std::int64_t aos = T0 + 3600, los = T0 + 3600 + 600;
+    FoxCommand inject{};
+    inject.structSize = sizeof(inject);
+    inject.op = FOXAPI_OP_SETTING_SET;
+    std::snprintf(inject.text, sizeof(inject.text), "test.scheduleHint=NOAA 19|%lld|%lld|137900000|%d|40000|55", static_cast<long long>(aos * 1000), static_cast<long long>(los * 1000), static_cast<int>(FOXAPI_DEMOD_NFM));
+    CHECK(r.submit(inject).status == FOXAPI_OK);
+    CHECK(r.waitFact("fact.schedule.hint.count", "1"));
+    const json h = json::parse(r.fact("fact.schedule.hint.1"), nullptr, false);
+    CHECK(h.is_object() && h["label"] == "NOAA 19" && h["aosUnix"].get<std::int64_t>() == aos && h["freqHz"].get<double>() == 137.9e6 && h["plugin"] == "test.dll");
+    // a hint alone does nothing, however long it sits and even when its time comes
+    CHECK(r.fact("fact.schedule.count") == "0");
+    r.clockS(aos);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    CHECK(r.fact("fact.schedule.count") == "0" && (r.rx().flags & (FOXAPI_RX_RECORDING_IQ | FOXAPI_RX_RECORDING_AUDIO)) == 0u);
+    r.clockS(T0);
+    // the user picks it
+    CHECK(r.op0(FOXAPP_OP_SCHEDULE_FROM_HINT, 5, 1).status == FOXAPI_NOT_FOUND);
+    CHECK(r.op0(FOXAPP_OP_SCHEDULE_FROM_HINT, 0, 1).status == FOXAPI_NOT_FOUND);
+    CHECK(r.op0(FOXAPP_OP_SCHEDULE_FROM_HINT, 1, 9).status == FOXAPI_OUT_OF_RANGE);
+    const FoxCommandResult pick = r.op0(FOXAPP_OP_SCHEDULE_FROM_HINT, 1, 1);
+    CHECK(pick.status == FOXAPI_OK && pick.applied[0] == 1.0);
+    CHECK(r.waitFact("fact.schedule.count", "1"));
+    const json e = r.entry(1);
+    CHECK(e["name"] == "NOAA 19" && e["radio"] == 1 && e["startUnix"].get<std::int64_t>() == aos - 60);
+    CHECK(e["lengthS"].get<int>() == 600 + 120 && e["tune"] == true && e["freqHz"].get<double>() == 137.9e6 && e["mode"].get<int>() == static_cast<int>(FOXAPI_DEMOD_NFM));
+    CHECK(e["bandwidthHz"].get<double>() == 40000.0 && e["recordIq"] == true && e["recordAudio"] == false && e["returnToWhereIWas"] == true);
+    // the same pass twice is an overlap
+    CHECK(r.op0(FOXAPP_OP_SCHEDULE_FROM_HINT, 1, 1).status == FOXAPI_BUSY);
+    // it then runs like any entry: the I/Q is recorded from a minute before, the radio is tuned, and everything is put back afterwards
+    r.clockS(aos - 60);
+    CHECK(r.waitState(1, "recording"));
+    CHECK(r.waitRx(1, [](const FoxReceiverState& s) { return (s.flags & FOXAPI_RX_RECORDING_IQ) != 0u; }));
+    CHECK(std::llround(r.rx().tunedHz) == 137900000 && r.rx().demodMode == FOXAPI_DEMOD_NFM && (r.rx().flags & FOXAPI_RX_RECORDING_AUDIO) == 0u);
+    r.clockS(aos - 60 + 720);
+    CHECK(r.waitState(1, "done"));
+    CHECK(r.waitRx(1, [](const FoxReceiverState& s) { return (s.flags & FOXAPI_RX_RECORDING_IQ) == 0u; }));
+    CHECK(std::llround(r.rx().centreHz) == std::llround(before.centreHz) && r.rx().demodMode == before.demodMode);
+    // hints that go away (the plugin stopped) leave the entry alone, and the list empties
+    inject.text[0] = 't';
+    std::snprintf(inject.text, sizeof(inject.text), "test.scheduleHint=");
+    CHECK(r.submit(inject).status == FOXAPI_OK);
+    CHECK(r.waitFact("fact.schedule.hint.count", "0"));
+    CHECK(r.fact("fact.schedule.count") == "1");
+}
+
 void testSettingsFile() {
     cascade::core::AppConfig c;
     cascade::core::sched::Entry e;
@@ -720,6 +771,7 @@ int main(int argc, char** argv) {
     if (want("clock")) { testClockRules(); }
     if (want("restart")) { testRestart(); }
     if (want("ops")) { testOps(); }
+    if (want("hint")) { testHintHandoff(); }
     if (want("file")) { testSettingsFile(); }
     fs::remove_all(scratchRoot(), ec);
     return testSummary("test_engine_api_schedule");

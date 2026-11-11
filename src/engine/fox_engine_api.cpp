@@ -2219,6 +2219,37 @@ void ApiHostImpl::applyTestHook(const Pending& p, FoxCommandResult& r, const std
         std::this_thread::sleep_for(std::chrono::milliseconds(std::clamp(std::atoi(val.c_str()), 0, 1000)));
     } else if (key == "test.stallAfterPass") {
         stallAfterPassMs_ = std::clamp(std::atoi(val.c_str()), 0, 1000);
+    } else if (key == "test.scheduleHint") {
+        // Stands in for a plugin that predicts something (CascadeScheduleHint): "label|aosUnixMs|losUnixMs|freqHz|mode|bandwidthHz|maxElDeg", added to the hints
+        // the engine lists; an empty value takes them all away. (The plugin side - the table's set_schedule_hint - is tests/test_plugin_schedule_hint.cpp's.)
+        if (val.empty()) {
+            engine_.pluginHints_.clear();
+        } else {
+            std::vector<std::string> f;
+            std::size_t a = 0;
+            while (true) {
+                const std::size_t b = val.find('|', a);
+                f.push_back(val.substr(a, b == std::string::npos ? std::string::npos : b - a));
+                if (b == std::string::npos) { break; }
+                a = b + 1;
+            }
+            if (f.size() >= 7) {
+                cascade::core::PluginApiCore::HostScheduleHint h;
+                h.plugin = "test.dll";
+                h.hint.structSize = sizeof(h.hint);
+                h.hint.id = static_cast<std::uint32_t>(engine_.pluginHints_.size() + 1);
+                h.hint.kind = CASCADE_SCHEDULE_HINT_PASS;
+                std::snprintf(h.hint.label, sizeof(h.hint.label), "%s", f[0].c_str());
+                h.hint.aosUnixMs = std::strtoll(f[1].c_str(), nullptr, 10);
+                h.hint.losUnixMs = std::strtoll(f[2].c_str(), nullptr, 10);
+                h.hint.freqHz = std::strtod(f[3].c_str(), nullptr);
+                h.hint.demodMode = static_cast<std::uint32_t>(std::strtoul(f[4].c_str(), nullptr, 10));
+                h.hint.bandwidthHz = std::strtod(f[5].c_str(), nullptr);
+                h.hint.maxElDeg = std::strtod(f[6].c_str(), nullptr);
+                engine_.pluginHints_.push_back(h);
+            }
+        }
+        ++engine_.scheduleVersion_;
     } else if (key == "test.scheduleClock") {
         // The timed recordings' clock (unix milliseconds), so a test sets the time and steps it without sleeping; 0 gives the system clock back.
         engine_.scheduleClockMs_.store(std::strtoll(val.c_str(), nullptr, 10), std::memory_order_relaxed);

@@ -2297,6 +2297,8 @@ void scheduleOps(AppWindow& a) {
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_SCHEDULE_SKIP, 9999)), FOXAPI_NOT_FOUND));
         covering(FOXAPP_OP_SCHEDULE_RUN_NOW);
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_SCHEDULE_RUN_NOW, 9999)), FOXAPI_NOT_FOUND));
+        covering(FOXAPP_OP_SCHEDULE_FROM_HINT);
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SCHEDULE_FROM_HINT, 1, 1)), FOXAPI_NOT_FOUND));   // no plugin has predicted anything here
         covering(FOXAPP_OP_SCHEDULE_REMOVE);
         CHECK(ok(A::apply(a, ints(FOXAPP_OP_SCHEDULE_REMOVE, id))));
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_SCHEDULE_REMOVE, id)), FOXAPI_NOT_FOUND));

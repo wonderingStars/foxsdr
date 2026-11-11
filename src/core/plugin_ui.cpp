@@ -592,6 +592,12 @@ std::int32_t l1RemoveMarker(void* ctx, std::uint32_t id) {
 std::int32_t l1ClearMarkers(void* ctx) {
     return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.clearMarkers(c); });
 }
+std::int32_t l1SetScheduleHint(void* ctx, const CascadeScheduleHint* h) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.setScheduleHint(c, h); });
+}
+std::int32_t l1ClearScheduleHints(void* ctx) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.clearScheduleHints(c); });
+}
 std::int32_t l1SettingsGet(void* ctx, const char* key, char* buf, std::size_t cap) {
     return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) {
         return a.settingsGet(c, key, buf, cap);
@@ -662,6 +668,8 @@ void fillLevel1(HostCtx& c) {
     t.remove_command = &l1RemoveCommand;
     t.poll_command = &l1PollCommand;
     t.settings_seq = &l1SettingsSeq;
+    t.set_schedule_hint = &l1SetScheduleHint;
+    t.clear_schedule_hints = &l1ClearScheduleHints;
 }
 
 }  // namespace

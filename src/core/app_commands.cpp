@@ -186,6 +186,7 @@ constexpr OpEntry kOps[] = {
     {FOXAPP_OP_SCHEDULE_ENABLE, "APP_SCHEDULE_ENABLE", true},
     {FOXAPP_OP_SCHEDULE_RUN_NOW, "APP_SCHEDULE_RUN_NOW", true},
     {FOXAPP_OP_SCHEDULE_SKIP, "APP_SCHEDULE_SKIP", true},
+    {FOXAPP_OP_SCHEDULE_FROM_HINT, "APP_SCHEDULE_FROM_HINT", true},
 };
 
 constexpr std::size_t kOpCount = sizeof(kOps) / sizeof(kOps[0]);

@@ -284,6 +284,41 @@ void testDecodersOnOtherRadios(const fs::path& fixtures) {
     CHECK_EQ(r.fact("radio.1.source"), std::string("file"));
     CHECK(r.fact("radio.1.plugins").find(bystander) != std::string::npos);
     CHECK_EQ(r.fact("radio.count"), std::string("5"));
+
+    // 5: THE POCSAG FIXTURE THAT "DOES NOT DECODE ON RADIO 2" (the screen lane's open engine item, screen-s6.md B2). The cause is the TUNING, not the radio number:
+    // the fixture's carrier is 17.75 kHz above the file's own centre, so the receiver must be tuned to centre + 17750 Hz of VFO offset (as the cases above do).
+    // `radio tune <n> <hz>` of the drive scripts is SET_FREQUENCY - "tuned Hz; the VFO is kept, the centre follows" - which with the VFO at 0 puts the CENTRE at
+    // 153.350 MHz and the VFO on it, 17.75 kHz away from the carrier. Mistuned that way the decoder is fed, the file plays and nothing decodes; given the offset
+    // it decodes at once, on the very same radio.
+    {
+        const Case& p = cases[1];   // pocsag, expect "FOXSDR FIXTURE"
+        FoxCommand add = testing::cmd(FOXAPI_OP_RADIO_ADD, 0.0, 6, ("file:" + (fixtures / p.fixture).string()).c_str());
+        add.ival[1] = 1;
+        CHECK_EQ(r.send(add).status(), FOXAPI_OK);
+        CHECK(r.until([&] { return r.fact("radio.6.source") == "file"; }));
+        CHECK_EQ(r.send(r.aimed(FOXAPI_OP_SET_FREQUENCY, 6, 153350000.0)).status(), FOXAPI_OK);   // what `radio tune 6 153350000` sends
+        CHECK_EQ(r.send(r.aimed(FOXAPI_OP_SET_MODE, 6, 0.0, p.mode)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(r.aimed(FOXAPI_OP_SET_BANDWIDTH, 6, p.bandwidthHz)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(r.aimed(FOXAPI_OP_SET_VOLUME, 6, 0.0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.radio(6).vfoOffsetHz, 0.0);
+        FoxCommand mv = testing::cmd(FOXAPI_OP_PLUGIN_RADIO, 0.0, 6, p.file.c_str());
+        mv.ival[1] = 1;
+        CHECK_EQ(r.send(mv).status(), FOXAPI_OK);
+        const auto heardOn6 = [&] {
+            for (const Line& l : r.lines()) {
+                if (l.radio == 6 && l.text.find(p.expect) != std::string::npos) { return true; }
+            }
+            return false;
+        };
+        (void)r.until([] { return false; }, 15000);   // fifteen seconds of passes: long enough for the fixture to loop several times
+        const bool mistunedDecoded = heardOn6();
+        std::printf("    pocsag on radio 6, tuned by SET_FREQUENCY alone (VFO offset 0): decoded %s\n", mistunedDecoded ? "YES" : "no");
+        CHECK(!mistunedDecoded);
+        CHECK_EQ(r.send(r.aimed(FOXAPI_OP_SET_CENTRE, 6, p.centreHz)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(r.aimed(FOXAPI_OP_SET_VFO_OFFSET, 6, p.vfoHz)).status(), FOXAPI_OK);
+        CHECK(r.until([&] { return heardOn6(); }, 90000));
+        std::printf("    ...and with the centre and the 17750 Hz offset the same radio decodes: %s\n", heardOn6() ? "yes" : "NO");
+    }
 }
 
 }  // namespace

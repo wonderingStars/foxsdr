@@ -2519,6 +2519,9 @@ private:
     std::map<std::string, PluginNotice> pluginNotices_;
     // The plugins' marks, copied out of the core only when its sequence moves.
     std::vector<cascade::core::HostMarker> pluginMarkers_;
+    // What plugins PREDICT (CascadeScheduleHint: the satellites plugin's next passes), for the user to pick into the schedule: copied when the API's counter moves.
+    std::vector<cascade::core::PluginApiCore::HostScheduleHint> pluginHints_;
+    std::uint64_t pluginHintsSeq_ = 0;
     std::uint64_t pluginMarkersSeq_ = 0;
     // AppConfig::pluginsStopped. The durable copy of "the user stopped this
     // plugin", by module file name, held here for the same reason the grants
@@ -3160,6 +3163,7 @@ private:
     std::atomic<std::int64_t> scheduleClockMs_{0};   // the test hook's clock (unix ms); 0 = the system's
     std::uint64_t scheduleVersion_ = 1;               // moves with any change of the list, a state or a note (the fact block's fingerprint)
     void pumpSchedule();
+    std::int32_t scheduleFromHint(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why);
     std::int64_t scheduleNowMs() const;
     void loadSchedule(const std::vector<cascade::core::sched::Entry>& entries);
     std::vector<cascade::core::sched::Entry> scheduleEntries() const;

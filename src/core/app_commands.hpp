@@ -124,6 +124,11 @@
 #define FOXAPP_OP_SCHEDULE_ENABLE        0x860Eu /* ival[0]: the id; ival[1]: 0/1 */
 #define FOXAPP_OP_SCHEDULE_RUN_NOW       0x860Fu /* ival[0]: the id */
 #define FOXAPP_OP_SCHEDULE_SKIP          0x8610u /* ival[0]: the id */
+//   SCHEDULE_FROM_HINT (SETTINGS): a plugin's hint (a predicted satellite pass, CascadeScheduleHint; fact.schedule.hint.<n>) made into an entry, because THE USER
+//   PICKED IT. ival[0]: the hint's number n (1..fact.schedule.hint.count); ival[1]: the radio (1..8, 0 = radio 1); text: the entry's name ("" = the hint's label). The
+//   entry starts a minute before the hint's start and ends a minute after its end, tunes to its frequency / mode / bandwidth, records the I/Q and puts the tuning back;
+//   it is then an ordinary entry (SCHEDULE_SET's refusals apply: OUT_OF_RANGE, BUSY on overlap, LIMIT). NOT_FOUND for a number the list does not hold. applied[0]: the id.
+#define FOXAPP_OP_SCHEDULE_FROM_HINT     0x8611u /* ival[0]: hint number; ival[1]: radio; text: name; applied[0]: the new entry's id */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */
 #define FOXAPP_OP_USER_PRESET_FORGET_AT  0x8702u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */
