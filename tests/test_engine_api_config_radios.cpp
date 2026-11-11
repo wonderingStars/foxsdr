@@ -338,17 +338,24 @@ void testADamagedArray() {
         CHECK_EQ(c.radios[1].centerHz, 0.0);
         CHECK_EQ(c.centerHz, 145800000.0);
     }
-    // A file or a sound card cannot be a second radio; the Pluto and rtl_tcp panels are not scanned devices either; device arguments of a megabyte are dropped.
+    // A sound card cannot be a second radio (its one list and open are the first radio's); a file, a Pluto and an rtl_tcp server can (stage 7: they are kept with their arguments); an unknown
+    // driver is the generator; device arguments of a megabyte are dropped.
     {
         std::string huge(1 << 20, 'x');
         AppConfig c;
         CHECK(parseText(damaged(R"([{"sourceKind": "file", "args": "C:/x.iq"}, {"sourceKind": "soundcard", "args": "card"}, {"sourceKind": "pluto", "args": "uri=ip:1"},
-            {"sourceKind": "rtltcp", "args": "1.2.3.4:1234"}, {"sourceKind": "rtlsdr", "args": ")" + huge + R"("}, {"sourceKind": "no such driver", "args": "a"},
+            {"sourceKind": "rtltcp", "args": "rtltcp=1.2.3.4:1234"}, {"sourceKind": "rtlsdr", "args": ")" + huge + R"("}, {"sourceKind": "no such driver", "args": "a"},
             {"sourceKind": "sdrplay", "args": "serial=1"}])"),
                           c));
         CHECK_EQ(c.radios.size(), static_cast<std::size_t>(7));
-        for (std::size_t i = 0; i < 6; ++i) {
-            CHECK_EQ(c.radios[i].sourceKind, std::string("siggen")) ;
+        CHECK_EQ(c.radios[0].sourceKind, std::string("file"));
+        CHECK_EQ(c.radios[0].args, std::string("C:/x.iq"));
+        CHECK_EQ(c.radios[2].sourceKind, std::string("pluto"));
+        CHECK_EQ(c.radios[2].args, std::string("uri=ip:1"));
+        CHECK_EQ(c.radios[3].sourceKind, std::string("rtltcp"));
+        CHECK_EQ(c.radios[3].args, std::string("rtltcp=1.2.3.4:1234"));
+        for (const std::size_t i : {1u, 4u, 5u}) {
+            CHECK_EQ(c.radios[i].sourceKind, std::string("siggen"));
             CHECK(c.radios[i].args.empty());
         }
         CHECK_EQ(c.radios[6].sourceKind, std::string("sdrplay"));

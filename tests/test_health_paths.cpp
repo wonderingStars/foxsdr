@@ -291,7 +291,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         // sites for master's one shared function: the bookmarks and the markers in engine.cpp, the settings in the engine service.
         {"GainRefused", "src/engine/engine.cpp", 1},
         {"PpmRefused", "src/engine/engine_ppm.cpp", 2},
-        {"IqFileGone", "src/engine/engine.cpp", 1},
+        {"IqFileGone", "src/engine/engine.cpp", 1}, {"IqFileGone", "src/engine/engine_radio_saved.cpp", 1},   // (stage 7: a saved second radio's file that is gone)
         {"CatalogueBad", "src/engine/engine_store.cpp", 2},
         {"CatStop", "src/net/cat_server.cpp", 1},
         {"FileKept", "src/engine/engine.cpp", 2}, {"FileKept", "src/engine/engine_service.cpp", 1},

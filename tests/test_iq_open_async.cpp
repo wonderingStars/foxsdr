@@ -502,7 +502,7 @@ void checkTheOpenIsNotMadeOnTheGuiThread() {
         "    auto file = std::make_unique<IqFileSource>();\n"
         "    if (!file->open(path)) { return; }\n"
         "}\n";
-    CHECK(withoutLineComments(functionBody(before, "void Engine::openIqFile(")).find("iqOpen.request(") == std::string::npos);
+    CHECK(withoutLineComments(functionBody(before, "void Engine::openIqFile(")).find("job.request(") == std::string::npos);
 
     // The handler lives in the engine's disk file; the button is in the window's.
     const fs::path src = fs::path(CASCADE_SOURCE_DIR) / "src";
@@ -511,7 +511,7 @@ void checkTheOpenIsNotMadeOnTheGuiThread() {
     const std::string engine = withoutLineComments(readFileText(src / "engine" / "engine.cpp"));
     const std::string body = functionBody(source, "void Engine::openIqFile(");
     CHECK(body.size() > 300);
-    const std::size_t request = body.find("iqOpen.request(");
+    const std::size_t request = body.find("job.request(");
     const std::size_t open = body.find("file->open(");
     CHECK(request != std::string::npos);
     CHECK(open != std::string::npos);
