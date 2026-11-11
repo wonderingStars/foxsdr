@@ -1561,6 +1561,13 @@ int main(int argc, char** argv) {
         if (name == "dbMax") { out = fmt("%.6f", state.dbMax); return std::string(); }
         if (name == "nrStrength") { out = fmt("%.6f", state.nrStrength); return std::string(); }
         if (name == "notchHz") { out = fmt("%.6f", state.notchHz); return std::string(); }
+        // AGC choice and noise blanker (lane C): the selected radio's settings and its two measurements, as the engine publishes them
+        if (name == "agcMode") { out = std::to_string(state.agcMode); return std::string(); }
+        if (name == "agcFixedGainDb") { out = fmt("%.6f", state.agcFixedGainDb); return std::string(); }
+        if (name == "agcGainDb") { out = fmt("%.6f", state.agcGainDb); return std::string(); }
+        if (name == "nbEnabled") { out = std::to_string(state.nbEnabled); return std::string(); }
+        if (name == "nbThresholdDb") { out = fmt("%.6f", state.nbThresholdDb); return std::string(); }
+        if (name == "nbBlankedPct") { out = fmt("%.6f", state.nbBlankedPct); return std::string(); }
         if (name == "txFrequencyHz") { out = fmt("%.6f", state.txFrequencyHz); return std::string(); }
         if (name == "demodMode") { out = std::to_string(state.demodMode); return std::string(); }
         if (name == "mode") { out = modeName(state.demodMode); return std::string(); }

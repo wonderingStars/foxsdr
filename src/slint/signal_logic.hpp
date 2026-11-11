@@ -74,6 +74,10 @@
 //   filter-notch-freq(norm)        opNotchFreq          FOXAPP_OP_SET_NOTCH_FREQUENCY 0x8204  num[0] = notchHzFromNorm(norm) (10 Hz .. 20 kHz, logarithmic)
 //   filter-notch-q(norm)           opNotchQ             FOXAPP_OP_SET_NOTCH_Q 0x8205  num[0] = notchQFromNorm(norm) (1 .. 200)
 //   filter-auto-notch(on)          opAutoNotch          FOXAPI_OP_SET_AUTO_NOTCH 0x010F  ival[0] = on
+//   filter-agc-mode(index)         opAgcMode            FOXAPI_OP_SET_AGC 0x0111  ival[0] = index (0 Auto .. 4 Off), ival[1] = 0 (the fixed gain is not set)
+//   filter-agc-fixed(norm)         opAgcFixed           FOXAPI_OP_SET_AGC 0x0111  ival[0] = the mode now in force (Off), ival[1] = 1, num[0] = agcFixedFromNorm(norm) (-20..+40 dB)
+//   filter-nb(on)                  opNb                 FOXAPI_OP_SET_NB 0x0112  ival[0] = on, ival[1] = 0 (the threshold is not set)
+//   filter-nb-threshold(norm)      opNbThreshold        FOXAPI_OP_SET_NB 0x0112  ival[0] = the switch now in force, ival[1] = 1, num[0] = nbThresholdFromNorm(norm) (6..30 dB)
 //   sink-device-selected(i)        opSinkDevice         FOXAPI_OP_AUDIO_DEVICE 0x0E01  ival[0] = devices[i].id (the PortAudio index); sent for the row in use too (the Selectable does: it re-opens)
 //   sink-buffer-selected(i)        opSinkBuffer         FOXAPP_OP_SET_AUDIO_BUFFER 0x8425  ival[0] = buffers[i].id (0 AUTOMATIC, 120, 240, 480, 960 ms)
 //   transmit-clicked()             opTransmitPage       FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN 0x8408  ival[0] = the page's NEW state (open flag is the publisher's)   grant TRANSMIT
@@ -234,6 +238,22 @@ struct AudioFiltersModel {
     bool auto_notch_on = false;
     std::string auto_notch_status;
     bool auto_notch_locked = false;
+    // AGC choice and noise blanker (lane C): the selected radio's.
+    std::string agc_text;                  // the chosen mode's word ("Auto", "Fast", "Medium", "Slow", "Off")
+    std::vector<SelectItem> agc_modes;     // the five, in FOXAPI_AGC_* order; id = the mode number
+    int agc_index = 0;
+    float agc_fixed = 0.f;                 // 0..1 over -20..+40 dB
+    std::string agc_fixed_text;            // "+12 dB"
+    bool agc_fixed_on = false;             // the Fixed gain slider is live only in Off
+    std::string agc_gain_text;             // the gain in use, "+12 dB"
+    int agc_gain_int = 0;                  // ...whole dB
+    std::string agc_gain_tip;              // "AGC gain now: 12 dB" (the readout's accessible name)
+    bool nb_on = false;
+    float nb_threshold = 0.f;              // 0..1 over 6..30 dB
+    std::string nb_threshold_text;         // "15 dB"
+    int nb_pct = 0;                        // share of the last 100 ms blanked
+    std::string nb_read;                   // "Blanking 3 %", or "Standing down: signal too strong" while nb_standing; "" while the blanker is off
+    bool nb_standing = false;              // letting everything through: a strong signal is not a click
     // host extras
     std::string chip;                      // "OFF" or "2 ON"
     bool lamp_lit = false;
@@ -414,6 +434,12 @@ double notchHzFromNorm(float norm);
 float notchQNorm(double q);
 double notchQFromNorm(float norm);
 std::string filtersChip(int filtersOn);
+// AGC choice and noise blanker: the sliders' spans and the five modes' words (translated; FOXAPI_AGC_* order)
+float agcFixedNorm(double db);
+double agcFixedFromNorm(float norm);
+float nbThresholdNorm(double db);
+double nbThresholdFromNorm(float norm);
+std::vector<SelectItem> agcModes();
 
 // sinks
 std::vector<int> bufferChoices();                            // 0 (AUTOMATIC), 120, 240, 480, 960
@@ -500,6 +526,10 @@ Command opNotch(bool on);
 Command opNotchFreq(float norm);
 Command opNotchQ(float norm);
 Command opAutoNotch(bool on);
+Command opAgcMode(int index);
+Command opAgcFixed(int modeNow, float norm);
+Command opNb(bool on);
+Command opNbThreshold(bool onNow, float norm);
 Command opSinkDevice(const SinksModel& m, int index);
 Command opSinkBuffer(const SinksModel& m, int index);
 Command opTransmitPage(bool open);

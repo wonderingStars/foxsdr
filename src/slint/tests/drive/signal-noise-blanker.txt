@@ -1,0 +1,34 @@
+#! frames=300 bank=0 sections=0:3
+# signal-noise-blanker: the Noise blanker tick, its Threshold slider and the blanking readout of the Audio filters section (tick rows 4403-4405; multi-radio lane C).
+# Off at the start (state nbEnabled == 0), Threshold greyed until the tick is on (a press on it changes nothing). The tick is read back from the engine; the Threshold slider runs 6 .. 30 dB over the
+# track (1.0 = 30, 0.0 = 6, default 15). The generator makes no clicks, so with the blanker on the blanked share stays at about nothing: nbBlankedPct is read back
+# too (the "Blanking n %" note itself is not a control).
+10 state running == 1
+state nbEnabled == 0
++1 expect "Noise blanker" checked equals "false"
+# greyed while off: a press on the slider changes nothing (the default stays 15)
++1 slider "Threshold" 0.9
++20 state nbThresholdDb < 16
++1 click "Noise blanker"
++20 state nbEnabled == 1
++1 expect "Noise blanker" checked equals "true"
++1 state nbThresholdDb > 14
++1 state nbThresholdDb < 16
++1 slider "Threshold" 1.0
++20 state nbThresholdDb > 29
++1 slider "Threshold" 0.0
++20 state nbThresholdDb < 7
++1 slider "Threshold" 0.5
++20 state nbThresholdDb > 17
++1 state nbThresholdDb < 19
++1 state nbEnabled == 1
+# no clicks in the generator: nothing is blanked
++30 state nbBlankedPct < 5
++1 click "Noise blanker"
++20 state nbEnabled == 0
++1 expect "Noise blanker" checked equals "false"
+# greyed again: the press leaves the 18 dB the slider was left at
++1 slider "Threshold" 0.9
++20 state nbThresholdDb > 17
++1 state nbThresholdDb < 19
++1 state running == 1

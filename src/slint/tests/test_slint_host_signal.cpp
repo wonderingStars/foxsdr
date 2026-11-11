@@ -659,6 +659,50 @@ int main() {
         CHECK(three.chip == "3 ON" && three.auto_notch_status == "searching" && !three.auto_notch_locked);
         CHECK(autoNotchStatus(false, false, 0).empty() && autoNotchStatus(true, true, 999.6) == "on 1000 Hz" && autoNotchStatus(true, false, 0) == "searching");
         CHECK(filtersChip(0) == "OFF" && filtersChip(1) == "1 ON" && filtersChip(3) == "3 ON");
+        {
+            // AGC choice and noise blanker: what the model reads from the state
+            FoxReceiverState a{};
+            a.structSize = sizeof(a);
+            const AudioFiltersModel d = readAudioFilters(a);   // a zeroed state: Auto, blanker off
+            CHECK(d.agc_modes.size() == 5 && d.agc_modes[0].label == "Auto" && d.agc_modes[1].label == "Fast" && d.agc_modes[2].label == "Medium" &&
+                  d.agc_modes[3].label == "Slow" && d.agc_modes[4].label == "Off");
+            CHECK(d.agc_index == 0 && d.agc_text == "Auto" && !d.agc_fixed_on && !d.nb_on && !d.nb_standing && d.nb_pct == 0);
+            a.agcMode = FOXAPI_AGC_OFF;
+            a.agcFixedGainDb = 12.0;
+            a.agcGainDb = 12.04;
+            a.nbEnabled = 1;
+            a.nbThresholdDb = 18.0;
+            a.nbBlankedPct = 3.4;
+            const AudioFiltersModel o = readAudioFilters(a);
+            CHECK(o.agc_index == 4 && o.agc_text == "Off" && o.agc_fixed_on);
+            CHECK_NEAR(o.agc_fixed, 32.0 / 60.0, 1e-6);
+            CHECK(o.agc_fixed_text == "+12 dB" && o.agc_gain_text == "+12 dB" && o.agc_gain_int == 12);
+            CHECK(o.nb_on && !o.nb_standing && o.nb_pct == 3 && o.nb_threshold_text == "18 dB");
+            CHECK(o.nb_read == "Blanking 3 %" && o.agc_gain_tip == "AGC gain now: 12 dB" && d.nb_read.empty());
+            CHECK_NEAR(o.nb_threshold, 12.0 / 24.0, 1e-6);
+            a.nbStandingDown = 1;
+            CHECK(readAudioFilters(a).nb_standing && readAudioFilters(a).nb_read == "Standing down: signal too strong");
+            a.nbEnabled = 0;
+            CHECK(!readAudioFilters(a).nb_standing && readAudioFilters(a).nb_read.empty());   // off: it is not standing down, it is off, and the note is gone
+            a.agcMode = FOXAPI_AGC_SLOW;
+            a.agcFixedGainDb = -20.0;
+            a.agcGainDb = -3.6;
+            const AudioFiltersModel sl = readAudioFilters(a);
+            CHECK(sl.agc_index == 3 && sl.agc_text == "Slow" && !sl.agc_fixed_on && sl.agc_fixed == 0.0f && sl.agc_fixed_text == "-20 dB" && sl.agc_gain_text == "-4 dB");
+            a.agcMode = 99;
+            CHECK(readAudioFilters(a).agc_index == 4);   // a mode this host does not know reads as the last, never past the list
+            // the sliders' spans
+            CHECK_NEAR(agcFixedNorm(-20.0), 0.0, 1e-9);
+            CHECK_NEAR(agcFixedNorm(40.0), 1.0, 1e-9);
+            CHECK_NEAR(agcFixedNorm(-55.0), 0.0, 1e-9);
+            CHECK_NEAR(agcFixedFromNorm(0.0f), -20.0, 1e-9);
+            CHECK_NEAR(agcFixedFromNorm(1.0f), 40.0, 1e-9);
+            CHECK_NEAR(agcFixedFromNorm(0.5f), 10.0, 1e-9);
+            CHECK_NEAR(nbThresholdFromNorm(0.0f), 6.0, 1e-9);
+            CHECK_NEAR(nbThresholdFromNorm(1.0f), 30.0, 1e-9);
+            CHECK_NEAR(nbThresholdNorm(15.0), 9.0 / 24.0, 1e-6);
+            CHECK_NEAR(nbThresholdFromNorm(2.0f), 30.0, 1e-9);   // clamped
+        }
         CHECK_NEAR(notchNormFromHz(10), 0.0, 1e-9);
         CHECK_NEAR(notchNormFromHz(20000), 1.0, 1e-9);
         CHECK_NEAR(notchHzFromNorm(0.0f), 10.0, 1e-6);
@@ -1035,6 +1079,18 @@ int main() {
         CHECK(c.q.c.op == FOXAPP_OP_SET_NOTCH_Q && std::fabs(c.q.c.num[0] - 100.5) < 1e-3);
         c = opAutoNotch(true);
         CHECK(c.q.c.op == FOXAPI_OP_SET_AUTO_NOTCH && c.q.c.ival[0] == 1);
+        // AGC choice and noise blanker: the mode alone leaves the fixed gain alone; the fixed gain travels with the mode in force; ranges are the engine's
+        c = opAgcMode(3);
+        CHECK(c.valid && c.q.c.op == FOXAPI_OP_SET_AGC && c.q.c.ival[0] == 3 && c.q.c.ival[1] == 0 && c.grant == FOXAPI_GRANT_SETTINGS);
+        CHECK(!opAgcMode(-1).valid && !opAgcMode(5).valid);
+        c = opAgcFixed(4, 0.5f);
+        CHECK(c.valid && c.q.c.op == FOXAPI_OP_SET_AGC && c.q.c.ival[0] == 4 && c.q.c.ival[1] == 1 && c.q.c.num[0] == 10.0);
+        CHECK(opAgcFixed(4, 0.0f).q.c.num[0] == -20.0 && opAgcFixed(4, 1.0f).q.c.num[0] == 40.0 && opAgcFixed(4, 9.0f).q.c.num[0] == 40.0 && !opAgcFixed(7, 0.5f).valid);
+        c = opNb(true);
+        CHECK(c.valid && c.q.c.op == FOXAPI_OP_SET_NB && c.q.c.ival[0] == 1 && c.q.c.ival[1] == 0);
+        c = opNbThreshold(true, 0.5f);
+        CHECK(c.valid && c.q.c.op == FOXAPI_OP_SET_NB && c.q.c.ival[0] == 1 && c.q.c.ival[1] == 1 && c.q.c.num[0] == 18.0);
+        CHECK(opNbThreshold(false, 0.0f).q.c.ival[0] == 0 && opNbThreshold(false, 0.0f).q.c.num[0] == 6.0 && opNbThreshold(true, 1.0f).q.c.num[0] == 30.0);
 
         Rig sr;
         sr.t.add(FOXAPI_LIST_AUDIO_DEVICES, 0, "Speakers", "", 0, 0);

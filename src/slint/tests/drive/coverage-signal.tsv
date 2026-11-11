@@ -72,3 +72,9 @@
 1971	ASSERTED	signal-source-iqfile.txt	press the box, key ctrl+v; expect value equals the clipboard file (FOXSDR_FILE_CLIPBOARD); the log holds the paste line
 1972	ASSERTED	signal-source-iqfile.txt	type a quoted path with a trailing space, click "Open"; expect value equals the cleaned path, state deviceName contains aprs-decoder
 1973	ASSERTED	signal-source-iqfile.txt	Open on a file that is not there: the source stays (state deviceName), and the run's diagnostic log holds "source: the I/Q file did not open" (header logcontains)
+4400	ASSERTED	signal-agc	choose AGC Fast, Medium, Slow, Off, Auto; each read back as state agcMode == 1, 2, 3, 4, 0; expect AGC value contains the word
+4401	ASSERTED	signal-agc	slider Fixed gain 1.0, 0.0, 0.5 in Off; state agcFixedGainDb > 39, < -19, about 10; expect enabled false outside Off and true in Off
+4402	ASSERTED	signal-agc	state agcGainDb follows the fixed gain in Off (> 38, < -18, about 10); the readout text itself is read back through the engine's figure
+4403	ASSERTED	signal-noise-blanker	click on, click off; state nbEnabled == 1 / == 0; expect Noise blanker checked true / false
+4404	ASSERTED	signal-noise-blanker	slider Threshold 1.0, 0.0, 0.5; state nbThresholdDb > 29, < 7, about 18; expect enabled false while the blanker is off, true while on
+4405	DRIVEN	signal-noise-blanker	the note is text, not a control: state nbBlankedPct < 5 with the generator (no clicks) is read back; the words themselves are held by test_slint_signal

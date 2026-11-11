@@ -817,6 +817,38 @@ int main() {
         CHECKV(!evs.empty() && evs.back().name == "filter-notch-q" && std::abs(num(evs.back().args) - 0.8) < 0.04, "Q 0.8: '%s'", evs.empty() ? "" : evs.back().args.c_str());
         e = press(xc + 40, anY + 12);
         CHECKV(e.name == "filter-auto-notch" && e.args == "0", "auto notch: '%s' '%s'", e.name.c_str(), e.args.c_str());
+        // ---- AGC choice and noise blanker (lane C), appended below the Auto notch row. c2: AGC Off at +20 dB (Fixed gain live, 0.667), blanker on (threshold 0.375, "Blanking 3 %").
+        const int agY = anY + kPitch, fxY = agY + kPitch, nbY = fxY + kPitch, thY = nbY + kPitch, noteY = thY + kPitch;
+        {
+            const Frame h = shot();
+            const int dl = xc + 56 + 8, dr = xc + kBodyW - 62 - 8;                       // the dropdown between the 56 px label and the 62 px gain readout
+            CHECKV(h.countNear(xc, agY + 5, xc + 40, agY + 19, fgSoft, 60) >= 15, "AGC label (%d)", h.countNear(xc, agY + 5, xc + 40, agY + 19, fgSoft, 60));
+            CHECKV(h.near(dr - 1, agY + 12, keyLine) && h.near(dl + 40, agY, keyLine) && h.near(dl + 40, agY + 23, keyLine), "the AGC key is a dropdown between the label and the readout");
+            CHECKV(h.countNear(dr + 8, agY + 3, xc + kBodyW, agY + 21, fg, 60) >= 25, "the gain in use (+20 dB) at the right: %d", h.countNear(dr + 8, agY + 3, xc + kBodyW, agY + 21, fg, 60));
+            CHECK(h.near(track0 + 60, fxY + 12, sliderFill, 0) && h.near(track0 + 100, fxY + 12, sliderTrack, 0));          // 0.667 of 119 = 79: live in Off
+            CHECK(h.countNear(xc, fxY + 5, xc + 56, fxY + 19, fgSoft, 60) >= 20);                                           // "Fixed gain"
+            CHECKV(h.countNear(xc, nbY + 5, xc + 14, nbY + 19, accent, 0) >= 100, "the Noise blanker box is ticked");
+            CHECK(h.near(track0 + 30, thY + 12, sliderFill, 0) && h.near(track0 + 70, thY + 12, sliderTrack, 0));          // 0.375 of 119 = 44
+            CHECKV(h.countNear(xc, noteY, xc + kBodyW, noteY + 14, dim, 30) >= 30, "the Blanking 3 % note is dim: %d", h.countNear(xc, noteY, xc + kBodyW, noteY + 14, dim, 30));
+            CHECK(h.countNear(xc, noteY, xc + kBodyW, noteY + 14, warnFg, 40) == 0);
+            // events: the Fixed gain slider, the blanker tick and its Threshold, then the dropdown row 2 (Medium)
+            evs.clear();
+            clk(track0 + 89, fxY + 12);
+            CHECKV(!evs.empty() && evs.back().name == "filter-agc-fixed" && std::abs(num(evs.back().args) - 0.75) < 0.04, "fixed gain 0.75: '%s'", evs.empty() ? "" : evs.back().args.c_str());
+            e = press(xc + 40, nbY + 12);
+            CHECKV(e.name == "filter-nb" && e.args == "0", "blanker: '%s' '%s'", e.name.c_str(), e.args.c_str());
+            evs.clear();
+            clk(track0 + 24, thY + 12);
+            CHECKV(!evs.empty() && evs.back().name == "filter-nb-threshold" && std::abs(num(evs.back().args) - 0.2) < 0.04, "threshold 0.2: '%s'", evs.empty() ? "" : evs.back().args.c_str());
+            evs.clear();
+            clk(dl + 40, agY + 12);
+            shot();
+            const auto pr = popupRow(dl, agY, 2);
+            clk(pr.first, pr.second);
+            CHECKV(!evs.empty() && evs.back().name == "filter-agc-mode" && evs.back().args == "2", "AGC row 2: '%s' '%s'", evs.empty() ? "" : evs.back().name.c_str(), evs.empty() ? "" : evs.back().args.c_str());
+            clk(R + 250, 4);
+            park();
+        }
         // c3: everything off: the sliders carry the disabled fill and take no press; the status is dim ("Searching")
         const int T3 = yOf(ui->get_c3_y()) + kSecRow + kBodyPad;
         const int s3 = T3 + (stY - T2), an3 = T3 + (anY - T2);
@@ -827,6 +859,18 @@ int main() {
         clk(track0 + 90, s3 + 12);
         CHECKV(evs.empty(), "the greyed Strength slider takes no press (%zu)", evs.size());
         CHECK(g.countNear(xc + kBodyW - 80, an3 + 3, xc + kBodyW, an3 + 21, dim, 40) >= 15 && g.countNear(xc + kBodyW - 80, an3 + 3, xc + kBodyW, an3 + 21, goodFg, 40) == 0);
+        // c3, AGC Auto and the blanker off: Fixed gain and Threshold carry the disabled fill and take no press, the blanker box is empty, there is no Blanking note
+        {
+            const int fx3 = T3 + (fxY - T2), nb3 = T3 + (nbY - T2), th3 = T3 + (thY - T2), note3 = T3 + (noteY - T2);
+            CHECK(g.near(track0 + 20, fx3 + 12, sliderOffFill, 0));
+            CHECK(g.near(track0 + 20, th3 + 12, sliderOffFill, 0));
+            CHECK(!g.near(xc + 3, nb3 + 8, accent, 0));
+            CHECK(g.countNear(xc, note3, xc + kBodyW, note3 + 14, dim, 30) < 5);
+            evs.clear();
+            clk(track0 + 90, fx3 + 12);
+            clk(track0 + 90, th3 + 12);
+            CHECKV(evs.empty(), "the greyed Fixed gain and Threshold sliders take no press (%zu)", evs.size());
+        }
         park();
     }
 

@@ -34,6 +34,8 @@ constexpr double kSoapyGainMinDb = 0.0;             // app_window.cpp: the fallb
 constexpr double kSoapyGainMaxDb = 60.0;
 constexpr double kNotchMinHz = 10.0, kNotchMaxHz = 20000.0;   // the Notch Freq slider's span (logarithmic)
 constexpr double kNotchQMin = 1.0, kNotchQMax = 200.0;
+constexpr double kAgcFixedMinDb = -20.0, kAgcFixedMaxDb = 40.0;   // the fixed gain's range (dsp/agc.hpp kFixedGainMinDb / MaxDb)
+constexpr double kNbThresholdMinDb = 6.0, kNbThresholdMaxDb = 30.0;   // the blanker's threshold range (dsp/noise_blanker.hpp)
 constexpr double kPlainCardRateHz = 48000.0;        // SoundCardSettings::cardRateHz' default: what a one-field command carries in the fields it does not name
 
 void entry(FoxListItem& it) {
@@ -316,6 +318,34 @@ double notchHzFromNorm(float norm) {
 }
 float notchQNorm(double q) { return static_cast<float>(std::clamp((q - kNotchQMin) / (kNotchQMax - kNotchQMin), 0.0, 1.0)); }
 double notchQFromNorm(float norm) { return kNotchQMin + std::clamp(static_cast<double>(norm), 0.0, 1.0) * (kNotchQMax - kNotchQMin); }
+
+float agcFixedNorm(double db) {
+    return static_cast<float>(std::clamp((db - kAgcFixedMinDb) / (kAgcFixedMaxDb - kAgcFixedMinDb), 0.0, 1.0));
+}
+double agcFixedFromNorm(float norm) {
+    // whole dB: the slider is a coarse control and the engine keeps what it is given
+    const double db = kAgcFixedMinDb + std::clamp(static_cast<double>(norm), 0.0, 1.0) * (kAgcFixedMaxDb - kAgcFixedMinDb);
+    return std::round(db);
+}
+float nbThresholdNorm(double db) {
+    return static_cast<float>(std::clamp((db - kNbThresholdMinDb) / (kNbThresholdMaxDb - kNbThresholdMinDb), 0.0, 1.0));
+}
+double nbThresholdFromNorm(float norm) {
+    const double db = kNbThresholdMinDb + std::clamp(static_cast<double>(norm), 0.0, 1.0) * (kNbThresholdMaxDb - kNbThresholdMinDb);
+    return std::round(db);
+}
+std::vector<SelectItem> agcModes() {
+    // FOXAPI_AGC_* order; "Auto", "Medium" and "Off" are words the catalogue already has
+    const char* words[5] = {tr("Auto"), tr("Fast"), tr("Medium"), tr("Slow"), tr("Off")};
+    std::vector<SelectItem> out;
+    for (int i = 0; i < 5; ++i) {
+        SelectItem s;
+        s.label = words[i];
+        s.id = std::to_string(i);
+        out.push_back(std::move(s));
+    }
+    return out;
+}
 
 std::string filtersChip(int filtersOn) {
     if (filtersOn <= 0) { return tr("OFF"); }
@@ -1072,6 +1102,22 @@ AudioFiltersModel readAudioFilters(const FoxReceiverState& st) {
     m.auto_notch_on = autoNotch;
     m.auto_notch_locked = autoNotch && (st.flags & FOXAPI_RX_AUTO_NOTCH_ENGAGED) != 0u;
     m.auto_notch_status = autoNotchStatus(autoNotch, m.auto_notch_locked, st.autoNotchHz);
+    // AGC choice and noise blanker
+    m.agc_modes = agcModes();
+    m.agc_index = static_cast<int>(std::min<std::uint32_t>(st.agcMode, FOXAPI_AGC_OFF));
+    m.agc_text = m.agc_modes[static_cast<std::size_t>(m.agc_index)].label;
+    m.agc_fixed = agcFixedNorm(st.agcFixedGainDb);
+    m.agc_fixed_text = cc::formatText("%+.0f dB", std::round(st.agcFixedGainDb));
+    m.agc_fixed_on = st.agcMode == FOXAPI_AGC_OFF;
+    m.agc_gain_int = static_cast<int>(std::lround(st.agcGainDb));
+    m.agc_gain_text = cc::formatText("%+d dB", m.agc_gain_int);
+    m.nb_on = st.nbEnabled != 0u;
+    m.nb_threshold = nbThresholdNorm(st.nbThresholdDb);
+    m.nb_threshold_text = cc::formatText("%.0f dB", st.nbThresholdDb);
+    m.nb_pct = static_cast<int>(std::lround(std::clamp(st.nbBlankedPct, 0.0, 100.0)));
+    m.nb_standing = m.nb_on && st.nbStandingDown != 0u;
+    m.agc_gain_tip = cc::formatText(tr("AGC gain now: %d dB"), m.agc_gain_int);
+    if (m.nb_on) { m.nb_read = m.nb_standing ? std::string(tr("Standing down: signal too strong")) : cc::formatText(tr("Blanking %d %%"), m.nb_pct); }
     return m;
 }
 
@@ -1528,6 +1574,24 @@ Command opNotch(bool on) { return make(cmd::makeInt(FOXAPI_OP_SET_NOTCH, on ? 1 
 Command opNotchFreq(float norm) { return make(cmd::makeNum(FOXAPP_OP_SET_NOTCH_FREQUENCY, notchHzFromNorm(norm))); }
 Command opNotchQ(float norm) { return make(cmd::makeNum(FOXAPP_OP_SET_NOTCH_Q, notchQFromNorm(norm))); }
 Command opAutoNotch(bool on) { return make(cmd::makeInt(FOXAPI_OP_SET_AUTO_NOTCH, on ? 1 : 0)); }
+// The mode alone leaves the fixed gain alone (ival[1] = 0).
+Command opAgcMode(int index) {
+    if (index < 0 || index > static_cast<int>(FOXAPI_AGC_OFF)) { return {}; }
+    return make(cmd::makeInt(FOXAPI_OP_SET_AGC, index, 0));
+}
+// The fixed gain travels with the mode now in force (the engine sets the mode first, the gain after it): the slider is live only in Off.
+Command opAgcFixed(int modeNow, float norm) {
+    if (modeNow < 0 || modeNow > static_cast<int>(FOXAPI_AGC_OFF)) { return {}; }
+    FoxCommand c = cmd::makeNumInt(FOXAPI_OP_SET_AGC, agcFixedFromNorm(norm), modeNow);
+    c.ival[1] = 1;
+    return make(c);
+}
+Command opNb(bool on) { return make(cmd::makeInt(FOXAPI_OP_SET_NB, on ? 1 : 0, 0)); }
+Command opNbThreshold(bool onNow, float norm) {
+    FoxCommand c = cmd::makeNumInt(FOXAPI_OP_SET_NB, nbThresholdFromNorm(norm), onNow ? 1 : 0);
+    c.ival[1] = 1;
+    return make(c);
+}
 
 Command opSinkDevice(const SinksModel& m, int index) {
     if (!inRange(index, m.devices.size())) { return {}; }

@@ -66,6 +66,11 @@ export struct RadioExtrasModel { wfm: bool, stereo: bool, stereo-word: string, s
 export struct AudioFiltersModel {
     chain-note: string, nr-on: bool, nr-strength: float, nr-text: string, notch-on: bool, notch-freq: float, notch-freq-text: string,
     notch-q: float, notch-q-text: string, auto-notch-on: bool, auto-notch-status: string, auto-notch-locked: bool,
+    // AGC choice and noise blanker (multi-radio lane C, docs/multi-radio-records/agc-nb-wiring.md): the selected radio's.
+    // agc-fixed is 0..1 over -20..+40 dB and is live only in Off; agc-gain-text is the gain in use ("+12 dB"), agc-gain-tip its accessible name ("AGC gain now: 12 dB").
+    // nb-threshold is 0..1 over 6..30 dB; nb-read is the note ("Blanking 3 %", or the standing-down sentence, which nb-standing makes amber). The host words them (core::tr).
+    agc-text: string, agc-modes: [SelectItem], agc-index: int, agc-fixed: float, agc-fixed-text: string, agc-fixed-on: bool, agc-gain-text: string, agc-gain-tip: string,
+    nb-on: bool, nb-threshold: float, nb-threshold-text: string, nb-read: string, nb-standing: bool,
 }
 
 export struct SinksModel {
@@ -138,6 +143,10 @@ export global SignalEvents {
     callback filter-notch-freq(float);
     callback filter-notch-q(float);
     callback filter-auto-notch(bool);
+    callback filter-agc-mode(int);
+    callback filter-agc-fixed(float);
+    callback filter-nb(bool);
+    callback filter-nb-threshold(float);
     callback sink-device-selected(int);
     callback sink-buffer-selected(int);
     callback transmit-clicked();
@@ -1138,6 +1147,14 @@ export component AudioFiltersBody inherits VerticalLayout {
     filter-notch-q(a) => { SignalEvents.filter-notch-q(a); }
     callback filter-auto-notch(bool);
     filter-auto-notch(a) => { SignalEvents.filter-auto-notch(a); }
+    callback filter-agc-mode(int);
+    filter-agc-mode(a) => { SignalEvents.filter-agc-mode(a); }
+    callback filter-agc-fixed(float);
+    filter-agc-fixed(a) => { SignalEvents.filter-agc-fixed(a); }
+    callback filter-nb(bool);
+    filter-nb(a) => { SignalEvents.filter-nb(a); }
+    callback filter-nb-threshold(float);
+    filter-nb-threshold(a) => { SignalEvents.filter-nb-threshold(a); }
 
     spacing: 6px;
     alignment: start;
@@ -1159,6 +1176,53 @@ export component AudioFiltersBody inherits VerticalLayout {
             tone: root.model.auto-notch-locked ? ChipTone.good : ChipTone.neutral;
         }
     }
+    // ---- the audio AGC (a choice of speed, or Off with a fixed gain) and the noise blanker: the selected radio's, appended below the older rows so they keep their places ----
+    Line {
+        RowLabel { width: 56px; text: @tr("AGC"); }
+        DropKey {
+            horizontal-stretch: 1;
+            value: root.model.agc-text;
+            items: root.model.agc-modes;
+            selected: root.model.agc-index;
+            label: @tr("AGC");
+            tooltip: @tr("How the audio level follows the signal. Auto is the original behaviour; Fast, Medium and Slow differ in how quickly the gain recovers after a loud signal; Off holds the gain still at the Fixed gain value.");
+            popup-min-w: 120px;
+            picked(i) => { root.filter-agc-mode(i); }
+        }
+        Readout {
+            width: 62px;
+            text: root.model.agc-gain-text;
+            horizontal-alignment: right;
+            accessible-role: text;
+            accessible-label: root.model.agc-gain-tip;
+        }
+    }
+    SliderRow {
+        label: @tr("Fixed gain");
+        readout: root.model.agc-fixed-text;
+        value: root.model.agc-fixed;
+        enabled: root.model.agc-fixed-on;
+        tooltip: @tr("The gain used while AGC is Off, in dB above unity. The limiter stays on, so a loud signal cannot clip.");
+        changed(v) => { root.filter-agc-fixed(v); }
+    }
+    Line {
+        Tick {
+            horizontal-stretch: 1;
+            label: @tr("Noise blanker");
+            on: root.model.nb-on;
+            tooltip: @tr("Removes short wide-band clicks - ignition, electric fences, switching - before the filter smears them. It changes what the audio, meter, scope and decoders of this radio hear; recordings are not touched.");
+            toggled(v) => { root.filter-nb(v); }
+        }
+    }
+    SliderRow {
+        label: @tr("Threshold");
+        readout: root.model.nb-threshold-text;
+        value: root.model.nb-threshold;
+        enabled: root.model.nb-on;
+        tooltip: @tr("How far above the average level a click must rise to be blanked, in dB. Lower blanks more.");
+        changed(v) => { root.filter-nb-threshold(v); }
+    }
+    if root.model.nb-on && root.model.nb-read != "" : Note { text: root.model.nb-read; tone: root.model.nb-standing ? ChipTone.warn : ChipTone.neutral; }
 }
 
 // ================================================ Sinks ================================================

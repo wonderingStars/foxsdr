@@ -15,6 +15,7 @@
 //   C  622  c1    Source / RTL-SDR      variant 7: the converter card with an Up converter, LO 125 MHz, quick keys, Inverts, parse error, on-air line   m-conv
 //          c2     Audio filters / 3 ON  NR on 0.45, notch on 1000 Hz Q 30, auto notch locked on 1.2 kHz                              m-filters
 //          c3     Audio filters / OFF   everything off: the sliders greyed, the auto notch has no status                              m-filters-off
+//                 (both carry, below the Auto notch row: AGC (c2 Off at +20 dB, c3 Auto), Fixed gain (live only in Off), Noise blanker + Threshold + "Blanking 3 %" (c2 on, c3 off))
 //          c4     Sinks / OPEN          device, audio-health note, buffer, lead notice, "Muted by", the untouched-volume note        m-sinks
 //          c5     Sinks / NO DEV        the "No audio output devices" line instead of the dropdown                                   m-sinks-none
 //   D  928  d1    Recorder / OFF        idle: the folder, Record IQ and Record audio side by side                                    m-rec-idle
@@ -102,6 +103,10 @@ component SpecFilters inherits AudioFiltersBody {
     filter-notch-freq(a) => { Rec.rec("filter-notch-freq", "" + a); }
     filter-notch-q(a) => { Rec.rec("filter-notch-q", "" + a); }
     filter-auto-notch(a) => { Rec.rec("filter-auto-notch", a ? "1" : "0"); }
+    filter-agc-mode(a) => { Rec.rec("filter-agc-mode", "" + a); }
+    filter-agc-fixed(a) => { Rec.rec("filter-agc-fixed", "" + a); }
+    filter-nb(a) => { Rec.rec("filter-nb", a ? "1" : "0"); }
+    filter-nb-threshold(a) => { Rec.rec("filter-nb-threshold", "" + a); }
 }
 
 component SpecRecorder inherits RecorderBody {
@@ -280,11 +285,25 @@ export component SignalSpecimen inherits Window {
         chain-note: "chain: notch -> auto-notch -> noise reduction", nr-on: true, nr-strength: 0.45, nr-text: "0.45",
         notch-on: true, notch-freq: 0.5, notch-freq-text: "1000 Hz", notch-q: 0.15, notch-q-text: "30",
         auto-notch-on: true, auto-notch-status: "Locked on 1.2 kHz", auto-notch-locked: true,
+        // AGC Off at +20 dB (the fixed gain 0.667 of -20..+40) and the blanker on at 15 dB, blanking 3 %
+        agc-text: "Off", agc-index: 4, agc-fixed: 0.667, agc-fixed-text: "+20 dB", agc-fixed-on: true, agc-gain-text: "+20 dB", agc-gain-tip: "AGC gain now: 20 dB",
+        agc-modes: [
+            { label: "Auto", id: "0", enabled: true, note: "" }, { label: "Fast", id: "1", enabled: true, note: "" }, { label: "Medium", id: "2", enabled: true, note: "" },
+            { label: "Slow", id: "3", enabled: true, note: "" }, { label: "Off", id: "4", enabled: true, note: "" },
+        ],
+        nb-on: true, nb-threshold: 0.375, nb-threshold-text: "15 dB", nb-read: "Blanking 3 %", nb-standing: false,
     };
     in-out property <AudioFiltersModel> m-filters-off: {
         chain-note: "chain: notch -> auto-notch -> noise reduction", nr-on: false, nr-strength: 0.45, nr-text: "0.45",
         notch-on: false, notch-freq: 0.5, notch-freq-text: "1000 Hz", notch-q: 0.15, notch-q-text: "30",
         auto-notch-on: true, auto-notch-status: "Searching", auto-notch-locked: false,
+        // AGC Auto (its fixed gain greyed) and the blanker off (its threshold greyed)
+        agc-text: "Auto", agc-index: 0, agc-fixed: 0.5, agc-fixed-text: "+10 dB", agc-fixed-on: false, agc-gain-text: "+12 dB", agc-gain-tip: "AGC gain now: 12 dB",
+        agc-modes: [
+            { label: "Auto", id: "0", enabled: true, note: "" }, { label: "Fast", id: "1", enabled: true, note: "" }, { label: "Medium", id: "2", enabled: true, note: "" },
+            { label: "Slow", id: "3", enabled: true, note: "" }, { label: "Off", id: "4", enabled: true, note: "" },
+        ],
+        nb-on: false, nb-threshold: 0.375, nb-threshold-text: "15 dB", nb-read: "", nb-standing: false,
     };
     in-out property <SinksModel> m-sinks: {
         device-text: "Speakers (Realtek)",

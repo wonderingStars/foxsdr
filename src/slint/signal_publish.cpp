@@ -137,7 +137,7 @@ std::shared_ptr<slint::Model<T>> SignalPublisher::Synced<T>::set(const std::vect
 }
 
 struct SignalPublisher::Models {
-    Synced<::SelectItem> devices, rates, antennas, cards, cardRates, decimations, sinkDevices, sinkBuffers, importKinds;
+    Synced<::SelectItem> devices, rates, antennas, cards, cardRates, decimations, sinkDevices, sinkBuffers, agcModes, importKinds;
     Synced<::GainStage> stages;
     Synced<::OptionRow> options;
     Synced<slint::SharedString> setupLines;
@@ -742,6 +742,19 @@ void SignalPublisher::updateClocks() {
     o.auto_notch_on = m.auto_notch_on;
     o.auto_notch_status = ss(m.auto_notch_status);
     o.auto_notch_locked = m.auto_notch_locked;
+    o.agc_text = ss(m.agc_text);
+    o.agc_modes = lists_->agcModes.set(items(m.agc_modes));
+    o.agc_index = m.agc_index;
+    o.agc_fixed = m.agc_fixed;
+    o.agc_fixed_text = ss(m.agc_fixed_text);
+    o.agc_fixed_on = m.agc_fixed_on;
+    o.agc_gain_text = ss(m.agc_gain_text);
+    o.agc_gain_tip = ss(m.agc_gain_tip);
+    o.nb_on = m.nb_on;
+    o.nb_threshold = m.nb_threshold;
+    o.nb_threshold_text = ss(m.nb_threshold_text);
+    o.nb_read = ss(m.nb_read);
+    o.nb_standing = m.nb_standing;
     return o;
 }
 
@@ -874,7 +887,9 @@ void SignalPublisher::publish(const FoxReceiverState& state) {
     }
     if (sigs_.changed("filters", cat(m.filters.chain_note, m.filters.nr_on, m.filters.nr_strength, m.filters.nr_text, m.filters.notch_on, m.filters.notch_freq,
                                      m.filters.notch_freq_text, m.filters.notch_q, m.filters.notch_q_text, m.filters.auto_notch_on, m.filters.auto_notch_status,
-                                     m.filters.auto_notch_locked))) {
+                                     m.filters.auto_notch_locked, m.filters.agc_text, m.filters.agc_modes, m.filters.agc_index, m.filters.agc_fixed,
+                                     m.filters.agc_fixed_text, m.filters.agc_fixed_on, m.filters.agc_gain_text, m.filters.agc_gain_tip, m.filters.nb_on,
+                                     m.filters.nb_threshold, m.filters.nb_threshold_text, m.filters.nb_read, m.filters.nb_standing))) {
         ui_.set_filters_model(mapFilters(m.filters));
     }
     if (sigs_.changed("sinks", cat(m.sinks.device_text, m.sinks.devices, m.sinks.device_index, m.sinks.none_line, m.sinks.health_note, m.sinks.buffer_text, m.sinks.buffers,
@@ -996,6 +1011,10 @@ void SignalPublisher::wire() {
     ev.on_filter_notch_freq([this](float n) { send(opNotchFreq(n)); });
     ev.on_filter_notch_q([this](float n) { send(opNotchQ(n)); });
     ev.on_filter_auto_notch([this](bool on) { send(opAutoNotch(on)); });
+    ev.on_filter_agc_mode([this](int i) { send(opAgcMode(i)); });
+    ev.on_filter_agc_fixed([this](float n) { send(opAgcFixed(last_.filters.agc_index, n)); });
+    ev.on_filter_nb([this](bool on) { send(opNb(on)); });
+    ev.on_filter_nb_threshold([this](float n) { send(opNbThreshold(last_.filters.nb_on, n)); });
     ev.on_sink_device_selected([this](int i) { send(opSinkDevice(last_.sinks, i)); });
     ev.on_sink_buffer_selected([this](int i) { send(opSinkBuffer(last_.sinks, i)); });
     ev.on_transmit_clicked([this] { txPageOpen_ = !txPageOpen_; send(opTransmitPage(txPageOpen_)); });   // the open flag is this object's

@@ -11,9 +11,9 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2142 | 517 | 83 | 1542 | 0 |
+| 2148 | 522 | 84 | 1542 | 0 |
 
-Of the 1248 rows that are controls (the 894 readout-like rows left out): 517 asserted, 83 driven without a read-back, 648 not drivable.
+Of the 1254 rows that are controls (the 894 readout-like rows left out): 522 asserted, 84 driven without a read-back, 648 not drivable.
 
 NOT DRIVABLE by reason: readout 894, other 213, needs a signal (no fixture) 120, relocated 86, deferred 77, withheld in a bounded run 70, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
@@ -201,6 +201,7 @@ NOT DRIVABLE by reason: readout 894, other 213, needs a signal (no fixture) 120,
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
 | 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 96 | 48 | 0 | 48 | 35 | 0 |
 | 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 68 | 30 | 1 | 37 | 26 | 0 |
+| SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md) | 6 | 5 | 1 | 0 | 0 | 0 |
 
 ## Every row
 
@@ -3245,4 +3246,15 @@ NOT DRIVABLE by reason: readout 894, other 213, needs a signal (no fixture) 120,
 | 4209 | Radio pane: splitter between spectrum and waterfall | gesture | NOT DRIVABLE | - | deferred: built as the component RadioPane (docs/multi-radio-records/screen-s1-s2.md, S2) and shown in test_slint_radio_pane with fake data; it is not placed in MainWindow until the workspace (S3), so no drive script can reach it yet |
 | 4210 | Radio pane: selection outline in the radio's colour | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 4211 | Radio pane: the compact spectrum (no 76 px header) | well/plot | NOT DRIVABLE | - | a readout, not a control |
+
+### SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md)
+
+| # | control | type | class | script | detail |
+|---|---|---|---|---|---|
+| 4400 | AGC (Auto, Fast, Medium, Slow, Off) | dropdown | DRIVEN+ASSERTED | signal-agc | choose AGC Fast, Medium, Slow, Off, Auto; each read back as state agcMode == 1, 2, 3, 4, 0; expect AGC value contains the word |
+| 4401 | AGC Fixed gain (live only in Off) | slider | DRIVEN+ASSERTED | signal-agc | slider Fixed gain 1.0, 0.0, 0.5 in Off; state agcFixedGainDb > 39, < -19, about 10; expect enabled false outside Off and true in Off |
+| 4402 | AGC gain in use (dB) | readout | DRIVEN+ASSERTED | signal-agc | state agcGainDb follows the fixed gain in Off (> 38, < -18, about 10); the readout text itself is read back through the engine's figure |
+| 4403 | Noise blanker | checkbox | DRIVEN+ASSERTED | signal-noise-blanker | click on, click off; state nbEnabled == 1 / == 0; expect Noise blanker checked true / false |
+| 4404 | Noise blanker Threshold | slider | DRIVEN+ASSERTED | signal-noise-blanker | slider Threshold 1.0, 0.0, 0.5; state nbThresholdDb > 29, < 7, about 18; expect enabled false while the blanker is off, true while on |
+| 4405 | Blanking n % / Standing down | readout | DRIVEN | signal-noise-blanker | the note is text, not a control: state nbBlankedPct < 5 with the generator (no clicks) is read back; the words themselves are held by test_slint_signal |
 

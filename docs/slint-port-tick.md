@@ -3122,3 +3122,16 @@ Phase 3, the EXTEND bank, the Plugin store, the Fitted modules window and the pa
 | 4209 | Radio pane: splitter between spectrum and waterfall | gesture | DEFERRED | built as the component RadioPane (docs/multi-radio-records/screen-s1-s2.md, S2) and shown in test_slint_radio_pane with fake data; it is not placed in MainWindow until the workspace (S3), so no drive script can reach it yet |
 | 4210 | Radio pane: selection outline in the radio's colour | overlay/marker | DEFERRED | built as the component RadioPane (docs/multi-radio-records/screen-s1-s2.md, S2) and shown in test_slint_radio_pane with fake data; it is not placed in MainWindow until the workspace (S3), so no drive script can reach it yet |
 | 4211 | Radio pane: the compact spectrum (no 76 px header) | well/plot | DEFERRED | built as the component RadioPane (docs/multi-radio-records/screen-s1-s2.md, S2) and shown in test_slint_radio_pane with fake data; it is not placed in MainWindow until the workspace (S3), so no drive script can reach it yet |
+
+## SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md)
+
+Two audio features of the selected radio, below the Auto notch row of the Audio filters section (the classic window and the web page get no control). FOXAPI_OP_SET_AGC 0x0111 and FOXAPI_OP_SET_NB 0x0112, receiver-scoped.
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 4400 | AGC (Auto, Fast, Medium, Slow, Off) | dropdown | PRESENT | DropKey agc-modes -> filter-agc-mode(index) -> opAgcMode: SET_AGC ival[0] = the mode, ival[1] = 0; the key shows the engine's agcMode |
+| 4401 | AGC Fixed gain (live only in Off) | slider | PRESENT | SliderRow, -20 .. +40 dB over 0..1 (whole dB), greyed unless agcMode is Off -> filter-agc-fixed(norm) -> opAgcFixed: SET_AGC with the mode in force (Off) and ival[1] = 1, num[0] = the gain; the engine sets the mode first |
+| 4402 | AGC gain in use (dB) | readout | PRESENT | the engine's agcGainDb (a measurement), whole dB, beside the selector; the accessible name is 'AGC gain now: n dB' |
+| 4403 | Noise blanker | checkbox | PRESENT | Tick -> filter-nb(on) -> opNb: SET_NB ival[0] = on, ival[1] = 0; off by default |
+| 4404 | Noise blanker Threshold | slider | PRESENT | SliderRow, 6 .. 30 dB over 0..1 (whole dB), greyed unless the blanker is on -> filter-nb-threshold(norm) -> opNbThreshold: SET_NB with the switch in force and ival[1] = 1 |
+| 4405 | Blanking n % / Standing down | readout | PRESENT | the engine's nbBlankedPct (rounded) as 'Blanking n %', or the amber 'Standing down: signal too strong' while nbStandingDown; shown only while the blanker is on |

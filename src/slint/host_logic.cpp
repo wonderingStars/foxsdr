@@ -331,7 +331,7 @@ std::vector<StatusCardModel> statusCards(const FoxReceiverState& s, const HostEx
         c.lines = {s.deviceName};
         if (!x.antenna.empty()) { c.lines.push_back(cascade::core::formatText(cascade::i18n::tr("ANTENNA %s"), x.antenna.c_str())); }
         // x.gainText is compared with the English "AUTO" (and main.cpp compares gainText() with "N/A"): those two words stay English upstream
-        if (!x.gainText.empty()) { c.lines.push_back(x.gainText == "AUTO" ? std::string(cascade::i18n::tr("GAIN AUTO - AGC ON")) : cascade::core::formatText(cascade::i18n::tr("GAIN %s"), x.gainText.c_str())); }
+        if (!x.gainText.empty()) { c.lines.push_back(x.gainText == "AUTO" ? std::string(cascade::i18n::tr("GAIN AUTO")) : cascade::core::formatText(cascade::i18n::tr("GAIN %s"), x.gainText.c_str())); }
         if (x.havePpm) { c.lines.push_back(ppm); }
         c.lines.push_back(fmtRate(s.sampleRateHz));
         if (faulted && s.faultMessage[0] != '\0') { c.lines.push_back(s.faultMessage); }

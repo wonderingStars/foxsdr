@@ -5,6 +5,7 @@
 #include "host_logic.hpp"
 #include "test_check.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -314,6 +315,17 @@ int main() {
         CHECK(card(cards, "RECEIVER").value == "RUNNING" && card(cards, "RECEIVER").tone == CardTone::Good && card(cards, "RECEIVER").lampLit);
         CHECK(card(cards, "RECEIVER").detail == "Signal generator \xC2\xB7 ANT RX \xC2\xB7 GAIN 32 dB \xC2\xB7 PPM 0.0 \xC2\xB7 2.400 MS/s");
         CHECK(card(cards, "RECEIVER").lines.size() == 5);
+        // THE HARDWARE'S AUTOMATIC GAIN reads "GAIN AUTO" (it used to read "GAIN AUTO - AGC ON"): AGC now means the audio AGC alone on this screen
+        {
+            const auto has = [&](const StatusCardModel& c, const char* line) { return std::find(c.lines.begin(), c.lines.end(), std::string(line)) != c.lines.end(); };
+            HostExtras a = x;
+            a.gainText = "AUTO";
+            const auto autoCards = statusCards(s, a);
+            CHECK(has(card(autoCards, "RECEIVER"), "GAIN AUTO"));
+            CHECK(!has(card(autoCards, "RECEIVER"), "GAIN AUTO - AGC ON"));
+            a.gainText = "32 dB";
+            CHECK(has(card(statusCards(s, a), "RECEIVER"), "GAIN 32 dB"));
+        }
         CHECK(card(cards, "DECODERS").value == "2 running" && card(cards, "DECODERS").detail == "of 5 fitted, 1 idle" && card(cards, "DECODERS").tone == CardTone::Good);
         CHECK(card(cards, "OUTPUT").value == "3.2 /s" && card(cards, "OUTPUT").detail == "output lines, 2.0 s mean" && card(cards, "OUTPUT").tone == CardTone::Warn);
         CHECK(card(cards, "SINK").value == "OPEN" && card(cards, "SINK").tone == CardTone::Good);

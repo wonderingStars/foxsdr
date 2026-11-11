@@ -1,0 +1,49 @@
+#! frames=420 bank=0 sections=0:3
+# signal-agc: the AGC selector, the Fixed gain slider and the gain readout of the Audio filters section (tick rows 4400-4402; multi-radio lane C).
+# The selector picks every mode (Auto, Fast, Medium, Slow, Off) and each pick is read back from the engine (state agcMode = FOXAPI_AGC_*). Fixed gain is
+# live only in Off: greyed in every other mode (a press on it changes nothing: a slider has no `enabled` to expect), and in Off it sets the gain the audio uses, -20 .. +40 dB over the track, read back as
+# state agcFixedGainDb and, because the gain in force is published too, as state agcGainDb. The mode comes first in the engine, so Off with a gain keeps that gain.
+10 state running == 1
+state agcMode == 0
++1 expect "AGC" value contains "Auto"
++1 slider "Fixed gain" 0.9
++20 state agcFixedGainDb < 1
+# every mode, in the order of the list, each read back
++1 choose "AGC" "Fast"
++20 state agcMode == 1
++1 expect "AGC" value contains "Fast"
++1 choose "AGC" "Medium"
++20 state agcMode == 2
++1 expect "AGC" value contains "Medium"
++1 choose "AGC" "Slow"
++20 state agcMode == 3
++1 expect "AGC" value contains "Slow"
+# greyed outside Off: a press on the slider changes nothing
++1 slider "Fixed gain" 0.9
++20 state agcFixedGainDb < 1
+# Off: the gain frozen at the one held, the slider live
++1 choose "AGC" "Off"
++20 state agcMode == 4
++1 expect "AGC" value contains "Off"
+# the track: 1.0 is +40 dB, 0.0 is -20 dB, 0.5 is +10 dB (whole dB); the gain in use follows the fixed gain
++1 slider "Fixed gain" 1.0
++20 state agcFixedGainDb > 39
++1 state agcGainDb > 38
++1 slider "Fixed gain" 0.0
++20 state agcFixedGainDb < -19
++1 state agcGainDb < -18
++1 slider "Fixed gain" 0.5
++20 state agcFixedGainDb > 8
++1 state agcFixedGainDb < 12
++1 state agcGainDb > 8
++1 state agcGainDb < 12
++1 state agcMode == 4
+# back to Auto: the slider greys again, the mode is the engine's. Two controls carry the label "Auto" while the list is open (the list row is the first), hence #1.
++1 choose "AGC" "Auto"#1
++20 state agcMode == 0
++1 expect "AGC" value contains "Auto"
+# greyed again: the press leaves the 10 dB the slider was left at
++1 slider "Fixed gain" 0.9
++20 state agcFixedGainDb > 8
++1 state agcFixedGainDb < 12
++1 state running == 1
