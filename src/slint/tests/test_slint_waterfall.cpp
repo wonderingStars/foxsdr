@@ -311,6 +311,7 @@ int main() {
     {
         PluginMark point;
         point.pos = 0.20f; point.width = 0.0f; point.label = "APRS"; point.color = slint::Color::from_argb_uint8(0x20, 0x20, 0xff, 0x20); point.dashed = false;
+        point.row = -1;   // (lane S1: the name's row; -1 draws no name, so this block holds the LINE as before; the name has its own check below)
         PluginMark span;
         span.pos = 0.55f; span.width = 0.10f; span.label = ""; span.color = slint::Color::from_argb_uint8(0xff, 0xff, 0x50, 0x50); span.dashed = false;
         PluginMark clipped;                                                                   // starts left of the picture: only the part in view is drawn
@@ -323,6 +324,7 @@ int main() {
     const Rgb flooredGreen = over(rgb(0x20ff20), 96.0 / 255.0, kBlue);                    // 0x20 of alpha is raised to 0x60
     const int pointX = bestColumn(pm, 236, 245, 0, 200, flooredGreen);
     CHECK(pointX >= 239 && pointX <= 241 && isSolid(pm, pointX, 0, 200, flooredGreen));    // 44 + 0.20 * 980 = 240, solid
+    CHECK(pm.countInk(244, 2, 300, 15, kBlue) == 0);                                       // row -1: no name beside the line
     CHECK(pm.near(583, 100, rgb(0xff5050)) && pm.near(680, 100, rgb(0xff5050)));          // the span: an edge line each side (44 + 539, and 98 px on)
     CHECK(pm.near(582, 100, kBlue) && pm.near(681, 100, kBlue));
     CHECK(pm.near(630, 100, over(rgb(0xff5050), 0.14, kBlue), 6) && pm.near(584, 20, over(rgb(0xff5050), 0.14, kBlue), 6));   // between: the 14 % tint
@@ -331,6 +333,21 @@ int main() {
     const Rgb edgeOverTint = over(rgb(0xd4b060), 0.6, themeTint);                         // ...with the default mark's line (60 %) over it at each end
     CHECK(pm.near(44, 100, edgeOverTint) && pm.near(92, 100, edgeOverTint) && pm.near(93, 100, kBlue) && pm.near(94, 100, kBlue));   // ...to 0.05 of the picture
     CHECK(pm.countNear(690, 0, kW, kPicH, rgb(0xff5050), 6) == 0);                       // the mark right of the picture (pos 1.3) is not drawn
+    {   // LANE S1: the waterfall draws the NAMES of plugin marks on the picture's top rows (it drew none before): a mark with a row has its name beside the line, the line stays whole
+        PluginMark named;
+        named.pos = 0.20f; named.width = 0.0f; named.label = "APRS"; named.color = slint::Color::from_argb_uint8(0x20, 0x20, 0xff, 0x20); named.dashed = false; named.row = 0; named.tip = "APRS  100.3 MHz";
+        ui->set_marks(std::make_shared<slint::VectorModel<PluginMark>>(std::vector<PluginMark>{named}));
+        ui->set_marks(std::make_shared<slint::VectorModel<PluginMark>>(std::vector<PluginMark>{named}));
+        const Frame withName = render(ui, kW, kH);
+        CHECK(withName.countInk(244, 2, 300, 15, kBlue) > 40);                             // the name's plate and letters, from the line's x to the right, on row 0 (y 2 to 15)
+        named.row = 1;
+        ui->set_marks(std::make_shared<slint::VectorModel<PluginMark>>(std::vector<PluginMark>{named}));
+        const Frame rowOne = render(ui, kW, kH);
+        CHECK(rowOne.countInk(244, 2, 300, 15, kBlue) == 0 && rowOne.countInk(244, 15, 300, 30, kBlue) > 40);   // row 1 is 13 px lower
+        named.row = -1;
+        ui->set_marks(std::make_shared<slint::VectorModel<PluginMark>>(std::vector<PluginMark>{named}));
+        CHECK(render(ui, kW, kH).countInk(244, 2, 300, 30, kBlue) == 0);                  // row -1: collapsed into a tab or not placed: no name
+    }
     CHECK(pm.countNear(138, 0, 147, kPicH, kPluginLine, 10) == 0);                // ...and the dashed default mark is gone with the old model
     {
         std::vector<PluginMark> back;
