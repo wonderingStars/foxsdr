@@ -1,0 +1,6 @@
+# feed-cases-new.tsv - cases for the fixtures made by tests/test_feed_fixtures.cpp (--write <dir>; {FEED} = that dir). Same columns as feed-cases-drive.tsv.
+dtmf-decoder-gen	dtmf-decoder-	{FEED}/dtmf-decoder.wav	7100000	10000	USB	3000	60	order:s  1|s  2|s  3|s  A|s  4|s  5|s  6|s  B|s  7|s  8|s  9|s  C|s  *|s  0|s  #|s  D
+ils-meter-gen	ils-meter-	{FEED}/ils-meter.wav	110300000	10000	AM	12000	60	ILS LOC && num:90:150 Hz=4.4~0.6 && fly RIGHT
+ccir-selcall-gen	ccir-selcall-	{FEED}/ccir-selcall.wav	7100000	10000	USB	3000	60	CCIR call 12345
+psk31-decoder-gen	psk31-decoder-	{FEED}/psk31-decoder.wav	14059000	10000	USB	3000	90	CQ CQ DE FOXSDR FIXTURE K
+per-tester-gen	per-tester-	{FEED}/per-tester.wav	433920000	20000	NFM	20000	90	PER PN9 && synchronised && num:errors=40~3
