@@ -274,6 +274,18 @@ Handle openUdp(bool allowBroadcast, std::string& error) {
     return h;
 }
 
+Handle bindUdp(std::uint32_t ip, std::uint16_t port, std::string& error) {
+    const Handle h = openUdp(false, error);
+    if (h == kInvalid) { return kInvalid; }
+    const sockaddr_in a = makeAddr(ip, port);
+    if (::bind(S(h), reinterpret_cast<const sockaddr*>(&a), sizeof(a)) != 0) {
+        error = "could not bind the UDP socket";
+        closeHandle(h);
+        return kInvalid;
+    }
+    return h;
+}
+
 long sendTo(Handle s, const void* buf, std::size_t n, std::uint32_t ip, std::uint16_t port) {
     const sockaddr_in a = makeAddr(ip, port);
     return static_cast<long>(::sendto(S(s), static_cast<const char*>(buf), static_cast<int>(n), 0,

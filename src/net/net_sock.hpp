@@ -61,6 +61,8 @@ int pollMany(PollItem* items, std::size_t n, int ms);
 // A UDP socket (non-blocking) and one datagram out.
 Handle openUdp(bool allowBroadcast, std::string& error);
 long sendTo(Handle s, const void* buf, std::size_t n, std::uint32_t ip, std::uint16_t port);
+// A bound, non-blocking UDP socket (a listener; the stand-in receivers of the tests use it). recvSome() reads one datagram from it.
+Handle bindUdp(std::uint32_t ip, std::uint16_t port, std::string& error);
 
 }  // namespace cascade::net::sock
 
