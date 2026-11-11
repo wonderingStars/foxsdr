@@ -51,6 +51,9 @@ std::vector<Entry> registry() {
     r.push_back({"ils-meter", [] { return ilsLoc(); }, kRate48, 10.0, kUsbOffset});
     r.push_back({"ccir-selcall", [] { return ccirSelcall(); }, kRate48, 3.0, kUsbOffset + 1300.0});
     r.push_back({"psk31-decoder", [] { return psk31(); }, kRate48, 10.0, kUsbOffset + 1500.0});
+    r.push_back({"mpt1327-monitor", [] { return mpt1327(); }, kRate48, 4.0, kUsbOffset + 1500.0});
+    r.push_back({"timesig-decoder", [] { return dcf77(); }, 16000.0, 230.0, 5000.0});
+    r.push_back({"enocean-monitor", [] { return enocean(); }, 1e6, 0.7, 2000.0});
     r.push_back({"per-tester", [] { return perPn9(40); }, 96000.0, 5.0, 20000.0});
     return r;
 }

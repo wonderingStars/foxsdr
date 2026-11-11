@@ -181,4 +181,296 @@ inline Iq perPn9(int flips, const Opt& o = Opt()) {
     return nfm(a, rate, 20000.0, dev, o);
 }
 
+// ---- MPT 1327 forward control channel (1200 baud FFSK: 1200 Hz = 1, 1800 Hz = 0), codewords by the standard's BCH(63,48) + parity ---------------------
+// Burst: ALOHA, CCSC, GTC (go to channel 321, prefix 23 ident 4567 calling 4568), CCSC, ACK, CCSC, broadcast (channel 640, adjacent site 3), CCSC, ALOHA; system 0x2BCD.
+// Tuning: NFM, VFO = centre + 10 kHz, 12.5 kHz passband.
+namespace mpt {
+using Bits = std::vector<std::uint8_t>;
+inline void put(Bits& b, std::uint32_t v, int n) {
+    for (int i = n - 1; i >= 0; --i) { b.push_back(static_cast<std::uint8_t>((v >> i) & 1u)); }
+}
+inline Bits str(const char* s) {
+    Bits b;
+    for (; *s != '\0'; ++s) { b.push_back(static_cast<std::uint8_t>(*s == '1')); }
+    return b;
+}
+// 3.2.3 by long division: 48 information bits, 15 check bits (generator X15+X14+X13+X11+X4+X2+1), the last check bit inverted, then even parity of the 64 bits.
+inline Bits complete(const Bits& info48) {
+    Bits w(63, 0);
+    for (int i = 0; i < 48; ++i) { w[static_cast<std::size_t>(i)] = info48[static_cast<std::size_t>(i)]; }
+    const Bits g = str("1110100000010101");
+    for (std::size_t i = 0; i < 48; ++i) {
+        if (w[i] == 0) { continue; }
+        for (std::size_t j = 0; j < g.size(); ++j) { w[i + j] ^= g[j]; }
+    }
+    Bits cw = info48;
+    for (std::size_t i = 48; i < 63; ++i) { cw.push_back(w[i]); }
+    cw[62] ^= 1u;
+    unsigned par = 0;
+    for (std::uint8_t b : cw) { par ^= b; }
+    cw.push_back(static_cast<std::uint8_t>(par & 1u));
+    return cw;
+}
+// Appendix 3: the completion sequence that makes the system codeword's 64-bit word end in the standard's way.
+inline Bits ccsc(std::uint32_t sys15) {
+    Bits info = str("1010101010101010");
+    const Bits sy = str("1100010011010100");
+    info.insert(info.end(), sy.begin(), sy.end());
+    put(info, sys15, 15);
+    Bits ccs;
+    for (int assume = 0; assume < 2; ++assume) {
+        Bits t = info;
+        t.push_back(static_cast<std::uint8_t>(assume));
+        const Bits cw = complete(t);
+        if (cw[63] == 1) {
+            ccs.assign(cw.begin() + 47, cw.begin() + 63);
+            ccs[15] ^= 1u;
+            break;
+        }
+    }
+    Bits b;
+    b.push_back(0);
+    put(b, sys15, 15);
+    b.insert(b.end(), ccs.begin(), ccs.end());
+    const Bits pre = str("1010101010101010"), sync = str("1100010011010111");
+    b.insert(b.end(), pre.begin(), pre.end());
+    b.insert(b.end(), sync.begin(), sync.end());
+    return b;
+}
+inline Bits general(std::uint32_t pfix, std::uint32_t ident1, std::uint32_t cat, std::uint32_t type, std::uint32_t func, const Bits& rest) {
+    Bits b;
+    b.push_back(1);
+    put(b, pfix, 7);
+    put(b, ident1, 13);
+    b.push_back(1);
+    put(b, cat, 3);
+    put(b, type, 2);
+    put(b, func, 3);
+    b.insert(b.end(), rest.begin(), rest.end());
+    return complete(b);
+}
+inline Bits gtc(std::uint32_t pfix, std::uint32_t ident1, bool data, std::uint32_t chan, std::uint32_t ident2) {
+    Bits b;
+    b.push_back(1);
+    put(b, pfix, 7);
+    put(b, ident1, 13);
+    b.push_back(0);
+    b.push_back(data ? 1 : 0);
+    put(b, chan, 10);
+    put(b, ident2, 13);
+    put(b, 0, 2);
+    return complete(b);
+}
+}  // namespace mpt
+
+inline Iq mpt1327(const Opt& o = Opt()) {
+    using namespace mpt;
+    const std::uint32_t sys = 0x2BCD;
+    const auto rest = [](std::initializer_list<std::pair<int, std::uint32_t>> f) {
+        Bits b;
+        for (const auto& x : f) { put(b, x.second, x.first); }
+        return b;
+    };
+    const Bits aloha = general(0, 8191, 0, 0, 0, rest({{4, 7}, {3, 0}, {2, 0}, {5, 0}, {4, 0}}));
+    const Bits g = gtc(23, 4567, false, 321, 4568);
+    const Bits ack = general(23, 4568, 0, 1, 0, rest({{13, 4567}, {1, 0}, {4, 0}}));
+    Bits bc;
+    bc.push_back(1);
+    put(bc, 4, 5);
+    put(bc, sys, 15);
+    bc.push_back(1);
+    put(bc, 0, 3);
+    put(bc, 3, 2);
+    put(bc, 4, 3);
+    put(bc, 640, 10);
+    put(bc, 0, 4);
+    put(bc, 3, 4);
+    bc = complete(bc);
+    const std::vector<Bits> seq = {aloha, ccsc(sys), g, ccsc(sys), ack, ccsc(sys), bc, ccsc(sys), aloha};
+    Bits bits = str("1010101010101010101010101010101010101010");
+    const Bits sync = str("1100010011010111");
+    bits.insert(bits.end(), sync.begin(), sync.end());
+    for (const Bits& c : seq) { bits.insert(bits.end(), c.begin(), c.end()); }
+    bits.push_back(0);
+    Audio a;
+    silence(a, 0.4, kRate48);
+    for (int rep = 0; rep < 3; ++rep) {
+        double phase = 0.0;
+        for (std::size_t k = 0; k < bits.size(); ++k) {
+            const double f = bits[k] ? 1200.0 : 1800.0;
+            const std::size_t n = static_cast<std::size_t>(std::floor(static_cast<double>(k + 1) * 40.0) - std::floor(static_cast<double>(k) * 40.0));
+            for (std::size_t i = 0; i < n; ++i) {
+                a.push_back(0.5 * std::sin(phase));
+                phase += 2.0 * kPi * f / kRate48;
+            }
+        }
+        silence(a, 0.8, kRate48);
+    }
+    return nfm(a, kRate48, kUsbOffset, 3000.0, o);
+}
+
+// ---- DCF77 (the time code of the German LF station: one second marker per second, the carrier cut to 15 % for 100 ms (0) or 200 ms (1)) -------------------
+// Four consecutive minutes from Wed 2026-11-11 12:34 CET (UTC+1), no call bit, no announcements, the three parity bits and the BCD fields written from the published
+// second-by-second table (minute 21-27, hour 29-34, day 36-41, weekday 42-44, month 45-49, year 50-57). The carrier is heard as a 1000 Hz tone (a receiver in USB 1 kHz off the carrier).
+// Tuning: USB, VFO = centre + 4 kHz, 3 kHz passband, 16 kS/s file. The plugin prints the time after it has read consecutive frames.
+namespace dcf {
+struct Tm { int y, mo, d, wd /* ISO 1..7 */, h, mi; };
+inline void frameBits(const Tm& t, int* b) {
+    for (int i = 0; i < 60; ++i) { b[i] = 0; }
+    b[17] = 0;   // CET: bit 17 = 0, bit 18 = 1
+    b[18] = 1;
+    b[20] = 1;   // start of time information
+    static const int ms[7] = {21, 22, 23, 24, 25, 26, 27}, mw[7] = {1, 2, 4, 8, 10, 20, 40};
+    static const int hs[6] = {29, 30, 31, 32, 33, 34}, hw[6] = {1, 2, 4, 8, 10, 20};
+    static const int ds[6] = {36, 37, 38, 39, 40, 41}, dw[6] = {1, 2, 4, 8, 10, 20};
+    static const int ws[3] = {42, 43, 44}, ww[3] = {1, 2, 4};
+    static const int os[5] = {45, 46, 47, 48, 49}, ow[5] = {1, 2, 4, 8, 10};
+    static const int ys[8] = {50, 51, 52, 53, 54, 55, 56, 57}, yw[8] = {1, 2, 4, 8, 10, 20, 40, 80};
+    const auto bcd = [&](const int* sec, const int* w, int n, int v) {
+        const int u = v % 10, tn = v / 10;
+        for (int i = 0; i < n; ++i) { b[sec[i]] = (w[i] < 10) ? ((u & w[i]) ? 1 : 0) : ((tn & (w[i] / 10)) ? 1 : 0); }
+    };
+    bcd(ms, mw, 7, t.mi);
+    bcd(hs, hw, 6, t.h);
+    bcd(ds, dw, 6, t.d);
+    for (int i = 0; i < 3; ++i) { b[ws[i]] = (t.wd & ww[i]) ? 1 : 0; }
+    bcd(os, ow, 5, t.mo);
+    bcd(ys, yw, 8, t.y % 100);
+    const auto even = [&](int a, int z) {
+        int c = 0;
+        for (int i = a; i <= z; ++i) { c += b[i]; }
+        return c % 2;
+    };
+    b[28] = even(21, 27);
+    b[35] = even(29, 34);
+    b[58] = even(36, 57);
+}
+}  // namespace dcf
+
+inline Iq dcf77(const Opt& o = Opt()) {
+    const double rate = 16000.0;
+    dcf::Tm t{2026, 11, 11, 3, 12, 34};
+    Audio a;
+    const double lowRatio = 0.15, edgeMs = 1.5;
+    double gain = 1.0;
+    const double alpha = 1.0 - std::exp(-1.0 / (edgeMs * 1e-3 * rate));
+    std::size_t k = 0;
+    for (int frame = 0; frame < 4; ++frame) {
+        int bits[60];
+        dcf::frameBits(t, bits);
+        for (int sec = 0; sec < 60; ++sec) {
+            const std::size_t n = static_cast<std::size_t>(rate);
+            const double lowMs = (sec == 59) ? 0.0 : (bits[sec] ? 200.0 : 100.0);   // no reduction in second 59: the minute marker
+            for (std::size_t i = 0; i < n; ++i, ++k) {
+                const double ms = static_cast<double>(i) * 1000.0 / rate;
+                const double target = ms < lowMs ? lowRatio : 1.0;
+                gain += alpha * (target - gain);
+                a.push_back(0.5 * gain * std::sin(2.0 * kPi * 1000.0 * static_cast<double>(k) / rate));
+            }
+        }
+        if (++t.mi >= 60) {   // never reached for 12:34..12:37
+            t.mi = 0;
+            ++t.h;
+        }
+    }
+    Opt oo = o;
+    oo.snrDb = std::min(o.snrDb, 35.0);
+    return usb(a, rate, 4000.0, oo);
+}
+
+// ---- EnOcean ERP1 (868.3 MHz ASK, 125 kbit/s, the 8-to-12 line code, CRC-8 poly x^8+x^2+x+1) -------------------------------------------------------
+// Three telegrams of the kinds a switch and two sensors send (RPS F6 with one data byte, 1BS D5, 4BS A5), each as three sub-telegrams 10-40 ms apart, from a made-up sender
+// address (not any real device). 1 MS/s, 2 kHz carrier offset, 100 ppm bit-rate error, 30 dB SNR; a "1" is 30 dB below a "0".
+// Tuning: RAW, VFO irrelevant (an I/Q decoder), the file's 1 MHz span.
+namespace eno {
+inline void groupBits(unsigned byte, bool last, std::vector<int>& b) {
+    const auto bit = [&](int k) { return static_cast<int>((byte >> k) & 1u); };
+    b.push_back(bit(7)); b.push_back(bit(6)); b.push_back(bit(5)); b.push_back(1 - bit(5));
+    b.push_back(bit(4)); b.push_back(bit(3)); b.push_back(bit(2)); b.push_back(1 - bit(2));
+    b.push_back(bit(1)); b.push_back(bit(0)); b.push_back(last ? 1 : 0); b.push_back(last ? 0 : 1);
+}
+inline std::uint8_t crc8(const std::vector<std::uint8_t>& d) {
+    unsigned rem = 0;
+    for (std::uint8_t v : d) {
+        unsigned x = (rem ^ v) << 8;
+        for (int bit = 15; bit >= 8; --bit) {
+            if (x & (1u << bit)) { x ^= (0x107u << (bit - 8)); }
+        }
+        rem = x & 0xFFu;
+    }
+    return static_cast<std::uint8_t>(rem);
+}
+inline std::vector<int> frameBits(std::vector<std::uint8_t> body) {
+    body.push_back(crc8(body));
+    std::vector<int> b;
+    for (int i = 0; i < 8; ++i) { b.push_back(i % 2 == 0 ? 1 : 0); }   // preamble 10101010
+    static const int sof[4] = {1, 0, 0, 1};
+    for (int i = 0; i < 4; ++i) { b.push_back(sof[i]); }
+    for (std::size_t i = 0; i < body.size(); ++i) { groupBits(body[i], i + 1 == body.size(), b); }
+    return b;
+}
+}  // namespace eno
+
+inline Iq enocean(const Opt& o = Opt()) {
+    const double fs = 1e6, bitUs = 8.0 * (1.0 + 100e-6), low = 0.03;
+    const std::uint32_t id = 0x0180ABCD;   // made up
+    const auto body = [&](unsigned rorg, std::initializer_list<unsigned> data, unsigned status) {
+        std::vector<std::uint8_t> b;
+        b.push_back(static_cast<std::uint8_t>(rorg));
+        for (unsigned d : data) { b.push_back(static_cast<std::uint8_t>(d)); }
+        b.push_back(static_cast<std::uint8_t>(id >> 24)); b.push_back(static_cast<std::uint8_t>(id >> 16));
+        b.push_back(static_cast<std::uint8_t>(id >> 8)); b.push_back(static_cast<std::uint8_t>(id));
+        b.push_back(static_cast<std::uint8_t>(status));
+        return b;
+    };
+    std::vector<std::vector<int>> frames;
+    std::vector<double> gaps;
+    const std::vector<std::vector<std::uint8_t>> tel = {body(0xF6, {0x30}, 0xB0), body(0xD5, {0x09}, 0x80), body(0xA5, {0x00, 0x00, 0x55, 0x08}, 0x80)};
+    Rng rng(o.seed);
+    for (std::size_t t = 0; t < tel.size(); ++t) {
+        for (int sub = 0; sub < 3; ++sub) {
+            frames.push_back(eno::frameBits(tel[t]));
+            gaps.push_back(sub == 2 ? 300000.0 : 10000.0 + 30000.0 * rng.uniform());
+        }
+    }
+    std::vector<double> startUs;
+    double cur = 40000.0, endUs = 0.0;
+    for (std::size_t f = 0; f < frames.size(); ++f) {
+        startUs.push_back(cur);
+        endUs = cur + static_cast<double>(frames[f].size()) * bitUs;
+        cur = endUs + gaps[f];
+    }
+    const std::size_t n = static_cast<std::size_t>((endUs + 20000.0) * fs / 1e6);
+    Iq r;
+    r.rate = fs;
+    r.i.resize(n);
+    r.q.resize(n);
+    const double sigma = std::sqrt(1.0 / std::pow(10.0, std::min(o.snrDb, 30.0) / 10.0) / 2.0);
+    Rng g(o.seed * 31u + 5u);
+    std::size_t fi = 0;
+    for (std::size_t k = 0; k < n; ++k) {
+        const double us = static_cast<double>(k) * 1e6 / fs;
+        while (fi + 1 < frames.size() && us >= startUs[fi] + static_cast<double>(frames[fi].size()) * bitUs + 40.0) { ++fi; }
+        double a = 0.0;
+        const double s = startUs[fi], e = s + static_cast<double>(frames[fi].size()) * bitUs;
+        if (us >= s - 40.0 && us < s) {
+            a = low;
+        } else if (us >= s && us < e) {
+            const double rel = (us - s) / bitUs;
+            const std::size_t j = static_cast<std::size_t>(rel);
+            const auto lv = [&](std::size_t q) { return frames[fi][q] == 0 ? 1.0 : low; };
+            a = lv(j);
+            const double fr = (rel - static_cast<double>(j)) * bitUs, half = 0.75;
+            if (fr < half && j > 0) { a = lv(j - 1) + (lv(j) - lv(j - 1)) * (0.5 + fr / 1.5); }
+            else if (fr > bitUs - half && j + 1 < frames[fi].size()) { a = lv(j) + (lv(j + 1) - lv(j)) * (0.5 - (bitUs - fr) / 1.5); }
+        } else if (us >= e && us < e + 40.0) {
+            a = low;
+        }
+        const double ph = 2.0 * kPi * (2000.0 + o.cfoHz) * us * 1e-6;
+        r.i[k] = static_cast<float>(a * std::cos(ph) + sigma * g.gauss());
+        r.q[k] = static_cast<float>(a * std::sin(ph) + sigma * g.gauss());
+    }
+    return r;
+}
+
 }  // namespace feedgen
