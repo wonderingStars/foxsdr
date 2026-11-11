@@ -119,6 +119,7 @@ Header parseHeader(const std::string& script) {
             else if (key == "view") { h.env["FOXSDR_SLINT_VIEW"] = value; }
             else if (key == "open") { h.env["FOXSDR_SLINT_OPEN"] = value; }
             else if (key == "store") { h.env["FOXSDR_SLINT_STORE_PAGE"] = value; }
+            else if (key == "testradios") { h.env["FOXSDR_SLINT_TEST_RADIOS"] = value; }   // 2..8 made-up radios for the radio workspace (docs/multi-radio-records/screen-s3.md); a test-only seam of a bounded run
             else if (key == "size") { h.env["FOXSDR_SLINT_SIZE"] = value; }   // <w>x<h>: a taller window for a tall section body
             else if (key == "plugins") { h.plugins = value; }                 // all | <id>,<id>...: the plugins fitted for this run (docs 6.49)
             else if (key == "iqfile") { h.iqfile = value; }                   // the I/Q WAV source (docs 6.50)

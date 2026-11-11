@@ -1,0 +1,10 @@
+#! frames=300 testradios=4 size=1280x720
+# workspace-edge: 1280 x 720 is exactly enough for a multi-pane layout (the minimum is inclusive): 2 x 2 is shown, no notice, all four radios read.
+10 state workspace.radios == 4
++1 click "2 x 2"
++12 state workspace.shown == 2
+state workspace.fell == 0
+state workspace.cells == "1,2,3,4"
++10 state workspace.ticks.4 > 3
+state workspace.cell != "0x0"
++1 shot "workspace-edge.png"

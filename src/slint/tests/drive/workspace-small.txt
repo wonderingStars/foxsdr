@@ -1,0 +1,19 @@
+#! frames=300 testradios=4 size=1000x640
+# workspace-small: the small-window fallback. In a window below 1280 x 720 a multi-pane layout is chosen but One is shown, the notice says so, and only the selected radio is read; the chosen
+# layout is kept. (The window cannot be widened by the script: the return of the layout when the window is wide is held in test_slint_workspace_host; workspace-edge.txt holds the 1280 x 720 edge.)
+10 state workspace.radios == 4
++1 click "2 x 2"
++12 state workspace.layout == 2
+state workspace.shown == 0
+state workspace.fell == 1
+state workspace.cells == "1"
++10 state workspace.ticks.2 == 0
+state workspace.ticks.1 > 3
+state workspace.pic.1 == "1024x340"
++1 expect "2 x 2" checked equals "true"
++1 expect "Several radios need a window of at least 1280 x 720. Showing one radio." label contains "1280 x 720"
++1 shot "workspace-small.png"
++1 click "Side by side"
++12 state workspace.layout == 1
+state workspace.shown == 0
+state workspace.fell == 1

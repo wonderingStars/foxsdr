@@ -1,0 +1,41 @@
+#! frames=520 testradios=4 size=1600x900
+# workspace-select: selecting a radio and a gesture in a pane (radio 1 is the engine's; radios 2 to 4 are the bounded run's test seam: the live path is unverified until engine stage 4 is merged).
+# A click on a pane's tag selects it (RADIO_FOCUS, the strip then shows that radio: state tunedHz is the selected radio's); a click in a pane's spectrum retunes THAT radio only and does not move the
+# selection; START in a pane starts that radio only; STOP in pane 1 stops the engine's own radio. Tick rows 4212-4214 (docs/multi-radio-records/screen-s3.md).
+10 state workspace.selected == 1
+state tunedHz == 100300000
++1 click "2 x 2"
++12 state workspace.shown == 2
++1 click "Select Radio 3"
++8 state workspace.selected == 3
+state tunedHz == 102000000
++1 click "Select Radio 2"
++8 state workspace.selected == 2
+state tunedHz == 101000000
+state workspace.tuned.4 == 103000000
+state workspace.tuned.3 == 102000000
++1 press "Radio 4 spectrum"
++8 state workspace.tuned.4 != 103000000
+state workspace.tuned.3 == 102000000
+state workspace.tuned.2 == 101000000
+state workspace.tuned.1 == 100300000
+state workspace.selected == 2
+state tunedHz == 101000000
++1 press "Radio 3 waterfall"
++8 state workspace.tuned.3 != 102000000
+state workspace.tuned.4 != 103000000
+state workspace.tuned.2 == 101000000
+state workspace.selected == 2
++1 state workspace.running.3 == 0
++1 click "Start Radio 3"
++8 state workspace.running.3 == 1
+state workspace.running.4 == 1
+state workspace.running.2 == 1
+state workspace.selected == 2
++1 expect "Stop Radio 3" enabled equals "true"
++1 state workspace.running.1 == 1
++1 click "Stop Radio 1"
++10 state workspace.running.1 == 0
+state workspace.running.2 == 1
+state workspace.selected == 2
++1 shot "workspace-selected-2.png"

@@ -35,6 +35,8 @@ set(foxsdr_slint_sources main.cpp host_logic.cpp host_duties.cpp kit_logic.cpp p
     "${CMAKE_SOURCE_DIR}/src/gui/module_census.cpp"
     "${CMAKE_SOURCE_DIR}/src/gui/font_probe.cpp")
 # THE GLOBE VIEWS (docs 6.65): the geometry, the planets, the rules, what each view draws, its picture and its publisher. Their tests are registered by tests/CMakeLists.txt.
+# THE RADIO WORKSPACE (docs/multi-radio-records/screen-s3.md): the logic, the publisher into ui/workspace.slint, and the test seam (made-up radios for a bounded run only)
+list(APPEND foxsdr_slint_sources workspace_logic.cpp workspace_publish.cpp workspace_testseam.cpp)
 list(APPEND foxsdr_slint_sources globe_scene.cpp solar_ephemeris.cpp globe_logic.cpp globe_draw.cpp globe_compositor.cpp globe_publish.cpp)
 if(WIN32)
     enable_language(RC)

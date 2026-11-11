@@ -1,0 +1,43 @@
+#! frames=520 testradios=8 size=1600x900
+# workspace-pages: eight radios (1 real, 2 to 8 made up by the bounded run's test seam) in pages of four. Page one shows radios 1 to 4 and reads only them; "Radios 5-8" shows the second page and
+# reads those; selecting radio 6 (a click on its tag) is the session's focus and moves the strip to it; Side by side pages through the pairs (1-2, 3-4, 5-6, 7-8) and keeps the page that holds the
+# selected radio. Tick rows 4212-4214 (docs/multi-radio-records/screen-s3.md).
+10 state workspace.radios == 8
++1 click "2 x 2"
++12 state workspace.shown == 2
+state workspace.pages == 2
+state workspace.page == 0
+state workspace.cells == "1,2,3,4"
+state workspace.ticks.1 > 3
+state workspace.ticks.4 > 3
+state workspace.ticks.5 == 0
+state workspace.ticks.8 == 0
++1 expect "Radios 1-4" checked equals "true"
++1 expect "Radios 5-8" checked equals "false"
++1 click "Radios 5-8"
++12 state workspace.page == 1
+state workspace.cells == "5,6,7,8"
++1 expect "Radios 1-4" checked equals "false"
++1 expect "Radios 5-8" checked equals "true"
++10 state workspace.ticks.5 > 3
+state workspace.ticks.8 > 3
++1 expect "Select Radio 5" label equals "Select Radio 5"
++1 expect "Select Radio 8" label equals "Select Radio 8"
++1 shot "workspace-page2.png"
++1 click "Select Radio 6"
++8 state workspace.selected == 6
+state tunedHz == 105000000
+state workspace.page == 1
++1 click "Radios 1-4"
++12 state workspace.page == 0
+state workspace.cells == "1,2,3,4"
++1 click "Side by side"
++12 state workspace.pages == 4
+state workspace.page == 2
+state workspace.cells == "5,6"
++1 expect "Radios 5-6" checked equals "true"
++1 click "Radios 7-8"
++12 state workspace.cells == "7,8"
+state workspace.page == 3
++1 click "Radios 1-2"
++12 state workspace.cells == "1,2"

@@ -76,6 +76,9 @@
 #include "transmit_publish.hpp"
 #include "scope_publish.hpp"
 #include "view3d_publish.hpp"
+#include "workspace_logic.hpp"
+#include "workspace_publish.hpp"
+#include "workspace_testseam.hpp"
 #include "plugin_kit.hpp"
 #include "signal_publish.hpp"
 #include "signatures.hpp"
@@ -109,7 +112,7 @@ slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
 std::string sigOf(const std::vector<Tick>& t) { std::string s; for (const auto& k : t) { s += fmt("%.6f|", k.frac) + k.label + ";"; } return s; }
 std::int64_t nowMs() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
-constexpr double kZoomPerNotch = 1.3;
+constexpr double kZoomPerNotch = foxsdr::slinthost::kZoomStepPerNotch;   // the panes' wheel zooms by the same factor (workspace_logic.hpp)
 // The bookmark names' stacking rule works in pixels (docs 6.52): the plot is taken at the trace's painted width, and a caption glyph (Theme.font-cap,
 // 10 px) at 6 px - the window never hands its plot width back here, and the rule needs only the proportions to decide which names touch.
 // (The painted width is the radio's own: RadioView::wells.size.traceW, radio_view.hpp.)
@@ -336,6 +339,24 @@ int main(int argc, char** argv) {
     // strip, the panels and the banks. Slots are made on first use; with one radio only slot 0 exists and the window is today's.
     RadioSet radios;
     const auto selected = [&]() -> RadioView& { return radios.selectedView(); };
+    // THE RADIO WORKSPACE (docs/multi-radio-records/screen-s3.md, stage S3): the radios the engine has, the layout and the page, the selection, the panes' rows in the model of ui/workspace.slint. With ONE radio
+    // (today's engine) nothing here shows: layout One is the receiver view as it was. The engine's multi-radio stage is not in this tree: see the SEAM notes below.
+    Workspace workspace(radios);
+    foxsdr::slintworkspace::WorkspacePublisher workspacePublisher(*ui);
+    // TEST ONLY (workspace_testseam.hpp): a BOUNDED run's FOXSDR_SLINT_TEST_RADIOS=<2..8> makes radios 2 to N from made-up answers, so the drive harness can show, drive and shoot the panes before stage 4
+    // has live radios. Never in a session: the gate is the bounded run, and no control reaches it.
+    std::unique_ptr<SeamRadios> seam;
+    if (const int n = testRadiosFromEnv(std::getenv("FOXSDR_SLINT_TEST_RADIOS"), bounded.bounded()); n > 0) {
+        seam = std::make_unique<SeamRadios>(n);
+        std::fprintf(stderr, "foxsdr-slint: TEST SEAM: %d radios, radios 2 to %d are made up (FOXSDR_SLINT_TEST_RADIOS)\n", n, n);
+    }
+    FoxReceiverState realState{}; realState.structSize = sizeof(realState);   // the engine's own read_state, before the seam puts a made-up radio's in `state`
+    std::array<int, kMaxRadios> paneTicks{};                                   // per slot: how many ticks its pictures were read and painted (the drive script's read-back)
+    std::array<std::pair<float, float>, kMaxRadios> paneHover;                 // per slot: the pointer over its spectrum or waterfall, fractions; -1 when not over it
+    for (auto& h : paneHover) { h = {-1.f, -1.f}; }
+    int lastShownLayout = -1, lastSelectedSlot = -1;
+    std::unique_ptr<PaneGestures> paneGestures;                                // the panes' gestures (workspace_logic.hpp), wired below
+    std::string paneGainOfSelected;                                            // the strip's gain figure, for the selected radio's pane
     int traceMode = 1;                        // 0 normal 1 peak hold 2 average
     double averageLengthS = 1.0;
     bool rangeManual = false;
@@ -500,6 +521,11 @@ int main(int argc, char** argv) {
     // `radio` is the radio's number (slot + 1) a pane's gesture aims at; 0 = the selected radio, the engine's focus (FoxCommand.target, radio_view.hpp aimAt).
     const auto submit = [&](FoxCommand c, std::uint32_t radio = 0) {
         c.structSize = sizeof(c);
+        // TEST SEAM: a command aimed at (or, for the strip, following the selection to) a made-up radio changes ITS state; the engine has no such radio
+        if (seam) {
+            const int slot = radio != 0 ? static_cast<int>(radio) - 1 : radios.selected;
+            if (seam->fake(slot) && seam->apply(slot, c, realState)) { return; }
+        }
         aimAt(c, radio);
         FoxSubmitResult r{}; r.structSize = sizeof(r);
         const int32_t rc = api->submit(session, &c, 1, &r);
@@ -507,6 +533,31 @@ int main(int argc, char** argv) {
         else if (r.status == FOXAPI_BUSY) { std::fprintf(stderr, "foxsdr-slint: submit op 0x%04x: the session's queue is full\n", c.op); }
     };
     const auto op = [&](std::uint32_t code) { FoxCommand c{}; c.op = code; return c; };
+    // THE ENGINE AS THE WORKSPACE SEES IT (workspace_logic.hpp EngineReads): the facts fact.radio.count and fact.radio.<n>.state, and RADIO_FOCUS. With the test seam they are answered from the made-up radios.
+    // SEAM FOR ENGINE STAGE 4: nothing else changes when stage 4 is merged: the facts name the radios it opens and RADIO_FOCUS moves the session's focus for real.
+    const EngineReads engineReads{
+        [&](const char* name, std::string& out) -> int {
+            if (seam) {
+                const std::string n = name;
+                if (n == "fact.radio.count") { out = std::to_string(seam->count()); return static_cast<int>(out.size()); }
+                for (int r = 1; r <= seam->count(); ++r) { if (n == "fact.radio." + std::to_string(r) + ".state") { out = "running"; return static_cast<int>(out.size()); } }
+                return -1;
+            }
+            char buf[64] = {};
+            const int32_t n = api->get_setting(session, name, buf, sizeof(buf));
+            if (n < 0) { return n; }
+            out.assign(buf, static_cast<std::size_t>(std::max<int32_t>(0, std::min<int32_t>(n, 63))));
+            return n;
+        },
+        [&](std::uint32_t radio) -> int32_t {
+            if (seam) { return seam->focus(radio); }
+            FoxCommand c{}; c.structSize = sizeof(c); c.op = FOXAPI_OP_RADIO_FOCUS; c.ival[0] = static_cast<std::int64_t>(radio);
+            FoxSubmitResult r{}; r.structSize = sizeof(r);
+            const int32_t rc = api->submit(session, &c, 1, &r);
+            return rc < 0 ? rc : r.status;
+        }};
+    // Selecting a radio is the session's focus (design 3.2): the engine is asked, and the window's selection follows when it says yes.
+    const auto selectRadio = [&](int radio) { (void)workspace.select(radio, engineReads); };
     const auto setFrequency = [&](double hz) { FoxCommand c = op(FOXAPI_OP_SET_FREQUENCY); c.num[0] = hz; submit(c); };
     const auto stepTune = [&](int dir, double step) { FoxCommand c = op(FOXAPI_OP_STEP_TUNE); c.ival[0] = dir; c.num[0] = step; submit(c); };
     const auto setMode = [&](std::uint32_t demod) { FoxCommand c = op(FOXAPI_OP_SET_MODE); c.ival[0] = static_cast<int64_t>(demod); submit(c); };
@@ -911,6 +962,33 @@ int main(int argc, char** argv) {
             ui->set_marker_tooltip(ss("M" + std::to_string(m.id) + " " + fmtMHz(m.hz) + (m.note.empty() ? "" : " \xC2\xB7 " + m.note) + " \xC2\xB7 right-click to remove"));
         }
     });
+    // THE PANES' GESTURES (ui/workspace.slint WorkspaceModel): each is aimed at its pane's radio (FoxCommand.target = the radio's number, radio_view.hpp aimAt) and does NOT move the selection;
+    // the header, the tag and the readout row select, and so does a right-click (its menu is the selected radio's, as every menu of this window is). Click-to-tune, the drag of the band, the edge
+    // drag, the wheel and the waterfall's pan are the receiver view's gestures over THAT radio's picture (its own zoom, its own state).
+    {
+        auto& wm = ui->global<WorkspaceModel>();
+        const auto viewOf = [&](int radio) -> RadioView& { return radios.at(radio - 1); };
+        paneGestures = std::make_unique<PaneGestures>(radios, [&](const FoxCommand& c, std::uint32_t radio) { submit(c, radio); });
+        wm.on_layout_selected([&](int l) { workspace.setLayout(l); });
+        wm.on_page_selected([&](int p) { workspace.setPage(p); });
+        wm.on_select_requested([&](int r) { selectRadio(r); });
+        wm.on_stop_clicked([&](int r) { paneGestures->stop(r); });
+        const auto paneHoverAt = [&](int r, float x, float y) { paneHover[static_cast<std::size_t>(std::clamp(r - 1, 0, kMaxRadios - 1))] = (x >= 0 && y >= 0) ? std::make_pair(x, y) : std::make_pair(-1.f, -1.f); };
+        wm.on_spectrum_hover(paneHoverAt);
+        wm.on_waterfall_hover(paneHoverAt);
+        wm.on_spectrum_clicked([&](int r, float x, bool shift) { paneGestures->click(r, x, shift); });
+        wm.on_waterfall_clicked([&](int r, float x, bool shift) { paneGestures->click(r, x, shift); });
+        wm.on_spectrum_double_clicked([&](int r, float) { paneGestures->resetView(r); });
+        wm.on_waterfall_double_clicked([&](int r) { paneGestures->resetView(r); });
+        wm.on_band_dragged([&](int r, float dx) { paneGestures->bandDrag(r, dx, tickNo); });
+        wm.on_edge_dragged([&](int r, float half) { paneGestures->edgeDrag(r, half); });
+        wm.on_spectrum_wheel([&](int r, float x, int n, bool shift) { paneGestures->wheel(r, x, n, shift); });
+        wm.on_waterfall_wheel([&](int r, float x, int n, bool shift) { paneGestures->wheel(r, x, n, shift); });
+        wm.on_waterfall_panned([&](int r, float dx) { paneGestures->pan(r, dx); });
+        wm.on_spectrum_menu_requested([&](int r, float x, float px, float py) { selectRadio(r); menuHz = viewOf(r).hzAtFrac(x); openMenu(MenuKind::Trace, px, py); });
+        wm.on_waterfall_menu_requested([&](int r, float x, float px, float py) { selectRadio(r); menuHz = viewOf(r).hzAtFrac(x); openMenu(MenuKind::Marker, px, py); });
+        wm.on_marker_hovered([&](int, int) {});   // a pane's marker tips: stage S6
+    }
     ui->on_status_clicked([&](int) {});
     // The status bar's two keys open the SYSTEM bank's report sheet through the report-open effect (system_publish.cpp: applyReportOpen -> the page of that kind).
     ui->on_feature_request_clicked([&] { ui->global<SystemEvents>().invoke_report_open(0); });
@@ -1044,6 +1122,8 @@ int main(int argc, char** argv) {
     const PlotSize layoutOnePlot{980, 330};
     // The radio's spectrum frame. Today's engine API has one spectrum, the focused radio's; the per-radio read (read_radio_spectrum, engine stage 3) answers here by rv.slot.
     const auto readSpectrum = [&](RadioView& rv, FoxSpectrumInfo& info) -> int32_t {
+        if (seam && seam->fake(rv.slot)) { return seam->spectrum(rv.slot, rv.sinceSeq, info, rv.bins.data(), static_cast<uint32_t>(rv.bins.size()), realState); }
+        if (FOXAPI_HAS(api, read_radio_spectrum)) { return api->read_radio_spectrum(session, static_cast<uint32_t>(rv.slot) + 1u, rv.sinceSeq, &info, rv.bins.data(), static_cast<uint32_t>(rv.bins.size())); }
         return api->read_spectrum(session, rv.sinceSeq, &info, rv.bins.data(), static_cast<uint32_t>(rv.bins.size()));
     };
     // PER VISIBLE PANE: follow a retune that leaves the picture, read the radio's spectrum, paint its trace and waterfall on a new frame, and derive the figures around them
@@ -1236,6 +1316,7 @@ int main(int argc, char** argv) {
         if (listMoved) {
             lastListSeq = state.listSeq;
             refreshLists();
+            workspace.readFacts(engineReads);   // the radios the engine has (fact.radio.count and the per-radio facts); the lists' fingerprint moves with them
             // The Radio body's "Follow the band plan's mode when retuning": the engine's switch, a fact in the lists' block ("1"/"0"; not yet published reads as on).
             char followBuf[8] = {};
             const int32_t n = api->get_setting(session, "fact.bandPlan.followMode", followBuf, sizeof(followBuf));
@@ -1243,6 +1324,8 @@ int main(int argc, char** argv) {
             ui->set_follow_band_plan(followBandPlan);
         }
         ++tickNo;
+        // TEST SEAM: the strip shows the selected radio; when that is a made-up one its state replaces the engine's here (radio 1's is kept in realState)
+        if (seam) { realState = state; if (radios.selected > 0) { state = seam->state(radios.selected, realState); } }
         selected().state = state;   // the selected radio's picture works from the state the strip reads (until the per-radio read of engine stage 3)
         const bool running = (state.flags & FOXAPI_RX_RUNNING) != 0;
 
@@ -1353,8 +1436,54 @@ int main(int argc, char** argv) {
         if (sigs.changed("status", cardSig)) { ui->set_status(std::make_shared<slint::VectorModel<StatusCard>>(std::move(cards))); }
 
         // THE PICTURES: the per-pane work for each pane on screen (layout One: the selected radio's, the only one), then its figures into the window
-        paneTick(selected(), layoutOnePlot, true);
-        publishPicture(selected());
+        // THE WORKSPACE: layout One is today's path, untouched (the selected radio painted at the picture size of today and published into the window's own properties). A multi-pane layout reads and
+        // paints each radio on screen at the size of its pane and publishes it into its row of the workspace model; the selected radio is read in either case (the strip, the banks and the 3D history
+        // follow it), and a radio that is not on screen is not read. In the seam, radios 2 to N answer from made-up state.
+        const int winW = static_cast<int>(ui->get_win_w()), winH = static_cast<int>(ui->get_win_h());
+        const int shownLayout = workspace.shownLayout(winW, winH);
+        if (shownLayout != lastShownLayout || radios.selected != lastSelectedSlot) {   // the window's own properties may hold another radio's figures: send them all again
+            selected().sigs.last.clear();
+            lastShownLayout = shownLayout;
+            lastSelectedSlot = radios.selected;
+        }
+        workspacePublisher.publishLayout(workspace, winW, winH, ui->get_band_plan_on() ? ui->get_ribbon_size() : 0);
+        paneGainOfSelected = gainTxt == "N/A" ? std::string() : gainTxt;
+        if (shownLayout == kLayoutOne) {
+            workspace.restorePictures(radios.selected);
+            paneTick(selected(), layoutOnePlot, true);
+            ++paneTicks[static_cast<std::size_t>(radios.selected)];
+            publishPicture(selected());
+        } else {
+            const auto& wm = ui->global<WorkspaceModel>();
+            const int cellW = static_cast<int>(wm.get_cell_w()), cellH = static_cast<int>(wm.get_cell_h());
+            const auto splits = wm.get_splits();
+            std::array<bool, kMaxRadios> onScreen{};
+            for (const PaneCell& c : workspace.cells(winW, winH)) { if (c.occupied) { onScreen[static_cast<std::size_t>(c.slot)] = true; } }
+            for (const int slot : workspace.slotsToTick(winW, winH)) {
+                RadioView& rv = radios.at(slot);
+                if (slot == radios.selected) { rv.state = state; }
+                else if (seam && slot == 0) { rv.state = realState; }
+                else if (seam && seam->fake(slot)) { rv.state = seam->state(slot, realState); }
+                else if (FOXAPI_HAS(api, read_radio_state)) {
+                    FoxReceiverState st{}; st.structSize = sizeof(st);
+                    if (api->read_radio_state(session, static_cast<std::uint32_t>(slot) + 1u, &st) >= 0) { rv.state = st; }
+                }
+                const float split = splits && static_cast<std::size_t>(slot) < splits->row_count() ? splits->row_data(static_cast<std::size_t>(slot)).value_or(kPaneSplitDefault) : kPaneSplitDefault;
+                if (cellW > 0 && cellH > 0) { workspace.fitPictures(slot, cellW, cellH, split); }
+                paneTick(rv, rv.plot, slot == radios.selected);
+                ++paneTicks[static_cast<std::size_t>(slot)];
+                if (!onScreen[static_cast<std::size_t>(slot)]) { continue; }
+                foxsdr::slintworkspace::PaneContext ctx;
+                ctx.texts = paneTexts(slot + 1, rv.state, slot == radios.selected ? paneGainOfSelected : std::string());
+                ctx.decoder = slot == radios.selected ? (lists.decodersFed.empty() ? std::string() : lists.decodersFed.front()) : std::string();
+                if (seam && slot == 1) { ctx.decoder = "APRS"; }   // TEST SEAM: one made-up decoder chip, so the pane's chip is seen
+                ctx.traceMode = traceMode;
+                const auto h = paneHover[static_cast<std::size_t>(slot)];
+                ctx.hoverX = h.first;
+                if (h.first >= 0) { ctx.cursorText = cursorText(rv.hzAtFrac(h.first), rv.dbAtFrac(h.first)); }
+                workspacePublisher.publishPane(rv, ctx);
+            }
+        }
         const ViewWindow v = selected().fig.view;   // the window the figures were laid out for (before this tick's frame moved the baseband)
 
         // answers: log anything the engine refused (a refusal UI is the notices of phase 3)
@@ -1605,6 +1734,31 @@ int main(int argc, char** argv) {
         if (name.rfind("scope.", 0) == 0) { return scopeBank.readState(name.substr(6), out); }
         // view3d.<what>: the 3D views' own state (view3d_publish.hpp readState: wf.on, wf.azimuth, wf.elevation, wf.zoom, wf.depth, wf.shading, wf.renders, wf.triangles, wf.pixels ...)
         if (name.rfind("view3d.", 0) == 0) { return view3dBank.readState(name.substr(7), out); }
+        // workspace.<what>: the radio workspace's own state (docs/multi-radio-records/screen-s3.md): layout (chosen), shown, page, pages, selected (1-based), radios, cells (the shown cells' radio numbers, 0 = empty),
+        // ticks.<n> (how many ticks radio n's pictures were read), tuned.<n> / running.<n> (the host's last read of radio n), pic.<n> (its trace picture, WxH), cell (one pane's size, WxH), fell (1 = the small-window notice)
+        if (name.rfind("workspace.", 0) == 0) {
+            const std::string what = name.substr(10);
+            const int winW = static_cast<int>(ui->get_win_w()), winH = static_cast<int>(ui->get_win_h());
+            const auto slotOf = [&](const std::string& tail) { return std::clamp(std::atoi(tail.c_str()) - 1, 0, kMaxRadios - 1); };
+            if (what == "layout") { out = std::to_string(workspace.layout()); }
+            else if (what == "shown") { out = std::to_string(workspace.shownLayout(winW, winH)); }
+            else if (what == "page") { out = std::to_string(workspace.page()); }
+            else if (what == "pages") { out = std::to_string(workspace.pageCount()); }
+            else if (what == "selected") { out = std::to_string(workspace.selectedRadio()); }
+            else if (what == "radios") { out = std::to_string(workspace.radioCount()); }
+            else if (what == "fell") { out = workspace.fellBack(winW, winH) ? "1" : "0"; }
+            else if (what == "cells") {
+                out.clear();
+                for (const PaneCell& c : workspace.cells(winW, winH)) { if (!out.empty()) { out += ","; } out += std::to_string(c.occupied ? c.slot + 1 : 0); }
+            }
+            else if (what.rfind("ticks.", 0) == 0) { out = std::to_string(paneTicks[static_cast<std::size_t>(slotOf(what.substr(6)))]); }
+            else if (what.rfind("tuned.", 0) == 0) { out = fmt("%.0f", radios.at(slotOf(what.substr(6))).state.tunedHz); }
+            else if (what.rfind("running.", 0) == 0) { out = (radios.at(slotOf(what.substr(8))).state.flags & FOXAPI_RX_RUNNING) ? "1" : "0"; }
+            else if (what.rfind("pic.", 0) == 0) { const auto& sz = radios.at(slotOf(what.substr(4))).wells.size; out = std::to_string(sz.traceW) + "x" + std::to_string(sz.traceH); }
+            else if (what == "cell") { const auto& wm = ui->global<WorkspaceModel>(); out = fmt("%.0f", static_cast<double>(wm.get_cell_w())) + "x" + fmt("%.0f", static_cast<double>(wm.get_cell_h())); }
+            else { return "workspace.layout|shown|page|pages|selected|radios|fell|cells|ticks.<n>|tuned.<n>|running.<n>|pic.<n>|cell, not " + name; }
+            return std::string();
+        }
         if (name == "bank") { out = std::to_string(ui->get_bank_index()); return std::string(); }
         if (name == "view") { out = std::to_string(ui->get_view_index()); return std::string(); }
         if (name == "pages") { out = publisher.pagesLine(); return std::string(); }

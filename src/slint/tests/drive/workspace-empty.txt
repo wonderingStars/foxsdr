@@ -1,0 +1,12 @@
+#! frames=300 testradios=3 size=1600x900
+# workspace-empty: three radios in a 2 x 2 grid: the fourth cell has no radio and draws an empty slot (the seam of stage S4's "Add a radio" card); it is not read, and no page key is offered.
+# Tick rows 4212-4216 (docs/multi-radio-records/screen-s3.md).
+10 state workspace.radios == 3
++1 click "2 x 2"
++12 state workspace.shown == 2
+state workspace.cells == "1,2,3,0"
+state workspace.pages == 1
++10 state workspace.ticks.3 > 3
+state workspace.ticks.4 == 0
++1 expect "Select Radio 3" label equals "Select Radio 3"
++1 shot "workspace-empty-slot.png"

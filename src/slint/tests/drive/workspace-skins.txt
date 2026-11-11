@@ -1,0 +1,27 @@
+#! frames=760 testradios=8 size=1600x900 bank=4 sections=4:0
+# workspace-skins: the layouts in both skins of the window (Workbench, then Night Watch chosen in the SYSTEM bank's Display section), with eight radios (1 real, 2 to 8 made up by the bounded run's test
+# seam): 2 x 2, side by side and the second page of four in each, shot to PNG for looking at (docs/multi-radio-records/screen-s3.md). The state reads hold that each shot is the layout it says.
+10 state workspace.radios == 8
+state look.bg == "#15171b"
++1 click "2 x 2"
++12 state workspace.shown == 2
++3 shot "skin-workbench-four.png"
++1 click "Side by side"
++12 state workspace.shown == 1
++3 shot "skin-workbench-two.png"
++1 click "2 x 2"
++1 click "Radios 5-8"
++12 state workspace.page == 1
++3 shot "skin-workbench-page2.png"
++1 click "Radios 1-4"
++12 state workspace.page == 0
++1 choose "Theme" "Night Watch"
++12 state look.bg != "#15171b"
++3 shot "skin-night-four.png"
++1 click "Radios 5-8"
++12 state workspace.page == 1
++3 shot "skin-night-page2.png"
++1 click "Radios 1-4"
++1 click "Side by side"
++12 state workspace.shown == 1
++3 shot "skin-night-two.png"

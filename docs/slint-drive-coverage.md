@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2148 | 522 | 84 | 1542 | 0 |
+| 2153 | 529 | 92 | 1532 | 0 |
 
-Of the 1254 rows that are controls (the 894 readout-like rows left out): 522 asserted, 84 driven without a read-back, 648 not drivable.
+Of the 1266 rows that are controls (the 887 readout-like rows left out): 529 asserted, 92 driven without a read-back, 645 not drivable.
 
-NOT DRIVABLE by reason: readout 894, other 213, needs a signal (no fixture) 120, relocated 86, deferred 77, withheld in a bounded run 70, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 887, other 215, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -200,7 +200,7 @@ NOT DRIVABLE by reason: readout 894, other 213, needs a signal (no fixture) 120,
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
 | 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 96 | 48 | 0 | 48 | 35 | 0 |
-| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 68 | 30 | 1 | 37 | 26 | 0 |
+| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 73 | 37 | 9 | 27 | 19 | 0 |
 | SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md) | 6 | 5 | 1 | 0 | 0 | 0 |
 
 ## Every row
@@ -3234,18 +3234,23 @@ NOT DRIVABLE by reason: readout 894, other 213, needs a signal (no fixture) 120,
 | 4091 | Satellites: the satellites deck (position well, layers, targets register, next passes, Doppler, GRANT RECEIVER CONTROL) | page | NOT DRIVABLE | - | a readout, not a control |
 | 4100 | 3D globes: the chosen view, camera and options are remembered | behaviour | DRIVEN+ASSERTED | globe-solar-system.txt | state fact.config.interface contains "solar:" (the same line ends each globe-*.txt script) |
 | 4101 | 3D globes: the honest empty states | readout | NOT DRIVABLE | - | a readout, not a control |
-| 4200 | Radio pane: R-tag (Select Radio n) | key | NOT DRIVABLE | - | deferred: built as the component RadioPane (docs/multi-radio-records/screen-s1-s2.md, S2) and shown in test_slint_radio_pane with fake data; it is not placed in MainWindow until the workspace (S3), so no drive script can reach it yet |
-| 4201 | Radio pane: device name (elides first) | readout | NOT DRIVABLE | - | a readout, not a control |
-| 4202 | Radio pane: frequency (never elided) | readout | NOT DRIVABLE | - | a readout, not a control |
-| 4203 | Radio pane: mode chip | chip | NOT DRIVABLE | - | a readout, not a control |
-| 4204 | Radio pane: RUN, DEC, MUTE, FAIL lamps (captions drop in a short pane) | lamp | NOT DRIVABLE | - | a readout, not a control |
-| 4205 | Radio pane: STOP / START key (Stop Radio n) | key | NOT DRIVABLE | - | deferred: built as the component RadioPane (docs/multi-radio-records/screen-s1-s2.md, S2) and shown in test_slint_radio_pane with fake data; it is not placed in MainWindow until the workspace (S3), so no drive script can reach it yet |
-| 4206 | Radio pane: readout row (GAIN, SQL, VOL, RATE, BIAS, decoder chip, PEAK, SPAN) | readout | NOT DRIVABLE | - | a readout, not a control |
-| 4207 | Radio pane: spectrum gestures (click to tune, double-click, wheel, band drag, edge drag, right-click menu) | gesture | NOT DRIVABLE | - | deferred: built as the component RadioPane (docs/multi-radio-records/screen-s1-s2.md, S2) and shown in test_slint_radio_pane with fake data; it is not placed in MainWindow until the workspace (S3), so no drive script can reach it yet |
-| 4208 | Radio pane: waterfall gestures (click to tune, pan, wheel, double-click, right-click menu) | gesture | NOT DRIVABLE | - | deferred: built as the component RadioPane (docs/multi-radio-records/screen-s1-s2.md, S2) and shown in test_slint_radio_pane with fake data; it is not placed in MainWindow until the workspace (S3), so no drive script can reach it yet |
-| 4209 | Radio pane: splitter between spectrum and waterfall | gesture | NOT DRIVABLE | - | deferred: built as the component RadioPane (docs/multi-radio-records/screen-s1-s2.md, S2) and shown in test_slint_radio_pane with fake data; it is not placed in MainWindow until the workspace (S3), so no drive script can reach it yet |
-| 4210 | Radio pane: selection outline in the radio's colour | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
-| 4211 | Radio pane: the compact spectrum (no 76 px header) | well/plot | NOT DRIVABLE | - | a readout, not a control |
+| 4200 | Radio pane: R-tag (Select Radio n) | key | DRIVEN+ASSERTED | workspace-select | click "Select Radio 3" then "Select Radio 2"; state workspace.selected == 3 then == 2 and state tunedHz follows the selected radio (the strip shows it) |
+| 4201 | Radio pane: device name (elides first) | readout | DRIVEN | workspace-layouts | expect "Radio 2: Test radio 2" label contains "Test radio 2"; the device name is text (the seam's made-up radio 2), read as the control's own label |
+| 4202 | Radio pane: frequency (never elided) | readout | DRIVEN | workspace-layouts | expect "Radio 2: 101.000000 MHz" label contains "101.000000"; the frequency text of the made-up radio 2 |
+| 4203 | Radio pane: mode chip | chip | DRIVEN | workspace-layouts | expect "Radio 2: WFM" label contains "WFM"; the mode chip of the made-up radio 2 |
+| 4204 | Radio pane: RUN, DEC, MUTE, FAIL lamps (captions drop in a short pane) | lamp | NOT DRIVABLE | - | the four lamps carry the same words in every pane (RUN, DEC, MUTE, FAIL) so no label is unique; each lamp's state is the pane's flag, held by test_slint_radio_pane and read back as state workspace.running.<n> |
+| 4205 | Radio pane: STOP / START key (Stop Radio n) | key | DRIVEN+ASSERTED | workspace-select | click "Start Radio 3" then "Stop Radio 1"; state workspace.running.3 == 1 and workspace.running.1 == 0, the others untouched |
+| 4206 | Radio pane: readout row (GAIN, SQL, VOL, RATE, BIAS, decoder chip, PEAK, SPAN) | readout | DRIVEN | workspace-layouts | expect "Radio 2: SPAN 2.400 MHz" and "Radio 2: GAIN --" label contains; the drop order of the figures is held by test_slint_radio_workspace (ten widths) |
+| 4207 | Radio pane: spectrum gestures (click to tune, double-click, wheel, band drag, edge drag, right-click menu) | gesture | DRIVEN+ASSERTED | workspace-select | press "Radio 4 spectrum": click to tune retunes radio 4 only (state workspace.tuned.4 moved, .3 .2 .1 not, the selection not). Double-click, wheel, band drag, edge drag and right-click have no verb; held by test_slint_radio_workspace with real pointer events and test_slint_workspace_host |
+| 4208 | Radio pane: waterfall gestures (click to tune, pan, wheel, double-click, right-click menu) | gesture | DRIVEN+ASSERTED | workspace-select | press "Radio 3 waterfall": click to tune retunes radio 3 only (state workspace.tuned.3 moved, .4 .2 not). Pan, wheel, double-click and the right-click menu have no verb; held by test_slint_radio_workspace |
+| 4209 | Radio pane: splitter between spectrum and waterfall | gesture | NOT DRIVABLE | - | a pointer drag: the scripted input has no drag verb; test_slint_radio_workspace drags it with real pointer events and checks that the radio's share is kept across a page change |
+| 4210 | Radio pane: selection outline in the radio's colour | overlay/marker | DRIVEN | workspace-select | state workspace.selected after each selection and shot "workspace-selected-2.png"; the outline's pixels are held by test_slint_radio_workspace in both skins |
+| 4211 | Radio pane: the compact spectrum (no 76 px header) | well/plot | DRIVEN | workspace-layouts | shot "workspace-four.png" and "workspace-two.png" (looked at); the plot top and the picture position are held by test_slint_radio_pane |
+| 4212 | Workspace bar: layout keys One / Side by side / 2 x 2 | key | DRIVEN+ASSERTED | workspace-layouts | click "2 x 2", "Side by side", "One"; state workspace.layout == 2, 1, 0 and workspace.shown, workspace.cells; expect the key checked |
+| 4213 | Workspace bar: page keys (Radios 1-4, Radios 5-8; pairs in Side by side) | key | DRIVEN+ASSERTED | workspace-pages | click "Radios 5-8", "Radios 1-4", "Radios 7-8", "Radios 1-2"; state workspace.page and workspace.cells; expect the key checked; with 8 radios in layout Four only the page shown is read (workspace.ticks.5 == 0 on page one) |
+| 4214 | Workspace bar: small-window notice | message | DRIVEN | workspace-small | a 1000 x 640 window: state workspace.shown == 0 and workspace.fell == 1; expect the sentence present (its text is a label, no state of its own) |
+| 4215 | Workspace: an empty slot (no radio in that cell) | well/plot | DRIVEN | workspace-empty | three radios in 2 x 2: state workspace.cells == "1,2,3,0" and workspace.ticks.4 == 0; shot "workspace-empty-slot.png"; the cell has no unique control label (the name is shared by a group and its text) |
+| 4216 | Workspace: the grid of panes (2 x 2, side by side; a page of four) | layout | DRIVEN+ASSERTED | workspace-layouts | state workspace.cells per layout and page, workspace.pic.<n> (the pictures fitted to the pane, today's size back in One), workspace.ticks.<n> (only the radios on screen are read) |
 
 ### SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md)
 
