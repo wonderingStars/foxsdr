@@ -841,6 +841,16 @@ public:
     void radioClosed(std::size_t slot) {
         if (slot == 0 || slot >= kMaxReceivers) { return; }
         radioFrames_[slot] = cascade::core::SpectrumFrame{};   // (the pass's: the next radio in the slot counts its frames from 1 again)
+        // A SESSION FOCUSED ON THE RADIO THAT WENT is moved to radio 1 (always there), and every seq group of its reads moves, as after any change of focus.
+        {
+            std::lock_guard<std::mutex> lk(sessionsMutex_);
+            for (const auto& kv : sessions_) {
+                if (kv.second->focus.load(std::memory_order_acquire) == static_cast<std::uint32_t>(slot) + 1u) {
+                    kv.second->focus.store(1u, std::memory_order_release);
+                    kv.second->focusBump.fetch_add(1, std::memory_order_acq_rel);
+                }
+            }
+        }
         {
             std::lock_guard<std::mutex> lk(radioRingsMutex_);
             if (radioRings_[slot]) { radioRings_[slot]->retire(); }

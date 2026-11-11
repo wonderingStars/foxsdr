@@ -292,6 +292,76 @@ void testTheEdges() {
     Access::removeFakeRadio();
 }
 
+std::string fact(Rig& r, const std::string& key) {
+    char buf[2048];
+    const int32_t n = api()->get_setting(r.s->raw(), ("fact." + key).c_str(), buf, sizeof(buf));
+    return n >= 0 ? std::string(buf) : std::string("<absent>");
+}
+
+std::uint64_t listSeqOf(Rig& r, std::uint32_t radio) {
+    FoxReceiverState st{};
+    st.structSize = sizeof(st);
+    (void)api()->read_radio_state(r.s->raw(), radio, &st);
+    return st.listSeq;
+}
+
+void testSourceKindsSoloSequenceAndFocus() {
+    std::printf("  E: every source kind radio 1 can be, the solo read-back, the list sequence on add and remove, the focus after a remove\n");
+    {
+        Rig r;
+        // THE LIST SEQUENCE MOVES when a radio is added and when one is removed (the fingerprint holds the slot mask)
+        const std::uint64_t s0 = listSeqOf(r, 1);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RADIO_ADD, 20000.0, 2)).status(), FOXAPI_OK);
+        r.pump(3);
+        const std::uint64_t s1 = listSeqOf(r, 1);
+        CHECK(s1 != s0);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RADIO_ADD, 30000.0, 3)).status(), FOXAPI_OK);
+        r.pump(3);
+        // THE SOLO IS READ BACK
+        CHECK_EQ(fact(r, "radio.solo"), std::string("0"));
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RADIO_SOLO, 0.0, 3)).status(), FOXAPI_OK);
+        r.pump(3);
+        CHECK_EQ(fact(r, "radio.solo"), std::string("3"));
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RADIO_SOLO, 0.0, 2)).status(), FOXAPI_OK);
+        r.pump(3);
+        CHECK_EQ(fact(r, "radio.solo"), std::string("2"));
+        // THE FOCUS FOLLOWS A REMOVE: a session focused on radio 2 is on radio 1 after it, with its seq groups moved; the solo of a removed radio is cleared and said
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RADIO_FOCUS, 0.0, 2)).status(), FOXAPI_OK);
+        const std::uint64_t before = [&] { FoxReceiverState st{}; st.structSize = sizeof(st); (void)api()->read_state(r.s->raw(), &st); return st.seq; }();
+        const std::uint64_t seqBefore = listSeqOf(r, 1);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RADIO_REMOVE, 0.0, 2)).status(), FOXAPI_OK);
+        r.pump(3);
+        CHECK(listSeqOf(r, 1) != seqBefore);
+        FoxReceiverState st{};
+        st.structSize = sizeof(st);
+        CHECK_EQ(api()->read_state(r.s->raw(), &st), FOXAPI_OK);   // the focused read answers (radio 1), not NO_DEVICE
+        CHECK(st.seq != before);
+        CHECK_EQ(api()->read_radio_state(r.s->raw(), 0, &st), FOXAPI_OK);
+        CHECK_EQ(fact(r, "radio.solo"), std::string("0"));
+        // a session focused on another radio is not moved
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RADIO_FOCUS, 0.0, 3)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RADIO_ADD, 40000.0, 2)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RADIO_REMOVE, 0.0, 2)).status(), FOXAPI_OK);
+        FoxCommand a3 = testing::cmd(FOXAPI_OP_RADIO_AUDIO, 0.0, 0);
+        a3.ival[1] = 2;   // radio 0 = the focus: radio 3 if the focus stayed
+        CHECK_EQ(r.send(a3).status(), FOXAPI_OK);
+        CHECK_EQ(fact(r, "radio.3.audio"), std::string("right"));
+        // EVERY SOURCE RADIO 1 CAN BE: an I/Q file, an rtl_tcp server and a Pluto are accepted as a second radio (they open through the same worker; with nothing behind them the
+        // radio stays on the generator and says why); the sound card stays the first radio's and the refusal says so
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RADIO_REMOVE, 0.0, 3)).status(), FOXAPI_OK);
+        const testing::Outcome file = r.send(testing::cmd(FOXAPI_OP_RADIO_ADD, 0.0, 0, "file:C:/no/such/recording.iq"));
+        CHECK_EQ(file.status(), FOXAPI_OK);
+        const testing::Outcome tcp = r.send(testing::cmd(FOXAPI_OP_RADIO_ADD, 0.0, 0, "open-rtltcp:127.0.0.1:1"));
+        CHECK_EQ(tcp.status(), FOXAPI_OK);
+        const testing::Outcome pluto = r.send(testing::cmd(FOXAPI_OP_RADIO_ADD, 0.0, 0, "open-pluto:uri=ip:127.0.0.1"));
+        CHECK_EQ(pluto.status(), FOXAPI_OK);
+        const testing::Outcome card = r.send(testing::cmd(FOXAPI_OP_RADIO_ADD, 0.0, 0, "soundcard:open"));
+        CHECK_EQ(card.status(), FOXAPI_UNSUPPORTED);
+        CHECK(std::string(card.result.message).find("sound card") != std::string::npos);
+        CHECK_EQ(fact(r, "radio.count"), std::string("4"));
+    }
+}
+
 void testTheCapabilityWord() {
     std::printf("  D: the capability word names the set\n");
     const FoxEngineApi* a = api();
@@ -309,6 +379,7 @@ int main() {
     testEachRadiosOwn();
     testTheFocusIsPerSessionAndForTheFourListsOnly();
     testTheEdges();
+    testSourceKindsSoloSequenceAndFocus();
     testTheCapabilityWord();
     return check::finish("test_engine_api_radio_lists");
 }

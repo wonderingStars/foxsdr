@@ -102,10 +102,21 @@ FoxCommandResult Engine::radioAddOp(const FoxCommand& c, const std::string& text
         // A device id is "<kind>:<args>"; the panels' own ("file:", "open-pluto:", "row:", "soundcard:") are not devices of a scanned list.
         if (colon == std::string::npos) { return refuse(FOXAPI_NOT_FOUND, "no scanned device matches that id"); }
         const std::string kind = text.substr(0, colon);
-        if (kind == "file" || kind == "open-pluto" || kind == "open-rtltcp" || kind == "row" || kind == "soundcard") {
-            return refuse(FOXAPI_UNSUPPORTED, "a second radio opens a scanned device or the signal generator");
+        // EVERY SOURCE RADIO 1 CAN BE, but the sound card and the panels' bare rows (multi-radio stage 5 addition): an I/Q file ("file:<path>"), a Pluto
+        // ("open-pluto:<address>") and an rtl_tcp server ("open-rtltcp:<address>") open through the same worker as on the first radio. The sound card is the
+        // Source panel's one shared list and one open, and stays the first radio's (the design lists no second sound card); the refusal says so.
+        if (kind == "soundcard") { return refuse(FOXAPI_UNSUPPORTED, "the sound card is the first radio's: its one list and open are shared by the Source panel"); }
+        if (kind == "row") { return refuse(FOXAPI_UNSUPPORTED, "a second radio opens a device, an I/Q file, a Pluto, an rtl_tcp server or the signal generator"); }
+        if (kind == "file") {
+            key.clear();   // a recording is nobody's device
+        } else if (kind == "open-pluto") {
+            const std::string rest = text.substr(colon + 1);
+            key = pc::makeDeviceKey("pluto", rest.rfind("uri=", 0) == 0 ? rest : "uri=" + rest);
+        } else if (kind == "open-rtltcp") {
+            key = pc::makeDeviceKey("rtltcp", text.substr(colon + 1));
+        } else {
+            key = pc::makeDeviceKey(kind, text.substr(colon + 1));
         }
-        key = pc::makeDeviceKey(kind, text.substr(colon + 1));
     }
     const DeviceLedger::Claim claim = deviceLedger_.claim(key, DeviceHolder::receiver(slot), true);
     if (!claim.granted()) {

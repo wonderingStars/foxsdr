@@ -2486,7 +2486,7 @@ Four ops, additive (no capability bit; an interface that never sends them never 
   radio (or a patch radio) holds, message "in use by Radio N" / "in use by patch radio N". LIMIT: no slot free, or the limit on radios open in total (receivers and patch
   radios together, `fact.radio.max`) is reached - the message states the limit and names every holder.
 * `FOXAPI_OP_RADIO_REMOVE` (0x1203): `ival[0]` the number (2 or more; radio 1 is always there: UNSUPPORTED). The radio's takes end, its threads join, its device is let
-  go, the slot is free again. A session whose focus was that radio keeps the number and its reads answer NO_DEVICE until it sets another.
+  go, the slot is free again. A session whose focus was that radio is moved to radio 1 (its seq groups move). `RADIO_ADD` also accepts `file:<path>`, `open-pluto:<address>` and `open-rtltcp:<address>` as the device (the sound card stays the first radio's: UNSUPPORTED); `fact.radio.solo` reads the solo back.
 * `FOXAPI_OP_RADIO_AUDIO` (0x1204): `ival[0]` the radio (0 = the sender's focus), `ival[1]` the route: 0 both, 1 left, 2 right, 3 none (a 10 ms ramp; on a mono output left
   and right play as both). Published as `fact.radio.<n>.audio`.
 * `FOXAPI_OP_RADIO_SOLO` (0x1205): `ival[0]` the radio heard alone, 0 = nobody. Every other radio's sound is held silent by a ramped gain that touches neither its route nor its

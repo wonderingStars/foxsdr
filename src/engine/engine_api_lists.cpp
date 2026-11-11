@@ -570,6 +570,7 @@ std::uint64_t Engine::apiListsFingerprint() {
         for (const std::string& a : r->deviceAntennas_) { f.text(a); }
         f.text(r->deviceAntenna_);
     }
+    f.value(soloRadio_);
     f.value(scanner_.active());          // where the one scanner is, and which radio the transmitter follows (fact.scanner.radio, fact.transmit.radio: stage 6)
     f.value(scannerSlot_);
     f.value(transmitRadioSlot());
@@ -1318,6 +1319,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // (both, left, right, none: only "both" until slots 1 and up carry audio) and the decoder plugins running on it, their module files separated by commas.
     fact("radio.count", std::to_string(receiverCount()));
     fact("radio.max", std::to_string(kMaxReceivers));
+    fact("radio.solo", std::to_string(soloRadio_));   // the radio heard alone, 0 = nobody (RADIO_SOLO's read-back; multi-radio stage 5 addition)
     // WHERE THE ONE SCANNER IS (stage 6): the number of the radio it was started on while it is active, else 0; and WHICH RADIO THE TRANSMITTER FOLLOWS (the Pluto's radio, else 1).
     fact("scanner.radio", std::to_string(scanner_.active() ? scannerSlot_ + 1u : 0u));
     fact("transmit.radio", std::to_string(transmitRadioSlot() + 1u));
