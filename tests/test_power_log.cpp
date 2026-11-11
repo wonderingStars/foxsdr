@@ -784,13 +784,16 @@ void testSenders() {
             const pl::SendResult r = pl::sendHttp(t, {"m v=1"});
             CHECK(!r.ok && !r.error.empty() && r.error.find("SECRET") == std::string::npos);
         }
-        // header injection through the token or the path is refused before anything is sent
+        // header injection through the token or the path is refused before anything is sent: against a live listener, so a refusal cannot be mistaken for a refused port
+        TcpStub live(TcpStub::Mode::Reply204);
+        t.port = live.port();
         pl::InfluxTarget inj = t;
         inj.token = "x\r\nX-Evil: 1";
         CHECK(!pl::sendHttp(inj, {"m v=1"}).ok);
         inj = t;
         inj.path = "/a\r\nHost: evil";
         CHECK(!pl::sendHttp(inj, {"m v=1"}).ok);
+        CHECK(live.request().empty());      // nothing reached a LIVE listener
         // no token -> no Authorization header
         pl::InfluxTarget nt = t;
         nt.token.clear();
