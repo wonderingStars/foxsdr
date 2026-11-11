@@ -357,6 +357,8 @@ struct Receiver {
     int toneCode_ = 0;
     int tonePol_ = 0;
     bool toneRemove_ = false;
+    // S-meter display units (engine wiring lane 1): FOXAPI_METER_*, dBFS by default.
+    int meterUnits_ = 0;
     bool notchEnabled_ = false;
     float notchFreqHz_ = 1000.0f;
     float notchQ_ = 30.0f;

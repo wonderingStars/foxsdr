@@ -4872,6 +4872,14 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         r.toneDetectedPolarity = static_cast<std::uint32_t>(rxa.pipeline_.toneDetectedPolarity());
         r.toneGate = rxa.pipeline_.toneGateOpen() ? 1u : 0u;
         r.audioGate = rxa.pipeline_.audioGateOpen() ? 1u : 0u;
+        // THE S-METER IN dBm AND S UNITS (engine wiring lane 1): meterUnits is the display choice (a setting); the rest are measurements. signalDb and sMeter above stay on dBFS.
+        r.meterUnits = static_cast<std::uint32_t>(rxa.meterUnits_);
+        double dbm = 0.0, sUnits = 0.0;
+        bool calibrated = false;
+        smeterReading(rxa, r.signalDb, std::max(0.0, currentAbsoluteHz()), dbm, sUnits, calibrated);
+        r.signalDbm = dbm;
+        r.sUnits = sUnits;
+        r.calibrated = calibrated ? 1u : 0u;
     }
     r.notchHz = floatAsDecimal(rx().notchFreqHz_);
     r.notchQ = floatAsDecimal(rx().notchQ_);
@@ -7399,6 +7407,19 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[0] = kind == tone::kCtcss ? hz : static_cast<double>(code);
             return res;
         }
+        case FOXAPI_OP_SET_METER_UNITS: {
+            if (c.ival[0] < 0 || c.ival[0] > static_cast<long long>(FOXAPI_METER_DBM)) { return refuse(FOXAPI_OUT_OF_RANGE, "no such meter unit"); }
+            rx().meterUnits_ = static_cast<int>(c.ival[0]);
+            res.applied[0] = static_cast<double>(rx().meterUnits_);
+            return res;
+        }
+        case FOXAPP_OP_CAL_MEASURE:
+        case FOXAPP_OP_CAL_CLEAR: {
+            std::string why;
+            const std::int32_t st = applySmeterOp(c, res, why);
+            if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
+            return res;
+        }
         case FOXAPI_OP_SET_TONE_REMOVE: {
             Receiver& rxs = rx();
             rxs.toneRemove_ = on;
@@ -9095,6 +9116,13 @@ void Engine::exitCauseFinish(const cascade::core::ExitVerdict& v) {
 // the window keeps its view state (docs/engine-stage3.md). `cfg` is the
 // start-up state (core::startupState), not the file as saved.
 void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
+    // the S-meter calibration of every device (the loader checked each text; a text that does not parse here is dropped like a bad one)
+    smeterCal_.clear();
+    for (const auto& [key, text] : cfg.smeterCal) {
+        cascade::core::smeter::CalTable t;
+        if (t.fromText(text) && t.size() != 0) { smeterCal_[key] = std::move(t); }
+    }
+    ++smeterVersion_;
     loadedCfg_ = cfg;  // see loadedCfg_ in engine.hpp
     {
         // The interface's half, as loaded: what the snapshot carries for it until an interface sends its own (shell retirement R5).
@@ -9199,6 +9227,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         rx().toneCode_ = cfg.toneSquelchCode;
         rx().tonePol_ = cfg.toneSquelchPolarity;
         rx().toneRemove_ = cfg.toneRemove;
+        rx().meterUnits_ = cfg.meterUnits;
         (void)rx().pipeline_.setToneSquelch(rx().toneKind_, rx().toneHz_, rx().toneCode_, rx().tonePol_);
         rx().pipeline_.setToneRemove(rx().toneRemove_);
         rx().pipeline_.setAgcMode(static_cast<cascade::dsp::Agc::Mode>(rx().agcMode_));
@@ -9748,6 +9777,7 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
         cfg.toneSquelchCode = rxa.toneCode_;
         cfg.toneSquelchPolarity = rxa.tonePol_;
         cfg.toneRemove = rxa.toneRemove_;
+        cfg.meterUnits = rxa.meterUnits_;
     }
     cfg.notchEnabled = rx().notchEnabled_;
     cfg.notchFreqHz = static_cast<double>(rx().notchFreqHz_);
@@ -9794,6 +9824,13 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
     // RADIOS 2 TO 8: read out of each radio's Receiver (engine stage 5). Empty with one radio, and then the file is the file 0.99.104 writes.
     cfg.radios = savedRadios();
     cfg.schedule = scheduleEntries();
+    {
+        // the S-meter calibration of every device, one text each (engine_smeter.cpp)
+        cfg.smeterCal.clear();
+        for (const auto& [key, table] : smeterCal_) {
+            if (table.size() != 0) { cfg.smeterCal[key] = table.toText(); }
+        }
+    }
     cfg.pluginRadio = pluginRadio_;   // (radio 1 is the absence of an entry; the map never holds one)
     telemetryJournal(cfg);
     // FALSE while running, so a start-up that reads it back knows the previous
@@ -10676,6 +10713,7 @@ void Engine::runPassPart(PassPart part) {
             // THE ADDED RADIOS' OWN HOUSEKEEPING (stage 4): each under its own scope, after the first radio's.
             pumpExtraReceivers();
             pumpSchedule();   // (timed recordings: engine_schedule.cpp)
+            pollSmeterCal();  // (a calibration being measured: engine_smeter.cpp)
             break;
     }
 }

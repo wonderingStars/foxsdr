@@ -454,6 +454,9 @@ struct AppWindowTestAccess {
     static int toneCodePipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.toneDcsDigits(); }); }
     static bool toneRemoveRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->toneRemove_; }); }
     static bool toneRemovePipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.toneRemove(); }); }
+    static int meterUnitsRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->meterUnits_; }); }
+    static std::size_t calDevices(AppWindow& a) { return rd(a, [&] { return th::engine(a).smeterCal_.size(); }); }
+    static bool calMeasuring(AppWindow& a) { return rd(a, [&] { return th::engine(a).smeterMeasure_.active; }); }
     static bool notch(AppWindow& a) {
         return rd(a, [&] { return th::engine(a).notchEnabled_ && th::engine(a).pipeline_.notchEnabled(); });
     }
@@ -1207,6 +1210,36 @@ void receiverOps(AppWindow& a) {
         CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_TONE_SQUELCH, 3, 0)), FOXAPI_OUT_OF_RANGE));
         CHECK(A::toneKindRx(a) == 2 && A::toneCodeRx(a) == 754 && A::toneHzRx(a) == 0.0);   // (the values that came with the DCS command replaced all three: the tone is "any" again)
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_TONE_SQUELCH, FOXAPI_TONE_OFF, 0))));
+    }
+
+    covering(FOXAPI_OP_SET_METER_UNITS);
+    {
+        CHECK(A::meterUnitsRx(a) == 0);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_METER_UNITS, FOXAPI_METER_DBM))));
+        CHECK(A::meterUnitsRx(a) == 2);
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_METER_UNITS, 3)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_METER_UNITS, -1)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::meterUnitsRx(a) == 2);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_METER_UNITS, FOXAPI_METER_DBFS))));
+        CHECK(A::meterUnitsRx(a) == 0);
+    }
+
+    covering(FOXAPP_OP_CAL_MEASURE);
+    covering(FOXAPP_OP_CAL_CLEAR);
+    {
+        // The local path: the refusals (a level outside -150..+30 dBm, a band that is not one, nothing to clear); the measurement itself needs a running radio and 3 s of
+        // passes, which test_engine_api_smeter holds.
+        FoxCommand m = ints(FOXAPP_OP_CAL_MEASURE, 0, 0);
+        m.num[0] = 31.0;
+        CHECK(refused(A::apply(a, m), FOXAPI_OUT_OF_RANGE));
+        m.num[0] = -73.0;
+        m.ival[0] = 1;
+        m.num[1] = 5.0e6;
+        m.num[2] = 4.0e6;
+        CHECK(refused(A::apply(a, m), FOXAPI_OUT_OF_RANGE));
+        CHECK(!A::calMeasuring(a) && A::calDevices(a) == 0);
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_CAL_CLEAR, 0, 0)), FOXAPI_NOT_FOUND));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_CAL_CLEAR, 1, 0)), FOXAPI_NOT_FOUND));
     }
 
     covering(FOXAPI_OP_SET_TONE_REMOVE);

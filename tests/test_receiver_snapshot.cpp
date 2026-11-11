@@ -573,6 +573,11 @@ void countersMoveByGroup() {
         {"the DCS polarity detected (a measurement)", [](PublishedState& p) { p.rx.toneDetectedPolarity = 1; }, ""},
         {"the tone gate (a measurement)", [](PublishedState& p) { p.rx.toneGate = 0; }, ""},
         {"the audio gate (a measurement)", [](PublishedState& p) { p.rx.audioGate = 1; }, ""},
+        // S-meter units and calibration (engine wiring lane 1): the units are a setting; the dBm and S figures and the calibrated flag are measurements.
+        {"the S-meter's display units", [](PublishedState& p) { p.rx.meterUnits = FOXAPI_METER_DBM; }, "seq mode"},
+        {"the level in dBm (a measurement)", [](PublishedState& p) { p.rx.signalDbm = -73.0; }, ""},
+        {"the level in S units (a measurement)", [](PublishedState& p) { p.rx.sUnits = 9.0; }, ""},
+        {"calibrated (a measurement)", [](PublishedState& p) { p.rx.calibrated = 1; }, ""},
         // API 0.3 8.6, the scanner: its seven settings are a group of their own (scanSeq, and
         // seq with it); the scanner's state word and its frequency are live state that moves seq
         // alone (the scanner flag, which the state already had, is the same).
@@ -672,7 +677,7 @@ void rdsGroupAndLayout() {
     CHECK(offsetof(FoxReceiverState, toneHz) < offsetof(FoxReceiverState, toneCode));
     CHECK(offsetof(FoxReceiverState, toneDetectedHz) > offsetof(FoxReceiverState, toneRemove));
     CHECK(offsetof(FoxReceiverState, audioGate) > offsetof(FoxReceiverState, toneGate));
-    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, audioGate) + sizeof(std::uint32_t)) < 8u);
+    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, calibrated) + sizeof(std::uint32_t)) < 8u);
     CHECK(FOXAPI_RDS_PS_CHARS == 9 && FOXAPI_RDS_TEXT_CHARS == 65);
     // The six RDS bits are one word's low bits, each its own.
     const std::uint32_t bits[] = {FOXAPI_RDS_SYNCED, FOXAPI_RDS_PI_VALID, FOXAPI_RDS_PS_VALID,
@@ -757,7 +762,7 @@ void scanGroupAndLayout() {
     CHECK(offsetof(FoxReceiverState, toneHz) < offsetof(FoxReceiverState, toneCode));
     CHECK(offsetof(FoxReceiverState, toneDetectedHz) > offsetof(FoxReceiverState, toneRemove));
     CHECK(offsetof(FoxReceiverState, audioGate) > offsetof(FoxReceiverState, toneGate));
-    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, audioGate) + sizeof(std::uint32_t)) < 8u);
+    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, calibrated) + sizeof(std::uint32_t)) < 8u);
     // The state words are 0..3, each its own.
     CHECK(FOXAPI_SCANNER_IDLE == 0u && FOXAPI_SCANNER_SCANNING == 1u && FOXAPI_SCANNER_PAUSED == 2u &&
           FOXAPI_SCANNER_HOLDING == 3u);

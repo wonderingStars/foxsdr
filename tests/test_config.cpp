@@ -31,6 +31,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/config.hpp"
+#include "core/smeter_cal.hpp"
 
 #include <limits>  // the manual gain memory's non-finite stages
 
@@ -392,6 +393,8 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.toneSquelchCode == b.toneSquelchCode);
     CHECK(a.toneSquelchPolarity == b.toneSquelchPolarity);
     CHECK(a.toneRemove == b.toneRemove);
+    CHECK(a.meterUnits == b.meterUnits);
+    CHECK(a.smeterCal == b.smeterCal);
     CHECK(a.notchEnabled == b.notchEnabled);
     CHECK(a.notchFreqHz == b.notchFreqHz);
     CHECK(a.notchQ == b.notchQ);
@@ -920,6 +923,13 @@ int main() {
         in.toneSquelchCode = 754;
         in.toneSquelchPolarity = 2;
         in.toneRemove = true;
+        in.meterUnits = 2;   // dBm (default dBFS)
+        {
+            cascade::core::smeter::CalTable t;   // (the canonical text, as the loader keeps it)
+            t.set({0.0, 30.0e6, 43.5, 20.0, true});
+            t.set({30.0e6, 6.0e9, 51.25, 20.0, true});
+            in.smeterCal["rtlsdr|serial=00000001"] = t.toText();
+        }
         in.notchEnabled = true;
         in.notchFreqHz = 1234.5;
         in.notchQ = 42.25;
@@ -2225,6 +2235,17 @@ int main() {
         CHECK(writeText(path, "{\"toneSquelchKind\":1,\"toneSquelchHz\":88.5,\"toneSquelchCode\":754,\"toneSquelchPolarity\":1,\"toneRemove\":true}\n"));
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.toneSquelchKind == 1 && out.toneSquelchHz == 88.5 && out.toneSquelchCode == 754 && out.toneSquelchPolarity == 1 && out.toneRemove);
+
+        // S-METER UNITS AND CALIBRATION (engine wiring lane 1): units clamped, a calibration text that does not parse (or is empty, or is a number) dropped whole, per device.
+        CHECK(writeText(path, "{\"meterUnits\":9}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.meterUnits == 2 && out.smeterCal.empty());
+        CHECK(writeText(path, "{\"meterUnits\":-4}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.meterUnits == 0);
+        CHECK(writeText(path, "{\"smeterCal\":{\"good\":\"0 30000000 43.5 20 1\\n\",\"bad\":\"nonsense\",\"empty\":\"\",\"num\":5,\"\":\"0 30000000 1 0 1\\n\"}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.smeterCal.size() == 1 && out.smeterCal.count("good") == 1);
 
         // notch frequency stays inside the audible span of the 48 kHz sink,
         // and Q inside the biquad's useful range.

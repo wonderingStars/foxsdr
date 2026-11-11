@@ -379,6 +379,13 @@ void testToneSquelch() {
     bad.target = 2;
     CHECK_EQ(s.run(bad).status(), FOXAPI_NO_DEVICE);
     CHECK_EQ(s.state().toneKind, static_cast<uint32_t>(FOXAPI_TONE_DCS));
+    // the S-meter's display units (0x0115): a setting, refused past dBm, the estimate flagged uncalibrated
+    CHECK_EQ(s.state().meterUnits, static_cast<uint32_t>(FOXAPI_METER_DBFS));
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_METER_UNITS, 0.0, FOXAPI_METER_S)).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().meterUnits, static_cast<uint32_t>(FOXAPI_METER_S));
+    CHECK_EQ(s.state().calibrated, 0u);
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_METER_UNITS, 0.0, 3)).status(), FOXAPI_OUT_OF_RANGE);
+    CHECK_EQ(s.state().meterUnits, static_cast<uint32_t>(FOXAPI_METER_S));
 }
 
 void testBatchAndQueueBound() {

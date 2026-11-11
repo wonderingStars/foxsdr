@@ -63,6 +63,7 @@
 #include "core/patch_recordings.hpp"
 #include "core/patch_runner.hpp"
 #include "core/pipeline.hpp"
+#include "core/smeter_cal.hpp"
 #include "core/ppm_correction.hpp"
 #include "core/phase_clock.hpp"
 #include "core/freq_markers.hpp"
@@ -3174,6 +3175,26 @@ private:
     void loadSchedule(const std::vector<cascade::core::sched::Entry>& entries);
     std::vector<cascade::core::sched::Entry> scheduleEntries() const;
     std::int32_t applyScheduleOp(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why);
+    // S-METER IN dBm AND S UNITS, AND ITS CALIBRATION (engine_smeter.cpp; engine wiring lane 1).
+    struct SmeterMeasure {
+        bool active = false;
+        std::size_t slot = 0;
+        std::string key;
+        double knownDbm = 0.0, lo = 0.0, hi = 0.0, startS = 0.0, sum = 0.0, gainDb = 0.0;
+        int n = 0;
+        bool gainIsDb = true;
+    };
+    static constexpr double kSmeterMeasureS = 3.0;
+    std::string smeterKey(const Receiver& r) const;
+    void smeterGain(const Receiver& r, double& gainDb, bool& isDb) const;
+    void smeterReading(const Receiver& r, double dbfs, double frequencyHz, double& dbm, double& sUnits, bool& calibrated) const;
+    std::int32_t applySmeterOp(const FoxCommand& c, FoxCommandResult& res, std::string& why);
+    void pollSmeterCal();
+    std::map<std::string, cascade::core::smeter::CalTable> smeterCal_;   // device key -> its calibration (saved: AppConfig::smeterCal)
+    SmeterMeasure smeterMeasure_;
+    std::string smeterState_ = "idle";
+    std::string smeterMessage_;
+    std::uint64_t smeterVersion_ = 1;   // moves with every change of the tables or of the measurement's state (the fact block's fingerprint)
     std::string scheduleRefusal(const cascade::core::sched::Entry& e, std::size_t slot);
     void scheduleBegin(std::uint32_t id, std::int64_t occurrence, std::int64_t nowMs);
     void scheduleStopRun(std::uint32_t id, const std::string& why, bool early);

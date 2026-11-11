@@ -70,6 +70,7 @@
     "toneSquelchCode": 0,
     "toneSquelchPolarity": 0,
     "toneRemove": false,
+    "meterUnits": 0,
     "nrEnabled": false,
     "nrStrength": 0.5,
     "patch": "",

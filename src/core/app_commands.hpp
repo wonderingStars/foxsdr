@@ -129,6 +129,12 @@
 //   entry starts a minute before the hint's start and ends a minute after its end, tunes to its frequency / mode / bandwidth, records the I/Q and puts the tuning back;
 //   it is then an ordinary entry (SCHEDULE_SET's refusals apply: OUT_OF_RANGE, BUSY on overlap, LIMIT). NOT_FOUND for a number the list does not hold. applied[0]: the id.
 #define FOXAPP_OP_SCHEDULE_FROM_HINT     0x8611u /* ival[0]: hint number; ival[1]: radio; text: name; applied[0]: the new entry's id */
+//   CAL_MEASURE (SETTINGS; engine wiring lane 1, S-meter calibration): the selected radio (target) must be running. num[0]: the known level in dBm (-150..+30) of the signal on it. ival[0]: 0 = the
+//   band that holds the radio's frequency, [0, 30 MHz) or [30 MHz, 6 GHz); 1 = the band num[1] .. num[2] Hz. The engine averages the radio's level for 3 s and stores offset = known dBm - measured
+//   dBFS for that band, for that DEVICE (fact.smeter.cal.state says measuring, then done or failed). BUSY while another measurement runs; OUT_OF_RANGE a level or band that is not one.
+//   CAL_CLEAR (SETTINGS): the selected radio's device. ival[0]: 0 = the entry that covers num[0] Hz (0 = the radio's own frequency); 1 = every entry of the device. NOT_FOUND when there is none.
+#define FOXAPP_OP_CAL_MEASURE            0x8612u /* num[0]: known dBm; ival[0]: 0 default band / 1 explicit; num[1], num[2]: lo, hi Hz. Addresses one radio (target) */
+#define FOXAPP_OP_CAL_CLEAR              0x8613u /* ival[0]: 0 one entry (num[0] Hz, 0 = this radio's) / 1 all of the device. Addresses one radio (target) */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */
 #define FOXAPP_OP_USER_PRESET_FORGET_AT  0x8702u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

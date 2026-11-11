@@ -96,6 +96,8 @@ struct ConfigFieldInfo {
     X(toneSquelchCode,                Engine,    false) \
     X(toneSquelchPolarity,            Engine,    false) \
     X(toneRemove,              Engine,    false) \
+    X(meterUnits,              Engine,    false) \
+    X(smeterCal,               Engine,    false) \
     X(notchEnabled,            Engine,    false) \
     X(notchFreqHz,             Engine,    false) \
     X(notchQ,                  Engine,    false) \

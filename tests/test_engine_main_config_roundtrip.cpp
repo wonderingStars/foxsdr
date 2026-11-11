@@ -78,7 +78,7 @@ const std::set<std::string>& engineWritten() {
         "airspy", "audioBufferMs", "audioBufferAutoMs", "ppmCorrection", "ppm", "autoGainByRadio",
         "manualGainByRadio", "plutoUri", "rtlTcpAddr", "iqFilePath", "soundCard", "centerHz", "mode", "bandwidthHz",
         "squelchDb", "squelchAuto", "volume", "dbMin", "dbMax", "vfoOffsetHz", "sampleRateHz", "stereoEnabled", "deemphasisIndex",
-        "nrEnabled", "nrStrength", "agcMode", "agcFixedGainDb", "nbEnabled", "nbThresholdDb", "toneSquelchKind", "toneSquelchHz", "toneSquelchCode", "toneSquelchPolarity", "toneRemove", "notchEnabled", "notchFreqHz", "notchQ", "autoNotch", "bandPlanFollowMode", "bandPlanSelection",
+        "nrEnabled", "nrStrength", "agcMode", "agcFixedGainDb", "nbEnabled", "nbThresholdDb", "toneSquelchKind", "toneSquelchHz", "toneSquelchCode", "toneSquelchPolarity", "toneRemove", "meterUnits", "smeterCal", "notchEnabled", "notchFreqHz", "notchQ", "autoNotch", "bandPlanFollowMode", "bandPlanSelection",
         "transmitOpen", "transmitMode", "transmitInput", "transmitPowerDb", "transmitSplit", "transmitSplitHz",
         "transmitToneHz", "transmitMonitor", "transmitArgs", "rxPositionSet", "rxLatDeg", "rxLonDeg",
         "pluginCatalogueUrl", "pluginLastUpdateCheck", "pluginTuneAllowed", "pluginSettingsAllowed", "pluginTransmitAllowed",
@@ -152,6 +152,9 @@ AppConfig seeded() {
     c.toneSquelchCode = 754;
     c.toneSquelchPolarity = 2;
     c.toneRemove = true;
+    // S-meter units and one device's calibration (engine wiring lane 1)
+    c.meterUnits = 2;
+    c.smeterCal["siggen"] = "0 30000000 43.5 0 1\n";
     c.notchEnabled = true;
     c.notchFreqHz = 1500.0;
     c.deemphasisIndex = 1;
@@ -422,6 +425,7 @@ int main() {
     CHECK(afterFirst["nrEnabled"] == true);
     CHECK(afterFirst["agcMode"] == 4 && afterFirst["agcFixedGainDb"] == -7.5 && afterFirst["nbEnabled"] == true && afterFirst["nbThresholdDb"] == 22.5);
     CHECK(afterFirst["toneSquelchKind"] == 2 && afterFirst["toneSquelchHz"] == 162.2 && afterFirst["toneSquelchCode"] == 754 && afterFirst["toneSquelchPolarity"] == 2 && afterFirst["toneRemove"] == true);
+    CHECK(afterFirst["meterUnits"] == 2 && afterFirst.contains("smeterCal") && afterFirst["smeterCal"].contains("siggen"));
     CHECK(afterFirst["notchEnabled"] == true);
     CHECK(afterFirst["deemphasisIndex"] == 1);
     CHECK(afterFirst["stereoEnabled"] == false);
@@ -444,6 +448,7 @@ int main() {
         CHECK(afterSecond["pluginRun"] == afterFirst["pluginRun"]);
         CHECK(afterSecond["agcMode"] == 4 && afterSecond["agcFixedGainDb"] == -7.5 && afterSecond["nbEnabled"] == true && afterSecond["nbThresholdDb"] == 22.5);
         CHECK(afterSecond["toneSquelchKind"] == 2 && afterSecond["toneSquelchHz"] == 162.2 && afterSecond["toneSquelchCode"] == 754 && afterSecond["toneSquelchPolarity"] == 2 && afterSecond["toneRemove"] == true);
+        CHECK(afterSecond["meterUnits"] == 2 && afterSecond.contains("smeterCal") && afterSecond["smeterCal"] == afterFirst["smeterCal"]);
         CHECK(afterSecond["pluginSites"] == afterFirst["pluginSites"]);
         CHECK(afterSecond["telemetryLaunches"] == 2);
         CHECK(afterSecond["telemetryCrashes"] == 0);       // the first run ended cleanly: nothing to count

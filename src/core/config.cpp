@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/config.hpp"
 #include "dsp/tone_squelch.hpp"
+#include "core/smeter_cal.hpp"
 
 #include "core/bias_tee_memory.hpp"
 #include "core/diag_log.hpp"
@@ -275,6 +276,7 @@ std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
         r.agcFixedGainDb = !(r.agcFixedGainDb >= -20.0) ? -20.0 : clampd(r.agcFixedGainDb, -20.0, 40.0);
         r.nbThresholdDb = !(r.nbThresholdDb >= 6.0) ? 6.0 : clampd(r.nbThresholdDb, 6.0, 30.0);
         clampToneSquelch(r.toneSquelchKind, r.toneSquelchHz, r.toneSquelchCode, r.toneSquelchPolarity);
+        r.meterUnits = r.meterUnits < 0 ? 0 : (r.meterUnits > 2 ? 2 : r.meterUnits);
         r.notchFreqHz = clampd(r.notchFreqHz, 10.0, 20000.0);
         r.notchQ = clampd(r.notchQ, 0.1, 1000.0);
         r.audioRoute = r.audioRoute < 0 ? 0 : (r.audioRoute > 3 ? 3 : r.audioRoute);
@@ -582,6 +584,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     getInt(j, "toneSquelchCode", out.toneSquelchCode);
     getInt(j, "toneSquelchPolarity", out.toneSquelchPolarity);
     getBool(j, "toneRemove", out.toneRemove);
+    getInt(j, "meterUnits", out.meterUnits);
     getBool(j, "notchEnabled", out.notchEnabled);
     getDouble(j, "notchFreqHz", out.notchFreqHz);
     getDouble(j, "notchQ", out.notchQ);
@@ -944,6 +947,21 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
             out.pluginRadio = std::move(m);
         }
     }
+    // S-meter calibration: one text per device, each checked by the table's own parser (a bad text drops THAT device's calibration whole), bounded in count and size.
+    {
+        const auto it = j.find("smeterCal");
+        if (it != j.end() && it->is_object()) {
+            std::map<std::string, std::string> m;
+            for (auto e = it->begin(); e != it->end() && m.size() < 32; ++e) {
+                if (!e.value().is_string() || e.key().empty() || e.key().size() > 256) { continue; }
+                const std::string text = e.value().get<std::string>();
+                smeter::CalTable probe;
+                if (text.size() > 8192 || !probe.fromText(text) || probe.size() == 0) { continue; }
+                m[e.key()] = probe.toText();
+            }
+            out.smeterCal = std::move(m);
+        }
+    }
     // Radios 2 to 8, element-wise tolerant like userPresets: an entry that is not an object is skipped, a field of the wrong type keeps its default,
     // and every value is clamped by sanitiseSavedRadios below. Reading stops at 4 x the limit so a hostile file cannot make this loop long.
     {
@@ -981,6 +999,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
                 getInt(e, "toneSquelchCode", r.toneSquelchCode);
                 getInt(e, "toneSquelchPolarity", r.toneSquelchPolarity);
                 getBool(e, "toneRemove", r.toneRemove);
+                getInt(e, "meterUnits", r.meterUnits);
                 getBool(e, "notchEnabled", r.notchEnabled);
                 getDouble(e, "notchFreqHz", r.notchFreqHz);
                 getDouble(e, "notchQ", r.notchQ);
@@ -1207,6 +1226,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     out.agcFixedGainDb = !(out.agcFixedGainDb >= -20.0f) ? -20.0f : clampf(out.agcFixedGainDb, -20.0f, 40.0f);
     out.nbThresholdDb = !(out.nbThresholdDb >= 6.0f) ? 6.0f : clampf(out.nbThresholdDb, 6.0f, 30.0f);
     clampToneSquelch(out.toneSquelchKind, out.toneSquelchHz, out.toneSquelchCode, out.toneSquelchPolarity);
+    out.meterUnits = out.meterUnits < 0 ? 0 : (out.meterUnits > 2 ? 2 : out.meterUnits);
     out.notchFreqHz = clampd(out.notchFreqHz, 10.0, 20000.0);
     out.notchQ = clampd(out.notchQ, 0.1, 1000.0);
     // At least kMinRangeSpanDb apart, which is the rule every writer of this pair follows (the
@@ -1555,6 +1575,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["toneSquelchCode"] = cfg.toneSquelchCode;
     j["toneSquelchPolarity"] = cfg.toneSquelchPolarity;
     j["toneRemove"] = cfg.toneRemove;
+    j["meterUnits"] = cfg.meterUnits;
     j["notchEnabled"] = cfg.notchEnabled;
     j["notchFreqHz"] = cfg.notchFreqHz;
     j["notchQ"] = cfg.notchQ;
@@ -1714,6 +1735,11 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
         for (const auto& [id, radio] : placed) { pr[id] = radio; }
         j["pluginRadio"] = std::move(pr);
     }
+    if (!cfg.smeterCal.empty()) {
+        json sc = json::object();
+        for (const auto& [key, text] : cfg.smeterCal) { sc[key] = text; }
+        j["smeterCal"] = std::move(sc);
+    }
     if (!cfg.radios.empty()) {
         json radios = json::array();
         for (const SavedRadio& r : sanitiseSavedRadios(cfg.radios)) {
@@ -1745,6 +1771,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
             e["toneSquelchCode"] = r.toneSquelchCode;
             e["toneSquelchPolarity"] = r.toneSquelchPolarity;
             e["toneRemove"] = r.toneRemove;
+            e["meterUnits"] = r.meterUnits;
             e["notchEnabled"] = r.notchEnabled;
             e["notchFreqHz"] = r.notchFreqHz;
             e["notchQ"] = r.notchQ;

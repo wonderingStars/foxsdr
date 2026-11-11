@@ -149,6 +149,30 @@ decimates inside; its CPU cost in a running chain was not measured separately. B
 | B5: the tone is not written to the settings file (`toneSquelchHz`) | `test_config` (`a.toneSquelchHz == b.toneSquelchHz`), `test_engine_api_tone` (three checks: the file, the restored radio, its pipeline) |
 | B6: the op is not receiver-scoped (the `case` removed from `radio_scope.hpp`) | `test_radio_scope` (`isRadioScopedOp`), `test_engine_api_tone` (a command aimed at radio 2 lands on radio 1: four checks) |
 
+## B2. S-meter units and calibration (second session)
+
+**Ops.** `FOXAPI_OP_SET_METER_UNITS` 0x0115 (per radio, `ival[0]` dBFS / S / dBm: the screen's display choice) and the application ops `FOXAPP_OP_CAL_MEASURE` 0x8612 and `FOXAPP_OP_CAL_CLEAR` 0x8613 (receiver-scoped through the
+target; in no web, CAT or TCI profile, same reason as B1). `radio_scope` is now 54 ops.
+
+**Behaviour.** `src/engine/engine_smeter.cpp`: the block is `core/smeter_cal.hpp`; the engine keeps one `CalTable` per DEVICE KEY (`makeDeviceKey(kind, args)`; `siggen` and `file` for the generator and an I/Q file) in
+`Engine::smeterCal_`. CAL_MEASURE needs a running radio, takes the known level in dBm (-150..+30) and a band (default: the one of [0, 30 MHz) or [30 MHz, 6 GHz) that holds the radio's frequency, or an explicit one), averages the radio's
+level over 3 s of passes (a gain change, a stop, a removal or a source change during the measurement fails it, in words) and stores offset = known dBm - measured dBFS with the radio's total gain (the sum of its gain stages; stages
+in steps make the compensation off, as the block says). The state carries `signalDbm`, `sUnits`, `calibrated` beside the dBFS figures that were always there; uncalibrated, `signalDbm` is the dBFS number standing in as an estimate and
+`calibrated` is 0. `signalDb`, `sMeter` and the squelch stay on dBFS. The 3 s average is an average of the dB readings of the meter's own smoothed level, taken once a pass.
+
+**State fields (appended after `audioGate`):** `meterUnits` (setting, moves `modeSeq`), `signalDbm`, `sUnits`, `calibrated` (measurements). **Config keys:** `meterUnits` (radio 1 and each `radios` entry, clamped 0..2) and `smeterCal`
+(device key -> `CalTable::toText()`; at most 32 devices, 8 KiB a text, a text that does not parse or is empty is dropped whole at load; written only when there is one). **Facts (LOCAL):** `fact.smeter.cal.state`
+(`idle measuring done failed`), `.message`, `.devices`.
+
+**Tests (real results).** `test_engine_api_smeter`: `113 checks passed, 0 failed` (defaults; units per radio and the refusals; a measurement at -73 dBm on the generator at 7.1 MHz reads back `signalDb -30.00 dBFS -> signalDbm -73.00 dBm,
+sUnits 9.000`; the other band stays an estimate until measured; a second device-sharing radio reads it at its own frequency; clear one band, clear all; an explicit band; ten refusals; the radio stopping mid-measurement; save,
+in-process restart, a damaged text dropped). `test_config` `3769 checks, 0 failed`, `test_receiver_snapshot` `842`, `test_apply_command` `1772`, `test_config_halves` `2482`, `test_engine_main_config_roundtrip` `259`, `test_radio_scope`
+`137`; the mock engine `443 checks passed, 2 failed` (the two known version-gate checks). The targeted run of 89 tests (`config|snapshot|apply_command|radio_scope|engine_api|golden|tone|smeter|health_paths|thread_inventory|slint_host|api_`)
+passed: `100% tests passed out of 89`.
+
+**UNVERIFIED.** Gain compensation through the engine (the generator has no gain stages, so the engine's sum is 0 in every test; the block's own compensation is proved in `test_smeter_cal`); nothing was calibrated against a real signal
+generator and no real tuner (the block's record says the same); the S9 convention is the block's (UNVERIFIED against the standard itself); the screen's lettering of the three units is the screen lane's.
+
 ## Old reader
 
 RUN, with the v0.99.104 sources (`git show v0.99.104:src/core/config.hpp` and `config.cpp` in a directory searched first, `tools/old_reader_probe/build_probe.bat`; `new_main.cpp` gained a fifth file for this lane:

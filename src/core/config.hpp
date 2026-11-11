@@ -206,6 +206,7 @@ struct SavedRadio {
     int toneSquelchCode = 0;
     int toneSquelchPolarity = 0;
     bool toneRemove = false;
+    int meterUnits = 0;   // S-meter display units, 0 dBFS / 1 S / 2 dBm (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
     double notchQ = 30.0;
@@ -492,6 +493,7 @@ struct AppConfig {
     int toneSquelchCode = 0;
     int toneSquelchPolarity = 0;
     bool toneRemove = false;
+    int meterUnits = 0;   // S-meter display units, 0 dBFS / 1 S / 2 dBm (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
     double notchQ = 30.0;
@@ -1190,6 +1192,11 @@ struct AppConfig {
     // 0.99.104 wrote, plus nothing. An older build reads the file, ignores this key, and writes the file back without it: radios 2 to 8 are forgotten
     // there, radio 1 is not.
     std::vector<SavedRadio> radios;
+
+    // --- S-meter calibration (engine wiring lane 1): device key -> that device's CalTable as core::smeter::CalTable::toText() writes it (one band per line). One string per
+    // device, REFUSED WHOLESALE (that device only) when any line is bad; at most 32 devices, 8 KiB a text. Written only when there is one, so a file without calibration is the file
+    // it was. An older reader ignores the key and writes the file back without it.
+    std::map<std::string, std::string> smeterCal;
 
     // --- Plugins whose MUTE setting is not the default -------------------------
     // Module FILE NAMES again, and a list of OVERRIDES rather than of settings:

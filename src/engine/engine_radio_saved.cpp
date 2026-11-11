@@ -96,6 +96,7 @@ SavedRadio Engine::savedRadioOf(std::size_t slot) {
     r.toneSquelchCode = rx().toneCode_;
     r.toneSquelchPolarity = rx().tonePol_;
     r.toneRemove = rx().toneRemove_;
+    r.meterUnits = rx().meterUnits_;
     r.notchEnabled = rx().notchEnabled_;
     r.notchFreqHz = static_cast<double>(rx().notchFreqHz_);
     r.notchQ = static_cast<double>(rx().notchQ_);
@@ -252,6 +253,7 @@ void Engine::restoreSavedRadios(const cascade::core::AppConfig& cfg) {
             tq.num[2] = static_cast<double>(s.toneSquelchPolarity);
             send(tq);
             send(cmd::makeInt(FOXAPI_OP_SET_TONE_REMOVE, s.toneRemove ? 1 : 0));
+            send(cmd::makeInt(FOXAPI_OP_SET_METER_UNITS, s.meterUnits));
         }
         {
             FoxCommand notch = cmd::makeInt(FOXAPI_OP_SET_NOTCH, s.notchEnabled ? 1 : 0, 1);
