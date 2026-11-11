@@ -281,6 +281,30 @@ std::string num(double v, int decimals) {
 
 }  // namespace
 
+void drawLabelRgba(std::uint8_t* rgba, std::uint32_t w, std::uint32_t h, int x, int y, const std::string& text, std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a, int scale) {
+    if (rgba == nullptr || scale < 1) { return; }
+    for (char ch : text) {
+        if (const Glyph* gl = glyphOf(ch)) {
+            for (int row = 0; row < 7; ++row) {
+                for (int col = 0; col < 5; ++col) {
+                    if (gl->rows[row][col] != '#') { continue; }
+                    for (int dy = 0; dy < scale; ++dy) {
+                        for (int dx = 0; dx < scale; ++dx) {
+                            const int px = x + col * scale + dx, py = y + row * scale + dy;
+                            if (px < 0 || py < 0 || px >= static_cast<int>(w) || py >= static_cast<int>(h)) { continue; }
+                            std::uint8_t* p = rgba + (static_cast<std::size_t>(py) * w + static_cast<std::size_t>(px)) * 4;
+                            p[0] = r; p[1] = g; p[2] = b; p[3] = a;
+                        }
+                    }
+                }
+            }
+        }
+        x += 6 * scale;
+    }
+}
+
+int labelWidthPx(const std::string& text, int scale) { return static_cast<int>(text.size()) * 6 * std::max(1, scale); }
+
 std::vector<std::pair<double, std::string>> frequencyLabels(double centreHz, double spanHz, std::uint32_t w) {
     std::vector<std::pair<double, std::string>> out;
     if (!(spanHz > 0) || w < 100) { return out; }
@@ -527,6 +551,14 @@ Outcome saveData(const std::string& typedPath, const std::string& baseFolder, Sn
         return good;
     });
     o.rows = o.ok ? rows : 0;
+    return o;
+}
+
+Outcome saveText(const std::string& typedPath, const std::string& baseFolder, const std::string& text, const std::string& ext) {
+    const std::string path = resolvePath(typedPath, baseFolder, ext);
+    if (path.empty()) { Outcome o; o.error = "no file name"; o.why = 1; return o; }
+    if (text.empty()) { Outcome o; o.error = "there is nothing to write"; o.why = 2; return o; }
+    Outcome o = writeAtomically(path, [&](std::FILE* f, std::uint64_t& bytes) { bytes = text.size(); return std::fwrite(text.data(), 1, text.size(), f) == text.size(); });
     return o;
 }
 

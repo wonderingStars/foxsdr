@@ -150,6 +150,14 @@ foreach(src ${_foxsdr_slint_test_sources})
             # One-click layouts (lane S1, ../layouts_prefs.cpp): the saved text lives in the 3D views' entry text (view3d_prefs, with scene3d) next to the workspace's (workspace_prefs).
             list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../layouts_prefs.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../view3d_prefs.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../scene3d.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../workspace_prefs.cpp")
         endif()
+        if(unit STREQUAL "extras")
+            # The spectrum and waterfall extras of screen lane B (../spectrum_extras.cpp): the colour maps (core/colour_maps.hpp, header only), the line rate, the stamps, the peaks, A / B, SNR, tracker, history.
+            list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../spectrum_extras.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../export_logic.cpp")
+        endif()
+        if(unit STREQUAL "scope_analysis")
+            # The scope analysis views of screen lane B (../scope_analysis.cpp): they paint with the demod scope's Canvas and read its feed, and draw their words with the export picture's 5 x 7 face.
+            list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../scope_analysis.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../scope_logic.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../scope_compositor.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../spectrum_extras.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../export_logic.cpp")
+        endif()
         if(unit STREQUAL "marks")
             # The names of plugin marks, decluttered (lane S1, ../mark_layout.cpp): pure.
             list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../mark_layout.cpp")

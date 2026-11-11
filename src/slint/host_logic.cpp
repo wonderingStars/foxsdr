@@ -267,6 +267,7 @@ void resetTrace(TraceState& s) {
     s.peak.clear();
     s.average.clear();
     s.density.clear();
+    s.minHold.clear();
 }
 
 namespace {
@@ -304,6 +305,21 @@ void paintPersistence(Rgba* px, std::uint32_t w, std::uint32_t h, const float* b
     }
 }
 
+// THE REFERENCE TRACE (lane B, S22): the saved trace as a thin violet line, one level per column, drawn behind the live trace (NaN columns are gaps).
+void paintReference(Rgba* px, std::uint32_t w, std::uint32_t h, const std::vector<float>& ref, double dbMin, double dbMax) {
+    if (ref.size() != w) { return; }
+    const double range = std::max(1.0, dbMax - dbMin);
+    int last = -1;
+    for (std::uint32_t x = 0; x < w; ++x) {
+        const float v = ref[x];
+        if (std::isnan(v)) { last = -1; continue; }
+        const int y = static_cast<int>((1.0 - std::clamp((v - dbMin) / range, 0.0, 1.0)) * (h - 1));
+        const int y0 = last < 0 ? y : std::min(last, y), y1 = last < 0 ? y : std::max(last, y);
+        for (int yy = y0; yy <= y1; ++yy) { px[static_cast<std::size_t>(yy) * w + x] = Rgba{0xc4, 0x8b, 0xff, 230}; }
+        last = y;
+    }
+}
+
 }  // namespace
 
 void paintTrace(Rgba* px, std::uint32_t w, std::uint32_t h, const float* bins, std::size_t n, double dbMin, double dbMax,
@@ -315,6 +331,7 @@ void paintTrace(Rgba* px, std::uint32_t w, std::uint32_t h, const float* bins, s
         st.peak.clear();
         st.average.clear();
         paintPersistence(px, w, h, bins, n, dbMin, dbMax, st);
+        if (st.showReference) { paintReference(px, w, h, st.reference, dbMin, dbMax); }
         return;
     }
     st.density.clear();
@@ -326,6 +343,9 @@ void paintTrace(Rgba* px, std::uint32_t w, std::uint32_t h, const float* bins, s
     };
     const auto vline = [&](int x, int y0, int y1, Rgba c) { for (int y = std::min(y0, y1); y <= std::max(y0, y1); ++y) { put(x, y, c); } };
 
+    if (st.showReference) { paintReference(px, w, h, st.reference, dbMin, dbMax); }
+    if (mode == TraceMode::MinHold && st.minHold.size() != w) { st.minHold.assign(w, 300.0f); }
+    if (mode != TraceMode::MinHold) { st.minHold.clear(); }
     if (mode == TraceMode::PeakHold && st.peak.size() != w) { st.peak.assign(w, -300.0f); }
     if (mode == TraceMode::Average && st.average.size() != w) { st.average.assign(w, -300.0f); }
     if (mode != TraceMode::PeakHold) { st.peak.clear(); }
@@ -338,9 +358,26 @@ void paintTrace(Rgba* px, std::uint32_t w, std::uint32_t h, const float* bins, s
     for (std::uint32_t x = 0; x < w; ++x) {
         const float v = columnMax(bins, n, x, w);
         const int y = yOf(v);
-        if (last >= 0) { vline(static_cast<int>(x), last, y, live); } else { put(static_cast<int>(x), y, live); }
+        if (st.shape == 1) {   // FILL (S6): the area under the trace, the trace's colour at about a quarter
+            const Rgba f{live.r, live.g, live.b, 72};
+            for (int yy = y + 1; yy < static_cast<int>(h); ++yy) { put(static_cast<int>(x), yy, f); }
+        }
+        if (st.shape == 2) {   // BARS (S6): a histogram of 4-column groups (3 wide, 1 gap), each as high as its strongest column
+            const std::uint32_t g0 = x - (x % 4);
+            float gv = v;
+            for (std::uint32_t k = g0; k < std::min<std::uint32_t>(w, g0 + 4); ++k) { gv = std::max(gv, columnMax(bins, n, k, w)); }
+            if (x % 4 != 3) {
+                const int yb = yOf(gv);
+                const Rgba f{live.r, live.g, live.b, 150};
+                for (int yy = yb + 1; yy < static_cast<int>(h); ++yy) { put(static_cast<int>(x), yy, f); }
+                put(static_cast<int>(x), yb, live);
+            }
+        } else if (last >= 0) { vline(static_cast<int>(x), last, y, live); } else { put(static_cast<int>(x), y, live); }
         last = y;
-        if (mode == TraceMode::PeakHold) {
+        if (mode == TraceMode::MinHold) {
+            st.minHold[x] = std::min(st.minHold[x], v);
+            heldY[x] = yOf(st.minHold[x]);
+        } else if (mode == TraceMode::PeakHold) {
             st.peak[x] = std::max(st.peak[x], v);
             heldY[x] = yOf(st.peak[x]);
         } else if (mode == TraceMode::Average) {
@@ -351,7 +388,7 @@ void paintTrace(Rgba* px, std::uint32_t w, std::uint32_t h, const float* bins, s
     }
     // the bold held trace over it
     if (mode != TraceMode::Normal) {
-        const Rgba c = mode == TraceMode::PeakHold ? held : average;
+        const Rgba c = mode == TraceMode::PeakHold ? held : average;   // (min hold takes the average's colour: the held lines are told apart by the label in the header)
         int prev = -1;
         for (std::uint32_t x = 0; x < w; ++x) {
             const int y = heldY[x];
@@ -362,13 +399,14 @@ void paintTrace(Rgba* px, std::uint32_t w, std::uint32_t h, const float* bins, s
     }
 }
 
-void scrollWaterfallRow(Rgba* px, std::uint32_t w, std::uint32_t h, const float* bins, std::size_t n, double dbMin, double dbMax) {
+void scrollWaterfallRow(Rgba* px, std::uint32_t w, std::uint32_t h, const float* bins, std::size_t n, double dbMin, double dbMax, const Rgba* lut) {
     if (px == nullptr || w == 0 || h == 0) { return; }
     if (h > 1) { std::memmove(px + w, px, sizeof(Rgba) * static_cast<std::size_t>(w) * (h - 1)); }
     const double range = std::max(1.0, dbMax - dbMin);
     for (std::uint32_t x = 0; x < w; ++x) {
         const float v = (bins != nullptr && n > 0) ? columnMax(bins, n, x, w) : -300.0f;
-        px[x] = heat(static_cast<float>((v - dbMin) / range));
+        const float t = static_cast<float>((v - dbMin) / range);
+        px[x] = lut != nullptr ? lut[t <= 0.0f ? 0 : t >= 1.0f ? 255 : static_cast<std::size_t>(t * 255.0f + 0.5f)] : heat(t);
     }
 }
 
