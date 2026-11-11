@@ -578,13 +578,14 @@ void testTheFocusBumpWithTwoLiveRadios() {
     CHECK(std::fabs(bAfter.tunedHz - 145.5e6) > 1.0);
     CHECK_EQ(bAfter.tuneSeq, bBefore.tuneSeq);
     CHECK_EQ(bAfter.modeSeq, bBefore.modeSeq);
-    // A focus on a radio that is removed answers NO_DEVICE until the session sets another; the other session is untouched.
+    // A focus on a radio that is removed is MOVED TO RADIO 1 (the engine's addition after the screen lane's finding: it used to keep the number and answer NO_DEVICE); the
+    // other session is untouched.
     CHECK_EQ(removeRadio(d.eng, b, 2).status(), FOXAPI_OK);
     passes(d.eng, 3);
     FoxReceiverState gone{};
     gone.structSize = sizeof(gone);
-    CHECK_EQ(api()->read_state(a.raw(), &gone), FOXAPI_NO_DEVICE);
-    CHECK_EQ(pumped(d.eng, a, testing::cmd(FOXAPI_OP_RADIO_FOCUS, 0, 1)).status(), FOXAPI_OK);
+    CHECK_EQ(api()->read_state(a.raw(), &gone), FOXAPI_OK);
+    CHECK_EQ(pumped(d.eng, a, testing::cmd(FOXAPI_OP_RADIO_FOCUS, 0, 1)).status(), FOXAPI_NO_CHANGE);   // (it is on radio 1 already)
     passes(d.eng, 2);
     CHECK_EQ(api()->read_state(a.raw(), &gone), FOXAPI_OK);
 }

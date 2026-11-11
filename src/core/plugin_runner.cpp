@@ -121,6 +121,15 @@ void destroyOne(fault::Slot* slot, const std::string& key, const Api* api, void*
 
 PluginRunner::~PluginRunner() { clear(); }
 
+namespace {
+// The radio whose plugin code the calling thread is inside (PluginRunner::currentRadio).
+thread_local std::uint32_t t_currentRadio = 0;
+}  // namespace
+
+std::uint32_t PluginRunner::currentRadio() { return t_currentRadio; }
+PluginRunner::CurrentRadioScope::CurrentRadioScope(std::uint32_t radio) : previous_(t_currentRadio) { t_currentRadio = radio; }
+PluginRunner::CurrentRadioScope::~CurrentRadioScope() { t_currentRadio = previous_; }
+
 void PluginRunner::setStopped(std::vector<std::string> keys) {
     std::lock_guard<std::mutex> lock(mutex_);
     stopped_.set(std::move(keys));
@@ -161,6 +170,7 @@ bool PluginRunner::hasInstances(const std::string& pluginKey) const {
 
 void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audioRateHz,
                            double iqRateHz, double centreHz) {
+    const CurrentRadioScope radioScope(radio());
     std::unique_lock<std::mutex> lock(mutex_);
     // Drops the lock while the OLD instances' destroy() runs and retakes it
     // before returning - see its declaration. Everything below therefore
@@ -205,6 +215,7 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
 }
 
 bool PluginRunner::startPlugin(const LoadedPlugin& lp) {
+    const CurrentRadioScope radioScope(radio());
     std::unique_lock<std::mutex> lock(mutex_);
     if (!lp.loaded) { return false; }
     // A stop is a decision; only the owner's setStopped() reverses it.
@@ -246,6 +257,7 @@ bool PluginRunner::startPlugin(const LoadedPlugin& lp) {
 }
 
 void PluginRunner::stopPlugin(const std::string& pluginKey) {
+    const CurrentRadioScope radioScope(radio());
     std::unique_lock<std::mutex> lock(mutex_);
     // Down until startPlugin(): a rebuild() in between must not bring it back.
     std::vector<std::string> keys = dormant_.keys();
@@ -565,6 +577,7 @@ bool PluginRunner::isFeeding(const std::string& pluginKey) const {
 }
 
 void PluginRunner::processIq(const float* interleaved, std::size_t frames) {
+    const CurrentRadioScope radioScope(radio());
     if (interleaved == nullptr || frames == 0) { return; }
     std::lock_guard<std::mutex> lock(mutex_);
     // A RETUNE THAT FOUND THE LOCK BUSY lands here, between two blocks and before
@@ -597,6 +610,7 @@ void PluginRunner::processIq(const float* interleaved, std::size_t frames) {
 }
 
 void PluginRunner::retune(double centreHz) {
+    const CurrentRadioScope radioScope(radio());
     // TRY, never wait: see the declaration. A destroy()-time re-entry arrives here
     // with the lock dropped and takes whichever branch the DSP thread leaves it.
     std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
@@ -638,6 +652,7 @@ void PluginRunner::retuneLocked(double centreHz) {
 }
 
 void PluginRunner::clear() {
+    const CurrentRadioScope radioScope(radio());
     std::unique_lock<std::mutex> lock(mutex_);
     destroyInstances(lock);
     // THE STREAM ENDS HERE. A new epoch with no rates says so: a plugin still
@@ -652,6 +667,7 @@ void PluginRunner::setStreamClock(std::shared_ptr<StreamClock> clock) {
 }
 
 void PluginRunner::processAudioChain(float* left, float* right, std::size_t frames) {
+    const CurrentRadioScope radioScope(radio());
     if (left == nullptr || right == nullptr || frames == 0) { return; }
     std::lock_guard<std::mutex> lock(mutex_);
     if (processors_.empty()) { return; }
@@ -873,6 +889,7 @@ void PluginRunner::removePluginLocked(const std::string& key,
 }
 
 void PluginRunner::processAudio(const float* mono, std::size_t frames) {
+    const CurrentRadioScope radioScope(radio());
     if (mono == nullptr || frames == 0) { return; }
     std::lock_guard<std::mutex> lock(mutex_);
     if (clock_) { clock_->addAudio(frames); }  // see processIq
@@ -1037,6 +1054,7 @@ void PluginRunner::pullAudioLocked(AudioInstance& a, float* left, float* right,
 }
 
 bool PluginRunner::pullPluginAudio(float* left, float* right, std::size_t frames) {
+    const CurrentRadioScope radioScope(radio());
     if (left == nullptr || right == nullptr || frames == 0) { return false; }
     std::lock_guard<std::mutex> lock(mutex_);
     if (audioInstances_.empty()) { return false; }
@@ -1199,6 +1217,7 @@ void PluginRunner::setTxKeyed(bool keyed) {
 }
 
 void PluginRunner::pollTxAudio() {
+    const CurrentRadioScope radioScope(radio());
     std::lock_guard<std::mutex> lock(mutex_);
     pollTxAudioLocked();
 }
@@ -1560,6 +1579,7 @@ void PluginRunner::pollImageTextLocked(std::uint32_t inputKind) {
 }
 
 void PluginRunner::pollImages(std::vector<HostImage>& out) {
+    const CurrentRadioScope radioScope(radio());
     std::lock_guard<std::mutex> lock(mutex_);
 
     // Re-seed `out` whenever the instance set changed under it - a rescan, a
@@ -1673,6 +1693,7 @@ void PluginRunner::pollImages(std::vector<HostImage>& out) {
 }
 
 bool PluginRunner::imagePress(const std::string& plugin, std::uint32_t x, std::uint32_t y) {
+    const CurrentRadioScope radioScope(radio());
     std::lock_guard<std::mutex> lock(mutex_);
     for (const ImageInstance& image : imageInstances_) {
         if (image.name == plugin && !image.failed && image.input != nullptr &&
@@ -1685,6 +1706,7 @@ bool PluginRunner::imagePress(const std::string& plugin, std::uint32_t x, std::u
 }
 
 std::vector<DecodedLine> PluginRunner::drainText() {
+    const CurrentRadioScope radioScope(radio());
     // The audio path's diagnostics ride out on the call the GUI already makes
     // every frame, so a takeover line appears in the log without a single new
     // call site. Taken BEFORE the lock below, because it takes the lock

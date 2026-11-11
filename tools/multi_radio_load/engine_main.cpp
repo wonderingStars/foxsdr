@@ -3,7 +3,11 @@
 // housekeeping, recorders idle, audio streams opened by the engine on the default output device at VOLUME ZERO. It is what the stage-0 tool said it did not
 // cover ("NOT exercised: Engine's control thread, API host, ...").
 //
-// Usage: multi_radio_load_engine [radios (2..8, default 8)] [seconds (default 60)]
+// Usage: multi_radio_load_engine [radios (2..8, default 8)] [seconds (default 60)] [reverse|-] [radio probe module]
+//
+// With a radio probe module (tests/fixtures/radio_probe_plugin.cpp, built as radio_probe_fixture) the tool copies it under four names into a plugin folder of its own, puts one
+// copy on each of radios 1 to 4 (FOXAPI_OP_PLUGIN_RADIO; multi-radio stage 6) and reports, per copy, how many reports its decoder wrote - so that the load is the load WITH a
+// decoder fed on each of four radios, and the figures prove the decoders were fed.
 //
 // Prints, every 10 s and at the end: whole-process CPU as a share of the machine and in cores, the working set, the threads, and for each radio the samples
 // its source read, the samples its ring DROPPED, the audio underruns and whether it faulted. Exit 0 = every radio read, none dropped, none faulted; 1 = a
@@ -24,6 +28,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <process.h>
 #include <psapi.h>
 #include <tlhelp32.h>
 
@@ -32,9 +37,16 @@
 #include "engine/receiver.hpp"
 #include "foxsdr_api.h"
 
+namespace {
+std::string g_pluginDir;
+std::string pluginDirText() { return g_pluginDir; }
+}  // namespace
+
 namespace cascade::gui {
 struct AppWindowTestAccess {
     using Engine = cascade::engine::Engine;
+    static void installPluginDir() { Engine::testHooks_.pluginDir = &pluginDirText; }
+    static bool runnerHas(Engine& e, std::size_t slot, const std::string& file) { return e.runnerOf(slot).hasInstances(file); }
     static std::uint64_t dropped(Engine& e, std::size_t slot) { return e.receivers_[slot] ? e.receivers_[slot]->pipeline_.ringDroppedSamples() : 0; }
     static std::uint64_t read(Engine& e, std::size_t slot) { return e.receivers_[slot] ? e.receivers_[slot]->pipeline_.sourceSamplesRead() : 0; }
     static std::uint64_t underruns(Engine& e, std::size_t slot) { return e.receivers_[slot] ? e.receivers_[slot]->pipeline_.audio().underruns() : 0; }
@@ -115,6 +127,24 @@ int main(int argc, char** argv) {
     ::SetEnvironmentVariableA("FOXSDR_CRASH_URL", "http://127.0.0.1:9");
     ::SetEnvironmentVariableA("FOXSDR_UPDATE_URL", "http://127.0.0.1:9");
 
+    // THE PLUGINS (optional): four copies of the radio probe, in a folder of their own, found by the engine's first scan.
+    const std::string probeModule = argc > 4 ? argv[4] : std::string();
+    std::vector<std::string> probeFiles;
+    const std::filesystem::path probeLogs = scratch / "probe-logs";
+    if (!probeModule.empty()) {
+        const std::filesystem::path dir = scratch / "plugins";
+        std::filesystem::create_directories(dir, ec);
+        std::filesystem::create_directories(probeLogs, ec);
+        ::SetEnvironmentVariableA("RADIO_PROBE_DIR", probeLogs.string().c_str());
+        _putenv_s("RADIO_PROBE_DIR", probeLogs.string().c_str());   // (the module reads it with getenv, which has its own copy of the environment)
+        for (int k = 1; k <= 4; ++k) {
+            const std::string leaf = "rp-load" + std::to_string(k) + "-1.2.3-abi3-win-x64.dll";
+            std::filesystem::copy_file(probeModule, dir / leaf, std::filesystem::copy_options::overwrite_existing, ec);
+            probeFiles.push_back(leaf);
+        }
+        g_pluginDir = dir.string();
+        Access::installPluginDir();
+    }
     const FoxEngineApi* api = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
     Engine eng;
     eng.configureApi("token=load");
@@ -137,6 +167,18 @@ int main(int argc, char** argv) {
         (void)api->submit(session, &c, 1, &r);
     };
     for (int n = 2; n <= radios; ++n) { send(makeCmd(FOXAPI_OP_RADIO_ADD, 20000.0 * n, n)); }
+    std::this_thread::sleep_for(std::chrono::milliseconds(800));
+    // one probe on each of radios 1 to 4 (radio 1 is where a plugin is until it is put elsewhere)
+    for (std::size_t k = 1; k < probeFiles.size() && static_cast<int>(k) < radios; ++k) {
+        FoxCommand c{};
+        c.structSize = sizeof(c);
+        c.op = FOXAPI_OP_PLUGIN_RADIO;
+        c.ival[0] = static_cast<long long>(k) + 1;
+        std::snprintf(c.text, sizeof(c.text), "%s", probeFiles[k].c_str());
+        FoxSubmitResult r{};
+        r.structSize = sizeof(r);
+        (void)api->submit(session, &c, 1, &r);
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(800));
     // Every radio at volume zero, in WFM like the stage-0 mix, then all running.
     for (int n = 1; n <= radios; ++n) {
@@ -199,6 +241,20 @@ int main(int argc, char** argv) {
         std::printf("           audio produced %.0f frames/s; %s\n", static_cast<double>(Access::produced(eng, s) - prod0[s]) / wallTotal, Access::sink(eng, s).c_str());
         std::printf("           audio recoveries %d, note: %s\n", Access::recoveries(eng, s), Access::note(eng, s).c_str());
         if (dropped != 0 || faulted || !running || read == 0) { ++bad; }
+    }
+    for (std::size_t k = 0; k < probeFiles.size(); ++k) {
+        std::size_t lines = 0;
+        {
+            std::FILE* f = std::fopen((probeLogs / (probeFiles[k] + ".log")).string().c_str(), "rb");
+            if (f != nullptr) {
+                int ch;
+                while ((ch = std::fgetc(f)) != EOF) { lines += ch == '\n' ? 1u : 0u; }
+                std::fclose(f);
+            }
+        }
+        const bool here = k < static_cast<std::size_t>(radios) && Access::runnerHas(eng, k, probeFiles[k]);
+        std::printf("  decoder %zu (%s) on radio %zu: %s, %zu reports written\n", k + 1, probeFiles[k].c_str(), k + 1, here ? "instance live" : "NO INSTANCE", lines);
+        if (!here || lines == 0) { ++bad; }
     }
     std::printf("RESULT %s: %d radios, average %.2f core(s) = %.2f%% of the machine, peak %.2f core(s), %zu threads\n", bad == 0 ? "OK" : "NOT OK", radios, avg,
                 100.0 * avg / cores, peak, threads());

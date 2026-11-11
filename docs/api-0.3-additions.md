@@ -2486,7 +2486,7 @@ Four ops, additive (no capability bit; an interface that never sends them never 
   radio (or a patch radio) holds, message "in use by Radio N" / "in use by patch radio N". LIMIT: no slot free, or the limit on radios open in total (receivers and patch
   radios together, `fact.radio.max`) is reached - the message states the limit and names every holder.
 * `FOXAPI_OP_RADIO_REMOVE` (0x1203): `ival[0]` the number (2 or more; radio 1 is always there: UNSUPPORTED). The radio's takes end, its threads join, its device is let
-  go, the slot is free again. A session whose focus was that radio keeps the number and its reads answer NO_DEVICE until it sets another.
+  go, the slot is free again. A session whose focus was that radio is moved to radio 1 (its seq groups move). `RADIO_ADD` also accepts `file:<path>`, `open-pluto:<address>` and `open-rtltcp:<address>` as the device (the sound card stays the first radio's: UNSUPPORTED); `fact.radio.solo` reads the solo back.
 * `FOXAPI_OP_RADIO_AUDIO` (0x1204): `ival[0]` the radio (0 = the sender's focus), `ival[1]` the route: 0 both, 1 left, 2 right, 3 none (a 10 ms ramp; on a mono output left
   and right play as both). Published as `fact.radio.<n>.audio`.
 * `FOXAPI_OP_RADIO_SOLO` (0x1205): `ival[0]` the radio heard alone, 0 = nobody. Every other radio's sound is held silent by a ramped gain that touches neither its route nor its
@@ -2496,6 +2496,22 @@ Per-radio reads and commands from stage 3 now act on a real second radio: `read_
 `read_spectrum`, `read_audio` and `read_scope` follow the session's focus; a command with `target` n changes radio n and nothing of another radio. The seq groups of a radio other
 than the first carry the radio's number in their high bits (`(n - 1) << 48`), so a client moving between radios never mistakes one radio's counter for another's unchanged one.
 `fact.radio.<n>.refusal` carries the words when a radio's device could not be had.
+
+### 9.22 Several radios: the saved radios, the plugins' radio, the per-radio lists (multi-radio stages 5 and 6; docs/multi-radio-records/engine-stages-5-6.md)
+
+* `FOXAPI_CAP_RADIOS` (bit 30) says the engine serves the whole multi-radio set. The functions are still tested with `FOXAPI_HAS`.
+* `FOXAPI_OP_PLUGIN_RADIO` (0x1206, grant SETTINGS): `text` the plugin's module file name, `ival[0]` the radio (1 to `fact.radio.max`), `ival[1]` = 1 and start it. A decoder
+  instance is created on the PluginRunner of that radio and fed that radio's I/Q, audio and decoder taps; the plugin's `get_state`, `get_gain`, `get_sample_rates`,
+  `get_stream_info`, the controls it queues and its `request_tune` are answered from, and applied to, that radio (the host service `centre_hz` and `sample_rate_hz` too, when the
+  call is made from inside the plugin's `create()`, `process()` or `destroy()`; from a thread of the plugin's own they answer for radio 1). Answers: `NOT_FOUND` no such plugin,
+  `NO_DEVICE` no such radio, `OUT_OF_RANGE` not 1 to the limit, `UNSUPPORTED` a plugin that transmits (it runs on radio 1), `NO_CHANGE` it runs there already. A radio that is removed
+  sends its plugins back to radio 1, STOPPED.
+* `read_radio_list(session, radio, list, index, out)`: GAINS, ANTENNAS, SAMPLE_RATES and DECODERS of radio `radio` (0 = the session's focus). `read_list` of those four follows the
+  session's focus. DECODERS: every decoder plugin on every radio; ACTIVE and FED mean "on this radio"; `value[0]` is the plugin's radio.
+* Facts: `fact.plugin.<module file>.radio`, `fact.radio.<n>.plugins` (now every radio's), `fact.scanner.radio`, `fact.transmit.radio`, `fact.radio.restore`.
+* Saved settings: the key `radios` (an array of up to seven objects: radios 2 to 8) and the key `pluginRadio` (plugin id -> radio number), both written only when non-empty,
+  `schemaVersion` 1. The shape is in `src/core/config.hpp` (`SavedRadio`).
+* Usage report: the field `radios_max` (the highest number of receivers running at once in the session, 1 to 8). PRIVACY.md has its row.
 
 ## 10. What stays a GAP after 0.3
 

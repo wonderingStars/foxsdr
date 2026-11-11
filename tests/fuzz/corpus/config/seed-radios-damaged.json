@@ -1,0 +1,12 @@
+{
+    "schemaVersion": 1,
+    "centerHz": 145800000.0,
+    "radios": [
+        {"number": 3, "sourceKind": "file", "args": "C:/x.iq", "centerHz": -5, "volume": 9, "agcMode": 77, "audioRoute": -2, "bandwidthHz": 1e300},
+        {"number": 3, "sourceKind": "rtlsdr", "args": "serial=1", "squelchDb": -9999, "notchQ": 0, "nbThresholdDb": 1e9},
+        {"number": "x", "sourceKind": 7, "mode": [1], "muted": "yes", "running": 1},
+        {"number": 1}, {"number": 9}, {"number": -4}, {}, 5, "six", null, [7],
+        {"number": 8, "sourceKind": "pluto", "args": "uri=ip:1.2.3.4"}, {"number": 2}, {"number": 4}
+    ],
+    "pluginRadio": {"": 2, "a": 0, "b": 99, "c": "3", "d": 4, "e": 1.5}
+}

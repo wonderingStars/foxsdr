@@ -204,6 +204,7 @@ extern "C" {
 #define FOXAPI_CAP_LONG_TEXT     (1ull << 27) /* submit_text: one command with a text longer than text[] */
 #define FOXAPI_CAP_NODE_SPECTRUM (1ull << 28) /* read_node_spectrum: a patch radio's own spectrum */
 #define FOXAPI_CAP_LOCAL_EXT     (1ull << 29) /* get_local_extension: in-process extension points (section 9.15); never over a transport */
+#define FOXAPI_CAP_RADIOS        (1ull << 30) /* 0.3, multi-radio: several radios at once - RADIO_ADD / REMOVE / AUDIO / SOLO / FOCUS and PLUGIN_RADIO, read_radio_state, read_radio_spectrum and read_radio_list, fact.radio.* (the functions are still tested with FOXAPI_HAS: the bit says the engine serves the whole set) */
 
 /* ---------------------------------------------------------------------------
  * Session grants. Asked for in FoxSessionParams::grants; the engine grants
@@ -632,12 +633,13 @@ typedef struct FoxCommand {
 #define FOXAPI_OP_SCAN_SERIAL_PORTS 0x0F03u /* 0.3; LOCAL sessions only; result arrives as FOXAPI_LIST_SERIAL_PORTS changing */
 #define FOXAPI_OP_SERVER_CONFIG     0x1001u /* text: JSON (web + CAT listeners); LOCAL sessions only */
 #define FOXAPI_OP_UPDATE_CHECK      0x1101u /* ival[0]: 1 = check now, 2 = enable at start, 3 = disable */
-/* 0.3, multi-radio (additive; no capability bit - an interface tests FOXAPI_HAS on read_radio_state, and the fact fact.radio.max). */
+/* 0.3, multi-radio (additive; FOXAPI_CAP_RADIOS says the engine serves the set, FOXAPI_HAS on each function is still the test of one, and fact.radio.max is the limit). */
 #define FOXAPI_OP_RADIO_FOCUS       0x1201u /* ival[0]: the radio number, from 1. Sets THIS SESSION's focused radio (grant: VIEW); the commands of the session that name no radio (target 0), and its read_state, read_spectrum and single-radio lists, then follow that radio. NO_DEVICE: no such radio. NO_CHANGE: it is the focus already. On a change every seq group of THIS session's read_state (seq, tuneSeq, modeSeq, deviceSeq, audioSeq, displaySeq, txSeq, listSeq, rdsSeq, scanSeq) moves by one, so an interface redraws everything exactly as it does after a source change. Another session's focus is not touched. */
 #define FOXAPI_OP_RADIO_ADD         0x1202u /* 0.3, multi-radio stage 4 (grant: SETTINGS). Opens another radio (a slot from 2 to fact.radio.max). ival[0]: its number, 0 = the lowest free one. ival[1]: 1 = start it running once it is open. text: a device id from FOXAPI_LIST_DEVICES, or "" / "generator" for a TEST RADIO on the built-in signal generator; num[0]: a test radio's tone, Hz from its centre (0 = 25 kHz times its number). applied[0]: the radio's number. NO_CHANGE: that radio is open already. OUT_OF_RANGE: not a number from 2 to fact.radio.max. BUSY: the device is held by another radio, message "in use by Radio N" or "in use by patch radio N". LIMIT: no radio is free or the engine's limit on open radios (fact.radio.max, receivers and patch radios together) is reached; the message states it and names every holder. */
-#define FOXAPI_OP_RADIO_REMOVE      0x1203u /* 0.3 (grant: SETTINGS). ival[0]: the radio's number, 2 or more (radio 1 is always there: UNSUPPORTED). Stops it (its takes end first), lets go of its device and joins its threads; the slot is free to add again. NO_DEVICE: no radio has that number. A session whose focus was that radio keeps the number: its reads then answer NO_DEVICE until it sets another. */
+#define FOXAPI_OP_RADIO_REMOVE      0x1203u /* 0.3 (grant: SETTINGS). ival[0]: the radio's number, 2 or more (radio 1 is always there: UNSUPPORTED). Stops it (its takes end first), lets go of its device and joins its threads; the slot is free to add again. NO_DEVICE: no radio has that number. A session whose focus was that radio is moved to radio 1 (every seq group of its reads moves, as after RADIO_FOCUS). RADIO_ADD also takes 'file:<path>', 'open-pluto:<address>' and 'open-rtltcp:<address>' as the device (not the sound card, which stays the first radio's: UNSUPPORTED). fact.radio.solo reads RADIO_SOLO back. */
 #define FOXAPI_OP_RADIO_AUDIO      0x1204u /* 0.3 (grant: SETTINGS). ival[0]: the radio (0 = the sender's focus), ival[1]: where its sound goes: 0 both, 1 left, 2 right, 3 none. The change is a 10 ms ramp. On a mono output device left and right play as both. Published as fact.radio.<n>.audio. NO_CHANGE: it is that route already. */
 #define FOXAPI_OP_RADIO_SOLO       0x1205u /* 0.3 (grant: SETTINGS). ival[0]: the radio that is heard alone; 0 = nobody is solo. Every other radio's sound is held silent by a ramped gain, WITHOUT touching its own route or mute, so un-soloing gives each back exactly what it had. NO_CHANGE: it is solo already. */
+#define FOXAPI_OP_PLUGIN_RADIO     0x1206u /* 0.3, multi-radio stage 6 (grant: SETTINGS). Puts a plugin on a radio: the decoder instance is fed the I/Q, the audio and the decoder taps of THAT radio and of no other, and its host calls (get_state, the controls it queues, the centre it asks for) are answered from it. text: the plugin's module file name (as DECODER_START takes it). ival[0]: the radio's number, 1 to fact.radio.max. ival[1]: 1 = and start it there (a stop is cleared, as DECODER_START clears it). Read back as fact.plugin.<module file>.radio and fact.radio.<n>.plugins; saved in the settings file and restored with the radios. A plugin that has not been placed runs on radio 1. NOT_FOUND: no such plugin. NO_DEVICE: no radio has that number. OUT_OF_RANGE: not 1 to fact.radio.max. UNSUPPORTED: a plugin that transmits (CASCADE_CAP_TX_AUDIO) runs on radio 1 only. NO_CHANGE: it runs there already. When its radio is removed a plugin goes back to radio 1 and stays STOPPED. */
 #define FOXAPI_TARGET_ALL_RADIOS    0xFFFFFFFFu     /* FoxCommand::target for FOXAPI_OP_RUN alone: every radio the engine has (Start together, STOP ALL); refused (BAD_ARGUMENT) for any other op */
 
 #define FOXAPI_TX_MODE_CW  0u
@@ -1148,6 +1150,15 @@ typedef struct FoxEngineApi {
      * 0 for this session's focused radio. NO_DEVICE when the engine has no such radio. */
     int32_t (FOXAPI_CALL *read_radio_spectrum)(FoxSession *session, uint32_t radio, uint64_t sinceSeq,
                                                FoxSpectrumInfo *info, float *bins, uint32_t cap);
+    /* ---- 0.3, multi-radio stage 6 (FOXAPI_CAP_RADIOS) ---------------------------------------------------------------------------------- */
+
+    /* One radio's copy of a list that describes ONE radio, exactly as read_list gives the focused radio's: FOXAPI_LIST_GAINS, FOXAPI_LIST_ANTENNAS,
+     * FOXAPI_LIST_SAMPLE_RATES and FOXAPI_LIST_DECODERS. radio 1..N, or 0 for this session's focused radio. `out` NULL asks the count, as read_list does.
+     * NO_DEVICE when the engine has no such radio; BAD_ARGUMENT for any other list (it is not one radio's: use read_list). For FOXAPI_LIST_DECODERS every decoder
+     * plugin is listed on every radio; ACTIVE and FED say it runs (and is fed) ON THIS RADIO, and value[0] is the radio the plugin runs on (1 when it has not been
+     * placed: FOXAPI_OP_PLUGIN_RADIO). read_list of these four lists follows the session's focus (radio 1 until RADIO_FOCUS), so a client that knows nothing of
+     * several radios sees exactly what it always saw. */
+    int32_t (FOXAPI_CALL *read_radio_list)(FoxSession *session, uint32_t radio, uint32_t list, uint32_t index, FoxListItem *out);
 } FoxEngineApi;
 
 /* True when the table covers member `m`: the engine was built with it. */

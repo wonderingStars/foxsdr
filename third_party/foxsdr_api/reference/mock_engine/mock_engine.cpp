@@ -1343,6 +1343,8 @@ private:
         case FOXAPI_OP_TX_SET_FREQUENCY: case FOXAPI_OP_TX_SET_POWER: case FOXAPI_OP_SETTING_SET:
         case FOXAPI_OP_TX_REMOTE_ARM: case FOXAPI_OP_BOOKMARK_FAVOURITE:
         case FOXAPI_OP_BOOKMARK_REMOVE_GROUP: case FOXAPI_OP_RADIO_FOCUS:
+        // (multi-radio stages 4 and 6) the ops that open, close, route and solo a radio and place a plugin on one: known, and answered as an engine with one radio would
+        case FOXAPI_OP_RADIO_ADD: case FOXAPI_OP_RADIO_REMOVE: case FOXAPI_OP_RADIO_AUDIO: case FOXAPI_OP_RADIO_SOLO: case FOXAPI_OP_PLUGIN_RADIO:
             break;
         default:
             // A newer interface's op, or one this engine does not implement:
@@ -1377,6 +1379,35 @@ private:
                 return FOXAPI_OUT_OF_RANGE;
             }
             return radioLive(static_cast<uint32_t>(c.ival[0])) ? FOXAPI_OK : FOXAPI_NO_DEVICE;
+        // THE MOCK HAS ONE RADIO (and room for kMaxRadios): the five multi-radio ops are known and answer as an engine whose slots are all taken would.
+        case FOXAPI_OP_RADIO_ADD:
+            if (c.ival[0] < 0 || c.ival[0] == 1 || c.ival[0] > static_cast<long long>(kMaxRadios)) {
+                return FOXAPI_OUT_OF_RANGE;
+            }
+            return FOXAPI_LIMIT;
+        case FOXAPI_OP_RADIO_REMOVE:
+            if (c.ival[0] < 1 || c.ival[0] > static_cast<long long>(kMaxRadios)) {
+                return FOXAPI_OUT_OF_RANGE;
+            }
+            return c.ival[0] == 1 ? FOXAPI_UNSUPPORTED : FOXAPI_NO_DEVICE;
+        case FOXAPI_OP_RADIO_AUDIO:
+            if (c.ival[0] < 0 || c.ival[0] > static_cast<long long>(kMaxRadios) || c.ival[1] < 0 || c.ival[1] > 3) {
+                return FOXAPI_OUT_OF_RANGE;
+            }
+            return radioLive(c.ival[0] == 0 ? s.focus.load() : static_cast<uint32_t>(c.ival[0])) ? FOXAPI_OK : FOXAPI_NO_DEVICE;
+        case FOXAPI_OP_RADIO_SOLO:
+            if (c.ival[0] < 0 || c.ival[0] > static_cast<long long>(kMaxRadios)) {
+                return FOXAPI_OUT_OF_RANGE;
+            }
+            return (c.ival[0] == 0 || radioLive(static_cast<uint32_t>(c.ival[0]))) ? FOXAPI_OK : FOXAPI_NO_DEVICE;
+        case FOXAPI_OP_PLUGIN_RADIO:
+            if (c.text[0] == '\0') {
+                return FOXAPI_BAD_ARGUMENT;
+            }
+            if (c.ival[0] < 1 || c.ival[0] > static_cast<long long>(kMaxRadios)) {
+                return FOXAPI_OUT_OF_RANGE;
+            }
+            return radioLive(static_cast<uint32_t>(c.ival[0])) ? FOXAPI_NOT_FOUND /* the mock fits no plugin */ : FOXAPI_NO_DEVICE;
         case FOXAPI_OP_SET_CENTRE:
             return (v > 0.0 && v <= kMaxCentreHz) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_FREQUENCY:
@@ -1777,6 +1808,12 @@ private:
             if (c.ival[1] != 0) m_.agcFixedGainDb = v;
             r.applied[0] = m_.agcFixedGainDb;
             bump(kMode);
+            break;
+        case FOXAPI_OP_RADIO_AUDIO:
+        case FOXAPI_OP_RADIO_SOLO:
+            // (the mock's one radio plays both channels and has no solo to hold: the route it has is the route it is asked for, so nothing changes)
+            r.status = FOXAPI_NO_CHANGE;
+            r.applied[0] = static_cast<double>(c.op == FOXAPI_OP_RADIO_AUDIO ? c.ival[1] : c.ival[0]);
             break;
         case FOXAPI_OP_SET_NB:
             m_.nbEnabled = c.ival[0] != 0;
@@ -2383,7 +2420,10 @@ private:
                 return "a target of all radios is for RUN alone";
             }
             return "the command is malformed (NaN, unterminated or empty text)";
-        case FOXAPI_UNSUPPORTED: return "this engine does not implement that command";
+        case FOXAPI_UNSUPPORTED:
+            return p.cmd.op == FOXAPI_OP_RADIO_REMOVE ? "radio 1 is always there" : "this engine does not implement that command";
+        case FOXAPI_LIMIT: return "this engine runs one radio";
+        case FOXAPI_NOT_FOUND: return "no plugin with that name is installed";
         case FOXAPI_NO_DEVICE:
             return (scopedOp(p.cmd.op) || p.cmd.op == FOXAPI_OP_RADIO_FOCUS) ? "there is no radio with that number"
                                                                               : "there is no transmitter open";

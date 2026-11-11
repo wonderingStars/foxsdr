@@ -279,7 +279,11 @@ std::uint64_t Engine::apiListsFingerprint() {
     // ...and the settings store's generation: PLUGIN_SETTINGS' values are what a settings form shows, and they move when anybody writes one (the form,
     // the plugin's own settings_set, a config load) - stub campaign B9.
     f.value(pluginApi_->settingsGeneration());
-    f.value(pluginRunner_.statusGeneration());
+    f.value(runnersStatusGeneration());
+    for (const auto& kv : pluginRadio_) {   // which radio each plugin runs on (stage 6)
+        f.text(kv.first);
+        f.value(kv.second);
+    }
     // The install records' verdict on each file (integrity: not the file that was installed).
     for (const cascade::core::InstalledPlugin& r : pluginInventory_.plugins) {
         f.text(r.file);
@@ -306,7 +310,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     // of plugin and is read with the receiver stopped. The pass takes the snapshot while stopped as well
     // (fillPublishedState), so this adds no acquisition of the lock.
     f.value(rx().pipeline_.running());
-    for (const std::string& k : feedingKeysScratch_) { f.text(k); }
+    for (const std::string& k : feedingKeysForLists()) { f.text(k); }
     // --- API 0.3's, and the 0.2 lists step 1 left out ----------------------
     // The store.
     f.value(catalog_.size());
@@ -547,6 +551,29 @@ std::uint64_t Engine::apiListsFingerprint() {
         f.text(e.second);
     }
     f.value(receiverMask_.load(std::memory_order_acquire));
+    // THE FOUR PER-RADIO LISTS of every added radio (multi-radio stage 6; read_radio_list): the rates, the gains with what they are at now, the antennas and which is in force.
+    for (std::size_t slot = 1; slot < kMaxReceivers; ++slot) {
+        Receiver* r = receivers_[slot].get();
+        if (r == nullptr) { continue; }
+        f.value(slot);
+        f.value(r->device_ != nullptr);
+        f.value(r->pipeline_.activeSource().sampleRateHz());
+        for (double hz : r->deviceRatesHz_) { f.value(hz); }
+        for (const std::string& l : r->deviceRateLabels_) { f.text(l); }
+        for (std::size_t i = 0; i < r->deviceGainRanges_.size(); ++i) {
+            f.text(r->deviceGainRanges_[i].name);
+            f.value(r->deviceGainRanges_[i].minDb);
+            f.value(r->deviceGainRanges_[i].maxDb);
+            f.value(r->deviceGainRanges_[i].stepDb);
+            f.value(i < r->deviceGainsDb_.size() ? static_cast<double>(r->deviceGainsDb_[i]) : 0.0);
+        }
+        for (const std::string& a : r->deviceAntennas_) { f.text(a); }
+        f.text(r->deviceAntenna_);
+    }
+    f.value(soloRadio_);
+    f.value(scanner_.active());          // where the one scanner is, and which radio the transmitter follows (fact.scanner.radio, fact.transmit.radio: stage 6)
+    f.value(scannerSlot_);
+    f.value(transmitRadioSlot());
     for (std::uint32_t n = 1; n <= kMaxReceivers; ++n) {
         if (!receiverLive(n)) { continue; }
         f.text(radioStateWord(n));
@@ -766,13 +793,59 @@ std::shared_ptr<const ApiListBlock> Engine::buildApiLists(std::uint64_t fingerpr
         }
         if (const auto n = pluginNotices_.find(w.key); n != pluginNotices_.end()) { w.noticeLevel = n->second.level; }
         w.matched = !w.key.empty() &&
-                    std::find(feedingKeysScratch_.begin(), feedingKeysScratch_.end(), w.key) != feedingKeysScratch_.end();
+                    std::find(feedingKeysForLists().begin(), feedingKeysForLists().end(), w.key) != feedingKeysForLists().end();
+        w.radio = radioOfPlugin(w.key);
         w.askedSettings = !w.key.empty() && std::find(settingsAskers.begin(), settingsAskers.end(), w.key) != settingsAskers.end();
         w.digestMismatch = !cascade::core::PluginRepo::changedSinceInstallNote(pluginInventory_.plugins, w.key).empty();
         b->plugins.push_back(std::move(w));
     }
     buildApiLists03(*b);
+    buildRadioLists(*b);
     return b;
+}
+
+// THE FOUR LISTS THAT DESCRIBE ONE RADIO, for radios 2 to 8 (multi-radio stage 6): what buildApiLists copies out of rx() for the first radio, taken from each added radio under its own
+// scope, and the DECODERS of every radio (every decoder plugin, running ON THAT RADIO or not).
+void Engine::buildRadioLists(ApiListBlock& b) {
+    const std::vector<cascade::core::DecoderStatus> status = allDecoderStatus();
+    for (std::size_t slot = 1; slot < kMaxReceivers && slot < ApiListBlock::kRadios; ++slot) {
+        if (!receivers_[slot] || receivers_[slot]->removing_) { continue; }
+        RadioWork w(*this, slot);
+        ApiListBlock::RadioLists& rl = b.radios[slot];
+        rl.present = true;
+        if (rx().device_ != nullptr) {
+            rl.rates = rx().deviceRatesHz_;
+            for (std::size_t i = 0; i < rx().deviceRatesHz_.size(); ++i) {
+                rl.rateLabels.push_back(i < rx().deviceRateLabels_.size() ? rx().deviceRateLabels_[i] : cascade::gui::rateLabel(rx().deviceRatesHz_[i]));
+            }
+            rl.rateHz = rx().pipeline_.activeSource().sampleRateHz();
+            const cascade::source::AirspySource* const airspy = asAirspyDevice();
+            for (std::size_t i = 0; i < rx().deviceGainRanges_.size(); ++i) {
+                const auto& g = rx().deviceGainRanges_[i];
+                rl.gains.push_back({g.name, g.minDb, g.maxDb, g.stepDb, i < rx().deviceGainsDb_.size() ? static_cast<double>(rx().deviceGainsDb_[i]) : 0.0,
+                                    cascade::gui::gainUnitWire(g.unit), gainDrivenByAgc(airspy, g.name)});
+            }
+            rl.antennas = rx().deviceAntennas_;
+            rl.antenna = rx().deviceAntenna_;
+        }
+        const bool radioRunning = rx().pipeline_.running();
+        for (const ApiListBlock::Plugin& p : b.plugins) {
+            if (!p.decoder) { continue; }
+            ApiListBlock::Decoder d;
+            d.name = p.name;
+            d.key = p.key;
+            d.radio = p.radio;
+            d.running = p.running && p.radio == slot + 1u;
+            d.mutes = p.mutes;
+            d.fed = d.running && radioRunning &&
+                    std::find(feedingKeysForLists().begin(), feedingKeysForLists().end(), p.key) != feedingKeysForLists().end();
+            for (const cascade::core::DecoderStatus& st : status) {
+                if (st.key == p.key && st.reason != cascade::core::DecoderIdleReason::Running) { d.status = st.detail.empty() ? idleWord(st.reason) : st.detail; }
+            }
+            if (!p.loaded) { d.status = p.status; }
+            rl.decoders.push_back(std::move(d));
+        }
+    }
 }
 
 // API 0.3's collections, and the 0.2 lists step 1 left out
@@ -783,7 +856,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         b.facts[key] = ApiListBlock::Fact{std::move(value), localOnly};
     };
     // The runner's rows, copied once for the block: DECODERS' idle word and the fitted modules' idle sentence.
-    const std::vector<cascade::core::DecoderStatus> status = pluginRunner_.status();
+    const std::vector<cascade::core::DecoderStatus> status = allDecoderStatus();
     // DECODERS: every decoder plugin, running or not, and why not.
     {
         for (const ApiListBlock::Plugin& p : b.plugins) {
@@ -791,10 +864,15 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             ApiListBlock::Decoder d;
             d.name = p.name;
             d.key = p.key;
-            d.running = p.running;
+            d.radio = p.radio;
+            d.running = p.running && p.radio == 1u;   // (ON THE FIRST RADIO: the list is radio 1's; the other radios' are read_radio_list's)
             d.mutes = p.mutes;
-            d.fed = rx().pipeline_.running() && std::find(feedingKeysScratch_.begin(), feedingKeysScratch_.end(),
-                                                     p.key) != feedingKeysScratch_.end();
+            {
+                // FED = its own radio's receiver is running and some runner is feeding it (stage 6; with one radio this is the line it always was).
+                const std::size_t slot = static_cast<std::size_t>(p.radio) - 1u;
+                const bool radioRunning = slot < kMaxReceivers && receivers_[slot] && receivers_[slot]->pipeline_.running();
+                d.fed = p.radio == 1u && radioRunning && std::find(feedingKeysForLists().begin(), feedingKeysForLists().end(), p.key) != feedingKeysForLists().end();
+            }
             for (const cascade::core::DecoderStatus& st : status) {
                 if (st.key == p.key && st.reason != cascade::core::DecoderIdleReason::Running) {
                     d.status = st.detail.empty() ? idleWord(st.reason) : st.detail;
@@ -829,6 +907,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             const cascade::core::LoadedPlugin& p = records[i];
             const std::string k = "plugin." + w.key + ".";
             fact(k + "path", p.path, true);
+            fact(k + "radio", std::to_string(w.radio));   // the radio the plugin runs on (stage 6; PLUGIN_RADIO sets it)
             fact(k + "version", p.version);
             fact(k + "author", p.author);
             fact(k + "licence", p.licence);
@@ -1240,6 +1319,20 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // (both, left, right, none: only "both" until slots 1 and up carry audio) and the decoder plugins running on it, their module files separated by commas.
     fact("radio.count", std::to_string(receiverCount()));
     fact("radio.max", std::to_string(kMaxReceivers));
+    fact("radio.solo", std::to_string(soloRadio_));   // the radio heard alone, 0 = nobody (RADIO_SOLO's read-back; multi-radio stage 5 addition)
+    // WHERE THE ONE SCANNER IS (stage 6): the number of the radio it was started on while it is active, else 0; and WHICH RADIO THE TRANSMITTER FOLLOWS (the Pluto's radio, else 1).
+    fact("scanner.radio", std::to_string(scanner_.active() ? scannerSlot_ + 1u : 0u));
+    fact("transmit.radio", std::to_string(transmitRadioSlot() + 1u));
+    {
+        // WHAT THE LAST RESTORE OF THE SAVED RADIOS COULD NOT DO (engine stage 5): one sentence per radio, by number and by the device's name, separated by newlines;
+        // absent when every saved radio came back.
+        std::string notes;
+        for (const std::string& n : radioRestoreNotes_) {
+            if (!notes.empty()) { notes += '\n'; }
+            notes += n;
+        }
+        if (!notes.empty()) { fact("radio.restore", notes); }
+    }
     for (std::uint32_t n = 1; n <= kMaxReceivers; ++n) {
         if (!receiverLive(n)) { continue; }
         const std::string pre = "radio." + std::to_string(n) + ".";
@@ -1255,11 +1348,11 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         // (The first radio's route is read from its own slot like any other's.)
         std::string running;
         for (const ApiListBlock::Plugin& p : b.plugins) {
-            if (!p.decoder || !p.running) { continue; }
+            if (!p.decoder || !p.running || p.radio != n) { continue; }
             if (!running.empty()) { running += ','; }
             running += p.key;
         }
-        fact(pre + "plugins", n == 1u ? running : std::string());
+        fact(pre + "plugins", running);
     }
     {
         std::string centre;

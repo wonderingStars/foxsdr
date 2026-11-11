@@ -367,7 +367,7 @@ void Engine::changeConverter(const cc::ConverterSetting& s) {
     // A new frequency as far as everything downstream is concerned (a relabel
     // is one too; applyRetuneNow already told them when the radio moved).
     rx().pipeline_.resetRds();
-    pluginRunner_.retune(rx().pipeline_.activeSource().centerFrequencyHz());
+    runner().retune(rx().pipeline_.activeSource().centerFrequencyHz());   // (the scoped radio's decoders - stage 6)
     // Which way it was set, never a frequency (PRIVACY.md: what somebody
     // tunes to stays out of reports - an LO says which band they listen to).
     cascade::core::diagLogf("source: converter %s%s for the %s", cc::converterModeKey(eff.mode),

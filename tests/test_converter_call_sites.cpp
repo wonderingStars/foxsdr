@@ -127,6 +127,9 @@ const Allowed kAllowed[] = {
     {"app_window.cpp", "ppmPreTellHz(kind, args, dev->hasFrequencyCorrection(), radioHz)",
      "startup restore: radioHz is radioHzForSource(...), then the crystal correction for a radio "
      "corrected by retuning (0.99.56; test_ppm_app testStartupRestore)"},
+    {"app_window_radio_saved.cpp", "ppmPreTellHz(kind, args, dev->hasFrequencyCorrection(), radioHz)",
+     "restore of an added radio (multi-radio stage 5, restoreExtraRadioDevice): the startup restore's own line for the radio this thread has selected - radioHz is "
+     "radioHzForSource(...), then the crystal correction for a radio corrected by retuning (tests/test_engine_api_saved_radios.cpp restores a device radio)"},
     {"app_window.cpp", "dev->setCenterFrequencyHz(*r.preTuneRadioHz)",
      "RSP pre-Init tune on the open worker: preTuneRadioHz is radioFromAir(...) of keepCenterHz, "
      "converted on the GUI thread in launchDeviceOpen (test_converter_app_paths "

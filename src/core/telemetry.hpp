@@ -69,6 +69,9 @@ struct TelemetrySession {
     std::vector<std::string> panels;            // panels opened, deduplicated
     std::vector<std::string> plugins;           // "name version", installed
     std::string sdrModel;                       // "B200"; serial stripped
+    // THE HIGHEST NUMBER OF RECEIVERS RUNNING AT ONCE this session (multi-radio engine stage 5), sent as `radios_max`: a bare count, 1 for a user
+    // with one radio. toJson() sends it clamped to 1..8.
+    std::uint32_t radiosMax = 1;
 };
 
 // What is actually transmitted. Kept as a struct so a test can assert on the

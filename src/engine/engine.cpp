@@ -145,7 +145,7 @@ Engine::Engine(EngineHost& host)
     providers.catSession = [this](const std::string& label) { return openCatSession(*api_, label); };
     // (stage 5e) The receiver plugins' pictures: the host's image feed owns the ONE accumulator that polls the decoders (a decoder offers a
     // picture once, so two pollers would split them), through the runner this engine owns.
-    providers.pollImages = [this](std::vector<cascade::core::HostImage>& out) { pluginRunner_.pollImages(out); };
+    providers.pollImages = [this](std::vector<cascade::core::HostImage>& out) { pollAllImages(out); };
     servers_.attach(std::move(providers));
 }
 
@@ -3068,8 +3068,8 @@ void Engine::followInputRate() {
     // they were built for. Cheap when no plugins are loaded, and it must run
     // even when the rate was REFUSED above: the centre frequency has usually
     // moved regardless, and a decoder told the wrong one reports confidently
-    // wrong things.
-    refreshPluginRunner();
+    // wrong things. (Only the decoders of THIS radio: another radio's source did not change - stage 6.)
+    refreshPluginRunner(/*allRadios=*/false);
 }
 
 void Engine::setVfoToAbsoluteHz(double wantAbsHz, bool snap) {
@@ -3207,6 +3207,12 @@ bool Engine::detachAndUnloadPlugins(cascade::core::PhaseClock* phases) {
     txPluginModuleGoing(std::string(), "the plugins were unloaded");
     rx().pipeline_.setPluginRunner(nullptr);
     pluginRunner_.clear();
+    // ...and every added radio's (stage 6): detached from its pipeline first, then the instances destroyed, before the modules are unmapped.
+    for (std::size_t slot = 1; slot < kMaxReceivers; ++slot) {
+        if (!radioRunners_[slot]) { continue; }
+        if (receivers_[slot]) { receivers_[slot]->pipeline_.setPluginRunner(nullptr); }
+        radioRunners_[slot]->clear();
+    }
     // THE PATCH'S DECODERS, BY THE SAME RULE AND SYNCHRONOUSLY. A patch set
     // can hold instances of these very plugins (0.99.15), and unlike the
     // runner above it is not detached by a pointer - the DSP thread may be
@@ -4061,7 +4067,15 @@ void Engine::removeInstalledPlugin(const std::string& fileName) {
     rescanPlugins();
 }
 
-void Engine::refreshPluginRunner() {
+void Engine::refreshPluginRunner(bool allRadios) {
+    // A SOURCE CHANGE ON AN ADDED RADIO (stage 6): its own decoders against its own new rate and centre, and nothing else. The plugin UI's half (the directive below) is not
+    // rebuilt for it - no plugin was added or removed, and a track source rebuilt for another radio's retune would lose its targets.
+    if (!allRadios && scopedSlot() != 0u) {
+        pushPluginHoldSets();
+        rebuildRunnerOf(scopedSlot());
+        rebuildMuteStates();
+        return;
+    }
     // Decoder instances are created FOR a sample rate and a centre frequency,
     // so they are only valid for the source that was active when they were
     // built. Both change when the user switches source, opens a file, or when
@@ -4125,12 +4139,28 @@ void Engine::refreshPluginRunner() {
     // poll) or a plugin's own worker, and the active source is swapped by the pass - a read of it from outside the pass is a read
     // of an object that can be replaced under it. The published state is the pass's own copy of the same figure, at most one pass
     // old. Before the first publish there is no pass beside this call (the scan in initialise), so the source is read directly.
+    //
+    // WHICH RADIO (stage 6): the runner labels every call it makes into plugin code with its radio (PluginRunner::currentRadio), so a decoder that asks from inside create(),
+    // process() or destroy() is answered from the radio it is running on; a call from anywhere else (a plugin's own thread, the window's poll) is answered from the first radio's.
     svc.centreHz = [this] {
+        const std::uint32_t radio = std::max<std::uint32_t>(1u, cascade::core::PluginRunner::currentRadio());
         cascade::core::PublishedState ps;
+        if (radio != 1u) {
+            const std::shared_ptr<cascade::core::ReceiverSnapshot> snap = snapshotOf(radio);
+            return (snap != nullptr && snap->read(ps)) ? ps.rx.centreHz : 0.0;
+        }
         if (rx().receiverSnapshot_->read(ps)) { return ps.rx.centreHz; }
         return controlThreadRunning() ? 0.0 : rx().pipeline_.activeSource().centerFrequencyHz();
     };
-    svc.sampleRateHz = [this] { return rx().pipeline_.inputRateHz(); };
+    svc.sampleRateHz = [this] {
+        const std::uint32_t radio = std::max<std::uint32_t>(1u, cascade::core::PluginRunner::currentRadio());
+        if (radio != 1u) {
+            cascade::core::PublishedState ps;
+            const std::shared_ptr<cascade::core::ReceiverSnapshot> snap = snapshotOf(radio);
+            return (snap != nullptr && snap->read(ps)) ? ps.rx.sampleRateHz : 0.0;
+        }
+        return rx().pipeline_.inputRateHz();
+    };
     svc.unixTimeMs = [] {
         return static_cast<std::int64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -4147,7 +4177,9 @@ void Engine::refreshPluginRunner() {
     // not from the pipeline (a read of the source from outside the pass).
     svc.tuneFrom = [this](const std::string& key, double hz) -> std::int32_t {
         cascade::core::PublishedState ps;
-        if (rx().receiverSnapshot_->read(ps) && !(ps.rx.sampleRateHz > 0.0)) { return CASCADE_TUNE_NO_DEVICE; }
+        // The plugin's own radio's state (stage 6): a plugin on radio 2 asking to tune is asking about radio 2.
+        const std::shared_ptr<cascade::core::ReceiverSnapshot> snap = snapshotOf(pluginApi_->clientRadio(key));
+        if (snap != nullptr && snap->read(ps) && !(ps.rx.sampleRateHz > 0.0)) { return CASCADE_TUNE_NO_DEVICE; }
         return pluginApi_->queueCentreRetune(key, hz);
     };
     // THE GRANTS GO IN BEFORE THE DIRECTIVE: a plugin may ask for the receiver from inside its attach(), and must be answered
@@ -4204,21 +4236,13 @@ void Engine::refreshPluginRunner() {
     // A REBUILD DESTROYS THE TRANSMIT INSTANCES: a plugin that is keyed loses its key and its window here (stub campaign B13), not a block later; one that is merely armed
     // is left as it is (its instances come back asking, and the window is still the operator's).
     txPluginModuleGoing(std::string(), "the plugins were rebuilt");
-    rx().pipeline_.setPluginRunner(nullptr);
-    if (patchRunning_) {
-        // THE PATCH HAS THE DECODERS (0.99.18). While it runs the
-        // receiver runs only on the generator, and a plugin publishes its map
-        // targets through ONE snapshot per module (the ADS-B plugin says so in
-        // its own source) - so the receiver's ADS-B instance, fed generator
-        // noise, would overwrite the aircraft the patch's ADS-B instance is
-        // finding, every block. No receiver decoders while the patch runs;
-        // stopping it calls this again and they come back.
-        pluginRunner_.clear();
+    // EVERY RADIO'S DECODERS, each against its own source (stage 6), or - for a source change on the first radio - the first radio's alone. While the patch runs the
+    // receivers' decoders stand down (rebuildRunnerOf clears them): the patch has its own instances of these plugins, and a second set fed the generator's noise would
+    // overwrite what the patch finds, a plugin publishing its map targets through ONE snapshot per module (the ADS-B plugin says so in its own source).
+    if (allRadios) {
+        rebuildAllRunners();
     } else {
-        pluginRunner_.rebuild(pluginHost_.plugins(), cascade::core::Pipeline::kAudioRateHz,
-                              rx().pipeline_.inputRateHz(),
-                              rx().pipeline_.activeSource().centerFrequencyHz());
-        rx().pipeline_.setPluginRunner(&pluginRunner_);
+        rebuildRunnerOf(0u);
     }
     // AND THE MUTE SNAPSHOT AFTER THE REBUILD, not before it. It carries the
     // running state, and running now means the runner is ACTUALLY FEEDING the
@@ -4434,6 +4458,8 @@ void Engine::applyUserPresetEdit(const PendingUserPresetEdit& edit) {
 
 void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
                                   const CascadePreset& ps, bool pin) {
+    // THE PLUGIN'S OWN RADIO (stage 6): a preset tunes the radio the plugin runs on, and the decoders are rebuilt against that radio.
+    const RadioWork pluginsRadio(*this, static_cast<std::size_t>(radioOfPlugin(cascade::core::pluginKey(p))) - 1u);
     // A PRESET ON A STOPPED PLUGIN STARTS IT. Pressing "ADS-B 1090 MHz" is an
     // unambiguous "I want this plugin now", and the alternative is the worst
     // outcome this feature can produce: the radio dutifully retunes to 1090 MHz
@@ -4639,7 +4665,22 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     std::size_t runnerActive = 0;
     std::uint32_t matchedModules = 0;
     std::uint32_t fittedModules = 0;
-    pluginRunner_.feedSnapshot(runnerActive, feedingKeysScratch_);
+    // THE SCOPED RADIO'S RUNNER (stage 6): the decoders of the radio this state is the state of. The first radio's keys land in feedingKeysScratch_ as always; another radio's
+    // in a scratch of its own, so the lists - which want the keys fed on ANY radio - are built from feedingKeysAll_ (made here, only when there is more than one runner).
+    std::vector<std::string>& feedingKeys = scopedSlot() == 0u ? feedingKeysScratch_ : feedingKeysExtraScratch_;
+    runner().feedSnapshot(runnerActive, feedingKeys);
+    if (scopedSlot() == 0u && anyExtraRunner()) {
+        feedingKeysAll_ = feedingKeysScratch_;
+        for (std::size_t slot = 1; slot < kMaxReceivers; ++slot) {
+            if (!radioRunners_[slot]) { continue; }
+            std::size_t n = 0;
+            std::vector<std::string> more;
+            radioRunners_[slot]->feedSnapshot(n, more);
+            for (std::string& k : more) {
+                if (std::find(feedingKeysAll_.begin(), feedingKeysAll_.end(), k) == feedingKeysAll_.end()) { feedingKeysAll_.push_back(std::move(k)); }
+            }
+        }
+    }
     refreshApiPluginKeys();
     {
         const auto& plugins = pluginHost_.plugins();
@@ -4650,15 +4691,11 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
             ++fittedModules;
             const std::string& key = apiPluginKeys_[i];
             if (key.empty()) { continue; }
-            if (std::find(feedingKeysScratch_.begin(), feedingKeysScratch_.end(), key) !=
-                feedingKeysScratch_.end()) {
-                ++matchedModules;
-            }
+            if (std::find(feedingKeys.begin(), feedingKeys.end(), key) != feedingKeys.end()) { ++matchedModules; }
         }
     }
     // RUNNING is fed with the receiver running; stopped, nothing is fed.
-    // (Decoder plugins run on the first radio only until stage 6: an added radio is fed none.)
-    const std::uint32_t fedModules = (running && scopedSlot() == 0u) ? matchedModules : 0u;
+    const std::uint32_t fedModules = running ? matchedModules : 0u;
 
     // THE RECEIVER RAIL'S READOUTS (API 0.3 8.4), each read ONCE: the flag word,
     // the members below and /api/status's extension (AppStateExt) all take
@@ -4686,7 +4723,7 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     fs.recordingAudio = rx().audioRecorder_.recording();
     fs.scannerActive = scanner_.active() && scannerSlot_ == scopedSlot();
     // The DEC lamp's own predicate (drawToolbar's MASTER cluster).
-    fs.decoderActive = scopedSlot() == 0u && running && runnerActive > 0;
+    fs.decoderActive = running && runnerActive > 0;
     // THE KEY, as the engine API's rules decided it this pass (stage 4).
     const ApiHost::TxFacts key = api_->txFacts();
     fs.txAvailable = transmitter_.haveSink();
@@ -4903,7 +4940,7 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     // acquisition of the runner's lock (it was two, audioGaps() and
     // audioGapFrames(); the name is the third read, and the status text's own
     // publish still asks for it separately).
-    const bool pluginPlaying = pluginRunner_.audioPathSnapshot(
+    const bool pluginPlaying = runner().audioPathSnapshot(
         e.audioPluginGaps, e.audioPluginGapFrames, r.audioPlayingPlugin, sizeof(r.audioPlayingPlugin));
     r.audioPluginGaps = e.audioPluginGaps;
     r.audioPluginGapFrames = e.audioPluginGapFrames;
@@ -5009,7 +5046,11 @@ void Engine::applyPluginApi() {
     for (const cascade::core::PluginControl& c : controls) {
         if (!api.controlStillAllowed(c)) { continue; }
         FoxCommand command{};
-        if (cascade::net::pluginControlToCommand(c, command)) { (void)applyCommand(command); }
+        // AIMED AT THE PLUGIN'S OWN RADIO (stage 6): a command a plugin queues moves the radio it runs on, never the focus of a session and never another radio.
+        if (cascade::net::pluginControlToCommand(c, command)) {
+            command.target = api.clientRadio(c.client);
+            (void)applyCommand(command);
+        }
     }
     // The legacy request_tune's queued retunes (pump move step P3): each retunes the SOURCE's centre, as the call always did,
     // here on the pass - after the grant is checked again, and only while a device is open (the call's own answer said so then;
@@ -5019,6 +5060,9 @@ void Engine::applyPluginApi() {
         api.takeCentreRetunes(retunes);
         for (const cascade::core::PluginApiCore::CentreRetune& r : retunes) {
             if (!api.centreRetuneStillAllowed(r)) { continue; }
+            const std::uint32_t radio = api.clientRadio(r.client);
+            if (!receiverLive(radio)) { continue; }
+            RadioWork asked(*this, static_cast<std::size_t>(radio) - 1u);
             if (!(rx().pipeline_.activeSource().sampleRateHz() > 0.0)) { continue; }
             retuneSourceHz(r.hz);
         }
@@ -5114,7 +5158,7 @@ std::size_t Engine::fedDecoderCount() const {
         if (p.decoder == nullptr && p.iqDecoder == nullptr && p.imageDecoder == nullptr) {
             continue;
         }
-        if (pluginRunner_.isFeeding(cascade::core::pluginKey(p))) { ++n; }
+        if (pluginFeedingAnywhere(cascade::core::pluginKey(p))) { ++n; }
     }
     return n;
 }
@@ -5254,7 +5298,8 @@ void Engine::rebuildMuteStates() {
         // was not being fed. Silence on behalf of a decoder the application
         // itself says is doing nothing is silence for a reason that is not a
         // reason.
-        m.running = !pluginIsStopped(m.key) && pluginRunner_.isFeeding(m.key);
+        // (The mute machine is one latch with one popup and mutes the first radio: a plugin on another radio never mutes it - stage 6.)
+        m.running = !pluginIsStopped(m.key) && radioOfPlugin(m.key) == 1u && pluginRunner_.isFeeding(m.key);
         m.mutes = pluginMutes(p);
         // THE SAME ENUMERATION drawPluginPresets and the preset bars use - one
         // walk of this plugin's table, capped and filtered once, rather than
@@ -5420,7 +5465,13 @@ void Engine::pumpDecoderOutput() {
     // is bounded and drops silently by design (the DSP thread must never
     // block on the GUI), so draining only while the Plugins section happened
     // to be expanded would quietly lose decodes the user never knew existed.
-    for (cascade::core::DecodedLine& l : pluginRunner_.drainText()) {
+    std::vector<cascade::core::DecodedLine> drained = pluginRunner_.drainText();
+    for (std::size_t slot = 1; slot < kMaxReceivers; ++slot) {
+        if (!radioRunners_[slot]) { continue; }
+        std::vector<cascade::core::DecodedLine> more = radioRunners_[slot]->drainText();
+        drained.insert(drained.end(), std::make_move_iterator(more.begin()), std::make_move_iterator(more.end()));
+    }
+    for (cascade::core::DecodedLine& l : drained) {
         // COUNTED HERE BECAUSE THIS IS THE ONLY PLACE THAT SEES THEM ALL.
         // decoderLog_ is a bounded tail and drops its oldest entries, so its
         // size is not a count of anything; the status column's rate card
@@ -5536,6 +5587,8 @@ void Engine::closeTransmitRadio() {
 
 void Engine::followTransmitFrequency() {
     if (!transmitter_.haveSink()) { return; }
+    // THE RADIO THE TRANSMITTER FOLLOWS (stage 6): the Pluto's radio, else the first (transmitRadioSlot).
+    const SlotScope followed(this, transmitRadioSlot());
     const double want = cascade::gui::txFrequencyHz(transmitSplit_, transmitSplitHz_,
                                                     std::max(0.0, currentAbsoluteHz()));
     // ONLY WHEN IT HAS MOVED. This runs every frame and a Pluto's retune is a
@@ -6119,7 +6172,7 @@ std::vector<cascade::gui::RunnableDecoder> Engine::runnableDecoders() const {
         rd.name = lp.name;
         rd.key = cascade::core::pluginKey(lp);
         rd.stopped = pluginIsStopped(rd.key);
-        rd.feeding = pluginRunner_.isFeeding(rd.key);
+        rd.feeding = pluginFeedingAnywhere(rd.key);
         rd.idle = pluginIsIdle(rd.key);
         runnable.push_back(std::move(rd));
     }
@@ -6377,7 +6430,7 @@ void Engine::applyRetuneNow(double centerHz, bool isPluginPreset) {
     // tuning step and the decoder should be told where it actually is.
     const double landedHz = src.centerFrequencyHz();
     // (The decoders run on the first radio only until stage 6: another radio's retune is none of theirs.)
-    if (scopedSlot() == 0u) { pluginRunner_.retune(landedHz); }
+    runner().retune(landedHz);   // (the scoped radio's decoders - stage 6)
 
     // SAY WHEN THE RADIO CANNOT TUNE THERE. Measured on a USRP B200: a request
     // for 7.000 MHz landed at 30.800 MHz with sourceError_, faultMessage and
@@ -6703,7 +6756,7 @@ void Engine::fillStatusLists(cascade::net::RadioStatus& s, const std::string& fa
     // coming out of this radio. Empty is the ordinary case: the demodulated
     // audio is playing and the two gap counters (figures) have nothing to
     // report.
-    s.audioSource = pluginRunner_.playingPlugin();
+    s.audioSource = runner().playingPlugin();
     s.recordDir = recordDir_;
     s.recordError = rx().recordError_;
     s.recordNotice = rx().recordNotice_;
@@ -7015,6 +7068,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             return radioAudioOp(c, res);
         case FOXAPI_OP_RADIO_SOLO:
             return radioSoloOp(c, res);
+        case FOXAPI_OP_PLUGIN_RADIO:
+            return pluginRadioOp(c, text, res);
         // --- the receiver ----------------------------------------------------
         case FOXAPI_OP_RUN:
             // The dome, the Start/Stop key, the scope's POWER, the web remote
@@ -7028,7 +7083,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 // the dome, a key binding, a browser, a remote session - a
                 // stop opens any key and marks a latch's principal.
                 // (The transmitter follows the first radio's device until the screen says otherwise: another radio's stop is not the key's end.)
-                if (scopedSlot() == 0u) { api_->endKeyFromEngine("the receiver was stopped"); }
+                if (scopedSlot() == transmitRadioSlot()) { api_->endKeyFromEngine("the receiver was stopped"); }
                 // THE TEST SEAM OF FOXSDR_HOLD_AUDIO_LOCK, taken HERE so that the stop below runs while the audio mutex is held - for a control
                 // request's stop only (the web remote's and a plugin's), as it always was.
                 if (!commandFromWindow_ && holdAudioLockMs_ > 0 && !holdAudioLockDone_ && rx().pipeline_.running()) { holdAudioLockForTest(); }
@@ -8000,7 +8055,11 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if (c.ival[0] < 0 || c.ival[1] < 0 || c.ival[0] > 0xFFFFFFFFll || c.ival[1] > 0xFFFFFFFFll) {
                 return refuse(FOXAPI_OUT_OF_RANGE, "a click is a position inside the picture");
             }
-            if (!pluginRunner_.imagePress(text, static_cast<std::uint32_t>(c.ival[0]), static_cast<std::uint32_t>(c.ival[1]))) {
+            bool pressed = false;
+            forEachRunner([&](cascade::core::PluginRunner& r) {
+                pressed = pressed || r.imagePress(text, static_cast<std::uint32_t>(c.ival[0]), static_cast<std::uint32_t>(c.ival[1]));
+            });
+            if (!pressed) {
                 res.status = FOXAPI_NO_CHANGE;   // nothing was delivered: no such picture, no input, an inert picture, outside it, or the plugin is switched off
             }
             return res;
@@ -8768,6 +8827,7 @@ void Engine::telemetryJournal(cascade::core::AppConfig& cfg) {
     // MODEL ONLY - sanitiseDevice strips the serial, which the raw args carry
     // twice (once alone, once inside the label).
     r.session.sdrModel = rx().deviceModel_;
+    r.session.radiosMax = telemetryRadiosMax_;   // the highest number of receivers running at once this session (engine stage 5)
     for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
         if (p.loaded && r.session.plugins.size() < 20) {
             r.session.plugins.push_back(p.name + " " + p.version);
@@ -9417,6 +9477,10 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     // at the top of run(); from here the engine is the one writer).
     diagContextHave_ = false;
     pumpDiagContext();
+    // RADIOS 2 TO 8 (engine stage 5): through RADIO_ADD and the ordinary ops, last, so that the first radio's restore (which settled the band plan, the converters,
+    // the per-device memories and the output) is what they come back against. A file without `radios` restores no one.
+    restoreSavedRadios(cfg);
+    restorePluginRadios(cfg);
 }
 
 // THE RECEIVER'S HALF OF THE CONFIG SNAPSHOT (engine stage 3a): every line of
@@ -9574,6 +9638,9 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
     cfg.closedWindows.clear();
     cfg.pluginMuteOverride = pluginMuteOverride_;
     cfg.userPresets = userPresets_;
+    // RADIOS 2 TO 8: read out of each radio's Receiver (engine stage 5). Empty with one radio, and then the file is the file 0.99.104 writes.
+    cfg.radios = savedRadios();
+    cfg.pluginRadio = pluginRadio_;   // (radio 1 is the absence of an entry; the map never holds one)
     telemetryJournal(cfg);
     // FALSE while running, so a start-up that reads it back knows the previous
     // session never got as far as writing true. Set only on the clean exit

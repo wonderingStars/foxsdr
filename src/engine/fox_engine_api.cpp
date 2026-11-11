@@ -841,6 +841,16 @@ public:
     void radioClosed(std::size_t slot) {
         if (slot == 0 || slot >= kMaxReceivers) { return; }
         radioFrames_[slot] = cascade::core::SpectrumFrame{};   // (the pass's: the next radio in the slot counts its frames from 1 again)
+        // A SESSION FOCUSED ON THE RADIO THAT WENT is moved to radio 1 (always there), and every seq group of its reads moves, as after any change of focus.
+        {
+            std::lock_guard<std::mutex> lk(sessionsMutex_);
+            for (const auto& kv : sessions_) {
+                if (kv.second->focus.load(std::memory_order_acquire) == static_cast<std::uint32_t>(slot) + 1u) {
+                    kv.second->focus.store(1u, std::memory_order_release);
+                    kv.second->focusBump.fetch_add(1, std::memory_order_acq_rel);
+                }
+            }
+        }
         {
             std::lock_guard<std::mutex> lk(radioRingsMutex_);
             if (radioRings_[slot]) { radioRings_[slot]->retire(); }
@@ -939,7 +949,14 @@ public:
         return FOXAPI_OK;
     }
 
-    int32_t readList(const ApiSession* s, uint32_t list, uint32_t index, FoxListItem* out);
+    // `radio` (multi-radio stage 6): which radio's copy of GAINS, ANTENNAS, SAMPLE_RATES and DECODERS - 0 is the session's focused radio (what read_list means for these
+    // four); any other list is not one radio's and ignores it.
+    int32_t readList(const ApiSession* s, uint32_t list, uint32_t index, FoxListItem* out, uint32_t radio = 0u);
+    int32_t readRadioList(const ApiSession* s, uint32_t radio, uint32_t list, uint32_t index, FoxListItem* out) {
+        if (list != FOXAPI_LIST_GAINS && list != FOXAPI_LIST_ANTENNAS && list != FOXAPI_LIST_SAMPLE_RATES && list != FOXAPI_LIST_DECODERS) { return FOXAPI_BAD_ARGUMENT; }
+        if (radio > kMaxReceivers) { return FOXAPI_NO_DEVICE; }
+        return readList(s, list, index, out, radio);
+    }
 
     int32_t getSetting(ApiSession* s, const char* key, char* buf, std::size_t cap) {
         if (key == nullptr || (buf == nullptr && cap != 0)) { return FOXAPI_BAD_ARGUMENT; }
@@ -2726,7 +2743,7 @@ void ApiHostImpl::endPass() {
     }
 }
 
-int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index, FoxListItem* out) {
+int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index, FoxListItem* out, uint32_t radio) {
     if (out != nullptr && out->structSize < FOXAPI_MIN_LIST_ITEM) { return FOXAPI_BAD_ARGUMENT; }
     const bool local = (s->flags & FOXAPI_SESSION_LOCAL) != 0u;
     std::shared_ptr<const ApiListBlock> b;
@@ -2735,6 +2752,25 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
         b = lists_;
     }
     if (b == nullptr) { b = std::make_shared<const ApiListBlock>(); }
+    // THE FOUR LISTS THAT DESCRIBE ONE RADIO follow the radio asked for (read_radio_list) or, with none named, the session's focus (read_list): radio 1's are the block's own
+    // fields, another radio's are copied over them into a block of this read's own, so that the one switch below serves every radio.
+    if (list == FOXAPI_LIST_GAINS || list == FOXAPI_LIST_ANTENNAS || list == FOXAPI_LIST_SAMPLE_RATES || list == FOXAPI_LIST_DECODERS) {
+        if (radio == 0u) { radio = s->focus.load(std::memory_order_acquire); }
+        if (!engine_.receiverLive(radio)) { return FOXAPI_NO_DEVICE; }
+        if (radio != 1u) {
+            if (radio < 2u || radio > ApiListBlock::kRadios || !b->radios[radio - 1u].present) { return FOXAPI_NO_DEVICE; }
+            const ApiListBlock::RadioLists& rl = b->radios[radio - 1u];
+            auto view = std::make_shared<ApiListBlock>();
+            view->rates = rl.rates;
+            view->rateLabels = rl.rateLabels;
+            view->rateHz = rl.rateHz;
+            view->gains = rl.gains;
+            view->antennas = rl.antennas;
+            view->antenna = rl.antenna;
+            view->decoders = rl.decoders;
+            b = std::move(view);
+        }
+    }
     FoxListItem it{};
     it.structSize = sizeof(it);
     it.list = list;
@@ -2874,6 +2910,7 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 it.id = index + 1u;
                 copyText(it.name, d.name.c_str());
                 copyText(it.detail, d.status.c_str());
+                it.value[0] = static_cast<double>(d.radio);   // multi-radio stage 6: the radio the plugin runs on
                 if (d.running) { it.flags |= FOXAPI_ITEM_ACTIVE; }
                 if (d.fed) { it.flags |= FOXAPI_ITEM_FED; }
                 if (d.mutes) { it.flags |= FOXAPI_ITEM_MUTES; }  // 0.3 (8.7)
@@ -3561,6 +3598,10 @@ int32_t FOXAPI_CALL apiReadList(FoxSession* s, uint32_t list, uint32_t index, Fo
     return onSession(s, [&](ApiSession* x) { return x->host->readList(x, list, index, out); });
 }
 
+int32_t FOXAPI_CALL apiReadRadioList(FoxSession* s, uint32_t radio, uint32_t list, uint32_t index, FoxListItem* out) {
+    return onSession(s, [&](ApiSession* x) { return x->host->readRadioList(x, radio, list, index, out); });
+}
+
 int32_t FOXAPI_CALL apiGetSetting(FoxSession* s, const char* key, char* buf, size_t cap) {
     return onSession(s, [&](ApiSession* x) { return x->host->getSetting(x, key, buf, cap); });
 }
@@ -3616,7 +3657,9 @@ const FoxEngineApi kApi = {
         FOXAPI_CAP_FACTS | FOXAPI_CAP_LONG_TEXT | FOXAPI_CAP_SCOPE | FOXAPI_CAP_NODE_SPECTRUM | FOXAPI_CAP_IMAGES |
         // API 0.3 9.15 (shell retirement R4): the in-process extension points (the plugin UI plane). An engine that serves them says so; a
         // transport's client library does not, and a REMOTE session is refused them whatever the word says.
-        FOXAPI_CAP_LOCAL_EXT,
+        FOXAPI_CAP_LOCAL_EXT |
+        // API 0.3, multi-radio (stages 3, 4 and 6): several radios, the per-radio reads and the plugins' radio.
+        FOXAPI_CAP_RADIOS,
     "FoxSDR engine",
     CASCADE_VERSION_STRING,
     apiCreate,
@@ -3641,9 +3684,10 @@ const FoxEngineApi kApi = {
     apiReadNodeSpectrum,
     apiSubmitText,
     apiGetLocalExtension,
-    // 0.3, multi-radio (stage 3): no capability bit - FOXAPI_HAS is the test.
+    // 0.3, multi-radio (stages 3 and 6): FOXAPI_CAP_RADIOS says the set is served; FOXAPI_HAS is still the test of one function.
     apiReadRadioState,
     apiReadRadioSpectrum,
+    apiReadRadioList,
 };
 
 }  // namespace

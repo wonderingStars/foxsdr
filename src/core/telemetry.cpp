@@ -287,6 +287,7 @@ std::string TelemetryReport::toJson() const {
     // Through scrubModel a second time, as health goes through its vocabulary:
     // whatever this member was filled with, no serial or address leaves.
     j["sdr"] = scrubModel(session.sdrModel);
+    j["radios_max"] = session.radiosMax < 1u ? 1u : (session.radiosMax > 8u ? 8u : session.radiosMax);
     nlohmann::json modes = nlohmann::json::object();
     for (const auto& kv : session.modeSeconds) {
         modes[kv.first] = kv.second;

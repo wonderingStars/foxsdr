@@ -174,6 +174,8 @@ struct ConfigFieldInfo {
     X(closedWindows,           Engine,    false) \
     X(pluginsStopped,          Engine,    false) \
     X(pluginRun,               Engine,    false) \
+    X(pluginRadio,             Engine,    false) \
+    X(radios,                  Engine,    false) \
     X(pluginMuteOverride,      Engine,    false) \
     X(pluginSettingsAllowed,   Engine,    false) \
     X(pluginTransmitAllowed,   Engine,    false) \

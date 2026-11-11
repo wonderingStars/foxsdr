@@ -457,6 +457,13 @@ void testCapabilityWord() {
              const int32_t unknown = api()->get_local_extension(r.e.apiHandle(), 99u, &a, &out);
              return shortArgs == FOXAPI_BAD_ARGUMENT && unknown == FOXAPI_UNSUPPORTED && out == nullptr;
          }()},
+        // (multi-radio stage 6, deliberately added to the word) several radios at once: the per-radio reads of the state, the spectrum and the four lists are in the table, the ops
+        // that open, close, route and solo a radio and place a plugin on one are known, a radio that is not there is NO_DEVICE, and a list that is not one radio's is refused.
+        {FOXAPI_CAP_RADIOS, "RADIOS", true,
+         FOXAPI_HAS(api(), read_radio_state) && FOXAPI_HAS(api(), read_radio_spectrum) && FOXAPI_HAS(api(), read_radio_list) && known(FOXAPI_OP_RADIO_ADD) &&
+             known(FOXAPI_OP_RADIO_REMOVE) && known(FOXAPI_OP_RADIO_AUDIO) && known(FOXAPI_OP_RADIO_SOLO) && known(FOXAPI_OP_PLUGIN_RADIO) &&
+             api()->read_radio_list(s.s, 5, FOXAPI_LIST_GAINS, 0, nullptr) == FOXAPI_NO_DEVICE &&
+             api()->read_radio_list(s.s, 1, FOXAPI_LIST_BOOKMARKS, 0, nullptr) == FOXAPI_BAD_ARGUMENT && fact(s, "fact.radio.max").size() > 0u},
     };
     std::uint64_t listed = 0;
     for (const Row& row : rows) {
@@ -469,14 +476,14 @@ void testCapabilityWord() {
         CHECK(row.probe);
     }
     // Every bit the header defines is in the table (a new bit with no row fails here), and the retired one stays clear.
-    for (int bit = 0; bit <= 29; ++bit) {
+    for (int bit = 0; bit <= 30; ++bit) {
         if (bit == 14) {
             CHECK((caps & (1ull << bit)) == 0u);
             continue;
         }
         CHECK((listed & (1ull << bit)) != 0u);
     }
-    CHECK_EQ(caps >> 30, 0ull);
+    CHECK_EQ(caps >> 31, 0ull);   // (bit 30 is FOXAPI_CAP_RADIOS since multi-radio stage 6; the word ends there)
 }
 
 // ===================================================================================================================================

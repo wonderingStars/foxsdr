@@ -115,7 +115,13 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
                 break;
             }
             case 10: {   // the owner: grants, the stop set, a plugin put to sleep and woken
-                switch (in.u8() % 6) {
+                switch (in.u8() % 7) {
+                    case 6: {   // which radio the plugin runs on (multi-radio stage 6): any number; the core keeps it in 1..8 and the reads still answer an ABI answer
+                        core.setClientRadio(key, in.u32() % 12u);
+                        const std::uint32_t radio = core.clientRadio(key);
+                        FUZZ_REQUIRE(radio >= 1u && radio <= PluginApiCore::kRadios);
+                        break;
+                    }
                     case 0: core.setTuneGranted(key, (in.u8() & 1u) != 0u); break;
                     case 1: core.setSettingsGranted(key, (in.u8() & 1u) != 0u); break;
                     case 2: core.setTxGranted(key, (in.u8() & 1u) != 0u); break;

@@ -124,7 +124,7 @@ void Engine::applyPluginQuarantines() {
         // un-keyed and the arming window closed; if it did not, this changes nothing.)
         txPluginModuleGoing(moduleFile, "the plugin that held the key was switched off after a fault");
         // ...its decoders out of the runner (nothing of the plugin is called: the guard refuses, and the handles are leaked on purpose)...
-        pluginRunner_.stopPlugin(moduleFile);
+        stopPluginEverywhere(moduleFile);
         // ...and the notice on its row, in the module's own list.
         PluginNotice n;
         n.level = 2;

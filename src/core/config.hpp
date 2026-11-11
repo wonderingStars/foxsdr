@@ -156,6 +156,60 @@
 
 namespace cascade::core {
 
+// ONE SAVED RADIO OF THE MULTI-RADIO ENGINE (engine stage 5; docs/multi-radio-records/engine-stages-5-6.md). The top-level keys of AppConfig are RADIO 1
+// and stay where they always were; `AppConfig::radios` holds radios 2 to 8, one object each, with the settings a user would expect a radio to come back
+// with. Every value is clamped when the file is read (sanitiseSavedRadios); a field the file does not carry keeps the default below, which is "leave what
+// the radio opens with" for a number that is 0.
+//
+//   number          2..kMaxSavedRadios; 0 = the lowest free number (an entry with none, or one that repeats a number)
+//   sourceKind      "siggen" (a TEST RADIO on the signal generator) or a scanned device's driver: "soapy", "rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay",
+//                   "mirisdr", "rx888", "aor", "hydrasdr". Anything else (a file, a sound card, the Pluto and rtl_tcp panels) cannot be a second radio: "siggen"
+//   args            the device's arguments as the driver was opened with them (empty for the generator)
+//   sampleRateHz    0 = the driver's default
+//   antenna         the RX port ("" = the driver's default)
+//   toneHz          a test radio's tone, Hz from its centre (0 = 25 kHz times its number)
+//   centerHz        the AIR frequency at the centre (0 = leave the radio where it opens)
+//   mode            a demodulator name ("" = leave); bandwidthHz 0 = the mode's; vfoOffsetHz
+//   the rest        squelch, volume, mute, de-emphasis, stereo, noise reduction, AGC, noise blanker, notch, the audio route (0 both, 1 left, 2 right, 3 none)
+//   running         the radio was running when it was saved (restored running)
+// Gains are NOT here: they are per DEVICE (autoGainByRadio, manualGainByRadio, airspy, ppm, biasTee, converters) and come back when that device opens.
+inline constexpr int kMaxSavedRadios = 7;   // radios 2..8; the engine's kMaxReceivers is 8 (radio 1 is the top-level keys)
+struct SavedRadio {
+    int number = 0;
+    std::string sourceKind = "siggen";
+    std::string args;
+    double sampleRateHz = 0.0;
+    std::string antenna;
+    double toneHz = 0.0;
+    double centerHz = 0.0;
+    std::string mode;
+    double bandwidthHz = 0.0;
+    double vfoOffsetHz = 0.0;
+    double squelchDb = -50.0;
+    bool squelchAuto = false;
+    double volume = 0.5;
+    bool muted = false;
+    int deemphasisIndex = 0;
+    bool stereoEnabled = true;
+    bool nrEnabled = false;
+    double nrStrength = 0.5;
+    int agcMode = 0;
+    double agcFixedGainDb = 0.0;
+    bool nbEnabled = false;
+    double nbThresholdDb = 15.0;
+    bool notchEnabled = false;
+    double notchFreqHz = 1000.0;
+    double notchQ = 30.0;
+    bool autoNotch = false;
+    int audioRoute = 0;
+    bool running = false;
+    bool operator==(const SavedRadio&) const = default;
+};
+
+// The entries as a file may have them, made safe: not an array of objects is empty; at most kMaxSavedRadios kept (the first ones); every number clamped; a
+// number outside 2..8 or already taken becomes 0 (lowest free). Duplicate DEVICES are kept here - the engine's ledger refuses the second at restore, by name.
+std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in);
+
 struct AppConfig {
     int schemaVersion = 1;
     // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"|
@@ -1110,6 +1164,18 @@ struct AppConfig {
     // stop. An id with no entry is AUTO, and the application writes no entry for
     // AUTO. Keyed on the id, not on the file name, so an update keeps the choice.
     std::map<std::string, std::string> pluginRun;
+
+    // --- Which radio each plugin runs on (multi-radio engine, stage 6) ------------------------------------------------------------------------------
+    // Plugin id (pluginRunId, version-stripped) -> the radio's number, 1..8. A plugin with no entry runs on radio 1, and the application writes no entry for
+    // radio 1 (the engine erases it), so a one-radio user's file is unchanged. An entry whose id is empty or longer than 128 bytes, or whose number is not
+    // 1..8, is dropped one at a time. A number for a radio that is not open at start-up is read as radio 1 (the engine says so in the log).
+    std::map<std::string, int> pluginRadio;
+
+    // --- Radios 2 to 8 (multi-radio engine, stage 5) ----------------------------------------------------------------------------------------------------
+    // The top-level keys are radio 1; see SavedRadio. Empty (and not even written) for a user with one radio, so a one-radio file is byte-for-byte the file
+    // 0.99.104 wrote, plus nothing. An older build reads the file, ignores this key, and writes the file back without it: radios 2 to 8 are forgotten
+    // there, radio 1 is not.
+    std::vector<SavedRadio> radios;
 
     // --- Plugins whose MUTE setting is not the default -------------------------
     // Module FILE NAMES again, and a list of OVERRIDES rather than of settings:

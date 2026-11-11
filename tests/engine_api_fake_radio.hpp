@@ -82,9 +82,14 @@ public:
         const std::string& given = fakeRadioNameOverride();
         return given.empty() ? "Mock RTL-SDR (serial 00000001)" : given.c_str();
     }
-    const char* lastError() const override { return ""; }
+    const char* lastError() const override { return lastError_.c_str(); }
     const char* driverKey() const override { return kind_.c_str(); }
-    bool open(const std::string&) override {
+    // A radio whose arguments contain "MISSING" is a radio that is not plugged in (multi-radio stage 5: the saved-radios restore's missing-device section).
+    bool open(const std::string& args) override {
+        if (args.find("MISSING") != std::string::npos) {
+            lastError_ = "no such device";
+            return false;
+        }
         open_ = true;
         return true;
     }
@@ -128,6 +133,7 @@ private:
         return r;
     }
     std::string kind_;
+    std::string lastError_;
     std::atomic<bool> abort_{true};
     double rate_ = 2048000.0;
     double centre_ = 100.0e6;

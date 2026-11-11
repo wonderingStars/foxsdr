@@ -180,7 +180,41 @@ PluginSettingsMap sanitisePluginSettings(const PluginSettingsMap& in) {
 
 PluginApiCore::PluginApiCore(std::shared_ptr<ReceiverSnapshot> snapshot)
     : snapshot_(snapshot != nullptr ? std::move(snapshot) : std::make_shared<ReceiverSnapshot>()),
-      clock_(std::make_shared<StreamClock>()) {}
+      clock_(std::make_shared<StreamClock>()) {
+    snapshots_[0] = snapshot_;
+    clocks_[0] = clock_;
+    for (std::size_t i = 1; i < kRadios; ++i) {
+        snapshots_[i] = std::make_shared<ReceiverSnapshot>();
+        clocks_[i] = std::make_shared<StreamClock>();
+    }
+}
+
+void PluginApiCore::setClientRadio(const std::string& key, std::uint32_t radio) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    const std::uint32_t r = radio >= 1u && radio <= kRadios ? radio : 1u;
+    // Kept by key even when the plugin has no client yet (its host client is made when the plugin UI first attaches it): the client is born on the radio it was put on.
+    if (r == 1u) {
+        clientRadios_.erase(key);
+    } else {
+        clientRadios_[key] = r;
+    }
+    for (const std::unique_ptr<PluginApiClient>& c : clients_) {
+        if (c->key == key) { c->radio.store(r, std::memory_order_release); }
+    }
+}
+
+std::uint32_t PluginApiCore::clientRadio(const std::string& key) const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    for (const std::unique_ptr<PluginApiClient>& c : clients_) {
+        if (c->key == key) { return c->radio.load(std::memory_order_acquire); }
+    }
+    return 1u;
+}
+
+std::uint32_t PluginApiCore::clientRadio(std::size_t index) const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return index < clients_.size() ? clients_[index]->radio.load(std::memory_order_acquire) : 1u;
+}
 
 PluginApiClient& PluginApiCore::client(const std::string& key, const std::string& name,
                                        std::uint32_t capabilities) {
@@ -204,6 +238,7 @@ PluginApiClient& PluginApiCore::client(const std::string& key, const std::string
     c->name = name;
     c->capabilities = capabilities;
     c->slot = fault::slotFor(key);
+    if (const auto placed = clientRadios_.find(key); placed != clientRadios_.end()) { c->radio.store(placed->second, std::memory_order_release); }
     c->index = clients_.size();
     ClientState st;
     st.markers.reserve(CASCADE_MAX_MARKERS_PER_PLUGIN);
@@ -619,7 +654,7 @@ std::int32_t PluginApiCore::getState(const PluginApiClient& c,
         return CASCADE_API_BAD_ARGUMENT;
     }
     PublishedState p;
-    if (!snapshot_->read(p)) { return CASCADE_API_BUSY; }
+    if (!snapshotFor(c).read(p)) { return CASCADE_API_BUSY; }
     const FoxReceiverState& f = p.rx;
     CascadeReceiverState s{};
     std::uint32_t flags = 0;
@@ -710,7 +745,7 @@ std::int32_t PluginApiCore::getGain(const PluginApiClient& c, std::uint32_t inde
         return CASCADE_API_BAD_ARGUMENT;
     }
     PublishedState p;
-    if (!snapshot_->read(p)) { return CASCADE_API_BUSY; }
+    if (!snapshotFor(c).read(p)) { return CASCADE_API_BUSY; }
     if (index >= p.app.abiGainCount || index >= kMaxPublishedGains) {
         return CASCADE_API_NOT_FOUND;
     }
@@ -735,7 +770,7 @@ std::int32_t PluginApiCore::getSampleRates(const PluginApiClient& c, double* out
     if (g != CASCADE_API_OK) { return g; }
     if (out == nullptr && cap != 0u) { return CASCADE_API_BAD_ARGUMENT; }
     PublishedState p;
-    if (!snapshot_->read(p)) { return CASCADE_API_BUSY; }
+    if (!snapshotFor(c).read(p)) { return CASCADE_API_BUSY; }
     if ((p.rx.flags & FOXAPI_RX_DEVICE_OPEN) == 0u) { return 0; }
     const std::uint32_t n =
         std::min<std::uint32_t>(p.app.rateCount, static_cast<std::uint32_t>(kMaxPublishedRates));
@@ -751,9 +786,9 @@ std::int32_t PluginApiCore::getStreamInfo(const PluginApiClient& c,
         return CASCADE_API_BAD_ARGUMENT;
     }
     StreamFacts sf;
-    if (!clock_->read(sf)) { return CASCADE_API_BUSY; }
+    if (!clocks_[radioIndex(c.radio.load(std::memory_order_acquire))]->read(sf)) { return CASCADE_API_BUSY; }
     PublishedState p;
-    if (!snapshot_->read(p)) { return CASCADE_API_BUSY; }
+    if (!snapshotFor(c).read(p)) { return CASCADE_API_BUSY; }
     CascadeStreamInfo si{};
     si.epoch = sf.epoch;
     si.epochStartUnixMs = sf.epochStartUnixMs;
@@ -849,7 +884,7 @@ std::int32_t PluginApiCore::requestControl(PluginApiClient& c, const PluginContr
     // What needs a radio, against the snapshot the plugin could itself read.
     if (req.kind == K::SampleRate || req.kind == K::Gain || req.kind == K::DeviceAgc) {
         PublishedState p;
-        if (!snapshot_->read(p)) { return CASCADE_API_BUSY; }
+        if (!snapshotFor(c).read(p)) { return CASCADE_API_BUSY; }
         if ((p.rx.flags & FOXAPI_RX_DEVICE_OPEN) == 0u) { return CASCADE_API_NO_DEVICE; }
         if (req.kind == K::DeviceAgc && (p.rx.flags & FOXAPI_RX_AGC_SUPPORTED) == 0u) {
             return CASCADE_API_UNSUPPORTED;

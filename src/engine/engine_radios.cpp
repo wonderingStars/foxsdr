@@ -102,10 +102,21 @@ FoxCommandResult Engine::radioAddOp(const FoxCommand& c, const std::string& text
         // A device id is "<kind>:<args>"; the panels' own ("file:", "open-pluto:", "row:", "soundcard:") are not devices of a scanned list.
         if (colon == std::string::npos) { return refuse(FOXAPI_NOT_FOUND, "no scanned device matches that id"); }
         const std::string kind = text.substr(0, colon);
-        if (kind == "file" || kind == "open-pluto" || kind == "open-rtltcp" || kind == "row" || kind == "soundcard") {
-            return refuse(FOXAPI_UNSUPPORTED, "a second radio opens a scanned device or the signal generator");
+        // EVERY SOURCE RADIO 1 CAN BE, but the sound card and the panels' bare rows (multi-radio stage 5 addition): an I/Q file ("file:<path>"), a Pluto
+        // ("open-pluto:<address>") and an rtl_tcp server ("open-rtltcp:<address>") open through the same worker as on the first radio. The sound card is the
+        // Source panel's one shared list and one open, and stays the first radio's (the design lists no second sound card); the refusal says so.
+        if (kind == "soundcard") { return refuse(FOXAPI_UNSUPPORTED, "the sound card is the first radio's: its one list and open are shared by the Source panel"); }
+        if (kind == "row") { return refuse(FOXAPI_UNSUPPORTED, "a second radio opens a device, an I/Q file, a Pluto, an rtl_tcp server or the signal generator"); }
+        if (kind == "file") {
+            key.clear();   // a recording is nobody's device
+        } else if (kind == "open-pluto") {
+            const std::string rest = text.substr(colon + 1);
+            key = pc::makeDeviceKey("pluto", rest.rfind("uri=", 0) == 0 ? rest : "uri=" + rest);
+        } else if (kind == "open-rtltcp") {
+            key = pc::makeDeviceKey("rtltcp", text.substr(colon + 1));
+        } else {
+            key = pc::makeDeviceKey(kind, text.substr(colon + 1));
         }
-        key = pc::makeDeviceKey(kind, text.substr(colon + 1));
     }
     const DeviceLedger::Claim claim = deviceLedger_.claim(key, DeviceHolder::receiver(slot), true);
     if (!claim.granted()) {
@@ -116,6 +127,10 @@ FoxCommandResult Engine::radioAddOp(const FoxCommand& c, const std::string& text
     // bit raised. Nothing reads a slot whose bit is not set.
     std::unique_ptr<Receiver> r = std::make_unique<Receiver>(cascade::core::Pipeline::Config{kSampleRateHz, kFftSize, kAveragingAlpha, /*audioEnabled=*/true});
     r->radioNumber_ = static_cast<std::uint32_t>(slot) + 1u;
+    // THE PLUGIN API CORE OWNS EVERY RADIO'S SNAPSHOT (stage 6), so a plugin's get_state on this radio never meets a snapshot being freed: the receiver adopts the core's, and
+    // it is emptied (a default state is published) so that a radio added where another was reads as new until its first pass.
+    r->receiverSnapshot_ = pluginApi_->radioSnapshot(static_cast<std::uint32_t>(slot) + 1u);
+    r->receiverSnapshot_->publish(cascade::core::PublishedState{}, nullptr, std::vector<std::uint64_t>());
     r->claimedKey_ = key;
     {
         std::unique_lock<std::shared_mutex> lk(receiverSlotsMutex_);
@@ -145,11 +160,17 @@ FoxCommandResult Engine::radioAddOp(const FoxCommand& c, const std::string& text
         }
         if (!generator) {
             rx().sourceError_.clear();
-            if (!selectSourceById(text)) {
+            if (restoreEntry_ != nullptr) {
+                // A RESTORE (engine stage 5): the start-up open, by the saved arguments, with the saved rate, antenna and centre - not a pick from the scanned lists.
+                restoreExtraRadioDevice(text.substr(0, text.find(':')), text.substr(text.find(':') + 1), restoreEntry_->sampleRateHz, restoreEntry_->antenna,
+                                        restoreEntry_->centerHz);
+            } else if (!selectSourceById(text)) {
                 // The radio stays (it is on the generator, like the first radio after a failed open); the words say why.
                 rx().refusal_ = rx().sourceError_;
             }
         }
+        // ITS RUNNER (stage 6): the decoders that run on this radio, if any (none until the user puts one here), against its own source.
+        createRadioRunner(slot);
         if (c.ival[1] != 0) { startReceiver(); }
     }
     applyAudioRoutes();
@@ -182,6 +203,9 @@ void Engine::removeReceiverSlot(std::size_t slot) {
     {
         RadioWork w(*this, slot);
         rx().removing_ = true;
+        // THE PLUGINS THAT RAN HERE GO FIRST (stage 6): back to radio 1, stopped, their instances destroyed and the runner detached - before the radio's threads end and before
+        // its snapshot, which a plugin's get_state reads, goes quiet.
+        destroyRadioRunner(slot);
         // THE TAKES END FIRST and the threads are joined by the stop, as a user's Stop does (stopReceiver): a take can never outlive the sample flow it
         // taps. Then an open still in flight is reaped (a detached worker releases the device if it lands after), and the radio lets go of its device.
         // THE STOP IS THE ONE STOP: RUN 0 aimed at this radio, through applyCommand (stopReceiver is applyCommand's alone - tests/test_stop_ends_recordings
@@ -276,6 +300,7 @@ void Engine::applyAudioRoutes() {
 // What the first radio's pass does for it in pumpWorkers / pumpAudio / pumpInputs, run for each added radio under its own scope. Only the functions that are
 // one radio's: the scan, the plugin store, the catalogue and the other engine-wide polls stay as they were (once a pass, not once a radio).
 void Engine::pumpExtraReceivers() {
+    telemetryNoteRadios();
     for (std::size_t slot = 1; slot < kMaxReceivers; ++slot) {
         if (!receivers_[slot]) { continue; }
         RadioWork w(*this, slot);
@@ -288,6 +313,7 @@ void Engine::pumpExtraReceivers() {
         pollAudioOpen();
         pollAudioHealth();
         pollDspMinute();
+        pollSavedRadioRetry();   // (a saved device that was only busy is tried again, as the first radio's is: engine stage 5)
         // A radio whose open failed holds nothing: the ledger is told by the key going (the radio sits on the generator, as the first radio does).
         if (rx().device_ == nullptr && !rx().deviceOpenPending_) { rx().claimedKey_.clear(); }
     }
