@@ -440,8 +440,7 @@ void testSidebandSwitchWithInterferer() {
     // the unswitched stream holds two tones (0.5 at 1 kHz, 0.5 at 800 Hz): its largest step
     double base = 0;
     for (std::size_t j = at(fs, 0.8); j + 1 < at(fs, 0.95); ++j) { base = std::max<double>(base, std::fabs(y[j + 1] - y[j])); }
-    std::printf("Both -> Upper with a 0.5 interferer: largest step across the switch %.4f, before it %.4f
-", maxStep, base);
+    std::printf("Both -> Upper with a 0.5 interferer: largest step across the switch %.4f, before it %.4f\n", maxStep, base);
     CHECK(maxStep < 1.2 * base);
 }
 
