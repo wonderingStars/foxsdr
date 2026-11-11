@@ -1337,7 +1337,15 @@ int main(int argc, char** argv) {
     const auto onTick = [&] {
         const TickTimer tickTimer(tickMs);
         (void)api->heartbeat(session);
-        if (api->read_state(session, &state) < 0) { return; }
+        if (const int32_t rs = api->read_state(session, &state); rs < 0) {
+            // A removed radio leaves the session's focus on a number with no radio behind it: every focused read answers NO_DEVICE until the session sets another (docs/api-0.3-additions.md 9.21) and the tick
+            // would stop here for good. The facts say which radios are left, the selection moves to the lowest and the focus follows (refreshRadios); a radio that is still there is asked for again.
+            if (rs == FOXAPI_NO_DEVICE) {
+                refreshRadios();
+                if (workspace.occupied(radios.selected)) { (void)engineReads.focus(static_cast<std::uint32_t>(radios.selected) + 1u); }
+            }
+            return;
+        }
         const bool listMoved = state.listSeq != lastListSeq;
         if (listMoved) {
             lastListSeq = state.listSeq;

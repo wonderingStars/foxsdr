@@ -264,16 +264,7 @@ int main() {
     // THE `radio` VERB (docs/multi-radio-records/screen-s4.md): add [<n> [<toneHz>]] and remove <n>; the target is asked with the verb, the radio's number and the tone; a target that cannot
     // do it (a fake of the older interface) says so and the step fails; remove needs a number from 2; add takes a number 0..8 and a tone; anything else is a line of its own in the errors
     {
-        const Script s = parseInputScript("1 radio add
-radio add 3
-radio add 4 60000
-radio remove 4
-radio remove 1
-radio add 9
-radio drop 2
-radio remove 3 5
-radio add 2.5
-");
+        const Script s = parseInputScript("1 radio add\nradio add 3\nradio add 4 60000\nradio remove 4\nradio remove 1\nradio add 9\nradio drop 2\nradio remove 3 5\nradio add 2.5\n\n");
         CHECK(s.steps.size() == 4);
         CHECK(s.errors.size() == 5);
         CHECK(s.errors.size() == 5 && s.errors[0].find("line 5") != std::string::npos && s.errors[1].find("line 6") != std::string::npos && s.errors[2].find("line 7") != std::string::npos
@@ -286,9 +277,7 @@ radio add 2.5
         struct RadioTarget : FakeTarget {
             std::string radio(const std::string& what, int n, double tone) override { calls.push_back("radio " + what + " " + std::to_string(n) + " " + std::to_string(static_cast<int>(tone))); return std::string(); }
         };
-        const Script ok = parseInputScript("1 radio add 2 60000
-radio remove 2
-");
+        const Script ok = parseInputScript("1 radio add 2 60000\nradio remove 2\n\n");
         RadioTarget rt;
         Driver d(ok, rt);
         said.clear();

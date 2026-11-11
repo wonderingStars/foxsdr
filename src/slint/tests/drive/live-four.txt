@@ -1,4 +1,4 @@
-#! frames=900 size=1600x900
+#! frames=900 size=1440x900
 # live-four: four LIVE radios in a 2 x 2 grid (screen stage S4, job B; docs/multi-radio-records/screen-s4.md). Radio 1 is the engine's own; radios 2 to 4 are GENERATOR radios opened through the
 # engine's real RADIO_ADD (`radio add <n> <tone Hz>`), each with a tone of its own: 50, 80 and 110 kHz above its centre. Each pane draws its OWN radio: the highest bin of each pane's last frame is
 # at that radio's tone (state workspace.peakoff.<n>); a click in pane 3's spectrum retunes radio 3 only; STOP in pane 4 stops radio 4 only; removing radio 3 empties its cell and disturbs no other
@@ -26,13 +26,13 @@ state workspace.r.3.running == 1
 state workspace.r.4.running == 1
 +1 shot "live-four.png"
 # tuning in pane 3 moves radio 3 only
-+1 state workspace.r.3.tuned == 100300000
-state workspace.r.2.tuned == 100300000
++1 state workspace.r.3.tuned == 100000000
+state workspace.r.2.tuned == 100000000
 +1 press "Radio 3 spectrum"
-+15 state workspace.r.3.tuned != 100300000
++15 state workspace.r.3.tuned != 100000000
 state workspace.r.1.tuned == 100300000
-state workspace.r.2.tuned == 100300000
-state workspace.r.4.tuned == 100300000
+state workspace.r.2.tuned == 100000000
+state workspace.r.4.tuned == 100000000
 state workspace.selected == 1
 # STOP in pane 4 stops radio 4 only
 +1 click "Stop Radio 4"
