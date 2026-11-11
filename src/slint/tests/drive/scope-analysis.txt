@@ -1,0 +1,29 @@
+#! frames=520 bank=2 iqfile=scope.wav centre=100000000 mode=AM bandwidth=3000 FOXSDR_SLINT_DEMOD_SCOPE=0
+# scope-analysis (lane B, S11, S17, S18): the analysis keys of the demod scope. The scope.wav fixture is an AM carrier with a 100 Hz tone: the AUDIO tap carries the tone. WATERFALL adds a line of the audio spectrum per paint
+# (read back: the lines added); AUTOCORR finds the tone's period (10 ms = 100 Hz, read back rounded); CEPSTRUM reads its pitch (the tone: about 100 Hz); EYE folds the baseband I on two symbols
+# (read back: the traces folded). A second press of a lit key goes back to the tube.
+30 state running == 1
++10 state scope.live == 1
+state scope.analysis == 0
++1 click "WATERFALL"
++30 state scope.analysis == 1
+state scope.analysisLines > 10
++1 shot "scope-audio-waterfall.png"
++1 click "AUTOCORR"
++20 state scope.analysis == 2
+state scope.analysisPeakHz >= 95
+state scope.analysisPeakHz <= 105
++1 shot "scope-autocorr.png"
++1 click "CEPSTRUM"
++20 state scope.analysis == 3
+state scope.analysisPitchHz >= 90
+state scope.analysisPitchHz <= 110
++1 shot "scope-cepstrum.png"
++1 click "I/Q"
++8 state scope.signal == 2
++1 click "EYE"
++20 state scope.analysis == 4
+state scope.analysisTraces > 0
++1 shot "scope-eye.png"
++1 click "EYE"
++10 state scope.analysis == 0

@@ -1,0 +1,13 @@
+#! frames=600 bank=4 sections=4:0
+# look-peaks (lane B, S20): automatic peak labels. "Peak labels" names the strongest signals on the spectrum (the generator's carrier stands far over the noise): off by default, "3 strongest" gives at least one,
+# off again takes them away. The names are plugin-style marks (the same rows and "+N" tabs), read back as the number of peaks found.
+10 state running == 1
+state look.peaks == 0
++1 scroll "Theme" 450
++20 choose "Peak labels" "3 strongest"
++30 state look.peaks >= 1
+state look.peaks <= 3
+state look.peakhz > 1000000
++1 shot "look-peaks.png"
++1 choose "Peak labels" "Off"
++10 state look.peaks == 0

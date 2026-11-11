@@ -31,6 +31,12 @@ import { Chip, ChipTone } from "chips.slint";
 import { TooltipFace, ElidedHint } from "tooltip.slint";
 import { PluginMark, MarkTab, UserMarker } from "spectrum.slint";
 
+// Lane B (S7): the strength key under the waterfall shows the colour map the host paints with: a 256 x 1 picture of it (custom = false: the skin's own five-stop gradient, the classic map).
+export global WaterfallLook {
+    in property <image> ramp;
+    in property <bool> custom: false;
+}
+
 export struct AgeTick { pos: float, label: string }
 
 // Where the last tab of each of the three rows ends (plus the gap), and the row the tab just placed took (-1: none).
@@ -443,6 +449,7 @@ export component WaterfallView inherits Rectangle {
                     height: 8px; min-width: 180px; preferred-width: 180px;
                     border-radius: 2px;
                     background: @linear-gradient(90deg, Theme.wf-floor 0%, Theme.wf-mid 25%, Theme.wf-high 50%, Theme.wf-hot 75%, Theme.wf-peak 100%);
+                    if WaterfallLook.custom : Image { x: 0px; y: 0px; width: parent.width; height: parent.height; source: WaterfallLook.ramp; image-fit: fill; image-rendering: pixelated; }
                 }
                 HorizontalLayout {
                     alignment: space-between;

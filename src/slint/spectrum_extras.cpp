@@ -305,7 +305,7 @@ void plate(Rgba* px, std::uint32_t w, std::uint32_t h, int x0, int y0, int x1, i
 
 void paintMeasureBox(Rgba* px, std::uint32_t w, std::uint32_t h, const std::vector<std::string>& lines) {
     if (px == nullptr || lines.empty()) { return; }
-    constexpr int kScale = 1, kPad = 4, kLineH = 11;
+    const int kScale = w >= 700 ? 2 : 1, kPad = 4, kLineH = 7 * kScale + 4;   // a wide picture gets the face at twice the size
     int widest = 0;
     for (const std::string& l : lines) { widest = std::max(widest, foxsdr::slintexport::labelWidthPx(l, kScale)); }
     const int bw = widest + 2 * kPad, bh = static_cast<int>(lines.size()) * kLineH + 2 * kPad - 2;

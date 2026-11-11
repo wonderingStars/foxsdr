@@ -43,6 +43,8 @@ list(APPEND foxsdr_slint_sources radio_mix_logic.cpp radio_mix_publish.cpp)
 list(APPEND foxsdr_slint_sources link_logic.cpp workspace_prefs.cpp)
 # LANE S1 (docs/multi-radio-records/screen-s1.md): one-click layouts, the waterfall as a file, the names of plugin marks decluttered
 list(APPEND foxsdr_slint_sources layouts_prefs.cpp export_logic.cpp mark_layout.cpp)
+# LANE B (docs/multi-radio-records/screen-b.md): the spectrum and waterfall extras (colour maps, line rate, stamps, peaks, A/B, SNR, tracker, history)
+list(APPEND foxsdr_slint_sources spectrum_extras.cpp scope_analysis.cpp)
 list(APPEND foxsdr_slint_sources globe_scene.cpp solar_ephemeris.cpp globe_logic.cpp globe_draw.cpp globe_compositor.cpp globe_publish.cpp)
 if(WIN32)
     enable_language(RC)

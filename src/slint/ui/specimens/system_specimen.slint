@@ -1,4 +1,4 @@
-// The SYSTEM bank specimen sheet (1240 x 2560): every body of ui/system_bank.slint inside the REAL Section it is shown under (296 wide: the body is 254 px,
+// The SYSTEM bank specimen sheet (1240 x 3200, taller since lane B added rows to the Display body): every body of ui/system_bank.slint inside the REAL Section it is shown under (296 wide: the body is 254 px,
 // the Section's own padding 30 / 12), on the sample models below, so tests/test_slint_system.cpp can probe the pixels against the Banks artboard
 // (artboards/Workbench-Banks.dc.html: the SYSTEM column A5 and its closed sections A5b) and press the controls with real pointer and key events.
 // Four columns of stacked Sections (each Section's y is the one above's y + height + 10, so the stack holds whatever height the typefaces settle on);
@@ -136,7 +136,7 @@ component SpecReport inherits ReportSheet {
 
 export component SystemSpecimen inherits Window {
     width: 1240px;
-    height: 2560px;
+    height: 3200px;
     background: Theme.bg;
 
     // ---- the geometry the test reads ----

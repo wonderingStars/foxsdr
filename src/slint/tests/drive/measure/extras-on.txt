@@ -1,0 +1,14 @@
+#! frames=900 size=1600x900 bank=4 sections=4:0 FOXSDR_SLINT_FRAME_LOG=1
+# extras-on (lane B): ONE radio with every per-frame extra of lane B on: the SNR, channel power and tracker readouts, the history graph, 8 peak labels, the filled shape, the reference trace, min hold, a slow waterfall with clock stamps and the Ember map.
+10 state running == 1
++1 scroll "Theme" 450
++20 choose "Trace" "Min hold"
++3 choose "Trace shape" "Filled"
++3 choose "Peak labels" "8 strongest"
++3 click "SNR readout"
++1 click "Channel power"
++1 click "Frequency tracker"
++1 click "Signal history graph"
++1 click "Save the trace as the reference"
++3 choose "Time stamps" "Clock time, UTC"
++850 state running == 1

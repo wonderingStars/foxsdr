@@ -795,6 +795,42 @@ component SheetFrame inherits Rectangle {
 
 // ================================================ Display ================================================
 
+// LANE B (docs/multi-radio-records/screen-b.md): the waterfall and trace choices, at the foot of the Display body. The host owns every value (a pick asks, the model changes when
+// the host has done it); the rows are appended, so the rows above keep their places.
+export global SpectrumLook {
+    in property <[SelectItem]> palettes;   in property <int> palette-index;     // S7 colour maps
+    in property <[SelectItem]> speeds;     in property <int> speed-index;       // S10 line speed
+    in property <[SelectItem]> stamps;     in property <int> stamp-index;       // S8 time stamps: age, UTC, local
+    in property <[SelectItem]> traces;     in property <int> trace-index;       // normal, peak hold, average, persistence, min hold
+    in property <[SelectItem]> shapes;     in property <int> shape-index;       // S6 line, filled, bars
+    in property <[SelectItem]> peak-counts; in property <int> peak-index;       // S20 peak labels: off, 3, 5, 8
+    in property <[SelectItem]> zooms;      in property <int> zoom-index;        // S25 band zoom: the full span, bands over the picture, the tuned frequency
+    in property <bool> snr;                // S14
+    in property <bool> channel-power;      // Q2
+    in property <bool> tracker;            // Q3
+    in property <bool> history;            // S15
+    in property <bool> reference-shown;    // S22
+    in property <bool> reference-set;
+    in property <bool> compact;            // S26
+    in property <string> status;
+    callback palette-picked(int);
+    callback speed-picked(int);
+    callback stamps-picked(int);
+    callback trace-picked(int);
+    callback shape-picked(int);
+    callback peaks-picked(int);
+    callback zoom-picked(int);
+    callback snr-toggled(bool);
+    callback channel-power-toggled(bool);
+    callback tracker-toggled(bool);
+    callback history-toggled(bool);
+    callback reference-save();
+    callback reference-toggled(bool);
+    callback reference-clear();
+    callback history-save();
+    callback compact-toggled(bool);
+}
+
 export component DisplayBody inherits VerticalLayout {
     in property <DisplayModel> model;
 
@@ -955,6 +991,52 @@ export component DisplayBody inherits VerticalLayout {
         }
     }
     if root.model.band-plan && root.model.plan-status != "" : Note { text: root.model.plan-status; tone: root.model.plan-status-tone; }
+    // LANE B: the waterfall and the trace (SpectrumLook above)
+    Line {
+        RowLabel { text: @tr("Colour map"); horizontal-stretch: 1; }
+        DropKey { width: 150px; value: Pick.label(SpectrumLook.palettes, SpectrumLook.palette-index); items: SpectrumLook.palettes; selected: SpectrumLook.palette-index; label: @tr("Colour map");
+            popup-min-w: 170px; tooltip: @tr("The colours of the waterfall and its strength key. The Blue-yellow safe map can be told apart by people who confuse red and green."); picked(i) => { SpectrumLook.palette-picked(i); } }
+    }
+    Line {
+        RowLabel { text: @tr("Waterfall speed"); horizontal-stretch: 1; }
+        DropKey { width: 150px; value: Pick.label(SpectrumLook.speeds, SpectrumLook.speed-index); items: SpectrumLook.speeds; selected: SpectrumLook.speed-index; label: @tr("Waterfall speed");
+            popup-min-w: 170px; tooltip: @tr("How fast the waterfall scrolls. A slow line keeps the strongest level of every frame since the last line, so a short signal is not lost."); picked(i) => { SpectrumLook.speed-picked(i); } }
+    }
+    Line {
+        RowLabel { text: @tr("Time stamps"); horizontal-stretch: 1; }
+        DropKey { width: 150px; value: Pick.label(SpectrumLook.stamps, SpectrumLook.stamp-index); items: SpectrumLook.stamps; selected: SpectrumLook.stamp-index; label: @tr("Time stamps");
+            popup-min-w: 170px; picked(i) => { SpectrumLook.stamps-picked(i); } }
+    }
+    Line {
+        RowLabel { text: @tr("Trace"); horizontal-stretch: 1; }
+        DropKey { width: 150px; value: Pick.label(SpectrumLook.traces, SpectrumLook.trace-index); items: SpectrumLook.traces; selected: SpectrumLook.trace-index; label: @tr("Trace");
+            popup-min-w: 150px; picked(i) => { SpectrumLook.trace-picked(i); } }
+    }
+    Line {
+        RowLabel { text: @tr("Trace shape"); horizontal-stretch: 1; }
+        DropKey { width: 150px; value: Pick.label(SpectrumLook.shapes, SpectrumLook.shape-index); items: SpectrumLook.shapes; selected: SpectrumLook.shape-index; label: @tr("Trace shape");
+            popup-min-w: 150px; picked(i) => { SpectrumLook.shape-picked(i); } }
+    }
+    Line {
+        RowLabel { text: @tr("Peak labels"); horizontal-stretch: 1; }
+        DropKey { width: 150px; value: Pick.label(SpectrumLook.peak-counts, SpectrumLook.peak-index); items: SpectrumLook.peak-counts; selected: SpectrumLook.peak-index; label: @tr("Peak labels");
+            popup-min-w: 150px; tooltip: @tr("Name the strongest signals on the spectrum with their frequency and level."); picked(i) => { SpectrumLook.peaks-picked(i); } }
+    }
+    Line {
+        RowLabel { text: @tr("Band zoom"); horizontal-stretch: 1; }
+        DropKey { width: 150px; value: Pick.label(SpectrumLook.zooms, SpectrumLook.zoom-index); items: SpectrumLook.zooms; selected: SpectrumLook.zoom-index; label: @tr("Band zoom");
+            popup-min-w: 220px; tooltip: @tr("Frame the spectrum and the waterfall on a band or on the tuned frequency."); picked(i) => { SpectrumLook.zoom-picked(i); } }
+    }
+    Line { Tick { horizontal-stretch: 1; label: @tr("SNR readout"); on: SpectrumLook.snr; toggled(v) => { SpectrumLook.snr-toggled(v); } } }
+    Line { Tick { horizontal-stretch: 1; label: @tr("Channel power"); on: SpectrumLook.channel-power; toggled(v) => { SpectrumLook.channel-power-toggled(v); } } }
+    Line { Tick { horizontal-stretch: 1; label: @tr("Frequency tracker"); on: SpectrumLook.tracker; toggled(v) => { SpectrumLook.tracker-toggled(v); } } }
+    Line { Tick { horizontal-stretch: 1; label: @tr("Signal history graph"); on: SpectrumLook.history; toggled(v) => { SpectrumLook.history-toggled(v); } } }
+    Line { Key { horizontal-stretch: 1; small: true; label: @tr("Save signal history (CSV)"); clicked => { SpectrumLook.history-save(); } } }
+    Line { Key { horizontal-stretch: 1; small: true; label: @tr("Save the trace as the reference"); clicked => { SpectrumLook.reference-save(); } } }
+    Line { Tick { horizontal-stretch: 1; label: @tr("Show the reference trace"); on: SpectrumLook.reference-shown; toggled(v) => { SpectrumLook.reference-toggled(v); } } }
+    Line { Key { horizontal-stretch: 1; small: true; label: @tr("Clear the reference trace"); enabled: SpectrumLook.reference-set; clicked => { SpectrumLook.reference-clear(); } } }
+    Line { Tick { horizontal-stretch: 1; label: @tr("Compact window"); on: SpectrumLook.compact; toggled(v) => { SpectrumLook.compact-toggled(v); } } }
+    if SpectrumLook.status != "" : Note { text: SpectrumLook.status; }
     // </content>
 }
 

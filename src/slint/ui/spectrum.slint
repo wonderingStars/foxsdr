@@ -58,7 +58,12 @@ export struct MarkTab { pos: float, count: int, row: int }   // a "+N" tab: the 
 export struct UserMarker { pos: float, label: string }            // the spectrum draws the line only; the label is the waterfall tab
 // One channel of the airband block on the air: a bright band while its squelch is open, a faint one while shut.
 export struct AirbandChannel { from: float, to: float, open: bool }
-export enum TraceMode { normal, peak-hold, average, persistence }
+export enum TraceMode { normal, peak-hold, average, persistence, min-hold }
+// Lane B (docs/multi-radio-records/screen-b.md, S23): a click on a bookmark's name on the spectrum tunes to it. (radio-id 0 = the window's selected radio, else the pane's radio; the index counts the names the host drew.)
+export global SpectrumEvents {
+    callback bookmark-clicked(int, int);
+    callback pinch(int, float, float);   // S27: a two-finger pinch over the plot: the radio (0 = selected), the factor since the last report (> 1 = fingers apart), where it is centred (0..1 of the plot width)
+}
 
 // A vertical dashed line: a column of short rectangles, because Slint has no dashed borders.
 component DashColumn inherits Rectangle {
@@ -100,6 +105,7 @@ export component SpectrumView inherits Rectangle {
     // ---- what the host feeds it ----
     in property <image> trace;                       // painted by the host over a transparent ground, fills the plot
     in property <TraceMode> trace-mode: TraceMode.normal;
+    in property <int> radio-id: 0;                    // lane B: the radio this spectrum belongs to (0 = the selected one), for a click on a bookmark name
     in property <string> caption;                    // "Spectrum · 4096 bin · EMA 0.35"
     in property <string> caveat;                     // "average of the last frames, not the audio"
     in property <string> trace-mode-label;           // "Peak hold" / "Average": shown unless the mode is normal
@@ -602,6 +608,20 @@ export component SpectrumView inherits Rectangle {
         }
     }
 
+    // S27 (lane B): the pinch. A touch screen's two fingers (or a touchpad's pinch) zoom the picture about the point between them; one finger already pans through the plot's pointer events.
+    property <float> pinch-last: 1.0;
+    pinch-h := ScaleRotateGestureHandler {
+        x: root.gutter-w;
+        y: root.plot-top;
+        width: root.plot-w;
+        height: root.plot-h;
+        started => { root.pinch-last = 1.0; }
+        updated => {
+            if (root.plot-w > 0px && root.pinch-last > 0.0) { SpectrumEvents.pinch(root.radio-id, self.scale / root.pinch-last, self.center.x / root.plot-w); }
+            root.pinch-last = self.scale;
+        }
+    }
+
     // hover reports (-1, -1 on leave) and the rest tip. One tracker covers the position AND the entering / leaving,
     // so a re-entry at the very same spot still reports. The tip is shown 600 ms after the pointer came to rest and
     // stays while it moves less than 6 px; a bigger move hides it and starts the countdown again, at the new spot.
@@ -665,6 +685,22 @@ export component SpectrumView inherits Rectangle {
             accessible-label: @tr("Show the {} names that did not fit", t.count);
             accessible-action-default => { root.mark-tab-clicked(i, parent.absolute-position.x, parent.absolute-position.y + parent.height); }
             clicked => { root.mark-tab-clicked(i, parent.absolute-position.x, parent.absolute-position.y + parent.height); }
+        }
+    }
+
+    // A BOOKMARK'S NAME IS A KEY (lane B, S23): a click tunes to it. Over the plot's TouchArea like the names of marks, one box per name drawn.
+    for b[i] in root.bookmarks : Rectangle {
+        visible: b.label != "" && b.row >= 0;
+        x: Math.max(0px, root.gutter-w + root.snap(root.plot-w * b.pos) - 8px);
+        y: (root.compact ? root.plot-top + 2px : 60px) + b.row * 14px;
+        height: 14px;
+        width: bm-name.preferred-width + 3px;
+        bm-name := Text { visible: false; text: b.label; font-family: Theme.font-ui; font-size: Theme.font-cap; }
+        bm-area := TouchArea {
+            accessible-role: button;
+            accessible-label: b.label;
+            accessible-action-default => { SpectrumEvents.bookmark-clicked(root.radio-id, i); }
+            clicked => { SpectrumEvents.bookmark-clicked(root.radio-id, i); }
         }
     }
 

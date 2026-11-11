@@ -3204,3 +3204,28 @@ The status bar and the One layout's plot (the S6 leftovers), one-click layouts, 
 | 4520 | Plugin marks: the names are stacked into rows instead of drawn over each other (spectrum and waterfall) | behaviour | PRESENT | mark_layout.hpp: up to three rows; every mark keeps its line. Lane S1, item 4. |
 | 4521 | Plugin marks: names that fit no row are counted into a "+N" tab; a click lists them and a pick tunes there | key | PRESENT | on the spectrum, on the waterfall and in the radio panes. Lane S1, item 4. |
 | 4522 | Plugin marks: a name's tooltip (the name, its frequency, the plugin it came from) | tooltip | PRESENT | drawn inline in the shared tooltip face. Lane S1, item 4. |
+
+## Lane B (docs/multi-radio-records/screen-b.md; rows 4700 and up are this lane's)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 4700 | Display body: Colour map (the waterfall's six maps: Classic and five OKLab maps; the strength key follows) | dropdown | PRESENT | S7. spectrum_extras paletteTable; WaterfallLook.ramp Lane B. |
+| 4701 | Display body: Waterfall speed (every frame down to a line a minute; a slow line keeps the strongest level of the frames between) | dropdown | PRESENT | S10. spectrum_extras RowPacer Lane B. |
+| 4702 | Display body: Time stamps (age, clock UTC, clock local) down the waterfall | dropdown | PRESENT | S8. clockTicks Lane B. |
+| 4703 | Display body: Trace (adds Min hold to Normal, Peak hold, Average, Persistence) | dropdown | PRESENT | S5. TraceMode::MinHold Lane B. |
+| 4704 | Display body: Trace shape (line, filled, bars) | dropdown | PRESENT | S6. paintTrace shape Lane B. |
+| 4705 | Display body: Peak labels (off, 3, 5, 8 strongest named on the spectrum) | dropdown | PRESENT | S20. findPeaks; the labels are marks Lane B. |
+| 4706 | Display body: Band zoom (full span, bands over the baseband, the tuned frequency's surroundings) | dropdown | PRESENT | S25. Lane B. |
+| 4707 | Display body: SNR readout (box on the spectrum) | checkbox | PRESENT | S14. measureSnr Lane B. |
+| 4708 | Display body: Channel power (box on the spectrum; between markers A and B when both are set) | checkbox | PRESENT | Q2. channelPowerDb Lane B. |
+| 4709 | Display body: Frequency tracker (box on the spectrum) | checkbox | PRESENT | Q3. FreqTracker Lane B. |
+| 4710 | Display body: Signal history graph, and Save signal history (CSV) | checkbox | PRESENT | S15. SignalHistory, saveText Lane B. |
+| 4711 | Display body: reference trace - Save the trace as the reference, Show, Clear | key | PRESENT | S22. ReferenceTrace Lane B. |
+| 4712 | Display body: Compact window (forces the compact strip and bar) | checkbox | PRESENT | S26. MainWindow.compact-forced Lane B. |
+| 4713 | Spectrum and waterfall right-click menus: Set marker A here / Set marker B here / Clear markers A and B (B's name carries the differences) | menu | PRESENT | S21. AbMarkers Lane B. |
+| 4714 | Spectrum: a bookmark's name is a key (a click tunes there) | key | PRESENT | S23. SpectrumEvents.bookmark-clicked Lane B. |
+| 4715 | Spectrum: two-finger pinch zooms about the fingers | behaviour | PRESENT | S27. ScaleRotateGestureHandler; scripted only (no touch screen) Lane B. |
+| 4716 | Demod scope: WATERFALL key (the audio spectrum over time) | key | PRESENT | S11. scope_analysis Lane B. |
+| 4717 | Demod scope: AUTOCORR key (autocorrelation of the audio) | key | PRESENT | S17. Lane B. |
+| 4718 | Demod scope: CEPSTRUM key (cepstrum of the audio, pitch) | key | PRESENT | S17. Lane B. |
+| 4719 | Demod scope: EYE key (eye diagram of the baseband I) | key | PRESENT | S18. Lane B. |

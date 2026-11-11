@@ -1,0 +1,10 @@
+#! frames=400 bank=4 sections=4:0 size=1920x1080
+# look-compact (lane B, S26): the Compact window. At 1920 wide the strip is in its roomy form; ticking "Compact window" in the Display body forces the compact strip and the radios' bar (read back: the window's compact-strip flag); unticking puts the roomy ones back.
+10 state running == 1
+state look.compact == 0
++1 scroll "Theme" 450
++20 click "Compact window"
++10 state look.compact == 1
++1 shot "look-compact.png"
++1 click "Compact window"
++10 state look.compact == 0

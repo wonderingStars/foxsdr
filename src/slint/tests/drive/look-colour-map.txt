@@ -1,0 +1,19 @@
+#! frames=500 bank=4 sections=4:0
+# look-colour-map (lane B, S7): the waterfall's colour map. The Display body's "Colour map" box (at the foot of the body) picks one of six maps: the classic one and the five OKLab maps. The host paints the
+# newest waterfall line through the map (read back as the colour of two columns of that line), and the strength key under the waterfall shows the map (WaterfallLook.custom). The classic map leaves the key's own gradient.
+10 state running == 1
+state wf.palette == 0
+state wf.keycustom == 0
++30 state wf.toppx > 5
+state wf.hipx == "779188"
++1 scroll "Theme" 350
++20 choose "Colour map" "Ember"
++3 state wf.palette == 2
+state wf.keycustom == 1
++12 state wf.hipx == "DD7A00"
++1 shot "look-colour-ember.png"
++1 choose "Colour map" "Blue-yellow safe"
++3 state wf.palette == 5
++1 choose "Colour map" "Classic"
++3 state wf.palette == 0
+state wf.keycustom == 0

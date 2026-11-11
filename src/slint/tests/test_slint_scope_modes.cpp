@@ -354,7 +354,7 @@ int main() {
     s.gain.clear();
     s.autos.clear();
     // AUTO ticked: the attenuator's steppers are dead, the time base's work
-    order = scanRow(win, 83, 12, 500, s.timebase);
+    order = scanRow(win, 113, 12, 500, s.timebase);
     CHECK(!s.timebase.empty());
     CHECK((order == std::vector<int>{-1, 1}));
     CHECK(s.gain.empty());
@@ -366,7 +366,7 @@ int main() {
     render(ui, kW, kH);
     s.timebase.clear();
     s.gain.clear();
-    scanRow(win, 83, 12, 500, s.timebase);
+    scanRow(win, 113, 12, 500, s.timebase);
     {
         std::vector<int> g;
         for (const int v : s.gain) { if (g.empty() || g.back() != v) { g.push_back(v); } }
@@ -382,7 +382,7 @@ int main() {
     s.timebase.clear();
     s.gain.clear();
     s.autos.clear();
-    scanRow(win, 83, 12, 500, s.timebase);
+    scanRow(win, 113, 12, 500, s.timebase);
     CHECK(s.timebase.empty() && s.gain.empty() && s.autos.empty());
     m.spectral = false;
     m.signal = 0;
@@ -393,7 +393,7 @@ int main() {
 
     // ---- the display latches ----
     s.display.clear();
-    order = scanRow(win, 113, 12, 500, s.display);
+    order = scanRow(win, 143, 12, 500, s.display);
     CHECK((order == std::vector<int>{0, 1, 2}));
 
     // ---- the dead tube's sentence is ink in the middle of the glass, and the readout row is ink along its foot ----
@@ -405,7 +405,7 @@ int main() {
     ui->set_demod(m);
     Frame dead = render(ui, kW, kH);
     dead.savePng(shotDir() + "scope-modes-demod-dead.png");
-    const int midY = 40 + 90 + 11 + gh / 2;
+    const int midY = 40 + 90 + 30 + 11 + gh / 2;
     const Rgb glassCol = dead.at(60, midY - 40);
     CHECK(dead.countInk(60, midY - 12, 740, midY + 12, glassCol, 40) > 40);
     m.dead = "";
@@ -418,12 +418,12 @@ int main() {
     m.gain_read = "100 mV/DIV";
     ui->set_demod(m);
     Frame foot = render(ui, kW, kH);
-    CHECK(foot.countInk(60, 40 + 90 + 11 + gh - 22, 740, 40 + 90 + 11 + gh - 4, glassCol, 40) > 60);
+    CHECK(foot.countInk(60, 40 + 90 + 30 + 11 + gh - 22, 740, 40 + 90 + 30 + 11 + gh - 4, glassCol, 40) > 60);
     // a plugin's legend at the top left
     m.audio_from = "AUDIO FROM dab-radio";
     ui->set_demod(m);
     Frame legend = render(ui, kW, kH);
-    CHECK(legend.countInk(60, 40 + 90 + 11 + 3, 300, 40 + 90 + 11 + 20, glassCol, 40) > 20);
+    CHECK(legend.countInk(60, 40 + 90 + 30 + 11 + 3, 300, 40 + 90 + 30 + 11 + 20, glassCol, 40) > 20);
 
     // ---- the multiplex's names appear only where they fit ----
     m.audio_from = "";
@@ -437,7 +437,7 @@ int main() {
     ui->set_demod(m);
     Frame mpx = render(ui, kW, kH);
     mpx.savePng(shotDir() + "scope-modes-demod-mpx.png");
-    const int top = 40 + 90 + 11;
+    const int top = 40 + 90 + 30 + 11;
     CHECK(mpx.countInk(14, top + 12, 14 + static_cast<int>(0.15 * gw), top + 26, glassCol, 40) > 15);       // Mono L+R under its bracket
     CHECK(mpx.countInk(14 + static_cast<int>(0.20 * gw), top + 12, 14 + static_cast<int>(0.215 * gw), top + 22, glassCol, 40) == 0);   // RDS does not fit
     CHECK(mpx.countInk(14 + static_cast<int>(0.19 * gw) + 3, top + 24, 14 + static_cast<int>(0.19 * gw) + 60, top + 38, glassCol, 40) > 8);   // Pilot beside its rule

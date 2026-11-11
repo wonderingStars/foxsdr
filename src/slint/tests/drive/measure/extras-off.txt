@@ -1,0 +1,4 @@
+#! frames=900 size=1600x900 bank=4 sections=4:0 FOXSDR_SLINT_FRAME_LOG=1
+# extras-off (lane B): ONE radio, every extra of lane B off, the frame meter on. Nothing is asserted: the run's FRAMEMETER line is the tick's own work and interval.
+10 state running == 1
++850 state running == 1
