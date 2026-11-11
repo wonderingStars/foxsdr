@@ -2,22 +2,22 @@
 # look-measure (lane B, S14, S15, Q2, Q3): the readouts in the box at the spectrum's top right (SNR against the median floor, the channel power of the passband, the frequency tracker) and the signal history graph at its
 # bottom right. Each is off until ticked. The history holds a sample a second, saved as a CSV under the profile's exports folder (the file is read back: its path and its rows).
 10 state running == 1
-state look.snr == "-"
+state lb.snr == "-"
 +1 scroll "Theme" 450
 +20 click "SNR readout"
-+20 state look.snr > 10
++20 state lb.snr > 10
 +1 click "Channel power"
-+10 state look.power > -150
-state look.power < 10
++10 state lb.power > -150
+state lb.power < 10
 +1 click "Frequency tracker"
-+30 state look.trackvalid == 1
++30 state lb.trackvalid == 1
 +1 click "Signal history graph"
-+120 state look.history >= 3
++120 state lb.history >= 3
 +1 shot "look-measure.png"
 +1 click "Save signal history (CSV)"
-+10 state look.status contains "Saved"
-state look.historyfile contains "foxsdr-signal-history"
-state look.historyrows >= 3
++10 state lb.status contains "Saved"
+state lb.historyfile contains "foxsdr-signal-history"
+state lb.historyrows >= 3
 +1 click "SNR readout"
 +1 click "Channel power"
 +1 click "Frequency tracker"

@@ -2728,8 +2728,8 @@ int main(int argc, char** argv) {
             return std::string();
         }
         // look.<what> (lane B): the extras' read-backs - the peak labels, SNR, channel power, tracker, A / B, reference, history, the zoom and the compact window
-        if (name.rfind("look.", 0) == 0) {
-            const std::string what = name.substr(5);
+        if (name.rfind("lb.", 0) == 0) {
+            const std::string what = name.substr(3);
             RadioView& rv = selected();
             if (what == "peaks") { out = std::to_string(rv.peaks.size()); }
             else if (what == "peakhz") { out = rv.peaks.empty() ? std::string("0") : fmt("%.0f", rv.peaks.front().hz); }
@@ -2759,7 +2759,7 @@ int main(int argc, char** argv) {
             else if (what == "railfolded") { out = ui->get_rail_folded() ? "1" : "0"; }
             else if (what == "bookmarks") { out = std::to_string(rv.fig.bookmarkHz.size()); }
             else if (what == "status") { out = lookStatus; }
-            else { return "look.<peaks|peakhz|snr|floor|power|trackvalid|trackhz|trackoffset|abset|abdeltahz|abdeltadb|refset|refcols|history|historyfile|historyrows|shape|minhold|zoomspan|zoomcentre|compact|railfolded|bookmarks|status>, not " + name; }
+            else { return "lb.<peaks|peakhz|snr|floor|power|trackvalid|trackhz|trackoffset|abset|abdeltahz|abdeltadb|refset|refcols|history|historyfile|historyrows|shape|minhold|zoomspan|zoomcentre|compact|railfolded|bookmarks|status>, not " + name; }
             return std::string();
         }
         if (name.rfind("trace.", 0) == 0) {

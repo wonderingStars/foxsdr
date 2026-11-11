@@ -3,12 +3,12 @@
 10 state running == 1
 +1 scroll "Theme" 450
 +20 choose "Band zoom" "Tuned frequency, 200 kHz wide"
-+10 state look.zoomspan == 200000
++10 state lb.zoomspan == 200000
 +1 shot "look-zoom.png"
 +1 choose "Band zoom" "Full span"#2
-+10 state look.zoomspan > 200000
++10 state lb.zoomspan > 200000
 # S27: a pinch (a two-finger gesture, delivered by the scripted input as `radio pinch <factor> <about>`: the Slint gesture handler's own event cannot be made by a script) zooms about the point between the fingers
 +1 radio pinch 4 0.5
-+5 state look.zoomspan < 1000000
++5 state lb.zoomspan < 1000000
 +1 radio pinch 0.25 0.5
-+5 state look.zoomspan > 1500000
++5 state lb.zoomspan > 1500000

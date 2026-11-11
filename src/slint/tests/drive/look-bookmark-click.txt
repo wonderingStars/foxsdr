@@ -7,6 +7,6 @@
 +25 state count.bookmarks == 1
 +1 radio tune 1 100400000
 +30 state tunedHz == 100400000
-state look.bookmarks >= 1
+state lb.bookmarks >= 1
 +1 click "Probe"
 +30 state tunedHz == 100300000

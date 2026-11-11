@@ -2,14 +2,14 @@
 # look-ab (lane B, S21): the A and B measurement markers. They are set from the right-click menu of the spectrum or the waterfall ("Set marker A here" / "Set marker B here" at the frequency under the pointer): the scripted input cannot open
 # that menu, so `radio menuhz` says where it "was opened" and `radio menu <id>` picks its item (411 A, 412 B, 413 clear). B's name carries the frequency difference and the level difference (read back).
 10 state running == 1
-state look.abset == 0
+state lb.abset == 0
 +1 radio menuhz 100300000
 +1 radio menu 411
-+5 state look.abset == 1
++5 state lb.abset == 1
 +1 radio menuhz 100310000
 +1 radio menu 412
-+10 state look.abset == 3
-state look.abdeltahz == 10000
++10 state lb.abset == 3
+state lb.abdeltahz == 10000
 +1 shot "look-ab.png"
 +1 radio menu 413
-+5 state look.abset == 0
++5 state lb.abset == 0
