@@ -2580,6 +2580,10 @@ At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTT
 
 * Op `FOXAPI_OP_SET_NOISE_SQUELCH` 0x0119 (receiver-scoped; in no web, CAT or TCI profile). State, appended after `cwPitchHz`: `noiseSquelchOn noiseSquelchThresholdDb noiseSquelchTailMs noiseSquelchLevelDb noiseSquelchOpen`. Saved: the three settings for radio 1 and in each `radios` entry.
 
+### 9.33 Audio equaliser and filters (engine wiring lane 1, group E; docs/multi-radio-records/engine-wiring-1.md)
+
+* Ops `FOXAPI_OP_SET_EQ_BAND` 0x011A and `FOXAPI_OP_SET_AUDIO_FILTERS` 0x011B (receiver-scoped; in no web, CAT or TCI profile). State, appended after `noiseSquelchOpen`: `eqDb[8]`, `audioHighPassHz`, `audioLowPassHz`. Saved: `eqDb`, `audioHighPassHz`, `audioLowPassHz`.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

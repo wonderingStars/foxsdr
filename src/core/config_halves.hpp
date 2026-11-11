@@ -99,6 +99,9 @@ struct ConfigFieldInfo {
     X(meterUnits,              Engine,    false) \
     X(nrMethod,                Engine,    false) \
     X(cwPitchHz,               Engine,    false) \
+    X(eqDb,                    Engine,    false) \
+    X(audioHighPassHz,         Engine,    false) \
+    X(audioLowPassHz,          Engine,    false) \
     X(noiseSquelchOn,          Engine,    false) \
     X(noiseSquelchThresholdDb, Engine,    false) \
     X(noiseSquelchTailMs,      Engine,    false) \

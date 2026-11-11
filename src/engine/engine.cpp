@@ -4882,6 +4882,9 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         r.calibrated = calibrated ? 1u : 0u;
         r.nrMethod = static_cast<std::uint32_t>(rxa.nrMethod_);
         r.cwPitchHz = rxa.cwPitchHz_;
+        for (std::size_t i = 0; i < rxa.eqDb_.size(); ++i) { r.eqDb[i] = rxa.eqDb_[i]; }
+        r.audioHighPassHz = static_cast<std::uint32_t>(rxa.audioHpHz_);
+        r.audioLowPassHz = static_cast<std::uint32_t>(rxa.audioLpHz_);
         r.noiseSquelchOn = rxa.noiseSquelchOn_ ? 1u : 0u;
         r.noiseSquelchThresholdDb = rxa.noiseSquelchThresholdDb_;
         r.noiseSquelchTailMs = rxa.noiseSquelchTailMs_;
@@ -7420,6 +7423,27 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[0] = kind == tone::kCtcss ? hz : static_cast<double>(code);
             return res;
         }
+        case FOXAPI_OP_SET_EQ_BAND: {
+            Receiver& rxs = rx();
+            if (c.ival[0] < 0 || c.ival[0] > 7) { return refuse(FOXAPI_OUT_OF_RANGE, "an equaliser band is 0 to 7"); }
+            double db = c.num[0];
+            if (!std::isfinite(db)) { return refuse(FOXAPI_OUT_OF_RANGE, "that gain is not a number"); }
+            if (db < -12.0) { db = -12.0; res.flags |= FOXAPI_RESULT_CLAMPED; }
+            if (db > 12.0) { db = 12.0; res.flags |= FOXAPI_RESULT_CLAMPED; }
+            if (!rxs.pipeline_.setEqBand(static_cast<int>(c.ival[0]), db)) { return refuse(FOXAPI_OUT_OF_RANGE, "that equaliser setting is not one the audio chain takes"); }
+            rxs.eqDb_[static_cast<std::size_t>(c.ival[0])] = db;
+            res.applied[0] = db;
+            return res;
+        }
+        case FOXAPI_OP_SET_AUDIO_FILTERS: {
+            Receiver& rxs = rx();
+            if (!rxs.pipeline_.setAudioFilters(static_cast<int>(c.ival[0]), static_cast<int>(c.ival[1]))) {
+                return refuse(FOXAPI_OUT_OF_RANGE, "the high-pass is off, 100 or 300 Hz and the low-pass off, 2400, 3000 or 6000 Hz");
+            }
+            rxs.audioHpHz_ = static_cast<int>(c.ival[0]);
+            rxs.audioLpHz_ = static_cast<int>(c.ival[1]);
+            return res;
+        }
         case FOXAPI_OP_SET_NOISE_SQUELCH: {
             Receiver& rxs = rx();
             double thr = rxs.noiseSquelchThresholdDb_, tail = rxs.noiseSquelchTailMs_;
@@ -9298,6 +9322,11 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         (void)rx().pipeline_.setNoiseReductionMethod(rx().nrMethod_);
         rx().cwPitchHz_ = cfg.cwPitchHz;
         (void)rx().pipeline_.setCwPitchHz(rx().cwPitchHz_);
+        rx().eqDb_ = {};
+        for (std::size_t i = 0; i < cfg.eqDb.size() && i < 8; ++i) { rx().eqDb_[i] = cfg.eqDb[i]; }
+        rx().audioHpHz_ = cfg.audioHighPassHz;
+        rx().audioLpHz_ = cfg.audioLowPassHz;
+        pushAudioEq();
         rx().noiseSquelchOn_ = cfg.noiseSquelchOn;
         rx().noiseSquelchThresholdDb_ = cfg.noiseSquelchThresholdDb;
         rx().noiseSquelchTailMs_ = cfg.noiseSquelchTailMs;
@@ -9862,6 +9891,15 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
         cfg.meterUnits = rxa.meterUnits_;
         cfg.nrMethod = rxa.nrMethod_;
         cfg.cwPitchHz = rxa.cwPitchHz_;
+        cfg.eqDb.clear();
+        for (double g : rxa.eqDb_) {
+            if (g != 0.0) {
+                cfg.eqDb.assign(rxa.eqDb_.begin(), rxa.eqDb_.end());
+                break;
+            }
+        }
+        cfg.audioHighPassHz = rxa.audioHpHz_;
+        cfg.audioLowPassHz = rxa.audioLpHz_;
         cfg.noiseSquelchOn = rxa.noiseSquelchOn_;
         cfg.noiseSquelchThresholdDb = rxa.noiseSquelchThresholdDb_;
         cfg.noiseSquelchTailMs = rxa.noiseSquelchTailMs_;
@@ -9968,6 +10006,7 @@ void Engine::initialise() {
         rx().pipeline_.setToneRemove(rx().toneRemove_);
         (void)rx().pipeline_.setNoiseReductionMethod(rx().nrMethod_);
         (void)rx().pipeline_.setCwPitchHz(rx().cwPitchHz_);
+        pushAudioEq();
         (void)rx().pipeline_.setNoiseSquelch(rx().noiseSquelchOn_, rx().noiseSquelchThresholdDb_, rx().noiseSquelchTailMs_);
         pushManualNotches();
     }

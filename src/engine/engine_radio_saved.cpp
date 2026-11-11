@@ -99,6 +99,14 @@ SavedRadio Engine::savedRadioOf(std::size_t slot) {
     r.meterUnits = rx().meterUnits_;
     r.nrMethod = rx().nrMethod_;
     r.cwPitchHz = rx().cwPitchHz_;
+    for (double g : rx().eqDb_) {
+        if (g != 0.0) {
+            r.eqDb.assign(rx().eqDb_.begin(), rx().eqDb_.end());
+            break;
+        }
+    }
+    r.audioHighPassHz = rx().audioHpHz_;
+    r.audioLowPassHz = rx().audioLpHz_;
     r.noiseSquelchOn = rx().noiseSquelchOn_;
     r.noiseSquelchThresholdDb = rx().noiseSquelchThresholdDb_;
     r.noiseSquelchTailMs = rx().noiseSquelchTailMs_;
@@ -265,6 +273,11 @@ void Engine::restoreSavedRadios(const cascade::core::AppConfig& cfg) {
             send(cmd::makeInt(FOXAPI_OP_SET_METER_UNITS, s.meterUnits));
             send(cmd::makeInt(FOXAPI_OP_SET_NR_METHOD, s.nrMethod));
             send(cmd::makeNum(FOXAPI_OP_SET_CW_PITCH, s.cwPitchHz));
+            for (std::size_t i = 0; i < s.eqDb.size() && i < 8; ++i) {
+                FoxCommand eq = cmd::makeNumInt(FOXAPI_OP_SET_EQ_BAND, s.eqDb[i], static_cast<std::int64_t>(i));
+                send(eq);
+            }
+            send(cmd::makeInt(FOXAPI_OP_SET_AUDIO_FILTERS, s.audioHighPassHz, s.audioLowPassHz));
             {
                 FoxCommand nsq = cmd::makeInt(FOXAPI_OP_SET_NOISE_SQUELCH, s.noiseSquelchOn ? 1 : 0, 1);
                 nsq.num[0] = s.noiseSquelchThresholdDb;

@@ -73,6 +73,8 @@
     "meterUnits": 0,
     "nrMethod": 0,
     "cwPitchHz": 700.0,
+    "audioHighPassHz": 0,
+    "audioLowPassHz": 0,
     "noiseSquelchOn": false,
     "noiseSquelchThresholdDb": -30.0,
     "noiseSquelchTailMs": 100.0,

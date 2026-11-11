@@ -220,6 +220,9 @@ struct SavedRadio {
     int meterUnits = 0;   // S-meter display units, 0 dBFS / 1 S / 2 dBm (engine wiring lane 1)
     int nrMethod = 0;     // noise-reduction method, 0 standard / 1 spectral / 2 line enhancer (engine wiring lane 1)
     double cwPitchHz = 700.0;   // the CW sidetone pitch, 300..1200 Hz (engine wiring lane 1)
+    std::vector<double> eqDb;   // the equaliser: empty (flat) or eight gains, dB -12..+12 (engine wiring lane 1)
+    int audioHighPassHz = 0;    // 0 / 100 / 300
+    int audioLowPassHz = 0;     // 0 / 2400 / 3000 / 6000
     bool noiseSquelchOn = false;           // the FM noise squelch (engine wiring lane 1)
     double noiseSquelchThresholdDb = -30.0;   // -90..0
     double noiseSquelchTailMs = 100.0;        // 0..2000
@@ -513,6 +516,9 @@ struct AppConfig {
     int meterUnits = 0;   // S-meter display units, 0 dBFS / 1 S / 2 dBm (engine wiring lane 1)
     int nrMethod = 0;     // noise-reduction method, 0 standard / 1 spectral / 2 line enhancer (engine wiring lane 1)
     double cwPitchHz = 700.0;   // the CW sidetone pitch, 300..1200 Hz (engine wiring lane 1)
+    std::vector<double> eqDb;   // the equaliser: empty (flat) or eight gains, dB -12..+12 (engine wiring lane 1)
+    int audioHighPassHz = 0;    // 0 / 100 / 300
+    int audioLowPassHz = 0;     // 0 / 2400 / 3000 / 6000
     bool noiseSquelchOn = false;           // the FM noise squelch (engine wiring lane 1)
     double noiseSquelchThresholdDb = -30.0;   // -90..0
     double noiseSquelchTailMs = 100.0;        // 0..2000

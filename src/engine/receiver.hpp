@@ -361,6 +361,9 @@ struct Receiver {
     int meterUnits_ = 0;
     // Noise-reduction method (engine wiring lane 1): FOXAPI_NR_*, standard by default.
     int nrMethod_ = 0;
+    std::array<double, 8> eqDb_{};   // the equaliser's bands (engine wiring lane 1): all flat
+    int audioHpHz_ = 0;              // the audio high-pass: 0 off / 100 / 300
+    int audioLpHz_ = 0;              // the audio low-pass: 0 off / 2400 / 3000 / 6000
     bool noiseSquelchOn_ = false;           // the FM noise squelch (engine wiring lane 1)
     double noiseSquelchThresholdDb_ = -30.0;
     double noiseSquelchTailMs_ = 100.0;

@@ -264,6 +264,19 @@ not wired: the user sets the threshold by eye against the live level); the guard
 | Q4 (C4: threshold not written) | `test_engine_api_noisesq` (file, restored radio) |
 | Q5 (C4: not receiver-scoped) | `test_radio_scope`, `test_engine_api_noisesq` |
 
+## E1. Audio equaliser and filters (second session; taken out of order: SAM, IF shift and the spectrum are heavier, see the end)
+
+**Ops** `FOXAPI_OP_SET_EQ_BAND` 0x011A (`ival[0]` band 0..7: bass, middle, treble, graphic 100 / 300 / 1000 / 2500 / 5000 Hz; `num[0]` dB +-12) and `FOXAPI_OP_SET_AUDIO_FILTERS` 0x011B (`ival[0]` high-pass 0 / 100 / 300 Hz,
+`ival[1]` low-pass 0 / 2400 / 3000 / 6000 Hz); per radio, receiver-scoped, in no web, CAT or TCI profile. **Behaviour.** Two `dsp::AudioEq` (one per channel) on the finished audio right after the noise reduction (before the plugin audio
+chain and the decoders' separate feed), their settings atomics (nothing posted); all flat and off is a bit-exact passthrough. The API refuses a gain outside +-12; the engine's own path clamps and flags CLAMPED. The block's record asked for
+flush-to-zero on the DSP thread: NOT set (the equaliser's sections idle themselves after the gains settle flat); UNVERIFIED on a CPU that is slower with denormals.
+**State (appended after `noiseSquelchOpen`):** `eqDb[8]`, `audioHighPassHz`, `audioLowPassHz` (settings, move `modeSeq`). **Config:** `eqDb` (an array of eight, written only when a band is off flat; anything but eight numbers reads as flat,
+gains clamped), `audioHighPassHz`, `audioLowPassHz` (a value that is not one of the choices reads as off), for radio 1 and each `radios` entry.
+**Tests.** `test_pipeline_audioeq` `26 checks, 0 failed` (an AM carrier with 1000 and 4000 Hz tones: treble -12 dB `4000 Hz -7.4 dB, 1000 Hz -0.1 dB`; low-pass 2400 `4000 Hz -18.3 dB, 1000 Hz 0.0 dB`; the 300 Hz high-pass leaves both;
+flat and off the block reports bypass and both tones are back; refusals), `test_engine_api_audioeq` `85 checks passed, 0 failed`, `test_config` 3837, `test_receiver_snapshot` 896, `test_apply_command` 1824, `test_config_halves` 2599
+(`eqDb` joins the fields whose perturbation the file cannot carry), `test_engine_main_config_roundtrip` 277, `test_radio_scope` 143 (60 ops), mock 467 (+2 known).
+**UNVERIFIED.** Nobody listened; no measurement of the equaliser's CPU in a running chain; the screen's band labels are the block's.
+
 ## Old reader
 
 RUN, with the v0.99.104 sources (`git show v0.99.104:src/core/config.hpp` and `config.cpp` in a directory searched first, `tools/old_reader_probe/build_probe.bat`; `new_main.cpp` gained a fifth file for this lane:

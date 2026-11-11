@@ -1956,6 +1956,12 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
         case FOXAPI_OP_SET_NB:
             // with ival[1] = 1 the threshold, 6..30 dB above the average
             return (c.ival[1] == 0 || (v >= 6.0 && v <= 30.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_EQ_BAND:
+            return (c.ival[0] >= 0 && c.ival[0] <= 7 && c.num[0] >= -12.0 && c.num[0] <= 12.0) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_AUDIO_FILTERS:
+            return ((c.ival[0] == 0 || c.ival[0] == 100 || c.ival[0] == 300) &&
+                    (c.ival[1] == 0 || c.ival[1] == 2400 || c.ival[1] == 3000 || c.ival[1] == 6000))
+                       ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_NOISE_SQUELCH:
             return (c.ival[1] == 0 || (c.num[0] >= -90.0 && c.num[0] <= 0.0 && c.num[1] >= 0.0 && c.num[1] <= 2000.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_CW_PITCH:

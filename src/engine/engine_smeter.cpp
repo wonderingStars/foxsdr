@@ -54,6 +54,11 @@ void Engine::smeterReading(const Receiver& r, double dbfs, double frequencyHz, d
     sUnits = sm::dbmToS(res.dbm, frequencyHz).units;
 }
 
+void Engine::pushAudioEq() {
+    for (std::size_t i = 0; i < rx().eqDb_.size(); ++i) { (void)rx().pipeline_.setEqBand(static_cast<int>(i), rx().eqDb_[i]); }
+    (void)rx().pipeline_.setAudioFilters(rx().audioHpHz_, rx().audioLpHz_);
+}
+
 void Engine::pushManualNotches() {
     for (std::size_t i = 0; i < rx().manualNotch_.size(); ++i) {
         const Receiver::ManualNotchSlot& ns = rx().manualNotch_[i];

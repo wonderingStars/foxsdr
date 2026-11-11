@@ -1237,6 +1237,29 @@ bool Pipeline::noiseSquelchOn() const { return mirrorNoiseSqOn_.load(std::memory
 double Pipeline::noiseSquelchLevelDb() const { return noiseSqLevelDb_.load(std::memory_order_relaxed); }
 bool Pipeline::noiseSquelchOpen() const { return noiseSqOpen_.load(std::memory_order_relaxed); }
 
+// --- audio equaliser and filters ---------------------------------------------------------------------------------------------------------------------
+bool Pipeline::setEqBand(int band, double db) {
+    if (band < 0 || band > 7 || !std::isfinite(db) || db < -12.0 || db > 12.0) { return false; }
+    if (band < 3) {
+        for (cascade::dsp::AudioEq* e : {&eqL_, &eqR_}) {
+            if (band == 0) { e->setBassDb(db); } else if (band == 1) { e->setMidDb(db); } else { e->setTrebleDb(db); }
+        }
+    } else {
+        eqL_.setGraphicDb(band - 3, db);
+        eqR_.setGraphicDb(band - 3, db);
+    }
+    return true;
+}
+bool Pipeline::setAudioFilters(int hp, int lp) {
+    if (!(hp == 0 || hp == 100 || hp == 300) || !(lp == 0 || lp == 2400 || lp == 3000 || lp == 6000)) { return false; }
+    for (cascade::dsp::AudioEq* e : {&eqL_, &eqR_}) {
+        e->setHighPass(static_cast<cascade::dsp::AudioHighPass>(hp));
+        e->setLowPass(static_cast<cascade::dsp::AudioLowPass>(lp));
+    }
+    return true;
+}
+bool Pipeline::eqBypassed() const { return eqL_.isBypassed(); }
+
 // --- CW pitch -------------------------------------------------------------------------------------------------------------------------------------
 bool Pipeline::setCwPitchHz(double hz) {
     if (!std::isfinite(hz) || hz < 300.0 || hz > 1200.0) { return false; }
@@ -2414,6 +2437,9 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         }
         nrMethodActive_.store(alt ? nrMethod_ : 0, std::memory_order_relaxed);
     }
+    // THE EQUALISER AND THE AUDIO FILTERS, after the noise reduction (bit-exact passthrough while everything is flat and off).
+    eqL_.process(outL_.data(), k);
+    eqR_.process(outR_.data(), k);
 
     // --- IN-CHAIN AUDIO PROCESSOR PLUGINS (host API level 1) ----------------
     //

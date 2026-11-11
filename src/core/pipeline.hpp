@@ -149,6 +149,7 @@
 #include "dsp/noise_reduction.hpp"
 #include "dsp/nr_methods.hpp"
 #include "dsp/notch_bank.hpp"
+#include "dsp/audio_eq.hpp"
 #include "dsp/noise_squelch.hpp"
 #include "dsp/notch.hpp"
 #include "dsp/rds.hpp"
@@ -567,6 +568,12 @@ public:
     bool noiseSquelchOn() const;
     double noiseSquelchLevelDb() const;   // measured, once per block
     bool noiseSquelchOpen() const;
+    // THE AUDIO EQUALISER AND FILTERS (engine wiring lane 1; dsp/audio_eq.hpp) on the finished audio of each channel, after the noise reduction: bands 0..7 (bass, middle, treble, then the
+    // graphic 100 / 300 / 1000 / 2500 / 5000 Hz) +-12 dB, a high-pass (0, 100, 300 Hz) and a low-pass (0, 2400, 3000, 6000 Hz). All flat and off: the samples are not touched. False for a value
+    // outside those. The block's settings are atomics: nothing is posted.
+    bool setEqBand(int band, double db);
+    bool setAudioFilters(int highPassHz, int lowPassHz);
+    bool eqBypassed() const;
     bool setCwPitchHz(double hz);
     double cwPitchHz() const;
     int manualNotchCount() const;   // slots that are on
@@ -1104,6 +1111,8 @@ private:
     bool toneRemove_ = false;
     double toneChanRateHz_ = 0.0;
     // NOISE-REDUCTION METHOD: the choice and what the posted switch and strength last said (so a method built later starts from them), and the two channels' alternative reducers.
+    cascade::dsp::AudioEq eqL_{kAudioRateHz};
+    cascade::dsp::AudioEq eqR_{kAudioRateHz};
     cascade::dsp::NotchBank notchBankL_{kAudioRateHz};
     cascade::dsp::NotchBank notchBankR_{kAudioRateHz};
     double cwPitchNow_ = 700.0;
