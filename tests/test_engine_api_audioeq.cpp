@@ -37,6 +37,9 @@ void testA() {
     CHECK(Access::pipeline(r.eng, 0).eqBypassed());
     CHECK_EQ(r.send(band(2, 2, -6.5)).status(), FOXAPI_OK);
     CHECK_EQ(r.send(band(2, 7, 9.0)).status(), FOXAPI_OK);
+    // the bands alone (no filter chosen yet) take the pipeline of radio 2 out of bypass; radio 1's stays in it
+    CHECK(r.until([&] { return !Access::pipeline(r.eng, 1).eqBypassed(); }, 15000));
+    CHECK(Access::pipeline(r.eng, 0).eqBypassed());
     CHECK_EQ(r.send(filters(2, 300, 3000)).status(), FOXAPI_OK);
     CHECK(r.until([&] { return r.radio(2).audioLowPassHz == 3000u; }, 5000));
     CHECK_EQ(r.radio(2).eqDb[2], -6.5);
@@ -45,9 +48,7 @@ void testA() {
     CHECK_EQ(r.radio(1).eqDb[2], 0.0);
     CHECK_EQ(r.radio(1).audioLowPassHz, 0u);
     CHECK(Access::pipeline(r.eng, 0).eqBypassed());
-    // the pipeline of radio 2 really runs them (the block reports it is no longer a passthrough once its audio blocks have gone through), and radio 1's still does not
-    CHECK(r.until([&] { return !Access::pipeline(r.eng, 1).eqBypassed(); }, 15000));
-    CHECK(Access::pipeline(r.eng, 0).eqBypassed());
+
     CHECK_EQ(r.send(band(9, 0, 1.0)).status(), FOXAPI_NO_DEVICE);
 }
 
