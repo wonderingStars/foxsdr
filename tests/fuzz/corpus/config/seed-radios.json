@@ -1,0 +1,14 @@
+{
+    "schemaVersion": 1,
+    "sourceKind": "siggen",
+    "centerHz": 100000000.0,
+    "mode": "WFM",
+    "radios": [
+        {"number": 2, "sourceKind": "rtlsdr", "args": "serial=00000001", "sampleRateHz": 2400000.0, "antenna": "", "toneHz": 0.0, "centerHz": 98500000.0, "mode": "WFM",
+         "bandwidthHz": 150000.0, "vfoOffsetHz": 0.0, "squelchDb": -50.0, "squelchAuto": false, "volume": 0.5, "muted": false, "deemphasisIndex": 0, "stereoEnabled": true,
+         "nrEnabled": false, "nrStrength": 0.5, "agcMode": 2, "agcFixedGainDb": 0.0, "nbEnabled": true, "nbThresholdDb": 15.0, "notchEnabled": false, "notchFreqHz": 1000.0,
+         "notchQ": 30.0, "autoNotch": false, "audioRoute": 1, "running": true},
+        {"number": 5, "sourceKind": "siggen", "toneHz": 125000.0, "centerHz": 7100000.0, "mode": "USB", "bandwidthHz": 2800.0, "audioRoute": 3}
+    ],
+    "pluginRadio": {"pocsag-decoder": 2, "ads-b": 5}
+}

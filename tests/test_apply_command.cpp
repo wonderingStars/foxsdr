@@ -3283,6 +3283,16 @@ void radioOps(AppWindow& a) {
         CHECK(refused(A::apply(a, ints(FOXAPI_OP_RADIO_SOLO, 6)), FOXAPI_NO_DEVICE));
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_RADIO_SOLO, 0))));
     }
+    covering(FOXAPI_OP_PLUGIN_RADIO);
+    {
+        // (multi-radio stage 6; the success path - a plugin fed its own radio - is tests/test_engine_api_plugin_radio.cpp's, with a real module.) Refusals change nothing, in the
+        // order the handler asks: a name, a radio number in range, a plugin that is installed, a radio that is open.
+        CHECK(refused(A::apply(a, text(FOXAPI_OP_PLUGIN_RADIO, "", 2)), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPI_OP_PLUGIN_RADIO, "no-such-plugin.dll", 0)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, text(FOXAPI_OP_PLUGIN_RADIO, "no-such-plugin.dll", 9)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, text(FOXAPI_OP_PLUGIN_RADIO, "no-such-plugin.dll", 2)), FOXAPI_NOT_FOUND));
+        CHECK(refused(A::apply(a, text(FOXAPI_OP_PLUGIN_RADIO, "no-such-plugin.dll", 5)), FOXAPI_NOT_FOUND));
+    }
     covering(FOXAPI_OP_RADIO_REMOVE);
     {
         CHECK(refused(A::apply(a, ints(FOXAPI_OP_RADIO_REMOVE, 1)), FOXAPI_UNSUPPORTED));

@@ -253,6 +253,8 @@ struct AppWindowTestAccess {
         });
     }
     static cascade::core::PluginApiCore& api(AppWindow& a) { return *th::engine(a).pluginApi_; }
+    // THE OTHER RADIOS' OWN PUBLISH (multi-radio stage 6: the golden now holds the readers while there are several radios), which the pass makes after the first radio's.
+    static void publishRadios(AppWindow& a) { th::engine(a).publishExtraReceivers(); }
 
     // State no command sets: the strings a reader passes through verbatim.
     static void fixRecordDir(AppWindow& a) { th::engine(a).recordDir_ = "/golden/recordings"; }
@@ -601,6 +603,42 @@ void drive(AppWindow& a) {
 
     CHECK(ok(A::apply(a, text(FOXAPI_OP_SELECT_SOURCE, "siggen"))));
     record(a, "back to the generator");
+
+    // ---- APPENDED BY MULTI-RADIO STAGES 4 TO 6 (the records above are the capture's, unchanged) -----------------------------------------------------------------------
+    // The AGC choice and the noise blanker (lane C) are state of the radio that /api/status, CAT and the plugin ABI do not carry: the readers must say the same as before them.
+    {
+        FoxCommand agc = cmd::makeInt(FOXAPI_OP_SET_AGC, FOXAPI_AGC_FAST, 1);
+        agc.num[0] = 6.0;
+        CHECK(ok(A::apply(a, agc)));
+        FoxCommand nb = cmd::makeInt(FOXAPI_OP_SET_NB, 1, 1);
+        nb.num[0] = 20.0;
+        CHECK(ok(A::apply(a, nb)));
+        record(a, "agc and blanker (not carried by these readers)");
+    }
+    // A SECOND RADIO (stage 4) exists, tuned and in another mode: the web status, CAT and a plugin on the first radio read the FIRST radio, as before.
+    {
+        FoxCommand add = cmd::makeNum(FOXAPI_OP_RADIO_ADD, 90000.0);
+        add.ival[0] = 2;
+        CHECK(ok(A::apply(a, add)));
+        FoxCommand vol = cmd::makeNum(FOXAPI_OP_SET_VOLUME, 0.0);
+        vol.target = 2;
+        CHECK(ok(A::apply(a, vol)));
+        FoxCommand centre = cmd::makeNum(FOXAPI_OP_SET_CENTRE, 7.1e6);
+        centre.target = 2;
+        CHECK(ok(A::apply(a, centre)));
+        FoxCommand mode = cmd::makeInt(FOXAPI_OP_SET_MODE, FOXAPI_DEMOD_USB);
+        mode.target = 2;
+        CHECK(ok(A::apply(a, mode)));
+        A::publishRadios(a);
+        record(a, "a second radio is open (the readers read the first)");
+        // A PLUGIN PUT ON RADIO 2 (stage 6) reads RADIO 2: its centre, its mode, its device; the web status and CAT still read the first.
+        A::api(a).setClientRadio(kPluginKey, 2);
+        record(a, "the plugin is on radio 2");
+        A::api(a).setClientRadio(kPluginKey, 1);
+        FoxCommand remove = cmd::makeInt(FOXAPI_OP_RADIO_REMOVE, 2);
+        CHECK(ok(A::apply(a, remove)));
+        record(a, "the second radio is gone");
+    }
 }
 
 std::string goldenPath() { return GOLDEN_FILE; }

@@ -730,7 +730,7 @@ void testTheScannerAndTheTransmitter() {
         CHECK_EQ(transmitRadioFor(true, "uri=ip:172.16.0.1", pluto2), static_cast<std::size_t>(0));   // not any radio's device
         CHECK_EQ(transmitRadioFor(false, "uri=ip:192.168.2.1", pluto2), static_cast<std::size_t>(0));  // no transmitter open
         CHECK_EQ(transmitRadioFor(true, "", pluto2), static_cast<std::size_t>(0));
-        const std::vector<TransmitCandidate> notOpen = {{"pluto", "uri=ip:192.168.2.1", false}};
+        const std::vector<TransmitCandidate> notOpen = {{"siggen", "", false}, {"pluto", "uri=ip:192.168.2.1", false}};
         CHECK_EQ(transmitRadioFor(true, "uri=ip:192.168.2.1", notOpen), static_cast<std::size_t>(0));   // a Pluto that did not open is not a radio to follow
     }
 }
