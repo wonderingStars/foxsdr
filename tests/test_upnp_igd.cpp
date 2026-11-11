@@ -651,6 +651,8 @@ void testDiscoveryRefusals() {
         {"https control", "<root><device><serviceList><service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType>"
                           "<controlURL>https://127.0.0.1/ctl</controlURL></service></serviceList></device></root>"},
         {"mismatched tags", "<root><device></root></device>"},
+        {"doctype without a subset", "<?xml version=\"1.0\"?><!DOCTYPE root SYSTEM \"x.dtd\"><root><device><serviceList><service><serviceType>"
+                                     "urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><controlURL>/ctl/IPConn</controlURL></service></serviceList></device></root>"},
     };
     for (const auto& bd : badDesc) {
         StandInRouter r;
