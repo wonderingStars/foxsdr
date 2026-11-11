@@ -945,6 +945,14 @@ const KnownWait kKnownWaits[] = {
     // where closeDevice() first shutdown()s the socket so a parked reader wakes. Its connect and
     // socket bounds are iiod::kConnectWait and iiod::kReplyWait above, so its whole column is
     // the one join - 2500 ms, spent INSTEAD OF the Soapy pair's 3000, never as well as it.
+    {"src/source/kiwisdr_client.hpp", "kJoinWait", 0,
+     "the bound on joining the KiwiSDR client's reader and keep-alive threads in KiwiSdrClient::close() (feat/kiwi-client; not wired into the engine yet). close() first shutdown()s the socket so a parked reader wakes, so the join is normally instant; the bound is only reached if the reader ignores that. Zero until the engine wraps the client: the wiring lane re-decides it (and the matching HangWatchdog budget) where it makes the close part of a radio's teardown"},
+    {"src/source/kiwisdr_client.hpp", "kKeepAliveInterval", 0,
+     "not a wait at all - the cadence of the keep-alive thread, which waits on a condition variable that close() signals (feat/kiwi-client); nothing on the shutdown path sleeps on it"},
+    {"src/source/kiwisdr_client.hpp", "kConnectWait", 0,
+     "the default bound on connect plus upgrade in KiwiSdrClient::open(), spent on a radio's open worker and never on the shutdown path: close() cuts a connect in progress by shutting the socket (measured 1 ms with a stalled upgrade, test_kiwisdr_client) (feat/kiwi-client)"},
+    {"src/source/kiwisdr_client.hpp", "kStallWait", 0,
+     "the default bound on silence from a KiwiSDR before the reader reports the connection dropped: a threshold read on the reader thread, never waited on by anyone (feat/kiwi-client)"},
     {"src/source/rtl_tcp_source.hpp", "kReaderJoinWait", 0,
      "the bounded join in RtlTcpSource::stopReaderLocked() (closeDevice's path; stop() joins "
      "nothing), and the WHOLE of the 2500 ms rtl_tcp column - the Pluto's argument word for "
