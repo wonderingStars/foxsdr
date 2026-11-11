@@ -164,7 +164,9 @@ struct HpsdrSource::Rx {
             if (!link.run.load(std::memory_order_relaxed)) { return false; }
             const char* e = udp->lastError();
             if (e != nullptr && std::strstr(e, "timed out") != nullptr) {
-                if (link.streaming.load(std::memory_order_relaxed) && ++silentTicks >= silentLimit) {
+                if (!link.streaming.load(std::memory_order_relaxed)) {
+                    silentTicks = 0;  // idle slices are not silence: only consecutive streaming ones count
+                } else if (++silentTicks >= silentLimit) {
                     link.fault("the HPSDR radio stopped sending", "no data arrived");
                     return false;
                 }

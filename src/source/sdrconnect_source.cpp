@@ -100,7 +100,9 @@ struct SdrConnectSource::Conn {
             if (err != nullptr && std::strstr(err, "timed out") != nullptr) {
                 // Idle is silence by design; a streaming source silent for several slices has
                 // lost its server.
-                if (link.streaming.load(std::memory_order_relaxed) && ++silentTicks >= silentLimit) {
+                if (!link.streaming.load(std::memory_order_relaxed)) {
+                    silentTicks = 0;  // idle slices are not silence: only consecutive streaming ones count
+                } else if (++silentTicks >= silentLimit) {
                     link.fault("SDRconnect stopped sending", "no data arrived");
                     return false;
                 }

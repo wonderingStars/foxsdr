@@ -423,6 +423,13 @@ void testCyclesAndShutdown() {
     }
     CHECK(s.start());
     const auto got = readN(s, 1000);
+    if (got.size() < 1000 || rampBreaks(got) != 0) {
+        std::fprintf(stderr, "restart read: %zu samples, %d breaks; device: starts %d stops %d discoveries %d bad %d sent %d; src faulted=%d err=%s lost=%llu bad=%llu",
+                     got.size(), rampBreaks(got), dev.starts.load(), dev.stops.load(), dev.discoveries.load(), dev.badCommands.load(),
+                     dev.sent(), s.faulted() ? 1 : 0, s.lastError(), static_cast<unsigned long long>(s.packetsLost()),
+                     static_cast<unsigned long long>(s.badPackets()));
+        std::fputc(10, stderr);
+    }
     CHECK(got.size() >= 1000 && rampBreaks(got) == 0);  // nothing from before a stop is delivered after the restart
     const auto t0 = std::chrono::steady_clock::now();
     s.closeDevice();

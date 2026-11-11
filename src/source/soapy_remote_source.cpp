@@ -142,7 +142,9 @@ struct SoapyRemoteSource::Stream {
                 if (!gotFirst && datagram) { sendAck(); }  // the gratuitous ack, until data flows
                 // Idle (not activated) is silence by design; a streaming source that has been
                 // silent for several slices has lost its server.
-                if (link.streaming.load(std::memory_order_relaxed) && ++silentTicks >= silentLimit) {
+                if (!link.streaming.load(std::memory_order_relaxed)) {
+                    silentTicks = 0;  // idle slices are not silence: only consecutive streaming ones count
+                } else if (++silentTicks >= silentLimit) {
                     link.fault("the radio server stopped sending", "no stream data arrived");
                     return false;
                 }
