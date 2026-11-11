@@ -236,6 +236,36 @@ double clampd(double v, double lo, double hi) {
 
 // The tone squelch's five settings made safe: a kind out of range lands on the nearest end; a tone that is not one of the 50, a code that is not one of the 83
 // and a polarity out of range fall back to "any" (dsp/tone_squelch.hpp); a number that is not a number cannot pass.
+// The manual notch bank as a file carries it: "notchBank": [{"slot":0,"hz":1000,"widthHz":50,"on":true}, ...]; an entry that is not an object is skipped, at most ten are read.
+std::vector<ManualNotchSetting> readNotchBank(const json& j) {
+    std::vector<ManualNotchSetting> v;
+    const auto it = j.find("notchBank");
+    if (it == j.end() || !it->is_array()) { return v; }
+    for (const json& e : *it) {
+        if (!e.is_object() || v.size() >= 10) { continue; }
+        ManualNotchSetting n;
+        getInt(e, "slot", n.slot);
+        getDouble(e, "hz", n.hz);
+        getDouble(e, "widthHz", n.widthHz);
+        getBool(e, "on", n.on);
+        v.push_back(n);
+    }
+    return sanitiseNotchBank(std::move(v));
+}
+void writeNotchBank(json& j, const std::vector<ManualNotchSetting>& bank) {
+    if (bank.empty()) { return; }
+    json a = json::array();
+    for (const ManualNotchSetting& n : sanitiseNotchBank(bank)) {
+        json e;
+        e["slot"] = n.slot;
+        e["hz"] = n.hz;
+        e["widthHz"] = n.widthHz;
+        e["on"] = n.on;
+        a.push_back(std::move(e));
+    }
+    j["notchBank"] = std::move(a);
+}
+
 void clampToneSquelch(int& kind, double& hz, int& code, int& pol) {
     kind = kind < 0 ? 0 : (kind > 2 ? 2 : kind);
     if (!(hz >= 0.0) || !cascade::dsp::tone::validCtcssHz(hz)) { hz = 0.0; }
@@ -244,6 +274,19 @@ void clampToneSquelch(int& kind, double& hz, int& code, int& pol) {
 }
 
 }  // namespace
+
+std::vector<ManualNotchSetting> sanitiseNotchBank(std::vector<ManualNotchSetting> in) {
+    std::vector<ManualNotchSetting> out;
+    std::set<int> taken;
+    for (ManualNotchSetting& n : in) {
+        if (n.slot < 0 || n.slot > 9 || taken.count(n.slot) != 0 || !std::isfinite(n.hz) || !std::isfinite(n.widthHz)) { continue; }
+        taken.insert(n.slot);
+        n.hz = clampd(n.hz, 20.0, 21600.0);
+        n.widthHz = clampd(n.widthHz, 1.0, 2000.0);
+        out.push_back(n);
+    }
+    return out;
+}
 
 // Radios 2 to 8 as a file may have them, made safe. A number is "not >= lo" clamped so one that is not a number cannot pass; a value that names no thing
 // (a tone, a rate, a frequency below zero) becomes 0, which the engine reads as "leave what the radio opens with".
@@ -278,6 +321,7 @@ std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
         clampToneSquelch(r.toneSquelchKind, r.toneSquelchHz, r.toneSquelchCode, r.toneSquelchPolarity);
         r.meterUnits = r.meterUnits < 0 ? 0 : (r.meterUnits > 2 ? 2 : r.meterUnits);
         r.nrMethod = r.nrMethod < 0 ? 0 : (r.nrMethod > 2 ? 2 : r.nrMethod);
+        r.notchBank = sanitiseNotchBank(std::move(r.notchBank));
         r.notchFreqHz = clampd(r.notchFreqHz, 10.0, 20000.0);
         r.notchQ = clampd(r.notchQ, 0.1, 1000.0);
         r.audioRoute = r.audioRoute < 0 ? 0 : (r.audioRoute > 3 ? 3 : r.audioRoute);
@@ -587,6 +631,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     getBool(j, "toneRemove", out.toneRemove);
     getInt(j, "meterUnits", out.meterUnits);
     getInt(j, "nrMethod", out.nrMethod);
+    out.notchBank = readNotchBank(j);
     getBool(j, "notchEnabled", out.notchEnabled);
     getDouble(j, "notchFreqHz", out.notchFreqHz);
     getDouble(j, "notchQ", out.notchQ);
@@ -1003,6 +1048,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
                 getBool(e, "toneRemove", r.toneRemove);
                 getInt(e, "meterUnits", r.meterUnits);
                 getInt(e, "nrMethod", r.nrMethod);
+                r.notchBank = readNotchBank(e);
                 getBool(e, "notchEnabled", r.notchEnabled);
                 getDouble(e, "notchFreqHz", r.notchFreqHz);
                 getDouble(e, "notchQ", r.notchQ);
@@ -1231,6 +1277,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     clampToneSquelch(out.toneSquelchKind, out.toneSquelchHz, out.toneSquelchCode, out.toneSquelchPolarity);
     out.meterUnits = out.meterUnits < 0 ? 0 : (out.meterUnits > 2 ? 2 : out.meterUnits);
     out.nrMethod = out.nrMethod < 0 ? 0 : (out.nrMethod > 2 ? 2 : out.nrMethod);
+    out.notchBank = sanitiseNotchBank(std::move(out.notchBank));
     out.notchFreqHz = clampd(out.notchFreqHz, 10.0, 20000.0);
     out.notchQ = clampd(out.notchQ, 0.1, 1000.0);
     // At least kMinRangeSpanDb apart, which is the rule every writer of this pair follows (the
@@ -1581,6 +1628,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["toneRemove"] = cfg.toneRemove;
     j["meterUnits"] = cfg.meterUnits;
     j["nrMethod"] = cfg.nrMethod;
+    writeNotchBank(j, cfg.notchBank);
     j["notchEnabled"] = cfg.notchEnabled;
     j["notchFreqHz"] = cfg.notchFreqHz;
     j["notchQ"] = cfg.notchQ;
@@ -1778,6 +1826,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
             e["toneRemove"] = r.toneRemove;
             e["meterUnits"] = r.meterUnits;
             e["nrMethod"] = r.nrMethod;
+            writeNotchBank(e, r.notchBank);
             e["notchEnabled"] = r.notchEnabled;
             e["notchFreqHz"] = r.notchFreqHz;
             e["notchQ"] = r.notchQ;

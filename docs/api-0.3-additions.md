@@ -2568,6 +2568,10 @@ At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTT
 
 * Op `FOXAPI_OP_SET_NR_METHOD` 0x0116 (receiver-scoped; in no web, CAT or TCI profile). State, appended after `calibrated`: `nrMethod`, `nrMethodActive`. Saved: `nrMethod` for radio 1 and in each `radios` entry. Full text: API.md 6.19.
 
+### 9.30 Manual notch bank (engine wiring lane 1, group C; docs/multi-radio-records/engine-wiring-1.md)
+
+* Op `FOXAPI_OP_SET_NOTCH_SLOT` 0x0117 (receiver-scoped; in no web, CAT or TCI profile). State, appended after `nrMethodActive`: `notchBankMask`, `notchBankHz[10]`, `notchBankWidthHz[10]`. Saved: `notchBank` for radio 1 and in each `radios` entry.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

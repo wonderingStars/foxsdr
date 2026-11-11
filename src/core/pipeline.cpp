@@ -1213,6 +1213,13 @@ bool Pipeline::noiseBlankerStandingDown() const {
     return nbStandingDown_.load(std::memory_order_relaxed);
 }
 
+// --- manual notch bank ---------------------------------------------------------------------------------------------------------------------------
+bool Pipeline::setManualNotch(int slot, double hz, double widthHz, bool on) {
+    if (!notchBankL_.setNotch(slot, hz, widthHz, on)) { return false; }
+    return notchBankR_.setNotch(slot, hz, widthHz, on);
+}
+int Pipeline::manualNotchCount() const { return notchBankL_.activeCount(); }
+
 // --- noise-reduction method ---------------------------------------------------------------------------------------------------------------------
 bool Pipeline::setNoiseReductionMethod(int method) {
     if (method < 0 || method > 2) { return false; }
@@ -2333,6 +2340,8 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     }
     notchL_->process(outL_.data(), k);
     notchR_->process(outR_.data(), k);
+    notchBankL_.process(outL_.data(), k);   // (a single atomic load and a return while no slot is on: bit-exact passthrough)
+    notchBankR_.process(outR_.data(), k);
     autoNotchL_->process(outL_.data(), k);
     autoNotchR_->process(outR_.data(), k);
     autoNotchEngaged_.store(autoNotchL_->isEngaged(), std::memory_order_relaxed);

@@ -148,6 +148,7 @@
 #include "dsp/demod.hpp"
 #include "dsp/noise_reduction.hpp"
 #include "dsp/nr_methods.hpp"
+#include "dsp/notch_bank.hpp"
 #include "dsp/notch.hpp"
 #include "dsp/rds.hpp"
 #include "core/patch_runner.hpp"
@@ -554,6 +555,10 @@ public:
     // NOISE-REDUCTION METHOD (engine wiring lane 1): 0 the standard noise reduction, 1 minimum-statistics spectral subtraction, 2 the adaptive line enhancer. The on/off switch and
     // the strength are setNoiseReductionEnabled / Strength's for every method. The line enhancer is for CW and steady carriers and is applied in CW and RAW only; in any other mode the
     // standard one runs in its place (noiseReductionMethodActive says which is running). False (nothing changed) for a method past 2.
+    // THE MANUAL NOTCH BANK (engine wiring lane 1; dsp/notch_bank.hpp): up to ten notches on the finished audio of each channel, after the single notch. A slot moves, widens or switches
+    // on and off without a click (the block glides and fades). False for a slot past 9 or a number that is not one. Any thread; nothing is posted (the bank's settings are atomics).
+    bool setManualNotch(int slot, double hz, double widthHz, bool on);
+    int manualNotchCount() const;   // slots that are on
     bool setNoiseReductionMethod(int method);
     int noiseReductionMethod() const;
     int noiseReductionMethodActive() const;   // measured, once per block: 0 while the noise reduction is off
@@ -1088,6 +1093,8 @@ private:
     bool toneRemove_ = false;
     double toneChanRateHz_ = 0.0;
     // NOISE-REDUCTION METHOD: the choice and what the posted switch and strength last said (so a method built later starts from them), and the two channels' alternative reducers.
+    cascade::dsp::NotchBank notchBankL_{kAudioRateHz};
+    cascade::dsp::NotchBank notchBankR_{kAudioRateHz};
     int nrMethod_ = 0;
     bool nrOn_ = false;
     float nrStrengthNow_ = 0.5f;

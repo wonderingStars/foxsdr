@@ -4882,6 +4882,11 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         r.calibrated = calibrated ? 1u : 0u;
         r.nrMethod = static_cast<std::uint32_t>(rxa.nrMethod_);
         r.nrMethodActive = static_cast<std::uint32_t>(rxa.pipeline_.noiseReductionMethodActive());
+        for (std::size_t i = 0; i < rxa.manualNotch_.size(); ++i) {
+            if (rxa.manualNotch_[i].on) { r.notchBankMask |= 1u << i; }
+            r.notchBankHz[i] = rxa.manualNotch_[i].hz;
+            r.notchBankWidthHz[i] = rxa.manualNotch_[i].widthHz;
+        }
     }
     r.notchHz = floatAsDecimal(rx().notchFreqHz_);
     r.notchQ = floatAsDecimal(rx().notchQ_);
@@ -7409,6 +7414,29 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[0] = kind == tone::kCtcss ? hz : static_cast<double>(code);
             return res;
         }
+        case FOXAPI_OP_SET_NOTCH_SLOT: {
+            const long long slot = std::llround(c.num[2]);
+            if (slot < 0 || slot > 9 || std::fabs(c.num[2] - static_cast<double>(slot)) > 1e-9) { return refuse(FOXAPI_OUT_OF_RANGE, "a notch slot is 0 to 9"); }
+            Receiver& rxs = rx();
+            Receiver::ManualNotchSlot& ns = rxs.manualNotch_[static_cast<std::size_t>(slot)];
+            double hz = ns.hz, width = ns.widthHz;
+            if (c.ival[1] == 1) {
+                hz = c.num[0];
+                width = c.num[1];
+                if (!std::isfinite(hz) || !std::isfinite(width)) { return refuse(FOXAPI_OUT_OF_RANGE, "that notch frequency or width is not a number"); }
+                if (hz < 20.0) { hz = 20.0; res.flags |= FOXAPI_RESULT_CLAMPED; }
+                if (hz > 21600.0) { hz = 21600.0; res.flags |= FOXAPI_RESULT_CLAMPED; }
+                if (width < 1.0) { width = 1.0; res.flags |= FOXAPI_RESULT_CLAMPED; }
+                if (width > 2000.0) { width = 2000.0; res.flags |= FOXAPI_RESULT_CLAMPED; }
+            }
+            if (!rxs.pipeline_.setManualNotch(static_cast<int>(slot), hz, width, on)) { return refuse(FOXAPI_OUT_OF_RANGE, "that notch is not one the bank can take"); }
+            ns.hz = hz;
+            ns.widthHz = width;
+            ns.on = on;
+            res.applied[0] = hz;
+            res.applied[1] = width;
+            return res;
+        }
         case FOXAPI_OP_SET_NR_METHOD: {
             if (c.ival[0] < 0 || c.ival[0] > static_cast<long long>(FOXAPI_NR_LINE)) { return refuse(FOXAPI_OUT_OF_RANGE, "no such noise-reduction method"); }
             Receiver& rxs = rx();
@@ -9240,6 +9268,14 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         rx().meterUnits_ = cfg.meterUnits;
         rx().nrMethod_ = cfg.nrMethod;
         (void)rx().pipeline_.setNoiseReductionMethod(rx().nrMethod_);
+        rx().manualNotch_ = {};
+        for (const cascade::core::ManualNotchSetting& n : cfg.notchBank) {
+            Receiver::ManualNotchSlot& ns = rx().manualNotch_[static_cast<std::size_t>(n.slot)];
+            ns.hz = n.hz;
+            ns.widthHz = n.widthHz;
+            ns.on = n.on;
+        }
+        pushManualNotches();
         (void)rx().pipeline_.setToneSquelch(rx().toneKind_, rx().toneHz_, rx().toneCode_, rx().tonePol_);
         rx().pipeline_.setToneRemove(rx().toneRemove_);
         rx().pipeline_.setAgcMode(static_cast<cascade::dsp::Agc::Mode>(rx().agcMode_));
@@ -9791,6 +9827,11 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
         cfg.toneRemove = rxa.toneRemove_;
         cfg.meterUnits = rxa.meterUnits_;
         cfg.nrMethod = rxa.nrMethod_;
+        cfg.notchBank.clear();
+        for (std::size_t i = 0; i < rxa.manualNotch_.size(); ++i) {
+            const Receiver::ManualNotchSlot& ns = rxa.manualNotch_[i];
+            if (ns.on || ns.hz != 1000.0 || ns.widthHz != 50.0) { cfg.notchBank.push_back({static_cast<int>(i), ns.hz, ns.widthHz, ns.on}); }
+        }
     }
     cfg.notchEnabled = rx().notchEnabled_;
     cfg.notchFreqHz = static_cast<double>(rx().notchFreqHz_);
@@ -9888,6 +9929,7 @@ void Engine::initialise() {
         (void)rx().pipeline_.setToneSquelch(rx().toneKind_, rx().toneHz_, rx().toneCode_, rx().tonePol_);
         rx().pipeline_.setToneRemove(rx().toneRemove_);
         (void)rx().pipeline_.setNoiseReductionMethod(rx().nrMethod_);
+        pushManualNotches();
     }
     rx().pipeline_.setNotchEnabled(rx().notchEnabled_);
     rx().pipeline_.setNotchFrequencyHz(static_cast<double>(rx().notchFreqHz_));

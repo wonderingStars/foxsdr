@@ -174,6 +174,17 @@ namespace cascade::core {
 //   the rest        squelch, volume, mute, de-emphasis, stereo, noise reduction, AGC, noise blanker, notch, the audio route (0 both, 1 left, 2 right, 3 none)
 //   running         the radio was running when it was saved (restored running)
 // Gains are NOT here: they are per DEVICE (autoGainByRadio, manualGainByRadio, airspy, ppm, biasTee, converters) and come back when that device opens.
+// One slot of the manual notch bank (dsp/notch_bank.hpp): 0..9, a frequency 20..21600 Hz, a -3 dB width 1..2000 Hz, on or off. Written only for a slot that is on or was moved.
+struct ManualNotchSetting {
+    int slot = 0;
+    double hz = 1000.0;
+    double widthHz = 50.0;
+    bool on = false;
+    bool operator==(const ManualNotchSetting&) const = default;
+};
+// Made safe: slots outside 0..9, a slot already taken and a non-finite number are dropped; the numbers are clamped.
+std::vector<ManualNotchSetting> sanitiseNotchBank(std::vector<ManualNotchSetting> in);
+
 inline constexpr int kMaxSavedRadios = 7;   // radios 2..8; the engine's kMaxReceivers is 8 (radio 1 is the top-level keys)
 struct SavedRadio {
     int number = 0;
@@ -208,6 +219,7 @@ struct SavedRadio {
     bool toneRemove = false;
     int meterUnits = 0;   // S-meter display units, 0 dBFS / 1 S / 2 dBm (engine wiring lane 1)
     int nrMethod = 0;     // noise-reduction method, 0 standard / 1 spectral / 2 line enhancer (engine wiring lane 1)
+    std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
     double notchQ = 30.0;
@@ -496,6 +508,7 @@ struct AppConfig {
     bool toneRemove = false;
     int meterUnits = 0;   // S-meter display units, 0 dBFS / 1 S / 2 dBm (engine wiring lane 1)
     int nrMethod = 0;     // noise-reduction method, 0 standard / 1 spectral / 2 line enhancer (engine wiring lane 1)
+    std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
     double notchQ = 30.0;

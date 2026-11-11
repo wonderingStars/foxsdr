@@ -494,6 +494,9 @@ Five ops, grant SETTINGS (`RADIO_FOCUS`, 6.18, is VIEW). A one-radio client neve
   a tone squelch is on the squelch opens only for a carrier that carries the chosen tone or code. State, appended after `nbStandingDown`: `toneKind toneHz toneCode tonePolarity toneRemove` (settings: they
   move `modeSeq`) and `toneDetectedHz toneDetectedCode toneDetectedPolarity toneGate audioGate` (measurements: they move nothing; `toneGate` is 1 while no tone is required or the required one is present,
   `audioGate` is 1 while the carrier AND the tone let the audio through). Saved per radio (`toneSquelchKind`, `toneSquelchHz`, `toneSquelchCode`, `toneSquelchPolarity`, `toneRemove`).
+* **Manual notch bank (engine wiring lane 1, group C).** `SET_NOTCH_SLOT` 0x0117 (per radio): `num[2]` the slot 0..9, `ival[0]` 0/1 on; with `ival[1]` = 1 `num[0]` the frequency (20..21600 Hz) and `num[1]` the -3 dB width (1..2000 Hz);
+  without them the slot keeps its last values. Up to ten notches on the finished audio of the radio, after the single notch; a slot moves, widens or switches without a click. State, appended after `nrMethodActive`: `notchBankMask`
+  (bit i: slot i on), `notchBankHz[10]`, `notchBankWidthHz[10]` (settings: they move `modeSeq`; defaults off, 1000 Hz, 50 Hz). Saved per radio as `notchBank` (only the slots that are on or were moved).
 * **Noise-reduction method (engine wiring lane 1, group C).** `SET_NR_METHOD` 0x0116 (`ival[0]` `FOXAPI_NR_STANDARD` / `SPECTRAL` / `LINE`, per radio; the on/off switch and the strength stay `SET_NR`'s). The line enhancer is for CW and
   steady carriers and runs in CW and RAW only; elsewhere the standard noise reduction runs in its place. State, appended after `calibrated`: `nrMethod` (a setting: moves `modeSeq`) and `nrMethodActive` (the method in use now; 0 while the noise
   reduction is off - measured). Saved per radio as `nrMethod`.

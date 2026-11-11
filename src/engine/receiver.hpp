@@ -361,6 +361,13 @@ struct Receiver {
     int meterUnits_ = 0;
     // Noise-reduction method (engine wiring lane 1): FOXAPI_NR_*, standard by default.
     int nrMethod_ = 0;
+    // The manual notch bank (engine wiring lane 1): ten slots, each off at 1000 Hz and 50 Hz wide until set.
+    struct ManualNotchSlot {
+        double hz = 1000.0;
+        double widthHz = 50.0;
+        bool on = false;
+    };
+    std::array<ManualNotchSlot, 10> manualNotch_{};
     bool notchEnabled_ = false;
     float notchFreqHz_ = 1000.0f;
     float notchQ_ = 30.0f;

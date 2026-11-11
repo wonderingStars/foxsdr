@@ -3190,6 +3190,7 @@ private:
     void smeterReading(const Receiver& r, double dbfs, double frequencyHz, double& dbm, double& sUnits, bool& calibrated) const;
     std::int32_t applySmeterOp(const FoxCommand& c, FoxCommandResult& res, std::string& why);
     void pollSmeterCal();
+    void pushManualNotches();   // the selected radio's ten notch slots into its pipeline (engine_smeter.cpp, beside the other per-radio audio helpers)
     std::map<std::string, cascade::core::smeter::CalTable> smeterCal_;   // device key -> its calibration (saved: AppConfig::smeterCal)
     SmeterMeasure smeterMeasure_;
     std::string smeterState_ = "idle";

@@ -1956,6 +1956,13 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
         case FOXAPI_OP_SET_NB:
             // with ival[1] = 1 the threshold, 6..30 dB above the average
             return (c.ival[1] == 0 || (v >= 6.0 && v <= 30.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_NOTCH_SLOT: {
+            // the slot 0..9 (a whole number, in num[2]); with ival[1] = 1 the frequency 20..21600 Hz and the width 1..2000 Hz
+            const double slot = c.num[2];
+            if (!(slot >= 0.0 && slot <= 9.0) || slot != std::floor(slot)) { return FOXAPI_OUT_OF_RANGE; }
+            if (c.ival[1] == 0) { return FOXAPI_OK; }
+            return (c.num[0] >= 20.0 && c.num[0] <= 21600.0 && c.num[1] >= 1.0 && c.num[1] <= 2000.0) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        }
         case FOXAPI_OP_SET_NR_METHOD:
             return (c.ival[0] >= 0 && c.ival[0] <= static_cast<long long>(FOXAPI_NR_LINE)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_METER_UNITS:

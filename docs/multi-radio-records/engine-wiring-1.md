@@ -202,6 +202,18 @@ in-process restart into the pipelines), `test_config` 3787, `test_receiver_snaps
 
 The three layers of B1's range check each go RED on their own because the test now tells them apart by their own sentence (API: "outside what the engine accepts"; engine: names CTCSS or DCS; pipeline: a direct call).
 
+## C2. Manual notch bank (second session)
+
+**Op** `FOXAPI_OP_SET_NOTCH_SLOT` 0x0117 (per radio; `num[2]` the slot 0..9, `ival[0]` on, with `ival[1]` = 1 `num[0]` Hz 20..21600 and `num[1]` the -3 dB width 1..2000 Hz; receiver-scoped; in no web, CAT or TCI profile).
+**Behaviour.** `Pipeline` owns two `dsp::NotchBank` (one per channel) on the finished audio, after the single notch and before the automatic notch; the bank's settings are atomics, so nothing is posted. A slot moves, widens, switches
+on and off without a click (the block's glide and fade) and costs one atomic load while no slot is on. The API refuses a value outside the ranges; the engine's own path clamps and flags CLAMPED, like the blanker.
+**State (appended after `nrMethodActive`):** `notchBankMask`, `notchBankHz[10]`, `notchBankWidthHz[10]` (settings, move `modeSeq`). **Config:** `notchBank` (an array of `{slot, hz, widthHz, on}`; only slots that are on or were moved; read
+tolerantly, at most ten, a slot out of range or repeated dropped, numbers clamped), for radio 1 and in each `radios` entry. The automatic notch already existed (`SET_AUTO_NOTCH`) and is unchanged.
+**Tests.** `test_pipeline_notchbank` `19 checks, 0 failed` (an AM carrier with 1000 and 1700 Hz tones through the real chain: a notch on 1000 Hz takes it down by more than 30 dB and leaves 1700 Hz within 1.5 dB, a second slot takes 1700 Hz,
+both off brings both back, bad slots and numbers refused), `test_engine_api_notchbank` `104 checks passed, 0 failed`, `test_config` 3801, `test_receiver_snapshot` 869, `test_apply_command` 1791, `test_config_halves` 2508,
+`test_engine_main_config_roundtrip` 263, `test_radio_scope` 139 (56 ops), mock 451 (+2 known).
+**UNVERIFIED.** Nobody listened to it; the notch depth measured here is on a generated tone through a real chain, not on a real heterodyne; ten notches together cost 14 to 16 ns a sample per channel in the block's own measurement, not measured in a running chain.
+
 ## Old reader
 
 RUN, with the v0.99.104 sources (`git show v0.99.104:src/core/config.hpp` and `config.cpp` in a directory searched first, `tools/old_reader_probe/build_probe.bat`; `new_main.cpp` gained a fifth file for this lane:

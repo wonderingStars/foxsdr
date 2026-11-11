@@ -54,6 +54,13 @@ void Engine::smeterReading(const Receiver& r, double dbfs, double frequencyHz, d
     sUnits = sm::dbmToS(res.dbm, frequencyHz).units;
 }
 
+void Engine::pushManualNotches() {
+    for (std::size_t i = 0; i < rx().manualNotch_.size(); ++i) {
+        const Receiver::ManualNotchSlot& ns = rx().manualNotch_[i];
+        (void)rx().pipeline_.setManualNotch(static_cast<int>(i), ns.hz, ns.widthHz, ns.on);
+    }
+}
+
 std::int32_t Engine::applySmeterOp(const FoxCommand& c, FoxCommandResult& res, std::string& why) {
     Receiver& r = rx();
     const std::string key = smeterKey(r);

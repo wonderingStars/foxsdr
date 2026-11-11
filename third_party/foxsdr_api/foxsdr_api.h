@@ -430,7 +430,12 @@ typedef struct FoxReceiverState {
     /* ---- 0.3 (noise-reduction method; docs/API.md 6.19): nrMethod is THIS radio's choice (FOXAPI_NR_*) and moves modeSeq; nrMethodActive is the method in use now - measured. ---- */
     uint32_t nrMethod;                 /* FOXAPI_NR_* */
     uint32_t nrMethodActive;           /* FOXAPI_NR_* in use now: 0 (standard) while the noise reduction is off, and while the line enhancer is chosen outside CW and RAW - measured */
+    /* ---- 0.3 (manual notch bank; docs/API.md 6.19): up to FOXAPI_NOTCH_SLOTS manual notches on the audio of THIS radio. All three are settings and move modeSeq. ---- */
+    uint32_t notchBankMask;            /* bit i set: slot i is on */
+    double notchBankHz[10];            /* slot i's frequency, Hz (20..21600; the last one set, whether the slot is on or not) */
+    double notchBankWidthHz[10];       /* slot i's -3 dB width, Hz (1..2000) */
 } FoxReceiverState;
+#define FOXAPI_NOTCH_SLOTS 10
 
 /* FoxReceiverState::nrMethod and FOXAPI_OP_SET_NR_METHOD ival[0] */
 #define FOXAPI_NR_STANDARD 0u /* the noise reduction as it always was (default) */
@@ -601,6 +606,7 @@ typedef struct FoxCommand {
 #define FOXAPI_OP_SET_TONE_SQUELCH  0x0113u /* ival[0]: FOXAPI_TONE_*; ival[1]=1: the values follow - num[0]: CTCSS Hz (0 any, else one of the 50), num[1]: DCS code as digits (0 any, else one of the 83), num[2]: DCS polarity 0 any / 1 normal / 2 inverted. Without them the radio's last choice is used. Addresses one radio (target); NFM only */
 #define FOXAPI_OP_SET_METER_UNITS   0x0115u /* ival[0]: FOXAPI_METER_* 0..2: how this radio's level is lettered (the choice is the screen's; the state carries all three). Addresses one radio (target) */
 #define FOXAPI_OP_SET_NR_METHOD     0x0116u /* ival[0]: FOXAPI_NR_* 0..2; the strength is SET_NR's. Addresses one radio (target) */
+#define FOXAPI_OP_SET_NOTCH_SLOT    0x0117u /* num[2]: the slot 0..9; ival[0]: 0/1 on; ival[1]=1: num[0] is the frequency, Hz 20..21600, num[1] the -3 dB width, Hz 1..2000. Addresses one radio (target) */
 #define FOXAPI_OP_SET_TONE_REMOVE   0x0114u /* ival[0]: 0/1: the high-pass that takes the sub-audible tone out of the audio. Addresses one radio (target) */
 /* Display */
 #define FOXAPI_OP_SET_DISPLAY_RANGE 0x0201u /* num[0]: dbMin, num[1]: dbMax (min span enforced) */

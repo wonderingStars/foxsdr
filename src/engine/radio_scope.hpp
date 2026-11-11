@@ -49,6 +49,7 @@ inline bool isRadioScopedOp(std::uint32_t op) {
         case FOXAPI_OP_SET_TONE_REMOVE:
         case FOXAPI_OP_SET_METER_UNITS:
         case FOXAPI_OP_SET_NR_METHOD:
+        case FOXAPI_OP_SET_NOTCH_SLOT:
         case FOXAPP_OP_CAL_MEASURE:
         case FOXAPP_OP_CAL_CLEAR:
         case FOXAPI_OP_SET_NOTCH:

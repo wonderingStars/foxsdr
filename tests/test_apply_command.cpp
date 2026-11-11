@@ -454,6 +454,9 @@ struct AppWindowTestAccess {
     static int toneCodePipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.toneDcsDigits(); }); }
     static bool toneRemoveRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->toneRemove_; }); }
     static bool toneRemovePipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.toneRemove(); }); }
+    static bool notchSlotOn(AppWindow& a, int i) { return rd(a, [&] { return th::engine(a).receivers_[0]->manualNotch_[static_cast<std::size_t>(i)].on; }); }
+    static double notchSlotHz(AppWindow& a, int i) { return rd(a, [&] { return th::engine(a).receivers_[0]->manualNotch_[static_cast<std::size_t>(i)].hz; }); }
+    static int notchBankPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.manualNotchCount(); }); }
     static int nrMethodRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->nrMethod_; }); }
     static int nrMethodPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.noiseReductionMethod(); }); }
     static int meterUnitsRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->meterUnits_; }); }
@@ -1212,6 +1215,27 @@ void receiverOps(AppWindow& a) {
         CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_TONE_SQUELCH, 3, 0)), FOXAPI_OUT_OF_RANGE));
         CHECK(A::toneKindRx(a) == 2 && A::toneCodeRx(a) == 754 && A::toneHzRx(a) == 0.0);   // (the values that came with the DCS command replaced all three: the tone is "any" again)
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_TONE_SQUELCH, FOXAPI_TONE_OFF, 0))));
+    }
+
+    covering(FOXAPI_OP_SET_NOTCH_SLOT);
+    {
+        CHECK(!A::notchSlotOn(a, 4) && A::notchBankPipe(a) == 0);
+        FoxCommand n = ints(FOXAPI_OP_SET_NOTCH_SLOT, 1, 1);
+        n.num[0] = 1800.0;
+        n.num[1] = 40.0;
+        n.num[2] = 4.0;
+        CHECK(ok(A::apply(a, n)));
+        CHECK(A::notchSlotOn(a, 4) && A::notchSlotHz(a, 4) == 1800.0 && A::notchBankPipe(a) == 1);
+        n.num[0] = 5.0;   // clamped to 20 Hz and said so
+        const FoxCommandResult lo = A::apply(a, n);
+        CHECK(ok(lo) && (lo.flags & FOXAPI_RESULT_CLAMPED) != 0u && A::notchSlotHz(a, 4) == 20.0);
+        n.num[2] = 10.0;
+        CHECK(refused(A::apply(a, n), FOXAPI_OUT_OF_RANGE));
+        n.num[2] = 4.0;
+        n.ival[0] = 0;
+        n.ival[1] = 0;
+        CHECK(ok(A::apply(a, n)));
+        CHECK(!A::notchSlotOn(a, 4) && A::notchBankPipe(a) == 0);
     }
 
     covering(FOXAPI_OP_SET_NR_METHOD);

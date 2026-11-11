@@ -137,6 +137,9 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
                       f.meterUnits != o.meterUnits ||
                       // the noise-reduction method chosen is a setting; the method in use is a measurement
                       f.nrMethod != o.nrMethod ||
+                      // the manual notch bank's switches, frequencies and widths (all settings)
+                      f.notchBankMask != o.notchBankMask || std::memcmp(f.notchBankHz, o.notchBankHz, sizeof(f.notchBankHz)) != 0 ||
+                      std::memcmp(f.notchBankWidthHz, o.notchBankWidthHz, sizeof(f.notchBankWidthHz)) != 0 ||
                       f.notchQ != o.notchQ || changed(f.flags, o.flags, kModeFlags);
     const bool device = first || changed(f.flags, o.flags, kDeviceFlags) ||
                         f.sampleRateHz != o.sampleRateHz || f.channelRateHz != o.channelRateHz ||
