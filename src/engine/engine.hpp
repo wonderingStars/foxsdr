@@ -744,6 +744,12 @@ private:
     // The rtl_tcp row's Open key (SELECT_SOURCE "open-rtltcp:rtltcp=<addr>"): the Pluto's recipe, step for step.
     void openRtlTcpAt(const std::string& args);
     void openRtlTcpFromBox();
+    // A KiwiSDR receiver (audio only) as this radio's source: SELECT_SOURCE "open-kiwisdr:<host>[:<port>]" (kiwisdr_source.hpp).
+    void openKiwiAt(const std::string& args);
+    bool radioIsKiwi() const;
+    void adoptKiwiRadio();
+    // The pipeline's channel bandwidth for this radio: the user's, or wide open on a KiwiSDR radio.
+    void applyChannelBandwidth();
     void tuneToBookmark(const cascade::core::Bookmark& b);
     std::uint64_t addBookmarkHere(const std::string& name, const std::string& group = std::string());  // the new bookmark's id
     cascade::core::Scanner::Params scannerParams() const;   // (the list mode's list too: scanTicked_)

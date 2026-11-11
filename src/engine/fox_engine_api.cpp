@@ -1976,6 +1976,7 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
             if (remote && (std::strncmp(c.text, "file:", 5) == 0 || std::strncmp(c.text, "pluto:", 6) == 0 ||
                            std::strncmp(c.text, "open-pluto:", 11) == 0 ||
                            std::strncmp(c.text, "open-rtltcp:", 12) == 0 ||
+                           std::strncmp(c.text, "open-kiwisdr:", 13) == 0 ||   // (an outward connection to an address the remote client chose)
                            std::strncmp(c.text, "soundcard:", 10) == 0)) {
                 return FOXAPI_DENIED;
             }

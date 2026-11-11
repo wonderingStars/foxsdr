@@ -59,6 +59,7 @@
 #include "core/thread_beats.hpp"
 #include "core/tune_control.hpp"
 #include "source/iq_file_source.hpp"
+#include "source/kiwisdr_source.hpp"
 #include "source/rsp_rows.hpp"
 #include "source/soapy_enum_proc.hpp"
 #include "core/device_scan_plan.hpp"
@@ -1745,6 +1746,7 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
     ++rx().sourceGen_;  // this install is itself a source change
     installSource(std::move(r.dev));
     rx().sourceKind_ = r.kind;
+    adoptKiwiRadio();   // (a KiwiSDR receiver: RAW demodulator, the mode becomes the receiver's, offset 0)
     // A RADIO OPENED - the denominator of the failures above - and the watch for
     // its samples to arrive (0.99.64, core/health_events.hpp).
     if (r.kind != "siggen" && r.kind != "file") {
@@ -2191,6 +2193,62 @@ void Engine::openRtlTcpAt(const std::string& args) {
     launchDeviceOpen(std::move(req), "rtl_tcp server at " + addr);
 }
 
+// A KiwiSDR receiver as this radio's source (SELECT_SOURCE "open-kiwisdr:<host>[:<port>]"; the address is validated HERE, before anything is closed, so a typo can never
+// take a live radio away). The rtl_tcp recipe: the open blocks (connect, the opening commands, the receiver's first word) and runs on the worker.
+void Engine::openKiwiAt(const std::string& args) {
+    rx().sourceError_.clear();
+    const std::string addr = (args.rfind("kiwisdr=", 0) == 0) ? args.substr(8) : args;
+    cascade::source::KiwiSdrSource::Address parsed;
+    std::string why;
+    if (!cascade::source::KiwiSdrSource::parseArgs(addr, parsed, why)) {
+        rx().sourceError_ = why;
+        return;
+    }
+    const std::optional<double> keepCenterHz = carriedAirCentre();
+    DeviceOpenResult req;
+    if (rx().device_ != nullptr) {
+        req.closedRadio = cascade::gui::rememberedSourceAfterFailedOpen(
+            rx().sourceKind_, cfgSoapyArgs_, cfgNativeArgs_, "",
+            rx().pipeline_.activeSource().sampleRateHz());
+        req.closedLabel = rx().deviceModel_;
+        // The model, never the address: this line goes in the report.
+        cascade::core::diagLogf("source: closing %s before opening the KiwiSDR receiver", rx().deviceModel_.c_str());
+        rx().device_ = nullptr;
+        rx().soapyView_ = nullptr;
+        rx().deviceArgs_.clear();
+        rx().deviceModel_.clear();
+        ++rx().sourceGen_;
+        installSource(nullptr);
+        rx().sourceKind_ = "siggen";
+        applyConverterForSource();
+        followInputRate();
+    }
+    req.kind = kKiwiSdrDriverKey;
+    req.args = std::string("kiwisdr=") + parsed.host + ":" + std::to_string(parsed.port);
+    req.row = sourceSel_;
+    req.requestRateHz = 12000.0;
+    req.keepCenterHz = keepCenterHz;
+    launchDeviceOpen(std::move(req), "KiwiSDR receiver at " + parsed.host);
+}
+
+// THE KIWISDR'S OWN RULES FOR A RADIO (kiwisdr_source.hpp): its demodulator stays RAW (the receiver sends audio), the mode the user picks is the receiver's,
+// the VFO offset is 0 (the receiver tunes itself), and the local channel filter is left fully open (the receiver applies the passband).
+bool Engine::radioIsKiwi() const { return rx().sourceKind_ == kKiwiSdrDriverKey && dynamic_cast<cascade::source::KiwiSdrSource*>(rx().device_) != nullptr; }
+
+void Engine::applyChannelBandwidth() {
+    // 24 kHz is far above the audio's 6 kHz: the pipeline clamps it to 0.9 of the channel rate, which passes all of it.
+    rx().pipeline_.setVfoBandwidthHz(radioIsKiwi() ? 24000.0 : rx().vfoBandwidthHz_);
+}
+
+void Engine::adoptKiwiRadio() {
+    if (!radioIsKiwi()) { return; }
+    int idx = rx().modeIndex_;
+    if (idx < 0 || idx >= 8 || cascade::source::KiwiSdrSource::serverModeFor(static_cast<int>(kModeMap[idx])).word[0] == '\0') { idx = 2; }   // a mode the receiver has no word for: AM
+    commitModeIndex(idx);
+    rx().pipeline_.setVfoOffsetHz(0.0);
+    applyChannelBandwidth();
+}
+
 void Engine::selectSource(int idx, std::optional<double> carryAirHz) {
     // RE-CLICK ON THE CURRENT ROW: a no-op - unless the radio installed there
     // has DIED (unplugged, or a driver fault the receiver latched), when the
@@ -2404,6 +2462,7 @@ std::unique_ptr<cascade::source::DeviceSource> Engine::makeDeviceSource(
     if (kind == "aor") { return std::make_unique<cascade::source::AorSource>(); }
     if (kind == kPlutoDriverKey) { return std::make_unique<cascade::source::PlutoSource>(); }
     if (kind == kRtlTcpDriverKey) { return std::make_unique<cascade::source::RtlTcpSource>(); }
+    if (kind == kKiwiSdrDriverKey) { return std::make_unique<cascade::source::KiwiSdrSource>(); }
     if (kind == "soapy") { return std::make_unique<cascade::source::SoapySource>(); }
     return nullptr;
 }
@@ -3077,6 +3136,11 @@ void Engine::followInputRate() {
 }
 
 void Engine::setVfoToAbsoluteHz(double wantAbsHz, bool snap) {
+    // A KiwiSDR radio tunes itself: a click on the display moves its centre, never a VFO offset (which stays 0).
+    if (radioIsKiwi()) {
+        tuneAbsoluteHz(wantAbsHz);
+        return;
+    }
     if (snap) {
         // Same raster as the drag path (kModeSnapHz); Shift bypasses it.
         const double s = kModeSnapHz[rx().modeIndex_];
@@ -4501,7 +4565,7 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
             commitModeIndex(idx);
             rx().bandwidthIndex_ = kModeDefaultBw[idx];
             rx().vfoBandwidthHz_ = kBwHz[rx().bandwidthIndex_];
-            rx().pipeline_.setVfoBandwidthHz(rx().vfoBandwidthHz_);
+            applyChannelBandwidth();
         }
     }
 
@@ -4528,7 +4592,7 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
         const double bwHi = kVfoBwMaxChanFrac * rx().pipeline_.channelRateHz();
         const double bwBefore = rx().vfoBandwidthHz_;
         rx().vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(ps.bandwidthHz, bwHi));
-        rx().pipeline_.setVfoBandwidthHz(rx().vfoBandwidthHz_);
+        applyChannelBandwidth();
         // -1 WHEN THE PRESET ASKED FOR SOMETHING THE LIST DOES NOT CARRY, and
         // that is exactly the APT case: 40 kHz is not a step, and the nearest
         // one is 12.5 kHz. Pointing the combo there made it letter a bandwidth
@@ -4560,7 +4624,7 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // notice needs to say "this preset needs a receiver that covers that
     // band" rather than leaving it as an unexplained tune.
     if ((ps.flags & CASCADE_PRESET_DEVICE_CENTRE) != 0u) {
-        const double off = cascade::gui::presetVfoOffsetHz(ps.flags, rx().pipeline_.vfoOffsetHz());
+        const double off = radioIsKiwi() ? 0.0 : cascade::gui::presetVfoOffsetHz(ps.flags, rx().pipeline_.vfoOffsetHz());
         rx().pipeline_.setVfoOffsetHz(off);
         rx().vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
         retuneSourceHz(ps.frequencyHz, /*isPluginPreset=*/true);
@@ -6056,7 +6120,7 @@ void Engine::tuneToBookmark(const cascade::core::Bookmark& b) {
     const double bwHi = kVfoBwMaxChanFrac * rx().pipeline_.channelRateHz();
     const double bwBefore = rx().vfoBandwidthHz_;
     rx().vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(b.bandwidthHz, bwHi));
-    rx().pipeline_.setVfoBandwidthHz(rx().vfoBandwidthHz_);
+    applyChannelBandwidth();
     // -1 for a bookmark saved at a bandwidth the list does not carry (one
     // taken while a preset had the VFO at 40 kHz, say): the combo letters the
     // real figure and ticks nothing.
@@ -6146,6 +6210,10 @@ bool Engine::selectSourceById(const std::string& id) {
         openRtlTcpAt(args);
         return true;
     }
+    if (kind == "open-kiwisdr") {
+        openKiwiAt(args);
+        return true;
+    }
     // The KIND is matched too - a native row and a Soapy row for one dongle
     // carry the same serial.
     if (cascade::gui::isNativeSourceKind(kind)) {
@@ -6193,7 +6261,14 @@ std::vector<cascade::gui::RunnableDecoder> Engine::runnableDecoders() const {
 void Engine::commitModeIndex(int index) {
     if (index < 0 || index >= 8) { return; }
     rx().modeIndex_ = index;
-    rx().pipeline_.setDemodMode(kModeMap[index]);
+    if (radioIsKiwi()) {
+        // A KiwiSDR radio: the mode is the RECEIVER's (it sends audio demodulated in it); this radio's own demodulator passes the audio (RAW). A mode the receiver has no word
+        // for (WFM, DSB, RAW) is kept as the user's pick and leaves the receiver in its last mode (the refusal sentence is in the source's lastError).
+        if (auto* kiwi = dynamic_cast<cascade::source::KiwiSdrSource*>(rx().device_)) { (void)kiwi->setServerMode(static_cast<int>(kModeMap[index])); }
+        rx().pipeline_.setDemodMode(cascade::dsp::DemodMode::RAW);
+    } else {
+        rx().pipeline_.setDemodMode(kModeMap[index]);
+    }
     // The breadcrumb trail (core/event_trail.hpp): a demodulator change, by its fixed name.
     cascade::core::trail::noteMode(index);
     refreshDiagContext();
@@ -6211,7 +6286,7 @@ void Engine::setBandwidthIndex(int index) {
     const double before = rx().vfoBandwidthHz_;
     rx().bandwidthIndex_ = index;
     rx().vfoBandwidthHz_ = kBwHz[index];
-    rx().pipeline_.setVfoBandwidthHz(rx().vfoBandwidthHz_);
+    applyChannelBandwidth();
     // A pick of the step already in force changes nothing and says nothing.
     if (rx().vfoBandwidthHz_ != before) { logBandwidthChange("bandwidth list"); }
 }
@@ -6221,7 +6296,7 @@ void Engine::setModeIndex(int index) {
     commitModeIndex(index);
     rx().bandwidthIndex_ = kModeDefaultBw[index];
     rx().vfoBandwidthHz_ = kBwHz[rx().bandwidthIndex_];
-    rx().pipeline_.setVfoBandwidthHz(rx().vfoBandwidthHz_);
+    applyChannelBandwidth();
     // The MODE and its bandwidth - a demodulator change, not a tuning change.
     // No frequency reaches the log, here or anywhere else.
     cascade::core::diagLogf("mode: %s, bandwidth %.0f", kModeNames[index], rx().vfoBandwidthHz_);
@@ -7119,8 +7194,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         case FOXAPI_OP_SET_VFO_OFFSET: {
             // Clamped against the LIVE rate: the whole band stays inside the
             // baseband (the web remote, a plugin and a spectrum drag).
-            const double off = cascade::gui::vfoOffsetInsideSpan(c.num[0], rx().pipeline_.inputRateHz(),
-                                                                 rx().vfoBandwidthHz_);
+            const double off = radioIsKiwi() ? 0.0   // (a KiwiSDR radio's offset stays 0: the receiver tunes itself)
+                                             : cascade::gui::vfoOffsetInsideSpan(c.num[0], rx().pipeline_.inputRateHz(), rx().vfoBandwidthHz_);
             rx().pipeline_.setVfoOffsetHz(off);
             rx().vfoOffsetKhz_ = static_cast<float>(off / 1000.0);
             if (off != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
@@ -7131,7 +7206,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // The rail's VFO slider: its own +/-500 kHz span, never clamped to
             // the band (a divergence from SET_VFO_OFFSET kept as it was - see
             // docs/engine-stage1.md).
-            rx().vfoOffsetKhz_ = static_cast<float>(c.num[0] / 1000.0);
+            rx().vfoOffsetKhz_ = radioIsKiwi() ? 0.0f : static_cast<float>(c.num[0] / 1000.0);
             rx().pipeline_.setVfoOffsetHz(1000.0 * static_cast<double>(rx().vfoOffsetKhz_));
             res.applied[0] = rx().pipeline_.vfoOffsetHz();
             return res;
@@ -7176,7 +7251,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             const double bwHi = kVfoBwMaxChanFrac * rx().pipeline_.channelRateHz();
             const double bwBefore = rx().vfoBandwidthHz_;
             rx().vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(c.num[0], bwHi));
-            rx().pipeline_.setVfoBandwidthHz(rx().vfoBandwidthHz_);
+            applyChannelBandwidth();
             rx().bandwidthIndex_ = bandwidthStepIndex(rx().vfoBandwidthHz_);
             if (rx().vfoBandwidthHz_ != bwBefore) { logBandwidthChange("remote request"); }
             if (rx().vfoBandwidthHz_ != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
@@ -7204,7 +7279,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             const double bwHi = kVfoBwMaxChanFrac * rx().pipeline_.channelRateHz();
             const double dragBefore = rx().vfoBandwidthHz_;
             rx().vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(c.num[0], bwHi));
-            rx().pipeline_.setVfoBandwidthHz(rx().vfoBandwidthHz_);
+            applyChannelBandwidth();
             if (rx().vfoBandwidthHz_ != dragBefore) { rx().vfoBandwidthDragged_ = true; }   // logged once, when the drag settles (BANDWIDTH_DRAG_END)
             if (rx().vfoBandwidthHz_ != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
             res.applied[0] = rx().vfoBandwidthHz_;
@@ -7494,7 +7569,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // which; a scanned device's id is "<kind>:<args>", the same spelling its key has.
             if (const std::size_t colon = text.find(':'); colon != std::string::npos) {
                 const std::string kind = text.substr(0, colon);
-                if (kind != "file" && kind != "open-pluto" && kind != "open-rtltcp" && kind != "row" && kind != "soundcard") {
+                if (kind != "file" && kind != "open-pluto" && kind != "open-rtltcp" && kind != "open-kiwisdr" && kind != "row" && kind != "soundcard") {
                     const std::string key = cascade::core::patch::makeDeviceKey(kind, text.substr(colon + 1));
                     rebuildDeviceLedger();
                     const DeviceHolder holder = deviceLedger_.holderOf(key);
@@ -9485,7 +9560,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     // chain ended up with, not whatever the file claimed.
     const double bwHi = kVfoBwMaxChanFrac * rx().pipeline_.channelRateHz();
     rx().vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(cfg.bandwidthHz, bwHi));
-    rx().pipeline_.setVfoBandwidthHz(rx().vfoBandwidthHz_);
+    applyChannelBandwidth();
     // The combo's tick, and -1 for a saved bandwidth that is none of the steps
     // - a config written while a plugin preset had the VFO at its own width.
     // The combo letters vfoBandwidthHz_ itself either way.

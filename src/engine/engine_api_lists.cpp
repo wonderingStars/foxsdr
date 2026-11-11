@@ -11,6 +11,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -33,6 +34,7 @@
 #include "core/soundcard_panel.hpp"
 #include "net/web_policy.hpp"
 #include "source/airspy_source.hpp"
+#include "source/kiwisdr_source.hpp"
 #include "source/rtlsdr_source.hpp"
 #include "source/rx888_source.hpp"
 #include "source/soundcard_source.hpp"
@@ -582,6 +584,12 @@ std::uint64_t Engine::apiListsFingerprint() {
         f.value(receivers_[n - 1u]->audioRoute_);
         f.text(receivers_[n - 1u]->claimedKey_);
         f.text(receivers_[n - 1u]->refusal_);
+        // (a KiwiSDR radio's own facts: its state and mode words, and its level in 3 dB steps so a moving signal does not rebuild the block every pass)
+        if (const auto* kiwi = dynamic_cast<const cascade::source::KiwiSdrSource*>(receivers_[n - 1u]->device_)) {
+            f.text(kiwi->stateWord());
+            f.text(kiwi->serverMode());
+            f.value(kiwi->haveSmeter() ? static_cast<int>(std::floor(kiwi->rssiDbm() / 3.0)) : 0);
+        }
         {
             // (stage 7) the device's tunable range: asked while it is unknown, forgotten with the device
             Receiver& rr = *receivers_[n - 1u];
@@ -1363,6 +1371,20 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             fact(pre + "label", radioLabel());
             // WHAT KIND OF SOURCE THIS RADIO IS ON (stage 7): "siggen", "file", "pluto", "rtltcp", "soapy" or a native driver's key; the generator while a source is still opening.
             fact(pre + "source", rx().sourceKind_);
+            // A KIWISDR RADIO (engine wiring lane 1): what the receiver is doing, in the client's words, never its address. state is one of idle, connecting, playing, busy, password,
+            // down, redirect, failed, dropped, malformed, closed; mode is the receiver's mode word; rssi (dBm, only once the receiver has sent a level) and dropped (audio samples
+            // the engine could not take in time).
+            if (const auto* kiwi = dynamic_cast<const cascade::source::KiwiSdrSource*>(rx().device_)) {
+                fact(pre + "kiwi.state", kiwi->stateWord());
+                fact(pre + "kiwi.detail", kiwi->stateSentence());
+                fact(pre + "kiwi.mode", kiwi->serverMode());
+                if (kiwi->haveSmeter()) {
+                    char rssi[32];
+                    std::snprintf(rssi, sizeof(rssi), "%.1f", kiwi->rssiDbm());
+                    fact(pre + "kiwi.rssi", rssi);
+                }
+                fact(pre + "kiwi.dropped", std::to_string(kiwi->droppedSamples()));
+            }
             // THE TUNABLE RANGE of the open device, "<lowest>,<highest>" centre frequency in Hz exactly as the driver reports it (DeviceSource::frequencyRangeHz, asked once the device is
             // open and kept); absent for the generator, an I/Q file (its centre is nominal and takes any value) and a device that reports none. (stage 7)
             if (rx().rangeKnown_) {

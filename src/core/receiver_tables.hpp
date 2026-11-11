@@ -124,6 +124,8 @@ constexpr const char* kPlutoDriverKey = "pluto";
 // THE RTL_TCP SERVER'S ROW (0.99.70) is the Pluto's kind of row and follows its rules: an address typed in a box (rtlTcpAddr_), a row that
 // selects and does not connect, an Open key that does.
 constexpr const char* kRtlTcpDriverKey = "rtltcp";
+// A KiwiSDR receiver on the network (audio only; source/kiwisdr_source.hpp): the radio kind word in the settings and in fact.radio.<n>.source.
+constexpr const char* kKiwiSdrDriverKey = "kiwisdr";
 
 constexpr const char* kModeNames[8] = {"NFM", "WFM", "AM", "DSB",
                                        "USB", "CW",  "LSB", "RAW"};

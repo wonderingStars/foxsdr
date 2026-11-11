@@ -158,6 +158,7 @@ void Engine::restoreExtraRadioDevice(const std::string& kind, const std::string&
         ++rx().sourceGen_;
         installSource(std::move(dev));
         rx().sourceKind_ = kind;
+        adoptKiwiRadio();
         cascade::core::health::noteRadioOpen(kind);
         applyConverterForSource();
         followInputRate();

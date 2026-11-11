@@ -2545,6 +2545,13 @@ At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTT
 
 *It is not a heartbeat.* The session's keep-alive stays the authorised `GET /api/status` and nothing else (8.16, API 0.2): a stream held open by a frozen tab must not stand in for a live page, and the remote transmit key is judged from that heartbeat with a 2 s window. The page therefore keeps one `GET /api/status` every 500 ms while the stream is up (4 per second, 250 ms, when it is not) and applies what it returns. The page falls back to the fast poll the moment the stream errors (including a 503 or 401), and retries the stream every 10 s. A client that is not a browser can use `/api/events` for the push and must poll `/api/status` itself if it holds the transmit key.
 
+### 9.26 A KiwiSDR receiver as a radio (engine wiring lane 1; docs/multi-radio-records/engine-wiring-1.md)
+
+* `RADIO_ADD` / `SELECT_SOURCE` text `open-kiwisdr:<host>[:<port>]` opens a KiwiSDR receiver (`src/source/kiwisdr_source.*` over `kiwisdr_client.*`) as a listen-only, audio-only radio: 12 kS/s audio as a real
+  signal through the radio's own chain (demodulator RAW), centre = the receiver's frequency, the mode is the receiver's, the VFO offset stays 0. No op number, no state field. REMOTE sessions are `DENIED`.
+* Facts (LOCAL read like the other radio facts): `fact.radio.<n>.source` = `kiwisdr`; `fact.radio.<n>.kiwi.state` (`idle connecting playing busy password down redirect failed dropped malformed closed`), `.detail`, `.mode`, `.rssi` (dBm, once the receiver has sent a level), `.dropped`. A refusal is `fact.radio.<n>.refusal`.
+* Saved settings: `sourceKind` "kiwisdr" with `nativeArgs` "kiwisdr=host:port" for radio 1, and the same kind and `args` in a `radios` entry; an older reader falls back to the generator for the kind it does not know.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the
