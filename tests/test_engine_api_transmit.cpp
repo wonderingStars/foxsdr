@@ -1501,7 +1501,10 @@ void testTicketBooksUnderMerging() {
     stopStalls.store(true);
     staller.join();
     const auto t0 = std::chrono::steady_clock::now();
-    while (std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(1500)) {
+    // At least 1.5 s, and then until every ticket issued has had its result read (at most 30 s): on a machine so loaded that the control thread has not applied
+    // the last of them within a second and a half, "missing" must mean a result that never came, not one that has not come YET.
+    while (std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(1500) ||
+           (!unread.empty() && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(30))) {
         a.beat();
         readSome(64);
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
