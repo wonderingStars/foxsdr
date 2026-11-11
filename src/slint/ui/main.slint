@@ -63,7 +63,9 @@ export { Theme, Skin, Workbench, NightWatch, DigitFace, MeterStyle, ChipTone, La
 export { TxChoice, TransmitPageModel, TransmitEvents }
 export { View3D, Scene3DLabel, SurveyRankRow, SondeLegendRow }   // the 3D views' state and their labels (docs 6.64): the host's view3d_publish sets the global and answers its callbacks
 import { GlobeEvents, GlobeModel, GlobeControl, GlobeChipModel } from "globe_views.slint";
-import { WorkspaceModel, WorkspaceCell, WorkspaceBar, RadioWorkspace } from "workspace.slint";
+import { WorkspaceModel, WorkspaceCell, WorkspaceBar, RadioWorkspace, AddRadioCard, StripRadio, MasterLamp, MixRow, AddChoice } from "workspace.slint";
+import { RadioStripBlock, AudioMixBlock, RadioTag } from "radio_strip.slint";
+export { StripRadio, MasterLamp, MixRow, AddChoice }
 import { RadioPaneData } from "radio_pane.slint";
 export { WorkspaceModel, WorkspaceCell, RadioPaneData }   // the radio workspace (docs/multi-radio-records/screen-s3.md): the host publishes its model and answers its callbacks
 export { GlobeEvents, GlobeModel, GlobeControl, GlobeChipModel }
@@ -421,6 +423,10 @@ export component MainWindow inherits Window {
                 HorizontalLayout {   // stretch (the default): the lanes take the strip's slack, the other blocks keep their width
                     padding-left: 16px; padding-right: 16px; spacing: 14px;   // the sheet says 20; 14 lets the three lanes keep their captions at 1440
 
+                    // STAGE S4: with more than one radio open the strip starts with the radios' own block (docs/multi-radio-records/screen-s4.md); with one radio it is not there and the strip is as it was
+                    if WorkspaceModel.radio-count > 1 && !root.compact-strip : RadioStripBlock { horizontal-stretch: 0; }
+                    if WorkspaceModel.radio-count > 1 && !root.compact-strip : VLine { y: (parent.height - 72px) / 2; }
+
                     HorizontalLayout { // STOP + the four MASTER lamps
                         spacing: 14px; alignment: center; horizontal-stretch: 0;
                         VerticalLayout { alignment: center; StopKey { running: root.running; tooltip: root.running ? @tr("Stop the receiver") : @tr("Start the receiver"); clicked => { root.stop-clicked(); } } }
@@ -546,7 +552,10 @@ export component MainWindow inherits Window {
                         Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
                         HorizontalLayout { padding-left: 12px; padding-right: 12px; alignment: space-between;
                             Caption { label: root.bank-titles[root.bank-index]; color: Theme.fg; }
-                            VerticalLayout { alignment: center; Chip { label: root.bank-chip; tone: root.bank-chip-tone; } }
+                            HorizontalLayout { spacing: 6px;
+                                if WorkspaceModel.radio-count > 1 : VerticalLayout { alignment: center; RadioTag { } }   // stage S4: the radio the panel and the banks show
+                                VerticalLayout { alignment: center; Chip { label: root.bank-chip; tone: root.bank-chip-tone; } }
+                            }
                         }
                     }
                     Flickable { vertical-stretch: 1; viewport-height: list.preferred-height;
@@ -604,6 +613,7 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+                    if WorkspaceModel.radio-count > 1 : AudioMixBlock { }   // stage S4: per radio the route, MUTE, SOLO and volume
                     Rectangle { height: 44px;
                         Rectangle { y: 0; height: Theme.hairline; width: parent.width; background: Theme.line; }
                         VerticalLayout { padding-left: 12px; padding-right: 12px; padding-top: 8px; spacing: 2px;
@@ -660,7 +670,7 @@ export component MainWindow inherits Window {
                     // THE RADIO WORKSPACE (docs/multi-radio-records/screen-s3.md): with more than one radio open the receiver view carries a 30 px bar (layout keys, page keys) over it, and a multi-pane
                     // layout puts the grid of panes where the spectrum and waterfall are. With ONE radio there is no bar, ws-bar-h is 0 and this view is exactly what it was.
                     private property <length> ws-bar-h: root.view-index == 0 && WorkspaceModel.radio-count > 1 ? 30px : 0px;
-                    if root.view-index == 0 && WorkspaceModel.radio-count > 1 : WorkspaceBar { x: 0; y: 0; width: parent.width; }
+                    if root.view-index == 0 && WorkspaceModel.radio-count > 1 : WorkspaceBar { x: 0; y: 0; width: parent.width; compact: root.compact-strip; }
                     if root.view-index == 0 && WorkspaceModel.shown-layout > 0 : RadioWorkspace { x: 0; y: parent.ws-bar-h; width: parent.width; height: max(0px, parent.height - parent.ws-bar-h); }
                     if root.view-index == 0 && WorkspaceModel.shown-layout == 0 : Rectangle {   // the wells are placed, not laid out: a layout here fed its 120 px minimum to the window's own size
                         x: 0; y: parent.ws-bar-h; width: parent.width; height: parent.height - parent.ws-bar-h;
@@ -747,6 +757,8 @@ export component MainWindow inherits Window {
                         }
                     }
                     Rectangle { horizontal-stretch: 1; }
+                    // STAGE S4: the way to add a radio - the one new thing a one-radio user sees (docs/multi-radio-records/screen-s4.md); the card is in a sheet
+                    if WorkspaceModel.can-add : VerticalLayout { alignment: center; Key { label: WorkspaceModel.add-key; ghost: true; small: true; min-w: 0px; tooltip: WorkspaceModel.add-key-tip; clicked => { WorkspaceModel.add-open-requested(); } } }
                     VerticalLayout { alignment: center; Key { label: @tr("Request a feature"); ghost: true; small: true; min-w: 0px; tooltip: @tr("Ask for a feature"); clicked => { root.feature-request-clicked(); } } }
                     VerticalLayout { alignment: center; Key { label: @tr("Report a bug / dislike"); ghost: true; small: true; min-w: 0px; tooltip: @tr("Report a problem"); clicked => { root.bug-report-clicked(); } } }
                     Rectangle { width: 8px; }
@@ -780,6 +792,18 @@ export component MainWindow inherits Window {
         HorizontalLayout { spacing: 8px; alignment: end;
             Key { label: root.mute-stop-label; clicked => { root.mute-question-open = false; KitEvents.mute-stop-clicked(); } }
             Key { label: @tr("Keep it running"); on: true; clicked => { root.mute-question-open = false; KitEvents.mute-keep-clicked(); } }
+        }
+    }
+    // STAGE S4: the card "Add a radio" as a sheet (the status bar's key), and the question before a running or recording radio is removed
+    if WorkspaceModel.add-open && WorkspaceModel.can-add : Sheet { title: WorkspaceModel.add-title; dismissed => { WorkspaceModel.add-dismissed(); }
+        AddRadioCard { titled: false; slot: 0; label: ""; }   // (no group label: the status bar's key is the one control called "Add a radio")
+        HorizontalLayout { alignment: end; Key { label: @tr("Close"); clicked => { WorkspaceModel.add-dismissed(); } } }
+    }
+    if WorkspaceModel.remove-confirm > 0 : Sheet { title: WorkspaceModel.remove-question; dismissed => { WorkspaceModel.remove-cancelled(); }
+        Text { text: WorkspaceModel.remove-explain; wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; }
+        HorizontalLayout { spacing: 8px; alignment: end;
+            Key { label: WorkspaceModel.remove-yes; danger: true; clicked => { WorkspaceModel.remove-confirmed(); } }
+            Key { label: WorkspaceModel.remove-no; on: true; clicked => { WorkspaceModel.remove-cancelled(); } }
         }
     }
     // the SIGNAL bank's companion sheets: the Radio-setup page and the recorder's import dialog (shown by their models)

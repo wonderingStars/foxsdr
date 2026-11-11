@@ -1,0 +1,261 @@
+// FoxSDR Slint front end - THE MULTI-RADIO STRIP, AUDIO MIX AND SECTIONS TAG (docs/multi-radio-screen-design.md 3.4, built in stage S4; docs/multi-radio-records/screen-s4.md).
+//
+//   RadioStripBlock   the block at the left of the receiver strip (a window of 1760 px or more) or one row of the 30 px workspace bar (a narrower window), shown only when more than one radio is open:
+//                     "Controls follow" with the radios of the page shown, STOP Rn and STOP ALL / START ALL, and the MASTER lamps (one per open radio, a click selects it and turns the page to it)
+//   AudioMixBlock     the foot of the sections panel, only with more than one radio: per radio the route (both, left, right, none), MUTE, SOLO and the volume
+//   RadioTag          the R-tag over the sections panel's header: the radio the panel and the banks show
+//
+// Everything arrives through WorkspaceModel (workspace.slint) and every gesture goes back through it with the radio's number; this file decides nothing. Every control names its radio in its accessible
+// label, as the panes' do, so labels stay unique with several radios on screen: the selector keys read "Controls follow Radio 2", the lamps "Radio 2 master", the mix rows "Output of Radio 2",
+// "Mute Radio 2", "Solo Radio 2" and "Radio 2: VOLUME".
+import { Theme } from "theme.slint";
+import { Caption, SegGroup, SegKey, Key } from "keys.slint";
+import { Slider } from "sliders.slint";
+import { TipTimer } from "tooltip.slint";
+import { WorkspaceModel } from "workspace_model.slint";
+
+// One MASTER lamp: a dot and its radio's number, as one key (drawn here, not with `Lamp`: the lamp's caption gap and width are its own and eight of them do not fit the strip's block).
+component MasterLampKey inherits Rectangle {
+    in property <int> radio;
+    in property <string> caption;
+    in property <string> name;
+    in property <string> tip;
+    in property <int> state;
+    in property <bool> on;
+    callback clicked();
+    property <color> tint: root.state == 1 ? Theme.lamp-green : root.state == 2 ? Theme.lamp-red : Theme.lamp-off;
+    property <color> cap-tint: root.state == 1 ? Theme.lamp-green-cap : root.state == 2 ? Theme.lamp-red-cap : Theme.muted;
+    width: 25px;
+    height: 20px;
+    border-radius: 3px;
+    background: area.has-hover ? Theme.menu-hot : transparent;
+    border-width: root.on ? Theme.hairline : 0px;
+    border-color: Theme.radio-colour(root.radio);
+    accessible-role: button;
+    accessible-label: root.name;
+    accessible-description: root.tip;
+    accessible-action-default => { root.clicked(); }
+    Rectangle {
+        x: 4px;
+        y: (parent.height - 10px) / 2;
+        width: 10px;
+        height: 10px;
+        border-radius: 5px;
+        background: root.tint;
+        border-width: Theme.hairline;
+        border-color: root.state == 0 ? Theme.lamp-ring : root.tint;
+    }
+    Text {
+        x: 16px;
+        y: 0px;
+        width: 8px;
+        height: parent.height;
+        text: root.caption;
+        color: root.cap-tint;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-cap;
+        font-weight: Theme.weight-semibold;
+        vertical-alignment: center;
+    }
+    area := TouchArea { clicked => { root.clicked(); } }
+    TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tip; anchor-h: parent.height; }
+}
+
+// The three groups of the block, shared by its tall form (the strip) and its flat form (the workspace bar).
+component SelectorKeys inherits SegGroup {
+    small: true;
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+        for r in WorkspaceModel.selector : SegKey {
+            label: r.label;
+            small: true;
+            min-w: 0px;
+            on: r.on;
+            accessible-label: r.name;
+            tooltip: r.tip;
+            clicked => { WorkspaceModel.selector-clicked(r.radio); }
+        }
+    }
+}
+component StopKeys inherits HorizontalLayout {
+    spacing: 6px;
+    alignment: start;
+    Key {
+        label: WorkspaceModel.stop-selected-text;
+        small: true;
+        min-w: 0px;
+        danger: WorkspaceModel.selected-running;
+        enabled: WorkspaceModel.selected-running;
+        tooltip: WorkspaceModel.stop-selected-tip;
+        clicked => { WorkspaceModel.stop-selected-clicked(); }
+    }
+    Key {
+        label: WorkspaceModel.stop-all-text;
+        small: true;
+        min-w: 0px;
+        tooltip: WorkspaceModel.stop-all-tip;
+        clicked => { WorkspaceModel.stop-all-clicked(); }
+    }
+}
+component MasterLamps inherits HorizontalLayout {
+    spacing: 0px;
+    alignment: start;
+    for m in WorkspaceModel.masters : MasterLampKey {
+        radio: m.radio;
+        caption: m.caption;
+        name: m.name;
+        tip: m.tip;
+        state: m.state;
+        on: m.on;
+        clicked => { WorkspaceModel.master-clicked(m.radio); }
+    }
+}
+
+// THE BLOCK, in two forms that read the same model. RadioStripBlock is the strip's (four rows: "Controls follow", the selector, STOP Rn and STOP ALL, MASTER and the lamps), 262 px wide, for a
+// window of 1760 px or more. RadioStripRow is one row for the 30 px workspace bar, with no captions: the strip of a narrower window has no room for a block of its own (at 1440 it pushed BIAS TEE out).
+export component RadioStripBlock inherits Rectangle {
+    min-width: 262px;
+    preferred-width: 262px;
+    max-width: 262px;
+    accessible-role: groupbox;
+    accessible-label: @tr("Controls follow");
+    VerticalLayout {
+        alignment: center;
+        spacing: 4px;
+        Caption { label: @tr("Controls follow"); }
+        HorizontalLayout { alignment: start; SelectorKeys { } }
+        StopKeys { }
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            VerticalLayout { alignment: center; Caption { label: @tr("MASTER"); } }
+            MasterLamps { }
+        }
+    }
+}
+
+export component RadioStripRow inherits Rectangle {
+    min-width: row.min-width;
+    preferred-width: row.preferred-width;
+    max-width: row.preferred-width;
+    accessible-role: groupbox;
+    accessible-label: @tr("Controls follow");
+    row := HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        VerticalLayout { alignment: center; SelectorKeys { } }
+        VerticalLayout { alignment: center; StopKeys { } }
+        VerticalLayout { alignment: center; MasterLamps { } }
+    }
+}
+
+// The R-tag over the sections panel: the colour and number of the radio the panel shows.
+export component RadioTag inherits Rectangle {
+    width: 30px;
+    height: 18px;
+    border-radius: 4px;
+    background: Theme.radio-colour(WorkspaceModel.selected-radio);
+    Text {
+        text: "R" + WorkspaceModel.selected-radio;   // not-translated: the radio's tag
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-cap;
+        font-weight: Theme.weight-semibold;
+        color: Theme.radio-ink;
+    }
+}
+
+// One radio's row of the Audio mix.
+component MixRowView inherits Rectangle {
+    in property <int> radio;
+    in property <string> name;
+    in property <string> route-text;
+    in property <string> route-label;
+    in property <string> route-tip;
+    in property <bool> muted;
+    in property <string> mute-label;
+    in property <bool> solo;
+    in property <string> solo-label;
+    in property <string> solo-tip;
+    in property <float> volume;
+    in property <string> volume-label;
+    in property <string> volume-text;
+    height: 32px;
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 5px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 26px;
+                height: 16px;
+                border-radius: 3px;
+                background: Theme.radio-colour(root.radio);
+                Text { text: "R" + root.radio; horizontal-alignment: center; vertical-alignment: center; font-family: Theme.font-mono; font-size: Theme.font-tiny; font-weight: Theme.weight-semibold; color: Theme.radio-ink; }   // not-translated: the radio's tag
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Key { label: root.route-text; small: true; min-w: 44px; accessible-label: root.route-label; tooltip: root.route-tip; clicked => { WorkspaceModel.route-clicked(root.radio); } }
+        }
+        VerticalLayout {
+            alignment: center;
+            Key { label: @tr("MUTE"); small: true; min-w: 0px; on: root.muted; accessible-label: root.mute-label; accessible-checkable: true; accessible-checked: root.muted; tooltip: root.mute-label; clicked => { WorkspaceModel.mute-clicked(root.radio); } }
+        }
+        VerticalLayout {
+            alignment: center;
+            Key { label: @tr("SOLO"); small: true; min-w: 0px; on: root.solo; accessible-label: root.solo-label; accessible-checkable: true; accessible-checked: root.solo; tooltip: root.solo-tip; clicked => { WorkspaceModel.solo-clicked(root.radio); } }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            min-width: 40px;
+            Slider {
+                value: root.volume;
+                accessible-label: root.volume-label;
+                tooltip: root.volume-text;
+                changed(v) => { WorkspaceModel.volume-changed(root.radio, v); }
+            }
+        }
+    }
+}
+
+export component AudioMixBlock inherits Rectangle {
+    // 26 px of title, 32 px a radio, at most 200 px: more than five radios scroll
+    height: min(26px + WorkspaceModel.mix.length * 32px + 4px, 200px);
+    background: Theme.panel-alt;
+    accessible-role: groupbox;
+    accessible-label: @tr("Audio mix");
+    Rectangle { y: 0px; height: Theme.hairline; width: parent.width; background: Theme.line; }
+    VerticalLayout {
+        Rectangle {
+            height: 26px;
+            HorizontalLayout { padding-left: 12px; alignment: start; VerticalLayout { alignment: center; Caption { label: @tr("Audio mix"); } } }
+        }
+        Flickable {
+            vertical-stretch: 1;
+            viewport-height: rows.preferred-height;
+            rows := VerticalLayout {
+                alignment: start;
+                for m in WorkspaceModel.mix : MixRowView {
+                    radio: m.radio;
+                    name: m.name;
+                    route-text: m.route-text;
+                    route-label: m.route-label;
+                    route-tip: m.route-tip;
+                    muted: m.muted;
+                    mute-label: m.mute-label;
+                    solo: m.solo;
+                    solo-label: m.solo-label;
+                    solo-tip: m.solo-tip;
+                    volume: m.volume;
+                    volume-label: m.volume-label;
+                    volume-text: m.volume-text;
+                }
+            }
+        }
+    }
+}

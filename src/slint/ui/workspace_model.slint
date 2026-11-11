@@ -1,0 +1,128 @@
+// FoxSDR Slint front end - THE RADIO WORKSPACE'S MODEL (docs/multi-radio-records/screen-s3.md and screen-s4.md): the structs the host fills and the global `WorkspaceModel` every part of the multi-radio
+// screen reads and reports through. It is its own file so the strip's block (radio_strip.slint) and the workspace's bar (workspace.slint, which carries the block in a compact window) can both
+// import it without importing each other. workspace.slint re-exports everything here, so a file that imports it from there still can.
+import { RadioPaneData } from "radio_pane.slint";
+
+export struct WorkspaceCell {
+    occupied: bool,                  // a radio is open in this slot
+    label: string,                   // "Radio 3": the slot's name, for an empty cell
+    card-label: string,              // "Add a radio to pane 3": the card's accessible name in an empty cell
+    pane: RadioPaneData,
+}
+
+// ---- stage S4: what the strip, the audio mix, the status bar and the card are given ----
+export struct StripRadio {
+    radio: int,
+    label: string,                   // "R2"
+    name: string,                    // the accessible name: "Controls follow Radio 2"
+    tip: string,
+    on: bool,
+}
+export struct MasterLamp {
+    radio: int,
+    caption: string,                 // "2"
+    name: string,                    // "Radio 2 master"
+    tip: string,
+    state: int,                      // 0 stopped (dark), 1 running (green), 2 failed (red)
+    on: bool,                        // the selected radio
+}
+export struct MixRow {
+    radio: int,
+    name: string,                    // "Radio 2"
+    route: int,                      // 0 both, 1 left, 2 right, 3 none
+    route-text: string,
+    route-label: string,             // "Output of Radio 2"
+    route-tip: string,
+    muted: bool,
+    mute-label: string,              // "Mute Radio 2"
+    solo: bool,
+    solo-label: string,              // "Solo Radio 2"
+    solo-tip: string,
+    volume: float,                   // 0..1
+    volume-label: string,
+    volume-text: string,
+    running: bool,
+}
+export struct AddChoice {
+    caption: string,                 // what the key says
+    accessible: string,              // "Add Signal generator"
+}
+
+export global WorkspaceModel {
+    // ---- published by the host ----
+    in-out property <int> layout: 0;                 // the CHOSEN layout: 0 One, 1 Side by side, 2 Four (2 x 2)
+    in property <int> shown-layout: 0;               // what is shown: the chosen layout after the small-window fallback and the one-radio rule
+    in-out property <int> page: 0;                   // the page of the chosen layout, from 0
+    in property <int> radio-count: 1;                // the radios the engine has; the bar and the grid exist only above one
+    in property <int> selected-radio: 1;             // 1-based: the radio the strip, the panels and the banks show
+    in property <[WorkspaceCell]> cells;             // by radio slot, 8 rows (slot 0 is radio 1)
+    in property <[string]> page-labels;              // "Radios 1-4", "Radios 5-8": more than one entry offers the page keys
+    in property <[string]> page-tips;
+    in property <string> notice;                     // the small-window sentence, "" when the layout is shown
+    in property <int> ribbon-size: 2;                // the toolbar's Band plan key, for every pane
+    // ---- stage S4, published by the host ----
+    in property <[StripRadio]> selector;             // the strip's radios of the page shown
+    in property <string> stop-selected-text;         // "STOP R2"
+    in property <string> stop-selected-tip;
+    in property <bool> selected-running;
+    in property <string> stop-all-text;              // "STOP ALL" while any radio runs, else "START ALL"
+    in property <string> stop-all-tip;
+    in property <[MasterLamp]> masters;              // one per open radio
+    in property <[MixRow]> mix;                      // one per open radio
+    in property <bool> can-add;                      // a slot is free: the card and the status bar's key are offered
+    in property <[AddChoice]> add-choices;           // the devices not already held
+    in property <string> add-note;                   // the engine's own words when it refused (unchanged), else ""
+    in property <string> add-title;
+    in property <string> add-hint;
+    in property <string> add-none;                   // shown when there is no device to offer
+    in property <string> add-rescan;
+    in property <string> add-key;                    // the status bar's key: "Add a radio"
+    in property <string> add-key-tip;
+    in-out property <bool> add-open;                 // the sheet from the status bar's key
+    in property <string> selected-name;              // "Radio 2": the sections panel's tag
+    in property <int> remove-confirm;                // the radio whose removal waits for a yes (0 = none)
+    in property <string> remove-question;
+    in property <string> remove-explain;
+    in property <string> remove-yes;
+    in property <string> remove-no;
+    // the splitter of each radio's pane, kept here so it survives a page change
+    in-out property <[float]> splits: [0.45, 0.45, 0.45, 0.45, 0.45, 0.45, 0.45, 0.45];
+    // ---- written by the workspace: the size one pane has, for the host to fit the pictures to ----
+    in-out property <length> cell-w;
+    in-out property <length> cell-h;
+    // ---- what the user asked ----
+    callback layout-selected(int);                   // 0 One, 1 Side by side, 2 Four
+    callback page-selected(int);
+    callback select-requested(int);                  // radio (1-based)
+    callback stop-clicked(int);
+    callback spectrum-hover(int, float, float);
+    callback spectrum-clicked(int, float, bool);
+    callback spectrum-double-clicked(int, float);
+    callback spectrum-menu-requested(int, float, length, length);   // radio, xfrac, window position of the pointer
+    callback band-dragged(int, float);
+    callback edge-dragged(int, float);
+    callback spectrum-wheel(int, float, int, bool);
+    callback waterfall-hover(int, float, float);
+    callback waterfall-clicked(int, float, bool);
+    callback waterfall-panned(int, float);
+    callback waterfall-double-clicked(int);
+    callback waterfall-menu-requested(int, float, length, length);
+    callback waterfall-wheel(int, float, int, bool);
+    callback marker-hovered(int, int);
+    // ---- stage S4: what comes back ----
+    callback master-clicked(int);                    // radio: select it and turn the page to it
+    callback selector-clicked(int);                  // radio
+    callback stop-selected-clicked();
+    callback stop-all-clicked();
+    callback route-clicked(int);                     // radio: the next route
+    callback mute-clicked(int);
+    callback solo-clicked(int);
+    callback volume-changed(int, float);
+    callback add-chosen(int, int);                   // the pane's number (0 = the lowest free slot), the choice
+    callback add-rescan-clicked();
+    callback add-open-requested();
+    callback add-dismissed();
+    callback remove-requested(int);                  // the pane's close key
+    callback remove-confirmed();
+    callback remove-cancelled();
+}

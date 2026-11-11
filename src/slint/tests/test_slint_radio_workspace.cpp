@@ -69,6 +69,7 @@ RadioPaneData makePane(int radio, const char* decoder) {
     d.spectrum_label = ss("Radio " + n + " spectrum");
     d.waterfall_label = ss("Radio " + n + " waterfall");
     d.resize_label = ss("Resize Radio " + n);
+    d.removable = radio > 1; d.close_label = ss("Remove Radio " + n);   // stage S4: radios 2 and up have a close key
     d.device = ss(devices[(radio - 1) % 8]);
     d.frequency = ss(freqs[(radio - 1) % 8]);
     d.mode = ss("NFM");
@@ -123,6 +124,7 @@ int main() {
     g.on_page_selected([&](int p) { lastEvent = "page"; lastValue = p; ++events; g.set_page(p); });
     g.on_select_requested([&](int r) { lastEvent = "select"; lastRadio = r; ++events; });
     g.on_stop_clicked([&](int r) { lastEvent = "stop"; lastRadio = r; ++events; });
+    g.on_remove_requested([&](int r) { lastEvent = "remove"; lastRadio = r; ++events; });
     g.on_spectrum_clicked([&](int r, float x, bool) { lastEvent = "spectrum-click"; lastRadio = r; lastX = x; ++events; });
     g.on_spectrum_wheel([&](int r, float, int n, bool) { lastEvent = "spectrum-wheel"; lastRadio = r; lastValue = n; ++events; });
     g.on_waterfall_clicked([&](int r, float x, bool) { lastEvent = "waterfall-click"; lastRadio = r; lastX = x; ++events; });
@@ -306,6 +308,8 @@ int main() {
             CHECKV(count("Select Radio " + std::to_string(n)) == 1 && count("Radio " + std::to_string(n) + " spectrum") == 1 && count("Radio " + std::to_string(n) + " waterfall") == 1 && count("Resize Radio " + std::to_string(n)) == 1, "radio %d's controls", n);
         }
         CHECK(count("STOP") == 0 && count("START") == 0 && count("Spectrum") == 0 && count("Waterfall") == 0);
+        // STAGE S4: radios 2 and up carry a close key naming their radio; radio 1 has none (it is always there)
+        CHECKV(count("Remove Radio 1") == 0 && count("Remove Radio 2") == 1 && count("Remove Radio 3") == 1 && count("Remove Radio 4") == 1, "the close keys");
         // radio 2 runs a decoder: its chip is in its pane and in no other
         CHECK(count("Radio 2: APRS", false) == 1 && count("Radio 1: APRS", false) == 0);
     }
@@ -316,6 +320,9 @@ int main() {
         const auto tag4 = findOne("Select Radio 4");
         CHECK(tag4.has_value());
         if (tag4) { clickCentre(*tag4); CHECK(lastEvent == "select" && lastRadio == 4); }
+        const auto close3 = findOne("Remove Radio 3");
+        CHECK(close3.has_value());
+        if (close3) { clickCentre(*close3); CHECK(lastEvent == "remove" && lastRadio == 3); }
         const auto stop3 = findOne("Start Radio 3");
         if (stop3) { clickCentre(*stop3); CHECK(lastEvent == "stop" && lastRadio == 3); }
         const int cw = (W - 6) / 2, ch = (H - BAR - 6) / 2;
