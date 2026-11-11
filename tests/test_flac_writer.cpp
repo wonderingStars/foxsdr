@@ -530,6 +530,23 @@ void testExtremes() {
         const Enc e3 = encodeFile("recm-rx" + std::to_string(bps) + ".flac", o, rnd);
         const DecInfo d3 = decode(e3.file);
         CHECK(d3.ok && d3.pcm == rnd);
+        // a constant side channel wider than the sample depth: L in [hi/4, hi], R = L - D with D > hi, so S = D needs bps+1 bits and is cheapest as a constant subframe
+        {
+            std::mt19937 g2(77);
+            const std::int64_t D = static_cast<std::int64_t>(1.2 * std::ldexp(1.0, bps - 1));
+            std::vector<std::int32_t> ls;
+            for (int i = 0; i < 8192; ++i) {
+                const std::int32_t L = hi / 4 + static_cast<std::int32_t>(g2() % static_cast<unsigned>(hi - hi / 4));
+                ls.push_back(L); ls.push_back(static_cast<std::int32_t>(L - D));
+            }
+            const Enc e4 = encodeFile("recm-wide" + std::to_string(bps) + ".flac", o, ls);
+            const DecInfo d4 = decode(e4.file);
+            CHECK(e4.ok && d4.ok && d4.pcm == ls);
+            bool sideUsed = false;
+            for (int a : d4.assignments) { if (a != 1) { sideUsed = true; } }
+            CHECK(sideUsed);   // a decorrelated assignment with a (bps+1)-bit constant side subframe
+            if (haveFfmpeg()) { Bytes pcm; std::string et; CHECK(ffmpegDecode(g_dir / ("recm-wide" + std::to_string(bps) + ".flac"), bps, &pcm, &et) && et.empty() && pcm == pcmBytes(ls, bps)); }
+        }
         std::printf("extremes %d-bit: square, DC rail and random-rail inputs round-trip; DC frames are constant subframes (%d)\n", bps, d2.constantSub);
     }
 }
