@@ -5,7 +5,7 @@ set DIR=C:\Users\steve\foxsdr-wt\mr-screen1\src\slint\tests\drive\measure
 set OUT=D:\foxsdr-build\mr-screen1-meter
 mkdir %OUT% 2>nul
 set FOXSDR_DRIVE_VERBOSE=1
-for %%R in (1 2 3) do (
+for %%R in (1 2) do (
  for %%S in (meter-one meter-four) do (
   for %%B in (default software) do (
    for %%C in (unset 60) do (
