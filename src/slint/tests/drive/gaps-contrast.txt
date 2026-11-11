@@ -1,0 +1,16 @@
+#! frames=300 bank=4 sections=4:0 size=1600x900 FOXSDR_SLINT_WINDOWS_HC=0 restart=gaps-contrast-2.txt
+# gaps-contrast (docs/multi-radio-records/slint-gaps.md item 11): the high-contrast skin. The option in SYSTEM > Display switches the window to the HighContrast skin and back (state gaps.skin, the host's
+# word for the skin in force); the choice is the host's own record in the window half (state gaps.hc). The palette's reading pairs (7 : 1) are held by test_slint_hc_palette, which reads the .slint source. Windows' own
+# high-contrast setting forces the skin on: the second start has it STOOD IN for (FOXSDR_SLINT_WINDOWS_HC=1; the real setting is UNVERIFIED on this machine, which does not have it on).
+10 state running == 1
+state gaps.skin == workbench
+state gaps.hc == 0
++1 click "High contrast"
++10 state gaps.hc == 1
++1 state gaps.skin == highcontrast
++1 click "High contrast"
++10 state gaps.hc == 0
++1 state gaps.skin == workbench
++1 click "High contrast"
++10 state gaps.skin == highcontrast
++60 state gaps.hc == 1

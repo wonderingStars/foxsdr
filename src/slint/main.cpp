@@ -945,17 +945,22 @@ int main(int argc, char** argv) {
     // last look is applied, nothing else - so a counter face picked from the menu stays until the saved style moves.
     foxsdr::slintlook::ScaleFollower scaleFollower;
     std::string lookTheme, lookStyle;
+    bool lookHc = false, winHc = false;   // slint-gaps.md item 11: the high-contrast skin in force, and Windows' own setting (polled once a second; FOXSDR_SLINT_WINDOWS_HC=1 stands in for it in a bounded run)
+    std::string skinNow = "workbench";
     bool lookStarted = false;
     const auto applyLook = [&] {
         const cascade::core::AppConfig& half = duties.interfaceHalf();
-        if (!lookStarted || half.uiTheme != lookTheme || half.tunerDisplayStyle != lookStyle) {
-            const bool themeMoved = !lookStarted || half.uiTheme != lookTheme;
+        const bool hcNow = wsMemory.saved().highContrast || winHc;
+        if (!lookStarted || half.uiTheme != lookTheme || half.tunerDisplayStyle != lookStyle || hcNow != lookHc) {
+            const bool themeMoved = !lookStarted || half.uiTheme != lookTheme || hcNow != lookHc;
+            lookHc = hcNow;
             lookStarted = true;
             lookTheme = half.uiTheme;
             lookStyle = half.tunerDisplayStyle;
             if (themeMoved) {
-                const foxsdr::slintlook::SkinId id = foxsdr::slintlook::skinOfTheme(half.uiTheme);
-                ui->global<Theme>().set_skin(id == foxsdr::slintlook::SkinId::NightWatch ? ui->global<NightWatch>().get_value() : ui->global<Workbench>().get_value());
+                const foxsdr::slintlook::SkinId id = hcNow ? foxsdr::slintlook::SkinId::HighContrast : foxsdr::slintlook::skinOfTheme(half.uiTheme);
+                ui->global<Theme>().set_skin(id == foxsdr::slintlook::SkinId::HighContrast ? ui->global<HighContrast>().get_value() : id == foxsdr::slintlook::SkinId::NightWatch ? ui->global<NightWatch>().get_value() : ui->global<Workbench>().get_value());
+                skinNow = foxsdr::slintlook::skinName(id);
                 std::fprintf(stderr, "foxsdr-slint: look: theme '%s' is drawn in the %s skin\n", half.uiTheme.c_str(), foxsdr::slintlook::skinName(id));
             }
             const foxsdr::slintlook::CounterFace cf = foxsdr::slintlook::faceOfStyle(half.tunerDisplayStyle);
@@ -1053,6 +1058,8 @@ int main(int argc, char** argv) {
     // THE COUNTER'S DIGIT GROUPING (item 2): the Display body's pick, saved with the workspace (`dg=`)
     ui->global<SystemEvents>().on_display_digit_grouping([&](int i) { if (wsMemory.setDotStyle(i == 1 ? 1 : 0)) { wsSaveSince = static_cast<long>(tickNo); } });
     systemBank.setDigitGroupingSource([&] { return wsMemory.saved().dotStyle; });
+    ui->global<SystemEvents>().on_display_high_contrast([&](bool on) { if (wsMemory.setHighContrast(on)) { wsSaveSince = static_cast<long>(tickNo); } });
+    systemBank.setHighContrastSource([&] { return wsMemory.saved().highContrast; });
     // A FILE DROPPED ON THE WINDOW (item 8; the classic's submitPendingDrop): a WAV is a recording to play, an XML or CSV a frequency list to import, anything else is refused with a note under the counter.
     // The OS drop reaches this through gaps_win's drop target; a bounded run calls it directly (FOXSDR_SLINT_DROP=<tick>:<path>[;...]) because a real drag cannot be scripted.
     handleDrop = [&](const std::string& path) {
@@ -1727,6 +1734,7 @@ int main(int argc, char** argv) {
         ui->set_converter_warn(lists.converter);
         ui->set_tune_hint(ss(tuneHint(lists.converter)));
         {   // slint-gaps.md items 2 and 3: the digit grouping, the padlock, and the note a refused tuning gesture leaves under the counter for three seconds
+            if (tickNo % 30 == 1) { winHc = (bounded.bounded() && std::getenv("FOXSDR_SLINT_WINDOWS_HC") != nullptr) ? std::getenv("FOXSDR_SLINT_WINDOWS_HC")[0] == '1' : foxsdr::slintgaps::windowsHighContrast(); }
             auto& lk = foxsdr::slintgaps::FrequencyLock::instance();
             lk.setSelected(workspace.selectedRadio());
             ui->set_freq_locked(lk.locked(workspace.selectedRadio()));
@@ -2261,6 +2269,9 @@ int main(int argc, char** argv) {
             if (w == "help") { out = std::to_string(helpOpened); return std::string(); }
             if (w == "diagcopies") { out = std::to_string(systemBank.diagCopies()); return std::string(); }
             if (w == "diagstatus") { out = systemBank.bundleStatus(); return std::string(); }
+            if (w == "hc") { out = wsMemory.saved().highContrast ? "1" : "0"; return std::string(); }
+            if (w == "winhc") { out = winHc ? "1" : "0"; return std::string(); }
+            if (w == "skin") { out = skinNow; return std::string(); }
             if (w == "clip") { out = fakeClip; return std::string(); }
             if (w == "savenote") { out = publisher.lastSaveNote(); return std::string(); }
             if (w == "helpurl") { out = helpUrlOverride; return std::string(); }

@@ -30,6 +30,7 @@ struct SavedWorkspace {
     // slint-gaps.md (items 2 and 3): how the counter groups its digits (0 = 1.090.000.000, 1 = 1090.000.000) and the radios whose frequency is locked (bit i = radio i + 1). Written to the text
     // ONLY when not 0 (`dg=`, `fl=` after `sp=`), so a text without them is what it was before and an older build reads the rest.
     int dotStyle = 0;
+    bool highContrast = false;           // slint-gaps.md item 11, `hc=1`
     std::uint32_t locked = 0;
     bool operator==(const SavedWorkspace& o) const = default;
 };
@@ -57,6 +58,7 @@ public:
     // the digit grouping and the frequency lock are the user's choices, told here when they change (true = changed, saved a moment later like the rest)
     bool setDotStyle(int style);
     bool setLocked(std::uint32_t mask);
+    bool setHighContrast(bool on);
     bool observe(int layout, const std::array<float, 8>& splits, bool linkOn, std::uint32_t excluded);
     // The saved selection and page, once: while the window is open (`tick` within kRestoreWindowTicks), the user has not chosen anything yet and the saved radio is open (`openMask`, bit per slot).
     // Returns true with the radio (1-based) and page to apply; false when there is nothing to apply (yet).

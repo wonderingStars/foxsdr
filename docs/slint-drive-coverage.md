@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2187 | 562 | 92 | 1533 | 0 |
+| 2203 | 575 | 94 | 1534 | 0 |
 
-Of the 1300 rows that are controls (the 887 readout-like rows left out): 562 asserted, 92 driven without a read-back, 646 not drivable.
+Of the 1316 rows that are controls (the 887 readout-like rows left out): 575 asserted, 94 driven without a read-back, 647 not drivable.
 
-NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -201,7 +201,7 @@ NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120,
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
 | 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 96 | 48 | 0 | 48 | 35 | 0 |
 | 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 107 | 70 | 9 | 28 | 19 | 0 |
-| SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md) | 6 | 5 | 1 | 0 | 0 | 0 |
+| SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md) | 22 | 18 | 3 | 1 | 0 | 0 |
 
 ## Every row
 
@@ -3296,4 +3296,20 @@ NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120,
 | 4403 | Noise blanker | checkbox | DRIVEN+ASSERTED | signal-noise-blanker | click on, click off; state nbEnabled == 1 / == 0; expect Noise blanker checked true / false |
 | 4404 | Noise blanker Threshold | slider | DRIVEN+ASSERTED | signal-noise-blanker | slider Threshold 1.0, 0.0, 0.5; state nbThresholdDb > 29, < 7, about 18; expect enabled false while the blanker is off, true while on |
 | 4405 | Blanking n % / Standing down | readout | DRIVEN | signal-noise-blanker | the note is text, not a control: state nbBlankedPct < 5 with the generator (no clicks) is read back; the words themselves are held by test_slint_signal |
+| 4600 | FM de-emphasis choice (50 us / 75 us / Off) | dropdown | DRIVEN+ASSERTED | gaps-deemph | choose each of the three, read back as state deemphasis == 0 / 1 / 2; the combo is enabled in WFM and NFM and greyed in AM |
+| 4601 | Digit grouping (counter dots 1.090.000.000 / 1090.000.000) | dropdown | DRIVEN+ASSERTED | gaps-digits | choose 1090.000.000, read back as state gaps.dots == 1 and the editor's seed '100.300.000'; the second start finds it saved |
+| 4602 | Typed frequency accepts dotted entries in either style | field | DRIVEN+ASSERTED | gaps-digits | 101.100.000, 102.200.000 and 103.3 typed, each read back as state tunedHz |
+| 4603 | Frequency lock key by the counter | key | DRIVEN+ASSERTED | gaps-lock | click, state gaps.locked / gaps.lockmask; the second start finds the lock saved |
+| 4604 | Locked radio: tuning refused, note under the counter | behaviour | DRIVEN+ASSERTED | gaps-lock | Ctrl+Up, a digit nudge, the wheel, a typed entry and a click on the waterfall are each refused (state tunedHz unchanged, state gaps.lockrefusals counts them); mode still changes |
+| 4605 | Picture page: Save as BMP shows Saving... and greys the key while the file is written | key | DRIVEN+ASSERTED | gaps-picture-save | click, expect enabled false, state gaps.savenote == Saving..., then Saved ..., enabled true again (the worker is held 700 ms by a bounded-run seam) |
+| 4606 | Map page: Line / Ribbon trail style keys | segment | DRIVEN+ASSERTED | gaps-map-trail | click Ribbon / Line, read back as cfg.mapTrailStyle 1 / 0; greyed while Trails is off |
+| 4607 | Counter right-click menu: Enlarge figures / Normal size / Enlarge every reading save their settings | menu item | DRIVEN+ASSERTED | gaps-counter-menu | each entry activated through the menu's callback by a bounded-run seam, read back as cfg.counterScale and cfg.readingsScale |
+| 4608 | Counter right-click menu: Copy frequency / Paste frequency | menu item | DRIVEN+ASSERTED | gaps-counter-menu | copy read back as state gaps.clip, a typed change tuned away and pasted back |
+| 4609 | BROWSE FILES on a plugin PATH setting | key | DRIVEN+ASSERTED | gaps-browse-files | the IBOC Radio 'nrsc5 library file' field: the seam's file shown in the box and read back from the engine as fact.plugin.setting.<id> |
+| 4610 | File dropped on the window (recording, frequency list, other) | behaviour | DRIVEN | gaps-drop | the handler is called directly by a bounded-run seam (a real OS drag cannot be scripted); verdicts read back as state gaps.drops, gaps.refuseddrops, gaps.dropnote; the OS drop is not exercised |
+| 4611 | RESTART SDRPLAY SERVICE key | key | DRIVEN+ASSERTED | gaps-sdrplay | up to the call boundary: the key shown by a seam, pressed, the elevated launcher replaced by a stand-in that counts the call (state gaps.sdrplaycalls == 1); the real restart is UNVERIFIED ON HARDWARE |
+| 4612 | Copy diagnostics | key | DRIVEN+ASSERTED | gaps-misc | click, state gaps.diagcopies == 1 and the status line (a bounded run does not touch the desk's clipboard) |
+| 4613 | Help: the manual (app menu) | menu item | DRIVEN | gaps-misc | the entry is activated through the menu's callback by a seam; the address read back as state gaps.helpurl (no browser is started) |
+| 4614 | Run SDRplay diagnostic and its bias-tee question | key | NOT DRIVABLE | - | not built: needs an SDRplay radio to prove (record: NOT DONE) |
+| 4615 | High contrast option and skin | checkbox | DRIVEN+ASSERTED | gaps-contrast | the option and a stand-in for Windows' setting each switch the skin (state gaps.skin); the palette's pairs are held at 7 : 1 by test_slint_hc_palette |
 

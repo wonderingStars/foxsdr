@@ -23,7 +23,11 @@ void textRules() {
     CHECK(back.dotStyle == 1 && back.locked == 5u && back.layout == w.layout && back.splits == w.splits);
     // an old text: neither
     const SavedWorkspace old = parseWorkspaceBody(plain);
-    CHECK(old.dotStyle == 0 && old.locked == 0u);
+    CHECK(old.dotStyle == 0 && old.locked == 0u && !old.highContrast);
+    SavedWorkspace hc;
+    hc.highContrast = true;
+    CHECK(workspaceBody(hc).find(",hc=1") != std::string::npos && parseWorkspaceBody(workspaceBody(hc)).highContrast);   // item 11: the high-contrast option
+    CHECK(workspaceBody(SavedWorkspace{}).find("hc=") == std::string::npos);
     // values are clamped
     const SavedWorkspace wild = parseWorkspaceBody("lay=1,dg=9,fl=999");
     CHECK(wild.dotStyle == 1 && wild.locked == 255u && wild.layout == 1);
@@ -51,6 +55,7 @@ void memory() {
     m.markWritten();
     CHECK(m.setLocked(0x1FFu) && m.saved().locked == 0xFFu && m.dirty());
     CHECK(!m.setLocked(0xFFu));
+    CHECK(m.setHighContrast(true) && m.saved().highContrast && !m.setHighContrast(true) && m.setHighContrast(false));
     CHECK(m.setLocked(0u) && m.saved().locked == 0u);
     // what was written loads back, in a new session
     m.setLocked(3u);

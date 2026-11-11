@@ -41,6 +41,7 @@ std::string workspaceBody(const SavedWorkspace& w) {
     }
     if (w.dotStyle != 0) { out += ",dg=" + std::to_string(std::clamp(w.dotStyle, 0, 1)); }
     if ((w.locked & 0xFFu) != 0u) { out += ",fl=" + std::to_string(w.locked & 0xFFu); }
+    if (w.highContrast) { out += ",hc=1"; }
     return out;
 }
 
@@ -58,6 +59,7 @@ SavedWorkspace parseWorkspaceBody(const std::string& body) {
         else if (k == "lk" && whole(v, n)) { w.linkOn = n != 0; }
         else if (k == "ex" && whole(v, n)) { w.excluded = static_cast<std::uint32_t>(std::clamp(n, 0L, 255L)); }
         else if (k == "dg" && whole(v, n)) { w.dotStyle = static_cast<int>(std::clamp(n, 0L, 1L)); }
+        else if (k == "hc" && whole(v, n)) { w.highContrast = n != 0; }
         else if (k == "fl" && whole(v, n)) { w.locked = static_cast<std::uint32_t>(std::clamp(n, 0L, 255L)); }
         else if (k == "sp") {
             const std::vector<std::string> parts = splitOn(v, '.');
@@ -116,6 +118,14 @@ bool WorkspaceMemory::setDotStyle(int style) {
     const int s = std::clamp(style, 0, 1);
     if (saved_.dotStyle == s) { return false; }
     saved_.dotStyle = s;
+    saved_.present = true;
+    dirty_ = true;
+    return true;
+}
+
+bool WorkspaceMemory::setHighContrast(bool on) {
+    if (saved_.highContrast == on) { return false; }
+    saved_.highContrast = on;
     saved_.present = true;
     dirty_ = true;
     return true;

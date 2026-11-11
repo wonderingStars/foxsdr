@@ -13,6 +13,7 @@ void* findMainWindow();                                        // the process's 
 // Item 8: the window accepts files dropped on it; `onDrop` is called on the UI thread with the first dropped path. Replaces the window backend's own drop target. True when installed.
 bool installFileDrop(void* window, std::function<void(const std::string&)> onDrop);
 bool setClipboardText(const std::string& utf8);                // items 6 and 9
-std::string clipboardText();                                   // "" when there is no text on the clipboard
+std::string clipboardText();
+bool windowsHighContrast();                                    // item 11: Windows' own high-contrast setting is on                                   // "" when there is no text on the clipboard
 
 }  // namespace foxsdr::slintgaps

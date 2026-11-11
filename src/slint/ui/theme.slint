@@ -246,6 +246,32 @@ export global NightWatch {
     };
 }
 
+// HIGH CONTRAST (docs/multi-radio-records/slint-gaps.md item 11): the third filling, a palette and nothing else - black grounds, white lines and text, one yellow accent, 2 px lines, no glow, no
+// shadow. Every reading pair is at least 7 : 1 (test_slint_hc_palette holds it). It is the window's own choice (SYSTEM > Display > High contrast) and it is forced on while Windows' own high-contrast
+// setting is on. Metrics and components are the Workbench's: only the tokens differ.
+export global HighContrast {
+    out property <Skin> value: {
+        bg: #000000, strip: #000000, panel: #000000, panel-alt: #0a0a0a, card: #0a0a0a, well: #000000, well-deep: #000000, field: #000000, menu: #000000, menu-hot: #262600,
+        table-selected: #2a2a00, card-warn: #1a1400, card-warn-line: #ffd800, card-err: #1a0000, card-err-line: #ff7070, backdrop: #000000d8, line: #ffffff, line-strong: #ffffff,
+        line-faint: #6a6a6a, knob-ring: #ffffff, fg: #ffffff, fg-soft: #ffffff, muted: #ececec, dim: #d8d8d8, faint: #c0c0c0, nudge: #ffffff, disabled: #9a9a9a, focus: #00ffff,
+        accent: #ffd800, accent-ink: #000000, accent-soft: #ffe566, accent-hover: #fff07a, digit: #ffff00, digit-glow: #ffff0000, digit-dim: #8a8a00, lamp-off: #404040, lamp-ring: #ffffff,
+        lamp-green: #00ff66, lamp-green-cap: #ffffff, lamp-amber: #ffd800, lamp-amber-cap: #ffffff, lamp-red: #ff4040, lamp-red-cap: #ffffff, lamp-yellow: #ffff00, lamp-yellow-cap: #ffffff,
+        chip-bg: #000000, chip-fg: #ffffff, chip-line: #ffffff, chip-good-bg: #001a0a, chip-good-fg: #00ff66, chip-good-line: #00ff66, chip-warn-bg: #1a1400, chip-warn-fg: #ffd800,
+        chip-warn-line: #ffd800, chip-err-bg: #1a0000, chip-err-fg: #ff9090, chip-err-line: #ff9090, key-bg: #000000, key-line: #ffffff, key-fg: #ffffff, key-disabled-bg: #000000,
+        key-disabled-fg: #9a9a9a, danger-bg: #1a0000, danger-line: #ff7070, danger-strong-line: #ff7070, danger-fg: #ffffff, danger-glyph: #ff9090, hazard-line: #ffd800,
+        hazard-stripe: #2a2400, plate-line: #ffd800, plate-fg: #ffd800, slider-track: #6a6a6a, slider-fill: #ffd800, slider-knob: #ffffff, slider-knob-ring: #000000,
+        slider-disabled-fill: #6a6a6a, slider-disabled-knob: #9a9a9a, level-bar: #00ff66, meter-face: #000000, meter-ink: #ffffff, meter-needle: #ffd800, meter-led-low: #00ff66,
+        meter-led-mid: #ffd800, meter-led-high: #ff4040, meter-peak: #ffffff, trace-live: #00ffff, trace-peak: #ffd800, trace-average: #ffffff, radio-1: #00ffff, radio-2: #ffd800,
+        radio-3: #00ff66, radio-4: #ff80ff, radio-ink: #000000, vfo: #ffd800, vfo-fill: #ffd80033, bandplan: #3a3a3a, bandplan-fg: #ffffff, mark: #ffe566, mark-fill: #ffe56633,
+        bookmark: #ffd800, bookmark-tick: #ffd800, marker: #ffffff, cursor: #ffffffaa, cursor-chip-bg: #000000ee, cursor-chip-line: #ffffff, graticule: #5a5a5a, axis-fg: #d8d8d8,
+        wf-floor: #000000, wf-mid: #1a2a6a, wf-high: #00a0ff, wf-hot: #ffd800, wf-peak: #ffffff, wf-vfo: #ffff00, wf-key-bg: #000000ee, 
+        font-ui: "Inter", font-mono: "JetBrains Mono",   // not-translated: typeface names
+       
+        radius: 6px, radius-panel: 8px, radius-seg: 7px, radius-seg-key: 5px, radius-chip: 10px, radius-dome: 10px, radius-menu-item: 5px,
+        digit-face: DigitFace.plain, lamp-glow: false, shadows: false, hairline: 2px,
+    };
+}
+
 export global Theme {
     // THE FILLING IN FORCE. Components never read this directly: they read the tokens below.
     in-out property <Skin> skin: Workbench.value;

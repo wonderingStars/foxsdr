@@ -461,6 +461,7 @@ void SystemPublisher::execute(const Effect& e, const char* what) {
     o.figures = lists_->figures.set(items(m.figures));
     o.figures_index = m.figures_index;
     o.digit_groupings = lists_->digitGroupings.set(items(m.digit_groupings));
+    o.high_contrast = highContrast_ ? highContrast_() : m.high_contrast;
     o.digit_grouping_index = digitGrouping_ ? (digitGrouping_() == 1 ? 1 : 0) : m.digit_grouping_index;
     o.tuner_switches = m.tuner_switches;
     o.enlarge_readings = m.enlarge_readings;

@@ -21,7 +21,7 @@
 
 namespace foxsdr::slintlook {
 
-enum class SkinId { Workbench, NightWatch };
+enum class SkinId { Workbench, NightWatch, HighContrast };   // HighContrast: slint-gaps.md item 11, chosen by its own option, not by the saved theme key
 
 // The skin a saved theme key ("today", "classic-xl", "night", "glass", "daylight", "field"; anything else is Today) is drawn in.
 SkinId skinOfTheme(const std::string& uiTheme);

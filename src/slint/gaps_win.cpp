@@ -144,6 +144,13 @@ bool setClipboardText(const std::string& utf8) {
     return ok;
 }
 
+bool windowsHighContrast() {
+    HIGHCONTRASTW hc{};
+    hc.cbSize = sizeof(hc);
+    if (!::SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(hc), &hc, 0)) { return false; }
+    return (hc.dwFlags & HCF_HIGHCONTRASTON) != 0;
+}
+
 std::string clipboardText() {
     std::string out;
     if (!::OpenClipboard(nullptr)) { return out; }
@@ -159,6 +166,7 @@ void* findMainWindow() { return nullptr; }
 bool installFileDrop(void*, std::function<void(const std::string&)>) { return false; }
 bool setClipboardText(const std::string&) { return false; }
 std::string clipboardText() { return std::string(); }
+bool windowsHighContrast() { return false; }
 #endif
 
 }  // namespace foxsdr::slintgaps

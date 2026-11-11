@@ -37,6 +37,7 @@ public:
     int diagCopies() const { return diagCopies_; }                 // the drive scripts' read-back of Copy diagnostics
     const std::string& bundleStatus() const { return bundleStatus_; }
     void setDigitGroupingSource(std::function<int()> f) { digitGrouping_ = std::move(f); }
+    void setHighContrastSource(std::function<bool()> f) { highContrast_ = std::move(f); }
     struct Hooks {
         std::function<void()> updateCardChanged;   // the duties changed the update card's state (a re-tick, "Show it again"): the host applies it
         std::function<void()> rangeManual;         // a dB slider was dragged: the range is Manual from then on (the host's own flag and the strip's key follow)
@@ -115,6 +116,7 @@ private:
 
     // ---- the models ----
     ::DisplayModel mapDisplay(const DisplayModel& m);
+    std::function<bool()> highContrast_;
     std::function<int()> digitGrouping_;   // slint-gaps.md item 2: the saved grouping (0 | 1), which the host keeps in the workspace entry of the window half
     ::LanguageModel mapLanguage(const LanguageModel& m);
     ::UpdatesModel mapUpdates(const UpdatesModel& m);
