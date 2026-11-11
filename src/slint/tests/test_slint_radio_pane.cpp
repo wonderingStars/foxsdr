@@ -234,6 +234,8 @@ int main() {
         CHECKV(inkIn("Radio 3: FT8", 3) > 100, "pane 3 shows its decoder chip (ink %d)", inkIn("Radio 3: FT8", 3));
         CHECKV(inkIn("Radio 1: SPAN 2.400 MHz", 1) > 100 && inkIn("Radio 5: SPAN 2.400 MHz", 5) > 100, "SPAN stays in both widths");
         CHECKV(inkIn("Radio 5: GAIN 32 dB", 5) > 30, "pane 5 keeps GAIN");
+        // THE ORDER OF LOSS (changed in stage S3; S2 dropped the decoder chip before BIAS, RATE, VOL and SQL): PEAK, BIAS, RATE, VOL, SQL, the decoder chip, GAIN. At 420 px the chip of pane 5 is still there.
+        CHECKV(inkIn("Radio 5: FT8", 5) > 100, "pane 5 keeps its decoder chip: it outlives BIAS, RATE, VOL and SQL (ink %d)", inkIn("Radio 5: FT8", 5));
     }
 
     // ---- real pointer events: each reports its own radio ----

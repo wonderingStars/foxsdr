@@ -2,7 +2,7 @@
 // Measurements are the hand-over's pane (556 x 353 in a 2 x 2 grid at 1440 x 900):
 //
 //   header        30 px   R-tag (the radio's colour), device name, frequency, mode chip, the four lamps RUN / DEC / MUTE / FAIL, STOP / START
-//   readout row   28 px   GAIN, SQL, VOL, RATE, BIAS, the decoder chip, then the peak and SPAN at the right (they left the spectrum's own 76 px header)
+//   readout row   28 px   GAIN, SQL, VOL, RATE, BIAS, the decoder chip, then the peak and SPAN at the right (they left the spectrum's own 76 px header); a narrow pane drops figures in a fixed order, below
 //   spectrum      the compact SpectrumView (its header is not drawn; the ribbon and its names are the only thing above the plot)
 //   splitter      6 px    resizes spectrum against waterfall inside this pane
 //   waterfall     the WaterfallView without its strength key (the key is the receiver view's)
@@ -42,6 +42,10 @@ export struct RadioPaneData {
     decoding: bool,
     muted: bool,
     failed: bool,
+    run-tip: string,                 // "Radio 2 is running": the lamps' tooltips (the host's sentences); "" falls back to the lamp's word
+    dec-tip: string,
+    mute-tip: string,
+    fail-tip: string,
     gain: string,                    // the readout row's figures, formatted by the host: "32 dB", "AUTO"
     squelch: string,
     volume: string,
@@ -110,13 +114,13 @@ export component RadioPane inherits Rectangle {
     in property <bool> selected;                       // the pane the strip, the sections panel and the banks show: a 2 px outline in the radio's colour
     in property <int> ribbon-size: 2;                  // 0 none, 1 small, 2 medium, 3 large; the toolbar's Band plan key sets 0 for every pane
     in property <length> caption-min-width: 480px;     // below this the lamps lose their captions
-    // The readout captions. The defaults are words the catalogues already hold, so they are long (SQUELCH, VOLUME, SAMPLE RATE, BIAS TEE, PEAK IN PASSBAND); the host
-    // passes the hand-over's short words (SQL, VOL, RATE, BIAS, PEAK) once the catalogues have them (docs/multi-radio-records/screen-s1-s2.md, decision 1).
+    // The readout captions: the hand-over's short words, which the catalogues hold since stage S3 (SQL, VOL, RATE, BIAS). PEAK keeps the catalogues' long word (a short PEAK is not
+    // in the prepared set of strings); it is the first figure a narrow pane drops.
     in property <string> gain-caption: @tr("GAIN");
-    in property <string> squelch-caption: @tr("SQUELCH");
-    in property <string> volume-caption: @tr("VOLUME");
-    in property <string> rate-caption: @tr("SAMPLE RATE");
-    in property <string> bias-caption: @tr("BIAS TEE");
+    in property <string> squelch-caption: @tr("SQL");
+    in property <string> volume-caption: @tr("VOL");
+    in property <string> rate-caption: @tr("RATE");
+    in property <string> bias-caption: @tr("BIAS");
     in property <string> peak-caption: @tr("PEAK IN PASSBAND");
     in-out property <float> split-ratio: 0.45;         // the spectrum's share of the body under the readout row
     out property <color> tint: Theme.radio-colour(root.data.radio);
@@ -127,7 +131,7 @@ export component RadioPane inherits Rectangle {
     callback spectrum-hover(int, float, float);        // radio, xfrac, yfrac; (-1, -1) on leave
     callback spectrum-clicked(int, float, bool);       // radio, xfrac, shift
     callback spectrum-double-clicked(int, float);
-    callback spectrum-menu-requested(int, float, length, length);   // radio, xfrac, pointer position in the pane's spectrum
+    callback spectrum-menu-requested(int, float, length, length);   // radio, xfrac, pointer position in the PANE
     callback band-dragged(int, float);                 // radio, dxfrac
     callback edge-dragged(int, float);                 // radio, half-width fraction
     callback spectrum-wheel(int, float, int, bool);    // radio, xfrac, notches, shift
@@ -138,20 +142,36 @@ export component RadioPane inherits Rectangle {
     callback waterfall-menu-requested(int, float, length, length);
     callback waterfall-wheel(int, float, int, bool);
     callback marker-hovered(int, int);                 // radio, marker index
+    callback split-changed(int, float);                // radio, the spectrum's new share: the workspace keeps it for the radio (a pane is made again when its page comes back)
 
     private property <length> header-h: 30px;
-    // THE READOUT ROW holds what fits, in this order of loss: PEAK first, then the decoder chip, BIAS, RATE, VOL, SQL, GAIN; SPAN is pinned at the right and never goes.
-    // Each left-hand figure is shown whole or not at all, and PEAK only when it clears the last one shown.
+    // THE READOUT ROW holds what fits, and loses figures in this order, the first named going first: PEAK, BIAS, RATE, VOL, SQL, the decoder chip, GAIN. SPAN is pinned at the right and never goes.
+    // So a figure is shown only when it and every figure that outlasts it fit in the room left of SPAN (`left-limit`), counted in that priority order (GAIN, decoder chip, SQL, VOL, RATE, BIAS)
+    // and then PLACED in the hand-over's order (GAIN, SQL, VOL, RATE, BIAS, decoder chip) from the left, so a dropped figure leaves no hole. Each figure is shown whole or not at all.
     private property <length> gap: 7px;                // between two readouts
     private property <length> left-limit: span.x - root.gap;
-    private property <bool> gain-fits: gain.x + gain.width <= root.left-limit;
-    private property <bool> sql-fits: sql.x + sql.width <= root.left-limit;
-    private property <bool> vol-fits: vol.x + vol.width <= root.left-limit;
-    private property <bool> rate-fits: rate.x + rate.width <= root.left-limit;
-    private property <bool> bias-fits: bias.x + bias.width <= root.left-limit;
-    private property <bool> deco-fits: root.data.decoder != "" && deco.x + deco.width <= root.left-limit;
-    private property <length> left-end: root.deco-fits ? deco.x + deco.width : root.bias-fits ? bias.x + bias.width : root.rate-fits ? rate.x + rate.width
-        : root.vol-fits ? vol.x + vol.width : root.sql-fits ? sql.x + sql.width : root.gain-fits ? gain.x + gain.width : 8px;
+    private property <bool> has-deco: root.data.decoder != "";
+    private property <length> need-gain: 8px + gain.width;
+    private property <length> need-deco: root.need-gain + (root.has-deco ? root.gap + deco.width : 0px);
+    private property <length> need-sql: root.need-deco + root.gap + sql.width;
+    private property <length> need-vol: root.need-sql + root.gap + vol.width;
+    private property <length> need-rate: root.need-vol + root.gap + rate.width;
+    private property <length> need-bias: root.need-rate + root.gap + bias.width;
+    out property <bool> gain-fits: root.need-gain <= root.left-limit;
+    out property <bool> deco-fits: root.has-deco && root.gain-fits && root.need-deco <= root.left-limit;
+    out property <bool> sql-fits: root.gain-fits && (!root.has-deco || root.deco-fits) && root.need-sql <= root.left-limit;
+    out property <bool> vol-fits: root.sql-fits && root.need-vol <= root.left-limit;
+    out property <bool> rate-fits: root.vol-fits && root.need-rate <= root.left-limit;
+    out property <bool> bias-fits: root.rate-fits && root.need-bias <= root.left-limit;
+    // where each shown figure starts: after the shown figures before it in the hand-over's order
+    private property <length> x-gain: 8px;
+    private property <length> x-sql: root.x-gain + (root.gain-fits ? gain.width + root.gap : 0px);
+    private property <length> x-vol: root.x-sql + (root.sql-fits ? sql.width + root.gap : 0px);
+    private property <length> x-rate: root.x-vol + (root.vol-fits ? vol.width + root.gap : 0px);
+    private property <length> x-bias: root.x-rate + (root.rate-fits ? rate.width + root.gap : 0px);
+    private property <length> x-deco: root.x-bias + (root.bias-fits ? bias.width + root.gap : 0px);
+    private property <length> left-end: root.deco-fits ? root.x-deco + deco.width : root.bias-fits ? root.x-bias + bias.width : root.rate-fits ? root.x-rate + rate.width
+        : root.vol-fits ? root.x-vol + vol.width : root.sql-fits ? root.x-sql + sql.width : root.gain-fits ? root.x-gain + gain.width : 8px;
     private property <length> readout-h: 28px;
     private property <length> body-h: max(0px, root.height - root.header-h - root.readout-h);
     private property <length> spec-h: max(60px, (root.body-h - Theme.splitter-h) * root.split-ratio);
@@ -192,7 +212,7 @@ export component RadioPane inherits Rectangle {
                     font-family: Theme.font-mono;
                     font-size: Theme.font-cap;
                     font-weight: Theme.weight-semibold;
-                    color: Theme.bg;
+                    color: Theme.radio-ink;   // measured against all four radio colours in every skin: at least 4.5 to 1
                 }
                 TouchArea { clicked => { root.select-requested(root.data.radio); } }
             }
@@ -226,10 +246,10 @@ export component RadioPane inherits Rectangle {
                 accessible-label: root.data.prefix + ": " + root.data.mode;
             }
             // the four lamps; a short pane keeps the dots and moves the words into the tooltips
-            Lamp { caption: root.captions-shown ? @tr("RUN") : ""; tooltip: @tr("RUN"); state: root.data.running ? LampState.green : LampState.off; y: (root.header-h - 13px) / 2; height: 13px; }
-            Lamp { caption: root.captions-shown ? @tr("DEC") : ""; tooltip: @tr("DEC"); state: root.data.decoding ? LampState.green : LampState.off; y: (root.header-h - 13px) / 2; height: 13px; }
-            Lamp { caption: root.captions-shown ? @tr("MUTE") : ""; tooltip: @tr("MUTE"); state: root.data.muted ? LampState.amber : LampState.off; y: (root.header-h - 13px) / 2; height: 13px; }
-            Lamp { caption: root.captions-shown ? @tr("FAIL") : ""; tooltip: @tr("FAIL"); state: root.data.failed ? LampState.red : LampState.off; y: (root.header-h - 13px) / 2; height: 13px; }
+            Lamp { caption: root.captions-shown ? @tr("RUN") : ""; tooltip: root.data.run-tip != "" ? root.data.run-tip : @tr("RUN"); state: root.data.running ? LampState.green : LampState.off; y: (root.header-h - 13px) / 2; height: 13px; }
+            Lamp { caption: root.captions-shown ? @tr("DEC") : ""; tooltip: root.data.dec-tip != "" ? root.data.dec-tip : @tr("DEC"); state: root.data.decoding ? LampState.green : LampState.off; y: (root.header-h - 13px) / 2; height: 13px; }
+            Lamp { caption: root.captions-shown ? @tr("MUTE") : ""; tooltip: root.data.mute-tip != "" ? root.data.mute-tip : @tr("MUTE"); state: root.data.muted ? LampState.amber : LampState.off; y: (root.header-h - 13px) / 2; height: 13px; }
+            Lamp { caption: root.captions-shown ? @tr("FAIL") : ""; tooltip: root.data.fail-tip != "" ? root.data.fail-tip : @tr("FAIL"); state: root.data.failed ? LampState.red : LampState.off; y: (root.header-h - 13px) / 2; height: 13px; }
             Key {
                 label: root.data.running ? @tr("STOP") : @tr("START");
                 small: true;
@@ -251,15 +271,15 @@ export component RadioPane inherits Rectangle {
         background: Theme.strip;
         clip: true;
         TouchArea { clicked => { root.select-requested(root.data.radio); } }
-        // PLACED, NOT LAID OUT: a row that cannot hold everything drops its LAST items whole (never half a figure), so each readout is hidden when it would pass `left-limit`
-        // (the `*-fits` rules above); SPAN is pinned at the right and keeps its place, PEAK beside it appears from `caption-min-width` up when it clears the rest. A layout would shrink them all instead.
-        gain := Readout { x: 8px; y: 0px; height: root.readout-h; prefix: root.data.prefix; caption: root.gain-caption; value: root.data.gain; visible: root.gain-fits; }
-        sql := Readout { x: gain.x + gain.width + root.gap; y: 0px; height: root.readout-h; prefix: root.data.prefix; caption: root.squelch-caption; value: root.data.squelch; visible: root.sql-fits; }
-        vol := Readout { x: sql.x + sql.width + root.gap; y: 0px; height: root.readout-h; prefix: root.data.prefix; caption: root.volume-caption; value: root.data.volume; visible: root.vol-fits; }
-        rate := Readout { x: vol.x + vol.width + root.gap; y: 0px; height: root.readout-h; prefix: root.data.prefix; caption: root.rate-caption; value: root.data.rate; visible: root.rate-fits; }
-        bias := Readout { x: rate.x + rate.width + root.gap; y: 0px; height: root.readout-h; prefix: root.data.prefix; caption: root.bias-caption; value: root.data.bias-tee ? @tr("ON") : @tr("OFF"); ink: root.data.bias-tee ? Theme.lamp-amber : Theme.fg-soft; visible: root.bias-fits; }
+        // PLACED, NOT LAID OUT: a row that cannot hold everything drops whole figures (never half a figure) in the fixed order above, so each readout is hidden by the `*-fits` rules; SPAN is pinned
+        // at the right and keeps its place, PEAK beside it appears from `caption-min-width` up when everything else is shown and it clears them. A layout would shrink them all instead.
+        gain := Readout { x: root.x-gain; y: 0px; height: root.readout-h; prefix: root.data.prefix; caption: root.gain-caption; value: root.data.gain; visible: root.gain-fits; }
+        sql := Readout { x: root.x-sql; y: 0px; height: root.readout-h; prefix: root.data.prefix; caption: root.squelch-caption; value: root.data.squelch; visible: root.sql-fits; }
+        vol := Readout { x: root.x-vol; y: 0px; height: root.readout-h; prefix: root.data.prefix; caption: root.volume-caption; value: root.data.volume; visible: root.vol-fits; }
+        rate := Readout { x: root.x-rate; y: 0px; height: root.readout-h; prefix: root.data.prefix; caption: root.rate-caption; value: root.data.rate; visible: root.rate-fits; }
+        bias := Readout { x: root.x-bias; y: 0px; height: root.readout-h; prefix: root.data.prefix; caption: root.bias-caption; value: root.data.bias-tee ? @tr("ON") : @tr("OFF"); ink: root.data.bias-tee ? Theme.lamp-amber : Theme.fg-soft; visible: root.bias-fits; }
         deco := Chip {
-            x: bias.x + bias.width + root.gap;
+            x: root.x-deco;
             y: (root.readout-h - self.height) / 2;
             visible: root.deco-fits;
             label: root.data.decoder;
@@ -277,7 +297,7 @@ export component RadioPane inherits Rectangle {
             x: span.x - root.gap - self.width;
             y: 0px;
             height: root.readout-h;
-            visible: root.captions-shown && self.x >= root.left-end + root.gap;
+            visible: root.captions-shown && root.bias-fits && (!root.has-deco || root.deco-fits) && self.x >= root.left-end + root.gap;   // PEAK goes first: only when every other figure is shown
             prefix: root.data.prefix;
             caption: root.peak-caption;
             value: root.data.peak;
@@ -313,7 +333,7 @@ export component RadioPane inherits Rectangle {
         hover(x, y) => { root.spectrum-hover(root.data.radio, x, y); }
         clicked(x, shift) => { root.spectrum-clicked(root.data.radio, x, shift); }
         double-clicked(x) => { root.spectrum-double-clicked(root.data.radio, x); }
-        right-clicked(x, px, py) => { root.spectrum-menu-requested(root.data.radio, x, px, py); }
+        right-clicked(x, px, py) => { root.spectrum-menu-requested(root.data.radio, x, px, py + root.header-h + root.readout-h); }
         band-dragged(dx) => { root.band-dragged(root.data.radio, dx); }
         edge-dragged(h) => { root.edge-dragged(root.data.radio, h); }
         wheel(x, n, shift) => { root.spectrum-wheel(root.data.radio, x, n, shift); }
@@ -323,7 +343,7 @@ export component RadioPane inherits Rectangle {
         y: root.header-h + root.readout-h + root.spec-h;
         width: root.width;
         accessible-label: root.data.resize-label;
-        moved(dy) => { root.split-ratio = max(0.1, min(0.9, root.split-ratio + dy / max(1px, root.body-h - Theme.splitter-h))); }
+        moved(dy) => { root.split-ratio = max(0.1, min(0.9, root.split-ratio + dy / max(1px, root.body-h - Theme.splitter-h))); root.split-changed(root.data.radio, root.split-ratio); }
     }
     waterfall := WaterfallView {
         x: 0px;
@@ -348,7 +368,7 @@ export component RadioPane inherits Rectangle {
         clicked(x, shift) => { root.waterfall-clicked(root.data.radio, x, shift); }
         panned(dx) => { root.waterfall-panned(root.data.radio, dx); }
         double-clicked => { root.waterfall-double-clicked(root.data.radio); }
-        right-clicked(x, px, py) => { root.waterfall-menu-requested(root.data.radio, x, px, py); }
+        right-clicked(x, px, py) => { root.waterfall-menu-requested(root.data.radio, x, px, py + root.header-h + root.readout-h + root.spec-h + Theme.splitter-h); }
         wheel(x, n, shift) => { root.waterfall-wheel(root.data.radio, x, n, shift); }
         marker-hovered(i) => { root.marker-hovered(root.data.radio, i); }
     }

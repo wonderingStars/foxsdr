@@ -1,0 +1,188 @@
+// FoxSDR Slint front end - THE RADIO WORKSPACE (docs/multi-radio-screen-design.md 3.4, built in stage S3; docs/multi-radio-records/screen-s3.md).
+//
+//   WorkspaceBar     30 px strip over the view (RECEIVER tab only, only when more than one radio is open): "Layout" One / Side by side / 2 x 2, the page keys "Radios 1-4" "Radios 5-8"
+//                    (only when a radio lives beyond the first page), and the small-window notice.
+//   RadioWorkspace   the grid of RadioPanes: Two = two columns side by side, Four = 2 x 2, 6 px gaps. One is NOT drawn here: layout One is the receiver view of MainWindow, untouched.
+//   WorkspaceModel   what the host publishes (the layout it chose, the page, the radios' panes in ONE model by radio slot) and every gesture that comes back, each with the radio's number.
+//
+// A pane exists only while its radio is on screen: panes are made per radio slot, so a pane's own state (its splitter) is kept for the radio in WorkspaceModel.splits and is back when its page comes
+// back. A pane's gestures are the host's: it aims each at the pane's radio (FoxCommand.target) and does not move the selection; the header, the tag and the readout row select (the pane says
+// select-requested), and so does a right-click (the menu is the selected radio's).
+//
+// SEAM FOR STAGE S4: an empty cell (no radio in that slot) draws a quiet well with the slot's name. The card "Add a radio" (RADIO_ADD) replaces `EmptySlot`; nothing here adds a radio.
+// The layout and the page are the host's to decide (the keys only ask): the host sets `layout` and `page` back, so a refused or clamped choice never leaves the keys lying.
+import { Theme } from "theme.slint";
+import { Caption, SegGroup, SegKey } from "keys.slint";
+import { RadioPane, RadioPaneData } from "radio_pane.slint";
+
+export struct WorkspaceCell {
+    occupied: bool,                  // a radio is open in this slot
+    label: string,                   // "Radio 3": the slot's name, for an empty cell
+    pane: RadioPaneData,
+}
+
+export global WorkspaceModel {
+    // ---- published by the host ----
+    in-out property <int> layout: 0;                 // the CHOSEN layout: 0 One, 1 Side by side, 2 Four (2 x 2)
+    in property <int> shown-layout: 0;               // what is shown: the chosen layout after the small-window fallback and the one-radio rule
+    in-out property <int> page: 0;                   // the page of the chosen layout, from 0
+    in property <int> radio-count: 1;                // the radios the engine has; the bar and the grid exist only above one
+    in property <int> selected-radio: 1;             // 1-based: the radio the strip, the panels and the banks show
+    in property <[WorkspaceCell]> cells;             // by radio slot, 8 rows (slot 0 is radio 1)
+    in property <[string]> page-labels;              // "Radios 1-4", "Radios 5-8": more than one entry offers the page keys
+    in property <[string]> page-tips;
+    in property <string> notice;                     // the small-window sentence, "" when the layout is shown
+    in property <int> ribbon-size: 2;                // the toolbar's Band plan key, for every pane
+    // the splitter of each radio's pane, kept here so it survives a page change
+    in-out property <[float]> splits: [0.45, 0.45, 0.45, 0.45, 0.45, 0.45, 0.45, 0.45];
+    // ---- written by the workspace: the size one pane has, for the host to fit the pictures to ----
+    in-out property <length> cell-w;
+    in-out property <length> cell-h;
+    // ---- what the user asked ----
+    callback layout-selected(int);                   // 0 One, 1 Side by side, 2 Four
+    callback page-selected(int);
+    callback select-requested(int);                  // radio (1-based)
+    callback stop-clicked(int);
+    callback spectrum-hover(int, float, float);
+    callback spectrum-clicked(int, float, bool);
+    callback spectrum-double-clicked(int, float);
+    callback spectrum-menu-requested(int, float, length, length);   // radio, xfrac, window position of the pointer
+    callback band-dragged(int, float);
+    callback edge-dragged(int, float);
+    callback spectrum-wheel(int, float, int, bool);
+    callback waterfall-hover(int, float, float);
+    callback waterfall-clicked(int, float, bool);
+    callback waterfall-panned(int, float);
+    callback waterfall-double-clicked(int);
+    callback waterfall-menu-requested(int, float, length, length);
+    callback waterfall-wheel(int, float, int, bool);
+    callback marker-hovered(int, int);
+}
+
+export component WorkspaceBar inherits Rectangle {
+    height: 30px;
+    background: Theme.strip;
+    accessible-role: groupbox;
+    accessible-label: @tr("Layout");
+    Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
+    Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: parent.height; clip: true;   // the bar holds its width: what does not fit is cut, never widens the window
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            spacing: 8px;
+            alignment: start;
+            VerticalLayout { alignment: center; Caption { label: @tr("Layout"); font-size: Theme.font-tiny; } }
+            VerticalLayout {
+                alignment: center;
+                SegGroup {
+                    small: true;
+                    HorizontalLayout {
+                        padding: 2px;
+                        spacing: 2px;
+                        SegKey { label: @tr("One"); small: true; min-w: 0px; on: WorkspaceModel.layout == 0; tooltip: @tr("Show one radio, as before"); clicked => { WorkspaceModel.layout-selected(0); } }
+                        SegKey { label: @tr("Side by side"); small: true; min-w: 0px; on: WorkspaceModel.layout == 1; tooltip: @tr("Show two radios side by side"); clicked => { WorkspaceModel.layout-selected(1); } }
+                        SegKey { label: "2 x 2"; small: true; min-w: 0px; on: WorkspaceModel.layout == 2; tooltip: @tr("Show four radios in a 2 x 2 grid"); clicked => { WorkspaceModel.layout-selected(2); } }   // not-translated: the key's caption, as the design has it
+                    }
+                }
+            }
+            // THE PAGE KEYS: one per page, the page shown is lit; only when a radio lives beyond the first page
+            if WorkspaceModel.page-labels.length > 1 : VerticalLayout {
+                alignment: center;
+                SegGroup {
+                    small: true;
+                    HorizontalLayout {
+                        padding: 2px;
+                        spacing: 2px;
+                        for label[i] in WorkspaceModel.page-labels : SegKey { label: label; small: true; min-w: 0px; on: WorkspaceModel.page == i; tooltip: WorkspaceModel.page-tips[i]; clicked => { WorkspaceModel.page-selected(i); } }
+                    }
+                }
+            }
+            // THE SMALL-WINDOW NOTICE: the multi-pane layout was chosen and the window is too small for it, so One is shown
+            if WorkspaceModel.notice != "" : VerticalLayout {
+                alignment: center;
+                Text {
+                    text: WorkspaceModel.notice;
+                    color: Theme.chip-warn-fg;
+                    font-size: Theme.font-small;
+                    overflow: elide;
+                    min-width: 0px;
+                    accessible-role: text;
+                    accessible-label: WorkspaceModel.notice;
+                }
+            }
+        }
+    }
+}
+
+// An empty slot: a quiet well with the slot's name. The seam of stage S4 (the card "Add a radio").
+component EmptySlot inherits Rectangle {
+    in property <string> label;
+    background: Theme.well-deep;
+    border-width: Theme.hairline;
+    border-color: Theme.line;
+    accessible-role: groupbox;
+    accessible-label: root.label;
+    Text {
+        text: root.label;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+        color: Theme.dim;
+    }
+}
+
+export component RadioWorkspace inherits Rectangle {
+    private property <int> psize: WorkspaceModel.shown-layout == 2 ? 4 : 2;     // the panes of a page
+    private property <int> first: WorkspaceModel.page * root.psize;               // the first radio slot on the page
+    private property <length> gap: 6px;
+    private property <int> rows: WorkspaceModel.shown-layout == 2 ? 2 : 1;
+    // the size of one pane: two columns in both layouts, one or two rows
+    out property <length> cell-w: (root.width - root.gap) / 2;
+    out property <length> cell-h: root.rows == 2 ? (root.height - root.gap) / 2 : root.height;
+    // the host fits each pane's pictures to this size: written when the grid is made (an `if` makes it with the size already settled, so no change is seen) and whenever it changes
+    init => { WorkspaceModel.cell-w = root.cell-w; WorkspaceModel.cell-h = root.cell-h; }
+    changed cell-w => { WorkspaceModel.cell-w = root.cell-w; }
+    changed cell-h => { WorkspaceModel.cell-h = root.cell-h; }
+    background: Theme.bg;
+    clip: true;
+
+    for cell[slot] in WorkspaceModel.cells : Rectangle {
+        x: Math.mod(slot - root.first, 2) * (root.cell-w + root.gap);
+        y: Math.floor((slot - root.first) / 2) * (root.cell-h + root.gap);
+        width: root.cell-w;
+        height: root.cell-h;
+        if slot >= root.first && slot < root.first + root.psize && cell.occupied : pane := RadioPane {
+            width: parent.width;
+            height: parent.height;
+            data: cell.pane;
+            selected: slot + 1 == WorkspaceModel.selected-radio;
+            ribbon-size: WorkspaceModel.ribbon-size;
+            split-ratio: WorkspaceModel.splits[slot];
+            // A right-click's position comes from the pane relative to the pane; the host gets it in the window's own coordinates.
+            select-requested(r) => { WorkspaceModel.select-requested(r); }
+            stop-clicked(r) => { WorkspaceModel.stop-clicked(r); }
+            spectrum-hover(r, x, y) => { WorkspaceModel.spectrum-hover(r, x, y); }
+            spectrum-clicked(r, x, shift) => { WorkspaceModel.spectrum-clicked(r, x, shift); }
+            spectrum-double-clicked(r, x) => { WorkspaceModel.spectrum-double-clicked(r, x); }
+            spectrum-menu-requested(r, x, px, py) => { WorkspaceModel.spectrum-menu-requested(r, x, pane.absolute-position.x + px, pane.absolute-position.y + py); }
+            band-dragged(r, dx) => { WorkspaceModel.band-dragged(r, dx); }
+            edge-dragged(r, h) => { WorkspaceModel.edge-dragged(r, h); }
+            spectrum-wheel(r, x, n, shift) => { WorkspaceModel.spectrum-wheel(r, x, n, shift); }
+            waterfall-hover(r, x, y) => { WorkspaceModel.waterfall-hover(r, x, y); }
+            waterfall-clicked(r, x, shift) => { WorkspaceModel.waterfall-clicked(r, x, shift); }
+            waterfall-panned(r, dx) => { WorkspaceModel.waterfall-panned(r, dx); }
+            waterfall-double-clicked(r) => { WorkspaceModel.waterfall-double-clicked(r); }
+            waterfall-menu-requested(r, x, px, py) => { WorkspaceModel.waterfall-menu-requested(r, x, pane.absolute-position.x + px, pane.absolute-position.y + py); }
+            waterfall-wheel(r, x, n, shift) => { WorkspaceModel.waterfall-wheel(r, x, n, shift); }
+            marker-hovered(r, i) => { WorkspaceModel.marker-hovered(r, i); }
+            split-changed(r, v) => { WorkspaceModel.splits[r - 1] = v; }
+        }
+        if slot >= root.first && slot < root.first + root.psize && !cell.occupied : EmptySlot {
+            width: parent.width;
+            height: parent.height;
+            label: cell.label;
+        }
+    }
+}

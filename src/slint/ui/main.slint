@@ -63,6 +63,9 @@ export { Theme, Skin, Workbench, NightWatch, DigitFace, MeterStyle, ChipTone, La
 export { TxChoice, TransmitPageModel, TransmitEvents }
 export { View3D, Scene3DLabel, SurveyRankRow, SondeLegendRow }   // the 3D views' state and their labels (docs 6.64): the host's view3d_publish sets the global and answers its callbacks
 import { GlobeEvents, GlobeModel, GlobeControl, GlobeChipModel } from "globe_views.slint";
+import { WorkspaceModel, WorkspaceCell, WorkspaceBar, RadioWorkspace } from "workspace.slint";
+import { RadioPaneData } from "radio_pane.slint";
+export { WorkspaceModel, WorkspaceCell, RadioPaneData }   // the radio workspace (docs/multi-radio-records/screen-s3.md): the host publishes its model and answers its callbacks
 export { GlobeEvents, GlobeModel, GlobeControl, GlobeChipModel }
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
@@ -654,7 +657,13 @@ export component MainWindow inherits Window {
                 }
                 Rectangle { // the view: RECEIVER (spectrum + splitter + waterfall), PATCH, SCOPE
                     vertical-stretch: 1; preferred-height: 700px;   // the layout sizes the window on the desktop: 36 + 104 + 32 + 700 + 28 is the design height (the well alone would count as 120)
-                    if root.view-index == 0 : Rectangle {   // the wells are placed, not laid out: a layout here fed its 120 px minimum to the window's own size
+                    // THE RADIO WORKSPACE (docs/multi-radio-records/screen-s3.md): with more than one radio open the receiver view carries a 30 px bar (layout keys, page keys) over it, and a multi-pane
+                    // layout puts the grid of panes where the spectrum and waterfall are. With ONE radio there is no bar, ws-bar-h is 0 and this view is exactly what it was.
+                    private property <length> ws-bar-h: root.view-index == 0 && WorkspaceModel.radio-count > 1 ? 30px : 0px;
+                    if root.view-index == 0 && WorkspaceModel.radio-count > 1 : WorkspaceBar { x: 0; y: 0; width: parent.width; }
+                    if root.view-index == 0 && WorkspaceModel.shown-layout > 0 : RadioWorkspace { x: 0; y: parent.ws-bar-h; width: parent.width; height: max(0px, parent.height - parent.ws-bar-h); }
+                    if root.view-index == 0 && WorkspaceModel.shown-layout == 0 : Rectangle {   // the wells are placed, not laid out: a layout here fed its 120 px minimum to the window's own size
+                        x: 0; y: parent.ws-bar-h; width: parent.width; height: parent.height - parent.ws-bar-h;
                         spectrum := SpectrumView {
                             x: 0; y: 0; width: parent.width;
                             height: max(120px, (parent.height - Theme.splitter-h) * root.split-ratio);

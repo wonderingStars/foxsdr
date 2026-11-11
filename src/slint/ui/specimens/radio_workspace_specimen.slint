@@ -1,0 +1,39 @@
+// The radio workspace's specimen: the bar over the grid of panes, as the main window places them (docs/multi-radio-records/screen-s3.md), fed with fake data by the test
+// (tests/test_slint_radio_workspace.cpp) through the WorkspaceModel global, so layouts, pages, selection and the empty slot are seen with several radios, in every skin, without the host.
+//
+//   y 0, h 30           WorkspaceBar (layout keys, page keys, notice)
+//   y 30 ..             RadioWorkspace over the rest of the window (Four = 2 x 2, Two = side by side; 6 px gaps)
+//
+// One hidden pane of a width the test sets (a pane in this window would cost the generated code a branch for every element: the compiler's limit) reports which readout figures it keeps
+// (probe-mask): bit 0 GAIN, 1 SQL, 2 VOL, 3 RATE, 4 BIAS, 5 the decoder chip. The test sets `probe-data` (a decoder running or not) and `probe-width`, and holds the order in which a narrow pane gives figures up.
+import { Theme, Skin, Workbench, NightWatch } from "../theme.slint";
+import { RadioWorkspace, WorkspaceBar, WorkspaceModel, WorkspaceCell } from "../workspace.slint";
+import { RadioPane, RadioPaneData } from "../radio_pane.slint";
+import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker } from "../spectrum.slint";
+import { AgeTick } from "../waterfall.slint";
+import { TipLayer } from "../tooltip.slint";
+export { Theme, Skin, Workbench, NightWatch, WorkspaceModel, WorkspaceCell }
+export { RadioPaneData, AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, AgeTick }
+
+component Probe inherits RadioPane {
+    visible: false;
+    height: 353px;
+    out property <int> mask: (self.gain-fits ? 1 : 0) + (self.sql-fits ? 2 : 0) + (self.vol-fits ? 4 : 0) + (self.rate-fits ? 8 : 0) + (self.bias-fits ? 16 : 0) + (self.deco-fits ? 32 : 0);
+}
+
+export component RadioWorkspaceSpecimen inherits Window {
+    background: Theme.bg;
+    min-width: 320px;
+    min-height: 240px;
+
+    in-out property <RadioPaneData> probe-data;
+    in-out property <length> probe-width: 640px;
+    out property <int> probe-mask: probe.mask;
+
+    bar := WorkspaceBar { x: 0px; y: 0px; width: root.width; }
+    ws := RadioWorkspace { x: 0px; y: bar.height; width: root.width; height: max(0px, root.height - bar.height); }
+
+    probe := Probe { width: root.probe-width; data: root.probe-data; }
+
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
+}

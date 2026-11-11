@@ -391,7 +391,7 @@ export component SpectrumView inherits Rectangle {
         color: Theme.axis-fg;
     }
     if root.axis-unit != "" : Text {
-        x: root.width - self.width - 4px;
+        x: root.compact ? 4px : root.width - self.width - 4px;   // a pane's narrow plot puts its last tick under the right-hand corner: the unit sits in the left gutter there (the receiver view keeps it at the right)
         y: root.height - root.axis-h + 3px;
         height: 14px;
         text: root.axis-unit;
