@@ -118,7 +118,9 @@ public:
     using Handler = std::function<void(Sock, std::size_t /*index*/, const std::atomic<bool>&)>;
     ~TcpServer() { stop(); }
 
-    bool start(Handler h) {
+    // `port` 0: an ephemeral loopback port; otherwise that port (a test that needs a TCP and a UDP socket
+    // under one number picks the number first).
+    bool start(Handler h, std::uint16_t port = 0) {
         if (!startNet()) { return false; }
         handler_ = std::move(h);
         listener_ = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -126,7 +128,7 @@ public:
         sockaddr_in a{};
         a.sin_family = AF_INET;
         a.sin_addr.s_addr = ::htonl(INADDR_LOOPBACK);
-        a.sin_port = 0;
+        a.sin_port = ::htons(port);
         if (::bind(listener_, reinterpret_cast<sockaddr*>(&a), sizeof(a)) != 0) { return false; }
         SockLen len = sizeof(a);
         ::getsockname(listener_, reinterpret_cast<sockaddr*>(&a), &len);
