@@ -67,3 +67,41 @@ UNPROVEN: everything is on generated signals; no coherent two-channel radio on t
 
 Hand-off: engine feeds two sample-aligned complex streams (same rate, same clock) to `TwoChannelCombiner::process`; settings needed: mode, manual amplitude/phase,
 steering ratio (amplitude and phase), forgetting time constant, freeze, optional "capture interferer-only covariance then freeze" button using `covariance()` and `solveFrom()`.
+
+## Part 3: direction-finding maths (Q8a)
+
+Files: `src/dsp/doa_maths.hpp`, `.cpp`, `tests/test_doa_maths.cpp`. Maths only, no hardware code.
+
+Built: sample covariance (N = 1..8 coherent channels), Hermitian eigen-decomposition by cyclic Jacobi written here (phase rotation to make the pivot real, then the real Jacobi rotation; no third-party library),
+UCA and ULA steering vectors, Bartlett and MUSIC spectra, peak picking (wrap-around for the circle, parabolic refinement, peak-to-median figure and a 0..1 confidence heuristic 1 - 10^(-dB/20)),
+`countAboveNoise` (a heuristic eigenvalue-ratio source count, not an information criterion), and a common-source calibration (`calibrateFromCommonSource` returns per-channel complex correction, phase in degrees, gain in dB, and a dominance figure; `applyCalibration` forms K R K^H).
+Conventions are in the header (UCA element 0 on +x, bearing counter-clockwise from +x; ULA bearing from the axis, grid 0..180 degrees).
+
+Sources opened: Wikipedia "MUSIC (algorithm)" (steps, pseudo-spectrum, source count must be known; cites Schmidt, IEEE Trans. AP-34, March 1986, pp. 276-280, which I did not open);
+Werner, Gardill, Hutter, arXiv:2502.08592v1 (Feb 2025, CC BY-NC-ND 4.0), eq. (1) plane-wave model for an element at (x_m, y_m) and eq. (16) MUSIC spectrum (text extracted with pdftotext);
+Loyka ELG5132 lecture 7 (same as Part 2) for the Bartlett spectrum as the matched-beamformer output. The calibration method is my own derivation (R = P c c^H + noise, dominant eigenvector is c); no free source describing a calibration was found, and the Werner paper only mentions a reference antenna in its abstract.
+Not opened and not used: krakensdr_doa, pyArgus, gr-doa, Heimdall (GPL) or any other SDR program.
+
+Measured (generated plane waves, complex Gaussian sources and noise, 1000 snapshots, 40 random bearings per cell, RMS bearing error in degrees; grid 0.5 degree with parabolic refinement):
+```
+ single source   SNR dB   UCA5 MUSIC  UCA5 Bartlett  UCA8 MUSIC  ULA4 MUSIC
+                  -10        1.69        1.67          0.77        1.61
+                    0        0.25        0.25          0.19        0.34
+                   10        0.12        0.10          0.11        0.12
+                   20        0.10        0.02          0.09        0.09
+```
+(UCA5 radius 0.425 lambda, UCA8 0.65 lambda, ULA4 spacing 0.5 lambda, 145 MHz.) The 0.1 degree floor at high SNR is the grid and the parabolic refinement, not noise.
+Two uncorrelated sources at 40.3 and 110.7 degrees (off-grid), 30 trials, MUSIC with 2 sources: UCA5 0.82 / 0.23 / 0.14 degrees and UCA8 0.35 / 0.14 / 0.14 degrees at -5 / 5 / 20 dB, all 30 trials resolved; Bartlett on UCA5 at 20 dB 3.06 degrees (broad lobes);
+ULA4 60.3/110.7 at 20 dB 0.13 degrees; UCA5 MUSIC two sources 30 degrees apart 0.15 degrees, 12 degrees apart 0.18 degrees (20 dB, still resolved).
+Confidence: strong signal 0.987 (38.1 dB over the spectrum median), noise only 0.226 (2.2 dB). Jacobi: residual < 1e-11, orthonormality < 1e-12, N = 1..8, multiplicity-7 eigenvalue, zero matrix, empty input.
+Calibration (5 channels, injected random gains of +-2 dB and random phases, common source with 20 dB receiver SNR, 4096 snapshots): worst phase error 0.041 degrees, worst gain error 0.031 dB; bearing RMS error with the injected offsets 100.32 degrees uncalibrated against 0.11 degrees calibrated.
+CPU, N = 8: covariance of 4096 snapshots 0.29 ms, Jacobi 0.022 ms (5 sweeps), MUSIC on 720 bearings 0.31 ms.
+Ambiguity of a linear array, stated and tested: bearing is measured from the axis and theta and -theta have identical steering vectors (front/back mirror; mismatch 0), so the scan covers 0..180 degrees only and a linear array alone cannot give a full-circle bearing;
+with spacing = 1 lambda, bearings with cos(theta') = cos(theta) + 1 are indistinguishable (grating lobe, mismatch 2.8e-16), hence spacing <= lambda/2. A circular array has no such ambiguity but its element spacing must stay <= lambda/2 too.
+Break-it: (a) MUSIC using the signal instead of the noise subspace turned 19 of 105 checks red; (b) inverting the calibration factor (ei/ref instead of ref/ei) turned 4 red (phase, gain, calibrated bearing, improvement); both restored: 105/105 pass.
+Pins: see the test (UCA5 MUSIC < 1 degree at 20 dB, < 3 at 0 dB, < 15 at -10 dB; two-source < 1 degree at 20 dB with >= 28 of 30 resolved; calibration < 1 degree and < 0.1 dB).
+UNPROVEN: generated signals only; no coherent multi-channel radio on this desk; real arrays have mutual coupling, element pattern and position errors, correlated (multipath) sources that break MUSIC, and amplitude/phase drift between calibrations, none modelled.
+What hardware would need what (from the re-check section): a KrakenSDR-class device is five RTL-SDR tuners on one clock with a switchable common noise source; its coherent I/Q is served by Heimdall (GPL-3.0, clean-room barrier), so the capture link stays blocked until a permissively licensed description exists or the owner supplies a device to capture.
+The maths here needs only: N sample-aligned complex streams, array type and radius or spacing, frequency, and a capture with the noise source on for calibration.
+
+Hand-off: engine/capture lane produces N aligned streams; call `sampleCovariance` per block (about 4096 snapshots), `hermitianEigen`, then `musicSpectrum`/`bartlettSpectrum` and `pickPeaks`; settings: array type, radius/spacing, centre frequency, source count, calibration run (noise source on) and stored per-channel factors applied with `applyCalibration` (or applied to the samples before the covariance).
