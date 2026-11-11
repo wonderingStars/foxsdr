@@ -162,6 +162,25 @@ void testBadPoints() {
     Ed25519PublicKey two{};
     two[0] = 2;
     CHECK(!ed25519Verify(two, U(msg), msg.size(), zero));
+    // A LOW-ORDER KEY makes the sign and canonical-encoding refusals provable (a zero signature would fail for any reason): with A = the identity point (y = 1, x = 0),
+    // [S]B = R + [k]A holds for R = B and S = 1 whatever k is. The canonical encoding of the identity therefore verifies; every non-canonical or sign-bit-set alias of it must not.
+    {
+        Ed25519Signature s1{};
+        s1[0] = 0x58;
+        for (int i = 1; i < 32; ++i) { s1[i] = 0x66; }   // R = the base point (RFC 8032 5.1: y = 4/5, encoded 58 66 66 ... 66)
+        s1[32] = 1;                                       // S = 1
+        Ed25519PublicKey identity{};
+        identity[0] = 1;
+        CHECK(ed25519Verify(identity, U(msg), msg.size(), s1));
+        Ed25519PublicKey alias{};   // y = p + 1 is the same y as 1 but not the canonical encoding (RFC 8032 5.1.3: y must be below p)
+        for (int i = 1; i < 31; ++i) { alias[i] = 0xff; }
+        alias[0] = 0xee;
+        alias[31] = 0x7f;
+        CHECK(!ed25519Verify(alias, U(msg), msg.size(), s1));
+        Ed25519PublicKey signedZero = identity;   // x = 0 with the sign bit set is refused (RFC 8032 5.1.3 step 4)
+        signedZero[31] = 0x80;
+        CHECK(!ed25519Verify(signedZero, U(msg), msg.size(), s1));
+    }
     // The all-zero signature under a real key.
     const auto pub = arr<Ed25519PublicKey>(unhex(kEd25519Vectors[1].pub));
     CHECK(!ed25519Verify(pub, U(msg), msg.size(), zero));
