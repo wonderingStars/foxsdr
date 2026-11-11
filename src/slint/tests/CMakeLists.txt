@@ -276,6 +276,15 @@ foreach(src ${_foxsdr_slint_test_sources})
         foxsdr_slint_copy_dll(${name})
         add_test(NAME ${name} COMMAND ${name})
         set_tests_properties(${name} PROPERTIES LABELS "slint")
+    elseif(family STREQUAL "radio_link_host")
+        # Link tuning, the saved layout and the page keys (docs/multi-radio-records/screen-s5.md): link_logic, workspace_prefs (over the 3D views' text, view3d_prefs + scene3d) and the workspace's logic.
+        add_executable(${name} ${name}.cpp "${CMAKE_CURRENT_SOURCE_DIR}/../host_logic.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../workspace_logic.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../radio_mix_logic.cpp"
+                       "${CMAKE_CURRENT_SOURCE_DIR}/../link_logic.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../workspace_prefs.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../view3d_prefs.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../scene3d.cpp")
+        target_link_libraries(${name} PRIVATE slint_render_harness slint_i18n)
+        target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/.." "${FOXSDR_REPO_ROOT}/src" "${FOXSDR_REPO_ROOT}/third_party/foxsdr_api")
+        foxsdr_slint_copy_dll(${name})
+        add_test(NAME ${name} COMMAND ${name})
+        set_tests_properties(${name} PROPERTIES LABELS "slint")
     elseif(family STREQUAL "workspace_host")
         # The radio workspace's host logic (docs/multi-radio-records/screen-s3.md, S3, ../workspace_logic.cpp) and the test seam's made-up radios (../workspace_testseam.cpp): no window, but a RadioView owns Slint pixel buffers.
         add_executable(${name} ${name}.cpp "${CMAKE_CURRENT_SOURCE_DIR}/../host_logic.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../workspace_logic.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../workspace_testseam.cpp")

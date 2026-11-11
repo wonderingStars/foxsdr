@@ -137,6 +137,9 @@ public:
     // Selects radio `radio` (1-based): asks the engine (RADIO_FOCUS) and follows only when it answers OK or NO_CHANGE. The page that holds it becomes the page shown.
     // False when no such radio is open or the engine refused; the selection is then untouched.
     bool select(int radio, const EngineReads& engine);
+    // The page keys (Alt+PageUp / Alt+PageDown, screen stage S5): `dir` -1 or +1. In a multi-pane layout that is shown, the previous / next page (clamped at the ends, no wrap); where One is shown
+    // (the layout, or the small-window fallback) a page IS a radio, so the key selects the previous / next radio that exists. True when something moved.
+    bool stepPage(int dir, int winW, int winH, const EngineReads& engine);
 
     // ---- pictures ----
     // Fits a radio's pictures to a pane of cellW x cellH (see panePictures); the history restarts only when the size changed by more than a few pixels. True if it was refitted.

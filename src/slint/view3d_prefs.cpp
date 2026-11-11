@@ -69,6 +69,7 @@ ViewPrefs ViewPrefs::parse(const std::string& text) {
         const std::string name = entry.substr(0, colon);
         const std::string body = entry.substr(colon + 1);
         if (!goodName(name)) { continue; }
+        if (name == kRawWorkspace) { if (!body.empty() && body.size() <= 256) { p.raw_[name] = body; } continue; }
         ViewState s;
         for (const std::string& kv : split(body, ',')) {
             const std::size_t eq = kv.find('=');
@@ -95,7 +96,19 @@ std::string ViewPrefs::serialize() const {
         for (std::size_t i = 0; i < s.opt.size(); ++i) { if (s.opt[i] != 0) { e += ",o" + std::to_string(i) + "=" + std::to_string(s.opt[i]); } }
         add(e);
     }
+    for (const auto& [name, body] : raw_) { add(name + ":" + body); }
     return out;
+}
+
+std::string ViewPrefs::raw(const std::string& name) const {
+    const auto it = raw_.find(name);
+    return it == raw_.end() ? std::string() : it->second;
+}
+
+void ViewPrefs::setRaw(const std::string& name, const std::string& body) {
+    if (name != kRawWorkspace) { return; }
+    if (body.empty() || body.size() > 256 || body.find(';') != std::string::npos) { raw_.erase(name); return; }
+    raw_[name] = body;
 }
 
 ViewState ViewPrefs::get(const std::string& name, const ViewState& defaults) const {

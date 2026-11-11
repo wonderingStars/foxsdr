@@ -221,6 +221,19 @@ bool Workspace::select(int radio, const EngineReads& engine) {
     return true;
 }
 
+bool Workspace::stepPage(int dir, int winW, int winH, const EngineReads& engine) {
+    const int step = dir < 0 ? -1 : 1;
+    if (shownLayout(winW, winH) == kLayoutOne) {
+        for (int t = radios_.selected + step; t >= 0 && t < kMaxRadios; t += step) {
+            if (occupied(t)) { return select(t + 1, engine); }
+        }
+        return false;
+    }
+    const int before = page_;
+    setPage(page_ + step);
+    return page_ != before;
+}
+
 bool Workspace::fitPictures(int slot, int cellW, int cellH, float split) {
     RadioView& rv = radios_.at(slot);
     const PictureSize want = panePictures(cellW, cellH, split);

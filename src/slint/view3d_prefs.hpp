@@ -39,11 +39,19 @@ public:
     // The state of a view, or `defaults` when it is not listed. The camera and options are clamped (elevation 4..89, zoom 0.35..5, azimuth -180..180, each option 0..15).
     ViewState get(const std::string& name, const ViewState& defaults) const;
     void set(const std::string& name, const ViewState& s);
-    bool operator==(const ViewPrefs& o) const { return views_ == o.views_; }
+    // ENTRIES THAT ARE NOT A 3D VIEW travel in the same text (screen stage S5: the workspace's saved layout, name "workspace", workspace_prefs.hpp): their body is kept VERBATIM, never read as a camera,
+    // so a 3D page that saves its own view does not lose them. Only the names in kRawNames are kept this way; the body may hold anything but ';'.
+    std::string raw(const std::string& name) const;       // "" when there is none
+    void setRaw(const std::string& name, const std::string& body);   // an empty body removes the entry
+    bool operator==(const ViewPrefs& o) const { return views_ == o.views_ && raw_ == o.raw_; }
 
 private:
     std::map<std::string, ViewState> views_;
+    std::map<std::string, std::string> raw_;
 };
+
+// The names of the entries kept verbatim.
+inline constexpr const char* kRawWorkspace = "workspace";
 
 // A camera and the state it came from, both ways.
 scene3d::Camera cameraOf(const ViewState& s);
