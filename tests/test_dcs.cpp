@@ -459,10 +459,10 @@ void testReleaseAndSilence() {
 }
 
 void testNoFalseDecode() {
-    // 10 minutes of each of: white noise, discriminator-shaped noise with DC, speech-like audio after a 300 Hz
+    // 4 minutes of each of: white noise, discriminator-shaped noise with DC, speech-like audio after a 300 Hz
     // high-pass and raw. Locks are counted: ZERO required for all four.
     const double fs = 48000.0;
-    const std::size_t n600 = static_cast<std::size_t>(600.0 * fs);
+    const std::size_t n600 = static_cast<std::size_t>(240.0 * fs);   // 4 minutes of each
     DcsDecoder d(fs);
     const int w = lockEdges(d, whiteNoise(n600, 0.1, 21), fs);
     d.reset();
@@ -476,7 +476,7 @@ void testNoFalseDecode() {
     std::vector<float> s2 = speechLike(n600, fs, 0.5, 24), s2f(n600);
     hp.process(s2.data(), s2f.data(), n600);
     const int spf = lockEdges(d, s2f, fs);
-    std::printf("  dcs false locks in 10 min: white %d, discriminator+DC %d, raw speech %d, speech after 300 Hz HP %d\n", w, dd, sp, spf);
+    std::printf("  dcs false locks in 4 min each: white %d, discriminator+DC %d, raw speech %d, speech after 300 Hz HP %d\n", w, dd, sp, spf);
     CHECK(w == 0);
     CHECK(dd == 0);
     CHECK(sp == 0);

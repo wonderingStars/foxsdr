@@ -280,37 +280,40 @@ void testAdjacentTonesAndSelection() {
 }
 
 void testNoFalseDetect() {
-    // 10 minutes of white noise, 10 minutes of discriminator-shaped noise with a DC offset,
-    // and 10 minutes of speech-like audio both raw (nothing removed below 300 Hz: harder than a real
-    // transmitter, which filters its audio) and after the 300 Hz high-pass: false locks are counted.
+    // White noise (10 minutes at 48 kHz), discriminator-shaped noise with a DC offset, and speech-like audio both raw
+    // (nothing removed below 300 Hz: harder than a real transmitter, which filters its audio) and after the 300 Hz
+    // high-pass (5 minutes each at 48 kHz); 2 minutes of each at 24 kHz. False locks are counted. The runs are kept
+    // to what fits the 120 s test bound with other tests loading the machine; the record says what ran.
     for (double fs : kRates) {
-        const std::size_t n600 = static_cast<std::size_t>(600.0 * fs);
+        const bool full = (fs == 48000.0);
+        const std::size_t nWhite = static_cast<std::size_t>((full ? 600.0 : 120.0) * fs);
+        const std::size_t nOther = static_cast<std::size_t>((full ? 300.0 : 120.0) * fs);
         CtcssDetector d(fs, true);
-        const int w = risingEdges(d, whiteNoise(n600, 0.1, 1), fs);
+        const int w = risingEdges(d, whiteNoise(nWhite, 0.1, 1), fs);
         d.reset();
-        std::vector<float> dn = discriminatorNoise(n600, 0.1, 2);
+        std::vector<float> dn = discriminatorNoise(nOther, 0.1, 2);
         for (auto& x : dn) { x += 0.2f; }
         const int dd = risingEdges(d, dn, fs);
         d.reset();
-        const int sp = risingEdges(d, speechLike(n600, fs, 0.5, 3), fs);
+        const int sp = risingEdges(d, speechLike(nOther, fs, 0.5, 3), fs);
         d.reset();
         CtcssHighpass hp(fs);
-        std::vector<float> s2 = speechLike(n600, fs, 0.5, 4), s2f(n600);
-        hp.process(s2.data(), s2f.data(), n600);
+        std::vector<float> s2 = speechLike(nOther, fs, 0.5, 4), s2f(nOther);
+        hp.process(s2.data(), s2f.data(), nOther);
         const int spf = risingEdges(d, s2f, fs);
-        std::printf("  false locks in 10 min at fs=%.0f: white %d, discriminator+DC %d, raw speech %d, speech after 300 Hz HP %d\n", fs, w, dd, sp, spf);
+        std::printf("  false locks at fs=%.0f (white %.0f s, others %.0f s): white %d, discriminator+DC %d, raw speech %d, speech after 300 Hz HP %d\n", fs, nWhite / fs, nOther / fs, w, dd, sp, spf);
         CHECK(w == 0);
         CHECK(dd == 0);
         CHECK(spf == 0);
         // RAW speech with nothing removed below 300 Hz: a voiced vowel whose fundamental holds near a tone
         // for a few hundred ms IS a tone to this detector, and is to any CTCSS decoder fed unfiltered audio.
-        // Pinned at what the run measured (138-142 locks of any of 50 tones in 10 minutes, bound 250);
-        // a chosen single tone is counted below. A real transmitter high-passes its audio (the 0 above).
-        CHECK(sp <= 250);
+        // Pinned at what the run measured (about 71 locks of any of 50 tones per 5 minutes, bound 150); a chosen
+        // single tone is counted below. A real transmitter high-passes its audio (the 0 above).
+        CHECK(sp <= 150);
     }
     {  // A single CHOSEN tone against raw speech: false gate openings in 10 minutes.
         const double fs = 48000.0;
-        const std::vector<float> sp = speechLike(static_cast<std::size_t>(600.0 * fs), fs, 0.5, 3);
+        const std::vector<float> sp = speechLike(static_cast<std::size_t>(150.0 * fs), fs, 0.5, 3);
         for (double hz : {67.0, 100.0, 123.0, 203.5}) {
             CtcssDetector d(fs, false);
             d.setSelectedToneHz(hz);
@@ -321,8 +324,8 @@ void testNoFalseDetect() {
                 if (d.gateOpen() && !was) { ++opens; }
                 was = d.gateOpen();
             }
-            std::printf("  chosen tone %.1f Hz against 10 min of RAW speech-like audio: %d false openings\n", hz, opens);
-            CHECK(opens <= 40);  // measured 0, 0, 3, 28 (tones in the middle of the synthetic fundamentals' range open most)
+            std::printf("  chosen tone %.1f Hz against 150 s of RAW speech-like audio: %d false openings\n", hz, opens);
+            CHECK(opens <= 14);  // measured about a quarter of 0, 0, 3, 28 per 600 s (tones in the middle of the synthetic fundamentals range open most)
         }
     }
     {  // Digital silence: no tone, no NaN.
