@@ -180,7 +180,7 @@ Gate-rule rows:
 | G5 | rules 9, 10: q construct or I in an RF header | RED, 7 failed check(s): `test_aprs_is.cpp:220  gate(pkt).reason == GateReason::QConstructOnRf` |
 | G6 | rule 3: third-party header with TCPIP / TCPXX | RED, 4 failed check(s): `test_aprs_is.cpp:227  gate("N0RF>APRS,WIDE1-1:}N0INT>APRS,TCPIP,N0GATE*:>from the internet").reason == Gate...` |
 | G7 | rule 6: third-party packet gated without its RF header and } | RED, 3 failed check(s): `test_aprs_is.cpp:233  d.line == "N0INT>APRS,WIDE2-1,qAR,N0GATE-10:>inner status"` |
-| G8 | rule 8: qAO, always (break: qAR written) | RED, 3 failed check(s): `test_aprs_is.cpp:197  d.reason == GateReason::Gated && d.line == "N0CALL-9>APRS,WIDE1-1*,qAO,N0GATE-10:>sta...` |
+| G8 | rule 8: qAO, always (break: qAR written; re-run after the 2026-11-11 correction) | RED, 10 failed checks: `test_aprs_is.cpp:194  d.line == "N0CALL-9>APRS,WIDE1-1*,WIDE2-1,qAO,N0GATE-10:!4903.50N/07201.75W-Test"` |
 | G9 | 510-byte limit on the gated line | RED, 2 failed check(s): `test_aprs_is.cpp:257  gate("N0CALL>APRS:>" + tooLong).reason == GateReason::TooLong` |
 | G10 | CR / LF / NUL in a packet | RED, 3 failed check(s): `test_aprs_is.cpp:250  gate("N0CALL>APRS:>hi\r\nN0EVIL>APRS:>second packet").reason == GateReason::Malformed` |
 | G11 | nested third-party packet | RED, 1 failed check(s): `test_aprs_is.cpp:239  gate("N0RF>APRS:}N0A>APRS:}N0B>APRS:>x").reason == GateReason::NestedThirdParty` |
