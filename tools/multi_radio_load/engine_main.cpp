@@ -39,7 +39,20 @@ struct AppWindowTestAccess {
     static std::uint64_t read(Engine& e, std::size_t slot) { return e.receivers_[slot] ? e.receivers_[slot]->pipeline_.sourceSamplesRead() : 0; }
     static std::uint64_t underruns(Engine& e, std::size_t slot) { return e.receivers_[slot] ? e.receivers_[slot]->pipeline_.audio().underruns() : 0; }
     static bool faulted(Engine& e, std::size_t slot) { return e.receivers_[slot] && e.receivers_[slot]->pipeline_.faulted(); }
+    static std::uint64_t produced(Engine& e, std::size_t slot) { return e.receivers_[slot] ? e.receivers_[slot]->pipeline_.audioSamplesProduced() : 0; }
+    static int recoveries(Engine& e, std::size_t slot) { return e.receivers_[slot] ? e.receivers_[slot]->audioRecoveries_ : -1; }
+    static std::string note(Engine& e, std::size_t slot) { return e.receivers_[slot] ? e.receivers_[slot]->audioHealthNote_ : std::string(); }
     static bool running(Engine& e, std::size_t slot) { return e.receivers_[slot] && e.receivers_[slot]->pipeline_.running(); }
+    // The radio's sink as it stands: open and playing, ever opened, its lead in frames, the frames queued, the priming callbacks it has served.
+    static std::string sink(Engine& e, std::size_t slot) {
+        if (!e.receivers_[slot]) { return "no radio"; }
+        cascade::sink::AudioOut& a = e.receivers_[slot]->pipeline_.audio();
+        char b[400];
+        std::snprintf(b, sizeof(b), "sink %s, alive %d, device index %d, ever opened %d, channels %d, lead %zu frames, queued %zu frames, priming callbacks %llu",
+                      a.running() ? "playing" : "NOT playing", a.streamAlive() ? 1 : 0, a.openedDeviceRequested(), a.everOpened() ? 1 : 0, a.channels(), a.leadFrames(),
+                      a.ringFrames(), static_cast<unsigned long long>(a.primingCallbacks()));
+        return b;
+    }
 };
 }  // namespace cascade::gui
 
@@ -130,14 +143,23 @@ int main(int argc, char** argv) {
         send(makeCmd(FOXAPI_OP_SET_VOLUME, 0.0, 0, static_cast<std::uint32_t>(n)));
         send(makeCmd(FOXAPI_OP_SET_MODE, 0.0, FOXAPI_DEMOD_WFM, static_cast<std::uint32_t>(n)));
     }
-    send(makeCmd(FOXAPI_OP_RUN, 0.0, 1, FOXAPI_TARGET_ALL_RADIOS));
+    if (argc > 3 && std::string(argv[3]) == "reverse") {
+        // One at a time, the last radio first (a diagnostic: does the radio that starts first keep the audio that the others lose?).
+        for (int n = radios; n >= 1; --n) {
+            send(makeCmd(FOXAPI_OP_RUN, 0.0, 1, static_cast<std::uint32_t>(n)));
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        }
+    } else {
+        send(makeCmd(FOXAPI_OP_RUN, 0.0, 1, FOXAPI_TARGET_ALL_RADIOS));
+    }
     std::this_thread::sleep_for(std::chrono::seconds(3));   // settle: the first samples, the audio priming
 
-    std::vector<std::uint64_t> drop0, read0, under0;
+    std::vector<std::uint64_t> drop0, read0, under0, prod0;
     for (int n = 0; n < radios; ++n) {
         drop0.push_back(Access::dropped(eng, static_cast<std::size_t>(n)));
         read0.push_back(Access::read(eng, static_cast<std::size_t>(n)));
         under0.push_back(Access::underruns(eng, static_cast<std::size_t>(n)));
+        prod0.push_back(Access::produced(eng, static_cast<std::size_t>(n)));
     }
     const double cpu0 = cpuSeconds();
     const auto t0 = std::chrono::steady_clock::now();
@@ -174,6 +196,8 @@ int main(int argc, char** argv) {
         std::printf("  radio %d: read %llu samples (%.3f MS/s), dropped %llu, audio underruns %llu, %s%s\n", n + 1, static_cast<unsigned long long>(read),
                     static_cast<double>(read) / wallTotal / 1e6, static_cast<unsigned long long>(dropped), static_cast<unsigned long long>(under),
                     running ? "running" : "NOT RUNNING", faulted ? ", FAULTED" : "");
+        std::printf("           audio produced %.0f frames/s; %s\n", static_cast<double>(Access::produced(eng, s) - prod0[s]) / wallTotal, Access::sink(eng, s).c_str());
+        std::printf("           audio recoveries %d, note: %s\n", Access::recoveries(eng, s), Access::note(eng, s).c_str());
         if (dropped != 0 || faulted || !running || read == 0) { ++bad; }
     }
     std::printf("RESULT %s: %d radios, average %.2f core(s) = %.2f%% of the machine, peak %.2f core(s), %zu threads\n", bad == 0 ? "OK" : "NOT OK", radios, avg,

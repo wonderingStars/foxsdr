@@ -136,8 +136,13 @@ FoxCommandResult Engine::radioAddOp(const FoxCommand& c, const std::string& text
         }
         // THE SAME OUTPUT AS THE FIRST RADIO'S, when that one has an open sink: every radio plays through its own stream to the chosen device and the
         // system mixes them (design section 6).
+        // (A Pipeline opens the system default output when it is built, as the first radio's did: a radio that is already playing on the output the first
+        // radio chose is left alone - reopening a stream that is open disturbs it - and one that is not is opened on it.)
         cascade::sink::AudioOut& first = receivers_[0]->pipeline_.audio();
-        if (first.everOpened()) { (void)requestAudioOpen(first.openedDeviceRequested(), false); }
+        cascade::sink::AudioOut& mine = rx().pipeline_.audio();
+        if (first.everOpened() && (!mine.everOpened() || !mine.streamAlive() || mine.openedDeviceRequested() != first.openedDeviceRequested())) {
+            (void)requestAudioOpen(first.openedDeviceRequested(), false);
+        }
         if (!generator) {
             rx().sourceError_.clear();
             if (!selectSourceById(text)) {
