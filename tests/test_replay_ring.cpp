@@ -261,15 +261,21 @@ void testConcurrentReadWhileWriting() {
             r.write(v.data(), n, (k & 1) != 0);
             pos += n;
             written.store(pos);
+            // Pace the writer at about 3000 samples per 40 us so that a copy of the WHOLE ring (which takes longer
+            // than that) is overtaken by the writer partway through: that is the case the overwrite check exists for.
+            const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(40);
+            while (std::chrono::steady_clock::now() < until) {}
         }
     });
-    long bad = 0, reads = 0, samplesChecked = 0;
-    std::vector<std::int16_t> out(30000);
+    long bad = 0, reads = 0, samplesChecked = 0, goodReads = 0;
+    std::vector<std::int16_t> out(r.capacity());
     const auto t0 = std::chrono::steady_clock::now();
     while (std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(1500)) {
         std::uint64_t first = 0;
-        const std::size_t got = r.copyLast(30000, out.data(), &first);
+        const std::size_t ask = (reads & 1) ? 30000 : out.size();  // every other read asks for the whole ring
+        const std::size_t got = r.copyLast(ask, out.data(), &first);
         ++reads;
+        if (got > 0) { ++goodReads; }
         for (std::size_t i = 0; i < got; ++i) {
             if (out[i] != rampInt(first + i)) { ++bad; break; }
         }
@@ -279,6 +285,7 @@ void testConcurrentReadWhileWriting() {
     w.join();
     std::printf("  concurrent: %ld reads, %ld samples checked, %ld bad reads, %llu samples written\n", reads, samplesChecked, bad, static_cast<unsigned long long>(written.load()));
     CHECK(reads > 100);
+    CHECK(goodReads > 10);  // the check does not simply refuse everything
     CHECK(bad == 0);
 }
 
