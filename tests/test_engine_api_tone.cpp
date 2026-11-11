@@ -145,6 +145,7 @@ void testDRefusals() {
         const testing::Outcome o = r.send(toneOp(1, b.kind, true, b.hz, b.code, b.pol));
         if (o.status() != FOXAPI_OUT_OF_RANGE) { std::printf("  %s answered %d\n", b.why, o.status()); }
         CHECK_EQ(o.status(), FOXAPI_OUT_OF_RANGE);
+        CHECK(std::string(o.result.message).find("outside what the engine accepts") != std::string::npos);   // the API's own range check answered (the engine's sentences name CTCSS or DCS)
     }
     r.pump(10);
     const FoxReceiverState after = r.radio(1);
@@ -166,6 +167,10 @@ void testDRefusals() {
     {
         const FoxCommandResult res = r.eng.applyCommand(toneOp(1, FOXAPI_TONE_CTCSS, true, 99.0, 0, 0), std::string());
         CHECK_EQ(res.status, FOXAPI_OUT_OF_RANGE);
+        CHECK(std::string(res.message).find("CTCSS") != std::string::npos);   // the engine's own sentence, not the pipeline's
+        const FoxCommandResult res2 = r.eng.applyCommand(toneOp(1, FOXAPI_TONE_DCS, true, 0.0, 24, 0), std::string());
+        CHECK_EQ(res2.status, FOXAPI_OUT_OF_RANGE);
+        CHECK(std::string(res2.message).find("DCS") != std::string::npos);
         CHECK_EQ(r.radio(1).toneHz, 88.5);
     }
 }
