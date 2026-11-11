@@ -38,11 +38,13 @@ namespace foxsdr::slintdrive {
 // `state`: the host's read-back by name ("" when served, else the refusal); `shot`: the host's screenshot to a file.
 using StateReader = std::function<std::string(const std::string& name, std::string& out)>;
 using ShotWriter = std::function<std::string(const std::string& file)>;
+// `radio`: the host's test-only add/remove of a radio ("" when sent, else the refusal).
+using RadioHook = std::function<std::string(const std::string& what, int n, double toneHz)>;
 
 template <class W>
 class SlintDriveTarget : public DriveTarget {
 public:
-    SlintDriveTarget(const slint::ComponentHandle<W>& ui, StateReader state, ShotWriter shot) : ui_(ui), state_(std::move(state)), shot_(std::move(shot)) {}
+    SlintDriveTarget(const slint::ComponentHandle<W>& ui, StateReader state, ShotWriter shot, RadioHook radio = nullptr) : ui_(ui), state_(std::move(state)), shot_(std::move(shot)), radio_(std::move(radio)) {}
 
     std::string click(const std::string& labelSpec) override {
         std::optional<slint::testing::ElementHandle> e;
@@ -178,6 +180,7 @@ public:
 
     std::string state(const std::string& name, std::string& out) override { return state_ ? state_(name, out) : "no state reader"; }
     std::string shot(const std::string& file) override { return shot_ ? shot_(file) : "no screenshot writer"; }
+    std::string radio(const std::string& what, int n, double toneHz) override { return radio_ ? radio_(what, n, toneHz) : "no radio hook"; }
 
     std::string dumpControls() override {
         int n = 0, all = 0, withRole = 0;
@@ -286,6 +289,7 @@ private:
     slint::ComponentHandle<W> ui_;
     StateReader state_;
     ShotWriter shot_;
+    RadioHook radio_;
 };
 
 }  // namespace foxsdr::slintdrive

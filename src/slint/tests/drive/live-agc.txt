@@ -1,0 +1,37 @@
+#! frames=800 size=1600x900 bank=0 sections=0:3
+# live-agc: the SIGNAL bank's AGC choice follows the selected radio, with two LIVE radios (screen stage S4, job B; docs/multi-radio-records/screen-s4.md). Radio 2 is a generator radio opened through the
+# engine's real RADIO_ADD. Setting AGC to Fast while radio 2 is selected changes radio 2 only (state workspace.r.<n>.agc is each radio's own); selecting radio 1 shows Auto, selecting radio 2 shows Fast again;
+# the noise blanker is per radio too.
+10 state agcMode == 0
++1 radio add 2 60000
++25 state workspace.radios == 2
++1 click "Side by side"
++15 state workspace.shown == 1
++1 click "Select Radio 2"
++15 state workspace.selected == 2
++1 expect "AGC" value contains "Auto"
++1 choose "AGC" "Fast"
++20 state agcMode == 1
+state workspace.r.2.agc == 1
+state workspace.r.1.agc == 0
++1 expect "AGC" value contains "Fast"
++1 click "Noise blanker"
++20 state nbEnabled == 1
+state workspace.r.2.nb == 1
+state workspace.r.1.nb == 0
+# back to radio 1: its own values
++1 click "Select Radio 1"
++15 state workspace.selected == 1
+state agcMode == 0
+state nbEnabled == 0
++1 expect "AGC" value contains "Auto"
++1 expect "Noise blanker" checked equals "false"
+state workspace.r.2.agc == 1
+# and radio 2 again
++1 click "Select Radio 2"
++15 state workspace.selected == 2
+state agcMode == 1
+state nbEnabled == 1
++1 expect "AGC" value contains "Fast"
++1 expect "Noise blanker" checked equals "true"
++1 shot "live-agc-radio2.png"

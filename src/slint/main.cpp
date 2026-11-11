@@ -556,6 +556,22 @@ int main(int argc, char** argv) {
             const int32_t rc = api->submit(session, &c, 1, &r);
             return rc < 0 ? rc : r.status;
         }};
+    // THE RADIOS THAT EXIST, from the engine's facts. A slot that has emptied loses its picture; a selected radio that has gone hands the selection to the lowest one that is left AND the session's
+    // focus follows (the engine keeps a removed radio's number as the session's focus and answers NO_DEVICE until it is told another).
+    const auto refreshRadios = [&] {
+        const std::uint32_t before = workspace.mask();
+        const int selBefore = radios.selected;
+        workspace.readFacts(engineReads);
+        const std::uint32_t after = workspace.mask();
+        for (int s = 0; s < kMaxRadios; ++s) {
+            if (((before >> s) & 1u) != 0u && ((after >> s) & 1u) == 0u) {
+                radios.reset(s);
+                paneTicks[static_cast<std::size_t>(s)] = 0;
+                paneHover[static_cast<std::size_t>(s)] = {-1.f, -1.f};
+            }
+        }
+        if (radios.selected != selBefore) { (void)engineReads.focus(static_cast<std::uint32_t>(radios.selected) + 1u); }
+    };
     // Selecting a radio is the session's focus (design 3.2): the engine is asked, and the window's selection follows when it says yes.
     const auto selectRadio = [&](int radio) { (void)workspace.select(radio, engineReads); };
     const auto setFrequency = [&](double hz) { FoxCommand c = op(FOXAPI_OP_SET_FREQUENCY); c.num[0] = hz; submit(c); };
@@ -1309,14 +1325,23 @@ int main(int argc, char** argv) {
     };
 
     // ---- the tick: heartbeat, read_state, lists, read_spectrum, poll_results -> properties ----
+    // THE HOST'S OWN TICK TIME (state workspace.tickms / tickp95, docs/multi-radio-records/screen-s4.md): the last 300 ticks' wall time from the heartbeat to the end of the tick, the host's work with the
+    // live radios (reads, pictures, the models) - not the render, which the event loop does after the tick.
+    std::deque<double> tickMs;
+    struct TickTimer {
+        std::deque<double>& d;
+        std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        explicit TickTimer(std::deque<double>& dq) : d(dq) {}
+        ~TickTimer() { d.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count()); if (d.size() > 300) { d.pop_front(); } }
+    };
     const auto onTick = [&] {
+        const TickTimer tickTimer(tickMs);
         (void)api->heartbeat(session);
         if (api->read_state(session, &state) < 0) { return; }
         const bool listMoved = state.listSeq != lastListSeq;
         if (listMoved) {
             lastListSeq = state.listSeq;
             refreshLists();
-            workspace.readFacts(engineReads);   // the radios the engine has (fact.radio.count and the per-radio facts); the lists' fingerprint moves with them
             // The Radio body's "Follow the band plan's mode when retuning": the engine's switch, a fact in the lists' block ("1"/"0"; not yet published reads as on).
             char followBuf[8] = {};
             const int32_t n = api->get_setting(session, "fact.bandPlan.followMode", followBuf, sizeof(followBuf));
@@ -1324,6 +1349,9 @@ int main(int argc, char** argv) {
             ui->set_follow_band_plan(followBandPlan);
         }
         ++tickNo;
+        // THE RADIOS THE ENGINE HAS (fact.radio.count and the per-radio facts): read when the lists moved and every eighth tick besides - a radio added or removed does not move the lists'
+        // fingerprint (screen-s4.md), and the panes must follow within a quarter of a second.
+        if (listMoved || tickNo % 8 == 1) { refreshRadios(); }
         // TEST SEAM: the strip shows the selected radio; when that is a made-up one its state replaces the engine's here (radio 1's is kept in realState)
         if (seam) { realState = state; if (radios.selected > 0) { state = seam->state(radios.selected, realState); } }
         selected().state = state;   // the selected radio's picture works from the state the strip reads (until the per-radio read of engine stage 3)
@@ -1755,8 +1783,46 @@ int main(int argc, char** argv) {
             else if (what.rfind("tuned.", 0) == 0) { out = fmt("%.0f", radios.at(slotOf(what.substr(6))).state.tunedHz); }
             else if (what.rfind("running.", 0) == 0) { out = (radios.at(slotOf(what.substr(8))).state.flags & FOXAPI_RX_RUNNING) ? "1" : "0"; }
             else if (what.rfind("pic.", 0) == 0) { const auto& sz = radios.at(slotOf(what.substr(4))).wells.size; out = std::to_string(sz.traceW) + "x" + std::to_string(sz.traceH); }
+            // peakoff.<n>: where the highest bin of radio n's last spectrum frame is, in Hz from that frame's centre (a test radio's tone, docs/multi-radio-records/screen-s4.md); peakdb.<n> its level
+            else if (what.rfind("peakoff.", 0) == 0 || what.rfind("peakdb.", 0) == 0) {
+                const bool off = what[4] == 'o';
+                const RadioView& rv = radios.at(slotOf(what.substr(off ? 8 : 7)));
+                if (rv.frame.empty() || !(rv.lastInfo.spanHz > 0)) { return std::string("radio ") + what.substr(off ? 8 : 7) + " has no spectrum frame yet"; }
+                std::size_t best = 0;
+                for (std::size_t i = 1; i < rv.frame.size(); ++i) { if (rv.frame[i] > rv.frame[best]) { best = i; } }
+                out = off ? fmt("%.0f", (static_cast<double>(best) + 0.5) / static_cast<double>(rv.frame.size()) * rv.lastInfo.spanHz - rv.lastInfo.spanHz / 2.0) : fmt("%.1f", static_cast<double>(rv.frame[best]));
+            }
+            // r.<n>.<field>: radio n's OWN state as the tick last read it, on screen or not (running, tuned, centre, mode, volume, muted, agc, agcfixed, nb, nbthreshold, device, rate)
+            else if (what.rfind("r.", 0) == 0) {
+                const std::size_t dot = what.find('.', 2);
+                if (dot == std::string::npos) { return std::string("workspace.r.<n>.<field>, not ") + name; }
+                const int s = slotOf(what.substr(2, dot - 2));
+                if (!workspace.occupied(s)) { return "radio " + std::to_string(s + 1) + " is not open"; }
+                const std::string field = what.substr(dot + 1);
+                const FoxReceiverState& st = s == radios.selected ? state : radios.at(s).state;
+                if (field == "running") { out = (st.flags & FOXAPI_RX_RUNNING) ? "1" : "0"; }
+                else if (field == "tuned") { out = fmt("%.0f", st.tunedHz); }
+                else if (field == "centre") { out = fmt("%.0f", st.centreHz); }
+                else if (field == "mode") { out = modeName(st.demodMode); }
+                else if (field == "volume") { out = fmt("%.2f", st.volume); }
+                else if (field == "muted") { out = (st.flags & FOXAPI_RX_MUTED) ? "1" : "0"; }
+                else if (field == "agc") { out = std::to_string(st.agcMode); }
+                else if (field == "agcfixed") { out = fmt("%.1f", st.agcFixedGainDb); }
+                else if (field == "nb") { out = std::to_string(st.nbEnabled); }
+                else if (field == "nbthreshold") { out = fmt("%.1f", st.nbThresholdDb); }
+                else if (field == "device") { out = st.deviceName; }
+                else if (field == "rate") { out = fmt("%.0f", st.sampleRateHz); }
+                else { return "workspace.r.<n>.running|tuned|centre|mode|volume|muted|agc|agcfixed|nb|nbthreshold|device|rate, not " + name; }
+            }
+            else if (what == "tickms" || what == "tickp95" || what == "tickn") {
+                std::vector<double> v(tickMs.begin(), tickMs.end());
+                if (v.size() < 10) { return std::string("fewer than ten ticks timed yet"); }
+                std::sort(v.begin(), v.end());
+                double sum = 0; for (const double x : v) { sum += x; }
+                out = what == "tickn" ? std::to_string(v.size()) : what == "tickms" ? fmt("%.2f", sum / static_cast<double>(v.size())) : fmt("%.2f", v[static_cast<std::size_t>(static_cast<double>(v.size() - 1) * 0.95)]);
+            }
             else if (what == "cell") { const auto& wm = ui->global<WorkspaceModel>(); out = fmt("%.0f", static_cast<double>(wm.get_cell_w())) + "x" + fmt("%.0f", static_cast<double>(wm.get_cell_h())); }
-            else { return "workspace.layout|shown|page|pages|selected|radios|fell|cells|ticks.<n>|tuned.<n>|running.<n>|pic.<n>|cell, not " + name; }
+            else { return "workspace.layout|shown|page|pages|selected|radios|fell|cells|ticks.<n>|tuned.<n>|running.<n>|pic.<n>|peakoff.<n>|peakdb.<n>|r.<n>.<field>|tickms|tickp95|tickn|cell, not " + name; }
             return std::string();
         }
         if (name == "bank") { out = std::to_string(ui->get_bank_index()); return std::string(); }
@@ -1764,6 +1830,14 @@ int main(int argc, char** argv) {
         if (name == "pages") { out = publisher.pagesLine(); return std::string(); }
         if (name == "tick") { out = std::to_string(bounded.ticks() + 1); return std::string(); }
         return "no state named " + name;
+    };
+    // The drive script's `radio add|remove` (input_script.hpp; a bounded run only): a GENERATOR radio opened or removed through the engine's real RADIO_ADD / RADIO_REMOVE, started running.
+    const foxsdr::slintdrive::RadioHook radioHook = [&](const std::string& what, int n, double toneHz) -> std::string {
+        FoxCommand c = op(what == "add" ? FOXAPI_OP_RADIO_ADD : FOXAPI_OP_RADIO_REMOVE);
+        c.ival[0] = n;
+        if (what == "add") { c.ival[1] = 1; std::snprintf(c.text, sizeof(c.text), "generator"); c.num[0] = toneHz; }
+        submit(c);
+        return std::string();
     };
     std::unique_ptr<foxsdr::slintdrive::SlintDriveTarget<MainWindow>> driveTarget;
     std::unique_ptr<foxsdr::slintdrive::Driver> drive;
@@ -1786,7 +1860,7 @@ int main(int argc, char** argv) {
                 scriptRefused = true;
             } else {
                 std::fprintf(stderr, "foxsdr-slint: input script: %zu steps from %s\n", script.steps.size(), scriptPath);
-                driveTarget = std::make_unique<foxsdr::slintdrive::SlintDriveTarget<MainWindow>>(ui, readState, screenshotTo);
+                driveTarget = std::make_unique<foxsdr::slintdrive::SlintDriveTarget<MainWindow>>(ui, readState, screenshotTo, radioHook);
                 drive = std::make_unique<foxsdr::slintdrive::Driver>(std::move(script), *driveTarget);
             }
         }

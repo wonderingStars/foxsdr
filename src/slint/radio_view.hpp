@@ -186,6 +186,8 @@ public:
         if (!views_[i]) { views_[i] = std::make_unique<RadioView>(static_cast<int>(i), pictures_); }
         return *views_[i];
     }
+    // The radio in this slot has gone (RADIO_REMOVE): its picture, zoom, history and cache go with it, so a radio added into the slot later starts clean.
+    void reset(int slot) { if (slot >= 0 && slot < kMaxRadios) { views_[static_cast<std::size_t>(slot)].reset(); } }
     bool exists(int slot) const { return slot >= 0 && slot < kMaxRadios && views_[static_cast<std::size_t>(slot)] != nullptr; }
     int created() const { int n = 0; for (const auto& v : views_) { n += v ? 1 : 0; } return n; }
     // The picture size a radio created from now on gets (the pane size, fixed by a later measurement).

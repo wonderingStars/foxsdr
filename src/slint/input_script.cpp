@@ -95,6 +95,7 @@ const char* verbName(Verb v) {
         case Verb::State: return "state";
         case Verb::Shot: return "shot";
         case Verb::Dump: return "dump";
+        case Verb::Radio: return "radio";
     }
     return "?";
 }
@@ -218,6 +219,22 @@ Script parseInputScript(const std::string& text) {
             if (!c.quoted(st.label) || st.label.empty()) { bad("shot takes a quoted file name"); continue; }
         } else if (verb == "dump") {
             st.verb = Verb::Dump;
+        } else if (verb == "radio") {
+            st.verb = Verb::Radio;
+            st.label = c.word();
+            if (st.label != "add" && st.label != "remove") { bad("radio takes add or remove, not \"" + st.label + "\""); continue; }
+            double v = 0;
+            std::string num = c.word();
+            if (!num.empty()) {
+                if (!isNumber(num, v) || v < 0.0 || v > 8.0 || v != std::floor(v)) { bad("radio takes a radio number 0..8: \"" + num + "\""); continue; }
+                st.radioNo = static_cast<int>(v);
+            }
+            if (st.label == "remove" && st.radioNo < 2) { bad("radio remove takes the number of a radio from 2 to 8"); continue; }
+            num = c.word();
+            if (!num.empty()) {
+                if (st.label == "remove" || !isNumber(num, v) || std::fabs(v) > 1.0e7) { bad("radio add takes a tone in Hz last: \"" + num + "\""); continue; }
+                st.number = v;
+            }
         } else {
             bad("unknown verb \"" + verb + "\"");
             continue;
@@ -301,6 +318,10 @@ void Driver::tick(long tick, const std::function<void(const std::string&)>& say)
                 break;
             case Verb::Shot: head += " \"" + st.label + "\""; why = target_.shot(st.label); break;
             case Verb::Dump: why = target_.dumpControls(); break;
+            case Verb::Radio:
+                head += " " + st.label + " " + std::to_string(st.radioNo);
+                why = target_.radio(st.label, st.radioNo, st.number);
+                break;
         }
         if (why.empty()) {
             say(head + " -> ok");

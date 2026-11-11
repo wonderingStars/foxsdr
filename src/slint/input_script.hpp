@@ -34,6 +34,9 @@
 //                                       - numbers compare as numbers, anything else as the exact text
 //   shot "<file>"                       a PNG of the window, beside the settings file's screenshots
 //   dump                                every control with an accessible label, one per line on stderr: the author's map
+//   radio add [<n> [<toneHz>]]          TEST ONLY: opens a GENERATOR radio through the engine's real RADIO_ADD (number n, 0 or none = the lowest free; the tone in Hz from its
+//                                       centre, none = 25 kHz times its number), started running (docs/multi-radio-records/screen-s4.md); the effect is read back with `state`
+//   radio remove <n>                    TEST ONLY: RADIO_REMOVE of radio n (2 or more), through the engine
 //
 //   "<label>"#<n> picks the n-th control (from 1) when several carry the label (a sheet's Close beside the title bar's).
 //
@@ -49,7 +52,7 @@
 
 namespace foxsdr::slintdrive {
 
-enum class Verb { Click, Press, Type, Key, Slider, Scroll, Choose, Expect, State, Shot, Dump };
+enum class Verb { Click, Press, Type, Key, Slider, Scroll, Choose, Expect, State, Shot, Dump, Radio };
 
 const char* verbName(Verb v);
 
@@ -61,7 +64,8 @@ struct Step {
     std::string text;     // type: the text; choose: the item; key: the key name; expect / state: the wanted value
     std::string what;     // expect: value | label | checked | enabled; state: the comparison
     std::string compare;  // expect: equals | contains
-    double number = 0;    // slider: the fraction; scroll: the pixels
+    double number = 0;    // slider: the fraction; scroll: the pixels; radio: the tone in Hz
+    int radioNo = 0;      // radio: the radio's number
 };
 
 struct Script {
@@ -95,6 +99,8 @@ public:
     virtual std::string state(const std::string& name, std::string& out) = 0;
     virtual std::string shot(const std::string& file) = 0;
     virtual std::string dumpControls() = 0;   // the `dump` verb (named apart from nlohmann's dump() for tests/test_json_dump_policy)
+    // The `radio` verb (a bounded run's test seam): what is "add" or "remove", n the radio's number (0 = the lowest free), toneHz a generator radio's tone (0 = the engine's default).
+    virtual std::string radio(const std::string& what, int n, double toneHz) { (void)what; (void)n; (void)toneHz; return "this target cannot add or remove radios"; }
 };
 
 struct DriveReport {

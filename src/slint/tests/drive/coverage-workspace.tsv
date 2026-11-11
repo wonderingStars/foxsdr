@@ -15,3 +15,11 @@
 4214	DRIVEN	workspace-small	a 1000 x 640 window: state workspace.shown == 0 and workspace.fell == 1; expect the sentence present (its text is a label, no state of its own)
 4215	DRIVEN	workspace-empty	three radios in 2 x 2: state workspace.cells == "1,2,3,0" and workspace.ticks.4 == 0; shot "workspace-empty-slot.png"; the cell has no unique control label (the name is shared by a group and its text)
 4216	ASSERTED	workspace-layouts	state workspace.cells per layout and page, workspace.pic.<n> (the pictures fitted to the pane, today's size back in One), workspace.ticks.<n> (only the radios on screen are read)
+4200	ASSERTED	live-eight	click "Select Radio 6" on page two of eight LIVE radios: state workspace.selected == 6 (RADIO_FOCUS to the real engine); live-two: "Select Radio 2" and the strip follows (state tunedHz differs from radio 1's)
+4205	ASSERTED	live-four	click "Stop Radio 4" / "Start Radio 4" with four LIVE radios: state workspace.r.4.running follows, radios 1 to 3 untouched
+4207	ASSERTED	live-four	press "Radio 3 spectrum" with four LIVE radios: state workspace.r.3.tuned moves, r.1 r.2 r.4 do not, the selection stays (live-two: the same for radio 2)
+4212	ASSERTED	live-four	click "2 x 2" with radios opened by the real RADIO_ADD: state workspace.cells == "1,2,3,4"; live-eight: "Side by side" gives four pages
+4213	ASSERTED	live-eight	click "Radios 5-8" with eight LIVE radios: state workspace.cells == "5,6,7,8", each pane's own tone (state workspace.peakoff.<n>)
+4215	ASSERTED	live-four	radio remove 3 (the real RADIO_REMOVE): state workspace.cells == "1,2,0,4", the other panes still read their own tones; live-eight: radio 7 removed on page two
+4216	ASSERTED	live-four	state workspace.peakoff.<n> per pane (radio n's own tone, 50 / 80 / 110 kHz and radio 1's +300 kHz), workspace.ticks.<n>, workspace.r.<n>.running
+4400	ASSERTED	live-agc	selecting radio 2 and choosing AGC Fast / the noise blanker: state workspace.r.2.agc and workspace.r.2.nb change, radio 1's do not; selecting radio 1 shows Auto and off again

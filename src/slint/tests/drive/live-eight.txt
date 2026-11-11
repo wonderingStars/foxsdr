@@ -1,0 +1,48 @@
+#! frames=1100 size=1600x900
+# live-eight: EIGHT live radios in two pages of four (screen stage S4, job B; docs/multi-radio-records/screen-s4.md). Radio 1 is the engine's; radios 2 to 8 are GENERATOR radios opened through
+# the engine's real RADIO_ADD, each with a tone of its own (radio n at n x 30 kHz above its centre). Page one shows and reads radios 1 to 4, page two radios 5 to 8, each with its own peak; selecting
+# radio 6 on page two moves the strip to it; removing radio 7 empties its cell and the others carry on; Side by side pages through the pairs.
+10 state workspace.radios == 1
++1 radio add 2 60000
++1 radio add 3 90000
++1 radio add 4 120000
++1 radio add 5 150000
++1 radio add 6 180000
++1 radio add 7 210000
++1 radio add 8 240000
++60 state workspace.radios == 8
++1 click "2 x 2"
++15 state workspace.shown == 2
+state workspace.pages == 2
+state workspace.cells == "1,2,3,4"
++20 state workspace.ticks.4 > 3
+state workspace.ticks.5 == 0
+state workspace.peakoff.2 > 55000
+state workspace.peakoff.2 < 65000
+state workspace.peakoff.4 > 115000
+state workspace.peakoff.4 < 125000
++1 shot "live-eight-page1.png"
++1 click "Radios 5-8"
++15 state workspace.cells == "5,6,7,8"
++20 state workspace.ticks.8 > 3
+state workspace.peakoff.5 > 145000
+state workspace.peakoff.5 < 155000
+state workspace.peakoff.6 > 175000
+state workspace.peakoff.6 < 185000
+state workspace.peakoff.7 > 205000
+state workspace.peakoff.7 < 215000
+state workspace.peakoff.8 > 235000
+state workspace.peakoff.8 < 245000
++1 shot "live-eight-page2.png"
++1 click "Select Radio 6"
++10 state workspace.selected == 6
++1 radio remove 7
++30 state workspace.radios == 7
+state workspace.cells == "5,6,0,8"
+state workspace.selected == 6
++1 state workspace.r.5.running == 1
+state workspace.r.6.running == 1
+state workspace.r.8.running == 1
++1 shot "live-eight-removed-7.png"
++1 click "Side by side"
++15 state workspace.pages == 4

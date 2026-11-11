@@ -261,6 +261,46 @@ int main() {
         CHECK(s.errors.size() == 2 && s.errors[0].find("line 4") != std::string::npos && s.errors[1].find("line 5") != std::string::npos);
         CHECK(s.steps.size() == 3);
     }
+    // THE `radio` VERB (docs/multi-radio-records/screen-s4.md): add [<n> [<toneHz>]] and remove <n>; the target is asked with the verb, the radio's number and the tone; a target that cannot
+    // do it (a fake of the older interface) says so and the step fails; remove needs a number from 2; add takes a number 0..8 and a tone; anything else is a line of its own in the errors
+    {
+        const Script s = parseInputScript("1 radio add
+radio add 3
+radio add 4 60000
+radio remove 4
+radio remove 1
+radio add 9
+radio drop 2
+radio remove 3 5
+radio add 2.5
+");
+        CHECK(s.steps.size() == 4);
+        CHECK(s.errors.size() == 5);
+        CHECK(s.errors.size() == 5 && s.errors[0].find("line 5") != std::string::npos && s.errors[1].find("line 6") != std::string::npos && s.errors[2].find("line 7") != std::string::npos
+              && s.errors[3].find("line 8") != std::string::npos && s.errors[4].find("line 9") != std::string::npos);
+        if (s.steps.size() == 4) {
+            CHECK(s.steps[0].verb == Verb::Radio && s.steps[0].label == "add" && s.steps[0].radioNo == 0 && s.steps[0].number == 0);
+            CHECK(s.steps[1].radioNo == 3 && s.steps[2].radioNo == 4 && s.steps[2].number == 60000);
+            CHECK(s.steps[3].label == "remove" && s.steps[3].radioNo == 4);
+        }
+        struct RadioTarget : FakeTarget {
+            std::string radio(const std::string& what, int n, double tone) override { calls.push_back("radio " + what + " " + std::to_string(n) + " " + std::to_string(static_cast<int>(tone))); return std::string(); }
+        };
+        const Script ok = parseInputScript("1 radio add 2 60000
+radio remove 2
+");
+        RadioTarget rt;
+        Driver d(ok, rt);
+        said.clear();
+        d.tick(1, say);
+        CHECK((rt.calls == std::vector<std::string>{"radio add 2 60000", "radio remove 2 0"}));
+        CHECK(d.allRun());
+        FakeTarget plain;   // the older interface: no radio hook
+        Driver d2(ok, plain);
+        said.clear();
+        d2.tick(1, say);
+        CHECK(d2.report().failed == 2 && anySaid("cannot add or remove radios"));
+    }
     // a word comparison is exact, and != works on words and numbers
     {
         const Script s = parseInputScript("1 state w == abc\nstate w != abd\nstate n != 4\nstate n == 3.0\nstate w == ABC\n");
