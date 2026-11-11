@@ -1031,6 +1031,15 @@ const KnownWait kKnownWaits[] = {
      "this constant. Measured on the shipped binary (--frames 3 with the page enabled and a half-sent request held): teardown 9.8 s; with the "
      "page enabled and nobody connected 16 ms. Charged ONCE: the web server is stopped once, and the CAT listener beside it is bounded by "
      "its poll interval (fractions of a second). 13500 -> 23500, and kShutdownThresholdMs 33000 -> 53000 with it"},
+    {"src/net/web_server.hpp", "kEventHeartbeat", 0,
+     "how long a live-update stream (GET /api/events) may stay silent before it sends a comment line: a threshold read on the stream's own "
+     "worker, not a wait anyone does. Never spent on the shutdown path: WebServer::stop() wakes every stream on a condition variable and the "
+     "stream ends at its next look (measured 0 to 1 ms with four attached, test_web_server), so a listener adds nothing to kClientIoTimeout's "
+     "charge above (feat/web-bookmarks)"},
+    {"src/net/web_server.hpp", "kEventTick", 0,
+     "how often a live-update stream looks for a change, as the timeout of a wait on a condition variable that WebServer::stop() signals: the "
+     "wait ends at once when the server stops, so the 250 ms is never spent on the shutdown path (test_web_server: stop() with four streams "
+     "attached takes under 200 ms, in practice about 1 ms) (feat/web-bookmarks)"},
     {"src/net/web_server.cpp", "kSessionIdleTick", 0,
      "WebServer::Impl::idleLoop() (stage 5d) - how often the idle thread collects the engine session's results while the server runs. A "
      "polling interval, not a bound: the thread waits on a condition variable whose predicate is its stop flag, and WebServer::stop() sets "
