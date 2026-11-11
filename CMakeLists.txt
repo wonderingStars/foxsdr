@@ -1181,3 +1181,31 @@ if(CASCADE_BUILD_INTERFACE)
     enable_testing()
     add_subdirectory(tests)
 endif()
+
+# ---------------------------------------------------------------------------
+# Knob input (MIDI, ShuttleXpress, PowerMate): src/input and tests/input. STAND-ALONE: nothing here is linked into the engine or the window yet
+# (docs/feature-records/knob-input.md, WIRING HAND-OFF). Its own tests register here, not in tests/CMakeLists.txt, because that file globs tests/test_*.cpp and
+# links each against cascade_engine; these need only cascade_input. Each carries the `headless` label the two-pass run selects on.
+# ---------------------------------------------------------------------------
+add_library(cascade_input STATIC
+    src/input/input_event.cpp src/input/midi_parse.cpp src/input/hid_parse.cpp src/input/mapping.cpp)
+target_include_directories(cascade_input PUBLIC src)
+target_link_libraries(cascade_input PUBLIC cascade_json PRIVATE cascade_flags)
+if(WIN32)
+    # winmm: midiIn*. setupapi + hid: HID enumeration and capabilities. (All three ship with Windows and its SDK.)
+    target_sources(cascade_input PRIVATE src/input/midi_win.cpp src/input/hid_win.cpp)
+    target_link_libraries(cascade_input PUBLIC winmm setupapi hid)
+endif()
+add_executable(cascade_input_probe src/input/input_probe.cpp)
+target_link_libraries(cascade_input_probe PRIVATE cascade_input cascade_flags)
+
+enable_testing()
+file(GLOB CASCADE_INPUT_TESTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/input/test_*.cpp")
+foreach(src ${CASCADE_INPUT_TESTS})
+    get_filename_component(name "${src}" NAME_WE)
+    add_executable(${name} "${src}")
+    target_link_libraries(${name} PRIVATE cascade_input cascade_flags)
+    target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+    add_test(NAME ${name} COMMAND ${name})
+    set_tests_properties(${name} PROPERTIES LABELS "headless;input" TIMEOUT 120)
+endforeach()
