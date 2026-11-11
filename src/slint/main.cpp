@@ -56,6 +56,7 @@
 #include "stb_image_write.h"
 
 #include "foxsdr_api.h"
+#include "core/airband_data.hpp"
 #include "core/app_commands.hpp"
 #include "core/config_halves.hpp"
 #include "core/diag_log.hpp"
@@ -86,6 +87,7 @@
 #include "radio_mix_publish.hpp"
 #include "link_logic.hpp"
 #include "workspace_prefs.hpp"
+#include "lanec_publish.hpp"   // screen lane C (docs/multi-radio-records/screen-c.md)
 #include "workspace_testseam.hpp"
 #include "plugin_kit.hpp"
 #include "signal_publish.hpp"
@@ -200,7 +202,7 @@ int main(int argc, char** argv) {
 
     // THE FREQUENCY LOCK (slint-gaps.md item 3): every publisher is handed this copy of the table, whose submit and submit_text refuse the tuning commands of a locked radio (gaps_logic.hpp)
     const FoxEngineApi* const rawApi = engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
-    const FoxEngineApi* api = foxsdr::slintgaps::lockedApi(rawApi);
+    const FoxEngineApi* api = foxsdr::slintlanec::deltaLockApi(foxsdr::slintgaps::lockedApi(rawApi), &foxsdr::slintlanec::deltaMaskNow, &foxsdr::slintlanec::deltaRadioOf);   // screen lane C, T8: the delta lock sits over the frequency lock
     FoxEngine* handle = service.engine().apiHandle();
     if (api == nullptr || handle == nullptr) { std::fprintf(stderr, "foxsdr-slint: no API table\n"); return 1; }
 
@@ -628,6 +630,25 @@ int main(int argc, char** argv) {
         else if (r.status == FOXAPI_BUSY) { std::fprintf(stderr, "foxsdr-slint: submit op 0x%04x: the session's queue is full\n", c.op); }
     };
     const auto op = [&](std::uint32_t code) { FoxCommand c{}; c.op = code; return c; };
+    // SCREEN LANE C (docs/multi-radio-records/screen-c.md): the scanner block, the memories, the quick memories, the delta lock, the clock and the two sheets
+    const std::string laneCDir = configPath.empty() ? std::string() : std::filesystem::path(configPath).parent_path().string();
+    foxsdr::slintlanec::LaneCPublisher::Env laneCEnv;
+    laneCEnv.ui = &*ui;
+    laneCEnv.api = api;
+    laneCEnv.session = session;
+    laneCEnv.storePath = laneCDir.empty() ? std::string() : (std::filesystem::path(laneCDir) / "lanec.json").string();
+    laneCEnv.scanLogPath = laneCDir.empty() ? std::string() : (std::filesystem::path(laneCDir) / "scan-log.csv").string();
+    laneCEnv.bounded = bounded.bounded();
+    laneCEnv.submit = [&](const FoxCommand& c, std::uint32_t radio) { submit(c, radio); };
+    laneCEnv.nowMs = [] { return static_cast<double>(nowMs()); };
+    laneCEnv.unixNow = [] { return static_cast<std::int64_t>(std::time(nullptr)); };
+    laneCEnv.openIq = [&](const std::string& path) { signalBank.openDroppedRecording(path); };
+    laneCEnv.recorderDir = [&] { std::string d; foxsdr::slintkit::LiveTable t(api, session); if (!t.fact("fact.recorder.dir", d)) { d.clear(); } return d; };
+    laneCEnv.selectedRadio = [&] { return workspace.selectedRadio(); };
+    foxsdr::slintlanec::LaneCPublisher laneC(std::move(laneCEnv));
+    const bool laneCOff = bounded.bounded() && std::getenv("FOXSDR_SLINT_LANEC_OFF") != nullptr;
+    laneC.wire();
+    publisher.setClipboardSink([&](const std::string& t) { clipSet(t); });   // W16c: the Decoder output page's Copy key (clipSet is the window's clipboard, or the bounded run's stand-in)
     // THE ENGINE AS THE WORKSPACE SEES IT (workspace_logic.hpp EngineReads): the facts fact.radio.count and fact.radio.<n>.state, and RADIO_FOCUS. With the test seam they are answered from the made-up radios.
     // SEAM FOR ENGINE STAGE 4: nothing else changes when stage 4 is merged: the facts name the radios it opens and RADIO_FOCUS moves the session's focus for real.
     const EngineReads engineReads{
@@ -880,6 +901,10 @@ int main(int argc, char** argv) {
                 e.push_back(entry(MenuItemKind::Separator, 0, ""));
                 e.push_back(entry(MenuItemKind::Item, 105, "Copy frequency", fmt("%.6f MHz", state.tunedHz / 1e6).c_str()));
                 e.push_back(entry(MenuItemKind::Item, 106, "Paste frequency", "", false, !!clipGet().empty()));
+                e.push_back(entry(MenuItemKind::Separator, 0, ""));
+                e.push_back(entry(MenuItemKind::Checked, 107, "Lock the tuning step", "", laneC.stepLocked()));
+                e.push_back(entry(MenuItemKind::Checked, 108, "Delta lock", "", laneC.deltaOn(workspace.selectedRadio())));
+                e.push_back(entry(MenuItemKind::Checked, 109, "Remember the width of each mode", "", laneC.bwMemoryOn()));
                 break;
             case MenuKind::Trace:
                 e.push_back(entry(MenuItemKind::Checked, 201, "Normal", "", traceMode == 0));
@@ -927,6 +952,8 @@ int main(int argc, char** argv) {
                 e.push_back(entry(MenuItemKind::Item, 602, "Key bindings", "F7"));
                 e.push_back(entry(MenuItemKind::Item, 603, "Save a screenshot", "Ctrl W"));
                 e.push_back(entry(MenuItemKind::Item, 605, "Help: the manual"));
+                e.push_back(entry(MenuItemKind::Item, 606, "Keyboard shortcuts", "Shift F1"));
+                e.push_back(entry(MenuItemKind::Item, 607, "Recordings..."));
                 e.push_back(entry(MenuItemKind::Separator, 0, ""));
                 e.push_back(entry(MenuItemKind::Item, 604, "Quit"));
                 break;
@@ -998,6 +1025,11 @@ int main(int argc, char** argv) {
                 break;
             }
             case 103: showNudges = !showNudges; ui->set_show_nudges(showNudges); break;
+            case 107: laneC.toggleStepLock(); break;                                   // T3
+            case 108: laneC.toggleDelta(workspace.selectedRadio()); break;             // T8
+            case 109: laneC.toggleBwMemory(); break;                                   // F7
+            case 606: laneC.openShortcuts(foxsdr::slintsystem::keyTableFromConfig(duties.interfaceHalf().keyBindings)); break;   // U10
+            case 607: laneC.openRecordings(); break;                                   // P11
             case 111: face = Face::Nixie; applyFace(); break;
             case 112: face = Face::Drum; applyFace(); break;
             case 113: face = Face::Plain; applyFace(); break;
@@ -1038,7 +1070,7 @@ int main(int argc, char** argv) {
 
     // ---- the strip ----
     ui->on_stop_clicked([&] { FoxCommand c = op(FOXAPI_OP_RUN); c.ival[0] = (state.flags & FOXAPI_RX_RUNNING) ? 0 : 1; submit(c); });
-    ui->on_nudge([&](int digit, int dir) { stepTune(dir, stepOfDigit(digit)); });
+    ui->on_nudge([&](int digit, int dir) { stepTune(dir, laneC.stepLocked() ? tuneStepHz : stepOfDigit(digit)); });   // T3: with the step locked every digit steps by the Tune step
     ui->on_edit_requested([&] { ui->set_editor_text(ss(wsMemory.saved().dotStyle == 1 ? foxsdr::slintgaps::dottedFrequencyText(state.tunedHz, 1) : fmt("%.6f", state.tunedHz / 1e6))); ui->set_editing(true); });
     ui->on_typed([&](slint::SharedString text) {
         double hz = 0;
@@ -1422,6 +1454,7 @@ int main(int argc, char** argv) {
         else if (id == "tuneStepUp") { stepTune(1, tuneStepHz); } else if (id == "tuneStepDown") { stepTune(-1, tuneStepHz); }
         else if (id == "tuneSpanUp") { stepTune(1, currentView().spanHz); } else if (id == "tuneSpanDown") { stepTune(-1, currentView().spanHz); }
         else if (id == "quickTune") { ui->invoke_edit_requested(); }
+        else if (id == foxsdr::slintsystem::kShortcutOverlay) { laneC.openShortcuts(foxsdr::slintsystem::keyTableFromConfig(duties.interfaceHalf().keyBindings)); }   // U10
         else if (id == "zoomIn") { zoomView(kZoomPerNotch, 0.5); } else if (id == "zoomOut") { zoomView(1.0 / kZoomPerNotch, 0.5); } else if (id == "zoomReset") { selected().resetView(); }
         else if (id == "record") { FoxCommand c = op(FOXAPI_OP_RECORD_AUDIO); c.ival[0] = (state.flags & FOXAPI_RX_RECORDING_AUDIO) ? 0 : 1; submit(c); }
         else if (id == "screenshot") { screenshot(); }
@@ -1449,7 +1482,7 @@ int main(int argc, char** argv) {
             switch (foxsdr::slintsystem::escapeStep(open)) {
                 case foxsdr::slintsystem::EscapeStep::ImportDialog: ui->global<SignalEvents>().invoke_import_closed(); break;
                 case foxsdr::slintsystem::EscapeStep::StorePluginPage: ui->global<ExtendEvents>().invoke_store_plugin_back(); break;
-                case foxsdr::slintsystem::EscapeStep::Overlays: ui->set_editing(false); ui->set_about_open(false); ui->set_bias_question_open(false); break;
+                case foxsdr::slintsystem::EscapeStep::Overlays: ui->set_editing(false); ui->set_about_open(false); ui->set_bias_question_open(false); laneC.closeOverlays(); break;
             }
         }
         else if (id == "uiSizeAuto") { systemBank.setInterfaceSize(0); }   // Ctrl+0: back to Auto (saved; the look takes it on the next tick)
@@ -1743,6 +1776,11 @@ int main(int argc, char** argv) {
             if (noteTick > 0 && tickNo - noteTick < 90) { ui->set_converter_text(ss(noteText)); ui->set_converter_warn(true); }
             if (!dropInstalled && tickNo >= 20 && tickNo % 15 == 0) {   // the OS file drop: once the window exists, our drop target takes the place of the backend's
                 if (void* hw = foxsdr::slintgaps::findMainWindow()) { dropInstalled = foxsdr::slintgaps::installFileDrop(hw, [&](const std::string& p) { if (handleDrop) { handleDrop(p); } }); }
+            }
+            if (!laneCOff) { laneC.tick(state, static_cast<long>(tickNo)); }   // screen lane C: scanner block, memories, clock, sheets (FOXSDR_SLINT_LANEC_OFF=1, a bounded run only, leaves it out: the frame-cost comparison)
+            if (!lists.converter && !(noteTick > 0 && tickNo - noteTick < 90)) {   // T9: the airband channel's name where the counter says "via ..." (a note or a converter keeps the place)
+                const std::string ch = cascade::core::airbandChannelName(state.tunedHz);
+                if (!ch.empty()) { ui->set_converter_text(ss(cascade::core::formatText(cascade::i18n::tr("Channel %s"), ch.c_str()))); }
             }
             if (helpAtTick > 0 && tickNo == helpAtTick) { ui->invoke_menu_activated(605); }
             for (const auto& ms : menuSeam) { if (tickNo == ms.first) { ui->invoke_menu_activated(ms.second); } }
@@ -2249,6 +2287,10 @@ int main(int argc, char** argv) {
         if (name.rfind("scope.", 0) == 0) { return scopeBank.readState(name.substr(6), out); }
         // view3d.<what>: the 3D views' own state (view3d_publish.hpp readState: wf.on, wf.azimuth, wf.elevation, wf.zoom, wf.depth, wf.shading, wf.renders, wf.triangles, wf.pixels ...)
         if (name.rfind("view3d.", 0) == 0) { return view3dBank.readState(name.substr(7), out); }
+        // lanec.<what>: screen lane C (lanec_publish.hpp readState)
+        if (name == "lanec.logcopies") { out = std::to_string(publisher.copyCount()); return std::string(); }
+        if (name == "lanec.logcopy") { out = publisher.lastCopy(); return std::string(); }
+        if (name.rfind("lanec.", 0) == 0) { return laneC.readState(name.substr(6), out); }
         // gaps.<what>: the classic-window gaps (docs/multi-radio-records/slint-gaps.md)
         if (name.rfind("gaps.", 0) == 0) {
             const std::string w = name.substr(5);

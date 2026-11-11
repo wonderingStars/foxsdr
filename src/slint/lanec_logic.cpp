@@ -38,10 +38,10 @@ std::optional<double> toNumber(const std::string& text) {
     return v;
 }
 
-std::string fmt(const char* f, double v) {
-    char b[64];
-    std::snprintf(b, sizeof b, f, v);
-    return b;
+std::string fmt(const char* f, double v) {   // one double into one of this unit's own literal formats (never a translated text)
+    std::vector<char> b(64);
+    const int n = std::snprintf(b.data(), b.size(), f, v);
+    return n > 0 ? std::string(b.data(), static_cast<std::size_t>(std::min<int>(n, 63))) : std::string();
 }
 
 FoxCommand cmd(std::uint32_t op) {

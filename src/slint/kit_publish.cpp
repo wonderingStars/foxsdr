@@ -1520,6 +1520,14 @@ void KitPublisher::wire() {
         }
     });
     ui_.global<::KitEvents>().on_page_log_clear([this](int) { kit_.clearDecoderLines(); });
+    // SCREEN LANE C, W16c: every line the window holds, as text (the plugin's name is not part of the decoded text), one per line, to the clipboard the host's sink writes
+    ui_.global<::KitEvents>().on_page_log_copy([this](int) {
+        std::string all;
+        for (const DecoderLine& l : kit_.decoderLines()) { all += l.text; all += '\n'; }
+        ++copies_;
+        lastCopy_ = all;
+        if (clipboardSink_) { clipboardSink_(all); }
+    });
     ui_.global<::KitEvents>().on_page_log_follow([page](int i, bool on) { if (Page* p = page(i)) { p->follow = on; } });
     ui_.global<::KitEvents>().on_page_picture_pressed([this, page](int i, int x, int y) { if (Page* p = page(i)) { kit_.imagePress(p->plugin, x, y); } });
     ui_.global<::KitEvents>().on_page_picture_save([this, page](int i) {

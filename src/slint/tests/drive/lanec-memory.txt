@@ -1,0 +1,60 @@
+#! frames=900 size=1600x900 bank=2 sections=2:2 restart=lanec-memory-2.txt
+# lanec-memory (docs/multi-radio-records/screen-c.md, rows C12, C1, T10, T5): the memory of the frequency the receiver is on (a bookmark's squelch, scan threshold, repeater offset and CTCSS tone, kept beside the settings) and the eight quick memories.
+# The memory block is greyed until the receiver is on a bookmark. A recall (tuning back onto the bookmark) sends the entry's squelch. A bad entry goes back to what is stored. The second start finds all of it saved.
+10 state running == 1
+state tunedHz == 100300000
+state lanec.memenabled == 0
++1 expect "Squelch dB" enabled equals "false"
++1 type "Bookmark name" "Probe"
++1 click "Add current"
++25 state count.bookmarks == 1
++10 state lanec.memenabled == 1
++1 expect "Squelch dB" enabled equals "true"
++1 state lanec.memtitle contains Probe
++1 type "Squelch dB" "-70"
++1 key enter
++5 state lanec.memsquelch == -70
++1 type "Scan threshold dB" "-60"
++1 key enter
++5 state lanec.memthreshold == -60
++1 type "Offset kHz" "-600"
++1 key enter
++5 state lanec.memoffset == -600
++1 state lanec.memtx contains 99.7
++1 type "Tone Hz" "88.5"
++1 key enter
++5 state lanec.memtone == 88.5
++1 state lanec.memories == 1
+# an entry that is no tone goes back to what is stored
++1 type "Tone Hz" "12"
++1 key enter
++5 state lanec.memtone == 88.5
++1 expect "Tone Hz" value equals "88.5"
+# the engine's own squelch is not the entry's: tune away, then back onto the bookmark, and the entry's squelch is sent
++1 click "1 MHz digit"
++3 type "Frequency in MHz" "101.1"
++1 key enter
++12 state tunedHz == 101100000
++5 state lanec.memenabled == 0
++1 expect "Squelch dB" enabled equals "false"
++1 click "1 MHz digit"
++3 type "Frequency in MHz" "100.3"
++1 key enter
++12 state tunedHz == 100300000
++10 state squelchDb == -70
+# the quick memories: store, tune away, recall
++1 click "Store into a memory"
++3 state lanec.quickstore == 1
++1 click "M2"
++5 state lanec.quickstore == 0
++1 state lanec.quick.1 == 100300000
++1 expect "M2  100.300" enabled equals "true"
++1 click "1 MHz digit"
++3 type "Frequency in MHz" "103.7"
++1 key enter
++12 state tunedHz == 103700000
++1 click "M2  100.300"
++12 state tunedHz == 100300000
++1 click "M5"
++5 state tunedHz == 100300000
++30 state lanec.saved == 1

@@ -1,0 +1,5 @@
+#! frames=120 size=1600x900
+# lanec-clock, the second start on the same scratch profile: the clock is still on local time.
+10 state running == 1
+state lanec.clockmode == 2
+state lanec.clock contains LT

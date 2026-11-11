@@ -1,0 +1,24 @@
+#! frames=200 size=1600x900
+# lanec-channel (docs/multi-radio-records/screen-c.md, row T9): the airband channel's name under the counter. 118.000 MHz is both the 25 kHz channel 118.000 and the 8.33 kHz channel 118.005; 118.008333 is channel 118.010;
+# 100.3 MHz is no airband channel and shows nothing.
+10 state running == 1
+state tunedHz == 100300000
+state gaps.lockedlabel == ""
++1 click "1 MHz digit"
++3 type "Frequency in MHz" "118.0"
++1 key enter
++12 state tunedHz == 118000000
++3 state gaps.lockedlabel == "Channel 118.000 / 118.005"
++1 click "1 MHz digit"
++3 type "Frequency in MHz" "118.008333"
++1 key enter
++12 state gaps.lockedlabel == "Channel 118.010"
++1 click "1 MHz digit"
++3 type "Frequency in MHz" "119.0"
++1 key enter
++12 state gaps.lockedlabel == "Channel 119.000 / 119.005"
++1 click "1 MHz digit"
++3 type "Frequency in MHz" "100.3"
++1 key enter
++12 state tunedHz == 100300000
++3 state gaps.lockedlabel == ""

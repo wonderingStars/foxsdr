@@ -79,6 +79,7 @@ export global KitEvents {
     callback page-bar-preset-pressed(int, int, int);
     callback page-bar-save-clicked(int, int);
     callback page-log-clear(int);
+    callback page-log-copy(int);                         // screen lane C, W16c: the decoder text to the clipboard
     callback page-log-follow(int, bool);
     callback page-picture-pressed(int, int, int);
     callback page-picture-save(int);
@@ -402,6 +403,8 @@ export component PageBody inherits Rectangle {
     bar-save-clicked(a, b) => { KitEvents.page-bar-save-clicked(a, b); }
     callback log-clear(int);
     log-clear(a) => { KitEvents.page-log-clear(a); }
+    callback log-copy(int);
+    log-copy(a) => { KitEvents.page-log-copy(a); }
     callback log-follow(int, bool);
     log-follow(a, b) => { KitEvents.page-log-follow(a, b); }
     callback picture-pressed(int, int, int);
@@ -512,7 +515,7 @@ export component PageBody inherits Rectangle {
                 PresetBar { presets: b.presets; save-label: @tr("+ Save"); pressed(i) => { root.bar-preset-pressed(root.index, bi, i); } save-clicked => { root.bar-save-clicked(root.index, bi); } }
             }
             LogView { vertical-stretch: 1; lines: root.page.lines; follow: root.page.follow; count-text: root.page.count-text; empty-text: @tr("Listening...");
-                clear-clicked => { root.log-clear(root.index); } follow-toggled(v) => { root.log-follow(root.index, v); } }
+                clear-clicked => { root.log-clear(root.index); } copy-clicked => { root.log-copy(root.index); } follow-toggled(v) => { root.log-follow(root.index, v); } }
         }
         // 2 picture
         if root.page.kind == 2 && !root.page.globe.active : PicturePane { vertical-stretch: 1; picture: root.page.picture; have: root.page.have; status: root.page.status; interactive: root.page.interactive;

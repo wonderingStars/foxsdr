@@ -1,0 +1,13 @@
+#! frames=260 size=1600x900 FOXSDR_SLINT_MENU=150:606
+# lanec-shortcuts (docs/multi-radio-records/screen-c.md, row U10): the keyboard-shortcut overlay. Shift+F1 opens it (a fixed key, answered after the key table: F1 itself is the SIGNAL bank's), it lists every bound action of the saved key table, Esc closes it;
+# the App menu's "Keyboard shortcuts" entry (a bounded-run seam presses it at tick 150) opens it too, and its Close key closes it.
+10 state running == 1
+state lanec.shortcutsopen == 0
++1 key shift+f1
++5 state lanec.shortcutsopen == 1
++1 state lanec.shortcuts > 20
++1 key escape
++5 state lanec.shortcutsopen == 0
+150 state lanec.shortcutsopen == 1
++3 click "Close"#2
++5 state lanec.shortcutsopen == 0

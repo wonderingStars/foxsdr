@@ -1,0 +1,16 @@
+#! frames=520 size=1600x900 bank=0 sections=0:2 FOXSDR_SLINT_MENU=15:109
+# lanec-bandwidth (docs/multi-radio-records/screen-c.md, row F7): "Remember the width of each mode" (the counter's right-click menu, turned on at tick 15 by a bounded-run seam). The passband is narrowed in WFM; the width is kept once it has
+# settled; a trip to NFM (the engine puts NFM's own width in) and back to WFM brings the narrowed width back instead of WFM's 150 kHz.
+10 state running == 1
+state mode == WFM
++10 state lanec.bwmemory == 1
++1 slider "Passband" 0.1
++10 state bandwidthHz < 100000
++25 state lanec.bw.2 > 0
++1 choose "WFM" "NFM"
++20 state mode == NFM
++1 choose "NFM" "WFM"
++30 state mode == WFM
++1 state bandwidthHz < 100000
++1 state lanec.bw.2 > 0
++30 state lanec.saved == 1

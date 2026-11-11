@@ -220,9 +220,9 @@ public:
     }
     void clearLockouts() { temp_.clear(); perm_.clear(); }
     bool isLocked(double hz) const {
-        const auto near = [hz](double x) { return std::fabs(x - hz) <= kLockoutEpsHz; };
-        if (std::any_of(params_.lockedHz.begin(), params_.lockedHz.end(), near) || std::any_of(perm_.begin(), perm_.end(), near)) { return true; }
-        return std::any_of(temp_.begin(), temp_.end(), [&](const TempLock& t) { return near(t.hz) && t.untilMs > lastMs_; });
+        const auto close = [hz](double x) { return std::fabs(x - hz) <= kLockoutEpsHz; };
+        if (std::any_of(params_.lockedHz.begin(), params_.lockedHz.end(), close) || std::any_of(perm_.begin(), perm_.end(), close)) { return true; }
+        return std::any_of(temp_.begin(), temp_.end(), [&](const TempLock& t) { return close(t.hz) && t.untilMs > lastMs_; });
     }
     // The operator's lockouts (not Params::lockedHz): permanent ones, then the temporary ones still running.
     std::vector<double> lockouts() const {

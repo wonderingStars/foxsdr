@@ -1,0 +1,12 @@
+#! frames=200 size=1600x900 bank=2 sections=2:2
+# lanec-memory, the second start on the same scratch profile: the bookmark is back (the engine saves it), its memory and the quick memory are back (lanec.json).
+10 state running == 1
+state lanec.quick.1 == 100300000
+state lanec.quick.0 == 0
++1 expect "M2  100.300" enabled equals "true"
++30 state lanec.memenabled == 1
++1 state lanec.memsquelch == -70
++1 state lanec.memthreshold == -60
++1 state lanec.memoffset == -600
++1 state lanec.memtone == 88.5
++1 expect "Squelch dB" value equals "-70"

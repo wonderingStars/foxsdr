@@ -1,0 +1,11 @@
+#! frames=300 size=1600x900
+# lanec-delta-off (docs/multi-radio-records/screen-c.md, row T8): the same click on the waterfall as lanec-delta, without the delta lock: the VFO moves inside the picture, the centre stays (the break-it contrast of lanec-delta).
+10 state running == 1
+state centreHz == 100000000
+state vfoOffsetHz == 300000
+state lanec.deltamask == 0
++1 press "Waterfall"
++15 state tunedHz != 100300000
++1 state centreHz == 100000000
++1 state vfoOffsetHz != 300000
++1 state lanec.deltaconversions == 0

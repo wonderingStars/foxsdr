@@ -1,0 +1,18 @@
+#! frames=300 size=1600x900 restart=lanec-clock-2.txt
+# lanec-clock (docs/multi-radio-records/screen-c.md, row T12): the clock in the status bar. UTC at first; a press on it goes to local time, then to "no clock" (the place stays, a dim --:--:--), then back to UTC.
+# The mode is saved in lanec.json beside the settings file: the second start finds local time (after the last press the run waits for the save).
+10 state running == 1
+state lanec.clockmode == 1
+state lanec.clock contains UTC
++1 expect "Clock" label equals "Clock"
++1 press "Clock"
++5 state lanec.clockmode == 2
++1 state lanec.clock contains LT
++1 press "Clock"
++5 state lanec.clockmode == 0
++1 state lanec.clock contains --
++1 press "Clock"
++5 state lanec.clockmode == 1
++1 press "Clock"
++5 state lanec.clockmode == 2
++30 state lanec.saved == 1

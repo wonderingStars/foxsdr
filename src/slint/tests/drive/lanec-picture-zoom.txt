@@ -1,0 +1,17 @@
+#! frames=900 bank=1 plugins=apt-decoder open=module:apt-decoder-1.0.0-abi3-win-x64.dll iqfile=apt-decoder.wav centre=137100000 mode=NFM bandwidth=40000 size=1600x1600
+# lanec-picture-zoom (docs/multi-radio-records/screen-c.md, row W16a): the wheel zooms a plugin's picture about the pointer (up to 16 times) and "Fit" shows it whole again; the key exists only while zoomed. The fixture is the NOAA APT image
+# (fixture-apt-decoder). A click on the picture is still its own pixel under the pointer (the arithmetic is in the .slint; the NOAA APT page takes no clicks, so only the zoom is driven here).
+120 state kit.plugins == 1
++1 click "START"
++60 state decodersRunning >= 1
++300 state kit.pictures >= 1
++1 click "NOAA APT image"
++10 expect "Save as BMP" enabled equals "true"
++1 scroll "Picture" -60
++5 expect "Fit" enabled equals "true"
++1 scroll "Picture" -60
++3 scroll "Picture" 120
++3 expect "Fit" enabled equals "true"
++1 click "Fit"
++3 scroll "Picture" 60
++3 expect "Save as BMP" enabled equals "true"

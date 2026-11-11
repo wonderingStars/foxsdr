@@ -1,0 +1,54 @@
+#! frames=700 size=1600x900 bank=2 sections=2:3
+# lanec-scanner (docs/multi-radio-records/screen-c.md, rows C2, C3, C5, C4, C1): the lane's block under the Scanner body. The lockout keys are dead until a scan of the ticked rows runs. The priority list is typed as MHz (a bad token is dropped),
+# its interval is clamped to 5..600 s, both are saved; the engine's scanner does not read them yet and the block says so. Mute while scanning silences the receiver while a scan steps (a range scan on the generator here) and never touches a mute
+# the user set. The scan log is off until it is ticked.
+10 state running == 1
++1 expect "Lock out 10 min" enabled equals "false"
++1 expect "Lock out for good" enabled equals "false"
++1 expect "Clear lockouts" enabled equals "false"
++1 state lanec.enginenote == 0
++1 type "Priority MHz" "162.55, 121.5, nope"
++1 key enter
++5 state lanec.priority == "162.55, 121.5"
++1 state lanec.enginenote == 1
++1 type "Every s" "45"
++1 key enter
++5 state lanec.priorityevery == 45
++1 type "Every s" "1"
++1 key enter
++5 state lanec.priorityevery == 5
++1 type "Every s" "abc"
++1 key enter
++5 state lanec.priorityevery == 5
++1 expect "Every s" value equals "5"
++1 click "Log what the scan finds"
++5 state lanec.logscan == 1
++1 click "Mute while scanning"
++5 state lanec.mutescan == 1
++1 state muted == 0
+# a range scan across the generator, its squelch shut (so the scan only steps): the receiver is silenced while it steps
++1 slider "Squelch" 1.0
++5 state squelchDb > -10
++1 type "Start MHz" "100.2"
++1 key enter
++1 type "Stop MHz" "100.4"
++1 key enter
++1 type "Step kHz" "100"
++1 key enter
++1 type "Dwell ms" "300"
++1 key enter
++1 click "Start scan"
++30 state scanner == 1
++1 state lanec.scanstate == 1
++1 state lanec.mutedbyus == 1
++1 state muted == 1
+# the squelch opens: the scan comes to a signal and holds on it; the receiver is let go and the user hears it
++1 slider "Squelch" 0.0
++60 state lanec.mutedbyus == 0
++1 state muted == 0
++1 click "Stop scan"
++30 state scanner == 0
++1 state muted == 0
++1 click "Mute while scanning"
++5 state lanec.mutescan == 0
++30 state lanec.saved == 1

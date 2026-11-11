@@ -1,0 +1,22 @@
+#! frames=360 size=1600x900 FOXSDR_SLINT_MENU=70:107
+# lanec-steplock (docs/multi-radio-records/screen-c.md, row T3): the tuning-step lock, from the counter's right-click menu. Unlocked, a digit's nudge steps by that digit's place (the 1 MHz digit: 1 MHz); locked (at tick 70 by the menu's own callback, a bounded-run seam),
+# every digit steps by the Tune step (10 kHz: the key table's text). The lock is saved (lanec.json).
+10 state running == 1
+state tunedHz == 100300000
+state lanec.steplock == 0
++1 click "Step 1 MHz digit up"
++12 state tunedHz == 101300000
++1 click "Step 1 MHz digit down"
++12 state tunedHz == 100300000
+75 state lanec.steplock == 1
++1 click "Step 1 MHz digit up"
++12 state tunedHz == 100310000
++1 click "Step 1 MHz digit down"
++12 state tunedHz == 100300000
++1 click "Step 100 kHz digit up"
++12 state tunedHz == 100310000
++1 click "Step 100 kHz digit down"
++12 state tunedHz == 100300000
++1 key ctrl+up
++12 state tunedHz == 100310000
++30 state lanec.saved == 1
