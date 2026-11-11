@@ -21,7 +21,9 @@ twenty other lanes (a headless gate was measured at 41 of 813 tests in 70 minute
 | 4dffee73 | A: a KiwiSDR receiver as a radio kind |
 | 58a1aebc | A: the VFO-offset check hardened (found by break-it K1) |
 | 265c70d4 | B1: tone squelch and tone remover |
-| (last) | this record |
+| a28e07e2 | the record (first version, before the gates) |
+| b0377c6b | three tests the merges and wiring made red (health paths, shutdown budget, the web profile count) |
+| (last) | this record's gate results, the old-reader proof and `tools/old_reader_probe/new_main.cpp`'s fifth file |
 
 ## Step 1: the merges
 
@@ -149,16 +151,37 @@ decimates inside; its CPU cost in a running chain was not measured separately. B
 
 ## Old reader
 
-NOT RUN. The proof the previous lane made (`tools/old_reader_probe`, the v0.99.104 sources of `config.hpp` and `config.cpp`) was not repeated for the new keys (`toneSquelch*`, `toneRemove`, and the new `sourceKind`
-"kiwisdr"). The loader of this tree ignores unknown keys by construction (`test_config` "an older reader" checks are for THIS tree's loader), and an older build's loader is the same code path the `radios` keys of stage 5
-already crossed, but that is an argument and not a run: UNVERIFIED.
+RUN, with the v0.99.104 sources (`git show v0.99.104:src/core/config.hpp` and `config.cpp` in a directory searched first, `tools/old_reader_probe/build_probe.bat`; `new_main.cpp` gained a fifth file for this lane:
+radio 1 on `kiwisdr=rx.example.org:8073` with a DCS tone squelch and the remover on, radio 2 on a second KiwiSDR with a CTCSS tone, radio 3 with a DCS code). The new writer wrote it; the OLD reader:
+```
+old reader: load ok ()
+old reader: sourceKind=siggen centerHz=98500000 mode=WFM volume=0.35  nativeArgs=kiwisdr=rx.example.org:8073 schemaVersion=1
+old reader: write-back ok ()
+```
+and the file it wrote back has no `toneSquelch*` or `toneRemove` key and no `radios` key (as before, radios 2 to 8 are forgotten there). Radio 1's kind `kiwisdr` is not one the old loader knows, so it falls back to the generator
+(`siggen`): an old build opens a settings file written with a KiwiSDR on radio 1 on the signal generator and, on its next save, forgets the receiver. That is the designed fall-back, not a loss of the file. The other files of the
+probe (one radio, eight radios, the stage 7 sources, lane A's TCI and schedule) still load in the old reader exactly as they did (`one.json`: `sourceKind=rtlsdr ... nativeArgs=serial=00000001`).
 
 ## Gates
 
-* **After step 1** the headless gate (`ctest -L "headless|slint" -j4 --timeout 300`) was started on the merged tree and STOPPED after 41 of 813 tests in about 70 minutes (the machine ran roughly 25 other compiler and test
-  processes: CPU at 100 %). Of the 41 that had finished, `test_failure_files` (107 s) and `test_engine_api_txplugin` (54 s) were red; the second passes alone (exit 0, "stopped after 2.0 s (111 passes)"); the first was not re-run.
-  The merges themselves were proved test by test (above). Nothing was waved through: the full gates below are on the later tips.
-* Final gates: see the lane's final message; the numbers are repeated in the addendum at the end of this file when they exist.
+Final tip: the commit that holds this addendum (the code is that of b0377c6b; the commits after it change only this record and `tools/old_reader_probe/new_main.cpp`).
+
+* **Headless**, `ctest -L "headless|slint" -j4 --timeout 300`, on the code of a28e07e2 (817 tests): `99% tests passed, 8 tests failed out of 817`. The eight, each classified:
+  * `test_airband_data`, `test_band_plan`, `test_converter_call_sites`, `test_page_resize_id`, `test_png_decode`: the five known false failures of this build folder; run from the worktree root they pass
+    (`115`, `5174`, `5`, `22`, `49 checks`, `0 failed`).
+  * `test_health_paths`, `test_shutdown_budget_free`, `test_engine_api_txplugin`: REAL, caused by this lane's work and fixed in b0377c6b: `kiwisdr_source.cpp` raises `Recovered::ReaderLeak` twice and the table did not list it; the new
+    `kFirstAudioWait` and `kReadWait` had no row in the shutdown budget; the web profile has had 39 ops since SET_MUTED joined it (the merge of feat/web-bookmarks) and `test_engine_api_txplugin` still counted 38.
+    After the fix `test_health_paths`, `test_engine_api_txplugin`, `test_shutdown_budget` and `test_shutdown_budget_free` pass together (`100% tests passed out of 4`). The full headless gate was not repeated after these three
+    test-only fixes.
+* **Window gate**, hidden desktop `FoxSDRTestsW1`, `FOXSDR_FRAME_CAP_HZ=60`, `ctest -L gui -j3`, on the same code (267 tests): `99% tests passed, 2 tests failed out of 267`: `test_crash_upload` and `test_diagnostics`.
+  `test_crash_upload` passed alone on the hidden desktop (`Passed 23.62 sec`) and is not understood: it failed once in the gate at 23.83 s (a load flake is the guess, UNVERIFIED). `test_diagnostics` is the commit stamp
+  (the tree was committed after the build): after a rebuild, `test_diagnostics` and `test_diagnostics_free` passed (`3.68 s`, `3.39 s`).
+* The full headless gate was started once on the merged tree before any wiring and stopped at 41 of 813 tests (above).
+
+## `config.json`
+
+`%APPDATA%\foxsdr\config.json` sha256 before: c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3; after (read at the end of the gates): c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3.
+Every test ran in its own scratch profile (`engine_api_test::hermetic`).
 
 ## SCREEN HAND-OFF (no `.slint`, no catalogue, no drive script and no ledger row was touched)
 
