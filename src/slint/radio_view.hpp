@@ -128,7 +128,8 @@ struct RadioView {
     // and the tick of the last drag of the band, so the picture is never moved under the hand.
     double lastTunedHz = std::numeric_limits<double>::quiet_NaN();
     int lastBandDragTick = -1000;
-    Signatures sigs;                            // the signatures of this radio's published figures
+    Signatures sigs;                            // the signatures of this radio's published figures (layout One: the main window's properties)
+    Signatures paneSigs;                        // the same for this radio's row in the workspace's model (workspace_publish.cpp): a second cache, so the two targets never share one
     PlotSize plot;
     PaneFigures fig;
 
@@ -162,6 +163,13 @@ struct RadioView {
         if (view.spanHz >= fullSpan() * 0.999) { view = {0, 0}; }
     }
     void resetView() { view = {0, 0}; }
+    // THE PICTURES REFITTED (docs/multi-radio-records/screen-s3.md): new buffers of the new size, the trace's held lines and the waterfall's history cleared (what a hidden page does),
+    // and the next frame painted at once. The window shows the old images until the next publish.
+    void resizePictures(PictureSize s) {
+        wells = WellBuffers(s);
+        resetTrace(traceState);
+        sinceSeq = 0;
+    }
 };
 
 // A command aimed at a radio: the radio's number (slot + 1) goes in FoxCommand.target; 0 leaves it alone, which is the selected radio (the engine's focus).
