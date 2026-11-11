@@ -38,6 +38,30 @@ public:
     bool makeExecutable(const std::string& path) override;
 };
 
+// Every operation answers "no" / "nothing". A base for tests (and for the udev installer's tests) that
+// override only what they exercise.
+class NullUpdateHost : public UpdateHost {
+public:
+    bool exists(const std::string&) override { return false; }
+    std::int64_t fileSize(const std::string&) override { return -1; }
+    bool makeDir(const std::string&) override { return false; }
+    bool writableDir(const std::string&) override { return false; }
+    std::uint64_t freeSpace(const std::string&) override { return 0; }
+    bool createExclusive(const std::string&) override { return false; }
+    bool removeAll(const std::string&) override { return false; }
+    bool rename(const std::string&, const std::string&) override { return false; }
+    bool writeText(const std::string&, const std::string&) override { return false; }
+    bool readText(const std::string&, std::string&) override { return false; }
+    bool readHead(const std::string&, std::size_t, std::string&) override { return false; }
+    bool sha256(const std::string&, std::string&) override { return false; }
+    bool makeExecutable(const std::string&) override { return false; }
+    FetchResult fetch(const std::string&, const std::string&, std::uint64_t, std::uint64_t,
+                      std::atomic<bool>*) override { return FetchResult{}; }
+    bool listArchive(const std::string&, std::vector<std::string>&) override { return false; }
+    bool extractArchive(const std::string&, const std::string&) override { return false; }
+    int runProgram(const std::string&, const std::vector<std::string>&, int, std::string&) override { return -1; }
+};
+
 // Splits a block of text into lines (\n or \r\n), dropping a trailing empty one. Pure.
 std::vector<std::string> splitLines(const std::string& text);
 
