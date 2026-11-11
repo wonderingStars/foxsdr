@@ -24,3 +24,4 @@ vor-decoder-drive	vor-decoder-	{DRIVE}/vor-decoder.wav	113000000	13000	AM	22000	
 weather-decoder-drive	weather-decoder-	{DRIVE}/weather-decoder.wav	433920000	0	RAW	250000	90	id=F824 ch=2 rc=6B temp=21.7C hum=55% batt=ok && id=1D20 ch=3 rc=85 temp=-8.4C hum=28% batt=low
 wefax-decoder-drive	wefax-decoder-	{DRIVE}/wefax-decoder.wav	3853100	3000	USB	42000	120	start tone, IOC 576 && phased at 120 lpm, IOC 576 && chart complete
 workbench-drive	workbench-	{DRIVE}/workbench.wav	162475000	0	RAW	240000	60	WORKBENCH && NOAA weather: 7 of 7 channels in range
+packet-tnc-drive	packet-tnc-	{DRIVE}/aprs-decoder.wav	144800000	17750	NFM	12500	90	FOXSDR-1>APRS
