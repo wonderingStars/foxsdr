@@ -41,12 +41,13 @@
 #include <vector>
 
 #include "core/civil_time.hpp"
+#include "core/if_recorder.hpp"
 #include "source/iq_readers.hpp"
 
 namespace cascade::core::recbrowse {
 
 enum class Kind : int { Iq = 0, Audio = 1 };
-enum class StartSource : int { None = 0, SigmfDatetime = 1, FileNameUtc = 2, FileNameLocal = 3, ModifiedMinusDuration = 4 };
+enum class StartSource : int { None = 0, SigmfDatetime = 1, FileNameUtc = 2, FileNameLocal = 3, ModifiedMinusDuration = 4, IfHeader = 5 };
 
 struct Entry {
     std::string path;
@@ -70,6 +71,9 @@ struct Entry {
     StartSource startSource = StartSource::None;
     bool truncated = false;              // the header declared more data than the file holds
     bool guessedFromName = false;        // rate / centre of a raw file came from the name
+    bool ifRecording = false;            // a FoxSDR channel (IF) recording: the "fxif" chunk was read
+    std::string mode, radio;             // from the fxif chunk
+    double bandwidthHz = 0.0;
     bool broken = false;
     std::string error;
 };
@@ -329,6 +333,14 @@ inline Entry probeFile(const std::filesystem::path& p, const ScanOptions& opt) {
                 e.kindGuessed = true;
                 // an I/Q reading also supplies the container details (centre is not in a plain WAV)
             } else { e.kind = Kind::Audio; }
+            if (h.channels == 2) {   // a FoxSDR channel recording says what it is: kind, centre, mode, bandwidth, start time
+                const ifrec::IfHeader ih = ifrec::readIfHeader(e.path);
+                if (ih.ok && ih.hasMeta) {
+                    e.kind = Kind::Iq; e.kindGuessed = false; e.ifRecording = true;
+                    e.centerHz = ih.meta.centerHz; e.centerKnown = true; e.mode = ih.meta.mode; e.radio = ih.meta.radio; e.bandwidthHz = ih.meta.bandwidthHz;
+                    if (ih.meta.startUnixMs != 0) { e.startUnixMs = ih.meta.startUnixMs; e.startSource = StartSource::IfHeader; }
+                }
+            }
         } else if (ext == ".sigmf-meta" || ext == ".cu8" || ext == ".cs16" || ext == ".cf32" || ext == ".sigmf-data") {
             e.kind = Kind::Iq;
             source::iqfile::RawParams rp;
