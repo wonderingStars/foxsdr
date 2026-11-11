@@ -1,6 +1,7 @@
 // FoxSDR Slint front end - THE RADIO WORKSPACE'S MODEL (docs/multi-radio-records/screen-s3.md and screen-s4.md): the structs the host fills and the global `WorkspaceModel` every part of the multi-radio
 // screen reads and reports through. It is its own file so the strip's block (radio_strip.slint) and the workspace's bar (workspace.slint, which carries the block in a compact window) can both
 // import it without importing each other. workspace.slint re-exports everything here, so a file that imports it from there still can.
+import { Theme } from "theme.slint";   // (the house rule: every file of the window imports the Theme; this one draws nothing and uses none of it)
 import { RadioPaneData } from "radio_pane.slint";
 
 export struct WorkspaceCell {
