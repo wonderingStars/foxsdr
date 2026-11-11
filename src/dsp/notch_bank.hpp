@@ -75,7 +75,7 @@ public:
     // DSP thread. Filters in place.
     void process(float* x, std::size_t n) {
         const std::uint32_t wanted = mask_.load(std::memory_order_acquire);
-        if (wanted == 0 && fadingOut_ == 0) { return; }  // the zero-cost path
+        if (wanted == 0 && running_ == 0) { return; }  // the zero-cost path
         std::size_t i = 0;
         while (i < n) {
             if (blockPos_ == 0) { updateBlock(wanted); }
@@ -86,13 +86,18 @@ public:
         }
     }
 
+    // The frequency a slot is at right now after the glide (DSP thread / tests): 0 for a slot that is not running.
+    double glidedFreqHz(int i) const {
+        return (i >= 0 && i < kMaxNotches && slot_[static_cast<std::size_t>(i)].running) ? slot_[static_cast<std::size_t>(i)].curF : 0.0;
+    }
+
     // Blocks of 16 samples the bank has worked on (stays 0 while nothing is on: the zero-cost proof for the tests).
     std::uint64_t blocksWorked() const { return blocks_; }
 
     // DSP thread: forget all filter memory and glides (next change of a slot starts clean).
     void reset() {
         for (auto& s : slot_) { s.reset(); }
-        fadingOut_ = 0;
+        running_ = 0;
         blockPos_ = 0;
     }
 
@@ -119,7 +124,6 @@ private:
 
     void updateBlock(std::uint32_t wanted) {
         ++blocks_;
-        int fading = 0;
         for (int i = 0; i < kMaxNotches; ++i) {
             Slot& s = slot_[static_cast<std::size_t>(i)];
             const bool want = ((wanted >> i) & 1u) != 0;
@@ -130,6 +134,7 @@ private:
                 s.curW = s.width.load(std::memory_order_relaxed);
                 s.notch = Notch(fs_, s.curF, s.curF / s.curW);
                 s.running = true;
+                ++running_;
                 s.gain = 0.0;
             }
             if (!s.running) { continue; }
@@ -144,9 +149,7 @@ private:
                     s.notch.setQ(s.curF / s.curW);
                 }
             }
-            if (!want) { ++fading; }
         }
-        fadingOut_ = fading;
     }
 
     void runSegment(float* x, std::size_t n) {
@@ -166,7 +169,7 @@ private:
             }
             if (s.gain <= 0.0 && s.target <= 0.0) {
                 s.reset();
-                if (fadingOut_ > 0) { --fadingOut_; }
+                --running_;
             }
         }
     }
@@ -177,7 +180,7 @@ private:
     std::array<Slot, kMaxNotches> slot_;
     std::atomic<std::uint32_t> mask_{0};
     std::size_t blockPos_ = 0;
-    int fadingOut_ = 0;
+    int running_ = 0;  // slots whose filter is being run (on, or fading in or out)
     std::uint64_t blocks_ = 0;
 };
 

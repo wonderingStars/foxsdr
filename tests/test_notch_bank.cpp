@@ -270,6 +270,43 @@ void testZeroCost() {
     CHECK(std::memcmp(v.data(), v2.data(), v.size() * sizeof(float)) == 0);
 }
 
+void testGlideAndFade() {
+    // glide: a retune does not jump. After one block the notch has moved a little; after 100 ms it is there.
+    {
+        NotchBank b(kFs);
+        b.setNotch(0, 1000.0, 50.0, true);
+        std::vector<float> x(4800, 0.0f);
+        b.process(x.data(), x.size());
+        b.setNotch(0, 2000.0, 50.0, true);
+        b.process(x.data(), 16);
+        const double f1 = b.glidedFreqHz(0);
+        b.process(x.data(), 4800);
+        const double f2 = b.glidedFreqHz(0);
+        std::printf("glide: 1000 -> 2000 Hz, after one 16-sample block %.1f Hz, after 100 ms %.3f Hz\n", f1, f2);
+        CHECK(f1 > 1000.0 && f1 < 1200.0);
+        CHECK_NEAR(f2, 2000.0, 0.01);
+        CHECK(b.glidedFreqHz(1) == 0.0);
+    }
+    // fade: a tone on the notch is silent; switching the notch off brings it back over about 10 ms, not in one sample
+    {
+        NotchBank b(kFs);
+        b.setNotch(0, 1000.0, 50.0, true);
+        std::vector<float> a = sine(1000.0, 0.5, 48000);
+        b.process(a.data(), a.size());
+        b.setOn(0, false);
+        std::vector<float> c = sine(1000.0, 0.5, 2400, 48000);
+        b.process(c.data(), c.size());
+        double early = 0, mid = 0, late = 0;
+        for (std::size_t i = 0; i < 24; ++i) { early = std::max(early, std::fabs(static_cast<double>(c[i]))); }
+        for (std::size_t i = 220; i < 260; ++i) { mid = std::max(mid, std::fabs(static_cast<double>(c[i]))); }
+        for (std::size_t i = 600; i < 1000; ++i) { late = std::max(late, std::fabs(static_cast<double>(c[i]))); }
+        std::printf("fade out: peak in first 0.5 ms %.3f, around 5 ms %.3f, after 12 ms %.3f (tone 0.5)\n", early, mid, late);
+        CHECK(early < 0.1);
+        CHECK(mid > 0.15 && mid < 0.35);
+        CHECK(late > 0.49);
+    }
+}
+
 void testChunking() {
     const std::vector<float> in = sbgen::whiteNoise(48000, 0.3, 4);
     // every chunk size divides 4800, where the notches are retuned and one is switched off, so all runs see the same stream positions
@@ -381,6 +418,7 @@ int main() {
     testAllTen();
     testNoClick();
     testZeroCost();
+    testGlideAndFade();
     testChunking();
     testBounds();
     testNoAllocation();
