@@ -1,0 +1,32 @@
+#! frames=520 size=1280x720 config=layouts-seed.json
+# layout-degrade (lane S1, item 2): a settings file with layouts in it loads (the seed has two) and a layout that names more than the window has degrades quietly: "Four up" wants the 2 x 2
+# workspace and radio 3, and there is ONE radio: the workspace layout is kept (it comes back when the radios do, the S5 rule), the radio that is not open is not selected, the sentence says so, and nothing
+# is started. Then two more radios are added and the same layout selects radio 3.
+10 state layouts.count == 2
+state layouts.names == "Airband|HF DX|Four up|Quiet"
++1 choose "Layouts" "Manage layouts..."
++5 state layouts.open == 1
++1 click "Apply layout Four up"
++4 state layout.bank == 2
+state layout.sections == 8
+state layout.rail == 1
+state layout.split == 33
+state layout.workspace == 2
+state layout.selected == 1
+state layouts.note contains "not open"
+state workspace.radios == 1
++1 radio add 2 60000
++1 radio add 3 90000
++40 state workspace.radios == 3
++1 click "Apply layout Quiet"
++4 state layout.bank == 1
+state layout.workspace == 0
++1 click "Apply layout Four up"
++4 state layout.workspace == 2
+state layout.selected == 3
+state layouts.note == "Applied the layout Four up"
+state workspace.radios == 3
+state workspace.r.1.running == 1
+state workspace.r.2.running == 1
+state workspace.r.3.running == 1
++1 shot "layout-degrade.png"

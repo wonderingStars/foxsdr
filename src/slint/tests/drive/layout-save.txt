@@ -1,0 +1,53 @@
+#! frames=520 size=1280x720
+# layout-save (lane S1, item 2): the user arranges the window, saves it under a name, changes it, and the layout brings the arrangement back; renaming and deleting; the names that cannot be used.
+# The arrangement is the TOOLS bank (F3), the rail folded and the split dragged up.
+10 state layouts.count == 0
++1 key f3
++3 state layout.bank == 2
++1 click "FOLD"
++3 state layout.rail == 1
++1 drag "Resize" 0 -60
++3 state layout.split < 60
++1 choose "Layouts" "Manage layouts..."
++5 state layouts.open == 1
+# a name that is a built-in layout's is refused, and so is an empty one
++1 type "Layout name" "airband"
++1 click "Save the current layout"
++3 state layouts.note contains "built-in"
+state layouts.count == 0
++1 type "Layout name" "   "
++1 click "Save the current layout"
++3 state layouts.note contains "name"
+state layouts.count == 0
+# a good name
++1 type "Layout name" "My layout"
++1 click "Save the current layout"
++3 state layouts.count == 1
+state layouts.names == "Airband|HF DX|My layout"
+state layouts.note contains "Saved"
+# the saved text is in the interface half's settings
++1 state workspace.savedview contains "layouts:n=My layout"
+# change the arrangement, then bring the layout back
++1 click "Apply layout HF DX"
++4 state layout.bank == 0
++1 click "Apply layout My layout"
++4 state layout.bank == 2
+state layout.rail == 1
+state layout.split < 60
+state layouts.note contains "My layout"
+# rename it
++1 click "Rename layout My layout"
++3 type "Rename layout My layout" "Renamed"
++2 click "Finish renaming layout My layout"
++3 state layouts.names == "Airband|HF DX|Renamed"
+# a name that another layout has is refused
++1 click "Rename layout Renamed"
++3 type "Rename layout Renamed" "hf dx"
++2 click "Finish renaming layout Renamed"
++3 state layouts.note contains "built-in"
+state layouts.names == "Airband|HF DX|Renamed"
+# delete it
++1 click "Delete layout Renamed"
++3 state layouts.count == 0
+state layouts.names == "Airband|HF DX"
++1 shot "layout-save.png"

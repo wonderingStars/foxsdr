@@ -1,0 +1,60 @@
+// layouts_ui.slint - ONE-CLICK LAYOUTS (lane S1, docs/multi-radio-records/screen-s1.md; src/slint/layouts_prefs.hpp is the state they are saved in).
+//
+// The title bar's "Layouts" key opens a menu (the host's: every layout one item, then "Save the current layout..." and "Manage layouts...") and the sheet this file draws: the list of layouts with
+// Apply, Rename and Delete on each of the user's own, and the save form (a name, "Include tuning", Save). The host (main.cpp) fills LayoutsModel and answers its callbacks; nothing here decides
+// what a layout holds.
+import { Theme } from "theme.slint";
+import { Key } from "keys.slint";
+import { Field, FieldKind, Checkbox } from "fields.slint";
+
+export struct LayoutRow { name: string, builtin: bool, editing: bool }
+
+export global LayoutsModel {
+    in-out property <bool> open;                 // the sheet
+    in property <[LayoutRow]> rows;
+    in property <string> note;                   // the sentence under the form ("Saved", "That name belongs to a built-in layout")
+    in property <bool> note-bad;
+    in-out property <string> save-name;
+    in-out property <bool> include-tuning;
+    in-out property <string> rename-text;
+    callback menu-requested(length, length);     // the title bar's key, with the place under it
+    callback applied(int);
+    callback saved(string, bool);
+    callback rename-begun(int);
+    callback rename-committed(int, string);
+    callback removed(int);
+}
+
+export component LayoutsBody inherits VerticalLayout {
+    spacing: 10px;
+    Text { text: @tr("A layout arranges the window: the bank, the sections, the split, the radio layout. It never starts or stops a radio, a recording or a decoder."); wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; }
+    for r[i] in LayoutsModel.rows : HorizontalLayout {
+        spacing: 6px;
+        if !r.editing : Text {
+            horizontal-stretch: 1; min-width: 0px;
+            text: r.builtin ? @tr("{} (built in)", r.name) : r.name;
+            color: Theme.fg; font-size: Theme.font-body; vertical-alignment: center; overflow: elide;
+        }
+        if r.editing : Field {
+            horizontal-stretch: 1; min-width: 0px;
+            label: @tr("Rename layout {}", r.name); kind: FieldKind.text; kind-label: " "; max-length: 24; value <=> LayoutsModel.rename-text;
+            committed(t) => { LayoutsModel.rename-committed(i, t); }
+        }
+        Key { label: @tr("Apply"); small: true; min-w: 0px; accessible-label: @tr("Apply layout {}", r.name); clicked => { LayoutsModel.applied(i); } }
+        if !r.builtin && !r.editing : Key { label: @tr("Rename"); small: true; min-w: 0px; accessible-label: @tr("Rename layout {}", r.name); clicked => { LayoutsModel.rename-begun(i); } }
+        if !r.builtin && r.editing : Key { label: @tr("Done"); small: true; min-w: 0px; on: true; accessible-label: @tr("Finish renaming layout {}", r.name); clicked => { LayoutsModel.rename-committed(i, LayoutsModel.rename-text); } }
+        if !r.builtin : Key { label: @tr("Delete"); small: true; min-w: 0px; danger: true; accessible-label: @tr("Delete layout {}", r.name); clicked => { LayoutsModel.removed(i); } }
+    }
+    Field { label: @tr("Layout name"); kind: FieldKind.text; kind-label: " "; max-length: 24; value <=> LayoutsModel.save-name; placeholder: @tr("A name for this arrangement"); committed(t) => { LayoutsModel.save-name = t; } }
+    Checkbox { label: @tr("Include tuning (the frequency and mode of the selected radio)"); checked <=> LayoutsModel.include-tuning; }
+    if LayoutsModel.note != "" : Text {
+        text: LayoutsModel.note; wrap: word-wrap; font-size: Theme.font-small;
+        color: LayoutsModel.note-bad ? Theme.chip-warn-fg : Theme.fg-soft;
+        accessible-role: text; accessible-label: LayoutsModel.note;
+    }
+    HorizontalLayout {
+        spacing: 8px; alignment: end;
+        Key { label: @tr("Save the current layout"); accessible-label: @tr("Save the current layout"); clicked => { LayoutsModel.saved(LayoutsModel.save-name, LayoutsModel.include-tuning); } }
+        Key { label: @tr("Close"); on: true; clicked => { LayoutsModel.open = false; } }
+    }
+}

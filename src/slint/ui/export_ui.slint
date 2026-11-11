@@ -1,0 +1,60 @@
+// export_ui.slint - THE TOOLS BANK'S "Export" SECTION (lane S1, docs/multi-radio-records/screen-s1.md; src/slint/export_logic.hpp holds the files' rules).
+//
+// "Save waterfall picture" writes a PNG of the waterfall as drawn, with a frequency scale and a time scale; "Save waterfall data" writes the levels of the last 1, 5, 15 or 60 minutes as a CSV or a FoxSDR spectrum
+// file. Both go to the path in the box (a missing extension is added, a file that is there is never overwritten: the name gets " (2)"); both are written off the frame by the host.
+import { Theme } from "theme.slint";
+import { Key, SegGroup, SegKey } from "keys.slint";
+import { Field, FieldKind } from "fields.slint";
+import { BodyRow } from "sections.slint";
+
+export global ExportModel {
+    in property <string> context;                // "Radio 2 - 100.300 MHz, 2 MHz span - 12 min stored (3.6 MB)"
+    in property <int> length-index;              // 0..3 = 1, 5, 15, 60 minutes
+    in property <int> format-index;              // 0 CSV, 1 FoxSDR spectrum
+    in-out property <string> path;               // where to save, without the extension or with it
+    in property <string> note;                   // what the last export did
+    in property <bool> note-bad;
+    in property <bool> working;                  // a file is being written
+    callback length-selected(int);
+    callback format-selected(int);
+    callback picture-clicked(string);
+    callback data-clicked(string);
+}
+
+export component ExportBody inherits VerticalLayout {
+    spacing: 10px;
+    Text { text: ExportModel.context; wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; font-family: Theme.font-mono; accessible-role: text; accessible-label: ExportModel.context; }
+    Field {
+        label: @tr("Save to"); kind: FieldKind.text; kind-label: " "; value <=> ExportModel.path;
+        placeholder: @tr("Folder and file name"); committed(t) => { ExportModel.path = t; }
+    }
+    VerticalLayout {   // the label above the four keys: side by side they are wider than the panel in the longer languages
+        spacing: 4px;
+        Text { text: @tr("Data length").to-uppercase(); color: Theme.muted; font-family: Theme.font-ui; font-size: Theme.font-cap; font-weight: Theme.weight-semibold; letter-spacing: Theme.cap-spacing; wrap: word-wrap; }
+        SegGroup {
+            small: true;
+            SegKey { label: @tr("{} min", 1); small: true; min-w: 0px; on: ExportModel.length-index == 0; accessible-label: @tr("Data length {} minutes", 1); clicked => { ExportModel.length-selected(0); } }
+            SegKey { label: @tr("{} min", 5); small: true; min-w: 0px; on: ExportModel.length-index == 1; accessible-label: @tr("Data length {} minutes", 5); clicked => { ExportModel.length-selected(1); } }
+            SegKey { label: @tr("{} min", 15); small: true; min-w: 0px; on: ExportModel.length-index == 2; accessible-label: @tr("Data length {} minutes", 15); clicked => { ExportModel.length-selected(2); } }
+            SegKey { label: @tr("{} min", 60); small: true; min-w: 0px; on: ExportModel.length-index == 3; accessible-label: @tr("Data length {} minutes", 60); clicked => { ExportModel.length-selected(3); } }
+        }
+    }
+    BodyRow {
+        label: @tr("Data format");
+        SegGroup {
+            small: true;
+            SegKey { label: "CSV"; small: true; min-w: 0px; on: ExportModel.format-index == 0; accessible-label: "CSV"; clicked => { ExportModel.format-selected(0); } }   // not-translated: the name of a file format
+            SegKey { label: "FSW"; small: true; min-w: 0px; on: ExportModel.format-index == 1; accessible-label: "FSW"; tooltip: @tr("FoxSDR spectrum file: compact, one byte for every level"); clicked => { ExportModel.format-selected(1); } }   // not-translated: the name of a file format
+        }
+    }
+    VerticalLayout {   // one key a row: the words of the longest languages do not fit two in the panel's width
+        spacing: 6px; alignment: start;
+        Key { label: @tr("Save waterfall picture"); small: true; min-w: 0px; enabled: !ExportModel.working; accessible-label: @tr("Save waterfall picture"); clicked => { ExportModel.picture-clicked(ExportModel.path); } }
+        Key { label: @tr("Save waterfall data"); small: true; min-w: 0px; enabled: !ExportModel.working; accessible-label: @tr("Save waterfall data"); clicked => { ExportModel.data-clicked(ExportModel.path); } }
+    }
+    if ExportModel.note != "" : Text {
+        text: ExportModel.note; wrap: word-wrap; font-size: Theme.font-small;
+        color: ExportModel.note-bad ? Theme.chip-warn-fg : Theme.fg-soft;
+        accessible-role: text; accessible-label: ExportModel.note;
+    }
+}

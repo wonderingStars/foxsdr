@@ -84,6 +84,10 @@
 #include "radio_mix_publish.hpp"
 #include "link_logic.hpp"
 #include "workspace_prefs.hpp"
+#include "layouts_prefs.hpp"
+#include "export_logic.hpp"
+#include "mark_layout.hpp"
+#include "core/disk_job.hpp"
 #include "workspace_testseam.hpp"
 #include "plugin_kit.hpp"
 #include "signal_publish.hpp"
@@ -131,7 +135,7 @@ struct ListsSnapshot {
     bool converter = false; std::string converterName; double converterLoHz = 0;
     struct Band { std::string name; double startHz, stopHz; };
     std::vector<Band> bands;
-    struct Mark { std::string name; double hz, widthHz; std::uint32_t rgba; bool span, dashed, spectrumOnly; };
+    struct Mark { std::string name; double hz, widthHz; std::uint32_t rgba; bool span, dashed, spectrumOnly; std::string plugin; };   // plugin: the module that set it (the list item's detail)
     std::vector<Mark> marks;
     struct Bookmark { std::uint64_t id; std::string name; double hz; bool favourite; };
     std::vector<Bookmark> bookmarks;
@@ -146,7 +150,7 @@ struct ListsSnapshot {
     unsigned fittedPlugins = 0;
 };
 
-enum class MenuKind { None, Counter, Trace, Marker, MarkerClear, TuneStep, App, Modes };
+enum class MenuKind { None, Counter, Trace, Marker, MarkerClear, TuneStep, App, Modes, Layouts, MarkTab };
 enum class Face { Plain, Drum, Nixie };
 
 struct PaletteAction { std::string kind, title, detail; std::function<void()> run; };
@@ -374,6 +378,25 @@ int main(int argc, char** argv) {
     // setting), a bounded run's tuning ranges (the product cannot ask a device for its range) and the note Start together leaves for the record (the time between the radios' first frames, measured in a bounded run).
     LinkGroup linkGroup;
     WorkspaceMemory wsMemory;
+    // LANE S1 (docs/multi-radio-records/screen-s1.md): the user's layouts, each radio's store of levels for the waterfall export and its export job, the persistence trace's decay, the names a "+N" tab lists
+    foxsdr::slintlayouts::LayoutBook layoutBook;
+    std::string layoutNote;
+    bool layoutNoteBad = false;
+    int layoutRenaming = -1;
+    std::array<foxsdr::slintexport::SpectrumStore, kMaxRadios> spectrumStores;
+    int exportLengthIdx = 1, exportFormatIdx = 0;
+    std::string exportNote, exportContextSig;
+    bool exportNoteBad = false;
+    cascade::core::DiskJob<foxsdr::slintexport::Outcome> exportJob{"Waterfall export"};
+    std::string exportTypedPath;                  // what was typed when the last export was asked (for the sentence about it)
+    std::string exportLastPath;                   // the file the last export wrote (a bounded run's drive reads it back: export.fileinfo, export.peakoffset)
+    int persistenceDecayIdx = 1;                  // 0 fast, 1 medium, 2 slow
+    std::vector<std::pair<std::string, double>> markTabItems;   // the names the open "+N" menu lists
+    int markTabRadio = 0;                         // the radio that tab belongs to (1-based; 0 = layout One's selected radio)
+    int testMarks = 0;
+    bool testMarksDashed = true;
+    if (const char* e = std::getenv("FOXSDR_SLINT_TEST_MARKS"); e != nullptr && bounded.bounded()) { testMarks = std::clamp(std::atoi(e), 0, 512); }
+    if (const char* e = std::getenv("FOXSDR_SLINT_TEST_MARKS_DASHED"); e != nullptr && bounded.bounded()) { testMarksDashed = std::atoi(e) != 0; }
     std::array<LinkRange, kMaxRadios> testRanges{};
     long wsSaveSince = -1;
     std::string togetherNote = "no start together yet";
@@ -620,6 +643,7 @@ int main(int argc, char** argv) {
         for (int s = 0; s < kMaxRadios; ++s) {
             if (((before >> s) & 1u) != 0u && ((after >> s) & 1u) == 0u) {
                 radios.reset(s);
+                spectrumStores[static_cast<std::size_t>(s)].clear();
                 paneTicks[static_cast<std::size_t>(s)] = 0;
                 paneHover[static_cast<std::size_t>(s)] = {-1.f, -1.f};
             }
@@ -687,7 +711,20 @@ int main(int argc, char** argv) {
         readList(FOXAPI_LIST_ANTENNAS, [&](const FoxListItem& it) { ++l.antennaCount; if (it.flags & FOXAPI_ITEM_ACTIVE) { l.antenna = it.name; } });
         readList(FOXAPI_LIST_CONVERTERS, [&](const FoxListItem& it) { if ((it.flags & FOXAPI_ITEM_ACTIVE) && it.value[0] != 0) { l.converter = true; l.converterName = it.name; l.converterLoHz = it.value[1]; } });
         readList(FOXAPI_LIST_BAND_PLAN, [&](const FoxListItem& it) { l.bands.push_back({it.name, it.value[0], it.value[1]}); });
-        readList(FOXAPI_LIST_MARKERS, [&](const FoxListItem& it) { l.marks.push_back({it.name, it.value[0], it.value[1], static_cast<std::uint32_t>(it.value[2]), (it.flags & FOXAPI_ITEM_SPAN) != 0, (it.flags & FOXAPI_ITEM_DASHED) != 0, (it.flags & FOXAPI_ITEM_SPECTRUM_ONLY) != 0}); });
+        readList(FOXAPI_LIST_MARKERS, [&](const FoxListItem& it) { l.marks.push_back({it.name, it.value[0], it.value[1], static_cast<std::uint32_t>(it.value[2]), (it.flags & FOXAPI_ITEM_SPAN) != 0, (it.flags & FOXAPI_ITEM_DASHED) != 0, (it.flags & FOXAPI_ITEM_SPECTRUM_ONLY) != 0, std::string(it.detail)}); });
+        // TEST ONLY (a bounded run's FOXSDR_SLINT_TEST_MARKS=<n>): n made-up marks fed BELOW the plugin ABI (which caps a plugin at 64), spread over the selected radio's band with crowds, so the names' declutter
+        // and its cost can be shown at 64 and 256 marks without a plugin that sets them
+        if (testMarks > 0) {
+            std::uint32_t seed = 20261111u;
+            const auto next = [&] { seed = seed * 1664525u + 1013904223u; return static_cast<double>(seed >> 8) / 16777216.0; };
+            const double span = state.sampleRateHz > 0 ? state.sampleRateHz : 2.0e6, lo = state.centreHz - span / 2.0;
+            for (int i = 0; i < testMarks; ++i) {
+                const double crowd = (i % 3 == 0) ? 0.25 + 0.02 * next() : next();   // a third of them crowd one place, so the stacking and the "+N" tab have something to do
+                char name[24];
+                std::snprintf(name, sizeof(name), "STN%03d %s", i, (i % 4 == 0) ? "Eng" : "Fr");
+                l.marks.push_back({name, lo + crowd * span, 0.0, 0xffc864ffu, false, testMarksDashed && (i % 5) == 0, false, "made up"});   // (one in five dashed, as a plugin may: FOXSDR_SLINT_TEST_MARKS_DASHED=0 draws none dashed)
+            }
+        }
         readList(FOXAPI_LIST_BOOKMARKS, [&](const FoxListItem& it) { l.bookmarks.push_back({it.id, it.name, it.value[0], (it.flags & FOXAPI_ITEM_FAVOURITE) != 0}); });
         readList(FOXAPI_LIST_FREQ_MARKERS, [&](const FoxListItem& it) { l.markers.push_back({it.id, it.name, it.value[0]}); });
         readList(FOXAPI_LIST_DECODERS, [&](const FoxListItem& it) { if (it.flags & FOXAPI_ITEM_FED) { l.decodersFed.push_back(it.name); } });
@@ -759,6 +796,7 @@ int main(int argc, char** argv) {
                 add(2, "Bookmarks", std::to_string(lists.bookmarks.size()), ChipTone::Neutral);
                 add(3, "Scanner", (state.flags & FOXAPI_RX_SCANNER_ACTIVE) ? "SCANNING" : "OFF", (state.flags & FOXAPI_RX_SCANNER_ACTIVE) ? ChipTone::Good : ChipTone::Neutral);
                 add(4, "Airband", "--", ChipTone::Neutral);
+                add(5, cascade::i18n::tr("Export"), "--", ChipTone::Neutral);   // lane S1: the waterfall as a file
                 break;
             case 3:
                 add(0, "Web access", lists.webListening ? "PORT " + std::to_string(lists.webPort) : "OFF", lists.webListening ? ChipTone::Good : ChipTone::Neutral);
@@ -823,6 +861,7 @@ int main(int argc, char** argv) {
                 e.push_back(entry(MenuItemKind::Checked, 201, "Normal", "", traceMode == 0));
                 e.push_back(entry(MenuItemKind::Checked, 202, "Peak hold", "", traceMode == 1));
                 e.push_back(entry(MenuItemKind::Checked, 203, "Average", "", traceMode == 2));
+                e.push_back(entry(MenuItemKind::Checked, 206, std::string(cascade::i18n::tr("Persistence")).c_str(), "", traceMode == 3));
                 e.push_back(entry(MenuItemKind::Separator, 0, ""));
                 e.push_back(entry(MenuItemKind::Item, 204, "Reset trace", "", false, traceMode != 0));
                 e.push_back(entry(MenuItemKind::Heading, 0, "Average length"));
@@ -831,8 +870,28 @@ int main(int argc, char** argv) {
                     for (std::size_t i = 0; i < presets.size(); ++i) { e.push_back(entry(MenuItemKind::Radio, 211 + static_cast<int>(i), presets[i].first, "", std::fabs(averageLengthS - presets[i].second) < 1e-9)); }
                     e.push_back(entry(MenuItemKind::Slider, 218, "Average length", "", false, true, static_cast<float>(std::clamp(std::log(averageLengthS / 0.05) / std::log(200.0), 0.0, 1.0))));
                 }
+                e.push_back(entry(MenuItemKind::Heading, 0, std::string(cascade::i18n::tr("Persistence decay")).c_str()));
+                e.push_back(entry(MenuItemKind::Radio, 221, std::string(cascade::i18n::tr("Fast")).c_str(), "", persistenceDecayIdx == 0));
+                e.push_back(entry(MenuItemKind::Radio, 222, std::string(cascade::i18n::tr("Medium")).c_str(), "", persistenceDecayIdx == 1));
+                e.push_back(entry(MenuItemKind::Radio, 223, std::string(cascade::i18n::tr("Slow")).c_str(), "", persistenceDecayIdx == 2));
                 displayBlock(e);
                 break;
+            case MenuKind::Layouts: {   // lane S1: every layout is one item (the stock ones first), then the way to the sheet
+                const std::vector<foxsdr::slintlayouts::Layout> all = layoutBook.all();
+                e.push_back(entry(MenuItemKind::Heading, 0, std::string(cascade::i18n::tr("Layouts")).c_str()));
+                for (std::size_t i = 0; i < all.size(); ++i) { e.push_back(entry(MenuItemKind::Item, 1000 + static_cast<int>(i), all[i].name.c_str())); }
+                e.push_back(entry(MenuItemKind::Separator, 0, ""));
+                e.push_back(entry(MenuItemKind::Item, 1990, std::string(cascade::i18n::tr("Save the current layout...")).c_str()));
+                e.push_back(entry(MenuItemKind::Item, 1991, std::string(cascade::i18n::tr("Manage layouts...")).c_str()));
+                break;
+            }
+            case MenuKind::MarkTab: {   // lane S1: the names a "+N" tab stands for; a pick tunes to that mark
+                e.push_back(entry(MenuItemKind::Heading, 0, std::string(cascade::i18n::tr("Names that did not fit")).c_str()));
+                for (std::size_t i = 0; i < markTabItems.size() && i < 60; ++i) {
+                    e.push_back(entry(MenuItemKind::Item, 9000 + static_cast<int>(i), markTabItems[i].first.c_str(), fmt("%.4f MHz", markTabItems[i].second / 1e6).c_str()));
+                }
+                break;
+            }
             case MenuKind::Marker: {
                 menuMarkerNear = -1;
                 for (std::size_t i = 0; i < lists.markers.size(); ++i) {
@@ -915,6 +974,226 @@ int main(int argc, char** argv) {
             scaleFollower.applied(cur);
         }
     };
+    // ======================================================== LANE S1: one-click layouts (layouts_prefs.hpp) and the waterfall's export ========================================================
+    layoutBook.load(duties.interfaceHalf().view3d);
+    const auto layoutWindow = [&]() {
+        foxsdr::slintlayouts::Window w;
+        w.bank = bankIndex;
+        for (const int row : openSections[bankIndex]) { if (row >= 0 && row < 10) { w.sections |= 1u << row; } }
+        w.railFolded = ui->get_rail_folded();
+        w.view = ui->get_view_index();
+        w.splitPct = static_cast<int>(std::lround(ui->get_split_ratio() * 100.0f));
+        w.workspace = workspace.layout();
+        w.link = linkGroup.on();
+        w.wf3d = ui->global<View3D>().get_wf_on();
+        w.selected = workspace.selectedRadio();
+        w.openRadios = workspace.mask();
+        w.tunedHz = static_cast<std::int64_t>(std::llround(state.tunedHz));
+        w.mode = std::max(0, modeIndex(state.demodMode));
+        w.patchRunning = (state.flags & FOXAPI_RX_PATCH_RUNNING) != 0;
+        return w;
+    };
+    // The ONLY things a layout can do to the window (layouts_prefs.hpp Actions): there is no member that starts or stops anything.
+    const auto layoutActions = [&]() {
+        foxsdr::slintlayouts::Actions a;
+        a.setBank = [&](int b) { bankIndex = std::clamp(b, 0, 4); ui->set_bank_index(bankIndex); };
+        a.setSections = [&](int b, std::uint32_t mask) {
+            std::set<int> rows;
+            for (int i = 0; i < 10; ++i) { if (((mask >> i) & 1u) != 0u) { rows.insert(i); } }
+            const std::set<int> before = openSections[b];
+            openSections[b] = rows;
+            if (b == 4) { for (const int r : rows) { if (before.count(r) == 0) { systemBank.sectionOpened(r); } } }   // a section that opens asks for what it shows
+            if (b == 2 && rows.count(1) > 0 && before.count(1) == 0) { systemBank.sectionOpened(4); }
+        };
+        a.setRail = [&](bool folded) { ui->set_rail_folded(folded); };
+        a.setView = [&](int v) { ui->set_view_index(v); patchBank.setViewShown(v == 1); };
+        a.setSplitPct = [&](int p) { ui->set_split_ratio(static_cast<float>(p) / 100.0f); };
+        a.setWorkspace = [&](int l) { workspace.setLayout(l); };
+        a.setLink = [&](bool on) { linkGroup.setOn(on, workspace.mask()); };
+        a.selectRadio = [&](int r) { selectRadio(r); };
+        a.setWf3d = [&](bool on) { ui->global<View3D>().invoke_wf_view_selected(on); };
+        a.tune = [&](std::int64_t hz) { setFrequency(static_cast<double>(hz)); };
+        a.setMode = [&](int m) { setMode(demodOfIndex(m)); };
+        return a;
+    };
+    const auto publishLayouts = [&] {
+        auto& lm = ui->global<LayoutsModel>();
+        std::vector<LayoutRow> rows;
+        const std::vector<foxsdr::slintlayouts::Layout> all = layoutBook.all();
+        for (std::size_t i = 0; i < all.size(); ++i) { rows.push_back(LayoutRow{ss(all[i].name), all[i].builtin, !all[i].builtin && layoutRenaming == static_cast<int>(i)}); }
+        lm.set_rows(std::make_shared<slint::VectorModel<LayoutRow>>(std::move(rows)));
+        lm.set_note(ss(layoutNote));
+        lm.set_note_bad(layoutNoteBad);
+    };
+    const auto layoutsChanged = [&] {   // saved at once (a rare, deliberate act), then shown
+        if (layoutBook.dirty()) {
+            cascade::core::AppConfig half = duties.interfaceHalf();
+            const std::string text = layoutBook.text(half.view3d);
+            if (text != half.view3d) { half.view3d = text; (void)duties.saveInterfaceHalf(half); }
+            layoutBook.markWritten();
+        }
+        publishLayouts();
+    };
+    const auto applyLayoutNamed = [&](const std::string& name) {
+        const foxsdr::slintlayouts::Layout* l = layoutBook.find(name);
+        if (l == nullptr) { return; }
+        const int held = foxsdr::slintlayouts::apply(*l, layoutWindow(), layoutActions());
+        layoutNote = cascade::core::formatText(cascade::i18n::tr("Applied the layout %s"), l->name.c_str());
+        layoutNoteBad = false;
+        if ((held & foxsdr::slintlayouts::kHeldView) != 0) { layoutNote += ". " + std::string(cascade::i18n::tr("The patch is running, so the window stays on its tab")); layoutNoteBad = true; }
+        if ((held & foxsdr::slintlayouts::kHeldSelection) != 0) { layoutNote += ". " + std::string(cascade::i18n::tr("The radio that layout names is not open, so the selection stays")); layoutNoteBad = true; }
+        publishLayouts();
+    };
+    {
+        using SR = foxsdr::slintlayouts::SaveResult;
+        auto& lm = ui->global<LayoutsModel>();
+        lm.on_menu_requested([&](float x, float y) { openMenu(MenuKind::Layouts, x, y); });
+        lm.on_applied([&](int i) {
+            const std::vector<foxsdr::slintlayouts::Layout> all = layoutBook.all();
+            if (i >= 0 && static_cast<std::size_t>(i) < all.size()) { applyLayoutNamed(all[static_cast<std::size_t>(i)].name); }
+        });
+        lm.on_saved([&](slint::SharedString nameS, bool tuning) {
+            const std::string name = foxsdr::slintlayouts::cleanName(std::string(nameS));
+            const SR r = layoutBook.save(name, foxsdr::slintlayouts::capture(layoutWindow(), tuning));
+            layoutNoteBad = r != SR::Saved && r != SR::Replaced;
+            switch (r) {
+                case SR::Saved: layoutNote = cascade::core::formatText(cascade::i18n::tr("Saved the layout %s"), name.c_str()); break;
+                case SR::Replaced: layoutNote = cascade::core::formatText(cascade::i18n::tr("Replaced the layout %s"), name.c_str()); break;
+                case SR::BadName: layoutNote = cascade::i18n::tr("Type a name for the layout first"); break;
+                case SR::ReservedName: layoutNote = cascade::i18n::tr("That is the name of a built-in layout"); break;
+                case SR::Full: layoutNote = cascade::core::formatText(cascade::i18n::tr("You can keep %d layouts of your own: delete one first"), static_cast<int>(foxsdr::slintlayouts::kMaxUserLayouts)); break;
+            }
+            layoutsChanged();
+        });
+        lm.on_rename_begun([&](int i) {
+            const std::vector<foxsdr::slintlayouts::Layout> all = layoutBook.all();
+            if (i < 0 || static_cast<std::size_t>(i) >= all.size() || all[static_cast<std::size_t>(i)].builtin) { return; }
+            layoutRenaming = i;
+            ui->global<LayoutsModel>().set_rename_text(ss(all[static_cast<std::size_t>(i)].name));
+            publishLayouts();
+        });
+        lm.on_rename_committed([&](int i, slint::SharedString textS) {
+            const std::vector<foxsdr::slintlayouts::Layout> all = layoutBook.all();
+            if (i < 0 || static_cast<std::size_t>(i) >= all.size() || all[static_cast<std::size_t>(i)].builtin) { return; }
+            const std::string to = foxsdr::slintlayouts::cleanName(std::string(textS));
+            const SR r = layoutBook.rename(all[static_cast<std::size_t>(i)].name, to);
+            layoutNoteBad = r != SR::Saved;
+            if (r == SR::Saved) { layoutNote = cascade::core::formatText(cascade::i18n::tr("Renamed to %s"), to.c_str()); layoutRenaming = -1; }
+            else if (r == SR::BadName) { layoutNote = cascade::i18n::tr("Type a name for the layout first"); }
+            else {
+                const foxsdr::slintlayouts::Layout* other = layoutBook.find(to);
+                layoutNote = (other != nullptr && other->builtin) ? cascade::i18n::tr("That is the name of a built-in layout") : cascade::i18n::tr("Another layout has that name");
+            }
+            layoutsChanged();
+        });
+        lm.on_removed([&](int i) {
+            const std::vector<foxsdr::slintlayouts::Layout> all = layoutBook.all();
+            if (i < 0 || static_cast<std::size_t>(i) >= all.size() || all[static_cast<std::size_t>(i)].builtin) { return; }
+            const std::string name = all[static_cast<std::size_t>(i)].name;
+            (void)layoutBook.remove(name);
+            layoutRenaming = -1;
+            layoutNote = cascade::core::formatText(cascade::i18n::tr("Deleted the layout %s"), name.c_str());
+            layoutNoteBad = false;
+            layoutsChanged();
+        });
+    }
+    publishLayouts();
+    // TEST ONLY (a bounded run's FOXSDR_SLINT_LAYOUTS_SHEET=1): the clip sweep reaches the sheet in any language, whose key labels are translated, with the longest note the sheet can show
+    if (std::getenv("FOXSDR_SLINT_LAYOUTS_SHEET") != nullptr && bounded.bounded()) {
+        layoutNote = cascade::core::formatText(cascade::i18n::tr("Applied the layout %s"), "Quiet listening") + ". " + std::string(cascade::i18n::tr("The patch is running, so the window stays on its tab")) + ". " +
+                     std::string(cascade::i18n::tr("The radio that layout names is not open, so the selection stays"));
+        layoutNoteBad = true;
+        ui->global<LayoutsModel>().set_open(true);
+        publishLayouts();
+    }
+
+    // THE WATERFALL AS A FILE (export_logic.hpp): the store of levels is filled where the picture is painted (paneTick); a click copies what the file needs and a core::DiskJob writes it, off the frame
+    const auto exportBase = [&] { return (std::filesystem::path(configPath).parent_path() / "exports").string(); };
+    const auto utcNowMs = [] { return static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()); };
+    {
+        auto& em = ui->global<ExportModel>();
+        em.set_path(ss((std::filesystem::path(exportBase()) / "foxsdr-waterfall").string()));
+        em.on_length_selected([&](int i) { exportLengthIdx = std::clamp(i, 0, 3); });
+        em.on_format_selected([&](int i) { exportFormatIdx = std::clamp(i, 0, 1); });
+        const auto precheck = [&](const std::string& path) -> bool {
+            exportNoteBad = true;
+            if (exportJob.pending()) { return false; }   // one file at a time: the key is dimmed while one is written
+            const RadioView& rv = selected();
+            if (rv.frame.empty() || !(rv.lastInfo.spanHz > 0)) { exportNote = cascade::i18n::tr("This radio has shown no spectrum yet, so there is nothing to save"); return false; }
+            if (path.find_first_not_of(" \t") == std::string::npos) { exportNote = cascade::i18n::tr("Type where to save first"); return false; }
+            return true;
+        };
+        em.on_picture_clicked([&](slint::SharedString typed) {
+            const std::string path(typed);
+            if (!precheck(path)) { return; }
+            RadioView& rv = selected();
+            foxsdr::slintexport::PictureSpec spec;
+            spec.w = rv.wells.size.wfW;
+            spec.h = rv.wells.size.wfH;
+            const ViewWindow cur = rv.currentView();
+            spec.centreHz = cur.centreHz;
+            spec.spanHz = cur.spanHz;
+            spec.newestUtcMs = utcNowMs();
+            spec.radio = rv.slot + 1;
+            spec.dbMin = rv.state.dbMin;
+            spec.dbMax = rv.state.dbMax;
+            if (rv.frameTimes.size() >= 2 && rv.frameTimes.back() > rv.frameTimes.front()) {
+                spec.secondsPerRow = static_cast<double>(rv.frameTimes.back() - rv.frameTimes.front()) / 1000.0 / static_cast<double>(rv.frameTimes.size() - 1);
+            }
+            std::vector<foxsdr::slintexport::Pixel> pic(rv.wells.picture.size());
+            static_assert(sizeof(foxsdr::slintexport::Pixel) == sizeof(Rgba));
+            std::memcpy(pic.data(), rv.wells.picture.data(), sizeof(Rgba) * rv.wells.picture.size());
+            exportTypedPath = path;
+            exportNote = cascade::i18n::tr("Saving...");
+            exportNoteBad = false;
+            const std::string base = exportBase();
+            (void)exportJob.request([path, base, pic = std::move(pic), spec]() mutable { return foxsdr::slintexport::savePicture(path, base, std::move(pic), spec); });
+        });
+        em.on_data_clicked([&](slint::SharedString typed) {
+            const std::string path(typed);
+            if (!precheck(path)) { return; }
+            const RadioView& rv = selected();
+            static const int kMinutes[4] = {1, 5, 15, 60};
+            foxsdr::slintexport::Snapshot snap = spectrumStores[static_cast<std::size_t>(rv.slot)].snapshot(kMinutes[exportLengthIdx], utcNowMs());
+            if (snap.empty()) { exportNote = cascade::i18n::tr("This radio has shown no spectrum yet, so there is nothing to save"); return; }
+            foxsdr::slintexport::FileFacts facts;
+            facts.radio = rv.slot + 1;
+            facts.note = std::string("FoxSDR ") + cascade::versionString();
+            exportTypedPath = path;
+            exportNote = cascade::i18n::tr("Saving...");
+            exportNoteBad = false;
+            const std::string base = exportBase();
+            const int format = exportFormatIdx;
+            (void)exportJob.request([path, base, snap = std::move(snap), format, facts]() mutable { return foxsdr::slintexport::saveData(path, base, std::move(snap), format, facts); });
+        });
+    }
+    // once a tick: collect a finished file, and say what the selected radio's store holds
+    const auto publishExport = [&] {
+        auto& em = ui->global<ExportModel>();
+        foxsdr::slintexport::Outcome r;
+        if (exportJob.poll(r)) {
+            exportNoteBad = !r.ok;
+            if (r.ok) { exportNote = cascade::core::formatText(cascade::i18n::tr("Saved %s"), r.path.c_str()); exportLastPath = r.path; }
+            else if (r.why == 1) { exportNote = cascade::i18n::tr("Type where to save first"); }
+            else if (r.why == 2) { exportNote = cascade::i18n::tr("This radio has shown no spectrum yet, so there is nothing to save"); }
+            else { exportNote = cascade::core::formatText(cascade::i18n::tr("The file could not be written to %s"), exportTypedPath.c_str()); }
+        }
+        const RadioView& rv = selected();
+        const foxsdr::slintexport::SpectrumStore& store = spectrumStores[static_cast<std::size_t>(rv.slot)];
+        const ViewWindow cur = rv.currentView();
+        const std::string context = cascade::core::formatText(cascade::i18n::tr("Radio %d at %s, span %s: %d min stored, %.1f MB"), rv.slot + 1, fmtMHz(cur.centreHz).c_str(), spanText(cur.spanHz).c_str(),
+                                                              static_cast<int>(store.rows() * foxsdr::slintexport::kRowGapMs / 60000), static_cast<double>(store.bytes()) / 1e6);
+        const std::string sig = context + "|" + exportNote + (exportNoteBad ? "1" : "0") + (exportJob.pending() ? "w" : "i") + std::to_string(exportLengthIdx) + std::to_string(exportFormatIdx);
+        if (sig == exportContextSig) { return; }
+        exportContextSig = sig;
+        em.set_context(ss(context));
+        em.set_note(ss(exportNote));
+        em.set_note_bad(exportNoteBad);
+        em.set_working(exportJob.pending());
+        em.set_length_index(exportLengthIdx);
+        em.set_format_index(exportFormatIdx);
+    };
+
     ui->on_menu_activated([&](int id) {
         switch (id) {
             case 101: case 102: case 104: std::fprintf(stderr, "foxsdr-slint: counter scale %d: the interface-size setting of phase 2\n", id); break;
@@ -924,6 +1203,9 @@ int main(int argc, char** argv) {
             case 113: face = Face::Plain; applyFace(); break;
             case 201: case 202: case 203: traceMode = id - 201; ui->set_trace_mode(traceMode); resetTrace(selected().traceState); break;
             case 204: resetTrace(selected().traceState); break;
+            case 206: traceMode = 3; ui->set_trace_mode(3); resetTrace(selected().traceState); break;   // persistence (lane S1)
+            case 221: case 222: case 223: persistenceDecayIdx = id - 221; break;
+            case 1990: case 1991: layoutNote.clear(); layoutNoteBad = false; layoutRenaming = -1; ui->global<LayoutsModel>().set_open(true); publishLayouts(); break;
             case 211: case 212: case 213: case 214: case 215: case 216: case 217: {
                 const double presets[7] = {0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0};
                 averageLengthS = presets[id - 211];
@@ -943,6 +1225,19 @@ int main(int argc, char** argv) {
             case 604: slint::quit_event_loop(); break;
             case 701: case 702: case 703: case 704: case 705: case 706: case 707: case 708: setMode(demodOfIndex(id - 701)); break;
             default:
+                if (id >= 1000 && id < 1000 + 64) {   // a layout of the Layouts menu
+                    const std::vector<foxsdr::slintlayouts::Layout> all = layoutBook.all();
+                    if (static_cast<std::size_t>(id - 1000) < all.size()) { applyLayoutNamed(all[static_cast<std::size_t>(id - 1000)].name); }
+                    break;
+                }
+                if (id >= 9000 && id < 9000 + 64) {   // a name of a "+N" tab: tune to that mark (the radio the tab is on is selected first)
+                    const std::size_t k = static_cast<std::size_t>(id - 9000);
+                    if (k < markTabItems.size()) {
+                        if (markTabRadio > 0) { selectRadio(markTabRadio); }
+                        setFrequency(markTabItems[k].second);
+                    }
+                    break;
+                }
                 if (id >= 501 && id <= 509) {
                     tuneStepHz = kTuneSteps[static_cast<std::size_t>(id - 501)].second;
                     ui->set_tune_step_text(ss(tuneStepLabel(tuneStepHz)));
@@ -1055,6 +1350,13 @@ int main(int argc, char** argv) {
     ui->on_spectrum_wheel(wheel);
     ui->on_waterfall_wheel(wheel);
     ui->on_waterfall_panned([&](float dx) { selected().pan(dx); });
+    ui->on_mark_tab_clicked([&](int i, bool wf, float x, float y) {   // lane S1: layout One's tab
+        const auto& tabs = wf ? selected().fig.wfMarkTabs : selected().fig.markTabs;
+        if (i < 0 || static_cast<std::size_t>(i) >= tabs.size()) { return; }
+        markTabItems = tabs[static_cast<std::size_t>(i)].items;
+        markTabRadio = 0;
+        openMenu(MenuKind::MarkTab, x, y);
+    });
     ui->on_marker_hovered([&](int i) {
         if (i >= 0 && i < static_cast<int>(lists.markers.size())) {
             const auto& m = lists.markers[static_cast<std::size_t>(i)];
@@ -1087,6 +1389,14 @@ int main(int argc, char** argv) {
         wm.on_spectrum_menu_requested([&](int r, float x, float px, float py) { selectRadio(r); menuHz = viewOf(r).hzAtFrac(x); openMenu(MenuKind::Trace, px, py); });
         wm.on_waterfall_menu_requested([&](int r, float x, float px, float py) { selectRadio(r); menuHz = viewOf(r).hzAtFrac(x); openMenu(MenuKind::Marker, px, py); });
         wm.on_marker_hovered([&](int, int) {});   // a pane's marker tips: stage S6
+        wm.on_mark_tab_clicked([&](int r, int i, bool wf, float x, float y) {   // lane S1: a pane's "+N" tab (its radio is selected when a name is picked)
+            if (r < 1 || r > kMaxRadios) { return; }
+            const auto& tabs = wf ? radios.at(r - 1).fig.wfMarkTabs : radios.at(r - 1).fig.markTabs;
+            if (i < 0 || static_cast<std::size_t>(i) >= tabs.size()) { return; }
+            markTabItems = tabs[static_cast<std::size_t>(i)].items;
+            markTabRadio = r;
+            openMenu(MenuKind::MarkTab, x, y);
+        });
     }
     // ---- STAGE S4: the strip, the audio mix, the card and the status chips ----
     {
@@ -1415,6 +1725,9 @@ int main(int argc, char** argv) {
             const std::vector<float>& frame = rv.frame;
             const std::int64_t t = nowMs();
             rv.lastFrameMs = t;
+            // the waterfall export's store: one row of levels a quarter second of this radio's frames (export_logic.hpp)
+            spectrumStores[static_cast<std::size_t>(rv.slot)].push(static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()),
+                                                                   info.centreHz, info.spanHz, frame.data(), frame.size());
             rv.frameTimes.push_back(t);
             while (rv.frameTimes.size() > 2 && t - rv.frameTimes.front() > 5000) { rv.frameTimes.pop_front(); }
             const double fps = rv.frameTimes.size() >= 2 ? 1000.0 * static_cast<double>(rv.frameTimes.size() - 1) / static_cast<double>(std::max<std::int64_t>(1, rv.frameTimes.back() - rv.frameTimes.front())) : 0.0;
@@ -1424,7 +1737,8 @@ int main(int argc, char** argv) {
             const std::size_t b1 = std::max(b0 + 1, static_cast<std::size_t>(std::clamp(fracOf(cur.centreHz + cur.spanHz / 2.0, info.centreHz, info.spanHz), 0.0, 1.0) * frame.size()));
             const float* sub = frame.data() + b0;
             const std::size_t subN = std::min(b1, frame.size()) - b0;
-            const foxsdr::slinthost::TraceMode mode = traceMode == 1 ? foxsdr::slinthost::TraceMode::PeakHold : traceMode == 2 ? foxsdr::slinthost::TraceMode::Average : foxsdr::slinthost::TraceMode::Normal;
+            const foxsdr::slinthost::TraceMode mode = traceMode == 1 ? foxsdr::slinthost::TraceMode::PeakHold : traceMode == 2 ? foxsdr::slinthost::TraceMode::Average : traceMode == 3 ? foxsdr::slinthost::TraceMode::Persistence : foxsdr::slinthost::TraceMode::Normal;
+            { static const double kTau[3] = {0.3, 1.0, 3.0}; rv.traceState.decay = fps > 0 ? static_cast<float>(std::exp(-1.0 / (kTau[persistenceDecayIdx] * fps))) : 0.9f; }   // the persistence trace's fraction kept a frame
             rv.traceState.averageAlpha = static_cast<float>(fps > 0 ? 1.0 - std::exp(-1.0 / (averageLengthS * fps)) : 0.1);
             const PictureSize& px = rv.wells.size;
             paintTrace(rv.wells.traceMemory(), px.traceW, px.traceH, sub, subN, st.dbMin, st.dbMax, rv.traceState, mode,
@@ -1474,15 +1788,45 @@ int main(int argc, char** argv) {
             const std::vector<int> rows = bookmarkNameRows(names, static_cast<double>(rv.wells.size.traceW), kSpectrumCapCharPx, duties.interfaceHalf().bookmarkStackNames ? kBookmarkNameMaxRows : 1);
             for (std::size_t i = 0; i < names.size(); ++i) { fig.bookmarks.push_back({static_cast<float>(names[i].pos), names[i].label, names[i].favourite, rows[i]}); }
         }
+        int dashedSeen = 0;   // a crowd of dashed lines costs the frame (each is a stack of small rectangles, measured: 256 marks with one in five dashed took the tick interval from 33 to 40 ms): past 8 they are drawn solid
         for (const auto& m : lists.marks) {
             const double f = fracOf(m.hz, v.centreHz, v.spanHz);
             const double w = m.span && v.spanHz > 0 ? m.widthHz / v.spanHz : 0.0;
             if (f + w < 0 || f > 1) { continue; }
             const std::uint8_t a = static_cast<std::uint8_t>(std::max<std::uint32_t>(0x60, m.rgba & 0xffu));
             FigureMark fm{static_cast<float>(f), static_cast<float>(w), m.name, 0, 0, 0, 0, m.dashed};
+            fm.hz = m.hz;
+            if (fm.dashed && ++dashedSeen > 8) { fm.dashed = false; }
+            fm.tip = m.plugin;   // (the module's name for now; the layout below turns it into the tooltip of a name that is drawn)
             if (m.rgba != 0) { fm.a = a; fm.r = static_cast<std::uint8_t>(m.rgba >> 24); fm.g = static_cast<std::uint8_t>(m.rgba >> 16); fm.b = static_cast<std::uint8_t>(m.rgba >> 8); }
             fig.marks.push_back(fm);
             if (!m.spectrumOnly) { fig.wfMarks.push_back(fm); }
+        }
+        {   // THE NAMES OF PLUGIN MARKS (lane S1, mark_layout.hpp): stacked into rows, what fits no row counted into "+N" tabs; a name that is drawn gets its tooltip (what it is, its frequency, the plugin it came from)
+            const int specRows = std::clamp((plot.h - 24) / 14, 1, 3), wfRows = plot.h >= 200 ? 3 : 2;
+            const auto place = [&](std::vector<FigureMark>& marks, int rows, std::vector<PaneFigures::MarkTabFig>& tabs) {
+                std::vector<foxsdr::slintmarks::MarkName> names;
+                names.reserve(marks.size());
+                for (const FigureMark& m : marks) { names.push_back({m.pos, foxsdr::slintmarks::characterCount(m.label)}); }
+                const foxsdr::slintmarks::MarkLayout lay = foxsdr::slintmarks::declutter(names, plot.w, kSpectrumCapCharPx, rows);
+                for (std::size_t i = 0; i < marks.size(); ++i) {
+                    FigureMark& m = marks[i];
+                    m.row = lay.row[i];
+                    const std::string plugin = m.tip;
+                    m.tip.clear();
+                    if (m.row >= 0) { m.tip = foxsdr::slintmarks::tooltipText(m.label, fmtMHz(m.hz), plugin.empty() ? std::string() : cascade::core::formatText(cascade::i18n::tr("from %s"), plugin.c_str())); }
+                }
+                for (const auto& t : lay.tabs) {
+                    PaneFigures::MarkTabFig tab;
+                    tab.pos = static_cast<float>(t.pos);
+                    tab.count = static_cast<int>(t.items.size());
+                    tab.row = rows;
+                    for (const std::size_t i : t.items) { tab.items.emplace_back(marks[i].label, marks[i].hz); }
+                    tabs.push_back(std::move(tab));
+                }
+            };
+            place(fig.marks, specRows, fig.markTabs);
+            place(fig.wfMarks, wfRows, fig.wfMarkTabs);
         }
         for (const auto& m : lists.markers) {
             const double f = fracOf(m.hz, v.centreHz, v.spanHz);
@@ -1537,11 +1881,16 @@ int main(int argc, char** argv) {
             }
         }
         {
-            const auto toMark = [](const FigureMark& m) { return PluginMark{m.pos, m.width, ss(m.label), slint::Color::from_argb_uint8(m.a, m.r, m.g, m.b), m.dashed}; };
-            std::string sig; for (const auto& m : fig.marks) { sig += fmt("%.5f|", m.pos) + fmt("%.5f|", m.width) + m.label + (m.dashed ? "d" : "") + ";"; }
-            std::string wsig; for (const auto& m : fig.wfMarks) { wsig += fmt("%.5f|", m.pos) + fmt("%.5f|", m.width) + ";"; }
+            const auto toMark = [](const FigureMark& m) { return PluginMark{m.pos, m.width, ss(m.label), slint::Color::from_argb_uint8(m.a, m.r, m.g, m.b), m.dashed, m.row, ss(m.tip)}; };
+            const auto toTab = [](const PaneFigures::MarkTabFig& t) { return MarkTab{t.pos, t.count, t.row}; };
+            std::string sig; for (const auto& m : fig.marks) { sig += fmt("%.5f|", m.pos) + fmt("%.5f|", m.width) + m.label + (m.dashed ? "d" : "") + std::to_string(m.row) + m.tip + ";"; }
+            std::string wsig; for (const auto& m : fig.wfMarks) { wsig += fmt("%.5f|", m.pos) + fmt("%.5f|", m.width) + m.label + std::to_string(m.row) + ";"; }
+            std::string tsig; for (const auto& t : fig.markTabs) { tsig += fmt("%.5f|", t.pos) + std::to_string(t.count) + ";"; }
+            std::string wtsig; for (const auto& t : fig.wfMarkTabs) { wtsig += fmt("%.5f|", t.pos) + std::to_string(t.count) + ";"; }
             if (psigs.changed("marks", sig)) { std::vector<PluginMark> marks; for (const auto& m : fig.marks) { marks.push_back(toMark(m)); } ui->set_marks(std::make_shared<slint::VectorModel<PluginMark>>(std::move(marks))); }
             if (psigs.changed("wfmarks", wsig)) { std::vector<PluginMark> wfMarks; for (const auto& m : fig.wfMarks) { wfMarks.push_back(toMark(m)); } ui->set_wf_marks(std::make_shared<slint::VectorModel<PluginMark>>(std::move(wfMarks))); }
+            if (psigs.changed("marktabs", tsig)) { std::vector<MarkTab> tabs; for (const auto& t : fig.markTabs) { tabs.push_back(toTab(t)); } ui->set_mark_tabs(std::make_shared<slint::VectorModel<MarkTab>>(std::move(tabs))); }
+            if (psigs.changed("wfmarktabs", wtsig)) { std::vector<MarkTab> tabs; for (const auto& t : fig.wfMarkTabs) { tabs.push_back(toTab(t)); } ui->set_wf_mark_tabs(std::make_shared<slint::VectorModel<MarkTab>>(std::move(tabs))); }
         }
         {
             std::string sig; for (const auto& m : fig.markers) { sig += fmt("%.5f|", m.pos) + m.label + ";"; }
@@ -1907,6 +2256,7 @@ int main(int argc, char** argv) {
         systemBank.publish(state);
         scopeBank.publish(state, static_cast<double>(nowMs()) / 1000.0);
         {   // the 3D surface of the waterfall: repainted only while it is the page on screen and something it shows moved
+            publishExport();   // lane S1: a finished file, and what the selected radio's store holds
             foxsdr::slintview3d::Wf3dContext wf3d;
             wf3d.visible = ui->get_view_index() == 0;
             wf3d.running = (state.flags & FOXAPI_RX_RUNNING) != 0;
@@ -2029,6 +2379,115 @@ int main(int argc, char** argv) {
             return "update.shown|headline|note|primary|withdrawn, not " + name;
         }
         if (name.rfind("fact.", 0) == 0) { return world.fact(name.c_str(), out) ? std::string() : "no fact " + name; }
+        // LANE S1 read-backs. layouts.count (the user's own), layouts.names (all, "|" between), layouts.open (the sheet), layouts.note; layout.<bank|sections|rail|view|split|workspace|link|wf3d|selected|tuned|mode>
+        // (the window as a layout would capture it NOW); export.<note|working|rows|segments|path|length|format> (the selected radio's store and the last file); marks.[r<n>.]<named|tabs|total|wfnamed|wftabs|tabitems0>
+        // (the names of plugin marks as laid out: drawn, "+N" tabs, all marks, and how many names tab 0 stands for); trace.<mode|decay|density> (the trace display: 0 normal 1 peak 2 average 3 persistence)
+        if (name.rfind("layouts.", 0) == 0) {
+            const std::string what = name.substr(8);
+            if (what == "count") { out = std::to_string(layoutBook.user().size()); return std::string(); }
+            if (what == "names") { std::string j; for (const auto& l : layoutBook.all()) { j += (j.empty() ? "" : "|") + l.name; } out = j; return std::string(); }
+            if (what == "open") { out = ui->global<LayoutsModel>().get_open() ? "1" : "0"; return std::string(); }
+            if (what == "note") { out = layoutNote; return std::string(); }
+            return "layouts.<count|names|open|note>, not " + name;
+        }
+        if (name.rfind("layout.", 0) == 0) {
+            const std::string what = name.substr(7);
+            const foxsdr::slintlayouts::Window w = layoutWindow();
+            if (what == "bank") { out = std::to_string(w.bank); }
+            else if (what == "sections") { out = std::to_string(w.sections); }
+            else if (what == "rail") { out = w.railFolded ? "1" : "0"; }
+            else if (what == "view") { out = std::to_string(w.view); }
+            else if (what == "split") { out = std::to_string(w.splitPct); }
+            else if (what == "workspace") { out = std::to_string(w.workspace); }
+            else if (what == "link") { out = w.link ? "1" : "0"; }
+            else if (what == "wf3d") { out = w.wf3d ? "1" : "0"; }
+            else if (what == "selected") { out = std::to_string(w.selected); }
+            else if (what == "tuned") { out = std::to_string(w.tunedHz); }
+            else if (what == "mode") { out = std::to_string(w.mode); }
+            else { return "layout.<bank|sections|rail|view|split|workspace|link|wf3d|selected|tuned|mode>, not " + name; }
+            return std::string();
+        }
+        if (name.rfind("export.", 0) == 0) {
+            const std::string what = name.substr(7);
+            const foxsdr::slintexport::SpectrumStore& store = spectrumStores[static_cast<std::size_t>(radios.selected)];
+            if (what == "note") { out = exportNote; }
+            else if (what == "working") { out = exportJob.pending() ? "1" : "0"; }
+            else if (what == "rows") { out = std::to_string(store.rows()); }
+            else if (what == "segments") { out = std::to_string(store.segments()); }
+            else if (what == "path") { out = std::string(ui->global<ExportModel>().get_path()); }
+            else if (what == "length") { out = std::to_string(exportLengthIdx); }
+            else if (what == "format") { out = std::to_string(exportFormatIdx); }
+            else if (what == "lastpath") { out = exportLastPath; }
+            else if (what == "fileinfo" || what == "peakoffset") {
+                // A BOUNDED RUN'S read-back of the last file written: fileinfo = what kind of file and how much is in it, peakoffset = the strongest column of the newest row of a FoxSDR spectrum file, in Hz
+                // from the segment's centre (the carrier's place, as a file reader would find it)
+                std::vector<std::uint8_t> bytes;
+                if (!exportLastPath.empty()) {
+                    if (std::FILE* f = std::fopen(exportLastPath.c_str(), "rb")) {
+                        std::uint8_t buf[8192];
+                        std::size_t n;
+                        while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) { bytes.insert(bytes.end(), buf, buf + n); }
+                        std::fclose(f);
+                    }
+                }
+                if (bytes.empty()) { return std::string("no file has been written"); }
+                const bool fsw = bytes.size() > 4 && std::memcmp(bytes.data(), "FXSP", 4) == 0;
+                const bool png = bytes.size() > 8 && bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G';
+                if (what == "peakoffset") {
+                    if (!fsw) { return std::string("the last file is not a FoxSDR spectrum file"); }
+                    const auto snap = foxsdr::slintexport::readBinary(bytes);
+                    if (!snap || snap->empty()) { return std::string("the file cannot be read back"); }
+                    const foxsdr::slintexport::Segment& seg = snap->segments.back();
+                    const std::size_t row = seg.rows() - 1;
+                    std::uint32_t best = 0;
+                    for (std::uint32_t c = 1; c < seg.columns; ++c) { if (seg.levels[row * seg.columns + c] > seg.levels[row * seg.columns + best]) { best = c; } }
+                    out = fmt("%.0f", (static_cast<double>(best) + 0.5) * seg.spanHz / static_cast<double>(seg.columns) - seg.spanHz / 2.0);
+                } else if (png) {
+                    out = "png " + foxsdr::slintexport::pngText(bytes, "FoxSDR");
+                } else if (fsw) {
+                    const auto snap = foxsdr::slintexport::readBinary(bytes);
+                    out = snap ? "fsw rows=" + std::to_string(snap->rows()) + " segments=" + std::to_string(snap->segments.size()) : std::string("fsw unreadable");
+                } else {
+                    std::size_t rows = 0;
+                    std::size_t at = 0;
+                    while (at < bytes.size()) {   // lines that are not '#' header lines
+                        std::size_t end = at;
+                        while (end < bytes.size() && bytes[end] != 10) { ++end; }
+                        if (end > at && bytes[at] != '#') { ++rows; }
+                        at = end + 1;
+                    }
+                    out = "csv rows=" + std::to_string(rows);
+                }
+            }
+            else { return "export.<note|working|rows|segments|path|length|format|lastpath|fileinfo|peakoffset>, not " + name; }
+            return std::string();
+        }
+        if (name.rfind("marks.", 0) == 0) {
+            std::string what = name.substr(6);
+            int slot = radios.selected;
+            if (what.size() > 2 && what[0] == 'r' && std::isdigit(static_cast<unsigned char>(what[1])) != 0 && what.find('.') != std::string::npos) {
+                slot = std::clamp(std::atoi(what.c_str() + 1) - 1, 0, kMaxRadios - 1);
+                what = what.substr(what.find('.') + 1);
+            }
+            const PaneFigures& f = radios.at(slot).fig;
+            const auto drawn = [](const std::vector<FigureMark>& v) { int n = 0; for (const auto& m : v) { n += m.row >= 0 ? 1 : 0; } return n; };
+            if (what == "named") { out = std::to_string(drawn(f.marks)); }
+            else if (what == "tabs") { out = std::to_string(f.markTabs.size()); }
+            else if (what == "total") { out = std::to_string(f.marks.size()); }
+            else if (what == "wfnamed") { out = std::to_string(drawn(f.wfMarks)); }
+            else if (what == "wftabs") { out = std::to_string(f.wfMarkTabs.size()); }
+            else if (what == "tabitems0") { out = std::to_string(f.markTabs.empty() ? 0 : f.markTabs[0].items.size()); }
+            else { return "marks.[r<n>.]<named|tabs|total|wfnamed|wftabs|tabitems0>, not " + name; }
+            return std::string();
+        }
+        if (name.rfind("trace.", 0) == 0) {
+            const std::string what = name.substr(6);
+            if (what == "mode") { out = std::to_string(traceMode); }
+            else if (what == "decay") { out = std::to_string(persistenceDecayIdx); }
+            else if (what == "density") { std::size_t n = 0; for (const float d : selected().traceState.density) { n += d > 0.0f ? 1 : 0; } out = std::to_string(n); }
+            else { return "trace.<mode|decay|density>, not " + name; }
+            return std::string();
+        }
         // figure.<what> (lane S1): the One layout's picture as the host laid it out - plotheight / plotwidth (the pixels the window reports for the spectrum's plot, which the dB labels and the frequency
         // ticks are laid out over), dbticks (how many dB labels), dbpitch (the smallest gap between two of them in pixels, 0 with fewer than two)
         if (name.rfind("figure.", 0) == 0) {

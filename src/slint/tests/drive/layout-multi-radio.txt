@@ -1,0 +1,31 @@
+#! frames=560 size=1280x720
+# layout-multi-radio (lane S1, item 2): with four radios open a saved layout brings back the workspace layout (2 x 2) and the selected radio; it does not capture which radios are open (the four stay
+# open) and it starts or stops none of them.
+10 state workspace.radios == 1
++1 radio add 2 60000
++1 radio add 3 90000
++1 radio add 4 120000
++40 state workspace.radios == 4
++1 click "2 x 2"
++20 state workspace.layout == 2
++1 click "Select Radio 3"
++10 state workspace.selected == 3
++1 choose "Layouts" "Manage layouts..."
++5 state layouts.open == 1
++1 type "Layout name" "Quad"
++1 click "Save the current layout"
++3 state layouts.count == 1
+# the arrangement changes: One layout, radio 1
++1 click "One"
++10 state workspace.layout == 0
++1 click "Controls follow Radio 1"
++10 state workspace.selected == 1
++1 click "Apply layout Quad"
++10 state workspace.layout == 2
+state workspace.selected == 3
+state workspace.radios == 4
+state workspace.r.1.running == 1
+state workspace.r.2.running == 1
+state workspace.r.3.running == 1
+state workspace.r.4.running == 1
++1 shot "layout-multi-radio.png"

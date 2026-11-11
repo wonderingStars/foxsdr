@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2190 | 564 | 92 | 1534 | 0 |
+| 2210 | 582 | 92 | 1536 | 0 |
 
-Of the 1303 rows that are controls (the 887 readout-like rows left out): 564 asserted, 92 driven without a read-back, 647 not drivable.
+Of the 1323 rows that are controls (the 887 readout-like rows left out): 582 asserted, 92 driven without a read-back, 649 not drivable.
 
-NOT DRIVABLE by reason: readout 887, other 217, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 887, other 219, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -202,7 +202,7 @@ NOT DRIVABLE by reason: readout 887, other 217, needs a signal (no fixture) 120,
 | 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 96 | 48 | 0 | 48 | 35 | 0 |
 | 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 107 | 70 | 9 | 28 | 19 | 0 |
 | SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md) | 6 | 5 | 1 | 0 | 0 | 0 |
-| Lane S1 (docs/multi-radio-records/screen-s1.md; rows 4500 and up are this lane's) | 3 | 2 | 0 | 1 | 0 | 0 |
+| Lane S1 (docs/multi-radio-records/screen-s1.md; rows 4500 and up are this lane's) | 23 | 20 | 0 | 3 | 0 | 0 |
 
 ## Every row
 
@@ -3305,4 +3305,24 @@ NOT DRIVABLE by reason: readout 887, other 217, needs a signal (no fixture) 120,
 | 4500 | Status bar: Add a radio, Request a feature and Report a bug / dislike keep their words and sit wholly inside the window | behaviour | DRIVEN+ASSERTED | status-bar-keys | expect the three keys' right edge <= the window's width, with four radios open, in English at 1280 x 720; the same in French (the longest words: Signaler un bug / une critique); the same at 800 x 560 with one radio and with four; the same in Japanese at 800 x 560 |
 | 4501 | Status bar: a chip whose cell does not fit is not drawn (the first chip always is) | behaviour | NOT DRIVABLE | - | no state names the chips that are drawn and nothing is operated; the clip sweep (EDGE items of the status bar) and the screenshots of status-bar-keys-800 show it |
 | 4502 | Spectrum (layout One): the dB labels are laid out over the plot the window gives the spectrum and are at least 14 px apart | behaviour | DRIVEN+ASSERTED | plot-db-labels-800 | state figure.plotheight < 330, figure.dbticks >= 2, figure.dbpitch >= 14 at 800 x 560; the same at 1280 x 720 |
+| 4503 | Title bar: Layouts key (opens the menu of layouts) | key | DRIVEN+ASSERTED | layout-airband | choose Layouts > Airband; the window's bank, sections, split and workspace layout read back |
+| 4504 | Layouts menu: one item per layout (applies it) | menu | DRIVEN+ASSERTED | layout-airband | the menu item applies the layout; the radio keeps running on the same frequency |
+| 4505 | Layouts menu: Save the current layout... / Manage layouts... | menu | DRIVEN+ASSERTED | layout-hfdx | choose Layouts > Manage layouts... opens the sheet (layouts.open == 1) |
+| 4506 | Layouts sheet: Apply (every layout) | key | DRIVEN+ASSERTED | layout-hfdx | click Apply layout Airband / HF DX; read back as layout.bank, layout.sections, layout.split, layout.workspace; Apply of a layout that names a radio that is not open: the note says so and nothing is started; with four radios the layout brings back the workspace layout and the selected radio |
+| 4507 | Layouts sheet: Rename / Done (the user's own layouts) | key | DRIVEN+ASSERTED | layout-save | Rename layout > type > Finish renaming; a stock name is refused |
+| 4508 | Layouts sheet: Delete (the user's own layouts) | key | DRIVEN+ASSERTED | layout-save | Delete layout; layouts.count and layouts.names read back |
+| 4509 | Layouts sheet: layout name, Include tuning, Save the current layout | field | DRIVEN+ASSERTED | layout-save | type the name, Save the current layout; refusals for a stock name and an empty one; the settings text holds the entry (workspace.savedview) |
+| 4510 | Layouts sheet: the sentence under the form | message | DRIVEN+ASSERTED | layout-save | state layouts.note contains the sentence |
+| 4511 | TOOLS bank: Export section | section | DRIVEN+ASSERTED | export-wf | the section is opened by the window's header; its keys are operated |
+| 4512 | Export: Save to (folder and file name) | field | DRIVEN+ASSERTED | export-wf | type Save to; a blank path is refused; a repeated path gives the (2) file |
+| 4513 | Export: Data length (1, 5, 15, 60 minutes) | key | DRIVEN+ASSERTED | export-wf | click Data length 15 minutes; state export.length == 2 |
+| 4514 | Export: Data format (CSV, FSW) | key | DRIVEN+ASSERTED | export-wf | click FSW / CSV; state export.format |
+| 4515 | Export: Save waterfall picture | key | DRIVEN+ASSERTED | export-wf | click Save waterfall picture; the host reads the file back (export.fileinfo: a PNG whose text chunk names the radio, centre and span) |
+| 4516 | Export: Save waterfall data | key | DRIVEN+ASSERTED | export-wf | click Save waterfall data; the spectrum file's strongest column is the carrier within one column (export.peakoffset), the CSV's rows are counted |
+| 4517 | Export: what the store holds and what the last file did | readout | DRIVEN+ASSERTED | export-wf | state export.note contains the file name; state export.rows |
+| 4518 | Spectrum toolbar: Trace Persistence | key | DRIVEN+ASSERTED | trace-persistence | click Persistence; state trace.mode == 3, trace.density > 100; Normal clears it |
+| 4519 | Trace menu (right-click): Persistence and Persistence decay (Fast, Medium, Slow) | menu | NOT DRIVABLE | - | the Trace menu is the spectrum's right-click menu, which the scripted input cannot open; the decay arithmetic is held by test_slint_host_persistence |
+| 4520 | Plugin marks: the names are stacked into rows instead of drawn over each other (spectrum and waterfall) | behaviour | DRIVEN+ASSERTED | marks-many | 256 made-up marks: state marks.named, marks.tabs, marks.wfnamed, marks.wftabs read back; marks-few: four marks, no tab |
+| 4521 | Plugin marks: names that fit no row are counted into a "+N" tab; a click lists them and a pick tunes there | key | DRIVEN+ASSERTED | marks-many | the "+N" tab is clicked and a name picked (see the script) |
+| 4522 | Plugin marks: a name's tooltip (the name, its frequency, the plugin it came from) | tooltip | NOT DRIVABLE | - | a tooltip appears after the pointer rests on a name; the scripted input has no hover verb; the text rule is held by test_slint_host_marks |
 

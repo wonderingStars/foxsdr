@@ -1,0 +1,16 @@
+#! frames=500 size=1280x720 FOXSDR_SLINT_TEST_MARKS=256
+# marks-many (lane S1, item 4): 256 made-up plugin marks (fed below the plugin ABI, which caps a plugin at 64) crowd the 2 MHz window. Their names are stacked into rows, what fits no row is counted into
+# "+N" tabs, on the spectrum and on the waterfall; every mark keeps its line. The names that are drawn never overlap (the unit test holds that for the layout rule); here the state is read back.
+10 state marks.total == 256
++10 state marks.named >= 10
+state marks.named < 256
+state marks.tabs >= 1
+state marks.wfnamed >= 10
+state marks.wftabs >= 1
+state marks.tabitems0 >= 2
++1 shot "marks-many.png"
+# the biggest "+N" tab on the spectrum lists the 89 names that fit no row (the made-up marks are a fixed sequence, so the count and the names are always the same at this size); picking one tunes there
+state tunedHz == 100300000
++1 choose "Show the 89 names that did not fit"#1 "STN114 Fr"
++8 state tunedHz != 100300000
++1 shot "marks-many-picked.png"

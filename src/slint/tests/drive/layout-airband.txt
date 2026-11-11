@@ -1,0 +1,19 @@
+#! frames=260 size=1280x720
+# layout-airband (lane S1, item 2): the Layouts key in the title bar opens a menu; "Airband" arranges the window (the TOOLS bank with the Airband section open, a wide waterfall, side by side) and
+# NOTHING ELSE: the radio keeps running on the same frequency in the same mode. The window starts on the SIGNAL bank.
+10 state layout.bank == 0
+state layouts.count == 0
+state layouts.names == "Airband|HF DX"
+state running == 1
+state tunedHz == 100300000
++1 choose "Layouts" "Airband"
++6 state layout.bank == 2
+state layout.sections == 16
+state layout.split == 40
+state workspace.layout == 1
+state layouts.note contains "Airband"
+# the layout started nothing, stopped nothing and retuned nothing
+state running == 1
+state tunedHz == 100300000
+state workspace.radios == 1
++1 shot "layout-airband.png"
