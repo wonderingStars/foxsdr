@@ -142,7 +142,7 @@ std::string makeEnvelope(const Ed25519Seed& seed, const std::string& payload) {
     j["keyId"] = keyIdOf(ed25519PublicKey(seed));
     j["payload"] = base64Encode(payload);
     j["sig"] = base64Encode(std::string(reinterpret_cast<const char*>(sig.data()), sig.size()));
-    return j.dump();
+    return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 std::vector<Ed25519PublicKey> ownerTrustedKeys() {
