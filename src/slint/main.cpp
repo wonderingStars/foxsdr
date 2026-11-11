@@ -2155,7 +2155,7 @@ int main(int argc, char** argv) {
             else if (what == "linked") { out.clear(); for (int s = 0; s < kMaxRadios; ++s) { if (linkGroup.linked(s, workspace.mask())) { if (!out.empty()) { out += ","; } out += std::to_string(s + 1); } } }
             else if (what.rfind("link.", 0) == 0) { out = std::to_string(static_cast<int>(linkGroup.stateOf(slotOf(what.substr(5)), workspace.mask()))); }
             else if (what.rfind("intended.", 0) == 0) { out = fmt("%.0f", linkGroup.intendedHz(slotOf(what.substr(9)))); }
-            else if (what == "pagekeys") { out = std::to_string(ui->global<WorkspaceModel>().get_page_labels()->row_count()); }   // the page keys the bar has (0 where One is shown)
+            else if (what == "pagekeys") { const auto pl = ui->global<WorkspaceModel>().get_page_labels(); out = std::to_string(pl ? pl->row_count() : 0); }   // (no model has been set until the first page key is offered)   // the page keys the bar has (0 where One is shown)
             else if (what == "together") { out = togetherNote; }
             else if (what == "togetherms") {   // the engine-clock spread of the first frames of the last Start together, in ms ("" until one has been measured)
                 const std::size_t at = togetherNote.find("engineSpreadMs=");

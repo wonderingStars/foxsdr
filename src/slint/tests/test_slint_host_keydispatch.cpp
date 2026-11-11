@@ -268,6 +268,16 @@ void radioKeys() {
         const KeyBindingsModel m = readKeyBindings(iface, o);
         CHECK(m.action_count == 42 && m.groups.back().heading == "Radio" && m.groups.back().rows.size() == 10);
         CHECK(m.groups.back().rows[0].action == "Select Radio 1" && m.groups.back().rows[0].chord == "Ctrl+1" && m.groups.back().rows[9].chord == "Alt+PageDown" && m.clash_count == 0);
+    // THE CLASH TEXT of a row names the other row (a name longer than a short-string buffer, so a std::string passed where a C string is meant fails here: the host crashed at start with a saved table
+    // that put two actions on F2 - found by test_slint_config_roundtrip): "mute" saved on Ctrl+Up clashes with "Tune up one step (10 kHz)" and says so, and a row of the new group names its clash the same way
+    {
+        cascade::core::AppConfig clash;
+        clash.keyBindings = {"mute=Ctrl+Up", "selectRadio2=Ctrl+1"};
+        const KeyBindingsModel cm = readKeyBindings(clash, o);
+        std::string muteClash, tuneClash, radio1Clash;
+        for (const KeyGroup& g : cm.groups) { for (const KeyRow& r : g.rows) { if (r.id == "mute") { muteClash = r.clash; } if (r.id == "tuneStepUp") { tuneClash = r.clash; } if (r.id == "selectRadio1") { radio1Clash = r.clash; } } }
+        CHECK(muteClash == "also Tune up one step (10 kHz)" && tuneClash == "also Mute the sound" && radio1Clash == "also Select Radio 2" && cm.clash_count == 4);
+    }
     }
 
 

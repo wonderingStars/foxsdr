@@ -853,7 +853,8 @@ KeyBindingsModel readKeyBindings(const cc::AppConfig& iface, const ReadOptions& 
         r.chord = formatChord(t[static_cast<std::size_t>(i)]);
         r.capturing = !o.capturing_id.empty() && o.capturing_id == a.id;
         const int other = clashOf(t, i);
-        if (other >= 0) { r.clash = cc::formatText(tr("also %s"), keyActionName(other)); }
+        // (a std::string through a C vararg crashed the host at start with a clashing saved table: found by test_slint_config_roundtrip, whose seed holds two actions on F2)
+        if (other >= 0) { r.clash = cc::formatText(tr("also %s"), keyActionName(other).c_str()); }
         m.groups.back().rows.push_back(std::move(r));
     }
     m.action_count = kKeyActionCount;
