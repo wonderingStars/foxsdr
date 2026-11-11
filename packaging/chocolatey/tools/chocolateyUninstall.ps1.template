@@ -1,0 +1,19 @@
+$ErrorActionPreference = 'Stop'
+
+# Setup registers "FoxSDR <version>" under Programs and Features (UninstallDisplayName in installer/cascade.iss) and its
+# UninstallString is the quoted path of unins000.exe. No /CLEANDATA: settings, plugins and caches stay, as for any
+# silent uninstall (the setup keeps them unless told to remove them).
+[array]$key = Get-UninstallRegistryKey -SoftwareName 'FoxSDR*'
+
+if ($key.Count -eq 1) {
+  $file = $key[0].UninstallString.Trim('"')
+  Uninstall-ChocolateyPackage -PackageName $env:ChocolateyPackageName -FileType 'exe' `
+    -SilentArgs '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -File $file -ValidExitCodes @(0)
+}
+elseif ($key.Count -eq 0) {
+  Write-Warning "$env:ChocolateyPackageName has already been uninstalled by other means."
+}
+else {
+  Write-Warning "$($key.Count) matches found; nothing was uninstalled. Matches:"
+  $key | ForEach-Object { Write-Warning "- $($_.DisplayName)" }
+}

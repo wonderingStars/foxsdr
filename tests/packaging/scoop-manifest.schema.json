@@ -1,0 +1,163 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "Written for FoxSDR's own tests from the Scoop manifest facts read on 2026-11-11 in ScoopInstaller/Scoop's schema.json (top-level property list, required = version, homepage, license, hash and license forms, architecture keys, autoupdate keys) and the App Manifests wiki page. It is NOT a copy of that file. A key the Scoop page did not list is refused here, on purpose: a typo in a manifest key is silently ignored by Scoop.",
+  "type": "object",
+  "required": ["version", "homepage", "license"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "##": { "type": ["string", "array"] },
+    "_comment": { "type": ["string", "array"] },
+    "version": { "type": "string", "minLength": 1, "pattern": "^[^\\s]+$" },
+    "description": { "type": "string", "minLength": 1 },
+    "homepage": { "type": "string", "pattern": "^https?://" },
+    "license": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "required": ["identifier"],
+          "additionalProperties": false,
+          "properties": {
+            "identifier": { "type": "string", "minLength": 1 },
+            "url": { "type": "string", "pattern": "^https?://" }
+          }
+        }
+      ]
+    },
+    "architecture": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "32bit": { "$ref": "#/definitions/architecture" },
+        "64bit": { "$ref": "#/definitions/architecture" },
+        "arm64": { "$ref": "#/definitions/architecture" }
+      }
+    },
+    "url": { "$ref": "#/definitions/uriOrArrayOfUris" },
+    "hash": { "$ref": "#/definitions/hash" },
+    "innosetup": { "type": "boolean" },
+    "bin": { "type": ["string", "array"] },
+    "shortcuts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "array",
+        "minItems": 2,
+        "items": { "type": "string", "minLength": 1 }
+      }
+    },
+    "persist": { "type": ["string", "array"] },
+    "notes": { "type": ["string", "array"] },
+    "depends": { "type": ["string", "array"] },
+    "suggest": { "type": "object" },
+    "env_add_path": { "type": ["string", "array"] },
+    "env_set": { "type": "object" },
+    "extract_dir": { "type": ["string", "array"] },
+    "extract_to": { "type": ["string", "array"] },
+    "installer": { "type": "object" },
+    "uninstaller": { "type": "object" },
+    "pre_install": { "type": ["string", "array"] },
+    "post_install": { "type": ["string", "array"] },
+    "pre_uninstall": { "type": ["string", "array"] },
+    "post_uninstall": { "type": ["string", "array"] },
+    "psmodule": { "type": "object" },
+    "cookie": { "type": "object" },
+    "checkver": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "properties": {
+            "github": { "type": "string", "pattern": "^https?://" },
+            "url": { "type": "string" },
+            "regex": { "type": "string" },
+            "re": { "type": "string" },
+            "jsonpath": { "type": "string" },
+            "jp": { "type": "string" },
+            "xpath": { "type": "string" },
+            "reverse": { "type": "boolean" },
+            "replace": { "type": "string" },
+            "useragent": { "type": "string" },
+            "script": { "type": ["string", "array"] },
+            "sourceforge": { "type": ["string", "object"] }
+          }
+        }
+      ]
+    },
+    "autoupdate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "32bit": { "$ref": "#/definitions/autoupdateArchitecture" },
+            "64bit": { "$ref": "#/definitions/autoupdateArchitecture" },
+            "arm64": { "$ref": "#/definitions/autoupdateArchitecture" }
+          }
+        },
+        "bin": { "type": ["string", "array"] },
+        "env_add_path": { "type": ["string", "array"] },
+        "env_set": { "type": "object" },
+        "extract_dir": { "type": ["string", "array"] },
+        "hash": { "type": ["string", "object", "array"] },
+        "installer": { "type": "object" },
+        "license": { "type": ["string", "object"] },
+        "notes": { "type": ["string", "array"] },
+        "persist": { "type": ["string", "array"] },
+        "psmodule": { "type": "object" },
+        "shortcuts": { "type": "array" },
+        "url": { "type": ["string", "array"] }
+      }
+    }
+  },
+  "definitions": {
+    "hashString": {
+      "type": "string",
+      "pattern": "^(?:[a-fA-F0-9]{64}|(?:sha1|sha256|sha512|md5):[a-fA-F0-9]+)$"
+    },
+    "hash": {
+      "oneOf": [
+        { "$ref": "#/definitions/hashString" },
+        { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/definitions/hashString" } }
+      ]
+    },
+    "uri": { "type": "string", "pattern": "^https?://[^\\s$]+$" },
+    "uriOrArrayOfUris": {
+      "oneOf": [
+        { "$ref": "#/definitions/uri" },
+        { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/definitions/uri" } }
+      ]
+    },
+    "architecture": {
+      "type": "object",
+      "properties": {
+        "url": { "$ref": "#/definitions/uriOrArrayOfUris" },
+        "hash": { "$ref": "#/definitions/hash" },
+        "bin": { "type": ["string", "array"] },
+        "checkver": { "type": ["string", "object"] },
+        "extract_dir": { "type": ["string", "array"] },
+        "installer": { "type": "object" },
+        "shortcuts": { "type": "array" },
+        "uninstaller": { "type": "object" },
+        "pre_install": { "type": ["string", "array"] },
+        "post_install": { "type": ["string", "array"] },
+        "pre_uninstall": { "type": ["string", "array"] },
+        "post_uninstall": { "type": ["string", "array"] }
+      }
+    },
+    "autoupdateArchitecture": {
+      "type": "object",
+      "properties": {
+        "url": { "type": ["string", "array"] },
+        "hash": { "type": ["string", "object", "array"] },
+        "bin": { "type": ["string", "array"] },
+        "extract_dir": { "type": ["string", "array"] },
+        "installer": { "type": "object" },
+        "shortcuts": { "type": "array" }
+      }
+    }
+  }
+}
