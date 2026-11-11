@@ -261,6 +261,29 @@ int main() {
         CHECK(s.errors.size() == 2 && s.errors[0].find("line 4") != std::string::npos && s.errors[1].find("line 5") != std::string::npos);
         CHECK(s.steps.size() == 3);
     }
+    // CHORDS (screen stage S5): ctrl+ shift+ alt+, in that order, once each, in front of a named key, a function key or one letter or digit: ctrl+pagedown, alt+pageup, ctrl+8, ctrl+shift+f5; refused: a chord with
+    // no key, the modifiers twice or out of order, an unknown name, a chord of a symbol
+    {
+        const Script s = parseInputScript("1 key alt+pageup\nkey alt+pagedown\nkey ctrl+8\nkey ctrl+pagedown\nkey ctrl+shift+f5\nkey pageup\nkey home\nkey end\nkey shift+alt+x\n");
+        CHECK(s.errors.empty() && s.steps.size() == 9);
+        CHECK(s.steps.size() == 9 && s.steps[0].text == "alt+pageup" && s.steps[3].text == "ctrl+pagedown" && s.steps[4].text == "ctrl+shift+f5" && s.steps[5].text == "pageup");
+        const Script bad = parseInputScript("1 key alt+\nkey ctrl+ctrl+a\nkey alt+ctrl+a\nkey ctrl+nokey\nkey alt+!\nkey ctrl+f13\nkey shift+ctrl+a\n");
+        CHECK(bad.errors.size() == 7 && bad.steps.empty());
+    }
+    // THE `radio range` VERB (screen stage S5): a made-up tuning range for Link tuning, radio 1 to 8, low then high in Hz, low not above high; 0 0 takes it away
+    {
+        const Script s = parseInputScript("1 radio range 2 88000000 108000000\nradio range 1 0 0\nradio range 0 1 2\nradio range 2 5\nradio range 2 9 3\nradio range 2 x y\nradio range 9 1 2\nradio range 3 1 2 3\n");
+        CHECK(s.steps.size() == 2 && s.errors.size() == 6);
+        CHECK(s.steps.size() == 2 && s.steps[0].verb == Verb::Radio && s.steps[0].label == "range" && s.steps[0].radioNo == 2 && s.steps[0].number == 88000000 && s.steps[0].number2 == 108000000);
+        struct RangeTarget : FakeTarget {
+            std::string radio(const std::string& what, int n, double lo, double hi) override { calls.push_back("radio " + what + " " + std::to_string(n) + " " + std::to_string(static_cast<long long>(lo)) + " " + std::to_string(static_cast<long long>(hi))); return std::string(); }
+        };
+        RangeTarget rt;
+        Driver d(s, rt);
+        said.clear();
+        d.tick(1, say);
+        CHECK((rt.calls == std::vector<std::string>{"radio range 2 88000000 108000000", "radio range 1 0 0"}) && d.allRun());
+    }
     // THE `radio` VERB (docs/multi-radio-records/screen-s4.md): add [<n> [<toneHz>]] and remove <n>; the target is asked with the verb, the radio's number and the tone; a target that cannot
     // do it (a fake of the older interface) says so and the step fails; remove needs a number from 2; add takes a number 0..8 and a tone; anything else is a line of its own in the errors
     {
@@ -275,7 +298,7 @@ int main() {
             CHECK(s.steps[3].label == "remove" && s.steps[3].radioNo == 4);
         }
         struct RadioTarget : FakeTarget {
-            std::string radio(const std::string& what, int n, double tone) override { calls.push_back("radio " + what + " " + std::to_string(n) + " " + std::to_string(static_cast<int>(tone))); return std::string(); }
+            std::string radio(const std::string& what, int n, double tone, double hz2) override { calls.push_back("radio " + what + " " + std::to_string(n) + " " + std::to_string(static_cast<int>(tone)) + (hz2 != 0.0 ? " " + std::to_string(static_cast<long long>(hz2)) : std::string())); return std::string(); }
         };
         const Script ok = parseInputScript("1 radio add 2 60000\nradio remove 2\n\n");
         RadioTarget rt;

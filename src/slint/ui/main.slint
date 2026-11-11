@@ -669,8 +669,11 @@ export component MainWindow inherits Window {
                     vertical-stretch: 1; preferred-height: 700px;   // the layout sizes the window on the desktop: 36 + 104 + 32 + 700 + 28 is the design height (the well alone would count as 120)
                     // THE RADIO WORKSPACE (docs/multi-radio-records/screen-s3.md): with more than one radio open the receiver view carries a 30 px bar (layout keys, page keys) over it, and a multi-pane
                     // layout puts the grid of panes where the spectrum and waterfall are. With ONE radio there is no bar, ws-bar-h is 0 and this view is exactly what it was.
-                    private property <length> ws-bar-h: root.view-index == 0 && WorkspaceModel.radio-count > 1 ? 30px : 0px;
-                    if root.view-index == 0 && WorkspaceModel.radio-count > 1 : WorkspaceBar { x: 0; y: 0; width: parent.width; compact: root.compact-strip; }
+                    // STAGE S5: the bar wraps its groups onto as many 30 px rows as the width asks (WorkspaceModel.bar-h, written by the bar), and in a compact window it is on EVERY tab (the radios' selector,
+                    // STOP keys and MASTER lamps live in it there), so the PATCH, SCOPE and plugin views start below it too.
+                    private property <bool> ws-bar-on: WorkspaceModel.radio-count > 1 && (root.view-index == 0 || root.compact-strip);
+                    private property <length> ws-bar-h: self.ws-bar-on ? WorkspaceModel.bar-h : 0px;
+                    if self.ws-bar-on : WorkspaceBar { x: 0; y: 0; width: parent.width; compact: root.compact-strip; receiver: root.view-index == 0; }
                     if root.view-index == 0 && WorkspaceModel.shown-layout > 0 : RadioWorkspace { x: 0; y: parent.ws-bar-h; width: parent.width; height: max(0px, parent.height - parent.ws-bar-h); }
                     if root.view-index == 0 && WorkspaceModel.shown-layout == 0 : Rectangle {   // the wells are placed, not laid out: a layout here fed its 120 px minimum to the window's own size
                         x: 0; y: parent.ws-bar-h; width: parent.width; height: parent.height - parent.ws-bar-h;
@@ -729,10 +732,10 @@ export component MainWindow inherits Window {
                             foot-left: root.waterfall-foot-left; foot-tuned: root.waterfall-foot-tuned; foot-rest: root.waterfall-foot-rest;
                         }
                     }
-                    if root.view-index == 1 : PatchPage { model: root.patch-model; canvas: root.canvas-model; inspector: root.inspector-model; }
-                    if root.view-index == 2 : RadarScopeView { model: root.radar-scope-model; offers: root.radar-model.offers; }
+                    if root.view-index == 1 : Rectangle { x: 0; y: parent.ws-bar-h; width: parent.width; height: max(0px, parent.height - parent.ws-bar-h); PatchPage { model: root.patch-model; canvas: root.canvas-model; inspector: root.inspector-model; } }
+                    if root.view-index == 2 : Rectangle { x: 0; y: parent.ws-bar-h; width: parent.width; height: max(0px, parent.height - parent.ws-bar-h); RadarScopeView { model: root.radar-scope-model; offers: root.radar-model.offers; } }
                     // a docked page of the plugin kit (its body reaches the host through the KitEvents global)
-                    if root.view-index >= 3 && root.view-index - 3 < root.pages.length && !root.pages[root.view-index - 3].torn : PageBody { page: root.pages[root.view-index - 3]; index: root.view-index - 3; }
+                    if root.view-index >= 3 && root.view-index - 3 < root.pages.length && !root.pages[root.view-index - 3].torn : Rectangle { x: 0; y: parent.ws-bar-h; width: parent.width; height: max(0px, parent.height - parent.ws-bar-h); PageBody { page: root.pages[root.view-index - 3]; index: root.view-index - 3; } }
                 }
             }
         }

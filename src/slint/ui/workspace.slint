@@ -1,7 +1,8 @@
 // FoxSDR Slint front end - THE RADIO WORKSPACE (docs/multi-radio-screen-design.md 3.4, built in stage S3; docs/multi-radio-records/screen-s3.md).
 //
-//   WorkspaceBar     30 px strip over the view (RECEIVER tab only, only when more than one radio is open): "Layout" One / Side by side / 2 x 2, the page keys "Radios 1-4" "Radios 5-8"
-//                    (only when a radio lives beyond the first page), and the small-window notice.
+//   WorkspaceBar     the bar over the view (RECEIVER tab, and every tab in a compact window; only when more than one radio is open), as many 30 px rows as the width asks: "Layout" One / Side by side / 2 x 2,
+//                    the page keys "Radios 1-4" "Radios 5-8" (only when a radio lives beyond the first page), "Link tuning", "Start together", in a compact window the radios' selector, STOP keys and
+//                    MASTER lamps, and the small-window notice. (Stage S5 made it wrap; it was one 30 px row, clipped at 800 px.)
 //   RadioWorkspace   the grid of RadioPanes: Two = two columns side by side, Four = 2 x 2, 6 px gaps. One is NOT drawn here: layout One is the receiver view of MainWindow, untouched.
 //   WorkspaceModel   what the host publishes (the layout it chose, the page, the radios' panes in ONE model by radio slot) and every gesture that comes back, each with the radio's number.
 //
@@ -15,26 +16,115 @@
 import { Theme } from "theme.slint";
 import { Caption, SegGroup, SegKey, Key } from "keys.slint";
 import { RadioPane, RadioPaneData } from "radio_pane.slint";
-import { RadioStripRow } from "radio_strip.slint";
+import { SelectorKeys, StopKeys, MasterLamps } from "radio_strip.slint";
 import { WorkspaceModel, WorkspaceCell, StripRadio, MasterLamp, MixRow, AddChoice } from "workspace_model.slint";
 export { WorkspaceModel, WorkspaceCell, StripRadio, MasterLamp, MixRow, AddChoice }
 
 
 
-export component WorkspaceBar inherits Rectangle {
-    in property <bool> compact;                      // the window's strip is compact (narrower than 1760 px): the radios' block lives here, as one row, and not in the strip
+// THE BAR'S MEASURES: each group of the bar reports its own width here (a group that is not drawn is not counted: the bar knows which ones it has). A global, because a group is made by an `if`
+// and the bar cannot name an element inside one.
+global BarMetrics {
+    in-out property <[length]> w: [0px, 0px, 0px, 0px, 0px, 0px, 0px, 0px];
+}
+
+// One group of the bar: a row of controls that reports its width. The bar places the groups by those widths and starts a new row when the next one does not fit (below).
+component BarGroup inherits Rectangle {
+    in property <int> index;
+    out property <length> pw: row.preferred-width;
     height: 30px;
+    init => { BarMetrics.w[root.index] = root.pw; }
+    changed pw => { BarMetrics.w[root.index] = root.pw; }
+    row := HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        @children
+    }
+}
+
+// THE WORKSPACE BAR (docs/multi-radio-records/screen-s3.md, screen-s5.md): over the receiver view, and in a compact window over every tab. Its groups are
+//   0 "Layout" and the keys One / Side by side / 2 x 2          (RECEIVER tab)
+//   1 the page keys "Radios 1-4" ...                            (RECEIVER tab, when a radio lives beyond the first page)
+//   2 "Link tuning"                                             (RECEIVER tab)
+//   3 "Start together"                                          (RECEIVER tab)
+//   4 the selector "R1 R2 R3 R4", 5 STOP Rn and STOP ALL, 6 the MASTER lamps       (a compact window, on every tab: the strip has no room for them)
+//   7 the small-window notice                                   (RECEIVER tab)
+// NOTHING IS CLIPPED. The groups are placed left to right by their own widths and a group that does not fit the rest of the row starts the next one, so the bar is as many 30 px rows as the width asks for
+// (one in a wide window, up to four at 800 px) and its height is `bar-h`, which the views under it start below. A group wider than the bar alone is cut at its edge (none is, down to the smallest window).
+export component WorkspaceBar inherits Rectangle {
+    in property <bool> compact;                      // the window's strip is compact (narrower than 1760 px): the radios' block lives here, as groups 4 to 6
+    in property <bool> receiver: true;               // the RECEIVER tab: groups 0 to 3 and 7; on another tab (compact windows only) the radios' groups alone
+    private property <length> pad: 8px;
+    private property <length> gap: 10px;
+    private property <length> right: root.width - root.pad;
+    private property <length> room: max(0px, root.width - 2 * root.pad);
+    // which groups are drawn, and how wide each is (never wider than the bar)
+    private property <bool> s0: root.receiver;
+    private property <bool> s1: root.receiver && WorkspaceModel.page-labels.length > 1;
+    private property <bool> s2: root.receiver;
+    private property <bool> s3: root.receiver;
+    private property <bool> s4: root.compact;
+    private property <bool> s5: root.compact;
+    private property <bool> s6: root.compact;
+    private property <bool> s7: root.receiver && WorkspaceModel.notice != "";
+    private property <length> w0: root.s0 ? min(BarMetrics.w[0], root.room) : 0px;
+    private property <length> w1: root.s1 ? min(BarMetrics.w[1], root.room) : 0px;
+    private property <length> w2: root.s2 ? min(BarMetrics.w[2], root.room) : 0px;
+    private property <length> w3: root.s3 ? min(BarMetrics.w[3], root.room) : 0px;
+    private property <length> w4: root.s4 ? min(BarMetrics.w[4], root.room) : 0px;
+    private property <length> w5: root.s5 ? min(BarMetrics.w[5], root.room) : 0px;
+    private property <length> w6: root.s6 ? min(BarMetrics.w[6], root.room) : 0px;
+    private property <length> w7: root.s7 ? min(BarMetrics.w[7], root.room) : 0px;
+    // where each group starts and which row it is on: a group goes after the one before it when it fits the rest of the row, else it starts the next row; an empty group takes no room
+    pure function place-x(prev-end: length, w: length) -> length {
+        if (w == 0px) { return prev-end; }
+        if (prev-end <= root.pad) { return root.pad; }
+        if (prev-end + root.gap + w <= root.right) { return prev-end + root.gap; }
+        return root.pad;
+    }
+    pure function place-row(prev-row: int, prev-end: length, w: length) -> int {
+        if (w == 0px) { return prev-row; }
+        if (prev-end <= root.pad) { return prev-row; }
+        if (prev-end + root.gap + w <= root.right) { return prev-row; }
+        return prev-row + 1;
+    }
+    private property <length> x0: root.place-x(root.pad, root.w0);
+    private property <int> r0: 0;
+    private property <length> e0: root.w0 == 0px ? root.pad : root.x0 + root.w0;
+    private property <length> x1: root.place-x(root.e0, root.w1);
+    private property <int> r1: root.place-row(root.r0, root.e0, root.w1);
+    private property <length> e1: root.w1 == 0px ? root.e0 : root.x1 + root.w1;
+    private property <length> x2: root.place-x(root.e1, root.w2);
+    private property <int> r2: root.place-row(root.r1, root.e1, root.w2);
+    private property <length> e2: root.w2 == 0px ? root.e1 : root.x2 + root.w2;
+    private property <length> x3: root.place-x(root.e2, root.w3);
+    private property <int> r3: root.place-row(root.r2, root.e2, root.w3);
+    private property <length> e3: root.w3 == 0px ? root.e2 : root.x3 + root.w3;
+    private property <length> x4: root.place-x(root.e3, root.w4);
+    private property <int> r4: root.place-row(root.r3, root.e3, root.w4);
+    private property <length> e4: root.w4 == 0px ? root.e3 : root.x4 + root.w4;
+    private property <length> x5: root.place-x(root.e4, root.w5);
+    private property <int> r5: root.place-row(root.r4, root.e4, root.w5);
+    private property <length> e5: root.w5 == 0px ? root.e4 : root.x5 + root.w5;
+    private property <length> x6: root.place-x(root.e5, root.w6);
+    private property <int> r6: root.place-row(root.r5, root.e5, root.w6);
+    private property <length> e6: root.w6 == 0px ? root.e5 : root.x6 + root.w6;
+    private property <length> x7: root.place-x(root.e6, root.w7);
+    private property <int> r7: root.place-row(root.r6, root.e6, root.w7);
+    out property <int> rows: root.r7 + 1;
+    out property <length> bar-h: root.rows * 30px;
+    // the bar tells the model how tall it is, so the view under it starts below it (written when the bar is made and whenever it changes)
+    init => { WorkspaceModel.bar-h = root.bar-h; }
+    changed bar-h => { WorkspaceModel.bar-h = root.bar-h; }
+    height: root.bar-h;
     background: Theme.strip;
     accessible-role: groupbox;
     accessible-label: @tr("Layout");
     Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
     Rectangle {
         x: 0px; y: 0px; width: parent.width; height: parent.height; clip: true;   // the bar holds its width: what does not fit is cut, never widens the window
-        HorizontalLayout {
-            padding-left: 8px;
-            padding-right: 8px;
-            spacing: 8px;
-            alignment: start;
+        if root.s0 : BarGroup {
+            index: 0; x: root.x0; y: root.r0 * 30px; width: root.w0;
             VerticalLayout { alignment: center; Caption { label: @tr("Layout"); font-size: Theme.font-tiny; } }
             VerticalLayout {
                 alignment: center;
@@ -49,8 +139,11 @@ export component WorkspaceBar inherits Rectangle {
                     }
                 }
             }
-            // THE PAGE KEYS: one per page, the page shown is lit; only when a radio lives beyond the first page
-            if WorkspaceModel.page-labels.length > 1 : VerticalLayout {
+        }
+        // THE PAGE KEYS: one per page, the page shown is lit; only when a radio lives beyond the first page
+        if root.s1 : BarGroup {
+            index: 1; x: root.x1; y: root.r1 * 30px; width: root.w1;
+            VerticalLayout {
                 alignment: center;
                 SegGroup {
                     small: true;
@@ -61,10 +154,34 @@ export component WorkspaceBar inherits Rectangle {
                     }
                 }
             }
-            // STAGE S4: in a window whose strip is compact the radios' block (selector, STOP Rn, STOP ALL, MASTER lamps) is this one row
-            if root.compact : RadioStripRow { }
-            // THE SMALL-WINDOW NOTICE: the multi-pane layout was chosen and the window is too small for it, so One is shown
-            if WorkspaceModel.notice != "" : VerticalLayout {
+        }
+        // STAGE S5: Link tuning (an option, off by default) and Start together (RUN to every open radio)
+        if root.s2 : BarGroup {
+            index: 2; x: root.x2; y: root.r2 * 30px; width: root.w2;
+            VerticalLayout {
+                alignment: center;
+                Key {
+                    label: WorkspaceModel.link-text; small: true; min-w: 0px; on: WorkspaceModel.link-on; tooltip: WorkspaceModel.link-tip;
+                    accessible-checkable: true; accessible-checked: WorkspaceModel.link-on;
+                    clicked => { WorkspaceModel.link-toggled(); }
+                }
+            }
+        }
+        if root.s3 : BarGroup {
+            index: 3; x: root.x3; y: root.r3 * 30px; width: root.w3;
+            VerticalLayout {
+                alignment: center;
+                Key { label: WorkspaceModel.together-text; small: true; min-w: 0px; enabled: WorkspaceModel.together-enabled; tooltip: WorkspaceModel.together-tip; clicked => { WorkspaceModel.together-clicked(); } }
+            }
+        }
+        // STAGE S4, moved here by S5: in a compact window the radios' block is three groups of this bar, on every tab
+        if root.s4 : BarGroup { index: 4; x: root.x4; y: root.r4 * 30px; width: root.w4; VerticalLayout { alignment: center; SelectorKeys { } } }
+        if root.s5 : BarGroup { index: 5; x: root.x5; y: root.r5 * 30px; width: root.w5; VerticalLayout { alignment: center; StopKeys { } } }
+        if root.s6 : BarGroup { index: 6; x: root.x6; y: root.r6 * 30px; width: root.w6; VerticalLayout { alignment: center; MasterLamps { } } }
+        // THE SMALL-WINDOW NOTICE: the multi-pane layout was chosen and the window is too small for it, so One is shown
+        if root.s7 : BarGroup {
+            index: 7; x: root.x7; y: root.r7 * 30px; width: root.w7;
+            VerticalLayout {
                 alignment: center;
                 Text {
                     text: WorkspaceModel.notice;
@@ -121,7 +238,7 @@ export component AddRadioCard inherits Rectangle {
                     alignment: start;
                     Key { label: c.caption; accessible-label: c.accessible; small: true; min-w: 0px; clicked => { WorkspaceModel.add-chosen(root.slot, i); } }
                 }
-                if WorkspaceModel.add-choices.length == 0 : Text { text: WorkspaceModel.add-none; font-size: Theme.font-small; color: Theme.dim; wrap: word-wrap; }
+                if WorkspaceModel.add-choices.length == 0 : Text { text: WorkspaceModel.add-none; font-size: Theme.font-small; color: Theme.muted; wrap: word-wrap; }   // (Theme.dim was 3.9 : 1 on the card in Night Watch: found by the contrast table of stage S5)
             }
         }
         if WorkspaceModel.add-note != "" : Text {
@@ -157,7 +274,7 @@ component EmptySlot inherits Rectangle {
             vertical-alignment: center;
             font-family: Theme.font-mono;
             font-size: Theme.font-small;
-            color: Theme.dim;
+            color: Theme.muted;
         }
     }
     if WorkspaceModel.can-add : AddRadioCard { x: 0px; y: 0px; width: parent.width; height: parent.height; slot: root.slot; label: root.card-label; }
@@ -208,6 +325,7 @@ export component RadioWorkspace inherits Rectangle {
             waterfall-wheel(r, x, n, shift) => { WorkspaceModel.waterfall-wheel(r, x, n, shift); }
             marker-hovered(r, i) => { WorkspaceModel.marker-hovered(r, i); }
             split-changed(r, v) => { WorkspaceModel.splits[r - 1] = v; }
+            link-clicked(r) => { WorkspaceModel.pane-link-clicked(r); }
             close-clicked(r) => { WorkspaceModel.remove-requested(r); }
         }
         if slot >= root.first && slot < root.first + root.psize && !cell.occupied : EmptySlot {

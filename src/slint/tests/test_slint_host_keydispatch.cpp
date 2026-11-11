@@ -79,7 +79,7 @@ void stockChords() {
         if (got != r.id) { std::printf("  stock %s%s%s%s: got '%s', wanted '%s'\n", r.press.ctrl ? "Ctrl+" : "", r.press.shift ? "Shift+" : "", r.press.alt ? "Alt+" : "", r.press.key.c_str(), got.c_str(), r.id); }
         CHECK(got == r.id);
     }
-    // every row of the table answers its own stock chord with its own id - 31 of the 32 (the PTT is held, not pressed)
+    // every row of the table answers its own stock chord with its own id - 41 of the 42 (the PTT is held, not pressed)
     int answered = 0;
     for (int i = 0; i < kKeyActionCount; ++i) {
         const std::string want = keyAction(i).id;
@@ -93,7 +93,7 @@ void stockChords() {
         CHECK(got == want);
         ++answered;
     }
-    CHECK(answered == 31);
+    CHECK(answered == 41);
     // the keys no chord holds answer nothing; modifier-only and unnamed keys too
     CHECK(shortcutForPress(press("G"), def).empty() && shortcutForPress(press("Space"), def).empty() && shortcutForPress(press(""), def).empty());
 }
@@ -214,6 +214,75 @@ void escapeLayers() {
 
 }  // namespace
 
+
+// ---- SCREEN STAGE S5: the ten rows of this window's own (docs/multi-radio-records/screen-s5.md): Ctrl+1 to Ctrl+8 select a radio, Alt+PageUp / Alt+PageDown turn the page of radios ----
+Chord ch(const char* text) { Chord c; parseChord(text, c); return c; }
+std::string answer(const KeyTable& t, const char* chordText, bool glyphShifted = false) {
+    const Chord c = ch(chordText);
+    KeyPress p;
+    p.key = c.key; p.ctrl = c.ctrl; p.shift = c.shift; p.alt = c.alt; p.glyphShifted = glyphShifted;
+    return shortcutForPress(p, t);
+}
+void radioKeys() {
+{
+        CHECK(kClassicKeyActionCount == 32 && kKeyActionCount == 42 && kSelectRadioActions == 8);
+        for (int n = 1; n <= 8; ++n) {
+            const int idx = keyActionIndexOf("selectRadio" + std::to_string(n));
+            CHECK(idx == kClassicKeyActionCount + n - 1 && keyAction(idx).number == n && std::string(keyAction(idx).stock) == "Ctrl+" + std::to_string(n) && std::string(keyAction(idx).group) == "Radio");
+            CHECK(keyActionName(idx) == "Select Radio " + std::to_string(n));
+        }
+        CHECK(keyActionIndexOf("radioPagePrev") == 40 && keyActionIndexOf("radioPageNext") == 41);
+        CHECK(std::string(keyAction(40).stock) == "Alt+PageUp" && std::string(keyAction(41).stock) == "Alt+PageDown");
+        CHECK(keyActionName(40) == "Previous page of radios" && keyActionName(41) == "Next page of radios" && keyActionName(0) == "Start / stop the receiver");
+        // PROOF THEY ARE FREE: no other action holds any of the ten chords in the stock table (the table has no clash at all), and the fixed shortcuts are other chords
+        const KeyTable def = defaultKeyTable();
+        CHECK(clashCount(def) == 0);
+        for (int i = 0; i < kClassicKeyActionCount; ++i) {
+            for (int j = kClassicKeyActionCount; j < kKeyActionCount; ++j) { CHECK(!(def[static_cast<std::size_t>(i)] == def[static_cast<std::size_t>(j)])); }
+        }
+        CHECK(answer(def, "Ctrl+K") == kShortcutPalette && answer(def, "Ctrl+0") == kShortcutUiSizeAuto);
+        CHECK(answer(def, "F12") == "screenshot" && answer(def, "Escape") == kShortcutEscape);
+        // each chord answers its own id; the neighbours that were taken are as they were
+        for (int n = 1; n <= 8; ++n) { CHECK(answer(def, ("Ctrl+" + std::to_string(n)).c_str()) == "selectRadio" + std::to_string(n)); }
+        CHECK(answer(def, "Alt+PageUp") == "radioPagePrev" && answer(def, "Alt+PageDown") == "radioPageNext");
+        CHECK(answer(def, "Ctrl+PageUp") == "tuneSpanUp" && answer(def, "Ctrl+PageDown") == "tuneSpanDown");
+        CHECK(answer(def, "Ctrl+Shift+PageUp") == "squelchUp" && answer(def, "PageUp").empty() && answer(def, "Shift+Alt+PageUp").empty() && answer(def, "Ctrl+Alt+PageUp").empty());
+        CHECK(answer(def, "Ctrl+9").empty() && answer(def, "Alt+1").empty() && answer(def, "1").empty() && answer(def, "Ctrl+Shift+1").empty());
+        // rebindable and saved like every other row: a chord moved, saved as "id=chord", read back; a clash is named by the row's own name
+        KeyTable t = def;
+        t[static_cast<std::size_t>(keyActionIndexOf("selectRadio3"))] = ch("Ctrl+Alt+3");
+        const std::vector<std::string> lines = keyTableToConfig(t);
+        CHECK(lines.size() == 1 && lines[0] == "selectRadio3=Ctrl+Alt+3");
+        const KeyTable back = keyTableFromConfig(lines);
+        CHECK(back == t && answer(back, "Ctrl+Alt+3") == "selectRadio3" && answer(back, "Ctrl+3").empty());
+        t[static_cast<std::size_t>(keyActionIndexOf("selectRadio2"))] = ch("Ctrl+4");
+        CHECK(clashOf(t, keyActionIndexOf("selectRadio2")) == keyActionIndexOf("selectRadio4") && clashCount(t) == 2);
+        const KeyTable unbound = keyTableFromConfig({"radioPageNext=None"});
+        CHECK(answer(unbound, "Alt+PageDown").empty() && answer(unbound, "Alt+PageUp") == "radioPagePrev");
+        // the saved file of a build that does not know the rows (the ImGui window's) loads: unknown ids are dropped one by one
+        const KeyTable odd = keyTableFromConfig({"mute=Ctrl+M", "selectRadio9=Ctrl+9", "selectRadio1=Ctrl+Shift+1"});
+        CHECK(odd[static_cast<std::size_t>(keyActionIndexOf("selectRadio1"))] == ch("Ctrl+Shift+1") && odd[1] == ch("Ctrl+M"));
+        // the keys page lists them
+        cascade::core::AppConfig iface;
+        ReadOptions o;
+        const KeyBindingsModel m = readKeyBindings(iface, o);
+        CHECK(m.action_count == 42 && m.groups.back().heading == "Radio" && m.groups.back().rows.size() == 10);
+        CHECK(m.groups.back().rows[0].action == "Select Radio 1" && m.groups.back().rows[0].chord == "Ctrl+1" && m.groups.back().rows[9].chord == "Alt+PageDown" && m.clash_count == 0);
+    // THE CLASH TEXT of a row names the other row (a name longer than a short-string buffer, so a std::string passed where a C string is meant fails here: the host crashed at start with a saved table
+    // that put two actions on F2 - found by test_slint_config_roundtrip): "mute" saved on Ctrl+Up clashes with "Tune up one step (10 kHz)" and says so, and a row of the new group names its clash the same way
+    {
+        cascade::core::AppConfig clash;
+        clash.keyBindings = {"mute=Ctrl+Up", "selectRadio2=Ctrl+1"};
+        const KeyBindingsModel cm = readKeyBindings(clash, o);
+        std::string muteClash, tuneClash, radio1Clash;
+        for (const KeyGroup& g : cm.groups) { for (const KeyRow& r : g.rows) { if (r.id == "mute") { muteClash = r.clash; } if (r.id == "tuneStepUp") { tuneClash = r.clash; } if (r.id == "selectRadio1") { radio1Clash = r.clash; } } }
+        CHECK(muteClash == "also Tune up one step (10 kHz)" && tuneClash == "also Mute the sound" && radio1Clash == "also Select Radio 2" && cm.clash_count == 4);
+    }
+    }
+
+
+}
+
 int main() {
     stockChords();
     modifiersDistinguish();
@@ -223,5 +292,6 @@ int main() {
     fixedChords();
     glyphShift();
     escapeLayers();
+    radioKeys();
     return testSummary("test_slint_host_keydispatch");
 }

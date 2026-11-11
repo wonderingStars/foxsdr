@@ -654,6 +654,17 @@ constexpr KeyActionInfo kActions[kKeyActionCount] = {
     {"bankExtend", FOX_TR_NOOP("Bank: EXTEND"), FOX_TR_NOOP("Rail"), "F4"},
     {"bankSystem", FOX_TR_NOOP("Bank: SYSTEM"), FOX_TR_NOOP("Rail"), "F5"},
     {"openSettings", FOX_TR_NOOP("Settings and key bindings"), FOX_TR_NOOP("Rail"), "F7"},
+    // THIS WINDOW'S OWN (screen stage S5): the radios. Ctrl+PageUp / Ctrl+PageDown are the tuneSpan keys above, so the page keys are the Alt ones.
+    {"selectRadio1", FOX_TR_NOOP("Select Radio %d"), FOX_TR_NOOP("Radio"), "Ctrl+1", 1},
+    {"selectRadio2", FOX_TR_NOOP("Select Radio %d"), FOX_TR_NOOP("Radio"), "Ctrl+2", 2},
+    {"selectRadio3", FOX_TR_NOOP("Select Radio %d"), FOX_TR_NOOP("Radio"), "Ctrl+3", 3},
+    {"selectRadio4", FOX_TR_NOOP("Select Radio %d"), FOX_TR_NOOP("Radio"), "Ctrl+4", 4},
+    {"selectRadio5", FOX_TR_NOOP("Select Radio %d"), FOX_TR_NOOP("Radio"), "Ctrl+5", 5},
+    {"selectRadio6", FOX_TR_NOOP("Select Radio %d"), FOX_TR_NOOP("Radio"), "Ctrl+6", 6},
+    {"selectRadio7", FOX_TR_NOOP("Select Radio %d"), FOX_TR_NOOP("Radio"), "Ctrl+7", 7},
+    {"selectRadio8", FOX_TR_NOOP("Select Radio %d"), FOX_TR_NOOP("Radio"), "Ctrl+8", 8},
+    {"radioPagePrev", FOX_TR_NOOP("Previous page of radios"), FOX_TR_NOOP("Radio"), "Alt+PageUp"},
+    {"radioPageNext", FOX_TR_NOOP("Next page of radios"), FOX_TR_NOOP("Radio"), "Alt+PageDown"},
 };
 
 // EVERY KEY A CHORD MAY USE, by its canonical name, in the ImGui table's order (the names are the file format).
@@ -694,6 +705,10 @@ std::string trimmed(const std::string& s) {
 
 }  // namespace
 
+std::string keyActionName(int index) {
+    const KeyActionInfo& a = keyAction(index);
+    return a.number > 0 ? cc::formatText(tr(a.name), a.number) : std::string(tr(a.name));
+}
 const KeyActionInfo& keyAction(int index) { return kActions[std::clamp(index, 0, kKeyActionCount - 1)]; }
 int keyActionIndexOf(const std::string& id) {
     for (int i = 0; i < kKeyActionCount; ++i) {
@@ -834,11 +849,12 @@ KeyBindingsModel readKeyBindings(const cc::AppConfig& iface, const ReadOptions& 
         }
         KeyRow r;
         r.id = a.id;
-        r.action = tr(a.name);
+        r.action = keyActionName(i);
         r.chord = formatChord(t[static_cast<std::size_t>(i)]);
         r.capturing = !o.capturing_id.empty() && o.capturing_id == a.id;
         const int other = clashOf(t, i);
-        if (other >= 0) { r.clash = cc::formatText(tr("also %s"), tr(kActions[other].name)); }
+        // (a std::string through a C vararg crashed the host at start with a clashing saved table: found by test_slint_config_roundtrip, whose seed holds two actions on F2)
+        if (other >= 0) { r.clash = cc::formatText(tr("also %s"), keyActionName(other).c_str()); }
         m.groups.back().rows.push_back(std::move(r));
     }
     m.action_count = kKeyActionCount;

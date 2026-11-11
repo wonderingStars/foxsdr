@@ -54,8 +54,8 @@ PaneTexts paneTexts(int radio, const FoxReceiverState& st, const std::string& ga
     t.stopLabel = (st.flags & FOXAPI_RX_RUNNING) ? cascade::core::formatText(cascade::i18n::tr("Stop Radio %d"), radio) : cascade::core::formatText(cascade::i18n::tr("Start Radio %d"), radio);
     t.spectrumLabel = cascade::core::formatText(cascade::i18n::tr("Radio %d spectrum"), radio);
     t.waterfallLabel = cascade::core::formatText(cascade::i18n::tr("Radio %d waterfall"), radio);
-    t.resizeLabel = "Resize Radio " + std::to_string(radio);   // English only, needs translation: not in the prepared set of strings
-    t.closeLabel = "Remove Radio " + std::to_string(radio);    // English only, needs translation: not in the prepared set of strings (stage S4)
+    t.resizeLabel = cascade::core::formatText(cascade::i18n::tr("Resize Radio %d"), radio);
+    t.closeLabel = cascade::core::formatText(cascade::i18n::tr("Remove Radio %d"), radio);
     t.runTip = cascade::core::formatText(cascade::i18n::tr("Radio %d is running"), radio);
     t.decTip = cascade::core::formatText(cascade::i18n::tr("A decoder is running on Radio %d"), radio);
     t.muteTip = cascade::core::formatText(cascade::i18n::tr("Radio %d is muted"), radio);
@@ -219,6 +219,19 @@ bool Workspace::select(int radio, const EngineReads& engine) {
     const int size = pageSizeOf(layout_);
     page_ = std::clamp(slot / size, 0, pageCount() - 1);
     return true;
+}
+
+bool Workspace::stepPage(int dir, int winW, int winH, const EngineReads& engine) {
+    const int step = dir < 0 ? -1 : 1;
+    if (shownLayout(winW, winH) == kLayoutOne) {
+        for (int t = radios_.selected + step; t >= 0 && t < kMaxRadios; t += step) {
+            if (occupied(t)) { return select(t + 1, engine); }
+        }
+        return false;
+    }
+    const int before = page_;
+    setPage(page_ + step);
+    return page_ != before;
 }
 
 bool Workspace::fitPictures(int slot, int cellW, int cellH, float split) {

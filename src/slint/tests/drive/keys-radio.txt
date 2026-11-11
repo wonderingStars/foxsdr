@@ -1,0 +1,68 @@
+#! frames=1900 size=1600x900
+# keys-radio: the new chords with EIGHT live radios (screen stage S5; docs/multi-radio-records/screen-s5.md), each pressed through the scripted input as the window's focus scope receives it. Ctrl+1 to Ctrl+8 select a
+# radio (the page that holds it is shown; a radio that is not open is left alone); Alt+PageUp / Alt+PageDown turn the page of radios (clamped at the ends; in Side by side a page is a pair; where One is shown the
+# keys select the neighbouring radio). Ctrl+PageUp / Ctrl+PageDown are still "tune one screen width" (they retune the selected radio, they do not turn the page).
+10 state workspace.radios == 1
++1 radio add 2 60000
++1 radio add 3 90000
++1 radio add 4 120000
++1 radio add 5 150000
++1 radio add 6 180000
++1 radio add 7 210000
++1 radio add 8 240000
++40 state workspace.radios == 8
++1 click "2 x 2"
++15 state workspace.shown == 2
+state workspace.selected == 1
+state workspace.page == 0
++1 key ctrl+3
++8 state workspace.selected == 3
+state workspace.page == 0
++1 key ctrl+6
++8 state workspace.selected == 6
+state workspace.page == 1
+state workspace.cells == "5,6,7,8"
++1 shot "keys-radio-six.png"
++1 key ctrl+1
++8 state workspace.selected == 1
+state workspace.page == 0
+# the page keys: page only (the selection stays on radio 1), clamped at both ends
++1 key alt+pagedown
++8 state workspace.page == 1
+state workspace.selected == 1
+state workspace.cells == "5,6,7,8"
++1 key alt+pagedown
++8 state workspace.page == 1
++1 key alt+pageup
++8 state workspace.page == 0
+state workspace.cells == "1,2,3,4"
++1 key alt+pageup
++8 state workspace.page == 0
+# Side by side: four pages of two
++1 click "Side by side"
++15 state workspace.layout == 1
++1 key alt+pagedown
++8 state workspace.page == 1
+state workspace.cells == "3,4"
++1 key alt+pagedown
++1 key alt+pagedown
++10 state workspace.page == 3
+state workspace.cells == "7,8"
++1 key alt+pagedown
++8 state workspace.page == 3
++1 key ctrl+2
++8 state workspace.selected == 2
+state workspace.page == 0
+# Ctrl+PageDown is "tune one screen width": it retunes the selected radio and turns no page
+state workspace.r.2.tuned == 100000000
++1 key ctrl+pagedown
++14 state workspace.r.2.tuned < 100000000
+state workspace.page == 0
+state workspace.selected == 2
+# a radio that is not open is left alone: radio 8 removed, Ctrl+8 changes nothing
++1 radio remove 8
++25 state workspace.radios == 7
++1 key ctrl+8
++8 state workspace.selected == 2
++1 key ctrl+7
++8 state workspace.selected == 7

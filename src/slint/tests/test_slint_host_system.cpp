@@ -133,9 +133,9 @@ void driftChecks() {
         const std::regex row(R"re(\{KeyAction::(\w+),\s*"(\w+)",\s*FOX_TR_NOOP\("([^"]*)"\),\s*FOX_TR_NOOP\("([^"]*)"\)\})re");
         std::vector<std::vector<std::string>> rows;
         for (std::sregex_iterator it(kb.begin(), kb.end(), row), end; it != end; ++it) { rows.push_back({(*it)[1], (*it)[2], (*it)[3], (*it)[4]}); }
-        CHECK(rows.size() == static_cast<std::size_t>(kKeyActionCount));
+        CHECK(rows.size() == static_cast<std::size_t>(kClassicKeyActionCount));   // the ImGui window's 32; the rows after them are this window's own (screen stage S5)
         std::map<std::string, int> indexOf;
-        for (std::size_t i = 0; i < rows.size() && i < static_cast<std::size_t>(kKeyActionCount); ++i) {
+        for (std::size_t i = 0; i < rows.size() && i < static_cast<std::size_t>(kClassicKeyActionCount); ++i) {
             const KeyActionInfo& a = keyAction(static_cast<int>(i));
             CHECK(rows[i][1] == a.id);
             CHECK(rows[i][2] == a.name);
@@ -151,7 +151,7 @@ void driftChecks() {
             CHECK(std::string(keyAction(at->second).stock) == (*it)[2].str());
             ++found;
         }
-        CHECK(found == kKeyActionCount);
+        CHECK(found == kClassicKeyActionCount);
     }
     {
         const std::size_t split = kb.find("constexpr KeyRow kKeyAliases");
@@ -658,7 +658,8 @@ void serialReads() {
 // ---- Key bindings ----
 void keyReads() {
     // the host copy: 32 actions, the stock chords the ImGui table ships
-    CHECK(kKeyActionCount == 32 && std::string(keyAction(0).id) == "startStop" && std::string(keyAction(31).id) == "openSettings" && std::string(keyAction(24).id) == "screenshot");
+    CHECK(kClassicKeyActionCount == 32 && kKeyActionCount == 42 && std::string(keyAction(0).id) == "startStop" && std::string(keyAction(31).id) == "openSettings" && std::string(keyAction(24).id) == "screenshot");
+    CHECK(std::string(keyAction(32).id) == "selectRadio1" && std::string(keyAction(41).id) == "radioPageNext");   // this window's own ten (screen stage S5)
     CHECK(keyActionIndexOf("mute") == 1 && keyActionIndexOf("bankView") == 28 && keyActionIndexOf("bankTools") == -1 && keyActionIndexOf("") == -1);
     const KeyTable def = defaultKeyTable();
     CHECK(formatChord(def[0]) == "Ctrl+F2" && formatChord(def[1]) == "M" && formatChord(def[4]) == "Ctrl+Shift+PageUp" && formatChord(def[22]) == "Shift+R" && formatChord(def[23]) == "Space");
@@ -687,17 +688,17 @@ void keyReads() {
     const KeyTable back = keyTableFromConfig({"mute=Ctrl+M", "volumeUp=None", "mute=Ctrl+Z", "volumeDown=Banana", "nonsense=A", "noequals", " squelchUp = Ctrl + Q "});
     CHECK(formatChord(back[1]) == "Ctrl+M" && !back[2].bound() && formatChord(back[3]) == "Minus" && formatChord(back[4]) == "Ctrl+Q");
     CHECK(keyTableFromConfig({}) == def);
-    // the read: seven groups (Picture comes twice, Transmit sits between), thirty-two rows, the stored chords
+    // the read: eight groups (Picture comes twice, Transmit sits between; "Radio", this window's own ten rows, is last: screen stage S5), forty-two rows, the stored chords
     core::AppConfig cfg;
     ReadOptions o;
     KeyBindingsModel m = readKeyBindings(cfg, o);
-    CHECK(m.groups.size() == 7 && at(m.groups, 0).heading == "Receiver" && at(m.groups, 1).heading == "Mode" && at(m.groups, 2).heading == "Tuning" && at(m.groups, 3).heading == "Picture");
+    CHECK(m.groups.size() == 8 && at(m.groups, 7).heading == "Radio" && at(m.groups, 7).rows.size() == 10 && at(m.groups, 0).heading == "Receiver" && at(m.groups, 1).heading == "Mode" && at(m.groups, 2).heading == "Tuning" && at(m.groups, 3).heading == "Picture");
     CHECK(at(m.groups, 4).heading == "Transmit" && at(m.groups, 5).heading == "Picture" && at(m.groups, 6).heading == "Rail");
     std::size_t rows = 0;
     for (const KeyGroup& g : m.groups) { rows += g.rows.size(); }
-    CHECK(rows == 32 && at(at(m.groups, 0).rows, 0).id == "startStop" && at(at(m.groups, 0).rows, 0).action == "Start / stop the receiver" && at(at(m.groups, 0).rows, 0).chord == "Ctrl+F2");
+    CHECK(rows == 42 && at(at(m.groups, 0).rows, 0).id == "startStop" && at(at(m.groups, 0).rows, 0).action == "Start / stop the receiver" && at(at(m.groups, 0).rows, 0).chord == "Ctrl+F2");
     CHECK(at(at(m.groups, 4).rows, 0).id == "transmitPtt" && at(at(m.groups, 4).rows, 0).chord == "Space" && at(at(m.groups, 6).rows, 5).id == "openSettings" && at(at(m.groups, 6).rows, 5).chord == "F7");
-    CHECK(!m.changed && m.changed_count == 0 && m.action_count == 32 && m.clash_count == 0 && m.prompt == "press a key" && m.reset_label == "Reset to defaults");
+    CHECK(!m.changed && m.changed_count == 0 && m.action_count == 42 && m.clash_count == 0 && m.prompt == "press a key" && m.reset_label == "Reset to defaults");
     CHECK(m.help == "Every shortcut the receiver answers. Click a key to change it, then press the keys you want - Esc leaves it alone, Backspace clears it. Shortcuts never fire while you are typing in a field.");
     CHECK(m.footer == "F12 always saves a screenshot, whatever the Screenshot key is set to.\nEsc always cancels what is being typed or the full-screen scope.");
     CHECK(readSystem(noTable, cfg, stateWith(-110, 0), o).chips[kRowKeys].word == "STOCK");

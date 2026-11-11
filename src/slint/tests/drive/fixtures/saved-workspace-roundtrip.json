@@ -1,0 +1,1 @@
+{ "telemetryEnabled": false, "updateCheckEnabled": false, "mainView": "receiver", "bandPlanOverlay": false, "sourceKind": "siggen", "view3d": "radar:on=1,az=40.00,el=32.00,zoom=1.00;workspace:lay=1,pg=1,sel=3,lk=1,ex=2,sp=45.45.45.45.45.45.45.45" }

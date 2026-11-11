@@ -1,0 +1,48 @@
+#! frames=1500 size=800x560 bank=4 sections=4:0
+# bar-small-800: THE REPAIR OF THE 800 px WINDOW (screen stage S5; docs/multi-radio-records/screen-s5.md). In stage S4 the radios' selector, the STOP keys and the lamps were cut out of the one-row bar at this width.
+# Now the bar wraps. Three LIVE radios (the engine's and two generator radios); every control of the bar is operated with a POINTER click at its centre (the scripted `press`: refused when the control is outside the
+# window), and the effect is read back from the engine: the lamps and the selector select, STOP Rn stops the selected radio, "Start together" starts every stopped radio, STOP ALL / START ALL, Link tuning, the layout
+# keys (the window is under 1280 x 720, so the layout stays One and says so). Shots in both skins (Workbench, then Night Watch chosen in the SYSTEM bank's Display section).
+10 state workspace.radios == 1
++1 radio add 2 60000
++1 radio add 3 90000
++30 state workspace.radios == 3
++5 state look.width == 800
++1 shot "bar-800-three-workbench.png"
++1 press "Radio 3 master"
++8 state workspace.selected == 3
++1 press "Controls follow Radio 2"
++8 state workspace.selected == 2
++1 press "Controls follow Radio 1"
++8 state workspace.selected == 1
++1 press "Radio 2 master"
++8 state workspace.selected == 2
++1 press "STOP R2"
++12 state workspace.r.2.running == 0
+state workspace.r.1.running == 1
++1 press "Start together"
++30 state workspace.r.2.running == 1
++1 press "STOP ALL"
++15 state workspace.r.1.running == 0
+state workspace.r.2.running == 0
+state workspace.r.3.running == 0
++1 press "START ALL"
++15 state workspace.r.1.running == 1
+state workspace.r.3.running == 1
++1 press "Link tuning"
++6 state workspace.link == 1
++1 press "Link tuning"
++6 state workspace.link == 0
++1 press "2 x 2"
++10 state workspace.layout == 2
+state workspace.shown == 0
+state workspace.fell == 1
+state workspace.pagekeys == 0
++1 shot "bar-800-fell-workbench.png"
++1 press "One"
++10 state workspace.layout == 0
++1 choose "Theme" "Night Watch"
++12 state look.bg != "#15171b"
++1 shot "bar-800-three-night.png"
++1 press "Radio 3 master"
++8 state workspace.selected == 3

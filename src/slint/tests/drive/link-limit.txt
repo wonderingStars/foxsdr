@@ -1,0 +1,89 @@
+#! frames=2600 size=1600x900
+# link-limit: a LINKED radio that cannot follow (screen stage S5; docs/multi-radio-records/screen-s5.md). Radio 1 is the engine's (100.300 MHz), radio 2 a generator radio (100.000 MHz) that the test gives a TUNING
+# RANGE of 99.900 to 100.100 MHz (the drive verb "radio range 2 ...": the product cannot ask a device for its range, so a limit is shown by a seam that clamps the request as a device that clamps to its edge would).
+# Link on, radio 1 tuned up in steps of the tuneStepUp key (Ctrl+Up: 12.5 kHz in WFM, the engine's own raster): after 8 steps radio 2 is at 100.100 MHz (the gap kept, the limit reached exactly); the 9th takes radio 1 to
+# 100.4125 MHz and radio 2 STAYS AT ITS LIMIT 100.100 MHz while the group wants 100.1125 MHz (its pane's link key says it could not follow: state workspace.link.2 == 2, workspace.intended.2 the group's wish); the 10th, still at the
+# limit; stepping radio 1 back down brings radio 2 back with the gap it had (100.300 / 100.000), link.2 == 1 again. Radio 1 is never held back.
+10 state workspace.radios == 1
++1 radio add 2 60000
++30 state workspace.radios == 2
++1 radio range 2 99900000 100100000
++1 click "2 x 2"
++15 state workspace.shown == 2
++1 click "Link tuning"
++6 state workspace.link == 1
++1 key ctrl+up
++8 state workspace.r.1.tuned == 100312500
+state workspace.r.2.tuned == 100012500
++1 key ctrl+up
++8 state workspace.r.1.tuned == 100325000
+state workspace.r.2.tuned == 100025000
++1 key ctrl+up
++8 state workspace.r.1.tuned == 100337500
+state workspace.r.2.tuned == 100037500
++1 key ctrl+up
++8 state workspace.r.1.tuned == 100350000
+state workspace.r.2.tuned == 100050000
++1 key ctrl+up
++8 state workspace.r.1.tuned == 100362500
+state workspace.r.2.tuned == 100062500
++1 key ctrl+up
++8 state workspace.r.1.tuned == 100375000
+state workspace.r.2.tuned == 100075000
++1 key ctrl+up
++8 state workspace.r.1.tuned == 100387500
+state workspace.r.2.tuned == 100087500
++1 key ctrl+up
++8 state workspace.r.1.tuned == 100400000
+state workspace.r.2.tuned == 100100000
+state workspace.link.2 == 1
+# the 9th step is beyond the limit: radio 1 moves, radio 2 stays at its limit, the group wants more of it
++1 key ctrl+up
++14 state workspace.r.1.tuned == 100412500
+state workspace.r.2.tuned == 100100000
+state workspace.link.2 == 2
+state workspace.link.1 == 1
+state workspace.intended.2 == 100112500
++1 expect "Link Radio 2" checked equals "true"
++1 shot "link-limit-stuck.png"
++1 key ctrl+up
++14 state workspace.r.1.tuned == 100425000
+state workspace.r.2.tuned == 100100000
+state workspace.link.2 == 2
+state workspace.intended.2 == 100125000
+# back down: radio 2 comes back with the gap it had
++1 key ctrl+down
++10 state workspace.r.1.tuned == 100412500
+state workspace.r.2.tuned == 100100000
+state workspace.link.2 == 2
++1 key ctrl+down
++10 state workspace.r.1.tuned == 100400000
+state workspace.r.2.tuned == 100100000
+state workspace.link.2 == 1
++1 key ctrl+down
++10 state workspace.r.1.tuned == 100387500
+state workspace.r.2.tuned == 100087500
++1 key ctrl+down
++10 state workspace.r.1.tuned == 100375000
+state workspace.r.2.tuned == 100075000
++1 key ctrl+down
++10 state workspace.r.1.tuned == 100362500
+state workspace.r.2.tuned == 100062500
++1 key ctrl+down
++10 state workspace.r.1.tuned == 100350000
+state workspace.r.2.tuned == 100050000
++1 key ctrl+down
++10 state workspace.r.1.tuned == 100337500
+state workspace.r.2.tuned == 100037500
++1 key ctrl+down
++10 state workspace.r.1.tuned == 100325000
+state workspace.r.2.tuned == 100025000
++1 key ctrl+down
++10 state workspace.r.1.tuned == 100312500
+state workspace.r.2.tuned == 100012500
++1 key ctrl+down
++10 state workspace.r.1.tuned == 100300000
+state workspace.r.2.tuned == 100000000
+state workspace.r.1.tuned == 100300000
+state workspace.r.2.tuned == 100000000
+state workspace.link.2 == 1
