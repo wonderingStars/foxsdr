@@ -446,6 +446,14 @@ struct AppWindowTestAccess {
     static bool nbPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.noiseBlankerEnabled(); }); }
     static float nbThresholdRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->nbThresholdDb_; }); }
     static float nbThresholdPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.noiseBlankerThresholdDb(); }); }
+    static int toneKindRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->toneKind_; }); }
+    static int toneKindPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.toneKind(); }); }
+    static double toneHzRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->toneHz_; }); }
+    static double toneHzPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.toneHz(); }); }
+    static int toneCodeRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->toneCode_; }); }
+    static int toneCodePipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.toneDcsDigits(); }); }
+    static bool toneRemoveRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->toneRemove_; }); }
+    static bool toneRemovePipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.toneRemove(); }); }
     static bool notch(AppWindow& a) {
         return rd(a, [&] { return th::engine(a).notchEnabled_ && th::engine(a).pipeline_.notchEnabled(); });
     }
@@ -1171,6 +1179,43 @@ void receiverOps(AppWindow& a) {
         const FoxCommandResult hi = A::apply(a, on);
         CHECK(ok(hi) && (hi.flags & FOXAPI_RESULT_CLAMPED) != 0u && A::nbThresholdRx(a) == 30.0f && A::nbThresholdPipe(a) == 30.0f);
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_NB, 0, 0))));
+    }
+
+    covering(FOXAPI_OP_SET_TONE_SQUELCH);
+    {
+        CHECK(A::toneKindRx(a) == 0 && A::toneKindPipe(a) == 0 && A::toneHzRx(a) == 0.0);
+        FoxCommand tq = ints(FOXAPI_OP_SET_TONE_SQUELCH, FOXAPI_TONE_CTCSS, 1);
+        tq.num[0] = 123.0;
+        CHECK(ok(A::apply(a, tq)));
+        CHECK(A::toneKindRx(a) == 1 && A::toneKindPipe(a) == 1 && A::toneHzRx(a) == 123.0 && A::toneHzPipe(a) == 123.0);
+        // the kind alone keeps the last values
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_TONE_SQUELCH, FOXAPI_TONE_OFF, 0))));
+        CHECK(A::toneKindRx(a) == 0 && A::toneKindPipe(a) == 0 && A::toneHzRx(a) == 123.0);
+        // DCS with its values
+        FoxCommand dcs = ints(FOXAPI_OP_SET_TONE_SQUELCH, FOXAPI_TONE_DCS, 1);
+        dcs.num[1] = 754.0;
+        dcs.num[2] = 2.0;
+        CHECK(ok(A::apply(a, dcs)));
+        CHECK(A::toneKindPipe(a) == 2 && A::toneCodeRx(a) == 754 && A::toneCodePipe(a) == 754);
+        // the refusals leave everything as it was
+        FoxCommand bad = tq;
+        bad.num[0] = 99.0;
+        CHECK(refused(A::apply(a, bad), FOXAPI_OUT_OF_RANGE));
+        bad = dcs;
+        bad.num[1] = 24.0;
+        CHECK(refused(A::apply(a, bad), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_TONE_SQUELCH, 3, 0)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::toneKindRx(a) == 2 && A::toneCodeRx(a) == 754 && A::toneHzRx(a) == 0.0);   // (the values that came with the DCS command replaced all three: the tone is "any" again)
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_TONE_SQUELCH, FOXAPI_TONE_OFF, 0))));
+    }
+
+    covering(FOXAPI_OP_SET_TONE_REMOVE);
+    {
+        CHECK(!A::toneRemoveRx(a) && !A::toneRemovePipe(a));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_TONE_REMOVE, 1, 0))));
+        CHECK(A::toneRemoveRx(a) && A::toneRemovePipe(a));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_TONE_REMOVE, 0, 0))));
+        CHECK(!A::toneRemoveRx(a) && !A::toneRemovePipe(a));
     }
 
     covering(FOXAPP_OP_SET_NR_STRENGTH);

@@ -130,6 +130,9 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
                       // nbStandingDown are measurements, like signalDb: they move nothing)
                       f.agcMode != o.agcMode || f.agcFixedGainDb != o.agcFixedGainDb || f.nbEnabled != o.nbEnabled ||
                       f.nbThresholdDb != o.nbThresholdDb ||
+                      // the tone squelch's five settings (the detected tone or code and the two gates are measurements: they move nothing)
+                      f.toneKind != o.toneKind || f.toneHz != o.toneHz || f.toneCode != o.toneCode || f.tonePolarity != o.tonePolarity ||
+                      f.toneRemove != o.toneRemove ||
                       f.notchQ != o.notchQ || changed(f.flags, o.flags, kModeFlags);
     const bool device = first || changed(f.flags, o.flags, kDeviceFlags) ||
                         f.sampleRateHz != o.sampleRateHz || f.channelRateHz != o.channelRateHz ||

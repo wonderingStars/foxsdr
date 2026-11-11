@@ -50,6 +50,7 @@ struct AppWindowTestAccess {
     static std::string deviceArgs(Engine& e, std::size_t slot) { return e.receivers_[slot] ? e.receivers_[slot]->deviceArgs_ : std::string("<no radio>"); }
     static std::string kind(Engine& e, std::size_t slot) { return e.receivers_[slot] ? e.receivers_[slot]->sourceKind_ : std::string("<no radio>"); }
     static std::string seed(const Engine& e) { return e.transmitArgsSeed(); }
+    static cascade::core::Pipeline& pipeline(Engine& e, std::size_t slot) { return e.receivers_[slot]->pipeline_; }
 };
 }  // namespace cascade::gui
 

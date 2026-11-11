@@ -43,6 +43,7 @@
 #include "core/utf8_text.hpp"
 #include "engine/engine.hpp"
 #include "engine/plugin_ui_port.hpp"
+#include "dsp/tone_squelch.hpp"
 #include "engine/radio_scope.hpp"
 #include "core/receiver_tables.hpp"
 #include "net/status_compose.hpp"
@@ -1955,6 +1956,15 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
         case FOXAPI_OP_SET_NB:
             // with ival[1] = 1 the threshold, 6..30 dB above the average
             return (c.ival[1] == 0 || (v >= 6.0 && v <= 30.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_TONE_SQUELCH: {
+            // the kind 0..2; with ival[1] = 1 the values too: a CTCSS tone of the 50 (or 0), a DCS code of the 83 written as digits (or 0), a polarity 0..2
+            if (c.ival[0] < 0 || c.ival[0] > static_cast<long long>(FOXAPI_TONE_DCS)) { return FOXAPI_OUT_OF_RANGE; }
+            if (c.ival[1] == 0) { return FOXAPI_OK; }
+            const double code = c.num[1];
+            const double pol = c.num[2];
+            if (!(code >= 0.0 && code <= 777.0) || code != std::floor(code) || !(pol >= 0.0 && pol <= 2.0) || pol != std::floor(pol)) { return FOXAPI_OUT_OF_RANGE; }
+            return (cascade::dsp::tone::validCtcssHz(c.num[0]) && cascade::dsp::tone::validDcsDigits(static_cast<int>(code))) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        }
         case FOXAPI_OP_SET_NOTCH:
             return (c.ival[1] == 0 || (v >= 10.0 && v <= 20000.0 && c.num[1] >= 0.1 && c.num[1] <= 1000.0))
                        ? FOXAPI_OK

@@ -387,6 +387,11 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.agcFixedGainDb == b.agcFixedGainDb);
     CHECK(a.nbEnabled == b.nbEnabled);
     CHECK(a.nbThresholdDb == b.nbThresholdDb);
+    CHECK(a.toneSquelchKind == b.toneSquelchKind);
+    CHECK(a.toneSquelchHz == b.toneSquelchHz);
+    CHECK(a.toneSquelchCode == b.toneSquelchCode);
+    CHECK(a.toneSquelchPolarity == b.toneSquelchPolarity);
+    CHECK(a.toneRemove == b.toneRemove);
     CHECK(a.notchEnabled == b.notchEnabled);
     CHECK(a.notchFreqHz == b.notchFreqHz);
     CHECK(a.notchQ == b.notchQ);
@@ -910,6 +915,11 @@ int main() {
         in.agcFixedGainDb = -7.5f;  // below unity: the widened range (default 0)
         in.nbEnabled = true;      // (default off)
         in.nbThresholdDb = 22.5f; // (default 15)
+        in.toneSquelchKind = 2;       // DCS (default Off)
+        in.toneSquelchHz = 123.0;
+        in.toneSquelchCode = 754;
+        in.toneSquelchPolarity = 2;
+        in.toneRemove = true;
         in.notchEnabled = true;
         in.notchFreqHz = 1234.5;
         in.notchQ = 42.25;
@@ -2200,6 +2210,21 @@ int main() {
         CHECK(writeText(path, "{\"agcMode\":2,\"agcFixedGainDb\":-20.0,\"nbEnabled\":true,\"nbThresholdDb\":6.0}\n"));
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.agcMode == 2 && out.agcFixedGainDb == -20.0f && out.nbEnabled && out.nbThresholdDb == 6.0f);
+
+        // THE TONE SQUELCH (engine wiring lane 1): a file without the keys loads as Off; a kind out of range lands on the nearest end; a tone that is not one of the 50, a
+        // code that is not one of the 83 and a polarity out of range fall back to "any"; an older reader never sees the keys (it ignores what it does not know).
+        CHECK(writeText(path, "{}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.toneSquelchKind == 0 && out.toneSquelchHz == 0.0 && out.toneSquelchCode == 0 && out.toneSquelchPolarity == 0 && !out.toneRemove);
+        CHECK(writeText(path, "{\"toneSquelchKind\":9,\"toneSquelchHz\":99.0,\"toneSquelchCode\":24,\"toneSquelchPolarity\":7}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.toneSquelchKind == 2 && out.toneSquelchHz == 0.0 && out.toneSquelchCode == 0 && out.toneSquelchPolarity == 2);
+        CHECK(writeText(path, "{\"toneSquelchKind\":-3,\"toneSquelchHz\":-1.0,\"toneSquelchCode\":19,\"toneSquelchPolarity\":-1}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.toneSquelchKind == 0 && out.toneSquelchHz == 0.0 && out.toneSquelchCode == 0 && out.toneSquelchPolarity == 0);
+        CHECK(writeText(path, "{\"toneSquelchKind\":1,\"toneSquelchHz\":88.5,\"toneSquelchCode\":754,\"toneSquelchPolarity\":1,\"toneRemove\":true}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.toneSquelchKind == 1 && out.toneSquelchHz == 88.5 && out.toneSquelchCode == 754 && out.toneSquelchPolarity == 1 && out.toneRemove);
 
         // notch frequency stays inside the audible span of the 48 kHz sink,
         // and Q inside the biquad's useful range.

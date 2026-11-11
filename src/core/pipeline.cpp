@@ -465,6 +465,11 @@ void Pipeline::rebuildChannelBlocks(double chanRate) {
     // carried over — a rate change is a stream discontinuity, and a PS name
     // that survived one would be exactly the stale readout resetRds() exists
     // to prevent.
+    // The tone squelch's detectors listen at the channel rate too: rebuilt for it (a rate change is a discontinuity: the lock is forgotten).
+    toneChanRateHz_ = chanRate;
+    configureToneLocked();
+    toneHpL_.configure(kAudioRateHz);
+    toneHpR_.configure(kAudioRateHz);
     stereo_ = std::make_unique<cascade::dsp::StereoFm>(chanRate);
     stereo_->setDeemphasisUs(deemphasisUs_);
     stereo_->setForceMono(!stereoEnabled_);
@@ -1201,6 +1206,70 @@ float Pipeline::noiseBlankerBlankedPercent() const {
 bool Pipeline::noiseBlankerStandingDown() const {
     return nbStandingDown_.load(std::memory_order_relaxed);
 }
+
+// --- tone squelch (CTCSS / DCS) -------------------------------------------------------------------------------------------------------------------
+void Pipeline::configureToneLocked() {
+    // The idle detector is reset so that a lock it held when it was last used cannot be the first thing it says; the chosen one is configured for the
+    // channel rate (the set-up allocates: it runs here, under audioMutex_, when the setting or the rate changes, never per block).
+    ctcss_.reset();
+    dcs_.reset();
+    if (toneChanRateHz_ <= 0.0) { return; }
+    if (toneKind_ == cascade::dsp::tone::kCtcss) {
+        ctcss_.configure(toneChanRateHz_, /*includeExtraTones=*/true);
+        ctcss_.setSelectedToneHz(toneHz_);
+    } else if (toneKind_ == cascade::dsp::tone::kDcs) {
+        dcs_.configure(toneChanRateHz_);
+        dcs_.setSelected(toneDcsOctal_, static_cast<cascade::dsp::DcsDecoder::Polarity>(toneDcsPol_));
+    }
+}
+
+bool Pipeline::setToneSquelch(int kind, double hz, int dcsDigits, int polarity) {
+    namespace tone = cascade::dsp::tone;
+    if (kind < tone::kOff || kind > tone::kDcs) { return false; }
+    if (kind == tone::kCtcss && !tone::validCtcssHz(hz)) { return false; }
+    unsigned octal = 0;
+    if (kind == tone::kDcs) {
+        if (!tone::validDcsDigits(dcsDigits) || !tone::validPolarity(polarity)) { return false; }
+        if (dcsDigits != 0) { (void)tone::digitsToOctal(dcsDigits, octal); }
+    }
+    // The values the other kind does not use are kept as given (the saved settings hold one choice of each), but only the chosen kind is run.
+    post([this, kind, hz, octal, polarity] {
+             toneKind_ = kind;
+             toneHz_ = hz;
+             toneDcsOctal_ = octal;
+             toneDcsPol_ = polarity;
+             configureToneLocked();
+         },
+         [this, kind, hz, dcsDigits, polarity] {
+             mirrorToneKind_.store(kind, std::memory_order_relaxed);
+             mirrorToneHz_.store(hz, std::memory_order_relaxed);
+             mirrorToneDcsDigits_.store(dcsDigits, std::memory_order_relaxed);
+             mirrorTonePol_.store(polarity, std::memory_order_relaxed);
+         });
+    return true;
+}
+
+void Pipeline::setToneRemove(bool on) {
+    post([this, on] {
+             if (on && !toneRemove_) {
+                 toneHpL_.reset();
+                 toneHpR_.reset();
+             }
+             toneRemove_ = on;
+         },
+         [this, on] { mirrorToneRemove_.store(on, std::memory_order_relaxed); });
+}
+
+int Pipeline::toneKind() const { return mirrorToneKind_.load(std::memory_order_relaxed); }
+double Pipeline::toneHz() const { return mirrorToneHz_.load(std::memory_order_relaxed); }
+int Pipeline::toneDcsDigits() const { return mirrorToneDcsDigits_.load(std::memory_order_relaxed); }
+int Pipeline::tonePolarity() const { return mirrorTonePol_.load(std::memory_order_relaxed); }
+bool Pipeline::toneRemove() const { return mirrorToneRemove_.load(std::memory_order_relaxed); }
+double Pipeline::toneDetectedHz() const { return toneDetectedHz_.load(std::memory_order_relaxed); }
+int Pipeline::toneDetectedCode() const { return toneDetectedCode_.load(std::memory_order_relaxed); }
+int Pipeline::toneDetectedPolarity() const { return toneDetectedPol_.load(std::memory_order_relaxed); }
+bool Pipeline::toneGateOpen() const { return toneGateOpen_.load(std::memory_order_relaxed); }
+bool Pipeline::audioGateOpen() const { return audioGateOpen_.load(std::memory_order_relaxed); }
 
 void Pipeline::setNotchEnabled(bool on) {
     post(
@@ -2073,6 +2142,35 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         for (std::size_t i = 0; i < m; ++i) { audioBuf_[i] *= fmScale_; }
     }
 
+    // --- TONE SQUELCH: NFM only, nothing at all when it is off -----------------------------------------------------------------------------------
+    // The detector listens to the discriminator output as it is here (de-emphasised and scaled; both detectors normalise by the band's own power, so the
+    // scale does not matter), before the AGC and the squelch. The squelch's gate is told the verdict once a block and ramps to it like the carrier's.
+    bool toneRequired = false;
+    bool toneOpen = true;
+    if (toneKind_ != cascade::dsp::tone::kOff && mode == cascade::dsp::DemodMode::NFM) {
+        toneRequired = true;
+        if (toneKind_ == cascade::dsp::tone::kCtcss) {
+            ctcss_.process(audioBuf_.data(), m);
+            toneOpen = ctcss_.gateOpen();
+            toneDetectedHz_.store(ctcss_.detectedHz(), std::memory_order_relaxed);
+            toneDetectedCode_.store(0, std::memory_order_relaxed);
+            toneDetectedPol_.store(0, std::memory_order_relaxed);
+        } else {
+            dcs_.process(audioBuf_.data(), m);
+            toneOpen = dcs_.gateOpen();
+            const unsigned octal = dcs_.detectedCode();
+            toneDetectedHz_.store(0.0, std::memory_order_relaxed);
+            toneDetectedCode_.store(octal != 0u ? cascade::dsp::tone::octalToDigits(octal) : 0, std::memory_order_relaxed);
+            toneDetectedPol_.store(octal != 0u ? dcs_.detectedPolarity() : 0, std::memory_order_relaxed);
+        }
+    } else {
+        toneDetectedHz_.store(0.0, std::memory_order_relaxed);
+        toneDetectedCode_.store(0, std::memory_order_relaxed);
+        toneDetectedPol_.store(0, std::memory_order_relaxed);
+    }
+    squelch_.setToneGate(toneRequired, toneOpen);
+    toneGateOpen_.store(toneOpen, std::memory_order_relaxed);
+
     // --- One channel or two -------------------------------------------------
     leftBuf_.resize(m);
     rightBuf_.resize(m);
@@ -2162,7 +2260,8 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // other reader that wants to know whether silence is the squelch's doing
     // (see squelchOpen()). A relaxed store of one bool: nothing is added to the
     // per-sample loop above.
-    squelchOpen_.store(squelch_.isOpen(), std::memory_order_relaxed);
+    squelchOpen_.store(squelch_.carrierOpen(), std::memory_order_relaxed);   // (the carrier alone: the auto-squelch and the heard-time counters read it)
+    audioGateOpen_.store(squelch_.isOpen(), std::memory_order_relaxed);      // (the carrier and the tone: what the listener hears)
     for (std::size_t i = 0; i < m; ++i) {
         leftBuf_[i] = ilvBuf_[2 * i];
         rightBuf_[i] = ilvBuf_[2 * i + 1];
@@ -2195,6 +2294,11 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
 
     // --- Audio post-processing: notch -> auto-notch -> noise reduction ------
     // Order rationale in the header. All three are bypasses when disabled.
+    // THE TONE REMOVER, when asked: a 300 Hz high-pass that takes the sub-audible tone out of what is heard (the decoder tap above is upstream of it).
+    if (toneRemove_) {
+        toneHpL_.process(outL_.data(), outL_.data(), k);
+        toneHpR_.process(outR_.data(), outR_.data(), k);
+    }
     notchL_->process(outL_.data(), k);
     notchR_->process(outR_.data(), k);
     autoNotchL_->process(outL_.data(), k);

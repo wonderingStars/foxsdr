@@ -487,6 +487,13 @@ Five ops, grant SETTINGS (`RADIO_FOCUS`, 6.18, is VIEW). A one-radio client neve
 * **Facts** (stage 6 adds to 6.18's): `fact.plugin.<module file>.radio` (the plugin's radio), `fact.radio.<n>.plugins` (the decoder modules running ON radio n, comma-separated),
   `fact.scanner.radio` (the radio the one scanner was started on while it is active, else `0`), `fact.transmit.radio` (the radio the transmitter follows, `1` unless a Pluto is
   another radio), and `fact.radio.restore` (stage 5: one sentence per saved radio that could not be restored at start-up, newline-separated, "Radio 3: ..."; absent when all came back).
+* **Tone squelch (CTCSS and DCS; engine wiring lane 1, group B).** `SET_TONE_SQUELCH` 0x0113 (`ival[0]` `FOXAPI_TONE_OFF`/`CTCSS`/`DCS`; with `ival[1]` = 1 the values: `num[0]` a CTCSS tone in Hz
+  (one of the 50 of the standard and extra tables, or 0 for any tone), `num[1]` a DCS code written as digits (`23` for 023; one of the 83, or 0 for any code), `num[2]` the DCS polarity 0 any / 1 normal / 2 inverted;
+  without them the radio's last choice is used) and `SET_TONE_REMOVE` 0x0114 (`ival[0]` 0/1: a 300 Hz high-pass on the heard audio that takes the sub-audible tone out). Both address one radio (`target`),
+  NFM only (in any other mode the setting is kept and does nothing), and both are in no web, CAT or TCI profile (the page has no control for them; a public REMOTE session with the SETTINGS grant may send them). While
+  a tone squelch is on the squelch opens only for a carrier that carries the chosen tone or code. State, appended after `nbStandingDown`: `toneKind toneHz toneCode tonePolarity toneRemove` (settings: they
+  move `modeSeq`) and `toneDetectedHz toneDetectedCode toneDetectedPolarity toneGate audioGate` (measurements: they move nothing; `toneGate` is 1 while no tone is required or the required one is present,
+  `audioGate` is 1 while the carrier AND the tone let the audio through). Saved per radio (`toneSquelchKind`, `toneSquelchHz`, `toneSquelchCode`, `toneSquelchPolarity`, `toneRemove`).
 * **A KiwiSDR receiver as a radio** (engine wiring lane 1): `RADIO_ADD` and `SELECT_SOURCE` take `open-kiwisdr:<host>[:<port>]` (`kiwisdr=host:port` or the bare address; port 8073 by
   default; a host name or number, never a web address). It is an AUDIO-ONLY, listen-only radio: the receiver sends demodulated 12 kS/s mono audio, which plays through the radio's own chain; its
   spectrum is that audio's, mirrored about zero. The radio's centre is the receiver's tuned frequency (a retune is a command to the receiver), a mode the user picks is the receiver's mode

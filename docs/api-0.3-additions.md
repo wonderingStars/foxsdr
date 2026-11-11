@@ -2552,6 +2552,12 @@ At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTT
 * Facts (LOCAL read like the other radio facts): `fact.radio.<n>.source` = `kiwisdr`; `fact.radio.<n>.kiwi.state` (`idle connecting playing busy password down redirect failed dropped malformed closed`), `.detail`, `.mode`, `.rssi` (dBm, once the receiver has sent a level), `.dropped`. A refusal is `fact.radio.<n>.refusal`.
 * Saved settings: `sourceKind` "kiwisdr" with `nativeArgs` "kiwisdr=host:port" for radio 1, and the same kind and `args` in a `radios` entry; an older reader falls back to the generator for the kind it does not know.
 
+### 9.27 Tone squelch: CTCSS and DCS (engine wiring lane 1, group B; docs/multi-radio-records/engine-wiring-1.md)
+
+* Ops `FOXAPI_OP_SET_TONE_SQUELCH` 0x0113 and `FOXAPI_OP_SET_TONE_REMOVE` 0x0114 (receiver-scoped: `target` addresses a radio; not in the web, CAT or TCI profile). Full text: API.md 6.19 beside the AGC and the blanker.
+* `FoxReceiverState`, appended after `nbStandingDown`: `toneKind toneHz toneCode tonePolarity toneRemove toneDetectedHz toneDetectedCode toneDetectedPolarity toneGate audioGate`. The five settings move `modeSeq`; the rest are measurements.
+* Saved settings: `toneSquelchKind toneSquelchHz toneSquelchCode toneSquelchPolarity toneRemove` for radio 1 and in each `radios` entry; an older reader ignores them.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

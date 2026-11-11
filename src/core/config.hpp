@@ -198,6 +198,14 @@ struct SavedRadio {
     double agcFixedGainDb = 0.0;
     bool nbEnabled = false;
     double nbThresholdDb = 15.0;
+    // Tone squelch (engine wiring lane 1): 0 Off, 1 CTCSS, 2 DCS; the tone in Hz (0 any, else one of the 50); the DCS code written as digits (0 any, else one of
+    // the 83); its polarity (0 any, 1 normal, 2 inverted); the tone remover. A file without the keys loads as Off. A value that is not one of the table's is
+    // dropped to "any" by the loader (dsp/tone_squelch.hpp).
+    int toneSquelchKind = 0;
+    double toneSquelchHz = 0.0;
+    int toneSquelchCode = 0;
+    int toneSquelchPolarity = 0;
+    bool toneRemove = false;
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
     double notchQ = 30.0;
@@ -479,6 +487,11 @@ struct AppConfig {
     float agcFixedGainDb = 0.0f;
     bool nbEnabled = false;
     float nbThresholdDb = 15.0f;
+    int toneSquelchKind = 0;
+    double toneSquelchHz = 0.0;
+    int toneSquelchCode = 0;
+    int toneSquelchPolarity = 0;
+    bool toneRemove = false;
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
     double notchQ = 30.0;

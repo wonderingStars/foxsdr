@@ -4861,6 +4861,17 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         r.nbThresholdDb = floatAsDecimal(rxa.nbThresholdDb_);
         r.nbBlankedPct = static_cast<double>(rxa.pipeline_.noiseBlankerBlankedPercent());
         r.nbStandingDown = rxa.pipeline_.noiseBlankerStandingDown() ? 1u : 0u;
+        // THE TONE SQUELCH (engine wiring lane 1): the five settings move modeSeq, the detected tone or code and the two gates are measurements.
+        r.toneKind = static_cast<std::uint32_t>(rxa.toneKind_);
+        r.toneHz = rxa.toneHz_;
+        r.toneCode = static_cast<std::uint32_t>(rxa.toneCode_);
+        r.tonePolarity = static_cast<std::uint32_t>(rxa.tonePol_);
+        r.toneRemove = rxa.toneRemove_ ? 1u : 0u;
+        r.toneDetectedHz = rxa.pipeline_.toneDetectedHz();
+        r.toneDetectedCode = static_cast<std::uint32_t>(rxa.pipeline_.toneDetectedCode());
+        r.toneDetectedPolarity = static_cast<std::uint32_t>(rxa.pipeline_.toneDetectedPolarity());
+        r.toneGate = rxa.pipeline_.toneGateOpen() ? 1u : 0u;
+        r.audioGate = rxa.pipeline_.audioGateOpen() ? 1u : 0u;
     }
     r.notchHz = floatAsDecimal(rx().notchFreqHz_);
     r.notchQ = floatAsDecimal(rx().notchQ_);
@@ -7363,6 +7374,38 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[0] = floatAsDecimal(rxs.nbThresholdDb_);
             return res;
         }
+        case FOXAPI_OP_SET_TONE_SQUELCH: {
+            Receiver& rxs = rx();
+            namespace tone = cascade::dsp::tone;
+            if (c.ival[0] < 0 || c.ival[0] > static_cast<long long>(FOXAPI_TONE_DCS)) { return refuse(FOXAPI_OUT_OF_RANGE, "no such tone squelch"); }
+            // The values come with the op (ival[1] = 1) or are the radio's last choice.
+            double hz = rxs.toneHz_;
+            int code = rxs.toneCode_;
+            int pol = rxs.tonePol_;
+            if (c.ival[1] == 1) {
+                hz = c.num[0];
+                code = static_cast<int>(std::llround(c.num[1]));
+                pol = static_cast<int>(std::llround(c.num[2]));
+                if (!tone::validCtcssHz(hz)) { return refuse(FOXAPI_OUT_OF_RANGE, "that is not one of the 50 CTCSS tones"); }
+                if (!tone::validDcsDigits(code)) { return refuse(FOXAPI_OUT_OF_RANGE, "that is not one of the 83 standard DCS codes"); }
+                if (!tone::validPolarity(pol)) { return refuse(FOXAPI_OUT_OF_RANGE, "a DCS polarity is any, normal or inverted"); }
+            }
+            const int kind = static_cast<int>(c.ival[0]);
+            if (!rxs.pipeline_.setToneSquelch(kind, hz, code, pol)) { return refuse(FOXAPI_OUT_OF_RANGE, "that tone squelch is not one the detectors know"); }
+            rxs.toneKind_ = kind;
+            rxs.toneHz_ = hz;
+            rxs.toneCode_ = code;
+            rxs.tonePol_ = pol;
+            res.applied[0] = kind == tone::kCtcss ? hz : static_cast<double>(code);
+            return res;
+        }
+        case FOXAPI_OP_SET_TONE_REMOVE: {
+            Receiver& rxs = rx();
+            rxs.toneRemove_ = on;
+            rxs.pipeline_.setToneRemove(on);
+            res.applied[0] = on ? 1.0 : 0.0;
+            return res;
+        }
         case FOXAPP_OP_SET_NR_STRENGTH:
             rx().nrStrength_ = static_cast<float>(c.num[0]);
             rx().pipeline_.setNoiseReductionStrength(rx().nrStrength_);
@@ -9151,6 +9194,13 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         rx().agcFixedGainDb_ = cfg.agcFixedGainDb;
         rx().nbEnabled_ = cfg.nbEnabled;
         rx().nbThresholdDb_ = cfg.nbThresholdDb;
+        rx().toneKind_ = cfg.toneSquelchKind;
+        rx().toneHz_ = cfg.toneSquelchHz;
+        rx().toneCode_ = cfg.toneSquelchCode;
+        rx().tonePol_ = cfg.toneSquelchPolarity;
+        rx().toneRemove_ = cfg.toneRemove;
+        (void)rx().pipeline_.setToneSquelch(rx().toneKind_, rx().toneHz_, rx().toneCode_, rx().tonePol_);
+        rx().pipeline_.setToneRemove(rx().toneRemove_);
         rx().pipeline_.setAgcMode(static_cast<cascade::dsp::Agc::Mode>(rx().agcMode_));
         rx().pipeline_.setAgcFixedGain(rx().agcFixedGainDb_);
         rx().pipeline_.setNoiseBlankerThresholdDb(rx().nbThresholdDb_);
@@ -9693,6 +9743,11 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
         cfg.agcFixedGainDb = agcFixedGainShown(rxa);
         cfg.nbEnabled = rxa.nbEnabled_;
         cfg.nbThresholdDb = rxa.nbThresholdDb_;
+        cfg.toneSquelchKind = rxa.toneKind_;
+        cfg.toneSquelchHz = rxa.toneHz_;
+        cfg.toneSquelchCode = rxa.toneCode_;
+        cfg.toneSquelchPolarity = rxa.tonePol_;
+        cfg.toneRemove = rxa.toneRemove_;
     }
     cfg.notchEnabled = rx().notchEnabled_;
     cfg.notchFreqHz = static_cast<double>(rx().notchFreqHz_);
@@ -9780,6 +9835,8 @@ void Engine::initialise() {
         rx().pipeline_.setAgcFixedGain(rx().agcFixedGainDb_);
         rx().pipeline_.setNoiseBlankerThresholdDb(rx().nbThresholdDb_);
         rx().pipeline_.setNoiseBlankerEnabled(rx().nbEnabled_);
+        (void)rx().pipeline_.setToneSquelch(rx().toneKind_, rx().toneHz_, rx().toneCode_, rx().tonePol_);
+        rx().pipeline_.setToneRemove(rx().toneRemove_);
     }
     rx().pipeline_.setNotchEnabled(rx().notchEnabled_);
     rx().pipeline_.setNotchFrequencyHz(static_cast<double>(rx().notchFreqHz_));

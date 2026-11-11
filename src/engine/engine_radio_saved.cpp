@@ -91,6 +91,11 @@ SavedRadio Engine::savedRadioOf(std::size_t slot) {
     r.agcFixedGainDb = fixedGainShown(rx());
     r.nbEnabled = rx().nbEnabled_;
     r.nbThresholdDb = static_cast<double>(rx().nbThresholdDb_);
+    r.toneSquelchKind = rx().toneKind_;
+    r.toneSquelchHz = rx().toneHz_;
+    r.toneSquelchCode = rx().toneCode_;
+    r.toneSquelchPolarity = rx().tonePol_;
+    r.toneRemove = rx().toneRemove_;
     r.notchEnabled = rx().notchEnabled_;
     r.notchFreqHz = static_cast<double>(rx().notchFreqHz_);
     r.notchQ = static_cast<double>(rx().notchQ_);
@@ -238,6 +243,15 @@ void Engine::restoreSavedRadios(const cascade::core::AppConfig& cfg) {
             FoxCommand nb = cmd::makeInt(FOXAPI_OP_SET_NB, s.nbEnabled ? 1 : 0, 1);
             nb.num[0] = s.nbThresholdDb;
             send(nb);
+        }
+        {
+            // The tone squelch with its values (ival[1] = 1), then the remover.
+            FoxCommand tq = cmd::makeInt(FOXAPI_OP_SET_TONE_SQUELCH, s.toneSquelchKind, 1);
+            tq.num[0] = s.toneSquelchHz;
+            tq.num[1] = static_cast<double>(s.toneSquelchCode);
+            tq.num[2] = static_cast<double>(s.toneSquelchPolarity);
+            send(tq);
+            send(cmd::makeInt(FOXAPI_OP_SET_TONE_REMOVE, s.toneRemove ? 1 : 0));
         }
         {
             FoxCommand notch = cmd::makeInt(FOXAPI_OP_SET_NOTCH, s.notchEnabled ? 1 : 0, 1);

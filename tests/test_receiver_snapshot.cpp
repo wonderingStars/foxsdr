@@ -562,6 +562,17 @@ void countersMoveByGroup() {
         {"the noise blanker threshold", [](PublishedState& p) { p.rx.nbThresholdDb = 22.0; }, "seq mode"},
         {"the noise blanker blanked share (a measurement)", [](PublishedState& p) { p.rx.nbBlankedPct = 3.5; }, ""},
         {"the noise blanker standing down (a measurement)", [](PublishedState& p) { p.rx.nbStandingDown = 1; }, ""},
+        // The tone squelch (engine wiring lane 1, group B): the five settings are the mode group's; the detected tone, code, polarity and the two gates are measurements.
+        {"the tone squelch kind", [](PublishedState& p) { p.rx.toneKind = FOXAPI_TONE_CTCSS; }, "seq mode"},
+        {"the CTCSS tone chosen", [](PublishedState& p) { p.rx.toneHz = 123.0; }, "seq mode"},
+        {"the DCS code chosen", [](PublishedState& p) { p.rx.toneCode = 754; }, "seq mode"},
+        {"the DCS polarity chosen", [](PublishedState& p) { p.rx.tonePolarity = 2; }, "seq mode"},
+        {"the tone remover", [](PublishedState& p) { p.rx.toneRemove = 1; }, "seq mode"},
+        {"the CTCSS tone detected (a measurement)", [](PublishedState& p) { p.rx.toneDetectedHz = 100.0; }, ""},
+        {"the DCS code detected (a measurement)", [](PublishedState& p) { p.rx.toneDetectedCode = 23; }, ""},
+        {"the DCS polarity detected (a measurement)", [](PublishedState& p) { p.rx.toneDetectedPolarity = 1; }, ""},
+        {"the tone gate (a measurement)", [](PublishedState& p) { p.rx.toneGate = 0; }, ""},
+        {"the audio gate (a measurement)", [](PublishedState& p) { p.rx.audioGate = 1; }, ""},
         // API 0.3 8.6, the scanner: its seven settings are a group of their own (scanSeq, and
         // seq with it); the scanner's state word and its frequency are live state that moves seq
         // alone (the scanner flag, which the state already had, is the same).
@@ -655,7 +666,13 @@ void rdsGroupAndLayout() {
     CHECK(offsetof(FoxReceiverState, nbBlankedPct) == offsetof(FoxReceiverState, nbThresholdDb) + sizeof(double));
     CHECK(offsetof(FoxReceiverState, nbEnabled) > offsetof(FoxReceiverState, agcGainDb));
     CHECK(offsetof(FoxReceiverState, nbStandingDown) > offsetof(FoxReceiverState, nbBlankedPct));
-    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, nbStandingDown) + sizeof(std::uint32_t)) < 8u);
+    // The tone squelch members (engine wiring lane 1) follow nbStandingDown, in this order; after them only the struct's own tail padding.
+    CHECK(offsetof(FoxReceiverState, toneKind) > offsetof(FoxReceiverState, nbStandingDown));
+    CHECK(offsetof(FoxReceiverState, toneKind) < offsetof(FoxReceiverState, toneHz));
+    CHECK(offsetof(FoxReceiverState, toneHz) < offsetof(FoxReceiverState, toneCode));
+    CHECK(offsetof(FoxReceiverState, toneDetectedHz) > offsetof(FoxReceiverState, toneRemove));
+    CHECK(offsetof(FoxReceiverState, audioGate) > offsetof(FoxReceiverState, toneGate));
+    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, audioGate) + sizeof(std::uint32_t)) < 8u);
     CHECK(FOXAPI_RDS_PS_CHARS == 9 && FOXAPI_RDS_TEXT_CHARS == 65);
     // The six RDS bits are one word's low bits, each its own.
     const std::uint32_t bits[] = {FOXAPI_RDS_SYNCED, FOXAPI_RDS_PI_VALID, FOXAPI_RDS_PS_VALID,
@@ -734,7 +751,13 @@ void scanGroupAndLayout() {
     CHECK(offsetof(FoxReceiverState, nbBlankedPct) == offsetof(FoxReceiverState, nbThresholdDb) + sizeof(double));
     CHECK(offsetof(FoxReceiverState, nbEnabled) > offsetof(FoxReceiverState, agcGainDb));
     CHECK(offsetof(FoxReceiverState, nbStandingDown) > offsetof(FoxReceiverState, nbBlankedPct));
-    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, nbStandingDown) + sizeof(std::uint32_t)) < 8u);
+    // The tone squelch members (engine wiring lane 1) follow nbStandingDown, in this order; after them only the struct's own tail padding.
+    CHECK(offsetof(FoxReceiverState, toneKind) > offsetof(FoxReceiverState, nbStandingDown));
+    CHECK(offsetof(FoxReceiverState, toneKind) < offsetof(FoxReceiverState, toneHz));
+    CHECK(offsetof(FoxReceiverState, toneHz) < offsetof(FoxReceiverState, toneCode));
+    CHECK(offsetof(FoxReceiverState, toneDetectedHz) > offsetof(FoxReceiverState, toneRemove));
+    CHECK(offsetof(FoxReceiverState, audioGate) > offsetof(FoxReceiverState, toneGate));
+    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, audioGate) + sizeof(std::uint32_t)) < 8u);
     // The state words are 0..3, each its own.
     CHECK(FOXAPI_SCANNER_IDLE == 0u && FOXAPI_SCANNER_SCANNING == 1u && FOXAPI_SCANNER_PAUSED == 2u &&
           FOXAPI_SCANNER_HOLDING == 3u);

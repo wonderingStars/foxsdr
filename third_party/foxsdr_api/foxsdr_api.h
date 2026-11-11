@@ -409,7 +409,24 @@ typedef struct FoxReceiverState {
     double nbThresholdDb;              /* 6..30 dB above the average magnitude */
     double nbBlankedPct;               /* share of the last 100 ms blanked, 0..100; 0 while off or standing down - measured */
     uint32_t nbStandingDown;           /* 1 while the blanker lets everything through because a quarter of the last 100 ms would go - measured */
+    /* ---- 0.3 (tone squelch; docs/API.md 6.24): the CTCSS / DCS squelch of THIS radio. toneKind, toneHz, toneCode, tonePolarity and toneRemove are the radio's
+     * settings and move modeSeq; the detected figures and the two gates are measurements and move nothing. ---- */
+    uint32_t toneKind;                 /* FOXAPI_TONE_* */
+    double toneHz;                     /* the CTCSS tone chosen, Hz; 0 = any tone */
+    uint32_t toneCode;                 /* the DCS code chosen, written as digits (23 for 023); 0 = any code */
+    uint32_t tonePolarity;             /* the DCS polarity chosen: 0 any, 1 normal, 2 inverted */
+    uint32_t toneRemove;               /* 0/1: the high-pass that takes the tone out of the audio is on */
+    double toneDetectedHz;             /* the CTCSS tone locked now, Hz; 0 none - measured */
+    uint32_t toneDetectedCode;         /* the DCS code locked now, as digits; 0 none - measured */
+    uint32_t toneDetectedPolarity;     /* 1 normal, 2 inverted; 0 none - measured */
+    uint32_t toneGate;                 /* 1 while no tone is required or the required tone is present - measured */
+    uint32_t audioGate;                /* 1 while the carrier AND the tone let the audio through (the squelch the listener hears) - measured */
 } FoxReceiverState;
+
+/* FoxReceiverState::toneKind and FOXAPI_OP_SET_TONE_SQUELCH ival[0] */
+#define FOXAPI_TONE_OFF   0u /* no tone squelch (default) */
+#define FOXAPI_TONE_CTCSS 1u /* open only on a carrier carrying the chosen CTCSS tone (NFM) */
+#define FOXAPI_TONE_DCS   2u /* open only on a carrier carrying the chosen DCS code (NFM) */
 
 
 /* FoxReceiverState::agcMode and FOXAPI_OP_SET_AGC ival[0] */
@@ -562,6 +579,8 @@ typedef struct FoxCommand {
 #define FOXAPI_OP_SET_BAND_FOLLOW   0x0110u /* ival[0]: 0/1 - a retune into another band of the band plan adopts that band's conventional mode (fact.bandPlan.followMode) */
 #define FOXAPI_OP_SET_AGC           0x0111u /* ival[0]: FOXAPI_AGC_* 0..4; ival[1]=1: num[0] is the fixed gain, dB, -20..+40 (set after the mode). Addresses one radio (target) */
 #define FOXAPI_OP_SET_NB            0x0112u /* ival[0]: 0/1; ival[1]=1: num[0] is the blanker threshold, dB above the average, 6..30. Addresses one radio (target) */
+#define FOXAPI_OP_SET_TONE_SQUELCH  0x0113u /* ival[0]: FOXAPI_TONE_*; ival[1]=1: the values follow - num[0]: CTCSS Hz (0 any, else one of the 50), num[1]: DCS code as digits (0 any, else one of the 83), num[2]: DCS polarity 0 any / 1 normal / 2 inverted. Without them the radio's last choice is used. Addresses one radio (target); NFM only */
+#define FOXAPI_OP_SET_TONE_REMOVE   0x0114u /* ival[0]: 0/1: the high-pass that takes the sub-audible tone out of the audio. Addresses one radio (target) */
 /* Display */
 #define FOXAPI_OP_SET_DISPLAY_RANGE 0x0201u /* num[0]: dbMin, num[1]: dbMax (min span enforced) */
 #define FOXAPI_OP_SET_BAND_PLAN     0x0202u /* text: selection name */

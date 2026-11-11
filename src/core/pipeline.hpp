@@ -142,6 +142,9 @@
 
 #include "core/spectrum_frame.hpp"
 #include "dsp/agc.hpp"
+#include "dsp/ctcss.hpp"
+#include "dsp/dcs.hpp"
+#include "dsp/tone_squelch.hpp"
 #include "dsp/demod.hpp"
 #include "dsp/noise_reduction.hpp"
 #include "dsp/notch.hpp"
@@ -535,6 +538,30 @@ public:
     float noiseBlankerThresholdDb() const;
     float noiseBlankerBlankedPercent() const;
     bool noiseBlankerStandingDown() const;
+
+    // TONE SQUELCH (CTCSS / DCS; engine wiring lane 1, dsp/tone_squelch.hpp has the rules). NFM only: in any other mode the setting is kept and does nothing. The
+    // detector listens to the discriminator output at the channel rate, before the AGC and the squelch; while a tone squelch is on the squelch's gate needs the
+    // tone as well as the carrier. Posted like the other settings; the detectors are rebuilt for the channel rate by rebuildChannelBlocks.
+    //   setToneSquelch      kind 0 Off, 1 CTCSS (hz: 0 any tone, else one of the 50), 2 DCS (dcsDigits: 0 any code, else one of the 83 written as digits, 23 for
+    //                       023; polarity 0 any, 1 normal, 2 inverted). False, and nothing changed, for a value outside those.
+    //   setToneRemove       a high-pass at the audio rate that takes the sub-audible tone out of what is heard (off by default).
+    //   toneKind ... toneRemove      the settings as asked (verbatim mirrors).
+    //   toneDetectedHz / toneDetectedCode / toneDetectedPolarity   what the detector has locked on now (0 when none) - measured, once per block.
+    //   toneGateOpen        the tone condition: true while no tone is required or the required tone is present - measured.
+    //   carrierSquelchOpen  the carrier gate alone; squelchOpen() is the same (kept for the auto-squelch and the heard-time counters).
+    //   audioGateOpen       the carrier AND the tone: the gate the listener hears.
+    bool setToneSquelch(int kind, double hz, int dcsDigits, int polarity);
+    void setToneRemove(bool on);
+    int toneKind() const;
+    double toneHz() const;
+    int toneDcsDigits() const;
+    int tonePolarity() const;
+    bool toneRemove() const;
+    double toneDetectedHz() const;
+    int toneDetectedCode() const;
+    int toneDetectedPolarity() const;
+    bool toneGateOpen() const;
+    bool audioGateOpen() const;
 
     void setNotchEnabled(bool on);
     bool notchEnabled() const;
@@ -1045,6 +1072,20 @@ private:
 
     cascade::dsp::Agc agc_;
     cascade::dsp::Squelch squelch_;
+    // TONE SQUELCH: the settings the DSP thread works from (changed only by posted commands, under audioMutex_), the two detectors (only the chosen kind runs),
+    // and the two high-passes of the tone remover, one per channel, at the audio rate.
+    int toneKind_ = 0;
+    double toneHz_ = 0.0;
+    unsigned toneDcsOctal_ = 0;
+    int toneDcsPol_ = 0;
+    bool toneRemove_ = false;
+    double toneChanRateHz_ = 0.0;
+    cascade::dsp::CtcssDetector ctcss_;
+    cascade::dsp::DcsDecoder dcs_;
+    cascade::dsp::CtcssHighpass toneHpL_;
+    cascade::dsp::CtcssHighpass toneHpR_;
+    // (re)configures the chosen detector for toneChanRateHz_ and applies the choice; caller holds audioMutex_
+    void configureToneLocked();
     cascade::dsp::PowerMeter meter_;      // S-meter source (channel power)
     // TWO resamplers with identical configuration, one per channel: the
     // resampler is mono, and running the same L/M state machine twice from
@@ -1206,6 +1247,16 @@ private:
     std::atomic<float> mirrorNbThresholdDb_{15.0f};
     std::atomic<float> nbBlankedPct_{0.0f};      // live, once per block
     std::atomic<bool> nbStandingDown_{false};
+    std::atomic<int> mirrorToneKind_{0};
+    std::atomic<double> mirrorToneHz_{0.0};
+    std::atomic<int> mirrorToneDcsDigits_{0};
+    std::atomic<int> mirrorTonePol_{0};
+    std::atomic<bool> mirrorToneRemove_{false};
+    std::atomic<double> toneDetectedHz_{0.0};    // live, once per block
+    std::atomic<int> toneDetectedCode_{0};       // DCS, as digits (23 for 023); 0 none
+    std::atomic<int> toneDetectedPol_{0};        // 1 normal, 2 inverted; 0 none
+    std::atomic<bool> toneGateOpen_{true};
+    std::atomic<bool> audioGateOpen_{false};
     std::atomic<bool> mirrorNotchEnabled_{false};
     std::atomic<double> mirrorNotchHz_{0.0};
     std::atomic<double> mirrorNotchQ_{0.0};

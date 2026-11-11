@@ -350,6 +350,13 @@ struct Receiver {
     float agcFixedGainDb_ = 0.0f;
     bool nbEnabled_ = false;
     float nbThresholdDb_ = 15.0f;
+    // Tone squelch (engine wiring lane 1, group B): FOXAPI_TONE_*, the CTCSS tone (Hz, 0 any), the DCS code as digits (0 any) and its polarity (0 any), and the tone
+    // remover. Off, any, any, any, off by default: the audio as it always was.
+    int toneKind_ = 0;
+    double toneHz_ = 0.0;
+    int toneCode_ = 0;
+    int tonePol_ = 0;
+    bool toneRemove_ = false;
     bool notchEnabled_ = false;
     float notchFreqHz_ = 1000.0f;
     float notchQ_ = 30.0f;

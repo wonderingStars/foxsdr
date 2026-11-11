@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/config.hpp"
+#include "dsp/tone_squelch.hpp"
 
 #include "core/bias_tee_memory.hpp"
 #include "core/diag_log.hpp"
@@ -232,6 +233,15 @@ double clampd(double v, double lo, double hi) {
     return v > hi ? hi : v;
 }
 
+// The tone squelch's five settings made safe: a kind out of range lands on the nearest end; a tone that is not one of the 50, a code that is not one of the 83
+// and a polarity out of range fall back to "any" (dsp/tone_squelch.hpp); a number that is not a number cannot pass.
+void clampToneSquelch(int& kind, double& hz, int& code, int& pol) {
+    kind = kind < 0 ? 0 : (kind > 2 ? 2 : kind);
+    if (!(hz >= 0.0) || !cascade::dsp::tone::validCtcssHz(hz)) { hz = 0.0; }
+    if (!cascade::dsp::tone::validDcsDigits(code)) { code = 0; }
+    pol = pol < 0 ? 0 : (pol > 2 ? 2 : pol);
+}
+
 }  // namespace
 
 // Radios 2 to 8 as a file may have them, made safe. A number is "not >= lo" clamped so one that is not a number cannot pass; a value that names no thing
@@ -264,6 +274,7 @@ std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
         r.agcMode = r.agcMode < 0 ? 0 : (r.agcMode > 4 ? 4 : r.agcMode);
         r.agcFixedGainDb = !(r.agcFixedGainDb >= -20.0) ? -20.0 : clampd(r.agcFixedGainDb, -20.0, 40.0);
         r.nbThresholdDb = !(r.nbThresholdDb >= 6.0) ? 6.0 : clampd(r.nbThresholdDb, 6.0, 30.0);
+        clampToneSquelch(r.toneSquelchKind, r.toneSquelchHz, r.toneSquelchCode, r.toneSquelchPolarity);
         r.notchFreqHz = clampd(r.notchFreqHz, 10.0, 20000.0);
         r.notchQ = clampd(r.notchQ, 0.1, 1000.0);
         r.audioRoute = r.audioRoute < 0 ? 0 : (r.audioRoute > 3 ? 3 : r.audioRoute);
@@ -566,6 +577,11 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     getFloat(j, "agcFixedGainDb", out.agcFixedGainDb);
     getBool(j, "nbEnabled", out.nbEnabled);
     getFloat(j, "nbThresholdDb", out.nbThresholdDb);
+    getInt(j, "toneSquelchKind", out.toneSquelchKind);
+    getDouble(j, "toneSquelchHz", out.toneSquelchHz);
+    getInt(j, "toneSquelchCode", out.toneSquelchCode);
+    getInt(j, "toneSquelchPolarity", out.toneSquelchPolarity);
+    getBool(j, "toneRemove", out.toneRemove);
     getBool(j, "notchEnabled", out.notchEnabled);
     getDouble(j, "notchFreqHz", out.notchFreqHz);
     getDouble(j, "notchQ", out.notchQ);
@@ -960,6 +976,11 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
                 getDouble(e, "agcFixedGainDb", r.agcFixedGainDb);
                 getBool(e, "nbEnabled", r.nbEnabled);
                 getDouble(e, "nbThresholdDb", r.nbThresholdDb);
+                getInt(e, "toneSquelchKind", r.toneSquelchKind);
+                getDouble(e, "toneSquelchHz", r.toneSquelchHz);
+                getInt(e, "toneSquelchCode", r.toneSquelchCode);
+                getInt(e, "toneSquelchPolarity", r.toneSquelchPolarity);
+                getBool(e, "toneRemove", r.toneRemove);
                 getBool(e, "notchEnabled", r.notchEnabled);
                 getDouble(e, "notchFreqHz", r.notchFreqHz);
                 getDouble(e, "notchQ", r.notchQ);
@@ -1185,6 +1206,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     if (out.agcMode > 4) { out.agcMode = 4; }
     out.agcFixedGainDb = !(out.agcFixedGainDb >= -20.0f) ? -20.0f : clampf(out.agcFixedGainDb, -20.0f, 40.0f);
     out.nbThresholdDb = !(out.nbThresholdDb >= 6.0f) ? 6.0f : clampf(out.nbThresholdDb, 6.0f, 30.0f);
+    clampToneSquelch(out.toneSquelchKind, out.toneSquelchHz, out.toneSquelchCode, out.toneSquelchPolarity);
     out.notchFreqHz = clampd(out.notchFreqHz, 10.0, 20000.0);
     out.notchQ = clampd(out.notchQ, 0.1, 1000.0);
     // At least kMinRangeSpanDb apart, which is the rule every writer of this pair follows (the
@@ -1528,6 +1550,11 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["agcFixedGainDb"] = cfg.agcFixedGainDb;
     j["nbEnabled"] = cfg.nbEnabled;
     j["nbThresholdDb"] = cfg.nbThresholdDb;
+    j["toneSquelchKind"] = cfg.toneSquelchKind;
+    j["toneSquelchHz"] = cfg.toneSquelchHz;
+    j["toneSquelchCode"] = cfg.toneSquelchCode;
+    j["toneSquelchPolarity"] = cfg.toneSquelchPolarity;
+    j["toneRemove"] = cfg.toneRemove;
     j["notchEnabled"] = cfg.notchEnabled;
     j["notchFreqHz"] = cfg.notchFreqHz;
     j["notchQ"] = cfg.notchQ;
@@ -1713,6 +1740,11 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
             e["agcFixedGainDb"] = r.agcFixedGainDb;
             e["nbEnabled"] = r.nbEnabled;
             e["nbThresholdDb"] = r.nbThresholdDb;
+            e["toneSquelchKind"] = r.toneSquelchKind;
+            e["toneSquelchHz"] = r.toneSquelchHz;
+            e["toneSquelchCode"] = r.toneSquelchCode;
+            e["toneSquelchPolarity"] = r.toneSquelchPolarity;
+            e["toneRemove"] = r.toneRemove;
             e["notchEnabled"] = r.notchEnabled;
             e["notchFreqHz"] = r.notchFreqHz;
             e["notchQ"] = r.notchQ;
