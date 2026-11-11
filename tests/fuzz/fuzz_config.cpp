@@ -51,7 +51,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         FUZZ_REQUIRE(r.nbThresholdDb >= 6.0 && r.nbThresholdDb <= 30.0 && r.notchFreqHz >= 10.0 && r.notchFreqHz <= 20000.0);
         FUZZ_REQUIRE(r.audioRoute >= 0 && r.audioRoute <= 3 && r.deemphasisIndex >= 0 && r.deemphasisIndex <= 2);
         FUZZ_REQUIRE(r.sampleRateHz >= 0.0 && r.centerHz >= 0.0 && r.bandwidthHz >= 0.0 && r.args.size() <= 512u);
-        FUZZ_REQUIRE(r.sourceKind != "file" && r.sourceKind != "soundcard" && r.sourceKind != "pluto" && r.sourceKind != "rtltcp");
+        FUZZ_REQUIRE(r.sourceKind != "soundcard" && r.sourceKind != "row" && r.sourceKind != "open-pluto");   // (file, pluto and rtltcp are kept: stage 7)
     }
     for (const auto& kv : first.pluginRadio) { FUZZ_REQUIRE(kv.second >= 1 && kv.second <= 8 && !kv.first.empty()); }
     return 0;
