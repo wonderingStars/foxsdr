@@ -77,6 +77,25 @@ bool airband833(int channelKhz) {
     return r == 5 || r == 10 || r == 15;
 }
 
+std::string airbandChannelName(double hz) {
+    if (!(hz >= 117.9e6 && hz <= 137.1e6)) { return std::string(); }
+    const double slotHz = 25000.0 / 3.0;
+    const long long idx = std::llround((hz - 118.0e6) / slotHz);
+    if (idx < 0) { return std::string(); }
+    const double chan = 118.0e6 + static_cast<double>(idx) * slotHz;
+    if (std::fabs(hz - chan) > 200.0) { return std::string(); }
+    const long long slot = idx / 3, r = idx % 3;
+    const long long kHz833 = 118000 + slot * 25 + (r == 0 ? 5 : r == 1 ? 10 : 15);
+    char b[48];
+    if (r == 0) {
+        const long long kHz25 = 118000 + slot * 25;
+        std::snprintf(b, sizeof b, "%lld.%03lld / %lld.%03lld", kHz25 / 1000, kHz25 % 1000, kHz833 / 1000, kHz833 % 1000);
+    } else {
+        std::snprintf(b, sizeof b, "%lld.%03lld", kHz833 / 1000, kHz833 % 1000);
+    }
+    return b;
+}
+
 double airbandChannelHz(int channelKhz) {
     const int r = channelKhz % 25;
     const int slotKhz = channelKhz - r;
