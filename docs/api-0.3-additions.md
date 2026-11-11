@@ -2523,6 +2523,12 @@ than the first carry the radio's number in their high bits (`(n - 1) << 48`), so
 * `DECODER_LINES` `value[1]`: the radio (1 to 8) whose decoder said the line; 0 for a patch decoder's line.
 * The transmitter's address, when none was given, is seeded from the first open Pluto on ANY radio (it was radio 1 only), so `fact.transmit.radio` can be 2.
 
+### 9.24 The TCI server, audio over the network and timed recordings (engine features lane A; docs/multi-radio-records/engine-features-a.md)
+
+* `SERVER_CONFIG` takes two more members, `"tci": {enabled, bindAll, port}` and `"udp": {enabled, host, port, radio, packetFrames}`; both listeners are OFF by default, the TCI server binds `127.0.0.1` unless `bindAll`, and it is receive-only (no transmit command is accepted; its session profile, `InternalKind::Tci`, has six ops and no transmitter op). New facts `fact.tci.*` and `fact.udp.*` (LOCAL); `FOXAPI_LIST_SERVERS` stays two entries. Full text: API.md 6.22.
+* Timed recordings: ops `FOXAPP_OP_SCHEDULE_SET` 0x860C, `_REMOVE` 0x860D, `_ENABLE` 0x860E, `_RUN_NOW` 0x860F, `_SKIP` 0x8610 (LOCAL sessions only), the facts `fact.schedule.count/active/missed/max/next` and `fact.schedule.entry.<id>` (one JSON document per entry), the settings key `schedule`. Full text: API.md 6.23.
+* The settings file gains `tciEnabled tciBindAll tciPort udpAudioEnabled udpAudioHost udpAudioPort udpAudioRadio udpAudioPacketFrames schedule`; a 0.99.104 reader ignores them (`tools/old_reader_probe`).
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

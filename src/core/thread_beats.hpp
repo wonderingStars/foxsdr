@@ -147,6 +147,9 @@ inline constexpr ThreadSpec kThreadWebListen{"web-listen", Kind::Server};
 inline constexpr ThreadSpec kThreadWebIdle{"web-idle", Kind::Server};
 inline constexpr ThreadSpec kThreadCatAccept{"cat-accept", Kind::Server};
 inline constexpr ThreadSpec kThreadCatClient{"cat-client", Kind::Server};
+inline constexpr ThreadSpec kThreadTciAccept{"tci-accept", Kind::Server};
+inline constexpr ThreadSpec kThreadTciClient{"tci-client", Kind::Server};
+inline constexpr ThreadSpec kThreadUdpAudio{"udp-audio", Kind::Server};
 inline constexpr ThreadSpec kThreadImageFeed{"image-feed", Kind::Feed};
 inline constexpr ThreadSpec kThreadServerHost{"server-host", Kind::Feed};
 inline constexpr ThreadSpec kThreadPasswordHash{"password-hash", Kind::Feed};
@@ -164,7 +167,8 @@ inline constexpr ThreadSpec kThreadSoundCardOpen{"soundcard-open", Kind::Open};
 
 inline constexpr const ThreadSpec* kAllThreads[] = {
     &kThreadDsp,        &kThreadSource,      &kThreadPatchSource,  &kThreadTransmit,      &kThreadKeeper,
-    &kThreadWebListen,  &kThreadWebIdle,     &kThreadCatAccept,    &kThreadCatClient,     &kThreadImageFeed,
+    &kThreadWebListen,  &kThreadWebIdle,     &kThreadCatAccept,    &kThreadCatClient,     &kThreadTciAccept,    &kThreadTciClient,     &kThreadUdpAudio,
+    &kThreadImageFeed,
     &kThreadServerHost, &kThreadPasswordHash, &kThreadDiskJob,     &kThreadConfigWrite,   &kThreadRecordOpen,
     &kThreadLinkPoll,   &kThreadDriverInstall, &kThreadGps,        &kThreadDeviceScan,    &kThreadDeviceOpen,
     &kThreadPatchOpen,  &kThreadSoundCardScan, &kThreadSoundCardOpen,

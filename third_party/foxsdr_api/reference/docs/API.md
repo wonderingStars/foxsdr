@@ -533,6 +533,43 @@ The reference engine keeps the settings and publishes them; it has no audio loop
 or blanker, so `agcGainDb` reads the fixed gain in `OFF` and 0 otherwise, and the
 blanked share is 0.
 
+### 6.22 The TCI server and audio over the network (0.3, additive; engine features lane A)
+
+Two more listeners, both OFF by default, configured by the local operator through `SERVER_CONFIG` exactly as the web server and the CAT listener are, and read as facts (the list `SERVERS` stays two entries):
+
+```
+{"tci": {"enabled": bool, "bindAll": bool, "port": 50001},
+ "udp": {"enabled": bool, "host": "127.0.0.1", "port": 7355, "radio": 1, "packetFrames": 480}}
+```
+
+Every member is optional; an unknown key, a wrong type, a `tci.port` outside 1024 to 65535, a `udp.port` outside 1 to 65535, a `udp.radio` outside 1 to 8, a `udp.packetFrames` other than 480 or 960, or a `udp.host` with a space or control character is an error (the result's message says which). An emptied `udp.host` resets to `127.0.0.1`, never to a wider address. REMOTE sessions cannot send it (DENIED). The settings file keys are `tciEnabled`, `tciBindAll`, `tciPort`, `udpAudioEnabled`, `udpAudioHost`, `udpAudioPort`, `udpAudioRadio`, `udpAudioPacketFrames`; an older reader ignores them.
+
+**TCI server.** A WebSocket server (RFC 6455, `net/ws_frame.*` written from the RFC; the vendored cpp-httplib 0.53.1 does contain a WebSocket server and client and compiles, and is used as the independent client of the tests, but is not what the server runs on: see `docs/multi-radio-records/engine-features-a.md`) speaking a receive-only subset of TCI Protocol 2.1 (Expert Electronics, MIT licence; https://github.com/ExpertSDR3/TCI, `TCI Protocol 2.1.pdf`). It binds `127.0.0.1` unless `tci.bindAll` is true (the protocol has no authentication; `fact.tci.scope` says "this computer only" or "all interfaces"). At most 4 clients; a fifth is answered with an HTTP 503 that says why. TCI receiver `n` (from 0) is the n-th radio the engine has, in ascending radio order; adding or removing a radio renumbers them and the server says so (`TRX_COUNT`, then the state again).
+
+Spoken: the initialisation commands in the order of section 4.1 (`VFO_LIMITS IF_LIMITS TRX_COUNT CHANNELS_COUNT DEVICE RECEIVE_ONLY MODULATIONS_LIST PROTOCOL READY`, then `START`/`STOP` and each receiver's state); `START STOP DDS IF VFO MODULATION RX_ENABLE RX_FILTER_BAND SQL_ENABLE SQL_LEVEL` (a set is echoed to every client once the engine has applied it, even when nothing changed; a change made by anyone is pushed on a 30 ms tick); `TRX TUNE TX_ENABLE` always answer `false`; `AUDIO_START AUDIO_STOP AUDIO_SAMPLERATE AUDIO_STREAM_SAMPLE_TYPE AUDIO_STREAM_CHANNELS AUDIO_STREAM_SAMPLES` and the receiver audio stream (binary messages with the 64-byte header of section 3.4; 8/12/24/48 kHz, int16/int24/int32/float32, 1 or 2 channels, default float32 stereo 48 kHz). Everything else, including `IQ_START` (no I/Q stream), the CW commands, `DRIVE`, the spot commands and every sensor command (`RX_SENSORS`: FoxSDR has no calibrated dBm scale), is ignored without a reply, as the specification says an unknown command is. **There is no transmit**: `TRX`, `TUNE` and `TX_ENABLE` are answered `false`, a binary `TX_AUDIO_STREAM` from a client is dropped, and the engine session behind a connection (`InternalKind::Tci`) has exactly six ops on its profile (`RUN SET_CENTRE SET_VFO_OFFSET SET_MODE SET_BANDWIDTH SET_SQUELCH`) and no transmitter, store, setting or path op. Modulation names: `AM LSB USB CW NFM` (the specification's) and `WFM DSB` (FoxSDR's own; the specification names no wide-FM or double-sideband mode).
+
+Limits: a text message over 2048 bytes is read as nothing; a WebSocket message over 32 KiB closes the connection (1009); an unmasked, reserved or malformed frame closes it (1002); text that is not UTF-8 closes it (1007); the opening handshake must finish in 5 s and fit 8 KiB. A client that stops reading is dropped after 3 s without a byte accepted, or with 1 MiB queued; audio is not read for a client with 256 KiB waiting. Network work runs on the server's own threads, never on the DSP thread or the pass.
+
+Facts (all LOCAL): `fact.tci.enabled`, `.bindAll`, `.port`, `.listening`, `.boundPort`, `.scope`, `.refusal` (the sentence a start was refused with, "port N is already in use by another program ..."); `fact.udp.enabled`, `.host`, `.port`, `.radio`, `.packetFrames`, `.sending`, `.refusal`. Read at the call and moving nothing: `fact.tci.clients`, `.commands`, `.accepted`, `.audioPackets`, `.slowDropped`, `fact.udp.sent`, `.errors`.
+
+**Audio over the network.** One radio's finished audio as UDP datagrams to one address: headerless raw PCM, 48 000 Hz, signed 16-bit little-endian, ONE channel (the format GQRX documents), exactly `packetFrames` samples a datagram (480 = 960 bytes = 10 ms, 960 = 1920 bytes = 20 ms), no handshake and no sequence number. The socket only sends. A send the network refuses is counted (`fact.udp.errors`) and the audio dropped; a radio that is not there sends nothing until it is back. Programs that need a sound card (WSJT-X and the like) still need a virtual audio cable.
+
+### 6.23 Timed recordings (0.3, additive; engine features lane A)
+
+A schedule of up to 32 entries kept in the settings (key `schedule`; an older reader ignores it): a radio, a start (UTC seconds), a length (1 s to 24 h), once / daily / weekly (elapsed time from the first start, so a daylight-saving change moves the local hour of a repeat), optionally a frequency / mode / bandwidth to tune to first, audio and / or I/Q to record, and whether to put the tuning back at the end. All ops are LOCAL sessions only:
+
+| Op | Number | Meaning |
+|---|---|---|
+| `SCHEDULE_SET` | `0x860C` | long text (or text): the entry as JSON (`name radio startUnix lengthS repeat tune freqHz mode bandwidthHz recordAudio recordIq returnToWhereIWas enabled`; an unknown key is an error); `ival[0]` 0 adds, an id replaces; `applied[0]` the id. OUT_OF_RANGE (the message names the field), BUSY (overlaps another entry on the radio), LIMIT, NOT_FOUND, BAD_ARGUMENT |
+| `SCHEDULE_REMOVE` | `0x860D` | `ival[0]` the id; a running recording ends at the next pass |
+| `SCHEDULE_ENABLE` | `0x860E` | `ival[0]` the id, `ival[1]` 0/1; NO_CHANGE when it already is, BUSY when switching it on would overlap |
+| `SCHEDULE_RUN_NOW` | `0x860F` | `ival[0]` the id; starts it at the next pass without using up a scheduled start |
+| `SCHEDULE_SKIP` | `0x8610` | `ival[0]` the id; the next start passes without happening |
+
+Rules of the clock: an entry starts at its time and not more than 30 s late; a start that fell while FoxSDR was closed, the machine slept or the clock jumped forward is MISSED (counted, shown, never started late); an occurrence is handled once (the entry's `lastStartUnix` is saved), so a restart neither runs it again nor counts it twice and a clock set back never re-runs it; a recording ends `lengthS` after it began, or at once if the clock is set back by more than 2 s while it runs. An entry whose radio is closed, stopped, still opening, already recording or held by the scanner is REFUSED at its start, in words, and the occurrence is used up; nothing is ever taken over. Two enabled entries on one radio may not overlap (compared over the next two weeks). A recorder opens its file on a worker: an unwritable folder or a full disk shows a few passes after the start as a refusal in the recorder's own words, and the other recorder and the tuning are put back.
+
+Facts (LOCAL): `fact.schedule.count`, `.active`, `.missed`, `.max`, `.next` (unix seconds of the soonest start, 0 none), and `fact.schedule.entry.<id>`: one JSON document per entry (its fields plus `state` - waiting, starting, recording, done, stopped early, missed, refused, skipped, disabled -, `note`, `nextUnix`, `lastStartUnix`, `missed`). Test hook (engines made with `testHooks=1` only): `SETTING_SET test.scheduleClock=<unix ms>` sets the clock the schedule reads (0 gives the system clock back).
+
 ## 7. Mechanics
 
 ### 7.1 Reads (snapshots)

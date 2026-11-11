@@ -36,6 +36,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -2270,6 +2271,38 @@ void markerOps(AppWindow& a) {
     }
 }
 
+void scheduleOps(AppWindow& a) {
+    // TIMED RECORDINGS (engine features lane A): the five ops through the application's own apply; tests/test_engine_api_schedule.cpp holds the clock, the
+    // refusals at a start, the facts and the file.
+    const long long later = static_cast<long long>(std::time(nullptr)) + 86400;
+    const std::string entry = "{\"name\":\"apply\",\"radio\":1,\"startUnix\":" + std::to_string(later) + ",\"lengthS\":60,\"recordAudio\":true}";
+    covering(FOXAPP_OP_SCHEDULE_SET);
+    {
+        FoxCommandResult r = A::apply(a, text(FOXAPP_OP_SCHEDULE_SET, entry));
+        CHECK(ok(r));
+        CHECK(r.applied[0] >= 1.0);
+        const std::int64_t id = static_cast<std::int64_t>(r.applied[0]);
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_SCHEDULE_SET, entry)), FOXAPI_BUSY));            // the same slot on the same radio
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_SCHEDULE_SET, "not json")), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_SCHEDULE_SET, "{\"radio\":99}")), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_SCHEDULE_SET, entry, 9999)), FOXAPI_NOT_FOUND));
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_SCHEDULE_SET, entry, id))));                            // replacing itself is not an overlap
+        covering(FOXAPP_OP_SCHEDULE_ENABLE);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SCHEDULE_ENABLE, id, 0))));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SCHEDULE_ENABLE, id, 0)), FOXAPI_NO_CHANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SCHEDULE_ENABLE, 9999, 1)), FOXAPI_NOT_FOUND));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SCHEDULE_ENABLE, id, 1))));
+        covering(FOXAPP_OP_SCHEDULE_SKIP);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SCHEDULE_SKIP, id))));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SCHEDULE_SKIP, 9999)), FOXAPI_NOT_FOUND));
+        covering(FOXAPP_OP_SCHEDULE_RUN_NOW);
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SCHEDULE_RUN_NOW, 9999)), FOXAPI_NOT_FOUND));
+        covering(FOXAPP_OP_SCHEDULE_REMOVE);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SCHEDULE_REMOVE, id))));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SCHEDULE_REMOVE, id)), FOXAPI_NOT_FOUND));
+    }
+}
+
 void airbandOps(AppWindow& a) {
     const bool pageWas = A::patchPageOpen(a);
 
@@ -3572,6 +3605,7 @@ int main() {
         patchOps(app);
         airbandOps(app);
         markerOps(app);
+        scheduleOps(app);
         transmitterOps(app);
         radioOps(app);
         otherOps(app);

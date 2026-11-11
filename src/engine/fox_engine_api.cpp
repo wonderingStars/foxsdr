@@ -427,8 +427,17 @@ constexpr std::uint32_t kCatProfile[] = {
     FOXAPI_OP_SET_BANDWIDTH,
 };
 
+// TCI: what the specification's bidirectional commands that FoxSDR speaks turn into - start and stop, the centre, the offset, the mode, the
+// passband and the squelch of a radio - and NEVER the transmitter, the store, a setting or a path. The audio is read through the grant, not an op.
+constexpr std::uint32_t kTciProfile[] = {
+    FOXAPI_OP_RUN,           FOXAPI_OP_SET_CENTRE, FOXAPI_OP_SET_VFO_OFFSET, FOXAPI_OP_SET_MODE,
+    FOXAPI_OP_SET_BANDWIDTH, FOXAPI_OP_SET_SQUELCH,
+};
+
 constexpr std::uint64_t kWebProfileGrants = FOXAPI_GRANT_TUNE | FOXAPI_GRANT_SETTINGS | FOXAPI_GRANT_TRANSMIT | FOXAPI_GRANT_AUDIO;
 constexpr std::uint64_t kCatProfileGrants = FOXAPI_GRANT_TUNE | FOXAPI_GRANT_SETTINGS;
+constexpr std::uint64_t kTciProfileGrants = FOXAPI_GRANT_TUNE | FOXAPI_GRANT_SETTINGS | FOXAPI_GRANT_AUDIO;
+constexpr std::uint64_t kUdpProfileGrants = FOXAPI_GRANT_AUDIO;
 
 }  // namespace
 
@@ -436,6 +445,8 @@ std::span<const std::uint32_t> internalProfileOps(InternalKind kind) {
     switch (kind) {
         case InternalKind::Web: return std::span<const std::uint32_t>(kWebProfile);
         case InternalKind::Cat: return std::span<const std::uint32_t>(kCatProfile);
+        case InternalKind::Tci: return std::span<const std::uint32_t>(kTciProfile);
+        case InternalKind::Udp: break;   // no op at all
         case InternalKind::None: break;
     }
     return {};
@@ -445,6 +456,8 @@ std::uint64_t internalProfileGrants(InternalKind kind) {
     switch (kind) {
         case InternalKind::Web: return kWebProfileGrants;
         case InternalKind::Cat: return kCatProfileGrants;
+        case InternalKind::Tci: return kTciProfileGrants;
+        case InternalKind::Udp: return kUdpProfileGrants;
         case InternalKind::None: break;
     }
     return 0;
@@ -454,6 +467,8 @@ const char* internalKindName(InternalKind kind) {
     switch (kind) {
         case InternalKind::Web: return "web";
         case InternalKind::Cat: return "cat";
+        case InternalKind::Tci: return "tci";
+        case InternalKind::Udp: return "udp";
         case InternalKind::None: break;
     }
     return "";
@@ -627,7 +642,7 @@ public:
             if (status != nullptr) { *status = st; }
             return nullptr;
         };
-        if (kind != InternalKind::Web && kind != InternalKind::Cat) { return fail(FOXAPI_BAD_ARGUMENT); }
+        if (kind != InternalKind::Web && kind != InternalKind::Cat && kind != InternalKind::Tci && kind != InternalKind::Udp) { return fail(FOXAPI_BAD_ARGUMENT); }
         auto s = std::make_shared<ApiSession>();
         s->flags = FOXAPI_SESSION_REMOTE;
         s->grants = internalProfileGrants(kind) | FOXAPI_GRANT_VIEW;
@@ -638,7 +653,7 @@ public:
         {
             std::lock_guard<std::mutex> lk(sessionsMutex_);
             if (const int32_t st = admitLocked(s, true); st != FOXAPI_OK) { return fail(st); }
-            s->principal = kind == InternalKind::Web ? std::string("web") : "cat:" + std::to_string(s->id);
+            s->principal = kind == InternalKind::Web ? std::string("web") : std::string(internalKindName(kind)) + ":" + std::to_string(s->id);
         }
         if (status != nullptr) { *status = FOXAPI_OK; }
         return s.get();
@@ -986,6 +1001,24 @@ public:
             const bool web = key[5] == 'w';  // ("fact.web.served" or "fact.cat.accepted")
             v = std::to_string(web ? engine_.servers().webCounters().served.load(std::memory_order_relaxed)
                                    : engine_.servers().catCounters().accepted.load(std::memory_order_relaxed));
+        } else if (std::strcmp(key, "fact.tci.clients") == 0 || std::strcmp(key, "fact.tci.commands") == 0 || std::strcmp(key, "fact.tci.accepted") == 0 ||
+                   std::strcmp(key, "fact.tci.audioPackets") == 0 || std::strcmp(key, "fact.tci.slowDropped") == 0 ||
+                   std::strcmp(key, "fact.udp.sent") == 0 || std::strcmp(key, "fact.udp.errors") == 0) {
+            // THE TCI SERVER'S AND THE AUDIO STREAM'S LIVE FIGURES (docs/API.md 6.22): read at the call from the servers' own atomics, like fact.cat.accepted
+            // (a client served moves them, and a block rebuilt per client would be a rebuild per tick). LOCAL.
+            if ((s->flags & FOXAPI_SESSION_LOCAL) == 0u) { return FOXAPI_DENIED; }
+            const std::string k = key + 5;
+            cascade::net::TciServer& tci = engine_.servers().tciServer();
+            cascade::net::UdpAudioSender& udp = engine_.servers().udpSender();
+            std::uint64_t n = 0;
+            if (k == "tci.clients") { n = static_cast<std::uint64_t>(tci.clientCount()); }
+            else if (k == "tci.commands") { n = tci.commandCount(); }
+            else if (k == "tci.accepted") { n = engine_.servers().tciCounters().accepted.load(std::memory_order_relaxed); }
+            else if (k == "tci.audioPackets") { n = tci.audioPackets(); }
+            else if (k == "tci.slowDropped") { n = tci.slowDropped(); }
+            else if (k == "udp.sent") { n = udp.packetsSent(); }
+            else { n = udp.sendErrors(); }
+            v = std::to_string(n);
         } else if (std::strcmp(key, "fact.config.interface") == 0) {
             // THE INTERFACE'S HALF OF THE SETTINGS FILE, as a document (API 0.3 9.16; core/config_halves.hpp): the half the engine holds, with every open flag
             // cleared (the start-up state). Read AT THE CALL, not from the list block, because the window reads it in its constructor - before the first
@@ -1798,6 +1831,12 @@ public:
     FoxSession* openInternalSession(InternalKind kind, const std::string& label, int32_t* status) {
         return openInternal(kind, label, status);
     }
+    // ApiHost::readAudioOfRadio: the audio ring of a named radio for a session that serves several (see the header).
+    int32_t readAudioOfRadio(ApiSession* s, std::uint32_t radio, uint64_t* cursor, float* out, uint32_t cap) {
+        if (s == nullptr) { return FOXAPI_BAD_ARGUMENT; }
+        if (radio == 1u) { return readFirstAudio(s, cursor, out, cap, nullptr); }
+        return readRadioAudio(s, radio, cursor, out, cap, nullptr);
+    }
     // TESTS ONLY (ApiHost::sessionCountForTest): the sessions the table holds now - every kind, detached ones included - and, of those,
     // the engine-internal ones of `kind`. What proves a server closes the session it opened (stage 5c).
     std::size_t sessionCount(InternalKind kind) {
@@ -2180,6 +2219,9 @@ void ApiHostImpl::applyTestHook(const Pending& p, FoxCommandResult& r, const std
         std::this_thread::sleep_for(std::chrono::milliseconds(std::clamp(std::atoi(val.c_str()), 0, 1000)));
     } else if (key == "test.stallAfterPass") {
         stallAfterPassMs_ = std::clamp(std::atoi(val.c_str()), 0, 1000);
+    } else if (key == "test.scheduleClock") {
+        // The timed recordings' clock (unix milliseconds), so a test sets the time and steps it without sleeping; 0 gives the system clock back.
+        engine_.scheduleClockMs_.store(std::strtoll(val.c_str(), nullptr, 10), std::memory_order_relaxed);
     } else if (key == "test.openDelay") {
         openDelayMs_.store(std::clamp(std::atoi(val.c_str()), 0, 1000));
     } else if (key == "test.gather") {
@@ -2492,7 +2534,7 @@ void ApiHostImpl::applyTail() {
         if (tailQueue_.empty()) { return; }
         tailWork_.swap(tailQueue_);
     }
-    for (const InternalKind kind : {InternalKind::Web, InternalKind::Cat}) {
+    for (const InternalKind kind : {InternalKind::Web, InternalKind::Cat, InternalKind::Tci, InternalKind::Udp}) {
         for (const Pending& p : tailWork_) {
             if (p.internal == kind) { apply(p); }
         }
@@ -3446,6 +3488,13 @@ std::int32_t ApiHost::validateForTest(FoxSession* s, const FoxCommand& c) {
     return s == nullptr ? FOXAPI_BAD_ARGUMENT : impl_->validateForTest(static_cast<ApiSession*>(s), c);
 }
 std::size_t ApiHost::sessionCountForTest(InternalKind kind) { return impl_->sessionCount(kind); }
+std::int32_t ApiHost::readAudioOfRadio(FoxSession* s, std::uint32_t radio, std::uint64_t* cursor, float* out, std::uint32_t capFrames) {
+    try {
+        return impl_->readAudioOfRadio(static_cast<ApiSession*>(s), radio, cursor, out, capFrames);
+    } catch (...) {
+        return FOXAPI_FAILED;
+    }
+}
 FoxSession* ApiHost::openInternalSession(InternalKind kind, const std::string& label, std::int32_t* status) {
     try {
         return impl_->openInternalSession(kind, label, status);

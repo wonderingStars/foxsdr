@@ -106,6 +106,24 @@
 #define FOXAPP_OP_MARKER_REMOVE          0x8607u /* ival[0]: the marker's number */
 #define FOXAPP_OP_MARKER_CLEAR           0x8608u /* no arguments: empties the list, the numbering starts again at M1 */
 #define FOXAPP_OP_MARKER_NOTE            0x8609u /* ival[0]: the marker's number; text (or long text): its note */
+// TIMED RECORDINGS (docs/API.md 6.23; engine_schedule.cpp, core/schedule.hpp), all LOCAL sessions only and none of them on any internal profile. A schedule is up to 32
+// entries - a radio, a start (UTC seconds), a length, once / daily / weekly, optionally a frequency / mode / bandwidth to tune to first, audio and / or I/Q to
+// record, and whether to put the tuning back - kept in the settings and read as the facts fact.schedule.* (one JSON document per entry). The clock starts an
+// entry at its time, up to 30 s late; a start that fell while FoxSDR was closed or the clock jumped is MISSED (counted, shown, never run late). An entry whose
+// radio is closed, stopped, opening, already recording or held by the scanner is REFUSED at its start, in words. Entries on one radio may not overlap.
+//   SCHEDULE_SET (SETTINGS): long text (or text): a JSON object with any of name, radio, startUnix, lengthS, repeat ("once" | "daily" | "weekly"), tune, freqHz,
+//   mode (FOXAPI_DEMOD_* 1..7), bandwidthHz, recordAudio, recordIq, returnToWhereIWas, enabled; an UNKNOWN key is an error. ival[0]: 0 adds an entry, an id replaces
+//   that entry (every field not named keeps its value). applied[0]: the entry's id. OUT_OF_RANGE (the sentence names the field), BUSY (it overlaps another entry on
+//   the radio), LIMIT (the 32nd is the last), NOT_FOUND (no such id), BAD_ARGUMENT (not an object, a wrong kind of value, an unknown key).
+//   SCHEDULE_REMOVE (SETTINGS): ival[0]: the id. A recording it is making ends at the next pass. NOT_FOUND.
+//   SCHEDULE_ENABLE (SETTINGS): ival[0]: the id; ival[1]: 0 off / 1 on. NO_CHANGE when it already is; BUSY when switching it on would overlap.
+//   SCHEDULE_RUN_NOW (SETTINGS): ival[0]: the id. Starts it at the next pass, outside its schedule (it does not use up a scheduled start). BUSY while it records.
+//   SCHEDULE_SKIP (SETTINGS): ival[0]: the id. The next start passes without happening. NO_CHANGE for a once-entry that has no next start.
+#define FOXAPP_OP_SCHEDULE_SET           0x860Cu /* long text: the entry as JSON; ival[0]: 0 add / an id to replace; applied[0]: the id */
+#define FOXAPP_OP_SCHEDULE_REMOVE        0x860Du /* ival[0]: the id */
+#define FOXAPP_OP_SCHEDULE_ENABLE        0x860Eu /* ival[0]: the id; ival[1]: 0/1 */
+#define FOXAPP_OP_SCHEDULE_RUN_NOW       0x860Fu /* ival[0]: the id */
+#define FOXAPP_OP_SCHEDULE_SKIP          0x8610u /* ival[0]: the id */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */
 #define FOXAPP_OP_USER_PRESET_FORGET_AT  0x8702u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

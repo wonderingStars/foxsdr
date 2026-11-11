@@ -46,6 +46,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/schedule.hpp"
 #include "core/airband_monitor.hpp"
 #include "core/airspy_settings.hpp"
 #include "core/app_commands.hpp"
@@ -3140,6 +3141,33 @@ private:
     // FOXAPP_OP_MARKER_DROP / _REMOVE / _CLEAR / _NOTE (stub campaign B10, engine_markers.cpp): the waterfall's markers (freqMarkers_), worked by number. Returns the
     // status; `why` is the sentence of a refusal and `res.applied` what the op says it carries.
     std::int32_t applyMarkerOp(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why);
+    // --- TIMED RECORDINGS (engine_schedule.cpp; docs/API.md 6.23) ---
+    // The pure clock (core/schedule.hpp) holds the entries and decides; this engine turns its decisions into the commands a person would give.
+    struct ScheduleRt {
+        std::string state = "waiting";   // waiting, starting, recording, done, stopped early, missed, refused, skipped, disabled
+        std::string note;                // the sentence for a refusal, an early end or a miss
+        int radio = 0;
+        bool audio = false, iq = false;  // what THIS entry started (and so what it ends)
+        bool tuned = false, restore = false, modeChanged = false, bandwidthChanged = false;
+        double prevCentre = 0.0, prevOffset = 0.0, prevBandwidth = 0.0;
+        std::uint32_t prevDemod = 0;
+        int passes = 0;
+        std::int64_t startedUnixMs = 0;
+    };
+    cascade::core::sched::Runner schedule_;
+    std::map<std::uint32_t, ScheduleRt> scheduleRt_;
+    std::uint32_t scheduleNextId_ = 1;
+    std::atomic<std::int64_t> scheduleClockMs_{0};   // the test hook's clock (unix ms); 0 = the system's
+    std::uint64_t scheduleVersion_ = 1;               // moves with any change of the list, a state or a note (the fact block's fingerprint)
+    void pumpSchedule();
+    std::int64_t scheduleNowMs() const;
+    void loadSchedule(const std::vector<cascade::core::sched::Entry>& entries);
+    std::vector<cascade::core::sched::Entry> scheduleEntries() const;
+    std::int32_t applyScheduleOp(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why);
+    std::string scheduleRefusal(const cascade::core::sched::Entry& e, std::size_t slot);
+    void scheduleBegin(std::uint32_t id, std::int64_t occurrence, std::int64_t nowMs);
+    void scheduleStopRun(std::uint32_t id, const std::string& why, bool early);
+    void scheduleFacts(const std::function<void(const std::string&, const std::string&)>& put) const;
     // Starts the monitor on the preset in airbandGroup_: 0 it did not start (airbandNote_ says why), 1 listening, 2 waiting for the patch.
     int airbandStart();
     void airbandStop(const std::string& why);

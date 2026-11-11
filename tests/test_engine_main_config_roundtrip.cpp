@@ -72,7 +72,7 @@ const std::set<std::string>& engineWritten() {
     static const std::set<std::string> keys = {
         // ServerHost::store
         "webEnabled", "webBindAddress", "webPort", "webUsername", "webPasswordRecord", "catEnabled", "catBindAll",
-        "catPort",
+        "catPort", "tciEnabled", "tciBindAll", "tciPort", "udpAudioEnabled", "udpAudioHost", "udpAudioPort", "udpAudioRadio", "udpAudioPacketFrames",
         // Engine::fillConfig
         "sourceKind", "soapyAntenna", "soapyArgs", "nativeArgs", "lookForNetworkUsrps", "biasTee", "converters",
         "airspy", "audioBufferMs", "audioBufferAutoMs", "ppmCorrection", "ppm", "autoGainByRadio",
@@ -85,6 +85,8 @@ const std::set<std::string>& engineWritten() {
         "pluginSettings", "pluginsStopped", "pluginRun", "pluginSites", "closedWindows", "pluginMuteOverride", "userPresets",
         // radios 2 to 8 and each plugin's radio (multi-radio engine, stages 5 and 6)
         "radios", "pluginRadio",
+        // the timed recordings (engine features lane A)
+        "schedule",
         // Engine::telemetryJournal and the clean-exit flag
         "telemetryEnabled", "telemetryInstallId", "telemetryFirstRun", "telemetryFirstVersion", "telemetryLaunches",
         "telemetryCrashes", "telemetryExitsDied", "telemetryExitsKilled", "telemetryExitsEnded",

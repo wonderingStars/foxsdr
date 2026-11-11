@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
+#include <map>
 #include <set>
 
 #include <nlohmann/json.hpp>
@@ -91,7 +93,7 @@ bool parseServerConfigRequest(const std::string& text, ServerConfigRequest& out,
         error = "the configuration must be a JSON object";
         return false;
     }
-    if (!onlyKnown(j, {"web", "cat"}, "the configuration", error)) { return false; }
+    if (!onlyKnown(j, {"web", "cat", "tci", "udp"}, "the configuration", error)) { return false; }
     bool said = false;
     if (const auto w = j.find("web"); w != j.end()) {
         if (!w->is_object()) {
@@ -161,6 +163,60 @@ bool parseServerConfigRequest(const std::string& text, ServerConfigRequest& out,
         }
         said = said || !c->empty();
     }
+    if (const auto t = j.find("tci"); t != j.end()) {
+        if (!t->is_object()) {
+            error = "tci must be an object";
+            return false;
+        }
+        if (!onlyKnown(*t, {"enabled", "bindAll", "port"}, "tci", error)) { return false; }
+        if (!readBool(*t, "enabled", out.tciEnabled, error) || !readBool(*t, "bindAll", out.tciBindAll, error) ||
+            !readPort(*t, "port", out.tciPort, error)) {
+            return false;
+        }
+        said = said || !t->empty();
+    }
+    if (const auto u = j.find("udp"); u != j.end()) {
+        if (!u->is_object()) {
+            error = "udp must be an object";
+            return false;
+        }
+        if (!onlyKnown(*u, {"enabled", "host", "port", "radio", "packetFrames"}, "udp", error)) { return false; }
+        if (!readBool(*u, "enabled", out.udpEnabled, error) || !readText(*u, "host", 253, out.udpHost, error)) { return false; }
+        // The destination port belongs to the receiver, not to a listener of ours: any port from 1 to 65535.
+        for (const char* key : {"port", "radio", "packetFrames"}) {
+            const auto it = u->find(key);
+            if (it == u->end()) { continue; }
+            if (!it->is_number_integer()) {
+                error = std::string(key) + " must be a whole number";
+                return false;
+            }
+            const long long v = it->get<long long>();
+            const std::string k = key;
+            if (k == "port") {
+                if (v < 1 || v > 65535) { error = "port must be between 1 and 65535"; return false; }
+                out.udpPort = static_cast<int>(v);
+            } else if (k == "radio") {
+                if (v < 1 || v > 8) { error = "radio must be a number from 1 to 8"; return false; }
+                out.udpRadio = static_cast<int>(v);
+            } else {
+                if (v != 480 && v != 960) { error = "packetFrames must be 480 or 960"; return false; }
+                out.udpPacketFrames = static_cast<int>(v);
+            }
+        }
+        if (out.udpHost.has_value()) {
+            if (out.udpHost->empty()) {
+                out.udpHost = ServerConfig::Udp{}.host;   // an emptied host resets to the loopback default, never to a wider one
+            } else {
+                for (const char c : *out.udpHost) {
+                    if (static_cast<unsigned char>(c) <= 0x20 || static_cast<unsigned char>(c) >= 0x7F) {
+                        error = "host must be an address or a name without spaces or control characters";
+                        return false;
+                    }
+                }
+            }
+        }
+        said = said || !u->empty();
+    }
     if (!said) {
         error = "the configuration says nothing";  // "{}" is a client that meant to say something and did not
         return false;
@@ -191,6 +247,15 @@ ServerHost::ServerHost() {
     ImageFeed::Hooks h;
     h.serving = [this] { return webListening(); };
     h.publish = [this](std::vector<cascade::net::WebImage> set) { webServer_.setImages(std::move(set)); };
+    tciCounters_.sampler = [this](const Counters& c) {
+        if (tciServer_.running()) {
+            c.clients.store(tciServer_.clientCount(), std::memory_order_relaxed);
+            c.commands.store(tciServer_.commandCount(), std::memory_order_relaxed);
+        }
+        // (for the UDP stream `served` is the datagrams sent: the sender's own counter, read at the call)
+        c.served.store(udpSender_.packetsSent(), std::memory_order_relaxed);
+    };
+    tciServer_.setUsageCallback([this] { tciCounters_.accepted.fetch_add(1, std::memory_order_relaxed); });
     images_.attach(std::move(h));
 }
 
@@ -203,6 +268,8 @@ void ServerHost::attach(Providers p) {
     if (p.webStatus) { (void)webServer_.setStatusProvider(std::move(p.webStatus)); }
     if (p.webSession) { (void)webServer_.setSessionOpener(std::move(p.webSession)); }
     if (p.catSession) { catServer_.setSessionOpener(std::move(p.catSession)); }
+    if (p.tciBackend) { tciServer_.setBackendOpener(std::move(p.tciBackend)); }
+    if (p.udpReader) { udpReader_ = std::move(p.udpReader); }
     if (p.pollImages) { images_.setPoll(std::move(p.pollImages)); }
 }
 
@@ -244,6 +311,10 @@ void ServerHost::workerLoop() {
         reconcileWeb(retry);
         beat.beat("reconcile-cat");
         if (!stopping()) { reconcileCat(retry); }
+        beat.beat("reconcile-tci");
+        if (!stopping()) { reconcileTci(retry); }
+        beat.beat("reconcile-udp");
+        if (!stopping()) { reconcileUdp(retry); }
         lk.lock();
         wBusy_ = false;
         widleCv_.notify_all();
@@ -347,6 +418,75 @@ void ServerHost::reconcileCat(bool retry) {
     setCat(std::move(l));
 }
 
+// TCI: the same shape as CAT. Left enabled in the config when the start is refused (the usual cause is a port something else holds), with the sentence
+// in fact.tci.refusal; the next SERVER_CONFIG (even one that says nothing new) tries again.
+void ServerHost::reconcileTci(bool retry) {
+    const ServerConfig::Tci want = config().tci;
+    if (!want.enabled) {
+        if (tciServer_.running()) { tciServer_.stop(); }
+        tciRunCfg_.reset();
+        tciAttempt_.reset();
+        tciCounters_.clients.store(0, std::memory_order_relaxed);
+        tciCounters_.commands.store(0, std::memory_order_relaxed);
+        setTci(Listener{});
+        return;
+    }
+    if (tciServer_.running() && tciRunCfg_.has_value() && *tciRunCfg_ == want) { return; }
+    if (!tciServer_.running() && tciAttempt_.has_value() && *tciAttempt_ == want && !retry) { return; }
+    if (tciServer_.running()) { tciServer_.stop(); }
+    std::string error;
+    const bool ok = tciServer_.start(static_cast<std::uint16_t>(want.port), want.bindAll, error);
+    tciAttempt_ = want;
+    Listener l;
+    if (ok) {
+        tciRunCfg_ = want;
+        l.running = true;
+        l.boundPort = static_cast<int>(tciServer_.boundPort());
+        cascade::core::diagLogf("tci: listening on port %d (%s)", want.port, want.bindAll ? "all interfaces" : "loopback");
+    } else {
+        tciRunCfg_.reset();
+        l.refusal = error;
+        cascade::core::diagWarnf("tci: listener refused on port %d (%s)", want.port, error.c_str());
+        tciCounters_.clients.store(0, std::memory_order_relaxed);
+        tciCounters_.commands.store(0, std::memory_order_relaxed);
+    }
+    setTci(std::move(l));
+}
+
+void ServerHost::reconcileUdp(bool retry) {
+    const ServerConfig::Udp want = config().udp;
+    if (!want.enabled) {
+        if (udpSender_.running()) { udpSender_.stop(); }
+        udpRunCfg_.reset();
+        udpAttempt_.reset();
+        setUdp(Listener{});
+        return;
+    }
+    if (udpSender_.running() && udpRunCfg_.has_value() && *udpRunCfg_ == want) { return; }
+    if (!udpSender_.running() && udpAttempt_.has_value() && *udpAttempt_ == want && !retry) { return; }
+    if (udpSender_.running()) { udpSender_.stop(); }
+    std::string error;
+    bool ok = false;
+    if (!udpReader_) {
+        error = "audio over the network has no engine session to read from";
+    } else {
+        ok = udpSender_.start(want.host, want.port, want.packetFrames, udpReader_(want.radio), error);
+    }
+    udpAttempt_ = want;
+    Listener l;
+    if (ok) {
+        udpRunCfg_ = want;
+        l.running = true;
+        l.boundPort = want.port;
+        cascade::core::diagLogf("udp audio: sending radio %d to port %d", want.radio, want.port);
+    } else {
+        udpRunCfg_.reset();
+        l.refusal = error;
+        cascade::core::diagWarnf("udp audio: refused (%s)", error.c_str());
+    }
+    setUdp(std::move(l));
+}
+
 void ServerHost::shutdown() {
     std::thread w;
     {
@@ -361,11 +501,17 @@ void ServerHost::shutdown() {
     // A hard stop each: when it returns no thread of the server runs and every client is closed (what makes destroying them safe).
     webServer_.stop();
     catServer_.stop();
+    tciServer_.stop();
+    udpSender_.stop();
     webRunCfg_.reset();
     catRunCfg_.reset();
+    tciRunCfg_.reset();
+    udpRunCfg_.reset();
     webListening_.store(false, std::memory_order_relaxed);
     setWeb(Listener{});
     setCat(Listener{});
+    setTci(Listener{});
+    setUdp(Listener{});
     widleCv_.notify_all();
 }
 
@@ -389,6 +535,14 @@ ServerHost::Outcome ServerHost::apply(const ServerConfigRequest& r) {
         if (r.catEnabled) { set(cfg_.cat.enabled, *r.catEnabled); }
         if (r.catBindAll) { set(cfg_.cat.bindAll, *r.catBindAll); }
         if (r.catPort) { set(cfg_.cat.port, *r.catPort); }
+        if (r.tciEnabled) { set(cfg_.tci.enabled, *r.tciEnabled); }
+        if (r.tciBindAll) { set(cfg_.tci.bindAll, *r.tciBindAll); }
+        if (r.tciPort) { set(cfg_.tci.port, *r.tciPort); }
+        if (r.udpEnabled) { set(cfg_.udp.enabled, *r.udpEnabled); }
+        if (r.udpHost) { set(cfg_.udp.host, *r.udpHost); }
+        if (r.udpPort) { set(cfg_.udp.port, *r.udpPort); }
+        if (r.udpRadio) { set(cfg_.udp.radio, *r.udpRadio); }
+        if (r.udpPacketFrames) { set(cfg_.udp.packetFrames, *r.udpPacketFrames); }
         if (r.webPasswordRecord) {
             ++passwordGeneration_;  // whatever was being hashed is no longer the answer
             waitingPlain_.reset();
@@ -489,11 +643,22 @@ void ServerHost::load(const cascade::core::AppConfig& c) {
         cfg_.cat.enabled = c.catEnabled;
         cfg_.cat.bindAll = c.catBindAll;
         cfg_.cat.port = c.catPort;
+        cfg_.tci.enabled = c.tciEnabled;
+        cfg_.tci.bindAll = c.tciBindAll;
+        cfg_.tci.port = c.tciPort;
+        cfg_.udp.enabled = c.udpAudioEnabled;
+        cfg_.udp.host = c.udpAudioHost;
+        cfg_.udp.port = c.udpAudioPort;
+        cfg_.udp.radio = c.udpAudioRadio;
+        cfg_.udp.packetFrames = c.udpAudioPacketFrames;
     }
     bump();
     // The restore starts what the file switched on (a refusal - a port held, an off-machine bind with no password - is reported, not
     // fatal), and stops a listener the file does not. Nothing to wake a worker for when both are off and nothing runs.
-    if (c.webEnabled || c.catEnabled || webServer_.running() || catServer_.running()) { kick(false); }
+    if (c.webEnabled || c.catEnabled || c.tciEnabled || c.udpAudioEnabled || webServer_.running() || catServer_.running() || tciServer_.running() ||
+        udpSender_.running()) {
+        kick(false);
+    }
 }
 
 void ServerHost::store(cascade::core::AppConfig& c) const {
@@ -506,6 +671,14 @@ void ServerHost::store(cascade::core::AppConfig& c) const {
     c.catEnabled = cfg_.cat.enabled;
     c.catBindAll = cfg_.cat.bindAll;
     c.catPort = cfg_.cat.port;
+    c.tciEnabled = cfg_.tci.enabled;
+    c.tciBindAll = cfg_.tci.bindAll;
+    c.tciPort = cfg_.tci.port;
+    c.udpAudioEnabled = cfg_.udp.enabled;
+    c.udpAudioHost = cfg_.udp.host;
+    c.udpAudioPort = cfg_.udp.port;
+    c.udpAudioRadio = cfg_.udp.radio;
+    c.udpAudioPacketFrames = cfg_.udp.packetFrames;
 }
 
 ServerConfig ServerHost::config() const {
@@ -521,6 +694,34 @@ ServerHost::Listener ServerHost::web() const {
 ServerHost::Listener ServerHost::cat() const {
     std::lock_guard<std::mutex> lk(m_);
     return cat_;
+}
+
+ServerHost::Listener ServerHost::tci() const {
+    std::lock_guard<std::mutex> lk(m_);
+    return tci_;
+}
+
+ServerHost::Listener ServerHost::udp() const {
+    std::lock_guard<std::mutex> lk(m_);
+    return udp_;
+}
+
+void ServerHost::setTci(Listener l) {
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        if (tci_ == l) { return; }
+        tci_ = std::move(l);
+    }
+    bump();
+}
+
+void ServerHost::setUdp(Listener l) {
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        if (udp_ == l) { return; }
+        udp_ = std::move(l);
+    }
+    bump();
 }
 
 void ServerHost::setWeb(Listener l) {
@@ -730,6 +931,136 @@ std::unique_ptr<cascade::net::CatSession> openCatSession(ApiHost& api, const std
     FoxSession* s = api.openInternalSession(InternalKind::Cat, label, &status);
     if (s == nullptr) { return nullptr; }
     return std::make_unique<TableCatSession>(table, s);
+}
+
+// ---- a TCI connection's session ---------------------------------------------------------------------------------------------------------
+
+namespace {
+
+// net::TciBackend over the C table. Used by one connection's thread only (the server's contract). The radios' ranges (fact.radio.<n>.range) are
+// read when a radio is first seen and again every ten seconds - they change only when a radio opens - not on every tick.
+class TableTciBackend final : public cascade::net::TciBackend {
+public:
+    TableTciBackend(ApiHost& api, const FoxEngineApi* table, FoxSession* session) : api_(api), t_(table), s_(session) {}
+    ~TableTciBackend() override { t_->close_session(s_); }
+
+    std::vector<int> radios() override {
+        std::vector<int> out;
+        FoxReceiverState st{};
+        for (std::uint32_t n = 1; n <= 8; ++n) {
+            st.structSize = sizeof(st);
+            const std::int32_t r = t_->read_radio_state(s_, n, &st);
+            if (r == FOXAPI_OK || r == FOXAPI_BUSY) { out.push_back(static_cast<int>(n)); }
+        }
+        return out;
+    }
+
+    bool readRadio(int radio, cascade::net::TciRadioView& out) override {
+        FoxReceiverState st{};
+        st.structSize = sizeof(st);
+        std::int32_t r = t_->read_radio_state(s_, static_cast<std::uint32_t>(radio), &st);
+        if (r == FOXAPI_BUSY) { r = t_->read_radio_state(s_, static_cast<std::uint32_t>(radio), &st); }   // the seqlock overlapped a publish: once more
+        if (r != FOXAPI_OK) { return false; }
+        out.running = (st.flags & FOXAPI_RX_RUNNING) != 0u;
+        out.centreHz = st.centreHz;
+        out.vfoOffsetHz = st.vfoOffsetHz;
+        out.tunedHz = st.tunedHz;
+        out.sampleRateHz = st.sampleRateHz;
+        out.bandwidthHz = st.bandwidthHz;
+        out.squelchDb = st.squelchDb;
+        out.demod = st.demodMode;
+        range(radio, out);
+        return true;
+    }
+
+    int submit(const std::vector<FoxCommand>& commands) override {
+        if (commands.empty()) { return 0; }
+        std::vector<FoxCommand> batch(commands);
+        std::vector<FoxSubmitResult> answers(batch.size());
+        for (FoxCommand& c : batch) { c.structSize = sizeof(FoxCommand); }
+        for (FoxSubmitResult& a : answers) { a.structSize = sizeof(FoxSubmitResult); }
+        const std::int32_t taken = t_->submit(s_, batch.data(), static_cast<std::uint32_t>(batch.size()), answers.data());
+        return taken > 0 ? static_cast<int>(taken) : 0;
+    }
+
+    int pollResults() override {
+        int total = 0;
+        for (;;) {
+            FoxCommandResult r[16];
+            for (FoxCommandResult& x : r) { x.structSize = sizeof(x); }
+            const std::int32_t n = t_->poll_results(s_, r, 16);
+            if (n <= 0) { break; }
+            total += static_cast<int>(n);
+            if (n < 16) { break; }
+        }
+        return total;
+    }
+
+    int readAudio(int radio, std::uint64_t& cursor, float* out, std::size_t capFrames) override {
+        return static_cast<int>(api_.readAudioOfRadio(s_, static_cast<std::uint32_t>(radio), &cursor, out, static_cast<std::uint32_t>(capFrames)));
+    }
+
+private:
+    struct Range {
+        std::int64_t readMs = 0;
+        double lo = 0.0, hi = 0.0;
+    };
+    void range(int radio, cascade::net::TciRadioView& out) {
+        const std::int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        Range& r = ranges_[radio];
+        if (r.readMs == 0 || now - r.readMs > 10000) {
+            r.readMs = now;
+            r.lo = r.hi = 0.0;
+            char buf[96];
+            const std::string key = "fact.radio." + std::to_string(radio) + ".range";
+            if (t_->get_setting(s_, key.c_str(), buf, sizeof(buf)) > 0) {
+                double lo = 0.0, hi = 0.0;
+                if (std::sscanf(buf, "%lf,%lf", &lo, &hi) == 2 && hi > lo) {
+                    r.lo = lo;
+                    r.hi = hi;
+                }
+            }
+        }
+        out.limitLoHz = r.lo;
+        out.limitHiHz = r.hi;
+    }
+    ApiHost& api_;
+    const FoxEngineApi* t_;
+    FoxSession* s_;
+    std::map<int, Range> ranges_;
+};
+
+// The UDP audio's session: held by the reader the sender holds (one owner, the sender's worker), closed when the reader goes.
+struct UdpSession {
+    UdpSession(ApiHost& a, const FoxEngineApi* t, FoxSession* s) : api(a), table(t), session(s) {}
+    ~UdpSession() { table->close_session(session); }
+    ApiHost& api;
+    const FoxEngineApi* table;
+    FoxSession* session;
+};
+
+}  // namespace
+
+std::unique_ptr<cascade::net::TciBackend> openTciBackend(ApiHost& api, const std::string& label) {
+    const FoxEngineApi* table = engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+    if (table == nullptr) { return nullptr; }
+    std::int32_t status = FOXAPI_OK;
+    FoxSession* s = api.openInternalSession(InternalKind::Tci, label, &status);
+    if (s == nullptr) { return nullptr; }
+    return std::make_unique<TableTciBackend>(api, table, s);
+}
+
+cascade::net::UdpAudioSender::Reader openUdpAudioReader(ApiHost& api, int radio, const std::string& label) {
+    const FoxEngineApi* table = engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+    if (table == nullptr) { return {}; }
+    std::int32_t status = FOXAPI_OK;
+    FoxSession* s = api.openInternalSession(InternalKind::Udp, label, &status);
+    if (s == nullptr) { return {}; }
+    auto session = std::make_shared<UdpSession>(api, table, s);
+    return [session, radio](std::uint64_t& cursor, float* out, std::size_t cap) -> int {
+        return static_cast<int>(session->api.readAudioOfRadio(session->session, static_cast<std::uint32_t>(radio), &cursor, out,
+                                                               static_cast<std::uint32_t>(cap)));
+    };
 }
 
 }  // namespace cascade::engine

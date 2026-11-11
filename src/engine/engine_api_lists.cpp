@@ -199,6 +199,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     // damaged or unsaved file; both from members, nothing allocates.
     f.value(freqMarkers_.version());
     f.value(freqMarkers_.size());
+    f.value(scheduleVersion_);   // the timed recordings: any change of the list, a state or a note (engine_schedule.cpp)
     f.text(markerError_);
     // The DSP chain's input rate (API 0.3 8.5, fact.input.rateHz): the source's rate
     // unless the chain refused a change of it, and then the one the display is
@@ -1334,6 +1335,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // each radio that exists, keyed by its number from 1: its state (empty is never published - a radio that is not there has no facts - opening, running,
     // stopped, faulted, lent), the device it holds ("" on the generator or a file: the key a patch Radio node would name), its label, its audio route
     // (both, left, right, none: only "both" until slots 1 and up carry audio) and the decoder plugins running on it, their module files separated by commas.
+    scheduleFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // (LOCAL: a recording plan is the operator's)
     fact("radio.count", std::to_string(receiverCount()));
     fact("radio.max", std::to_string(kMaxReceivers));
     fact("radio.solo", std::to_string(soloRadio_));   // the radio heard alone, 0 = nobody (RADIO_SOLO's read-back; multi-radio stage 5 addition)
@@ -1510,6 +1512,25 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         };
         add("web", wl, sc.web.enabled, sc.web.port, servers_.webCounters());
         add("cat", cl, sc.cat.enabled, sc.cat.port, servers_.catCounters());
+        // THE TCI SERVER AND AUDIO OVER THE NETWORK (docs/API.md 6.22), all LOCAL, as facts only: FOXAPI_LIST_SERVERS stays two entries (an interface that
+        // counts them is not surprised). The live figures (clients, commands, accepted, datagrams) are read at the call: fact.tci.clients, .commands,
+        // .accepted and fact.udp.sent, .errors.
+        const ServerHost::Listener tl = servers_.tci();
+        const ServerHost::Listener ul = servers_.udp();
+        fact("tci.enabled", sc.tci.enabled ? "1" : "0", true);
+        fact("tci.bindAll", sc.tci.bindAll ? "1" : "0", true);
+        fact("tci.port", std::to_string(sc.tci.port), true);
+        fact("tci.listening", tl.running ? "1" : "0", true);
+        fact("tci.boundPort", std::to_string(tl.running ? tl.boundPort : 0), true);
+        fact("tci.refusal", tl.refusal, true);
+        fact("tci.scope", sc.tci.bindAll ? "all interfaces" : "this computer only", true);
+        fact("udp.enabled", sc.udp.enabled ? "1" : "0", true);
+        fact("udp.host", sc.udp.host, true);
+        fact("udp.port", std::to_string(sc.udp.port), true);
+        fact("udp.radio", std::to_string(sc.udp.radio), true);
+        fact("udp.packetFrames", std::to_string(sc.udp.packetFrames), true);
+        fact("udp.sending", ul.running ? "1" : "0", true);
+        fact("udp.refusal", ul.refusal, true);
     }
     // THE RECORDINGS: the two recorders' takes (current or last), then the
     // patch's files.

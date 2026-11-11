@@ -187,6 +187,15 @@ struct ConfigFieldInfo {
     X(catEnabled,              Engine,    false) \
     X(catBindAll,              Engine,    false) \
     X(catPort,                 Engine,    false) \
+    X(tciEnabled,              Engine,    false) \
+    X(tciBindAll,              Engine,    false) \
+    X(tciPort,                 Engine,    false) \
+    X(udpAudioEnabled,         Engine,    false) \
+    X(udpAudioHost,            Engine,    false) \
+    X(udpAudioPort,            Engine,    false) \
+    X(udpAudioRadio,           Engine,    false) \
+    X(udpAudioPacketFrames,    Engine,    false) \
+    X(schedule,                Engine,    false) \
     X(webUsername,             Engine,    false) \
     X(webPasswordRecord,       Engine,    false) \
     X(updateCheckEnabled,      Interface, false) \

@@ -49,6 +49,8 @@
 #include "core/host_image.hpp"
 #include "engine/image_feed.hpp"
 #include "net/cat_server.hpp"
+#include "net/tci_server.hpp"
+#include "net/udp_audio.hpp"
 #include "net/web_policy.hpp"
 #include "net/web_server.hpp"
 
@@ -77,6 +79,15 @@ std::unique_ptr<cascade::net::WebSession> openWebSession(ApiHost& api, std::func
 // ServerHost is destroyed first, and stops the CAT server - which closes every session - before that).
 std::unique_ptr<cascade::net::CatSession> openCatSession(ApiHost& api, const std::string& label);
 
+// A TCI CONNECTION'S SESSION ON THE ENGINE: opens ApiHost::openInternalSession(InternalKind::Tci, label) and wraps it in the net::TciBackend the TCI
+// server speaks - read_radio_state for each radio's figures, submit and poll_results for the commands, ApiHost::readAudioOfRadio for the audio of any
+// radio. Null when the engine will not give a session (the limits; an internal session counts like any other).
+std::unique_ptr<cascade::net::TciBackend> openTciBackend(ApiHost& api, const std::string& label);
+
+// THE UDP AUDIO'S READER for one radio: opens an InternalKind::Udp session (AUDIO grant, no op) and returns the reader the sender calls from its worker
+// thread; the session closes when the reader is destroyed (the sender stopped). Empty when the engine will not give a session.
+cascade::net::UdpAudioSender::Reader openUdpAudioReader(ApiHost& api, int radio, const std::string& label);
+
 // The two listeners' configuration: the AppConfig fields web* and cat* (core/config.hpp), as one value.
 struct ServerConfig {
     cascade::net::WebServerConfig web;  // enabled, bindAddress, port, username, passwordRecord (never the password)
@@ -86,16 +97,36 @@ struct ServerConfig {
         int port = 4532;
         bool operator==(const Cat& o) const { return enabled == o.enabled && bindAll == o.bindAll && port == o.port; }
     } cat;
+    // THE TCI SERVER (net/tci_server.hpp): OFF by default, loopback by default, receive-only always.
+    struct Tci {
+        bool enabled = false;
+        bool bindAll = false;   // false: loopback only
+        int port = 50001;
+        bool operator==(const Tci& o) const { return enabled == o.enabled && bindAll == o.bindAll && port == o.port; }
+    } tci;
+    // AUDIO OVER THE NETWORK (net/udp_audio.hpp): OFF by default; one radio's audio to one UDP address, 127.0.0.1:7355 unless told otherwise.
+    struct Udp {
+        bool enabled = false;
+        std::string host = "127.0.0.1";
+        int port = 7355;
+        int radio = 1;           // 1..8
+        int packetFrames = 480;  // 480 or 960 samples a datagram
+        bool operator==(const Udp& o) const {
+            return enabled == o.enabled && host == o.host && port == o.port && radio == o.radio && packetFrames == o.packetFrames;
+        }
+    } udp;
     bool operator==(const ServerConfig& o) const {
         return web.enabled == o.web.enabled && web.bindAddress == o.web.bindAddress && web.port == o.web.port &&
-               web.username == o.web.username && web.passwordRecord == o.web.passwordRecord && cat == o.cat;
+               web.username == o.web.username && web.passwordRecord == o.web.passwordRecord && cat == o.cat && tci == o.tci && udp == o.udp;
     }
 };
 
 // ONE FOXAPI_OP_SERVER_CONFIG, parsed. The text is a JSON object:
 //   {"web": {"enabled": bool, "bindAddress": "127.0.0.1", "port": 8073, "username": "admin",
 //            "password": "...", "passwordRecord": "pbkdf2-sha256$...", "clearPassword": true},
-//    "cat": {"enabled": bool, "bindAll": bool, "port": 4532}}
+//    "cat": {"enabled": bool, "bindAll": bool, "port": 4532},
+//    "tci": {"enabled": bool, "bindAll": bool, "port": 50001},
+//    "udp": {"enabled": bool, "host": "127.0.0.1", "port": 7355, "radio": 1, "packetFrames": 480}}
 // Every member is optional and means "leave this alone" when absent; an UNKNOWN key at either level is an error (a control request is
 // a live instruction, not a file that must survive a newer writer), so is a wrong type, a port outside 1024..65535, a bind address
 // the policy does not accept (net::isAcceptableBindAddress), a password under eight characters, a record that does not parse, more
@@ -112,6 +143,14 @@ struct ServerConfigRequest {
     std::optional<bool> catEnabled;
     std::optional<bool> catBindAll;
     std::optional<int> catPort;
+    std::optional<bool> tciEnabled;
+    std::optional<bool> tciBindAll;
+    std::optional<int> tciPort;
+    std::optional<bool> udpEnabled;
+    std::optional<std::string> udpHost;
+    std::optional<int> udpPort;
+    std::optional<int> udpRadio;
+    std::optional<int> udpPacketFrames;
 };
 
 // False with a sentence in `error` (the result's message) for anything above. Pure.
@@ -172,6 +211,9 @@ public:
         cascade::net::WebServer::StatusProvider webStatus;
         cascade::net::WebSessionOpener webSession;
         cascade::net::CatSessionOpener catSession;
+        cascade::net::TciBackendOpener tciBackend;
+        // The UDP audio's reader for a radio (openUdpAudioReader); the host calls it on its worker when the stream starts.
+        std::function<cascade::net::UdpAudioSender::Reader(int radio)> udpReader;
         // PluginRunner::pollImages (stage 5e): the image feed's one accumulator polls the decoders through it.
         std::function<void(std::vector<cascade::core::HostImage>&)> pollImages;
     };
@@ -186,6 +228,8 @@ public:
     // --- the servers --------------------------------------------------------------------------------------------------------------
     cascade::net::WebServer& webServer() { return webServer_; }
     cascade::net::CatServer& catServer() { return catServer_; }
+    cascade::net::TciServer& tciServer() { return tciServer_; }
+    cascade::net::UdpAudioSender& udpSender() { return udpSender_; }
     // Whether the web server is listening - lock-free; what the receiver state's WEB_LISTENING bit carries.
     bool webListening() const { return webListening_.load(std::memory_order_relaxed); }
 
@@ -222,10 +266,16 @@ public:
     std::uint64_t version() const { return version_.load(std::memory_order_relaxed); }
     Listener web() const;
     Listener cat() const;
+    Listener tci() const;
+    Listener udp() const;
     void setWeb(Listener l);
     void setCat(Listener l);
+    void setTci(Listener l);
+    void setUdp(Listener l);
     Counters& webCounters() { return webCounters_; }
     Counters& catCounters() { return catCounters_; }
+    Counters& tciCounters() { return tciCounters_; }
+    const Counters& tciCounters() const { return tciCounters_; }
     const Counters& webCounters() const { return webCounters_; }
     const Counters& catCounters() const { return catCounters_; }
 
@@ -244,22 +294,31 @@ private:
     void workerLoop();
     void reconcileWeb(bool retry);
     void reconcileCat(bool retry);
+    void reconcileTci(bool retry);
+    void reconcileUdp(bool retry);
     bool stopping() const;
 
     mutable std::mutex m_;
     ServerConfig cfg_;
-    Listener web_, cat_;
-    Counters webCounters_, catCounters_;
+    Listener web_, cat_, tci_, udp_;
+    Counters webCounters_, catCounters_, tciCounters_;
     std::atomic<std::uint64_t> version_{1};
     std::atomic<bool> passwordPending_{false};
 
     // The servers and what the worker last did with them. The servers are thread-safe objects; the "last" records are the worker's alone.
     cascade::net::WebServer webServer_;
     cascade::net::CatServer catServer_;
+    cascade::net::TciServer tciServer_;
+    cascade::net::UdpAudioSender udpSender_;
+    std::function<cascade::net::UdpAudioSender::Reader(int radio)> udpReader_;
     std::optional<cascade::net::WebServerConfig> webRunCfg_;   // what the running web server was started with
     std::optional<cascade::net::WebServerConfig> webAttempt_;  // what the last start was tried with (refused or not)
     std::optional<ServerConfig::Cat> catRunCfg_;
     std::optional<ServerConfig::Cat> catAttempt_;
+    std::optional<ServerConfig::Tci> tciRunCfg_;
+    std::optional<ServerConfig::Tci> tciAttempt_;
+    std::optional<ServerConfig::Udp> udpRunCfg_;
+    std::optional<ServerConfig::Udp> udpAttempt_;
     std::atomic<bool> webListening_{false};
     std::atomic<bool> hosting_{true};
 

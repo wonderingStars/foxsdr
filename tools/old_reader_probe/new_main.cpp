@@ -38,6 +38,31 @@ int main(int argc, char** argv) {
         }
         ok = ConfigStore::save(argv[3], c, err) && ok;   // FILE, RTL_TCP, PLUTO
     }
+    if (argc > 4) {
+        // ENGINE FEATURES LANE A: the TCI server, audio over the network and the timed recordings, all switched on, beside a radio 1 the old reader must still read exactly
+        c.radios.clear();
+        c.tciEnabled = true;
+        c.tciBindAll = true;
+        c.tciPort = 50123;
+        c.udpAudioEnabled = true;
+        c.udpAudioHost = "192.168.1.20";
+        c.udpAudioPort = 7400;
+        c.udpAudioRadio = 3;
+        c.udpAudioPacketFrames = 960;
+        sched::Entry e;
+        e.id = 1;
+        e.name = "weather pass";
+        e.radio = 2;
+        e.startUnix = 1790000100;
+        e.lengthS = 600;
+        e.repeat = sched::Repeat::Daily;
+        e.tune = true;
+        e.freqHz = 137.9e6;
+        e.mode = 1;
+        e.recordIq = true;
+        c.schedule.push_back(e);
+        ok = ConfigStore::save(argv[4], c, err) && ok;   // TCI, UDP AUDIO, SCHEDULE
+    }
     std::printf("new writer: %s\n", ok ? "ok" : "FAILED");
     return ok ? 0 : 1;
 }

@@ -977,6 +977,53 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     getBool(j, "catEnabled", out.catEnabled);
     getBool(j, "catBindAll", out.catBindAll);
     getInt(j, "catPort", out.catPort);
+    getBool(j, "tciEnabled", out.tciEnabled);
+    getBool(j, "tciBindAll", out.tciBindAll);
+    getInt(j, "tciPort", out.tciPort);
+    getBool(j, "udpAudioEnabled", out.udpAudioEnabled);
+    getString(j, "udpAudioHost", out.udpAudioHost);
+    getInt(j, "udpAudioPort", out.udpAudioPort);
+    getInt(j, "udpAudioRadio", out.udpAudioRadio);
+    getInt(j, "udpAudioPacketFrames", out.udpAudioPacketFrames);
+    // The timed recordings: element-wise tolerant like the radios (an entry that is not an object is skipped, a field of the wrong type keeps its
+    // default) and every entry is judged by sched::sanitise below. Reading stops at 4 x the limit so a hostile file cannot make this loop long.
+    {
+        const auto it = j.find("schedule");
+        if (it != j.end() && it->is_array()) {
+            std::vector<sched::Entry> entries;
+            for (const auto& e : *it) {
+                if (!e.is_object()) { continue; }
+                if (entries.size() >= static_cast<std::size_t>(sched::kMaxEntries) * 4u) { break; }
+                sched::Entry x;
+                int id = 0, repeat = 0, outcome = 0;
+                std::int64_t big = 0;
+                getInt(e, "id", id);
+                x.id = id > 0 ? static_cast<std::uint32_t>(id) : 0u;
+                getString(e, "name", x.name);
+                getInt(e, "radio", x.radio);
+                if (const auto s = e.find("startUnix"); s != e.end() && s->is_number_integer()) { x.startUnix = s->get<std::int64_t>(); }
+                getInt(e, "lengthS", x.lengthS);
+                getInt(e, "repeat", repeat);
+                x.repeat = static_cast<sched::Repeat>(repeat);
+                getBool(e, "tune", x.tune);
+                getDouble(e, "freqHz", x.freqHz);
+                getInt(e, "mode", x.mode);
+                getDouble(e, "bandwidthHz", x.bandwidthHz);
+                getBool(e, "recordAudio", x.recordAudio);
+                getBool(e, "recordIq", x.recordIq);
+                getBool(e, "returnToWhereIWas", x.returnToWhereIWas);
+                getBool(e, "enabled", x.enabled);
+                if (const auto s = e.find("createdUnix"); s != e.end() && s->is_number_integer()) { x.createdUnix = s->get<std::int64_t>(); }
+                if (const auto s = e.find("lastStartUnix"); s != e.end() && s->is_number_integer()) { x.lastStartUnix = s->get<std::int64_t>(); }
+                getInt(e, "lastOutcome", outcome);
+                x.lastOutcome = static_cast<sched::Outcome>(outcome);
+                getInt(e, "missed", x.missed);
+                (void)big;
+                entries.push_back(std::move(x));
+            }
+            out.schedule = std::move(entries);
+        }
+    }
     getString(j, "webUsername", out.webUsername);
     getString(j, "webPasswordRecord", out.webPasswordRecord);
     getBool(j, "updateCheckEnabled", out.updateCheckEnabled);
@@ -1316,6 +1363,22 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     if (out.catPort < 1024 || out.catPort > 65535) {
         out.catPort = defaults.catPort;
     }
+    if (out.tciPort < 1024 || out.tciPort > 65535) {
+        out.tciPort = defaults.tciPort;
+    }
+    // The audio destination: an emptied or hostile host resets to the loopback default (never to a wider one); a port or a radio out of range, or a
+    // packet size that is neither of the two, resets to the default.
+    if (out.udpAudioHost.empty() || out.udpAudioHost.size() > 253) { out.udpAudioHost = defaults.udpAudioHost; }
+    for (const char c : out.udpAudioHost) {
+        if (static_cast<unsigned char>(c) <= 0x20 || static_cast<unsigned char>(c) >= 0x7F) {
+            out.udpAudioHost = defaults.udpAudioHost;
+            break;
+        }
+    }
+    if (out.udpAudioPort < 1 || out.udpAudioPort > 65535) { out.udpAudioPort = defaults.udpAudioPort; }
+    if (out.udpAudioRadio < 1 || out.udpAudioRadio > 8) { out.udpAudioRadio = defaults.udpAudioRadio; }
+    if (out.udpAudioPacketFrames != 480 && out.udpAudioPacketFrames != 960) { out.udpAudioPacketFrames = defaults.udpAudioPacketFrames; }
+    out.schedule = sched::sanitise(std::move(out.schedule));
     if (out.webPort < 1024 || out.webPort > 65535) {
         out.webPort = defaults.webPort;
     }
@@ -1666,6 +1729,41 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["catEnabled"] = cfg.catEnabled;
     j["catBindAll"] = cfg.catBindAll;
     j["catPort"] = cfg.catPort;
+    j["tciEnabled"] = cfg.tciEnabled;
+    j["tciBindAll"] = cfg.tciBindAll;
+    j["tciPort"] = cfg.tciPort;
+    j["udpAudioEnabled"] = cfg.udpAudioEnabled;
+    j["udpAudioHost"] = cfg.udpAudioHost;
+    j["udpAudioPort"] = cfg.udpAudioPort;
+    j["udpAudioRadio"] = cfg.udpAudioRadio;
+    j["udpAudioPacketFrames"] = cfg.udpAudioPacketFrames;
+    // Written only when there is something to write, so the file of a user who never made one is exactly the file it was.
+    if (!cfg.schedule.empty()) {
+        nlohmann::json arr = nlohmann::json::array();
+        for (const sched::Entry& x : sched::sanitise(cfg.schedule)) {
+            nlohmann::json e;
+            e["id"] = x.id;
+            e["name"] = x.name;
+            e["radio"] = x.radio;
+            e["startUnix"] = x.startUnix;
+            e["lengthS"] = x.lengthS;
+            e["repeat"] = static_cast<int>(x.repeat);
+            e["tune"] = x.tune;
+            e["freqHz"] = x.freqHz;
+            e["mode"] = x.mode;
+            e["bandwidthHz"] = x.bandwidthHz;
+            e["recordAudio"] = x.recordAudio;
+            e["recordIq"] = x.recordIq;
+            e["returnToWhereIWas"] = x.returnToWhereIWas;
+            e["enabled"] = x.enabled;
+            e["createdUnix"] = x.createdUnix;
+            e["lastStartUnix"] = x.lastStartUnix;
+            e["lastOutcome"] = static_cast<int>(x.lastOutcome);
+            e["missed"] = x.missed;
+            arr.push_back(std::move(e));
+        }
+        j["schedule"] = std::move(arr);
+    }
     j["webUsername"] = cfg.webUsername;
     j["webPasswordRecord"] = cfg.webPasswordRecord;
     j["updateCheckEnabled"] = cfg.updateCheckEnabled;

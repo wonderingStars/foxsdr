@@ -66,6 +66,8 @@ enum class InternalKind : int {
     None = 0,
     Web = 1,  // the browser page: what /api/control can emit, the plugin store and the PTT included
     Cat = 2,  // rigctld: tune, mode and passband, never the transmitter
+    Tci = 3,  // the TCI server (net/tci_server): tune, mode, filter, squelch, run and stop, and the audio of any radio - never the transmitter
+    Udp = 4,  // audio over the network (net/udp_audio): it may read one radio's audio and speak no op at all
 };
 // The ops a kind's profile allows, and the grants besides VIEW it holds. The closure tests read these.
 std::span<const std::uint32_t> internalProfileOps(InternalKind kind);
@@ -110,6 +112,10 @@ public:
     // beyond the session limits - it counts against the 64 and the 16 REMOTE places like any other - or FOXAPI_BAD_ARGUMENT). Any
     // thread. The caller closes it with the table's close_session.
     FoxSession* openInternalSession(InternalKind kind, const std::string& label, std::int32_t* status = nullptr);
+    // The finished audio of ONE named radio (1..N) for an engine-internal session that serves several (the TCI server): mono, 48 kHz, float, from
+    // `cursor` (0 = join live; the same ring and the same rules as the table's read_audio, which reads the session's focused radio). DENIED without the
+    // AUDIO grant, NO_DEVICE for a radio that is not there, otherwise the frames written. Any thread; never waits for the pass.
+    std::int32_t readAudioOfRadio(FoxSession* s, std::uint32_t radio, std::uint64_t* cursor, float* out, std::uint32_t capFrames);
     // TESTS ONLY - nothing in the product calls it: the status submit would give `c` from session `s` at the door (the refusal a result
     // would carry), with nothing queued or applied. Any thread.
     std::int32_t validateForTest(FoxSession* s, const FoxCommand& c);

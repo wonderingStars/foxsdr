@@ -204,7 +204,8 @@ void testSources(const fs::path& root) {
 
     // 1b. setUsageCallback: the servers define it, ServerHost calls it - twice, once a server, in its constructor - and nobody else does. What it hands over is a
     //     counter increment (data the table serves as fact.web.served and fact.cat.accepted), not a recorder: 1a holds that no recorder is named anywhere engine-side.
-    const std::set<std::string> definers = {"src/net/web_server.cpp", "src/net/web_server.hpp", "src/net/cat_server.cpp", "src/net/cat_server.hpp"};
+    const std::set<std::string> definers = {"src/net/web_server.cpp", "src/net/web_server.hpp", "src/net/cat_server.cpp", "src/net/cat_server.hpp",
+                                         "src/net/tci_server.cpp", "src/net/tci_server.hpp"};
     int hostCalls = 0;
     for (const std::vector<Source>* group : {&engine, &net, &gui, &core}) {
         for (const Source& s : *group) {
@@ -219,12 +220,12 @@ void testSources(const fs::path& root) {
             CHECK(false);
         }
     }
-    CHECK(hostCalls == 2);
+    CHECK(hostCalls == 3);   // (web, CAT, and the TCI server since the engine-features lane: each a counter increment, nothing more)
     for (const Source& s : engine) {
         if (s.rel != "src/engine/server_host.cpp") { continue; }
         const std::string body = bodyAt(s.code, "ServerHost::ServerHost()");
         CHECK(!body.empty());
-        CHECK(countWord(body, "setUsageCallback") == 2);
+        CHECK(countWord(body, "setUsageCallback") == 3);
         // ...and each of the two callbacks is an increment of its counter.
         CHECK(body.find("served.fetch_add(") != std::string::npos);
         CHECK(body.find("accepted.fetch_add(") != std::string::npos);

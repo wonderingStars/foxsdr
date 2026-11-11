@@ -135,6 +135,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include "core/schedule.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
@@ -1283,6 +1284,23 @@ struct AppConfig {
     bool catBindAll = false;
     // 4532 is the port rigctld uses, so clients need no configuring.
     int catPort = 4532;
+
+    // --- TCI server (net/tci_server.hpp) and audio over the network (net/udp_audio.hpp) ---------------------------------
+    // Both OFF by default. The TCI server listens on the loopback interface unless tciBindAll says otherwise (the protocol has no authentication,
+    // so a wider bind is a deliberate act) and is RECEIVE-ONLY whatever the settings say. The default port is the one TCI programs commonly
+    // use (the TCI 2.1 PDF names none). Audio over the network sends one radio's finished audio (raw 48 kHz 16-bit mono) to one UDP address.
+    bool tciEnabled = false;
+    bool tciBindAll = false;
+    int tciPort = 50001;
+    bool udpAudioEnabled = false;
+    std::string udpAudioHost = "127.0.0.1";   // an emptied value resets to this, never to something wider
+    int udpAudioPort = 7355;
+    int udpAudioRadio = 1;                    // 1..8
+    int udpAudioPacketFrames = 480;           // 480 (10 ms) or 960 (20 ms)
+
+    // --- Timed recordings (core/schedule.hpp): the entries, as the engine's clock holds them. Saved with the settings; an older reader ignores
+    // the key. At most sched::kMaxEntries; damaged entries are dropped when the file is read.
+    std::vector<sched::Entry> schedule;
 
     // Account name for the browser login. An empty value resets to the default.
     std::string webUsername = "admin";

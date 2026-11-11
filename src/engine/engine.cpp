@@ -143,6 +143,10 @@ Engine::Engine(EngineHost& host)
         return openWebSession(*api_, [this] { return rx().receiverSnapshot_->readFull()->bookmarkIds; }, label);
     };
     providers.catSession = [this](const std::string& label) { return openCatSession(*api_, label); };
+    // The TCI server's connections and the UDP audio's reader are sessions of their own as well (engine/server_host.cpp): a TCI connection serves every
+    // radio through one session; the UDP stream reads the one radio it was configured for.
+    providers.tciBackend = [this](const std::string& label) { return openTciBackend(*api_, label); };
+    providers.udpReader = [this](int radio) { return openUdpAudioReader(*api_, radio, "udp:" + std::to_string(radio)); };
     // (stage 5e) The receiver plugins' pictures: the host's image feed owns the ONE accumulator that polls the decoders (a decoder offers a
     // picture once, so two pollers would split them), through the runner this engine owns.
     providers.pollImages = [this](std::vector<cascade::core::HostImage>& out) { pollAllImages(out); };
@@ -7925,6 +7929,18 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             return res;
         }
 
+        // --- timed recordings (docs/API.md 6.23, engine_schedule.cpp) ------------------------------------------------------------
+        case FOXAPP_OP_SCHEDULE_SET:
+        case FOXAPP_OP_SCHEDULE_REMOVE:
+        case FOXAPP_OP_SCHEDULE_ENABLE:
+        case FOXAPP_OP_SCHEDULE_RUN_NOW:
+        case FOXAPP_OP_SCHEDULE_SKIP: {
+            std::string why;
+            const std::int32_t st = applyScheduleOp(c, text, res, why);
+            if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
+            return res;
+        }
+
         // --- decoders and plugins ------------------------------------------------------------
         case FOXAPI_OP_DECODER_START:
         case FOXAPI_OP_DECODER_STOP: {
@@ -9478,6 +9494,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
     // RADIOS 2 TO 8 (engine stage 5): through RADIO_ADD and the ordinary ops, last, so that the first radio's restore (which settled the band plan, the converters,
     // the per-device memories and the output) is what they come back against. A file without `radios` restores no one.
     restoreSavedRadios(cfg);
+    loadSchedule(cfg.schedule);   // the timed recordings (engine_schedule.cpp)
     restorePluginRadios(cfg);
 }
 
@@ -9638,6 +9655,7 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
     cfg.userPresets = userPresets_;
     // RADIOS 2 TO 8: read out of each radio's Receiver (engine stage 5). Empty with one radio, and then the file is the file 0.99.104 writes.
     cfg.radios = savedRadios();
+    cfg.schedule = scheduleEntries();
     cfg.pluginRadio = pluginRadio_;   // (radio 1 is the absence of an entry; the map never holds one)
     telemetryJournal(cfg);
     // FALSE while running, so a start-up that reads it back knows the previous
@@ -10517,6 +10535,7 @@ void Engine::runPassPart(PassPart part) {
             pumpAudio();
             // THE ADDED RADIOS' OWN HOUSEKEEPING (stage 4): each under its own scope, after the first radio's.
             pumpExtraReceivers();
+            pumpSchedule();   // (timed recordings: engine_schedule.cpp)
             break;
     }
 }
