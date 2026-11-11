@@ -5,13 +5,15 @@
 // sdrplay_source.cpp is untouched and stays the zero-IF plan; the wiring lane decides how
 // the setting reaches it (HAND-OFF in docs/feature-records/radio-sources.md).
 //
-// WHERE THE NUMBERS COME FROM (all project-own, no outside source read in this lane):
-//  * The low-IF combinations are the ones the SDRplay API specification lists (section 3.15,
-//    "Conditions for LIF down-conversion to be enabled", as transcribed in
-//    sdrplay_probe.cpp stepIfModes): fs 2 MHz + IF 450 kHz + BW 0.2 or 0.6; fs 6 MHz + IF
-//    1620 kHz + BW 1.536; fs 8 MHz or 8.192 MHz + IF 2048 kHz + BW 1.536 (8 MHz also with
-//    BW 5.0). The specification PDF itself was NOT reachable in this lane (the re-check of
-//    2026-11-11 saw 404): the table is the earlier transcription, NOT re-verified.
+// WHERE THE NUMBERS COME FROM:
+//  * The low-IF combinations are the ones the SDRplay API specification v3.15 lists ("Conditions for
+//    LIF down-conversion to be enabled for all RSPs in single tuner mode", read on 2026-11-11 from
+//    https://sdrplay.com/wp-content/uploads/2026/04/SDRplay_API_Specification_v3.15.pdf, the address
+//    the re-check could not find): fs 8192000 or 8000000 + BW 1.536 + IF 2048; fs 8000000 + BW 5.0 +
+//    IF 2048; fs 2000000 + BW <= 0.3 + IF 450; fs 2000000 + BW 0.6 + IF 450; fs 6000000 + BW <=
+//    1.536 + IF 1620. Every row of the table below is one of those (verified against the PDF; the
+//    specification states no licence near its link, terms NOT VERIFIED). The specification says
+//    nothing about what rate a low-IF stream delivers.
 //  * The output-rate arithmetic is fsHz / decimation, the one rule sdrplay_source.cpp holds
 //    every plan to. WHAT A LOW-IF STREAM ACTUALLY DELIVERS is the open question that made
 //    0.99.44 retire low-IF: two RSP2 field logs showed the ADC rate (6 MS/s) arriving
