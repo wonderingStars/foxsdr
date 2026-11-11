@@ -63,7 +63,7 @@ void testKeepAwakeCounting() {
         auto a = k.acquire();
         CHECK(k.holders() == 1 && k.active());
         CHECK(os.sets() == 1 && os.clears() == 0);
-        CHECK(os.calls.at(0) == (kEsContinuous | kEsSystemRequired));   // the display is NOT held unless asked
+        CHECK(!os.calls.empty() && os.calls[0] == (kEsContinuous | kEsSystemRequired));   // the display is NOT held unless asked
         auto b = k.acquire();
         auto c = k.acquire();
         CHECK(k.holders() == 3 && os.sets() == 1);                       // the OS is asked once for three holds
@@ -79,12 +79,12 @@ void testKeepAwakeCounting() {
         CHECK(k.holders() == 0 && !k.active() && os.clears() == 1);
     }
     CHECK(os.calls.back() == kEsContinuous);
-    CHECK(os.threads.at(0) == os.threads.at(1));                         // one thread sets and clears
-    CHECK(os.threads.at(0) != std::this_thread::get_id());
+    CHECK(os.threads.size() >= 2 && os.threads[0] == os.threads[1]);                         // one thread sets and clears
+    CHECK(!os.threads.empty() && os.threads[0] != std::this_thread::get_id());
     // A second period asks again.
     { auto l = k.acquire(); CHECK(k.active()); }
     CHECK(os.sets() == 2 && os.clears() == 2 && k.setCalls() == 2 && k.clearCalls() == 2);
-    CHECK(os.threads.at(2) == os.threads.at(3));
+    CHECK(os.threads.size() >= 4 && os.threads[2] == os.threads[3]);
     // Move-assignment releases what the target held.
     {
         auto x = k.acquire();
@@ -126,7 +126,7 @@ void testKeepAwakeExitPaths() {
         FakeOs os3;
         KeepAwake k3(os3.fns(), /*alsoKeepDisplayOn=*/true);
         { auto l = k3.acquire(); }
-        CHECK(os3.calls.at(0) == (kEsContinuous | kEsSystemRequired | kEsDisplayRequired));
+        CHECK(!os3.calls.empty() && os3.calls[0] == (kEsContinuous | kEsSystemRequired | kEsDisplayRequired));
     }
 }
 
