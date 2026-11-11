@@ -43,15 +43,27 @@ saying the engine does not start them yet. Whoever wires them must turn those ro
 
 ## Op allocation
 
-`0x0113` to `0x011F` were reserved for this lane (receiver group of `foxsdr_api.h`).
+`0x0113` to `0x011F` were reserved for this lane (receiver group of `foxsdr_api.h`). Every op below is receiver-scoped (`FoxCommand.target`), is in NO web, CAT or TCI profile (the page has no control, and
+`test_engine_api_05a` P1 requires the web profile to be exactly what the page can send; a public REMOTE session with the SETTINGS grant may send them, like the other audio settings), and has its range check at the API,
+in the engine and (where the pipeline checks) in the pipeline. The application ops are LOCAL only.
 
-| Op | Number | What | Remote (web) profile |
-|---|---|---|---|
-| `FOXAPI_OP_SET_TONE_SQUELCH` | 0x0113 | per radio: kind (off, CTCSS, DCS) and, with `ival[1]` = 1, the values | no: the page has no control, and `test_engine_api_05a` P1 requires the web profile to be exactly what the page can send. A public REMOTE session with the SETTINGS grant may send it, like the other audio settings. |
-| `FOXAPI_OP_SET_TONE_REMOVE` | 0x0114 | per radio: the tone remover | no (same reason) |
-| 0x0115 to 0x011F | free | next: `SET_METER_UNITS` (S-meter display), then the notch, noise-reduction method and the rest as they are wired; when 0x011F is reached continue at 0x0120 in the same receiver group (the next unused block of the group; nothing else of `foxsdr_api.h` uses 0x0120 to 0x01FF) | |
+| Op | Number | What |
+|---|---|---|
+| `FOXAPI_OP_SET_TONE_SQUELCH` | 0x0113 | B1: kind (off, CTCSS, DCS) and, with `ival[1]` = 1, the values |
+| `FOXAPI_OP_SET_TONE_REMOVE` | 0x0114 | B1: the tone remover |
+| `FOXAPI_OP_SET_METER_UNITS` | 0x0115 | B2: S-meter display units |
+| `FOXAPI_OP_SET_NR_METHOD` | 0x0116 | C1: noise-reduction method |
+| `FOXAPI_OP_SET_NOTCH_SLOT` | 0x0117 | C2: one slot of the manual notch bank |
+| `FOXAPI_OP_SET_CW_PITCH` | 0x0118 | C3: CW sidetone pitch |
+| `FOXAPI_OP_SET_NOISE_SQUELCH` | 0x0119 | C4: FM noise squelch |
+| `FOXAPI_OP_SET_EQ_BAND` | 0x011A | E1: one equaliser band |
+| `FOXAPI_OP_SET_AUDIO_FILTERS` | 0x011B | E1: audio high-pass and low-pass |
+| 0x011C to 0x011F | free | next (SAM sideband and loop bandwidth, IF shift and the pass-band cut-offs, AFC, I/Q correction); when 0x011F is reached continue at 0x0120 in the same receiver group (nothing else of `foxsdr_api.h` uses 0x0120 to 0x01FF) |
+| `FOXAPP_OP_CAL_MEASURE` | 0x8612 | B2: measure a calibration (application-op group, after 0x8611) |
+| `FOXAPP_OP_CAL_CLEAR` | 0x8613 | B2: clear a calibration |
 
-The KiwiSDR radio needs no op (it rides `SELECT_SOURCE` and `RADIO_ADD` text ids).
+The KiwiSDR radio needs no op (it rides `SELECT_SOURCE` and `RADIO_ADD` text ids). `FoxReceiverState` grew by appending only: after `nbStandingDown` the tone squelch (B1), then `meterUnits signalDbm sUnits calibrated` (B2),
+`nrMethod nrMethodActive` (C1), `notchBankMask notchBankHz[10] notchBankWidthHz[10]` (C2), `cwPitchHz` (C3), `noiseSquelch*` (C4), `eqDb[8] audioHighPassHz audioLowPassHz` (E1).
 
 ## A. The KiwiSDR audio-only radio
 
@@ -277,6 +289,16 @@ flat and off the block reports bypass and both tones are back; refusals), `test_
 (`eqDb` joins the fields whose perturbation the file cannot carry), `test_engine_main_config_roundtrip` 277, `test_radio_scope` 143 (60 ops), mock 467 (+2 known).
 **UNVERIFIED.** Nobody listened; no measurement of the equaliser's CPU in a running chain; the screen's band labels are the block's.
 
+## Break-it results, E1 (all RED, restored, rebuilt)
+
+| Removal | RED in |
+|---|---|
+| E1 (the equaliser not run in the chain) | `test_pipeline_audioeq` (treble and low-pass no longer act) |
+| E2 (the engine does not hand a band to the pipeline) | `test_engine_api_audioeq`: GREEN at first (the check was satisfied by the filters' own change of the bypass report), the test was twice hardened (the bands alone must leave bypass) and is then RED (`!eqBypassed()` never true) |
+| E3 (`eqDb` not written) | `test_engine_api_audioeq`, `test_config` |
+| E4 (op not receiver-scoped) | `test_radio_scope`, `test_engine_api_audioeq` |
+| E5 (the pipeline's filter-choice check) | `test_pipeline_audioeq` (`!p.setAudioFilters(150, 0)`) |
+
 ## Old reader
 
 RUN, with the v0.99.104 sources (`git show v0.99.104:src/core/config.hpp` and `config.cpp` in a directory searched first, `tools/old_reader_probe/build_probe.bat`; `new_main.cpp` gained a fifth file for this lane:
@@ -343,18 +365,35 @@ the spectrum as an audio spectrum (it is mirrored about 0 and spans ±6 kHz; the
 * A PRIVACY NOTE the lane did not close: `core/diag_log.cpp`'s address scrubber lists the keys it hides (`host=`, `rtltcp=`, `uri=` ...); `kiwisdr=` is not among them. The engine never logs the address (the log lines name
   the kind only) and the refusal sentences do not carry it, but a future line that prints the args would leak it: add `kiwisdr=` to the scrubber when the Worker word is added.
 
-## WHAT WAS NOT REACHED, in order
+## WHAT WAS NOT REACHED, in order (after the second session)
 
-1. B: S-meter calibration (`smeter_cal.hpp`): `FOXAPP_OP_CAL_MEASURE` / `CAL_CLEAR`, a `CalTable` per device key persisted as one string, `SET_METER_UNITS` 0x0115, state `meterUnits signalDbm sUnits calibrated`.
-   The block, its design and the hand-off are in `docs/feature-records/signal-blocks.md` (D).
-2. C (batch 2): synchronous AM (`sam.hpp`, behind its setting, default OFF; its C-QUAM relative `cquam.hpp` is in batch 4 and UNVERIFIED), IF shift / pass-band tuning (`passband.hpp`), manual notch bank
-   (`notch_bank.hpp` is batch 3) and automatic notches, noise-reduction method choice (`nr_methods.hpp`; the CW method only in CW and carrier modes).
-3. D (batch 3): CW pitch (`kCwToneHz` in `src/dsp/demod.cpp` near line 100; CW today uses the voice SSB filter), the manual notch bank, the spectrum block (FFT size default 8,192, ceiling 131,072, and the window).
-4. E (batch 4): noise squelch (guard its denormal behaviour on exact digital silence: add the all-zero input test and measure the CPU time), AFC, I/Q correction, equaliser and audio filters, CW peak filter,
-   stereo placement, symbol tap, zoom FFT, SNR tap.
-5. F: the plugin host changes (bookmark and marker cap 256 with a `markerLimit` fact and the visible span published to plugins; the EVENTS interface appended to the host table).
-6. G: whatever else the six records hand to "the wiring lane". The ones seen and NOT done: MQTT publisher and rotator and decode webhook (batch 3: they have worker threads, whose inventory rows say so), power and SNR
-   logging (batch 2), I/Q readers behind `IqFileSource::open` (batch 2), replay ring, clips and the listening log / ADIF export (batch 1: the brief names these as other lanes').
+1. C: synchronous AM (`sam.hpp`; a new demodulator mode or a flag on AM: it touches the mode tables, `FOXAPI_DEMOD_*`, the screen's mode list and every test that counts modes, which is why it was left; default OFF and listed
+   UNVERIFIED when done; its C-QUAM relative `cquam.hpp` is UNVERIFIED in its own record), IF shift / pass-band tuning (`passband.hpp`: it replaces or follows the channel filter, `dsp::Vfo`'s low-pass), and the CW pass band centred on
+   the pitch (`cw_pitch.hpp`, `cw_filter.hpp`).
+2. D (batch 3): the spectrum block (FFT size default 8,192, ceiling 131,072, window choice: the frame type must carry a variable bin count, which reaches the waterfall and the screen).
+3. E (batch 4), the rest: AFC, I/Q correction, CW peak filter and channel shape, stereo placement, symbol tap, zoom FFT, SNR tap. (The equaliser and filters and the noise squelch are done; so is the noise squelch's silence guard.)
+4. F: the plugin host changes (bookmark and marker cap 256 with a `markerLimit` fact and the visible span published to plugins; the EVENTS interface appended to the host table, with its two-plugin tests).
+5. G: MQTT publisher, rotator and decode webhook (batch 3; each has a worker thread, whose inventory rows say so), power and SNR logging and the I/Q readers behind `IqFileSource::open` (batch 2); replay ring, clips and the
+   listening log / ADIF export (batch 1, named in the brief as other lanes').
+
+Why the order was not kept: SAM, IF shift and the spectrum size each change a structure many other places count (the demodulator enum, the channel filter, the spectrum frame), and the allowance was better spent on features that
+finish cleanly in one commit; the equaliser (E1) was taken before them for that reason.
+
+## DECISIONS FOR THE OWNER
+
+* DCS pairs in the screen: 82 of the 83 codes have a partner ("023 N" is "047 I"); the engine takes any of the 83 with a polarity and holds a chosen polarity strictly. Show the pair, or one reading?
+* The noise squelch's threshold is a number of this chain (the detector sees the discriminator AFTER the user's de-emphasis); a flat-discriminator detector would need the NFM de-emphasis moved out of the demodulator. Worth doing before the
+  screen puts a threshold slider on it?
+* The line enhancer runs in CW and RAW only; the setting is always accepted and saved. The screen should offer it only there.
+* KiwiSDR: no password support; the address is the saved key. Add a password prompt (never saved) next?
+* The CW pass band is still the voice SSB filter's. A CW filter centred on the pitch is the natural next step for the pitch setting to mean much below 600 Hz.
+* Telemetry: `kiwisdr` reports as `other` until the Worker learns the word (Worker first, then the application).
+
+## UNVERIFIED (second session, in one place)
+
+Nothing was heard by an ear: every audio feature is proved on generated signals through the real chain. No real KiwiSDR, repeater, DCS or CTCSS transmission, real tuner calibration or real impulse noise was involved. Gain compensation of the
+S-meter calibration is proved in the block and not through the engine (the generator has no gain stages). The silence guard is proved on this CPU and compiler. The spectral and notch-bank CPU costs were not measured in a running chain.
+The rebuild-for-a-new-input-rate path re-applies the CW pitch, the noise squelch and the tone detectors, but no test changes the input rate under a running radio with each of them set.
 
 ## Files and tools left in the build folder (not committed)
 
