@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <thread>
 
 #include "core/file_pick.hpp"
 #include "core/i18n.hpp"
@@ -275,7 +276,7 @@ std::shared_ptr<slint::Model<SettingField>> KitPublisher::fieldsModel(const std:
         f.placeholder = ss(s.placeholder);
         f.max_length = static_cast<int>(s.maxLength);
         f.error = ss(kit_.edits().error(file, s.key));
-        f.pending = kit_.edits().pending(file, s.key);
+        f.pending = kit_.edits().pending(file, s.key) && browsed_.count(file + "|" + s.key) == 0u;   // a path chosen with BROWSE FILES is shown at once (the box would otherwise keep what it has until the engine answers)
         sig += s.key + "=" + shown + (f.pending ? "?" : "") + std::string(f.error) + ";";
         fields.push_back(std::move(f));
     }
@@ -1218,6 +1219,11 @@ void KitPublisher::publishMuteQuestion() {
     ui_.set_mute_question_open(muteQuestionOpen_);
 }
 
+std::string KitPublisher::lastSaveNote() const {
+    for (const Page& p : pages_) { if (!p.saveNote.empty()) { return p.saveNote; } }
+    return std::string();
+}
+
 // THE PICTURE SAVE'S ANSWER (item 4): the worker has written the file; the sentence it answers becomes the note of the page that asked.
 void KitPublisher::pollSave() {
     if (!saveJob_.valid() || saveJob_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) { return; }
@@ -1230,6 +1236,7 @@ void KitPublisher::pollSave() {
 // (the same call), a cancel changes nothing. The dialog is modal and blocks this thread while the person chooses, exactly as the I/Q file row's does (signal_publish.cpp iqBrowse).
 void KitPublisher::browseSetting(const std::string& file, int id) {
     const SettingsSet* set = settingsFor(kit_.lists().settings, file);
+    std::fprintf(stderr, "foxsdr-slint: settings: BROWSE FILES on field %d of a module (%s)\n", id, set != nullptr ? "its settings are known" : "no settings known for it");   // never the file's name or the path (PRIVACY.md)
     if (set == nullptr) { return; }
     for (const SettingSpec& s : set->fields) {
         if (static_cast<int>(s.id) != id || s.kind != CASCADE_SETTING_PATH) { continue; }
@@ -1247,7 +1254,8 @@ void KitPublisher::browseSetting(const std::string& file, int id) {
             rq.startFrom = kit_.edits().shown(file, s.key, s.value);
             got = cascade::core::pickFile(rq, chosen);
         }
-        if (got && !chosen.empty()) { kit_.editSetting(file, s, chosen); }
+        std::fprintf(stderr, "foxsdr-slint: settings: BROWSE FILES %s\n", got && !chosen.empty() ? "chose a file" : "was cancelled");
+        if (got && !chosen.empty()) { browsed_.insert(file + "|" + s.key); kit_.editSetting(file, s, chosen); }
         return;
     }
 }
@@ -1522,7 +1530,8 @@ void KitPublisher::wire() {
         if (!job) { p->saveNote = refusal; return; }
         p->saveNote = cascade::i18n::tr("Saving...");       // the disk is touched on a worker, never on the thread that draws the window (the classic's 0.99.64 rule)
         savePlugin_ = p->plugin;
-        saveJob_ = std::async(std::launch::async, std::move(job));
+        const int delay = saveDelayMs_;
+        saveJob_ = std::async(std::launch::async, [job = std::move(job), delay]() { if (delay > 0) { std::this_thread::sleep_for(std::chrono::milliseconds(delay)); } return job(); });
     });
     ui_.global<::KitEvents>().on_page_row_pressed([this, page](int i, int row) {
         Page* p = page(i); const PluginRow* r = p != nullptr ? rowOf(*p) : nullptr;

@@ -190,7 +190,8 @@ void PluginKit::tick(const FoxReceiverState& state, bool listSeqMoved, const std
     port_->applyNewestDirective();
     port_->poll();
     port_->pollImages(images_);
-    if (listSeqMoved || lists_.rows.empty()) {
+    if (listSeqMoved || lists_.rows.empty() || rereadLists_) {
+        rereadLists_ = false;   // a settings edit was answered: the stored values are read again (the lists' sequence does not move for a setting)
         ReadOptions o;
         o.fittedFacts = true;
         o.settings = true;
@@ -347,7 +348,7 @@ void PluginKit::pollResults() {
     const std::int32_t got = env_.api->poll_results(env_.session, r, 32);
     for (std::int32_t i = 0; i < got; ++i) {
         if (r[i].op == FOXAPP_OP_PLUGIN_SETTING_EDIT) {
-            (void)edits_.deliver(r[i].ticket, verdictFromAnswer(r[i].status, r[i].applied[0]));
+            if (edits_.deliver(r[i].ticket, verdictFromAnswer(r[i].status, r[i].applied[0]))) { rereadLists_ = true; }
             continue;
         }
         if (r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) {

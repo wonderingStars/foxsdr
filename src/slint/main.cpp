@@ -303,6 +303,7 @@ int main(int argc, char** argv) {
         if (half.mapTrailStyle != style) { half.mapTrailStyle = style; (void)duties.saveInterfaceHalf(half); }
     });
     if (const char* pick = std::getenv("FOXSDR_FILE_PICK"); pick != nullptr && bounded.bounded()) { publisher.setFilePickSeam(pick); }
+    if (const char* sd = std::getenv("FOXSDR_SLINT_SAVE_DELAY_MS"); sd != nullptr && bounded.bounded()) { publisher.setSaveDelayForTest(std::atoi(sd)); }
     publisher.wire();
     // WHAT THE 3D VIEWS REMEMBER (docs 6.65): the view, camera and small choices of every globe view, in the framework's one interface-half text (view3d_prefs.hpp)
     publisher.setViewPrefsHooks([&duties] { return duties.interfaceHalf().view3d; },
@@ -408,7 +409,27 @@ int main(int argc, char** argv) {
             at = end + 1;
         }
     }
-    const bool helpSeam = bounded.bounded() && std::getenv("FOXSDR_SLINT_HELP_TEST") != nullptr;   // a bounded run does not open a browser: the address is kept for the script
+    const char* const helpTest = bounded.bounded() ? std::getenv("FOXSDR_SLINT_HELP_TEST") : nullptr;   // =<tick>: the app menu's Help entry is activated at that tick (a popup's rows are not reachable by label)
+    // the counter menu's Copy and Paste frequency use the OS clipboard; a bounded run keeps its own, so the desk's clipboard is neither read nor changed
+    std::string fakeClip;
+    const bool fakeClipOn = bounded.bounded();
+    const auto clipSet = [&](const std::string& t) { if (fakeClipOn) { fakeClip = t; } else { (void)foxsdr::slintgaps::setClipboardText(t); } };
+    const auto clipGet = [&]() { return fakeClipOn ? fakeClip : foxsdr::slintgaps::clipboardText(); };
+    std::vector<std::pair<int, int>> menuSeam;   // FOXSDR_SLINT_MENU=<tick>:<id>[;...] (a bounded run): a menu entry is activated through the menu's own callback
+    if (const char* m = bounded.bounded() ? std::getenv("FOXSDR_SLINT_MENU") : nullptr; m != nullptr) {
+        std::string all = m;
+        std::size_t at = 0;
+        while (at < all.size()) {
+            std::size_t end = all.find(';', at);
+            if (end == std::string::npos) { end = all.size(); }
+            const std::string piece = all.substr(at, end - at);
+            const std::size_t colon = piece.find(':');
+            if (colon != std::string::npos && colon > 0) { menuSeam.emplace_back(std::atoi(piece.substr(0, colon).c_str()), std::atoi(piece.substr(colon + 1).c_str())); }
+            at = end + 1;
+        }
+    }
+    const bool helpSeam = helpTest != nullptr;
+    const int helpAtTick = helpTest != nullptr ? std::atoi(helpTest) : 0;   // a bounded run does not open a browser: the address is kept for the script
     long lockSeen = 0;          // slint-gaps.md item 3: the lock's refusal count last seen, and the tick of the last refusal (the note under the counter)
     int noteTick = -1000;
     std::string togetherNote = "no start together yet";
@@ -858,7 +879,7 @@ int main(int argc, char** argv) {
                 e.push_back(entry(MenuItemKind::Checked, 104, "Enlarge every reading", "", duties.interfaceHalf().readingsScale > 1.0f));
                 e.push_back(entry(MenuItemKind::Separator, 0, ""));
                 e.push_back(entry(MenuItemKind::Item, 105, "Copy frequency", fmt("%.6f MHz", state.tunedHz / 1e6).c_str()));
-                e.push_back(entry(MenuItemKind::Item, 106, "Paste frequency", "", false, !foxsdr::slintgaps::clipboardText().empty()));
+                e.push_back(entry(MenuItemKind::Item, 106, "Paste frequency", "", false, !!clipGet().empty()));
                 break;
             case MenuKind::Trace:
                 e.push_back(entry(MenuItemKind::Checked, 201, "Normal", "", traceMode == 0));
@@ -965,10 +986,10 @@ int main(int argc, char** argv) {
                 (void)duties.saveInterfaceHalf(half);
                 break;
             }
-            case 105: (void)foxsdr::slintgaps::setClipboardText(foxsdr::slintgaps::dottedFrequencyText(state.tunedHz, wsMemory.saved().dotStyle)); break;
+            case 105: clipSet(foxsdr::slintgaps::dottedFrequencyText(state.tunedHz, wsMemory.saved().dotStyle)); break;
             case 106: {   // a frequency from the clipboard, either style; a locked radio refuses it like any tuning
                 double hz = 0;
-                if (foxsdr::slintgaps::parseTypedFrequencyHz(foxsdr::slintgaps::clipboardText(), hz)) { setFrequency(hz); }
+                if (foxsdr::slintgaps::parseTypedFrequencyHz(clipGet(), hz)) { setFrequency(hz); }
                 break;
             }
             case 103: showNudges = !showNudges; ui->set_show_nudges(showNudges); break;
@@ -1715,6 +1736,8 @@ int main(int argc, char** argv) {
             if (!dropInstalled && tickNo >= 20 && tickNo % 15 == 0) {   // the OS file drop: once the window exists, our drop target takes the place of the backend's
                 if (void* hw = foxsdr::slintgaps::findMainWindow()) { dropInstalled = foxsdr::slintgaps::installFileDrop(hw, [&](const std::string& p) { if (handleDrop) { handleDrop(p); } }); }
             }
+            if (helpAtTick > 0 && tickNo == helpAtTick) { ui->invoke_menu_activated(605); }
+            for (const auto& ms : menuSeam) { if (tickNo == ms.first) { ui->invoke_menu_activated(ms.second); } }
             for (DropStep& ds : dropSeam) { if (!ds.done && tickNo >= ds.tick && handleDrop) { ds.done = true; handleDrop(ds.path); } }
         }
         ui->set_mode_index(modeIndex(state.demodMode));
@@ -2238,6 +2261,8 @@ int main(int argc, char** argv) {
             if (w == "help") { out = std::to_string(helpOpened); return std::string(); }
             if (w == "diagcopies") { out = std::to_string(systemBank.diagCopies()); return std::string(); }
             if (w == "diagstatus") { out = systemBank.bundleStatus(); return std::string(); }
+            if (w == "clip") { out = fakeClip; return std::string(); }
+            if (w == "savenote") { out = publisher.lastSaveNote(); return std::string(); }
             if (w == "helpurl") { out = helpUrlOverride; return std::string(); }
             if (w == "dropinstalled") { out = dropInstalled ? "1" : "0"; return std::string(); }
             return "gaps.locked|locked.<n>|lockmask|lockrefusals|savedlock|dots|editor|lockedlabel|dropnote|drops|refuseddrops|sdrplay|sdrplaycalls|help, not " + name;

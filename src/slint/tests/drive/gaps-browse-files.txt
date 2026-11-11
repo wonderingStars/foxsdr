@@ -1,0 +1,18 @@
+#! frames=700 bank=1 plugins=all open=module:nrsc5-radio-dynamic-0.1.2-abi3-win-x64.dll size=1600x1600 FOXSDR_FILE_PICK=C:\gaps\chosen\libnrsc5.dll
+# gaps-browse-files (docs/multi-radio-records/slint-gaps.md item 7): BROWSE FILES on a plugin settings PATH field. The IBOC Radio plugin's "nrsc5 library file" is a PATH setting. A native dialog cannot be pressed
+# from a test, so FOXSDR_FILE_PICK (bounded runs only, the I/Q row's seam) is the file the dialog "chooses": the path goes into the field as if typed, is stored by the engine and read back; an empty answer is a
+# cancel and changes nothing. The dialog itself (core::pickFile, the same call the I/Q row's Browse key makes) is UNVERIFIED here.
+120 state kit.plugins == 43
++1 click "START"
++40 state decodersRunning >= 1
++1 click "GRANT RECEIVER CONTROL"
++15 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
++1 click "< FITTED"
++3 state pages contains "Fitted modules"
++1 click "IBOC Radio (nrsc5 library) image"
++3 state pages contains "IBOC Radio (nrsc5 library) image"
++1 click "Plugin settings"#2
++5 expect "nrsc5 library file" value equals ""
++1 click "BROWSE FILES"
++30 expect "nrsc5 library file" value equals "C:\\gaps\\chosen\\libnrsc5.dll"
++1 state fact.plugin.setting.26 contains "libnrsc5.dll"   # the engine stored it

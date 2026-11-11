@@ -1,0 +1,18 @@
+#! frames=700 bank=1 plugins=adsb-decoder open=module:adsb-decoder-1.9.1-abi3-win-x64.dll iqfile=adsb-decoder.wav centre=1090000000 mode=RAW bandwidth=2400000 size=1600x1600
+# gaps-map-trail (docs/multi-radio-records/slint-gaps.md item 5): the map page's own Line and Ribbon keys, as the classic's map page has its trail style combo. The style is the ONE setting
+# SYSTEM > Display's "Trail style" saves (mapTrailStyle, already driven by system-display-map.txt): a key here is read back as the saved setting, greyed while Trails is off, and the two controls agree.
+120 state kit.plugins == 1
++1 click "START"
++60 state decodersRunning >= 1
++300 state kit.mapPages >= 1
++1 click "ADS-B map"
++10 state cfg.mapTrailStyle == 0
++1 expect "Ribbon" enabled equals "true"
++1 click "Ribbon"
++20 state cfg.mapTrailStyle == 1
++1 click "Line"
++20 state cfg.mapTrailStyle == 0
++1 click "Trails"
++5 expect "Ribbon" enabled equals "false"
++1 click "Trails"
++5 expect "Ribbon" enabled equals "true"

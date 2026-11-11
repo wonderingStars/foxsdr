@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <future>
 #include <optional>
+#include <set>
 #include <map>
 #include <memory>
 #include <string>
@@ -48,6 +49,9 @@ public:
     void setTrailStyleSink(std::function<void(int)> f) { trailStyleSink_ = std::move(f); }
     // slint-gaps.md item 7: a bounded run's answer for the BROWSE FILES key (FOXSDR_FILE_PICK): no dialog, the answer is this path (empty = a cancel)
     void setFilePickSeam(const std::string& path) { filePickSeam_ = path; }
+    // slint-gaps.md item 4, a bounded run only (FOXSDR_SLINT_SAVE_DELAY_MS): the picture save's worker waits this long, so the Saving... state can be seen; and the note of the page that saved last
+    void setSaveDelayForTest(int ms) { saveDelayMs_ = ms; }
+    std::string lastSaveNote() const;
     // A bounded run's self-capture (FOXSDR_SLINT_DECODE_DRAWER=1): the DECODE bank's "Turn on and off plugins" drawer open, whatever language the row's label is in.
     void openPluginDrawerForCapture() { decodeOpen_["plugins"] = true; }
     const slintmap::MapLook& mapLook() const { return look_; }
@@ -172,6 +176,8 @@ private:
     std::optional<std::string> filePickSeam_;
     std::future<std::string> saveJob_;                // item 4: the picture being written on a worker (one at a time); its sentence is the page's note when it is back
     std::string savePlugin_;
+    int saveDelayMs_ = 0;
+    std::set<std::string> browsed_;   // the settings (file + 0x1F + key) whose last edit came from BROWSE FILES
     void pollSave();
     void browseSetting(const std::string& file, int id);
     foxsdr::slinthost::Signatures sigs_;

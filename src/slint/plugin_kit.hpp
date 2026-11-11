@@ -188,6 +188,7 @@ private:
     KitLists lists_;
     std::deque<DecoderLine> lines_;
     std::uint64_t linesLastId_ = 0, linesSeenTotal_ = 0;
+    bool rereadLists_ = false;   // a settings edit was answered (tick re-reads the lists once)
     std::vector<MapPage> pages_;
     OpenWindows open_;
     SettingsEdits edits_;
