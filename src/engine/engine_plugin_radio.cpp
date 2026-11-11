@@ -172,7 +172,12 @@ FoxCommandResult Engine::pluginRadioOp(const FoxCommand& c, const std::string& t
         if (!movePluginToRadio(text, radio, why)) { return refuse(why.rfind("there is no radio", 0) == 0 ? FOXAPI_NO_DEVICE : FOXAPI_UNSUPPORTED, why); }
     }
     // ival[1] = 1: and run it there (a stop is cleared; the start is the DECODE bank's own: setPluginStopped -> ALWAYS).
-    if (c.ival[1] == 1) { setPluginStopped(text, false); }
+    // The start applies the plugin's first preset (maybeAutoPresetOnStart): to the radio the plugin RUNS ON, not to the one this command happens to be scoped to (the session's focus), so a
+    // decoder started on radio 2 tunes radio 2 (screen stage S6: found by runs-on-radio2 - the preset went to the wrong radio).
+    if (c.ival[1] == 1) {
+        RadioWork work(*this, static_cast<std::size_t>(radio) - 1u);
+        setPluginStopped(text, false);
+    }
     res.applied[0] = static_cast<double>(radio);
     if (already && c.ival[1] != 1) { res.status = FOXAPI_NO_CHANGE; }
     return res;

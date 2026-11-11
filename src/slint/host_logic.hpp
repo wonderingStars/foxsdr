@@ -27,7 +27,17 @@ const char* placeName(int index);                          // "GHz", "100 MHz", 
 const char* modeName(std::uint32_t demod);                 // FOXAPI_DEMOD_* -> "NFM" .. "RAW", else "?"
 int modeIndex(std::uint32_t demod);                        // the strip's segment index 0..7, -1 unknown
 std::uint32_t demodOfIndex(int index);                     // the segment's FOXAPI_DEMOD_*
+// The tuning key's step (Ctrl+Up / Ctrl+Down, the "Tune step" picker's start value): the key table says "Tune up one step (10 kHz)" and the classic window steps the 10 kHz digit, so the Slint window
+// starts at 10 kHz too (screen stage S6, B5: it started at 12.5 kHz, which the label never said).
+constexpr double kDefaultTuneStepHz = 10000.0;
 double modeStepHz(std::uint32_t demod);                    // the tuning step per mode (NFM 12.5 kHz, WFM 100 kHz, AM 9 kHz, else 1 kHz)
+
+// ---- the four lists a radio has of its own (screen stage S6, B1) ----
+// GAINS, ANTENNAS, SAMPLE_RATES and DECODERS differ from radio to radio; every other list is the engine's, one for all.
+bool isPerRadioList(std::uint32_t list);
+// One item of a list as RADIO `radio` (1-based) has it: the four per-radio lists are asked for that radio by read_radio_list (so the screen does not depend on where the session's focus is),
+// anything else, an engine without FOXAPI_CAP_RADIOS and radio 0 by read_list (the focus). Same contract as read_list: the count, `out` filled below it, negative = refused.
+std::int32_t readListFor(const FoxEngineApi* api, FoxSession* session, std::uint32_t radio, std::uint32_t list, std::uint32_t index, FoxListItem* out);
 
 // ---- readouts ----
 std::string fmtMHz(double hz);                             // "145.500000 MHz"

@@ -21,6 +21,7 @@ namespace foxsdr::slintworkspace {
 struct PaneContext {
     foxsdr::slinthost::PaneTexts texts;
     std::string decoder;            // the chip: what runs on this radio ("" draws none)
+    std::string notice;             // why this radio sits on the generator (the engine's sentence), "" none: drawn over the top of the spectrum (screen stage S6)
     int traceMode = 1;              // shared: 0 normal, 1 peak hold, 2 average
     float hoverX = -1;              // the pointer over this pane's spectrum or waterfall, fraction of the plot; -1 = not over it
     std::string cursorText;         // "145.212 MHz . -78.4 dB" for hoverX

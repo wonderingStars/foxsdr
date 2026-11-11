@@ -62,6 +62,7 @@ struct PluginRow {
     std::uint32_t noticeLevel = 0;
     // a DECODERS entry (every loaded decoder has one)
     bool decoder = false, fed = false, mutes = false;
+    int radio = 1;         // the radio a decoder plugin runs on (fact.plugin.<file>.radio, 1..8; 1 until the engine says otherwise) - screen stage S6, the Runs-on picker
     std::string idle;      // DECODERS detail: why it is idle, "" running
     // two facts of a loaded module: the catalogue category and the titles of its own windows
     std::string category, panelTitle, instrumentTitle;
@@ -104,6 +105,12 @@ struct ReadOptions {
     bool blocked = false;       // STORE_BLOCKED and its two facts (the DECODE bank shows)
 };
 void readKitLists(TableReader& table, KitLists& out, const ReadOptions& options);
+// ---- THE RUNS-ON PICKER (screen stage S6; design 3.7) ----
+// One key per OPEN radio, the plugin's own radio lit. Shown only when more than one radio is open and the plugin is a decoder that can move (a plugin that transmits stays on radio 1: the engine
+// answers UNSUPPORTED to PLUGIN_RADIO for it, so no key is offered).
+struct RunsOnKey { int radio = 0; bool on = false; };
+struct RunsOnModel { std::vector<RunsOnKey> keys; int current = 1; bool shown() const { return !keys.empty(); } };
+RunsOnModel runsOnFor(const PluginRow& row, std::uint32_t openMask);   // openMask: bit n-1 = radio n is open
 const PluginRow* rowByName(const std::vector<PluginRow>& rows, const std::string& displayName);   // the LOADED row of that name
 const PluginRow* rowByFile(const std::vector<PluginRow>& rows, const std::string& file);
 std::string fileForName(const std::vector<PluginRow>& rows, const std::string& displayName);     // "" when none is loaded

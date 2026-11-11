@@ -167,6 +167,20 @@ target_compile_definitions(test_slint_duties PRIVATE FOXSDR_SLINT_SOURCE_DIR="${
 add_test(NAME test_slint_duties COMMAND test_slint_duties)
 set_tests_properties(test_slint_duties PROPERTIES LABELS "slint" TIMEOUT 120)
 
+# THE SCREEN'S LISTS ARE THE SELECTED RADIO'S (screen stage S6, B1; docs/multi-radio-records/screen-s6.md): the real engine, a fake RTL-SDR as radio 2, and the host's own list reader (host_logic.cpp
+# readListFor), without a window. Built here for the reason test_slint_duties is: it needs the engine library, and tests/CMakeLists.txt registers only what needs nothing but the Slint SDK.
+add_executable(test_slint_lists_engine tests/test_slint_lists_engine.cpp host_logic.cpp)
+target_compile_features(test_slint_lists_engine PRIVATE cxx_std_20)
+target_link_libraries(test_slint_lists_engine PRIVATE cascade_engine)
+target_include_directories(test_slint_lists_engine PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_SOURCE_DIR}/src"
+    "${CMAKE_SOURCE_DIR}/tests"
+    "${CMAKE_SOURCE_DIR}/third_party/foxsdr_api"
+    "${CMAKE_SOURCE_DIR}/third_party/foxsdr_api/reference/tests")
+add_test(NAME test_slint_lists_engine COMMAND test_slint_lists_engine)
+set_tests_properties(test_slint_lists_engine PROPERTIES LABELS "slint" TIMEOUT 180)
+
 # THE SCRIPTED INPUT'S DRIVEN RUNS (input_script.hpp, docs 6.47): test_slint_drive_run spawns foxsdr-slint itself on a scratch profile
 # with FOXSDR_INPUT_SCRIPT, so it is built after the window and carries the gui label (it opens a window: the hidden-desktop pass) next to
 # drive (so the drive suite can be run on its own: ctest -L drive - not "slint-drive", which ctest -L slint would match and open windows). Each script of tests/drive/*.txt is one more test,

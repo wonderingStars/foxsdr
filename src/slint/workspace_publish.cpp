@@ -118,7 +118,7 @@ void WorkspacePublisher::publishPane(RadioView& rv, const PaneContext& ctx) {
     // THE WORDS and the flags, as one signature
     {
         const std::string sig = t.prefix + "|" + t.selectLabel + "|" + t.stopLabel + "|" + t.spectrumLabel + "|" + t.waterfallLabel + "|" + t.resizeLabel + "|" + t.closeLabel + "|" + t.runTip + "|" + t.decTip + "|" +
-                                t.muteTip + "|" + t.failTip + "|" + t.device + "|" + t.frequency + "|" + t.mode + "|" + t.gain + "|" + t.squelch + "|" + t.volume + "|" + t.rate + "|" + ctx.decoder + "|" +
+                                t.muteTip + "|" + t.failTip + "|" + t.device + "|" + t.frequency + "|" + t.mode + "|" + t.gain + "|" + t.squelch + "|" + t.volume + "|" + t.rate + "|" + ctx.decoder + "|" + ctx.notice + "|" +
                                 (t.running ? "r" : "-") + (t.decoding ? "d" : "-") + (t.muted ? "m" : "-") + (t.failed ? "f" : "-") + (t.biasTee ? "b" : "-") + std::to_string(ctx.traceMode) + "|" + (ctx.linkShown ? "L" : "-") + std::to_string(ctx.link) + ctx.linkLabel + "|" + ctx.linkTip;
         if (sg.changed("pane.words", sig)) {
             d.radio = slot + 1;
@@ -147,6 +147,7 @@ void WorkspacePublisher::publishPane(RadioView& rv, const PaneContext& ctx) {
             d.rate = ss(t.rate);
             d.bias_tee = t.biasTee;
             d.decoder = ss(ctx.decoder);
+            d.notice = ss(ctx.notice);
             d.trace_mode = ctx.traceMode;
             d.link_shown = ctx.linkShown;
             d.link = ctx.link;

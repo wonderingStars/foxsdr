@@ -58,6 +58,7 @@ export struct RadioPaneData {
     rate: string,
     bias-tee: bool,
     decoder: string,                 // what runs on this radio: "APRS"; "" draws no chip
+    notice: string,                  // why this radio is on the generator (the engine's sentence, e.g. "RTL-SDR did not open: ..."); "" draws nothing (screen stage S6)
     peak: string,                    // "-41.2 dBFS"
     span: string,                    // "SPAN 2.400 MHz"
     trace: image,
@@ -371,6 +372,28 @@ export component RadioPane inherits Rectangle {
         band-dragged(dx) => { root.band-dragged(root.data.radio, dx); }
         edge-dragged(h) => { root.edge-dragged(root.data.radio, h); }
         wheel(x, n, shift) => { root.spectrum-wheel(root.data.radio, x, n, shift); }
+    }
+    // WHY THIS RADIO IS ON THE GENERATOR (screen stage S6): the engine's own sentence over the top of the spectrum, in the warning ink on a scrim. Nothing is drawn when there is none.
+    if root.data.notice != "" : Rectangle {
+        x: 4px;
+        y: root.header-h + root.readout-h + 4px;
+        width: max(0px, root.width - 8px);
+        height: note-text.preferred-height + 8px;
+        background: Theme.well-deep;
+        border-width: Theme.hairline;
+        border-color: Theme.line-strong;
+        border-radius: 3px;
+        accessible-role: text;
+        accessible-label: root.data.prefix + ": " + root.data.notice;
+        note-text := Text {
+            x: 6px;
+            y: 4px;
+            width: max(0px, parent.width - 12px);
+            text: root.data.notice;
+            font-size: Theme.font-small;
+            color: Theme.chip-warn-fg;
+            wrap: word-wrap;
+        }
     }
     Splitter {
         x: 0px;

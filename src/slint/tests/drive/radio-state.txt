@@ -1,0 +1,23 @@
+#! frames=300 size=1600x900
+# radio-state (screen stage S6; design 3.6): `state radio.<n>.<field>` reads radio n's OWN state whichever radio is selected (the same as workspace.r.<n>.<field>); plain `state <name>` is the selected
+# radio's. Two live generator radios: each radio's device, rate, mode, frequency, decoder chip, notice and lists, read while radio 1 is selected.
+10 state radio.1.running == 1
+state radio.1.device == "Signal generator"
+state radio.1.notice == ""
+state radio.1.decoder == ""
++1 radio add 2 60000
++30 state workspace.radios == 2
+state workspace.selected == 1
+state radio.2.running == 1
+state radio.2.device == "Signal generator"
+state radio.2.rate == 2000000
+state radio.2.gains == 0
+state radio.2.antennas == 0
+state radio.2.decoder == ""
+state radio.2.notice == ""
++1 radio tune 2 101000000
++1 radio mode 2 2
++15 state radio.2.tuned == 101000000
+state radio.2.mode == WFM
+state radio.1.tuned == 100300000
+state tunedHz == 100300000

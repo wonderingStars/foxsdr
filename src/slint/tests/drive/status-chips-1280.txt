@@ -1,0 +1,13 @@
+#! frames=400 size=1280x720
+# status-chips-1280 (screen stage S6, from the clip sweep): the status bar has one chip per open radio only while the window leaves room for them. At 1280 x 720 two radios still get a chip each
+# (R1 R2), three or more share ONE chip ("Radios 1-3") whose lines list them, so the bar's own words and its last keys are not pushed past the window's edge (they were, in 20 of 34 languages, with three or four radios).
+10 state workspace.chips == ""
++1 radio add 2 60000
++30 state workspace.radios == 2
++10 state workspace.chips == "1,2"
++1 radio add 3 90000
++30 state workspace.radios == 3
++10 state workspace.chips == "0"
++1 radio remove 3
++30 state workspace.radios == 2
++10 state workspace.chips == "1,2"

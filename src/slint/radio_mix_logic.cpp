@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 
 namespace foxsdr::slinthost {
 
@@ -55,6 +56,13 @@ std::string routeText(int route) {
     }
 }
 int nextRoute(int route) { return (std::clamp(route, 0, kRouteCount - 1) + 1) % kRouteCount; }
+
+int soloFromFact(const std::string& fact, std::uint32_t openMask) {
+    char* end = nullptr;
+    const long n = std::strtol(fact.c_str(), &end, 10);
+    if (end == fact.c_str() || n < 1 || n > 8) { return 0; }
+    return ((openMask >> (n - 1)) & 1u) != 0u ? static_cast<int>(n) : 0;
+}
 
 MasterState masterStateOf(const RadioFacts& f, const FoxReceiverState& st) {
     if (f.state == "faulted" || (st.flags & FOXAPI_RX_FAULTED) != 0u) { return MasterState::Failed; }
@@ -177,6 +185,56 @@ std::vector<DeviceChoice> addChoices(const std::vector<DeviceRow>& rows, const s
         out.push_back(std::move(c));
     }
     return out;
+}
+
+std::string paneNotice(const std::string& refusal, const std::string& restore, int radio) {
+    if (!refusal.empty()) { return refusal; }
+    const std::string prefix = "Radio " + std::to_string(radio) + ": ";
+    std::size_t pos = 0;
+    while (pos < restore.size()) {
+        std::size_t end = restore.find('\n', pos);
+        if (end == std::string::npos) { end = restore.size(); }
+        if (restore.compare(pos, prefix.size(), prefix) == 0) { return restore.substr(pos + prefix.size(), end - pos - prefix.size()); }
+        pos = end + 1;
+    }
+    return std::string();
+}
+
+std::vector<DeviceChoice> addKindChoices() {
+    std::vector<DeviceChoice> out;
+    const auto entryChoice = [&](const std::string& caption, const std::string& placeholder, const char* prefix) {
+        DeviceChoice c;
+        c.caption = caption;
+        c.accessible = std::string(cascade::i18n::tr("Add")) + " " + caption;
+        c.entry = true;
+        c.placeholder = placeholder;
+        c.prefix = prefix;
+        out.push_back(std::move(c));
+    };
+    entryChoice(cascade::i18n::tr("I/Q file"), cascade::i18n::tr("I/Q file path"), "file:");
+    entryChoice("rtl_tcp", cascade::i18n::tr("rtl_tcp host and port"), "open-rtltcp:");
+    entryChoice(cascade::i18n::tr("ADALM-Pluto (network)"), cascade::i18n::tr("Pluto address"), "open-pluto:");
+    DeviceChoice card;
+    card.caption = cascade::i18n::tr("Sound card");
+    card.accessible = std::string(cascade::i18n::tr("Add")) + " " + card.caption;
+    card.id = "soundcard:";
+    out.push_back(std::move(card));
+    return out;
+}
+
+std::vector<DeviceChoice> addAllChoices(const std::vector<DeviceRow>& rows, const std::vector<std::string>& held) {
+    std::vector<DeviceChoice> out = addChoices(rows, held);
+    for (DeviceChoice& c : addKindChoices()) { out.push_back(std::move(c)); }
+    return out;
+}
+
+std::string addIdFor(const DeviceChoice& choice, const std::string& typed) {
+    if (!choice.entry) { return choice.id; }
+    std::size_t a = 0, b = typed.size();
+    while (a < b && (typed[a] == ' ' || typed[a] == '\t' || typed[a] == '"')) { ++a; }
+    while (b > a && (typed[b - 1] == ' ' || typed[b - 1] == '\t' || typed[b - 1] == '"' || typed[b - 1] == '\r' || typed[b - 1] == '\n')) { --b; }
+    if (a == b) { return std::string(); }
+    return choice.prefix + typed.substr(a, b - a);
 }
 
 AddOutcome addOutcome(std::int32_t status, const char* message) {

@@ -1,4 +1,4 @@
-#! frames=2600 size=1600x900
+#! frames=2600 size=1600x900 FOXSDR_SLINT_TUNE_STEP=12500
 # link-limit: a LINKED radio that cannot follow (screen stage S5; docs/multi-radio-records/screen-s5.md). Radio 1 is the engine's (100.300 MHz), radio 2 a generator radio (100.000 MHz) that the test gives a TUNING
 # RANGE of 99.900 to 100.100 MHz (the drive verb "radio range 2 ...": the product cannot ask a device for its range, so a limit is shown by a seam that clamps the request as a device that clamps to its edge would).
 # Link on, radio 1 tuned up in steps of the tuneStepUp key (Ctrl+Up: 12.5 kHz in WFM, the engine's own raster): after 8 steps radio 2 is at 100.100 MHz (the gap kept, the limit reached exactly); the 9th takes radio 1 to

@@ -13,7 +13,7 @@
 // 5 the "Target details" drawer, 6 a map page row, 7 a picture row, 8 a panel row, 9 an instrument row, 10 a note line.
 import { Theme } from "theme.slint";
 import { Chip, LampDot, ChipTone, LampState } from "chips.slint";
-import { Caption, Key } from "keys.slint";
+import { Caption, Key, SegGroup, SegKey } from "keys.slint";
 import { Lamp } from "lamps.slint";
 import { Section } from "sections.slint";
 import { RowKind, RowTone, TableRow, Table } from "table.slint";
@@ -49,6 +49,7 @@ export global KitEvents {
     callback decode-entry-forgot(int, int);
     callback decode-entry-save(int);
     callback decode-entry-run(int);
+    callback decode-entry-runs-on(int, int);
     callback decode-entry-mute(int, bool);
     callback decode-entry-settings-toggled(int);
     callback decode-entry-setting-committed(int, int, string);
@@ -145,6 +146,9 @@ export struct DecodeRow {
     key2-label: string,    // its second key ("Remove" / "Confirm delete")
 }
 
+// One key of the Runs-on picker (design 3.7): the radio's short tag, the accessible name that says which plugin and which radio, and whether it is the plugin's radio.
+export struct RunsOnKey { label: string, accessible: string, on: bool }
+
 // One plugin's entry in the "Turn on and off plugins" drawer: heading, presets (column form), STOP/START, mute, the settings fold.
 export struct PluginEntry {
     file: string,
@@ -162,6 +166,9 @@ export struct PluginEntry {
     has-settings: bool,
     fields: [SettingField],
     settings-open: bool,
+    runs-on-tip: string,
+    runs-on-label: string,   // "Runs on"; "" when the picker is not drawn (one radio open, or a plugin that cannot move)
+    runs-on: [RunsOnKey],
 }
 
 export struct DecoderBar { name: string, file: string, presets: [PresetKeyModel] }
@@ -607,6 +614,8 @@ export component DecodeBank inherits VerticalLayout {
     entry-save(a) => { KitEvents.decode-entry-save(a); }
     callback entry-run(int);
     entry-run(a) => { KitEvents.decode-entry-run(a); }
+    callback entry-runs-on(int, int);
+    entry-runs-on(a, b) => { KitEvents.decode-entry-runs-on(a, b); }
     callback entry-mute(int, bool);
     entry-mute(a, b) => { KitEvents.decode-entry-mute(a, b); }
     callback entry-settings-toggled(int);
@@ -657,6 +666,12 @@ export component DecodeBank inherits VerticalLayout {
                         pressed(i) => { root.entry-preset(ei, i); } forgot(i) => { root.entry-forgot(ei, i); } save-clicked => { root.entry-save(ei); } }
                     if e.decoder : RunKeys { offers-stop: e.offers-stop; idle: e.idle; mutes: e.mutes; mute-shown: true;
                         run-clicked => { root.entry-run(ei); } mute-toggled(v) => { root.entry-mute(ei, v); } }
+                    if e.runs-on.length > 0 : HorizontalLayout { spacing: 6px; alignment: start;
+                        Text { text: e.runs-on-label; font-size: Theme.font-small; color: Theme.muted; vertical-alignment: center; overflow: elide; }
+                        SegGroup { small: true;
+                            for k[ki] in e.runs-on : SegKey { small: true; label: k.label; on: k.on; accessible-label: k.accessible; tooltip: e.runs-on-tip; clicked => { root.entry-runs-on(ei, ki + 1); } }
+                        }
+                    }
                     if e.has-settings : PluginSettingsForm { fields: e.fields;
                         committed(id, t) => { root.entry-setting-committed(ei, id, t); } toggled(id, v) => { root.entry-setting-toggled(ei, id, v); } browse-clicked(id) => { root.entry-browse(ei, id); } }
                 }

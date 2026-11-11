@@ -1,0 +1,23 @@
+#! frames=700 size=1600x900 restart=solo-readback-2.txt
+# solo-readback (screen stage S6, B4): the Audio mix shows the engine's solo (fact.radio.solo), not a copy the host keeps. Radio 2 and 3 are added; SOLO on radio 3 is pressed in the Audio mix and the host's
+# read-back says 3; another client's change is simulated by the engine's own op through the strip's route (RADIO_SOLO sent by a second press moves it off). The session then quits and starts again: the engine
+# does not save the solo (it is a listening state, not a setting), so the second start must show NO solo - the read-back is the engine's fact, never a stale host variable.
+10 state workspace.radios == 1
++1 radio add 2 60000
++1 radio add 3 90000
++30 state workspace.radios == 3
+state fact.radio.solo == 0
+state workspace.solo == 0
++1 click "Solo Radio 3"
++15 state fact.radio.solo == 3
+state workspace.solo == 3
+expect "Solo Radio 3" checked equals "true"
++1 click "Solo Radio 2"
++15 state fact.radio.solo == 2
+state workspace.solo == 2
+expect "Solo Radio 3" checked equals "false"
++1 click "Solo Radio 2"
++15 state fact.radio.solo == 0
+state workspace.solo == 0
++1 click "Solo Radio 3"
++15 state workspace.solo == 3

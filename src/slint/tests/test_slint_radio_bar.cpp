@@ -330,6 +330,11 @@ int main() {
             {"pane: readout value on the row", [](const Skin& s) { return s.fg_soft; }, [](const Skin& s) { return s.strip; }, false},
             {"pane: decoder chip", [](const Skin& s) { return s.chip_good_fg; }, [](const Skin& s) { return s.chip_good_bg; }, false},
             {"pane: mode chip", [](const Skin& s) { return s.chip_fg; }, [](const Skin& s) { return s.chip_bg; }, false},
+            // stage S6: the pane's device notice (the engine's sentence over the spectrum, warning ink on the deep well) and the Runs-on picker's caption in the DECODE bank
+            {"pane: device notice (the engine's sentence) on its scrim", [](const Skin& s) { return s.chip_warn_fg; }, [](const Skin& s) { return s.well_deep; }, false},
+            {"DECODE drawer: 'Runs on' caption on the panel", [](const Skin& s) { return s.muted; }, [](const Skin& s) { return s.panel; }, false},
+            {"DECODE drawer: Runs-on key text (SegKey) on its group", [](const Skin& s) { return s.fg_soft; }, [](const Skin& s) { return s.panel_alt; }, false},
+            {"DECODE drawer: lit Runs-on key text", [](const Skin& s) { return s.accent_ink; }, [](const Skin& s) { return s.accent; }, false},
             {"disabled key text (Start together when dead)", [](const Skin& s) { return s.key_disabled_fg; }, [](const Skin& s) { return s.key_disabled_bg; }, true},
         };
         for (const Pair& p : pairs) {

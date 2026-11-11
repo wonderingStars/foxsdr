@@ -1,0 +1,13 @@
+#! frames=400 size=1600x900
+# tune-step-key (screen stage S6, B5): the tuning key says "Tune up one step (10 kHz)" and moves 10 kHz. The Slint window used to start the step at 12.5 kHz (found by the S5 drive run: 100312500),
+# which the label never said. One radio is enough: radio 1 starts at 100.300 MHz; Ctrl+Up and Ctrl+Down step it by exactly 10 kHz and back, and the Tune step picker still offers the other steps.
+10 state running == 1
+state tunedHz == 100300000
++1 key ctrl+up
++12 state tunedHz == 100310000
++1 key ctrl+up
++12 state tunedHz == 100320000
++1 key ctrl+down
++12 state tunedHz == 100310000
++1 key ctrl+down
++12 state tunedHz == 100300000

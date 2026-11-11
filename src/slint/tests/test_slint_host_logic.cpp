@@ -207,6 +207,23 @@ int main() {
         CHECK_NEAR(d[11].frac, 1.0, 1e-9);
         const auto tall = dbTicks(-110, 0, 1200);
         CHECK(tall.size() == 12 && tall[1].label == "-10");
+        // a short plot (a pane of four at 1280 x 720: about 60 px): the labels are at least 14 px apart, never a smear
+        {
+            for (const double h : {40.0, 60.0, 90.0, 120.0}) {
+                const auto t = dbTicks(-110, 0, h);
+                double last = -1e9;
+                int labelled = 0;
+                bool spaced = true;
+                for (const auto& tk : t) {
+                    if (tk.label.empty()) { continue; }
+                    ++labelled;
+                    if (tk.frac * h - last < 14.0 - 1e-6) { spaced = false; }
+                    last = tk.frac * h;
+                }
+                CHECK(spaced && labelled >= 1);
+            }
+            CHECK(dbTicks(-110, 0, 60).size() == 12);   // every 10 dB keeps its rule; only the labels thin out
+        }
         CHECK(dbTicks(0, 0, 330).empty());
         CHECK(dbTicks(-10, -110, 330).empty());
 

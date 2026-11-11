@@ -131,7 +131,7 @@ void DeckPublisher::publish(const DeckInputs& in) {
             g.set_add_open(in.addOpen && canAdd);
             g.set_add_note(ss(in.addNote));
             std::vector<AddChoice> rows;
-            for (const auto& c : in.choices) { AddChoice row{}; row.caption = ss(c.caption); row.accessible = ss(c.accessible); rows.push_back(row); }
+            for (const auto& c : in.choices) { AddChoice row{}; row.caption = ss(c.caption); row.accessible = ss(c.accessible); row.entry = c.entry; row.placeholder = ss(c.placeholder); rows.push_back(row); }
             g.set_add_choices(modelOf(std::move(rows)));
             g.set_add_title(ss(addCardTitle()));
             g.set_add_hint(ss(addCardHint()));

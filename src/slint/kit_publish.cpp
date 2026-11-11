@@ -1136,6 +1136,21 @@ void KitPublisher::publishDecodeBank(const FoxReceiverState& state) {
         e.offers_stop = !r.stopped && !r.asleep;
         e.idle = r.asleep && !r.stopped;
         e.mutes = r.mutes;
+        {   // THE RUNS-ON PICKER: one key per open radio, shown only when more than one is open
+            const RunsOnModel ro = runsOnFor(r, radioMask_);
+            std::vector<::RunsOnKey> keys;
+            for (const RunsOnKey& k2 : ro.keys) {
+                ::RunsOnKey key{};
+                key.label = ss("R" + std::to_string(k2.radio));
+                key.accessible = ss(cascade::core::formatText(cascade::i18n::tr("Radio %d: %s"), k2.radio, r.name.c_str()));
+                key.on = k2.on;
+                keys.push_back(key);
+            }
+            e.runs_on = model(std::move(keys));
+            e.runs_on_label = ss(ro.shown() ? cascade::i18n::tr("Runs on") : "");
+            e.runs_on_tip = ss(ro.shown() ? cascade::i18n::tr("The radio this plugin listens to. Choose another to move it there.") : "");
+            esig += "r" + std::to_string(ro.shown() ? ro.current : 0) + "m" + std::to_string(radioMask_) + ";";
+        }
         const SettingsSet* set = settingsFor(k.settings, r.file);
         e.has_settings = set != nullptr && !set->fields.empty();
         e.settings_open = entrySettingsOpen_[r.file];
@@ -1343,6 +1358,10 @@ void KitPublisher::wire() {
         presetNote_ = cascade::core::formatText(cascade::i18n::tr("Saved %.4f MHz as a preset for %s"), state_.tunedHz / 1e6, r->name.c_str());
     });
     ui_.global<::KitEvents>().on_decode_entry_run([this, entryRow](int e) { const PluginRow* r = entryRow(e); if (r != nullptr) { kit_.startStop(r->file, !r->stopped && !r->asleep); } });
+    ui_.global<::KitEvents>().on_decode_entry_runs_on([this, entryRow](int e, int radio) {
+        const PluginRow* r = entryRow(e);
+        if (r != nullptr && radio >= 1 && radio <= 8) { kit_.setPluginRadio(r->file, radio, !r->stopped); }   // a running plugin goes on running on its new radio; a stopped one stays stopped
+    });
     ui_.global<::KitEvents>().on_decode_entry_mute([this, entryRow](int e, bool on) { const PluginRow* r = entryRow(e); if (r != nullptr) { kit_.setMute(r->file, on); } });
     ui_.global<::KitEvents>().on_decode_entry_settings_toggled([this, entryRow](int e) { const PluginRow* r = entryRow(e); if (r != nullptr) { entrySettingsOpen_[r->file] = !entrySettingsOpen_[r->file]; } });
     const auto settingOf = [this](const std::string& file, int id) -> const SettingSpec* {

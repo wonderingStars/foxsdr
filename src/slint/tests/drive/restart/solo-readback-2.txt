@@ -1,0 +1,6 @@
+#! frames=300 size=1600x900
+# solo-readback, the second start: radios 2 and 3 are back (the engine saves them), the solo is not (it is not a setting): the read-back says nobody, and agrees with the engine.
+60 state workspace.radios == 3
+state fact.radio.solo == 0
+state workspace.solo == 0
+expect "Solo Radio 3" checked equals "false"

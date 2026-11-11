@@ -68,6 +68,10 @@ public:
     LiveTable(const FoxEngineApi* api, FoxSession* session) : api_(api), session_(session) {}
     std::int32_t readList(std::uint32_t list, std::uint32_t index, FoxListItem* out) override;
     bool fact(const std::string& key, std::string& out) override;
+    // The radio whose gains, antennas, sample rates and decoders EVERY live table reads (host_logic readListFor); 0 = the session's focus. One window per process, one selected radio: the host
+    // sets it from the selection before the tick's readers run, so the SIGNAL bank, the DECODE bank and the rest show the selected radio's lists whatever the session's focus does.
+    static void setListRadio(std::uint32_t radio);
+    static std::uint32_t listRadio();
 
 private:
     const FoxEngineApi* api_;
@@ -136,6 +140,7 @@ public:
     std::uint64_t submit(const cascade::core::cmd::QueuedCommand& q);
     std::uint64_t submit(const FoxCommand& c) { return submit(cascade::core::cmd::QueuedCommand{c, std::string()}); }
     void startStop(const std::string& file, bool stop);
+    void setPluginRadio(const std::string& file, int radio, bool start);   // FOXAPI_OP_PLUGIN_RADIO: put a decoder on a radio (start: also start it / clear its stop)
     void stopList(const std::vector<std::string>& files, bool endMute);
     void applyPreset(const std::string& file, const Preset& p);        // FOXAPI_OP_PLUGIN_PRESET or FOXAPP_OP_USER_PRESET_APPLY
     void forgetPreset(const std::string& file, const Preset& p);       // FOXAPP_OP_USER_PRESET_FORGET_AT

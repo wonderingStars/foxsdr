@@ -85,7 +85,7 @@ MixRow mixRow(int radio, int route, bool muted, bool solo, float volume) {
     r.running = true;
     return r;
 }
-AddChoice choice(const char* caption) { AddChoice c; c.caption = ss(caption); c.accessible = ss(std::string("Add ") + caption); return c; }
+AddChoice choice(const char* caption) { AddChoice c{}; c.caption = ss(caption); c.accessible = ss(std::string("Add ") + caption); return c; }
 
 }  // namespace
 
@@ -288,6 +288,19 @@ int main() {
             Frame empty = render(ui, W, H);
             CHECKV(find("Add Signal generator").empty(), "%s: no choices left", skinName);
             empty.savePng(shotDir() + "strip-" + skinName + "-nochoices.png");
+            // SCREEN STAGE S6: a source that needs something typed is a field and an Add key (the I/Q file, rtl_tcp, Pluto), the sound card is an ordinary key the engine will refuse
+            {
+                AddChoice file = choice("I/Q file");
+                file.entry = true;
+                file.placeholder = ss("I/Q file path");
+                AddChoice card = choice("Sound card");
+                g.set_add_choices(modelOf(std::vector<AddChoice>{choice("Signal generator"), file, card}));
+                render(ui, W, H);
+                CHECKV(find("Add I/Q file").size() == 2, "%s: the file's Add key is on both cards (%zu)", skinName, find("Add I/Q file").size());
+                CHECKV(!find("I/Q file").empty(), "%s: the file's field is drawn", skinName);
+                CHECKV(find("Add Sound card").size() == 2, "%s: the sound card is offered (the engine refuses it in its own words)", skinName);
+                CHECKV(find("Add Signal generator").size() == 2, "%s: the generator is still offered as a plain key", skinName);
+            }
             g.set_add_choices(modelOf(std::vector<AddChoice>{choice("Signal generator"), choice("RTL-SDR #0 (native)"), choice("Airspy Mini")}));
         }
 
@@ -351,6 +364,28 @@ int main() {
         // the mix block is no taller than 200 px: its foot is the sheet's panel foot (504)
         const auto mixBlock = one("Audio mix", true);
         if (!mixBlock) { for (const auto& e : find("Audio mix", true)) { if (e.accessible_role() == slint::language::AccessibleRole::Groupbox) { CHECKV(e.size().height <= 200.5f, "the mix is %.0f px tall", static_cast<double>(e.size().height)); } } }
+    }
+
+    // ---- SCREEN STAGE S6: the longest words of the catalogues leave the volume slider inside the block (the keys elide before the row runs past the panel; found by the sweep screenshots) ----
+    {
+        ui->global<Theme>().set_skin(workbench);
+        MixRow r1 = mixRow(1, 0, false, false, 0.5f);
+        r1.route_text = ss("Και τα δύο");   // Greek "Both": the longest route word of the catalogues (10 letters)
+        MixRow r2 = mixRow(2, 0, false, false, 0.5f);
+        r2.route_text = ss("Tidak ada");
+        g.set_masters(modelOf(std::vector<MasterLamp>{master(1, 1, true), master(2, 1, false)}));
+        g.set_mix(modelOf(std::vector<MixRow>{r1, r2}));
+        g.set_radio_count(2);
+        render(ui, W, H);
+        float blockRight = 0;
+        for (const auto& e : find("Audio mix", true)) { if (e.accessible_role() == slint::language::AccessibleRole::Groupbox) { blockRight = e.absolute_position().x + e.size().width; } }
+        CHECK(blockRight > 100.0f);
+        for (const char* label : {"Radio 1: VOLUME", "Radio 2: VOLUME"}) {
+            const auto sl = one(label, true);
+            CHECK(sl.has_value());
+            if (sl) { CHECKV(sl->absolute_position().x + sl->size().width <= blockRight + 0.5f, "%s ends at %.0f, the block at %.0f", label, static_cast<double>(sl->absolute_position().x + sl->size().width), static_cast<double>(blockRight)); }
+            if (sl) { CHECKV(sl->size().width >= 20.0f, "%s keeps a usable length (%.0f)", label, static_cast<double>(sl->size().width)); }
+        }
     }
 
     // ---- the one-radio rule at this level: a model with nothing in it draws nothing of the block's rows ----

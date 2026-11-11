@@ -1,4 +1,4 @@
-#! frames=1900 size=1600x900
+#! frames=1900 size=1600x900 FOXSDR_SLINT_TUNE_STEP=12500
 # link-remove: what happens to the group when a linked radio is REMOVED and when a radio is ADDED while Link is on (screen stage S5; docs/multi-radio-records/screen-s5.md), with LIVE radios. Radio 1 (100.300 MHz),
 # generator radios 2 and 3 (100.000 MHz each), Link on. Removing radio 2 (the real RADIO_REMOVE) leaves radios 1 and 3 a group: one step (12.5 kHz) on radio 1 still moves radio 3 and nothing else is disturbed (radio 3 keeps its
 # own frequency through the removal). Removing radio 3 too leaves one radio: tuning moves it alone. A radio added while Link is on (radio 2 again, 100.000 MHz) joins the group at once, with the gap it has: the next

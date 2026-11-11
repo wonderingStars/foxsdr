@@ -99,13 +99,15 @@ void Engine::openIqFile(const std::string& path) {
     // source; pollIqOpen() installs it on a later pass. The pipeline keeps its current source until then, as a failed open always left it.
     const std::uint64_t gen = rx().sourceGen_.load();
     const int row = sourceSel_;
+    const std::size_t slot = scopedSlot();
     const auto factory = iqFileFactory_;
     const auto hook = diskHook();
-    job.request([path, gen, row, factory, hook]() -> IqOpenResult {
+    job.request([path, gen, row, slot, factory, hook]() -> IqOpenResult {
         IqOpenResult r;
         r.path = path;
         r.gen = gen;
         r.row = row;
+        r.slot = slot;
         try {
             if (hook) { hook(); }
             auto file = factory ? factory() : std::make_unique<cascade::source::IqFileSource>();
@@ -132,6 +134,14 @@ void Engine::pollIqOpen() {
     const auto letGo = [](std::unique_ptr<cascade::source::IqFileSource> f) {
         if (f) { std::thread([g = std::move(f)]() mutable { g.reset(); }).detach(); }
     };
+    // THE RADIO THAT ASKED (screen stage S6): the open is one job for the engine, but the file belongs to the radio whose RADIO_ADD or Open asked for it - installed on the pass's
+    // own scope it landed on the FIRST radio whatever radio had asked. A radio that has gone since lets the file go.
+    RadioWork work(*this, r.slot);
+    if (r.slot != 0u && (receiverMask_.load(std::memory_order_acquire) & (1u << r.slot)) == 0u) {
+        cc::diagLogf("source: an I/Q file open finished after its radio was removed");
+        letGo(std::move(r.file));
+        return;
+    }
     // THE CHOICE MAY HAVE MOVED ON while the header was being read (the same rule as a sound card's open): another source installed (sourceGen_
     // moved), a radio open under way, or the combo moved off the row it was asked on. The open file is then simply closed again.
     if (r.gen != rx().sourceGen_.load() || rx().deviceOpenPending_ || sourceSel_ != r.row) {

@@ -1,0 +1,41 @@
+#! frames=1800 size=1600x900
+# add-kinds (screen stage S6, B3): the Add-a-radio card offers every source kind the engine accepts as a further radio: the generator, scanned devices, an I/Q file (file:<path>), an rtl_tcp server
+# (open-rtltcp:<address>), a Pluto (open-pluto:<address>), and the SOUND CARD, which the engine refuses with a sentence of its own: the sentence is shown on the card and the card stays open. A server
+# or an I/Q file that cannot be opened still gives a radio (on the generator), and its pane says why in the engine's words (fact.radio.<n>.refusal).
+10 state workspace.radios == 1
++1 click "Add a radio"
++5 state workspace.open == 1
+state workspace.choices >= 5
++1 shot "add-kinds-card.png"
+# the sound card: refused, in the engine's words, shown; nothing is added and the card stays
++1 click "Add Sound card"
++20 state workspace.addnote contains "sound card"
+state workspace.radios == 1
+state workspace.open == 1
+state workspace.lastadd contains "sound card"
++1 shot "add-kinds-refused.png"
+# an empty field sends nothing
++1 click "Add I/Q file"
++10 state workspace.radios == 1
+# an I/Q file: radio 2 plays it
++1 type "I/Q file" "{FIXTURES}/pocsag-decoder.wav"
++2 click "Add I/Q file"
++40 state workspace.radios == 2
+state workspace.open == 0
+state workspace.r.2.running == 1
+state workspace.r.2.notice == ""
+# an I/Q file that is not there: the radio is added (the open answers later), sits on the generator, and the pane says why in the engine's words
++1 click "Add a radio"
++5 state workspace.open == 1
++1 type "I/Q file" "{FIXTURES}/no-such-recording.wav"
++2 click "Add I/Q file"
++60 state workspace.radios == 3
++30 state workspace.r.3.notice contains "cannot open"
+state workspace.r.3.device == "Signal generator"
++1 shot "add-kinds-file-notice.png"
+# an rtl_tcp server nobody is running (a dead local port) is added as well; whether its pane can say why depends on the open's answer (an engine item, see the record)
++1 click "Add a radio"
++5 state workspace.open == 1
++1 type "rtl_tcp" "127.0.0.1:9"
++2 click "Add rtl_tcp"
++60 state workspace.radios == 4

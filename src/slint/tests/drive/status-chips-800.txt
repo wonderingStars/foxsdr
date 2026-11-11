@@ -1,0 +1,6 @@
+#! frames=300 size=800x560
+# status-chips-800 (screen stage S6, from the clip sweep): in a window under 1000 px two radios already share one chip ("Radios 1-2").
+10 state workspace.chips == ""
++1 radio add 2 60000
++30 state workspace.radios == 2
++10 state workspace.chips == "0"
