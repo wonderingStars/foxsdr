@@ -146,6 +146,14 @@ public:
         std::lock_guard<std::mutex> gg(m_);
         greeting_ = g;
     }
+    // When each connection (refused ones included) was accepted, in milliseconds after the first.
+    std::vector<double> acceptTimesMs() {
+        std::lock_guard<std::mutex> g(m_);
+        std::vector<double> v;
+        if (acceptAt_.empty()) { return v; }
+        for (const auto& t : acceptAt_) { v.push_back(std::chrono::duration<double, std::milli>(t - acceptAt_.front()).count()); }
+        return v;
+    }
     // Refuse (accept then close at once) the next `n` connections.
     void refuseNext(int n) { refuse_.store(n); }
 
@@ -158,9 +166,12 @@ private:
                 if (refuse_.load() > 0) {
                     refuse_.fetch_sub(1);
                     sock::closeHandle(h);
+                    std::lock_guard<std::mutex> g(m_);
+                    acceptAt_.push_back(Clock::now());
                     accepted_.fetch_add(1);
                 } else {
                     std::lock_guard<std::mutex> g(m_);
+                    acceptAt_.push_back(Clock::now());
                     Conn c;
                     c.s = h;
                     conns_.push_back(c);
@@ -207,6 +218,7 @@ private:
     std::vector<Conn> conns_;
     std::vector<std::string> log_, outq_;
     std::vector<bool> drop_;
+    std::vector<Clock::time_point> acceptAt_;
     std::string greeting_;
 };
 

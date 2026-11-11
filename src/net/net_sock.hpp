@@ -44,6 +44,10 @@ Handle acceptOne(Handle listener);
 Handle beginConnectTcp(std::uint32_t ip, std::uint16_t port);
 // Waits up to `ms` for a connect to finish; true when connected.
 bool waitConnect(Handle s, int ms);
+// One look at a connect in progress, waiting up to `ms`: 1 connected, 0 still pending, -1 failed (refused, unreachable).
+int connectState(Handle s, int ms);
+// Resolves a dotted quad or a host name to an IPv4 address (host order). Blocks for the resolver: call it on a worker thread only.
+bool resolveIpv4(const std::string& host, std::uint32_t& hostOrder);
 
 // One recv / send on a non-blocking socket. Bytes moved, 0 = peer closed (recv), -1 = nothing now (see wouldBlock()) or an error.
 long recvSome(Handle s, void* buf, std::size_t n);

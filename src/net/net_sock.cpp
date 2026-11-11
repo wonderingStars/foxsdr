@@ -195,15 +195,40 @@ Handle beginConnectTcp(std::uint32_t ip, std::uint16_t port) {
     return h;
 }
 
-bool waitConnect(Handle s, int ms) {
+int connectState(Handle s, int ms) {
     PollItem it;
     it.s = s;
     it.want = kWritable;
-    if (pollMany(&it, 1, ms) <= 0) { return false; }
+    if (pollMany(&it, 1, ms) < 0) { return -1; }
     int err = 0;
     SockLen len = sizeof(err);
-    if (::getsockopt(S(s), SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&err), &len) != 0) { return false; }
-    return err == 0 && (it.got & kWritable) != 0;
+    if (::getsockopt(S(s), SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&err), &len) != 0) { return -1; }
+    if (err != 0) { return -1; }
+    if (it.got & kWritable) { return 1; }
+    if (it.got & kError) { return -1; }
+    return 0;
+}
+
+bool waitConnect(Handle s, int ms) { return connectState(s, ms) == 1; }
+
+bool resolveIpv4(const std::string& host, std::uint32_t& hostOrder) {
+    if (parseIpv4(host, hostOrder)) { return true; }
+    if (host.empty() || host.size() > 253 || !ensureStarted()) { return false; }
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* res = nullptr;
+    if (::getaddrinfo(host.c_str(), nullptr, &hints, &res) != 0 || res == nullptr) { return false; }
+    bool ok = false;
+    for (addrinfo* p = res; p != nullptr; p = p->ai_next) {
+        if (p->ai_family == AF_INET && p->ai_addr != nullptr) {
+            hostOrder = ntohl(reinterpret_cast<const sockaddr_in*>(p->ai_addr)->sin_addr.s_addr);
+            ok = true;
+            break;
+        }
+    }
+    ::freeaddrinfo(res);
+    return ok;
 }
 
 long recvSome(Handle s, void* buf, std::size_t n) {
