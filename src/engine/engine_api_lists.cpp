@@ -1374,7 +1374,9 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             // WHY THE RADIO IS NOT ON ITS DEVICE: the refusal RADIO_ADD kept, else - for a further radio, which has no Source panel to show it - the source's own error (an I/Q file that did not open,
             // an rtl_tcp server that could not be reached: those answer on a later pass, after RADIO_ADD said yes). Screen stage S6, B3.
             if (!rx().refusal_.empty()) { fact(pre + "refusal", rx().refusal_); }
-            else if (n != 1u && !rx().sourceError_.empty()) { fact(pre + "refusal", rx().sourceError_); }
+            // ONLY WHEN THE RADIO IS ON THE GENERATOR BECAUSE ITS SOURCE DID NOT OPEN: a radio that opened carries source errors that are notices ("Sample rate coerced",
+            // a Pluto's rate refusal), which are not a refusal of the radio (test_engine_api_source_kinds; stage 7's noteAsyncOpenEnded writes the same fact for the same case).
+            else if (n != 1u && rx().device_ == nullptr && rx().sourceKind_ == "siggen" && !rx().sourceError_.empty()) { fact(pre + "refusal", rx().sourceError_); }
         }
         // (The first radio's route is read from its own slot like any other's.)
         std::string running;

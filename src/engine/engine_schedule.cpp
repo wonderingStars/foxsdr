@@ -106,7 +106,7 @@ std::int32_t Engine::scheduleFromHint(const FoxCommand& c, const std::string& te
     set.op = FOXAPP_OP_SCHEDULE_SET;
     set.ival[0] = 0;
     set.ival[1] = 0;
-    return applyScheduleOp(set, j.dump(), res, why);
+    return applyScheduleOp(set, j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), res, why);
 }
 
 std::int32_t Engine::applyScheduleOp(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why) {
@@ -503,7 +503,7 @@ void Engine::scheduleFacts(const std::function<void(const std::string&, const st
         hj["mode"] = h.demodMode;
         hj["bandwidthHz"] = h.bandwidthHz;
         hj["decoder"] = std::string(h.decoderName);
-        put("schedule.hint." + std::to_string(i + 1), hj.dump());
+        put("schedule.hint." + std::to_string(i + 1), hj.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
     for (const sched::Entry& e : list) {
         json j;
@@ -527,7 +527,7 @@ void Engine::scheduleFacts(const std::function<void(const std::string&, const st
         j["state"] = it != scheduleRt_.end() ? it->second.state : std::string("waiting");
         j["note"] = it != scheduleRt_.end() ? it->second.note : std::string();
         j["nextUnix"] = e.enabled ? sched::nextStartAfter(e, std::max(nowS, e.lastStartUnix)) : -1;
-        put("schedule.entry." + std::to_string(e.id), j.dump());
+        put("schedule.entry." + std::to_string(e.id), j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 }
 
