@@ -37,6 +37,10 @@ export struct RadioPaneData {
     resize-label: string,            // "Resize Radio 2"
     removable: bool,                 // radios 2 and up have a close key (stage S4); radio 1 is always there
     close-label: string,             // "Remove Radio 2"
+    link-shown: bool,                // Link tuning is on: the header carries a link key (stage S5)
+    link: int,                       // 0 not linked, 1 linked, 2 linked but could not follow the group
+    link-label: string,              // "Link Radio 2"
+    link-tip: string,                // "Linked: moves with the other linked radios", or the sentence that says where it stays
     device: string,                  // "RTL-SDR #0" - elided first when the header is short
     frequency: string,               // "145.500000 MHz" - never elided
     mode: string,                    // "NFM"
@@ -144,6 +148,7 @@ export component RadioPane inherits Rectangle {
     callback waterfall-menu-requested(int, float, length, length);
     callback waterfall-wheel(int, float, int, bool);
     callback marker-hovered(int, int);                 // radio, marker index
+    callback link-clicked(int);                        // radio: the link key (stage S5): takes the radio out of the group or puts it back
     callback close-clicked(int);                       // radio: the close key (stage S4): the host removes the radio, asking first when it runs or records
     callback split-changed(int, float);                // radio, the spectrum's new share: the workspace keeps it for the radio (a pane is made again when its page comes back)
 
@@ -260,6 +265,21 @@ export component RadioPane inherits Rectangle {
                 y: (root.header-h - self.height) / 2;
                 accessible-label: root.data.stop-label;
                 clicked => { root.stop-clicked(root.data.radio); }
+            }
+            // STAGE S5: the link key, only while Link tuning is on. Lit = in the group; red = in the group but could not follow it (the tip says where it stays); plain = left out.
+            if root.data.link-shown : Key {
+                label: @tr("Link");
+                small: true;
+                on: root.data.link == 1;
+                danger: root.data.link == 2;
+                show-lamp: root.data.link == 2;          // the radio that could not follow also carries an amber dot, so it is told from a radio that was left out
+                lamp: LampState.amber;
+                y: (root.header-h - self.height) / 2;
+                accessible-label: root.data.link-label;
+                accessible-checkable: true;
+                accessible-checked: root.data.link != 0;
+                tooltip: root.data.link-tip;
+                clicked => { root.link-clicked(root.data.radio); }
             }
             if root.data.removable : Key {
                 icon: @image-url("icons/close.svg");

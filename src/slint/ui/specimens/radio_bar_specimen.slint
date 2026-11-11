@@ -1,0 +1,26 @@
+// The workspace bar at the widths a window can give it (docs/multi-radio-records/screen-s5.md): the test sets the bar's width, whether the window's strip is compact (the radios' selector, STOP keys and
+// MASTER lamps are groups of the bar) and whether the RECEIVER tab is showing, feeds the WorkspaceModel global with fake data for up to eight radios, and reads where every control landed.
+//
+//   y 0, h bar-height   WorkspaceBar, `bar-w` wide (it wraps its groups onto as many 30 px rows as that width asks)
+//   y bar-height ..     a marker strip the height of the view's first line, so the test sees that what is under the bar starts below it
+import { Theme, Skin, Workbench, NightWatch } from "../theme.slint";
+import { WorkspaceModel, StripRadio, MasterLamp, WorkspaceBar } from "../workspace.slint";
+import { TipLayer } from "../tooltip.slint";
+export { Theme, Skin, Workbench, NightWatch, WorkspaceModel, StripRadio, MasterLamp }
+
+export component RadioBarSpecimen inherits Window {
+    background: Theme.bg;
+    min-width: 320px;
+    min-height: 240px;
+
+    in-out property <length> bar-w: 800px;
+    in-out property <bool> compact: true;
+    in-out property <bool> receiver: true;
+    out property <length> bar-height: bar.height;
+    out property <int> bar-rows: bar.rows;
+
+    bar := WorkspaceBar { x: 0px; y: 0px; width: root.bar-w; compact: root.compact; receiver: root.receiver; }
+    Rectangle { x: 0px; y: bar.height; width: root.bar-w; height: 20px; background: Theme.well-deep; accessible-role: groupbox; accessible-label: "the view under the bar"; }
+
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
+}

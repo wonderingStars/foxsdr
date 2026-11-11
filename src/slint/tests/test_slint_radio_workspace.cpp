@@ -70,6 +70,7 @@ RadioPaneData makePane(int radio, const char* decoder) {
     d.waterfall_label = ss("Radio " + n + " waterfall");
     d.resize_label = ss("Resize Radio " + n);
     d.removable = radio > 1; d.close_label = ss("Remove Radio " + n);   // stage S4: radios 2 and up have a close key
+    d.link_shown = false; d.link = 0; d.link_label = ss("Link Radio " + n); d.link_tip = ss("Not linked: Link tuning never moves this radio");   // stage S5: the link key exists only while Link tuning is on
     d.device = ss(devices[(radio - 1) % 8]);
     d.frequency = ss(freqs[(radio - 1) % 8]);
     d.mode = ss("NFM");
@@ -125,6 +126,7 @@ int main() {
     g.on_select_requested([&](int r) { lastEvent = "select"; lastRadio = r; ++events; });
     g.on_stop_clicked([&](int r) { lastEvent = "stop"; lastRadio = r; ++events; });
     g.on_remove_requested([&](int r) { lastEvent = "remove"; lastRadio = r; ++events; });
+    g.on_pane_link_clicked([&](int r) { lastEvent = "pane-link"; lastRadio = r; ++events; });
     g.on_spectrum_clicked([&](int r, float x, bool) { lastEvent = "spectrum-click"; lastRadio = r; lastX = x; ++events; });
     g.on_spectrum_wheel([&](int r, float, int n, bool) { lastEvent = "spectrum-wheel"; lastRadio = r; lastValue = n; ++events; });
     g.on_waterfall_clicked([&](int r, float x, bool) { lastEvent = "waterfall-click"; lastRadio = r; lastX = x; ++events; });
@@ -450,6 +452,50 @@ int main() {
         g.set_layout(2); g.set_shown_layout(2);
         render(ui, W, H);
     }
+
+    // ---- STAGE S5: the pane's link key: only while Link tuning is on; lit when the radio is in the group, red when it could not follow, plain when left out; a click names its radio ----
+    for (const char* skinName : {"workbench", "night"}) {
+        ui->global<Theme>().set_skin(std::string(skinName) == "night" ? night : workbench);
+        g.set_layout(2); g.set_shown_layout(2); g.set_page(0);
+        std::vector<WorkspaceCell> cells = makeCells(4);
+        g.set_cells(std::make_shared<slint::VectorModel<WorkspaceCell>>(cells));
+        render(ui, W, H);
+        CHECKV(count("Link Radio 1") == 0 && count("Link Radio 2") == 0, "%s: no link key while Link tuning is off", skinName);
+        const int state[4] = {1, 0, 2, 1};
+        for (int i = 0; i < 4; ++i) {
+            cells[static_cast<std::size_t>(i)].pane.link_shown = true;
+            cells[static_cast<std::size_t>(i)].pane.link = state[i];
+            cells[static_cast<std::size_t>(i)].pane.link_tip = ss(state[i] == 2 ? "Radio 3 could not follow the link and stays at 144.500000 MHz." : state[i] == 1 ? "Linked: moves with the other linked radios" : "Not linked: Link tuning never moves this radio");
+        }
+        g.set_cells(std::make_shared<slint::VectorModel<WorkspaceCell>>(cells));
+        Frame f = render(ui, W, H);
+        for (int n = 1; n <= 4; ++n) {
+            const auto k = findOne("Link Radio " + std::to_string(n));
+            CHECKV(k.has_value(), "%s: Link Radio %d is exactly one control", skinName, n);
+            if (!k) { continue; }
+            CHECKV(k->accessible_checked().value_or(false) == (state[n - 1] != 0), "%s: Link Radio %d checked = %d", skinName, n, state[n - 1] != 0);
+            const auto p = k->absolute_position();
+            const auto sz = k->size();
+            CHECKV(sz.width > 20.f && sz.height > 10.f, "%s: Link Radio %d is %.0f x %.0f", skinName, n, static_cast<double>(sz.width), static_cast<double>(sz.height));
+        }
+        // the key's ground tells the three states apart: lit (accent), red (danger), plain (key); the pixel under the key's left edge
+        const auto groundAt = [&](int n) { const auto k = findOne("Link Radio " + std::to_string(n)); const auto p = k->absolute_position(); const auto sz = k->size(); return f.at(static_cast<int>(p.x + 4), static_cast<int>(p.y + sz.height / 2)); };
+        const Skin& sk = std::string(skinName) == "night" ? night : workbench;
+        CHECKV(rgbOf(sk.accent).r == groundAt(1).r && rgbOf(sk.accent).g == groundAt(1).g, "%s: a linked radio's key is lit", skinName);
+        CHECKV(rgbOf(sk.danger_bg).r == groundAt(3).r && rgbOf(sk.danger_bg).g == groundAt(3).g, "%s: the radio that could not follow has the danger key", skinName);
+        CHECKV(rgbOf(sk.key_bg).r == groundAt(2).r && rgbOf(sk.key_bg).g == groundAt(2).g, "%s: a radio left out has the plain key", skinName);
+        CHECKV(std::string(findOne("Link Radio 3")->accessible_description().value_or(slint::SharedString())).find("could not follow") != std::string::npos, "%s: the tip says it could not follow", skinName);
+        // a real click names its radio (and does not select the pane)
+        for (const int n : {2, 4}) {
+            const auto k = findOne("Link Radio " + std::to_string(n));
+            lastEvent.clear(); lastRadio = 0;
+            if (k) { clickCentre(*k); }
+            CHECKV(lastEvent == "pane-link" && lastRadio == n, "%s: a click on Link Radio %d gave '%s' %d", skinName, n, lastEvent.c_str(), lastRadio);
+        }
+        f.savePng(shotDir() + "workspace-link-" + skinName + ".png");
+        g.set_cells(std::make_shared<slint::VectorModel<WorkspaceCell>>(makeCells(4)));
+    }
+    ui->global<Theme>().set_skin(workbench);
 
     return testSummary("test_slint_radio_workspace");
 }
