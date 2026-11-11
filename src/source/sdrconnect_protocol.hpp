@@ -70,7 +70,7 @@ inline std::string buildMessage(const std::string& eventType, const std::string&
     j["property"] = property;
     if (!device.empty()) { j["device"] = device; }
     j["value"] = value;
-    return j.dump();
+    return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 // Reads one text message. False (and `out` untouched) for anything that is not a JSON object

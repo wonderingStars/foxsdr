@@ -101,3 +101,41 @@ Files: `src/source/sdrplay_dual_tuner.{hpp,cpp}`, test `tests/test_sdrplay_dual_
 **UNPROVEN on a real RSPduo**; every record in the tests is hand-built. Also not done, as the brief says: no combiner, no second stream, nothing in `SdrPlaySource` (its `streamCallbackB` still drops channel B on purpose).
 
 HAND-OFF: when dual-tuner support is wired, call `enumerateDualTuner` with an adapter over the session's GetDevices, show an Available offer as two selectable tuners, call `prepareDualTunerSelect` before SelectDevice, use `DualTunerRateTable::check` for every rate request in that mode, and show `DualTunerOffer::sentence` when not Available. Strings: the status sentences above, "Tuner 1 (A)" / "Tuner 2 (B)", the rate-table refusals. Threads: none.
+
+## Results
+
+Build D:/foxsdr-build/feat-src, Release (`-DCASCADE_BUILD_SLINT=OFF -DCASCADE_SOFTGL=OFF`). Real result lines:
+
+| Test (command: `D:/foxsdr-build/feat-src/tests/Release/<name>.exe`) | Result line |
+|---|---|
+| test_sdrplay_ifmode_diag (part 1) | `test_sdrplay_ifmode_diag: 178 checks, 0 failed` |
+| test_soapy_remote_source (part 2) | `test_soapy_remote_source: 9088 checks, 0 failed` |
+| test_sdrconnect_source (part 3) | `test_sdrconnect_source: 298 checks, 0 failed` |
+| test_rig_cat (part 4) | `test_rig_cat: 28855 checks, 0 failed` |
+| test_hpsdr_source (part 5) | `test_hpsdr_source: 1855 checks, 0 failed` |
+| test_sdrplay_dual_tuner (part 6) | `test_sdrplay_dual_tuner: 10392 checks, 0 failed` |
+| test_thread_inventory | `test_thread_inventory: 10005 checks, 0 failed` (row added for `src/source/net_sample_source.cpp`, R_DRIVER) |
+| test_shutdown_budget and _free | Passed, 77.5 s and 76.7 s (the new files declare no named chrono waits; the base class's two bounds are plain millisecond ints) |
+| test_health_paths | Passed after adding the `ReaderLeak` row for `net_sample_source.cpp` (the base class raises `Recovered::ReaderLeak` when it abandons a reader, as the other drivers do) |
+| test_json_dump_policy | Passed after `sdrconnect_protocol.hpp` was changed to dump with `error_handler_t::replace` |
+
+Start/stop and open/close 50 times, no abandoned reader (`NetSampleSource::readersAbandoned()` unchanged) and shutdown timing are asserted in parts 2, 3 and 5 (a close with a silent streaming server: 27 to 63 ms; HPSDR close 0 to 214 ms, one receive slice at worst). Parts 1, 4 (apart from its connection cycles) and 6 start no thread.
+
+### Break-it table (change the named line, see the named tests RED, restore, GREEN; script `D:/foxsdr-build/src-breakit.sh`)
+
+| Part | Removed | Result with it removed |
+|---|---|---|
+| 1 | the 2% "delivers the ADC rate" branch of `sdrPlayLowIfRateVerdict` | 1 failed (the 0.99.43 field-log case) |
+| 2 | the trailer check in `recvMessage` | 3 failed (the bad-trailer open must be refused) |
+| 2 | the element-count-beyond-length check in `checkDatagram` | named tests red (the datagram check and the stream-fault cases) |
+| 3 | the accept-value check in `checkHandshakeResponse` | 3 failed (wrong accept, wrong-accept open) |
+| 3 | the masked-server-frame check in the frame parser | 1 failed |
+| 4 | the exact digit-count check in `parseAnswer` | 4+ failed |
+| 5 | the exact-length check (1032) in `parseDataPacket` | 4 failed |
+| 6 | the both-tuners-free check in `assessDualTuner` | 3+ failed |
+
+A first version of the part 2 break-it for the trailer check did not go red (the stand-in hung up after the bad reply, so the open failed for another reason); the stand-in now carries on answering, which made the test sensitive to the check. Recorded because it is the kind of test that looks like proof and is not.
+
+### Full headless suite (`ctest --test-dir D:/foxsdr-build/feat-src -C Release -L headless -j4 --timeout 300`, in slices)
+
+Slices 1-150, 151-300, 301-450, 451-600, 601-760 (the last: `100% tests passed out of 90`). Red in the slices: the known configuration failures test_airband_data, test_band_plan, test_converter_call_sites, test_engine_api_transmit, test_page_resize_id, test_png_decode, test_window_failed_app, plus the known load flake test_pass_control (passed alone, 46.9 s); and two that were MINE and are fixed in the commit after this record: test_health_paths (unlisted `ReaderLeak` use) and test_json_dump_policy (`dump()` without the replace handler). After the fixes the twelve tests named in the table above were re-run together: `100% tests passed out of 12`.
