@@ -144,17 +144,20 @@ inline int udpSendTo(Sock s, std::uint32_t host, int port, const void* data, std
     return n;
 }
 
-// One datagram, if one is waiting. Returns bytes (0 allowed: an empty datagram), -1 when nothing is waiting or on error.
+// One datagram, if one is waiting. Returns bytes (0 allowed: an empty datagram), -1 when nothing is waiting or on error, -2 when a datagram
+// arrived that did not fit `cap` (it is consumed and lost).
 inline int udpRecv(Sock s, void* buf, std::size_t cap) {
     sockaddr_in from{};
 #if defined(_WIN32)
     int fl = sizeof(from);
     const int n = ::recvfrom(static_cast<SOCKET>(s), static_cast<char*>(buf), static_cast<int>(cap), 0, reinterpret_cast<sockaddr*>(&from), &fl);
+    if (n < 0 && ::WSAGetLastError() == WSAEMSGSIZE) { return -2; }
 #else
     socklen_t fl = sizeof(from);
     const int n = static_cast<int>(::recvfrom(static_cast<int>(s), buf, cap, 0, reinterpret_cast<sockaddr*>(&from), &fl));
+    if (n < 0 && errno == EMSGSIZE) { return -2; }
 #endif
-    return n;
+    return n < 0 ? -1 : n;
 }
 
 // A listening TCP socket on host:port (port 0 = a free one; read it with boundPortOf). Non-blocking accept.
