@@ -105,3 +105,40 @@ What hardware would need what (from the re-check section): a KrakenSDR-class dev
 The maths here needs only: N sample-aligned complex streams, array type and radius or spacing, frequency, and a capture with the noise source on for calibration.
 
 Hand-off: engine/capture lane produces N aligned streams; call `sampleCovariance` per block (about 4096 snapshots), `hermitianEigen`, then `musicSpectrum`/`bartlettSpectrum` and `pickPeaks`; settings: array type, radius/spacing, centre frequency, source count, calibration run (noise source on) and stored per-channel factors applied with `applyCalibration` (or applied to the samples before the covariance).
+
+## Part 4: W12 driver allow-list, W18 WebSDR link-out, N26 phone web side
+
+All new files; nothing downloaded or installed; no existing file edited.
+
+### W12 driver allow-list (`src/core/driver_policy.hpp/.cpp`, `tests/test_driver_policy.cpp`)
+Data: one reviewed row per radio family (action, whether the source was opened, source, note) plus the pure lookup `decide(vid, pid, interfaceNumber)` over the existing `radiosetup::knownDevices()` ids.
+InstallWinUsb only for the RTL-SDR family and only for interface 0 (never the composite parent -1, never interface 1); NoInstallNeeded for Airspy; NotAllowed for everything else and for every unknown id.
+Read (opened 2026-11-11): https://airspy.com/quickstart/ ("Airspy is a plug-and-play device and does not require any particular driver installation on Windows Vista, 7, 8, 8.1 and 10"; manual route = the vendor's WinUSB Compatibility Driver .inf; Zadig not mentioned);
+https://hackrf.readthedocs.io/en/latest/installing_hackrf_software.html (no Windows driver, WinUSB or Zadig step; libusb only as a build dependency). A web search found only community advice for HackRF (Zadig rarely needed, "downgrade WCID driver"): not authoritative, so HackRF stays NotAllowed.
+RX888, AOR and Mirics: pages not opened, USB ids NOT VERIFIED, no rows added (1df7:2500 is already named an SDRplay RSP1 in core/radio_setup.cpp and is also the Mirics reference id). Airspy HF+ and LimeSDR rows are NotAllowed with evidenceVerified = false (no Windows driver page opened).
+Test (`ctest -R test_driver_policy`): 338 checks, 0 failed. Includes: every known family has a row and every row names a real family; no duplicate rows; an InstallWinUsb row must be evidence-verified; for every id in `rtlSdrUsbIds()` interface 0 installs and interface 1 / parent do not;
+for EVERY known device the policy installs exactly when the shipped `winusb::targetAllowed` accepts the same device (cross-check against the existing installer); fake ids (0000:0000, ffff:ffff, 1234:5678, 0bda:0000, 04b4:00f1) refused on every interface.
+Break-it: dropping the interface-0 condition turned the interface 1 / parent checks red; restored.
+Hand-off: the installer (`core/winusb_install.cpp`) should call `driverpolicy::decide` before offering the key, and a radio-setup finding for Airspy can say "no driver install needed" using the row; adding a family means adding a row with a source. UNPROVEN: nothing was installed; no HackRF, Airspy or other radio driver behaviour was observed.
+
+### W18 WebSDR link-out (`src/core/websdr_link.hpp/.cpp`, `tests/test_websdr_link.cpp`)
+Pure `buildLink(baseUrl, frequencyKHz, mode)` -> "scheme://host[:port]/path?tune=<kHz>[am]". Source (opened): https://www.websdr.org/faq.html: deep link "?tune=" appended to the site address, example http://websdr.ewi.utwente.nl:8901/?tune=198am (198 kHz, AM); the FAQ has no terms for linking, nothing on automated clients, and says the author takes action against framing his WebSDR (so open it in the system browser, never embed).
+Documented: the shape and the "am" suffix. NOT VERIFIED: usb/lsb/cw/fm suffixes and fractional kHz: any non-AM mode yields the frequency alone and `modeSuffixDocumented = false` so the UI can warn. Frequency printed to at most three decimals. Refused: non-http(s), no host, user:password or any "@", bad ports, spaces/quotes/angle brackets, non-finite or out-of-range frequency (0 < f <= 3,000,000 kHz), non-alphanumeric mode. Query and fragment on the base are dropped.
+Test: 76 checks, 0 failed (the FAQ example reproduced byte for byte). Break-it: removing the "@" refusal turned 6 checks red; restored. An audio client is still blocked on a written reply from the operator (contact address NOT VERIFIED; via websdr.org).
+Hand-off: a "Open in browser" key on a WebSDR list row calls `buildLink` and hands the URL to the OS shell; needs the list of WebSDR addresses from the owner's directory work.
+
+### N26 phone web side (`src/net/web_phone.hpp/.cpp`, `tests/test_web_phone.cpp`)
+Built: the manifest JSON, `<head>` tags, an additive phone stylesheet (44 CSS px targets, safe-area padding, tables scroll inside themselves, no literal colours because the web UI's tokens govern), `cspWithManifest`, and checkers `originInstallable` and `manifestInstallable`.
+Sources (opened 2026-11-11): MDN "Making PWAs installable" (manifest linked from every page; Chromium needs name or short_name, icons with 192 and 512 px, start_url, display or display_override, prefer_related_applications false/absent; https or localhost/127.0.0.1 with or without port; a service worker is NOT required; Firefox does not install PWAs; Android installs only from Chrome with Google Mobile Services or Samsung Internet; iOS 16.4+ via the Share menu);
+MDN CSP manifest-src (falls back to default-src); W3C WCAG 2.2 Understanding SC 2.5.8 (24 by 24 CSS px; the page also describes 2.5.5 with 44 by 44); MDN env() (safe-area-inset-top/right/bottom/left; viewport-fit=cover is NOT on that page: general knowledge, NOT VERIFIED).
+Finding that matters for wiring: the web UI's Content-Security-Policy is `default-src 'none'; ...` and has no manifest-src, so a manifest would be BLOCKED; `cspWithManifest` appends `manifest-src 'self'`.
+Test: 47 checks, 0 failed: shipped manifest passes the checker; removing start_url, display, icons, name+short_name, the 512 icon or setting prefer_related_applications true each fails it with the right message (the checker's own break-it); origin rule cases; CSP helper idempotent and exact; CSS braces balanced, inside `@media (max-width: 600px)`, no url(), @import, #, !important. Break-it on the product code: disabling the CSP helper turned 3 checks red; restored.
+Not "tested the way existing web tests are" (those drive web_server.cpp over a real loopback listener): the pieces are not served yet; a test that serves them needs the patch below.
+PATCH DESCRIPTION for web_server.cpp (file owned by other work, not edited here):
+1. In `svr.Get("/")` (around line 3379) keep the page as is but (a) replace the existing viewport `<meta>` in `kIndexHtml` with `phone::headTags()` content (viewport now has viewport-fit=cover, plus theme-color and manifest link); (b) set the CSP through `phone::cspWithManifest(...)`.
+2. Add `svr.Get(phone::kManifestPath, ...)` returning `phone::manifestJson()` as `application/manifest+json`, as an ungated static route exactly like `/app.css` and the fonts (verified: those routes at lines 3379-3421 carry no session check; the manifest holds nothing private and a browser fetches it without credentials by default, so it must not be gated).
+3. Add `svr.Get(phone::kIcon192Path ...)` and `kIcon512Path`: 192 and 512 px PNGs, which do not exist yet (resources/icon has a 256 px PNG; both must be made from generate_icon.py and embedded like the fonts).
+4. In the `/app.css` route append `phone::phoneCss()` to the joined stylesheet (the existing join is `kAppCss1 + kAppCss2 + kAppCss3` near line 884).
+5. HTTPS: installability needs https (or localhost): see N13 (TLS, owner's word still needed). Over plain http on a LAN address the page works in a phone browser but cannot be installed (`originInstallable` says so).
+Native Android/iOS builds stay with U2/U3 and are not part of this lane.
+Hand-off settings: none required; optionally show the `originInstallable` problem text on the web settings page.
