@@ -110,6 +110,27 @@ int main() {
         CHECK(h.valid);
         if (h.valid) { CHECK(relErr(h.hopRateHz, 250.0) < 0.02); }
     }
+    // --- noisy peaks: the dwell tolerance matters (a tolerance far under the peak jitter splits every dwell) ---------
+    {
+        sg::Rng rng(67);
+        auto x = hopper(static_cast<std::size_t>(rate * 2.0), rate, -7000.0, 2000.0, 8, 0.020, 0.4, rng);
+        sg::addNoise(x, 6.0, rng);
+        const FreqTrack t = trackPeak(x.data(), x.size(), rate, tp);
+        const HopReport h = analyseHops(t);
+        CHECK(h.valid);
+        if (h.valid) {
+            CHECK(h.hopCount >= 85 && h.hopCount <= 105);
+            CHECK(relErr(h.hopRateHz, 50.0) < 0.03);
+        }
+        HopParams tiny;
+        tiny.tolHz = 0.02 * t.binHz;
+        const HopReport hs = analyseHops(t, tiny);
+        CHECK(!hs.valid || hs.hopCount < 60 || hs.hopCount > 140);
+        HopParams wide;
+        wide.tolHz = 6.0 * t.binHz;   // wider than a channel spacing step is 10.7 bins: still separates them
+        const HopReport hw = analyseHops(t, wide);
+        CHECK(hw.valid && hw.hopCount >= 85 && hw.hopCount <= 105);
+    }
     // --- chirps: sawtooth up and down, and a triangle ---------------------------------------------------------------
     {
         sg::Rng rng(63);
