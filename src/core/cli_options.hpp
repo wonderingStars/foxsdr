@@ -20,6 +20,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace cascade::core::cli {
@@ -42,6 +43,9 @@ struct ParseConfig {
     // Extensions an I/Q file may have (source/iq_readers.hpp openAuto), lowercase with the dot.
     std::vector<std::string> iqExtensions = {".wav", ".rf64", ".cu8", ".cs16", ".cf32", ".sigmf-meta", ".sigmf-data"};
     std::function<bool(const std::string&)> fileExists;     // optional: when set, an I/Q file that does not exist is an error
+    // Options that another part of the start-up owns (today: --config PATH, --use-config, --frames N in engine/process_boot.cpp): (name, takes a value).
+    // They are skipped, not errors, and handed back in ParseResult::passedThrough so the caller can check they were meant.
+    std::vector<std::pair<std::string, bool>> passThrough;
     std::function<bool(const std::string&)> dirExists;      // optional: when set, a profile folder that does not exist is an error (a missing one may also be created later: leave unset)
 };
 
@@ -49,6 +53,7 @@ struct ParseResult {
     bool ok = false;                          // no errors (help requests are ok)
     Options options;
     std::vector<std::string> errors;
+    std::vector<std::string> passedThrough;   // the skipped arguments, in order
 };
 
 // One row of the option table: used for the help text and for translation.
@@ -192,6 +197,17 @@ inline ParseResult parse(const std::vector<std::string>& args, const ParseConfig
         } else if (a.size() > 2) {
             // -fVALUE: a short option with its value attached
             name = a.substr(0, 2); value = a.substr(2); hasValue = true;
+        }
+        {
+            bool passed = false;
+            for (const auto& pt : cfg.passThrough) {
+                if (name != pt.first) { continue; }
+                passed = true;
+                r.passedThrough.push_back(a);
+                if (pt.second && !hasValue && i + 1 < args.size()) { r.passedThrough.push_back(args[++i]); }
+                break;
+            }
+            if (passed) { continue; }
         }
         const std::string lname = canonicalOption(name);
         if (lname.empty()) {

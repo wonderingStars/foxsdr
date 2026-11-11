@@ -179,6 +179,24 @@ void testIqFile() {
     std::printf("I/Q file and profile: positional and -i, 8 extensions, conflicts with --radio, raw-only rate and centre, Windows path characters, existence callbacks, a realistic full line\n");
 }
 
+void testPassThrough() {
+    // the options the start-up code already owns (engine/process_boot.cpp: --config PATH, --use-config, --frames N) are skipped, not errors
+    cli::ParseConfig cfg;
+    cfg.passThrough = {{"--config", true}, {"--use-config", false}, {"--frames", true}};
+    auto p = cli::parse({"--config", "x.json", "--use-config", "--frames=10", "-f", "7M"}, cfg);
+    CHECK(p.ok && *p.options.frequencyHz == 7e6);
+    CHECK(p.passedThrough == (Args{"--config", "x.json", "--use-config", "--frames=10"}));
+    // without the pass-through list the same words are unknown options
+    p = cli::parse({"--use-config"});
+    CHECK(!p.ok && hasError(p, "unknown option --use-config") && p.passedThrough.empty());
+    // a pass-through option with a missing value does not swallow what is not there, and an option after it still parses
+    p = cli::parse({"--frames"}, cfg); CHECK(p.ok && p.passedThrough == (Args{"--frames"}));
+    p = cli::parse({"--config", "a.json", "--bogus"}, cfg); CHECK(!p.ok && hasError(p, "unknown option --bogus") && p.passedThrough.size() == 2);
+    // a pass-through option's value is not read as a file name or an option
+    p = cli::parse({"--config", "settings.wav", "-s"}, cfg); CHECK(p.ok && !p.options.iqFile && p.options.startRunning);
+    std::printf("pass-through: the start-up's own options are skipped and reported, unknown ones still refused, a value is not mistaken for a file\n");
+}
+
 void testHelp() {
     const std::string h = cli::helpText();
     CHECK(h.rfind("Usage: foxsdr [options] [I/Q file]\n", 0) == 0);
@@ -337,6 +355,7 @@ int main() {
     testFrequencies();
     testOptions();
     testIqFile();
+    testPassThrough();
     testHelp();
     testFuzz();
     testClock();

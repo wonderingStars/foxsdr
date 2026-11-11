@@ -647,8 +647,9 @@ private:
                 const std::size_t frames = std::min<std::size_t>(chunkFrames, static_cast<std::size_t>(h - t) / channels_);
                 for (std::size_t i = 0; i < frames * channels_; ++i) {
                     const float v = ring_[static_cast<std::size_t>((t + i) & (cap_ - 1))];
-                    const double s = std::isfinite(v) ? static_cast<double>(v) * scale : 0.0;
-                    q[i] = static_cast<std::int32_t>(std::clamp<std::int64_t>(static_cast<std::int64_t>(std::llround(s)), lo, hi));
+                    // clamp the DOUBLE before rounding (the Windows C runtime's llround returns 0, not the rail, for values far outside the range)
+                    const double s = std::isfinite(v) ? std::clamp(static_cast<double>(v) * scale, static_cast<double>(lo), static_cast<double>(hi)) : 0.0;
+                    q[i] = static_cast<std::int32_t>(std::llround(s));
                 }
                 t += frames * channels_;
                 tail_.store(t, std::memory_order_release);

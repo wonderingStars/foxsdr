@@ -173,8 +173,9 @@ public:
                 for (std::size_t i = 0; i < chunk; ++i) {
                     const float c[2] = {x[done + i].real(), x[done + i].imag()};
                     for (int k = 0; k < 2; ++k) {
-                        const double v = std::isfinite(c[k]) ? static_cast<double>(c[k]) * 32768.0 : 0.0;
-                        const long q = std::clamp(std::lround(v), -32768L, 32767L);
+                        // clamp the DOUBLE before rounding: the Windows C runtime's lround returns 0 (not the rail) for values outside the long range, and for NaN / inf
+                        const double v = std::isfinite(c[k]) ? std::clamp(static_cast<double>(c[k]) * 32768.0, -32768.0, 32767.0) : 0.0;
+                        const long q = std::lround(v);
                         const std::int16_t s = static_cast<std::int16_t>(q);
                         std::memcpy(p, &s, 2); p += 2;
                     }

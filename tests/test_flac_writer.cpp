@@ -3,8 +3,10 @@
 // THE DECODER BELOW IS WRITTEN HERE FROM RFC 9639 (https://www.rfc-editor.org/rfc/rfc9639.html, read 2026-11-11), NOT FROM THE WRITER: it has its own bit
 // reader, its own bitwise CRC-8 / CRC-16, its own frame-header parser, and its own MD5 check (RFC 1321 vectors, and on Windows the system's CNG MD5 as
 // a third opinion). It decodes constant, verbatim and fixed-predictor subframes, the four channel assignments, wasted bits and both Rice methods.
-// Where a FLAC-reading program is on the PC (ffmpeg, already installed; nothing was installed for this) the files are also decoded by it with CRC and
-// MD5 checking switched on, and the PCM compared byte for byte.
+// Where a FLAC-reading program is on the PC (ffmpeg, already installed; nothing was installed for this) the files are also decoded by it with CRC checking
+// on (it reports a flipped bit: checked by hand on a corrupted file), the PCM compared byte for byte, and the MD5 it computes over ITS decoded PCM
+// (`-f md5`, the RFC's definition) compared with the STREAMINFO MD5 of the file. ffmpeg does NOT report a wrong STREAMINFO MD5 by itself (also checked
+// by hand: a file with one MD5 byte flipped decodes without a message), so the MD5 is proved by the three computations above, not by its silence.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "alloc_probe.hpp"
@@ -403,6 +405,17 @@ bool haveFfmpeg() {
 }
 
 // Decodes with ffmpeg (CRC + MD5 checking on); returns the raw PCM bytes and the stderr text.
+// ffmpeg's own MD5 of the decoded PCM (hex), or empty.
+std::string ffmpegPcmMd5(const fs::path& flac, int bps) {
+    const fs::path out = g_dir / "recm-ff.md5";
+    fs::remove(out);
+    const int rc = runCmd("ffmpeg -nostdin -v error -i \"" + flac.string() + "\" -c:a " + (bps == 16 ? "pcm_s16le" : "pcm_s24le") + " -f md5 \"" + out.string() + "\" 2> NUL");
+    if (rc != 0) { return {}; }
+    const Bytes b = readFile(out);
+    const std::string t(b.begin(), b.end());
+    return t.rfind("MD5=", 0) == 0 && t.size() >= 36 ? t.substr(4, 32) : std::string();
+}
+
 bool ffmpegDecode(const fs::path& flac, int bps, Bytes* pcm, std::string* errText) {
     const fs::path out = g_dir / "recm-ff.pcm", er = g_dir / "recm-ff.err";
     fs::remove(out); fs::remove(er);
@@ -499,10 +512,11 @@ void testRoundTrips() {
             if (!errText.empty()) { std::printf("  case %d: ffmpeg said: %s\n", idx, errText.c_str()); }
             CHECK(errText.empty());
             CHECK(pcm == pcmBytes(in, c.bps));
+            CHECK(ffmpegPcmMd5(g_dir / ("recm-rt" + std::to_string(idx) + ".flac"), c.bps) == hex(d.md5, 16));   // an independent hash of ffmpeg's decoded audio equals the file's STREAMINFO MD5
         }
         ++idx;
     }
-    std::printf("round trips: %d cases decoded by the test's own decoder%s\n", idx, haveFfmpeg() ? " and by ffmpeg (CRC and MD5 checking on)" : " (ffmpeg not found: not run)");
+    std::printf("round trips: %d cases decoded by the test's own decoder%s\n", idx, haveFfmpeg() ? " and by ffmpeg (CRC checking on, PCM identical, its own MD5 of the PCM equal to STREAMINFO)" : " (ffmpeg not found: not run)");
 }
 
 void testExtremes() {
