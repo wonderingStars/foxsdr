@@ -351,8 +351,16 @@ void readerThread() {
 
 }  // namespace
 
+// A driver that faults ends the helper AT ONCE, with the exception code as the exit code (which the application reports), and without handing the
+// process to Windows Error Reporting, whose wait for a report can keep a faulted process alive for a long time.
+LONG WINAPI dieAtOnce(EXCEPTION_POINTERS* info) {
+    ::TerminateProcess(::GetCurrentProcess(), info != nullptr && info->ExceptionRecord != nullptr ? info->ExceptionRecord->ExceptionCode : 0xC0000005u);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 int wmain(int argc, wchar_t** argv) {
     ::SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+    ::SetUnhandledExceptionFilter(dieAtOnce);
     std::wstring pipe;
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::wstring(argv[i]) == L"--pipe") { pipe = argv[i + 1]; }

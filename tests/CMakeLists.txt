@@ -660,6 +660,9 @@ foreach(src ${CASCADE_TESTS})
     # A liveness bug (stuck spin loop, deadlock) must fail the suite, not hang
     # it forever — ctest's default per-test timeout is 1500 s.
     set_tests_properties(${name} PROPERTIES TIMEOUT 120)
+    if(name STREQUAL "test_extio")
+        set_tests_properties(${name} PROPERTIES TIMEOUT 300)   # real helper processes, real hangs and floods, timed: slow under load
+    endif()
     # For the sanitizer block at the end of this file: every test this loop
     # registers, by name.
     list(APPEND CASCADE_ALL_TEST_NAMES ${name})

@@ -10,6 +10,7 @@
 //       ExtioSource; retuning while streaming.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -497,7 +498,7 @@ void testBeforeTheHelper() {
         ExtioClient c(o);
         CHECK(!c.open() && c.fact().code == ex::kFactHelperMissing);
         ExtioOptions o2 = opts("tone");
-        o2.helperPath64 = writeFile("notprogram.exe", std::vector<std::uint8_t>{'n', 'o'});
+        o2.helperPath64 = writeFile("notprogram.dat", std::vector<std::uint8_t>{'n', 'o'});
         ExtioClient c2(o2);
         CHECK(!c2.open() && c2.fact().code == ex::kFactHelperStart);
     }
@@ -560,6 +561,40 @@ void testRetuneWhileStreaming() {
     c.close();
 }
 
+// The paths a settings file or a CMake variable gives: forward slashes, and a path relative to the working directory. The helper loads the DLL with
+// LOAD_WITH_ALTERED_SEARCH_PATH, which wants a full path with backslashes (found when ctest, which passes forward slashes, hung the whole test).
+void testPathSpellings() {
+    {
+        std::string dll = path("tone");
+        std::string helper = g_helper;
+        std::replace(dll.begin(), dll.end(), '\\', '/');
+        std::replace(helper.begin(), helper.end(), '\\', '/');
+        ExtioOptions o = opts("tone");
+        o.dllPath = dll;
+        o.helperPath64 = helper;
+        ExtioClient c(o);
+        CHECK(c.open());
+        CHECK(c.start(7.0e6));
+        CHECK(collect(c, 1024, 10000).size() >= 1024);
+        c.close();
+    }
+    {
+        std::error_code ec;
+        const fs::path rel = fs::relative(fs::path(path("tone")), fs::current_path(), ec);
+        const fs::path relHelper = fs::relative(fs::path(g_helper), fs::current_path(), ec);
+        if (!ec && !rel.empty() && rel.is_relative() && !relHelper.empty() && relHelper.is_relative()) {   // (different drives have no relative form)
+            ExtioOptions o = opts("tone");
+            o.dllPath = rel.string();
+            o.helperPath64 = relHelper.string();
+            ExtioClient c(o);
+            CHECK(c.open());
+            CHECK(c.start(7.0e6));
+            CHECK(collect(c, 1024, 10000).size() >= 1024);
+            c.close();
+        }
+    }
+}
+
 // OPTIONAL (arguments 3 and 4): a 32-bit helper and a 32-bit stand-in tone driver built without a .DEF file, so it exports the DECORATED stdcall names
 // (_InitHW@12 ...) the specification's note on Visual C++ describes. Skipped (and said so) when they are not given.
 void testThirtyTwoBit(const std::string& helper32, const std::string& dll32) {
@@ -586,7 +621,10 @@ void testThirtyTwoBit(const std::string& helper32, const std::string& dll32) {
 
 }  // namespace
 
+#define RUN(fn) do { std::printf("-- " #fn "%c", 10); fn(); } while (0)
+
 int main(int argc, char** argv) {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);   // progress is visible even when a runner kills a hung test
     testWire();
     testMachine();
 #if defined(_WIN32)
@@ -596,19 +634,20 @@ int main(int argc, char** argv) {
     }
     g_helper = argv[1];
     g_dir = argv[2];
-    testOffUntilChosen();
-    testTone();
-    testStatus();
-    testCrashes();
-    testHangs();
-    testFlood();
-    testSizes();
-    testBadPointer();
-    testRefusals();
-    testFloatNonFinite();
-    testBeforeTheHelper();
-    testSource();
-    testRetuneWhileStreaming();
+    RUN(testOffUntilChosen);
+    RUN(testTone);
+    RUN(testStatus);
+    RUN(testCrashes);
+    RUN(testHangs);
+    RUN(testFlood);
+    RUN(testSizes);
+    RUN(testBadPointer);
+    RUN(testRefusals);
+    RUN(testFloatNonFinite);
+    RUN(testBeforeTheHelper);
+    RUN(testSource);
+    RUN(testRetuneWhileStreaming);
+    RUN(testPathSpellings);
     if (argc >= 5) { testThirtyTwoBit(argv[3], argv[4]); }
     else { std::printf("32-bit helper and driver not given: the 32-bit run was SKIPPED%c", '\n'); }
 #else

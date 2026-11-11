@@ -246,7 +246,16 @@ struct ExtioClient::Impl {
 };
 
 namespace {
-std::wstring wideOf(const std::string& utf8) { return core::fsPathFromUtf8(utf8).native(); }
+// ABSOLUTE: the helper loads the DLL with LOAD_WITH_ALTERED_SEARCH_PATH, which needs a full path, and a relative helper path would depend on a
+// working directory the helper does not share.
+std::wstring wideOf(const std::string& utf8) {
+    std::error_code ec;
+    const std::filesystem::path p = core::fsPathFromUtf8(utf8);
+    const std::filesystem::path a = std::filesystem::absolute(p, ec);
+    std::filesystem::path r = ec ? p : a;
+    r.make_preferred();   // backslashes: LOAD_WITH_ALTERED_SEARCH_PATH does not take forward slashes (a path from a CMake variable or a settings file may have them)
+    return r.native();
+}
 }  // namespace
 
 ExtioClient::ExtioClient(ExtioOptions options) : impl_(std::make_unique<Impl>()) {
