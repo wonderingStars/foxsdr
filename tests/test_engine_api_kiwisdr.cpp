@@ -233,12 +233,23 @@ void testBAsRadioTwo() {
         for (std::size_t i = before; i < now.size(); ++i) { tuned = tuned || now[i].find("SET mod=") != std::string::npos; }
         CHECK(!tuned);
     }
-    // a VFO offset is refused (0 kept): the receiver tunes itself
+    // a VFO offset is refused (0 kept): the receiver tunes itself. (A narrow bandwidth first, so that the span clamp alone would have let 2 kHz stand.)
     {
-        const testing::Outcome o = r.send(r.aimed(FOXAPI_OP_SET_VFO_OFFSET, 2, 5000.0));
+        CHECK_EQ(r.send(r.aimed(FOXAPI_OP_SET_BANDWIDTH, 2, 3000.0)).status(), FOXAPI_OK);
+        const testing::Outcome o = r.send(r.aimed(FOXAPI_OP_SET_VFO_OFFSET, 2, 2000.0));
         CHECK_EQ(o.status(), FOXAPI_OK);
         CHECK((o.result.flags & FOXAPI_RESULT_CLAMPED) != 0u);
+        r.pump(10);
         CHECK_EQ(r.radio(2).vfoOffsetHz, 0.0);
+        const testing::Outcome free = r.send(r.aimed(FOXAPP_OP_SET_VFO_OFFSET_FREE, 2, 2000.0));
+        CHECK_EQ(free.status(), FOXAPI_OK);
+        r.pump(10);
+        CHECK_EQ(r.radio(2).vfoOffsetHz, 0.0);
+        // a click on the display moves the receiver's frequency, not an offset
+        CHECK_EQ(r.send(r.aimed(FOXAPP_OP_VFO_TO_ABSOLUTE, 2, 7110000.0)).status(), FOXAPI_OK);
+        CHECK(r.until([&] { return r.radio(2).centreHz == 7110000.0; }, 5000));
+        CHECK_EQ(r.radio(2).vfoOffsetHz, 0.0);
+        CHECK(r.until([&] { return seen.has("freq=7110.000"); }, 10000));
     }
     // the audio still plays after all that
     CHECK(r.until([&] { return toneInSpectrum(r.spectrum(2)); }, 10000));
