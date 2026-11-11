@@ -184,6 +184,24 @@ The decoders are fed upstream of all of it, as before. The 512-sample latency of
 in-process restart into the pipelines), `test_config` 3787, `test_receiver_snapshot` 860, `test_apply_command` 1782, `test_config_halves` 2495, `test_engine_main_config_roundtrip` 261, `test_radio_scope` 138 (55 ops), mock 447 (+2 known).
 **UNVERIFIED.** Nobody listened to either method through the chain; the blocks are proved on generated signals only (their record). CPU cost of the spectral method per radio in a running chain was not measured.
 
+## Break-it results of the second session (all RED, restored, rebuilt; logs `D:/foxsdr-build/mr-engine1/lane/mut-*.log`)
+
+| Removal | RED in |
+|---|---|
+| R1 (B1 range check, API layer: `validate` answers OK) | `test_engine_api_tone` (the refusal no longer carries the API's sentence, 4+ checks) |
+| R2 (B1 range check, engine layer: the CTCSS check in `applyCommand` off) | `test_engine_api_tone` (`message` no longer names CTCSS) |
+| R3 (B1 range check, pipeline layer: `setToneSquelch` no longer checks the tone) | `test_pipeline_tone` (`!p.setToneSquelch(kCtcss, 99.0 ...)` and the kept choice, 2 checks) |
+| S1 (B2: the measured entry is not stored) | `test_engine_api_smeter` (`measure(...)`, devices 0 vs 1, calibrated 0 vs 1) |
+| S2 (B2: the table is not consulted) | `test_engine_api_smeter` (calibrated, `signalDbm`, `sUnits`) |
+| S3 (B2: `smeterCal` not written) | `test_engine_api_smeter` (file, JSON) |
+| S4 (B2: units op not receiver-scoped) | `test_radio_scope`, `test_engine_api_smeter` |
+| N1 (C1: the line enhancer runs in any mode) | `test_engine_api_nrmethod` (`active() == 0u (2 vs 0)` in USB/AM) |
+| N2 (C1: the engine does not hand the method to the pipeline) | `test_engine_api_nrmethod` (pipeline mirrors, active method) |
+| N3 (C1: `nrMethod` not written) | `test_engine_api_nrmethod` (file, restored radio, pipeline) |
+| N4 (C1: op not receiver-scoped) | `test_radio_scope`, `test_engine_api_nrmethod` |
+
+The three layers of B1's range check each go RED on their own because the test now tells them apart by their own sentence (API: "outside what the engine accepts"; engine: names CTCSS or DCS; pipeline: a direct call).
+
 ## Old reader
 
 RUN, with the v0.99.104 sources (`git show v0.99.104:src/core/config.hpp` and `config.cpp` in a directory searched first, `tools/old_reader_probe/build_probe.bat`; `new_main.cpp` gained a fifth file for this lane:
