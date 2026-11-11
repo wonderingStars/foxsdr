@@ -1,0 +1,48 @@
+#! frames=1900 size=1280x720 bank=4 sections=4:0
+# bar-small-1280: THE REPAIR OF THE LAST MASTER LAMPS AT 1280 x 720 (screen stage S5; docs/multi-radio-records/screen-s5.md). With six to eight radios the lamps of radios 6 to 8 were cut out of the one-row bar in
+# stage S4. Now the bar wraps onto a second row. EIGHT live radios; each of the last lamps and the page key, Link tuning and Start together is operated with a POINTER click at its centre (refused when outside the
+# window) and its effect read back; shots in both skins, in 2 x 2 (page 2) and Side by side.
+10 state workspace.radios == 1
++1 radio add 2 60000
++1 radio add 3 90000
++1 radio add 4 120000
++1 radio add 5 150000
++1 radio add 6 180000
++1 radio add 7 210000
++1 radio add 8 240000
++40 state workspace.radios == 8
++1 click "2 x 2"
++15 state workspace.shown == 2
++10 shot "bar-1280-eight-workbench.png"
+state workspace.pagekeys == 2
++1 press "Radio 8 master"
++8 state workspace.selected == 8
+state workspace.page == 1
++1 press "Radio 7 master"
++8 state workspace.selected == 7
++1 press "Radio 6 master"
++8 state workspace.selected == 6
++1 press "Radios 1-4"
++8 state workspace.page == 0
++1 press "Radios 5-8"
++8 state workspace.page == 1
++1 press "Controls follow Radio 8"
++8 state workspace.selected == 8
++1 press "STOP ALL"
++20 state workspace.r.8.running == 0
++1 press "Start together"
++40 state workspace.r.8.running == 1
+state workspace.r.1.running == 1
++1 press "Link tuning"
++6 state workspace.link == 1
++1 shot "bar-1280-eight-link-workbench.png"
++1 press "Link tuning"
++6 state workspace.link == 0
++1 choose "Theme" "Night Watch"
++12 state look.bg != "#15171b"
++8 shot "bar-1280-eight-night.png"
++1 press "Radio 8 master"
++8 state workspace.selected == 8
++1 click "Side by side"
++15 state workspace.layout == 1
++8 shot "bar-1280-eight-two-night.png"

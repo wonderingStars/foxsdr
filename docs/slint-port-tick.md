@@ -3141,6 +3141,15 @@ Phase 3, the EXTEND bank, the Plugin store, the Fitted modules window and the pa
 | 4228 | Status bar: "Add a radio" key and its sheet | key | PRESENT | the way to add a radio; the one new thing a one-radio user sees; opens the same card in a sheet (the lowest free slot), shown while fewer than eight radios are open |
 | 4229 | Radio pane: close key (Remove Radio n) | key | PRESENT | radios 2 and up; removes a stopped radio at once (RADIO_REMOVE), asks first when the radio runs or records |
 | 4230 | Remove question: Remove / Cancel | dialog | PRESENT | the sheet before a running or recording radio is removed |
+| 4231 | Workspace bar: Link tuning | key | PRESENT | an option, OFF by default (screen stage S5): linked radios move together by the same amount and keep their gaps; every open radio joins when it goes on, a radio added later joins, a removed radio leaves; lit while on; the tip is the rule in words |
+| 4232 | Workspace bar: Start together | key | PRESENT | RUN aimed at every open radio (FOXAPI_TARGET_ALL_RADIOS), one command; live only while some open radio is stopped |
+| 4233 | Radio pane: link key (Link Radio n) | key | PRESENT | only while Link tuning is on: takes the radio out of the group or puts it back; lit = in the group, plain = left out |
+| 4234 | Radio pane: could not follow (the link key in the danger ink with an amber dot) | indicator | PRESENT | a linked radio that stayed short of the group (a tuning limit): the key's tip says where it stays; the group's intended frequency is kept and the gap comes back when the group moves back |
+| 4235 | Workspace bar: the radios' selector, STOP keys and MASTER lamps in a compact window, on every tab | key | PRESENT | the bar wraps its groups onto as many 30 px rows as the width asks (nothing is clipped down to 624 px wide) and, in a window under 1760 px, is over the PATCH, SCOPE and plugin tabs as well as the receiver |
+| 4236 | Keyboard: Ctrl+1 to Ctrl+8 select a radio | key | PRESENT | the key table's rows selectRadio1..8 (rebindable, saved, listed in the keys page under "Radio"); a radio that is not open is left alone; the page that holds the radio is shown |
+| 4237 | Keyboard: Alt+PageUp / Alt+PageDown turn the page of radios | key | PRESENT | the rows radioPagePrev / radioPageNext; clamped at the ends; where One is shown they select the neighbouring radio; Ctrl+PageUp / Ctrl+PageDown stay "tune one screen width" |
+| 4238 | Key bindings: the "Radio" group (Select Radio n, Previous page of radios, Next page of radios) | list | PRESENT | ten rows at the foot of the key table, listed and rebound like every other row |
+| 4239 | Saved layout: layout, page, selected radio, each splitter, Link and the radios left out of the group | behaviour | PRESENT | one entry "workspace" in the interface half's view3d setting; restored at start (what the engine restored shows: with one radio the window shows One and radio 1 and the saved eight-radio layout is kept unchanged) |
 
 ## SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md)
 

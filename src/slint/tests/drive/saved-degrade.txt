@@ -1,0 +1,42 @@
+#! frames=1700 size=1600x900 config=saved-workspace-eight.json
+# saved-degrade: THE SAVED LAYOUT DEGRADES QUIETLY AND IS KEPT (screen stage S5; docs/multi-radio-records/screen-s5.md). The settings file is seeded with the layout of an eight-radio session: 2 x 2 on page 2,
+# radio 6 selected, Link on with radio 4 left out of the group, the splitters of radios 2 and 5 moved (30 % and 62 %). The engine here comes back with ONE radio (radios 2 to 8 are saved by its stage 5, which is not
+# in this tree): the window shows One and radio 1 (the chosen layout is 2 x 2, shown 0), the saved record is NOT overwritten (it is the same text in the screen's memory, in the interface half and in the engine's
+# table, a long while later). Then radios 2 to 6 return inside the first ten seconds: the saved layout applies again - 2 x 2 shown, radio 6 selected on page 2, Link on with radio 4 out of the group, each splitter
+# where it was - and the record is still the same text, because nothing the user did changed it.
+10 state workspace.radios == 1
+state workspace.layout == 2
+state workspace.shown == 0
+state workspace.selected == 1
+state workspace.page == 0
+state workspace.link == 1
+state workspace.split.2 == 30
+state workspace.split.5 == 62
+state workspace.split.1 == 45
+state workspace.saved == "lay=2,pg=1,sel=6,lk=1,ex=8,sp=45.30.45.45.62.45.45.90"
++1 shot "saved-degrade-one.png"
++60 state workspace.savedview contains "workspace:lay=2,pg=1,sel=6,lk=1,ex=8,sp=45.30.45.45.62.45.45.90"
+state workspace.saved == "lay=2,pg=1,sel=6,lk=1,ex=8,sp=45.30.45.45.62.45.45.90"
+state fact.config.interface contains "workspace:lay=2,pg=1,sel=6,lk=1,ex=8,sp=45.30.45.45.62.45.45.90"
+state workspace.layout == 2
+state workspace.shown == 0
+state workspace.selected == 1
+# the radios come back
++1 radio add 2 60000
++1 radio add 3 90000
++1 radio add 4 120000
++1 radio add 5 150000
++1 radio add 6 180000
++40 state workspace.radios == 6
++15 state workspace.selected == 6
+state workspace.page == 1
+state workspace.shown == 2
+state workspace.cells == "5,6,0,0"
+state workspace.linked == "1,2,3,5,6"
+state workspace.link.4 == 0
+state workspace.link.6 == 1
+state workspace.split.2 == 30
++1 shot "saved-degrade-six.png"
++40 state workspace.saved == "lay=2,pg=1,sel=6,lk=1,ex=8,sp=45.30.45.45.62.45.45.90"
+state workspace.savedview contains "workspace:lay=2,pg=1,sel=6,lk=1,ex=8,sp=45.30.45.45.62.45.45.90"
+state fact.config.interface contains "workspace:lay=2,pg=1,sel=6,lk=1,ex=8,sp=45.30.45.45.62.45.45.90"

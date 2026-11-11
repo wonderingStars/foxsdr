@@ -24,6 +24,10 @@ struct PaneContext {
     int traceMode = 1;              // shared: 0 normal, 1 peak hold, 2 average
     float hoverX = -1;              // the pointer over this pane's spectrum or waterfall, fraction of the plot; -1 = not over it
     std::string cursorText;         // "145.212 MHz . -78.4 dB" for hoverX
+    // STAGE S5 (docs/multi-radio-records/screen-s5.md): the pane's link key, drawn only while Link tuning is on
+    bool linkShown = false;
+    int link = 0;                   // 0 left out of the group, 1 linked, 2 linked but could not follow
+    std::string linkLabel, linkTip;
 };
 
 class WorkspacePublisher {

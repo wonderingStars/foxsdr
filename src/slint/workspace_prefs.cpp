@@ -111,7 +111,13 @@ bool WorkspaceMemory::userPage(int page) {
 bool WorkspaceMemory::observe(int layout, const std::array<float, 8>& splits, bool linkOn, std::uint32_t excluded) {
     bool changed = false;
     const int lay = std::clamp(layout, 0, 2);
-    if (saved_.layout != lay) { saved_.layout = lay; changed = true; }
+    if (saved_.layout != lay) {
+        saved_.layout = lay;
+        // a page is a page OF A LAYOUT (Four: radios 1-4, 5-8; Two: pairs; One: one radio): the saved page follows the layout the user chose, onto the page that holds the saved selection
+        const int size = lay == 2 ? 4 : lay == 1 ? 2 : 1;
+        saved_.page = std::clamp((saved_.selected - 1) / size, 0, 7);
+        changed = true;
+    }
     for (std::size_t i = 0; i < splits.size(); ++i) {
         if (percent(saved_.splits[i]) != percent(splits[i])) { saved_.splits[i] = static_cast<float>(percent(splits[i])) / 100.0f; changed = true; }
     }

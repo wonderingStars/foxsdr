@@ -19,8 +19,10 @@
 //   press "<label>"                     a pointer click at the control's centre (the real gesture; a control outside the window is refused)
 //   type "<label>" "<text>"             a field: pointer-focused, its text selected, the text typed (no Enter: `key enter` commits)
 //   key <name>                          a key to the focused control: enter, escape, tab, backspace, delete, space, up, down, left,
-//                                       right, f1..f12, ctrl+<letter|digit>, or ONE printable character typed as itself (a letter
-//                                       into whatever has the focus - a popup's filter field, say - without a pointer)
+//                                       right, pageup, pagedown, home, end, f1..f12, ctrl+<letter|digit>, any chord of ctrl+ shift+ alt+
+//                                       (in that order) in front of a named key or one character (ctrl+pagedown, alt+pageup, ctrl+8),
+//                                       or ONE printable character typed as itself (a letter into whatever has the focus - a
+//                                       popup's filter field, say - without a pointer)
 //   slider "<label>" <0..1>             a slider: a pointer press at that fraction of its track
 //   scroll "<label>" <pixels>           a wheel scroll at the control's centre: positive shows what is BELOW (the content moves up),
 //                                       negative what is above - a section body taller than the window is reached this way
@@ -37,6 +39,8 @@
 //   radio add [<n> [<toneHz>]]          TEST ONLY: opens a GENERATOR radio through the engine's real RADIO_ADD (number n, 0 or none = the lowest free; the tone in Hz from its
 //                                       centre, none = 25 kHz times its number), started running (docs/multi-radio-records/screen-s4.md); the effect is read back with `state`
 //   radio remove <n>                    TEST ONLY: RADIO_REMOVE of radio n (2 or more), through the engine
+//   radio range <n> <loHz> <hiHz>       TEST ONLY: radio n (1 to 8) is given a tuning range for LINK TUNING (docs/multi-radio-records/screen-s5.md): the follower's request is clamped to it, as a device
+//                                       that clamps to its edge would. The product cannot ask a device for its range (the API has none), so a limit can be shown only by a seam; "radio range <n> 0 0" removes it
 //
 //   "<label>"#<n> picks the n-th control (from 1) when several carry the label (a sheet's Close beside the title bar's).
 //
@@ -64,7 +68,8 @@ struct Step {
     std::string text;     // type: the text; choose: the item; key: the key name; expect / state: the wanted value
     std::string what;     // expect: value | label | checked | enabled; state: the comparison
     std::string compare;  // expect: equals | contains
-    double number = 0;    // slider: the fraction; scroll: the pixels; radio: the tone in Hz
+    double number = 0;    // slider: the fraction; scroll: the pixels; radio: the tone in Hz (add), the low end in Hz (range)
+    double number2 = 0;   // radio range: the high end in Hz
     int radioNo = 0;      // radio: the radio's number
 };
 
@@ -99,8 +104,8 @@ public:
     virtual std::string state(const std::string& name, std::string& out) = 0;
     virtual std::string shot(const std::string& file) = 0;
     virtual std::string dumpControls() = 0;   // the `dump` verb (named apart from nlohmann's dump() for tests/test_json_dump_policy)
-    // The `radio` verb (a bounded run's test seam): what is "add" or "remove", n the radio's number (0 = the lowest free), toneHz a generator radio's tone (0 = the engine's default).
-    virtual std::string radio(const std::string& what, int n, double toneHz) { (void)what; (void)n; (void)toneHz; return "this target cannot add or remove radios"; }
+    // The `radio` verb (a bounded run's test seam): what is "add", "remove" or "range", n the radio's number (0 = the lowest free), toneHz a generator radio's tone (0 = the engine's default) or, for a range, its low end, hz2 its high end.
+    virtual std::string radio(const std::string& what, int n, double toneHz, double hz2 = 0) { (void)what; (void)n; (void)toneHz; (void)hz2; return "this target cannot add or remove radios"; }
 };
 
 struct DriveReport {

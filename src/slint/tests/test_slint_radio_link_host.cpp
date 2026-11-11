@@ -361,8 +361,11 @@ int main() {
         CHECK(m.saved().selected == 6 && m.saved().page == 1 && m.saved().layout == 2 && m.saved().linkOn && m.saved().excluded == 8u && m.saved().splits[0] == 0.30f && m.saved().splits[4] == 0.60f);
         m.markWritten();
         CHECK(!m.dirty());
-        // a layout the user chose
-        CHECK(m.observe(1, splits, true, 0x08u) && m.saved().layout == 1 && m.dirty());
+        // a layout the user chose: the saved page follows it onto the page of that layout that holds the saved radio (radio 6: Four page 2 = index 1, Two page 3 = index 2, One = index 5)
+        CHECK(m.observe(1, splits, true, 0x08u) && m.saved().layout == 1 && m.saved().page == 2 && m.dirty());
+        CHECK(m.observe(0, splits, true, 0x08u) && m.saved().layout == 0 && m.saved().page == 5);
+        CHECK(m.observe(2, splits, true, 0x08u) && m.saved().layout == 2 && m.saved().page == 1);
+        CHECK(m.observe(1, splits, true, 0x08u) && m.saved().page == 2);
         m.markWritten();
         CHECK(m.userSelected(3, 1) && m.saved().selected == 3 && m.dirty());
         m.markWritten();

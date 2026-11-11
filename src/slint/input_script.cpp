@@ -4,6 +4,7 @@
 
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <sstream>
 
@@ -68,7 +69,7 @@ bool isNumber(const std::string& t, double& v) {
 }
 
 bool knownKey(const std::string& k) {
-    static const char* const names[] = {"enter", "return", "escape", "tab", "backspace", "delete", "space", "up", "down", "left", "right"};
+    static const char* const names[] = {"enter", "return", "escape", "tab", "backspace", "delete", "space", "up", "down", "left", "right", "pageup", "pagedown", "home", "end"};
     for (const char* n : names) { if (k == n) { return true; } }
     if (k.size() >= 2 && k[0] == 'f') {
         const int n = std::atoi(k.c_str() + 1);
@@ -77,7 +78,17 @@ bool knownKey(const std::string& k) {
         return digits && n >= 1 && n <= 12;
     }
     if (k.size() == 1 && std::isprint(static_cast<unsigned char>(k[0])) && k[0] != ' ') { return true; }   // one character, typed as itself
-    return k.size() == 6 && k.rfind("ctrl+", 0) == 0 && std::isalnum(static_cast<unsigned char>(k[5]));   // ctrl+<letter> or ctrl+<digit> (Ctrl+0, docs 6.61)
+    // A CHORD: ctrl+ shift+ alt+ (in that order, each at most once, at least one) in front of a named key, a function key or one letter or digit (ctrl+<letter|digit> is Ctrl+0, docs 6.61;
+    // ctrl+pagedown, alt+pageup and ctrl+8 are screen stage S5's)
+    std::string rest = k;
+    int mods = 0;
+    for (const char* m : {"ctrl+", "shift+", "alt+"}) {
+        if (rest.rfind(m, 0) == 0) { rest.erase(0, std::strlen(m)); ++mods; }
+    }
+    if (mods == 0 || rest.empty()) { return false; }
+    if (rest.size() == 1) { return std::isalnum(static_cast<unsigned char>(rest[0])) != 0; }
+    if (rest.rfind("ctrl+", 0) == 0 || rest.rfind("shift+", 0) == 0 || rest.rfind("alt+", 0) == 0) { return false; }   // the modifiers are in the order ctrl, shift, alt, once each
+    return knownKey(rest);
 }
 
 }  // namespace
@@ -222,7 +233,7 @@ Script parseInputScript(const std::string& text) {
         } else if (verb == "radio") {
             st.verb = Verb::Radio;
             st.label = c.word();
-            if (st.label != "add" && st.label != "remove") { bad("radio takes add or remove, not \"" + st.label + "\""); continue; }
+            if (st.label != "add" && st.label != "remove" && st.label != "range") { bad("radio takes add, remove or range, not \"" + st.label + "\""); continue; }
             double v = 0;
             std::string num = c.word();
             if (!num.empty()) {
@@ -230,10 +241,19 @@ Script parseInputScript(const std::string& text) {
                 st.radioNo = static_cast<int>(v);
             }
             if (st.label == "remove" && st.radioNo < 2) { bad("radio remove takes the number of a radio from 2 to 8"); continue; }
-            num = c.word();
-            if (!num.empty()) {
-                if (st.label == "remove" || !isNumber(num, v) || std::fabs(v) > 1.0e7) { bad("radio add takes a tone in Hz last: \"" + num + "\""); continue; }
-                st.number = v;
+            if (st.label == "range") {
+                if (st.radioNo < 1) { bad("radio range takes the number of a radio from 1 to 8"); continue; }
+                double lo = 0, hi = 0;
+                const std::string a = c.word(), b = c.word();
+                if (!isNumber(a, lo) || !isNumber(b, hi) || lo < 0.0 || hi < lo || hi > 1.0e12) { bad("radio range takes a low and a high end in Hz, low not above high: \"" + a + "\" \"" + b + "\""); continue; }
+                st.number = lo;
+                st.number2 = hi;
+            } else {
+                num = c.word();
+                if (!num.empty()) {
+                    if (st.label == "remove" || !isNumber(num, v) || std::fabs(v) > 1.0e7) { bad("radio add takes a tone in Hz last: \"" + num + "\""); continue; }
+                    st.number = v;
+                }
             }
         } else {
             bad("unknown verb \"" + verb + "\"");
@@ -320,7 +340,7 @@ void Driver::tick(long tick, const std::function<void(const std::string&)>& say)
             case Verb::Dump: why = target_.dumpControls(); break;
             case Verb::Radio:
                 head += " " + st.label + " " + std::to_string(st.radioNo);
-                why = target_.radio(st.label, st.radioNo, st.number);
+                why = target_.radio(st.label, st.radioNo, st.number, st.number2);
                 break;
         }
         if (why.empty()) {

@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2167 | 542 | 92 | 1533 | 0 |
+| 2176 | 550 | 92 | 1534 | 0 |
 
-Of the 1280 rows that are controls (the 887 readout-like rows left out): 542 asserted, 92 driven without a read-back, 646 not drivable.
+Of the 1289 rows that are controls (the 887 readout-like rows left out): 550 asserted, 92 driven without a read-back, 647 not drivable.
 
-NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 887, other 217, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -200,7 +200,7 @@ NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120,
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
 | 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 96 | 48 | 0 | 48 | 35 | 0 |
-| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 87 | 50 | 9 | 28 | 19 | 0 |
+| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 96 | 58 | 9 | 29 | 19 | 0 |
 | SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md) | 6 | 5 | 1 | 0 | 0 | 0 |
 
 ## Every row
@@ -3265,6 +3265,15 @@ NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120,
 | 4228 | Status bar: "Add a radio" key and its sheet | key | DRIVEN+ASSERTED | deck-add | click "Add a radio" in the status bar: the sheet opens (state workspace.open == 1), "Add Signal generator"#2 adds, the sheet closes |
 | 4229 | Radio pane: close key (Remove Radio n) | key | DRIVEN+ASSERTED | deck-add | click "Remove Radio 2" on a stopped radio: gone at once (state workspace.radios); on a running one the question comes first (state workspace.removeask == 2) |
 | 4230 | Remove question: Remove / Cancel | dialog | DRIVEN+ASSERTED | deck-add | click "Remove" in the question: the radio goes; "Cancel": it stays |
+| 4231 | Workspace bar: Link tuning | key | DRIVEN+ASSERTED | link-follow | click "Link tuning": state workspace.link, workspace.linked and the key checked; with it on +10 kHz on radio 1 (Ctrl+Up) moves radios 2 and 3 by +10 kHz, off it moves nobody (state workspace.r.<n>.tuned from the engine); link-limit, link-remove |
+| 4232 | Workspace bar: Start together | key | DRIVEN+ASSERTED | together | click "Start together" with every radio stopped: state workspace.r.<n>.running == 1 for all four, the key dead while all run (expect enabled), the spread of the first frames measured (state workspace.together) |
+| 4233 | Radio pane: link key (Link Radio n) | key | DRIVEN+ASSERTED | link-follow | click "Link Radio 3": state workspace.link.3 == 0 and workspace.linked, expect the key checked; the radio is not moved by radio 1 and does not move it; clicked again it joins with the gap it has |
+| 4234 | Radio pane: could not follow (the link key in the danger ink with an amber dot) | indicator | DRIVEN+ASSERTED | link-limit | radio range 2 ... then Ctrl+Up past the limit: state workspace.link.2 == 2 and workspace.intended.2 (what the group wants) while workspace.r.2.tuned stays at the limit; back down, link.2 == 1 and the gap is back |
+| 4235 | Workspace bar: the radios' selector, STOP keys and MASTER lamps in a compact window, on every tab | key | DRIVEN+ASSERTED | bar-small | press "STOP ALL", "Radio 8 master", "Controls follow Radio 4", "Link tuning" and "Start together" at 624 x 400, 800 x 560 and 1280 x 720 with six to eight radios: a pointer click at each control's centre (refused outside the window) and the effect read back; bar-tabs: the same on the PATCH and SCOPE tabs |
+| 4236 | Keyboard: Ctrl+1 to Ctrl+8 select a radio | key | DRIVEN+ASSERTED | keys-radio | key ctrl+1 .. ctrl+8: state workspace.selected and workspace.page; ctrl+8 with radio 8 not open changes nothing; link-follow selects radio 3 with ctrl+3 |
+| 4237 | Keyboard: Alt+PageUp / Alt+PageDown turn the page of radios | key | DRIVEN+ASSERTED | keys-radio | key alt+pagedown / alt+pageup: state workspace.page and workspace.cells, clamped at the ends, four pages in Side by side; ctrl+pagedown still retunes the selected radio |
+| 4238 | Key bindings: the "Radio" group (Select Radio n, Previous page of radios, Next page of radios) | list | NOT DRIVABLE | - | the rows are the key table's own: held by test_slint_host_keydispatch (ten rows free, answered, rebound, saved) and test_slint_host_system (listed under "Radio"); the SYSTEM bank's capture is the existing one |
+| 4239 | Saved layout: layout, page, selected radio, each splitter, Link and the radios left out of the group | behaviour | DRIVEN+ASSERTED | saved-degrade | seeded with an eight-radio layout and started with one radio: state workspace.layout == 2 with workspace.shown == 0 and the record unchanged (state workspace.savedview); radios added inside ten seconds bring back the saved selection, Link and the splitters; saved-roundtrip writes it and saved-restore reads it back |
 
 ### SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md)
 

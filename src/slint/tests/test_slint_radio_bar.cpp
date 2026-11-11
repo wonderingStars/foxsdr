@@ -208,6 +208,29 @@ int main() {
         }
     }
 
+    // EIGHT RADIOS IN SIDE BY SIDE are four pages of two: four page keys ("Radios 1-2" ... "Radios 7-8"), the widest the page group gets. The host offers page keys only while a multi-pane layout is on screen
+    // (window of 1280 x 720 or more: a centre column of 920 px with the panel open), so the group is checked from there up: every key inside the bar, at most two rows, none overlapping.
+    for (const char* skinName : {"workbench", "night"}) {
+        ui->global<Theme>().set_skin(std::string(skinName) == "night" ? night : workbench);
+        ui->set_compact(true);
+        ui->set_receiver(true);
+        feed(8);
+        g.set_page_labels(modelOf(std::vector<slint::SharedString>{ss("Radios 1-2"), ss("Radios 3-4"), ss("Radios 5-6"), ss("Radios 7-8")}));
+        for (const int w : {920, 1100, 1400}) {
+            ui->set_bar_w(static_cast<float>(w));
+            Frame f = render(ui, W, H);
+            const float barH = ui->get_bar_height();
+            CHECKV(ui->get_bar_rows() <= 2, "%s: four page keys at %d px need %d rows", skinName, w, ui->get_bar_rows());
+            for (const char* label : {"Radios 1-2", "Radios 3-4", "Radios 5-6", "Radios 7-8", "Link tuning", "Radio 8 master", "STOP ALL"}) {
+                const auto e = one(label);
+                CHECKV(e.has_value(), "%s %d px: \"%s\" is there", skinName, w, label);
+                if (e) { const Box b = boxOf(*e); CHECKV(b.x0 >= -0.5f && b.x1 <= static_cast<float>(w) + 0.5f && b.y1 <= barH + 0.5f, "%s %d px: \"%s\" lies inside the bar (%.0f to %.0f)", skinName, w, label, static_cast<double>(b.x0), static_cast<double>(b.x1)); }
+            }
+            if (w == 920) { f.savePng(shotDir() + "bar-" + skinName + "-four-page-keys-920.png"); }
+        }
+        feed(8);
+    }
+
     // LONG WORDS wrap, they are not cut: the receiver tab of a compact window at the smallest width with a wordy Link key and notice
     {
         ui->global<Theme>().set_skin(workbench);
