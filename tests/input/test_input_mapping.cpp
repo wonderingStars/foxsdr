@@ -80,8 +80,8 @@ int main() {
         Settings s = settingsFromText(text, &rep);
         CHECK(rep.bindingsRead == 1 && s.version == 3 && s.bindings.size() == 1 && s.bindings[0].accel.maxFactor == 2.0);
         const json out = settingsToJson(s);
-        CHECK(out["future"]["a"] == 1);
-        CHECK(out["bindings"][0]["colour"] == "red");
+        CHECK(out.contains("future") && out["future"].value("a", 0) == 1);
+        CHECK(out["bindings"][0].value("colour", std::string()) == "red");
     }
     // ---- MALFORMED: nothing throws, bad entries are counted and skipped, good ones survive ----------------------------------------------------------
     {

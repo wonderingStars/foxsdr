@@ -240,8 +240,7 @@ int main() {
         }
         CHECK(wellFormed);
         CHECK(inRange);
-        std::printf("note: midi fuzz: 2000000 bytes, %ld events
-", events);
+        std::printf("note: midi fuzz: 2000000 bytes, %ld events\n", events);
         CHECK(events > 1000);
     }
     return testSummary("test_input_midi");

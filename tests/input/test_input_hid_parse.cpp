@@ -202,8 +202,7 @@ int main() {
             }
         }
         CHECK(ok);
-        std::printf("note: hid fuzz: 1000000 reports, %ld events
-", events);
+        std::printf("note: hid fuzz: 1000000 reports, %ld events\n", events);
         CHECK(events > 1000);
     }
     return testSummary("test_input_hid_parse");

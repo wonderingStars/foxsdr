@@ -183,7 +183,7 @@ int main() {
         const auto t0 = Clock::now();
         CHECK(dev.close(2000));
         const long long ms = msSince(t0);
-        CHECK(ms < 1500);
+        CHECK(ms < 500);
         std::printf("note: close with a pending read took %lld ms\n", ms);
         CHECK(q.size() == 0);  // a deliberate close is not a disconnect
         CloseHandle(p.client);
@@ -220,7 +220,7 @@ int main() {
         const auto t0 = Clock::now();
         CHECK(dev->close(2000));
         CHECK(dev->close(2000));  // twice
-        CHECK(msSince(t0) < 1500);
+        CHECK(msSince(t0) < 500);
         go = false;
         writer.join();
         dev.reset();
