@@ -43,7 +43,10 @@ Work list by grep (not exhaustive of behaviour; counts of `#if` lines naming the
 - Not covered by grep: 38 files include POSIX headers (`<sys/...>`, `<linux/...>`, `<unistd.h>`, epoll, pthread_setname) directly; audio (PortAudio backend), GL (macOS OpenGL 4.1 maximum), USB without usbfs, code signing and notarisation.
 
 ## Gates
-GATE_PLACEHOLDER
+Own tests alone at the tip: `test_linux_update` 208 checks, 0 failed; `test_udev_rules` 133 checks, 0 failed; `test_packaging_files` 25 checks, 0 failed; the Windows updater's `test_updater` (untouched) 384 checks, 0 failed.
+Headless gate, once, on the full build at the tip (`ctest --test-dir D:/foxsdr-build/feat-plat -C Release -L "headless|slint" -j4 --timeout 300`, log `D:/foxsdr-build/plat-gate.log`, run on a heavily loaded machine):
+`99% tests passed, 8 tests failed out of 687`, `Total Test time (real) = 1635.53 sec`.
+Failed: test_airband_data, test_band_plan, test_converter_call_sites, test_page_resize_id, test_png_decode, test_window_failed_app (all six are the brief's KNOWN FALSE FAILURES on builds under D:/foxsdr-build / Slint off, not re-run); test_sentinel and test_plugin_store_window_free (not on the known list: each re-run alone once: `100% tests passed out of 2`, test_sentinel 7.36 s, test_plugin_store_window_free 29.50 s, so load flakes). No failure involves a file of this lane. The Windows build and its installer-layout tests are in that set and passed; the Windows tree's `cmake_install.cmake` gained no content from the new include.
 
 ## What a pushed branch and manual CI runs would prove
 - `packaging` / `deb-rpm`: the deb and rpm are produced; both hold the programs, launchers, resources, helper, policy and rules (grep of both listings); the installed `foxsdr-engine --version` prints `FoxSDR <version>`; the helper refuses an argument as root; dpkg owns the rules file. Dispatch: Actions tab -> packaging -> Run workflow (branch `feat/platform`), or `gh workflow run packaging.yml --ref feat/platform`.
