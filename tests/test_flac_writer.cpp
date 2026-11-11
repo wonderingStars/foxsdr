@@ -812,7 +812,7 @@ void testAsync() {
         src[2 * i] = a; src[2 * i + 1] = -a * 0.7f;
     }
     // hostile values: NaN, +-inf, beyond full scale
-    src[10] = std::nanf(""); src[11] = INFINITY; src[12] = -INFINITY; src[13] = 3.0f; src[14] = -3.0f; src[15] = 1.0f;
+    src[10] = std::nanf(""); src[11] = INFINITY; src[12] = -INFINITY; src[13] = 3.0f; src[14] = -3.0f; src[15] = 1.0f; src[16] = 1e30f; src[17] = -1e30f; src[18] = 3.4e38f; src[19] = -3.4e38f;
     double maxPushUs = 0.0;
     long newsDuringPush = 0;
     std::thread producer([&] {
@@ -847,7 +847,7 @@ void testAsync() {
     }
     if (!same) { std::printf("  async: first difference at sample %zu\n", firstBad); }
     CHECK(same);
-    CHECK(d.ok && d.pcm[11] == 0 && d.pcm[12] == 0 && d.pcm[13] == 32767 && d.pcm[14] == -32768 && d.pcm[15] == 32767);
+    CHECK(d.ok && d.pcm[11] == 0 && d.pcm[12] == 0 && d.pcm[13] == 32767 && d.pcm[14] == -32768 && d.pcm[15] == 32767 && d.pcm[16] == 32767 && d.pcm[17] == -32768 && d.pcm[18] == 32767 && d.pcm[19] == -32768);
     std::printf("async: 6 s stereo through the recorder from a producer thread: 0 dropped, 0 allocations in %zu push calls, slowest push %.1f us, file decodes to the expected quantisation (NaN and inf = 0, clamped at the rails)\n",
                 total / 480, maxPushUs);
 

@@ -100,7 +100,7 @@ void testRoundTripFloat() {
 void testPcm16() {
     const std::string p = (g_dir / "recm-if-p16.wav").string();
     std::vector<cf> in = {cf(0, 0), cf(0.5f, -0.5f), cf(1.0f, -1.0f), cf(-1.0f, 1.0f), cf(2.0f, -2.0f), cf(1.5f, 100.0f), cf(std::nanf(""), INFINITY), cf(-INFINITY, 0.25f),
-                          cf(1.0f / 65536.0f, -1.0f / 65536.0f), cf(3.0f / 65536.0f, -3.0f / 65536.0f), cf(0.99999f, -0.99999f)};
+                          cf(1.0f / 65536.0f, -1.0f / 65536.0f), cf(3.0f / 65536.0f, -3.0f / 65536.0f), cf(0.99999f, -0.99999f), cf(1e30f, -1e30f), cf(3.4e38f, -3.4e38f)};
     CHECK(writeAll(p, meta(), ir::SampleFormat::Pcm16, in));
     const ir::IfHeader h = ir::readIfHeader(p);
     CHECK(h.ok && h.format == ir::SampleFormat::Pcm16 && h.frames == in.size());
@@ -110,12 +110,13 @@ void testPcm16() {
     if (r != nullptr) {
         std::vector<cf> back(in.size());
         CHECK(r->read(back.data(), back.size()) == in.size());
-        auto q = [](float v) { return std::isfinite(v) ? static_cast<float>(std::max(-32768L, std::min(32767L, std::lround(static_cast<double>(v) * 32768.0)))) / 32768.0f : 0.0f; };
+        auto q = [](float v) { return std::isfinite(v) ? static_cast<float>(std::lround(std::max(-32768.0, std::min(32767.0, static_cast<double>(v) * 32768.0)))) / 32768.0f : 0.0f; };
         bool ok = true;
         for (std::size_t i = 0; i < in.size(); ++i) { if (back[i].real() != q(in[i].real()) || back[i].imag() != q(in[i].imag())) { ok = false; std::printf("  frame %zu: got (%g, %g)\n", i, back[i].real(), back[i].imag()); } }
         CHECK(ok);
         CHECK(back[2].real() == 32767.0f / 32768.0f && back[3].real() == -1.0f);       // the rails: +1.0 saturates, -1.0 is exact
         CHECK(back[6] == cf(0.0f, 0.0f) && back[7].real() == 0.0f);                     // non-finite -> 0
+        CHECK(back[11] == cf(32767.0f / 32768.0f, -1.0f) && back[12] == cf(32767.0f / 32768.0f, -1.0f));   // huge finite values go to the rails, not to 0 (the C runtime's lround gives 0 there)
         CHECK(back[8].real() == 1.0f / 32768.0f && back[9].real() == 2.0f / 32768.0f);   // 0.5 LSB and 1.5 LSB round half away from zero to 1 and 2 LSB
     }
     const Bytes b = readAll(p);
