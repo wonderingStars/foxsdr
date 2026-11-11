@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "core/utf8_text.hpp"
 #include "export_logic.hpp"
 #include "spectrum_extras.hpp"
 
@@ -20,7 +21,7 @@ const Rgba kBg{0x04, 0x0a, 0x06, 255}, kGrid{0x1c, 0x3a, 0x28, 255}, kBeam{0x5a,
 void text(Rgba* px, int w, int h, int x, int y, const std::string& t) {
     foxsdr::slintexport::drawLabelRgba(reinterpret_cast<std::uint8_t*>(px), static_cast<std::uint32_t>(w), static_cast<std::uint32_t>(h), x, y, t, kText.r, kText.g, kText.b, 255, 1);
 }
-std::string f1(const char* f, double a) { char b[64]; std::snprintf(b, sizeof(b), f, a); return b; }
+std::string f1(const char* f, double a) { std::string s; cascade::core::formatUtf8(s, f, a); return s; }
 void graticule(Canvas& cv, int w, int h) {
     cv.fill(kBg);
     for (int i = 1; i < 10; ++i) { cv.line(static_cast<float>(i * w) / 10.0f, 0, static_cast<float>(i * w) / 10.0f, static_cast<float>(h), 1.0f, Rgba{kGrid.r, kGrid.g, kGrid.b, 160}); }

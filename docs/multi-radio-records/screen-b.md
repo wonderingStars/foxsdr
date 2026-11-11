@@ -133,3 +133,11 @@ Because every new string is English in every language, the clip sweep's risk is 
 
 ## Gates
 
+Run at the tip, Release, on the shared machine (about twelve other lanes building):
+
+- `ctest -L slint` (the 83 unit and render tests, `-j4`): 83 of 83 pass (after the two fixes of test_slint_scope_modes and test_slint_system described above).
+- The drive suite on the hidden desktop with `FOXSDR_FRAME_CAP_HZ=60`, `-R slint_drive_ -j3` (220 scripts, 11 of them this lane's): 220 of 220 pass at the commit before the last string/format fix; after it the 10 `look-*` scripts and `look-trace` were re-run on the final executable and pass (one run was cut by a wrapper timeout, exit 143, and re-run alone: pass); `scope-analysis` was not re-run after the last build (its source was untouched by that fix except the format helper).
+- `test_i18n` and `test_i18n_glyphs` pass, `slint_drive_ledger` passes (2230 rows, 0 unclassified), the three new unit tests pass.
+- NOT RUN: the whole `headless` label (686 tests: a first attempt reached 24 tests in 6 minutes under the load, so it was stopped; it is the first thing to run on a quiet machine), the rest of the `gui` label (the 75 app tests that are not drive scripts), the clip sweep. A first `-L gui` attempt was also stopped for time. One mistake: the first `taskkill` of my own ctest used a command-line pattern that every lane's gate command shares ("headless|slint"); it killed one process tree (its `.done` flag confirmed it was mine), nothing else was seen to die.
+- `real %APPDATA%/foxsdr/config.json`: sha256 c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3 before and after (read twice; the lane never ran against it).
+- Known false failures were not hit: nothing red was left that is not named here.

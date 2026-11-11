@@ -9,13 +9,14 @@
 #include <limits>
 
 #include "core/colour_maps.hpp"
+#include "core/utf8_text.hpp"
 #include "export_logic.hpp"
 
 namespace foxsdr::slintextras {
 
 namespace {
 constexpr float kNaN = std::numeric_limits<float>::quiet_NaN();
-std::string fmt(const char* f, double a) { char b[96]; std::snprintf(b, sizeof(b), f, a); return b; }
+std::string fmt(const char* f, double a) { std::string s; cascade::core::formatUtf8(s, f, a); return s; }
 }  // namespace
 
 // ---------------------------------------------------------------- S7
