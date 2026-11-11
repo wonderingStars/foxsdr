@@ -401,7 +401,7 @@ std::string moduleFor(const fs::path& dir, const std::string& prefix) {
 std::string clip(const std::string& s, std::size_t n) { return s.size() <= n ? s : s.substr(0, n - 3) + "..."; }
 
 struct Result {
-    std::string id, verdict, module, fragment, note;
+    std::string id, verdict, module, fragment, note, tuning;
     double seconds = 0;
     int lines = 0, markers = 0;
     std::string unmet;
@@ -462,6 +462,9 @@ Result runRow(const Row& row, const fs::path& pluginSrc) {
                 r.note = "the I/Q file did not open within 20 s";
             } else {
                 tune();
+                // wait until the radio really reads the row's centre before the plugin starts: a plugin that judges the band from the centre at start (DAB, workbench, the
+                // meters) must not see the file source's default
+                (void)rig.until([&] { return std::fabs(rig.radio(1).centreHz - row.centre) < 1.0; }, 5000);
                 rig.send(rig.aimed(FOXAPI_OP_RUN, 1, 0.0, 1));
                 FoxCommand p = testing::cmd(FOXAPI_OP_PLUGIN_RADIO, 0.0, 1, mod.c_str());
                 p.ival[1] = 1;
@@ -470,6 +473,14 @@ Result runRow(const Row& row, const fs::path& pluginSrc) {
                 (void)rig.send(st);
                 rig.pump(5);
                 tune();   // START may apply the plugin's first preset: put the tuning back the way the row says
+                (void)rig.until([&] { return std::fabs(rig.radio(1).centreHz - row.centre) < 1.0 && std::fabs(rig.radio(1).vfoOffsetHz - row.vfo) < 1.0; }, 3000);
+                {
+                    const FoxReceiverState st = rig.radio(1);
+                    char tb[200];
+                    std::snprintf(tb, sizeof tb, "tuned: centre %.0f Hz, VFO %+.0f Hz, rate %.0f S/s", st.centreHz, st.vfoOffsetHz, st.sampleRateHz);
+                    r.tuning = tb;
+                    if (std::fabs(st.centreHz - row.centre) >= 1.0 || std::fabs(st.vfoOffsetHz - row.vfo) >= 1.0) { r.note = "TUNING NOT AS ASKED (asked centre " + std::to_string(static_cast<long long>(row.centre)) + ", VFO " + std::to_string(static_cast<long long>(row.vfo)) + "); "; }
+                }
                 std::vector<Term> terms = parseExpect(row.expect);
                 Seen seen;
                 bool met = false;
@@ -507,8 +518,8 @@ Result runRow(const Row& row, const fs::path& pluginSrc) {
                 }
                 for (std::size_t i = 0; i < pick.size() && i < 4; ++i) { r.fragment += (i ? " | " : "") + clip(pick[i], 150); }
                 r.verdict = (met && absent) ? "PASS" : "FAIL";
-                if (!met) { r.note = "unmet: " + r.unmet; }
-                if (met && !absent) { r.note = "a forbidden line appeared"; }
+                if (!met) { r.note += "unmet: " + r.unmet; }
+                if (met && !absent) { r.note += "a forbidden line appeared"; }
                 if (pst != FOXAPI_OK && pst != FOXAPI_NO_CHANGE) { r.note += (r.note.empty() ? "" : "; ") + std::string("PLUGIN_RADIO answered ") + std::to_string(pst); }
             }
         }
@@ -595,9 +606,9 @@ int main(int argc, char** argv) {
         results.push_back(r);
     }
     std::ofstream out(resultsFile);
-    out << "id\tverdict\tmodule\tseconds\tlines\tmarkers\tnote\tfragment\n";
+    out << "id\tverdict\tmodule\tseconds\tlines\tmarkers\ttuning\tnote\tfragment\n";
     for (const Result& r : results) {
-        out << r.id << '\t' << r.verdict << '\t' << r.module << '\t' << static_cast<int>(r.seconds + 0.5) << '\t' << r.lines << '\t' << r.markers << '\t' << r.note << '\t' << r.fragment << '\n';
+        out << r.id << '\t' << r.verdict << '\t' << r.module << '\t' << static_cast<int>(r.seconds + 0.5) << '\t' << r.lines << '\t' << r.markers << '\t' << r.tuning << '\t' << r.note << '\t' << r.fragment << '\n';
     }
     std::printf("feed check: %d PASS, %d FAIL, %d SKIP\n", pass, fail, skip);
     return fail == 0 ? 0 : 1;
