@@ -92,6 +92,7 @@ const Row kRows[] = {
     {"src/source/pluto_tx.cpp", 1, 0, 0, 0, "",
      "the Pluto transmit sink's writer thread: the transmitter's own thread (registered) hands it blocks and bounds its join (kWriterJoinWait) - NOT COVERED by this batch (a known gap)"},
     {"src/source/rtl_tcp_source.cpp", 1, 0, 0, 0, "", R_DRIVER},
+    {"src/source/net_sample_source.cpp", 1, 0, 0, 0, "", R_DRIVER},
     {"src/source/rtlsdr_source.cpp", 1, 0, 0, 0, "", R_DRIVER},
     {"src/source/rx888_source.cpp", 1, 0, 0, 0, "", R_DRIVER},
     {"src/source/sdrplay_probe.cpp", 1, 0, 0, 0, "",
