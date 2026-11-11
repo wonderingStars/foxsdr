@@ -891,27 +891,6 @@ export component DisplayBody inherits VerticalLayout {
         }
     }
     Line {
-        RowLabel { text: @tr("Digit grouping"); horizontal-stretch: 1; }
-        DropKey {
-            width: 150px;
-            value: Pick.label(root.model.digit-groupings, root.model.digit-grouping-index);
-            items: root.model.digit-groupings;
-            selected: root.model.digit-grouping-index;
-            label: @tr("Digit grouping");
-            tooltip: @tr("How the tuned-frequency counter and the typed frequency group their digits. Typing a frequency accepts either style.");
-            picked(i) => { root.display-digit-grouping(i); }
-        }
-    }
-    Line {
-        Tick {
-            horizontal-stretch: 1;
-            label: @tr("High contrast");
-            on: root.model.high-contrast;
-            tooltip: @tr("Black grounds, white lines and text, one yellow accent. It is also used whenever Windows' own high-contrast setting is on.");
-            toggled(v) => { root.display-high-contrast(v); }
-        }
-    }
-    Line {
         Tick {
             horizontal-stretch: 1;
             label: @tr("Tuner switches");
@@ -984,6 +963,27 @@ export component DisplayBody inherits VerticalLayout {
         }
     }
     if root.model.band-plan && root.model.plan-status != "" : Note { text: root.model.plan-status; tone: root.model.plan-status-tone; }
+    Line {
+        RowLabel { text: @tr("Digit grouping"); horizontal-stretch: 1; }
+        DropKey {
+            width: 150px;
+            value: Pick.label(root.model.digit-groupings, root.model.digit-grouping-index);
+            items: root.model.digit-groupings;
+            selected: root.model.digit-grouping-index;
+            label: @tr("Digit grouping");
+            tooltip: @tr("How the tuned-frequency counter and the typed frequency group their digits. Typing a frequency accepts either style.");
+            picked(i) => { root.display-digit-grouping(i); }
+        }
+    }
+    Line {
+        Tick {
+            horizontal-stretch: 1;
+            label: @tr("High contrast");
+            on: root.model.high-contrast;
+            tooltip: @tr("Black grounds, white lines and text, one yellow accent. It is also used whenever Windows' own high-contrast setting is on.");
+            toggled(v) => { root.display-high-contrast(v); }
+        }
+    }
     // </content>
 }
 

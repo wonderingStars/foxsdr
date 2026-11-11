@@ -865,7 +865,7 @@ int main() {
             CHECK(g.near(track0 + 20, fx3 + 12, sliderOffFill, 0));
             CHECK(g.near(track0 + 20, th3 + 12, sliderOffFill, 0));
             CHECK(!g.near(xc + 3, nb3 + 8, accent, 0));
-            CHECK(g.countNear(xc, note3, xc + kBodyW, note3 + 14, dim, 30) < 5);
+            CHECK(g.countNear(xc, note3 + 36, xc + kBodyW, note3 + 50, dim, 30) < 5);   // (the De-emph row of slint-gaps.md item 1 now stands where the absent Blanking note would be; the probe is one row lower)
             evs.clear();
             clk(track0 + 90, fx3 + 12);
             clk(track0 + 90, th3 + 12);
