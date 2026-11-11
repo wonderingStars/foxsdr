@@ -203,21 +203,25 @@ void testEnsure() {
             SKIP_LINUX("could not create a junction or symlink here");
         }
     }
-    // racing threads for one day
+    // racing threads: in every round all threads start together on one NEW path; exactly one of them may count each level as its own
     {
-        std::vector<std::thread> th;
+        const int kThreads = 8, kRounds = 300;
         std::atomic<int> okc{0}, created{0};
-        for (int t = 0; t < 8; ++t) {
+        std::atomic<int> gate{0};
+        std::vector<std::thread> th;
+        for (int t = 0; t < kThreads; ++t) {
             th.emplace_back([&] {
-                for (int i = 0; i < 30; ++i) {
-                    const Ensured r = ensureFolder(root, "race/2026/" + std::to_string(i) + "/day");
+                for (int i = 0; i < kRounds; ++i) {
+                    gate.fetch_add(1);
+                    while (gate.load() < (i + 1) * kThreads) { std::this_thread::yield(); }
+                    const Ensured r = ensureFolder(root, "race/r" + std::to_string(i) + "/day");
                     if (r.ok) { ++okc; created += r.created; }
                 }
             });
         }
         for (auto& t : th) { t.join(); }
-        CHECK(okc == 240);
-        CHECK(created == 1 + 1 + 30 * 2);                                                       // race, 2026, then 30 x (i, day): each made once overall
+        CHECK(okc == kThreads * kRounds);
+        CHECK(created == 1 + 2 * kRounds);                                                       // "race" once, then (r<i>, day) per round, each made once overall
     }
     // the parent of the root holds only what we put there
     std::set<std::string> names;
