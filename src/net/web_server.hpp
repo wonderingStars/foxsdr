@@ -17,12 +17,11 @@
 // in. stop() joins the listener thread before returning, so no handler can be
 // running once it has.
 //
-// TRANSPORT SECURITY. There is none: this speaks plain HTTP, deliberately (see
-// third_party/THIRD_PARTY.md for why OpenSSL is not linked). That single fact
-// drives the whole design here — the bind policy refuses an off-machine bind
-// without a password, the session cookie is SameSite=Strict, and reaching this
-// from beyond the LAN is documented as "terminate TLS in front of it", never
-// "forward the port".
+// TRANSPORT SECURITY. Plain HTTP unless the user switches HTTPS on (WebServerConfig::tlsEnabled, OFF by default): this class never links
+// OpenSSL (see third_party/THIRD_PARTY.md). With HTTPS on, net/web_tls.hpp owns the public port, speaks TLS with Windows' own Schannel and relays
+// to this plain server, which is then bound to 127.0.0.1 on a private port. The design with plain HTTP drives the rest - the bind policy
+// refuses an off-machine bind without a password, the session cookie is SameSite=Strict (and Secure while HTTPS is on) - and reaching this
+// from beyond the LAN is documented as a risk the user takes on, never as "forward the port" without the warning (MANUAL.md).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
@@ -42,6 +41,8 @@
 #include "net/web_control.hpp"
 #include "net/web_policy.hpp"
 #include "net/web_session.hpp"
+#include "net/web_tls.hpp"
+#include "net/web_users.hpp"
 
 // Forward-declared rather than included: httplib.h is 747 KB and belongs in
 // exactly one translation unit.
@@ -508,8 +509,32 @@ public:
     // "remote access is live" indicator.
     BindDecision decision() const;
 
-    // Live session count, for the settings panel ("2 browsers connected").
+    // Live session count (owner sessions and listeners), for the settings panel ("2 browsers connected").
     std::size_t sessionCount() const;
+
+    // --- Listeners and HTTPS (feat/web-secure) ---------------------------------------------------------------------------------------
+    // The room: the owner's moderation (kick, ban by name or address, the note) and the listener list, for a settings panel or a test. The
+    // page's own routes call the same object. Its state (sessions, bans, chat, note, audit) is emptied at every start and stop.
+    WebRoom& room();
+    // Listeners signed in right now: the number the host publishes as a fact (fact.web.listeners).
+    std::size_t listenerCount() const;
+
+    // What the HTTPS terminator is doing. active is false with HTTPS off (and always on a platform without it).
+    struct TlsInfo {
+        bool active = false;
+        int port = -1;                  // the public port
+        int privatePort = -1;           // the plain server's loopback-only port
+        std::string fingerprintSha256;  // 64 hex digits of the certificate: what the page's user compares with the browser's warning
+        std::string thumbprintSha1;     // 40 hex digits, as Windows' certificate manager shows it
+        std::vector<std::string> names; // subject alternative names of a self-signed certificate
+        std::int64_t notAfter = 0;
+        bool selfSigned = false;
+        bool keyExportable = true;
+        TlsStats stats;
+    };
+    TlsInfo tlsInfo() const;
+    // Timeouts and connection caps of the terminator. Before start(); false while running. The defaults are the product's; tests shorten them.
+    bool setTlsLimits(const TlsTimeouts& t, std::size_t total, std::size_t perAddress);
 
     // Ends every session without stopping the server. The settings UI calls
     // this on a password change.

@@ -100,12 +100,57 @@ BindDecision evaluateBind(const WebServerConfig& cfg) {
         return d;
     }
 
+    // --- HTTPS ---------------------------------------------------------------------------------------------------------------------
+    if (cfg.tlsEnabled) {
+#ifndef _WIN32
+        d.verdict = BindVerdict::RefusedTlsUnavailable;
+        d.reason = "HTTPS for the web page uses Windows' own TLS (Schannel) and is not built on this platform; put a TLS proxy in front of "
+                   "the page instead (UNPROVEN on this platform)";
+        return d;
+#endif
+        if (!cfg.tlsCertThumbprint.empty()) {
+            bool hex = cfg.tlsCertThumbprint.size() == 40;
+            for (char c : cfg.tlsCertThumbprint) {
+                hex = hex && ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'));
+            }
+            if (!hex) {
+                d.verdict = BindVerdict::RefusedTlsCertificate;
+                d.reason = "the certificate thumbprint must be the 40 hexadecimal digits Windows shows for it (no spaces); leave it empty to "
+                           "use the self-signed certificate this program makes";
+                return d;
+            }
+        }
+    }
+
+    // --- Listeners -----------------------------------------------------------------------------------------------------------------
+    if (cfg.listenersEnabled) {
+        if (!recordUsable) {
+            d.verdict = BindVerdict::RefusedListenerPassword;
+            d.reason = "listeners are signed in by the owner's say-so: set the owner password before allowing listeners";
+            return d;
+        }
+        PasswordRecord lrec;
+        std::string lerr;
+        if (cfg.listenerPasswordRecord.empty() || !PasswordRecord::parse(cfg.listenerPasswordRecord, lrec, lerr)) {
+            d.verdict = BindVerdict::RefusedListenerPassword;
+            d.reason = cfg.listenerPasswordRecord.empty()
+                           ? "set the listener password before allowing listeners"
+                           : "the stored listener password cannot be read (" + lerr + "); set it again before allowing listeners";
+            return d;
+        }
+        if (cfg.maxListeners < 1 || cfg.maxListeners > 32 || cfg.listenerIdleSeconds < 0 || cfg.listenerSessionSeconds < 0) {
+            d.verdict = BindVerdict::RefusedListenerLimits;
+            d.reason = "the listener limit must be 1 to 32, and the idle and session time limits cannot be negative";
+            return d;
+        }
+    }
+
     d.verdict = BindVerdict::Allowed;
     d.effectiveAddress = effective;
     d.reachableOffMachine = !loopback;
     // Rule 3: always on for an off-machine bind, and honoured on loopback too
-    // whenever a usable credential exists.
-    d.authRequired = !loopback || recordUsable;
+    // whenever a usable credential exists. Listeners always need the sign-in.
+    d.authRequired = !loopback || recordUsable || cfg.listenersEnabled;
     return d;
 }
 

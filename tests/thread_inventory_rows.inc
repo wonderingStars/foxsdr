@@ -83,6 +83,7 @@ const Row kRows[] = {
      "the responsive shell call: a worker the GUI thread waits on while taking messages, under the user-paced pause; waiting for a person is its job"},
     {"src/net/cat_server.cpp", 2, 0, 2, 2, "kThreadCatAccept,kThreadCatClient", ""},
     {"src/net/web_server.cpp", 2, 0, 2, 2, "kThreadWebIdle,kThreadWebListen", ""},
+    {"src/net/web_tls.cpp", 2, 0, 2, 2, "kThreadWebTlsAccept,kThreadWebTlsConn", ""},
     {"src/source/airspy_source.cpp", 1, 0, 0, 0, "", R_DRIVER},
     {"src/source/airspyhf_source.cpp", 1, 0, 0, 0, "", R_DRIVER},
     {"src/source/aor_source.cpp", 1, 0, 0, 0, "", R_DRIVER},

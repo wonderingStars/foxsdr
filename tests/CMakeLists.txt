@@ -317,7 +317,7 @@ foreach(src ${CASCADE_TESTS})
                     $<TARGET_FILE:SoapySDR> $<TARGET_FILE_DIR:${name}>)
     endif()
 
-    if(name STREQUAL "test_font_assets")
+    if(name STREQUAL "test_font_assets" OR name STREQUAL "test_web_users" OR name STREQUAL "test_web_tls" OR name STREQUAL "test_web_secure")
         # Compares something compiled INTO the binary against the files it was
         # generated from - the typefaces against third_party/fonts - so it
         # needs the repository root on its command line.
@@ -1331,7 +1331,8 @@ set(CASCADE_FENCE_DENIED_PROBES
     core/plugin_host.hpp core/plugin_repo.hpp core/freq_manager.hpp core/mp3_writer.hpp
     # src/net, denied whole by stage 5f (the servers are the engine's): every header of the directory, one probe each
     net/cat_protocol.hpp net/cat_server.hpp net/control_ops.hpp net/status_compose.hpp net/web_audio.hpp net/web_auth.hpp
-    net/web_control.hpp net/web_policy.hpp net/web_server.hpp net/web_session.hpp)
+    net/web_control.hpp net/web_policy.hpp net/web_server.hpp net/web_session.hpp
+    net/web_users.hpp net/web_tls.hpp)
 function(_cascade_fence_probe_source out_var id body)
     set(_src "${CASCADE_FENCE_PROBE_DIR}/${id}.cpp")
     set(_old "")
