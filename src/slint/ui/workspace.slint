@@ -188,6 +188,7 @@ export component WorkspaceBar inherits Rectangle {
                     text: WorkspaceModel.notice;
                     color: Theme.chip-warn-fg;
                     font-size: Theme.font-small;
+                    wrap: word-wrap;      // two lines of the small face fit the bar's 30 px row; the third would be elided (the S6 sweep found the sentence cut at the bar's edge at 800 px)
                     overflow: elide;
                     min-width: 0px;
                     accessible-role: text;
@@ -207,7 +208,8 @@ component AddEntryRow inherits VerticalLayout {
     callback add(string);
     property <string> typed;
     spacing: 3px;
-    Field { label: root.caption; kind: FieldKind.text; value <=> root.typed; placeholder: root.placeholder; committed(t) => { root.typed = t; } }
+    // (kind-label a blank: the field would say TEXT beside its name, which tells nobody anything here)
+    Field { label: root.caption; kind: FieldKind.text; kind-label: " "; value <=> root.typed; placeholder: root.placeholder; committed(t) => { root.typed = t; } }
     HorizontalLayout {
         alignment: start;
         Key { label: root.add-label; accessible-label: root.accessible; small: true; min-w: 0px; clicked => { root.add(root.typed); } }
@@ -252,6 +254,7 @@ export component AddRadioCard inherits Rectangle {
                 spacing: 4px;
                 alignment: start;
                 for c[i] in WorkspaceModel.add-choices : VerticalLayout {
+                    alignment: start;
                     if c.entry : AddEntryRow {
                         caption: c.caption; placeholder: c.placeholder; accessible: c.accessible; add-label: @tr("Add");
                         add(t) => { WorkspaceModel.add-entered(root.slot, i, t); }

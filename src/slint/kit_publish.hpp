@@ -42,6 +42,8 @@ public:
     void setMapLook(const slintmap::MapLook& look) { look_ = look; }
     // The radios that are open (bit n-1 = radio n), handed in every tick: the DECODE bank's entries offer the Runs-on picker when more than one is (screen stage S6, design 3.7).
     void setRadios(std::uint32_t openMask) { radioMask_ = openMask; }
+    // A bounded run's self-capture (FOXSDR_SLINT_DECODE_DRAWER=1): the DECODE bank's "Turn on and off plugins" drawer open, whatever language the row's label is in.
+    void openPluginDrawerForCapture() { decodeOpen_["plugins"] = true; }
     const slintmap::MapLook& mapLook() const { return look_; }
     // THE 3D VIEWS (globe_publish.hpp, docs 6.65): the state the drive scripts read ("globe.<propagation|ft8|goes|solar|satellites>", "globe.status").
     std::string globeState(const std::string& what) const;

@@ -209,7 +209,10 @@ std::vector<Tick> dbTicks(double dbMin, double dbMax, double heightPx) {
     if (!(dbMax > dbMin)) { return out; }
     const double range = dbMax - dbMin;
     const double pitch = heightPx * 10.0 / range;
-    const int labelEvery = pitch < 40.0 ? 20 : 10;
+    int labelEvery = pitch < 40.0 ? 20 : 10;
+    // A SHORT PLOT (a pane of four on a 1280 x 720 window has about 60 px of trace): two labels are never closer than 14 px, so the labels thin out to every 50 or 100 dB instead of running into
+    // one smear (found by the S6 sweep screenshots; before, the rule stopped at 20 dB)
+    for (const int every : {50, 100}) { if (heightPx * labelEvery / range < 14.0 && labelEvery < every) { labelEvery = every; } }
     const int top = static_cast<int>(std::floor(dbMax / 10.0)) * 10;
     const int bottom = static_cast<int>(std::ceil(dbMin / 10.0)) * 10;
     for (int db = top; db >= bottom; db -= 10) {

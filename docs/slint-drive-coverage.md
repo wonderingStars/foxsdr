@@ -11,9 +11,9 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2187 | 561 | 93 | 1533 | 0 |
+| 2187 | 562 | 92 | 1533 | 0 |
 
-Of the 1300 rows that are controls (the 887 readout-like rows left out): 561 asserted, 93 driven without a read-back, 646 not drivable.
+Of the 1300 rows that are controls (the 887 readout-like rows left out): 562 asserted, 92 driven without a read-back, 646 not drivable.
 
 NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
@@ -200,7 +200,7 @@ NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120,
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
 | 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 96 | 48 | 0 | 48 | 35 | 0 |
-| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 107 | 69 | 10 | 28 | 19 | 0 |
+| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 107 | 70 | 9 | 28 | 19 | 0 |
 | SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md) | 6 | 5 | 1 | 0 | 0 | 0 |
 
 ## Every row
@@ -3260,7 +3260,7 @@ NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120,
 | 4223 | Audio mix: MUTE (Mute Radio n) | key | DRIVEN+ASSERTED | deck-audio | click "Mute Radio 2": state workspace.mute.2 == 1 and workspace.mute.1 == 0 |
 | 4224 | Audio mix: SOLO (Solo Radio n) | key | DRIVEN+ASSERTED | deck-audio | click "Solo Radio 2" twice: state workspace.solo == 2 then 0; expect the key checked (the host's own record) |
 | 4225 | Audio mix: volume slider (Radio n: VOLUME) | slider | DRIVEN+ASSERTED | deck-audio | slider "Radio 2: VOLUME": state workspace.r.2.volume follows, workspace.r.1.volume does not |
-| 4226 | Status bar: one chip per open radio (Rn, its state, its frequency and mode) | chip | DRIVEN | deck-select | state workspace.chips == "1,2,3" (one chip per open radio, in front of today's); the chip's own label carries its radio's frequency, which a script cannot name, so a click on a chip is held by test_slint_host_radio_mix (the chip's words) and looked at in the shots |
+| 4226 | Status bar: one chip per open radio (Rn, its state, its frequency and mode) | chip | DRIVEN+ASSERTED | status-chips-1280 | at 1280 x 720: state workspace.chips == "1,2" with two radios, "0" (one shared chip) with three; at 800 x 560 (status-chips-800) two radios already share one; state workspace.chips == "1,2,3" (one chip per open radio, in front of today's); the chip's own label carries its radio's frequency, which a script cannot name, so a click on a chip is held by test_slint_host_radio_mix (the chip's words) and looked at in the shots |
 | 4227 | Add a radio: the card in an empty cell | card | DRIVEN+ASSERTED | deck-add | click "Add Signal generator" in an empty cell: state workspace.radios grows, the cell becomes a pane; the engine's refusal when the limit is reached: state workspace.addnote |
 | 4228 | Status bar: "Add a radio" key and its sheet | key | DRIVEN+ASSERTED | deck-add | click "Add a radio" in the status bar: the sheet opens (state workspace.open == 1), "Add Signal generator"#2 adds, the sheet closes |
 | 4229 | Radio pane: close key (Remove Radio n) | key | DRIVEN+ASSERTED | deck-add | click "Remove Radio 2" on a stopped radio: gone at once (state workspace.radios); on a running one the question comes first (state workspace.removeask == 2) |

@@ -145,9 +145,10 @@ int main() {
             const int top = f.firstRowNear(x, kY[i] + 58, kY[i] + 200, rgb(0xff00ff), 8);
             CHECKV(top >= kY[i] + 85 && top <= kY[i] + 87, "%s: pane %d plot top at %d (want 86)", skinName, i + 1, top - kY[i]);
             // the ribbon's segment "2 m" (0.1 .. 0.4 of the plot) is drawn in the band plan's colour at the well's top
-            CHECKV(f.near(kX[i] + 44 + static_cast<int>(0.25 * (kW[i] - 44)), kY[i] + 58 + 4, rgbOf(skin.bandplan), 8), "%s: pane %d ribbon", skinName, i + 1);
+            CHECKV(i == 1 || f.near(kX[i] + 44 + static_cast<int>(0.25 * (kW[i] - 44)), kY[i] + 58 + 4, rgbOf(skin.bandplan), 8), "%s: pane %d ribbon", skinName, i + 1);   // (pane 2's notice covers the top of its plot)
             // no header of the receiver view: no caption, no peak block and no SPAN chip over the plot's rows 58..86 at the right edge
-            CHECKV(f.near(kX[i] + kW[i] - 40, kY[i] + 58 + 30, rgbOf(skin.well), 8) || f.near(kX[i] + kW[i] - 40, kY[i] + 58 + 30, rgb(0xff00ff), 8), "%s: pane %d no peak block", skinName, i + 1);
+            // (pane 2 carries a device notice over the top of its plot: the deep well of its scrim is not the plot's well - screen stage S6)
+            CHECKV(i == 1 || f.near(kX[i] + kW[i] - 40, kY[i] + 58 + 30, rgbOf(skin.well), 8) || f.near(kX[i] + kW[i] - 40, kY[i] + 58 + 30, rgb(0xff00ff), 8), "%s: pane %d no peak block", skinName, i + 1);
             // the waterfall's picture (blue) sits under the splitter: well-deep above it is the age strip's ground
             CHECKV(f.countNear(kX[i] + 44, kY[i] + 200, kX[i] + kW[i], kY[i] + 300, rgb(0x0000ff), 8) > 1000, "%s: pane %d waterfall picture", skinName, i + 1);
         }

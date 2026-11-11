@@ -292,6 +292,7 @@ int main(int argc, char** argv) {
     // THE PLUGIN KIT'S PAGES (kit_publish.hpp): the DECODE bank, the docked and torn-off pages and the "Sound is muted" question, built from
     // the kit's state after each tick and wired to it once.
     foxsdr::slintkit::KitPublisher publisher(*ui, kit);
+    if (std::getenv("FOXSDR_SLINT_DECODE_DRAWER") != nullptr && bounded.bounded()) { publisher.openPluginDrawerForCapture(); }
     publisher.wire();
     // WHAT THE 3D VIEWS REMEMBER (docs 6.65): the view, camera and small choices of every globe view, in the framework's one interface-half text (view3d_prefs.hpp)
     publisher.setViewPrefsHooks([&duties] { return duties.interfaceHalf().view3d; },
@@ -360,6 +361,7 @@ int main(int argc, char** argv) {
     std::string addNote;
     std::array<std::string, kMaxRadios> radioDecoder;   // what each radio's pane chip says: the first decoder FED on that radio (read_radio_list, screen stage S6)
     std::string restoreText;                 // fact.radio.restore: the saved radios whose device was missing at start, one "Radio n: ..." line each
+    std::function<void(int)> addSheetCapture;   // FOXSDR_SLINT_ADD_SHEET=1 (a bounded run: the clip sweep reaches the card in any language, whose key labels are translated): opens the sheet, then asks for the sound card
     std::string lastAddAnswer;               // "<status>:<message>" of the newest RADIO_ADD answer (a bounded run reads it: workspace.lastadd)
     bool addOpen = false, addSwitchLayout = false;
     int removeConfirm = 0;
@@ -1126,6 +1128,12 @@ int main(int argc, char** argv) {
         });
         wm.on_volume_changed([&](int r, float v) { FoxCommand c = op(FOXAPI_OP_SET_VOLUME); c.num[0] = std::clamp(static_cast<double>(v), 0.0, 1.0); submit(c, static_cast<std::uint32_t>(r)); });
         wm.on_add_open_requested([&] { addOpen = true; addNote.clear(); readDeviceRows(); });
+        if (std::getenv("FOXSDR_SLINT_ADD_SHEET") != nullptr && bounded.bounded()) {
+            addSheetCapture = [&](int at) {
+                if (at == 20) { addOpen = true; addNote.clear(); readDeviceRows(); }
+                if (at == 45) { FoxCommand c = op(FOXAPI_OP_RADIO_ADD); c.ival[0] = 0; c.ival[1] = 1; std::snprintf(c.text, sizeof(c.text), "soundcard:"); addTicket = 0; submit(c); addTicket = lastTicket; }
+            };
+        }
         wm.on_add_dismissed([&] { addOpen = false; addNote.clear(); });
         wm.on_add_rescan_clicked([&] { submit(op(FOXAPI_OP_SCAN_DEVICES)); addNote.clear(); readDeviceRows(); });
         const auto addFromCard = [&](int slot, int choice, const std::string& typed) {
@@ -1592,6 +1600,7 @@ int main(int argc, char** argv) {
             ui->set_follow_band_plan(followBandPlan);
         }
         ++tickNo;
+        if (addSheetCapture) { addSheetCapture(tickNo); }
         // THE RADIOS THE ENGINE HAS (fact.radio.count and the per-radio facts): read when the lists moved and every eighth tick besides - a radio added or removed does not move the lists'
         // fingerprint (screen-s4.md), and the panes must follow within a quarter of a second.
         if (listMoved || tickNo % 8 == 1) { refreshRadios(); }
@@ -1763,7 +1772,9 @@ int main(int argc, char** argv) {
             // STAGE S5 (found in the 1280 x 720 shot with eight radios: the status bar's last key was cut off): with more than four radios in a window under 1500 px even the tag-and-lamp chips are too many for the
             // bar, so they become ONE chip, "Radios 1-8", with the worst state's lamp and one line per radio (state, frequency, mode) that a click opens; the MASTER lamps in the bar over the view say the same
             // and select (the chip no longer does).
-            const bool collapse = workspace.radioCount() > 4 && static_cast<int>(ui->get_win_w()) < 1500;
+            // STAGE S6 (the sweep, 34 languages x 1280 and 800: with three or four radios the chips pushed the status bar's own words and its last keys past the window's edge, which one radio never did): the one chip from three
+            // radios up under 1500 px, and from two radios up under 1000 px
+            const bool collapse = (workspace.radioCount() > 2 && static_cast<int>(ui->get_win_w()) < 1500) || (workspace.radioCount() > 1 && static_cast<int>(ui->get_win_w()) < 1000);
             if (collapse) {
                 const std::vector<RadioChipData> chips = deckPublisher.chips(deck);
                 std::vector<slint::SharedString> chipLines;

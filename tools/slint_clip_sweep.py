@@ -52,9 +52,11 @@ VIEWS = {
 SEEDS = {'workbench': 'skin-workbench.json', 'night': 'skin-night.json'}
 SIZES = {'1280': '1280x720', '800': '800x560'}
 RADIO_BODIES = {
+    'one': ('bank=0', []),   # the BASELINE: the same window with one radio, so what the several radios add is the difference
     'panes': ('bank=0', ['+1 radio add 2 60000', '+1 radio add 3 90000', '+1 radio add 4 120000', '+30 state workspace.radios == 4', '+1 click "2 x 2"', '+20 state workspace.layout == 2']),
-    'decode': ('bank=1 plugins=pocsag-decoder,adsb-decoder', ['+1 radio add 2 60000', '+1 radio add 3 90000', '+30 state workspace.radios == 3', '+1 click "Turn on and off plugins"', '+20 state workspace.radios == 3']),
-    'card': ('bank=0', ['+1 radio add 2 60000', '+1 radio add 3 90000', '+30 state workspace.radios == 3', '+1 click "Add a radio"', '+10 state workspace.open == 1', '+1 click "Add Sound card"', '+20 state workspace.radios == 3']),
+    # (a key's label is in the interface language, so the drawer and the sheet are opened by the window's own capture seams, not by clicking their English labels)
+    'decode': ('bank=1 plugins=pocsag-decoder,adsb-decoder FOXSDR_SLINT_DECODE_DRAWER=1', ['+1 radio add 2 60000', '+1 radio add 3 90000', '+60 state workspace.radios == 3']),
+    'card': ('bank=0 FOXSDR_SLINT_ADD_SHEET=1', ['+1 radio add 2 60000', '+1 radio add 3 90000', '+60 state workspace.radios == 3']),
 }
 for _kind in RADIO_BODIES:
     for _skin in SEEDS:
@@ -66,9 +68,21 @@ for _kind in RADIO_BODIES:
 LINE = re.compile(r'CLIPPROBE \|~\| (.*?) \|~\|END', re.DOTALL)
 
 
+def view_script(view: str, language: str, frames: int, shot: str = '') -> str:
+    """The drive script of one (view, language): a one-radio view is its header and the language check; a multi-radio view adds its radios, its skin and its size."""
+    if view.startswith('r4-'):
+        _, kind, skin, size = view.split('-')
+        bank, body = RADIO_BODIES[kind]
+        head = '#! frames=%d %s size=%s config=%s FOXSDR_LANGUAGE=%s' % (frames, bank, SIZES[size], SEEDS[skin], language)
+        lines = ['10 state ui.language == %s' % language] + body
+        if shot:
+            lines.append('+5 shot "%s"' % shot)
+        return head + '\n# clip sweep: %s in %s\n' % (view, language) + '\n'.join(lines) + '\n'
+    return ('#! frames=%d %s FOXSDR_LANGUAGE=%s\n# clip sweep: %s in %s\n%d state ui.language == %s\n') % (frames, VIEWS[view], language, view, language, frames // 2, language)
+
+
 def run_one(build_dir: Path, language: str, view: str, frames: int):
-    header = VIEWS[view]
-    script = ('#! frames=%d %s FOXSDR_LANGUAGE=%s\n# clip sweep: %s in %s\n%d state ui.language == %s\n') % (frames, header, language, view, language, frames // 2, language)
+    script = view_script(view, language, frames, 'sweep-%s-%s.png' % (view, language) if view.startswith('r4-') else '')
     with tempfile.NamedTemporaryFile('w', suffix='.txt', prefix='clipsweep-%s-%s-' % (view, language), delete=False, encoding='utf-8', newline='\n') as f:
         f.write(script)
         path = f.name

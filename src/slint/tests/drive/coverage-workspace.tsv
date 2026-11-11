@@ -58,3 +58,4 @@
 4249	ASSERTED	solo-readback	click "Solo Radio 3": state fact.radio.solo == 3 and workspace.solo == 3; Solo Radio 2 moves it; a second start shows nobody (the solo is not saved)
 4250	ASSERTED	tune-step-key	key ctrl+up / ctrl+down: state tunedHz moves by exactly 10000 Hz and back
 4240	ASSERTED	radio-state	state radio.<n>.device|rate|gains|antennas|decoder|notice|tuned|mode read radio n's own figures while radio 1 is selected
+4226	ASSERTED	status-chips-1280	at 1280 x 720: state workspace.chips == "1,2" with two radios, "0" (one shared chip) with three; at 800 x 560 (status-chips-800) two radios already share one
