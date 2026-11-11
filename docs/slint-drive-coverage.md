@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2203 | 575 | 94 | 1534 | 0 |
+| 2226 | 595 | 96 | 1535 | 0 |
 
-Of the 1316 rows that are controls (the 887 readout-like rows left out): 575 asserted, 94 driven without a read-back, 647 not drivable.
+Of the 1339 rows that are controls (the 887 readout-like rows left out): 595 asserted, 96 driven without a read-back, 648 not drivable.
 
-NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 887, other 217, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -202,6 +202,7 @@ NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120,
 | 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 96 | 48 | 0 | 48 | 35 | 0 |
 | 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 107 | 70 | 9 | 28 | 19 | 0 |
 | SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md) | 22 | 18 | 3 | 1 | 0 | 0 |
+| Screen lane C - tuning, scanning, memories and controls (rows 4800 and up are this lane's; docs/multi-radio-records/screen-c.md) | 23 | 20 | 2 | 1 | 0 | 0 |
 
 ## Every row
 
@@ -3312,4 +3313,32 @@ NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120,
 | 4613 | Help: the manual (app menu) | menu item | DRIVEN | gaps-misc | the entry is activated through the menu's callback by a seam; the address read back as state gaps.helpurl (no browser is started) |
 | 4614 | Run SDRplay diagnostic and its bias-tee question | key | NOT DRIVABLE | - | not built: needs an SDRplay radio to prove (record: NOT DONE) |
 | 4615 | High contrast option and skin | checkbox | DRIVEN+ASSERTED | gaps-contrast | the option and a stand-in for Windows' setting each switch the skin (state gaps.skin); the palette's pairs are held at 7 : 1 by test_slint_hc_palette |
+
+### Screen lane C - tuning, scanning, memories and controls (rows 4800 and up are this lane's; docs/multi-radio-records/screen-c.md)
+
+| # | control | type | class | script | detail |
+|---|---|---|---|---|---|
+| 4800 | Scanner: Lock out 10 min | key | DRIVEN+ASSERTED | lanec-lockout | two ticked rows are scanned with the squelch shut; the key unticks the row the scan is on (state lanec.lockouts == 1, the Scanner body's label falls from "Ticked frequencies (2)" to "(1)"), Clear lockouts ticks it back; dead with no scan (lanec-scanner) |
+| 4801 | Scanner: Lock out for good | key | DRIVEN+ASSERTED | lanec-lockout | as row 4800 (for good: the row stays unticked until Clear lockouts) |
+| 4802 | Scanner: Clear lockouts and the n locked out count | key | DRIVEN+ASSERTED | lanec-lockout | Clear lockouts ticks the row back (state lanec.lockouts == 0, "Ticked frequencies (2)" again); enabled false with none out (lanec-scanner) |
+| 4803 | Scanner: Priority MHz field | field | DRIVEN+ASSERTED | lanec-scanner | typed, read back as state lanec.priority; the note as state lanec.enginenote |
+| 4804 | Scanner: Every s field | field | DRIVEN+ASSERTED | lanec-scanner | 1 reads back as 5, abc is refused and the field shows 5 |
+| 4805 | Scanner: Mute while scanning | checkbox | DRIVEN+ASSERTED | lanec-scanner | a range scan on the generator: state lanec.mutedbyus and state muted follow the scan |
+| 4806 | Scanner: Log what the scan finds | checkbox | DRIVEN | lanec-scanner | the tick reads back (state lanec.logscan); the line is written when a hold ends, which the drive does not wait for |
+| 4807 | Scanner: what the scan found; the engine note | readout | NOT DRIVABLE | - | a readout |
+| 4808 | Bookmarks: memory of the tuned frequency, Squelch dB | field | DRIVEN+ASSERTED | lanec-memory | typed -70 read back, then tune away and back: state squelchDb == -70 |
+| 4809 | Bookmarks: memory, Scan threshold dB | field | DRIVEN+ASSERTED | lanec-memory | read back as state lanec.memthreshold; saved (second start) |
+| 4810 | Bookmarks: memory, Offset kHz and the Transmit line | field | DRIVEN+ASSERTED | lanec-memory | -600 gives Transmit 99.7000 MHz at 100.3 MHz |
+| 4811 | Bookmarks: memory, Tone Hz | field | DRIVEN+ASSERTED | lanec-memory | 88.5 read back; 12 is refused and the field shows 88.5 again |
+| 4812 | Bookmarks: Store into a memory and the eight memories M1 to M8 | checkbox + key | DRIVEN+ASSERTED | lanec-memory | stored, tuned away, recalled; the second start finds it saved |
+| 4813 | Counter menu: Lock the tuning step | menu item | DRIVEN+ASSERTED | lanec-steplock | the 1 MHz digit steps 1 MHz, then 10 kHz after the lock; reached through the menu's own callback by a bounded-run seam |
+| 4814 | Counter menu: Delta lock | menu item | DRIVEN+ASSERTED | lanec-delta | locked: vfoOffsetHz stays 300000 and centreHz moves; lanec-delta-off is the same click without the lock (the offset moves, the centre stays) |
+| 4815 | Counter menu: Remember the width of each mode | menu item | DRIVEN+ASSERTED | lanec-bandwidth | narrowed in WFM, a trip to NFM and back: the narrowed width returns instead of WFM's 150 kHz |
+| 4816 | Airband channel name under the counter | readout | DRIVEN+ASSERTED | lanec-channel | read back through the caption (state gaps.lockedlabel) |
+| 4817 | Status bar clock | key | DRIVEN+ASSERTED | lanec-clock | cycled, read back; the second start finds local time |
+| 4818 | Keyboard shortcuts overlay | sheet | DRIVEN+ASSERTED | lanec-shortcuts | Shift+F1 opens (state lanec.shortcutsopen, lanec.shortcuts > 20), Esc closes, the menu entry opens, Close closes |
+| 4819 | Recordings sheet: the list, Open, Open folder | sheet | DRIVEN+ASSERTED | lanec-recordings | two takes made, listed (state lanec.recordings >= 2), Open reads back the file (a bounded run opens nothing) |
+| 4820 | Decoder output: Copy key | key | DRIVEN+ASSERTED | lanec-log-copy | the CW fixture's FOXSDR line is what the key copied (state lanec.logcopy) |
+| 4821 | Picture page: wheel zoom, drag to pan, Fit key | behaviour | DRIVEN | lanec-picture-zoom | the wheel and Fit are driven on the APT fixture's picture (Fit exists only while zoomed); the pixel arithmetic of a click on a zoomed picture is not read back |
+| 4822 | Shift+F1 fixed shortcut | shortcut | DRIVEN+ASSERTED | lanec-shortcuts | see row 4818 |
 

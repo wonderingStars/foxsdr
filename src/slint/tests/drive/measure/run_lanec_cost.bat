@@ -5,6 +5,7 @@ set DIR=C:\Users\steve\foxsdr-wt\feat-gaps\src\slint\tests\drive\measure
 set OUT=D:\foxsdr-build\feat-gaps-lanec-cost
 mkdir %OUT% 2>nul
 set FOXSDR_FRAME_CAP_HZ=60
+set FOXSDR_DRIVE_VERBOSE=1
 for %%R in (1 2 3) do (
  for %%M in (on off) do (
   setlocal

@@ -3190,3 +3190,31 @@ Two audio features of the selected radio, below the Auto notch row of the Audio 
 | 4613 | Help: the manual (app menu) | menu item | PRESENT | menu id 605 opens docs/MANUAL.md of the public repository in the default browser |
 | 4614 | Run SDRplay diagnostic and its bias-tee question | key | DEFERRED | the probe child process of the classic window (source/sdrplay_probe) is not ported; the key still says so in the log |
 | 4615 | High contrast option and skin | checkbox | PRESENT | Tick in SYSTEM > Display (hc=); the HighContrast skin is a palette; also forced on while Windows' own setting is on |
+
+## Screen lane C - tuning, scanning, memories and controls (rows 4800 and up are this lane's; docs/multi-radio-records/screen-c.md)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 4800 | Scanner: Lock out 10 min | key | PRESENT | Key under the Scanner body, live while a scan of the ticked rows runs -> LaneC.act lock-temp: the row the scan is on is unticked (FOXAPP_OP_BOOKMARK_TICK) and ticked again after ten minutes; a range scan has no row (the engine hand-off: Params::lockedHz) |
+| 4801 | Scanner: Lock out for good | key | PRESENT | Key: as Lock out 10 min with no end -> lock-perm (the row stays unticked until Clear lockouts) |
+| 4802 | Scanner: Clear lockouts and the n locked out count | key | PRESENT | Key (live while one is out) and the dim count beside it -> lock-clear ticks back every row this window unticked |
+| 4803 | Scanner: Priority MHz field | field | PRESENT | LabelledField -> priority: the typed list in MHz (comma separated, bad tokens dropped, at most 16), saved in lanec.json; the engine does not read it yet (a note says so) |
+| 4804 | Scanner: Every s field | field | PRESENT | LabelledField -> priority-every: seconds between priority visits, clamped 5..600, a non-number goes back to the stored value |
+| 4805 | Scanner: Mute while scanning | checkbox | PRESENT | Tick -> mute-scan, saved; the follower sends SET_MUTED 1 while a scan steps and 0 when it holds a signal or ends (a mute the user set is never touched) |
+| 4806 | Scanner: Log what the scan finds | checkbox | PRESENT | Tick -> log-scan, saved: one line per signal the scan stops on (time UTC, frequency, seconds heard) is appended to scan-log.csv beside the settings file |
+| 4807 | Scanner: what the scan found; the engine note | readout | PRESENT | dim line Found n on m frequencies; most heard ... and an amber note while the engine does not read the priority list and the thresholds |
+| 4808 | Bookmarks: memory of the tuned frequency, Squelch dB | field | PRESENT | LabelledField + the line above it naming the bookmark the receiver is on (greyed with the sentence that says why when it is on none) -> mem-squelch; a recall (tuning back onto the bookmark, no scan running) sends the entry's squelch |
+| 4809 | Bookmarks: memory, Scan threshold dB | field | PRESENT | LabelledField -> mem-threshold: the entry's scan threshold in dB (Scanner::Params::thresholdDb when the engine reads it) |
+| 4810 | Bookmarks: memory, Offset kHz and the Transmit line | field | PRESENT | LabelledField -> mem-offset: repeater shift, signed kHz; the note under it says the transmit frequency |
+| 4811 | Bookmarks: memory, Tone Hz | field | PRESENT | LabelledField -> mem-tone: CTCSS tone 60..260 Hz or empty; stored, not yet applied (the tone squelch waits for F14) |
+| 4812 | Bookmarks: Store into a memory and the eight memories M1 to M8 | checkbox + key | PRESENT | Tick -> quick-store, then a press on a memory stores the frequency, mode and width the receiver is on; a press on a stored one recalls (frequency, mode, width); the key then reads M2  100.300 |
+| 4813 | Counter menu: Lock the tuning step | menu item | PRESENT | Checked item 107 in the counter's right-click menu: every digit and the wheel step by the Tune step; saved |
+| 4814 | Counter menu: Delta lock | menu item | PRESENT | Checked item 108, per radio, saved: click-to-tune on the waterfall becomes a retune of the counter (the VFO offset is kept, the centre moves); the VFO offset itself is refused |
+| 4815 | Counter menu: Remember the width of each mode | menu item | PRESENT | Checked item 109, saved: the width each mode was last used at is kept once it has settled and given back when the mode is entered again |
+| 4816 | Airband channel name under the counter | readout | PRESENT | Channel 118.000 / 118.005 or Channel 118.010 in the place of the converter caption when the frequency is an airband channel (core::airbandChannelName) |
+| 4817 | Status bar clock | key | PRESENT | dim clock at the right of the status bar, UTC or local time (LT); a press cycles UTC, local, off (--:--:--); saved |
+| 4818 | Keyboard shortcuts overlay | sheet | PRESENT | Shift+F1 or App menu > Keyboard shortcuts: every bound action of the saved key table with its chord; Esc or Close closes it |
+| 4819 | Recordings sheet: the list, Open, Open folder | sheet | PRESENT | App menu > Recordings...: the recorder's folder, newest first, kind (I/Q or Audio), size, date; Open plays an I/Q take as the I/Q file and hands any other file to the system; Open folder shows the folder |
+| 4820 | Decoder output: Copy key | key | PRESENT | Key in the Decoder output bar -> every line the window holds, as text, to the clipboard |
+| 4821 | Picture page: wheel zoom, drag to pan, Fit key | behaviour | PRESENT | The wheel zooms the plugin's picture about the pointer (up to 16 times), a drag pans while zoomed, Fit shows it whole; a click is still the picture's own pixel under the pointer |
+| 4822 | Shift+F1 fixed shortcut | shortcut | PRESENT | not in the key table (F1 is the SIGNAL bank's): answered after the table by key_dispatch |

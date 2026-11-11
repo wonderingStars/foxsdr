@@ -1,0 +1,45 @@
+#! frames=700 size=1600x1600 bank=2 sections=2:3,4
+# lanec-lockout (docs/multi-radio-records/screen-c.md, row C3): lockouts in a scan of the ticked rows. Two ticked rows (typed into the Airband body: NFM at 100.2 and 100.4 MHz) are scanned with the squelch shut so the scan only steps; "Lock out for good" unticks the
+# row the scan is on (the one lockout the engine honours: the ticked count falls to 1) and "Clear lockouts" ticks it back; "Lock out 10 min" does the same for a while. The keys are live only while a scan of the ticked rows runs.
+10 state running == 1
++1 type "Preset" "Probe"
++1 key enter
++1 type "Frequency (MHz)" "100.2"
++1 key enter
++1 choose "Mode" "NFM"
++1 type "name" "A"
++1 key enter
++1 click "Add"
++25 state count.bookmarks == 1
++1 type "Frequency (MHz)" "100.4"
++1 key enter
++1 type "name" "B"
++1 key enter
++1 click "Add"
++25 state count.bookmarks == 2
++1 click "Ticked frequencies (2)"
++20 state fact.scanner.listMode == 1
++1 expect "Lock out for good" enabled equals "false"
++1 slider "Squelch"#1 1.0
++5 state squelchDb > -10
++1 type "Dwell ms" "300"
++1 key enter
++1 click "Start scan"
++30 state scanner == 1
++10 expect "Lock out for good" enabled equals "true"
++1 click "Lock out for good"
++20 state lanec.lockouts == 1
++1 expect "Ticked frequencies (1)" checked equals "true"
++1 expect "Clear lockouts" enabled equals "true"
++1 click "Clear lockouts"
++20 state lanec.lockouts == 0
++1 expect "Ticked frequencies (2)" checked equals "true"
++30 state scanner == 1
++1 click "Lock out 10 min"
++20 state lanec.lockouts == 1
++1 expect "Ticked frequencies (1)" checked equals "true"
++1 click "Clear lockouts"
++20 state lanec.lockouts == 0
++1 expect "Ticked frequencies (2)" checked equals "true"
++1 click "Stop scan"
++30 state scanner == 0

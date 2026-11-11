@@ -1,4 +1,4 @@
-#! frames=900 size=1600x900 bank=2 sections=2:2,3 FOXSDR_SLINT_FRAME_LOG=1
+#! frames=900 size=1600x1600 bank=2 sections=2:2,3 FOXSDR_SLINT_FRAME_LOG=1
 # lanec-cost (docs/multi-radio-records/screen-c.md): the Bookmarks and Scanner bodies open (the lane's blocks drawn), one live generator radio, a bookmark under the receiver, a range scan running; the frame meter on. Nothing is asserted: the run's
 # "host tick time" line is the figure. Run it with and without FOXSDR_SLINT_LANEC_OFF=1 (the lane's tick left out) three times each (run_lanec_cost.bat).
 10 state running == 1

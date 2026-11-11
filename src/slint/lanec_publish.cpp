@@ -222,6 +222,8 @@ void LaneCPublisher::act(const std::string& id, const std::string& text) {
             quickStore_ = false;
             markDirty();
         } else {
+            // a radio whose frequency is locked takes no recall at all (a recall that kept the mode and the width and refused the frequency would be half a memory)
+            if (foxsdr::slintgaps::FrequencyLock::instance().locked(env_.selectedRadio ? env_.selectedRadio() : 1)) { return; }
             for (const FoxCommand& c : recallCommands(q)) { send(c); }
         }
     } else if (id == "mem-squelch" || id == "mem-threshold" || id == "mem-offset" || id == "mem-tone") {
@@ -306,7 +308,8 @@ void LaneCPublisher::tick(const FoxReceiverState& state, long tickNo) {
         FoxCommand c{};
         c.op = FOXAPI_OP_SET_MUTED;
         c.ival[0] = *m;
-        send(c);
+        if (*m == 1) { mutedRadio_ = env_.selectedRadio ? env_.selectedRadio() : 1; send(c); }
+        else { send(c, static_cast<std::uint32_t>(mutedRadio_)); }   // the radio we silenced, whichever is selected now
     }
 
     // C4

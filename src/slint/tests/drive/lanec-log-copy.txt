@@ -11,3 +11,4 @@
 +1 click "Copy"
 +5 state lanec.logcopies == 1
 +1 state lanec.logcopy contains FOXSDR
++1 state gaps.clip contains FOXSDR

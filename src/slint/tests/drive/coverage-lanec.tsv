@@ -1,6 +1,6 @@
-4800	ASSERTED	lanec-scanner	the key is dead with no scan (enabled false); the list-mode lockout itself is held by test_slint_lanec_host (ListLockouts) and test_scanner_lanec (the scanner steps over a locked point); NOT run end to end: a scan of ticked rows needs rows the drive cannot tick without labels
-4801	ASSERTED	lanec-scanner	dead with no scan (enabled false); see row 4800
-4802	ASSERTED	lanec-scanner	enabled false with none out; the model is held by test_slint_lanec_host (ListLockouts clear)
+4800	ASSERTED	lanec-lockout	two ticked rows are scanned with the squelch shut; the key unticks the row the scan is on (state lanec.lockouts == 1, the Scanner body's label falls from "Ticked frequencies (2)" to "(1)"), Clear lockouts ticks it back; dead with no scan (lanec-scanner)
+4801	ASSERTED	lanec-lockout	as row 4800 (for good: the row stays unticked until Clear lockouts)
+4802	ASSERTED	lanec-lockout	Clear lockouts ticks the row back (state lanec.lockouts == 0, "Ticked frequencies (2)" again); enabled false with none out (lanec-scanner)
 4803	ASSERTED	lanec-scanner	typed, read back as state lanec.priority; the note as state lanec.enginenote
 4804	ASSERTED	lanec-scanner	1 reads back as 5, abc is refused and the field shows 5
 4805	ASSERTED	lanec-scanner	a range scan on the generator: state lanec.mutedbyus and state muted follow the scan

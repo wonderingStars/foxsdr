@@ -109,6 +109,7 @@ private:
     ScanMuteFollower mute_;
     BandwidthMemory bandwidth_;
     std::uint32_t lastScanState_ = 0;
+    int mutedRadio_ = 1;               // the radio the mute follower silenced
     bool quickStore_ = false;
     // the sheets
     bool shortcutsOpen_ = false;
