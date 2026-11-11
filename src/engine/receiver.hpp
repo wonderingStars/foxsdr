@@ -476,6 +476,9 @@ struct Receiver {
     std::string claimedKey_;
     // The words fact.radio.<n>.refusal carries when the radio's device could not be had (the ledger's sentence); cleared by the next good open.
     std::string refusal_;
+    // A radio added on a file, a Pluto or an rtl_tcp server opens on a worker (as the first radio's panel does): until the open lands, the generator stands in, and when it fails the
+    // reason is the radio's refusal. True from the add until the pass has seen the open end either way (multi-radio engine stage 7).
+    bool openWatch_ = false;
     // When the radio asked for a stop of its own accord (RADIO_REMOVE is in progress), so the pass does not start it again. Pass thread only.
     bool removing_ = false;
     // ---- published state ----

@@ -26,6 +26,7 @@
 #ifndef CASCADE_ENGINE_ENGINE_DISK_STATE_HPP
 #define CASCADE_ENGINE_ENGINE_DISK_STATE_HPP
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -72,6 +73,14 @@ struct RecordingScan {
 
 struct EngineDiskWork {
     cascade::core::DiskJob<IqOpenResult> iqOpen{"I/Q file open"};
+    // THE SAME OPEN FOR RADIOS 2 TO 8 (multi-radio engine stage 7): a radio opens its own file on its own worker, collected under that radio's scope (a result is
+    // installed into the radio that asked and no other). Made on first use; index = slot, entry 0 is never used (radio 1 has `iqOpen`).
+    std::array<std::unique_ptr<cascade::core::DiskJob<IqOpenResult>>, 8> iqOpenOf;
+    cascade::core::DiskJob<IqOpenResult>& iqOpenFor(std::size_t slot) {
+        if (slot == 0u || slot >= iqOpenOf.size()) { return iqOpen; }
+        if (!iqOpenOf[slot]) { iqOpenOf[slot] = std::make_unique<cascade::core::DiskJob<IqOpenResult>>("I/Q file open (extra radio)"); }
+        return *iqOpenOf[slot];
+    }
     cascade::core::DiskJob<ExportOutcome> bookmarkExport{"frequency list export"};
     // WHO ASKED FOR THE EXPORT NOW OUT (master 0.99.66): true = one PRESET's CSV (the AIRBAND section's Export CSV), whose result the window says in that
     // section; false = the Bookmarks section's export for SDR#, whose result is the engine's bookmark note. Set on the pass when the export starts and

@@ -67,7 +67,7 @@ EngineDiskWork& Engine::disk() {
     return *diskWork_;
 }
 
-bool Engine::iqOpenPending() const { return diskWork_ != nullptr && diskWork_->iqOpen.pending(); }
+bool Engine::iqOpenPending() const { return diskWork_ != nullptr && diskWork_->iqOpenFor(scopedSlot()).pending(); }
 bool Engine::bookmarkExportPending() const { return diskWork_ != nullptr && diskWork_->bookmarkExport.pending(); }
 bool Engine::bookmarkImportPending() const { return diskWork_ != nullptr && diskWork_->bookmarkImport.pending(); }
 bool Engine::recordingScanPending() const { return diskWork_ != nullptr && diskWork_->recordingScan.pending(); }
@@ -88,7 +88,8 @@ void Engine::openIqFile(const std::string& path) {
     EngineDiskWork& d = disk();
     // ONE OPEN AT A TIME: a second press while the header is still being read (the key is disabled, but a browser and a key binding are not the
     // key) changes nothing.
-    if (d.iqOpen.pending()) { return; }
+    cascade::core::DiskJob<IqOpenResult>& job = d.iqOpenFor(scopedSlot());   // THIS radio's worker (radio 1: the original one)
+    if (job.pending()) { return; }
     // The user chose a file: a saved radio that was only busy at start-up is no longer what the session is waiting for (pollSavedRadioRetry,
     // 0.99.92).
     cancelSavedRadioRetry();
@@ -100,7 +101,7 @@ void Engine::openIqFile(const std::string& path) {
     const int row = sourceSel_;
     const auto factory = iqFileFactory_;
     const auto hook = diskHook();
-    d.iqOpen.request([path, gen, row, factory, hook]() -> IqOpenResult {
+    job.request([path, gen, row, factory, hook]() -> IqOpenResult {
         IqOpenResult r;
         r.path = path;
         r.gen = gen;
@@ -124,7 +125,7 @@ void Engine::openIqFile(const std::string& path) {
 void Engine::pollIqOpen() {
     if (diskWork_ == nullptr) { return; }
     IqOpenResult r;
-    if (!diskWork_->iqOpen.poll(r)) { return; }
+    if (!diskWork_->iqOpenFor(scopedSlot()).poll(r)) { return; }
     if (!r.file && r.error.empty()) { r.error = "cannot open file: " + r.path; }
     // A source that was open while it was being replaced is closed by whoever lets it go, and a close is a file-system call too: not on this
     // thread.
@@ -352,6 +353,13 @@ void Engine::pollDiskJobs() {
     if (diskWork_ == nullptr) { return; }
     EngineDiskWork& d = *diskWork_;
     pollIqOpen();
+    // A file open that was out for a radio that has since been removed lands on nobody: collected here and closed off the pass (a slot's worker is its own, so a radio added in the
+    // same place later is never held up by it).
+    for (std::size_t slot = 1; slot < kMaxReceivers; ++slot) {
+        if (receivers_[slot] || !d.iqOpenOf[slot]) { continue; }
+        IqOpenResult gone;
+        if (d.iqOpenOf[slot]->poll(gone) && gone.file) { std::thread([f = std::move(gone.file)]() mutable { f.reset(); }).detach(); }
+    }
 
     // A FREQUENCY LIST READ: put in the bookmarks, in the words the synchronous import used. The list is the pass's (the worker never touched it).
     {

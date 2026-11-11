@@ -5466,9 +5466,11 @@ void Engine::pumpDecoderOutput() {
     // block on the GUI), so draining only while the Plugins section happened
     // to be expanded would quietly lose decodes the user never knew existed.
     std::vector<cascade::core::DecodedLine> drained = pluginRunner_.drainText();
+    for (cascade::core::DecodedLine& l : drained) { l.radio = 1u; }
     for (std::size_t slot = 1; slot < kMaxReceivers; ++slot) {
         if (!radioRunners_[slot]) { continue; }
         std::vector<cascade::core::DecodedLine> more = radioRunners_[slot]->drainText();
+        for (cascade::core::DecodedLine& l : more) { l.radio = static_cast<std::uint32_t>(slot) + 1u; }
         drained.insert(drained.end(), std::make_move_iterator(more.begin()), std::make_move_iterator(more.end()));
     }
     for (cascade::core::DecodedLine& l : drained) {
@@ -5538,11 +5540,7 @@ void Engine::openTransmitRadio() {
     // doing both is the overwhelmingly common case and making the operator
     // retype an address they have already given is how a transmitter ends up
     // pointed at the wrong machine on a shared bench.
-    if (transmitArgs_.empty()) {
-        transmitArgs_ = (rx().sourceKind_ == "pluto" && !rx().deviceArgs_.empty())
-                            ? rx().deviceArgs_
-                            : std::string("uri=ip:192.168.2.1");
-    }
+    if (transmitArgs_.empty()) { transmitArgs_ = transmitArgsSeed(); }
     if (txSinkForTest_ != nullptr && transmitArgs_ == "test:tx:dummy") {
         // TESTS ONLY: the table's dummy load (testHooks=1), no RF anywhere.
         transmitter_.setSink(txSinkForTest_());
@@ -10258,7 +10256,13 @@ void Engine::pumpAudio() {
 // The address the Transmit page opens on when nobody has typed one: the
 // receiver's own Pluto, else the Pluto's factory address.
 std::string Engine::transmitArgsSeed() const {
-    return (rx().sourceKind_ == "pluto" && !rx().deviceArgs_.empty()) ? rx().deviceArgs_ : std::string("uri=ip:192.168.2.1");
+    if (rx().sourceKind_ == "pluto" && !rx().deviceArgs_.empty()) { return rx().deviceArgs_; }
+    // A Pluto that is another radio's is the same board doing both (multi-radio engine stage 7): the first radio that has one open.
+    for (std::size_t s = 0; s < kMaxReceivers; ++s) {
+        const std::unique_ptr<Receiver>& other = receivers_[s];
+        if (other && !other->removing_ && other->device_ != nullptr && other->sourceKind_ == "pluto" && !other->deviceArgs_.empty()) { return other->deviceArgs_; }
+    }
+    return std::string("uri=ip:192.168.2.1");
 }
 
 void Engine::publishStatusText() {

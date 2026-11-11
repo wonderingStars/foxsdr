@@ -307,6 +307,9 @@ public:
     // behind it, instead of racing a loopback socket to get there first.
     std::atomic<bool> holdWriteBufAcks{false};
 
+    // While set, READBUF is served (quiet samples at about 2.5 MS/s): the board's receive half, for a test that opens it as a radio. Off by default: the transmit tests never read.
+    std::atomic<bool> serveRx{false};
+
 private:
     void acceptLoop() {
         while (run_.load()) {
@@ -502,6 +505,13 @@ private:
                 // anything else happens. OPEN <device> <samples> <mask>.
                 const std::string mask = w.size() >= 4 ? w[3] : std::string();
                 sendText(s, mask.size() == 8 ? "0\n" : "-22\n");
+            } else if (cmd == "READBUF" && serveRx.load()) {
+                // THE RECEIVE STREAM (multi-radio stage 7: a Pluto opened as a second radio needs its samples to flow): ops.c send_data, the length, the channel mask, then
+                // 12-bit little-endian words (zeros: a quiet board), paced to about 2.5 MS/s so that the driver's reader does not spin.
+                const long want = w.size() >= 3 ? std::atol(w[2].c_str()) : 0;
+                std::this_thread::sleep_for(std::chrono::microseconds(static_cast<long long>(static_cast<double>(want) / 4.0 / 2.5e6 * 1.0e6)));
+                std::string data(static_cast<std::size_t>(want > 0 ? want : 0), '\0');
+                if (!sendText(s, std::to_string(want) + "\n00000003\n") || !sendText(s, data)) { break; }
             } else if (cmd == "READ") {
                 std::string key;
                 if (w.size() >= 5) {
@@ -563,6 +573,23 @@ inline void stockTxBoard(FakeTxIiod& d) {
     d.setAttr("ad9361-phy/out/voltage0/hardwaregain_available", "[-89.750000 0.250000 0.000000]");
     d.setAttr("ad9361-phy/out/voltage0/rf_port_select", "A");
     d.setAttr("ad9361-phy/out/voltage0/rf_port_select_available", "A B");
+}
+
+// The receive half's attributes of a stock board (the numbers test_pluto_source.cpp's daemon serves), and the stream switched on: what PlutoSource::open reads to come up.
+inline void stockRxBoard(FakeTxIiod& d) {
+    d.setAttr("ad9361-phy/xo_correction", "39999976");
+    d.setAttr("ad9361-phy/out/altvoltage0/frequency", "100000000");
+    d.setAttr("ad9361-phy/out/altvoltage0/frequency_available", "[70000000 1 6000000000]");
+    d.setAttr("ad9361-phy/in/voltage0/sampling_frequency", "2500000");
+    d.setAttr("ad9361-phy/in/voltage0/sampling_frequency_available", "[2083333 1 61440000]");
+    d.setAttr("ad9361-phy/in/voltage0/rf_bandwidth", "18000000");
+    d.setAttr("ad9361-phy/in/voltage0/rf_bandwidth_available", "[200000 1 56000000]");
+    d.setAttr("ad9361-phy/in/voltage0/hardwaregain", "40.000000 dB");
+    d.setAttr("ad9361-phy/in/voltage0/hardwaregain_available", "[-3 1 71]");
+    d.setAttr("ad9361-phy/in/voltage0/gain_control_mode", "slow_attack");
+    d.setAttr("ad9361-phy/in/voltage0/gain_control_mode_available", "manual fast_attack slow_attack hybrid");
+    d.setAttr("ad9361-phy/in/voltage0/rf_port_select", "A_BALANCED");
+    d.serveRx = true;
 }
 
 // The same board with the AD9364 unlock applied: 70 MHz to 6 GHz. Served so

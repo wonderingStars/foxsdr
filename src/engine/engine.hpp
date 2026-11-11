@@ -387,6 +387,7 @@ private:
     void restoreSavedRadios(const cascade::core::AppConfig& cfg);
     // The device branch of a restore for a radio other than the first: opens `kind` with `args` on THIS thread, as the first radio's start-up restore does, under
     // the slot's RadioWork. A device that will not open leaves the radio on the generator, naming the device, and remembered for the next save.
+    void restoreExtraRadioFile(const std::string& path, double rateHz, double centerHz);
     void restoreExtraRadioDevice(const std::string& kind, const std::string& args, double rateHz, const std::string& antenna, double centerHz);
     // WHICH RADIO EACH PLUGIN RUNS ON (stage 6; engine_plugin_radio.cpp): plugin id (pluginRunId) -> radio number 2..8. A plugin with no entry is on radio 1.
     std::map<std::string, int> pluginRadio_;
@@ -735,6 +736,8 @@ private:
     // what the worker opened - installOpenedIqFile is the body the synchronous open ran after its header was read.
     void openIqFile(const std::string& path);
     void pollIqOpen();
+    // For a radio added on a worker-opened source: when the open has ended without a device, the reason becomes the radio's refusal (engine_radios.cpp).
+    void noteAsyncOpenEnded();
     void installOpenedIqFile(std::unique_ptr<cascade::source::IqFileSource> file, const std::string& path);
     void openPlutoAt(const std::string& args);
     // The rtl_tcp row's Open key (SELECT_SOURCE "open-rtltcp:rtltcp=<addr>"): the Pluto's recipe, step for step.

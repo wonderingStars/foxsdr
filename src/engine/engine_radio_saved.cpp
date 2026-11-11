@@ -65,12 +65,14 @@ SavedRadio Engine::savedRadioOf(std::size_t slot) {
     // stands in for it.
     const cascade::gui::SavedSource src = cascade::gui::sourceToSave(rx().sourceKind_, cfgSoapyArgs_, cfgNativeArgs_, iqOpenPath_,
                                                                      rx().pipeline_.activeSource().sampleRateHz(), rx().restoreKeep_);
-    // A second radio is a scanned device or the generator: a file or a sound card can be neither (the first radio's panels are the only door to them).
-    const bool device = src.kind == "soapy" || (cascade::gui::isNativeSourceKind(src.kind) && src.kind != "pluto" && src.kind != "rtltcp");
-    r.sourceKind = device ? src.kind : std::string("siggen");
-    r.args = device ? (src.kind == "soapy" ? src.soapyArgs : src.nativeArgs) : std::string();
+    // A second radio is the generator, a scanned device, a Pluto, an rtl_tcp server or an I/Q file (engine stage 7: it is saved as what it is, with the arguments or the path it
+    // was opened with). The sound card is the first radio's alone and is saved as the generator.
+    const bool file = src.kind == "file";
+    const bool device = src.kind == "soapy" || cascade::gui::isNativeSourceKind(src.kind);
+    r.sourceKind = (device || file) ? src.kind : std::string("siggen");
+    r.args = file ? src.filePath : (device ? (src.kind == "soapy" ? src.soapyArgs : src.nativeArgs) : std::string());
     if (r.args.empty()) { r.sourceKind = "siggen"; }
-    r.sampleRateHz = device ? src.sampleRateHz : 0.0;
+    r.sampleRateHz = (device || file) ? src.sampleRateHz : 0.0;
     r.antenna = rx().deviceAntenna_;
     r.toneHz = rx().testToneOffsetHz_;
     r.centerHz = rx().pipeline_.activeSource().centerFrequencyHz();
@@ -109,7 +111,31 @@ std::vector<SavedRadio> Engine::savedRadios() {
 
 // --- RESTORE -----------------------------------------------------------------------------------------------------------------------------------
 
+// A saved I/Q file as a second radio: the first radio's start-up restore of a file, for the radio this thread has selected (synchronous: the control thread is not running yet).
+// A file that will not open leaves the radio on the generator, remembered by its path (restoreKeep_) so the next save names it again, and says why in the radio's refusal.
+void Engine::restoreExtraRadioFile(const std::string& path, double rateHz, double centerHz) {
+    auto file = iqFileFactory_ ? iqFileFactory_() : std::make_unique<cascade::source::IqFileSource>();
+    if (file->open(path)) {
+        const double fileRadioHz = radioHzForSource("file", std::string(), centerHz);
+        if (fileRadioHz >= 0.0) { file->setCenterFrequencyHz(fileRadioHz); }
+        installOpenedIqFile(std::move(file), path);
+        return;
+    }
+    rx().sourceError_ = file->lastError();
+    // THE FACT, NEVER THE PATH, in the log (a file name is the user's own data; the radio-1 restore's rule).
+    cascade::core::diagWarnf("radio: radio %u could not be restored on its I/Q file - it is on the signal generator and the radio stays saved", static_cast<unsigned>(scopedSlot() + 1u));
+    cascade::core::health::noteRecovered(cascade::core::health::Recovered::IqFileGone);
+    rx().restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen("file", std::string(), std::string(), path, rateHz);
+    rx().restoreKeepLabel_ = cascade::gui::fileNameOf(path);
+    rx().sourceError_ = cascade::gui::radioNotOpenedSentence(rx().restoreKeepLabel_, rx().sourceError_);
+    rx().refusal_ = rx().sourceError_;
+}
+
 void Engine::restoreExtraRadioDevice(const std::string& kind, const std::string& args, double rateHz, const std::string& antenna, double centerHz) {
+    if (kind == "file") {
+        restoreExtraRadioFile(args, rateHz, centerHz);
+        return;
+    }
     // The first radio's start-up restore (applyConfig, the device branch), for the radio this thread has selected. The prefer-native rule is not applied: this
     // file is written by a build that knows the native drivers.
     if (kind != "soapy") { scanNative(); }

@@ -237,7 +237,7 @@ double clampd(double v, double lo, double hi) {
 // Radios 2 to 8 as a file may have them, made safe. A number is "not >= lo" clamped so one that is not a number cannot pass; a value that names no thing
 // (a tone, a rate, a frequency below zero) becomes 0, which the engine reads as "leave what the radio opens with".
 std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
-    static const char* const kKinds[] = {"siggen", "soapy", "rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "aor", "hydrasdr"};
+    static const char* const kKinds[] = {"siggen", "soapy", "rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "aor", "hydrasdr", "pluto", "rtltcp", "file"};
     std::vector<SavedRadio> out;
     std::set<int> taken;
     for (SavedRadio& r : in) {

@@ -113,7 +113,9 @@ FoxCommandResult Engine::radioAddOp(const FoxCommand& c, const std::string& text
             const std::string rest = text.substr(colon + 1);
             key = pc::makeDeviceKey("pluto", rest.rfind("uri=", 0) == 0 ? rest : "uri=" + rest);
         } else if (kind == "open-rtltcp") {
-            key = pc::makeDeviceKey("rtltcp", text.substr(colon + 1));
+            // (the key radio 1's open leaves in deviceArgs_: "rtltcp=<address>", whichever spelling was typed, so the same server twice is refused)
+            const std::string rest = text.substr(colon + 1);
+            key = pc::makeDeviceKey("rtltcp", rest.rfind("rtltcp=", 0) == 0 ? rest : "rtltcp=" + rest);
         } else {
             key = pc::makeDeviceKey(kind, text.substr(colon + 1));
         }
@@ -167,6 +169,9 @@ FoxCommandResult Engine::radioAddOp(const FoxCommand& c, const std::string& text
             } else if (!selectSourceById(text)) {
                 // The radio stays (it is on the generator, like the first radio after a failed open); the words say why.
                 rx().refusal_ = rx().sourceError_;
+            } else {
+                // A file, a Pluto and an rtl_tcp server open on a worker: the generator stands in until the open lands, and noteAsyncOpenEnded says why if it does not.
+                rx().openWatch_ = true;
             }
         }
         // ITS RUNNER (stage 6): the decoders that run on this radio, if any (none until the user puts one here), against its own source.
@@ -307,6 +312,8 @@ void Engine::pumpExtraReceivers() {
         const double nowS = clockS();
         pollRecordStarts(nowS);
         pollDeviceOpen();
+        pollIqOpen();   // (a file added as a radio opens on its own worker: engine stage 7)
+        noteAsyncOpenEnded();
         pollSoapyRecovery();
         pollPendingRetune();
         endTakesOnFault();
@@ -316,6 +323,19 @@ void Engine::pumpExtraReceivers() {
         pollSavedRadioRetry();   // (a saved device that was only busy is tried again, as the first radio's is: engine stage 5)
         // A radio whose open failed holds nothing: the ledger is told by the key going (the radio sits on the generator, as the first radio does).
         if (rx().device_ == nullptr && !rx().deviceOpenPending_) { rx().claimedKey_.clear(); }
+    }
+}
+
+// A radio added on a source that opens on a worker (engine stage 7): when the open has ended with nothing installed, its reason is the radio's refusal
+// (fact.radio.<n>.refusal), as a device that could not be had at the add is. An open that landed clears it.
+void Engine::noteAsyncOpenEnded() {
+    if (!rx().openWatch_) { return; }
+    if (rx().deviceOpenPending_ || iqOpenPending()) { return; }
+    rx().openWatch_ = false;
+    if (rx().device_ == nullptr && rx().sourceKind_ == "siggen") {
+        rx().refusal_ = rx().sourceError_.empty() ? std::string("the source did not open") : rx().sourceError_;
+    } else {
+        rx().refusal_.clear();
     }
 }
 

@@ -70,6 +70,8 @@ struct DecodedLine {
     std::string text;    // one line, no trailing newline
     // The PATCH decoder node that said it (API 0.3 8.12, DECODER_LINES value[0]); 0 for the receiver's own decoders.
     std::uint64_t node = 0;
+    // The RADIO whose runner said it (1..8; multi-radio engine stage 7, DECODER_LINES value[1]): stamped by the engine when it drains a runner. 0 for a patch decoder's line.
+    std::uint32_t radio = 0;
 };
 
 // Why a loaded plugin is not currently being fed. Reported rather than

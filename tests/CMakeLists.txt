@@ -601,6 +601,12 @@ foreach(src ${CASCADE_TESTS})
         # real frame loop; both built first.
         add_dependencies(${name} late_fault_fixture cascade)
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:late_fault_fixture>")
+    elseif(name STREQUAL "test_engine_api_source_kinds")
+        # An I/Q file of the slint drive set plays as a second radio (multi-radio stage 7): the fixture folder is argument 1.
+        add_test(NAME ${name} COMMAND ${name} "${CMAKE_SOURCE_DIR}/src/slint/tests/drive/fixtures")
+    elseif(name STREQUAL "test_engine_api_decode_radio")
+        # Real decoder modules (the installed ones; the test skips without them) on radios 2 to 5, each on its own fixture file (stage 7).
+        add_test(NAME ${name} COMMAND ${name} "${CMAKE_SOURCE_DIR}/src/slint/tests/drive/fixtures")
     elseif(name STREQUAL "test_engine_api_plugin_radio")
         # The radio probe, copied into scratch plugin folders by the test (plugins per radio, stage 6).
         add_dependencies(${name} radio_probe_fixture)

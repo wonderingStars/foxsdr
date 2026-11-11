@@ -1442,6 +1442,7 @@ public:
             DecoderLine& d = decoderLines_[decoderLinesNext_ % kDecoderLines];
             d.number = total - (log.size() - i) + 1;
             d.node = log[i].node;
+            d.radio = log[i].radio;
             copyText(d.plugin, log[i].plugin.c_str());
             copyText(d.text, log[i].text.c_str());
             ++decoderLinesNext_;
@@ -1779,6 +1780,7 @@ private:
     struct DecoderLine {
         uint64_t number = 0;
         uint64_t node = 0;       // API 0.3 8.12: the patch decoder node the line came from, 0 = the receiver's own
+        uint32_t radio = 0;      // the radio whose decoder said it (stage 7; DECODER_LINES value[1]), 0 = a patch decoder
         char plugin[96] = {};
         char text[160] = {};
     };
@@ -3224,6 +3226,7 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 copyText(it.name, d.plugin);
                 copyText(it.detail, d.text);
                 it.value[0] = static_cast<double>(d.node);  // (API 0.3 8.12) the patch decoder node, 0 = the receiver's
+                it.value[1] = static_cast<double>(d.radio); // (stage 7) the radio whose decoder said it; 0 = a patch decoder's line
             }
             break;
         }

@@ -1342,6 +1342,8 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             fact(pre + "device", n == 1u ? patchReceiverRadioKey()
                                          : (rx().device_ != nullptr ? cascade::core::patch::makeDeviceKey(rx().sourceKind_, rx().deviceArgs_) : std::string()));
             fact(pre + "label", radioLabel());
+            // WHAT KIND OF SOURCE THIS RADIO IS ON (stage 7): "siggen", "file", "pluto", "rtltcp", "soapy" or a native driver's key; the generator while a source is still opening.
+            fact(pre + "source", rx().sourceKind_);
             fact(pre + "audio", radioRouteWord(rx().audioRoute_));
             if (!rx().refusal_.empty()) { fact(pre + "refusal", rx().refusal_); }
         }
