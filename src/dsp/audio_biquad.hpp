@@ -3,7 +3,7 @@
 //
 // SOURCE: Robert Bristow-Johnson, "Cookbook formulae for audio EQ biquad filter coefficients", published as the W3C Working
 // Group Note "Audio EQ Cookbook" (editor Raymond Toy), 8 June 2021, https://www.w3.org/TR/audio-eq-cookbook/ (read 2026-11-11):
-// peakingEQ, lowShelf, highShelf, LPF, HPF, with A = 10^(dB/40), w0 = 2 pi f0 / fs, alpha = sin(w0) / (2 Q).
+// peakingEQ, lowShelf, highShelf, LPF, HPF, notch, with A = 10^(dB/40), w0 = 2 pi f0 / fs, alpha = sin(w0) / (2 Q).
 // Nothing here is wired into the engine. Header-only, allocation-free.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
@@ -79,6 +79,13 @@ inline Coef highpass(double fs, double f0, double q) {
     const double al = std::sin(w) / (2.0 * clampQ(q));
     const double c = std::cos(w);
     return normalise((1 + c) / 2, -(1 + c), (1 + c) / 2, 1 + al, -2 * c, 1 - al);
+}
+
+inline Coef notch(double fs, double f0, double q) {
+    const double w = 2.0 * kPi * clampFreq(fs, f0) / fs;
+    const double al = std::sin(w) / (2.0 * clampQ(q));
+    const double c = std::cos(w);
+    return normalise(1.0, -2 * c, 1.0, 1 + al, -2 * c, 1 - al);
 }
 
 inline double run(const Coef& k, State& s, double x) {
