@@ -166,6 +166,7 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
       </div>
     </div>
     <button id="listen">Listen</button>
+    <button id="mute" aria-pressed="false" title="silence the radio's audio at the receiver, like the window's MUTE key">Mute</button>
     <div id="volume"><span class="cap">Volume</span>
       <div class="knobwrap">
         <div id="volKnob" class="knob" role="slider" tabindex="0"
@@ -2134,7 +2135,11 @@ function reflectExtras(s) {
   };
   lamp('lampRun', s.running);
   lamp('lampDec', (s.plugins || []).length > 0);
-  lamp('lampMute', !!s.audioMutedBy, 'warn');
+  lamp('lampMute', !!s.muted || !!s.audioMutedBy, 'warn');
+  // The button shows the USER'S mute, read back from the status every poll: a mute set at the desk shows here too.
+  $('mute').classList.toggle('on', !!s.muted);
+  $('mute').setAttribute('aria-pressed', s.muted ? 'true' : 'false');
+  $('mute').textContent = s.muted ? 'Unmute' : 'Mute';
   lamp('lampFail', !!(s.recordError || s.sourceError), 'bad');
 
   // THE METER. 0 to 10 MS/s across 270 degrees, which covers every rate the
@@ -2503,6 +2508,9 @@ $('listen').addEventListener('click', () => {
   if (audioCtx) stopListening(); else startListening();
 });
 
+$('mute').addEventListener('click', () => {
+  control({ muted: $('mute').getAttribute('aria-pressed') !== 'true' });
+});
 $('playstop').addEventListener('click', () => {
   control({ running: $('playstop').textContent === 'Start' });
 });
@@ -2610,9 +2618,18 @@ $('scanToggle').addEventListener('click', () => {
 });
 $('scanSkip').addEventListener('click', () => control({ scannerSkip: true }));
 
+)JS";
+
+// (the client script continues: kAppJs3 outgrew MSVC's single-literal limit with the live-update code)
+constexpr char kAppJs3b[] = R"JS(
 async function pollStatus() {
   const s = await getJson('/api/status');
   if (!s) return;
+  showStatus(s);
+}
+
+// What a status object does to the page - from a poll's answer or from a pushed event, the same thing.
+function showStatus(s) {
   buildModes();
   reflect(s);
   $('status').innerHTML = [
@@ -2764,15 +2781,53 @@ $('spectrum').addEventListener('click', (e) => {
 // ~15 Hz reads as live. Each response is ~2 KB on a kept-alive connection,
 // so the faster cadence costs ~30 KB/s and no extra connections.
 let specTimer = null;
+// LIVE UPDATES (GET /api/events, server-sent events). While the stream is up the status arrives by push and the status poll slows to
+// KEEPALIVE_MS: that poll is the session's heartbeat (the server counts nothing else as one), not the page's source of readouts. 500 ms and
+// not slower because the engine judges the remote transmit key's keep-alive from it with a 2 s window (docs/api-0.3-additions.md 8.16): a page
+// polling every 2 s would lose a held key at its first late poll. When
+// the stream drops - an old browser, a proxy that buffers it, the server at its listener cap (503), a sign-out - the poll goes back to
+// 250 ms at once and the stream is tried again after EVENTS_RETRY_MS. Nothing else on the page knows which of the two is feeding it.
+const STATUS_POLL_MS = 250, KEEPALIVE_MS = 500, EVENTS_RETRY_MS = 10000;
+let es = null, esRetry = null;
+function setStatusRate(ms) {
+  if (timer) clearInterval(timer);
+  timer = setInterval(() => { pollStatus(); }, ms);
+}
+function stopEvents() {
+  if (esRetry) { clearTimeout(esRetry); esRetry = null; }
+  if (es) { es.close(); es = null; }
+}
+function startEvents() {
+  esRetry = null;
+  if (es || !timer || !window.EventSource) return;
+  const src = new EventSource('/api/events');
+  es = src;
+  src.addEventListener('status', (e) => {
+    if (es !== src) return;
+    let s = null;
+    try { s = JSON.parse(e.data); } catch (_) { return; }
+    setLinkUp(true);
+    if (!src.live) { src.live = true; setStatusRate(KEEPALIVE_MS); }
+    showStatus(s);
+  });
+  src.onerror = () => {
+    if (es !== src) return;
+    src.close();
+    es = null;
+    if (timer) { setStatusRate(STATUS_POLL_MS); esRetry = setTimeout(startEvents, EVENTS_RETRY_MS); }
+  };
+}
 function startPolling() {
   if (timer) return;
-  timer = setInterval(() => { pollStatus(); }, 250);
+  setStatusRate(STATUS_POLL_MS);
   specTimer = setInterval(() => { pollSpectrum(); }, 66);
   pollStatus(); pollSpectrum();
+  startEvents();
 }
 // Lets go of the transmit key too: every caller is the session going, and
 // reflectTransmit's release runs only from the poller stopped here (kAppJs2p).
 function stopPolling() {
+  stopEvents();
   if (timer) { clearInterval(timer); timer = null; }
   if (specTimer) { clearInterval(specTimer); specTimer = null; }
   pttRelease();
@@ -2825,7 +2880,7 @@ refreshSession();
 const std::string& appJs() {
     static const std::string joined =
         std::string(kAppJs1) + kAppJs2 + kAppJs2t + kAppJs2b + kAppJs2c + kAppJs2d +
-        kAppJs2e + kAppJs2p + kAppJs3;
+        kAppJs2e + kAppJs2p + kAppJs3 + kAppJs3b;
     return joined;
 }
 
@@ -2898,6 +2953,7 @@ std::string statusJson(const RadioStatus& s,
     j["transmitRemoteHold"] = s.transmitRemoteHoldMs;
     j["squelchDb"] = s.squelchDb;
     j["volume"] = s.volume;
+    j["muted"] = s.muted;
     j["dbMin"] = s.dbMin;
     j["dbMax"] = s.dbMax;
     j["tunerDisplayStyle"] = s.tunerDisplayStyle;
@@ -3213,6 +3269,10 @@ public:
         return static_cast<std::size_t>(listeners_.load(std::memory_order_relaxed));
     }
 
+    std::size_t eventListeners() const {
+        return static_cast<std::size_t>(eventListeners_.load(std::memory_order_relaxed));
+    }
+
 private:
     void installRoutes(httplib::Server& svr);
 
@@ -3296,6 +3356,12 @@ private:
 
     // How many browsers are streaming audio right now (the cap's count). The audio itself is the engine's: read through the session.
     std::atomic<int> listeners_{0};
+    // The live-update streams (GET /api/events): how many are open, and what wakes them when the server stops (a stream sleeps on the
+    // condition variable between looks, never in a bare sleep, so stop() does not wait out a tick; stop() takes the mutex before it
+    // notifies, so a stream that has just tested running_ cannot miss the wake-up).
+    std::atomic<int> eventListeners_{0};
+    std::mutex eventMutex_;
+    std::condition_variable eventCv_;
 
     // Highest spectrum sequence this process has served. Zero at start-up,
     // which is exactly why a cursor left over from a previous run reads as
@@ -3539,6 +3605,73 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         }
         res.set_content(statusJson(s, [this](std::size_t i) { return haveImage(i); }),
                         "application/json");
+    });
+
+    // LIVE UPDATES: the status the page polls for, pushed as server-sent events (text/event-stream) when it changes.
+    //
+    // PLAIN HTTP, NO NEW LIBRARY: a chunked content provider that never ends, exactly as the audio stream is. THE SAME RULES AS EVERY
+    // OTHER ROUTE: the cookie gate (authorised(): no cookie, no stream) and the bind policy that decided who may reach this port at all;
+    // a stream is also re-checked against the session store on every look, so a sign-out, an expiry or a revoke ends it within a tick.
+    //
+    // NOT A HEARTBEAT. The web session's keep-alive is the authorised /api/status poll and nothing else (web_session.hpp), and a stream
+    // held open by a frozen tab must not stand in for a page that is alive, so this route never calls session_->heartbeat(). The page
+    // keeps a slow status poll for that while the stream is up (kAppJs3).
+    //
+    // NO BUSY LOOP: a look every kEventTick on a condition variable that stop() also signals; it sends only when the JSON differs from
+    // what this listener last got, plus a comment line when kEventHeartbeat passes in silence (it keeps proxies from closing an idle
+    // stream and finds a vanished peer: the write fails). At most kMaxEventListeners at once; the next is answered 503.
+    svr.Get("/api/events", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorised(req)) {
+            deny(res, "sign in first");
+            return;
+        }
+        const int before = eventListeners_.fetch_add(1, std::memory_order_acq_rel);
+        if (before >= static_cast<int>(WebServer::kMaxEventListeners)) {
+            eventListeners_.fetch_sub(1, std::memory_order_acq_rel);
+            deny(res, "too many live-update listeners", 503);
+            return;
+        }
+        struct Stream {
+            std::string token;
+            std::string last;
+            bool first = true;
+            std::chrono::steady_clock::time_point lastSend{};
+        };
+        auto st = std::make_shared<Stream>();
+        st->token = cookieValue(req.get_header_value("Cookie"), kCookieName);
+        res.set_header("X-Accel-Buffering", "no");
+        res.set_chunked_content_provider(
+            "text/event-stream",
+            [this, st](std::size_t /*offset*/, httplib::DataSink& sink) {
+                if (!st->first) {
+                    std::unique_lock<std::mutex> lk(eventMutex_);
+                    eventCv_.wait_for(lk, WebServer::kEventTick, [this] { return !running_.load(std::memory_order_acquire); });
+                }
+                if (!running_.load(std::memory_order_acquire)) { return false; }  // server stopping: end the stream
+                BindDecision d;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    d = decision_;
+                }
+                if (d.authRequired && !sessions_.validate(st->token, now())) { return false; }  // signed out, expired or revoked
+                RadioStatus s;
+                if (status_) { s = status_(); }
+                std::string json = statusJson(s, [this](std::size_t i) { return haveImage(i); });
+                const auto t = std::chrono::steady_clock::now();
+                std::string out;
+                if (st->first) { out += "retry: 3000\n\n"; }
+                if (json != st->last) {
+                    out += "event: status\ndata: " + json + "\n\n";  // (statusJson's dump has no line break: one data line)
+                    st->last = std::move(json);
+                } else if (t - st->lastSend >= WebServer::kEventHeartbeat) {
+                    out += ": keep-alive\n\n";
+                }
+                st->first = false;
+                if (out.empty()) { return true; }
+                st->lastSend = t;
+                return sink.write(out.data(), out.size());
+            },
+            [this](bool) { eventListeners_.fetch_sub(1, std::memory_order_acq_rel); });
     });
 
     // Live audio as an endless chunked response of 16-bit little-endian PCM.
@@ -3925,6 +4058,9 @@ void WebServer::Impl::stop() {
         svr_.reset();
         return;
     }
+    // Wake the live-update streams: they sleep on this, and end at once when they see running_ is false.
+    { std::lock_guard<std::mutex> lk(eventMutex_); }
+    eventCv_.notify_all();
     if (svr_) {
         svr_->stop();
     }
@@ -3979,6 +4115,7 @@ BindDecision WebServer::decision() const { return impl_->decision(); }
 std::size_t WebServer::sessionCount() const { return impl_->sessionCount(); }
 void WebServer::revokeAllSessions() { impl_->revokeAllSessions(); }
 std::size_t WebServer::audioListeners() const { return impl_->audioListeners(); }
+std::size_t WebServer::eventListeners() const { return impl_->eventListeners(); }
 void WebServer::setImages(std::vector<WebImage> images) {
     impl_->setImages(std::move(images));
 }

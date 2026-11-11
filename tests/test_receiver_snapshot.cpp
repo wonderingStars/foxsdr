@@ -835,7 +835,7 @@ PublishedState everyFieldDistinct() {
     r.flags = FOXAPI_RX_RUNNING | FOXAPI_RX_FAULTED | FOXAPI_RX_STEREO_ACTIVE | FOXAPI_RX_TX_KEYED |
               FOXAPI_RX_TX_REMOTE_ARMED | FOXAPI_RX_NR | FOXAPI_RX_NOTCH | FOXAPI_RX_AUTO_NOTCH |
               FOXAPI_RX_STEREO_ENABLED | FOXAPI_RX_AGC_SUPPORTED | FOXAPI_RX_DEVICE_AGC |
-              FOXAPI_RX_RECORDING_IQ | FOXAPI_RX_RECORDING_AUDIO | FOXAPI_RX_SCANNER_ACTIVE;
+              FOXAPI_RX_RECORDING_IQ | FOXAPI_RX_RECORDING_AUDIO | FOXAPI_RX_SCANNER_ACTIVE | FOXAPI_RX_MUTED;
     r.centreHz = 101.1e6;
     r.sampleRateHz = 2.4e6;
     r.vfoOffsetHz = -12.5e3;
@@ -940,7 +940,7 @@ RadioStatus everyListDistinct() {
 const char* const kRows[] = {
     "running", "faulted", "faultMessage", "centerHz", "sampleRateHz", "vfoOffsetHz", "bandwidthHz",
     "mode", "sourceName", "signalDb", "stereoActive", "transmitting", "transmitAvailable",
-    "transmitRemoteHoldMs", "squelchDb", "volume", "dbMin", "dbMax", "tunerDisplayStyle",
+    "transmitRemoteHoldMs", "squelchDb", "volume", "muted", "dbMin", "dbMax", "tunerDisplayStyle",
     "deemphasisIndex", "nrEnabled", "nrStrength", "notchEnabled", "notchFreqHz", "notchQ", "autoNotch",
     "autoNotchEngaged", "autoNotchFreqHz", "stereoEnabled", "pilotLocked", "rdsSynced", "rdsPiValid",
     "rdsPi", "rdsPsValid", "rdsPs", "rdsRadioText", "rdsPty", "rdsTp", "rdsTa", "rdsGroups",
@@ -1011,6 +1011,7 @@ void composeMapsEveryField() {
     ROW(o.transmitRemoteHoldMs == 1234);
     ROW(o.squelchDb == -61.5f);
     ROW(o.volume == 0.375f);
+    ROW(o.muted);  // FOXAPI_RX_MUTED: the user's mute (feat/web-bookmarks)
     ROW(o.dbMin == -117.0f);
     ROW(o.dbMax == -7.5f);
     ROW(o.tunerDisplayStyle == "plain");
@@ -1091,7 +1092,7 @@ void composeMapsEveryField() {
     const RadioStatus z = cascade::net::composeRadioStatus(off, &l);
     CHECK(!z.running && !z.faulted && !z.stereoActive && !z.transmitting && !z.transmitAvailable &&
           !z.nrEnabled && !z.notchEnabled && !z.autoNotch && !z.stereoEnabled && !z.agcSupported &&
-          !z.agc && !z.iqRecording && !z.audioRecording && !z.scannerActive);
+          !z.agc && !z.iqRecording && !z.audioRecording && !z.scannerActive && !z.muted);
 
     // The table above is every member: the header decides, not this file.
     const std::set<std::string> declared = radioStatusMembers();
@@ -1151,6 +1152,7 @@ const BoolOut kBools[] = {
     {"faulted", [](const RadioStatus& o) { return o.faulted; }},
     {"stereoActive", [](const RadioStatus& o) { return o.stereoActive; }},
     {"transmitting", [](const RadioStatus& o) { return o.transmitting; }},
+    {"muted", [](const RadioStatus& o) { return o.muted; }},
     {"transmitAvailable", [](const RadioStatus& o) { return o.transmitAvailable; }},
     {"nrEnabled", [](const RadioStatus& o) { return o.nrEnabled; }},
     {"notchEnabled", [](const RadioStatus& o) { return o.notchEnabled; }},
@@ -1234,7 +1236,7 @@ void walkingOneCompose() {
         {FOXAPI_RX_RUNNING, "RUNNING", "running"},
         {FOXAPI_RX_DEVICE_OPEN, "DEVICE_OPEN", ""},
         {FOXAPI_RX_FAULTED, "FAULTED", "faulted"},
-        {FOXAPI_RX_MUTED, "MUTED", ""},
+        {FOXAPI_RX_MUTED, "MUTED", "muted"},
         {FOXAPI_RX_SQUELCH_OPEN, "SQUELCH_OPEN", ""},
         {FOXAPI_RX_STEREO_ENABLED, "STEREO_ENABLED", "stereoEnabled"},
         {FOXAPI_RX_STEREO_ACTIVE, "STEREO_ACTIVE", "stereoActive"},

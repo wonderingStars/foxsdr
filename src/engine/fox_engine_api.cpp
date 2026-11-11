@@ -410,7 +410,7 @@ constexpr std::uint32_t kWebProfile[] = {
     FOXAPI_OP_SET_SAMPLE_RATE, FOXAPI_OP_SET_GAIN,      FOXAPI_OP_SET_DEVICE_AGC, FOXAPI_OP_RECORD_IQ,
     FOXAPI_OP_RECORD_AUDIO,  FOXAPI_OP_BOOKMARK_ADD,    FOXAPI_OP_BOOKMARK_TUNE,  FOXAPI_OP_BOOKMARK_REMOVE,
     FOXAPI_OP_PLUGIN_GRANT,  FOXAPI_OP_PLUGIN_PRESET,   FOXAPI_OP_SCANNER_RUN,    FOXAPI_OP_SCANNER_SKIP,
-    FOXAPI_OP_TX_PTT,
+    FOXAPI_OP_TX_PTT,        FOXAPI_OP_SET_MUTED,
     // the plugin store: ADMIN ops the page's "Get plugins", Install and Remove buttons send (the profile, not a grant, allows them)
     FOXAPI_OP_STORE_FETCH,   FOXAPI_OP_STORE_INSTALL,   FOXAPI_OP_STORE_REMOVE,
     // the application's own ops the page's sliders send (every other REMOTE session is refused all of them)

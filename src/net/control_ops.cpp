@@ -40,6 +40,10 @@ std::vector<cmd::QueuedCommand> controlRequestToCommands(const ControlRequest& r
     if (r.vfoOffsetHz) { push(out, cmd::makeNum(FOXAPI_OP_SET_VFO_OFFSET, *r.vfoOffsetHz)); }
     if (r.squelchDb) { push(out, cmd::makeNum(FOXAPI_OP_SET_SQUELCH, *r.squelchDb)); }
     if (r.volume) { push(out, cmd::makeNum(FOXAPI_OP_SET_VOLUME, *r.volume)); }
+    // The user's mute, the same op the window's MUTE key sends (feat/web-bookmarks). NEEDS FOXAPI_OP_SET_MUTED IN kWebProfile
+    // (src/engine/fox_engine_api.cpp): until it is there the engine refuses it for the web session (HAND-OFF in
+    // docs/feature-records/web-bookmarks.md).
+    if (r.muted) { push(out, cmd::makeInt(FOXAPI_OP_SET_MUTED, *r.muted ? 1 : 0)); }
     // The display range: the end the caller moved yields to the minimum span.
     if (r.dbMin && r.dbMax) {
         push(out, cmd::makeNum(FOXAPI_OP_SET_DISPLAY_RANGE, *r.dbMin, *r.dbMax));

@@ -131,6 +131,7 @@ foreach(src ${_foxsdr_slint_test_sources})
                 "${CMAKE_CURRENT_SOURCE_DIR}/../signal_logic.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/airband_data.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/freq_import.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/freq_import_formats.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/freq_markers.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/freq_manager.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/file_read.cpp"

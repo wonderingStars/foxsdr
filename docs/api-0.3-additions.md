@@ -2529,6 +2529,22 @@ than the first carry the radio's number in their high bits (`(n - 1) << 48`), so
 * Timed recordings: ops `FOXAPP_OP_SCHEDULE_SET` 0x860C, `_REMOVE` 0x860D, `_ENABLE` 0x860E, `_RUN_NOW` 0x860F, `_SKIP` 0x8610 (LOCAL sessions only), the facts `fact.schedule.count/active/missed/max/next` and `fact.schedule.entry.<id>` (one JSON document per entry), the settings key `schedule`. Full text: API.md 6.23.
 * The settings file gains `tciEnabled tciBindAll tciPort udpAudioEnabled udpAudioHost udpAudioPort udpAudioRadio udpAudioPacketFrames schedule`; a 0.99.104 reader ignores them (`tools/old_reader_probe`).
 
+### 9.25 The web page: the user's mute and live updates (feat/web-bookmarks; docs/feature-records/web-bookmarks.md)
+
+Two additions to the browser page's HTTP routes (`src/net/web_server.cpp`, `web_control.*`). Neither changes the engine API table; one needs a profile line there (below).
+
+**`muted` in `POST /api/control`.** A JSON boolean, strict like the other booleans (`1`, `"true"` and `null` are 400). It is translated to `FOXAPI_OP_SET_MUTED` with `ival[0]` 1 or 0, the op the window's MUTE key sends (`control_ops.cpp`), and it is the user's own mute, not a plugin's (`audioMutedBy`). `GET /api/status` carries it back as `"muted"` (`FOXAPI_RX_MUTED`), so a mute set at the desk shows on the page. **The web session's profile (`kWebProfile`, `fox_engine_api.cpp`) must hold `FOXAPI_OP_SET_MUTED`**, one line, and `test_engine_api_05a` P1 (the profile is the closure of `controlRequestToCommands`, both ways: 38 ops today, 39 with it) must set `muted` in its every-field request; until both are done the engine answers the page's mute `FOXAPI_DENIED`.
+
+**`GET /api/events`: live updates as server-sent events.** `Content-Type: text/event-stream`, chunked, plain HTTP. Same gate as every other route: the session cookie when the binding requires one (401 and no stream otherwise; the bind policy decides who can reach the port at all), and the stream is re-checked against the session store every look, so a sign-out, an expiry or a revoke ends it within `kEventTick`. The stream, in order:
+
+- `retry: 3000` - the browser's reconnect delay (ms), first.
+- `event: status` with one `data:` line, the same JSON `GET /api/status` returns (one line, no embedded line break), when that JSON differs from what this listener last received. The first one is sent at once. The status is read every `kEventTick` (250 ms) on a condition variable, never a sleep and never a spin, so with a signal level that moves on every look it is pushed at up to 4 per second, and for a static radio not at all.
+- `: keep-alive` - a comment line, after `kEventHeartbeat` (15 s) with nothing else sent. It keeps a proxy from closing an idle stream and makes a vanished peer fail a write.
+
+At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTTP worker for as long as it is open (the audio stream's 4 is a separate count); the next is answered `503 {"error":"too many live-update listeners"}`. `WebServer::stop()` wakes every stream and ends it at once: a stop with all four attached took 0 to 1 ms in `test_web_server`, inside the existing budget (`kClientIoTimeout`, `test_shutdown_budget`).
+
+*It is not a heartbeat.* The session's keep-alive stays the authorised `GET /api/status` and nothing else (8.16, API 0.2): a stream held open by a frozen tab must not stand in for a live page, and the remote transmit key is judged from that heartbeat with a 2 s window. The page therefore keeps one `GET /api/status` every 500 ms while the stream is up (4 per second, 250 ms, when it is not) and applies what it returns. The page falls back to the fast poll the moment the stream errors (including a 503 or 401), and retries the stream every 10 s. A client that is not a browser can use `/api/events` for the push and must poll `/api/status` itself if it holds the transmit key.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

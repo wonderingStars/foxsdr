@@ -56,7 +56,10 @@ struct ImportResult {
     std::size_t entries = 0;   // entries seen in the file
     std::size_t skipped = 0;   // seen but unusable (no frequency, not a number)
     std::size_t shifted = 0;   // carried a non-zero SDR# Shift, not applied
-    std::string format;        // "SDR# XML" or "CSV"
+    std::string format;        // "SDR# XML", "CSV", "CHIRP CSV" or "SDR++ JSON"
+    // Added with the CHIRP and SDR++ readers (feat/web-bookmarks). Both stay 0 for the older formats.
+    std::size_t modeDefaulted = 0;  // a mode the file named that FoxSDR has no demodulator name for: imported as NFM
+    std::size_t toned = 0;          // rows whose CTCSS / DCS tone was kept in the name (Bookmark has no tone field)
     std::string error;         // set when nothing could be read at all
 };
 
@@ -66,8 +69,33 @@ ImportResult importSdrSharpXml(std::string_view text);
 // CSV text.
 ImportResult importCsv(std::string_view text);
 
-// Either, decided from the content: anything containing "<MemoryEntry" is
-// SDR#'s format, everything else is tried as CSV.
+// CHIRP's CSV export (Location,Name,Frequency,Duplex,Offset,Tone,rToneFreq,cToneFreq,DtcsCode,...,Mode,...).
+// The frequency is the receive frequency, in MHz; Name and Mode become the bookmark's; the mode is mapped
+// FM/NFM -> NFM, WFM -> WFM, AM/NAM -> AM, USB, LSB, CW/CWR -> CW, and any other non-empty mode (DV, DMR, ...)
+// is imported as NFM and counted in modeDefaulted. A row with a tone (Tone, TSQL, DTCS, Cross) keeps it in the
+// bookmark's name as " [CTCSS 88.5 Hz]" / " [DCS 023]" because a Bookmark has no tone or notes field. Quoted
+// fields (commas and line breaks inside quotes), a byte-order mark, CRLF, empty rows and a missing optional
+// column are all accepted. A file whose header is not CHIRP's sets `error` and reads nothing.
+ImportResult importChirpCsv(std::string_view text);
+
+// True when the first row of `text` (after a byte-order mark) is a CHIRP header: a Location and a Frequency
+// column and at least two more of CHIRP's own column names (Duplex, Offset, Tone, rToneFreq, cToneFreq,
+// DtcsCode, DtcsPolarity, TStep, Skip, Power, Comment, CrossMode).
+bool looksLikeChirpCsv(std::string_view text);
+
+// SDR++'s frequency-manager file (frequency_manager_config.json): {"lists": {"<list name>": {"bookmarks":
+// {"<bookmark name>": {"frequency": Hz, "bandwidth": Hz, "mode": index}}}}}. Each list becomes a bookmark
+// group. UNVERIFIED against a real export: the mode index map (0 NFM, 1 WFM, 2 AM, 3 DSB, 4 USB, 5 CW, 6 LSB,
+// 7 RAW) comes from the survey's secondary record, not from a documentation page. An index outside 0..7 is
+// imported as NFM and counted in modeDefaulted. Malformed JSON, or JSON with no "lists" object, sets `error`.
+ImportResult importSdrppJson(std::string_view text);
+
+// True when `text` (after a byte-order mark and white space) starts with '{' and parses as JSON with a
+// "lists" object at the top.
+bool looksLikeSdrppJson(std::string_view text);
+
+// Any of the four, decided from the content: "<MemoryEntry" is SDR#'s XML, a JSON object with "lists" is
+// SDR++'s, a CHIRP header is CHIRP's, everything else is tried as the generic CSV.
 ImportResult importFrequencyList(std::string_view text);
 
 // Reads a file named by its UTF-8 path and imports it (0.99.80).

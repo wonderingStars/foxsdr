@@ -50,6 +50,7 @@ RadioStatus composeRadioStatus(const cascade::core::PublishedState& state, const
     o.transmitRemoteHoldMs = r.txHoldRemainingMs;
     o.squelchDb = static_cast<float>(r.squelchDb);
     o.volume = static_cast<float>(r.volume);
+    o.muted = flag(FOXAPI_RX_MUTED);
     o.dbMin = static_cast<float>(r.dbMin);
     o.dbMax = static_cast<float>(r.dbMax);
     o.deemphasisIndex = static_cast<int>(r.deemphasis);

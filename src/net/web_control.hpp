@@ -78,6 +78,7 @@ struct ControlRequest {
     std::optional<double> bandwidthHz;
     std::optional<double> squelchDb;
     std::optional<double> volume;                   // 0..1
+    std::optional<bool> muted;                      // the user's own mute (the window's MUTE key): FOXAPI_OP_SET_MUTED
 
     // Display range shared by the spectrum axis and the waterfall colormap.
     std::optional<double> dbMin;
@@ -182,7 +183,7 @@ struct ControlRequest {
 
     bool empty() const {
         return !running && !centerHz && !vfoOffsetHz && !mode && !bandwidthHz &&
-               !squelchDb && !volume && !dbMin && !dbMax && !deemphasisIndex &&
+               !squelchDb && !volume && !muted && !dbMin && !dbMax && !deemphasisIndex &&
                !nrEnabled && !nrStrength && !notchEnabled && !notchFreqHz &&
                !notchQ && !autoNotch && !stereoEnabled && !sourceKind &&
                !soapyArgs && !antenna && !sampleRateHz && !gainName && !gainDb &&

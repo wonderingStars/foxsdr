@@ -103,6 +103,9 @@ std::vector<Row> table() {
     row({"squelchDb"}, [](ControlRequest& r) { r.squelchDb = -42.0; },
         {{FOXAPI_OP_SET_SQUELCH, 0, 0, -42.0}});
     row({"volume"}, [](ControlRequest& r) { r.volume = 0.25; }, {{FOXAPI_OP_SET_VOLUME, 0, 0, 0.25}});
+    // The user's mute: the op the window's MUTE key sends.
+    row({"muted"}, [](ControlRequest& r) { r.muted = true; }, {{FOXAPI_OP_SET_MUTED, 1}});
+    row({"muted"}, [](ControlRequest& r) { r.muted = false; }, {{FOXAPI_OP_SET_MUTED, 0}});
     // The display range: both, or the one end that moved.
     row({"dbMin", "dbMax"}, [](ControlRequest& r) { r.dbMin = -110.0; r.dbMax = -30.0; },
         {{FOXAPI_OP_SET_DISPLAY_RANGE, 0, 0, -110.0, -30.0}});
@@ -293,6 +296,7 @@ void orderIsTheHistoricalOrder() {
     r.deemphasisIndex = 0;
     r.dbMin = -100.0;
     r.volume = 0.5;
+    r.muted = true;
     r.squelchDb = -60.0;
     r.vfoOffsetHz = 0.0;
     r.bandwidthHz = 12.5e3;
@@ -302,7 +306,7 @@ void orderIsTheHistoricalOrder() {
     const std::vector<std::uint32_t> want = {
         FOXAPI_OP_RUN,           FOXAPI_OP_SET_CENTRE,     FOXAPI_OP_SET_MODE,
         FOXAPI_OP_SET_BANDWIDTH, FOXAPI_OP_SET_VFO_OFFSET, FOXAPI_OP_SET_SQUELCH,
-        FOXAPI_OP_SET_VOLUME,    FOXAPP_OP_SET_DISPLAY_MIN, FOXAPI_OP_SET_DEEMPHASIS,
+        FOXAPI_OP_SET_VOLUME,    FOXAPI_OP_SET_MUTED,       FOXAPP_OP_SET_DISPLAY_MIN, FOXAPI_OP_SET_DEEMPHASIS,
         FOXAPI_OP_SET_STEREO,    FOXAPI_OP_SET_NR,         FOXAPI_OP_SET_AUTO_NOTCH,
         FOXAPI_OP_SCAN_DEVICES,  FOXAPI_OP_SELECT_SOURCE,  FOXAPI_OP_SET_ANTENNA,
         FOXAPI_OP_SET_SAMPLE_RATE, FOXAPI_OP_SET_GAIN,     FOXAPI_OP_SET_DEVICE_AGC,

@@ -414,6 +414,8 @@ ImportResult importCsv(std::string_view text) {
 
 ImportResult importFrequencyList(std::string_view text) {
     if (text.find("<MemoryEntry") != std::string_view::npos) { return importSdrSharpXml(text); }
+    if (looksLikeSdrppJson(text)) { return importSdrppJson(text); }
+    if (looksLikeChirpCsv(text)) { return importChirpCsv(text); }
     return importCsv(text);
 }
 
