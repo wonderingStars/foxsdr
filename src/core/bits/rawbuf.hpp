@@ -90,6 +90,9 @@ private:
 
 // ---- the decoder chain ---------------------------------------------------------------------------------
 
+// A slice longer than this many chips is cut (a resource limit: a burst of an hour is not a burst).
+inline constexpr size_t kMaxChips = 1u << 18;
+
 enum class FramingKind : uint8_t { None, Fixed, Length, Flag };
 
 struct ChainSettings {
@@ -110,6 +113,8 @@ struct ChainSettings {
     LengthFraming length;
     Bits flag = fromString("01111110");
     bool unstuff = true;
+    size_t maxFrames = 1024;       // resource limits on the result
+    size_t maxFrameBits = 4096;    // a frame framed by sync alone ends at the next sync hit or after this many bits
 };
 
 struct ChainResult {
@@ -132,7 +137,7 @@ inline ChainResult redecode(const RawSlice& s, const ChainSettings& cs) {
         if (!(T > 0)) T = estimateChipPeriod(runs);
         if (!(T > 0)) { r.problem = "the chip period could not be estimated (too few runs)"; return r; }
         r.chipUs = T;
-        cur = runsToChips(runs, T, 1u << 20);
+        cur = runsToChips(runs, T, kMaxChips);
     } else if (!s.chips.empty()) {
         cur = s.chips;
         r.chipUs = s.chipUs;
@@ -162,11 +167,14 @@ inline ChainResult redecode(const RawSlice& s, const ChainSettings& cs) {
             case FramingKind::Fixed: r.frames = frameFixed(r.bits, r.syncHits, cs.sync.size(), cs.fixedBits); break;
             case FramingKind::Length: r.frames = frameByLength(r.bits, r.syncHits, cs.sync.size(), cs.length); break;
             default: {
-                for (const auto& h : r.syncHits) {
+                for (size_t i = 0; i < r.syncHits.size() && r.frames.size() < cs.maxFrames; ++i) {
+                    const auto& h = r.syncHits[i];
                     Frame f;
                     f.start = h.pos + cs.sync.size();
                     f.syncDistance = h.distance;
-                    f.bits = slice(r.bits, f.start, r.bits.size());
+                    size_t end = i + 1 < r.syncHits.size() ? r.syncHits[i + 1].pos : r.bits.size();
+                    if (end < f.start) end = f.start;
+                    f.bits = slice(r.bits, f.start, std::min(end - f.start, cs.maxFrameBits));
                     r.frames.push_back(std::move(f));
                 }
             }
@@ -178,6 +186,7 @@ inline ChainResult redecode(const RawSlice& s, const ChainSettings& cs) {
         f.bits = r.bits;
         r.frames.push_back(std::move(f));
     }
+    if (r.frames.size() > cs.maxFrames) r.frames.resize(cs.maxFrames);
     r.ok = true;
     return r;
 }

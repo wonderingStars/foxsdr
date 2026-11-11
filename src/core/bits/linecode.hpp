@@ -257,7 +257,7 @@ inline Bits runsToChips(const std::vector<LevelRun>& runs, double T, size_t maxC
     if (!(T > 0)) return chips;
     for (const auto& r : runs) {
         double nd = std::round(r.duration / T);
-        if (nd < 1) nd = 1;
+        if (!(nd >= 1)) nd = 1;  // also catches NaN
         if (clipLong && nd > 8) nd = 8;
         const size_t n = static_cast<size_t>(std::min(nd, 1e9));
         for (size_t k = 0; k < n && chips.size() < maxChips; ++k) chips.push_back(r.level & 1u);
