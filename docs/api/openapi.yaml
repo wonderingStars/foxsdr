@@ -1,0 +1,915 @@
+openapi: 3.0.3
+info:
+  title: FoxSDR web remote
+  version: 0.99.108
+  description: "The HTTP interface of FoxSDR's built-in web server (src/net/web_server.cpp), read from that file's routes at engine/multi-radio d3630d78. It is the page the receiver serves to a browser plus the JSON and streaming routes the page uses. The server is OFF until the user turns it on. It has no TLS. A bind to anything but the loopback address is refused unless a password is set (src/net/web_policy.hpp). Where this file and the source disagree, the source is right; tests/packaging/test_openapi_routes.py fails when a route in the source is missing here."
+  license:
+    name: PolyForm Noncommercial 1.0.0
+    url: https://github.com/wonderingStars/foxsdr/blob/master/LICENSE
+servers:
+  - url: http://127.0.0.1:8073
+    description: "The default bind address and port (kDefaultWebPort 8073 in src/core/server_ports.hpp). The user chooses both in the settings."
+security:
+  - cookieAuth: []
+tags:
+  - name: page
+    description: "The page and its fonts. Never need a sign-in."
+  - name: session
+    description: "Sign in, sign out and ask whether a sign-in is needed."
+  - name: receiver
+    description: "Read the receiver and change it."
+paths:
+  /:
+    get:
+      tags: [page]
+      operationId: getIndex
+      summary: The web page (HTML)
+      description: "Sent with a strict Content-Security-Policy: no inline script or style, no external origin, no framing. Needs no sign-in: the page itself asks /api/session whether to show the sign-in form."
+      security: []
+      responses:
+        "200":
+          description: "The page."
+          content:
+            text/html:
+              schema:
+                type: string
+  /app.css:
+    get:
+      tags: [page]
+      operationId: getAppCss
+      summary: The page's style sheet
+      description: "Needs no sign-in."
+      security: []
+      responses:
+        "200":
+          description: "The style sheet."
+          content:
+            text/css:
+              schema:
+                type: string
+  /app.js:
+    get:
+      tags: [page]
+      operationId: getAppJs
+      summary: The page's script
+      description: "Needs no sign-in."
+      security: []
+      responses:
+        "200":
+          description: "The script."
+          content:
+            text/javascript:
+              schema:
+                type: string
+  /font/ui.ttf:
+    get:
+      tags: [page]
+      operationId: getFontUi
+      summary: The interface typeface
+      description: "SIL Open Font License, served byte for byte, Cache-Control public, max-age=31536000, immutable. Needs no sign-in."
+      security: []
+      responses:
+        "200":
+          description: "The font file."
+          content:
+            font/ttf:
+              schema:
+                type: string
+                format: binary
+  /font/legend.ttf:
+    get:
+      tags: [page]
+      operationId: getFontLegend
+      summary: The legend typeface
+      description: "SIL Open Font License, served byte for byte, immutable. Needs no sign-in."
+      security: []
+      responses:
+        "200":
+          description: "The font file."
+          content:
+            font/ttf:
+              schema:
+                type: string
+                format: binary
+  /font/reading.ttf:
+    get:
+      tags: [page]
+      operationId: getFontReading
+      summary: The reading typeface
+      description: "SIL Open Font License, served byte for byte, immutable. Needs no sign-in."
+      security: []
+      responses:
+        "200":
+          description: "The font file."
+          content:
+            font/ttf:
+              schema:
+                type: string
+                format: binary
+  /api/session:
+    get:
+      tags: [session]
+      operationId: getSession
+      summary: Is a sign-in needed, and is this client signed in
+      description: "Needs no sign-in. Reveals nothing beyond whether a credential is needed and whether this client holds a valid one."
+      security: []
+      responses:
+        "200":
+          description: "The sign-in state."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionState"
+  /api/login:
+    post:
+      tags: [session]
+      operationId: login
+      summary: Sign in
+      description: "Needs no sign-in. The body must be JSON (a CSRF defence: a cross-origin form cannot send it). Failed attempts are throttled per client address. On success the response sets the foxsdr_session cookie (Path=/; HttpOnly; SameSite=Strict; not Secure, because the server has no TLS). Checks are made in the order 415, 429, 400, 409, 401."
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: "Signed in. The session cookie is in the Set-Cookie header."
+          headers:
+            Set-Cookie:
+              description: "foxsdr_session=<token>; Path=/; HttpOnly; SameSite=Strict"
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          description: "The body is not valid JSON."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: "Wrong user name or password (counted by the throttle)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: "No password is set on this receiver, so there is nothing to sign in to."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: "The body is over the 8 KiB limit (the server's payload cap; the status is the vendored HTTP library's PayloadTooLarge_413)."
+        "415":
+          description: "The Content-Type is not application/json."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: "Too many failed sign-in attempts from this address; try again after the time in Retry-After."
+          headers:
+            Retry-After:
+              description: "Seconds to wait."
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: "A session could not be created."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/logout:
+    post:
+      tags: [session]
+      operationId: logout
+      summary: Sign out
+      description: "Needs no sign-in. Revokes the presented session, if any, and clears the cookie (Max-Age=0)."
+      security: []
+      responses:
+        "200":
+          description: "Done."
+          headers:
+            Set-Cookie:
+              description: "The cookie, expired."
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+  /api/status:
+    get:
+      tags: [receiver]
+      operationId: getStatus
+      summary: The whole receiver state
+      description: "Needs a sign-in when the server runs with a password. THIS CALL, and no other, is the web session's heartbeat: the engine judges the remote transmit key's keep-alive from it (2 s window), so a client that holds the transmit key must keep polling it."
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: "The state."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+        "401":
+          $ref: "#/components/responses/SignInFirst"
+  /api/audio:
+    get:
+      tags: [receiver]
+      operationId: getAudio
+      summary: The audio the receiver is playing, as a stream
+      description: "Needs a sign-in when the server runs with a password. A chunked response that never ends until the client closes it or the server stops: signed 16-bit little-endian PCM, 48 kHz, mono. At most 4 listeners at once."
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: "The stream."
+          content:
+            "audio/L16;rate=48000;channels=1":
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/SignInFirst"
+        "503":
+          description: "The receiver is not available to this server, or 4 listeners are already connected."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/image/{index}:
+    get:
+      tags: [receiver]
+      operationId: getImage
+      summary: One picture a plugin has drawn
+      description: "Needs a sign-in when the server runs with a password. The index is the position in the status response's images list."
+      parameters:
+        - name: index
+          in: path
+          required: true
+          description: "Zero-based index into the status response's images list."
+          schema:
+            type: integer
+            minimum: 0
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: "The picture as a BMP."
+          content:
+            image/bmp:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: "The index is not a number this server can read."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/SignInFirst"
+        "404":
+          description: "No picture at that index."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/tile/{z}/{x}/{y}:
+    get:
+      tags: [receiver]
+      operationId: getTile
+      summary: One map tile
+      description: "Needs a sign-in when the server runs with a password. A tile that is not held yet is queued for the application to fetch and answered 202; ask again shortly."
+      parameters:
+        - name: z
+          in: path
+          required: true
+          description: "Zoom level, 0 to 22."
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 22
+        - name: x
+          in: path
+          required: true
+          description: "Tile column, 0 to 2^z - 1."
+          schema:
+            type: integer
+            minimum: 0
+        - name: y
+          in: path
+          required: true
+          description: "Tile row, 0 to 2^z - 1."
+          schema:
+            type: integer
+            minimum: 0
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: "The tile as a BMP."
+          content:
+            image/bmp:
+              schema:
+                type: string
+                format: binary
+        "202":
+          description: "Not held yet; it has been requested."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pending"
+        "400":
+          description: "The address is not a tile (not numbers, zoom over 22, or x or y outside the zoom's range)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/SignInFirst"
+        "404":
+          description: "No such tile."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/control:
+    post:
+      tags: [receiver]
+      operationId: postControl
+      summary: Change the receiver
+      description: "Needs a sign-in when the server runs with a password. The body is ONE JSON object of the fields below; absent fields are left alone; an unknown field, an empty object, a value out of range, NaN or infinity is refused with 400. Nothing is applied here: the request is validated, queued, and answered 202; the receiver applies it on its next frame, so read /api/status to see the result."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ControlRequest"
+      security:
+        - cookieAuth: []
+      responses:
+        "202":
+          description: "Accepted and queued."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Accepted"
+        "400":
+          description: "Refused: not a JSON object, an unknown field, a value out of range, a mode name that does not exist, or an empty object. The error text names which."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/SignInFirst"
+        "409":
+          description: "transmitPtt was asked for but no transmitter is open, or remote transmit is not allowed at the desk."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: "The body is over the 8 KiB limit (the status is the vendored HTTP library's PayloadTooLarge_413)."
+        "415":
+          description: "The Content-Type is not application/json."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: "The receiver is not available to this server, or its state could not be read just now; try again."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/spectrum:
+    get:
+      tags: [receiver]
+      operationId: getSpectrum
+      summary: The latest spectrum line
+      description: "Needs a sign-in when the server runs with a password. Poll with the seq of the last answer in since; fresh is false when there is nothing newer."
+      parameters:
+        - name: since
+          in: query
+          required: false
+          description: "The seq of the last line the client holds. A value that is not a number, or one this server run has never issued, is treated as 0 (send anything)."
+          schema:
+            type: integer
+            minimum: 0
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: "The line, or fresh false."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Spectrum"
+        "401":
+          $ref: "#/components/responses/SignInFirst"
+  /api/events:
+    get:
+      tags: [receiver]
+      operationId: getEvents
+      summary: Live status updates (server-sent events)
+      x-to-add-at-merge: true
+      description: "TO ADD AT MERGE: this route is in the running feat/web-secure lane (branch feat/web-bookmarks, record docs/feature-records/web-bookmarks.md) and is not in this tree yet. Server-sent events: an event named status with the status JSON as one line whenever it changed (the first at once), a keep-alive comment after 15 s of silence, retry 3000. Needs the same sign-in as every route, re-checked on each look so signing out ends the stream. At most 4 streams (then 503). It is NOT the heartbeat: keep polling /api/status while a transmit key is held. Remove the x-to-add-at-merge marker when the route lands; tests/packaging/test_openapi_routes.py then requires it in the source."
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: "The event stream."
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/SignInFirst"
+        "503":
+          description: "Four streams are already open."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: foxsdr_session
+      description: "Sign-in rule. With no password set (allowed only on the loopback address) every route answers without a cookie. With a password set (required for any other address, enforced on loopback too) every route marked with this scheme answers 401 with the error sign in first unless the request carries a valid foxsdr_session cookie from POST /api/login. At most 32 sessions are held at once."
+  responses:
+    SignInFirst:
+      description: "A password is set and the request carries no valid session cookie."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: "A sentence fit to show the user."
+    Ok:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+    Accepted:
+      type: object
+      required: [accepted]
+      properties:
+        accepted:
+          type: boolean
+    Pending:
+      type: object
+      required: [pending]
+      properties:
+        pending:
+          type: boolean
+    SessionState:
+      type: object
+      required: [authRequired, authenticated, reachableOffMachine]
+      properties:
+        authRequired:
+          type: boolean
+          description: "A sign-in is needed."
+        authenticated:
+          type: boolean
+          description: "This request holds a valid session (always true when no sign-in is needed)."
+        reachableOffMachine:
+          type: boolean
+          description: "The server is bound to an address other machines can reach."
+    LoginRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          description: "Defaults to the empty string, which never matches."
+        password:
+          type: string
+          description: "Defaults to the empty string, which never matches."
+    Spectrum:
+      type: object
+      required: [seq, fresh, dbMin, dbMax]
+      properties:
+        seq:
+          type: integer
+          description: "Sequence number of this line."
+        fresh:
+          type: boolean
+          description: "False when there is no line newer than since; centerHz, spanHz and bins are then absent."
+        dbMin:
+          type: number
+          description: "The level that the quantised value 0 stands for."
+        dbMax:
+          type: number
+          description: "The level that the quantised value 255 stands for."
+        centerHz:
+          type: number
+        spanHz:
+          type: number
+        bins:
+          type: string
+          description: "One byte per bin, base64, quantised between dbMin and dbMax."
+    ControlRequest:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      description: "Every field is optional, but at least one must be present. Ranges are the ones in src/net/web_control.hpp."
+      properties:
+        running:
+          type: boolean
+          description: "Start or stop the receiver."
+        centerHz:
+          type: number
+          minimum: 0
+          maximum: 6000000000
+          description: "Source centre frequency, Hz."
+        vfoOffsetHz:
+          type: number
+          minimum: -100000000
+          maximum: 100000000
+          description: "Tuned offset from the centre, Hz."
+        mode:
+          type: string
+          description: "A demodulator name exactly as the desktop and the config file spell it (dsp::modeFromName), case-sensitive."
+        bandwidthHz:
+          type: number
+          minimum: 100
+          maximum: 10000000
+        squelchDb:
+          type: number
+          minimum: -200
+          maximum: 20
+        volume:
+          type: number
+          minimum: 0
+          maximum: 1
+        dbMin:
+          type: number
+          minimum: -200
+          maximum: 40
+          description: "Display range floor; the application keeps it below dbMax."
+        dbMax:
+          type: number
+          minimum: -200
+          maximum: 40
+        deemphasisIndex:
+          type: integer
+          description: "0 = 50 us, 1 = 75 us, 2 = off."
+        nrEnabled:
+          type: boolean
+        nrStrength:
+          type: number
+          minimum: 0
+          maximum: 1
+        notchEnabled:
+          type: boolean
+        notchFreqHz:
+          type: number
+          minimum: 10
+          maximum: 20000
+        notchQ:
+          type: number
+          minimum: 0.1
+          maximum: 1000
+        autoNotch:
+          type: boolean
+        stereoEnabled:
+          type: boolean
+        sourceKind:
+          type: string
+          description: "One of siggen, soapy, rtlsdr, hackrf, airspy, airspyhf, sdrplay, mirisdr, rx888, pluto, aor, hydrasdr, rtltcp. There is deliberately no file source: a browser cannot name a path on the machine."
+        soapyArgs:
+          type: string
+          description: "A device's args string as the scan reported it; matched against the scanned list, never passed to a driver verbatim."
+        antenna:
+          type: string
+        sampleRateHz:
+          type: number
+          minimum: 8000
+          maximum: 61440000
+        gainName:
+          type: string
+          description: "Set together with gainDb."
+        gainDb:
+          type: number
+          minimum: -30
+          maximum: 100
+        agc:
+          type: boolean
+        scanDevices:
+          type: boolean
+          description: "Ask the application to enumerate radios; the result appears in a later status."
+        recordIq:
+          type: boolean
+        recordAudio:
+          type: boolean
+          description: "Recordings land in the directory the application already uses; it cannot be set from here."
+        bookmarkAdd:
+          type: string
+          description: "Add the current frequency under this name."
+        bookmarkTune:
+          type: integer
+          description: "Index into the bookmarks the status lists."
+        bookmarkRemove:
+          type: integer
+          description: "Index into the bookmarks the status lists."
+        scannerActive:
+          type: boolean
+        scannerSkip:
+          type: boolean
+          description: "Move on from the signal being heard."
+        scanStartHz:
+          type: number
+          minimum: 0
+          maximum: 6000000000
+        scanStopHz:
+          type: number
+          minimum: 0
+          maximum: 6000000000
+        scanStepHz:
+          type: number
+          minimum: 100
+          maximum: 10000000
+        pluginFetch:
+          type: boolean
+          description: "Fetch the plugin catalogue (the only call that contacts the catalogue origin, and only when asked)."
+        pluginInstall:
+          type: string
+          description: "Install the catalogue entry with this id. Refused by the same gate as the desktop unless acknowledgeNotice is true."
+        acknowledgeNotice:
+          type: boolean
+          description: "The browser's equivalent of ticking the legal-notice box."
+        pluginRemove:
+          type: string
+          description: "Remove an installed plugin by the file name the status reports."
+        pluginTuneName:
+          type: string
+          description: "Set together with pluginTuneAllowed."
+        pluginTuneAllowed:
+          type: boolean
+          description: "Grant or revoke that plugin's permission to move the receiver."
+        pluginPresetName:
+          type: string
+          description: "Set together with pluginPresetIndex."
+        pluginPresetIndex:
+          type: integer
+          description: "Apply one of that plugin's declared presets."
+        transmitPtt:
+          type: boolean
+          description: "A PTT held down, not a switch: true buys one bounded hold and must be repeated; false opens the key at once. Refused with 409 unless a transmitter is open. A body carrying transmitLatch or transmitLatched is refused by name."
+        muted:
+          type: boolean
+          x-to-add-at-merge: true
+          description: "TO ADD AT MERGE (feat/web-secure, record docs/feature-records/web-bookmarks.md): mute or unmute the audio."
+    Status:
+      type: object
+      description: "The whole receiver state. These are the top-level fields statusJson() in src/net/web_server.cpp writes; the lists of plugins, catalogue entries, tracks and images carry more fields than are listed here (read statusJson). Text fields that come from decoders (decoded[].text, rds*) are whatever was on the air."
+      properties:
+        running:
+          type: boolean
+        faulted:
+          type: boolean
+        faultMessage:
+          type: string
+        centerHz:
+          type: number
+        sampleRateHz:
+          type: number
+        vfoOffsetHz:
+          type: number
+        bandwidthHz:
+          type: number
+        mode:
+          type: string
+        sourceName:
+          type: string
+        signalDb:
+          type: number
+        stereoActive:
+          type: boolean
+        transmitting:
+          type: boolean
+        transmitAvailable:
+          type: boolean
+          description: "Whether the remote key may be closed at all."
+        transmitRemoteHold:
+          type: integer
+          description: "Milliseconds left of the current remote hold."
+        squelchDb:
+          type: number
+        volume:
+          type: number
+        dbMin:
+          type: number
+        dbMax:
+          type: number
+        tunerDisplayStyle:
+          type: string
+        deemphasisIndex:
+          type: integer
+        nrEnabled:
+          type: boolean
+        nrStrength:
+          type: number
+        notchEnabled:
+          type: boolean
+        notchFreqHz:
+          type: number
+        notchQ:
+          type: number
+        autoNotch:
+          type: boolean
+        autoNotchEngaged:
+          type: boolean
+        autoNotchFreqHz:
+          type: number
+        stereoEnabled:
+          type: boolean
+        pilotLocked:
+          type: boolean
+        rdsSynced:
+          type: boolean
+        rdsPiValid:
+          type: boolean
+        rdsPi:
+          type: integer
+        rdsPsValid:
+          type: boolean
+        rdsPs:
+          type: string
+        rdsRadioText:
+          type: string
+        rdsPty:
+          type: integer
+        rdsTp:
+          type: boolean
+        rdsTa:
+          type: boolean
+        rdsGroups:
+          type: integer
+        rdsErrors:
+          type: integer
+        sourceKind:
+          type: string
+        soapyArgs:
+          type: string
+        antenna:
+          type: string
+        antennas:
+          type: array
+          items:
+            type: string
+        agcSupported:
+          type: boolean
+        agc:
+          type: boolean
+        sourceBusy:
+          type: boolean
+        sourceError:
+          type: string
+        devices:
+          type: array
+          items:
+            type: object
+            properties:
+              label:
+                type: string
+              args:
+                type: string
+              kind:
+                type: string
+        gains:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              db:
+                type: number
+              unit:
+                type: string
+        bookmarks:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              freqHz:
+                type: number
+              mode:
+                type: string
+              bandwidthHz:
+                type: number
+        decoded:
+          type: array
+          items:
+            type: object
+            properties:
+              plugin:
+                type: string
+              text:
+                type: string
+        tracks:
+          type: array
+          items:
+            type: object
+        rxPositionSet:
+          type: boolean
+        rxLatDeg:
+          type: number
+          nullable: true
+        rxLonDeg:
+          type: number
+          nullable: true
+        basemap:
+          type: object
+        plugins:
+          type: array
+          items:
+            type: object
+        catalogue:
+          type: array
+          items:
+            type: object
+        catalogueStatus:
+          type: string
+        catalogueError:
+          type: string
+        catalogueBusy:
+          type: boolean
+        installReport:
+          type: string
+        installError:
+          type: string
+        images:
+          type: array
+          items:
+            type: object
+        iqRecording:
+          type: boolean
+        audioMutedBy:
+          type: string
+        audioUnderruns:
+          type: integer
+        audioPrimingCallbacks:
+          type: integer
+        audioRingMs:
+          type: number
+        audioRingCapacityMs:
+          type: number
+        audioLeadMs:
+          type: number
+        audioSource:
+          type: string
+        audioPluginGaps:
+          type: integer
+        audioPluginGapFrames:
+          type: integer
+        audioRecording:
+          type: boolean
+        iqBytes:
+          type: integer
+        audioBytes:
+          type: integer
+        recordDir:
+          type: string
+        recordError:
+          type: string
+        recordNotice:
+          type: string
+        scannerActive:
+          type: boolean
+        scannerState:
+          type: string
+          enum: [idle, scanning, paused, holding]
+        scanStartHz:
+          type: number
+        scanStopHz:
+          type: number
+        scanStepHz:
+          type: number
+        muted:
+          type: boolean
+          x-to-add-at-merge: true
+          description: "TO ADD AT MERGE (feat/web-secure): the user mute."
