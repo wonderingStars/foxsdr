@@ -204,6 +204,20 @@ int main() {
         const auto last = tick(g, r);
         CHECK(last.size() == 1 && near(r.hz[1], 51.0e6));
     }
+    {   // a radio removed by ANOTHER session (nobody calls forget): when its number comes back at some other frequency it takes a new baseline, it is not read as the user tuning it by the difference
+        LinkGroup g;
+        Radios r;
+        r.openRadio(0, 100.0e6); r.openRadio(1, 90.0e6);
+        g.setOn(true, r.open);
+        tick(g, r);
+        r.open &= ~(1u << 1);                                // gone, and the group is told only by the open mask
+        CHECK(tick(g, r).empty());
+        r.openRadio(1, 50.0e6);                              // a new radio 2, 40 MHz lower than the one that was
+        CHECK(tick(g, r).empty());
+        CHECK(near(r.hz[0], 100.0e6) && near(r.hz[1], 50.0e6));
+        r.hz[0] += 1e6;
+        CHECK(tick(g, r).size() == 1 && near(r.hz[1], 51.0e6));
+    }
     {   // a removed radio's place is not kept: forget() clears the "left out" mark so the next radio of that number is linked
         LinkGroup g;
         Radios r = four();

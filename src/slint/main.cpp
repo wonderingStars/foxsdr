@@ -1723,7 +1723,28 @@ int main(int argc, char** argv) {
             // With more than four radios, or in a window narrower than 1500 px, the chip is the radio's tag and its lamp only (the status bar has no room for the state words beside today's chips and its two
             // keys); the state word and the figures are its detail lines, which a click on a chip opens
             const bool terse = workspace.radioCount() > 4 || static_cast<int>(ui->get_win_w()) < 1500;
-            for (const RadioChipData& rc : deckPublisher.chips(deck)) {
+            // STAGE S5 (found in the 1280 x 720 shot with eight radios: the status bar's last key was cut off): with more than four radios in a window under 1500 px even the tag-and-lamp chips are too many for the
+            // bar, so they become ONE chip, "Radios 1-8", with the worst state's lamp and one line per radio (state, frequency, mode) that a click opens; the MASTER lamps in the bar over the view say the same
+            // and select (the chip no longer does).
+            const bool collapse = workspace.radioCount() > 4 && static_cast<int>(ui->get_win_w()) < 1500;
+            if (collapse) {
+                const std::vector<RadioChipData> chips = deckPublisher.chips(deck);
+                std::vector<slint::SharedString> chipLines;
+                bool anyRun = false, anyFail = false;
+                std::string sig = "radios";
+                for (const RadioChipData& rc : chips) {
+                    anyRun = anyRun || (rc.lampLit && !rc.lampRed);
+                    anyFail = anyFail || rc.lampRed;
+                    chipLines.push_back(ss(rc.key + "  " + rc.value + "  " + rc.detail));
+                    sig += "|" + rc.key + rc.value + rc.detail;
+                }
+                const std::string key = pageLabel(chips.empty() ? 1 : chips.front().radio, chips.empty() ? 1 : chips.back().radio);
+                chipRadios.push_back(0);
+                cardSig += key + sig + (anyRun ? "G" : "-") + (anyFail ? "R" : "-") + ";";
+                cards.push_back({ss(key), ss(""), ss(""), anyFail ? ChipTone::Err : ChipTone::Neutral, anyFail ? LampState::Red : anyRun ? LampState::Green : LampState::Off, true,
+                                 std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(chipLines))});
+            }
+            for (const RadioChipData& rc : collapse ? std::vector<RadioChipData>() : deckPublisher.chips(deck)) {
                 chipRadios.push_back(rc.radio);
                 const std::string chipValue = terse ? std::string() : rc.value;
                 cardSig += rc.key + "|" + chipValue + "|" + (terse ? rc.value + "," + rc.detail : rc.detail) + "|" + std::to_string(rc.tone) + (rc.lampLit ? "L" : "-") + (rc.lampRed ? "R" : "-") + ";";

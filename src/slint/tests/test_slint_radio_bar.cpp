@@ -314,6 +314,22 @@ int main() {
             {"MASTER lamp number, stopped, on the bar", [](const Skin& s) { return s.muted; }, [](const Skin& s) { return s.strip; }, false},
             {"MASTER lamp number, running, on the bar", [](const Skin& s) { return s.lamp_green_cap; }, [](const Skin& s) { return s.strip; }, false},
             {"MASTER lamp number, failed, on the bar", [](const Skin& s) { return s.lamp_red_cap; }, [](const Skin& s) { return s.strip; }, false},
+            // the texts of the parts that stages S3 and S4 added (the pane's own are stage S2's)
+            {"R-tag ink on radio 1's colour (pane, panel, mix)", [](const Skin& s) { return s.radio_ink; }, [](const Skin& s) { return s.radio_1; }, false},
+            {"R-tag ink on radio 2's colour", [](const Skin& s) { return s.radio_ink; }, [](const Skin& s) { return s.radio_2; }, false},
+            {"R-tag ink on radio 3's colour", [](const Skin& s) { return s.radio_ink; }, [](const Skin& s) { return s.radio_3; }, false},
+            {"R-tag ink on radio 4's colour", [](const Skin& s) { return s.radio_ink; }, [](const Skin& s) { return s.radio_4; }, false},
+            {"Add-a-radio card: title on the card", [](const Skin& s) { return s.fg; }, [](const Skin& s) { return s.well_deep; }, false},
+            {"Add-a-radio card: hint on the card", [](const Skin& s) { return s.muted; }, [](const Skin& s) { return s.well_deep; }, false},
+            {"Add-a-radio card: 'No other radio found.' and the quiet cell's name (muted since stage S5)", [](const Skin& s) { return s.muted; }, [](const Skin& s) { return s.well_deep; }, false},
+            {"Add-a-radio card: the engine's refusal on the card", [](const Skin& s) { return s.chip_warn_fg; }, [](const Skin& s) { return s.well_deep; }, false},
+            {"Audio mix: the block's title on the panel", [](const Skin& s) { return s.muted; }, [](const Skin& s) { return s.panel_alt; }, false},
+            {"pane: device name on the header", [](const Skin& s) { return s.fg_soft; }, [](const Skin& s) { return s.panel; }, false},
+            {"pane: frequency on the header", [](const Skin& s) { return s.accent_soft; }, [](const Skin& s) { return s.panel; }, false},
+            {"pane: readout caption on the row", [](const Skin& s) { return s.muted; }, [](const Skin& s) { return s.strip; }, false},
+            {"pane: readout value on the row", [](const Skin& s) { return s.fg_soft; }, [](const Skin& s) { return s.strip; }, false},
+            {"pane: decoder chip", [](const Skin& s) { return s.chip_good_fg; }, [](const Skin& s) { return s.chip_good_bg; }, false},
+            {"pane: mode chip", [](const Skin& s) { return s.chip_fg; }, [](const Skin& s) { return s.chip_bg; }, false},
             {"disabled key text (Start together when dead)", [](const Skin& s) { return s.key_disabled_fg; }, [](const Skin& s) { return s.key_disabled_bg; }, true},
         };
         for (const Pair& p : pairs) {

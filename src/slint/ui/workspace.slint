@@ -238,7 +238,7 @@ export component AddRadioCard inherits Rectangle {
                     alignment: start;
                     Key { label: c.caption; accessible-label: c.accessible; small: true; min-w: 0px; clicked => { WorkspaceModel.add-chosen(root.slot, i); } }
                 }
-                if WorkspaceModel.add-choices.length == 0 : Text { text: WorkspaceModel.add-none; font-size: Theme.font-small; color: Theme.dim; wrap: word-wrap; }
+                if WorkspaceModel.add-choices.length == 0 : Text { text: WorkspaceModel.add-none; font-size: Theme.font-small; color: Theme.muted; wrap: word-wrap; }   // (Theme.dim was 3.9 : 1 on the card in Night Watch: found by the contrast table of stage S5)
             }
         }
         if WorkspaceModel.add-note != "" : Text {
@@ -274,7 +274,7 @@ component EmptySlot inherits Rectangle {
             vertical-alignment: center;
             font-family: Theme.font-mono;
             font-size: Theme.font-small;
-            color: Theme.dim;
+            color: Theme.muted;
         }
     }
     if WorkspaceModel.can-add : AddRadioCard { x: 0px; y: 0px; width: parent.width; height: parent.height; slot: root.slot; label: root.card-label; }

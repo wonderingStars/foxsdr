@@ -11,6 +11,8 @@
 +1 radio add 7 210000
 +1 radio add 8 240000
 +40 state workspace.radios == 8
+# eight radios in a window under 1500 px: the status bar has ONE chip for them ("Radios 1-8"), not eight (they pushed the bar's last key out of the window in stage S4)
+state workspace.chips == "0"
 +1 click "2 x 2"
 +15 state workspace.shown == 2
 +10 shot "bar-1280-eight-workbench.png"
