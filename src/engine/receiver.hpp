@@ -361,6 +361,7 @@ struct Receiver {
     int meterUnits_ = 0;
     // Noise-reduction method (engine wiring lane 1): FOXAPI_NR_*, standard by default.
     int nrMethod_ = 0;
+    double cwPitchHz_ = 700.0;   // the CW sidetone pitch (engine wiring lane 1)
     // The manual notch bank (engine wiring lane 1): ten slots, each off at 1000 Hz and 50 Hz wide until set.
     struct ManualNotchSlot {
         double hz = 1000.0;

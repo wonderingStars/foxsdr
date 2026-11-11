@@ -558,6 +558,9 @@ public:
     // THE MANUAL NOTCH BANK (engine wiring lane 1; dsp/notch_bank.hpp): up to ten notches on the finished audio of each channel, after the single notch. A slot moves, widens or switches
     // on and off without a click (the block glides and fades). False for a slot past 9 or a number that is not one. Any thread; nothing is posted (the bank's settings are atomics).
     bool setManualNotch(int slot, double hz, double widthHz, bool on);
+    // The CW sidetone pitch (engine wiring lane 1): 300 to 1200 Hz, default 700. False (nothing changed) outside that or for a number that is not one. Posted; kept across a rate change.
+    bool setCwPitchHz(double hz);
+    double cwPitchHz() const;
     int manualNotchCount() const;   // slots that are on
     bool setNoiseReductionMethod(int method);
     int noiseReductionMethod() const;
@@ -1095,6 +1098,7 @@ private:
     // NOISE-REDUCTION METHOD: the choice and what the posted switch and strength last said (so a method built later starts from them), and the two channels' alternative reducers.
     cascade::dsp::NotchBank notchBankL_{kAudioRateHz};
     cascade::dsp::NotchBank notchBankR_{kAudioRateHz};
+    double cwPitchNow_ = 700.0;
     int nrMethod_ = 0;
     bool nrOn_ = false;
     float nrStrengthNow_ = 0.5f;
@@ -1267,6 +1271,7 @@ private:
     std::atomic<float> mirrorNbThresholdDb_{15.0f};
     std::atomic<float> nbBlankedPct_{0.0f};      // live, once per block
     std::atomic<bool> nbStandingDown_{false};
+    std::atomic<double> mirrorCwPitchHz_{700.0};
     std::atomic<int> mirrorNrMethod_{0};
     std::atomic<int> nrMethodActive_{0};
     std::atomic<int> mirrorToneKind_{0};

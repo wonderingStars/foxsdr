@@ -219,6 +219,7 @@ struct SavedRadio {
     bool toneRemove = false;
     int meterUnits = 0;   // S-meter display units, 0 dBFS / 1 S / 2 dBm (engine wiring lane 1)
     int nrMethod = 0;     // noise-reduction method, 0 standard / 1 spectral / 2 line enhancer (engine wiring lane 1)
+    double cwPitchHz = 700.0;   // the CW sidetone pitch, 300..1200 Hz (engine wiring lane 1)
     std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
@@ -508,6 +509,7 @@ struct AppConfig {
     bool toneRemove = false;
     int meterUnits = 0;   // S-meter display units, 0 dBFS / 1 S / 2 dBm (engine wiring lane 1)
     int nrMethod = 0;     // noise-reduction method, 0 standard / 1 spectral / 2 line enhancer (engine wiring lane 1)
+    double cwPitchHz = 700.0;   // the CW sidetone pitch, 300..1200 Hz (engine wiring lane 1)
     std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;

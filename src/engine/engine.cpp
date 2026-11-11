@@ -4881,6 +4881,7 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         r.sUnits = sUnits;
         r.calibrated = calibrated ? 1u : 0u;
         r.nrMethod = static_cast<std::uint32_t>(rxa.nrMethod_);
+        r.cwPitchHz = rxa.cwPitchHz_;
         r.nrMethodActive = static_cast<std::uint32_t>(rxa.pipeline_.noiseReductionMethodActive());
         for (std::size_t i = 0; i < rxa.manualNotch_.size(); ++i) {
             if (rxa.manualNotch_[i].on) { r.notchBankMask |= 1u << i; }
@@ -7414,6 +7415,13 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[0] = kind == tone::kCtcss ? hz : static_cast<double>(code);
             return res;
         }
+        case FOXAPI_OP_SET_CW_PITCH: {
+            Receiver& rxs = rx();
+            if (!rxs.pipeline_.setCwPitchHz(c.num[0])) { return refuse(FOXAPI_OUT_OF_RANGE, "the CW pitch is 300 to 1200 Hz"); }
+            rxs.cwPitchHz_ = c.num[0];
+            res.applied[0] = rxs.cwPitchHz_;
+            return res;
+        }
         case FOXAPI_OP_SET_NOTCH_SLOT: {
             const long long slot = std::llround(c.num[2]);
             if (slot < 0 || slot > 9 || std::fabs(c.num[2] - static_cast<double>(slot)) > 1e-9) { return refuse(FOXAPI_OUT_OF_RANGE, "a notch slot is 0 to 9"); }
@@ -9268,6 +9276,8 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         rx().meterUnits_ = cfg.meterUnits;
         rx().nrMethod_ = cfg.nrMethod;
         (void)rx().pipeline_.setNoiseReductionMethod(rx().nrMethod_);
+        rx().cwPitchHz_ = cfg.cwPitchHz;
+        (void)rx().pipeline_.setCwPitchHz(rx().cwPitchHz_);
         rx().manualNotch_ = {};
         for (const cascade::core::ManualNotchSetting& n : cfg.notchBank) {
             Receiver::ManualNotchSlot& ns = rx().manualNotch_[static_cast<std::size_t>(n.slot)];
@@ -9827,6 +9837,7 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
         cfg.toneRemove = rxa.toneRemove_;
         cfg.meterUnits = rxa.meterUnits_;
         cfg.nrMethod = rxa.nrMethod_;
+        cfg.cwPitchHz = rxa.cwPitchHz_;
         cfg.notchBank.clear();
         for (std::size_t i = 0; i < rxa.manualNotch_.size(); ++i) {
             const Receiver::ManualNotchSlot& ns = rxa.manualNotch_[i];
@@ -9929,6 +9940,7 @@ void Engine::initialise() {
         (void)rx().pipeline_.setToneSquelch(rx().toneKind_, rx().toneHz_, rx().toneCode_, rx().tonePol_);
         rx().pipeline_.setToneRemove(rx().toneRemove_);
         (void)rx().pipeline_.setNoiseReductionMethod(rx().nrMethod_);
+        (void)rx().pipeline_.setCwPitchHz(rx().cwPitchHz_);
         pushManualNotches();
     }
     rx().pipeline_.setNotchEnabled(rx().notchEnabled_);

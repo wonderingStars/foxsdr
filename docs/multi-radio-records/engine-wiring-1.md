@@ -214,6 +214,18 @@ both off brings both back, bad slots and numbers refused), `test_engine_api_notc
 `test_engine_main_config_roundtrip` 263, `test_radio_scope` 139 (56 ops), mock 451 (+2 known).
 **UNVERIFIED.** Nobody listened to it; the notch depth measured here is on a generated tone through a real chain, not on a real heterodyne; ten notches together cost 14 to 16 ns a sample per channel in the block's own measurement, not measured in a running chain.
 
+## C3. CW pitch (second session)
+
+**Op** `FOXAPI_OP_SET_CW_PITCH` 0x0118 (per radio, `num[0]` Hz 300..1200, default 700; receiver-scoped; in no web, CAT or TCI profile). `kCwToneHz` in `src/dsp/demod.cpp` is now the default of a member
+(`Demodulator::cwToneHz_`, `setCwPitchHz`); in CW mode a change restarts the Weaver chain (a documented clean start), elsewhere it waits; `Pipeline` re-applies it when the demodulator is rebuilt for a new input rate.
+**Not done: the CW pass band.** CW still uses the voice SSB filter (about 300 Hz to 3.6 kHz, not centred on the pitch); `dsp/cw_pitch.hpp`'s numbers for a centred CW filter and `dsp/cw_filter.hpp` (group E) are not wired. At a pitch of
+300 Hz the beat sits at the filter's lower edge.
+**State (appended after `notchBankWidthHz`):** `cwPitchHz` (setting, moves `modeSeq`). **Config:** `cwPitchHz` (radio 1 and each `radios` entry, clamped to 300..1200, junk to 700).
+**Tests.** `test_pipeline_cwpitch` `26 checks, 0 failed` (a carrier on the tuned frequency beats at 700 Hz by default, then at 450, 1000, 300 and 1200 as set, found by sweeping the finished audio; kept across USB and back; refusals),
+`test_engine_api_cwpitch` `37 checks passed, 0 failed`, `test_demod` `10020 checks, 0 failed` (the demodulator change), `test_config` 3813, `test_receiver_snapshot` 872, `test_apply_command` 1800, `test_config_halves` 2521,
+`test_engine_main_config_roundtrip` 265, `test_radio_scope` 140 (57 ops), mock 455 (+2 known).
+**UNVERIFIED.** Nobody listened; the pitch is proved on a generated carrier; the rebuild-for-a-new-rate path re-applies the pitch but no test changes the input rate under a running CW radio.
+
 ## Old reader
 
 RUN, with the v0.99.104 sources (`git show v0.99.104:src/core/config.hpp` and `config.cpp` in a directory searched first, `tools/old_reader_probe/build_probe.bat`; `new_main.cpp` gained a fifth file for this lane:

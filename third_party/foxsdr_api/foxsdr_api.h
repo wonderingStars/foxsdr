@@ -434,6 +434,8 @@ typedef struct FoxReceiverState {
     uint32_t notchBankMask;            /* bit i set: slot i is on */
     double notchBankHz[10];            /* slot i's frequency, Hz (20..21600; the last one set, whether the slot is on or not) */
     double notchBankWidthHz[10];       /* slot i's -3 dB width, Hz (1..2000) */
+    /* ---- 0.3 (CW pitch; docs/API.md 6.19): the sidetone a carrier on the tuned frequency beats at in CW mode - a setting, moves modeSeq. ---- */
+    double cwPitchHz;                  /* 300..1200 Hz, default 700 */
 } FoxReceiverState;
 #define FOXAPI_NOTCH_SLOTS 10
 
@@ -607,6 +609,7 @@ typedef struct FoxCommand {
 #define FOXAPI_OP_SET_METER_UNITS   0x0115u /* ival[0]: FOXAPI_METER_* 0..2: how this radio's level is lettered (the choice is the screen's; the state carries all three). Addresses one radio (target) */
 #define FOXAPI_OP_SET_NR_METHOD     0x0116u /* ival[0]: FOXAPI_NR_* 0..2; the strength is SET_NR's. Addresses one radio (target) */
 #define FOXAPI_OP_SET_NOTCH_SLOT    0x0117u /* num[2]: the slot 0..9; ival[0]: 0/1 on; ival[1]=1: num[0] is the frequency, Hz 20..21600, num[1] the -3 dB width, Hz 1..2000. Addresses one radio (target) */
+#define FOXAPI_OP_SET_CW_PITCH      0x0118u /* num[0]: Hz, 300..1200: where a carrier on the tuned frequency beats in CW mode. Addresses one radio (target) */
 #define FOXAPI_OP_SET_TONE_REMOVE   0x0114u /* ival[0]: 0/1: the high-pass that takes the sub-audible tone out of the audio. Addresses one radio (target) */
 /* Display */
 #define FOXAPI_OP_SET_DISPLAY_RANGE 0x0201u /* num[0]: dbMin, num[1]: dbMax (min span enforced) */

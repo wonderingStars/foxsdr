@@ -1213,6 +1213,18 @@ bool Pipeline::noiseBlankerStandingDown() const {
     return nbStandingDown_.load(std::memory_order_relaxed);
 }
 
+// --- CW pitch -------------------------------------------------------------------------------------------------------------------------------------
+bool Pipeline::setCwPitchHz(double hz) {
+    if (!std::isfinite(hz) || hz < 300.0 || hz > 1200.0) { return false; }
+    post([this, hz] {
+             cwPitchNow_ = hz;
+             demod_.setCwPitchHz(hz);
+         },
+         [this, hz] { mirrorCwPitchHz_.store(hz, std::memory_order_relaxed); });
+    return true;
+}
+double Pipeline::cwPitchHz() const { return mirrorCwPitchHz_.load(std::memory_order_relaxed); }
+
 // --- manual notch bank ---------------------------------------------------------------------------------------------------------------------------
 bool Pipeline::setManualNotch(int slot, double hz, double widthHz, bool on) {
     if (!notchBankL_.setNotch(slot, hz, widthHz, on)) { return false; }
@@ -1567,6 +1579,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
         // deemphasis pole, AM DC-blocker pole), so a stale demod would e.g.
         // scale the CW sidetone by oldChannel/newChannel.
         demod_ = cascade::dsp::Demodulator(chanRate);
+        demod_.setCwPitchHz(cwPitchNow_);   // (a rebuilt demodulator starts at the default pitch: the user's is put back before the mode)
         demod_.setMode(mode);
         // A rebuilt demodulator starts at the library default de-emphasis,
         // which is nobody's choice: the helper replaces it with the user's,

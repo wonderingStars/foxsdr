@@ -136,7 +136,7 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
                       // the S-meter's display units are a setting; signalDbm, sUnits and calibrated are measurements like signalDb
                       f.meterUnits != o.meterUnits ||
                       // the noise-reduction method chosen is a setting; the method in use is a measurement
-                      f.nrMethod != o.nrMethod ||
+                      f.nrMethod != o.nrMethod || f.cwPitchHz != o.cwPitchHz ||
                       // the manual notch bank's switches, frequencies and widths (all settings)
                       f.notchBankMask != o.notchBankMask || std::memcmp(f.notchBankHz, o.notchBankHz, sizeof(f.notchBankHz)) != 0 ||
                       std::memcmp(f.notchBankWidthHz, o.notchBankWidthHz, sizeof(f.notchBankWidthHz)) != 0 ||

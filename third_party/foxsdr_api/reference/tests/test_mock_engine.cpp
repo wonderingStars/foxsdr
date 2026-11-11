@@ -391,6 +391,11 @@ void testToneSquelch() {
     CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_NR_METHOD, 0.0, FOXAPI_NR_LINE)).status(), FOXAPI_OK);
     CHECK_EQ(s.state().nrMethod, static_cast<uint32_t>(FOXAPI_NR_LINE));
     CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_NR_METHOD, 0.0, 3)).status(), FOXAPI_OUT_OF_RANGE);
+    // the CW pitch (0x0118)
+    CHECK_EQ(s.state().cwPitchHz, 700.0);
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_CW_PITCH, 450.0)).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().cwPitchHz, 450.0);
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_CW_PITCH, 1300.0)).status(), FOXAPI_OUT_OF_RANGE);
     // the manual notch bank (0x0117)
     FoxCommand ns = cmd(FOXAPI_OP_SET_NOTCH_SLOT, 1500.0, 1);
     ns.ival[1] = 1;

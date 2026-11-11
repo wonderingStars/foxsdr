@@ -72,6 +72,7 @@
     "toneRemove": false,
     "meterUnits": 0,
     "nrMethod": 0,
+    "cwPitchHz": 700.0,
     "nrEnabled": false,
     "nrStrength": 0.5,
     "patch": "",

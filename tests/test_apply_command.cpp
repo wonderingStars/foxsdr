@@ -457,6 +457,8 @@ struct AppWindowTestAccess {
     static bool notchSlotOn(AppWindow& a, int i) { return rd(a, [&] { return th::engine(a).receivers_[0]->manualNotch_[static_cast<std::size_t>(i)].on; }); }
     static double notchSlotHz(AppWindow& a, int i) { return rd(a, [&] { return th::engine(a).receivers_[0]->manualNotch_[static_cast<std::size_t>(i)].hz; }); }
     static int notchBankPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.manualNotchCount(); }); }
+    static double cwPitchRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->cwPitchHz_; }); }
+    static double cwPitchPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.cwPitchHz(); }); }
     static int nrMethodRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->nrMethod_; }); }
     static int nrMethodPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.noiseReductionMethod(); }); }
     static int meterUnitsRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->meterUnits_; }); }
@@ -1236,6 +1238,17 @@ void receiverOps(AppWindow& a) {
         n.ival[1] = 0;
         CHECK(ok(A::apply(a, n)));
         CHECK(!A::notchSlotOn(a, 4) && A::notchBankPipe(a) == 0);
+    }
+
+    covering(FOXAPI_OP_SET_CW_PITCH);
+    {
+        CHECK(A::cwPitchRx(a) == 700.0 && A::cwPitchPipe(a) == 700.0);
+        CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_CW_PITCH, 550.0))));
+        CHECK(A::cwPitchRx(a) == 550.0 && A::cwPitchPipe(a) == 550.0);
+        CHECK(refused(A::apply(a, num(FOXAPI_OP_SET_CW_PITCH, 299.0)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, num(FOXAPI_OP_SET_CW_PITCH, 1201.0)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::cwPitchRx(a) == 550.0);
+        CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_CW_PITCH, 700.0))));
     }
 
     covering(FOXAPI_OP_SET_NR_METHOD);

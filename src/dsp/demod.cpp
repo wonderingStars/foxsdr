@@ -97,7 +97,7 @@ constexpr double kSsbTransitionHz = 600.0;
 constexpr double kSsbMinBandwidthHz = 1000.0;
 constexpr double kSsbMaxRateFraction = 0.3;
 // CW sidetone: a carrier on the VFO center beats at this audio pitch.
-constexpr double kCwToneHz = 700.0;
+constexpr double kCwToneHz = 700.0;   // (the default pitch: Demodulator::cwToneHz_ starts here and setCwPitchHz moves it)
 
 // --- FM deemphasis -----------------------------------------------------------
 // The one-pole network, its derivation and its 50 us default live in
@@ -205,6 +205,12 @@ void Demodulator::setSsbBandwidthHz(double bandwidthHz) {
     }
 }
 
+void Demodulator::setCwPitchHz(double hz) {
+    if (!std::isfinite(hz) || hz < 300.0 || hz > 1200.0 || hz == cwToneHz_) { return; }
+    cwToneHz_ = hz;
+    if (mode_ == DemodMode::CW) { setMode(mode_); }
+}
+
 void Demodulator::setMode(DemodMode m) {
     mode_ = m;
     const double bfo = ssbBfoHz_ / rate_;  // Weaver BFO = f0, see ssbShape
@@ -224,7 +230,7 @@ void Demodulator::setMode(DemodMode m) {
             // carrier at DC beats at kCwToneHz. Both shifts are folded into
             // the first mix (+tone then -f0 commute into one Nco); the
             // up-mix is unchanged, so audio = 700 + (carrier offset).
-            shiftDown_.setFrequency(kCwToneHz / rate_ - bfo);
+            shiftDown_.setFrequency(cwToneHz_ / rate_ - bfo);
             shiftUp_.setFrequency(+bfo);
             break;
         default:
