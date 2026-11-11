@@ -1162,12 +1162,10 @@ Read the security posture before exposing it:
 - **A password is required for any binding beyond this machine.** Without one,
   a LAN bind is refused outright — no socket is opened at all, rather than a
   socket opened without a gate.
-- **There is no TLS.** The server speaks plain HTTP deliberately: it links no
-  crypto library, so it cannot honestly offer transport security. On a home
-  LAN that is a reasonable trade. **Do not port-forward it to the internet.**
-  To reach it from outside, terminate TLS in front of it — a reverse proxy
-  (Caddy, nginx) or a tunnel such as Tailscale or Cloudflare Tunnel — and never
-  expose its port directly.
+- **Plain HTTP unless you switch HTTPS on** (see [HTTPS and listeners](#https-and-listeners)
+  below). The default server links no crypto library of its own; on a home LAN
+  plain HTTP is a reasonable trade. **Do not port-forward it to the internet,
+  with or without HTTPS: read the warning in the next section first.**
 - Passwords are stored hashed (PBKDF2-HMAC-SHA256), never in the clear;
   sessions are cookie-based, expire, and are revoked whenever the settings
   change.
@@ -1201,6 +1199,68 @@ again every ten seconds. While the stream is up the page still asks twice a
 second, only to tell the receiver the page is alive (a held transmit key depends
 on that). The stream needs the same sign-in as the rest of the page, and signing
 out, an expired sign-in or stopping the web server ends it.
+
+## HTTPS and listeners
+
+*Status: built into the web server and proved with tests (HTTPS on Windows
+only; on Linux the switch is refused with a sentence that says it is
+unproven there). The **Web access** section of the window and the
+configuration file do not carry these switches yet: they arrive with the
+settings screen described in `docs/feature-records/web-secure.md`. Every one
+is **off** by default.*
+
+**A plain warning first.** Putting this page on the internet lets strangers
+find a radio that sits behind your home connection and try passwords at it all
+day. HTTPS hides what is sent from people on the path; it does **not** make a
+weak password strong, it does not hide that the page exists, and it does not
+make FoxSDR a hardened public service. A self-signed certificate protects only
+as far as you check it. If you open the page to the internet anyway: use long
+passwords, give listeners the smallest cap you can live with, leave chat off,
+and prefer a tunnel or VPN into your own network to a forwarded port.
+
+**HTTPS.** With HTTPS on the page is served over TLS using Windows' own
+Schannel: TLS 1.2 at least, TLS 1.3 where Windows offers it; TLS 1.0, 1.1 and
+SSL are refused. The plain server is then bound to this machine only, so plain
+HTTP is no longer offered to the network at all, and the sign-in cookie is
+marked Secure. By default FoxSDR makes a self-signed certificate (an elliptic
+curve key that cannot be exported, with this computer's name and every address
+of it in the certificate); the page's status shows its **SHA-256 fingerprint**,
+and your browser will warn about an unknown certificate the first time: compare
+the fingerprint it shows with FoxSDR's before you accept. Instead you can name a
+certificate you already have, by the 40 digits Windows shows as its thumbprint,
+from the Personal store of your account or of the computer (it needs its private
+key). A client that does not finish the handshake, says nothing for half a
+minute, or stops reading is dropped.
+
+**Listeners.** With listeners on, there are two kinds of people on the page. You,
+the **owner**, sign in with the account the page always had and control
+everything. A **listener** types any name of their own choosing (up to 24 letters,
+digits, spaces, dots, dashes or underscores) with the one shared **listener
+password** you set, and may only look and listen: the spectrum, the status and the
+sound. Every operation that tunes or changes anything is refused, including the
+transmit key; one switch, **listeners may tune**, lets them change frequency, mode
+and bandwidth and nothing else. A listener is not shown where your antenna is, the
+folder recordings go to, device serial numbers or plugin file names.
+
+- **Limits.** At most 4 listeners by default (1 to 32); a listener who does
+  nothing for 15 minutes, or has been on for 8 hours, is signed out. Each
+  listener holds one audio stream and one live-update stream of the server.
+- **Moderation.** The owner sees who is listening, with the address each came from
+  (shown live to you and nowhere else), and can **kick** (end the session; they may
+  come back), **ban** (by name and by address; ends the session and refuses
+  them) and **allow** again. A ban never stops the owner signing in. Bans, like
+  everything below, last until the web server is stopped or restarted: addresses
+  are not written to disk.
+- **Note.** The owner can set one line of text that every listener sees as a banner.
+- **Chat.** Off by default. When on: text only, 200 characters, three lines every
+  ten seconds per person, shown exactly as typed (never as markup). Chat is
+  never written to a file, a log or a report, and neither are names or addresses;
+  the owner's moderation view keeps a short in-memory trail of joins, leaves,
+  kicks and bans that carries the listener's chosen name and never an address
+  or anything anyone typed.
+- **Not built:** a listener tuning on their own, independently of the owner and
+  of other listeners. That needs a receiver chain and an audio stream per listener;
+  everyone listens to the same radio.
 
 ## How it looks
 

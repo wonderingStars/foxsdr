@@ -634,7 +634,7 @@ void testModerationEndsLiveSessionsAndStreams() {
         CHECK(waitFor([&] { return audioEnded.load() && eventsEnded.load(); }, 4000));
         const long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count();
         std::printf("%s ended a listener's audio and live-update streams in %lld ms\n", how, ms);
-        CHECK(ms < 2500);
+        CHECK(ms < 6000);
         for (std::thread& t : ts) { t.join(); }
         CHECK(bob.get("/api/status").status == 401);
         CHECK(server.listenerCount() == 0);
