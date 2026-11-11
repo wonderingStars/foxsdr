@@ -701,6 +701,23 @@ void testDriverFailures() {
     CHECK(d.stats().moves == 1 && d.stats().suppressed >= 1);
     d.finish();  // park fails on this link: counted
     CHECK(d.stats().failures == 3 && d.stats().parks == 0);
+    // a move that fails after an earlier one went through: the tracker goes back to where the rotator really is, so the same target is sent again
+    {
+        struct SecondFails : RotatorLink {
+            int calls = 0;
+            std::vector<double> azs;
+            bool setPosition(double a, double) override { ++calls; if (calls == 2) { return fail("down"); } azs.push_back(a); return true; }
+            bool getPosition(Position*) override { return false; }
+            bool stop() override { return true; }
+            bool park() override { return true; }
+        } l;
+        Tracker t3;
+        TrackerDriver d3(t3, l);
+        d3.step(0, 100, 20);
+        d3.step(10, 150, 20);  // fails
+        d3.step(10.1, 150, 20);  // must be sent again: the rotator is still at 100
+        CHECK(l.azs.size() == 2 && l.azs[0] == 100 && l.azs[1] == 150 && d3.stats().failures == 1 && d3.stats().moves == 2);
+    }
     // a link that recovers: the stop reaches it
     Tracker t2;
     SimRotator rot;
