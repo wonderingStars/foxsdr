@@ -146,6 +146,19 @@ foreach(src ${_foxsdr_slint_test_sources})
                 "${FOXSDR_REPO_ROOT}/src/core/plugin_repo_data.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/plugin_store_reasons.cpp")
         endif()
+        if(unit STREQUAL "layouts")
+            # One-click layouts (lane S1, ../layouts_prefs.cpp): the saved text lives in the 3D views' entry text (view3d_prefs, with scene3d) next to the workspace's (workspace_prefs).
+            list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../layouts_prefs.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../view3d_prefs.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../scene3d.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../workspace_prefs.cpp")
+        endif()
+        if(unit STREQUAL "marks")
+            # The names of plugin marks, decluttered (lane S1, ../mark_layout.cpp): pure.
+            list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../mark_layout.cpp")
+        endif()
+        if(unit STREQUAL "export")
+            # The waterfall as a file (lane S1, ../export_logic.cpp): pure, and the repo's own PNG reader (stb_image) reads back what the encoder wrote.
+            # (../export_logic.cpp is added by name above: the unit's own logic file)
+            list(APPEND _extra "${FOXSDR_REPO_ROOT}/src/core/png_decode.cpp")
+        endif()
         if(unit STREQUAL "input")
             # The scripted input's parser and driver (docs 6.47): ../input_script.cpp, no Slint - the fake target in the test stands for the window.
             list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../input_script.cpp")
@@ -203,6 +216,9 @@ foreach(src ${_foxsdr_slint_test_sources})
             list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../scene3d.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../view3d_prefs.cpp")
         endif()
         foxsdr_slint_logic_test(${name} ${_extra})
+        if(unit STREQUAL "export")
+            target_include_directories(${name} PRIVATE "${FOXSDR_REPO_ROOT}/third_party")   # core/png_decode.cpp includes "stb/stb_image.h"
+        endif()
         if(unit STREQUAL "glyphs")
             target_include_directories(${name} PRIVATE "${FOXSDR_REPO_ROOT}/third_party/imgui")
             target_compile_definitions(${name} PRIVATE FOXSDR_GLYPH_FONT_DIR="${FOXSDR_REPO_ROOT}/third_party/fonts")

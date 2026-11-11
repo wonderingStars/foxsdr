@@ -721,7 +721,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
         traceModeName(traceModeFromName(out.spectrumTraceMode));
     getInt(j, "spectrumAverageMs", out.spectrumAverageMs);
     getString(j, "view3d", out.view3d);
-    if (out.view3d.size() > 1024) { out.view3d.clear(); }   // the text of five or ten views is a few hundred bytes: more is not ours
+    if (out.view3d.size() > 2048) { out.view3d.clear(); }   // the text of five or ten views is a few hundred bytes, the workspace and the user's layouts (slint layouts_prefs) a thousand more: more is not ours
     out.spectrumAverageMs = static_cast<int>(
         clampTraceAverageMs(static_cast<double>(out.spectrumAverageMs)));
     getInt(j, "mapTrailStyle", out.mapTrailStyle);

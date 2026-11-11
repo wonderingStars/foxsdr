@@ -88,11 +88,16 @@ struct Rgba {
     std::uint8_t r = 0, g = 0, b = 0, a = 0;
 };
 Rgba heat(float t);                                        // the strength key's ramp, t clamped to 0..1
-enum class TraceMode { Normal, PeakHold, Average };
+enum class TraceMode { Normal, PeakHold, Average, Persistence };
 struct TraceState {
     std::vector<float> peak;                               // the highest level each column has reached
     std::vector<float> average;                            // the running power average per column
     float averageAlpha = 0.1f;
+    // PERSISTENCE (lane S1, docs/multi-radio-records/screen-s1.md): how much of the picture's history each cell keeps. `density` is one float a pixel of the trace picture: every frame it is multiplied by
+    // `decay` (the fraction kept, 0.5 .. 0.999) and the frame's trace adds 1 to the cells it passes through; a cell that the trace visits on every frame settles at 1 / (1 - decay) and is drawn
+    // fully lit, one it visits on a third of them a third as bright. The decay per frame is the host's (exp(-1 / (tau * frames per second))): Fast tau 0.3 s, Medium 1 s, Slow 3 s.
+    std::vector<float> density;
+    float decay = 0.93f;
 };
 void resetTrace(TraceState& state);
 // Clears the buffer to transparent and draws the live trace, and in PeakHold / Average the bold held trace
