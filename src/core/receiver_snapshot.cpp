@@ -135,6 +135,8 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
                       f.toneRemove != o.toneRemove ||
                       // the S-meter's display units are a setting; signalDbm, sUnits and calibrated are measurements like signalDb
                       f.meterUnits != o.meterUnits ||
+                      // the noise-reduction method chosen is a setting; the method in use is a measurement
+                      f.nrMethod != o.nrMethod ||
                       f.notchQ != o.notchQ || changed(f.flags, o.flags, kModeFlags);
     const bool device = first || changed(f.flags, o.flags, kDeviceFlags) ||
                         f.sampleRateHz != o.sampleRateHz || f.channelRateHz != o.channelRateHz ||

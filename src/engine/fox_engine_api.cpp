@@ -1956,6 +1956,8 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
         case FOXAPI_OP_SET_NB:
             // with ival[1] = 1 the threshold, 6..30 dB above the average
             return (c.ival[1] == 0 || (v >= 6.0 && v <= 30.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_NR_METHOD:
+            return (c.ival[0] >= 0 && c.ival[0] <= static_cast<long long>(FOXAPI_NR_LINE)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_METER_UNITS:
             return (c.ival[0] >= 0 && c.ival[0] <= static_cast<long long>(FOXAPI_METER_DBM)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_TONE_SQUELCH: {

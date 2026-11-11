@@ -2564,6 +2564,10 @@ At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTT
 * `FoxReceiverState`, appended after `audioGate`: `meterUnits signalDbm sUnits calibrated`. Facts (LOCAL): `fact.smeter.cal.state`, `.message`, `.devices`.
 * Saved settings: `meterUnits` for radio 1 and in each `radios` entry; `smeterCal` (device key -> table text; a text that does not parse is dropped whole at load). An older reader ignores them.
 
+### 9.29 Noise-reduction method (engine wiring lane 1, group C; docs/multi-radio-records/engine-wiring-1.md)
+
+* Op `FOXAPI_OP_SET_NR_METHOD` 0x0116 (receiver-scoped; in no web, CAT or TCI profile). State, appended after `calibrated`: `nrMethod`, `nrMethodActive`. Saved: `nrMethod` for radio 1 and in each `radios` entry. Full text: API.md 6.19.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

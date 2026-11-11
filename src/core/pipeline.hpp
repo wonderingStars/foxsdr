@@ -147,6 +147,7 @@
 #include "dsp/tone_squelch.hpp"
 #include "dsp/demod.hpp"
 #include "dsp/noise_reduction.hpp"
+#include "dsp/nr_methods.hpp"
 #include "dsp/notch.hpp"
 #include "dsp/rds.hpp"
 #include "core/patch_runner.hpp"
@@ -550,6 +551,12 @@ public:
     //   toneGateOpen        the tone condition: true while no tone is required or the required tone is present - measured.
     //   carrierSquelchOpen  the carrier gate alone; squelchOpen() is the same (kept for the auto-squelch and the heard-time counters).
     //   audioGateOpen       the carrier AND the tone: the gate the listener hears.
+    // NOISE-REDUCTION METHOD (engine wiring lane 1): 0 the standard noise reduction, 1 minimum-statistics spectral subtraction, 2 the adaptive line enhancer. The on/off switch and
+    // the strength are setNoiseReductionEnabled / Strength's for every method. The line enhancer is for CW and steady carriers and is applied in CW and RAW only; in any other mode the
+    // standard one runs in its place (noiseReductionMethodActive says which is running). False (nothing changed) for a method past 2.
+    bool setNoiseReductionMethod(int method);
+    int noiseReductionMethod() const;
+    int noiseReductionMethodActive() const;   // measured, once per block: 0 while the noise reduction is off
     bool setToneSquelch(int kind, double hz, int dcsDigits, int polarity);
     void setToneRemove(bool on);
     int toneKind() const;
@@ -1080,6 +1087,12 @@ private:
     int toneDcsPol_ = 0;
     bool toneRemove_ = false;
     double toneChanRateHz_ = 0.0;
+    // NOISE-REDUCTION METHOD: the choice and what the posted switch and strength last said (so a method built later starts from them), and the two channels' alternative reducers.
+    int nrMethod_ = 0;
+    bool nrOn_ = false;
+    float nrStrengthNow_ = 0.5f;
+    std::unique_ptr<cascade::dsp::NoiseReducer> nrAltL_;
+    std::unique_ptr<cascade::dsp::NoiseReducer> nrAltR_;
     cascade::dsp::CtcssDetector ctcss_;
     cascade::dsp::DcsDecoder dcs_;
     cascade::dsp::CtcssHighpass toneHpL_;
@@ -1247,6 +1260,8 @@ private:
     std::atomic<float> mirrorNbThresholdDb_{15.0f};
     std::atomic<float> nbBlankedPct_{0.0f};      // live, once per block
     std::atomic<bool> nbStandingDown_{false};
+    std::atomic<int> mirrorNrMethod_{0};
+    std::atomic<int> nrMethodActive_{0};
     std::atomic<int> mirrorToneKind_{0};
     std::atomic<double> mirrorToneHz_{0.0};
     std::atomic<int> mirrorToneDcsDigits_{0};

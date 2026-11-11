@@ -454,6 +454,8 @@ struct AppWindowTestAccess {
     static int toneCodePipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.toneDcsDigits(); }); }
     static bool toneRemoveRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->toneRemove_; }); }
     static bool toneRemovePipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.toneRemove(); }); }
+    static int nrMethodRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->nrMethod_; }); }
+    static int nrMethodPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.noiseReductionMethod(); }); }
     static int meterUnitsRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->meterUnits_; }); }
     static std::size_t calDevices(AppWindow& a) { return rd(a, [&] { return th::engine(a).smeterCal_.size(); }); }
     static bool calMeasuring(AppWindow& a) { return rd(a, [&] { return th::engine(a).smeterMeasure_.active; }); }
@@ -1210,6 +1212,18 @@ void receiverOps(AppWindow& a) {
         CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_TONE_SQUELCH, 3, 0)), FOXAPI_OUT_OF_RANGE));
         CHECK(A::toneKindRx(a) == 2 && A::toneCodeRx(a) == 754 && A::toneHzRx(a) == 0.0);   // (the values that came with the DCS command replaced all three: the tone is "any" again)
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_TONE_SQUELCH, FOXAPI_TONE_OFF, 0))));
+    }
+
+    covering(FOXAPI_OP_SET_NR_METHOD);
+    {
+        CHECK(A::nrMethodRx(a) == 0 && A::nrMethodPipe(a) == 0);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_NR_METHOD, FOXAPI_NR_LINE))));
+        CHECK(A::nrMethodRx(a) == 2 && A::nrMethodPipe(a) == 2);
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_NR_METHOD, 3)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_NR_METHOD, -1)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::nrMethodRx(a) == 2);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_NR_METHOD, FOXAPI_NR_STANDARD))));
+        CHECK(A::nrMethodPipe(a) == 0);
     }
 
     covering(FOXAPI_OP_SET_METER_UNITS);

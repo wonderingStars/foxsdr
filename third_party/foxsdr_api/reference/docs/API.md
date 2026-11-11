@@ -494,6 +494,9 @@ Five ops, grant SETTINGS (`RADIO_FOCUS`, 6.18, is VIEW). A one-radio client neve
   a tone squelch is on the squelch opens only for a carrier that carries the chosen tone or code. State, appended after `nbStandingDown`: `toneKind toneHz toneCode tonePolarity toneRemove` (settings: they
   move `modeSeq`) and `toneDetectedHz toneDetectedCode toneDetectedPolarity toneGate audioGate` (measurements: they move nothing; `toneGate` is 1 while no tone is required or the required one is present,
   `audioGate` is 1 while the carrier AND the tone let the audio through). Saved per radio (`toneSquelchKind`, `toneSquelchHz`, `toneSquelchCode`, `toneSquelchPolarity`, `toneRemove`).
+* **Noise-reduction method (engine wiring lane 1, group C).** `SET_NR_METHOD` 0x0116 (`ival[0]` `FOXAPI_NR_STANDARD` / `SPECTRAL` / `LINE`, per radio; the on/off switch and the strength stay `SET_NR`'s). The line enhancer is for CW and
+  steady carriers and runs in CW and RAW only; elsewhere the standard noise reduction runs in its place. State, appended after `calibrated`: `nrMethod` (a setting: moves `modeSeq`) and `nrMethodActive` (the method in use now; 0 while the noise
+  reduction is off - measured). Saved per radio as `nrMethod`.
 * **S-meter units and calibration (engine wiring lane 1, group B).** `SET_METER_UNITS` 0x0115 (`ival[0]` `FOXAPI_METER_DBFS`/`S`/`DBM`, per radio, the screen's display choice) and the application ops
   `CAL_MEASURE` 0x8612 (`num[0]` the known level in dBm, -150..+30; `ival[0]` 0 = the band that holds the radio's frequency, [0, 30 MHz) or [30 MHz, 6 GHz), 1 = the band `num[1]`..`num[2]` Hz; the radio must be running; the engine
   averages its level for 3 s and stores offset = known dBm - measured dBFS, with the total gain, for that DEVICE) and `CAL_CLEAR` 0x8613 (`ival[0]` 0 = the band covering `num[0]` Hz (0 = the radio's own), 1 = every band of the

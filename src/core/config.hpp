@@ -207,6 +207,7 @@ struct SavedRadio {
     int toneSquelchPolarity = 0;
     bool toneRemove = false;
     int meterUnits = 0;   // S-meter display units, 0 dBFS / 1 S / 2 dBm (engine wiring lane 1)
+    int nrMethod = 0;     // noise-reduction method, 0 standard / 1 spectral / 2 line enhancer (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
     double notchQ = 30.0;
@@ -494,6 +495,7 @@ struct AppConfig {
     int toneSquelchPolarity = 0;
     bool toneRemove = false;
     int meterUnits = 0;   // S-meter display units, 0 dBFS / 1 S / 2 dBm (engine wiring lane 1)
+    int nrMethod = 0;     // noise-reduction method, 0 standard / 1 spectral / 2 line enhancer (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
     double notchQ = 30.0;

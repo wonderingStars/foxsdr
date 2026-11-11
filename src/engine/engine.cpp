@@ -4880,6 +4880,8 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         r.signalDbm = dbm;
         r.sUnits = sUnits;
         r.calibrated = calibrated ? 1u : 0u;
+        r.nrMethod = static_cast<std::uint32_t>(rxa.nrMethod_);
+        r.nrMethodActive = static_cast<std::uint32_t>(rxa.pipeline_.noiseReductionMethodActive());
     }
     r.notchHz = floatAsDecimal(rx().notchFreqHz_);
     r.notchQ = floatAsDecimal(rx().notchQ_);
@@ -7407,6 +7409,14 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[0] = kind == tone::kCtcss ? hz : static_cast<double>(code);
             return res;
         }
+        case FOXAPI_OP_SET_NR_METHOD: {
+            if (c.ival[0] < 0 || c.ival[0] > static_cast<long long>(FOXAPI_NR_LINE)) { return refuse(FOXAPI_OUT_OF_RANGE, "no such noise-reduction method"); }
+            Receiver& rxs = rx();
+            if (!rxs.pipeline_.setNoiseReductionMethod(static_cast<int>(c.ival[0]))) { return refuse(FOXAPI_OUT_OF_RANGE, "no such noise-reduction method"); }
+            rxs.nrMethod_ = static_cast<int>(c.ival[0]);
+            res.applied[0] = static_cast<double>(rxs.nrMethod_);
+            return res;
+        }
         case FOXAPI_OP_SET_METER_UNITS: {
             if (c.ival[0] < 0 || c.ival[0] > static_cast<long long>(FOXAPI_METER_DBM)) { return refuse(FOXAPI_OUT_OF_RANGE, "no such meter unit"); }
             rx().meterUnits_ = static_cast<int>(c.ival[0]);
@@ -9228,6 +9238,8 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         rx().tonePol_ = cfg.toneSquelchPolarity;
         rx().toneRemove_ = cfg.toneRemove;
         rx().meterUnits_ = cfg.meterUnits;
+        rx().nrMethod_ = cfg.nrMethod;
+        (void)rx().pipeline_.setNoiseReductionMethod(rx().nrMethod_);
         (void)rx().pipeline_.setToneSquelch(rx().toneKind_, rx().toneHz_, rx().toneCode_, rx().tonePol_);
         rx().pipeline_.setToneRemove(rx().toneRemove_);
         rx().pipeline_.setAgcMode(static_cast<cascade::dsp::Agc::Mode>(rx().agcMode_));
@@ -9778,6 +9790,7 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
         cfg.toneSquelchPolarity = rxa.tonePol_;
         cfg.toneRemove = rxa.toneRemove_;
         cfg.meterUnits = rxa.meterUnits_;
+        cfg.nrMethod = rxa.nrMethod_;
     }
     cfg.notchEnabled = rx().notchEnabled_;
     cfg.notchFreqHz = static_cast<double>(rx().notchFreqHz_);
@@ -9874,6 +9887,7 @@ void Engine::initialise() {
         rx().pipeline_.setNoiseBlankerEnabled(rx().nbEnabled_);
         (void)rx().pipeline_.setToneSquelch(rx().toneKind_, rx().toneHz_, rx().toneCode_, rx().tonePol_);
         rx().pipeline_.setToneRemove(rx().toneRemove_);
+        (void)rx().pipeline_.setNoiseReductionMethod(rx().nrMethod_);
     }
     rx().pipeline_.setNotchEnabled(rx().notchEnabled_);
     rx().pipeline_.setNotchFrequencyHz(static_cast<double>(rx().notchFreqHz_));

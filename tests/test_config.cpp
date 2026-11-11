@@ -394,6 +394,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.toneSquelchPolarity == b.toneSquelchPolarity);
     CHECK(a.toneRemove == b.toneRemove);
     CHECK(a.meterUnits == b.meterUnits);
+    CHECK(a.nrMethod == b.nrMethod);
     CHECK(a.smeterCal == b.smeterCal);
     CHECK(a.notchEnabled == b.notchEnabled);
     CHECK(a.notchFreqHz == b.notchFreqHz);
@@ -924,6 +925,7 @@ int main() {
         in.toneSquelchPolarity = 2;
         in.toneRemove = true;
         in.meterUnits = 2;   // dBm (default dBFS)
+        in.nrMethod = 1;     // spectral (default standard)
         {
             cascade::core::smeter::CalTable t;   // (the canonical text, as the loader keeps it)
             t.set({0.0, 30.0e6, 43.5, 20.0, true});
@@ -2240,6 +2242,12 @@ int main() {
         CHECK(writeText(path, "{\"meterUnits\":9}\n"));
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.meterUnits == 2 && out.smeterCal.empty());
+        CHECK(writeText(path, "{\"nrMethod\":9}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.nrMethod == 2);
+        CHECK(writeText(path, "{\"nrMethod\":-1}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.nrMethod == 0);
         CHECK(writeText(path, "{\"meterUnits\":-4}\n"));
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.meterUnits == 0);

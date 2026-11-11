@@ -1134,6 +1134,7 @@ void Pipeline::resetRds() {
 void Pipeline::setNoiseReductionEnabled(bool on) {
     post(
         [this, on] {
+            nrOn_ = on;
             nrL_->setEnabled(on);
             nrR_->setEnabled(on);
         },
@@ -1150,6 +1151,11 @@ void Pipeline::setNoiseReductionStrength(float s01) {
     post([this, s01] {
         nrL_->setStrength(s01);
         nrR_->setStrength(s01);
+        nrStrengthNow_ = nrL_->strength();
+        if (nrAltL_) {
+            nrAltL_->setStrength(nrStrengthNow_);
+            nrAltR_->setStrength(nrStrengthNow_);
+        }
     });
 }
 
@@ -1206,6 +1212,32 @@ float Pipeline::noiseBlankerBlankedPercent() const {
 bool Pipeline::noiseBlankerStandingDown() const {
     return nbStandingDown_.load(std::memory_order_relaxed);
 }
+
+// --- noise-reduction method ---------------------------------------------------------------------------------------------------------------------
+bool Pipeline::setNoiseReductionMethod(int method) {
+    if (method < 0 || method > 2) { return false; }
+    post([this, method] {
+             nrMethod_ = method;
+             nrAltL_.reset();
+             nrAltR_.reset();
+             if (method == 1) {
+                 nrAltL_ = std::make_unique<cascade::dsp::MinStatSubtractor>();
+                 nrAltR_ = std::make_unique<cascade::dsp::MinStatSubtractor>();
+             } else if (method == 2) {
+                 nrAltL_ = std::make_unique<cascade::dsp::LineEnhancer>();
+                 nrAltR_ = std::make_unique<cascade::dsp::LineEnhancer>();
+             }
+             if (nrAltL_) {
+                 nrAltL_->setStrength(nrL_->strength());
+                 nrAltR_->setStrength(nrL_->strength());
+                 nrStrengthNow_ = nrL_->strength();
+             }
+         },
+         [this, method] { mirrorNrMethod_.store(method, std::memory_order_relaxed); });
+    return true;
+}
+int Pipeline::noiseReductionMethod() const { return mirrorNrMethod_.load(std::memory_order_relaxed); }
+int Pipeline::noiseReductionMethodActive() const { return nrMethodActive_.load(std::memory_order_relaxed); }
 
 // --- tone squelch (CTCSS / DCS) -------------------------------------------------------------------------------------------------------------------
 void Pipeline::configureToneLocked() {
@@ -2305,8 +2337,19 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     autoNotchR_->process(outR_.data(), k);
     autoNotchEngaged_.store(autoNotchL_->isEngaged(), std::memory_order_relaxed);
     autoNotchHz_.store(autoNotchL_->frequencyHz(), std::memory_order_relaxed);
-    nrL_->process(outL_.data(), k, outL_.data());
-    nrR_->process(outR_.data(), k, outR_.data());
+    {
+        // THE NOISE-REDUCTION METHOD: the chosen alternative runs while the switch is on (the line enhancer in CW and RAW only); otherwise the standard one, as it always did.
+        const bool alt = nrOn_ && nrAltL_ != nullptr &&
+                         (nrMethod_ == 1 || (nrMethod_ == 2 && (mode == cascade::dsp::DemodMode::CW || mode == cascade::dsp::DemodMode::RAW)));
+        if (alt) {
+            nrAltL_->process(outL_.data(), k, outL_.data());
+            nrAltR_->process(outR_.data(), k, outR_.data());
+        } else {
+            nrL_->process(outL_.data(), k, outL_.data());
+            nrR_->process(outR_.data(), k, outR_.data());
+        }
+        nrMethodActive_.store(alt ? nrMethod_ : 0, std::memory_order_relaxed);
+    }
 
     // --- IN-CHAIN AUDIO PROCESSOR PLUGINS (host API level 1) ----------------
     //

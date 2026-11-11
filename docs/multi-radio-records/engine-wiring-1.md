@@ -173,6 +173,17 @@ passed: `100% tests passed out of 89`.
 **UNVERIFIED.** Gain compensation through the engine (the generator has no gain stages, so the engine's sum is 0 in every test; the block's own compensation is proved in `test_smeter_cal`); nothing was calibrated against a real signal
 generator and no real tuner (the block's record says the same); the S9 convention is the block's (UNVERIFIED against the standard itself); the screen's lettering of the three units is the screen lane's.
 
+## C1. Noise-reduction method (second session)
+
+**Op** `FOXAPI_OP_SET_NR_METHOD` 0x0116 (per radio, `ival[0]` standard / spectral / line enhancer; receiver-scoped; in no web, CAT or TCI profile). The switch and the strength remain `SET_NR`'s for every method.
+**Behaviour.** `Pipeline` holds a pair of `dsp::NoiseReducer` (`MinStatSubtractor` or `LineEnhancer`, built under the audio lock when the method is set). While the noise reduction is on, spectral runs in any mode; the line enhancer
+runs in CW and RAW only and the standard reduction runs in its place elsewhere (decision: the setting is always accepted and saved, so a file restores whatever the mode; the screen offers the line enhancer only in CW and RAW).
+The decoders are fed upstream of all of it, as before. The 512-sample latency of the standard and spectral methods is the reduction's own; switching method mid-stream is not click-free (not measured).
+**State (appended after `calibrated`):** `nrMethod` (setting, moves `modeSeq`), `nrMethodActive` (measured: the method in use now, 0 while the reduction is off). **Config:** `nrMethod` (radio 1 and each `radios` entry, clamped 0..2).
+**Tests.** `test_engine_api_nrmethod` `49 checks passed, 0 failed` (per radio; refusals at the API and the engine; spectral active in USB, line enhancer inactive in USB and AM and active in CW, off when the reduction is off; save and
+in-process restart into the pipelines), `test_config` 3787, `test_receiver_snapshot` 860, `test_apply_command` 1782, `test_config_halves` 2495, `test_engine_main_config_roundtrip` 261, `test_radio_scope` 138 (55 ops), mock 447 (+2 known).
+**UNVERIFIED.** Nobody listened to either method through the chain; the blocks are proved on generated signals only (their record). CPU cost of the spectral method per radio in a running chain was not measured.
+
 ## Old reader
 
 RUN, with the v0.99.104 sources (`git show v0.99.104:src/core/config.hpp` and `config.cpp` in a directory searched first, `tools/old_reader_probe/build_probe.bat`; `new_main.cpp` gained a fifth file for this lane:

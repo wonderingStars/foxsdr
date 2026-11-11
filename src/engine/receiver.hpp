@@ -359,6 +359,8 @@ struct Receiver {
     bool toneRemove_ = false;
     // S-meter display units (engine wiring lane 1): FOXAPI_METER_*, dBFS by default.
     int meterUnits_ = 0;
+    // Noise-reduction method (engine wiring lane 1): FOXAPI_NR_*, standard by default.
+    int nrMethod_ = 0;
     bool notchEnabled_ = false;
     float notchFreqHz_ = 1000.0f;
     float notchQ_ = 30.0f;

@@ -578,6 +578,8 @@ void countersMoveByGroup() {
         {"the level in dBm (a measurement)", [](PublishedState& p) { p.rx.signalDbm = -73.0; }, ""},
         {"the level in S units (a measurement)", [](PublishedState& p) { p.rx.sUnits = 9.0; }, ""},
         {"calibrated (a measurement)", [](PublishedState& p) { p.rx.calibrated = 1; }, ""},
+        {"the noise-reduction method", [](PublishedState& p) { p.rx.nrMethod = FOXAPI_NR_SPECTRAL; }, "seq mode"},
+        {"the noise-reduction method in use (a measurement)", [](PublishedState& p) { p.rx.nrMethodActive = 1; }, ""},
         // API 0.3 8.6, the scanner: its seven settings are a group of their own (scanSeq, and
         // seq with it); the scanner's state word and its frequency are live state that moves seq
         // alone (the scanner flag, which the state already had, is the same).
@@ -677,7 +679,7 @@ void rdsGroupAndLayout() {
     CHECK(offsetof(FoxReceiverState, toneHz) < offsetof(FoxReceiverState, toneCode));
     CHECK(offsetof(FoxReceiverState, toneDetectedHz) > offsetof(FoxReceiverState, toneRemove));
     CHECK(offsetof(FoxReceiverState, audioGate) > offsetof(FoxReceiverState, toneGate));
-    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, calibrated) + sizeof(std::uint32_t)) < 8u);
+    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, nrMethodActive) + sizeof(std::uint32_t)) < 8u);
     CHECK(FOXAPI_RDS_PS_CHARS == 9 && FOXAPI_RDS_TEXT_CHARS == 65);
     // The six RDS bits are one word's low bits, each its own.
     const std::uint32_t bits[] = {FOXAPI_RDS_SYNCED, FOXAPI_RDS_PI_VALID, FOXAPI_RDS_PS_VALID,
@@ -762,7 +764,7 @@ void scanGroupAndLayout() {
     CHECK(offsetof(FoxReceiverState, toneHz) < offsetof(FoxReceiverState, toneCode));
     CHECK(offsetof(FoxReceiverState, toneDetectedHz) > offsetof(FoxReceiverState, toneRemove));
     CHECK(offsetof(FoxReceiverState, audioGate) > offsetof(FoxReceiverState, toneGate));
-    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, calibrated) + sizeof(std::uint32_t)) < 8u);
+    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, nrMethodActive) + sizeof(std::uint32_t)) < 8u);
     // The state words are 0..3, each its own.
     CHECK(FOXAPI_SCANNER_IDLE == 0u && FOXAPI_SCANNER_SCANNING == 1u && FOXAPI_SCANNER_PAUSED == 2u &&
           FOXAPI_SCANNER_HOLDING == 3u);

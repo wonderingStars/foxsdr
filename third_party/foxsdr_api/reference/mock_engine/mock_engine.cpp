@@ -717,7 +717,7 @@ public:
         case FOXAPI_OP_SET_BANDWIDTH: case FOXAPI_OP_SET_SQUELCH: case FOXAPI_OP_SET_VOLUME:
         case FOXAPI_OP_SET_MUTED: case FOXAPI_OP_SET_DEEMPHASIS: case FOXAPI_OP_SET_STEREO:
         case FOXAPI_OP_SET_NR: case FOXAPI_OP_SET_NOTCH: case FOXAPI_OP_SET_AUTO_NOTCH:
-        case FOXAPI_OP_SET_AGC: case FOXAPI_OP_SET_NB: case FOXAPI_OP_SET_TONE_SQUELCH: case FOXAPI_OP_SET_TONE_REMOVE: case FOXAPI_OP_SET_METER_UNITS:
+        case FOXAPI_OP_SET_AGC: case FOXAPI_OP_SET_NB: case FOXAPI_OP_SET_TONE_SQUELCH: case FOXAPI_OP_SET_TONE_REMOVE: case FOXAPI_OP_SET_METER_UNITS: case FOXAPI_OP_SET_NR_METHOD:
         case FOXAPI_OP_SET_DISPLAY_RANGE: case FOXAPI_OP_SELECT_SOURCE: case FOXAPI_OP_SET_SAMPLE_RATE:
         case FOXAPI_OP_SET_GAIN: case FOXAPI_OP_SET_DEVICE_AGC: case FOXAPI_OP_BOOKMARK_TUNE:
             return true;
@@ -1185,6 +1185,7 @@ private:
         uint32_t tonePolarity = 0;
         bool toneRemove = false;
         uint32_t meterUnits = FOXAPI_METER_DBFS;
+        uint32_t nrMethod = FOXAPI_NR_STANDARD;
         bool notch = false;
         double notchHz = 1000.0;
         double notchQ = 30.0;
@@ -1340,7 +1341,7 @@ private:
         case FOXAPI_OP_SET_BANDWIDTH: case FOXAPI_OP_SET_SQUELCH: case FOXAPI_OP_SET_VOLUME:
         case FOXAPI_OP_SET_MUTED: case FOXAPI_OP_SET_DEEMPHASIS: case FOXAPI_OP_SET_STEREO:
         case FOXAPI_OP_SET_NR: case FOXAPI_OP_SET_NOTCH: case FOXAPI_OP_SET_AUTO_NOTCH:
-        case FOXAPI_OP_SET_AGC: case FOXAPI_OP_SET_NB: case FOXAPI_OP_SET_TONE_SQUELCH: case FOXAPI_OP_SET_TONE_REMOVE: case FOXAPI_OP_SET_METER_UNITS:
+        case FOXAPI_OP_SET_AGC: case FOXAPI_OP_SET_NB: case FOXAPI_OP_SET_TONE_SQUELCH: case FOXAPI_OP_SET_TONE_REMOVE: case FOXAPI_OP_SET_METER_UNITS: case FOXAPI_OP_SET_NR_METHOD:
         case FOXAPI_OP_SET_DISPLAY_RANGE: case FOXAPI_OP_SCAN_DEVICES:
         case FOXAPI_OP_SELECT_SOURCE: case FOXAPI_OP_SET_SAMPLE_RATE: case FOXAPI_OP_SET_GAIN:
         case FOXAPI_OP_SET_DEVICE_AGC: case FOXAPI_OP_BOOKMARK_ADD: case FOXAPI_OP_BOOKMARK_TUNE:
@@ -1441,6 +1442,7 @@ private:
         case FOXAPI_OP_SET_NB:
             return (c.ival[1] == 0 || (v >= 6.0 && v <= 30.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_METER_UNITS:
+        case FOXAPI_OP_SET_NR_METHOD:
             return (c.ival[0] >= 0 && c.ival[0] <= 2) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_TONE_SQUELCH:
             // the kind 0..2; with ival[1] = 1 the values: a tone of the 50 or 0, a code of the 83 (as digits) or 0, a polarity 0..2 (the mock holds the tables' answers only to the extent below)
@@ -1842,6 +1844,11 @@ private:
                 m_.tonePolarity = static_cast<uint32_t>(c.num[2]);
             }
             r.applied[0] = m_.toneKind == FOXAPI_TONE_CTCSS ? m_.toneHz : static_cast<double>(m_.toneCode);
+            bump(kMode);
+            break;
+        case FOXAPI_OP_SET_NR_METHOD:
+            m_.nrMethod = static_cast<uint32_t>(c.ival[0]);
+            r.applied[0] = static_cast<double>(m_.nrMethod);
             bump(kMode);
             break;
         case FOXAPI_OP_SET_METER_UNITS:
@@ -2672,6 +2679,8 @@ private:
         s.signalDbm = s.signalDb;   // measurements: the mock has no calibration, so the dBFS number stands in as the estimate
         s.sUnits = 0.0;
         s.calibrated = 0u;
+        s.nrMethod = m_.nrMethod;
+        s.nrMethodActive = 0u;   // a measurement: the mock runs no noise reduction
         s.notchHz = m_.notchHz;
         s.notchQ = m_.notchQ;
         s.pilotLevel = (f & FOXAPI_RX_STEREO_ACTIVE) ? 1.0 : 0.0;

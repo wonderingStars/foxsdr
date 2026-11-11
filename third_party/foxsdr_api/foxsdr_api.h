@@ -427,7 +427,15 @@ typedef struct FoxReceiverState {
     double signalDbm;                  /* the level in dBm: calibrated, or the dBFS number standing in as an ESTIMATE (calibrated = 0) - measured */
     double sUnits;                     /* the level in S units of signalDbm at the tuned frequency: S9 = 9.0, S9+20 dB = 9.333 - measured */
     uint32_t calibrated;               /* 1 when a calibration of this device covers the tuned frequency - measured */
+    /* ---- 0.3 (noise-reduction method; docs/API.md 6.19): nrMethod is THIS radio's choice (FOXAPI_NR_*) and moves modeSeq; nrMethodActive is the method in use now - measured. ---- */
+    uint32_t nrMethod;                 /* FOXAPI_NR_* */
+    uint32_t nrMethodActive;           /* FOXAPI_NR_* in use now: 0 (standard) while the noise reduction is off, and while the line enhancer is chosen outside CW and RAW - measured */
 } FoxReceiverState;
+
+/* FoxReceiverState::nrMethod and FOXAPI_OP_SET_NR_METHOD ival[0] */
+#define FOXAPI_NR_STANDARD 0u /* the noise reduction as it always was (default) */
+#define FOXAPI_NR_SPECTRAL 1u /* minimum-statistics spectral subtraction (broadband hiss on voice) */
+#define FOXAPI_NR_LINE     2u /* adaptive line enhancer (CW and steady carriers: applied in CW and RAW only; the standard one elsewhere) */
 
 /* FoxReceiverState::meterUnits and FOXAPI_OP_SET_METER_UNITS ival[0] */
 #define FOXAPI_METER_DBFS 0u /* the bar and the number as they always were (default) */
@@ -592,6 +600,7 @@ typedef struct FoxCommand {
 #define FOXAPI_OP_SET_NB            0x0112u /* ival[0]: 0/1; ival[1]=1: num[0] is the blanker threshold, dB above the average, 6..30. Addresses one radio (target) */
 #define FOXAPI_OP_SET_TONE_SQUELCH  0x0113u /* ival[0]: FOXAPI_TONE_*; ival[1]=1: the values follow - num[0]: CTCSS Hz (0 any, else one of the 50), num[1]: DCS code as digits (0 any, else one of the 83), num[2]: DCS polarity 0 any / 1 normal / 2 inverted. Without them the radio's last choice is used. Addresses one radio (target); NFM only */
 #define FOXAPI_OP_SET_METER_UNITS   0x0115u /* ival[0]: FOXAPI_METER_* 0..2: how this radio's level is lettered (the choice is the screen's; the state carries all three). Addresses one radio (target) */
+#define FOXAPI_OP_SET_NR_METHOD     0x0116u /* ival[0]: FOXAPI_NR_* 0..2; the strength is SET_NR's. Addresses one radio (target) */
 #define FOXAPI_OP_SET_TONE_REMOVE   0x0114u /* ival[0]: 0/1: the high-pass that takes the sub-audible tone out of the audio. Addresses one radio (target) */
 /* Display */
 #define FOXAPI_OP_SET_DISPLAY_RANGE 0x0201u /* num[0]: dbMin, num[1]: dbMax (min span enforced) */

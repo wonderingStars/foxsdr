@@ -386,6 +386,11 @@ void testToneSquelch() {
     CHECK_EQ(s.state().calibrated, 0u);
     CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_METER_UNITS, 0.0, 3)).status(), FOXAPI_OUT_OF_RANGE);
     CHECK_EQ(s.state().meterUnits, static_cast<uint32_t>(FOXAPI_METER_S));
+    // the noise-reduction method (0x0116)
+    CHECK_EQ(s.state().nrMethod, static_cast<uint32_t>(FOXAPI_NR_STANDARD));
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_NR_METHOD, 0.0, FOXAPI_NR_LINE)).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().nrMethod, static_cast<uint32_t>(FOXAPI_NR_LINE));
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_NR_METHOD, 0.0, 3)).status(), FOXAPI_OUT_OF_RANGE);
 }
 
 void testBatchAndQueueBound() {

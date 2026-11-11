@@ -277,6 +277,7 @@ std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
         r.nbThresholdDb = !(r.nbThresholdDb >= 6.0) ? 6.0 : clampd(r.nbThresholdDb, 6.0, 30.0);
         clampToneSquelch(r.toneSquelchKind, r.toneSquelchHz, r.toneSquelchCode, r.toneSquelchPolarity);
         r.meterUnits = r.meterUnits < 0 ? 0 : (r.meterUnits > 2 ? 2 : r.meterUnits);
+        r.nrMethod = r.nrMethod < 0 ? 0 : (r.nrMethod > 2 ? 2 : r.nrMethod);
         r.notchFreqHz = clampd(r.notchFreqHz, 10.0, 20000.0);
         r.notchQ = clampd(r.notchQ, 0.1, 1000.0);
         r.audioRoute = r.audioRoute < 0 ? 0 : (r.audioRoute > 3 ? 3 : r.audioRoute);
@@ -585,6 +586,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     getInt(j, "toneSquelchPolarity", out.toneSquelchPolarity);
     getBool(j, "toneRemove", out.toneRemove);
     getInt(j, "meterUnits", out.meterUnits);
+    getInt(j, "nrMethod", out.nrMethod);
     getBool(j, "notchEnabled", out.notchEnabled);
     getDouble(j, "notchFreqHz", out.notchFreqHz);
     getDouble(j, "notchQ", out.notchQ);
@@ -1000,6 +1002,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
                 getInt(e, "toneSquelchPolarity", r.toneSquelchPolarity);
                 getBool(e, "toneRemove", r.toneRemove);
                 getInt(e, "meterUnits", r.meterUnits);
+                getInt(e, "nrMethod", r.nrMethod);
                 getBool(e, "notchEnabled", r.notchEnabled);
                 getDouble(e, "notchFreqHz", r.notchFreqHz);
                 getDouble(e, "notchQ", r.notchQ);
@@ -1227,6 +1230,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     out.nbThresholdDb = !(out.nbThresholdDb >= 6.0f) ? 6.0f : clampf(out.nbThresholdDb, 6.0f, 30.0f);
     clampToneSquelch(out.toneSquelchKind, out.toneSquelchHz, out.toneSquelchCode, out.toneSquelchPolarity);
     out.meterUnits = out.meterUnits < 0 ? 0 : (out.meterUnits > 2 ? 2 : out.meterUnits);
+    out.nrMethod = out.nrMethod < 0 ? 0 : (out.nrMethod > 2 ? 2 : out.nrMethod);
     out.notchFreqHz = clampd(out.notchFreqHz, 10.0, 20000.0);
     out.notchQ = clampd(out.notchQ, 0.1, 1000.0);
     // At least kMinRangeSpanDb apart, which is the rule every writer of this pair follows (the
@@ -1576,6 +1580,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["toneSquelchPolarity"] = cfg.toneSquelchPolarity;
     j["toneRemove"] = cfg.toneRemove;
     j["meterUnits"] = cfg.meterUnits;
+    j["nrMethod"] = cfg.nrMethod;
     j["notchEnabled"] = cfg.notchEnabled;
     j["notchFreqHz"] = cfg.notchFreqHz;
     j["notchQ"] = cfg.notchQ;
@@ -1772,6 +1777,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
             e["toneSquelchPolarity"] = r.toneSquelchPolarity;
             e["toneRemove"] = r.toneRemove;
             e["meterUnits"] = r.meterUnits;
+            e["nrMethod"] = r.nrMethod;
             e["notchEnabled"] = r.notchEnabled;
             e["notchFreqHz"] = r.notchFreqHz;
             e["notchQ"] = r.notchQ;
