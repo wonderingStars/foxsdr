@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2153 | 530 | 91 | 1532 | 0 |
+| 2167 | 542 | 92 | 1533 | 0 |
 
-Of the 1266 rows that are controls (the 887 readout-like rows left out): 530 asserted, 91 driven without a read-back, 645 not drivable.
+Of the 1280 rows that are controls (the 887 readout-like rows left out): 542 asserted, 92 driven without a read-back, 646 not drivable.
 
-NOT DRIVABLE by reason: readout 887, other 215, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 887, other 216, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -200,7 +200,7 @@ NOT DRIVABLE by reason: readout 887, other 215, needs a signal (no fixture) 120,
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
 | 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 96 | 48 | 0 | 48 | 35 | 0 |
-| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 73 | 38 | 8 | 27 | 19 | 0 |
+| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 87 | 50 | 9 | 28 | 19 | 0 |
 | SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md) | 6 | 5 | 1 | 0 | 0 | 0 |
 
 ## Every row
@@ -3241,8 +3241,8 @@ NOT DRIVABLE by reason: readout 887, other 215, needs a signal (no fixture) 120,
 | 4204 | Radio pane: RUN, DEC, MUTE, FAIL lamps (captions drop in a short pane) | lamp | NOT DRIVABLE | - | the four lamps carry the same words in every pane (RUN, DEC, MUTE, FAIL) so no label is unique; each lamp's state is the pane's flag, held by test_slint_radio_pane and read back as state workspace.running.<n> |
 | 4205 | Radio pane: STOP / START key (Stop Radio n) | key | DRIVEN+ASSERTED | workspace-select | click "Start Radio 3" then "Stop Radio 1"; state workspace.running.3 == 1 and workspace.running.1 == 0, the others untouched; click "Stop Radio 4" / "Start Radio 4" with four LIVE radios: state workspace.r.4.running follows, radios 1 to 3 untouched |
 | 4206 | Radio pane: readout row (GAIN, SQL, VOL, RATE, BIAS, decoder chip, PEAK, SPAN) | readout | DRIVEN | workspace-layouts | expect "Radio 2: SPAN 2.400 MHz" and "Radio 2: GAIN --" label contains; the drop order of the figures is held by test_slint_radio_workspace (ten widths) |
-| 4207 | Radio pane: spectrum gestures (click to tune, double-click, wheel, band drag, edge drag, right-click menu) | gesture | DRIVEN+ASSERTED | workspace-select | press "Radio 4 spectrum": click to tune retunes radio 4 only (state workspace.tuned.4 moved, .3 .2 .1 not, the selection not). Double-click, wheel, band drag, edge drag and right-click have no verb; held by test_slint_radio_workspace with real pointer events and test_slint_workspace_host; press "Radio 3 spectrum" with four LIVE radios: state workspace.r.3.tuned moves, r.1 r.2 r.4 do not, the selection stays (live-two: the same for radio 2) |
-| 4208 | Radio pane: waterfall gestures (click to tune, pan, wheel, double-click, right-click menu) | gesture | DRIVEN+ASSERTED | workspace-select | press "Radio 3 waterfall": click to tune retunes radio 3 only (state workspace.tuned.3 moved, .4 .2 not). Pan, wheel, double-click and the right-click menu have no verb; held by test_slint_radio_workspace |
+| 4207 | Radio pane: spectrum gestures (click to tune, double-click, wheel, band drag, edge drag, right-click menu) | gesture | DRIVEN+ASSERTED | workspace-select | press "Radio 4 spectrum": click to tune retunes radio 4 only (state workspace.tuned.4 moved, .3 .2 .1 not, the selection not). Double-click, wheel, band drag, edge drag and right-click have no verb; held by test_slint_radio_workspace with real pointer events and test_slint_workspace_host |
+| 4208 | Radio pane: waterfall gestures (click to tune, pan, wheel, double-click, right-click menu) | gesture | DRIVEN+ASSERTED | workspace-select | press "Radio 3 waterfall": click to tune retunes radio 3 only (state workspace.tuned.3 moved, .4 .2 not). Pan, wheel, double-click and the right-click menu have no verb; held by test_slint_radio_workspace; press "Radio 3 waterfall" with four LIVE radios: state workspace.r.3.tuned moves, r.1 r.2 r.4 do not, the selection stays (live-two: the same for radio 2) |
 | 4209 | Radio pane: splitter between spectrum and waterfall | gesture | NOT DRIVABLE | - | a pointer drag: the scripted input has no drag verb; test_slint_radio_workspace drags it with real pointer events and checks that the radio's share is kept across a page change |
 | 4210 | Radio pane: selection outline in the radio's colour | overlay/marker | DRIVEN | workspace-select | state workspace.selected after each selection and shot "workspace-selected-2.png"; the outline's pixels are held by test_slint_radio_workspace in both skins |
 | 4211 | Radio pane: the compact spectrum (no 76 px header) | well/plot | DRIVEN | workspace-layouts | shot "workspace-four.png" and "workspace-two.png" (looked at); the plot top and the picture position are held by test_slint_radio_pane |
@@ -3251,6 +3251,20 @@ NOT DRIVABLE by reason: readout 887, other 215, needs a signal (no fixture) 120,
 | 4214 | Workspace bar: small-window notice | message | DRIVEN | workspace-small | a 1000 x 640 window: state workspace.shown == 0 and workspace.fell == 1; expect the sentence present (its text is a label, no state of its own) |
 | 4215 | Workspace: an empty slot (no radio in that cell) | well/plot | DRIVEN+ASSERTED | live-four | radio remove 3 (the real RADIO_REMOVE): state workspace.cells == "1,2,0,4", the other panes still read their own tones; live-eight: radio 7 removed on page two; three radios in 2 x 2: state workspace.cells == "1,2,3,0" and workspace.ticks.4 == 0; shot "workspace-empty-slot.png"; the cell has no unique control label (the name is shared by a group and its text) |
 | 4216 | Workspace: the grid of panes (2 x 2, side by side; a page of four) | layout | DRIVEN+ASSERTED | workspace-layouts | state workspace.cells per layout and page, workspace.pic.<n> (the pictures fitted to the pane, today's size back in One), workspace.ticks.<n> (only the radios on screen are read); state workspace.peakoff.<n> per pane (radio n's own tone, 50 / 80 / 110 kHz and radio 1's +300 kHz), workspace.ticks.<n>, workspace.r.<n>.running |
+| 4217 | Strip: "Controls follow" radio selector (R1 to R4 of the page shown) | key | DRIVEN+ASSERTED | deck-select | click "Controls follow Radio 2" and "Controls follow Radio 1"; state workspace.selected follows and the strip shows that radio (state tunedHz); expect the key checked |
+| 4218 | Strip: STOP Rn | key | DRIVEN+ASSERTED | deck-select | click "STOP R2": state workspace.r.2.running == 0 and radio 1 still runs; expect "STOP R2" enabled equals "false" once it has stopped |
+| 4219 | Strip: STOP ALL / START ALL | key | DRIVEN+ASSERTED | deck-select | click "STOP ALL" then "START ALL": state workspace.r.<n>.running for every open radio; the key's own word changes with it |
+| 4220 | Strip: MASTER lamps (Radio n master) | key | DRIVEN+ASSERTED | deck-select | click "Radio 3 master": state workspace.selected == 3; state workspace.master.<n> is 1 running, 0 stopped, 2 failed |
+| 4221 | Sections panel: the R-tag of the selected radio | readout | NOT DRIVABLE | - | a tag with no label of its own (a readout); its colour is held by test_slint_radio_strip in both skins and looked at in the shots |
+| 4222 | Audio mix: route key (Output of Radio n) | key | DRIVEN+ASSERTED | deck-audio | click "Output of Radio 2" four times: state workspace.audio.2 goes left, right, none, both (fact.radio.2.audio from the engine) |
+| 4223 | Audio mix: MUTE (Mute Radio n) | key | DRIVEN+ASSERTED | deck-audio | click "Mute Radio 2": state workspace.mute.2 == 1 and workspace.mute.1 == 0 |
+| 4224 | Audio mix: SOLO (Solo Radio n) | key | DRIVEN+ASSERTED | deck-audio | click "Solo Radio 2" twice: state workspace.solo == 2 then 0; expect the key checked (the host's own record) |
+| 4225 | Audio mix: volume slider (Radio n: VOLUME) | slider | DRIVEN+ASSERTED | deck-audio | slider "Radio 2: VOLUME": state workspace.r.2.volume follows, workspace.r.1.volume does not |
+| 4226 | Status bar: one chip per open radio (Rn, its state, its frequency and mode) | chip | DRIVEN | deck-select | state workspace.chips == "1,2,3" (one chip per open radio, in front of today's); the chip's own label carries its radio's frequency, which a script cannot name, so a click on a chip is held by test_slint_host_radio_mix (the chip's words) and looked at in the shots |
+| 4227 | Add a radio: the card in an empty cell | card | DRIVEN+ASSERTED | deck-add | click "Add Signal generator" in an empty cell: state workspace.radios grows, the cell becomes a pane; the engine's refusal when the limit is reached: state workspace.addnote |
+| 4228 | Status bar: "Add a radio" key and its sheet | key | DRIVEN+ASSERTED | deck-add | click "Add a radio" in the status bar: the sheet opens (state workspace.open == 1), "Add Signal generator"#2 adds, the sheet closes |
+| 4229 | Radio pane: close key (Remove Radio n) | key | DRIVEN+ASSERTED | deck-add | click "Remove Radio 2" on a stopped radio: gone at once (state workspace.radios); on a running one the question comes first (state workspace.removeask == 2) |
+| 4230 | Remove question: Remove / Cancel | dialog | DRIVEN+ASSERTED | deck-add | click "Remove" in the question: the radio goes; "Cancel": it stays |
 
 ### SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md)
 

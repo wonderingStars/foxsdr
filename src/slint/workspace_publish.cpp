@@ -5,6 +5,7 @@
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
 #include "host_logic.hpp"
+#include "radio_mix_logic.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -52,6 +53,7 @@ WorkspacePublisher::WorkspacePublisher(MainWindow& ui) : ui_(ui) {
     for (int i = 0; i < kMaxRadios; ++i) {
         rows_[static_cast<std::size_t>(i)] = blankCell();
         rows_[static_cast<std::size_t>(i)].label = ss(cascade::core::formatText(cascade::i18n::tr("Radio %d"), i + 1));
+        rows_[static_cast<std::size_t>(i)].card_label = ss(addCardSlotName(i + 1));
         rows_[static_cast<std::size_t>(i)].pane.radio = i + 1;
         rows.push_back(rows_[static_cast<std::size_t>(i)]);
     }
@@ -114,7 +116,7 @@ void WorkspacePublisher::publishPane(RadioView& rv, const PaneContext& ctx) {
 
     // THE WORDS and the flags, as one signature
     {
-        const std::string sig = t.prefix + "|" + t.selectLabel + "|" + t.stopLabel + "|" + t.spectrumLabel + "|" + t.waterfallLabel + "|" + t.resizeLabel + "|" + t.runTip + "|" + t.decTip + "|" +
+        const std::string sig = t.prefix + "|" + t.selectLabel + "|" + t.stopLabel + "|" + t.spectrumLabel + "|" + t.waterfallLabel + "|" + t.resizeLabel + "|" + t.closeLabel + "|" + t.runTip + "|" + t.decTip + "|" +
                                 t.muteTip + "|" + t.failTip + "|" + t.device + "|" + t.frequency + "|" + t.mode + "|" + t.gain + "|" + t.squelch + "|" + t.volume + "|" + t.rate + "|" + ctx.decoder + "|" +
                                 (t.running ? "r" : "-") + (t.decoding ? "d" : "-") + (t.muted ? "m" : "-") + (t.failed ? "f" : "-") + (t.biasTee ? "b" : "-") + std::to_string(ctx.traceMode);
         if (sg.changed("pane.words", sig)) {
@@ -125,6 +127,8 @@ void WorkspacePublisher::publishPane(RadioView& rv, const PaneContext& ctx) {
             d.spectrum_label = ss(t.spectrumLabel);
             d.waterfall_label = ss(t.waterfallLabel);
             d.resize_label = ss(t.resizeLabel);
+            d.removable = slot > 0;                    // radio 1 is always there (RADIO_REMOVE refuses it)
+            d.close_label = ss(t.closeLabel);
             d.run_tip = ss(t.runTip);
             d.dec_tip = ss(t.decTip);
             d.mute_tip = ss(t.muteTip);

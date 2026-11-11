@@ -1,7 +1,7 @@
 #! frames=700 size=1440x900
 # live-two: two LIVE radios (screen stage S4, job B; docs/multi-radio-records/screen-s4.md). Radio 1 is the engine's own; radio 2 is a GENERATOR radio opened through the engine's real RADIO_ADD
 # (the drive verb `radio add 2 60000`: number 2, a tone 60 kHz above its centre). Nothing is made up: every figure below is read from the engine's second radio.
-# Each pane shows its OWN radio's spectrum (radio 1's tone is at +300 kHz, radio 2's at +60 kHz: the peak of each pane's last frame, state workspace.peakoff.<n>); a click in pane 2's spectrum retunes radio 2
+# Each pane shows its OWN radio's spectrum (radio 1's tone is at +300 kHz, radio 2's at +60 kHz: the peak of each pane's last frame, state workspace.peakoff.<n>); a click in pane 2's waterfall retunes radio 2
 # only; selecting radio 2 moves the strip (state tunedHz) and the SIGNAL bank (AGC) to it; STOP in pane 2 stops radio 2 only; removing radio 2 empties its pane and leaves radio 1 alone.
 10 state workspace.radios == 1
 state workspace.peakoff.1 > 290000
@@ -21,7 +21,7 @@ state workspace.peakoff.1 < 310000
 # tuning in pane 2 moves radio 2 only
 +1 state workspace.r.2.tuned == 100000000
 state workspace.r.1.tuned == 100300000
-+1 press "Radio 2 spectrum"
++1 press "Radio 2 waterfall"
 +15 state workspace.r.2.tuned != 100000000
 state workspace.r.1.tuned == 100300000
 state workspace.selected == 1

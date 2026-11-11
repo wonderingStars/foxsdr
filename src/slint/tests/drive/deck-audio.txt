@@ -1,0 +1,55 @@
+#! frames=800 size=1600x900
+# deck-audio: the Audio mix block at the foot of the sections panel with two LIVE radios (screen stage S4; docs/multi-radio-records/screen-s4.md; tick rows 4222-4225). Radio 2 is a generator radio
+# opened through the engine's real RADIO_ADD. The route key of a radio cycles both, left, right, none, both (RADIO_AUDIO; read back as the engine's fact.radio.<n>.audio); MUTE and the volume act on that radio
+# only; SOLO marks the radio heard alone (RADIO_SOLO; the host's record is read back, the engine has none to give) and a second press hears all again. SOLO and MUTE of radio 1 are untouched throughout.
+10 state workspace.audio.1 == both
++1 radio add 2 60000
++25 state workspace.radios == 2
+state workspace.audio.2 == both
++1 click "Output of Radio 2"
++15 state workspace.audio.2 == left
+state workspace.audio.1 == both
++1 click "Output of Radio 2"
++15 state workspace.audio.2 == right
++1 click "Output of Radio 2"
++15 state workspace.audio.2 == none
++1 click "Output of Radio 2"
++15 state workspace.audio.2 == both
++1 click "Output of Radio 1"
++15 state workspace.audio.1 == left
++1 click "Output of Radio 1"
++15 state workspace.audio.1 == right
++1 click "Output of Radio 1"
++15 state workspace.audio.1 == none
++1 click "Output of Radio 1"
++15 state workspace.audio.1 == both
+state workspace.audio.2 == both
+# MUTE
++1 expect "Mute Radio 2" checked equals "false"
++1 click "Mute Radio 2"
++15 state workspace.mute.2 == 1
+state workspace.mute.1 == 0
++1 expect "Mute Radio 2" checked equals "true"
++1 click "Mute Radio 2"
++15 state workspace.mute.2 == 0
+# SOLO
++1 click "Solo Radio 2"
++15 state workspace.solo == 2
++1 expect "Solo Radio 2" checked equals "true"
++1 expect "Solo Radio 1" checked equals "false"
++1 click "Solo Radio 1"
++15 state workspace.solo == 1
++1 click "Solo Radio 1"
++15 state workspace.solo == 0
+# the volume of radio 2 only
++1 slider "Radio 2: VOLUME" 0.3
++15 state workspace.r.2.volume < 0.35
+state workspace.r.2.volume > 0.25
+state workspace.r.1.volume != 0.30
++1 shot "deck-audio.png"
+# removing the solo radio clears the solo
++1 click "Solo Radio 2"
++15 state workspace.solo == 2
++1 radio remove 2
++25 state workspace.radios == 1
+state workspace.solo == 0

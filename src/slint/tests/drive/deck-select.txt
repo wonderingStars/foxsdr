@@ -1,0 +1,62 @@
+#! frames=1100 size=1600x900 bank=0 sections=0:3
+# deck-select: the strip's radio block with three LIVE radios (screen stage S4; docs/multi-radio-records/screen-s4.md; tick rows 4217-4221 and 4226). Radio 1 is the engine's, radios 2 and 3 are
+# generator radios opened through the engine's real RADIO_ADD (`radio add`). With ONE radio nothing of the block is there (no status chip for a radio); with three the selector "Controls follow Radio n",
+# STOP R<n>, STOP ALL / START ALL and the MASTER lamps appear and the status bar has one chip per radio. Selecting a radio (the selector, a lamp) moves the strip and the SIGNAL bank (AGC) to it;
+# STOP Rn stops the selected radio only; STOP ALL stops every radio and START ALL starts them again.
+10 state workspace.chips == ""
+state workspace.master.1 == 1
++1 radio add 2 60000
++1 radio add 3 90000
++30 state workspace.radios == 3
+state workspace.chips == "1,2,3"
+state workspace.master.2 == 1
+state workspace.master.3 == 1
++1 click "2 x 2"
++15 state workspace.shown == 2
++1 expect "Controls follow Radio 1" checked equals "true"
++1 expect "Controls follow Radio 2" checked equals "false"
++1 shot "deck-select-three.png"
+# retune radio 2 in its own pane, then select it: the strip follows
++1 press "Radio 2 spectrum"
++15 state workspace.r.2.tuned != 100300000
+state workspace.selected == 1
+state tunedHz == 100300000
++1 click "Controls follow Radio 2"
++15 state workspace.selected == 2
+state tunedHz != 100300000
++1 expect "Controls follow Radio 2" checked equals "true"
++1 expect "Controls follow Radio 1" checked equals "false"
+# the SIGNAL bank follows: AGC is radio 2's own
++1 choose "AGC" "Fast"
++20 state agcMode == 1
+state workspace.r.1.agc == 0
+state workspace.r.3.agc == 0
+# a lamp selects too
++1 click "Radio 3 master"
++15 state workspace.selected == 3
+state agcMode == 0
++1 expect "AGC" value contains "Auto"
++1 click "Radio 2 master"
++15 state workspace.selected == 2
++1 expect "AGC" value contains "Fast"
+# STOP R2 stops radio 2 only
++1 expect "STOP R2" enabled equals "true"
++1 click "STOP R2"
++15 state workspace.r.2.running == 0
+state workspace.r.1.running == 1
+state workspace.r.3.running == 1
+state workspace.master.2 == 0
+state workspace.master.1 == 1
++1 expect "STOP R2" enabled equals "false"
++1 shot "deck-select-r2-stopped.png"
+# STOP ALL stops every radio, START ALL starts every radio
++1 click "STOP ALL"
++15 state workspace.r.1.running == 0
+state workspace.r.2.running == 0
+state workspace.r.3.running == 0
++1 expect "START ALL" enabled equals "true"
++1 click "START ALL"
++15 state workspace.r.1.running == 1
+state workspace.r.2.running == 1
+state workspace.r.3.running == 1
++1 expect "STOP ALL" enabled equals "true"

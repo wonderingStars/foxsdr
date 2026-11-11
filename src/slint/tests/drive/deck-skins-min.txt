@@ -1,0 +1,11 @@
+#! frames=420 size=800x560 bank=4 sections=4:0
+# deck-skins-min: the strip's radio block, the Audio mix and the status bar with three LIVE radios in a window far below the 1280 x 720 a multi-pane layout needs (docs/multi-radio-records/screen-s4.md):
+# layout One is shown, the strip is clipped on the right as it already is at this width, and the block is at its left. Looked at, in both skins; no state is asserted beyond the radios.
+10 state workspace.radios == 1
++1 radio add 2 60000
++1 radio add 3 90000
++30 state workspace.radios == 3
++5 shot "s4-800-three-workbench.png"
++1 choose "Theme" "Night Watch"
++12 state look.bg != "#15171b"
++8 shot "s4-800-three-night.png"

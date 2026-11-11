@@ -78,6 +78,8 @@
 #include "view3d_publish.hpp"
 #include "workspace_logic.hpp"
 #include "workspace_publish.hpp"
+#include "radio_mix_logic.hpp"
+#include "radio_mix_publish.hpp"
 #include "workspace_testseam.hpp"
 #include "plugin_kit.hpp"
 #include "signal_publish.hpp"
@@ -343,6 +345,19 @@ int main(int argc, char** argv) {
     // (today's engine) nothing here shows: layout One is the receiver view as it was. The engine's multi-radio stage is not in this tree: see the SEAM notes below.
     Workspace workspace(radios);
     foxsdr::slintworkspace::WorkspacePublisher workspacePublisher(*ui);
+    // THE STRIP, THE AUDIO MIX, THE CARD (docs/multi-radio-records/screen-s4.md, stage S4): what the engine says about each radio (fact.radio.<n>.*, read with the radios), the host's own record of the solo
+    // radio (the engine publishes no read-back of it), the engine's last refusal to an add (shown unchanged), and the question before a running radio is removed.
+    foxsdr::slintworkspace::DeckPublisher deckPublisher(*ui);
+    std::array<RadioFacts, kMaxRadios> radioFacts{};
+    int soloRadio = 0;
+    std::string addNote;
+    bool addOpen = false, addSwitchLayout = false;
+    int removeConfirm = 0;
+    std::uint64_t addTicket = 0, lastTicket = 0;
+    std::vector<DeviceRow> deviceRows;
+    std::array<FoxReceiverState, kMaxRadios> deckStates{};
+    std::array<bool, kMaxRadios> deckHave{};
+    std::vector<int> chipRadios;               // the radio of each status chip the deck put in front of today's (a click on the chip selects it)
     // TEST ONLY (workspace_testseam.hpp): a BOUNDED run's FOXSDR_SLINT_TEST_RADIOS=<2..8> makes radios 2 to N from made-up answers, so the drive harness can show, drive and shoot the panes before stage 4
     // has live radios. Never in a session: the gate is the bounded run, and no control reaches it.
     std::unique_ptr<SeamRadios> seam;
@@ -529,6 +544,7 @@ int main(int argc, char** argv) {
         aimAt(c, radio);
         FoxSubmitResult r{}; r.structSize = sizeof(r);
         const int32_t rc = api->submit(session, &c, 1, &r);
+        lastTicket = rc < 0 ? 0 : r.ticket;
         if (rc < 0) { std::fprintf(stderr, "foxsdr-slint: submit op 0x%04x refused by the call: %d\n", c.op, rc); }
         else if (r.status == FOXAPI_BUSY) { std::fprintf(stderr, "foxsdr-slint: submit op 0x%04x: the session's queue is full\n", c.op); }
     };
@@ -563,6 +579,8 @@ int main(int argc, char** argv) {
         const int selBefore = radios.selected;
         workspace.readFacts(engineReads);
         const std::uint32_t after = workspace.mask();
+        for (int s = 0; s < kMaxRadios; ++s) { radioFacts[static_cast<std::size_t>(s)] = ((after >> s) & 1u) != 0u ? readRadioFacts(engineReads, s + 1) : RadioFacts{}; }
+        if (soloRadio != 0 && ((after >> (soloRadio - 1)) & 1u) == 0u) { soloRadio = 0; }   // the engine clears the solo of a radio that goes
         for (int s = 0; s < kMaxRadios; ++s) {
             if (((before >> s) & 1u) != 0u && ((after >> s) & 1u) == 0u) {
                 radios.reset(s);
@@ -571,6 +589,26 @@ int main(int argc, char** argv) {
             }
         }
         if (radios.selected != selBefore) { (void)engineReads.focus(static_cast<std::uint32_t>(radios.selected) + 1u); }
+    };
+    // The engine's answer to the card's RADIO_ADD: a refusal is kept and shown as the engine worded it (it names every holder; nothing here rewords it); an add that was taken closes the sheet,
+    // refreshes the radios at once and, for the first radio beside the first, turns the layout from One to Side by side. Any answer to a removal refreshes the radios too.
+    const auto deckOnAnswer = [&](const FoxCommandResult& r) {
+        if (r.op == FOXAPI_OP_RADIO_ADD && addTicket != 0 && r.ticket == addTicket) {
+            addTicket = 0;
+            const AddOutcome outcome = addOutcome(r.status, r.message);
+            if (outcome.accepted) {
+                addNote.clear();
+                addOpen = false;
+                refreshRadios();
+                if (addSwitchLayout && workspace.radioCount() > 1) { workspace.setLayout(kLayoutTwo); }
+                addSwitchLayout = false;
+            } else {
+                addNote = outcome.note;   // the engine's words, unchanged
+                addSwitchLayout = false;
+            }
+        } else if (r.op == FOXAPI_OP_RADIO_REMOVE || r.op == FOXAPI_OP_RADIO_ADD || r.op == FOXAPI_OP_RADIO_AUDIO) {
+            refreshRadios();
+        }
     };
     // Selecting a radio is the session's focus (design 3.2): the engine is asked, and the window's selection follows when it says yes.
     const auto selectRadio = [&](int radio) { (void)workspace.select(radio, engineReads); };
@@ -1005,7 +1043,73 @@ int main(int argc, char** argv) {
         wm.on_waterfall_menu_requested([&](int r, float x, float px, float py) { selectRadio(r); menuHz = viewOf(r).hzAtFrac(x); openMenu(MenuKind::Marker, px, py); });
         wm.on_marker_hovered([&](int, int) {});   // a pane's marker tips: stage S6
     }
-    ui->on_status_clicked([&](int) {});
+    // ---- STAGE S4: the strip, the audio mix, the card and the status chips ----
+    {
+        auto& wm = ui->global<WorkspaceModel>();
+        const auto stateOf = [&](int radio) -> const FoxReceiverState& { return deckStates[static_cast<std::size_t>(std::clamp(radio - 1, 0, kMaxRadios - 1))]; };
+        const auto anyRunning = [&] {
+            for (int s = 0; s < kMaxRadios; ++s) { if (workspace.occupied(s) && (deckStates[static_cast<std::size_t>(s)].flags & FOXAPI_RX_RUNNING) != 0u) { return true; } }
+            return false;
+        };
+        const auto readDeviceRows = [&] {
+            deviceRows.clear();
+            const std::int32_t n = api->read_list(session, FOXAPI_LIST_DEVICES, 0, nullptr);
+            for (std::int32_t i = 0; i < n && i < 64; ++i) {
+                FoxListItem it{}; it.structSize = sizeof(it);
+                if (api->read_list(session, FOXAPI_LIST_DEVICES, static_cast<std::uint32_t>(i), &it) <= i) { break; }
+                DeviceRow row; row.index = i; row.name = it.name; row.detail = it.detail;
+                deviceRows.push_back(std::move(row));
+            }
+        };
+        readDeviceRows();
+        wm.on_master_clicked([&](int r) { selectRadio(r); });
+        wm.on_selector_clicked([&](int r) { selectRadio(r); });
+        wm.on_stop_selected_clicked([&] { FoxCommand c = op(FOXAPI_OP_RUN); c.ival[0] = 0; submit(c, static_cast<std::uint32_t>(radios.selected) + 1u); });
+        wm.on_stop_all_clicked([&] { FoxCommand c = op(FOXAPI_OP_RUN); c.ival[0] = anyRunning() ? 0 : 1; submit(c, FOXAPI_TARGET_ALL_RADIOS); });
+        wm.on_route_clicked([&](int r) {
+            FoxCommand c = op(FOXAPI_OP_RADIO_AUDIO);
+            c.ival[0] = r;
+            c.ival[1] = nextRoute(routeOfWord(radioFacts[static_cast<std::size_t>(std::clamp(r - 1, 0, kMaxRadios - 1))].audio));
+            submit(c);
+        });
+        wm.on_mute_clicked([&](int r) { FoxCommand c = op(FOXAPI_OP_SET_MUTED); c.ival[0] = (stateOf(r).flags & FOXAPI_RX_MUTED) ? 0 : 1; submit(c, static_cast<std::uint32_t>(r)); });
+        wm.on_solo_clicked([&](int r) {
+            FoxCommand c = op(FOXAPI_OP_RADIO_SOLO);
+            c.ival[0] = soloRadio == r ? 0 : r;
+            soloRadio = static_cast<int>(c.ival[0]);
+            submit(c);
+        });
+        wm.on_volume_changed([&](int r, float v) { FoxCommand c = op(FOXAPI_OP_SET_VOLUME); c.num[0] = std::clamp(static_cast<double>(v), 0.0, 1.0); submit(c, static_cast<std::uint32_t>(r)); });
+        wm.on_add_open_requested([&] { addOpen = true; addNote.clear(); readDeviceRows(); });
+        wm.on_add_dismissed([&] { addOpen = false; addNote.clear(); });
+        wm.on_add_rescan_clicked([&] { submit(op(FOXAPI_OP_SCAN_DEVICES)); addNote.clear(); readDeviceRows(); });
+        wm.on_add_chosen([&](int slot, int choice) {
+            // The devices on offer are those not already held (radio_mix_logic addChoices); the engine's ledger has the last word and its refusal is shown as it worded it.
+            std::vector<std::string> held;
+            for (int s = 0; s < kMaxRadios; ++s) { if (workspace.occupied(s) && !radioFacts[static_cast<std::size_t>(s)].device.empty()) { held.push_back(radioFacts[static_cast<std::size_t>(s)].device); } }
+            const std::vector<DeviceChoice> choices = addChoices(deviceRows, held);
+            if (choice < 0 || choice >= static_cast<int>(choices.size())) { return; }
+            FoxCommand c = op(FOXAPI_OP_RADIO_ADD);
+            c.ival[0] = slot;
+            c.ival[1] = 1;   // a radio added from the card starts running, as the first radio does
+            std::snprintf(c.text, sizeof(c.text), "%s", choices[static_cast<std::size_t>(choice)].id.c_str());
+            addTicket = 0;
+            submit(c);
+            addTicket = lastTicket;
+            addSwitchLayout = workspace.radioCount() == 1 && workspace.layout() == kLayoutOne;   // the first radio added shows beside the first (Side by side)
+        });
+        wm.on_remove_requested([&](int r) {
+            if (r < 2) { return; }
+            if (removeNeedsConfirm(stateOf(r))) { removeConfirm = r; return; }
+            FoxCommand c = op(FOXAPI_OP_RADIO_REMOVE); c.ival[0] = r; submit(c);
+        });
+        wm.on_remove_confirmed([&] {
+            if (removeConfirm >= 2) { FoxCommand c = op(FOXAPI_OP_RADIO_REMOVE); c.ival[0] = removeConfirm; submit(c); }
+            removeConfirm = 0;
+        });
+        wm.on_remove_cancelled([&] { removeConfirm = 0; });
+        ui->on_status_clicked([&](int i) { if (i >= 0 && i < static_cast<int>(chipRadios.size())) { selectRadio(chipRadios[static_cast<std::size_t>(i)]); } });
+    }
     // The status bar's two keys open the SYSTEM bank's report sheet through the report-open effect (system_publish.cpp: applyReportOpen -> the page of that kind).
     ui->on_feature_request_clicked([&] { ui->global<SystemEvents>().invoke_report_open(0); });
     ui->on_bug_report_clicked([&] { ui->global<SystemEvents>().invoke_report_open(1); });
@@ -1448,6 +1552,40 @@ int main(int argc, char** argv) {
         ui->set_converter_line(ss(lists.converter ? "via " + lists.converterName + " \xC2\xB7 LO " + fmtMHz(lists.converterLoHz) : std::string()));
         ui->set_team_message_shown(false);  // the team message cards are a later phase's (the update card is the duties': applyUpdateCard)
 
+        // THE DECK (stage S4): every open radio's state - the selected one's is the strip's, the others are read per radio - then the strip, the lamps, the mix and the card into the window
+        foxsdr::slintworkspace::DeckInputs deck;
+        deck.mask = workspace.mask();
+        deck.selectedSlot = radios.selected;
+        {
+            const int dW = static_cast<int>(ui->get_win_w()), dH = static_cast<int>(ui->get_win_h());
+            deck.shownLayout = workspace.shownLayout(dW, dH);
+            deck.page = workspace.page();
+            for (int s = 0; s < kMaxRadios; ++s) {
+                if (!workspace.occupied(s)) { deckStates[static_cast<std::size_t>(s)] = FoxReceiverState{}; deckHave[static_cast<std::size_t>(s)] = false; continue; }
+                FoxReceiverState st{}; st.structSize = sizeof(st);
+                bool have = true;
+                if (s == radios.selected) { st = state; }
+                else if (seam && s == 0) { st = realState; }
+                else if (seam && seam->fake(s)) { st = seam->state(s, realState); }
+                else if (FOXAPI_HAS(api, read_radio_state)) { have = api->read_radio_state(session, static_cast<std::uint32_t>(s) + 1u, &st) >= 0; }
+                else { have = false; }
+                if (have) { deckStates[static_cast<std::size_t>(s)] = st; }
+                deckHave[static_cast<std::size_t>(s)] = have || deckHave[static_cast<std::size_t>(s)];
+            }
+            deck.facts = radioFacts;
+            deck.states = deckStates;
+            deck.haveState = deckHave;
+            deck.soloRadio = soloRadio;
+            std::vector<std::string> held;
+            for (int s = 0; s < kMaxRadios; ++s) { if (workspace.occupied(s) && !radioFacts[static_cast<std::size_t>(s)].device.empty()) { held.push_back(radioFacts[static_cast<std::size_t>(s)].device); } }
+            deck.choices = addChoices(deviceRows, held);
+            deck.freeSlots = kMaxRadios - workspace.radioCount();
+            deck.addNote = addNote;
+            deck.addOpen = addOpen;
+            deck.removeConfirm = removeConfirm;
+            if (removeConfirm != 0 && !workspace.occupied(removeConfirm - 1)) { removeConfirm = 0; deck.removeConfirm = 0; }
+            deckPublisher.publish(deck);
+        }
         // the status bar
         HostExtras x;
         x.gainText = gainTxt == "N/A" ? std::string() : gainTxt;
@@ -1458,6 +1596,24 @@ int main(int argc, char** argv) {
         x.recorderValue = lists.recorderValue; x.recorderDetail = lists.recorderDetail;
         std::vector<StatusCard> cards;
         std::string cardSig;
+        // STAGE S4: with several radios the bar starts with one chip per open radio (a click selects it); today's chips follow
+        chipRadios.clear();
+        if (workspace.radioCount() > 1) {
+            // With more than four radios, or in a window narrower than 1500 px, the chip is the radio's tag and its lamp only (the status bar has no room for the state words beside today's chips and its two
+            // keys); the state word and the figures are its detail lines, which a click on a chip opens
+            const bool terse = workspace.radioCount() > 4 || static_cast<int>(ui->get_win_w()) < 1500;
+            for (const RadioChipData& rc : deckPublisher.chips(deck)) {
+                chipRadios.push_back(rc.radio);
+                const std::string chipValue = terse ? std::string() : rc.value;
+                cardSig += rc.key + "|" + chipValue + "|" + (terse ? rc.value + "," + rc.detail : rc.detail) + "|" + std::to_string(rc.tone) + (rc.lampLit ? "L" : "-") + (rc.lampRed ? "R" : "-") + ";";
+                std::vector<slint::SharedString> chipLines;
+                if (terse) { chipLines.push_back(ss(rc.value)); chipLines.push_back(ss(rc.detail)); }
+                cards.push_back({ss(rc.key), ss(chipValue), ss(terse ? std::string() : rc.detail),
+                                 rc.tone == 1 ? ChipTone::Good : rc.tone == 2 ? ChipTone::Warn : rc.tone == 3 ? ChipTone::Err : ChipTone::Neutral,
+                                 rc.lampLit ? (rc.lampRed ? LampState::Red : LampState::Green) : LampState::Off, true,
+                                 std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(chipLines))});
+            }
+        }
         for (const auto& c : statusCards(state, x)) {
             cardSig += c.key + "|" + c.value + "|" + c.detail + "|" + std::to_string(static_cast<int>(c.tone)) + "|" + (c.lampLit ? "L" : "-") + (c.lampRed ? "R" : "-");
             for (const auto& l : c.lines) { cardSig += "/" + l; }
@@ -1530,6 +1686,7 @@ int main(int argc, char** argv) {
             extendBank.onAnswer(r[i]);  // a SERVER_CONFIG's (Web access and CAT control): a refusal becomes the web box's red line
             patchBank.onAnswer(r[i]);   // the draft's SET_GRAPH (its commit is settled by this answer) and the radio scan's
             transmitBank.onAnswer(r[i]);   // a refused LATCH or consent (the Transmit page's key note)
+            deckOnAnswer(r[i]);
             if (r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) { std::fprintf(stderr, "foxsdr-slint: op 0x%04x answered %d: %s\n", r[i].op, r[i].status, r[i].message); }
         }
 
@@ -1537,7 +1694,7 @@ int main(int argc, char** argv) {
         // the browser's tiles, the track-info lines, the plugin-use table, the events and the tickets - then its pages (kit_publish.cpp).
         kit.tick(state, listMoved, face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain");
         extendBank.publish(state);   // before the kit's pages: the store page of kind 9 is built from the model this hands over
-        for (const FoxCommandResult& r2 : kit.takeUnclaimedResults()) { patchBank.onAnswer(r2); transmitBank.onAnswer(r2); }   // an answer the kit's own poll took first: the draft waits for it
+        for (const FoxCommandResult& r2 : kit.takeUnclaimedResults()) { patchBank.onAnswer(r2); transmitBank.onAnswer(r2); deckOnAnswer(r2); }   // an answer the kit's own poll took first: the draft waits for it
         patchBank.publish(state);    // before the kit's pages too: the Patch presets page of kind 10 is built from the model this hands over
         transmitBank.publish(state); // ... and the Transmit page of kind 11 (and the key's batch for this tick)
         // THE MAP'S LOOK, from the interface half each tick (SYSTEM > Display saves it there): the aircraft icon size, the trail width and the trail style, bounded
@@ -1791,7 +1948,8 @@ int main(int argc, char** argv) {
             else if (what.rfind("tuned.", 0) == 0) { out = fmt("%.0f", radios.at(slotOf(what.substr(6))).state.tunedHz); }
             else if (what.rfind("running.", 0) == 0) { out = (radios.at(slotOf(what.substr(8))).state.flags & FOXAPI_RX_RUNNING) ? "1" : "0"; }
             else if (what.rfind("pic.", 0) == 0) { const auto& sz = radios.at(slotOf(what.substr(4))).wells.size; out = std::to_string(sz.traceW) + "x" + std::to_string(sz.traceH); }
-            // peakoff.<n>: where the highest bin of radio n's last spectrum frame is, in Hz from that frame's centre (a test radio's tone, docs/multi-radio-records/screen-s4.md); peakdb.<n> its level
+            // peakoff.<n>: where the highest bin of radio n's last spectrum frame is, in Hz from that frame's centre (a test radio's tone, docs/multi-radio-records/screen-s4.md); peakdb.<n> its level;
+            // frames.<n> how many frames radio n's pane has had
             else if (what.rfind("peakoff.", 0) == 0 || what.rfind("peakdb.", 0) == 0) {
                 const bool off = what[4] == 'o';
                 const RadioView& rv = radios.at(slotOf(what.substr(off ? 8 : 7)));
@@ -1800,14 +1958,18 @@ int main(int argc, char** argv) {
                 for (std::size_t i = 1; i < rv.frame.size(); ++i) { if (rv.frame[i] > rv.frame[best]) { best = i; } }
                 out = off ? fmt("%.0f", (static_cast<double>(best) + 0.5) / static_cast<double>(rv.frame.size()) * rv.lastInfo.spanHz - rv.lastInfo.spanHz / 2.0) : fmt("%.1f", static_cast<double>(rv.frame[best]));
             }
-            // r.<n>.<field>: radio n's OWN state as the tick last read it, on screen or not (running, tuned, centre, mode, volume, muted, agc, agcfixed, nb, nbthreshold, device, rate)
+            // STAGE S4 (docs/multi-radio-records/screen-s4.md): master.<n> the radio's MASTER lamp (0 dark, 1 green, 2 red), audio.<n> its route word, mute.<n> / vol.<n> / agc.<n> / nb.<n> its own
+            // state as the deck last read it (the radio's, never the selected radio's), solo (the host's record, 0 = nobody), chips (the radios the status bar has a chip for), free (slots that
+            // can still be added), choices (the card's devices), addnote (the engine's refusal as it worded it), removeask (the radio a question waits on), open (the sheet is up)
+            // r.<n>.<field>: radio n's OWN state as the deck last read it, on screen or not (running, tuned, centre, mode, volume, muted, agc, agcfixed, nb, nbthreshold, device, rate); an error when
+            // radio n is not open
             else if (what.rfind("r.", 0) == 0) {
                 const std::size_t dot = what.find('.', 2);
                 if (dot == std::string::npos) { return std::string("workspace.r.<n>.<field>, not ") + name; }
                 const int s = slotOf(what.substr(2, dot - 2));
                 if (!workspace.occupied(s)) { return "radio " + std::to_string(s + 1) + " is not open"; }
                 const std::string field = what.substr(dot + 1);
-                const FoxReceiverState& st = s == radios.selected ? state : radios.at(s).state;
+                const FoxReceiverState& st = deckStates[static_cast<std::size_t>(s)];
                 if (field == "running") { out = (st.flags & FOXAPI_RX_RUNNING) ? "1" : "0"; }
                 else if (field == "tuned") { out = fmt("%.0f", st.tunedHz); }
                 else if (field == "centre") { out = fmt("%.0f", st.centreHz); }
@@ -1822,6 +1984,15 @@ int main(int argc, char** argv) {
                 else if (field == "rate") { out = fmt("%.0f", st.sampleRateHz); }
                 else { return "workspace.r.<n>.running|tuned|centre|mode|volume|muted|agc|agcfixed|nb|nbthreshold|device|rate, not " + name; }
             }
+            else if (what.rfind("master.", 0) == 0) {
+                const int s = slotOf(what.substr(7));
+                out = std::to_string(static_cast<int>(masterStateOf(radioFacts[static_cast<std::size_t>(s)], deckStates[static_cast<std::size_t>(s)])));
+            }
+            else if (what.rfind("audio.", 0) == 0) { out = radioFacts[static_cast<std::size_t>(slotOf(what.substr(6)))].audio; }
+            else if (what.rfind("mute.", 0) == 0) { out = (deckStates[static_cast<std::size_t>(slotOf(what.substr(5)))].flags & FOXAPI_RX_MUTED) ? "1" : "0"; }
+            else if (what.rfind("vol.", 0) == 0) { out = fmt("%.2f", deckStates[static_cast<std::size_t>(slotOf(what.substr(4)))].volume); }
+            else if (what.rfind("agc.", 0) == 0) { out = std::to_string(deckStates[static_cast<std::size_t>(slotOf(what.substr(4)))].agcMode); }
+            else if (what.rfind("nb.", 0) == 0) { out = std::to_string(deckStates[static_cast<std::size_t>(slotOf(what.substr(3)))].nbEnabled); }
             else if (what == "tickms" || what == "tickp95" || what == "tickn") {
                 std::vector<double> v(tickMs.begin(), tickMs.end());
                 if (v.size() < 10) { return std::string("fewer than ten ticks timed yet"); }
@@ -1829,8 +2000,15 @@ int main(int argc, char** argv) {
                 double sum = 0; for (const double x : v) { sum += x; }
                 out = what == "tickn" ? std::to_string(v.size()) : what == "tickms" ? fmt("%.2f", sum / static_cast<double>(v.size())) : fmt("%.2f", v[static_cast<std::size_t>(static_cast<double>(v.size() - 1) * 0.95)]);
             }
+            else if (what == "solo") { out = std::to_string(soloRadio); }
+            else if (what == "chips") { out.clear(); for (const int r : chipRadios) { if (!out.empty()) { out += ","; } out += std::to_string(r); } }
+            else if (what == "free") { out = std::to_string(kMaxRadios - workspace.radioCount()); }
+            else if (what == "choices") { out = std::to_string(ui->global<WorkspaceModel>().get_add_choices()->row_count()); }
+            else if (what == "addnote") { out = addNote; }
+            else if (what == "removeask") { out = std::to_string(removeConfirm); }
+            else if (what == "open") { out = addOpen ? "1" : "0"; }
             else if (what == "cell") { const auto& wm = ui->global<WorkspaceModel>(); out = fmt("%.0f", static_cast<double>(wm.get_cell_w())) + "x" + fmt("%.0f", static_cast<double>(wm.get_cell_h())); }
-            else { return "workspace.layout|shown|page|pages|selected|radios|fell|cells|ticks.<n>|tuned.<n>|running.<n>|pic.<n>|peakoff.<n>|peakdb.<n>|r.<n>.<field>|tickms|tickp95|tickn|cell, not " + name; }
+            else { return "workspace.layout|shown|page|pages|selected|radios|fell|cells|ticks.<n>|tuned.<n>|running.<n>|pic.<n>|peakoff.<n>|peakdb.<n>|master.<n>|audio.<n>|mute.<n>|vol.<n>|agc.<n>|nb.<n>|solo|chips|free|choices|addnote|removeask|open|cell, not " + name; }
             return std::string();
         }
         if (name == "bank") { out = std::to_string(ui->get_bank_index()); return std::string(); }
@@ -1963,6 +2141,15 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "CLIPPROBE-LOG end\n");
 #endif
         // What the kit holds at the end of a bounded run: the evidence that the port answered on this thread.
+        {   // the host's own tick time with the radios this run had open (state workspace.tickms), for the record of screen stage S4
+            std::vector<double> v(tickMs.begin(), tickMs.end());
+            if (v.size() >= 10) {
+                std::sort(v.begin(), v.end());
+                double sum = 0; for (const double x : v) { sum += x; }
+                std::fprintf(stderr, "foxsdr-slint: bounded run: host tick time over the last %zu ticks: mean %.2f ms, p95 %.2f ms, worst %.2f ms, %d radios open\n", v.size(), sum / static_cast<double>(v.size()),
+                             v[static_cast<std::size_t>(static_cast<double>(v.size() - 1) * 0.95)], v.back(), workspace.radioCount());
+            }
+        }
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", kitLine.c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", signalBank.summaryLine().c_str());
         std::fprintf(stderr, "foxsdr-slint: bounded run: %s\n", systemBank.summaryLine().c_str());

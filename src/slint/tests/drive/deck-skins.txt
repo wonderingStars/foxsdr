@@ -1,0 +1,45 @@
+#! frames=1200 size=1440x900 bank=4 sections=4:0
+# deck-skins: every new part of screen stage S4 in both skins of the window at 1440 x 900 (Workbench, then Night Watch chosen in the SYSTEM bank's Display section), with LIVE radios opened through the
+# engine's real RADIO_ADD: the one-radio window with the status bar's new key, three radios (the strip's radio block, the MASTER lamps, the Audio mix at the panel's foot, one status chip per radio, the
+# card in the empty cell), four, the sheet from the status bar's key, the question before a running radio is removed. Shot to PNG for looking at (docs/multi-radio-records/screen-s4.md).
+10 state workspace.radios == 1
+state look.bg == "#15171b"
++3 shot "s4-1440-one-workbench.png"
++1 radio add 2 60000
++1 radio add 3 90000
++30 state workspace.radios == 3
++1 click "2 x 2"
++15 state workspace.shown == 2
++10 shot "s4-1440-three-workbench.png"
++1 click "Add Signal generator"
++30 state workspace.radios == 4
++1 click "Select Radio 2"
++15 state workspace.selected == 2
++8 shot "s4-1440-four-workbench.png"
++1 click "Add a radio"
++5 state workspace.open == 1
++3 shot "s4-1440-sheet-workbench.png"
++1 click "Add Signal generator"
++30 state workspace.radios == 5
++1 click "Remove Radio 3"
++10 state workspace.removeask == 3
++3 shot "s4-1440-question-workbench.png"
++1 click "Cancel"
++5 state workspace.removeask == 0
++1 choose "Theme" "Night Watch"
++12 state look.bg != "#15171b"
++8 shot "s4-1440-five-night.png"
++1 click "Radios 5-8"
++12 state workspace.page == 1
++8 shot "s4-1440-page2-night.png"
++1 click "Radios 1-4"
++12 state workspace.page == 0
++1 click "Add a radio"
++5 state workspace.open == 1
++3 shot "s4-1440-sheet-night.png"
++1 click "Add Signal generator"
++30 state workspace.radios == 6
++1 click "Remove Radio 3"
++10 state workspace.removeask == 3
++3 shot "s4-1440-question-night.png"
++1 click "Cancel"

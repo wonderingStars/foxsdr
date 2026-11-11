@@ -1,0 +1,51 @@
+#! frames=1300 size=1600x900
+# deck-add: adding and removing radios from the screen (screen stage S4; docs/multi-radio-records/screen-s4.md; tick rows 4227-4230), against the engine's real RADIO_ADD / RADIO_REMOVE: the only thing a
+# ONE-radio user sees that is new is the status bar's key "Add a radio"; it opens a sheet that lists the devices not already held (here the signal generator, which every radio has of its own); a choice
+# adds a radio and, the first time, turns the layout from One to Side by side. In a 2 x 2 grid an empty cell is the same card for ITS slot (a click there asks the engine for that radio number).
+# The close key of a pane removes a stopped radio at once and asks first when it runs.
+10 state workspace.radios == 1
+state workspace.free == 7
+state workspace.open == 0
++1 click "Add a radio"
++5 state workspace.open == 1
+state workspace.choices >= 1
++1 shot "deck-add-sheet.png"
++1 click "Add Signal generator"
++30 state workspace.radios == 2
+state workspace.open == 0
+state workspace.layout == 1
+state workspace.cells == "1,2"
++1 click "2 x 2"
++15 state workspace.cells == "1,2,0,0"
+# the card in an empty cell asks for ITS slot: the second card is pane 4's, so the radio that appears is radio 4 and pane 3 stays empty; then pane 3's card fills the other
++1 shot "deck-add-cells.png"
++1 click "Add Signal generator"#2
++30 state workspace.radios == 3
+state workspace.cells == "1,2,0,4"
++1 click "Add Signal generator"
++30 state workspace.radios == 4
+state workspace.cells == "1,2,3,4"
+# the close key: radio 3 runs, so the question comes first; Cancel keeps it, Remove removes it
++1 click "Remove Radio 3"
++10 state workspace.removeask == 3
++1 shot "deck-add-question.png"
++1 click "Cancel"
++10 state workspace.removeask == 0
+state workspace.radios == 4
++1 click "Remove Radio 3"
++10 state workspace.removeask == 3
++1 click "Remove"
++30 state workspace.radios == 3
++1 click "Remove Radio 4"
++10 state workspace.removeask == 4
++1 click "Remove"
++30 state workspace.radios == 2
+state workspace.cells == "1,2,0,0"
+# a stopped radio goes at once
++1 click "Stop Radio 2"
++15 state workspace.r.2.running == 0
++1 click "Remove Radio 2"
++30 state workspace.radios == 1
+state workspace.removeask == 0
+state workspace.selected == 1
+state running == 1
