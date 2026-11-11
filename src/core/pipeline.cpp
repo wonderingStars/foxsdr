@@ -468,6 +468,10 @@ void Pipeline::rebuildChannelBlocks(double chanRate) {
     // The tone squelch's detectors listen at the channel rate too: rebuilt for it (a rate change is a discontinuity: the lock is forgotten).
     toneChanRateHz_ = chanRate;
     configureToneLocked();
+    noiseSq_ = std::make_unique<cascade::dsp::NoiseSquelch>(chanRate);   // (the FM noise squelch listens at the channel rate: rebuilt with it, its settings put back)
+    noiseSq_->setThresholdDb(noiseSqThresholdDb_);
+    noiseSq_->setTailMs(noiseSqTailMs_);
+    noiseSq_->setEnabled(noiseSqOn_);
     toneHpL_.configure(kAudioRateHz);
     toneHpR_.configure(kAudioRateHz);
     stereo_ = std::make_unique<cascade::dsp::StereoFm>(chanRate);
@@ -1212,6 +1216,26 @@ float Pipeline::noiseBlankerBlankedPercent() const {
 bool Pipeline::noiseBlankerStandingDown() const {
     return nbStandingDown_.load(std::memory_order_relaxed);
 }
+
+// --- FM noise squelch -------------------------------------------------------------------------------------------------------------------------------
+bool Pipeline::setNoiseSquelch(bool on, double thresholdDb, double tailMs) {
+    if (!std::isfinite(thresholdDb) || thresholdDb < -90.0 || thresholdDb > 0.0 || !std::isfinite(tailMs) || tailMs < 0.0 || tailMs > 2000.0) { return false; }
+    post([this, on, thresholdDb, tailMs] {
+             noiseSqOn_ = on;
+             noiseSqThresholdDb_ = thresholdDb;
+             noiseSqTailMs_ = tailMs;
+             if (noiseSq_) {
+                 noiseSq_->setThresholdDb(thresholdDb);
+                 noiseSq_->setTailMs(tailMs);
+                 noiseSq_->setEnabled(on);
+             }
+         },
+         [this, on] { mirrorNoiseSqOn_.store(on, std::memory_order_relaxed); });
+    return true;
+}
+bool Pipeline::noiseSquelchOn() const { return mirrorNoiseSqOn_.load(std::memory_order_relaxed); }
+double Pipeline::noiseSquelchLevelDb() const { return noiseSqLevelDb_.load(std::memory_order_relaxed); }
+bool Pipeline::noiseSquelchOpen() const { return noiseSqOpen_.load(std::memory_order_relaxed); }
 
 // --- CW pitch -------------------------------------------------------------------------------------------------------------------------------------
 bool Pipeline::setCwPitchHz(double hz) {
@@ -2221,6 +2245,18 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         toneDetectedPol_.store(0, std::memory_order_relaxed);
     }
     squelch_.setToneGate(toneRequired, toneOpen);
+    // --- FM NOISE SQUELCH: NFM only. The detector is the discriminator output; the block's gain is read off a buffer of ones and applied to the audio after the level squelch below.
+    bool noiseSqApply = false;
+    if (mode == cascade::dsp::DemodMode::NFM && noiseSq_) {
+        noiseSqGain_.assign(m, 1.0f);
+        noiseSq_->process(audioBuf_.data(), m, noiseSqGain_.data());
+        noiseSqApply = noiseSqOn_ || noiseSq_->gain() < 1.0;
+        noiseSqLevelDb_.store(static_cast<double>(noiseSq_->levelDb()), std::memory_order_relaxed);
+        noiseSqOpen_.store(noiseSq_->isOpen(), std::memory_order_relaxed);
+    } else {
+        noiseSqLevelDb_.store(-200.0, std::memory_order_relaxed);
+        noiseSqOpen_.store(false, std::memory_order_relaxed);
+    }
     toneGateOpen_.store(toneOpen, std::memory_order_relaxed);
 
     // --- One channel or two -------------------------------------------------
@@ -2308,6 +2344,12 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // Squelch measures the pre-demod channel and gates the (AGC'd) audio, so
     // closed-squelch output is exact digital silence after the ramp.
     squelch_.process(gateBuf_.data(), 2 * m, ilvBuf_.data());
+    if (noiseSqApply) {
+        for (std::size_t i = 0; i < m; ++i) {
+            ilvBuf_[2 * i] *= noiseSqGain_[i];
+            ilvBuf_[2 * i + 1] *= noiseSqGain_[i];
+        }
+    }
     // The gate's own state, once per block, for the diagnostics bundle and any
     // other reader that wants to know whether silence is the squelch's doing
     // (see squelchOpen()). A relaxed store of one bool: nothing is added to the

@@ -329,7 +329,45 @@ void testBasics() {
 }
 }  // namespace
 
+// EXACT DIGITAL SILENCE (engine wiring lane 1: the guard the block's record asked for). After a second of noise, 20 s of all-zero input: the cost per sample stays that of
+// ordinary processing (the unguarded high-pass state decays into denormals at about 68 ns a sample), the level reads silence and the gate behaves.
+void testSilenceCost() {
+    NoiseSquelch s(kFs);
+    s.setThresholdDb(-30.0);
+    DiscNoise noise(kSigma, 5);
+    std::vector<float> loud(static_cast<std::size_t>(kFs));
+    noise.fill(loud, 0, loud.size());
+    std::vector<float> a(loud.size(), 1.0f);
+    s.process(loud.data(), loud.size(), a.data());
+    std::vector<float> zeros(static_cast<std::size_t>(kFs) * 20, 0.0f), b(zeros.size(), 1.0f);
+    const auto t0 = std::chrono::steady_clock::now();
+    s.process(zeros.data(), zeros.size(), b.data());
+    const double ns = std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count() / static_cast<double>(zeros.size());
+    // for comparison: the same amount of ordinary (noisy) input
+    NoiseSquelch r(kFs);
+    std::vector<float> nz(zeros.size());
+    noise.fill(nz, 0, nz.size());
+    std::vector<float> c(nz.size(), 1.0f);
+    const auto t1 = std::chrono::steady_clock::now();
+    r.process(nz.data(), nz.size(), c.data());
+    const double nsNoise = std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t1).count() / static_cast<double>(zeros.size());
+    std::printf("  silence: %.1f ns a sample; ordinary noise: %.1f ns a sample (the unguarded high-pass measured 68 ns in silence)\n", ns, nsNoise);
+    CHECK(ns < 30.0);
+    CHECK(ns <= nsNoise * 1.5 + 5.0);
+    CHECK(s.levelDb() == -200.0);
+    CHECK(s.isOpen());   // the level is below any threshold: the gate is open (a receiver with no input is "quiet")
+    // the gate's output is finite and exact: nothing denormal reaches the audio
+    for (float v : b) {
+        if (!std::isfinite(v) || (v != 0.0f && std::fabs(v) < 1e-30f)) {
+            CHECK(false);
+            break;
+        }
+    }
+    // and the guard changes nothing for ordinary input: the same noise through a fresh block gives the same decisions as before the guard (open fraction pinned by testFalseOpens)
+}
+
 int main() {
+    testSilenceCost();
     testDelays();
     testHysteresisAndTail();
     testSpeechStaysOpen();

@@ -99,6 +99,9 @@ struct ConfigFieldInfo {
     X(meterUnits,              Engine,    false) \
     X(nrMethod,                Engine,    false) \
     X(cwPitchHz,               Engine,    false) \
+    X(noiseSquelchOn,          Engine,    false) \
+    X(noiseSquelchThresholdDb, Engine,    false) \
+    X(noiseSquelchTailMs,      Engine,    false) \
     X(notchBank,               Engine,    false) \
     X(smeterCal,               Engine,    false) \
     X(notchEnabled,            Engine,    false) \

@@ -322,6 +322,8 @@ std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
         r.meterUnits = r.meterUnits < 0 ? 0 : (r.meterUnits > 2 ? 2 : r.meterUnits);
         r.nrMethod = r.nrMethod < 0 ? 0 : (r.nrMethod > 2 ? 2 : r.nrMethod);
         r.cwPitchHz = !(r.cwPitchHz >= 300.0) ? 700.0 : (r.cwPitchHz > 1200.0 ? 1200.0 : r.cwPitchHz);
+        r.noiseSquelchThresholdDb = !(r.noiseSquelchThresholdDb >= -90.0) ? -90.0 : (r.noiseSquelchThresholdDb > 0.0 ? 0.0 : r.noiseSquelchThresholdDb);
+        r.noiseSquelchTailMs = !(r.noiseSquelchTailMs >= 0.0) ? 0.0 : (r.noiseSquelchTailMs > 2000.0 ? 2000.0 : r.noiseSquelchTailMs);
         r.notchBank = sanitiseNotchBank(std::move(r.notchBank));
         r.notchFreqHz = clampd(r.notchFreqHz, 10.0, 20000.0);
         r.notchQ = clampd(r.notchQ, 0.1, 1000.0);
@@ -633,6 +635,9 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     getInt(j, "meterUnits", out.meterUnits);
     getInt(j, "nrMethod", out.nrMethod);
     getDouble(j, "cwPitchHz", out.cwPitchHz);
+    getBool(j, "noiseSquelchOn", out.noiseSquelchOn);
+    getDouble(j, "noiseSquelchThresholdDb", out.noiseSquelchThresholdDb);
+    getDouble(j, "noiseSquelchTailMs", out.noiseSquelchTailMs);
     out.notchBank = readNotchBank(j);
     getBool(j, "notchEnabled", out.notchEnabled);
     getDouble(j, "notchFreqHz", out.notchFreqHz);
@@ -1051,6 +1056,9 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
                 getInt(e, "meterUnits", r.meterUnits);
                 getInt(e, "nrMethod", r.nrMethod);
                 getDouble(e, "cwPitchHz", r.cwPitchHz);
+                getBool(e, "noiseSquelchOn", r.noiseSquelchOn);
+                getDouble(e, "noiseSquelchThresholdDb", r.noiseSquelchThresholdDb);
+                getDouble(e, "noiseSquelchTailMs", r.noiseSquelchTailMs);
                 r.notchBank = readNotchBank(e);
                 getBool(e, "notchEnabled", r.notchEnabled);
                 getDouble(e, "notchFreqHz", r.notchFreqHz);
@@ -1281,6 +1289,8 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     out.meterUnits = out.meterUnits < 0 ? 0 : (out.meterUnits > 2 ? 2 : out.meterUnits);
     out.nrMethod = out.nrMethod < 0 ? 0 : (out.nrMethod > 2 ? 2 : out.nrMethod);
     out.cwPitchHz = !(out.cwPitchHz >= 300.0) ? 700.0 : (out.cwPitchHz > 1200.0 ? 1200.0 : out.cwPitchHz);
+    out.noiseSquelchThresholdDb = !(out.noiseSquelchThresholdDb >= -90.0) ? -90.0 : (out.noiseSquelchThresholdDb > 0.0 ? 0.0 : out.noiseSquelchThresholdDb);
+    out.noiseSquelchTailMs = !(out.noiseSquelchTailMs >= 0.0) ? 0.0 : (out.noiseSquelchTailMs > 2000.0 ? 2000.0 : out.noiseSquelchTailMs);
     out.notchBank = sanitiseNotchBank(std::move(out.notchBank));
     out.notchFreqHz = clampd(out.notchFreqHz, 10.0, 20000.0);
     out.notchQ = clampd(out.notchQ, 0.1, 1000.0);
@@ -1633,6 +1643,9 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["meterUnits"] = cfg.meterUnits;
     j["nrMethod"] = cfg.nrMethod;
     j["cwPitchHz"] = cfg.cwPitchHz;
+    j["noiseSquelchOn"] = cfg.noiseSquelchOn;
+    j["noiseSquelchThresholdDb"] = cfg.noiseSquelchThresholdDb;
+    j["noiseSquelchTailMs"] = cfg.noiseSquelchTailMs;
     writeNotchBank(j, cfg.notchBank);
     j["notchEnabled"] = cfg.notchEnabled;
     j["notchFreqHz"] = cfg.notchFreqHz;
@@ -1832,6 +1845,9 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
             e["meterUnits"] = r.meterUnits;
             e["nrMethod"] = r.nrMethod;
             e["cwPitchHz"] = r.cwPitchHz;
+            e["noiseSquelchOn"] = r.noiseSquelchOn;
+            e["noiseSquelchThresholdDb"] = r.noiseSquelchThresholdDb;
+            e["noiseSquelchTailMs"] = r.noiseSquelchTailMs;
             writeNotchBank(e, r.notchBank);
             e["notchEnabled"] = r.notchEnabled;
             e["notchFreqHz"] = r.notchFreqHz;

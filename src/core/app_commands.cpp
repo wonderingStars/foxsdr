@@ -195,6 +195,7 @@ constexpr OpEntry kOps[] = {
     {FOXAPI_OP_SET_NR_METHOD, "SET_NR_METHOD", true},
     {FOXAPI_OP_SET_NOTCH_SLOT, "SET_NOTCH_SLOT", true},
     {FOXAPI_OP_SET_CW_PITCH, "SET_CW_PITCH", true},
+    {FOXAPI_OP_SET_NOISE_SQUELCH, "SET_NOISE_SQUELCH", true},
 };
 
 constexpr std::size_t kOpCount = sizeof(kOps) / sizeof(kOps[0]);

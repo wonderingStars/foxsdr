@@ -396,6 +396,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.meterUnits == b.meterUnits);
     CHECK(a.nrMethod == b.nrMethod);
     CHECK(a.cwPitchHz == b.cwPitchHz);
+    CHECK(a.noiseSquelchOn == b.noiseSquelchOn && a.noiseSquelchThresholdDb == b.noiseSquelchThresholdDb && a.noiseSquelchTailMs == b.noiseSquelchTailMs);
     CHECK(a.notchBank.size() == b.notchBank.size());
     for (std::size_t i = 0; i < a.notchBank.size() && i < b.notchBank.size(); ++i) {
         CHECK(a.notchBank[i].slot == b.notchBank[i].slot && a.notchBank[i].hz == b.notchBank[i].hz && a.notchBank[i].widthHz == b.notchBank[i].widthHz && a.notchBank[i].on == b.notchBank[i].on);
@@ -932,6 +933,9 @@ int main() {
         in.meterUnits = 2;   // dBm (default dBFS)
         in.nrMethod = 1;     // spectral (default standard)
         in.cwPitchHz = 850.0;   // (default 700)
+        in.noiseSquelchOn = true;   // (default off)
+        in.noiseSquelchThresholdDb = -42.5;   // (default -30)
+        in.noiseSquelchTailMs = 160.0;        // (default 100)
         in.notchBank.push_back({2, 1750.0, 33.0, true});   // (default: none)
         in.notchBank.push_back({7, 400.0, 12.5, false});
         {

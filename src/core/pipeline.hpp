@@ -149,6 +149,7 @@
 #include "dsp/noise_reduction.hpp"
 #include "dsp/nr_methods.hpp"
 #include "dsp/notch_bank.hpp"
+#include "dsp/noise_squelch.hpp"
 #include "dsp/notch.hpp"
 #include "dsp/rds.hpp"
 #include "core/patch_runner.hpp"
@@ -559,6 +560,13 @@ public:
     // on and off without a click (the block glides and fades). False for a slot past 9 or a number that is not one. Any thread; nothing is posted (the bank's settings are atomics).
     bool setManualNotch(int slot, double hz, double widthHz, bool on);
     // The CW sidetone pitch (engine wiring lane 1): 300 to 1200 Hz, default 700. False (nothing changed) outside that or for a number that is not one. Posted; kept across a rate change.
+    // THE FM NOISE SQUELCH (engine wiring lane 1; dsp/noise_squelch.hpp): NFM only, a second gate beside the level squelch. The detector listens to the discriminator output at the channel
+    // rate (here after the user's de-emphasis and the FM scaling, so the threshold is a number of this chain, not a universal one: the screen shows noiseSquelchLevelDb beside it);
+    // its gain multiplies the audio after the level squelch. False for a threshold outside -90..0 dB or a tail outside 0..2000 ms. Posted; kept across a rate rebuild.
+    bool setNoiseSquelch(bool on, double thresholdDb, double tailMs);
+    bool noiseSquelchOn() const;
+    double noiseSquelchLevelDb() const;   // measured, once per block
+    bool noiseSquelchOpen() const;
     bool setCwPitchHz(double hz);
     double cwPitchHz() const;
     int manualNotchCount() const;   // slots that are on
@@ -1099,6 +1107,11 @@ private:
     cascade::dsp::NotchBank notchBankL_{kAudioRateHz};
     cascade::dsp::NotchBank notchBankR_{kAudioRateHz};
     double cwPitchNow_ = 700.0;
+    std::unique_ptr<cascade::dsp::NoiseSquelch> noiseSq_;
+    bool noiseSqOn_ = false;
+    double noiseSqThresholdDb_ = -30.0;
+    double noiseSqTailMs_ = 100.0;
+    std::vector<float> noiseSqGain_;
     int nrMethod_ = 0;
     bool nrOn_ = false;
     float nrStrengthNow_ = 0.5f;
@@ -1272,6 +1285,9 @@ private:
     std::atomic<float> nbBlankedPct_{0.0f};      // live, once per block
     std::atomic<bool> nbStandingDown_{false};
     std::atomic<double> mirrorCwPitchHz_{700.0};
+    std::atomic<bool> mirrorNoiseSqOn_{false};
+    std::atomic<double> noiseSqLevelDb_{-200.0};
+    std::atomic<bool> noiseSqOpen_{false};
     std::atomic<int> mirrorNrMethod_{0};
     std::atomic<int> nrMethodActive_{0};
     std::atomic<int> mirrorToneKind_{0};

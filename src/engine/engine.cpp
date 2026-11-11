@@ -4882,6 +4882,11 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         r.calibrated = calibrated ? 1u : 0u;
         r.nrMethod = static_cast<std::uint32_t>(rxa.nrMethod_);
         r.cwPitchHz = rxa.cwPitchHz_;
+        r.noiseSquelchOn = rxa.noiseSquelchOn_ ? 1u : 0u;
+        r.noiseSquelchThresholdDb = rxa.noiseSquelchThresholdDb_;
+        r.noiseSquelchTailMs = rxa.noiseSquelchTailMs_;
+        r.noiseSquelchLevelDb = rxa.pipeline_.noiseSquelchLevelDb();
+        r.noiseSquelchOpen = rxa.pipeline_.noiseSquelchOpen() ? 1u : 0u;
         r.nrMethodActive = static_cast<std::uint32_t>(rxa.pipeline_.noiseReductionMethodActive());
         for (std::size_t i = 0; i < rxa.manualNotch_.size(); ++i) {
             if (rxa.manualNotch_[i].on) { r.notchBankMask |= 1u << i; }
@@ -7415,6 +7420,21 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[0] = kind == tone::kCtcss ? hz : static_cast<double>(code);
             return res;
         }
+        case FOXAPI_OP_SET_NOISE_SQUELCH: {
+            Receiver& rxs = rx();
+            double thr = rxs.noiseSquelchThresholdDb_, tail = rxs.noiseSquelchTailMs_;
+            if (c.ival[1] == 1) {
+                thr = c.num[0];
+                tail = c.num[1];
+            }
+            if (!rxs.pipeline_.setNoiseSquelch(on, thr, tail)) { return refuse(FOXAPI_OUT_OF_RANGE, "the noise squelch threshold is -90 to 0 dB and its tail 0 to 2000 ms"); }
+            rxs.noiseSquelchOn_ = on;
+            rxs.noiseSquelchThresholdDb_ = thr;
+            rxs.noiseSquelchTailMs_ = tail;
+            res.applied[0] = thr;
+            res.applied[1] = tail;
+            return res;
+        }
         case FOXAPI_OP_SET_CW_PITCH: {
             Receiver& rxs = rx();
             if (!rxs.pipeline_.setCwPitchHz(c.num[0])) { return refuse(FOXAPI_OUT_OF_RANGE, "the CW pitch is 300 to 1200 Hz"); }
@@ -9278,6 +9298,10 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         (void)rx().pipeline_.setNoiseReductionMethod(rx().nrMethod_);
         rx().cwPitchHz_ = cfg.cwPitchHz;
         (void)rx().pipeline_.setCwPitchHz(rx().cwPitchHz_);
+        rx().noiseSquelchOn_ = cfg.noiseSquelchOn;
+        rx().noiseSquelchThresholdDb_ = cfg.noiseSquelchThresholdDb;
+        rx().noiseSquelchTailMs_ = cfg.noiseSquelchTailMs;
+        (void)rx().pipeline_.setNoiseSquelch(rx().noiseSquelchOn_, rx().noiseSquelchThresholdDb_, rx().noiseSquelchTailMs_);
         rx().manualNotch_ = {};
         for (const cascade::core::ManualNotchSetting& n : cfg.notchBank) {
             Receiver::ManualNotchSlot& ns = rx().manualNotch_[static_cast<std::size_t>(n.slot)];
@@ -9838,6 +9862,9 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
         cfg.meterUnits = rxa.meterUnits_;
         cfg.nrMethod = rxa.nrMethod_;
         cfg.cwPitchHz = rxa.cwPitchHz_;
+        cfg.noiseSquelchOn = rxa.noiseSquelchOn_;
+        cfg.noiseSquelchThresholdDb = rxa.noiseSquelchThresholdDb_;
+        cfg.noiseSquelchTailMs = rxa.noiseSquelchTailMs_;
         cfg.notchBank.clear();
         for (std::size_t i = 0; i < rxa.manualNotch_.size(); ++i) {
             const Receiver::ManualNotchSlot& ns = rxa.manualNotch_[i];
@@ -9941,6 +9968,7 @@ void Engine::initialise() {
         rx().pipeline_.setToneRemove(rx().toneRemove_);
         (void)rx().pipeline_.setNoiseReductionMethod(rx().nrMethod_);
         (void)rx().pipeline_.setCwPitchHz(rx().cwPitchHz_);
+        (void)rx().pipeline_.setNoiseSquelch(rx().noiseSquelchOn_, rx().noiseSquelchThresholdDb_, rx().noiseSquelchTailMs_);
         pushManualNotches();
     }
     rx().pipeline_.setNotchEnabled(rx().notchEnabled_);

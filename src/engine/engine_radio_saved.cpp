@@ -99,6 +99,9 @@ SavedRadio Engine::savedRadioOf(std::size_t slot) {
     r.meterUnits = rx().meterUnits_;
     r.nrMethod = rx().nrMethod_;
     r.cwPitchHz = rx().cwPitchHz_;
+    r.noiseSquelchOn = rx().noiseSquelchOn_;
+    r.noiseSquelchThresholdDb = rx().noiseSquelchThresholdDb_;
+    r.noiseSquelchTailMs = rx().noiseSquelchTailMs_;
     for (std::size_t i = 0; i < rx().manualNotch_.size(); ++i) {
         const Receiver::ManualNotchSlot& ns = rx().manualNotch_[i];
         if (ns.on || ns.hz != 1000.0 || ns.widthHz != 50.0) { r.notchBank.push_back({static_cast<int>(i), ns.hz, ns.widthHz, ns.on}); }
@@ -262,6 +265,12 @@ void Engine::restoreSavedRadios(const cascade::core::AppConfig& cfg) {
             send(cmd::makeInt(FOXAPI_OP_SET_METER_UNITS, s.meterUnits));
             send(cmd::makeInt(FOXAPI_OP_SET_NR_METHOD, s.nrMethod));
             send(cmd::makeNum(FOXAPI_OP_SET_CW_PITCH, s.cwPitchHz));
+            {
+                FoxCommand nsq = cmd::makeInt(FOXAPI_OP_SET_NOISE_SQUELCH, s.noiseSquelchOn ? 1 : 0, 1);
+                nsq.num[0] = s.noiseSquelchThresholdDb;
+                nsq.num[1] = s.noiseSquelchTailMs;
+                send(nsq);
+            }
             for (const cascade::core::ManualNotchSetting& n : s.notchBank) {
                 FoxCommand nc = cmd::makeInt(FOXAPI_OP_SET_NOTCH_SLOT, n.on ? 1 : 0, 1);
                 nc.num[0] = n.hz;

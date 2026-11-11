@@ -226,6 +226,24 @@ both off brings both back, bad slots and numbers refused), `test_engine_api_notc
 `test_engine_main_config_roundtrip` 265, `test_radio_scope` 140 (57 ops), mock 455 (+2 known).
 **UNVERIFIED.** Nobody listened; the pitch is proved on a generated carrier; the rebuild-for-a-new-rate path re-applies the pitch but no test changes the input rate under a running CW radio.
 
+## C4. FM noise squelch (second session)
+
+**Op** `FOXAPI_OP_SET_NOISE_SQUELCH` 0x0119 (per radio; `ival[0]` on; with `ival[1]` = 1 `num[0]` the threshold, dB re full scale -90..0 (default -30), `num[1]` the tail, ms 0..2000 (default 100); receiver-scoped; in no web,
+CAT or TCI profile). NFM only. **Behaviour.** `dsp::NoiseSquelch` (built per channel rate, rebuilt with it, settings put back) listens to the discriminator output at the channel rate (here AFTER the user's de-emphasis and the FM
+scaling: so the threshold is a number of this chain, not a universal one - the block's record wanted the flat discriminator and the NFM demodulator applies the de-emphasis inside; the screen shows `noiseSquelchLevelDb` beside the threshold
+and the owner may want the detector moved ahead of the de-emphasis later). Its gain is read off a buffer of ones and multiplies the audio after the level squelch; the decoders are fed upstream of it. It is independent of the level squelch
+and of the tone squelch (all three must let the audio through).
+**The denormal guard (the brief's requirement).** The block gained a guard: a block of exact zeros clears the high-pass states and runs the level and the gate with a detector sample of 0 without touching the filter; the level average is
+flushed to 0 below 1e-30. `test_noise_squelch` (72 checks, 0 failed) feeds 20 s of exact zeros after a second of noise: `silence: 5.1 ns a sample; ordinary noise: 10.1 ns a sample (the unguarded high-pass measured 68 ns in silence)`,
+the level reads -200 dB, the output is finite and exact.
+**State (appended after `cwPitchHz`):** `noiseSquelchOn`, `noiseSquelchThresholdDb`, `noiseSquelchTailMs` (settings, move `modeSeq`), `noiseSquelchLevelDb`, `noiseSquelchOpen` (measurements). **Config:** the three settings (radio 1 and each `radios`
+entry; clamped -90..0 and 0..2000).
+**Tests.** `test_pipeline_noisesq` `23 checks, 0 failed` (a narrow-FM carrier with a 1 kHz tone: clean `noise level -97.7 dB, open 1, audio 0.399`; with strong complex noise `noise level -45.0 dB, open 0, audio 0.000` with the level
+squelch wide open; off plays the noisy audio; back to clean it opens; in AM nothing is applied or measured; bad thresholds and tails refused), `test_engine_api_noisesq` `53 checks passed, 0 failed`, `test_config` 3825,
+`test_receiver_snapshot` 887, `test_apply_command` 1809, `test_config_halves` 2560, `test_engine_main_config_roundtrip` 271, `test_radio_scope` 141 (58 ops), mock 460 (+2 known).
+**UNVERIFIED.** Nobody listened; the noise is generated white complex noise on a carrier, not a real weak signal; the thresholds that suit real receivers are unknown (the record's "thresholdForQuietingDb against a measured noise-only level" is
+not wired: the user sets the threshold by eye against the live level); the guard is proved on this CPU and compiler only (no flush-to-zero was set anywhere).
+
 ## Old reader
 
 RUN, with the v0.99.104 sources (`git show v0.99.104:src/core/config.hpp` and `config.cpp` in a directory searched first, `tools/old_reader_probe/build_probe.bat`; `new_main.cpp` gained a fifth file for this lane:

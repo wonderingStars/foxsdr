@@ -70,6 +70,17 @@ public:
     void process(const float* detector, std::size_t n, float* audio) {
         const bool en = enabled_.load();
         if (!en && env_ >= 1.0 && !pending_) { return; }
+        // EXACT DIGITAL SILENCE (engine wiring lane 1, the guard the block's record asked for): the high-pass states of a block that follows noise decay into DENORMALS
+        // on an all-zero input, and a denormal costs about 68 ns a sample (measured by accident in the block's first run). A block of exact zeros therefore clears the filter's
+        // states and runs the level and the gate with a detector sample of 0 without touching the filter; the level average is also flushed to 0 once it is below 1e-30.
+        bool silent = true;
+        for (std::size_t i = 0; i < n; ++i) {
+            if (detector[i] != 0.0f) {
+                silent = false;
+                break;
+            }
+        }
+        if (silent) { s_[0] = s_[1] = abq::State{}; }
         const double bl = bandLow_.load();
         if (bl != bandCur_) { design(bl); }
         const double openLin = std::pow(10.0, openDb_.load() / 10.0);
@@ -79,8 +90,9 @@ public:
         for (std::size_t i = 0; i < n; ++i) {
             double x = static_cast<double>(detector[i]);
             if (!std::isfinite(x)) { x = 0.0; }
-            double b = abq::run(c_[1], s_[1], abq::run(c_[0], s_[0], x));
+            const double b = silent ? 0.0 : abq::run(c_[1], s_[1], abq::run(c_[0], s_[0], x));
             p_ += alpha_ * (b * b - p_);
+            if (p_ < 1e-30) { p_ = 0.0; }   // (never a denormal level)
             if (p_ < openLin) {
                 closeRun_ = 0;
                 if (!open_) {

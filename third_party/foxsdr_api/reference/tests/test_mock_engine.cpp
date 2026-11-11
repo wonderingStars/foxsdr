@@ -391,6 +391,16 @@ void testToneSquelch() {
     CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_NR_METHOD, 0.0, FOXAPI_NR_LINE)).status(), FOXAPI_OK);
     CHECK_EQ(s.state().nrMethod, static_cast<uint32_t>(FOXAPI_NR_LINE));
     CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_NR_METHOD, 0.0, 3)).status(), FOXAPI_OUT_OF_RANGE);
+    // the FM noise squelch (0x0119)
+    CHECK_EQ(s.state().noiseSquelchThresholdDb, -30.0);
+    FoxCommand nq = cmd(FOXAPI_OP_SET_NOISE_SQUELCH, -44.0, 1);
+    nq.ival[1] = 1;
+    nq.num[1] = 250.0;
+    CHECK_EQ(s.run(nq).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().noiseSquelchOn, 1u);
+    CHECK_EQ(s.state().noiseSquelchTailMs, 250.0);
+    nq.num[0] = 1.0;
+    CHECK_EQ(s.run(nq).status(), FOXAPI_OUT_OF_RANGE);
     // the CW pitch (0x0118)
     CHECK_EQ(s.state().cwPitchHz, 700.0);
     CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_CW_PITCH, 450.0)).status(), FOXAPI_OK);
