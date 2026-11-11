@@ -1338,7 +1338,9 @@ set(CASCADE_FENCE_DENIED_PROBES
     # src/net, denied whole by stage 5f (the servers are the engine's): every header of the directory, one probe each
     net/cat_protocol.hpp net/cat_server.hpp net/control_ops.hpp net/status_compose.hpp net/web_audio.hpp net/web_auth.hpp
     net/web_control.hpp net/web_policy.hpp net/web_server.hpp net/web_session.hpp
-    net/ws_frame.hpp net/tci_protocol.hpp net/tci_server.hpp net/udp_audio.hpp)
+    net/ws_frame.hpp net/tci_protocol.hpp net/tci_server.hpp net/udp_audio.hpp
+    # feat/webmodels: the standalone web models (viewport, bookmarks, clip, profiles, arbiter, CORS, UPnP IGD client)
+    net/web_viewport.hpp net/web_bookmarks.hpp net/web_clip.hpp net/web_profiles.hpp net/web_arbiter.hpp net/web_cors.hpp net/upnp_igd.hpp)
 function(_cascade_fence_probe_source out_var id body)
     set(_src "${CASCADE_FENCE_PROBE_DIR}/${id}.cpp")
     set(_old "")
