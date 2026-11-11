@@ -318,6 +318,13 @@ int main(int argc, char** argv) {
     const char* only = std::getenv("HW_ONLY");
     if (only != nullptr && std::string(only) == "b200") { rtl.clear(); }
     if (!rtl.empty()) { ids.push_back(rtl); }
+    // HW_FILE=<recording>: radio 2 plays that I/Q file instead of the RTL-SDR (radio 1 stays on the B200): a real recording beside a real radio.
+    const char* hwFile = std::getenv("HW_FILE");
+    if (hwFile != nullptr && *hwFile != '\0') {
+        ids.clear();
+        if (!b200.empty()) { ids.push_back(b200); }
+        ids.push_back(std::string("file:") + hwFile);
+    }
     if (ids.empty()) {
         std::printf("RESULT NO RADIO: neither device enumerates\n");
         g_api->close_session(g_session);
@@ -360,6 +367,7 @@ int main(int argc, char** argv) {
     std::vector<double> station(3, 0.0);
     std::vector<std::vector<Peak>> peaks(3);
     for (int n = 1; n <= radios; ++n) {
+        if (hwFile != nullptr && *hwFile != '\0' && n == radios && ids[static_cast<std::size_t>(n) - 1u].rfind("file:", 0) == 0) { continue; }   // (a file is not swept)
         peaks[static_cast<std::size_t>(n)] = sweepFm(static_cast<std::uint32_t>(n));
         std::printf("radio %d sweep of 87.5 to 108 MHz: %zu peaks", n, peaks[static_cast<std::size_t>(n)].size());
         for (std::size_t i = 0; i < peaks[static_cast<std::size_t>(n)].size() && i < 5; ++i) {
