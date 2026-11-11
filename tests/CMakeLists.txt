@@ -1668,3 +1668,10 @@ foreach(t ${_cascade_registered_tests})
                 "(labels: '${_labels}'); every test must carry exactly one.")
     endif()
 endforeach()
+
+# --- lane sysmodels: the standalone manifest signing tool (tools/manifest_sign.cpp) --------------------------------------------------------------------
+# Built beside the tests (it links the engine only for sys_hash / sys_ed25519 / sys_manifest_sig); test_sys_manifest_tool runs the built tool. It reads the files it is
+# named and generates no key; see the header of the tool.
+add_executable(foxsdr_manifest_sign "${CMAKE_SOURCE_DIR}/tools/manifest_sign.cpp")
+target_link_libraries(foxsdr_manifest_sign PRIVATE cascade_engine)
+add_dependencies(test_sys_manifest_tool foxsdr_manifest_sign)

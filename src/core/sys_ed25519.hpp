@@ -7,8 +7,8 @@
 //
 // WRITTEN FROM THE OPENED RFC 8032 (https://www.rfc-editor.org/rfc/rfc8032.txt, IETF Trust, text of the standard): the group law of section 5.1.4
 // (extended coordinates), the point encoding of 5.1.2, the verification equation of 5.1.7 and the rule that S must be below the group order L. The
-// field arithmetic is a 16 x 16-bit limb layout (the shape public-domain TweetNaCl uses; no source of it was copied: the curve constants are COMPUTED
-// by the one-off script in the commit message from their definitions d = -121665/121666, By = 4/5, sqrt(-1) = 2^((p-1)/4), L = 2^252 + 27742...). The
+// field arithmetic is a 16 x 16-bit limb layout (the layout of the public-domain TweetNaCl, written out afresh here and not copied from any file; the curve constants are COMPUTED
+// from their definitions (the script is in docs/feature-records/sysmodels.md) d = -121665/121666, By = 4/5, sqrt(-1) = 2^((p-1)/4), L = 2^252 + 27742...). The
 // tests run all five vectors of RFC 8032 section 7.1 through sign and verify (tests/sys_ed25519_vectors.hpp is generated from the RFC text by a script, not
 // typed), then flip every bit of a signature and a message and expect rejection.
 //
