@@ -174,3 +174,91 @@ When it is applied `testHeaderSplitKnownDefect` goes red on purpose: flip its ex
 - A tiny window remains between httplib closing a socket inside a failed `connect()` and this client forgetting the handle (`Link::sockValid`); a `close()` landing in exactly that window would call `shutdown` on a closed descriptor. Not reproduced.
 - Not run: any GUI test, any test over a real network, any ASan / TSan build of these files.
 - The thread-abandon path (the reader does not return within 2.5 s) is not exercised by a test: the stand-in cannot make the socket shutdown fail.
+
+## Live test 2026-11-11
+
+Branch tip before this section: `5af86481` (probe) plus the fix commit. The statements in UNVERIFIED above that the client has never connected to a real receiver are superseded by this section, which is the record of that one connection.
+
+**The connection.** ONE connection, ONE WebSocket session, to `websdr.heppen.be:8073` (Heppen, Limburg, Belgium; KiwiSDR 2, software v1.902; plain `ws://`), started 15:04:50Z on 2026-11-11, closed after 45.0 s. Chosen from the public list data (mirrored at rx.linkfanel.net; kiwisdr.com/public itself sits behind a play-button gate, which was not bypassed) and one read of the receiver's own `/status` page at 15:04Z: users 8 of 50, status active, plain port. Frequency 77.5 kHz, AM, passband -5000 to +5000 Hz: the German time signal DCF77 (about 250 km away), a continuous carrier whose amplitude dips once a second, so "audio present" can be judged by structure and not by ear. (BBC 198 kHz long wave was the first idea; a search showed it closed on 27 June 2026, so it was not used.)
+
+**What was sent** (all of it, from `wire.log`, 48 client frames): the HTTP upgrade `GET /1794409490/SND` with `User-Agent: cpp-httplib/0.53.1`; then `SET auth t=kiwi p=` (empty password), `SET ident_user=FoxSDR-test`, `SET AR OK in=12000 out=12000`, `SET compression=1`, `SET mod=am low_cut=-5000 high_cut=5000 freq=77.500`, and 43 times `SET keepalive` (about once a second). Identity string: `FoxSDR-test`. No password, location, e-mail, callsign or name. Close: the client shut the TCP connection (no WebSocket close frame); the receiver's side ended 0.3 s later. The probe's relay made exactly one upstream TCP connection (`upstream_connections=1`).
+
+**What came back:** the 101 upgrade at T+0.76 s; 19 MSG frames (the last at T+39.4 s); 2198 SND frames, the first at T+1.36 s, then 50 per second, every one 130 bytes, flags `0x10`, sequence 0 to 2197 without a gap; no W/F, no EXT, no text frames, no close frame, no ping. The state reached `Playing` at the first SND and stayed there. Local files (never committed) in `D:/foxsdr-samples/kiwi-live/`: `wire.log`, `s2c.raw`, `c2s.raw`, `frames.bin`, `audio.wav`, `summary.txt`, with a line in `D:/foxsdr-samples/MANIFEST.md`.
+
+### Audio judgement
+
+- 2198 frames x 240 samples = 527520 samples = 43.96 s at 12000 Hz. The receiver announced `sample_rate=12000.000000` and `audio_rate=12000` in MSG frames, as the client assumed. Independently, 41 successive second marks in the decoded audio are 41.00 s apart to within the 10 ms block resolution, so the real rate is 12000 Hz to within about 0.03 percent.
+- ADPCM: four decodes compared offline over all 2198 frames (low or high nibble first, state carried across frames or reset every frame). Only the client's choice (low nibble first, carried state, no per-frame header, 120 payload bytes = 240 samples) gives audio with a once-a-second envelope dip: 42 dips, 37 of 40 intervals 1.00 s plus or minus 10 ms, widths 90 or 190 ms, and one 2.0 s gap where the minute mark is (the second-59 pulse is absent). That is DCF77's keying, so the audio is the station. High nibble first with carried state saturates (mean |x| about 30300 of 32767, no structure); low nibble first with a per-frame reset shows a start-up ramp in every frame (mean |x| 3, 6, 8 over the first samples against 25 mid-frame) and no 1 Hz structure. The carried-state decode stays stable for 44 s (the per-5-s mean moves from 1895 to 2183 and never runs to the rails), which also says the rounding matches the server's encoder closely enough not to run away.
+- Level: no clipping, minimum -7, maximum 11290, a large positive mean (about 2070): the AM output is the envelope, not DC-blocked. S-meter raw about 401 to 407 (-86.9 to -86.3 dBm by the outline's formula), lower in the frames that overlap a dip (mean raw 342 against 397), so the 0.1 dB per unit scale is supported; the absolute offset (-127) cannot be checked from this recording.
+- Byte order of PCM and I/Q mode: not heard (the receiver sent only ADPCM when asked for `compression=1`).
+
+### The 15 protocol questions
+
+| # | Result | Evidence |
+|---|---|---|
+| 1 | ANSWERED | `freq=77.500` (kHz, three decimals) was accepted and the 77.5 kHz station came out (wire.log T+0.758; the dips above). Hz or a passband centre would have tuned elsewhere. |
+| 2 | ANSWERED in part | `am` accepted with edges -5000/+5000. The receiver's own `load_cfg` MSG (T+1.08, percent-encoded JSON) lists its mode names and default passbands, signed relative to the carrier: am -4900..4900, amn +-2500, amw +-6000, sam, sal -4900..0, sau 0..4900, sas, qam, drm +-5000, lsb -2400..-300, lsn -2100..-300, usb 300..2400, usn 300..2100, cw +-400, cwn +-250, nbfm +-6000, nnfm +-5000, iq. Only `am` was sent. |
+| 3 | STILL OPEN | Meaning of `in=` and `out=`: no observable effect, because both sent values equal the stream rate. Whether AR OK is required is not shown. |
+| 4 | ANSWERED | 12 kHz, announced twice in MSG (`sample_rate=12000.000000`, `audio_rate=12000`), measured by the second marks. |
+| 5 | STILL OPEN | No PCM frame was sent (all 2198 flags `0x10`). |
+| 6 | ANSWERED | See the audio judgement: low nibble first, state carried across frames, no per-frame header, two samples per byte, initial predictor 0 (the first 12 samples decode to exactly 0). |
+| 7 | STILL OPEN | Only `0x10` was ever set; other bits never seen. |
+| 8 | STILL OPEN | I/Q not exercised. The passband table lists a mode named `iq`; nothing about its payload. |
+| 9 | ANSWERED in part | With an empty password the receiver answered `badp=0` (T+1.08) after the client had already sent the other four commands without waiting, and accepted them. `chan_no_pwd=0`, `chan_no_pwd_true=0`, `max_camp=50` also came. Codes 1 to 7 and an exemption flow: not seen. |
+| 10 | ANSWERED in part | Values in MSG text ARE percent-encoded (`load_cfg=%7B%22passbands...`, names in `user_cb`). Keys seen: rx_chans, chan_no_pwd, chan_no_pwd_true, max_camp, badp, version_maj/min, debian_ver, model, platform, hw, ext_clk, freq_offset, abyy, dx_db_name, has_attn, load_cfg, load_dxcfg, load_dxcomm_cfg, center_freq, bandwidth, adc_clk_nom, sample_rate, client_public_ip, rx_chan, is_local, cfg_loaded, audio_init, audio_rate, and `user_cb` (one entry per channel, 50 entries, carrying other users' names, once at T+39.4 s). No time-limit or kick message came in 45 s (the receiver's status line mentions "Limits"): that key stays OPEN. |
+| 11 | STILL OPEN | No `down` or `redirect` was sent. |
+| 12 | ANSWERED in part | `SET keepalive` (the whole command) was sent 43 times at about 1 s and never refused; the connection lived 45 s. Whether it is REQUIRED and the server's inactivity limit: OPEN. |
+| 13 | ANSWERED | Outside this protocol: the public list data carries name, location, antenna, users, users_max, status; the receiver's `/status` page gives the same as key=value lines from one plain GET. |
+| 14 | ANSWERED | `/SND` alone worked; no `/W/F` or `/EXT` connection was needed. |
+| 15 | STILL OPEN | The name `FoxSDR-test` was accepted and appears in the receiver's `user_cb` list; the terms about identification are not a wire matter (the owner's action, as before). |
+
+### The 18 assumptions
+
+| # | Result | Evidence |
+|---|---|---|
+| 1 | CONFIRMED | 12000 Hz (above). |
+| 2 | STILL OPEN | Accepted; the meaning of in/out cannot be told apart. |
+| 3 | CONFIRMED | kHz with three decimals. |
+| 4 | STILL OPEN | No PCM seen. |
+| 5 | CONFIRMED | Nibble order, state carried, no header, two samples per byte, initial state 0. |
+| 6 | CONFIRMED for 0; codes 1 to 7 STILL OPEN | `badp=0` came for an empty password; the client classified it as accepted and carried on. |
+| 7 | CONFIRMED | Every MSG is `MSG`, one space, then words; one parser handled all 19. Values percent-encoded (see Q10). |
+| 8 | STILL OPEN | No redirect seen. |
+| 9 | STILL OPEN | `FoxSDR-test` is unreserved characters, so encoded or not cannot be told apart. |
+| 10 | CONFIRMED | The five opening commands in this order, with no waiting, were all accepted. |
+| 11 | CONFIRMED (accepted) | The Unix time in seconds as the path component was accepted; whether any value is accepted was not tested. |
+| 12 | CONFIRMED (accepted) | Text frame `SET keepalive`, about 1 s, accepted. |
+| 13 | WRONG in effect, FIXED | "A MSG text above 4 KiB is malformed and ends the connection": the real receiver sends MSG texts of 1.9 to 3.1 KiB even on its smallest configuration (`load_cfg` 1878 B, `load_dxcfg` 3074 B, `user_cb` 2471 B for 50 channels), and the size follows the receiver's configuration. A receiver with a bigger band list or longer user names would have been dropped. Fixed (below). The other malformed rules held: nothing else tripped them. |
+| 14 | CONFIRMED | `am` accepted; every mode name in the receiver's table is 2 to 4 lower-case letters. |
+| 15 | CONFIRMED | The state stayed `Connecting` until the first SND at T+1.36 s, then `Playing`. |
+| 16 | STILL OPEN | The client sent no close frame; the receiver's side ended 0.3 s later; whether it minds cannot be seen from the client. |
+| 17 | CONFIRMED for plain receivers | `ws://` worked on port 8073; an https-only receiver remains unreachable (not tried, by design). |
+| 18 | CONFIRMED (harmless) | The receiver sends binary frames only (opcode 2). |
+
+### Fixes (all offline, from the recording)
+
+1. A MSG text above 4096 bytes no longer ends the connection: the first 4096 bytes are parsed, the rest dropped, and `ParsedFrame::messageTruncated` says so. The 64 KiB frame limit is unchanged, and a refusal keyword at the front of an over-long message is still seen. RED before: protocol test 6 failures (`parseFrame` returned `TooLarge` for a 5000-byte MSG), client test 4 failures for this (an over-long MSG gave `Malformed` and the audio after it was never delivered; a `too_busy` inside one was not seen). GREEN after.
+2. `status().detail` still said "connecting" while `Playing` (the live summary showed `detail=connecting` after 45 s of audio). Now "receiving audio". RED before (1 failure), GREEN after.
+3. The stand-in server (`tests/kiwisdr_fake_server.hpp`) is unchanged: it can already send any MSG and SND the tests ask for, and the recorded frames are now replayed through it by `tests/test_kiwisdr_replay.cpp`, so it carries the real server's frames.
+
+**Replay test** `tests/test_kiwisdr_replay.cpp`: always runs a hand-typed excerpt of protocol keywords and numbers (no names, no addresses). When `D:/foxsdr-samples/kiwi-live/frames.bin` (or the folder in `KIWILIVE_DIR`) exists it feeds the recorded frames to the parser (all parse, contiguous sequence, 240 samples each, 42 envelope dips, 37 of 40 on the second) and then over a loopback socket through the whole client (decoded samples identical to the parser's, no drops, no gaps, 19 ignored MSG). It skips cleanly, counted, when the folder is absent. Break-it: with `kAdpcmLowNibbleFirst` flipped the replay test went red (`1 envelope dips`, 4 failures) and was restored.
+
+**Results (this session, Release):** `test_kiwisdr_protocol: 192 checks, 0 failed`; `test_kiwisdr_client: 383 checks, 0 failed`; `test_kiwisdr_replay: 2307 checks, 0 failed` (about 8.5 s); `test_kiwisdr_live_probe: 37 checks, 0 failed` (includes the hard stop shown with a 4 s timer: exit code 3 after 4.1 s); the three run three times in a row with `--repeat until-fail:3`: `100% tests passed out of 3`. `test_thread_inventory` still fails exactly as in TESTS above (`src/source/kiwisdr_client.cpp creates 2 std::thread ... has never heard of it`): the row is in the WIRING HAND-OFF and was not added here.
+
+**httplib short header read:** not seen. The client received all 2198 SND frames and 19 MSG frames without a drop. On the relay side none of the 2187 receive boundaries fell inside a frame header (the relay's chunks, 129 to 4788 bytes, are not the client's own receive calls, so this is weak evidence). The patch proposals were not applied.
+
+### What is still open, and would a second connection help
+
+Still open: PCM byte order (Q5, A4), flag bits other than `0x10` (Q7), I/Q mode (Q8), the meaning and necessity of AR OK (Q3, A2), badp codes 1 to 7 and any password flow (Q9, A6), the forms of `down`, `redirect`, `too_busy` and any time-limit or kick message (Q10, Q11, A8), whether keep-alive is required (Q12), the close frame (A16), and the terms (Q15). A second connection could answer Q5 and the PCM half of A4 (send `compression=0`), Q3 and A2 (leave AR OK out), whether keep-alive is required, and, with a mode other than `am`, part of Q2. It cannot answer the refusal, redirect, down, time-limit and password questions: a polite connection to a healthy open receiver never provokes them. It needs the owner's word.
+
+### Sources of protocol knowledge
+
+The record and the code comments cite exactly these:
+- "The outline in the pre-release facts report, section 3, 'KiwiSDR, WebSDR, OpenWebRX'" (`kiwisdr_protocol.hpp` header, `kiwisdr_client.hpp`, the tests). NO URL is given anywhere in the record or the code, and I did not open the report. Taken from it: the path `/<timestamp>/SND`; the command names `SET auth t=kiwi p=`, `SET ident_user=`, `SET mod= low_cut= high_cut= freq=`, `SET compression=`, `SET AR OK in= out=`, `SET keepalive`; the tags MSG / SND / W/F / EXT; the SND header (flags 1 byte, sequence 4 bytes little-endian, S-meter 2 bytes big-endian) and RSSI = 0.1 x smeter - 127 dBm; ADPCM when flag `0x10`; the messages too_busy, badp (codes 1 to 7), down, redirect; the politeness terms ("Terms to honour", itself marked unverified).
+- "The earlier design notes" (`kAudioRateHz`): 12 kHz. No document or URL named.
+- IMA ADPCM "the public standard algorithm" (89-entry step table, 16-entry index table): no URL named. RFC 6455 for WebSocket (named only in the stand-in's comments).
+- The record states that no KiwiSDR server code, kiwiclient or kiwirecorder was read, and I read none.
+
+Protocol facts with NO cited source (the earlier lane's assumption or memory, listed as ASSUMPTIONS 1 to 18): the audio rate, the AR OK meaning, the kHz unit, PCM byte order, the ADPCM nibble order and state handling, badp=0 as accepted, the MSG separator and key=value form, percent-encoding, the opening order, the timestamp meaning, the keep-alive form and timing, "malformed ends the connection", the mode-name rules, `Playing` at the first frame, no close frame, ws:// only.
+
+Now CONFIRMED by my own wire recording (an observation of our own connection, the cleanest provenance): the path, the whole command set and its order (accepted), the SND header layout and the 0.1 dB per unit scale (offset not checkable), the 12 kHz rate and its announcement, the kHz unit, the ADPCM details, badp=0, the MSG form and its percent-encoding, the keep-alive form, `/SND` alone, and ws:// on a plain receiver. NOT confirmed: PCM byte order, the other flag bits, I/Q, AR OK semantics, badp 1 to 7, the down/redirect/too_busy forms, the close frame, the RSSI offset, and the politeness and identification terms.

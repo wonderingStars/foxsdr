@@ -214,6 +214,7 @@ void readerBody(std::shared_ptr<KiwiSdrClient::Link> link) {
                 std::lock_guard<std::mutex> lk(link->m);
                 if (link->state.load(std::memory_order_relaxed) == State::Connecting) {
                     link->status.state = State::Playing;
+                    link->status.detail = "receiving audio";
                     link->state.store(State::Playing, std::memory_order_release);
                 }
             }

@@ -21,8 +21,9 @@
 // WHERE THE OUTLINE RUNS OUT, THIS FILE DOES NOT GUESS SILENTLY: every
 // decision beyond the outline sits behind ONE named constant or function in
 // namespace assumed below, and docs/feature-records/kiwi-client.md lists each
-// under ASSUMPTIONS and, as a question, under PROTOCOL QUESTIONS. Nothing here
-// has ever spoken to a real KiwiSDR.
+// under ASSUMPTIONS and, as a question, under PROTOCOL QUESTIONS. One live session
+// (2026-11-11, record section "Live test 2026-11-11") has since confirmed or
+// contradicted most of them; each constant below says which.
 //
 // BOUNDS. Every length that arrives is checked before it is used. A frame
 // longer than kMaxFrameBytes is refused before anything is decoded or
@@ -49,7 +50,7 @@ namespace cascade::source::kiwi {
 // ParseError::TooLarge.
 constexpr std::size_t kMaxFrameBytes = 64 * 1024;
 
-// The longest text a MSG frame may carry into the key/value parser.
+// The longest MSG text that is parsed; a longer text is cut here (ParsedFrame::messageTruncated).
 constexpr std::size_t kMaxMessageTextBytes = 4096;
 
 // The longest redirect target, password and user name the builders accept.
@@ -68,6 +69,7 @@ namespace assumed {
 
 // The audio rate the server streams at, in Hz. NOT in the outline; the
 // earlier design notes say 12 kHz. Sent in AR OK and reported to the caller.
+// CONFIRMED LIVE: the receiver announced sample_rate=12000.000000 and audio_rate=12000.
 constexpr int kAudioRateHz = 12000;
 
 // SET AR OK in=<kArOkIn> out=<kArOkOut>: the outline names the command and
@@ -77,7 +79,7 @@ constexpr int kArOkIn = kAudioRateHz;
 constexpr int kArOkOut = kAudioRateHz;
 
 // freq= is sent in kilohertz (decimal, three places = 1 Hz resolution). The
-// outline does not give the unit.
+// outline does not give the unit. CONFIRMED LIVE: kHz (77.500 reached the 77.5 kHz station).
 constexpr double kFreqUnitHz = 1000.0;
 
 // 16-bit PCM samples are big-endian on the wire (the outline names only the
@@ -86,11 +88,13 @@ constexpr bool kPcmBigEndian = true;
 
 // IMA ADPCM: the low nibble of each byte is the earlier sample (the usual WAV
 // packing), the decoder starts at predictor 0 / index 0 on a new connection
-// and its state CARRIES OVER from one frame to the next.
+// and its state CARRIES OVER from one frame to the next. CONFIRMED LIVE (no frame header,
+// 120 payload bytes = 240 samples): the decoded audio carries the station's 1 Hz keying.
 constexpr bool kAdpcmLowNibbleFirst = true;
 
 // badp=0 means "password accepted"; the outline names codes 1-7 as the
-// refusals. 0 is therefore not a refusal.
+// refusals. 0 is therefore not a refusal. CONFIRMED LIVE for 0 (the receiver answered badp=0
+// to an empty password); codes 1-7 not seen.
 constexpr int kBadpAcceptedCode = 0;
 
 // A MSG frame's text may be preceded by one separator byte after the tag.
@@ -137,7 +141,7 @@ enum class FrameType { Msg, Snd, Waterfall, Ext };
 enum class ParseError {
     None,
     TooShort,    // fewer bytes than the tag or the header
-    TooLarge,    // above kMaxFrameBytes (or a MSG text above kMaxMessageTextBytes)
+    TooLarge,    // above kMaxFrameBytes
     UnknownTag,  // not MSG / SND / W/F / EXT (a client may ignore it)
     BadPayload,  // a PCM payload with an odd number of bytes
 };
@@ -187,6 +191,7 @@ struct ParsedFrame {
     ServerMessage message;         // Msg
     SndFrame snd;                  // Snd
     std::size_t payloadBytes = 0;  // everything after the tag, for W/F and EXT
+    bool messageTruncated = false;  // Msg: the text was longer than kMaxMessageTextBytes; only the front was parsed
 };
 
 // Parses one whole binary frame. On any error `out` is left unspecified and

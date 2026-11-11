@@ -506,6 +506,8 @@ void testRedirectIsReportedNotFollowed() {
 
 // --- 5. the receiver sends rubbish ----------------------------------------------------------------------
 
+std::size_t kiwi_frame_limit() { return 64 * 1024; }
+
 void expectMalformed(const std::string& payload, const char* what) {
     Probe probe;
     FakeKiwi srv(serve(probe, [payload](Conn& c, int) {
@@ -526,7 +528,7 @@ void expectMalformed(const std::string& payload, const char* what) {
 void testMalformedAndHostileFrames() {
     expectMalformed("SND\x00\x01", "SND cut inside its header");
     expectMalformed(Conn::sndPayload(0x00, 1, 1, "abc"), "PCM with half a sample");
-    expectMalformed("MSG " + std::string(6000, 'x'), "oversized MSG text");
+    expectMalformed(std::string("MSG ") + std::string(kiwi_frame_limit(), 'x'), "MSG above the 64 KiB frame limit");
     expectMalformed(Conn::sndPayload(0x10, 1, 1, std::string(200 * 1024, '\x55')), "200 KiB frame");
     expectMalformed(Conn::sndPayload(0x00, 1, 1, std::string(1024 * 1024, '\x01')), "1 MiB frame");
     expectMalformed(std::string("EXT") + std::string(64 * 1024, 'x'), "EXT over the limit");
@@ -565,6 +567,44 @@ void testMalformedAndHostileFrames() {
     CHECK(fine.ignoredFrames() == 4);
     CHECK(drain(fine).size() == 4);
     fine.close();
+}
+
+// LIVE 2026-11-11: a real receiver sends long MSG texts (its configuration, percent-encoded
+// JSON, 1.8 to 3 KiB on the smallest one). One above the 4 KiB text limit must NOT end the
+// connection; audio after it is delivered.
+void testLongMessageIsNotFatal() {
+    Probe probe;
+    FakeKiwi srv(serve(probe, [](Conn& c, int) {
+        c.sendMsg("load_dxcfg=" + std::string(3074, 'a'));
+        c.sendMsg("load_dxcfg=" + std::string(9000, 'b'));
+        c.sendSnd(0x00, 1, 1, pcmOf(7, 8));
+    }));
+    KiwiSdrClient client;
+    CHECK(client.open(optsFor(srv)));
+    CHECK(waitFor([&] { return client.audioFrames() == 1; }, 3000));
+    CHECK(client.state() == State::Playing);
+    CHECK(client.ignoredFrames() == 2);
+    CHECK(drain(client).size() == 8);
+    client.close();
+    // A refusal inside an over-long message still stops the client.
+    Probe probe2;
+    FakeKiwi srv2(serve(probe2, [](Conn& c, int) { c.sendMsg("too_busy=1 pad=" + std::string(9000, 'c')); }));
+    KiwiSdrClient busy;
+    CHECK(busy.open(optsFor(srv2)));
+    CHECK(waitFor([&] { return busy.state() == State::RefusedBusy; }, 3000));
+    busy.close();
+}
+
+// LIVE 2026-11-11: the summary of the live run said detail="connecting" while Playing.
+void testDetailFollowsState() {
+    Probe probe;
+    FakeKiwi srv(serve(probe, [](Conn& c, int) { c.sendSnd(0x00, 1, 1, pcmOf(7, 8)); }));
+    KiwiSdrClient client;
+    CHECK(client.open(optsFor(srv)));
+    CHECK(waitFor([&] { return client.state() == State::Playing; }, 3000));
+    CHECK(client.status().detail.find("connecting") == std::string::npos);
+    CHECK(!client.status().detail.empty());
+    client.close();
 }
 
 // --- 6. the connection fails -----------------------------------------------------------------------------
@@ -863,6 +903,8 @@ int main() {
     testDown();
     testRedirectIsReportedNotFollowed();
     testMalformedAndHostileFrames();
+    testLongMessageIsNotFatal();
+    testDetailFollowsState();
     testStallReported();
     testDropMidStreamIsNotRetried();
     testConnectFailures();

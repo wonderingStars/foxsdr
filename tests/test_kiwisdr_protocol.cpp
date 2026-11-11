@@ -407,9 +407,27 @@ void testMessages() {
     const std::vector<std::uint8_t> nosep = {'M', 'S', 'G', 'd', 'o', 'w', 'n'};
     CHECK(kiwi::parseFrame(nosep.data(), nosep.size(), st, f) == kiwi::ParseError::None);
     CHECK(f.message.kind == kiwi::MessageKind::Down);
-    // A MSG with a text above the limit is refused.
+    // LIVE 2026-11-11: a real receiver sends MSG texts of 1.8 to 3 KiB (its configuration as
+    // percent-encoded JSON), and the size scales with its configuration. A MSG text above
+    // kMaxMessageTextBytes is therefore NOT an error: the first kMaxMessageTextBytes are parsed,
+    // the rest is dropped and the frame says so. (The 64 KiB frame limit still holds.)
     const auto big = msg(std::string(5000, 'x'));
-    CHECK(kiwi::parseFrame(big.data(), big.size(), st, f) == kiwi::ParseError::TooLarge);
+    CHECK(kiwi::parseFrame(big.data(), big.size(), st, f) == kiwi::ParseError::None);
+    CHECK(f.type == kiwi::FrameType::Msg);
+    CHECK(f.messageTruncated);
+    CHECK(f.message.kind == kiwi::MessageKind::Info);
+    CHECK(f.message.words.size() == 1 && f.message.words[0].key.size() == kiwi::kMaxMessageTextBytes);
+    // A refusal at the front of an over-long message is still seen.
+    const auto busyBig = msg("too_busy=7 load_dxcfg=" + std::string(9000, 'y'));
+    CHECK(kiwi::parseFrame(busyBig.data(), busyBig.size(), st, f) == kiwi::ParseError::None);
+    CHECK(f.messageTruncated && f.message.kind == kiwi::MessageKind::TooBusy && f.message.code == 7);
+    // A message at exactly the limit is not truncated.
+    const auto exact = msg(std::string(kiwi::kMaxMessageTextBytes, 'x'));
+    CHECK(kiwi::parseFrame(exact.data(), exact.size(), st, f) == kiwi::ParseError::None);
+    CHECK(!f.messageTruncated);
+    // The frame limit still refuses a MSG above 64 KiB.
+    const auto huge = msg(std::string(kiwi::kMaxFrameBytes, 'x'));
+    CHECK(kiwi::parseFrame(huge.data(), huge.size(), st, f) == kiwi::ParseError::TooLarge);
 }
 
 void testOtherTagsAndErrors() {

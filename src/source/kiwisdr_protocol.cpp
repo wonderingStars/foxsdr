@@ -249,14 +249,19 @@ ParseError parseFrame(const std::uint8_t* data, std::size_t len, AdpcmState& adp
     // for a frame above the limit.
     if (len > kMaxFrameBytes) { return ParseError::TooLarge; }
     if (len < kTagBytes || data == nullptr) { return ParseError::TooShort; }
+    out.messageTruncated = false;
 
     if (std::memcmp(data, "MSG", kTagBytes) == 0) {
         std::size_t off = kTagBytes;
         if (off < len && static_cast<char>(data[off]) == assumed::kMsgSeparator) { ++off; }
-        const std::size_t textLen = len - off;
-        if (textLen > kMaxMessageTextBytes) { return ParseError::TooLarge; }
+        // LIVE 2026-11-11: real receivers send MSG texts of several KiB (their configuration as
+        // percent-encoded JSON), so a long text is not an error: the first kMaxMessageTextBytes
+        // are parsed (every refusal keyword is short and comes early), the rest is dropped.
+        const std::size_t fullLen = len - off;
+        const std::size_t textLen = fullLen > kMaxMessageTextBytes ? kMaxMessageTextBytes : fullLen;
         const std::string text(reinterpret_cast<const char*>(data) + off, textLen);
         out.type = FrameType::Msg;
+        out.messageTruncated = fullLen > kMaxMessageTextBytes;
         out.payloadBytes = len - kTagBytes;
         out.message = classify(parseKeyValues(text));
         return ParseError::None;
