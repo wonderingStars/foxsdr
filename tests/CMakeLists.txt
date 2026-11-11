@@ -1668,3 +1668,11 @@ foreach(t ${_cascade_registered_tests})
                 "(labels: '${_labels}'); every test must carry exactly one.")
     endif()
 endforeach()
+
+# hamops lane: the source-scan tests of the new ham-operations models read their own headers; they are given the repository root.
+foreach(_hamops_t test_cabrillo test_contest_macros test_adif_qso test_adif_broadcast test_contest_score test_band_map test_omnirig_client
+                  test_radioinfo_udp test_antenna_genius test_xplane_udp test_hid_report test_transcript_store test_hamops_scan)
+    if(TARGET ${_hamops_t})
+        target_compile_definitions(${_hamops_t} PRIVATE HAMOPS_SRC_DIR="${CMAKE_SOURCE_DIR}")
+    endif()
+endforeach()
