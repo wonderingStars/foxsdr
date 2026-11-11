@@ -168,6 +168,22 @@ public:
         return std::string();
     }
 
+    // A drag from the control's centre by (dx, dy): the pointer goes down, moves in four steps and comes up at the end (a DragArea reports each move).
+    std::string drag(const std::string& labelSpec, double dx, double dy) override {
+        std::optional<slint::testing::ElementHandle> e;
+        std::string why = find(labelSpec, e);
+        if (!why.empty()) { return why; }
+        float x = 0, y = 0;
+        why = centre(labelSpec, *e, x, y);
+        if (!why.empty()) { return why; }
+        auto& w = ui_->window();
+        w.dispatch_pointer_move_event(slint::LogicalPosition({x, y}));
+        w.dispatch_pointer_press_event(slint::LogicalPosition({x, y}), slint::PointerEventButton::Left);
+        for (int i = 1; i <= 4; ++i) { w.dispatch_pointer_move_event(slint::LogicalPosition({x + static_cast<float>(dx) * static_cast<float>(i) / 4.f, y + static_cast<float>(dy) * static_cast<float>(i) / 4.f})); }
+        w.dispatch_pointer_release_event(slint::LogicalPosition({x + static_cast<float>(dx), y + static_cast<float>(dy)}), slint::PointerEventButton::Left);
+        return std::string();
+    }
+
     // A wheel scroll at the control's centre. Slint's Flickable moves its viewport BY the delta (a positive delta_y brings what is above
     // into view, as a wheel rolled away from the user does), so "pixels" positive = show what is below = a negative delta.
     std::string scroll(const std::string& labelSpec, double pixels) override {

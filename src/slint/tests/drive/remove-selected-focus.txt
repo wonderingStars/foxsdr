@@ -1,0 +1,36 @@
+#! frames=500 size=1600x900
+# remove-selected-focus: the screen's own RADIO_FOCUS handling after the engine merge (wave 3): the engine itself moves a session's focus to radio 1 when its radio is removed, and the screen moves its selection to radio 1 too.
+# Radio 3 (added stopped) is selected, so the strip reads radio 3 (not running). It is removed: the selection and the strip's reads are radio 1's again (running), and radio 2 is not disturbed.
+10 state workspace.radios == 1
+state running == 1
++1 radio add 2 60000
++1 radio add 3 90000
++30 state workspace.radios == 3
++1 click "2 x 2"
++10 state workspace.layout == 2
++1 click "Stop Radio 3"
++10 state workspace.r.3.running == 0
++1 key ctrl+3
++8 state workspace.selected == 3
+state running == 0
++1 radio remove 3
++30 state workspace.radios == 2
+state workspace.selected == 1
+state running == 1
+state workspace.cells == "1,2,0,0"
++1 click "Stop Radio 2"
++10 state workspace.r.2.running == 0
+# a removal of a radio that is NOT selected leaves the selection alone
++1 key ctrl+2
++8 state workspace.selected == 2
+state running == 0
++1 radio add 3 90000
++30 state workspace.radios == 3
++1 radio remove 3
++30 state workspace.radios == 2
+state workspace.selected == 2
+state running == 0
++1 radio remove 2
++30 state workspace.radios == 1
+state workspace.selected == 1
+state running == 1

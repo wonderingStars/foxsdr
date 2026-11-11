@@ -1,0 +1,13 @@
+#! frames=600 size=1600x900
+# restart-multi-radio, the second start: the profile is the one the first start left. Radios 2 to 4 come back from the ENGINE's saved table (no `radio add` here), the layout, the selection (radio 3),
+# Link and radio 2's splitter from the SCREEN's saved layout, and the screen applies the selection when the radios are back.
+60 state workspace.radios == 4
++20 state workspace.layout == 2
+state workspace.selected == 3
+state workspace.link == 1
+state workspace.split.2 != 45
+state workspace.split.2 > 10
+state fact.radio.count == 4
+state workspace.shown == 2
+expect "Link tuning" checked equals "true"
++1 shot "restart-multi-radio-second.png"

@@ -101,6 +101,7 @@ const char* verbName(Verb v) {
         case Verb::Key: return "key";
         case Verb::Slider: return "slider";
         case Verb::Scroll: return "scroll";
+        case Verb::Drag: return "drag";
         case Verb::Choose: return "choose";
         case Verb::Expect: return "expect";
         case Verb::State: return "state";
@@ -203,6 +204,14 @@ Script parseInputScript(const std::string& text) {
             const std::string num = c.word();
             if (!isNumber(num, v) || v == 0.0 || std::fabs(v) > 100000.0) { bad("scroll takes a number of pixels, not 0: \"" + num + "\""); continue; }
             st.number = v;
+        } else if (verb == "drag") {
+            st.verb = Verb::Drag;
+            if (!c.quoted(st.label) || st.label.empty()) { bad("drag takes a quoted label"); continue; }
+            double dx = 0, dy = 0;
+            const std::string a = c.word(), b = c.word();
+            if (!isNumber(a, dx) || !isNumber(b, dy) || (dx == 0.0 && dy == 0.0) || std::fabs(dx) > 5000.0 || std::fabs(dy) > 5000.0) { bad("drag takes the offset right and down in pixels, not both 0: \"" + a + "\" \"" + b + "\""); continue; }
+            st.number = dx;
+            st.number2 = dy;
         } else if (verb == "choose") {
             st.verb = Verb::Choose;
             if (!c.quoted(st.label) || st.label.empty()) { bad("choose takes a quoted label"); continue; }
@@ -262,7 +271,7 @@ Script parseInputScript(const std::string& text) {
         if (ok && !c.atEnd()) { bad("trailing words after the " + verb); continue; }
         int index = 1;
         std::string probe = st.label;
-        if ((st.verb == Verb::Click || st.verb == Verb::Press || st.verb == Verb::Type || st.verb == Verb::Slider || st.verb == Verb::Choose || st.verb == Verb::Expect) && !splitLabelIndex(probe, index)) {
+        if ((st.verb == Verb::Click || st.verb == Verb::Press || st.verb == Verb::Type || st.verb == Verb::Slider || st.verb == Verb::Drag || st.verb == Verb::Choose || st.verb == Verb::Expect) && !splitLabelIndex(probe, index)) {
             bad("a label's #index counts from 1: \"" + st.label + "\"");
             continue;
         }
@@ -317,6 +326,7 @@ void Driver::tick(long tick, const std::function<void(const std::string&)>& say)
             case Verb::Type: head += " \"" + st.label + "\" \"" + st.text + "\""; why = target_.type(st.label, st.text); break;
             case Verb::Key: head += " " + st.text; why = target_.key(st.text); break;
             case Verb::Slider: head += " \"" + st.label + "\" " + std::to_string(st.number); why = target_.slider(st.label, st.number); break;
+            case Verb::Drag: head += " \"" + st.label + "\" " + std::to_string(st.number) + " " + std::to_string(st.number2); why = target_.drag(st.label, st.number, st.number2); break;
             case Verb::Scroll: head += " \"" + st.label + "\" " + std::to_string(st.number); why = target_.scroll(st.label, st.number); break;
             case Verb::Choose:
                 head += " \"" + st.label + "\" \"" + st.text + "\"";

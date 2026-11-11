@@ -56,7 +56,7 @@
 
 namespace foxsdr::slintdrive {
 
-enum class Verb { Click, Press, Type, Key, Slider, Scroll, Choose, Expect, State, Shot, Dump, Radio };
+enum class Verb { Click, Press, Type, Key, Slider, Scroll, Drag, Choose, Expect, State, Shot, Dump, Radio };
 
 const char* verbName(Verb v);
 
@@ -69,7 +69,7 @@ struct Step {
     std::string what;     // expect: value | label | checked | enabled; state: the comparison
     std::string compare;  // expect: equals | contains
     double number = 0;    // slider: the fraction; scroll: the pixels; radio: the tone in Hz (add), the low end in Hz (range)
-    double number2 = 0;   // radio range: the high end in Hz
+    double number2 = 0;   // radio range: the high end in Hz; drag: the pointer's offset down in pixels (number is the offset right)
     int radioNo = 0;      // radio: the radio's number
 };
 
@@ -98,6 +98,8 @@ public:
     virtual std::string key(const std::string& name) = 0;
     virtual std::string slider(const std::string& label, double frac) = 0;
     virtual std::string scroll(const std::string& label, double pixels) = 0;
+    // A pointer drag from the control's centre by (dx, dy) logical pixels: press, a few moves, release. A target that cannot drag says so.
+    virtual std::string drag(const std::string& label, double dx, double dy) { (void)label; (void)dx; (void)dy; return "this target cannot drag"; }
     virtual std::string open(const std::string& label) = 0;   // a dropdown key: its default action opens the popup
     virtual std::string pick(const std::string& item) = 0;    // the popup row with that label, the tick after
     virtual std::string read(const std::string& label, const std::string& what, std::string& out) = 0;

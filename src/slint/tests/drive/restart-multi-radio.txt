@@ -1,0 +1,23 @@
+#! frames=900 size=1600x900 restart=restart-multi-radio-2.txt
+# restart-multi-radio, the first start of the end-to-end proof that a session of several radios comes back (docs/multi-radio-records/wave-3-screen-merge.md). Three generator radios are added
+# beside radio 1, the layout is 2 x 2, radio 3 is selected, Link tuning is on and radio 2's splitter is dragged. The window then quits (the frames run out) and the SAME scratch profile is started
+# again by restart/restart-multi-radio-2.txt: the engine's own saved radios 2 to 4 (stage 5) and the screen's saved layout (S5) must come back together.
+10 state workspace.radios == 1
++1 radio add 2 60000
++1 radio add 3 90000
++1 radio add 4 120000
++30 state workspace.radios == 4
++1 click "2 x 2"
++15 state workspace.layout == 2
++1 click "Link tuning"
++6 state workspace.link == 1
++1 key ctrl+3
++8 state workspace.selected == 3
++1 drag "Resize Radio 2" 0 -40
++8 state workspace.split.2 != 45
++1 state workspace.split.2 > 10
++40 state workspace.saved contains "lay=2"
+state workspace.saved contains "sel=3"
+state workspace.saved contains "lk=1"
++1 state workspace.split.2 > 0
++1 shot "restart-multi-radio-first.png"

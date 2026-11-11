@@ -98,6 +98,7 @@ struct Header {
     bool updateCheck = false; // updatecheck=on: the generator profile's "Check for updates at startup" tick is ON (it is off otherwise: a bounded run asks nobody)
     std::vector<std::string> logContains;   // logcontains=<text, underscores for spaces>: the run's diagnostic log must hold the text afterwards (docs 6.63: "a refused open reaches the log")
     std::string manifest;     // manifest=<file>: foxsdr.com's answer, canned (FOXSDR_FAKE_UPDATE_MANIFEST, core/updater.hpp); relative = under tests/drive/fixtures (docs 6.63)
+    std::string restart;      // restart=<file under tests/drive/restart>: after the run the SAME scratch profile (the settings file the first run wrote, the engine's own saved radios) is started again with this script (docs/multi-radio-records/screen-s6.md: "quit, start again")
     std::map<std::string, std::string> env;
 };
 
@@ -129,6 +130,7 @@ Header parseHeader(const std::string& script) {
             else if (key == "config") { h.config = value; }                   // the settings seed file (docs 6.51)
             else if (key == "radios") { h.userRadios = (value == "user"); }   // the user's SoapySDR modules (docs 6.51: a hardware run)
             else if (key == "updatecheck") { h.updateCheck = (value == "on"); }   // the Updates tick on (docs 6.63: the kill switch's notice)
+            else if (key == "restart") { h.restart = value; }
             else if (key == "manifest") { h.manifest = value; }                   // the canned update answer (docs 6.63)
             else if (key == "logcontains") {                                      // a line the run must have written to its diagnostic log (docs 6.63)
                 std::string text = value;
@@ -392,6 +394,39 @@ int main(int argc, char** argv) {
         std::string line;
         while (std::getline(lines, line)) {
             if (line.find("input script line ") != std::string::npos) { std::printf("  %s\n", line.c_str()); }
+        }
+    }
+    // THE SECOND START (restart=): the profile is left as the first run saved it; only the script changes. Its header may name its own frames= and FOXSDR_* variables.
+    if (!h.restart.empty()) {
+        const fs::path scriptDir = fs::path(argv[1]).parent_path() / "restart";
+        std::string script2 = readFile(scriptDir / h.restart);
+        if (script2.empty()) { std::printf("  cannot read the restart script %s\n", (scriptDir / h.restart).string().c_str()); }
+        CHECK(!script2.empty());
+        const Header h2 = parseHeader(script2);
+        {
+            std::ofstream f(scriptPath, std::ios::binary | std::ios::trunc);
+            f << script2;
+        }
+        for (const auto& [k, v] : h2.env) { setEnv(k.c_str(), v); }
+        const Run r2 = run("\"" + exe + "\" --frames " + std::to_string(h2.frames) + " 2>&1");
+        const bool finished2 = r2.out.find(std::to_string(h2.frames) + " of " + std::to_string(h2.frames) + " ticks, exit 0") != std::string::npos;
+        std::string summary2;
+        for (std::size_t at = r2.out.find("input script: "); at != std::string::npos; at = r2.out.find("input script: ", at + 1)) {
+            const std::size_t e2 = r2.out.find('\n', at);
+            const std::string cand = r2.out.substr(at, e2 == std::string::npos ? std::string::npos : e2 - at);
+            if (cand.find(" steps, ") != std::string::npos) { summary2 = cand; }
+        }
+        const bool clean2 = summary2.find(", 0 failed, 0 not reached") != std::string::npos;
+        CHECK(r2.exitCode == 0);
+        CHECK(finished2);
+        CHECK(clean2);
+        if (r2.exitCode != 0 || !finished2 || !clean2 || (verbose != nullptr && *verbose == '1')) {
+            std::printf("  %s (second start): exit %d; %s\n--- the run's output ---\n%s\n--- end ---\n", tag.c_str(), r2.exitCode, summary2.c_str(), r2.out.c_str());
+        } else {
+            std::printf("  %s (second start): %s\n", tag.c_str(), summary2.c_str());
+            std::istringstream lines(r2.out);
+            std::string line;
+            while (std::getline(lines, line)) { if (line.find("input script line ") != std::string::npos) { std::printf("  %s\n", line.c_str()); } }
         }
     }
     if (tag == "builtin") {
