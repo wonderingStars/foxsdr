@@ -142,3 +142,12 @@ PATCH DESCRIPTION for web_server.cpp (file owned by other work, not edited here)
 5. HTTPS: installability needs https (or localhost): see N13 (TLS, owner's word still needed). Over plain http on a LAN address the page works in a phone browser but cannot be installed (`originInstallable` says so).
 Native Android/iOS builds stay with U2/U3 and are not part of this lane.
 Hand-off settings: none required; optionally show the `originInstallable` problem text on the web settings page.
+
+## Gates (build D:/foxsdr-build/feat-maths, Release, Slint off, softgl off)
+
+Own tests: `test_oirt_stereo` 26 checks, `test_two_channel_combiner` 25, `test_doa_maths` 105, `test_driver_policy` 338, `test_websdr_link` 76, `test_web_phone` 47: all 0 failed (run directly and via ctest).
+Whole set: `ctest -C Release -L "headless|slint" -j4 --timeout 300` on the full build (690 tests): "97% tests passed, 22 tests failed out of 690".
+Red in that run and what they are: the known false failures test_airband_data, test_band_plan, test_converter_call_sites, test_engine_api_transmit, test_page_resize_id, test_png_decode, test_window_failed_app (7);
+load flakes that passed when re-run alone once: test_audio_open, test_bookmark_save_async, test_bounded_hooks, test_engine_main_smoke, test_engine_service_keep, test_failure_files, test_gui_file_jobs, test_iq_open_async, test_link_request_poll, test_plugin_hostile, test_plugin_unload_handshake, test_patch_dest_async_stepped, test_plugin_store_window_free, test_stop_ends_recordings_free (the last failed once with 1 check in a second concurrent run, passed alone twice);
+test_pass_control (on the known load-flake list) failed again alone, on its latency checks only (`longestStartGap <= 36`, `kicksDropped*10 <= nKicks`, `kickedPasses >= ...`, 4 of 709 checks) while other lanes were building on the machine: a timing measurement, not related to new files; not re-proved green.
+Existing files edited by this lane: none (no CMake edits either; sources and tests are globbed). Records: this file only.
