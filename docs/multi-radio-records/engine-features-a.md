@@ -12,9 +12,11 @@ Branch `feat/engine-a`, cut from `mr/engine-stage7` (1741d823) with `engine/mult
 | 11815764 | merge of `mr/screen-s6` (9d907b68), one conflict in `engine_disk_work.cpp` |
 | 87d83583 | task 4: the plugin hand-off (`set_schedule_hint`), and the POCSAG-on-radio-2 finding |
 | a5bec0ab | the break-it tool and batch |
-| (last) | this record, and anything the final gates needed |
+| 887dc10f | the transmit probe waits for every ticket at the end; API.md hint text |
+| dd1deab6 | two fixes the final headless gate found: unguarded `dump()` sites, and the S6 refusal fallback applied to radios that opened |
+| (last) | this record |
 
-Wall time by task (this machine was shared with three other lanes' builds all along; the figures are elapsed time, not effort): task 1 gates and the live check about 3.5 h (the headless gate took 24 min and the window gate 35 min on their own; the build in front of them 40 min); task 2 about 1.5 h; task 3 about 5 h (reading the specification, three transports tried on paper, the code, 1,400 lines of tests, the engine integration); task 4 about 3.5 h (engine side) plus 1 h for the plugin hand-off; the merge, the two engine items, the break-it runs and this record about 2.5 h.
+Wall time: the lane ran from about 13:10 to 17:45 (4.5 h) on a machine shared with three other lanes' builds. The tasks interleaved because each gate takes 25 to 40 minutes: tasks 3 and 4 were read and written during the two gates and the 20-run loop. Rough elapsed time by task, not effort: task 1 (build, both gates, the live check, the reruns) about 1.5 h, mostly waiting; task 2 about 1 h of work (reading, two measurement series, the fix) plus the 20-run loop; task 3 about 2 h of work (reading the specification and the sources, the code, the tests); task 4 about 1.5 h of work plus about 0.5 h for the plugin hand-off; the merge of `mr/screen-s6`, the two engine items, the 18 break-it runs, the final build and gates and this record about 2 h.
 
 ## Task 1. The merged tree is proven
 
@@ -52,7 +54,7 @@ In every run, including the red ones, the books themselves held. "Half to always
 
 **Outcome: the expectation was wrong, not the code.** The guard says "the probe exercised the books on enough tickets", which must hold whatever the machine's speed; a fixed loop count cannot promise it. The probe now runs at least 3000 loops and then goes on until it has issued 1500 new tickets, or fails with the figures after 120 s (an engine that does not drain). The `> 1000` assertion, `merged > 1000` and every assertion about the books are unchanged; nothing was loosened. The loop now yields now and then after a BUSY instead of hammering a held pass. The summary line prints the BUSY count and the loop count.
 
-**GREEN.** With the fix: 1538 and 1653 new tickets (3000 loops, 4189 to 4302 BUSY) in the two runs under the same 24 burners that gave the red 523 with the old test; {{TX20}}. (Under that extreme load one other timing test in the same file, the key-up keep-alive at line 2506, failed once in two runs; it is a different test, a keep-alive deadline against 24 competing busy processes, and was not touched.)
+**GREEN.** With the fix: 1538 and 1653 new tickets (3000 loops, 4189 to 4302 BUSY) in the two runs under the same 24 burners that gave the red 523 with the old test; **20 consecutive runs of the fixed probe, under the machine's ordinary load (the lane's own break-it builds and the other lanes' compiles ran during most of them): the probe reached 1500 or more new tickets in 20 of 20 (1500 to 1723; the `> 1000` guard never failed). The books were exact in 18 of the 20; in the other two (which needed 45,323 and 66,274 loops because the control thread was starved) 193 results had not yet been applied when the fixed 1.5 s final drain ended, which is "not yet", not "never": the drain now waits for every issued ticket (at most 30 s), which is the second change in commit 887dc10f. Whole-file result of those 20 runs: 14 passed; the six others failed OTHER timing tests of the same file (line 413 the keyed-frame share, 571 the queue depth during a stall, 1048 and 2328 and 2329 wall-clock fractions of a held key), each a wall-clock measurement against a starved machine, none touched by this lane, none failing in the two quiet gate passes.** After the drain change: 8 runs: PASS 1500 tickets; PASS 1654 tickets; PASS 1653 tickets; PASS 1502 tickets; PASS 1501 tickets; PASS 1501 tickets; PASS 1501 tickets; PASS 1502 tickets.. (Under that extreme load one other timing test in the same file, the key-up keep-alive at line 2506, failed once in two runs; it is a different test, a keep-alive deadline against 24 competing busy processes, and was not touched.)
 
 ## Task 3. The TCI server and audio over the network (design section 8)
 
@@ -93,7 +95,7 @@ In every run, including the red ones, the books themselves held. "Half to always
 
 **Op numbers**: `FOXAPP_OP_SCHEDULE_SET` 0x860C (long text JSON, `ival[0]` 0 add / id replace, `applied[0]` the id), `_REMOVE` 0x860D, `_ENABLE` 0x860E, `_RUN_NOW` 0x860F, `_SKIP` 0x8610, `_FROM_HINT` 0x8611 (below). All LOCAL only. **Facts** (LOCAL): `fact.schedule.count .active .missed .max .next`, `fact.schedule.entry.<id>` (one JSON document: the fields plus `state` waiting / starting / recording / done / stopped early / missed / refused / skipped / disabled, `note`, `nextUnix`, `lastStartUnix`, `missed`), `fact.schedule.hint.count` and `fact.schedule.hint.<n>`. **Test hook**: `SETTING_SET test.scheduleClock=<unix ms>` (testHooks engines only). API.md 6.23.
 
-**Tests (real results).** `test_schedule` 134 checks (arithmetic, validation, the file, overlap, the clock); `test_engine_api_schedule` 225 checks (one entry's whole life including a real WAV file of 17 KB written and closed; two radios; the refusals in words ("radio 5 is not open", "radio 2 is stopped (a timed recording does not start a radio)", "radio 1 is already recording audio"); the unwritable folder: "recorder: cannot create directory ...: Cannot create a file when that file already exists."; creation rules and every field's range; the clock rules; a restart from the settings snapshot; the ops and a REMOTE session refused; the hint hand-off; the settings file round trip and a damaged schedule); `test_apply_command` has a case for each op. `tools/old_reader_probe` writes a file with every new key: {{PROBE}}.
+**Tests (real results).** `test_schedule` 134 checks (arithmetic, validation, the file, overlap, the clock); `test_engine_api_schedule` 225 checks (one entry's whole life including a real WAV file of 17 KB written and closed; two radios; the refusals in words ("radio 5 is not open", "radio 2 is stopped (a timed recording does not start a radio)", "radio 1 is already recording audio"); the unwritable folder: "recorder: cannot create directory ...: Cannot create a file when that file already exists."; creation rules and every field's range; the clock rules; a restart from the settings snapshot; the ops and a REMOTE session refused; the hint hand-off; the settings file round trip and a damaged schedule); `test_apply_command` has a case for each op. `tools/old_reader_probe` writes a file with every new key: the sources of v0.99.104 (`config.hpp` and `config.cpp` from the tag, built against this tree's library) LOAD a file that has `tciEnabled`, `tciBindAll`, `tciPort`, the five `udpAudio*` keys and a `schedule` of one daily entry, read radio 1 exactly (rtlsdr, 98.5 MHz, WFM, volume 0.35, `serial=00000001`), and write it back without any of the new keys (the same as `radios` and `pluginRadio` in stage 5).
 
 **Not simulated.** A DISK THAT FILLS MID-RECORDING: the code path is the recorder's own error ending the take (`recordError_`), which the schedule reports as "stopped early" with that sentence; the unwritable-folder case exercises the same reporting, but no test fills a disk. The satellites plugin's real pass times, and any real signal, were not run (this lane runs no hardware).
 
@@ -124,11 +126,44 @@ and, APPENDED at the end of `CascadeHostApi` after `settings_seq`: `int32_t (*se
 
 ## Break-it results
 
-{{MUT}}
+Each guarantee was mutated in one line (`tools/mutation_check.sh`, the batch `tools/mutation_batch_engine_features_a.sh`: apply, build the named tests, run them, restore with git), and the tests named went RED every time (18 of 18):
+
+| | Mutation | RED in |
+|---|---|---|
+| M01 | an unmasked client frame accepted (`ws_frame.cpp`) | `test_ws_frame` (2 checks), `test_tci_server` (the unmasked-frame close, 2) |
+| M02 | `TX_PTT` added to the TCI session's profile (`fox_engine_api.cpp`) | `test_tci_engine` (the profile is exactly the six receive ops) |
+| M03 | `TRX`/`TUNE`/`TX_ENABLE` answered `true` | `test_tci_protocol` (4 or more), `test_tci_server` (1), `test_tci_engine` (2) |
+| M04 | the bind scope ignored: always every interface | `test_tci_server` (the machine's other address reachable) |
+| M05 | no slow-client drop (stall time and queue bound made huge) | `test_tci_server` (4: never dropped, 30 s, session left) |
+| M06 | the 4-client cap not enforced | `test_tci_server` (3) |
+| M07 | the exclusive bind replaced by `SO_REUSEADDR` | `test_tci_server` (the port-in-use sentence) |
+| M08 | the echo of a set dropped | `test_tci_protocol` (4) |
+| M09 | the UDP packet size ignored (always 480) | `test_udp_audio` (3) |
+| M10 | the 30 s grace made 100,000 s | `test_schedule` (2) |
+| M11 | the handled occurrence not remembered | `test_schedule` (4) |
+| M12 | a clock set back no longer ends a recording | `test_schedule` (1) |
+| M13 | the entry's radio ignored (everything on radio 1) | `test_engine_api_schedule two` (4) |
+| M14 | the tuning not put back | `test_engine_api_schedule one` (3) |
+| M15 | overlap on a radio not refused | `test_engine_api_schedule rules` (4) |
+| M16 | the stopped / busy radio check removed | `test_engine_api_schedule refusals` (3) |
+| M17 | a hint that ends before it starts accepted | `test_plugin_schedule_hint` (3) |
+| M18 | the 16-hints limit not kept | `test_plugin_schedule_hint` (3) |
+
+Not mutated, by nature: "no network work on the DSP thread or the pass" (there is no code to remove: the servers have no call into either, and the longest backend call under a dead client was under 1 ms); the handshake time limit and the UTF-8 rule have a test each but no mutation run. The rest of the guarantees are the ones above.
 
 ## Final gates
 
-{{FINAL}}
+**Build**: `cmake --build D:/foxsdr-build/mr-engine1 --config Release --parallel 8`, exit 0, at the code of the final tip (commit dd1deab6; later commits are this record only).
+
+**The first headless pass of the merged-and-extended tree** (779 tests: the 762 of task 1 plus 17 new, 1487 s) found two REAL failures, both caused by this lane's work and fixed in dd1deab6: `test_json_dump_policy` (three `dump()` calls in `engine_schedule.cpp` without `error_handler_t::replace`; a name or a plugin's label that is not valid UTF-8 would have thrown on the pass) and `test_engine_api_source_kinds` (lines 503 and 658: the merge of `mr/screen-s6` made `fact.radio.<n>.refusal` fall back to the source's own error for ANY radio 2 to 8, so a radio that opened but carried a notice ("Sample rate coerced ...", a Pluto's rate refusal) showed a refusal; the fallback now applies only while the radio is on the generator because its source did not open, the one case S6 wanted and stage 7's `noteAsyncOpenEnded` already published).
+
+**Headless gate at the final code**: `ctest -L "headless|slint" -j4 --timeout 300`, **779 tests, 1585 s: 774 passed, 5 failed**, all five the known false failures of a D: build (`test_airband_data`, `test_band_plan`, `test_converter_call_sites`, `test_page_resize_id`, `test_png_decode`); run from the worktree root they pass: 115, 5174, 5, 22 and 49 checks, 0 failed. Real failures: none. (`test_engine_api_transmit` passed in this gate and in the first.)
+
+**Window gate at the final code** (hidden desktop `FoxSDRTests`, `FOXSDR_FRAME_CAP_HZ=60`, `-L gui -j3`): **267 tests, 2191 s, 100% passed, 0 failed** (the merged screen stage's drive scripts included).
+
+**`test_diagnostics` and `test_diagnostics_free`** (the commit stamp) passed in the window gate and the headless gate at the code of dd1deab6; this record's own commit moves the stamp again, so they fail on a tree not rebuilt after it, as before; they were rebuilt after the last commit (the one that holds this record) and run on that tip; the result is in the lane's final report, not here, because writing it here would move the stamp again.
+
+**`config.json`** (`%APPDATA%\foxsdr\config.json`) sha256 before: c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3; after: c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3 (every test and tool ran in a scratch profile; the live restart check used the harness's redirected profile).
 
 ## SCREEN HAND-OFF (no `.slint`, no catalogue, no drive script and no ledger row was touched)
 
