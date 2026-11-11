@@ -1423,7 +1423,7 @@ void testTicketBooksUnderMerging() {
     std::map<uint64_t, int> results;
     std::set<uint64_t> issued, unread;
     uint64_t maxTicket = 0, lastResult = 0;
-    int badNoChange = 0, unknown = 0, nonIncreasing = 0, merged = 0, outOfOrder = 0;
+    int badNoChange = 0, unknown = 0, nonIncreasing = 0, merged = 0, outOfOrder = 0, busy = 0;
     std::atomic<bool> stopStalls{false};
     std::thread staller([&] {
         std::mt19937 r2(7);
@@ -1446,7 +1446,22 @@ void testTicketBooksUnderMerging() {
             unread.erase(rr[i].ticket);
         }
     };
-    for (int iter = 0; iter < 3000; ++iter) {
+    // HOW LONG THE PROBE RUNS IS DECIDED BY WHAT IT HAS COVERED, NOT BY A COUNT OF LOOPS. The session may have only FOXAPI_MAX_PENDING (256) ordinary commands
+    // outstanding, and the staller holds the control thread for tens of milliseconds at a time, so an ordinary command sent while the pass is held is answered
+    // BUSY - correctly - and gets no ticket. How many NEW tickets 3000 loops earn is therefore a figure about how fast the control thread drains against how
+    // fast this thread submits: 1,700 on a quiet machine, 800 on a loaded one (the old guard "more than 1000" failed one run in two on a loaded machine and
+    // every run on a very loaded one, with nothing wrong in the engine). The guard below is a COVERAGE guard (the probe exercised the books on enough
+    // tickets), so the probe now runs at least 3000 loops and then goes on until it has issued kWantedTickets new tickets - or fails if the engine has not
+    // drained that many in kMaxProbeSeconds. The assertions about the books (nothing missing, doubled, unknown, out of order) are unchanged.
+    constexpr std::size_t kWantedTickets = 1500;
+    constexpr int kMaxProbeSeconds = 120;
+    const auto probeStart = std::chrono::steady_clock::now();
+    int iter = 0;
+    for (;; ++iter) {
+        if (iter >= 3000 && (issued.size() >= kWantedTickets ||
+                             std::chrono::steady_clock::now() - probeStart > std::chrono::seconds(kMaxProbeSeconds))) {
+            break;
+        }
         a.beat();
         const int nb = 1 + static_cast<int>(rng() % 6);
         std::vector<FoxCommand> v;
@@ -1475,10 +1490,13 @@ void testTicketBooksUnderMerging() {
             } else if (r.status == FOXAPI_NO_CHANGE) {
                 ++merged;
                 badNoChange += unread.count(r.ticket) == 0 ? 1 : 0;
+            } else if (r.status == FOXAPI_BUSY) {
+                ++busy;   // the pending cap, while the pass is held
             }
         }
         if (rng() % 3 == 0) readSome(1 + static_cast<uint32_t>(rng() % 64));
         if (rng() % 50 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        if (busy > 0 && iter % 8 == 0) std::this_thread::yield();   // a pass held for a stall is waited out, not hammered
     }
     stopStalls.store(true);
     staller.join();
@@ -1494,9 +1512,9 @@ void testTicketBooksUnderMerging() {
         missing += n == 0 ? 1 : 0;
         dup += n > 1 ? 1 : 0;
     }
-    std::printf("ticket books: %zu new tickets, %d merged; missing %d, duplicated %d, unknown %d, out of order %d, "
+    std::printf("ticket books: %zu new tickets, %d merged, %d refused BUSY at the pending cap, %d loops; missing %d, duplicated %d, unknown %d, out of order %d, "
                 "NO_CHANGE naming a read ticket %d, non-increasing new tickets %d\n",
-                issued.size(), merged, missing, dup, unknown, outOfOrder, badNoChange, nonIncreasing);
+                issued.size(), merged, busy, iter, missing, dup, unknown, outOfOrder, badNoChange, nonIncreasing);
     CHECK(issued.size() > 1000);
     CHECK(merged > 1000);  // the probe did merge, a lot
     CHECK_EQ(missing, 0);
