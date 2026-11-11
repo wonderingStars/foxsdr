@@ -284,6 +284,51 @@ int main() {
         d.tick(1, say);
         CHECK((rt.calls == std::vector<std::string>{"radio range 2 88000000 108000000", "radio range 1 0 0"}) && d.allRun());
     }
+    // THE `drag` VERB AND `radio addsrc` (screen stage S6): a pointer drag from a control's centre by an offset right and down; a radio added by source id
+    {
+        const Script s = parseInputScript("1 drag \"Resize Radio 2\" 0 -40\ndrag \"x\" 10 5\ndrag \"x\" 0 0\ndrag \"x\" 9000 1\ndrag \"x\" a b\ndrag x 1 1\ndrag \"x\" 1\nradio addsrc 2 file:C:/iq/a.wav\nradio addsrc 0 \"file:C:/iq/a b.wav\"\nradio addsrc 3\nradio addsrc 9 generator\nradio addsrc 2 open-rtltcp:127.0.0.1:1234\n\n");
+        CHECK(s.steps.size() == 5);
+        CHECK(s.errors.size() == 7);
+        if (s.steps.size() == 5) {
+            CHECK(s.steps[0].verb == Verb::Drag && s.steps[0].label == "Resize Radio 2" && s.steps[0].number == 0 && s.steps[0].number2 == -40);
+            CHECK(s.steps[1].verb == Verb::Drag && s.steps[1].number == 10 && s.steps[1].number2 == 5);
+            CHECK(s.steps[2].verb == Verb::Radio && s.steps[2].label == "addsrc" && s.steps[2].radioNo == 2 && s.steps[2].text == "file:C:/iq/a.wav");
+            CHECK(s.steps[3].radioNo == 0 && s.steps[3].text == "file:C:/iq/a b.wav");
+            CHECK(s.steps[4].text == "open-rtltcp:127.0.0.1:1234");
+        }
+        struct DragTarget : FakeTarget {
+            std::string drag(const std::string& label, double dx, double dy) override { calls.push_back("drag " + label + " " + std::to_string(static_cast<int>(dx)) + " " + std::to_string(static_cast<int>(dy))); return std::string(); }
+            std::string radioSource(int n, const std::string& source) override { calls.push_back("addsrc " + std::to_string(n) + " " + source); return std::string(); }
+        };
+        const Script ok = parseInputScript("1 drag \"Resize Radio 2\" 0 -40\nradio addsrc 2 file:x.wav\n\n");
+        DragTarget dt;
+        Driver d(ok, dt);
+        said.clear();
+        d.tick(1, say);
+        CHECK((dt.calls == std::vector<std::string>{"drag Resize Radio 2 0 -40", "addsrc 2 file:x.wav"}) && d.allRun());
+        FakeTarget plain;   // the older interface: cannot drag, cannot add by source
+        Driver d2(ok, plain);
+        said.clear();
+        d2.tick(1, say);
+        CHECK(d2.report().failed == 2 && anySaid("cannot drag") && anySaid("by source"));
+    }
+    // `radio tune|mode|bw <n> <value>` (screen stage S6): the ordinary op aimed at a radio the script added, for a radio's setup (a fixture's centre, mode and passband)
+    {
+        const Script s = parseInputScript("1 radio tune 2 153350000\nradio mode 2 1\nradio bw 2 12500\nradio tune 0 1\nradio mode 2 9\nradio tune 2 x\nradio bw 2\nradio tune 2 1 2\n\n");
+        CHECK(s.steps.size() == 3 && s.errors.size() == 5);
+        if (s.steps.size() == 3) {
+            CHECK(s.steps[0].label == "tune" && s.steps[0].radioNo == 2 && s.steps[0].number == 153350000);
+            CHECK(s.steps[1].label == "mode" && s.steps[1].number == 1 && s.steps[2].label == "bw" && s.steps[2].number == 12500);
+        }
+        struct TuneTarget : FakeTarget {
+            std::string radio(const std::string& what, int n, double v, double) override { calls.push_back("radio " + what + " " + std::to_string(n) + " " + std::to_string(static_cast<long long>(v))); return std::string(); }
+        };
+        TuneTarget tt;
+        Driver d(s, tt);
+        said.clear();
+        d.tick(1, say);
+        CHECK((tt.calls == std::vector<std::string>{"radio tune 2 153350000", "radio mode 2 1", "radio bw 2 12500"}) && d.allRun());
+    }
     // THE `radio` VERB (docs/multi-radio-records/screen-s4.md): add [<n> [<toneHz>]] and remove <n>; the target is asked with the verb, the radio's number and the tone; a target that cannot
     // do it (a fake of the older interface) says so and the step fails; remove needs a number from 2; add takes a number 0..8 and a tone; anything else is a line of its own in the errors
     {

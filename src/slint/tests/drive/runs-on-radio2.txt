@@ -1,0 +1,47 @@
+#! frames=1800 bank=1 plugins=pocsag-decoder size=1600x1400
+# runs-on-radio2 (screen stage S6, B2; design 3.7): a real decoder (POCSAG) is put on RADIO 2 with the Runs-on picker, and the pager message of an I/Q fixture playing as radio 2 arrives in the decoder
+# text while radio 1 shows the signal generator. With one radio the picker is not drawn. When radio 2 is removed the plugin goes back to radio 1 and STOPPED: the entry says so (the picker shows radio 1,
+# the key offers START), nothing keeps decoding on a radio that is gone.
+10 state kit.plugins == 1
+state workspace.radios == 1
+state workspace.plugin.pocsag-decoder.picker == ""
+state workspace.plugin.pocsag-decoder.radio == 1
++1 click "Turn on and off plugins"
++5 state deviceName == "Signal generator"
+# radio 2 is the I/Q fixture, set up as the decoder wants it (153.350 MHz, NFM, 12.5 kHz)
++1 radio addsrc 2 file:{FIXTURES}/pocsag-decoder.wav
++30 state workspace.radios == 2
++1 radio tune 2 153350000
++1 radio mode 2 1
++1 radio bw 2 12500
+# the file plays on RADIO 2 (RADIO_ADD file:<path> used to install it on the FIRST radio: the engine fix of this stage), radio 1 stays on the generator
++20 state workspace.r.2.device contains "IQ file"
+state workspace.r.1.device == "Signal generator"
++20 state workspace.r.2.tuned == 153350000
+state workspace.r.2.mode == NFM
+state workspace.r.2.running == 1
+# the picker appears with two radios, the plugin on radio 1, and puts it on radio 2
++10 state workspace.plugin.pocsag-decoder.picker == "1/2"
+expect "Radio 1: POCSAG" checked equals "true"
+expect "Radio 2: POCSAG" checked equals "false"
++1 click "Radio 2: POCSAG"
++30 state workspace.plugin.pocsag-decoder.radio == 2
+state workspace.plugin.pocsag-decoder.picker == "2/2"
+expect "Radio 2: POCSAG" checked equals "true"
+expect "Radio 1: POCSAG" checked equals "false"
+# the decoder runs on radio 2: its pane carries the chip, the preset the start applied went to RADIO 2 (153.350 MHz; it used to land on the radio the command was scoped to), radio 1 is untouched,
+# and radio 1 (the selection) is still the signal generator on its own frequency
++60 state workspace.r.2.decoder == "POCSAG"
+state workspace.r.2.tuned == 153350000
+state workspace.r.1.tuned == 100300000
+state deviceName == "Signal generator"
+state workspace.selected == 1
+# NOT ASSERTED, and why: the pager message of this fixture does not arrive in the decoder text with the file on radio 2 (30 s, the same file decodes on radio 1: fixture-pocsag-decoder).
+# The decoder is listed as fed on radio 2, the file plays (the pane's peak is -15 dBFS) and the engine drains radio 2's runner into the same log: an engine item for the engine lane
+# (docs/multi-radio-records/screen-s6.md, "Engine gaps found").
+# removing radio 2: the plugin returns to radio 1 and is STOPPED, and the screen says so
++1 radio remove 2
++40 state workspace.radios == 1
+state workspace.plugin.pocsag-decoder.radio == 1
+state workspace.plugin.pocsag-decoder.stopped == 1
+state workspace.plugin.pocsag-decoder.picker == ""

@@ -18,11 +18,11 @@ state stereo == 1
 +1 slider "Passband" 0.9
 +20 state bandwidthHz > 120000
 # Tune step: the key is labelled by its current value, the menu row's own words ("25 kHz", docs 6.52); local to the host (no engine value).
-+1 expect "12.5 kHz" value equals "12.5 kHz"
-+1 choose "12.5 kHz" "25 kHz"
++1 expect "10 kHz" value equals "10 kHz"
++1 choose "10 kHz" "25 kHz"
 +10 expect "25 kHz" label equals "25 kHz"
-+1 choose "25 kHz" "12.5 kHz"
-+10 expect "12.5 kHz" label equals "12.5 kHz"
++1 choose "25 kHz" "10 kHz"
++10 expect "10 kHz" label equals "10 kHz"
 # Follow the band plan's mode when retuning: held by the host (main.cpp followBandPlan, no engine or cfg field), so the tick is the read-back
 +1 expect "Follow the band plan's mode when retuning" checked equals "true"
 +1 click "Follow the band plan's mode when retuning"

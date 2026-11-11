@@ -242,7 +242,7 @@ Script parseInputScript(const std::string& text) {
         } else if (verb == "radio") {
             st.verb = Verb::Radio;
             st.label = c.word();
-            if (st.label != "add" && st.label != "remove" && st.label != "range") { bad("radio takes add, remove or range, not \"" + st.label + "\""); continue; }
+            if (st.label != "add" && st.label != "addsrc" && st.label != "remove" && st.label != "range" && st.label != "tune" && st.label != "mode" && st.label != "bw") { bad("radio takes add, addsrc, remove, range, tune, mode or bw, not \"" + st.label + "\""); continue; }
             double v = 0;
             std::string num = c.word();
             if (!num.empty()) {
@@ -250,7 +250,15 @@ Script parseInputScript(const std::string& text) {
                 st.radioNo = static_cast<int>(v);
             }
             if (st.label == "remove" && st.radioNo < 2) { bad("radio remove takes the number of a radio from 2 to 8"); continue; }
-            if (st.label == "range") {
+            if (st.label == "addsrc") {
+                if (!c.wordOrQuoted(st.text)) { bad("radio addsrc takes the source id last (generator, file:<path>, open-rtltcp:<address>, open-pluto:<address>, soundcard:, <kind>:<args>)"); continue; }
+            } else if (st.label == "tune" || st.label == "mode" || st.label == "bw") {   // `radio tune <n> <hz>`, `radio mode <n> <FOXAPI_DEMOD_*>`, `radio bw <n> <hz>`: setup of a radio the script added (the op aimed at it)
+                if (st.radioNo < 1) { bad("radio " + st.label + " takes the number of a radio from 1 to 8"); continue; }
+                double val = 0;
+                const std::string a = c.word();
+                if (!isNumber(a, val) || val < 0.0 || val > 1.0e12 || (st.label == "mode" && (val < 1.0 || val > 8.0 || val != std::floor(val)))) { bad("radio " + st.label + " takes " + (st.label == "mode" ? "a mode 1..8 (FOXAPI_DEMOD_*)" : "a frequency in Hz") + ": \"" + a + "\""); continue; }
+                st.number = val;
+            } else if (st.label == "range") {
                 if (st.radioNo < 1) { bad("radio range takes the number of a radio from 1 to 8"); continue; }
                 double lo = 0, hi = 0;
                 const std::string a = c.word(), b = c.word();
@@ -349,8 +357,8 @@ void Driver::tick(long tick, const std::function<void(const std::string&)>& say)
             case Verb::Shot: head += " \"" + st.label + "\""; why = target_.shot(st.label); break;
             case Verb::Dump: why = target_.dumpControls(); break;
             case Verb::Radio:
-                head += " " + st.label + " " + std::to_string(st.radioNo);
-                why = target_.radio(st.label, st.radioNo, st.number, st.number2);
+                head += " " + st.label + " " + std::to_string(st.radioNo) + (st.label == "addsrc" ? " " + st.text : std::string());
+                why = st.label == "addsrc" ? target_.radioSource(st.radioNo, st.text) : target_.radio(st.label, st.radioNo, st.number, st.number2);
                 break;
         }
         if (why.empty()) {

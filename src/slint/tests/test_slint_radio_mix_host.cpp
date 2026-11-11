@@ -194,5 +194,41 @@ int main() {
         CHECK(removeExplain(stateWith(FOXAPI_RX_RUNNING | FOXAPI_RX_RECORDING_IQ)).find("recording") != std::string::npos);
     }
 
+
+    // ---- SCREEN STAGE S6, B3: the source kinds the engine accepts, and the sentences the pane shows ----
+    {
+        const auto kinds = addKindChoices();
+        CHECK(kinds.size() == 4);
+        if (kinds.size() == 4) {
+            CHECK(kinds[0].entry && kinds[0].prefix == "file:" && kinds[0].caption == "I/Q file" && !kinds[0].placeholder.empty());
+            CHECK(kinds[1].entry && kinds[1].prefix == "open-rtltcp:" && kinds[1].caption == "rtl_tcp");
+            CHECK(kinds[2].entry && kinds[2].prefix == "open-pluto:");
+            CHECK(!kinds[3].entry && kinds[3].id == "soundcard:" && kinds[3].caption == "Sound card");   // refused by the engine with its own sentence: offered, not hidden
+            CHECK(kinds[0].accessible == "Add I/Q file" && kinds[3].accessible == "Add Sound card");
+        }
+        const std::vector<DeviceRow> rows = {{0, "Signal generator", ""}, {3, "RTL-SDR #0", "rtlsdr:0"}};
+        const auto all = addAllChoices(rows, {});
+        CHECK(all.size() == 2 + 4 && all[0].id == "generator" && all[1].id == "rtlsdr:0" && all[2].prefix == "file:");
+        CHECK(addAllChoices(rows, {"rtlsdr|0"}).size() == 1 + 4);   // the held device goes, the kinds stay
+        CHECK(addAllChoices({}, {}).size() == 4);
+        // what is typed becomes RADIO_ADD's text; nothing typed sends nothing
+        CHECK(addIdFor(all[2], "C:/iq/test.wav") == "file:C:/iq/test.wav");
+        CHECK(addIdFor(all[2], "  \"C:/iq/a b.wav\"  ") == "file:C:/iq/a b.wav");   // a pasted path in quotes
+        CHECK(addIdFor(all[2], "").empty() && addIdFor(all[2], "   ").empty());
+        CHECK(addIdFor(all[3], "192.168.1.5:1234") == "open-rtltcp:192.168.1.5:1234");
+        CHECK(addIdFor(all[4], "ip:pluto.local") == "open-pluto:ip:pluto.local");
+        CHECK(addIdFor(all[5], "ignored") == "soundcard:" && addIdFor(all[0], "x") == "generator" && addIdFor(all[1], "x") == "rtlsdr:0");
+        // THE SOLO READ-BACK (B4): the engine's fact, only for a radio that is open
+        CHECK(soloFromFact("3", 0x7u) == 3 && soloFromFact("1", 0x1u) == 1 && soloFromFact("0", 0xFFu) == 0 && soloFromFact("", 0xFFu) == 0);
+        CHECK(soloFromFact("3", 0x3u) == 0 && soloFromFact("9", 0xFFu) == 0 && soloFromFact("x", 0xFFu) == 0 && soloFromFact("-2", 0xFFu) == 0 && soloFromFact("8", 0x80u) == 8);
+        // the pane's notice: the radio's own refusal first, else its line of fact.radio.restore (without the "Radio n: " the pane already names)
+        const std::string restore = "Radio 2: RTL-SDR did not open: busy\nRadio 4: Airspy is not plugged in";
+        CHECK(paneNotice("in use by Radio 1", restore, 2) == "in use by Radio 1");
+        CHECK(paneNotice("", restore, 2) == "RTL-SDR did not open: busy");
+        CHECK(paneNotice("", restore, 4) == "Airspy is not plugged in");
+        CHECK(paneNotice("", restore, 3).empty() && paneNotice("", "", 2).empty());
+        CHECK(paneNotice("", "Radio 22: not this one", 2).empty());
+    }
+
     return testSummary("test_slint_radio_mix_host");
 }

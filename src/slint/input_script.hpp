@@ -107,6 +107,8 @@ public:
     virtual std::string shot(const std::string& file) = 0;
     virtual std::string dumpControls() = 0;   // the `dump` verb (named apart from nlohmann's dump() for tests/test_json_dump_policy)
     // The `radio` verb (a bounded run's test seam): what is "add", "remove" or "range", n the radio's number (0 = the lowest free), toneHz a generator radio's tone (0 = the engine's default) or, for a range, its low end, hz2 its high end.
+    // `radio addsrc <n> <id>`: RADIO_ADD with a source id as the engine takes it ("generator", "file:<path>", "open-rtltcp:<address>", "open-pluto:<address>", "soundcard:", "<kind>:<args>"); n 0 = the lowest free.
+    virtual std::string radioSource(int n, const std::string& source) { (void)n; (void)source; return "this target cannot add radios by source"; }
     virtual std::string radio(const std::string& what, int n, double toneHz, double hz2 = 0) { (void)what; (void)n; (void)toneHz; (void)hz2; return "this target cannot add or remove radios"; }
 };
 

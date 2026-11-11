@@ -1,4 +1,4 @@
-#! frames=2000 size=1600x900 bank=4 sections=4:0
+#! frames=2000 size=1600x900 bank=4 sections=4:0 FOXSDR_SLINT_TUNE_STEP=12500
 # link-skins: THE LINK KEYS IN BOTH SKINS (screen stage S5; docs/multi-radio-records/screen-s5.md): three LIVE radios in 2 x 2, Link tuning on, radio 3 taken out of the group (the plain key), radio 2 given a tuning range
 # of 99.900 to 100.100 MHz and pushed past it by nine steps of radio 1 (the key that could not follow: the danger ink with an amber dot), Workbench then Night Watch. Shot to PNG for looking at.
 10 state workspace.radios == 1

@@ -45,6 +45,22 @@ VIEWS = {
     'presets':  'bank=0 view=patch open=patch-presets',
 }
 
+# THE MULTI-RADIO VIEWS (screen stage S6): the screen with SEVERAL LIVE RADIOS (generator radios opened through the engine's real RADIO_ADD), at the two small sizes, in both skins. Each name is
+# r4-<kind>-<skin>-<size>: kind panes = four radios in 2 x 2 (the bar, the pane headers, the strip's additions, the Audio mix, the status chips); decode = the DECODE bank's plugin drawer with two radios (the Runs-on
+# picker); card = the Add-a-radio sheet with the engine's sentence for the sound card on it and a pane that carries a device notice (an rtl_tcp server nobody runs). The skin is the settings seed (fixtures/skin-*.json:
+# uiTheme today = Workbench, night = Night Watch); the size is the window's (header size=).
+SEEDS = {'workbench': 'skin-workbench.json', 'night': 'skin-night.json'}
+SIZES = {'1280': '1280x720', '800': '800x560'}
+RADIO_BODIES = {
+    'panes': ('bank=0', ['+1 radio add 2 60000', '+1 radio add 3 90000', '+1 radio add 4 120000', '+30 state workspace.radios == 4', '+1 click "2 x 2"', '+20 state workspace.layout == 2']),
+    'decode': ('bank=1 plugins=pocsag-decoder,adsb-decoder', ['+1 radio add 2 60000', '+1 radio add 3 90000', '+30 state workspace.radios == 3', '+1 click "Turn on and off plugins"', '+20 state workspace.radios == 3']),
+    'card': ('bank=0', ['+1 radio add 2 60000', '+1 radio add 3 90000', '+30 state workspace.radios == 3', '+1 click "Add a radio"', '+10 state workspace.open == 1', '+1 click "Add Sound card"', '+20 state workspace.radios == 3']),
+}
+for _kind in RADIO_BODIES:
+    for _skin in SEEDS:
+        for _size in SIZES:
+            VIEWS['r4-%s-%s-%s' % (_kind, _skin, _size)] = None   # filled by view_header / view_body below
+
 # one report: the probe window's Texts carry their room in an accessible-description, main.cpp (FOXSDR_SLINT_PROBE) reads them through the testing API at the end of the run and prints them
 # between two marker lines, then CLIPPROBE-WINDOW <w> <h>; a report ends at its END marker because the text of a Text may itself hold a newline
 LINE = re.compile(r'CLIPPROBE \|~\| (.*?) \|~\|END', re.DOTALL)

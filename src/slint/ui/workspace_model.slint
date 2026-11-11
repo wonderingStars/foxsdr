@@ -47,6 +47,8 @@ export struct MixRow {
 export struct AddChoice {
     caption: string,                 // what the key says
     accessible: string,              // "Add Signal generator"
+    entry: bool,                     // a source that needs something typed (an I/Q file, an rtl_tcp or Pluto address): a field and an Add key instead of one key
+    placeholder: string,
 }
 
 export global WorkspaceModel {
@@ -128,6 +130,7 @@ export global WorkspaceModel {
     callback mute-clicked(int);
     callback solo-clicked(int);
     callback volume-changed(int, float);
+    callback add-entered(int, int, string);          // the pane's number, the choice, the text typed for it (an entry choice)
     callback add-chosen(int, int);                   // the pane's number (0 = the lowest free slot), the choice
     callback add-rescan-clicked();
     callback add-open-requested();

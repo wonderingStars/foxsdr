@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "key_dispatch.hpp"
 #include "system_logic.hpp"
+#include "host_logic.hpp"
 #include "test_check.hpp"
 
 #include <cstdio>
@@ -276,6 +277,12 @@ void radioKeys() {
         const KeyBindingsModel cm = readKeyBindings(clash, o);
         std::string muteClash, tuneClash, radio1Clash;
         for (const KeyGroup& g : cm.groups) { for (const KeyRow& r : g.rows) { if (r.id == "mute") { muteClash = r.clash; } if (r.id == "tuneStepUp") { tuneClash = r.clash; } if (r.id == "selectRadio1") { radio1Clash = r.clash; } } }
+        // THE KEY SAYS 10 kHz AND DOES 10 kHz (screen stage S6, B5): the Slint window started at 12.5 kHz while the row said 10; the host's start value is held to the row's words
+        {
+            std::string tuneAction;
+            for (const KeyGroup& g : cm.groups) { for (const KeyRow& r : g.rows) { if (r.id == "tuneStepUp") { tuneAction = r.action; } } }
+            CHECK(tuneAction.find(std::to_string(static_cast<int>(foxsdr::slinthost::kDefaultTuneStepHz / 1000.0)) + " kHz") != std::string::npos);
+        }
         CHECK(muteClash == "also Tune up one step (10 kHz)" && tuneClash == "also Mute the sound" && radio1Clash == "also Select Radio 2" && cm.clash_count == 4);
     }
     }

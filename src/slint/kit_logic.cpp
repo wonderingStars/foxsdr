@@ -165,6 +165,13 @@ void readKitLists(TableReader& t, KitLists& c, const ReadOptions& o) {
             break;
         }
     }
+    // WHERE EACH DECODER RUNS (fact.plugin.<file>.radio): a plugin that has not been placed is on radio 1
+    for (PluginRow& r : c.rows) {
+        if (!r.loaded || !r.decoder || r.file.empty()) { continue; }
+        const std::string v = factOf(t, "fact.plugin." + r.file + ".radio");
+        const int n = v.empty() ? 1 : std::atoi(v.c_str());
+        r.radio = n >= 1 && n <= 8 ? n : 1;
+    }
     // PRESETS (the plugin's own, by its name), then USER_PRESETS (the operator's, by the user key)
     const std::int32_t presets = size(FOXAPI_LIST_PRESETS);
     for (std::int32_t i = 0; i < presets; ++i) {
@@ -262,6 +269,16 @@ void readKitLists(TableReader& t, KitLists& c, const ReadOptions& o) {
     c.lastDenied = factOf(t, "fact.plugin.lastDenied");
     c.pluginDir = factOf(t, "fact.plugin.dir");
     c.txArmed = factOf(t, "fact.tx.plugin.armed") == "1";
+}
+
+RunsOnModel runsOnFor(const PluginRow& row, std::uint32_t openMask) {
+    RunsOnModel m;
+    int open = 0;
+    for (int n = 1; n <= 8; ++n) { if (((openMask >> (n - 1)) & 1u) != 0u) { ++open; } }
+    if (open < 2 || !row.loaded || !row.decoder || (row.caps & CASCADE_CAP_TX_AUDIO) != 0u) { return m; }
+    m.current = row.radio >= 1 && row.radio <= 8 && ((openMask >> (row.radio - 1)) & 1u) != 0u ? row.radio : 1;
+    for (int n = 1; n <= 8; ++n) { if (((openMask >> (n - 1)) & 1u) != 0u) { m.keys.push_back({n, n == m.current}); } }
+    return m;
 }
 
 const PluginRow* rowByName(const std::vector<PluginRow>& rows, const std::string& displayName) {

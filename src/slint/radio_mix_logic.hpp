@@ -70,6 +70,9 @@ struct StripWords {
 };
 StripWords stripWords(int selectedRadio, bool selectedRunning, bool anyRunning);
 
+// The radio heard alone, from the engine's fact.radio.solo ("0" = nobody): 1..8 when that radio is open (mask bit n-1), else 0. The Audio mix shows this, never a copy of its own (screen stage S6, B4).
+int soloFromFact(const std::string& fact, std::uint32_t openMask);
+
 // ---- the audio mix rows ----
 struct MixRowData {
     int radio = 0;
@@ -97,6 +100,11 @@ struct RadioChipData {
 };
 RadioChipData radioChip(int radio, const RadioFacts& f, const FoxReceiverState& st, bool haveState);
 
+// ---- what a pane says about its radio's device (screen stage S6, B3) ----
+// The engine's reason a radio sits on the generator: fact.radio.<n>.refusal ("RTL-SDR did not open: ..."), else the line of fact.radio.restore that starts "Radio <n>: " (a saved radio whose
+// device was missing at start; the pane names the radio, so the prefix is cut). "" when there is none.
+std::string paneNotice(const std::string& refusal, const std::string& restore, int radio);
+
 // ---- the Add-a-radio card ----
 // One row of the engine's device list, as the card needs it.
 struct DeviceRow {
@@ -108,10 +116,22 @@ struct DeviceChoice {
     std::string caption;        // what the key says
     std::string accessible;     // "Add Signal generator"
     std::string id;             // RADIO_ADD's text: "generator" or "<kind>:<args>"
+    bool entry = false;         // a source that needs something typed first (a file, an address): the card draws a field and an Add key instead of one key
+    std::string placeholder;    // the field's hint
+    std::string prefix;         // RADIO_ADD's text is this prefix followed by the typed text
 };
 // The devices a second radio can open that no open radio already holds (`held` = the device keys of the open radios): the signal generator (each radio has its own), and the scanned radios.
 // NOT offered, and why: the I/Q file, the sound card, a Pluto and an rtl_tcp address - RADIO_ADD refuses them (UNSUPPORTED, engine stage 4: "a second radio opens a scanned device or the signal generator").
 std::vector<DeviceChoice> addChoices(const std::vector<DeviceRow>& rows, const std::vector<std::string>& held);
+// THE SOURCE KINDS THE ENGINE ACCEPTS BESIDES THE SCANNED DEVICES (engine RADIO_ADD, wave 3): an I/Q file ("file:<path>"), an rtl_tcp server ("open-rtltcp:<address>"), a Pluto
+// ("open-pluto:<address>"), and the sound card, which the engine REFUSES with a sentence of its own ("the sound card is the first radio's ..."): the row is offered anyway and the sentence is
+// shown, never hidden (screen stage S6, B3).
+std::vector<DeviceChoice> addKindChoices();
+// Every choice the card offers: the devices (addChoices), then the kinds above.
+std::vector<DeviceChoice> addAllChoices(const std::vector<DeviceRow>& rows, const std::vector<std::string>& held);
+// RADIO_ADD's text for a choice and what was typed: the prefix and the trimmed text, "" when the choice needs text and none was typed; a choice without a prefix is its own id.
+std::string addIdFor(const DeviceChoice& choice, const std::string& typed);
+
 // The key the engine's ledger would hold for a row ("" for the generator), spelled as fact.radio.<n>.device is.
 std::string deviceKeyOf(const DeviceRow& row);
 

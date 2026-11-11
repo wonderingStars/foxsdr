@@ -345,5 +345,43 @@ int main() {
         CHECK(countText(14, 14, 0) == "14 targets" && countText(1, 1, 0) == "1 target" && countText(3, 14, 2) == "3 of 14 targets, 2 heard without a position");
     }
 
+
+    // ---- SCREEN STAGE S6: where each decoder runs, and the Runs-on picker's model ----
+    {
+        StubTable t = sample();
+        t.facts["fact.plugin.aprs-decoder-1.0.2-abi3-win-x64.dll.radio"] = "3";
+        t.facts["fact.plugin.pocsag-decoder-1.0.5-abi3-win-x64.dll.radio"] = "9";   // out of range reads as radio 1
+        KitLists k;
+        readKitLists(t, k, ReadOptions{});
+        const PluginRow* aprs = rowByFile(k.rows, "aprs-decoder-1.0.2-abi3-win-x64.dll");
+        const PluginRow* pocsag = rowByFile(k.rows, "pocsag-decoder-1.0.5-abi3-win-x64.dll");
+        const PluginRow* apt = rowByFile(k.rows, "apt-decoder-1.0.0-abi3-win-x64.dll");
+        CHECK(aprs != nullptr && pocsag != nullptr && apt != nullptr);
+        if (aprs != nullptr && pocsag != nullptr && apt != nullptr) {
+            CHECK(aprs->radio == 3 && pocsag->radio == 1 && apt->radio == 1);   // placed on radio 3; out of range and unplaced are radio 1
+            // one radio open: no picker, whatever the plugin is
+            CHECK(!runsOnFor(*aprs, 0x1u).shown() && !runsOnFor(*aprs, 0u).shown());
+            // three radios open (1, 2, 4): one key each, the plugin's own lit; radio 3 is not open, so a plugin placed there reads as radio 1
+            RunsOnModel m = runsOnFor(*aprs, 0x1u | 0x2u | 0x8u);
+            CHECK(m.shown() && m.keys.size() == 3 && m.current == 1);
+            CHECK(m.keys[0].radio == 1 && m.keys[0].on && m.keys[1].radio == 2 && !m.keys[1].on && m.keys[2].radio == 4 && !m.keys[2].on);
+            m = runsOnFor(*aprs, 0x1u | 0x4u);   // radios 1 and 3 open: the plugin is on radio 3
+            CHECK(m.shown() && m.current == 3 && m.keys.size() == 2 && !m.keys[0].on && m.keys[1].on && m.keys[1].radio == 3);
+            // a plugin that transmits stays on radio 1: no picker (the engine would answer UNSUPPORTED)
+            PluginRow tx = *aprs;
+            tx.caps |= CASCADE_CAP_TX_AUDIO;
+            CHECK(!runsOnFor(tx, 0xFFu).shown());
+            // eight radios: eight keys
+            CHECK(runsOnFor(*aprs, 0xFFu).keys.size() == 8);
+            // a module that is not loaded, or is not a decoder, has none
+            PluginRow off = *aprs;
+            off.loaded = false;
+            CHECK(!runsOnFor(off, 0xFFu).shown());
+            PluginRow notDec = *aprs;
+            notDec.decoder = false;
+            CHECK(!runsOnFor(notDec, 0xFFu).shown());
+        }
+    }
+
     return testSummary("test_slint_host_kit");
 }

@@ -96,6 +96,17 @@ double modeStepHz(std::uint32_t demod) {
     }
 }
 
+// ---- the four lists a radio has of its own ----
+bool isPerRadioList(std::uint32_t list) {
+    return list == FOXAPI_LIST_GAINS || list == FOXAPI_LIST_ANTENNAS || list == FOXAPI_LIST_SAMPLE_RATES || list == FOXAPI_LIST_DECODERS;
+}
+
+std::int32_t readListFor(const FoxEngineApi* api, FoxSession* session, std::uint32_t radio, std::uint32_t list, std::uint32_t index, FoxListItem* out) {
+    if (api == nullptr) { return FOXAPI_BAD_ARGUMENT; }
+    if (radio >= 1u && isPerRadioList(list) && FOXAPI_HAS(api, read_radio_list)) { return api->read_radio_list(session, radio, list, index, out); }
+    return api->read_list(session, list, index, out);
+}
+
 // ---- readouts ----
 std::string fmtMHz(double hz) { return fmt("%.6f MHz", hz / 1e6); }
 std::string fmtRate(double hz) { return hz > 0.0 ? fmt("%.3f MS/s", hz / 1e6) : std::string("--"); }

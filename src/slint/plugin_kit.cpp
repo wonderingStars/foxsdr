@@ -8,6 +8,7 @@
 #include <ctime>
 #include <filesystem>
 
+#include "host_logic.hpp"
 #include "core/diag_log.hpp"
 #include "core/i18n.hpp"
 #include "core/image_write.hpp"
@@ -98,9 +99,13 @@ std::vector<std::string> BasemapClient::drainText() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
+namespace { std::uint32_t gListRadio = 0; }
+void LiveTable::setListRadio(std::uint32_t radio) { gListRadio = radio; }
+std::uint32_t LiveTable::listRadio() { return gListRadio; }
+
 std::int32_t LiveTable::readList(std::uint32_t list, std::uint32_t index, FoxListItem* out) {
     if (out != nullptr) { entry(*out); }
-    return api_->read_list(session_, list, index, out);
+    return foxsdr::slinthost::readListFor(api_, session_, gListRadio, list, index, out);
 }
 
 bool LiveTable::fact(const std::string& key, std::string& out) {
@@ -408,6 +413,7 @@ std::uint64_t PluginKit::submit(const cascade::core::cmd::QueuedCommand& q) {
 }
 
 void PluginKit::startStop(const std::string& file, bool stop) { submit(cascade::core::cmd::makeText(stop ? FOXAPI_OP_DECODER_STOP : FOXAPI_OP_DECODER_START, file)); }
+void PluginKit::setPluginRadio(const std::string& file, int radio, bool start) { submit(cascade::core::cmd::makeText(FOXAPI_OP_PLUGIN_RADIO, file, radio, start ? 1 : 0)); }
 void PluginKit::stopList(const std::vector<std::string>& files, bool endMute) {
     std::string keys;
     for (const std::string& f : files) { keys += (keys.empty() ? "" : "\n") + f; }

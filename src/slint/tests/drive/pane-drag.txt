@@ -1,0 +1,20 @@
+#! frames=500 size=1600x900
+# pane-drag (screen stage S6; row 4209): the splitter between a pane's spectrum and waterfall is DRAGGED with the pointer (the drag verb: press at the centre of "Resize Radio 2", four moves, release).
+# The spectrum's share of the body is read back (state workspace.split.<n>, percent): up makes it smaller, down larger, and it stops at 10 and 90 %. Radio 1's splitter is not moved by radio 2's.
+10 state workspace.radios == 1
++1 radio add 2 60000
++30 state workspace.radios == 2
++1 click "Side by side"
++15 state workspace.shown == 1
+state workspace.split.2 == 45
+state workspace.split.1 == 45
++1 drag "Resize Radio 2" 0 -40
++8 state workspace.split.2 < 45
+state workspace.split.1 == 45
++1 drag "Resize Radio 2" 0 4000
++8 state workspace.split.2 == 90
++1 drag "Resize Radio 2" 0 -4000
++8 state workspace.split.2 == 10
++1 drag "Resize Radio 1" 0 60
++8 state workspace.split.1 > 45
+state workspace.split.2 == 10

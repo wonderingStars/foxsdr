@@ -15,6 +15,7 @@
 // The layout and the page are the host's to decide (the keys only ask): the host sets `layout` and `page` back, so a refused or clamped choice never leaves the keys lying.
 import { Theme } from "theme.slint";
 import { Caption, SegGroup, SegKey, Key } from "keys.slint";
+import { Field, FieldKind } from "fields.slint";
 import { RadioPane, RadioPaneData } from "radio_pane.slint";
 import { SelectorKeys, StopKeys, MasterLamps } from "radio_strip.slint";
 import { WorkspaceModel, WorkspaceCell, StripRadio, MasterLamp, MixRow, AddChoice } from "workspace_model.slint";
@@ -197,6 +198,22 @@ export component WorkspaceBar inherits Rectangle {
     }
 }
 
+// One source of the card that needs something typed first (an I/Q file's path, an rtl_tcp or Pluto address): the field, and the Add key that sends what is in it.
+component AddEntryRow inherits VerticalLayout {
+    in property <string> caption;
+    in property <string> placeholder;
+    in property <string> accessible;
+    in property <string> add-label;
+    callback add(string);
+    property <string> typed;
+    spacing: 3px;
+    Field { label: root.caption; kind: FieldKind.text; value <=> root.typed; placeholder: root.placeholder; committed(t) => { root.typed = t; } }
+    HorizontalLayout {
+        alignment: start;
+        Key { label: root.add-label; accessible-label: root.accessible; small: true; min-w: 0px; clicked => { root.add(root.typed); } }
+    }
+}
+
 // THE CARD "ADD A RADIO" (RADIO_ADD): the devices not already held, one key each, and "Look for radios again". In an empty cell (`slot` is its 1-based number, the radio the engine is asked for) and in the sheet the
 // status bar's key opens (`slot` 0: the lowest free). A refusal is shown as the engine worded it, unchanged, under the keys.
 export component AddRadioCard inherits Rectangle {
@@ -234,9 +251,15 @@ export component AddRadioCard inherits Rectangle {
             list := VerticalLayout {
                 spacing: 4px;
                 alignment: start;
-                for c[i] in WorkspaceModel.add-choices : HorizontalLayout {
-                    alignment: start;
-                    Key { label: c.caption; accessible-label: c.accessible; small: true; min-w: 0px; clicked => { WorkspaceModel.add-chosen(root.slot, i); } }
+                for c[i] in WorkspaceModel.add-choices : VerticalLayout {
+                    if c.entry : AddEntryRow {
+                        caption: c.caption; placeholder: c.placeholder; accessible: c.accessible; add-label: @tr("Add");
+                        add(t) => { WorkspaceModel.add-entered(root.slot, i, t); }
+                    }
+                    if !c.entry : HorizontalLayout {
+                        alignment: start;
+                        Key { label: c.caption; accessible-label: c.accessible; small: true; min-w: 0px; clicked => { WorkspaceModel.add-chosen(root.slot, i); } }
+                    }
                 }
                 if WorkspaceModel.add-choices.length == 0 : Text { text: WorkspaceModel.add-none; font-size: Theme.font-small; color: Theme.muted; wrap: word-wrap; }   // (Theme.dim was 3.9 : 1 on the card in Night Watch: found by the contrast table of stage S5)
             }

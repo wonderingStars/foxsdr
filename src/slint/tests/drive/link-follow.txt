@@ -1,4 +1,4 @@
-#! frames=1500 size=1600x900
+#! frames=1500 size=1600x900 FOXSDR_SLINT_TUNE_STEP=12500
 # link-follow: LINK TUNING with three LIVE radios (screen stage S5; docs/multi-radio-records/screen-s5.md). Radio 1 is the engine's (100.300 MHz), radios 2 and 3 are GENERATOR radios opened through the
 # real RADIO_ADD (100.000 MHz each). Link is OFF by default: tuning radio 1 by one step (the tuneStepUp key, Ctrl+Up: 12.5 kHz in WFM, the engine's own raster) moves nobody. With "Link tuning" on, one step on radio 1 moves radios 2 and 3 by
 # the same step, so the gaps are kept; selecting radio 3 (Ctrl+3, the new chord) and tuning it one step down moves the others one step down. A radio taken out of the group by its pane's link key is not moved and
