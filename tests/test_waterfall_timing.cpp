@@ -425,7 +425,7 @@ void testDaylightSaving() {
     p.minLabelPx = 90.0;
     p.newestUtcMs = utcMs(2026, 3, 29, 20, 0, 0);
     t = ticksOf(p, uk, &I);
-    CHECK(I >= 10800000);
+    CHECK(I == 43200000);  // 6 h would be 5 h apart across the change (too close at 90 px): the one-hour margin moves the choice to 12 h
     for (std::size_t i = 1; i < t.size(); ++i) { CHECK((t[i].row - t[i - 1].row) * p.rowPx >= p.minLabelPx - 1e-9); }
     for (const Tick& k : t) { CHECK(detail::floorMod(k.utcMs + uk.offsetAt(k.utcMs / 1000) * 1000LL, I) == 0); }
     // the same hour-boundary behaviour in New York (US rule) across 2026-11-01
