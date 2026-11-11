@@ -282,3 +282,16 @@ foreach(src ${_foxsdr_slint_test_sources})
         message(STATUS "foxsdr-slint tests: ${name} has no specimens/${family}_specimen.slint yet - not registered")
     endif()
 endforeach()
+
+# SCREEN STAGE S0'S MEASURING HARNESS (docs/multi-radio-records/screen-s0.md): a real window with one to four RadioPanes fed new pictures every frame, printing the frame
+# times. A tool, not a test: no add_test, so no ctest label runs it (it needs a window and is timed, and it is run by hand on the hidden desktop).
+add_executable(measure_radio_panes measure_radio_panes.cpp "${CMAKE_CURRENT_SOURCE_DIR}/../host_logic.cpp")
+target_link_libraries(measure_radio_panes PRIVATE slint_render_harness slint_i18n)
+target_include_directories(measure_radio_panes PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/.." "${FOXSDR_REPO_ROOT}/src" "${FOXSDR_REPO_ROOT}/third_party/foxsdr_api")
+set_property(TARGET measure_radio_panes PROPERTY SLINT_EMBED_RESOURCES embed-files)
+slint_target_sources(measure_radio_panes "${FOXSDR_SLINT_UI_DIR}/specimens/radio_pane_s0.slint")
+foxsdr_slint_copy_dll(measure_radio_panes)
+if(MSVC)
+    target_compile_options(measure_radio_panes PRIVATE /utf-8)
+    target_compile_definitions(measure_radio_panes PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+endif()

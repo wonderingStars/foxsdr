@@ -1,0 +1,35 @@
+// Screen stage S0's measuring sheet (docs/multi-radio-records/screen-s0.md): one to four RadioPanes in the workspace area of a 1440 x 900 or 1600 x 900 window,
+// placed as the hand-over's 2 x 2 grid (6 px gaps, workspace right of the 56 px rail and the 252 px sections panel, under the 34 px title bar, the 92 px focus strip and
+// the 34 px toolbar). The host (tests/measure_radio_panes.cpp) feeds every pane a new trace picture and a new waterfall picture each frame. The chrome around the
+// workspace (title bar, strip, rail, panel, status bar) is NOT drawn: this sheet measures the panes, not the window.
+import { Theme } from "../theme.slint";
+import { RadioPane, RadioPaneData } from "../radio_pane.slint";
+import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker } from "../spectrum.slint";
+import { AgeTick } from "../waterfall.slint";
+export { Theme, RadioPaneData, AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, AgeTick }
+
+export component S0Window inherits Window {
+    background: Theme.bg;
+    in property <[RadioPaneData]> panes;
+    in property <length> ws-x: 308px;
+    in property <length> ws-y: 160px;
+    in property <length> pane-w: 563px;
+    in property <length> pane-h: 353px;
+
+    // THE FRAME CLOCK: animation-tick() changes with every frame the window draws and keeps the window drawing, so the host gets a call once per drawn frame, whatever the renderer
+    // (the software renderer has no rendering notifier). The host does its per-frame work in it; the next call comes after the frame that work was drawn in.
+    callback frame();
+    property <duration> clock: animation-tick();
+    changed clock => { root.frame(); }
+
+    for d[i] in root.panes : RadioPane {
+        x: root.ws-x + (Math.mod(i, 2) * (root.pane-w + 6px));
+        y: root.ws-y + (Math.floor(i / 2) * (root.pane-h + 6px));
+        width: root.pane-w;
+        height: root.pane-h;
+        data: d;
+        selected: i == 0;
+        ribbon-size: 2;
+        squelch-caption: "SQL"; volume-caption: "VOL"; rate-caption: "RATE"; bias-caption: "BIAS"; peak-caption: "PEAK";
+    }
+}
