@@ -590,7 +590,7 @@ int main() {
             // ...and the minute reads the same counter against the same mark.
             const std::size_t minuteFn = src.find("void Engine::closeAudioMinute(");
             CHECK(minuteFn != std::string::npos &&
-                  src.find("pluginScans_ != audioRescansAtLogStart_", minuteFn) != std::string::npos);
+                  src.find("pluginScans_ != rx().audioRescansAtLogStart_", minuteFn) != std::string::npos);
 
             // --- 9c. A USER'S STOP IS NOT THE MACHINE FALLING BEHIND (0.99.102) ----------------
             // The same day's feed: a Store install raised its buffer to 240 ms after
@@ -629,7 +629,7 @@ int main() {
             CHECK(stopEnd != std::string::npos);
             if (stopFn != std::string::npos && stopEnd != std::string::npos) {
                 const std::string body = src.substr(stopFn, stopEnd - stopFn);
-                CHECK(body.find("if (running) { ++receiverStops_; }") != std::string::npos);
+                CHECK(body.find("if (running) { ++rx().receiverStops_; }") != std::string::npos);
             }
         }
     }
@@ -849,11 +849,11 @@ int main() {
         const std::string body = (poll == std::string::npos || end == std::string::npos) ? std::string() : eng.substr(poll, end - poll);
         const std::string src =
             stripComments(readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "gui" / "app_window.cpp"));
-        const std::size_t minute = body.find("now - lastAudioLogSec_ >= 60.0");
+        const std::size_t minute = body.find("now - rx().lastAudioLogSec_ >= 60.0");
         const std::size_t close = body.find("closeAudioMinute(", minute);
         CHECK(minute != std::string::npos && close != std::string::npos);
         // ...inside that block, before the next statement of the poll (the 1 Hz probe).
-        CHECK(minute != std::string::npos && close < body.find("now - lastAudioProbeSec_ < 1.0"));
+        CHECK(minute != std::string::npos && close < body.find("now - rx().lastAudioProbeSec_ < 1.0"));
         // The card and the rail both ask for the sentence.
         std::size_t uses = 0;
         for (std::size_t at = 0; (at = src.find("audioLeadNotice()", at)) != std::string::npos; at += 10) {

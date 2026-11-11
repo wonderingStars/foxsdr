@@ -454,6 +454,12 @@ std::size_t AudioOut::writeStereo(const float* interleaved, std::size_t frames) 
     return ring_.write(interleaved, frames * 2) / 2;
 }
 
+void AudioOut::setRoute(int route) {
+    route_.store(route >= kRouteBoth && route <= kRouteNone ? route : kRouteBoth, std::memory_order_relaxed);
+}
+
+void AudioOut::setSilenced(bool silenced) { silenced_.store(silenced, std::memory_order_relaxed); }
+
 void AudioOut::setVolume(float v01) {
     // Negated comparison so NaN (which fails every ordering test) lands on
     // the silent side instead of poisoning every output sample.
@@ -523,6 +529,49 @@ std::size_t AudioOut::pullBlock(void* self, float* dst, std::size_t frames) {
     const std::size_t got = ao->ring_.read(dst, n);
     const float vol = ao->volume_.load(std::memory_order_relaxed);
     for (std::size_t i = 0; i < got; ++i) { dst[i] *= vol; }
+    // THE ROUTE AND THE SOLO SILENCE (setRoute / setSilenced): a gain per channel that moves toward its target one fixed step a frame, so a switch is
+    // a 10 ms ramp. The common case (both channels, not silenced, gains already at 1) takes the first branch and costs two compares.
+    {
+        const int route = ao->route_.load(std::memory_order_relaxed);
+        const bool silenced = ao->silenced_.load(std::memory_order_relaxed);
+        float targetL = 1.0f;
+        float targetR = 1.0f;
+        if (chan == 2) {
+            if (route == kRouteRight || route == kRouteNone) { targetL = 0.0f; }
+            if (route == kRouteLeft || route == kRouteNone) { targetR = 0.0f; }
+        } else if (route == kRouteNone) {
+            targetL = 0.0f;
+            targetR = 0.0f;
+        }
+        if (silenced) {
+            targetL = 0.0f;
+            targetR = 0.0f;
+        }
+        if (targetL != 1.0f || targetR != 1.0f || ao->routeGainL_ != 1.0f || ao->routeGainR_ != 1.0f) {
+            constexpr float kStep = 1.0f / static_cast<float>(kRouteRampFrames);
+            const auto toward = [kStep](float cur, float target) {
+                return cur < target ? std::min(target, cur + kStep) : std::max(target, cur - kStep);
+            };
+            float gl = ao->routeGainL_;
+            float gr = ao->routeGainR_;
+            if (chan == 2) {
+                for (std::size_t f = 0; f + 1 < got; f += 2) {
+                    gl = toward(gl, targetL);
+                    gr = toward(gr, targetR);
+                    dst[f] *= gl;
+                    dst[f + 1] *= gr;
+                }
+            } else {
+                for (std::size_t f = 0; f < got; ++f) {
+                    gl = toward(gl, targetL);
+                    dst[f] *= gl;
+                }
+                gr = gl;
+            }
+            ao->routeGainL_ = gl;
+            ao->routeGainR_ = gr;
+        }
+    }
     if (got < n) {
         // Starved: the device buffer beyond `got` is whatever the host left
         // there (often the previous period — an audible stutter-loop).

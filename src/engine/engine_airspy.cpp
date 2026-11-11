@@ -26,75 +26,75 @@ using AirspyMode = cascade::source::AirspySource::GainMode;
 // window's drawAirspyControls reads it once a frame to decide whether to
 // draw its own panel in place of the generic one.
 cascade::source::AirspySource* Engine::asAirspyDevice() const {
-    return cascade::gui::asAirspy(device_);
+    return cascade::gui::asAirspy(rx().device_);
 }
 
 void Engine::refreshDeviceGainMirrors() {
-    if (device_ == nullptr) { return; }
-    deviceGainRanges_ = device_->gains();
-    deviceGainNames_.clear();
-    deviceGainsDb_.clear();
-    for (const cascade::source::GainInfo& g : deviceGainRanges_) {
-        deviceGainNames_.push_back(g.name);
-        deviceGainsDb_.push_back(static_cast<float>(device_->gainDb(g.name)));
+    if (rx().device_ == nullptr) { return; }
+    rx().deviceGainRanges_ = rx().device_->gains();
+    rx().deviceGainNames_.clear();
+    rx().deviceGainsDb_.clear();
+    for (const cascade::source::GainInfo& g : rx().deviceGainRanges_) {
+        rx().deviceGainNames_.push_back(g.name);
+        rx().deviceGainsDb_.push_back(static_cast<float>(rx().device_->gainDb(g.name)));
     }
-    deviceAgc_ = device_->autoGain();
+    rx().deviceAgc_ = rx().device_->autoGain();
 }
 
 void Engine::airspyRememberOpen() {
-    if (cascade::source::AirspySource* a = cascade::gui::asAirspy(device_)) {
-        cascade::gui::airspyRemember(airspyMemory_, deviceArgs_, *a);
+    if (cascade::source::AirspySource* a = cascade::gui::asAirspy(rx().device_)) {
+        cascade::gui::airspyRemember(airspyMemory_, rx().deviceArgs_, *a);
     }
 }
 
 bool Engine::chooseAirspyDecimation(unsigned factor) {
-    cascade::source::AirspySource* a = cascade::gui::asAirspy(device_);
+    cascade::source::AirspySource* a = cascade::gui::asAirspy(rx().device_);
     if (a == nullptr) { return false; }
     if (!a->setDecimation(factor)) {
-        sourceError_ = a->lastError();
+        rx().sourceError_ = a->lastError();
         return false;
     }
     // A divider on what the radio delivers: the Rate combo lists DELIVERED
     // rates, so it is rebuilt, and the whole chain - spectrum span, channel,
     // a recording's rate, every decoder - follows the new rate exactly as it
     // follows a rate change.
-    deviceRatesHz_ = a->supportedSampleRatesHz();
-    deviceRateLabels_.clear();
-    for (const double r : deviceRatesHz_) { deviceRateLabels_.push_back(cascade::gui::airspyRateLabel(r)); }
+    rx().deviceRatesHz_ = a->supportedSampleRatesHz();
+    rx().deviceRateLabels_.clear();
+    for (const double r : rx().deviceRatesHz_) { rx().deviceRateLabels_.push_back(cascade::gui::airspyRateLabel(r)); }
     int best = 0;
-    for (int i = 1; i < static_cast<int>(deviceRatesHz_.size()); ++i) {
-        if (std::fabs(deviceRatesHz_[static_cast<std::size_t>(i)] - a->sampleRateHz()) <
-            std::fabs(deviceRatesHz_[static_cast<std::size_t>(best)] - a->sampleRateHz())) {
+    for (int i = 1; i < static_cast<int>(rx().deviceRatesHz_.size()); ++i) {
+        if (std::fabs(rx().deviceRatesHz_[static_cast<std::size_t>(i)] - a->sampleRateHz()) <
+            std::fabs(rx().deviceRatesHz_[static_cast<std::size_t>(best)] - a->sampleRateHz())) {
             best = i;
         }
     }
-    deviceRateIndex_ = best;
+    rx().deviceRateIndex_ = best;
     followInputRate();
     airspyRememberOpen();
     return true;
 }
 
 bool Engine::chooseAirspyGainMode(AirspyMode mode) {
-    cascade::source::AirspySource* a = cascade::gui::asAirspy(device_);
+    cascade::source::AirspySource* a = cascade::gui::asAirspy(rx().device_);
     if (a == nullptr) { return false; }
     const bool ok = a->setGainMode(mode);
     if (ok) {
         airspyRememberOpen();
     } else {
-        sourceError_ = a->lastError();
+        rx().sourceError_ = a->lastError();
     }
     refreshDeviceGainMirrors();
     return ok;
 }
 
 bool Engine::chooseAirspyAgc(bool lna, bool on) {
-    cascade::source::AirspySource* a = cascade::gui::asAirspy(device_);
+    cascade::source::AirspySource* a = cascade::gui::asAirspy(rx().device_);
     if (a == nullptr) { return false; }
     const bool ok = lna ? a->setLnaAgc(on) : a->setMixerAgc(on);
     if (ok) {
         airspyRememberOpen();
     } else {
-        sourceError_ = a->lastError();
+        rx().sourceError_ = a->lastError();
     }
     refreshDeviceGainMirrors();
     return ok;
@@ -103,17 +103,17 @@ bool Engine::chooseAirspyAgc(bool lna, bool on) {
 // ---- each radio's Auto gain switch and manual gain (0.99.73 / 0.99.75; master's AppWindow members, here because the radio is the engine's) ----
 
 bool Engine::changeAutoGain(bool want) {
-    if (device_ == nullptr || !deviceAgcSupported_) { return false; }
-    const bool wasAgc = deviceAgc_;
-    if (!device_->setAutoGain(want)) {
-        sourceError_ = device_->lastError();
+    if (rx().device_ == nullptr || !rx().deviceAgcSupported_) { return false; }
+    const bool wasAgc = rx().deviceAgc_;
+    if (!rx().device_->setAutoGain(want)) {
+        rx().sourceError_ = rx().device_->lastError();
         return false;  // the device did not change mode: the box stays where it was
     }
-    deviceAgc_ = want;
+    rx().deviceAgc_ = want;
     // An "off" is remembered as well as an "on": a radio set back to manual
     // gain stays on manual gain at its next open. The debounced save notices
     // through configsEqual (autoGainByRadio); this calls no save of its own.
-    rememberAutoGain(*device_, deviceArgs_, want);
+    rememberAutoGain(*rx().device_, rx().deviceArgs_, want);
     if (want == wasAgc) { return true; }  // nothing changed mode: nothing for the gains to follow
 
     // THE GAINS FOLLOW THE SWITCH (0.99.74, found live on the B200 by the verifier of the top
@@ -128,24 +128,24 @@ bool Engine::changeAutoGain(bool want) {
     //        radio opened already on automatic gain has only what the open read), a step the radio
     //        turns down is dropped without a word as the dial's own steps are, and then every stage
     //        is read back, so the mirror is what the radio really holds.
-    const bool airspy = cascade::gui::asAirspy(device_) != nullptr;
+    const bool airspy = cascade::gui::asAirspy(rx().device_) != nullptr;
     if (want) {
         manualGainsBeforeAgc_.clear();
-        for (std::size_t i = 0; i < deviceGainNames_.size() && i < deviceGainsDb_.size(); ++i) {
-            manualGainsBeforeAgc_.emplace_back(deviceGainNames_[i], deviceGainsDb_[i]);
+        for (std::size_t i = 0; i < rx().deviceGainNames_.size() && i < rx().deviceGainsDb_.size(); ++i) {
+            manualGainsBeforeAgc_.emplace_back(rx().deviceGainNames_[i], rx().deviceGainsDb_[i]);
         }
         refreshDeviceGainMirrors();
     } else {
         std::size_t restored = 0;
-        for (std::size_t i = 0; i < deviceGainNames_.size() && i < deviceGainsDb_.size(); ++i) {
-            float db = deviceGainsDb_[i];
+        for (std::size_t i = 0; i < rx().deviceGainNames_.size() && i < rx().deviceGainsDb_.size(); ++i) {
+            float db = rx().deviceGainsDb_[i];
             for (const auto& kept : manualGainsBeforeAgc_) {
-                if (kept.first == deviceGainNames_[i]) {
+                if (kept.first == rx().deviceGainNames_[i]) {
                     db = kept.second;
                     break;
                 }
             }
-            if (device_->setGainDb(deviceGainNames_[i], static_cast<double>(db))) { ++restored; }
+            if (rx().device_->setGainDb(rx().deviceGainNames_[i], static_cast<double>(db))) { ++restored; }
         }
         manualGainsBeforeAgc_.clear();
         refreshDeviceGainMirrors();
@@ -154,25 +154,25 @@ bool Engine::changeAutoGain(bool want) {
     // The box is what the radio ACCEPTED, as it has always been for every radio but an Airspy (whose
     // two AGC switches the readback above is the authority on): refreshDeviceGainMirrors re-read
     // autoGain(), which a driver need not keep in step.
-    if (!airspy) { deviceAgc_ = want; }
+    if (!airspy) { rx().deviceAgc_ = want; }
     return true;
 }
 
 void Engine::rememberManualGain(std::size_t stage) {
-    if (device_ == nullptr || stage >= deviceGainNames_.size()) { return; }
+    if (rx().device_ == nullptr || stage >= rx().deviceGainNames_.size()) { return; }
     // An Airspy's gains are part of its gain mode, remembered in airspyMemory_ by
     // airspyRememberOpen; a second record here would be a second witness that could disagree.
-    if (cascade::gui::asAirspy(device_) != nullptr) { return; }
+    if (cascade::gui::asAirspy(rx().device_) != nullptr) { return; }
     // A radio gaining itself reports ITS choice, not the user's: the user's numbers are the
     // ones kept from before the switch went on (manualGainsBeforeAgc_) and from the last
     // hand on a slider, which this memory already holds.
-    if (deviceAgc_) { return; }
-    const std::string& name = deviceGainNames_[stage];
+    if (rx().deviceAgc_) { return; }
+    const std::string& name = rx().deviceGainNames_[stage];
     // THE READBACK, not the request: the radio quantises, and the number to put back at the
     // next open is the one the radio actually held.
-    const double db = device_->gainDb(name);
+    const double db = rx().device_->gainDb(name);
     if (!std::isfinite(db)) { return; }
-    const std::string key = cascade::core::biasTeeRadioKey(device_->driverKey(), deviceArgs_);
+    const std::string key = cascade::core::biasTeeRadioKey(rx().device_->driverKey(), rx().deviceArgs_);
     auto it = manualGainMemory_.find(key);
     if (it == manualGainMemory_.end()) {
         // A new radio past the cap is not remembered (the bias tee's rule); one already in
@@ -199,15 +199,15 @@ void Engine::restoreManualGain(cascade::source::DeviceSource& dev, const std::st
     std::string restored;
     for (const auto& [stage, wantDb] : mem->second) {
         std::size_t i = 0;
-        while (i < deviceGainNames_.size() && deviceGainNames_[i] != stage) { ++i; }
-        if (i >= deviceGainNames_.size()) { continue; }  // the radio no longer has it
+        while (i < rx().deviceGainNames_.size() && rx().deviceGainNames_[i] != stage) { ++i; }
+        if (i >= rx().deviceGainNames_.size()) { continue; }  // the radio no longer has it
         double db = wantDb;
-        if (i < deviceGainRanges_.size() && deviceGainRanges_[i].maxDb > deviceGainRanges_[i].minDb) {
-            db = std::min(std::max(db, deviceGainRanges_[i].minDb), deviceGainRanges_[i].maxDb);
+        if (i < rx().deviceGainRanges_.size() && rx().deviceGainRanges_[i].maxDb > rx().deviceGainRanges_[i].minDb) {
+            db = std::min(std::max(db, rx().deviceGainRanges_[i].minDb), rx().deviceGainRanges_[i].maxDb);
         }
         if (!dev.setGainDb(stage, db)) { continue; }
         const double took = dev.gainDb(stage);
-        if (i < deviceGainsDb_.size()) { deviceGainsDb_[i] = static_cast<float>(took); }
+        if (i < rx().deviceGainsDb_.size()) { rx().deviceGainsDb_[i] = static_cast<float>(took); }
         char one[96];
         std::snprintf(one, sizeof one, "%s%s %.1f", restored.empty() ? "" : ", ", stage.c_str(), took);
         restored += one;

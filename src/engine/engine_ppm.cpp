@@ -20,7 +20,7 @@ namespace cascade::engine {
 
 namespace cc = cascade::core;
 
-std::string Engine::ppmRadioKeyNow() const { return cc::ppmRadioKey(sourceKind_, deviceArgs_); }
+std::string Engine::ppmRadioKeyNow() const { return cc::ppmRadioKey(rx().sourceKind_, rx().deviceArgs_); }
 
 double Engine::ppmForKey(const std::string& key) const {
     return cc::ppmFor(ppmCorrectionOn_, ppmValues_, key);
@@ -32,7 +32,7 @@ double Engine::ppmForPatchDevice(const std::string& deviceKey) const {
 }
 
 cc::PpmMethod Engine::ppmMethodNow() {
-    return cc::ppmMethodFor(sourceKind_, pipeline_.rawSource().hasFrequencyCorrection());
+    return cc::ppmMethodFor(rx().sourceKind_, rx().pipeline_.rawSource().hasFrequencyCorrection());
 }
 
 void Engine::applyPpmForSource() {
@@ -42,7 +42,7 @@ void Engine::applyPpmForSource() {
     // value: off is exactly the behaviour before this existed.
     ppmRadioApplied_ = 0.0;
     ppmError_.clear();
-    pipeline_.setSoftwarePpm(0.0);
+    rx().pipeline_.setSoftwarePpm(0.0);
     const std::optional<PpmPending> pending = ppmPending_;
     ppmPending_.reset();
     const std::string key = ppmRadioKeyNow();
@@ -53,21 +53,21 @@ void Engine::applyPpmForSource() {
     if (method == cc::PpmMethod::InRadio) {
         // The driver retunes to its own centre with the new reference
         // (RtlSdrSource, SoapySource), so the frequency it reports holds.
-        cascade::source::IqSource& raw = pipeline_.rawSource();
+        cascade::source::IqSource& raw = rx().pipeline_.rawSource();
         if (raw.setFrequencyCorrectionPpm(ppm)) {
             ppmRadioApplied_ = ppm;
-            if (cc::ppmRadioTakesWholePpm(sourceKind_)) {
+            if (cc::ppmRadioTakesWholePpm(rx().sourceKind_)) {
                 cascade::core::diagLogf(
                     "source: frequency correction %s ppm applied in the radio (%s, whole ppm: %+d)",
-                    cc::ppmText(ppm).c_str(), sourceKind_.c_str(), cc::ppmWholeForRadio(ppm));
+                    cc::ppmText(ppm).c_str(), rx().sourceKind_.c_str(), cc::ppmWholeForRadio(ppm));
             } else {
                 cascade::core::diagLogf("source: frequency correction %s ppm applied in the radio (%s)",
-                                        cc::ppmText(ppm).c_str(), sourceKind_.c_str());
+                                        cc::ppmText(ppm).c_str(), rx().sourceKind_.c_str());
             }
         } else {
             ppmError_ = raw.lastError();
             cascade::core::diagWarnf("source: the %s refused its frequency correction (%s)",
-                                     sourceKind_.c_str(), ppmError_.c_str());
+                                     rx().sourceKind_.c_str(), ppmError_.c_str());
             cascade::core::health::noteRecovered(cascade::core::health::Recovered::PpmRefused);
         }
         return;
@@ -79,16 +79,16 @@ void Engine::applyPpmForSource() {
     // or a pre-install tune made without the correction - and is moved now so
     // it really is on the frequency it reports.
     if (pending.has_value() && pending->key == key &&
-        pending->memo.sentHz == pipeline_.rawSource().centerFrequencyHz()) {
-        pipeline_.setSoftwarePpm(ppm, pending->memo);
+        pending->memo.sentHz == rx().pipeline_.rawSource().centerFrequencyHz()) {
+        rx().pipeline_.setSoftwarePpm(ppm, pending->memo);
     } else {
         const std::optional<double> air = carriedAirCentre();
-        pipeline_.setSoftwarePpm(ppm);
-        if (air.has_value()) { pipeline_.activeSource().setCenterFrequencyHz(*air); }
+        rx().pipeline_.setSoftwarePpm(ppm);
+        if (air.has_value()) { rx().pipeline_.activeSource().setCenterFrequencyHz(*air); }
     }
     cascade::core::diagLogf(
         "source: frequency correction %s ppm applied by retuning (%s, centre frequency only)",
-        cc::ppmText(ppm).c_str(), sourceKind_.c_str());
+        cc::ppmText(ppm).c_str(), rx().sourceKind_.c_str());
 }
 
 double Engine::ppmPreTellHz(const std::string& kind, const std::string& args, bool radioCorrects,
@@ -122,16 +122,16 @@ void Engine::changePpm(bool on, double ppm) {
     const cc::PpmMethod method = ppmMethodNow();
     if (method == cc::PpmMethod::NotApplicable) { return; }
     if (method == cc::PpmMethod::InRadio) {
-        cascade::source::IqSource& raw = pipeline_.rawSource();
+        cascade::source::IqSource& raw = rx().pipeline_.rawSource();
         if (raw.setFrequencyCorrectionPpm(after)) {
             ppmRadioApplied_ = after;
             ppmError_.clear();
             cascade::core::diagLogf("source: frequency correction %s ppm in the radio (%s)",
-                                    cc::ppmText(after).c_str(), sourceKind_.c_str());
+                                    cc::ppmText(after).c_str(), rx().sourceKind_.c_str());
         } else {
             ppmError_ = raw.lastError();
             cascade::core::diagWarnf("source: the %s refused its frequency correction (%s)",
-                                     sourceKind_.c_str(), ppmError_.c_str());
+                                     rx().sourceKind_.c_str(), ppmError_.c_str());
             cascade::core::health::noteRecovered(cascade::core::health::Recovered::PpmRefused);
         }
         return;
@@ -140,14 +140,14 @@ void Engine::changePpm(bool on, double ppm) {
     // converter change. The true centre is read through the OLD correction,
     // then the radio is told what the new one makes of it.
     const std::optional<double> air = carriedAirCentre();
-    pipeline_.setSoftwarePpm(after);
-    tuneMismatchNote_.clear();
+    rx().pipeline_.setSoftwarePpm(after);
+    rx().tuneMismatchNote_.clear();
     if (air.has_value()) {
-        retuneCoalescer_.clearPending();
+        rx().retuneCoalescer_.clearPending();
         applyRetuneNow(*air);
     }
     cascade::core::diagLogf("source: frequency correction %s ppm by retuning (%s)",
-                            cc::ppmText(after).c_str(), sourceKind_.c_str());
+                            cc::ppmText(after).c_str(), rx().sourceKind_.c_str());
 }
 
 std::string Engine::ppmCardValueText() {
@@ -156,7 +156,7 @@ std::string Engine::ppmCardValueText() {
     if (method == cc::PpmMethod::NotApplicable) { return {}; }
     double shown = ppmForKey(ppmRadioKeyNow());
     // What the radio really took: a whole-ppm register gets the rounded value.
-    if (method == cc::PpmMethod::InRadio && cc::ppmRadioTakesWholePpm(sourceKind_)) {
+    if (method == cc::PpmMethod::InRadio && cc::ppmRadioTakesWholePpm(rx().sourceKind_)) {
         shown = static_cast<double>(cc::ppmWholeForRadio(shown));
     }
     char buf[32];
@@ -184,13 +184,13 @@ Engine::PpmFacts Engine::ppmFacts() {
     f.method = method == cc::PpmMethod::NotApplicable ? "na" : (method == cc::PpmMethod::InRadio ? "radio" : "retune");
     const std::string key = ppmRadioKeyNow();
     f.stored = cc::ppmFor(true, ppmValues_, key);
-    f.wholeRadio = method == cc::PpmMethod::InRadio && cc::ppmRadioTakesWholePpm(sourceKind_);
+    f.wholeRadio = method == cc::PpmMethod::InRadio && cc::ppmRadioTakesWholePpm(rx().sourceKind_);
     f.wholeValue = cc::ppmWholeForRadio(f.stored);
     f.error = ppmError_;
     f.cardValue = ppmCardValueText();
     // WHICH RADIO the value is for - the serial is what tells two identical dongles apart. On screen only; never logged.
-    f.model = deviceModel_.empty() ? std::string(pipeline_.activeSource().name()) : deviceModel_;
-    f.serial = cascade::source::argValue(deviceArgs_, "serial");
+    f.model = rx().deviceModel_.empty() ? std::string(rx().pipeline_.activeSource().name()) : rx().deviceModel_;
+    f.serial = cascade::source::argValue(rx().deviceArgs_, "serial");
     f.key = key;
     return f;
 }

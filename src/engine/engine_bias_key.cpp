@@ -58,20 +58,20 @@ bool Engine::biasTeeReachable() const {
     // can no longer confirm; the FAIL lamp beside it and the Source panel are
     // where a dead radio is reported, and the reopen that follows a driver
     // fault puts the key back with the radio.
-    return biasTeePanel_.present && device_ != nullptr && !device_->deviceDead() &&
-           withBiasTee(device_, [](auto&) { return true; });
+    return biasTeePanel_.present && rx().device_ != nullptr && !rx().device_->deviceDead() &&
+           withBiasTee(rx().device_, [](auto&) { return true; });
 }
 
 std::string Engine::biasKeyRadioNow() const {
     if (biasStandInActive()) { return biasKeyRadio(kStandInKind, kStandInArgs); }
-    return biasKeyRadio(sourceKind_, deviceArgs_);
+    return biasKeyRadio(rx().sourceKind_, rx().deviceArgs_);
 }
 
 std::string Engine::biasKeyRadioName() const {
     // Which radio the dialog names: the driver's own name for it (the stand-in
     // says what it is, in the words the window drew for it).
     if (biasStandInActive()) { return "stand-in radio (FOXSDR_FORCE_BIAS_KEY)"; }
-    if (device_ != nullptr) { return device_->name(); }
+    if (rx().device_ != nullptr) { return rx().device_->name(); }
     return {};
 }
 
@@ -81,7 +81,7 @@ bool Engine::biasKeyMayRememberNow() const {
     // A real radio: exactly when an "on" switched now will be kept and put
     // back at its next open (review round 2, L2) - which is also when the
     // session may skip the question next time (the gate's mayRemember).
-    return device_ != nullptr && biasTeeWillRestoreOn(biasTeePanel_, *device_, deviceArgs_);
+    return rx().device_ != nullptr && biasTeeWillRestoreOn(biasTeePanel_, *rx().device_, rx().deviceArgs_);
 }
 
 void Engine::switchBiasTee(bool want) {
@@ -91,7 +91,7 @@ void Engine::switchBiasTee(bool want) {
         if (biasStandIn_ == BiasStandIn::Accept) {
             biasStandInOn_ = want;
         } else {
-            sourceError_ = "stand-in bias tee (FOXSDR_FORCE_BIAS_KEY=refuse): switching the "
+            rx().sourceError_ = "stand-in bias tee (FOXSDR_FORCE_BIAS_KEY=refuse): switching the "
                            "bias-T was refused";
         }
         return;
@@ -99,8 +99,8 @@ void Engine::switchBiasTee(bool want) {
     // The checkbox's own path, unchanged: request, then show the READBACK; a
     // refusal leaves the box, the key and the memory where they were.
     std::string err;
-    biasTeeTicked(biasTeePanel_, device_, deviceArgs_, want, &err);
-    if (!err.empty()) { sourceError_ = err; }
+    biasTeeTicked(biasTeePanel_, rx().device_, rx().deviceArgs_, want, &err);
+    if (!err.empty()) { rx().sourceError_ = err; }
 }
 
 }  // namespace cascade::engine

@@ -316,10 +316,10 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         words.insert(s.word);
         ++filesOf[s.word];
     }
-    for (const char* reading : {"now.sourceThreadsAbandoned = static_cast<unsigned long long>(pipeline_.abandonedSourceThreads())",
+    for (const char* reading : {"now.sourceThreadsAbandoned = static_cast<unsigned long long>(rx().pipeline_.abandonedSourceThreads())",
                                 "now.vendorCallsAbandoned = cascade::source::SoapySource::driverCallsAbandoned()",
-                                "now.ringDroppedSamples = pipeline_.ringDroppedSamples()",
-                                "now.dspThreadExceptions = static_cast<unsigned long long>(pipeline_.dspThreadExceptions())",
+                                "now.ringDroppedSamples = rx().pipeline_.ringDroppedSamples()",
+                                "now.dspThreadExceptions = static_cast<unsigned long long>(rx().pipeline_.dspThreadExceptions())",
                                 "now.threadWedges = cascade::core::beats::Registry::wedgesFound()",
                                 "now.pluginFaults = pf.faults", "now.pluginQuarantines = pf.quarantines", "now.pluginWedges = pf.wedges",
                                 "now.pluginOveruses = pf.overruns",

@@ -50,96 +50,96 @@ std::int32_t Engine::applySquelchAutoOp(const FoxCommand& c, FoxCommandResult& r
         return FOXAPI_OUT_OF_RANGE;
     }
     const bool on = c.ival[0] == 1;
-    if (on != squelchAuto_) {
-        squelchAuto_ = on;
+    if (on != rx().squelchAuto_) {
+        rx().squelchAuto_ = on;
         // Either way the history is another session's: the floor was measured with the threshold somewhere else, or not at all.
-        noiseFloor_.reset();
-        squelchAutoSetS_ = -1.0e9;
-        squelchAutoOnAirband_ = false;
+        rx().noiseFloor_.reset();
+        rx().squelchAutoSetS_ = -1.0e9;
+        rx().squelchAutoOnAirband_ = false;
         cc::diagLogf("squelch: auto %s (AUTO key)", on ? "on" : "off");
     }
-    res.applied[0] = squelchAuto_ ? 1.0 : 0.0;
+    res.applied[0] = rx().squelchAuto_ ? 1.0 : 0.0;
     return FOXAPI_OK;
 }
 
 void Engine::squelchAutoOff(const char* why) {
-    if (!squelchAuto_) { return; }
-    squelchAuto_ = false;
-    noiseFloor_.reset();
-    squelchAutoSetS_ = -1.0e9;
-    squelchAutoOnAirband_ = false;
+    if (!rx().squelchAuto_) { return; }
+    rx().squelchAuto_ = false;
+    rx().noiseFloor_.reset();
+    rx().squelchAutoSetS_ = -1.0e9;
+    rx().squelchAutoOnAirband_ = false;
     cc::diagLogf("squelch: auto off (%s)", why != nullptr ? why : "");
 }
 
 void Engine::squelchAutoRestore(bool on) {
-    squelchAuto_ = on;   // quietly: a restored setting is not a decision to log
-    noiseFloor_.reset();
-    squelchAutoSetS_ = -1.0e9;
-    squelchAutoOnAirband_ = false;
+    rx().squelchAuto_ = on;   // quietly: a restored setting is not a decision to log
+    rx().noiseFloor_.reset();
+    rx().squelchAutoSetS_ = -1.0e9;
+    rx().squelchAutoOnAirband_ = false;
 }
 
 void Engine::squelchAutoFrame() {
-    if (!squelchAuto_) { return; }
+    if (!rx().squelchAuto_) { return; }
     const double now = clockS();
     // WHILE THE AIRBAND MONITOR LISTENS, AUTO IS THE MONITOR'S OWN RULE: the median channel level plus 8 dB, re-applied every quarter second to the monitor's
     // squelch. The block is rebuilt only when the value moves by half a decibel or more. The receiver's own threshold is left where it was.
     if (airbandListening_) {
-        if (!squelchAutoOnAirband_) {
-            squelchAutoOnAirband_ = true;
-            noiseFloor_.reset();
-            squelchAutoSetS_ = -1.0e9;
+        if (!rx().squelchAutoOnAirband_) {
+            rx().squelchAutoOnAirband_ = true;
+            rx().noiseFloor_.reset();
+            rx().squelchAutoSetS_ = -1.0e9;
         }
-        if (now - squelchAutoSetS_ >= kSquelchAutoPeriodS) {
-            squelchAutoSetS_ = now;
+        if (now - rx().squelchAutoSetS_ >= kSquelchAutoPeriodS) {
+            rx().squelchAutoSetS_ = now;
             airbandAboveTheNoise(static_cast<float>(kSquelchAutoMinMoveDb));
         }
         return;
     }
-    if (squelchAutoOnAirband_) {
-        squelchAutoOnAirband_ = false;
-        noiseFloor_.reset();
-        squelchAutoSetS_ = -1.0e9;
+    if (rx().squelchAutoOnAirband_) {
+        rx().squelchAutoOnAirband_ = false;
+        rx().noiseFloor_.reset();
+        rx().squelchAutoSetS_ = -1.0e9;
     }
     // Nothing to measure while the receiver is stopped (the meter reads "no data" then), and the history from before it stopped is not the channel it will
     // start on.
-    if (!pipeline_.running()) {
-        noiseFloor_.reset();
+    if (!rx().pipeline_.running()) {
+        rx().noiseFloor_.reset();
         return;
     }
     // A retune, another bandwidth or another mode is another channel and another floor: the history belongs to the one before, and the threshold it set stays
     // until the new one has half a second of its own.
     const double absHz = currentAbsoluteHz();
-    if (std::fabs(absHz - squelchAutoAbsHz_) > 1.0 || vfoBandwidthHz_ != squelchAutoBwHz_ || modeIndex_ != squelchAutoMode_) {
-        noiseFloor_.reset();
-        squelchAutoAbsHz_ = absHz;
-        squelchAutoBwHz_ = vfoBandwidthHz_;
-        squelchAutoMode_ = modeIndex_;
+    if (std::fabs(absHz - rx().squelchAutoAbsHz_) > 1.0 || rx().vfoBandwidthHz_ != rx().squelchAutoBwHz_ || rx().modeIndex_ != rx().squelchAutoMode_) {
+        rx().noiseFloor_.reset();
+        rx().squelchAutoAbsHz_ = absHz;
+        rx().squelchAutoBwHz_ = rx().vfoBandwidthHz_;
+        rx().squelchAutoMode_ = rx().modeIndex_;
     }
     // THE GATE IS TOLD TO THE TRACKER: while the squelch is open the signal is being passed, which is not the noise, and once there is a floor estimate such
     // readings are not fed - a carrier never teaches the floor (core/noise_floor_tracker.hpp has the rule and its one valve).
-    noiseFloor_.push(static_cast<double>(pipeline_.signalPowerDb()), now, pipeline_.squelchOpen());
-    if (now - squelchAutoSetS_ < kSquelchAutoPeriodS) { return; }
-    const double target = cc::autoSquelchTargetDb(noiseFloor_.floorDb());
+    rx().noiseFloor_.push(static_cast<double>(rx().pipeline_.signalPowerDb()), now, rx().pipeline_.squelchOpen());
+    if (now - rx().squelchAutoSetS_ < kSquelchAutoPeriodS) { return; }
+    const double target = cc::autoSquelchTargetDb(rx().noiseFloor_.floorDb());
     if (std::isnan(target)) { return; }
-    squelchAutoSetS_ = now;
+    rx().squelchAutoSetS_ = now;
     // Half a decibel is the smallest move worth a call: the floor's own wobble must not turn the dial and the gate every quarter second.
-    if (std::fabs(target - static_cast<double>(squelchDb_)) >= kSquelchAutoMinMoveDb) {
-        squelchDb_ = static_cast<float>(target);
-        pipeline_.setSquelchDb(squelchDb_);
+    if (std::fabs(target - static_cast<double>(rx().squelchDb_)) >= kSquelchAutoMinMoveDb) {
+        rx().squelchDb_ = static_cast<float>(target);
+        rx().pipeline_.setSquelchDb(rx().squelchDb_);
     }
 }
 
 // The floor as published: whole decibels (a fact is rebuilt when its fingerprint moves, and a floor that wobbles by a tenth must not move it), INT_MIN when
 // there is nothing to say - the switch is off, the monitor listens (its rule has no floor) or the tracker holds no measurement yet.
 int Engine::squelchFloorWhole() const {
-    if (!squelchAuto_ || airbandListening_) { return INT_MIN; }
-    const double f = noiseFloor_.floorDb();
+    if (!rx().squelchAuto_ || airbandListening_) { return INT_MIN; }
+    const double f = rx().noiseFloor_.floorDb();
     if (!std::isfinite(f)) { return INT_MIN; }
     return static_cast<int>(std::lround(f));
 }
 
 void Engine::buildApiListsSquelch(ApiListBlock& b) {
-    b.facts["squelch.auto"] = ApiListBlock::Fact{squelchAuto_ ? "1" : "0", false};
+    b.facts["squelch.auto"] = ApiListBlock::Fact{rx().squelchAuto_ ? "1" : "0", false};
     const int floorDb = squelchFloorWhole();
     b.facts["squelch.floorDb"] = ApiListBlock::Fact{floorDb == INT_MIN ? std::string() : std::to_string(floorDb), false};
 }

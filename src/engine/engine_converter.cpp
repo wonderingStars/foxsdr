@@ -60,10 +60,10 @@ std::string Engine::resolveConverterKey(const std::string& radioKey) const {
 std::string Engine::converterRawKeyNow() const {
     // A SOUND CARD BY ITS CARD: it leaves deviceArgs_ empty, and "soundcard|"
     // would give every card one shared setting (gui::soundCardConverterKey).
-    if (sourceKind_ == "soundcard") {
+    if (rx().sourceKind_ == "soundcard") {
         return cascade::gui::soundCardConverterKey(soundCardLive_.device, soundCardLive_.hostApi);
     }
-    return cc::converterRadioKey(sourceKind_, deviceArgs_);
+    return cc::converterRadioKey(rx().sourceKind_, rx().deviceArgs_);
 }
 
 std::string Engine::converterRadioKeyNow() const {
@@ -84,7 +84,7 @@ cc::ConverterSetting Engine::converterForKey(const std::string& radioKey) const 
     std::string cardArgs;
     if (cascade::gui::soundCardKeyArgs(key, cardArgs)) {
         const cascade::source::SoundCardFormat f = cascade::gui::soundCardFormatForKey(
-            cardArgs, sourceKind_ == "soundcard", soundCardLive_, soundCard_);
+            cardArgs, rx().sourceKind_ == "soundcard", soundCardLive_, soundCard_);
         return cascade::gui::soundCardConverter(stored, f).effective;
     }
     return stored;
@@ -135,12 +135,12 @@ std::optional<double> Engine::carriedAirCentre() {
     // was never tuned reads 0 Hz. The AIR figure is what is carried, and it
     // may be below 0 Hz (a VLF station with the VFO parked up, through an
     // up-converter) - which is a frequency, not the absence of one.
-    if (!(pipeline_.rawSource().centerFrequencyHz() > 0.0)) { return std::nullopt; }
-    return pipeline_.activeSource().centerFrequencyHz();
+    if (!(rx().pipeline_.rawSource().centerFrequencyHz() > 0.0)) { return std::nullopt; }
+    return rx().pipeline_.activeSource().centerFrequencyHz();
 }
 
 void Engine::applyConverterForSource() {
-    pipeline_.setConverter(converterForKey(converterRadioKeyNow()));
+    rx().pipeline_.setConverter(converterForKey(converterRadioKeyNow()));
     converterHeldAir_.reset();   // a station held for the radio just replaced
     // THIS radio's crystal correction too (0.99.56, engine_ppm.cpp): every install site calls this, before any tune, which is exactly
     // where the correction has to be in force.
@@ -191,11 +191,11 @@ std::string Engine::converterName(const cc::ConverterSetting& s) const {
 std::string Engine::converterAliasState() {
     const std::string raw = converterRawKeyNow();
     // Said until the user sets a converter here themselves.
-    if (converterNotCarried_.count(raw) != 0 && !cc::converterActive(pipeline_.converter())) {
+    if (converterNotCarried_.count(raw) != 0 && !cc::converterActive(rx().pipeline_.converter())) {
         return "notCarried";
     }
     if (converterKeyAlias_.count(raw) == 0) { return {}; }
-    if (!cc::converterActive(pipeline_.converter())) { return {}; }
+    if (!cc::converterActive(rx().pipeline_.converter())) { return {}; }
     return "carried";
 }
 
@@ -203,7 +203,7 @@ std::string Engine::converterModesText() const {
     // A SOUND CARD (gui::soundCardConverter): none at all in I/Q mode - the
     // typed centre is the translation - and no up-converter in real mode.
     std::vector<cc::ConverterMode> modes;
-    if (sourceKind_ == "soundcard") {
+    if (rx().sourceKind_ == "soundcard") {
         if (soundCardLive_.format == cascade::source::SoundCardFormat::IqStereo) { return {}; }
         modes = {cc::ConverterMode::Off, cc::ConverterMode::Down};
     } else {
@@ -219,7 +219,7 @@ std::string Engine::converterModesText() const {
 }
 
 bool Engine::converterUpIgnored() const {
-    if (sourceKind_ != "soundcard") { return false; }
+    if (rx().sourceKind_ != "soundcard") { return false; }
     const cc::ConverterSetting stored = cc::converterFor(converters_, converterRadioKeyNow());
     return cascade::gui::soundCardConverter(stored, soundCardLive_.format).upRefused;
 }
@@ -228,16 +228,16 @@ double Engine::converterRadioCentreHz() {
     // THE RADIO'S OWN READBACK, not a sum: the converter's status line exists so
     // that what the radio reports (its lights, another program, its own display)
     // is on the screen beside the air frequency the counter shows.
-    return pipeline_.rawSource().centerFrequencyHz();
+    return rx().pipeline_.rawSource().centerFrequencyHz();
 }
 
 std::string Engine::converterTuneNote(double requestAirHz, bool refused, double answeredAirHz,
                                          bool isPluginPreset) {
-    const cc::ConverterSetting conv = pipeline_.converter();
+    const cc::ConverterSetting conv = rx().pipeline_.converter();
     if (!cc::converterActive(conv)) { return {}; }
     double rLo = 0.0;
     double rHi = 0.0;
-    const bool hasRange = device_ != nullptr && device_->frequencyRangeHz(rLo, rHi);
+    const bool hasRange = rx().device_ != nullptr && rx().device_->frequencyRangeHz(rLo, rHi);
     const std::string name = converterName(conv);
     const std::string air = cc::converterHzText(requestAirHz);
     const double radioHz = cc::radioFromAir(conv, requestAirHz);
@@ -298,7 +298,7 @@ void Engine::changeConverter(const cc::ConverterSetting& s) {
     // straight back on must find 17.2 kHz again - not keep 125.0172 MHz on
     // the air and send the radio to 250.0172 MHz. A tune moves the radio
     // (and a source install clears this), so any later change starts afresh.
-    const double radioNowHz = pipeline_.rawSource().centerFrequencyHz();
+    const double radioNowHz = rx().pipeline_.rawSource().centerFrequencyHz();
     if (converterHeldAir_.has_value() && converterHeldAir_->key == key &&
         converterHeldAir_->radioHz == radioNowHz && airBefore.has_value()) {
         airBefore = converterHeldAir_->airHz;
@@ -308,8 +308,8 @@ void Engine::changeConverter(const cc::ConverterSetting& s) {
     // (sanitiseConverter keeps a valid LO whatever the mode).
     converters_[key] = cc::sanitiseConverter(s);
     const cc::ConverterSetting eff = converterForKey(key);
-    pipeline_.setConverter(eff);
-    tuneMismatchNote_.clear();
+    rx().pipeline_.setConverter(eff);
+    rx().tuneMismatchNote_.clear();
 
     // THE AIR FREQUENCY STAYS; THE RADIO FOLLOWS. On every change - on, off,
     // mode, LO, inversion - the station the user is listening to is kept (the
@@ -335,21 +335,21 @@ void Engine::changeConverter(const cc::ConverterSetting& s) {
     // where its external receiver is), so a converter in front of one only
     // relabels what it hears - asking it to retune would be refused and
     // said as "out of reach".
-    if (airBefore.has_value() && sourceKind_ != "file" && sourceKind_ != "soundcard") {
+    if (airBefore.has_value() && rx().sourceKind_ != "file" && rx().sourceKind_ != "soundcard") {
         const double airHz = *airBefore;
         const double radioHz = cc::radioFromAir(eff, airHz);
         double rLo = 0.0;
         double rHi = 0.0;
         const bool hasRange =
-            device_ != nullptr && device_->frequencyRangeHz(rLo, rHi) && rHi > rLo;
+            rx().device_ != nullptr && rx().device_->frequencyRangeHz(rLo, rHi) && rHi > rLo;
         const bool reachable = std::isfinite(radioHz) && radioHz > 0.0 &&
                                (!hasRange || (radioHz >= rLo && radioHz <= rHi));
         if (reachable) {
-            retuneCoalescer_.clearPending();
+            rx().retuneCoalescer_.clearPending();
             applyRetuneNow(airHz);
         } else {
             converterHeldAir_ = ConverterHeldAir{key, airHz, radioNowHz};
-            tuneMismatchNote_ =
+            rx().tuneMismatchNote_ =
                 cc::converterActive(eff)
                     ? converterTuneNote(airHz, /*refused=*/true, 0.0, /*isPluginPreset=*/false)
                     : cascade::gui::tuneRefusedMessage(airHz, hasRange, rLo, rHi,
@@ -357,8 +357,8 @@ void Engine::changeConverter(const cc::ConverterSetting& s) {
             // Where it fell, never the frequency (PRIVACY.md).
             cascade::core::diagLogf("source: converter change: the %s cannot follow the air "
                                     "frequency (%s); it stays where it was",
-                                    sourceKind_ == "soundcard" ? "sound card"
-                                                               : pipeline_.activeSource().name(),
+                                    rx().sourceKind_ == "soundcard" ? "sound card"
+                                                               : rx().pipeline_.activeSource().name(),
                                     !(radioHz > 0.0) ? "0 Hz or below at the radio"
                                     : radioHz < rLo   ? "below its range"
                                                       : "above its range");
@@ -366,13 +366,13 @@ void Engine::changeConverter(const cc::ConverterSetting& s) {
     }
     // A new frequency as far as everything downstream is concerned (a relabel
     // is one too; applyRetuneNow already told them when the radio moved).
-    pipeline_.resetRds();
-    pluginRunner_.retune(pipeline_.activeSource().centerFrequencyHz());
+    rx().pipeline_.resetRds();
+    pluginRunner_.retune(rx().pipeline_.activeSource().centerFrequencyHz());
     // Which way it was set, never a frequency (PRIVACY.md: what somebody
     // tunes to stays out of reports - an LO says which band they listen to).
     cascade::core::diagLogf("source: converter %s%s for the %s", cc::converterModeKey(eff.mode),
                             eff.inverted && cc::converterActive(eff) ? " (inverted)" : "",
-                            sourceKind_.c_str());
+                            rx().sourceKind_.c_str());
 }
 
 }  // namespace cascade::engine

@@ -2476,6 +2476,27 @@ Appended; the API stays 0.3 and the plugin ABI stays 3. Specified in third_party
   settings move `modeSeq`; the three measurements move nothing.
 * The settings file gains `agcMode`, `agcFixedGainDb`, `nbEnabled`, `nbThresholdDb` (Engine half). The web profile is NOT extended (the web page has no control).
 
+### 9.21 Several radios: adding, removing, the audio route and solo (multi-radio stage 4; docs/multi-radio-records/engine-stage-4.md)
+
+Four ops, additive (no capability bit; an interface that never sends them never sees a change), grant SETTINGS:
+
+* `FOXAPI_OP_RADIO_ADD` (0x1202): opens another radio into a free slot (2 to `fact.radio.max`). `ival[0]` the number (0 = the lowest free), `ival[1]` 1 = start it
+  running, `text` a device id from `FOXAPI_LIST_DEVICES` (or "" / "generator": a TEST RADIO on the built-in signal generator), `num[0]` a test radio's tone in Hz from
+  its centre (0 = 25 kHz times its number). `applied[0]` = the number. NO_CHANGE: open already. OUT_OF_RANGE: not a number from 2 to the limit. BUSY: a device another
+  radio (or a patch radio) holds, message "in use by Radio N" / "in use by patch radio N". LIMIT: no slot free, or the limit on radios open in total (receivers and patch
+  radios together, `fact.radio.max`) is reached - the message states the limit and names every holder.
+* `FOXAPI_OP_RADIO_REMOVE` (0x1203): `ival[0]` the number (2 or more; radio 1 is always there: UNSUPPORTED). The radio's takes end, its threads join, its device is let
+  go, the slot is free again. A session whose focus was that radio keeps the number and its reads answer NO_DEVICE until it sets another.
+* `FOXAPI_OP_RADIO_AUDIO` (0x1204): `ival[0]` the radio (0 = the sender's focus), `ival[1]` the route: 0 both, 1 left, 2 right, 3 none (a 10 ms ramp; on a mono output left
+  and right play as both). Published as `fact.radio.<n>.audio`.
+* `FOXAPI_OP_RADIO_SOLO` (0x1205): `ival[0]` the radio heard alone, 0 = nobody. Every other radio's sound is held silent by a ramped gain that touches neither its route nor its
+  mute, so un-soloing restores each exactly.
+
+Per-radio reads and commands from stage 3 now act on a real second radio: `read_radio_state` / `read_radio_spectrum` read that radio's own state and spectrum; `read_state`,
+`read_spectrum`, `read_audio` and `read_scope` follow the session's focus; a command with `target` n changes radio n and nothing of another radio. The seq groups of a radio other
+than the first carry the radio's number in their high bits (`(n - 1) << 48`), so a client moving between radios never mistakes one radio's counter for another's unchanged one.
+`fact.radio.<n>.refusal` carries the words when a radio's device could not be had.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

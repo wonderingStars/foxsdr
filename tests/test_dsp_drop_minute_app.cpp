@@ -516,7 +516,7 @@ int main() {
         CHECK(poll != std::string::npos && end != std::string::npos);
         if (poll != std::string::npos && end != std::string::npos) {
             const std::string body = srcText.substr(poll, end - poll);
-            const std::size_t minute = body.find("now - lastDspLogSec_ >= 60.0");
+            const std::size_t minute = body.find("now - rx().lastDspLogSec_ >= 60.0");
             CHECK(minute != std::string::npos);
             CHECK(minute != std::string::npos &&
                   body.find("closeDspMinute()", minute) != std::string::npos);

@@ -248,6 +248,10 @@ public:
         }
     }
 
+    // The ring shows nothing until the next publish (a radio's slot was emptied): the sequence is NOT reset - it only ever grows - but a read answers NO_CHANGE
+    // until a frame newer than the retirement is published.
+    void retire() { retiredAt_.store(latest_.load(std::memory_order_acquire), std::memory_order_release); }
+
     void publish(const float* bins, std::size_t count, double centreHz, double spanHz, std::int64_t ums) {
         const uint64_t seq = ++lastSeq_;
         Slot& s = slots_[seq % kSlots];
@@ -279,7 +283,7 @@ public:
     int32_t read(uint64_t since, FoxSpectrumInfo& info, float* out, uint32_t cap) const {
         for (int attempt = 0; attempt < 64; ++attempt) {
             const uint64_t seq = latest_.load(std::memory_order_acquire);
-            if (seq == 0 || seq <= since) { return FOXAPI_NO_CHANGE; }
+            if (seq == 0 || seq <= since || seq <= retiredAt_.load(std::memory_order_acquire)) { return FOXAPI_NO_CHANGE; }
             const Slot& s = slots_[seq % kSlots];
             if (s.seq.load(std::memory_order_acquire) != seq) { continue; }
             const uint32_t n = s.bins.load(std::memory_order_relaxed);
@@ -321,6 +325,7 @@ private:
         std::unique_ptr<std::atomic<float>[]> data;
     };
     std::array<Slot, kSlots> slots_;
+    std::atomic<uint64_t> retiredAt_{0};
     std::atomic<uint64_t> latest_{0};
     uint64_t lastSeq_ = 0;  // writer only
 };
@@ -833,6 +838,17 @@ public:
 
     // An end the ENGINE makes (Engine::applyCommand's RUN 0, TX_OPEN,
     // TX_CLOSE - whichever client sent them - and a fault).
+    void radioClosed(std::size_t slot) {
+        if (slot == 0 || slot >= kMaxReceivers) { return; }
+        radioFrames_[slot] = cascade::core::SpectrumFrame{};   // (the pass's: the next radio in the slot counts its frames from 1 again)
+        {
+            std::lock_guard<std::mutex> lk(radioRingsMutex_);
+            if (radioRings_[slot]) { radioRings_[slot]->retire(); }
+        }
+        std::lock_guard<std::mutex> lk(audioFeedMutex_);
+        radioFeeds_[slot] = RadioFeed{};
+    }
+
     void endKeyFromEngine(const char* why) {
         noteKeyTouch();
         rules_.endKey(why, steadyMs());
@@ -879,12 +895,18 @@ public:
         if (radio == 0u) { radio = focus; }
         if (!engine_.receiverLive(radio)) { return FOXAPI_NO_DEVICE; }
         cascade::core::PublishedState p;
-        if (!engine_.receivers_[radio - 1u]->receiverSnapshot_->read(p)) { return FOXAPI_BUSY; }
+        // Through the slot lock (Engine::snapshotOf): this runs on the caller's thread and the radio may be closed by the pass at this moment.
+        const std::shared_ptr<cascade::core::ReceiverSnapshot> snapshot = engine_.snapshotOf(radio);
+        if (snapshot == nullptr) { return FOXAPI_NO_DEVICE; }
+        if (!snapshot->read(p)) { return FOXAPI_BUSY; }
         FoxReceiverState st = p.rx;
         st.structSize = sizeof(st);
         st.grants = s->grants;
         if (p.app.txKeyOwner != 0 && p.app.txKeyOwner == s->id) { st.flags |= FOXAPI_RX_TX_KEY_MINE; }
         if (s->releaseFirst.load(std::memory_order_relaxed)) { st.flags |= FOXAPI_RX_TX_LATCH_RELEASE_FIRST; }
+        // EACH RADIO'S SEQ GROUPS ARE ITS OWN COUNTERS, so two radios could show the same number: a radio other than the first carries its number in the high bits, so
+        // that a client that moves from one radio to another (or a pane that reads each) never mistakes the one's figure for the other's unchanged one.
+        if (radio != 1u) { bumpSeqs(st, static_cast<std::uint64_t>(radio - 1u) << 48); }
         if (radio == focus) { bumpSeqs(st, s->focusBump.load(std::memory_order_acquire)); }
         return copyOut(st, out, FOXAPI_MIN_RECEIVER_STATE);
     }
@@ -906,10 +928,12 @@ public:
             return FOXAPI_BAD_ARGUMENT;
         }
         if (radio == 0u) { radio = s->focus.load(std::memory_order_acquire); }
-        if (!engine_.receiverLive(radio) || radio != 1u) { return FOXAPI_NO_DEVICE; }
+        if (!engine_.receiverLive(radio)) { return FOXAPI_NO_DEVICE; }
         FoxSpectrumInfo local{};
         local.structSize = sizeof(local);
-        const int32_t r = spectrum_.read(since, local, bins, cap);
+        const SpectrumRing* ring = radio == 1u ? &spectrum_ : radioRing(radio);
+        if (ring == nullptr) { return FOXAPI_NO_CHANGE; }   // a radio that has not published a frame yet
+        const int32_t r = ring->read(since, local, bins, cap);
         if (r != FOXAPI_OK) { return r; }
         copyOut(local, info, FOXAPI_MIN_SPECTRUM_INFO);
         return FOXAPI_OK;
@@ -993,8 +1017,14 @@ public:
             detachToken(s->token);
             return FOXAPI_DETACHED;
         }
+        // The snapshot a command is validated against is the SESSION'S FOCUSED radio's (the radio the command means when it names none).
         cascade::core::PublishedState snap;
-        const bool haveSnap = engine_.receiverSnapshot_->read(snap);
+        bool haveSnap = false;
+        if (const std::shared_ptr<cascade::core::ReceiverSnapshot> fs = engine_.snapshotOf(s->focus.load(std::memory_order_acquire)); fs != nullptr) {
+            haveSnap = fs->read(snap);
+        } else {
+            haveSnap = engine_.receiverSnapshot_->read(snap);
+        }
         const std::uint64_t gen = engine_.sourceGen_.load();
         int32_t taken = 0;
         std::lock_guard<std::mutex> lk(s->m);
@@ -1011,7 +1041,7 @@ public:
                 // THE RADIO THIS COMMAND IS FOR, and that radio's source generation (the guard that drops a command asked of a radio that has gone since is
                 // per radio): validate has refused a target that names no radio, so a scoped command that is not refused names a live one.
                 std::uint64_t cgen = gen;
-                std::uint32_t cradio = 1u;
+                std::uint32_t cradio = s->focus.load(std::memory_order_acquire);
                 if (refused == FOXAPI_OK && isRadioScopedOp(c.op)) {
                     const RadioPick pick = pickRadio(c.op, c.target, s->focus.load(), [this](std::uint32_t n) { return engine_.receiverLive(n); });
                     cradio = pick.radio;
@@ -1081,13 +1111,18 @@ public:
             const std::size_t most = remote ? std::min<std::size_t>(ring, FOXAPI_SCOPE_REMOTE_FRAMES) : ring;
             return static_cast<std::uint32_t>(std::min<std::size_t>(most, 0xFFFFFFFFu));
         };
+        // THE SESSION'S FOCUSED RADIO's taps (stage 4), under the slot lock: the radio may be closed by the pass while this reads.
+        std::shared_lock<std::shared_mutex> slotLock(engine_.receiverSlotsMutex_);
+        const std::uint32_t focusRadio = s->focus.load(std::memory_order_acquire);
+        const Receiver* const focused = focusRadio >= 1u && focusRadio <= kMaxReceivers ? engine_.receivers_[focusRadio - 1u].get() : nullptr;
+        if (focused == nullptr) { return FOXAPI_NO_DEVICE; }
         cascade::core::PublishedState ps;
-        const bool have = engine_.receiverSnapshot_->read(ps);
+        const bool have = focused->receiverSnapshot_->read(ps);
         FoxScopeInfo local{};
         local.structSize = sizeof(local);
         local.tap = tap;
         std::size_t got = 0;
-        const cascade::core::Pipeline& pl = engine_.pipeline_;
+        const cascade::core::Pipeline& pl = focused->pipeline_;
         switch (tap) {
             case FOXAPI_SCOPE_AUDIO:
                 local.channels = 1;
@@ -1151,7 +1186,81 @@ public:
     // WHAT IS DELIBERATELY AS IT WAS: the counter and the tap are two reads, so a block that lands between them shifts the copied
     // span by that block (a few frames repeated, the same few missed); the COUNT of frames the ring has been given is exact.
     // A cursor of 0 means "join live" and never names a frame: the ring starts with one frame of silence so a joined cursor is >= 1.
+    // The audio of the session's FOCUSED radio (stage 4): the first radio's ring is the one above; every other radio has a ring and a feed state of its own,
+    // under the same mutex, made by the first read of it. A reader of a radio that has gone gets NO_DEVICE.
+    struct RadioFeed {
+        std::unique_ptr<cascade::net::AudioRing> ring;
+        std::uint64_t lastProduced = 0;
+        bool feeding = false;
+        std::int64_t demandUntilMs = 0;
+    };
+    std::array<RadioFeed, kMaxReceivers> radioFeeds_;
+    // One feed step of radio `radio` (2 and up) under audioFeedMutex_ and the slot lock. `asked`: a reader is feeding.
+    void feedRadioLocked(std::uint32_t radio, bool asked) {
+        RadioFeed& f = radioFeeds_[radio - 1u];
+        if (!f.ring) { return; }
+        std::shared_lock<std::shared_mutex> slotLock(engine_.receiverSlotsMutex_);
+        const std::unique_ptr<Receiver>& rcv = engine_.receivers_[radio - 1u];
+        if (!rcv) { return; }
+        const std::uint64_t produced = rcv->pipeline_.audioSamplesProduced();
+        if (!f.feeding) {
+            if (!asked) { return; }
+            f.lastProduced = produced;
+            f.feeding = true;
+            return;
+        }
+        if (produced <= f.lastProduced) {
+            f.lastProduced = produced;
+            return;
+        }
+        std::uint64_t fresh = produced - f.lastProduced;
+        if (fresh > kAudioTapFrames) { fresh = kAudioTapFrames; }
+        const std::size_t got = rcv->pipeline_.audioTap(audioScratch_.data(), static_cast<std::size_t>(fresh));
+        f.ring->write(audioScratch_.data(), got);
+        f.lastProduced = produced;
+    }
     int32_t readAudio(ApiSession* s, uint64_t* cursor, float* out, uint32_t cap, FoxStreamInfo* info) {
+        const std::uint32_t focusRadio = s->focus.load(std::memory_order_acquire);
+        if (focusRadio != 1u) { return readRadioAudio(s, focusRadio, cursor, out, cap, info); }
+        return readFirstAudio(s, cursor, out, cap, info);
+    }
+    int32_t readRadioAudio(ApiSession* s, std::uint32_t radio, uint64_t* cursor, float* out, uint32_t cap, FoxStreamInfo* info) {
+        if ((s->grants & FOXAPI_GRANT_AUDIO) == 0u) { return FOXAPI_DENIED; }
+        if (cursor == nullptr || (out == nullptr && cap != 0)) { return FOXAPI_BAD_ARGUMENT; }
+        if (info != nullptr && info->structSize < FOXAPI_MIN_STREAM_INFO) { return FOXAPI_BAD_ARGUMENT; }
+        if (!engine_.receiverLive(radio)) { return FOXAPI_NO_DEVICE; }
+        std::uint64_t dropped = 0;
+        std::size_t n = 0;
+        std::uint64_t written = 0;
+        {
+            std::lock_guard<std::mutex> lk(audioFeedMutex_);
+            RadioFeed& f = radioFeeds_[radio - 1u];
+            f.demandUntilMs = steadyMs() + opt_.audioDemandMs;
+            if (!f.ring) {
+                f.ring = std::make_unique<cascade::net::AudioRing>();
+                const float lead = 0.0f;
+                f.ring->write(&lead, 1);
+            }
+            feedRadioLocked(radio, true);
+            if (*cursor == 0) {
+                *cursor = f.ring->written();
+            } else {
+                n = f.ring->read(*cursor, out, cap, dropped);
+            }
+            written = f.ring->written();
+        }
+        if (info != nullptr) {
+            FoxStreamInfo local{};
+            local.structSize = sizeof(local);
+            local.channels = 1;
+            local.rateHz = cascade::core::Pipeline::kAudioRateHz;
+            local.dropped = dropped;
+            local.written = written;
+            copyOut(local, info, FOXAPI_MIN_STREAM_INFO);
+        }
+        return static_cast<int32_t>(n);
+    }
+    int32_t readFirstAudio(ApiSession* s, uint64_t* cursor, float* out, uint32_t cap, FoxStreamInfo* info) {
         if ((s->grants & FOXAPI_GRANT_AUDIO) == 0u) { return FOXAPI_DENIED; }
         if (cursor == nullptr || (out == nullptr && cap != 0)) { return FOXAPI_BAD_ARGUMENT; }
         // A short info is refused BEFORE the cursor moves, never skipped: a caller that silently got no drop count would not know it
@@ -1213,9 +1322,24 @@ public:
         audioLastProduced_ = produced;
     }
 
+    // The same for every radio but the first (stage 4): continue a feed that a reader started, stop it when nobody has asked for a while.
+    void feedRadioAudioFromPass() {
+        std::unique_lock<std::mutex> lk(audioFeedMutex_, std::try_to_lock);
+        if (!lk.owns_lock()) { return; }
+        for (std::uint32_t radio = 2; radio <= kMaxReceivers; ++radio) {
+            RadioFeed& f = radioFeeds_[radio - 1u];
+            if (!f.feeding) { continue; }
+            if (steadyMs() >= f.demandUntilMs) {
+                f.feeding = false;
+                continue;
+            }
+            feedRadioLocked(radio, false);
+        }
+    }
     // The pumping thread, once a pass (endPass): feed while somebody is listening, and stop feeding when they stop. A reader that is
     // feeding at this moment has the same frames in hand: the pass skips rather than wait for it.
     void feedAudioFromPass() {
+        feedRadioAudioFromPass();
         if (!audioFeeding_.load(std::memory_order_relaxed)) { return; }
         std::unique_lock<std::mutex> lk(audioFeedMutex_, std::try_to_lock);
         if (!lk.owns_lock()) { return; }
@@ -1556,6 +1680,21 @@ private:
 
     SpectrumRing spectrum_;
     cascade::core::SpectrumFrame frame_;                 // the pumping thread's copy, reused
+    // THE OTHER RADIOS' SPECTRA (multi-radio stage 4): one ring a slot, made by the pass the first time that radio publishes a frame and kept until the
+    // host goes (a ring's sequence only ever grows, so a radio added again into the same slot continues it and a reader's `since` is never ahead of it).
+    // The pointer is read by any thread, so it is set once under radioRingsMutex_ and never changed; the ring itself is lock-free.
+    mutable std::mutex radioRingsMutex_;
+    std::array<std::unique_ptr<SpectrumRing>, kMaxReceivers> radioRings_;
+    std::array<cascade::core::SpectrumFrame, kMaxReceivers> radioFrames_;   // the pass's copy of each radio's newest frame (its sequence is the radio's own)
+    const SpectrumRing* radioRing(std::uint32_t radio) const {
+        std::lock_guard<std::mutex> lk(radioRingsMutex_);
+        return radioRings_[radio - 1u].get();
+    }
+    SpectrumRing& radioRingForPass(std::size_t slot) {
+        std::lock_guard<std::mutex> lk(radioRingsMutex_);
+        if (!radioRings_[slot]) { radioRings_[slot] = std::make_unique<SpectrumRing>(); }
+        return *radioRings_[slot];
+    }
 
     // read_audio (stage 5a). The tap holds this many frames (Pipeline::kAudioTapSize), the most one feed can copy.
     static constexpr std::size_t kAudioTapFrames = 4096;
@@ -1999,7 +2138,10 @@ void ApiHostImpl::apply(const Pending& p) {
     // WHERE THE COMMAND CAME FROM, for the one op that must know (the store's install of a plugin from a site the user added: a REMOTE session
     // - the web page's own is one - may not fit one). Set for the length of the call and cleared after it; the pass is the only thread here.
     engine_.commandFromRemote_ = (p.sessionFlags & FOXAPI_SESSION_REMOTE) != 0u;
+    // THE RADIO A COMMAND THAT NAMES NONE MEANS is the sending session's focus, resolved at the submit (p.radio; the first radio for a target of ALL).
+    engine_.commandFocus_ = p.radio == FOXAPI_TARGET_ALL_RADIOS ? 1u : p.radio;
     const FoxCommandResult applied = engine_.applyCommand(c, p.longText);
+    engine_.commandFocus_ = 1u;
     engine_.commandFromRemote_ = false;
     r.status = applied.status;
     r.flags = applied.flags;
@@ -2467,6 +2609,17 @@ void ApiHostImpl::endPass() {
         cascade::source::IqSource& src = engine_.pipeline_.activeSource();
         spectrum_.publish(frame_.dbBins.data(), frame_.dbBins.size(), src.centerFrequencyHz(), src.sampleRateHz(),
                           unixMs());
+    }
+    // THE OTHER RADIOS' SPECTRA (stage 4), each into its own ring: the radio's newest frame, as the first radio's goes into spectrum_.
+    for (std::size_t slot = 1; slot < kMaxReceivers; ++slot) {
+        const std::unique_ptr<Receiver>& rcv = engine_.receivers_[slot];
+        if (!rcv) { continue; }
+        // A scratch frame of the radio's own: getLatestFrame answers "is there one newer than the one I hold", and each pipeline counts its frames from 1.
+        cascade::core::SpectrumFrame& mine = radioFrames_[slot];
+        if (rcv->pipeline_.getLatestFrame(mine) && !mine.dbBins.empty()) {
+            cascade::source::IqSource& src = rcv->pipeline_.activeSource();
+            radioRingForPass(slot).publish(mine.dbBins.data(), mine.dbBins.size(), src.centerFrequencyHz(), src.sampleRateHz(), unixMs());
+        }
     }
     // API 0.3: THE PATCH RADIOS' SPECTRA, each into its own ring (a ring is
     // made only when a node's radio first appears, and dropped with it).
@@ -3262,6 +3415,7 @@ FoxSession* ApiHost::openInternalSession(InternalKind kind, const std::string& l
     }
 }
 void ApiHost::endKeyFromEngine(const char* why) { impl_->endKeyFromEngine(why); }
+void ApiHost::radioClosed(std::size_t slot) { impl_->radioClosed(slot); }
 void ApiHost::takeDecoderLines(const std::deque<cascade::core::DecodedLine>& log, std::uint64_t total) {
     impl_->takeDecoderLines(log, total);
 }
