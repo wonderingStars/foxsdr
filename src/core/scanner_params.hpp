@@ -21,6 +21,19 @@ struct ScannerParams {
     double listenMs = 0;  // longest stay on one signal; 0 = until quiet
     // Non-empty: scan these, in this order, instead of the range (core/scanner.hpp, "List mode").
     std::vector<double> list;
+
+    // --- screen lane C additions (2026-11-11): every field defaults to "off", so an engine that does not know them scans exactly as before ---
+    // Permanent lockouts (C3): frequencies the scan never lands on. A lattice point or list entry within lockoutEpsHz of one is passed over.
+    std::vector<double> lockedHz;
+    // Priority channels (C2): visited every priorityIntervalMs of scanning time (0 = never), one per visit in turn, for dwellMs each. A signal on
+    // one holds the scan there like any other; with none, the scan goes back to the frequency it left.
+    std::vector<double> priorityHz;
+    double priorityIntervalMs = 0;
+    // Per-entry thresholds (C1): thresholdDb[k] belongs to list[k] (NaN or a missing entry = the squelch decides, as before). With one, and a level
+    // supplied to tick(), the signal counts as present when the level reaches it, whatever the squelch says.
+    std::vector<double> thresholdDb;
+    // Mute while scanning (C5): the scanner says muted() while it steps and not while it listens.
+    bool muteWhileScanning = false;
 };
 
 }  // namespace cascade::core

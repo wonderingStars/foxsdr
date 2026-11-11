@@ -89,6 +89,21 @@
 //   range, so the machine always has somewhere to tune. start/stop/step are
 //   ignored while a list is in use.
 //
+// Screen lane C additions (2026-11-11; the engine's tickScanner calls tick(now, squelch) as before and none of this changes what it sees until
+// it sets the new Params fields)
+// -----------------------------------------------------------------------------------------------------------------------------------------
+//   Lockouts (C3): lockOut(hz, forMs) passes a frequency over (forMs > 0: until that long from the last tick; 0 or less: for good). advance() and
+//   the first tune step past every locked point (within kLockoutEpsHz), so no retune is ever emitted TO a locked frequency; with every point locked
+//   the scan stays where it is and emits nothing. Params::lockedHz is the same set, stored with the configuration. clearLockouts() lifts the
+//   operator's (not Params::lockedHz, which is the configuration's).
+//   Priority channels (C2): with Params::priorityHz and priorityIntervalMs > 0, after each priorityIntervalMs of SCANNING time (not of listening)
+//   the next priority frequency is tuned for dwellMs; a signal there holds the scan on it (Paused, Holding) like any other; none, and the scan
+//   returns to the frequency it left. After a hold on a priority channel the scan also goes back to the frequency it left (that point did not
+//   finish its dwell). currentHz() names the priority frequency while the tuner is on it.
+//   Per-entry thresholds (C1): tick(nowMs, squelchOpen, levelDb) with a level, on a list entry that has Params::thresholdDb, counts the signal as
+//   present when levelDb >= that entry's threshold and ignores the squelch flag for that entry; no level (NaN) or no threshold: the flag decides.
+//   Mute while scanning (C5): muted() is true while the scan steps (Scanning) when Params::muteWhileScanning is set, false while it listens.
+//
 // configure()
 // -----------
 //   Sanitizes in this order: stopHz < startHz -> the two are swapped;
@@ -109,7 +124,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -136,14 +153,27 @@ public:
         p.resumeMs = sanitizeTimeMs(p.resumeMs);
         p.listenMs = sanitizeTimeMs(p.listenMs);
         std::vector<double> kept;
+        std::vector<double> keptThr;
+        const bool thrAligned = p.thresholdDb.size() == p.list.size();
         kept.reserve(p.list.size());
-        for (const double hz : p.list) {
-            if (std::isfinite(hz) && hz >= 0.0) { kept.push_back(hz); }
+        for (std::size_t i = 0; i < p.list.size(); ++i) {
+            const double hz = p.list[i];
+            if (std::isfinite(hz) && hz >= 0.0) {
+                kept.push_back(hz);
+                if (thrAligned) { keptThr.push_back(p.thresholdDb[i]); }
+            }
         }
         p.list = std::move(kept);
+        p.thresholdDb = std::move(keptThr);  // empty when it did not line up with the list: then no entry has one
+        const auto badHz = [](double hz) { return !(std::isfinite(hz) && hz >= 0.0); };
+        p.lockedHz.erase(std::remove_if(p.lockedHz.begin(), p.lockedHz.end(), badHz), p.lockedHz.end());
+        p.priorityHz.erase(std::remove_if(p.priorityHz.begin(), p.priorityHz.end(), badHz), p.priorityHz.end());
+        p.priorityIntervalMs = sanitizeTimeMs(p.priorityIntervalMs);
         params_ = std::move(p);
         stepIndex_ = 0;
         phaseMs_ = 0.0;
+        onPriority_ = false;
+        priorityTimerMs_ = 0.0;
         if (state_ != State::Idle) {
             state_ = State::Scanning;
             firstTunePending_ = true;
@@ -160,12 +190,49 @@ public:
         phaseMs_ = 0.0;
         advanceAfterMs_ = params_.dwellMs;
         lastMs_ = nowMs;
+        onPriority_ = false;
+        priorityTimerMs_ = 0.0;
     }
 
     void stop() {
         state_ = State::Idle;
         firstTunePending_ = false;
+        onPriority_ = false;
     }
+
+    // A frequency within this many hertz of a locked one is locked (the 8.33 kHz channel frequencies are not whole hertz).
+    static constexpr double kLockoutEpsHz = 5.0;
+
+    // C3. forMs > 0: a temporary lockout that ends forMs after the last tick (the caller's clock); 0 or less: for good (until clearLockouts()).
+    void lockOut(double hz, double forMs = 0.0) {
+        if (!(std::isfinite(hz) && hz >= 0.0)) { return; }
+        if (forMs > 0.0) {
+            temp_.push_back({hz, lastMs_ + forMs});
+        } else if (std::none_of(perm_.begin(), perm_.end(), [hz](double x) { return std::fabs(x - hz) <= kLockoutEpsHz; })) {
+            perm_.push_back(hz);
+        }
+    }
+    // Locks out the frequency the scan is on and moves on (the next tick retunes). Nothing while Idle.
+    void lockOutCurrent(double forMs = 0.0) {
+        if (state_ == State::Idle) { return; }
+        lockOut(currentHz(), forMs);
+        skip();
+    }
+    void clearLockouts() { temp_.clear(); perm_.clear(); }
+    bool isLocked(double hz) const {
+        const auto near = [hz](double x) { return std::fabs(x - hz) <= kLockoutEpsHz; };
+        if (std::any_of(params_.lockedHz.begin(), params_.lockedHz.end(), near) || std::any_of(perm_.begin(), perm_.end(), near)) { return true; }
+        return std::any_of(temp_.begin(), temp_.end(), [&](const TempLock& t) { return near(t.hz) && t.untilMs > lastMs_; });
+    }
+    // The operator's lockouts (not Params::lockedHz): permanent ones, then the temporary ones still running.
+    std::vector<double> lockouts() const {
+        std::vector<double> out = perm_;
+        for (const TempLock& t : temp_) { if (t.untilMs > lastMs_) { out.push_back(t.hz); } }
+        return out;
+    }
+
+    // C5.
+    bool muted() const { return params_.muteWhileScanning && state_ == State::Scanning; }
 
     // Moves on from the current frequency now: the next tick retunes to the
     // next lattice point (wrapping stop -> start) whatever the squelch says
@@ -173,6 +240,7 @@ public:
     void skip() {
         if (state_ == State::Idle) { return; }
         advance();
+        onPriority_ = false;
         state_ = State::Scanning;
         firstTunePending_ = true;
         phaseMs_ = 0.0;
@@ -185,12 +253,23 @@ public:
     // (the first tune after start/reconfigure, or a lattice advance);
     // std::nullopt otherwise. Timing rules are in the header comment.
     std::optional<double> tick(double nowMs, bool squelchOpen) {
+        return tick(nowMs, squelchOpen, std::numeric_limits<double>::quiet_NaN());
+    }
+
+    // The same with the signal level (dB, the unit of Params::thresholdDb) of the frequency the radio is on; NaN = not known.
+    std::optional<double> tick(double nowMs, bool squelchFlag, double levelDb) {
         if (state_ == State::Idle) { return std::nullopt; }
+        bool squelchOpen = squelchFlag;
+        if (!onPriority_) {
+            const double thr = thresholdAt(stepIndex_);
+            if (!std::isnan(thr) && !std::isnan(levelDb)) { squelchOpen = levelDb >= thr; }
+        }
 
         // Backward jumps contribute zero; time then accumulates from the
         // new nowMs (lastMs_ is updated unconditionally for that reason).
         const double delta = (nowMs > lastMs_) ? (nowMs - lastMs_) : 0.0;
         lastMs_ = nowMs;
+        temp_.erase(std::remove_if(temp_.begin(), temp_.end(), [nowMs](const TempLock& t) { return t.untilMs <= nowMs; }), temp_.end());
 
         switch (state_) {
         case State::Scanning:
@@ -198,6 +277,24 @@ public:
                 // Emitted before the squelch check: on this tick the flag
                 // still describes the pre-scan tuning (see header comment).
                 firstTunePending_ = false;
+                phaseMs_ = 0.0;
+                advanceAfterMs_ = params_.dwellMs;
+                priorityTimerMs_ = 0.0;
+                if (!onPriority_ && isLocked(currentHz()) && !advance()) { return std::nullopt; }  // every point locked: nowhere to tune
+                onPriority_ = false;
+                return currentHz();
+            }
+            if (onPriority_) {
+                // On a priority channel: the squelch is honoured once the radio has settled (dwellMs, or the resume wait after a hold).
+                phaseMs_ += delta;
+                if (phaseMs_ < advanceAfterMs_) { return std::nullopt; }
+                if (squelchOpen) {
+                    state_ = State::Paused;
+                    listenedMs_ = 0.0;
+                    return std::nullopt;
+                }
+                onPriority_ = false;  // nothing there: back to the frequency the scan left
+                priorityTimerMs_ = 0.0;
                 phaseMs_ = 0.0;
                 advanceAfterMs_ = params_.dwellMs;
                 return currentHz();
@@ -211,13 +308,26 @@ public:
                 return std::nullopt;
             }
             phaseMs_ += delta;
+            priorityTimerMs_ += delta;
+            if (params_.priorityIntervalMs > 0.0 && priorityTimerMs_ >= params_.priorityIntervalMs) {
+                if (const std::optional<double> p = nextPriority()) {
+                    // A due priority visit outranks a due step.
+                    onPriority_ = true;
+                    priorityCur_ = *p;
+                    priorityTimerMs_ = 0.0;
+                    phaseMs_ = 0.0;
+                    advanceAfterMs_ = params_.dwellMs;
+                    return priorityCur_;
+                }
+                priorityTimerMs_ = 0.0;  // every priority channel locked out: try again next interval
+            }
             if (phaseMs_ >= advanceAfterMs_) {
-                advance();
                 // Fresh dwell from the emitting tick: excess is discarded
                 // so a UI stall cannot cause a catch-up burst, and the
                 // resume-wait threshold reverts to the normal dwell.
                 phaseMs_ = 0.0;
                 advanceAfterMs_ = params_.dwellMs;
+                if (!advance()) { return std::nullopt; }  // every point locked: stay
                 return currentHz();
             }
             return std::nullopt;
@@ -227,10 +337,11 @@ public:
             if (params_.listenMs > 0.0 && listenedMs_ >= params_.listenMs) {
                 // Listened long enough: the machine's own skip, emitted on
                 // this tick. The dwell runs fresh from the retune.
-                advance();
+                const bool moved = advance();
                 state_ = State::Scanning;
                 phaseMs_ = 0.0;
                 advanceAfterMs_ = params_.dwellMs;
+                if (!moved) { return std::nullopt; }  // every other point is locked out: stay
                 return currentHz();
             }
             if (!squelchOpen) {
@@ -270,6 +381,7 @@ public:
     // Always startHz + k*stepHz, inside [startHz, stopHz] by construction -
     // or, in list mode, list[k].
     double currentHz() const {
+        if (onPriority_) { return priorityCur_; }
         if (!params_.list.empty()) {
             return params_.list[static_cast<std::size_t>(stepIndex_) % params_.list.size()];
         }
@@ -283,7 +395,37 @@ private:
     // "not >= 0" catches NaN as well as negatives; both collapse to zero.
     static double sanitizeTimeMs(double t) { return (t >= 0.0) ? t : 0.0; }
 
-    void advance() {
+    struct TempLock { double hz; double untilMs; };
+
+    double thresholdAt(long long k) const {
+        if (params_.list.empty() || k < 0 || static_cast<std::size_t>(k) >= params_.thresholdDb.size()) { return std::numeric_limits<double>::quiet_NaN(); }
+        return params_.thresholdDb[static_cast<std::size_t>(k)];
+    }
+
+    // The next priority frequency in turn that is not locked out; nullopt when there is none.
+    std::optional<double> nextPriority() {
+        const std::size_t n = params_.priorityHz.size();
+        for (std::size_t i = 0; i < n; ++i) {
+            const double hz = params_.priorityHz[(priorityIdx_ + i) % n];
+            if (!isLocked(hz)) {
+                priorityIdx_ = (priorityIdx_ + i + 1) % n;
+                return hz;
+            }
+        }
+        return std::nullopt;
+    }
+
+    long long pointCount() const {
+        if (!params_.list.empty()) { return static_cast<long long>(params_.list.size()); }
+        return static_cast<long long>(std::floor((params_.stopHz - params_.startHz) / params_.stepHz)) + 1;
+    }
+
+    double indexHz(long long k) const {
+        if (!params_.list.empty()) { return params_.list[static_cast<std::size_t>(k) % params_.list.size()]; }
+        return params_.startHz + static_cast<double>(k) * params_.stepHz;
+    }
+
+    void advanceOne() {
         const long long next = stepIndex_ + 1;
         if (!params_.list.empty()) {
             stepIndex_ = (next >= static_cast<long long>(params_.list.size())) ? 0 : next;
@@ -296,6 +438,19 @@ private:
         }
     }
 
+    // Moves to the next point that is not locked out (wrapping). False, and the index unchanged, when every point is locked.
+    bool advance() {
+        onPriority_ = false;
+        const long long was = stepIndex_;
+        const long long limit = std::min<long long>(pointCount(), 1LL << 20);
+        for (long long i = 0; i < limit; ++i) {
+            advanceOne();
+            if (!isLocked(indexHz(stepIndex_))) { return true; }
+        }
+        stepIndex_ = was;
+        return false;
+    }
+
     Params params_{};  // member initializers double as sane defaults
     State state_ = State::Idle;
     long long stepIndex_ = 0;      // lattice index k; frequency derives from it
@@ -304,6 +459,12 @@ private:
     double phaseMs_ = 0.0;         // elapsed inside the current phase
     double listenedMs_ = 0.0;      // time on the current signal (Paused + Holding)
     double advanceAfterMs_ = 0.0;  // dwellMs normally, resumeMs after a hold
+    std::vector<TempLock> temp_;
+    std::vector<double> perm_;
+    bool onPriority_ = false;      // the tuner is on a priority channel, not on the lattice point stepIndex_ names
+    double priorityCur_ = 0.0;
+    double priorityTimerMs_ = 0.0; // scanning time since the last priority visit
+    std::size_t priorityIdx_ = 0;
 };
 
 }  // namespace cascade::core
