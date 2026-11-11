@@ -140,8 +140,9 @@ void stamps() {
     for (const auto& x : a) { for (const auto& y : b) { if (x.label == y.label) { found = true; CHECK(std::fabs((y.frac - x.frac) - (1.0 / (238.0 / 30.0))) < 1e-6); } } }
     CHECK(found);
     // local stamps fall on round LOCAL times (a half-hour zone)
-    const auto loc = clockTicks(t, 60.0, 238.0, 48.0, 2, 5.5 * 3600.0);
-    for (const auto& k : loc) { CHECK(k.label.substr(3) == "00" || k.label.substr(3) == "30" || k.label.substr(3) == "15" || k.label.substr(3) == "45"); }
+    const auto loc = clockTicks(t, 60.0, 238.0, 48.0, 2, 5.5 * 3600.0 + 210.0);   // a zone 3.5 minutes off the hour: the hour stamps must still fall on round LOCAL hours
+    CHECK(!loc.empty());
+    for (const auto& k : loc) { CHECK(k.label.size() == 5 && k.label.substr(3) == "00"); }
     // degenerate input
     CHECK(clockTicks(t, 0.0, 238.0, 48.0, 1, 0).empty() && clockTicks(t, 1.0, 0.0, 48.0, 1, 0).empty() && clockTicks(t, -1.0, 238.0, 48.0, 1, 0).empty());
 }

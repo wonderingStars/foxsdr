@@ -33,6 +33,9 @@ void autocorr() {
     CHECK(r.size() == 1025 && std::fabs(r[0] - 1.0f) < 1e-4f);
     const std::size_t pk = autocorrelationPeak(r);
     CHECK(pk >= 39 && pk <= 41);
+    // a bump INSIDE the first lobe (before r first falls below zero) is not the period
+    const std::vector<float> shoulder{1.0f, 0.8f, 0.85f, 0.5f, 0.1f, -0.2f, -0.5f, 0.1f, 0.6f, 0.3f};
+    CHECK(autocorrelationPeak(shoulder) == 8);
     // silence and noise give no peak; a short input is zeros
     std::vector<float> flat(2048, 0.0f), r2;
     autocorrelation(flat.data(), flat.size(), 512, r2);
