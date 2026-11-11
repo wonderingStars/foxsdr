@@ -47,6 +47,7 @@ struct IqOpenResult {
     std::string path;                                     // as it was asked for
     std::uint64_t gen = 0;
     int row = 0;
+    std::size_t slot = 0;   // the radio (0 = the first) that asked: the file is installed THERE, not on whichever radio the pass is scoped to when the answer comes (screen stage S6, found by runs-on-radio2)
 };
 
 // A frequency list written, or why not.

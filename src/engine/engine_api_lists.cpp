@@ -1343,7 +1343,10 @@ void Engine::buildApiLists03(ApiListBlock& b) {
                                          : (rx().device_ != nullptr ? cascade::core::patch::makeDeviceKey(rx().sourceKind_, rx().deviceArgs_) : std::string()));
             fact(pre + "label", radioLabel());
             fact(pre + "audio", radioRouteWord(rx().audioRoute_));
+            // WHY THE RADIO IS NOT ON ITS DEVICE: the refusal RADIO_ADD kept, else - for a further radio, which has no Source panel to show it - the source's own error (an I/Q file that did not open,
+            // an rtl_tcp server that could not be reached: those answer on a later pass, after RADIO_ADD said yes). Screen stage S6, B3.
             if (!rx().refusal_.empty()) { fact(pre + "refusal", rx().refusal_); }
+            else if (n != 1u && !rx().sourceError_.empty()) { fact(pre + "refusal", rx().sourceError_); }
         }
         // (The first radio's route is read from its own slot like any other's.)
         std::string running;
