@@ -29,6 +29,8 @@
 #include <algorithm>
 #include <array>
 #include "frame_meter.hpp"
+#include "gaps_logic.hpp"
+#include "gaps_win.hpp"
 #include <chrono>
 #include <thread>
 #include <type_traits>
@@ -196,7 +198,9 @@ int main(int argc, char** argv) {
     const EngineService::Restored restored = service.restore();
     if (boot.announceConfig && service.persistent()) { EngineService::announce(restored); }
 
-    const FoxEngineApi* api = engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+    // THE FREQUENCY LOCK (slint-gaps.md item 3): every publisher is handed this copy of the table, whose submit and submit_text refuse the tuning commands of a locked radio (gaps_logic.hpp)
+    const FoxEngineApi* const rawApi = engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+    const FoxEngineApi* api = foxsdr::slintgaps::lockedApi(rawApi);
     FoxEngine* handle = service.engine().apiHandle();
     if (api == nullptr || handle == nullptr) { std::fprintf(stderr, "foxsdr-slint: no API table\n"); return 1; }
 
@@ -293,6 +297,12 @@ int main(int argc, char** argv) {
     // the kit's state after each tick and wired to it once.
     foxsdr::slintkit::KitPublisher publisher(*ui, kit);
     if (std::getenv("FOXSDR_SLINT_DECODE_DRAWER") != nullptr && bounded.bounded()) { publisher.openPluginDrawerForCapture(); }
+    // slint-gaps.md items 5 and 7: the map pages' Line / Ribbon keys save mapTrailStyle in the interface half; a bounded run's FOXSDR_FILE_PICK is the answer of the BROWSE FILES key (no dialog)
+    publisher.setTrailStyleSink([&duties](int style) {
+        cascade::core::AppConfig half = duties.interfaceHalf();
+        if (half.mapTrailStyle != style) { half.mapTrailStyle = style; (void)duties.saveInterfaceHalf(half); }
+    });
+    if (const char* pick = std::getenv("FOXSDR_FILE_PICK"); pick != nullptr && bounded.bounded()) { publisher.setFilePickSeam(pick); }
     publisher.wire();
     // WHAT THE 3D VIEWS REMEMBER (docs 6.65): the view, camera and small choices of every globe view, in the framework's one interface-half text (view3d_prefs.hpp)
     publisher.setViewPrefsHooks([&duties] { return duties.interfaceHalf().view3d; },
@@ -316,6 +326,10 @@ int main(int argc, char** argv) {
     // THE SIGNAL BANK'S BODIES (signal_publish.hpp): the Source, Radio, Audio filters, Sinks, Transmit, Recorder and Frequency correction models, the Radio-setup
     // page and the import dialog, published from signal_logic's reads once a tick (after the kit's) and wired to the engine's ops.
     foxsdr::slintsignal::SignalPublisher signalBank(*ui, kit, api, session);
+    if (std::getenv("FOXSDR_SLINT_SDRPLAY_TEST") != nullptr && bounded.bounded()) {   // slint-gaps.md item 9: the key is shown as if the driver had trouble, and a stand-in takes the place of the elevated restart (nothing is ever asked of Windows)
+        signalBank.forceSdrPlayKeyForTest("SDRplayAPIService");
+        signalBank.setSdrPlayLauncherForTest(nullptr);
+    }
     signalBank.setBounded(bounded.bounded());   // the I/Q row's file seams (FOXSDR_FILE_PICK, FOXSDR_FILE_CLIPBOARD) exist only in a bounded run
     signalBank.wire();
     if (std::getenv("FOXSDR_SLINT_SETUP") != nullptr) { signalBank.raiseSetupForCapture(); }     // a bounded run's capture of the Radio-setup page
@@ -376,6 +390,27 @@ int main(int argc, char** argv) {
     WorkspaceMemory wsMemory;
     std::array<LinkRange, kMaxRadios> testRanges{};
     long wsSaveSince = -1;
+    std::string noteText, dropNote, helpUrlOverride;   // the transient note under the counter; the last drop's verdict; a bounded run's help address
+    int dropsTaken = 0, dropsRefused = 0, helpOpened = 0;
+    std::function<void(const std::string&)> handleDrop;
+    bool dropInstalled = false;
+    struct DropStep { int tick = 0; std::string path; bool done = false; };
+    std::vector<DropStep> dropSeam;   // FOXSDR_SLINT_DROP=<tick>:<path>[;<tick>:<path>...] (a bounded run): the drop handler is called directly, a real drag cannot be scripted
+    if (const char* d = std::getenv("FOXSDR_SLINT_DROP"); d != nullptr && bounded.bounded()) {
+        std::string all = d;
+        std::size_t at = 0;
+        while (at < all.size()) {
+            std::size_t end = all.find(';', at);
+            if (end == std::string::npos) { end = all.size(); }
+            const std::string piece = all.substr(at, end - at);
+            const std::size_t colon = piece.find(':');
+            if (colon != std::string::npos && colon > 0) { dropSeam.push_back({std::atoi(piece.substr(0, colon).c_str()), piece.substr(colon + 1), false}); }
+            at = end + 1;
+        }
+    }
+    const bool helpSeam = bounded.bounded() && std::getenv("FOXSDR_SLINT_HELP_TEST") != nullptr;   // a bounded run does not open a browser: the address is kept for the script
+    long lockSeen = 0;          // slint-gaps.md item 3: the lock's refusal count last seen, and the tick of the last refusal (the note under the counter)
+    int noteTick = -1000;
     std::string togetherNote = "no start together yet";
     // TEST ONLY (workspace_testseam.hpp): a BOUNDED run's FOXSDR_SLINT_TEST_RADIOS=<2..8> makes radios 2 to N from made-up answers, so the drive harness can show, drive and shoot the panes before stage 4
     // has live radios. Never in a session: the gate is the bounded run, and no control reaches it.
@@ -559,7 +594,10 @@ int main(int argc, char** argv) {
         // TEST SEAM: a command aimed at (or, for the strip, following the selection to) a made-up radio changes ITS state; the engine has no such radio
         if (seam) {
             const int slot = radio != 0 ? static_cast<int>(radio) - 1 : radios.selected;
-            if (seam->fake(slot) && seam->apply(slot, c, realState)) { return; }
+            if (seam->fake(slot)) {
+                if (foxsdr::slintgaps::FrequencyLock::instance().refuses(c, radio)) { lastTicket = 0; return; }
+                if (seam->apply(slot, c, realState)) { return; }
+            }
         }
         aimAt(c, radio);
         FoxSubmitResult r{}; r.structSize = sizeof(r);
@@ -809,15 +847,18 @@ int main(int argc, char** argv) {
         switch (kind) {
             case MenuKind::Counter:
                 e.push_back(entry(MenuItemKind::Heading, 0, "TUNED - HERTZ"));
-                e.push_back(entry(MenuItemKind::Checked, 101, "Enlarge figures", "", false));
-                e.push_back(entry(MenuItemKind::Checked, 102, "Normal size", "", true));
+                e.push_back(entry(MenuItemKind::Checked, 101, "Enlarge figures", "", duties.interfaceHalf().counterScale >= 2));
+                e.push_back(entry(MenuItemKind::Checked, 102, "Normal size", "", duties.interfaceHalf().counterScale < 2));
                 e.push_back(entry(MenuItemKind::Checked, 103, "Show tuner switches", "", showNudges));
                 e.push_back(entry(MenuItemKind::Heading, 0, "Counter face"));
                 e.push_back(entry(MenuItemKind::Radio, 111, "Nixie tubes", "", face == Face::Nixie));
                 e.push_back(entry(MenuItemKind::Radio, 112, "Neon", "", face == Face::Drum));
                 e.push_back(entry(MenuItemKind::Radio, 113, "Plain", "", face == Face::Plain));
                 e.push_back(entry(MenuItemKind::Separator, 0, ""));
-                e.push_back(entry(MenuItemKind::Checked, 104, "Enlarge every reading", "", false));
+                e.push_back(entry(MenuItemKind::Checked, 104, "Enlarge every reading", "", duties.interfaceHalf().readingsScale > 1.0f));
+                e.push_back(entry(MenuItemKind::Separator, 0, ""));
+                e.push_back(entry(MenuItemKind::Item, 105, "Copy frequency", fmt("%.6f MHz", state.tunedHz / 1e6).c_str()));
+                e.push_back(entry(MenuItemKind::Item, 106, "Paste frequency", "", false, !foxsdr::slintgaps::clipboardText().empty()));
                 break;
             case MenuKind::Trace:
                 e.push_back(entry(MenuItemKind::Checked, 201, "Normal", "", traceMode == 0));
@@ -864,6 +905,7 @@ int main(int argc, char** argv) {
                 e.push_back(entry(MenuItemKind::Item, 601, "About FoxSDR..."));
                 e.push_back(entry(MenuItemKind::Item, 602, "Key bindings", "F7"));
                 e.push_back(entry(MenuItemKind::Item, 603, "Save a screenshot", "Ctrl W"));
+                e.push_back(entry(MenuItemKind::Item, 605, "Help: the manual"));
                 e.push_back(entry(MenuItemKind::Separator, 0, ""));
                 e.push_back(entry(MenuItemKind::Item, 604, "Quit"));
                 break;
@@ -917,7 +959,18 @@ int main(int argc, char** argv) {
     };
     ui->on_menu_activated([&](int id) {
         switch (id) {
-            case 101: case 102: case 104: std::fprintf(stderr, "foxsdr-slint: counter scale %d: the interface-size setting of phase 2\n", id); break;
+            case 101: case 102: case 104: {   // the same three settings the Display body saves (counterScale, readingsScale); this window does not draw the figures larger yet (the record, item 6)
+                cascade::core::AppConfig half = duties.interfaceHalf();
+                if (id == 101) { half.counterScale = 2; } else if (id == 102) { half.counterScale = 1; } else { half.readingsScale = half.readingsScale > 1.0f ? 1.0f : foxsdr::slintsystem::kEnlargedReadings; }
+                (void)duties.saveInterfaceHalf(half);
+                break;
+            }
+            case 105: (void)foxsdr::slintgaps::setClipboardText(foxsdr::slintgaps::dottedFrequencyText(state.tunedHz, wsMemory.saved().dotStyle)); break;
+            case 106: {   // a frequency from the clipboard, either style; a locked radio refuses it like any tuning
+                double hz = 0;
+                if (foxsdr::slintgaps::parseTypedFrequencyHz(foxsdr::slintgaps::clipboardText(), hz)) { setFrequency(hz); }
+                break;
+            }
             case 103: showNudges = !showNudges; ui->set_show_nudges(showNudges); break;
             case 111: face = Face::Nixie; applyFace(); break;
             case 112: face = Face::Drum; applyFace(); break;
@@ -941,6 +994,7 @@ int main(int argc, char** argv) {
             case 602: bankIndex = 4; ui->set_bank_index(4); openSections[4].insert(5); break;
             case 603: ui->invoke_shortcut(ss("screenshot")); break;
             case 604: slint::quit_event_loop(); break;
+            case 605: if (helpSeam) { ++helpOpened; helpUrlOverride = foxsdr::slintgaps::manualUrl(); } else { helpOpened += foxsdr::slintgaps::openUrl(foxsdr::slintgaps::manualUrl()) ? 1 : 0; } break;   // item 10: the manual, in the default browser
             case 701: case 702: case 703: case 704: case 705: case 706: case 707: case 708: setMode(demodOfIndex(id - 701)); break;
             default:
                 if (id >= 501 && id <= 509) {
@@ -959,14 +1013,34 @@ int main(int argc, char** argv) {
     // ---- the strip ----
     ui->on_stop_clicked([&] { FoxCommand c = op(FOXAPI_OP_RUN); c.ival[0] = (state.flags & FOXAPI_RX_RUNNING) ? 0 : 1; submit(c); });
     ui->on_nudge([&](int digit, int dir) { stepTune(dir, stepOfDigit(digit)); });
-    ui->on_edit_requested([&] { ui->set_editor_text(ss(fmt("%.6f", state.tunedHz / 1e6))); ui->set_editing(true); });
+    ui->on_edit_requested([&] { ui->set_editor_text(ss(wsMemory.saved().dotStyle == 1 ? foxsdr::slintgaps::dottedFrequencyText(state.tunedHz, 1) : fmt("%.6f", state.tunedHz / 1e6))); ui->set_editing(true); });
     ui->on_typed([&](slint::SharedString text) {
         double hz = 0;
-        if (parseFrequencyHz(std::string(text), hz)) { setFrequency(hz); }
+        if (foxsdr::slintgaps::parseTypedFrequencyHz(std::string(text), hz)) { setFrequency(hz); }
         else { std::fprintf(stderr, "foxsdr-slint: could not read frequency \"%s\"\n", text.data()); }
         ui->set_editing(false);
     });
     ui->on_edit_cancelled([&] { ui->set_editing(false); });
+    // THE PADLOCK BY THE COUNTER (slint-gaps.md item 3): the selected radio's lock, saved with the workspace; the table every publisher holds refuses the radio's tuning while it is on
+    ui->on_lock_toggled([&] {
+        auto& lk = foxsdr::slintgaps::FrequencyLock::instance();
+        const int r = std::clamp(workspace.selectedRadio(), 1, 8);
+        const std::uint32_t m = lk.mask() ^ (1u << (r - 1));
+        lk.setMask(m);
+        if (wsMemory.setLocked(m)) { wsSaveSince = static_cast<long>(tickNo); }
+    });
+    // THE COUNTER'S DIGIT GROUPING (item 2): the Display body's pick, saved with the workspace (`dg=`)
+    ui->global<SystemEvents>().on_display_digit_grouping([&](int i) { if (wsMemory.setDotStyle(i == 1 ? 1 : 0)) { wsSaveSince = static_cast<long>(tickNo); } });
+    systemBank.setDigitGroupingSource([&] { return wsMemory.saved().dotStyle; });
+    // A FILE DROPPED ON THE WINDOW (item 8; the classic's submitPendingDrop): a WAV is a recording to play, an XML or CSV a frequency list to import, anything else is refused with a note under the counter.
+    // The OS drop reaches this through gaps_win's drop target; a bounded run calls it directly (FOXSDR_SLINT_DROP=<tick>:<path>[;...]) because a real drag cannot be scripted.
+    handleDrop = [&](const std::string& path) {
+        switch (foxsdr::slintgaps::classifyDrop(path)) {
+            case foxsdr::slintgaps::DropKind::IqRecording: signalBank.openDroppedRecording(path); ++dropsTaken; dropNote = "recording"; break;
+            case foxsdr::slintgaps::DropKind::FrequencyList: signalBank.importDroppedList(path); ++dropsTaken; dropNote = "list"; break;
+            default: ++dropsRefused; dropNote = cascade::i18n::tr("That file is neither a recording nor a frequency list."); noteText = dropNote; noteTick = tickNo; break;
+        }
+    };
     ui->on_counter_menu_requested([&](float x, float y) { openMenu(MenuKind::Counter, x, y); });
     ui->on_mode_selected([&](int i) { setMode(demodOfIndex(i)); });
     ui->on_mode_picker_requested([&](float x, float y) { openMenu(MenuKind::Modes, x, y); });
@@ -1175,6 +1249,7 @@ int main(int argc, char** argv) {
         // tick). Nothing here writes: the record is changed only by what the user does from now on (a restart that comes back with one radio leaves the saved eight-radio layout as it was).
         wsMemory.load(duties.interfaceHalf().view3d);
         const SavedWorkspace& sv = wsMemory.saved();
+        foxsdr::slintgaps::FrequencyLock::instance().setMask(sv.locked);   // the radios whose frequency was locked when the window last closed (slint-gaps.md item 3)
         if (sv.present) {
             workspace.setLayout(sv.layout);
             std::vector<float> sp(sv.splits.begin(), sv.splits.end());
@@ -1630,6 +1705,18 @@ int main(int argc, char** argv) {
         ui->set_converter_text(ss(lists.converter ? "via " + lists.converterName : std::string()));
         ui->set_converter_warn(lists.converter);
         ui->set_tune_hint(ss(tuneHint(lists.converter)));
+        {   // slint-gaps.md items 2 and 3: the digit grouping, the padlock, and the note a refused tuning gesture leaves under the counter for three seconds
+            auto& lk = foxsdr::slintgaps::FrequencyLock::instance();
+            lk.setSelected(workspace.selectedRadio());
+            ui->set_freq_locked(lk.locked(workspace.selectedRadio()));
+            ui->set_digit_dots(wsMemory.saved().dotStyle);
+            if (lk.refusals() != lockSeen) { lockSeen = lk.refusals(); noteTick = tickNo; noteText = cascade::i18n::tr("Frequency locked"); }
+            if (noteTick > 0 && tickNo - noteTick < 90) { ui->set_converter_text(ss(noteText)); ui->set_converter_warn(true); }
+            if (!dropInstalled && tickNo >= 20 && tickNo % 15 == 0) {   // the OS file drop: once the window exists, our drop target takes the place of the backend's
+                if (void* hw = foxsdr::slintgaps::findMainWindow()) { dropInstalled = foxsdr::slintgaps::installFileDrop(hw, [&](const std::string& p) { if (handleDrop) { handleDrop(p); } }); }
+            }
+            for (DropStep& ds : dropSeam) { if (!ds.done && tickNo >= ds.tick && handleDrop) { ds.done = true; handleDrop(ds.path); } }
+        }
         ui->set_mode_index(modeIndex(state.demodMode));
         ui->set_mode_hint(ss(modeHint(state)));
         const bool agc = (state.flags & FOXAPI_RX_DEVICE_AGC) != 0;
@@ -2131,6 +2218,30 @@ int main(int argc, char** argv) {
         if (name.rfind("scope.", 0) == 0) { return scopeBank.readState(name.substr(6), out); }
         // view3d.<what>: the 3D views' own state (view3d_publish.hpp readState: wf.on, wf.azimuth, wf.elevation, wf.zoom, wf.depth, wf.shading, wf.renders, wf.triangles, wf.pixels ...)
         if (name.rfind("view3d.", 0) == 0) { return view3dBank.readState(name.substr(7), out); }
+        // gaps.<what>: the classic-window gaps (docs/multi-radio-records/slint-gaps.md)
+        if (name.rfind("gaps.", 0) == 0) {
+            const std::string w = name.substr(5);
+            auto& lk = foxsdr::slintgaps::FrequencyLock::instance();
+            if (w == "locked") { out = lk.locked(workspace.selectedRadio()) ? "1" : "0"; return std::string(); }
+            if (w.rfind("locked.", 0) == 0) { out = lk.locked(std::atoi(w.c_str() + 7)) ? "1" : "0"; return std::string(); }
+            if (w == "lockmask") { out = std::to_string(lk.mask()); return std::string(); }
+            if (w == "lockrefusals") { out = std::to_string(lk.refusals()); return std::string(); }
+            if (w == "savedlock") { out = std::to_string(wsMemory.saved().locked); return std::string(); }
+            if (w == "dots") { out = std::to_string(wsMemory.saved().dotStyle); return std::string(); }
+            if (w == "editor") { out = std::string(ui->get_editor_text()); return std::string(); }
+            if (w == "lockedlabel") { out = std::string(ui->get_converter_text()); return std::string(); }
+            if (w == "dropnote") { out = dropNote; return std::string(); }
+            if (w == "drops") { out = std::to_string(dropsTaken); return std::string(); }
+            if (w == "refuseddrops") { out = std::to_string(dropsRefused); return std::string(); }
+            if (w == "sdrplay") { out = signalBank.sdrPlayRestartState(); return std::string(); }
+            if (w == "sdrplaycalls") { out = std::to_string(signalBank.sdrPlayRestartCalls()); return std::string(); }
+            if (w == "help") { out = std::to_string(helpOpened); return std::string(); }
+            if (w == "diagcopies") { out = std::to_string(systemBank.diagCopies()); return std::string(); }
+            if (w == "diagstatus") { out = systemBank.bundleStatus(); return std::string(); }
+            if (w == "helpurl") { out = helpUrlOverride; return std::string(); }
+            if (w == "dropinstalled") { out = dropInstalled ? "1" : "0"; return std::string(); }
+            return "gaps.locked|locked.<n>|lockmask|lockrefusals|savedlock|dots|editor|lockedlabel|dropnote|drops|refuseddrops|sdrplay|sdrplaycalls|help, not " + name;
+        }
         // workspace.<what>: the radio workspace's own state (docs/multi-radio-records/screen-s3.md): layout (chosen), shown, page, pages, selected (1-based), radios, cells (the shown cells' radio numbers, 0 = empty),
         // ticks.<n> (how many ticks radio n's pictures were read), tuned.<n> / running.<n> (the host's last read of radio n), pic.<n> (its trace picture, WxH), cell (one pane's size, WxH), fell (1 = the small-window notice)
         if (name.rfind("workspace.", 0) == 0) {

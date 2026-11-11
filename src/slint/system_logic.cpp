@@ -232,6 +232,8 @@ DisplayModel readDisplay(TableReader& t, const cc::AppConfig& iface, const FoxRe
     m.figures.push_back(SelectItem{std::string(tr("Normal size")), "1"});
     m.figures.push_back(SelectItem{std::string(tr("Enlarged figures")), "2"});
     m.figures_index = iface.counterScale >= 2 ? 1 : 0;
+    m.digit_groupings.push_back(SelectItem{std::string("1.090.000.000"), "0"});   // not-translated: the two groupings are shown as the figures they make
+    m.digit_groupings.push_back(SelectItem{std::string("1090.000.000"), "1"});
     m.tuner_switches = iface.counterSwitches;
     m.enlarge_readings = iface.readingsScale > 1.0f;
     const int icon = clampIconPx(iface.aircraftIconPx);

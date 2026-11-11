@@ -102,6 +102,7 @@ export global KitEvents {
     callback page-map-coverage(int, bool);
     callback page-map-trails(int, bool);
     callback page-map-alt-colours(int, bool);
+    callback page-map-trail-style(int, int);      // page, 0 = Line, 1 = Ribbon (the classic map page's trail style combo; slint-gaps.md item 5)
     callback page-map-reset-coverage(int);
     callback page-map-stop-following(int);
     callback page-map-sort-clicked(int);
@@ -192,6 +193,7 @@ export struct MapModel {
     coverage-on: bool,
     trails-on: bool,
     alt-colours: bool,
+    trail-style: int,      // 0 Line, 1 Ribbon (mapTrailStyle)
     on-screen-only: bool,
     coverage-status: string,
     coverage-empty: bool,
@@ -340,6 +342,7 @@ component MapToolbar inherits VerticalLayout {
     callback coverage(int, bool);
     callback trails(int, bool);
     callback alt-colours(int, bool);
+    callback trail-style(int, int);
     callback reset-coverage(int);
     callback stop-following(int);
     callback sort-clicked(int);
@@ -358,6 +361,12 @@ component MapToolbar inherits VerticalLayout {
         Checkbox { label: @tr("Coverage"); checked: root.map.coverage-on; tooltip: @tr("Furthest any target has been plotted, per 5 degrees of bearing, from the receiver position, this session only."); toggled(v) => { root.coverage(root.index, v); } }
         Checkbox { label: @tr("Trails"); checked: root.map.trails-on; tooltip: @tr("Draw the lines plugins publish: flight trails, predicted ground tracks and footprints."); toggled(v) => { root.trails(root.index, v); } }
         Checkbox { label: @tr("Altitude colours"); checked: root.map.alt-colours; enabled: root.map.trails-on; tooltip: root.map.trails-on ? @tr("Colour each part of a trail by the altitude observed there.") : @tr("Turn Trails on to colour them by altitude."); toggled(v) => { root.alt-colours(root.index, v); } }
+        SegGroup { small: true;   // the classic's Line / Ribbon combo, as two keys; greyed with the trails, as there
+            HorizontalLayout { spacing: 2px;
+                SegKey { small: true; label: @tr("Line"); on: root.map.trail-style != 1; enabled: root.map.trails-on; tooltip: @tr("Line draws a solid trail. Ribbon draws a translucent\nband, easier to follow over a detailed map, at the cost of\ncovering more of what is underneath."); clicked => { root.trail-style(root.index, 0); } }
+                SegKey { small: true; label: @tr("Ribbon"); on: root.map.trail-style == 1; enabled: root.map.trails-on; tooltip: @tr("Line draws a solid trail. Ribbon draws a translucent\nband, easier to follow over a detailed map, at the cost of\ncovering more of what is underneath."); clicked => { root.trail-style(root.index, 1); } }
+            }
+        }
         Key { label: @tr("Reset coverage"); small: true; min-w: 0px; enabled: !root.map.coverage-empty; clicked => { root.reset-coverage(root.index); } }
         Text { text: root.map.coverage-status; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; overflow: elide; }
         Rectangle { horizontal-stretch: 1; }
@@ -439,6 +448,8 @@ export component PageBody inherits Rectangle {
     map-trails(a, b) => { KitEvents.page-map-trails(a, b); }
     callback map-alt-colours(int, bool);
     map-alt-colours(a, b) => { KitEvents.page-map-alt-colours(a, b); }
+    callback map-trail-style(int, int);
+    map-trail-style(a, b) => { KitEvents.page-map-trail-style(a, b); }
     callback map-reset-coverage(int);
     map-reset-coverage(a) => { KitEvents.page-map-reset-coverage(a); }
     callback map-stop-following(int);
@@ -525,7 +536,7 @@ export component PageBody inherits Rectangle {
             if root.page.view3d == 2 : SondeViewBar { }
             MapToolbar { map: root.page.map; index: root.index;
                 fit(p) => { root.map-fit(p); } set-rx(p) => { root.map-set-rx(p); } on-screen(p, v) => { root.map-on-screen(p, v); } coverage(p, v) => { root.map-coverage(p, v); }
-                trails(p, v) => { root.map-trails(p, v); } alt-colours(p, v) => { root.map-alt-colours(p, v); } reset-coverage(p) => { root.map-reset-coverage(p); }
+                trails(p, v) => { root.map-trails(p, v); } alt-colours(p, v) => { root.map-alt-colours(p, v); } trail-style(p, v) => { root.map-trail-style(p, v); } reset-coverage(p) => { root.map-reset-coverage(p); }
                 stop-following(p) => { root.map-stop-following(p); } sort-clicked(p) => { root.map-sort-clicked(p); } sort-dir(p) => { root.map-sort-dir(p); } }
             if root.page.view3d == 2 && View3D.sonde-on : SondeWell { vertical-stretch: 1; }
             if !(root.page.view3d == 2 && View3D.sonde-on) : HorizontalLayout { spacing: 0px; vertical-stretch: 1;

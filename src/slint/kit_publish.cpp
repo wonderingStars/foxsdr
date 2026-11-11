@@ -10,6 +10,7 @@
 #include <cstring>
 #include <functional>
 
+#include "core/file_pick.hpp"
 #include "core/i18n.hpp"
 #include "core/plugin_ui_data.hpp"
 #include "core/utf8_text.hpp"
@@ -375,9 +376,10 @@ void KitPublisher::fillPicture(const Page& p, PageTab& t, std::string& sig) {
         t.pic_w = 0; t.pic_h = 0;
         sig += "P0";
     }
-    t.save_enabled = t.have;
+    const bool saving = saveJob_.valid() && savePlugin_ == p.plugin;
+    t.save_enabled = t.have && !saveJob_.valid();   // one write at a time, as the classic's key is greyed while a picture is being written
     t.save_note = ss(p.saveNote);
-    sig += p.saveNote;
+    sig += p.saveNote + (t.save_enabled ? "E" : "e") + (saving ? "S" : "");
 }
 
 void KitPublisher::fillPanel(const Page& p, PageTab& t, std::string& sig) {
@@ -625,6 +627,7 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
     m.coverage_on = s.coverageOn;
     m.trails_on = s.trailsOn;
     m.alt_colours = s.altColours;
+    m.trail_style = look_.trailStyle == slintmap::TrailStyle::Ribbon ? 1 : 0;   // item 5: the keys show the saved style (the interface half's mapTrailStyle, handed in as the look)
     m.on_screen_only = s.onScreenOnly;
     m.coverage_empty = kit_.coverage().empty();
     m.coverage_status = ss(!home ? std::string(cascade::i18n::tr("set the RX position to measure coverage")) : kit_.coverage().empty() ? std::string(cascade::i18n::tr("nothing heard yet"))
@@ -1215,8 +1218,43 @@ void KitPublisher::publishMuteQuestion() {
     ui_.set_mute_question_open(muteQuestionOpen_);
 }
 
+// THE PICTURE SAVE'S ANSWER (item 4): the worker has written the file; the sentence it answers becomes the note of the page that asked.
+void KitPublisher::pollSave() {
+    if (!saveJob_.valid() || saveJob_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) { return; }
+    const std::string note = saveJob_.get();
+    for (Page& p : pages_) { if (p.plugin == savePlugin_) { p.saveNote = note; } }
+    savePlugin_.clear();
+}
+
+// BROWSE FILES (item 7; the classic's plugin_settings_form.cpp): the system's file dialog opening beside what the box says, programs first when the placeholder names one; a choice goes in as if typed
+// (the same call), a cancel changes nothing. The dialog is modal and blocks this thread while the person chooses, exactly as the I/Q file row's does (signal_publish.cpp iqBrowse).
+void KitPublisher::browseSetting(const std::string& file, int id) {
+    const SettingsSet* set = settingsFor(kit_.lists().settings, file);
+    if (set == nullptr) { return; }
+    for (const SettingSpec& s : set->fields) {
+        if (static_cast<int>(s.id) != id || s.kind != CASCADE_SETTING_PATH) { continue; }
+        std::string chosen;
+        bool got = false;
+        if (filePickSeam_.has_value()) {
+            chosen = *filePickSeam_;
+            got = !chosen.empty();
+        } else {
+            cascade::core::FilePickRequest rq;
+            rq.title = cascade::i18n::tr("Choose a file");
+            rq.programsName = cascade::i18n::tr("Programs (*.exe)");
+            rq.allFilesName = cascade::i18n::tr("All files (*.*)");
+            rq.programs = cascade::core::placeholderNamesProgram(s.placeholder);
+            rq.startFrom = kit_.edits().shown(file, s.key, s.value);
+            got = cascade::core::pickFile(rq, chosen);
+        }
+        if (got && !chosen.empty()) { kit_.editSetting(file, s, chosen); }
+        return;
+    }
+}
+
 void KitPublisher::publish(const FoxReceiverState& state) {
     state_ = state;
+    pollSave();
     nowMs_ = clockMs();
     const KitEvents ev = kit_.takeEvents();
     for (const std::string& file : ev.presetApplied) {
@@ -1378,7 +1416,7 @@ void KitPublisher::wire() {
         const PluginRow* r = entryRow(e); const SettingSpec* s = r != nullptr ? settingOf(r->file, id) : nullptr;
         if (s != nullptr) { kit_.editSetting(r->file, *s, on ? "1" : ""); }
     });
-    ui_.global<::KitEvents>().on_decode_entry_browse([this](int, int) { std::fprintf(stderr, "foxsdr-slint: the file dialog for a PATH field is a later step; type the path\n"); });
+    ui_.global<::KitEvents>().on_decode_entry_browse([this, entryRow](int e, int id) { const PluginRow* r = entryRow(e); if (r != nullptr) { browseSetting(r->file, id); } });
     ui_.global<::KitEvents>().on_decode_grant_toggled([this](int i, bool on) {
         const auto& stale = kit_.lists().staleGrants;
         if (i < 0 || i >= static_cast<int>(stale.size())) { return; }
@@ -1455,7 +1493,8 @@ void KitPublisher::wire() {
         Page* p = page(i); const PluginRow* r = p != nullptr ? rowOf(*p) : nullptr; const SettingSpec* s = r != nullptr ? settingOf(r->file, id) : nullptr;
         if (s != nullptr) { kit_.editSetting(r->file, *s, on ? "1" : ""); }
     });
-    ui_.global<::KitEvents>().on_page_browse_clicked([](int, int) { std::fprintf(stderr, "foxsdr-slint: the file dialog for a PATH field is a later step; type the path\n"); });
+    ui_.global<::KitEvents>().on_page_browse_clicked([this, page](int i, int id) { Page* p = page(i); const PluginRow* r = p != nullptr ? rowOf(*p) : nullptr; if (r != nullptr) { browseSetting(r->file, id); } });
+    ui_.global<::KitEvents>().on_page_map_trail_style([this](int, int style) { if (trailStyleSink_) { trailStyleSink_(style == 1 ? 1 : 0); } look_.trailStyle = style == 1 ? slintmap::TrailStyle::Ribbon : slintmap::TrailStyle::Line; });
     ui_.global<::KitEvents>().on_page_bar_preset_pressed([this](int, int bar, int k) {
         int b = 0;
         for (const PluginRow& r : kit_.lists().rows) {
@@ -1475,7 +1514,16 @@ void KitPublisher::wire() {
     ui_.global<::KitEvents>().on_page_log_clear([this](int) { kit_.clearDecoderLines(); });
     ui_.global<::KitEvents>().on_page_log_follow([page](int i, bool on) { if (Page* p = page(i)) { p->follow = on; } });
     ui_.global<::KitEvents>().on_page_picture_pressed([this, page](int i, int x, int y) { if (Page* p = page(i)) { kit_.imagePress(p->plugin, x, y); } });
-    ui_.global<::KitEvents>().on_page_picture_save([this, page](int i) { if (Page* p = page(i)) { p->saveNote = kit_.savePicture(p->plugin); } });
+    ui_.global<::KitEvents>().on_page_picture_save([this, page](int i) {
+        Page* p = page(i);
+        if (p == nullptr || saveJob_.valid()) { return; }   // a second press while the first is out is ignored (the key is greyed too)
+        std::string refusal;
+        std::function<std::string()> job = kit_.prepareSavePicture(p->plugin, refusal);
+        if (!job) { p->saveNote = refusal; return; }
+        p->saveNote = cascade::i18n::tr("Saving...");       // the disk is touched on a worker, never on the thread that draws the window (the classic's 0.99.64 rule)
+        savePlugin_ = p->plugin;
+        saveJob_ = std::async(std::launch::async, std::move(job));
+    });
     ui_.global<::KitEvents>().on_page_row_pressed([this, page](int i, int row) {
         Page* p = page(i); const PluginRow* r = p != nullptr ? rowOf(*p) : nullptr;
         if (p == nullptr || r == nullptr) { return; }

@@ -1,0 +1,55 @@
+#! frames=620 size=1600x900 restart=gaps-lock-2.txt
+# gaps-lock (docs/multi-radio-records/slint-gaps.md item 3): the padlock key by the counter. Unlocked, every tuning gesture of the window moves radio 1; locked, each is refused (the engine never sees it),
+# a note says so under the counter, and mode and the rest keep working. The lock is the radio's, saved with the workspace: the second start finds it locked.
+# GESTURES TRIED, each locked and unlocked: the keyboard (Ctrl+Up), a digit's nudge key, the wheel over a digit, the typed entry, a click on the waterfall (the spectrum shares its handler).
+# NOT HERE (command-level proof in test_slint_host_gaps, every tuning op through the lock): band keys, a bookmark recall, a scanner start.
+10 state running == 1
+state tunedHz == 100300000
+state gaps.locked == 0
++1 key ctrl+up
++12 state tunedHz == 100310000
++1 click "Lock the frequency"
++3 state gaps.locked == 1
++1 state gaps.lockmask == 1
++1 expect "Frequency locked - press to unlock" label contains "unlock"
++1 key ctrl+up
++12 state tunedHz == 100310000
++1 state gaps.lockrefusals == 1
++1 state gaps.lockedlabel == "Frequency locked"
++1 click "Frequency locked - press to unlock"
++3 state gaps.locked == 0
++1 click "Step 1 MHz digit up"
++12 state tunedHz == 101310000
++1 click "Step 1 MHz digit down"
++12 state tunedHz == 100310000
++1 click "1 MHz digit"
++3 type "Frequency in MHz" "100.3"
++1 key enter
++12 state tunedHz == 100300000
++1 press "Waterfall"
++12 state tunedHz != 100300000
++1 click "1 MHz digit"
++3 type "Frequency in MHz" "100.3"
++1 key enter
++12 state tunedHz == 100300000
+# lock again; the digit nudge, the wheel, the typed entry, a click on the waterfall (the spectrum shares its handler) are all refused
++1 click "Lock the frequency"
++3 state gaps.locked == 1
++1 click "Step 1 MHz digit up"
++12 state tunedHz == 100300000
++1 scroll "1 MHz digit" -40
++12 state tunedHz == 100300000
++1 click "1 MHz digit"
++3 type "Frequency in MHz" "105.5"
++1 key enter
++12 state tunedHz == 100300000
++1 press "Waterfall"
++12 state tunedHz == 100300000
++1 state gaps.lockrefusals > 4
+# everything else still works
++1 choose "WFM" "NFM"
++20 state mode == NFM
++1 choose "NFM" "WFM"
++20 state mode == WFM
++1 state gaps.savedlock == 1
++60 state gaps.savedlock == 1

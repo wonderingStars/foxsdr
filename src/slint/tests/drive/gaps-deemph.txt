@@ -1,0 +1,23 @@
+#! frames=420 bank=0 sections=0:3 size=1600x900
+# gaps-deemph (docs/multi-radio-records/slint-gaps.md item 1): the FM de-emphasis choice (50 us / 75 us / Off) in the Audio filters section, as the classic's "De-emph" combo. Each pick is read
+# back from the engine (state deemphasis = the engine's 0 / 1 / 2), the combo is live in the FM modes and greyed in the others, and a pick made while greyed changes nothing.
+10 state running == 1
+state deemphasis == 0
+state mode == WFM
++1 expect "De-emph" value contains "50 us"
++1 expect "De-emph" enabled equals "true"
++1 choose "De-emph" "75 us (Americas)"
++20 state deemphasis == 1
++1 expect "De-emph" value contains "75 us"
++1 choose "De-emph" "Off"
++20 state deemphasis == 2
++1 expect "De-emph" value contains "Off"
++1 choose "De-emph" "50 us (EU/world)"
++20 state deemphasis == 0
+# NFM keeps it live; AM greys it
++1 choose "WFM" "NFM"
++20 state mode == NFM
++1 expect "De-emph" enabled equals "true"
++1 choose "NFM" "AM"
++20 state mode == AM
++1 expect "De-emph" enabled equals "false"

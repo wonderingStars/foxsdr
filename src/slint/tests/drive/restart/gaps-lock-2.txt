@@ -1,0 +1,8 @@
+#! frames=140 size=1600x900
+# gaps-lock, the second start on the same scratch profile: radio 1's frequency is still locked, and the key says so.
+10 state running == 1
+state gaps.locked == 1
+state gaps.lockmask == 1
++1 expect "Frequency locked - press to unlock" enabled equals "true"
++1 key ctrl+up
++12 state gaps.lockrefusals == 1

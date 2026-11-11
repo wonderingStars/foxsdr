@@ -1,0 +1,7 @@
+#! frames=120 bank=4 sections=4:0 size=1600x900
+# gaps-digits, the second start on the same scratch profile: the digit grouping chosen before the quit is the one in force.
+10 state running == 1
+state gaps.dots == 1
++1 expect "Digit grouping" value contains "1090.000.000"
++1 click "1 MHz digit"
++3 state gaps.editor == "103.300.000"

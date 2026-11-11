@@ -59,6 +59,8 @@ export struct SourceModel {
     options: [OptionRow],
     converter-shown: bool, converter-mode: int, converter-alias: string, converter-lo: string, converter-inverts: bool,
     converter-error: string, converter-on-air: string,
+    // RESTART SDRPLAY SERVICE (slint-gaps.md item 9; the classic's Source section key): shown while the driver has trouble reaching the service; the line is the busy sentence or the last outcome
+    sdrplay-key-shown: bool, sdrplay-key-enabled: bool, sdrplay-key-label: string, sdrplay-line: string,
 }
 
 export struct RadioExtrasModel { wfm: bool, stereo: bool, stereo-word: string, stereo-tone: ChipTone, rds-shown: bool, rds-ps: string, rds-rt: string, rds-pi: string }
@@ -71,6 +73,8 @@ export struct AudioFiltersModel {
     // nb-threshold is 0..1 over 6..30 dB; nb-read is the note ("Blanking 3 %", or the standing-down sentence, which nb-standing makes amber). The host words them (core::tr).
     agc-text: string, agc-modes: [SelectItem], agc-index: int, agc-fixed: float, agc-fixed-text: string, agc-fixed-on: bool, agc-gain-text: string, agc-gain-tip: string,
     nb-on: bool, nb-threshold: float, nb-threshold-text: string, nb-read: string, nb-standing: bool,
+    // FM de-emphasis (docs/multi-radio-records/slint-gaps.md, item 1): the selected radio's 50 us / 75 us / Off; the row is live only in NFM and WFM, as the classic's combo is.
+    deemph-text: string, deemph-modes: [SelectItem], deemph-index: int, deemph-enabled: bool,
 }
 
 export struct SinksModel {
@@ -111,6 +115,7 @@ export global SignalEvents {
     callback iq-path-committed(string);
     callback iq-open();
     callback iq-browse();                          // ADDED (docs 6.63): the system's file dialog; a choice is opened
+    callback sdrplay-restart();                    // slint-gaps.md item 9: asks Windows to restart the SDRplay API Service (a UAC prompt)
     callback iq-paste() -> bool;                   // ADDED: Ctrl+V with a FILE on the clipboard; true = the host took its path into the box
     callback pluto-address-committed(string);
     callback pluto-open();
@@ -147,6 +152,7 @@ export global SignalEvents {
     callback filter-agc-fixed(float);
     callback filter-nb(bool);
     callback filter-nb-threshold(float);
+    callback filter-deemph(int);
     callback sink-device-selected(int);
     callback sink-buffer-selected(int);
     callback transmit-clicked();
@@ -695,6 +701,8 @@ export component SourceBody inherits VerticalLayout {
     iq-open() => { SignalEvents.iq-open(); }
     callback iq-browse();
     iq-browse() => { SignalEvents.iq-browse(); }
+    callback sdrplay-restart();
+    sdrplay-restart() => { SignalEvents.sdrplay-restart(); }
     callback iq-paste() -> bool;
     iq-paste() => { return SignalEvents.iq-paste(); }
     callback pluto-address-committed(string);
@@ -779,6 +787,10 @@ export component SourceBody inherits VerticalLayout {
         Note { text: root.model.stopped-line; tone: ChipTone.err; }
         if root.model.stopped-advice != "" : Note { text: root.model.stopped-advice; }
     }
+    if root.model.sdrplay-key-shown : Line {
+        Key { label: root.model.sdrplay-key-label != "" ? root.model.sdrplay-key-label : @tr("RESTART SDRPLAY SERVICE"); xs: true; min-w: 0px; enabled: root.model.sdrplay-key-enabled; clicked => { root.sdrplay-restart(); } }
+    }
+    if root.model.sdrplay-key-shown && root.model.sdrplay-line != "" : Note { text: root.model.sdrplay-line; tone: root.model.sdrplay-key-enabled ? ChipTone.warn : ChipTone.neutral; }
     if root.model.advisory != "" : VariantCard {
         tag: @tr("Advisories");
         tone: root.model.advisory-tone == ChipTone.warn ? CardTone.warn : root.model.advisory-tone == ChipTone.err ? CardTone.err : CardTone.neutral;
@@ -1155,6 +1167,8 @@ export component AudioFiltersBody inherits VerticalLayout {
     filter-nb(a) => { SignalEvents.filter-nb(a); }
     callback filter-nb-threshold(float);
     filter-nb-threshold(a) => { SignalEvents.filter-nb-threshold(a); }
+    callback filter-deemph(int);
+    filter-deemph(a) => { SignalEvents.filter-deemph(a); }
 
     spacing: 6px;
     alignment: start;
@@ -1223,6 +1237,21 @@ export component AudioFiltersBody inherits VerticalLayout {
         changed(v) => { root.filter-nb-threshold(v); }
     }
     if root.model.nb-on && root.model.nb-read != "" : Note { text: root.model.nb-read; tone: root.model.nb-standing ? ChipTone.warn : ChipTone.neutral; }
+    // ---- FM de-emphasis (the classic's "De-emph" combo): the selected radio's; live in NFM and WFM only, greyed (not hidden) elsewhere ----
+    Line {
+        RowLabel { width: 56px; text: @tr("De-emph"); }
+        DropKey {
+            horizontal-stretch: 1;
+            value: root.model.deemph-text;
+            items: root.model.deemph-modes;
+            selected: root.model.deemph-index;
+            label: @tr("De-emph");
+            enabled: root.model.deemph-enabled;
+            tooltip: @tr("Broadcast FM pre-emphasises treble; the receiver undoes it.\n50 us: Europe, Africa, Asia, Australia. 75 us: Americas, South Korea.");
+            popup-min-w: 150px;
+            picked(i) => { root.filter-deemph(i); }
+        }
+    }
 }
 
 // ================================================ Sinks ================================================

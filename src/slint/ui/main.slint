@@ -135,6 +135,9 @@ export component MainWindow inherits Window {
     in property <string> tuned-text: "145.500000 MHz";   // not-translated: sample data the host replaces
     in property <[int]> digits: [0, 1, 4, 5, 5, 0, 0, 0, 0, 0];
     in property <int> leading-zeros: 1;
+    in property <int> digit-dots: 0;               // 0 = 1.090.000.000, 1 = 1090.000.000 (slint-gaps.md item 2)
+    in property <bool> freq-locked: false;         // the selected radio's frequency lock (slint-gaps.md item 3)
+    callback lock-toggled();
     in property <bool> show-nudges: true;
     in-out property <bool> editing;                  // the typed frequency editor is open
     in-out property <string> editor-text;
@@ -442,12 +445,16 @@ export component MainWindow inherits Window {
                         HorizontalLayout { alignment: space-between;
                             Caption { label: @tr("Tuned frequency"); }
                             HorizontalLayout { spacing: 10px;
+                                Key { icon: root.freq-locked ? @image-url("icons/lock.svg") : @image-url("icons/unlock.svg"); icon-size: 12px; icon-only: true; xs: true; on: root.freq-locked;
+                                    accessible-label: root.freq-locked ? @tr("Frequency locked - press to unlock") : @tr("Lock the frequency");
+                                    tooltip: root.freq-locked ? @tr("Frequency locked - press to unlock") : @tr("Lock the frequency");
+                                    clicked => { root.lock-toggled(); } }
                                 Lamp { caption: @tr("RCVR"); state: root.running ? LampState.amber : LampState.off; }
                                 Text { text: root.tuned-text; font-family: Theme.font-mono; font-size: Theme.font-small; color: Theme.accent-soft; vertical-alignment: center; }
                             }
                         }
                         counter := FrequencyCounter {   // the caption slot under the figures: the converter line when one is active, else the sheet's tune hint
-                            digits: root.digits; leading-zeros: root.leading-zeros; show-nudges: root.show-nudges;
+                            digits: root.digits; leading-zeros: root.leading-zeros; show-nudges: root.show-nudges; dot-style: root.digit-dots;
                             editing: root.editing; editor-text <=> root.editor-text;
                             converter-text: root.converter-text != "" ? root.converter-text : root.tune-hint; converter-warn: root.converter-warn;
                             tooltip: @tr("Scroll a digit to tune  |  click to type");
