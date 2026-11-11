@@ -174,23 +174,23 @@ void Engine::refreshApiPluginKeys() {
 const char* Engine::radioStateWord(std::uint32_t radio) {
     if (radio != 1u) { return "stopped"; }
     if (patchMainKeep_.valid) { return "lent"; }
-    if (deviceOpenPending_) { return "opening"; }
-    if (!apiFaultText_.empty()) { return "faulted"; }
-    return pipeline_.running() ? "running" : "stopped";
+    if (rx().deviceOpenPending_) { return "opening"; }
+    if (!rx().apiFaultText_.empty()) { return "faulted"; }
+    return rx().pipeline_.running() ? "running" : "stopped";
 }
 
 // The open radio's name for a person: its model, else what the receiver is on instead of a radio.
 std::string Engine::radioLabel() {
     if (patchMainKeep_.valid) { return patchMainKeep_.label; }
-    if (device_ != nullptr) { return deviceModel_; }
-    if (sourceKind_ == "file") { return "I/Q file"; }
+    if (rx().device_ != nullptr) { return rx().deviceModel_; }
+    if (rx().sourceKind_ == "file") { return "I/Q file"; }
     return "Signal generator";
 }
 
 std::uint64_t Engine::apiListsFingerprint() {
     Fingerprint f;
-    f.value(modeIndex_);
-    f.value(vfoBandwidthHz_);
+    f.value(rx().modeIndex_);
+    f.value(rx().vfoBandwidthHz_);
     f.value(freqMgr_.version());
     f.value(freqMgr_.list().size());
     // THE WATERFALL'S MARKERS (FREQ_MARKERS, stub campaign B10): the list's own counter - bumped by every drop, remove, clear and note - and the sentence of a
@@ -201,9 +201,9 @@ std::uint64_t Engine::apiListsFingerprint() {
     // The DSP chain's input rate (API 0.3 8.5, fact.input.rateHz): the source's rate
     // unless the chain refused a change of it, and then the one the display is
     // measured against.
-    f.value(pipeline_.inputRateHz());
-    f.text(sourceKind_);
-    f.text(deviceArgs_);
+    f.value(rx().pipeline_.inputRateHz());
+    f.text(rx().sourceKind_);
+    f.text(rx().deviceArgs_);
     for (const auto& d : nativeDevices_) {
         f.text(d.driver);
         f.text(d.label);
@@ -213,24 +213,24 @@ std::uint64_t Engine::apiListsFingerprint() {
         f.text(d.label);
         f.text(d.args);
     }
-    const bool haveDevice = device_ != nullptr;
+    const bool haveDevice = rx().device_ != nullptr;
     f.value(haveDevice);
     cascade::source::AirspySource* const airspy = asAirspyDevice();
     if (haveDevice) {
-        for (double r : deviceRatesHz_) { f.value(r); }
-        f.value(pipeline_.activeSource().sampleRateHz());
-        for (std::size_t i = 0; i < deviceGainRanges_.size(); ++i) {
-            const auto& g = deviceGainRanges_[i];
+        for (double r : rx().deviceRatesHz_) { f.value(r); }
+        f.value(rx().pipeline_.activeSource().sampleRateHz());
+        for (std::size_t i = 0; i < rx().deviceGainRanges_.size(); ++i) {
+            const auto& g = rx().deviceGainRanges_[i];
             f.text(g.name);
             f.value(g.minDb);
             f.value(g.maxDb);
             f.value(g.stepDb);
             f.value(g.unit);  // the GAINS entry's unit token (0.3)
             f.value(gainDrivenByAgc(airspy, g.name));  // FOXAPI_ITEM_AGC (0.3, 8.3)
-            if (i < deviceGainsDb_.size()) { f.value(deviceGainsDb_[i]); }
+            if (i < rx().deviceGainsDb_.size()) { f.value(rx().deviceGainsDb_[i]); }
         }
-        for (const auto& a : deviceAntennas_) { f.text(a); }
-        f.text(deviceAntenna_);
+        for (const auto& a : rx().deviceAntennas_) { f.text(a); }
+        f.text(rx().deviceAntenna_);
     }
     for (const auto& a : devices_) {
         f.text(a.name);
@@ -303,7 +303,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     // HASHED WHETHER OR NOT THE RECEIVER RUNS (API 0.3 8.8): PLUGINS' MATCHED is the runner's answer for any kind
     // of plugin and is read with the receiver stopped. The pass takes the snapshot while stopped as well
     // (fillPublishedState), so this adds no acquisition of the lock.
-    f.value(pipeline_.running());
+    f.value(rx().pipeline_.running());
     for (const std::string& k : feedingKeysScratch_) { f.text(k); }
     // --- API 0.3's, and the 0.2 lists step 1 left out ----------------------
     // The store.
@@ -372,8 +372,8 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(addAllFailed_);  // the level of the addAllSummary line
     // The transmitter's address and whether it is open.
     f.text(transmitArgs_);
-    f.text(sourceKind_);
-    f.text(deviceArgs_);
+    f.text(rx().sourceKind_);
+    f.text(rx().deviceArgs_);
     f.value(transmitter_.haveSink());
     // Plugin marks, the band plan, the presets people saved.
     f.value(pluginMarkersSeq_);
@@ -390,15 +390,15 @@ std::uint64_t Engine::apiListsFingerprint() {
         f.value(u.bandwidthHz);
     }
     // The radio's own switches, its bias tee, its converter.
-    f.value(deviceRfNotchPresent_);
-    f.value(deviceRfNotch_);
-    f.value(deviceDabNotchPresent_);
-    f.value(deviceDabNotch_);
-    f.value(deviceHdrPresent_);
-    f.value(deviceHdr_);
-    f.value(deviceAdcSwitchesPresent_);
-    f.value(deviceDither_);
-    f.value(deviceRandomiser_);
+    f.value(rx().deviceRfNotchPresent_);
+    f.value(rx().deviceRfNotch_);
+    f.value(rx().deviceDabNotchPresent_);
+    f.value(rx().deviceDabNotch_);
+    f.value(rx().deviceHdrPresent_);
+    f.value(rx().deviceHdr_);
+    f.value(rx().deviceAdcSwitchesPresent_);
+    f.value(rx().deviceDither_);
+    f.value(rx().deviceRandomiser_);
     f.value(biasTeePanel_.present);
     f.value(biasTeePanel_.shown);
     for (const auto& c : converters_) {
@@ -415,13 +415,13 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(biasTeeReachable());
     f.value(biasTeePanel_.remembered.size());
     f.value(biasStandIn_);
-    if (device_ != nullptr) { f.cstr(device_->name()); }
+    if (rx().device_ != nullptr) { f.cstr(rx().device_->name()); }
     // The converter IN FORCE (what the pipeline applies, which a sound card's
     // format makes differ from the stored setting), what the alias note says,
     // and the sound card the converter key is made from: two cards leave
     // deviceArgs_ empty alike, and the second must still rebuild the lists.
     {
-        const cascade::core::ConverterSetting live = pipeline_.converter();
+        const cascade::core::ConverterSetting live = rx().pipeline_.converter();
         f.value(live.mode);
         f.value(live.loHz);
         f.value(live.inverted);
@@ -454,7 +454,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(airbandChans_.size());
     f.value(scanTicked_);
     // AUTOMATIC SQUELCH (stub campaign B12): the switch and the floor in whole decibels (a wobble of a tenth must not rebuild the block).
-    f.value(squelchAuto_);
+    f.value(rx().squelchAuto_);
     f.value(squelchFloorWhole());
     // A PLUGIN MAY KEY THE TRANSMITTER (stub campaign B13): the window (open, its length, the seconds left - the block is rebuilt once a second while one is open and not
     // otherwise), why it last closed, what the last ARM was refused for, who is on the air, DATA (flat), the grant list, and for each module that declares transmit audio the
@@ -481,10 +481,10 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(bookmarkImportPending());
     f.value(importLast_.seq);
     // The status lines.
-    for (const std::string* t : {&sourceError_, &gpsRefusal_, &catalogError_, &bandPlanError_, &tuneMismatchNote_,
+    for (const std::string* t : {&rx().sourceError_, &gpsRefusal_, &catalogError_, &bandPlanError_, &rx().tuneMismatchNote_,
                                  &transmitError_, &soundCardMissing_, &sdrPlayApiDetail_, &sdrPlayAdvice_,
-                                 &recordNotice_, &recordError_, &presetNote_, &pluginEnforceError_,
-                                 &restoreKeepLabel_, &audioHealthNote_,  // (audioHealth: API 0.3 8.4)
+                                 &rx().recordNotice_, &rx().recordError_, &presetNote_, &pluginEnforceError_,
+                                 &rx().restoreKeepLabel_, &rx().audioHealthNote_,  // (audioHealth: API 0.3 8.4)
                                  &bookmarkImportNote_, &bookmarkError_,  // (the Bookmarks section's: 8.6)
                                  &installReport_, &installError_,  // (the plugin install/remove outcome: 8.8)
                                  &catalogStatus_, &addAllSummary_}) {  // (the store window's two more: 8.9)
@@ -567,13 +567,13 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(carriedAirCentre().has_value());
     // The recorders: whether each is taking, and to which file (the bytes
     // are read live, never fingerprinted).
-    f.value(iqRecorder_.recording());
-    f.value(audioRecorder_.recording());
+    f.value(rx().iqRecorder_.recording());
+    f.value(rx().audioRecorder_.recording());
     // ...and whether a take's file is still being opened or its start has been withdrawn (fact.recorder.start, stub campaign B18): raw words, no string built.
-    f.value(recordStartState(iqStart_));
-    f.value(recordStartState(audioStart_));
-    f.value(iqRecordStartS_);
-    f.value(audioRecordStartS_);
+    f.value(recordStartState(rx().iqStart_));
+    f.value(recordStartState(rx().audioStart_));
+    f.value(rx().iqRecordStartS_);
+    f.value(rx().audioRecordStartS_);
     f.text(recordDir_);
     // The usage switch, the install id it minted, and the session counters (API 0.3 8.13: fact.telemetry.* and fact.diag.*).
     f.value(telemetryEnabled_);
@@ -594,10 +594,10 @@ std::uint64_t Engine::apiListsFingerprint() {
     // allocates (the sound card list and the unbound dongles are small, and are hashed by what they carry).
     //  - the combo's own row, and what the section says about the radio being kept / being opened
     f.value(sourceSel_);
-    f.text(restoreKeep_.kind);
-    f.value(deviceOpenPending_);
-    f.text(deviceBusyLabel_);
-    f.text(deviceModel_);
+    f.text(rx().restoreKeep_.kind);
+    f.value(rx().deviceOpenPending_);
+    f.text(rx().deviceBusyLabel_);
+    f.text(rx().deviceModel_);
     //  - the scan's state, and the inputs of the gate (soapyScanGated) and of the plan behind scanSkip that nothing
     //    above hashes: the process-wide count of open SoapySDR radios (an abandoned one keeps the scan gated for the
     //    rest of the session with no radio installed) and the patch radios still opening. The gate's ANSWER is not
@@ -625,17 +625,17 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(ppmCorrectionOn_);
     f.value(ppmRadioApplied_);
     f.text(ppmError_);
-    f.text(sourceKind_);
-    f.text(deviceArgs_);
-    f.text(deviceModel_);
+    f.text(rx().sourceKind_);
+    f.text(rx().deviceArgs_);
+    f.text(rx().deviceModel_);
     for (const auto& kv : ppmValues_) {
         f.text(kv.first);
         f.value(kv.second);
     }
     //  - what automatic last did to the audio buffer (the parts of fact.audio.leadNote)
-    f.value(static_cast<int>(audioLeadNote_));
-    f.value(audioLeadNoteMs_);
-    f.value(audioLeadNoteCount_);
+    f.value(static_cast<int>(rx().audioLeadNote_));
+    f.value(rx().audioLeadNoteMs_);
+    f.value(rx().audioLeadNoteCount_);
     for (const cascade::usb::UsbDeviceInfo& u : nativeUnbound_) {
         f.value(u.vid);
         f.value(u.pid);
@@ -644,9 +644,9 @@ std::uint64_t Engine::apiListsFingerprint() {
     for (const std::string& d : faultedDrivers_) { f.text(d); }
     f.value(scanEvidenceSeq_);
     //  - the radio's fault sentence WHOLE (STATUS_LINES deviceFault) and the rates' captions
-    f.text(apiFaultText_);
+    f.text(rx().apiFaultText_);
     if (haveDevice) {
-        for (const std::string& l : deviceRateLabels_) { f.text(l); }
+        for (const std::string& l : rx().deviceRateLabels_) { f.text(l); }
     }
     //  - the sound card: where the listing stands, the form, and the inputs it listed
     f.value(soundCardListed_);
@@ -675,8 +675,8 @@ std::uint64_t Engine::apiListsFingerprint() {
 std::shared_ptr<const ApiListBlock> Engine::buildApiLists(std::uint64_t fingerprint) {
     auto b = std::make_shared<ApiListBlock>();
     b->fingerprint = fingerprint;
-    b->mode = cascade::gui::abiDemodForModeIndex(modeIndex_);
-    b->bandwidthHz = vfoBandwidthHz_;
+    b->mode = cascade::gui::abiDemodForModeIndex(rx().modeIndex_);
+    b->bandwidthHz = rx().vfoBandwidthHz_;
     // The bookmarks: shared with the previous block unless they changed.
     if (apiLists_ != nullptr && apiListsBookmarkVersion_ == freqMgr_.version() && apiLists_->bookmarks) {
         b->bookmarks = apiLists_->bookmarks;
@@ -689,34 +689,34 @@ std::shared_ptr<const ApiListBlock> Engine::buildApiLists(std::uint64_t fingerpr
     // Engine::selectSourceById matches them against these same lists).
     // API 0.3 8.10: the combo's two fixed rows are entries too (an entry's index is its row in the combo), and every id
     // is the one spelling sourceIdForRow gives the combo.
-    b->devices.push_back({"Signal generator", sourceIdForRow(0), sourceKind_ == "siggen"});
-    b->devices.push_back({"IQ file", sourceIdForRow(1), sourceKind_ == "file"});
-    b->devices.push_back({"Sound card", sourceIdForRow(kSoundCardRow), sourceKind_ == "soundcard"});
+    b->devices.push_back({"Signal generator", sourceIdForRow(0), rx().sourceKind_ == "siggen"});
+    b->devices.push_back({"IQ file", sourceIdForRow(1), rx().sourceKind_ == "file"});
+    b->devices.push_back({"Sound card", sourceIdForRow(kSoundCardRow), rx().sourceKind_ == "soundcard"});
     for (std::size_t i = 0; i < nativeDevices_.size(); ++i) {
         const auto& d = nativeDevices_[i];
         b->devices.push_back({d.label, sourceIdForRow(kNativeRowBase + static_cast<int>(i)),
-                              sourceKind_ == d.driver && deviceArgs_ == d.args});
+                              rx().sourceKind_ == d.driver && rx().deviceArgs_ == d.args});
     }
     for (std::size_t i = 0; i < soapyDevices_.size(); ++i) {
         const auto& d = soapyDevices_[i];
         b->devices.push_back({d.label, sourceIdForRow(soapyRowBase() + static_cast<int>(i)),
-                              sourceKind_ == "soapy" && deviceArgs_ == d.args});
+                              rx().sourceKind_ == "soapy" && rx().deviceArgs_ == d.args});
     }
-    if (device_ != nullptr) {
-        b->rates = deviceRatesHz_;
-        for (std::size_t i = 0; i < deviceRatesHz_.size(); ++i) {
-            b->rateLabels.push_back(i < deviceRateLabels_.size() ? deviceRateLabels_[i] : cascade::gui::rateLabel(deviceRatesHz_[i]));
+    if (rx().device_ != nullptr) {
+        b->rates = rx().deviceRatesHz_;
+        for (std::size_t i = 0; i < rx().deviceRatesHz_.size(); ++i) {
+            b->rateLabels.push_back(i < rx().deviceRateLabels_.size() ? rx().deviceRateLabels_[i] : cascade::gui::rateLabel(rx().deviceRatesHz_[i]));
         }
-        b->rateHz = pipeline_.activeSource().sampleRateHz();
+        b->rateHz = rx().pipeline_.activeSource().sampleRateHz();
         const cascade::source::AirspySource* const airspy = asAirspyDevice();
-        for (std::size_t i = 0; i < deviceGainRanges_.size(); ++i) {
-            const auto& g = deviceGainRanges_[i];
+        for (std::size_t i = 0; i < rx().deviceGainRanges_.size(); ++i) {
+            const auto& g = rx().deviceGainRanges_[i];
             b->gains.push_back({g.name, g.minDb, g.maxDb, g.stepDb,
-                                i < deviceGainsDb_.size() ? static_cast<double>(deviceGainsDb_[i]) : 0.0,
+                                i < rx().deviceGainsDb_.size() ? static_cast<double>(rx().deviceGainsDb_[i]) : 0.0,
                                 cascade::gui::gainUnitWire(g.unit), gainDrivenByAgc(airspy, g.name)});
         }
-        b->antennas = deviceAntennas_;
-        b->antenna = deviceAntenna_;
+        b->antennas = rx().deviceAntennas_;
+        b->antenna = rx().deviceAntenna_;
     }
     for (int i = 0; i < static_cast<int>(devices_.size()); ++i) {
         const auto& a = devices_[static_cast<std::size_t>(i)];
@@ -786,7 +786,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             d.key = p.key;
             d.running = p.running;
             d.mutes = p.mutes;
-            d.fed = pipeline_.running() && std::find(feedingKeysScratch_.begin(), feedingKeysScratch_.end(),
+            d.fed = rx().pipeline_.running() && std::find(feedingKeysScratch_.begin(), feedingKeysScratch_.end(),
                                                      p.key) != feedingKeysScratch_.end();
             for (const cascade::core::DecoderStatus& st : status) {
                 if (st.key == p.key && st.reason != cascade::core::DecoderIdleReason::Running) {
@@ -1061,13 +1061,13 @@ void Engine::buildApiLists03(ApiListBlock& b) {
                                  static_cast<std::uint32_t>(i)});
     }
     // THE RADIO'S OWN SWITCHES (SET_DEVICE_OPTION's names), where present.
-    if (device_ != nullptr) {
-        if (deviceRfNotchPresent_) { b.deviceOptions.emplace_back("rf_notch", deviceRfNotch_); }
-        if (deviceDabNotchPresent_) { b.deviceOptions.emplace_back("dab_notch", deviceDabNotch_); }
-        if (deviceHdrPresent_) { b.deviceOptions.emplace_back("hdr", deviceHdr_); }
-        if (deviceAdcSwitchesPresent_) {
-            b.deviceOptions.emplace_back("dither", deviceDither_);
-            b.deviceOptions.emplace_back("randomiser", deviceRandomiser_);
+    if (rx().device_ != nullptr) {
+        if (rx().deviceRfNotchPresent_) { b.deviceOptions.emplace_back("rf_notch", rx().deviceRfNotch_); }
+        if (rx().deviceDabNotchPresent_) { b.deviceOptions.emplace_back("dab_notch", rx().deviceDabNotch_); }
+        if (rx().deviceHdrPresent_) { b.deviceOptions.emplace_back("hdr", rx().deviceHdr_); }
+        if (rx().deviceAdcSwitchesPresent_) {
+            b.deviceOptions.emplace_back("dither", rx().deviceDither_);
+            b.deviceOptions.emplace_back("randomiser", rx().deviceRandomiser_);
         }
     }
     b.serialPorts = serialPorts_;
@@ -1080,15 +1080,15 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             int level;
         };
         const Line lines[] = {
-            {"sourceError", &sourceError_, 3},        {"gpsRefusal", &gpsRefusal_, 3},
+            {"sourceError", &rx().sourceError_, 3},        {"gpsRefusal", &gpsRefusal_, 3},
             {"catalogError", &catalogError_, 3},      {"bandPlanError", &bandPlanError_, 3},
-            {"tuneMismatchNote", &tuneMismatchNote_, 2}, {"transmitError", &transmitError_, 3},
+            {"tuneMismatchNote", &rx().tuneMismatchNote_, 2}, {"transmitError", &transmitError_, 3},
             {"soundCardMissing", &soundCardMissing_, 2}, {"sdrPlayApiDetail", &sdrPlayApiDetail_, 2},
-            {"sdrPlayAdvice", &sdrPlayAdvice_, 2},    {"recordNotice", &recordNotice_, 1},
-            {"recordError", &recordError_, 3},        {"presetNote", &presetNote_, 1},
-            {"pluginEnforceError", &pluginEnforceError_, 3}, {"restoreKeepLabel", &restoreKeepLabel_, 1},
+            {"sdrPlayAdvice", &sdrPlayAdvice_, 2},    {"recordNotice", &rx().recordNotice_, 1},
+            {"recordError", &rx().recordError_, 3},        {"presetNote", &presetNote_, 1},
+            {"pluginEnforceError", &pluginEnforceError_, 3}, {"restoreKeepLabel", &rx().restoreKeepLabel_, 1},
             // 8.4: the audio watchdog's note under the Sinks section's device combo, a warning.
-            {"audioHealth", &audioHealthNote_, 2},
+            {"audioHealth", &rx().audioHealthNote_, 2},
             // 8.6: the Bookmarks section's note (what an import, an export or a group removal did)
             // and its red line (the bookmark file could not be read or saved).
             {"bookmarkNote", &bookmarkImportNote_, 1},
@@ -1103,7 +1103,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             {"addAllSummary", &addAllSummary_, addAllFailed_ ? 3 : 1},
             // 8.10: the radio's fault sentence WHOLE (FoxReceiverState::faultMessage cuts it at 127 bytes, and the
             // zombie-source sentence is 134): the pipeline's, or the test stand-in's.
-            {"deviceFault", &apiFaultText_, 3},
+            {"deviceFault", &rx().apiFaultText_, 3},
         };
         for (const Line& l : lines) {
             b.statusLines.push_back({l.key, *l.text, l.level});
@@ -1119,7 +1119,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
                                     active, active ? &converterRadioCentre_ : nullptr});
         }
         fact("converter.radioKey", now, true);
-        const cascade::core::ConverterSetting live = pipeline_.converter();
+        const cascade::core::ConverterSetting live = rx().pipeline_.converter();
         fact("converter.name", converterName(live));
         // API 0.3 8.3: the converter IN FORCE ("<mode> <LO Hz> <inverted>", the
         // LO to the digit it round-trips by), the note the Source section may
@@ -1166,7 +1166,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     fact("bookmarks.export.path", exportLast_.shown, true);
     {
         char rateText[40];
-        std::snprintf(rateText, sizeof(rateText), "%.17g", pipeline_.inputRateHz());
+        std::snprintf(rateText, sizeof(rateText), "%.17g", rx().pipeline_.inputRateHz());
         fact("input.rateHz", rateText);
     }
     // AN AIRSPY's gain modes and decimation factors.
@@ -1386,9 +1386,9 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // to say that neither the take flags nor the RECORDINGS list carries: two characters, the I/Q take's and the audio take's, each '0' no start out, '1' the file
     // is being opened, '2' the start was withdrawn and the worker has not answered yet. (Stub campaign B18; it was a field of the window's own recorder before the
     // split.)
-    fact("recorder.start", std::string{static_cast<char>('0' + recordStartState(iqStart_)), static_cast<char>('0' + recordStartState(audioStart_))}, true);
+    fact("recorder.start", std::string{static_cast<char>('0' + recordStartState(rx().iqStart_)), static_cast<char>('0' + recordStartState(rx().audioStart_))}, true);
     for (int k = 0; k < 2; ++k) {
-        const cascade::core::Recorder& rec = k == 0 ? iqRecorder_ : audioRecorder_;
+        const cascade::core::Recorder& rec = k == 0 ? rx().iqRecorder_ : rx().audioRecorder_;
         const std::string path = rec.path();
         fact(k == 0 ? "recorder.iq.path" : "recorder.audio.path", path, true);
         if (path.empty()) { continue; }
@@ -1397,7 +1397,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         r.name = slash == std::string::npos ? path : path.substr(slash + 1);
         r.path = path;
         r.kind = k + 1;
-        r.rateHz = k == 0 ? iqRecordRateHz_ : cascade::core::Pipeline::kAudioRateHz;
+        r.rateHz = k == 0 ? rx().iqRecordRateHz_ : cascade::core::Pipeline::kAudioRateHz;
         r.active = rec.recording();
         r.recorder = &rec;
         b.recordings.push_back(std::move(r));
@@ -1426,8 +1426,8 @@ void Engine::buildApiListsSource(ApiListBlock& b) {
     };
     // The combo's own row, the kind of radio kept for the config, the radio being opened.
     fact("source.row", std::to_string(sourceSel_));
-    fact("source.keep", restoreKeep_.kind);
-    fact("source.opening", deviceOpenPending_ ? deviceBusyLabel_ : std::string());
+    fact("source.keep", rx().restoreKeep_.kind);
+    fact("source.opening", rx().deviceOpenPending_ ? rx().deviceBusyLabel_ : std::string());
     // The scan beside an open radio: the name the two deferral sentences quote, and the drivers a scan leaves out
     // ("" with the whole SoapySDR scan deferred, and with nothing gating it).
     {

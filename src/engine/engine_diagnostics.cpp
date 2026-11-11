@@ -104,10 +104,10 @@ void Engine::reportPluginStatus(const std::vector<cascade::core::HostImage>& ima
     // a rate that is obviously fine.
     std::printf("source status: kind=%s name=%s deviceRate=%.6f chainRate=%.6f "
                 "centre=%.0f running=%d error=%s\n",
-                sourceKind_.c_str(), pipeline_.activeSourceName(),
-                pipeline_.activeSource().sampleRateHz(), pipeline_.inputRateHz(),
-                pipeline_.activeSource().centerFrequencyHz(),
-                pipeline_.running() ? 1 : 0,
+                rx().sourceKind_.c_str(), rx().pipeline_.activeSourceName(),
+                rx().pipeline_.activeSource().sampleRateHz(), rx().pipeline_.inputRateHz(),
+                rx().pipeline_.activeSource().centerFrequencyHz(),
+                rx().pipeline_.running() ? 1 : 0,
                 statusText().sourceError.empty() ? "-" : statusText().sourceError.c_str());
 
     // The RUNNER, reported separately from the host, because "loaded" and
@@ -180,7 +180,7 @@ void Engine::reportPluginStatus(const std::vector<cascade::core::HostImage>& ima
     // the counts above are: in a bounded run "no line" and "nothing is muting"
     // must not look the same.
     std::printf("audio mute: muted=%d by=%s\n",
-                pipeline_.audioMuted() ? 1 : 0, muteSubjectText().c_str());
+                rx().pipeline_.audioMuted() ? 1 : 0, muteSubjectText().c_str());
     std::printf("plugin runner: active=%d lines=%d audioFed=%llu iqFed=%llu\n",
                 static_cast<int>(pluginRunner_.activeCount()),
                 static_cast<int>(decoderLog_.size()),

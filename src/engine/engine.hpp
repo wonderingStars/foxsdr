@@ -213,6 +213,34 @@ private:
     // The source generation of radio `radio` (a live one): the guard that drops a command asked of a radio that has gone since.
     std::uint64_t receiverSourceGen(std::uint32_t radio) const { return receivers_[radio - 1u]->sourceGen_.load(); }
 
+    // THE RECEIVER AN ENGINE FUNCTION ACTS ON (multi-radio stage 4). Every function of the engine that touches "the radio" names it through rx(): the
+    // receiver slot the calling thread has selected with a SlotScope, or slot 0 (the receiver every client has always used) when none is. The control
+    // pass selects a slot for a command addressed to it (applyCommand), for each radio's own housekeeping (the per-radio polls) and for each radio's
+    // publish. The selection is per THREAD and per ENGINE (a scope of another engine, or none, reads as slot 0), restored when the scope ends, and
+    // never held across a thread: a worker that a slot starts carries its answer back in its own result (DeviceOpenResult), and the pass applies it
+    // under that slot's scope. The same-named references in Engine (below) remain, bound to slot 0, for the friends and the tests that name them.
+    inline static thread_local const Engine* tlsScopeEngine_ = nullptr;
+    inline static thread_local std::size_t tlsScopeSlot_ = 0;
+    Receiver& rx() const { return *receivers_[tlsScopeEngine_ == this ? tlsScopeSlot_ : 0u]; }
+    // The slot the calling thread has selected on this engine (0 = the first radio).
+    std::size_t scopedSlot() const { return tlsScopeEngine_ == this ? tlsScopeSlot_ : 0u; }
+    class SlotScope {
+    public:
+        SlotScope(const Engine* e, std::size_t slot) : prevEngine_(tlsScopeEngine_), prevSlot_(tlsScopeSlot_) {
+            tlsScopeEngine_ = e;
+            tlsScopeSlot_ = slot;
+        }
+        ~SlotScope() {
+            tlsScopeEngine_ = prevEngine_;
+            tlsScopeSlot_ = prevSlot_;
+        }
+        SlotScope(const SlotScope&) = delete;
+        SlotScope& operator=(const SlotScope&) = delete;
+    private:
+        const Engine* prevEngine_;
+        std::size_t prevSlot_;
+    };
+
     // NO DEFAULT MEMBER INITIALISERS, on purpose: GCC refuses them on a
     // nested struct used by an inline static member of the enclosing class
     // ("required before the end of its enclosing class"). testHooks_ below is
@@ -1191,7 +1219,7 @@ private:
     double& savedRadioRetryLastFailSec_ = receivers_[0]->savedRadioRetryLastFailSec_;
     bool& savedRadioRetryBusy_ = receivers_[0]->savedRadioRetryBusy_;
     double& savedRadioRetryClockS_ = receivers_[0]->savedRadioRetryClockS_;
-    double retryClockS() const { return savedRadioRetryClockS_ >= 0.0 ? savedRadioRetryClockS_ : clockS(); }
+    double retryClockS() const { return rx().savedRadioRetryClockS_ >= 0.0 ? rx().savedRadioRetryClockS_ : clockS(); }
 
     // --- Off-thread SoapySDR discovery and open --------------------------
     // SoapySDR::Device::enumerate()/make() do USB bus discovery and, for a
@@ -1324,7 +1352,7 @@ private:
     void pollSavedRadioRetry();
     // Stops the retries: the user chose something else, so the saved radio is no longer what the session is waiting for. restoreKeep_ itself is
     // left for the exit save to read.
-    void cancelSavedRadioRetry() { savedRadioRetryBusy_ = false; }
+    void cancelSavedRadioRetry() { rx().savedRadioRetryBusy_ = false; }
     // The reopen itself, once pollSoapyRecovery has judged it due: reads the
     // rate, gains, running state and AIR centre off the dead radio (device_),
     // closes it and launches the open. Split from the gate so the carry-across
@@ -1364,7 +1392,7 @@ private:
     // FoxSDR was before the native Airspy and what every other driver still
     // reports.
     cascade::source::GainUnit gainUnitAt(std::size_t i) const {
-        return i < deviceGainRanges_.size() ? deviceGainRanges_[i].unit
+        return i < rx().deviceGainRanges_.size() ? rx().deviceGainRanges_[i].unit
                                             : cascade::source::GainUnit::Decibels;
     }
     cascade::source::GainUnit firstGainUnit() const { return gainUnitAt(0); }
@@ -1772,7 +1800,7 @@ private:
     // is the WINDOW'S, built over this core, and the engine never touches it: it posts a directive through pluginLink_ and the
     // window applies it on its own thread (core/plugin_directive.hpp; docs/engine-stage4.md, step P3).
     std::shared_ptr<cascade::core::PluginApiCore> pluginApi_ =
-        std::make_shared<cascade::core::PluginApiCore>(receiverSnapshot_);
+        std::make_shared<cascade::core::PluginApiCore>(rx().receiverSnapshot_);
     cascade::core::PluginDirectiveLink pluginLink_;
     // THE PLUGIN UI OF AN ENGINE WITH NO WINDOW (the table's headless engine, the tests that build an Engine alone): driven by
     // the engine itself, on the thread that posts, through the same apply() the window uses. Dormant - never rebuilt, never
@@ -3456,7 +3484,7 @@ public:
     // What the receiver published last: the one receiver snapshot (read()
     // and readFull() are the reader side; core/receiver_snapshot.hpp).
     std::shared_ptr<const cascade::core::ReceiverSnapshot> snapshot() const {
-        return receiverSnapshot_;
+        return rx().receiverSnapshot_;
     }
 
 private:

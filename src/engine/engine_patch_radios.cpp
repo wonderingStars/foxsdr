@@ -163,7 +163,7 @@ std::string Engine::patchDeviceLabel(const std::string& key) const {
 
 std::string Engine::patchReceiverRadioKey() const {
     if (patchMainKeep_.valid) { return pc::makeDeviceKey(patchMainKeep_.kind, patchMainKeep_.args); }
-    if (device_ != nullptr) { return pc::makeDeviceKey(sourceKind_, deviceArgs_); }
+    if (rx().device_ != nullptr) { return pc::makeDeviceKey(rx().sourceKind_, rx().deviceArgs_); }
     return std::string();
 }
 
@@ -180,7 +180,7 @@ void Engine::rebuildDeviceLedger() {
         if (slot == 0) {
             if (!patchMainKeep_.valid) {
                 // What the receiver would lend (the same question the loan asks, with the patch taken as running): its device, or its sound card.
-                const cascade::gui::ReceiverLoan held = cascade::gui::receiverSourceForPatch(true, sourceKind_, device_ != nullptr, deviceOpenPending_, deviceArgs_,
+                const cascade::gui::ReceiverLoan held = cascade::gui::receiverSourceForPatch(true, rx().sourceKind_, rx().device_ != nullptr, rx().deviceOpenPending_, rx().deviceArgs_,
                                                                                             soundCardOpenPending_, soundCardLive_);
                 if (held.take) { key = pc::makeDeviceKey(held.kind, held.args); }
             }
@@ -250,7 +250,7 @@ void Engine::patchReconcile() {
     // card is described by what is RUNNING (soundCardLive_), never by the
     // Source section's controls, which may have been edited and not Opened.
     const cascade::gui::ReceiverLoan loan = cascade::gui::receiverSourceForPatch(
-        patchRunning_, sourceKind_, device_ != nullptr, deviceOpenPending_, deviceArgs_,
+        patchRunning_, rx().sourceKind_, rx().device_ != nullptr, rx().deviceOpenPending_, rx().deviceArgs_,
         soundCardOpenPending_, soundCardLive_);
     if (loan.take) {
         PatchMainKeep keep;
@@ -261,8 +261,8 @@ void Engine::patchReconcile() {
         keep.label = loan.kind == "soundcard"
                          ? std::string(tr("Sound card")) + ": " + loan.card.device + " (" +
                                loan.card.hostApi + ")"
-                         : deviceModel_;
-        keep.rateHz = pipeline_.activeSource().sampleRateHz();
+                         : rx().deviceModel_;
+        keep.rateHz = rx().pipeline_.activeSource().sampleRateHz();
         // The AIR centre, which may be below 0 Hz through a converter; no
         // value only when the radio has never been tuned.
         keep.centreHz = carriedAirCentre();
@@ -842,11 +842,11 @@ void Engine::patchStopAll(bool restoreMain) {
     // slots keep what they had); a successful open clears that
     // (pollSoundCard), a failed one leaves it.
     if (keep.kind == "soundcard") {
-        if (!restoreKeep_.valid()) {
-            restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
+        if (!rx().restoreKeep_.valid()) {
+            rx().restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(
                 "soundcard", cfgSoapyArgs_, cfgNativeArgs_, std::string(), keep.rateHz);
             soundCardRemembered_ = keep.card;
-            restoreKeepLabel_ = keep.label;
+            rx().restoreKeepLabel_ = keep.label;
         }
         cascade::core::diagLogf("patch: handing %s back to the receiver",
                                 keptRadioForLog(keep.kind, keep.card, keep.label).c_str());
@@ -859,7 +859,7 @@ void Engine::patchStopAll(bool restoreMain) {
     // a hand-back that finds the radio unlisted, or whose open fails, used to
     // leave the config naming the generator. Remembered the way a startup
     // restore that could not open it is; a successful open clears it.
-    if (!restoreKeep_.valid()) {
+    if (!rx().restoreKeep_.valid()) {
         cascade::gui::RememberedSource r;
         r.kind = keep.kind;
         if (keep.kind == "soapy") {
@@ -870,8 +870,8 @@ void Engine::patchStopAll(bool restoreMain) {
             r.soapyArgs = cfgSoapyArgs_;
         }
         r.sampleRateHz = keep.rateHz;
-        restoreKeep_ = r;
-        restoreKeepLabel_ = keep.label;
+        rx().restoreKeep_ = r;
+        rx().restoreKeepLabel_ = keep.label;
     }
     int row = -1;
     if (keep.kind == "soapy") {
@@ -891,7 +891,7 @@ void Engine::patchStopAll(bool restoreMain) {
                       tr("the radio the patch page was using (%s) is not listed any more - "
                          "choose it again in Source"),
                       keep.label.c_str());
-        sourceError_ = buf;
+        rx().sourceError_ = buf;
         cascade::core::diagWarnf("patch: could not hand %s back to the receiver - not listed",
                                  keptRadioForLog(keep.kind, keep.card, keep.label).c_str());
         return;

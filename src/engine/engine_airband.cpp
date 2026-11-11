@@ -302,10 +302,10 @@ std::int32_t Engine::applyBookmarkAddRows(const FoxCommand& c, const std::string
         // THE SAME RULE AS A TUNE THE RADIO REFUSES (noteTuneRefused): a frequency outside what the radio publishes it covers is not accepted, and
         // the note says what it does cover. Judged at the RADIO, so a converter's LO is taken out first. A radio that publishes no range (the
         // generator, an I/Q file) refuses nothing; the list is the user's. Every row is judged before any is added.
-        const cc::ConverterSetting conv = pipeline_.converter();
+        const cc::ConverterSetting conv = rx().pipeline_.converter();
         double rangeLoHz = 0.0;
         double rangeHiHz = 0.0;
-        const bool hasRange = device_ != nullptr && device_->frequencyRangeHz(rangeLoHz, rangeHiHz);
+        const bool hasRange = rx().device_ != nullptr && rx().device_->frequencyRangeHz(rangeLoHz, rangeHiHz);
         for (const cc::Bookmark& b : items) {
             if (cascade::gui::radioCanTune(cc::radioFromAir(conv, b.freqHz), hasRange, rangeLoHz, rangeHiHz)) { continue; }
             std::string note;
@@ -391,15 +391,15 @@ int Engine::airbandStart() {
     // THE PATCH VIEW HAS THE RECEIVER'S RADIO: hand it back first, then start once the patch has let go (airbandFrame watches for it). LISTEN
     // SWITCHES TO THE RECEIVER VIEW, which is what closing the patch view is (pumpPatch's close rule: the patch stops, the receiver gets its radio
     // back); a window follows the engine's wish (fact.airband.pending). A radio that is being opened is between sources too: the same wait.
-    if (patchPageOpen_ || patchWasOpen_ || deviceOpenPending_) {
+    if (patchPageOpen_ || patchWasOpen_ || rx().deviceOpenPending_) {
         patchPageOpen_ = false;
         airbandStartPending_ = true;
         airbandNote_.clear();
         return 2;
     }
     if (scanner_.active()) { scanner_.stop(); }
-    if (!pipeline_.running()) { startReceiver(); }
-    const double rate = pipeline_.activeSource().sampleRateHz();
+    if (!rx().pipeline_.running()) { startReceiver(); }
+    const double rate = rx().pipeline_.activeSource().sampleRateHz();
     if (!(rate > 0.0) || !cc::patch::chooseChannelRate(rate).ok) {
         airbandNote_ = tr("The receiver's sample rate cannot be divided down to an audio rate - choose another rate in the Source section.");
         return 0;
@@ -421,8 +421,8 @@ int Engine::airbandStart() {
         airbandChans_.push_back(std::move(c));
     }
     airbandRateHz_ = rate;
-    airbandSourceDevice_ = device_;
-    airbandSourceKind_ = sourceKind_;
+    airbandSourceDevice_ = rx().device_;
+    airbandSourceKind_ = rx().sourceKind_;
     airbandTuned_ = false;
     // A FRESH SESSION STARTS FROM BLOCK 0 WITH A FRESH CLOCK. Carried over from the last session, the block index could be past the end of the new
     // plan and the watchdog's clock long expired: the watchdog then republished a block that does not exist on every pass, the scanner never
@@ -430,7 +430,7 @@ int Engine::airbandStart() {
     airbandBlock_ = 0;
     airbandPublishedS_ = clockS();
     airbandProgressS_ = airbandPublishedS_;
-    airbandBlocksSeen_ = pipeline_.patchRunner().blocksRun();
+    airbandBlocksSeen_ = rx().pipeline_.patchRunner().blocksRun();
     airbandListening_ = true;
     airbandNote_.clear();
     airbandListVersion_ = freqMgr_.version();
@@ -463,7 +463,7 @@ void Engine::airbandStop(const std::string& why) {
     }
     airbandListening_ = false;
     airbandScanner_.stop();
-    pipeline_.patchRunner().clear();
+    rx().pipeline_.patchRunner().clear();
     airbandFlushHeard();
     for (AirbandChan& c : airbandChans_) {
         c.open = false;
@@ -481,7 +481,7 @@ void Engine::airbandTuneBlock(std::size_t index) {
     // Applied NOW rather than through the retune coalescer: the readback below is the centre the strips are offset from, and a deferred tune
     // would make it the previous block's.
     applyRetuneNow(blk.centreHz, false);
-    airbandCentreHz_ = pipeline_.activeSource().centerFrequencyHz();
+    airbandCentreHz_ = rx().pipeline_.activeSource().centerFrequencyHz();
     airbandTuned_ = true;
     // WHERE IT LANDED, NOT WHERE IT WAS ASKED: a radio that refused the tune, coerced it (a B200 asked for 7 MHz answered 30.8), or has no tuner at
     // all would leave channels outside the band - their strips would alias other frequencies and credit the wrong rows with what they heard.
@@ -518,7 +518,7 @@ void Engine::airbandTuneBlock(std::size_t index) {
         b.node = ch.node;
         airbandBuilt_.push_back(b);
     }
-    pipeline_.patchRunner().publish(std::move(set));
+    rx().pipeline_.patchRunner().publish(std::move(set));
     airbandPublishedS_ = clockS();
     airbandProgressS_ = airbandPublishedS_;
     for (AirbandChan& c : airbandChans_) {
@@ -576,7 +576,7 @@ void Engine::airbandFrame() {
             return;
         }
         // The patch has let go of the radio AND the receiver has it open again (the hand-back reopens it on a worker).
-        if (!patchWasOpen_ && !deviceOpenPending_) { airbandStart(); }
+        if (!patchWasOpen_ && !rx().deviceOpenPending_) { airbandStart(); }
         return;
     }
     if (!airbandListening_) { return; }
@@ -586,9 +586,9 @@ void Engine::airbandFrame() {
         return;
     }
     // A radio being opened is between sources: judge nothing until it lands.
-    if (deviceOpenPending_) { return; }
+    if (rx().deviceOpenPending_) { return; }
     // A different radio (a reopen, a source switch): the blocks were cut for the old one's rate and the strips are offset from its centre.
-    if (device_ != airbandSourceDevice_ || sourceKind_ != airbandSourceKind_) {
+    if (rx().device_ != airbandSourceDevice_ || rx().sourceKind_ != airbandSourceKind_) {
         airbandStop(std::string());
         airbandStart();
         return;
@@ -597,18 +597,18 @@ void Engine::airbandFrame() {
         airbandStop(tr("Stopped: the scanner is running."));
         return;
     }
-    if (!pipeline_.running()) {
+    if (!rx().pipeline_.running()) {
         airbandStop(tr("Stopped: the receiver stopped."));
         return;
     }
     // USER WINS, as with the scanner: a centre the monitor did not tune to is the user's hand on the dial, and the strips' offsets no longer mean
     // anything. (airbandTuned_ is false until the first block is tuned: with several blocks that waits for the scanner's first tick.)
-    if (airbandTuned_ && std::fabs(pipeline_.activeSource().centerFrequencyHz() - airbandCentreHz_) > 1.0) {
+    if (airbandTuned_ && std::fabs(rx().pipeline_.activeSource().centerFrequencyHz() - airbandCentreHz_) > 1.0) {
         airbandStop(tr("Stopped: the receiver was retuned."));
         return;
     }
     // A new sample rate, or a different set of ticked rows: cut the blocks again.
-    if (pipeline_.activeSource().sampleRateHz() != airbandRateHz_) {
+    if (rx().pipeline_.activeSource().sampleRateHz() != airbandRateHz_) {
         airbandStop(std::string());
         airbandStart();
         return;
@@ -637,7 +637,7 @@ void Engine::airbandFrame() {
     // rescan, or a stalled radio - and its last squelch reports are history, not news. Reports are also ignored for a moment after each publish:
     // samples captured at the previous centre are still being worked through with the new offsets, and a hold made on them would be a hold on
     // noise.
-    const std::uint64_t ran = pipeline_.patchRunner().blocksRun();
+    const std::uint64_t ran = rx().pipeline_.patchRunner().blocksRun();
     if (ran != airbandBlocksSeen_) {
         airbandBlocksSeen_ = ran;
         airbandProgressS_ = nowS;
@@ -651,7 +651,7 @@ void Engine::airbandFrame() {
             float lvl = -200.0f;
             bool open = false;
             const bool reported = live && settled &&
-                                  pipeline_.patchRunner().squelchState(airbandFirstId_ + static_cast<cc::patch::NodeId>(m), lvl, open);
+                                  rx().pipeline_.patchRunner().squelchState(airbandFirstId_ + static_cast<cc::patch::NodeId>(m), lvl, open);
             const std::size_t ci = blk.members[m];
             if (ci >= airbandChans_.size()) { continue; }
             AirbandChan& c = airbandChans_[ci];
