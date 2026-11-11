@@ -32,6 +32,7 @@
 
 #include "core/airspy_settings.hpp"
 #include "core/audio_open.hpp"
+#include "core/bias_tee.hpp"
 #include "core/noise_floor_tracker.hpp"
 #include "core/pipeline.hpp"
 #include "core/receiver_snapshot.hpp"
@@ -450,6 +451,33 @@ struct Receiver {
     // bundle's dsp-ring line; publishRingFigures() adds the minute still open to them and publishes (core::setRingFigures).
     std::size_t dspRingHighWaterSession_ = 0;
     std::uint64_t dspBlockLongestNsSession_ = 0;
+    // ---- the slot's own life (multi-radio stage 4) ----
+    // Which radio this is, from 1 (slot + 1); set once when the slot is built.
+    std::uint32_t radioNumber_ = 1;
+    // WHAT THE ENGINE-WIDE MIRRORS THAT ARE ONE RADIO'S SAY WHILE THIS SLOT IS THE ONE BEING WORKED ON (Engine::RadioWork): the Source list's selected
+    // row, the I/Q file's path and the two saved-config device spellings live in Engine (the window's and the saved settings' one set), so a command
+    // addressed to a radio other than the first swaps them for this slot's for the length of the call and puts the first radio's back. Slot 0 never uses
+    // them (its are the engine's).
+    int sourceSel_wide_ = 0;
+    // ...and the three more that are the open radio's panel and memory: its bias tee panel (present / shown / remembered), the gains it had before auto gain
+    // switched on, and the crystal correction last applied to it.
+    cascade::gui::BiasTeePanel biasTeePanel_wide_;
+    std::vector<std::pair<std::string, float>> manualGainsBeforeAgc_wide_;
+    double ppmRadioApplied_wide_ = 0.0;
+    std::string iqOpenPath_wide_;
+    std::string cfgSoapyArgs_wide_;
+    std::string cfgNativeArgs_wide_;
+    // WHERE THIS RADIO'S AUDIO GOES (RADIO_AUDIO: AudioOut::kRoute*), and whether the solo rule holds it silent (RADIO_SOLO). The route is the user's
+    // choice and survives a solo; the silence is the engine's and is recomputed from which radio is solo.
+    int audioRoute_ = 0;
+    // A test radio's tone, Hz from the centre ("" device: the signal generator), for the label and for the tests; 0 = none set.
+    double testToneOffsetHz_ = 0.0;
+    // The device key this radio asked the ledger for when it was added ("" for the generator), kept for the refusal and the facts.
+    std::string claimedKey_;
+    // The words fact.radio.<n>.refusal carries when the radio's device could not be had (the ledger's sentence); cleared by the next good open.
+    std::string refusal_;
+    // When the radio asked for a stop of its own accord (RADIO_REMOVE is in progress), so the pass does not start it again. Pass thread only.
+    bool removing_ = false;
     // ---- published state ----
     // THE ONE RECEIVER SNAPSHOT (engine stage 2, core/receiver_snapshot.hpp),
     // declared first so the API core can be built on it: publishReceiverState

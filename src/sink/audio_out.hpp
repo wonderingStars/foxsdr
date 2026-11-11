@@ -227,6 +227,22 @@ public:
     // tilted by the volume control.
     void setVolume(float v01);
 
+    // WHERE THIS STREAM'S AUDIO GOES (multi-radio stage 4; engine RADIO_AUDIO / RADIO_SOLO). A ROUTE is which of the two channels of a stereo stream carry
+    // the sound: kRouteBoth (as ever), kRouteLeft or kRouteRight (the other channel is silent; the sound is NOT folded into it - a radio that is "the left
+    // one" plays on the left speaker only) or kRouteNone. SILENCED is the solo rule's switch: another radio is the solo one, so this stream is held at zero
+    // WITHOUT touching the user's own mute, and un-soloing gives it back exactly as it was. Both are atomics read by the callback, and both are applied as a
+    // gain that MOVES toward its target by a fixed step per frame (kRouteRampFrames, 10 ms at 48 kHz), so a change is a ramp, never a click. A mono stream
+    // (the fallback on a device with one channel) has no left and right: a route of left or right plays as both, none and silenced play nothing.
+    static constexpr int kRouteBoth = 0;
+    static constexpr int kRouteLeft = 1;
+    static constexpr int kRouteRight = 2;
+    static constexpr int kRouteNone = 3;
+    static constexpr std::size_t kRouteRampFrames = 480;
+    void setRoute(int route);
+    int route() const { return route_.load(std::memory_order_relaxed); }
+    void setSilenced(bool silenced);
+    bool silenced() const { return silenced_.load(std::memory_order_relaxed); }
+
     // The callback core. `frames` is what PortAudio hands the callback, so
     // the buffer it fills is frames * channels() floats.
     //
@@ -320,6 +336,12 @@ private:
 
     dsp::SpscRing<float> ring_;
     std::atomic<float> volume_{1.0f};
+    // The route and the solo silence (setRoute / setSilenced), and the gains the callback has reached toward them. The current gains are the
+    // callback's own (one thread writes them); the targets are what the control thread stores.
+    std::atomic<int> route_{kRouteBoth};
+    std::atomic<bool> silenced_{false};
+    float routeGainL_ = 1.0f;
+    float routeGainR_ = 1.0f;
     std::atomic<std::uint64_t> underruns_{0};
     // The lead pullBlock demands before it plays, in frames. Read by the
     // callback on every unprimed block, written by setLeadFrames(): it must be

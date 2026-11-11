@@ -19,6 +19,7 @@
 #include <cmath>
 #include <complex>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -39,6 +40,13 @@ constexpr const char* kFakeRadioId = "rtlsdr:serial=00000001";
 inline std::string& fakeRadioNameOverride() {
     static std::string name;
     return name;
+}
+
+// A switch for a test that needs a radio to DIE mid-stream (multi-radio stage 4: a fault on one radio leaves the others running): while it is set, a fake radio of the
+// kind "hackrf" throws from read(), which is what the pipeline's source thread reports as the radio's fault. Never set by any other test; the kinds "rtlsdr" and the rest never throw.
+inline std::atomic<bool>& fakeRadioThrows() {
+    static std::atomic<bool> on{false};
+    return on;
 }
 
 class FakeRadio final : public cascade::source::DeviceSource {
@@ -65,6 +73,7 @@ public:
     }
     std::size_t read(std::complex<float>* dst, std::size_t n) override {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        if (kind_ == "hackrf" && fakeRadioThrows().load()) { throw std::runtime_error("the fake radio died"); }
         if (abort_) { return 0; }
         for (std::size_t i = 0; i < n; ++i) { dst[i] = {0.0f, 0.0f}; }
         return n;

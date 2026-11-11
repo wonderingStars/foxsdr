@@ -96,7 +96,7 @@ void Engine::openIqFile(const std::string& path) {
     // header walked with reads - on the pass, and a recording on a network share or a sleeping drive held every command, every answer and every
     // publish for as long as the disk took (see core/disk_job.hpp). The worker owns the path and the factory by value and hands back the opened
     // source; pollIqOpen() installs it on a later pass. The pipeline keeps its current source until then, as a failed open always left it.
-    const std::uint64_t gen = sourceGen_.load();
+    const std::uint64_t gen = rx().sourceGen_.load();
     const int row = sourceSel_;
     const auto factory = iqFileFactory_;
     const auto hook = diskHook();
@@ -133,7 +133,7 @@ void Engine::pollIqOpen() {
     };
     // THE CHOICE MAY HAVE MOVED ON while the header was being read (the same rule as a sound card's open): another source installed (sourceGen_
     // moved), a radio open under way, or the combo moved off the row it was asked on. The open file is then simply closed again.
-    if (r.gen != sourceGen_.load() || deviceOpenPending_ || sourceSel_ != r.row) {
+    if (r.gen != rx().sourceGen_.load() || rx().deviceOpenPending_ || sourceSel_ != r.row) {
         cc::diagLogf("source: an I/Q file open finished after the choice moved on");
         letGo(std::move(r.file));
         return;
@@ -143,7 +143,7 @@ void Engine::pollIqOpen() {
         // (gui/iq_file_box.hpp: PRIVACY.md promises the log never names a file you opened): a tester's report of an Open that "does nothing"
         // came with a log that had no I/Q line at all, and a refused open was the one outcome of the key that left no trace anywhere but a
         // red line on the screen.
-        sourceError_ = r.error;
+        rx().sourceError_ = r.error;
         cc::diagWarnf("source: the I/Q file did not open: %s", cascade::core::iqOpenReasonForLog(r.error, r.path).c_str());
         return;
     }
@@ -154,25 +154,25 @@ void Engine::installOpenedIqFile(std::unique_ptr<cascade::source::IqFileSource> 
     // Carry the displayed frequency over: a file's center is nominal anyway, and a readout that jumps to 0 on source switch would read as a
     // tuning bug. The AIR frequency carries over; the file is told it through its own converter, which is off unless the user set one for I/Q
     // files.
-    const double fileRadioHz = radioHzForSource("file", std::string(), pipeline_.activeSource().centerFrequencyHz());
+    const double fileRadioHz = radioHzForSource("file", std::string(), rx().pipeline_.activeSource().centerFrequencyHz());
     if (fileRadioHz >= 0.0) { file->setCenterFrequencyHz(fileRadioHz); }
-    device_ = nullptr;  // before setSource destroys a live device
-    soapyView_ = nullptr;
-    deviceArgs_.clear();
-    deviceModel_.clear();
-    sourceError_.clear();
-    ++sourceGen_;  // a device open still in flight is now stale
+    rx().device_ = nullptr;  // before setSource destroys a live device
+    rx().soapyView_ = nullptr;
+    rx().deviceArgs_.clear();
+    rx().deviceModel_.clear();
+    rx().sourceError_.clear();
+    ++rx().sourceGen_;  // a device open still in flight is now stale
     installSource(std::move(file));
-    sourceKind_ = "file";
+    rx().sourceKind_ = "file";
     applyConverterForSource();
     iqOpenPath_ = path;
     // A file is a deliberate choice of source like any other, so a radio remembered from a failed restore is superseded here too - see
     // selectSource's generator row.
-    restoreKeep_ = cascade::gui::RememberedSource{};
-    restoreKeepLabel_.clear();
+    rx().restoreKeep_ = cascade::gui::RememberedSource{};
+    rx().restoreKeepLabel_.clear();
     followInputRate();  // DSP chain + frequency axis track the file's rate
     // The RATE, never the path: a file name is the user's own data and a report is a support artefact, not a listening record.
-    cc::diagLogf("source: opened an I/Q file at %.0f S/s", pipeline_.activeSource().sampleRateHz());
+    cc::diagLogf("source: opened an I/Q file at %.0f S/s", rx().pipeline_.activeSource().sampleRateHz());
 }
 
 // --- THE FREQUENCY LIST EXPORTED --------------------------------------------------------------------------------------------------------------

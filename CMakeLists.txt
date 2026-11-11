@@ -837,6 +837,9 @@ target_link_libraries(foxsdr-reports PRIVATE cascade_engine)
 if(WIN32)
     add_executable(multi_radio_load EXCLUDE_FROM_ALL tools/multi_radio_load/main.cpp)
     target_link_libraries(multi_radio_load PRIVATE cascade_engine psapi propsys ole32)
+    # ...and its successor for the multi-radio engine (stage 4): the same load through the REAL ENGINE (control thread, API host, per-radio publish).
+    add_executable(multi_radio_load_engine EXCLUDE_FROM_ALL tools/multi_radio_load/engine_main.cpp)
+    target_link_libraries(multi_radio_load_engine PRIVATE cascade_engine psapi)
 endif()
 
 # nb_real_noise - measures the noise blanker on a REAL I/Q recording of power-line impulse noise through the real Vfo, and
