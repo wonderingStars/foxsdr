@@ -149,6 +149,12 @@
 #define FOXAPP_OP_DISPLAY_AVERAGE        0x881Bu /* text: JSON, see above */
 #define FOXAPP_OP_WF_HISTORY             0x881Cu /* ival[0]: 0 pause / 1 live / 2 back / 3 forward / 4 seek / 5 on-off; num[0], num[1], ival[1]: see above. Addresses one radio (target) */
 
+//   TRACE_MODE (SETTINGS; screen S1's engine hand-off "a saved trace mode with persistence"): the spectrum trace's mode as the Slint window names it, kept by the engine in trace-mode.json beside markers.json so it
+//   comes back at the next start. (The classic window's saved spectrumTraceMode has no values for these; its config key is left alone: AppConfig is a shared file.) text = one of "normal", "peak_hold", "min_hold",
+//   "average", "persistence_fast", "persistence_medium", "persistence_slow" (the persistence tau 0.3 s, 1 s, 3 s). Default "normal". OUT_OF_RANGE for any other word; NO_CHANGE when it is in force already. The window
+//   draws the trace; the engine only keeps the choice (fact.display.trace) and answers every client with it. A damaged file is ignored (fact.display.trace.error says why).
+#define FOXAPP_OP_TRACE_MODE             0x881Du /* text: the mode word */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -180,7 +186,8 @@
     {FOXAPP_OP_OVERLAY_LOOKUP, "APP_OVERLAY_LOOKUP", true}, \
     {FOXAPP_OP_GRADIENT_SET, "APP_GRADIENT_SET", true}, \
     {FOXAPP_OP_DISPLAY_AVERAGE, "APP_DISPLAY_AVERAGE", true}, \
-    {FOXAPP_OP_WF_HISTORY, "APP_WF_HISTORY", true},
+    {FOXAPP_OP_WF_HISTORY, "APP_WF_HISTORY", true}, \
+    {FOXAPP_OP_TRACE_MODE, "APP_TRACE_MODE", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP

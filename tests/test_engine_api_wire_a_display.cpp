@@ -7,6 +7,9 @@
 //   D2  WATERFALL HISTORY: off by default (nothing kept, ops say so); switched on for radio 1 it keeps the lines that are published; PAUSE freezes the view while the live lines go on; scroll back moves the view
 //       by the lines asked and reports how far behind it is; forward and live come back; a time before the first line seeks the oldest; bad numbers are refused; switched off it frees the memory.
 //
+//   D3  TRACE MODE: "normal" is the default; each of the six other words is taken and read back, the same word is NO_CHANGE, a word that is none is refused with nothing changed; the choice is kept in
+//       trace-mode.json and a new engine starts on it; a damaged file is reported and the default stands.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cmath>
 #include <cstdio>
@@ -190,6 +193,46 @@ void testHistory() {
     CHECK_EQ(w.waterfallCopy(0, 10, v, bins), std::size_t(0));
 }
 
+void testTrace() {
+    std::printf("D3: trace mode\n");
+    const fs::path user = g_dir / "user3";
+    const char* const words[] = {"peak_hold", "min_hold", "average", "persistence_fast", "persistence_medium", "persistence_slow", "normal"};
+    {
+        Rig r(user);
+        CHECK_EQ(r.fact("display.trace"), std::string("normal"));
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_TRACE_MODE, 0.0, 0, "normal")).status(), FOXAPI_NO_CHANGE);
+        for (const char* w : words) {
+            CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_TRACE_MODE, 0.0, 0, w)).status(), FOXAPI_OK);
+            CHECK_EQ(r.fact("display.trace"), std::string(w));
+            CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_TRACE_MODE, 0.0, 0, w)).status(), FOXAPI_NO_CHANGE);
+        }
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_TRACE_MODE, 0.0, 0, "persistence_slow")).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_TRACE_MODE, 0.0, 0, "sparkly")).status(), FOXAPI_OUT_OF_RANGE);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_TRACE_MODE, 0.0, 0, "")).status(), FOXAPI_OUT_OF_RANGE);
+        CHECK_EQ(r.fact("display.trace"), std::string("persistence_slow"));
+        CHECK(r.until([&] {
+            std::ifstream f(user / "trace-mode.json");
+            std::string t((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            return t.find("persistence_slow") != std::string::npos;
+        }, 6000));
+    }
+    {
+        Rig r(user);
+        r.settle(200);
+        CHECK_EQ(r.fact("display.trace"), std::string("persistence_slow"));   // a new engine starts on it
+    }
+    {
+        std::ofstream f(user / "trace-mode.json", std::ios::binary);
+        f << "{\"version\":1,\"mode\":\"glitter\"}";
+    }
+    {
+        Rig r(user);
+        r.settle(200);
+        CHECK_EQ(r.fact("display.trace"), std::string("normal"));
+        CHECK(!r.fact("display.trace.error").empty() && r.fact("display.trace.error") != "<absent>");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -201,6 +244,7 @@ int main() {
     fs::create_directories(g_dir, ec);
     testChain();
     testHistory();
+    testTrace();
     fs::remove_all(g_dir, ec);
     return check::finish("test_engine_api_wire_a_display");
 }

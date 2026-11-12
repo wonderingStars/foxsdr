@@ -96,9 +96,40 @@ bool parseAverage(const std::string& text, int& mode, long long& frames, double&
 }
 }  // namespace
 
+namespace {
+bool traceModeWord(const std::string& w) {
+    static const char* const ok[] = {"normal", "peak_hold", "min_hold", "average", "persistence_fast", "persistence_medium", "persistence_slow"};
+    for (const char* o : ok) { if (w == o) { return true; } }
+    return false;
+}
+}  // namespace
+
+WireA::Result WireA::traceModeOp(const std::string& text, Result res) {
+    framesLoadOnce();
+    if (!traceModeWord(text)) { return refused(res, FOXAPI_OUT_OF_RANGE, "the mode is normal, peak_hold, min_hold, average, persistence_fast, persistence_medium or persistence_slow"); }
+    if (text == traceMode_) { return refused(res, FOXAPI_NO_CHANGE, "that mode is in force already"); }
+    traceMode_ = text;
+    traceError_.clear();
+    saveFile("trace-mode.json", json{{"version", 1}, {"mode", traceMode_}}.dump() + "\n");
+    bump();
+    return res;
+}
+
 void WireA::framesLoadOnce() {
     if (framesLoaded_ || dir().empty()) { return; }
     framesLoaded_ = true;
+    {
+        const std::string t = readFile("trace-mode.json");
+        if (!t.empty()) {
+            const json j = json::parse(t, nullptr, false);
+            if (!j.is_discarded() && j.is_object() && j.contains("mode") && j["mode"].is_string() && traceModeWord(j["mode"].get<std::string>())) {
+                traceMode_ = j["mode"].get<std::string>();
+            } else {
+                traceError_ = "the trace mode file is not valid";
+            }
+            bump();
+        }
+    }
     const std::string text = readFile("display-average.json");
     if (text.empty()) { return; }
     AverageCfg c;
@@ -258,6 +289,8 @@ std::size_t WireA::waterfallCopy(std::size_t slot, std::size_t rows, std::vector
 
 void WireA::framesFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {
     fact("display.average", averageJson());
+    fact("display.trace", traceMode_);
+    fact("display.trace.error", traceError_);
     for (std::size_t slot = 0; slot < wf_.size(); ++slot) {
         if (!e_.receiverLive(static_cast<std::uint32_t>(slot) + 1u)) { continue; }
         const std::string k = "wf." + std::to_string(slot + 1) + ".";

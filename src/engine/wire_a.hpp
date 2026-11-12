@@ -168,6 +168,8 @@ public:
 
 private:
     Result framesOp(const FoxCommand& c, const std::string& text, Result res);
+    Result traceModeOp(const std::string& text, Result res);
+    std::string traceMode_ = "normal", traceError_;
     Result wfOp(const FoxCommand& c, Result res);
     void framesFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
     void framesLoadOnce();

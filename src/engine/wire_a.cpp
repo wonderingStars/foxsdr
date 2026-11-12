@@ -49,6 +49,8 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
         case FOXAPP_OP_DISPLAY_AVERAGE:
         case FOXAPP_OP_WF_HISTORY:
             return framesOp(c, text, res);
+        case FOXAPP_OP_TRACE_MODE:
+            return traceModeOp(text, res);
         case FOXAPP_OP_MARKER_EXPORT:
         case FOXAPP_OP_MARKER_IMPORT:
             return markerIoOp(c, text, res);
