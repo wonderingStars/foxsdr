@@ -35,6 +35,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/dsp_benchmark.hpp"
 #include "core/pipeline.hpp"
 #include "core/recorder.hpp"
 #include "dsp/demod.hpp"
@@ -810,6 +811,28 @@ int runRecordCheck() {
     return 0;
 }
 
+// --- DSP benchmark (flag --benchmark) -----------------------------------------
+//
+// Times the blocks of the DSP chain on THIS machine (core/dsp_benchmark.hpp: FFT sizes, the channel filter, every demodulator mode,
+// the audio resamplers) and prints one line per item with the median and best speed and the multiple of real time. It reads no radio, no
+// config and no network, and writes nothing: a person asking "can this machine keep up with 10 MS/s" gets numbers. The exit code is 0
+// when every item ran and 1 when one threw (the table says which); a speed is never judged.
+int runBenchmark(double secondsPerItem) {
+    core::bench::BenchOptions o;
+    if (secondsPerItem > 0.0) { o.secondsPerItem = secondsPerItem; }
+    std::printf("DSP benchmark: %.2f s per item, %d timed slices each (median and best slice; the machine is shared, the gap is the noise)\n",
+                o.secondsPerItem, o.slices);
+    const std::vector<core::bench::BenchResult> rs = core::bench::runDspBenchmark(o);
+    std::printf("%s", core::bench::formatTable(rs).c_str());
+    int failed = 0;
+    for (const core::bench::BenchResult& r : rs) {
+        if (!r.ok) { ++failed; }
+    }
+    std::printf("benchmark %s: %zu items, %d failed\n", failed == 0 ? "PASS" : "FAIL", rs.size(), failed);
+    return failed == 0 ? 0 : 1;
+}
+
+
 // Which tool mode the command line asked for, filled in by the argument parse
 // (process_boot.cpp) and handed over once the parse has finished - NOT while it
 // runs, so `cascade --selftest --bogus` still reports the unknown argument
@@ -824,6 +847,7 @@ std::optional<int> runToolMode(const ToolRequest& req, int argc, char** argv) {
     // so a second argument can name which dongle ("serial=00000001").
     if (req.rtlsdrCheck) { return rtlsdrCheckMain(argc, argv); }
     if (req.recordCheck) { return runRecordCheck(); }
+    if (req.benchmark) { return runBenchmark(); }
     if (req.toneCheck) { return runToneCheck(); }
     if (req.rdsCheckMhz > 0.0) { return runRdsCheck(req.rdsCheckMhz * 1.0e6); }
     return std::nullopt;

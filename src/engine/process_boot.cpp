@@ -589,6 +589,7 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
     bool soapyCheck = false;
     bool rtlsdrCheck = false;
     bool recordCheck = false;
+    bool benchmark = false;
     bool toneCheck = false;
     bool linkTesterReveal = false;
     double rdsCheckMhz = 0.0;
@@ -687,6 +688,10 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
             // ~1 s real-time sleep and disk writes make it a bench tool,
             // not part of the CI-facing CLI surface.
             recordCheck = true;
+        } else if (std::strcmp(argv[i], "--benchmark") == 0) {
+            // Times the DSP blocks on THIS machine and prints a table (see runBenchmark): headless, about 10 s of CPU,
+            // so a tool mode like the checks, kept out of the usage string (the usage text is pinned by tests).
+            benchmark = true;
         } else if (std::strcmp(argv[i], "--rds-check") == 0) {
             // Hidden bench diagnostic (see runRdsCheck): needs a real radio
             // tuned to a real RDS broadcast, so never a ctest entry.
@@ -915,6 +920,7 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
     boot.tool.soapyCheck = soapyCheck;
     boot.tool.rtlsdrCheck = rtlsdrCheck;
     boot.tool.recordCheck = recordCheck;
+    boot.tool.benchmark = benchmark;
     boot.tool.toneCheck = toneCheck;
     boot.tool.rdsCheckMhz = rdsCheckMhz;
     return std::nullopt;

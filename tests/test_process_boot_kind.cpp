@@ -155,6 +155,15 @@ int main() {
         CHECK(helperBad.exit && helperBad.exitCode == 2);
     }
 
+    // --- --benchmark is a kind-blind tool mode (engine wiring W2): it runs for both kinds as a tool mode (about 5 s each) and never hides an unknown argument (a plain boot is NOT run here: it starts the crash sentinel, a child of this very executable) ---
+    for (const ProcessKind k : {ProcessKind::Host, ProcessKind::Engine}) {
+        setEnv(cascade::core::kInstanceScopeEnv, std::string("bootkind-bench-") + (k == ProcessKind::Host ? "h" : "e") + std::to_string(std::rand()));
+        const BootResult b = boot(k, {"x", "--benchmark"});  // a tool mode runs INSTEAD of a session: the boot answers with its exit code
+        CHECK(b.exit && b.exitCode == 0);
+        const BootResult bad = boot(k, {"x", "--benchmark", "--no-such-flag"});
+        CHECK(bad.exit && bad.exitCode == 1);  // the tool mode never hides an unknown argument
+    }
+
     // --- the flags differ by kind (stage 7b) ---------------------------------------------------------------
     {
         const BootResult s = boot(ProcessKind::Engine, {"foxsdr-engine", "--seconds", "2.5"});
