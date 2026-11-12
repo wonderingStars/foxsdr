@@ -1685,13 +1685,37 @@ set(CASCADE_GUI_TESTS
 #  * packaging_openapi_routes: docs/api/openapi.yaml against the web server's source, so the file cannot rot (needs Python 3).
 # The SDK template under sdk/ has its own CMake project and is built by hand (sdk/README.md).
 find_program(CASCADE_TEST_PWSH NAMES pwsh)
+# wire-c begin: the WindowsApps pwsh.exe is an app-execution alias that can answer "found" and then fail to start from some environments
+# (the engine-merge lanes saw it): ask it a question first, and when it cannot answer register the test as a visible SKIP (exit 77), never silently absent.
 if(CASCADE_TEST_PWSH)
+    execute_process(COMMAND ${CASCADE_TEST_PWSH} -NoProfile -Command "exit 0" RESULT_VARIABLE CASCADE_TEST_PWSH_RC OUTPUT_QUIET ERROR_QUIET TIMEOUT 60)
+    if(NOT CASCADE_TEST_PWSH_RC EQUAL 0)
+        message(STATUS "pwsh (${CASCADE_TEST_PWSH}) does not run here: packaging_manifests will report SKIP")
+        set(CASCADE_TEST_PWSH_RUNS FALSE)
+    else()
+        set(CASCADE_TEST_PWSH_RUNS TRUE)
+    endif()
+endif()
+# wire-c end
+if(CASCADE_TEST_PWSH AND CASCADE_TEST_PWSH_RUNS)
     add_test(NAME packaging_manifests
         COMMAND ${CASCADE_TEST_PWSH} -NoProfile -File ${CMAKE_SOURCE_DIR}/tests/packaging/test_package_manifests.ps1)
     set_tests_properties(packaging_manifests PROPERTIES TIMEOUT 600)
 else()
-    message(STATUS "no pwsh (PowerShell 7): packaging_manifests is not registered")
+    # wire-c begin
+    message(STATUS "no usable pwsh (PowerShell 7): packaging_manifests reports SKIP")
+    add_test(NAME packaging_manifests
+        COMMAND ${CMAKE_COMMAND} -E echo "SKIP packaging_manifests: PowerShell 7 (pwsh) is not usable on this PC; run tests/packaging/test_package_manifests.ps1 with it")
+    set_tests_properties(packaging_manifests PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP packaging_manifests")
+    # wire-c end
 endif()
+# wire-c begin: the release script's package-manifests step, fake-only (no generator run, nothing published)
+if(CASCADE_TEST_PWSH AND CASCADE_TEST_PWSH_RUNS)
+    add_test(NAME release_package_step
+        COMMAND ${CASCADE_TEST_PWSH} -NoProfile -File ${CMAKE_SOURCE_DIR}/tests/test_release_packaging_step.ps1)
+    set_tests_properties(release_package_step PROPERTIES TIMEOUT 300)
+endif()
+# wire-c end
 find_program(CASCADE_TEST_PYTHON NAMES python3 python)
 if(CASCADE_TEST_PYTHON)
     add_test(NAME packaging_openapi_routes
