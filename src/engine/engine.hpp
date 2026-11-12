@@ -3230,6 +3230,8 @@ private:
     void wireCFacts(const std::function<void(const std::string&, const std::string&)>& fact);
     std::uint64_t wireCVersion();
     void pumpWireC();
+    bool wireCRecordingBusy() const;
+    void wireCResumeAction();
     std::unique_ptr<cascade::engine::wirec::State> wireC_;
     std::mutex wireCMutex_;
     std::uint64_t wireCVersion_ = 1;

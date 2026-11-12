@@ -23,6 +23,8 @@
 #include <string>
 #include <vector>
 
+#include "engine/wire_c_power.hpp"
+
 namespace cascade::engine::wirec {
 
 enum class Kind { Bool, Int, Real, Choice, Text };
@@ -77,9 +79,26 @@ public:
     Settings& settings() { return settings_; }
     const Settings& settings() const { return settings_; }
 
+    // The power and resource work (wire_c_power.hpp), made on first use from `powerSeams` (the real ones in the program; a test sets them before the first pass).
+    PowerSeams powerSeams;
+    Power& power() {
+        std::lock_guard<std::mutex> lk(powerMu_);
+        if (!power_) { power_ = std::make_unique<Power>(powerSeams); }
+        return *power_;
+    }
+    bool hasPower() const {
+        std::lock_guard<std::mutex> lk(powerMu_);
+        return power_ != nullptr;
+    }
+    bool powerStarted = false;            // the worker and the watcher are started (control pass only)
+    std::uint64_t perfSeen = 0;           // the last perf version the engine's fingerprint counted
+    std::uint64_t resumeActions = 0;      // resume actions the engine has carried out
+
 private:
     std::filesystem::path folder_;
     Settings settings_;
+    mutable std::mutex powerMu_;
+    std::unique_ptr<Power> power_;
 };
 
 // The text a value is normalised to ("1"/"0" for a Bool, the shortest round-trip number for Int / Real). Used by set() and by the tests.

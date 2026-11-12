@@ -9,6 +9,7 @@
 
 #include "core/app_commands.hpp"
 #include "core/config.hpp"
+#include "core/diag_log.hpp"
 #include "engine/engine.hpp"
 #include "engine/wire_c.hpp"
 
@@ -58,14 +59,77 @@ void Engine::wireCFacts(const std::function<void(const std::string&, const std::
     s.settings().each([&fact](const std::string& key, const std::string& value) { fact("wirec." + key, value); });
     fact("wirec.version", std::to_string(wireCVersion()));
     fact("wirec.error", s.settings().error());
+    // POWER AND RESOURCES (wire_c_power.hpp). "" is "not available" - a reading that could not be made is never shown as 0.
+    if (s.hasPower()) {
+        wc::Power& p = s.power();
+        const wc::PerfFacts f = p.perf();
+        fact("sys.keepawake", p.keepAwakeHeld() && p.keepAwakeActive() ? "1" : "0");
+        fact("sys.resume.count", std::to_string(s.resumeActions));
+        fact("perf.cpu_percent", f.cpuPercent);
+        fact("perf.memory_mb", f.memoryMb);
+        fact("perf.system_memory_percent", f.systemMemoryPercent);
+        fact("perf.gpu_percent", f.gpuPercent);
+        fact("perf.reduced", f.reduced ? "1" : "0");
+        fact("perf.switch.ui_frame_cap_hz", std::to_string(f.switches.uiFrameCapHz));
+        fact("perf.switch.waterfall_rows_per_second", std::to_string(f.switches.waterfallRowsPerSecond));
+        fact("perf.switch.animations", f.switches.animations ? "1" : "0");
+        fact("perf.switch.glow_and_shadows", f.switches.glowAndShadows ? "1" : "0");
+        fact("perf.switch.three_d_views_live", f.switches.threeDViewsLive ? "1" : "0");
+        fact("perf.switch.background_map_redraw", f.switches.backgroundMapRedraw ? "1" : "0");
+    }
 }
 
 std::uint64_t Engine::wireCVersion() {
     return wireCVersion_ + wireC().settings().version();
 }
 
+// Anything recording right now: an audio or I/Q take, the IF or multiplex take of any radio, or a scheduled capture that is starting or recording. The state, not the
+// start and stop sites, so a take that ends any way at all ends the hold (wire_c_power.hpp).
+bool Engine::wireCRecordingBusy() const {
+    for (const auto& r : receivers_) {
+        if (r && (r->iqRecorder_.recording() || r->audioRecorder_.recording() || r->ifRecorder_.recording() || r->mpxRecorder_.recording())) { return true; }
+    }
+    for (const auto& [id, rt] : scheduleRt_) {
+        (void)id;
+        if (rt.state == "recording" || rt.state == "starting") { return true; }
+    }
+    return false;
+}
+
+// What the engine does after the PC wakes: the radios are looked for again (USB ones re-enumerate while it sleeps) and a saved radio that was waiting is tried at
+// once, the same two steps the hot-plug notice takes. It does NOT close and reopen a radio that is open and healthy: whether that is wanted is not settled.
+void Engine::wireCResumeAction() {
+    scanNative();
+    scanSoapy();
+    if (rx().savedRadioRetryBusy_) {
+        rx().savedRadioRetryAttempts_ = 0;
+        rx().savedRadioRetryLastFailSec_ = -1.0e9;
+    }
+}
+
 void Engine::pumpWireC() {
-    // (nothing runs on the pass yet: each feature adds its call here)
+    wc::State& s = wireC();
+    wc::Power& p = s.power();
+    if (!s.powerStarted) {
+        s.powerStarted = true;
+        p.startSampler();
+        p.startResumeWatch();
+    }
+    const std::string mode = s.settings().get("perf.mode");
+    p.setPerfMode(mode == "on" ? cascade::core::sys::EffectsMode::On : mode == "off" ? cascade::core::sys::EffectsMode::Off : cascade::core::sys::EffectsMode::Auto);
+    if (p.keepAwakePass(s.settings().getBool("sys.keep_awake") && wireCRecordingBusy())) { ++wireCVersion_; }
+    if (p.perfVersion() != s.perfSeen) {
+        s.perfSeen = p.perfVersion();
+        ++wireCVersion_;
+    }
+    if (p.takeResume()) {
+        if (s.settings().getBool("sys.resume_reopen")) {
+            cascade::core::diagLogf("power: the PC woke from sleep; looking for the radios again");
+            wireCResumeAction();
+            ++s.resumeActions;
+        }
+        ++wireCVersion_;
+    }
 }
 
 }  // namespace cascade::engine

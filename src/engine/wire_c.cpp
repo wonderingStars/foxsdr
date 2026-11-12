@@ -24,7 +24,8 @@ using nlohmann::json;
 // A feature that opens a network port, a device or a file is OFF ("0") here.
 constexpr Spec kSpecs[] = {
     // --- system (sysmodels) ---
-    {"sys.resume_reopen", Kind::Bool, 0, 0, "1", ""},         // reopen the radio and the audio after the PC wakes from sleep
+    {"sys.keep_awake", Kind::Bool, 0, 0, "1", ""},            // keep the PC awake (never the display) while a recording or scheduled capture runs
+    {"sys.resume_reopen", Kind::Bool, 0, 0, "1", ""},         // look for the radios again when the PC wakes from sleep
     {"sys.backup_on_close", Kind::Bool, 0, 0, "0", ""},       // back the settings up when FoxSDR closes
     {"sys.backup_keep", Kind::Int, 1, 50, "10", ""},          // how many backups to keep
     {"sys.sync_folder", Kind::Text, 0, 260, "", ""},          // a shared folder for syncing profiles (empty = off)

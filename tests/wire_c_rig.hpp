@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <memory>
@@ -65,8 +66,10 @@ inline std::string readAll(const fs::path& p) {
 struct Rig {
     cascade::engine::Engine eng;
     std::unique_ptr<testing::Session> local;
-    explicit Rig(const fs::path& folder) {
+    // `before` runs on the lane's state before the engine is initialised: where a test sets its seams (the OS calls, the clocks).
+    explicit Rig(const fs::path& folder, const std::function<void(cascade::engine::wirec::State&)>& before = {}) {
         Access::useFolder(eng, folder.string());
+        if (before) { before(Access::wirec(eng)); }
         eng.configureApi(kHooks);
         eng.initialise();
         eng.controlPass();
