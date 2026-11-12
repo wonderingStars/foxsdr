@@ -95,3 +95,58 @@ All five new ops are receiver-scoped, saved per radio (`config.json` keys append
 
 Per radio, in `config.json` and the `radios` entries: `spectrumFftSize`, `spectrumWindow`, `spectrumFrameRateHz`, `iqCorrect`, `afcOn`, `afcPullInHz`, `cwPeakOn`, `cwPeakWidthHz`, `cwPeakBoostDb`, `stereoPlaceMode`, `stereoPlaceValue`, `vfoActive`, `vfoOtherHz`, `vfoOtherMode`, `vfoOtherBwHz`, `recordIqFormat`, `recordAudioFormat`. The source kind word `rawiq` (saved radio / `sourceKind`) is NOT yet in the telemetry vocabulary (`health::vocabulary()`, `core/event_trail.cpp kDrivers`, `core/telemetry.cpp nativeFamilyModel`, the Worker): the Worker first, then the application; until then it reports as `other`.
 New strings: none in the string tables (no control was built); the English strings are those of section 4.
+
+## 6. Gates
+
+Machine: about twenty other lanes; Release build in `D:/foxsdr-build/mr-engine1` (Slint ON, `cmake --build . --config Release --parallel 3`, exit 0, 0 errors); headless in slices of 100 test numbers (`ctest -L "headless|slint" -I a,b -j4 --timeout 300`, 912 tests); GUI on the hidden desktop `FoxSDRTests` with `FOXSDR_FRAME_CAP_HZ=60`, `-L gui -j3`.
+
+| Gate | Tip | Result |
+|---|---|---|
+| headless + slint, first run | 86450ff8 | 912 tests, 7 red: the five known false failures (`test_airband_data`, `test_band_plan`, `test_converter_call_sites`, `test_page_resize_id`, `test_png_decode`), `test_diagnostics_free`, and **`test_plugin_containment`, which was this lane's**: its scan read `specBlock_->columns()` in `pipeline.cpp` as a plugin ABI call. Fixed in 54e3067a (a reference, no behaviour change); passes alone. |
+| GUI (`-L gui`, 278 tests) | 54e3067a build (fresh rebuild after the fix) | **278 of 278 passed**, 2,109 s |
+| headless + slint, final | 54e3067a | 912 tests, 7 red, all explained in 6b (five known false failures, `test_diagnostics_free`, and the load flake `test_engine_main_password_not_in_argv` which passes alone) |
+
+### 6b. Every red of the final headless gate, by name, with its result re-run alone (compare with section 8b of `engine-wiring-2.md`)
+
+Final headless gate at 54e3067a: 912 tests, 7 red, 905 passed.
+
+| Test | First gate | Final gate | Alone | Class |
+|---|---|---|---|---|
+| `test_airband_data` | red | red | **fails alone** (0.05 s) | known false failure |
+| `test_band_plan` | red | red | **fails alone** (0.07 s) | known false failure |
+| `test_converter_call_sites` | red | red | **fails alone** (0.01 s) | known false failure |
+| `test_page_resize_id` | red | red | **fails alone** (0.01 s) | known false failure |
+| `test_png_decode` | red | red | **fails alone** (0.01 s) | known false failure |
+| `test_diagnostics_free` | red | red | **fails alone** (6.34 s) | stale-stamp family, as in W2 8b (its gui sibling `test_diagnostics` passes in the GUI gate) |
+| `test_engine_main_password_not_in_argv` | green | red | **passes alone** (6.03 s) | load (it is in W2's list as the same load flake) |
+| `test_plugin_containment` | red (mine) | green | passes alone | fixed in 54e3067a |
+
+No crash among them: no test of either gate ended in an access violation; `test_engine_api_merge` was green in both.
+
+The reference mock engine was not extended and no test compares it with the header (`test_mock_engine` and the conformance tests pass).
+
+## 7. Decisions for the owner
+
+1. **Spectrum default size.** Kept at 1,024 / Blackman-Harris / automatic, which is the legacy estimator unchanged. The brief recommends 8,192 as the default; that is a change of one number (`Receiver::spectrumFft_` and the `AppConfig` default) but it changes the frame every view receives (the ring serves at most 16,384 bins, a wider FFT is max-reduced), so it should go with the screen lane that draws them.
+2. **Spectrum level.** A tone reads the same level at every size and window (the block's compensated reading is lowered by the legacy estimator's -8.9 dB so the S-meter calibration, the noise floor and thresholds do not move). The alternative, calibrated dBFS, would move all of them.
+3. **Pseudo-stereo (D5)** is placed as a plugin by `plugin-or-host.md`; the host already had it as a mode of the stereo placer, so it is offered (`SET_STEREO_PLACE` mode 2) and the plugin route is not closed.
+4. **VFO split** is not built (a receive-only program has nothing to transmit on B).
+5. **16-bit I/Q recordings clip** beyond full scale (a float take keeps it); offered as an option, float stays the default.
+6. **Raw I/Q source.** A UDP source listens where its address says (127.0.0.1 hears this computer only; 0.0.0.0 has to be spelled); a stream with a declared centre refuses a retune to another number. The telemetry word `rawiq` waits for the Worker.
+7. **Hot-plug.** No off switch (a local notification, no network); a radio that died by being unplugged is not re-opened (its descriptor is not kept anywhere the retry could use).
+8. **AFC** moves the real VFO by a few hundred hertz while the counter keeps showing the frequency the user chose (`vfoOffsetHz` is the user's own); the correction is `afcCorrectionHz`. Confirm that the counter should not follow it.
+9. **R11:** the automatic direct-sampling branch is unreachable on a dongle without an upconverter (section 3, item 2). Decide whether the manual override should also widen the allowed range to HF.
+10. **`sys_device_watch.{hpp,cpp}`** are identical to `feat/sysmodels` 21f38996 and the thread-inventory row is its text (it still says "not yet wired into the engine"): the merge is clean, the sentence is stale.
+
+## 8. UNVERIFIED (everything not run)
+
+* A real unplug and re-plug (no radio was touched), the OS registration of the device-change notice (the sysmodels lane's), and any real RTL-SDR, Airspy or other radio.
+* AFC and CW peak on a real off-air signal; the stereo placement on a real stereo decode (only the "mono audio only" rule is exercised, with USB noise); I/Q correction on a real imbalanced dongle (generated: image -41.3 -> -57.4 dB).
+* Spectrum sizes above 16,384 bins reach a reader only as the maximum of groups (tested to 65,536 through the ring); sizes above that reach only the engine's own frame. No view was checked against 131,072 bins.
+* The Slint window with any of the new state (no control was built); the web, CAT and TCI surfaces do not offer the new ops.
+* The wire protocol of a third-party sender other than FoxSDR's own FXIQ framing (u8/s16/f32 headerless formats follow the usual conventions and were tested against streams generated here only).
+* The `usb` direct-sampling path (R11), IF recording (P4) and everything in section 3.
+
+## 9. Configuration file
+
+The real `%APPDATA%/foxsdr/config.json` sha256 before (start of the lane) and after (checked at 07:56, 10:05, 11:30 and at the end): `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3`, byte-identical. Every engine test runs with the profile redirected (`engine_api_test::hermetic`) or in a scratch folder. No radio was opened, no Windows dialog was raised (the GUI tests ran on the hidden desktop only), nothing was pushed, nothing was downloaded.
