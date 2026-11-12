@@ -32,6 +32,7 @@
 #include "core/bookmark_notes.hpp"
 #include "core/channel_plans.hpp"
 #include "core/csv_overlay.hpp"
+#include "core/fft_scan.hpp"
 #include "core/waterfall_history.hpp"
 #include "core/disk_job.hpp"
 #include "core/rec_daily.hpp"
@@ -190,6 +191,19 @@ private:
     Result traceModeOp(const std::string& text, Result res);
     std::string traceMode_ = "normal", traceError_;
     Result wfOp(const FoxCommand& c, Result res);
+    Result fftOp(const FoxCommand& c, const std::string& text, Result res);
+    struct Fft {
+        bool on = false;
+        cascade::core::tuning::FftScanGrid grid;
+        cascade::core::tuning::FftScanOptions opt;
+        double nextS = 0.0;
+        std::string last;            // the result as JSON
+        std::size_t hits = 0;
+        bool have = false;
+    };
+    std::array<Fft, 8> fft_;
+    std::vector<double> fftScratch_;
+    std::array<std::string, 8> fftResults_;
     void framesFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
     void framesLoadOnce();
     std::string averageJson() const;

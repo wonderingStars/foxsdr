@@ -141,8 +141,62 @@ void WireA::framesLoadOnce() {
     }
 }
 
+WireA::Result WireA::fftOp(const FoxCommand& c, const std::string& text, Result res) {
+    const std::size_t slot = e_.scopedSlot();
+    if (slot >= fft_.size()) { return refused(res, FOXAPI_NO_DEVICE, "there is no radio with that number"); }
+    Fft& f = fft_[slot];
+    if (c.ival[0] == 1) {
+        if (!f.on || !f.have) { return refused(res, FOXAPI_NO_CHANGE, "the FFT scan is off or has seen no frame yet"); }
+        fftResults_[slot] = f.last;
+        res.applied[0] = static_cast<double>(f.hits);
+        bump();
+        return res;
+    }
+    if (c.ival[0] != 0) { return refused(res, FOXAPI_OUT_OF_RANGE, "ival[0] is 0 configure or 1 read"); }
+    const json j = json::parse(text, nullptr, false);
+    if (j.is_discarded() || !j.is_object()) { return refused(res, FOXAPI_BAD_ARGUMENT, "the text is not a JSON object"); }
+    if (j.contains("enabled") && !j["enabled"].is_boolean()) { return refused(res, FOXAPI_BAD_ARGUMENT, "enabled is true or false"); }
+    const bool on = j.value("enabled", true);
+    if (!on) {
+        if (!f.on) { return refused(res, FOXAPI_NO_CHANGE, "it is off already"); }
+        f = Fft();
+        fftResults_[slot].clear();
+        bump();
+        return res;
+    }
+    auto num = [&](const char* k, double& dst, double lo, double hi, std::string& bad) {
+        if (!j.contains(k)) { return; }
+        if (!j[k].is_number() || !std::isfinite(j[k].get<double>()) || j[k].get<double>() < lo || j[k].get<double>() > hi) { bad = std::string("the field ") + k + " is not valid"; return; }
+        dst = j[k].get<double>();
+    };
+    Fft n;
+    n.on = true;
+    std::string bad;
+    if (!j.contains("startHz") || !j.contains("stopHz") || !j.contains("stepHz")) { return refused(res, FOXAPI_BAD_ARGUMENT, "the grid needs startHz, stopHz and stepHz"); }
+    num("startHz", n.grid.startHz, 1.0, 1e13, bad);
+    num("stopHz", n.grid.stopHz, 1.0, 1e13, bad);
+    num("stepHz", n.grid.stepHz, 1.0, 1e9, bad);
+    num("marginDb", n.opt.marginDb, 0.0, 60.0, bad);
+    num("fixedDb", n.opt.fixedDb, -160.0, 20.0, bad);
+    if (!bad.empty()) { return refused(res, FOXAPI_BAD_ARGUMENT, bad); }
+    if (n.grid.stopHz < n.grid.startHz || (n.grid.stopHz - n.grid.startHz) / n.grid.stepHz > 200000.0) { return refused(res, FOXAPI_BAD_ARGUMENT, "the grid is empty or has more than 200000 channels"); }
+    if (j.contains("mode")) {
+        if (!j["mode"].is_string() || (j["mode"].get<std::string>() != "relative" && j["mode"].get<std::string>() != "fixed")) { return refused(res, FOXAPI_BAD_ARGUMENT, "mode is relative or fixed"); }
+        n.opt.mode = j["mode"].get<std::string>() == "fixed" ? cascade::core::tuning::TriggerMode::Fixed : cascade::core::tuning::TriggerMode::Relative;
+    }
+    if (j.contains("merge")) {
+        if (!j["merge"].is_boolean()) { return refused(res, FOXAPI_BAD_ARGUMENT, "merge is true or false"); }
+        n.opt.mergeAdjacent = j["merge"].get<bool>();
+    }
+    f = n;
+    fftResults_[slot].clear();
+    bump();
+    return res;
+}
+
 WireA::Result WireA::framesOp(const FoxCommand& c, const std::string& text, Result res) {
     framesLoadOnce();
+    if (c.op == FOXAPP_OP_FFT_SCAN) { return fftOp(c, text, res); }
     if (c.op == FOXAPP_OP_WF_HISTORY) { return wfOp(c, res); }
     AverageCfg n;
     std::string err;
@@ -200,6 +254,23 @@ void WireA::displayFrame(std::size_t slot, std::vector<float>& bins, double cent
             ch->a.swap(ch->b);
         }
         std::memcpy(bins.data(), ch->a.data(), n * sizeof(float));
+    }
+    // the FFT scan looks at what is drawn, at most five times a second
+    if (Fft& f = fft_[slot]; f.on && nowS >= f.nextS) {
+        f.nextS = nowS + 0.2;
+        fftScratch_.assign(bins.begin(), bins.end());
+        const cascade::core::tuning::FftScanResult r = cascade::core::tuning::fftScan(fftScratch_.data(), fftScratch_.size(), centreHz, spanHz, f.grid, f.opt);
+        if (r.ok) {
+            std::vector<cascade::core::tuning::FftScanHit> hits = r.hits;
+            std::sort(hits.begin(), hits.end(), [](const auto& a, const auto& b) { return a.levelDb > b.levelDb; });
+            if (hits.size() > 100) { hits.resize(100); }
+            json arr = json::array();
+            for (const auto& h : hits) { arr.push_back({{"hz", h.hz}, {"levelDb", h.levelDb}, {"aboveFloorDb", h.aboveFloorDb}}); }
+            f.last = json{{"hits", arr}, {"channelsInSpan", r.channelsInSpan}, {"channelsOutOfSpan", r.channelsOutOfSpan}, {"floorDb", r.floorDb}, {"floorReliable", r.floorReliable},
+                          {"centreHz", centreHz}, {"spanHz", spanHz}, {"ageMs", 0}}.dump();
+            f.hits = hits.size();
+            f.have = true;
+        }
     }
     // the history keeps what is drawn
     if (std::shared_ptr<Wf> w = wf_[slot]; w && w->on) {
@@ -289,6 +360,11 @@ std::size_t WireA::waterfallCopy(std::size_t slot, std::size_t rows, std::vector
 
 void WireA::framesFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {
     fact("display.average", averageJson());
+    for (std::size_t slot = 0; slot < fft_.size(); ++slot) {
+        if (!e_.receiverLive(static_cast<std::uint32_t>(slot) + 1u)) { continue; }
+        fact("fftscan." + std::to_string(slot + 1) + ".on", fft_[slot].on ? "1" : "0");
+        fact("fftscan." + std::to_string(slot + 1) + ".result", fftResults_[slot]);
+    }
     fact("display.trace", traceMode_);
     fact("display.trace.error", traceError_);
     for (std::size_t slot = 0; slot < wf_.size(); ++slot) {

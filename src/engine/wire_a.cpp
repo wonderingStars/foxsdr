@@ -57,6 +57,7 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
             return displayOp(c, text, res);
         case FOXAPP_OP_DISPLAY_AVERAGE:
         case FOXAPP_OP_WF_HISTORY:
+        case FOXAPP_OP_FFT_SCAN:
             return framesOp(c, text, res);
         case FOXAPP_OP_TRACE_MODE:
             return traceModeOp(text, res);

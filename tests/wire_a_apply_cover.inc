@@ -3,6 +3,11 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 void wireAOps(AppWindow& a) {
+    covering(FOXAPP_OP_FFT_SCAN);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_FFT_SCAN, 7)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_FFT_SCAN, 1)), FOXAPI_NO_CHANGE));   // off
+    }
     covering(FOXAPP_OP_BAND_MEMORY);
     covering(FOXAPP_OP_BAND_MEMORY_NOTE);
     {

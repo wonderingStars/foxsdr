@@ -194,6 +194,14 @@
 #define FOXAPP_OP_BAND_MEMORY            0x8823u /* text: JSON {enabled, fields, forget, clear} */
 #define FOXAPP_OP_BAND_MEMORY_NOTE       0x8824u /* text: JSON {spectrumTopDb, spectrumRangeDb, zoomSpanHz}. Addresses one radio (target) */
 
+//   FFT_SCAN (SETTINGS; core/fft_scan.hpp): look for signals across the whole captured span from the ONE spectrum frame the radio already makes, without retuning. Per radio (target). ival[0] = 0: configure from the
+//   JSON {"enabled":true|false, "startHz","stopHz","stepHz" (the channel grid; at most 200000 channels), "mode":"relative"|"fixed" (relative), "marginDb":0..60 (8), "fixedDb":-160..20 (-70), "merge":true|false (true)}
+//   (the grid is absolute RF; channels outside the span on show are COUNTED, not guessed). The engine works on the frame it publishes (after the display chain), at most five times a second while it is on; the radio is
+//   not retuned: a caller that wants the rest of a wide grid retunes by the span and reads again. ival[0] = 1: read the newest result into fact.fftscan.<n>.result as JSON {"hits":[{"hz","levelDb","aboveFloorDb"}]
+//   (strongest first, at most 100),"channelsInSpan","channelsOutOfSpan","floorDb","floorReliable","centreHz","spanHz","ageMs"}; applied[0] = the number of hits. BAD_ARGUMENT for a bad grid or number (nothing changes);
+//   NO_CHANGE when read while it is off or before the first frame. The facts do not move on every frame: a read is the way to see a result.
+#define FOXAPP_OP_FFT_SCAN               0x8825u /* ival[0]: 0 configure / 1 read; text: JSON. Addresses one radio (target) */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -233,7 +241,8 @@
     {FOXAPP_OP_RECORDINGS_LIST, "APP_RECORDINGS_LIST", true}, \
     {FOXAPP_OP_RECORDINGS_OPEN, "APP_RECORDINGS_OPEN", true}, \
     {FOXAPP_OP_BAND_MEMORY, "APP_BAND_MEMORY", true}, \
-    {FOXAPP_OP_BAND_MEMORY_NOTE, "APP_BAND_MEMORY_NOTE", true},
+    {FOXAPP_OP_BAND_MEMORY_NOTE, "APP_BAND_MEMORY_NOTE", true}, \
+    {FOXAPP_OP_FFT_SCAN, "APP_FFT_SCAN", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP

@@ -10,6 +10,9 @@
 //   D3  TRACE MODE: "normal" is the default; each of the six other words is taken and read back, the same word is NO_CHANGE, a word that is none is refused with nothing changed; the choice is kept in
 //       trace-mode.json and a new engine starts on it; a damaged file is reported and the default stands.
 //
+//   D4  FFT SCAN: with a 25 kHz grid across the generator's span the two tones (+300 kHz at -30 dB and -500 kHz at -45 dB over a -90 dB floor) are the two hits, strongest first, with no retune; a grid wider than the
+//       span counts the channels it does not cover; fixed mode with a level between the tones finds only the strong one; off again; bad grids refused; reading while off is NO_CHANGE.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cmath>
 #include <cstdio>
@@ -18,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include <nlohmann/json.hpp>
 #include "wire_a_rig.hpp"
 #include "engine/wire_a.hpp"
 
@@ -233,6 +237,59 @@ void testTrace() {
     }
 }
 
+void testFft() {
+    std::printf("D4: FFT scan\n");
+    Rig r;
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RUN, 0, 1)).status(), FOXAPI_OK);
+    r.settle(300);
+    const FoxReceiverState st = r.local->state();
+    const double centre = st.centreHz;
+    const double tunedBefore = st.tunedHz;
+    FoxCommand cfg = testing::cmd(FOXAPP_OP_FFT_SCAN, 0.0, 0);
+    FoxCommand rd = testing::cmd(FOXAPP_OP_FFT_SCAN, 0.0, 1);
+    CHECK_EQ(r.send(rd).status(), FOXAPI_NO_CHANGE);   // off
+    char buf[320];
+    std::snprintf(buf, sizeof buf, "{\"enabled\":true,\"startHz\":%.0f,\"stopHz\":%.0f,\"stepHz\":25000,\"mode\":\"relative\",\"marginDb\":8}", centre - 0.9e6, centre + 0.9e6);
+    const std::string grid = buf;
+    CHECK_EQ(r.send(cfg, &grid).status(), FOXAPI_OK);
+    CHECK(r.until([&] { return r.send(rd).status() == FOXAPI_OK; }, 5000));
+    testing::Outcome o = r.send(rd);
+    CHECK_EQ(o.status(), FOXAPI_OK);
+    const nlohmann::json j = nlohmann::json::parse(r.fact("fftscan.1.result"));
+    std::printf("  hits: %zu, floor %.1f dB, in span %lld, out of span %lld\n", j["hits"].size(), j["floorDb"].get<double>(), j["channelsInSpan"].get<long long>(), j["channelsOutOfSpan"].get<long long>());
+    CHECK_EQ(j["hits"].size(), std::size_t(2));
+    if (j["hits"].size() == 2) {
+        CHECK(std::fabs(j["hits"][0]["hz"].get<double>() - (centre + 300.0e3)) <= 25.0e3);   // the strong tone first
+        CHECK(std::fabs(j["hits"][1]["hz"].get<double>() - (centre - 500.0e3)) <= 25.0e3);
+        CHECK(j["hits"][0]["levelDb"].get<double>() > j["hits"][1]["levelDb"].get<double>());
+    }
+    CHECK(j["floorReliable"].get<bool>());
+    CHECK_EQ(j["channelsOutOfSpan"].get<long long>(), 0);
+    CHECK(std::fabs(r.local->state().tunedHz - tunedBefore) < 1.0);   // the radio was not retuned
+    // a grid wider than the span counts what it does not cover
+    std::snprintf(buf, sizeof buf, "{\"startHz\":%.0f,\"stopHz\":%.0f,\"stepHz\":100000}", centre - 6.0e6, centre + 6.0e6);
+    const std::string wide = buf;
+    CHECK_EQ(r.send(cfg, &wide).status(), FOXAPI_OK);
+    CHECK(r.until([&] { return r.send(rd).status() == FOXAPI_OK; }, 5000));
+    const nlohmann::json w = nlohmann::json::parse(r.fact("fftscan.1.result"));
+    CHECK(w["channelsOutOfSpan"].get<long long>() > 50);
+    // fixed mode: a level between the tones (-60 dB on the display scale of this frame) keeps only the strong one
+    std::snprintf(buf, sizeof buf, "{\"startHz\":%.0f,\"stopHz\":%.0f,\"stepHz\":25000,\"mode\":\"fixed\",\"fixedDb\":%.1f}", centre - 1.0e6, centre + 1.0e6, j["hits"][0]["levelDb"].get<double>() - 6.0);
+    const std::string fixedGrid = buf;
+    CHECK_EQ(r.send(cfg, &fixedGrid).status(), FOXAPI_OK);
+    CHECK(r.until([&] { return r.send(rd).status() == FOXAPI_OK; }, 5000));
+    CHECK_EQ(nlohmann::json::parse(r.fact("fftscan.1.result"))["hits"].size(), std::size_t(1));
+    // bad grids and numbers
+    const std::string bad1 = "{nope", bad2 = R"({"startHz":1000,"stopHz":900,"stepHz":10})", bad3 = R"({"startHz":1,"stopHz":1e12,"stepHz":1})", bad4 = R"({"startHz":1000,"stopHz":2000})", bad5 = R"({"startHz":1000,"stopHz":2000,"stepHz":10,"marginDb":90})";
+    for (const std::string* b : {&bad1, &bad2, &bad3, &bad4, &bad5}) { CHECK_EQ(r.send(cfg, b).status(), FOXAPI_BAD_ARGUMENT); }
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_FFT_SCAN, 0.0, 4)).status(), FOXAPI_OUT_OF_RANGE);
+    // off
+    const std::string off = R"({"enabled":false})";
+    CHECK_EQ(r.send(cfg, &off).status(), FOXAPI_OK);
+    CHECK_EQ(r.send(cfg, &off).status(), FOXAPI_NO_CHANGE);
+    CHECK_EQ(r.send(rd).status(), FOXAPI_NO_CHANGE);
+}
+
 }  // namespace
 
 int main() {
@@ -245,6 +302,7 @@ int main() {
     testChain();
     testHistory();
     testTrace();
+    testFft();
     fs::remove_all(g_dir, ec);
     return check::finish("test_engine_api_wire_a_display");
 }
