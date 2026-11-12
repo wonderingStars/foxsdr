@@ -311,6 +311,15 @@ bool withDabNotch(cascade::source::DeviceSource* dev, Fn&& fn) {
     return fn(*sp);
 }
 
+// E4000 OFFSET TUNING (row R12): an rtl_tcp server whose header names an E4000 (hasOffsetTuning()); an R820T, an R828D and every other
+// source have none, so the control is offered only where the driver says so.
+template <typename Fn>
+bool withOffsetTuning(cascade::source::DeviceSource* dev, Fn&& fn) {
+    auto* rt = dynamic_cast<cascade::source::RtlTcpSource*>(dev);
+    if (rt == nullptr || !rt->hasOffsetTuning()) { return false; }
+    return fn(*rt);
+}
+
 template <typename Fn>
 bool withHdrMode(cascade::source::DeviceSource* dev, Fn&& fn) {
     auto* sp = dynamic_cast<cascade::source::SdrPlaySource*>(dev);
@@ -3052,6 +3061,10 @@ void Engine::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::s
     });
     rx().deviceHdrPresent_ = withHdrMode(&dev, [this](auto& d) {
         rx().deviceHdr_ = d.hdrMode();
+        return true;
+    });
+    rx().deviceOffsetTuningPresent_ = withOffsetTuning(&dev, [this](auto& d) {
+        rx().deviceOffsetTuning_ = d.offsetTuning();
         return true;
     });
     rx().deviceAdcSwitchesPresent_ = withAdcSwitches(&dev, [this](auto& d) {
@@ -7866,6 +7879,13 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 withDabNotch(rx().device_, [this](auto& d) {
                     if (!d.setDabNotch(rx().deviceDabNotch_)) { rx().sourceError_ = d.lastError(); }
                     rx().deviceDabNotch_ = d.dabNotch();
+                    return true;
+                });
+            } else if (text == "offset_tuning" && rx().deviceOffsetTuningPresent_) {
+                rx().deviceOffsetTuning_ = on;
+                withOffsetTuning(rx().device_, [this](auto& d) {
+                    if (!d.setOffsetTuning(rx().deviceOffsetTuning_)) { rx().sourceError_ = d.lastError(); }
+                    rx().deviceOffsetTuning_ = d.offsetTuning();
                     return true;
                 });
             } else if (text == "hdr" && rx().deviceHdrPresent_) {

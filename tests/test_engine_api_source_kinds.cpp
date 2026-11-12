@@ -245,6 +245,9 @@ public:
     std::atomic<double> rateHz{2400000.0};
     std::atomic<int> connections{0};
     std::atomic<std::uint64_t> bytesSent{0};
+    std::atomic<unsigned> tunerType{5};      // the header's tuner: 5 = R820T (the default here), 1 = E4000
+    std::atomic<int> offsetTuning{-1};       // the last argument of command 0x0a (offset tuning), -1 until one arrives
+    std::atomic<int> offsetTuningCommands{0};
 
 private:
     void loop() {
@@ -270,7 +273,7 @@ private:
         }
     }
     void serve(cascade::test::Sock s) {
-        const unsigned char header[12] = {'R', 'T', 'L', '0', 0, 0, 0, 5, 0, 0, 0, 29};
+        const unsigned char header[12] = {'R', 'T', 'L', '0', 0, 0, 0, static_cast<unsigned char>(tunerType.load()), 0, 0, 0, 29};
         if (cascade::test::sendBytes(s, reinterpret_cast<const char*>(header), 12) != 12) { return; }
         // Non-blocking from here on: commands are read between chunks.
 #if defined(_WIN32)
@@ -295,6 +298,7 @@ private:
                     const unsigned id = pending[0];
                     const std::uint32_t v = (static_cast<std::uint32_t>(pending[1]) << 24) | (static_cast<std::uint32_t>(pending[2]) << 16) | (static_cast<std::uint32_t>(pending[3]) << 8) | pending[4];
                     if (id == 0x02) { rateHz = static_cast<double>(v); }
+                    if (id == 0x0a) { offsetTuning = static_cast<int>(v); ++offsetTuningCommands; }
                     pending.erase(pending.begin(), pending.begin() + 5);
                 }
             }
@@ -546,6 +550,64 @@ void testBRtlTcpAsRadioTwo() {
     CHECK(r.until([&] { return r.fact("radio.2.source") == "rtltcp"; }, 20000));
 }
 
+// ---- B2: E4000 offset tuning (R12) is offered only where the server's header names an E4000, and what the person switches is what the server is told ----
+
+// The device options list (read_list, FOXAPI_LIST_DEVICE_OPTIONS) is RADIO 1's: it is not one of the four lists that follow a focused radio. By name: -1 absent, 0 off, 1 on.
+int deviceOption(Rig& r, const char* name) {
+    const int32_t n = api()->read_list(r.s->raw(), FOXAPI_LIST_DEVICE_OPTIONS, 0, nullptr);
+    for (int32_t i = 0; i < n; ++i) {
+        FoxListItem it{};
+        it.structSize = sizeof(it);
+        if (api()->read_list(r.s->raw(), FOXAPI_LIST_DEVICE_OPTIONS, static_cast<uint32_t>(i), &it) < 0) { continue; }
+        if (std::string(it.name) == name) { return (it.flags & FOXAPI_ITEM_ACTIVE) != 0 ? 1 : 0; }
+    }
+    return -1;
+}
+
+void testB2OffsetTuning() {
+    std::printf("B2: E4000 offset tuning is offered on an E4000 header only, and is sent to the server\n");
+    // An R820T server as radio 2: a request for the option reaches nothing (the radio has no such switch; the server is never sent the command).
+    {
+        ToneServer srv;
+        CHECK(srv.start());
+        Rig r;
+        CHECK_EQ(r.add(2, "open-rtltcp:rtltcp=" + srv.address()).status(), FOXAPI_OK);
+        CHECK(r.until([&] { return r.fact("radio.2.source") == "rtltcp"; }, 20000));
+        r.send(r.aimed(FOXAPI_OP_SET_DEVICE_OPTION, 2, 1.0, 1, "offset_tuning"));
+        r.pump(20);
+        CHECK_EQ(srv.offsetTuningCommands.load(), 0);
+        CHECK_EQ(deviceOption(r, "offset_tuning"), -1);   // radio 1 is the generator
+    }
+    // An E4000 server as radio 2: the connection says 0 at open (the server keeps its state between clients); switched on, the server hears 1; off, 0.
+    {
+        ToneServer srv;
+        srv.tunerType = 1;
+        CHECK(srv.start());
+        Rig r;
+        CHECK_EQ(r.add(2, "open-rtltcp:rtltcp=" + srv.address()).status(), FOXAPI_OK);
+        CHECK(r.until([&] { return r.fact("radio.2.source") == "rtltcp"; }, 20000));
+        CHECK(r.until([&] { return srv.offsetTuning.load() == 0; }, 10000));
+        CHECK_EQ(r.send(r.aimed(FOXAPI_OP_SET_DEVICE_OPTION, 2, 1.0, 1, "offset_tuning")).status(), FOXAPI_OK);
+        CHECK(r.until([&] { return srv.offsetTuning.load() == 1; }, 10000));
+        CHECK_EQ(r.send(r.aimed(FOXAPI_OP_SET_DEVICE_OPTION, 2, 0.0, 0, "offset_tuning")).status(), FOXAPI_OK);
+        CHECK(r.until([&] { return srv.offsetTuning.load() == 0; }, 10000));
+    }
+    // An E4000 server as radio 1 (the options list is radio 1's): offered, off; on -> shown on and the server hears 1; off again.
+    {
+        ToneServer srv;
+        srv.tunerType = 1;
+        CHECK(srv.start());
+        Rig r;
+        CHECK_EQ(r.send(r.aimed(FOXAPI_OP_SELECT_SOURCE, 1, 0.0, 0, ("open-rtltcp:rtltcp=" + srv.address()).c_str())).status(), FOXAPI_OK);
+        CHECK(r.until([&] { return r.fact("radio.1.source") == "rtltcp"; }, 20000));
+        CHECK(r.until([&] { return deviceOption(r, "offset_tuning") == 0; }, 10000));
+        CHECK_EQ(r.send(r.aimed(FOXAPI_OP_SET_DEVICE_OPTION, 1, 1.0, 1, "offset_tuning")).status(), FOXAPI_OK);
+        CHECK(r.until([&] { return srv.offsetTuning.load() == 1 && deviceOption(r, "offset_tuning") == 1; }, 10000));
+        CHECK_EQ(r.send(r.aimed(FOXAPI_OP_SET_DEVICE_OPTION, 1, 0.0, 0, "offset_tuning")).status(), FOXAPI_OK);
+        CHECK(r.until([&] { return srv.offsetTuning.load() == 0 && deviceOption(r, "offset_tuning") == 0; }, 10000));
+    }
+}
+
 // ---- C -----------------------------------------------------------------------------------------------------------------------------------------
 
 void testCSavedWithTheirRealKind() {
@@ -734,6 +796,7 @@ int main(int argc, char** argv) {
     testAFileAsRadioTwo();
     testAFilesOnTwoRadiosAtOnce();
     testBRtlTcpAsRadioTwo();
+    testB2OffsetTuning();
     testCSavedWithTheirRealKind();
     testDPlutoAsRadioTwoAndTheTransmitter();
     testDPlutoSurvivesARestart();

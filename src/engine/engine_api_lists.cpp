@@ -409,6 +409,8 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(rx().deviceAdcSwitchesPresent_);
     f.value(rx().deviceDither_);
     f.value(rx().deviceRandomiser_);
+    f.value(rx().deviceOffsetTuningPresent_);
+    f.value(rx().deviceOffsetTuning_);
     f.value(biasTeePanel_.present);
     f.value(biasTeePanel_.shown);
     for (const auto& c : converters_) {
@@ -1182,6 +1184,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             b.deviceOptions.emplace_back("dither", rx().deviceDither_);
             b.deviceOptions.emplace_back("randomiser", rx().deviceRandomiser_);
         }
+        if (rx().deviceOffsetTuningPresent_) { b.deviceOptions.emplace_back("offset_tuning", rx().deviceOffsetTuning_); }
     }
     b.serialPorts = serialPorts_;
     buildApiListsSource(b);
