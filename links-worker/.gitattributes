@@ -1,0 +1,2 @@
+# The registry is signed byte for byte and embedded as a string: its line endings must never change between checkouts.
+* text eol=lf
