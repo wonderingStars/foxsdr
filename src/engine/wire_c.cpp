@@ -36,6 +36,8 @@ constexpr Spec kSpecs[] = {
     {"access.number_format", Kind::Choice, 0, 0, "dot", "dot|windows"},
     {"access.digits", Kind::Choice, 0, 0, "latin", "latin|native|language"},
     {"access.palette", Kind::Choice, 0, 0, "normal", "normal|deuteranopia|protanopia|tritanopia|highcontrast"},
+    // --- the Plugin store (webmodels, store sort) ---
+    {"store.sort", Kind::Choice, 0, 0, "catalogue", "catalogue|name|updated"},   // the order of the store's list; "popular" and "rating" wait for the server's data (none exists)
     // --- web (webmodels) ---
     {"web.cors_origins", Kind::Text, 0, 2000, "", ""},        // allowed origins, one per line (empty = no cross-origin page may read)
     {"web.cors_credentials", Kind::Choice, 0, 0, "off", "off"},   // credentialed cross-origin requests: never (the session cookie is SameSite=Strict; an owner decision with HTTPS)

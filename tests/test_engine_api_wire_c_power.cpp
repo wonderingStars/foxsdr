@@ -137,14 +137,14 @@ void testResources(const fs::path& dir) {
         s.powerSeams.registerResumeWithOs = false;
     });
     CHECK(waitFor(r, [&] { return !r.fact("perf.memory_mb").empty() && r.fact("perf.memory_mb") != "<absent>"; }));
-    CHECK(r.fact("perf.memory_mb") == "123");
+    CHECK(r.fact("perf.memory_mb") == "100");   // 123 MB, published in 50 MB steps
     CHECK(r.fact("perf.system_memory_percent") == "40");
     CHECK(r.fact("perf.gpu_percent").empty());            // no GPU counters here: "", never 0
     CHECK(r.fact("perf.reduced") == "0");
     CHECK(r.fact("perf.switch.animations") == "1");
     // a GPU that answers
     sc.gpuAvailable = true;
-    CHECK(waitFor(r, [&] { return r.fact("perf.gpu_percent") == "55"; }));
+    CHECK(waitFor(r, [&] { return r.fact("perf.gpu_percent") == "60"; }));   // 55 %, published in 10 % steps
     // high memory: reduced after the policy's streak of high samples
     sc.memoryPercent = 96.0;
     CHECK(waitFor(r, [&] { return r.fact("perf.reduced") == "1"; }));

@@ -4,6 +4,7 @@
 #include "engine/wire_c_power.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 
 #include "core/diag_log.hpp"
@@ -60,11 +61,13 @@ void Power::sampleOnce() {
     const sys::EffectsSwitches& sw = policy_.update(snap);
     PerfFacts f;
     f.sampled = true;
-    char buf[48];
-    if (snap.processCpuPercent.available) { std::snprintf(buf, sizeof(buf), "%.1f", snap.processCpuPercent.value); f.cpuPercent = buf; }
-    if (snap.workingSetBytes.available) { f.memoryMb = std::to_string(snap.workingSetBytes.value / (1024u * 1024u)); }
-    if (snap.systemMemoryPercent.available) { std::snprintf(buf, sizeof(buf), "%.0f", snap.systemMemoryPercent.value); f.systemMemoryPercent = buf; }
-    if (snap.gpuPercent.available) { std::snprintf(buf, sizeof(buf), "%.0f", snap.gpuPercent.value); f.gpuPercent = buf; }
+    // THE FIGURES ARE PUBLISHED IN COARSE STEPS (CPU and GPU to 10 %, the process memory to 50 MB, the system memory to 5 %): a published fact that moves moves the engine's list
+    // counter (listSeq), and a read-out that changed every second would make every client re-read every list every second for a figure nobody can read that fast.
+    auto step = [](double v, double by) { return std::llround(v / by) * static_cast<long long>(by); };
+    if (snap.processCpuPercent.available) { f.cpuPercent = std::to_string(step(snap.processCpuPercent.value, 10.0)); }
+    if (snap.workingSetBytes.available) { f.memoryMb = std::to_string(step(static_cast<double>(snap.workingSetBytes.value) / (1024.0 * 1024.0), 50.0)); }
+    if (snap.systemMemoryPercent.available) { f.systemMemoryPercent = std::to_string(step(snap.systemMemoryPercent.value, 5.0)); }
+    if (snap.gpuPercent.available) { f.gpuPercent = std::to_string(step(snap.gpuPercent.value, 10.0)); }
     f.reduced = sw.reduced;
     f.switches = sw;
     {

@@ -1030,7 +1030,9 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // The update plans, once for the whole block (planUpdates walks the catalogue against the install records):
     // STORE_UPDATES, and each entry's updateReason below.
     const std::vector<cascade::core::PluginUpdate> updates = plannedPluginUpdates();
-    for (const cascade::core::PluginCatalogEntry& e : catalog_) {
+    const std::vector<std::size_t> wireCOrder = wireCStoreOrder();   // wire-c: the list's order (key store.sort; the catalogue's own by default)
+    for (const std::size_t wireCAt : wireCOrder) {   // wire-c (was: for (e : catalog_))
+        const cascade::core::PluginCatalogEntry& e = catalog_[wireCAt];
         const cascade::core::PluginPlatform* const here = e.thisPlatform();
         // BY CATALOGUE KEY (0.99.74): the id for an official plugin - every name and key that existed before sites is unchanged - and
         // "<id>@<site label>" for a plugin from a site the user added.

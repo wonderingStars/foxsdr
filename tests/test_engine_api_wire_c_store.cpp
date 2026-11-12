@@ -304,12 +304,67 @@ void testHelperStore() {
     PluginRepo::setTransportForTest(nullptr);
 }
 
+// the names of the CATALOGUE list, in the order the engine lists them
+std::string listedNames(testing::Session& s) {
+    std::string out;
+    const int32_t n = api()->read_list(s.raw(), FOXAPI_LIST_CATALOGUE, 0, nullptr);
+    for (int32_t i = 0; i < n; ++i) {
+        FoxListItem it{};
+        it.structSize = sizeof(it);
+        api()->read_list(s.raw(), FOXAPI_LIST_CATALOGUE, static_cast<uint32_t>(i), &it);
+        out += (out.empty() ? "" : ",") + std::string(it.name);
+    }
+    return out;
+}
+
+FoxCommand settingCmd(const std::string& key, const std::string& value) { return textCmd(FOXAPP_OP_WIREC_SETTING, key + std::string(1, '\x1F') + value); }
+
+// W9: the order of the store's list
+void testStoreSort() {
+    const std::string abi = std::to_string(static_cast<unsigned>(CASCADE_PLUGIN_ABI_VERSION));
+    auto entry = [&](const std::string& id, const std::string& name, const std::string& version, const std::string& published) {
+        return "{\"id\":\"" + id + "\",\"name\":\"" + name + "\",\"version\":\"" + version + "\",\"licence\":\"MIT\",\"published\":\"" + published + "\",\"abiVersion\":" + abi + ",\"platforms\":[{\"os\":\"" +
+               PluginRepo::hostOs() + "\",\"arch\":\"" + PluginRepo::hostArch() + "\",\"file\":\"" + id + "-" + version + kModExt + "\",\"url\":\"https://dl.example.invalid/" + id + "\",\"sha256\":\"" +
+               std::string(64, 'a') + "\"}]}";
+    };
+    const std::string index = "{\"schemaVersion\":1,\"plugins\":[" + entry("zz", "Zebra", "1.0.0", "2026-03-01") + "," + entry("aa", "alpha", "2.0.0", "2026-01-05") + "," + entry("mm", "Mango", "1.0.0", "2026-02-10") + "]}";
+    const fs::path indexFile = g_scratch / "sort-index.json";
+    {
+        std::ofstream f(indexFile, std::ios::binary | std::ios::trunc);
+        f << index;
+    }
+    cascade::engine::Engine eng;
+    eng.configureApi(kHooks);
+    eng.initialise();
+    eng.controlPass();
+    testing::Session local(api(), eng.apiHandle(), FOXAPI_SESSION_LOCAL, testing::kAllGrants);
+    CHECK(local.ok());
+    CHECK_EQ(pumped(eng, local, textCmd(FOXAPP_OP_SET_CATALOGUE_URL, indexFile.string())).status(), FOXAPI_OK);
+    CHECK_EQ(pumped(eng, local, testing::cmd(FOXAPI_OP_STORE_FETCH)).status(), FOXAPI_OK);
+    CHECK(passUntil(eng, [&] { return api()->read_list(local.raw(), FOXAPI_LIST_CATALOGUE, 0, nullptr) == 3; }));
+    const std::string asCatalogue = listedNames(local);
+    CHECK(asCatalogue.find("Zebra") < asCatalogue.find("alpha") && asCatalogue.find("alpha") < asCatalogue.find("Mango"));   // the catalogue's own order by default
+    CHECK_EQ(pumped(eng, local, settingCmd("store.sort", "name")).status(), FOXAPI_OK);
+    passUntil(eng, [&] { return listedNames(local).find("alpha") < listedNames(local).find("Zebra"); });
+    CHECK_EQ(listedNames(local), std::string("alpha,Mango,Zebra"));   // by name, any case
+    CHECK_EQ(pumped(eng, local, settingCmd("store.sort", "updated")).status(), FOXAPI_OK);
+    passUntil(eng, [&] { return listedNames(local) == "Zebra,Mango,alpha"; });
+    CHECK_EQ(listedNames(local), std::string("Zebra,Mango,alpha"));   // newest first: Zebra (March), Mango (February), alpha (January)
+    CHECK_EQ(pumped(eng, local, settingCmd("store.sort", "popular")).status(), FOXAPI_OUT_OF_RANGE);   // no server data: not offered
+    CHECK_EQ(pumped(eng, local, settingCmd("store.sort", "catalogue")).status(), FOXAPI_OK);
+    passUntil(eng, [&] { return listedNames(local) == asCatalogue; });
+    CHECK_EQ(listedNames(local), asCatalogue);
+    // an install by key still finds its entry whatever the order (it refuses here only for want of a licence tick or file: it is not NOT_FOUND)
+    CHECK(pumped(eng, local, textCmd(FOXAPI_OP_STORE_INSTALL, "mm", 1)).status() != FOXAPI_NOT_FOUND);
+}
+
 }  // namespace
 
 int main() {
     std::printf("test_engine_api_wire_c_store\n");
     isolate();
     testHelperStore();
+    testStoreSort();
     std::error_code ec;
     fs::remove_all(g_scratch, ec);
     return check::finish("test_engine_api_wire_c_store");

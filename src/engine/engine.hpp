@@ -3244,6 +3244,9 @@ private:
     void wireCLabelTake(cascade::core::Recorder::OpenRequest& req);
     bool wireCRecordingBusy() const;
     void wireCResumeAction();
+    // The resource facts ("perf.cpu_percent" ...), read at the call (fox_engine_api.cpp, a friend); false for a key that is not one.
+    bool wireCLiveFact(const std::string& key, std::string& value);
+    std::vector<std::size_t> wireCStoreOrder();   // the order the store's list is built in (key store.sort; the catalogue's own order by default)
     std::unique_ptr<cascade::engine::wirec::State> wireC_;
     std::mutex wireCMutex_;
     std::uint64_t wireCVersion_ = 1;
