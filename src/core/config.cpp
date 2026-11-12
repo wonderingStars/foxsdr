@@ -311,7 +311,7 @@ std::vector<ManualNotchSetting> sanitiseNotchBank(std::vector<ManualNotchSetting
 // Radios 2 to 8 as a file may have them, made safe. A number is "not >= lo" clamped so one that is not a number cannot pass; a value that names no thing
 // (a tone, a rate, a frequency below zero) becomes 0, which the engine reads as "leave what the radio opens with".
 std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
-    static const char* const kKinds[] = {"siggen", "soapy", "rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "aor", "hydrasdr", "pluto", "rtltcp", "kiwisdr", "file"};
+    static const char* const kKinds[] = {"siggen", "soapy", "rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "aor", "hydrasdr", "pluto", "rtltcp", "kiwisdr", "rawiq", "file"};
     std::vector<SavedRadio> out;
     std::set<int> taken;
     for (SavedRadio& r : in) {
@@ -1420,7 +1420,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
         out.sourceKind != "mirisdr" && out.sourceKind != "rx888" &&
         out.sourceKind != "pluto" && out.sourceKind != "soundcard" &&
         out.sourceKind != "aor" && out.sourceKind != "hydrasdr" &&
-        out.sourceKind != "rtltcp" && out.sourceKind != "kiwisdr") {
+        out.sourceKind != "rtltcp" && out.sourceKind != "kiwisdr" && out.sourceKind != "rawiq") {
         out.sourceKind = defaults.sourceKind;
     }
     // The sound card's settings, each back to its default on its own when

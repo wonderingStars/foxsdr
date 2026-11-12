@@ -126,6 +126,7 @@ constexpr const char* kPlutoDriverKey = "pluto";
 constexpr const char* kRtlTcpDriverKey = "rtltcp";
 // A KiwiSDR receiver on the network (audio only; source/kiwisdr_source.hpp): the radio kind word in the settings and in fact.radio.<n>.source.
 constexpr const char* kKiwiSdrDriverKey = "kiwisdr";
+constexpr const char* kRawIqDriverKey = "rawiq";   // a raw I/Q stream on a network socket (engine serial lane A, R5)
 
 constexpr const char* kModeNames[8] = {"NFM", "WFM", "AM", "DSB",
                                        "USB", "CW",  "LSB", "RAW"};

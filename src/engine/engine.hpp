@@ -748,6 +748,8 @@ private:
     void openRtlTcpFromBox();
     // A KiwiSDR receiver (audio only) as this radio's source: SELECT_SOURCE "open-kiwisdr:<host>[:<port>]" (kiwisdr_source.hpp).
     void openKiwiAt(const std::string& args);
+    // A raw I/Q stream on a network socket (engine serial lane A, R5; engine_rawiq.cpp): SELECT_SOURCE "open-rawiq:[tcp://|udp://]host:port[?fmt=..&rate=..&freq=..&hdr=1]". The kiwisdr recipe.
+    void openRawIqAt(const std::string& args);
     bool radioIsKiwi() const;
     void adoptKiwiRadio();
     // The pipeline's channel bandwidth for this radio: the user's, or wide open on a KiwiSDR radio.

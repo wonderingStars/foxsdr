@@ -21,6 +21,7 @@
 #include "core/patch_devices.hpp"
 #include "core/receiver_tables.hpp"
 #include "source/kiwisdr_source.hpp"
+#include "source/raw_iq_net_source.hpp"
 #include "source/siggen_source.hpp"
 
 namespace pc = cascade::core::patch;
@@ -120,6 +121,13 @@ FoxCommandResult Engine::radioAddOp(const FoxCommand& c, const std::string& text
             std::string why;
             if (!cascade::source::KiwiSdrSource::parseArgs(rest, a, why)) { return refuse(FOXAPI_BAD_ARGUMENT, why); }
             key = pc::makeDeviceKey("kiwisdr", "kiwisdr=" + a.host + ":" + std::to_string(a.port));
+        } else if (kind == "open-rawiq") {
+            // (the key radio 1's open leaves in deviceArgs_: "rawiq=<address and settings>": the same stream twice is refused; the text is parsed here so a typo is refused before a slot is made)
+            const std::string rest = text.substr(colon + 1);
+            cascade::source::rawiq::Spec rspec;
+            std::string rwhy;
+            if (!cascade::source::rawiq::parseSpec(rest.rfind("rawiq=", 0) == 0 ? rest.substr(6) : rest, rspec, rwhy)) { return refuse(FOXAPI_BAD_ARGUMENT, rwhy); }
+            key = pc::makeDeviceKey("rawiq", rest.rfind("rawiq=", 0) == 0 ? rest : "rawiq=" + rest);
         } else if (kind == "open-rtltcp") {
             // (the key radio 1's open leaves in deviceArgs_: "rtltcp=<address>", whichever spelling was typed, so the same server twice is refused)
             const std::string rest = text.substr(colon + 1);

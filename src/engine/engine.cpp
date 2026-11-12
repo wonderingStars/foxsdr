@@ -59,6 +59,7 @@
 #include "core/thread_beats.hpp"
 #include "core/tune_control.hpp"
 #include "source/iq_file_source.hpp"
+#include "source/raw_iq_net_source.hpp"
 #include "source/kiwisdr_source.hpp"
 #include "source/rsp_rows.hpp"
 #include "source/soapy_enum_proc.hpp"
@@ -2473,6 +2474,7 @@ std::unique_ptr<cascade::source::DeviceSource> Engine::makeDeviceSource(
     if (kind == kPlutoDriverKey) { return std::make_unique<cascade::source::PlutoSource>(); }
     if (kind == kRtlTcpDriverKey) { return std::make_unique<cascade::source::RtlTcpSource>(); }
     if (kind == kKiwiSdrDriverKey) { return std::make_unique<cascade::source::KiwiSdrSource>(); }
+    if (kind == kRawIqDriverKey) { return std::make_unique<cascade::source::RawIqNetSource>(); }
     if (kind == "soapy") { return std::make_unique<cascade::source::SoapySource>(); }
     return nullptr;
 }
@@ -6326,6 +6328,10 @@ bool Engine::selectSourceById(const std::string& id) {
         openKiwiAt(args);
         return true;
     }
+    if (kind == "open-rawiq") {
+        openRawIqAt(args);
+        return true;
+    }
     // The KIND is matched too - a native row and a Soapy row for one dongle
     // carry the same serial.
     if (cascade::gui::isNativeSourceKind(kind)) {
@@ -7990,7 +7996,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // which; a scanned device's id is "<kind>:<args>", the same spelling its key has.
             if (const std::size_t colon = text.find(':'); colon != std::string::npos) {
                 const std::string kind = text.substr(0, colon);
-                if (kind != "file" && kind != "open-pluto" && kind != "open-rtltcp" && kind != "open-kiwisdr" && kind != "row" && kind != "soundcard") {
+                if (kind != "file" && kind != "open-pluto" && kind != "open-rtltcp" && kind != "open-kiwisdr" && kind != "open-rawiq" && kind != "row" && kind != "soundcard") {
                     const std::string key = cascade::core::patch::makeDeviceKey(kind, text.substr(colon + 1));
                     rebuildDeviceLedger();
                     const DeviceHolder holder = deviceLedger_.holderOf(key);
