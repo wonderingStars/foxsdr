@@ -296,6 +296,26 @@ Machine: about thirty other lanes; a Release build under `D:/foxsdr-build/mr-eng
 The full GUI gate was NOT repeated at the final tip (it takes about 35 minutes of a loaded machine when nothing else of this lane runs): the commits after dd60cfb6 are the OIRT stereo (pipeline, engine lists, one op, two tests) and
 documentation; the 26-test subset above is the radio, signal, recorder and stereo-adjacent part.
 
+### 8b. Every red of every headless gate, by name, with its result when re-run ALONE (for the merge lane)
+
+Re-run alone with `ctest -C Release -R "^<name>$"` in the build folder at the final tip 3fa4ade3 (the five known ones also through `ctest --test-dir` from the worktree root: same result).
+
+| Test | Gate 1 | Gate 2 | Final gate | Alone | Class |
+|---|---|---|---|---|---|
+| `test_airband_data` | red | red | red | **fails alone** (0.05 s) | known false failure |
+| `test_band_plan` | red | red | red | **fails alone** (0.06 s) | known false failure |
+| `test_converter_call_sites` | red | red | red | **fails alone** (0.01 s) | known false failure |
+| `test_page_resize_id` | red | red | red | **fails alone** (0.01 s) | known false failure |
+| `test_png_decode` | red | red | red | **fails alone** (0.01 s) | known false failure |
+| `test_crash_upload_free` | red | red | red | **fails alone, every time** (22 s; `test_crash_upload.cpp:1782 srv.connections() == 1`); the same line fails with `FOXSDR_PASS=free` in the binaries of two other lanes' base builds (`mr-dsp`, `en-sysmodels`) | pre-existing on the base, not this lane's |
+| `test_diagnostics_free` | red | red | green | **fails alone** (6.97 s, final tip too); its gui sibling `test_diagnostics` passes at the final tip | stale-stamp family (known); the `_free` variant was not investigated further |
+| `test_engine_main_password_not_in_argv` | red | green | green | **passes alone** (7.21 s) | load |
+| `test_health_app_stepped` | green | green | red | **passes alone** twice (45.30 s, 44.94 s) | load |
+| `test_health_paths` | green | red | green | failed alone at gate 2 (`:249 raises == 6`): **this lane's change** (events_seq's catch block), fixed in dd60cfb6 | regression, fixed |
+| `test_plugin_misuse` | green | red | green | failed alone at gate 2 (marker flood 100 vs quota 256): **this lane's change**, fixed in dd60cfb6 | regression, fixed |
+
+No crash among them: no test of the three gates ended in an access violation. The W1 list's `test_engine_api_merge` is green at every gate of this lane (section 0).
+
 **Flake loops** (md5-pinned binaries, 20 runs each, through ctest): `test_engine_api_lock`, `_macros`, `_recname`, `_private`, `test_plugin_events`, `test_engine_api_markerlimit`, `test_pa_open_list_race`: **140 of 140 passed** (before OIRT; `test_pipeline_oirt` and `test_engine_api_oirt` were run 2 to 3 times each and passed).
 
 **`test_engine_api_merge`** at the final tip: alone through ctest `Passed 20.89 sec`; six concurrent copies (two batches of three, each under the debugger launcher): **no access violation in any (avs=0 six times)**. The first batch ended with `unclean` 1 to 4 (a missing result inside the 3 s wait, load: three copies of 24 threads at once, one `Passed` standing alone minutes before), the second batch `4 checks passed, 0 failed` three times with no rerun.
