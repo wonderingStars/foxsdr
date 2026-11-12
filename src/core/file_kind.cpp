@@ -292,8 +292,12 @@ FileClass classifyFile(const std::string& utf8Path) {
             if (!readWhole(p, size, bytes)) { return make(FileKind::Unreadable, utf8Path, "the file could not be read"); }
             const ImportResult r = importFrequencyList(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
             if (!r.items.empty()) {
-                FileClass c = make(r.format == "CSV" ? FileKind::BookmarkCsv : FileKind::BookmarkXml, utf8Path,
-                                   r.format == "CSV" ? "a frequency list (CSV)" : "a frequency list (SDR# XML)");
+                // wire-b begin: the description names the format the importer recognised (SDRuno bank, gqrx, CHIRP ...), not always "SDR# XML"
+                const std::string what = r.format == "CSV" ? std::string("a frequency list (CSV)")
+                                       : (r.format == "SDR# XML" || r.format.empty()) ? std::string("a frequency list (SDR# XML)")
+                                                                                       : "a frequency list (" + r.format + ")";
+                // wire-b end
+                FileClass c = make(r.format == "CSV" ? FileKind::BookmarkCsv : FileKind::BookmarkXml, utf8Path, what);
                 c.entries = r.items.size();
                 return c;
             }

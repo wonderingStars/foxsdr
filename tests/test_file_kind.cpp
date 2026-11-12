@@ -301,6 +301,11 @@ void testFiles() {
         CHECK(c.kind == FileKind::BookmarkCsv && c.entries == 2);
         const auto x = classifyFile(writeText("b/freqs.xml", "<ArrayOfMemoryEntry><MemoryEntry><Name>A</Name><Frequency>7100000</Frequency><DetectorType>LSB</DetectorType></MemoryEntry></ArrayOfMemoryEntry>"));
         CHECK(x.kind == FileKind::BookmarkXml && x.entries == 1);
+        // wire-b: the SDRuno memory bank is named as what it is, not as SDR# XML
+        const auto s1b = classifyFile(writeText("b/bank.s1b", "5980000,Y,AM,Station A,,,8000,AntA\r\n7200000,N,LSB,Station B,,,2800,AntA\r\n"));
+        CHECK(s1b.kind == FileKind::BookmarkXml && s1b.entries == 2);
+        CHECK(s1b.detail.find("SDRuno memory bank (.s1b)") != std::string::npos);
+        CHECK(x.detail == "a frequency list (SDR# XML)");
         CHECK(classifyFile(writeText("b/words.txt", "just some words, no numbers here\nand more\n")).kind == FileKind::Unknown);
         CHECK(classifyFile(writeText("b/empty.txt", "")).kind == FileKind::Unknown);
     }

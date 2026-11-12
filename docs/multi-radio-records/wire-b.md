@@ -132,3 +132,9 @@ The hand-off asks for "an engine slicer tap on a radio's magnitude stream that f
 ABI REQUESTS (so far): a host call for a decoder to push a frame record (bytes, length, CRC state, protocol name) into the engine's `FrameLog` (S10); a host call for an MFSK decoder to hand per-symbol tone energies (S11).
 
 Config file sha256 at Phase 0 start: `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (to be re-checked at the end).
+
+## 5. WIRED ITEMS (Phase 1, base e7e25fc9; one commit each; decisive result lines are real output)
+
+| # | Item | Commit | What was wired | Decisive result | Break-it |
+|---|---|---|---|---|---|
+| 1 | Y9 `.s1b` label | (this commit) | `core/file_kind.cpp`: the classified detail now names the importer's format ("a frequency list (SDRuno memory bank (.s1b))"); SDR# XML and CSV texts unchanged | `test_file_kind` Passed (new checks: `.s1b` kind BookmarkXml, 2 entries, detail names the bank; SDR# XML text unchanged) | label forced back to "SDR# XML": `test_file_kind` Failed; restored: Passed |
