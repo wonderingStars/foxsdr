@@ -36,6 +36,8 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
             return historyStep(c, res);
         case FOXAPP_OP_CHANNEL:
             return channelOp(c, text, res);
+        case FOXAPP_OP_KEY_ACTION:
+            return keyActionOp(c, text, res);
         case FOXAPP_OP_MARKER_EXPORT:
         case FOXAPP_OP_MARKER_IMPORT:
             return markerIoOp(c, text, res);

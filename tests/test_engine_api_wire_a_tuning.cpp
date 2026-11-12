@@ -7,6 +7,9 @@
 //   C1  CHANNEL MODE: choose a plan, the radio lands on channel 1 in the plan's mode and width; next / previous wrap; go to a label; a marine channel with two
 //       frequencies shows both; leaving; the refusals (unknown plan, unknown label, no plan chosen, bad ival).
 //
+//   K1  KEY ACTIONS: bandwidth up / down walk the mode's list and stop at its ends; cycle_mode goes round; next / previous bookmark wrap; centre_signal moves the tuned frequency onto a generated carrier
+//       20 kHz away inside the passband and then says it is centred; cycle_step is the window's; any other id is refused.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cmath>
 #include <cstdio>
@@ -113,6 +116,64 @@ void testChannels() {
     CHECK_EQ(r.fact("tuned.1.hz"), where);
 }
 
+FoxCommand key(const char* id) { return testing::cmd(FOXAPP_OP_KEY_ACTION, 0.0, 0, id); }
+
+void testKeys() {
+    std::printf("K1: key actions\n");
+    Rig r;
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RUN, 0, 1)).status(), FOXAPI_OK);
+    CHECK_EQ(r.send(key("nonsense")).status(), FOXAPI_OUT_OF_RANGE);
+    CHECK_EQ(r.send(key("cycle_step")).status(), FOXAPI_UNSUPPORTED);
+    // bandwidth: NFM list 5000 6250 7500 10000 12500 15000 25000
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_MODE, 0.0, FOXAPI_DEMOD_NFM)).status(), FOXAPI_OK);
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_BANDWIDTH, 12500.0)).status(), FOXAPI_OK);
+    testing::Outcome o = r.send(key("bandwidth_up"));
+    CHECK_EQ(o.status(), FOXAPI_OK);
+    CHECK_EQ(r.fact("tuned.1.bandwidthHz"), std::string("15000"));
+    CHECK_EQ(r.send(key("bandwidth_up")).status(), FOXAPI_OK);
+    CHECK_EQ(r.fact("tuned.1.bandwidthHz"), std::string("25000"));
+    CHECK_EQ(r.send(key("bandwidth_up")).status(), FOXAPI_NO_CHANGE);   // the widest: no wrap
+    CHECK_EQ(r.fact("tuned.1.bandwidthHz"), std::string("25000"));
+    CHECK_EQ(r.send(key("bandwidth_down")).status(), FOXAPI_OK);
+    CHECK_EQ(r.fact("tuned.1.bandwidthHz"), std::string("15000"));
+    // mode: NFM -> WFM -> AM
+    CHECK_EQ(r.send(key("cycle_mode")).status(), FOXAPI_OK);
+    CHECK_EQ(r.fact("tuned.1.mode"), std::string("WFM"));
+    CHECK_EQ(r.send(key("cycle_mode")).status(), FOXAPI_OK);
+    CHECK_EQ(r.fact("tuned.1.mode"), std::string("AM"));
+    // a mode with no list (DSB): NO_CHANGE
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_MODE, 0.0, FOXAPI_DEMOD_DSB)).status(), FOXAPI_OK);
+    CHECK_EQ(r.send(key("bandwidth_up")).status(), FOXAPI_NO_CHANGE);
+    // bookmarks: three, next / previous wrap
+    const double marks[3] = {100.0e6, 101.0e6, 102.0e6};
+    for (const double m : marks) {
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_FREQUENCY, m, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_BOOKMARK_ADD, 0, 0, "m")).status(), FOXAPI_OK);
+    }
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_FREQUENCY, 100.5e6, 0)).status(), FOXAPI_OK);
+    o = r.send(key("next_bookmark"));
+    CHECK(std::fabs(o.result.applied[0] - 101.0e6) < 2.0);
+    o = r.send(key("next_bookmark"));
+    CHECK(std::fabs(o.result.applied[0] - 102.0e6) < 2.0);
+    o = r.send(key("next_bookmark"));
+    CHECK(std::fabs(o.result.applied[0] - 100.0e6) < 2.0);   // wraps
+    o = r.send(key("previous_bookmark"));
+    CHECK(std::fabs(o.result.applied[0] - 102.0e6) < 2.0);   // wraps back
+    // centre_signal: a carrier 20 kHz above the tuned frequency, inside a 150 kHz WFM passband
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_MODE, 0.0, FOXAPI_DEMOD_WFM)).status(), FOXAPI_OK);
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_CTUN, 0.0, 1)).status(), FOXAPI_OK);   // the tune moves the VFO, not the generator's centre: the carrier stays where it is
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_FREQUENCY, 100.0e6, 0)).status(), FOXAPI_OK);
+    const double tunedNow = std::strtod(r.fact("tuned.1.hz").c_str(), nullptr), centreNow = std::strtod(r.fact("tuned.1.centreHz").c_str(), nullptr);
+    CHECK(Access::genTone(r.eng, 0, tunedNow + 20.0e3 - centreNow, -10.0f));   // 20 kHz above where the radio is, whatever its VFO offset
+    CHECK(Access::genTone(r.eng, 1, 1.0e6, -90.0f));   // the demo's second tone, out of the way and quiet
+    r.settle(600);
+    o = r.send(key("centre_signal"));
+    std::printf("  centre_signal: %d, tuned %.0f Hz (the carrier is at +20000)\n", o.status(), o.result.applied[0] - 100.0e6);
+    CHECK_EQ(o.status(), FOXAPI_OK);
+    CHECK(std::fabs(o.result.applied[0] - (tunedNow + 20.0e3)) < 4000.0);   // onto the carrier, to within a few spectrum bins
+    CHECK_EQ(r.send(key("centre_signal")).status(), FOXAPI_NO_CHANGE);   // centred already (the carrier is fixed: the radio is on centre tuning)
+}
+
 }  // namespace
 
 int main() {
@@ -120,5 +181,6 @@ int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     testHistory();
     testChannels();
+    testKeys();
     return check::finish("test_engine_api_wire_a_tuning");
 }

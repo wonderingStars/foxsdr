@@ -20,7 +20,9 @@
 #include <string>
 
 #include "core/app_commands.hpp"
+#include "core/key_actions.hpp"
 #include "core/receiver_tables.hpp"
+#include "core/spectrum_frame.hpp"
 #include "engine/engine.hpp"
 #include "engine/wire_a.hpp"
 
@@ -146,6 +148,87 @@ void WireA::channelFacts(const std::function<void(const std::string&, const std:
         fact(k + "modeHint", cur.plan() != nullptr ? cur.plan()->modeHint : std::string());
         fact(k + "numberingIsOurs", cur.plan() != nullptr && cur.plan()->numberingIsOurs ? "1" : "0");
     }
+}
+
+// ---- key actions --------------------------------------------------------------------------------------------------------------------------------
+// core/key_actions.hpp's pure handlers on the engine's own state. The tuning step is the window's, so cycle_step is not here.
+
+WireA::Result WireA::keyActionOp(const FoxCommand& c, const std::string& text, Result res) {
+    (void)c;
+    namespace t = cascade::core::tuning;
+    const t::KeyActionInfo* info = t::findKeyAction(text);
+    if (info == nullptr) { return refused(res, FOXAPI_OUT_OF_RANGE, "that is not a key action"); }
+    Receiver& rxs = e_.rx();
+    const double tuned = e_.currentAbsoluteHz();
+    switch (info->id) {
+        case t::KeyActionId::BandwidthUp:
+        case t::KeyActionId::BandwidthDown: {
+            const std::string mode = rxs.modeIndex_ >= 0 && rxs.modeIndex_ < 8 ? cascade::gui::kModeNames[rxs.modeIndex_] : "";
+            const auto next = t::bandwidthStep(t::defaultBandwidths(mode), rxs.vfoBandwidthHz_, info->id == t::KeyActionId::BandwidthUp ? 1 : -1);
+            if (!next.has_value()) { return refused(res, FOXAPI_NO_CHANGE, "this mode has no list of bandwidths"); }
+            if (std::fabs(*next - rxs.vfoBandwidthHz_) < 0.5) { return refused(res, FOXAPI_NO_CHANGE, "the bandwidth is at the end of the list"); }
+            const Result r = subCommand(FOXAPI_OP_SET_BANDWIDTH, *next, 0);
+            res.applied[0] = r.applied[0];
+            return res;
+        }
+        case t::KeyActionId::CycleStep:
+            return refused(res, FOXAPI_UNSUPPORTED, "the tuning step is kept by the window");
+        case t::KeyActionId::CycleMode: {
+            std::vector<std::string> modes;
+            for (int m = 0; m < 7; ++m) { modes.push_back(cascade::gui::kModeNames[m]); }   // not RAW
+            const std::string cur = rxs.modeIndex_ >= 0 && rxs.modeIndex_ < 8 ? cascade::gui::kModeNames[rxs.modeIndex_] : "";
+            const auto next = t::cycleMode(modes, cur, 1);
+            if (!next.has_value()) { return refused(res, FOXAPI_NO_CHANGE, "no mode to go to"); }
+            for (int m = 0; m < 8; ++m) {
+                if (*next == cascade::gui::kModeNames[m]) {
+                    e_.setModeIndex(m);
+                    res.applied[0] = m + 1;
+                    return res;
+                }
+            }
+            return refused(res, FOXAPI_FAILED, "the mode is not known");
+        }
+        case t::KeyActionId::CentreSignal: {
+            cascade::core::SpectrumFrame frame;
+            if (!rxs.pipeline_.getLatestFrame(frame) || frame.dbBins.size() < 8) { return refused(res, FOXAPI_NO_CHANGE, "there is no spectrum to look at yet"); }
+            const double rate = rxs.pipeline_.inputRateHz();
+            const double centre = rxs.pipeline_.activeSource().centerFrequencyHz();
+            const double n = static_cast<double>(frame.dbBins.size());
+            if (!(rate > 0.0)) { return refused(res, FOXAPI_NO_CHANGE, "the radio has no sample rate yet"); }
+            const double half = 0.5 * rxs.vfoBandwidthHz_;
+            double bestDb = -1.0e9, bestHz = 0.0;
+            bool found = false;
+            for (std::size_t i = 0; i < frame.dbBins.size(); ++i) {
+                const double hz = centre + (static_cast<double>(i) - n / 2.0) * rate / n;
+                if (std::fabs(hz - tuned) > half) { continue; }
+                if (frame.dbBins[i] > bestDb) { bestDb = frame.dbBins[i]; bestHz = hz; found = true; }
+            }
+            if (!found) { return refused(res, FOXAPI_NO_CHANGE, "no signal inside the passband"); }
+            const auto to = t::centreOnSignal(tuned, bestHz, half);
+            if (!to.has_value()) { return refused(res, FOXAPI_NO_CHANGE, "the signal is centred already"); }
+            e_.tuneAbsoluteHz(*to);
+            res.applied[0] = e_.currentAbsoluteHz();
+            bump();
+            return res;
+        }
+        case t::KeyActionId::NextBookmark:
+        case t::KeyActionId::PreviousBookmark: {
+            std::vector<double> hz;
+            for (const cascade::core::Bookmark& b : e_.freqMgr_.list()) { hz.push_back(b.freqHz); }   // the list is kept sorted ascending
+            const auto to = info->id == t::KeyActionId::NextBookmark ? t::nextBookmark(hz, tuned) : t::previousBookmark(hz, tuned);
+            if (!to.has_value()) { return refused(res, FOXAPI_NO_CHANGE, "there are no bookmarks"); }
+            for (const cascade::core::Bookmark& b : e_.freqMgr_.list()) {
+                if (std::fabs(b.freqHz - *to) < 0.5) {
+                    e_.tuneToBookmark(b);
+                    break;
+                }
+            }
+            res.applied[0] = e_.currentAbsoluteHz();
+            bump();
+            return res;
+        }
+    }
+    return refused(res, FOXAPI_OUT_OF_RANGE, "that is not a key action");
 }
 
 }  // namespace cascade::engine

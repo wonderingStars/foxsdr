@@ -16,6 +16,7 @@
 #include "core/app_commands.hpp"
 #include "core/freq_manager.hpp"
 #include "engine/engine.hpp"
+#include "source/siggen.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "engine_api_test_env.hpp"
 #include "engine_client.hpp"
@@ -27,6 +28,13 @@ struct AppWindowTestAccess {
     static void recordDir(Engine& e, const std::string& dir) { e.recordDir_ = dir; }
     static void markerPath(Engine& e, const std::string& path) { e.markerPath_ = path; }
     static cascade::core::FreqManager& bookmarks(Engine& e) { return e.freqMgr_; }
+    // The generator source of radio 1 (nullptr when it is not the generator): a tone `slot` at `offsetHz` from its centre.
+    static bool genTone(Engine& e, int slot, double offsetHz, float amplitudeDb) {
+        cascade::source::SigGen* g = &e.rx().pipeline_.sigGen();
+        if (g == nullptr) { return false; }
+        g->setTone(slot, offsetHz, amplitudeDb);
+        return true;
+    }
 };
 }  // namespace cascade::gui
 

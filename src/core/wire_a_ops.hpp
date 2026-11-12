@@ -98,6 +98,14 @@
 #define FOXAPP_OP_ATTACH                 0x8813u /* text: JSON {folder, action, ...} */
 #define FOXAPP_OP_SIGMF_ANNOTATE         0x8814u /* text: JSON {meta, action, ...} */
 
+//   KEY_ACTION (SETTINGS; core/key_actions.hpp): the keyboard actions the key table did not have, as one op on the selected radio (target); the key bindings themselves are the screen's. text = the action id:
+//   "bandwidth_up" / "bandwidth_down" (the next width in the mode's own list: AM 3-12 kHz, NFM 5-25 kHz, WFM 100-250 kHz, USB / LSB 1.8-3.6 kHz, CW 100 Hz-1.2 kHz; no wrap at the ends; NO_CHANGE at an end or for
+//   a mode with no list), "cycle_mode" (the next of NFM, WFM, AM, DSB, USB, CW, LSB, wrapping), "centre_signal" (retunes onto the strongest signal inside the passband: the peak of the radio's last spectrum frame
+//   within half the bandwidth of the tuned frequency; NO_CHANGE when it is already within 5 Hz of it or there is none), "next_bookmark" / "previous_bookmark" (the bookmark above / below the tuned frequency, wrapping;
+//   NO_CHANGE with no bookmark). "cycle_step" is the window's: the tuning step is kept by the window, not the engine, so it answers UNSUPPORTED. OUT_OF_RANGE for any other text. applied[0] = the bandwidth (the bandwidth
+//   actions), the frequency (centre_signal, bookmarks) or the mode number from 1 (cycle_mode).
+#define FOXAPP_OP_KEY_ACTION             0x8815u /* text: the action id. Addresses one radio (target) */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -121,7 +129,8 @@
     {FOXAPP_OP_EXPORT_BOX, "APP_EXPORT_BOX", true}, \
     {FOXAPP_OP_PROJECT, "APP_PROJECT", true}, \
     {FOXAPP_OP_ATTACH, "APP_ATTACH", true}, \
-    {FOXAPP_OP_SIGMF_ANNOTATE, "APP_SIGMF_ANNOTATE", true},
+    {FOXAPP_OP_SIGMF_ANNOTATE, "APP_SIGMF_ANNOTATE", true}, \
+    {FOXAPP_OP_KEY_ACTION, "APP_KEY_ACTION", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP
