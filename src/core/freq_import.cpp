@@ -3,6 +3,7 @@
 
 #include "core/airband_monitor.hpp"
 #include "core/file_read.hpp"
+#include "core/freq_import_foreign.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -412,10 +413,33 @@ ImportResult importCsv(std::string_view text) {
     return r;
 }
 
+namespace {
+
+// core/freq_import_foreign.hpp has its own result struct (it was written beside this file, not in it); folded here into the one the callers
+// know. Nothing in it is lost: items, entries, skipped, modeDefaulted, format and error carry over, and the fields the foreign readers do
+// not have (shifted, toned) stay 0.
+ImportResult fromForeign(ForeignImportResult&& f) {
+    ImportResult r;
+    r.items = std::move(f.items);
+    r.entries = f.entries;
+    r.skipped = f.skipped;
+    r.modeDefaulted = f.modeDefaulted;
+    r.format = std::move(f.format);
+    r.error = std::move(f.error);
+    return r;
+}
+
+}  // namespace
+
 ImportResult importFrequencyList(std::string_view text) {
     if (text.find("<MemoryEntry") != std::string_view::npos) { return importSdrSharpXml(text); }
     if (looksLikeSdrppJson(text)) { return importSdrppJson(text); }
     if (looksLikeChirpCsv(text)) { return importChirpCsv(text); }
+    // gqrx's bookmarks.csv and CubicSDR's bookmarks.xml, from the content (a <cubicsdr_bookmarks> root; a gqrx header comment or
+    // ';'-separated numeric lines). Both formats are UNVERIFIED against a real file (docs/feature-records/core-formats.md): the generic
+    // CSV below stays the fallback for anything they do not recognise.
+    const std::string_view body = foreign::dropBom(text);
+    if (foreign::looksLikeCubicSdr(body) || foreign::looksLikeGqrx(body)) { return fromForeign(importForeignBookmarks(text)); }
     return importCsv(text);
 }
 

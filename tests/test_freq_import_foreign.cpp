@@ -1,4 +1,4 @@
-// Tests for the gqrx / CubicSDR bookmark importers (core/freq_import_foreign.hpp).
+// Tests for the gqrx / CubicSDR bookmark importers (core/freq_import_foreign.hpp), and for their dispatch from importFrequencyList.
 //
 // THE FIXTURES ARE WRITTEN BY HAND from the format descriptions in the header; no real gqrx or CubicSDR file was available, so these tests
 // prove the code against that description (and its hostile-input limits), not against the programs' own files. UNVERIFIED until a real
@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/freq_import_foreign.hpp"
 
+#include "core/freq_import.hpp"
 #include "test_check.hpp"
 
 #include <cstdio>
@@ -277,6 +278,33 @@ void testFiles() {
     fs::remove_all(d, ec);
 }
 
+// ---- wired into importFrequencyList (engine wiring W2): the one entry point every import path uses -------------------------------------------
+
+void testDispatch() {
+    // gqrx and CubicSDR files, by content, through the entry point the import op (FOXAPP_OP_BOOKMARK_IMPORT_FILE) and the window both call.
+    const cascade::core::ImportResult g = cascade::core::importFrequencyList(kGqrx);
+    CHECK(g.error.empty());
+    CHECK(g.format == "gqrx CSV");
+    CHECK(g.entries == 7 && g.items.size() == 7 && g.skipped == 0 && g.modeDefaulted == 1);
+    if (!g.items.empty()) { CHECK(g.items[0].name == "Tower" && g.items[0].freqHz == 118300000 && g.items[0].mode == "AM" && g.items[0].group == "Aircraft"); }
+    const cascade::core::ImportResult gb = cascade::core::importFrequencyList(std::string("\xEF\xBB\xBF") + kGqrx);   // a byte-order mark
+    CHECK(gb.format == "gqrx CSV" && gb.items.size() == 7);
+    const cascade::core::ImportResult c = cascade::core::importFrequencyList(kCubic);
+    CHECK(c.error.empty());
+    CHECK(c.format == "CubicSDR XML");
+    CHECK(!c.items.empty());
+    CHECK(cascade::core::importFrequencyList(std::string("\xEF\xBB\xBF") + kCubic).format == "CubicSDR XML");
+    // The same count as the foreign reader itself: nothing is lost in the fold.
+    CHECK(c.items.size() == importForeignBookmarks(kCubic).items.size());
+    // What was there before is untouched: a generic CSV (comma, no header comment) and SDR#'s XML are still read as they were.
+    CHECK(cascade::core::importFrequencyList("frequency,name,mode\n100.1,A,FM\n").format == "CSV");
+    CHECK(cascade::core::importFrequencyList("Name,Frequency (MHz),Mode\nA,100.1,FM\n").format == "CSV");
+    CHECK(cascade::core::importFrequencyList("<MemoryEntry><Name>x</Name><Frequency>100000000</Frequency></MemoryEntry>").format == "SDR# XML");
+    // A refusal from the foreign reader reaches the caller as the ImportResult error (a gqrx-looking file with no usable line).
+    const cascade::core::ImportResult none = cascade::core::importFrequencyList("# Frequency ; Name ; Modulation\n");
+    CHECK(!none.error.empty() && none.items.empty());
+}
+
 }  // namespace
 
 int main() {
@@ -288,5 +316,6 @@ int main() {
     testCubicVariants();
     testCubicHostile();
     testFiles();
+    testDispatch();
     return testSummary("test_freq_import_foreign");
 }

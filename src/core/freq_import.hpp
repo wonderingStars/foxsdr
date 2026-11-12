@@ -56,7 +56,7 @@ struct ImportResult {
     std::size_t entries = 0;   // entries seen in the file
     std::size_t skipped = 0;   // seen but unusable (no frequency, not a number)
     std::size_t shifted = 0;   // carried a non-zero SDR# Shift, not applied
-    std::string format;        // "SDR# XML", "CSV", "CHIRP CSV" or "SDR++ JSON"
+    std::string format;        // "SDR# XML", "CSV", "CHIRP CSV", "SDR++ JSON", "gqrx CSV" or "CubicSDR XML"
     // Added with the CHIRP and SDR++ readers (feat/web-bookmarks). Both stay 0 for the older formats.
     std::size_t modeDefaulted = 0;  // a mode the file named that FoxSDR has no demodulator name for: imported as NFM
     std::size_t toned = 0;          // rows whose CTCSS / DCS tone was kept in the name (Bookmark has no tone field)
@@ -94,8 +94,10 @@ ImportResult importSdrppJson(std::string_view text);
 // "lists" object at the top.
 bool looksLikeSdrppJson(std::string_view text);
 
-// Any of the four, decided from the content: "<MemoryEntry" is SDR#'s XML, a JSON object with "lists" is
-// SDR++'s, a CHIRP header is CHIRP's, everything else is tried as the generic CSV.
+// Any of the six, decided from the content: "<MemoryEntry" is SDR#'s XML, a JSON object with "lists" is
+// SDR++'s, a CHIRP header is CHIRP's, a <cubicsdr_bookmarks> root is CubicSDR's, a gqrx header comment or
+// ';'-separated numeric lines are gqrx's (core/freq_import_foreign.hpp; format "gqrx CSV" / "CubicSDR XML"),
+// everything else is tried as the generic CSV.
 ImportResult importFrequencyList(std::string_view text);
 
 // Reads a file named by its UTF-8 path and imports it (0.99.80).
