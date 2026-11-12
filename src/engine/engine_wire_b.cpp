@@ -212,6 +212,51 @@ FoxCommandResult Engine::bitsOp(const FoxCommand& c, const std::string& text, Fo
     return res;
 }
 
+// --- sigmeas: the eight cursors and the marks (wire_b_cursors.hpp) ----------------------------------------------------------------------------------
+FoxCommandResult Engine::cursorOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed) {
+    wireb::Json params = wireb::Json::object();
+    if (!text.empty()) {
+        params = wireb::Json::parse(text, nullptr, false);
+        if (params.is_discarded() || !params.is_object()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the parameters are not a JSON object"); }
+    }
+    const wireb::CursorOp op = c.op == FOXAPP_OP_CURSOR_SET ? wireb::CursorOp::Set : c.op == FOXAPP_OP_CURSOR_READ ? wireb::CursorOp::Read : wireb::CursorOp::Marks;
+    std::vector<std::complex<float>> iq;
+    double rate = 0.0;
+    if (op != wireb::CursorOp::Set) {
+        wireb::SpanSpec span;
+        std::string why;
+        if (!wireb::spanOf(params, span, why)) { return refusal(res, FOXAPI_BAD_ARGUMENT, why); }
+        cascade::core::Pipeline& pl = rx().pipeline_;
+        rate = pl.channelRateHz();
+        if (!(rate > 0.0) || !pl.running()) { return refusal(res, FOXAPI_FAILED, "the radio is not running"); }
+        const std::size_t ago = static_cast<std::size_t>(std::ceil(span.endAgoS * rate));
+        const std::size_t len = std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil(span.durationS * rate)));
+        const std::size_t want = std::min(pl.scopeIq().capacity(), ago + len);
+        iq.resize(want);
+        const std::size_t got = pl.scopeIq().snapshot(iq.data(), want);
+        if (got == 0) { return refusal(res, FOXAPI_FAILED, "the radio tap holds no samples yet"); }
+        const std::size_t endCut = std::min(ago, got - 1);
+        const std::size_t used = std::min(len, got - endCut);
+        const std::size_t first = got - endCut - used;
+        iq = std::vector<std::complex<float>>(iq.begin() + static_cast<std::ptrdiff_t>(first), iq.begin() + static_cast<std::ptrdiff_t>(first + used));
+    }
+    const std::size_t slot = scopedSlot();
+    WireBState& w = wireBState();
+    const wireb::RunResult rr = wireb::cursorRun(op, w.cursors[slot < w.cursors.size() ? slot : 0], iq.empty() ? nullptr : iq.data(), iq.size(), rate, params);
+    if (!rr.ok) { return refusal(res, FOXAPI_BAD_ARGUMENT, rr.why); }
+    wireb::Json doc = wireb::Json::object();
+    doc["op"] = op == wireb::CursorOp::Marks ? "marks" : "cursors";
+    doc["radio"] = slot + 1u;
+    doc["valid"] = rr.valid;
+    doc["reason"] = rr.reason;
+    doc["result"] = rr.out;
+    w.facts["radio." + std::to_string(slot + 1u) + ".sigmeas." + (op == wireb::CursorOp::Marks ? "marks" : "cursors")] = doc.dump(-1, ' ', false, wireb::Json::error_handler_t::replace);
+    changed = true;
+    res.applied[0] = rr.valid ? 1.0 : 0.0;
+    if (!rr.valid) { std::snprintf(res.message, sizeof(res.message), "%s", rr.reason.c_str()); }
+    return res;
+}
+
 FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text, FoxCommandResult res) {
     WireBState& w = wireBState();
     std::lock_guard<std::mutex> lk(w.mutex);
@@ -265,6 +310,30 @@ FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text
             }
             w.facts["gpu_fft.mode"] = std::to_string(c.ival[0]);
             res.applied[0] = static_cast<double>(c.ival[0]);
+            changed = true;
+            break;
+        }
+        case FOXAPP_OP_CURSOR_SET:
+        case FOXAPP_OP_CURSOR_READ:
+        case FOXAPP_OP_CURSOR_MARKS:
+            res = cursorOp(c, text, res, changed);
+            break;
+        case FOXAPP_OP_FRAMELOG_CONFIG: {
+            if (c.ival[0] < -1 || c.ival[0] > 1) { return refusal(res, FOXAPI_OUT_OF_RANGE, "keep failed frames is -1 (as it is), 0 or 1"); }
+            if (c.ival[1] < 0 || c.ival[1] > 4096) { return refusal(res, FOXAPI_OUT_OF_RANGE, "the frame log holds 1 to 4096 frames (0 leaves it as it is)"); }
+            const bool newKeep = c.ival[0] < 0 ? w.frameLog->keepBad() : c.ival[0] == 1;
+            const bool capacityChange = c.ival[1] != 0;
+            if (newKeep == w.frameLog->keepBad() && !capacityChange) { return refusal(res, FOXAPI_NO_CHANGE, "the frame log is set so already"); }
+            if (capacityChange) { w.frameLog = std::make_unique<cascade::sigmeas::FrameLog>(static_cast<std::size_t>(c.ival[1])); }   // (a new capacity starts an empty log)
+            w.frameLog->setKeepBad(newKeep);
+            res.applied[0] = newKeep ? 1.0 : 0.0;
+            changed = true;
+            break;
+        }
+        case FOXAPP_OP_FRAMELOG_READ: {
+            const wireb::Json j = wireb::frameLogJson(*w.frameLog, c.ival[0] != 0);
+            w.facts["framelog"] = j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace);
+            res.applied[0] = static_cast<double>(j["frames"].size());
             changed = true;
             break;
         }

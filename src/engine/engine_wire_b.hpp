@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 
@@ -20,6 +21,7 @@
 
 #include "core/field_strength.hpp"
 #include "engine/wire_b_bits.hpp"
+#include "engine/wire_b_cursors.hpp"
 
 namespace cascade::engine {
 
@@ -37,6 +39,10 @@ struct WireBState {
 
     // --- bitview: one ring of kept bursts and the last decoded frames per radio ---
     std::array<wireb::BitsRadio, 8> bits;
+
+    // --- sigmeas: the eight cursors of each radio and the one frame log ---
+    std::array<cascade::sigmeas::CursorSet8, 8> cursors;
+    std::unique_ptr<cascade::sigmeas::FrameLog> frameLog = std::make_unique<cascade::sigmeas::FrameLog>(256);
 };
 
 }  // namespace cascade::engine

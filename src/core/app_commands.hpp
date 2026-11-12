@@ -326,6 +326,19 @@
 //   Facts (LOCAL): radio.<n>.gpufft = one JSON object {mode, engaged, backend ("cpu"/"gpu"), submitted, completed_gpu, completed_cpu, dropped_frames, device_lost, error}; gpu_fft.mode = the last mode asked for.
 //   Not reached by this operation: the spectrum BLOCK (SET_SPECTRUM, the large FFT sizes) - see the record.
 #define FOXAPP_OP_GPU_FFT_MODE           0x8918u /* ival[0]: 0 CPU / 1 Auto / 2 GPU; every open radio; facts radio.<n>.gpufft, gpu_fft.mode */
+//   THE EIGHT CURSORS AND THE FRAME LOG (SETTINGS; dsp/sigmeas_cursors.hpp, dsp/sigmeas_framelog.hpp through engine/wire_b_cursors.hpp), LOCAL sessions only, nothing written to disk. The engine keeps one
+//   CursorSet8 per radio (mode free / locked / harmonic, spacing, reference, eight frequencies from the CHANNEL CENTRE; not saved). CURSOR_SET (text: JSON; keys mode, spacing_hz, reference 1-8,
+//   range_low_hz + range_high_hz, set: [{"cursor": 1-8, "freq_hz": n}]) changes a copy and keeps it only when every part was accepted (else BAD_ARGUMENT naming the key; nothing changes).
+//   CURSOR_READ (JSON: duration_s, end_ago_s, search_hz, snap) reads the level under every cursor from the Welch spectrum of the newest span of the radio's channel I/Q and, with snap and in free mode, moves
+//   the cursors onto the peaks. CURSOR_MARKS (JSON: kind harmonic / sideband, base_hz or carrier_hz, spacing_hz, count, low_hz, high_hz, search_hz) lists harmonic or sideband marks with their levels.
+//   Facts radio.<n>.sigmeas.cursors (SET and READ) and radio.<n>.sigmeas.marks. FRAMELOG_CONFIG (ival[0]: -1 keep, 0 drop / 1 keep frames that FAILED their CRC; ival[1]: capacity 1..4096, 0 keep) and
+//   FRAMELOG_READ (ival[0]: 1 include the failed frames) work on the engine's one FRAME LOG: frames kept IN MEMORY ONLY with their CRC flag (no plugin call fills it yet: an ABI request); the fact framelog
+//   holds the frames as hex only when READ asks, LOCAL only.
+#define FOXAPP_OP_CURSOR_SET             0x8919u /* addresses one radio (target): text JSON; fact radio.<n>.sigmeas.cursors */
+#define FOXAPP_OP_CURSOR_READ            0x891Au /* addresses one radio (target): text JSON; fact radio.<n>.sigmeas.cursors */
+#define FOXAPP_OP_CURSOR_MARKS           0x891Bu /* addresses one radio (target): text JSON; fact radio.<n>.sigmeas.marks */
+#define FOXAPP_OP_FRAMELOG_CONFIG        0x891Cu /* ival[0]: -1 keep / 0 / 1 keep CRC-failed frames; ival[1]: capacity 1..4096 (0 keep) */
+#define FOXAPP_OP_FRAMELOG_READ          0x891Du /* ival[0]: 1 include CRC-failed frames; fact framelog */
 // wire-b end
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.

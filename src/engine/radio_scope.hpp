@@ -95,6 +95,9 @@ inline bool isRadioScopedOp(std::uint32_t op) {
         case FOXAPP_OP_BITS_SPEC_CHECK:
         case FOXAPP_OP_BITS_SPEC_RUN:
         case FOXAPP_OP_BITS_TABLE_CHECK:
+        case FOXAPP_OP_CURSOR_SET:
+        case FOXAPP_OP_CURSOR_READ:
+        case FOXAPP_OP_CURSOR_MARKS:
         // wire-b end
         case FOXAPP_OP_CAL_MEASURE:
         case FOXAPP_OP_CAL_CLEAR:
