@@ -280,6 +280,23 @@
 #define FOXAPP_OP_FIELD_TABLE            0x8900u /* long text: the CSV table; ival[0]: 0 antenna factor / 1 cable loss; ival[1]: unit 0 Hz / 1 kHz / 2 MHz / 3 GHz */
 #define FOXAPP_OP_FIELD_CONFIG           0x8901u /* num[0]: preamp gain dB; num[1]: input ohm; ival[0]: 1 show / 0 hide */
 #define FOXAPP_OP_FIELD_READ             0x8902u /* addresses one radio (target); applied[0]: dBuV/m, applied[1]: the flag bits */
+//   SIGNAL MEASUREMENTS (SETTINGS; dsp/sigmeas_*.hpp through engine/wire_b_sigmeas.hpp): nine READ operations, one per measurement block, each addressing one radio (target).
+//   text (or long text): ONE JSON object of parameters, every key optional, an unknown key or a value outside its range is BAD_ARGUMENT naming the key (nothing is measured).
+//   The span is read from the radio's channel taps: the channel I/Q after the VFO at the channel rate (the audio block reads the finished 48 kHz audio) - at most the newest 1.3 s
+//   (the tap's size). "duration_s" (default 0.25, 0.001 to 10) is the length and "end_ago_s" (default 0, 0 to 60) how long before the newest sample the span ENDS; a span the tap
+//   does not hold is cut to what it holds. Frequencies in every answer are Hz from the CHANNEL CENTRE (the tuned frequency). FAILED when the radio is not running or its tap is empty.
+//   The answer is the LOCAL fact radio.<n>.sigmeas.<name> (one JSON object: op, radio, tuned_hz, rate_hz, samples, valid, reason and "result"); the command result says OK, with
+//   applied[0] 1 when the block measured something and 0 when it could not (message: the block's one-phrase reason: "span too short", "no signal found" ...), applied[1] the samples used.
+//   The keys of each block are in docs/multi-radio-records/wire-b.md (SCREEN HAND-OFF). Nothing is written to disk; nothing is saved.
+#define FOXAPP_OP_SIGMEAS_BANDWIDTH      0x8903u /* occupied and x-dB bandwidth: fact radio.<n>.sigmeas.bandwidth */
+#define FOXAPP_OP_SIGMEAS_MODULATION     0x8904u /* FM deviation and AM depth: fact ...sigmeas.modulation */
+#define FOXAPP_OP_SIGMEAS_SYMBOLS        0x8905u /* "mode": fsk / ook / cursor (symbol period from two cursors): fact ...sigmeas.symbols */
+#define FOXAPP_OP_SIGMEAS_VSTIME         0x8906u /* amplitude, frequency and phase against time: fact ...sigmeas.vstime */
+#define FOXAPP_OP_SIGMEAS_BURSTS         0x8907u /* burst list and repeat period: fact ...sigmeas.bursts */
+#define FOXAPP_OP_SIGMEAS_HOPCHIRP       0x8908u /* frequency hopping and chirp tracking: fact ...sigmeas.hopchirp */
+#define FOXAPP_OP_SIGMEAS_AUDIO          0x8909u /* SINAD, THD, SFDR, ENOB of the finished audio: fact ...sigmeas.audio */
+#define FOXAPP_OP_SIGMEAS_DRIFT          0x890Au /* drift search (de-chirp): fact ...sigmeas.drift */
+#define FOXAPP_OP_SIGMEAS_HISTOGRAM      0x890Bu /* amplitude / magnitude histogram and the power CCDF: fact ...sigmeas.histogram */
 // wire-b end
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.

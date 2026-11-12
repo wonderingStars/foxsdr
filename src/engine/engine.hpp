@@ -3234,6 +3234,7 @@ private:
     std::uint64_t wireBVersion_ = 1;   // moves whenever a wire-b result or setting changes (the fact block's fingerprint)
     WireBState& wireBState();
     FoxCommandResult applyWireB(const FoxCommand& c, const std::string& text, FoxCommandResult res);
+    FoxCommandResult sigmeasOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     void wireBFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
     // wire-b end
     std::vector<cascade::core::macros::Macro> macros_;
