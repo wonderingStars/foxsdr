@@ -365,6 +365,10 @@ struct Receiver {
     // S-meter display units (engine wiring lane 1): FOXAPI_METER_*, dBFS by default.
     int meterUnits_ = 0;
     // Noise-reduction method (engine wiring lane 1): FOXAPI_NR_*, standard by default.
+    // The spectrum's FFT size, window and frame rate (engine serial lane A): 1024 / Blackman-Harris / automatic is the legacy estimator.
+    int spectrumFft_ = 1024;
+    int spectrumWindow_ = 3;
+    double spectrumFps_ = 0.0;
     int nrMethod_ = 0;
     std::array<double, 8> eqDb_{};   // the equaliser's bands (engine wiring lane 1): all flat
     int audioHpHz_ = 0;              // the audio high-pass: 0 off / 100 / 300

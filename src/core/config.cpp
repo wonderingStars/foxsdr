@@ -283,6 +283,8 @@ std::vector<double> readEq(const json& j) {
 }
 int sanitiseHp(int v) { return (v == 100 || v == 300) ? v : 0; }
 int sanitiseLp(int v) { return (v == 2400 || v == 3000 || v == 6000) ? v : 0; }
+int sanitiseSpectrumFft(int v) { return (v >= 1024 && v <= 131072 && (v & (v - 1)) == 0) ? v : 1024; }
+double sanitiseSpectrumFps(double v) { return !(v > 0.0) ? 0.0 : (v < 1.0 ? 1.0 : (v > 120.0 ? 120.0 : v)); }
 
 void clampToneSquelch(int& kind, double& hz, int& code, int& pol) {
     kind = kind < 0 ? 0 : (kind > 2 ? 2 : kind);
@@ -342,6 +344,9 @@ std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
         r.cwPitchHz = !(r.cwPitchHz >= 300.0) ? 700.0 : (r.cwPitchHz > 1200.0 ? 1200.0 : r.cwPitchHz);
         r.audioHighPassHz = sanitiseHp(r.audioHighPassHz);
         r.audioLowPassHz = sanitiseLp(r.audioLowPassHz);
+        r.spectrumFftSize = sanitiseSpectrumFft(r.spectrumFftSize);
+        r.spectrumWindow = r.spectrumWindow < 0 ? 3 : (r.spectrumWindow > 4 ? 3 : r.spectrumWindow);
+        r.spectrumFrameRateHz = sanitiseSpectrumFps(r.spectrumFrameRateHz);
         if (r.eqDb.size() != 8) { r.eqDb.clear(); }
         r.noiseSquelchThresholdDb = !(r.noiseSquelchThresholdDb >= -90.0) ? -90.0 : (r.noiseSquelchThresholdDb > 0.0 ? 0.0 : r.noiseSquelchThresholdDb);
         r.noiseSquelchTailMs = !(r.noiseSquelchTailMs >= 0.0) ? 0.0 : (r.noiseSquelchTailMs > 2000.0 ? 2000.0 : r.noiseSquelchTailMs);
@@ -659,6 +664,9 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     out.eqDb = readEq(j);
     getInt(j, "audioHighPassHz", out.audioHighPassHz);
     getInt(j, "audioLowPassHz", out.audioLowPassHz);
+    getDouble(j, "spectrumFrameRateHz", out.spectrumFrameRateHz);
+    getInt(j, "spectrumWindow", out.spectrumWindow);
+    getInt(j, "spectrumFftSize", out.spectrumFftSize);
     getBool(j, "noiseSquelchOn", out.noiseSquelchOn);
     getDouble(j, "noiseSquelchThresholdDb", out.noiseSquelchThresholdDb);
     getDouble(j, "noiseSquelchTailMs", out.noiseSquelchTailMs);
@@ -1083,6 +1091,9 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
                 r.eqDb = readEq(e);
                 getInt(e, "audioHighPassHz", r.audioHighPassHz);
                 getInt(e, "audioLowPassHz", r.audioLowPassHz);
+                getDouble(e, "spectrumFrameRateHz", r.spectrumFrameRateHz);
+                getInt(e, "spectrumWindow", r.spectrumWindow);
+                getInt(e, "spectrumFftSize", r.spectrumFftSize);
                 getBool(e, "noiseSquelchOn", r.noiseSquelchOn);
                 getDouble(e, "noiseSquelchThresholdDb", r.noiseSquelchThresholdDb);
                 getDouble(e, "noiseSquelchTailMs", r.noiseSquelchTailMs);
@@ -1318,6 +1329,9 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     out.cwPitchHz = !(out.cwPitchHz >= 300.0) ? 700.0 : (out.cwPitchHz > 1200.0 ? 1200.0 : out.cwPitchHz);
     out.audioHighPassHz = sanitiseHp(out.audioHighPassHz);
     out.audioLowPassHz = sanitiseLp(out.audioLowPassHz);
+    out.spectrumFftSize = sanitiseSpectrumFft(out.spectrumFftSize);
+    out.spectrumWindow = out.spectrumWindow < 0 ? 3 : (out.spectrumWindow > 4 ? 3 : out.spectrumWindow);
+    out.spectrumFrameRateHz = sanitiseSpectrumFps(out.spectrumFrameRateHz);
     out.noiseSquelchThresholdDb = !(out.noiseSquelchThresholdDb >= -90.0) ? -90.0 : (out.noiseSquelchThresholdDb > 0.0 ? 0.0 : out.noiseSquelchThresholdDb);
     out.noiseSquelchTailMs = !(out.noiseSquelchTailMs >= 0.0) ? 0.0 : (out.noiseSquelchTailMs > 2000.0 ? 2000.0 : out.noiseSquelchTailMs);
     out.notchBank = sanitiseNotchBank(std::move(out.notchBank));
@@ -1675,6 +1689,9 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     if (cfg.eqDb.size() == 8) { j["eqDb"] = cfg.eqDb; }
     j["audioHighPassHz"] = cfg.audioHighPassHz;
     j["audioLowPassHz"] = cfg.audioLowPassHz;
+    j["spectrumFrameRateHz"] = cfg.spectrumFrameRateHz;
+    j["spectrumWindow"] = cfg.spectrumWindow;
+    j["spectrumFftSize"] = cfg.spectrumFftSize;
     j["noiseSquelchOn"] = cfg.noiseSquelchOn;
     j["noiseSquelchThresholdDb"] = cfg.noiseSquelchThresholdDb;
     j["noiseSquelchTailMs"] = cfg.noiseSquelchTailMs;
@@ -1880,6 +1897,9 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
             if (r.eqDb.size() == 8) { e["eqDb"] = r.eqDb; }
             e["audioHighPassHz"] = r.audioHighPassHz;
             e["audioLowPassHz"] = r.audioLowPassHz;
+            e["spectrumFrameRateHz"] = r.spectrumFrameRateHz;
+            e["spectrumWindow"] = r.spectrumWindow;
+            e["spectrumFftSize"] = r.spectrumFftSize;
             e["noiseSquelchOn"] = r.noiseSquelchOn;
             e["noiseSquelchThresholdDb"] = r.noiseSquelchThresholdDb;
             e["noiseSquelchTailMs"] = r.noiseSquelchTailMs;

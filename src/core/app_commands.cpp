@@ -204,6 +204,7 @@ constexpr OpEntry kOps[] = {
     {FOXAPI_OP_SET_NOISE_SQUELCH, "SET_NOISE_SQUELCH", true},
     {FOXAPI_OP_SET_EQ_BAND, "SET_EQ_BAND", true},
     {FOXAPI_OP_SET_AUDIO_FILTERS, "SET_AUDIO_FILTERS", true},
+    {FOXAPI_OP_SET_SPECTRUM, "SET_SPECTRUM", true},
 };
 
 constexpr std::size_t kOpCount = sizeof(kOps) / sizeof(kOps[0]);

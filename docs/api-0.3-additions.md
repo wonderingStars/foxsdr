@@ -2638,6 +2638,10 @@ At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTT
   `pilotLocked`, `stereoActive`) is the OIRT carrier lock; `pilotLevel` is the carrier's level against its nominal 20 % (about 1 for a standard transmission).
 * The default is unchanged for every frequency outside the band, and the engine makes no change at all unless the tuned frequency is inside 65.8 to 74 MHz or the user chose.
 
+### 9.38 Spectrum size, window and frame rate (engine serial lane A, rows S1 S2 S3; docs/multi-radio-records/engine-serial-a.md)
+
+* Op `FOXAPI_OP_SET_SPECTRUM` 0x011C (receiver-scoped; in no web, CAT or TCI profile): `ival[0]` the FFT size (a power of two, 1024 to 131072), `ival[1]` the window (0 rectangular, 1 Hann, 2 Hamming, 3 Blackman-Harris, 4 flat-top), `num[0]` the frame rate (0 automatic, else 1 to 120 a second); `applied[0]` and `applied[1]` are the size and the rate. State, appended after `audioLowPassHz`: `spectrumFftSize spectrumWindow spectrumFrameRateHz` (settings: they move `modeSeq`). Saved per radio (`spectrumFftSize`, `spectrumWindow`, `spectrumFrameRateHz`).
+* The frames the spectrum ring serves carry `spectrumFftSize` bins up to the ring's width of 16,384 (`FoxSpectrumInfo::binCount`; a wider FFT is served as the maximum of each group, so a narrow carrier survives); a reader that passes a smaller cap gets the maximum of each group, as before. 1024 / Blackman-Harris / automatic is the legacy estimator, unchanged; anything else runs the spectrum block on the same samples, and its tone level is lowered by the legacy estimator's uncompensated Blackman-Harris reading (-8.9 dB) so a tone reads the same level at every size and window while the noise per bin falls with the size. Automatic means 30 frames a second on the block path (the block clamps the hop to at least a sixteenth of the FFT, so a very large FFT cannot reach a high rate).
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

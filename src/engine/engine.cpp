@@ -4899,6 +4899,9 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         for (std::size_t i = 0; i < rxa.eqDb_.size(); ++i) { r.eqDb[i] = rxa.eqDb_[i]; }
         r.audioHighPassHz = static_cast<std::uint32_t>(rxa.audioHpHz_);
         r.audioLowPassHz = static_cast<std::uint32_t>(rxa.audioLpHz_);
+        r.spectrumFftSize = static_cast<std::uint32_t>(rxa.spectrumFft_);
+        r.spectrumWindow = static_cast<std::uint32_t>(rxa.spectrumWindow_);
+        r.spectrumFrameRateHz = rxa.spectrumFps_;
         r.noiseSquelchOn = rxa.noiseSquelchOn_ ? 1u : 0u;
         r.noiseSquelchThresholdDb = rxa.noiseSquelchThresholdDb_;
         r.noiseSquelchTailMs = rxa.noiseSquelchTailMs_;
@@ -7564,6 +7567,18 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[1] = tail;
             return res;
         }
+        case FOXAPI_OP_SET_SPECTRUM: {
+            Receiver& rxs = rx();
+            if (!rxs.pipeline_.setSpectrum(static_cast<std::size_t>(c.ival[0]), static_cast<int>(c.ival[1]), c.num[0])) {
+                return refuse(FOXAPI_OUT_OF_RANGE, "the spectrum FFT size is a power of two from 1024 to 131072, the window 0 to 4 and the frame rate 0 (automatic) or 1 to 120 a second");
+            }
+            rxs.spectrumFft_ = static_cast<int>(c.ival[0]);
+            rxs.spectrumWindow_ = static_cast<int>(c.ival[1]);
+            rxs.spectrumFps_ = c.num[0];
+            res.applied[0] = static_cast<double>(c.ival[0]);
+            res.applied[1] = c.num[0];
+            return res;
+        }
         case FOXAPI_OP_SET_CW_PITCH: {
             Receiver& rxs = rx();
             if (!rxs.pipeline_.setCwPitchHz(c.num[0])) { return refuse(FOXAPI_OUT_OF_RANGE, "the CW pitch is 300 to 1200 Hz"); }
@@ -9447,11 +9462,15 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         for (std::size_t i = 0; i < cfg.eqDb.size() && i < 8; ++i) { rx().eqDb_[i] = cfg.eqDb[i]; }
         rx().audioHpHz_ = cfg.audioHighPassHz;
         rx().audioLpHz_ = cfg.audioLowPassHz;
+        rx().spectrumFft_ = cfg.spectrumFftSize;
+        rx().spectrumWindow_ = cfg.spectrumWindow;
+        rx().spectrumFps_ = cfg.spectrumFrameRateHz;
         pushAudioEq();
         rx().noiseSquelchOn_ = cfg.noiseSquelchOn;
         rx().noiseSquelchThresholdDb_ = cfg.noiseSquelchThresholdDb;
         rx().noiseSquelchTailMs_ = cfg.noiseSquelchTailMs;
         (void)rx().pipeline_.setNoiseSquelch(rx().noiseSquelchOn_, rx().noiseSquelchThresholdDb_, rx().noiseSquelchTailMs_);
+        (void)rx().pipeline_.setSpectrum(static_cast<std::size_t>(rx().spectrumFft_), rx().spectrumWindow_, rx().spectrumFps_);
         rx().manualNotch_ = {};
         for (const cascade::core::ManualNotchSetting& n : cfg.notchBank) {
             Receiver::ManualNotchSlot& ns = rx().manualNotch_[static_cast<std::size_t>(n.slot)];
@@ -10021,6 +10040,9 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
         }
         cfg.audioHighPassHz = rxa.audioHpHz_;
         cfg.audioLowPassHz = rxa.audioLpHz_;
+        cfg.spectrumFftSize = rxa.spectrumFft_;
+        cfg.spectrumWindow = rxa.spectrumWindow_;
+        cfg.spectrumFrameRateHz = rxa.spectrumFps_;
         cfg.noiseSquelchOn = rxa.noiseSquelchOn_;
         cfg.noiseSquelchThresholdDb = rxa.noiseSquelchThresholdDb_;
         cfg.noiseSquelchTailMs = rxa.noiseSquelchTailMs_;
@@ -10129,6 +10151,7 @@ void Engine::initialise() {
         (void)rx().pipeline_.setCwPitchHz(rx().cwPitchHz_);
         pushAudioEq();
         (void)rx().pipeline_.setNoiseSquelch(rx().noiseSquelchOn_, rx().noiseSquelchThresholdDb_, rx().noiseSquelchTailMs_);
+        (void)rx().pipeline_.setSpectrum(static_cast<std::size_t>(rx().spectrumFft_), rx().spectrumWindow_, rx().spectrumFps_);
         pushManualNotches();
     }
     rx().pipeline_.setNotchEnabled(rx().notchEnabled_);

@@ -458,6 +458,8 @@ struct AppWindowTestAccess {
     static double notchSlotHz(AppWindow& a, int i) { return rd(a, [&] { return th::engine(a).receivers_[0]->manualNotch_[static_cast<std::size_t>(i)].hz; }); }
     static int notchBankPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.manualNotchCount(); }); }
     static double cwPitchRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->cwPitchHz_; }); }
+    static int spectrumFftRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->spectrumFft_; }); }
+    static std::size_t spectrumFftPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.spectrumFftSize(); }); }
     static double cwPitchPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.cwPitchHz(); }); }
     static bool nsqRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->noiseSquelchOn_; }); }
     static double nsqThrRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->noiseSquelchThresholdDb_; }); }
@@ -1278,6 +1280,22 @@ void receiverOps(AppWindow& a) {
         CHECK(!A::nsqRx(a) && !A::nsqPipe(a) && A::nsqThrRx(a) == -42.0);
     }
 
+    covering(FOXAPI_OP_SET_SPECTRUM);
+    {
+        CHECK(A::spectrumFftRx(a) == 1024 && A::spectrumFftPipe(a) == 1024);
+        FoxCommand sp = ints(FOXAPI_OP_SET_SPECTRUM, 8192, 1);
+        sp.num[0] = 20.0;
+        CHECK(ok(A::apply(a, sp)));
+        CHECK(A::spectrumFftRx(a) == 8192 && A::spectrumFftPipe(a) == 8192);
+        sp.ival[0] = 5000;
+        CHECK(refused(A::apply(a, sp), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::spectrumFftRx(a) == 8192 && A::spectrumFftPipe(a) == 8192);
+        sp.ival[0] = 1024;
+        sp.ival[1] = 3;
+        sp.num[0] = 0.0;
+        CHECK(ok(A::apply(a, sp)));
+        CHECK(A::spectrumFftRx(a) == 1024 && A::spectrumFftPipe(a) == 1024);
+    }
     covering(FOXAPI_OP_SET_CW_PITCH);
     {
         CHECK(A::cwPitchRx(a) == 700.0 && A::cwPitchPipe(a) == 700.0);

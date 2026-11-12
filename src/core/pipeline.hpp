@@ -156,6 +156,7 @@
 #include "core/patch_runner.hpp"
 #include "dsp/resampler.hpp"
 #include "dsp/spectrum.hpp"
+#include "dsp/spectrum_block.hpp"
 #include "dsp/spsc_ring.hpp"
 #include "dsp/squelch.hpp"
 #include "dsp/oirt_stereo.hpp"
@@ -586,6 +587,16 @@ public:
     bool eqBypassed() const;
     bool setCwPitchHz(double hz);
     double cwPitchHz() const;
+    // THE SPECTRUM'S SIZE, WINDOW AND FRAME RATE (engine serial lane A, rows S1 S2 S3; dsp/spectrum_block.hpp). fftSize: a power of two, 1,024 to 131,072; window: 0 rectangular, 1 Hann, 2 Hamming,
+    // 3 Blackman-Harris (the default), 4 flat-top; frameRateHz: 0 = automatic (30 a second on the block path), else 1 to 120. 1,024 / Blackman-Harris / automatic is the LEGACY estimator (the frame every
+    // drained block, as it has always been); anything else runs the spectrum block, fed the same samples, its tone level lowered by the legacy estimator's (uncompensated) Blackman-Harris offset so a
+    // choice never moves a displayed level. The audio chain is not touched: its block stays the construction FFT size. False (nothing changed) for a value outside those. Any control thread.
+    bool setSpectrum(std::size_t fftSize, int window, double frameRateHz);
+    std::size_t spectrumFftSize() const;
+    int spectrumWindow() const;
+    double spectrumFrameRateHz() const;
+    // The bins of the newest frame (the ring's reader sees a frame of this many): fftSize on both paths.
+    std::size_t spectrumBinCount() const;
     int manualNotchCount() const;   // slots that are on
     bool setNoiseReductionMethod(int method);
     int noiseReductionMethod() const;
@@ -1131,6 +1142,14 @@ private:
     cascade::dsp::NotchBank notchBankL_{kAudioRateHz};
     cascade::dsp::NotchBank notchBankR_{kAudioRateHz};
     double cwPitchNow_ = 700.0;
+    // The spectrum block path (setSpectrum): the block exists from the first non-default choice on and is never freed while the pipeline lives; specOn_ says whether the DSP thread feeds it.
+    std::unique_ptr<cascade::dsp::SpectrumBlock> specBlock_;
+    std::atomic<bool> specOn_{false};
+    std::size_t specFft_ = 0;       // the choice (0 = the construction size); all of these under frameMutex_, which also makes the block's ONE control thread (latest, swapIn, collectRetired) one lock
+    int specWindow_ = 3;
+    double specFps_ = 0.0;
+    std::vector<float> specScratch_;   // getLatestFrame's read buffer
+    void rebuildSpectrumBlock();   // the choice -> the block (any control thread; takes frameMutex_ for the hand-over only)
     std::unique_ptr<cascade::dsp::NoiseSquelch> noiseSq_;
     bool noiseSqOn_ = false;
     double noiseSqThresholdDb_ = -30.0;

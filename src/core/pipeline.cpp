@@ -292,6 +292,12 @@ constexpr std::size_t kAudioTapSize = 4096;
 // returned, not that the thread was merely slow.
 constexpr std::chrono::seconds kSourceJoinWait{3};
 
+// The spectrum choice (setSpectrum): the largest FFT it takes, the frame rate "automatic" means on the block path, and the figure the block's compensated tone level is lowered by to match the legacy
+// estimator's uncompensated Blackman-Harris reading (20 log10 of that window's coherent gain, its first coefficient 0.35875).
+constexpr std::size_t kSpectrumMaxFft = 131072;
+constexpr double kAutoSpectrumFps = 30.0;
+const float kLegacyToneOffsetDb = static_cast<float>(20.0 * std::log10(0.35875));
+
 }  // namespace
 
 Pipeline::Pipeline(Config cfg)
@@ -1046,6 +1052,20 @@ bool Pipeline::running() const {
 
 bool Pipeline::getLatestFrame(SpectrumFrame& out) {
     std::lock_guard<std::mutex> lk(frameMutex_);
+    if (specOn_.load(std::memory_order_acquire)) {
+        // THE SPECTRUM BLOCK PATH (setSpectrum): the newest block frame, if one is newer than the last pulled, becomes the latest frame. The legacy estimator's tone level is
+        // uncompensated for the window (a full-scale tone under Blackman-Harris reads 20 log10(0.35875) = -8.9 dB), and the block's is compensated: lowering by the same figure keeps every
+        // level the application shows (the S-meter calibration, the noise floor, the thresholds) where it was whatever size and window are chosen.
+        const std::size_t cols = specBlock_->columns();
+        if (specScratch_.size() < cols) { specScratch_.resize(cols); }
+        std::uint64_t blockSeq = 0;
+        const std::size_t got = specBlock_->latest(specScratch_.data(), specScratch_.size(), &blockSeq);
+        if (got > 0) {
+            latest_.dbBins.resize(got);
+            for (std::size_t i = 0; i < got; ++i) { latest_.dbBins[i] = specScratch_[i] + kLegacyToneOffsetDb; }
+            latest_.seq += 1;
+        }
+    }
     if (latest_.seq <= out.seq) { return false; }
     out = latest_;
     return true;
@@ -1279,6 +1299,60 @@ bool Pipeline::setAudioFilters(int hp, int lp) {
     return true;
 }
 bool Pipeline::eqBypassed() const { return eqL_.isBypassed(); }
+
+// --- the spectrum's size, window and frame rate (engine serial lane A, S1 S2 S3) ------------------------------------------------------------------
+bool Pipeline::setSpectrum(std::size_t fftSize, int window, double frameRateHz) {
+    if (!cascade::dsp::specSizeValid(fftSize) || fftSize > kSpectrumMaxFft || window < 0 || window > 4) { return false; }
+    if (!std::isfinite(frameRateHz) || frameRateHz < 0.0 || frameRateHz > 120.0 || (frameRateHz > 0.0 && frameRateHz < 1.0)) { return false; }
+    {
+        std::lock_guard<std::mutex> lk(frameMutex_);
+        specFft_ = fftSize;
+        specWindow_ = window;
+        specFps_ = frameRateHz;
+    }
+    rebuildSpectrumBlock();
+    return true;
+}
+
+void Pipeline::rebuildSpectrumBlock() {
+    std::size_t fft = 0;
+    int win = 3;
+    double fps = 0.0;
+    {
+        std::lock_guard<std::mutex> lk(frameMutex_);
+        fft = specFft_ == 0 ? cfg_.fftSize : specFft_;
+        win = specWindow_;
+        fps = specFps_;
+    }
+    if (fft == cfg_.fftSize && win == 3 && fps == 0.0) {
+        specOn_.store(false, std::memory_order_release);   // the legacy estimator again (the block stays allocated, idle)
+        return;
+    }
+    cascade::dsp::SpecConfig c;
+    c.fftSize = fft;
+    c.window = static_cast<cascade::dsp::SpecWindow>(win);
+    c.sampleRateHz = mirrorInputRateHz_.load(std::memory_order_relaxed);
+    c.frameRateHz = fps > 0.0 ? fps : kAutoSpectrumFps;
+    c.hop = 0;
+    c.columns = 0;
+    c.mode = cascade::dsp::SpecMode::Average;
+    c.scale = cascade::dsp::SpecScale::Tone;
+    c.alpha = cfg_.averagingAlpha;
+    std::unique_ptr<cascade::dsp::SpectrumBlock::Engine> e = cascade::dsp::SpectrumBlock::prepare(c);   // allocates and plans: outside the lock
+    if (!e) { return; }
+    std::lock_guard<std::mutex> lk(frameMutex_);
+    if (!specBlock_) {
+        specBlock_ = std::make_unique<cascade::dsp::SpectrumBlock>(c);
+    } else {
+        specBlock_->swapIn(std::move(e));
+    }
+    specOn_.store(true, std::memory_order_release);
+}
+
+std::size_t Pipeline::spectrumFftSize() const { return specFft_ == 0 ? cfg_.fftSize : specFft_; }
+int Pipeline::spectrumWindow() const { return specWindow_; }
+double Pipeline::spectrumFrameRateHz() const { return specFps_; }
+std::size_t Pipeline::spectrumBinCount() const { return specFft_ == 0 ? cfg_.fftSize : specFft_; }
 
 // --- CW pitch -------------------------------------------------------------------------------------------------------------------------------------
 bool Pipeline::setCwPitchHz(double hz) {
@@ -1723,6 +1797,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
     // ...and the lock-free mirror inputRateHz() reads, in the same breath as
     // the field it mirrors, so the two can never disagree.
     mirrorInputRateHz_.store(rateHz, std::memory_order_relaxed);
+    rebuildSpectrumBlock();   // a frame rate asked for in hertz needs the new input rate (a no-op on the legacy path)
     // ONE LINE PER ACCEPTED CHANGE (0.99.85), here at the commit rather than at
     // any caller, because every way the rate moves - the rail's Rate combo, a
     // plugin preset, the browser, a retune the driver answered with another
@@ -2130,12 +2205,17 @@ void Pipeline::dspThreadBody() {
         filled = 0;
         dspBeat("spectrum");
         const auto blockBegan = std::chrono::steady_clock::now();
-        estimator_.process(acc.data(), db.data());
+        if (specOn_.load(std::memory_order_acquire)) {
+            // The spectrum block (setSpectrum): frames come at its own rate from these same samples and are pulled by getLatestFrame.
+            specBlock_->process(acc.data(), n);
+        } else {
+            estimator_.process(acc.data(), db.data());
 
-        {
-            std::lock_guard<std::mutex> lk(frameMutex_);
-            latest_.dbBins = db;  // vector assignment reuses capacity after the first frame
-            latest_.seq += 1;     // strictly increasing; never reset (see header)
+            {
+                std::lock_guard<std::mutex> lk(frameMutex_);
+                latest_.dbBins = db;  // vector assignment reuses capacity after the first frame
+                latest_.seq += 1;     // strictly increasing; never reset (see header)
+            }
         }
 
         // Duplicate the same drained block into the audio path (the spectrum

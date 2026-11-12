@@ -107,6 +107,9 @@ SavedRadio Engine::savedRadioOf(std::size_t slot) {
     }
     r.audioHighPassHz = rx().audioHpHz_;
     r.audioLowPassHz = rx().audioLpHz_;
+    r.spectrumFftSize = rx().spectrumFft_;
+    r.spectrumWindow = rx().spectrumWindow_;
+    r.spectrumFrameRateHz = rx().spectrumFps_;
     r.noiseSquelchOn = rx().noiseSquelchOn_;
     r.noiseSquelchThresholdDb = rx().noiseSquelchThresholdDb_;
     r.noiseSquelchTailMs = rx().noiseSquelchTailMs_;
@@ -278,6 +281,11 @@ void Engine::restoreSavedRadios(const cascade::core::AppConfig& cfg) {
                 send(eq);
             }
             send(cmd::makeInt(FOXAPI_OP_SET_AUDIO_FILTERS, s.audioHighPassHz, s.audioLowPassHz));
+            {
+                FoxCommand spc = cmd::makeInt(FOXAPI_OP_SET_SPECTRUM, s.spectrumFftSize, s.spectrumWindow);
+                spc.num[0] = s.spectrumFrameRateHz;
+                send(spc);
+            }
             {
                 FoxCommand nsq = cmd::makeInt(FOXAPI_OP_SET_NOISE_SQUELCH, s.noiseSquelchOn ? 1 : 0, 1);
                 nsq.num[0] = s.noiseSquelchThresholdDb;
