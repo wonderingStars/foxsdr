@@ -36,6 +36,7 @@
 #include <thread>
 #include <vector>
 
+#include "net/receiver_listing.hpp"
 #include "net/web_audio.hpp"
 #include "net/web_auth.hpp"
 #include "net/web_control.hpp"
@@ -563,6 +564,15 @@ public:
     // its worker, only when a decoder's picture actually changed - re-encoding a megapixel BMP every poll would cost more than the whole
     // rest of the server.
     void setImages(std::vector<WebImage> images);
+
+    // --- Public receiver listing (oss-net item 4; net/receiver_listing.hpp) ------------------------------------------------------------
+    // GET /status.json: the public document a receiver directory (Receiverbook) reads to list this page. OFF until a listing with
+    // enabled == true and a valid set of fields is given; until then the route answers 404 as if it did not exist. The route is deliberately
+    // NOT behind the sign-in (a crawler has no cookie) and serves ONLY the fields the user typed (name, location text, optional position,
+    // bands) plus the version and the listener limit; it reads nothing from the receiver. It is reachable only where the bind policy lets
+    // anyone reach the page at all (loopback by default). Callable at any time, from any thread, running or not. Returns false with `error`
+    // (a sentence for the settings panel) when the listing is enabled but invalid; the previous listing then stays in force.
+    bool setReceiverListing(const ReceiverListing& listing, std::string& error);
 
     // --- Basemap tiles -------------------------------------------------------
     // GET /api/tile/{z}/{x}/{y} is demand-driven by the BROWSER's viewport,

@@ -3427,6 +3427,21 @@ public:
         return i < images_.size() && !images_[i].bmp.empty();
     }
 
+    // The public listing (net/receiver_listing.hpp): the document is built once, when the listing is set, and served as it is; a disabled
+    // listing is an empty document and the route answers 404.
+    bool setReceiverListing(const ReceiverListing& listing, std::string& error) {
+        error = validateListing(listing);
+        if (!error.empty()) { return false; }
+        std::string doc = listingJson(listing);
+        std::lock_guard<std::mutex> lock(listingMutex_);
+        listingDoc_ = std::move(doc);
+        return true;
+    }
+    std::string listingDocument() const {
+        std::lock_guard<std::mutex> lock(listingMutex_);
+        return listingDoc_;
+    }
+
     // --- Basemap tiles (see web_server.hpp for the shape of the whole thing) --
 
     std::vector<WebServer::TileRequest> takePendingTileRequests() {
@@ -3530,6 +3545,10 @@ private:
     // Decoded pictures, already BMP-encoded by the application.
     mutable std::mutex imageMutex_;
     std::vector<WebImage> images_;
+
+    // The public receiver listing's document ("" = off).
+    mutable std::mutex listingMutex_;
+    std::string listingDoc_;
 
     // Basemap tiles published by the application, and the requests waiting for
     // it. An entry with an empty bmp means the plugin said MISSING — a real
@@ -3679,7 +3698,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
     // caller-influenced JSON, and no-store because nothing here is worth a
     // cache entry and a cached /api/status is a stale readout.
     svr.set_post_routing_handler(
-        [this](const httplib::Request&, httplib::Response& res) {
+        [this](const httplib::Request& req, httplib::Response& res) {
             res.set_header("X-Content-Type-Options", "nosniff");
             res.set_header("Cache-Control", "no-store");
             res.set_header("Referrer-Policy", "no-referrer");
@@ -3693,7 +3712,8 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
             // missing login - neither is a browser being USED, both are
             // scanners and failed logins, and counting them would say
             // "browser" was exercised by a tester who never opened the page.
-            if (usageCallback_ && res.status != 404 && res.status != 401) { usageCallback_(); }
+            // The public listing's crawler (GET /status.json) is not a browser being used either.
+            if (usageCallback_ && res.status != 404 && res.status != 401 && req.path != "/status.json") { usageCallback_(); }
         });
 
     svr.Get("/", [](const httplib::Request&, httplib::Response& res) {
@@ -3704,6 +3724,17 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                        "connect-src 'self'; img-src 'self' data:; font-src 'self'; "
                        "form-action 'none'; frame-ancestors 'none'; base-uri 'none'");
         res.set_content(kIndexHtml, "text/html; charset=utf-8");
+    });
+
+    // The public receiver listing: no sign-in (a directory's crawler has no cookie), no state read, nothing but the user's own typed fields.
+    // Off (the default) it is a 404, indistinguishable from a path that was never served.
+    svr.Get("/status.json", [this](const httplib::Request&, httplib::Response& res) {
+        const std::string doc = listingDocument();
+        if (doc.empty()) {
+            res.status = 404;
+            return;
+        }
+        res.set_content(doc, "application/json");
     });
 
     svr.Get("/app.css", [](const httplib::Request&, httplib::Response& res) {
@@ -4756,6 +4787,9 @@ bool WebServer::setTlsLimits(const TlsTimeouts& t, std::size_t total, std::size_
 std::size_t WebServer::eventListeners() const { return impl_->eventListeners(); }
 void WebServer::setImages(std::vector<WebImage> images) {
     impl_->setImages(std::move(images));
+}
+bool WebServer::setReceiverListing(const ReceiverListing& listing, std::string& error) {
+    return impl_->setReceiverListing(listing, error);
 }
 std::vector<WebServer::TileRequest> WebServer::takePendingTileRequests() {
     return impl_->takePendingTileRequests();
