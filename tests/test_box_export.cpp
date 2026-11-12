@@ -291,10 +291,11 @@ void testPlacementAndTime() {
     }
     // two boxes of one recording agree where they overlap (their starts are a whole number of decimation steps apart)
     {
-        const BoxSpec a = baseSpec(30000, 10000, 0.0, 0.5);
-        BoxSpec b = baseSpec(30000, 10000, 24016.0 / kFs, 0.4);
+        const double f1 = kFc + 31000;     // 31 kHz: the mixer phase between the two starts is NOT a whole number of cycles
+        const BoxSpec a = baseSpec(31000, 10000, 0.0, 0.5);
+        BoxSpec b = baseSpec(31000, 10000, 24016.0 / kFs, 0.4);
         MemSink sa, sb;
-        const FnSource::Fn fn = [&](std::uint64_t n, double t) { return tone(f0 + 700)(n, t) + tone(f0 - 2300, 0.5)(n, t); };
+        const FnSource::Fn fn = [&](std::uint64_t n, double t) { return tone(f1 + 700)(n, t) + tone(f1 - 2300, 0.5)(n, t); };
         const BoxResult ra = run(fn, a, sa), rb = run(fn, b, sb);
         CHECK(ra.ok && rb.ok && ra.decimation == 19);
         const std::size_t off = 24016 / 19;
