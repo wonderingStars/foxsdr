@@ -8,6 +8,8 @@
 #include <cmath>
 #include <complex>
 #include <cstdio>
+#include <cstring>
+#include <new>
 #include <vector>
 
 #include "dsp/cw_filter.hpp"
@@ -86,9 +88,10 @@ int main() {
         CHECK(std::fabs(factor - want[s]) < (s == 3 ? 0.4 : 0.2));
     }
     CHECK(got[1].w60 / got[1].w6 < got[2].w60 / got[2].w6 && got[2].w60 / got[2].w6 < got[3].w60 / got[3].w6);   // sharp < medium < soft
-    // the default is its own filter and, measured, a soft one (a Blackman-Harris windowed sinc is nearly Gaussian): -6 dB at the bandwidth, a shape factor near 3.16 - the outputs below prove it is not the soft design
-    CHECK(std::fabs(got[0].w6 - bw) < 0.10 * bw);
-    CHECK(got[0].w60 / got[0].w6 > 2.9 && got[0].w60 / got[0].w6 < 3.4);
+    // the default is the filter the VFO has always had (a Blackman-Harris windowed sinc, -6 dB at 0.75 of the bandwidth either side, so a full width of 1.5 x the bandwidth), measured 8,965 Hz wide at -6 dB and
+    // 13,411 Hz at -60 dB, a shape factor of 1.50. (An earlier version of this test read the default as "soft, 3.16" because the shape member was uninitialised when the constructor designed the filter.)
+    CHECK(std::fabs(got[0].w6 - 1.5 * bw) < 0.05 * bw);
+    CHECK(got[0].w60 / got[0].w6 > 1.35 && got[0].w60 / got[0].w6 < 1.65);
 
     // each shape is a different filter: the same noise through two of them comes out different
     {
@@ -132,5 +135,28 @@ int main() {
     CHECK(keep.channelShape() == 1 && keep.channelShapeActive());
     keep.setBandwidthHz(150000.0);
     CHECK(keep.channelShape() == 1 && !keep.channelShapeActive());
+    // A VFO built on MEMORY FULL OF GARBAGE has the default shape and the filter it has always had: the shape member must be set before the constructor designs the stages (it was once declared after them, so
+    // it was read uninitialised and a narrow filter came out in a random shape - found by test_noise_blanker).
+    {
+        std::vector<std::complex<float>> in(60000), a(60000 / 12 + 8), b(60000 / 12 + 8);
+        for (std::size_t i = 0; i < in.size(); ++i) {
+            const double ph = 2.0 * kPi * 1234.0 * static_cast<double>(i) / kRate;
+            in[i] = std::complex<float>(static_cast<float>(std::cos(ph) + 0.1 * std::sin(0.37 * static_cast<double>(i))), static_cast<float>(std::sin(ph)));
+        }
+        for (const unsigned char poison : {0xFFu, 0xA5u, 0x7Fu, 0x01u}) {
+            alignas(Vfo) unsigned char storage[sizeof(Vfo)];
+            std::memset(storage, static_cast<int>(poison), sizeof storage);
+            Vfo* dirty = new (storage) Vfo(kRate, 12, 3000.0);
+            Vfo clean(kRate, 12, 3000.0);
+            CHECK(dirty->channelShape() == 0);
+            const std::size_t n1 = dirty->process(in.data(), in.size(), a.data(), a.size());
+            const std::size_t n2 = clean.process(in.data(), in.size(), b.data(), b.size());
+            CHECK(n1 == n2);
+            bool same = n1 == n2;
+            for (std::size_t i = 0; same && i < n1; ++i) { same = a[i] == b[i]; }
+            CHECK(same);
+            dirty->~Vfo();
+        }
+    }
     return testSummary("test_vfo_shape");
 }

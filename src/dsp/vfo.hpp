@@ -130,6 +130,8 @@ private:
     // Re-derives nbStage_ from stages_ and bandwidth_; after every redesign.
     void placeNoiseBlanker();
 
+    // F6: see setChannelShape. DECLARED FIRST: the constructor designs the stages (stages_ is initialised from designStages) and that reads it.
+    int shape_ = 0;
     double inputRate_;
     unsigned decimFactor_;
     double bandwidth_;  // after clamping
@@ -140,7 +142,6 @@ private:
     // multiply to decimFactor_ and whose LAST stage is the channel filter
     // proper (passband bw/2, stopband at the channel Nyquist).
     std::vector<FirDecimator> stages_;
-    int shape_ = 0;   // F6: see setChannelShape
     std::vector<float> narrowStageTaps(double channelRate, double bw) const;
     // Scratch buffers, members so steady-state process() calls don't
     // allocate; sized to the internal chunk, not to the caller's n. One
