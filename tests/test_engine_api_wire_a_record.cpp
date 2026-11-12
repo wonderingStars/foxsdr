@@ -146,6 +146,9 @@ void testLock() {
         Rig r(user, rec);
         CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 100.0e6, 0)).status(), FOXAPI_OK);
         CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RUN, 0, 1)).status(), FOXAPI_OK);
+        CHECK_EQ(r.fact("record.lock"), std::string("0"));   // the default is off: today's behaviour
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_RECORD_LOCK, 0.0, 0)).status(), FOXAPI_NO_CHANGE);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_RECORD_LOCK, 0.0, 1)).status(), FOXAPI_OK);
         CHECK_EQ(r.fact("record.lock"), std::string("1"));
         // an I/Q take
         CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_IQ, 0, 1)).status(), FOXAPI_OK);
@@ -176,7 +179,7 @@ void testLock() {
         CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_AUDIO, 0, 0)).status(), FOXAPI_OK);
         r.settle(700);
         // the switch: off allows the change during a take; on again refuses; the same setting is NO_CHANGE; a bad value is refused
-        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_RECORD_LOCK, 0.0, 1)).status(), FOXAPI_NO_CHANGE);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_RECORD_LOCK, 0.0, 1)).status(), FOXAPI_NO_CHANGE);   // on already
         CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_RECORD_LOCK, 0.0, 5)).status(), FOXAPI_OUT_OF_RANGE);
         CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_RECORD_LOCK, 0.0, 0)).status(), FOXAPI_OK);
         CHECK_EQ(r.fact("record.lock"), std::string("0"));

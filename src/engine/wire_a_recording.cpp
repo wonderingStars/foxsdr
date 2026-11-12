@@ -145,7 +145,7 @@ void WireA::lockLoadOnce() {
     const nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
     if (j.is_discarded() || !j.is_object()) { return; }
     rl::Policy p;
-    p.lockWhileRecording = j.value("lock", true);
+    p.lockWhileRecording = j.value("lock", false);
     p.lockGain = j.value("gain", false);
     lockPolicy_ = p;
     lock_.setPolicy(p);

@@ -46,7 +46,7 @@ class Engine;
 
 class WireA {
 public:
-    explicit WireA(Engine& e) : e_(e) {}
+    explicit WireA(Engine& e) : e_(e) { lock_.setPolicy(lockPolicy_); }
 
     // The lane's state for one engine, made at first use.
     static WireA& of(Engine& e);
@@ -161,7 +161,8 @@ private:
     void lockSync(std::size_t slot);
     cascade::core::reclock::RecordLock lock_;
     bool lockLoaded_ = false;
-    cascade::core::reclock::Policy lockPolicy_;
+    // DEFAULT OFF: today a source change during an I/Q take ENDS the take with a notice (tests/test_stop_ends_recordings.cpp holds it); the lock would refuse it instead. The owner's call.
+    cascade::core::reclock::Policy lockPolicy_ = [] { cascade::core::reclock::Policy p; p.lockWhileRecording = false; return p; }();
     std::string lockReason_;
 
 public:

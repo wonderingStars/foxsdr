@@ -6,7 +6,7 @@ void wireAOps(AppWindow& a) {
     covering(FOXAPP_OP_RECORD_LOCK);
     {
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_RECORD_LOCK, 7)), FOXAPI_OUT_OF_RANGE));
-        CHECK(refused(A::apply(a, ints(FOXAPP_OP_RECORD_LOCK, 1)), FOXAPI_NO_CHANGE));   // on already: the default
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_RECORD_LOCK, 0)), FOXAPI_NO_CHANGE));   // off already: the default
     }
     covering(FOXAPP_OP_SET_RECORD_DAILY);
     {
