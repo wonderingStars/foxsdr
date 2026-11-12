@@ -45,7 +45,7 @@
 // it steps down one line below the header, as the real app does; a name that fits to the right of the header
 // stays right under the ribbon. Airband: channels are drawn under the VFO band, the two captions on the row
 // under the header; the host hides the band and the peak block (show-vfo, show-peak) while it listens.
-import { Theme } from "theme.slint";
+import { Theme, SrText } from "theme.slint";
 import { Chip } from "chips.slint";
 import { TooltipFace } from "tooltip.slint";
 
@@ -62,6 +62,8 @@ export enum TraceMode { normal, peak-hold, average, persistence, min-hold }
 // Lane B (docs/multi-radio-records/screen-b.md, S23): a click on a bookmark's name on the spectrum tunes to it. (radio-id 0 = the window's selected radio, else the pane's radio; the index counts the names the host drew.)
 export global SpectrumEvents {
     callback bookmark-clicked(int, int);
+    in property <bool> select-mode;   // lane K: a drag over the plot chooses a span to zoom to (the host sets it from the Display body)
+    callback zoom-selected(int, float, float);   // lane K (DEPTH-GAPS A2 Display): a dragged selection of the plot, as two fractions of the plot width (left < right), with the radio (0 = selected); the host zooms to it
     callback pinch(int, float, float);   // S27: a two-finger pinch over the plot: the radio (0 = selected), the factor since the last report (> 1 = fingers apart), where it is centred (0..1 of the plot width)
 }
 
@@ -135,6 +137,10 @@ export component SpectrumView inherits Rectangle {
     in property <float> cursor-pos;                  // 0..1 of the plot width
     in property <string> cursor-text;                // the host formats it: "145.212 MHz · -78.4 dB"
     in property <bool> shift-held;                   // for platforms whose pointer events carry no modifiers
+    in property <bool> select-mode: SpectrumEvents.select-mode;   // lane K: a drag off the band chooses a span to zoom to (Ctrl held does the same at any time)
+    out property <bool> selecting: root.press-zone == 4 && root.sel-moved;   // a selection is being dragged
+    out property <float> sel-from: root.plot-w > 0px ? Math.max(0.0, Math.min(root.press-x, root.last-x) / root.plot-w) : 0.0;
+    out property <float> sel-to: root.plot-w > 0px ? Math.min(1.0, Math.max(root.press-x, root.last-x) / root.plot-w) : 0.0;
     in property <bool> enabled: true;
     in property <string> tooltip;                    // the off-band tip when off-band-tooltip is empty
     in property <string> band-tooltip;
@@ -166,6 +172,8 @@ export component SpectrumView inherits Rectangle {
     property <int> press-zone;                                          // set at a left press: 0 off the band, 1 band, 2 left edge, 3 right edge
     property <bool> press-off-band;
     property <bool> press-shift;
+    property <bool> sel-moved;
+    property <bool> sel-swallow;                                         // the release of a dragged selection is not a click
     property <length> press-x;
     property <length> last-x;
     property <float> press-half;
@@ -179,6 +187,7 @@ export component SpectrumView inherits Rectangle {
     clip: true;
     accessible-role: image;
     accessible-label: root.caption != "" ? root.caption : @tr("Spectrum");
+    accessible-description: root.radio-id > 0 ? SrText.pane-spectrum[root.radio-id - 1] : SrText.spectrum;   // lane K: the screen reader's sentence for the picture
 
     pure function snap(v: length) -> length {
         return Math.round(v / 1px) * 1px;
@@ -194,7 +203,7 @@ export component SpectrumView inherits Rectangle {
     }
     // The zone the pointer is in (or the drag in progress), collapsed to 0 / 1 / 2.
     pure function area-zone() -> int {
-        if (area.pressed) { return root.press-zone == 1 ? 1 : root.press-zone >= 2 ? 2 : 0; }
+        if (area.pressed) { return root.press-zone == 1 ? 1 : (root.press-zone == 2 || root.press-zone == 3) ? 2 : 0; }
         if (!area.has-hover) { return 0; }
         return root.zone-at(area.mouse-x) == 1 ? 1 : root.zone-at(area.mouse-x) >= 2 ? 2 : 0;
     }
@@ -552,6 +561,16 @@ export component SpectrumView inherits Rectangle {
         color: Theme.bookmark;
     }
 
+    // lane K: the rubber band of a dragged selection (the span the zoom will keep)
+    if root.selecting : Rectangle {
+        x: root.gutter-w + root.sel-from * root.plot-w;
+        y: root.plot-top;
+        width: (root.sel-to - root.sel-from) * root.plot-w;
+        height: root.plot-h;
+        background: Theme.accent.with-alpha(0.16);
+        border-width: Theme.hairline;
+        border-color: Theme.accent;
+    }
     // =====================================================================================================
     // the interaction zone: the plot rectangle
     area := TouchArea {
@@ -570,13 +589,19 @@ export component SpectrumView inherits Rectangle {
                 root.press-half = root.vfo-half;
                 root.press-zone = root.zone-at(self.pressed-x);
                 root.press-off-band = root.press-zone == 0;
+                root.sel-moved = false;
+                root.sel-swallow = false;
+                if (root.press-zone == 0 && (root.select-mode || e.modifiers.control)) { root.press-zone = 4; }   // lane K: the rubber band
             } else if (e.kind == PointerEventKind.up) {
                 if (e.button == PointerEventButton.right) {
                     if (root.press-zone == 0 && self.mouse-x >= 0px && self.mouse-x < self.width && self.mouse-y >= 0px && self.mouse-y < self.height && root.plot-w > 0px) {
                         root.right-clicked(self.mouse-x / root.plot-w, self.x + self.mouse-x, self.y + self.mouse-y);
                     }
                 } else if (e.button == PointerEventButton.left) {
+                    if (root.press-zone == 4 && root.sel-moved && root.plot-w > 0px) { SpectrumEvents.zoom-selected(root.radio-id, root.sel-from, root.sel-to); }
+                    root.sel-swallow = root.press-zone == 4 && root.sel-moved;
                     root.press-zone = 0;
+                    root.sel-moved = false;
                 }
             } else if (e.kind == PointerEventKind.cancel) {
                 root.press-zone = 0;
@@ -587,12 +612,15 @@ export component SpectrumView inherits Rectangle {
             if (root.press-zone == 1) {
                 root.band-dragged((self.mouse-x - root.last-x) / root.plot-w);
                 root.last-x = self.mouse-x;
+            } else if (root.press-zone == 4) {
+                root.last-x = self.mouse-x;
+                if (Math.abs(self.mouse-x - root.press-x) > 4px) { root.sel-moved = true; }
             } else if (root.press-zone >= 2) {
                 root.edge-dragged(Math.max(0, root.press-half + (root.press-zone == 3 ? 1 : -1) * (self.mouse-x - root.press-x) / root.plot-w));
             }
         }
         clicked => {
-            if (root.press-off-band && root.plot-w > 0px) { root.clicked(self.pressed-x / root.plot-w, root.press-shift); }
+            if (root.press-off-band && !root.sel-swallow && root.plot-w > 0px) { root.clicked(self.pressed-x / root.plot-w, root.press-shift); }   // lane K: a dragged selection is not a click
         }
         double-clicked => {
             if (root.press-off-band && root.plot-w > 0px) { root.double-clicked(self.pressed-x / root.plot-w); }

@@ -245,19 +245,19 @@ Script parseInputScript(const std::string& text) {
         } else if (verb == "radio") {
             st.verb = Verb::Radio;
             st.label = c.word();
-            if (st.label == "menu" || st.label == "menuslider" || st.label == "menuhz" || st.label == "pinch") {   // lane B, TEST ONLY: `radio menu <id>` picks a menu item (the right-click menus cannot be opened by the scripted input), `radio menuslider <id> <0..1>` moves a menu slider, `radio menuhz <hz>` sets where the menu "was opened"
+            if (st.label == "menu" || st.label == "menuslider" || st.label == "menuhz" || st.label == "pinch" || st.label == "zoomsel") {   // lane B, TEST ONLY: `radio menu <id>` picks a menu item (the right-click menus cannot be opened by the scripted input), `radio menuslider <id> <0..1>` moves a menu slider, `radio menuhz <hz>` sets where the menu "was opened"
                 const std::string a = c.word();
                 double v1 = 0;
                 if (!isNumber(a, v1) || v1 < 0.0 || v1 > 1.0e12) { bad("radio " + st.label + " takes a number: \"" + a + "\""); continue; }
                 st.number = v1;
-                if (st.label == "menuslider" || st.label == "pinch") {
+                if (st.label == "menuslider" || st.label == "pinch" || st.label == "zoomsel") {
                     const std::string b = c.word();
                     double v2 = 0;
                     if (!isNumber(b, v2) || v2 < 0.0 || v2 > 1.0) { bad("radio " + st.label + " takes a position 0..1 last: \"" + b + "\""); continue; }
                     st.number2 = v2;
                 }
             } else {
-            if (st.label != "add" && st.label != "addsrc" && st.label != "remove" && st.label != "range" && st.label != "tune" && st.label != "mode" && st.label != "bw") { bad("radio takes add, addsrc, remove, range, tune, mode, bw, menu, menuslider, menuhz or pinch, not \"" + st.label + "\""); continue; }
+            if (st.label != "add" && st.label != "addsrc" && st.label != "remove" && st.label != "range" && st.label != "tune" && st.label != "mode" && st.label != "bw") { bad("radio takes add, addsrc, remove, range, tune, mode, bw, menu, menuslider, menuhz, pinch or zoomsel, not \"" + st.label + "\""); continue; }
             double v = 0;
             std::string num = c.word();
             if (!num.empty()) {

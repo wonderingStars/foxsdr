@@ -462,3 +462,13 @@ export global Theme {
     out property <int> weight-medium: 500;
     out property <int> weight-semibold: 600;
 }
+
+// SCREEN LANE K (docs/multi-radio-records/screen-k.md): what a screen reader is told about the pictures. The host (lanek_publish.cpp) writes one sentence per picture, a few times a
+// second at most and only when it changed enough to speak; the views put it in accessible-description. `pane-*` are the multi-radio panes by radio (index 0 = radio 1).
+export global SrText {
+    in property <string> spectrum;
+    in property <string> waterfall;
+    in property <string> counter;
+    in property <[string]> pane-spectrum;
+    in property <[string]> pane-waterfall;
+}

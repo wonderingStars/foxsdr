@@ -1,0 +1,23 @@
+#! frames=1500 size=1600x2600 bank=4 sections=4:0,14
+# lanek-spectrum (screen lane K, rows: averaging choice, zoom to a dragged selection, trace detector with the RBW readout, limit mask, eight-cursor tool, gradient editor): the Display body's foot and the Spectrum tools section.
+10 state running == 1
++20 state lk.rbw > 0
++1 choose "Averaging" "RMS (mean of the powers)"
++5 state lk.avgmode == 2
++1 choose "Averaging" "Off (the trace as it is)"
++5 state lk.avgmode == 0
++1 choose "Trace detector" "Peak"
++5 state lk.detector == 1
++1 choose "Trace detector" "As drawn (strongest bin of a column)"
++5 state lk.detector == 0
++1 shot "lanek-spectrum.png"
+# zoom to a dragged selection: tick it, drag over the plot, the view narrows
++1 click "Zoom to a dragged selection"
++5 state lk.zoomselect == 1
+state lk.zoomselect == 1
+# the selection itself (the scripted drag starts on a control, so the plot's rubber band is driven by the test-only verb, the same call the plot makes): from 30 % to 40 % of the width
++1 radio zoomsel 0.3 0.4
++8 state lk.zoomspan > 1
+state lk.zoomspan < 2000000
++1 click "Zoom to a dragged selection"
++5 state lk.zoomselect == 0

@@ -11,7 +11,7 @@
 // row is here, relocated here as the Workbench IA says (deck meters into the status bar and the level line,
 // mode keys onto the strip, status cards into the status bar), or deferred with its reason in that list.
 
-import { Theme, Skin, Workbench, NightWatch, HighContrast, DigitFace, MeterStyle } from "theme.slint";
+import { Theme, Skin, Workbench, NightWatch, HighContrast, DigitFace, MeterStyle, SrText } from "theme.slint";
 import { Chip, LampDot, ChipTone, LampState } from "chips.slint";
 import { TipTimer, TipLayer, ElidedHint } from "tooltip.slint";
 import { Caption, Key, KeyNames, KeyFocus, SegGroup, SegKey, RailKey, StopKey } from "keys.slint";
@@ -29,7 +29,7 @@ import { SignalEvents, SelectItem, GainStage, OptionRow, SourceModel, RadioExtra
          RecorderBody, RadioSetupSheet, ImportDialog } from "signal_bank.slint";
 import { SystemEvents, SpectrumLook, DisplayModel, LanguageModel, UpdatesModel, GpsRow, SerialPortsModel, KeyRow, KeyGroup, KeyBindingsModel, DiagnosticsModel,
          UsageModel, TesterModel, ReportPageModel, DisplayBody, LanguageBody, UpdatesBody, SerialPortsBody, KeyBindingsBody, DiagnosticsBody,
-         UsageBody, TesterBody, ReportSheet } from "system_bank.slint";
+         UsageBody, TesterBody, ReportSheet, KRow, KPanel, LaneK } from "system_bank.slint";
 import { ToolsEvents, PositionOffers, RadarModel, BookmarkRow, BookmarksModel, ScannerModel, AirbandRow, AirportRow, AirbandModel, MarkerRow,
          MarkersModel, RadarBody, BookmarksBody, ScannerBody, AirbandBody, MarkersSheet } from "tools_bank.slint";
 import { ExtendEvents, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory, StoreSite, UpdateRow, StorePluginPage, StoreModel,
@@ -49,7 +49,7 @@ import { FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, Port
 import { TxChoice, TransmitPageModel, TransmitEvents } from "transmit_page.slint";   // the Transmit page (kit page kind 11; docs 6.58): its model and gestures reach C++ through main.h
 import { AboutSlint } from "std-widgets.slint";
 
-export { Theme, Skin, Workbench, NightWatch, HighContrast, DigitFace, MeterStyle, ChipTone, LampState, MenuItemKind, MenuEntry, CardTone,
+export { Theme, Skin, Workbench, NightWatch, HighContrast, DigitFace, MeterStyle, SrText, ChipTone, LampState, MenuItemKind, MenuEntry, CardTone,
          AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode, SpectrumEvents, WaterfallLook, AgeTick, PaletteResult, LayoutRow, LayoutsModel, ExportModel,
          KitEvents, DecodeRow, PluginEntry, RunsOnKey, DecoderBar, PageTab, MapModel, FittedModel, ModuleModel, DetailsModel,
          PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
@@ -67,7 +67,7 @@ export { TxChoice, TransmitPageModel, TransmitEvents }
 export { View3D, Scene3DLabel, SurveyRankRow, SondeLegendRow }   // the 3D views' state and their labels (docs 6.64): the host's view3d_publish sets the global and answers its callbacks
 import { GlobeEvents, GlobeModel, GlobeControl, GlobeChipModel } from "globe_views.slint";
 import { WorkspaceModel, WorkspaceCell, WorkspaceBar, RadioWorkspace, AddRadioCard, StripRadio, MasterLamp, MixRow, AddChoice } from "workspace.slint";
-import { RadioStripBlock, AudioMixBlock, RadioTag } from "radio_strip.slint";
+import { RadioStripBlock, AudioMixBlock, RadioTag, KTile, LaneKMatrix } from "radio_strip.slint";
 export { StripRadio, MasterLamp, MixRow, AddChoice }
 import { RadioPaneData } from "radio_pane.slint";
 export { WorkspaceModel, WorkspaceCell, RadioPaneData }   // the radio workspace (docs/multi-radio-records/screen-s3.md): the host publishes its model and answers its callbacks
@@ -76,6 +76,7 @@ export { LaneC, LCQuick, LCShortcut, LCRecording }   // screen lane C: the host 
 import { MapJEvents, LayerRow, ReplayModel, FilterModel, MapJModel, PolarDot, SkyModel, AntennaModel } from "mapj.slint";   // screen lane J (docs/multi-radio-records/screen-j.md): the map's layers, replay and filter, the Sky and Antenna pages
 import { GridLabel } from "map.slint";
 export { MapJEvents, LayerRow, ReplayModel, FilterModel, MapJModel, PolarDot, SkyModel, AntennaModel, GridLabel }
+export { KRow, LaneK, KTile, LaneKMatrix }   // screen lane K (docs/multi-radio-records/screen-k.md): the host (lanek_publish.cpp) sets the globals and answers their act(id, text)
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
 export struct StatusCard { key: string, value: string, detail: string, tone: ChipTone, lamp: LampState, show-lamp: bool, lines: [string] }
@@ -209,6 +210,7 @@ export component MainWindow inherits Window {
     in property <DiagnosticsModel> diag-model;
     in property <UsageModel> usage-model;
     in property <TesterModel> tester-model;
+    in property <int> system-extra-base: 10;                // lane K: the SYSTEM bank's row where lane K's sections start (after About: 10, or 9 while the Beta tester row is absent)
     in property <ReportPageModel> report-page;
     // THE TOOLS BANK (phase 3, docs 6.41): the bodies under the rows of bank 2, filled by the host (tools_publish.cpp)
     in property <RadarModel> radar-model;
@@ -618,6 +620,12 @@ export component MainWindow inherits Window {
                                         if root.bank-index == 4 && i == 6 : DiagnosticsBody { model: root.diag-model; }
                                         if root.bank-index == 4 && i == 7 : UsageBody { model: root.usage-model; }
                                         if root.bank-index == 4 && i == 8 : TesterBody { model: root.tester-model; }
+                                        // screen lane K: the sections after About, placed from `system-extra-base`: Settings and backup, Performance, Accessibility, Community, Spectrum tools
+                                        if root.bank-index == 4 && i == root.system-extra-base + 0 : KPanel { rows: LaneK.rows-backup; act(id, t) => { LaneK.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 1 : KPanel { rows: LaneK.rows-perf; act(id, t) => { LaneK.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 2 : KPanel { rows: LaneK.rows-access; act(id, t) => { LaneK.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 3 : KPanel { rows: LaneK.rows-community; act(id, t) => { LaneK.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 4 : KPanel { rows: LaneK.rows-spectrum; act(id, t) => { LaneK.act(id, t); } }
                                         // the SIGNAL bank's bodies (signal_bank.slint), by row: 1 Source, 3 Audio filters, 4 Sinks, 6 Recorder, 7 Frequency correction
                                         if root.bank-index == 0 && i == 1 : SourceBody { model: root.source-model; ppm-block: false; }   // the ppm block is row 7
                                         if root.bank-index == 0 && i == 2 : RadioExtras { model: root.radio-extras; }
@@ -923,6 +931,48 @@ export component MainWindow inherits Window {
             Key { label: @tr("Open folder"); clicked => { LaneC.act("rec-folder", ""); } }   // not-translated: the host's action id
             Key { label: @tr("Close"); on: true; clicked => { LaneC.recordings-open = false; } }
         }
+    }
+    // SCREEN LANE K: the generic sheet (the first-run setup, a confirmation, the cursor tool, the gradient editor): a title and a row panel the host fills
+    if LaneK.sheet-open : Sheet { title: LaneK.sheet-title; sheet-w: LaneK.sheet-width * 1px; dismissed => { LaneK.act("sheet-dismiss", ""); }   // not-translated: the host's action id
+        Flickable {
+            height: min(500px, ksheet-list.preferred-height); viewport-height: ksheet-list.preferred-height;
+            ksheet-list := KPanel { rows: LaneK.sheet-rows; act(id, t) => { LaneK.act(id, t); } }
+        }
+    }
+    // SCREEN LANE K: the Matrix (DEPTH-GAPS A2 Multi-radio): every open radio in a row; the pointer resting on a row previews that radio's sound, a click keeps it, a double click selects the radio
+    if LaneKMatrix.open : Sheet { title: @tr("Radio matrix"); sheet-w: 760px; dismissed => { LaneKMatrix.open = false; LaneKMatrix.act("leave", "0"); }   // not-translated: the host's action id
+        if LaneKMatrix.note != "" : Text { text: LaneKMatrix.note; wrap: word-wrap; color: Theme.dim; font-size: Theme.font-small; }
+        Flickable {
+            height: min(340px, kmx-list.preferred-height); viewport-height: kmx-list.preferred-height;
+            kmx-list := VerticalLayout { spacing: 3px;
+                for t[i] in LaneKMatrix.tiles : Rectangle {
+                    height: 34px; border-radius: Theme.radius; border-width: Theme.hairline;
+                    border-color: t.heard ? Theme.accent : Theme.line;
+                    background: t.heard ? Theme.table-selected : kmx-area.has-hover ? Theme.menu-hot : Theme.field;
+                    accessible-role: button;
+                    accessible-label: t.name;
+                    accessible-description: t.freq + " " + t.mode + ", " + t.level-text + ", " + t.state + (t.heard ? ", " + @tr("heard") : "");
+                    accessible-action-default => { LaneKMatrix.act("listen", "\{t.radio}"); }   // not-translated: the host's action id
+                    kmx-area := TouchArea {
+                        changed has-hover => { LaneKMatrix.act(self.has-hover ? "hover" : "leave", "\{t.radio}"); }   // not-translated: the host's action id
+                        clicked => { LaneKMatrix.act("listen", "\{t.radio}"); }   // not-translated: the host's action id
+                        double-clicked => { LaneKMatrix.act("select", "\{t.radio}"); }   // not-translated: the host's action id
+                    }
+                    HorizontalLayout { padding-left: 10px; padding-right: 10px; spacing: 10px;
+                        Text { width: 64px; vertical-alignment: center; text: t.name; color: Theme.fg; font-family: Theme.font-ui; font-size: Theme.font-small; font-weight: Theme.weight-semibold; overflow: elide; }
+                        Text { width: 118px; vertical-alignment: center; text: t.freq; color: Theme.accent-soft; font-family: Theme.font-mono; font-size: Theme.font-small; overflow: elide; }
+                        Text { width: 50px; vertical-alignment: center; text: t.mode; color: Theme.fg-soft; font-family: Theme.font-mono; font-size: Theme.font-small; overflow: elide; }
+                        VerticalLayout { alignment: center; width: 110px;
+                            Rectangle { height: 8px; background: Theme.well; border-radius: 2px;
+                                Rectangle { x: 0px; height: parent.height; width: parent.width * max(0.0, min(1.0, t.level)); border-radius: 2px; background: t.heard ? Theme.accent : Theme.fg-soft; } }
+                        }
+                        Text { width: 60px; vertical-alignment: center; horizontal-alignment: right; text: t.level-text; color: Theme.dim; font-family: Theme.font-mono; font-size: Theme.font-small; overflow: elide; }
+                        Text { horizontal-stretch: 1; min-width: 0px; vertical-alignment: center; text: t.follows != "" ? t.state + "  " + t.follows : t.state; color: Theme.dim; font-family: Theme.font-ui; font-size: Theme.font-small; overflow: elide; }
+                    }
+                }
+            }
+        }
+        HorizontalLayout { alignment: end; Key { label: @tr("Close"); clicked => { LaneKMatrix.open = false; LaneKMatrix.act("leave", "0"); } } }   // not-translated: the host's action id
     }
     // ===================== the tip layer: LAST, so a tooltip draws over the pages, the torn-off windows and the sheets =====================
     TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }

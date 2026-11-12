@@ -1,0 +1,19 @@
+#! frames=900 FOXSDR_SLINT_FIRSTRUN=1
+# lanek-wizard (screen lane K, row: first-run wizard and starter presets): a new profile opens the setup at the first tick (here asked for by FOXSDR_SLINT_FIRSTRUN: a bounded run is never a first run). Four pages: welcome, which
+# radio, starting stations for it, anonymous usage reports. Next is dead on the radio page until one is chosen. Finishing adds the chosen starting stations to the bookmarks (tune, set the mode, add) and puts the tuning back.
+15 state lk.wizardstep == 0
++1 shot "lanek-wizard.png"
++1 click "Next"
++8 state lk.wizardstep == 1
++1 expect "Next" enabled equals "false"
++1 click "RTL-SDR dongle"
++8 expect "Next" enabled equals "true"
++1 click "Next"
++8 state lk.wizardstep == 2
++1 click "FM broadcast band"
++1 click "Next"
++8 state lk.wizardstep == 3
++1 click "Done"
++20 state lk.action == wizard-done
+state lk.status contains "starting station"
+state lk.sheet == 0

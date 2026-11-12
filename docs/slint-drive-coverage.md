@@ -11,9 +11,9 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2284 | 647 | 96 | 1541 | 0 |
+| 2321 | 673 | 107 | 1541 | 0 |
 
-Of the 1397 rows that are controls (the 887 readout-like rows left out): 647 asserted, 96 driven without a read-back, 654 not drivable.
+Of the 1434 rows that are controls (the 887 readout-like rows left out): 673 asserted, 107 driven without a read-back, 654 not drivable.
 
 NOT DRIVABLE by reason: readout 887, other 222, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 71, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
@@ -206,6 +206,7 @@ NOT DRIVABLE by reason: readout 887, other 222, needs a signal (no fixture) 120,
 | Screen lane C - tuning, scanning, memories and controls (rows 4800 and up are this lane's; docs/multi-radio-records/screen-c.md) | 23 | 20 | 2 | 1 | 0 | 0 |
 | Lane B (docs/multi-radio-records/screen-b.md; rows 4700 and up are this lane's) | 20 | 20 | 0 | 0 | 0 | 0 |
 | Screen lane J - the map rows (rows 4900 and up are this lane's; docs/multi-radio-records/screen-j.md) | 15 | 12 | 0 | 3 | 0 | 0 |
+| Screen lane K - the remaining rows (rows 5200 and up are this lane's; docs/multi-radio-records/screen-k.md) | 37 | 26 | 11 | 0 | 0 | 0 |
 
 ## Every row
 
@@ -3417,4 +3418,46 @@ NOT DRIVABLE by reason: readout 887, other 222, needs a signal (no fixture) 120,
 | 4912 | Sky page: the polar sky plot and a pass on it | plot | DRIVEN+ASSERTED | mapj-sky | state mapj.passMax >= 60 with the made-up pass; shot mapj-sky.png |
 | 4913 | Antenna page (App menu > Antenna calculator...): Frequency, Distance, Coax, Velocity factor, Yagi elements fields | field | DRIVEN+ASSERTED | mapj-antenna | typed values read back as the dipole and path-loss numbers; a bad value shows the error |
 | 4914 | Antenna page: the table of lengths in metres and feet | table | DRIVEN+ASSERTED | mapj-antenna | state mapj.antennaRows >= 10, >= 14 with nine Yagi elements |
+
+### Screen lane K - the remaining rows (rows 5200 and up are this lane's; docs/multi-radio-records/screen-k.md)
+
+| # | control | type | class | script | detail |
+|---|---|---|---|---|---|
+| 5200 | Settings and backup: Export settings (one file into the exports folder; secrets and the install id left out) | key | DRIVEN+ASSERTED | lanek-backup | state lk.status contains Exported, state lk.exports == 1; the bundle is read back by test_slint_lanek_host (no secret in it) |
+| 5201 | Settings and backup: Back up settings now (own backups folder, pruned to the newest N) | key | DRIVEN+ASSERTED | lanek-backup | state lk.status contains Backed up; the pruning by test_slint_lanek_host |
+| 5202 | Settings and backup: Back up automatically when FoxSDR closes | checkbox | DRIVEN | lanek-backup | the tick is operated by test_slint_lanek_host only through the keeper (the write at exit is main.cpp finishAtExit: log line lane K at exit) |
+| 5203 | Settings and backup: Backups kept (5, 10, 20, 50) | dropdown | DRIVEN | lanek-backup | a saved choice; the pruning bound is read back by test_slint_lanek_host |
+| 5204 | Settings and backup: Files in the exports folder (pick one to import) | dropdown | DRIVEN+ASSERTED | lanek-backup | state lk.importpath |
+| 5205 | Settings and backup: File to import (a path) | field | DRIVEN+ASSERTED | lanek-backup | the export fills it; the import key reads it |
+| 5206 | Settings and backup: Import settings... and its confirmation sheet (Import and close FoxSDR, Cancel) | key | DRIVEN+ASSERTED | lanek-backup | state lk.sheet == 2, Cancel changes nothing (lk.pending == 0), the import sets lk.pending == 1 and the SECOND START reads the imported theme back (restart/lanek-backup-2) |
+| 5207 | Settings and backup: Profile list, Use this profile, Delete profile | dropdown | DRIVEN | lanek-backup | the keeper (save, list, switch planned again at exit, delete) is asserted by test_slint_lanek_host; the keys follow the saved profile in lanek-backup |
+| 5208 | Settings and backup: Name for a new profile and Save as profile... | field | DRIVEN+ASSERTED | lanek-backup | state lk.profiles == 1, state lk.status contains Saved the profile |
+| 5209 | Settings and backup: Shared folder for syncing profiles, Sync profiles now | field | DRIVEN | lanek-backup | the sync (push, pull, conflicts left alone) is asserted by test_slint_lanek_host; no shared folder in a drive run |
+| 5210 | Settings and backup: Run the first-time setup again | key | DRIVEN+ASSERTED | lanek-wizard | FOXSDR_SLINT_FIRSTRUN opens the same sheet; state lk.wizardstep |
+| 5211 | Settings and backup: Reset everything to defaults... (confirmation sheet, Also set aside plugins / logs, Reset and close) | key | DRIVEN+ASSERTED | lanek-backup | state lk.sheet == 4; a scratch profile is not a folder named foxsdr, so the sheet refuses and Reset and close is disabled (expect enabled false); the real reset, its folder guard and the undo are asserted by test_slint_lanek_host |
+| 5212 | Settings and backup: Undo the reset | key | DRIVEN | lanek-backup | enabled only after a reset; asserted by test_slint_lanek_host (the file work at exit) |
+| 5213 | First-run setup sheet: Next, Back, Skip setup, Done | key | DRIVEN+ASSERTED | lanek-wizard | state lk.wizardstep 0, 1, 2, 3; Next is disabled on the radio page until one is chosen |
+| 5214 | First-run setup sheet: Which radio do you have? (eleven choices) | dropdown | DRIVEN+ASSERTED | lanek-wizard | click RTL-SDR dongle enables Next |
+| 5215 | First-run setup sheet: Starting stations (none, or one of the presets for that radio) | dropdown | DRIVEN+ASSERTED | lanek-wizard | click FM broadcast band; state lk.status contains starting station after Done |
+| 5216 | First-run setup sheet: Send anonymous usage reports (the wizard offers the existing switch) | checkbox | DRIVEN | lanek-wizard | the telemetry op is the existing FOXAPP_OP_TELEMETRY_CONSENT; its own switch is SYSTEM > Usage reporting (already built) |
+| 5217 | Performance: CPU, memory, computer memory and graphics readouts | readout | DRIVEN+ASSERTED | lanek-perf | state lk.samples, lk.mem; a figure that cannot be read says n/a |
+| 5218 | Performance: Reduced effects (Automatic, On, Off) | dropdown | DRIVEN+ASSERTED | lanek-perf | state lk.perfmode, lk.reduced |
+| 5219 | Accessibility: Colour set (Normal and three colour-blind-safe sets) | dropdown | DRIVEN+ASSERTED | lanek-access | state lk.palette; the contrast and colour-vision numbers of the palettes are in test_access_palette (the access lane) |
+| 5220 | Accessibility: Number format and Digits | dropdown | DRIVEN | lanek-access | the dot-only default is byte for byte today's text (every existing test); the comma form is asserted by test_slint_host_numbers |
+| 5221 | Accessibility: Speak the frequency, mode and level now | key | DRIVEN+ASSERTED | lanek-access | state lk.spokencount, lk.spoken (a recording stand-in in a bounded run: nobody hears it) |
+| 5222 | Accessibility: Speak changes automatically, first state on start, frequency, mode, level, interrupt | checkbox | DRIVEN | lanek-access | Speak the mode is operated; the announcer's policy is asserted by test_access_speech |
+| 5223 | Accessibility: Signal level as, waits, smallest change, level step (spoken readout) | slider | DRIVEN | lanek-access | saved choices feeding the announcer policy |
+| 5224 | Accessibility: Play a tone that follows the signal (and its pitch, levels, volume, squelch) | checkbox | DRIVEN+ASSERTED | lanek-access | state lk.toneon, lk.tonehz (the parameters are computed; no device is opened in a bounded run) |
+| 5225 | Accessibility: screen reader sentences for the spectrum, the waterfall and the frequency | behaviour | DRIVEN+ASSERTED | lanek-access | state lk.sr.spectrum, lk.sr.waterfall, lk.sr.counter (the text the accessible description carries) |
+| 5226 | Community: Forum and Discord links (App menu and the Community section; empty setting = hidden) | key | DRIVEN+ASSERTED | lanek-community | state lk.forumurl == empty, lk.discordurl == empty: no address is set in this copy |
+| 5227 | Display body: Averaging (Off, Linear, RMS, Log, Exponential), Frames, Time constant | dropdown | DRIVEN+ASSERTED | lanek-spectrum | state lk.avgmode; the averaging closed forms by test_trace_average |
+| 5228 | Display body: Zoom to a dragged selection (and Ctrl+drag) | checkbox | DRIVEN+ASSERTED | lanek-spectrum | state lk.zoomselect, then radio zoomsel (the plot's own call) narrows the span: state lk.zoomspan |
+| 5229 | Spectrum: a dragged selection (rubber band) zooms the view | behaviour | DRIVEN | lanek-spectrum | the scripted drag starts on a control, not on the plot: the real pointer drag is the final real-mouse drive's |
+| 5230 | Display body: Gradient editor... (sheet: Use my gradient, Blend in, stop colour, position, remove, add, reverse, reset, Done) | key | DRIVEN+ASSERTED | lanek-tools | state lk.sheet == 7, lk.gradon, lk.gradtop == the last stop's colour, lk.gradstops |
+| 5231 | Spectrum tools: Trace detector (As drawn, Peak, Negative peak, RMS, Voltage average, Log average, Sample) | dropdown | DRIVEN+ASSERTED | lanek-spectrum | state lk.detector; the reductions by test_slint_lanek_spectrum_host (closed forms for noise) |
+| 5232 | Spectrum tools: Resolution bandwidth readout | readout | DRIVEN+ASSERTED | lanek-spectrum | state lk.rbw > 0 |
+| 5233 | Spectrum tools: Limit mask - Mask file, Write an example mask file, Load the mask, Show the limit lines, margin and breach readouts | key | DRIVEN+ASSERTED | lanek-tools | state lk.maskloaded, lk.maskpass; the lines by test_slint_lanek_spectrum_host |
+| 5234 | Spectrum tools: Eight-cursor tool... (sheet: mode, spacing, reference, eight cursor fields, place by click, tuned, snap, show) | key | DRIVEN+ASSERTED | lanek-tools | state lk.sheet == 8, lk.cursormode, lk.cursor.0 / .3 in the harmonic mode |
+| 5235 | Spectrum tools: Show the cursors | checkbox | DRIVEN | lanek-tools | the cursors are drawn into the trace picture (test_slint_lanek_spectrum_host reads the pixels) |
+| 5236 | Audio mix: Matrix key and the Matrix sheet (one row per radio; hover previews, click keeps, double click selects) | key | DRIVEN+ASSERTED | lanek-matrix | state lk.tiles == 3, lk.baseline, lk.matrixsolo; the pointer's own hover is the final real-mouse drive's |
 

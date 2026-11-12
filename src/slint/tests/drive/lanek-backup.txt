@@ -1,0 +1,41 @@
+#! frames=1900 size=1600x4400 bank=4 sections=4:0,10 restart=lanek-backup-2.txt
+# lanek-backup (screen lane K, docs/multi-radio-records/screen-k.md; rows: one-file settings export, import, backup, settings profiles, whole-app reset): the Settings and backup section. The export writes one file into
+# the profile's exports folder, a backup goes into its own folder, a profile is saved by name. The IMPORT is a pending operation: the confirmation sheet names what will be replaced, and the file work happens when the
+# window closes (after the engine's last save, or that save would overwrite it); the SECOND START (restart/lanek-backup-2.txt) reads the imported theme back. The reset's folder guard refuses a scratch profile that is not
+# a folder named foxsdr: the sheet says so and its key is dead. The import is applied as the run ends (a bounded run ends at its frame count), so what it did is read by the second start.
+10 state running == 1
++2 choose "Theme" "Night Watch"
++12 state cfg.uiTheme == night
++300 state running == 1
++1 click "Export settings"
++15 state lk.status contains "Exported"
+state lk.exports == 1
++1 type "Name for a new profile" "Night"
++1 key enter
++8 click "Save as profile..."
++10 state lk.status contains "Saved the profile"
+state lk.profiles == 1
++1 click "Back up settings now"
++10 state lk.status contains "Backed up"
++1 shot "lanek-backup.png"
+# the reset's confirmation: a scratch folder is not named foxsdr, so the sheet refuses and its key is dead
++1 click "Reset everything to defaults..."
++8 state lk.sheet == 4
++1 expect "Reset and close FoxSDR" enabled equals "false"
++1 shot "lanek-reset-sheet.png"
++1 click "Cancel"
++8 state lk.sheet == 0
+# the import's confirmation names what it replaces; Cancel changes nothing
++2 choose "Theme" "Today's bench"
++12 state cfg.uiTheme == today
++1 click "Import settings..."
++8 state lk.sheet == 2
++1 shot "lanek-import-sheet.png"
++1 click "Cancel"
++8 state lk.sheet == 0
+state lk.pending == 0
+# import the exported file (the theme in it is Night Watch): the window closes and applies it as it ends
++1 click "Import settings..."
++8 state lk.sheet == 2
++1 click "Import and close FoxSDR"
++8 state lk.pending == 1

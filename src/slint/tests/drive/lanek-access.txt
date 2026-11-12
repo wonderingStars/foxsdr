@@ -1,0 +1,31 @@
+#! frames=1200 size=1600x2600 bank=4 sections=4:12
+# lanek-access (screen lane K, rows: colour-blind-safe palette picker, number format, spoken readout, signal tone): the Accessibility section. A palette changes the skin's status, trace and radio colours; the spoken readout goes to a
+# recording stand-in in a bounded run (nobody hears it); the tone's parameters are computed and read back, no device is opened.
+10 state running == 1
+state lk.palette == normal
++1 click "Colour-blind safe: red-weak (protanopia)"
++8 state lk.palette == protanopia
++1 shot "lanek-palette-protanopia.png"
++1 click "Colour-blind safe: green-weak (deuteranopia)"
++8 state lk.palette == deuteranopia
++1 click "Colour-blind safe: blue-weak (tritanopia)"
++8 state lk.palette == tritanopia
+# the spoken readout: on request it speaks the frequency, the mode and the level
++1 click "Speak the frequency, mode and level now"
++8 state lk.spokencount == 1
+state lk.spoken contains "megahertz"
++1 click "Speak the mode"
++3 click "Speak the frequency, mode and level now"
++8 state lk.spokencount == 2
+# the tone: on, it follows the level; off, it is silent
++1 click "Play a tone that follows the signal"
++30 state lk.toneon == 1
+state lk.tonehz > 100
++1 click "Play a tone that follows the signal"
++8 state lk.toneon == 0
++1 shot "lanek-access.png"
+# the screen reader's sentences for the pictures (the spectrum's description is read by NVDA and the like from the accessible description; here the text itself is read back)
++10 state lk.sr.spectrum contains "Spectrum, tuned to"
+state lk.sr.spectrum contains "megahertz"
+state lk.sr.waterfall contains "Waterfall of the same span"
+state lk.sr.counter contains "megahertz"

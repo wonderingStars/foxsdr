@@ -230,7 +230,9 @@ export component AudioMixBlock inherits Rectangle {
     VerticalLayout {
         Rectangle {
             height: 26px;
-            HorizontalLayout { padding-left: 12px; alignment: start; VerticalLayout { alignment: center; Caption { label: @tr("Audio mix"); } } }
+            HorizontalLayout { padding-left: 12px; padding-right: 12px; spacing: 8px; alignment: start; VerticalLayout { alignment: center; Caption { label: @tr("Audio mix"); } }
+                VerticalLayout { alignment: center; Key { xs: true; label: @tr("Matrix"); tooltip: @tr("An overview of every radio: point at a row to hear that radio"); clicked => { LaneKMatrix.open = true; } } }   // screen lane K: DEPTH-GAPS A2 Multi-radio
+            }
         }
         Flickable {
             vertical-stretch: 1;
@@ -255,4 +257,15 @@ export component AudioMixBlock inherits Rectangle {
             }
         }
     }
+}
+
+// SCREEN LANE K (docs/multi-radio-records/screen-k.md): the Matrix, an overview of every open radio. The host (lanek_publish.cpp) fills `tiles`; a pointer resting on a row asks
+// act("hover", n) and leaving it act("leave", n) - the host turns those into the existing solo call after a dwell and a grace (core/radio_matrix_model.hpp) - and the row's Listen key is the
+// same thing without a pointer (act("listen", n)). The sheet itself is main.slint's.
+export struct KTile { radio: int, name: string, freq: string, mode: string, level: float, level-text: string, state: string, heard: bool, follows: string }
+export global LaneKMatrix {
+    in-out property <bool> open;
+    in property <[KTile]> tiles;
+    in property <string> note;
+    callback act(string, string);
 }

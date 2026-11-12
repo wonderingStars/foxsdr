@@ -26,7 +26,7 @@
 // click; the second press of a double-click is neither a tune nor a pan; past 4 px of travel the press is a pan (a step per
 // move); the right button reports on release, never while the left is panning; the wheel is one `wheel` per event with
 // round(delta-y / 120) notches, at least one, wheel UP positive (Slint's delta-y is positive for a wheel turned up).
-import { Theme } from "theme.slint";
+import { Theme, SrText } from "theme.slint";
 import { Chip, ChipTone } from "chips.slint";
 import { TooltipFace, ElidedHint } from "tooltip.slint";
 import { PluginMark, MarkTab, UserMarker } from "spectrum.slint";
@@ -125,6 +125,8 @@ export component WaterfallView inherits Rectangle {
 
     accessible-role: image;
     accessible-label: @tr("Waterfall");
+    in property <int> sr-radio: 0;                   // lane K: 0 = the window's selected radio, else the pane's radio, for the screen reader's sentence
+    accessible-description: root.sr-radio > 0 ? SrText.pane-waterfall[root.sr-radio - 1] : SrText.waterfall;
     background: Theme.well-deep;
     clip: true;
 
