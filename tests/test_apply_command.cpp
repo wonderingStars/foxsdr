@@ -2669,6 +2669,12 @@ void macroOps(AppWindow& a) {
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 0)), FOXAPI_NO_CHANGE));   // automatic is the default
     CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 2))));
     CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 0))));
+    // wire-c begin: the op block 0x8A00-0x8AFF (the engine behaviour is tests/test_engine_api_wire_c*.cpp's; each op named here is answered, never merely known)
+    covering(FOXAPP_OP_WIREC_SETTING);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_WIREC_SETTING, "nokey")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_WIREC_SETTING, std::string("no.such.key") + '' + "1")), FOXAPI_NOT_FOUND));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_WIREC_SETTING, std::string("sys.backup_keep") + '' + "0")), FOXAPI_OUT_OF_RANGE));
+    // wire-c end
 }
 
 void airbandOps(AppWindow& a) {

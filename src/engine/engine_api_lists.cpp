@@ -211,6 +211,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(ppmAutoVersion_);   // the pilot ppm measurements (engine_mpx.cpp)
     f.value(mpxVersion_);   // which radios record their multiplex (engine_mpx.cpp)
     f.value(hotplugVersion_);   // the hot-plug counts (engine_hotplug.cpp)
+    f.value(wireCVersion());   // wire-c: the settings of wiring lane C (engine_wire_c.cpp)
     f.text(markerError_);
     // The DSP chain's input rate (API 0.3 8.5, fact.input.rateHz): the source's rate
     // unless the chain refused a change of it, and then the one the display is
@@ -1362,6 +1363,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // (both, left, right, none: only "both" until slots 1 and up carry audio) and the decoder plugins running on it, their module files separated by commas.
     scheduleFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // (LOCAL: a recording plan is the operator's)
     macroFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // (LOCAL: a macro is the operator's)
+    wireCFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // wire-c (LOCAL: the operator's own settings file)
     // THE S-METER CALIBRATION (engine wiring lane 1; LOCAL: a device's key can name a serial number): what the last measurement did, and how many devices hold a calibration.
     if (!recordNameLoaded_) { loadRecordName(); }   // (the file is read once, here or at the first take, whichever asks first)
     fact("record.nameTemplate", recordNameTemplate_, true);   // (LOCAL: a file-name template can carry a person's own words)

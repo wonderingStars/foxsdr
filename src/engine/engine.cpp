@@ -7330,6 +7330,14 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
     // THE FREQUENCY LOCK (FOXAPP_OP_RADIO_LOCK): a tuning command aimed at a locked radio is refused whoever sent it - the window, a plugin, the web page, CAT.
     if (rx().tuneLocked_ && isTuningCommandOfLock(c)) { return refuse(FOXAPI_DENIED, "this radio's frequency is locked"); }
 
+    // wire-c begin: the whole block 0x8A00-0x8AFF is wiring lane C's (engine_wire_c.cpp)
+    if ((c.op & 0xFF00u) == 0x8A00u) {
+        std::string why;
+        const std::int32_t st = applyWireC(c, text, res, why);
+        if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
+        return res;
+    }
+    // wire-c end
     switch (c.op) {
         // --- the radios (multi-radio stage 4; engine_radios.cpp) ---------------
         case FOXAPI_OP_RADIO_ADD:
@@ -11343,6 +11351,7 @@ void Engine::runPassPart(PassPart part) {
             pumpExtraReceivers();
             pumpSchedule();   // (timed recordings: engine_schedule.cpp)
             pumpMacros();     // (a macro being played: engine_macros.cpp)
+            pumpWireC();      // wire-c (engine_wire_c.cpp)
             pollSmeterCal();  // (a calibration being measured: engine_smeter.cpp)
             break;
     }

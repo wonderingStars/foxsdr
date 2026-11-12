@@ -99,6 +99,7 @@
 #include "engine/device_ledger.hpp"
 #include "engine/engine_host.hpp"
 #include "engine/engine_types.hpp"
+#include "engine/wire_c.hpp"   // wire-c
 #include "engine/fox_engine_api.hpp"
 #include "engine/server_host.hpp"
 #include "engine/pass_stats.hpp"
@@ -3223,6 +3224,17 @@ private:
     std::uint64_t recordNameVersion_ = 1;
     std::string recordNamePathForTest_;   // TESTS ONLY (through the friend): the file to use instead of the per-user folder's
     std::uint64_t radioLockVersion_ = 1;
+    // wire-c begin (wiring lane C; engine_wire_c.cpp, wire_c.hpp): the op block 0x8A00-0x8AFF, its facts and its pump
+    cascade::engine::wirec::State& wireC();
+    std::int32_t applyWireC(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why);
+    void wireCFacts(const std::function<void(const std::string&, const std::string&)>& fact);
+    std::uint64_t wireCVersion();
+    void pumpWireC();
+    std::unique_ptr<cascade::engine::wirec::State> wireC_;
+    std::mutex wireCMutex_;
+    std::uint64_t wireCVersion_ = 1;
+    std::string wireCFolderForTest_;   // TESTS ONLY (through the friend): the folder wirec.json lives in, instead of the per-user one
+    // wire-c end
     void loadMacros();
     std::int32_t applyMacroOp(const FoxCommand& c, const std::string& text, std::string& why);
     void macroFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
