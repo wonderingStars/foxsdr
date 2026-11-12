@@ -396,6 +396,18 @@ public:
     // memory only. A plugin's posts are stamped with its name and (when it sets CASCADE_FLAG_PRIVATE_DATA) CASCADE_EVENT_FLAG_PRIVATE, and a private event is
     // delivered to nobody but its own plugin; hostPostEvent is the host's own post (the decoder lines it drains, as kind "text").
     std::int32_t postEvent(const PluginApiClient& c, const CascadeEvent* e);
+    // RECORDER (plugin_abi.h recorder_start / recorder_stop; wiring lane C): checked against the SETTINGS grant, queued (a small ring, BUSY when full), drained by the engine's
+    // pass. The label is validated here; the engine applies it.
+    struct RecorderRequest {
+        std::size_t client = 0;
+        bool start = false;
+        char label[CASCADE_RECORDER_LABEL_CHARS] = {};
+    };
+    static constexpr std::size_t kRecorderQueue = 8;
+    std::int32_t recorderRequest(PluginApiClient& c, bool start, const char* label);
+    void takeRecorderRequests(std::vector<RecorderRequest>& out);   // the pass
+    // Whether a drained request may still be applied NOW (the module is live, not stopped, and still holds the SETTINGS grant). A stop is always allowed for a live module.
+    bool recorderRequestStillAllowed(const RecorderRequest& r) const;
     std::int32_t readEvents(const PluginApiClient& c, std::uint64_t afterSeq, CascadeEvent* out, std::uint32_t cap) const;
     std::uint64_t eventsSeq() const;
     // The host's own read of the ring (its windows, and the alert and decode-database parts that will read decode events): everything after `afterSeq`, oldest first,
@@ -494,6 +506,9 @@ private:
     mutable std::mutex eventsMutex_;
     std::deque<CascadeEvent> events_;
     std::uint64_t eventsNext_ = 1;
+    // The recorder requests (wiring lane C): a small ring under its own lock, drained by the pass.
+    mutable std::mutex recorderMutex_;
+    std::deque<RecorderRequest> recorderQueue_;
     mutable std::mutex mutex_;
     std::vector<std::unique_ptr<PluginApiClient>> clients_;
     std::vector<ClientState> state_;

@@ -108,7 +108,80 @@ void Engine::wireCResumeAction() {
     }
 }
 
+// A take a plugin asked for: its label first in the file name ("tg-1234_foxsdr_audio_....wav"). Only while a plugin's take is being started.
+void Engine::wireCLabelTake(cascade::core::Recorder::OpenRequest& req) {
+    if (wireCStartLabel_.empty() || req.path.empty()) { return; }
+    const std::filesystem::path p(req.path);
+    req.path = (p.parent_path() / (wireCStartLabel_ + "_" + p.filename().string())).string();
+}
+
+// THE RECORDER A PLUGIN MAY ASK FOR (row P1). The request was checked against the SETTINGS grant when it was made and is checked again here (a grant taken away, a plugin
+// stopped or unloaded in between). The take is the radio's own audio take, started and stopped exactly as the user's Record key does; one take per radio, never one
+// the user started (a start while the radio is recording is refused and logged), and a plugin can end only the take it started. A plugin that goes away has its take ended.
+void Engine::wireCPluginRecorder() {
+    cascade::core::PluginApiCore& api = *pluginApi_;
+    std::vector<cascade::core::PluginApiCore::RecorderRequest> reqs;
+    std::vector<int> ages;
+    for (const WireCDeferredStart& d : wireCDeferred_) {
+        reqs.push_back(d.req);
+        ages.push_back(d.passes);
+    }
+    wireCDeferred_.clear();
+    api.takeRecorderRequests(reqs);
+    ages.resize(reqs.size(), 0);
+    for (std::size_t qi = 0; qi < reqs.size(); ++qi) {
+        const auto& r = reqs[qi];
+        if (!api.recorderRequestStillAllowed(r)) { continue; }
+        const std::uint32_t radio = api.clientRadio(r.client);
+        if (!receiverLive(radio)) { continue; }
+        RadioWork asked(*this, static_cast<std::size_t>(radio) - 1u);
+        const std::size_t slot = static_cast<std::size_t>(radio) - 1u;
+        if (r.start) {
+            if (rx().audioRecorder_.recording() || rx().audioStart_.pending() || wireCPluginTakes_.count(slot) != 0) {
+                cascade::core::diagLogf("recorder: a plugin's take was refused, this radio is already recording");
+                continue;
+            }
+            if (takeFinishing(false)) {
+                // the previous file is still being closed: the recorder would queue the start and forget the label, so it waits here instead
+                if (ages[qi] < 120) { wireCDeferred_.push_back({r, ages[qi] + 1}); }
+                else { cascade::core::diagLogf("recorder: a plugin's take was dropped, the previous file was not closed in time"); }
+                continue;
+            }
+            wireCStartLabel_ = r.label;
+            const bool started = startAudioRecording();
+            wireCStartLabel_.clear();
+            if (started) { wireCPluginTakes_[slot] = r.client; }
+            else { cascade::core::diagLogf("recorder: a plugin's take could not start"); }
+        } else {
+            const auto it = wireCPluginTakes_.find(slot);
+            if (it != wireCPluginTakes_.end() && it->second == r.client) {
+                stopAudioRecording();
+                wireCPluginTakes_.erase(it);
+            }
+        }
+    }
+    // a take whose plugin has gone (stopped, unloaded, detached), or that the user ended: ended / forgotten
+    for (auto it = wireCPluginTakes_.begin(); it != wireCPluginTakes_.end();) {
+        const std::size_t slot = it->first;
+        const cascade::core::PluginApiCore::RecorderRequest probe{it->second, true, {}};   // (a START is allowed only while the plugin is live, not stopped and holds the grant)
+        bool drop = false;
+        if (slot >= receivers_.size() || !receivers_[slot]) {
+            drop = true;
+        } else {
+            RadioWork asked(*this, slot);
+            if (!api.recorderRequestStillAllowed(probe)) {
+                stopAudioRecording();
+                drop = true;
+            } else if (!rx().audioRecorder_.recording() && !rx().audioStart_.pending()) {
+                drop = true;   // the take is over (the user's Stop, or an error)
+            }
+        }
+        it = drop ? wireCPluginTakes_.erase(it) : std::next(it);
+    }
+}
+
 void Engine::pumpWireC() {
+    wireCPluginRecorder();
     wc::State& s = wireC();
     wc::Power& p = s.power();
     if (!s.powerStarted) {

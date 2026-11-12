@@ -3230,6 +3230,17 @@ private:
     void wireCFacts(const std::function<void(const std::string&, const std::string&)>& fact);
     std::uint64_t wireCVersion();
     void pumpWireC();
+    // The recorder a plugin may ask for (plugin_abi.h recorder_start / recorder_stop): drained once a pass; one take per radio, remembered by radio slot -> plugin client.
+    void wireCPluginRecorder();
+    std::map<std::size_t, std::size_t> wireCPluginTakes_;
+    // a start asked for while the radio's previous file is still being closed waits (up to about two seconds) rather than being queued by the recorder, which would lose its label
+    struct WireCDeferredStart {
+        cascade::core::PluginApiCore::RecorderRequest req;
+        int passes = 0;
+    };
+    std::vector<WireCDeferredStart> wireCDeferred_;
+    std::string wireCStartLabel_;   // the label of the take being started, for applyRecordName (empty = a user's take)
+    void wireCLabelTake(cascade::core::Recorder::OpenRequest& req);
     bool wireCRecordingBusy() const;
     void wireCResumeAction();
     std::unique_ptr<cascade::engine::wirec::State> wireC_;

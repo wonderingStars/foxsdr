@@ -1129,6 +1129,52 @@ std::int32_t PluginApiCore::postEvent(const PluginApiClient& c, const CascadeEve
     return CASCADE_API_OK;
 }
 
+std::int32_t PluginApiCore::recorderRequest(PluginApiClient& c, bool start, const char* label) {
+    const std::int32_t g = gate(c);
+    if (g != CASCADE_API_OK) { return g; }
+    const std::uint32_t grants = c.grants.load(std::memory_order_acquire);
+    if ((grants & CASCADE_STATE_STOPPED) != 0u) { return CASCADE_API_DENIED; }
+    // asking for a SETTINGS-grant function is what makes the host offer the grant key (the same rule as requestControl)
+    if (!c.askedSettings.exchange(true, std::memory_order_acq_rel)) { askersSeq_.fetch_add(1, std::memory_order_release); }
+    if ((grants & CASCADE_STATE_SETTINGS_GRANTED) == 0u) { return CASCADE_API_DENIED; }
+    RecorderRequest req;
+    req.client = c.index;
+    req.start = start;
+    if (start) {
+        if (label == nullptr) { return CASCADE_API_BAD_ARGUMENT; }
+        const std::size_t n = ::strnlen(label, CASCADE_RECORDER_LABEL_CHARS + 1);
+        if (n == 0) { return CASCADE_API_BAD_ARGUMENT; }
+        if (n > CASCADE_RECORDER_LABEL_CHARS - 1) { return CASCADE_API_OUT_OF_RANGE; }
+        for (std::size_t i = 0; i < n; ++i) {
+            const char ch = label[i];
+            const bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-';
+            if (!ok) { return CASCADE_API_BAD_ARGUMENT; }
+        }
+        std::memcpy(req.label, label, n);
+    }
+    std::lock_guard<std::mutex> lk(recorderMutex_);
+    if (recorderQueue_.size() >= kRecorderQueue) { return CASCADE_API_BUSY; }
+    recorderQueue_.push_back(req);
+    return CASCADE_API_OK;
+}
+
+void PluginApiCore::takeRecorderRequests(std::vector<RecorderRequest>& out) {
+    std::lock_guard<std::mutex> lk(recorderMutex_);
+    for (const RecorderRequest& r : recorderQueue_) { out.push_back(r); }
+    recorderQueue_.clear();
+}
+
+bool PluginApiCore::recorderRequestStillAllowed(const RecorderRequest& r) const {
+    if (!attached()) { return false; }
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (r.client >= clients_.size()) { return false; }
+    const PluginApiClient& cl = *clients_[r.client];
+    if (!cl.live.load(std::memory_order_acquire)) { return false; }
+    const std::uint32_t g = cl.grants.load(std::memory_order_acquire);
+    if ((g & CASCADE_STATE_STOPPED) != 0u) { return false; }
+    return r.start ? (g & CASCADE_STATE_SETTINGS_GRANTED) != 0u : true;
+}
+
 void PluginApiCore::hostPostEvent(const std::string& plugin, bool privateData, const std::string& kind, const std::string& text, double frequencyHz,
                                   std::int64_t unixMs) {
     CascadeEvent x{};
