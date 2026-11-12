@@ -1707,3 +1707,8 @@ foreach(t ${_cascade_registered_tests})
                 "(labels: '${_labels}'); every test must carry exactly one.")
     endif()
 endforeach()
+
+# recplay lane: the attachments test hashes and copies files and fuzzes 4000 manifests (47 s beside other work on a loaded desk); give it the room the other disk-heavy tests have.
+if(TEST test_record_attachments)
+    set_tests_properties(test_record_attachments PROPERTIES TIMEOUT 300)
+endif()
