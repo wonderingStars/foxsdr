@@ -547,6 +547,11 @@ void networkAddresses() {
     expectScrub("soapy: args host=SHACK-PC, port=5555", "soapy: args host=<host>, port=5555");
     expectScrub("soapy: hostname=radio-room ok", "soapy: hostname=<host> ok");
     expectScrub("soapy: rtltcp=192.168.1.20:1234", "soapy: rtltcp=<host>:1234");
+    // The three network-radio address keys (engine wiring W2: KiwiSDR, SoapyRemote, SDRconnect): the address a user typed is a person's host.
+    expectScrub("kiwisdr: open kiwisdr=192.168.1.30:8073 failed", "kiwisdr: open kiwisdr=<host>:8073 failed");
+    expectScrub("kiwisdr: kiwisdr=sdr.example.org", "kiwisdr: kiwisdr=<host>");
+    expectScrub("soapy: soapyremote=192.168.1.40:55132,prot=tcp", "soapy: soapyremote=<host>:55132,prot=tcp");
+    expectScrub("sdrconnect: sdrconnect=shack-pc:5454,path=/", "sdrconnect: sdrconnect=<host>:5454,path=/");
     expectScrub("pluto: uri=ip:192.168.2.1", "pluto: uri=ip:<host>");
     expectScrub("vendor: addr=sdr.example.org", "vendor: addr=<host>");
     expectScrub("vendor: server=spy.example.net:5555", "vendor: server=<host>:5555");
