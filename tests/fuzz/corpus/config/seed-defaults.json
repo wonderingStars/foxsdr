@@ -75,6 +75,7 @@
     "cwPitchHz": 700.0,
     "audioHighPassHz": 0,
     "audioLowPassHz": 0,
+    "iqCorrect": 0,
     "spectrumFftSize": 1024,
     "spectrumWindow": 3,
     "spectrumFrameRateHz": 0.0,

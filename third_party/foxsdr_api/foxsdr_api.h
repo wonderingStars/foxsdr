@@ -459,6 +459,9 @@ typedef struct FoxReceiverState {
     double fileStartUnixMs;            /* the recording's real start, milliseconds since 1970 UTC (0 unknown) */
     uint32_t fileSource;               /* 1 while this radio plays an I/Q file */
     uint32_t fileStartSource;          /* where fileStartUnixMs came from: 0 unknown, 1 the file's name, 2 the file's last-write time minus its length */
+    /* ---- 0.3 (I/Q correction; docs/API.md 6.19): iqCorrectMask is a setting (moves modeSeq), iqImageRejectionDb a measurement. ---- */
+    double iqImageRejectionDb;         /* the balance estimator's image rejection of the input, dB (200 while nothing is measured) - measured */
+    uint32_t iqCorrectMask;            /* bit 0 DC removal, bit 1 gain and phase balance, bit 2 swap I and Q; 0 = the samples are untouched (default) */
 } FoxReceiverState;
 #define FOXAPI_EQ_BANDS 8
 #define FOXAPI_NOTCH_SLOTS 10
@@ -638,6 +641,7 @@ typedef struct FoxCommand {
 #define FOXAPI_OP_SET_EQ_BAND       0x011Au /* ival[0]: the band 0..7 (0 bass, 1 middle, 2 treble, 3..7 the graphic bands 100, 300, 1000, 2500, 5000 Hz); num[0]: dB, -12..+12. Addresses one radio (target) */
 #define FOXAPI_OP_SET_AUDIO_FILTERS 0x011Bu /* ival[0]: high-pass 0 (off), 100 or 300 Hz; ival[1]: low-pass 0 (off), 2400, 3000 or 6000 Hz. Addresses one radio (target) */
 #define FOXAPI_OP_SET_SPECTRUM      0x011Cu /* ival[0]: the spectrum FFT size, a power of two 1024..131072; ival[1]: the window 0..4 (rectangular, Hann, Hamming, Blackman-Harris, flat-top); num[0]: the frame rate, Hz - 0 automatic, else 1..120. Addresses one radio (target). applied[0]: the FFT size, applied[1]: the frame rate */
+#define FOXAPI_OP_SET_IQ_CORRECT         0x011Du /* ival[0]: the I/Q correction bits - 1 DC removal, 2 gain and phase balance, 4 swap I and Q (0..7, default 0 = untouched). Addresses one radio (target) */
 #define FOXAPI_OP_SET_TONE_REMOVE   0x0114u /* ival[0]: 0/1: the high-pass that takes the sub-audible tone out of the audio. Addresses one radio (target) */
 /* Display */
 #define FOXAPI_OP_SET_DISPLAY_RANGE 0x0201u /* num[0]: dbMin, num[1]: dbMax (min span enforced) */

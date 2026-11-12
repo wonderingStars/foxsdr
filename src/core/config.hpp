@@ -229,6 +229,7 @@ struct SavedRadio {
     int spectrumFftSize = 1024;           // the spectrum's FFT size, a power of two 1024..131072 (engine serial lane A)
     int spectrumWindow = 3;               // 0 rectangular / 1 Hann / 2 Hamming / 3 Blackman-Harris / 4 flat-top
     double spectrumFrameRateHz = 0.0;     // 0 automatic, else 1..120
+    int iqCorrect = 0;     // the I/Q correction bits: 1 DC removal, 2 balance, 4 swap I/Q (engine serial lane A)
     std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
@@ -528,6 +529,7 @@ struct AppConfig {
     int spectrumFftSize = 1024;           // the spectrum's FFT size, a power of two 1024..131072 (engine serial lane A)
     int spectrumWindow = 3;               // 0 rectangular / 1 Hann / 2 Hamming / 3 Blackman-Harris / 4 flat-top
     double spectrumFrameRateHz = 0.0;     // 0 automatic, else 1..120
+    int iqCorrect = 0;     // the I/Q correction bits: 1 DC removal, 2 balance, 4 swap I/Q (engine serial lane A)
     std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;

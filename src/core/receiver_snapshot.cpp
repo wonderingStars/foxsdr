@@ -141,6 +141,8 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
                       std::memcmp(f.eqDb, o.eqDb, sizeof(f.eqDb)) != 0 || f.audioHighPassHz != o.audioHighPassHz || f.audioLowPassHz != o.audioLowPassHz ||
                       // the spectrum size, window and frame rate (settings)
                       f.spectrumFftSize != o.spectrumFftSize || f.spectrumWindow != o.spectrumWindow || f.spectrumFrameRateHz != o.spectrumFrameRateHz ||
+                      // the I/Q correction choice (a setting; the image rejection it reads is a measurement)
+                      f.iqCorrectMask != o.iqCorrectMask ||
                       // the noise squelch's three settings (its level and its gate are measurements)
                       f.noiseSquelchOn != o.noiseSquelchOn || f.noiseSquelchThresholdDb != o.noiseSquelchThresholdDb || f.noiseSquelchTailMs != o.noiseSquelchTailMs ||
                       // the manual notch bank's switches, frequencies and widths (all settings)

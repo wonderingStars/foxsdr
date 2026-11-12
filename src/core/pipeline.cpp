@@ -333,6 +333,7 @@ Pipeline::Pipeline(Config cfg)
     active_ = &builtin_;  // the generator feeds the ring until setSource says otherwise
     airView_.bind(active_);  // no converter until the caller sets one
     estimator_.setAlpha(cfg.averagingAlpha);
+    iqCorr_ = std::make_unique<cascade::dsp::IqCorrector>(cfg.sampleRateHz);
     demod_.setMode(cascade::dsp::DemodMode::WFM);  // default mode per spec
     // WFM de-emphasis belongs to StereoFm, never to the discriminator (see the
     // ownership note in the header), so for the default mode this leaves the
@@ -1354,6 +1355,18 @@ int Pipeline::spectrumWindow() const { return specWindow_; }
 double Pipeline::spectrumFrameRateHz() const { return specFps_; }
 std::size_t Pipeline::spectrumBinCount() const { return specFft_ == 0 ? cfg_.fftSize : specFft_; }
 
+// --- I/Q correction (engine serial lane A, F16) ----------------------------------------------------------------------------------------------------------
+bool Pipeline::setIqCorrection(int mask) {
+    if (mask < 0 || mask > 7) { return false; }
+    iqMask_.store(mask, std::memory_order_relaxed);
+    iqCorr_->setDcRemoval((mask & 1) != 0);
+    iqCorr_->setBalance((mask & 2) != 0);
+    iqCorr_->setSwap((mask & 4) != 0);
+    return true;
+}
+int Pipeline::iqCorrection() const { return iqMask_.load(std::memory_order_relaxed); }
+double Pipeline::iqImageRejectionDb() const { return iqCorr_->imageRejectionDb(); }
+
 // --- CW pitch -------------------------------------------------------------------------------------------------------------------------------------
 bool Pipeline::setCwPitchHz(double hz) {
     if (!std::isfinite(hz) || hz < 300.0 || hz > 1200.0) { return false; }
@@ -1798,6 +1811,14 @@ bool Pipeline::setInputRateHz(double rateHz) {
     // the field it mirrors, so the two can never disagree.
     mirrorInputRateHz_.store(rateHz, std::memory_order_relaxed);
     rebuildSpectrumBlock();   // a frame rate asked for in hertz needs the new input rate (a no-op on the legacy path)
+    {
+        // The corrector's time constants are in samples: a new one for the new rate (the DSP thread is parked here), with the user's choice put back.
+        iqCorr_ = std::make_unique<cascade::dsp::IqCorrector>(rateHz);
+        const int m = iqMask_.load(std::memory_order_relaxed);
+        iqCorr_->setDcRemoval((m & 1) != 0);
+        iqCorr_->setBalance((m & 2) != 0);
+        iqCorr_->setSwap((m & 4) != 0);
+    }
     // ONE LINE PER ACCEPTED CHANGE (0.99.85), here at the commit rather than at
     // any caller, because every way the rate moves - the rail's Rate combo, a
     // plugin preset, the browser, a retune the driver answered with another
@@ -2203,6 +2224,7 @@ void Pipeline::dspThreadBody() {
             continue;
         }
         filled = 0;
+        iqCorr_->process(acc.data(), n);   // F16: the I/Q correction (nothing at all while its mask is 0)
         dspBeat("spectrum");
         const auto blockBegan = std::chrono::steady_clock::now();
         if (specOn_.load(std::memory_order_acquire)) {

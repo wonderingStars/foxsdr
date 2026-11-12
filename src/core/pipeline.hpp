@@ -157,6 +157,7 @@
 #include "dsp/resampler.hpp"
 #include "dsp/spectrum.hpp"
 #include "dsp/spectrum_block.hpp"
+#include "dsp/iq_correct.hpp"
 #include "dsp/spsc_ring.hpp"
 #include "dsp/squelch.hpp"
 #include "dsp/oirt_stereo.hpp"
@@ -597,6 +598,12 @@ public:
     double spectrumFrameRateHz() const;
     // The bins of the newest frame (the ring's reader sees a frame of this many): fftSize on both paths.
     std::size_t spectrumBinCount() const;
+    // I/Q CORRECTION AT THE SOURCE RATE (engine serial lane A, row F16; dsp/iq_correct.hpp): mask bit 0 removes the DC offset, bit 1 balances gain and phase (blind image rejection,
+    // for a signal alike either side of its centre), bit 2 swaps I and Q. It runs on the drained block in place BEFORE the spectrum, the audio chain and the I/Q recorder see it, and
+    // costs nothing while the mask is 0 (the default: the samples are untouched). False (nothing changed) for a mask above 7. Any thread; kept across a rate change.
+    bool setIqCorrection(int mask);
+    int iqCorrection() const;
+    double iqImageRejectionDb() const;   // the balance estimator's reading of the input, dB (200 while nothing is measured)
     int manualNotchCount() const;   // slots that are on
     bool setNoiseReductionMethod(int method);
     int noiseReductionMethod() const;
@@ -1141,6 +1148,8 @@ private:
     cascade::dsp::AudioEq eqR_{kAudioRateHz};
     cascade::dsp::NotchBank notchBankL_{kAudioRateHz};
     cascade::dsp::NotchBank notchBankR_{kAudioRateHz};
+    std::unique_ptr<cascade::dsp::IqCorrector> iqCorr_;   // swapped only while the DSP thread is quiesced (a rate change)
+    std::atomic<int> iqMask_{0};
     double cwPitchNow_ = 700.0;
     // The spectrum block path (setSpectrum): the block exists from the first non-default choice on and is never freed while the pipeline lives; specOn_ says whether the DSP thread feeds it.
     std::unique_ptr<cascade::dsp::SpectrumBlock> specBlock_;

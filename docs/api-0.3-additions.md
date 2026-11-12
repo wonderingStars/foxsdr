@@ -2646,6 +2646,9 @@ At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTT
 
 * Ops `FOXAPP_OP_FILE_SEEK` 0x861A (`ival[0]` 0 seconds / 1 a fraction of the length, `num[0]` the place) and `FOXAPP_OP_FILE_LOOP` 0x861B (`ival[0]` 1: loop between `num[0]` and `num[1]` seconds / 0: clear), both receiver-scoped, in no web, CAT or TCI profile. `UNSUPPORTED` for a radio that plays no file, `OUT_OF_RANGE` past either end or for a loop that is not a start before a later end inside the recording. The first block after a seek starts at the new place; a loop wraps from its end to its start with no gap and no repeated frame.
 * State, appended after `spectrumFrameRateHz` (measurements, they move nothing): `filePositionSec fileDurationSec fileLoopStartSec fileLoopEndSec fileStartUnixMs fileSource fileStartSource`. `fileStartUnixMs` is the recording's real start: `fileStartSource` 1 = the date and time in the file name (local time, as FoxSDR names its takes), 2 = the file's last-write time minus its length, 0 unknown. Nothing is saved: a file starts from the top.
+### 9.40 I/Q correction at the source rate (engine serial lane A, row F16; dsp/iq_correct.hpp)
+
+* Op `FOXAPI_OP_SET_IQ_CORRECT` 0x011D (receiver-scoped; in no web, CAT or TCI profile): `ival[0]` a sum of 1 DC removal, 2 gain and phase balance (blind image rejection: the wanted band should look alike either side of its centre), 4 swap I and Q; 0 (the default) leaves the samples untouched. It runs on the drained block before the spectrum, the audio chain and the I/Q recorder, so all three see the corrected samples. State, appended after `fileStartSource`: `iqImageRejectionDb` (measurement, 200 while the balance is off or has measured nothing) and `iqCorrectMask` (a setting, moves `modeSeq`). Saved per radio as `iqCorrect`.
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

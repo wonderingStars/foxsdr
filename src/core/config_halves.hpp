@@ -102,6 +102,7 @@ struct ConfigFieldInfo {
     X(eqDb,                    Engine,    false) \
     X(audioHighPassHz,         Engine,    false) \
     X(audioLowPassHz,          Engine,    false) \
+    X(iqCorrect,                 Engine,    false) \
     X(spectrumFrameRateHz,       Engine,    false) \
     X(spectrumWindow,            Engine,    false) \
     X(spectrumFftSize,           Engine,    false) \
