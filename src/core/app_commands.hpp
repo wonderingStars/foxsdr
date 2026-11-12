@@ -151,6 +151,11 @@
 //   stop, start and the scanner's stop are not tuning and still work; DECODER_START applies a preset on the engine's own side and is not in the set. NO_CHANGE when it is already so.
 //   Not saved (a restart unlocks). fact.radio.<n>.locked is "1" or "0".
 #define FOXAPP_OP_RADIO_LOCK             0x8617u /* ival[0]: 1 lock / 0 unlock. Addresses one radio (target) */
+//   SET_RECORD_NAME (SETTINGS; engine wiring W2, core/rec_naming.hpp, docs/api-0.3-additions.md 9.36): the file-name TEMPLATE for every recording take, kept in record-name.txt in the per-user folder.
+//   text: the template ("{freq_mhz}/{mode}_{datetime}", tokens {date} {time} {datetime} {year} {month} {day} {hour} {min} {sec} {ms} {tz} {freq} {freq_khz} {freq_mhz} {mode} {radio} {bookmark}
+//   {counter} {counter:N}; '/' separates up to three folders below the recordings folder; the extension is added; local time) or "" to go back to the default names. BAD_ARGUMENT with the model's
+//   words for a template it refuses (nothing changes); NO_CHANGE when it is in force already. fact.record.nameTemplate reads it back.
+#define FOXAPP_OP_SET_RECORD_NAME        0x8618u /* text: the template, "" = the default naming */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */
 #define FOXAPP_OP_USER_PRESET_FORGET_AT  0x8702u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

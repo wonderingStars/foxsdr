@@ -3184,6 +3184,15 @@ private:
     void pumpMacros();
     // THE FREQUENCY LOCK (FOXAPP_OP_RADIO_LOCK, engine wiring W2; Receiver::tuneLocked_): which commands it refuses, and the fingerprint counter of its facts.
     static bool isTuningCommandOfLock(const FoxCommand& c);
+    // RECORDING FILE NAMES FROM A TEMPLATE (engine_recname.cpp; FOXAPP_OP_SET_RECORD_NAME, engine wiring W2).
+    std::string recordNameFilePath() const;
+    void loadRecordName();
+    std::int32_t applyRecordNameOp(const FoxCommand& c, const std::string& text, std::string& why);
+    void applyRecordName(cascade::core::Recorder::OpenRequest& req);
+    std::string recordNameTemplate_;
+    bool recordNameLoaded_ = false;
+    std::uint64_t recordNameVersion_ = 1;
+    std::string recordNamePathForTest_;   // TESTS ONLY (through the friend): the file to use instead of the per-user folder's
     std::uint64_t radioLockVersion_ = 1;
     void loadMacros();
     std::int32_t applyMacroOp(const FoxCommand& c, const std::string& text, std::string& why);

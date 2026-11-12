@@ -2488,6 +2488,13 @@ void macroOps(AppWindow& a) {
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_RADIO_LOCK, 1)), FOXAPI_NO_CHANGE));
     CHECK(refused(A::apply(a, num(FOXAPI_OP_SET_FREQUENCY, 100.0e6)), FOXAPI_DENIED));
     CHECK(ok(A::apply(a, ints(FOXAPP_OP_RADIO_LOCK, 0))));
+    // THE RECORDING FILE-NAME TEMPLATE (FOXAPP_OP_SET_RECORD_NAME; the take naming itself is tests/test_engine_api_recname.cpp's): a refused one changes nothing, a good one is kept, the same again is NO_CHANGE,
+    // and "" puts the default names back (the profile this test runs in is a scratch one).
+    covering(FOXAPP_OP_SET_RECORD_NAME);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SET_RECORD_NAME, "a:b")), FOXAPI_BAD_ARGUMENT));
+    CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_RECORD_NAME, "{mode}/{date}"))));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SET_RECORD_NAME, "{mode}/{date}")), FOXAPI_NO_CHANGE));
+    CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_RECORD_NAME, ""))));
 }
 
 void airbandOps(AppWindow& a) {

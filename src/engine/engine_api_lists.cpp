@@ -205,6 +205,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(scheduleVersion_);   // the timed recordings: any change of the list, a state or a note (engine_schedule.cpp)
     f.value(macroVersion_);      // the macros: the file, a run, a note (engine_macros.cpp)
     f.value(radioLockVersion_);  // the frequency lock of every radio (FOXAPP_OP_RADIO_LOCK)
+    f.value(recordNameVersion_); // the recording file-name template (FOXAPP_OP_SET_RECORD_NAME)
     f.text(markerError_);
     // The DSP chain's input rate (API 0.3 8.5, fact.input.rateHz): the source's rate
     // unless the chain refused a change of it, and then the one the display is
@@ -1352,6 +1353,8 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     scheduleFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // (LOCAL: a recording plan is the operator's)
     macroFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // (LOCAL: a macro is the operator's)
     // THE S-METER CALIBRATION (engine wiring lane 1; LOCAL: a device's key can name a serial number): what the last measurement did, and how many devices hold a calibration.
+    if (!recordNameLoaded_) { loadRecordName(); }   // (the file is read once, here or at the first take, whichever asks first)
+    fact("record.nameTemplate", recordNameTemplate_, true);   // (LOCAL: a file-name template can carry a person's own words)
     fact("smeter.cal.state", smeterState_, true);
     fact("smeter.cal.message", smeterMessage_, true);
     fact("smeter.cal.devices", std::to_string(smeterCal_.size()), true);

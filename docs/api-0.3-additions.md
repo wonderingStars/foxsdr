@@ -2613,6 +2613,19 @@ At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTT
   (as for the window's lock: what can still move a locked radio).
 * `fact.radio.<n>.locked` is `"1"` or `"0"` for every radio that exists; the fact fingerprint moves with it.
 
+### 9.36 Recording file names from a template (engine wiring lane 2; src/engine/engine_recname.cpp, core/rec_naming.hpp)
+
+* Op `FOXAPP_OP_SET_RECORD_NAME` 0x8618 (text: the template; grant SETTINGS; the application's own, so a REMOTE session is refused). One template for every take, kept in `record-name.txt` in the
+  per-user folder (beside the configuration), read the first time a pass builds the facts or a take starts. `""` clears it: takes are named as they always were.
+* Tokens: `{date}` `{time}` `{datetime}` `{year}` `{month}` `{day}` `{hour}` `{min}` `{sec}` `{ms}` `{tz}` `{freq}` (whole Hz) `{freq_khz}` `{freq_mhz}` (trailing zeros trimmed) `{mode}` `{radio}` (the radio's label)
+  `{bookmark}` (reads `unknown`: a take does not know which bookmark it is on) `{counter}` `{counter:N}`; `{{` and `}}` are literal braces; `/` separates up to three folders below the recordings folder
+  (made on the disk worker like the file); the extension `.wav` is added. The time tokens read the local clock.
+* A template is checked when it is SET, by expanding it for a sample take: a forbidden character (`< > : " | ? *`, control characters), a leading separator or drive, `.` / `..`, an empty component, a component
+  ending in a dot or space, a reserved device name, an unknown token, an unclosed or stray brace, a bad counter width, more than three folders or a name over the length limits is `BAD_ARGUMENT` with the model's
+  words, and the template in force does not change. The same template again is `NO_CHANGE`. Values that come from the radio at run time (a label with a `/`) have their forbidden characters replaced by `_`.
+* The take is created exclusively on the disk worker as before: a name that exists is never opened over (it becomes `name-2.wav`). If an expansion cannot be made at a take's start the default name is used and
+  the log says so. `fact.record.nameTemplate` (LOCAL) reads the template back. Not done: rollover, one file per transmission, FLAC (other parts of the same model lane).
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

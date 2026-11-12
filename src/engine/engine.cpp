@@ -6148,6 +6148,7 @@ bool Engine::startAudioRecording() {
         rx().recordError_ = err;
         return false;
     }
+    applyRecordName(req);   // (the file-name template, when one is set: engine_recname.cpp)
     rx().audioStart_.request(rx().audioRecorder_.opener(), std::move(req));
     return true;
 }
@@ -6172,6 +6173,7 @@ bool Engine::startIqRecording() {
     // The rate the file's header is being written for, kept to compare with the rate when the file arrives: a take is one rate, and a source
     // that changed it while the disk was slow must not get a header that lies (see finishRecordStart).
     rx().iqRecordRateHz_ = rate;
+    applyRecordName(req);   // (the file-name template, when one is set: engine_recname.cpp)
     rx().iqStart_.request(rx().iqRecorder_.opener(), std::move(req));
     return true;
 }
@@ -7279,6 +7281,12 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             }
             res.applied[0] = rx().pipeline_.running() ? 1.0 : 0.0;
             return res;
+        case FOXAPP_OP_SET_RECORD_NAME: {
+            std::string why;
+            const std::int32_t st = applyRecordNameOp(c, text, why);
+            if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
+            return res;
+        }
         case FOXAPP_OP_RADIO_LOCK:
             if (rx().tuneLocked_ == on) { return refuse(FOXAPI_NO_CHANGE, on ? "the frequency is locked already" : "the frequency is not locked"); }
             rx().tuneLocked_ = on;
