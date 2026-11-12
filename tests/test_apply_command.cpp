@@ -2472,6 +2472,18 @@ void scheduleOps(AppWindow& a) {
     }
 }
 
+// MACROS (engine wiring W2; src/engine/engine_macros.cpp). The profile this test runs in has no macro file, so there are no macros: an unknown name is NOT_FOUND, a stop with
+// nothing running is NO_CHANGE, and a reload of an absent file is fine. The playing of steps, the refusals of a bad file and the REMOTE denial are tests/test_engine_api_macros.cpp's.
+void macroOps(AppWindow& a) {
+    covering(FOXAPP_OP_MACRO_RELOAD);
+    CHECK(ok(A::apply(a, text(FOXAPP_OP_MACRO_RELOAD, ""))));
+    covering(FOXAPP_OP_MACRO_RUN);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_MACRO_RUN, "nonesuch")), FOXAPI_NOT_FOUND));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_MACRO_RUN, "")), FOXAPI_BAD_ARGUMENT));
+    covering(FOXAPP_OP_MACRO_STOP);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_MACRO_STOP, "")), FOXAPI_NO_CHANGE));
+}
+
 void airbandOps(AppWindow& a) {
     const bool pageWas = A::patchPageOpen(a);
 
@@ -3775,6 +3787,7 @@ int main() {
         airbandOps(app);
         markerOps(app);
         scheduleOps(app);
+        macroOps(app);
         transmitterOps(app);
         radioOps(app);
         otherOps(app);

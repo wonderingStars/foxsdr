@@ -135,6 +135,15 @@
 //   CAL_CLEAR (SETTINGS): the selected radio's device. ival[0]: 0 = the entry that covers num[0] Hz (0 = the radio's own frequency); 1 = every entry of the device. NOT_FOUND when there is none.
 #define FOXAPP_OP_CAL_MEASURE            0x8612u /* num[0]: known dBm; ival[0]: 0 default band / 1 explicit; num[1], num[2]: lo, hi Hz. Addresses one radio (target) */
 #define FOXAPP_OP_CAL_CLEAR              0x8613u /* ival[0]: 0 one entry (num[0] Hz, 0 = this radio's) / 1 all of the device. Addresses one radio (target) */
+//   MACROS (SETTINGS; engine wiring W2, core/macros.hpp, docs/api-0.3-additions.md 9.34): named command sequences kept in macros.json in the per-user folder, played on the control
+//   pass with the engine's clock. The steps are the engine's own commands (on the first radio) minus the model's denied prefixes (anything that transmits, grants, installs, edits the
+//   servers, uploads, tests, or starts another macro op). MACRO_RUN text: the macro's name; OK once started; NOT_FOUND no such macro; BUSY one is running; BAD_ARGUMENT the file is refused
+//   (the message names the macro and step; no macro is available then) or the name is empty. MACRO_STOP: NO_CHANGE when none is running. MACRO_RELOAD reads the file again (BUSY while
+//   one runs; BAD_ARGUMENT with the file's error). A step the engine refuses ends the run with its words in fact.macro.last. The facts: macro.names (newline separated), macro.running,
+//   macro.last, macro.error, macro.steps. All three are the application's own (LOCAL sessions only).
+#define FOXAPP_OP_MACRO_RUN              0x8614u /* text: the macro's name */
+#define FOXAPP_OP_MACRO_STOP             0x8615u
+#define FOXAPP_OP_MACRO_RELOAD           0x8616u
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */
 #define FOXAPP_OP_USER_PRESET_FORGET_AT  0x8702u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

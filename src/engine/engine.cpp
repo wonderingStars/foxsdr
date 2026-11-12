@@ -8226,6 +8226,15 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
             return res;
         }
+        // --- macros (engine_macros.cpp) --------------------------------------------------------
+        case FOXAPP_OP_MACRO_RUN:
+        case FOXAPP_OP_MACRO_STOP:
+        case FOXAPP_OP_MACRO_RELOAD: {
+            std::string why;
+            const std::int32_t st = applyMacroOp(c, text, why);
+            if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
+            return res;
+        }
 
         // --- decoders and plugins ------------------------------------------------------------
         case FOXAPI_OP_DECODER_START:
@@ -10897,6 +10906,7 @@ void Engine::runPassPart(PassPart part) {
             // THE ADDED RADIOS' OWN HOUSEKEEPING (stage 4): each under its own scope, after the first radio's.
             pumpExtraReceivers();
             pumpSchedule();   // (timed recordings: engine_schedule.cpp)
+            pumpMacros();     // (a macro being played: engine_macros.cpp)
             pollSmeterCal();  // (a calibration being measured: engine_smeter.cpp)
             break;
     }

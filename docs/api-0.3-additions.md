@@ -2584,6 +2584,23 @@ At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTT
 
 * Ops `FOXAPI_OP_SET_EQ_BAND` 0x011A and `FOXAPI_OP_SET_AUDIO_FILTERS` 0x011B (receiver-scoped; in no web, CAT or TCI profile). State, appended after `noiseSquelchOpen`: `eqDb[8]`, `audioHighPassHz`, `audioLowPassHz`. Saved: `eqDb`, `audioHighPassHz`, `audioLowPassHz`.
 
+### 9.34 Macros (engine wiring lane 2; src/engine/engine_macros.cpp, core/macros.hpp)
+
+* Ops `FOXAPP_OP_MACRO_RUN` 0x8614 (text: the macro's name), `FOXAPP_OP_MACRO_STOP` 0x8615, `FOXAPP_OP_MACRO_RELOAD` 0x8616. The application's own ops: a REMOTE session is refused them
+  ("the application's own commands are for sessions on this machine"); grant SETTINGS.
+* A macro is a named list of application commands with delays, kept in `macros.json` in the per-user folder (beside the configuration; JSON, `{"version":1,"macros":[{"name","description",
+  "repeat","steps":[{"cmd","num":[<=4],"ival":[<=2],"text","delayMs"}]}]}`). A step names a command by the name `core/app_commands.cpp` gives it (`SET_FREQUENCY`, `SET_MODE`,
+  `RECORD_IQ`, `APP_...`), or the pseudo-steps `WAIT` and `RUN_MACRO` (text: another macro's name). The file is read the first time any macro op asks and again on `MACRO_RELOAD`; it is
+  refused WHOLE on the first error (the message names the macro and step) and then no macro is available. A missing file is no macros and no error.
+* What a step may not be: the model's allow-list is made by subtraction - nothing that transmits or keys a transmitter (`TX_`, `APP_TX_`), grants a plugin a permission, installs or removes a
+  plugin, edits the server or interface configuration, uploads a report, checks for updates or runs a test hook, and not another macro op (`APP_MACRO_`): a macro starts another only through
+  `RUN_MACRO`, which carries the loop protection (no cycles, depth 4, repeat at most 1000 with at least 100 ms a pass, at most 10,000 steps a start, a delay at most 24 h).
+* The steps are applied by the engine's own `applyCommand` on the control pass, with the engine's clock, on the FIRST radio. A step the engine refuses ends the run (the words are in
+  `fact.macro.last`); `NO_CHANGE` (already so) does not. `MACRO_RUN` answers `OK` once started, `NOT_FOUND`, `BUSY` while one runs, `BAD_ARGUMENT` for an empty name or a refused file;
+  `MACRO_STOP` answers `NO_CHANGE` when none runs; `MACRO_RELOAD` is `BUSY` while one runs.
+* Facts (LOCAL sessions): `fact.macro.names` (newline separated), `fact.macro.running`, `fact.macro.last` (`running`, `finished`, `stopped`, or `stopped: ...` with the words),
+  `fact.macro.error`, `fact.macro.steps` (steps applied in the last run).
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

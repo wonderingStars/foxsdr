@@ -46,6 +46,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/macros.hpp"
 #include "core/schedule.hpp"
 #include "core/airband_monitor.hpp"
 #include "core/airspy_settings.hpp"
@@ -3179,6 +3180,23 @@ private:
     std::atomic<std::int64_t> scheduleClockMs_{0};   // the test hook's clock (unix ms); 0 = the system's
     std::uint64_t scheduleVersion_ = 1;               // moves with any change of the list, a state or a note (the fact block's fingerprint)
     void pumpSchedule();
+    // MACROS (engine_macros.cpp; docs/api-0.3-additions.md 9.34): the model's player, pumped on the Back part of every control pass.
+    void pumpMacros();
+    void loadMacros();
+    std::int32_t applyMacroOp(const FoxCommand& c, const std::string& text, std::string& why);
+    void macroFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    std::string macrosFilePath() const;
+    std::int64_t macroNowMs() const;
+    std::vector<cascade::core::macros::Macro> macros_;
+    cascade::core::macros::Player macroPlayer_;
+    std::string macrosError_;     // the file's refusal, "" when it loaded (or is absent)
+    std::string macroName_;       // the macro that is running, "" when none
+    std::string macroLast_;       // how the last run ended: running / finished / stopped (+ the words)
+    std::uint64_t macroStepsApplied_ = 0;
+    std::uint64_t macroVersion_ = 1;   // moves with any change of the macros, a run or a note (the fact block's fingerprint)
+    bool macrosLoaded_ = false;
+    std::string macrosPathForTest_;                    // TESTS ONLY (through the friend): the file to read instead of the per-user folder's
+    std::atomic<std::int64_t> macroClockMs_{-1};      // TESTS ONLY: the player's clock (ms); negative = the steady clock
     std::int32_t scheduleFromHint(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why);
     std::int64_t scheduleNowMs() const;
     void loadSchedule(const std::vector<cascade::core::sched::Entry>& entries);
