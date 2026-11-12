@@ -20,6 +20,7 @@
 #include "core/diag_log.hpp"
 #include "core/patch_devices.hpp"
 #include "core/receiver_tables.hpp"
+#include "source/kiwisdr_source.hpp"
 #include "source/siggen_source.hpp"
 
 namespace pc = cascade::core::patch;
@@ -112,6 +113,13 @@ FoxCommandResult Engine::radioAddOp(const FoxCommand& c, const std::string& text
         } else if (kind == "open-pluto") {
             const std::string rest = text.substr(colon + 1);
             key = pc::makeDeviceKey("pluto", rest.rfind("uri=", 0) == 0 ? rest : "uri=" + rest);
+        } else if (kind == "open-kiwisdr") {
+            // (the key radio 1's open leaves in deviceArgs_: "kiwisdr=<host>:<port>": the same receiver twice is refused, as one rtl_tcp server is)
+            const std::string rest = text.substr(colon + 1);
+            cascade::source::KiwiSdrSource::Address a;
+            std::string why;
+            if (!cascade::source::KiwiSdrSource::parseArgs(rest, a, why)) { return refuse(FOXAPI_BAD_ARGUMENT, why); }
+            key = pc::makeDeviceKey("kiwisdr", "kiwisdr=" + a.host + ":" + std::to_string(a.port));
         } else if (kind == "open-rtltcp") {
             // (the key radio 1's open leaves in deviceArgs_: "rtltcp=<address>", whichever spelling was typed, so the same server twice is refused)
             const std::string rest = text.substr(colon + 1);
@@ -316,6 +324,7 @@ void Engine::pumpExtraReceivers() {
         noteAsyncOpenEnded();
         pollSoapyRecovery();
         pollPendingRetune();
+        pollStereoSystem();
         endTakesOnFault();
         pollAudioOpen();
         pollAudioHealth();

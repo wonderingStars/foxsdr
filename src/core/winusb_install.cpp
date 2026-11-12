@@ -27,6 +27,7 @@
 #include <fstream>
 #include <sstream>
 
+#include "core/driver_policy.hpp"
 #include "core/i18n.hpp"
 #include "core/radio_setup.hpp"
 #include "usb/usb_device.hpp"
@@ -65,7 +66,9 @@ bool isRtlInterfaceZeroId(const std::string& hardwareId) {
     cascade::usb::UsbId id{0, 0};
     if (!cascade::usb::usbIdFromHardwareId(hardwareId, id)) { return false; }
     const auto* d = cascade::core::radiosetup::findKnownDevice(id.vid, id.pid);
-    return d != nullptr && std::strcmp(d->family, cascade::core::radiosetup::kFamilyRtl) == 0;
+    if (d == nullptr || std::strcmp(d->family, cascade::core::radiosetup::kFamilyRtl) != 0) { return false; }
+    // W12: the elevated helper refuses on the reviewed allow-list as well (core/driver_policy.hpp), so the two layers cannot drift apart.
+    return cascade::core::driverpolicy::decide(id.vid, id.pid, 0).action == cascade::core::driverpolicy::Action::InstallWinUsb;
 }
 
 }  // namespace

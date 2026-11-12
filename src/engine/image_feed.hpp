@@ -59,6 +59,9 @@ public:
     // the decoders' poll (the engine's constructor, through ServerHost::attach: the runner is the engine's).
     void attach(Hooks hooks);
     void setPoll(std::function<void(std::vector<cascade::core::HostImage>&)> poll) { hooks_.poll = std::move(poll); }
+    // A PRIVATE PLUGIN'S PICTURES (CASCADE_FLAG_PRIVATE_DATA) are never encoded into the served set: its slot is still listed (the page can
+    // show that the plugin exists and is waiting) with no bitmap, and the window's own copyTo is unaffected. Set once, before the worker runs.
+    void setPrivate(std::function<bool(const std::string&)> isPrivate) { isPrivate_ = std::move(isPrivate); }
 
     // THE WINDOW'S READ (HostPluginFeed::pollImages): polls the decoders now - on the caller's thread, as the window always has - and brings
     // `out` up to date with the accumulator: an entry whose plugin, revision, sequence and size match is left as it is (its pixels are not
@@ -99,6 +102,7 @@ private:
     void workerLoop();
 
     Hooks hooks_;
+    std::function<bool(const std::string&)> isPrivate_;
 
     // The accumulator, and what the worker last published (both under pm_). The poll itself happens under pm_: one poller at a time.
     std::mutex pm_;

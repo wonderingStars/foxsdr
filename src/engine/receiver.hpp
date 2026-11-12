@@ -275,6 +275,11 @@ struct Receiver {
     bool deviceAdcSwitchesPresent_ = false;  // the RX888's pair, together
     bool deviceDither_ = false;
     bool deviceRandomiser_ = false;
+    int stereoSystem_ = 0;          // FOXAPP_OP_SET_STEREO_SYSTEM: 0 automatic, 1 pilot tone, 2 OIRT (engine wiring W2; not saved)
+    int stereoSystemApplied_ = 1;   // what the pipeline was last told (1 or 2)
+    bool tuneLocked_ = false;   // the frequency lock (FOXAPP_OP_RADIO_LOCK, engine wiring W2): every way a retune reaches this radio is refused or a no-op
+    bool deviceOffsetTuningPresent_ = false;  // an rtl_tcp server's E4000 (R12), where its header names one
+    bool deviceOffsetTuning_ = false;
     // The ACTIVE source's kind as the config store spells it. Tracked at each
     // successful switch because the pipeline does not expose source identity.
     // "siggen"|"file"|"soapy"|"rtlsdr"|"hackrf"|"airspy"|"airspyhf"|
@@ -350,6 +355,31 @@ struct Receiver {
     float agcFixedGainDb_ = 0.0f;
     bool nbEnabled_ = false;
     float nbThresholdDb_ = 15.0f;
+    // Tone squelch (engine wiring lane 1, group B): FOXAPI_TONE_*, the CTCSS tone (Hz, 0 any), the DCS code as digits (0 any) and its polarity (0 any), and the tone
+    // remover. Off, any, any, any, off by default: the audio as it always was.
+    int toneKind_ = 0;
+    double toneHz_ = 0.0;
+    int toneCode_ = 0;
+    int tonePol_ = 0;
+    bool toneRemove_ = false;
+    // S-meter display units (engine wiring lane 1): FOXAPI_METER_*, dBFS by default.
+    int meterUnits_ = 0;
+    // Noise-reduction method (engine wiring lane 1): FOXAPI_NR_*, standard by default.
+    int nrMethod_ = 0;
+    std::array<double, 8> eqDb_{};   // the equaliser's bands (engine wiring lane 1): all flat
+    int audioHpHz_ = 0;              // the audio high-pass: 0 off / 100 / 300
+    int audioLpHz_ = 0;              // the audio low-pass: 0 off / 2400 / 3000 / 6000
+    bool noiseSquelchOn_ = false;           // the FM noise squelch (engine wiring lane 1)
+    double noiseSquelchThresholdDb_ = -30.0;
+    double noiseSquelchTailMs_ = 100.0;
+    double cwPitchHz_ = 700.0;   // the CW sidetone pitch (engine wiring lane 1)
+    // The manual notch bank (engine wiring lane 1): ten slots, each off at 1000 Hz and 50 Hz wide until set.
+    struct ManualNotchSlot {
+        double hz = 1000.0;
+        double widthHz = 50.0;
+        bool on = false;
+    };
+    std::array<ManualNotchSlot, 10> manualNotch_{};
     bool notchEnabled_ = false;
     float notchFreqHz_ = 1000.0f;
     float notchQ_ = 30.0f;

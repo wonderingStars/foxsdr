@@ -129,6 +129,38 @@
 //   entry starts a minute before the hint's start and ends a minute after its end, tunes to its frequency / mode / bandwidth, records the I/Q and puts the tuning back;
 //   it is then an ordinary entry (SCHEDULE_SET's refusals apply: OUT_OF_RANGE, BUSY on overlap, LIMIT). NOT_FOUND for a number the list does not hold. applied[0]: the id.
 #define FOXAPP_OP_SCHEDULE_FROM_HINT     0x8611u /* ival[0]: hint number; ival[1]: radio; text: name; applied[0]: the new entry's id */
+//   CAL_MEASURE (SETTINGS; engine wiring lane 1, S-meter calibration): the selected radio (target) must be running. num[0]: the known level in dBm (-150..+30) of the signal on it. ival[0]: 0 = the
+//   band that holds the radio's frequency, [0, 30 MHz) or [30 MHz, 6 GHz); 1 = the band num[1] .. num[2] Hz. The engine averages the radio's level for 3 s and stores offset = known dBm - measured
+//   dBFS for that band, for that DEVICE (fact.smeter.cal.state says measuring, then done or failed). BUSY while another measurement runs; OUT_OF_RANGE a level or band that is not one.
+//   CAL_CLEAR (SETTINGS): the selected radio's device. ival[0]: 0 = the entry that covers num[0] Hz (0 = the radio's own frequency); 1 = every entry of the device. NOT_FOUND when there is none.
+#define FOXAPP_OP_CAL_MEASURE            0x8612u /* num[0]: known dBm; ival[0]: 0 default band / 1 explicit; num[1], num[2]: lo, hi Hz. Addresses one radio (target) */
+#define FOXAPP_OP_CAL_CLEAR              0x8613u /* ival[0]: 0 one entry (num[0] Hz, 0 = this radio's) / 1 all of the device. Addresses one radio (target) */
+//   MACROS (SETTINGS; engine wiring W2, core/macros.hpp, docs/api-0.3-additions.md 9.34): named command sequences kept in macros.json in the per-user folder, played on the control
+//   pass with the engine's clock. The steps are the engine's own commands (on the first radio) minus the model's denied prefixes (anything that transmits, grants, installs, edits the
+//   servers, uploads, tests, or starts another macro op). MACRO_RUN text: the macro's name; OK once started; NOT_FOUND no such macro; BUSY one is running; BAD_ARGUMENT the file is refused
+//   (the message names the macro and step; no macro is available then) or the name is empty. MACRO_STOP: NO_CHANGE when none is running. MACRO_RELOAD reads the file again (BUSY while
+//   one runs; BAD_ARGUMENT with the file's error). A step the engine refuses ends the run with its words in fact.macro.last. The facts: macro.names (newline separated), macro.running,
+//   macro.last, macro.error, macro.steps. All three are the application's own (LOCAL sessions only).
+#define FOXAPP_OP_MACRO_RUN              0x8614u /* text: the macro's name */
+#define FOXAPP_OP_MACRO_STOP             0x8615u
+#define FOXAPP_OP_MACRO_RELOAD           0x8616u
+//   RADIO_LOCK (SETTINGS; engine wiring W2, slint-gaps item 3's engine half, docs/api-0.3-additions.md 9.35): ival[0] 1 = lock the selected radio's (target) FREQUENCY, 0 = unlock. While a radio is
+//   locked the engine refuses, with FOXAPI_DENIED, every tuning command aimed at it - SET_CENTRE, SET_FREQUENCY, SET_VFO_OFFSET, STEP_TUNE, BOOKMARK_TUNE, PLUGIN_PRESET, VFO_TO_ABSOLUTE,
+//   SET_VFO_OFFSET_FREE, USER_PRESET_APPLY, a list scan start, an air-band listen / next block / tune one, a SCANNER_RUN that starts - and every other way a retune reaches the source (a
+//   running scan's next step, a plugin's request_tune) is a no-op: the lock is the ENGINE's, so a plugin, the web page and CAT cannot move a locked radio. Mode, bandwidth, volume, squelch,
+//   stop, start and the scanner's stop are not tuning and still work; DECODER_START applies a preset on the engine's own side and is not in the set. NO_CHANGE when it is already so.
+//   Not saved (a restart unlocks). fact.radio.<n>.locked is "1" or "0".
+#define FOXAPP_OP_RADIO_LOCK             0x8617u /* ival[0]: 1 lock / 0 unlock. Addresses one radio (target) */
+//   SET_RECORD_NAME (SETTINGS; engine wiring W2, core/rec_naming.hpp, docs/api-0.3-additions.md 9.36): the file-name TEMPLATE for every recording take, kept in record-name.txt in the per-user folder.
+//   text: the template ("{freq_mhz}/{mode}_{datetime}", tokens {date} {time} {datetime} {year} {month} {day} {hour} {min} {sec} {ms} {tz} {freq} {freq_khz} {freq_mhz} {mode} {radio} {bookmark}
+//   {counter} {counter:N}; '/' separates up to three folders below the recordings folder; the extension is added; local time) or "" to go back to the default names. BAD_ARGUMENT with the model's
+//   words for a template it refuses (nothing changes); NO_CHANGE when it is in force already. fact.record.nameTemplate reads it back.
+#define FOXAPP_OP_SET_RECORD_NAME        0x8618u /* text: the template, "" = the default naming */
+//   SET_STEREO_SYSTEM (SETTINGS; engine wiring W2, dsp/oirt_stereo.hpp, docs/api-0.3-additions.md 9.37): which composite decoder the selected radio's (target) WFM mode runs. ival[0]: 0 = AUTOMATIC
+//   (OIRT polar modulation while the tuned frequency is inside 65.8 to 74 MHz, the pilot-tone system everywhere else: the default), 1 = the pilot-tone system always, 2 = OIRT always; any other value is
+//   OUT_OF_RANGE. NO_CHANGE when it is already so. Not saved (a restart returns to automatic). fact.radio.<n>.stereo.system reads auto / pilot / oirt, fact.radio.<n>.stereo.decoder the decoder in the
+//   path now (pilot / oirt: the OIRT decoder runs only in WFM at a channel rate of 100 kHz or more).
+#define FOXAPP_OP_SET_STEREO_SYSTEM      0x8619u /* ival[0]: 0 automatic / 1 pilot tone / 2 OIRT. Addresses one radio (target) */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */
 #define FOXAPP_OP_USER_PRESET_FORGET_AT  0x8702u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

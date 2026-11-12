@@ -598,6 +598,23 @@ std::int32_t l1SetScheduleHint(void* ctx, const CascadeScheduleHint* h) {
 std::int32_t l1ClearScheduleHints(void* ctx) {
     return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.clearScheduleHints(c); });
 }
+std::int32_t l1PostEvent(void* ctx, const CascadeEvent* e) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.postEvent(c, e); });
+}
+std::int32_t l1ReadEvents(void* ctx, std::uint64_t afterSeq, CascadeEvent* out, std::uint32_t cap) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.readEvents(c, afterSeq, out, cap); });
+}
+std::uint64_t l1EventsSeq(void* ctx) {
+    // No CASCADE_API_* channel on this signature (as l1SettingsSeq): an unattached or unknown ctx reads as "nothing yet".
+    try {
+        auto* c = static_cast<HostCtx*>(ctx);
+        if (c == nullptr || !c->core) { return 0u; }
+        return c->core->eventsSeq();
+    } catch (...) {
+        raiseHostFault();
+        return 0u;
+    }
+}
 std::int32_t l1SettingsGet(void* ctx, const char* key, char* buf, std::size_t cap) {
     return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) {
         return a.settingsGet(c, key, buf, cap);
@@ -670,6 +687,9 @@ void fillLevel1(HostCtx& c) {
     t.settings_seq = &l1SettingsSeq;
     t.set_schedule_hint = &l1SetScheduleHint;
     t.clear_schedule_hints = &l1ClearScheduleHints;
+    t.post_event = &l1PostEvent;
+    t.read_events = &l1ReadEvents;
+    t.events_seq = &l1EventsSeq;
 }
 
 }  // namespace

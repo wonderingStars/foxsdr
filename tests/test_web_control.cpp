@@ -67,6 +67,31 @@ void testAcceptsEachField() {
     CHECK(!r.running.has_value());
 }
 
+// The user's mute (feat/web-bookmarks): a strict JSON boolean, and a request that carries only it is not empty.
+void testMutedField() {
+    ControlRequest r;
+    std::string error;
+    CHECK(parseControlRequest("{\"muted\":true}", r, error));
+    CHECK(r.muted.has_value() && *r.muted);
+    CHECK(!r.empty());
+    CHECK(parseControlRequest("{\"muted\":false}", r, error));
+    CHECK(r.muted.has_value() && !*r.muted);
+    CHECK(!r.volume.has_value());  // the mute is not the volume
+    // Together with the volume, the page's two audio controls in one request.
+    CHECK(parseControlRequest("{\"muted\":true,\"volume\":0.3}", r, error));
+    CHECK(r.muted.value_or(false) && r.volume.value_or(-1.0) == 0.3);
+    // Absent means absent.
+    CHECK(parseControlRequest("{\"volume\":0.3}", r, error));
+    CHECK(!r.muted.has_value());
+    // Not a boolean: refused, and the request is left empty.
+    for (const char* bad : {"{\"muted\":1}", "{\"muted\":0}", "{\"muted\":\"true\"}", "{\"muted\":null}", "{\"muted\":[true]}"}) {
+        ControlRequest q;
+        CHECK(!parseControlRequest(bad, q, error));
+        CHECK(!error.empty());
+        CHECK(q.empty());
+    }
+}
+
 void testEveryModeName() {
     // Every mode the DSP layer names must be accepted, and must come back as
     // the same mode. This is what stops the browser's vocabulary drifting from
@@ -432,6 +457,7 @@ void testFailureLeavesNothingBehind() {
 
 int main() {
     testAcceptsEachField();
+    testMutedField();
     testEveryModeName();
     testRejectsBadModes();
     testRejectsMalformedBodies();

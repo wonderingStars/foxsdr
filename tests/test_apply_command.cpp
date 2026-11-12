@@ -446,6 +446,30 @@ struct AppWindowTestAccess {
     static bool nbPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.noiseBlankerEnabled(); }); }
     static float nbThresholdRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->nbThresholdDb_; }); }
     static float nbThresholdPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.noiseBlankerThresholdDb(); }); }
+    static int toneKindRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->toneKind_; }); }
+    static int toneKindPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.toneKind(); }); }
+    static double toneHzRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->toneHz_; }); }
+    static double toneHzPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.toneHz(); }); }
+    static int toneCodeRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->toneCode_; }); }
+    static int toneCodePipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.toneDcsDigits(); }); }
+    static bool toneRemoveRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->toneRemove_; }); }
+    static bool toneRemovePipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.toneRemove(); }); }
+    static bool notchSlotOn(AppWindow& a, int i) { return rd(a, [&] { return th::engine(a).receivers_[0]->manualNotch_[static_cast<std::size_t>(i)].on; }); }
+    static double notchSlotHz(AppWindow& a, int i) { return rd(a, [&] { return th::engine(a).receivers_[0]->manualNotch_[static_cast<std::size_t>(i)].hz; }); }
+    static int notchBankPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.manualNotchCount(); }); }
+    static double cwPitchRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->cwPitchHz_; }); }
+    static double cwPitchPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.cwPitchHz(); }); }
+    static bool nsqRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->noiseSquelchOn_; }); }
+    static double nsqThrRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->noiseSquelchThresholdDb_; }); }
+    static bool nsqPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.noiseSquelchOn(); }); }
+    static double eqRx(AppWindow& a, int i) { return rd(a, [&] { return th::engine(a).receivers_[0]->eqDb_[static_cast<std::size_t>(i)]; }); }
+    static int hpRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->audioHpHz_; }); }
+    static int lpRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->audioLpHz_; }); }
+    static int nrMethodRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->nrMethod_; }); }
+    static int nrMethodPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.noiseReductionMethod(); }); }
+    static int meterUnitsRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->meterUnits_; }); }
+    static std::size_t calDevices(AppWindow& a) { return rd(a, [&] { return th::engine(a).smeterCal_.size(); }); }
+    static bool calMeasuring(AppWindow& a) { return rd(a, [&] { return th::engine(a).smeterMeasure_.active; }); }
     static bool notch(AppWindow& a) {
         return rd(a, [&] { return th::engine(a).notchEnabled_ && th::engine(a).pipeline_.notchEnabled(); });
     }
@@ -1171,6 +1195,149 @@ void receiverOps(AppWindow& a) {
         const FoxCommandResult hi = A::apply(a, on);
         CHECK(ok(hi) && (hi.flags & FOXAPI_RESULT_CLAMPED) != 0u && A::nbThresholdRx(a) == 30.0f && A::nbThresholdPipe(a) == 30.0f);
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_NB, 0, 0))));
+    }
+
+    covering(FOXAPI_OP_SET_TONE_SQUELCH);
+    {
+        CHECK(A::toneKindRx(a) == 0 && A::toneKindPipe(a) == 0 && A::toneHzRx(a) == 0.0);
+        FoxCommand tq = ints(FOXAPI_OP_SET_TONE_SQUELCH, FOXAPI_TONE_CTCSS, 1);
+        tq.num[0] = 123.0;
+        CHECK(ok(A::apply(a, tq)));
+        CHECK(A::toneKindRx(a) == 1 && A::toneKindPipe(a) == 1 && A::toneHzRx(a) == 123.0 && A::toneHzPipe(a) == 123.0);
+        // the kind alone keeps the last values
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_TONE_SQUELCH, FOXAPI_TONE_OFF, 0))));
+        CHECK(A::toneKindRx(a) == 0 && A::toneKindPipe(a) == 0 && A::toneHzRx(a) == 123.0);
+        // DCS with its values
+        FoxCommand dcs = ints(FOXAPI_OP_SET_TONE_SQUELCH, FOXAPI_TONE_DCS, 1);
+        dcs.num[1] = 754.0;
+        dcs.num[2] = 2.0;
+        CHECK(ok(A::apply(a, dcs)));
+        CHECK(A::toneKindPipe(a) == 2 && A::toneCodeRx(a) == 754 && A::toneCodePipe(a) == 754);
+        // the refusals leave everything as it was
+        FoxCommand bad = tq;
+        bad.num[0] = 99.0;
+        CHECK(refused(A::apply(a, bad), FOXAPI_OUT_OF_RANGE));
+        bad = dcs;
+        bad.num[1] = 24.0;
+        CHECK(refused(A::apply(a, bad), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_TONE_SQUELCH, 3, 0)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::toneKindRx(a) == 2 && A::toneCodeRx(a) == 754 && A::toneHzRx(a) == 0.0);   // (the values that came with the DCS command replaced all three: the tone is "any" again)
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_TONE_SQUELCH, FOXAPI_TONE_OFF, 0))));
+    }
+
+    covering(FOXAPI_OP_SET_NOTCH_SLOT);
+    {
+        CHECK(!A::notchSlotOn(a, 4) && A::notchBankPipe(a) == 0);
+        FoxCommand n = ints(FOXAPI_OP_SET_NOTCH_SLOT, 1, 1);
+        n.num[0] = 1800.0;
+        n.num[1] = 40.0;
+        n.num[2] = 4.0;
+        CHECK(ok(A::apply(a, n)));
+        CHECK(A::notchSlotOn(a, 4) && A::notchSlotHz(a, 4) == 1800.0 && A::notchBankPipe(a) == 1);
+        n.num[0] = 5.0;   // clamped to 20 Hz and said so
+        const FoxCommandResult lo = A::apply(a, n);
+        CHECK(ok(lo) && (lo.flags & FOXAPI_RESULT_CLAMPED) != 0u && A::notchSlotHz(a, 4) == 20.0);
+        n.num[2] = 10.0;
+        CHECK(refused(A::apply(a, n), FOXAPI_OUT_OF_RANGE));
+        n.num[2] = 4.0;
+        n.ival[0] = 0;
+        n.ival[1] = 0;
+        CHECK(ok(A::apply(a, n)));
+        CHECK(!A::notchSlotOn(a, 4) && A::notchBankPipe(a) == 0);
+    }
+
+    covering(FOXAPI_OP_SET_EQ_BAND);
+    covering(FOXAPI_OP_SET_AUDIO_FILTERS);
+    {
+        CHECK(A::eqRx(a, 5) == 0.0 && A::hpRx(a) == 0 && A::lpRx(a) == 0);
+        CHECK(ok(A::apply(a, [&] { FoxCommand c = ints(FOXAPI_OP_SET_EQ_BAND, 5, 0); c.num[0] = -7.5; return c; }())));
+        CHECK(A::eqRx(a, 5) == -7.5);
+        const FoxCommandResult hi = A::apply(a, [&] { FoxCommand c = ints(FOXAPI_OP_SET_EQ_BAND, 5, 0); c.num[0] = 30.0; return c; }());
+        CHECK(ok(hi) && (hi.flags & FOXAPI_RESULT_CLAMPED) != 0u && A::eqRx(a, 5) == 12.0);
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_EQ_BAND, 8, 0)), FOXAPI_OUT_OF_RANGE));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_AUDIO_FILTERS, 300, 6000))));
+        CHECK(A::hpRx(a) == 300 && A::lpRx(a) == 6000);
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_AUDIO_FILTERS, 200, 0)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::hpRx(a) == 300);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_AUDIO_FILTERS, 0, 0))));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_EQ_BAND, 5, 0))));
+    }
+
+    covering(FOXAPI_OP_SET_NOISE_SQUELCH);
+    {
+        CHECK(!A::nsqRx(a) && !A::nsqPipe(a) && A::nsqThrRx(a) == -30.0);
+        FoxCommand n = ints(FOXAPI_OP_SET_NOISE_SQUELCH, 1, 1);
+        n.num[0] = -42.0;
+        n.num[1] = 150.0;
+        CHECK(ok(A::apply(a, n)));
+        CHECK(A::nsqRx(a) && A::nsqPipe(a) && A::nsqThrRx(a) == -42.0);
+        n.num[0] = 3.0;
+        CHECK(refused(A::apply(a, n), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::nsqThrRx(a) == -42.0);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_NOISE_SQUELCH, 0, 0))));
+        CHECK(!A::nsqRx(a) && !A::nsqPipe(a) && A::nsqThrRx(a) == -42.0);
+    }
+
+    covering(FOXAPI_OP_SET_CW_PITCH);
+    {
+        CHECK(A::cwPitchRx(a) == 700.0 && A::cwPitchPipe(a) == 700.0);
+        CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_CW_PITCH, 550.0))));
+        CHECK(A::cwPitchRx(a) == 550.0 && A::cwPitchPipe(a) == 550.0);
+        CHECK(refused(A::apply(a, num(FOXAPI_OP_SET_CW_PITCH, 299.0)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, num(FOXAPI_OP_SET_CW_PITCH, 1201.0)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::cwPitchRx(a) == 550.0);
+        CHECK(ok(A::apply(a, num(FOXAPI_OP_SET_CW_PITCH, 700.0))));
+    }
+
+    covering(FOXAPI_OP_SET_NR_METHOD);
+    {
+        CHECK(A::nrMethodRx(a) == 0 && A::nrMethodPipe(a) == 0);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_NR_METHOD, FOXAPI_NR_LINE))));
+        CHECK(A::nrMethodRx(a) == 2 && A::nrMethodPipe(a) == 2);
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_NR_METHOD, 3)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_NR_METHOD, -1)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::nrMethodRx(a) == 2);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_NR_METHOD, FOXAPI_NR_STANDARD))));
+        CHECK(A::nrMethodPipe(a) == 0);
+    }
+
+    covering(FOXAPI_OP_SET_METER_UNITS);
+    {
+        CHECK(A::meterUnitsRx(a) == 0);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_METER_UNITS, FOXAPI_METER_DBM))));
+        CHECK(A::meterUnitsRx(a) == 2);
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_METER_UNITS, 3)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_METER_UNITS, -1)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::meterUnitsRx(a) == 2);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_METER_UNITS, FOXAPI_METER_DBFS))));
+        CHECK(A::meterUnitsRx(a) == 0);
+    }
+
+    covering(FOXAPP_OP_CAL_MEASURE);
+    covering(FOXAPP_OP_CAL_CLEAR);
+    {
+        // The local path: the refusals (a level outside -150..+30 dBm, a band that is not one, nothing to clear); the measurement itself needs a running radio and 3 s of
+        // passes, which test_engine_api_smeter holds.
+        FoxCommand m = ints(FOXAPP_OP_CAL_MEASURE, 0, 0);
+        m.num[0] = 31.0;
+        CHECK(refused(A::apply(a, m), FOXAPI_OUT_OF_RANGE));
+        m.num[0] = -73.0;
+        m.ival[0] = 1;
+        m.num[1] = 5.0e6;
+        m.num[2] = 4.0e6;
+        CHECK(refused(A::apply(a, m), FOXAPI_OUT_OF_RANGE));
+        CHECK(!A::calMeasuring(a) && A::calDevices(a) == 0);
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_CAL_CLEAR, 0, 0)), FOXAPI_NOT_FOUND));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_CAL_CLEAR, 1, 0)), FOXAPI_NOT_FOUND));
+    }
+
+    covering(FOXAPI_OP_SET_TONE_REMOVE);
+    {
+        CHECK(!A::toneRemoveRx(a) && !A::toneRemovePipe(a));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_TONE_REMOVE, 1, 0))));
+        CHECK(A::toneRemoveRx(a) && A::toneRemovePipe(a));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_TONE_REMOVE, 0, 0))));
+        CHECK(!A::toneRemoveRx(a) && !A::toneRemovePipe(a));
     }
 
     covering(FOXAPP_OP_SET_NR_STRENGTH);
@@ -2303,6 +2470,37 @@ void scheduleOps(AppWindow& a) {
         CHECK(ok(A::apply(a, ints(FOXAPP_OP_SCHEDULE_REMOVE, id))));
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_SCHEDULE_REMOVE, id)), FOXAPI_NOT_FOUND));
     }
+}
+
+// MACROS (engine wiring W2; src/engine/engine_macros.cpp). The profile this test runs in has no macro file, so there are no macros: an unknown name is NOT_FOUND, a stop with
+// nothing running is NO_CHANGE, and a reload of an absent file is fine. The playing of steps, the refusals of a bad file and the REMOTE denial are tests/test_engine_api_macros.cpp's.
+void macroOps(AppWindow& a) {
+    covering(FOXAPP_OP_MACRO_RELOAD);
+    CHECK(ok(A::apply(a, text(FOXAPP_OP_MACRO_RELOAD, ""))));
+    covering(FOXAPP_OP_MACRO_RUN);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_MACRO_RUN, "nonesuch")), FOXAPI_NOT_FOUND));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_MACRO_RUN, "")), FOXAPI_BAD_ARGUMENT));
+    covering(FOXAPP_OP_MACRO_STOP);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_MACRO_STOP, "")), FOXAPI_NO_CHANGE));
+    // THE FREQUENCY LOCK (FOXAPP_OP_RADIO_LOCK): lock, a tune is refused, a repeat is NO_CHANGE, unlock. (The whole set of refused commands, the per-radio rule and the REMOTE denial are tests/test_engine_api_lock.cpp's.)
+    covering(FOXAPP_OP_RADIO_LOCK);
+    CHECK(ok(A::apply(a, ints(FOXAPP_OP_RADIO_LOCK, 1))));
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_RADIO_LOCK, 1)), FOXAPI_NO_CHANGE));
+    CHECK(refused(A::apply(a, num(FOXAPI_OP_SET_FREQUENCY, 100.0e6)), FOXAPI_DENIED));
+    CHECK(ok(A::apply(a, ints(FOXAPP_OP_RADIO_LOCK, 0))));
+    // THE RECORDING FILE-NAME TEMPLATE (FOXAPP_OP_SET_RECORD_NAME; the take naming itself is tests/test_engine_api_recname.cpp's): a refused one changes nothing, a good one is kept, the same again is NO_CHANGE,
+    // and "" puts the default names back (the profile this test runs in is a scratch one).
+    covering(FOXAPP_OP_SET_RECORD_NAME);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SET_RECORD_NAME, "a:b")), FOXAPI_BAD_ARGUMENT));
+    CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_RECORD_NAME, "{mode}/{date}"))));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SET_RECORD_NAME, "{mode}/{date}")), FOXAPI_NO_CHANGE));
+    CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_RECORD_NAME, ""))));
+    // THE STEREO SYSTEM (FOXAPP_OP_SET_STEREO_SYSTEM; the decoding itself is tests/test_pipeline_oirt.cpp's and the engine's behaviour tests/test_engine_api_oirt.cpp's).
+    covering(FOXAPP_OP_SET_STEREO_SYSTEM);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 3)), FOXAPI_OUT_OF_RANGE));
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 0)), FOXAPI_NO_CHANGE));   // automatic is the default
+    CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 2))));
+    CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 0))));
 }
 
 void airbandOps(AppWindow& a) {
@@ -3608,6 +3806,7 @@ int main() {
         airbandOps(app);
         markerOps(app);
         scheduleOps(app);
+        macroOps(app);
         transmitterOps(app);
         radioOps(app);
         otherOps(app);

@@ -229,6 +229,7 @@ export component FrequencyCounter inherits Rectangle {
     in property <string> converter-text;                          // "via <converter>": the caption in warning colour
     in property <bool> converter-warn;
     in property <bool> enabled: true;
+    in property <int> dot-style: 0;                               // how the figures group: 0 = thousands (1.090.000.000), 1 = MHz.kHz.Hz (1090.000.000: no dot after the GHz figure); slint-gaps.md item 2
     in property <string> tooltip: @tr("Scroll a digit to tune  |  click to type");   // shown under a figure; the host passes the translated text
     out property <bool> editor-focused: input.has-focus;
 
@@ -244,7 +245,8 @@ export component FrequencyCounter inherits Rectangle {
     property <length> pad-x: 8px;
     property <length> pad-y: 2px;
     property <length> dot-w: Math.round(Theme.font-counter-dot / 1px * 0.6) * 1px;
-    property <length> plate-w: 2 * root.bw + 2 * root.pad-x + 10 * Theme.digit-w + 3 * root.dot-w;
+    property <int> dot-count: root.dot-style == 1 ? 2 : 3;
+    property <length> plate-w: 2 * root.bw + 2 * root.pad-x + 10 * Theme.digit-w + root.dot-count * root.dot-w;
     property <length> plate-h: 2 * root.bw + 2 * root.pad-y + Theme.digit-h;
     property <length> unit-h: 12px;
     property <length> caption-h: 12px;
@@ -254,7 +256,7 @@ export component FrequencyCounter inherits Rectangle {
 
     // x of digit i: past the border and padding, i columns, and a dot cell for each of the dots before it
     pure function digit-x(i: int) -> length {
-        return root.bw + root.pad-x + i * Theme.digit-w + ((i >= 1 ? 1 : 0) + (i >= 4 ? 1 : 0) + (i >= 7 ? 1 : 0)) * root.dot-w;
+        return root.bw + root.pad-x + i * Theme.digit-w + ((i >= 1 && root.dot-style == 0 ? 1 : 0) + (i >= 4 ? 1 : 0) + (i >= 7 ? 1 : 0)) * root.dot-w;
     }
 
     width: root.plate-w;
@@ -281,6 +283,7 @@ export component FrequencyCounter inherits Rectangle {
     }
     for g in [1, 4, 7] : Text {
         x: root.digit-x(g) - root.dot-w - 1px; y: root.bw + root.pad-y; width: root.dot-w + 2px; height: Theme.digit-h;   // 2 px wider than the dot: its box was 1 px short of the glyph (docs 6.62)
+        visible: g != 1 || root.dot-style == 0;
         text: ".";
         color: Theme.knob-ring;
         font-family: Theme.font-digits;

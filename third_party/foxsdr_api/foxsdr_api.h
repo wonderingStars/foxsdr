@@ -409,7 +409,62 @@ typedef struct FoxReceiverState {
     double nbThresholdDb;              /* 6..30 dB above the average magnitude */
     double nbBlankedPct;               /* share of the last 100 ms blanked, 0..100; 0 while off or standing down - measured */
     uint32_t nbStandingDown;           /* 1 while the blanker lets everything through because a quarter of the last 100 ms would go - measured */
+    /* ---- 0.3 (tone squelch; docs/API.md 6.24): the CTCSS / DCS squelch of THIS radio. toneKind, toneHz, toneCode, tonePolarity and toneRemove are the radio's
+     * settings and move modeSeq; the detected figures and the two gates are measurements and move nothing. ---- */
+    uint32_t toneKind;                 /* FOXAPI_TONE_* */
+    double toneHz;                     /* the CTCSS tone chosen, Hz; 0 = any tone */
+    uint32_t toneCode;                 /* the DCS code chosen, written as digits (23 for 023); 0 = any code */
+    uint32_t tonePolarity;             /* the DCS polarity chosen: 0 any, 1 normal, 2 inverted */
+    uint32_t toneRemove;               /* 0/1: the high-pass that takes the tone out of the audio is on */
+    double toneDetectedHz;             /* the CTCSS tone locked now, Hz; 0 none - measured */
+    uint32_t toneDetectedCode;         /* the DCS code locked now, as digits; 0 none - measured */
+    uint32_t toneDetectedPolarity;     /* 1 normal, 2 inverted; 0 none - measured */
+    uint32_t toneGate;                 /* 1 while no tone is required or the required tone is present - measured */
+    uint32_t audioGate;                /* 1 while the carrier AND the tone let the audio through (the squelch the listener hears) - measured */
+    /* ---- 0.3 (S-meter units and calibration; docs/API.md 6.19): meterUnits is THIS radio's display choice (FOXAPI_METER_*) and moves modeSeq; the rest are measurements.
+     * signalDb and sMeter stay on dBFS; these say what the level is in dBm and S units, and whether a calibration of the device covers the frequency. ---- */
+    uint32_t meterUnits;               /* FOXAPI_METER_* */
+    double signalDbm;                  /* the level in dBm: calibrated, or the dBFS number standing in as an ESTIMATE (calibrated = 0) - measured */
+    double sUnits;                     /* the level in S units of signalDbm at the tuned frequency: S9 = 9.0, S9+20 dB = 9.333 - measured */
+    uint32_t calibrated;               /* 1 when a calibration of this device covers the tuned frequency - measured */
+    /* ---- 0.3 (noise-reduction method; docs/API.md 6.19): nrMethod is THIS radio's choice (FOXAPI_NR_*) and moves modeSeq; nrMethodActive is the method in use now - measured. ---- */
+    uint32_t nrMethod;                 /* FOXAPI_NR_* */
+    uint32_t nrMethodActive;           /* FOXAPI_NR_* in use now: 0 (standard) while the noise reduction is off, and while the line enhancer is chosen outside CW and RAW - measured */
+    /* ---- 0.3 (manual notch bank; docs/API.md 6.19): up to FOXAPI_NOTCH_SLOTS manual notches on the audio of THIS radio. All three are settings and move modeSeq. ---- */
+    uint32_t notchBankMask;            /* bit i set: slot i is on */
+    double notchBankHz[10];            /* slot i's frequency, Hz (20..21600; the last one set, whether the slot is on or not) */
+    double notchBankWidthHz[10];       /* slot i's -3 dB width, Hz (1..2000) */
+    /* ---- 0.3 (CW pitch; docs/API.md 6.19): the sidetone a carrier on the tuned frequency beats at in CW mode - a setting, moves modeSeq. ---- */
+    double cwPitchHz;                  /* 300..1200 Hz, default 700 */
+    /* ---- 0.3 (FM noise squelch; docs/API.md 6.19): a second gate beside the level squelch, NFM only. noiseSquelchOn, noiseSquelchThresholdDb and noiseSquelchTailMs are settings and
+     * move modeSeq; the level and the gate are measurements. ---- */
+    uint32_t noiseSquelchOn;           /* 0/1 */
+    double noiseSquelchThresholdDb;    /* the gate opens when the discriminator's noise above 5 kHz falls below this, dB re full scale (-90..0; default -30) */
+    double noiseSquelchTailMs;         /* how long the noise must stay above the threshold + 3 dB before the gate closes, 0..2000 ms (default 100) */
+    double noiseSquelchLevelDb;        /* the noise level the gate is judging now, dB re full scale (-200 for silence) - measured */
+    uint32_t noiseSquelchOpen;         /* 1 while the noise gate is open - measured */
+    /* ---- 0.3 (audio equaliser and filters; docs/API.md 6.19): the finished audio of THIS radio. All settings; they move modeSeq. ---- */
+    double eqDb[8];                    /* bass, middle, treble, then the graphic bands 100, 300, 1000, 2500, 5000 Hz: dB, -12..+12, 0 flat */
+    uint32_t audioHighPassHz;          /* 0 off, 100 or 300 */
+    uint32_t audioLowPassHz;           /* 0 off, 2400, 3000 or 6000 */
 } FoxReceiverState;
+#define FOXAPI_EQ_BANDS 8
+#define FOXAPI_NOTCH_SLOTS 10
+
+/* FoxReceiverState::nrMethod and FOXAPI_OP_SET_NR_METHOD ival[0] */
+#define FOXAPI_NR_STANDARD 0u /* the noise reduction as it always was (default) */
+#define FOXAPI_NR_SPECTRAL 1u /* minimum-statistics spectral subtraction (broadband hiss on voice) */
+#define FOXAPI_NR_LINE     2u /* adaptive line enhancer (CW and steady carriers: applied in CW and RAW only; the standard one elsewhere) */
+
+/* FoxReceiverState::meterUnits and FOXAPI_OP_SET_METER_UNITS ival[0] */
+#define FOXAPI_METER_DBFS 0u /* the bar and the number as they always were (default) */
+#define FOXAPI_METER_S    1u /* S units */
+#define FOXAPI_METER_DBM  2u /* dBm */
+
+/* FoxReceiverState::toneKind and FOXAPI_OP_SET_TONE_SQUELCH ival[0] */
+#define FOXAPI_TONE_OFF   0u /* no tone squelch (default) */
+#define FOXAPI_TONE_CTCSS 1u /* open only on a carrier carrying the chosen CTCSS tone (NFM) */
+#define FOXAPI_TONE_DCS   2u /* open only on a carrier carrying the chosen DCS code (NFM) */
 
 
 /* FoxReceiverState::agcMode and FOXAPI_OP_SET_AGC ival[0] */
@@ -562,6 +617,15 @@ typedef struct FoxCommand {
 #define FOXAPI_OP_SET_BAND_FOLLOW   0x0110u /* ival[0]: 0/1 - a retune into another band of the band plan adopts that band's conventional mode (fact.bandPlan.followMode) */
 #define FOXAPI_OP_SET_AGC           0x0111u /* ival[0]: FOXAPI_AGC_* 0..4; ival[1]=1: num[0] is the fixed gain, dB, -20..+40 (set after the mode). Addresses one radio (target) */
 #define FOXAPI_OP_SET_NB            0x0112u /* ival[0]: 0/1; ival[1]=1: num[0] is the blanker threshold, dB above the average, 6..30. Addresses one radio (target) */
+#define FOXAPI_OP_SET_TONE_SQUELCH  0x0113u /* ival[0]: FOXAPI_TONE_*; ival[1]=1: the values follow - num[0]: CTCSS Hz (0 any, else one of the 50), num[1]: DCS code as digits (0 any, else one of the 83), num[2]: DCS polarity 0 any / 1 normal / 2 inverted. Without them the radio's last choice is used. Addresses one radio (target); NFM only */
+#define FOXAPI_OP_SET_METER_UNITS   0x0115u /* ival[0]: FOXAPI_METER_* 0..2: how this radio's level is lettered (the choice is the screen's; the state carries all three). Addresses one radio (target) */
+#define FOXAPI_OP_SET_NR_METHOD     0x0116u /* ival[0]: FOXAPI_NR_* 0..2; the strength is SET_NR's. Addresses one radio (target) */
+#define FOXAPI_OP_SET_NOTCH_SLOT    0x0117u /* num[2]: the slot 0..9; ival[0]: 0/1 on; ival[1]=1: num[0] is the frequency, Hz 20..21600, num[1] the -3 dB width, Hz 1..2000. Addresses one radio (target) */
+#define FOXAPI_OP_SET_CW_PITCH      0x0118u /* num[0]: Hz, 300..1200: where a carrier on the tuned frequency beats in CW mode. Addresses one radio (target) */
+#define FOXAPI_OP_SET_NOISE_SQUELCH 0x0119u /* ival[0]: 0/1; ival[1]=1: num[0] the threshold, dB re full scale -90..0, num[1] the tail, ms 0..2000. NFM only. Addresses one radio (target) */
+#define FOXAPI_OP_SET_EQ_BAND       0x011Au /* ival[0]: the band 0..7 (0 bass, 1 middle, 2 treble, 3..7 the graphic bands 100, 300, 1000, 2500, 5000 Hz); num[0]: dB, -12..+12. Addresses one radio (target) */
+#define FOXAPI_OP_SET_AUDIO_FILTERS 0x011Bu /* ival[0]: high-pass 0 (off), 100 or 300 Hz; ival[1]: low-pass 0 (off), 2400, 3000 or 6000 Hz. Addresses one radio (target) */
+#define FOXAPI_OP_SET_TONE_REMOVE   0x0114u /* ival[0]: 0/1: the high-pass that takes the sub-audible tone out of the audio. Addresses one radio (target) */
 /* Display */
 #define FOXAPI_OP_SET_DISPLAY_RANGE 0x0201u /* num[0]: dbMin, num[1]: dbMax (min span enforced) */
 #define FOXAPI_OP_SET_BAND_PLAN     0x0202u /* text: selection name */

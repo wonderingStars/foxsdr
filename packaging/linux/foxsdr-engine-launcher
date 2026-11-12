@@ -1,0 +1,4 @@
+#!/bin/sh
+# foxsdr-engine - starts the headless FoxSDR engine from its package directory (see foxsdr-launcher).
+self=$(readlink -f "$0")
+exec "$(dirname "$self")/../lib/foxsdr/foxsdr-engine" "$@"

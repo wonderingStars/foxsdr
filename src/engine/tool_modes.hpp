@@ -24,6 +24,7 @@ struct ToolRequest {
     bool soapyCheck = false;    // --soapy-check (hidden: needs hardware)
     bool rtlsdrCheck = false;   // --rtlsdr-check (hidden: needs a WinUSB dongle)
     bool recordCheck = false;   // --record-check (hidden: ~1 s of wall time)
+    bool benchmark = false;     // --benchmark (times the DSP blocks, prints a table; about 10 s of CPU)
     bool toneCheck = false;     // --tone-check (hidden: plays sound)
     double rdsCheckMhz = 0.0;   // --rds-check <MHz> (hidden: needs an RDS station)
 };
@@ -34,9 +35,12 @@ int runSoapyCheck();
 int runToneCheck();
 int runRdsCheck(double centerHz);
 int runRecordCheck();
+// Times the DSP blocks (core/dsp_benchmark.hpp) and prints the table; exit 0 when every item ran, 1 when one threw.
+// `secondsPerItem` is the wall time spent on each item (the command line uses the default).
+int runBenchmark(double secondsPerItem = 0.2);
 
 // The one dispatch: the FIRST requested mode, in the order the checks have
-// always been tried (selftest, soapy, rtlsdr, record, tone, rds), or nullopt when
+// always been tried (selftest, soapy, rtlsdr, record, benchmark, tone, rds), or nullopt when
 // none was requested. `argc`/`argv` are the whole command line, because
 // --rtlsdr-check takes the rest of it (a second argument names the dongle).
 std::optional<int> runToolMode(const ToolRequest& req, int argc, char** argv);

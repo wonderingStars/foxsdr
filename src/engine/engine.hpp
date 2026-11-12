@@ -46,6 +46,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/macros.hpp"
 #include "core/schedule.hpp"
 #include "core/airband_monitor.hpp"
 #include "core/airspy_settings.hpp"
@@ -63,6 +64,7 @@
 #include "core/patch_recordings.hpp"
 #include "core/patch_runner.hpp"
 #include "core/pipeline.hpp"
+#include "core/smeter_cal.hpp"
 #include "core/ppm_correction.hpp"
 #include "core/phase_clock.hpp"
 #include "core/freq_markers.hpp"
@@ -744,6 +746,12 @@ private:
     // The rtl_tcp row's Open key (SELECT_SOURCE "open-rtltcp:rtltcp=<addr>"): the Pluto's recipe, step for step.
     void openRtlTcpAt(const std::string& args);
     void openRtlTcpFromBox();
+    // A KiwiSDR receiver (audio only) as this radio's source: SELECT_SOURCE "open-kiwisdr:<host>[:<port>]" (kiwisdr_source.hpp).
+    void openKiwiAt(const std::string& args);
+    bool radioIsKiwi() const;
+    void adoptKiwiRadio();
+    // The pipeline's channel bandwidth for this radio: the user's, or wide open on a KiwiSDR radio.
+    void applyChannelBandwidth();
     void tuneToBookmark(const cascade::core::Bookmark& b);
     std::uint64_t addBookmarkHere(const std::string& name, const std::string& group = std::string());  // the new bookmark's id
     cascade::core::Scanner::Params scannerParams() const;   // (the list mode's list too: scanTicked_)
@@ -915,6 +923,11 @@ private:
     // drawUi unconditionally, because the runner's buffer is bounded and
     // draining only when the panel is visible would drop output silently.
     void pumpDecoderOutput();
+    // PRIVATE PLUGINS (engine wiring W2; docs/PLUGIN-API.md "Private data"): the plugins whose descriptor carries CASCADE_FLAG_PRIVATE_DATA.
+    // The set is rebuilt from the loaded list on the control pass (refreshPrivatePlugins) and READ FROM ANY THREAD (the image feed's worker
+    // asks while it encodes): a shared immutable vector under a short lock, so a reload never changes what a reader holds.
+    void refreshPrivatePlugins();
+    bool pluginIsPrivate(const std::string& name) const;
     // Rebuilds every decoder instance against the CURRENT source rate and
     // centre frequency. Called after any source change, because both are
     // passed to a decoder's create() and cannot be changed afterwards.
@@ -2431,6 +2444,10 @@ private:
     // Decoded output, newest last, bounded. The panel is a tail, not an
     // archive; the recorder is where a permanent copy belongs.
     std::deque<cascade::core::DecodedLine> decoderLog_;
+    mutable std::mutex privatePluginsMutex_;
+    std::shared_ptr<const std::vector<std::string>> privatePlugins_;
+    // TESTS ONLY (reached through the friend): plugin names treated as private besides the loaded plugins' own flag; empty in a product run.
+    std::vector<std::string> testPrivatePlugins_;
     static constexpr std::size_t kDecoderLogMax = cascade::engine::kDecoderLogMax;
     // THE ONLY MESSAGE COUNT THIS APPLICATION HAS. No decoder plugin reports a
     // message tally over the ABI and the runner keeps none, so the one
@@ -3163,11 +3180,65 @@ private:
     std::atomic<std::int64_t> scheduleClockMs_{0};   // the test hook's clock (unix ms); 0 = the system's
     std::uint64_t scheduleVersion_ = 1;               // moves with any change of the list, a state or a note (the fact block's fingerprint)
     void pumpSchedule();
+    // MACROS (engine_macros.cpp; docs/api-0.3-additions.md 9.34): the model's player, pumped on the Back part of every control pass.
+    void pumpMacros();
+    // THE FREQUENCY LOCK (FOXAPP_OP_RADIO_LOCK, engine wiring W2; Receiver::tuneLocked_): which commands it refuses, and the fingerprint counter of its facts.
+    static bool isTuningCommandOfLock(const FoxCommand& c);
+    // THE STEREO SYSTEM (FOXAPP_OP_SET_STEREO_SYSTEM, engine wiring W2): run once a pass for every radio, under its scope, after its retune is polled.
+    void pollStereoSystem();
+    std::uint64_t stereoSystemVersion_ = 1;
+    // RECORDING FILE NAMES FROM A TEMPLATE (engine_recname.cpp; FOXAPP_OP_SET_RECORD_NAME, engine wiring W2).
+    std::string recordNameFilePath() const;
+    void loadRecordName();
+    std::int32_t applyRecordNameOp(const FoxCommand& c, const std::string& text, std::string& why);
+    void applyRecordName(cascade::core::Recorder::OpenRequest& req);
+    std::string recordNameTemplate_;
+    bool recordNameLoaded_ = false;
+    std::uint64_t recordNameVersion_ = 1;
+    std::string recordNamePathForTest_;   // TESTS ONLY (through the friend): the file to use instead of the per-user folder's
+    std::uint64_t radioLockVersion_ = 1;
+    void loadMacros();
+    std::int32_t applyMacroOp(const FoxCommand& c, const std::string& text, std::string& why);
+    void macroFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    std::string macrosFilePath() const;
+    std::int64_t macroNowMs() const;
+    std::vector<cascade::core::macros::Macro> macros_;
+    cascade::core::macros::Player macroPlayer_;
+    std::string macrosError_;     // the file's refusal, "" when it loaded (or is absent)
+    std::string macroName_;       // the macro that is running, "" when none
+    std::string macroLast_;       // how the last run ended: running / finished / stopped (+ the words)
+    std::uint64_t macroStepsApplied_ = 0;
+    std::uint64_t macroVersion_ = 1;   // moves with any change of the macros, a run or a note (the fact block's fingerprint)
+    bool macrosLoaded_ = false;
+    std::string macrosPathForTest_;                    // TESTS ONLY (through the friend): the file to read instead of the per-user folder's
+    std::atomic<std::int64_t> macroClockMs_{-1};      // TESTS ONLY: the player's clock (ms); negative = the steady clock
     std::int32_t scheduleFromHint(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why);
     std::int64_t scheduleNowMs() const;
     void loadSchedule(const std::vector<cascade::core::sched::Entry>& entries);
     std::vector<cascade::core::sched::Entry> scheduleEntries() const;
     std::int32_t applyScheduleOp(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why);
+    // S-METER IN dBm AND S UNITS, AND ITS CALIBRATION (engine_smeter.cpp; engine wiring lane 1).
+    struct SmeterMeasure {
+        bool active = false;
+        std::size_t slot = 0;
+        std::string key;
+        double knownDbm = 0.0, lo = 0.0, hi = 0.0, startS = 0.0, sum = 0.0, gainDb = 0.0;
+        int n = 0;
+        bool gainIsDb = true;
+    };
+    static constexpr double kSmeterMeasureS = 3.0;
+    std::string smeterKey(const Receiver& r) const;
+    void smeterGain(const Receiver& r, double& gainDb, bool& isDb) const;
+    void smeterReading(const Receiver& r, double dbfs, double frequencyHz, double& dbm, double& sUnits, bool& calibrated) const;
+    std::int32_t applySmeterOp(const FoxCommand& c, FoxCommandResult& res, std::string& why);
+    void pollSmeterCal();
+    void pushAudioEq();   // the selected radio's equaliser bands and audio filters into its pipeline (engine_smeter.cpp)
+    void pushManualNotches();   // the selected radio's ten notch slots into its pipeline (engine_smeter.cpp, beside the other per-radio audio helpers)
+    std::map<std::string, cascade::core::smeter::CalTable> smeterCal_;   // device key -> its calibration (saved: AppConfig::smeterCal)
+    SmeterMeasure smeterMeasure_;
+    std::string smeterState_ = "idle";
+    std::string smeterMessage_;
+    std::uint64_t smeterVersion_ = 1;   // moves with every change of the tables or of the measurement's state (the fact block's fingerprint)
     std::string scheduleRefusal(const cascade::core::sched::Entry& e, std::size_t slot);
     void scheduleBegin(std::uint32_t id, std::int64_t occurrence, std::int64_t nowMs);
     void scheduleStopRun(std::uint32_t id, const std::string& why, bool early);

@@ -487,7 +487,8 @@ int main() {
                                     std::string(name) == "mapWindowY";
                 // perturb() adds a radio with NO stages to manualGainByRadio, and the writer does not write a radio with no stage left (core/config.cpp): the file has
                 // nothing of it to compare, which is the same exception for the same reason (the window's hand-kept list compared the map itself).
-                const bool unwritten = legacy || std::string(name) == "manualGainByRadio";
+                // perturb() also gives eqDb one element: the equaliser is written only as eight gains (anything else is flat), so the file has nothing of it either (engine wiring lane 1).
+                const bool unwritten = legacy || std::string(name) == "manualGainByRadio" || std::string(name) == "eqDb";
                 const bool keeperSees = cascade::engine::EngineService::comparable(base) != cascade::engine::EngineService::comparable(changed);
                 if (!unwritten && keeperSees != !moves) { std::printf("  the keeper's compare and '%s' (moves=%d, sees=%d)\n", name, moves ? 1 : 0, keeperSees ? 1 : 0); }
                 CHECK(unwritten || keeperSees == !moves);

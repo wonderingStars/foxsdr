@@ -63,6 +63,34 @@ int main(int argc, char** argv) {
         c.schedule.push_back(e);
         ok = ConfigStore::save(argv[4], c, err) && ok;   // TCI, UDP AUDIO, SCHEDULE
     }
+    if (argc > 5) {
+        // ENGINE WIRING LANE 1: radio 1 on a KiwiSDR receiver with a tone squelch, radios 2 and 3 with tone squelch settings of their own and one of them on a KiwiSDR receiver
+        c.radios.clear();
+        c.tciEnabled = false;
+        c.udpAudioEnabled = false;
+        c.schedule.clear();
+        c.sourceKind = "kiwisdr";
+        c.nativeArgs = "kiwisdr=rx.example.org:8073";
+        c.toneSquelchKind = 2;
+        c.toneSquelchCode = 754;
+        c.toneSquelchPolarity = 2;
+        c.toneRemove = true;
+        SavedRadio a;
+        a.number = 2;
+        a.sourceKind = "kiwisdr";
+        a.args = "kiwisdr=rx.example.org:8074";
+        a.centerHz = 7.1e6;
+        a.toneSquelchKind = 1;
+        a.toneSquelchHz = 123.0;
+        c.radios.push_back(a);
+        SavedRadio b;
+        b.number = 3;
+        b.sourceKind = "siggen";
+        b.toneSquelchKind = 2;
+        b.toneSquelchCode = 23;
+        c.radios.push_back(b);
+        ok = ConfigStore::save(argv[5], c, err) && ok;   // KIWISDR, TONE SQUELCH
+    }
     std::printf("new writer: %s\n", ok ? "ok" : "FAILED");
     return ok ? 0 : 1;
 }

@@ -2529,6 +2529,115 @@ than the first carry the radio's number in their high bits (`(n - 1) << 48`), so
 * Timed recordings: ops `FOXAPP_OP_SCHEDULE_SET` 0x860C, `_REMOVE` 0x860D, `_ENABLE` 0x860E, `_RUN_NOW` 0x860F, `_SKIP` 0x8610 (LOCAL sessions only), the facts `fact.schedule.count/active/missed/max/next` and `fact.schedule.entry.<id>` (one JSON document per entry), the settings key `schedule`. Full text: API.md 6.23.
 * The settings file gains `tciEnabled tciBindAll tciPort udpAudioEnabled udpAudioHost udpAudioPort udpAudioRadio udpAudioPacketFrames schedule`; a 0.99.104 reader ignores them (`tools/old_reader_probe`).
 
+### 9.25 The web page: the user's mute and live updates (feat/web-bookmarks; docs/feature-records/web-bookmarks.md)
+
+Two additions to the browser page's HTTP routes (`src/net/web_server.cpp`, `web_control.*`). Neither changes the engine API table; one needs a profile line there (below).
+
+**`muted` in `POST /api/control`.** A JSON boolean, strict like the other booleans (`1`, `"true"` and `null` are 400). It is translated to `FOXAPI_OP_SET_MUTED` with `ival[0]` 1 or 0, the op the window's MUTE key sends (`control_ops.cpp`), and it is the user's own mute, not a plugin's (`audioMutedBy`). `GET /api/status` carries it back as `"muted"` (`FOXAPI_RX_MUTED`), so a mute set at the desk shows on the page. **The web session's profile (`kWebProfile`, `fox_engine_api.cpp`) must hold `FOXAPI_OP_SET_MUTED`**, one line, and `test_engine_api_05a` P1 (the profile is the closure of `controlRequestToCommands`, both ways: 38 ops today, 39 with it) must set `muted` in its every-field request; until both are done the engine answers the page's mute `FOXAPI_DENIED`.
+
+**`GET /api/events`: live updates as server-sent events.** `Content-Type: text/event-stream`, chunked, plain HTTP. Same gate as every other route: the session cookie when the binding requires one (401 and no stream otherwise; the bind policy decides who can reach the port at all), and the stream is re-checked against the session store every look, so a sign-out, an expiry or a revoke ends it within `kEventTick`. The stream, in order:
+
+- `retry: 3000` - the browser's reconnect delay (ms), first.
+- `event: status` with one `data:` line, the same JSON `GET /api/status` returns (one line, no embedded line break), when that JSON differs from what this listener last received. The first one is sent at once. The status is read every `kEventTick` (250 ms) on a condition variable, never a sleep and never a spin, so with a signal level that moves on every look it is pushed at up to 4 per second, and for a static radio not at all.
+- `: keep-alive` - a comment line, after `kEventHeartbeat` (15 s) with nothing else sent. It keeps a proxy from closing an idle stream and makes a vanished peer fail a write.
+
+At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTTP worker for as long as it is open (the audio stream's 4 is a separate count); the next is answered `503 {"error":"too many live-update listeners"}`. `WebServer::stop()` wakes every stream and ends it at once: a stop with all four attached took 0 to 1 ms in `test_web_server`, inside the existing budget (`kClientIoTimeout`, `test_shutdown_budget`).
+
+*It is not a heartbeat.* The session's keep-alive stays the authorised `GET /api/status` and nothing else (8.16, API 0.2): a stream held open by a frozen tab must not stand in for a live page, and the remote transmit key is judged from that heartbeat with a 2 s window. The page therefore keeps one `GET /api/status` every 500 ms while the stream is up (4 per second, 250 ms, when it is not) and applies what it returns. The page falls back to the fast poll the moment the stream errors (including a 503 or 401), and retries the stream every 10 s. A client that is not a browser can use `/api/events` for the push and must poll `/api/status` itself if it holds the transmit key.
+
+### 9.26 A KiwiSDR receiver as a radio (engine wiring lane 1; docs/multi-radio-records/engine-wiring-1.md)
+
+* `RADIO_ADD` / `SELECT_SOURCE` text `open-kiwisdr:<host>[:<port>]` opens a KiwiSDR receiver (`src/source/kiwisdr_source.*` over `kiwisdr_client.*`) as a listen-only, audio-only radio: 12 kS/s audio as a real
+  signal through the radio's own chain (demodulator RAW), centre = the receiver's frequency, the mode is the receiver's, the VFO offset stays 0. No op number, no state field. REMOTE sessions are `DENIED`.
+* Facts (LOCAL read like the other radio facts): `fact.radio.<n>.source` = `kiwisdr`; `fact.radio.<n>.kiwi.state` (`idle connecting playing busy password down redirect failed dropped malformed closed`), `.detail`, `.mode`, `.rssi` (dBm, once the receiver has sent a level), `.dropped`. A refusal is `fact.radio.<n>.refusal`.
+* Saved settings: `sourceKind` "kiwisdr" with `nativeArgs` "kiwisdr=host:port" for radio 1, and the same kind and `args` in a `radios` entry; an older reader falls back to the generator for the kind it does not know.
+
+### 9.27 Tone squelch: CTCSS and DCS (engine wiring lane 1, group B; docs/multi-radio-records/engine-wiring-1.md)
+
+* Ops `FOXAPI_OP_SET_TONE_SQUELCH` 0x0113 and `FOXAPI_OP_SET_TONE_REMOVE` 0x0114 (receiver-scoped: `target` addresses a radio; not in the web, CAT or TCI profile). Full text: API.md 6.19 beside the AGC and the blanker.
+* `FoxReceiverState`, appended after `nbStandingDown`: `toneKind toneHz toneCode tonePolarity toneRemove toneDetectedHz toneDetectedCode toneDetectedPolarity toneGate audioGate`. The five settings move `modeSeq`; the rest are measurements.
+* Saved settings: `toneSquelchKind toneSquelchHz toneSquelchCode toneSquelchPolarity toneRemove` for radio 1 and in each `radios` entry; an older reader ignores them.
+
+### 9.28 S-meter units and calibration (engine wiring lane 1, group B; docs/multi-radio-records/engine-wiring-1.md)
+
+* Ops `FOXAPI_OP_SET_METER_UNITS` 0x0115 and the application ops `FOXAPP_OP_CAL_MEASURE` 0x8612 / `FOXAPP_OP_CAL_CLEAR` 0x8613 (receiver-scoped; in no web, CAT or TCI profile). Full text: API.md 6.19.
+* `FoxReceiverState`, appended after `audioGate`: `meterUnits signalDbm sUnits calibrated`. Facts (LOCAL): `fact.smeter.cal.state`, `.message`, `.devices`.
+* Saved settings: `meterUnits` for radio 1 and in each `radios` entry; `smeterCal` (device key -> table text; a text that does not parse is dropped whole at load). An older reader ignores them.
+
+### 9.29 Noise-reduction method (engine wiring lane 1, group C; docs/multi-radio-records/engine-wiring-1.md)
+
+* Op `FOXAPI_OP_SET_NR_METHOD` 0x0116 (receiver-scoped; in no web, CAT or TCI profile). State, appended after `calibrated`: `nrMethod`, `nrMethodActive`. Saved: `nrMethod` for radio 1 and in each `radios` entry. Full text: API.md 6.19.
+
+### 9.30 Manual notch bank (engine wiring lane 1, group C; docs/multi-radio-records/engine-wiring-1.md)
+
+* Op `FOXAPI_OP_SET_NOTCH_SLOT` 0x0117 (receiver-scoped; in no web, CAT or TCI profile). State, appended after `nrMethodActive`: `notchBankMask`, `notchBankHz[10]`, `notchBankWidthHz[10]`. Saved: `notchBank` for radio 1 and in each `radios` entry.
+
+### 9.31 CW pitch (engine wiring lane 1, group C; docs/multi-radio-records/engine-wiring-1.md)
+
+* Op `FOXAPI_OP_SET_CW_PITCH` 0x0118 (receiver-scoped; in no web, CAT or TCI profile). State, appended after `notchBankWidthHz`: `cwPitchHz`. Saved: `cwPitchHz` for radio 1 and in each `radios` entry.
+
+### 9.32 FM noise squelch (engine wiring lane 1, group C; docs/multi-radio-records/engine-wiring-1.md)
+
+* Op `FOXAPI_OP_SET_NOISE_SQUELCH` 0x0119 (receiver-scoped; in no web, CAT or TCI profile). State, appended after `cwPitchHz`: `noiseSquelchOn noiseSquelchThresholdDb noiseSquelchTailMs noiseSquelchLevelDb noiseSquelchOpen`. Saved: the three settings for radio 1 and in each `radios` entry.
+
+### 9.33 Audio equaliser and filters (engine wiring lane 1, group E; docs/multi-radio-records/engine-wiring-1.md)
+
+* Ops `FOXAPI_OP_SET_EQ_BAND` 0x011A and `FOXAPI_OP_SET_AUDIO_FILTERS` 0x011B (receiver-scoped; in no web, CAT or TCI profile). State, appended after `noiseSquelchOpen`: `eqDb[8]`, `audioHighPassHz`, `audioLowPassHz`. Saved: `eqDb`, `audioHighPassHz`, `audioLowPassHz`.
+
+### 9.34 Macros (engine wiring lane 2; src/engine/engine_macros.cpp, core/macros.hpp)
+
+* Ops `FOXAPP_OP_MACRO_RUN` 0x8614 (text: the macro's name), `FOXAPP_OP_MACRO_STOP` 0x8615, `FOXAPP_OP_MACRO_RELOAD` 0x8616. The application's own ops: a REMOTE session is refused them
+  ("the application's own commands are for sessions on this machine"); grant SETTINGS.
+* A macro is a named list of application commands with delays, kept in `macros.json` in the per-user folder (beside the configuration; JSON, `{"version":1,"macros":[{"name","description",
+  "repeat","steps":[{"cmd","num":[<=4],"ival":[<=2],"text","delayMs"}]}]}`). A step names a command by the name `core/app_commands.cpp` gives it (`SET_FREQUENCY`, `SET_MODE`,
+  `RECORD_IQ`, `APP_...`), or the pseudo-steps `WAIT` and `RUN_MACRO` (text: another macro's name). The file is read the first time any macro op asks and again on `MACRO_RELOAD`; it is
+  refused WHOLE on the first error (the message names the macro and step) and then no macro is available. A missing file is no macros and no error.
+* What a step may not be: the model's allow-list is made by subtraction - nothing that transmits or keys a transmitter (`TX_`, `APP_TX_`), grants a plugin a permission, installs or removes a
+  plugin, edits the server or interface configuration, uploads a report, checks for updates or runs a test hook, and not another macro op (`APP_MACRO_`): a macro starts another only through
+  `RUN_MACRO`, which carries the loop protection (no cycles, depth 4, repeat at most 1000 with at least 100 ms a pass, at most 10,000 steps a start, a delay at most 24 h).
+* The steps are applied by the engine's own `applyCommand` on the control pass, with the engine's clock, on the FIRST radio. A step the engine refuses ends the run (the words are in
+  `fact.macro.last`); `NO_CHANGE` (already so) does not. `MACRO_RUN` answers `OK` once started, `NOT_FOUND`, `BUSY` while one runs, `BAD_ARGUMENT` for an empty name or a refused file;
+  `MACRO_STOP` answers `NO_CHANGE` when none runs; `MACRO_RELOAD` is `BUSY` while one runs.
+* Facts (LOCAL sessions): `fact.macro.names` (newline separated), `fact.macro.running`, `fact.macro.last` (`running`, `finished`, `stopped`, or `stopped: ...` with the words),
+  `fact.macro.error`, `fact.macro.steps` (steps applied in the last run).
+
+### 9.35 The frequency lock (engine wiring lane 2; docs/multi-radio-records/slint-gaps.md item 3, the engine half)
+
+* Op `FOXAPP_OP_RADIO_LOCK` 0x8617 (receiver-scoped by `target`, grant SETTINGS, the application's own: a REMOTE session is refused it): `ival[0]` 1 locks the radio's FREQUENCY, 0 unlocks. `NO_CHANGE` when it
+  is already so; `NO_DEVICE` for a radio the engine does not have. Not saved: a restart unlocks (the window keeps its own lock lamp and sends the op with it).
+* While a radio is locked the engine refuses, with `FOXAPI_DENIED` ("this radio's frequency is locked"), every tuning command aimed at it, from any session: `SET_CENTRE`, `SET_FREQUENCY`,
+  `SET_VFO_OFFSET`, `STEP_TUNE`, `BOOKMARK_TUNE`, `PLUGIN_PRESET`, `VFO_TO_ABSOLUTE`, `SET_VFO_OFFSET_FREE`, `USER_PRESET_APPLY`, a list scan start (`SCANNER_LIST` ival 2), an air-band listen / next
+  block / tune one, a `SCANNER_RUN` that starts - the same set as the window's own lock. Every other way a retune reaches the source goes through `Engine::retuneSourceHz`, which is a no-op on a
+  locked radio: a running scan's next step, a plugin's legacy `request_tune`. So a plugin, the web page and CAT cannot move a locked radio.
+* Not tuning, so still allowed on a locked radio: mode, bandwidth, volume, squelch, stop and start, the scanner's stop. `DECODER_START` applies a preset on the engine's own side and is not in the set
+  (as for the window's lock: what can still move a locked radio).
+* `fact.radio.<n>.locked` is `"1"` or `"0"` for every radio that exists; the fact fingerprint moves with it.
+
+### 9.36 Recording file names from a template (engine wiring lane 2; src/engine/engine_recname.cpp, core/rec_naming.hpp)
+
+* Op `FOXAPP_OP_SET_RECORD_NAME` 0x8618 (text: the template; grant SETTINGS; the application's own, so a REMOTE session is refused). One template for every take, kept in `record-name.txt` in the
+  per-user folder (beside the configuration), read the first time a pass builds the facts or a take starts. `""` clears it: takes are named as they always were.
+* Tokens: `{date}` `{time}` `{datetime}` `{year}` `{month}` `{day}` `{hour}` `{min}` `{sec}` `{ms}` `{tz}` `{freq}` (whole Hz) `{freq_khz}` `{freq_mhz}` (trailing zeros trimmed) `{mode}` `{radio}` (the radio's label)
+  `{bookmark}` (reads `unknown`: a take does not know which bookmark it is on) `{counter}` `{counter:N}`; `{{` and `}}` are literal braces; `/` separates up to three folders below the recordings folder
+  (made on the disk worker like the file); the extension `.wav` is added. The time tokens read the local clock.
+* A template is checked when it is SET, by expanding it for a sample take: a forbidden character (`< > : " | ? *`, control characters), a leading separator or drive, `.` / `..`, an empty component, a component
+  ending in a dot or space, a reserved device name, an unknown token, an unclosed or stray brace, a bad counter width, more than three folders or a name over the length limits is `BAD_ARGUMENT` with the model's
+  words, and the template in force does not change. The same template again is `NO_CHANGE`. Values that come from the radio at run time (a label with a `/`) have their forbidden characters replaced by `_`.
+* The take is created exclusively on the disk worker as before: a name that exists is never opened over (it becomes `name-2.wav`). If an expansion cannot be made at a take's start the default name is used and
+  the log says so. `fact.record.nameTemplate` (LOCAL) reads the template back. Not done: rollover, one file per transmission, FLAC (other parts of the same model lane).
+
+### 9.37 OIRT stereo (engine wiring lane 2; dsp/oirt_stereo.hpp, Pipeline::setStereoSystem, Engine::pollStereoSystem)
+
+* Op `FOXAPP_OP_SET_STEREO_SYSTEM` 0x8619 (receiver-scoped by `target`, grant SETTINGS, the application's own, so a REMOTE session is refused): which composite decoder the radio's WFM mode runs. `ival[0]`: 0 =
+  AUTOMATIC (the default: OIRT polar modulation while the tuned frequency is inside 65.8 to 74 MHz, both edges in; the pilot-tone system everywhere else), 1 = the pilot-tone system always, 2 = OIRT always.
+  Anything else is `OUT_OF_RANGE`; the same value again is `NO_CHANGE`; `NO_DEVICE` for a radio the engine does not have. Not saved: a restart returns to automatic.
+* `fact.radio.<n>.stereo.system` reads `auto` / `pilot` / `oirt` (the choice); `fact.radio.<n>.stereo.decoder` reads `pilot` / `oirt` (the decoder in the path now: `oirt` only in WFM at a channel rate of 100 kHz or
+  more, the least the decoder can decode at; in any other mode no composite decoder runs and it reads `pilot`).
+* The pipeline feeds the OIRT decoder the discriminator scaled so +-1 is 50 kHz (`Pipeline::kOirtMaxDeviationHz`, the OIRT system's maximum deviation: UNVERIFIED against the standard's table, which this lane did not
+  open; a transmitter at another deviation shifts the lamp threshold proportionally and leaves separation unchanged, as the model's record says). The stereo lamp (`FOXAPI_RX_*` pilot lock / stereo active, and the pipeline's
+  `pilotLocked`, `stereoActive`) is the OIRT carrier lock; `pilotLevel` is the carrier's level against its nominal 20 % (about 1 for a standard transmission).
+* The default is unchanged for every frequency outside the band, and the engine makes no change at all unless the tuned frequency is inside 65.8 to 74 MHz or the user chose.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

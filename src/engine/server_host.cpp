@@ -271,6 +271,7 @@ void ServerHost::attach(Providers p) {
     if (p.tciBackend) { tciServer_.setBackendOpener(std::move(p.tciBackend)); }
     if (p.udpReader) { udpReader_ = std::move(p.udpReader); }
     if (p.pollImages) { images_.setPoll(std::move(p.pollImages)); }
+    if (p.isPrivatePlugin) { images_.setPrivate(std::move(p.isPrivatePlugin)); }
 }
 
 // ---- the worker ---------------------------------------------------------------------------------------------------------------------

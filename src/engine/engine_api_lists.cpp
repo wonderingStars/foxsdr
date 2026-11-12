@@ -11,6 +11,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -33,6 +34,7 @@
 #include "core/soundcard_panel.hpp"
 #include "net/web_policy.hpp"
 #include "source/airspy_source.hpp"
+#include "source/kiwisdr_source.hpp"
 #include "source/rtlsdr_source.hpp"
 #include "source/rx888_source.hpp"
 #include "source/soundcard_source.hpp"
@@ -199,7 +201,12 @@ std::uint64_t Engine::apiListsFingerprint() {
     // damaged or unsaved file; both from members, nothing allocates.
     f.value(freqMarkers_.version());
     f.value(freqMarkers_.size());
+    f.value(smeterVersion_);   // the S-meter calibration's tables and its measurement (engine_smeter.cpp)
     f.value(scheduleVersion_);   // the timed recordings: any change of the list, a state or a note (engine_schedule.cpp)
+    f.value(macroVersion_);      // the macros: the file, a run, a note (engine_macros.cpp)
+    f.value(radioLockVersion_);  // the frequency lock of every radio (FOXAPP_OP_RADIO_LOCK)
+    f.value(recordNameVersion_); // the recording file-name template (FOXAPP_OP_SET_RECORD_NAME)
+    f.value(stereoSystemVersion_);  // the stereo system of every radio (FOXAPP_OP_SET_STEREO_SYSTEM)
     f.text(markerError_);
     // The DSP chain's input rate (API 0.3 8.5, fact.input.rateHz): the source's rate
     // unless the chain refused a change of it, and then the one the display is
@@ -406,6 +413,8 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(rx().deviceAdcSwitchesPresent_);
     f.value(rx().deviceDither_);
     f.value(rx().deviceRandomiser_);
+    f.value(rx().deviceOffsetTuningPresent_);
+    f.value(rx().deviceOffsetTuning_);
     f.value(biasTeePanel_.present);
     f.value(biasTeePanel_.shown);
     for (const auto& c : converters_) {
@@ -580,8 +589,15 @@ std::uint64_t Engine::apiListsFingerprint() {
         f.text(radioStateWord(n));
         // (stage 4) what the other radio facts say: the route and the device the radio holds move the block too.
         f.value(receivers_[n - 1u]->audioRoute_);
+        f.value(receivers_[n - 1u]->pipeline_.oirtActive());   // (fact.radio.<n>.stereo.decoder follows the pipeline's own state, which no command moves)
         f.text(receivers_[n - 1u]->claimedKey_);
         f.text(receivers_[n - 1u]->refusal_);
+        // (a KiwiSDR radio's own facts: its state and mode words, and its level in 3 dB steps so a moving signal does not rebuild the block every pass)
+        if (const auto* kiwi = dynamic_cast<const cascade::source::KiwiSdrSource*>(receivers_[n - 1u]->device_)) {
+            f.text(kiwi->stateWord());
+            f.text(kiwi->serverMode());
+            f.value(kiwi->haveSmeter() ? static_cast<int>(std::floor(kiwi->rssiDbm() / 3.0)) : 0);
+        }
         {
             // (stage 7) the device's tunable range: asked while it is unknown, forgotten with the device
             Receiver& rr = *receivers_[n - 1u];
@@ -906,6 +922,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // "known and empty" is told from NOT_FOUND - and the command keys of the loaded ones. The facts are keyed by
     // the module file name (PLUGINS' detail): the table's reader takes the leaf from the right.
     fact("plugin.dir", pluginDir_, true);
+    fact("plugin.markerLimit", std::to_string(CASCADE_MAX_MARKERS_PER_PLUGIN));   // the marks one plugin may have set at once (plugin_abi.h; 256 from 0.99.109, it was 64)
     // THE START NOTICES (plugin containment P1): one line a plugin the crash-loop breaker acted on at this start, "<run id>\t<version>\t<strikes>\t
     // <permanent 1/0>\t<phase word>" - what the window says once ("X faulted last session - started without it"). Empty when it acted on none.
     // And whether this is safe mode (every plugin refused). Names a plugin by its run id, which is its file name less its version: local only.
@@ -1173,6 +1190,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             b.deviceOptions.emplace_back("dither", rx().deviceDither_);
             b.deviceOptions.emplace_back("randomiser", rx().deviceRandomiser_);
         }
+        if (rx().deviceOffsetTuningPresent_) { b.deviceOptions.emplace_back("offset_tuning", rx().deviceOffsetTuning_); }
     }
     b.serialPorts = serialPorts_;
     buildApiListsSource(b);
@@ -1336,6 +1354,13 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // stopped, faulted, lent), the device it holds ("" on the generator or a file: the key a patch Radio node would name), its label, its audio route
     // (both, left, right, none: only "both" until slots 1 and up carry audio) and the decoder plugins running on it, their module files separated by commas.
     scheduleFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // (LOCAL: a recording plan is the operator's)
+    macroFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // (LOCAL: a macro is the operator's)
+    // THE S-METER CALIBRATION (engine wiring lane 1; LOCAL: a device's key can name a serial number): what the last measurement did, and how many devices hold a calibration.
+    if (!recordNameLoaded_) { loadRecordName(); }   // (the file is read once, here or at the first take, whichever asks first)
+    fact("record.nameTemplate", recordNameTemplate_, true);   // (LOCAL: a file-name template can carry a person's own words)
+    fact("smeter.cal.state", smeterState_, true);
+    fact("smeter.cal.message", smeterMessage_, true);
+    fact("smeter.cal.devices", std::to_string(smeterCal_.size()), true);
     fact("radio.count", std::to_string(receiverCount()));
     fact("radio.max", std::to_string(kMaxReceivers));
     fact("radio.solo", std::to_string(soloRadio_));   // the radio heard alone, 0 = nobody (RADIO_SOLO's read-back; multi-radio stage 5 addition)
@@ -1356,6 +1381,12 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         if (!receiverLive(n)) { continue; }
         const std::string pre = "radio." + std::to_string(n) + ".";
         fact(pre + "state", radioStateWord(n));
+        fact(pre + "locked", receivers_[n - 1u]->tuneLocked_ ? "1" : "0");
+        {
+            const int sys = receivers_[n - 1u]->stereoSystem_;
+            fact(pre + "stereo.system", sys == 1 ? "pilot" : (sys == 2 ? "oirt" : "auto"));
+            fact(pre + "stereo.decoder", receivers_[n - 1u]->pipeline_.oirtActive() ? "oirt" : "pilot");
+        }
         {
             SlotScope scope(this, static_cast<std::size_t>(n) - 1u);
             fact(pre + "device", n == 1u ? patchReceiverRadioKey()
@@ -1363,6 +1394,20 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             fact(pre + "label", radioLabel());
             // WHAT KIND OF SOURCE THIS RADIO IS ON (stage 7): "siggen", "file", "pluto", "rtltcp", "soapy" or a native driver's key; the generator while a source is still opening.
             fact(pre + "source", rx().sourceKind_);
+            // A KIWISDR RADIO (engine wiring lane 1): what the receiver is doing, in the client's words, never its address. state is one of idle, connecting, playing, busy, password,
+            // down, redirect, failed, dropped, malformed, closed; mode is the receiver's mode word; rssi (dBm, only once the receiver has sent a level) and dropped (audio samples
+            // the engine could not take in time).
+            if (const auto* kiwi = dynamic_cast<const cascade::source::KiwiSdrSource*>(rx().device_)) {
+                fact(pre + "kiwi.state", kiwi->stateWord());
+                fact(pre + "kiwi.detail", kiwi->stateSentence());
+                fact(pre + "kiwi.mode", kiwi->serverMode());
+                if (kiwi->haveSmeter()) {
+                    char rssi[32];
+                    std::snprintf(rssi, sizeof(rssi), "%.1f", kiwi->rssiDbm());
+                    fact(pre + "kiwi.rssi", rssi);
+                }
+                fact(pre + "kiwi.dropped", std::to_string(kiwi->droppedSamples()));
+            }
             // THE TUNABLE RANGE of the open device, "<lowest>,<highest>" centre frequency in Hz exactly as the driver reports it (DeviceSource::frequencyRangeHz, asked once the device is
             // open and kept); absent for the generator, an I/Q file (its centre is nominal and takes any value) and a device that reports none. (stage 7)
             if (rx().rangeKnown_) {

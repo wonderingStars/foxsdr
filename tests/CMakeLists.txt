@@ -52,6 +52,26 @@ set_target_properties(radio_probe_fixture PROPERTIES
     PREFIX ""
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_radio_probe/$<CONFIG>"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_radio_probe/$<CONFIG>")
+# THE EXTIO HELPER AND ITS STAND-IN DRIVERS (row R8, docs/feature-records/unblocked-desk.md): the helper process that loads an ExtIO DLL for FoxSDR, and one
+# stand-in driver DLL per behaviour (a tone, a crash, a hang, a flood, nonsense sizes ...) written for tests/test_extio.cpp. The stand-ins misbehave on
+# purpose and live in a directory of their own (fixture_extio/). Windows only.
+if(WIN32)
+    add_subdirectory("${CMAKE_SOURCE_DIR}/tools/extio_helper" "${CMAKE_CURRENT_BINARY_DIR}/extio_helper")
+    set(CASCADE_EXTIO_MODES tone:0 crashcb:1 crashlo:2 hangstart:3 hanglo:4 flood:5 sizeodd:6 sizehuge:7 sizeneg:8 sizezero:9 badptr:10 noexports:11
+        initfalse:12 soundcard:13 silent:14 floatbad:15 status:16 badtype:17)
+    foreach(_m ${CASCADE_EXTIO_MODES})
+        string(REPLACE ":" ";" _p "${_m}")
+        list(GET _p 0 _n)
+        list(GET _p 1 _v)
+        add_library(extio_standin_${_n} MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/extio_standin.cpp")
+        target_compile_definitions(extio_standin_${_n} PRIVATE STANDIN_MODE=${_v})
+        set_target_properties(extio_standin_${_n} PROPERTIES
+            PREFIX "" OUTPUT_NAME "ExtIO_${_n}"
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_extio/$<CONFIG>"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_extio/$<CONFIG>")
+        list(APPEND CASCADE_EXTIO_STANDINS extio_standin_${_n})
+    endforeach()
+endif()
 # The tests that are handed the hostile fixture's path as their first argument (and need it built first).
 set(CASCADE_HOSTILE_TESTS
     test_plugin_hostile
@@ -317,7 +337,11 @@ foreach(src ${CASCADE_TESTS})
                     $<TARGET_FILE:SoapySDR> $<TARGET_FILE_DIR:${name}>)
     endif()
 
-    if(name STREQUAL "test_font_assets")
+    if(name STREQUAL "test_extio")
+        # The helper process and the stand-in drivers, built first; the test is handed the helper and the stand-ins' directory.
+        add_dependencies(${name} ${CASCADE_EXTIO_HELPER_TARGET} ${CASCADE_EXTIO_STANDINS})
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:${CASCADE_EXTIO_HELPER_TARGET}>" "${CMAKE_CURRENT_BINARY_DIR}/fixture_extio/$<CONFIG>")
+    elseif(name STREQUAL "test_font_assets")
         # Compares something compiled INTO the binary against the files it was
         # generated from - the typefaces against third_party/fonts - so it
         # needs the repository root on its command line.
@@ -636,6 +660,9 @@ foreach(src ${CASCADE_TESTS})
     # A liveness bug (stuck spin loop, deadlock) must fail the suite, not hang
     # it forever — ctest's default per-test timeout is 1500 s.
     set_tests_properties(${name} PROPERTIES TIMEOUT 120)
+    if(name STREQUAL "test_extio")
+        set_tests_properties(${name} PROPERTIES TIMEOUT 300)   # real helper processes, real hangs and floods, timed: slow under load
+    endif()
     # For the sanitizer block at the end of this file: every test this loop
     # registers, by name.
     list(APPEND CASCADE_ALL_TEST_NAMES ${name})
@@ -1024,9 +1051,21 @@ endif()
 # and the key ends "because the interface stopped answering" - the rule
 # working, on a machine too busy for the probe to hold up its end.
 set_tests_properties(test_engine_api_transmit test_engine_api_merge PROPERTIES TIMEOUT 600 RUN_SERIAL TRUE)
+
+# The core-formats tests (docs/feature-records/core-formats.md). test_rf64_writer WRITES MORE THAN 4 GiB for real (about 15 s idle, 60 s on a
+# loaded shared machine; it deletes the file and skips when under 12 GiB are free); test_decode_db writes a million records; test_alert_rules and
+# test_dsp_benchmark time a loop. None of them fails on a speed: the longer limit is for the machine being slow, not for a hang.
+set_tests_properties(test_rf64_writer PROPERTIES TIMEOUT 900)
+set_tests_properties(test_decode_db test_alert_rules test_dsp_benchmark PROPERTIES TIMEOUT 300)
 # The disk-work tests (stub campaign B19) are made of fixed waits - a 2.5 s "slow disk" a dozen times over - and run 50 - 95 s on the owner's desk, so the
 # inherited 120 s bound leaves a shared runner no room; a timeout is not what they are about.
 set_tests_properties(test_gui_file_jobs test_failure_files PROPERTIES TIMEOUT 300)
+# The CTCSS and DCS block tests run minutes of generated audio through the detectors (false-lock counts over noise and speech, every tone and every code at two rates): about 30-60 s on an idle desk, more beside other work.
+foreach(_sb test_ctcss test_dcs)
+    if(TEST ${_sb})
+        set_tests_properties(${_sb} PROPERTIES TIMEOUT 300)
+    endif()
+endforeach()
 # The team-message test starts the real application fourteen times, 70 frames each.
 # CI run 38564730541: x64 passed in 61.98 s; arm64 hit the inherited 120 s
 # bound at 120.11 s without stdout (Store test: 35.27 s x64, 69.55 s arm64).

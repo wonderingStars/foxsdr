@@ -142,8 +142,15 @@
 
 #include "core/spectrum_frame.hpp"
 #include "dsp/agc.hpp"
+#include "dsp/ctcss.hpp"
+#include "dsp/dcs.hpp"
+#include "dsp/tone_squelch.hpp"
 #include "dsp/demod.hpp"
 #include "dsp/noise_reduction.hpp"
+#include "dsp/nr_methods.hpp"
+#include "dsp/notch_bank.hpp"
+#include "dsp/audio_eq.hpp"
+#include "dsp/noise_squelch.hpp"
 #include "dsp/notch.hpp"
 #include "dsp/rds.hpp"
 #include "core/patch_runner.hpp"
@@ -151,6 +158,7 @@
 #include "dsp/spectrum.hpp"
 #include "dsp/spsc_ring.hpp"
 #include "dsp/squelch.hpp"
+#include "dsp/oirt_stereo.hpp"
 #include "dsp/stereo_fm.hpp"
 #include "dsp/vfo.hpp"
 // The demod scope's two rolling taps. A header, no .cpp: the whole thing is a
@@ -453,6 +461,15 @@ public:
     // exactly when a broadcast receiver is expected to produce stereo.
     void setStereoEnabled(bool on);
     bool stereoEnabled() const;
+    // THE STEREO SYSTEM (engine wiring W2; dsp/oirt_stereo.hpp): which composite decoder WFM runs. 1 = the pilot-tone system (every receiver the world over but
+    // the OIRT band), 2 = OIRT polar modulation (65.8 to 74 MHz in Russia, Belarus, Ukraine, Moldova, Armenia). The ENGINE decides which (automatic by the tuned
+    // frequency, or the user's choice) and says so here; the default is 1, the behaviour before this existed. A value other than 1 or 2 is ignored. The OIRT decoder
+    // is fed the discriminator scaled so +-1 is kOirtMaxDeviationHz (50 kHz, the OIRT system's maximum deviation; UNVERIFIED against the standard's table).
+    static constexpr double kOirtMaxDeviationHz = 50000.0;
+    void setStereoSystem(int system);
+    int stereoSystem() const;
+    // True while the OIRT decoder is the one in the path (WFM, system 2, a channel rate it can decode at).
+    bool oirtActive() const;
 
     // Lock-free snapshots for the UI indicator, published once per DSP block
     // exactly like signalPowerDb(). pilotLocked() is the decoder's own lock
@@ -535,6 +552,56 @@ public:
     float noiseBlankerThresholdDb() const;
     float noiseBlankerBlankedPercent() const;
     bool noiseBlankerStandingDown() const;
+
+    // TONE SQUELCH (CTCSS / DCS; engine wiring lane 1, dsp/tone_squelch.hpp has the rules). NFM only: in any other mode the setting is kept and does nothing. The
+    // detector listens to the discriminator output at the channel rate, before the AGC and the squelch; while a tone squelch is on the squelch's gate needs the
+    // tone as well as the carrier. Posted like the other settings; the detectors are rebuilt for the channel rate by rebuildChannelBlocks.
+    //   setToneSquelch      kind 0 Off, 1 CTCSS (hz: 0 any tone, else one of the 50), 2 DCS (dcsDigits: 0 any code, else one of the 83 written as digits, 23 for
+    //                       023; polarity 0 any, 1 normal, 2 inverted). False, and nothing changed, for a value outside those.
+    //   setToneRemove       a high-pass at the audio rate that takes the sub-audible tone out of what is heard (off by default).
+    //   toneKind ... toneRemove      the settings as asked (verbatim mirrors).
+    //   toneDetectedHz / toneDetectedCode / toneDetectedPolarity   what the detector has locked on now (0 when none) - measured, once per block.
+    //   toneGateOpen        the tone condition: true while no tone is required or the required tone is present - measured.
+    //   carrierSquelchOpen  the carrier gate alone; squelchOpen() is the same (kept for the auto-squelch and the heard-time counters).
+    //   audioGateOpen       the carrier AND the tone: the gate the listener hears.
+    // NOISE-REDUCTION METHOD (engine wiring lane 1): 0 the standard noise reduction, 1 minimum-statistics spectral subtraction, 2 the adaptive line enhancer. The on/off switch and
+    // the strength are setNoiseReductionEnabled / Strength's for every method. The line enhancer is for CW and steady carriers and is applied in CW and RAW only; in any other mode the
+    // standard one runs in its place (noiseReductionMethodActive says which is running). False (nothing changed) for a method past 2.
+    // THE MANUAL NOTCH BANK (engine wiring lane 1; dsp/notch_bank.hpp): up to ten notches on the finished audio of each channel, after the single notch. A slot moves, widens or switches
+    // on and off without a click (the block glides and fades). False for a slot past 9 or a number that is not one. Any thread; nothing is posted (the bank's settings are atomics).
+    bool setManualNotch(int slot, double hz, double widthHz, bool on);
+    // The CW sidetone pitch (engine wiring lane 1): 300 to 1200 Hz, default 700. False (nothing changed) outside that or for a number that is not one. Posted; kept across a rate change.
+    // THE FM NOISE SQUELCH (engine wiring lane 1; dsp/noise_squelch.hpp): NFM only, a second gate beside the level squelch. The detector listens to the discriminator output at the channel
+    // rate (here after the user's de-emphasis and the FM scaling, so the threshold is a number of this chain, not a universal one: the screen shows noiseSquelchLevelDb beside it);
+    // its gain multiplies the audio after the level squelch. False for a threshold outside -90..0 dB or a tail outside 0..2000 ms. Posted; kept across a rate rebuild.
+    bool setNoiseSquelch(bool on, double thresholdDb, double tailMs);
+    bool noiseSquelchOn() const;
+    double noiseSquelchLevelDb() const;   // measured, once per block
+    bool noiseSquelchOpen() const;
+    // THE AUDIO EQUALISER AND FILTERS (engine wiring lane 1; dsp/audio_eq.hpp) on the finished audio of each channel, after the noise reduction: bands 0..7 (bass, middle, treble, then the
+    // graphic 100 / 300 / 1000 / 2500 / 5000 Hz) +-12 dB, a high-pass (0, 100, 300 Hz) and a low-pass (0, 2400, 3000, 6000 Hz). All flat and off: the samples are not touched. False for a value
+    // outside those. The block's settings are atomics: nothing is posted.
+    bool setEqBand(int band, double db);
+    bool setAudioFilters(int highPassHz, int lowPassHz);
+    bool eqBypassed() const;
+    bool setCwPitchHz(double hz);
+    double cwPitchHz() const;
+    int manualNotchCount() const;   // slots that are on
+    bool setNoiseReductionMethod(int method);
+    int noiseReductionMethod() const;
+    int noiseReductionMethodActive() const;   // measured, once per block: 0 while the noise reduction is off
+    bool setToneSquelch(int kind, double hz, int dcsDigits, int polarity);
+    void setToneRemove(bool on);
+    int toneKind() const;
+    double toneHz() const;
+    int toneDcsDigits() const;
+    int tonePolarity() const;
+    bool toneRemove() const;
+    double toneDetectedHz() const;
+    int toneDetectedCode() const;
+    int toneDetectedPolarity() const;
+    bool toneGateOpen() const;
+    bool audioGateOpen() const;
 
     void setNotchEnabled(bool on);
     bool notchEnabled() const;
@@ -1035,6 +1102,11 @@ private:
     // (neither has an assignment operator worth relying on, and both bake the
     // rate into their filter designs).
     std::unique_ptr<cascade::dsp::StereoFm> stereo_;
+    std::unique_ptr<cascade::dsp::OirtStereo> oirt_;   // the same channel rate and settings as stereo_, built beside it (setStereoSystem chooses)
+    int stereoSystem_ = 1;                              // the DSP thread's (and the setter's, under the post)
+    std::atomic<int> mirrorStereoSystem_{1};
+    std::atomic<bool> oirtActive_{false};
+    std::vector<float> oirtIn_, oirtL_, oirtR_;         // the OIRT branch's scratch (the decoder's output capacity is one more than its input)
     std::unique_ptr<cascade::dsp::RdsDecoder> rds_;
     bool stereoEnabled_ = true;
     // Counters of the last published snapshot: the publish is skipped unless
@@ -1045,6 +1117,36 @@ private:
 
     cascade::dsp::Agc agc_;
     cascade::dsp::Squelch squelch_;
+    // TONE SQUELCH: the settings the DSP thread works from (changed only by posted commands, under audioMutex_), the two detectors (only the chosen kind runs),
+    // and the two high-passes of the tone remover, one per channel, at the audio rate.
+    int toneKind_ = 0;
+    double toneHz_ = 0.0;
+    unsigned toneDcsOctal_ = 0;
+    int toneDcsPol_ = 0;
+    bool toneRemove_ = false;
+    double toneChanRateHz_ = 0.0;
+    // NOISE-REDUCTION METHOD: the choice and what the posted switch and strength last said (so a method built later starts from them), and the two channels' alternative reducers.
+    cascade::dsp::AudioEq eqL_{kAudioRateHz};
+    cascade::dsp::AudioEq eqR_{kAudioRateHz};
+    cascade::dsp::NotchBank notchBankL_{kAudioRateHz};
+    cascade::dsp::NotchBank notchBankR_{kAudioRateHz};
+    double cwPitchNow_ = 700.0;
+    std::unique_ptr<cascade::dsp::NoiseSquelch> noiseSq_;
+    bool noiseSqOn_ = false;
+    double noiseSqThresholdDb_ = -30.0;
+    double noiseSqTailMs_ = 100.0;
+    std::vector<float> noiseSqGain_;
+    int nrMethod_ = 0;
+    bool nrOn_ = false;
+    float nrStrengthNow_ = 0.5f;
+    std::unique_ptr<cascade::dsp::NoiseReducer> nrAltL_;
+    std::unique_ptr<cascade::dsp::NoiseReducer> nrAltR_;
+    cascade::dsp::CtcssDetector ctcss_;
+    cascade::dsp::DcsDecoder dcs_;
+    cascade::dsp::CtcssHighpass toneHpL_;
+    cascade::dsp::CtcssHighpass toneHpR_;
+    // (re)configures the chosen detector for toneChanRateHz_ and applies the choice; caller holds audioMutex_
+    void configureToneLocked();
     cascade::dsp::PowerMeter meter_;      // S-meter source (channel power)
     // TWO resamplers with identical configuration, one per channel: the
     // resampler is mono, and running the same L/M state machine twice from
@@ -1206,6 +1308,22 @@ private:
     std::atomic<float> mirrorNbThresholdDb_{15.0f};
     std::atomic<float> nbBlankedPct_{0.0f};      // live, once per block
     std::atomic<bool> nbStandingDown_{false};
+    std::atomic<double> mirrorCwPitchHz_{700.0};
+    std::atomic<bool> mirrorNoiseSqOn_{false};
+    std::atomic<double> noiseSqLevelDb_{-200.0};
+    std::atomic<bool> noiseSqOpen_{false};
+    std::atomic<int> mirrorNrMethod_{0};
+    std::atomic<int> nrMethodActive_{0};
+    std::atomic<int> mirrorToneKind_{0};
+    std::atomic<double> mirrorToneHz_{0.0};
+    std::atomic<int> mirrorToneDcsDigits_{0};
+    std::atomic<int> mirrorTonePol_{0};
+    std::atomic<bool> mirrorToneRemove_{false};
+    std::atomic<double> toneDetectedHz_{0.0};    // live, once per block
+    std::atomic<int> toneDetectedCode_{0};       // DCS, as digits (23 for 023); 0 none
+    std::atomic<int> toneDetectedPol_{0};        // 1 normal, 2 inverted; 0 none
+    std::atomic<bool> toneGateOpen_{true};
+    std::atomic<bool> audioGateOpen_{false};
     std::atomic<bool> mirrorNotchEnabled_{false};
     std::atomic<double> mirrorNotchHz_{0.0};
     std::atomic<double> mirrorNotchQ_{0.0};

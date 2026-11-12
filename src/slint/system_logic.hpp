@@ -157,6 +157,9 @@ struct DisplayModel {
     int freq_display_index = 0;
     std::vector<SelectItem> figures;       // Normal size, Enlarged figures
     int figures_index = 0;
+    std::vector<SelectItem> digit_groupings;   // slint-gaps.md item 2: 1.090.000.000 | 1090.000.000 (the numerals are the labels); saved in the workspace entry of the window half (`dg=`), not here
+    int digit_grouping_index = 0;
+    bool high_contrast = false;            // slint-gaps.md item 11 (the host's own record, like the grouping)
     bool tuner_switches = true;
     bool enlarge_readings = false;
     float icon_px = 48.f;

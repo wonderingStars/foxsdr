@@ -783,6 +783,26 @@ bandwidth), and the Airband monitor plays the ticked AM and NFM ones.
   decimal comma. Importing the same file twice adds nothing twice. SDR#'s
   converter Shift is not applied: the frequency is taken as written, and the
   import says when a list carried one.
+- **Import a CHIRP or an SDR++ file** the same way: FoxSDR looks at what is in
+  the file, not at its name, so a `.csv`, `.txt` or `.json` all work.
+  - *CHIRP*: the CSV that CHIRP exports (its first row starts with
+    `Location,Name,Frequency,Duplex,Offset,Tone,...`). The Frequency (MHz),
+    Name and Mode columns come across. CHIRP's modes become FM and NFM to NFM,
+    WFM, AM and NAM to AM, USB, LSB, and CW and CWR to CW; any other mode (DV,
+    DMR, ...) is imported as NFM and the import says how many it did that to.
+    A bookmark has no tone field, so a row with a CTCSS or DCS tone keeps it in
+    the name, as `Hilltop [CTCSS 88.5 Hz]` or `Hilltop [DCS 023]`. Only the
+    receive frequency is taken: a repeater's offset and a split transmit
+    frequency are ignored, because FoxSDR listens.
+  - *SDR++*: the frequency manager's `frequency_manager_config.json`. Every
+    list in it becomes a group of the same name, and each bookmark's frequency,
+    bandwidth and mode come across (the mode is SDR++'s index: NFM, WFM, AM,
+    DSB, USB, CW, LSB, RAW). This reader has not yet been checked against a
+    real SDR++ export, only against the format as published descriptions give
+    it; if a mode looks wrong after an import, tell us.
+  - A file that is neither is refused with a sentence saying what it was
+    expected to be, and nothing is added. The result says how many rows were
+    imported and how many were skipped (no usable frequency).
 - **Groups of your own:** the box under the name is the group the next
   **Add current** joins - type "MILANO MALPENSA" once and every frequency you
   add after it lands in that group until you change or clear the box; the
@@ -1156,16 +1176,31 @@ The browser client does everything the desktop does, with two deliberate
 exceptions: it cannot name an I/Q file or a recording directory, because those
 are host filesystem paths rather than settings.
 
-It has no Stop/Start button of its own — that lives in the window — but it does
-SAY which plugins are stopped, so it never claims output from one that is
-switched off, and pressing a stopped plugin's **preset** there starts it, just
-as pressing it in the window does. A preset press is the same unambiguous "I
-want this plugin now" wherever it comes from, and the alternative — retuning
-the receiver for a decoder that is switched off, or silently doing nothing —
-would be worse from a page that cannot explain itself. It has no mute checkbox
-either, for the same reason, but when a decoder is silencing the audio the
-toolbar carries a **muted by *plugin*** badge — a browser hearing nothing has
-no other way to tell a muted radio from a dead stream.
+The toolbar has a **Start**/**Stop** key for the receiver and a **Mute** key
+for the audio. **Mute** is the same mute as the window's MUTE key, and it
+shows **Unmute** while it is on, also when the mute was set at the desk, because
+the page reads the state back from the receiver. The MUTE lamp lights for it and
+for a decoder that is silencing the audio.
+
+The page does SAY which plugins are stopped, so it never claims output from one
+that is switched off, and pressing a stopped plugin's **preset** there starts
+it, just as pressing it in the window does. A preset press is the same
+unambiguous "I want this plugin now" wherever it comes from, and the alternative
+— retuning the receiver for a decoder that is switched off, or silently doing
+nothing — would be worse from a page that cannot explain itself. When a decoder
+is silencing the audio the toolbar also carries a **muted by *plugin*** badge —
+a browser hearing nothing has no other way to tell a muted radio from a dead
+stream.
+
+**Live updates.** The page asks the receiver to push its status when it changes
+(server-sent events, plain HTTP, no extra software) instead of asking four times
+a second. Up to four browsers can hold the stream at once; a fifth, a browser
+without the feature, or a proxy that buffers it, is not a problem: the page
+notices the stream is not there and goes back to asking, then tries the stream
+again every ten seconds. While the stream is up the page still asks twice a
+second, only to tell the receiver the page is alive (a held transmit key depends
+on that). The stream needs the same sign-in as the rest of the page, and signing
+out, an expired sign-in or stopping the web server ends it.
 
 ## How it looks
 

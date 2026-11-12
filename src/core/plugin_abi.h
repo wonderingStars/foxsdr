@@ -269,6 +269,20 @@ extern "C" {
 #define CASCADE_CAP_ALL_KNOWN 0x0001FFFFu /* OR of every bit THIS host knows */
 
 /*
+ * A FLAG, NOT A CAPABILITY: CASCADE_FLAG_PRIVATE_DATA (bit 31, host 0.99.109; engine wiring W2).
+ *
+ * A plugin that handles identifiers of people or devices (a Remote ID serial, a trunked radio's subscriber id, a meter number, a Bluetooth
+ * address) sets this bit in `capabilities` beside the capabilities it really has. It has no table and provides nothing by itself, so it is
+ * NOT part of CASCADE_CAP_ALL_KNOWN (the module census asks every capability bit for a table and this one has none) and an older host
+ * ignores it like any bit it does not know. A host that knows it keeps this plugin's decoded text, tracks and pictures for its own
+ * windows (memory only, as always) and does NOT hand them to the web page mirror ("decoded", "tracks", /api/image), to a REMOTE engine-API
+ * session (its decoder lines arrive empty) or to the diagnostics a person copies. It does not change what the plugin may do and does not
+ * make the plugin's own files private: a plugin still never prints to stderr or stdout and never puts an identifier into a setting
+ * (docs/PLUGIN-API.md, "Private data").
+ */
+#define CASCADE_FLAG_PRIVATE_DATA 0x80000000u
+
+/*
  * The four bits above 0x04 were added WITHOUT an ABI bump, which is the whole
  * claim ABI 3 made and this is the proof of it: they are new entries in the
  * capability table, the descriptor did not change size, and every plugin built
@@ -1739,8 +1753,34 @@ typedef struct CascadeScheduleHint {
     char decoderName[CASCADE_SCHEDULE_LABEL_CHARS]; /* the plugin the user would want started with it, "" none (informational: the host does not start it) */
 } CascadeScheduleHint;
 
+/* ---- Decode events (appended after host API level 2; engine wiring W2, brief item 13 "AD3"): check CASCADE_HOST_HAS(host, post_event). ----------
+ * A plugin POSTS a structured event (a decoded message, an alert, a position) and READS the events other plugins posted - and, as events of kind "text",
+ * every decoder line the host drained. The host keeps the newest CASCADE_EVENT_RING of them in one ring in memory (never written to disk by the host);
+ * each carries a sequence number from 1 that is never reused, so a reader asks for "everything after the last one I saw". An event of a plugin that sets
+ * CASCADE_FLAG_PRIVATE_DATA is stamped CASCADE_EVENT_FLAG_PRIVATE and is delivered ONLY to that plugin (and to the host's own windows): another plugin never
+ * reads it, so a logbook or an alert plugin cannot receive identifiers a private plugin keeps to itself. */
+#define CASCADE_EVENT_RING 1024u
+#define CASCADE_EVENT_PLUGIN_CHARS 48
+#define CASCADE_EVENT_KIND_CHARS 24
+#define CASCADE_EVENT_TEXT_CHARS 192
+#define CASCADE_EVENT_KIND_TEXT "text" /* the host's own kind: a decoder line, posted by the host on the plugin's behalf */
+#define CASCADE_EVENT_FLAG_PRIVATE 0x00000001u /* stamped by the host; ignored on post */
+typedef struct CascadeEvent {
+    uint32_t structSize;    /* sizeof(CascadeEvent) as the caller compiled it */
+    uint32_t flags;         /* CASCADE_EVENT_FLAG_*; ignored on post */
+    uint64_t seq;           /* assigned by the host, from 1; ignored on post */
+    int64_t unixMs;         /* when it was posted, host clock (UTC ms); ignored on post */
+    double frequencyHz;     /* the tuned frequency it is about, 0 = none; a finite number, 0 .. 6 GHz */
+    char plugin[CASCADE_EVENT_PLUGIN_CHARS]; /* the posting plugin's name, written by the host; ignored on post */
+    char kind[CASCADE_EVENT_KIND_CHARS];     /* a short lower-case word the plugin chooses: [a-z0-9._-], 1 to 23 bytes ("message", "alert", "position") */
+    char text[CASCADE_EVENT_TEXT_CHARS];     /* UTF-8; control characters become spaces; cut at 191 bytes on a whole character */
+} CascadeEvent;
+
 #define CASCADE_MARKER_LABEL_CHARS 32
-#define CASCADE_MAX_MARKERS_PER_PLUGIN 64u
+/* Marks one plugin may have set at once. 256 from FoxSDR 0.99.109 (it was 64: a survey, a scanner or an aircraft-and-ship overlay has more than 64 things to
+ * mark). A plugin built against the old header still works - it simply never asks for more than 64; a plugin built against this one on an OLDER host gets
+ * LIMIT at that host's own quota, which it must treat as the end of its marks, not as an error. The host publishes the number in fact.plugin.markerLimit. */
+#define CASCADE_MAX_MARKERS_PER_PLUGIN 256u
 typedef struct CascadeMarker {
     uint32_t structSize;
     uint32_t id;                /* the plugin's own; setting an id REPLACES */
@@ -1936,6 +1976,20 @@ typedef struct CascadeHostApi {
     int32_t (*set_schedule_hint)(void *ctx, const CascadeScheduleHint *hint);
     /* Removes all of this plugin's hints. The host also removes them when the plugin is stopped or unloaded. */
     int32_t (*clear_schedule_hints)(void *ctx);
+
+    /* ---- Decode events (appended after host API level 2: check CASCADE_HOST_HAS(host, post_event)). Any thread, no grant. ---------------------- */
+
+    /* Posts one event as this plugin. The struct and its text are copied. OK; BAD_ARGUMENT (NULL, a short struct, a kind that is empty or not [a-z0-9._-]
+     * of at most 23 bytes, a non-finite frequency); OUT_OF_RANGE (a frequency below 0 or above 6 GHz); DETACHED when the plugin is not live. The host
+     * assigns plugin, seq, unixMs and flags. Posting is bounded: the ring holds CASCADE_EVENT_RING events and drops the oldest, so a plugin that posts
+     * without limit only costs readers the events it displaced. */
+    int32_t (*post_event)(void *ctx, const CascadeEvent *event);
+    /* Copies, oldest first, up to `cap` events with seq above `afterSeq` into `out` (each `out[i].structSize` must be set to sizeof(CascadeEvent); a
+     * shorter struct is filled as far as it goes). Returns how many were written (>= 0) or an error. Events of another plugin that set
+     * CASCADE_FLAG_PRIVATE_DATA are skipped. A reader that fell more than CASCADE_EVENT_RING behind finds the oldest still held: compare seq to see the gap. */
+    int32_t (*read_events)(void *ctx, uint64_t afterSeq, CascadeEvent *out, uint32_t cap);
+    /* The newest sequence number the host has assigned (0 = none yet): cheap to poll, so a plugin calls read_events only when it moved. */
+    uint64_t (*events_seq)(void *ctx);
 } CascadeHostApi;
 
 /*

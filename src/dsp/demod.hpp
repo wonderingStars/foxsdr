@@ -124,6 +124,12 @@ public:
     // caller that narrows the channel filter for a sideband mode must leave it
     // at least twice that wide (core::Pipeline gives it four times B).
     void setSsbBandwidthHz(double bandwidthHz);
+
+    // THE CW SIDETONE PITCH (engine wiring lane 1): where a carrier ON the tuned frequency beats in CW mode, 300 to 1200 Hz (default 700, which is what it always was). A value outside
+    // that, or not finite, is ignored. In CW mode the Weaver chain restarts (a documented clean start, like a mode change); in any other mode the value waits. The pass band stays the
+    // voice SSB filter's (dsp/cw_pitch.hpp has the numbers for a CW filter centred on the pitch: not wired).
+    void setCwPitchHz(double hz);
+    double cwPitchHz() const { return cwToneHz_; }
     double ssbBandwidthHz() const { return ssbBandwidthHz_; }
 
 private:
@@ -148,6 +154,7 @@ private:
     // 1 = plain streaming FIR), BFO up-mix.
     Nco shiftDown_;
     Nco shiftUp_;
+    double cwToneHz_ = 700.0;   // see setCwPitchHz
     double ssbBandwidthHz_ = 3000.0;  // B; see setSsbBandwidthHz
     double ssbBfoHz_ = 0.0;           // f0, the two mixes' frequency (ssbShape)
     FirDecimator ssbFilter_;

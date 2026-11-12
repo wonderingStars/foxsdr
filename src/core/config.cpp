@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/config.hpp"
+#include "dsp/tone_squelch.hpp"
+#include "core/smeter_cal.hpp"
 
 #include "core/bias_tee_memory.hpp"
 #include "core/diag_log.hpp"
@@ -232,12 +234,82 @@ double clampd(double v, double lo, double hi) {
     return v > hi ? hi : v;
 }
 
+// The tone squelch's five settings made safe: a kind out of range lands on the nearest end; a tone that is not one of the 50, a code that is not one of the 83
+// and a polarity out of range fall back to "any" (dsp/tone_squelch.hpp); a number that is not a number cannot pass.
+// The manual notch bank as a file carries it: "notchBank": [{"slot":0,"hz":1000,"widthHz":50,"on":true}, ...]; an entry that is not an object is skipped, at most ten are read.
+std::vector<ManualNotchSetting> readNotchBank(const json& j) {
+    std::vector<ManualNotchSetting> v;
+    const auto it = j.find("notchBank");
+    if (it == j.end() || !it->is_array()) { return v; }
+    for (const json& e : *it) {
+        if (!e.is_object() || v.size() >= 10) { continue; }
+        ManualNotchSetting n;
+        getInt(e, "slot", n.slot);
+        getDouble(e, "hz", n.hz);
+        getDouble(e, "widthHz", n.widthHz);
+        getBool(e, "on", n.on);
+        v.push_back(n);
+    }
+    return sanitiseNotchBank(std::move(v));
+}
+void writeNotchBank(json& j, const std::vector<ManualNotchSetting>& bank) {
+    if (bank.empty()) { return; }
+    json a = json::array();
+    for (const ManualNotchSetting& n : sanitiseNotchBank(bank)) {
+        json e;
+        e["slot"] = n.slot;
+        e["hz"] = n.hz;
+        e["widthHz"] = n.widthHz;
+        e["on"] = n.on;
+        a.push_back(std::move(e));
+    }
+    j["notchBank"] = std::move(a);
+}
+
+// The equaliser as a file may have it: not an array, or not eight numbers, is flat (empty); each gain clamped to +-12 dB, a non-number 0. An all-zero list is the empty one.
+std::vector<double> readEq(const json& j) {
+    std::vector<double> v;
+    const auto it = j.find("eqDb");
+    if (it == j.end() || !it->is_array() || it->size() != 8) { return v; }
+    bool any = false;
+    for (const json& e : *it) {
+        double g = e.is_number() ? e.get<double>() : 0.0;
+        g = std::isfinite(g) ? std::min(12.0, std::max(-12.0, g)) : 0.0;
+        any = any || g != 0.0;
+        v.push_back(g);
+    }
+    if (!any) { v.clear(); }
+    return v;
+}
+int sanitiseHp(int v) { return (v == 100 || v == 300) ? v : 0; }
+int sanitiseLp(int v) { return (v == 2400 || v == 3000 || v == 6000) ? v : 0; }
+
+void clampToneSquelch(int& kind, double& hz, int& code, int& pol) {
+    kind = kind < 0 ? 0 : (kind > 2 ? 2 : kind);
+    if (!(hz >= 0.0) || !cascade::dsp::tone::validCtcssHz(hz)) { hz = 0.0; }
+    if (!cascade::dsp::tone::validDcsDigits(code)) { code = 0; }
+    pol = pol < 0 ? 0 : (pol > 2 ? 2 : pol);
+}
+
 }  // namespace
+
+std::vector<ManualNotchSetting> sanitiseNotchBank(std::vector<ManualNotchSetting> in) {
+    std::vector<ManualNotchSetting> out;
+    std::set<int> taken;
+    for (ManualNotchSetting& n : in) {
+        if (n.slot < 0 || n.slot > 9 || taken.count(n.slot) != 0 || !std::isfinite(n.hz) || !std::isfinite(n.widthHz)) { continue; }
+        taken.insert(n.slot);
+        n.hz = clampd(n.hz, 20.0, 21600.0);
+        n.widthHz = clampd(n.widthHz, 1.0, 2000.0);
+        out.push_back(n);
+    }
+    return out;
+}
 
 // Radios 2 to 8 as a file may have them, made safe. A number is "not >= lo" clamped so one that is not a number cannot pass; a value that names no thing
 // (a tone, a rate, a frequency below zero) becomes 0, which the engine reads as "leave what the radio opens with".
 std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
-    static const char* const kKinds[] = {"siggen", "soapy", "rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "aor", "hydrasdr", "pluto", "rtltcp", "file"};
+    static const char* const kKinds[] = {"siggen", "soapy", "rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "aor", "hydrasdr", "pluto", "rtltcp", "kiwisdr", "file"};
     std::vector<SavedRadio> out;
     std::set<int> taken;
     for (SavedRadio& r : in) {
@@ -264,6 +336,16 @@ std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
         r.agcMode = r.agcMode < 0 ? 0 : (r.agcMode > 4 ? 4 : r.agcMode);
         r.agcFixedGainDb = !(r.agcFixedGainDb >= -20.0) ? -20.0 : clampd(r.agcFixedGainDb, -20.0, 40.0);
         r.nbThresholdDb = !(r.nbThresholdDb >= 6.0) ? 6.0 : clampd(r.nbThresholdDb, 6.0, 30.0);
+        clampToneSquelch(r.toneSquelchKind, r.toneSquelchHz, r.toneSquelchCode, r.toneSquelchPolarity);
+        r.meterUnits = r.meterUnits < 0 ? 0 : (r.meterUnits > 2 ? 2 : r.meterUnits);
+        r.nrMethod = r.nrMethod < 0 ? 0 : (r.nrMethod > 2 ? 2 : r.nrMethod);
+        r.cwPitchHz = !(r.cwPitchHz >= 300.0) ? 700.0 : (r.cwPitchHz > 1200.0 ? 1200.0 : r.cwPitchHz);
+        r.audioHighPassHz = sanitiseHp(r.audioHighPassHz);
+        r.audioLowPassHz = sanitiseLp(r.audioLowPassHz);
+        if (r.eqDb.size() != 8) { r.eqDb.clear(); }
+        r.noiseSquelchThresholdDb = !(r.noiseSquelchThresholdDb >= -90.0) ? -90.0 : (r.noiseSquelchThresholdDb > 0.0 ? 0.0 : r.noiseSquelchThresholdDb);
+        r.noiseSquelchTailMs = !(r.noiseSquelchTailMs >= 0.0) ? 0.0 : (r.noiseSquelchTailMs > 2000.0 ? 2000.0 : r.noiseSquelchTailMs);
+        r.notchBank = sanitiseNotchBank(std::move(r.notchBank));
         r.notchFreqHz = clampd(r.notchFreqHz, 10.0, 20000.0);
         r.notchQ = clampd(r.notchQ, 0.1, 1000.0);
         r.audioRoute = r.audioRoute < 0 ? 0 : (r.audioRoute > 3 ? 3 : r.audioRoute);
@@ -566,6 +648,21 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     getFloat(j, "agcFixedGainDb", out.agcFixedGainDb);
     getBool(j, "nbEnabled", out.nbEnabled);
     getFloat(j, "nbThresholdDb", out.nbThresholdDb);
+    getInt(j, "toneSquelchKind", out.toneSquelchKind);
+    getDouble(j, "toneSquelchHz", out.toneSquelchHz);
+    getInt(j, "toneSquelchCode", out.toneSquelchCode);
+    getInt(j, "toneSquelchPolarity", out.toneSquelchPolarity);
+    getBool(j, "toneRemove", out.toneRemove);
+    getInt(j, "meterUnits", out.meterUnits);
+    getInt(j, "nrMethod", out.nrMethod);
+    getDouble(j, "cwPitchHz", out.cwPitchHz);
+    out.eqDb = readEq(j);
+    getInt(j, "audioHighPassHz", out.audioHighPassHz);
+    getInt(j, "audioLowPassHz", out.audioLowPassHz);
+    getBool(j, "noiseSquelchOn", out.noiseSquelchOn);
+    getDouble(j, "noiseSquelchThresholdDb", out.noiseSquelchThresholdDb);
+    getDouble(j, "noiseSquelchTailMs", out.noiseSquelchTailMs);
+    out.notchBank = readNotchBank(j);
     getBool(j, "notchEnabled", out.notchEnabled);
     getDouble(j, "notchFreqHz", out.notchFreqHz);
     getDouble(j, "notchQ", out.notchQ);
@@ -928,6 +1025,21 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
             out.pluginRadio = std::move(m);
         }
     }
+    // S-meter calibration: one text per device, each checked by the table's own parser (a bad text drops THAT device's calibration whole), bounded in count and size.
+    {
+        const auto it = j.find("smeterCal");
+        if (it != j.end() && it->is_object()) {
+            std::map<std::string, std::string> m;
+            for (auto e = it->begin(); e != it->end() && m.size() < 32; ++e) {
+                if (!e.value().is_string() || e.key().empty() || e.key().size() > 256) { continue; }
+                const std::string text = e.value().get<std::string>();
+                smeter::CalTable probe;
+                if (text.size() > 8192 || !probe.fromText(text) || probe.size() == 0) { continue; }
+                m[e.key()] = probe.toText();
+            }
+            out.smeterCal = std::move(m);
+        }
+    }
     // Radios 2 to 8, element-wise tolerant like userPresets: an entry that is not an object is skipped, a field of the wrong type keeps its default,
     // and every value is clamped by sanitiseSavedRadios below. Reading stops at 4 x the limit so a hostile file cannot make this loop long.
     {
@@ -960,6 +1072,21 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
                 getDouble(e, "agcFixedGainDb", r.agcFixedGainDb);
                 getBool(e, "nbEnabled", r.nbEnabled);
                 getDouble(e, "nbThresholdDb", r.nbThresholdDb);
+                getInt(e, "toneSquelchKind", r.toneSquelchKind);
+                getDouble(e, "toneSquelchHz", r.toneSquelchHz);
+                getInt(e, "toneSquelchCode", r.toneSquelchCode);
+                getInt(e, "toneSquelchPolarity", r.toneSquelchPolarity);
+                getBool(e, "toneRemove", r.toneRemove);
+                getInt(e, "meterUnits", r.meterUnits);
+                getInt(e, "nrMethod", r.nrMethod);
+                getDouble(e, "cwPitchHz", r.cwPitchHz);
+                r.eqDb = readEq(e);
+                getInt(e, "audioHighPassHz", r.audioHighPassHz);
+                getInt(e, "audioLowPassHz", r.audioLowPassHz);
+                getBool(e, "noiseSquelchOn", r.noiseSquelchOn);
+                getDouble(e, "noiseSquelchThresholdDb", r.noiseSquelchThresholdDb);
+                getDouble(e, "noiseSquelchTailMs", r.noiseSquelchTailMs);
+                r.notchBank = readNotchBank(e);
                 getBool(e, "notchEnabled", r.notchEnabled);
                 getDouble(e, "notchFreqHz", r.notchFreqHz);
                 getDouble(e, "notchQ", r.notchQ);
@@ -1185,6 +1312,15 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     if (out.agcMode > 4) { out.agcMode = 4; }
     out.agcFixedGainDb = !(out.agcFixedGainDb >= -20.0f) ? -20.0f : clampf(out.agcFixedGainDb, -20.0f, 40.0f);
     out.nbThresholdDb = !(out.nbThresholdDb >= 6.0f) ? 6.0f : clampf(out.nbThresholdDb, 6.0f, 30.0f);
+    clampToneSquelch(out.toneSquelchKind, out.toneSquelchHz, out.toneSquelchCode, out.toneSquelchPolarity);
+    out.meterUnits = out.meterUnits < 0 ? 0 : (out.meterUnits > 2 ? 2 : out.meterUnits);
+    out.nrMethod = out.nrMethod < 0 ? 0 : (out.nrMethod > 2 ? 2 : out.nrMethod);
+    out.cwPitchHz = !(out.cwPitchHz >= 300.0) ? 700.0 : (out.cwPitchHz > 1200.0 ? 1200.0 : out.cwPitchHz);
+    out.audioHighPassHz = sanitiseHp(out.audioHighPassHz);
+    out.audioLowPassHz = sanitiseLp(out.audioLowPassHz);
+    out.noiseSquelchThresholdDb = !(out.noiseSquelchThresholdDb >= -90.0) ? -90.0 : (out.noiseSquelchThresholdDb > 0.0 ? 0.0 : out.noiseSquelchThresholdDb);
+    out.noiseSquelchTailMs = !(out.noiseSquelchTailMs >= 0.0) ? 0.0 : (out.noiseSquelchTailMs > 2000.0 ? 2000.0 : out.noiseSquelchTailMs);
+    out.notchBank = sanitiseNotchBank(std::move(out.notchBank));
     out.notchFreqHz = clampd(out.notchFreqHz, 10.0, 20000.0);
     out.notchQ = clampd(out.notchQ, 0.1, 1000.0);
     // At least kMinRangeSpanDb apart, which is the rule every writer of this pair follows (the
@@ -1214,7 +1350,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
         out.sourceKind != "mirisdr" && out.sourceKind != "rx888" &&
         out.sourceKind != "pluto" && out.sourceKind != "soundcard" &&
         out.sourceKind != "aor" && out.sourceKind != "hydrasdr" &&
-        out.sourceKind != "rtltcp") {
+        out.sourceKind != "rtltcp" && out.sourceKind != "kiwisdr") {
         out.sourceKind = defaults.sourceKind;
     }
     // The sound card's settings, each back to its default on its own when
@@ -1528,6 +1664,21 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["agcFixedGainDb"] = cfg.agcFixedGainDb;
     j["nbEnabled"] = cfg.nbEnabled;
     j["nbThresholdDb"] = cfg.nbThresholdDb;
+    j["toneSquelchKind"] = cfg.toneSquelchKind;
+    j["toneSquelchHz"] = cfg.toneSquelchHz;
+    j["toneSquelchCode"] = cfg.toneSquelchCode;
+    j["toneSquelchPolarity"] = cfg.toneSquelchPolarity;
+    j["toneRemove"] = cfg.toneRemove;
+    j["meterUnits"] = cfg.meterUnits;
+    j["nrMethod"] = cfg.nrMethod;
+    j["cwPitchHz"] = cfg.cwPitchHz;
+    if (cfg.eqDb.size() == 8) { j["eqDb"] = cfg.eqDb; }
+    j["audioHighPassHz"] = cfg.audioHighPassHz;
+    j["audioLowPassHz"] = cfg.audioLowPassHz;
+    j["noiseSquelchOn"] = cfg.noiseSquelchOn;
+    j["noiseSquelchThresholdDb"] = cfg.noiseSquelchThresholdDb;
+    j["noiseSquelchTailMs"] = cfg.noiseSquelchTailMs;
+    writeNotchBank(j, cfg.notchBank);
     j["notchEnabled"] = cfg.notchEnabled;
     j["notchFreqHz"] = cfg.notchFreqHz;
     j["notchQ"] = cfg.notchQ;
@@ -1687,6 +1838,11 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
         for (const auto& [id, radio] : placed) { pr[id] = radio; }
         j["pluginRadio"] = std::move(pr);
     }
+    if (!cfg.smeterCal.empty()) {
+        json sc = json::object();
+        for (const auto& [key, text] : cfg.smeterCal) { sc[key] = text; }
+        j["smeterCal"] = std::move(sc);
+    }
     if (!cfg.radios.empty()) {
         json radios = json::array();
         for (const SavedRadio& r : sanitiseSavedRadios(cfg.radios)) {
@@ -1713,6 +1869,21 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
             e["agcFixedGainDb"] = r.agcFixedGainDb;
             e["nbEnabled"] = r.nbEnabled;
             e["nbThresholdDb"] = r.nbThresholdDb;
+            e["toneSquelchKind"] = r.toneSquelchKind;
+            e["toneSquelchHz"] = r.toneSquelchHz;
+            e["toneSquelchCode"] = r.toneSquelchCode;
+            e["toneSquelchPolarity"] = r.toneSquelchPolarity;
+            e["toneRemove"] = r.toneRemove;
+            e["meterUnits"] = r.meterUnits;
+            e["nrMethod"] = r.nrMethod;
+            e["cwPitchHz"] = r.cwPitchHz;
+            if (r.eqDb.size() == 8) { e["eqDb"] = r.eqDb; }
+            e["audioHighPassHz"] = r.audioHighPassHz;
+            e["audioLowPassHz"] = r.audioLowPassHz;
+            e["noiseSquelchOn"] = r.noiseSquelchOn;
+            e["noiseSquelchThresholdDb"] = r.noiseSquelchThresholdDb;
+            e["noiseSquelchTailMs"] = r.noiseSquelchTailMs;
+            writeNotchBank(e, r.notchBank);
             e["notchEnabled"] = r.notchEnabled;
             e["notchFreqHz"] = r.notchFreqHz;
             e["notchQ"] = r.notchQ;

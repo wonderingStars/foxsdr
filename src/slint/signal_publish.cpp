@@ -29,6 +29,9 @@
 #include "core/thread_beats.hpp"
 #include "core/utf8_text.hpp"
 #include "core/winusb_install.hpp"
+#include "gaps_win.hpp"
+#include "source/sdrplay_service.hpp"
+#include "source/sdrplay_source.hpp"
 #include "gui/radio_setup_inventory.hpp"
 
 #if defined(_WIN32)
@@ -137,7 +140,7 @@ std::shared_ptr<slint::Model<T>> SignalPublisher::Synced<T>::set(const std::vect
 }
 
 struct SignalPublisher::Models {
-    Synced<::SelectItem> devices, rates, antennas, cards, cardRates, decimations, sinkDevices, sinkBuffers, agcModes, importKinds;
+    Synced<::SelectItem> devices, rates, antennas, cards, cardRates, decimations, sinkDevices, sinkBuffers, agcModes, importKinds, deemphModes;
     Synced<::GainStage> stages;
     Synced<::OptionRow> options;
     Synced<slint::SharedString> setupLines;
@@ -712,6 +715,10 @@ void SignalPublisher::updateClocks() {
     o.converter_inverts = m.converter_inverts;
     o.converter_error = ss(m.converter_error);
     o.converter_on_air = ss(m.converter_on_air);
+    o.sdrplay_key_shown = m.sdrplay_key_shown;
+    o.sdrplay_key_enabled = m.sdrplay_key_enabled;
+    o.sdrplay_key_label = ss(m.sdrplay_key_label);
+    o.sdrplay_line = ss(m.sdrplay_line);
     return o;
 }
 
@@ -755,6 +762,10 @@ void SignalPublisher::updateClocks() {
     o.nb_threshold_text = ss(m.nb_threshold_text);
     o.nb_read = ss(m.nb_read);
     o.nb_standing = m.nb_standing;
+    o.deemph_text = ss(m.deemph_text);
+    o.deemph_modes = lists_->deemphModes.set(items(m.deemph_modes));
+    o.deemph_index = m.deemph_index;
+    o.deemph_enabled = m.deemph_enabled;
     return o;
 }
 
@@ -855,8 +866,140 @@ void SignalPublisher::updateClocks() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------------------------------------------
+// a dropped file, and RESTART SDRPLAY SERVICE (slint-gaps.md items 8 and 9)
+
+void SignalPublisher::openDroppedRecording(const std::string& path) {
+    const std::string p = cascade::core::cleanImportPath(path);
+    if (p.empty()) { return; }
+    cascade::core::diagLogf("source: a WAV file was dropped on the window; opening it as the I/Q file");   // never the name (PRIVACY.md)
+    opts_.iq_path = p;
+    opts_.iq_box_note.clear();
+    forceRead_ = true;
+    sendAll({opIqRow(), opIqOpen(p)});
+}
+
+void SignalPublisher::importDroppedList(const std::string& path) {
+    opts_.import_kind = 0;
+    opts_.import_preset.clear();
+    importPath(path);
+}
+
+struct SignalPublisher::SdrState {
+    cascade::source::SdrPlayServiceRestart restart;
+    cascade::source::SdrPlayServiceStatus service;
+    cascade::source::SdrPlayServiceTrouble trouble = cascade::source::SdrPlayServiceTrouble::None;
+    bool forced = false;          // a test made the key appear
+    bool standIn = false;         // a test replaced the elevated launcher
+    std::string note;
+    int calls = 0;                // how many times the key reached the launcher
+};
+
+namespace {
+const char* phaseWord(cascade::source::SdrPlayRestartPhase p) {
+    using P = cascade::source::SdrPlayRestartPhase;
+    switch (p) {
+        case P::Idle: return "idle";
+        case P::Running: return "running";
+        case P::Done: return "done";
+        case P::Failed: return "failed";
+        case P::Cancelled: return "cancelled";
+        case P::TimedOut: return "timedout";
+        case P::NotStarted: return "notstarted";
+    }
+    return "idle";
+}
+}  // namespace
+
+void SignalPublisher::setSdrPlayLauncherForTest(std::function<void()> standIn) {
+    if (!sdr_) { sdr_ = std::make_unique<SdrState>(); }
+    sdr_->standIn = true;
+    sdr_->restart.setLauncherForTest([this, standIn](const std::string&, std::chrono::milliseconds, const std::atomic<bool>&) {
+        ++sdr_->calls;   // (the stand-in runs on the worker; the count is read by the drive script a few ticks later)
+        if (standIn) { standIn(); }
+        cascade::source::SdrPlayRestartOutcome o;
+        o.phase = cascade::source::SdrPlayRestartPhase::Done;
+        return o;
+    });
+}
+std::string SignalPublisher::sdrPlayRestartState() const { return sdr_ ? phaseWord(sdr_->restart.phase()) : "idle"; }
+int SignalPublisher::sdrPlayRestartCalls() const { return sdr_ ? sdr_->calls : 0; }
+void SignalPublisher::forceSdrPlayKeyForTest(const std::string& serviceName) {
+    if (!sdr_) { sdr_ = std::make_unique<SdrState>(); }
+    sdr_->forced = true;
+    sdr_->service = cascade::source::SdrPlayServiceStatus{};
+    sdr_->service.serviceName = serviceName;
+    sdr_->service.state = cascade::source::SdrPlayServiceState::Stopped;
+    sdr_->trouble = cascade::source::SdrPlayServiceTrouble::OpenFailed;
+}
+
+// The classic's pollSdrPlayService and finishSdrPlayServiceRestart, one tick at a time: what Windows says the service is doing is asked ONCE per change of trouble, never per frame.
+void SignalPublisher::pollSdrPlay() {
+    using namespace cascade::source;
+    if (!sdr_) { sdr_ = std::make_unique<SdrState>(); }
+    SdrState& s = *sdr_;
+    if (s.restart.takeFinished()) {
+        const SdrPlayRestartOutcome o = s.restart.outcome();
+        if (o.phase == SdrPlayRestartPhase::Cancelled) {
+            cascade::core::diagLogf("source: SDRplay API Service restart cancelled at the Windows prompt");
+            s.note = tr("Restart cancelled.");
+        } else if (o.phase == SdrPlayRestartPhase::NotStarted) {
+            cascade::core::diagWarnf("source: SDRplay API Service restart not started - error %lu", o.win32Error);
+            s.note = cascade::core::formatText(tr("Windows would not run the restart (error %lu)."), o.win32Error);
+        } else {
+            s.service = o.after;
+            noteSdrPlayServiceStatus(o.after);
+            cascade::core::diagLogf("source: SDRplay API Service restart finished (exit code %lu); now %s", o.exitCode, sdrPlayServiceSummary(o.after).c_str());
+            const bool running = o.after.state == SdrPlayServiceState::Running;
+            const SdrPlayAfterRestart what = sdrPlayApplyServiceRestart(processSdrPlayApi(), running);
+            if (what == SdrPlayAfterRestart::ServiceNotRunning) {
+                std::string note;
+                if (o.phase == SdrPlayRestartPhase::TimedOut) { note = tr("The restart did not finish within 45 seconds."); }
+                else if (o.phase == SdrPlayRestartPhase::Failed) { note = cascade::core::formatText(tr("The restart ended with exit code %lu."), o.exitCode); }
+                const std::string advice = sdrPlayServiceAdvice(o.after);
+                if (!advice.empty()) { note += (note.empty() ? "" : " ") + advice; }
+                s.note = note;
+            } else if (what == SdrPlayAfterRestart::RestartFoxSdr) {
+                // THE LOST SESSION STAYS LOST: a worker of ours may still be inside the vendor DLL for the orphaned device
+                s.note = tr("The SDRplay API Service was restarted and is running. Restart FoxSDR to use the SDRplay radio again.");
+            } else {
+                s.note = tr("The SDRplay API Service was restarted and is running.");
+                send(opRefresh());   // this process never had a session: the radios are listed again, here and now
+            }
+        }
+        forceRead_ = true;
+    }
+    if (!s.forced && !s.standIn) {
+        const SdrPlayServiceTrouble trouble = sdrPlayServiceTrouble(processSdrPlayApi());
+        if (trouble != s.trouble) {
+            s.trouble = trouble;
+            if (trouble == SdrPlayServiceTrouble::None) { if (!s.restart.running()) { s.note.clear(); } }
+            else { s.service = querySdrPlayServiceAndNote(); }
+        }
+    }
+#if defined(_WIN32)
+    constexpr bool kWindows = true;
+#else
+    constexpr bool kWindows = false;
+#endif
+    const SdrPlayRestartPhase phase = s.restart.phase();
+    const bool shown = sdrPlayRestartKeyShown(kWindows, s.service, s.trouble, phase);
+    if (shown != opts_.sdrplay_key_shown || (phase == SdrPlayRestartPhase::Running) != opts_.sdrplay_restarting || s.note != opts_.sdrplay_note) { forceRead_ = true; }
+    opts_.sdrplay_key_shown = shown;
+    opts_.sdrplay_restarting = phase == SdrPlayRestartPhase::Running;
+    opts_.sdrplay_note = s.note;
+}
+
+void SignalPublisher::sdrPlayRestartPressed() {
+    if (!sdr_ || sdr_->restart.running()) { return; }
+    sdr_->note.clear();
+    cascade::core::diagLogf("source: RESTART SDRPLAY SERVICE pressed - restarting %s elevated", sdr_->service.serviceName.c_str());
+    sdr_->restart.start(sdr_->service.serviceName, foxsdr::slintgaps::findMainWindow());   // the main window owns the UAC prompt, so it comes up in front
+}
+
 void SignalPublisher::publish(const FoxReceiverState& state) {
     state_ = state;
+    pollSdrPlay();
     const std::int64_t nowMs = static_cast<std::int64_t>(nowS() * 1000.0);
     pollSetup();
     pollImport();
@@ -879,7 +1022,7 @@ void SignalPublisher::publish(const FoxReceiverState& state) {
                                     m.source.card_warning, m.source.airspy_decimations, m.source.airspy_decimation_index, m.source.airspy_hardware_rate,
                                     m.source.airspy_gain_mode, m.source.airspy_gain_norm, m.source.airspy_lna_agc, m.source.airspy_mixer_agc, m.source.airspy_lna,
                                     m.source.airspy_mixer, m.source.airspy_vga, m.source.options, m.source.converter_shown, m.source.converter_mode,
-                                    m.source.converter_alias, m.source.converter_lo, m.source.converter_inverts, m.source.converter_error, m.source.converter_on_air))) {
+                                    m.source.converter_alias, m.source.converter_lo, m.source.converter_inverts, m.source.converter_error, m.source.converter_on_air, m.source.sdrplay_key_shown, m.source.sdrplay_key_enabled, m.source.sdrplay_key_label, m.source.sdrplay_line))) {
         ui_.set_source_model(mapSource(m.source));
     }
     if (sigs_.changed("radio", cat(m.radio.wfm, m.radio.stereo, m.radio.stereo_word, m.radio.stereo_tone, m.radio.rds_shown, m.radio.rds_ps, m.radio.rds_rt, m.radio.rds_pi))) {
@@ -889,7 +1032,8 @@ void SignalPublisher::publish(const FoxReceiverState& state) {
                                      m.filters.notch_freq_text, m.filters.notch_q, m.filters.notch_q_text, m.filters.auto_notch_on, m.filters.auto_notch_status,
                                      m.filters.auto_notch_locked, m.filters.agc_text, m.filters.agc_modes, m.filters.agc_index, m.filters.agc_fixed,
                                      m.filters.agc_fixed_text, m.filters.agc_fixed_on, m.filters.agc_gain_text, m.filters.agc_gain_tip, m.filters.nb_on,
-                                     m.filters.nb_threshold, m.filters.nb_threshold_text, m.filters.nb_read, m.filters.nb_standing))) {
+                                     m.filters.nb_threshold, m.filters.nb_threshold_text, m.filters.nb_read, m.filters.nb_standing, m.filters.deemph_text, m.filters.deemph_modes,
+                                     m.filters.deemph_index, m.filters.deemph_enabled))) {
         ui_.set_filters_model(mapFilters(m.filters));
     }
     if (sigs_.changed("sinks", cat(m.sinks.device_text, m.sinks.devices, m.sinks.device_index, m.sinks.none_line, m.sinks.health_note, m.sinks.buffer_text, m.sinks.buffers,
@@ -963,6 +1107,7 @@ void SignalPublisher::wire() {
     ev.on_iq_path_committed([this](slint::SharedString p) { opts_.iq_path = std::string(p); forceRead_ = true; });   // [local]: the draft
     ev.on_iq_open([this] { iqOpen(); });
     ev.on_iq_browse([this] { iqBrowse(); });
+    ev.on_sdrplay_restart([this] { sdrPlayRestartPressed(); });
     ev.on_iq_paste([this]() { return iqPaste(); });
     ev.on_pluto_address_committed([this](slint::SharedString t) { plutoDraft_ = std::string(t); plutoDraftSet_ = true; send(opPlutoAddress(plutoDraft_)); });
     ev.on_pluto_open([this] { send(opPlutoOpen(plutoDraftSet_ ? plutoDraft_ : last_.source.pluto_address)); });
@@ -1012,6 +1157,7 @@ void SignalPublisher::wire() {
     ev.on_filter_notch_q([this](float n) { send(opNotchQ(n)); });
     ev.on_filter_auto_notch([this](bool on) { send(opAutoNotch(on)); });
     ev.on_filter_agc_mode([this](int i) { send(opAgcMode(i)); });
+    ev.on_filter_deemph([this](int i) { send(opDeemph(i)); });
     ev.on_filter_agc_fixed([this](float n) { send(opAgcFixed(last_.filters.agc_index, n)); });
     ev.on_filter_nb([this](bool on) { send(opNb(on)); });
     ev.on_filter_nb_threshold([this](float n) { send(opNbThreshold(last_.filters.nb_on, n)); });

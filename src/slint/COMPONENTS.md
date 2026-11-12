@@ -357,3 +357,15 @@ Fields added to the contract (the host mirrors them; each is a plain field or ca
 **Choices where the contract left a question** (also in the file's header): the canvas keys are 28 px high and 2 px apart (the library's small SegGroup); zoom scales the node, the header and the face's text while the controls keep their natural size; the folded strip's fold key is a one-chevron icon (its text does not fit 24 px); `PatchModel.inspector-shown` / `inspector-folded` decide the layout and `InspectorModel.shown` / `folded` are not read; `PatchModel.tab-chip` is the main window's tab row, not drawn; the FlowRow estimate is 7 px a character; a double click on a preset row reaches the host as `presets-row`, `presets-row`, `presets-row-activated`; the plugin settings form keeps the kit's own fold line.
 
 `tests/test_slint_patch.cpp` renders the specimen (`PatchPage` in two widths, `PatchPresetsPage` in three states, a rule-11 probe at 254 px) and drives every callback with real pointer and key events; set `FOXSDR_SLINT_DUMP="x,y,w,h"` to print the colours of a region of the first canvas frame.
+
+## Additions of the gaps lane (docs/multi-radio-records/slint-gaps.md)
+
+| Component | What was added | Contract fields / callbacks |
+|---|---|---|
+| `FrequencyCounter` (digits.slint) | the digit grouping: the dot before the GHz figure is dropped in style 1 (1090.000.000) and the plate is one dot cell narrower | `in dot-style: int` (0 thousands, 1 MHz.kHz.Hz); the host keeps the choice (workspace entry `dg=`) |
+| `MainWindow` (main.slint) | the frequency lock: a padlock `Key` (icons/lock.svg, icons/unlock.svg, lit while locked) in the counter's header row beside the RCVR lamp | `in freq-locked: bool`, `in digit-dots: int`, `callback lock-toggled()` |
+| `AudioFiltersBody` (signal_bank.slint) | the De-emph row: a `DropKey` (50 us / 75 us / Off), greyed outside NFM and WFM, under the noise blanker | `AudioFiltersModel.deemph-text`, `deemph-modes`, `deemph-index`, `deemph-enabled`; `SignalEvents.filter-deemph(int)` |
+| `SourceBody` (signal_bank.slint) | the RESTART SDRPLAY SERVICE key and its line, under the device-stopped card | `SourceModel.sdrplay-key-shown`, `sdrplay-key-enabled`, `sdrplay-key-label`, `sdrplay-line`; `SignalEvents.sdrplay-restart()` |
+| `DisplayBody` (system_bank.slint) | the Digit grouping row and the High contrast tick | `DisplayModel.digit-groupings`, `digit-grouping-index`, `high-contrast`; `SystemEvents.display-digit-grouping(int)`, `display-high-contrast(bool)` |
+| `MapToolbar` (pages.slint) | the Line / Ribbon keys beside Altitude colours | `MapModel.trail-style: int`; `KitEvents.page-map-trail-style(page, style)` |
+| `HighContrast` (theme.slint) | the third filling of `Skin`: black grounds, white lines and text, one yellow accent, 2 px lines, no glow or shadow (a palette and nothing else) | `ui->global<HighContrast>().get_value()`; held at 7 : 1 by `test_slint_hc_palette` |

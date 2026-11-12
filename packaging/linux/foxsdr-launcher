@@ -1,0 +1,5 @@
+#!/bin/sh
+# foxsdr - starts the FoxSDR window application from its package directory.
+# The program finds its resources beside ITS OWN real path, so it is exec-ed by that path.
+self=$(readlink -f "$0")
+exec "$(dirname "$self")/../lib/foxsdr/cascade" "$@"

@@ -174,6 +174,17 @@ namespace cascade::core {
 //   the rest        squelch, volume, mute, de-emphasis, stereo, noise reduction, AGC, noise blanker, notch, the audio route (0 both, 1 left, 2 right, 3 none)
 //   running         the radio was running when it was saved (restored running)
 // Gains are NOT here: they are per DEVICE (autoGainByRadio, manualGainByRadio, airspy, ppm, biasTee, converters) and come back when that device opens.
+// One slot of the manual notch bank (dsp/notch_bank.hpp): 0..9, a frequency 20..21600 Hz, a -3 dB width 1..2000 Hz, on or off. Written only for a slot that is on or was moved.
+struct ManualNotchSetting {
+    int slot = 0;
+    double hz = 1000.0;
+    double widthHz = 50.0;
+    bool on = false;
+    bool operator==(const ManualNotchSetting&) const = default;
+};
+// Made safe: slots outside 0..9, a slot already taken and a non-finite number are dropped; the numbers are clamped.
+std::vector<ManualNotchSetting> sanitiseNotchBank(std::vector<ManualNotchSetting> in);
+
 inline constexpr int kMaxSavedRadios = 7;   // radios 2..8; the engine's kMaxReceivers is 8 (radio 1 is the top-level keys)
 struct SavedRadio {
     int number = 0;
@@ -198,6 +209,24 @@ struct SavedRadio {
     double agcFixedGainDb = 0.0;
     bool nbEnabled = false;
     double nbThresholdDb = 15.0;
+    // Tone squelch (engine wiring lane 1): 0 Off, 1 CTCSS, 2 DCS; the tone in Hz (0 any, else one of the 50); the DCS code written as digits (0 any, else one of
+    // the 83); its polarity (0 any, 1 normal, 2 inverted); the tone remover. A file without the keys loads as Off. A value that is not one of the table's is
+    // dropped to "any" by the loader (dsp/tone_squelch.hpp).
+    int toneSquelchKind = 0;
+    double toneSquelchHz = 0.0;
+    int toneSquelchCode = 0;
+    int toneSquelchPolarity = 0;
+    bool toneRemove = false;
+    int meterUnits = 0;   // S-meter display units, 0 dBFS / 1 S / 2 dBm (engine wiring lane 1)
+    int nrMethod = 0;     // noise-reduction method, 0 standard / 1 spectral / 2 line enhancer (engine wiring lane 1)
+    double cwPitchHz = 700.0;   // the CW sidetone pitch, 300..1200 Hz (engine wiring lane 1)
+    std::vector<double> eqDb;   // the equaliser: empty (flat) or eight gains, dB -12..+12 (engine wiring lane 1)
+    int audioHighPassHz = 0;    // 0 / 100 / 300
+    int audioLowPassHz = 0;     // 0 / 2400 / 3000 / 6000
+    bool noiseSquelchOn = false;           // the FM noise squelch (engine wiring lane 1)
+    double noiseSquelchThresholdDb = -30.0;   // -90..0
+    double noiseSquelchTailMs = 100.0;        // 0..2000
+    std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
     double notchQ = 30.0;
@@ -479,6 +508,21 @@ struct AppConfig {
     float agcFixedGainDb = 0.0f;
     bool nbEnabled = false;
     float nbThresholdDb = 15.0f;
+    int toneSquelchKind = 0;
+    double toneSquelchHz = 0.0;
+    int toneSquelchCode = 0;
+    int toneSquelchPolarity = 0;
+    bool toneRemove = false;
+    int meterUnits = 0;   // S-meter display units, 0 dBFS / 1 S / 2 dBm (engine wiring lane 1)
+    int nrMethod = 0;     // noise-reduction method, 0 standard / 1 spectral / 2 line enhancer (engine wiring lane 1)
+    double cwPitchHz = 700.0;   // the CW sidetone pitch, 300..1200 Hz (engine wiring lane 1)
+    std::vector<double> eqDb;   // the equaliser: empty (flat) or eight gains, dB -12..+12 (engine wiring lane 1)
+    int audioHighPassHz = 0;    // 0 / 100 / 300
+    int audioLowPassHz = 0;     // 0 / 2400 / 3000 / 6000
+    bool noiseSquelchOn = false;           // the FM noise squelch (engine wiring lane 1)
+    double noiseSquelchThresholdDb = -30.0;   // -90..0
+    double noiseSquelchTailMs = 100.0;        // 0..2000
+    std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
     double notchQ = 30.0;
@@ -1177,6 +1221,11 @@ struct AppConfig {
     // 0.99.104 wrote, plus nothing. An older build reads the file, ignores this key, and writes the file back without it: radios 2 to 8 are forgotten
     // there, radio 1 is not.
     std::vector<SavedRadio> radios;
+
+    // --- S-meter calibration (engine wiring lane 1): device key -> that device's CalTable as core::smeter::CalTable::toText() writes it (one band per line). One string per
+    // device, REFUSED WHOLESALE (that device only) when any line is bad; at most 32 devices, 8 KiB a text. Written only when there is one, so a file without calibration is the file
+    // it was. An older reader ignores the key and writes the file back without it.
+    std::map<std::string, std::string> smeterCal;
 
     // --- Plugins whose MUTE setting is not the default -------------------------
     // Module FILE NAMES again, and a list of OVERRIDES rather than of settings:

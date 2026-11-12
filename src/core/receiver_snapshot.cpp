@@ -130,6 +130,20 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
                       // nbStandingDown are measurements, like signalDb: they move nothing)
                       f.agcMode != o.agcMode || f.agcFixedGainDb != o.agcFixedGainDb || f.nbEnabled != o.nbEnabled ||
                       f.nbThresholdDb != o.nbThresholdDb ||
+                      // the tone squelch's five settings (the detected tone or code and the two gates are measurements: they move nothing)
+                      f.toneKind != o.toneKind || f.toneHz != o.toneHz || f.toneCode != o.toneCode || f.tonePolarity != o.tonePolarity ||
+                      f.toneRemove != o.toneRemove ||
+                      // the S-meter's display units are a setting; signalDbm, sUnits and calibrated are measurements like signalDb
+                      f.meterUnits != o.meterUnits ||
+                      // the noise-reduction method chosen is a setting; the method in use is a measurement
+                      f.nrMethod != o.nrMethod || f.cwPitchHz != o.cwPitchHz ||
+                      // the equaliser's eight bands and the audio filters (all settings)
+                      std::memcmp(f.eqDb, o.eqDb, sizeof(f.eqDb)) != 0 || f.audioHighPassHz != o.audioHighPassHz || f.audioLowPassHz != o.audioLowPassHz ||
+                      // the noise squelch's three settings (its level and its gate are measurements)
+                      f.noiseSquelchOn != o.noiseSquelchOn || f.noiseSquelchThresholdDb != o.noiseSquelchThresholdDb || f.noiseSquelchTailMs != o.noiseSquelchTailMs ||
+                      // the manual notch bank's switches, frequencies and widths (all settings)
+                      f.notchBankMask != o.notchBankMask || std::memcmp(f.notchBankHz, o.notchBankHz, sizeof(f.notchBankHz)) != 0 ||
+                      std::memcmp(f.notchBankWidthHz, o.notchBankWidthHz, sizeof(f.notchBankWidthHz)) != 0 ||
                       f.notchQ != o.notchQ || changed(f.flags, o.flags, kModeFlags);
     const bool device = first || changed(f.flags, o.flags, kDeviceFlags) ||
                         f.sampleRateHz != o.sampleRateHz || f.channelRateHz != o.channelRateHz ||

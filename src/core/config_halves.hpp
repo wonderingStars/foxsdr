@@ -91,6 +91,22 @@ struct ConfigFieldInfo {
     X(agcFixedGainDb,          Engine,    false) \
     X(nbEnabled,               Engine,    false) \
     X(nbThresholdDb,           Engine,    false) \
+    X(toneSquelchKind,                Engine,    false) \
+    X(toneSquelchHz,                  Engine,    false) \
+    X(toneSquelchCode,                Engine,    false) \
+    X(toneSquelchPolarity,            Engine,    false) \
+    X(toneRemove,              Engine,    false) \
+    X(meterUnits,              Engine,    false) \
+    X(nrMethod,                Engine,    false) \
+    X(cwPitchHz,               Engine,    false) \
+    X(eqDb,                    Engine,    false) \
+    X(audioHighPassHz,         Engine,    false) \
+    X(audioLowPassHz,          Engine,    false) \
+    X(noiseSquelchOn,          Engine,    false) \
+    X(noiseSquelchThresholdDb, Engine,    false) \
+    X(noiseSquelchTailMs,      Engine,    false) \
+    X(notchBank,               Engine,    false) \
+    X(smeterCal,               Engine,    false) \
     X(notchEnabled,            Engine,    false) \
     X(notchFreqHz,             Engine,    false) \
     X(notchQ,                  Engine,    false) \

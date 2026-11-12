@@ -923,12 +923,13 @@ void maskUrlHosts(std::string& s) {
 // 2. After a key a device-argument string or a driver writes a host with:
 //    "ip:" (FoxSDR's own "Pluto at ip:<host>" and libiio's "ip:<host>" URI),
 //    "host=", "hostname=", "remote=", "rtltcp=", "server=", "uri=", "addr=",
-//    "address=". A single label - a machine name - is masked here as well as
+//    "address=", and the network radios' own keys "kiwisdr=", "soapyremote=",
+//    "sdrconnect=" (the address a user typed is a person's host). A single label - a machine name - is masked here as well as
 //    a dotted one. A value that is itself a scheme ("uri=ip:...",
 //    "remote=tcp://...") is left to the rule for that scheme.
 void maskKeyedHosts(std::string& s) {
     for (const char* key : {"ip:", "host=", "hostname=", "remote=", "rtltcp=", "server=", "uri=",
-                            "addr=", "address="}) {
+                            "addr=", "address=", "kiwisdr=", "soapyremote=", "sdrconnect="}) {
         const std::size_t keyLen = std::strlen(key);
         std::size_t from = 0;
         for (;;) {

@@ -246,7 +246,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         CHECK(ui.find("globalLedger") == std::string::npos);
         std::size_t raises = 0;
         for (std::size_t at = 0; (at = ui.find("raiseHostFault();", at)) != std::string::npos; at += 10) { ++raises; }
-        CHECK(raises == 6);            // the four host calls and the two level-1 helpers' catch blocks
+        CHECK(raises == 7);            // the four host calls and the two level-1 helpers' catch blocks, and events_seq's (the decode events, engine wiring W2: a call with no status channel)
         CHECK(ui.find("health::raiseRecovered(cascade::core::health::Recovered::PluginApi)") != std::string::npos);
     }
     // 3. Every word of the vocabulary has the sites the survey names, and no others.
@@ -278,6 +278,8 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         {"ReaderLeak", "src/source/pluto_source.cpp", 1},  {"ReaderLeak", "src/source/rtl_tcp_source.cpp", 1},
         {"ReaderLeak", "src/source/rtlsdr_source.cpp", 1}, {"ReaderLeak", "src/source/pluto_tx.cpp", 1},
         {"ReaderLeak", "src/core/patch_radio.cpp", 1},
+        {"ReaderLeak", "src/source/kiwisdr_source.cpp", 2},   // (engine wiring lane 1: the open-failure path and closeDevice each raise it when the client abandoned a thread)
+        {"ReaderLeak", "src/source/net_sample_source.cpp", 1},
         {"CloseLeak", "src/source/soundcard_source.cpp", 1}, {"CloseLeak", "src/sink/pa_init.cpp", 1},
         {"LinkStranded", "src/source/sdrplay_source.cpp", 1},
         {"StreamRestart", "src/source/airspy_source.cpp", 1},

@@ -72,6 +72,9 @@ struct DecodedLine {
     std::uint64_t node = 0;
     // The RADIO whose runner said it (1..8; multi-radio engine stage 7, DECODER_LINES value[1]): stamped by the engine when it drains a runner. 0 for a patch decoder's line.
     std::uint32_t radio = 0;
+    // The plugin set CASCADE_FLAG_PRIVATE_DATA (stamped by the engine when it drains a runner): the web mirror, a remote API session and the
+    // copied diagnostics do not carry this line's text.
+    bool privateData = false;
 };
 
 // Why a loaded plugin is not currently being fed. Reported rather than

@@ -780,6 +780,71 @@ The host does not trust a plugin's code to be right, and a plugin that is wrong 
   the rest of the session (unmapping it would end the process under the thread), and the log line is
   `plugin: <id> broke a rule of the plugin API (<kind>)`.
 
+## Decode events (appended after host API level 2)
+
+A plugin can **publish** a structured event and **read** the events other plugins published. Three calls, appended at the end of `CascadeHostApi` (check
+`CASCADE_HOST_HAS(host, post_event)`; `apiLevel` is unchanged - the struct size is the version, as for the schedule hints). Any thread, no grant.
+
+```c
+CascadeEvent e = {0};
+e.structSize = sizeof(e);
+e.frequencyHz = 148.0125e6;                       /* 0 = none; 0 .. 6 GHz */
+snprintf(e.kind, sizeof(e.kind), "message");       /* [a-z0-9._-], 1 to 23 bytes */
+snprintf(e.text, sizeof(e.text), "%s", line);      /* UTF-8, up to 191 bytes */
+host->post_event(host->ctx, &e);                   /* the host fills plugin, seq, unixMs, flags */
+
+uint64_t seen = 0;
+CascadeEvent out[64];
+for (int i = 0; i < 64; ++i) out[i].structSize = sizeof(CascadeEvent);
+int n = host->read_events(host->ctx, seen, out, 64);   /* oldest first; n events with seq > seen */
+if (n > 0) seen = out[n - 1].seq;
+```
+
+* **One ring, in memory only.** The newest `CASCADE_EVENT_RING` (1,024) events of every plugin; the host never writes them to disk. Sequence numbers start at 1 and are never
+  reused, so "everything after the last I saw" is exact, and a reader that fell more than 1,024 behind sees the gap in the first `seq` it gets. `events_seq` is the newest number
+  assigned (0 = none yet): poll it cheaply and call `read_events` only when it moved.
+* **The host posts too.** Every decoder line the host drains (the text that fills the decoder panel) is also an event of kind `"text"` (`CASCADE_EVENT_KIND_TEXT`), posted under the
+  plugin's name with the tuned frequency. A plugin that reads events therefore sees what the panel shows - and an alert or logbook plugin needs no private channel to the decoders.
+* **What a post is refused for:** a NULL or short struct, a kind that is empty, has a character outside `[a-z0-9._-]` or is not terminated, a non-finite frequency (`BAD_ARGUMENT`),
+  a frequency below 0 or above 6 GHz (`OUT_OF_RANGE`), a plugin that is not live (`DETACHED`). Control characters in the text become spaces; a text cut at 191 bytes keeps whole
+  characters. The host assigns `plugin`, `seq`, `unixMs` and `flags` whatever the struct held.
+* **Private plugins' events are their own.** An event of a plugin that sets `CASCADE_FLAG_PRIVATE_DATA` carries `CASCADE_EVENT_FLAG_PRIVATE` and is delivered only to that plugin
+  (and to the host's own windows): another plugin's `read_events` skips it. Sequence numbers still count it, so a reader sees a gap, not a loss. This is what lets an alert or logbook
+  plugin exist without receiving identifiers a private plugin keeps to itself.
+* **Posting is bounded, not metered.** A plugin that posts without limit only costs the others the events it displaced from the ring; there is no per-plugin quota yet.
+* **Not in this change:** the rest of the planned "level 3" list (azimuth and elevation, the symbol rate, several pictures per decoder) and any consumer inside the host (the alert
+  rules and the decode database read the same ring through `PluginApiCore::hostEvents`).
+
+## Private data (`CASCADE_FLAG_PRIVATE_DATA`)
+
+A plugin that handles identifiers of people or devices - a Remote ID serial, a trunked radio's subscriber id, a meter number, a Bluetooth address, a
+callsign - sets one more bit in `capabilities`, beside the capabilities it really has:
+
+```c
+desc.capabilities = CASCADE_CAP_DECODER | CASCADE_CAP_PANEL | CASCADE_FLAG_PRIVATE_DATA;
+```
+
+It is a **flag, not a capability**: bit 31, no table, no entry in `capabilityTables`, outside `CASCADE_CAP_ALL_KNOWN`, and a plugin that declares only the
+flag provides the host nothing and is refused like one that declares only bits the host does not know. A host that predates the flag ignores it, as
+it ignores every bit it does not know (ABI 3's rule), so setting it never stops a plugin loading anywhere.
+
+What a host that knows it does with the plugin's output:
+
+| Sink | Private plugin's data |
+|---|---|
+| the host's own windows (decoder panel, map, rows, instruments) | shown, as always (memory only) |
+| the web page ("decoded" lines, "tracks", the pictures served at `/api/image`) | **left out**: the lines and targets are not in the status; a picture's slot is listed with no bitmap (width 0, not complete) |
+| a REMOTE engine-API session (`FOXAPI_LIST_DECODER_LINES`) | the line arrives numbered and named with its **text blank** |
+| the diagnostics a person copies (the newest decoded lines) | **left out** |
+| the diagnostic log and every report the host uploads | nothing of a plugin's text is ever written there: `poll_text` and `log` are memory only, whether or not the flag is set |
+
+The flag changes none of the plugin's own duties, which the host cannot enforce: **never print an identifier to stderr or stdout** (the host captures a
+process's stderr into its log, from which reports are made), and **never put an identifier, salt or decoded value into a setting** (`settings_set` writes
+every value to the configuration file, with dated backup copies). A plugin that does either is not made private by this flag.
+
+Settings of the PASSWORD kind travel the same configuration file as any other setting: whether they are protected at rest there is not decided
+(owner decision pending) and this flag does not change it.
+
 ## Checklist before you ship
 
 - Every level-1 call is behind `CASCADE_HOST_HAS`, and the plugin says what it

@@ -339,6 +339,96 @@ void testAgcAndNoiseBlanker() {
     CHECK_EQ(s.state().nbEnabled, 1u);
 }
 
+// THE TONE SQUELCH (docs/API.md 6.19, engine wiring lane 1): the kind and the values come back in the state and move the mode group, the values not carried keep the last choice,
+// the ranges are refused, the target rule is the AGC's, and the measurements are the mock's quiet ones.
+void testToneSquelch() {
+    testing::Engine e(api());
+    testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
+    FoxReceiverState st = s.state();
+    CHECK_EQ(st.toneKind, static_cast<uint32_t>(FOXAPI_TONE_OFF));
+    CHECK_EQ(st.toneRemove, 0u);
+    CHECK_EQ(st.toneGate, 1u);
+    const uint64_t before = st.modeSeq;
+    FoxCommand tq = cmd(FOXAPI_OP_SET_TONE_SQUELCH, 123.0, FOXAPI_TONE_CTCSS);
+    tq.ival[1] = 1;
+    CHECK_EQ(s.run(tq).status(), FOXAPI_OK);
+    st = s.state();
+    CHECK_EQ(st.toneKind, static_cast<uint32_t>(FOXAPI_TONE_CTCSS));
+    CHECK_EQ(st.toneHz, 123.0);
+    CHECK(st.modeSeq > before);
+    tq = cmd(FOXAPI_OP_SET_TONE_SQUELCH, 0.0, FOXAPI_TONE_DCS);   // no values: the last choice is kept
+    CHECK_EQ(s.run(tq).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().toneHz, 123.0);
+    tq.ival[1] = 1;
+    tq.num[1] = 754.0;
+    tq.num[2] = 2.0;
+    CHECK_EQ(s.run(tq).status(), FOXAPI_OK);
+    st = s.state();
+    CHECK_EQ(st.toneCode, 754u);
+    CHECK_EQ(st.tonePolarity, 2u);
+    CHECK_EQ(st.toneDetectedHz, 0.0);
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_TONE_REMOVE, 0.0, 1)).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().toneRemove, 1u);
+    FoxCommand bad = cmd(FOXAPI_OP_SET_TONE_SQUELCH, 0.0, 3);
+    CHECK_EQ(s.run(bad).status(), FOXAPI_OUT_OF_RANGE);
+    bad = cmd(FOXAPI_OP_SET_TONE_SQUELCH, 0.0, FOXAPI_TONE_DCS);
+    bad.ival[1] = 1;
+    bad.num[2] = 3.0;
+    CHECK_EQ(s.run(bad).status(), FOXAPI_OUT_OF_RANGE);
+    bad = cmd(FOXAPI_OP_SET_TONE_SQUELCH, 0.0, FOXAPI_TONE_OFF);
+    bad.target = 2;
+    CHECK_EQ(s.run(bad).status(), FOXAPI_NO_DEVICE);
+    CHECK_EQ(s.state().toneKind, static_cast<uint32_t>(FOXAPI_TONE_DCS));
+    // the S-meter's display units (0x0115): a setting, refused past dBm, the estimate flagged uncalibrated
+    CHECK_EQ(s.state().meterUnits, static_cast<uint32_t>(FOXAPI_METER_DBFS));
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_METER_UNITS, 0.0, FOXAPI_METER_S)).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().meterUnits, static_cast<uint32_t>(FOXAPI_METER_S));
+    CHECK_EQ(s.state().calibrated, 0u);
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_METER_UNITS, 0.0, 3)).status(), FOXAPI_OUT_OF_RANGE);
+    CHECK_EQ(s.state().meterUnits, static_cast<uint32_t>(FOXAPI_METER_S));
+    // the noise-reduction method (0x0116)
+    CHECK_EQ(s.state().nrMethod, static_cast<uint32_t>(FOXAPI_NR_STANDARD));
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_NR_METHOD, 0.0, FOXAPI_NR_LINE)).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().nrMethod, static_cast<uint32_t>(FOXAPI_NR_LINE));
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_NR_METHOD, 0.0, 3)).status(), FOXAPI_OUT_OF_RANGE);
+    // the equaliser and the audio filters (0x011A, 0x011B)
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_EQ_BAND, 6.0, 2)).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().eqDb[2], 6.0);
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_EQ_BAND, 13.0, 2)).status(), FOXAPI_OUT_OF_RANGE);
+    FoxCommand af = cmd(FOXAPI_OP_SET_AUDIO_FILTERS, 0.0, 300);
+    af.ival[1] = 6000;
+    CHECK_EQ(s.run(af).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().audioHighPassHz, 300u);
+    CHECK_EQ(s.state().audioLowPassHz, 6000u);
+    af.ival[0] = 200;
+    CHECK_EQ(s.run(af).status(), FOXAPI_OUT_OF_RANGE);
+    // the FM noise squelch (0x0119)
+    CHECK_EQ(s.state().noiseSquelchThresholdDb, -30.0);
+    FoxCommand nq = cmd(FOXAPI_OP_SET_NOISE_SQUELCH, -44.0, 1);
+    nq.ival[1] = 1;
+    nq.num[1] = 250.0;
+    CHECK_EQ(s.run(nq).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().noiseSquelchOn, 1u);
+    CHECK_EQ(s.state().noiseSquelchTailMs, 250.0);
+    nq.num[0] = 1.0;
+    CHECK_EQ(s.run(nq).status(), FOXAPI_OUT_OF_RANGE);
+    // the CW pitch (0x0118)
+    CHECK_EQ(s.state().cwPitchHz, 700.0);
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_CW_PITCH, 450.0)).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().cwPitchHz, 450.0);
+    CHECK_EQ(s.run(cmd(FOXAPI_OP_SET_CW_PITCH, 1300.0)).status(), FOXAPI_OUT_OF_RANGE);
+    // the manual notch bank (0x0117)
+    FoxCommand ns = cmd(FOXAPI_OP_SET_NOTCH_SLOT, 1500.0, 1);
+    ns.ival[1] = 1;
+    ns.num[1] = 40.0;
+    ns.num[2] = 6.0;
+    CHECK_EQ(s.run(ns).status(), FOXAPI_OK);
+    CHECK_EQ(s.state().notchBankMask, 1u << 6);
+    CHECK_EQ(s.state().notchBankHz[6], 1500.0);
+    ns.num[2] = 10.0;
+    CHECK_EQ(s.run(ns).status(), FOXAPI_OUT_OF_RANGE);
+}
+
 void testBatchAndQueueBound() {
     testing::Engine e(api());
     testing::Session s(api(), e.raw(), FOXAPI_SESSION_LOCAL, kAllGrants);
@@ -1134,6 +1224,7 @@ int main() {
     testRefusals();
     testRadios();
     testAgcAndNoiseBlanker();
+    testToneSquelch();
     testBatchAndQueueBound();
     testRefusalsAreResults();
     testRefusedFlagMeansNothingChanged();

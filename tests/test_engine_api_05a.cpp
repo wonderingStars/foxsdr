@@ -505,6 +505,7 @@ std::set<std::uint32_t> opsOfEveryRequest() {
     all.mode = cascade::dsp::DemodMode::NFM;
     all.bandwidthHz = 12500.0;
     all.squelchDb = -60.0;
+    all.muted = true;
     all.volume = 0.5;
     all.dbMin = -100.0;
     all.dbMax = -20.0;
@@ -596,7 +597,7 @@ void testProfileClosure() {
     }
     CHECK_EQ(app, 6);
     CHECK_EQ(admin, 3);
-    CHECK_EQ(web.size(), static_cast<std::size_t>(38));
+    CHECK_EQ(web.size(), static_cast<std::size_t>(39));
     // CAT: exactly what F and M send.
     const std::set<std::uint32_t> catEmitted = opsOfEveryCatLine();
     CHECK(cat == catEmitted);
@@ -722,7 +723,7 @@ void testProfileViolationIsAResult() {
     CHECK(std::fabs(desk.state().volume - 0.25) < 1e-9);
     // Not on the web profile: answered DENIED, as a RESULT (the submit itself succeeds), with the profile's sentence, REFUSED set,
     // and the engine unchanged.
-    const std::uint32_t off[] = {FOXAPI_OP_SET_MUTED, FOXAPI_OP_SERVER_CONFIG, FOXAPI_OP_TX_LATCH, FOXAPI_OP_TX_OPEN, FOXAPI_OP_STORE_CANCEL,
+    const std::uint32_t off[] = {FOXAPI_OP_SERVER_CONFIG, FOXAPI_OP_TX_LATCH, FOXAPI_OP_TX_OPEN, FOXAPI_OP_STORE_CANCEL,
                                  FOXAPI_OP_STORE_UPDATE_ALL, FOXAPI_OP_PATCH_RUN, FOXAPI_OP_BOOKMARK_FAVOURITE, FOXAPP_OP_SET_BANDWIDTH_STEP,
                                  FOXAPP_OP_TELEMETRY_CONSENT, FOXAPP_OP_SET_CATALOGUE_URL, FOXAPI_OP_AUDIO_DEVICE};
     for (const std::uint32_t op : off) {

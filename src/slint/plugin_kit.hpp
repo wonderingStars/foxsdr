@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <set>
 #include <string>
@@ -161,6 +162,9 @@ public:
     void editSetting(const std::string& file, const SettingSpec& f, const std::string& typed);
     // Saves the plugin's newest picture as a BMP beside the settings file; the sentence for the save note.
     std::string savePicture(const std::string& plugin);
+    // THE SAME SAVE ON A WORKER (slint-gaps.md item 4; the classic's AppWindow::saveImageBmp): everything on the window's thread is a copy of the picture and the two paths; the returned job does the
+    // disk work (the folder, a name that is taken atomically, the BMP) and answers the sentence the note shows. An empty job: `refusal` says why (nothing to save yet).
+    std::function<std::string()> prepareSavePicture(const std::string& plugin, std::string& refusal);
 
 private:
     void directiveBefore(const cascade::core::PluginDirectiveFacts& d);
@@ -184,6 +188,7 @@ private:
     KitLists lists_;
     std::deque<DecoderLine> lines_;
     std::uint64_t linesLastId_ = 0, linesSeenTotal_ = 0;
+    bool rereadLists_ = false;   // a settings edit was answered (tick re-reads the lists once)
     std::vector<MapPage> pages_;
     OpenWindows open_;
     SettingsEdits edits_;

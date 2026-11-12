@@ -104,6 +104,9 @@ struct RadioStatus {
     // which goes wrong the moment the desktop window changes something.
     float squelchDb = 0.0f;
     float volume = 0.0f;
+    // THE USER'S OWN MUTE (FOXAPI_RX_MUTED), so the page's MUTE button shows what the window's MUTE key set. Not the plugins' mute
+    // (audioMutedBy, below): that one is not the user's to undo from here.
+    bool muted = false;
 
     // --- Display ---------------------------------------------------------
     // The dB range the desktop's spectrum axis and waterfall colormap share.
@@ -528,6 +531,9 @@ public:
     // Browsers currently streaming audio, for the settings panel.
     std::size_t audioListeners() const;
 
+    // How many browsers hold the live-update stream (GET /api/events) open right now.
+    std::size_t eventListeners() const;
+
     // Replaces the served set of decoded pictures (already BMP-encoded). The engine's image feed (engine/image_feed.hpp) calls this from
     // its worker, only when a decoder's picture actually changed - re-encoding a megapixel BMP every poll would cost more than the whole
     // rest of the server.
@@ -578,6 +584,14 @@ public:
     // API — a page that cannot fetch its own status is a worse failure than one
     // that cannot play audio.
     static constexpr std::size_t kMaxAudioListeners = 4;
+
+    // The cap on live-update streams (GET /api/events). Each one parks an HTTP worker for as long as it is open, like an audio listener,
+    // so it has a cap of its own; the one over it is answered 503 and the page falls back to polling.
+    static constexpr std::size_t kMaxEventListeners = 4;
+    // How often an open stream looks for a change, and how long it may be silent before it sends a comment line (a keep-alive that also
+    // finds a dead peer: the write fails).
+    static constexpr std::chrono::milliseconds kEventTick{250};
+    static constexpr std::chrono::seconds kEventHeartbeat{15};
 
 private:
     class Impl;  // holds the httplib::Server and the route handlers

@@ -1,0 +1,18 @@
+#! frames=360 size=1600x900 FOXSDR_SLINT_MENU=40:101;80:105;200:106;240:104;280:102
+# gaps-counter-menu (docs/multi-radio-records/slint-gaps.md item 6): the counter's right-click menu. The classic's menu has Enlarge figures, Normal size, Show tuner switches, Counter face and Enlarge every reading;
+# three of them only logged in this window. Now they save counterScale and readingsScale (the settings SYSTEM > Display saves and the classic reads); this window does not draw the figures larger yet (the record). Copy
+# frequency and Paste frequency are new. A popup's rows cannot be reached by label and there is no right-click verb, so each entry is activated by a seam (FOXSDR_SLINT_MENU=<tick>:<id>) through the menu's own callback; a
+# bounded run has its own clipboard (the desk's is neither read nor changed). Paste goes through the tuning path, so a locked radio refuses it.
+10 state running == 1
+state cfg.counterScale == 1
+state cfg.readingsScale < 1.1
+45 state cfg.counterScale == 2
+# copy the frequency (the dotted text in force), tune away by typing, paste it back (tick 200)
+85 state gaps.clip == "100.300.000"
++1 click "1 MHz digit"
++3 type "Frequency in MHz" "101.1"
++1 key enter
++12 state tunedHz == 101100000
+205 state tunedHz == 100300000
+245 state cfg.readingsScale > 1.1
+285 state cfg.counterScale == 1

@@ -204,7 +204,9 @@ void Engine::reportPluginStatus(const std::vector<cascade::core::HostImage>& ima
     // The last few decoded lines: the only evidence that the chain from
     // antenna to plugin text actually closed.
     std::size_t shown = 0;
-    for (auto it = decoderLog_.rbegin(); it != decoderLog_.rend() && shown < 5; ++it, ++shown) {
+    for (auto it = decoderLog_.rbegin(); it != decoderLog_.rend() && shown < 5; ++it) {
+        if (it->privateData) { continue; }   // a private plugin's text is never in what a person copies out
+        ++shown;
         std::printf("plugin text: [%s] %s\n", it->plugin.c_str(), it->text.c_str());
     }
     for (const cascade::core::BlockedPlugin& b : pluginBlocked_) {

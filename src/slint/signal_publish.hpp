@@ -67,6 +67,18 @@ public:
     // The import dialog opened for an Airband preset (docs 6.61), and what a path typed in it does: the host hands it to the TOOLS bank's preset import.
     void openImportForPreset(const std::string& preset);
     void setPresetImport(std::function<void(const std::string& path, const std::string& preset)> fn) { presetImport_ = std::move(fn); }
+    // A FILE DROPPED ON THE WINDOW (slint-gaps.md item 8; the classic's submitPendingDrop): a recording is opened as the I/Q file (the Source row moves to the I/Q file, the file is opened as Open would
+    // open it); a frequency list goes to the import, as the Import key's box would send it. The caller has already told which it is (gaps_logic classifyDrop).
+    void openDroppedRecording(const std::string& path);
+    void importDroppedList(const std::string& path);
+    // RESTART SDRPLAY SERVICE (slint-gaps.md item 9; the classic's app_window_sdrplay.cpp). The key asks Windows for elevation (a UAC prompt) and restarts the service on a worker; a TEST replaces
+    // the elevated launcher with a stand-in so nothing is ever asked of Windows (the real call is only reached by pressing the key on a machine that shows it).
+    void setSdrPlayLauncherForTest(std::function<void()> standIn);
+    // The last restart's phase word for the drive scripts ("idle", "running", "done", "failed", "cancelled", "timedout", "notstarted") and how many times the key reached the launcher.
+    std::string sdrPlayRestartState() const;
+    int sdrPlayRestartCalls() const;
+    // TESTS ONLY: makes the key appear as if the driver had trouble reaching the service (the machine here has no SDRplay service to show it for).
+    void forceSdrPlayKeyForTest(const std::string& serviceName);
 
 private:
     // A list model kept between publishes and updated row by row.
@@ -96,6 +108,10 @@ private:
     bool iqPaste();
     void updateClocks();
     double nowS() const;
+    void pollSdrPlay();
+    void sdrPlayRestartPressed();
+    struct SdrState;
+    std::unique_ptr<SdrState> sdr_;
 
     // ---- the models ----
     ::SourceModel mapSource(const SourceModel& m);

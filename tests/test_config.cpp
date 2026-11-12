@@ -31,6 +31,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/config.hpp"
+#include "core/smeter_cal.hpp"
 
 #include <limits>  // the manual gain memory's non-finite stages
 
@@ -387,6 +388,21 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.agcFixedGainDb == b.agcFixedGainDb);
     CHECK(a.nbEnabled == b.nbEnabled);
     CHECK(a.nbThresholdDb == b.nbThresholdDb);
+    CHECK(a.toneSquelchKind == b.toneSquelchKind);
+    CHECK(a.toneSquelchHz == b.toneSquelchHz);
+    CHECK(a.toneSquelchCode == b.toneSquelchCode);
+    CHECK(a.toneSquelchPolarity == b.toneSquelchPolarity);
+    CHECK(a.toneRemove == b.toneRemove);
+    CHECK(a.meterUnits == b.meterUnits);
+    CHECK(a.nrMethod == b.nrMethod);
+    CHECK(a.cwPitchHz == b.cwPitchHz);
+    CHECK(a.eqDb == b.eqDb && a.audioHighPassHz == b.audioHighPassHz && a.audioLowPassHz == b.audioLowPassHz);
+    CHECK(a.noiseSquelchOn == b.noiseSquelchOn && a.noiseSquelchThresholdDb == b.noiseSquelchThresholdDb && a.noiseSquelchTailMs == b.noiseSquelchTailMs);
+    CHECK(a.notchBank.size() == b.notchBank.size());
+    for (std::size_t i = 0; i < a.notchBank.size() && i < b.notchBank.size(); ++i) {
+        CHECK(a.notchBank[i].slot == b.notchBank[i].slot && a.notchBank[i].hz == b.notchBank[i].hz && a.notchBank[i].widthHz == b.notchBank[i].widthHz && a.notchBank[i].on == b.notchBank[i].on);
+    }
+    CHECK(a.smeterCal == b.smeterCal);
     CHECK(a.notchEnabled == b.notchEnabled);
     CHECK(a.notchFreqHz == b.notchFreqHz);
     CHECK(a.notchQ == b.notchQ);
@@ -910,6 +926,28 @@ int main() {
         in.agcFixedGainDb = -7.5f;  // below unity: the widened range (default 0)
         in.nbEnabled = true;      // (default off)
         in.nbThresholdDb = 22.5f; // (default 15)
+        in.toneSquelchKind = 2;       // DCS (default Off)
+        in.toneSquelchHz = 123.0;
+        in.toneSquelchCode = 754;
+        in.toneSquelchPolarity = 2;
+        in.toneRemove = true;
+        in.meterUnits = 2;   // dBm (default dBFS)
+        in.nrMethod = 1;     // spectral (default standard)
+        in.cwPitchHz = 850.0;   // (default 700)
+        in.noiseSquelchOn = true;   // (default off)
+        in.eqDb = {1.5, 0.0, -3.0, 0.0, 0.0, 6.0, 0.0, -12.0};   // (default flat)
+        in.audioHighPassHz = 100;
+        in.audioLowPassHz = 2400;
+        in.noiseSquelchThresholdDb = -42.5;   // (default -30)
+        in.noiseSquelchTailMs = 160.0;        // (default 100)
+        in.notchBank.push_back({2, 1750.0, 33.0, true});   // (default: none)
+        in.notchBank.push_back({7, 400.0, 12.5, false});
+        {
+            cascade::core::smeter::CalTable t;   // (the canonical text, as the loader keeps it)
+            t.set({0.0, 30.0e6, 43.5, 20.0, true});
+            t.set({30.0e6, 6.0e9, 51.25, 20.0, true});
+            in.smeterCal["rtlsdr|serial=00000001"] = t.toText();
+        }
         in.notchEnabled = true;
         in.notchFreqHz = 1234.5;
         in.notchQ = 42.25;
@@ -2200,6 +2238,38 @@ int main() {
         CHECK(writeText(path, "{\"agcMode\":2,\"agcFixedGainDb\":-20.0,\"nbEnabled\":true,\"nbThresholdDb\":6.0}\n"));
         CHECK(ConfigStore::load(path, out, err));
         CHECK(out.agcMode == 2 && out.agcFixedGainDb == -20.0f && out.nbEnabled && out.nbThresholdDb == 6.0f);
+
+        // THE TONE SQUELCH (engine wiring lane 1): a file without the keys loads as Off; a kind out of range lands on the nearest end; a tone that is not one of the 50, a
+        // code that is not one of the 83 and a polarity out of range fall back to "any"; an older reader never sees the keys (it ignores what it does not know).
+        CHECK(writeText(path, "{}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.toneSquelchKind == 0 && out.toneSquelchHz == 0.0 && out.toneSquelchCode == 0 && out.toneSquelchPolarity == 0 && !out.toneRemove);
+        CHECK(writeText(path, "{\"toneSquelchKind\":9,\"toneSquelchHz\":99.0,\"toneSquelchCode\":24,\"toneSquelchPolarity\":7}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.toneSquelchKind == 2 && out.toneSquelchHz == 0.0 && out.toneSquelchCode == 0 && out.toneSquelchPolarity == 2);
+        CHECK(writeText(path, "{\"toneSquelchKind\":-3,\"toneSquelchHz\":-1.0,\"toneSquelchCode\":19,\"toneSquelchPolarity\":-1}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.toneSquelchKind == 0 && out.toneSquelchHz == 0.0 && out.toneSquelchCode == 0 && out.toneSquelchPolarity == 0);
+        CHECK(writeText(path, "{\"toneSquelchKind\":1,\"toneSquelchHz\":88.5,\"toneSquelchCode\":754,\"toneSquelchPolarity\":1,\"toneRemove\":true}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.toneSquelchKind == 1 && out.toneSquelchHz == 88.5 && out.toneSquelchCode == 754 && out.toneSquelchPolarity == 1 && out.toneRemove);
+
+        // S-METER UNITS AND CALIBRATION (engine wiring lane 1): units clamped, a calibration text that does not parse (or is empty, or is a number) dropped whole, per device.
+        CHECK(writeText(path, "{\"meterUnits\":9}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.meterUnits == 2 && out.smeterCal.empty());
+        CHECK(writeText(path, "{\"nrMethod\":9}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.nrMethod == 2);
+        CHECK(writeText(path, "{\"nrMethod\":-1}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.nrMethod == 0);
+        CHECK(writeText(path, "{\"meterUnits\":-4}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.meterUnits == 0);
+        CHECK(writeText(path, "{\"smeterCal\":{\"good\":\"0 30000000 43.5 20 1\\n\",\"bad\":\"nonsense\",\"empty\":\"\",\"num\":5,\"\":\"0 30000000 1 0 1\\n\"}}\n"));
+        CHECK(ConfigStore::load(path, out, err));
+        CHECK(out.smeterCal.size() == 1 && out.smeterCal.count("good") == 1);
 
         // notch frequency stays inside the audible span of the 48 kHz sink,
         // and Q inside the biquad's useful range.

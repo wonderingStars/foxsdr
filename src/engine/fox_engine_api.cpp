@@ -43,6 +43,7 @@
 #include "core/utf8_text.hpp"
 #include "engine/engine.hpp"
 #include "engine/plugin_ui_port.hpp"
+#include "dsp/tone_squelch.hpp"
 #include "engine/radio_scope.hpp"
 #include "core/receiver_tables.hpp"
 #include "net/status_compose.hpp"
@@ -410,7 +411,7 @@ constexpr std::uint32_t kWebProfile[] = {
     FOXAPI_OP_SET_SAMPLE_RATE, FOXAPI_OP_SET_GAIN,      FOXAPI_OP_SET_DEVICE_AGC, FOXAPI_OP_RECORD_IQ,
     FOXAPI_OP_RECORD_AUDIO,  FOXAPI_OP_BOOKMARK_ADD,    FOXAPI_OP_BOOKMARK_TUNE,  FOXAPI_OP_BOOKMARK_REMOVE,
     FOXAPI_OP_PLUGIN_GRANT,  FOXAPI_OP_PLUGIN_PRESET,   FOXAPI_OP_SCANNER_RUN,    FOXAPI_OP_SCANNER_SKIP,
-    FOXAPI_OP_TX_PTT,
+    FOXAPI_OP_TX_PTT,        FOXAPI_OP_SET_MUTED,
     // the plugin store: ADMIN ops the page's "Get plugins", Install and Remove buttons send (the profile, not a grant, allows them)
     FOXAPI_OP_STORE_FETCH,   FOXAPI_OP_STORE_INSTALL,   FOXAPI_OP_STORE_REMOVE,
     // the application's own ops the page's sliders send (every other REMOTE session is refused all of them)
@@ -1476,6 +1477,7 @@ public:
             d.number = total - (log.size() - i) + 1;
             d.node = log[i].node;
             d.radio = log[i].radio;
+            d.priv = log[i].privateData;
             copyText(d.plugin, log[i].plugin.c_str());
             copyText(d.text, log[i].text.c_str());
             ++decoderLinesNext_;
@@ -1814,6 +1816,7 @@ private:
         uint64_t number = 0;
         uint64_t node = 0;       // API 0.3 8.12: the patch decoder node the line came from, 0 = the receiver's own
         uint32_t radio = 0;      // the radio whose decoder said it (stage 7; DECODER_LINES value[1]), 0 = a patch decoder
+        bool priv = false;       // the plugin set CASCADE_FLAG_PRIVATE_DATA (engine wiring W2): a REMOTE session reads the line with its text blank
         char plugin[96] = {};
         char text[160] = {};
     };
@@ -1955,6 +1958,36 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
         case FOXAPI_OP_SET_NB:
             // with ival[1] = 1 the threshold, 6..30 dB above the average
             return (c.ival[1] == 0 || (v >= 6.0 && v <= 30.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_EQ_BAND:
+            return (c.ival[0] >= 0 && c.ival[0] <= 7 && c.num[0] >= -12.0 && c.num[0] <= 12.0) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_AUDIO_FILTERS:
+            return ((c.ival[0] == 0 || c.ival[0] == 100 || c.ival[0] == 300) &&
+                    (c.ival[1] == 0 || c.ival[1] == 2400 || c.ival[1] == 3000 || c.ival[1] == 6000))
+                       ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_NOISE_SQUELCH:
+            return (c.ival[1] == 0 || (c.num[0] >= -90.0 && c.num[0] <= 0.0 && c.num[1] >= 0.0 && c.num[1] <= 2000.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_CW_PITCH:
+            return (c.num[0] >= 300.0 && c.num[0] <= 1200.0) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_NOTCH_SLOT: {
+            // the slot 0..9 (a whole number, in num[2]); with ival[1] = 1 the frequency 20..21600 Hz and the width 1..2000 Hz
+            const double slot = c.num[2];
+            if (!(slot >= 0.0 && slot <= 9.0) || slot != std::floor(slot)) { return FOXAPI_OUT_OF_RANGE; }
+            if (c.ival[1] == 0) { return FOXAPI_OK; }
+            return (c.num[0] >= 20.0 && c.num[0] <= 21600.0 && c.num[1] >= 1.0 && c.num[1] <= 2000.0) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        }
+        case FOXAPI_OP_SET_NR_METHOD:
+            return (c.ival[0] >= 0 && c.ival[0] <= static_cast<long long>(FOXAPI_NR_LINE)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_METER_UNITS:
+            return (c.ival[0] >= 0 && c.ival[0] <= static_cast<long long>(FOXAPI_METER_DBM)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_TONE_SQUELCH: {
+            // the kind 0..2; with ival[1] = 1 the values too: a CTCSS tone of the 50 (or 0), a DCS code of the 83 written as digits (or 0), a polarity 0..2
+            if (c.ival[0] < 0 || c.ival[0] > static_cast<long long>(FOXAPI_TONE_DCS)) { return FOXAPI_OUT_OF_RANGE; }
+            if (c.ival[1] == 0) { return FOXAPI_OK; }
+            const double code = c.num[1];
+            const double pol = c.num[2];
+            if (!(code >= 0.0 && code <= 777.0) || code != std::floor(code) || !(pol >= 0.0 && pol <= 2.0) || pol != std::floor(pol)) { return FOXAPI_OUT_OF_RANGE; }
+            return (cascade::dsp::tone::validCtcssHz(c.num[0]) && cascade::dsp::tone::validDcsDigits(static_cast<int>(code))) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        }
         case FOXAPI_OP_SET_NOTCH:
             return (c.ival[1] == 0 || (v >= 10.0 && v <= 20000.0 && c.num[1] >= 0.1 && c.num[1] <= 1000.0))
                        ? FOXAPI_OK
@@ -1976,6 +2009,7 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
             if (remote && (std::strncmp(c.text, "file:", 5) == 0 || std::strncmp(c.text, "pluto:", 6) == 0 ||
                            std::strncmp(c.text, "open-pluto:", 11) == 0 ||
                            std::strncmp(c.text, "open-rtltcp:", 12) == 0 ||
+                           std::strncmp(c.text, "open-kiwisdr:", 13) == 0 ||   // (an outward connection to an address the remote client chose)
                            std::strncmp(c.text, "soundcard:", 10) == 0)) {
                 return FOXAPI_DENIED;
             }
@@ -2281,6 +2315,11 @@ void ApiHostImpl::applyTestHook(const Pending& p, FoxCommandResult& r, const std
         // pumpDecoderOutput appends it.
         const std::size_t bar = val.find('|');
         engine_.decoderLog_.push_back({val.substr(0, bar), bar == std::string::npos ? std::string() : val.substr(bar + 1)});
+        engine_.decoderLog_.back().privateData = engine_.pluginIsPrivate(engine_.decoderLog_.back().plugin);   // as pumpDecoderOutput stamps it
+        if (engine_.pluginApi_) {   // ...and feeds the event ring
+            const cascade::core::DecodedLine& line = engine_.decoderLog_.back();
+            engine_.pluginApi_->hostPostEvent(line.plugin, line.privateData, CASCADE_EVENT_KIND_TEXT, line.text, engine_.currentAbsoluteHz());
+        }
         while (engine_.decoderLog_.size() > Engine::kDecoderLogMax) { engine_.decoderLog_.pop_front(); }
         ++engine_.decoderLinesTotal_;
     } else if (key == "test.muteBy") {
@@ -3297,7 +3336,9 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 const DecoderLine& d = decoderLines_[(decoderLinesNext_ - n + index) % kDecoderLines];
                 it.id = d.number;
                 copyText(it.name, d.plugin);
-                copyText(it.detail, d.text);
+                // A PRIVATE PLUGIN'S LINE reaches a REMOTE session (the web page, a network client) with its text blank: the line is still
+                // counted and numbered, so a reader's cursor and the line count stay true, and the plugin's name says who was quiet.
+                if (!(d.priv && (s->flags & FOXAPI_SESSION_REMOTE) != 0u)) { copyText(it.detail, d.text); }
                 it.value[0] = static_cast<double>(d.node);  // (API 0.3 8.12) the patch decoder node, 0 = the receiver's
                 it.value[1] = static_cast<double>(d.radio); // (stage 7) the radio whose decoder said it; 0 = a patch decoder's line
             }

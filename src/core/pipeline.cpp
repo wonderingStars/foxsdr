@@ -465,9 +465,21 @@ void Pipeline::rebuildChannelBlocks(double chanRate) {
     // carried over — a rate change is a stream discontinuity, and a PS name
     // that survived one would be exactly the stale readout resetRds() exists
     // to prevent.
+    // The tone squelch's detectors listen at the channel rate too: rebuilt for it (a rate change is a discontinuity: the lock is forgotten).
+    toneChanRateHz_ = chanRate;
+    configureToneLocked();
+    noiseSq_ = std::make_unique<cascade::dsp::NoiseSquelch>(chanRate);   // (the FM noise squelch listens at the channel rate: rebuilt with it, its settings put back)
+    noiseSq_->setThresholdDb(noiseSqThresholdDb_);
+    noiseSq_->setTailMs(noiseSqTailMs_);
+    noiseSq_->setEnabled(noiseSqOn_);
+    toneHpL_.configure(kAudioRateHz);
+    toneHpR_.configure(kAudioRateHz);
     stereo_ = std::make_unique<cascade::dsp::StereoFm>(chanRate);
     stereo_->setDeemphasisUs(deemphasisUs_);
     stereo_->setForceMono(!stereoEnabled_);
+    oirt_ = std::make_unique<cascade::dsp::OirtStereo>(chanRate, 1);   // (decimation 1: the audio leaves at the channel rate, as StereoFm's does)
+    oirt_->setDeemphasisUs(deemphasisUs_);
+    oirt_->setForceMono(!stereoEnabled_);
     rds_ = std::make_unique<cascade::dsp::RdsDecoder>(chanRate);
     resetDecodersLocked();
 }
@@ -509,6 +521,7 @@ void Pipeline::applyChannelBandwidthLocked() {
 void Pipeline::resetDecodersLocked() {
     rds_->reset();
     stereo_->reset();  // stream state only; force-mono and tau are settings
+    oirt_->reset();
     rdsPubGroups_ = 0;
     rdsPubErrors_ = 0;
     {
@@ -1050,6 +1063,7 @@ void Pipeline::setDeemphasisUs(double us) {
             // was the whole of the setter and NFM never de-emphasised: the
             // missing half is the helper.
             stereo_->setDeemphasisUs(us);
+            oirt_->setDeemphasisUs(us);
             applyDemodDeemphasisLocked();
         },
         [this, us] { mirrorDeemphasisUs_.store(us, std::memory_order_relaxed); });
@@ -1092,8 +1106,23 @@ void Pipeline::setStereoEnabled(bool on) {
             // and stereo instead of stepping — a step in the difference channel is
             // an audible click in both speakers.
             stereo_->setForceMono(!on);
+            oirt_->setForceMono(!on);
         },
         [this, on] { mirrorStereoEnabled_.store(on, std::memory_order_relaxed); });
+}
+
+void Pipeline::setStereoSystem(int system) {
+    if (system != 1 && system != 2) { return; }
+    post([this, system] { stereoSystem_ = system; },
+         [this, system] { mirrorStereoSystem_.store(system, std::memory_order_relaxed); });
+}
+
+int Pipeline::stereoSystem() const {
+    return mirrorStereoSystem_.load(std::memory_order_relaxed);
+}
+
+bool Pipeline::oirtActive() const {
+    return oirtActive_.load(std::memory_order_relaxed);
 }
 
 bool Pipeline::stereoEnabled() const {
@@ -1129,6 +1158,7 @@ void Pipeline::resetRds() {
 void Pipeline::setNoiseReductionEnabled(bool on) {
     post(
         [this, on] {
+            nrOn_ = on;
             nrL_->setEnabled(on);
             nrR_->setEnabled(on);
         },
@@ -1145,6 +1175,11 @@ void Pipeline::setNoiseReductionStrength(float s01) {
     post([this, s01] {
         nrL_->setStrength(s01);
         nrR_->setStrength(s01);
+        nrStrengthNow_ = nrL_->strength();
+        if (nrAltL_) {
+            nrAltL_->setStrength(nrStrengthNow_);
+            nrAltR_->setStrength(nrStrengthNow_);
+        }
     });
 }
 
@@ -1201,6 +1236,158 @@ float Pipeline::noiseBlankerBlankedPercent() const {
 bool Pipeline::noiseBlankerStandingDown() const {
     return nbStandingDown_.load(std::memory_order_relaxed);
 }
+
+// --- FM noise squelch -------------------------------------------------------------------------------------------------------------------------------
+bool Pipeline::setNoiseSquelch(bool on, double thresholdDb, double tailMs) {
+    if (!std::isfinite(thresholdDb) || thresholdDb < -90.0 || thresholdDb > 0.0 || !std::isfinite(tailMs) || tailMs < 0.0 || tailMs > 2000.0) { return false; }
+    post([this, on, thresholdDb, tailMs] {
+             noiseSqOn_ = on;
+             noiseSqThresholdDb_ = thresholdDb;
+             noiseSqTailMs_ = tailMs;
+             if (noiseSq_) {
+                 noiseSq_->setThresholdDb(thresholdDb);
+                 noiseSq_->setTailMs(tailMs);
+                 noiseSq_->setEnabled(on);
+             }
+         },
+         [this, on] { mirrorNoiseSqOn_.store(on, std::memory_order_relaxed); });
+    return true;
+}
+bool Pipeline::noiseSquelchOn() const { return mirrorNoiseSqOn_.load(std::memory_order_relaxed); }
+double Pipeline::noiseSquelchLevelDb() const { return noiseSqLevelDb_.load(std::memory_order_relaxed); }
+bool Pipeline::noiseSquelchOpen() const { return noiseSqOpen_.load(std::memory_order_relaxed); }
+
+// --- audio equaliser and filters ---------------------------------------------------------------------------------------------------------------------
+bool Pipeline::setEqBand(int band, double db) {
+    if (band < 0 || band > 7 || !std::isfinite(db) || db < -12.0 || db > 12.0) { return false; }
+    if (band < 3) {
+        for (cascade::dsp::AudioEq* e : {&eqL_, &eqR_}) {
+            if (band == 0) { e->setBassDb(db); } else if (band == 1) { e->setMidDb(db); } else { e->setTrebleDb(db); }
+        }
+    } else {
+        eqL_.setGraphicDb(band - 3, db);
+        eqR_.setGraphicDb(band - 3, db);
+    }
+    return true;
+}
+bool Pipeline::setAudioFilters(int hp, int lp) {
+    if (!(hp == 0 || hp == 100 || hp == 300) || !(lp == 0 || lp == 2400 || lp == 3000 || lp == 6000)) { return false; }
+    for (cascade::dsp::AudioEq* e : {&eqL_, &eqR_}) {
+        e->setHighPass(static_cast<cascade::dsp::AudioHighPass>(hp));
+        e->setLowPass(static_cast<cascade::dsp::AudioLowPass>(lp));
+    }
+    return true;
+}
+bool Pipeline::eqBypassed() const { return eqL_.isBypassed(); }
+
+// --- CW pitch -------------------------------------------------------------------------------------------------------------------------------------
+bool Pipeline::setCwPitchHz(double hz) {
+    if (!std::isfinite(hz) || hz < 300.0 || hz > 1200.0) { return false; }
+    post([this, hz] {
+             cwPitchNow_ = hz;
+             demod_.setCwPitchHz(hz);
+         },
+         [this, hz] { mirrorCwPitchHz_.store(hz, std::memory_order_relaxed); });
+    return true;
+}
+double Pipeline::cwPitchHz() const { return mirrorCwPitchHz_.load(std::memory_order_relaxed); }
+
+// --- manual notch bank ---------------------------------------------------------------------------------------------------------------------------
+bool Pipeline::setManualNotch(int slot, double hz, double widthHz, bool on) {
+    if (!notchBankL_.setNotch(slot, hz, widthHz, on)) { return false; }
+    return notchBankR_.setNotch(slot, hz, widthHz, on);
+}
+int Pipeline::manualNotchCount() const { return notchBankL_.activeCount(); }
+
+// --- noise-reduction method ---------------------------------------------------------------------------------------------------------------------
+bool Pipeline::setNoiseReductionMethod(int method) {
+    if (method < 0 || method > 2) { return false; }
+    post([this, method] {
+             nrMethod_ = method;
+             nrAltL_.reset();
+             nrAltR_.reset();
+             if (method == 1) {
+                 nrAltL_ = std::make_unique<cascade::dsp::MinStatSubtractor>();
+                 nrAltR_ = std::make_unique<cascade::dsp::MinStatSubtractor>();
+             } else if (method == 2) {
+                 nrAltL_ = std::make_unique<cascade::dsp::LineEnhancer>();
+                 nrAltR_ = std::make_unique<cascade::dsp::LineEnhancer>();
+             }
+             if (nrAltL_) {
+                 nrAltL_->setStrength(nrL_->strength());
+                 nrAltR_->setStrength(nrL_->strength());
+                 nrStrengthNow_ = nrL_->strength();
+             }
+         },
+         [this, method] { mirrorNrMethod_.store(method, std::memory_order_relaxed); });
+    return true;
+}
+int Pipeline::noiseReductionMethod() const { return mirrorNrMethod_.load(std::memory_order_relaxed); }
+int Pipeline::noiseReductionMethodActive() const { return nrMethodActive_.load(std::memory_order_relaxed); }
+
+// --- tone squelch (CTCSS / DCS) -------------------------------------------------------------------------------------------------------------------
+void Pipeline::configureToneLocked() {
+    // The idle detector is reset so that a lock it held when it was last used cannot be the first thing it says; the chosen one is configured for the
+    // channel rate (the set-up allocates: it runs here, under audioMutex_, when the setting or the rate changes, never per block).
+    ctcss_.reset();
+    dcs_.reset();
+    if (toneChanRateHz_ <= 0.0) { return; }
+    if (toneKind_ == cascade::dsp::tone::kCtcss) {
+        ctcss_.configure(toneChanRateHz_, /*includeExtraTones=*/true);
+        ctcss_.setSelectedToneHz(toneHz_);
+    } else if (toneKind_ == cascade::dsp::tone::kDcs) {
+        dcs_.configure(toneChanRateHz_);
+        dcs_.setSelected(toneDcsOctal_, static_cast<cascade::dsp::DcsDecoder::Polarity>(toneDcsPol_));
+    }
+}
+
+bool Pipeline::setToneSquelch(int kind, double hz, int dcsDigits, int polarity) {
+    namespace tone = cascade::dsp::tone;
+    if (kind < tone::kOff || kind > tone::kDcs) { return false; }
+    if (kind == tone::kCtcss && !tone::validCtcssHz(hz)) { return false; }
+    unsigned octal = 0;
+    if (kind == tone::kDcs) {
+        if (!tone::validDcsDigits(dcsDigits) || !tone::validPolarity(polarity)) { return false; }
+        if (dcsDigits != 0) { (void)tone::digitsToOctal(dcsDigits, octal); }
+    }
+    // The values the other kind does not use are kept as given (the saved settings hold one choice of each), but only the chosen kind is run.
+    post([this, kind, hz, octal, polarity] {
+             toneKind_ = kind;
+             toneHz_ = hz;
+             toneDcsOctal_ = octal;
+             toneDcsPol_ = polarity;
+             configureToneLocked();
+         },
+         [this, kind, hz, dcsDigits, polarity] {
+             mirrorToneKind_.store(kind, std::memory_order_relaxed);
+             mirrorToneHz_.store(hz, std::memory_order_relaxed);
+             mirrorToneDcsDigits_.store(dcsDigits, std::memory_order_relaxed);
+             mirrorTonePol_.store(polarity, std::memory_order_relaxed);
+         });
+    return true;
+}
+
+void Pipeline::setToneRemove(bool on) {
+    post([this, on] {
+             if (on && !toneRemove_) {
+                 toneHpL_.reset();
+                 toneHpR_.reset();
+             }
+             toneRemove_ = on;
+         },
+         [this, on] { mirrorToneRemove_.store(on, std::memory_order_relaxed); });
+}
+
+int Pipeline::toneKind() const { return mirrorToneKind_.load(std::memory_order_relaxed); }
+double Pipeline::toneHz() const { return mirrorToneHz_.load(std::memory_order_relaxed); }
+int Pipeline::toneDcsDigits() const { return mirrorToneDcsDigits_.load(std::memory_order_relaxed); }
+int Pipeline::tonePolarity() const { return mirrorTonePol_.load(std::memory_order_relaxed); }
+bool Pipeline::toneRemove() const { return mirrorToneRemove_.load(std::memory_order_relaxed); }
+double Pipeline::toneDetectedHz() const { return toneDetectedHz_.load(std::memory_order_relaxed); }
+int Pipeline::toneDetectedCode() const { return toneDetectedCode_.load(std::memory_order_relaxed); }
+int Pipeline::toneDetectedPolarity() const { return toneDetectedPol_.load(std::memory_order_relaxed); }
+bool Pipeline::toneGateOpen() const { return toneGateOpen_.load(std::memory_order_relaxed); }
+bool Pipeline::audioGateOpen() const { return audioGateOpen_.load(std::memory_order_relaxed); }
 
 void Pipeline::setNotchEnabled(bool on) {
     post(
@@ -1459,6 +1646,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
         // deemphasis pole, AM DC-blocker pole), so a stale demod would e.g.
         // scale the CW sidetone by oldChannel/newChannel.
         demod_ = cascade::dsp::Demodulator(chanRate);
+        demod_.setCwPitchHz(cwPitchNow_);   // (a rebuilt demodulator starts at the default pitch: the user's is put back before the mode)
         demod_.setMode(mode);
         // A rebuilt demodulator starts at the library default de-emphasis,
         // which is nobody's choice: the helper replaces it with the user's,
@@ -2073,6 +2261,47 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         for (std::size_t i = 0; i < m; ++i) { audioBuf_[i] *= fmScale_; }
     }
 
+    // --- TONE SQUELCH: NFM only, nothing at all when it is off -----------------------------------------------------------------------------------
+    // The detector listens to the discriminator output as it is here (de-emphasised and scaled; both detectors normalise by the band's own power, so the
+    // scale does not matter), before the AGC and the squelch. The squelch's gate is told the verdict once a block and ramps to it like the carrier's.
+    bool toneRequired = false;
+    bool toneOpen = true;
+    if (toneKind_ != cascade::dsp::tone::kOff && mode == cascade::dsp::DemodMode::NFM) {
+        toneRequired = true;
+        if (toneKind_ == cascade::dsp::tone::kCtcss) {
+            ctcss_.process(audioBuf_.data(), m);
+            toneOpen = ctcss_.gateOpen();
+            toneDetectedHz_.store(ctcss_.detectedHz(), std::memory_order_relaxed);
+            toneDetectedCode_.store(0, std::memory_order_relaxed);
+            toneDetectedPol_.store(0, std::memory_order_relaxed);
+        } else {
+            dcs_.process(audioBuf_.data(), m);
+            toneOpen = dcs_.gateOpen();
+            const unsigned octal = dcs_.detectedCode();
+            toneDetectedHz_.store(0.0, std::memory_order_relaxed);
+            toneDetectedCode_.store(octal != 0u ? cascade::dsp::tone::octalToDigits(octal) : 0, std::memory_order_relaxed);
+            toneDetectedPol_.store(octal != 0u ? dcs_.detectedPolarity() : 0, std::memory_order_relaxed);
+        }
+    } else {
+        toneDetectedHz_.store(0.0, std::memory_order_relaxed);
+        toneDetectedCode_.store(0, std::memory_order_relaxed);
+        toneDetectedPol_.store(0, std::memory_order_relaxed);
+    }
+    squelch_.setToneGate(toneRequired, toneOpen);
+    // --- FM NOISE SQUELCH: NFM only. The detector is the discriminator output; the block's gain is read off a buffer of ones and applied to the audio after the level squelch below.
+    bool noiseSqApply = false;
+    if (mode == cascade::dsp::DemodMode::NFM && noiseSq_) {
+        noiseSqGain_.assign(m, 1.0f);
+        noiseSq_->process(audioBuf_.data(), m, noiseSqGain_.data());
+        noiseSqApply = noiseSqOn_ || noiseSq_->gain() < 1.0;
+        noiseSqLevelDb_.store(static_cast<double>(noiseSq_->levelDb()), std::memory_order_relaxed);
+        noiseSqOpen_.store(noiseSq_->isOpen(), std::memory_order_relaxed);
+    } else {
+        noiseSqLevelDb_.store(-200.0, std::memory_order_relaxed);
+        noiseSqOpen_.store(false, std::memory_order_relaxed);
+    }
+    toneGateOpen_.store(toneOpen, std::memory_order_relaxed);
+
     // --- One channel or two -------------------------------------------------
     leftBuf_.resize(m);
     rightBuf_.resize(m);
@@ -2083,12 +2312,36 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         // carry the same 15 kHz low-pass and the same de-emphasis, and the
         // difference channel is ramped in and out by StereoFm's own gate
         // (with the gate shut it emits L == R bit-exactly).
-        stereo_->process(audioBuf_.data(), m, leftBuf_.data(), rightBuf_.data());
-        pilotLocked_.store(stereo_->pilotLocked(), std::memory_order_relaxed);
-        pilotLevel_.store(stereo_->pilotLevel(), std::memory_order_relaxed);
-        stereoActive_.store(stereoEnabled_ && stereo_->pilotLocked() &&
-                                stereo_->stereoCapable(),
-                            std::memory_order_relaxed);
+        //
+        // THE STEREO SYSTEM (setStereoSystem): the OIRT polar-modulation decoder replaces the pilot-tone one when the engine says the tuned signal is OIRT. Both
+        // run on the same composite, both keep the 15 kHz low-pass and the de-emphasis, and a decoder that cannot decode at this channel rate (below 100 kHz) is
+        // a permanent mono one, so the pilot-tone decoder stays in the path then, as it would have.
+        if (stereoSystem_ == 2 && oirt_ && oirt_->stereoCapable()) {
+            // audioBuf_ is the discriminator already scaled by fmScale_ so that 0.5 is the broadcast deviation (kFmDeviationHz, 75 kHz); the OIRT decoder wants +-1 at the
+            // OIRT system's maximum deviation (kOirtMaxDeviationHz): the factor between the two is fixed.
+            const float toUnit = static_cast<float>(kFmDeviationHz / (0.5 * kOirtMaxDeviationHz));
+            oirtIn_.resize(m);
+            for (std::size_t i = 0; i < m; ++i) { oirtIn_[i] = audioBuf_[i] * toUnit; }
+            oirtL_.resize(oirt_->outputsFor(m));
+            oirtR_.resize(oirt_->outputsFor(m));
+            const std::size_t k = oirt_->process(oirtIn_.data(), m, oirtL_.data(), oirtR_.data());
+            for (std::size_t i = 0; i < m; ++i) {
+                leftBuf_[i] = i < k ? oirtL_[i] : 0.0f;
+                rightBuf_[i] = i < k ? oirtR_[i] : 0.0f;
+            }
+            pilotLocked_.store(oirt_->stereoLamp(), std::memory_order_relaxed);
+            pilotLevel_.store(oirt_->carrierLevel(), std::memory_order_relaxed);
+            stereoActive_.store(stereoEnabled_ && oirt_->stereoLamp(), std::memory_order_relaxed);
+            oirtActive_.store(true, std::memory_order_relaxed);
+        } else {
+            stereo_->process(audioBuf_.data(), m, leftBuf_.data(), rightBuf_.data());
+            pilotLocked_.store(stereo_->pilotLocked(), std::memory_order_relaxed);
+            pilotLevel_.store(stereo_->pilotLevel(), std::memory_order_relaxed);
+            stereoActive_.store(stereoEnabled_ && stereo_->pilotLocked() &&
+                                    stereo_->stereoCapable(),
+                                std::memory_order_relaxed);
+            oirtActive_.store(false, std::memory_order_relaxed);
+        }
     } else {
         // Every other mode is mono by nature: duplicate, so the rest of the
         // chain has exactly one shape.
@@ -2099,6 +2352,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         pilotLocked_.store(false, std::memory_order_relaxed);
         pilotLevel_.store(0.0f, std::memory_order_relaxed);
         stereoActive_.store(false, std::memory_order_relaxed);
+        oirtActive_.store(false, std::memory_order_relaxed);   // (no composite decoder is in the path in any other mode)
     }
 
     // --- AGC + squelch on the interleaved pair ------------------------------
@@ -2158,11 +2412,18 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // Squelch measures the pre-demod channel and gates the (AGC'd) audio, so
     // closed-squelch output is exact digital silence after the ramp.
     squelch_.process(gateBuf_.data(), 2 * m, ilvBuf_.data());
+    if (noiseSqApply) {
+        for (std::size_t i = 0; i < m; ++i) {
+            ilvBuf_[2 * i] *= noiseSqGain_[i];
+            ilvBuf_[2 * i + 1] *= noiseSqGain_[i];
+        }
+    }
     // The gate's own state, once per block, for the diagnostics bundle and any
     // other reader that wants to know whether silence is the squelch's doing
     // (see squelchOpen()). A relaxed store of one bool: nothing is added to the
     // per-sample loop above.
-    squelchOpen_.store(squelch_.isOpen(), std::memory_order_relaxed);
+    squelchOpen_.store(squelch_.carrierOpen(), std::memory_order_relaxed);   // (the carrier alone: the auto-squelch and the heard-time counters read it)
+    audioGateOpen_.store(squelch_.isOpen(), std::memory_order_relaxed);      // (the carrier and the tone: what the listener hears)
     for (std::size_t i = 0; i < m; ++i) {
         leftBuf_[i] = ilvBuf_[2 * i];
         rightBuf_[i] = ilvBuf_[2 * i + 1];
@@ -2195,14 +2456,35 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
 
     // --- Audio post-processing: notch -> auto-notch -> noise reduction ------
     // Order rationale in the header. All three are bypasses when disabled.
+    // THE TONE REMOVER, when asked: a 300 Hz high-pass that takes the sub-audible tone out of what is heard (the decoder tap above is upstream of it).
+    if (toneRemove_) {
+        toneHpL_.process(outL_.data(), outL_.data(), k);
+        toneHpR_.process(outR_.data(), outR_.data(), k);
+    }
     notchL_->process(outL_.data(), k);
     notchR_->process(outR_.data(), k);
+    notchBankL_.process(outL_.data(), k);   // (a single atomic load and a return while no slot is on: bit-exact passthrough)
+    notchBankR_.process(outR_.data(), k);
     autoNotchL_->process(outL_.data(), k);
     autoNotchR_->process(outR_.data(), k);
     autoNotchEngaged_.store(autoNotchL_->isEngaged(), std::memory_order_relaxed);
     autoNotchHz_.store(autoNotchL_->frequencyHz(), std::memory_order_relaxed);
-    nrL_->process(outL_.data(), k, outL_.data());
-    nrR_->process(outR_.data(), k, outR_.data());
+    {
+        // THE NOISE-REDUCTION METHOD: the chosen alternative runs while the switch is on (the line enhancer in CW and RAW only); otherwise the standard one, as it always did.
+        const bool alt = nrOn_ && nrAltL_ != nullptr &&
+                         (nrMethod_ == 1 || (nrMethod_ == 2 && (mode == cascade::dsp::DemodMode::CW || mode == cascade::dsp::DemodMode::RAW)));
+        if (alt) {
+            nrAltL_->process(outL_.data(), k, outL_.data());
+            nrAltR_->process(outR_.data(), k, outR_.data());
+        } else {
+            nrL_->process(outL_.data(), k, outL_.data());
+            nrR_->process(outR_.data(), k, outR_.data());
+        }
+        nrMethodActive_.store(alt ? nrMethod_ : 0, std::memory_order_relaxed);
+    }
+    // THE EQUALISER AND THE AUDIO FILTERS, after the noise reduction (bit-exact passthrough while everything is flat and off).
+    eqL_.process(outL_.data(), k);
+    eqR_.process(outR_.data(), k);
 
     // --- IN-CHAIN AUDIO PROCESSOR PLUGINS (host API level 1) ----------------
     //

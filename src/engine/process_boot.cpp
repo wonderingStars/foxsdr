@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -29,6 +30,8 @@
 #include "core/diag_report.hpp"
 #include "core/exit_record.hpp"
 #include "core/issue_report.hpp"
+#include "core/linux_update.hpp"
+#include "core/linux_update_host.hpp"
 #include "core/relaunch_marker.hpp"
 #include "core/sentinel.hpp"
 #include "core/stop_signal.hpp"
@@ -589,6 +592,7 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
     bool soapyCheck = false;
     bool rtlsdrCheck = false;
     bool recordCheck = false;
+    bool benchmark = false;
     bool toneCheck = false;
     bool linkTesterReveal = false;
     double rdsCheckMhz = 0.0;
@@ -687,6 +691,10 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
             // ~1 s real-time sleep and disk writes make it a bench tool,
             // not part of the CI-facing CLI surface.
             recordCheck = true;
+        } else if (std::strcmp(argv[i], "--benchmark") == 0) {
+            // Times the DSP blocks on THIS machine and prints a table (see runBenchmark): headless, about 10 s of CPU,
+            // so a tool mode like the checks, kept out of the usage string (the usage text is pinned by tests).
+            benchmark = true;
         } else if (std::strcmp(argv[i], "--rds-check") == 0) {
             // Hidden bench diagnostic (see runRdsCheck): needs a real radio
             // tuned to a real RDS broadcast, so never a ctest entry.
@@ -915,6 +923,7 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
     boot.tool.soapyCheck = soapyCheck;
     boot.tool.rtlsdrCheck = rtlsdrCheck;
     boot.tool.recordCheck = recordCheck;
+    boot.tool.benchmark = benchmark;
     boot.tool.toneCheck = toneCheck;
     boot.tool.rdsCheckMhz = rdsCheckMhz;
     return std::nullopt;
@@ -1120,6 +1129,23 @@ void armStopSignals(ProcessKind kind) {
     }
 }
 
+// STEP 7b (Linux only; engine wiring W2): the self-updater's "did the new copy start" check. Called in EVERY start, AFTER the tool modes:
+// `--version` is a tool mode and is what the updater's smoke run executes, so a call before them would delete the previous copy before
+// the new build had started for real. It undoes an interrupted swap, and removes the ".old" copy and the pending marker once the version
+// the marker names is the one running; for any install the program does not replace by itself it does nothing (confirmStartupFor).
+// UNPROVEN ON LINUX (probeThisInstall reads $APPIMAGE, /proc/self/exe and dpkg/rpm there); the decision it relies on is tested.
+void confirmLinuxUpdate() {
+#if !defined(_WIN32)
+    namespace lu = cascade::core::linuxupdate;
+    const std::unique_ptr<lu::UpdateHost> host = lu::makeSystemHost();
+    if (!host) { return; }
+    const lu::InstallProbe probe = lu::probeThisInstall(*host);
+    const lu::InstallKind kind = lu::detectInstallKind(probe);
+    const std::string note = lu::confirmStartupFor(*host, kind, lu::targetFor(probe, kind), cascade::versionString());
+    if (!note.empty()) { cascade::core::diagLogf("update: %s", note.c_str()); }
+#endif
+}
+
 }  // namespace
 
 // THE SEQUENCE. One line per step, in the order that is the contract; the step
@@ -1154,6 +1180,8 @@ BootResult bootProcess(ProcessKind kind, int argc, char** argv) {
     if (const Step done = parseFlags(kind, argc, argv, boot)) { return finish(*done); }
     // STEP 7: the tool modes (headless; a window would defeat them).
     if (const Step done = runToolMode(boot.tool, argc, argv)) { return finish(*done); }
+    // STEP 7b: Linux only, after the tool modes (see confirmLinuxUpdate).
+    confirmLinuxUpdate();
     // STEP 8: the config path the window will load.
     wireConfig(kind, boot);
     // STEP 9: the stderr capture (Host).

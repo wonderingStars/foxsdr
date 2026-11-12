@@ -38,6 +38,8 @@ export struct DisplayModel {
     db-min: float, db-min-text: string, db-max: float, db-max-text: string,                  // db-min / db-max: 0..1 of the slider's track; the text is the host's figure
     freq-displays: [SelectItem], freq-display-index: int, figures: [SelectItem], figures-index: int,
     tuner-switches: bool, enlarge-readings: bool,
+    high-contrast: bool,                                                                      // slint-gaps.md item 11: the high-contrast skin is chosen (it is also forced on while Windows' own setting is on)
+    digit-groupings: [SelectItem], digit-grouping-index: int,                                // the counter's dots: 1.090.000.000 or 1090.000.000 (slint-gaps.md item 2)
     icon-px: float, icon-text: string, trail-px: float, trail-text: string,                  // 0..1 and the host's "48 px"
     trail-styles: [SelectItem], trail-style-index: int,                                      // Line, Ribbon (mapTrailStyle; docs 6.52)
     band-plan: bool, band-sizes: [SelectItem], band-size-index: int, band-colours: [SelectItem], band-colour-index: int,
@@ -137,6 +139,8 @@ export global SystemEvents {
     callback display-db-max(float);
     callback display-freq-display(int);
     callback display-figures(int);
+    callback display-digit-grouping(int);
+    callback display-high-contrast(bool);
     callback display-tuner-switches(bool);
     callback display-enlarge(bool);
     callback display-icon-px(float);               // 0..1
@@ -810,6 +814,10 @@ export component DisplayBody inherits VerticalLayout {
     display-freq-display(a) => { SystemEvents.display-freq-display(a); }
     callback display-figures(int);
     display-figures(a) => { SystemEvents.display-figures(a); }
+    callback display-digit-grouping(int);
+    display-digit-grouping(a) => { SystemEvents.display-digit-grouping(a); }
+    callback display-high-contrast(bool);
+    display-high-contrast(a) => { SystemEvents.display-high-contrast(a); }
     callback display-tuner-switches(bool);
     display-tuner-switches(a) => { SystemEvents.display-tuner-switches(a); }
     callback display-enlarge(bool);
@@ -955,6 +963,27 @@ export component DisplayBody inherits VerticalLayout {
         }
     }
     if root.model.band-plan && root.model.plan-status != "" : Note { text: root.model.plan-status; tone: root.model.plan-status-tone; }
+    Line {
+        RowLabel { text: @tr("Digit grouping"); horizontal-stretch: 1; }
+        DropKey {
+            width: 150px;
+            value: Pick.label(root.model.digit-groupings, root.model.digit-grouping-index);
+            items: root.model.digit-groupings;
+            selected: root.model.digit-grouping-index;
+            label: @tr("Digit grouping");
+            tooltip: @tr("How the tuned-frequency counter and the typed frequency group their digits. Typing a frequency accepts either style.");
+            picked(i) => { root.display-digit-grouping(i); }
+        }
+    }
+    Line {
+        Tick {
+            horizontal-stretch: 1;
+            label: @tr("High contrast");
+            on: root.model.high-contrast;
+            tooltip: @tr("Black grounds, white lines and text, one yellow accent. It is also used whenever Windows' own high-contrast setting is on.");
+            toggled(v) => { root.display-high-contrast(v); }
+        }
+    }
     // </content>
 }
 

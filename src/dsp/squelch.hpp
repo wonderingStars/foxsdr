@@ -121,7 +121,17 @@ public:
         holdSamples_ = msToSamples(sampleRate_, static_cast<double>(ms));
     }
 
-    bool isOpen() const { return open_; }
+    // THE TONE GATE (CTCSS / DCS; engine wiring lane 1). While `required`, the gate lets the audio through only while the carrier is open AND `toneOpen` (the tone
+    // detector's verdict): it is the ramp's target, so the audio fades in and out exactly as the carrier gate's does. Not required (the default): the squelch is
+    // what it always was. Called on the DSP thread once a block, before process().
+    void setToneGate(bool required, bool toneOpen) {
+        toneRequired_ = required;
+        toneOpen_ = toneOpen;
+    }
+    // The carrier's own state (what the power says, with its hold), whatever the tone says: what the auto-squelch and the heard-time counters read.
+    bool carrierOpen() const { return open_; }
+    // The audio gate: the carrier open and, when a tone is required, the tone present.
+    bool isOpen() const { return open_ && (!toneRequired_ || toneOpen_); }
     // The channel power the gate is judging, in dB - what a squelch control
     // shows beside its threshold so the user can see where to set it.
     float levelDb() const { return meter_.powerDb(); }
@@ -152,7 +162,7 @@ public:
             // Envelope walks linearly toward the gate state and clamps AT the
             // endpoint, so a closed gate reaches exactly 0 (true silence, not
             // a denormal residue) and an open one exactly unity gain.
-            const float target = open_ ? 1.0f : 0.0f;
+            const float target = (open_ && (!toneRequired_ || toneOpen_)) ? 1.0f : 0.0f;
             if (env_ < target) {
                 env_ += rampStep_;
                 if (env_ > target) { env_ = target; }
@@ -184,6 +194,8 @@ private:
     float rampStep_ = 1.0f;
     float env_ = 0.0f;
     bool open_ = false;
+    bool toneRequired_ = false;
+    bool toneOpen_ = true;
 };
 
 }  // namespace cascade::dsp

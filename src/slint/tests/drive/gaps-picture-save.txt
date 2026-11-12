@@ -1,0 +1,15 @@
+#! frames=900 bank=1 plugins=apt-decoder open=module:apt-decoder-1.0.0-abi3-win-x64.dll iqfile=apt-decoder.wav centre=137100000 mode=NFM bandwidth=40000 size=1600x1600 FOXSDR_SLINT_SAVE_DELAY_MS=700
+# gaps-picture-save (docs/multi-radio-records/slint-gaps.md item 4): Save as BMP on a picture page writes the file on a worker (the classic's 0.99.64 rule): the key greys and the note says Saving... while it is
+# written, then the note says where it went and the key is back. The save's worker is held 700 ms by a seam (FOXSDR_SLINT_SAVE_DELAY_MS, bounded runs) so the state can be seen between two ticks.
+# The picture is the NOAA APT fixture's (fixture-apt-decoder): a plugin from the user's own folder, as every fixture script has.
+120 state kit.plugins == 1
++1 click "START"
++60 state decodersRunning >= 1
++300 state kit.pictures >= 1
++1 click "NOAA APT image"
++10 expect "Save as BMP" enabled equals "true"
++1 click "Save as BMP"
++3 expect "Save as BMP" enabled equals "false"
++1 state gaps.savenote == "Saving..."
++40 state gaps.savenote contains "Saved"
++1 expect "Save as BMP" enabled equals "true"

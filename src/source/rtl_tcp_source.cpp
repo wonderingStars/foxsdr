@@ -34,6 +34,7 @@ constexpr std::uint8_t kCmdGainMode = 0x03;
 constexpr std::uint8_t kCmdTunerGain = 0x04;
 constexpr std::uint8_t kCmdFrequencyCorrection = 0x05;
 constexpr std::uint8_t kCmdAgcMode = 0x08;
+constexpr std::uint8_t kCmdOffsetTuning = 0x0a;
 constexpr std::uint8_t kCmdGainByIndex = 0x0d;
 constexpr std::uint8_t kCmdBiasTee = 0x0e;
 
@@ -333,7 +334,10 @@ bool RtlTcpSource::sendStateLocked(std::string& err) {
             ok = put(kCmdGainByIndex, static_cast<std::uint32_t>(gainIndex_));
         }
     }
-    return ok && put(kCmdBiasTee, biasWanted_ ? 1u : 0u);
+    ok = ok && put(kCmdBiasTee, biasWanted_ ? 1u : 0u);
+    // The E4000's offset tuning, said explicitly like the rest (a previous client may have left it on). No other tuner is sent the command.
+    if (ok && tunerType_.load(std::memory_order_relaxed) == kTunerE4000) { ok = put(kCmdOffsetTuning, offsetWanted_ ? 1u : 0u); }
+    return ok;
 }
 
 // --- open / close ----------------------------------------------------------
@@ -430,6 +434,7 @@ bool RtlTcpSource::openImpl(const std::string& args, std::unique_ptr<iiod::Trans
     centerHz_ = 100000000.0;
     ppm_ = 0;
     biasWanted_ = false;
+    offsetWanted_ = false;
     autoWanted_ = false;
     gainTenths_ = 0;
     gainIndex_ = 0;
@@ -452,6 +457,7 @@ bool RtlTcpSource::openImpl(const std::string& args, std::unique_ptr<iiod::Trans
     centerFrequencyHz_.store(centerHz_, std::memory_order_relaxed);
     autoGain_.store(false, std::memory_order_relaxed);
     biasTee_.store(false, std::memory_order_relaxed);
+    offsetTuning_.store(false, std::memory_order_relaxed);
     // THE ADDRESS IS NOT IN THE NAME: name() reaches the diagnostic log (the
     // GUI quotes it in "the %s refused a tune"), and who is running the server
     // is nobody's business but the user's. The address is in the box the user
@@ -865,6 +871,27 @@ bool RtlTcpSource::setBiasT(bool on) {
     biasWanted_ = on;
     if (!sendCommandLocked(kCmdBiasTee, on ? 1u : 0u)) { return false; }
     biasTee_.store(on, std::memory_order_relaxed);
+    return true;
+}
+
+bool RtlTcpSource::hasOffsetTuning() const {
+    return openMirror_.load(std::memory_order_relaxed) && tunerType_.load(std::memory_order_relaxed) == kTunerE4000;
+}
+
+bool RtlTcpSource::setOffsetTuning(bool on) {
+    std::lock_guard<std::mutex> lk(devMutex_);
+    if (!openMirror_.load(std::memory_order_relaxed)) {
+        setError("setOffsetTuning() called with no rtl_tcp server open");
+        return false;
+    }
+    if (deviceDead()) { return false; }
+    if (tunerType_.load(std::memory_order_relaxed) != kTunerE4000) {
+        setError(std::string("offset tuning is offered only for an E4000 tuner; this server reports ") + rtlTcpTunerName(tunerType_.load(std::memory_order_relaxed)));
+        return false;
+    }
+    offsetWanted_ = on;
+    if (!sendCommandLocked(kCmdOffsetTuning, on ? 1u : 0u)) { return false; }
+    offsetTuning_.store(on, std::memory_order_relaxed);
     return true;
 }
 

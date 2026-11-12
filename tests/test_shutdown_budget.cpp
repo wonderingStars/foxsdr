@@ -945,6 +945,18 @@ const KnownWait kKnownWaits[] = {
     // where closeDevice() first shutdown()s the socket so a parked reader wakes. Its connect and
     // socket bounds are iiod::kConnectWait and iiod::kReplyWait above, so its whole column is
     // the one join - 2500 ms, spent INSTEAD OF the Soapy pair's 3000, never as well as it.
+    {"src/source/kiwisdr_client.hpp", "kJoinWait", 0,
+     "the bound on joining the KiwiSDR client's reader and keep-alive threads in KiwiSdrClient::close() (feat/kiwi-client; wired as KiwiSdrSource::closeDevice, engine wiring lane 1). close() first shutdown()s the socket so a parked reader wakes, so the join is normally instant (13 ms measured with a stalled receiver); the bound is only reached if the reader ignores that, and then the thread is ABANDONED (ReaderLeak notice), not waited for again. Zero, as rtl_tcp's reader join is: a source's close is the pipeline's own teardown (the DeviceSource destructor), which the 3000 ms kSourceJoinWait already covers for one source; a worst case of several KiwiSDR radios closing one after the other is NOT in the budget (UNVERIFIED that the receivers' destruction is inside the stretch the budget measures; it is the same position every other radio's close has)"},
+    {"src/source/kiwisdr_source.hpp", "kFirstAudioWait", 0,
+     "KiwiSdrSource::open()'s wait for the receiver's first word (audio or a refusal) after the upgrade, spent on a radio's OPEN WORKER (launchDeviceOpen) or, for a saved radio, in the start-up restore before the control thread runs - never on the shutdown path: a pending open is reaped (a detached worker releases the receiver if it lands after) and close() cuts a wait in progress by shutting the socket (engine wiring lane 1)"},
+    {"src/source/kiwisdr_source.hpp", "kReadWait", 0,
+     "KiwiSdrSource::read()'s wait for audio, spent on the pipeline's source thread, which the teardown already waits for through kSourceJoinWait's 3000 ms - never on the GUI teardown thread; the same argument as RtlTcpSource's kReadWait (engine wiring lane 1)"},
+    {"src/source/kiwisdr_client.hpp", "kKeepAliveInterval", 0,
+     "not a wait at all - the cadence of the keep-alive thread, which waits on a condition variable that close() signals (feat/kiwi-client); nothing on the shutdown path sleeps on it"},
+    {"src/source/kiwisdr_client.hpp", "kConnectWait", 0,
+     "the default bound on connect plus upgrade in KiwiSdrClient::open(), spent on a radio's open worker and never on the shutdown path: close() cuts a connect in progress by shutting the socket (measured 1 ms with a stalled upgrade, test_kiwisdr_client) (feat/kiwi-client)"},
+    {"src/source/kiwisdr_client.hpp", "kStallWait", 0,
+     "the default bound on silence from a KiwiSDR before the reader reports the connection dropped: a threshold read on the reader thread, never waited on by anyone (feat/kiwi-client)"},
     {"src/source/rtl_tcp_source.hpp", "kReaderJoinWait", 0,
      "the bounded join in RtlTcpSource::stopReaderLocked() (closeDevice's path; stop() joins "
      "nothing), and the WHOLE of the 2500 ms rtl_tcp column - the Pluto's argument word for "
@@ -1031,6 +1043,15 @@ const KnownWait kKnownWaits[] = {
      "this constant. Measured on the shipped binary (--frames 3 with the page enabled and a half-sent request held): teardown 9.8 s; with the "
      "page enabled and nobody connected 16 ms. Charged ONCE: the web server is stopped once, and the CAT listener beside it is bounded by "
      "its poll interval (fractions of a second). 13500 -> 23500, and kShutdownThresholdMs 33000 -> 53000 with it"},
+    {"src/net/web_server.hpp", "kEventHeartbeat", 0,
+     "how long a live-update stream (GET /api/events) may stay silent before it sends a comment line: a threshold read on the stream's own "
+     "worker, not a wait anyone does. Never spent on the shutdown path: WebServer::stop() wakes every stream on a condition variable and the "
+     "stream ends at its next look (measured 0 to 1 ms with four attached, test_web_server), so a listener adds nothing to kClientIoTimeout's "
+     "charge above (feat/web-bookmarks)"},
+    {"src/net/web_server.hpp", "kEventTick", 0,
+     "how often a live-update stream looks for a change, as the timeout of a wait on a condition variable that WebServer::stop() signals: the "
+     "wait ends at once when the server stops, so the 250 ms is never spent on the shutdown path (test_web_server: stop() with four streams "
+     "attached takes under 200 ms, in practice about 1 ms) (feat/web-bookmarks)"},
     {"src/net/web_server.cpp", "kSessionIdleTick", 0,
      "WebServer::Impl::idleLoop() (stage 5d) - how often the idle thread collects the engine session's results while the server runs. A "
      "polling interval, not a bound: the thread waits on a condition variable whose predicate is its stop flag, and WebServer::stop() sets "

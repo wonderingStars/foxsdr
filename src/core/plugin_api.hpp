@@ -49,6 +49,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -391,6 +392,17 @@ public:
     std::int32_t setScheduleHint(const PluginApiClient& c, const CascadeScheduleHint* h);
     std::int32_t clearScheduleHints(const PluginApiClient& c);
     std::uint64_t scheduleHintsSeq() const;
+    // DECODE EVENTS (plugin_abi.h CascadeEvent, post_event / read_events / events_seq; engine wiring W2). One ring of the newest CASCADE_EVENT_RING events, in
+    // memory only. A plugin's posts are stamped with its name and (when it sets CASCADE_FLAG_PRIVATE_DATA) CASCADE_EVENT_FLAG_PRIVATE, and a private event is
+    // delivered to nobody but its own plugin; hostPostEvent is the host's own post (the decoder lines it drains, as kind "text").
+    std::int32_t postEvent(const PluginApiClient& c, const CascadeEvent* e);
+    std::int32_t readEvents(const PluginApiClient& c, std::uint64_t afterSeq, CascadeEvent* out, std::uint32_t cap) const;
+    std::uint64_t eventsSeq() const;
+    // The host's own read of the ring (its windows, and the alert and decode-database parts that will read decode events): everything after `afterSeq`, oldest first,
+    // at most `max`, private events included - they are the host's to see.
+    std::vector<CascadeEvent> hostEvents(std::uint64_t afterSeq, std::size_t max = CASCADE_EVENT_RING) const;
+    void hostPostEvent(const std::string& plugin, bool privateData, const std::string& kind, const std::string& text, double frequencyHz,
+                       std::int64_t unixMs = 0);
     struct HostScheduleHint {
         std::string plugin;           // the module file name
         CascadeScheduleHint hint;
@@ -478,6 +490,10 @@ private:
     std::array<std::shared_ptr<StreamClock>, kRadios> clocks_;
     std::map<std::string, std::uint32_t> clientRadios_;   // module key -> radio (>1), under mutex_
 
+    // The events: a ring under its OWN lock (a plugin's post never waits for the settings and markers' lock, and a reader never blocks a pass).
+    mutable std::mutex eventsMutex_;
+    std::deque<CascadeEvent> events_;
+    std::uint64_t eventsNext_ = 1;
     mutable std::mutex mutex_;
     std::vector<std::unique_ptr<PluginApiClient>> clients_;
     std::vector<ClientState> state_;

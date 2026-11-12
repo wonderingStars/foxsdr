@@ -1,0 +1,11 @@
+#! frames=300 bank=0 sections=0:1 size=1600x900 FOXSDR_SLINT_SDRPLAY_TEST=1
+# gaps-sdrplay (docs/multi-radio-records/slint-gaps.md item 9): the RESTART SDRPLAY SERVICE key of the Source section, up to the call boundary. There is no SDRplay on this machine: a seam shows the key
+# as if the driver had trouble reaching the service, and the elevated restart (ShellExecute "runas", a UAC prompt) is replaced by a STAND-IN that only counts the call and answers Done, so NOTHING is ever
+# asked of Windows. The real restart, the UAC prompt and the service's answer are UNVERIFIED ON HARDWARE.
+10 state running == 1
+state gaps.sdrplay == idle
+state gaps.sdrplaycalls == 0
++1 expect "RESTART SDRPLAY SERVICE" enabled equals "true"
++1 click "RESTART SDRPLAY SERVICE"
++30 state gaps.sdrplaycalls == 1
++1 state gaps.sdrplay == done

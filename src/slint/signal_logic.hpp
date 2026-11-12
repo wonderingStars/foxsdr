@@ -254,6 +254,11 @@ struct AudioFiltersModel {
     int nb_pct = 0;                        // share of the last 100 ms blanked
     std::string nb_read;                   // "Blanking 3 %", or "Standing down: signal too strong" while nb_standing; "" while the blanker is off
     bool nb_standing = false;              // letting everything through: a strong signal is not a click
+    // FM de-emphasis (slint-gaps.md item 1): the engine's SET_DEEMPHASIS order, 0 = 50 us, 1 = 75 us, 2 = off; live in NFM and WFM only
+    std::vector<SelectItem> deemph_modes;
+    int deemph_index = 0;
+    std::string deemph_text;
+    bool deemph_enabled = false;
     // host extras
     std::string chip;                      // "OFF" or "2 ON"
     bool lamp_lit = false;
@@ -440,6 +445,7 @@ double agcFixedFromNorm(float norm);
 float nbThresholdNorm(double db);
 double nbThresholdFromNorm(float norm);
 std::vector<SelectItem> agcModes();
+std::vector<SelectItem> deemphModes();   // 50 us (EU/world), 75 us (Americas), Off: FOXAPI_OP_SET_DEEMPHASIS order
 
 // sinks
 std::vector<int> bufferChoices();                            // 0 (AUTOMATIC), 120, 240, 480, 960
@@ -527,6 +533,7 @@ Command opNotchFreq(float norm);
 Command opNotchQ(float norm);
 Command opAutoNotch(bool on);
 Command opAgcMode(int index);
+Command opDeemph(int index);             // FOXAPI_OP_SET_DEEMPHASIS, ival[0] = 0 | 1 | 2; anything else is not valid
 Command opAgcFixed(int modeNow, float norm);
 Command opNb(bool on);
 Command opNbThreshold(bool onNow, float norm);

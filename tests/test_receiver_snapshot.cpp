@@ -562,6 +562,36 @@ void countersMoveByGroup() {
         {"the noise blanker threshold", [](PublishedState& p) { p.rx.nbThresholdDb = 22.0; }, "seq mode"},
         {"the noise blanker blanked share (a measurement)", [](PublishedState& p) { p.rx.nbBlankedPct = 3.5; }, ""},
         {"the noise blanker standing down (a measurement)", [](PublishedState& p) { p.rx.nbStandingDown = 1; }, ""},
+        // The tone squelch (engine wiring lane 1, group B): the five settings are the mode group's; the detected tone, code, polarity and the two gates are measurements.
+        {"the tone squelch kind", [](PublishedState& p) { p.rx.toneKind = FOXAPI_TONE_CTCSS; }, "seq mode"},
+        {"the CTCSS tone chosen", [](PublishedState& p) { p.rx.toneHz = 123.0; }, "seq mode"},
+        {"the DCS code chosen", [](PublishedState& p) { p.rx.toneCode = 754; }, "seq mode"},
+        {"the DCS polarity chosen", [](PublishedState& p) { p.rx.tonePolarity = 2; }, "seq mode"},
+        {"the tone remover", [](PublishedState& p) { p.rx.toneRemove = 1; }, "seq mode"},
+        {"the CTCSS tone detected (a measurement)", [](PublishedState& p) { p.rx.toneDetectedHz = 100.0; }, ""},
+        {"the DCS code detected (a measurement)", [](PublishedState& p) { p.rx.toneDetectedCode = 23; }, ""},
+        {"the DCS polarity detected (a measurement)", [](PublishedState& p) { p.rx.toneDetectedPolarity = 1; }, ""},
+        {"the tone gate (a measurement)", [](PublishedState& p) { p.rx.toneGate = 0; }, ""},
+        {"the audio gate (a measurement)", [](PublishedState& p) { p.rx.audioGate = 1; }, ""},
+        // S-meter units and calibration (engine wiring lane 1): the units are a setting; the dBm and S figures and the calibrated flag are measurements.
+        {"the S-meter's display units", [](PublishedState& p) { p.rx.meterUnits = FOXAPI_METER_DBM; }, "seq mode"},
+        {"the level in dBm (a measurement)", [](PublishedState& p) { p.rx.signalDbm = -73.0; }, ""},
+        {"the level in S units (a measurement)", [](PublishedState& p) { p.rx.sUnits = 9.0; }, ""},
+        {"calibrated (a measurement)", [](PublishedState& p) { p.rx.calibrated = 1; }, ""},
+        {"the noise-reduction method", [](PublishedState& p) { p.rx.nrMethod = FOXAPI_NR_SPECTRAL; }, "seq mode"},
+        {"the noise-reduction method in use (a measurement)", [](PublishedState& p) { p.rx.nrMethodActive = 1; }, ""},
+        {"the CW pitch", [](PublishedState& p) { p.rx.cwPitchHz = 600.0; }, "seq mode"},
+        {"an equaliser band", [](PublishedState& p) { p.rx.eqDb[4] = 5.0; }, "seq mode"},
+        {"the audio high-pass", [](PublishedState& p) { p.rx.audioHighPassHz = 300; }, "seq mode"},
+        {"the audio low-pass", [](PublishedState& p) { p.rx.audioLowPassHz = 2400; }, "seq mode"},
+        {"the noise squelch switched on", [](PublishedState& p) { p.rx.noiseSquelchOn = 1; }, "seq mode"},
+        {"the noise squelch threshold", [](PublishedState& p) { p.rx.noiseSquelchThresholdDb = -44.0; }, "seq mode"},
+        {"the noise squelch tail", [](PublishedState& p) { p.rx.noiseSquelchTailMs = 300.0; }, "seq mode"},
+        {"the noise squelch level (a measurement)", [](PublishedState& p) { p.rx.noiseSquelchLevelDb = -35.0; }, ""},
+        {"the noise squelch gate (a measurement)", [](PublishedState& p) { p.rx.noiseSquelchOpen = 1; }, ""},
+        {"a manual notch switched on", [](PublishedState& p) { p.rx.notchBankMask = 4; }, "seq mode"},
+        {"a manual notch's frequency", [](PublishedState& p) { p.rx.notchBankHz[3] = 1234.0; }, "seq mode"},
+        {"a manual notch's width", [](PublishedState& p) { p.rx.notchBankWidthHz[9] = 77.0; }, "seq mode"},
         // API 0.3 8.6, the scanner: its seven settings are a group of their own (scanSeq, and
         // seq with it); the scanner's state word and its frequency are live state that moves seq
         // alone (the scanner flag, which the state already had, is the same).
@@ -655,7 +685,13 @@ void rdsGroupAndLayout() {
     CHECK(offsetof(FoxReceiverState, nbBlankedPct) == offsetof(FoxReceiverState, nbThresholdDb) + sizeof(double));
     CHECK(offsetof(FoxReceiverState, nbEnabled) > offsetof(FoxReceiverState, agcGainDb));
     CHECK(offsetof(FoxReceiverState, nbStandingDown) > offsetof(FoxReceiverState, nbBlankedPct));
-    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, nbStandingDown) + sizeof(std::uint32_t)) < 8u);
+    // The tone squelch members (engine wiring lane 1) follow nbStandingDown, in this order; after them only the struct's own tail padding.
+    CHECK(offsetof(FoxReceiverState, toneKind) > offsetof(FoxReceiverState, nbStandingDown));
+    CHECK(offsetof(FoxReceiverState, toneKind) < offsetof(FoxReceiverState, toneHz));
+    CHECK(offsetof(FoxReceiverState, toneHz) < offsetof(FoxReceiverState, toneCode));
+    CHECK(offsetof(FoxReceiverState, toneDetectedHz) > offsetof(FoxReceiverState, toneRemove));
+    CHECK(offsetof(FoxReceiverState, audioGate) > offsetof(FoxReceiverState, toneGate));
+    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, audioLowPassHz) + sizeof(std::uint32_t)) < 8u);
     CHECK(FOXAPI_RDS_PS_CHARS == 9 && FOXAPI_RDS_TEXT_CHARS == 65);
     // The six RDS bits are one word's low bits, each its own.
     const std::uint32_t bits[] = {FOXAPI_RDS_SYNCED, FOXAPI_RDS_PI_VALID, FOXAPI_RDS_PS_VALID,
@@ -734,7 +770,13 @@ void scanGroupAndLayout() {
     CHECK(offsetof(FoxReceiverState, nbBlankedPct) == offsetof(FoxReceiverState, nbThresholdDb) + sizeof(double));
     CHECK(offsetof(FoxReceiverState, nbEnabled) > offsetof(FoxReceiverState, agcGainDb));
     CHECK(offsetof(FoxReceiverState, nbStandingDown) > offsetof(FoxReceiverState, nbBlankedPct));
-    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, nbStandingDown) + sizeof(std::uint32_t)) < 8u);
+    // The tone squelch members (engine wiring lane 1) follow nbStandingDown, in this order; after them only the struct's own tail padding.
+    CHECK(offsetof(FoxReceiverState, toneKind) > offsetof(FoxReceiverState, nbStandingDown));
+    CHECK(offsetof(FoxReceiverState, toneKind) < offsetof(FoxReceiverState, toneHz));
+    CHECK(offsetof(FoxReceiverState, toneHz) < offsetof(FoxReceiverState, toneCode));
+    CHECK(offsetof(FoxReceiverState, toneDetectedHz) > offsetof(FoxReceiverState, toneRemove));
+    CHECK(offsetof(FoxReceiverState, audioGate) > offsetof(FoxReceiverState, toneGate));
+    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, audioLowPassHz) + sizeof(std::uint32_t)) < 8u);
     // The state words are 0..3, each its own.
     CHECK(FOXAPI_SCANNER_IDLE == 0u && FOXAPI_SCANNER_SCANNING == 1u && FOXAPI_SCANNER_PAUSED == 2u &&
           FOXAPI_SCANNER_HOLDING == 3u);
@@ -835,7 +877,7 @@ PublishedState everyFieldDistinct() {
     r.flags = FOXAPI_RX_RUNNING | FOXAPI_RX_FAULTED | FOXAPI_RX_STEREO_ACTIVE | FOXAPI_RX_TX_KEYED |
               FOXAPI_RX_TX_REMOTE_ARMED | FOXAPI_RX_NR | FOXAPI_RX_NOTCH | FOXAPI_RX_AUTO_NOTCH |
               FOXAPI_RX_STEREO_ENABLED | FOXAPI_RX_AGC_SUPPORTED | FOXAPI_RX_DEVICE_AGC |
-              FOXAPI_RX_RECORDING_IQ | FOXAPI_RX_RECORDING_AUDIO | FOXAPI_RX_SCANNER_ACTIVE;
+              FOXAPI_RX_RECORDING_IQ | FOXAPI_RX_RECORDING_AUDIO | FOXAPI_RX_SCANNER_ACTIVE | FOXAPI_RX_MUTED;
     r.centreHz = 101.1e6;
     r.sampleRateHz = 2.4e6;
     r.vfoOffsetHz = -12.5e3;
@@ -940,7 +982,7 @@ RadioStatus everyListDistinct() {
 const char* const kRows[] = {
     "running", "faulted", "faultMessage", "centerHz", "sampleRateHz", "vfoOffsetHz", "bandwidthHz",
     "mode", "sourceName", "signalDb", "stereoActive", "transmitting", "transmitAvailable",
-    "transmitRemoteHoldMs", "squelchDb", "volume", "dbMin", "dbMax", "tunerDisplayStyle",
+    "transmitRemoteHoldMs", "squelchDb", "volume", "muted", "dbMin", "dbMax", "tunerDisplayStyle",
     "deemphasisIndex", "nrEnabled", "nrStrength", "notchEnabled", "notchFreqHz", "notchQ", "autoNotch",
     "autoNotchEngaged", "autoNotchFreqHz", "stereoEnabled", "pilotLocked", "rdsSynced", "rdsPiValid",
     "rdsPi", "rdsPsValid", "rdsPs", "rdsRadioText", "rdsPty", "rdsTp", "rdsTa", "rdsGroups",
@@ -1011,6 +1053,7 @@ void composeMapsEveryField() {
     ROW(o.transmitRemoteHoldMs == 1234);
     ROW(o.squelchDb == -61.5f);
     ROW(o.volume == 0.375f);
+    ROW(o.muted);  // FOXAPI_RX_MUTED: the user's mute (feat/web-bookmarks)
     ROW(o.dbMin == -117.0f);
     ROW(o.dbMax == -7.5f);
     ROW(o.tunerDisplayStyle == "plain");
@@ -1091,7 +1134,7 @@ void composeMapsEveryField() {
     const RadioStatus z = cascade::net::composeRadioStatus(off, &l);
     CHECK(!z.running && !z.faulted && !z.stereoActive && !z.transmitting && !z.transmitAvailable &&
           !z.nrEnabled && !z.notchEnabled && !z.autoNotch && !z.stereoEnabled && !z.agcSupported &&
-          !z.agc && !z.iqRecording && !z.audioRecording && !z.scannerActive);
+          !z.agc && !z.iqRecording && !z.audioRecording && !z.scannerActive && !z.muted);
 
     // The table above is every member: the header decides, not this file.
     const std::set<std::string> declared = radioStatusMembers();
@@ -1151,6 +1194,7 @@ const BoolOut kBools[] = {
     {"faulted", [](const RadioStatus& o) { return o.faulted; }},
     {"stereoActive", [](const RadioStatus& o) { return o.stereoActive; }},
     {"transmitting", [](const RadioStatus& o) { return o.transmitting; }},
+    {"muted", [](const RadioStatus& o) { return o.muted; }},
     {"transmitAvailable", [](const RadioStatus& o) { return o.transmitAvailable; }},
     {"nrEnabled", [](const RadioStatus& o) { return o.nrEnabled; }},
     {"notchEnabled", [](const RadioStatus& o) { return o.notchEnabled; }},
@@ -1234,7 +1278,7 @@ void walkingOneCompose() {
         {FOXAPI_RX_RUNNING, "RUNNING", "running"},
         {FOXAPI_RX_DEVICE_OPEN, "DEVICE_OPEN", ""},
         {FOXAPI_RX_FAULTED, "FAULTED", "faulted"},
-        {FOXAPI_RX_MUTED, "MUTED", ""},
+        {FOXAPI_RX_MUTED, "MUTED", "muted"},
         {FOXAPI_RX_SQUELCH_OPEN, "SQUELCH_OPEN", ""},
         {FOXAPI_RX_STEREO_ENABLED, "STEREO_ENABLED", "stereoEnabled"},
         {FOXAPI_RX_STEREO_ACTIVE, "STEREO_ACTIVE", "stereoActive"},

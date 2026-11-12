@@ -412,8 +412,8 @@ void testSurface() {
             for (const std::uint32_t p : cascade::engine::internalProfileOps(k)) { CHECK(p != o); }
         }
     }
-    // The web profile is the closure of what a browser's request can say: 38 ops, as docs/api-0.3-additions.md 8.16.3 counts them. This change does not grow it.
-    CHECK_EQ(static_cast<int>(cascade::engine::internalProfileOps(cascade::engine::InternalKind::Web).size()), 38);   // (29 + the 3 store ops + the 6 sliders' app ops)
+    // The web profile is the closure of what a browser's request can say: 39 ops (38 as docs/api-0.3-additions.md 8.16.3 counted them, plus SET_MUTED, which the web page's mute sends since feat/web-bookmarks). This change does not grow it.
+    CHECK_EQ(static_cast<int>(cascade::engine::internalProfileOps(cascade::engine::InternalKind::Web).size()), 39);   // (30 + the 3 store ops + the 6 sliders' app ops)
     Rig r(false, false);
     testing::Session remote(api(), r.eng.apiHandle(), FOXAPI_SESSION_REMOTE, FOXAPI_GRANT_VIEW | FOXAPI_GRANT_TUNE | FOXAPI_GRANT_SETTINGS | FOXAPI_GRANT_TRANSMIT, "s3cret");
     CHECK(remote.ok());

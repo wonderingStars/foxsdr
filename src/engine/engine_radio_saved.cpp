@@ -91,6 +91,29 @@ SavedRadio Engine::savedRadioOf(std::size_t slot) {
     r.agcFixedGainDb = fixedGainShown(rx());
     r.nbEnabled = rx().nbEnabled_;
     r.nbThresholdDb = static_cast<double>(rx().nbThresholdDb_);
+    r.toneSquelchKind = rx().toneKind_;
+    r.toneSquelchHz = rx().toneHz_;
+    r.toneSquelchCode = rx().toneCode_;
+    r.toneSquelchPolarity = rx().tonePol_;
+    r.toneRemove = rx().toneRemove_;
+    r.meterUnits = rx().meterUnits_;
+    r.nrMethod = rx().nrMethod_;
+    r.cwPitchHz = rx().cwPitchHz_;
+    for (double g : rx().eqDb_) {
+        if (g != 0.0) {
+            r.eqDb.assign(rx().eqDb_.begin(), rx().eqDb_.end());
+            break;
+        }
+    }
+    r.audioHighPassHz = rx().audioHpHz_;
+    r.audioLowPassHz = rx().audioLpHz_;
+    r.noiseSquelchOn = rx().noiseSquelchOn_;
+    r.noiseSquelchThresholdDb = rx().noiseSquelchThresholdDb_;
+    r.noiseSquelchTailMs = rx().noiseSquelchTailMs_;
+    for (std::size_t i = 0; i < rx().manualNotch_.size(); ++i) {
+        const Receiver::ManualNotchSlot& ns = rx().manualNotch_[i];
+        if (ns.on || ns.hz != 1000.0 || ns.widthHz != 50.0) { r.notchBank.push_back({static_cast<int>(i), ns.hz, ns.widthHz, ns.on}); }
+    }
     r.notchEnabled = rx().notchEnabled_;
     r.notchFreqHz = static_cast<double>(rx().notchFreqHz_);
     r.notchQ = static_cast<double>(rx().notchQ_);
@@ -158,6 +181,7 @@ void Engine::restoreExtraRadioDevice(const std::string& kind, const std::string&
         ++rx().sourceGen_;
         installSource(std::move(dev));
         rx().sourceKind_ = kind;
+        adoptKiwiRadio();
         cascade::core::health::noteRadioOpen(kind);
         applyConverterForSource();
         followInputRate();
@@ -237,6 +261,36 @@ void Engine::restoreSavedRadios(const cascade::core::AppConfig& cfg) {
             FoxCommand nb = cmd::makeInt(FOXAPI_OP_SET_NB, s.nbEnabled ? 1 : 0, 1);
             nb.num[0] = s.nbThresholdDb;
             send(nb);
+        }
+        {
+            // The tone squelch with its values (ival[1] = 1), then the remover.
+            FoxCommand tq = cmd::makeInt(FOXAPI_OP_SET_TONE_SQUELCH, s.toneSquelchKind, 1);
+            tq.num[0] = s.toneSquelchHz;
+            tq.num[1] = static_cast<double>(s.toneSquelchCode);
+            tq.num[2] = static_cast<double>(s.toneSquelchPolarity);
+            send(tq);
+            send(cmd::makeInt(FOXAPI_OP_SET_TONE_REMOVE, s.toneRemove ? 1 : 0));
+            send(cmd::makeInt(FOXAPI_OP_SET_METER_UNITS, s.meterUnits));
+            send(cmd::makeInt(FOXAPI_OP_SET_NR_METHOD, s.nrMethod));
+            send(cmd::makeNum(FOXAPI_OP_SET_CW_PITCH, s.cwPitchHz));
+            for (std::size_t i = 0; i < s.eqDb.size() && i < 8; ++i) {
+                FoxCommand eq = cmd::makeNumInt(FOXAPI_OP_SET_EQ_BAND, s.eqDb[i], static_cast<std::int64_t>(i));
+                send(eq);
+            }
+            send(cmd::makeInt(FOXAPI_OP_SET_AUDIO_FILTERS, s.audioHighPassHz, s.audioLowPassHz));
+            {
+                FoxCommand nsq = cmd::makeInt(FOXAPI_OP_SET_NOISE_SQUELCH, s.noiseSquelchOn ? 1 : 0, 1);
+                nsq.num[0] = s.noiseSquelchThresholdDb;
+                nsq.num[1] = s.noiseSquelchTailMs;
+                send(nsq);
+            }
+            for (const cascade::core::ManualNotchSetting& n : s.notchBank) {
+                FoxCommand nc = cmd::makeInt(FOXAPI_OP_SET_NOTCH_SLOT, n.on ? 1 : 0, 1);
+                nc.num[0] = n.hz;
+                nc.num[1] = n.widthHz;
+                nc.num[2] = static_cast<double>(n.slot);
+                send(nc);
+            }
         }
         {
             FoxCommand notch = cmd::makeInt(FOXAPI_OP_SET_NOTCH, s.notchEnabled ? 1 : 0, 1);
