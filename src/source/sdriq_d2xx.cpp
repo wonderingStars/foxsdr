@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <mutex>
 #include <thread>
 
@@ -326,6 +327,96 @@ std::unique_ptr<SdriqLink> openD2xxSdriq(const std::string& libraryWhere, const 
 
 SdriqOpener d2xxSdriqOpener(const std::string& libraryWhere) {
     return [libraryWhere](const std::string& serial, std::string& error) { return openD2xxSdriq(libraryWhere, serial, error, nullptr); };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// the needed-library data
+// ---------------------------------------------------------------------------------------------------------------------
+const needed::Info& ftd2xxNeededInfo() {
+    static const needed::Info info = [] {
+        needed::Info i;
+        i.libraryId = "ftdi-d2xx";
+        i.name = "FTDI D2XX driver";
+        i.fileNames = {"ftd2xx.dll", "ftd2xx64.dll"};
+        i.minVersion = "";  // none is known: the classic calls FoxSDR uses are the oldest ones; "too old" here means one of the eight is missing
+        i.needs64Bit = true;
+        i.why = "FoxSDR talks to the RFspace SDR-IQ through this driver; once it is installed the SDR-IQ can be chosen as a radio.";
+        i.publisher = "FTDI";
+        // The only address read in the publisher's own documentation (the D2XX Programmer's Guide names "our web site www.ftdichip.com"). The page of the
+        // D2XX downloads on it was NOT read (FTDI's site refused the tool), so no deeper address is given: (unverified).
+        i.officialAddress = "https://www.ftdichip.com";
+        i.installKind = "installer";
+        i.copyInFolder = "";
+        i.steps = {
+            "Open FTDI's web site with the button below and find the D2XX driver for Windows (the one for 64-bit Windows).",
+            "Download it and run FTDI's installer (Windows may ask for your permission: that is FTDI's installer, not FoxSDR).",
+            "Unplug the SDR-IQ and plug it in again.",
+            "Come back here and press \"Check again\"; FoxSDR does not need to be restarted.",
+        };
+        i.licence = "(unverified: FTDI's driver licence was not read)";
+        i.notSuppliedLine = "FoxSDR does not include or supply this driver.";
+        i.fetchAllowed = false;
+        return i;
+    }();
+    return info;
+}
+
+needed::Check checkFtd2xx(const std::string& libraryWhere) {
+    const needed::Info& info = ftd2xxNeededInfo();
+    needed::Check r;
+    r.lookedIn = libraryWhere.empty() ? "the folders on your PATH (System32 is one of them)" : "the folder or file you chose";
+    std::string path, why;
+    for (const std::string& name : info.fileNames) {
+        path = vendorlib::findLibrary(libraryWhere, name, why);
+        if (!path.empty()) { r.fileName = name; break; }
+        if (!libraryWhere.empty() && why.find("does not exist") != std::string::npos) { break; }
+    }
+    if (path.empty()) {
+        r.state = needed::State::NotFound;
+        r.sentence = "Not found: FoxSDR looked for ftd2xx.dll and ftd2xx64.dll in " + r.lookedIn + " and neither is there.";
+        return r;
+    }
+    {
+        const std::filesystem::path fp{std::u8string(path.begin(), path.end())};
+        const std::u8string folder = fp.parent_path().u8string();
+        r.foundFolder.assign(folder.begin(), folder.end());
+        const std::u8string fname = fp.filename().u8string();
+        r.fileName.assign(fname.begin(), fname.end());
+    }
+    r.version = needed::fileVersion(path);
+    vendorlib::Library lib;
+    const vendorlib::Check c = lib.open(path);
+    if (!c.ok()) {
+        switch (c.verdict) {
+            case vendorlib::Verdict::Wrong32Bit:
+                r.state = needed::State::Wrong32Bit;
+                r.sentence = "Found " + r.fileName + ", but it is a 32-bit file and FoxSDR is 64-bit: install FTDI's 64-bit D2XX driver.";
+                break;
+            case vendorlib::Verdict::LoadFailed:
+                r.state = needed::State::WouldNotLoad;
+                r.sentence = "Found " + r.fileName + ", but it would not load: " + c.sentence;
+                break;
+            default:
+                r.state = needed::State::NotALibrary;
+                r.sentence = "Found a file called " + r.fileName + ", but it is not a library FoxSDR can use: " + c.sentence;
+                break;
+        }
+        return r;
+    }
+    std::vector<const char*> names(std::begin(ft::kExports), std::end(ft::kExports));
+    std::vector<void*> fn;
+    r.missing = vendorlib::resolveAll(lib, names, fn);
+    lib.close();
+    if (!r.missing.empty()) {
+        r.state = needed::State::TooOld;
+        r.sentence = "Found " + r.fileName + (r.version.empty() ? "" : " (version " + r.version + ")") +
+                     ", but it is too old or not FTDI's D2XX driver: it does not offer " + r.missing + ".";
+        return r;
+    }
+    r.state = needed::State::Working;
+    r.sentence = "Found and working: " + r.fileName + (r.version.empty() ? " (the file states no version)" : " (version " + r.version + ")") +
+                 ", 64-bit, and it offers the calls FoxSDR needs.";
+    return r;
 }
 
 }  // namespace cascade::source

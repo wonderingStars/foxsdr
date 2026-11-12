@@ -502,9 +502,113 @@ void testProductionOpenerThroughPath() {
     g_fx.reset();
 }
 
+
+// THE NEEDED-LIBRARY DATA (owner rule 2026-11-12 22:00): structured fields and "Check again" without a restart.
+void testNeededLibrary() {
+    const needed::Info& info = ftd2xxNeededInfo();
+    CHECK(info.libraryId == "ftdi-d2xx" && info.name == "FTDI D2XX driver" && info.publisher == "FTDI");
+    CHECK((info.fileNames == std::vector<std::string>{"ftd2xx.dll", "ftd2xx64.dll"}) && info.needs64Bit && info.minVersion.empty());
+    CHECK(info.installKind == "installer" && info.copyInFolder.empty() && info.steps.size() == 4 && !info.fetchAllowed);
+    CHECK(info.officialAddress == "https://www.ftdichip.com");  // the one address read in FTDI's own guide
+    CHECK(contains(info.licence, "unverified") && contains(info.notSuppliedLine, "does not include or supply") && !info.why.empty());
+    for (const std::string& st : info.steps) { CHECK(!st.empty()); }
+    CHECK(std::string(needed::stateWord(needed::State::Working)) == "working" && std::string(needed::stateWord(needed::State::TooOld)) == "too-old" &&
+          std::string(needed::stateWord(needed::State::Wrong32Bit)) == "wrong-32-bit" && std::string(needed::stateWord(needed::State::WouldNotLoad)) == "would-not-load" &&
+          std::string(needed::stateWord(needed::State::NotFound)) == "not-found" && std::string(needed::stateWord(needed::State::NotALibrary)) == "not-a-library");
+
+    const auto dir = eol::scratch("d2xxneed");
+    const auto fx = eol::fixtureDir();
+    const std::string scratchName = dir.filename().string();
+    const std::uint64_t loads0 = vl::Library::silentLoadCount();
+    // not found: says where it looked (categories, no folder), loads nothing
+    {
+        const needed::Check c = checkFtd2xx(eol::u8(dir));
+        CHECK(c.state == needed::State::NotFound && !c.working() && c.fileName.empty() && c.version.empty());
+        CHECK(contains(c.sentence, "ftd2xx.dll") && contains(c.sentence, "ftd2xx64.dll") && contains(c.sentence, "folder or file you chose"));
+        CHECK(!contains(c.sentence, scratchName.c_str()) && !contains(c.lookedIn, scratchName.c_str()));
+        PathGuard pg(L"");
+        const needed::Check p = checkFtd2xx();
+        CHECK(p.state == needed::State::NotFound && contains(p.sentence, "PATH"));
+    }
+    CHECK(vl::Library::silentLoadCount() == loads0);
+    // each way a found file can be wrong, each with its own state and a sentence that names the file
+    eol::writeFile(dir / "ftd2xx.dll", Bytes(3000, 'x'));
+    {
+        const needed::Check c = checkFtd2xx(eol::u8(dir));
+        CHECK(c.state == needed::State::NotALibrary && c.fileName == "ftd2xx.dll" && contains(c.sentence, "not a library FoxSDR can use"));
+    }
+    eol::writeFile(dir / "ftd2xx.dll", makeImage(vl::kMachineX86, 0x10B));
+    {
+        const needed::Check c = checkFtd2xx(eol::u8(dir));
+        CHECK(c.state == needed::State::Wrong32Bit && contains(c.sentence, "32-bit") && contains(c.sentence, "64-bit"));
+        CHECK(vl::Library::silentLoadCount() == loads0);  // refused from its bytes: the loader is not asked
+    }
+    std::filesystem::copy_file(fx / "eol_partial.dll", dir / "ftd2xx.dll", std::filesystem::copy_options::overwrite_existing);
+    {
+        const needed::Check c = checkFtd2xx(eol::u8(dir));
+        CHECK(c.state == needed::State::TooOld && contains(c.missing, "FT_ListDevices") && contains(c.sentence, "does not offer"));
+        CHECK(vl::Library::silentLoadCount() == loads0 + 1);
+    }
+    std::filesystem::copy_file(fx / "eol_needs_dep.dll", dir / "ftd2xx.dll", std::filesystem::copy_options::overwrite_existing);
+    {
+        const needed::Check c = checkFtd2xx(eol::u8(dir));
+        CHECK(c.state == needed::State::WouldNotLoad && contains(c.sentence, "126"));
+    }
+    // CHECK AGAIN WITHOUT RESTARTING: absent, then the person installs it, then the same call finds it and the radio opens; then it goes away again.
+    std::filesystem::remove(dir / "ftd2xx.dll");
+    g_fx.reset();
+    {
+        CHECK(checkFtd2xx(eol::u8(dir)).state == needed::State::NotFound);
+        std::string err;
+        CHECK(!openD2xxSdriq(eol::u8(dir), "", err));
+        std::filesystem::copy_file(fx / "ftd2xx.dll", dir / "ftd2xx.dll", std::filesystem::copy_options::overwrite_existing);  // "installed"
+        const needed::Check c = checkFtd2xx(eol::u8(dir));
+        CHECK(c.state == needed::State::Working && c.working() && c.fileName == "ftd2xx.dll" && c.missing.empty());
+        CHECK(contains(c.sentence, "Found and working") && contains(c.sentence, "64-bit"));
+        CHECK(c.version.empty() && contains(c.sentence, "states no version"));  // the stand-in has no version resource
+        CHECK(!c.foundFolder.empty() && !contains(c.sentence, scratchName.c_str()));
+        auto l = openD2xxSdriq(eol::u8(dir), "", err);  // and the same process opens the radio, no restart
+        CHECK(l);
+        l.reset();
+        CHECK(checkFtd2xx(eol::u8(dir)).working());  // the check unloaded it: it can be checked again and again
+        std::error_code ec;
+        std::filesystem::remove(dir / "ftd2xx.dll", ec);
+        CHECK(!ec);  // nothing keeps the file loaded (the check and the link both let go of it)
+        CHECK(checkFtd2xx(eol::u8(dir)).state == needed::State::NotFound);
+    }
+    // the PATH case: the same re-check through the PATH directories
+    {
+        std::filesystem::copy_file(fx / "ftd2xx.dll", dir / "ftd2xx.dll", std::filesystem::copy_options::overwrite_existing);
+        PathGuard pg(dir.wstring());
+        const needed::Check c = checkFtd2xx();
+        CHECK(c.working() && contains(c.lookedIn, "PATH"));
+    }
+    // a check opens no device and calls none of the library's functions
+    {
+        g_fx.reset();
+        const needed::Check c = checkFtd2xx(g_fx.dir);
+        CHECK(c.working() && g_fx.get(kOpens) == 0 && g_fx.get(kCalls) == 0);
+    }
+    // the file's own version, read without running its code
+    {
+        wchar_t sys[MAX_PATH];
+        const UINT n = ::GetSystemDirectoryW(sys, MAX_PATH);
+        CHECK(n > 0 && n < MAX_PATH);
+        const std::string k32 = eol::u8(std::filesystem::path(std::wstring(sys, n)) / "kernel32.dll");
+        const std::string v = needed::fileVersion(k32);
+        CHECK(!v.empty() && std::count(v.begin(), v.end(), '.') == 3 && v.find_first_not_of("0123456789.") == std::string::npos);
+        CHECK(needed::fileVersion(eol::u8(dir / "nothing.dll")).empty());
+        eol::writeFile(dir / "text.dll", Bytes(500, 'x'));
+        CHECK(needed::fileVersion(eol::u8(dir / "text.dll")).empty());
+    }
+    g_fx.reset();
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
 void testSinks() {
     const std::string root = EOL_SRC_DIR;
-    for (const char* f : {"src/source/sdriq_d2xx.cpp", "src/source/sdriq_d2xx.hpp", "src/source/ftd2xx_api.hpp"}) {
+    for (const char* f : {"src/source/sdriq_d2xx.cpp", "src/source/sdriq_d2xx.hpp", "src/source/ftd2xx_api.hpp", "src/source/needed_library.cpp", "src/source/needed_library.hpp"}) {
         const std::string t = readText(root + "/" + f);
         CHECK(!t.empty());
         CHECK(!contains(t, "stderr"));
@@ -559,6 +663,7 @@ int main() {
     testLinkFaults();
     testSourceEndToEnd();
     testProductionOpenerThroughPath();
+    testNeededLibrary();
     testSinks();
     testHangingRead();
     return testSummary("test_sdriq_d2xx");

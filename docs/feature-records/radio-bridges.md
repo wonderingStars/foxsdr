@@ -8,7 +8,7 @@ Owner decision (2026-11-12 21:50) that this lane works under: FoxSDR MAY load a 
 
 | Radio | Result | What it needs | Evidence |
 |---|---|---|---|
-| 1. RFspace SDR-IQ | **built** | the user's FTDI D2XX driver (`ftd2xx.dll`, then `ftd2xx64.dll`), found at run time | `test_sdriq_d2xx` 220 checks, 0 failed; `test_sdriq_source` passes |
+| 1. RFspace SDR-IQ | **built** | the user's FTDI D2XX driver (`ftd2xx.dll`, then `ftd2xx64.dll`), found at run time | `test_sdriq_d2xx` 287 checks, 0 failed; `test_sdriq_source` passes |
 | 2. WiNRADiO G31DDC | **not built** (32-bit library only, per the maker's own page) | n/a | quotes below |
 | 3. Fobos SDR | **not built** (no published interface description that is not LGPL/GPL source) | n/a | searches below |
 | 4. Perseus | **not built** (same) | n/a | below |
@@ -25,7 +25,7 @@ Read first: `D:/foxsdr-build/prep/lane-results/engine-oss.md`, `docs/feature-rec
 ### 1. SDR-IQ over FTDI's D2XX (`source/ftd2xx_api.hpp`, `source/sdriq_d2xx.{hpp,cpp}`)
 
 * **Declarations** (`ftd2xx_api.hpp`): the eight calls used (`FT_ListDevices`, `FT_OpenEx`, `FT_Close`, `FT_Read`, `FT_Write`, `FT_SetTimeouts`, `FT_Purge`, `FT_GetQueueStatus`), the `FT_STATUS` values, the open/list flags and `FT_PURGE_RX/TX`, written from FTDI's own "D2XX Programmer's Guide" 2.01 (prototypes and the appendix of values, as printed). FTDI's header was not read. Receive side only: no EEPROM, baud-rate, modem-line, bit-bang or reset call is declared (a source-scan test pins it).
-* **Library** (`openD2xxSdriq`): found as `ftd2xx.dll`, then `ftd2xx64.dll` through `vendorlib::findLibrary` (a folder or file the person gave, or the absolute PATH entries; never the current directory, never beside the executable), judged from its bytes (`checkFile`: a 32-bit or non-DLL file is refused before anything is mapped), loaded under the thread error mode that suppresses the system box, exports resolved with `resolveAll`. Absent, too old or wrong bitness: one plain sentence that names FTDI's D2XX driver and says to install it from FTDI's own web site (text only: nothing is opened, downloaded or bundled), and never names the folder. The test shows the loader is not even asked for a missing or non-image file and is asked once, with the silent mode set, for a too-old library and for one with a missing dependency (error 126).
+* **Library** (`openD2xxSdriq`): found as `ftd2xx.dll`, then `ftd2xx64.dll` through `vendorlib::findLibrary` (a folder or file the person gave, or the absolute PATH entries; never the current directory, never beside the executable), judged from its bytes (`checkFile`: a 32-bit or non-DLL file is refused before anything is mapped), loaded under the thread error mode that suppresses the system box, exports resolved with `resolveAll`. Absent, too old or wrong bitness: one plain sentence that names FTDI's D2XX driver and says to install it from FTDI's own web site (nothing is opened, downloaded or bundled by FoxSDR on its own: the page's buttons act only on the user's click), and never names the folder. The test shows the loader is not even asked for a missing or non-image file and is asked once, with the silent mode set, for a too-old library and for one with a missing dependency (error 126).
 * **Which device**: with a serial given it is opened as given (the source then asks the device its name and refuses anything that is not an "SDR-IQ"). With none given, only a device whose D2XX description contains "SDR-IQ" (any case) is chosen, so FoxSDR never writes to another FTDI device unless the person named its serial. A list string that overruns its buffer (canary bytes after it) or is unterminated refuses the library.
 * **Link** (`D2xxLink`): `read` asks `FT_GetQueueStatus`, then reads what is queued or one byte with the timeout (a D2XX timeout of 0 means "wait forever" and is never passed: clamped to 1..60000 ms); a library that reports more bytes than were asked for is distrusted; a failed status makes the link dead (-1) for good; a fault inside FTDI's code is caught by `callGuardingVendorFaults` (the link is dead, the module is leaked, the application lives); `write` loops over partial writes, gives up after three zero-byte writes; `close` waits a bounded time (by the clock) for calls in flight, calls `FT_Close` (unless the library faulted) and leaks the module rather than unloading it under a call that never returned.
 * **Edit to an existing file**: `defaultSdriqOpener()` in `sdriq_source.cpp` now calls `openD2xxSdriq` (so a default-constructed `SdriqSource` just works once the user's driver is on PATH); the header comments in `sdriq_source.hpp` say so; the production-opener case of `test_sdriq_source` empties PATH for its duration so it never touches a real driver.
@@ -58,7 +58,7 @@ The RF Explorer is a serial sweep device, not a library: the maker's libraries a
 
 | Test | Result line |
 |---|---|
-| test_sdriq_d2xx | `test_sdriq_d2xx: 220 checks, 0 failed` |
+| test_sdriq_d2xx | `test_sdriq_d2xx: 287 checks, 0 failed` (220 before the needed-library data, 67 after) |
 | test_rfexplorer_source | `test_rfexplorer_source: 7406 checks, 0 failed` (4 consecutive green; ctest 1.4 s) |
 | test_sdriq_source | Passed (production-opener case now with PATH emptied) |
 
@@ -75,6 +75,7 @@ What `test_rfexplorer_source` covers (stand-in device with noise, an off-grid to
 | RF Explorer | the CR LF end-of-line check removed | 1 failed (`badFrames >= 3`) |
 | RF Explorer | the `$S` direct-count reading removed | 10+ failed (the first sweep is never decoded) |
 | RF Explorer | the generator / model-60 refusal removed | 1 failed (`sw2.connect ... NotAnalyzer`) |
+| SDR-IQ needed-library check | the "does not offer all the calls" (too old) branch removed | 1 failed (`TooOld` and the missing list) |
 
 A slip of my own: the first run of the `$S` break-it crashed the test process (exit 139) instead of failing a check, because a test indexed `line.db[peak]` of an empty line; the test now guards the indexing, and the mutant then fails with named checks.
 
@@ -97,11 +98,11 @@ The full headless gate of the build folder, `ctest -C Release -L "headless|slint
 | test_health_app_stepped | Failed in the slice | passes alone (54.8 s): load flake (on the brief's list) |
 | test_engine_api_decode_radio (Timeout), test_engine_api_source_kinds | Failed | the git-ignored WAV fixtures of `src/slint/tests/drive/fixtures` were missing in this worktree (`the fixture scope.wav is not in ...`; `engine-merge.md` lists the same two for the same reason). They are generated by the repository's own `make_<name>.py` (`python -I make_scope.py`, `make_cw-decoder.py`, `make_pocsag-decoder.py`, `make_rtty-decoder.py`, `make_twotone-decoder.py`; standard library only, gitignored output). After generating them both pass: `test_engine_api_decode_radio` Passed 38.0 s, `test_engine_api_source_kinds` Passed 17.6 s. |
 
-Everything else passed, including `test_shutdown_budget_free`, `test_thread_inventory`, `test_json_dump_policy`, `test_health_paths`, `test_engine_shell_guard` (no new file in `src/net`) and `test_sdriq_source`. No red is attributable to this lane. `%APPDATA%/foxsdr/config.json`: sha256 `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` at the end (unchanged; hashed only).
+Everything else passed, including `test_shutdown_budget_free`, `test_thread_inventory`, `test_json_dump_policy`, `test_health_paths`, `test_engine_shell_guard` (no new file in `src/net`) and `test_sdriq_source`. No red is attributable to this lane. The needed-library data (`needed_library.*`, `checkFtd2xx`, 67 more checks in `test_sdriq_d2xx`) was added AFTER this gate; after it the five tests that cover the touched files were re-run and pass (`test_sdriq_d2xx` 287 checks, `test_sdriq_source`, `test_rfexplorer_source`, `test_json_dump_policy`, `test_thread_inventory`); the full gate was not repeated. `%APPDATA%/foxsdr/config.json`: sha256 `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` at the end (unchanged; hashed only).
 
 ## Files
 
-New: `src/source/ftd2xx_api.hpp`, `src/source/sdriq_d2xx.{hpp,cpp}`, `src/source/rfexplorer_protocol.{hpp,cpp}`, `src/source/rfexplorer_serial_win.{hpp,cpp}`, `tests/test_sdriq_d2xx.cpp`, `tests/test_rfexplorer_source.cpp`, `tests/fixtures/ftd2xx_standin.cpp`, this record. Edited: `src/source/sdriq_source.cpp` (the default opener calls the D2XX link: 5 lines) and `sdriq_source.hpp` (comments), `tests/test_sdriq_source.cpp` (the production-opener case empties PATH), `tests/CMakeLists.txt` (appended at the END between `# radio-bridges begin` / `end`: the stand-in `ftd2xx.dll` target and the two source-directory definitions). `CMakeLists.txt` was not touched (`src/source/*.cpp` is a glob). No file of the registry, `engine.cpp`, `pipeline.cpp`, `fox_engine_api.cpp`, `app_commands.*`, the config files or any `.slint` was touched; no operation number was added; `src/core/plugin_abi.h` untouched.
+New: `src/source/needed_library.{hpp,cpp}` (the shared structured data), `src/source/ftd2xx_api.hpp`, `src/source/sdriq_d2xx.{hpp,cpp}`, `src/source/rfexplorer_protocol.{hpp,cpp}`, `src/source/rfexplorer_serial_win.{hpp,cpp}`, `tests/test_sdriq_d2xx.cpp`, `tests/test_rfexplorer_source.cpp`, `tests/fixtures/ftd2xx_standin.cpp`, this record. Edited: `src/source/sdriq_source.cpp` (the default opener calls the D2XX link: 5 lines) and `sdriq_source.hpp` (comments), `tests/test_sdriq_source.cpp` (the production-opener case empties PATH), `tests/CMakeLists.txt` (appended at the END between `# radio-bridges begin` / `end`: the stand-in `ftd2xx.dll` target and the two source-directory definitions). `CMakeLists.txt` was not touched (`src/source/*.cpp` is a glob). No file of the registry, `engine.cpp`, `pipeline.cpp`, `fox_engine_api.cpp`, `app_commands.*`, the config files or any `.slint` was touched; no operation number was added; `src/core/plugin_abi.h` untouched.
 
 ## REGISTRATION HAND-OFF (for the merge lane; nothing here is registered)
 
@@ -150,6 +151,35 @@ English text for the radio setup: "Connect the RF Explorer by USB and choose its
 
 G31DDC, Fobos, Perseus, RFNM, Harogic: no row. (If the owner decides a 32-bit helper process for G31DDC or the SDK-header reading for Fobos / Perseus / Harogic, each is a new lane.)
 
+## NEEDED LIBRARIES (owner rule 2026-11-12 22:00, `NEEDED-LIBRARY-RULE.md`; replaces the "text only" sentence of the brief)
+
+Added after the lane's first report, on the orchestrator's message. Nothing is downloaded, bundled or opened by FoxSDR on its own; the buttons below act only on the user's click and are drawn by the radio-setup page (a screen lane's work).
+
+| Feature | Library id | Library | File names looked for | Minimum version | Official page | Install kind | Copy-in folder | Steps (English) | Licence | fetch allowed |
+|---|---|---|---|---|---|---|---|---|---|---|
+| SDR-IQ radio (`sdriq`) | `ftdi-d2xx` | FTDI D2XX driver, 64-bit | `ftd2xx.dll`, then `ftd2xx64.dll` (PATH directories, or the folder or file the user chose) | none known: the eight classic calls are the oldest ones, so "too old" means one of them is missing; 64-bit | `https://www.ftdichip.com` is the only address read in FTDI's own documentation (the D2XX Programmer's Guide says "our web site www.ftdichip.com"); the D2XX download page itself was NOT read (FTDI's site refused the tool, 403): **(unverified)**, not given | installer | none | 1. Open FTDI's web site (button) and find the D2XX driver for Windows, the 64-bit one. 2. Download it and run FTDI's installer (Windows may ask for permission: that is FTDI's installer, not FoxSDR). 3. Unplug the SDR-IQ and plug it in again. 4. Press "Check again"; FoxSDR does not need to be restarted. | (unverified: FTDI's driver licence was not read); FoxSDR does not include or supply it | `no (unverified)` (terms not read) |
+| RF Explorer sweep source (`rfexplorer`) | none | no library: a COM port. Whether Windows needs a USB-serial driver for it was not read in the maker's documents: (unverified), nothing is claimed | - | - | - | - | - | - | - | n/a |
+| G31DDC, Fobos, Perseus, RFNM, Harogic | (not built) | G31DDCAPI.dll (32-bit only), libfobos, libperseus, librfnm, the Harogic HTRA library | - | - | - | - | - | - | LGPL-2.1 / LGPL-3.0 / MPL-2.0 / the maker's own; none read in full | `no (unverified)` |
+
+**Structured data from the bridge** (`source/needed_library.hpp`, filled by `ftd2xxNeededInfo()` and `checkFtd2xx()` in `sdriq_d2xx`): `Info` (static: `libraryId`, `name`, `fileNames`, `minVersion`, `needs64Bit`, `why`, `publisher`, `officialAddress` (empty when unverified), `installKind`, `copyInFolder`, `steps`, `licence`, `notSuppliedLine`, `fetchAllowed`) and `Check` (the answer of "Check again": `state` as one of `working`, `not-found`, `too-old`, `wrong-32-bit`, `would-not-load`, `not-a-library`; `fileName`; `version` read from the file's own version resource without running its code; `lookedIn` ("the folders on your PATH (System32 is one of them)" or "the folder or file you chose": categories, never folders); `foundFolder` (structured only, for "Open that folder"; never in a sentence); `missing` (the calls a too-old file lacks); `sentence`). The address shown and opened must come from the link registry by `libraryId` `ftdi-d2xx`; `officialAddress` here is only the seed for the registry's built-in copy.
+
+**Check again works without restarting FoxSDR**: each call finds, judges, loads silently and unloads the library, keeping nothing. Tested (`testNeededLibrary`): library absent -> `not-found`; the stand-in copied in ("installed") -> the same call says `working` and the radio then opens in the same process; the file can be deleted afterwards (nothing keeps it loaded) and the next check says `not-found` again; also through PATH; a check opens no device and calls none of the library's functions (`kOpens == 0`, `kCalls == 0`); each wrong state (text file, 32-bit image, a library that offers too little, one with a missing dependency) has its own state and a sentence naming the file and no folder; the file version of `kernel32.dll` is read.
+
+**SCREEN HAND-OFF (the radio-setup page; the controls are the shared component's, not this lane's)** for a radio whose bridge has a `needed::Info`:
+
+| Control | English label | What it does | Data it uses |
+|---|---|---|---|
+| Text block | "Needs: FTDI D2XX driver (ftd2xx.dll or ftd2xx64.dll), 64-bit" / "Why: ..." / licence line / "FoxSDR does not include or supply this driver." | shows items 1, 2 and 6 of the rule | `Info.name`, `fileNames`, `needs64Bit`, `minVersion`, `why`, `licence`, `notSuppliedLine` |
+| Text | the official page as copyable text | shows the address from the registry; when the registry marks the link broken or moved, says it may be out of date, names the publisher and falls back to the steps | registry lookup by `Info.libraryId`; `Info.publisher` |
+| Button | "Open the download page" | opens the user's browser on the registry address, on the click only | registry address; hidden while the address is unverified |
+| Numbered list | the steps | shows `Info.steps` | `Info.steps` |
+| Button | "Open that folder" | for a copy-in library only; D2XX is an installer, so it is not shown for this row (`copyInFolder` is empty) | `Info.copyInFolder`, `Check.foundFolder` |
+| Button | "Choose the file..." | for a copy-in library only; not shown for this row. (If the owner wants it for D2XX, the page checks the chosen file with `checkFtd2xx(<file>)` before copying: it already accepts a file path and refuses with a sentence.) | `checkFtd2xx` |
+| Button | "Check again" | calls `checkFtd2xx()` (with the chosen folder or file when there is one) and shows `Check.sentence` with its state word | `Check` |
+| Status line | "Found and working: ftd2xx.dll (version ...), 64-bit ..." / "Not found: ..." / "... too old ..." / "... 32-bit ..." / "... would not load ..." | the result of the last check | `Check.state`, `sentence`, `version` |
+
+The same Info/Check shape is what any later bridge fills in (`needed_library.hpp` is not SDR-IQ specific). There is no ABI request from this lane: the page is in the engine's own screen, not a plugin.
+
 ## Sources opened (2026-11-12)
 
 | URL | Licence or status | Used for |
@@ -174,5 +204,5 @@ Disclosures. (1) Documents were fetched into the session scratch folder (outside
 2. **Fobos and Perseus**: may a lane read the public header (`fobos.h`, `perseus-sdk.h`) of the library the USER installed, for function and structure declarations (not copy them)? Without it both stay on their SoapySDR / ExtIO routes.
 3. **Harogic**: may a lane read `htraapi.h` from the user's own SDK folder, or will Harogic publish the enumeration values and structure packing?
 4. **RFNM**: waits for a stable C interface and binaries from RFNM (its network machine API, `rfnm/rfnmctl`, MPL-2.0, could be a separate lane).
-5. **SDR-IQ library folder**: PATH only, or a "driver folder" setting (needs the registration code to pass it to `d2xxSdriqOpener`)?
+5. **SDR-IQ driver page, licence and folder**: the D2XX download page and FTDI's driver licence were not read (FTDI's site refused the tool), so the registry row and the table cells say (unverified); PATH only, or a "driver folder" setting (needs the registration code to pass it to `d2xxSdriqOpener`)?
 6. **SDR-IQ and RF Explorer radio-setup text** (English above) for the radio-setup owner to add and translate.

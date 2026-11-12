@@ -29,6 +29,7 @@
 #include <string>
 #include <vector>
 
+#include "source/needed_library.hpp"
 #include "source/sdriq_source.hpp"
 
 namespace cascade::source {
@@ -46,6 +47,13 @@ std::unique_ptr<SdriqLink> openD2xxSdriq(const std::string& libraryWhere, const 
 
 // The same as an SdriqOpener for SdriqSource::setOpener(). `libraryWhere` is captured by value.
 SdriqOpener d2xxSdriqOpener(const std::string& libraryWhere = std::string());
+
+// THE NEEDED-LIBRARY DATA (owner rule 2026-11-12 22:00): what the radio-setup page shows for the SDR-IQ, as structured fields, and "Check again".
+const needed::Info& ftd2xxNeededInfo();
+// Looks for the library (a folder or file the person chose, or the PATH directories), judges it from its bytes, loads it silently, checks that it offers
+// the eight calls, unloads it again and reports. Opens no device, downloads and opens nothing, keeps nothing: calling it again after the person installed
+// the driver finds it without restarting FoxSDR.
+needed::Check checkFtd2xx(const std::string& libraryWhere = std::string());
 
 }  // namespace cascade::source
 
