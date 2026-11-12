@@ -398,6 +398,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.cwPitchHz == b.cwPitchHz);
     CHECK(a.eqDb == b.eqDb && a.audioHighPassHz == b.audioHighPassHz && a.audioLowPassHz == b.audioLowPassHz);
     CHECK(a.noiseSquelchOn == b.noiseSquelchOn && a.noiseSquelchThresholdDb == b.noiseSquelchThresholdDb && a.noiseSquelchTailMs == b.noiseSquelchTailMs);
+    CHECK(a.afcOn == b.afcOn && a.afcPullInHz == b.afcPullInHz);
     CHECK(a.iqCorrect == b.iqCorrect);
     CHECK(a.spectrumFftSize == b.spectrumFftSize && a.spectrumWindow == b.spectrumWindow && a.spectrumFrameRateHz == b.spectrumFrameRateHz);
     CHECK(a.notchBank.size() == b.notchBank.size());
@@ -942,6 +943,8 @@ int main() {
         in.audioLowPassHz = 2400;
         in.noiseSquelchThresholdDb = -42.5;   // (default -30)
         in.noiseSquelchTailMs = 160.0;        // (default 100)
+        in.afcOn = true;   // (default off)
+        in.afcPullInHz = 4000.0;   // (default 2500)
         in.iqCorrect = 5;   // (default 0)
         in.spectrumFftSize = 16384;   // (default 1024)
         in.spectrumWindow = 1;        // (default 3)

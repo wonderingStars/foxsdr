@@ -107,6 +107,8 @@ SavedRadio Engine::savedRadioOf(std::size_t slot) {
     }
     r.audioHighPassHz = rx().audioHpHz_;
     r.audioLowPassHz = rx().audioLpHz_;
+    r.afcOn = rx().afcOn_;
+    r.afcPullInHz = rx().afcPullInHz_;
     r.iqCorrect = rx().iqCorrect_;
     r.spectrumFftSize = rx().spectrumFft_;
     r.spectrumWindow = rx().spectrumWindow_;
@@ -282,6 +284,11 @@ void Engine::restoreSavedRadios(const cascade::core::AppConfig& cfg) {
                 send(eq);
             }
             send(cmd::makeInt(FOXAPI_OP_SET_AUDIO_FILTERS, s.audioHighPassHz, s.audioLowPassHz));
+            {
+                FoxCommand afc = cmd::makeInt(FOXAPI_OP_SET_AFC, s.afcOn ? 1 : 0, 1);
+                afc.num[0] = s.afcPullInHz;
+                send(afc);
+            }
             send(cmd::makeInt(FOXAPI_OP_SET_IQ_CORRECT, s.iqCorrect));
             {
                 FoxCommand spc = cmd::makeInt(FOXAPI_OP_SET_SPECTRUM, s.spectrumFftSize, s.spectrumWindow);

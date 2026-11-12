@@ -75,6 +75,8 @@
     "cwPitchHz": 700.0,
     "audioHighPassHz": 0,
     "audioLowPassHz": 0,
+    "afcOn": false,
+    "afcPullInHz": 2500.0,
     "iqCorrect": 0,
     "spectrumFftSize": 1024,
     "spectrumWindow": 3,

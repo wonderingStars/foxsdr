@@ -462,6 +462,8 @@ struct AppWindowTestAccess {
     static std::size_t spectrumFftPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.spectrumFftSize(); }); }
     static int iqCorrectRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->iqCorrect_; }); }
     static int iqCorrectPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.iqCorrection(); }); }
+    static bool afcRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->afcOn_; }); }
+    static bool afcPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.afcOn(); }); }
     static double cwPitchPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.cwPitchHz(); }); }
     static bool nsqRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->noiseSquelchOn_; }); }
     static double nsqThrRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->noiseSquelchThresholdDb_; }); }
@@ -1307,6 +1309,19 @@ void receiverOps(AppWindow& a) {
         CHECK(A::iqCorrectRx(a) == 5 && A::iqCorrectPipe(a) == 5);
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_IQ_CORRECT, 0))));
         CHECK(A::iqCorrectRx(a) == 0 && A::iqCorrectPipe(a) == 0);
+    }
+    covering(FOXAPI_OP_SET_AFC);
+    {
+        CHECK(!A::afcRx(a) && !A::afcPipe(a));
+        FoxCommand af = ints(FOXAPI_OP_SET_AFC, 1, 1);
+        af.num[0] = 4000.0;
+        CHECK(ok(A::apply(a, af)));
+        CHECK(A::afcRx(a) && A::afcPipe(a));
+        af.num[0] = 10.0;
+        CHECK(refused(A::apply(a, af), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::afcRx(a) && A::afcPipe(a));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_AFC, 0, 0))));
+        CHECK(!A::afcRx(a) && !A::afcPipe(a));
     }
     covering(FOXAPI_OP_SET_CW_PITCH);
     {

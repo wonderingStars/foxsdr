@@ -2649,6 +2649,9 @@ At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTT
 ### 9.40 I/Q correction at the source rate (engine serial lane A, row F16; dsp/iq_correct.hpp)
 
 * Op `FOXAPI_OP_SET_IQ_CORRECT` 0x011D (receiver-scoped; in no web, CAT or TCI profile): `ival[0]` a sum of 1 DC removal, 2 gain and phase balance (blind image rejection: the wanted band should look alike either side of its centre), 4 swap I and Q; 0 (the default) leaves the samples untouched. It runs on the drained block before the spectrum, the audio chain and the I/Q recorder, so all three see the corrected samples. State, appended after `fileStartSource`: `iqImageRejectionDb` (measurement, 200 while the balance is off or has measured nothing) and `iqCorrectMask` (a setting, moves `modeSeq`). Saved per radio as `iqCorrect`.
+### 9.41 Automatic frequency control (engine serial lane A, row F13; dsp/afc.hpp)
+
+* Op `FOXAPI_OP_SET_AFC` 0x011E (receiver-scoped; in no web, CAT or TCI profile): `ival[0]` 0/1; with `ival[1]` = 1 `num[0]` is the pull-in range, Hz 50 to 20000 (default 2500; a caught carrier is followed out to twice that). NFM, WFM and AM follow the block's mean frequency (right for a carrier-dominated signal), CW the strongest line; USB, LSB, DSB and RAW have no carrier and are left alone (any nudge is taken off). The nudge is added to the VFO and the user's own offset (`vfoOffsetHz`) is untouched; a retune takes the nudge off and the loop starts again. State, appended after `iqCorrectMask`: `afcPullInHz afcCorrectionHz afcOn afcLocked` (the switch and the range are settings and move `modeSeq`; the correction and the lock are measurements). Saved per radio as `afcOn` and `afcPullInHz`.
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

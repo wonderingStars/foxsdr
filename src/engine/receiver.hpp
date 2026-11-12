@@ -370,6 +370,8 @@ struct Receiver {
     int spectrumWindow_ = 3;
     double spectrumFps_ = 0.0;
     int iqCorrect_ = 0;   // the I/Q correction bits (engine serial lane A, F16)
+    bool afcOn_ = false;           // AFC (engine serial lane A, F13)
+    double afcPullInHz_ = 2500.0;
     int nrMethod_ = 0;
     std::array<double, 8> eqDb_{};   // the equaliser's bands (engine wiring lane 1): all flat
     int audioHpHz_ = 0;              // the audio high-pass: 0 off / 100 / 300

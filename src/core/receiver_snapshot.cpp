@@ -143,6 +143,8 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
                       f.spectrumFftSize != o.spectrumFftSize || f.spectrumWindow != o.spectrumWindow || f.spectrumFrameRateHz != o.spectrumFrameRateHz ||
                       // the I/Q correction choice (a setting; the image rejection it reads is a measurement)
                       f.iqCorrectMask != o.iqCorrectMask ||
+                      // the AFC switch and its pull-in range (settings; the correction and the lock are measurements)
+                      f.afcOn != o.afcOn || f.afcPullInHz != o.afcPullInHz ||
                       // the noise squelch's three settings (its level and its gate are measurements)
                       f.noiseSquelchOn != o.noiseSquelchOn || f.noiseSquelchThresholdDb != o.noiseSquelchThresholdDb || f.noiseSquelchTailMs != o.noiseSquelchTailMs ||
                       // the manual notch bank's switches, frequencies and widths (all settings)

@@ -4899,6 +4899,10 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         for (std::size_t i = 0; i < rxa.eqDb_.size(); ++i) { r.eqDb[i] = rxa.eqDb_[i]; }
         r.audioHighPassHz = static_cast<std::uint32_t>(rxa.audioHpHz_);
         r.audioLowPassHz = static_cast<std::uint32_t>(rxa.audioLpHz_);
+        r.afcOn = rxa.afcOn_ ? 1u : 0u;
+        r.afcPullInHz = rxa.afcPullInHz_;
+        r.afcCorrectionHz = rxa.pipeline_.afcCorrectionHz();
+        r.afcLocked = rxa.pipeline_.afcLocked() ? 1u : 0u;
         r.iqCorrectMask = static_cast<std::uint32_t>(rxa.iqCorrect_);
         r.iqImageRejectionDb = rxa.pipeline_.iqImageRejectionDb();
         r.spectrumFftSize = static_cast<std::uint32_t>(rxa.spectrumFft_);
@@ -7628,6 +7632,16 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[0] = static_cast<double>(c.ival[0]);
             return res;
         }
+        case FOXAPI_OP_SET_AFC: {
+            Receiver& rxs = rx();
+            double pull = rxs.afcPullInHz_;
+            if (c.ival[1] == 1) { pull = c.num[0]; }
+            if (!rxs.pipeline_.setAfc(on, pull)) { return refuse(FOXAPI_OUT_OF_RANGE, "the AFC pull-in range is 50 to 20000 Hz"); }
+            rxs.afcOn_ = on;
+            rxs.afcPullInHz_ = pull;
+            res.applied[0] = pull;
+            return res;
+        }
         case FOXAPI_OP_SET_CW_PITCH: {
             Receiver& rxs = rx();
             if (!rxs.pipeline_.setCwPitchHz(c.num[0])) { return refuse(FOXAPI_OUT_OF_RANGE, "the CW pitch is 300 to 1200 Hz"); }
@@ -9511,6 +9525,8 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         for (std::size_t i = 0; i < cfg.eqDb.size() && i < 8; ++i) { rx().eqDb_[i] = cfg.eqDb[i]; }
         rx().audioHpHz_ = cfg.audioHighPassHz;
         rx().audioLpHz_ = cfg.audioLowPassHz;
+        rx().afcOn_ = cfg.afcOn;
+        rx().afcPullInHz_ = cfg.afcPullInHz;
         rx().iqCorrect_ = cfg.iqCorrect;
         rx().spectrumFft_ = cfg.spectrumFftSize;
         rx().spectrumWindow_ = cfg.spectrumWindow;
@@ -9520,6 +9536,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         rx().noiseSquelchThresholdDb_ = cfg.noiseSquelchThresholdDb;
         rx().noiseSquelchTailMs_ = cfg.noiseSquelchTailMs;
         (void)rx().pipeline_.setNoiseSquelch(rx().noiseSquelchOn_, rx().noiseSquelchThresholdDb_, rx().noiseSquelchTailMs_);
+        (void)rx().pipeline_.setAfc(rx().afcOn_, rx().afcPullInHz_);
         (void)rx().pipeline_.setIqCorrection(rx().iqCorrect_);
         (void)rx().pipeline_.setSpectrum(static_cast<std::size_t>(rx().spectrumFft_), rx().spectrumWindow_, rx().spectrumFps_);
         rx().manualNotch_ = {};
@@ -10091,6 +10108,8 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
         }
         cfg.audioHighPassHz = rxa.audioHpHz_;
         cfg.audioLowPassHz = rxa.audioLpHz_;
+        cfg.afcOn = rxa.afcOn_;
+        cfg.afcPullInHz = rxa.afcPullInHz_;
         cfg.iqCorrect = rxa.iqCorrect_;
         cfg.spectrumFftSize = rxa.spectrumFft_;
         cfg.spectrumWindow = rxa.spectrumWindow_;
@@ -10203,6 +10222,7 @@ void Engine::initialise() {
         (void)rx().pipeline_.setCwPitchHz(rx().cwPitchHz_);
         pushAudioEq();
         (void)rx().pipeline_.setNoiseSquelch(rx().noiseSquelchOn_, rx().noiseSquelchThresholdDb_, rx().noiseSquelchTailMs_);
+        (void)rx().pipeline_.setAfc(rx().afcOn_, rx().afcPullInHz_);
         (void)rx().pipeline_.setIqCorrection(rx().iqCorrect_);
         (void)rx().pipeline_.setSpectrum(static_cast<std::size_t>(rx().spectrumFft_), rx().spectrumWindow_, rx().spectrumFps_);
         pushManualNotches();

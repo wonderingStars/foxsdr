@@ -158,6 +158,7 @@
 #include "dsp/spectrum.hpp"
 #include "dsp/spectrum_block.hpp"
 #include "dsp/iq_correct.hpp"
+#include "dsp/afc.hpp"
 #include "dsp/spsc_ring.hpp"
 #include "dsp/squelch.hpp"
 #include "dsp/oirt_stereo.hpp"
@@ -601,6 +602,14 @@ public:
     // I/Q CORRECTION AT THE SOURCE RATE (engine serial lane A, row F16; dsp/iq_correct.hpp): mask bit 0 removes the DC offset, bit 1 balances gain and phase (blind image rejection,
     // for a signal alike either side of its centre), bit 2 swaps I and Q. It runs on the drained block in place BEFORE the spectrum, the audio chain and the I/Q recorder see it, and
     // costs nothing while the mask is 0 (the default: the samples are untouched). False (nothing changed) for a mask above 7. Any thread; kept across a rate change.
+    // AUTOMATIC FREQUENCY CONTROL (engine serial lane A, row F13; dsp/afc.hpp): follows a drifting carrier by nudging the VFO. NFM, WFM and AM track the block's mean frequency, CW the strongest
+    // line (a keyed carrier); the other modes have no carrier to follow and are left alone. pullInHz (50 to 20,000) is how far from the tuned frequency a carrier is caught, and twice that how
+    // far it is followed once caught. The nudge is added to the user's offset (vfoOffsetHz() stays the user's own) and a retune forgets it. False (nothing changed) outside the range.
+    bool setAfc(bool on, double pullInHz);
+    bool afcOn() const;
+    double afcPullInHz() const;
+    double afcCorrectionHz() const;   // what is added to the VFO now (0 while off, unlocked or in a mode without a carrier)
+    bool afcLocked() const;
     bool setIqCorrection(int mask);
     int iqCorrection() const;
     double iqImageRejectionDb() const;   // the balance estimator's reading of the input, dB (200 while nothing is measured)
@@ -1150,6 +1159,16 @@ private:
     cascade::dsp::NotchBank notchBankR_{kAudioRateHz};
     std::unique_ptr<cascade::dsp::IqCorrector> iqCorr_;   // swapped only while the DSP thread is quiesced (a rate change)
     std::atomic<int> iqMask_{0};
+    // AFC (setAfc): the DSP thread's copies, the tracker (rebuilt with the channel blocks) and the lock-free mirrors the control thread reads.
+    std::unique_ptr<cascade::dsp::AfcTracker> afc_;
+    bool afcOn_ = false;
+    double afcPullHz_ = 2500.0;
+    double userOffsetHz_ = 0.0;      // the VFO offset the user asked for; the VFO runs at this plus afcAppliedHz_
+    double afcAppliedHz_ = 0.0;
+    std::atomic<bool> mirrorAfcOn_{false};
+    std::atomic<double> mirrorAfcPullHz_{2500.0};
+    std::atomic<double> mirrorAfcCorrHz_{0.0};
+    std::atomic<bool> mirrorAfcLocked_{false};
     double cwPitchNow_ = 700.0;
     // The spectrum block path (setSpectrum): the block exists from the first non-default choice on and is never freed while the pipeline lives; specOn_ says whether the DSP thread feeds it.
     std::unique_ptr<cascade::dsp::SpectrumBlock> specBlock_;

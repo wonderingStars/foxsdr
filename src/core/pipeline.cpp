@@ -479,6 +479,11 @@ void Pipeline::rebuildChannelBlocks(double chanRate) {
     noiseSq_->setThresholdDb(noiseSqThresholdDb_);
     noiseSq_->setTailMs(noiseSqTailMs_);
     noiseSq_->setEnabled(noiseSqOn_);
+    afc_ = std::make_unique<cascade::dsp::AfcTracker>(chanRate);   // (the AFC measures at the channel rate: rebuilt with it, its settings put back)
+    afc_->setPullInHz(afcPullHz_);
+    afc_->setHoldHz(2.0 * afcPullHz_);
+    afc_->setEnabled(afcOn_);
+    afcAppliedHz_ = 0.0;
     toneHpL_.configure(kAudioRateHz);
     toneHpR_.configure(kAudioRateHz);
     stereo_ = std::make_unique<cascade::dsp::StereoFm>(chanRate);
@@ -526,6 +531,14 @@ void Pipeline::applyChannelBandwidthLocked() {
 }
 
 void Pipeline::resetDecodersLocked() {
+    // (AFC: a retune is a different station - the nudge that followed the old carrier is taken off and the tracker starts again)
+    if (afc_) {
+        afc_->reset();
+        if (afcAppliedHz_ != 0.0) {
+            afcAppliedHz_ = 0.0;
+            vfo_.setOffsetHz(userOffsetHz_);
+        }
+    }
     rds_->reset();
     stereo_->reset();  // stream state only; force-mono and tau are settings
     oirt_->reset();
@@ -1367,6 +1380,37 @@ bool Pipeline::setIqCorrection(int mask) {
 int Pipeline::iqCorrection() const { return iqMask_.load(std::memory_order_relaxed); }
 double Pipeline::iqImageRejectionDb() const { return iqCorr_->imageRejectionDb(); }
 
+// --- AFC (engine serial lane A, F13) -------------------------------------------------------------------------------------------------------------------
+bool Pipeline::setAfc(bool on, double pullInHz) {
+    if (!std::isfinite(pullInHz) || pullInHz < 50.0 || pullInHz > 20000.0) { return false; }
+    post([this, on, pullInHz] {
+             afcOn_ = on;
+             afcPullHz_ = pullInHz;
+             if (afc_) {
+                 afc_->setPullInHz(pullInHz);
+                 afc_->setHoldHz(2.0 * pullInHz);
+                 if (!on) { afc_->setEnabled(false); }
+             }
+             if (!on && afcAppliedHz_ != 0.0) {
+                 afcAppliedHz_ = 0.0;
+                 vfo_.setOffsetHz(userOffsetHz_);
+             }
+             if (!on) {
+                 mirrorAfcCorrHz_.store(0.0, std::memory_order_relaxed);
+                 mirrorAfcLocked_.store(false, std::memory_order_relaxed);
+             }
+         },
+         [this, on, pullInHz] {
+             mirrorAfcOn_.store(on, std::memory_order_relaxed);
+             mirrorAfcPullHz_.store(pullInHz, std::memory_order_relaxed);
+         });
+    return true;
+}
+bool Pipeline::afcOn() const { return mirrorAfcOn_.load(std::memory_order_relaxed); }
+double Pipeline::afcPullInHz() const { return mirrorAfcPullHz_.load(std::memory_order_relaxed); }
+double Pipeline::afcCorrectionHz() const { return mirrorAfcCorrHz_.load(std::memory_order_relaxed); }
+bool Pipeline::afcLocked() const { return mirrorAfcLocked_.load(std::memory_order_relaxed); }
+
 // --- CW pitch -------------------------------------------------------------------------------------------------------------------------------------
 bool Pipeline::setCwPitchHz(double hz) {
     if (!std::isfinite(hz) || hz < 300.0 || hz > 1200.0) { return false; }
@@ -1558,7 +1602,8 @@ void Pipeline::setVfoOffsetHz(double offsetHz) {
     // setter returns (AppWindow::tuneAbsoluteHz and the slider both do).
     post(
         [this, offsetHz] {
-            if (vfo_.offsetHz() == offsetHz) { return; }  // no move, nothing to forget
+            if (afcAppliedHz_ == 0.0 && vfo_.offsetHz() == offsetHz) { return; }  // no move, nothing to forget
+            userOffsetHz_ = offsetHz;
             vfo_.setOffsetHz(offsetHz);
             // A retune is a different station: the RDS content and the pilot lock
             // that belonged to the old one must not survive it. (The SOURCE centre
@@ -1725,6 +1770,8 @@ bool Pipeline::setInputRateHz(double rateHz) {
         const float nbThresholdDb = vfo_.noiseBlankerThresholdDb();
         vfo_ = cascade::dsp::Vfo(rateHz, decim, vfoBandwidthHz_);
         vfo_.setOffsetHz(offset);
+        afcAppliedHz_ = 0.0;   // (the tracker is rebuilt below with the channel blocks; the nudge goes with it)
+        vfo_.setOffsetHz(userOffsetHz_);
         vfo_.setNoiseBlankerThresholdDb(nbThresholdDb);
         vfo_.setNoiseBlankerEnabled(nbOn);
 
@@ -2302,6 +2349,27 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     nbBlankedPct_.store(vfo_.noiseBlankerBlankedPercent(), std::memory_order_relaxed);
     nbStandingDown_.store(vfo_.noiseBlankerStandingDown(), std::memory_order_relaxed);
     if (m == 0) { return; }
+
+    // AFC (F13): measured on the channel baseband AFTER the correction in force, so each block sees the residual; the nudge goes onto the VFO for the next block.
+    if (afc_ && afcOn_) {
+        const cascade::dsp::DemodMode md = demod_.mode();
+        if (md == cascade::dsp::DemodMode::NFM || md == cascade::dsp::DemodMode::WFM || md == cascade::dsp::DemodMode::AM || md == cascade::dsp::DemodMode::CW) {
+            afc_->setEnabled(true);
+            afc_->setMode(md == cascade::dsp::DemodMode::CW ? cascade::dsp::AfcMode::Peak : cascade::dsp::AfcMode::MeanFrequency);
+            afc_->process(chanBuf_.data(), m);
+            const double corr = afc_->correctionHz();
+            if (std::fabs(corr - afcAppliedHz_) >= 0.5) {
+                afcAppliedHz_ = corr;
+                vfo_.setOffsetHz(userOffsetHz_ + corr);
+            }
+        } else if (afcAppliedHz_ != 0.0) {
+            afc_->reset();
+            afcAppliedHz_ = 0.0;
+            vfo_.setOffsetHz(userOffsetHz_);
+        }
+        mirrorAfcCorrHz_.store(afcAppliedHz_, std::memory_order_relaxed);
+        mirrorAfcLocked_.store(afcAppliedHz_ != 0.0 && afc_->locked(), std::memory_order_relaxed);
+    }
 
     // S-meter: channel power (post-filter, pre-demod), snapshotted for the GUI.
     meter_.process(chanBuf_.data(), m);

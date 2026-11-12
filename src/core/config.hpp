@@ -230,6 +230,8 @@ struct SavedRadio {
     int spectrumWindow = 3;               // 0 rectangular / 1 Hann / 2 Hamming / 3 Blackman-Harris / 4 flat-top
     double spectrumFrameRateHz = 0.0;     // 0 automatic, else 1..120
     int iqCorrect = 0;     // the I/Q correction bits: 1 DC removal, 2 balance, 4 swap I/Q (engine serial lane A)
+    bool afcOn = false;               // automatic frequency control (engine serial lane A)
+    double afcPullInHz = 2500.0;      // 50..20000
     std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
@@ -530,6 +532,8 @@ struct AppConfig {
     int spectrumWindow = 3;               // 0 rectangular / 1 Hann / 2 Hamming / 3 Blackman-Harris / 4 flat-top
     double spectrumFrameRateHz = 0.0;     // 0 automatic, else 1..120
     int iqCorrect = 0;     // the I/Q correction bits: 1 DC removal, 2 balance, 4 swap I/Q (engine serial lane A)
+    bool afcOn = false;               // automatic frequency control (engine serial lane A)
+    double afcPullInHz = 2500.0;      // 50..20000
     std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;

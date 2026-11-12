@@ -344,6 +344,7 @@ std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
         r.cwPitchHz = !(r.cwPitchHz >= 300.0) ? 700.0 : (r.cwPitchHz > 1200.0 ? 1200.0 : r.cwPitchHz);
         r.audioHighPassHz = sanitiseHp(r.audioHighPassHz);
         r.audioLowPassHz = sanitiseLp(r.audioLowPassHz);
+        r.afcPullInHz = !(r.afcPullInHz >= 50.0) ? 2500.0 : (r.afcPullInHz > 20000.0 ? 20000.0 : r.afcPullInHz);
         r.iqCorrect = r.iqCorrect < 0 || r.iqCorrect > 7 ? 0 : r.iqCorrect;
         r.spectrumFftSize = sanitiseSpectrumFft(r.spectrumFftSize);
         r.spectrumWindow = r.spectrumWindow < 0 ? 3 : (r.spectrumWindow > 4 ? 3 : r.spectrumWindow);
@@ -665,6 +666,8 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     out.eqDb = readEq(j);
     getInt(j, "audioHighPassHz", out.audioHighPassHz);
     getInt(j, "audioLowPassHz", out.audioLowPassHz);
+    getDouble(j, "afcPullInHz", out.afcPullInHz);
+    getBool(j, "afcOn", out.afcOn);
     getInt(j, "iqCorrect", out.iqCorrect);
     getDouble(j, "spectrumFrameRateHz", out.spectrumFrameRateHz);
     getInt(j, "spectrumWindow", out.spectrumWindow);
@@ -1093,6 +1096,8 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
                 r.eqDb = readEq(e);
                 getInt(e, "audioHighPassHz", r.audioHighPassHz);
                 getInt(e, "audioLowPassHz", r.audioLowPassHz);
+                getDouble(e, "afcPullInHz", r.afcPullInHz);
+                getBool(e, "afcOn", r.afcOn);
                 getInt(e, "iqCorrect", r.iqCorrect);
                 getDouble(e, "spectrumFrameRateHz", r.spectrumFrameRateHz);
                 getInt(e, "spectrumWindow", r.spectrumWindow);
@@ -1332,6 +1337,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     out.cwPitchHz = !(out.cwPitchHz >= 300.0) ? 700.0 : (out.cwPitchHz > 1200.0 ? 1200.0 : out.cwPitchHz);
     out.audioHighPassHz = sanitiseHp(out.audioHighPassHz);
     out.audioLowPassHz = sanitiseLp(out.audioLowPassHz);
+    out.afcPullInHz = !(out.afcPullInHz >= 50.0) ? 2500.0 : (out.afcPullInHz > 20000.0 ? 20000.0 : out.afcPullInHz);
     out.iqCorrect = out.iqCorrect < 0 || out.iqCorrect > 7 ? 0 : out.iqCorrect;
     out.spectrumFftSize = sanitiseSpectrumFft(out.spectrumFftSize);
     out.spectrumWindow = out.spectrumWindow < 0 ? 3 : (out.spectrumWindow > 4 ? 3 : out.spectrumWindow);
@@ -1693,6 +1699,8 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     if (cfg.eqDb.size() == 8) { j["eqDb"] = cfg.eqDb; }
     j["audioHighPassHz"] = cfg.audioHighPassHz;
     j["audioLowPassHz"] = cfg.audioLowPassHz;
+    j["afcPullInHz"] = cfg.afcPullInHz;
+    j["afcOn"] = cfg.afcOn;
     j["iqCorrect"] = cfg.iqCorrect;
     j["spectrumFrameRateHz"] = cfg.spectrumFrameRateHz;
     j["spectrumWindow"] = cfg.spectrumWindow;
@@ -1902,6 +1910,8 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
             if (r.eqDb.size() == 8) { e["eqDb"] = r.eqDb; }
             e["audioHighPassHz"] = r.audioHighPassHz;
             e["audioLowPassHz"] = r.audioLowPassHz;
+            e["afcPullInHz"] = r.afcPullInHz;
+            e["afcOn"] = r.afcOn;
             e["iqCorrect"] = r.iqCorrect;
             e["spectrumFrameRateHz"] = r.spectrumFrameRateHz;
             e["spectrumWindow"] = r.spectrumWindow;
