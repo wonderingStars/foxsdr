@@ -24,6 +24,7 @@
 #include "core/track_store.hpp"
 #include "core/adsb_coverage.hpp"
 #include "core/spectrum_mask.hpp"
+#include "engine/wire_b_needed_libs.hpp"
 #include "engine/wire_b_sweep.hpp"
 #include "core/pipeline.hpp"
 #include "net/aircraft_out.hpp"
@@ -119,6 +120,9 @@ struct WireBState {
     std::array<std::string, 8> followNote;
     wireb::SerialLinkFactory sweepFactory = wireb::defaultSerialLinkFactory();
     wireb::HackRfFactory hackrfFactory = wireb::defaultHackRfFactory();
+    // the needed-libraries check: what it may touch (a test gives a fabricated machine) and the last answer per library id (JSON text)
+    wireb::NeededEnv neededEnv = wireb::defaultNeededEnv();
+    std::map<std::string, std::string> neededChecks;
 };
 
 }  // namespace cascade::engine

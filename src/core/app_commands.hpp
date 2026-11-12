@@ -407,6 +407,13 @@
 //   receiver position is NOT in the answer. Fact coverage.state = {enabled, cells, added, bad_input, too_far, stale, future, max_range_km}.
 #define FOXAPP_OP_COVERAGE_CONFIG        0x892Eu /* text JSON; fact coverage.state */
 #define FOXAPP_OP_COVERAGE_READ          0x892Fu /* text JSON; fact coverage.read */
+//   NEEDED LIBRARIES (SETTINGS; engine/wire_b_needed_libs.hpp; the owner's needed-library rule), LOCAL sessions only, nothing written, nothing opened, copied or downloaded. The fact needed.libs is ALWAYS there: a JSON array
+//   with one row per thing the user must install or run before a source works (library id, source kind, name, file names looked for, minimum version, 64-bit, why, official page and its status (an unverified address is
+//   shown to nobody), install kind, folder note, numbered steps, licence, "FoxSDR does not include or supply it", fetch allowed, and "check": the last answer or null). NEEDED_LIB_CHECK (text: JSON {id (one library id;
+//   absent = every row), path (a folder or a FILE the user picked, judged only, never copied; for a vendor-library row only)}) looks AGAIN now, without a restart, by reading file HEADERS (nothing is loaded) and answers
+//   in "check": state found | not-found | wrong-32-bit | unusable | cannot-check, sentence, looked_in, found_in (a folder), file. BAD_ARGUMENT for an unknown id or key, or a path for another kind of row.
+//   applied[0]: the number of rows now "found".
+#define FOXAPP_OP_NEEDED_LIB_CHECK       0x8930u /* text JSON; fact needed.libs */
 // wire-b end
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.

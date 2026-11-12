@@ -367,6 +367,40 @@ FoxCommandResult Engine::tracksOp(const FoxCommand& c, const std::string& text, 
     return res;
 }
 
+FoxCommandResult Engine::neededLibOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed) {
+    (void)c;
+    WireBState& w = wireBState();
+    wireb::Json p = wireb::Json::object();
+    if (!text.empty()) {
+        p = wireb::Json::parse(text, nullptr, false);
+        if (p.is_discarded() || !p.is_object()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the parameters are not a JSON object"); }
+    }
+    wireb::detail::Params q(p);
+    std::string id, path;
+    if (!q.word("id", id) || !q.word("path", path) || !q.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, q.error); }
+    std::vector<const wireb::NeededLibrary*> rows;
+    if (id.empty()) {
+        if (!path.empty()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "a path goes with one library id"); }
+        for (const wireb::NeededLibrary& r : wireb::neededLibraries()) { rows.push_back(&r); }
+    } else {
+        const wireb::NeededLibrary* r = wireb::findNeededLibrary(id);
+        if (r == nullptr) { return refusal(res, FOXAPI_BAD_ARGUMENT, "no such library id"); }
+        if (!path.empty() && r->kind != wireb::NeededKind::VendorLibrary) { return refusal(res, FOXAPI_BAD_ARGUMENT, "a file you pick is judged for a vendor library only"); }
+        rows.push_back(r);
+    }
+    for (const wireb::NeededLibrary* r : rows) { w.neededChecks[r->libraryId] = wireb::recheckNeeded(*r, path, w.neededEnv).dump(-1, ' ', false, wireb::Json::error_handler_t::replace); }
+    std::int64_t found = 0;
+    for (const wireb::NeededLibrary& r : wireb::neededLibraries()) {
+        const auto it = w.neededChecks.find(r.libraryId);
+        if (it == w.neededChecks.end()) { continue; }
+        const wireb::Json j = wireb::Json::parse(it->second, nullptr, false);
+        if (j.is_object() && j.value("state", std::string()) == "found") { ++found; }
+    }
+    res.applied[0] = static_cast<double>(found);
+    changed = true;
+    return res;
+}
+
 FoxCommandResult Engine::coverageOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed) {
     WireBState& w = wireBState();
     wireb::Json p = wireb::Json::object();
@@ -947,6 +981,9 @@ FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text
         case FOXAPP_OP_COVERAGE_READ:
             res = coverageOp(c, text, res, changed);
             break;
+        case FOXAPP_OP_NEEDED_LIB_CHECK:
+            res = neededLibOp(c, text, res, changed);
+            break;
         case FOXAPP_OP_FOLLOW_SET:
         case FOXAPP_OP_FOLLOW_CLEAR:
         case FOXAPP_OP_FOLLOW_LOCK:
@@ -1138,6 +1175,17 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
         j["mode"] = r.mode; j["engaged"] = r.engaged; j["backend"] = r.backend == 1 ? "gpu" : "cpu"; j["submitted"] = r.submitted; j["completed_gpu"] = r.completedGpu;
         j["completed_cpu"] = r.completedCpu; j["dropped_frames"] = r.droppedFrames; j["device_lost"] = r.deviceLost; j["error"] = r.error;
         fact("radio." + std::to_string(i + 1) + ".gpufft", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
+    }
+    {
+        // the needed libraries: always there (the table, even before any wire-b op ran), with the last check of each
+        std::unique_lock<std::mutex> nlk;
+        if (wireB_ != nullptr) { nlk = std::unique_lock<std::mutex>(wireB_->mutex); }
+        wireb::Json rows = wireb::Json::array();
+        for (const wireb::NeededLibrary& r : wireb::neededLibraries()) {
+            const bool have = wireB_ != nullptr && wireB_->neededChecks.find(r.libraryId) != wireB_->neededChecks.end();
+            rows.push_back(wireb::neededToJson(r, have ? wireb::Json::parse(wireB_->neededChecks[r.libraryId], nullptr, false) : wireb::Json()));
+        }
+        fact("needed.libs", rows.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
     }
     if (wireB_ == nullptr) { return; }
     std::lock_guard<std::mutex> lk(wireB_->mutex);

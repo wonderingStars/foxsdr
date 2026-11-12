@@ -89,6 +89,12 @@ void wireBOps(AppWindow& a) {
     CHECK(refused(A::apply(a, text(FOXAPP_OP_COVERAGE_CONFIG, "{\"enabled\":true}")), FOXAPI_BAD_ARGUMENT));   // no position given
     covering(FOXAPP_OP_COVERAGE_READ);
     CHECK(refused(A::apply(a, text(FOXAPP_OP_COVERAGE_READ, "{}")), FOXAPI_FAILED));
+    // THE NEEDED LIBRARIES: a parameter that is not JSON, an unknown id, a path with no id and a path for a program row are refused
+    covering(FOXAPP_OP_NEEDED_LIB_CHECK);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_NEEDED_LIB_CHECK, "not json")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_NEEDED_LIB_CHECK, "{\"id\":\"no-such-library\"}")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_NEEDED_LIB_CHECK, "{\"path\":\"C:/x\"}")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_NEEDED_LIB_CHECK, "{\"id\":\"sdrplay-sdrconnect\",\"path\":\"C:/x\"}")), FOXAPI_BAD_ARGUMENT));
     covering(FOXAPP_OP_GPU_FFT_MODE);
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 3)), FOXAPI_OUT_OF_RANGE));
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 0)), FOXAPI_NO_CHANGE));
