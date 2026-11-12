@@ -45,6 +45,7 @@
 //             two's complement
 //       0x08  the RTL2832's own digital AGC: 0 off, 1 on
 //       0x0d  tuner gain by INDEX into the tuner's own table
+//       0x0a  offset tuning: 0 off, 1 on (an E4000 tuner only, here)
 //       0x0e  bias tee: 0 off, 1 on
 //   The server NEVER ACKNOWLEDGES a command. A client cannot learn whether one
 //   was understood, or what the server rounded it to; what this driver reports
@@ -267,6 +268,18 @@ public:
     bool setBiasT(bool on);
     bool biasT() const { return biasTee_.load(std::memory_order_relaxed); }
 
+    // OFFSET TUNING (0x0a, row R12): the zero-IF E4000 tuner leaves a DC spike at the centre of the spectrum; offset tuning moves the tuner's own
+    // oscillator off the wanted frequency to keep the spike out of the picture. It is OFFERED ONLY WHEN THE SERVER'S HEADER NAMES AN E4000
+    // (hasOffsetTuning()): setOffsetTuning() on any other tuner is refused with a sentence and sends nothing (an R820T / R828D has an IF and no
+    // such spike; whether a given server accepts the command for those tuners is UNVERIFIED and not relied on). The command's number, its 0/1
+    // argument and its big-endian encoding are from the rtl_tcp protocol overview at https://k3xec.com/rtl-tcp (no licence stated; the page says its
+    // explanation of 0x0a is still a TODO, so what the server does with it is this program's reading, UNVERIFIED against a real E4000).
+    // Like every other setting the connection sends it explicitly (0 unless asked for) because the server keeps its state between clients. The
+    // readback is the REQUEST.
+    bool hasOffsetTuning() const;
+    bool setOffsetTuning(bool on);
+    bool offsetTuning() const { return offsetTuning_.load(std::memory_order_relaxed); }
+
     std::size_t read(std::complex<float>* dst, std::size_t n) override;
 
     bool faulted() const override;
@@ -399,6 +412,7 @@ private:
     double centerHz_ = 100000000.0;
     int ppm_ = 0;
     bool biasWanted_ = false;
+    bool offsetWanted_ = false;      // E4000 only
     bool autoWanted_ = false;
     std::vector<int> ladderTenths_;  // the R82xx rungs, empty for other tuners
     int gainTenths_ = 0;             // the chosen rung, R82xx only
@@ -414,6 +428,7 @@ private:
     std::atomic<double> gainValue_{0.0};
     std::atomic<bool> autoGain_{false};
     std::atomic<bool> biasTee_{false};
+    std::atomic<bool> offsetTuning_{false};
 
     mutable std::mutex nameMutex_;
     std::string name_ = "rtl_tcp: (not connected)";

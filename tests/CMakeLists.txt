@@ -52,6 +52,26 @@ set_target_properties(radio_probe_fixture PROPERTIES
     PREFIX ""
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_radio_probe/$<CONFIG>"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_radio_probe/$<CONFIG>")
+# THE EXTIO HELPER AND ITS STAND-IN DRIVERS (row R8, docs/feature-records/unblocked-desk.md): the helper process that loads an ExtIO DLL for FoxSDR, and one
+# stand-in driver DLL per behaviour (a tone, a crash, a hang, a flood, nonsense sizes ...) written for tests/test_extio.cpp. The stand-ins misbehave on
+# purpose and live in a directory of their own (fixture_extio/). Windows only.
+if(WIN32)
+    add_subdirectory("${CMAKE_SOURCE_DIR}/tools/extio_helper" "${CMAKE_CURRENT_BINARY_DIR}/extio_helper")
+    set(CASCADE_EXTIO_MODES tone:0 crashcb:1 crashlo:2 hangstart:3 hanglo:4 flood:5 sizeodd:6 sizehuge:7 sizeneg:8 sizezero:9 badptr:10 noexports:11
+        initfalse:12 soundcard:13 silent:14 floatbad:15 status:16 badtype:17)
+    foreach(_m ${CASCADE_EXTIO_MODES})
+        string(REPLACE ":" ";" _p "${_m}")
+        list(GET _p 0 _n)
+        list(GET _p 1 _v)
+        add_library(extio_standin_${_n} MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/extio_standin.cpp")
+        target_compile_definitions(extio_standin_${_n} PRIVATE STANDIN_MODE=${_v})
+        set_target_properties(extio_standin_${_n} PROPERTIES
+            PREFIX "" OUTPUT_NAME "ExtIO_${_n}"
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_extio/$<CONFIG>"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_extio/$<CONFIG>")
+        list(APPEND CASCADE_EXTIO_STANDINS extio_standin_${_n})
+    endforeach()
+endif()
 # The tests that are handed the hostile fixture's path as their first argument (and need it built first).
 set(CASCADE_HOSTILE_TESTS
     test_plugin_hostile
@@ -317,7 +337,11 @@ foreach(src ${CASCADE_TESTS})
                     $<TARGET_FILE:SoapySDR> $<TARGET_FILE_DIR:${name}>)
     endif()
 
-    if(name STREQUAL "test_font_assets")
+    if(name STREQUAL "test_extio")
+        # The helper process and the stand-in drivers, built first; the test is handed the helper and the stand-ins' directory.
+        add_dependencies(${name} ${CASCADE_EXTIO_HELPER_TARGET} ${CASCADE_EXTIO_STANDINS})
+        add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:${CASCADE_EXTIO_HELPER_TARGET}>" "${CMAKE_CURRENT_BINARY_DIR}/fixture_extio/$<CONFIG>")
+    elseif(name STREQUAL "test_font_assets")
         # Compares something compiled INTO the binary against the files it was
         # generated from - the typefaces against third_party/fonts - so it
         # needs the repository root on its command line.
@@ -636,6 +660,9 @@ foreach(src ${CASCADE_TESTS})
     # A liveness bug (stuck spin loop, deadlock) must fail the suite, not hang
     # it forever — ctest's default per-test timeout is 1500 s.
     set_tests_properties(${name} PROPERTIES TIMEOUT 120)
+    if(name STREQUAL "test_extio")
+        set_tests_properties(${name} PROPERTIES TIMEOUT 300)   # real helper processes, real hangs and floods, timed: slow under load
+    endif()
     # For the sanitizer block at the end of this file: every test this loop
     # registers, by name.
     list(APPEND CASCADE_ALL_TEST_NAMES ${name})
