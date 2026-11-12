@@ -13,6 +13,7 @@
 #include "core/geo_math.hpp"
 #include "core/i18n.hpp"
 #include "core/locator.hpp"
+#include "core/utf8_text.hpp"
 #include "core/sky_position.hpp"
 
 namespace foxsdr::slintmapj {
@@ -23,11 +24,7 @@ namespace geo = cascade::core::geo;
 
 constexpr double kPi = 3.14159265358979323846;
 
-std::string fmt(const char* f, double a) {
-    char buf[96];
-    std::snprintf(buf, sizeof buf, f, a);
-    return buf;
-}
+std::string fmt(const char* f, double a) { return cascade::core::formatText(f, a); }
 
 std::string lowered(std::string s) {
     for (char& c : s) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
@@ -370,10 +367,8 @@ std::string behindText(double newestSec, double tSec, const std::function<std::s
     const double d = newestSec - tSec;
     if (!std::isfinite(d) || d < 1.0) { return word("live edge"); }
     const long total = static_cast<long>(d);
-    char buf[96];
-    if (total >= 60) { std::snprintf(buf, sizeof buf, word("%d min %d s behind").c_str(), static_cast<int>(total / 60), static_cast<int>(total % 60)); }
-    else { std::snprintf(buf, sizeof buf, word("%d s behind").c_str(), static_cast<int>(total)); }
-    return buf;
+    if (total >= 60) { return cascade::core::formatText(word("%d min %d s behind").c_str(), static_cast<int>(total / 60), static_cast<int>(total % 60)); }
+    return cascade::core::formatText(word("%d s behind").c_str(), static_cast<int>(total));
 }
 
 int TrackRecorder::feed(double nowSec, const std::vector<FeedItem>& items, double minGapSec) {
@@ -446,9 +441,7 @@ std::string filterSummary(const AircraftFilter& f, const std::function<std::stri
     const int n = filterConditionCount(f);
     const auto word = [&](const char* key) { return tr ? tr(key) : std::string(key); };
     if (!f.enabled || n == 0) { return word("no conditions"); }
-    char buf[96];
-    std::snprintf(buf, sizeof buf, word(n == 1 ? "%d condition" : "%d conditions").c_str(), n);
-    return buf;
+    return cascade::core::formatText(word(n == 1 ? "%d condition" : "%d conditions").c_str(), n);
 }
 
 bool parseNumber(const std::string& text, double lo, double hi, double& out) {
@@ -671,10 +664,8 @@ std::vector<AntennaRow> antennaRows(const AntennaInput& in) {
 std::string tileCacheText(std::size_t tiles, std::uint64_t bytes, std::uint64_t maxBytes, const cascade::core::tilecache::Stats& stats,
                           const std::function<std::string(const std::string&)>& tr) {
     const std::string f = tr ? tr("%zu tiles, %.1f of %.0f MB; %llu hits, %llu misses") : std::string("%zu tiles, %.1f of %.0f MB; %llu hits, %llu misses");
-    char buf[192];
-    std::snprintf(buf, sizeof buf, f.c_str(), tiles, static_cast<double>(bytes) / 1048576.0, static_cast<double>(maxBytes) / 1048576.0,
-                  static_cast<unsigned long long>(stats.hits + stats.staleHits), static_cast<unsigned long long>(stats.misses));
-    return buf;
+    return cascade::core::formatText(f.c_str(), tiles, static_cast<double>(bytes) / 1048576.0, static_cast<double>(maxBytes) / 1048576.0,
+                                     static_cast<unsigned long long>(stats.hits + stats.staleHits), static_cast<unsigned long long>(stats.misses));
 }
 
 }  // namespace foxsdr::slintmapj
