@@ -17,6 +17,7 @@
 #include "engine/engine.hpp"
 #include "engine/engine_wire_b.hpp"
 #include "engine/wire_b_sigmeas.hpp"
+#include "source/serial_port_win.hpp"
 
 namespace cascade::engine {
 
@@ -259,6 +260,102 @@ FoxCommandResult Engine::cursorOp(const FoxCommand& c, const std::string& text, 
     return res;
 }
 
+// --- sweepsrc: the sweep device (wire_b_sweep.hpp) -----------------------------------------------------------------------------------------------
+FoxCommandResult Engine::sweepOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed) {
+    WireBState& w = wireBState();
+    wireb::Json p = wireb::Json::object();
+    if (!text.empty()) {
+        p = wireb::Json::parse(text, nullptr, false);
+        if (p.is_discarded() || !p.is_object()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the parameters are not a JSON object"); }
+    }
+    wireb::detail::Params q(p);
+    switch (c.op) {
+        case FOXAPP_OP_SWEEP_OPEN: {
+            std::string kind = "tinysa", port;
+            double startMhz = 0.0, stopMhz = 0.0, interval = 0.0;
+            std::size_t points = 450;
+            if (!q.word("kind", kind) || !q.word("port", port) || !q.number("start_mhz", startMhz, 0.0, 1e6) || !q.number("stop_mhz", stopMhz, 0.0, 1e6) || !q.count("points", points, 2, 1048576) ||
+                !q.number("interval_ms", interval, 0.0, 60000.0) || !q.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, q.error); }
+            if (kind != "tinysa" && kind != "tinysa_ultra") { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"kind\" is tinysa or tinysa_ultra"); }
+            if (!cascade::source::tinysa::isValidComPortName(port)) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"port\" is a COM port name, COM1 to COM256"); }
+            if (!(stopMhz > startMhz)) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the stop frequency must be above the start frequency"); }
+            if (w.sweep.running()) { return refusal(res, FOXAPI_BUSY, "a sweep device is open already"); }
+            std::string why;
+            if (!w.sweep.start(w.sweepFactory, kind, port, kind == "tinysa" ? cascade::source::tinysa::Model::TinySa : cascade::source::tinysa::Model::TinySaUltra, startMhz * 1e6, stopMhz * 1e6, points,
+                               static_cast<int>(interval), why)) { return refusal(res, FOXAPI_FAILED, why); }
+            cascade::core::diagLogf("sweep: opened a %s sweep device", kind.c_str());
+            changed = true;
+            break;
+        }
+        case FOXAPP_OP_SWEEP_CLOSE:
+            if (!w.sweep.running()) {
+                w.sweep.stop();   // (a worker that ended by itself is joined here, so nothing is left behind)
+                return refusal(res, FOXAPI_NO_CHANGE, "no sweep device is open");
+            }
+            w.sweep.stop();
+            changed = true;
+            break;
+        case FOXAPP_OP_SWEEP_CONFIG: {
+            std::string why;
+            q.seen.insert("heatmap");
+            q.seen.insert("occupancy");
+            if (!q.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, q.error); }
+            if (p.contains("heatmap")) {
+                const wireb::Json& h = p["heatmap"];
+                if (!h.is_object()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"heatmap\" is an object"); }
+                wireb::detail::Params hq(h);
+                cascade::core::HeatmapConfig hc;
+                std::size_t cols = hc.cols, rows = hc.maxRows;
+                std::string fm = "max", tm = "max";
+                if (!hq.count("cols", cols, 1, 65536) || !hq.count("rows", rows, 2, 65536) || !hq.word("freq_mode", fm) || !hq.word("time_mode", tm) || !hq.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, hq.error); }
+                if ((fm != "max" && fm != "mean") || (tm != "max" && tm != "mean")) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the modes are max or mean"); }
+                hc.cols = cols; hc.maxRows = rows;
+                hc.freqMode = fm == "max" ? cascade::core::Decimate::Max : cascade::core::Decimate::Mean;
+                hc.timeMode = tm == "max" ? cascade::core::Decimate::Max : cascade::core::Decimate::Mean;
+                if (!w.sweep.configureHeatmap(hc, why)) { return refusal(res, FOXAPI_BAD_ARGUMENT, why); }
+            }
+            if (p.contains("occupancy")) {
+                if (p["occupancy"].is_null()) { w.sweep.clearOccupancy(); }
+                else if (!p["occupancy"].is_object()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"occupancy\" is an object or null"); }
+                else {
+                    wireb::detail::Params oq(p["occupancy"]);
+                    cascade::core::OccupancyConfig oc;
+                    double a = 0.0, b = 0.0, step = 0.0, fixedDb = oc.fixedFloorDb;
+                    bool haveFixed = p["occupancy"].contains("fixed_floor_db");
+                    if (!oq.number("start_mhz", a, 0.0, 1e6) || !oq.number("stop_mhz", b, 0.0, 1e6) || !oq.number("step_khz", step, 0.001, 1e9) || !oq.number("margin_db", oc.marginDb, 0.0, 200.0) ||
+                        !oq.number("floor_percentile", oc.floorPercentile, 0.0, 0.5) || !oq.number("fixed_floor_db", fixedDb, -400.0, 400.0) || !oq.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, oq.error); }
+                    if (haveFixed) { oc.fixedFloor = true; oc.fixedFloorDb = fixedDb; }
+                    if (!cascade::core::makeChannelPlan(a * 1e6, b * 1e6, step * 1e3, oc.plan, &why)) { return refusal(res, FOXAPI_BAD_ARGUMENT, why); }
+                    if (!w.sweep.configureOccupancy(oc, why)) { return refusal(res, FOXAPI_BAD_ARGUMENT, why); }
+                }
+            }
+            changed = true;
+            break;
+        }
+        case FOXAPP_OP_SWEEP_READ: {
+            std::size_t maxPoints = 512;
+            double x = -1.0;
+            bool occupancy = false;
+            if (!q.count("max_points", maxPoints, 2, 4096) || !q.number("x", x, -1.0, 1.0) || !q.flag("occupancy", occupancy) || !q.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, q.error); }
+            cascade::core::SweepLine line;
+            if (!w.sweep.lastLine(maxPoints, line)) { return refusal(res, FOXAPI_FAILED, "no sweep has arrived yet"); }
+            wireb::Json j = wireb::Json::object();
+            j["start_hz"] = line.startHz; j["stop_hz"] = line.stopHz; j["time_s"] = line.timeS; j["points"] = line.db.size();
+            wireb::Json db = wireb::Json::array();
+            for (const float v : line.db) { db.push_back(std::isfinite(v) ? wireb::Json(static_cast<double>(v)) : wireb::Json(nullptr)); }
+            j["db"] = db;
+            if (x >= 0.0) { double hz = 0.0; if (w.sweep.heatmapFrequencyAt(x, hz)) { j["click_hz"] = hz; } }
+            if (occupancy) { j["occupancy_csv"] = w.sweep.occupancyCsv(); }
+            w.facts["sweep.read"] = j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace);
+            changed = true;
+            break;
+        }
+        default:
+            return refusal(res, FOXAPI_UNSUPPORTED, "this build has no such operation");
+    }
+    return res;
+}
+
 FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text, FoxCommandResult res) {
     WireBState& w = wireBState();
     std::lock_guard<std::mutex> lk(w.mutex);
@@ -319,6 +416,12 @@ FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text
         case FOXAPP_OP_CURSOR_READ:
         case FOXAPP_OP_CURSOR_MARKS:
             res = cursorOp(c, text, res, changed);
+            break;
+        case FOXAPP_OP_SWEEP_OPEN:
+        case FOXAPP_OP_SWEEP_CLOSE:
+        case FOXAPP_OP_SWEEP_CONFIG:
+        case FOXAPP_OP_SWEEP_READ:
+            res = sweepOp(c, text, res, changed);
             break;
         case FOXAPP_OP_MASK_LOAD: {
             if (text.empty()) {
@@ -415,6 +518,10 @@ std::uint64_t Engine::wireBStamp() const {
         const cascade::core::Pipeline::GpuFftReport r = receivers_[i]->pipeline_.gpuFftReport();
         h = (h ^ static_cast<std::uint64_t>(r.mode + 1 + 4 * (r.engaged ? 1 : 0) + 8 * r.backend + 16 * static_cast<int>(r.error.size()) + 1000 * static_cast<int>(i))) * 1099511628211ull;
         h = (h ^ (r.engaged ? r.submitted / 256u : 0u)) * 1099511628211ull;
+        if (wireB_ != nullptr && i == 0) {
+            const wireb::SweepStatus s = wireB_->sweep.status();
+            h = (h ^ static_cast<std::uint64_t>((s.open ? 1 : 2) + 4 * s.lastError.size() + 64 * (s.sweeps / 16u) + 100003 * (s.heatRows / 4u))) * 1099511628211ull;   // (a coarse step: the counters move every sweep)
+        }
         if (wireB_ != nullptr && wireB_->maskLoaded) {
             const WireBState::MaskRadio& m = wireB_->maskRadios[i];
             h = (h ^ static_cast<std::uint64_t>((m.pass ? 1 : 2) + 4 * (m.mon.alarm() ? 1 : 0) + 8 * static_cast<int>(m.mon.events().size()) + 4096 * static_cast<int>(m.captures))) * 1099511628211ull;
@@ -488,6 +595,15 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
     }
     if (wireB_ == nullptr) { return; }
     std::lock_guard<std::mutex> lk(wireB_->mutex);
+    {
+        const wireb::SweepStatus s = wireB_->sweep.status();
+        if (!s.kind.empty()) {
+            wireb::Json j = wireb::Json::object();
+            j["open"] = s.open; j["kind"] = s.kind; j["sweeps"] = s.sweeps; j["refused"] = s.refused; j["last_error"] = s.lastError; j["points"] = s.points; j["start_hz"] = s.startHz;
+            j["stop_hz"] = s.stopHz; j["heat_rows"] = s.heatRows; j["heat_cols"] = s.heatCols; j["occ_channels"] = s.occChannels; j["occ_sweeps"] = s.occSweeps;
+            fact("sweep.state", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
+        }
+    }
     if (wireB_->maskLoaded) {
         for (std::size_t i = 0; i < receivers_.size(); ++i) {
             if (!receivers_[i]) { continue; }

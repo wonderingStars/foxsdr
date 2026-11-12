@@ -349,6 +349,18 @@
 //   Fact radio.<n>.mask = {enabled, loaded, pass, worst_margin_db, worst_freq_hz, alarm, events [...], captures, capture_note}. Not saved.
 #define FOXAPP_OP_MASK_LOAD              0x891Eu /* long text: the foxmask file; empty removes it; fact radio.<n>.mask */
 #define FOXAPP_OP_MASK_CONFIG            0x891Fu /* text: JSON {enabled, raise_frames, clear_frames, capture, post_roll_s, min_interval_s} */
+//   THE SWEEP DEVICE (SETTINGS; engine/wire_b_sweep.hpp over source/tinysa_protocol.hpp, core/sweep_stitch.hpp, core/sweep_occupancy.hpp), LOCAL sessions only: a tinySA / tinySA Ultra on a serial
+//   port as a SOURCE OF SWEEP LINES (not I/Q: it is not a radio of the engine). OFF until SWEEP_OPEN. SWEEP_OPEN (text: JSON {kind "tinysa" | "tinysa_ultra", port "COM1".."COM256", start_mhz, stop_mhz,
+//   points 2..1048576 (default 450), interval_ms 0..60000 (default 0)}): BAD_ARGUMENT for a key or value that is wrong (an invalid port name never reaches the system), BUSY when a device is open already,
+//   FAILED with a sentence when the port cannot be opened. One worker thread asks for a sweep over and over and feeds every line to a stitched heatmap and, when configured, an occupancy model; a device
+//   that stops answering ends the worker with a sentence (the port name is never put in a fact, a log or a report). SWEEP_CLOSE: NO_CHANGE when nothing is open. SWEEP_CONFIG (JSON: "heatmap":
+//   {cols 1..65536, rows 2..65536, freq_mode "max"|"mean", time_mode}, "occupancy": {start_mhz, stop_mhz, step_khz, margin_db 0..200, floor_percentile 0..0.5, fixed_floor_db} or null to drop it): works while
+//   open or not; the model's refusal words come back. SWEEP_READ (JSON: max_points 2..4096 default 512, x 0..1 for the click-to-tune frequency, occupancy true for the channel table as CSV): answers in
+//   the fact sweep.read. Fact sweep.state = {open, kind, sweeps, refused, last_error, points, start_hz, stop_hz, heat_rows, heat_cols, occ_channels, occ_sweeps}. UNVERIFIED on a real device.
+#define FOXAPP_OP_SWEEP_OPEN             0x8920u /* text JSON; fact sweep.state */
+#define FOXAPP_OP_SWEEP_CLOSE            0x8921u
+#define FOXAPP_OP_SWEEP_CONFIG           0x8922u /* text JSON */
+#define FOXAPP_OP_SWEEP_READ             0x8923u /* text JSON; fact sweep.read */
 // wire-b end
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.

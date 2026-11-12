@@ -48,6 +48,15 @@ void wireBOps(AppWindow& a) {
     covering(FOXAPP_OP_MASK_CONFIG);
     CHECK(refused(A::apply(a, text(FOXAPP_OP_MASK_CONFIG, "not json")), FOXAPI_BAD_ARGUMENT));
     CHECK(refused(A::apply(a, text(FOXAPP_OP_MASK_CONFIG, "{\"enabled\":true}")), FOXAPI_FAILED));
+    // THE SWEEP DEVICE: a port that is not a COM port name is refused before the system sees it; closing what is not open is no change; reading needs nothing open
+    covering(FOXAPP_OP_SWEEP_OPEN);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SWEEP_OPEN, "{\"kind\":\"tinysa\",\"port\":\"COM999\",\"start_mhz\":88,\"stop_mhz\":108}")), FOXAPI_BAD_ARGUMENT));
+    covering(FOXAPP_OP_SWEEP_CLOSE);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_SWEEP_CLOSE, 0)), FOXAPI_NO_CHANGE));
+    covering(FOXAPP_OP_SWEEP_CONFIG);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SWEEP_CONFIG, "not json")), FOXAPI_BAD_ARGUMENT));
+    covering(FOXAPP_OP_SWEEP_READ);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SWEEP_READ, "{}")), FOXAPI_FAILED));
     covering(FOXAPP_OP_GPU_FFT_MODE);
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 3)), FOXAPI_OUT_OF_RANGE));
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 0)), FOXAPI_NO_CHANGE));

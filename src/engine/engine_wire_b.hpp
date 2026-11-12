@@ -21,6 +21,7 @@
 
 #include "core/field_strength.hpp"
 #include "core/spectrum_mask.hpp"
+#include "engine/wire_b_sweep.hpp"
 #include "engine/wire_b_bits.hpp"
 #include "engine/wire_b_cursors.hpp"
 
@@ -67,6 +68,10 @@ struct WireBState {
     double maskPostRollS = 2.0;
     cascade::core::MaskMonitorConfig maskCfg;
     std::array<MaskRadio, 8> maskRadios;
+
+    // --- sweepsrc: the sweep device host (one device) and the way its link is made (the tests give a stand-in: no test opens a COM port) ---
+    wireb::SweepHost sweep;
+    wireb::SerialLinkFactory sweepFactory = wireb::defaultSerialLinkFactory();
 };
 
 }  // namespace cascade::engine

@@ -3239,6 +3239,7 @@ private:
     FoxCommandResult sigmeasOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     FoxCommandResult bitsOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     FoxCommandResult cursorOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
+    FoxCommandResult sweepOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
 public:
     WireBState& wireBStateForTest() { return wireBState(); }   // TESTS ONLY: a frame log nobody can fill yet (no plugin call) is filled by the test through this
 private:

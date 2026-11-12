@@ -148,6 +148,8 @@ const Row kRows[] = {
     {"src/slint/kit_publish.cpp", 0, 1, 0, 0, "",
      "the Slint plugin pages' Save as BMP: one write of a picture the user asked for, run so the window does not touch the disk (docs/multi-radio-records/slint-gaps.md item 4); the window polls its answer each tick and the key is greyed while it runs, so there is no loop to beat in - NOT COVERED by this batch"},
     {"src/slint/signal_publish.cpp", 1, 0, 1, 1, "kThreadDriverInstall", ""},
+    {"src/engine/wire_b_sweep.cpp", 1, 0, 0, 0, "",
+     "wire-b: the sweep device host's one worker (a tinySA on a serial link: ask for a sweep, feed the heatmap and the occupancy model): started by SWEEP_OPEN only, joined by SWEEP_CLOSE and the destructor, and it ends itself when the device stops answering; the link's own bounded reads are its waits - NOT COVERED by this batch (a known gap: no heartbeat yet)"},
     {"src/core/pipeline_gpufft.cpp", 0, 1, 0, 0, "",
      "wire-b: the GPU spectrum's one-shot build of its Direct3D engine (GpuSpectrumEngine), run so the DSP thread never waits for a device to be made; the DSP thread polls the future each block and waits for it only to switch the mode off (a build is short) - NOT COVERED by this batch: it holds no loop, it ends by itself"},
     {"src/slint/host_duties.cpp", 0, 2, 0, 0, "",

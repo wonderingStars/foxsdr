@@ -257,6 +257,10 @@ constexpr OpEntry kOps[] = {
     {FOXAPP_OP_FRAMELOG_READ, "APP_FRAMELOG_READ", true},
     {FOXAPP_OP_MASK_LOAD, "APP_MASK_LOAD", true},
     {FOXAPP_OP_MASK_CONFIG, "APP_MASK_CONFIG", true},
+    {FOXAPP_OP_SWEEP_OPEN, "APP_SWEEP_OPEN", true},
+    {FOXAPP_OP_SWEEP_CLOSE, "APP_SWEEP_CLOSE", true},
+    {FOXAPP_OP_SWEEP_CONFIG, "APP_SWEEP_CONFIG", true},
+    {FOXAPP_OP_SWEEP_READ, "APP_SWEEP_READ", true},
     // wire-b end
 };
 
