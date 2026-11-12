@@ -1973,6 +1973,8 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
             return (c.ival[0] >= 0 && c.ival[0] <= 7) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_AFC:
             return (c.ival[1] == 0 || (c.num[0] >= 50.0 && c.num[0] <= 20000.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_CW_PEAK:
+            return (c.ival[1] == 0 || (c.num[0] >= 30.0 && c.num[0] <= 500.0 && c.num[1] >= 0.0 && c.num[1] <= 24.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_CW_PITCH:
             return (c.num[0] >= 300.0 && c.num[0] <= 1200.0) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_NOTCH_SLOT: {

@@ -145,6 +145,8 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
                       f.iqCorrectMask != o.iqCorrectMask ||
                       // the AFC switch and its pull-in range (settings; the correction and the lock are measurements)
                       f.afcOn != o.afcOn || f.afcPullInHz != o.afcPullInHz ||
+                      // the CW peak filter (all settings)
+                      f.cwPeakOn != o.cwPeakOn || f.cwPeakWidthHz != o.cwPeakWidthHz || f.cwPeakBoostDb != o.cwPeakBoostDb ||
                       // the noise squelch's three settings (its level and its gate are measurements)
                       f.noiseSquelchOn != o.noiseSquelchOn || f.noiseSquelchThresholdDb != o.noiseSquelchThresholdDb || f.noiseSquelchTailMs != o.noiseSquelchTailMs ||
                       // the manual notch bank's switches, frequencies and widths (all settings)

@@ -78,7 +78,7 @@ const std::set<std::string>& engineWritten() {
         "airspy", "audioBufferMs", "audioBufferAutoMs", "ppmCorrection", "ppm", "autoGainByRadio",
         "manualGainByRadio", "plutoUri", "rtlTcpAddr", "iqFilePath", "soundCard", "centerHz", "mode", "bandwidthHz",
         "squelchDb", "squelchAuto", "volume", "dbMin", "dbMax", "vfoOffsetHz", "sampleRateHz", "stereoEnabled", "deemphasisIndex",
-        "nrEnabled", "nrStrength", "agcMode", "agcFixedGainDb", "nbEnabled", "nbThresholdDb", "toneSquelchKind", "toneSquelchHz", "toneSquelchCode", "toneSquelchPolarity", "toneRemove", "meterUnits", "nrMethod", "cwPitchHz", "noiseSquelchOn", "noiseSquelchThresholdDb", "noiseSquelchTailMs", "eqDb", "audioHighPassHz", "audioLowPassHz", "afcOn", "afcPullInHz", "iqCorrect", "spectrumFftSize", "spectrumWindow", "spectrumFrameRateHz", "notchBank", "smeterCal", "notchEnabled", "notchFreqHz", "notchQ", "autoNotch", "bandPlanFollowMode", "bandPlanSelection",
+        "nrEnabled", "nrStrength", "agcMode", "agcFixedGainDb", "nbEnabled", "nbThresholdDb", "toneSquelchKind", "toneSquelchHz", "toneSquelchCode", "toneSquelchPolarity", "toneRemove", "meterUnits", "nrMethod", "cwPitchHz", "noiseSquelchOn", "noiseSquelchThresholdDb", "noiseSquelchTailMs", "eqDb", "audioHighPassHz", "audioLowPassHz", "cwPeakOn", "cwPeakWidthHz", "cwPeakBoostDb", "afcOn", "afcPullInHz", "iqCorrect", "spectrumFftSize", "spectrumWindow", "spectrumFrameRateHz", "notchBank", "smeterCal", "notchEnabled", "notchFreqHz", "notchQ", "autoNotch", "bandPlanFollowMode", "bandPlanSelection",
         "transmitOpen", "transmitMode", "transmitInput", "transmitPowerDb", "transmitSplit", "transmitSplitHz",
         "transmitToneHz", "transmitMonitor", "transmitArgs", "rxPositionSet", "rxLatDeg", "rxLonDeg",
         "pluginCatalogueUrl", "pluginLastUpdateCheck", "pluginTuneAllowed", "pluginSettingsAllowed", "pluginTransmitAllowed",
@@ -159,6 +159,9 @@ AppConfig seeded() {
     c.noiseSquelchOn = true;
     c.noiseSquelchThresholdDb = -42.5;
     c.noiseSquelchTailMs = 160.0;
+    c.cwPeakOn = true;
+    c.cwPeakWidthHz = 60.0;
+    c.cwPeakBoostDb = 18.0;
     c.afcOn = true;
     c.afcPullInHz = 4000.0;
     c.iqCorrect = 5;
@@ -444,6 +447,7 @@ int main() {
     CHECK(afterFirst["spectrumFftSize"] == 16384 && afterFirst["spectrumWindow"] == 1 && afterFirst["spectrumFrameRateHz"] == 25.0);
     CHECK(afterFirst["iqCorrect"] == 5);
     CHECK(afterFirst["afcOn"] == true && afterFirst["afcPullInHz"] == 4000.0);
+    CHECK(afterFirst["cwPeakOn"] == true && afterFirst["cwPeakWidthHz"] == 60.0 && afterFirst["cwPeakBoostDb"] == 18.0);
     CHECK(afterFirst["notchEnabled"] == true);
     CHECK(afterFirst["deemphasisIndex"] == 1);
     CHECK(afterFirst["stereoEnabled"] == false);

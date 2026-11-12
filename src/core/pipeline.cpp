@@ -1411,12 +1411,32 @@ double Pipeline::afcPullInHz() const { return mirrorAfcPullHz_.load(std::memory_
 double Pipeline::afcCorrectionHz() const { return mirrorAfcCorrHz_.load(std::memory_order_relaxed); }
 bool Pipeline::afcLocked() const { return mirrorAfcLocked_.load(std::memory_order_relaxed); }
 
+// --- the CW peak filter (engine serial lane A, F8) -----------------------------------------------------------------------------------------------------
+bool Pipeline::setCwPeak(bool on, double widthHz, double boostDb) {
+    if (!std::isfinite(widthHz) || widthHz < cascade::dsp::CwPeakFilter::kMinWidthHz || widthHz > cascade::dsp::CwPeakFilter::kMaxWidthHz) { return false; }
+    if (!std::isfinite(boostDb) || boostDb < 0.0 || boostDb > cascade::dsp::CwPeakFilter::kMaxGainDb) { return false; }
+    for (cascade::dsp::CwPeakFilter* f : {&cwPeakL_, &cwPeakR_}) {
+        f->setWidthHz(widthHz);
+        f->setGainDb(boostDb);
+        f->setEnabled(on);
+    }
+    mirrorCwPeakWidth_.store(widthHz, std::memory_order_relaxed);
+    mirrorCwPeakBoost_.store(boostDb, std::memory_order_relaxed);
+    mirrorCwPeakOn_.store(on, std::memory_order_relaxed);
+    return true;
+}
+bool Pipeline::cwPeakOn() const { return mirrorCwPeakOn_.load(std::memory_order_relaxed); }
+double Pipeline::cwPeakWidthHz() const { return mirrorCwPeakWidth_.load(std::memory_order_relaxed); }
+double Pipeline::cwPeakBoostDb() const { return mirrorCwPeakBoost_.load(std::memory_order_relaxed); }
+
 // --- CW pitch -------------------------------------------------------------------------------------------------------------------------------------
 bool Pipeline::setCwPitchHz(double hz) {
     if (!std::isfinite(hz) || hz < 300.0 || hz > 1200.0) { return false; }
     post([this, hz] {
              cwPitchNow_ = hz;
              demod_.setCwPitchHz(hz);
+             cwPeakL_.setPitchHz(hz);   // (F8: the peak filter sits on the pitch)
+             cwPeakR_.setPitchHz(hz);
          },
          [this, hz] { mirrorCwPitchHz_.store(hz, std::memory_order_relaxed); });
     return true;
@@ -2655,6 +2675,11 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // THE EQUALISER AND THE AUDIO FILTERS, after the noise reduction (bit-exact passthrough while everything is flat and off).
     eqL_.process(outL_.data(), k);
     eqR_.process(outR_.data(), k);
+    // THE CW PEAK FILTER (F8), CW mode only: a peaking section at the pitch on the finished audio.
+    if (mode == cascade::dsp::DemodMode::CW) {
+        cwPeakL_.process(outL_.data(), k);
+        cwPeakR_.process(outR_.data(), k);
+    }
 
     // --- IN-CHAIN AUDIO PROCESSOR PLUGINS (host API level 1) ----------------
     //

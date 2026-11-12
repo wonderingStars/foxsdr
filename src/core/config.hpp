@@ -232,6 +232,9 @@ struct SavedRadio {
     int iqCorrect = 0;     // the I/Q correction bits: 1 DC removal, 2 balance, 4 swap I/Q (engine serial lane A)
     bool afcOn = false;               // automatic frequency control (engine serial lane A)
     double afcPullInHz = 2500.0;      // 50..20000
+    bool cwPeakOn = false;            // the CW peak filter (engine serial lane A)
+    double cwPeakWidthHz = 100.0;     // 30..500
+    double cwPeakBoostDb = 12.0;      // 0..24
     std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
@@ -534,6 +537,9 @@ struct AppConfig {
     int iqCorrect = 0;     // the I/Q correction bits: 1 DC removal, 2 balance, 4 swap I/Q (engine serial lane A)
     bool afcOn = false;               // automatic frequency control (engine serial lane A)
     double afcPullInHz = 2500.0;      // 50..20000
+    bool cwPeakOn = false;            // the CW peak filter (engine serial lane A)
+    double cwPeakWidthHz = 100.0;     // 30..500
+    double cwPeakBoostDb = 12.0;      // 0..24
     std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;

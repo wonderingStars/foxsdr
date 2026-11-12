@@ -4899,6 +4899,9 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         for (std::size_t i = 0; i < rxa.eqDb_.size(); ++i) { r.eqDb[i] = rxa.eqDb_[i]; }
         r.audioHighPassHz = static_cast<std::uint32_t>(rxa.audioHpHz_);
         r.audioLowPassHz = static_cast<std::uint32_t>(rxa.audioLpHz_);
+        r.cwPeakOn = rxa.cwPeakOn_ ? 1u : 0u;
+        r.cwPeakWidthHz = rxa.cwPeakWidthHz_;
+        r.cwPeakBoostDb = rxa.cwPeakBoostDb_;
         r.afcOn = rxa.afcOn_ ? 1u : 0u;
         r.afcPullInHz = rxa.afcPullInHz_;
         r.afcCorrectionHz = rxa.pipeline_.afcCorrectionHz();
@@ -7642,6 +7645,21 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[0] = pull;
             return res;
         }
+        case FOXAPI_OP_SET_CW_PEAK: {
+            Receiver& rxs = rx();
+            double width = rxs.cwPeakWidthHz_, boost = rxs.cwPeakBoostDb_;
+            if (c.ival[1] == 1) {
+                width = c.num[0];
+                boost = c.num[1];
+            }
+            if (!rxs.pipeline_.setCwPeak(on, width, boost)) { return refuse(FOXAPI_OUT_OF_RANGE, "the CW peak filter is 30 to 500 Hz wide and boosts 0 to 24 dB"); }
+            rxs.cwPeakOn_ = on;
+            rxs.cwPeakWidthHz_ = width;
+            rxs.cwPeakBoostDb_ = boost;
+            res.applied[0] = width;
+            res.applied[1] = boost;
+            return res;
+        }
         case FOXAPI_OP_SET_CW_PITCH: {
             Receiver& rxs = rx();
             if (!rxs.pipeline_.setCwPitchHz(c.num[0])) { return refuse(FOXAPI_OUT_OF_RANGE, "the CW pitch is 300 to 1200 Hz"); }
@@ -9525,6 +9543,9 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         for (std::size_t i = 0; i < cfg.eqDb.size() && i < 8; ++i) { rx().eqDb_[i] = cfg.eqDb[i]; }
         rx().audioHpHz_ = cfg.audioHighPassHz;
         rx().audioLpHz_ = cfg.audioLowPassHz;
+        rx().cwPeakOn_ = cfg.cwPeakOn;
+        rx().cwPeakWidthHz_ = cfg.cwPeakWidthHz;
+        rx().cwPeakBoostDb_ = cfg.cwPeakBoostDb;
         rx().afcOn_ = cfg.afcOn;
         rx().afcPullInHz_ = cfg.afcPullInHz;
         rx().iqCorrect_ = cfg.iqCorrect;
@@ -9536,6 +9557,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         rx().noiseSquelchThresholdDb_ = cfg.noiseSquelchThresholdDb;
         rx().noiseSquelchTailMs_ = cfg.noiseSquelchTailMs;
         (void)rx().pipeline_.setNoiseSquelch(rx().noiseSquelchOn_, rx().noiseSquelchThresholdDb_, rx().noiseSquelchTailMs_);
+        (void)rx().pipeline_.setCwPeak(rx().cwPeakOn_, rx().cwPeakWidthHz_, rx().cwPeakBoostDb_);
         (void)rx().pipeline_.setAfc(rx().afcOn_, rx().afcPullInHz_);
         (void)rx().pipeline_.setIqCorrection(rx().iqCorrect_);
         (void)rx().pipeline_.setSpectrum(static_cast<std::size_t>(rx().spectrumFft_), rx().spectrumWindow_, rx().spectrumFps_);
@@ -10108,6 +10130,9 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
         }
         cfg.audioHighPassHz = rxa.audioHpHz_;
         cfg.audioLowPassHz = rxa.audioLpHz_;
+        cfg.cwPeakOn = rxa.cwPeakOn_;
+        cfg.cwPeakWidthHz = rxa.cwPeakWidthHz_;
+        cfg.cwPeakBoostDb = rxa.cwPeakBoostDb_;
         cfg.afcOn = rxa.afcOn_;
         cfg.afcPullInHz = rxa.afcPullInHz_;
         cfg.iqCorrect = rxa.iqCorrect_;
@@ -10222,6 +10247,7 @@ void Engine::initialise() {
         (void)rx().pipeline_.setCwPitchHz(rx().cwPitchHz_);
         pushAudioEq();
         (void)rx().pipeline_.setNoiseSquelch(rx().noiseSquelchOn_, rx().noiseSquelchThresholdDb_, rx().noiseSquelchTailMs_);
+        (void)rx().pipeline_.setCwPeak(rx().cwPeakOn_, rx().cwPeakWidthHz_, rx().cwPeakBoostDb_);
         (void)rx().pipeline_.setAfc(rx().afcOn_, rx().afcPullInHz_);
         (void)rx().pipeline_.setIqCorrection(rx().iqCorrect_);
         (void)rx().pipeline_.setSpectrum(static_cast<std::size_t>(rx().spectrumFft_), rx().spectrumWindow_, rx().spectrumFps_);

@@ -159,6 +159,7 @@
 #include "dsp/spectrum_block.hpp"
 #include "dsp/iq_correct.hpp"
 #include "dsp/afc.hpp"
+#include "dsp/cw_filter.hpp"
 #include "dsp/spsc_ring.hpp"
 #include "dsp/squelch.hpp"
 #include "dsp/oirt_stereo.hpp"
@@ -610,6 +611,13 @@ public:
     double afcPullInHz() const;
     double afcCorrectionHz() const;   // what is added to the VFO now (0 while off, unlocked or in a mode without a carrier)
     bool afcLocked() const;
+    // THE CW PEAK FILTER (engine serial lane A, row F8; dsp/cw_filter.hpp CwPeakFilter): an audio peaking filter centred on the CW pitch (it follows setCwPitchHz), width 30 to 500 Hz, boost 0 to
+    // 24 dB, on the finished audio of CW mode only (after the equaliser; the decoder tap is far upstream and never sees it). Off, or in any other mode, it is a bit-exact no-op. False (nothing
+    // changed) for a width or boost outside those. Any thread.
+    bool setCwPeak(bool on, double widthHz, double boostDb);
+    bool cwPeakOn() const;
+    double cwPeakWidthHz() const;
+    double cwPeakBoostDb() const;
     bool setIqCorrection(int mask);
     int iqCorrection() const;
     double iqImageRejectionDb() const;   // the balance estimator's reading of the input, dB (200 while nothing is measured)
@@ -1155,6 +1163,11 @@ private:
     // NOISE-REDUCTION METHOD: the choice and what the posted switch and strength last said (so a method built later starts from them), and the two channels' alternative reducers.
     cascade::dsp::AudioEq eqL_{kAudioRateHz};
     cascade::dsp::AudioEq eqR_{kAudioRateHz};
+    cascade::dsp::CwPeakFilter cwPeakL_{kAudioRateHz};   // (F8: setters are atomics, process() runs on the DSP thread)
+    cascade::dsp::CwPeakFilter cwPeakR_{kAudioRateHz};
+    std::atomic<bool> mirrorCwPeakOn_{false};
+    std::atomic<double> mirrorCwPeakWidth_{100.0};
+    std::atomic<double> mirrorCwPeakBoost_{12.0};
     cascade::dsp::NotchBank notchBankL_{kAudioRateHz};
     cascade::dsp::NotchBank notchBankR_{kAudioRateHz};
     std::unique_ptr<cascade::dsp::IqCorrector> iqCorr_;   // swapped only while the DSP thread is quiesced (a rate change)

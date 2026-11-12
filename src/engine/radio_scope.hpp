@@ -59,6 +59,7 @@ inline bool isRadioScopedOp(std::uint32_t op) {
         case FOXAPP_OP_FILE_LOOP:
         case FOXAPI_OP_SET_IQ_CORRECT:
         case FOXAPI_OP_SET_AFC:
+        case FOXAPI_OP_SET_CW_PEAK:
         case FOXAPP_OP_CAL_MEASURE:
         case FOXAPP_OP_CAL_CLEAR:
         case FOXAPP_OP_RADIO_LOCK:

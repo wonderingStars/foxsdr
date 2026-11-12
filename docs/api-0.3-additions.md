@@ -2652,6 +2652,9 @@ At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTT
 ### 9.41 Automatic frequency control (engine serial lane A, row F13; dsp/afc.hpp)
 
 * Op `FOXAPI_OP_SET_AFC` 0x011E (receiver-scoped; in no web, CAT or TCI profile): `ival[0]` 0/1; with `ival[1]` = 1 `num[0]` is the pull-in range, Hz 50 to 20000 (default 2500; a caught carrier is followed out to twice that). NFM, WFM and AM follow the block's mean frequency (right for a carrier-dominated signal), CW the strongest line; USB, LSB, DSB and RAW have no carrier and are left alone (any nudge is taken off). The nudge is added to the VFO and the user's own offset (`vfoOffsetHz`) is untouched; a retune takes the nudge off and the loop starts again. State, appended after `iqCorrectMask`: `afcPullInHz afcCorrectionHz afcOn afcLocked` (the switch and the range are settings and move `modeSeq`; the correction and the lock are measurements). Saved per radio as `afcOn` and `afcPullInHz`.
+### 9.42 The CW peak filter (engine serial lane A, row F8; dsp/cw_filter.hpp CwPeakFilter)
+
+* Op `FOXAPI_OP_SET_CW_PEAK` 0x011F (receiver-scoped; in no web, CAT or TCI profile): `ival[0]` 0/1; with `ival[1]` = 1 `num[0]` is the width, Hz 30 to 500 (default 100), `num[1]` the boost, dB 0 to 24 (default 12). An audio peaking filter centred on the CW pitch (it follows `SET_CW_PITCH`), on the finished audio of CW mode only, after the equaliser; the decoder tap never sees it. State, appended after `afcLocked`: `cwPeakWidthHz cwPeakBoostDb cwPeakOn` (settings, they move `modeSeq`). Saved per radio.
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the
