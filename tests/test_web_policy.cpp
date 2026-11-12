@@ -278,6 +278,96 @@ void testRefusalPrecedence() {
     CHECK(evaluateBind(cfg).verdict == BindVerdict::RefusedPasswordRequired);
 }
 
+// --- feat/web-secure: HTTPS and listeners -----------------------------------------------------------------------------------------------
+
+void testDefaultsAreOff() {
+    const WebServerConfig cfg;
+    CHECK(!cfg.tlsEnabled);
+    CHECK(cfg.tlsCertThumbprint.empty());
+    CHECK(cfg.tlsCertFile.empty());
+    CHECK(!cfg.listenersEnabled);
+    CHECK(cfg.listenerPasswordRecord.empty());
+    CHECK(cfg.maxListeners == 4);
+    CHECK(!cfg.listenersMayTune);
+    CHECK(!cfg.chatEnabled);
+    // And a configuration that asks for none of it is judged exactly as before.
+    WebServerConfig a = baseConfig();
+    CHECK(evaluateBind(a).allowed() && !evaluateBind(a).authRequired);
+}
+
+void testTlsPolicy() {
+    WebServerConfig cfg = baseConfig();
+    cfg.tlsEnabled = true;
+#ifdef _WIN32
+    CHECK(evaluateBind(cfg).allowed());                 // loopback, no password, HTTPS: allowed (the password rules are unchanged)
+    cfg.tlsCertThumbprint = std::string(40, 'a');
+    CHECK(evaluateBind(cfg).allowed());
+    cfg.tlsCertThumbprint = std::string(40, 'F');
+    CHECK(evaluateBind(cfg).allowed());
+    for (const std::string bad : {std::string(39, 'a'), std::string(41, 'a'), std::string(40, 'g'), std::string("a b") + std::string(37, 'a'),
+                                   std::string("AAAA:") + std::string(35, 'a'), std::string(" ") + std::string(39, 'a')}) {
+        cfg.tlsCertThumbprint = bad;
+        const BindDecision d = evaluateBind(cfg);
+        CHECK(d.verdict == BindVerdict::RefusedTlsCertificate);
+        CHECK(!d.reason.empty());
+    }
+    cfg.tlsCertThumbprint.clear();
+    // An off-machine bind still needs the password: HTTPS does not replace it.
+    cfg.bindAddress = "0.0.0.0";
+    CHECK(evaluateBind(cfg).verdict == BindVerdict::RefusedPasswordRequired);
+    cfg.passwordRecord = realRecord();
+    const BindDecision d = evaluateBind(cfg);
+    CHECK(d.allowed() && d.authRequired && d.reachableOffMachine);
+#else
+    const BindDecision d = evaluateBind(cfg);
+    CHECK(d.verdict == BindVerdict::RefusedTlsUnavailable);
+    CHECK(d.reason.find("UNPROVEN") != std::string::npos);
+#endif
+}
+
+void testListenerPolicy() {
+    WebServerConfig cfg = baseConfig();
+    cfg.listenersEnabled = true;
+    // No owner password: listeners are refused even on loopback.
+    CHECK(evaluateBind(cfg).verdict == BindVerdict::RefusedListenerPassword);
+    cfg.passwordRecord = realRecord();
+    // An owner password but no listener password.
+    CHECK(evaluateBind(cfg).verdict == BindVerdict::RefusedListenerPassword);
+    cfg.listenerPasswordRecord = "pbkdf2-sha256$600000$garbage";
+    const BindDecision unreadable = evaluateBind(cfg);
+    CHECK(unreadable.verdict == BindVerdict::RefusedListenerPassword);
+    CHECK(unreadable.reason.find("cannot be read") != std::string::npos);
+    cfg.listenerPasswordRecord = realRecord();
+    BindDecision d = evaluateBind(cfg);
+    CHECK(d.allowed() && d.authRequired);
+    // The cap and the limits.
+    for (const int cap : {1, 4, 32}) {
+        cfg.maxListeners = cap;
+        CHECK(evaluateBind(cfg).allowed());
+    }
+    for (const int cap : {0, -1, 33, 1000}) {
+        cfg.maxListeners = cap;
+        CHECK(evaluateBind(cfg).verdict == BindVerdict::RefusedListenerLimits);
+    }
+    cfg.maxListeners = 4;
+    cfg.listenerIdleSeconds = -1;
+    CHECK(evaluateBind(cfg).verdict == BindVerdict::RefusedListenerLimits);
+    cfg.listenerIdleSeconds = 0;       // 0 = no limit
+    cfg.listenerSessionSeconds = 0;
+    CHECK(evaluateBind(cfg).allowed());
+    cfg.listenerSessionSeconds = -5;
+    CHECK(evaluateBind(cfg).verdict == BindVerdict::RefusedListenerLimits);
+    // The listener settings mean nothing while listeners are off: a bad value there is not a refusal.
+    cfg.listenersEnabled = false;
+    cfg.maxListeners = 99;
+    cfg.listenerPasswordRecord = "junk";
+    CHECK(evaluateBind(cfg).allowed());
+    // An unreadable OWNER record still wins over everything, as before.
+    cfg.listenersEnabled = true;
+    cfg.passwordRecord = "junk";
+    CHECK(evaluateBind(cfg).verdict == BindVerdict::RefusedPasswordUnusable);
+}
+
 }  // namespace
 
 int main() {
@@ -296,5 +386,8 @@ int main() {
     testPortRange();
     testInvalidAddressIsRefused();
     testRefusalPrecedence();
+    testDefaultsAreOff();
+    testTlsPolicy();
+    testListenerPolicy();
     return testSummary("test_web_policy");
 }

@@ -48,8 +48,8 @@ namespace {
 // this API serves is same-origin by construction, and Strict is what stops a
 // page on another origin navigating the browser into a state-changing request
 // with the cookie attached. HttpOnly keeps it away from any script that manages
-// to run on the page. Secure is deliberately ABSENT: this server has no TLS, so
-// marking the cookie Secure would stop the browser sending it at all.
+// to run on the page. Secure is added exactly when HTTPS is on (cookieAttributes): on plain HTTP a
+// Secure cookie would never come back.
 constexpr char kCookieName[] = "foxsdr_session";
 
 // Bodies this API accepts are small JSON objects. A cap this low means a
@@ -70,8 +70,9 @@ constexpr std::size_t kMaxPayloadBytes = 8 * 1024;
 // plugin output must never be able to do that, so invalid sequences become
 // U+FFFD and the response still goes out.
 
-std::string cookieAttributes() {
-    return std::string("; Path=/; HttpOnly; SameSite=Strict");
+std::string cookieAttributes(bool secure) {
+    // Secure only while HTTPS is on: on plain HTTP a Secure cookie would never be sent back and nobody could sign in.
+    return std::string("; Path=/; HttpOnly; SameSite=Strict") + (secure ? "; Secure" : "");
 }
 
 // Extracts one cookie value from a Cookie header. Deliberately small and
@@ -120,6 +121,35 @@ std::vector<std::uint8_t> quantiseSpectrum(const std::vector<float>& db) {
     return out;
 }
 
+// WHAT A LISTENER IS SHOWN. The status is the owner's readout; a listener (net/web_users.hpp) may look and listen, and is not shown what
+// identifies this computer or the people around it: where the antenna is (a home), the folder recordings go to, the radios' serial numbers
+// and device arguments, the plugin files' names, the installer's reports and the raw error texts (which carry paths and device names). The
+// signal itself - frequency, mode, level, decoded text, tracks - is what the page is for and stays.
+void redactForListener(RadioStatus& s) {
+    constexpr char kOwnerOnly[] = "(details are shown to the owner)";
+    s.rxPositionSet = false;
+    s.rxLatDeg = 0.0;
+    s.rxLonDeg = 0.0;
+    s.recordDir.clear();
+    if (!s.recordError.empty()) { s.recordError = kOwnerOnly; }
+    if (!s.recordNotice.empty()) { s.recordNotice = kOwnerOnly; }
+    if (!s.sourceError.empty()) { s.sourceError = kOwnerOnly; }
+    if (!s.faultMessage.empty()) { s.faultMessage = kOwnerOnly; }
+    s.soapyArgs.clear();
+    s.devices.clear();
+    s.sourceName = s.sourceKind;   // (a device label carries its serial number)
+    s.antennas.clear();
+    s.catalogue.clear();
+    s.catalogueStatus.clear();
+    s.catalogueError.clear();
+    s.installReport.clear();
+    s.installError.clear();
+    for (RadioStatus::Plugin& p : s.plugins) {
+        p.fileName.clear();
+        if (!p.error.empty()) { p.error = kOwnerOnly; }
+    }
+}
+
 // --- Static client -----------------------------------------------------------
 // Served from three routes rather than one inlined blob so the page can carry a
 // strict Content-Security-Policy: with the script and stylesheet at their own
@@ -145,6 +175,7 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
       <button type="submit" class="primary">Sign in</button>
     </form>
     <p id="loginError" class="error"></p>
+    <p id="loginHint" class="dim hidden">To listen without controlling the receiver, give a name of your own choosing and the listener password.</p>
   </div>
 </section>
 
@@ -180,6 +211,7 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
     <span class="spacer"></span>
     <span id="mutedBy" class="badge warn hidden"></span>
     <span id="remote" class="badge hidden">remote access</span>
+    <span id="roleBadge" class="badge hidden"></span>
     <span id="link" class="badge warn hidden">disconnected</span>
     <button id="logout" class="hidden">Sign out</button>
   </header>
@@ -289,6 +321,23 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
     <div id="rds" class="hidden"></div>
     <div id="splitPanels" class="hsplit hidden" title="drag to resize"></div>
     <div id="panels">
+      <div id="room" class="panel hidden">
+        <h3>Listeners <span id="roomCount" class="dim"></span></h3>
+        <div id="roomNote" class="hidden"></div>
+        <div id="chatBox" class="hidden">
+          <div id="chatLog"></div>
+          <form id="chatForm"><input id="chatText" maxlength="200" autocomplete="off" placeholder="say something (text only, 200 characters)">
+            <button type="submit">Send</button></form>
+          <p id="chatError" class="error"></p>
+        </div>
+        <div id="adminBox" class="hidden">
+          <table id="listenerList"></table>
+          <form id="noteForm"><input id="noteText" maxlength="200" autocomplete="off" placeholder="a note to show every listener">
+            <button type="submit">Set note</button> <button type="button" id="noteClear">Clear</button></form>
+          <div id="banList" class="dim"></div>
+          <p id="adminError" class="error"></p>
+        </div>
+      </div>
       <div id="mapWrap" class="panel hidden">
         <h3>Map <button class="pop" data-view="map"
                         title="open the map in its own window">&#x29c9;</button></h3>
@@ -877,6 +926,23 @@ body { padding:9px; box-sizing:border-box; }
        -webkit-user-select:none; }
 .ptt.on { background:var(--fault); border-color:var(--fault); color:var(--fg);
           box-shadow:0 0 10px rgba(0,0,0,.45) inset; }
+
+/* THE ROOM (feat/web-secure): a listener sees the page without the controls, and the owner sees who is listening. */
+body.listener #side, body.listener #playstop, body.listener #mute, body.listener #volume, body.listener #master
+  { display:none !important; }
+body.listener #app { grid-template-columns:1fr; grid-template-rows:var(--bar) 1fr auto;
+                     grid-template-areas:"bar" "main" "foot"; }
+body.listener.notune #freqDigits, body.listener.notune #spectrum, body.listener.notune #waterfall { pointer-events:none; }
+#room { display:block; }
+#roomNote { background:var(--read); color:var(--bg); padding:.3rem .5rem; border-radius:3px; margin:.25rem 0; }
+#chatLog { max-height:9rem; overflow-y:auto; font-size:.85rem; margin:.25rem 0; }
+#chatLog div { padding:.05rem 0; }
+#chatLog b { color:var(--accent); font-weight:600; margin-right:.35rem; }
+#chatForm, #noteForm { display:flex; gap:.35rem; margin:.25rem 0; }
+#chatForm input, #noteForm input { flex:1 1 auto; min-width:0; }
+#listenerList { width:100%; border-collapse:collapse; font-size:.85rem; }
+#listenerList td { padding:.1rem .35rem; border-top:1px solid var(--edge); }
+#listenerList button, #banList button { padding:0 .4rem; }
 )CSS";
 
 // The joined style sheet, built once on first use - the pieces are
@@ -2841,6 +2907,7 @@ async function refreshSession() {
   $('login').classList.toggle('hidden', !needsLogin);
   $('app').classList.toggle('hidden', needsLogin);
   $('logout').classList.toggle('hidden', !s.authRequired || !s.authenticated);
+  roomApply(s);
   if (needsLogin) stopPolling(); else startPolling();
 }
 
@@ -2875,12 +2942,120 @@ pttSetup();
 refreshSession();
 )JS";
 
+constexpr char kAppJs4[] = R"JS(
+// ---- THE ROOM (feat/web-secure): roles, the owner's note, the chat and the owner's moderation. Everything here that came from a person
+// (a name, a chat line, a note) is put on the page as text, or - for the chat and the note, which the server has already escaped - as the
+// server's escaped html.
+let roomTimer = null, roomChatSeq = 0, roomRole = 'owner', roomMayTune = true;
+function roomApply(s) {
+  roomRole = s.role || 'owner';
+  document.body.classList.toggle('listener', roomRole === 'listener');
+  if (roomRole !== 'listener') document.body.classList.remove('notune');
+  const badge = $('roleBadge');
+  const show = !!s.authenticated && (roomRole === 'listener' || !!s.listenersEnabled);
+  badge.textContent = roomRole === 'listener' ? 'listener: ' + (s.name || '') : 'owner';
+  badge.classList.toggle('hidden', !show);
+  $('loginHint').classList.toggle('hidden', !s.listenersEnabled);
+  const wantRoom = !!s.authenticated && !!s.listenersEnabled;
+  $('room').classList.toggle('hidden', !wantRoom);
+  if (wantRoom && !roomTimer) { roomPoll(); roomTimer = setInterval(roomPoll, 2000); }
+  if (!wantRoom && roomTimer) { clearInterval(roomTimer); roomTimer = null; roomChatSeq = 0; $('chatLog').textContent = ''; }
+}
+async function roomPoll() {
+  const r = await getJson('/api/room');
+  if (!r) return;
+  roomMayTune = !!r.mayTune;
+  document.body.classList.toggle('notune', !roomMayTune);
+  $('roomCount').textContent = r.listeners + ' of ' + r.maxListeners;
+  const note = $('roomNote');
+  note.innerHTML = r.note || '';          // (escaped by the server)
+  note.classList.toggle('hidden', !r.note);
+  $('chatBox').classList.toggle('hidden', !r.chatEnabled);
+  if (r.chatEnabled) {
+    const c = await getJson('/api/chat?since=' + roomChatSeq);
+    if (c && c.lines) {
+      const log = $('chatLog');
+      for (const l of c.lines) {
+        const row = document.createElement('div');
+        const who = document.createElement('b');
+        who.textContent = l.name;
+        const txt = document.createElement('span');
+        txt.innerHTML = l.html;           // (escaped by the server)
+        row.appendChild(who); row.appendChild(txt);
+        log.appendChild(row);
+        roomChatSeq = Math.max(roomChatSeq, l.seq);
+      }
+      while (log.childNodes.length > 80) log.removeChild(log.firstChild);
+      if (c.lines.length) log.scrollTop = log.scrollHeight;
+    }
+  }
+  $('adminBox').classList.toggle('hidden', roomRole !== 'owner');
+  if (roomRole === 'owner') renderAdmin(await getJson('/api/admin/state'));
+}
+function adminButton(label, op, body) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  b.addEventListener('click', () => adminPost(Object.assign({ op }, body)));
+  return b;
+}
+function renderAdmin(a) {
+  if (!a) return;
+  const t = $('listenerList');
+  t.textContent = '';
+  for (const l of a.listeners) {
+    const tr = document.createElement('tr');
+    const cells = [l.name, l.address, Math.round(l.signedInSeconds / 60) + ' min'];
+    for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); }
+    const act = document.createElement('td');
+    act.appendChild(adminButton('Kick', 'kick', { name: l.name }));
+    act.appendChild(adminButton('Ban', 'ban', { name: l.name }));
+    tr.appendChild(act);
+    t.appendChild(tr);
+  }
+  const bans = $('banList');
+  bans.textContent = '';
+  const add = (label, op, body) => {
+    const span = document.createElement('span');
+    span.textContent = label + ' ';
+    span.appendChild(adminButton('Allow', op, body));
+    span.appendChild(document.createTextNode(' '));
+    bans.appendChild(span);
+  };
+  for (const n of a.bannedNames) add('banned name ' + n, 'unban', { name: n });
+  for (const ad of a.bannedAddresses) add('banned address ' + ad, 'unbanAddress', { address: ad });
+}
+async function adminPost(body) {
+  $('adminError').textContent = '';
+  const r = await fetch('/api/admin', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) {
+    let msg = 'That did not work.';
+    try { const j = await r.json(); if (j && j.error) msg = j.error; } catch (_) {}
+    $('adminError').textContent = msg;
+  }
+  roomPoll();
+}
+$('noteForm').addEventListener('submit', (e) => { e.preventDefault(); adminPost({ op: 'note', text: $('noteText').value }); });
+$('noteClear').addEventListener('click', () => { $('noteText').value = ''; adminPost({ op: 'note', text: '' }); });
+$('chatForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('chatError').textContent = '';
+  const text = $('chatText').value;
+  if (!text.trim()) return;
+  const r = await fetch('/api/chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+  if (r.ok) { $('chatText').value = ''; roomPoll(); return; }
+  let msg = 'Not sent.';
+  try { const j = await r.json(); if (j && j.error) msg = j.error; } catch (_) {}
+  $('chatError').textContent = msg;
+});
+)JS";
+
 // The joined client script. Built once on first use — the pieces are compile
 // -time constants, so there is nothing to invalidate.
 const std::string& appJs() {
     static const std::string joined =
         std::string(kAppJs1) + kAppJs2 + kAppJs2t + kAppJs2b + kAppJs2c + kAppJs2d +
-        kAppJs2e + kAppJs2p + kAppJs3 + kAppJs3b;
+        kAppJs2e + kAppJs2p + kAppJs3 + kAppJs3b + kAppJs4;
     return joined;
 }
 
@@ -3204,8 +3379,32 @@ public:
         return decision_;
     }
 
-    std::size_t sessionCount() const { return sessions_.size(); }
-    void revokeAllSessions() { sessions_.revokeAll(); }
+    std::size_t sessionCount() const { return room_.ownerSessions() + room_.listenerCount(now()); }
+    void revokeAllSessions() { room_.revokeAll(); }
+    WebRoom& room() { return room_; }
+    std::size_t listenerCount() const { return room_.listenerCount(now()); }
+    bool setTlsLimits(const TlsTimeouts& t, std::size_t total, std::size_t perAddress) {
+        if (running()) { return false; }
+        tlsTimeouts_ = t;
+        tlsMaxTotal_ = total;
+        tlsMaxPerAddress_ = perAddress;
+        return true;
+    }
+    WebServer::TlsInfo tlsInfo() const {
+        WebServer::TlsInfo i;
+        if (!running() || !tls_) { return i; }
+        i.active = true;
+        i.port = tls_->boundPort();
+        i.privatePort = privatePort_;
+        i.fingerprintSha256 = tls_->fingerprintSha256();
+        i.thumbprintSha1 = tls_->thumbprintSha1();
+        i.names = tls_->certificateNames();
+        i.notAfter = tls_->certificateNotAfter();
+        i.selfSigned = tls_->selfSigned();
+        i.keyExportable = tls_->keyExportable();
+        i.stats = tls_->stats();
+        return i;
+    }
 
     void setImages(std::vector<WebImage> imgs) {
         std::lock_guard<std::mutex> lock(imageMutex_);
@@ -3280,6 +3479,19 @@ private:
     // not require authentication at all.
     bool authorised(const httplib::Request& req) const;
 
+    // WHO is asking: the owner, a listener, or nobody. `touch` is whether the request counts as the person being active (a listener's idle
+    // clock); a stream re-checking its own session passes false. When nobody has to sign in (loopback, no password, no listeners) the answer
+    // is the owner, as the page has always worked.
+    Identity identify(const httplib::Request& req, bool touch) const;
+    Identity identifyToken(const std::string& token, bool authRequired, bool touch) const;
+
+    // THE TRUE CLIENT ADDRESS: with HTTPS on, the terminator's record of who connected (req.remote_addr is then always the loopback relay);
+    // otherwise the socket's own peer. Never read from a header.
+    std::string clientAddress(const httplib::Request& req) const;
+
+    // How many audio or live-update streams may be open: the fixed floor, or room for every listener and the owner when listeners are on.
+    std::size_t streamCap() const;
+
     // Writes a 401 with a JSON body. One place, so no handler can invent a
     // different shape the client does not understand.
     static void deny(httplib::Response& res, const std::string& message,
@@ -3302,9 +3514,18 @@ private:
     int boundPort_ = -1;
     PasswordRecord record_;
     bool hasRecord_ = false;
+    PasswordRecord listenerRecord_;
+    bool hasListenerRecord_ = false;
 
-    mutable SessionStore sessions_;
+    mutable WebRoom room_;
     mutable LoginThrottle throttle_;
+
+    // HTTPS: the terminator in front of the plain server (null when off), the plain server's private loopback port, and the limits a test sets.
+    std::unique_ptr<TlsTerminator> tls_;
+    int privatePort_ = -1;
+    TlsTimeouts tlsTimeouts_;
+    std::size_t tlsMaxTotal_ = 64;
+    std::size_t tlsMaxPerAddress_ = 16;
 
     // Decoded pictures, already BMP-encoded by the application.
     mutable std::mutex imageMutex_;
@@ -3417,7 +3638,40 @@ bool WebServer::Impl::authorised(const httplib::Request& req) const {
         return true;
     }
     const std::string token = cookieValue(req.get_header_value("Cookie"), kCookieName);
-    return sessions_.validate(token, now());
+    Identity who;
+    return room_.identify(token, now(), true, who);
+}
+
+Identity WebServer::Impl::identifyToken(const std::string& token, bool authRequired, bool touch) const {
+    Identity who;
+    if (!authRequired) {
+        who.role = Role::Owner;
+        return who;
+    }
+    room_.identify(token, now(), touch, who);
+    return who;
+}
+
+Identity WebServer::Impl::identify(const httplib::Request& req, bool touch) const {
+    bool authRequired = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        authRequired = decision_.authRequired;
+    }
+    return identifyToken(cookieValue(req.get_header_value("Cookie"), kCookieName), authRequired, touch);
+}
+
+std::string WebServer::Impl::clientAddress(const httplib::Request& req) const {
+    if (tls_) {
+        const std::string real = tls_->peerOf(req.remote_port);
+        if (!real.empty()) { return real; }
+    }
+    return req.remote_addr;
+}
+
+std::size_t WebServer::Impl::streamCap() const {
+    const RoomConfig rc = room_.config();
+    return rc.listenersEnabled ? std::max(WebServer::kMaxAudioListeners, rc.maxListeners + 2) : WebServer::kMaxAudioListeners;
 }
 
 void WebServer::Impl::installRoutes(httplib::Server& svr) {
@@ -3490,20 +3744,31 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
 
     // What the client needs before it can decide whether to show a login form.
     // Unauthenticated by necessity, and it deliberately reveals nothing beyond
-    // whether a credential is needed and whether this one is held.
+    // whether a credential is needed and whether this one is held - and, once held, which role it is.
     svr.Get("/api/session", [this](const httplib::Request& req, httplib::Response& res) {
         BindDecision d;
+        WebServerConfig cfg;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             d = decision_;
+            cfg = cfg_;
         }
+        const Identity who = identify(req, true);
         nlohmann::json j;
         j["authRequired"] = d.authRequired;
-        j["authenticated"] = authorised(req);
+        j["authenticated"] = who.role != Role::None;
         j["reachableOffMachine"] = d.reachableOffMachine;
+        j["role"] = who.role == Role::Owner ? "owner" : (who.role == Role::Listener ? "listener" : "none");
+        j["listenersEnabled"] = cfg.listenersEnabled;
+        j["secure"] = tls_ != nullptr;
+        if (who.role == Role::Listener) { j["name"] = who.name; }
         res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
     });
 
+    // SIGN IN. One door for two roles. The owner's account name signs in the owner with the owner's password, exactly as before. With
+    // listeners switched on, ANY OTHER NAME is a listener's chosen handle and the password is the shared listener password. Either way one
+    // password derivation is paid whichever of name and password is wrong (so the two cannot be told apart by time), and a wrong answer is
+    // the one message "wrong user name or password".
     svr.Post("/api/login", [this](const httplib::Request& req, httplib::Response& res) {
         // Requiring JSON is a CSRF defence as much as a parsing convenience: a
         // cross-origin HTML form can only send urlencoded, plain-text or
@@ -3514,7 +3779,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
             return;
         }
 
-        const std::string client = req.remote_addr;
+        const std::string client = clientAddress(req);
         const std::int64_t t = now();
         if (!throttle_.allow(client, t)) {
             res.set_header("Retry-After",
@@ -3535,7 +3800,10 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         }
 
         PasswordRecord record;
+        PasswordRecord listenerRecord;
         std::string expectedUser;
+        bool listenersOn = false;
+        bool secure = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!hasRecord_) {
@@ -3544,9 +3812,65 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
             }
             record = record_;
             expectedUser = cfg_.username;
+            listenersOn = cfg_.listenersEnabled && hasListenerRecord_;
+            listenerRecord = listenerRecord_;
+            secure = tls_ != nullptr;
         }
 
         std::string verifyError;
+        const bool listenerAttempt = listenersOn && user != expectedUser;
+        if (listenerAttempt) {
+            // A BANNED ADDRESS never gets as far as a password: the ban is on the address the connection really came from. (It applies to
+            // listener sign-ins only: a ban can never lock the owner out of their own receiver; the throttle covers the owner's door.)
+            if (room_.isBannedAddress(client)) {
+                room_.audit(AuditKind::RefusedJoin, std::string(), t);
+                deny(res, "this address is not allowed to join", 403);
+                return;
+            }
+            if (!verifyPassword(password, listenerRecord, verifyError)) {
+                throttle_.recordFailure(client, t);
+                deny(res, "wrong user name or password", 401);
+                return;
+            }
+            std::string token;
+            std::string issueError;
+            const JoinResult jr = room_.joinListener(t, user, client, expectedUser, token, issueError);
+            switch (jr) {
+                case JoinResult::Ok:
+                    break;
+                case JoinResult::BadName:
+                    deny(res, "choose a name of 1 to 24 letters, digits, spaces, dots, dashes or underscores", 400);
+                    return;
+                case JoinResult::ReservedName:
+                    deny(res, "that name is not available", 400);
+                    return;
+                case JoinResult::NameTaken:
+                    deny(res, "someone is already listening under that name", 409);
+                    return;
+                case JoinResult::BannedAddress:
+                case JoinResult::BannedName:
+                    deny(res, "you are not allowed to join", 403);
+                    return;
+                case JoinResult::Full:
+                    res.set_header("Retry-After", "30");
+                    deny(res, "the listener limit has been reached; try again later", 503);
+                    return;
+                case JoinResult::Disabled:
+                    deny(res, "wrong user name or password", 401);
+                    return;
+                case JoinResult::Error:
+                    deny(res, "could not create a session (" + issueError + ")", 500);
+                    return;
+            }
+            throttle_.recordSuccess(client);
+            res.set_header("Set-Cookie", std::string(kCookieName) + "=" + token + cookieAttributes(secure));
+            nlohmann::json j;
+            j["ok"] = true;
+            j["role"] = "listener";
+            res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
+            return;
+        }
+
         // verifyLogin, not `user == expectedUser && verifyPassword(...)`: that
         // spelling short-circuits, and answering a wrong user name without
         // paying the derivation makes the two cases tell themselves apart by
@@ -3563,25 +3887,26 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
 
         std::string token;
         std::string issueError;
-        if (!sessions_.issue(t, token, issueError)) {
+        if (!room_.issueOwner(t, token, issueError)) {
             deny(res, "could not create a session (" + issueError + ")", 500);
             return;
         }
         throttle_.recordSuccess(client);
         res.set_header("Set-Cookie", std::string(kCookieName) + "=" + token +
-                                         cookieAttributes());
+                                         cookieAttributes(secure));
         nlohmann::json j;
         j["ok"] = true;
+        j["role"] = "owner";
         res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
     });
 
     svr.Post("/api/logout", [this](const httplib::Request& req, httplib::Response& res) {
         const std::string token = cookieValue(req.get_header_value("Cookie"), kCookieName);
-        sessions_.revoke(token);
+        room_.revoke(token, now());
         // Expire the cookie regardless, so a token this server has never heard
         // of does not linger in the browser.
         res.set_header("Set-Cookie", std::string(kCookieName) + "=" +
-                                         cookieAttributes() +
+                                         cookieAttributes(tls_ != nullptr) +
                                          "; Max-Age=0");
         nlohmann::json j;
         j["ok"] = true;
@@ -3593,7 +3918,10 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
             deny(res, "sign in first");
             return;
         }
-        if (session_) {
+        const Identity who = identify(req, true);
+        // ONLY THE OWNER'S PAGE IS THE KEEP-ALIVE. The engine judges the remote transmit key by this heartbeat, and a listener polling its
+        // own status must never stand in for an owner's page that has frozen with the key down.
+        if (session_ && who.role == Role::Owner) {
             // The page is alive: its keep-alive, and only this - the session's own heartbeat. (The results of what the page posted are
             // collected here too: the status poll is the one request a page keeps making.)
             session_->heartbeat();
@@ -3603,6 +3931,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         if (status_) {
             s = status_();
         }
+        if (who.role == Role::Listener) { redactForListener(s); }
         res.set_content(statusJson(s, [this](std::size_t i) { return haveImage(i); }),
                         "application/json");
     });
@@ -3625,8 +3954,9 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
             deny(res, "sign in first");
             return;
         }
+        const Identity firstWho = identify(req, true);
         const int before = eventListeners_.fetch_add(1, std::memory_order_acq_rel);
-        if (before >= static_cast<int>(WebServer::kMaxEventListeners)) {
+        if (before >= static_cast<int>(streamCap())) {
             eventListeners_.fetch_sub(1, std::memory_order_acq_rel);
             deny(res, "too many live-update listeners", 503);
             return;
@@ -3635,10 +3965,12 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
             std::string token;
             std::string last;
             bool first = true;
+            bool listener = false;
             std::chrono::steady_clock::time_point lastSend{};
         };
         auto st = std::make_shared<Stream>();
         st->token = cookieValue(req.get_header_value("Cookie"), kCookieName);
+        st->listener = firstWho.role == Role::Listener;
         res.set_header("X-Accel-Buffering", "no");
         res.set_chunked_content_provider(
             "text/event-stream",
@@ -3653,9 +3985,11 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                     std::lock_guard<std::mutex> lock(mutex_);
                     d = decision_;
                 }
-                if (d.authRequired && !sessions_.validate(st->token, now())) { return false; }  // signed out, expired or revoked
+                // signed out, expired, kicked or banned: the stream ends. (touch = false: a stream is not the person being active.)
+                if (d.authRequired && identifyToken(st->token, true, false).role == Role::None) { return false; }
                 RadioStatus s;
                 if (status_) { s = status_(); }
+                if (st->listener) { redactForListener(s); }
                 std::string json = statusJson(s, [this](std::size_t i) { return haveImage(i); });
                 const auto t = std::chrono::steady_clock::now();
                 std::string out;
@@ -3696,7 +4030,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         // Claim a slot BEFORE committing to the stream; each listener parks an
         // HTTP worker thread for as long as it listens.
         const int before = listeners_.fetch_add(1, std::memory_order_acq_rel);
-        if (before >= static_cast<int>(WebServer::kMaxAudioListeners)) {
+        if (before >= static_cast<int>(streamCap())) {
             listeners_.fetch_sub(1, std::memory_order_acq_rel);
             deny(res, "too many listeners", 503);
             return;
@@ -3708,12 +4042,30 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         // read_audio is asked to join live: the first read copies nothing and
         // sets the cursor to the stream's present.
         auto cursor = std::make_shared<std::uint64_t>(0);
+        struct AudioGuard {
+            std::string token;
+            bool authRequired = false;
+            std::chrono::steady_clock::time_point checked = std::chrono::steady_clock::now();
+        };
+        auto guard = std::make_shared<AudioGuard>();
+        guard->token = cookieValue(req.get_header_value("Cookie"), kCookieName);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            guard->authRequired = decision_.authRequired;
+        }
 
         res.set_chunked_content_provider(
             "audio/L16;rate=48000;channels=1",
-            [this, cursor](std::size_t /*offset*/, httplib::DataSink& sink) {
+            [this, cursor, guard](std::size_t /*offset*/, httplib::DataSink& sink) {
                 if (!running_.load(std::memory_order_acquire)) {
                     return false;  // server stopping: end the stream cleanly
+                }
+                // A KICK, A BAN, A SIGN-OUT OR A LIMIT ends the audio too, within a quarter of a second (touch = false: listening is not
+                // the person being active, so an abandoned tab's audio does not keep its session alive past the idle limit).
+                const auto nowSteady = std::chrono::steady_clock::now();
+                if (guard->authRequired && nowSteady - guard->checked >= std::chrono::milliseconds(250)) {
+                    guard->checked = nowSteady;
+                    if (identifyToken(guard->token, true, false).role == Role::None) { return false; }
                 }
                 // 100 ms per read. Small enough to keep latency low, large
                 // enough that the per-chunk overhead is irrelevant.
@@ -3822,10 +4174,24 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
             deny(res, "expected a JSON body", 415);
             return;
         }
+        // A LISTENER MAY LOOK AND LISTEN. Every operation is refused for one unless the server switch lets listeners tune, and then
+        // only the tuning fields (frequency, mode, bandwidth) are let through; nothing else is ever opened to a listener (the transmit
+        // key included: it is not a tuning field, and the heartbeat that keeps a key alive is the owner's page alone).
+        const Identity who = identify(req, true);
+        if (who.role == Role::Listener && !room_.config().listenersMayTune) {
+            room_.audit(AuditKind::RefusedOp, who.name, now());
+            deny(res, "listeners can look and listen but cannot control the receiver", 403);
+            return;
+        }
         ControlRequest cr;
         std::string error;
         if (!parseControlRequest(req.body, cr, error)) {
             deny(res, error, 400);
+            return;
+        }
+        if (who.role == Role::Listener && !listenerMayTune(cr)) {
+            room_.audit(AuditKind::RefusedOp, who.name, now());
+            deny(res, "listeners may only tune: frequency, mode and bandwidth", 403);
             return;
         }
         // THE KEY IS THE ONE REQUEST THAT IS NOT SIMPLY QUEUED. Everything
@@ -3876,6 +4242,205 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         res.status = 202;
         nlohmann::json j;
         j["accepted"] = true;
+        res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
+    });
+
+    // THE ROOM: who is here, the owner's note, the optional chat, and the owner's moderation. Everything a person typed is escaped before it
+    // leaves net/web_users.cpp, none of it reaches a file, a log or a report, and a refused operation is audited without its content.
+    svr.Get("/api/room", [this](const httplib::Request& req, httplib::Response& res) {
+        const Identity who = identify(req, true);
+        if (who.role == Role::None) {
+            deny(res, "sign in first");
+            return;
+        }
+        const RoomConfig rc = room_.config();
+        const OwnerNote note = room_.note();
+        nlohmann::json j;
+        j["role"] = who.role == Role::Owner ? "owner" : "listener";
+        if (who.role == Role::Listener) { j["name"] = who.name; }
+        j["listenersEnabled"] = rc.listenersEnabled;
+        j["listeners"] = rc.listenersEnabled ? room_.listenerCount(now()) : 0;
+        j["maxListeners"] = rc.listenersEnabled ? rc.maxListeners : 0;
+        j["mayTune"] = who.role == Role::Owner || (rc.listenersEnabled && rc.listenersMayTune);
+        j["chatEnabled"] = rc.listenersEnabled && rc.chatEnabled;
+        j["chatSeq"] = room_.chatSeq();
+        j["noteSeq"] = note.seq;
+        j["note"] = note.html;   // (escaped)
+        res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
+    });
+
+    svr.Get("/api/chat", [this](const httplib::Request& req, httplib::Response& res) {
+        const Identity who = identify(req, true);
+        if (who.role == Role::None) {
+            deny(res, "sign in first");
+            return;
+        }
+        const RoomConfig rc = room_.config();
+        std::uint64_t since = 0;
+        if (req.has_param("since")) {
+            try { since = std::stoull(req.get_param_value("since")); } catch (const std::exception&) { since = 0; }
+        }
+        nlohmann::json j;
+        j["enabled"] = rc.listenersEnabled && rc.chatEnabled;
+        j["seq"] = room_.chatSeq();
+        nlohmann::json lines = nlohmann::json::array();
+        if (rc.listenersEnabled && rc.chatEnabled) {
+            for (const ChatLine& l : room_.chatSince(since)) {
+                nlohmann::json o;
+                o["seq"] = l.seq;
+                o["t"] = l.t;
+                o["name"] = l.name;
+                o["owner"] = l.owner;
+                o["html"] = l.html;   // escaped: the page may put it in as it is
+                lines.push_back(std::move(o));
+            }
+        }
+        j["lines"] = std::move(lines);
+        res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
+    });
+
+    svr.Post("/api/chat", [this](const httplib::Request& req, httplib::Response& res) {
+        const Identity who = identify(req, true);
+        if (who.role == Role::None) {
+            deny(res, "sign in first");
+            return;
+        }
+        if (req.get_header_value("Content-Type").rfind("application/json", 0) != 0) {
+            deny(res, "expected a JSON body", 415);
+            return;
+        }
+        std::string text;
+        try {
+            const nlohmann::json j = nlohmann::json::parse(req.body);
+            text = j.value("text", std::string());
+        } catch (const std::exception&) {
+            deny(res, "malformed request", 400);
+            return;
+        }
+        switch (room_.postChat(who, text, now())) {
+            case ChatResult::Ok: {
+                nlohmann::json j;
+                j["ok"] = true;
+                res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
+                return;
+            }
+            case ChatResult::Disabled: deny(res, "chat is off", 403); return;
+            case ChatResult::Empty: deny(res, "nothing to send", 400); return;
+            case ChatResult::TooLong: deny(res, "that message is too long (200 bytes at most)", 413); return;
+            case ChatResult::BadText: deny(res, "that message is not valid text", 400); return;
+            case ChatResult::RateLimited:
+                res.set_header("Retry-After", std::to_string(kChatWindowSeconds));
+                deny(res, "slow down: a few messages every ten seconds", 429);
+                return;
+        }
+    });
+
+    // THE OWNER'S VIEW: the live listeners (with the addresses they came from: this is the one place an address is shown, to the owner, live),
+    // the bans and the audit trail.
+    svr.Get("/api/admin/state", [this](const httplib::Request& req, httplib::Response& res) {
+        const Identity who = identify(req, true);
+        if (who.role == Role::None) {
+            deny(res, "sign in first");
+            return;
+        }
+        if (who.role != Role::Owner) {
+            room_.audit(AuditKind::RefusedOp, who.name, now());
+            deny(res, "only the owner can do that", 403);
+            return;
+        }
+        std::uint64_t since = 0;
+        if (req.has_param("since")) {
+            try { since = std::stoull(req.get_param_value("since")); } catch (const std::exception&) { since = 0; }
+        }
+        nlohmann::json j;
+        nlohmann::json ls = nlohmann::json::array();
+        for (const ListenerInfo& l : room_.listeners(now())) {
+            nlohmann::json o;
+            o["name"] = l.name;
+            o["address"] = l.address;
+            o["signedInSeconds"] = l.signedInSeconds;
+            o["idleSeconds"] = l.idleSeconds;
+            ls.push_back(std::move(o));
+        }
+        j["listeners"] = std::move(ls);
+        j["bannedNames"] = room_.bannedNames();
+        j["bannedAddresses"] = room_.bannedAddresses();
+        nlohmann::json au = nlohmann::json::array();
+        for (const AuditEvent& e : room_.auditSince(since)) {
+            nlohmann::json o;
+            o["seq"] = e.seq;
+            o["t"] = e.t;
+            o["kind"] = auditWord(e.kind);
+            o["name"] = e.name;
+            au.push_back(std::move(o));
+        }
+        j["audit"] = std::move(au);
+        res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
+    });
+
+    svr.Post("/api/admin", [this](const httplib::Request& req, httplib::Response& res) {
+        const Identity who = identify(req, true);
+        if (who.role == Role::None) {
+            deny(res, "sign in first");
+            return;
+        }
+        if (who.role != Role::Owner) {
+            room_.audit(AuditKind::RefusedOp, who.name, now());
+            deny(res, "only the owner can do that", 403);
+            return;
+        }
+        if (req.get_header_value("Content-Type").rfind("application/json", 0) != 0) {
+            deny(res, "expected a JSON body", 415);
+            return;
+        }
+        std::string op, name, address, text;
+        try {
+            const nlohmann::json j = nlohmann::json::parse(req.body);
+            op = j.value("op", std::string());
+            name = j.value("name", std::string());
+            address = j.value("address", std::string());
+            text = j.value("text", std::string());
+        } catch (const std::exception&) {
+            deny(res, "malformed request", 400);
+            return;
+        }
+        const std::int64_t t = now();
+        ModResult m;
+        bool ok = true;
+        if (op == "kick") {
+            m = room_.kick(name, t);
+            ok = m.ok;
+        } else if (op == "ban") {
+            // Bans the NAME and, when that listener is on, the ADDRESS it came from.
+            std::string addr;
+            for (const ListenerInfo& l : room_.listeners(t)) {
+                if (foldCase(l.name) == foldCase(name)) { addr = l.address; }
+            }
+            m = room_.banName(name, t);
+            ok = m.ok;
+            if (ok && !addr.empty()) { m.ended += room_.banAddress(addr, t).ended; }
+        } else if (op == "banAddress") {
+            m = room_.banAddress(address, t);
+            ok = m.ok;
+        } else if (op == "unban") {
+            ok = room_.unbanName(name, t);
+        } else if (op == "unbanAddress") {
+            ok = room_.unbanAddress(address, t);
+        } else if (op == "note") {
+            const ChatResult r = room_.setNote(text, t);
+            if (r == ChatResult::TooLong) { deny(res, "that note is too long (200 bytes at most)", 413); return; }
+            if (r != ChatResult::Ok) { deny(res, r == ChatResult::Disabled ? "listeners are off" : "that note is not valid text", 400); return; }
+        } else {
+            deny(res, "unknown operation", 400);
+            return;
+        }
+        if (!ok) {
+            deny(res, "could not do that (no such entry, a bad name, or the list is full)", 400);
+            return;
+        }
+        nlohmann::json j;
+        j["ok"] = true;
+        j["ended"] = m.ended;
         res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
     });
 
@@ -3954,6 +4519,12 @@ bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {
             std::string parseError;
             hasRecord_ = PasswordRecord::parse(cfg.passwordRecord, record_, parseError);
         }
+        hasListenerRecord_ = false;
+        listenerRecord_ = PasswordRecord{};
+        if (cfg.listenersEnabled && !cfg.listenerPasswordRecord.empty()) {
+            std::string parseError;
+            hasListenerRecord_ = PasswordRecord::parse(cfg.listenerPasswordRecord, listenerRecord_, parseError);
+        }
     }
     if (!d.allowed()) {
         error = d.reason;
@@ -3963,10 +4534,42 @@ bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {
     // Sessions do not survive a restart: the binding, and possibly the
     // password, may have just changed, and anyone holding a token should have
     // to prove themselves against the new configuration.
-    sessions_.revokeAll();
+    {
+        RoomConfig rc;
+        rc.listenersEnabled = cfg.listenersEnabled;
+        rc.maxListeners = static_cast<std::size_t>(std::max(cfg.maxListeners, 1));
+        rc.idleSeconds = cfg.listenerIdleSeconds;
+        rc.sessionSeconds = cfg.listenerSessionSeconds;
+        rc.listenersMayTune = cfg.listenersMayTune;
+        rc.chatEnabled = cfg.chatEnabled;
+        room_.configure(rc);   // (empties the room: sessions, bans, chat, note and audit never survive a restart)
+    }
     throttle_.clear();
 
+    // HTTPS: the certificate is made or found BEFORE anything is bound, so a certificate that cannot be had fails the start cleanly.
+    std::unique_ptr<TlsTerminator> tls;
+    if (cfg.tlsEnabled) {
+        tls = std::make_unique<TlsTerminator>();
+        TlsOptions to;
+        to.thumbprint = cfg.tlsCertThumbprint;
+        to.certFile = cfg.tlsCertFile;
+        to.keyName = cfg.tlsKeyName;
+        tls->setTimeouts(tlsTimeouts_);
+        tls->setMaxConnections(tlsMaxTotal_, tlsMaxPerAddress_);
+        if (!tls->prepare(to, error)) {
+            error = "HTTPS: " + error;
+            return false;
+        }
+    }
+
     svr_ = std::make_unique<httplib::Server>();
+    if (cfg.listenersEnabled) {
+        // Every listener may hold an audio stream and a live-update stream, each parking a worker: size the pool for them.
+        const std::size_t cap = static_cast<std::size_t>(std::max(cfg.maxListeners, 1));
+        const std::size_t base = std::max<std::size_t>(8, std::thread::hardware_concurrency());
+        const std::size_t most = base + 2 * (cap + 2) + 8;
+        svr_->new_task_queue = [base, most]() { return new httplib::ThreadPool(base, most); };
+    }
     // WITHOUT THIS, A THROWING HANDLER IS AN EMPTY 500 AND NOTHING ELSE —
     // no message, no route, nothing in any log. That is the difference
     // between a two-minute diagnosis and an afternoon: a serialisation
@@ -4004,7 +4607,20 @@ bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {
     svr_->set_write_timeout(kClientIoTimeout);
     installRoutes(*svr_);
 
-    const int port = svr_->bind_to_port(d.effectiveAddress.c_str(), cfg.port) ? cfg.port : -1;
+    // With HTTPS the plain server is bound to THIS MACHINE ONLY, on a port the system picks: nothing off the machine can reach it, so plain
+    // HTTP is never offered to the network while HTTPS is on. The public port belongs to the terminator, started last.
+    int port = -1;
+    if (tls) {
+        port = svr_->bind_to_any_port("127.0.0.1");
+        if (port < 0) {
+            error = "could not bind the private loopback port the HTTPS terminator relays to";
+            svr_.reset();
+            return false;
+        }
+        privatePort_ = port;
+    } else {
+        port = svr_->bind_to_port(d.effectiveAddress.c_str(), cfg.port) ? cfg.port : -1;
+    }
     if (port < 0) {
         error = "could not bind " + d.effectiveAddress + ":" + std::to_string(cfg.port) +
                 " — another program is probably already using that port";
@@ -4048,6 +4664,17 @@ bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {
         idleThread_ = std::thread([this]() { idleLoop(); });
     }
     svr_->wait_until_ready();
+    if (tls) {
+        tls_ = std::move(tls);
+        std::string tlsError;
+        if (!tls_->start(d.effectiveAddress, cfg.port, privatePort_, tlsError)) {
+            error = tlsError;
+            stop();
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        boundPort_ = tls_->boundPort();
+    }
     return true;
 }
 
@@ -4061,6 +4688,9 @@ void WebServer::Impl::stop() {
     // Wake the live-update streams: they sleep on this, and end at once when they see running_ is false.
     { std::lock_guard<std::mutex> lk(eventMutex_); }
     eventCv_.notify_all();
+    // THE TERMINATOR FIRST: closing the public connections ends the relays and with them the plain server's workers that were parked on
+    // them, so the plain server's own stop below finds nothing left to wait for.
+    if (tls_) { tls_->stop(); }
     if (svr_) {
         svr_->stop();
     }
@@ -4076,7 +4706,9 @@ void WebServer::Impl::stop() {
         idleThread_.join();
     }
     svr_.reset();
-    sessions_.revokeAll();
+    tls_.reset();
+    privatePort_ = -1;
+    room_.clear();
     // THE ENGINE SESSION CLOSES HERE, with the last thread of the server gone (so no handler is using it) and the cookie sessions revoked.
     // THIS IS WHAT RELEASES THE TRANSMIT KEY when the server goes away while a browser still holds it: the table opens the key a closed
     // session held at the start of its next pass. It replaces the release this stop used
@@ -4115,6 +4747,12 @@ BindDecision WebServer::decision() const { return impl_->decision(); }
 std::size_t WebServer::sessionCount() const { return impl_->sessionCount(); }
 void WebServer::revokeAllSessions() { impl_->revokeAllSessions(); }
 std::size_t WebServer::audioListeners() const { return impl_->audioListeners(); }
+WebRoom& WebServer::room() { return impl_->room(); }
+std::size_t WebServer::listenerCount() const { return impl_->listenerCount(); }
+WebServer::TlsInfo WebServer::tlsInfo() const { return impl_->tlsInfo(); }
+bool WebServer::setTlsLimits(const TlsTimeouts& t, std::size_t total, std::size_t perAddress) {
+    return impl_->setTlsLimits(t, total, perAddress);
+}
 std::size_t WebServer::eventListeners() const { return impl_->eventListeners(); }
 void WebServer::setImages(std::vector<WebImage> images) {
     impl_->setImages(std::move(images));

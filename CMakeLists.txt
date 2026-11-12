@@ -446,6 +446,8 @@ if(WIN32)
     # contract (cascade.exe + SoapySDR.dll) does not change.
     # newdev: the one-click RTL-SDR driver install (core/winusb_install.cpp, 0.99.88; master's line, on this branch's target).
     target_link_libraries(cascade_engine PUBLIC winusb setupapi cfgmgr32 newdev)
+    # Schannel (SSPI), CNG key storage and the certificate store: the web page's HTTPS (net/web_tls.cpp, feat/web-secure). All inbox; no TLS library of ours.
+    target_link_libraries(cascade_engine PUBLIC secur32 crypt32 ncrypt)
     # The multimedia timer (timeBeginPeriod): the engine's control thread asks for a 1 ms tick so its period and floor mean what they say.
     target_link_libraries(cascade_engine PUBLIC winmm)
     # Media Foundation: Windows' own MP3 encoder for the patch page's MP3

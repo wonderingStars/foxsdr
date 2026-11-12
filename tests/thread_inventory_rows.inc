@@ -109,6 +109,7 @@ const Row kRows[] = {
     {"src/net/webhook.hpp", 1, 0, 0, 0, "",
      "the webhook sender's worker (bounded queue, retries with back-off, every wait a short slice; stop() joins it) - NOT COVERED by this batch (a known gap): nothing starts it yet (off by default); the wiring that does gives it a ThreadSpec heartbeat"},
     {"src/net/web_server.cpp", 2, 0, 2, 2, "kThreadWebIdle,kThreadWebListen", ""},
+    {"src/net/web_tls.cpp", 2, 0, 2, 2, "kThreadWebTlsAccept,kThreadWebTlsConn", ""},
     {"src/source/extio_client.cpp", 2, 0, 0, 0, "",
      "the ExtIO client's pipe reader (a blocking read that ends when the helper's end closes) and the one-shot wait for the helper to connect; both bounded by the client's own timeouts and ended by killing the helper - NOT COVERED by this batch (a known gap; nothing wires it to the engine yet)"},
     {"src/source/airspy_source.cpp", 1, 0, 0, 0, "", R_DRIVER},

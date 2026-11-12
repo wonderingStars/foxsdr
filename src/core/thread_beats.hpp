@@ -145,6 +145,8 @@ inline constexpr ThreadSpec kThreadTransmit{"transmit", Kind::Transmit};
 inline constexpr ThreadSpec kThreadKeeper{"keeper", Kind::Keeper};
 inline constexpr ThreadSpec kThreadWebListen{"web-listen", Kind::Server};
 inline constexpr ThreadSpec kThreadWebIdle{"web-idle", Kind::Server};
+inline constexpr ThreadSpec kThreadWebTlsAccept{"web-tls-accept", Kind::Server};   // the HTTPS terminator's accept loop (net/web_tls.cpp)
+inline constexpr ThreadSpec kThreadWebTlsConn{"web-tls-conn", Kind::Server};       // one relayed HTTPS connection
 inline constexpr ThreadSpec kThreadCatAccept{"cat-accept", Kind::Server};
 inline constexpr ThreadSpec kThreadCatClient{"cat-client", Kind::Server};
 inline constexpr ThreadSpec kThreadTciAccept{"tci-accept", Kind::Server};
@@ -169,6 +171,7 @@ inline constexpr const ThreadSpec* kAllThreads[] = {
     &kThreadDsp,        &kThreadSource,      &kThreadPatchSource,  &kThreadTransmit,      &kThreadKeeper,
     &kThreadWebListen,  &kThreadWebIdle,     &kThreadCatAccept,    &kThreadCatClient,     &kThreadTciAccept,    &kThreadTciClient,     &kThreadUdpAudio,
     &kThreadImageFeed,
+    &kThreadWebTlsAccept, &kThreadWebTlsConn,
     &kThreadServerHost, &kThreadPasswordHash, &kThreadDiskJob,     &kThreadConfigWrite,   &kThreadRecordOpen,
     &kThreadLinkPoll,   &kThreadDriverInstall, &kThreadGps,        &kThreadDeviceScan,    &kThreadDeviceOpen,
     &kThreadPatchOpen,  &kThreadSoundCardScan, &kThreadSoundCardOpen,

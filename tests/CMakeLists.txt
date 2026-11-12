@@ -341,7 +341,7 @@ foreach(src ${CASCADE_TESTS})
         # The helper process and the stand-in drivers, built first; the test is handed the helper and the stand-ins' directory.
         add_dependencies(${name} ${CASCADE_EXTIO_HELPER_TARGET} ${CASCADE_EXTIO_STANDINS})
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:${CASCADE_EXTIO_HELPER_TARGET}>" "${CMAKE_CURRENT_BINARY_DIR}/fixture_extio/$<CONFIG>")
-    elseif(name STREQUAL "test_font_assets")
+    elseif(name STREQUAL "test_font_assets" OR name STREQUAL "test_web_users" OR name STREQUAL "test_web_tls" OR name STREQUAL "test_web_secure")
         # Compares something compiled INTO the binary against the files it was
         # generated from - the typefaces against third_party/fonts - so it
         # needs the repository root on its command line.
@@ -1377,7 +1377,7 @@ set(CASCADE_FENCE_DENIED_PROBES
     # src/net, denied whole by stage 5f (the servers are the engine's): every header of the directory, one probe each
     net/cat_protocol.hpp net/cat_server.hpp net/control_ops.hpp net/status_compose.hpp net/web_audio.hpp net/web_auth.hpp
     net/web_control.hpp net/web_policy.hpp net/web_server.hpp net/web_session.hpp
-    net/ws_frame.hpp net/tci_protocol.hpp net/tci_server.hpp net/udp_audio.hpp)
+    net/ws_frame.hpp net/tci_protocol.hpp net/tci_server.hpp net/udp_audio.hpp net/web_users.hpp net/web_tls.hpp)
 function(_cascade_fence_probe_source out_var id body)
     set(_src "${CASCADE_FENCE_PROBE_DIR}/${id}.cpp")
     set(_old "")

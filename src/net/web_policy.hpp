@@ -78,6 +78,30 @@ struct WebServerConfig {
     // password has been set. A plaintext password is never stored here or
     // anywhere else.
     std::string passwordRecord;
+
+    // --- HTTPS (net/web_tls.hpp). OFF by default. ----------------------------------------------------------------------------------------
+    // With it on the public port speaks TLS (Windows' own Schannel, TLS 1.2 at least) and the plain server listens on 127.0.0.1 only, on a
+    // private port: plain HTTP is never offered to the network while HTTPS is on.
+    bool tlsEnabled = false;
+    // The certificate to present, as the 40 hex digits of its SHA-1 thumbprint (what Windows' certificate manager shows), found in the
+    // current user's or the machine's "Personal" store and needing its private key. EMPTY = the self-signed certificate this program makes.
+    std::string tlsCertThumbprint;
+    // The self-signed certificate (public part only) and the name of its key in the user's Windows key store. With tlsCertFile empty the
+    // key lives in memory only and a new certificate - a new fingerprint - is made at every start; with a path, the key is kept (not
+    // exportable) and the certificate reused until it expires.
+    std::string tlsCertFile;
+    std::string tlsKeyName = "FoxSDR-Web-TLS";
+
+    // --- Listeners (net/web_users.hpp). OFF by default. ---------------------------------------------------------------------------------
+    // A LISTENER signs in with a name of its own choosing and this ONE shared password (a serialized PasswordRecord, as above) and may only
+    // look and listen. The owner's account above is the only one that can control the receiver.
+    bool listenersEnabled = false;
+    std::string listenerPasswordRecord;
+    int maxListeners = 4;                 // 1 .. 32
+    int listenerIdleSeconds = 15 * 60;    // 0 = no limit
+    int listenerSessionSeconds = 8 * 3600;  // 0 = no limit (a cookie never outlives 12 hours either way)
+    bool listenersMayTune = false;        // the one switch that lets a listener tune (frequency, mode, bandwidth)
+    bool chatEnabled = false;             // text chat between the people on the page; OFF, and never stored
 };
 
 enum class BindVerdict {
@@ -88,6 +112,10 @@ enum class BindVerdict {
     RefusedEmptyUsername,     // a credential with no account name is unusable
     RefusedPasswordRequired,  // off-machine bind, no password set (rule 1)
     RefusedPasswordUnusable,  // off-machine bind, password record corrupt (rule 2)
+    RefusedTlsUnavailable,    // HTTPS asked for on a platform that has no built-in TLS here (not Windows)
+    RefusedTlsCertificate,    // the certificate thumbprint is not 40 hex digits
+    RefusedListenerPassword,  // listeners on, but the listener password is missing or unreadable, or there is no owner password
+    RefusedListenerLimits,    // the listener cap or a time limit is outside its range
 };
 
 struct BindDecision {
