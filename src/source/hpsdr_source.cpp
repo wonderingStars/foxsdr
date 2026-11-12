@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <set>
@@ -68,7 +69,10 @@ bool discoverHpsdr(const std::string& host, std::uint16_t port, std::chrono::mil
     if (s == kBad) { error = "could not open a UDP socket"; return false; }
     sockaddr_in me{};
     me.sin_family = AF_INET;
-    me.sin_addr.s_addr = ::htonl(INADDR_ANY);
+    // A loopback target (a test stand-in, or a radio on this machine) is reached over loopback only: bind
+    // there, so nothing listens on a wider address (a wider bind raises the firewall prompt). The broadcast
+    // search needs the wildcard address.
+    me.sin_addr.s_addr = ::htonl(host.rfind("127.", 0) == 0 ? INADDR_LOOPBACK : INADDR_ANY);
     if (::bind(s, reinterpret_cast<sockaddr*>(&me), sizeof(me)) != 0) {
         closeS(s);
         error = "could not bind a UDP socket";
@@ -158,8 +162,37 @@ struct HpsdrSource::Rx {
     std::vector<std::uint8_t> buf = std::vector<std::uint8_t>(4096);
     std::vector<std::complex<float>> out;
 
+    // The built-in protocol-1 half (used when no decoder was injected): the decoder, and the sender of the
+    // command-and-control frames. p1Mutex guards the decoder's tally against the control thread's reads;
+    // sendMutex serialises the sender (setters and the periodic refresh) and the socket writes.
+    std::mutex p1Mutex;
+    hp::Protocol1Decoder p1;
+    std::mutex sendMutex;
+    hp::ControlSender sender;
+    bool sending = false;  // between Start and Stop in built-in mode
+    std::chrono::steady_clock::time_point nextRefresh{};
+    std::atomic<std::uint64_t> controlPackets{0};
+    static constexpr int kRefreshMs = 100;  // a choice: the document names no interval
+
+    // One full cycle of the settings: every setting goes out once. Caller holds sendMutex.
+    bool sendCycleLocked() {
+        const std::size_t n = sender.packetsPerCycle();
+        for (std::size_t i = 0; i < n; ++i) {
+            const std::vector<std::uint8_t> pk = sender.nextPacket();
+            if (!udp->sendAll(pk.data(), pk.size())) { return false; }
+            controlPackets.fetch_add(1, std::memory_order_relaxed);
+        }
+        nextRefresh = std::chrono::steady_clock::now() + std::chrono::milliseconds(kRefreshMs);
+        return true;
+    }
+    void refreshIfDue() {
+        std::lock_guard<std::mutex> lk(sendMutex);
+        if (sending && std::chrono::steady_clock::now() >= nextRefresh) { sendCycleLocked(); }
+    }
+
     bool pump(NetLink& link) {
         std::size_t got = 0;
+        refreshIfDue();
         if (!udp->recvSome(buf.data(), buf.size(), got)) {
             if (!link.run.load(std::memory_order_relaxed)) { return false; }
             const char* e = udp->lastError();
@@ -195,9 +228,14 @@ struct HpsdrSource::Rx {
             std::lock_guard<std::mutex> lk(decMutex);
             dec = decoder;
         }
-        if (!dec) { bad.fetch_add(1, std::memory_order_relaxed); return true; }
         out.clear();
-        if (!dec->decode(p.frames, out)) { bad.fetch_add(1, std::memory_order_relaxed); return true; }
+        if (!dec) {  // the built-in protocol-1 decoder
+            std::lock_guard<std::mutex> lk(p1Mutex);
+            if (!p1.decodePacket(p.frames, out)) { bad.fetch_add(1, std::memory_order_relaxed); return true; }
+        } else if (!dec->decode(p.frames, out)) {
+            bad.fetch_add(1, std::memory_order_relaxed);
+            return true;
+        }
         if (!out.empty()) { link.pushSamples(out.data(), out.size()); }
         return true;
     }
@@ -236,11 +274,37 @@ bool HpsdrSource::open(const std::string& args) {
     std::string wantMac = argValue(args, "mac");
     for (char& c : wantMac) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
 
+    // board=metis|hermes|griffin|angelia|orion|hermes_lite: the board the user expects. A radio that
+    // answers as another board is refused (a wrong board id), not used.
+    std::string wantBoard = argValue(args, "board");
+    for (char& c : wantBoard) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+    int wantBoardId = -1;
+    if (!wantBoard.empty()) {
+        for (int id = 0; id < 256 && wantBoardId < 0; ++id) {
+            std::string n = hp::boardName(static_cast<std::uint8_t>(id));
+            for (char& c : n) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+            if (n != "unknown board" && n == wantBoard) { wantBoardId = id; }
+        }
+        if (wantBoardId < 0) {
+            setError("board= must be metis, hermes, griffin, angelia, orion or hermes_lite");
+            return false;
+        }
+    }
+
     std::vector<HpsdrDevice> found;
     if (!discoverHpsdr(host, port, std::chrono::milliseconds(timeoutMs_), found, err)) { setError(err); return false; }
     const HpsdrDevice* chosen = nullptr;
+    std::size_t boardMismatch = 0;
     for (const HpsdrDevice& d : found) {
-        if (wantMac.empty() || d.reply.macText() == wantMac) { chosen = &d; break; }
+        if (!wantMac.empty() && d.reply.macText() != wantMac) { continue; }
+        if (wantBoardId >= 0 && d.reply.boardId != wantBoardId) { ++boardMismatch; continue; }
+        chosen = &d;
+        break;
+    }
+    if (chosen == nullptr && boardMismatch > 0) {
+        setError("the HPSDR radio that answered is not the " + wantBoard + " that was asked for (it said " +
+                 hp::boardName(found.front().reply.boardId) + ")");
+        return false;
     }
     if (chosen == nullptr) {
         setError(found.empty() ? "no HPSDR radio answered the discovery request"
@@ -249,7 +313,8 @@ bool HpsdrSource::open(const std::string& args) {
     }
     dev_ = *chosen;
     // One socket for Start, Stop and the data: the device sends to the address and port the Start came from.
-    std::unique_ptr<UdpTransport> u = UdpTransport::bindLocal("0.0.0.0", 0, std::chrono::milliseconds(kPollMs), err);
+    std::unique_ptr<UdpTransport> u = UdpTransport::bindLocal(dev_.ip.rfind("127.", 0) == 0 ? "127.0.0.1" : "0.0.0.0", 0,
+                                                                       std::chrono::milliseconds(kPollMs), err);
     if (!u) { setError(err); return false; }
     if (!u->connectTo(dev_.ip, dev_.port)) { setError(u->lastError()); return false; }
     udp_ = std::shared_ptr<UdpTransport>(u.release());
@@ -258,6 +323,11 @@ bool HpsdrSource::open(const std::string& args) {
     rx->udp = udp_;
     rx->decoder = decoder_;
     rx->silentLimit = std::max(3, timeoutMs_ / kPollMs);
+    rx->p1.configure(1, 1, settings_.rateHz);
+    {
+        std::string why;
+        rx->sender.set(settings_, why);
+    }
     rx_ = rx;
     if (!beginReader([rx](NetLink& l) { return rx->pump(l); }, [rx]() { rx->udp->shutdown(); }, rx)) {
         rx_.reset();
@@ -291,10 +361,6 @@ bool HpsdrSource::start() {
     std::lock_guard<std::mutex> lk(mutex_);
     if (!isOpen() || !rx_) { setError("start() called with no HPSDR radio open"); return false; }
     if (faulted()) { return false; }
-    if (!decoder_) {
-        setError("HPSDR receive is not available: the layout of the 512-byte frames is not known to this build");
-        return false;
-    }
     if (active_) { return true; }
     {
         std::lock_guard<std::mutex> tl(rx_->trackMutex);
@@ -308,12 +374,34 @@ bool HpsdrSource::start() {
         return false;
     }
     active_ = true;
+    if (!decoder_) {  // built-in mode: the settings go to the radio right behind the Start
+        std::lock_guard<std::mutex> sl(rx_->sendMutex);
+        std::string why;
+        if (!rx_->sender.set(settings_, why)) { setError(why); active_ = false; return false; }
+        rx_->sender.restart();  // the PC's sequence number restarts at zero at each Start
+        {
+            std::lock_guard<std::mutex> pl(rx_->p1Mutex);
+            rx_->p1.configure(1, 1, settings_.rateHz);
+            rx_->p1.resetTally();
+        }
+        rx_->sending = true;
+        if (!rx_->sendCycleLocked()) {
+            rx_->sending = false;
+            setError(std::string("could not send the control frames: ") + udp_->lastError());
+            active_ = false;
+            return false;
+        }
+    }
     return startKeeping();
 }
 
 void HpsdrSource::stop() {
     std::lock_guard<std::mutex> lk(mutex_);
     stopKeeping();
+    if (rx_) {
+        std::lock_guard<std::mutex> sl(rx_->sendMutex);
+        rx_->sending = false;
+    }
     if (active_ && udp_) {
         const std::vector<std::uint8_t> cmd = hp::buildStartStop(hp::kStopAll);
         udp_->sendAll(cmd.data(), cmd.size());
@@ -323,22 +411,106 @@ void HpsdrSource::stop() {
 
 double HpsdrSource::sampleRateHz() const {
     std::lock_guard<std::mutex> lk(mutex_);
-    return decoder_ ? decoder_->sampleRateHz() : 0.0;
+    return decoder_ ? decoder_->sampleRateHz() : static_cast<double>(settings_.rateHz);
 }
 
-bool HpsdrSource::setSampleRateHz(double) {
-    setError("setting the HPSDR sample rate is not available: it is set inside the 512-byte frames, whose layout is not known to this build");
-    return false;
+// Applies new settings: stored always, sent at once when streaming in built-in mode. Caller holds mutex_.
+bool HpsdrSource::applySettingsLocked(const hp::ControlSettings& next) {
+    std::string why;
+    if (!rx_) {  // not open: validate and keep for open()
+        why = hp::validateSettings(next);
+        if (!why.empty()) { setError(why); return false; }
+        settings_ = next;
+        return true;
+    }
+    std::lock_guard<std::mutex> sl(rx_->sendMutex);
+    if (!rx_->sender.set(next, why)) { setError(why); return false; }
+    settings_ = next;
+    {
+        std::lock_guard<std::mutex> pl(rx_->p1Mutex);
+        rx_->p1.configure(1, 1, next.rateHz);
+    }
+    if (active_ && !decoder_ && rx_->sending && !rx_->sendCycleLocked()) {
+        setError(std::string("could not send the control frames: ") + udp_->lastError());
+        return false;
+    }
+    return true;
 }
 
-bool HpsdrSource::setCenterFrequencyHz(double) {
-    setError("tuning an HPSDR radio is not available: the frequency is set inside the 512-byte frames, whose layout is not known to this build");
-    return false;
+bool HpsdrSource::setSampleRateHz(double hz) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (decoder_) {
+        setError("setting the HPSDR sample rate is not available with an injected frame decoder");
+        return false;
+    }
+    if (!std::isfinite(hz) || hz != std::floor(hz) || hz < 0.0 || hz > 1.0e9) {
+        setError("the HPSDR sample rate must be 48000, 96000, 192000 or 384000 Hz");
+        return false;
+    }
+    hp::ControlSettings next = settings_;
+    next.rateHz = static_cast<int>(hz);
+    return applySettingsLocked(next);
+}
+
+double HpsdrSource::centerFrequencyHz() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return static_cast<double>(settings_.rxFreqHz[0]);
+}
+
+bool HpsdrSource::setCenterFrequencyHz(double hz) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (decoder_) {
+        setError("tuning an HPSDR radio is not available with an injected frame decoder");
+        return false;
+    }
+    if (!std::isfinite(hz) || hz < 0.0 || hz > 4294967295.0) {
+        setError("the HPSDR frequency must be 0 to 4294967295 Hz (a 32-bit value in whole hertz)");
+        return false;
+    }
+    hp::ControlSettings next = settings_;
+    next.rxFreqHz[0] = static_cast<std::uint32_t>(std::llround(hz));
+    return applySettingsLocked(next);
+}
+
+namespace {
+// The document names the input attenuator for Hermes and Angelia only ("Hermes/Angelia Attenuator enable").
+bool boardHasAttenuator(std::uint8_t id) { return id == 0x01 || id == 0x04; }
+constexpr const char* kAttenuator = "Attenuator";
+}  // namespace
+
+std::vector<GainInfo> HpsdrSource::gains() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (decoder_ || !isOpen() || !boardHasAttenuator(dev_.reply.boardId)) { return {}; }
+    return {GainInfo{kAttenuator, 0.0, 31.0, 1.0}};
+}
+
+bool HpsdrSource::setGainDb(const std::string& name, double db) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (name != kAttenuator || decoder_ || !isOpen() || !boardHasAttenuator(dev_.reply.boardId)) {
+        setError("this HPSDR radio has no gain control called " + name);
+        return false;
+    }
+    if (!std::isfinite(db) || db < 0.0 || db > 31.0) {
+        setError("the HPSDR attenuator must be 0 to 31 dB");
+        return false;
+    }
+    hp::ControlSettings next = settings_;
+    next.attenuatorDb = static_cast<int>(std::lround(db));
+    next.attenuatorEnable = next.attenuatorDb > 0;
+    return applySettingsLocked(next);
+}
+
+double HpsdrSource::gainDb(const std::string& name) const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return name == kAttenuator && settings_.attenuatorEnable ? static_cast<double>(settings_.attenuatorDb) : 0.0;
 }
 
 std::vector<double> HpsdrSource::supportedSampleRatesHz() const {
     std::lock_guard<std::mutex> lk(mutex_);
-    return decoder_ ? std::vector<double>{decoder_->sampleRateHz()} : std::vector<double>{};
+    if (decoder_) { return {decoder_->sampleRateHz()}; }
+    std::vector<double> v;
+    for (const int r : hp::supportedRates()) { v.push_back(static_cast<double>(r)); }
+    return v;
 }
 
 HpsdrDevice HpsdrSource::device() const {
@@ -358,6 +530,18 @@ std::uint64_t HpsdrSource::packetsLate() const {
     if (!rx_) { return 0; }
     std::lock_guard<std::mutex> tl(rx_->trackMutex);
     return rx_->tracker.late();
+}
+
+hp::StreamTally HpsdrSource::frameTally() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (!rx_) { return hp::StreamTally{}; }
+    std::lock_guard<std::mutex> pl(rx_->p1Mutex);
+    return rx_->p1.tally();
+}
+
+std::uint64_t HpsdrSource::controlPacketsSent() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return rx_ ? rx_->controlPackets.load() : 0;
 }
 
 std::uint64_t HpsdrSource::badPackets() const {
