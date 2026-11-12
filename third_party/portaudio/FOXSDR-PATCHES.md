@@ -1,7 +1,7 @@
 # FoxSDR patches to the vendored PortAudio
 
 PortAudio is vendored at commit `147dd722548358763a8b649b3e4b41dfffbcfbb6`
-(`third_party/THIRD_PARTY.md`) with the one change listed here. It is fenced in
+(`third_party/THIRD_PARTY.md`) with the changes listed here. They are fenced in
 the source by a `FOXSDR PATCH` comment naming it, so `grep -rn "FOXSDR PATCH"
 third_party/portaudio/src` finds every changed line. Anything not fenced is
 upstream at that commit, byte for byte (apart from line endings, which follow
@@ -99,3 +99,34 @@ platform) and goes red against plain upstream. The caller's half of the fix
    patch, this entry, the fence, the `THIRD_PARTY.md` sentence and the test.
 3. Otherwise add the one `PA_UNLESS( maxPeriods > 0, paInternalError );` line
    after `assert( maxPeriods > 1 );` and run `test_portaudio_alsa_periods`.
+
+## open-stream-list-lock - a lock around PortAudio's list of open streams
+
+**File:** `src/common/pa_front.c` (all platforms). `AddOpenStream`, `RemoveOpenStream` and `CloseOpenStreams` take a small lock
+(`SRWLOCK` on Windows, a static `pthread_mutex_t` elsewhere, both statically initialised and never destroyed) for the list
+operation alone; `CloseOpenStreams` reads the head under it and calls `Pa_CloseStream` outside it. Three functions are added, none
+declared in `portaudio.h`: `PaFoxsdr_OpenStreamCount` (the list's length, read under the lock) and
+`PaFoxsdr_OpenStreamListLockForTest` / `...UnlockForTest` (tests only).
+
+**Why.** Upstream's list has no lock: `Pa_OpenStream` adds to it as its last act and `Pa_CloseStream` removes from it as its
+first. `sink/pa_init.hpp` guards both with `PaStreamListGuard`, but `AudioOut` and `AudioIn` take it with `NoWait` (the GUI thread
+must never wait behind a hung driver), and a `NoWait` that finds the lock busy goes ahead WITHOUT it: two writers on one list.
+`test_engine_api_merge` runs 24 engines at once, each opening and closing the default output on a worker, so that happens: three of
+three runs under load ended in an access violation (symbolised from the faulting offsets with the PDB: `Pa_Terminate+0x64` at
+`pa_front.c:396`, the `CloseOpenStreams` call, and `Pa_CloseStream+0x48` at `pa_front.c:1379`, `RemoveOpenStream`, reading
+addresses `0x17` and `0xFFFFFFFFFFFFFFFF`, called from `sink::paTerminateShared`) after 160 to 260 s, when the last engine's
+`Pa_Terminate` closed a list node that a racing writer had left pointing at a freed stream. The lock makes the list correct whatever
+the callers do; it is held for microseconds and never across a host API's open or close, so a driver that hangs cannot hold it.
+
+**What it does not change.** Anything a caller sees: `Pa_OpenStream`, `Pa_CloseStream` and `Pa_Terminate` return what they did.
+`PaStreamListGuard` stays (it also serialises the host APIs' own work, and its timing rules are tested by
+`test_pa_stream_list_guard`).
+
+**The test.** `tests/test_pa_open_list_race.cpp` (A) takes the list lock by hand and requires an open and a close on other threads
+to wait for it (red with the lock removed: "the open waited: 0, the close waited: 0"), and (B) opens and closes 1,440 streams on 12
+threads with no guard at all and requires the list to hold exactly what is open. It skips, saying so, on a machine with no
+output device.
+
+**Re-applying on a PortAudio upgrade.** Vendor the new upstream unmodified first. If upstream's list has its own lock by then,
+delete this patch, this entry and the fence, keep the test (it then proves upstream's). Otherwise re-apply the three fenced
+functions and the lock.

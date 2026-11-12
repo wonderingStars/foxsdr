@@ -307,17 +307,43 @@ static int FindHostApi( PaDeviceIndex device, int *hostSpecificDeviceIndex )
 }
 
 
+/* FOXSDR PATCH open-stream-list-lock (third_party/portaudio/FOXSDR-PATCHES.md): the list of open streams below is changed by
+   Pa_OpenStream (AddOpenStream, its last act) and Pa_CloseStream (RemoveOpenStream, its first), with no lock of upstream's own, and a
+   program that opens and closes streams on several threads (FoxSDR runs one audio output per engine) corrupts it: a lost node, or a
+   node left pointing at a freed stream that the last Pa_Terminate then closes (an access violation inside Pa_Terminate). The lock
+   below is held for the list operation alone - never across the host API's open or close - so a driver that hangs cannot hold it. */
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+static SRWLOCK foxOpenStreamsLock_ = SRWLOCK_INIT;
+#define FOX_OPEN_STREAMS_LOCK()   AcquireSRWLockExclusive( &foxOpenStreamsLock_ )
+#define FOX_OPEN_STREAMS_UNLOCK() ReleaseSRWLockExclusive( &foxOpenStreamsLock_ )
+#else
+#include <pthread.h>
+static pthread_mutex_t foxOpenStreamsLock_ = PTHREAD_MUTEX_INITIALIZER;
+#define FOX_OPEN_STREAMS_LOCK()   pthread_mutex_lock( &foxOpenStreamsLock_ )
+#define FOX_OPEN_STREAMS_UNLOCK() pthread_mutex_unlock( &foxOpenStreamsLock_ )
+#endif
+
+
 static void AddOpenStream( PaStream* stream )
 {
+    FOX_OPEN_STREAMS_LOCK();
     ((PaUtilStreamRepresentation*)stream)->nextOpenStream = firstOpenStream_;
     firstOpenStream_ = (PaUtilStreamRepresentation*)stream;
+    FOX_OPEN_STREAMS_UNLOCK();
 }
 
 
 static void RemoveOpenStream( PaStream* stream )
 {
     PaUtilStreamRepresentation *previous = NULL;
-    PaUtilStreamRepresentation *current = firstOpenStream_;
+    PaUtilStreamRepresentation *current;
+
+    FOX_OPEN_STREAMS_LOCK();
+    current = firstOpenStream_;
 
     while( current != NULL )
     {
@@ -331,7 +357,7 @@ static void RemoveOpenStream( PaStream* stream )
             {
                 previous->nextOpenStream = current->nextOpenStream;
             }
-            return;
+            break;
         }
         else
         {
@@ -339,6 +365,7 @@ static void RemoveOpenStream( PaStream* stream )
             current = current->nextOpenStream;
         }
     }
+    FOX_OPEN_STREAMS_UNLOCK();
 }
 
 
@@ -347,8 +374,43 @@ static void CloseOpenStreams( void )
     /* we call Pa_CloseStream() here to ensure that the same destruction
         logic is used for automatically closed streams */
 
-    while( firstOpenStream_ != NULL )
-        Pa_CloseStream( firstOpenStream_ );
+    for( ;; )
+    {
+        PaStream *first;
+        /* FOXSDR PATCH open-stream-list-lock: the head is read under the lock and the close is made outside it (the close takes it itself). */
+        FOX_OPEN_STREAMS_LOCK();
+        first = (PaStream*)firstOpenStream_;
+        FOX_OPEN_STREAMS_UNLOCK();
+        if( first == NULL )
+            break;
+        Pa_CloseStream( first );
+    }
+}
+
+
+/* FOXSDR PATCH open-stream-list-lock: how many streams the list holds now. Not in portaudio.h; the tests declare it. */
+int PaFoxsdr_OpenStreamCount( void )
+{
+    int n = 0;
+    PaUtilStreamRepresentation *s;
+
+    FOX_OPEN_STREAMS_LOCK();
+    for( s = firstOpenStream_; s != NULL; s = s->nextOpenStream )
+        ++n;
+    FOX_OPEN_STREAMS_UNLOCK();
+    return n;
+}
+
+
+/* FOXSDR PATCH open-stream-list-lock: the list lock taken and released by hand, so a test can hold it and see that an open or a close waits for it. */
+void PaFoxsdr_OpenStreamListLockForTest( void )
+{
+    FOX_OPEN_STREAMS_LOCK();
+}
+
+void PaFoxsdr_OpenStreamListUnlockForTest( void )
+{
+    FOX_OPEN_STREAMS_UNLOCK();
 }
 
 
