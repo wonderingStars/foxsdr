@@ -205,3 +205,12 @@ Build folder `D:/foxsdr-build/en-tuning` (Slint OFF): the full `cmake --build --
 - failing the same way on the baseline build `D:/foxsdr-build/en-feedplan`: `test_gui_file_jobs` (frame counts under load), `test_engine_main_smoke`, `test_failure_files` (a simulated-time save-retry test, fails on the baseline too on a later run);
 - `test_kiwisdr_client` (`:342`, a 3 s wait for a pinned httplib defect) fails alone here and Passed on `D:/foxsdr-build/mr-dsp`; the baseline has no such test: UNVERIFIED whether that is load (about twenty builds ran on the machine); `test_flac_writer` times out at 120 s under this load (the model's own test).
 The GUI gate is the merge lane's (Slint OFF here). `%APPDATA%/foxsdr/config.json` sha256 before and after: `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (unchanged).
+
+## 11. ORCHESTRATOR ANSWERS (received after Phase 1 had reached its end; nothing in the code changed)
+1. Companion launcher (row 15): stays UNWIRED, an owner decision (it starts programs).
+2. CAT maximum RIT / XIT (row 10c): stays UNWIRED, an owner decision.
+3. Scan aids (49): in scope only for what SCANNER_EXTRAS does not already do (the lane found nothing beyond it that it had read: header not re-read); band stacking / mode memory (50): skipped where per-band memory (row 21) covers it; the remainder (the register of three frequencies per band, the per-MODE memory of bandwidth / step / AGC) is NOT DONE.
+4. Playback transport (pause, step, speed, seek, A-B loop) is this lane's alone (wire-b leaves playback untouched): seek and A-B loop already exist (serial-a FILE_SEEK / FILE_LOOP); pause, step and speed are item 1 of the not-done list in section 6 and the first thing to continue.
+5. Agreed: the Slint host may call the pure analyser-project header; the waterfall history bytes are read through WireA::waterfallCopy (same process); the per-radio level store, when built, is off by default with a 64 MB cap.
+6. CW surround may be one call in the audio stage (no collision with wire-b): item 4 of the not-done list.
+7. The two ABI requests (symbol rate, credit field) were forwarded to wire-c.
