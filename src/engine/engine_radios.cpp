@@ -324,6 +324,7 @@ void Engine::pumpExtraReceivers() {
         noteAsyncOpenEnded();
         pollSoapyRecovery();
         pollPendingRetune();
+        pollStereoSystem();
         endTakesOnFault();
         pollAudioOpen();
         pollAudioHealth();

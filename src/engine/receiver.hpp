@@ -275,6 +275,8 @@ struct Receiver {
     bool deviceAdcSwitchesPresent_ = false;  // the RX888's pair, together
     bool deviceDither_ = false;
     bool deviceRandomiser_ = false;
+    int stereoSystem_ = 0;          // FOXAPP_OP_SET_STEREO_SYSTEM: 0 automatic, 1 pilot tone, 2 OIRT (engine wiring W2; not saved)
+    int stereoSystemApplied_ = 1;   // what the pipeline was last told (1 or 2)
     bool tuneLocked_ = false;   // the frequency lock (FOXAPP_OP_RADIO_LOCK, engine wiring W2): every way a retune reaches this radio is refused or a no-op
     bool deviceOffsetTuningPresent_ = false;  // an rtl_tcp server's E4000 (R12), where its header names one
     bool deviceOffsetTuning_ = false;

@@ -477,6 +477,9 @@ void Pipeline::rebuildChannelBlocks(double chanRate) {
     stereo_ = std::make_unique<cascade::dsp::StereoFm>(chanRate);
     stereo_->setDeemphasisUs(deemphasisUs_);
     stereo_->setForceMono(!stereoEnabled_);
+    oirt_ = std::make_unique<cascade::dsp::OirtStereo>(chanRate, 1);   // (decimation 1: the audio leaves at the channel rate, as StereoFm's does)
+    oirt_->setDeemphasisUs(deemphasisUs_);
+    oirt_->setForceMono(!stereoEnabled_);
     rds_ = std::make_unique<cascade::dsp::RdsDecoder>(chanRate);
     resetDecodersLocked();
 }
@@ -518,6 +521,7 @@ void Pipeline::applyChannelBandwidthLocked() {
 void Pipeline::resetDecodersLocked() {
     rds_->reset();
     stereo_->reset();  // stream state only; force-mono and tau are settings
+    oirt_->reset();
     rdsPubGroups_ = 0;
     rdsPubErrors_ = 0;
     {
@@ -1059,6 +1063,7 @@ void Pipeline::setDeemphasisUs(double us) {
             // was the whole of the setter and NFM never de-emphasised: the
             // missing half is the helper.
             stereo_->setDeemphasisUs(us);
+            oirt_->setDeemphasisUs(us);
             applyDemodDeemphasisLocked();
         },
         [this, us] { mirrorDeemphasisUs_.store(us, std::memory_order_relaxed); });
@@ -1101,8 +1106,23 @@ void Pipeline::setStereoEnabled(bool on) {
             // and stereo instead of stepping — a step in the difference channel is
             // an audible click in both speakers.
             stereo_->setForceMono(!on);
+            oirt_->setForceMono(!on);
         },
         [this, on] { mirrorStereoEnabled_.store(on, std::memory_order_relaxed); });
+}
+
+void Pipeline::setStereoSystem(int system) {
+    if (system != 1 && system != 2) { return; }
+    post([this, system] { stereoSystem_ = system; },
+         [this, system] { mirrorStereoSystem_.store(system, std::memory_order_relaxed); });
+}
+
+int Pipeline::stereoSystem() const {
+    return mirrorStereoSystem_.load(std::memory_order_relaxed);
+}
+
+bool Pipeline::oirtActive() const {
+    return oirtActive_.load(std::memory_order_relaxed);
 }
 
 bool Pipeline::stereoEnabled() const {
@@ -2292,12 +2312,36 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         // carry the same 15 kHz low-pass and the same de-emphasis, and the
         // difference channel is ramped in and out by StereoFm's own gate
         // (with the gate shut it emits L == R bit-exactly).
-        stereo_->process(audioBuf_.data(), m, leftBuf_.data(), rightBuf_.data());
-        pilotLocked_.store(stereo_->pilotLocked(), std::memory_order_relaxed);
-        pilotLevel_.store(stereo_->pilotLevel(), std::memory_order_relaxed);
-        stereoActive_.store(stereoEnabled_ && stereo_->pilotLocked() &&
-                                stereo_->stereoCapable(),
-                            std::memory_order_relaxed);
+        //
+        // THE STEREO SYSTEM (setStereoSystem): the OIRT polar-modulation decoder replaces the pilot-tone one when the engine says the tuned signal is OIRT. Both
+        // run on the same composite, both keep the 15 kHz low-pass and the de-emphasis, and a decoder that cannot decode at this channel rate (below 100 kHz) is
+        // a permanent mono one, so the pilot-tone decoder stays in the path then, as it would have.
+        if (stereoSystem_ == 2 && oirt_ && oirt_->stereoCapable()) {
+            // audioBuf_ is the discriminator already scaled by fmScale_ so that 0.5 is the broadcast deviation (kFmDeviationHz, 75 kHz); the OIRT decoder wants +-1 at the
+            // OIRT system's maximum deviation (kOirtMaxDeviationHz): the factor between the two is fixed.
+            const float toUnit = static_cast<float>(kFmDeviationHz / (0.5 * kOirtMaxDeviationHz));
+            oirtIn_.resize(m);
+            for (std::size_t i = 0; i < m; ++i) { oirtIn_[i] = audioBuf_[i] * toUnit; }
+            oirtL_.resize(oirt_->outputsFor(m));
+            oirtR_.resize(oirt_->outputsFor(m));
+            const std::size_t k = oirt_->process(oirtIn_.data(), m, oirtL_.data(), oirtR_.data());
+            for (std::size_t i = 0; i < m; ++i) {
+                leftBuf_[i] = i < k ? oirtL_[i] : 0.0f;
+                rightBuf_[i] = i < k ? oirtR_[i] : 0.0f;
+            }
+            pilotLocked_.store(oirt_->stereoLamp(), std::memory_order_relaxed);
+            pilotLevel_.store(oirt_->carrierLevel(), std::memory_order_relaxed);
+            stereoActive_.store(stereoEnabled_ && oirt_->stereoLamp(), std::memory_order_relaxed);
+            oirtActive_.store(true, std::memory_order_relaxed);
+        } else {
+            stereo_->process(audioBuf_.data(), m, leftBuf_.data(), rightBuf_.data());
+            pilotLocked_.store(stereo_->pilotLocked(), std::memory_order_relaxed);
+            pilotLevel_.store(stereo_->pilotLevel(), std::memory_order_relaxed);
+            stereoActive_.store(stereoEnabled_ && stereo_->pilotLocked() &&
+                                    stereo_->stereoCapable(),
+                                std::memory_order_relaxed);
+            oirtActive_.store(false, std::memory_order_relaxed);
+        }
     } else {
         // Every other mode is mono by nature: duplicate, so the rest of the
         // chain has exactly one shape.
@@ -2308,6 +2352,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         pilotLocked_.store(false, std::memory_order_relaxed);
         pilotLevel_.store(0.0f, std::memory_order_relaxed);
         stereoActive_.store(false, std::memory_order_relaxed);
+        oirtActive_.store(false, std::memory_order_relaxed);   // (no composite decoder is in the path in any other mode)
     }
 
     // --- AGC + squelch on the interleaved pair ------------------------------

@@ -158,6 +158,7 @@
 #include "dsp/spectrum.hpp"
 #include "dsp/spsc_ring.hpp"
 #include "dsp/squelch.hpp"
+#include "dsp/oirt_stereo.hpp"
 #include "dsp/stereo_fm.hpp"
 #include "dsp/vfo.hpp"
 // The demod scope's two rolling taps. A header, no .cpp: the whole thing is a
@@ -460,6 +461,15 @@ public:
     // exactly when a broadcast receiver is expected to produce stereo.
     void setStereoEnabled(bool on);
     bool stereoEnabled() const;
+    // THE STEREO SYSTEM (engine wiring W2; dsp/oirt_stereo.hpp): which composite decoder WFM runs. 1 = the pilot-tone system (every receiver the world over but
+    // the OIRT band), 2 = OIRT polar modulation (65.8 to 74 MHz in Russia, Belarus, Ukraine, Moldova, Armenia). The ENGINE decides which (automatic by the tuned
+    // frequency, or the user's choice) and says so here; the default is 1, the behaviour before this existed. A value other than 1 or 2 is ignored. The OIRT decoder
+    // is fed the discriminator scaled so +-1 is kOirtMaxDeviationHz (50 kHz, the OIRT system's maximum deviation; UNVERIFIED against the standard's table).
+    static constexpr double kOirtMaxDeviationHz = 50000.0;
+    void setStereoSystem(int system);
+    int stereoSystem() const;
+    // True while the OIRT decoder is the one in the path (WFM, system 2, a channel rate it can decode at).
+    bool oirtActive() const;
 
     // Lock-free snapshots for the UI indicator, published once per DSP block
     // exactly like signalPowerDb(). pilotLocked() is the decoder's own lock
@@ -1092,6 +1102,11 @@ private:
     // (neither has an assignment operator worth relying on, and both bake the
     // rate into their filter designs).
     std::unique_ptr<cascade::dsp::StereoFm> stereo_;
+    std::unique_ptr<cascade::dsp::OirtStereo> oirt_;   // the same channel rate and settings as stereo_, built beside it (setStereoSystem chooses)
+    int stereoSystem_ = 1;                              // the DSP thread's (and the setter's, under the post)
+    std::atomic<int> mirrorStereoSystem_{1};
+    std::atomic<bool> oirtActive_{false};
+    std::vector<float> oirtIn_, oirtL_, oirtR_;         // the OIRT branch's scratch (the decoder's output capacity is one more than its input)
     std::unique_ptr<cascade::dsp::RdsDecoder> rds_;
     bool stereoEnabled_ = true;
     // Counters of the last published snapshot: the publish is skipped unless

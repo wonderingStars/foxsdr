@@ -2626,6 +2626,18 @@ At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTT
 * The take is created exclusively on the disk worker as before: a name that exists is never opened over (it becomes `name-2.wav`). If an expansion cannot be made at a take's start the default name is used and
   the log says so. `fact.record.nameTemplate` (LOCAL) reads the template back. Not done: rollover, one file per transmission, FLAC (other parts of the same model lane).
 
+### 9.37 OIRT stereo (engine wiring lane 2; dsp/oirt_stereo.hpp, Pipeline::setStereoSystem, Engine::pollStereoSystem)
+
+* Op `FOXAPP_OP_SET_STEREO_SYSTEM` 0x8619 (receiver-scoped by `target`, grant SETTINGS, the application's own, so a REMOTE session is refused): which composite decoder the radio's WFM mode runs. `ival[0]`: 0 =
+  AUTOMATIC (the default: OIRT polar modulation while the tuned frequency is inside 65.8 to 74 MHz, both edges in; the pilot-tone system everywhere else), 1 = the pilot-tone system always, 2 = OIRT always.
+  Anything else is `OUT_OF_RANGE`; the same value again is `NO_CHANGE`; `NO_DEVICE` for a radio the engine does not have. Not saved: a restart returns to automatic.
+* `fact.radio.<n>.stereo.system` reads `auto` / `pilot` / `oirt` (the choice); `fact.radio.<n>.stereo.decoder` reads `pilot` / `oirt` (the decoder in the path now: `oirt` only in WFM at a channel rate of 100 kHz or
+  more, the least the decoder can decode at; in any other mode no composite decoder runs and it reads `pilot`).
+* The pipeline feeds the OIRT decoder the discriminator scaled so +-1 is 50 kHz (`Pipeline::kOirtMaxDeviationHz`, the OIRT system's maximum deviation: UNVERIFIED against the standard's table, which this lane did not
+  open; a transmitter at another deviation shifts the lamp threshold proportionally and leaves separation unchanged, as the model's record says). The stereo lamp (`FOXAPI_RX_*` pilot lock / stereo active, and the pipeline's
+  `pilotLocked`, `stereoActive`) is the OIRT carrier lock; `pilotLevel` is the carrier's level against its nominal 20 % (about 1 for a standard transmission).
+* The default is unchanged for every frequency outside the band, and the engine makes no change at all unless the tuned frequency is inside 65.8 to 74 MHz or the user chose.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

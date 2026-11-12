@@ -6584,6 +6584,21 @@ void Engine::retuneSourceHz(double centerHz, bool isPluginPreset) {
     }
 }
 
+// THE STEREO SYSTEM (FOXAPP_OP_SET_STEREO_SYSTEM): automatic means OIRT polar modulation inside 65.8 to 74 MHz and the pilot-tone system everywhere else; the pipeline is told
+// only when the answer changes (its setter is a post to the DSP thread).
+void Engine::pollStereoSystem() {
+    int want = rx().stereoSystem_;
+    if (want == 0) {
+        const double hz = currentAbsoluteHz();
+        want = (hz >= 65.8e6 && hz <= 74.0e6) ? 2 : 1;
+    }
+    if (want != rx().stereoSystemApplied_) {
+        rx().pipeline_.setStereoSystem(want);
+        rx().stereoSystemApplied_ = want;
+        ++stereoSystemVersion_;
+    }
+}
+
 void Engine::pollPendingRetune() {
     if (const std::optional<double> hz = rx().retuneCoalescer_.due(steadyNowMs())) {
         applyRetuneNow(*hz, rx().pendingRetuneIsPreset_);
@@ -7287,6 +7302,14 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
             return res;
         }
+        case FOXAPP_OP_SET_STEREO_SYSTEM:
+            if (c.ival[0] < 0 || c.ival[0] > 2) { return refuse(FOXAPI_OUT_OF_RANGE, "the stereo system is 0 automatic, 1 pilot tone or 2 OIRT"); }
+            if (rx().stereoSystem_ == static_cast<int>(c.ival[0])) { return refuse(FOXAPI_NO_CHANGE, "the stereo system is that already"); }
+            rx().stereoSystem_ = static_cast<int>(c.ival[0]);
+            pollStereoSystem();
+            ++stereoSystemVersion_;
+            res.applied[0] = static_cast<double>(rx().stereoSystem_);
+            return res;
         case FOXAPP_OP_RADIO_LOCK:
             if (rx().tuneLocked_ == on) { return refuse(FOXAPI_NO_CHANGE, on ? "the frequency is locked already" : "the frequency is not locked"); }
             rx().tuneLocked_ = on;
@@ -10631,6 +10654,7 @@ void Engine::pumpWorkers() {
     pollSavedRadioRetry();
     // Release a wheel-burst retune the coalescer held back (~50 ms pacing).
     pollPendingRetune();
+    pollStereoSystem();
     // Same contract for the catalogue fetch / plugin download.
     pollPluginAsync();
     // ...and the web password's hash (stage 5a): a worker, never the pass.

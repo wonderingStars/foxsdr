@@ -3184,6 +3184,9 @@ private:
     void pumpMacros();
     // THE FREQUENCY LOCK (FOXAPP_OP_RADIO_LOCK, engine wiring W2; Receiver::tuneLocked_): which commands it refuses, and the fingerprint counter of its facts.
     static bool isTuningCommandOfLock(const FoxCommand& c);
+    // THE STEREO SYSTEM (FOXAPP_OP_SET_STEREO_SYSTEM, engine wiring W2): run once a pass for every radio, under its scope, after its retune is polled.
+    void pollStereoSystem();
+    std::uint64_t stereoSystemVersion_ = 1;
     // RECORDING FILE NAMES FROM A TEMPLATE (engine_recname.cpp; FOXAPP_OP_SET_RECORD_NAME, engine wiring W2).
     std::string recordNameFilePath() const;
     void loadRecordName();

@@ -206,6 +206,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(macroVersion_);      // the macros: the file, a run, a note (engine_macros.cpp)
     f.value(radioLockVersion_);  // the frequency lock of every radio (FOXAPP_OP_RADIO_LOCK)
     f.value(recordNameVersion_); // the recording file-name template (FOXAPP_OP_SET_RECORD_NAME)
+    f.value(stereoSystemVersion_);  // the stereo system of every radio (FOXAPP_OP_SET_STEREO_SYSTEM)
     f.text(markerError_);
     // The DSP chain's input rate (API 0.3 8.5, fact.input.rateHz): the source's rate
     // unless the chain refused a change of it, and then the one the display is
@@ -588,6 +589,7 @@ std::uint64_t Engine::apiListsFingerprint() {
         f.text(radioStateWord(n));
         // (stage 4) what the other radio facts say: the route and the device the radio holds move the block too.
         f.value(receivers_[n - 1u]->audioRoute_);
+        f.value(receivers_[n - 1u]->pipeline_.oirtActive());   // (fact.radio.<n>.stereo.decoder follows the pipeline's own state, which no command moves)
         f.text(receivers_[n - 1u]->claimedKey_);
         f.text(receivers_[n - 1u]->refusal_);
         // (a KiwiSDR radio's own facts: its state and mode words, and its level in 3 dB steps so a moving signal does not rebuild the block every pass)
@@ -1380,6 +1382,11 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         const std::string pre = "radio." + std::to_string(n) + ".";
         fact(pre + "state", radioStateWord(n));
         fact(pre + "locked", receivers_[n - 1u]->tuneLocked_ ? "1" : "0");
+        {
+            const int sys = receivers_[n - 1u]->stereoSystem_;
+            fact(pre + "stereo.system", sys == 1 ? "pilot" : (sys == 2 ? "oirt" : "auto"));
+            fact(pre + "stereo.decoder", receivers_[n - 1u]->pipeline_.oirtActive() ? "oirt" : "pilot");
+        }
         {
             SlotScope scope(this, static_cast<std::size_t>(n) - 1u);
             fact(pre + "device", n == 1u ? patchReceiverRadioKey()

@@ -2495,6 +2495,12 @@ void macroOps(AppWindow& a) {
     CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_RECORD_NAME, "{mode}/{date}"))));
     CHECK(refused(A::apply(a, text(FOXAPP_OP_SET_RECORD_NAME, "{mode}/{date}")), FOXAPI_NO_CHANGE));
     CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_RECORD_NAME, ""))));
+    // THE STEREO SYSTEM (FOXAPP_OP_SET_STEREO_SYSTEM; the decoding itself is tests/test_pipeline_oirt.cpp's and the engine's behaviour tests/test_engine_api_oirt.cpp's).
+    covering(FOXAPP_OP_SET_STEREO_SYSTEM);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 3)), FOXAPI_OUT_OF_RANGE));
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 0)), FOXAPI_NO_CHANGE));   // automatic is the default
+    CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 2))));
+    CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 0))));
 }
 
 void airbandOps(AppWindow& a) {

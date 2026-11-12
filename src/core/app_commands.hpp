@@ -156,6 +156,11 @@
 //   {counter} {counter:N}; '/' separates up to three folders below the recordings folder; the extension is added; local time) or "" to go back to the default names. BAD_ARGUMENT with the model's
 //   words for a template it refuses (nothing changes); NO_CHANGE when it is in force already. fact.record.nameTemplate reads it back.
 #define FOXAPP_OP_SET_RECORD_NAME        0x8618u /* text: the template, "" = the default naming */
+//   SET_STEREO_SYSTEM (SETTINGS; engine wiring W2, dsp/oirt_stereo.hpp, docs/api-0.3-additions.md 9.37): which composite decoder the selected radio's (target) WFM mode runs. ival[0]: 0 = AUTOMATIC
+//   (OIRT polar modulation while the tuned frequency is inside 65.8 to 74 MHz, the pilot-tone system everywhere else: the default), 1 = the pilot-tone system always, 2 = OIRT always; any other value is
+//   OUT_OF_RANGE. NO_CHANGE when it is already so. Not saved (a restart returns to automatic). fact.radio.<n>.stereo.system reads auto / pilot / oirt, fact.radio.<n>.stereo.decoder the decoder in the
+//   path now (pilot / oirt: the OIRT decoder runs only in WFM at a channel rate of 100 kHz or more).
+#define FOXAPP_OP_SET_STEREO_SYSTEM      0x8619u /* ival[0]: 0 automatic / 1 pilot tone / 2 OIRT. Addresses one radio (target) */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */
 #define FOXAPP_OP_USER_PRESET_FORGET_AT  0x8702u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */
