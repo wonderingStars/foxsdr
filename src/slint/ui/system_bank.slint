@@ -874,7 +874,7 @@ export component KPanel inherits VerticalLayout {
         if r.kind == 4 : VerticalLayout {
             spacing: 2px;
             Line { RowLabel { text: r.label; } }
-            for o[j] in r.options : RadioChoice { label: o; on: j == r.pick; enabled: r.enabled; tooltip: r.note; chosen => { root.act(r.id, "\{j}"); } }
+            for o[j] in r.options : RadioChoice { label: o; on: j == r.pick; enabled: r.enabled; tooltip: r.note != "" ? r.note : o; chosen => { root.act(r.id, "\{j}"); } }
         }
         if r.kind == 5 : VerticalLayout {
             spacing: 2px;

@@ -1817,7 +1817,7 @@
   "Renamed \"%s\" to \"%s\" (%zu)": "已將 \"%s\" 重新命名為 \"%s\"（%zu）",
   "Renamed to \"%s\".": "已重新命名為「%s」。",
   "Renamed to %s": "已重新命名為 %s",
-  "Replace %d file(s) with the profile \"%s\"? Your current ones are kept as .before-import copies.": "要用設定檔「%s」取代 %d 個檔案嗎？目前的檔案會保留為 .before-import 副本。",
+  "Replace %d file(s) with the profile \"%s\"? Your current ones are kept as .before-import copies.": "要取代 %d 個檔案為設定檔「%s」嗎？目前的檔案會保留為 .before-import 副本。",
   "Replace %d file(s)? Your current ones are kept as .before-import copies.": "要取代 %d 個檔案嗎？目前的檔案會保留為 .before-import 副本。",
   "Replace preset?": "取代預設？",
   "Replaced the layout %s": "已取代版面配置 %s",

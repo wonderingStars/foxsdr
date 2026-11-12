@@ -54,10 +54,10 @@ slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
 
 fs::path pathOf(const std::string& u8) { return fs::path(std::u8string(u8.begin(), u8.end())); }
 
-std::string num(const char* f, double v) {
-    char b[64] = {};
-    std::snprintf(b, sizeof(b), f, v);
-    return b;
+std::string num(const char* f, double v) {   // one double into one of this unit's own literal formats (never a translated text)
+    std::string s;
+    cc::formatUtf8(s, f, v);
+    return s;
 }
 
 KRow toK(const Row& r) {

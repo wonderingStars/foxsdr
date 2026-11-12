@@ -930,14 +930,14 @@ export component MainWindow inherits Window {
         }
     }
     // SCREEN LANE K: the generic sheet (the first-run setup, a confirmation, the cursor tool, the gradient editor): a title and a row panel the host fills
-    if LaneK.sheet-open : Sheet { title: LaneK.sheet-title; sheet-w: LaneK.sheet-width * 1px; dismissed => { LaneK.act("sheet-dismiss", ""); }
+    if LaneK.sheet-open : Sheet { title: LaneK.sheet-title; sheet-w: LaneK.sheet-width * 1px; dismissed => { LaneK.act("sheet-dismiss", ""); }   // not-translated: the host's action id
         Flickable {
             height: min(500px, ksheet-list.preferred-height); viewport-height: ksheet-list.preferred-height;
             ksheet-list := KPanel { rows: LaneK.sheet-rows; act(id, t) => { LaneK.act(id, t); } }
         }
     }
     // SCREEN LANE K: the Matrix (DEPTH-GAPS A2 Multi-radio): every open radio in a row; the pointer resting on a row previews that radio's sound, a click keeps it, a double click selects the radio
-    if LaneKMatrix.open : Sheet { title: @tr("Radio matrix"); sheet-w: 760px; dismissed => { LaneKMatrix.open = false; LaneKMatrix.act("leave", "0"); }
+    if LaneKMatrix.open : Sheet { title: @tr("Radio matrix"); sheet-w: 760px; dismissed => { LaneKMatrix.open = false; LaneKMatrix.act("leave", "0"); }   // not-translated: the host's action id
         if LaneKMatrix.note != "" : Text { text: LaneKMatrix.note; wrap: word-wrap; color: Theme.dim; font-size: Theme.font-small; }
         Flickable {
             height: min(340px, kmx-list.preferred-height); viewport-height: kmx-list.preferred-height;
@@ -949,11 +949,11 @@ export component MainWindow inherits Window {
                     accessible-role: button;
                     accessible-label: t.name;
                     accessible-description: t.freq + " " + t.mode + ", " + t.level-text + ", " + t.state + (t.heard ? ", " + @tr("heard") : "");
-                    accessible-action-default => { LaneKMatrix.act("listen", "\{t.radio}"); }
+                    accessible-action-default => { LaneKMatrix.act("listen", "\{t.radio}"); }   // not-translated: the host's action id
                     kmx-area := TouchArea {
-                        changed has-hover => { LaneKMatrix.act(self.has-hover ? "hover" : "leave", "\{t.radio}"); }
-                        clicked => { LaneKMatrix.act("listen", "\{t.radio}"); }
-                        double-clicked => { LaneKMatrix.act("select", "\{t.radio}"); }
+                        changed has-hover => { LaneKMatrix.act(self.has-hover ? "hover" : "leave", "\{t.radio}"); }   // not-translated: the host's action id
+                        clicked => { LaneKMatrix.act("listen", "\{t.radio}"); }   // not-translated: the host's action id
+                        double-clicked => { LaneKMatrix.act("select", "\{t.radio}"); }   // not-translated: the host's action id
                     }
                     HorizontalLayout { padding-left: 10px; padding-right: 10px; spacing: 10px;
                         Text { width: 64px; vertical-alignment: center; text: t.name; color: Theme.fg; font-family: Theme.font-ui; font-size: Theme.font-small; font-weight: Theme.weight-semibold; overflow: elide; }
@@ -969,7 +969,7 @@ export component MainWindow inherits Window {
                 }
             }
         }
-        HorizontalLayout { alignment: end; Key { label: @tr("Close"); clicked => { LaneKMatrix.open = false; LaneKMatrix.act("leave", "0"); } } }
+        HorizontalLayout { alignment: end; Key { label: @tr("Close"); clicked => { LaneKMatrix.open = false; LaneKMatrix.act("leave", "0"); } } }   // not-translated: the host's action id
     }
     // ===================== the tip layer: LAST, so a tooltip draws over the pages, the torn-off windows and the sheets =====================
     TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }

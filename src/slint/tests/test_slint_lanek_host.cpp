@@ -115,7 +115,7 @@ void record() {
     json big = json::object();
     for (int i = 0; i < 2000; ++i) { big["k" + std::to_string(i)] = i; }
     Record r5;
-    CHECK(r5.loadText(big.dump()));
+    CHECK(r5.loadText(big.dump(-1, ' ', false, json::error_handler_t::replace)));
     int kept = 0;
     for (int i = 0; i < 2000; ++i) { if (r5.getInt("k" + std::to_string(i), -1, -1, 5000) >= 0) { ++kept; } }
     CHECK(kept <= 512 && kept > 0);                         // the key count is bounded

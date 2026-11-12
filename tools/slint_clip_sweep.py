@@ -40,6 +40,7 @@ VIEWS = {
     'tools':    'bank=2 sections=2:0,1,2,3,4,5',
     'extend':   'bank=3 sections=3:0,1',
     'system':   'bank=4 sections=4:0,1,2,3,4,5,6,7',
+    'lanek':    'bank=4 sections=4:10,11,12,13,14 size=1600x3000',   # screen lane K: the five sections after About (docs/multi-radio-records/screen-k.md)
     'transmit': 'bank=0 open=transmit',
     'patch':    'bank=0 view=patch',
     'presets':  'bank=0 view=patch open=patch-presets',
