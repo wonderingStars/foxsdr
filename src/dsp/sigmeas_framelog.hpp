@@ -8,8 +8,9 @@
 //    With noise of unit mean energy per bin and a tone of amplitude a, the likelihood of "tone i was
 //    sent" is proportional to I0(2 a sqrt(E_i)) (I0: modified Bessel function; the other tones are
 //    pure noise and their factor is the same for every i - the textbook non-coherent orthogonal-signal
-//    detector, Proakis, "Digital Communications", ch. 5: the envelope of the matched filter is
-//    Rician for the sent tone and Rayleigh for the others). So the POSTERIOR of the winning tone,
+//    detector of the digital-communications textbooks, not opened here: the envelope of the matched
+//    filter is Rician for the sent tone and Rayleigh for the others; the I0 evaluation is checked
+//    against std::cyl_bessel_i in the test). So the POSTERIOR of the winning tone,
 //    under equal priors, is
 //        P(best) = I0(2 a sqrt(E_best)) / sum_j I0(2 a sqrt(E_j)),
 //    evaluated in the log domain. The noise level and a are taken from the symbol itself: the noise

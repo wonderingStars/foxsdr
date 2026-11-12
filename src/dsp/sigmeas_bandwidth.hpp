@@ -5,16 +5,18 @@
 // DEFINITIONS
 //  - Occupied bandwidth (beta-percent): "the width of a frequency band such that, below its lower
 //    and above its upper frequency limits, the mean powers emitted are each equal to beta/2 of
-//    the total mean power of a given emission" - ITU Radio Regulations Article 1.153 and
-//    ITU-R Recommendation SM.328 (beta = 99 % unless a recommendation says otherwise; the 0.5 %
-//    tails are measured on the power spectrum). The total here is the signal's power ABOVE THE
+//    the total mean power of a given emission" - ITU Radio Regulations No. 1.153, as quoted in
+//    ITU-R Recommendation SM.328-12 (opened: the percentage beta/2 is taken as 0.5 % unless an
+//    ITU-R Recommendation says otherwise, i.e. 99 % of the power lies inside). The total here is the signal's power ABOVE THE
 //    NOISE FLOOR inside the signal region: the floor is measured from the lowest quartile of the
 //    bins and subtracted bin by bin, so a noisy capture does not widen the answer by the noise's
 //    own tails.
 //  - x-dB bandwidth: "the width of the frequency band such that, beyond its upper and lower
 //    limits, any discrete spectrum component or continuous spectral power density is at least
-//    x dB lower than a predetermined 0 dB reference level" (ITU-R SM.443, the "x dB bandwidth";
-//    the reference is the peak of the (lightly smoothed) spectrum). It is the OUTERMOST pair of
+//    x dB lower than a predetermined 0 dB reference level" (ITU-R SM.328-12 section 1.8, opened;
+//    its "x dBsd" variant takes the maximum of the power spectral density as the 0 dB reference,
+//    which is what is done here, on a lightly smoothed spectrum; ITU-R SM.443 describes the
+//    measurement, but its PDF could not be text-extracted and was not read). It is the OUTERMOST pair of
 //    crossings inside the signal region, so a two-lobed FSK spectrum reads as one wide signal.
 //  - Centre: the power centroid of the signal region (the signal's own centre, not the peak).
 //

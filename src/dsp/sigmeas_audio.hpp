@@ -7,20 +7,22 @@
 //    of two N <= the span, one-sided, normalised so that the bin powers add up to the mean square
 //    of the signal. A component's power is the sum of its bins within +-4 bins of its peak.
 //  - SINAD = P(tone) / P(everything else in the band except DC), in dB. "Everything else" is noise
-//    plus harmonic and spurious distortion (IEEE Std 1241-2010 3.1 "signal-to-noise and distortion
-//    ratio"; the band is `bandLowHz`..`bandHighHz`, default 20 Hz .. Nyquist).
-//  - THD = sum of P(harmonic h) for h = 2 .. `maxHarmonic` over P(tone), in dB (IEC 60268-3 /
-//    AES17: the ratio of the rms of the harmonics to the rms of the fundamental). Harmonics above
+//    plus harmonic and spurious distortion (the IEEE 1241 "signal-to-noise and distortion ratio"; the
+//    standard text itself was not opened, only secondary pages that agree on it; the band is `bandLowHz`..`bandHighHz`, default 20 Hz .. Nyquist).
+//  - THD = sum of P(harmonic h) for h = 2 .. `maxHarmonic` over P(tone), in dB (the ratio of
+//    the rms of the harmonics to the rms of the fundamental; the audio-standard wording was not
+//    opened). Harmonics above
 //    Nyquist are folded back (aliased) to where a sampled system really puts them. `thdPercent` is
 //    the same as a percentage of amplitude.
 //  - THD+N = P(everything but the tone) / P(tone) = -SINAD, reported as a negative dB and a
 //    percentage, the figure audio analysers print.
 //  - SFDR = P(tone) over the power of the largest spur outside the tone's lobe and DC, in dBc
-//    (IEEE 1241 3.1 "spurious-free dynamic range"). A spur's power is the lobe sum around a local
+//    (the usual converter definition). A spur's power is the lobe sum around a local
 //    maximum of the spectrum.
-//  - ENOB = (SINAD - 1.76 + 20 log10(full scale / A)) / 6.02 (IEEE 1241 4.1 "effective number of
-//    bits": the converter whose ideal quantisation noise would equal the measured noise and
-//    distortion). `fullScaleAmplitude` (default 1.0) is the converter's full-scale peak value.
+//  - ENOB = (SINAD - 1.76 + 20 log10(full scale / A)) / 6.02 (the effective number of bits: the
+//    converter whose ideal quantisation noise would equal the measured noise and distortion; the
+//    1.76 and 6.02 are the ideal-quantiser figures, 6.02 N + 1.76 dB for a full-scale sine, as
+//    given by the manufacturer pages listed in the record). `fullScaleAmplitude` (default 1.0) is the converter's full-scale peak value.
 //
 // ACCURACY, pinned in tests/test_sigmeas_audio.cpp on a synthetic tone with known distortion and a
 // known white-noise floor: SINAD and THD within 0.3 dB, SFDR within 0.5 dB, ENOB of an ideal 10-, 12-

@@ -5,12 +5,11 @@
 //
 // DEFINITIONS
 //  - FM peak frequency deviation: the largest excursion of the instantaneous frequency from the
-//    carrier (ITU Radio Regulations 1.152 "frequency deviation"; "peak deviation" as in
-//    ITU-R SM.1268 / the CCITT definition used by every deviation meter). The instantaneous
-//    frequency is f[n] = arg(x[n] conj(x[n-1])) rate / 2 pi, low-passed to the audio bandwidth;
+//    carrier (the usual deviation-meter definition; no ITU number is cited because none was
+//    opened). The instantaneous frequency is f[n] = arg(x[n] conj(x[n-1])) rate / 2 pi, low-passed to the audio bandwidth;
 //    the carrier is its mean.
 //  - AM modulation depth: m = (A_max - A_min) / (A_max + A_min) of the envelope |x| (the
-//    "modulation factor", ITU Radio Regulations 1.155 / ITU-R SM.328); the positive and negative
+//    usual "modulation factor"; not checked against a standard text); the positive and negative
 //    peak depths (A_max/A_c - 1, 1 - A_min/A_c, A_c = the mean envelope) are reported too, and a
 //    negative peak depth of 1 or more flags over-modulation.
 //

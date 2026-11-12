@@ -18,7 +18,7 @@
 //    result as `ambiguous`: every run the same length, as in an alternating 0101 pattern). Edge times are the linear-interpolated crossings of the decision
 //    level, so the answer is not quantised to a sample.
 //  - FSK: the instantaneous frequency f[n] = arg(x[n] conj(x[n-1])) rate / 2 pi, smoothed to a
-//    quarter of the symbol period; Otsu's two-class threshold (Otsu 1979) gives the decision level;
+//    quarter of the symbol period; Otsu's two-class threshold (Otsu, IEEE Trans. SMC 1979; recalled, not opened) gives the decision level;
 //    mark and space are the medians of the two classes, shift = mark - space; edges, runs and the
 //    period as above, then symbols are read at their centres. A second pass re-smooths with the
 //    measured period.

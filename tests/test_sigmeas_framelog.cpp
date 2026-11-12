@@ -16,6 +16,14 @@
 using namespace cascade::sigmeas;
 
 int main() {
+    // --- the Bessel evaluation against the C++ special function ----------------------------------------------------------
+    {
+        double worst = 0.0;
+        for (double x = 0.0; x <= 100.0; x += 0.25) {
+            worst = std::max(worst, std::fabs(detail::logI0(x) - std::log(std::cyl_bessel_i(0.0, x))));
+        }
+        CHECK(worst < 1e-5);
+    }
     // --- calibration: M = 16 tones, tone-to-noise a^2 in {6, 10, 16}; the mean posterior is the accuracy ------
     for (double a2 : {6.0, 10.0, 16.0}) {
         sg::Rng rng(91);
