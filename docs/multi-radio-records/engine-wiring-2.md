@@ -195,10 +195,97 @@ Break-it column: the behaviour removed (or the lock/gate disabled), the result s
 | 7 | fecdd2d9 | array-maths W12, driver allow-list | `driverpolicy::decide` gates `radio_setup.cpp installTarget` and `winusb_install.cpp isRtlInterfaceZeroId` (the elevated helper's refusal) | `test_radio_setup`, `test_winusb_install`, `test_driver_policy`, `test_radio_setup_inventory` pass | RTL policy row -> NotAllowed: `test_radio_setup` :160 x2, :199 and `test_winusb_install` :41, :44, :47 fail |
 | 8 | e2955e1e | platform `confirmStartup` | `confirmStartupFor` (new, pure) called by `bootProcess` step 7b, Linux only, after the tool modes | `test_linux_update` `testConfirmStartupFor` passes | kind gate removed: 6 checks fail (:724/:725 x the five other kinds) |
 | 9 | e75e0810 | item 12, private plugins | `CASCADE_FLAG_PRIVATE_DATA` (bit 31, a flag outside `CASCADE_CAP_ALL_KNOWN`); web "decoded", "tracks", served pictures, REMOTE decoder lines, copied diagnostics all skip a private plugin | `test_engine_api_private` P1-P6 (28 checks), `test_plugin_validate`, `test_plugin_api/host`, `test_module_census`, `test_plugins_view`, `test_plugin_abi3_compat`, `test_server_host` pass; `test_engine_api_03` Passed alone 55.65 s after one failure in a parallel batch | all five sinks mutated: 7 checks fail, one group per sink |
+| 10 | 16913b89 | core-formats 7, macros | `APP_MACRO_RUN / STOP / RELOAD` (0x8614-0x8616): `macros.json` in the per-user folder, played on the control pass through `applyCommand`, the model's deny list plus `APP_MACRO_`; facts `macro.*` | `test_engine_api_macros` M1-M6 (64 checks) | refusal check removed: M3 fails twice; `APP_MACRO_` off the deny list: M4 fails; pump removed: M2 fails 7 times |
+| 11 | 8d67f50d | item 13, host event feed (AD3) | `post_event`, `read_events`, `events_seq` appended to `CascadeHostApi`; ring of 1,024 in memory; the host posts every drained decoder line as kind `text`; private events are the plugin's own; `PluginApiCore::hostEvents` for the host | `test_plugin_events` E1-E7 (1,187 checks), `test_engine_api_private` P7; **43 of 43 published plugin binaries load against the grown table** (`test_plugin_abi3_compat` on the newest win-x64 copy of each) | private filter removed: E5 fails 5x; ring bound removed: E4 fails; kind check removed: E3 fails 8x |
+| 12 | acdcc9d7 | slint-gaps item 3, engine half of the frequency lock (C3) | `APP_RADIO_LOCK` (0x8617): `Receiver::tuneLocked_`, every tuning command DENIED, `retuneSourceHz` no-op; `fact.radio.n.locked` | `test_engine_api_lock` L1-L6 | op-level refusal and choke point disabled: L2 fails for 7 commands, L4 3 checks |
+| 13 | 969f7137 | recording-models 3, file-name template (naming) | `APP_SET_RECORD_NAME` (0x8618): template in `record-name.txt`, validated on SET, expanded at each take's start; `fact.record.nameTemplate` | `test_engine_api_recname` N1-N5: a real take on the generator is `100.1/WFM_2026.wav` | validation off: N1 fails 9x; take path never set: N3 fails |
+| 14 | ff1d753e | W1 "not reached" F, marker cap | `CASCADE_MAX_MARKERS_PER_PLUGIN` 64 -> 256, `fact.plugin.markerLimit` | `test_engine_api_markerlimit` K1-K3 | fact removed: K1 fails twice |
 
 Notes on the proofs
 * Everything above that touches the Linux-only lines (`confirmLinuxUpdate`) or the Windows installer (W12) is proven through its pure functions only: the Linux lines were not compiled here, and nothing was installed or opened.
 * The E4000 and benchmark rows were exercised end to end (stand-in server; the real engine executable), not only by unit tests.
 * A slip, found and fixed in the commit that caused it (bf330b36): a plain `boot()` in `test_process_boot_kind` starts the crash sentinel, which is a child of the test's own executable and re-runs the test; six chained copies were stopped by hand (my own processes). A second slip: `test_crash_upload` is a gui test and was run once on the visible desktop; it failed there, passed on the hidden desktop; every gui test since runs on the hidden desktop only.
 
-(Further sections are appended as the remaining items are finished.)
+## 4. Gates
+
+* **First-third headless gate** (`ctest -L "headless|slint" -I <slice>`, 100 test numbers a slice, `-j4 --timeout 300`, 883 tests, at the tip before the macros commit): 8 red. Five are the
+  known false failures (`test_airband_data`, `test_band_plan`, `test_converter_call_sites`, `test_page_resize_id`, `test_png_decode`), `test_diagnostics_free` is the stale-stamp one (uncommitted
+  tree at the time), `test_engine_main_password_not_in_argv` passed alone (7.21 s: load), and **`test_crash_upload_free` fails alone, twice in a row, at `tests/test_crash_upload.cpp:1782`
+  (`srv.connections() == 1`)**: the same line fails, with `FOXSDR_PASS=free`, in the test binaries of two OTHER lanes' builds on the base (`mr-dsp` = engine/multi-radio and `en-sysmodels`), so it
+  is not this lane's change. Its gui sibling `test_crash_upload` passes on the hidden desktop (22.7 s).
+* **First-third GUI gate:** started on the hidden desktop (`FOXSDR_FRAME_CAP_HZ=60`, `-L gui -j3`), 278 tests; 21 had run (all passed) after 10 minutes, a rate that makes the gate about two
+  hours, and a build cannot be made while it runs, so it was stopped by hand (my own `ctest`). The GUI gate is therefore run ONCE, at the end, on the final tip (section 8).
+* Second-third and final gates: section 8.
+
+## 5. Telemetry, for the Worker (NOT deployed; the standing go-ahead for the Worker is the orchestrator's to use)
+
+Nothing was added to the application's usage report or health vocabulary by this lane. What the Worker must learn, in the order "Worker first, then the application":
+* radio kind word **`kiwisdr`** (W1): `health::vocabulary()` driver list, `core/event_trail.cpp kDrivers`, `core/telemetry.cpp nativeFamilyModel`, and the Worker's own copies. Until then the app reports `other` and the equality tests stay green.
+* **`radios_max`** (the number of open radios allowed, eight): a usage-report field the app does not send yet; add it to the Worker's schema before the app is changed to send it.
+* radio kind words for the sources merged from `feat/radio-sources` and `feat/unblocked-desk` when they are registered (not registered here): `soapyremote`, `sdrconnect`, `extio`; and `hpsdr`, `rspduo` when their blocks lift.
+* **The log address scrubber** now hides `kiwisdr=`, `soapyremote=` and `sdrconnect=` like `rtltcp=` (commit 923b8ccd, with a test).
+
+## 6. What was NOT done, and why (an ordered list, so a follow-up message can continue it)
+
+Order = suggested order of the next session. "Needs" says what is missing.
+1. **`test_engine_api_merge` residual:** one run of three concurrent copies ended `1 differ` (`nothing yet | A:RUN0 B:LATCH1 A:RUN0`, merged 293 ms against one-a-pass 274 ms: both inside the 900 ms window, so not
+   a stall). Not investigated. Needs: ten quiet-machine runs alone, then the merge-sweep case run in a loop.
+2. **SoapyRemote and SDRconnect registration** (radio-sources R3/R4): the model's fake servers live inside their test files; the engine test needs them extracted into headers first (about 300 lines each), then the
+   KiwiSDR source pattern (`kXDriverKey`, `makeDeviceSource`, `openXAt`, SELECT_SOURCE dispatch and exclusion list, second-radio key, REMOTE-deny list at `fox_engine_api.cpp:2010`) in about ten files; the telemetry word first.
+3. **Network I/Q out, SBS out, metrics, webhooks, MCP server:** each needs a `ServerHost` listener key (and its `AppConfig` fields) - the metrics page and the phone-web pieces (N26) need `web_server.cpp`, owned by
+   `feat/web-secure` (not merged here), so they are listed, not touched. Webhooks and the MCP server also need the thread rows (present as exempt rows) and a credential decision.
+4. **OIRT stereo** (`dsp/oirt_stereo`): the model's output rate is its own (`composite / decimation`); the pipeline's stereo stage is rate-preserving, so it fits with decimation 1. Needs: an `FoxCommand` op and a
+   per-radio setting (the C3 pattern: about 25 files, the vendored header, the mock engine) or the owner's word that "automatic by band" is wanted; a pipeline test that FM-modulates the model's generator.
+5. **FLAC, IF recording, rollover, RF64/SigMF writers, recordings browser, seek and A-B loop, scanner priority and lockouts (`scan_aids`), operating aids (VFO A/B, band stacking), CLI options (`cli_options`), UTC clock:**
+   see the Step 0 table (section 2). The writers need a second sink beside `Recorder` and a stop path in `stopReceiver` and `shutdownQuiesce`; scan_aids is superseded by screen-c's scanner extras (the op number
+   `0x860C` it proposes collides with this tree: use `0x860A`/`0x860B`, free here, at the screen merge); the CLI parser needs a branch in `process_boot.cpp parseFlags`.
+6. **Decode database and alert rules** (core-formats 5/6): decoded text on disk is a privacy decision; with the private flag and the event ring now in, the database can read `PluginApiCore::hostEvents` and skip
+   private events - needs the owner's word on default and retention.
+7. **Items that need a screen:** every row marked `screen` in section 2; the W1 screen hand-off controls; the ones this lane added are listed in section 7.
+8. **Host rows of the depth lanes (brief item 14):** not built: alert sound call (B1), post-squelch capture (B2), airline lookup (B6), waterfall click (B7), RTTY_SCOPE (B8), `start_capture` (B12), marker kind with a dB level (B13), choice-list setting kind (B14), Winlink forms window (B16). Each is an appended
+   call or capability bit with a host-side plumbing and a screen half; see `D:/foxsdr-build/prep/depth-digest.md`. The two the digest lists as "already done in the host" were verified so (B15 `STATE_IMAGE_INPUT`,
+   B18 estimated tracks). **B9 (NFM 7 kHz discriminator audio for 9600 baud) was not measured.**
+9. **`mbe_voice` integration (item 15)** and the INDEX.md serial rows (item 16): not reached; the serial rows R5 R10 R11 R18 R19 D4-D7 F6-F16 F20 S1-S3 S12 T4 T6 T7 P4 P7 P15 are described in the Step 0 survey
+   (`D:/foxsdr-build/w2-scratch/step0-D.md`, section D); the web-page rows are listed because `feat/web-secure` has not merged.
+10. **knob-input:** left as a model (item 9): the record says it is a host layer on the Slint side, `plugin-or-host.md` row U11a places it as the plugin `controllers`.
+11. **The PASSWORD-at-rest question** is not decided by the owner and no credential storage was built: settings of kind PASSWORD travel the same configuration file as every other setting (`settings_set` writes each
+    value verbatim to the file with dated backup copies; whether the file is protected at rest is UNVERIFIED); an owner decision (see section 9).
+
+## 7. Hand-offs
+
+**To the screen lanes (English strings; none translated):**
+* Frequency lock: the lock lamp sends `FOXAPP_OP_RADIO_LOCK` (target = the radio, `ival[0]` 1/0) beside its own mask; `fact.radio.<n>.locked` is the read-back.
+* Macros: a list reading `fact.macro.names` with "Macros", "Run", "Stop", "Reload macros"; `fact.macro.running`, `fact.macro.last`, `fact.macro.error` for the status line.
+* Recording file name: a "File name" field with the hint "{freq_mhz}/{mode}_{datetime}", `FOXAPP_OP_SET_RECORD_NAME`, `fact.record.nameTemplate`; the model's refusal words come back as the op's message.
+* E4000 offset tuning: a row "Offset tuning" (tooltip "Moves the E4000 tuner's oscillator off the wanted frequency to keep its centre spike out of the picture."): the Signal bank's option table (`signal_logic.cpp`, near line 703) ignores an unknown option name.
+* `--benchmark` is a command-line mode (kept out of the usage text); a Settings > About button is optional.
+
+**To `engine-merge`:** the screen branches B (`feat/screen-b`), C (`feat/screen-c`) and S1 are not in this tree. Op numbers: screen-c's proposed `FOXAPP_OP_SCANNER_EXTRAS 0x860C` collides with this tree (0x860C-0x8613 are SCHEDULE_* and CAL_*; this lane added 0x8614-0x8618); its `0x860A`/`0x860B` are free here. The engine hand-offs C1-C9 are in section 2.7. The `thread_inventory_rows.inc`
+rows for `flac_writer`, `if_recorder`, `rec_browser`, `mcp_http`, `webhook` are exempt rows ("NOT COVERED by a heartbeat: nothing starts it yet"): the wiring that starts each gives it a ThreadSpec and removes the exemption.
+
+**To `plugins-merge-3`:** the plugins repo copy `include/plugin_abi.h` (branch review-fixes-2026-11 holds a STALE one) must gain: `CASCADE_FLAG_PRIVATE_DATA` (bit 31) and its comment; `CascadeEvent`, `CASCADE_EVENT_*` and the three appended host members `post_event`, `read_events`, `events_seq`; `CASCADE_MAX_MARKERS_PER_PLUGIN` 256. There is NO byte-compare test of the header copy (only `test_plugin_abi3_compat`, which needs `FOXSDR_PUBLISHED_PLUGINS_DIR` and prints SKIP without it): the check is a manual diff. `docs/PLUGIN-API.md` has the new sections "Decode events" and "Private data".
+The privacy plugins (Remote ID, trunking, meters, BLE, LoRa) should set `CASCADE_FLAG_PRIVATE_DATA` in their descriptors.
+`test_plugin_abi3_compat` has a STALE assertion (`(p.capabilities & ~0x7FFu) == 0u`: no published plugin declares a capability above `CASCADE_CAP_AUDIO_OUT`): 13 of the 43 newest published binaries declare higher bits, so with
+`FOXSDR_PUBLISHED_PLUGINS_DIR` set it reports 13 failures although all 43 load.
+
+## 9. Decisions for the owner (this lane's)
+
+1. **Private-plugin flag:** bit 31 in `capabilities`, no table, outside the capability census. Confirm; and tell the privacy plugin lanes to set it.
+2. **PASSWORD settings at rest:** undecided; present behaviour: the value is written to the configuration file verbatim (and its dated backups). No credential storage was built here.
+3. **Macros:** a step acts on the first radio; the model's deny list (no transmit, no plugin grants, no server or interface configuration, no uploads) applies; the file is the user's own `macros.json`. OK as is?
+4. **Frequency lock:** not saved across a restart (the window's lamp is its own). Should it be?
+5. **File-name template:** one template for every take, local time, `{bookmark}` unresolved (reads `unknown`). Rollover, FLAC and one-file-per-transmission are separate decisions.
+6. **Event ring:** a plugin may post without a quota (it only displaces others' events from a ring of 1,024). Add a quota?
+7. **Marker cap 256** (plugin ABI constant): confirm; a plugin built against it on an older host gets `LIMIT` at the older host's quota.
+8. **Two APRS-IS paths:** the plugin's (receive and iGate, `qAO`) is the one that works; the core client (`net/aprs_is.*`, `qAO` enforced at `aprs_is.cpp:274`) stays an unwired model so no station runs two iGates.
+9. **PortAudio is patched in the vendored tree** (`third_party/portaudio/src/common/pa_front.c`, fenced, recorded in `FOXSDR-PATCHES.md`): a lock around its open-stream list. Upstream's fix, if any, should replace it at the next upgrade.
+
+## 10. Unverified (everything not run)
+
+* `confirmLinuxUpdate` (Linux-only lines of `process_boot.cpp`) was not compiled: no Linux toolchain here; CI's Linux build is the check.
+* gqrx and CubicSDR bookmark files were never seen (the model's own caveat): the import is proven against the model's hand-written fixtures.
+* E4000 offset tuning against a real E4000 dongle behind a real rtl_tcp server.
+* A real plugin setting `CASCADE_FLAG_PRIVATE_DATA` (none does yet): the flag-to-sink path is proven with stand-in names; the flag read from a descriptor by the validator test.
+* The classification of the `test_engine_api_merge` crash on the exact base commit d3630d78 (no binary of it exists; the evidence is the identical sink code from d3630d78 to W1's tip and another lane's crash at the same offset).
+* The frequency lock against a real plugin `request_tune` and a running list scan (both end in `retuneSourceHz`; reasoned, not driven).
+* Every item in section 6.
