@@ -62,6 +62,8 @@ const Row kRows[] = {
     {"src/core/record_finish.cpp", 1, 0, 1, 1, "kThreadDiskJob", ""},
     {"src/core/sentinel.cpp", 1, 0, 0, 0, "",
      "the sentinel's exit deadline: a thread that sleeps and then ends the process, the last resort and not a worker"},
+    {"src/core/sys_device_watch.cpp", 1, 0, 0, 0, "",
+     "the device-arrival watcher's window thread (one per started watcher): it blocks in GetMessage for the OS by design and ends on a stop message; standalone model, not yet wired into the engine - NOT COVERED by this lane (a heartbeat would be wrong for a loop that waits for the OS)"},
     {"src/core/telemetry.cpp", 4, 0, 0, 0, "",
      "the telemetry senders (usage record, health, the still-running beat) and the removal of a disarmed ledger's file: one-shot exchanges bounded by their own timeouts - NOT COVERED by this batch (a known gap)"},
     {"src/core/tester_link_net.cpp", 2, 0, 0, 0, "", R_NET},

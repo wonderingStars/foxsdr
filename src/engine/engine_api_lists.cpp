@@ -207,6 +207,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(radioLockVersion_);  // the frequency lock of every radio (FOXAPP_OP_RADIO_LOCK)
     f.value(recordNameVersion_); // the recording file-name template (FOXAPP_OP_SET_RECORD_NAME)
     f.value(stereoSystemVersion_);  // the stereo system of every radio (FOXAPP_OP_SET_STEREO_SYSTEM)
+    f.value(hotplugVersion_);   // the hot-plug counts (engine_hotplug.cpp)
     f.text(markerError_);
     // The DSP chain's input rate (API 0.3 8.5, fact.input.rateHz): the source's rate
     // unless the chain refused a change of it, and then the one the display is
@@ -1361,6 +1362,11 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     fact("smeter.cal.state", smeterState_, true);
     fact("smeter.cal.message", smeterMessage_, true);
     fact("smeter.cal.devices", std::to_string(smeterCal_.size()), true);
+    // HOT-PLUG (engine serial lane A, R10): whether the device-change notice is running and what it has counted (counts only).
+    fact("hotplug.on", hotplugWatch_ ? "1" : "0");
+    fact("hotplug.bursts", std::to_string(hotplugBursts_));
+    fact("hotplug.arrivals", std::to_string(hotplugArrivalsTotal_));
+    fact("hotplug.removals", std::to_string(hotplugRemovalsTotal_));
     fact("radio.count", std::to_string(receiverCount()));
     fact("radio.max", std::to_string(kMaxReceivers));
     fact("radio.solo", std::to_string(soloRadio_));   // the radio heard alone, 0 = nobody (RADIO_SOLO's read-back; multi-radio stage 5 addition)

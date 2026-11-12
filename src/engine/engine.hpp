@@ -46,6 +46,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/sys_device_watch.hpp"
 #include "core/macros.hpp"
 #include "core/schedule.hpp"
 #include "core/airband_monitor.hpp"
@@ -3190,6 +3191,16 @@ private:
     // VFO A / B (engine serial lane A, row T6; engine_vfo.cpp): the radio's own tune is the active letter's, Receiver::vfoOther_ is the other letter's register; this swaps them (the active
     // radio's frequency, mode and bandwidth against the register's) and retunes. Used by FOXAPP_OP_VFO_SELECT and VFO_SWAP, under the radio's scope.
     void vfoExchange();
+    // HOT-PLUG (engine serial lane A, row R10; engine_hotplug.cpp; core/sys_device_watch.hpp): one watcher per engine; the settled callback sets atomics and pumpHotplug (the control pass) acts.
+    void pumpHotplug();
+    std::atomic<int> hotplugArr_{0};
+    std::atomic<int> hotplugRem_{0};
+    std::atomic<bool> hotplugSettled_{false};
+    int hotplugBursts_ = 0;
+    int hotplugArrivalsTotal_ = 0;
+    int hotplugRemovalsTotal_ = 0;
+    std::uint64_t hotplugVersion_ = 1;
+    std::unique_ptr<cascade::core::sys::DeviceArrivalWatcher> hotplugWatch_;   // (declared last of these: destroyed first, its thread joined before the atomics go)
     void pollStereoSystem();
     std::uint64_t stereoSystemVersion_ = 1;
     // RECORDING FILE NAMES FROM A TEMPLATE (engine_recname.cpp; FOXAPP_OP_SET_RECORD_NAME, engine wiring W2).
@@ -3403,6 +3414,9 @@ public:
     // all of them at once. stopTransfers() then teardown() take it down;
     // ~Engine does both for a front end that did not. GUI thread in 3a.
     void initialise();
+    // HOT-PLUG (engine serial lane A, R10; engine_hotplug.cpp): the OS device-change notice. The real service starts it after initialise(); stop is also done by shutdownQuiesce().
+    void startHotplugWatch(bool registerWithOs, cascade::core::sys::ArrivalConfig cfg = {});
+    void stopHotplugWatch();
     void loadBookmarks();
     // Reads the previous session out of the config, counts a crash if it
     // never finished, and sends its report. Start-up only, after applyConfig (the crash count and the pending report are read

@@ -45,6 +45,24 @@ struct AppWindowTestAccess {
         return e.configSnapshot();
     }
     static void restore(Engine& e, const cascade::core::AppConfig& c) { e.applyConfig(c); }
+    // HOT-PLUG (engine serial lane A, R10): a watcher that listens to nobody but inject(), a short settle time, and the saved-radio retry the arrival must bring forward.
+    static void hotplugStart(Engine& e, std::int64_t settleMs) {
+        cascade::core::sys::ArrivalConfig c;
+        c.settleMs = settleMs;
+        c.maxWaitMs = settleMs * 4;
+        e.startHotplugWatch(false, c);
+    }
+    static bool hotplugInject(Engine& e, bool arrival, const std::string& path) {
+        return e.hotplugWatch_ && e.hotplugWatch_->inject(arrival ? cascade::core::sys::DeviceChange::Arrival : cascade::core::sys::DeviceChange::Removal, path);
+    }
+    static void armBusyRetry(Engine& e, int attempts, double lastFailSec) {
+        e.receivers_[0]->savedRadioRetryBusy_ = true;
+        e.receivers_[0]->savedRadioRetryAttempts_ = attempts;
+        e.receivers_[0]->savedRadioRetryLastFailSec_ = lastFailSec;
+    }
+    static int retryAttempts(Engine& e) { return e.receivers_[0]->savedRadioRetryAttempts_; }
+    static double retryLastFail(Engine& e) { return e.receivers_[0]->savedRadioRetryLastFailSec_; }
+    static bool hotplugRunning(Engine& e) { return e.hotplugWatch_ != nullptr; }
     static void recordDir(Engine& e, const std::string& dir) { e.recordDir_ = dir; }   // (engine serial lane A: a scratch recordings folder)
     static std::size_t transmitSlot(const Engine& e) { return e.transmitRadioSlot(); }
     static std::string transmitArgs(const Engine& e) { return e.transmitArgs_; }

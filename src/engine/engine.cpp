@@ -10732,6 +10732,7 @@ void Engine::pumpAudioMute() { updateAudioMute(); }
 // reasons that went with each line.
 
 void Engine::shutdownQuiesce() {
+    stopHotplugWatch();   // (R10: the window thread first - nothing it calls back into is torn down yet)
     // STAGE 5b: THE SERVERS STOP FIRST, before the control thread, as ~AppWindow stopped the ones it owned before anything else: a request in
     // flight must not reach a stopped pass, the servers' handlers read the snapshot and the API host, and nothing may be accepting a browser's
     // key while the keys are being let go below. WebServer::stop() can block for as long as the read timeout (10 s) when a client holds a
@@ -10866,6 +10867,7 @@ void Engine::pumpWorkers() {
     // ...and the saved radio that was only busy at start-up (0.99.92): tried again at 2, 4, 8 and 16 s after each failure. One bool read on
     // every pass with nothing armed.
     pollSavedRadioRetry();
+    pumpHotplug();   // R10: a settled burst of device arrivals / removals
     // Release a wheel-burst retune the coalescer held back (~50 ms pacing).
     pollPendingRetune();
     pollStereoSystem();

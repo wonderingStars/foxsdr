@@ -205,6 +205,7 @@ EngineService::Restored EngineService::restore() {
         engine_.beginPluginContainment(settingsDir, settingsFile);
     }
     engine_.initialise();
+    engine_.startHotplugWatch(true);   // R10: the OS device-change notice (a local notification, no network)
     writer_.bind(cascade::core::ConfigStore::writeFile);
 
     if (persistent()) {
