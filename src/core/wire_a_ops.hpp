@@ -26,13 +26,23 @@
 #define FOXAPP_OP_MARKER_EXPORT          0x8802u /* text: full path; ival[0]: 0 CSV / 1 JSON */
 #define FOXAPP_OP_MARKER_IMPORT          0x8803u /* text: full path; num[0]: merge reach, Hz (0 = same frequency only) */
 
+//   BOOKMARK_NOTE (SETTINGS): the note and tags of one bookmark (core/bookmark_notes.hpp, kept in bookmark_notes.json beside markers.json, keyed by frequency + mode so they survive the
+//   bookmark list being re-imported). ival[0]: the bookmark's id; ival[1]: 0 = set, 1 = read. set: long text (or text) = JSON {"note":"...", "tags":["a","b"]} (note up to 2000 bytes, up to 16 tags of
+//   32 bytes; an empty note and no tags removes the record; the text "" removes it too); read: the record's JSON in fact.bookmark.note.last (id in fact.bookmark.note.lastId, "" when none).
+//   NOT_FOUND: no bookmark with that id; BAD_ARGUMENT: bad JSON, an over-long note, a bad tag, too many notes. NO_CHANGE: set to what is there. BOOKMARK_FIND (SETTINGS): ival[0]: 0 = text search of notes and
+//   tags, 1 = bookmarks carrying the tag the text names; the ids come back newline-separated in fact.bookmark.find, applied[0] = the count. A bookmark that is renamed or retuned takes its note with it.
+#define FOXAPP_OP_BOOKMARK_NOTE          0x8804u /* ival[0]: bookmark id; ival[1]: 0 set / 1 read; long text: JSON {note, tags} */
+#define FOXAPP_OP_BOOKMARK_FIND          0x8805u /* ival[0]: 0 text / 1 tag; text: the query */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
 #define WIRE_A_KOPS \
     {FOXAPP_OP_HISTORY_STEP, "APP_HISTORY_STEP", true},     {FOXAPP_OP_CHANNEL, "APP_CHANNEL", true}, \
     {FOXAPP_OP_MARKER_EXPORT, "APP_MARKER_EXPORT", true}, \
-    {FOXAPP_OP_MARKER_IMPORT, "APP_MARKER_IMPORT", true},
+    {FOXAPP_OP_MARKER_IMPORT, "APP_MARKER_IMPORT", true}, \
+    {FOXAPP_OP_BOOKMARK_NOTE, "APP_BOOKMARK_NOTE", true}, \
+    {FOXAPP_OP_BOOKMARK_FIND, "APP_BOOKMARK_FIND", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP

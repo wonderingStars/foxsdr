@@ -14,6 +14,7 @@
 #define CASCADE_ENGINE_WIRE_A_HPP
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -22,6 +23,8 @@
 #include <vector>
 
 #include "core/background_saver.hpp"
+#include "core/bookmark.hpp"
+#include "core/bookmark_notes.hpp"
 #include "core/channel_plans.hpp"
 #include "core/freq_history.hpp"
 #include "foxsdr_api.h"
@@ -43,6 +46,9 @@ public:
 
     // Once per control pass, after the plugins and the scanner: records, ticks, saves.
     void pass();
+
+    // Writes what is dirty and waits up to `bound` for the lane's writes (the engine's exit drain). False when a write was abandoned.
+    bool drain(std::chrono::milliseconds bound);
 
     // The lane's facts (LOCAL: they can name a frequency), and the counter that moves when any of them does.
     void facts(const std::function<void(const std::string&, const std::string&)>& fact) const;
@@ -79,6 +85,24 @@ private:
     void filesFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
     std::string markerIoLast_;   // fact.markerio.last: what the last export / import did, in words (no path)
     std::string markerIoError_;
+
+    // ---- bookmarks: notes and tags (wire_a_bookmarks.cpp) ----
+    Result bookmarkNoteOp(const FoxCommand& c, const std::string& text, Result res);
+    Result bookmarkFindOp(const FoxCommand& c, const std::string& text, Result res);
+    void bookmarksPass();
+    void bookmarkFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    void bookmarksLoadOnce();
+    void notesChanged();
+    // The bookmark with this id (nullptr when there is none).
+    const cascade::core::Bookmark* bookmarkById(std::uint64_t id) const;
+    cascade::core::tuning::BookmarkNotes notes_;
+    bool bookmarksLoaded_ = false;
+    bool notesDirty_ = false;
+    double notesDueS_ = 0.0;
+    unsigned bookmarksSeenVersion_ = 0;
+    std::map<std::uint64_t, cascade::core::tuning::BookmarkNotes::Key> bookmarkKeys_;   // id -> the key its note is under, as of the last look
+    std::string noteLast_, noteLastId_, findLast_;
+    std::string notesError_;
 
     // ---- shared helpers (wire_a.cpp) ----
     // A full path the user typed (absolute, no control characters, under 1024 bytes). False with `why` when it is not.

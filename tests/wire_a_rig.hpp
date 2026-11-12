@@ -5,6 +5,7 @@
 #pragma once
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <memory>
@@ -13,6 +14,7 @@
 
 #include "check.hpp"
 #include "core/app_commands.hpp"
+#include "core/freq_manager.hpp"
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "engine_api_test_env.hpp"
@@ -24,6 +26,7 @@ struct AppWindowTestAccess {
     using Engine = cascade::engine::Engine;
     static void recordDir(Engine& e, const std::string& dir) { e.recordDir_ = dir; }
     static void markerPath(Engine& e, const std::string& path) { e.markerPath_ = path; }
+    static cascade::core::FreqManager& bookmarks(Engine& e) { return e.freqMgr_; }
 };
 }  // namespace cascade::gui
 
@@ -80,6 +83,17 @@ struct Rig {
         return o;
     }
     const FoxEngineApi* api() const { return wire_a_rig::api(); }
+    // The id of the bookmark at `hz` (0 when there is none), from the API's list.
+    std::uint64_t bookmarkId(double hz) {
+        const int32_t n = api()->read_list(local->raw(), FOXAPI_LIST_BOOKMARKS, 0, nullptr);
+        for (int32_t i = 0; i < n; ++i) {
+            FoxListItem it{};
+            it.structSize = sizeof(it);
+            api()->read_list(local->raw(), FOXAPI_LIST_BOOKMARKS, static_cast<uint32_t>(i), &it);
+            if (std::fabs(it.value[0] - hz) < 1.0) { return it.id; }
+        }
+        return 0;
+    }
     std::string fact(const std::string& key) {
         char buf[8192];
         const int32_t n = api()->get_setting(local->raw(), ("fact." + key).c_str(), buf, sizeof(buf));

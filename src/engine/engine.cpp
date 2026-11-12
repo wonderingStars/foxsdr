@@ -6566,6 +6566,7 @@ bool Engine::drainListSaves(std::chrono::steady_clock::time_point deadline) {
         cascade::core::diagWarnf("bookmarks: the final save failed");
         landed = false;
     }
+    if (!WireA::of(*this).drain(left)) { landed = false; }   // wire-a: the lane's files
     if (!markerSaver_.finishOrAbandon(left)) {
         cascade::core::diagLogf("markers: final save abandoned - the disk did not answer in time");
         landed = false;

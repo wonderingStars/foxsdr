@@ -38,12 +38,30 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
         case FOXAPP_OP_MARKER_EXPORT:
         case FOXAPP_OP_MARKER_IMPORT:
             return markerIoOp(c, text, res);
+        case FOXAPP_OP_BOOKMARK_NOTE:
+            return bookmarkNoteOp(c, text, res);
+        case FOXAPP_OP_BOOKMARK_FIND:
+            return bookmarkFindOp(c, text, res);
         default:
             return refused(res, FOXAPI_UNSUPPORTED, "this operation is not in this build");
     }
 }
 
+bool WireA::drain(std::chrono::milliseconds bound) {
+    notesDueS_ = 0.0;   // anything dirty goes out now
+    bookmarksPass();
+    const auto end = std::chrono::steady_clock::now() + bound;
+    bool ok = true;
+    for (auto& kv : savers_) {
+        const auto now = std::chrono::steady_clock::now();
+        const auto left = now < end ? std::chrono::duration_cast<std::chrono::milliseconds>(end - now) : std::chrono::milliseconds(0);
+        if (!kv.second->finishOrAbandon(left)) { ok = false; }
+    }
+    return ok;
+}
+
 void WireA::pass() {
+    bookmarksPass();
     historyPass();
     drainSaves();
 }
@@ -53,6 +71,7 @@ void WireA::facts(const std::function<void(const std::string&, const std::string
     channelFacts(fact);
     tunedFacts(fact);
     filesFacts(fact);
+    bookmarkFacts(fact);
 }
 
 void WireA::tunedFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {

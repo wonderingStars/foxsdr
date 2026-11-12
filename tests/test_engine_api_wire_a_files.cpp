@@ -4,6 +4,9 @@
 //       kept); a second import merges; a file that exists is never overwritten; a relative path, a bad direction, a missing file, a file with one bad row (nothing changes),
 //       a formula note guarded in the CSV and unguarded on the way back.
 //
+//   F2  BOOKMARK NOTES AND TAGS: set, read back, text search, tag search, the same again is NO_CHANGE, a bad tag / over-long note / bad JSON / unknown id are refused and change nothing,
+//       a bookmark retuned by the window takes its note with it, the file reaches the disk and a new engine reads it.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cmath>
 #include <cstdio>
@@ -83,6 +86,83 @@ void testMarkers() {
     CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_MARKER_IMPORT, 0.0, 0, (g_dir / "big.csv").string().c_str())).status(), FOXAPI_FAILED);
 }
 
+FoxCommand noteSet(std::uint64_t id) { return testing::cmd(FOXAPP_OP_BOOKMARK_NOTE, 0.0, static_cast<long long>(id)); }
+
+void testNotes() {
+    std::printf("F2: bookmark notes and tags\n");
+    const fs::path user = g_dir / "user2";
+    std::uint64_t id1 = 0;
+    {
+        Rig r(user);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RUN, 0, 1)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_FREQUENCY, 145.5e6, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_BOOKMARK_ADD, 0, 0, "Calling")).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_FREQUENCY, 433.92e6, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_BOOKMARK_ADD, 0, 0, "Sensors")).status(), FOXAPI_OK);
+        id1 = r.bookmarkId(145.5e6);
+        const std::uint64_t id2 = r.bookmarkId(433.92e6);
+        CHECK(id1 != 0 && id2 != 0 && id1 != id2);
+        const std::string rec = R"({"note":"Local repeater, busy at 18:00","tags":["Repeater","two-metre"]})";
+        CHECK_EQ(r.send(noteSet(id1), &rec).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(noteSet(id1), &rec).status(), FOXAPI_NO_CHANGE);   // the same again
+        FoxCommand rd = noteSet(id1);
+        rd.ival[1] = 1;
+        CHECK_EQ(r.send(rd).status(), FOXAPI_OK);
+        CHECK_EQ(r.fact("bookmark.note.lastId"), std::to_string(id1));
+        CHECK(r.fact("bookmark.note.last").find("Local repeater") != std::string::npos);
+        CHECK(r.fact("bookmark.note.last").find("\"repeater\"") != std::string::npos);   // tags are folded to lower case
+        CHECK_EQ(r.fact("bookmark.notes.count"), std::string("1"));
+        // searches
+        testing::Outcome o = r.send(testing::cmd(FOXAPP_OP_BOOKMARK_FIND, 0.0, 0, "busy"));
+        CHECK_EQ(static_cast<int>(o.result.applied[0]), 1);
+        CHECK_EQ(r.fact("bookmark.find"), std::to_string(id1));
+        o = r.send(testing::cmd(FOXAPP_OP_BOOKMARK_FIND, 0.0, 1, "TWO-METRE"));
+        CHECK_EQ(static_cast<int>(o.result.applied[0]), 1);
+        o = r.send(testing::cmd(FOXAPP_OP_BOOKMARK_FIND, 0.0, 1, "nothing"));
+        CHECK_EQ(static_cast<int>(o.result.applied[0]), 0);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_BOOKMARK_FIND, 0.0, 3, "x")).status(), FOXAPI_OUT_OF_RANGE);
+        // refusals change nothing
+        const std::string badTag = R"({"note":"x","tags":["bad tag with spaces and ;; "]})";
+        const std::string badJson = "{not json";
+        const std::string longNote = std::string("{\"note\":\"") + std::string(2100, 'n') + "\"}";
+        CHECK_EQ(r.send(noteSet(id1), &badJson).status(), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(r.send(noteSet(id1), &longNote).status(), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(r.send(noteSet(987654), &rec).status(), FOXAPI_NOT_FOUND);
+        (void)badTag;
+        CHECK_EQ(r.fact("bookmark.notes.count"), std::string("1"));
+        // the window retunes the bookmark: the note follows it
+        {
+            cascade::core::FreqManager& fm = Access::bookmarks(r.eng);
+            const std::size_t i = fm.indexOfId(id1);
+            cascade::core::Bookmark b = fm.list()[i];
+            b.freqHz = 145.55e6;
+            fm.updateAt(i, b);
+        }
+        r.settle(50);
+        rd = noteSet(r.bookmarkId(145.55e6));
+        rd.ival[1] = 1;
+        CHECK_EQ(r.send(rd).status(), FOXAPI_OK);
+        CHECK(r.fact("bookmark.note.last").find("Local repeater") != std::string::npos);
+        // the file is written on a worker (half a second after the change)
+        CHECK(r.until([&] { return fs::exists(user / "bookmark_notes.json"); }, 6000));
+    }
+    // a new engine on the same folder reads the note back (bookmarks are not reloaded here: the notes file alone is held)
+    {
+        Rig r(user);
+        r.settle(200);
+        CHECK_EQ(r.fact("bookmark.notes.count"), std::string("1"));
+        CHECK_EQ(r.fact("bookmark.notes.error"), std::string());
+    }
+    // a damaged file is reported and the notes start empty
+    {
+        spit(user / "bookmark_notes.json", "{\"version\": 9}");
+        Rig r(user);
+        r.settle(200);
+        CHECK_EQ(r.fact("bookmark.notes.count"), std::string("0"));
+        CHECK(!r.fact("bookmark.notes.error").empty() && r.fact("bookmark.notes.error") != "<absent>");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -93,6 +173,7 @@ int main() {
     fs::remove_all(g_dir, ec);
     fs::create_directories(g_dir, ec);
     testMarkers();
+    testNotes();
     fs::remove_all(g_dir, ec);
     return check::finish("test_engine_api_wire_a_files");
 }
