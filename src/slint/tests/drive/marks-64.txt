@@ -1,0 +1,6 @@
+#! frames=300 size=1280x720 FOXSDR_SLINT_TEST_MARKS=64
+# marks-64 (lane S1, item 4): 64 made-up marks, the most the host takes from ONE plugin today (CASCADE_MAX_MARKERS_PER_PLUGIN); here they are made up below the ABI like the 256 of marks-many.
+10 state marks.total == 64
++10 state marks.named >= 10
+state marks.tabs >= 1
++1 shot "marks-64.png"

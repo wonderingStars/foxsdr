@@ -1,0 +1,29 @@
+4500	ASSERTED	status-bar-keys	expect the three keys' right edge <= the window's width, with four radios open, in English at 1280 x 720
+4500	ASSERTED	status-bar-keys-fr	the same in French (the longest words: Signaler un bug / une critique)
+4500	ASSERTED	status-bar-keys-800	the same at 800 x 560 with one radio and with four
+4500	ASSERTED	status-bar-keys-800-ja	the same in Japanese at 800 x 560
+4501	NOT_DRIVABLE	-	no state names the chips that are drawn and nothing is operated; the clip sweep (EDGE items of the status bar) and the screenshots of status-bar-keys-800 show it
+4502	ASSERTED	plot-db-labels-800	state figure.plotheight < 330, figure.dbticks >= 2, figure.dbpitch >= 14 at 800 x 560
+4502	ASSERTED	plot-db-labels-1280	the same at 1280 x 720
+4503	ASSERTED	layout-airband	choose Layouts > Airband; the window's bank, sections, split and workspace layout read back
+4504	ASSERTED	layout-airband	the menu item applies the layout; the radio keeps running on the same frequency
+4505	ASSERTED	layout-hfdx	choose Layouts > Manage layouts... opens the sheet (layouts.open == 1)
+4506	ASSERTED	layout-hfdx	click Apply layout Airband / HF DX; read back as layout.bank, layout.sections, layout.split, layout.workspace
+4506	ASSERTED	layout-degrade	Apply of a layout that names a radio that is not open: the note says so and nothing is started
+4506	ASSERTED	layout-multi-radio	with four radios the layout brings back the workspace layout and the selected radio
+4507	ASSERTED	layout-save	Rename layout > type > Finish renaming; a stock name is refused
+4508	ASSERTED	layout-save	Delete layout; layouts.count and layouts.names read back
+4509	ASSERTED	layout-save	type the name, Save the current layout; refusals for a stock name and an empty one; the settings text holds the entry (workspace.savedview)
+4510	ASSERTED	layout-save	state layouts.note contains the sentence
+4511	ASSERTED	export-wf	the section is opened by the window's header; its keys are operated
+4512	ASSERTED	export-wf	type Save to; a blank path is refused; a repeated path gives the (2) file
+4513	ASSERTED	export-wf	click Data length 15 minutes; state export.length == 2
+4514	ASSERTED	export-wf	click FSW / CSV; state export.format
+4515	ASSERTED	export-wf	click Save waterfall picture; the host reads the file back (export.fileinfo: a PNG whose text chunk names the radio, centre and span)
+4516	ASSERTED	export-wf	click Save waterfall data; the spectrum file's strongest column is the carrier within one column (export.peakoffset), the CSV's rows are counted
+4517	ASSERTED	export-wf	state export.note contains the file name; state export.rows
+4518	ASSERTED	trace-persistence	click Persistence; state trace.mode == 3, trace.density > 100; Normal clears it
+4519	NOT_DRIVABLE	-	the Trace menu is the spectrum's right-click menu, which the scripted input cannot open; the decay arithmetic is held by test_slint_host_persistence
+4520	ASSERTED	marks-many	256 made-up marks: state marks.named, marks.tabs, marks.wfnamed, marks.wftabs read back; marks-few: four marks, no tab
+4521	ASSERTED	marks-many	the "+N" tab is clicked and a name picked (see the script)
+4522	NOT_DRIVABLE	-	a tooltip appears after the pointer rests on a name; the scripted input has no hover verb; the text rule is held by test_slint_host_marks

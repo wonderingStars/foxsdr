@@ -1,0 +1,48 @@
+#! frames=1100 size=1280x720 bank=2 sections=2:5
+# export-wf (lane S1, item 3): the waterfall as a file. Radio 2 is a generator with its carrier 60 kHz above the centre. After ten seconds of frames the store holds rows; the Export section (TOOLS bank, opened by the header)
+# saves the picture (a PNG with the FoxSDR text chunk), then the data as a FoxSDR spectrum file and as a CSV, to a path that is typed (a relative one goes under the profile's exports folder); each file is
+# read back by the host: the picture's chunk carries the centre and span, the spectrum file's strongest column is the carrier within one column (2 MHz over 1024 columns = 1953 Hz).
+10 state workspace.radios == 1
++1 radio add 2 60000
++40 state workspace.radios == 2
++1 click "Controls follow Radio 2"
++10 state workspace.selected == 2
++3 state export.rows >= 0
+# (the keys are below the panel's visible part with two radios open, and typing in the box scrolls the box back into view: scroll again after each type)
+# nothing is saved without a path
++1 type "Save to" "  "
++4 scroll "Save to" 400
++3 click "Save waterfall picture"
++3 state export.note contains "where"
+# let the store fill: a row a quarter second, ten seconds
++330 state export.rows >= 30
+state export.segments == 1
++1 type "Save to" "scripted/wf"
++1 scroll "Save to" 400
++1 click "Save waterfall picture"
++40 state export.working == 0
+state export.note contains "wf.png"
+state export.fileinfo contains "png radio=2;centre_hz="
+state export.fileinfo contains "span_hz=2000000.0"
+# the same path again does not overwrite: the file is "wf (2).png"
++1 click "Save waterfall picture"
++40 state export.working == 0
+state export.note contains "wf (2).png"
++1 click "FSW"
++3 state export.format == 1
++1 click "Save waterfall data"
++40 state export.working == 0
+state export.note contains "wf.fsw"
+state export.fileinfo contains "fsw rows="
+state export.peakoffset > 58000
+state export.peakoffset < 62000
++1 click "CSV"
++3 state export.format == 0
++1 click "Save waterfall data"
++40 state export.working == 0
+state export.note contains "wf.csv"
+state export.fileinfo contains "csv rows="
+# the length choices
++1 click "Data length 15 minutes"
++3 state export.length == 2
++1 shot "export-wf.png"

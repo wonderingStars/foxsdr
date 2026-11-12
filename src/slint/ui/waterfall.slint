@@ -29,7 +29,7 @@
 import { Theme } from "theme.slint";
 import { Chip, ChipTone } from "chips.slint";
 import { TooltipFace, ElidedHint } from "tooltip.slint";
-import { PluginMark, UserMarker } from "spectrum.slint";
+import { PluginMark, MarkTab, UserMarker } from "spectrum.slint";
 
 export struct AgeTick { pos: float, label: string }
 
@@ -92,6 +92,8 @@ export component WaterfallView inherits Rectangle {
     in property <float> vfo-pos;
     in property <bool> show-vfo: true;
     in property <[PluginMark]> plugin-marks;
+    in property <[MarkTab]> mark-tabs;
+    callback mark-tab-clicked(int, length, length);   // the tab's index, and the place under it in the window
     in property <[UserMarker]> user-markers;         // left to right; each is a dashed line and a tab "M1 145.212 MHz"
     in property <string> marker-tooltip;           // the host's words for the marker under the pointer (marker-hovered >= 0)
 
@@ -334,6 +336,33 @@ export component WaterfallView inherits Rectangle {
             if self.span : Rectangle { background: pm.color.alpha == 0 ? Theme.mark-fill : pm.color.with-alpha(0.14); }
             WfLine { x: 0px; height: parent.height; tint: parent.tint; dashed: pm.dashed; }
             if self.span : WfLine { x: parent.width - Theme.hairline; height: parent.height; tint: parent.tint; dashed: pm.dashed; }
+        }
+        // THE NAMES OF PLUGIN MARKS on the waterfall (lane S1, mark_layout.hpp): the same rule as the spectrum's, on the picture's top rows; what fits no row is a "+N" tab
+        for pm in root.plugin-marks : Rectangle {
+            visible: pm.label != "" && pm.row >= 0 && pm.pos >= 0 && pm.pos <= 1;
+            x: Math.max(0px, Math.min(pm.pos * root.pic-w, root.pic-w - self.width - 2px)); y: 2px + pm.row * 13px;   // moved in at the picture's right end, never cut
+            height: 13px; width: wf-name.preferred-width + 6px;
+            background: Theme.wf-key-bg.with-alpha(0.7);
+            wf-name := Text { x: 3px; y: 0px; height: parent.height; text: pm.label; vertical-alignment: center; font-family: Theme.font-ui; font-size: Theme.font-cap; color: root.mark-colour(pm.color); }
+            wf-name-hover := TouchArea { }
+            if wf-name-hover.has-hover && pm.tip != "" : TooltipFace {
+                text: pm.tip;
+                x: Math.min(0px, root.pic-w - parent.x - self.width - 4px);
+                y: parent.height + 2px;
+            }
+        }
+        for t[i] in root.mark-tabs : Rectangle {
+            x: Math.min(root.pic-w - 30px, max(0px, t.pos * root.pic-w)); y: 2px + t.row * 13px;
+            width: 30px; height: 13px;
+            border-radius: 3px; border-width: Theme.hairline; border-color: Theme.line-strong;
+            background: wf-tab-area.has-hover ? Theme.menu-hot : Theme.menu;
+            Text { text: "+" + t.count; font-family: Theme.font-ui; font-size: Theme.font-cap; color: Theme.fg-soft; horizontal-alignment: center; vertical-alignment: center; }
+            wf-tab-area := TouchArea {
+                accessible-role: button;
+                accessible-label: @tr("Show the {} names that did not fit", t.count);
+                accessible-action-default => { root.mark-tab-clicked(i, parent.absolute-position.x, parent.absolute-position.y + parent.height); }
+                clicked => { root.mark-tab-clicked(i, parent.absolute-position.x, parent.absolute-position.y + parent.height); }
+            }
         }
 
         // user marker lines: dashed, ivory, 60 % (the spectrum's are 35 %)

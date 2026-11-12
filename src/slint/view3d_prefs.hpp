@@ -8,6 +8,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <map>
 #include <string>
 
@@ -52,6 +53,9 @@ private:
 
 // The names of the entries kept verbatim.
 inline constexpr const char* kRawWorkspace = "workspace";
+// The one-click layouts (layouts_prefs.hpp, lane S1): the user's own, up to twelve, a few dozen bytes each - so this entry may be longer than the workspace's 256 bytes.
+inline constexpr const char* kRawLayouts = "layouts";
+inline constexpr std::size_t kRawLayoutsLimit = 1024;   // twelve layouts of at most 82 bytes and their separators: 995
 
 // A camera and the state it came from, both ways.
 scene3d::Camera cameraOf(const ViewState& s);

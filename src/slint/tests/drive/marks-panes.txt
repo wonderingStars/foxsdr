@@ -1,0 +1,14 @@
+#! frames=420 size=1280x720 FOXSDR_SLINT_TEST_MARKS=64
+# marks-panes (lane S1, item 4): the same rule in the radio panes (2 x 2, each pane's plot is smaller, so fewer rows): every pane lays its own names out; the crowd collapses into tabs on radio 1 and radio 2.
+10 state workspace.radios == 1
++1 radio add 2 60000
++1 radio add 3 90000
++1 radio add 4 120000
++40 state workspace.radios == 4
++1 click "2 x 2"
++30 state workspace.layout == 2
++10 state marks.r1.total >= 20
+state marks.r1.tabs >= 1
+state marks.r2.tabs >= 1
+state marks.r1.named >= 2
++1 shot "marks-panes.png"

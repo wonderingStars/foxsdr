@@ -1,0 +1,18 @@
+#! frames=300 size=1280x720
+# layout-hfdx (lane S1, item 2): the second stock layout, "HF DX" (the SIGNAL bank with Source and Radio open, a wide waterfall, one radio), applied from the sheet's keys after Airband; the window
+# goes from one arrangement to the other and the radio is untouched.
+10 state layout.bank == 0
++1 choose "Layouts" "Manage layouts..."
++5 state layouts.open == 1
++1 click "Apply layout Airband"
++4 state layout.bank == 2
+state layout.workspace == 1
++1 click "Apply layout HF DX"
++4 state layout.bank == 0
+state layout.sections == 6
+state layout.split == 25
+state workspace.layout == 0
+state layouts.note contains "HF DX"
+state running == 1
+state tunedHz == 100300000
++1 shot "layout-hfdx.png"

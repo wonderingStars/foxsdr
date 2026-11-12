@@ -109,6 +109,21 @@ int main() {
             CHECK(s.steps[13].verb == Verb::Shot && s.steps[13].label == "drive.png");
         }
     }
+    // a position or size read (lane S1): left, top, right, bottom, width or height with a numeric comparison; the old words keep their two comparisons
+    {
+        const Script s = parseInputScript(
+            "expect \"Report a bug / dislike\" right <= \"1280\"\n"
+            "expect \"Layouts\" width >= \"20\"\n"
+            "expect \"A\" bottom == \"28\"\n"
+            "expect \"A\" value equals \"x\"\n");
+        CHECK(s.errors.empty());
+        CHECK(s.steps.size() == 4 && s.steps[0].what == "right" && s.steps[0].compare == "<=" && s.steps[0].text == "1280" && s.steps[3].compare == "equals");
+        const Script bad = parseInputScript(
+            "expect \"A\" right equals \"5\"\n"       // 1: a position is compared as a number
+            "expect \"A\" value <= \"5\"\n"           // 2: a text is compared with equals or contains
+            "expect \"A\" middle <= \"5\"\n");        // 3: unknown property
+        CHECK(bad.errors.size() == 3);
+    }
     // the first step without a tick runs at tick 1; a quoted value for state
     {
         const Script s = parseInputScript("click \"A\"\nstate deviceName == \"Signal generator\"\n");

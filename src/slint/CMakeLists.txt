@@ -41,6 +41,8 @@ list(APPEND foxsdr_slint_sources workspace_logic.cpp workspace_publish.cpp works
 list(APPEND foxsdr_slint_sources radio_mix_logic.cpp radio_mix_publish.cpp)
 # SCREEN STAGE S5 (docs/multi-radio-records/screen-s5.md): Link tuning (link_logic) and what the screen remembers of the workspace (workspace_prefs, in the setting the 3D views use)
 list(APPEND foxsdr_slint_sources link_logic.cpp workspace_prefs.cpp)
+# LANE S1 (docs/multi-radio-records/screen-s1.md): one-click layouts, the waterfall as a file, the names of plugin marks decluttered
+list(APPEND foxsdr_slint_sources layouts_prefs.cpp export_logic.cpp mark_layout.cpp)
 list(APPEND foxsdr_slint_sources globe_scene.cpp solar_ephemeris.cpp globe_logic.cpp globe_draw.cpp globe_compositor.cpp globe_publish.cpp)
 # THE CLASSIC-WINDOW GAPS (docs/multi-radio-records/slint-gaps.md): the frequency lock, the digit grouping, the file drop, the help entry (gaps_logic: pure; gaps_win: Win32)
 list(APPEND foxsdr_slint_sources gaps_logic.cpp gaps_win.cpp)

@@ -215,10 +215,27 @@ void WorkspacePublisher::publishPane(RadioView& rv, const PaneContext& ctx) {
         }
     }
     {
-        const auto toMark = [](const FigureMark& m) { return PluginMark{m.pos, m.width, ss(m.label), slint::Color::from_argb_uint8(m.a, m.r, m.g, m.b), m.dashed}; };
+        const auto toMark = [](const FigureMark& m) { return PluginMark{m.pos, m.width, ss(m.label), slint::Color::from_argb_uint8(m.a, m.r, m.g, m.b), m.dashed, m.row, ss(m.tip)}; };
         std::string sig, wsig;
-        for (const auto& m : fig.marks) { sig += f5(m.pos) + f5(m.width) + m.label + (m.dashed ? "d" : "") + ";"; }
-        for (const auto& m : fig.wfMarks) { wsig += f5(m.pos) + f5(m.width) + ";"; }
+        for (const auto& m : fig.marks) { sig += f5(m.pos) + f5(m.width) + m.label + (m.dashed ? "d" : "") + std::to_string(m.row) + m.tip + ";"; }
+        for (const auto& m : fig.wfMarks) { wsig += f5(m.pos) + f5(m.width) + m.label + std::to_string(m.row) + ";"; }
+        {   // the "+N" tabs of the names that fit no row (lane S1, mark_layout.hpp)
+            std::string tsig, wtsig;
+            for (const auto& t : fig.markTabs) { tsig += f5(t.pos) + std::to_string(t.count) + ";"; }
+            for (const auto& t : fig.wfMarkTabs) { wtsig += f5(t.pos) + std::to_string(t.count) + ";"; }
+            if (sg.changed("pane.marktabs", tsig)) {
+                std::vector<MarkTab> tabs;
+                for (const auto& t : fig.markTabs) { tabs.push_back(MarkTab{t.pos, t.count, t.row}); }
+                d.mark_tabs = std::make_shared<slint::VectorModel<MarkTab>>(std::move(tabs));
+                dirty = true;
+            }
+            if (sg.changed("pane.wfmarktabs", wtsig)) {
+                std::vector<MarkTab> tabs;
+                for (const auto& t : fig.wfMarkTabs) { tabs.push_back(MarkTab{t.pos, t.count, t.row}); }
+                d.wf_mark_tabs = std::make_shared<slint::VectorModel<MarkTab>>(std::move(tabs));
+                dirty = true;
+            }
+        }
         if (sg.changed("pane.marks", sig)) {
             std::vector<PluginMark> marks;
             for (const auto& m : fig.marks) { marks.push_back(toMark(m)); }

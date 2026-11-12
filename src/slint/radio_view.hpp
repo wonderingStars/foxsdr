@@ -22,6 +22,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <slint.h>
@@ -93,7 +94,7 @@ struct WellBuffers {
 // and the frame-only fields (caption, span, foot, age ticks, peak) are meaningful only then.
 struct FigureBand { float from = 0, to = 0; std::string label; };
 struct FigureBookmark { float pos = 0; std::string label; bool favourite = false; int row = 0; };
-struct FigureMark { float pos = 0, width = 0; std::string label; std::uint8_t a = 0, r = 0, g = 0, b = 0; bool dashed = false; };
+struct FigureMark { float pos = 0, width = 0; std::string label; std::uint8_t a = 0, r = 0, g = 0, b = 0; bool dashed = false; int row = -1; std::string tip; double hz = 0; };   // row, tip, hz: lane S1 (mark_layout.hpp)
 struct FigureMarker { float pos = 0; std::string label; };
 
 struct PaneFigures {
@@ -106,6 +107,9 @@ struct PaneFigures {
     std::vector<FigureBand> ribbon;
     std::vector<FigureBookmark> bookmarks;
     std::vector<FigureMark> marks, wfMarks;
+    // THE "+N" TABS of the names that fit no row (lane S1, mark_layout.hpp): where each sits, how many names it stands for, the row it is drawn on, and the list its click opens (name, Hz)
+    struct MarkTabFig { float pos = 0; int count = 0; int row = 0; std::vector<std::pair<std::string, double>> items; };
+    std::vector<MarkTabFig> markTabs, wfMarkTabs;
     std::vector<FigureMarker> markers;
     int markerCount = 0;
     std::string keyFoot, footTuned, footRest;

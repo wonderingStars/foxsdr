@@ -1,0 +1,19 @@
+#! frames=260 size=1280x720
+# status-bar-keys (lane S1, the S6 leftover): with four radios open the status bar's three keys keep their words and sit wholly inside the window. The chips give way (the keys used to be
+# pushed past the right edge: "Report a bug / dislike" in 15 languages at 1280 x 720). English here; status-bar-keys-fr.txt has the longest French words, status-bar-keys-800*.txt the small window.
+10 state workspace.radios == 1
++1 radio add 2 60000
++1 radio add 3 90000
++1 radio add 4 120000
++40 state workspace.radios == 4
++1 click "2 x 2"
++20 state workspace.layout == 2
++3 expect "Report a bug / dislike" right <= "1280"
+expect "Request a feature" right <= "1280"
+expect "Add a radio" right <= "1280"
+# the three keys are in the status bar's row (the window's bottom 28 px) and keep a readable width
+expect "Report a bug / dislike" bottom <= "720"
+expect "Report a bug / dislike" width >= "100"
+# the keys do not overlap: Add, then Request, then Report, left to right
+expect "Request a feature" left >= "0"
++1 shot "status-bar-keys-1280.png"

@@ -350,6 +350,7 @@ export component RadioWorkspace inherits Rectangle {
             waterfall-menu-requested(r, x, px, py) => { WorkspaceModel.waterfall-menu-requested(r, x, pane.absolute-position.x + px, pane.absolute-position.y + py); }
             waterfall-wheel(r, x, n, shift) => { WorkspaceModel.waterfall-wheel(r, x, n, shift); }
             marker-hovered(r, i) => { WorkspaceModel.marker-hovered(r, i); }
+            mark-tab-clicked(r, i, wf, x, y) => { WorkspaceModel.mark-tab-clicked(r, i, wf, x, y); }
             split-changed(r, v) => { WorkspaceModel.splits[r - 1] = v; }
             link-clicked(r) => { WorkspaceModel.pane-link-clicked(r); }
             close-clicked(r) => { WorkspaceModel.remove-requested(r); }

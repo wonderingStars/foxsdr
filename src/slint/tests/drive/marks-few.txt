@@ -1,0 +1,7 @@
+#! frames=200 size=1280x720 FOXSDR_SLINT_TEST_MARKS=4
+# marks-few (lane S1, item 4): four made-up marks do not crowd each other: every name has a row and there is no "+N" tab (names that fit are never collapsed).
+10 state marks.total == 4
++10 state marks.named == 4
+state marks.tabs == 0
+state marks.wftabs == 0
++1 shot "marks-few.png"

@@ -1,0 +1,9 @@
+#! frames=200 size=800x560
+# plot-db-labels-800 (lane S1, the S6 leftover): the One layout's dB labels are laid out over the plot the window really gives the spectrum, not over a fixed 330 px. At 800 x 560 the plot is
+# much shorter than 330 px (the labels ran into one smear); the host now reads the plot's size from the window and keeps the labels at least 14 px apart.
+30 state figure.plotheight < 330
+state figure.plotheight > 30
+state figure.plotwidth < 980
+state figure.dbticks >= 2
+state figure.dbpitch >= 14
++1 shot "plot-db-labels-800.png"

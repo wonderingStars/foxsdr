@@ -53,6 +53,9 @@ bool goodName(const std::string& n) {
     return std::all_of(n.begin(), n.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_'; });
 }
 
+bool isRawName(const std::string& n) { return n == kRawWorkspace || n == kRawLayouts; }
+std::size_t rawLimit(const std::string& n) { return n == kRawLayouts ? kRawLayoutsLimit : 256; }
+
 std::string fmtF(float v) {
     char b[32];
     std::snprintf(b, sizeof(b), "%.2f", static_cast<double>(v));
@@ -69,7 +72,7 @@ ViewPrefs ViewPrefs::parse(const std::string& text) {
         const std::string name = entry.substr(0, colon);
         const std::string body = entry.substr(colon + 1);
         if (!goodName(name)) { continue; }
-        if (name == kRawWorkspace) { if (!body.empty() && body.size() <= 256) { p.raw_[name] = body; } continue; }
+        if (isRawName(name)) { if (!body.empty() && body.size() <= rawLimit(name)) { p.raw_[name] = body; } continue; }
         ViewState s;
         for (const std::string& kv : split(body, ',')) {
             const std::size_t eq = kv.find('=');
@@ -106,8 +109,8 @@ std::string ViewPrefs::raw(const std::string& name) const {
 }
 
 void ViewPrefs::setRaw(const std::string& name, const std::string& body) {
-    if (name != kRawWorkspace) { return; }
-    if (body.empty() || body.size() > 256 || body.find(';') != std::string::npos) { raw_.erase(name); return; }
+    if (!isRawName(name)) { return; }
+    if (body.empty() || body.size() > rawLimit(name) || body.find(';') != std::string::npos) { raw_.erase(name); return; }
     raw_[name] = body;
 }
 

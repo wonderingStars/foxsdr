@@ -121,6 +121,7 @@ export global WorkspaceModel {
     callback waterfall-menu-requested(int, float, length, length);
     callback waterfall-wheel(int, float, int, bool);
     callback marker-hovered(int, int);
+    callback mark-tab-clicked(int, int, bool, length, length);   // radio, tab index, on the waterfall, the place under the tab (lane S1)
     // ---- stage S4: what comes back ----
     callback master-clicked(int);                    // radio: select it and turn the page to it
     callback selector-clicked(int);                  // radio

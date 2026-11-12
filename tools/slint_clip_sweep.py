@@ -37,7 +37,7 @@ def all_languages():
 VIEWS = {
     'signal':   'bank=0 sections=0:0,1,2,3,4',
     'decode':   'bank=1',
-    'tools':    'bank=2 sections=2:0,1,2,3,4',
+    'tools':    'bank=2 sections=2:0,1,2,3,4,5',
     'extend':   'bank=3 sections=3:0,1',
     'system':   'bank=4 sections=4:0,1,2,3,4,5,6,7',
     'transmit': 'bank=0 open=transmit',
@@ -51,7 +51,14 @@ VIEWS = {
 # uiTheme today = Workbench, night = Night Watch); the size is the window's (header size=).
 SEEDS = {'workbench': 'skin-workbench.json', 'night': 'skin-night.json'}
 SIZES = {'1280': '1280x720', '800': '800x560'}
+# LANE S1 (docs/multi-radio-records/screen-s1.md): the views of its new words: the layouts sheet (a settings seed with two layouts of the user's own, the sheet opened by a capture seam with the longest
+# note), the Export section of the TOOLS bank, and the names of plugin marks with 64 made-up marks crowding the window (a bounded run's FOXSDR_SLINT_TEST_MARKS). The persistence key is in the spectrum toolbar
+# of every view.
+SEEDS_LAYOUTS = {'workbench': 'skin-workbench-layouts.json', 'night': 'skin-night-layouts.json'}
 RADIO_BODIES = {
+    'layouts': ('bank=0 FOXSDR_SLINT_LAYOUTS_SHEET=1', []),
+    'export': ('bank=2 sections=2:5', []),
+    'marks': ('bank=0 FOXSDR_SLINT_TEST_MARKS=64', []),
     'one': ('bank=0', []),   # the BASELINE: the same window with one radio, so what the several radios add is the difference
     'panes': ('bank=0', ['+1 radio add 2 60000', '+1 radio add 3 90000', '+1 radio add 4 120000', '+30 state workspace.radios == 4', '+1 click "2 x 2"', '+20 state workspace.layout == 2']),
     # (a key's label is in the interface language, so the drawer and the sheet are opened by the window's own capture seams, not by clicking their English labels)
@@ -73,7 +80,7 @@ def view_script(view: str, language: str, frames: int, shot: str = '') -> str:
     if view.startswith('r4-'):
         _, kind, skin, size = view.split('-')
         bank, body = RADIO_BODIES[kind]
-        head = '#! frames=%d %s size=%s config=%s FOXSDR_LANGUAGE=%s' % (frames, bank, SIZES[size], SEEDS[skin], language)
+        head = '#! frames=%d %s size=%s config=%s FOXSDR_LANGUAGE=%s' % (frames, bank, SIZES[size], (SEEDS_LAYOUTS if kind == 'layouts' else SEEDS)[skin], language)
         lines = ['10 state ui.language == %s' % language] + body
         if shot:
             lines.append('+5 shot "%s"' % shot)

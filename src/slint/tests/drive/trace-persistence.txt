@@ -1,0 +1,17 @@
+#! frames=300 size=1280x720
+# trace-persistence (lane S1, item 3): the spectrum's Trace choices gain "Persistence": the trace of the last seconds as a density that decays. The key switches the mode, the picture fills (cells of the
+# trace picture hold density), and leaving the mode forgets the picture. (The decay choice is in the right-click Trace menu, which the scripted input cannot open.)
+10 state trace.mode == 1
+state trace.density == 0
++1 click "Persistence"
++3 state trace.mode == 3
++60 state trace.density > 100
++1 shot "trace-persistence.png"
++1 click "Normal"
++3 state trace.mode == 0
++3 state trace.density == 0
++1 click "Persistence"
++30 state trace.density > 100
++1 click "Average"
++3 state trace.mode == 2
+state trace.density == 0

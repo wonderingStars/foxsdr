@@ -1,0 +1,4 @@
+#! frames=900 size=1600x900 FOXSDR_SLINT_FRAME_LOG=1 FOXSDR_SLINT_TEST_MARKS=64
+# marks-64 (lane S1, item 4): ONE radio, 64 made-up plugin marks, the frame meter on (frame_meter.hpp): the run's FRAMEMETER line holds the tick's own work (the figures include the marks' layout and their models). Nothing is asserted.
+10 state running == 1
++800 state running == 1

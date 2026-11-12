@@ -6,6 +6,7 @@
 #include "core/utf8_text.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -265,12 +266,58 @@ Rgba heat(float t) {
 void resetTrace(TraceState& s) {
     s.peak.clear();
     s.average.clear();
+    s.density.clear();
 }
+
+namespace {
+
+// THE PERSISTENCE (phosphor) PICTURE: the trace of the last seconds as a density, brighter where the trace spent more of them. One float a cell, decayed and added to every frame, mapped through a 256-step
+// ramp (the strength key's heat() with an alpha that rises with the density) so the picture sits over the spectrum's background like the plain trace does. Cells under 2 % are not drawn.
+void paintPersistence(Rgba* px, std::uint32_t w, std::uint32_t h, const float* bins, std::size_t n, double dbMin, double dbMax, TraceState& st) {
+    const std::size_t cells = static_cast<std::size_t>(w) * h;
+    if (st.density.size() != cells) { st.density.assign(cells, 0.0f); }
+    const float decay = std::clamp(st.decay, 0.5f, 0.999f);
+    float* d = st.density.data();
+    for (std::size_t i = 0; i < cells; ++i) { d[i] *= decay; }
+    const double range = std::max(1.0, dbMax - dbMin);
+    int last = -1;
+    for (std::uint32_t x = 0; x < w; ++x) {
+        const float v = columnMax(bins, n, x, w);
+        const int y = static_cast<int>((1.0 - std::clamp((v - dbMin) / range, 0.0, 1.0)) * (h - 1));
+        const int y0 = last < 0 ? y : std::min(last, y), y1 = last < 0 ? y : std::max(last, y);
+        for (int yy = y0; yy <= y1; ++yy) { d[static_cast<std::size_t>(yy) * w + x] += 1.0f; }
+        last = y;
+    }
+    static const std::array<Rgba, 256> ramp = [] {
+        std::array<Rgba, 256> r{};
+        for (std::size_t i = 0; i < r.size(); ++i) {
+            const float t = static_cast<float>(i) / 255.0f;
+            const Rgba c = heat(std::min(1.0f, 0.25f + 0.75f * t));
+            r[i] = Rgba{c.r, c.g, c.b, static_cast<std::uint8_t>(std::lround(255.0 * std::min(1.0, 0.18 + 0.82 * std::sqrt(static_cast<double>(t)))))};
+        }
+        return r;
+    }();
+    const float scale = (1.0f - decay) * 255.0f;
+    for (std::size_t i = 0; i < cells; ++i) {
+        const float t = d[i] * scale;
+        px[i] = t < 5.1f ? Rgba{0, 0, 0, 0} : ramp[static_cast<std::size_t>(std::min(255.0f, t))];
+    }
+}
+
+}  // namespace
 
 void paintTrace(Rgba* px, std::uint32_t w, std::uint32_t h, const float* bins, std::size_t n, double dbMin, double dbMax,
                 TraceState& st, TraceMode mode, Rgba live, Rgba held, Rgba average) {
     if (px == nullptr || w == 0 || h == 0) { return; }
     std::fill(px, px + static_cast<std::size_t>(w) * h, Rgba{0, 0, 0, 0});
+    if (mode == TraceMode::Persistence) {
+        if (bins == nullptr || n == 0) { return; }
+        st.peak.clear();
+        st.average.clear();
+        paintPersistence(px, w, h, bins, n, dbMin, dbMax, st);
+        return;
+    }
+    st.density.clear();
     if (bins == nullptr || n == 0) { return; }
     const double range = std::max(1.0, dbMax - dbMin);
     const auto yOf = [&](float db) { return static_cast<int>((1.0 - std::clamp((db - dbMin) / range, 0.0, 1.0)) * (h - 1)); };

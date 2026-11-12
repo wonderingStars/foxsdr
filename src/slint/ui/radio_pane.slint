@@ -23,7 +23,7 @@ import { Lamp } from "lamps.slint";
 import { Key } from "keys.slint";
 import { Splitter } from "tabs.slint";
 import { ElidedHint } from "tooltip.slint";
-import { SpectrumView, AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, UserMarker, TraceMode } from "spectrum.slint";
+import { SpectrumView, AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode } from "spectrum.slint";
 import { WaterfallView, AgeTick } from "waterfall.slint";
 
 export struct RadioPaneData {
@@ -63,7 +63,7 @@ export struct RadioPaneData {
     span: string,                    // "SPAN 2.400 MHz"
     trace: image,
     picture: image,
-    trace-mode: int,                 // 0 normal, 1 peak hold, 2 average
+    trace-mode: int,                 // 0 normal, 1 peak hold, 2 average, 3 persistence
     freq-ticks: [AxisTick],
     db-ticks: [DbTick],
     age-ticks: [AgeTick],
@@ -72,6 +72,8 @@ export struct RadioPaneData {
     bookmarks: [BookmarkMark],
     marks: [PluginMark],
     wf-marks: [PluginMark],
+    mark-tabs: [MarkTab],
+    wf-mark-tabs: [MarkTab],
     markers: [UserMarker],
     vfo-pos: float,
     vfo-half: float,
@@ -149,6 +151,7 @@ export component RadioPane inherits Rectangle {
     callback waterfall-menu-requested(int, float, length, length);
     callback waterfall-wheel(int, float, int, bool);
     callback marker-hovered(int, int);                 // radio, marker index
+    callback mark-tab-clicked(int, int, bool, length, length);   // radio, tab index, on the waterfall, the place under the tab (lane S1)
     callback link-clicked(int);                        // radio: the link key (stage S5): takes the radio out of the group or puts it back
     callback close-clicked(int);                       // radio: the close key (stage S4): the host removes the radio, asking first when it runs or records
     callback split-changed(int, float);                // radio, the spectrum's new share: the workspace keeps it for the radio (a pane is made again when its page comes back)
@@ -352,7 +355,10 @@ export component RadioPane inherits Rectangle {
         db-ticks: root.data.db-ticks;
         freq-ticks: root.data.freq-ticks;
         axis-unit: root.data.axis-unit;
-        trace-mode: root.data.trace-mode == 1 ? TraceMode.peak-hold : root.data.trace-mode == 2 ? TraceMode.average : TraceMode.normal;
+        trace-mode: root.data.trace-mode == 1 ? TraceMode.peak-hold : root.data.trace-mode == 2 ? TraceMode.average : root.data.trace-mode == 3 ? TraceMode.persistence : TraceMode.normal;
+        trace-mode-label: root.data.trace-mode == 1 ? @tr("Peak hold") : root.data.trace-mode == 2 ? @tr("Average") : root.data.trace-mode == 3 ? @tr("Persistence") : "";
+        mark-tabs: root.data.mark-tabs;
+        mark-tab-clicked(i, x, y) => { root.mark-tab-clicked(root.data.radio, i, false, x, y); }
         vfo-pos: root.data.vfo-pos;
         vfo-half: root.data.vfo-half;
         show-vfo: root.data.show-vfo;
@@ -416,6 +422,8 @@ export component RadioPane inherits Rectangle {
         vfo-pos: root.data.vfo-pos;
         show-vfo: root.data.show-vfo;
         plugin-marks: root.data.wf-marks;
+        mark-tabs: root.data.wf-mark-tabs;
+        mark-tab-clicked(i, x, y) => { root.mark-tab-clicked(root.data.radio, i, true, x, y); }
         user-markers: root.data.markers;
         cursor-visible: root.data.cursor-visible;
         cursor-pos: root.data.cursor-pos;
