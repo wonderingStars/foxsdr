@@ -57,7 +57,7 @@ bool parseDaily(const std::string& text, rd::Options& out, std::string& err) {
 }  // namespace
 
 std::string WireA::dailyJson() const {
-    return nlohmann::json{{"style", static_cast<int>(daily_.style)}, {"utc", daily_.clock == rd::Clock::Utc}, {"template", daily_.customTemplate}}.dump();
+    return nlohmann::json{{"style", static_cast<int>(daily_.style)}, {"utc", daily_.clock == rd::Clock::Utc}, {"template", daily_.customTemplate}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 void WireA::dailyLoadOnce() {
@@ -227,7 +227,7 @@ WireA::Result WireA::lockOp(const FoxCommand& c, const std::string& text, Result
     if (lockPolicy_.lockWhileRecording == now.lockWhileRecording && lockPolicy_.lockGain == now.lockGain) { return refused(res, FOXAPI_NO_CHANGE, "it is so already"); }
     lockPolicy_ = now;
     lock_.setPolicy(now);
-    saveFile("record-lock.json", nlohmann::json{{"lock", now.lockWhileRecording}, {"gain", now.lockGain}}.dump() + "\n");
+    saveFile("record-lock.json", nlohmann::json{{"lock", now.lockWhileRecording}, {"gain", now.lockGain}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
     bump();
     return res;
 }

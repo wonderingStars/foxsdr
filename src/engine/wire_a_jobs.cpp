@@ -165,7 +165,7 @@ WireA::Result WireA::jobOp(const FoxCommand& c, const std::string& text, Result 
         r.ok = b.ok;
         r.cancelled = b.cancelled;
         r.message = b.ok ? std::string("exported") : (b.cancelled ? std::string("cancelled") : b.error);
-        r.json = resultJson(b).dump();
+        r.json = resultJson(b).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         return r;
     });
 }

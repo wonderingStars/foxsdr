@@ -102,7 +102,7 @@ WireA::Result WireA::recordsOp(const FoxCommand& c, const std::string& text, Res
                 JobResult r;
                 r.ok = ok;
                 r.message = ok ? "hashed" : (err == "cancelled" ? "cancelled" : "the recording could not be read");
-                if (ok) { r.json = json{{"sha256", hex}, {"sizeBytes", bytes}}.dump(); }
+                if (ok) { r.json = json{{"sha256", hex}, {"sizeBytes", bytes}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace); }
                 return r;
             });
         }
@@ -118,7 +118,7 @@ WireA::Result WireA::recordsOp(const FoxCommand& c, const std::string& text, Res
                 JobResult r;
                 r.ok = true;
                 r.message = s == an::RefCheck::Match ? "this is the recording the project was made on" : "this is not the recording the project was made on";
-                r.json = json{{"state", refWord(s)}, {"tags", p.tags.size()}}.dump();
+                r.json = json{{"state", refWord(s)}, {"tags", p.tags.size()}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                 return r;
             });
         }
@@ -158,7 +158,7 @@ WireA::Result WireA::recordsOp(const FoxCommand& c, const std::string& text, Res
             JobResult r;
             r.ok = true;
             r.message = action == "list" ? "listed" : (action == "verify" ? "checked" : "done");
-            r.json = attachList(store, action == "verify" ? &verified : nullptr).dump();
+            r.json = attachList(store, action == "verify" ? &verified : nullptr).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             return r;
         });
     }
@@ -201,7 +201,7 @@ WireA::Result WireA::recordsOp(const FoxCommand& c, const std::string& text, Res
         JobResult r;
         r.ok = true;
         r.message = action == "list" ? "listed" : "done";
-        r.json = json{{"annotations", list.size()}}.dump();
+        r.json = json{{"annotations", list.size()}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         return r;
     });
 }

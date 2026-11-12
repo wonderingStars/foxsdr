@@ -40,7 +40,7 @@ WireA::Result WireA::markerIoOp(const FoxCommand& c, const std::string& text, Re
         if (c.ival[0] != 0 && c.ival[0] != 1) { return refused(res, FOXAPI_OUT_OF_RANGE, "0 is CSV and 1 is JSON"); }
         const std::vector<cascade::core::FreqMarker>& list = e_.freqMarkers_.list();
         if (list.empty()) { return refused(res, FOXAPI_NO_CHANGE, "there are no markers to export"); }
-        const std::string body = c.ival[0] == 0 ? t::markersToCsv(list) : t::markersToJson(list).dump(2) + "\n";
+        const std::string body = c.ival[0] == 0 ? t::markersToCsv(list) : t::markersToJson(list).dump(2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
         if (!writeNewFile(text, body, why)) {
             markerIoError_ = why;
             bump();

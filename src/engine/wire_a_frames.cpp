@@ -57,7 +57,7 @@ const char* smoothWord(int s) { return s == 1 ? "moving" : (s == 2 ? "savgol" : 
 std::string WireA::averageJson() const {
     return json{{"average", modeWord(avgCfg_.mode)}, {"frames", avgCfg_.frames}, {"timeConstantS", avgCfg_.tauS}, {"smoothing", smoothWord(avgCfg_.smoothing)}, {"smoothWidth", avgCfg_.width},
                 {"smoothOrder", avgCfg_.order}, {"comb", avgCfg_.comb}, {"combPeriod", avgCfg_.period}, {"combStrength", avgCfg_.strength}, {"dcBins", avgCfg_.dcBins}, {"combMemory", avgCfg_.memory}}
-        .dump();
+        .dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 namespace {
@@ -110,7 +110,7 @@ WireA::Result WireA::traceModeOp(const std::string& text, Result res) {
     if (text == traceMode_) { return refused(res, FOXAPI_NO_CHANGE, "that mode is in force already"); }
     traceMode_ = text;
     traceError_.clear();
-    saveFile("trace-mode.json", json{{"version", 1}, {"mode", traceMode_}}.dump() + "\n");
+    saveFile("trace-mode.json", json{{"version", 1}, {"mode", traceMode_}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
     bump();
     return res;
 }
@@ -267,7 +267,7 @@ void WireA::displayFrame(std::size_t slot, std::vector<float>& bins, double cent
             json arr = json::array();
             for (const auto& h : hits) { arr.push_back({{"hz", h.hz}, {"levelDb", h.levelDb}, {"aboveFloorDb", h.aboveFloorDb}}); }
             f.last = json{{"hits", arr}, {"channelsInSpan", r.channelsInSpan}, {"channelsOutOfSpan", r.channelsOutOfSpan}, {"floorDb", r.floorDb}, {"floorReliable", r.floorReliable},
-                          {"centreHz", centreHz}, {"spanHz", spanHz}, {"ageMs", 0}}.dump();
+                          {"centreHz", centreHz}, {"spanHz", spanHz}, {"ageMs", 0}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             f.hits = hits.size();
             f.have = true;
         }

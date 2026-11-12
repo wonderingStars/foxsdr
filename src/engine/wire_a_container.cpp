@@ -49,7 +49,7 @@ WireA::Result WireA::containerOp(const FoxCommand& c, Result res) {
     if (container_ == c.ival[0] && containerKeep_ == (c.ival[1] == 1)) { return refused(res, FOXAPI_NO_CHANGE, "it is so already"); }
     container_ = static_cast<int>(c.ival[0]);
     containerKeep_ = c.ival[1] == 1;
-    saveFile("record-container.json", json{{"flac", container_ == 1}, {"keep", containerKeep_}}.dump() + "\n");
+    saveFile("record-container.json", json{{"flac", container_ == 1}, {"keep", containerKeep_}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
     bump();
     return res;
 }
@@ -133,7 +133,7 @@ WireA::JobResult convert(const std::string& wavPath, bool keepWav, WireA::JobCtl
     if (!keepWav) { fs::remove(wav, ec); }
     r.ok = true;
     r.message = flt ? "float take written as 24-bit" : "converted";
-    r.json = json{{"frames", frames}, {"bits", outBits}, {"wavBytes", wavBytes}, {"flacBytes", flacBytes}, {"wavKept", keepWav}}.dump();
+    r.json = json{{"frames", frames}, {"bits", outBits}, {"wavBytes", wavBytes}, {"flacBytes", flacBytes}, {"wavKept", keepWav}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     return r;
 }
 

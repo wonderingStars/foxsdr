@@ -123,7 +123,7 @@ void WireA::bookmarksPass() {
     }
     if (favouritesDirty_ && e_.clockS() >= favouritesDueS_) {
         favouritesDirty_ = false;
-        saveFile("favourites.json", favourites_.toJson().dump(1) + "\n");
+        saveFile("favourites.json", favourites_.toJson().dump(1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
     }
     if (fieldsDirty_ && e_.clockS() >= fieldsDueS_) {
         fieldsDirty_ = false;
@@ -136,11 +136,11 @@ void WireA::bookmarksPass() {
             if (!std::isnan(f.toneHz)) { o["toneHz"] = f.toneHz; }
             arr.push_back(std::move(o));
         }
-        saveFile("bookmark_fields.json", nlohmann::json{{"version", 1}, {"fields", arr}}.dump(1) + "\n");
+        saveFile("bookmark_fields.json", nlohmann::json{{"version", 1}, {"fields", arr}}.dump(1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
     }
     if (notesDirty_ && e_.clockS() >= notesDueS_) {
         notesDirty_ = false;
-        saveFile("bookmark_notes.json", notes_.toJson().dump(1) + "\n");
+        saveFile("bookmark_notes.json", notes_.toJson().dump(1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
     }
 }
 
@@ -152,7 +152,7 @@ WireA::Result WireA::bookmarkNoteOp(const FoxCommand& c, const std::string& text
     if (c.ival[1] == 1) {
         const t::BookmarkNote* n = notes_.find(b->freqHz, b->mode);
         noteLastId_ = std::to_string(c.ival[0]);
-        noteLast_ = n == nullptr ? std::string() : nlohmann::json{{"note", n->note}, {"tags", n->tags}}.dump();
+        noteLast_ = n == nullptr ? std::string() : nlohmann::json{{"note", n->note}, {"tags", n->tags}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         bump();
         return res;
     }
@@ -299,7 +299,7 @@ WireA::Result WireA::favouriteOp(const FoxCommand& c, const std::string& text, R
         (void)subCommand(FOXAPI_OP_SET_SQUELCH, fav.dsp.squelchDb, 0);
         const int de = deemphIndexOf(fav.dsp.deemphasis);
         if (de >= 0) { (void)subCommand(FOXAPI_OP_SET_DEEMPHASIS, 0.0, de); }
-        favouriteRecalled_ = t::favouriteToJson(fav).dump();
+        favouriteRecalled_ = t::favouriteToJson(fav).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         res.applied[0] = e_.currentAbsoluteHz();
         bump();
         return res;
@@ -432,7 +432,7 @@ WireA::Result WireA::bookmarkFieldsOp(const FoxCommand& c, const std::string& te
             if (!std::isnan(it->second.offsetKhz)) { o["offsetKhz"] = it->second.offsetKhz; }
             if (!std::isnan(it->second.toneHz)) { o["toneHz"] = it->second.toneHz; }
         }
-        fieldsLast_ = it == fields_.end() ? std::string() : o.dump();
+        fieldsLast_ = it == fields_.end() ? std::string() : o.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         bump();
         return res;
     }

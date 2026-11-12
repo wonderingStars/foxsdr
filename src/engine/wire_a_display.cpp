@@ -51,7 +51,7 @@ WireA::Result WireA::displayOp(const FoxCommand& c, const std::string& text, Res
         if (text == gradientText_) { return refused(res, FOXAPI_NO_CHANGE, "that gradient is in force already"); }
         gradientText_ = text;
         gradientError_.clear();
-        saveFile("display-gradient.json", json{{"version", 1}, {"gradient", gradientText_}}.dump() + "\n");
+        saveFile("display-gradient.json", json{{"version", 1}, {"gradient", gradientText_}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
         bump();
         return res;
     }
@@ -68,7 +68,7 @@ WireA::Result WireA::displayOp(const FoxCommand& c, const std::string& text, Res
             for (const auto& kv : row) { r.push_back(json::array({kv.first, kv.second})); }
             out.push_back(std::move(r));
         }
-        overlayLookup_ = out.dump();
+        overlayLookup_ = out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         res.applied[0] = static_cast<double>(out.size());
         bump();
         return res;
@@ -99,7 +99,7 @@ WireA::Result WireA::displayOp(const FoxCommand& c, const std::string& text, Res
         if (!overlay->load(body, cfg, e)) { r.message = "the station database was refused: " + e; return r; }
         r.ok = true;
         r.message = "loaded";
-        r.json = json{{"rows", overlay->size()}, {"skipped", overlay->skippedRows()}, {"cleaned", overlay->cleanedCells()}}.dump();
+        r.json = json{{"rows", overlay->size()}, {"skipped", overlay->skippedRows()}, {"cleaned", overlay->cleanedCells()}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         r.onDone = [self, overlay]() { self->overlay_ = overlay; self->overlayLookup_.clear(); self->bump(); };
         return r;
     });

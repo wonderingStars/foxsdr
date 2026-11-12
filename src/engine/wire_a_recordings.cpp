@@ -121,7 +121,7 @@ WireA::Result WireA::recordingsOp(const FoxCommand& c, const std::string& text, 
                        {"startUnixMs", e.startUnixMs}, {"startSource", startWord(e.startSource)}, {"sizeBytes", e.sizeBytes}, {"channels", e.channels}, {"bits", e.bitsPerSample}, {"broken", e.broken},
                        {"error", e.error}, {"truncated", e.truncated}, {"ifRecording", e.ifRecording}, {"mode", e.mode}, {"bandwidthHz", e.bandwidthHz}});
     }
-    recordingsList_ = out.dump();
+    recordingsList_ = out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     res.applied[0] = static_cast<double>(idx.size());
     bump();
     return res;

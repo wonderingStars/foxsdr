@@ -171,7 +171,7 @@ void WireA::scanSave() {
                               {"plan", plan_.ranges().empty() ? nlohmann::json::object() : plan_.toJson()},
                               {"triggerOn", triggerOn_},
                               {"extras", {{"priorityHz", priorityHz_}, {"priorityIntervalMs", priorityIntervalMs_}, {"lockedHz", lockedHz_}, {"mute", muteWhileScanning_}, {"thresholds", th}}}};
-    saveFile("scan-plan.json", j.dump(1) + "\n");
+    saveFile("scan-plan.json", j.dump(1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
 }
 
 void WireA::scanPass() {
@@ -363,9 +363,9 @@ WireA::Result WireA::scanExtrasOp(const FoxCommand& c, const std::string& text, 
 
 void WireA::scanFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {
     fact("scanner.extras", "1");
-    fact("scan.plan", plan_.ranges().empty() ? std::string() : plan_.toJson().dump());
+    fact("scan.plan", plan_.ranges().empty() ? std::string() : plan_.toJson().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     fact("scan.plan.active", planOn_ && e_.scanner_.active() ? "1" : "0");
-    fact("scan.trigger", trigger_.configToJson().dump());
+    fact("scan.trigger", trigger_.configToJson().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     fact("scan.trigger.on", triggerOn_ ? "1" : "0");
     fact("scan.priority", hzListText(priorityHz_));
     fact("scan.priority.interval", std::to_string(static_cast<long long>(priorityIntervalMs_)));

@@ -52,7 +52,7 @@ void WireA::bandLoadOnce() {
 }
 
 void WireA::bandSave() {
-    saveFile("band_memory.json", json{{"version", 1}, {"enabled", bandOn_}, {"mask", bandMem_.enabledFields()}, {"memory", bandMem_.toJson()}}.dump(1) + "\n");
+    saveFile("band_memory.json", json{{"version", 1}, {"enabled", bandOn_}, {"mask", bandMem_.enabledFields()}, {"memory", bandMem_.toJson()}}.dump(1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
 }
 
 WireA::Result WireA::bandOp(const FoxCommand& c, const std::string& text, Result res) {
@@ -139,7 +139,7 @@ void WireA::bandPass() {
             if (a.spectrumTopDb) { o["spectrumTopDb"] = *a.spectrumTopDb; }
             if (a.spectrumRangeDb) { o["spectrumRangeDb"] = *a.spectrumRangeDb; }
             if (a.zoomSpanHz) { o["zoomSpanHz"] = *a.zoomSpanHz; }
-            bandApply_ = o.dump();
+            bandApply_ = o.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             bump();
         }
     }
