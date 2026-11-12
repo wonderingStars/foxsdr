@@ -1,0 +1,38 @@
+{
+    "version": "{{Version}}",
+    "description": "A free software-defined radio receiver with a spectrum and waterfall, a scanner, recording, a map and 43 plugins.",
+    "homepage": "https://foxsdr.com",
+    "license": {
+        "identifier": "PolyForm-Noncommercial-1.0.0",
+        "url": "{{RepoUrl}}/blob/master/LICENSE"
+    },
+    "architecture": {
+        "64bit": {
+            "url": "{{InstallerUrl}}",
+            "hash": "{{Sha256Lower}}"
+        }
+    },
+    "innosetup": true,
+    "shortcuts": [
+        [
+            "{{AppExe}}",
+            "FoxSDR"
+        ],
+        [
+            "cascade.exe",
+            "FoxSDR (classic window)"
+        ]
+    ],
+    "persist": "plugins",
+    "notes": "Scoop unpacks the setup's files without running Setup itself, so this install does not register the foxsdr: link handler. Settings stay in %APPDATA%\\foxsdr and %LOCALAPPDATA%\\FoxSDR. Your own plugins are kept in Scoop's persist folder.",
+    "checkver": {
+        "github": "{{RepoUrl}}"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "{{RepoUrl}}/releases/download/v$version/foxsdr-setup-$version.exe"
+            }
+        }
+    }
+}

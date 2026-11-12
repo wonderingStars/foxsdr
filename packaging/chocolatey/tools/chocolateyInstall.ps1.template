@@ -1,0 +1,15 @@
+$ErrorActionPreference = 'Stop'
+
+# The setup is an Inno Setup program. These three switches are the ones tools/release.ps1's install test runs it with
+# (it adds /CURRENTUSER for its own per-user check; this package installs machine-wide, the setup's default).
+$packageArgs = @{
+  packageName    = $env:ChocolateyPackageName
+  fileType       = 'exe'
+  url64bit       = '{{InstallerUrl}}'
+  checksum64     = '{{Sha256Lower}}'
+  checksumType64 = 'sha256'
+  silentArgs     = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+  validExitCodes = @(0)
+}
+
+Install-ChocolateyPackage @packageArgs

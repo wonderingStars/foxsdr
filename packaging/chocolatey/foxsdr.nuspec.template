@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chocolatey package for FoxSDR. Filled by tools/make-package-manifests.ps1. -->
+<package xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
+  <metadata>
+    <id>foxsdr</id>
+    <version>{{Version}}</version>
+    <title>FoxSDR</title>
+    <authors>Steven Fox</authors>
+    <owners>Steven Fox</owners>
+    <projectUrl>https://foxsdr.com</projectUrl>
+    <packageSourceUrl>{{RepoUrl}}/tree/master/packaging/chocolatey</packageSourceUrl>
+    <licenseUrl>{{RepoUrl}}/blob/master/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <copyright>Copyright 2026 Steven Fox</copyright>
+    <tags>sdr software-defined-radio radio rtl-sdr ham-radio spectrum waterfall ads-b</tags>
+    <summary>A free software-defined radio receiver with a spectrum and waterfall, a scanner, recording, a map and 43 plugins.</summary>
+    <description>FoxSDR is a software-defined radio receiver. It shows the spectrum and waterfall and demodulates NFM, WFM, AM, DSB, USB, LSB and CW, with stereo FM and RDS, a scanner, an airband monitor, audio and I/Q recording, a map and radar scope for decoded aircraft and ships, and plugins from an in-app catalogue. Most radios are driven by FoxSDR's own drivers. With no radio attached, a built-in signal generator and I/Q file playback work.
+
+Free for noncommercial use; commercial use needs a separate licence (see the licence link).
+
+The setup file is downloaded from the project's GitHub release and checked against the SHA-256 in this package. The setup is not code-signed (as of this package's version), so Windows may show SmartScreen when it is run by hand.</description>
+    <releaseNotes>{{ReleaseNotesUrl}}</releaseNotes>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+# Windows Package Manager manifest, installer file (schema 1.12.0). Filled by tools/make-package-manifests.ps1.
+# The setup is an Inno Setup program, so winget supplies the silent switches itself (the manifest page says so).
+# It installs machine-wide by default and elevates itself (PrivilegesRequired=admin in installer/cascade.iss).
+# Nothing here depends on the setup being code-signed.
+PackageIdentifier: StevenFox.FoxSDR
+PackageVersion: {{Version}}
+InstallerType: inno
+Scope: machine
+InstallModes:
+- interactive
+- silent
+- silentWithProgress
+UpgradeBehavior: install
+ElevationRequirement: elevatesSelf
+AppsAndFeaturesEntries:
+- DisplayName: FoxSDR {{Version}}
+  Publisher: Steven Fox
+Installers:
+- Architecture: x64
+  InstallerUrl: {{InstallerUrl}}
+  InstallerSha256: {{Sha256Upper}}
+ManifestType: installer
+ManifestVersion: 1.12.0

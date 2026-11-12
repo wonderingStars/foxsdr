@@ -1,0 +1,7 @@
+// Not compiled. A plugin source that breaks the host-sink rule: scan_sinks.cmake must refuse it.
+#include <cstdio>
+void leak(const char* id) {
+    std::fprintf(stderr, "device %s\n", id);
+    std::printf("device %s\n", id);
+}
+void keep(const CascadeHostApi* h, const char* id) { h->settings_set(h->ctx, "last", id); }

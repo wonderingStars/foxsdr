@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
+# Windows Package Manager manifest, default locale file (schema 1.12.0). Filled by tools/make-package-manifests.ps1.
+PackageIdentifier: StevenFox.FoxSDR
+PackageVersion: {{Version}}
+PackageLocale: en-GB
+Publisher: Steven Fox
+PublisherUrl: https://foxsdr.com
+PackageName: FoxSDR
+PackageUrl: https://foxsdr.com
+License: PolyForm Noncommercial 1.0.0
+LicenseUrl: {{RepoUrl}}/blob/master/LICENSE
+Copyright: Copyright 2026 Steven Fox
+ShortDescription: A free software-defined radio receiver for Windows with a spectrum and waterfall, a scanner, recording, a map and 43 plugins.
+Description: FoxSDR is a software-defined radio receiver. It shows the spectrum and waterfall and demodulates NFM, WFM, AM, DSB, USB, LSB and CW, with stereo FM and RDS, a scanner, an airband monitor, audio and I/Q recording, a map and radar scope for decoded aircraft and ships, and plugins from an in-app catalogue. Most radios are driven by FoxSDR's own drivers. With no radio attached, a built-in signal generator and I/Q file playback work. Free for noncommercial use; commercial use needs a separate licence.
+Moniker: foxsdr
+Tags:
+- sdr
+- software-defined-radio
+- radio
+- rtl-sdr
+- ham-radio
+- spectrum-analyzer
+- waterfall
+- ads-b
+ReleaseNotesUrl: {{ReleaseNotesUrl}}
+ManifestType: defaultLocale
+ManifestVersion: 1.12.0
