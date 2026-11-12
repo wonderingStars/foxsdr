@@ -11,7 +11,7 @@ Date 2026-11-12. Worktree `D:/foxsdr-wt/en-ossnet`, branch `feat/oss-net` cut fr
 | 3 | SDRuno .s1b import | No | host: `core/freq_import_sdruno.hpp` beside `freq_import_foreign.hpp`, dispatched from `importFrequencyList` (the existing import path) | LinuxSheeple-E/SDRunoPlugin_Fran (`loadS1bCsvFile`); vocabulary from the CaptDaags/SDRUno_S1B sample banks | Fran: README permission text = 3-clause BSD wording ("Portions are Copyright (C) 2020 Eric A. Cottrell"), no LICENSE file, GitHub shows none; its bundled CSV reader is ben-strasser's, BSD-3 text in the same README (nothing of it used). CaptDaags banks: no licence file, read only to learn the vocabulary, nothing copied. |
 | 4 | Receiverbook listing | No (`web-secure.md` part 6 had only looked at the directory's pages and built nothing) | host: `net/receiver_listing.hpp` plus a route in `net/web_server.cpp` | facts of the document, observed from a public receiver's own `status.json` and the OpenWebRX API wiki page | no source of OpenWebRX or Receiverbook (GPL / AGPL) opened; nothing ported |
 
-Third-party notices (project, URL, commit read, licence text in full): `src/source/THIRD-PARTY-NOTICES.md` (items 1 and 2), `src/core/THIRD-PARTY-NOTICES.md` (item 3), `src/net/THIRD-PARTY-NOTICES.md` (item 4: none). Each ported file also carries a header with the same facts.
+Third-party notices (project, URL, commit read, licence text in full): `src/source/THIRD-PARTY-NOTICES.md` (items 1 and 2), `src/core/THIRD-PARTY-NOTICES.md` (item 3), `docs/third-party-notices-net.md` (item 4: none; moved out of src/net at the engine-merge-2 merge because test_engine_shell_guard allows only .cpp, .hpp and .h files directly in src/net). Each ported file also carries a header with the same facts.
 
 ## Outcome
 
