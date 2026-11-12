@@ -3,6 +3,12 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 void wireAOps(AppWindow& a) {
+    covering(FOXAPP_OP_PACK_EXPORT);
+    covering(FOXAPP_OP_PACK_IMPORT);
+    {
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PACK_EXPORT, "{not json")), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PACK_IMPORT, "relative.json")), FOXAPI_BAD_ARGUMENT));
+    }
     covering(FOXAPP_OP_FAVOURITE_SAVE);
     covering(FOXAPP_OP_FAVOURITE_RECALL);
     covering(FOXAPP_OP_FAVOURITE_EDIT);

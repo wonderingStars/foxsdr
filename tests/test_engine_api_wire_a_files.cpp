@@ -10,6 +10,9 @@
 //   F3  FAVOURITES: save the radio's whole state under a name, change the radio, recall it (frequency, mode, bandwidth, AGC, noise reduction, noise blanker, notch, squelch, de-emphasis come
 //       back; the picture's own numbers come back in fact.favourite.recalled), rename, remove, a replaced name, the refusals, the file and a new engine reading it.
 //
+//   F4  PACKS: bookmarks with notes and tags and favourites exported to a pack file, imported into a second engine (added, with notes and the favourite), imported again (all duplicates, nothing
+//       overwritten), a hostile pack and a relative path refused, an existing file not overwritten.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cmath>
 #include <cstdio>
@@ -242,6 +245,62 @@ void testFavourites() {
     }
 }
 
+void testPacks() {
+    std::printf("F4: packs\n");
+    const fs::path pack = g_dir / "air.json";
+    {
+        Rig r(g_dir / "user4a");
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RUN, 0, 1)).status(), FOXAPI_OK);
+        const std::string rel = "{\"path\":\"x\"}";
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_PACK_EXPORT), &rel).status(), FOXAPI_BAD_ARGUMENT);   // not a full path
+        const std::string nothing = "{\"path\":\"" + (g_dir / "nothing.json").generic_string() + "\"}";
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_PACK_EXPORT), &nothing).status(), FOXAPI_NO_CHANGE);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_FREQUENCY, 118.3e6, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_BOOKMARK_ADD, 0, 0, "Tower")).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_FREQUENCY, 121.5e6, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_BOOKMARK_ADD, 0, 0, "Guard")).status(), FOXAPI_OK);
+        const std::uint64_t id = r.bookmarkId(118.3e6);
+        const std::string rec = R"({"note":"Approach","tags":["air"]})";
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_BOOKMARK_NOTE, 0.0, static_cast<long long>(id)), &rec).status(), FOXAPI_OK);
+        const std::string fav = R"({"name":"Airband view"})";
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_FAVOURITE_SAVE), &fav).status(), FOXAPI_OK);
+        const std::string exp = "{\"path\":\"" + pack.generic_string() + "\",\"name\":\"Air\",\"description\":\"two airband channels\"}";
+        testing::Outcome o = r.send(testing::cmd(FOXAPP_OP_PACK_EXPORT), &exp);
+        CHECK_EQ(o.status(), FOXAPI_OK);
+        CHECK_EQ(static_cast<int>(o.result.applied[0]), 2);
+        CHECK_EQ(r.fact("pack.last"), std::string("exported 2"));
+        const std::string body = slurp(pack);
+        CHECK(body.find("foxsdr-pack") != std::string::npos);
+        CHECK(body.find("Approach") != std::string::npos && body.find("Airband view") != std::string::npos);
+        CHECK(body.find("heard") == std::string::npos);   // nothing of this session's goes in
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_PACK_EXPORT), &exp).status(), FOXAPI_FAILED);   // never overwrites
+    }
+    {
+        Rig r(g_dir / "user4b");
+        const std::string p = pack.generic_string();
+        testing::Outcome o = r.send(testing::cmd(FOXAPP_OP_PACK_IMPORT, 0.0, 0, p.c_str()));
+        CHECK_EQ(o.status(), FOXAPI_OK);
+        CHECK_EQ(static_cast<int>(o.result.applied[0]), 2);
+        CHECK_EQ(r.fact("pack.last"), std::string("added 2, 0 already there"));
+        CHECK(r.bookmarkId(118.3e6) != 0 && r.bookmarkId(121.5e6) != 0);
+        CHECK_EQ(r.fact("bookmark.notes.count"), std::string("1"));
+        CHECK_EQ(r.fact("favourite.names"), std::string("Airband view"));
+        // again: all duplicates, nothing added
+        o = r.send(testing::cmd(FOXAPP_OP_PACK_IMPORT, 0.0, 0, p.c_str()));
+        CHECK_EQ(o.status(), FOXAPI_OK);
+        CHECK_EQ(static_cast<int>(o.result.applied[0]), 0);
+        CHECK_EQ(static_cast<int>(o.result.applied[1]), 2);
+        // a hostile pack and a missing file
+        spit(g_dir / "bad.json", R"({"format":"foxsdr-pack","version":1,"name":"x","description":"","bookmarks":[{"name":"","freqHz":-5}],"favourites":[]})");
+        const std::string bad = (g_dir / "bad.json").generic_string();
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_PACK_IMPORT, 0.0, 0, bad.c_str())).status(), FOXAPI_BAD_ARGUMENT);
+        const std::string none = (g_dir / "none.json").generic_string();
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_PACK_IMPORT, 0.0, 0, none.c_str())).status(), FOXAPI_FAILED);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_PACK_IMPORT, 0.0, 0, "air.json")).status(), FOXAPI_BAD_ARGUMENT);
+        CHECK(r.bookmarkId(118.3e6) != 0);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -254,6 +313,7 @@ int main() {
     testMarkers();
     testNotes();
     testFavourites();
+    testPacks();
     fs::remove_all(g_dir, ec);
     return check::finish("test_engine_api_wire_a_files");
 }

@@ -46,6 +46,9 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
         case FOXAPP_OP_FAVOURITE_RECALL:
         case FOXAPP_OP_FAVOURITE_EDIT:
             return favouriteOp(c, text, res);
+        case FOXAPP_OP_PACK_EXPORT:
+        case FOXAPP_OP_PACK_IMPORT:
+            return packOp(c, text, res);
         default:
             return refused(res, FOXAPI_UNSUPPORTED, "this operation is not in this build");
     }

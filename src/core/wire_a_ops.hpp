@@ -44,6 +44,14 @@
 #define FOXAPP_OP_FAVOURITE_RECALL       0x8807u /* text: the name. Addresses one radio (target) */
 #define FOXAPP_OP_FAVOURITE_EDIT         0x8808u /* ival[0]: 0 remove / 1 rename; text: name, or "old<TAB>new" */
 
+//   PACK_EXPORT / PACK_IMPORT (SETTINGS): shared bookmark packs (core/bookmark_pack.hpp, "foxsdr-pack" version 1): the bookmarks with their notes and tags and the whole-state favourites in one JSON file a user can
+//   hand to another. EXPORT: text = JSON {"path":"<full path>", "name":"...", "description":"..."} (the name and description are typed by the user; nothing else is added: no id, no heard-seconds, no path);
+//   a file that exists is never overwritten; applied[0] = bookmarks written, applied[1] = bookmarks left out as not exportable. NO_CHANGE: nothing to export. IMPORT: text = the pack's full path (at most 4 MiB), read
+//   strictly, all or nothing; a bookmark within 1 Hz of one in the list in the same mode is a duplicate and is left out (nothing is overwritten), the rest are added with their notes and tags; a favourite whose name is
+//   taken is left as it is. applied[0] = added, applied[1] = duplicates. LIMIT: the list or the favourites are full. fact.pack.last = "added N, M already there".
+#define FOXAPP_OP_PACK_EXPORT            0x8809u /* text: JSON {path, name, description} */
+#define FOXAPP_OP_PACK_IMPORT            0x880Au /* text: full path of the pack */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -55,7 +63,9 @@
     {FOXAPP_OP_BOOKMARK_FIND, "APP_BOOKMARK_FIND", true}, \
     {FOXAPP_OP_FAVOURITE_SAVE, "APP_FAVOURITE_SAVE", true}, \
     {FOXAPP_OP_FAVOURITE_RECALL, "APP_FAVOURITE_RECALL", true}, \
-    {FOXAPP_OP_FAVOURITE_EDIT, "APP_FAVOURITE_EDIT", true},
+    {FOXAPP_OP_FAVOURITE_EDIT, "APP_FAVOURITE_EDIT", true}, \
+    {FOXAPP_OP_PACK_EXPORT, "APP_PACK_EXPORT", true}, \
+    {FOXAPP_OP_PACK_IMPORT, "APP_PACK_IMPORT", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP

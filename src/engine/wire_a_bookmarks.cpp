@@ -17,6 +17,7 @@
 
 #include "core/app_commands.hpp"
 #include "core/bookmark.hpp"
+#include "core/bookmark_pack.hpp"
 #include "core/receiver_tables.hpp"
 #include "engine/engine.hpp"
 #include "engine/wire_a.hpp"
@@ -181,6 +182,7 @@ void WireA::bookmarkFacts(const std::function<void(const std::string&, const std
     fact("favourite.count", std::to_string(favourites_.size()));
     fact("favourite.error", favouritesError_);
     fact("favourite.recalled", favouriteRecalled_);
+    fact("pack.last", packLast_);
 }
 
 // ---- favourites ---------------------------------------------------------------------------------------------------------------------------------
@@ -289,6 +291,74 @@ WireA::Result WireA::favouriteOp(const FoxCommand& c, const std::string& text, R
         return refused(res, full ? FOXAPI_LIMIT : FOXAPI_BAD_ARGUMENT, err);
     }
     favouritesChanged();
+    return res;
+}
+
+// ---- packs --------------------------------------------------------------------------------------------------------------------------------------
+
+WireA::Result WireA::packOp(const FoxCommand& c, const std::string& text, Result res) {
+    bookmarksLoadOnce();
+    std::string why;
+    if (c.op == FOXAPP_OP_PACK_EXPORT) {
+        const nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
+        if (j.is_discarded() || !j.is_object() || !j.contains("path") || !j["path"].is_string()) { return refused(res, FOXAPI_BAD_ARGUMENT, "the text is JSON with a path"); }
+        const std::string path = j["path"].get<std::string>();
+        if (!fullPath(path, why)) { return refused(res, FOXAPI_BAD_ARGUMENT, why); }
+        const std::string name = j.contains("name") && j["name"].is_string() ? j["name"].get<std::string>() : std::string("FoxSDR pack");
+        const std::string description = j.contains("description") && j["description"].is_string() ? j["description"].get<std::string>() : std::string();
+        const std::vector<cascade::core::Bookmark>& list = e_.freqMgr_.list();
+        if (list.empty() && favourites_.size() == 0) { return refused(res, FOXAPI_NO_CHANGE, "there are no bookmarks or favourites to export"); }
+        std::vector<t::FavouriteState> favs;
+        for (const std::string& n : favourites_.names()) {
+            if (const t::FavouriteState* f = favourites_.find(n)) { favs.push_back(*f); }
+        }
+        int skipped = 0;
+        const std::string body = t::exportPack(name, description, list, &notes_, favs, &skipped);
+        if (body.empty() || body.size() > t::kPackMaxBytes) { return refused(res, FOXAPI_FAILED, "the pack could not be made (the name or description is not valid, or it is too big)"); }
+        if (!writeNewFile(path, body, why)) {
+            packLast_ = "not written";
+            bump();
+            return refused(res, FOXAPI_FAILED, why);
+        }
+        packLast_ = "exported " + std::to_string(static_cast<int>(list.size()) - skipped);
+        res.applied[0] = static_cast<double>(list.size()) - skipped;
+        res.applied[1] = skipped;
+        bump();
+        return res;
+    }
+    // PACK_IMPORT
+    if (!fullPath(text, why)) { return refused(res, FOXAPI_BAD_ARGUMENT, why); }
+    std::string body;
+    if (!readUserFile(text, t::kPackMaxBytes, body, why)) { packLast_ = "not read"; bump(); return refused(res, FOXAPI_FAILED, why); }
+    t::Pack pack;
+    std::string err;
+    if (!t::importPack(body, pack, err)) {
+        packLast_ = "refused";
+        bump();
+        return refused(res, FOXAPI_BAD_ARGUMENT, "the pack was refused: " + err);
+    }
+    const t::PackImportPlan plan = t::planImport(pack, e_.freqMgr_.list());
+    int added = 0;
+    bool full = false;
+    for (const t::PackBookmark& pb : plan.toAdd) {
+        cascade::core::Bookmark b = pb.bookmark;
+        b.id = 0;
+        if (e_.freqMgr_.add(b) < 0) { full = true; break; }   // (add() never refuses today; the branch keeps the LIMIT answer if it ever does)
+        ++added;
+        if (!pb.note.note.empty() || !pb.note.tags.empty()) {
+            std::string e2;
+            if (notes_.find(b.freqHz, b.mode) == nullptr && notes_.set(b.freqHz, b.mode, pb.note.note, pb.note.tags, &e2)) { notesChanged(); }
+        }
+    }
+    for (const t::FavouriteState& f : pack.favourites) {
+        if (favourites_.find(f.name) != nullptr) { continue; }
+        if (favourites_.set(f)) { favouritesChanged(); }
+    }
+    packLast_ = "added " + std::to_string(added) + ", " + std::to_string(plan.duplicates) + " already there";
+    res.applied[0] = added;
+    res.applied[1] = plan.duplicates;
+    bump();
+    if (full) { return refused(res, FOXAPI_LIMIT, "the bookmark list is full; what fitted was added"); }
     return res;
 }
 

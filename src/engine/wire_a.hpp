@@ -105,6 +105,10 @@ private:
     std::string noteLast_, noteLastId_, findLast_;
     std::string notesError_;
 
+    // ---- packs (wire_a_bookmarks.cpp) ----
+    Result packOp(const FoxCommand& c, const std::string& text, Result res);
+    std::string packLast_;
+
     // ---- favourites (wire_a_bookmarks.cpp) ----
     Result favouriteOp(const FoxCommand& c, const std::string& text, Result res);
     void favouritesChanged();
