@@ -44,6 +44,9 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
             return lockOp(c, text, res);
         case FOXAPP_OP_RECORD_CONTAINER:
             return containerOp(c, res);
+        case FOXAPP_OP_BAND_MEMORY:
+        case FOXAPP_OP_BAND_MEMORY_NOTE:
+            return bandOp(c, text, res);
         case FOXAPP_OP_RECORDINGS_SCAN:
         case FOXAPP_OP_RECORDINGS_LIST:
         case FOXAPP_OP_RECORDINGS_OPEN:
@@ -96,6 +99,7 @@ bool WireA::drain(std::chrono::milliseconds bound) {
         scanDirty_ = false;
         scanSave();
     }
+    if (bandDirty_) { bandDirty_ = false; bandSave(); }
     notesDueS_ = 0.0;   // anything dirty goes out now
     favouritesDueS_ = 0.0;
     bookmarksPass();
@@ -110,6 +114,7 @@ bool WireA::drain(std::chrono::milliseconds bound) {
 }
 
 void WireA::pass() {
+    bandPass();
     recordingsPass();
     containerPass();
     framesLoadOnce();
@@ -136,6 +141,7 @@ void WireA::facts(const std::function<void(const std::string&, const std::string
     jobFacts(fact);
     recordingFacts(fact);
     recordingsFacts(fact);
+    bandFacts(fact);
     displayFacts(fact);
     framesFacts(fact);
 }

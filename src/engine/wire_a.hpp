@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "core/background_saver.hpp"
+#include "core/band_memory.hpp"
 #include "core/bookmark.hpp"
 #include "core/bookmark_notes.hpp"
 #include "core/channel_plans.hpp"
@@ -233,6 +234,22 @@ public:
     bool recordGuard(const FoxCommand& c, std::string& why);
 
 private:
+    // ---- per-band memory (wire_a_band.cpp) ----
+    Result bandOp(const FoxCommand& c, const std::string& text, Result res);
+    void bandPass();
+    void bandFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    void bandLoadOnce();
+    void bandSave();
+    cascade::core::tuning::BandMemory bandMem_;
+    bool bandOn_ = false, bandLoaded_ = false, bandDirty_ = false;
+    double bandDueS_ = 0.0;
+    std::array<std::string, 8> bandLast_;
+    std::array<bool, 8> bandSeen_{};
+    struct BandView { double top = std::numeric_limits<double>::quiet_NaN(), range = std::numeric_limits<double>::quiet_NaN(), zoom = std::numeric_limits<double>::quiet_NaN(); };
+    std::array<BandView, 8> bandView_;
+    std::string bandApply_;
+    long long bandApplySeq_ = 0;
+
     // ---- the recordings browser (wire_a_recordings.cpp) ----
     struct Browser;
     Result recordingsOp(const FoxCommand& c, const std::string& text, Result res);

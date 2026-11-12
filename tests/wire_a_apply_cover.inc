@@ -3,6 +3,12 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 void wireAOps(AppWindow& a) {
+    covering(FOXAPP_OP_BAND_MEMORY);
+    covering(FOXAPP_OP_BAND_MEMORY_NOTE);
+    {
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_BAND_MEMORY, "{nope")), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_BAND_MEMORY_NOTE, "{\"zoomSpanHz\":5}")), FOXAPI_BAD_ARGUMENT));
+    }
     covering(FOXAPP_OP_RECORDINGS_SCAN);
     covering(FOXAPP_OP_RECORDINGS_LIST);
     covering(FOXAPP_OP_RECORDINGS_OPEN);

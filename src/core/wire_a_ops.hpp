@@ -183,6 +183,17 @@
 #define FOXAPP_OP_RECORDINGS_LIST        0x8821u /* text: JSON {sort, ascending, text, iq, audio, hideBroken, offset, limit} */
 #define FOXAPP_OP_RECORDINGS_OPEN        0x8822u /* ival[0]: id; ival[1]: scanId. Addresses one radio (target) */
 
+//   BAND MEMORY (SETTINGS; core/band_memory.hpp): what the operator last set on a band comes back when the band is entered again, by the band's NAME in the loaded band plan. OFF by default (it changes settings on a band
+//   crossing). BAND_MEMORY: text = JSON {"enabled":true|false, "fields":["volume","agc","attenuator","spectrum","zoom","antenna"] (which kinds are remembered; default volume, agc, spectrum, zoom), "forget":"<band name>"
+//   or "clear":true}; any member may be left out. When on, once a pass each live radio's band is looked up from its tuned frequency (a gap in the plan is no band); on a change the settings of the band being left are
+//   filed and those of the band being entered are applied: VOLUME and AGC by the engine itself (SET_VOLUME, SET_AGC), the screen-owned ones (spectrum top and range, zoom span) are put in fact.bandmem.apply for the
+//   screen to apply, as {"radio":n,"band":"...","seq":N,"spectrumTopDb":,"spectrumRangeDb":,"zoomSpanHz":} (a field the band has no memory of is absent). The attenuator and the antenna are device facts the engine
+//   does not hold as settings: they are never filed or applied by the engine (UNVERIFIED which device ops would set them). BAND_MEMORY_NOTE (per radio, target): text = JSON {"spectrumTopDb","spectrumRangeDb",
+//   "zoomSpanHz"} the screen's current view of that radio, filed under the band when it is left. BAD_ARGUMENT for bad JSON, an unknown field kind or a value out of range; NO_CHANGE when it is so already.
+//   fact.bandmem.on, .fields, .bands (how many bands have a memory), .apply, .last (the band each radio was last seen in). Kept in band_memory.json beside markers.json.
+#define FOXAPP_OP_BAND_MEMORY            0x8823u /* text: JSON {enabled, fields, forget, clear} */
+#define FOXAPP_OP_BAND_MEMORY_NOTE       0x8824u /* text: JSON {spectrumTopDb, spectrumRangeDb, zoomSpanHz}. Addresses one radio (target) */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -220,7 +231,9 @@
     {FOXAPP_OP_RECORD_CONTAINER, "APP_RECORD_CONTAINER", true}, \
     {FOXAPP_OP_RECORDINGS_SCAN, "APP_RECORDINGS_SCAN", true}, \
     {FOXAPP_OP_RECORDINGS_LIST, "APP_RECORDINGS_LIST", true}, \
-    {FOXAPP_OP_RECORDINGS_OPEN, "APP_RECORDINGS_OPEN", true},
+    {FOXAPP_OP_RECORDINGS_OPEN, "APP_RECORDINGS_OPEN", true}, \
+    {FOXAPP_OP_BAND_MEMORY, "APP_BAND_MEMORY", true}, \
+    {FOXAPP_OP_BAND_MEMORY_NOTE, "APP_BAND_MEMORY_NOTE", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP

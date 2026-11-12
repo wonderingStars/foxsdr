@@ -28,6 +28,7 @@ struct AppWindowTestAccess {
     static void recordDir(Engine& e, const std::string& dir) { e.recordDir_ = dir; }
     static void markerPath(Engine& e, const std::string& path) { e.markerPath_ = path; }
     static cascade::core::FreqManager& bookmarks(Engine& e) { return e.freqMgr_; }
+    static void bandPlanDir(Engine& e, const std::string& dir) { e.bandPlanDirForTest_ = dir; e.loadBandPlan(); }
     // The generator source of radio 1 (nullptr when it is not the generator): a tone `slot` at `offsetHz` from its centre.
     static bool genTone(Engine& e, int slot, double offsetHz, float amplitudeDb) {
         cascade::source::SigGen* g = &e.rx().pipeline_.sigGen();
