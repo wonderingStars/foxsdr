@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "source/iq_file_source.hpp"
 #include "source/file_start_time.hpp"
+#include "source/wav_meta.hpp"   // wire-a
 
 #include <bit>
 #include <cmath>
@@ -247,6 +248,13 @@ bool IqFileSource::open(const std::string& wavPath) {
     const std::size_t sep = wavPath.find_last_of("/\\");
     name_ = "IQ file: " +
             (sep == std::string::npos ? wavPath : wavPath.substr(sep + 1));
+    // wire-a begin: the centre the recorder wrote into the file's own header (source/wav_meta.hpp) is the file's centre; a file without one keeps the nominal
+    {
+        const cascade::source::wavmeta::WavMeta meta = cascade::source::wavmeta::readWavMeta(std::filesystem::path(wavPath));
+        centerFromHeader_ = meta.ok && meta.centerKnown;
+        if (centerFromHeader_) { centerFrequencyHz_ = meta.centerHz; }
+    }
+    // wire-a end
     opened_ = true;
     return true;
 }

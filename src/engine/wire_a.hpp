@@ -184,6 +184,8 @@ public:
     void scanTune(double hz);
     // another kind of scan was started: plan mode ends;
     void planOff() { planOn_ = false; }
+    // an I/Q file was installed as radio `slot`'s source (0-based); whether its centre came from its own header.
+    void iqFileOpened(std::size_t slot, bool centreFromHeader) { if (slot < fileHeaderCentre_.size()) { fileHeaderCentre_[slot] = centreFromHeader; bump(); } }
     // the trigger's floors belong to the scan that was configured: a new configuration starts them again.
     void scanConfigured() { trigger_.reset(); }
 
@@ -210,6 +212,7 @@ private:
         bool seen = false;
     };
     std::array<History, 8> history_;
+    std::array<bool, 8> fileHeaderCentre_{};
     std::array<cascade::core::tuning::ChannelCursor, 8> channel_;
 };
 

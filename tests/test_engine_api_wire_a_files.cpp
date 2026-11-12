@@ -13,6 +13,9 @@
 //   F4  PACKS: bookmarks with notes and tags and favourites exported to a pack file, imported into a second engine (added, with notes and the favourite), imported again (all duplicates, nothing
 //       overwritten), a hostile pack and a relative path refused, an existing file not overwritten.
 //
+//   F5  WAV HEADER CENTRE: an I/Q file whose RIFF auxi chunk says where it was recorded plays at that frequency (not at the frequency the radio happened to be on); one with a zero centre or no auxi chunk keeps
+//       the nominal one; fact.iqfile.1.centreFromHeader says which.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cmath>
 #include <cstdio>
@@ -301,6 +304,71 @@ void testPacks() {
     }
 }
 
+void le32(std::string& s, std::uint32_t v) { for (int i = 0; i < 4; ++i) { s.push_back(static_cast<char>((v >> (8 * i)) & 0xFF)); } }
+void le16(std::string& s, std::uint16_t v) { for (int i = 0; i < 2; ++i) { s.push_back(static_cast<char>((v >> (8 * i)) & 0xFF)); } }
+
+// A 16-bit I/Q WAV of one second of a carrier; `auxiCentreHz` < 0 writes no auxi chunk, otherwise a 164-byte one with that centre (SpectraVue's layout, little-endian uint32 at offset 32).
+void writeIqWav(const fs::path& p, double auxiCentreHz) {
+    const std::uint32_t rate = 48000;
+    std::string data;
+    for (std::uint32_t i = 0; i < rate; ++i) {
+        const double ph = 2.0 * 3.14159265358979323846 * 1000.0 * i / rate;
+        le16(data, static_cast<std::uint16_t>(static_cast<std::int16_t>(8000.0 * std::cos(ph))));
+        le16(data, static_cast<std::uint16_t>(static_cast<std::int16_t>(8000.0 * std::sin(ph))));
+    }
+    std::string auxi;
+    if (auxiCentreHz >= 0.0) {
+        std::string body(164, '\0');
+        const std::uint32_t c = static_cast<std::uint32_t>(auxiCentreHz);
+        for (int i = 0; i < 4; ++i) { body[32 + i] = static_cast<char>((c >> (8 * i)) & 0xFF); }
+        auxi = "auxi";
+        le32(auxi, 164);
+        auxi += body;
+    }
+    std::string h = "RIFF";
+    le32(h, static_cast<std::uint32_t>(4 + 24 + auxi.size() + 8 + data.size()));
+    h += "WAVEfmt ";
+    le32(h, 16);
+    le16(h, 1);
+    le16(h, 2);
+    le32(h, rate);
+    le32(h, rate * 4);
+    le16(h, 4);
+    le16(h, 16);
+    h += auxi;
+    h += "data";
+    le32(h, static_cast<std::uint32_t>(data.size()));
+    spit(p, h + data);
+}
+
+void testWavCentre() {
+    std::printf("F5: centre from the WAV header\n");
+    const fs::path withAuxi = g_dir / "with.wav", zero = g_dir / "zero.wav", plain = g_dir / "plain.wav";
+    writeIqWav(withAuxi, 137912000.0);
+    writeIqWav(zero, 0.0);
+    writeIqWav(plain, -1.0);
+    Rig r;
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_FREQUENCY, 98.0e6, 0)).status(), FOXAPI_OK);
+    auto open = [&](const fs::path& p) {
+        const std::string t = "file:" + p.generic_string();
+        FoxCommand c = testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0.0, 0, nullptr);
+        std::snprintf(c.text, sizeof c.text, "%s", t.c_str());
+        CHECK_EQ(r.send(c).status(), FOXAPI_OK);
+    };
+    auto waitHz = [&](double want) { return r.until([&] { return std::fabs(std::strtod(r.fact("tuned.1.centreHz").c_str(), nullptr) - want) < 1500.0; }, 8000); };
+    open(withAuxi);
+    const bool got = waitHz(137.912e6);
+    if (!got) { std::printf("  radio.1.source=%s tuned=%s state=%s\n", r.fact("radio.1.source").c_str(), r.fact("tuned.1.centreHz").c_str(), r.fact("radio.1.state").c_str()); }
+    CHECK(got);
+    CHECK_EQ(r.fact("iqfile.1.centreFromHeader"), std::string("1"));
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 99.0e6, 0)).status(), FOXAPI_OK);   // the radio is somewhere else: a file without a centre of its own carries that over
+    open(plain);
+    CHECK(r.until([&] { return r.fact("iqfile.1.centreFromHeader") == "0" && std::strtod(r.fact("tuned.1.centreHz").c_str(), nullptr) > 0.0 && std::fabs(std::strtod(r.fact("tuned.1.centreHz").c_str(), nullptr) - 137.912e6) > 1.0e6; }, 8000));
+    open(zero);
+    CHECK(r.until([&] { return r.fact("iqfile.1.centreFromHeader") == "0"; }, 8000));
+    CHECK(std::fabs(std::strtod(r.fact("tuned.1.centreHz").c_str(), nullptr) - 137.912e6) > 1.0e6);   // a zero centre is "unknown"
+}
+
 }  // namespace
 
 int main() {
@@ -314,6 +382,7 @@ int main() {
     testNotes();
     testFavourites();
     testPacks();
+    testWavCentre();
     fs::remove_all(g_dir, ec);
     return check::finish("test_engine_api_wire_a_files");
 }
