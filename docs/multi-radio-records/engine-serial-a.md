@@ -121,6 +121,25 @@ Machine: about twenty other lanes; Release build in `D:/foxsdr-build/mr-engine1`
 | GUI (`-L gui`, 278 tests) | 54e3067a build (fresh rebuild after the fix) | **278 of 278 passed**, 2,109 s |
 | headless + slint, final | 54e3067a | 912 tests, 7 red, all explained in 6b (five known false failures, `test_diagnostics_free`, and the load flake `test_engine_main_password_not_in_argv` which passes alone) |
 
+### 6c. The second batch (rows 11 to 19, tip 281aa38e)
+
+| Gate | Tip | Result |
+|---|---|---|
+| headless + slint, first run | 51b74c45 | 928 tests, 11 red. Five were this lane's or its test host's and are explained below; the rest are the known false failures. |
+| headless + slint, second run (after the VFO fix, before the config stack fix) | b0710417 | 928 tests, 10 red: six that fail alone and are known (`test_airband_data`, `test_band_plan`, `test_converter_call_sites`, `test_page_resize_id`, `test_png_decode`, `test_diagnostics_free`), `test_discord_presence` (timeout under load, passes alone, 5.2 s), `test_engine_main_password_not_in_argv` (load, passes alone, 6.6 s), `test_slint_fitted` (load, passes alone three times, 11 s), and `test_config` / `test_config_free` (this lane's test host, fixed in 281aa38e) |
+| after the fixes, the tests that were red re-run | 281aa38e | `test_config`, `test_config_free`, `test_slint_fitted`, `test_noise_blanker`, `test_vfo_shape`: 5 of 5 passed; `test_config` and `test_config_free` 10 of 10 in a loop |
+| GUI (`-L gui`, 278 tests, hidden desktop, `FOXSDR_FRAME_CAP_HZ=60`, `-j3`) | 281aa38e build | **278 of 278 passed**, 2,081 s |
+
+Reds of the first run of this batch that were THIS LANE'S, and what they were:
+
+* **`test_noise_blanker` ("Vfo no-harm", a 2.67 dB difference between two identically built VFOs): a real bug in row F6 (c7be6b78).** `Vfo::shape_` was declared after `stages_`, and `stages_` is initialised in the constructor's initialiser list from `designStages()`, which reads `shape_`: the member was read uninitialised, so a fresh VFO built a narrow filter in a random shape whenever the garbage was non-zero. Fixed in b0710417 (the member is declared first); `test_vfo_shape` gained a check that a VFO placement-built on memory filled with 0xFF, 0xA5, 0x7F and 0x01 has shape 0 and produces bit-identical output to a normally built one. Break-it: the member put back after `stages_` turned both `test_noise_blanker` and the new check red; fixed, both green. **The F6 commit message and its first test claimed the default filter "measures about 3.16 like the soft shape": that reading came from the same garbage. The real default measures 8,965 Hz wide at -6 dB and 13,411 Hz at -60 dB for a 6 kHz bandwidth, a shape factor of 1.50; the test now says so.**
+* **`test_config` / `test_config_free` (SegFault in about half the runs): the test's own stack, not the product.** The Windows event log gave 0xC00000FD (stack overflow) in ntdll; `dumpbin /disasm` of `test_config.obj` gives `main` a frame of 1,005,800 bytes against the 1 MB default stack; the same binary with `/STACK:8388608` passed 14 of 14. This lane's 29 added lines in `main` are assignments (no new locals), so the frame was already at the edge. `tests/CMakeLists.txt` now links `test_config` with an 8 MB stack, as `test_engine_service_options` has (281aa38e). The same story as that test's own comment.
+* `test_plugin_ui_threaded`, `test_tx_audio`, `test_health_app_stepped`, `test_gps_app_free` (red in the first run, all passed alone at 9, 12, 63 and 15 s) and `test_discord_presence`, `test_engine_main_password_not_in_argv`, `test_slint_fitted` (red once, passed alone): load on a machine shared with about twenty other lanes.
+
+Break-it on a header that most of the tree includes costs a full rebuild each way (about twenty minutes here): the one done on `vfo.hpp` did.
+
+Rows built in the second batch: R19 (40c543e7), R11 (89f93e64), T4 (b03144c9), D7 (68dee830), F6 (c7be6b78 and the fix b0710417), D4 (02953a66), P4 (7903ff34), R18 (2278a7c6), S12 (51b74c45). Not built, with the reasons: T7, F10 (section 3). Rows found already built are in section 10. `plugin_abi.h` was not touched; `foxsdr_api.h` and `app_commands.hpp` gained pure appends only (ops 0x8620 to 0x8625, state fields appended after `recordAudioFormat`).
+
 ### 6b. Every red of the final headless gate, by name, with its result re-run alone (compare with section 8b of `engine-wiring-2.md`)
 
 Final headless gate at 54e3067a: 912 tests, 7 red, 905 passed.
@@ -169,7 +188,7 @@ The reference mock engine was not extended and no test compares it with the head
 
 ## 9. Configuration file
 
-The real `%APPDATA%/foxsdr/config.json` sha256 before (start of the lane) and after (checked at 07:56, 10:05, 11:30 and at the end): `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3`, byte-identical. Every engine test runs with the profile redirected (`engine_api_test::hermetic`) or in a scratch folder. No radio was opened, no Windows dialog was raised (the GUI tests ran on the hidden desktop only), nothing was pushed, nothing was downloaded.
+The real `%APPDATA%/foxsdr/config.json` sha256 before (start of the lane) and after (checked at 07:56, 10:05, 11:30, 13:00, 15:45 and at the end): `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3`, byte-identical. Every engine test runs with the profile redirected (`engine_api_test::hermetic`) or in a scratch folder. No radio was opened, no Windows dialog was raised (the GUI tests ran on the hidden desktop only), nothing was pushed, nothing was downloaded.
 
 ## 10. Rows found already built (the second request: each re-verified at this tip, one commit each)
 
