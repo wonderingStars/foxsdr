@@ -75,7 +75,7 @@ struct ViewerInfo {
     std::int64_t idleMs = 0;
 };
 
-struct Decision {
+struct ControlDecision {
     bool allowed = false;
     bool viaOverride = false;  // an admin acting without holding control in EXCLUSIVE mode
     ArbResult why = ArbResult::Ok;
@@ -93,7 +93,7 @@ public:
 
     // May this viewer perform a tuning operation now? With `touch` true (the default) an allowed HOLDER's idle clock restarts; an
     // admin's override never restarts the holder's clock (the holder is not "active" because the admin is).
-    Decision mayAct(const std::string& id, std::int64_t nowMs, bool touch = true);
+    ControlDecision mayAct(const std::string& id, std::int64_t nowMs, bool touch = true);
 
     ArbResult requestControl(const std::string& id, std::int64_t nowMs);
     ArbResult releaseControl(const std::string& id, std::int64_t nowMs);

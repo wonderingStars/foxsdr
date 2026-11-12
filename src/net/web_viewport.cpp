@@ -13,14 +13,14 @@ double minCount(std::int64_t total) { return std::min(kMinVisibleBins, static_ca
 
 }  // namespace
 
-View fullView(std::int64_t totalBins) {
-    View v;
+WaterfallView fullView(std::int64_t totalBins) {
+    WaterfallView v;
     v.first = 0.0;
     v.count = totalBins > 0 ? static_cast<double>(totalBins) : 0.0;
     return v;
 }
 
-View clampView(View v, std::int64_t totalBins) {
+WaterfallView clampView(WaterfallView v, std::int64_t totalBins) {
     if (totalBins <= 0) { return fullView(0); }
     if (!finite(v.first) || !finite(v.count)) { return fullView(totalBins); }
     const double total = static_cast<double>(totalBins);
@@ -29,13 +29,13 @@ View clampView(View v, std::int64_t totalBins) {
     return v;
 }
 
-View zoomAt(View v, std::int64_t totalBins, double anchor, double factor) {
+WaterfallView zoomAt(WaterfallView v, std::int64_t totalBins, double anchor, double factor) {
     v = clampView(v, totalBins);
     if (totalBins <= 0 || !finite(factor) || factor <= 0.0) { return v; }
     if (!finite(anchor)) { anchor = 0.5; }
     anchor = std::min(std::max(anchor, 0.0), 1.0);
     const double binUnder = v.first + anchor * v.count;
-    View n;
+    WaterfallView n;
     n.count = v.count / factor;
     n.first = binUnder - anchor * n.count;
     return clampView(n, totalBins);
@@ -51,23 +51,23 @@ double wheelFactor(double deltaY) {
     return f;
 }
 
-View panByPixels(View v, std::int64_t totalBins, double dxPixels, double widthPixels) {
+WaterfallView panByPixels(WaterfallView v, std::int64_t totalBins, double dxPixels, double widthPixels) {
     v = clampView(v, totalBins);
     if (totalBins <= 0 || !finite(dxPixels) || !finite(widthPixels) || widthPixels <= 0.0) { return v; }
-    View n = v;
+    WaterfallView n = v;
     n.first = v.first - dxPixels / widthPixels * v.count;  // drag right: the picture follows, lower bins appear
     return clampView(n, totalBins);
 }
 
-View panByBins(View v, std::int64_t totalBins, double deltaBins) {
+WaterfallView panByBins(WaterfallView v, std::int64_t totalBins, double deltaBins) {
     v = clampView(v, totalBins);
     if (totalBins <= 0 || !finite(deltaBins)) { return v; }
-    View n = v;
+    WaterfallView n = v;
     n.first = v.first + deltaBins;
     return clampView(n, totalBins);
 }
 
-double pointerToHz(View v, const SpectrumSpan& span, double x, double widthPixels) {
+double pointerToHz(WaterfallView v, const SpectrumSpan& span, double x, double widthPixels) {
     const double low = span.centreHz - span.spanHz / 2.0;
     if (span.totalBins <= 0 || !finite(span.spanHz) || !finite(span.centreHz) || !finite(widthPixels) || widthPixels <= 0.0) { return low; }
     v = clampView(v, span.totalBins);
@@ -77,7 +77,7 @@ double pointerToHz(View v, const SpectrumSpan& span, double x, double widthPixel
     return low + bin / static_cast<double>(span.totalBins) * span.spanHz;
 }
 
-double hzToPointer(View v, const SpectrumSpan& span, double hz, double widthPixels) {
+double hzToPointer(WaterfallView v, const SpectrumSpan& span, double hz, double widthPixels) {
     if (span.totalBins <= 0 || !finite(span.spanHz) || span.spanHz <= 0.0 || !finite(hz) || !finite(widthPixels) || widthPixels <= 0.0) {
         return 0.0;
     }
@@ -87,7 +87,7 @@ double hzToPointer(View v, const SpectrumSpan& span, double hz, double widthPixe
     return (bin - v.first) / v.count * widthPixels;
 }
 
-View viewForRange(const SpectrumSpan& span, double loHz, double hiHz) {
+WaterfallView viewForRange(const SpectrumSpan& span, double loHz, double hiHz) {
     if (span.totalBins <= 0) { return fullView(0); }
     if (!finite(loHz) || !finite(hiHz) || !finite(span.spanHz) || span.spanHz <= 0.0 || !finite(span.centreHz)) {
         return fullView(span.totalBins);
@@ -95,13 +95,13 @@ View viewForRange(const SpectrumSpan& span, double loHz, double hiHz) {
     if (loHz > hiHz) { std::swap(loHz, hiHz); }
     const double low = span.centreHz - span.spanHz / 2.0;
     const double total = static_cast<double>(span.totalBins);
-    View v;
+    WaterfallView v;
     v.first = (loHz - low) / span.spanHz * total;
     v.count = (hiHz - loHz) / span.spanHz * total;
     return clampView(v, span.totalBins);
 }
 
-BinRange visibleBins(View v, std::int64_t totalBins) {
+BinRange visibleBins(WaterfallView v, std::int64_t totalBins) {
     BinRange r;
     if (totalBins <= 0) { return r; }
     v = clampView(v, totalBins);

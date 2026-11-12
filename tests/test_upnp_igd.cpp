@@ -729,7 +729,7 @@ void testParsers() {
     CHECK(buildMSearch("h", 1, "s", 99).find("MX: 5\r\n") != std::string::npos);                  // MX is bounded
     CHECK(buildMSearch("h", 1, "s", 0).find("MX: 1\r\n") != std::string::npos);
 
-    UrlParts u;
+    IgdUrl u;
     CHECK(parseHttpUrl("http://192.168.1.1:5000/rootDesc.xml", u) && u.host == "192.168.1.1" && u.port == 5000 && u.path == "/rootDesc.xml");
     CHECK(parseHttpUrl("http://10.0.0.1", u) && u.port == 80 && u.path == "/");
     CHECK(parseHttpUrl("HTTP://10.0.0.1/x?y=1", u) && u.path == "/x?y=1");
@@ -750,7 +750,7 @@ void testParsers() {
     CHECK(isPrivateLanAddress("192.168.1.1") && !isPrivateLanAddress("127.0.0.1") && !isPrivateLanAddress("169.254.1.1"));
 
     // description
-    UrlParts base;
+    IgdUrl base;
     base.host = "192.168.1.1";
     base.port = 5000;
     base.path = "/desc/root.xml";
@@ -847,7 +847,7 @@ void testFuzz() {
     const std::string http = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 11\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
     const std::string url = "http://192.168.1.1:5000/rootDesc.xml";
     const std::vector<const std::string*> seeds = {&ssdp, &xml, &soapOk, &soapFault, &http, &url};
-    UrlParts base;
+    IgdUrl base;
     base.host = "192.168.1.1";
     base.port = 5000;
     base.path = "/rootDesc.xml";
@@ -869,7 +869,7 @@ void testFuzz() {
         try {
             SsdpReply sr;
             if (parseSsdpReply(s, sr) && sr.location.empty()) { ++bad; }
-            UrlParts up;
+            IgdUrl up;
             if (parseHttpUrl(s, up)) {
                 unsigned char dummy = 0;
                 (void)dummy;
@@ -901,7 +901,7 @@ void testFuzz() {
         std::string s(rng() % 300, '\0');
         for (char& c : s) { c = static_cast<char>(rng()); }
         try {
-            SsdpReply sr; UrlParts up; IgdService svc; std::string err; SoapReply so; int st; std::string b;
+            SsdpReply sr; IgdUrl up; IgdService svc; std::string err; SoapReply so; int st; std::string b;
             parseSsdpReply(s, sr); parseHttpUrl(s, up); parseDeviceDescription(s, base, svc, err);
             parseSoapReply(200, s, "X", so); parseSoapReply(500, s, "X", so); parseHttpResponse(s, st, b);
         } catch (...) { ++bad; }

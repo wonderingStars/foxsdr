@@ -44,9 +44,9 @@ void testOpenModeAndIds() {
     // OPEN: every viewer that may tune may act; a listener may not
     CHECK(a.mayAct(owner, 1).allowed);
     CHECK(a.mayAct(guest, 1).allowed && !a.mayAct(guest, 1).viaOverride);
-    const Decision d = a.mayAct(listener, 1);
+    const ControlDecision d = a.mayAct(listener, 1);
     CHECK(!d.allowed && d.why == ArbResult::ListenerOnly);
-    const Decision u = a.mayAct("nobody0000x", 1);
+    const ControlDecision u = a.mayAct("nobody0000x", 1);
     CHECK(!u.allowed && u.why == ArbResult::Unknown);
     // nothing to request in OPEN mode
     CHECK(a.requestControl(guest, 2) == ArbResult::NotExclusive);
@@ -155,7 +155,7 @@ void testAdminOverrideHandOverRevoke() {
     CHECK(a.holder(7) == g2 && a.queue(7).empty());
     CHECK(!a.mayAct(g1, 8).allowed);
     // the admin acts regardless, and its action does not refresh the holder's idle clock
-    const Decision d = a.mayAct(owner, 8);
+    const ControlDecision d = a.mayAct(owner, 8);
     CHECK(d.allowed && d.viaOverride);
     // revoke: the holder loses control and the next in line takes over
     CHECK(a.requestControl(g1, 9) == ArbResult::Queued);

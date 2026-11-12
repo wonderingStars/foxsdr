@@ -36,40 +36,40 @@ struct SpectrumSpan {
     double spanHz = 0.0;  // the whole row
 };
 
-struct View {
+struct WaterfallView {
     double first = 0.0;
     double count = 0.0;
-    bool operator==(const View& o) const { return first == o.first && count == o.count; }
+    bool operator==(const WaterfallView& o) const { return first == o.first && count == o.count; }
 };
 
 // The whole row.
-View fullView(std::int64_t totalBins);
+WaterfallView fullView(std::int64_t totalBins);
 
 // Rules 1 and 2.
-View clampView(View v, std::int64_t totalBins);
+WaterfallView clampView(WaterfallView v, std::int64_t totalBins);
 
 // Zoom by `factor` (> 1 zooms IN, < 1 OUT) keeping the bin under `anchor` (0 = the left edge of the view, 1 = the right edge) fixed.
 // A factor that is not finite or not positive leaves the view as it was (clamped).
-View zoomAt(View v, std::int64_t totalBins, double anchor, double factor);
+WaterfallView zoomAt(WaterfallView v, std::int64_t totalBins, double anchor, double factor);
 
 // The zoom factor for a wheel event of `deltaY` pixels (up, negative, zooms in). Zero, non-finite, or a delta whose factor rounds to 1 gives 1.
 double wheelFactor(double deltaY);
 
 // Drag by `dxPixels` on a canvas `widthPixels` wide. A zero or negative width, or a non-finite delta, leaves the view as it was.
-View panByPixels(View v, std::int64_t totalBins, double dxPixels, double widthPixels);
+WaterfallView panByPixels(WaterfallView v, std::int64_t totalBins, double dxPixels, double widthPixels);
 
 // Move by whole bins (the keyboard's arrow keys).
-View panByBins(View v, std::int64_t totalBins, double deltaBins);
+WaterfallView panByBins(WaterfallView v, std::int64_t totalBins, double deltaBins);
 
 // The frequency under a pointer `x` pixels from the canvas's left edge on a canvas `widthPixels` wide. `x` is clamped to the canvas.
 // Returns the span's low edge when the canvas has no width or the span is empty.
-double pointerToHz(View v, const SpectrumSpan& span, double x, double widthPixels);
+double pointerToHz(WaterfallView v, const SpectrumSpan& span, double x, double widthPixels);
 
 // The pointer position (pixels, may be outside [0, width] when the frequency is outside the view) of `hz`.
-double hzToPointer(View v, const SpectrumSpan& span, double hz, double widthPixels);
+double hzToPointer(WaterfallView v, const SpectrumSpan& span, double hz, double widthPixels);
 
 // The view that shows [loHz, hiHz] (swapped if reversed, clamped to the row).
-View viewForRange(const SpectrumSpan& span, double loHz, double hiHz);
+WaterfallView viewForRange(const SpectrumSpan& span, double loHz, double hiHz);
 
 // The integer bins [firstBin, endBin) a view touches, for the server side of a "send only what is visible" reply: always inside
 // [0, totalBins], endBin >= firstBin.
@@ -77,6 +77,6 @@ struct BinRange {
     std::int64_t firstBin = 0;
     std::int64_t endBin = 0;
 };
-BinRange visibleBins(View v, std::int64_t totalBins);
+BinRange visibleBins(WaterfallView v, std::int64_t totalBins);
 
 }  // namespace cascade::net

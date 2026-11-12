@@ -155,10 +155,10 @@ ArbResult ControlArbiter::setRights(const std::string& id, bool isAdmin, bool ma
     return ArbResult::Ok;
 }
 
-Decision ControlArbiter::mayAct(const std::string& id, std::int64_t nowMs, bool touch) {
+ControlDecision ControlArbiter::mayAct(const std::string& id, std::int64_t nowMs, bool touch) {
     std::lock_guard<std::mutex> lk(mu_);
     expireLocked(nowMs);
-    Decision d;
+    ControlDecision d;
     Viewer* v = find(id);
     if (v == nullptr) { d.why = ArbResult::Unknown; return d; }
     if (!v->mayTune) { d.why = ArbResult::ListenerOnly; return d; }

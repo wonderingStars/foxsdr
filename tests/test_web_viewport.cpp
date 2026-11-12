@@ -16,7 +16,7 @@ constexpr std::int64_t kBins = 4096;
 const double kNaN = std::numeric_limits<double>::quiet_NaN();
 const double kInf = std::numeric_limits<double>::infinity();
 
-bool inside(const View& v, std::int64_t total) {
+bool inside(const WaterfallView& v, std::int64_t total) {
     return std::isfinite(v.first) && std::isfinite(v.count) && v.first >= 0.0 && v.count >= std::min(kMinVisibleBins, double(total)) &&
            v.count <= double(total) && v.first + v.count <= double(total) + 1e-9;
 }
@@ -30,23 +30,23 @@ SpectrumSpan span() {
 }
 
 void testClamp() {
-    CHECK(clampView({-5.0, 100.0}, kBins) == (View{0.0, 100.0}));
-    CHECK(clampView({4000.0, 500.0}, kBins) == (View{3596.0, 500.0}));        // pushed past the right end
-    CHECK(clampView({0.0, 1.0}, kBins) == (View{0.0, kMinVisibleBins}));       // too narrow
-    CHECK(clampView({0.0, 1e9}, kBins) == (View{0.0, double(kBins)}));         // too wide
+    CHECK(clampView({-5.0, 100.0}, kBins) == (WaterfallView{0.0, 100.0}));
+    CHECK(clampView({4000.0, 500.0}, kBins) == (WaterfallView{3596.0, 500.0}));        // pushed past the right end
+    CHECK(clampView({0.0, 1.0}, kBins) == (WaterfallView{0.0, kMinVisibleBins}));       // too narrow
+    CHECK(clampView({0.0, 1e9}, kBins) == (WaterfallView{0.0, double(kBins)}));         // too wide
     CHECK(clampView({kNaN, 100.0}, kBins) == fullView(kBins));
     CHECK(clampView({10.0, kInf}, kBins) == fullView(kBins));
-    CHECK(clampView({10.0, 10.0}, 0) == (View{0.0, 0.0}));
-    CHECK(clampView({10.0, 10.0}, -3) == (View{0.0, 0.0}));
+    CHECK(clampView({10.0, 10.0}, 0) == (WaterfallView{0.0, 0.0}));
+    CHECK(clampView({10.0, 10.0}, -3) == (WaterfallView{0.0, 0.0}));
     // fewer bins than the minimum: the whole row is the only legal view
-    CHECK(clampView({0.0, 3.0}, 8) == (View{0.0, 8.0}));
-    CHECK(clampView({2.0, 100.0}, 8) == (View{0.0, 8.0}));
+    CHECK(clampView({0.0, 3.0}, 8) == (WaterfallView{0.0, 8.0}));
+    CHECK(clampView({2.0, 100.0}, 8) == (WaterfallView{0.0, 8.0}));
 }
 
 void testZoomKeepsBinUnderPointer() {
-    const View full = fullView(kBins);
+    const WaterfallView full = fullView(kBins);
     for (const double anchor : {0.0, 0.25, 0.5, 0.9, 1.0}) {
-        View v = zoomAt(full, kBins, anchor, 4.0);
+        WaterfallView v = zoomAt(full, kBins, anchor, 4.0);
         CHECK_NEAR(v.count, kBins / 4.0, 1e-9);
         CHECK(inside(v, kBins));
         // the bin that was under the pointer is still under it
@@ -58,9 +58,9 @@ void testZoomKeepsBinUnderPointer() {
         }
     }
     // zoom in then out at the same pointer returns the view while no end clamps
-    View mid{1000.0, 2000.0};
-    View in = zoomAt(mid, kBins, 0.5, 2.0);
-    View back = zoomAt(in, kBins, 0.5, 0.5);
+    WaterfallView mid{1000.0, 2000.0};
+    WaterfallView in = zoomAt(mid, kBins, 0.5, 2.0);
+    WaterfallView back = zoomAt(in, kBins, 0.5, 0.5);
     CHECK_NEAR(back.first, mid.first, 1e-6);
     CHECK_NEAR(back.count, mid.count, 1e-6);
     // limits: zoom in a lot stops at the minimum, zoom out a lot stops at the full row
@@ -91,12 +91,12 @@ void testWheel() {
 }
 
 void testPan() {
-    View v{1000.0, 1000.0};
+    WaterfallView v{1000.0, 1000.0};
     // drag RIGHT by a quarter of the canvas: the picture follows, so the view moves to LOWER bins
-    View r = panByPixels(v, kBins, 100.0, 400.0);
+    WaterfallView r = panByPixels(v, kBins, 100.0, 400.0);
     CHECK_NEAR(r.first, 1000.0 - 250.0, 1e-9);
     CHECK_NEAR(r.count, 1000.0, 0.0);
-    View l = panByPixels(v, kBins, -100.0, 400.0);
+    WaterfallView l = panByPixels(v, kBins, -100.0, 400.0);
     CHECK_NEAR(l.first, 1250.0, 1e-9);
     // ends clamp
     CHECK_NEAR(panByPixels(v, kBins, 1e9, 400.0).first, 0.0, 0.0);
@@ -123,7 +123,7 @@ void testPointerToHz() {
     CHECK_NEAR(pointerToHz(fullView(kBins), s, 800.0, 800.0), 8.3e6, 1e-6);
     CHECK_NEAR(pointerToHz(fullView(kBins), s, 400.0, 800.0), 7.1e6, 1e-6);
     // a zoomed view: the pointer maps inside the visible part
-    const View z{1024.0, 1024.0};  // a quarter, starting a quarter in
+    const WaterfallView z{1024.0, 1024.0};  // a quarter, starting a quarter in
     CHECK_NEAR(pointerToHz(z, s, 0.0, 800.0), low + 0.25 * 2.4e6, 1e-6);
     CHECK_NEAR(pointerToHz(z, s, 800.0, 800.0), low + 0.5 * 2.4e6, 1e-6);
     // the pointer is clamped to the canvas
@@ -147,7 +147,7 @@ void testPointerToHz() {
 
 void testRangeAndBins() {
     const SpectrumSpan s = span();
-    const View v = viewForRange(s, 7.1e6, 7.4e6);
+    const WaterfallView v = viewForRange(s, 7.1e6, 7.4e6);
     CHECK_NEAR(v.count, 0.3e6 / 2.4e6 * kBins, 1e-6);
     CHECK_NEAR(v.first, 1.2e6 / 2.4e6 * kBins, 1e-6);
     CHECK(viewForRange(s, 7.4e6, 7.1e6) == v);           // reversed
@@ -159,13 +159,13 @@ void testRangeAndBins() {
     CHECK(viewForRange(zero, 1.0, 2.0) == fullView(kBins));
     CHECK(viewForRange(SpectrumSpan{}, 1.0, 2.0) == fullView(0));
 
-    BinRange r = visibleBins(View{10.5, 20.0}, kBins);
+    BinRange r = visibleBins(WaterfallView{10.5, 20.0}, kBins);
     CHECK(r.firstBin == 10 && r.endBin == 31);
     r = visibleBins(fullView(kBins), kBins);
     CHECK(r.firstBin == 0 && r.endBin == kBins);
-    r = visibleBins(View{kNaN, 5.0}, kBins);
+    r = visibleBins(WaterfallView{kNaN, 5.0}, kBins);
     CHECK(r.firstBin == 0 && r.endBin == kBins);
-    r = visibleBins(View{0.0, 10.0}, 0);
+    r = visibleBins(WaterfallView{0.0, 10.0}, 0);
     CHECK(r.firstBin == 0 && r.endBin == 0);
 }
 
@@ -174,7 +174,7 @@ void testRandomWalkStaysLegal() {
     std::mt19937_64 rng(12345);
     std::uniform_real_distribution<double> u(-1.0, 1.0);
     const double specials[] = {kNaN, kInf, -kInf, 0.0, -0.0, 1e300, -1e300, 1e-300};
-    View v = fullView(kBins);
+    WaterfallView v = fullView(kBins);
     int bad = 0;
     for (int i = 0; i < 20000; ++i) {
         const double a = (rng() % 11 == 0) ? specials[rng() % 8] : u(rng) * 3000.0;
@@ -184,7 +184,7 @@ void testRandomWalkStaysLegal() {
             case 1: v = panByPixels(v, kBins, a, 800.0); break;
             case 2: v = panByBins(v, kBins, a); break;
             case 3: v = zoomAt(v, kBins, u(rng), wheelFactor(a)); break;
-            default: v = clampView(View{a, b * 1000.0}, kBins); break;
+            default: v = clampView(WaterfallView{a, b * 1000.0}, kBins); break;
         }
         if (!inside(v, kBins)) { ++bad; }
         const BinRange r = visibleBins(v, kBins);

@@ -182,19 +182,19 @@ std::vector<std::size_t> sortStoreEntries(const std::vector<PluginCatalogEntry>&
     return idx;
 }
 
-bool ReleaseNoteHistory::add(const std::string& source, const std::string& id, ReleaseNote note) {
+bool ReleaseNoteHistory::add(const std::string& source, const std::string& id, StoreReleaseNote note) {
     const std::string k = keyOf(source, id);
     auto it = map_.find(k);
     if (it == map_.end()) {
         if (map_.size() >= kMaxHistoryPlugins) { return false; }
-        it = map_.emplace(k, std::vector<ReleaseNote>{}).first;
+        it = map_.emplace(k, std::vector<StoreReleaseNote>{}).first;
     }
     auto& v = it->second;
-    for (const ReleaseNote& e : v) {
+    for (const StoreReleaseNote& e : v) {
         if (compareStoreVersions(e.version, note.version) == 0 && e.version == note.version) { return false; }  // first seen wins
     }
     v.push_back(std::move(note));
-    std::sort(v.begin(), v.end(), [](const ReleaseNote& a, const ReleaseNote& b) {
+    std::sort(v.begin(), v.end(), [](const StoreReleaseNote& a, const StoreReleaseNote& b) {
         const int c = compareStoreVersions(a.version, b.version);
         return c != 0 ? c > 0 : a.version > b.version;
     });
@@ -206,7 +206,7 @@ std::size_t ReleaseNoteHistory::observe(const std::vector<PluginCatalogEntry>& e
     std::size_t added = 0;
     for (const PluginCatalogEntry& e : entries) {
         if (e.id.empty() || e.version.empty() || e.id.size() > 128 || e.source.size() > 256) { continue; }
-        ReleaseNote n;
+        StoreReleaseNote n;
         n.version = cleanText(e.version, 64);
         if (n.version.empty()) { continue; }
         n.published = validStoreDate(e.published) ? e.published : std::string();
@@ -216,9 +216,9 @@ std::size_t ReleaseNoteHistory::observe(const std::vector<PluginCatalogEntry>& e
     return added;
 }
 
-std::vector<ReleaseNote> ReleaseNoteHistory::history(const std::string& id, const std::string& source) const {
+std::vector<StoreReleaseNote> ReleaseNoteHistory::history(const std::string& id, const std::string& source) const {
     const auto it = map_.find(keyOf(source, id));
-    return it == map_.end() ? std::vector<ReleaseNote>{} : it->second;
+    return it == map_.end() ? std::vector<StoreReleaseNote>{} : it->second;
 }
 
 std::string ReleaseNoteHistory::toJson() const {
@@ -230,7 +230,7 @@ std::string ReleaseNoteHistory::toJson() const {
         p["source"] = kv.first.substr(0, nl);
         p["id"] = kv.first.substr(nl + 1);
         json rel = json::array();
-        for (const ReleaseNote& r : kv.second) {
+        for (const StoreReleaseNote& r : kv.second) {
             json e;
             e["version"] = r.version;
             e["published"] = r.published;
@@ -271,7 +271,7 @@ bool ReleaseNoteHistory::fromJson(const std::string& text, ReleaseNoteHistory& i
             if (!r.is_object()) { continue; }
             const auto ver = r.find("version");
             if (ver == r.end() || !ver->is_string()) { continue; }
-            ReleaseNote n;
+            StoreReleaseNote n;
             n.version = ver->get<std::string>();
             if (n.version.empty() || n.version.size() > 64 || !validUtf8(n.version)) { continue; }
             const auto pub = r.find("published");

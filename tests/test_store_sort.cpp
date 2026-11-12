@@ -310,7 +310,7 @@ void testHistoryFuzz() {
             if (t.pluginCount() > kMaxHistoryPlugins) { ++bad; }
             for (const char* id : {"p", "q"}) {
                 if (t.history(id).size() > kMaxHistoryPerPlugin) { ++bad; }
-                for (const ReleaseNote& n : t.history(id)) {
+                for (const StoreReleaseNote& n : t.history(id)) {
                     if (n.notes.size() > kMaxNoteBytes || n.version.size() > 64 || n.version.empty()) { ++bad; }
                 }
             }

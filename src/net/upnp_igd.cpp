@@ -442,8 +442,8 @@ std::string buildMSearch(const std::string& host, int port, const std::string& s
            "\r\nST: " + st + "\r\n\r\n";
 }
 
-bool parseHttpUrl(const std::string& url, UrlParts& out) {
-    out = UrlParts{};
+bool parseHttpUrl(const std::string& url, IgdUrl& out) {
+    out = IgdUrl{};
     if (url.size() > 512 || hasControl(url) || url.find(' ') != std::string::npos) { return false; }
     if (lower(url.substr(0, 7)) != "http://") { return false; }
     std::string rest = url.substr(7);
@@ -480,7 +480,7 @@ bool parseHttpUrl(const std::string& url, UrlParts& out) {
     return true;
 }
 
-bool parseDeviceDescription(const std::string& xml, const UrlParts& base, IgdService& out, std::string& error) {
+bool parseDeviceDescription(const std::string& xml, const IgdUrl& base, IgdService& out, std::string& error) {
     out = IgdService{};
     error.clear();
     XmlNode root;
@@ -499,7 +499,7 @@ bool parseDeviceDescription(const std::string& xml, const UrlParts& base, IgdSer
             if (cu.empty() || cu.size() > 512 || hasControl(cu) || cu.find(' ') != std::string::npos || cu.find('#') != std::string::npos) { continue; }
             std::string path;
             if (lower(cu.substr(0, 7)) == "http://") {
-                UrlParts u;
+                IgdUrl u;
                 if (!parseHttpUrl(cu, u) || u.host != base.host || u.port != base.port) { continue; }  // rule 4: the same host and port only
                 path = u.path;
             } else if (cu[0] == '/') {
@@ -705,7 +705,7 @@ UpnpResult UpnpMapper::discover() {
     if (!transport_->ssdpSearch(cfg_.ssdpHost, cfg_.ssdpPort, req, cfg_.timeoutMs, dg, from)) { return UpnpResult::NoDevice; }
     SsdpReply rep;
     if (!parseSsdpReply(dg, rep)) { return UpnpResult::NoDevice; }
-    UrlParts loc;
+    IgdUrl loc;
     // rule 4: a local IPv4 literal that is also the one that answered
     if (!parseHttpUrl(rep.location, loc) || !isLocalNetworkAddress(loc.host) || loc.host != from || !isLocalNetworkAddress(from)) {
         return UpnpResult::NoDevice;

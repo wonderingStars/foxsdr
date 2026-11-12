@@ -65,7 +65,7 @@ inline constexpr std::size_t kMaxHistoryPlugins = 400;
 inline constexpr std::size_t kMaxNoteBytes = 1000;
 inline constexpr std::size_t kMaxHistoryJsonBytes = 4 * 1024 * 1024;
 
-struct ReleaseNote {
+struct StoreReleaseNote {
     std::string version;
     std::string published;  // "" when the catalogue gave none or a malformed one
     std::string notes;      // may be empty: the catalogue said nothing for that version
@@ -76,7 +76,7 @@ public:
     // Records every entry's (source, id, version) not seen before. Returns how many were new. Entries with an empty id or version are ignored.
     std::size_t observe(const std::vector<PluginCatalogEntry>& entries);
     // Newest version first. `source` is PluginCatalogEntry::source ("" = the official catalogue).
-    std::vector<ReleaseNote> history(const std::string& id, const std::string& source = std::string()) const;
+    std::vector<StoreReleaseNote> history(const std::string& id, const std::string& source = std::string()) const;
     std::size_t pluginCount() const { return map_.size(); }
 
     std::string toJson() const;
@@ -84,8 +84,8 @@ public:
     static bool fromJson(const std::string& json, ReleaseNoteHistory& into);
 
 private:
-    bool add(const std::string& source, const std::string& id, ReleaseNote note);
-    std::map<std::string, std::vector<ReleaseNote>> map_;  // key: source + '\n' + id
+    bool add(const std::string& source, const std::string& id, StoreReleaseNote note);
+    std::map<std::string, std::vector<StoreReleaseNote>> map_;  // key: source + '\n' + id
 };
 
 }  // namespace cascade::core

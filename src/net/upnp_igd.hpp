@@ -60,13 +60,13 @@ bool parseSsdpReply(const std::string& datagram, SsdpReply& out);
 
 std::string buildMSearch(const std::string& host, int port, const std::string& searchTarget, int mxSeconds);
 
-struct UrlParts {
+struct IgdUrl {
     std::string host;  // an IPv4 literal
     int port = 80;
     std::string path = "/";
 };
 // http://a.b.c.d[:port][/path] only. Hosts that are names, https, userinfo, fragments, control characters: false.
-bool parseHttpUrl(const std::string& url, UrlParts& out);
+bool parseHttpUrl(const std::string& url, IgdUrl& out);
 
 // Private (10/8, 172.16/12, 192.168/16), link-local (169.254/16) or loopback IPv4 literal.
 bool isLocalNetworkAddress(const std::string& ipv4);
@@ -76,7 +76,7 @@ struct IgdService {
     std::string serviceType;  // urn:schemas-upnp-org:service:WANIPConnection:1 / :2 or WANPPPConnection:1
     std::string controlPath;  // an absolute path on the SAME host and port as the description
 };
-bool parseDeviceDescription(const std::string& xml, const UrlParts& base, IgdService& out, std::string& error);
+bool parseDeviceDescription(const std::string& xml, const IgdUrl& base, IgdService& out, std::string& error);
 
 std::string buildSoapBody(const std::string& serviceType, const std::string& action, const std::vector<std::pair<std::string, std::string>>& args);
 std::string xmlEscape(const std::string& s);
@@ -170,7 +170,7 @@ private:
     std::shared_ptr<IgdTransport> transport_;
     mutable std::mutex mu_;
     bool discovered_ = false;
-    UrlParts router_;
+    IgdUrl router_;
     IgdService service_;
     std::vector<int> active_;
     int lastError_ = 0;
