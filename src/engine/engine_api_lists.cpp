@@ -920,6 +920,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // "known and empty" is told from NOT_FOUND - and the command keys of the loaded ones. The facts are keyed by
     // the module file name (PLUGINS' detail): the table's reader takes the leaf from the right.
     fact("plugin.dir", pluginDir_, true);
+    fact("plugin.markerLimit", std::to_string(CASCADE_MAX_MARKERS_PER_PLUGIN));   // the marks one plugin may have set at once (plugin_abi.h; 256 from 0.99.109, it was 64)
     // THE START NOTICES (plugin containment P1): one line a plugin the crash-loop breaker acted on at this start, "<run id>\t<version>\t<strikes>\t
     // <permanent 1/0>\t<phase word>" - what the window says once ("X faulted last session - started without it"). Empty when it acted on none.
     // And whether this is safe mode (every plugin refused). Names a plugin by its run id, which is its file name less its version: local only.

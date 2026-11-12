@@ -1777,7 +1777,10 @@ typedef struct CascadeEvent {
 } CascadeEvent;
 
 #define CASCADE_MARKER_LABEL_CHARS 32
-#define CASCADE_MAX_MARKERS_PER_PLUGIN 64u
+/* Marks one plugin may have set at once. 256 from FoxSDR 0.99.109 (it was 64: a survey, a scanner or an aircraft-and-ship overlay has more than 64 things to
+ * mark). A plugin built against the old header still works - it simply never asks for more than 64; a plugin built against this one on an OLDER host gets
+ * LIMIT at that host's own quota, which it must treat as the end of its marks, not as an error. The host publishes the number in fact.plugin.markerLimit. */
+#define CASCADE_MAX_MARKERS_PER_PLUGIN 256u
 typedef struct CascadeMarker {
     uint32_t structSize;
     uint32_t id;                /* the plugin's own; setting an id REPLACES */
