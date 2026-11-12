@@ -103,6 +103,10 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         return controls_;
     }
+    std::vector<std::string> remoteConfigs() {
+        std::lock_guard<std::mutex> lk(m_);
+        return remoteConfigs_;
+    }
     std::atomic<int> streamRequests{0}, infoRequests{0};
     std::string lastStreamPath;
 
@@ -135,7 +139,7 @@ private:
                               std::to_string(body.size()) + "\r\n" + extra + "Connection: close\r\n\r\n" + body;
         sendExact(c, r.data(), r.size());
     }
-    std::string record(double startTime, int pairs, double fs, double& phase, Rng& rng, bool rawMode, std::string* binaryOut) {
+    std::string record(double startTime, int pairs, double fs, double& phase, Rng& rng, bool rawMode, std::string* binaryOut, bool int16Raw = false) {
         json j;
         j["startTime"] = startTime;
         j["endTime"] = startTime + pairs / fs;
@@ -160,6 +164,12 @@ private:
         if (rawMode) {
             j["samples"] = pairs;
             std::string out = j.dump() + "\n\x1e";
+            if (int16Raw) {   // the reference client's "format=int16&scale=32767": value * 32767, little-endian
+                std::vector<std::int16_t> w;
+                for (float x : v) { w.push_back(static_cast<std::int16_t>(std::lround(std::max(-1.0f, std::min(1.0f, x)) * 32767.0f))); }
+                binaryOut->assign(reinterpret_cast<const char*>(w.data()), w.size() * sizeof(std::int16_t));
+                return out;
+            }
             binaryOut->assign(reinterpret_cast<const char*>(v.data()), v.size() * sizeof(float));
             return out;
         }
@@ -208,10 +218,30 @@ private:
             respond(c, 200, "{}");
             return;
         }
+        if (r.method == "PUT" && r.path == "/remoteconfig") {
+            {
+                std::lock_guard<std::mutex> lk(m_);
+                remoteConfigs_.push_back(r.body);
+                const json j = json::parse(r.body, nullptr, false);
+                // the demodulator block carries the rate and the centre the stream will have
+                if (j.is_object() && j.value("receiverName", "") == "Block_IQDemodulator_1") {
+                    for (const auto& g : j["config"]["items"]) {
+                        for (const auto& it : g["items"]) {
+                            if (it["name"] == "samplerate") { rate_ = it["value"].get<double>(); }
+                            if (it["name"] == "centerfreq") { spec_.centerHz = it["value"].get<double>(); }
+                        }
+                    }
+                }
+            }
+            if (spec_.quirk == Quirk::ControlFails) { respond(c, 500, "{}"); return; }
+            respond(c, 200, "{}");
+            return;
+        }
         if (r.method == "GET" && r.path.rfind("/stream", 0) == 0) {
             ++streamRequests;
             lastStreamPath = r.path;
-            const bool rawMode = spec_.raw && r.path.find("format=float32") != std::string::npos;
+            const bool int16Mode = spec_.raw && r.path.find("format=int16&scale=32767") != std::string::npos;
+            const bool rawMode = spec_.raw && (int16Mode || r.path.find("format=float32") != std::string::npos);
             if (spec_.quirk == Quirk::StreamUnauthorized) { respond(c, 401, "{}"); return; }
             if (spec_.quirk == Quirk::StreamRefused) { respond(c, 503, "{}"); return; }
             const std::string head = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n";
@@ -238,7 +268,7 @@ private:
                         wire += sp.dump() + "\n\x1e";
                     }
                     std::string bin;
-                    wire += record(t, spec_.pairsPerRecord, fs, phase, rng, rawMode, &bin);
+                    wire += record(t, spec_.pairsPerRecord, fs, phase, rng, rawMode, &bin, int16Mode);
                     wire += bin;
                     t += spec_.pairsPerRecord / fs;
                     if (spec_.quirk == Quirk::GapsInTime && n % 5 == 0) { t += 0.01; }  // the server dropped data
@@ -275,7 +305,7 @@ private:
     Spec spec_;
     TcpServer srv_;
     std::mutex m_;
-    std::vector<std::string> controls_;
+    std::vector<std::string> controls_, remoteConfigs_;
     double rate_ = 0.0;
 };
 
@@ -435,6 +465,49 @@ void testRecords() {
         for (int i = 0; i < 10 && p.error().empty(); ++i) { p.feed(block.data(), block.size(), out); }
         CHECK(!p.error().empty() && out.empty());
     }
+    {   // int16 raw: little-endian pairs, value / 32767, split at every byte
+        std::string w = "{\"payload\":\"iq\",\"startTime\":1,\"endTime\":2,\"samples\":3}\n\x1e";
+        const std::int16_t v[] = {32767, -32767, 0, 16384, -1, 1};
+        w.append(reinterpret_cast<const char*>(v), sizeof v);
+        w += "{\"payload\":\"iq\",\"startTime\":2,\"endTime\":3,\"samples\":1}\n\x1e";
+        const std::int16_t v2[] = {-32768, 32767};   // -32768 is one step past full scale: not clamped, not wrapped
+        w.append(reinterpret_cast<const char*>(v2), sizeof v2);
+        aa::RecordParser p(aa::SampleFormat::Int16);
+        std::vector<aa::IqRecord> out;
+        for (char c : w) { const std::uint8_t b = static_cast<std::uint8_t>(c); p.feed(&b, 1, out); }
+        CHECK(p.error().empty() && out.size() == 2);
+        if (out.size() == 2 && out[0].samples.size() == 3 && out[1].samples.size() == 1) {
+            CHECK(out[0].samples[0] == std::complex<float>(1.0f, -1.0f) && out[0].samples[1] == std::complex<float>(0.0f, 16384.0f / 32767.0f));
+            CHECK(out[0].samples[2] == std::complex<float>(-1.0f / 32767.0f, 1.0f / 32767.0f));
+            CHECK(out[1].samples[0].real() < -1.0f && out[1].samples[0].real() > -1.001f && out[1].samples[0].imag() == 1.0f);
+        } else {
+            CHECK(false);
+        }
+        // a count whose bytes never arrive is not believed, and one too large is refused
+        aa::RecordParser q(aa::SampleFormat::Int16);
+        std::vector<aa::IqRecord> o2;
+        const std::string hdr = "{\"payload\":\"iq\",\"samples\":10}\n\x1e";
+        q.feed(reinterpret_cast<const std::uint8_t*>(hdr.data()), hdr.size(), o2);
+        CHECK(q.error().empty() && o2.empty());
+        aa::RecordParser r(aa::SampleFormat::Int16);
+        const std::string huge = "{\"payload\":\"iq\",\"samples\":99999999}\n\x1e";
+        r.feed(reinterpret_cast<const std::uint8_t*>(huge.data()), huge.size(), o2);
+        CHECK(!r.error().empty());
+    }
+    // the /remoteconfig bodies of the reference client (hb9fxq/libspectranstream, app/test_req.http): literal text
+    {
+        const json d = json::parse(aa::demodulatorRequest(10, "Block_IQDemodulator_1", 938000000.0, 2000000.0));
+        const json want = json::parse(R"({"request":10,"receiverName":"Block_IQDemodulator_1","config":{"type":"group","items":[{"type":"group","name":"main","items":[
+            {"type":"float","name":"centerfreq","value":938000000},{"type":"float","name":"samplerate","value":2000000},{"type":"float","name":"spanfreq","value":2000000}]}]}})");
+        CHECK(d == want);
+        const json t = json::parse(aa::tuneRequest(11, "Block_Spectran_V6B_1", 103000000.0));
+        const json want2 = json::parse(R"({"request":11,"receiverName":"Block_Spectran_V6B_1","config":{"type":"group","items":[{"type":"group","name":"main","items":[
+            {"type":"float","name":"centerfreq","value":103000000}]}]}})");
+        CHECK(t == want2);
+        CHECK(aa::validBlockName("Block_IQDemodulator_1") && aa::validBlockName("A b-c.d"));
+        for (const char* badName : {"", "a\"b", "a\\b", "x\ny", "a{b", "caf\xC3\xA9"}) { CHECK(!aa::validBlockName(badName)); }
+        CHECK(!aa::validBlockName(std::string(65, 'a')) && aa::validBlockName(std::string(64, 'a')));
+    }
     // request bodies
     {
         const json c = json::parse(aa::captureRequest(1.92e9, 2.0e8));
@@ -449,7 +522,7 @@ void testFuzz() {
     Rng rng(0xA110);
     const std::string good = jsonRecord({0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f});
     for (int i = 0; i < 4000; ++i) {
-        for (aa::SampleFormat f : {aa::SampleFormat::Json, aa::SampleFormat::Float32}) {
+        for (aa::SampleFormat f : {aa::SampleFormat::Json, aa::SampleFormat::Float32, aa::SampleFormat::Int16}) {
             aa::RecordParser p(f);
             std::vector<aa::IqRecord> out;
             std::string w = i % 2 ? good : std::string();
@@ -529,11 +602,96 @@ void testOpenAndStream(bool raw) {
     srv.stop();
 }
 
+void testInt16Stream() {
+    Spec sp;
+    sp.raw = true;
+    Server srv(sp);
+    CHECK(srv.start());
+    AaroniaSource s;
+    CHECK(s.open(srv.args("timeout=4000,rate=200000,format=int16")));
+    CHECK(s.start());
+    const auto got = readN(s, 20000);
+    CHECK(got.size() >= 20000);
+    CHECK(srv.lastStreamPath.find("format=int16&scale=32767") != std::string::npos);
+    const double fs = s.sampleRateHz();
+    CHECK_NEAR(toneHz(got, fs), 7000.0, 12.0);
+    double mag = 0;
+    for (auto& v : got) { mag += std::abs(v); }
+    CHECK_NEAR(mag / static_cast<double>(got.size()), 0.5, 0.03);   // /32767 puts the 0.5 tone back at 0.5
+    CHECK(!s.faulted());
+    s.closeDevice();
+    srv.stop();
+}
+
+void testRemoteConfig() {
+    Spec sp;
+    sp.raw = true;
+    Server srv(sp);
+    CHECK(srv.start());
+    AaroniaSource s;
+    CHECK(s.open(srv.args("timeout=4000,format=float32,control=remoteconfig,spectranoffset=-500000")));
+    CHECK(s.setCenterFrequencyHz(938000000.0) && s.setSampleRateHz(250000.0));
+    CHECK(srv.remoteConfigs().empty() && srv.controls().empty());  // nothing is sent until start
+    CHECK(s.start());
+    const auto rc = srv.remoteConfigs();
+    CHECK(rc.size() == 2 && srv.controls().empty());  // no /control request at all in this mode, not even a start
+    if (rc.size() == 2) {
+        const json a = json::parse(rc[0]), b = json::parse(rc[1]);
+        CHECK(a["request"] == 1 && a["receiverName"] == "Block_IQDemodulator_1");
+        const auto& items = a["config"]["items"][0]["items"];
+        CHECK(items.size() == 3 && items[0]["name"] == "centerfreq" && items[0]["value"] == 938000000.0 && items[1]["name"] == "samplerate" &&
+              items[1]["value"] == 250000.0 && items[2]["name"] == "spanfreq" && items[2]["value"] == 250000.0);
+        CHECK(b["request"] == 2 && b["receiverName"] == "Block_Spectran_V6B_1" && b["config"]["items"][0]["items"][0]["value"] == 937500000.0);
+    }
+    const auto got = readN(s, 20000);
+    CHECK(got.size() >= 20000);
+    CHECK_NEAR(s.sampleRateHz(), 250000.0 * (1.0 + 1500e-6), 250.0);   // the stream really runs at the rate the demodulator was given
+    CHECK_NEAR(toneHz(got, s.sampleRateHz()), 7000.0, 12.0);
+    // retuning while running sends numbered requests again
+    CHECK(s.setCenterFrequencyHz(940000000.0));
+    CHECK(srv.remoteConfigs().size() == 4 && json::parse(srv.remoteConfigs()[2])["request"] == 3);
+    s.stop();
+    CHECK(srv.controls().empty());  // and no stop either
+    s.closeDevice();
+    srv.stop();
+    {   // a named block, no SPECTRAN block
+        Server s2{Spec{}};
+        CHECK(s2.start());
+        AaroniaSource t;
+        CHECK(t.open(s2.args("timeout=3000,control=remoteconfig,demod=Block_IQDemodulator_1,spectran=")));
+        CHECK(t.setCenterFrequencyHz(100e6) && t.setSampleRateHz(1e6) && t.start());
+        CHECK(s2.remoteConfigs().size() == 1);
+        t.closeDevice();
+        s2.stop();
+    }
+    {   // the mission's refusal is said
+        Spec sp3;
+        sp3.quirk = Quirk::ControlFails;
+        Server s3(sp3);
+        CHECK(s3.start());
+        AaroniaSource t;
+        CHECK(t.open(s3.args("timeout=3000,control=remoteconfig")));
+        CHECK(t.setCenterFrequencyHz(100e6) && !t.start() && !t.running());
+        CHECK(std::string(t.lastError()).find("setting the demodulator") != std::string::npos && std::string(t.lastError()).find("HTTP status 500") != std::string::npos);
+        t.closeDevice();
+        s3.stop();
+    }
+    {   // bad block names and offsets never reach the network
+        AaroniaSource t;
+        CHECK(!t.open("aaronia=127.0.0.1:1,control=remoteconfig,demod=a\"b"));
+        CHECK(!t.open("aaronia=127.0.0.1:1,control=remoteconfig,demod="));
+        CHECK(!t.open("aaronia=127.0.0.1:1,control=remoteconfig,spectran=x{y"));
+        CHECK(!t.open("aaronia=127.0.0.1:1,control=remoteconfig,spectranoffset=abc"));
+        CHECK(!t.open("aaronia=127.0.0.1:1,control=remoteconfig,spectranoffset=1e30"));
+        CHECK(!t.isOpen());
+    }
+}
+
 void testOpenRefusals() {
     {
         AaroniaSource s;
         CHECK(!s.open("aaronia=127.0.0.1:0") && !s.open("aaronia=127.0.0.1:70000") && !s.open("aaronia=[::1"));
-        CHECK(!s.open("aaronia=127.0.0.1:1,timeout=5") && !s.open("aaronia=127.0.0.1:1,format=int16") && !s.open("aaronia=127.0.0.1:1,rate=5"));
+        CHECK(!s.open("aaronia=127.0.0.1:1,timeout=5") && !s.open("aaronia=127.0.0.1:1,format=int24") && !s.open("aaronia=127.0.0.1:1,control=magic") && !s.open("aaronia=127.0.0.1:1,rate=5"));
         CHECK(!s.start() && !s.setCenterFrequencyHz(1e9) && !s.setSampleRateHz(1e6));
         CHECK(!s.isOpen());
     }
@@ -667,6 +825,8 @@ int main() {
     testFuzz();
     testOpenAndStream(false);
     testOpenAndStream(true);
+    testInt16Stream();
+    testRemoteConfig();
     testOpenRefusals();
     testStreamFaults();
     testCycles();

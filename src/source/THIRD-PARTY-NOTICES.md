@@ -242,3 +242,39 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## gr-aaronia_rtsa (GNU Radio source block for the RTSA-Suite HTTP server) - MIT
+- URL: https://github.com/hb9fxq/gr-aaronia_rtsa , commit 72b291b09c503fa38ce7a7805d1e4e7b860e73ba (read 2026-11-12)
+- Files read: lib/rtsa_http_server_source_impl.{cc,h}, include/gnuradio/aaronia_rtsa/rtsa_http_server_source.h, grc/aaronia_rtsa_rtsa_http_server_source.block.yml, MANIFEST.md, docs/README.aaronia_rtsa, LICENSE. Every source file read carries the same MIT header; none is under the GPL (the GNU Radio runtime it links is not part of the files read and was not opened).
+- Used in: aaronia_protocol.hpp, aaronia_source.{hpp,cpp} (the block names Block_IQDemodulator_1 / Block_Spectran_V6B_1, the demodulator-plus-SPECTRAN control scheme, the default endpoint 127.0.0.1:54664)
+
+## libspectranstream (HTTP stream client library the block calls) - MIT
+- URL: https://github.com/hb9fxq/libspectranstream , commit d50791e5de02d49132e62314909dd18c8d871b57 (read 2026-11-12)
+- Files read: lib/spectranstream.cpp, lib/spectranstream.h, app/test_req.http, README.md, LICENSE
+- Used in: aaronia_protocol.hpp, aaronia_source.{hpp,cpp} (raw record delimiting by the 0x1E byte, /stream?format=float32 and /stream?format=int16&scale=32767, the PUT /remoteconfig request bodies, the /info probe)
+
+```text
+MIT License
+
+Copyright (c) 2021 Frank Werner-Krippendorf
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+(gr-aaronia_rtsa's LICENSE file is the identical MIT text, "Copyright (c) 2021 Frank Werner-Krippendorf".)

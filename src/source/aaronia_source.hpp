@@ -11,9 +11,15 @@
 //
 // ARGS ("key=value,key=value"):
 //   aaronia=host[:port]    the RTSA HTTP server block (port default 54664, the document's example)
-//   format=json|float32    the sample format asked for: json (default; the layout is fully described) or
-//                          float32 (binary; the document's description of the record delimiting is
-//                          ambiguous, see aaronia_protocol.hpp)
+//   format=json|float32|int16   the sample format asked for: json (default; the layout is fully described),
+//                          float32 or int16 (binary: the record delimiting and the int16 scale are those of the
+//                          MIT-licensed reference client, see aaronia_protocol.hpp)
+//   control=capture|remoteconfig   how the centre and rate are set: "capture" (default) PUTs /control as the
+//                          manufacturer's document describes; "remoteconfig" PUTs /remoteconfig to the named blocks
+//                          of the user's mission as the reference client does, and sends no start/stop of its own
+//   demod=NAME             the IQ demodulator block (remoteconfig only; default Block_IQDemodulator_1)
+//   spectran=NAME          the SPECTRAN block whose centre follows (default Block_Spectran_V6B_1; empty: none)
+//   spectranoffset=Hz      added to the centre sent to the SPECTRAN block (default 0)
 //   rate=Hz                the capture span / I/Q rate to ask for at start (the document gives no rate
 //                          control for I/Q other than the span: that frequencySpan sets the rate is a
 //                          hypothesis)
@@ -80,7 +86,7 @@ private:
     struct Stream;
 
     bool failOpen(const std::string& why);
-    bool control(const std::string& json, const char* what);
+    bool control(const std::string& json, const char* what, const char* path = "/control");
     bool sendCapture();
     void closeStream();
 
@@ -89,6 +95,10 @@ private:
     std::uint16_t port_ = 0;
     int timeoutMs_ = 3000;
     aaronia::SampleFormat format_ = aaronia::SampleFormat::Json;
+    bool remoteConfig_ = false;  // control=remoteconfig: the reference client's way of setting centre and rate
+    std::string demodBlock_, spectranBlock_;
+    double spectranOffsetHz_ = 0.0;
+    long long requestCounter_ = 0;
     std::string serverName_;
     double centerHz_ = 0.0, spanHz_ = 0.0;
     bool captureDirty_ = false;
