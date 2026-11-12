@@ -67,6 +67,20 @@ struct Trail {
     std::uint32_t rgba = 0xffffffffu;                // 0xRRGGBBAA
     bool dashed = false;
     bool closed = false;
+    // LANE J (docs/multi-radio-records/screen-j.md): a line of its own width, and a washed inside. widthPx 0 = the Display setting's width and
+    // style, as before; above 0 = that many pixels across (a thin faint APRS path, 1 px), the style ignored. fillAlpha is for a CLOSED trail
+    // only: the inside is washed in the trail's colour at that alpha (0..255) under the stroke (an airspace, the 24-hour range outline).
+    float widthPx = 0.f;
+    std::uint8_t fillAlpha = 0;
+};
+
+// A box of the map in degrees, washed in one colour (0xRRGGBBAA): a heat-map cell, a worked or heard grid square, a level-against-position cell.
+struct Cell {
+    double latMin = 0.0, latMax = 0.0, lonMin = 0.0, lonMax = 0.0;
+    std::uint32_t rgba = 0u;
+    bool operator==(const Cell& o) const {
+        return latMin == o.latMin && latMax == o.latMax && lonMin == o.lonMin && lonMax == o.lonMax && rgba == o.rgba;
+    }
 };
 
 class TileCompositor {
@@ -91,6 +105,12 @@ public:
     // 72 buckets of 5 degrees of bearing, km each (0 = nothing in that wedge); empty = the overlay is off.
     void setCoverage(const std::vector<double>& kmPerBucket);
     void setTrails(const std::vector<Trail>& trails);
+    // LANE J: boxes washed under the graticule, rings and trails, most of kMaxCells of them (the rest are not drawn); a cell whose edges are not numbers is dropped.
+    void setCells(const std::vector<Cell>& cells);
+    // LANE J: the Maidenhead grid lines: 0 off, 1 fields (20 x 10 degrees), 2 squares (2 x 1), 3 subsquares (5 x 2.5 minutes). A level whose lines would be closer than
+    // kMinGridLinePx apart is drawn as the level above it (a grid is never a smear).
+    void setGrid(int level);
+    int gridLevel() const;
     // The width and the style every trail is stroked with (a trail of 2 px, as a line, until this is called). The width is bounded as the
     // classic window bounds it for `iconPx` (clampTrailWidthPx): 1 .. the wingspan of the icon; a ribbon is kRibbonExtraPx wider than the line.
     void setTrailLook(int widthPx, int iconPx, TrailStyle style);
@@ -118,6 +138,8 @@ public:
     bool mercator() const;
 
     static constexpr std::size_t kMaxTiles = 256;              // the CPU cache's cap
+    static constexpr std::size_t kMaxCells = 40000;
+    static constexpr double kMinGridLinePx = 6.0;
     static constexpr std::uint64_t kMissingRetryComposes = 600;
     static constexpr double kMinSpanDeg = 0.02;
     static constexpr double kMaxSpanDeg = 360.0;

@@ -73,6 +73,9 @@ import { RadioPaneData } from "radio_pane.slint";
 export { WorkspaceModel, WorkspaceCell, RadioPaneData }   // the radio workspace (docs/multi-radio-records/screen-s3.md): the host publishes its model and answers its callbacks
 export { GlobeEvents, GlobeModel, GlobeControl, GlobeChipModel }
 export { LaneC, LCQuick, LCShortcut, LCRecording }   // screen lane C: the host (lanec_publish.cpp) sets the global and answers its act(id, text)
+import { MapJEvents, LayerRow, ReplayModel, FilterModel, MapJModel, PolarDot, SkyModel, AntennaModel } from "mapj.slint";   // screen lane J (docs/multi-radio-records/screen-j.md): the map's layers, replay and filter, the Sky and Antenna pages
+import { GridLabel } from "map.slint";
+export { MapJEvents, LayerRow, ReplayModel, FilterModel, MapJModel, PolarDot, SkyModel, AntennaModel, GridLabel }
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
 export struct StatusCard { key: string, value: string, detail: string, tone: ChipTone, lamp: LampState, show-lamp: bool, lines: [string] }

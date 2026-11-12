@@ -720,6 +720,8 @@ struct TileCompositor::Impl {
     double homeLat = 0.0, homeLon = 0.0;
     std::vector<double> coverage;
     std::vector<Trail> trails;
+    std::vector<Cell> cells;                            // lane J: heat, locator shading, level against position
+    int gridLevel = 0;                                  // lane J: the Maidenhead lines
     int trailPx = 2;                                   // the bounded width (a trail of 2 px, a line, until setTrailLook)
     TrailStyle trailStyle = TrailStyle::Line;
 
@@ -1127,6 +1129,80 @@ struct TileCompositor::Impl {
         }
     }
 
+    // ---- lane J: boxes washed in a colour (heat, worked / heard squares, level against position) ----
+    void drawCells(const Frame& f, const View& v) {
+        for (const Cell& c : cells) {
+            const int alpha = static_cast<int>(c.rgba & 0xffu);
+            if (alpha == 0) { continue; }
+            const Rgb colour{static_cast<std::uint8_t>(c.rgba >> 24), static_cast<std::uint8_t>(c.rgba >> 16), static_cast<std::uint8_t>(c.rgba >> 8)};
+            const double yTop = v.yOfLat(std::min(c.latMax, v.latLimit())), yBot = v.yOfLat(std::max(c.latMin, -v.latLimit()));
+            if (yBot < 0.0 || yTop >= f.h) { continue; }
+            const int y0 = static_cast<int>(std::clamp(std::floor(yTop + 0.5), 0.0, static_cast<double>(f.h)));
+            const int y1 = static_cast<int>(std::clamp(std::max(std::floor(yBot + 0.5), std::floor(yTop + 0.5) + 1.0), 0.0, static_cast<double>(f.h)));
+            const double mid = 0.5 * (c.lonMin + c.lonMax), halfW = 0.5 * (c.lonMax - c.lonMin);
+            // the world repeats every 360 degrees: the copies that can touch the picture
+            const double u = foldDelta(mid - v.cLon);
+            const int kLo = static_cast<int>(std::clamp(std::ceil((-(v.span * 0.5) - halfW - u) / 360.0), -3.0, 3.0));
+            const int kHi = static_cast<int>(std::clamp(std::floor(((v.span * 0.5) + halfW - u) / 360.0), -3.0, 3.0));
+            for (int k = kLo; k <= kHi; ++k) {
+                const double xa = v.xOfDelta(u + 360.0 * k - halfW), xb = v.xOfDelta(u + 360.0 * k + halfW);
+                const int x0 = static_cast<int>(std::clamp(std::floor(xa + 0.5), 0.0, static_cast<double>(f.w)));
+                const int x1 = static_cast<int>(std::clamp(std::max(std::floor(xb + 0.5), std::floor(xa + 0.5) + 1.0), 0.0, static_cast<double>(f.w)));
+                for (int y = y0; y < y1; ++y) {
+                    std::uint8_t* p = f.at(x0, y);
+                    for (int x = x0; x < x1; ++x, p += 4) { blendPixel(p, colour, alpha); }
+                }
+            }
+        }
+    }
+
+    // ---- lane J: the Maidenhead lines ----
+    static void gridSteps(int level, double& lonStep, double& latStep) {
+        if (level <= 1) { lonStep = 20.0; latStep = 10.0; }
+        else if (level == 2) { lonStep = 2.0; latStep = 1.0; }
+        else { lonStep = 5.0 / 60.0; latStep = 2.5 / 60.0; }
+    }
+    int effectiveGrid(const View& v) const {
+        int level = std::clamp(gridLevel, 0, 3);
+        while (level > 1) {
+            double lonStep = 0.0, latStep = 0.0;
+            gridSteps(level, lonStep, latStep);
+            if (lonStep * v.pxPerDeg >= TileCompositor::kMinGridLinePx && latStep * v.pxPerDeg >= TileCompositor::kMinGridLinePx) { break; }
+            --level;
+        }
+        return level;
+    }
+    void drawLocatorGrid(const Frame& f, const View& v) {
+        const int level = effectiveGrid(v);
+        if (level <= 0) { return; }
+        double lonStep = 0.0, latStep = 0.0;
+        gridSteps(level, lonStep, latStep);
+        const Rgb colour{0x6a, 0xb8, 0xd8};
+        constexpr int kAlpha = 120;
+        const double limit = v.latLimit();
+        const double west = v.cLon - v.span * 0.5, east = v.cLon + v.span * 0.5;
+        const double yNorth = v.yOfLat(limit), ySouth = v.yOfLat(-limit);
+        const int r0 = static_cast<int>(std::clamp(std::ceil(yNorth - 0.5), 0.0, static_cast<double>(f.h)));
+        const int r1 = static_cast<int>(std::clamp(std::ceil(ySouth - 0.5), 0.0, static_cast<double>(f.h)));
+        const double k0 = std::ceil((west + 180.0) / lonStep), k1 = std::floor((east + 180.0) / lonStep);
+        for (double k = k0; k <= k1 && k - k0 < 4096.0; k += 1.0) {
+            const double x = std::floor(v.xOfLon(k * lonStep - 180.0));
+            if (x < 0.0 || x >= f.w) { continue; }
+            for (int y = r0; y < r1; ++y) { blendPixel(f.at(static_cast<int>(x), y), colour, kAlpha); }
+        }
+        double south = 0.0, north = 0.0;
+        latRange(v, south, north);
+        south = std::max(south, -limit);
+        north = std::min(north, limit);
+        const double j0 = std::ceil((south + 90.0) / latStep), j1 = std::floor((north + 90.0) / latStep);
+        for (double j = j0; j <= j1 && j - j0 < 4096.0; j += 1.0) {
+            const double y = std::floor(v.yOfLat(j * latStep - 90.0));
+            if (y < 0.0 || y >= f.h) { continue; }
+            std::uint8_t* p = f.at(0, static_cast<int>(y));
+            for (int x = 0; x < f.w; ++x, p += 4) { blendPixel(p, colour, kAlpha); }
+        }
+    }
+
     // ---- the trails ----
     void drawTrails(const Frame& f, const View& v) {
         const double trailStrokePx = static_cast<double>(trailPx) + (trailStyle == TrailStyle::Ribbon ? kRibbonExtraPx : 0);
@@ -1165,13 +1241,22 @@ struct TileCompositor::Impl {
             const int kHi = static_cast<int>(std::clamp(std::floor((halfSpan - uMin) / 360.0), -4.0, 4.0));
             // The width is the Display setting's (setTrailLook). A dash is a capsule, its caps as wide as the line is, so the pattern grows with the
             // half-width past 1 px (a 6 px dash with 43 px caps would be a solid bar): 6 on, 4 off at the 2 px default, 60 on, 40 off at 20 px.
-            const double hw = trailStrokePx * 0.5;
+            const double hw = (t.widthPx > 0.f ? static_cast<double>(t.widthPx) : trailStrokePx) * 0.5;
             const double dashScale = std::max(1.0, hw);
             const Dash dash = t.dashed ? Dash{kDashOn * dashScale, kDashOff * dashScale} : Dash{};
             for (int k = kLo; k <= kHi; ++k) {
                 sx.resize(ux.size());
                 for (std::size_t i = 0; i < ux.size(); ++i) { sx[i] = v.xOfDelta(ux[i] + 360.0 * k); }
                 if (!boxTouchesPicture(sx.data(), uy.data(), sx.size(), f.w, f.h, 3.0)) { continue; }
+                if (t.closed && t.fillAlpha > 0u && sx.size() >= 3u) {      // lane J: the inside washed under the stroke
+                    fill.begin(f.w, f.h);
+                    fill.addRing(sx.data(), uy.data(), sx.size());
+                    const int fa = t.fillAlpha;
+                    fill.run([&](int y, int x0, int x1) {
+                        std::uint8_t* p = f.at(x0, y);
+                        for (int x = x0; x < x1; ++x, p += 4) { blendPixel(p, colour, fa); }
+                    });
+                }
                 raster.begin();
                 strokePath(raster, sx.data(), uy.data(), sx.size(), t.closed, hw, dash);
                 raster.end(colour, alpha);
@@ -1278,6 +1363,8 @@ void TileCompositor::setTrails(const std::vector<Trail>& trails) {
         c.rgba = t.rgba;
         c.dashed = t.dashed;
         c.closed = t.closed;
+        c.widthPx = std::isfinite(t.widthPx) && t.widthPx > 0.f ? std::min(t.widthPx, 64.f) : 0.f;
+        c.fillAlpha = t.fillAlpha;
         c.points.reserve(t.points.size());
         for (const auto& p : t.points) {
             if (finite2(p.first, p.second)) { c.points.push_back(p); }   // a vertex that is not a place is not drawn
@@ -1285,12 +1372,34 @@ void TileCompositor::setTrails(const std::vector<Trail>& trails) {
         clean.push_back(std::move(c));
     }
     const auto same = [](const Trail& a, const Trail& b) {
-        return a.rgba == b.rgba && a.dashed == b.dashed && a.closed == b.closed && a.points == b.points;
+        return a.rgba == b.rgba && a.dashed == b.dashed && a.closed == b.closed && a.widthPx == b.widthPx && a.fillAlpha == b.fillAlpha && a.points == b.points;
     };
     if (clean.size() == impl_->trails.size() && std::equal(clean.begin(), clean.end(), impl_->trails.begin(), same)) { return; }
     impl_->trails = std::move(clean);
     impl_->dirty = true;
 }
+
+void TileCompositor::setCells(const std::vector<Cell>& cells) {
+    std::vector<Cell> clean;
+    clean.reserve(std::min(cells.size(), kMaxCells));
+    for (const Cell& c : cells) {
+        if (clean.size() >= kMaxCells) { break; }
+        if (!finite2(c.latMin, c.latMax) || !finite2(c.lonMin, c.lonMax) || c.latMax < c.latMin || c.lonMax < c.lonMin) { continue; }
+        clean.push_back(c);
+    }
+    if (clean == impl_->cells) { return; }
+    impl_->cells = std::move(clean);
+    impl_->dirty = true;
+}
+
+void TileCompositor::setGrid(int level) {
+    level = std::clamp(level, 0, 3);
+    if (level == impl_->gridLevel) { return; }
+    impl_->gridLevel = level;
+    impl_->dirty = true;
+}
+
+int TileCompositor::gridLevel() const { return impl_->gridLevel; }
 
 bool TileCompositor::compose(std::uint8_t* rgba, int width, int height) {
     Impl& m = *impl_;
@@ -1335,7 +1444,9 @@ bool TileCompositor::compose(std::uint8_t* rgba, int width, int height) {
         m.updateRetry();
     }
     if (m.layerCoast && !tiled) { m.drawLand(f, v); }
+    if (!m.cells.empty()) { m.drawCells(f, v); }
     if (m.layerGraticule) { m.drawGraticule(f, v); }
+    if (m.gridLevel > 0) { m.drawLocatorGrid(f, v); }
     if (m.hasHome) {
         m.drawRings(f, v);
         if (!m.coverage.empty()) { m.drawCoverage(f, v); }

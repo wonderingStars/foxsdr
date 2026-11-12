@@ -1,0 +1,17 @@
+#! frames=700 bank=1 sections=2:1 plugins=adsb-decoder open=sky iqfile=adsb-decoder.wav centre=1090000000 mode=RAW bandwidth=2400000 size=1280x720 FOXSDR_SLINT_TEST_PASS=1
+# mapj-sky (rows M8 and the polar sky plot of a pass): the Sun, the Moon and five radio sources by azimuth and elevation for the receiver position, and a made-up pass on the polar plot (the test seam in the header).
+120 state kit.plugins == 1
++1 state mapj.skyRows == 0
++1 key f3
++4 state bank == 2
++1 type "Latitude" "51.4775"
++1 key enter
++1 type "Longitude" "-0.4614"
++1 key enter
++3 click "Set RX here"
++25 state positionSet == 1
++1 click "SKY"
++30 state mapj.skyRows == 7
++1 state mapj.sunEl != ""
++1 state mapj.passMax >= 60
++1 shot "mapj-sky.png"

@@ -1,0 +1,216 @@
+// FoxSDR Slint front end - SCREEN LANE J (docs/multi-radio-records/screen-j.md): what the map page gains and the two pages beside it.
+//   MapJBar     under the map's toolbar: Layers (the switches of the map's layers), Replay (the timeline transport), Filter (the aircraft filter),
+//               the unit choice and the tile cache's line. The host (kit_publish.cpp, rules in mapj_logic.*) fills `MapJModel`; every gesture is
+//               ONE callback, `MapJEvents.act(page, op, arg)`, so the pages and the torn-off windows reach the host the same way.
+//   SkyPage     kind 12: the Sun, the Moon and five radio sources by azimuth and elevation, and the polar plot of a pass.
+//   AntennaPage kind 13: the antenna calculators.
+import { Theme } from "theme.slint";
+import { Key } from "keys.slint";
+import { Checkbox, Field, FieldKind } from "fields.slint";
+import { Slider } from "sliders.slint";
+import { RowKind, RowTone, TableRow, Table } from "table.slint";
+import { GridLabel } from "map.slint";
+
+export global MapJEvents {
+    callback act(int, string, string);          // page index, the operation, its argument
+}
+
+export struct LayerRow { label: string, on: bool, enabled: bool, tip: string }
+
+export struct ReplayModel {
+    shown: bool,                                // the bar is open
+    empty: bool,                                // nothing recorded yet
+    active: bool,                               // the map shows the past
+    playing: bool,
+    pos: float,                                 // 0..1 along what is held
+    clock: string,                              // "14:32:05 UTC"
+    behind: string,                             // "5 min 30 s behind"
+    speed: string,                              // "4x"
+}
+
+export struct FilterModel {
+    shown: bool,
+    enabled: bool,
+    hide-ground: bool,
+    military: bool,
+    callsign: string,
+    alt-min: string,
+    alt-max: string,
+    type-text: string,
+    operator-text: string,
+    plugin-fields: bool,                        // the ADS-B plugin hands over type, operator and military: false = those three are dimmed
+    summary: string,
+    note: string,
+    alt-min-error: string,
+    alt-max-error: string,
+}
+
+export struct MapJModel {
+    layers-open: bool,
+    layers: [LayerRow],
+    blocked-line: string,
+    units: string,                              // the key's label: "Units: Automatic"
+    cache-text: string,
+    cache-has: bool,
+    status: string,                             // heat / range / level layers: what they hold
+    replay: ReplayModel,
+    filter: FilterModel,
+    grid-labels: [GridLabel],
+}
+
+export component MapJBar inherits Rectangle {
+    in property <MapJModel> m;
+    in property <int> index;
+    // the bar is exactly as tall as its rows: a layout left to itself takes the page's spare height and pushes the map away
+    height: bar.preferred-height;
+    bar := VerticalLayout {
+    spacing: 4px;
+    padding-left: 10px; padding-right: 10px; padding-bottom: 6px;
+    HorizontalLayout { spacing: 8px; alignment: start;
+        Key { label: @tr("Layers"); small: true; min-w: 0px; on: root.m.layers-open; tooltip: @tr("Switch the map's layers on and off"); clicked => { MapJEvents.act(root.index, "layers", ""); } }   // not-translated: the host's operation name
+        Key { label: @tr("Replay"); small: true; min-w: 0px; on: root.m.replay.shown; tooltip: @tr("Play back where the targets were"); clicked => { MapJEvents.act(root.index, "replay-bar", ""); } }   // not-translated: the host's operation name
+        Key { label: @tr("Filter"); small: true; min-w: 0px; on: root.m.filter.shown; tooltip: @tr("Choose which aircraft are shown"); clicked => { MapJEvents.act(root.index, "filter-bar", ""); } }   // not-translated: the host's operation name
+        Key { label: root.m.units; small: true; min-w: 0px; tooltip: @tr("The units the map's words use. Press to change them."); clicked => { MapJEvents.act(root.index, "units", ""); } }   // not-translated: the host's operation name
+        Text { text: root.m.status; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; overflow: elide; }
+        Rectangle { horizontal-stretch: 1; }
+        Text { text: root.m.cache-text; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; overflow: elide; }
+        Key { label: @tr("Clear tile cache"); small: true; min-w: 0px; enabled: root.m.cache-has; tooltip: @tr("Deletes the map tiles kept on disk. Only tiles you have looked at are ever kept."); clicked => { MapJEvents.act(root.index, "cache-clear", ""); } }   // not-translated: the host's operation name
+    }
+    if root.m.layers-open : VerticalLayout { spacing: 2px;
+        Rectangle { height: 44px;      // two rows of switches: a grid left to itself takes the whole page
+        GridLayout { spacing: 10px;
+            for row[i] in root.m.layers : Checkbox { row: i < 5 ? 0 : 1; col: i < 5 ? i : i - 5; label: row.label; checked: row.on; enabled: row.enabled; tooltip: row.tip;
+                toggled(v) => { MapJEvents.act(root.index, "layer", "" + i + ":" + (v ? "1" : "0")); } }   // not-translated: the host's operation name
+        }
+        }
+        Text { text: root.m.blocked-line; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
+    }
+    if root.m.replay.shown : HorizontalLayout { spacing: 8px;
+        Key { label: root.m.replay.playing ? @tr("Pause") : @tr("Play"); small: true; min-w: 0px; enabled: !root.m.replay.empty; tooltip: @tr("Play or pause the replay"); clicked => { MapJEvents.act(root.index, "replay-toggle", ""); } }   // not-translated: the host's operation name
+        Key { label: root.m.replay.speed; small: true; min-w: 0px; enabled: !root.m.replay.empty; tooltip: @tr("Replay speed: 1x, 4x, 16x, 64x"); clicked => { MapJEvents.act(root.index, "replay-speed", ""); } }   // not-translated: the host's operation name
+        Slider { horizontal-stretch: 1; value: root.m.replay.pos; enabled: !root.m.replay.empty; tooltip: @tr("Drag to move through the recorded time"); changed(v) => { MapJEvents.act(root.index, "replay-scrub", "" + v); } }   // not-translated: the host's operation name
+        Text { text: root.m.replay.clock; font-size: Theme.font-small; color: Theme.fg-soft; vertical-alignment: center; }
+        Text { text: root.m.replay.behind; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; overflow: elide; }
+        Key { label: @tr("Now"); small: true; min-w: 0px; enabled: root.m.replay.active; tooltip: @tr("Back to the live map"); clicked => { MapJEvents.act(root.index, "replay-now", ""); } }   // not-translated: the host's operation name
+    }
+    if root.m.filter.shown : VerticalLayout { spacing: 2px;
+        HorizontalLayout { spacing: 12px; alignment: start;
+            Checkbox { label: @tr("Filter aircraft"); checked: root.m.filter.enabled; tooltip: @tr("Show only the aircraft that pass every condition below"); toggled(v) => { MapJEvents.act(root.index, "filter-on", v ? "1" : "0"); } }   // not-translated: the host's operation name
+            Checkbox { label: @tr("Hide on ground"); checked: root.m.filter.hide-ground; tooltip: @tr("Hides aircraft under 50 ft that are slower than 25 m/s"); toggled(v) => { MapJEvents.act(root.index, "filter-ground", v ? "1" : "0"); } }   // not-translated: the host's operation name
+            Checkbox { label: @tr("Military or interesting"); checked: root.m.filter.military; enabled: root.m.filter.plugin-fields; tooltip: @tr("Needs the ADS-B plugin to say which aircraft these are"); toggled(v) => { MapJEvents.act(root.index, "filter-military", v ? "1" : "0"); } }   // not-translated: the host's operation name
+            Text { text: root.m.filter.summary; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; overflow: elide; }
+        }
+        HorizontalLayout { spacing: 8px;
+            Field { horizontal-stretch: 1; label: @tr("Callsign contains"); kind: FieldKind.text; value: root.m.filter.callsign; max-length: 24; committed(t) => { MapJEvents.act(root.index, "filter-callsign", t); } }   // not-translated: the host's operation name
+            Field { horizontal-stretch: 1; label: @tr("Altitude from, ft"); kind: FieldKind.number; value: root.m.filter.alt-min; error: root.m.filter.alt-min-error; max-length: 8; committed(t) => { MapJEvents.act(root.index, "filter-altmin", t); } }   // not-translated: the host's operation name
+            Field { horizontal-stretch: 1; label: @tr("Altitude to, ft"); kind: FieldKind.number; value: root.m.filter.alt-max; error: root.m.filter.alt-max-error; max-length: 8; committed(t) => { MapJEvents.act(root.index, "filter-altmax", t); } }   // not-translated: the host's operation name
+            Field { horizontal-stretch: 1; label: @tr("Type contains"); kind: FieldKind.text; value: root.m.filter.type-text; enabled: root.m.filter.plugin-fields; max-length: 12; committed(t) => { MapJEvents.act(root.index, "filter-type", t); } }   // not-translated: the host's operation name
+            Field { horizontal-stretch: 1; label: @tr("Operator contains"); kind: FieldKind.text; value: root.m.filter.operator-text; enabled: root.m.filter.plugin-fields; max-length: 24; committed(t) => { MapJEvents.act(root.index, "filter-operator", t); } }   // not-translated: the host's operation name
+        }
+        if root.m.filter.note != "" : Text { text: root.m.filter.note; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
+    }
+    }
+}
+
+// ----------------------------------------------------------------------------------------------------------------------------
+// the polar plot: the zenith at the centre, the horizon on the rim, north up, east to the right
+// ----------------------------------------------------------------------------------------------------------------------------
+export struct PolarDot { x: float, y: float, label: string, ink: color, below: bool }
+
+export component PolarPlot inherits Rectangle {
+    in property <[PolarDot]> dots;                 // x, y in 0..1 of the plot square
+    in property <string> pass-commands;            // an SVG path in a 0..200 box ("" = no pass)
+    in property <color> pass-ink;
+    in property <string> north-label: @tr("N");
+    in property <string> east-label: @tr("E");
+    in property <string> south-label: @tr("S");
+    in property <string> west-label: @tr("W");
+    property <length> d: Math.min(root.width, root.height) - 24px;
+    property <length> ox: (root.width - root.d) / 2;
+    property <length> oy: (root.height - root.d) / 2;
+    background: Theme.well;
+    clip: true;
+    accessible-role: image;
+    accessible-label: @tr("Polar sky plot");
+    // the horizon, 30 and 60 degrees up
+    Rectangle { x: root.ox; y: root.oy; width: root.d; height: root.d; border-radius: root.d / 2; border-width: 1px; border-color: Theme.line-strong; }
+    Rectangle { x: root.ox + root.d / 6; y: root.oy + root.d / 6; width: root.d * 2 / 3; height: root.d * 2 / 3; border-radius: self.width / 2; border-width: 1px; border-color: Theme.line; }
+    Rectangle { x: root.ox + root.d / 3; y: root.oy + root.d / 3; width: root.d / 3; height: root.d / 3; border-radius: self.width / 2; border-width: 1px; border-color: Theme.line; }
+    Rectangle { x: root.ox + root.d / 2; y: root.oy; width: 1px; height: root.d; background: Theme.line-faint; }
+    Rectangle { x: root.ox; y: root.oy + root.d / 2; width: root.d; height: 1px; background: Theme.line-faint; }
+    Text { x: root.ox + root.d / 2 - 6px; y: root.oy - 16px; text: root.north-label; font-size: Theme.font-hint; color: Theme.muted; }
+    Text { x: root.ox + root.d / 2 - 6px; y: root.oy + root.d + 2px; text: root.south-label; font-size: Theme.font-hint; color: Theme.muted; }
+    Text { x: root.ox + root.d + 4px; y: root.oy + root.d / 2 - 7px; text: root.east-label; font-size: Theme.font-hint; color: Theme.muted; }
+    Text { x: root.ox - 14px; y: root.oy + root.d / 2 - 7px; text: root.west-label; font-size: Theme.font-hint; color: Theme.muted; }
+    if root.pass-commands != "" : Path { x: root.ox; y: root.oy; width: root.d; height: root.d; viewbox-width: 200; viewbox-height: 200; commands: root.pass-commands; stroke: root.pass-ink; stroke-width: 2px; fill: transparent; }
+    for dot in root.dots : Rectangle {
+        x: root.ox + dot.x * root.d - 5px; y: root.oy + dot.y * root.d - 5px; width: 10px; height: 10px; border-radius: 5px;
+        background: dot.below ? Theme.dim : dot.ink;
+        accessible-role: none;
+        Text { x: 12px; y: -3px; text: dot.label; font-size: Theme.font-hint; color: dot.below ? Theme.dim : Theme.fg-soft; }
+    }
+}
+
+// ----------------------------------------------------------------------------------------------------------------------------
+// the Sky page (kind 12)
+// ----------------------------------------------------------------------------------------------------------------------------
+export struct SkyModel {
+    position-text: string,                      // "RX 51.4812 -0.4521 | 14:32:05 UTC", or the hint when no position is set
+    note: string,                               // "Elevation is geometric: no refraction."
+    columns: [string],
+    rows: [TableRow],
+    widths: [length],
+    dots: [PolarDot],
+    pass-commands: string,
+    pass-text: string,                          // "Pass: rises at 215, peaks at 64 degrees, sets at 45, 10 min" or "No pass"
+    pass-ink: color,
+    stellarium-note: string,
+}
+
+export component SkyPage inherits VerticalLayout {
+    in property <SkyModel> model;
+    in property <int> index;
+    spacing: 6px;
+    padding: 10px;
+    Text { text: root.model.position-text; font-size: Theme.font-small; color: Theme.fg-soft; overflow: elide; }
+    HorizontalLayout { spacing: 10px; vertical-stretch: 1;
+        Table { horizontal-stretch: 1; columns: root.model.columns; rows: root.model.rows; column-widths: root.model.widths; empty-text: @tr("Set the receiver position to see where the Sun, the Moon and the radio sources are."); }
+        PolarPlot { width: 320px; dots: root.model.dots; pass-commands: root.model.pass-commands; pass-ink: root.model.pass-ink; }
+    }
+    Text { text: root.model.pass-text; font-size: Theme.font-small; color: Theme.muted; overflow: elide; }
+    Text { text: root.model.note; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
+    Text { text: root.model.stellarium-note; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
+}
+
+// ----------------------------------------------------------------------------------------------------------------------------
+// the Antenna page (kind 13)
+// ----------------------------------------------------------------------------------------------------------------------------
+export struct AntennaModel {
+    freq: string,
+    distance: string,
+    coax-fraction: string,
+    vf: string,
+    yagi: string,
+    error: string,                              // "" = the input is good
+    columns: [string],
+    rows: [TableRow],
+    widths: [length],
+    note: string,
+}
+
+export component AntennaPage inherits VerticalLayout {
+    in property <AntennaModel> model;
+    in property <int> index;
+    spacing: 6px;
+    padding: 10px;
+    HorizontalLayout { spacing: 8px;
+        Field { horizontal-stretch: 1; label: @tr("Frequency (MHz)"); kind: FieldKind.number; value: root.model.freq; max-length: 12; committed(t) => { MapJEvents.act(root.index, "ant-freq", t); } }   // not-translated: the host's operation name
+        Field { horizontal-stretch: 1; label: @tr("Distance (km)"); kind: FieldKind.number; value: root.model.distance; max-length: 12; committed(t) => { MapJEvents.act(root.index, "ant-distance", t); } }   // not-translated: the host's operation name
+        Field { horizontal-stretch: 1; label: @tr("Coax (wavelengths)"); kind: FieldKind.number; value: root.model.coax-fraction; max-length: 8; committed(t) => { MapJEvents.act(root.index, "ant-coax", t); } }   // not-translated: the host's operation name
+        Field { horizontal-stretch: 1; label: @tr("Velocity factor"); kind: FieldKind.number; value: root.model.vf; max-length: 8; committed(t) => { MapJEvents.act(root.index, "ant-vf", t); } }   // not-translated: the host's operation name
+        Field { horizontal-stretch: 1; label: @tr("Yagi elements"); kind: FieldKind.number; value: root.model.yagi; max-length: 3; committed(t) => { MapJEvents.act(root.index, "ant-yagi", t); } }   // not-translated: the host's operation name
+    }
+    if root.model.error != "" : Text { text: root.model.error; font-size: Theme.font-small; color: Theme.danger-fg; overflow: elide; }
+    Table { vertical-stretch: 1; columns: root.model.columns; rows: root.model.rows; column-widths: root.model.widths; empty-text: @tr("Enter a frequency between 0.01 and 300000 MHz."); }
+    Text { text: root.model.note; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
+}

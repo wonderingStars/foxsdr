@@ -1,0 +1,66 @@
+#! frames=1500 bank=1 sections=2:1 plugins=adsb-decoder open=module:adsb-decoder-1.9.1-abi3-win-x64.dll iqfile=adsb-decoder.wav centre=1090000000 mode=RAW bandwidth=2400000 size=1600x1600 FOXSDR_SLINT_TEST_FILTER=1
+# mapj-replay-filter (rows M3, the aircraft filter and the unit choice): the replay's transport, the filter's conditions and the unit key, read back as state mapj.*.
+120 state kit.plugins == 1
++1 click "START"
++60 state decodersRunning >= 1
++300 state kit.tracks >= 1
+# the receiver's position (the aircraft is about 13 NM from Heathrow), set from the TOOLS bank as the radar scope's drive does
++1 key f3
++4 state bank == 2
++1 type "Latitude" "51.4775"
++1 key enter
++1 type "Longitude" "-0.4614"
++1 key enter
++3 click "Set RX here"
++25 state positionSet == 1
++1 click "DECODE"
++4 state bank == 1
++1 click "ADS-B map"
++30 state kit.mapPages >= 1
++1 click "Replay"
++20 state mapj.recorded >= 0
++1 click "Play"
++10 state mapj.replay != live
++1 click "1x"
++5 state mapj.replaySpeed == "4x"
++1 click "4x"
++5 state mapj.replaySpeed == "16x"
++1 click "Now"
++5 state mapj.replay == live
++1 click "Replay"
++1 click "Filter"
++1 click "Filter aircraft"
++5 state mapj.filter == on
++1 type "Callsign contains" "ZZZ"
++1 key enter
++10 state mapj.hidden >= 1
++1 state mapj.conditions == 1
++1 type "Callsign contains" "FOXSDR"
++1 key enter
++10 state mapj.hidden == 0
++1 type "Altitude from, ft" "40000"
++1 key enter
++10 state mapj.hidden >= 1
++1 state mapj.conditions == 2
++1 type "Altitude from, ft" "20000"
++1 key enter
++10 state mapj.hidden == 0
++1 type "Altitude from, ft" "abc"
++1 key enter
++10 state mapj.conditions == 1
++1 click "Hide on ground"
++10 state mapj.hidden == 0
++1 state mapj.conditions == 2
++1 click "Military or interesting"
++10 state mapj.conditions == 3
++1 shot "mapj-filter.png"
++1 click "Units: Automatic"
++5 state mapj.units == Metric
++1 click "Units: Metric"
++5 state mapj.units == Imperial
++1 click "Units: Imperial"
++5 state mapj.units == Aviation
++1 click "Units: Aviation"
++5 state mapj.units == Nautical
++1 click "Units: Nautical"
++5 state mapj.units == Automatic

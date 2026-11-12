@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2269 | 635 | 96 | 1538 | 0 |
+| 2284 | 647 | 96 | 1541 | 0 |
 
-Of the 1382 rows that are controls (the 887 readout-like rows left out): 635 asserted, 96 driven without a read-back, 651 not drivable.
+Of the 1397 rows that are controls (the 887 readout-like rows left out): 647 asserted, 96 driven without a read-back, 654 not drivable.
 
-NOT DRIVABLE by reason: readout 887, other 220, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 887, other 222, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 71, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -205,6 +205,7 @@ NOT DRIVABLE by reason: readout 887, other 220, needs a signal (no fixture) 120,
 | Lane S1 (docs/multi-radio-records/screen-s1.md; rows 4500 and up are this lane's) | 23 | 20 | 0 | 3 | 0 | 0 |
 | Screen lane C - tuning, scanning, memories and controls (rows 4800 and up are this lane's; docs/multi-radio-records/screen-c.md) | 23 | 20 | 2 | 1 | 0 | 0 |
 | Lane B (docs/multi-radio-records/screen-b.md; rows 4700 and up are this lane's) | 20 | 20 | 0 | 0 | 0 | 0 |
+| Screen lane J - the map rows (rows 4900 and up are this lane's; docs/multi-radio-records/screen-j.md) | 15 | 12 | 0 | 3 | 0 | 0 |
 
 ## Every row
 
@@ -3396,4 +3397,24 @@ NOT DRIVABLE by reason: readout 887, other 220, needs a signal (no fixture) 120,
 | 4717 | Demod scope: AUTOCORR key (autocorrelation of the audio) | key | DRIVEN+ASSERTED | scope-analysis | AUTOCORR finds the tone (peak 95 to 105 Hz for the 100 Hz tone) |
 | 4718 | Demod scope: CEPSTRUM key (cepstrum of the audio, pitch) | key | DRIVEN+ASSERTED | scope-analysis | CEPSTRUM reads a pitch of 90 to 110 Hz for the tone |
 | 4719 | Demod scope: EYE key (eye diagram of the baseband I) | key | DRIVEN+ASSERTED | scope-analysis | EYE folds the baseband I (traces read back); a second press goes back to the tube |
+
+### Screen lane J - the map rows (rows 4900 and up are this lane's; docs/multi-radio-records/screen-j.md)
+
+| # | control | type | class | script | detail |
+|---|---|---|---|---|---|
+| 4900 | Map page: Layers key (opens the switches of the nine layers) | key | DRIVEN+ASSERTED | mapj-layers | click Layers; the nine switches are read back as state mapj.layers |
+| 4901 | Map page: Airspaces, APRS paths, Heat map, 24 h range, Locator grid, Signal level switches | checkbox | DRIVEN+ASSERTED | mapj-layers | Heat map, 24 h range, Signal level, Locator grid clicked on and off; state mapj.layers, mapj.cells, mapj.grid, mapj.labels follow |
+| 4902 | Map page: Weather radar, Receiver map, Repeaters switches | checkbox | DRIVEN+ASSERTED | mapj-layers | expect "Weather radar" / "Receiver map" / "Repeaters" enabled equals false |
+| 4903 | Map page: legend rows and credit line of the layers that are on | legend | NOT DRIVABLE | - | a readout |
+| 4904 | Map page: Replay key and the transport (Play / Pause, speed 1x 4x 16x 64x, Now) | key | DRIVEN+ASSERTED | mapj-replay-filter | Replay, Play, the speed key and Now: state mapj.replay and mapj.replaySpeed |
+| 4905 | Map page: Replay slider (move through the recorded time) | slider | NOT DRIVABLE | - | a slider with no accessible label in the bounded run; the scrub arithmetic is test_slint_host_mapj |
+| 4906 | Map page: Filter key, Filter aircraft, Hide on ground, Military or interesting | checkbox | DRIVEN+ASSERTED | mapj-replay-filter | Filter aircraft, Hide on ground, Military or interesting: state mapj.filter and mapj.conditions |
+| 4907 | Map page: filter fields (Callsign contains, Altitude from / to, Type contains, Operator contains) | field | DRIVEN+ASSERTED | mapj-replay-filter | callsign and altitude typed: state mapj.hidden follows; a bad altitude drops the condition |
+| 4908 | Map page: Units key (Automatic, Metric, Imperial, Aviation, Nautical) | key | DRIVEN+ASSERTED | mapj-replay-filter | the key cycles through the five systems: state mapj.units |
+| 4909 | Map page: tile cache line and Clear tile cache key | key | NOT DRIVABLE | - | nothing fills the cache from the screen (the basemap plugin fetches its own tiles); the cache itself is test_tile_cache |
+| 4910 | Map page: Maidenhead grid lines and cell captions | overlay/marker | DRIVEN+ASSERTED | mapj-layers | state mapj.grid >= 1 and mapj.labels >= 1 with the Locator grid on; shot mapj-layers.png |
+| 4911 | Sky page (App menu > Sky positions...): the table of the Sun, the Moon and five radio sources | table | DRIVEN+ASSERTED | mapj-sky | state mapj.skyRows == 7 after the position is set |
+| 4912 | Sky page: the polar sky plot and a pass on it | plot | DRIVEN+ASSERTED | mapj-sky | state mapj.passMax >= 60 with the made-up pass; shot mapj-sky.png |
+| 4913 | Antenna page (App menu > Antenna calculator...): Frequency, Distance, Coax, Velocity factor, Yagi elements fields | field | DRIVEN+ASSERTED | mapj-antenna | typed values read back as the dipole and path-loss numbers; a bad value shows the error |
+| 4914 | Antenna page: the table of lengths in metres and feet | table | DRIVEN+ASSERTED | mapj-antenna | state mapj.antennaRows >= 10, >= 14 with nine Yagi elements |
 

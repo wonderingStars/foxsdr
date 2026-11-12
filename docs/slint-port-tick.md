@@ -3272,3 +3272,23 @@ The status bar and the One layout's plot (the S6 leftovers), one-click layouts, 
 | 4717 | Demod scope: AUTOCORR key (autocorrelation of the audio) | key | PRESENT | S17. Lane B. |
 | 4718 | Demod scope: CEPSTRUM key (cepstrum of the audio, pitch) | key | PRESENT | S17. Lane B. |
 | 4719 | Demod scope: EYE key (eye diagram of the baseband I) | key | PRESENT | S18. Lane B. |
+
+## Screen lane J - the map rows (rows 4900 and up are this lane's; docs/multi-radio-records/screen-j.md)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 4900 | Map page: Layers key (opens the switches of the nine layers) | key | PRESENT | Screen lane J. ui/mapj.slint MapJBar -> MapJEvents.act "layers"; drive mapj-layers. |
+| 4901 | Map page: Airspaces, APRS paths, Heat map, 24 h range, Locator grid, Signal level switches | checkbox | PRESENT | Screen lane J. Airspaces (closed paths, washed) and APRS paths (ids ending ~path, thin and faint) are on at first; heat and range come from the page's own aircraft (core/adsb_coverage.hpp), the locator grid from core/locator.hpp, signal level from core/rf_position_log.hpp. |
+| 4902 | Map page: Weather radar, Receiver map, Repeaters switches | checkbox | DEFERRED | Screen lane J. Shown dimmed and off with the sentence why: each data source needs its terms and a key read first (owner); no source is read. |
+| 4903 | Map page: legend rows and credit line of the layers that are on | legend | PRESENT | Screen lane J. layerLegend and creditLine (mapj_logic.hpp). |
+| 4904 | Map page: Replay key and the transport (Play / Pause, speed 1x 4x 16x 64x, Now) | key | PRESENT | Screen lane J. M3: the page records its own tracks (core/track_store.hpp) and shows them at the instant chosen; drive mapj-replay-filter. |
+| 4905 | Map page: Replay slider (move through the recorded time) | slider | PRESENT | Screen lane J. A slider is not drivable by label here; the arithmetic is test_slint_host_mapj (scrub, clamp, the live edge). |
+| 4906 | Map page: Filter key, Filter aircraft, Hide on ground, Military or interesting | checkbox | PRESENT | Screen lane J. The altitude, ground and callsign conditions filter on the track; military, type and operator need the ADS-B plugin's fields and are dimmed until a provider is wired (hand-off). |
+| 4907 | Map page: filter fields (Callsign contains, Altitude from / to, Type contains, Operator contains) | field | PRESENT | Screen lane J. A bad altitude shows its error and the condition is dropped. |
+| 4908 | Map page: Units key (Automatic, Metric, Imperial, Aviation, Nautical) | key | PRESENT | Screen lane J. core/access_units.hpp applied to the scale bar, the tip and the list notes; Automatic is what the map has always printed. |
+| 4909 | Map page: tile cache line and Clear tile cache key | key | PRESENT | Screen lane J. core/tile_cache.hpp: only viewed tiles are ever kept; nothing fills it yet (the basemap plugin fetches its own tiles): hand-off. |
+| 4910 | Map page: Maidenhead grid lines and cell captions | overlay/marker | PRESENT | Screen lane J. Fields, squares and subsquares by zoom; squares heard and worked shaded (test double: the ft8-decoder hand-off). |
+| 4911 | Sky page (App menu > Sky positions...): the table of the Sun, the Moon and five radio sources | table | PRESENT | Screen lane J. M8 over core/sky_position.hpp for the receiver position; the Stellarium link is blocked (needs Stellarium installed). |
+| 4912 | Sky page: the polar sky plot and a pass on it | plot | PRESENT | Screen lane J. The pass comes from the satellites plugin's az/el (hand-off); a made-up pass in a bounded run. |
+| 4913 | Antenna page (App menu > Antenna calculator...): Frequency, Distance, Coax, Velocity factor, Yagi elements fields | field | PRESENT | Screen lane J. Q7a over core/antenna_calc.hpp; drive mapj-antenna. |
+| 4914 | Antenna page: the table of lengths in metres and feet | table | PRESENT | Screen lane J. |
