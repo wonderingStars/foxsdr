@@ -172,6 +172,13 @@
 //   SET_FM_WIDTH (SETTINGS; engine serial lane A, row D7): ival[0] 0..4 = narrow 12.5 kHz, medium 30 kHz, medium-wide 50 kHz, broadcast 150 kHz, super-wide 225 kHz (core/receiver_tables.hpp kFmWidthHz), applied
 //   to the selected radio's (target) channel filter in NFM or WFM (UNSUPPORTED in any other mode); a width the channel cannot pass (0.9 of its rate) is held lower and the result carries CLAMPED. applied[0] is the width.
 #define FOXAPP_OP_SET_FM_WIDTH           0x861Fu /* ival[0]: 0..4 narrow / medium / medium-wide / broadcast / super-wide. Addresses one radio (target) */
+//   CHANNEL_CLAIM and CHANNEL_RELEASE (SETTINGS; engine serial lane A, row R19, core/tuner_pool.hpp): tuner pooling. CHANNEL_CLAIM: num[0] the frequency, Hz; ival[0] the mode (1-based FOXAPI_DEMOD_*, 0 = leave it);
+//   num[1] the bandwidth, Hz (0 = leave it). The pool picks a FREE radio (open and running, not claimed, not locked, not recording, not scanning): first one whose span on show already covers the frequency
+//   (tuned by its VFO alone, its hardware untouched), then one that can tune there by moving its centre; the lowest number among equals. applied[0] is the radio's number, applied[1] 1 when it was tuned by its
+//   VFO alone and 2 when its centre moved. LIMIT when no radio is free (the message says why), OUT_OF_RANGE for a frequency that is not a frequency. The radio stays claimed (fact.radio.<n>.claimed = 1)
+//   until CHANNEL_RELEASE (ival[0] = its number; NO_DEVICE for a radio that is not there, NO_CHANGE for one that is not claimed). Claims are not saved.
+#define FOXAPP_OP_CHANNEL_CLAIM          0x8620u /* num[0]: Hz; ival[0]: mode (0 keep); num[1]: bandwidth Hz (0 keep). Not radio-scoped: the pool chooses */
+#define FOXAPP_OP_CHANNEL_RELEASE        0x8621u /* ival[0]: the radio's number */
 #define FOXAPP_OP_SET_STEREO_SYSTEM      0x8619u /* ival[0]: 0 automatic / 1 pilot tone / 2 OIRT. Addresses one radio (target) */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

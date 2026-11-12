@@ -3201,6 +3201,10 @@ private:
     int hotplugRemovalsTotal_ = 0;
     std::uint64_t hotplugVersion_ = 1;
     std::unique_ptr<cascade::core::sys::DeviceArrivalWatcher> hotplugWatch_;   // (declared last of these: destroyed first, its thread joined before the atomics go)
+    // TUNER POOLING (engine serial lane A, row R19; engine_pool.cpp, core/tuner_pool.hpp): the claim and the release; the fingerprint counter of fact.radio.<n>.claimed.
+    FoxCommandResult claimChannel(const FoxCommand& c);
+    FoxCommandResult releaseChannel(const FoxCommand& c);
+    std::uint64_t poolVersion_ = 1;
     void pollStereoSystem();
     std::uint64_t stereoSystemVersion_ = 1;
     // RECORDING FILE NAMES FROM A TEMPLATE (engine_recname.cpp; FOXAPP_OP_SET_RECORD_NAME, engine wiring W2).

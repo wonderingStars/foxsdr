@@ -1404,6 +1404,14 @@ void receiverOps(AppWindow& a) {
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_FM_WIDTH, 5)), FOXAPI_OUT_OF_RANGE));
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_FM_WIDTH, -1)), FOXAPI_OUT_OF_RANGE));
     }
+    covering(FOXAPP_OP_CHANNEL_CLAIM);
+    covering(FOXAPP_OP_CHANNEL_RELEASE);
+    {
+        FoxCommand cl = num(FOXAPP_OP_CHANNEL_CLAIM, 0.0);
+        CHECK(refused(A::apply(a, cl), FOXAPI_OUT_OF_RANGE));             // not a frequency
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_CHANNEL_RELEASE, 1)), FOXAPI_NO_CHANGE));   // radio 1 is not claimed
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_CHANNEL_RELEASE, 7)), FOXAPI_NO_DEVICE));
+    }
     covering(FOXAPI_OP_SET_CW_PITCH);
     {
         CHECK(A::cwPitchRx(a) == 700.0 && A::cwPitchPipe(a) == 700.0);

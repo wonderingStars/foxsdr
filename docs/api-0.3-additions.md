@@ -2678,6 +2678,10 @@ At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTT
 ### 9.49 FM width presets (engine serial lane A, row D7; core/receiver_tables.hpp kFmWidthHz)
 
 * Op `FOXAPP_OP_SET_FM_WIDTH` 0x861F (receiver-scoped): `ival[0]` 0 narrow 12.5 kHz, 1 medium 30 kHz, 2 medium-wide 50 kHz, 3 broadcast 150 kHz, 4 super-wide 225 kHz, applied to the channel filter in NFM or WFM (`UNSUPPORTED` in another mode, `OUT_OF_RANGE` outside 0..4). The channel filter cannot pass more than 0.9 of the channel rate (the engine chooses a channel rate of 150 to 300 kHz): a width above that is held lower and the result carries `CLAMPED`; `applied[0]` is the width in force. No new state: `bandwidthHz` shows it. The Bandwidth combo's six steps are unchanged.
+### 9.50 Tuner pooling (engine serial lane A, row R19; core/tuner_pool.hpp, engine_pool.cpp)
+
+* Ops `FOXAPP_OP_CHANNEL_CLAIM` 0x8620 (`num[0]` the frequency, Hz; `ival[0]` the mode, 1-based `FOXAPI_DEMOD_*`, 0 leaves it; `num[1]` the bandwidth, Hz, 0 leaves it) and `FOXAPP_OP_CHANNEL_RELEASE` 0x8621 (`ival[0]` the radio's number). Not radio-scoped: the pool chooses the radio. A FREE radio is open, running, not claimed, not locked, not recording, not scanning and not lent to the patch page. The pool picks first a free radio whose span on show already covers the frequency (|offset| + channel/2 <= 0.45 x its rate: tuned by its VFO alone, the hardware untouched), then a free radio whose hardware range allows it (its centre moves, its VFO offset goes to 0); the lowest number among equals. `applied[0]` is the radio's number, `applied[1]` is 1 (VFO alone) or 2 (centre moved). `LIMIT` when none is free or none can tune there, `OUT_OF_RANGE` for something that is not a frequency, a mode or a bandwidth, `NO_DEVICE` / `NO_CHANGE` on a release of a radio that is not there / not claimed. `fact.radio.<n>.claimed` is 1 while a claim holds the radio. Claims are not saved.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

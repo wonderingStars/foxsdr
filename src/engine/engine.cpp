@@ -7712,6 +7712,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[0] = rxs.vfoBandwidthHz_;
             return res;
         }
+        case FOXAPP_OP_CHANNEL_CLAIM: return claimChannel(c);
+        case FOXAPP_OP_CHANNEL_RELEASE: return releaseChannel(c);
         case FOXAPP_OP_VFO_SELECT: {
             Receiver& rxs = rx();
             if (c.ival[0] != 0 && c.ival[0] != 1) { return refuse(FOXAPI_OUT_OF_RANGE, "the VFOs are A (0) and B (1)"); }

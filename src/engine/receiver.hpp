@@ -389,6 +389,7 @@ struct Receiver {
     int recordIqFormat_ = 0;       // the sample format of the next takes (engine serial lane A, P7)
     int recordAudioFormat_ = 0;
     bool ctun_ = false;            // centre tuning (engine serial lane A, T4)
+    bool claimed_ = false;         // held by a pool claim (FOXAPP_OP_CHANNEL_CLAIM, engine serial lane A, R19); not saved
     int nrMethod_ = 0;
     std::array<double, 8> eqDb_{};   // the equaliser's bands (engine wiring lane 1): all flat
     int audioHpHz_ = 0;              // the audio high-pass: 0 off / 100 / 300
