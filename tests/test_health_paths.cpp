@@ -279,6 +279,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         {"ReaderLeak", "src/source/rtlsdr_source.cpp", 1}, {"ReaderLeak", "src/source/pluto_tx.cpp", 1},
         {"ReaderLeak", "src/core/patch_radio.cpp", 1},
         {"ReaderLeak", "src/source/kiwisdr_source.cpp", 2},   // (engine wiring lane 1: the open-failure path and closeDevice each raise it when the client abandoned a thread)
+        {"ReaderLeak", "src/source/net_sample_source.cpp", 1},
         {"CloseLeak", "src/source/soundcard_source.cpp", 1}, {"CloseLeak", "src/sink/pa_init.cpp", 1},
         {"LinkStranded", "src/source/sdrplay_source.cpp", 1},
         {"StreamRestart", "src/source/airspy_source.cpp", 1},
