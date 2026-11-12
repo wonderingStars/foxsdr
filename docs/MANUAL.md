@@ -2416,8 +2416,9 @@ Other `FOXSDR_*` and `CASCADE_*` variables exist for tests and measurements; do 
 <!-- PENDING MERGE begin: libraries (oss-userlibs, oss-voice, oss-libs, oss-radios). Drop everything to the matching end marker, and its line in the contents list, if the branch does not ship. -->
 ## Libraries you add yourself
 
-*Status: **pending merge.** The code for the libraries below is on lane branches (oss-userlibs, oss-voice, oss-libs,
-oss-radios) that are not merged into `engine/multi-radio`; none of it is in the merged tip 090e7039. Every statement is
+*Status: **pending merge (partly).** Engine merge 3 note: oss-libs and oss-radios are now in `engine/multi-radio` (engine
+merge 2), but only as built code with no engine registration and no screen control (see `engine-merge-2.md` section 8), so
+the rows below still describe what users cannot yet do. oss-userlibs and oss-voice are still not merged. Every statement is
 from the lane records. FoxSDR ships **none** of these libraries and never downloads them; you obtain the file from its
 maker and put it where the record says. Every proof so far used a stand-in library written for the test, not the real
 one, except where stated.*
