@@ -79,7 +79,7 @@ inline std::string exportPack(const std::string& name, const std::string& descri
     if (skipped != nullptr) { *skipped = bad; }
     const nlohmann::json j = {{"format", "foxsdr-pack"}, {"version", 1}, {"name", validUserText(name, 64) ? name : std::string()},
                               {"description", validUserText(description, 500, true) ? description : std::string()}, {"bookmarks", bm}, {"favourites", fv}};
-    return j.dump(2);
+    return j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace);   // like every dump() in this tree (tests/test_json_dump_policy.cpp)
 }
 
 inline bool importPack(const std::string& text, Pack& out, std::string& err) {

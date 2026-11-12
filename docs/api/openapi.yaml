@@ -144,7 +144,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Ok"
+                $ref: "#/components/schemas/LoginOk"
         "400":
           description: "The body is not valid JSON."
           content:
@@ -157,8 +157,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "403":
+          description: "This address, or this listener name, is banned from joining."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
-          description: "No password is set on this receiver, so there is nothing to sign in to."
+          description: "No password is set on this receiver, so there is nothing to sign in to; or the listener name is already in use."
           content:
             application/json:
               schema:
@@ -173,6 +179,17 @@ paths:
                 $ref: "#/components/schemas/Error"
         "429":
           description: "Too many failed sign-in attempts from this address; try again after the time in Retry-After."
+          headers:
+            Retry-After:
+              description: "Seconds to wait."
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: "The listener limit has been reached; try again after the time in Retry-After (30 s)."
           headers:
             Retry-After:
               description: "Seconds to wait."
@@ -374,6 +391,12 @@ paths:
                 $ref: "#/components/schemas/Error"
         "401":
           $ref: "#/components/responses/SignInFirst"
+        "403":
+          description: "A listener asked: listeners cannot control the receiver, or (when the server lets them tune) may only change frequency, mode and bandwidth."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: "transmitPtt was asked for but no transmitter is open, or remote transmit is not allowed at the desk."
           content:
@@ -419,13 +442,181 @@ paths:
                 $ref: "#/components/schemas/Spectrum"
         "401":
           $ref: "#/components/responses/SignInFirst"
+  /api/room:
+    get:
+      tags: [room]
+      operationId: getRoom
+      summary: The room - who is on, what listeners may do, the owner's note
+      description: "Needs a sign-in (the owner's or a listener's). The counts are 0 while listener accounts are off."
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: "The room state."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Room"
+        "401":
+          $ref: "#/components/responses/SignInFirst"
+  /api/chat:
+    get:
+      tags: [room]
+      operationId: getChat
+      summary: Chat lines since a cursor
+      description: "Needs a sign-in. enabled is false, and lines empty, unless listener accounts and chat are both on. Lines are escaped for the page."
+      parameters:
+        - name: since
+          in: query
+          required: false
+          description: "The seq of the last chat line the client holds. A value that is not a number counts as 0."
+          schema:
+            type: integer
+            minimum: 0
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: "The lines newer than since."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatLines"
+        "401":
+          $ref: "#/components/responses/SignInFirst"
+    post:
+      tags: [room]
+      operationId: postChat
+      summary: Say something in the chat
+      description: "Needs a sign-in. The body is JSON with text (200 bytes at most after clean-up). Rate limited per person: a few messages every ten seconds."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatPost"
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: "Posted."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "400":
+          description: "The body is not valid JSON, the text is empty, or it is not valid text."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/SignInFirst"
+        "403":
+          description: "Chat is off."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: "The body is over the 8 KiB limit (the status is the vendored HTTP library's PayloadTooLarge_413), or the text is over 200 bytes."
+        "415":
+          description: "The Content-Type is not application/json."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: "Too many messages; try again after the time in Retry-After."
+          headers:
+            Retry-After:
+              description: "Seconds to wait."
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/admin/state:
+    get:
+      tags: [room]
+      operationId: getAdminState
+      summary: The owner's view of the room (listeners, bans, audit trail)
+      description: "Needs the OWNER's sign-in. This is the one place a listener's address is shown, to the owner, live. A listener who asks is refused and the refusal is audited."
+      parameters:
+        - name: since
+          in: query
+          required: false
+          description: "The seq of the last audit line the client holds. A value that is not a number counts as 0."
+          schema:
+            type: integer
+            minimum: 0
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: "The room as the owner sees it."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminState"
+        "401":
+          $ref: "#/components/responses/SignInFirst"
+        "403":
+          description: "Only the owner can do that."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/admin:
+    post:
+      tags: [room]
+      operationId: postAdmin
+      summary: Moderate the room (kick, ban, unban, note)
+      description: "Needs the OWNER's sign-in. The body is JSON with op, one of kick, ban, banAddress, unban, unbanAddress or note, and the field that op needs (name, address or text). A listener who asks is refused and the refusal is audited."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminOp"
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: "Done; ended says how many sessions it ended."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminDone"
+        "400":
+          description: "The body is not valid JSON, the op is unknown, or it could not be done (no such entry, a bad name, a full list, or text that is not valid)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/SignInFirst"
+        "403":
+          description: "Only the owner can do that."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: "The body is over the 8 KiB limit (the status is the vendored HTTP library's PayloadTooLarge_413), or the text is over 200 bytes."
+        "415":
+          description: "The Content-Type is not application/json."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/events:
     get:
       tags: [receiver]
       operationId: getEvents
       summary: Live status updates (server-sent events)
-      x-to-add-at-merge: true
-      description: "TO ADD AT MERGE: this route is in the running feat/web-secure lane (branch feat/web-bookmarks, record docs/feature-records/web-bookmarks.md) and is not in this tree yet. Server-sent events: an event named status with the status JSON as one line whenever it changed (the first at once), a keep-alive comment after 15 s of silence, retry 3000. Needs the same sign-in as every route, re-checked on each look so signing out ends the stream. At most 4 streams (then 503). It is NOT the heartbeat: keep polling /api/status while a transmit key is held. Remove the x-to-add-at-merge marker when the route lands; tests/packaging/test_openapi_routes.py then requires it in the source."
+      description: "Server-sent events: an event named status with the status JSON as one line whenever it changed (the first at once), a keep-alive comment after 15 s of silence, retry 3000. Needs the same sign-in as every route, re-checked on each look so signing out ends the stream. The number of open streams is capped (the audio listener limit, or the listener limit plus two while listener accounts are on), then 503. It is NOT the heartbeat: keep polling /api/status while a transmit key is held."
       security:
         - cookieAuth: []
       responses:
@@ -438,7 +629,7 @@ paths:
         "401":
           $ref: "#/components/responses/SignInFirst"
         "503":
-          description: "Four streams are already open."
+          description: "The cap on open streams has been reached."
           content:
             application/json:
               schema:
@@ -496,6 +687,166 @@ components:
         reachableOffMachine:
           type: boolean
           description: "The server is bound to an address other machines can reach."
+        role:
+          type: string
+          enum: [owner, listener, none]
+          description: "Who this request is: the owner, a listener who joined under a name, or nobody."
+        listenersEnabled:
+          type: boolean
+          description: "Listener accounts are switched on."
+        secure:
+          type: boolean
+          description: "The page is served over HTTPS."
+        name:
+          type: string
+          description: "The listener's name. Present only when role is listener."
+    LoginOk:
+      type: object
+      required: [ok, role]
+      properties:
+        ok:
+          type: boolean
+        role:
+          type: string
+          enum: [owner, listener]
+          description: "Which account signed in."
+    Room:
+      type: object
+      required: [role, listenersEnabled, listeners, maxListeners, mayTune, chatEnabled, chatSeq, noteSeq, note]
+      properties:
+        role:
+          type: string
+          enum: [owner, listener]
+        name:
+          type: string
+          description: "The listener's name. Present only for a listener."
+        listenersEnabled:
+          type: boolean
+        listeners:
+          type: integer
+          description: "Listeners on now (0 while listener accounts are off)."
+        maxListeners:
+          type: integer
+          description: "The limit (0 while listener accounts are off)."
+        mayTune:
+          type: boolean
+          description: "This client may change frequency, mode and bandwidth."
+        chatEnabled:
+          type: boolean
+        chatSeq:
+          type: integer
+          description: "The seq of the newest chat line."
+        noteSeq:
+          type: integer
+          description: "Changes whenever the owner's note does."
+        note:
+          type: string
+          description: "The owner's note, escaped for the page."
+    ChatLine:
+      type: object
+      required: [seq, t, name, owner, html]
+      properties:
+        seq:
+          type: integer
+        t:
+          type: integer
+          description: "Seconds since the epoch."
+        name:
+          type: string
+        owner:
+          type: boolean
+          description: "The line is the owner's."
+        html:
+          type: string
+          description: "The text, escaped: the page may put it in as it is."
+    ChatLines:
+      type: object
+      required: [enabled, seq, lines]
+      properties:
+        enabled:
+          type: boolean
+        seq:
+          type: integer
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatLine"
+    ChatPost:
+      type: object
+      properties:
+        text:
+          type: string
+          description: "Defaults to the empty string, which is refused."
+    AdminListener:
+      type: object
+      required: [name, address, signedInSeconds, idleSeconds]
+      properties:
+        name:
+          type: string
+        address:
+          type: string
+        signedInSeconds:
+          type: integer
+        idleSeconds:
+          type: integer
+    AuditLine:
+      type: object
+      required: [seq, t, kind, name]
+      properties:
+        seq:
+          type: integer
+        t:
+          type: integer
+          description: "Seconds since the epoch."
+        kind:
+          type: string
+        name:
+          type: string
+    AdminState:
+      type: object
+      required: [listeners, bannedNames, bannedAddresses, audit]
+      properties:
+        listeners:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminListener"
+        bannedNames:
+          type: array
+          items:
+            type: string
+        bannedAddresses:
+          type: array
+          items:
+            type: string
+        audit:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLine"
+    AdminOp:
+      type: object
+      required: [op]
+      properties:
+        op:
+          type: string
+          enum: [kick, ban, banAddress, unban, unbanAddress, note]
+        name:
+          type: string
+          description: "For kick, ban and unban."
+        address:
+          type: string
+          description: "For banAddress and unbanAddress."
+        text:
+          type: string
+          description: "For note: the note's text (200 bytes at most)."
+    AdminDone:
+      type: object
+      required: [ok, ended]
+      properties:
+        ok:
+          type: boolean
+        ended:
+          type: integer
+          description: "How many sessions the action ended."
     LoginRequest:
       type: object
       properties:
@@ -678,8 +1029,7 @@ components:
           description: "A PTT held down, not a switch: true buys one bounded hold and must be repeated; false opens the key at once. Refused with 409 unless a transmitter is open. A body carrying transmitLatch or transmitLatched is refused by name."
         muted:
           type: boolean
-          x-to-add-at-merge: true
-          description: "TO ADD AT MERGE (feat/web-secure, record docs/feature-records/web-bookmarks.md): mute or unmute the audio."
+          description: "Mute or unmute the audio."
     Status:
       type: object
       description: "The whole receiver state. These are the top-level fields statusJson() in src/net/web_server.cpp writes; the lists of plugins, catalogue entries, tracks and images carry more fields than are listed here (read statusJson). Text fields that come from decoders (decoded[].text, rds*) are whatever was on the air."
@@ -911,5 +1261,4 @@ components:
           type: number
         muted:
           type: boolean
-          x-to-add-at-merge: true
-          description: "TO ADD AT MERGE (feat/web-secure): the user mute."
+          description: "The user mute."

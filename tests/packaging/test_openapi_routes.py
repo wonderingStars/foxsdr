@@ -363,7 +363,8 @@ def run(args):
         s.check(label + ': at least one 2xx response', any(c.startswith('2') for c in codes))
         if key in src_ops:
             body = src_ops[key]
-            needs_auth = re.search(r'if\s*\(!authorised\(req\)\)', body) is not None
+            needs_auth = (re.search(r'if\s*\(!authorised\(req\)\)', body) is not None
+                          or re.search(r'if\s*\(who\.role == Role::None\)', body) is not None)   # the room routes ask identify() for who is there
             sec = op.get('security')
             s.check(label + ': security matches the handler (%s)' % ('the handler refuses an unauthorised request' if needs_auth else 'the handler never refuses one'),
                     (sec == [{'cookieAuth': []}] or (sec is None and False)) if needs_auth else sec == [])
@@ -456,7 +457,7 @@ def run(args):
             and '"idle" | "scanning" | "paused" | "holding"' in open(os.path.join(os.path.dirname(args.source), 'web_server.hpp'), encoding='utf-8').read())
 
     # ---- the small answers ------------------------------------------------------------------------------------------
-    small = [('get', '/api/session', 'SessionState'), ('get', '/api/spectrum', 'Spectrum'), ('post', '/api/login', 'Ok'),
+    small = [('get', '/api/session', 'SessionState'), ('get', '/api/spectrum', 'Spectrum'), ('post', '/api/login', 'LoginOk'),
              ('post', '/api/control', 'Accepted'), ('get', '/api/tile/{}/{}/{}', 'Pending')]
     for method, p, schema in small:
         body = src_ops.get((method, p), '')
