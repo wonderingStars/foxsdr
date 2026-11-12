@@ -83,6 +83,7 @@ inline bool isRadioScopedOp(std::uint32_t op) {
         case FOXAPP_OP_SIGMEAS_AUDIO:
         case FOXAPP_OP_SIGMEAS_DRIFT:
         case FOXAPP_OP_SIGMEAS_HISTOGRAM:
+        case FOXAPP_OP_PSEUDO_DOPPLER:
         // wire-b end
         case FOXAPP_OP_CAL_MEASURE:
         case FOXAPP_OP_CAL_CLEAR:

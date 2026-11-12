@@ -18,7 +18,7 @@ void wireBOps(AppWindow& a) {
     CHECK(refused(A::apply(a, cmd::makeNumInt(FOXAPP_OP_FIELD_CONFIG, 200.0, 0)), FOXAPI_OUT_OF_RANGE));
     // THE SIGNAL MEASUREMENTS: a parameter text that is not a JSON object is refused before anything is read from the radio (the measuring is test_engine_api_wireb_sigmeas's)
     const std::uint32_t sigmeasOps[] = {FOXAPP_OP_SIGMEAS_BANDWIDTH, FOXAPP_OP_SIGMEAS_MODULATION, FOXAPP_OP_SIGMEAS_SYMBOLS, FOXAPP_OP_SIGMEAS_VSTIME, FOXAPP_OP_SIGMEAS_BURSTS,
-                                        FOXAPP_OP_SIGMEAS_HOPCHIRP, FOXAPP_OP_SIGMEAS_AUDIO, FOXAPP_OP_SIGMEAS_DRIFT, FOXAPP_OP_SIGMEAS_HISTOGRAM};
+                                        FOXAPP_OP_SIGMEAS_HOPCHIRP, FOXAPP_OP_SIGMEAS_AUDIO, FOXAPP_OP_SIGMEAS_DRIFT, FOXAPP_OP_SIGMEAS_HISTOGRAM, FOXAPP_OP_PSEUDO_DOPPLER};
     for (const std::uint32_t op : sigmeasOps) {
         covering(op);
         CHECK(refused(A::apply(a, text(op, "not json")), FOXAPI_BAD_ARGUMENT));

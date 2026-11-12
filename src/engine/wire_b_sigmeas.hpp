@@ -16,6 +16,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <set>
 #include <string>
 #include <vector>
@@ -29,6 +30,7 @@
 #include "dsp/sigmeas_hopchirp.hpp"
 #include "dsp/sigmeas_modulation.hpp"
 #include "dsp/sigmeas_symbols.hpp"
+#include "dsp/pseudo_doppler.hpp"
 #include "dsp/sigmeas_vstime.hpp"
 
 namespace cascade::engine::wireb {
@@ -36,7 +38,7 @@ namespace cascade::engine::wireb {
 namespace sm = cascade::sigmeas;
 using Json = nlohmann::json;
 
-enum class Block { Bandwidth, Modulation, Symbols, VsTime, Bursts, HopChirp, Audio, Drift, Histogram };
+enum class Block { Bandwidth, Modulation, Symbols, VsTime, Bursts, HopChirp, Audio, Drift, Histogram, PseudoDoppler };
 
 // Which input a block reads: the channel I/Q, or the finished audio.
 inline bool blockWantsAudio(Block b) { return b == Block::Audio; }
@@ -105,6 +107,7 @@ struct Params {
 };
 
 inline Json numberOrNull(double v) { return std::isfinite(v) ? Json(v) : Json(nullptr); }
+inline double kNaNValue() { return std::numeric_limits<double>::quiet_NaN(); }
 
 inline std::string bitText(const std::vector<std::uint8_t>& bits, std::size_t cap) {
     std::string s;
@@ -353,6 +356,20 @@ inline RunResult sigmeasRun(Block block, const sm::Cf* iq, std::size_t nIq, doub
             rr.valid = d.valid; rr.reason = d.valid ? "" : d.reason;
             out["drift_hz_per_s"] = numberOrNull(d.driftHzPerS); out["start_freq_hz"] = numberOrNull(d.startFreqHz); out["peak_dbfs"] = numberOrNull(d.peakDbfs);
             out["gain_db"] = numberOrNull(d.gainDb);
+            break;
+        }
+        case Block::PseudoDoppler: {
+            // rfmon: the bearing of a carrier from one receiver and a switched four-antenna array (dsp/pseudo_doppler.hpp). The antenna switch is hardware this program does not drive:
+            // the caller says how many samples one antenna is on (the dwell) and where antenna 0 first dwell begins; the estimate is of the I/Q already in the span.
+            double dwell = 100.0, start = 0.0;
+            if (!q.number("samples_per_dwell", dwell, 8.0, 1e6) || !q.number("start_sample", start, 0.0, 1e9) || !q.finish()) { return refuse(); }
+            const cascade::dsp::PseudoDopplerResult b = cascade::dsp::estimatePseudoDopplerBearing(iq, nIq, dwell, start);
+            rr.valid = b.valid; rr.reason = b.valid ? "" : "fewer than eight dwells of the span, or no usable signal";
+            out["bearing_deg"] = numberOrNull(b.valid ? b.bearingDeg : detail::kNaNValue()); out["quality"] = b.quality;
+            out["freq_offset_rad_per_sample"] = b.freqOffsetRadPerSample; out["clock_offset_samples"] = b.clockOffsetSamples; out["rotations"] = b.rotations;
+            // Counter-clockwise from antenna 0 towards the transmitter, as the model defines it; a compass is clockwise, and the mounting of the array against north is for the screen to apply.
+            out["weak"] = b.valid && b.quality < 0.5;
+            out["warning"] = (b.valid && b.quality < 0.5) ? "Signal too weak or not steady for a bearing" : "";
             break;
         }
         case Block::Histogram: {

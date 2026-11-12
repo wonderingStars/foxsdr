@@ -28,7 +28,7 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kRate = 200000.0;
 
-enum Mode { kNoise = 0, kFsk, kOok, kMultitone, kFm, kAm, kBursts, kHop, kChirp, kTone1500, kQuiet };
+enum Mode { kNoise = 0, kFsk, kOok, kMultitone, kFm, kAm, kBursts, kHop, kChirp, kTone1500, kQuiet, kPseudoDoppler };
 
 // One source, several signals: the mode is switched by the test. Every signal has noise (sigma 0.01 per component) and an amplitude of 0.3.
 class Synth final : public cascade::source::IqSource {
@@ -97,6 +97,14 @@ public:
                 case kChirp: {
                     const double a = 2.0 * kPi * (1000.0 * t + 100.0 * t * t);   // 1000 Hz rising by 200 Hz/s
                     s = 0.3 * std::complex<double>(std::cos(a), std::sin(a));
+                    break;
+                }
+                case kPseudoDoppler: {
+                    // a plane wave from 40 degrees onto four antennas on a ring of a quarter wavelength, switched every 100 samples, with a carrier offset
+                    const double theta = 40.0 * kPi / 180.0;
+                    const int ant = static_cast<int>((k_ / 100u) % 4u);
+                    const double ph = 2.0 * kPi * 0.25 * std::cos(theta - ant * kPi / 2.0) + 0.01 * static_cast<double>(k_);
+                    s = 0.3 * std::complex<double>(std::cos(ph), std::sin(ph));
                     break;
                 }
                 case kTone1500: {
@@ -346,6 +354,35 @@ int main() {
             CHECK_EQ(sum + x["below_range"].get<std::uint64_t>() + x["above_range"].get<std::uint64_t>(), x["total"].get<std::uint64_t>());
             CHECK(x["ccdf"]["valid"].get<bool>());
         }
+    }
+
+    std::printf("H: pseudo-Doppler bearing (rfmon)\n");
+    {
+        // The switch has no sync line: where antenna 0 first dwell begins in the span is for the caller to say ("start_sample"). The model aligns within half a dwell of it and cannot tell
+        // which antenna is which (a bearing 90 degrees out is the answer for a start one dwell off), so the right start is the one that gives the true bearing: a sweep of start values over
+        // one rotation (400 samples) finds it; the others are valid but rotated, or refused.
+        syn.mode.store(kPseudoDoppler);
+        r.until([] { return false; }, 900);
+        int right = 0, valid = 0;
+        for (int start = 0; start < 400; start += 25) {
+            const std::string params = "{\"duration_s\":0.25,\"samples_per_dwell\":100,\"start_sample\":" + std::to_string(start) + "}";
+            const testing::Outcome o = sendText(r, FOXAPP_OP_PSEUDO_DOPPLER, 1, params);
+            CHECK_EQ(o.status(), FOXAPI_OK);
+            const json j = json::parse(bigFact(r, "radio.1.sigmeas.pseudodoppler"), nullptr, false);
+            if (j.is_discarded() || !j.value("valid", false)) { continue; }
+            ++valid;
+            const json& x = j["result"];
+            double err = std::fabs(x["bearing_deg"].get<double>() - 40.0);
+            if (err > 180.0) { err = 360.0 - err; }
+            if (err < 3.0 && x["quality"].get<double>() > 0.9 && !x["weak"].get<bool>()) { ++right; }
+        }
+        std::printf("  %d of 16 starts valid, %d gave the true bearing (40 deg)\n", valid, right);
+        CHECK(valid >= 8);
+        CHECK(right >= 1);   // (each call reads a span that begins at a different sample of the switching, so the matching starts differ from call to call)
+        // the noise alone is not a bearing: it is either refused or flagged weak, never a confident one
+        const json n = measure(r, syn, kNoise, FOXAPP_OP_PSEUDO_DOPPLER, "pseudodoppler", "{\"duration_s\":0.25}");
+        CHECK(!n["valid"].get<bool>() || n["result"]["weak"].get<bool>());
+        CHECK_EQ(sendText(r, FOXAPP_OP_PSEUDO_DOPPLER, 1, "{\"samples_per_dwell\":4}").status(), FOXAPI_BAD_ARGUMENT);
     }
 
     std::printf("G: refusals\n");

@@ -297,6 +297,11 @@
 #define FOXAPP_OP_SIGMEAS_AUDIO          0x8909u /* SINAD, THD, SFDR, ENOB of the finished audio: fact ...sigmeas.audio */
 #define FOXAPP_OP_SIGMEAS_DRIFT          0x890Au /* drift search (de-chirp): fact ...sigmeas.drift */
 #define FOXAPP_OP_SIGMEAS_HISTOGRAM      0x890Bu /* amplitude / magnitude histogram and the power CCDF: fact ...sigmeas.histogram */
+//   PSEUDO_DOPPLER (SETTINGS; dsp/pseudo_doppler.hpp, the rfmon lane bearing from one receiver and a switched four-antenna array): the same span rules as the measurements above (one radio,
+//   JSON text, the channel I/Q); keys "samples_per_dwell" (8 to 1e6, default 100) and "start_sample" (0 to 1e9, default 0: where antenna 0 first dwell begins in the span), plus
+//   "duration_s" / "end_ago_s". It ESTIMATES from I/Q already in the span: the antenna switch is hardware this program does not drive. Answer in the fact radio.<n>.sigmeas.pseudodoppler:
+//   bearing_deg (counter-clockwise from antenna 0 towards the transmitter), quality 0 to 1, weak (quality under 0.5) and the sentence "Signal too weak or not steady for a bearing".
+#define FOXAPP_OP_PSEUDO_DOPPLER         0x890Cu /* addresses one radio (target): fact radio.<n>.sigmeas.pseudodoppler */
 // wire-b end
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.

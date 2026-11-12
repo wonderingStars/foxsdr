@@ -88,6 +88,7 @@ FoxCommandResult Engine::sigmeasOp(const FoxCommand& c, const std::string& text,
         {FOXAPP_OP_SIGMEAS_BURSTS, wireb::Block::Bursts, "bursts"},          {FOXAPP_OP_SIGMEAS_HOPCHIRP, wireb::Block::HopChirp, "hopchirp"},
         {FOXAPP_OP_SIGMEAS_AUDIO, wireb::Block::Audio, "audio"},             {FOXAPP_OP_SIGMEAS_DRIFT, wireb::Block::Drift, "drift"},
         {FOXAPP_OP_SIGMEAS_HISTOGRAM, wireb::Block::Histogram, "histogram"},
+        {FOXAPP_OP_PSEUDO_DOPPLER, wireb::Block::PseudoDoppler, "pseudodoppler"},
     };
     const Row* row = nullptr;
     for (const Row& r : rows) {
@@ -190,6 +191,7 @@ FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text
         case FOXAPP_OP_SIGMEAS_AUDIO:
         case FOXAPP_OP_SIGMEAS_DRIFT:
         case FOXAPP_OP_SIGMEAS_HISTOGRAM:
+        case FOXAPP_OP_PSEUDO_DOPPLER:
             res = sigmeasOp(c, text, res, changed);
             break;
         default:
