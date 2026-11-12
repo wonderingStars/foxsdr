@@ -84,6 +84,7 @@ struct Radio {
         nextCentre = ranges.empty() ? 0 : static_cast<std::uint64_t>(ranges[0].first) * 1000000ull + offset;
     }
     void makeMore() {
+        if (ranges.empty() || numBytes == 0) { return; }  // the request was malformed: the radio has nothing to sweep
         // one transfer: 16 blocks (262144 / numBytes) in the sweep order
         const std::size_t blocks = 262144 / numBytes;
         for (std::size_t i = 0; i < blocks; ++i) {
@@ -159,6 +160,11 @@ public:
             return 0;
         }
         if (r_->pending.size() < 1000) { r_->makeMore(); }
+        if (r_->pending.empty()) {
+            lk.unlock();
+            std::this_thread::sleep_for(std::chrono::milliseconds(std::min(timeoutMs, 10u)));
+            return 0;
+        }
         std::uniform_int_distribution<std::size_t> pick(1, std::min<std::size_t>(r_->maxChunk, r_->pending.size()));
         const std::size_t n = std::min(cap, r_->maxChunk == 262144 ? std::min<std::size_t>(262144, r_->pending.size()) : pick(r_->rng));
         std::copy(r_->pending.begin(), r_->pending.begin() + static_cast<std::ptrdiff_t>(n), dst);
