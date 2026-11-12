@@ -158,6 +158,11 @@ std::unique_ptr<UdpTransport> UdpTransport::bindLocal(const std::string& localHo
     return t;
 }
 
+bool UdpTransport::setReceiveBuffer(int bytes) {
+    if (sock_ == kBadSock || bytes <= 0) { return false; }
+    return ::setsockopt(static_cast<SockT>(sock_), SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&bytes), sizeof(bytes)) == 0;
+}
+
 bool UdpTransport::connectTo(const std::string& host, std::uint16_t port) {
     sockaddr_in a{};
     a.sin_family = AF_INET;
