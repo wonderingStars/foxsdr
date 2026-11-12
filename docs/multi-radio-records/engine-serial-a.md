@@ -150,3 +150,7 @@ The reference mock engine was not extended and no test compares it with the head
 ## 9. Configuration file
 
 The real `%APPDATA%/foxsdr/config.json` sha256 before (start of the lane) and after (checked at 07:56, 10:05, 11:30 and at the end): `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3`, byte-identical. Every engine test runs with the profile redirected (`engine_api_test::hermetic`) or in a scratch folder. No radio was opened, no Windows dialog was raised (the GUI tests ran on the hidden desktop only), nothing was pushed, nothing was downloaded.
+
+## 10. Rows found already built (the second request: each re-verified at this tip, one commit each)
+
+* **D6 adjustable CW pitch** - built by W1 C3 b4e3bafc: SET_CW_PITCH 0x0118, 300 to 1200 Hz, Demodulator::setCwPitchHz replaces kCwToneHz, saved per radio (cwPitchHz). Re-run at tip 1c1a6688: test_pipeline_cwpitch Passed 8.22 s (a carrier beats at 450/1000/300/1200 Hz, kept across mode and rate changes), test_engine_api_cwpitch Passed 2.36 s. Left: the CW pass band centred on the pitch is the F6/F8 filter half; F8's audio peak filter (this lane, 9aa59ec4) follows the pitch.
