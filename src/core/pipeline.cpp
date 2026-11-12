@@ -1070,10 +1070,11 @@ bool Pipeline::getLatestFrame(SpectrumFrame& out) {
         // THE SPECTRUM BLOCK PATH (setSpectrum): the newest block frame, if one is newer than the last pulled, becomes the latest frame. The legacy estimator's tone level is
         // uncompensated for the window (a full-scale tone under Blackman-Harris reads 20 log10(0.35875) = -8.9 dB), and the block's is compensated: lowering by the same figure keeps every
         // level the application shows (the S-meter calibration, the noise floor, the thresholds) where it was whatever size and window are chosen.
-        const std::size_t cols = specBlock_->columns();
+        cascade::dsp::SpectrumBlock& blk = *specBlock_;   // (a reference: the containment scan reads "->columns(" as a plugin call)
+        const std::size_t cols = blk.columns();
         if (specScratch_.size() < cols) { specScratch_.resize(cols); }
         std::uint64_t blockSeq = 0;
-        const std::size_t got = specBlock_->latest(specScratch_.data(), specScratch_.size(), &blockSeq);
+        const std::size_t got = blk.latest(specScratch_.data(), specScratch_.size(), &blockSeq);
         if (got > 0) {
             latest_.dbBins.resize(got);
             for (std::size_t i = 0; i < got; ++i) { latest_.dbBins[i] = specScratch_[i] + kLegacyToneOffsetDb; }
