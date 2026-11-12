@@ -230,6 +230,12 @@ ApplyResult applyUpdate(UpdateHost& host, const Decision& d, const ApplyPaths& p
 std::string confirmStartup(UpdateHost& host, const std::string& target,
                            const std::string& runningVersion);
 
+// What the program's start calls (engine wiring W2): confirmStartup for an install this program replaces by itself - an AppImage file or an
+// unpacked tree - and nothing at all for any other kind (a package manager's, Flatpak's, Snap's, a container's, an unknown one) or an empty
+// target: those are never looked at, so no marker or ".old" beside them is ever acted on. Returns what confirmStartup returns.
+std::string confirmStartupFor(UpdateHost& host, InstallKind kind, const std::string& target,
+                              const std::string& runningVersion);
+
 // The names in a tarball listing are safe to extract: non-empty, relative, no ".." component, no
 // backslash or NUL, and all inside ONE top-level directory.
 bool archiveListingIsSafe(const std::vector<std::string>& names, std::string& error);

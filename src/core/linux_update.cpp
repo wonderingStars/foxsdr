@@ -500,4 +500,11 @@ std::string confirmStartup(UpdateHost& host, const std::string& target,
     return "";
 }
 
+std::string confirmStartupFor(UpdateHost& host, InstallKind kind, const std::string& target,
+                              const std::string& runningVersion) {
+    if (kind != InstallKind::AppImage && kind != InstallKind::Tree) { return ""; }
+    if (target.empty()) { return ""; }
+    return confirmStartup(host, target, runningVersion);
+}
+
 }  // namespace cascade::core::linuxupdate

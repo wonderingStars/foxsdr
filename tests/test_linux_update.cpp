@@ -705,6 +705,42 @@ void testConfirmStartup() {
     }
 }
 
+// The call the program's start makes: confirmStartupFor acts on an AppImage file or a tree, and on nothing else.
+void testConfirmStartupFor() {
+    const std::string t = "/home/u/FoxSDR.AppImage";
+    for (const InstallKind k : {InstallKind::AppImage, InstallKind::Tree}) {  // an install we replace: the marker is acted on
+        FakeHost h;
+        h.files[t] = "X";
+        h.files[t + ".old"] = "OLD";
+        h.files[t + ".update-pending"] = "0.99.110";
+        CHECK(!confirmStartupFor(h, k, t, "0.99.110").empty());
+        CHECK(!h.exists(t + ".old") && !h.exists(t + ".update-pending"));
+    }
+    for (const InstallKind k : {InstallKind::PackageManager, InstallKind::Flatpak, InstallKind::Snap, InstallKind::Container, InstallKind::Unknown}) {
+        FakeHost h;  // every other kind: a marker and an ".old" beside it are never touched, nothing is said
+        h.files[t] = "X";
+        h.files[t + ".old"] = "OLD";
+        h.files[t + ".update-pending"] = "0.99.110";
+        CHECK(confirmStartupFor(h, k, t, "0.99.110").empty());
+        CHECK(h.exists(t + ".old") && h.exists(t + ".update-pending") && h.files[t] == "X");
+    }
+    {  // an interrupted swap is undone for an AppImage, and not for a package install
+        FakeHost h;
+        h.files[t + ".old"] = "OLD";
+        CHECK(!confirmStartupFor(h, InstallKind::AppImage, t, "0.99.109").empty() && h.files[t] == "OLD");
+        FakeHost g;
+        g.files[t + ".old"] = "OLD";
+        CHECK(confirmStartupFor(g, InstallKind::PackageManager, t, "0.99.109").empty() && !g.exists(t));
+    }
+    {  // an empty target (the probe found none) is never acted on
+        FakeHost h;
+        h.files["/.old"] = "OLD";
+        h.files["/.update-pending"] = "0.99.110";
+        CHECK(confirmStartupFor(h, InstallKind::AppImage, "", "0.99.110").empty());
+        CHECK(h.exists("/.old") && h.exists("/.update-pending"));
+    }
+}
+
 void testArchiveListing() {
     std::string e;
     CHECK(archiveListingIsSafe({"top/", "top/a", "top/b/c"}, e));
@@ -964,6 +1000,7 @@ int main() {
     testApplySwapAndSmoke();
     testApplyTree();
     testConfirmStartup();
+    testConfirmStartupFor();
     testArchiveListing();
     testRealFiles();
     testLoopback();
