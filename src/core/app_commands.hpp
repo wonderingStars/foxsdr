@@ -339,6 +339,16 @@
 #define FOXAPP_OP_CURSOR_MARKS           0x891Bu /* addresses one radio (target): text JSON; fact radio.<n>.sigmeas.marks */
 #define FOXAPP_OP_FRAMELOG_CONFIG        0x891Cu /* ival[0]: -1 keep / 0 / 1 keep CRC-failed frames; ival[1]: capacity 1..4096 (0 keep) */
 #define FOXAPP_OP_FRAMELOG_READ          0x891Du /* ival[0]: 1 include CRC-failed frames; fact framelog */
+//   THE LIMIT MASK (SETTINGS; core/spectrum_mask.hpp, the rfmon lane limit lines with pass / fail, alarm and capture on breach), LOCAL sessions only. MASK_LOAD (text, long text: a "foxmask 1" file of
+//   upper / lower segments in absolute Hz and dB; empty text removes the mask) - BAD_ARGUMENT with the model's words and the LINE for a file it refuses (the old mask stays), NO_CHANGE for removing a
+//   mask that is not there. MASK_CONFIG (text: one JSON object, every key optional: enabled, raise_frames 1-100 (default 3), clear_frames 1-100 (5), capture (record I/Q on a breach, default false),
+//   post_roll_s 0-60 (2), min_interval_s 0-3600 (10); unknown key = BAD_ARGUMENT; FAILED when enabled is asked with no mask loaded). While enabled, once per control pass and for every open radio the engine
+//   evaluates the radio newest spectrum frame (absolute frequencies from its centre and sample rate) against the mask: pass / worst margin, an alarm raised after raise_frames failing frames in a
+//   row and cleared after clear_frames passing ones, a log line per event (kind, margin, frequency, frames: no identifier). With capture on, the alarm starts the radio normal I/Q recording (in
+//   the recordings folder) unless it is recording already or the minimum interval has not passed, and stops it post_roll_s later. THERE IS NO I/Q PRE-ROLL RING: the pre-roll of the model is 0.
+//   Fact radio.<n>.mask = {enabled, loaded, pass, worst_margin_db, worst_freq_hz, alarm, events [...], captures, capture_note}. Not saved.
+#define FOXAPP_OP_MASK_LOAD              0x891Eu /* long text: the foxmask file; empty removes it; fact radio.<n>.mask */
+#define FOXAPP_OP_MASK_CONFIG            0x891Fu /* text: JSON {enabled, raise_frames, clear_frames, capture, post_roll_s, min_interval_s} */
 // wire-b end
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.

@@ -20,6 +20,7 @@
 #include <array>
 
 #include "core/field_strength.hpp"
+#include "core/spectrum_mask.hpp"
 #include "engine/wire_b_bits.hpp"
 #include "engine/wire_b_cursors.hpp"
 
@@ -43,6 +44,29 @@ struct WireBState {
     // --- sigmeas: the eight cursors of each radio and the one frame log ---
     std::array<cascade::sigmeas::CursorSet8, 8> cursors;
     std::unique_ptr<cascade::sigmeas::FrameLog> frameLog = std::make_unique<cascade::sigmeas::FrameLog>(256);
+
+    // --- rfmon: the limit mask (one mask, one evaluator and monitor per radio) ---
+    struct MaskRadio {
+        cascade::core::MaskEvaluator ev;
+        cascade::core::MaskMonitor mon;
+        double centre = 0.0, span = 0.0;
+        std::size_t bins = 0;
+        std::uint64_t seq = 0;
+        bool pass = true;
+        bool anyLimited = false;
+        double margin = 0.0, marginFreq = 0.0;
+        double captureStartS = -1.0;
+        std::size_t captures = 0;
+        std::size_t lastLogged = 0;
+        std::string captureNote;
+    };
+    cascade::core::Mask mask;
+    bool maskLoaded = false;
+    bool maskEnabled = false;
+    bool maskCapture = false;
+    double maskPostRollS = 2.0;
+    cascade::core::MaskMonitorConfig maskCfg;
+    std::array<MaskRadio, 8> maskRadios;
 };
 
 }  // namespace cascade::engine

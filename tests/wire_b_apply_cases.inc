@@ -41,6 +41,13 @@ void wireBOps(AppWindow& a) {
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_FRAMELOG_CONFIG, -1, 0)), FOXAPI_NO_CHANGE));
     covering(FOXAPP_OP_FRAMELOG_READ);
     CHECK(ok(A::apply(a, ints(FOXAPP_OP_FRAMELOG_READ, 1))));
+    // THE LIMIT MASK: a bad file is refused with its line (the old mask stays), nothing to remove is no change, a parameter that is not JSON is refused, enabling with no mask fails
+    covering(FOXAPP_OP_MASK_LOAD);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_MASK_LOAD, "foxmask 1\nupper 1 2 3\n")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_MASK_LOAD, "")), FOXAPI_NO_CHANGE));
+    covering(FOXAPP_OP_MASK_CONFIG);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_MASK_CONFIG, "not json")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_MASK_CONFIG, "{\"enabled\":true}")), FOXAPI_FAILED));
     covering(FOXAPP_OP_GPU_FFT_MODE);
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 3)), FOXAPI_OUT_OF_RANGE));
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 0)), FOXAPI_NO_CHANGE));

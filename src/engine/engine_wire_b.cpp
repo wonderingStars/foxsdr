@@ -4,6 +4,7 @@
 // ops radio_scope.hpp lists. Each op group lives in its own section below; the pure work is in the model headers (core/field_strength.hpp ...).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -11,6 +12,7 @@
 #include <string>
 
 #include "core/app_commands.hpp"
+#include "core/diag_log.hpp"
 #include "core/field_strength.hpp"
 #include "engine/engine.hpp"
 #include "engine/engine_wire_b.hpp"
@@ -318,6 +320,54 @@ FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text
         case FOXAPP_OP_CURSOR_MARKS:
             res = cursorOp(c, text, res, changed);
             break;
+        case FOXAPP_OP_MASK_LOAD: {
+            if (text.empty()) {
+                if (!w.maskLoaded) { return refusal(res, FOXAPI_NO_CHANGE, "no mask is loaded"); }
+                w.mask = cascade::core::Mask{};
+                w.maskLoaded = false;
+                w.maskEnabled = false;
+                for (auto& m : w.maskRadios) { m.mon.reset(); m.ev = cascade::core::MaskEvaluator{}; m.bins = 0; m.pass = true; m.anyLimited = false; }
+                changed = true;
+                break;
+            }
+            cascade::core::Mask fresh;
+            const cascade::core::MaskParseResult pr = cascade::core::parseMask(text, fresh);
+            if (!pr.ok()) {
+                char why[160];
+                if (pr.line != 0) { std::snprintf(why, sizeof(why), "%s, line %zu", cascade::core::maskErrorText(pr.error), pr.line); }
+                else { std::snprintf(why, sizeof(why), "%s", cascade::core::maskErrorText(pr.error)); }
+                return refusal(res, FOXAPI_BAD_ARGUMENT, why);
+            }
+            w.mask = fresh;
+            w.maskLoaded = true;
+            for (auto& m : w.maskRadios) { m.mon.reset(); m.bins = 0; }
+            res.applied[0] = static_cast<double>(fresh.segments.size());
+            changed = true;
+            break;
+        }
+        case FOXAPP_OP_MASK_CONFIG: {
+            wireb::Json p = wireb::Json::object();
+            if (!text.empty()) {
+                p = wireb::Json::parse(text, nullptr, false);
+                if (p.is_discarded() || !p.is_object()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the parameters are not a JSON object"); }
+            }
+            wireb::detail::Params q(p);
+            bool enabled = w.maskEnabled, capture = w.maskCapture;
+            std::size_t raise = w.maskCfg.raiseFrames, clear = w.maskCfg.clearFrames;
+            double post = w.maskPostRollS, interval = w.maskCfg.minTriggerIntervalS;
+            if (!q.flag("enabled", enabled) || !q.flag("capture", capture) || !q.count("raise_frames", raise, 1, 100) || !q.count("clear_frames", clear, 1, 100) ||
+                !q.number("post_roll_s", post, 0.0, 60.0) || !q.number("min_interval_s", interval, 0.0, 3600.0) || !q.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, q.error); }
+            if (enabled && !w.maskLoaded) { return refusal(res, FOXAPI_FAILED, "load a mask first (MASK_LOAD)"); }
+            if (enabled == w.maskEnabled && capture == w.maskCapture && raise == w.maskCfg.raiseFrames && clear == w.maskCfg.clearFrames && post == w.maskPostRollS &&
+                interval == w.maskCfg.minTriggerIntervalS) { return refusal(res, FOXAPI_NO_CHANGE, "the mask is set so already"); }
+            w.maskEnabled = enabled; w.maskCapture = capture; w.maskPostRollS = post;
+            w.maskCfg.raiseFrames = raise; w.maskCfg.clearFrames = clear; w.maskCfg.minTriggerIntervalS = interval;
+            w.maskCfg.preRollS = 0.0;   // no I/Q pre-roll ring exists
+            w.maskCfg.postRollS = post;
+            for (auto& m : w.maskRadios) { m.mon.configure(w.maskCfg); }
+            changed = true;
+            break;
+        }
         case FOXAPP_OP_FRAMELOG_CONFIG: {
             if (c.ival[0] < -1 || c.ival[0] > 1) { return refusal(res, FOXAPI_OUT_OF_RANGE, "keep failed frames is -1 (as it is), 0 or 1"); }
             if (c.ival[1] < 0 || c.ival[1] > 4096) { return refusal(res, FOXAPI_OUT_OF_RANGE, "the frame log holds 1 to 4096 frames (0 leaves it as it is)"); }
@@ -364,9 +414,66 @@ std::uint64_t Engine::wireBStamp() const {
         if (!receivers_[i]) { continue; }
         const cascade::core::Pipeline::GpuFftReport r = receivers_[i]->pipeline_.gpuFftReport();
         h = (h ^ static_cast<std::uint64_t>(r.mode + 1 + 4 * (r.engaged ? 1 : 0) + 8 * r.backend + 16 * static_cast<int>(r.error.size()) + 1000 * static_cast<int>(i))) * 1099511628211ull;
-        h = (h ^ (r.engaged ? r.submitted / 256u : 0u)) * 1099511628211ull;   // (the counters themselves move every pass: a coarse step keeps the facts from going stale for long)
+        h = (h ^ (r.engaged ? r.submitted / 256u : 0u)) * 1099511628211ull;
+        if (wireB_ != nullptr && wireB_->maskLoaded) {
+            const WireBState::MaskRadio& m = wireB_->maskRadios[i];
+            h = (h ^ static_cast<std::uint64_t>((m.pass ? 1 : 2) + 4 * (m.mon.alarm() ? 1 : 0) + 8 * static_cast<int>(m.mon.events().size()) + 4096 * static_cast<int>(m.captures))) * 1099511628211ull;
+        }   // (the counters themselves move every pass: a coarse step keeps the facts from going stale for long)
     }
     return h;
+}
+
+// THE LIMIT MASK, once per control pass: for every open radio the newest spectrum frame against the mask, the monitor's debounce, the log line of a new event, the capture of a breach.
+void Engine::pumpWireB() {
+    if (wireB_ == nullptr || !wireB_->maskEnabled || !wireB_->maskLoaded) { return; }
+    WireBState& w = *wireB_;
+    std::lock_guard<std::mutex> lk(w.mutex);
+    const double nowS = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    bool moved = false;
+    for (std::size_t slot = 0; slot < receivers_.size(); ++slot) {
+        if (!receivers_[slot]) { continue; }
+        RadioWork radioWork(*this, slot);
+        WireBState::MaskRadio& m = w.maskRadios[slot];
+        cascade::core::Pipeline& pl = rx().pipeline_;
+        // a capture in progress ends post_roll_s after it began
+        if (m.captureStartS >= 0.0 && nowS - m.captureStartS >= w.maskPostRollS) {
+            stopIqRecording();
+            m.captureStartS = -1.0;
+            m.captureNote = "captured";
+            moved = true;
+        }
+        cascade::core::SpectrumFrame frame;
+        frame.seq = m.seq;
+        if (!pl.getLatestFrame(frame) || frame.dbBins.empty()) { continue; }
+        m.seq = frame.seq;
+        cascade::core::PublishedState ps;
+        if (rx().receiverSnapshot_ == nullptr || !rx().receiverSnapshot_->read(ps) || !(ps.rx.sampleRateHz > 0.0)) { continue; }
+        if (m.bins != frame.dbBins.size() || m.centre != ps.rx.centreHz || m.span != ps.rx.sampleRateHz) {
+            if (!m.ev.prepare(w.mask, ps.rx.centreHz, ps.rx.sampleRateHz, frame.dbBins.size())) { continue; }
+            m.bins = frame.dbBins.size(); m.centre = ps.rx.centreHz; m.span = ps.rx.sampleRateHz;
+        }
+        cascade::core::MaskResult r;
+        if (!m.ev.evaluate(frame.dbBins.data(), frame.dbBins.size(), r)) { continue; }
+        m.mon.update(r, nowS);
+        if (m.pass != r.pass || m.anyLimited != r.anyLimited || std::fabs(m.margin - r.worstMarginDb) >= 0.5) { moved = true; }
+        m.pass = r.pass; m.anyLimited = r.anyLimited; m.margin = std::isfinite(r.worstMarginDb) ? r.worstMarginDb : 0.0; m.marginFreq = r.worstFreqHz;
+        // one log line per event, when it opens (kind, margin, frequency, frames: no identifier)
+        const auto& ev = m.mon.events();
+        const std::size_t total = ev.size() + m.mon.droppedEvents();
+        if (total > m.lastLogged && !ev.empty()) {
+            cascade::core::diagLogf("%s", cascade::core::formatBreachLine(ev.back()).c_str());
+            m.lastLogged = total;
+            moved = true;
+        }
+        const cascade::core::CaptureTrigger t = m.mon.takeTrigger();
+        if (t.pending && w.maskCapture) {
+            if (rx().iqRecorder_.recording()) { m.captureNote = "not started: this radio is recording already"; }
+            else if (!startIqRecording()) { m.captureNote = "not started: the recording could not start"; }
+            else { m.captureStartS = nowS; ++m.captures; m.captureNote = "recording"; }
+            moved = true;
+        }
+    }
+    if (moved) { ++wireBVersion_; }
 }
 
 void Engine::wireBFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {
@@ -381,6 +488,22 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
     }
     if (wireB_ == nullptr) { return; }
     std::lock_guard<std::mutex> lk(wireB_->mutex);
+    if (wireB_->maskLoaded) {
+        for (std::size_t i = 0; i < receivers_.size(); ++i) {
+            if (!receivers_[i]) { continue; }
+            const WireBState::MaskRadio& m = wireB_->maskRadios[i];
+            wireb::Json j = wireb::Json::object();
+            j["enabled"] = wireB_->maskEnabled; j["loaded"] = true; j["pass"] = m.pass; j["limited"] = m.anyLimited; j["worst_margin_db"] = m.margin; j["worst_freq_hz"] = m.marginFreq;
+            j["alarm"] = m.mon.alarm(); j["captures"] = m.captures; j["capture_note"] = m.captureNote;
+            wireb::Json evs = wireb::Json::array();
+            for (const cascade::core::BreachEvent& e : m.mon.events()) {
+                evs.push_back({{"start_s", e.startS}, {"end_s", e.endS}, {"frames", e.frames}, {"worst_margin_db", e.worstMarginDb}, {"worst_freq_hz", e.worstFreqHz},
+                               {"kind", e.kind == cascade::core::MaskKind::Upper ? "upper" : "lower"}, {"open", e.open}});
+            }
+            j["events"] = evs;
+            fact("radio." + std::to_string(i + 1) + ".mask", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
+        }
+    }
     for (const auto& kv : wireB_->facts) { fact(kv.first, kv.second); }
     fact("field.afPoints", std::to_string(wireB_->antennaFactor.size()));
     fact("field.cablePoints", std::to_string(wireB_->cableLoss.size()));

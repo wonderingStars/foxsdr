@@ -11356,6 +11356,7 @@ void Engine::runPassPart(PassPart part) {
             pumpExtraReceivers();
             pumpSchedule();   // (timed recordings: engine_schedule.cpp)
             pumpMacros();     // (a macro being played: engine_macros.cpp)
+            pumpWireB();      // (wire-b: the limit mask of every open radio: engine_wire_b.cpp)
             pollSmeterCal();  // (a calibration being measured: engine_smeter.cpp)
             break;
     }

@@ -255,6 +255,8 @@ constexpr OpEntry kOps[] = {
     {FOXAPP_OP_CURSOR_MARKS, "APP_CURSOR_MARKS", true},
     {FOXAPP_OP_FRAMELOG_CONFIG, "APP_FRAMELOG_CONFIG", true},
     {FOXAPP_OP_FRAMELOG_READ, "APP_FRAMELOG_READ", true},
+    {FOXAPP_OP_MASK_LOAD, "APP_MASK_LOAD", true},
+    {FOXAPP_OP_MASK_CONFIG, "APP_MASK_CONFIG", true},
     // wire-b end
 };
 

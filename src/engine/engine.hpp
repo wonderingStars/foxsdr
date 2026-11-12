@@ -3244,6 +3244,7 @@ public:
 private:
     void wireBFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
     std::uint64_t wireBStamp() const;
+    void pumpWireB();   // once per control pass (the Back part): the limit mask of every open radio
     // wire-b end
     std::vector<cascade::core::macros::Macro> macros_;
     cascade::core::macros::Player macroPlayer_;
