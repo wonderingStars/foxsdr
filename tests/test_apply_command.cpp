@@ -1424,6 +1424,10 @@ void receiverOps(AppWindow& a) {
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_FILTER_SHAPE, 0))));
         CHECK(A::shapeRx(a) == 0 && A::shapePipe(a) == 0);
     }
+    covering(FOXAPP_OP_MPX_RECORD);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_MPX_RECORD, 0)), FOXAPI_NO_CHANGE));      // nothing is recording
+    }
     covering(FOXAPI_OP_SET_CW_PITCH);
     {
         CHECK(A::cwPitchRx(a) == 700.0 && A::cwPitchPipe(a) == 700.0);

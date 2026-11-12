@@ -3205,6 +3205,9 @@ private:
     FoxCommandResult claimChannel(const FoxCommand& c);
     FoxCommandResult releaseChannel(const FoxCommand& c);
     std::uint64_t poolVersion_ = 1;
+    // THE FM MULTIPLEX TAKE (engine serial lane A, row D4; engine_mpx.cpp): start, stop (also at the radio's end), and the fingerprint counter of fact.radio.<n>.mpx.
+    void stopMpxRecording();
+    std::uint64_t mpxVersion_ = 1;
     void pollStereoSystem();
     std::uint64_t stereoSystemVersion_ = 1;
     // RECORDING FILE NAMES FROM A TEMPLATE (engine_recname.cpp; FOXAPP_OP_SET_RECORD_NAME, engine wiring W2).

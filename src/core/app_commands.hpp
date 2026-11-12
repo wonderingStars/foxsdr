@@ -179,6 +179,11 @@
 //   until CHANNEL_RELEASE (ival[0] = its number; NO_DEVICE for a radio that is not there, NO_CHANGE for one that is not claimed). Claims are not saved.
 #define FOXAPP_OP_CHANNEL_CLAIM          0x8620u /* num[0]: Hz; ival[0]: mode (0 keep); num[1]: bandwidth Hz (0 keep). Not radio-scoped: the pool chooses */
 #define FOXAPP_OP_CHANNEL_RELEASE        0x8621u /* ival[0]: the radio's number */
+//   MPX_RECORD (SETTINGS; engine serial lane A, row D4): ival[0] 1 starts, 0 stops a recording of the FM MULTIPLEX of the selected radio (target) - the composite the discriminator gives before the stereo decoder
+//   (mono, the 19 kHz pilot, the 38 kHz difference, the 57 kHz RDS), resampled to 192 kHz, written as a 32-bit float mono WAV named mpx_<date>_<time>_192000Hz.wav in the recordings folder, for a program such as
+//   RDS Spy to open. UNSUPPORTED unless the radio is in WFM (the multiplex exists only there), NO_CHANGE when it is so already, FAILED with the recorder's words when the file cannot be made. It ends with the
+//   radio (stop, removal, shutdown). fact.radio.<n>.mpx reads 1 while it records. The file start blocks for the disk (a control-thread call, like a settings write).
+#define FOXAPP_OP_MPX_RECORD             0x8622u /* ival[0]: 1 start / 0 stop. Addresses one radio (target) */
 #define FOXAPP_OP_SET_STEREO_SYSTEM      0x8619u /* ival[0]: 0 automatic / 1 pilot tone / 2 OIRT. Addresses one radio (target) */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

@@ -6128,6 +6128,7 @@ void Engine::stopReceiver(const char* who) {
     const auto recordersFrom = std::chrono::steady_clock::now();
     if (iq) { stopIqRecording(); }
     if (audio) { stopAudioRecording(); }
+    if (rx().mpxRecorder_.recording()) { stopMpxRecording(); }
     const long long recordersMs = static_cast<long long>(
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - recordersFrom).count());
     // WHO ASKED, in the log (0.99.68): that same report's log showed the stop's cost and nothing of its cause. One line, before the stop
@@ -7728,6 +7729,23 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         }
         case FOXAPP_OP_CHANNEL_CLAIM: return claimChannel(c);
         case FOXAPP_OP_CHANNEL_RELEASE: return releaseChannel(c);
+        case FOXAPP_OP_MPX_RECORD: {
+            Receiver& rxs = rx();
+            if (on == rxs.mpxRecorder_.recording()) { return refuse(FOXAPI_NO_CHANGE, on ? "the multiplex is being recorded already" : "the multiplex is not being recorded"); }
+            if (!on) {
+                stopMpxRecording();
+                res.applied[0] = 0.0;
+                return res;
+            }
+            if (rxs.modeIndex_ != 1) { return refuse(FOXAPI_UNSUPPORTED, "the multiplex exists only in WFM"); }
+            (void)rxs.mpxRecorder_.setSampleFormat(cascade::core::RecordKind::Audio, cascade::core::kRecordAudioFloat32);
+            std::string why;
+            if (!rxs.mpxRecorder_.start(cascade::core::RecordKind::Audio, recordDir_, cascade::core::Pipeline::kMpxRateHz, why, "mpx")) { return refuse(FOXAPI_FAILED, why.c_str()); }
+            rxs.pipeline_.setMpxRecorder(&rxs.mpxRecorder_);
+            ++mpxVersion_;
+            res.applied[0] = 1.0;
+            return res;
+        }
         case FOXAPP_OP_VFO_SELECT: {
             Receiver& rxs = rx();
             if (c.ival[0] != 0 && c.ival[0] != 1) { return refuse(FOXAPI_OUT_OF_RANGE, "the VFOs are A (0) and B (1)"); }
@@ -10616,6 +10634,7 @@ void Engine::teardown() {
     forEachReceiver([this] {
         stopIqRecording();
         stopAudioRecording();
+        stopMpxRecording();
     });
     // (Every added radio's pipeline is stopped by shutdownStop's loop, or - for an engine torn down without it - by its Receiver's destructor, which joins
     // the pipeline's threads.)
@@ -10861,6 +10880,7 @@ void Engine::shutdownQuiesce() {
     forEachReceiver([this] {
         stopIqRecording();
         stopAudioRecording();
+        stopMpxRecording();
     });
 
     // THE BOUNDED RUN'S PLUGIN STATUS REPORT (CASCADE_PLUGIN_STATUS; shell retirement R4), where the window used to call reportPluginStatus - right

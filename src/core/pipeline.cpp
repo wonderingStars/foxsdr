@@ -334,6 +334,7 @@ Pipeline::Pipeline(Config cfg)
     airView_.bind(active_);  // no converter until the caller sets one
     estimator_.setAlpha(cfg.averagingAlpha);
     iqCorr_ = std::make_unique<cascade::dsp::IqCorrector>(cfg.sampleRateHz);
+    mpxResampler_ = cascade::dsp::RationalResampler(static_cast<unsigned>(kMpxRateHz), static_cast<unsigned>(cfg.sampleRateHz / static_cast<double>(vfoDecim_) + 0.5));   // D4
     demod_.setMode(cascade::dsp::DemodMode::WFM);  // default mode per spec
     // WFM de-emphasis belongs to StereoFm, never to the discriminator (see the
     // ownership note in the header), so for the default mode this leaves the
@@ -1890,6 +1891,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
         resamplerD_ = cascade::dsp::RationalResampler(
             static_cast<unsigned>(kAudioRateHz + 0.5),
             static_cast<unsigned>(chanRate + 0.5));
+        mpxResampler_ = cascade::dsp::RationalResampler(static_cast<unsigned>(kMpxRateHz), static_cast<unsigned>(chanRate + 0.5));   // (D4)
 
         // New rate regime: relearn the gain and the S-meter from neutral.
         // (Their per-sample time constants stay tuned for ~200 kHz channels,
@@ -1969,6 +1971,11 @@ void Pipeline::setIqRecorder(Recorder* r) {
     // serialization guarantee the header documents for record toggles.
     std::lock_guard<std::mutex> lk(audioMutex_);
     iqRecorder_ = r;
+}
+
+void Pipeline::setMpxRecorder(Recorder* r) {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    mpxRecorder_ = r;
 }
 
 void Pipeline::setAudioRecorder(Recorder* r) {
@@ -2475,6 +2482,13 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // furniture, and this application does not draw furniture. The scope's own
     // liveness rule watches written(), so a mode change simply stops the tube.
     if (wfm) { scopeMpx_.push(audioBuf_.data(), m); }
+    // D4: the same instant, resampled to 192 kHz, into the multiplex recorder when one is set.
+    if (wfm && mpxRecorder_ != nullptr) {
+        const std::size_t cap = mpxResampler_.maxOut(m);
+        mpxBuf_.resize(cap);
+        const std::size_t got = mpxResampler_.process(audioBuf_.data(), m, mpxBuf_.data(), cap);
+        if (got > 0) { mpxRecorder_->writeAudio(mpxBuf_.data(), got); }
+    }
 
     // RDS gets the RAW discriminator output: no de-emphasis, no scaling, no
     // AGC, no squelch — bit-for-bit the signal the --rds-check bench path

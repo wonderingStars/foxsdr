@@ -630,6 +630,11 @@ public:
     bool setChannelShape(int shape);
     int channelShape() const;
     bool channelShapeActive() const;
+    // THE FM MULTIPLEX AS A FILE (engine serial lane A, row D4): in WFM the composite (the discriminator's output before the stereo decoder: mono, the 19 kHz pilot, the 38 kHz difference, the 57 kHz RDS)
+    // is resampled to 192 kHz and handed to this recorder (an Audio take, so a 32-bit float WAV when its sample format is set so) for a program such as RDS Spy to open. Nothing is written in any
+    // other mode. Like setIqRecorder: after the setter returns no write against the old recorder is in flight; nullptr stops it. Any thread.
+    static constexpr double kMpxRateHz = 192000.0;
+    void setMpxRecorder(Recorder* r);
     bool setIqCorrection(int mask);
     int iqCorrection() const;
     double iqImageRejectionDb() const;   // the balance estimator's reading of the input, dB (200 while nothing is measured)
@@ -1413,6 +1418,9 @@ private:
     RdsSnapshot rdsPublished_;
     // Recorder taps (P6): non-owning, audioMutex_-guarded like the chain
     // blocks above — see the set*Recorder contract in the public section.
+    Recorder* mpxRecorder_ = nullptr;                    // D4 (under audioMutex_)
+    cascade::dsp::RationalResampler mpxResampler_{192000u, 200000u};   // composite rate -> 192 kHz; rebuilt with the channel blocks
+    std::vector<float> mpxBuf_;
     Recorder* iqRecorder_ = nullptr;
     Recorder* audioRecorder_ = nullptr;
 

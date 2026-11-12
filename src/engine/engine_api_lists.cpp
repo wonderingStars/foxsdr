@@ -208,6 +208,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(recordNameVersion_); // the recording file-name template (FOXAPP_OP_SET_RECORD_NAME)
     f.value(stereoSystemVersion_);  // the stereo system of every radio (FOXAPP_OP_SET_STEREO_SYSTEM)
     f.value(poolVersion_);   // which radios a pool claim holds (engine_pool.cpp)
+    f.value(mpxVersion_);   // which radios record their multiplex (engine_mpx.cpp)
     f.value(hotplugVersion_);   // the hot-plug counts (engine_hotplug.cpp)
     f.text(markerError_);
     // The DSP chain's input rate (API 0.3 8.5, fact.input.rateHz): the source's rate
@@ -1393,6 +1394,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         fact(pre + "state", radioStateWord(n));
         fact(pre + "locked", receivers_[n - 1u]->tuneLocked_ ? "1" : "0");
         fact(pre + "claimed", receivers_[n - 1u]->claimed_ ? "1" : "0");
+        fact(pre + "mpx", receivers_[n - 1u]->mpxRecorder_.recording() ? "1" : "0");
         {
             const int sys = receivers_[n - 1u]->stereoSystem_;
             fact(pre + "stereo.system", sys == 1 ? "pilot" : (sys == 2 ? "oirt" : "auto"));

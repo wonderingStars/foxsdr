@@ -445,6 +445,7 @@ struct Receiver {
     // stop*Recording clears the pointer before stopping the recorder.
     cascade::core::Recorder iqRecorder_;
     cascade::core::Recorder audioRecorder_;
+    cascade::core::Recorder mpxRecorder_;   // the FM multiplex take (engine serial lane A, D4): a 32-bit float audio take at 192 kHz
     std::string recordError_;  // red text in the Recorder section; "" = none
     // Why a take ended when nothing went WRONG (the user changed source):
     // muted text in the Recorder section and its own field on the web page,
