@@ -10,6 +10,7 @@
 #include <thread>
 #include <utility>
 
+#include "core/driver_policy.hpp"
 #include "core/i18n.hpp"
 #include "core/leak_on_purpose.hpp"
 #include "core/telemetry.hpp"
@@ -441,9 +442,12 @@ Findings assess(const Inventory& inv) {
         Finding f = judge(*d, nodes, inv);
         // THE ONE-CLICK INSTALL'S TARGET: interface 0 of an RTL-SDR on the
         // wrong driver. The elevated helper checks it again against the device.
+        // W12: the reviewed allow-list (core/driver_policy.hpp) says which radios the installer may EVER touch; a node it does not
+        // allow gets no target even when the family word matches, so a row added to this file cannot reach the installer unreviewed.
         if (f.kind == Kind::WrongDriver && f.family == kFamilyRtl) {
             for (const UsbNode* n : nodes) {
-                if (n->interfaceNumber == 0 && !n->instanceId.empty()) {
+                if (n->interfaceNumber == 0 && !n->instanceId.empty() &&
+                    driverpolicy::decide(n->vid, n->pid, n->interfaceNumber).action == driverpolicy::Action::InstallWinUsb) {
                     f.installTarget = n->instanceId;
                 }
             }
