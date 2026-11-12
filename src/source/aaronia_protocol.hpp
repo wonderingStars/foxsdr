@@ -341,13 +341,13 @@ inline std::string captureRequest(double centerHz, double spanHz) {
     j["frequencyCenter"] = centerHz;
     j["frequencySpan"] = spanHz;
     j["type"] = "capture";
-    return j.dump();
+    return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 inline std::string streamingRequest(bool start) {
     nlohmann::json j;
     j["start"] = start;
     j["type"] = "streaming";
-    return j.dump();
+    return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 }  // namespace cascade::source::aaronia
