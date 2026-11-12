@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 #include <cstdio>
 
 namespace cascade::source {
@@ -123,6 +124,106 @@ std::vector<double> DualTunerRateTable::outputRatesHz() const {
     std::sort(v.begin(), v.end());
     v.erase(std::unique(v.begin(), v.end(), [](double x, double y) { return std::fabs(x - y) < 0.5; }), v.end());
     return v;
+}
+
+const char* duoModeName(DuoMode m) {
+    switch (m) {
+        case DuoMode::SingleTuner: return "single tuner";
+        case DuoMode::DualTuner: return "dual tuner";
+        case DuoMode::MasterSlave: return "master/slave";
+    }
+    return "?";
+}
+
+std::vector<DualTunerRate> documentedLowIfRows(DuoMode mode) {
+    std::vector<DualTunerRate> v;
+    const auto add = [&v](double fs, abi::BwMHzT bw, abi::IfKHzT ifk) { v.push_back({fs, bw, ifk, 1}); };
+    if (mode == DuoMode::SingleTuner) {
+        // the six conditions of sdrplay_api_Init, expanded (the "<=" lines over the bandwidth enumeration)
+        add(8192000.0, abi::BW_1_536, abi::IF_2_048);
+        add(8000000.0, abi::BW_1_536, abi::IF_2_048);
+        add(8000000.0, abi::BW_5_000, abi::IF_2_048);
+        add(2000000.0, abi::BW_0_200, abi::IF_0_450);
+        add(2000000.0, abi::BW_0_300, abi::IF_0_450);
+        add(2000000.0, abi::BW_0_600, abi::IF_0_450);
+        add(6000000.0, abi::BW_0_200, abi::IF_1_620);
+        add(6000000.0, abi::BW_0_300, abi::IF_1_620);
+        add(6000000.0, abi::BW_0_600, abi::IF_1_620);
+        add(6000000.0, abi::BW_1_536, abi::IF_1_620);
+    } else {
+        // dual tuner and master/slave: ADC rate 6 or 8 MHz, bandwidth <= 1.536 MHz (Introduction, datasheet),
+        // and a combination the specification's low-IF list permits
+        add(6000000.0, abi::BW_0_200, abi::IF_1_620);
+        add(6000000.0, abi::BW_0_300, abi::IF_1_620);
+        add(6000000.0, abi::BW_0_600, abi::IF_1_620);
+        add(6000000.0, abi::BW_1_536, abi::IF_1_620);
+        add(8000000.0, abi::BW_1_536, abi::IF_2_048);
+    }
+    return v;
+}
+
+namespace {
+bool powerOfTwoUpTo32(unsigned d) { return d == 1 || d == 2 || d == 4 || d == 8 || d == 16 || d == 32; }
+bool definedBandwidth(abi::BwMHzT bw) {
+    return bw == abi::BW_0_200 || bw == abi::BW_0_300 || bw == abi::BW_0_600 || bw == abi::BW_1_536 || bw == abi::BW_5_000 ||
+           bw == abi::BW_6_000 || bw == abi::BW_7_000 || bw == abi::BW_8_000;
+}
+}  // namespace
+
+DualTunerRateCheck checkDuoRate(DuoMode mode, const DualTunerRate& want) {
+    DualTunerRateCheck c;
+    c.tableKnown = true;
+    if (!std::isfinite(want.fsHz) || want.fsHz <= 0.0 || want.decimation == 0) {
+        c.sentence = "That is not a valid sample-rate setting.";
+        return c;
+    }
+    if (mode == DuoMode::SingleTuner) {
+        if (!powerOfTwoUpTo32(want.decimation)) {
+            c.sentence = "In single-tuner mode the decimation must be 1, 2, 4, 8, 16 or 32.";
+            return c;
+        }
+        if (want.ifType == abi::IF_Zero) {
+            if (!definedBandwidth(want.bw)) {
+                c.sentence = "That is not one of the RSPduo's IF bandwidths (200, 300, 600 kHz, 1.536, 5, 6, 7 or 8 MHz).";
+                return c;
+            }
+            if (want.fsHz < kSingleTunerMinFsHz || want.fsHz > kSingleTunerMaxFsHz) {
+                c.sentence = "In zero-IF single-tuner mode the ADC rate must be 2 to 10.66 MHz.";
+                return c;
+            }
+            c.ok = true;
+            return c;
+        }
+    } else if (want.decimation != 1) {
+        c.sentence = std::string("In ") + duoModeName(mode) +
+                     " mode only no decimation is accepted: no SDRplay document opened lists the decimation factors.";
+        return c;
+    }
+    for (const DualTunerRate& a : documentedLowIfRows(mode)) {
+        if (std::fabs(a.fsHz - want.fsHz) < 1.0 && a.bw == want.bw && a.ifType == want.ifType) {
+            c.ok = true;
+            return c;
+        }
+    }
+    c.sentence = mode == DuoMode::SingleTuner
+                     ? "That is not one of the low-IF combinations the SDRplay API specification lists."
+                     : std::string("In ") + duoModeName(mode) +
+                           " mode both tuners run in low IF at an ADC rate of 6 or 8 MHz with a bandwidth of at most 1.536 MHz.";
+    return c;
+}
+
+std::vector<double> documentedLowIfOutputRatesHz(DuoMode mode) {
+    std::vector<double> v;
+    for (const DualTunerRate& a : documentedLowIfRows(mode)) { v.push_back(a.fsHz / a.decimation); }
+    std::sort(v.begin(), v.end());
+    v.erase(std::unique(v.begin(), v.end(), [](double x, double y) { return std::fabs(x - y) < 0.5; }), v.end());
+    return v;
+}
+
+DualTunerRateTable documentedDualTunerTable() {
+    DualTunerRateTable t;
+    t.setTable(documentedLowIfRows(DuoMode::DualTuner));
+    return t;
 }
 
 }  // namespace cascade::source

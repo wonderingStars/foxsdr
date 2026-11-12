@@ -24,14 +24,47 @@
 //   * In master/slave mode LIF down-conversion is always enabled and the default IF is zero-IF for the
 //     master, 450 kHz for the slave.
 //
-// WHAT THE SPECIFICATION DOES NOT SAY, so is NOT BUILT: the allowed sample-rate and bandwidth
-// combinations of DUAL-TUNER mode itself. The spec points at "pages 4 and 5 of the RSPduo introduction
-// document" (https://www.sdrplay.com/wp-content/uploads/2018/05/RSPduo-Introduction-V3.pdf), which
-// answered with an HTML error page (404) here. So DualTunerRateTable ships EMPTY: it refuses every
-// dual-tuner rate with a sentence saying the table is not known, and a caller (or a later lane that has
-// the document) fills it in with setTable(); the checking logic is proven with a table the TEST invents.
-// Whether the two tuners are coherent is also not stated by the specification (the product page says
-// "Not stated"): UNPROVEN, and nothing here claims it.
+// THE RATE RULES (follow-up lane feat/hpsdrduo, 2026-11-12). The specification's pointer, "pages 4 and 5 of the
+// RSPduo introduction document" (RSPduo-Introduction-V3.pdf), still answers 404 on sdrplay.com and 403 on the
+// one reseller mirror of V3 that was found (storage.eleshop.eu; not worked around). Opened instead, all read
+// only, none stating a licence:
+//   * SDRplay's own "RSPduo Datasheet" V0.9 (Jun 2020), https://sdrplay.com/wp-content/uploads/2026/06/
+//     RSPduo_Datasheet.pdf (2 pages, fetched 2026-11-12): "Sample frequency 2 - 10.66MSPS" (14 bit native
+//     2 - 6.048, 12 bit 6.048 - 8.064, 10 bit 8.064 - 9.216, 8 bit above); IF modes "Zero IF, All IF
+//     bandwidths" and "Low IF, IF bandwidths <= 1.536MHz"; IF bandwidths 200, 300, 600 kHz, 1.536, 5.0, 6.0,
+//     7.0, 8.0 MHz; operating modes "One receive stream, any IF mode or bandwidth ... from either tuner, or
+//     two simultaneous receive streams from both tuners using low IF mode and bandwidth limited to
+//     1.536MHz maximum" (the table the sheet refers to is a picture and has no text).
+//   * "Introduction to the RSPduo" V2.2 (an earlier revision than the V3 the specification cites; marked
+//     "New Product Announcement" and "Confidential" in its page footers though it is freely distributed),
+//     https://alexsradioshop.de/wp-content/uploads/2023/05/RSPduo-Introduction-V2-2.pdf (a reseller's copy
+//     of SDRplay's document), pages 4 and 5: dual-tuner operation is only possible with BOTH tuners in LOW
+//     IF mode (maximum flat IF bandwidth 1.536 MHz); "In low IF mode, there will only be two sample rates
+//     available: 6 MHz ... 8 MHz"; the matrix: single tuner, ADC rate 2 - 10 MHz, IF bandwidth 200 kHz - 8
+//     MHz; dual tuner, ADC rate 6 / 8 MHz, IF bandwidth 200 kHz - 1.536 MHz for both tuners; the tuner set
+//     up first (the master) dictates the ADC rate of the second.
+//   * The specification itself, section 3.15 (sdrplay_api_Init): "Conditions for LIF down-conversion to be
+//     enabled for all RSPs in single tuner mode" (six lines, repeated in the test as a stub of that check)
+//     and "In RSPduo master/slave mode, down-conversion is always enabled"; section 3.19: master/slave sample
+//     rate "between 6MHz and 8MHz"; the tuner-parameter comment: default ifType IF_Zero (master) or
+//     IF_0_450 (slave).
+// WHAT IS BUILT FROM THEM (documentedLowIfRows / checkDuoRate below): single tuner = zero IF at 2 - 10.66 MHz
+// with any of the eight bandwidths, or the specification's low-IF combinations; dual tuner AND master/slave =
+// low IF only, ADC rate 6 MHz or 8 MHz, bandwidth <= 1.536 MHz, each row ALSO one of the specification's
+// low-IF combinations (6 MHz with IF 1.620 MHz and bandwidth 0.2 .. 1.536; 8 MHz with IF 2.048 MHz and
+// bandwidth 1.536): the INTERSECTION of the two documents, so a row is refused unless both agree.
+// WHAT NO DOCUMENT OPENED SAYS, so it is refused, not guessed:
+//   * the decimation factors: the specification shows `decimationFactor` as a byte and the stage as "disabled
+//     by default" and lists no values. In DUAL-TUNER and MASTER/SLAVE mode only factor 1 (no decimation) is
+//     therefore accepted. In SINGLE-tuner mode factors 1, 2, 4, 8, 16, 32 are accepted because the shipping
+//     driver already uses them (sdrplay_source.cpp, two RSP2 field logs of 0.99.44), not because a document
+//     lists them.
+//   * the master/slave default IF (the specification's comment says zero IF for the master, which the
+//     Introduction's "both tuners in low IF" contradicts): the table follows the Introduction.
+//   * whether the two tuners are coherent (the product page says "Not stated"): nothing here claims it.
+//   * the V3 revision of the Introduction, and whether its pages 4 and 5 differ from V2.2's.
+// DualTunerRateTable itself still ships EMPTY (known() false) as before; documentedDualTunerTable() returns it
+// filled from the rows above.
 //
 // UNPROVEN ON A REAL RSPduo. The tests use hand-built DeviceT records.
 //
@@ -124,5 +157,27 @@ private:
     std::vector<DualTunerRate> allowed_;
     bool known_ = false;
 };
+
+// --- the documented rate rules of the three modes ----------------------------------------------
+
+enum class DuoMode { SingleTuner, DualTuner, MasterSlave };
+const char* duoModeName(DuoMode m);
+
+// The enumerated low-IF combinations of a mode, decimation 1 (see the header comment for where each comes
+// from). Single tuner's zero-IF side is a range, not rows: see checkDuoRate.
+std::vector<DualTunerRate> documentedLowIfRows(DuoMode mode);
+
+// The whole rule for one request: decimation, then (single tuner, zero IF) the 2 - 10.66 MHz range with a
+// defined bandwidth, or one of the documented low-IF rows. `tableKnown` is always true.
+DualTunerRateCheck checkDuoRate(DuoMode mode, const DualTunerRate& want);
+
+// Output rates (fs / decimation) the low-IF rows allow for a mode, ascending.
+std::vector<double> documentedLowIfOutputRatesHz(DuoMode mode);
+
+// The dual-tuner table filled from the documents (rows of documentedLowIfRows(DualTuner)).
+DualTunerRateTable documentedDualTunerTable();
+
+constexpr double kSingleTunerMinFsHz = 2000000.0;
+constexpr double kSingleTunerMaxFsHz = 10660000.0;
 
 }  // namespace cascade::source

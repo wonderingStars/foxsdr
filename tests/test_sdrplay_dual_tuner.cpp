@@ -1,7 +1,9 @@
 // test_sdrplay_dual_tuner.cpp - the source-level RSPduo dual-tuner decisions (R9) over an injected device
 // list of hand-built sdrplay_abi::DeviceT records. No SDRplay API is loaded, no service is touched.
-// UNPROVEN on a real RSPduo. The rate table the tests install is INVENTED by the test: the specification
-// does not give the dual-tuner table (see src/source/sdrplay_dual_tuner.hpp).
+// UNPROVEN on a real RSPduo. testRateTable installs a table INVENTED by the test to prove the checking logic;
+// testDocumentedRates (follow-up lane) proves the rate rules built from SDRplay's documents (header comment of
+// src/source/sdrplay_dual_tuner.hpp) against a STUB of the API's low-IF check written literally from the
+// specification's section 3.15, and an independently written expectation over a grid of settings.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cmath>
@@ -163,6 +165,158 @@ void testRateTable() {
     CHECK(t.known() && !t.check(DualTunerRate{}).ok);  // a known, empty table allows nothing and says so differently
 }
 
+// A stub of what sdrplay_api_Init checks, from the specification, section 3.15: "Conditions for LIF
+// down-conversion to be enabled for all RSPs in single tuner mode" (the six lines, bandwidth and IF as the
+// enumerations' numbers: BW_0_300 = 300, IF_0_450 = 450 ...).
+bool specLifDownConversion(double fs, int bw, int ifk) {
+    return (fs == 8192000 && bw == 1536 && ifk == 2048) || (fs == 8000000 && bw == 1536 && ifk == 2048) ||
+           (fs == 8000000 && bw == 5000 && ifk == 2048) || (fs == 2000000 && bw <= 300 && ifk == 450) ||
+           (fs == 2000000 && bw == 600 && ifk == 450) || (fs == 6000000 && bw <= 1536 && ifk == 1620);
+}
+
+bool bwDefined(int bw) { return bw == 200 || bw == 300 || bw == 600 || bw == 1536 || bw == 5000 || bw == 6000 || bw == 7000 || bw == 8000; }
+
+// The expectation, written again from the documents (not from the code): single tuner = zero IF 2 - 10.66 MHz
+// with a defined bandwidth, or a low-IF row of the specification; dual tuner and master/slave = both tuners in
+// low IF at 6 or 8 MHz, bandwidth <= 1.536 MHz, and a combination the specification lists; decimation: 1 only,
+// except single tuner where 1, 2, 4, 8, 16, 32 are accepted (the shipping driver's).
+bool expectedOk(DuoMode m, double fs, int bw, int ifk, unsigned dec) {
+    if (!(fs > 0.0) || dec == 0) { return false; }
+    if (m == DuoMode::SingleTuner) {
+        if (!(dec == 1 || dec == 2 || dec == 4 || dec == 8 || dec == 16 || dec == 32)) { return false; }
+        if (ifk == 0) { return bwDefined(bw) && fs >= 2000000.0 && fs <= 10660000.0; }
+        return bwDefined(bw) && specLifDownConversion(fs, bw, ifk);
+    }
+    if (dec != 1) { return false; }
+    return (fs == 6000000 || fs == 8000000) && bwDefined(bw) && bw <= 1536 && specLifDownConversion(fs, bw, ifk);
+}
+
+// The code allows 1 Hz of slack on fs; the expectation is exact, so a value within 1 Hz of a whole kHz is
+// snapped to it before the comparison.
+double snapFs(double fs) {
+    const double k = std::round(fs / 1000.0) * 1000.0;
+    return std::fabs(fs - k) < 1.0 ? k : fs;
+}
+
+void testDocumentedRates() {
+    const DuoMode modes[3] = {DuoMode::SingleTuner, DuoMode::DualTuner, DuoMode::MasterSlave};
+    CHECK(std::string(duoModeName(DuoMode::SingleTuner)) == "single tuner" && std::string(duoModeName(DuoMode::DualTuner)) == "dual tuner" &&
+          std::string(duoModeName(DuoMode::MasterSlave)) == "master/slave");
+    // every enumerated row passes the stub of the API's check, in every mode
+    for (const DuoMode m : modes) {
+        const auto rows = documentedLowIfRows(m);
+        CHECK(!rows.empty());
+        for (const DualTunerRate& r : rows) {
+            CHECK(specLifDownConversion(r.fsHz, static_cast<int>(r.bw), static_cast<int>(r.ifType)) && r.decimation == 1);
+            CHECK(checkDuoRate(m, r).ok);
+        }
+    }
+    CHECK(documentedLowIfRows(DuoMode::DualTuner).size() == 5 && documentedLowIfRows(DuoMode::SingleTuner).size() == 10);
+    {  // dual tuner and master/slave have the same rows; each is 6 or 8 MHz, <= 1.536 MHz
+        const auto d = documentedLowIfRows(DuoMode::DualTuner), ms = documentedLowIfRows(DuoMode::MasterSlave);
+        CHECK(d.size() == ms.size());
+        for (std::size_t i = 0; i < d.size() && i < ms.size(); ++i) {
+            CHECK(d[i].fsHz == ms[i].fsHz && d[i].bw == ms[i].bw && d[i].ifType == ms[i].ifType);
+            CHECK((d[i].fsHz == 6000000.0 || d[i].fsHz == 8000000.0) && static_cast<int>(d[i].bw) <= 1536);
+        }
+    }
+    {
+        const auto o = documentedLowIfOutputRatesHz(DuoMode::DualTuner);
+        CHECK(o.size() == 2 && o[0] == 6000000.0 && o[1] == 8000000.0);
+        const auto s = documentedLowIfOutputRatesHz(DuoMode::SingleTuner);
+        CHECK(s.size() == 4 && s[0] == 2000000.0 && s[1] == 6000000.0 && s[2] == 8000000.0 && s[3] == 8192000.0);
+    }
+    // the grid: every combination, every mode, against the independent expectation
+    const double fss[] = {1.0e6, 2.0e6, 2.0e6 + 0.4, 3.0e6, 6.0e6, 6.0e6 + 0.4, 6.0e6 + 2.0, 8.0e6, 8.192e6, 9.0e6, 10.66e6, 10.7e6, 12.0e6};
+    const int bws[] = {0, 200, 300, 600, 1536, 5000, 6000, 7000, 8000, 1234};
+    const int ifs[] = {-1, 0, 450, 1620, 2048};
+    const unsigned decs[] = {0, 1, 2, 3, 4, 16, 32, 64};
+    int accepted = 0, total = 0;
+    for (const DuoMode m : modes) {
+        for (const double fs : fss) {
+            for (const int bw : bws) {
+                for (const int ifk : ifs) {
+                    for (const unsigned dec : decs) {
+                        DualTunerRate w;
+                        w.fsHz = fs;
+                        w.bw = static_cast<abi::BwMHzT>(bw);
+                        w.ifType = static_cast<abi::IfKHzT>(ifk);
+                        w.decimation = dec;
+                        const DualTunerRateCheck c = checkDuoRate(m, w);
+                        const bool want = expectedOk(m, snapFs(fs), bw, ifk, dec);
+                        ++total;
+                        if (c.ok) { ++accepted; }
+                        if (c.ok != want) {
+                            std::fprintf(stderr, "mismatch mode=%s fs=%.1f bw=%d if=%d dec=%u code=%d expected=%d", duoModeName(m), fs, bw, ifk, dec, c.ok ? 1 : 0, want ? 1 : 0);
+                            std::fputc(10, stderr);
+                        }
+                        CHECK(c.ok == want);
+                        CHECK(c.ok == c.sentence.empty() && c.tableKnown);
+                    }
+                }
+            }
+        }
+    }
+    CHECK(total == 3 * 13 * 10 * 5 * 8 && accepted > 100);
+    {  // spot checks of the refusals by name
+        DualTunerRate w{6000000.0, abi::BW_1_536, abi::IF_1_620, 1};
+        CHECK(checkDuoRate(DuoMode::DualTuner, w).ok && checkDuoRate(DuoMode::MasterSlave, w).ok && checkDuoRate(DuoMode::SingleTuner, w).ok);
+        w.decimation = 2;
+        const DualTunerRateCheck c = checkDuoRate(DuoMode::DualTuner, w);
+        CHECK(!c.ok && c.sentence.find("decimation") != std::string::npos && c.sentence.find("dual tuner") != std::string::npos);
+        CHECK(checkDuoRate(DuoMode::SingleTuner, w).ok);  // the shipping driver's factor 2
+        w.decimation = 3;
+        CHECK(!checkDuoRate(DuoMode::SingleTuner, w).ok);
+        DualTunerRate zif{6000000.0, abi::BW_5_000, abi::IF_Zero, 1};
+        CHECK(checkDuoRate(DuoMode::SingleTuner, zif).ok);  // zero IF at 6 MHz, 5 MHz wide: single tuner only
+        CHECK(!checkDuoRate(DuoMode::DualTuner, zif).ok && !checkDuoRate(DuoMode::MasterSlave, zif).ok);
+        DualTunerRate wide{8000000.0, abi::BW_5_000, abi::IF_2_048, 1};
+        CHECK(checkDuoRate(DuoMode::SingleTuner, wide).ok && !checkDuoRate(DuoMode::DualTuner, wide).ok);  // 5 MHz wide: not in dual
+        CHECK(!checkDuoRate(DuoMode::DualTuner, DualTunerRate{2000000.0, abi::BW_0_600, abi::IF_0_450, 1}).ok);  // 2 MHz: not a dual rate
+        CHECK(!checkDuoRate(DuoMode::SingleTuner, DualTunerRate{std::nan(""), abi::BW_0_600, abi::IF_Zero, 1}).ok);
+        CHECK(!checkDuoRate(DuoMode::SingleTuner, DualTunerRate{-5.0, abi::BW_0_600, abi::IF_Zero, 1}).ok);
+        CHECK(!checkDuoRate(DuoMode::DualTuner, DualTunerRate{6000000.0, abi::BW_1_536, abi::IF_1_620, 0}).ok);
+    }
+    // the dual-tuner table filled from the documents
+    {
+        const DualTunerRateTable t = documentedDualTunerTable();
+        CHECK(t.known() && t.allowed().size() == 5);
+        CHECK(!DualTunerRateTable().known());  // the bare table is still empty
+        for (const DualTunerRate& r : t.allowed()) { CHECK(t.check(r).ok); }
+        const auto o = t.outputRatesHz();
+        CHECK(o.size() == 2 && o[0] == 6000000.0 && o[1] == 8000000.0);
+        DualTunerRate no{6000000.0, abi::BW_1_536, abi::IF_2_048, 1};
+        CHECK(!t.check(no).ok);
+    }
+    // the whole chain with stubs: device list -> assess -> prepare -> API init check for each documented row
+    {
+        FakeList list;
+        list.devices.push_back(dev("1234567890", abi::kRspDuo, kAll, 3));
+        std::vector<DualTunerOffer> offers;
+        std::string err;
+        CHECK(enumerateDualTuner(list, offers, err) && offers.size() == 1 && offers[0].status == DualTunerStatus::Available);
+        abi::DeviceT sel{};
+        CHECK(prepareDualTunerSelect(offers[0], sel) && sel.rspDuoMode == abi::RspDuoMode_Dual_Tuner && sel.tuner == abi::Tuner_Both);
+        for (const DualTunerRate& r : documentedLowIfRows(DuoMode::DualTuner)) {
+            // the stub of sdrplay_api_Init for a dual-tuner selection: the mode was prepared and the LIF check passes
+            const bool initOk = sel.rspDuoMode == abi::RspDuoMode_Dual_Tuner && sel.tuner == abi::Tuner_Both &&
+                                specLifDownConversion(r.fsHz, static_cast<int>(r.bw), static_cast<int>(r.ifType));
+            CHECK(initOk && checkDuoRate(DuoMode::DualTuner, r).ok);
+        }
+    }
+    // random settings: the rule and the expectation agree
+    srctest::Rng rng(0x5EEDu);
+    for (int i = 0; i < 20000; ++i) {
+        const DuoMode m = modes[rng.next() % 3];
+        const double fs = (rng.next() % 3 == 0) ? static_cast<double>(rng.next() % 12000000) : fss[rng.next() % 13];
+        const int bw = bws[rng.next() % 10];
+        const int ifk = ifs[rng.next() % 5];
+        const unsigned dec = rng.next() % 70;
+        DualTunerRate w{fs, static_cast<abi::BwMHzT>(bw), static_cast<abi::IfKHzT>(ifk), dec};
+        CHECK(checkDuoRate(m, w).ok == expectedOk(m, snapFs(fs), bw, ifk, dec));
+    }
+}
+
 void testFuzz() {
     srctest::Rng rng(0xD00D5u);
     int available = 0;
@@ -196,6 +350,7 @@ int main() {
     testEnumerate();
     testPrepare();
     testRateTable();
+    testDocumentedRates();
     testFuzz();
     return testSummary("test_sdrplay_dual_tuner");
 }
