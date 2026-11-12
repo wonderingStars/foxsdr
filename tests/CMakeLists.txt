@@ -1794,3 +1794,20 @@ if(WIN32)
         endif()
     endforeach()
 endif()
+
+# radio-bridges begin ---------------------------------------------------------------------------------------------------------------------------
+# A stand-in ftd2xx.dll (written from FTDI's published D2XX programmer's guide) for test_sdriq_d2xx, beside the other stand-in vendor libraries.
+if(WIN32)
+    set(_rb_dir "${CMAKE_CURRENT_BINARY_DIR}/fixture_osslibs")
+    add_library(rb_ftd2xx_standin MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ftd2xx_standin.cpp")
+    target_include_directories(rb_ftd2xx_standin PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    set_target_properties(rb_ftd2xx_standin PROPERTIES PREFIX "" OUTPUT_NAME "ftd2xx"
+        LIBRARY_OUTPUT_DIRECTORY "${_rb_dir}/$<CONFIG>" RUNTIME_OUTPUT_DIRECTORY "${_rb_dir}/$<CONFIG>")
+    foreach(_rb_t test_sdriq_d2xx)
+        if(TARGET ${_rb_t})
+            target_compile_definitions(${_rb_t} PRIVATE EOL_SRC_DIR="${CMAKE_SOURCE_DIR}")
+            add_dependencies(${_rb_t} rb_ftd2xx_standin eol_partial_standin)
+        endif()
+    endforeach()
+endif()
+# radio-bridges end -----------------------------------------------------------------------------------------------------------------------------
