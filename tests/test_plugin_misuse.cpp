@@ -156,8 +156,9 @@ void testFloods(const LoadedPlugin& lp, const LoadedPlugin& neighbour) {
     // commands: 16, then LIMIT
     CHECK(doOp(lp, "command-flood", 40) == 40 - static_cast<int>(CASCADE_MAX_COMMANDS_PER_PLUGIN));
     CHECK(rig.core->commands(rig.key).size() == CASCADE_MAX_COMMANDS_PER_PLUGIN);   // the store stayed at its bound
-    // markers: 64, then LIMIT
-    CHECK(doOp(lp, "marker-flood", 100) == 100 - static_cast<int>(CASCADE_MAX_MARKERS_PER_PLUGIN));
+    // markers: the quota (256 from 0.99.109, it was 64), then LIMIT: the flood is larger than the quota, whatever it is
+    constexpr int kMarkerFlood = static_cast<int>(CASCADE_MAX_MARKERS_PER_PLUGIN) + 36;
+    CHECK(doOp(lp, "marker-flood", kMarkerFlood) == kMarkerFlood - static_cast<int>(CASCADE_MAX_MARKERS_PER_PLUGIN));
     // the log ring: 256 between frames, then BUSY
     CHECK(doOp(lp, "log-flood", 400) == 400 - static_cast<int>(PluginApiCore::kLogQueue));
     {
@@ -173,7 +174,7 @@ void testFloods(const LoadedPlugin& lp, const LoadedPlugin& neighbour) {
         CHECK(controls.size() == PluginApiCore::kControlQueue);
     }
     const std::uint64_t flooded = (100 - CASCADE_MAX_SETTINGS_PER_PLUGIN) + (40 - CASCADE_MAX_COMMANDS_PER_PLUGIN) +
-                                  (100 - CASCADE_MAX_MARKERS_PER_PLUGIN) + (400 - PluginApiCore::kLogQueue) +
+                                  (kMarkerFlood - CASCADE_MAX_MARKERS_PER_PLUGIN) + (400 - PluginApiCore::kLogQueue) +
                                   (300 - PluginApiCore::kControlQueue);
     CHECK(misuse("hp-u", Misuse::Flood) == flooded);
     // the neighbour is untouched, and is still served in full
