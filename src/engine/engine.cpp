@@ -6532,7 +6532,28 @@ void Engine::tuneAbsoluteHz(double absHz, bool isPluginPreset) {
     if (scopedSlot() == 0u && rx().pipeline_.running() && !scanner_.active() && !isPluginPreset) { audioOutputTunePending_ = true; }
 }
 
+// The tuning commands the frequency lock refuses (the same set as the window's own lock, slint/gaps_logic.cpp isTuningCommand): the ones that move a radio's frequency.
+bool Engine::isTuningCommandOfLock(const FoxCommand& c) {
+    switch (c.op) {
+        case FOXAPI_OP_SET_CENTRE:
+        case FOXAPI_OP_SET_FREQUENCY:
+        case FOXAPI_OP_SET_VFO_OFFSET:
+        case FOXAPI_OP_STEP_TUNE:
+        case FOXAPI_OP_BOOKMARK_TUNE:
+        case FOXAPI_OP_PLUGIN_PRESET:
+        case FOXAPP_OP_VFO_TO_ABSOLUTE:
+        case FOXAPP_OP_SET_VFO_OFFSET_FREE:
+        case FOXAPP_OP_USER_PRESET_APPLY: return true;
+        case FOXAPP_OP_SCANNER_LIST: return c.ival[0] == 2;   // 2 = start a list scan (0 and 1 only choose the mode)
+        case FOXAPP_OP_AIRBAND: return c.ival[0] == 1 || c.ival[0] == 2 || c.ival[0] == 6;   // listen, next block, tune one
+        case FOXAPI_OP_SCANNER_RUN: return c.ival[0] != 0;
+        default: return false;
+    }
+}
+
 void Engine::retuneSourceHz(double centerHz, bool isPluginPreset) {
+    // THE LOCK'S CHOKE POINT: the scanner's next step, a plugin's request_tune and every command that gets past the op-level refusal reach the source here.
+    if (rx().tuneLocked_) { return; }
     // Hardware tunes are PACED (see the header declaration): a burst becomes
     // one device call per interval with the latest value. Everything without
     // a USB control path underneath applies immediately.
@@ -7221,6 +7242,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
     RadioWork radioWork(*this, isRadioScopedOp(c.op) ? static_cast<std::size_t>(pick.radio) - 1u : scopedSlot());
     const bool on = c.ival[0] != 0;
     const std::string text = cmd::textOf(c, longText);
+    // THE FREQUENCY LOCK (FOXAPP_OP_RADIO_LOCK): a tuning command aimed at a locked radio is refused whoever sent it - the window, a plugin, the web page, CAT.
+    if (rx().tuneLocked_ && isTuningCommandOfLock(c)) { return refuse(FOXAPI_DENIED, "this radio's frequency is locked"); }
 
     switch (c.op) {
         // --- the radios (multi-radio stage 4; engine_radios.cpp) ---------------
@@ -7255,6 +7278,12 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                                                 : "a control request (the web remote or a plugin)");
             }
             res.applied[0] = rx().pipeline_.running() ? 1.0 : 0.0;
+            return res;
+        case FOXAPP_OP_RADIO_LOCK:
+            if (rx().tuneLocked_ == on) { return refuse(FOXAPI_NO_CHANGE, on ? "the frequency is locked already" : "the frequency is not locked"); }
+            rx().tuneLocked_ = on;
+            ++radioLockVersion_;
+            res.applied[0] = on ? 1.0 : 0.0;
             return res;
         case FOXAPI_OP_SET_CENTRE:
             // The GUI's own absolute-tune path, so the RDS/stereo decoders are

@@ -144,6 +144,13 @@
 #define FOXAPP_OP_MACRO_RUN              0x8614u /* text: the macro's name */
 #define FOXAPP_OP_MACRO_STOP             0x8615u
 #define FOXAPP_OP_MACRO_RELOAD           0x8616u
+//   RADIO_LOCK (SETTINGS; engine wiring W2, slint-gaps item 3's engine half, docs/api-0.3-additions.md 9.35): ival[0] 1 = lock the selected radio's (target) FREQUENCY, 0 = unlock. While a radio is
+//   locked the engine refuses, with FOXAPI_DENIED, every tuning command aimed at it - SET_CENTRE, SET_FREQUENCY, SET_VFO_OFFSET, STEP_TUNE, BOOKMARK_TUNE, PLUGIN_PRESET, VFO_TO_ABSOLUTE,
+//   SET_VFO_OFFSET_FREE, USER_PRESET_APPLY, a list scan start, an air-band listen / next block / tune one, a SCANNER_RUN that starts - and every other way a retune reaches the source (a
+//   running scan's next step, a plugin's request_tune) is a no-op: the lock is the ENGINE's, so a plugin, the web page and CAT cannot move a locked radio. Mode, bandwidth, volume, squelch,
+//   stop, start and the scanner's stop are not tuning and still work; DECODER_START applies a preset on the engine's own side and is not in the set. NO_CHANGE when it is already so.
+//   Not saved (a restart unlocks). fact.radio.<n>.locked is "1" or "0".
+#define FOXAPP_OP_RADIO_LOCK             0x8617u /* ival[0]: 1 lock / 0 unlock. Addresses one radio (target) */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */
 #define FOXAPP_OP_USER_PRESET_FORGET_AT  0x8702u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

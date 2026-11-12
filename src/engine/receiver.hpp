@@ -275,6 +275,7 @@ struct Receiver {
     bool deviceAdcSwitchesPresent_ = false;  // the RX888's pair, together
     bool deviceDither_ = false;
     bool deviceRandomiser_ = false;
+    bool tuneLocked_ = false;   // the frequency lock (FOXAPP_OP_RADIO_LOCK, engine wiring W2): every way a retune reaches this radio is refused or a no-op
     bool deviceOffsetTuningPresent_ = false;  // an rtl_tcp server's E4000 (R12), where its header names one
     bool deviceOffsetTuning_ = false;
     // The ACTIVE source's kind as the config store spells it. Tracked at each

@@ -2482,6 +2482,12 @@ void macroOps(AppWindow& a) {
     CHECK(refused(A::apply(a, text(FOXAPP_OP_MACRO_RUN, "")), FOXAPI_BAD_ARGUMENT));
     covering(FOXAPP_OP_MACRO_STOP);
     CHECK(refused(A::apply(a, text(FOXAPP_OP_MACRO_STOP, "")), FOXAPI_NO_CHANGE));
+    // THE FREQUENCY LOCK (FOXAPP_OP_RADIO_LOCK): lock, a tune is refused, a repeat is NO_CHANGE, unlock. (The whole set of refused commands, the per-radio rule and the REMOTE denial are tests/test_engine_api_lock.cpp's.)
+    covering(FOXAPP_OP_RADIO_LOCK);
+    CHECK(ok(A::apply(a, ints(FOXAPP_OP_RADIO_LOCK, 1))));
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_RADIO_LOCK, 1)), FOXAPI_NO_CHANGE));
+    CHECK(refused(A::apply(a, num(FOXAPI_OP_SET_FREQUENCY, 100.0e6)), FOXAPI_DENIED));
+    CHECK(ok(A::apply(a, ints(FOXAPP_OP_RADIO_LOCK, 0))));
 }
 
 void airbandOps(AppWindow& a) {

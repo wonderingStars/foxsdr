@@ -2601,6 +2601,18 @@ At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTT
 * Facts (LOCAL sessions): `fact.macro.names` (newline separated), `fact.macro.running`, `fact.macro.last` (`running`, `finished`, `stopped`, or `stopped: ...` with the words),
   `fact.macro.error`, `fact.macro.steps` (steps applied in the last run).
 
+### 9.35 The frequency lock (engine wiring lane 2; docs/multi-radio-records/slint-gaps.md item 3, the engine half)
+
+* Op `FOXAPP_OP_RADIO_LOCK` 0x8617 (receiver-scoped by `target`, grant SETTINGS, the application's own: a REMOTE session is refused it): `ival[0]` 1 locks the radio's FREQUENCY, 0 unlocks. `NO_CHANGE` when it
+  is already so; `NO_DEVICE` for a radio the engine does not have. Not saved: a restart unlocks (the window keeps its own lock lamp and sends the op with it).
+* While a radio is locked the engine refuses, with `FOXAPI_DENIED` ("this radio's frequency is locked"), every tuning command aimed at it, from any session: `SET_CENTRE`, `SET_FREQUENCY`,
+  `SET_VFO_OFFSET`, `STEP_TUNE`, `BOOKMARK_TUNE`, `PLUGIN_PRESET`, `VFO_TO_ABSOLUTE`, `SET_VFO_OFFSET_FREE`, `USER_PRESET_APPLY`, a list scan start (`SCANNER_LIST` ival 2), an air-band listen / next
+  block / tune one, a `SCANNER_RUN` that starts - the same set as the window's own lock. Every other way a retune reaches the source goes through `Engine::retuneSourceHz`, which is a no-op on a
+  locked radio: a running scan's next step, a plugin's legacy `request_tune`. So a plugin, the web page and CAT cannot move a locked radio.
+* Not tuning, so still allowed on a locked radio: mode, bandwidth, volume, squelch, stop and start, the scanner's stop. `DECODER_START` applies a preset on the engine's own side and is not in the set
+  (as for the window's lock: what can still move a locked radio).
+* `fact.radio.<n>.locked` is `"1"` or `"0"` for every radio that exists; the fact fingerprint moves with it.
+
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

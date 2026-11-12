@@ -3182,6 +3182,9 @@ private:
     void pumpSchedule();
     // MACROS (engine_macros.cpp; docs/api-0.3-additions.md 9.34): the model's player, pumped on the Back part of every control pass.
     void pumpMacros();
+    // THE FREQUENCY LOCK (FOXAPP_OP_RADIO_LOCK, engine wiring W2; Receiver::tuneLocked_): which commands it refuses, and the fingerprint counter of its facts.
+    static bool isTuningCommandOfLock(const FoxCommand& c);
+    std::uint64_t radioLockVersion_ = 1;
     void loadMacros();
     std::int32_t applyMacroOp(const FoxCommand& c, const std::string& text, std::string& why);
     void macroFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;

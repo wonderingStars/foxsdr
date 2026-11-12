@@ -204,6 +204,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(smeterVersion_);   // the S-meter calibration's tables and its measurement (engine_smeter.cpp)
     f.value(scheduleVersion_);   // the timed recordings: any change of the list, a state or a note (engine_schedule.cpp)
     f.value(macroVersion_);      // the macros: the file, a run, a note (engine_macros.cpp)
+    f.value(radioLockVersion_);  // the frequency lock of every radio (FOXAPP_OP_RADIO_LOCK)
     f.text(markerError_);
     // The DSP chain's input rate (API 0.3 8.5, fact.input.rateHz): the source's rate
     // unless the chain refused a change of it, and then the one the display is
@@ -1374,6 +1375,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         if (!receiverLive(n)) { continue; }
         const std::string pre = "radio." + std::to_string(n) + ".";
         fact(pre + "state", radioStateWord(n));
+        fact(pre + "locked", receivers_[n - 1u]->tuneLocked_ ? "1" : "0");
         {
             SlotScope scope(this, static_cast<std::size_t>(n) - 1u);
             fact(pre + "device", n == 1u ? patchReceiverRadioKey()
