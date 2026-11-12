@@ -14,6 +14,8 @@
 #define CASCADE_ENGINE_WIRE_A_HPP
 
 #include <array>
+#include <limits>
+#include <utility>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -27,6 +29,9 @@
 #include "core/bookmark_notes.hpp"
 #include "core/channel_plans.hpp"
 #include "core/favourite_state.hpp"
+#include "core/scan_plan.hpp"
+#include "core/scan_trigger.hpp"
+#include "core/scanner_params.hpp"
 #include "core/freq_history.hpp"
 #include "foxsdr_api.h"
 
@@ -117,6 +122,43 @@ private:
     double favouritesDueS_ = 0.0;
     std::string favouriteRecalled_, favouritesError_;
 
+    // ---- the scanner (wire_a_scan.cpp) ----
+    Result scanOp(const FoxCommand& c, const std::string& text, Result res);
+    Result scanPlanOp(const FoxCommand& c, const std::string& text, Result res);
+    Result scanExtrasOp(const FoxCommand& c, const std::string& text, Result res);
+    void scanPass();
+    void scanFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    void scanLoadOnce();
+    void scanSave();
+    bool scanLoaded_ = false;
+    bool scanDirty_ = false;
+    double scanDueS_ = 0.0;
+    cascade::core::tuning::ScanPlan plan_;
+    cascade::core::tuning::ScanTrigger trigger_;
+    cascade::core::tuning::ScanCursor cursor_;
+    bool planOn_ = false;           // the running (or last started) scan is the plan's
+    bool triggerOn_ = false;
+    double rotateToHz_ = 0.0;       // SCAN_BACK: the next configure starts the list at this point
+    std::vector<double> priorityHz_, lockedHz_;
+    double priorityIntervalMs_ = 0.0;
+    bool muteWhileScanning_ = false;
+    std::vector<std::pair<double, double>> thresholds_;   // (Hz, dB)
+    std::string scanError_;
+
+public:
+    // The engine's hooks into the scanner (each a bracketed line in engine.cpp / engine_airband.cpp):
+    // the parameters the scanner is configured with, adjusted for the plan and the extras;
+    void adjustScannerParams(cascade::core::ScannerParams& p);
+    // whether the signal counts as present: the squelch's answer, or the trigger's when it is on;
+    bool scanOpen(bool squelchOpen, long long slot, double levelDb);
+    // the scanner's own retune (a plan scan tunes the mode and bandwidth of the range it is in);
+    void scanTune(double hz);
+    // another kind of scan was started: plan mode ends;
+    void planOff() { planOn_ = false; }
+    // the trigger's floors belong to the scan that was configured: a new configuration starts them again.
+    void scanConfigured() { trigger_.reset(); }
+
+private:
     // ---- shared helpers (wire_a.cpp) ----
     // Applies an engine op to the selected radio as a sub-command (the clamping and the bookkeeping of the op itself); the caller is inside the radio's RadioWork.
     Result subCommand(std::uint32_t op, double n0, long long i0, long long i1 = 0, double n1 = 0.0);

@@ -6297,6 +6297,7 @@ cascade::core::Scanner::Params Engine::scannerParams() const {
     p.listenMs = scanListenMs_;
     // LIST MODE (stub campaign B6): the ticked rows of the frequency list stand in for the range.
     if (scanTicked_) { p.list = tickedScanList(); }
+    WireA::of(const_cast<Engine&>(*this)).adjustScannerParams(p);   // wire-a: the plan's list and the extras
     return p;
 }
 
@@ -6894,9 +6895,12 @@ void Engine::scannerFrame() {
         if (now != scanList_) { configureScanner(); }
     }
 
-    const bool squelchOpen = rx().pipeline_.signalPowerDb() > rx().squelchDb_;
+    const bool squelchOpenRaw = rx().pipeline_.signalPowerDb() > rx().squelchDb_;
+    // wire-a begin: the scan's own trigger (when it is on) replaces the squelch's answer; the level goes to the scanner for per-entry thresholds
+    const bool squelchOpen = WireA::of(*this).scanOpen(squelchOpenRaw, scanner_.index(), rx().pipeline_.signalPowerDb());
+    // wire-a end
     const std::optional<double> retune =
-        scanner_.tick(clockS() * 1000.0, squelchOpen);
+        scanner_.tick(clockS() * 1000.0, squelchOpen, rx().pipeline_.signalPowerDb());
     if (retune.has_value() && scanTicked_) {
         // THE ROW ITSELF, so its mode and bandwidth come with it - an airband row is AM at 10 kHz, a broadcast row WFM.
         cascade::core::Bookmark row;
@@ -6916,7 +6920,7 @@ void Engine::scannerFrame() {
         scannerExpectedAbsHz_ = currentAbsoluteHz();
         scannerHasExpected_ = true;
     } else if (retune.has_value()) {
-        tuneAbsoluteHz(*retune);
+        WireA::of(*this).scanTune(*retune);   // wire-a: tuneAbsoluteHz, plus the mode and bandwidth of a plan range
         // Baseline from READBACK, not the request: a device that coerces
         // the tune must not read as a user action next frame.
         scannerExpectedAbsHz_ = currentAbsoluteHz();
@@ -8513,6 +8517,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 // A RANGE SCAN leaves list mode (the range travelled with the command: it is what was asked), and one radio takes one plan -
                 // the Airband monitor stands down (stub campaign B6).
                 scanTicked_ = false;
+                WireA::of(*this).planOff();   // wire-a: a range scan ends plan mode
                 if (airbandListening_ || airbandStartPending_) { airbandStop(std::string()); }
                 // ONE SCANNER, BOUND TO THE RADIO IT WAS STARTED ON: started on another radio, it moves there (it stops first, so it does not tune the
                 // radio it left).

@@ -49,12 +49,22 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
         case FOXAPP_OP_PACK_EXPORT:
         case FOXAPP_OP_PACK_IMPORT:
             return packOp(c, text, res);
+        case FOXAPP_OP_SCAN_PLAN:
+        case FOXAPP_OP_SCAN_BACK:
+        case FOXAPP_OP_SCAN_SAVE_HIT:
+        case FOXAPP_OP_SCAN_TRIGGER:
+        case FOXAPP_OP_SCANNER_EXTRAS:
+            return scanOp(c, text, res);
         default:
             return refused(res, FOXAPI_UNSUPPORTED, "this operation is not in this build");
     }
 }
 
 bool WireA::drain(std::chrono::milliseconds bound) {
+    if (scanDirty_) {
+        scanDirty_ = false;
+        scanSave();
+    }
     notesDueS_ = 0.0;   // anything dirty goes out now
     favouritesDueS_ = 0.0;
     bookmarksPass();
@@ -69,6 +79,7 @@ bool WireA::drain(std::chrono::milliseconds bound) {
 }
 
 void WireA::pass() {
+    scanPass();
     bookmarksPass();
     historyPass();
     drainSaves();
@@ -80,6 +91,7 @@ void WireA::facts(const std::function<void(const std::string&, const std::string
     tunedFacts(fact);
     filesFacts(fact);
     bookmarkFacts(fact);
+    scanFacts(fact);
 }
 
 void WireA::tunedFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {

@@ -52,6 +52,25 @@
 #define FOXAPP_OP_PACK_EXPORT            0x8809u /* text: JSON {path, name, description} */
 #define FOXAPP_OP_PACK_IMPORT            0x880Au /* text: full path of the pack */
 
+//   THE SCANNER (SETTINGS; core/scan_plan.hpp, scan_trigger.hpp and the screen C extras of core/scanner.hpp). One scanner, bound to the radio it was started on (as SCANNER_RUN does).
+//   SCAN_PLAN: ival[0] 0 = set the plan from the JSON in the text (core/scan_plan.hpp toJson: up to 16 ranges, each with its own step, mode and bandwidth, a direction, the trigger numbers; strict, all or nothing; a
+//   plan whose points would pass 100000 is refused), 1 = start a scan of the plan on the selected radio (target; the plan's points are the scanner's list, each stop tunes the mode and bandwidth of the range it is in;
+//   DENIED on a frequency-locked radio; NO_CHANGE with no plan), 2 = clear the plan (a running plan scan stops). Any other scan start (SCANNER_RUN, a list scan) ends plan mode. fact.scan.plan (the JSON), fact.scan.plan.active.
+//   SCAN_BACK: during a plan scan, step back to the point before the one the scan is on (it wraps), and carry on from there in the plan's direction. NO_CHANGE when no plan scan is running.
+//   SCAN_SAVE_HIT: num[0] = a frequency (0 = the frequency the scanner's radio is on): add it as a bookmark in the group "Scan hits", with the name "Scan <MHz>", the mode and bandwidth of the plan range it lies in; NO_CHANGE
+//   when a bookmark at that frequency in that mode exists already, or there is no plan. applied[0] = the frequency.
+//   SCAN_TRIGGER: the scan's own trigger, apart from the squelch: ival[0] 0 = off (the squelch decides, as always), 1 = on; text (optional) = the trigger JSON (core/scan_trigger.hpp configToJson: fixed level or margin above
+//   a floor that is kept for each scan point, hysteresis, floor rise). BAD_ARGUMENT for a bad config. fact.scan.trigger (the JSON), fact.scan.trigger.on.
+//   SCANNER_EXTRAS: ival[0] 0 = the priority list (text: Hz values separated by ';', at most 64; num[0] = the interval in ms between visits, 0 = never), 1 = lock a frequency out (num[0] Hz, 0 = the one the scan is on;
+//   num[1] ms, 0 = until cleared), 2 = clear the lockouts of 1, 3 = mute while scanning (ival[1] 0/1), 4 = per-entry thresholds (text: lines "<Hz><TAB><dB>", at most 1000; they apply to the entries of a list or plan scan),
+//   5 = the locked-out frequencies kept with the configuration (text: Hz values separated by ';', at most 1000). OUT_OF_RANGE / BAD_ARGUMENT for values that are not frequencies, levels or times. fact.scanner.extras is "1"
+//   (the window shows its "not used yet" note only while it is absent), fact.scan.priority, .priority.interval, .locked, .thresholds, .mute.
+#define FOXAPP_OP_SCAN_PLAN              0x880Bu /* ival[0]: 0 set / 1 start / 2 clear; text: the plan JSON. Addresses one radio (target) */
+#define FOXAPP_OP_SCAN_BACK              0x880Cu
+#define FOXAPP_OP_SCAN_SAVE_HIT          0x880Du /* num[0]: Hz (0 = where the scanner's radio is) */
+#define FOXAPP_OP_SCAN_TRIGGER           0x880Eu /* ival[0]: 0 off / 1 on; text: the trigger JSON (optional) */
+#define FOXAPP_OP_SCANNER_EXTRAS         0x880Fu /* ival[0]: 0 priority / 1 lock out / 2 clear / 3 mute / 4 thresholds / 5 locked list; ival[1], num[0], num[1], text: see above */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -65,7 +84,12 @@
     {FOXAPP_OP_FAVOURITE_RECALL, "APP_FAVOURITE_RECALL", true}, \
     {FOXAPP_OP_FAVOURITE_EDIT, "APP_FAVOURITE_EDIT", true}, \
     {FOXAPP_OP_PACK_EXPORT, "APP_PACK_EXPORT", true}, \
-    {FOXAPP_OP_PACK_IMPORT, "APP_PACK_IMPORT", true},
+    {FOXAPP_OP_PACK_IMPORT, "APP_PACK_IMPORT", true}, \
+    {FOXAPP_OP_SCAN_PLAN, "APP_SCAN_PLAN", true}, \
+    {FOXAPP_OP_SCAN_BACK, "APP_SCAN_BACK", true}, \
+    {FOXAPP_OP_SCAN_SAVE_HIT, "APP_SCAN_SAVE_HIT", true}, \
+    {FOXAPP_OP_SCAN_TRIGGER, "APP_SCAN_TRIGGER", true}, \
+    {FOXAPP_OP_SCANNER_EXTRAS, "APP_SCANNER_EXTRAS", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP
