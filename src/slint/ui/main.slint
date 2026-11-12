@@ -27,7 +27,7 @@ import { MenuItemKind, MenuEntry, Menu } from "menus.slint";
 import { SignalEvents, SelectItem, GainStage, OptionRow, SourceModel, RadioExtrasModel, AudioFiltersModel, SinksModel, TransmitModel, RecorderModel,
          RadioSetupModel, UnboundRow, SetupKey, ImportDialogModel, SourceBody, FrequencyCorrectionBody, RadioExtras, AudioFiltersBody, SinksBody,
          RecorderBody, RadioSetupSheet, ImportDialog } from "signal_bank.slint";
-import { SystemEvents, DisplayModel, LanguageModel, UpdatesModel, GpsRow, SerialPortsModel, KeyRow, KeyGroup, KeyBindingsModel, DiagnosticsModel,
+import { SystemEvents, SpectrumLook, DisplayModel, LanguageModel, UpdatesModel, GpsRow, SerialPortsModel, KeyRow, KeyGroup, KeyBindingsModel, DiagnosticsModel,
          UsageModel, TesterModel, ReportPageModel, DisplayBody, LanguageBody, UpdatesBody, SerialPortsBody, KeyBindingsBody, DiagnosticsBody,
          UsageBody, TesterBody, ReportSheet } from "system_bank.slint";
 import { ToolsEvents, PositionOffers, RadarModel, BookmarkRow, BookmarksModel, ScannerModel, AirbandRow, AirportRow, AirbandModel, MarkerRow,
@@ -37,10 +37,10 @@ import { ExtendEvents, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory,
 import { Checkbox } from "fields.slint";
 import { LaneC, LCQuick, LCShortcut, LCRecording } from "tools_bank.slint";   // screen lane C (docs/multi-radio-records/screen-c.md): its one global and the row structs
 import { Card, Banner, CardTone } from "cards.slint";
-import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode, SpectrumView } from "spectrum.slint";
+import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode, SpectrumView, SpectrumEvents } from "spectrum.slint";
 import { LayoutRow, LayoutsModel, LayoutsBody } from "layouts_ui.slint";
 import { ExportModel, ExportBody } from "export_ui.slint";
-import { AgeTick, WaterfallView } from "waterfall.slint";
+import { AgeTick, WaterfallView, WaterfallLook } from "waterfall.slint";
 import { View3D, Scene3DLabel, SurveyRankRow, SondeLegendRow, Scene3DViewToggle, Wf3DView } from "scene3d_views.slint";
 import { CommandField, CommandPalette, PaletteResult } from "palette.slint";
 import { ScopeEvents, DemodModel, MpxMarkItem, DemodScopeWindow, RadarTargetItem, RadarLabelItem, RadarLineItem, RadarContactItem, RadarOptionItem, RadarScopeModel, RadarScopeView } from "scope_modes.slint";
@@ -50,13 +50,13 @@ import { TxChoice, TransmitPageModel, TransmitEvents } from "transmit_page.slint
 import { AboutSlint } from "std-widgets.slint";
 
 export { Theme, Skin, Workbench, NightWatch, HighContrast, DigitFace, MeterStyle, ChipTone, LampState, MenuItemKind, MenuEntry, CardTone,
-         AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode, AgeTick, PaletteResult, LayoutRow, LayoutsModel, ExportModel,
+         AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode, SpectrumEvents, WaterfallLook, AgeTick, PaletteResult, LayoutRow, LayoutsModel, ExportModel,
          KitEvents, DecodeRow, PluginEntry, RunsOnKey, DecoderBar, PageTab, MapModel, FittedModel, ModuleModel, DetailsModel,
          PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
          InstrumentState, MapTarget, LegendRow, RowKind, RowTone, TableRow,
          SignalEvents, SelectItem, GainStage, OptionRow, SourceModel, RadioExtrasModel, AudioFiltersModel, SinksModel, TransmitModel, RecorderModel,
          RadioSetupModel, UnboundRow, SetupKey, ImportDialogModel,
-         SystemEvents, DisplayModel, LanguageModel, UpdatesModel, GpsRow, SerialPortsModel, KeyRow, KeyGroup, KeyBindingsModel, DiagnosticsModel,
+         SystemEvents, SpectrumLook, DisplayModel, LanguageModel, UpdatesModel, GpsRow, SerialPortsModel, KeyRow, KeyGroup, KeyBindingsModel, DiagnosticsModel,
          UsageModel, TesterModel, ReportPageModel,
          ToolsEvents, PositionOffers, RadarModel, BookmarkRow, BookmarksModel, ScannerModel, AirbandRow, AirportRow, AirbandModel, MarkerRow, MarkersModel,
          ExtendEvents, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory, StoreSite, UpdateRow, StorePluginPage, StoreModel,
@@ -351,7 +351,8 @@ export component MainWindow inherits Window {
 
     // the strip's blocks need about 1750 px at the sheet's sizes (counter 386, eight mode keys 434, three lanes of 120):
     // below that the mode segment folds into one picker key, as the deck scales down in the ImGui window
-    out property <bool> compact-strip: root.width < 1760px;
+    in property <bool> compact-forced: false;          // lane B (S26): the Compact mode of the Layouts menu forces the compact strip and bar whatever the width
+    out property <bool> compact-strip: root.compact-forced || root.width < 1760px;
 
     // the one menu (counter, trace, marker, meter): the host sets menu-entries and opens it here
     public function open-menu(x: length, y: length) { menu.at-x = x; menu.at-y = y; menu.show(); }
@@ -705,8 +706,8 @@ export component MainWindow inherits Window {
                             changed plot-w => { root.one-plot-w = self.plot-w; }
                             trace: root.trace-image; db-ticks: root.db-ticks; freq-ticks: root.freq-ticks; axis-unit: root.axis-unit;
                             caption: root.spectrum-caption; caveat: root.spectrum-caveat;
-                            trace-mode: root.trace-mode == 1 ? TraceMode.peak-hold : root.trace-mode == 2 ? TraceMode.average : root.trace-mode == 3 ? TraceMode.persistence : TraceMode.normal;
-                            trace-mode-label: root.trace-mode == 1 ? @tr("Peak hold") : root.trace-mode == 2 ? @tr("Average") : root.trace-mode == 3 ? @tr("Persistence") : "";
+                            trace-mode: root.trace-mode == 1 ? TraceMode.peak-hold : root.trace-mode == 2 ? TraceMode.average : root.trace-mode == 3 ? TraceMode.persistence : root.trace-mode == 4 ? TraceMode.min-hold : TraceMode.normal;
+                            trace-mode-label: root.trace-mode == 1 ? @tr("Peak hold") : root.trace-mode == 2 ? @tr("Average") : root.trace-mode == 3 ? @tr("Persistence") : root.trace-mode == 4 ? @tr("Min hold") : "";
                             mark-tabs: root.mark-tabs;
                             mark-tab-clicked(i, x, y) => { root.mark-tab-clicked(i, false, x, y); }
                             peak-text: root.peak-text; peak-age: root.peak-age; show-peak: root.show-peak; span-text: root.span-text;

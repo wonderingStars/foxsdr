@@ -30,6 +30,7 @@
 #include "foxsdr_api.h"
 #include "host_logic.hpp"
 #include "signatures.hpp"
+#include "spectrum_extras.hpp"
 
 namespace foxsdr::slinthost {
 
@@ -106,6 +107,7 @@ struct PaneFigures {
     float vfoPos = 0, vfoHalf = 0;
     std::vector<FigureBand> ribbon;
     std::vector<FigureBookmark> bookmarks;
+    std::vector<double> bookmarkHz;             // lane B (S23): the frequency of each bookmark name drawn, in the order of `bookmarks` (a click on the name tunes there)
     std::vector<FigureMark> marks, wfMarks;
     // THE "+N" TABS of the names that fit no row (lane S1, mark_layout.hpp): where each sits, how many names it stands for, the row it is drawn on, and the list its click opens (name, Hz)
     struct MarkTabFig { float pos = 0; int count = 0; int row = 0; std::vector<std::pair<std::string, double>> items; };
@@ -136,6 +138,21 @@ struct RadioView {
     Signatures paneSigs;                        // the same for this radio's row in the workspace's model (workspace_publish.cpp): a second cache, so the two targets never share one
     PlotSize plot;
     PaneFigures fig;
+    // LANE B (docs/multi-radio-records/screen-b.md): what the extras keep per radio
+    foxsdr::slintextras::RowPacer pacer;                       // S10: the waterfall's line rate and the strongest-of-the-frames line
+    double lastRowUtcS = 0;                                    // S8: the system clock when the newest waterfall line was made
+    double lastRowSteadyS = 0;
+    double secondsPerRow = 0;                                  // the line spacing the waterfall has now (history seconds = lines * this)
+    foxsdr::slintextras::ReferenceTrace reference;             // S22
+    foxsdr::slintextras::AbMarkers ab;                         // S21
+    foxsdr::slintextras::FreqTracker tracker;                  // Q3
+    foxsdr::slintextras::SignalHistory history;                // S14 / S15
+    std::vector<foxsdr::slintextras::Peak> peaks;              // S20 (refreshed a few times a second)
+    foxsdr::slintextras::SnrReading snr;                       // S14
+    double channelPowerDb = -200.0;                            // Q2
+    foxsdr::slintextras::TrackReading track;                   // Q3
+    foxsdr::slintextras::AbReading abRead;                     // S21
+    double lastMeasureS = 0;
 
     explicit RadioView(int slotIndex = 0, PictureSize pictures = {}) : slot(slotIndex), wells(pictures) {
         state.structSize = sizeof(state);

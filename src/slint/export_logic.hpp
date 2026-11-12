@@ -98,6 +98,9 @@ struct PictureSpec {
 };
 // The picture with a margin: a caption and the frequency scale above, the time scale at the left. The picture's own pixels are copied unchanged.
 Image renderPicture(const PictureSpec& spec);
+// The same 5 x 7 face drawn into any RGBA picture (lane B: the measurement box and the history graph in the trace picture): `scale` pixels a dot, lowercase drawn as capitals, an unknown character as a gap.
+void drawLabelRgba(std::uint8_t* rgba, std::uint32_t w, std::uint32_t h, int x, int y, const std::string& text, std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a, int scale);
+int labelWidthPx(const std::string& text, int scale);
 constexpr std::uint32_t kMarginLeft = 72, kMarginTop = 54;
 // "0 S", "-2 S", "-1 M" at the lines of the time scale, and the lines' rows (row, text): the rule the picture uses, public so a test can hold it.
 std::vector<std::pair<std::uint32_t, std::string>> timeLabels(std::uint32_t h, double secondsPerRow);
@@ -127,6 +130,8 @@ std::string resolvePath(const std::string& typed, const std::string& baseFolder,
 // file is never overwritten (freePath).
 Outcome savePicture(const std::string& typedPath, const std::string& baseFolder, std::vector<Pixel> picture, PictureSpec spec);
 // The data: format 0 CSV (.csv), 1 FoxSDR spectrum (.fsw). Streamed, so a long table never sits in memory twice.
+// A text file (lane B: the signal history as CSV): the typed path made usable with the extension `ext`, written under `.part` and renamed, an existing file never overwritten.
+Outcome saveText(const std::string& typedPath, const std::string& baseFolder, const std::string& text, const std::string& ext);
 Outcome saveData(const std::string& typedPath, const std::string& baseFolder, Snapshot snapshot, int format, FileFacts facts);
 // The text of the picture's PNG chunk: radio, centre, span, the newest line's UTC time, the display range, seconds a line.
 std::string pictureFacts(const PictureSpec& spec);

@@ -121,7 +121,7 @@ double num(const std::string& s) {
 constexpr int kColA = 10, kColB = 316, kColC = 622, kColD = 928;
 constexpr int kSecRow = 30, kBodyPad = 4, kBodyPadBottom = 12, kBodyX = 30, kBodyW = 254;
 constexpr int kRow = 24, kPitch = 30;          // the artboard's .rw (min-height 24) and the .sbd gap of 6
-constexpr int kW = 1240, kH = 2560;
+constexpr int kW = 1240, kH = 3200;
 
 }  // namespace
 

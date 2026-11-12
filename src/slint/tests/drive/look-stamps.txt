@@ -1,0 +1,17 @@
+#! frames=600 bank=4 sections=4:0
+# look-stamps (lane B, S8): the time stamps down the waterfall. "Age" is the old seconds-ago scale; "Clock time, UTC" and "Clock time, local" put round clock times (HH:MM:SS) at the lines made then, scrolling with the picture.
+10 state running == 1
++30 state wf.ticks >= 2
+state wf.tick1 contains " s"
++1 scroll "Theme" 450
++20 choose "Time stamps" "Clock time, UTC"
++3 state wf.stamp == 1
++20 state wf.tick1 contains ":"
+state wf.tick1frac > 0
++1 shot "look-stamps-utc.png"
++1 choose "Time stamps" "Clock time, local"
++3 state wf.stamp == 2
++20 state wf.tick1 contains ":"
++1 choose "Time stamps" "Age (seconds ago)"
++3 state wf.stamp == 0
++20 state wf.tick1 contains " s"

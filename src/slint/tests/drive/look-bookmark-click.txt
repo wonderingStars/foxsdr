@@ -1,0 +1,12 @@
+#! frames=500 bank=2 sections=2:2
+# look-bookmark-click (lane B, S23): a bookmark's name on the spectrum is a key. A bookmark "Probe" is added at the tuned frequency (100.3 MHz); the receiver is tuned 100 kHz away (still inside the picture), then the click on the
+# name "Probe" on the spectrum tunes back to the bookmark.
+10 state running == 1
++1 type "Bookmark name" "Probe"
++1 click "Add current"
++25 state count.bookmarks == 1
++1 radio tune 1 100400000
++30 state tunedHz == 100400000
+state lb.bookmarks >= 1
++1 click "Probe"
++30 state tunedHz == 100300000

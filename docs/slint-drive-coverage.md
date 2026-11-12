@@ -11,9 +11,9 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2249 | 615 | 96 | 1538 | 0 |
+| 2269 | 635 | 96 | 1538 | 0 |
 
-Of the 1362 rows that are controls (the 887 readout-like rows left out): 615 asserted, 96 driven without a read-back, 651 not drivable.
+Of the 1382 rows that are controls (the 887 readout-like rows left out): 635 asserted, 96 driven without a read-back, 651 not drivable.
 
 NOT DRIVABLE by reason: readout 887, other 220, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
@@ -204,6 +204,7 @@ NOT DRIVABLE by reason: readout 887, other 220, needs a signal (no fixture) 120,
 | SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md) | 22 | 18 | 3 | 1 | 0 | 0 |
 | Lane S1 (docs/multi-radio-records/screen-s1.md; rows 4500 and up are this lane's) | 23 | 20 | 0 | 3 | 0 | 0 |
 | Screen lane C - tuning, scanning, memories and controls (rows 4800 and up are this lane's; docs/multi-radio-records/screen-c.md) | 23 | 20 | 2 | 1 | 0 | 0 |
+| Lane B (docs/multi-radio-records/screen-b.md; rows 4700 and up are this lane's) | 20 | 20 | 0 | 0 | 0 | 0 |
 
 ## Every row
 
@@ -3370,4 +3371,29 @@ NOT DRIVABLE by reason: readout 887, other 220, needs a signal (no fixture) 120,
 | 4820 | Decoder output: Copy key | key | DRIVEN+ASSERTED | lanec-log-copy | the CW fixture's FOXSDR line is what the key copied (state lanec.logcopy) |
 | 4821 | Picture page: wheel zoom, drag to pan, Fit key | behaviour | DRIVEN | lanec-picture-zoom | the wheel and Fit are driven on the APT fixture's picture (Fit exists only while zoomed); the pixel arithmetic of a click on a zoomed picture is not read back |
 | 4822 | Shift+F1 fixed shortcut | shortcut | DRIVEN+ASSERTED | lanec-shortcuts | see row 4818 |
+
+### Lane B (docs/multi-radio-records/screen-b.md; rows 4700 and up are this lane's)
+
+| # | control | type | class | script | detail |
+|---|---|---|---|---|---|
+| 4700 | Display body: Colour map (the waterfall's six maps: Classic and five OKLab maps; the strength key follows) | dropdown | DRIVEN+ASSERTED | look-colour-map | the Colour map box picks Ember, Blue-yellow safe and Classic; the newest line is read back as its strongest colour (classic 779188, Ember DD7A00) and the key follows (WaterfallLook.custom) |
+| 4701 | Display body: Waterfall speed (every frame down to a line a minute; a slow line keeps the strongest level of the frames between) | dropdown | DRIVEN+ASSERTED | look-waterfall-speed | "1 line/s" gives 9 to 13 lines in ten seconds (read back: lines made, line spacing, the footer); a line every 10 s; back to every frame |
+| 4702 | Display body: Time stamps (age, clock UTC, clock local) down the waterfall | dropdown | DRIVEN+ASSERTED | look-stamps | the box picks UTC and local clock stamps (read back: the second tick reads HH:MM:SS) and back to age |
+| 4703 | Display body: Trace (adds Min hold to Normal, Peak hold, Average, Persistence) | dropdown | DRIVEN+ASSERTED | look-trace | Min hold is picked from the Trace box; the held columns are counted and are gone in Normal |
+| 4704 | Display body: Trace shape (line, filled, bars) | dropdown | DRIVEN+ASSERTED | look-trace | Trace shape Filled and Bars are picked and read back (the pictures are the screenshots; the pixels are test_slint_host_trace_modes) |
+| 4705 | Display body: Peak labels (off, 3, 5, 8 strongest named on the spectrum) | dropdown | DRIVEN+ASSERTED | look-peaks | 3 strongest finds the generator carrier (count and frequency read back); Off takes the labels away |
+| 4706 | Display body: Band zoom (full span, bands over the baseband, the tuned frequency's surroundings) | dropdown | DRIVEN+ASSERTED | look-zoom | Band zoom frames the tuned frequency 200 kHz wide (the span read back) and Full span puts the baseband back |
+| 4707 | Display body: SNR readout (box on the spectrum) | checkbox | DRIVEN+ASSERTED | look-measure | the SNR box reads the generator carrier against the median floor |
+| 4708 | Display body: Channel power (box on the spectrum; between markers A and B when both are set) | checkbox | DRIVEN+ASSERTED | look-measure | the channel power is read back |
+| 4709 | Display body: Frequency tracker (box on the spectrum) | checkbox | DRIVEN+ASSERTED | look-measure | the tracker finds the carrier (valid, frequency) |
+| 4710 | Display body: Signal history graph, and Save signal history (CSV) | checkbox | DRIVEN+ASSERTED | look-measure | the history graph fills (samples read back) and the CSV is saved and read back (rows) |
+| 4711 | Display body: reference trace - Save the trace as the reference, Show, Clear | key | DRIVEN+ASSERTED | look-trace | Save the trace as the reference (the covered columns are read back), Show reference off and on, Clear |
+| 4712 | Display body: Compact window (forces the compact strip and bar) | checkbox | DRIVEN+ASSERTED | look-compact | Compact window forces the compact strip at 1920 wide and back (the window flag is read back) |
+| 4713 | Spectrum and waterfall right-click menus: Set marker A here / Set marker B here / Clear markers A and B (B's name carries the differences) | menu | DRIVEN+ASSERTED | look-ab | the right-click menu cannot be opened by the scripted input: `radio menuhz` / `radio menu` call the same handler; A and B are set and the delta read back (10 kHz), then cleared |
+| 4714 | Spectrum: a bookmark's name is a key (a click tunes there) | key | DRIVEN+ASSERTED | look-bookmark-click | a bookmark added, the receiver tuned 100 kHz away, the click on the name tunes back |
+| 4715 | Spectrum: two-finger pinch zooms about the fingers | behaviour | DRIVEN+ASSERTED | look-zoom | the pinch handler of the host: `radio pinch` calls it (zoom in and out read back); the Slint gesture event itself cannot be made by the scripted input and there is no touch screen: UNVERIFIED on real touch |
+| 4716 | Demod scope: WATERFALL key (the audio spectrum over time) | key | DRIVEN+ASSERTED | scope-analysis | WATERFALL adds lines (read back) |
+| 4717 | Demod scope: AUTOCORR key (autocorrelation of the audio) | key | DRIVEN+ASSERTED | scope-analysis | AUTOCORR finds the tone (peak 95 to 105 Hz for the 100 Hz tone) |
+| 4718 | Demod scope: CEPSTRUM key (cepstrum of the audio, pitch) | key | DRIVEN+ASSERTED | scope-analysis | CEPSTRUM reads a pitch of 90 to 110 Hz for the tone |
+| 4719 | Demod scope: EYE key (eye diagram of the baseband I) | key | DRIVEN+ASSERTED | scope-analysis | EYE folds the baseband I (traces read back); a second press goes back to the tube |
 

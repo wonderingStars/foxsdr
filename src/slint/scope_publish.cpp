@@ -17,6 +17,7 @@
 #include "core/i18n.hpp"
 #include "radar_compositor.hpp"
 #include "scope_compositor.hpp"
+#include "scope_analysis.hpp"
 
 namespace foxsdr::slintscope {
 
@@ -50,6 +51,8 @@ struct ScopePublisher::Impl {
     std::array<slint::SharedPixelBuffer<slint::Rgba8Pixel>, 2> bufs;
     int which = 0;
     PaintScratch scratch;
+    int analysis = 0;                         // lane B: 0 the tube, 1..4 an analysis view (scope_analysis.hpp); a window setting, not saved
+    AnalysisState an;
     bool shownSet = false, wasOpen = false, lastLive = false;
     std::size_t segments = 0, painted = 0, saves = 0;
     double lastPaintS = -1.0;
@@ -128,6 +131,7 @@ struct ScopePublisher::Impl {
         m.shown = demod.open;
         m.live = demod.live();
         m.signal = static_cast<int>(demod.signalNow());
+        m.analysis = analysis;
         m.mpx_available = demod.mpxAvailable();
         m.spectral = r.spectral;
         m.baseband = cascade::gui::scopeSignalIsBaseband(demod.signalNow());
@@ -450,6 +454,7 @@ void ScopePublisher::toggleDemod() { setDemodOpen(!impl_->demod.open); }
 void ScopePublisher::wire() {
     auto&& ev = ui_.global<::ScopeEvents>();
     Impl* d = impl_.get();
+    ev.on_demod_analysis([d](int i) { d->analysis = std::clamp(i, 0, 4); d->an = AnalysisState{}; d->lastPaintS = -1.0; });
     ev.on_demod_signal([d](int i) { if (d->demod.setSignal(i)) { d->save(); } });
     ev.on_demod_timebase([d](int step) { if (d->demod.stepTimebase(step)) { d->save(); } });
     ev.on_demod_gain([d](int step) { if (d->demod.stepGain(step)) { d->save(); } });
@@ -517,12 +522,13 @@ void ScopePublisher::publish(const FoxReceiverState& state, double nowS) {
     const bool fading = d.demod.live() && d.demod.state.display == 2;
     const bool liveChanged = d.demod.live() != d.lastLive;
     d.lastLive = d.demod.live();
-    if (!(d.demod.dirty() || fading || liveChanged || d.lastPaintS < 0.0 || !d.shownSet)) { return; }
+    if (!(d.demod.dirty() || fading || d.analysis > 0 || liveChanged || d.lastPaintS < 0.0 || !d.shownSet)) { return; }
     const int w = d.glassW, h = d.glassH;
     auto& buf = d.bufs[static_cast<std::size_t>(d.which)];
     if (buf.width() != static_cast<std::uint32_t>(w) || buf.height() != static_cast<std::uint32_t>(h)) { buf = slint::SharedPixelBuffer<slint::Rgba8Pixel>(static_cast<std::uint32_t>(w), static_cast<std::uint32_t>(h)); }
     const auto t0 = std::chrono::steady_clock::now();
-    d.segments = paintDemodFace(reinterpret_cast<foxsdr::slinthost::Rgba*>(buf.begin()), w, h, d.demod, d.scratch);
+    d.segments = d.analysis > 0 ? paintAnalysis(reinterpret_cast<foxsdr::slinthost::Rgba*>(buf.begin()), w, h, static_cast<Analysis>(d.analysis), d.demod.feed(), cascade::core::kScopeTimebaseMs[std::clamp(d.demod.state.timebase, 0, cascade::core::kScopeTimebaseCount - 1)], d.an)
+                                : paintDemodFace(reinterpret_cast<foxsdr::slinthost::Rgba*>(buf.begin()), w, h, d.demod, d.scratch);
     d.lastPaintMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     d.skipTicks = d.lastPaintMs > 12.0 ? (d.lastPaintMs > 24.0 ? 2 : 1) : 0;
     ++d.painted;
@@ -539,6 +545,11 @@ std::string ScopePublisher::readState(const std::string& what, std::string& out)
     const DemodReadouts r = d.demod.readouts();
     const auto num = [&out](std::size_t v) { out = std::to_string(v); return std::string(); };
     if (what == "demodOpen") { return num(d.demod.open ? 1 : 0); }
+    if (what == "analysis") { return num(static_cast<std::size_t>(d.analysis)); }
+    if (what == "analysisLines") { return num(static_cast<std::size_t>(d.an.lines)); }
+    if (what == "analysisPeakHz") { out = std::to_string(static_cast<long>(d.an.peakHz + 0.5)); return std::string(); }
+    if (what == "analysisPitchHz") { out = std::to_string(static_cast<long>(d.an.pitchHz + 0.5)); return std::string(); }
+    if (what == "analysisTraces") { return num(d.an.eyeTraces); }
     if (what == "signal") { return num(static_cast<std::size_t>(d.demod.signalNow())); }
     if (what == "live") { return num(d.demod.live() ? 1 : 0); }
     if (what == "timebase") { return num(static_cast<std::size_t>(d.demod.state.timebase)); }

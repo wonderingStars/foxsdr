@@ -351,12 +351,13 @@ export component RadioPane inherits Rectangle {
         width: root.width;
         height: root.spec-h;
         compact: true;
+        radio-id: root.data.radio;
         trace: root.data.trace;
         db-ticks: root.data.db-ticks;
         freq-ticks: root.data.freq-ticks;
         axis-unit: root.data.axis-unit;
-        trace-mode: root.data.trace-mode == 1 ? TraceMode.peak-hold : root.data.trace-mode == 2 ? TraceMode.average : root.data.trace-mode == 3 ? TraceMode.persistence : TraceMode.normal;
-        trace-mode-label: root.data.trace-mode == 1 ? @tr("Peak hold") : root.data.trace-mode == 2 ? @tr("Average") : root.data.trace-mode == 3 ? @tr("Persistence") : "";
+        trace-mode: root.data.trace-mode == 1 ? TraceMode.peak-hold : root.data.trace-mode == 2 ? TraceMode.average : root.data.trace-mode == 3 ? TraceMode.persistence : root.data.trace-mode == 4 ? TraceMode.min-hold : TraceMode.normal;
+        trace-mode-label: root.data.trace-mode == 1 ? @tr("Peak hold") : root.data.trace-mode == 2 ? @tr("Average") : root.data.trace-mode == 3 ? @tr("Persistence") : root.data.trace-mode == 4 ? @tr("Min hold") : "";
         mark-tabs: root.data.mark-tabs;
         mark-tab-clicked(i, x, y) => { root.mark-tab-clicked(root.data.radio, i, false, x, y); }
         vfo-pos: root.data.vfo-pos;

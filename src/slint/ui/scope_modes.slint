@@ -25,6 +25,7 @@ export struct DemodModel {
     shown: bool, live: bool,
     signal: int,                           // 0 AUDIO, 1 SPEC, 2 I/Q, 3 VECTOR, 4 MPX (the one the tube shows: a saved MPX outside WFM reads as SPEC)
     mpx-available: bool, spectral: bool, baseband: bool,
+    analysis: int,                         // lane B: 0 the tube, 1 AUDIO WATERFALL (S11), 2 AUTOCORRELATION, 3 CEPSTRUM (S17), 4 EYE (S18); the tube's own signal keys stay as they are
     timebase-text: string, gain-text: string, auto-gain: bool, display: int,
     caption: string, display-word: string, centre: string, gain-read: string, audio-from: string, dead: string,
     picture: image,
@@ -33,6 +34,7 @@ export struct DemodModel {
 
 export global ScopeEvents {
     callback demod-signal(int);            // the input key pressed
+    callback demod-analysis(int);          // lane B: an analysis key (0 = back to the tube)
     callback demod-timebase(int);          // -1 / +1
     callback demod-gain(int);              // -1 / +1
     callback demod-auto(bool);
@@ -182,6 +184,8 @@ export component DemodScopeWindow inherits Rectangle {
 
     callback demod-signal(int);
     demod-signal(i) => { ScopeEvents.demod-signal(i); }
+    callback demod-analysis(int);
+    demod-analysis(i) => { ScopeEvents.demod-analysis(i); }
     callback demod-timebase(int);
     demod-timebase(d) => { ScopeEvents.demod-timebase(d); }
     callback demod-gain(int);
@@ -217,6 +221,14 @@ export component DemodScopeWindow inherits Rectangle {
                 LatchKey { label: "I/Q"; on: root.model.signal == 2; tooltip: @tr("BASEBAND I/Q"); clicked => { root.demod-signal(2); } }
                 LatchKey { label: @tr("VECTOR"); on: root.model.signal == 3; tooltip: @tr("VECTOR I-Q"); clicked => { root.demod-signal(3); } }
                 if root.model.mpx-available : LatchKey { label: "MPX"; on: root.model.signal == 4; tooltip: @tr("FM MULTIPLEX"); clicked => { root.demod-signal(4); } }   // not-translated: the multiplex's name
+            }
+            // --- LANE B: the analysis views of the audio and the baseband (S11, S17, S18); a second press of the lit key goes back to the tube ---
+            HorizontalLayout {
+                spacing: 4px; alignment: start;
+                LatchKey { label: @tr("WATERFALL"); on: root.model.analysis == 1; tooltip: @tr("AUDIO WATERFALL: the audio spectrum over time"); clicked => { root.demod-analysis(root.model.analysis == 1 ? 0 : 1); } }
+                LatchKey { label: @tr("AUTOCORR"); on: root.model.analysis == 2; tooltip: @tr("AUTOCORRELATION of the audio: a repeating pattern shows as a peak at its period"); clicked => { root.demod-analysis(root.model.analysis == 2 ? 0 : 2); } }
+                LatchKey { label: @tr("CEPSTRUM"); on: root.model.analysis == 3; tooltip: @tr("CEPSTRUM of the audio: harmonics (a voice's pitch) show as a peak at their spacing"); clicked => { root.demod-analysis(root.model.analysis == 3 ? 0 : 3); } }
+                LatchKey { label: @tr("EYE"); on: root.model.analysis == 4; tooltip: @tr("EYE DIAGRAM of the baseband I: the signal folded on two symbols. Set the time base so that one symbol fills five divisions."); clicked => { root.demod-analysis(root.model.analysis == 4 ? 0 : 4); } }
             }
             // --- the time base and the attenuator: disabled, not hidden, on a spectrum ---
             HorizontalLayout {

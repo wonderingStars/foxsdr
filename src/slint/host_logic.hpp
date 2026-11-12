@@ -88,7 +88,7 @@ struct Rgba {
     std::uint8_t r = 0, g = 0, b = 0, a = 0;
 };
 Rgba heat(float t);                                        // the strength key's ramp, t clamped to 0..1
-enum class TraceMode { Normal, PeakHold, Average, Persistence };
+enum class TraceMode { Normal, PeakHold, Average, Persistence, MinHold };
 struct TraceState {
     std::vector<float> peak;                               // the highest level each column has reached
     std::vector<float> average;                            // the running power average per column
@@ -98,6 +98,12 @@ struct TraceState {
     // fully lit, one it visits on a third of them a third as bright. The decay per frame is the host's (exp(-1 / (tau * frames per second))): Fast tau 0.3 s, Medium 1 s, Slow 3 s.
     std::vector<float> density;
     float decay = 0.93f;
+    // LANE B (docs/multi-radio-records/screen-b.md): MinHold's lowest level each column has reached (S5); the SHAPE of the live trace, 0 line, 1 filled (the area under it), 2 bars (a histogram: bars of 4 columns, S6);
+    // and the REFERENCE trace (S22): one level in dBFS per column of the picture, NaN where the saved trace does not reach, drawn behind the live one when `showReference`.
+    std::vector<float> minHold;
+    int shape = 0;
+    std::vector<float> reference;
+    bool showReference = false;
 };
 void resetTrace(TraceState& state);
 // Clears the buffer to transparent and draws the live trace, and in PeakHold / Average the bold held trace
@@ -105,8 +111,9 @@ void resetTrace(TraceState& state);
 void paintTrace(Rgba* px, std::uint32_t width, std::uint32_t height, const float* bins, std::size_t binCount,
                 double dbMin, double dbMax, TraceState& state, TraceMode mode, Rgba live, Rgba held, Rgba average);
 // Scrolls the picture down one row and paints the frame along row 0 through heat().
+// `lut` (lane B, S7): 256 colours to paint with instead of heat(); nullptr = the classic map.
 void scrollWaterfallRow(Rgba* px, std::uint32_t width, std::uint32_t height, const float* bins, std::size_t binCount,
-                        double dbMin, double dbMax);
+                        double dbMin, double dbMax, const Rgba* lut = nullptr);
 
 // ---- the status bar: the IA's seven cards, in order, from the table's state ----
 enum class CardTone { Neutral, Good, Warn, Err };

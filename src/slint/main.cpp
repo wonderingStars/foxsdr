@@ -39,6 +39,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <fstream>
 #include <deque>
 #include <filesystem>
 #include <functional>
@@ -89,6 +90,7 @@
 #include "workspace_prefs.hpp"
 #include "layouts_prefs.hpp"
 #include "export_logic.hpp"
+#include "spectrum_extras.hpp"
 #include "mark_layout.hpp"
 #include "core/disk_job.hpp"
 #include "lanec_publish.hpp"   // screen lane C (docs/multi-radio-records/screen-c.md)
@@ -474,6 +476,10 @@ int main(int argc, char** argv) {
     std::string paneGainOfSelected;                                            // the strip's gain figure, for the selected radio's pane
     int traceMode = 1;                        // 0 normal 1 peak hold 2 average
     double averageLengthS = 1.0;
+    // LANE B (docs/multi-radio-records/screen-b.md): the spectrum and waterfall choices of the Display body (SpectrumLook), the window's like the trace mode
+    int paletteIdx = 0, speedIdx = 0, stampMode = 0, traceShape = 0, peakIdx = 0, zoomIdx = 0;   // colour map, line speed, stamps (0 age, 1 UTC, 2 local), trace shape, peak labels (0 off, 1 = 3, 2 = 5, 3 = 8)
+    bool lookSnr = false, lookPower = false, lookTrack = false, lookHistory = false, lookRefShown = true, lookCompact = false, railWasFolded = false;
+    std::string lookStatus, lookHistoryPath, lookZoomSig;
     bool rangeManual = false;
     bool bandPlanOn = true;
     double tuneStepHz = kDefaultTuneStepHz;   // Ctrl+Up/Down and the Tune step picker (10 kHz, as the key table's text says)
@@ -921,6 +927,12 @@ int main(int argc, char** argv) {
         e.push_back(entry(MenuItemKind::Slider, 304, "Ceiling", "", false, rangeManual, static_cast<float>(std::clamp((state.dbMax + 100.0) / 120.0, 0.0, 1.0))));
         e.push_back(entry(MenuItemKind::Item, 305, "Reset display to defaults"));
     };
+    const auto abBlock = [&](std::vector<MenuEntry>& e) {   // lane B (S21): the A and B measurement markers, set where the menu was opened
+        e.push_back(entry(MenuItemKind::Separator, 0, ""));
+        e.push_back(entry(MenuItemKind::Item, 411, std::string(cascade::i18n::tr("Set marker A here")).c_str(), fmt("%.4f MHz", menuHz / 1e6).c_str(), false, menuHz > 0));
+        e.push_back(entry(MenuItemKind::Item, 412, std::string(cascade::i18n::tr("Set marker B here")).c_str(), fmt("%.4f MHz", menuHz / 1e6).c_str(), false, menuHz > 0));
+        e.push_back(entry(MenuItemKind::Item, 413, std::string(cascade::i18n::tr("Clear markers A and B")).c_str(), "", false, selected().ab.aSet || selected().ab.bSet));
+    };
     const auto openMenu = [&](MenuKind kind, float x, float y) {
         std::vector<MenuEntry> e;
         menuKind = kind;
@@ -949,6 +961,7 @@ int main(int argc, char** argv) {
                 e.push_back(entry(MenuItemKind::Checked, 202, "Peak hold", "", traceMode == 1));
                 e.push_back(entry(MenuItemKind::Checked, 203, "Average", "", traceMode == 2));
                 e.push_back(entry(MenuItemKind::Checked, 206, std::string(cascade::i18n::tr("Persistence")).c_str(), "", traceMode == 3));
+                e.push_back(entry(MenuItemKind::Checked, 207, std::string(cascade::i18n::tr("Min hold")).c_str(), "", traceMode == 4));   // lane B (S5)
                 e.push_back(entry(MenuItemKind::Separator, 0, ""));
                 e.push_back(entry(MenuItemKind::Item, 204, "Reset trace", "", false, traceMode != 0));
                 e.push_back(entry(MenuItemKind::Heading, 0, "Average length"));
@@ -961,6 +974,7 @@ int main(int argc, char** argv) {
                 e.push_back(entry(MenuItemKind::Radio, 221, std::string(cascade::i18n::tr("Fast")).c_str(), "", persistenceDecayIdx == 0));
                 e.push_back(entry(MenuItemKind::Radio, 222, std::string(cascade::i18n::tr("Medium")).c_str(), "", persistenceDecayIdx == 1));
                 e.push_back(entry(MenuItemKind::Radio, 223, std::string(cascade::i18n::tr("Slow")).c_str(), "", persistenceDecayIdx == 2));
+                abBlock(e);
                 displayBlock(e);
                 break;
             case MenuKind::Layouts: {   // lane S1: every layout is one item (the stock ones first), then the way to the sheet
@@ -991,6 +1005,7 @@ int main(int argc, char** argv) {
                 e.push_back(entry(MenuItemKind::Item, 403, "List markers...", std::to_string(lists.markers.size()).c_str()));
                 e.push_back(entry(MenuItemKind::Item, 404, "Copy markers to clipboard", "", false, !lists.markers.empty()));
                 e.push_back(entry(MenuItemKind::Submenu, 405, "Clear all markers", "", false, !lists.markers.empty()));
+                abBlock(e);
                 displayBlock(e);
                 break;
             }
@@ -1316,6 +1331,10 @@ int main(int argc, char** argv) {
             case 204: resetTrace(selected().traceState); break;
             case 206: traceMode = 3; ui->set_trace_mode(3); resetTrace(selected().traceState); break;   // persistence (lane S1)
             case 221: case 222: case 223: persistenceDecayIdx = id - 221; break;
+            case 207: traceMode = 4; ui->set_trace_mode(4); resetTrace(selected().traceState); break;   // min hold (lane B, S5)
+            case 411: selected().ab.setA(menuHz); break;   // lane B (S21)
+            case 412: selected().ab.setB(menuHz); break;
+            case 413: selected().ab.clear(); break;
             case 1990: case 1991: layoutNote.clear(); layoutNoteBad = false; layoutRenaming = -1; ui->global<LayoutsModel>().set_open(true); publishLayouts(); break;
             case 211: case 212: case 213: case 214: case 215: case 216: case 217: {
                 const double presets[7] = {0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0};
@@ -1362,6 +1381,127 @@ int main(int argc, char** argv) {
         if (id == 303 && rangeManual) { FoxCommand c = op(FOXAPP_OP_SET_DISPLAY_MIN); c.num[0] = -160.0 + 140.0 * v; submit(c); }
         if (id == 304 && rangeManual) { FoxCommand c = op(FOXAPP_OP_SET_DISPLAY_MAX); c.num[0] = -100.0 + 120.0 * v; submit(c); }
     });
+
+    // ======== LANE B (docs/multi-radio-records/screen-b.md): the Display body's waterfall and trace rows, the strength key's colours, a bookmark's name as a key, the compact window ========
+    const auto eachRadio = [&](const auto& fn) { for (int k = 0; k < kMaxRadios; ++k) { if (radios.exists(k)) { fn(radios.at(k)); } } };
+    const auto selectItems = [](const std::vector<std::string>& labels) {
+        std::vector<SelectItem> v;
+        for (std::size_t i = 0; i < labels.size(); ++i) { v.push_back(SelectItem{ss(labels[i]), ss(std::to_string(i)), true, ss("")}); }
+        return std::make_shared<slint::VectorModel<SelectItem>>(std::move(v));
+    };
+    struct ZoomChoice { std::string label; double centreHz, spanHz; };
+    const auto zoomChoices = [&]() {   // S25: the full span, the bands over the baseband, the tuned frequency's surroundings
+        std::vector<ZoomChoice> z;
+        RadioView& rv = selected();
+        const double full = rv.fullSpan(), lo = rv.fullCentre() - full / 2.0, hi = rv.fullCentre() + full / 2.0;
+        z.push_back({cascade::i18n::tr("Full span"), 0.0, 0.0});
+        for (const auto& b : lists.bands) {
+            if (b.stopHz < lo || b.startHz > hi || z.size() > 12) { continue; }
+            const double a = std::max(b.startHz, lo), c = std::min(b.stopHz, hi);
+            if (c - a < 1.0) { continue; }
+            z.push_back({b.name, 0.5 * (a + c), c - a});
+        }
+        for (const double w : {50e3, 200e3, 2e6}) {
+            if (w >= full * 0.999) { continue; }
+            const double tuned = std::clamp(rv.state.tunedHz, lo + w / 2.0, hi - w / 2.0);
+            z.push_back({cascade::core::formatText(cascade::i18n::tr("Tuned frequency, %s wide"), w >= 1e6 ? fmt("%.0f MHz", w / 1e6).c_str() : fmt("%.0f kHz", w / 1e3).c_str()), tuned, w});
+        }
+        return z;
+    };
+    const auto publishLook = [&] {
+        auto& g = ui->global<SpectrumLook>();
+        std::vector<std::string> pal, spd, stp, trc, shp, pks, zms;
+        for (int i = 0; i < foxsdr::slintextras::kPaletteCount; ++i) {
+            static const char* const names[foxsdr::slintextras::kPaletteCount] = {FOX_TR_NOOP("Classic"), FOX_TR_NOOP("Deep sea"), FOX_TR_NOOP("Ember"), FOX_TR_NOOP("Slate"), FOX_TR_NOOP("Spectrum"), FOX_TR_NOOP("Blue-yellow safe")};
+            pal.push_back(cascade::i18n::tr(names[i]));
+        }
+        for (int i = 0; i < foxsdr::slintextras::kSpeedCount; ++i) {
+            const double lps = foxsdr::slintextras::speedLinesPerSecond(i);
+            spd.push_back(lps <= 0.0 ? std::string(cascade::i18n::tr("Every frame")) : lps == 1.0 ? std::string(cascade::i18n::tr("1 line/s")) : lps > 1.0 ? cascade::core::formatText(cascade::i18n::tr("%.0f lines/s"), lps) : lps > 1.0 / 59.0 ? cascade::core::formatText(cascade::i18n::tr("1 line every %.0f s"), 1.0 / lps) : std::string(cascade::i18n::tr("1 line every minute")));
+        }
+        stp = {cascade::i18n::tr("Age (seconds ago)"), cascade::i18n::tr("Clock time, UTC"), cascade::i18n::tr("Clock time, local")};
+        trc = {cascade::i18n::tr("Normal"), cascade::i18n::tr("Peak hold"), cascade::i18n::tr("Average"), cascade::i18n::tr("Persistence"), cascade::i18n::tr("Min hold")};
+        shp = {cascade::i18n::tr("Line"), cascade::i18n::tr("Filled"), cascade::i18n::tr("Bars")};
+        pks = {cascade::i18n::tr("Off"), cascade::core::formatText(cascade::i18n::tr("%d strongest"), 3), cascade::core::formatText(cascade::i18n::tr("%d strongest"), 5), cascade::core::formatText(cascade::i18n::tr("%d strongest"), 8)};
+        for (const auto& c : zoomChoices()) { zms.push_back(c.label); }
+        g.set_palettes(selectItems(pal)); g.set_palette_index(paletteIdx);
+        g.set_speeds(selectItems(spd)); g.set_speed_index(speedIdx);
+        g.set_stamps(selectItems(stp)); g.set_stamp_index(stampMode);
+        g.set_traces(selectItems(trc)); g.set_trace_index(traceMode);
+        g.set_shapes(selectItems(shp)); g.set_shape_index(traceShape);
+        g.set_peak_counts(selectItems(pks)); g.set_peak_index(peakIdx);
+        g.set_zooms(selectItems(zms)); g.set_zoom_index(zoomIdx);
+        g.set_snr(lookSnr); g.set_channel_power(lookPower); g.set_tracker(lookTrack); g.set_history(lookHistory);
+        g.set_reference_shown(lookRefShown); g.set_reference_set(selected().reference.set); g.set_compact(lookCompact);
+        g.set_status(ss(lookStatus));
+    };
+    const auto applyPalette = [&] {   // the strength key under the waterfall shows the map the host paints with
+        auto& w = ui->global<WaterfallLook>();
+        w.set_custom(paletteIdx != 0);
+        slint::SharedPixelBuffer<slint::Rgba8Pixel> ramp(256, 1);
+        const auto& t = foxsdr::slintextras::paletteTable(paletteIdx);
+        for (std::size_t i = 0; i < 256; ++i) { ramp.begin()[i] = slint::Rgba8Pixel{t[i].r, t[i].g, t[i].b, 255}; }
+        w.set_ramp(slint::Image(ramp));
+    };
+    {
+        auto& g = ui->global<SpectrumLook>();
+        g.on_palette_picked([&](int i) { paletteIdx = std::clamp(i, 0, foxsdr::slintextras::kPaletteCount - 1); applyPalette(); eachRadio([&](RadioView& rv) { rv.wells.picture.assign(rv.wells.picture.size(), Rgba{0x06, 0x07, 0x0a, 255}); rv.sinceSeq = 0; }); publishLook(); });
+        g.on_speed_picked([&](int i) { speedIdx = std::clamp(i, 0, foxsdr::slintextras::kSpeedCount - 1); eachRadio([&](RadioView& rv) { rv.pacer.reset(); }); publishLook(); });
+        g.on_stamps_picked([&](int i) { stampMode = std::clamp(i, 0, 2); publishLook(); });
+        g.on_trace_picked([&](int i) { traceMode = std::clamp(i, 0, 4); ui->set_trace_mode(traceMode); resetTrace(selected().traceState); publishLook(); });
+        g.on_shape_picked([&](int i) { traceShape = std::clamp(i, 0, 2); publishLook(); });
+        g.on_peaks_picked([&](int i) { peakIdx = std::clamp(i, 0, 3); publishLook(); });
+        g.on_zoom_picked([&](int i) {
+            const auto z = zoomChoices();
+            if (i < 0 || static_cast<std::size_t>(i) >= z.size()) { return; }
+            RadioView& rv = selected();
+            rv.lastBandDragTick = tickNo;   // the hand has the picture for a moment (no follow-the-retune)
+            if (z[static_cast<std::size_t>(i)].spanHz <= 0.0 || z[static_cast<std::size_t>(i)].spanHz >= rv.fullSpan() * 0.999) { rv.resetView(); }
+            else { rv.view = {z[static_cast<std::size_t>(i)].centreHz, std::max(z[static_cast<std::size_t>(i)].spanHz, std::max(1.0, rv.state.sampleRateHz / 1000.0))}; }
+            zoomIdx = i;
+            publishLook();
+        });
+        g.on_snr_toggled([&](bool v) { lookSnr = v; publishLook(); });
+        g.on_channel_power_toggled([&](bool v) { lookPower = v; publishLook(); });
+        g.on_tracker_toggled([&](bool v) { lookTrack = v; eachRadio([&](RadioView& rv) { rv.tracker.reset(); }); publishLook(); });
+        g.on_history_toggled([&](bool v) { lookHistory = v; publishLook(); });
+        g.on_reference_save([&] {
+            RadioView& rv = selected();
+            if (rv.frame.empty() || !(rv.lastInfo.spanHz > 0)) { lookStatus = cascade::i18n::tr("There is no spectrum to save yet."); }
+            else { rv.reference.save(rv.frame.data(), rv.frame.size(), rv.lastInfo.centreHz, rv.lastInfo.spanHz); lookRefShown = true; lookStatus = cascade::i18n::tr("The trace is saved as the reference."); }
+            publishLook();
+        });
+        g.on_reference_toggled([&](bool v) { lookRefShown = v; publishLook(); });
+        g.on_reference_clear([&] { selected().reference.clear(); lookStatus.clear(); publishLook(); });
+        g.on_history_save([&] {
+            RadioView& rv = selected();
+            if (rv.history.samples().empty()) { lookStatus = cascade::i18n::tr("There is no signal history yet: switch on a readout or the graph first."); publishLook(); return; }
+            const foxsdr::slintexport::Outcome o = foxsdr::slintexport::saveText((std::filesystem::path(exportBase()) / "foxsdr-signal-history").string(), exportBase(), rv.history.csv(cascade::core::formatText("radio %d", rv.slot + 1)), "csv");
+            lookStatus = o.ok ? cascade::core::formatText(cascade::i18n::tr("Saved %s"), o.path.c_str()) : cascade::core::formatText(cascade::i18n::tr("The file could not be written: %s"), o.error.c_str());
+            lookHistoryPath = o.ok ? o.path : std::string();
+            publishLook();
+        });
+        g.on_compact_toggled([&](bool v) {
+            if (v == lookCompact) { return; }
+            lookCompact = v;
+            ui->set_compact_forced(v);   // the compact strip and the radios' bar whatever the width (the panel is left as it is: it holds this very tick)
+            publishLook();
+        });
+    }
+    ui->global<SpectrumEvents>().on_bookmark_clicked([&](int r, int i) {   // S23: a click on a bookmark's name on the spectrum tunes to it
+        RadioView& rv = r > 0 ? radios.at(r - 1) : selected();
+        if (i < 0 || static_cast<std::size_t>(i) >= rv.fig.bookmarkHz.size()) { return; }
+        if (r > 0) { selectRadio(r); }
+        setFrequency(rv.fig.bookmarkHz[static_cast<std::size_t>(i)]);
+    });
+    ui->global<SpectrumEvents>().on_pinch([&](int r, float factor, float aboutFrac) {   // S27: a pinch zooms the radio's picture about the point between the fingers
+        RadioView& rv = r > 0 ? radios.at(r - 1) : selected();
+        if (!(factor > 0.2f && factor < 5.0f)) { return; }
+        rv.lastBandDragTick = tickNo;
+        rv.zoom(static_cast<double>(factor), static_cast<double>(std::clamp(aboutFrac, 0.0f, 1.0f)));
+    });
+    applyPalette();
+    publishLook();
 
     // ---- the strip ----
     ui->on_stop_clicked([&] { FoxCommand c = op(FOXAPI_OP_RUN); c.ival[0] = (state.flags & FOXAPI_RX_RUNNING) ? 0 : 1; submit(c); });
@@ -1873,13 +2013,60 @@ int main(int argc, char** argv) {
             const std::size_t b1 = std::max(b0 + 1, static_cast<std::size_t>(std::clamp(fracOf(cur.centreHz + cur.spanHz / 2.0, info.centreHz, info.spanHz), 0.0, 1.0) * frame.size()));
             const float* sub = frame.data() + b0;
             const std::size_t subN = std::min(b1, frame.size()) - b0;
-            const foxsdr::slinthost::TraceMode mode = traceMode == 1 ? foxsdr::slinthost::TraceMode::PeakHold : traceMode == 2 ? foxsdr::slinthost::TraceMode::Average : traceMode == 3 ? foxsdr::slinthost::TraceMode::Persistence : foxsdr::slinthost::TraceMode::Normal;
+            const foxsdr::slinthost::TraceMode mode = traceMode == 1 ? foxsdr::slinthost::TraceMode::PeakHold : traceMode == 2 ? foxsdr::slinthost::TraceMode::Average : traceMode == 3 ? foxsdr::slinthost::TraceMode::Persistence : traceMode == 4 ? foxsdr::slinthost::TraceMode::MinHold : foxsdr::slinthost::TraceMode::Normal;
             { static const double kTau[3] = {0.3, 1.0, 3.0}; rv.traceState.decay = fps > 0 ? static_cast<float>(std::exp(-1.0 / (kTau[persistenceDecayIdx] * fps))) : 0.9f; }   // the persistence trace's fraction kept a frame
             rv.traceState.averageAlpha = static_cast<float>(fps > 0 ? 1.0 - std::exp(-1.0 / (averageLengthS * fps)) : 0.1);
             const PictureSize& px = rv.wells.size;
+            // LANE B: the trace's shape and reference (S6, S22), the measurements (S14, Q2, Q3, S15, S20), then the trace, the box and the graph over it
+            rv.traceState.shape = traceShape;
+            rv.traceState.showReference = lookRefShown && rv.reference.set;
+            if (rv.traceState.showReference) { rv.reference.columns(cur.centreHz, cur.spanHz, px.traceW, rv.traceState.reference); } else { rv.traceState.reference.clear(); }
+            std::vector<std::string> boxLines;
+            {
+                const double steadyS = static_cast<double>(t) / 1000.0, utcS = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()) / 1000.0;
+                const double binHz = info.spanHz / static_cast<double>(std::max<std::size_t>(1, frame.size())), fullLo = info.centreHz - info.spanHz / 2.0;
+                const auto binOf = [&](double hz) { return static_cast<std::size_t>(std::clamp((hz - fullLo) / binHz, 0.0, static_cast<double>(frame.size()))); };
+                const std::size_t pb0 = binOf(st.tunedHz - st.bandwidthHz / 2.0), pb1 = std::max(pb0 + 1, binOf(st.tunedHz + st.bandwidthHz / 2.0));
+                const bool wantMeasure = lookSnr || lookPower || lookHistory;
+                if (wantMeasure) {
+                    rv.snr = foxsdr::slintextras::measureSnr(frame.data(), frame.size(), pb0, pb1);
+                    std::size_t c0 = pb0, c1 = pb1;
+                    if (rv.ab.aSet && rv.ab.bSet) { c0 = binOf(std::min(rv.ab.aHz, rv.ab.bHz)); c1 = std::max(c0 + 1, binOf(std::max(rv.ab.aHz, rv.ab.bHz))); }   // between the A and B markers when both are set
+                    rv.channelPowerDb = foxsdr::slintextras::channelPowerDb(frame.data(), frame.size(), c0, c1);
+                    if (rv.snr.valid) { rv.history.push(foxsdr::slintextras::HistorySample{utcS, static_cast<float>(rv.snr.peakDb), static_cast<float>(rv.snr.floorDb), static_cast<float>(rv.snr.snrDb), static_cast<float>(rv.channelPowerDb)}); }
+                }
+                if (lookTrack) { rv.track = rv.tracker.update(steadyS, frame.data(), frame.size(), info.centreHz, info.spanHz, st.tunedHz - st.bandwidthHz / 2.0, st.tunedHz + st.bandwidthHz / 2.0, st.tunedHz); } else { rv.tracker.reset(); rv.track = {}; }
+                if (peakIdx > 0 && steadyS - rv.lastMeasureS >= 0.25) {
+                    rv.lastMeasureS = steadyS;
+                    static const int kCounts[4] = {0, 3, 5, 8};
+                    const double subBinHz = binHz, subLo = fullLo + static_cast<double>(b0) * binHz;
+                    rv.peaks = foxsdr::slintextras::findPeaks(sub, subN, subLo + static_cast<double>(subN) * subBinHz / 2.0, static_cast<double>(subN) * subBinHz, kCounts[std::clamp(peakIdx, 0, 3)], 10.0, std::max<std::size_t>(3, subN / 200));
+                } else if (peakIdx == 0) { rv.peaks.clear(); }
+                rv.abRead = foxsdr::slintextras::abReading(rv.ab, frame.data(), frame.size(), info.centreHz, info.spanHz);
+                const auto up = [](std::string x) { for (char& c : x) { c = static_cast<char>(std::toupper(static_cast<unsigned char>(c))); } return x; };
+                if (lookSnr && rv.snr.valid) { boxLines.push_back(fmt("SNR %.1f DB", rv.snr.snrDb)); boxLines.push_back(cascade::core::formatText("PEAK %.1f  FLOOR %.1f DBFS", rv.snr.peakDb, rv.snr.floorDb)); }
+                if (lookPower) { boxLines.push_back(std::string(rv.ab.aSet && rv.ab.bSet ? "CH PWR A-B " : "CH PWR ") + fmt("%.1f DBFS", rv.channelPowerDb)); }
+                if (lookTrack) {
+                    if (rv.track.valid) { boxLines.push_back(up(fmt("TRK %.6f MHZ", rv.track.hz / 1e6))); boxLines.push_back(up(cascade::core::formatText("%+.1f HZ  DRIFT %+.2f HZ/S", rv.track.offsetHz, rv.track.driftHzPerS))); }
+                    else { boxLines.push_back("TRK NO SIGNAL"); }
+                }
+            }
             paintTrace(rv.wells.traceMemory(), px.traceW, px.traceH, sub, subN, st.dbMin, st.dbMax, rv.traceState, mode,
                        Rgba{0x7a, 0xd7, 0xff, 255}, Rgba{0xff, 0x9f, 0x43, 255}, Rgba{0xf1, 0xea, 0xd6, 255});
-            scrollWaterfallRow(rv.wells.picture.data(), px.wfW, px.wfH, sub, subN, st.dbMin, st.dbMax);
+            if (!boxLines.empty()) { foxsdr::slintextras::paintMeasureBox(rv.wells.traceMemory(), px.traceW, px.traceH, boxLines); }
+            if (lookHistory) { foxsdr::slintextras::paintHistoryGraph(rv.wells.traceMemory(), px.traceW, px.traceH, rv.history, 0, 120.0); }
+            // S10: a line is made at the chosen rate (the strongest of the frames since the last line); S7: painted through the chosen colour map
+            {
+                const double wantLps = foxsdr::slintextras::speedLinesPerSecond(speedIdx);
+                if (rv.pacer.linesPerSecond() != wantLps) { rv.pacer.setLinesPerSecond(wantLps); }
+                const double steadyS = static_cast<double>(t) / 1000.0;
+                if (rv.pacer.feed(sub, subN, steadyS)) {
+                    const auto& row = rv.pacer.row();
+                    scrollWaterfallRow(rv.wells.picture.data(), px.wfW, px.wfH, row.data(), row.size(), st.dbMin, st.dbMax, paletteIdx == 0 ? nullptr : foxsdr::slintextras::paletteTable(paletteIdx).data());
+                    rv.lastRowUtcS = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()) / 1000.0;
+                }
+                rv.secondsPerRow = wantLps > 0.0 ? 1.0 / wantLps : (fps > 0 ? 1.0 / fps : 0.0);
+            }
             if (selectedRadio) {   // the 3D surface's history: one row of levels a frame, of THIS frequency window (a zoom, a pan or a retune starts it again)
                 const auto q = [](double x) { return static_cast<std::uint64_t>(static_cast<std::int64_t>(std::llround(x))); };
                 const std::uint64_t windowKey = q(cur.centreHz) * 1000003ull ^ q(cur.spanHz) * 998244353ull ^ q(info.centreHz) * 31ull ^ q(info.spanHz) ^ (static_cast<std::uint64_t>(info.binCount) << 40);
@@ -1889,9 +2076,18 @@ int main(int argc, char** argv) {
             // the figures around the wells
             fig.spectrumCaption = "Spectrum \xC2\xB7 " + std::to_string(info.binCount) + " bin" + (cur.spanHz < info.spanHz * 0.999 ? " \xC2\xB7 zoom" : "");
             fig.spanText = spanText(cur.spanHz);
-            const double history = fps > 0 ? px.wfH / fps : 0.0;
-            fig.footLeft = fps > 0 ? fmt("%.0f lines/s", fps) + " \xC2\xB7 " + fmt("%.0f s of history", history) : std::string();
-            fig.ageTicks = ageTicks(history, px.wfH);
+            const double history = rv.secondsPerRow > 0 ? px.wfH * rv.secondsPerRow : 0.0;
+            {
+                const double lps = rv.secondsPerRow > 0 ? 1.0 / rv.secondsPerRow : 0.0;
+                const std::string rate = lps >= 1.5 ? fmt("%.0f lines/s", lps) : lps >= 0.99 ? std::string("1 line/s") : fmt("1 line / %.0f s", rv.secondsPerRow);
+                fig.footLeft = lps > 0 ? rate + " \xC2\xB7 " + (history >= 600.0 ? fmt("%.0f min of history", history / 60.0) : fmt("%.0f s of history", history)) : std::string();
+            }
+            // S8: the ticks down the waterfall are ages, or clock times (UTC or local) that scroll with the picture
+            {
+                double offsetS = 0.0;
+                if (stampMode == 2) { long tz = 0; int dst = 0; long bias = 0; _get_timezone(&tz); _get_dstbias(&bias); std::time_t tt = std::time(nullptr); std::tm lt{}; localtime_s(&lt, &tt); dst = lt.tm_isdst > 0 ? 1 : 0; offsetS = static_cast<double>(-tz - (dst ? bias : 0)); }
+                fig.ageTicks = stampMode == 0 || rv.lastRowUtcS <= 0.0 ? ageTicks(history, px.wfH) : foxsdr::slintextras::clockTicks(rv.lastRowUtcS, rv.secondsPerRow, px.wfH, 48.0, stampMode, offsetS);
+            }
             // the peak inside the passband
             const double lo = fracOf(st.tunedHz - st.bandwidthHz / 2.0, info.centreHz, info.spanHz), hi = fracOf(st.tunedHz + st.bandwidthHz / 2.0, info.centreHz, info.spanHz);
             const std::size_t p0 = static_cast<std::size_t>(std::clamp(lo, 0.0, 1.0) * frame.size()), p1 = std::max(p0 + 1, static_cast<std::size_t>(std::clamp(hi, 0.0, 1.0) * frame.size()));
@@ -1920,9 +2116,10 @@ int main(int argc, char** argv) {
         // names stack onto up to three rows while "Stack close names" is on (bookmarkStackNames), one row otherwise - bookmarkNameRows is the rule.
         if (duties.interfaceHalf().bookmarkMarkers) {
             std::vector<BookmarkName> names;
-            for (const auto& b : lists.bookmarks) { const double f = fracOf(b.hz, v.centreHz, v.spanHz); if (f >= 0 && f <= 1 && names.size() < 64) { names.push_back({f, b.name, b.favourite}); } }
+            std::vector<double> nameHz;
+            for (const auto& b : lists.bookmarks) { const double f = fracOf(b.hz, v.centreHz, v.spanHz); if (f >= 0 && f <= 1 && names.size() < 64) { names.push_back({f, b.name, b.favourite}); nameHz.push_back(b.hz); } }
             const std::vector<int> rows = bookmarkNameRows(names, static_cast<double>(rv.wells.size.traceW), kSpectrumCapCharPx, duties.interfaceHalf().bookmarkStackNames ? kBookmarkNameMaxRows : 1);
-            for (std::size_t i = 0; i < names.size(); ++i) { fig.bookmarks.push_back({static_cast<float>(names[i].pos), names[i].label, names[i].favourite, rows[i]}); }
+            for (std::size_t i = 0; i < names.size(); ++i) { fig.bookmarks.push_back({static_cast<float>(names[i].pos), names[i].label, names[i].favourite, rows[i]}); fig.bookmarkHz.push_back(nameHz[i]); }
         }
         int dashedSeen = 0;   // a crowd of dashed lines costs the frame (each is a stack of small rectangles, measured: 256 marks with one in five dashed took the tick interval from 33 to 40 ms): past 8 they are drawn solid
         for (const auto& m : lists.marks) {
@@ -1937,6 +2134,22 @@ int main(int argc, char** argv) {
             if (m.rgba != 0) { fm.a = a; fm.r = static_cast<std::uint8_t>(m.rgba >> 24); fm.g = static_cast<std::uint8_t>(m.rgba >> 16); fm.b = static_cast<std::uint8_t>(m.rgba >> 8); }
             fig.marks.push_back(fm);
             if (!m.spectrumOnly) { fig.wfMarks.push_back(fm); }
+        }
+        {   // LANE B (S20, S21): the automatic peak labels and the A and B markers share the marks' rows, "+N" tabs and tooltips
+            const auto lbMark = [&](double hz, const std::string& label, std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a) {
+                const double f = fracOf(hz, v.centreHz, v.spanHz);
+                if (f < 0 || f > 1) { return; }
+                FigureMark fm{static_cast<float>(f), 0.0f, label, a, r, g, b, false};
+                fm.hz = hz;
+                fig.marks.push_back(fm);
+                fig.wfMarks.push_back(fm);
+            };
+            for (const auto& p : rv.peaks) { lbMark(p.hz, fmt("%.4f", p.hz / 1e6) + " " + fmt("%.0f dB", static_cast<double>(p.db)), 0xff, 0xc0, 0x4a, 0xc0); }
+            if (rv.ab.aSet || rv.ab.bSet) {
+                const float* fr = rv.frame.empty() ? nullptr : rv.frame.data();
+                if (rv.ab.aSet) { lbMark(rv.ab.aHz, foxsdr::slintextras::abLabelA(rv.ab, foxsdr::slintextras::levelAtHz(fr, rv.frame.size(), rv.lastInfo.centreHz, rv.lastInfo.spanHz, rv.ab.aHz)), 0x5a, 0xe0, 0x9a, 0xf0); }
+                if (rv.ab.bSet) { lbMark(rv.ab.bHz, foxsdr::slintextras::abLabelB(rv.ab, foxsdr::slintextras::levelAtHz(fr, rv.frame.size(), rv.lastInfo.centreHz, rv.lastInfo.spanHz, rv.ab.bHz), rv.abRead), 0x5a, 0xe0, 0x9a, 0xf0); }
+            }
         }
         {   // THE NAMES OF PLUGIN MARKS (lane S1, mark_layout.hpp): stacked into rows, what fits no row counted into "+N" tabs; a name that is drawn gets its tooltip (what it is, its frequency, the plugin it came from)
             const int specRows = std::clamp((plot.h - 24) / 14, 1, 3), wfRows = plot.h >= 200 ? 3 : 2;
@@ -2087,6 +2300,11 @@ int main(int argc, char** argv) {
         }
         ++tickNo;
         if (addSheetCapture) { addSheetCapture(tickNo); }
+        if (tickNo % 8 == 3) {   // lane B: the band zoom's list follows the baseband and the bands (the first publish may precede the first frame)
+            std::string zsig;
+            for (const auto& z : zoomChoices()) { zsig += z.label + "|"; }
+            if (zsig != lookZoomSig) { lookZoomSig = zsig; publishLook(); }
+        }
         // THE RADIOS THE ENGINE HAS (fact.radio.count and the per-radio facts): read when the lists moved and every eighth tick besides - a radio added or removed does not move the lists'
         // fingerprint (screen-s4.md), and the panes must follow within a quarter of a second.
         if (listMoved || tickNo % 8 == 1) { refreshRadios(); }
@@ -2636,6 +2854,70 @@ int main(int argc, char** argv) {
             else { return "marks.[r<n>.]<named|tabs|total|wfnamed|wftabs|tabitems0>, not " + name; }
             return std::string();
         }
+        // wf.<what> (lane B): the waterfall's and the readouts' read-backs
+        if (name.rfind("wf.", 0) == 0) {
+            const std::string what = name.substr(3);
+            RadioView& rv = selected();
+            if (what == "palette") { out = std::to_string(paletteIdx); }
+            else if (what == "speed") { out = std::to_string(speedIdx); }
+            else if (what == "stamp") { out = std::to_string(stampMode); }
+            else if (what == "lines") { out = std::to_string(rv.pacer.lines()); }
+            else if (what == "rowspacing") { out = fmt("%.4f", rv.secondsPerRow); }
+            else if (what == "keycustom") { out = ui->global<WaterfallLook>().get_custom() ? "1" : "0"; }
+            else if (what == "ticks") { out = std::to_string(rv.fig.ageTicks.size()); }
+            else if (what == "tick1") { out = rv.fig.ageTicks.size() > 1 ? rv.fig.ageTicks[1].label : std::string("-"); }
+            else if (what == "tick1frac") { out = rv.fig.ageTicks.size() > 1 ? fmt("%.4f", rv.fig.ageTicks[1].frac) : std::string("-"); }
+            else if (what == "foot") { out = rv.fig.footLeft; }
+            else if (what.rfind("px", 0) == 0) {   // wf.px<x>: the newest line's colour at column x as RRGGBB
+                const std::size_t x = static_cast<std::size_t>(std::atoi(what.c_str() + 2));
+                if (x >= rv.wells.size.wfW) { return "wf.px<x>: x is off the picture"; }
+                const Rgba c = rv.wells.picture[x];
+                out = cascade::core::formatText("%02X%02X%02X", static_cast<unsigned>(c.r), static_cast<unsigned>(c.g), static_cast<unsigned>(c.b));
+            }
+            else if (what == "hipx") {   // the strongest-looking pixel of the newest line (the carrier): RRGGBB
+                Rgba best{}; int bs = -1;
+                for (std::uint32_t x = 0; x < rv.wells.size.wfW; ++x) { const Rgba c = rv.wells.picture[x]; const int sum = c.r + c.g + c.b; if (sum > bs) { bs = sum; best = c; } }
+                out = cascade::core::formatText("%02X%02X%02X", static_cast<unsigned>(best.r), static_cast<unsigned>(best.g), static_cast<unsigned>(best.b));
+            }
+            else if (what == "toppx") { std::size_t lit = 0; for (std::uint32_t x = 0; x < rv.wells.size.wfW; ++x) { const Rgba c = rv.wells.picture[x]; lit += (c.r > 0x30 || c.g > 0x30 || c.b > 0x30) ? 1 : 0; } out = std::to_string(lit); }
+            else { return "wf.<palette|speed|stamp|lines|rowspacing|keycustom|ticks|tick1|tick1frac|foot|px<x>|hipx|toppx>, not " + name; }
+            return std::string();
+        }
+        // look.<what> (lane B): the extras' read-backs - the peak labels, SNR, channel power, tracker, A / B, reference, history, the zoom and the compact window
+        if (name.rfind("lb.", 0) == 0) {
+            const std::string what = name.substr(3);
+            RadioView& rv = selected();
+            if (what == "peaks") { out = std::to_string(rv.peaks.size()); }
+            else if (what == "peakhz") { out = rv.peaks.empty() ? std::string("0") : fmt("%.0f", rv.peaks.front().hz); }
+            else if (what == "snr") { out = rv.snr.valid ? fmt("%.1f", rv.snr.snrDb) : std::string("-"); }
+            else if (what == "floor") { out = rv.snr.valid ? fmt("%.1f", rv.snr.floorDb) : std::string("-"); }
+            else if (what == "power") { out = fmt("%.1f", rv.channelPowerDb); }
+            else if (what == "trackvalid") { out = rv.track.valid ? "1" : "0"; }
+            else if (what == "trackhz") { out = fmt("%.0f", rv.track.hz); }
+            else if (what == "trackoffset") { out = fmt("%.1f", rv.track.offsetHz); }
+            else if (what == "abset") { out = std::to_string((rv.ab.aSet ? 1 : 0) + (rv.ab.bSet ? 2 : 0)); }
+            else if (what == "abdeltahz") { out = fmt("%.0f", rv.abRead.deltaHz); }
+            else if (what == "abdeltadb") { out = std::isnan(rv.abRead.deltaDb) ? std::string("nan") : fmt("%.1f", rv.abRead.deltaDb); }
+            else if (what == "refset") { out = rv.reference.set ? "1" : "0"; }
+            else if (what == "refcols") { std::size_t n = 0; for (const float f : rv.traceState.reference) { n += std::isnan(f) ? 0 : 1; } out = std::to_string(n); }
+            else if (what == "history") { out = std::to_string(rv.history.samples().size()); }
+            else if (what == "historyfile") { out = lookHistoryPath; }
+            else if (what == "historyrows") {   // the rows (not the # lines or the header) of the CSV the last save wrote
+                std::size_t rows = 0;
+                if (!lookHistoryPath.empty()) { std::ifstream in(lookHistoryPath); std::string line; while (std::getline(in, line)) { if (!line.empty() && line[0] != '#' && line.rfind("utc,", 0) != 0) { ++rows; } } }
+                out = std::to_string(rows);
+            }
+            else if (what == "shape") { out = std::to_string(traceShape); }
+            else if (what == "minhold") { std::size_t n = 0; for (const float f : rv.traceState.minHold) { n += f < 299.0f ? 1 : 0; } out = std::to_string(n); }
+            else if (what == "zoomspan") { out = fmt("%.0f", rv.currentView().spanHz); }
+            else if (what == "zoomcentre") { out = fmt("%.0f", rv.currentView().centreHz); }
+            else if (what == "compact") { out = ui->get_compact_strip() ? "1" : "0"; }
+            else if (what == "railfolded") { out = ui->get_rail_folded() ? "1" : "0"; }
+            else if (what == "bookmarks") { out = std::to_string(rv.fig.bookmarkHz.size()); }
+            else if (what == "status") { out = lookStatus; }
+            else { return "lb.<peaks|peakhz|snr|floor|power|trackvalid|trackhz|trackoffset|abset|abdeltahz|abdeltadb|refset|refcols|history|historyfile|historyrows|shape|minhold|zoomspan|zoomcentre|compact|railfolded|bookmarks|status>, not " + name; }
+            return std::string();
+        }
         if (name.rfind("trace.", 0) == 0) {
             const std::string what = name.substr(6);
             if (what == "mode") { out = std::to_string(traceMode); }
@@ -2950,6 +3232,10 @@ int main(int argc, char** argv) {
             lr.hiHz = hz2;
             return std::string();
         }
+        if (what == "menu") { ui->invoke_menu_activated(static_cast<int>(toneHz)); return std::string(); }   // lane B, TEST ONLY: a pick of a right-click menu's item
+        if (what == "menuslider") { ui->invoke_menu_slider_changed(static_cast<int>(toneHz), static_cast<float>(hz2)); return std::string(); }
+        if (what == "menuhz") { menuHz = toneHz; return std::string(); }
+        if (what == "pinch") { ui->global<SpectrumEvents>().invoke_pinch(0, static_cast<float>(toneHz), static_cast<float>(hz2)); return std::string(); }   // TEST ONLY: a pinch of factor `toneHz` about the plot fraction `hz2`
         if (what == "tune" || what == "mode" || what == "bw") {   // setup of a radio a script added: the ordinary op, aimed at that radio
             FoxCommand c = op(what == "tune" ? FOXAPI_OP_SET_FREQUENCY : what == "mode" ? FOXAPI_OP_SET_MODE : FOXAPI_OP_SET_BANDWIDTH);
             if (what == "mode") { c.ival[0] = static_cast<std::int64_t>(toneHz); } else { c.num[0] = toneHz; }

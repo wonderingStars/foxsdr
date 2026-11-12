@@ -1,0 +1,22 @@
+#! frames=900 bank=4 sections=4:0
+# look-waterfall-speed (lane B, S10): the waterfall's line rate. "Every frame" is the engine's frame rate (about 30 lines a second); "1 line/s" makes one line a second from the strongest level of every bin over the frames
+# between (read back: the number of lines made since the pick, and the spacing the footer's history is worked from); "1 line every 10 s" is a tenth of that. The footer says the rate.
+10 state running == 1
++25 state wf.lines > 15
+state wf.rowspacing < 0.1
++1 scroll "Theme" 450
++20 choose "Waterfall speed" "1 line/s"
++2 state wf.lines >= 1
+state wf.rowspacing == 1.0000
+# ten seconds (300 ticks): 10 to 12 lines, not 300
++300 state wf.lines >= 9
+state wf.lines <= 13
+state wf.foot contains "1 line/s"
++1 shot "look-speed-1.png"
++1 choose "Waterfall speed" "1 line every 10 s"
++3 state wf.rowspacing == 10.0000
++200 state wf.lines <= 3
+state wf.foot contains "1 line / 10 s"
++1 choose "Waterfall speed" "Every frame"
++3 state wf.rowspacing < 0.1
++30 state wf.lines > 15

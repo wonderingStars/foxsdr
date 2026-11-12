@@ -1,0 +1,31 @@
+#! frames=700 bank=4 sections=4:0
+# look-trace (lane B, S5, S6, S22): min hold, the filled and bar shapes, and the reference trace. The Display body's "Trace" box picks Min hold (the lowest level each column has reached is kept: read back as the number of columns with a held level);
+# "Trace shape" draws the trace filled or as bars; "Save the trace as the reference" keeps the spectrum as a violet line behind the live one (read back: the columns it covers), the box under it hides it, "Clear" takes it away.
+10 state running == 1
++1 scroll "Theme" 450
++20 choose "Trace" "Min hold"
++3 state trace.mode == 4
++10 state lb.minhold > 100
++1 shot "look-minhold.png"
++1 choose "Trace" "Normal"#2
++3 state lb.minhold == 0
++1 choose "Trace shape" "Filled"
++3 state lb.shape == 1
++5 shot "look-filled.png"
++1 choose "Trace shape" "Bars"
++3 state lb.shape == 2
++5 shot "look-bars.png"
++1 choose "Trace shape" "Line"
++3 state lb.shape == 0
+state lb.refset == 0
++1 click "Save the trace as the reference"
++3 state lb.refset == 1
++10 state lb.refcols > 100
++1 shot "look-reference.png"
++1 click "Show the reference trace"
++10 state lb.refcols == 0
++1 click "Show the reference trace"
++10 state lb.refcols > 100
++1 click "Clear the reference trace"
++3 state lb.refset == 0
++10 state lb.refcols == 0
