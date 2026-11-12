@@ -1,0 +1,27 @@
+# feed-cases.tsv - the cases of tests/test_feed_check.cpp. TAB separated; columns:
+# id | module prefix | wav path ({FEED} generated fixtures, {DRIVE} the slint drive set made by make_*.py, {SAMPLES} local real recordings) | centre Hz | VFO offset Hz | mode | bandwidth Hz | timeout s | expectation
+# Section 1: the 23 synthetic fixtures of src/slint/tests/drive/fixtures (their decoder text is the drive scripts' fixture-*.txt expectations).
+acars-decoder-drive	acars-decoder-	{DRIVE}/acars-decoder.wav	131550000	20000	AM	8000	60	FOXSDR FIXTURE 1 && G-FOXS
+adsb-decoder-drive	adsb-decoder-	{DRIVE}/adsb-decoder.wav	1090000000	0	RAW	2400000	60	FOXSDR1 && 4D2025 && pos=51.5000,-0.1000 && alt=35000ft
+ais-decoder-drive	ais-decoder-	{DRIVE}/ais-decoder.wav	162000000	0	RAW	192000	60	235000001 && pos=51.507400,-0.127800
+aprs-decoder-drive	aprs-decoder-	{DRIVE}/aprs-decoder.wav	144800000	17750	NFM	12500	60	FOXSDR FIXTURE 1 && FOXSDR-1>APRS
+apt-decoder-drive	apt-decoder-	{DRIVE}/apt-decoder.wav	137100000	4000	NFM	40000	90	sync locked
+cw-decoder-drive	cw-decoder-	{DRIVE}/cw-decoder.wav	14037500	22500	CW	500	60	FOXSDR
+demod-analyzer-drive	demod-analyzer-	{DRIVE}/demod-analyzer.wav	145000000	190000	RAW	100000	60	DEMOD QPSK, 48.00 kBd && carrier +190.000 kHz && confidence 1.00
+eas-decoder-drive	eas-decoder-	{DRIVE}/eas-decoder.wav	162400000	40000	NFM	16000	90	ZCZC-WXR-RWT-048113-048121+0030-2311832-KXYZ/NWS- && Required Weekly Test && end of message (NNNN)
+epirb-decoder-drive	epirb-decoder-	{DRIVE}/epirb-decoder.wav	406025000	0	RAW	200000	60	DISTRESS BEACON && country=232 (United Kingdom && hexid=1D0C3DA3AE6B407
+ert-decoder-drive	ert-decoder-	{DRIVE}/ert-decoder.wav	912600000	0	RAW	0	60	id=41234567 && consumption=1234567 && ERT status: rate=2400000Hz
+example-decoder-drive	example-decoder-	{DRIVE}/example-decoder.wav	7100000	94500	LSB	3000	60	8000 samples && num:rms=0.34~0.03
+flex-decoder-drive	flex-decoder-	{DRIVE}/flex-decoder.wav	931937500	17750	NFM	12500	60	capcode=1234567 alpha: FOXSDR FIXTURE
+navtex-dsc-decoder-drive	navtex-dsc-decoder-	{DRIVE}/navtex-dsc-decoder.wav	516300	20000	USB	8000	120	FOXSDR FIXTURE 1 && NAVTEX  [F] A-navigational warning  msg 01  errors 0  repaired 0
+nearby-signal-catch-drive	nearby-signal-catch-	{DRIVE}/tones3.wav	433000000	0	RAW	480000	90	STRONG SIGNAL && 432.85 && 433.05 && 433.2
+pocsag-decoder-drive	pocsag-decoder-	{DRIVE}/pocsag-decoder.wav	153332250	17750	NFM	12500	60	addr=1234567 func=3 alpha: FOXSDR FIXTURE
+rtty-decoder-drive	rtty-decoder-	{DRIVE}/rtty-decoder.wav	14057500	22500	LSB	3000	90	FOXSDR FIXTURE 1
+selcal-decoder-drive	selcal-decoder-	{DRIVE}/selcal-decoder.wav	5575500	22500	USB	3000	90	SELCAL AB-CD
+sstv-decoder-drive	sstv-decoder-	{DRIVE}/sstv-decoder.wav	14230000	3000	USB	42000	90	VIS 44
+twotone-decoder-drive	twotone-decoder-	{DRIVE}/twotone-decoder.wav	153958250	41750	NFM	12500	90	TWO-TONE && Motorola Quick Call II && code 258
+vor-decoder-drive	vor-decoder-	{DRIVE}/vor-decoder.wav	113000000	13000	AM	22000	90	num:VOR radial=88~3
+weather-decoder-drive	weather-decoder-	{DRIVE}/weather-decoder.wav	433920000	0	RAW	250000	90	id=F824 ch=2 rc=6B temp=21.7C hum=55% batt=ok && id=1D20 ch=3 rc=85 temp=-8.4C hum=28% batt=low
+wefax-decoder-drive	wefax-decoder-	{DRIVE}/wefax-decoder.wav	3853100	3000	USB	42000	120	start tone, IOC 576 && phased at 120 lpm, IOC 576 && chart complete
+workbench-drive	workbench-	{DRIVE}/workbench.wav	162475000	0	RAW	240000	60	WORKBENCH && NOAA weather: 7 of 7 channels in range
+packet-tnc-drive	packet-tnc-	{DRIVE}/aprs-decoder.wav	144800000	17750	NFM	12500	90	FOXSDR-1>APRS
