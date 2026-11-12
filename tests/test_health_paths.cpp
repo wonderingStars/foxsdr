@@ -280,7 +280,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         {"ReaderLeak", "src/core/patch_radio.cpp", 1},
         {"ReaderLeak", "src/source/kiwisdr_source.cpp", 2},   // (engine wiring lane 1: the open-failure path and closeDevice each raise it when the client abandoned a thread)
         {"ReaderLeak", "src/source/net_sample_source.cpp", 1},
-        {"ReaderLeak", "src/source/g39ddc_source.cpp", 1},   // (osslibs: the WiNRADiO bridge abandons its apartment thread when a library call never returns)
+        {"ReaderLeak", "src/source/vendor_apartment.cpp", 1},   // (osslibs: the run-time bridges abandon their apartment thread when a library call never returns)
         {"CloseLeak", "src/source/soundcard_source.cpp", 1}, {"CloseLeak", "src/sink/pa_init.cpp", 1},
         {"LinkStranded", "src/source/sdrplay_source.cpp", 1},
         {"StreamRestart", "src/source/airspy_source.cpp", 1},

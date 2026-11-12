@@ -550,7 +550,7 @@ std::string readText(const std::string& path) {
 void testSinks() {
     const std::string root = EOL_SRC_DIR;
     for (const char* f : {"src/source/g39ddc_source.cpp", "src/source/g39ddc_source.hpp", "src/source/g39ddc_api.hpp", "src/source/vendor_lib.cpp",
-                          "src/source/vendor_lib.hpp"}) {
+                          "src/source/vendor_lib.hpp", "src/source/vendor_apartment.cpp", "src/source/vendor_apartment.hpp"}) {
         const std::string t = readText(root + "/" + f);
         CHECK(!t.empty());
         CHECK(!contains(t, "stderr"));

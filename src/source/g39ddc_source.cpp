@@ -14,10 +14,8 @@
 #include <mutex>
 #include <thread>
 
-#include "core/health_events.hpp"
-#include "dsp/spsc_ring.hpp"
 #include "source/g39ddc_api.hpp"
-#include "source/vendor_guard.hpp"
+#include "source/vendor_apartment.hpp"
 #include "source/vendor_lib.hpp"
 
 namespace cascade::source {
@@ -26,15 +24,9 @@ namespace {
 
 constexpr int kDefaultCallMs = 5000;
 constexpr int kDefaultSilenceMs = 5000;
-constexpr int kJoinMs = 1500;
 constexpr std::uint32_t kSamplesPerBuffer = 4096;  // a multiple of 64, as the document requires
-constexpr std::size_t kRingPairs = std::size_t{1} << 20;
 constexpr std::uint32_t kMaxDdcTypes = 64;
 constexpr double kPreferredRateHz = 192000.0;
-
-std::int64_t nowMs() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
-}
 
 std::string cleanSerial(const char* s, std::size_t max) {
     std::string r;
@@ -104,170 +96,26 @@ bool g39PlanTune(double centerHz, std::uint64_t minHz, std::uint64_t maxHz, std:
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------
-// The apartment: the one thread that calls the library.
+// The apartment (one thread for every library call) and the stream link are shared with the other WiNRADiO bridge: source/vendor_apartment.hpp.
 
 namespace {
 
-struct TaskState {
-    std::function<void()> fn;
-    std::mutex m;
-    std::condition_variable cv;
-    bool done = false;
-    bool faulted = false;
-};
+using vendorapt::Apartment;
+using vendorapt::nowMs;
 
-class Apartment {
-public:
-    Apartment() : st_(std::make_shared<Shared>()) {
-        auto st = st_;
-        thread_ = std::thread([st] { loop(st); });
-    }
-    ~Apartment() { shutdown(); }
-
-    enum class Result { Done, TimedOut, Faulted, Dead };
-
-    Result run(std::function<void()> fn, int timeoutMs) {
-        if (dead_.load()) { return Result::Dead; }
-        auto t = std::make_shared<TaskState>();
-        t->fn = std::move(fn);
-        {
-            std::lock_guard<std::mutex> lk(st_->m);
-            if (st_->stop) { return Result::Dead; }
-            st_->q.push_back(t);
-        }
-        st_->cv.notify_one();
-        std::unique_lock<std::mutex> lk(t->m);
-        if (!t->cv.wait_for(lk, std::chrono::milliseconds(timeoutMs), [&] { return t->done; })) {
-            dead_.store(true);
-            return Result::TimedOut;
-        }
-        if (t->faulted) {
-            dead_.store(true);
-            return Result::Faulted;
-        }
-        return Result::Done;
-    }
-
-    bool dead() const { return dead_.load(); }
-
-    // Ends the thread. True when it was joined; false when it was abandoned (a call into the library never returned).
-    bool shutdown() {
-        if (!thread_.joinable()) { return !abandoned_; }
-        {
-            std::lock_guard<std::mutex> lk(st_->m);
-            st_->stop = true;
-        }
-        st_->cv.notify_all();
-        std::unique_lock<std::mutex> lk(st_->m);
-        const bool exited = st_->cv2.wait_for(lk, std::chrono::milliseconds(kJoinMs), [&] { return st_->exited; });
-        lk.unlock();
-        if (exited) {
-            thread_.join();
-            return true;
-        }
-        abandoned_ = true;
-        core::health::raiseRecovered(core::health::Recovered::ReaderLeak);
-        thread_.detach();
-        return false;
-    }
-
-private:
-    struct Shared {
-        std::mutex m;
-        std::condition_variable cv;   // work or stop
-        std::condition_variable cv2;  // exited
-        std::deque<std::shared_ptr<TaskState>> q;
-        bool stop = false;
-        bool exited = false;
-    };
-
-    static void loop(std::shared_ptr<Shared> st) {
-        for (;;) {
-            std::shared_ptr<TaskState> t;
-            {
-                std::unique_lock<std::mutex> lk(st->m);
-                st->cv.wait(lk, [&] { return st->stop || !st->q.empty(); });
-                if (st->q.empty()) { break; }
-                t = st->q.front();
-                st->q.pop_front();
-            }
-            bool ok = vendor_run(t->fn);
-            {
-                std::lock_guard<std::mutex> lk(t->m);
-                t->faulted = !ok;
-                t->done = true;
-            }
-            t->cv.notify_all();
-        }
-        {
-            std::lock_guard<std::mutex> lk(st->m);
-            st->exited = true;
-        }
-        st->cv2.notify_all();
-    }
-
-    static void tramp(void* ctx) noexcept {
-        auto* fn = static_cast<std::function<void()>*>(ctx);
-        try {
-            (*fn)();
-        } catch (...) {
-        }
-    }
-    static bool vendor_run(std::function<void()>& fn) { return callGuardingVendorFaults(&Apartment::tramp, &fn); }
-
-    std::shared_ptr<Shared> st_;
-    std::thread thread_;
-    std::atomic<bool> dead_{false};
-    bool abandoned_ = false;
-};
-
-}  // namespace
-
-// ------------------------------------------------------------------------------------------------------------------------------------------
-
-namespace {
-
-// Shared with the library's callback thread. Heap-allocated and, when the apartment is abandoned, never freed.
-struct Link {
+// Shared with the library's callback thread (see vendor_apartment.hpp).
+struct Link : vendorapt::StreamLink {
     std::uint32_t channel = 0;
-    std::atomic<bool> gate{false};
-    dsp::SpscRing<std::complex<float>> ring{kRingPairs};
-    std::mutex m;
-    std::condition_variable cv;
-    std::atomic<std::int64_t> lastDataMs{0};
-    std::atomic<std::uint64_t> callbacks{0}, pairs{0}, dropped{0}, bad{0};
 };
 
 void FOX_G39_CALL ddc1Callback(std::uint32_t channel, const void* buffer, std::uint32_t n, std::uint32_t bits, std::uintptr_t user) {
     Link* l = reinterpret_cast<Link*>(user);
     if (l == nullptr) { return; }
-    l->callbacks.fetch_add(1, std::memory_order_relaxed);
-    if (channel != l->channel || buffer == nullptr || n == 0 || n > (1u << 20) || (bits != 16 && bits != 32)) {
-        l->bad.fetch_add(1, std::memory_order_relaxed);
+    if (channel != l->channel) {
+        l->countBad();
         return;
     }
-    if (!l->gate.load(std::memory_order_acquire)) { return; }
-    std::complex<float> tmp[1024];
-    std::uint32_t done = 0;
-    const auto* b16 = static_cast<const std::int16_t*>(buffer);
-    const auto* b32 = static_cast<const std::int32_t*>(buffer);
-    while (done < n) {
-        const std::uint32_t k = std::min<std::uint32_t>(n - done, 1024);
-        for (std::uint32_t i = 0; i < k; ++i) {
-            const std::size_t at = (static_cast<std::size_t>(done) + i) * 2;
-            if (bits == 16) {
-                tmp[i] = {static_cast<float>(b16[at]) * (1.0f / 32768.0f), static_cast<float>(b16[at + 1]) * (1.0f / 32768.0f)};
-            } else {
-                tmp[i] = {static_cast<float>(static_cast<double>(b32[at]) / 2147483648.0), static_cast<float>(static_cast<double>(b32[at + 1]) / 2147483648.0)};
-            }
-        }
-        const std::size_t w = l->ring.write(tmp, k);
-        l->pairs.fetch_add(w, std::memory_order_relaxed);
-        if (w < k) { l->dropped.fetch_add(k - w, std::memory_order_relaxed); }
-        done += k;
-    }
-    l->lastDataMs.store(nowMs(), std::memory_order_release);
-    l->cv.notify_one();
+    l->deliver(buffer, n, bits);
 }
 
 // What a task hands back. Held by shared_ptr and captured BY VALUE by every task: a library call that returns after its caller gave up
