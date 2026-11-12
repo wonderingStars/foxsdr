@@ -839,6 +839,12 @@ target_compile_definitions(test_apply_command PRIVATE
 if(MSVC AND TARGET test_engine_service_options)
     target_link_options(test_engine_service_options PRIVATE /STACK:8388608)
 endif()
+# THE STACK OF test_config (engine serial lane A): its main() keeps hundreds of AppConfig scenarios in one frame - 1,005,800 bytes (dumpbin /disasm of test_config.obj: the __chkstk size) against the 1 MB
+# default stack on MSVC. About half the runs died with 0xC00000FD under ConfigStore::load (fault offsets in ntdll; the same binary with /STACK:8388608 passed 14 of 14). The frame was already at the edge before
+# this lane (its additions to main are assignments, no new locals); nothing about the product moved, the headroom is the test host's to give.
+if(MSVC AND TARGET test_config)
+    target_link_options(test_config PRIVATE /STACK:8388608)
+endif()
 # THE GROUP-8 FIXTURE (window port group 8, API 0.3 section 8.7): a second real module - an I/Q
 # decoder (mute-while-running defaults ON), a DEVICE-CENTRE preset, a preset the host drops, a
 # preset with no label, and two marks on the spectrum - loaded beside the stage-1 fixture by the

@@ -207,6 +207,10 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(radioLockVersion_);  // the frequency lock of every radio (FOXAPP_OP_RADIO_LOCK)
     f.value(recordNameVersion_); // the recording file-name template (FOXAPP_OP_SET_RECORD_NAME)
     f.value(stereoSystemVersion_);  // the stereo system of every radio (FOXAPP_OP_SET_STEREO_SYSTEM)
+    f.value(poolVersion_);   // which radios a pool claim holds (engine_pool.cpp)
+    f.value(ppmAutoVersion_);   // the pilot ppm measurements (engine_mpx.cpp)
+    f.value(mpxVersion_);   // which radios record their multiplex (engine_mpx.cpp)
+    f.value(hotplugVersion_);   // the hot-plug counts (engine_hotplug.cpp)
     f.text(markerError_);
     // The DSP chain's input rate (API 0.3 8.5, fact.input.rateHz): the source's rate
     // unless the chain refused a change of it, and then the one the display is
@@ -413,6 +417,8 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(rx().deviceAdcSwitchesPresent_);
     f.value(rx().deviceDither_);
     f.value(rx().deviceRandomiser_);
+    f.value(rx().deviceDirectPresent_);
+    f.value(rx().deviceDirectChoice_);
     f.value(rx().deviceOffsetTuningPresent_);
     f.value(rx().deviceOffsetTuning_);
     f.value(biasTeePanel_.present);
@@ -1191,6 +1197,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             b.deviceOptions.emplace_back("randomiser", rx().deviceRandomiser_);
         }
         if (rx().deviceOffsetTuningPresent_) { b.deviceOptions.emplace_back("offset_tuning", rx().deviceOffsetTuning_); }
+        if (rx().deviceDirectPresent_) { b.deviceOptions.emplace_back("direct_sampling", rx().deviceDirectChoice_ != 0); }   // (value: forced; the choice itself is fact.radio.n.directSampling)
     }
     b.serialPorts = serialPorts_;
     buildApiListsSource(b);
@@ -1361,6 +1368,11 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     fact("smeter.cal.state", smeterState_, true);
     fact("smeter.cal.message", smeterMessage_, true);
     fact("smeter.cal.devices", std::to_string(smeterCal_.size()), true);
+    // HOT-PLUG (engine serial lane A, R10): whether the device-change notice is running and what it has counted (counts only).
+    fact("hotplug.on", hotplugWatch_ ? "1" : "0");
+    fact("hotplug.bursts", std::to_string(hotplugBursts_));
+    fact("hotplug.arrivals", std::to_string(hotplugArrivalsTotal_));
+    fact("hotplug.removals", std::to_string(hotplugRemovalsTotal_));
     fact("radio.count", std::to_string(receiverCount()));
     fact("radio.max", std::to_string(kMaxReceivers));
     fact("radio.solo", std::to_string(soloRadio_));   // the radio heard alone, 0 = nobody (RADIO_SOLO's read-back; multi-radio stage 5 addition)
@@ -1382,6 +1394,39 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         const std::string pre = "radio." + std::to_string(n) + ".";
         fact(pre + "state", radioStateWord(n));
         fact(pre + "locked", receivers_[n - 1u]->tuneLocked_ ? "1" : "0");
+        fact(pre + "claimed", receivers_[n - 1u]->claimed_ ? "1" : "0");
+        fact(pre + "mpx", receivers_[n - 1u]->mpxRecorder_.recording() ? "1" : "0");
+        fact(pre + "ifrec", receivers_[n - 1u]->ifRecorder_.recording() ? "1" : "0");
+        {
+            const cascade::core::ppmauto::Result pr = receivers_[n - 1u]->ppmAuto_.result(clockS());
+            const char* word = pr.state == cascade::core::ppmauto::State::Measuring ? "measuring" : (pr.state == cascade::core::ppmauto::State::Done ? "done" : (pr.state == cascade::core::ppmauto::State::Failed ? "failed" : "idle"));
+            {
+                const std::size_t zf = receivers_[n - 1u]->pipeline_.ifZoomFftSize();
+                if (zf == 0) {
+                    fact(pre + "zoom", "off");
+                } else {
+                    char zb[96];
+                    const double chan = receivers_[n - 1u]->pipeline_.channelRateHz();
+                    const double m = std::max(1.0, std::floor(chan / receivers_[n - 1u]->ifZoomSpanHz_ + 0.5));
+                    std::snprintf(zb, sizeof zb, "%zu bins of %.3f Hz over %.0f Hz", zf, chan / m / static_cast<double>(zf), chan / m);
+                    fact(pre + "zoom", zb);
+                }
+            }
+            fact(pre + "ppmauto.state", word);
+            if (pr.state != cascade::core::ppmauto::State::Idle) {
+                char pb[48];
+                std::snprintf(pb, sizeof pb, "%.3f", pr.progress);
+                fact(pre + "ppmauto.progress", pb);
+                std::snprintf(pb, sizeof pb, "%d", pr.readings);
+                fact(pre + "ppmauto.readings", pb);
+                if (pr.readings > 0) {
+                    std::snprintf(pb, sizeof pb, "%.2f", pr.ppm);
+                    fact(pre + "ppmauto.ppm", pb);
+                    std::snprintf(pb, sizeof pb, "%.3f", pr.uncertaintyPpm);
+                    fact(pre + "ppmauto.uncertainty", pb);
+                }
+            }
+        }
         {
             const int sys = receivers_[n - 1u]->stereoSystem_;
             fact(pre + "stereo.system", sys == 1 ? "pilot" : (sys == 2 ? "oirt" : "auto"));

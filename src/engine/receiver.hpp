@@ -36,6 +36,7 @@
 #include "core/noise_floor_tracker.hpp"
 #include "core/pipeline.hpp"
 #include "core/receiver_snapshot.hpp"
+#include "core/ppm_auto.hpp"
 #include "core/recorder.hpp"
 #include "core/record_finish.hpp"
 #include "core/retune_coalescer.hpp"
@@ -278,6 +279,8 @@ struct Receiver {
     int stereoSystem_ = 0;          // FOXAPP_OP_SET_STEREO_SYSTEM: 0 automatic, 1 pilot tone, 2 OIRT (engine wiring W2; not saved)
     int stereoSystemApplied_ = 1;   // what the pipeline was last told (1 or 2)
     bool tuneLocked_ = false;   // the frequency lock (FOXAPP_OP_RADIO_LOCK, engine wiring W2): every way a retune reaches this radio is refused or a no-op
+    bool deviceDirectPresent_ = false;        // the native RTL-SDR driver on a tuner that is not a Blog V4 (R11): the "direct_sampling" choice
+    int deviceDirectChoice_ = 0;              // 0 automatic / 1 never / 2 I branch / 3 Q branch
     bool deviceOffsetTuningPresent_ = false;  // an rtl_tcp server's E4000 (R12), where its header names one
     bool deviceOffsetTuning_ = false;
     // The ACTIVE source's kind as the config store spells it. Tracked at each
@@ -365,6 +368,32 @@ struct Receiver {
     // S-meter display units (engine wiring lane 1): FOXAPI_METER_*, dBFS by default.
     int meterUnits_ = 0;
     // Noise-reduction method (engine wiring lane 1): FOXAPI_NR_*, standard by default.
+    // The spectrum's FFT size, window and frame rate (engine serial lane A): 1024 / Blackman-Harris / automatic is the legacy estimator.
+    int spectrumFft_ = 1024;
+    int spectrumWindow_ = 3;
+    double spectrumFps_ = 0.0;
+    int iqCorrect_ = 0;   // the I/Q correction bits (engine serial lane A, F16)
+    bool afcOn_ = false;           // AFC (engine serial lane A, F13)
+    double afcPullInHz_ = 2500.0;
+    bool cwPeakOn_ = false;        // the CW peak filter (engine serial lane A, F8)
+    double cwPeakWidthHz_ = 100.0;
+    double cwPeakBoostDb_ = 12.0;
+    int stereoPlaceMode_ = 0;      // stereo placement of a mono receiver (engine serial lane A, F20/D5)
+    double stereoPlaceValue_ = 0.0;
+    // VFO A / B (engine serial lane A, T6): which letter the radio's own tune belongs to, and the register of the other one (vfoExchange).
+    struct VfoReg {
+        double hz = 0.0;
+        int mode = 0;          // the modeIndex_ (0-based)
+        double bwHz = 0.0;
+        bool set = false;
+    };
+    int vfoActive_ = 0;
+    VfoReg vfoOther_;
+    int recordIqFormat_ = 0;       // the sample format of the next takes (engine serial lane A, P7)
+    int recordAudioFormat_ = 0;
+    bool ctun_ = false;            // centre tuning (engine serial lane A, T4)
+    bool claimed_ = false;         // held by a pool claim (FOXAPP_OP_CHANNEL_CLAIM, engine serial lane A, R19); not saved
+    int filterShape_ = 0;          // the channel filter shape (engine serial lane A, F6)
     int nrMethod_ = 0;
     std::array<double, 8> eqDb_{};   // the equaliser's bands (engine wiring lane 1): all flat
     int audioHpHz_ = 0;              // the audio high-pass: 0 off / 100 / 300
@@ -417,6 +446,12 @@ struct Receiver {
     // stop*Recording clears the pointer before stopping the recorder.
     cascade::core::Recorder iqRecorder_;
     cascade::core::Recorder audioRecorder_;
+    double ifZoomSpanHz_ = 0.0;   // the span asked of the IF zoom (engine serial lane A, S12); the size is the pipeline's
+    cascade::core::ppmauto::Measurement ppmAuto_;   // the pilot-based ppm measurement (engine serial lane A, R18)
+    double ppmAutoLastReadS_ = 0.0;
+    cascade::core::Recorder ifRecorder_;   // the IF take (engine serial lane A, P4): I/Q at the channel rate
+    double ifRecordRateHz_ = 0.0;          // the channel rate its header was written for
+    cascade::core::Recorder mpxRecorder_;   // the FM multiplex take (engine serial lane A, D4): a 32-bit float audio take at 192 kHz
     std::string recordError_;  // red text in the Recorder section; "" = none
     // Why a take ended when nothing went WRONG (the user changed source):
     // muted text in the Recorder section and its own field on the web page,

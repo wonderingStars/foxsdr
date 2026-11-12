@@ -59,6 +59,7 @@
 #include "core/thread_beats.hpp"
 #include "core/tune_control.hpp"
 #include "source/iq_file_source.hpp"
+#include "source/raw_iq_net_source.hpp"
 #include "source/kiwisdr_source.hpp"
 #include "source/rsp_rows.hpp"
 #include "source/soapy_enum_proc.hpp"
@@ -318,6 +319,14 @@ template <typename Fn>
 bool withOffsetTuning(cascade::source::DeviceSource* dev, Fn&& fn) {
     auto* rt = dynamic_cast<cascade::source::RtlTcpSource*>(dev);
     if (rt == nullptr || !rt->hasOffsetTuning()) { return false; }
+    return fn(*rt);
+}
+
+// DIRECT SAMPLING (row R11): the native RTL-SDR driver on a tuner that is not a Blog V4; a choice, not a switch (0 automatic, 1 never, 2 I branch, 3 Q branch).
+template <typename Fn>
+bool withDirectSampling(cascade::source::DeviceSource* dev, Fn&& fn) {
+    auto* rt = dynamic_cast<cascade::source::RtlSdrSource*>(dev);
+    if (rt == nullptr || !rt->directSamplingSupported()) { return false; }
     return fn(*rt);
 }
 
@@ -2473,6 +2482,7 @@ std::unique_ptr<cascade::source::DeviceSource> Engine::makeDeviceSource(
     if (kind == kPlutoDriverKey) { return std::make_unique<cascade::source::PlutoSource>(); }
     if (kind == kRtlTcpDriverKey) { return std::make_unique<cascade::source::RtlTcpSource>(); }
     if (kind == kKiwiSdrDriverKey) { return std::make_unique<cascade::source::KiwiSdrSource>(); }
+    if (kind == kRawIqDriverKey) { return std::make_unique<cascade::source::RawIqNetSource>(); }
     if (kind == "soapy") { return std::make_unique<cascade::source::SoapySource>(); }
     return nullptr;
 }
@@ -3064,6 +3074,10 @@ void Engine::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::s
         rx().deviceHdr_ = d.hdrMode();
         return true;
     });
+    rx().deviceDirectPresent_ = withDirectSampling(&dev, [this](auto& d) {
+        rx().deviceDirectChoice_ = d.directSamplingChoice();
+        return true;
+    });
     rx().deviceOffsetTuningPresent_ = withOffsetTuning(&dev, [this](auto& d) {
         rx().deviceOffsetTuning_ = d.offsetTuning();
         return true;
@@ -3139,6 +3153,7 @@ void Engine::followInputRate() {
     if (rx().iqRecorder_.recording() && rx().pipeline_.inputRateHz() != rx().iqRecordRateHz_) {
         stopIqRecording();
     }
+    if (rx().ifRecorder_.recording() && rx().pipeline_.channelRateHz() != rx().ifRecordRateHz_) { stopIfRecording(); }   // P4: the channel rate moved with the input rate
 
     // Every source change funnels through here, which makes it the one place
     // that can keep the decoder instances honest about the rate and centre
@@ -4899,6 +4914,41 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         for (std::size_t i = 0; i < rxa.eqDb_.size(); ++i) { r.eqDb[i] = rxa.eqDb_[i]; }
         r.audioHighPassHz = static_cast<std::uint32_t>(rxa.audioHpHz_);
         r.audioLowPassHz = static_cast<std::uint32_t>(rxa.audioLpHz_);
+        r.filterShape = static_cast<std::uint32_t>(rxa.filterShape_);
+        r.filterShapeActive = rxa.pipeline_.channelShapeActive() ? 1u : 0u;
+        r.ctun = rxa.ctun_ ? 1u : 0u;
+        r.recordIqFormat = static_cast<std::uint32_t>(rxa.recordIqFormat_);
+        r.recordAudioFormat = static_cast<std::uint32_t>(rxa.recordAudioFormat_);
+        r.vfoActive = static_cast<std::uint32_t>(rxa.vfoActive_);
+        r.vfoOtherHz = rxa.vfoOther_.set ? rxa.vfoOther_.hz : 0.0;
+        r.vfoOtherBandwidthHz = rxa.vfoOther_.set ? rxa.vfoOther_.bwHz : 0.0;
+        r.vfoOtherMode = rxa.vfoOther_.set ? static_cast<std::uint32_t>(rxa.vfoOther_.mode + 1) : 0u;
+        r.stereoPlaceMode = static_cast<std::uint32_t>(rxa.stereoPlaceMode_);
+        r.stereoPlaceValue = rxa.stereoPlaceValue_;
+        r.cwPeakOn = rxa.cwPeakOn_ ? 1u : 0u;
+        r.cwPeakWidthHz = rxa.cwPeakWidthHz_;
+        r.cwPeakBoostDb = rxa.cwPeakBoostDb_;
+        r.afcOn = rxa.afcOn_ ? 1u : 0u;
+        r.afcPullInHz = rxa.afcPullInHz_;
+        r.afcCorrectionHz = rxa.pipeline_.afcCorrectionHz();
+        r.afcLocked = rxa.pipeline_.afcLocked() ? 1u : 0u;
+        r.iqCorrectMask = static_cast<std::uint32_t>(rxa.iqCorrect_);
+        r.iqImageRejectionDb = rxa.pipeline_.iqImageRejectionDb();
+        r.spectrumFftSize = static_cast<std::uint32_t>(rxa.spectrumFft_);
+        r.spectrumWindow = static_cast<std::uint32_t>(rxa.spectrumWindow_);
+        r.spectrumFrameRateHz = rxa.spectrumFps_;
+        if (const cascade::source::IqFileSource* fs = dynamic_cast<const cascade::source::IqFileSource*>(&const_cast<cascade::core::Pipeline&>(rxa.pipeline_).rawSource() /* (read only: the file source's readers are atomics) */); fs != nullptr && fs->totalFrames() > 0) {
+            const double rate = fs->sampleRateHz();
+            r.fileSource = 1u;
+            r.filePositionSec = static_cast<double>(fs->positionFrames()) / rate;
+            r.fileDurationSec = static_cast<double>(fs->totalFrames()) / rate;
+            if (fs->loopOn()) {
+                r.fileLoopStartSec = static_cast<double>(fs->loopStartFrame()) / rate;
+                r.fileLoopEndSec = static_cast<double>(fs->loopEndFrame()) / rate;
+            }
+            r.fileStartUnixMs = static_cast<double>(fs->startUnixMs());
+            r.fileStartSource = static_cast<std::uint32_t>(fs->startSource());
+        }
         r.noiseSquelchOn = rxa.noiseSquelchOn_ ? 1u : 0u;
         r.noiseSquelchThresholdDb = rxa.noiseSquelchThresholdDb_;
         r.noiseSquelchTailMs = rxa.noiseSquelchTailMs_;
@@ -6079,6 +6129,8 @@ void Engine::stopReceiver(const char* who) {
     const auto recordersFrom = std::chrono::steady_clock::now();
     if (iq) { stopIqRecording(); }
     if (audio) { stopAudioRecording(); }
+    if (rx().mpxRecorder_.recording()) { stopMpxRecording(); }
+    if (rx().ifRecorder_.recording()) { stopIfRecording(); }
     const long long recordersMs = static_cast<long long>(
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - recordersFrom).count());
     // WHO ASKED, in the log (0.99.68): that same report's log showed the stop's cost and nothing of its cause. One line, before the stop
@@ -6292,6 +6344,10 @@ bool Engine::selectSourceById(const std::string& id) {
     }
     if (kind == "open-kiwisdr") {
         openKiwiAt(args);
+        return true;
+    }
+    if (kind == "open-rawiq") {
+        openRawIqAt(args);
         return true;
     }
     // The KIND is matched too - a native row and a Soapy row for one dongle
@@ -6528,6 +6584,18 @@ void Engine::tuneAbsoluteHz(double absHz, bool isPluginPreset) {
     // readback, which simply won't move. isPluginPreset is only ever true from
     // applyPluginPreset, forwarded so a mismatch this produces can say which
     // plugin's button asked for it — see applyRetuneNow.
+    // CENTRE TUNING (engine serial lane A, row T4; Receiver::ctun_): with it ON a tune that lands inside the span the radio is already showing moves the VFO and leaves the radio's centre (and so the
+    // spectrum and waterfall) where they are; one that lands outside it moves the centre, as it always did, and keeps the offset. OFF is the old rule: the offset is kept and the centre follows.
+    if (rx().ctun_ && !isPluginPreset) {
+        const double centre = rx().pipeline_.activeSource().centerFrequencyHz();
+        const double rate = rx().pipeline_.inputRateHz();
+        const double off = absHz - centre;
+        if (rate > 0.0 && std::fabs(off) + 0.5 * rx().vfoBandwidthHz_ <= 0.45 * rate) {
+            rx().pipeline_.setVfoOffsetHz(off);
+            if (scopedSlot() == 0u && rx().pipeline_.running() && !scanner_.active()) { audioOutputTunePending_ = true; }
+            return;
+        }
+    }
     retuneSourceHz(absHz - rx().pipeline_.vfoOffsetHz(), isPluginPreset);
     // A MANUAL TUNE gives an audio-output decoder its first chance to play (an independent wake signal before it has an instance to
     // report as the playing plugin); the pass's lifecycle step consumes it (engine_plugin_run.cpp).
@@ -7302,6 +7370,34 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
             return res;
         }
+        case FOXAPP_OP_FILE_SEEK: {
+            cascade::source::IqFileSource* file = dynamic_cast<cascade::source::IqFileSource*>(&rx().pipeline_.rawSource());
+            if (file == nullptr || file->totalFrames() == 0) { return refuse(FOXAPI_UNSUPPORTED, "this radio is not playing an I/Q file"); }
+            const double rate = file->sampleRateHz();
+            const double lengthSec = static_cast<double>(file->totalFrames()) / rate;
+            double sec = c.num[0];
+            if (c.ival[0] == 1) { sec *= lengthSec; }
+            if (!std::isfinite(sec) || sec < 0.0 || sec >= lengthSec) { return refuse(FOXAPI_OUT_OF_RANGE, "the place is inside the recording"); }
+            if (!file->seekFrame(static_cast<std::uint64_t>(std::llround(sec * rate)))) { return refuse(FOXAPI_OUT_OF_RANGE, "the place is inside the recording"); }
+            res.applied[0] = sec;
+            return res;
+        }
+        case FOXAPP_OP_FILE_LOOP: {
+            cascade::source::IqFileSource* file = dynamic_cast<cascade::source::IqFileSource*>(&rx().pipeline_.rawSource());
+            if (file == nullptr || file->totalFrames() == 0) { return refuse(FOXAPI_UNSUPPORTED, "this radio is not playing an I/Q file"); }
+            if (c.ival[0] == 0) {
+                file->clearLoop();
+                return res;
+            }
+            const double rate = file->sampleRateHz();
+            const double a = c.num[0], b = c.num[1];
+            if (!std::isfinite(a) || !std::isfinite(b) || a < 0.0 || !(a < b) || !file->setLoopFrames(static_cast<std::uint64_t>(std::llround(a * rate)), static_cast<std::uint64_t>(std::llround(b * rate)))) {
+                return refuse(FOXAPI_OUT_OF_RANGE, "the loop runs from a start to a later end, both inside the recording");
+            }
+            res.applied[0] = a;
+            res.applied[1] = b;
+            return res;
+        }
         case FOXAPP_OP_SET_STEREO_SYSTEM:
             if (c.ival[0] < 0 || c.ival[0] > 2) { return refuse(FOXAPI_OUT_OF_RANGE, "the stereo system is 0 automatic, 1 pilot tone or 2 OIRT"); }
             if (rx().stereoSystem_ == static_cast<int>(c.ival[0])) { return refuse(FOXAPI_NO_CHANGE, "the stereo system is that already"); }
@@ -7562,6 +7658,211 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             rxs.noiseSquelchTailMs_ = tail;
             res.applied[0] = thr;
             res.applied[1] = tail;
+            return res;
+        }
+        case FOXAPI_OP_SET_SPECTRUM: {
+            Receiver& rxs = rx();
+            if (!rxs.pipeline_.setSpectrum(static_cast<std::size_t>(c.ival[0]), static_cast<int>(c.ival[1]), c.num[0])) {
+                return refuse(FOXAPI_OUT_OF_RANGE, "the spectrum FFT size is a power of two from 1024 to 131072, the window 0 to 4 and the frame rate 0 (automatic) or 1 to 120 a second");
+            }
+            rxs.spectrumFft_ = static_cast<int>(c.ival[0]);
+            rxs.spectrumWindow_ = static_cast<int>(c.ival[1]);
+            rxs.spectrumFps_ = c.num[0];
+            res.applied[0] = static_cast<double>(c.ival[0]);
+            res.applied[1] = c.num[0];
+            return res;
+        }
+        case FOXAPI_OP_SET_IQ_CORRECT: {
+            Receiver& rxs = rx();
+            if (!rxs.pipeline_.setIqCorrection(static_cast<int>(c.ival[0]))) { return refuse(FOXAPI_OUT_OF_RANGE, "the I/Q correction is a sum of 1 (DC removal), 2 (balance) and 4 (swap I and Q)"); }
+            rxs.iqCorrect_ = static_cast<int>(c.ival[0]);
+            res.applied[0] = static_cast<double>(c.ival[0]);
+            return res;
+        }
+        case FOXAPI_OP_SET_AFC: {
+            Receiver& rxs = rx();
+            double pull = rxs.afcPullInHz_;
+            if (c.ival[1] == 1) { pull = c.num[0]; }
+            if (!rxs.pipeline_.setAfc(on, pull)) { return refuse(FOXAPI_OUT_OF_RANGE, "the AFC pull-in range is 50 to 20000 Hz"); }
+            rxs.afcOn_ = on;
+            rxs.afcPullInHz_ = pull;
+            res.applied[0] = pull;
+            return res;
+        }
+        case FOXAPI_OP_SET_CW_PEAK: {
+            Receiver& rxs = rx();
+            double width = rxs.cwPeakWidthHz_, boost = rxs.cwPeakBoostDb_;
+            if (c.ival[1] == 1) {
+                width = c.num[0];
+                boost = c.num[1];
+            }
+            if (!rxs.pipeline_.setCwPeak(on, width, boost)) { return refuse(FOXAPI_OUT_OF_RANGE, "the CW peak filter is 30 to 500 Hz wide and boosts 0 to 24 dB"); }
+            rxs.cwPeakOn_ = on;
+            rxs.cwPeakWidthHz_ = width;
+            rxs.cwPeakBoostDb_ = boost;
+            res.applied[0] = width;
+            res.applied[1] = boost;
+            return res;
+        }
+        case FOXAPI_OP_SET_STEREO_PLACE: {
+            Receiver& rxs = rx();
+            if (!rxs.pipeline_.setStereoPlace(static_cast<int>(c.ival[0]), c.num[0])) {
+                return refuse(FOXAPI_OUT_OF_RANGE, "stereo placement is 0 off, 1 pan (-1 to 1), 2 pseudo-stereo (0 to 1) or 3 binaural (-90 to 90 degrees)");
+            }
+            rxs.stereoPlaceMode_ = static_cast<int>(c.ival[0]);
+            rxs.stereoPlaceValue_ = c.num[0];
+            res.applied[0] = c.num[0];
+            return res;
+        }
+        case FOXAPP_OP_SET_FM_WIDTH: {
+            Receiver& rxs = rx();
+            if (c.ival[0] < 0 || c.ival[0] >= kFmWidthCount) { return refuse(FOXAPI_OUT_OF_RANGE, "the FM widths are 0 narrow, 1 medium, 2 medium-wide, 3 broadcast and 4 super-wide"); }
+            if (rxs.modeIndex_ != 0 && rxs.modeIndex_ != 1) { return refuse(FOXAPI_UNSUPPORTED, "the FM widths are for NFM and WFM"); }
+            const double want = kFmWidthHz[c.ival[0]];
+            const double hi = kVfoBwMaxChanFrac * rxs.pipeline_.channelRateHz();
+            const double before = rxs.vfoBandwidthHz_;
+            rxs.vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(want, hi));
+            applyChannelBandwidth();
+            rxs.bandwidthIndex_ = bandwidthStepIndex(rxs.vfoBandwidthHz_);
+            if (rxs.vfoBandwidthHz_ != before) { logBandwidthChange("FM width preset"); }
+            if (rxs.vfoBandwidthHz_ != want) { res.flags |= FOXAPI_RESULT_CLAMPED; }
+            res.applied[0] = rxs.vfoBandwidthHz_;
+            return res;
+        }
+        case FOXAPP_OP_CHANNEL_CLAIM: return claimChannel(c);
+        case FOXAPP_OP_CHANNEL_RELEASE: return releaseChannel(c);
+        case FOXAPP_OP_SET_IF_ZOOM: {
+            Receiver& rxs = rx();
+            const std::int64_t size = c.ival[0];
+            if (size < 0 || size > 16384 || (size != 0 && (size < 256 || (size & (size - 1)) != 0))) { return refuse(FOXAPI_OUT_OF_RANGE, "the zoom FFT size is 0 (off) or a power of two from 256 to 16384"); }
+            if (size == 0) {
+                if (rxs.pipeline_.ifZoomFftSize() == 0) { return refuse(FOXAPI_NO_CHANGE, "the IF zoom is off already"); }
+                (void)rxs.pipeline_.setIfZoom(0, 0.0);
+                rxs.ifZoomSpanHz_ = 0.0;
+                res.applied[0] = 0.0;
+                ++ppmAutoVersion_;
+                return res;
+            }
+            const double chan = rxs.pipeline_.channelRateHz();
+            if (!(c.num[0] >= 100.0) || c.num[0] > chan) { return refuse(FOXAPI_OUT_OF_RANGE, "the zoom width is 100 Hz up to the channel rate"); }
+            if (rxs.pipeline_.ifZoomFftSize() == static_cast<std::size_t>(size) && rxs.ifZoomSpanHz_ == c.num[0]) { return refuse(FOXAPI_NO_CHANGE, "the IF zoom is so already"); }
+            if (!rxs.pipeline_.setIfZoom(static_cast<std::size_t>(size), c.num[0])) { return refuse(FOXAPI_OUT_OF_RANGE, "the zoom was refused"); }
+            rxs.ifZoomSpanHz_ = c.num[0];
+            ++ppmAutoVersion_;
+            res.applied[0] = chan / std::max(1.0, std::floor(chan / c.num[0] + 0.5));
+            return res;
+        }
+        case FOXAPP_OP_PPM_MEASURE: {
+            Receiver& rxs = rx();
+            if (on == rxs.ppmAuto_.active()) { return refuse(FOXAPI_NO_CHANGE, on ? "a ppm measurement is running already" : "no ppm measurement is running"); }
+            if (!on) {
+                rxs.ppmAuto_.cancel();
+                ++ppmAutoVersion_;
+                return res;
+            }
+            if (rxs.modeIndex_ != 1) { return refuse(FOXAPI_UNSUPPORTED, "the 19 kHz pilot is a WFM station's: tune a broadcast station in WFM"); }
+            if (!(c.num[0] >= 0.0) || c.num[0] > 300.0) { return refuse(FOXAPI_OUT_OF_RANGE, "the measurement time is 10 to 300 seconds (0 = 30)"); }
+            rxs.ppmAuto_.start(c.num[0] == 0.0 ? 30.0 : c.num[0], clockS());
+            rxs.ppmAutoLastReadS_ = -1.0;
+            ++ppmAutoVersion_;
+            res.applied[0] = rxs.ppmAuto_.seconds();
+            return res;
+        }
+        case FOXAPP_OP_IF_RECORD: {
+            Receiver& rxs = rx();
+            if (on == rxs.ifRecorder_.recording()) { return refuse(FOXAPI_NO_CHANGE, on ? "the IF is being recorded already" : "the IF is not being recorded"); }
+            if (!on) {
+                stopIfRecording();
+                res.applied[0] = 0.0;
+                return res;
+            }
+            (void)rxs.ifRecorder_.setSampleFormat(cascade::core::RecordKind::BasebandIq, rxs.recordIqFormat_);
+            const double rate = rxs.pipeline_.channelRateHz();
+            std::string why;
+            if (!rxs.ifRecorder_.start(cascade::core::RecordKind::BasebandIq, recordDir_, rate, why, "if")) { return refuse(FOXAPI_FAILED, why.c_str()); }
+            rxs.ifRecordRateHz_ = rate;
+            rxs.pipeline_.setIfRecorder(&rxs.ifRecorder_);
+            ++mpxVersion_;
+            res.applied[0] = rate;
+            return res;
+        }
+        case FOXAPP_OP_MPX_RECORD: {
+            Receiver& rxs = rx();
+            if (on == rxs.mpxRecorder_.recording()) { return refuse(FOXAPI_NO_CHANGE, on ? "the multiplex is being recorded already" : "the multiplex is not being recorded"); }
+            if (!on) {
+                stopMpxRecording();
+                res.applied[0] = 0.0;
+                return res;
+            }
+            if (rxs.modeIndex_ != 1) { return refuse(FOXAPI_UNSUPPORTED, "the multiplex exists only in WFM"); }
+            (void)rxs.mpxRecorder_.setSampleFormat(cascade::core::RecordKind::Audio, cascade::core::kRecordAudioFloat32);
+            std::string why;
+            if (!rxs.mpxRecorder_.start(cascade::core::RecordKind::Audio, recordDir_, cascade::core::Pipeline::kMpxRateHz, why, "mpx")) { return refuse(FOXAPI_FAILED, why.c_str()); }
+            rxs.pipeline_.setMpxRecorder(&rxs.mpxRecorder_);
+            ++mpxVersion_;
+            res.applied[0] = 1.0;
+            return res;
+        }
+        case FOXAPP_OP_VFO_SELECT: {
+            Receiver& rxs = rx();
+            if (c.ival[0] != 0 && c.ival[0] != 1) { return refuse(FOXAPI_OUT_OF_RANGE, "the VFOs are A (0) and B (1)"); }
+            if (rxs.vfoActive_ == static_cast<int>(c.ival[0])) { return refuse(FOXAPI_NO_CHANGE, "that VFO is in use already"); }
+            if (rxs.tuneLocked_) { return refuse(FOXAPI_DENIED, "the frequency is locked"); }
+            vfoExchange();
+            rxs.vfoActive_ = static_cast<int>(c.ival[0]);
+            res.applied[0] = static_cast<double>(rxs.vfoActive_);
+            return res;
+        }
+        case FOXAPP_OP_VFO_SWAP: {
+            Receiver& rxs = rx();
+            if (!rxs.vfoOther_.set) { return refuse(FOXAPI_NO_CHANGE, "the other VFO has not been set"); }
+            if (rxs.tuneLocked_) { return refuse(FOXAPI_DENIED, "the frequency is locked"); }
+            vfoExchange();
+            res.applied[0] = rxs.vfoOther_.hz;
+            return res;
+        }
+        case FOXAPP_OP_VFO_STORE: {
+            Receiver& rxs = rx();
+            if (c.ival[0] == 0) {
+                rxs.vfoOther_ = {currentAbsoluteHz(), rxs.modeIndex_, rxs.vfoBandwidthHz_, true};
+            } else if (c.ival[0] == 1) {
+                if (c.ival[1] < 1 || c.ival[1] > 8 || !(c.num[0] > 0.0) || c.num[0] > 1e12 || !(c.num[1] >= 0.0) || c.num[1] > 1e9 || (c.num[2] != 0.0 && c.num[2] != 1.0)) {
+                    return refuse(FOXAPI_OUT_OF_RANGE, "a VFO register is a frequency, a mode 1 to 8 and a bandwidth");
+                }
+                rxs.vfoOther_ = {c.num[0], static_cast<int>(c.ival[1] - 1), c.num[1], true};
+                rxs.vfoActive_ = static_cast<int>(c.num[2]);
+            } else {
+                return refuse(FOXAPI_OUT_OF_RANGE, "VFO_STORE copies (0) or sets (1)");
+            }
+            res.applied[0] = rxs.vfoOther_.hz;
+            return res;
+        }
+        case FOXAPI_OP_SET_RECORD_FORMAT: {
+            Receiver& rxs = rx();
+            if (!cascade::core::validRecordSampleFormat(cascade::core::RecordKind::BasebandIq, static_cast<int>(c.ival[0])) ||
+                !cascade::core::validRecordSampleFormat(cascade::core::RecordKind::Audio, static_cast<int>(c.ival[1]))) {
+                return refuse(FOXAPI_OUT_OF_RANGE, "I/Q takes are 0 (32-bit float) or 1 (16-bit integer), audio takes 0 (16-bit), 1 (24-bit) or 2 (32-bit float)");
+            }
+            rxs.recordIqFormat_ = static_cast<int>(c.ival[0]);
+            rxs.recordAudioFormat_ = static_cast<int>(c.ival[1]);
+            (void)rxs.iqRecorder_.setSampleFormat(cascade::core::RecordKind::BasebandIq, rxs.recordIqFormat_);
+            (void)rxs.audioRecorder_.setSampleFormat(cascade::core::RecordKind::Audio, rxs.recordAudioFormat_);
+            res.applied[0] = static_cast<double>(rxs.recordIqFormat_);
+            res.applied[1] = static_cast<double>(rxs.recordAudioFormat_);
+            return res;
+        }
+        case FOXAPI_OP_SET_CTUN: {
+            Receiver& rxs = rx();
+            if (rxs.ctun_ == on) { return refuse(FOXAPI_NO_CHANGE, on ? "centre tuning is on already" : "centre tuning is off already"); }
+            rxs.ctun_ = on;
+            res.applied[0] = on ? 1.0 : 0.0;
+            return res;
+        }
+        case FOXAPI_OP_SET_FILTER_SHAPE: {
+            Receiver& rxs = rx();
+            if (!rxs.pipeline_.setChannelShape(static_cast<int>(c.ival[0]))) { return refuse(FOXAPI_OUT_OF_RANGE, "the filter shape is 0 default, 1 sharp, 2 medium or 3 soft"); }
+            rxs.filterShape_ = static_cast<int>(c.ival[0]);
+            res.applied[0] = static_cast<double>(c.ival[0]);
             return res;
         }
         case FOXAPI_OP_SET_CW_PITCH: {
@@ -7828,7 +8129,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // which; a scanned device's id is "<kind>:<args>", the same spelling its key has.
             if (const std::size_t colon = text.find(':'); colon != std::string::npos) {
                 const std::string kind = text.substr(0, colon);
-                if (kind != "file" && kind != "open-pluto" && kind != "open-rtltcp" && kind != "open-kiwisdr" && kind != "row" && kind != "soundcard") {
+                if (kind != "file" && kind != "open-pluto" && kind != "open-rtltcp" && kind != "open-kiwisdr" && kind != "open-rawiq" && kind != "row" && kind != "soundcard") {
                     const std::string key = cascade::core::patch::makeDeviceKey(kind, text.substr(colon + 1));
                     rebuildDeviceLedger();
                     const DeviceHolder holder = deviceLedger_.holderOf(key);
@@ -7973,6 +8274,18 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                     rx().deviceDabNotch_ = d.dabNotch();
                     return true;
                 });
+            } else if (text == "direct_sampling" && rx().deviceDirectPresent_) {
+                // ival[0] is the choice here, not a switch: 0 automatic, 1 never, 2 the I branch, 3 the Q branch (R11)
+                if (c.ival[0] < 0 || c.ival[0] > 3) { return refuse(FOXAPI_OUT_OF_RANGE, "direct sampling is 0 automatic, 1 never, 2 the I branch or 3 the Q branch"); }
+                bool took = false;
+                withDirectSampling(rx().device_, [this, &c, &took](auto& d) {
+                    took = d.setDirectSamplingChoice(static_cast<int>(c.ival[0]));
+                    if (!took) { rx().sourceError_ = d.lastError(); }
+                    rx().deviceDirectChoice_ = d.directSamplingChoice();
+                    return true;
+                });
+                if (!took) { return refuse(FOXAPI_FAILED, rx().sourceError_.c_str()); }
+                res.applied[0] = static_cast<double>(rx().deviceDirectChoice_);
             } else if (text == "offset_tuning" && rx().deviceOffsetTuningPresent_) {
                 rx().deviceOffsetTuning_ = on;
                 withOffsetTuning(rx().device_, [this](auto& d) {
@@ -9447,11 +9760,36 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         for (std::size_t i = 0; i < cfg.eqDb.size() && i < 8; ++i) { rx().eqDb_[i] = cfg.eqDb[i]; }
         rx().audioHpHz_ = cfg.audioHighPassHz;
         rx().audioLpHz_ = cfg.audioLowPassHz;
+        rx().filterShape_ = cfg.filterShape;
+        rx().ctun_ = cfg.ctun;
+        rx().recordIqFormat_ = cfg.recordIqFormat;
+        rx().recordAudioFormat_ = cfg.recordAudioFormat;
+        rx().vfoActive_ = cfg.vfoActive;
+        rx().vfoOther_ = {cfg.vfoOtherHz, cfg.vfoOtherMode - 1, cfg.vfoOtherBwHz, cfg.vfoOtherMode >= 1 && cfg.vfoOtherHz > 0.0};
+        rx().stereoPlaceMode_ = cfg.stereoPlaceMode;
+        rx().stereoPlaceValue_ = cfg.stereoPlaceValue;
+        rx().cwPeakOn_ = cfg.cwPeakOn;
+        rx().cwPeakWidthHz_ = cfg.cwPeakWidthHz;
+        rx().cwPeakBoostDb_ = cfg.cwPeakBoostDb;
+        rx().afcOn_ = cfg.afcOn;
+        rx().afcPullInHz_ = cfg.afcPullInHz;
+        rx().iqCorrect_ = cfg.iqCorrect;
+        rx().spectrumFft_ = cfg.spectrumFftSize;
+        rx().spectrumWindow_ = cfg.spectrumWindow;
+        rx().spectrumFps_ = cfg.spectrumFrameRateHz;
         pushAudioEq();
         rx().noiseSquelchOn_ = cfg.noiseSquelchOn;
         rx().noiseSquelchThresholdDb_ = cfg.noiseSquelchThresholdDb;
         rx().noiseSquelchTailMs_ = cfg.noiseSquelchTailMs;
         (void)rx().pipeline_.setNoiseSquelch(rx().noiseSquelchOn_, rx().noiseSquelchThresholdDb_, rx().noiseSquelchTailMs_);
+        (void)rx().pipeline_.setChannelShape(rx().filterShape_);
+        (void)rx().iqRecorder_.setSampleFormat(cascade::core::RecordKind::BasebandIq, rx().recordIqFormat_);
+        (void)rx().audioRecorder_.setSampleFormat(cascade::core::RecordKind::Audio, rx().recordAudioFormat_);
+        (void)rx().pipeline_.setStereoPlace(rx().stereoPlaceMode_, rx().stereoPlaceValue_);
+        (void)rx().pipeline_.setCwPeak(rx().cwPeakOn_, rx().cwPeakWidthHz_, rx().cwPeakBoostDb_);
+        (void)rx().pipeline_.setAfc(rx().afcOn_, rx().afcPullInHz_);
+        (void)rx().pipeline_.setIqCorrection(rx().iqCorrect_);
+        (void)rx().pipeline_.setSpectrum(static_cast<std::size_t>(rx().spectrumFft_), rx().spectrumWindow_, rx().spectrumFps_);
         rx().manualNotch_ = {};
         for (const cascade::core::ManualNotchSetting& n : cfg.notchBank) {
             Receiver::ManualNotchSlot& ns = rx().manualNotch_[static_cast<std::size_t>(n.slot)];
@@ -10021,6 +10359,25 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
         }
         cfg.audioHighPassHz = rxa.audioHpHz_;
         cfg.audioLowPassHz = rxa.audioLpHz_;
+        cfg.filterShape = rxa.filterShape_;
+        cfg.ctun = rxa.ctun_;
+        cfg.recordIqFormat = rxa.recordIqFormat_;
+        cfg.recordAudioFormat = rxa.recordAudioFormat_;
+        cfg.vfoActive = rxa.vfoActive_;
+        cfg.vfoOtherHz = rxa.vfoOther_.set ? rxa.vfoOther_.hz : 0.0;
+        cfg.vfoOtherMode = rxa.vfoOther_.set ? rxa.vfoOther_.mode + 1 : 0;
+        cfg.vfoOtherBwHz = rxa.vfoOther_.set ? rxa.vfoOther_.bwHz : 0.0;
+        cfg.stereoPlaceMode = rxa.stereoPlaceMode_;
+        cfg.stereoPlaceValue = rxa.stereoPlaceValue_;
+        cfg.cwPeakOn = rxa.cwPeakOn_;
+        cfg.cwPeakWidthHz = rxa.cwPeakWidthHz_;
+        cfg.cwPeakBoostDb = rxa.cwPeakBoostDb_;
+        cfg.afcOn = rxa.afcOn_;
+        cfg.afcPullInHz = rxa.afcPullInHz_;
+        cfg.iqCorrect = rxa.iqCorrect_;
+        cfg.spectrumFftSize = rxa.spectrumFft_;
+        cfg.spectrumWindow = rxa.spectrumWindow_;
+        cfg.spectrumFrameRateHz = rxa.spectrumFps_;
         cfg.noiseSquelchOn = rxa.noiseSquelchOn_;
         cfg.noiseSquelchThresholdDb = rxa.noiseSquelchThresholdDb_;
         cfg.noiseSquelchTailMs = rxa.noiseSquelchTailMs_;
@@ -10129,6 +10486,14 @@ void Engine::initialise() {
         (void)rx().pipeline_.setCwPitchHz(rx().cwPitchHz_);
         pushAudioEq();
         (void)rx().pipeline_.setNoiseSquelch(rx().noiseSquelchOn_, rx().noiseSquelchThresholdDb_, rx().noiseSquelchTailMs_);
+        (void)rx().pipeline_.setChannelShape(rx().filterShape_);
+        (void)rx().iqRecorder_.setSampleFormat(cascade::core::RecordKind::BasebandIq, rx().recordIqFormat_);
+        (void)rx().audioRecorder_.setSampleFormat(cascade::core::RecordKind::Audio, rx().recordAudioFormat_);
+        (void)rx().pipeline_.setStereoPlace(rx().stereoPlaceMode_, rx().stereoPlaceValue_);
+        (void)rx().pipeline_.setCwPeak(rx().cwPeakOn_, rx().cwPeakWidthHz_, rx().cwPeakBoostDb_);
+        (void)rx().pipeline_.setAfc(rx().afcOn_, rx().afcPullInHz_);
+        (void)rx().pipeline_.setIqCorrection(rx().iqCorrect_);
+        (void)rx().pipeline_.setSpectrum(static_cast<std::size_t>(rx().spectrumFft_), rx().spectrumWindow_, rx().spectrumFps_);
         pushManualNotches();
     }
     rx().pipeline_.setNotchEnabled(rx().notchEnabled_);
@@ -10326,6 +10691,8 @@ void Engine::teardown() {
     forEachReceiver([this] {
         stopIqRecording();
         stopAudioRecording();
+        stopMpxRecording();
+        stopIfRecording();
     });
     // (Every added radio's pipeline is stopped by shutdownStop's loop, or - for an engine torn down without it - by its Receiver's destructor, which joins
     // the pipeline's threads.)
@@ -10518,6 +10885,7 @@ void Engine::pumpAudioMute() { updateAudioMute(); }
 // reasons that went with each line.
 
 void Engine::shutdownQuiesce() {
+    stopHotplugWatch();   // (R10: the window thread first - nothing it calls back into is torn down yet)
     // STAGE 5b: THE SERVERS STOP FIRST, before the control thread, as ~AppWindow stopped the ones it owned before anything else: a request in
     // flight must not reach a stopped pass, the servers' handlers read the snapshot and the API host, and nothing may be accepting a browser's
     // key while the keys are being let go below. WebServer::stop() can block for as long as the read timeout (10 s) when a client holds a
@@ -10570,6 +10938,8 @@ void Engine::shutdownQuiesce() {
     forEachReceiver([this] {
         stopIqRecording();
         stopAudioRecording();
+        stopMpxRecording();
+        stopIfRecording();
     });
 
     // THE BOUNDED RUN'S PLUGIN STATUS REPORT (CASCADE_PLUGIN_STATUS; shell retirement R4), where the window used to call reportPluginStatus - right
@@ -10652,6 +11022,8 @@ void Engine::pumpWorkers() {
     // ...and the saved radio that was only busy at start-up (0.99.92): tried again at 2, 4, 8 and 16 s after each failure. One bool read on
     // every pass with nothing armed.
     pollSavedRadioRetry();
+    pumpHotplug();   // R10: a settled burst of device arrivals / removals
+    pumpPpmAuto();   // R18
     // Release a wheel-burst retune the coalescer held back (~50 ms pacing).
     pollPendingRetune();
     pollStereoSystem();

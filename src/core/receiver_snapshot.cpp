@@ -139,6 +139,24 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
                       f.nrMethod != o.nrMethod || f.cwPitchHz != o.cwPitchHz ||
                       // the equaliser's eight bands and the audio filters (all settings)
                       std::memcmp(f.eqDb, o.eqDb, sizeof(f.eqDb)) != 0 || f.audioHighPassHz != o.audioHighPassHz || f.audioLowPassHz != o.audioLowPassHz ||
+                      // the spectrum size, window and frame rate (settings)
+                      f.spectrumFftSize != o.spectrumFftSize || f.spectrumWindow != o.spectrumWindow || f.spectrumFrameRateHz != o.spectrumFrameRateHz ||
+                      // the I/Q correction choice (a setting; the image rejection it reads is a measurement)
+                      f.iqCorrectMask != o.iqCorrectMask ||
+                      // the AFC switch and its pull-in range (settings; the correction and the lock are measurements)
+                      f.afcOn != o.afcOn || f.afcPullInHz != o.afcPullInHz ||
+                      // the CW peak filter (all settings)
+                      f.cwPeakOn != o.cwPeakOn || f.cwPeakWidthHz != o.cwPeakWidthHz || f.cwPeakBoostDb != o.cwPeakBoostDb ||
+                      // the stereo placement (a setting)
+                      f.stereoPlaceMode != o.stereoPlaceMode || f.stereoPlaceValue != o.stereoPlaceValue ||
+                      // the VFO A/B letter and the other register (settings)
+                      f.vfoActive != o.vfoActive || f.vfoOtherHz != o.vfoOtherHz || f.vfoOtherMode != o.vfoOtherMode || f.vfoOtherBandwidthHz != o.vfoOtherBandwidthHz ||
+                      // the recording sample formats (settings)
+                      f.recordIqFormat != o.recordIqFormat || f.recordAudioFormat != o.recordAudioFormat ||
+                      // centre tuning (a setting)
+                      f.ctun != o.ctun ||
+                      // the channel filter shape (a setting; whether it is in the filter is a measurement)
+                      f.filterShape != o.filterShape ||
                       // the noise squelch's three settings (its level and its gate are measurements)
                       f.noiseSquelchOn != o.noiseSquelchOn || f.noiseSquelchThresholdDb != o.noiseSquelchThresholdDb || f.noiseSquelchTailMs != o.noiseSquelchTailMs ||
                       // the manual notch bank's switches, frequencies and widths (all settings)

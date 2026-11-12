@@ -78,7 +78,7 @@ const std::set<std::string>& engineWritten() {
         "airspy", "audioBufferMs", "audioBufferAutoMs", "ppmCorrection", "ppm", "autoGainByRadio",
         "manualGainByRadio", "plutoUri", "rtlTcpAddr", "iqFilePath", "soundCard", "centerHz", "mode", "bandwidthHz",
         "squelchDb", "squelchAuto", "volume", "dbMin", "dbMax", "vfoOffsetHz", "sampleRateHz", "stereoEnabled", "deemphasisIndex",
-        "nrEnabled", "nrStrength", "agcMode", "agcFixedGainDb", "nbEnabled", "nbThresholdDb", "toneSquelchKind", "toneSquelchHz", "toneSquelchCode", "toneSquelchPolarity", "toneRemove", "meterUnits", "nrMethod", "cwPitchHz", "noiseSquelchOn", "noiseSquelchThresholdDb", "noiseSquelchTailMs", "eqDb", "audioHighPassHz", "audioLowPassHz", "notchBank", "smeterCal", "notchEnabled", "notchFreqHz", "notchQ", "autoNotch", "bandPlanFollowMode", "bandPlanSelection",
+        "nrEnabled", "nrStrength", "agcMode", "agcFixedGainDb", "nbEnabled", "nbThresholdDb", "toneSquelchKind", "toneSquelchHz", "toneSquelchCode", "toneSquelchPolarity", "toneRemove", "meterUnits", "nrMethod", "cwPitchHz", "noiseSquelchOn", "noiseSquelchThresholdDb", "noiseSquelchTailMs", "eqDb", "audioHighPassHz", "audioLowPassHz", "filterShape", "ctun", "recordIqFormat", "recordAudioFormat", "vfoActive", "vfoOtherHz", "vfoOtherMode", "vfoOtherBwHz", "stereoPlaceMode", "stereoPlaceValue", "cwPeakOn", "cwPeakWidthHz", "cwPeakBoostDb", "afcOn", "afcPullInHz", "iqCorrect", "spectrumFftSize", "spectrumWindow", "spectrumFrameRateHz", "notchBank", "smeterCal", "notchEnabled", "notchFreqHz", "notchQ", "autoNotch", "bandPlanFollowMode", "bandPlanSelection",
         "transmitOpen", "transmitMode", "transmitInput", "transmitPowerDb", "transmitSplit", "transmitSplitHz",
         "transmitToneHz", "transmitMonitor", "transmitArgs", "rxPositionSet", "rxLatDeg", "rxLonDeg",
         "pluginCatalogueUrl", "pluginLastUpdateCheck", "pluginTuneAllowed", "pluginSettingsAllowed", "pluginTransmitAllowed",
@@ -159,6 +159,25 @@ AppConfig seeded() {
     c.noiseSquelchOn = true;
     c.noiseSquelchThresholdDb = -42.5;
     c.noiseSquelchTailMs = 160.0;
+    c.filterShape = 2;
+    c.ctun = true;
+    c.recordIqFormat = 1;
+    c.recordAudioFormat = 2;
+    c.vfoActive = 1;
+    c.vfoOtherHz = 14070000.0;
+    c.vfoOtherMode = 5;
+    c.vfoOtherBwHz = 2700.0;
+    c.stereoPlaceMode = 3;
+    c.stereoPlaceValue = -40.0;
+    c.cwPeakOn = true;
+    c.cwPeakWidthHz = 60.0;
+    c.cwPeakBoostDb = 18.0;
+    c.afcOn = true;
+    c.afcPullInHz = 4000.0;
+    c.iqCorrect = 5;
+    c.spectrumFftSize = 16384;
+    c.spectrumWindow = 1;
+    c.spectrumFrameRateHz = 25.0;
     c.eqDb = {3.0, 0.0, -4.5, 0.0, 1.0, 0.0, 0.0, 2.0};
     c.audioHighPassHz = 300;
     c.audioLowPassHz = 3000;
@@ -435,6 +454,15 @@ int main() {
     CHECK(afterFirst["agcMode"] == 4 && afterFirst["agcFixedGainDb"] == -7.5 && afterFirst["nbEnabled"] == true && afterFirst["nbThresholdDb"] == 22.5);
     CHECK(afterFirst["toneSquelchKind"] == 2 && afterFirst["toneSquelchHz"] == 162.2 && afterFirst["toneSquelchCode"] == 754 && afterFirst["toneSquelchPolarity"] == 2 && afterFirst["toneRemove"] == true);
     CHECK(afterFirst["meterUnits"] == 2 && afterFirst["nrMethod"] == 1 && afterFirst["cwPitchHz"] == 850.0 && afterFirst["noiseSquelchOn"] == true && afterFirst["noiseSquelchThresholdDb"] == -42.5 && afterFirst["noiseSquelchTailMs"] == 160.0 && afterFirst["eqDb"].size() == 8 && afterFirst["eqDb"][2] == -4.5 && afterFirst["audioHighPassHz"] == 300 && afterFirst["audioLowPassHz"] == 3000 && afterFirst["notchBank"].size() == 1 && afterFirst["notchBank"][0]["hz"] == 1234.5 && afterFirst.contains("smeterCal") && afterFirst["smeterCal"].contains("siggen"));
+    CHECK(afterFirst["spectrumFftSize"] == 16384 && afterFirst["spectrumWindow"] == 1 && afterFirst["spectrumFrameRateHz"] == 25.0);
+    CHECK(afterFirst["iqCorrect"] == 5);
+    CHECK(afterFirst["afcOn"] == true && afterFirst["afcPullInHz"] == 4000.0);
+    CHECK(afterFirst["cwPeakOn"] == true && afterFirst["cwPeakWidthHz"] == 60.0 && afterFirst["cwPeakBoostDb"] == 18.0);
+    CHECK(afterFirst["stereoPlaceMode"] == 3 && afterFirst["stereoPlaceValue"] == -40.0);
+    CHECK(afterFirst["vfoActive"] == 1 && afterFirst["vfoOtherHz"] == 14070000.0 && afterFirst["vfoOtherMode"] == 5 && afterFirst["vfoOtherBwHz"] == 2700.0);
+    CHECK(afterFirst["recordIqFormat"] == 1 && afterFirst["recordAudioFormat"] == 2);
+    CHECK(afterFirst["ctun"] == true);
+    CHECK(afterFirst["filterShape"] == 2);
     CHECK(afterFirst["notchEnabled"] == true);
     CHECK(afterFirst["deemphasisIndex"] == 1);
     CHECK(afterFirst["stereoEnabled"] == false);

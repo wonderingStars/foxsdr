@@ -398,6 +398,15 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.cwPitchHz == b.cwPitchHz);
     CHECK(a.eqDb == b.eqDb && a.audioHighPassHz == b.audioHighPassHz && a.audioLowPassHz == b.audioLowPassHz);
     CHECK(a.noiseSquelchOn == b.noiseSquelchOn && a.noiseSquelchThresholdDb == b.noiseSquelchThresholdDb && a.noiseSquelchTailMs == b.noiseSquelchTailMs);
+    CHECK(a.filterShape == b.filterShape);
+    CHECK(a.ctun == b.ctun);
+    CHECK(a.recordIqFormat == b.recordIqFormat && a.recordAudioFormat == b.recordAudioFormat);
+    CHECK(a.vfoActive == b.vfoActive && a.vfoOtherHz == b.vfoOtherHz && a.vfoOtherMode == b.vfoOtherMode && a.vfoOtherBwHz == b.vfoOtherBwHz);
+    CHECK(a.stereoPlaceMode == b.stereoPlaceMode && a.stereoPlaceValue == b.stereoPlaceValue);
+    CHECK(a.cwPeakOn == b.cwPeakOn && a.cwPeakWidthHz == b.cwPeakWidthHz && a.cwPeakBoostDb == b.cwPeakBoostDb);
+    CHECK(a.afcOn == b.afcOn && a.afcPullInHz == b.afcPullInHz);
+    CHECK(a.iqCorrect == b.iqCorrect);
+    CHECK(a.spectrumFftSize == b.spectrumFftSize && a.spectrumWindow == b.spectrumWindow && a.spectrumFrameRateHz == b.spectrumFrameRateHz);
     CHECK(a.notchBank.size() == b.notchBank.size());
     for (std::size_t i = 0; i < a.notchBank.size() && i < b.notchBank.size(); ++i) {
         CHECK(a.notchBank[i].slot == b.notchBank[i].slot && a.notchBank[i].hz == b.notchBank[i].hz && a.notchBank[i].widthHz == b.notchBank[i].widthHz && a.notchBank[i].on == b.notchBank[i].on);
@@ -940,6 +949,25 @@ int main() {
         in.audioLowPassHz = 2400;
         in.noiseSquelchThresholdDb = -42.5;   // (default -30)
         in.noiseSquelchTailMs = 160.0;        // (default 100)
+        in.filterShape = 2;   // (default 0)
+        in.ctun = true;   // (default off)
+        in.recordIqFormat = 1;   // (default 0)
+        in.recordAudioFormat = 2;   // (default 0)
+        in.vfoActive = 1;   // (default 0)
+        in.vfoOtherHz = 14070000.0;   // (default 0 = never set)
+        in.vfoOtherMode = 5;
+        in.vfoOtherBwHz = 2700.0;
+        in.stereoPlaceMode = 3;   // (default off)
+        in.stereoPlaceValue = -40.0;   // (default 0)
+        in.cwPeakOn = true;   // (default off)
+        in.cwPeakWidthHz = 60.0;   // (default 100)
+        in.cwPeakBoostDb = 18.0;   // (default 12)
+        in.afcOn = true;   // (default off)
+        in.afcPullInHz = 4000.0;   // (default 2500)
+        in.iqCorrect = 5;   // (default 0)
+        in.spectrumFftSize = 16384;   // (default 1024)
+        in.spectrumWindow = 1;        // (default 3)
+        in.spectrumFrameRateHz = 25.0;   // (default 0)
         in.notchBank.push_back({2, 1750.0, 33.0, true});   // (default: none)
         in.notchBank.push_back({7, 400.0, 12.5, false});
         {

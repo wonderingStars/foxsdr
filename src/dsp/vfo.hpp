@@ -47,6 +47,15 @@ public:
     // The NCO phase and the offset are not touched.
     void setBandwidthHz(double bw);
 
+    // THE SHAPE OF THE NARROW CHANNEL FILTER (engine serial lane A, row F6; dsp/cw_filter.hpp designChannelFilter): 0 the filter this class has always had (a Blackman-Harris windowed sinc, -6 dB at 0.75 of the
+    // bandwidth, flat to the edge, about -32 dB at the bandwidth), 1 sharp, 2 medium, 3 soft: a linear-phase low-pass whose -6 dB width is the bandwidth and whose shape factor (width at -60 dB over width at
+    // -6 dB) is 1.3, 1.8 or 3.157 (the Gaussian). It replaces the NARROW stage, so it applies where a narrow stage exists (a bandwidth under kNarrowBelowChannelFraction of the channel rate, the case of every
+    // voice and keying width); a wider channel is the anti-alias stage alone and has no shape to choose (channelShapeActive() says which). Redesigns the filter and clears its history, like setBandwidthHz.
+    // False (nothing changed) outside 0..3.
+    bool setChannelShape(int shape);
+    int channelShape() const { return shape_; }
+    bool channelShapeActive() const { return shape_ != 0 && bandwidth_ < kNarrowBelowChannelFraction * channelRateHz(); }
+
     double channelRateHz() const;
 
     // What the channel filter costs: real-by-complex multiply-adds per INPUT
@@ -121,6 +130,8 @@ private:
     // Re-derives nbStage_ from stages_ and bandwidth_; after every redesign.
     void placeNoiseBlanker();
 
+    // F6: see setChannelShape. DECLARED FIRST: the constructor designs the stages (stages_ is initialised from designStages) and that reads it.
+    int shape_ = 0;
     double inputRate_;
     unsigned decimFactor_;
     double bandwidth_;  // after clamping
@@ -131,6 +142,7 @@ private:
     // multiply to decimFactor_ and whose LAST stage is the channel filter
     // proper (passband bw/2, stopband at the channel Nyquist).
     std::vector<FirDecimator> stages_;
+    std::vector<float> narrowStageTaps(double channelRate, double bw) const;
     // Scratch buffers, members so steady-state process() calls don't
     // allocate; sized to the internal chunk, not to the caller's n. One
     // intermediate buffer per stage boundary.

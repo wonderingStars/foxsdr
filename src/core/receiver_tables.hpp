@@ -126,6 +126,7 @@ constexpr const char* kPlutoDriverKey = "pluto";
 constexpr const char* kRtlTcpDriverKey = "rtltcp";
 // A KiwiSDR receiver on the network (audio only; source/kiwisdr_source.hpp): the radio kind word in the settings and in fact.radio.<n>.source.
 constexpr const char* kKiwiSdrDriverKey = "kiwisdr";
+constexpr const char* kRawIqDriverKey = "rawiq";   // a raw I/Q stream on a network socket (engine serial lane A, R5)
 
 constexpr const char* kModeNames[8] = {"NFM", "WFM", "AM", "DSB",
                                        "USB", "CW",  "LSB", "RAW"};
@@ -136,6 +137,11 @@ constexpr const char* kModeNames[8] = {"NFM", "WFM", "AM", "DSB",
 // (both sidebands); SSB/CW voice/keying fits in 3k; RAW passes the full
 // 200k channel for diagnostics. (Moved from engine.cpp at stage 4: the
 // engine API's LIST_MODES carries each mode's default too.)
+// THE FM WIDTH PRESETS (engine serial lane A, row D7; FOXAPP_OP_SET_FM_WIDTH): narrow (a 12.5 kHz two-way channel), medium (30 kHz), medium-wide (50 kHz), broadcast (150 kHz) and super-wide (225 kHz, the
+// widest the channel filter can pass: Vfo::clampBandwidth keeps a width to 0.9 of the channel rate, which the engine picks in [150 kHz, 300 kHz), so a radio on a small channel is held lower). Apart from
+// kBwHz, whose six steps the combo letters and the tests pin.
+constexpr double kFmWidthHz[5] = {12500.0, 30000.0, 50000.0, 150000.0, 225000.0};
+constexpr int kFmWidthCount = 5;
 constexpr int kModeDefaultBw[8] = {2, 1, 3, 3, 5, 5, 5, 0};
 
 // The web and CAT readers name the mode from the published FOXAPI_DEMOD_*

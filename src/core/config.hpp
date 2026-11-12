@@ -226,6 +226,25 @@ struct SavedRadio {
     bool noiseSquelchOn = false;           // the FM noise squelch (engine wiring lane 1)
     double noiseSquelchThresholdDb = -30.0;   // -90..0
     double noiseSquelchTailMs = 100.0;        // 0..2000
+    int spectrumFftSize = 1024;           // the spectrum's FFT size, a power of two 1024..131072 (engine serial lane A)
+    int spectrumWindow = 3;               // 0 rectangular / 1 Hann / 2 Hamming / 3 Blackman-Harris / 4 flat-top
+    double spectrumFrameRateHz = 0.0;     // 0 automatic, else 1..120
+    int iqCorrect = 0;     // the I/Q correction bits: 1 DC removal, 2 balance, 4 swap I/Q (engine serial lane A)
+    bool afcOn = false;               // automatic frequency control (engine serial lane A)
+    double afcPullInHz = 2500.0;      // 50..20000
+    bool cwPeakOn = false;            // the CW peak filter (engine serial lane A)
+    double cwPeakWidthHz = 100.0;     // 30..500
+    double cwPeakBoostDb = 12.0;      // 0..24
+    int stereoPlaceMode = 0;          // 0 off / 1 pan / 2 pseudo-stereo / 3 binaural (engine serial lane A)
+    double stereoPlaceValue = 0.0;    // the pan -1..1, the amount 0..1 or the azimuth -90..90
+    int vfoActive = 0;               // VFO A / B: the active letter (engine serial lane A)
+    double vfoOtherHz = 0.0;         // the other letter's frequency, Hz (0 = never set)
+    int vfoOtherMode = 0;            // its mode, 1-based FOXAPI_DEMOD_* (0 = never set)
+    double vfoOtherBwHz = 0.0;       // its bandwidth, Hz
+    int recordIqFormat = 0;          // baseband I/Q takes: 0 float32 / 1 int16 (engine serial lane A)
+    int recordAudioFormat = 0;       // audio takes: 0 int16 / 1 int24 / 2 float32
+    bool ctun = false;               // centre tuning (engine serial lane A)
+    int filterShape = 0;           // the channel filter shape: 0 default / 1 sharp / 2 medium / 3 soft (engine serial lane A)
     std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
@@ -522,6 +541,25 @@ struct AppConfig {
     bool noiseSquelchOn = false;           // the FM noise squelch (engine wiring lane 1)
     double noiseSquelchThresholdDb = -30.0;   // -90..0
     double noiseSquelchTailMs = 100.0;        // 0..2000
+    int spectrumFftSize = 1024;           // the spectrum's FFT size, a power of two 1024..131072 (engine serial lane A)
+    int spectrumWindow = 3;               // 0 rectangular / 1 Hann / 2 Hamming / 3 Blackman-Harris / 4 flat-top
+    double spectrumFrameRateHz = 0.0;     // 0 automatic, else 1..120
+    int iqCorrect = 0;     // the I/Q correction bits: 1 DC removal, 2 balance, 4 swap I/Q (engine serial lane A)
+    bool afcOn = false;               // automatic frequency control (engine serial lane A)
+    double afcPullInHz = 2500.0;      // 50..20000
+    bool cwPeakOn = false;            // the CW peak filter (engine serial lane A)
+    double cwPeakWidthHz = 100.0;     // 30..500
+    double cwPeakBoostDb = 12.0;      // 0..24
+    int stereoPlaceMode = 0;          // 0 off / 1 pan / 2 pseudo-stereo / 3 binaural (engine serial lane A)
+    double stereoPlaceValue = 0.0;    // the pan -1..1, the amount 0..1 or the azimuth -90..90
+    int vfoActive = 0;               // VFO A / B: the active letter (engine serial lane A)
+    double vfoOtherHz = 0.0;         // the other letter's frequency, Hz (0 = never set)
+    int vfoOtherMode = 0;            // its mode, 1-based FOXAPI_DEMOD_* (0 = never set)
+    double vfoOtherBwHz = 0.0;       // its bandwidth, Hz
+    int recordIqFormat = 0;          // baseband I/Q takes: 0 float32 / 1 int16 (engine serial lane A)
+    int recordAudioFormat = 0;       // audio takes: 0 int16 / 1 int24 / 2 float32
+    bool ctun = false;               // centre tuning (engine serial lane A)
+    int filterShape = 0;           // the channel filter shape: 0 default / 1 sharp / 2 medium / 3 soft (engine serial lane A)
     std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;

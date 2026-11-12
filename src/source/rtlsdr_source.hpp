@@ -195,6 +195,17 @@ public:
     // What the tuner is: "R820T", "R828D", "R828D (RTL-SDR Blog V4)".
     std::string tunerName() const;
 
+    // DIRECT SAMPLING, THE USER'S CHOICE (engine serial lane A, row R11). 0 automatic (the old rule, unchanged: below 24 MHz a plain R82xx dongle's demodulator is switched to the Q branch; the tuner's
+    // own range stops a tune that low first, see frequencyRangeHz), 1 never, 2 always on the I branch, 3 always on the Q branch (where the usual direct-sampling modification puts the antenna).
+    // A forced choice (2 or 3) widens the range this radio accepts to 100 kHz to 14.4 MHz (half the 28.8 MHz ADC clock: the first Nyquist zone) and tunes by the demodulator's down-converter.
+    // False, nothing changed, for a value outside 0..3 and for a radio that cannot (a Blog V4 has an upconverter and never leaves the tuner). Changing it retunes to where the radio is.
+    static constexpr double kDirectLoHz = 100000.0;
+    static constexpr double kDirectHiHz = 14400000.0;
+    bool setDirectSamplingChoice(int choice);
+    int directSamplingChoice() const { return directChoice_.load(std::memory_order_relaxed); }
+    bool directSamplingSupported() const;     // a radio with a tuner that is not a Blog V4
+    int directSamplingMode() const;           // what the demodulator is doing now: 0 off, 1 the I branch, 2 the Q branch
+
     // STREAM HEALTH, in the same words SoapySource writes, so one log reads
     // the same whichever way a radio was opened.
     static constexpr std::chrono::milliseconds kStreamHealthWindow{60000};
@@ -303,6 +314,7 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<double> sampleRateHz_{0.0};
     std::atomic<double> centerFrequencyHz_{0.0};
+    std::atomic<int> directChoice_{0};   // R11: 0 automatic / 1 never / 2 I branch / 3 Q branch
     std::atomic<bool> biasTee_{false};
     std::atomic<bool> eepromValid_{false};
     std::atomic<bool> biasTForced_{false};

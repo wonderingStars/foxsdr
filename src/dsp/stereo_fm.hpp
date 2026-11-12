@@ -121,6 +121,8 @@ public:
     // pilot band averages to zero in the coherent estimator even though its
     // raw energy does not.
     float pilotLevel() const noexcept { return level_; }
+    // The PLL's residual frequency, Hz: how far the pilot is from the nominal 19 kHz in this decoder's own sample-rate terms (engine serial lane A, row R18, core/ppm_auto.hpp). 0 for an on-grid pilot.
+    double pilotOffsetHz() const noexcept { return freq_ * rate_ / 6.283185307179586; }
 
     // User override: forces L = R = mono regardless of the pilot. Takes effect
     // through the same smooth gate as an ordinary loss of lock, so toggling it

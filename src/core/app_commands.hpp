@@ -160,6 +160,46 @@
 //   (OIRT polar modulation while the tuned frequency is inside 65.8 to 74 MHz, the pilot-tone system everywhere else: the default), 1 = the pilot-tone system always, 2 = OIRT always; any other value is
 //   OUT_OF_RANGE. NO_CHANGE when it is already so. Not saved (a restart returns to automatic). fact.radio.<n>.stereo.system reads auto / pilot / oirt, fact.radio.<n>.stereo.decoder the decoder in the
 //   path now (pilot / oirt: the OIRT decoder runs only in WFM at a channel rate of 100 kHz or more).
+//   FILE_SEEK and FILE_LOOP (SETTINGS; engine serial lane A, row P15, source/iq_file_source.hpp, docs/api-0.3-additions.md 9.39): the seek bar and the A-B loop of a radio that is playing an I/Q file (target).
+//   FILE_SEEK: num[0] is the place to play from, ival[0] = 0 in seconds from the start of the recording, 1 as a fraction 0..1 of its length; OUT_OF_RANGE past either end, UNSUPPORTED when the radio is
+//   not playing a file. FILE_LOOP: ival[0] = 1 loops between num[0] and num[1] seconds (0 <= start < end <= the length; the playing wraps from the end back to the start with no gap), ival[0] = 0 clears
+//   the loop. The position, length, loop and real start time are read back from the radio's state (filePositionSec and its neighbours); none of it is saved (a file starts from the top).
+#define FOXAPP_OP_FILE_SEEK              0x861Au /* ival[0]: 0 seconds / 1 fraction of the length; num[0]: the place. Addresses one radio (target) */
+#define FOXAPP_OP_FILE_LOOP              0x861Bu /* ival[0]: 1 loop between num[0] and num[1] seconds / 0 clear. Addresses one radio (target) */
+#define FOXAPP_OP_VFO_SELECT                 0x861Cu /* ival[0]: 0 = VFO A, 1 = VFO B. Addresses one radio (target) */
+#define FOXAPP_OP_VFO_SWAP                   0x861Du /* swap the two VFOs: the radio takes the other letter's frequency, mode and bandwidth and the other letter keeps what it had. Addresses one radio (target) */
+#define FOXAPP_OP_VFO_STORE                  0x861Eu /* ival[0] = 0: copy the radio's tune into the other VFO; 1: set the other VFO to ival[1] mode (1-based FOXAPI_DEMOD), num[0] Hz, num[1] bandwidth Hz, and the active letter to num[2] (0/1). Addresses one radio (target) */
+//   SET_FM_WIDTH (SETTINGS; engine serial lane A, row D7): ival[0] 0..4 = narrow 12.5 kHz, medium 30 kHz, medium-wide 50 kHz, broadcast 150 kHz, super-wide 225 kHz (core/receiver_tables.hpp kFmWidthHz), applied
+//   to the selected radio's (target) channel filter in NFM or WFM (UNSUPPORTED in any other mode); a width the channel cannot pass (0.9 of its rate) is held lower and the result carries CLAMPED. applied[0] is the width.
+#define FOXAPP_OP_SET_FM_WIDTH           0x861Fu /* ival[0]: 0..4 narrow / medium / medium-wide / broadcast / super-wide. Addresses one radio (target) */
+//   CHANNEL_CLAIM and CHANNEL_RELEASE (SETTINGS; engine serial lane A, row R19, core/tuner_pool.hpp): tuner pooling. CHANNEL_CLAIM: num[0] the frequency, Hz; ival[0] the mode (1-based FOXAPI_DEMOD_*, 0 = leave it);
+//   num[1] the bandwidth, Hz (0 = leave it). The pool picks a FREE radio (open and running, not claimed, not locked, not recording, not scanning): first one whose span on show already covers the frequency
+//   (tuned by its VFO alone, its hardware untouched), then one that can tune there by moving its centre; the lowest number among equals. applied[0] is the radio's number, applied[1] 1 when it was tuned by its
+//   VFO alone and 2 when its centre moved. LIMIT when no radio is free (the message says why), OUT_OF_RANGE for a frequency that is not a frequency. The radio stays claimed (fact.radio.<n>.claimed = 1)
+//   until CHANNEL_RELEASE (ival[0] = its number; NO_DEVICE for a radio that is not there, NO_CHANGE for one that is not claimed). Claims are not saved.
+#define FOXAPP_OP_CHANNEL_CLAIM          0x8620u /* num[0]: Hz; ival[0]: mode (0 keep); num[1]: bandwidth Hz (0 keep). Not radio-scoped: the pool chooses */
+#define FOXAPP_OP_CHANNEL_RELEASE        0x8621u /* ival[0]: the radio's number */
+//   MPX_RECORD (SETTINGS; engine serial lane A, row D4): ival[0] 1 starts, 0 stops a recording of the FM MULTIPLEX of the selected radio (target) - the composite the discriminator gives before the stereo decoder
+//   (mono, the 19 kHz pilot, the 38 kHz difference, the 57 kHz RDS), resampled to 192 kHz, written as a 32-bit float mono WAV named mpx_<date>_<time>_192000Hz.wav in the recordings folder, for a program such as
+//   RDS Spy to open. UNSUPPORTED unless the radio is in WFM (the multiplex exists only there), NO_CHANGE when it is so already, FAILED with the recorder's words when the file cannot be made. It ends with the
+//   radio (stop, removal, shutdown). fact.radio.<n>.mpx reads 1 while it records. The file start blocks for the disk (a control-thread call, like a settings write).
+#define FOXAPP_OP_MPX_RECORD             0x8622u /* ival[0]: 1 start / 0 stop. Addresses one radio (target) */
+//   IF_RECORD (SETTINGS; engine serial lane A, row P4): ival[0] 1 starts, 0 stops a recording of the IF of the selected radio (target): the channel after the VFO has mixed it to DC and the channel filter has taken
+//   everything outside the passband away, at the channel rate (about 200 kHz), as I/Q in the radio's I/Q file format (SET_RECORD_FORMAT: 32-bit float or 16-bit integer), in if_<date>_<time>_<rate>Hz.wav in the
+//   recordings folder. The same in every mode, before the demodulator and the squelch. NO_CHANGE when it is so already, FAILED with the recorder's words; it ends with the radio and when the input rate
+//   changes (the channel rate with it). fact.radio.<n>.ifrec reads 1 while it records. The file start blocks for the disk once.
+#define FOXAPP_OP_IF_RECORD              0x8623u /* ival[0]: 1 start / 0 stop. Addresses one radio (target) */
+//   PPM_MEASURE (SETTINGS; engine serial lane A, row R18, core/ppm_auto.hpp): measure the selected radio's (target) crystal error from the 19 kHz stereo pilot of the broadcast station it is tuned to. ival[0] 1 starts,
+//   0 cancels; num[0] the time in seconds (10 to 300; 0 = 30). WFM only (UNSUPPORTED otherwise); NO_CHANGE when it is so already. It reads the pilot PLL every 100 ms, ignores the first two seconds and any reading
+//   without a locked pilot of level 0.5 or more, and ends Done (20 or more readings) or Failed (fewer: no pilot). The number is a SUGGESTION: nothing is applied (SET_PPM applies a value). fact.radio.<n>.ppmauto.state is
+//   idle / measuring / done / failed, .progress 0..1, .ppm (positive = the crystal runs fast, the sign of SET_PPM), .uncertainty (one standard error, statistical only: the station's own pilot accuracy is not known
+//   here), .readings. A reading is only as good as the station: measure two or three and trust the ones that agree.
+#define FOXAPP_OP_PPM_MEASURE            0x8624u /* ival[0]: 1 start / 0 cancel; num[0]: seconds (10..300, 0 = 30). Addresses one radio (target) */
+//   SET_IF_ZOOM (SETTINGS; engine serial lane A, row S12): a second, high-resolution spectrum of the selected radio's (target) IF passband (dsp/zoom_fft.hpp). ival[0] the FFT size (0 off; a power of two from 256 to
+//   16384); num[0] the width of the whole picture in Hz (100 up to the channel rate; the decimation is the channel rate over it, rounded, so applied[0] says the span actually shown). The frame is read in process with
+//   Engine::zoomFrame(radio, ...): the engine C API still serves ONE spectrum frame per radio, so the zoom frame is not on the wire yet. fact.radio.<n>.zoom is off, or "<bins> bins of <binHz> Hz over <span> Hz".
+//   Not saved with the radio: it is a view, set again by the screen that wants it. OUT_OF_RANGE for a size or width that is not allowed, NO_CHANGE when it is so already.
+#define FOXAPP_OP_SET_IF_ZOOM            0x8625u /* ival[0]: FFT size or 0 off; num[0]: span Hz. Addresses one radio (target) */
 #define FOXAPP_OP_SET_STEREO_SYSTEM      0x8619u /* ival[0]: 0 automatic / 1 pilot tone / 2 OIRT. Addresses one radio (target) */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

@@ -108,8 +108,9 @@ bool Recorder::prepare(RecordKind kind, const std::string& directory, double sam
 
     // The WAV fmt chunk stores the rate (and the derived byte rate) as
     // uint32; a rate they cannot hold would write a header that lies.
+    const int fmt = sampleFormat(kind);
     const std::uint16_t channels = (kind == RecordKind::BasebandIq) ? 2 : 1;
-    const std::uint16_t bits = (kind == RecordKind::BasebandIq) ? 32 : 16;
+    const std::uint16_t bits = (kind == RecordKind::BasebandIq) ? (fmt == kRecordIqInt16 ? 16 : 32) : (fmt == kRecordAudioInt24 ? 24 : (fmt == kRecordAudioFloat32 ? 32 : 16));
     const std::uint16_t blockAlign =
         static_cast<std::uint16_t>(channels * (bits / 8u));
     if (!(sampleRateHz >= 1.0) || sampleRateHz > 4294967295.0) {
@@ -148,6 +149,7 @@ bool Recorder::prepare(RecordKind kind, const std::string& directory, double sam
     }
 
     out.kind = kind;
+    out.sampleFormat = fmt;
     out.directory = dir.string();
     out.path = (dir / fileName).string();
 
@@ -161,7 +163,7 @@ bool Recorder::prepare(RecordKind kind, const std::string& directory, double sam
     std::memcpy(h + 8, "WAVE", 4);
     std::memcpy(h + 12, "fmt ", 4);
     putU32(h + 16, 16);  // classic 16-byte fmt block
-    putU16(h + 20, (kind == RecordKind::BasebandIq) ? 3u : 1u);  // float/PCM
+    putU16(h + 20, (kind == RecordKind::BasebandIq ? fmt == 0 : fmt == kRecordAudioFloat32) ? 3u : 1u);  // float/PCM
     putU16(h + 22, channels);
     putU32(h + 24, rate);
     putU32(h + 28, static_cast<std::uint32_t>(byteRate));
@@ -203,6 +205,7 @@ bool Recorder::openFile(const OpenRequest& req, OpenedFile& out, std::string& er
     }
     OpenedFile opened;
     opened.kind = req.kind;
+    opened.sampleFormat = req.sampleFormat;
     opened.path = usedPath;
     opened.file.reset(f);  // from here a failure closes the file by itself
     // setvbuf must precede the first I/O on the stream. Failure (it cannot
@@ -239,6 +242,8 @@ bool Recorder::begin(OpenedFile&& opened, std::string& error) {
     frames_.store(0, std::memory_order_relaxed);
     dataBytes_.store(0, std::memory_order_relaxed);
     kind_.store(opened.kind, std::memory_order_relaxed);
+    takeFormat_.store(opened.sampleFormat, std::memory_order_relaxed);
+    frameBytes_.store(recordFrameBytes(opened.kind, opened.sampleFormat), std::memory_order_relaxed);
     file_ = opened.file.release();
     path_ = opened.path;
     // The take's clock starts here, before recording() can read true: a
@@ -277,8 +282,10 @@ void Recorder::writeIq(const std::complex<float>* s, std::size_t n) {
         // word. Truncating the last block to `room` still holds: what fits is
         // written, and the chunk going full closes the file on the spot,
         // either on the next pass of this loop or in the check after it.
+        const std::size_t fb = frameBytes_.load(std::memory_order_relaxed);
+        const bool int16 = fb == 4u;
         const std::uint64_t room =
-            (maxDataBytes_ - dataBytes_.load(std::memory_order_relaxed)) / 8u;
+            (maxDataBytes_ - dataBytes_.load(std::memory_order_relaxed)) / fb;
         if (room == 0) {
             endAtSizeLimit();
             return;
@@ -292,14 +299,26 @@ void Recorder::writeIq(const std::complex<float>* s, std::size_t n) {
         }
         unsigned char* p = stage_.data();
         for (std::size_t i = 0; i < take; ++i) {
-            // bit_cast + explicit LE bytes: the exact mirror of the file
-            // source's decoder, which is what makes the round trip bit-exact.
-            putU32(p + 8 * i,
-                   std::bit_cast<std::uint32_t>(s[done + i].real()));
-            putU32(p + 8 * i + 4,
-                   std::bit_cast<std::uint32_t>(s[done + i].imag()));
+            if (int16) {
+                // P7: 16-bit integer I/Q, the mirror of IqFileSource's i / 32768 read.
+                auto q16 = [](float v) {
+                    if (!(v == v)) { v = 0.0f; }
+                    long q = std::lround(static_cast<double>(v) * 32768.0);
+                    q = q > 32767 ? 32767 : (q < -32768 ? -32768 : q);
+                    return static_cast<std::uint16_t>(static_cast<std::int16_t>(q));
+                };
+                putU16(p + 4 * i, q16(s[done + i].real()));
+                putU16(p + 4 * i + 2, q16(s[done + i].imag()));
+            } else {
+                // bit_cast + explicit LE bytes: the exact mirror of the file
+                // source's decoder, which is what makes the round trip bit-exact.
+                putU32(p + 8 * i,
+                       std::bit_cast<std::uint32_t>(s[done + i].real()));
+                putU32(p + 8 * i + 4,
+                       std::bit_cast<std::uint32_t>(s[done + i].imag()));
+            }
         }
-        flushStage(take * 8u, 8u);
+        flushStage(take * fb, fb);
         done += take;
     }
     // A block that lands exactly ON the ceiling leaves the loop with the
@@ -310,7 +329,7 @@ void Recorder::writeIq(const std::complex<float>* s, std::size_t n) {
     // leave the chunk within a frame of full without it being what happened —
     // and that case stays a stall for stop() to finalize.
     if (!writeFailed_.load(std::memory_order_relaxed) &&
-        (maxDataBytes_ - dataBytes_.load(std::memory_order_relaxed)) / 8u == 0) {
+        (maxDataBytes_ - dataBytes_.load(std::memory_order_relaxed)) / frameBytes_.load(std::memory_order_relaxed) == 0) {
         endAtSizeLimit();
     }
 }
@@ -327,8 +346,10 @@ void Recorder::writeAudio(const float* s, std::size_t n) {
         // 96 kB/s, so this is a WAV nobody will reach in a sitting; it shares
         // the path anyway because "the file quietly stopped growing" is not a
         // behaviour worth keeping for the rare case either.
+        const std::size_t fb = frameBytes_.load(std::memory_order_relaxed);
+        const int afmt = takeFormat_.load(std::memory_order_relaxed);
         const std::uint64_t room =
-            (maxDataBytes_ - dataBytes_.load(std::memory_order_relaxed)) / 2u;
+            (maxDataBytes_ - dataBytes_.load(std::memory_order_relaxed)) / fb;
         if (room == 0) {
             endAtSizeLimit();
             return;
@@ -342,6 +363,12 @@ void Recorder::writeAudio(const float* s, std::size_t n) {
         }
         unsigned char* p = stage_.data();
         for (std::size_t i = 0; i < take; ++i) {
+            if (afmt == kRecordAudioFloat32) {
+                // P7: 32-bit float audio, bit-exact (a NaN from a demod glitch is written as silence).
+                const float f = (s[done + i] == s[done + i]) ? s[done + i] : 0.0f;
+                putU32(p + 4 * i, std::bit_cast<std::uint32_t>(f));
+                continue;
+            }
             float v = s[done + i];
             if (!(v == v)) {
                 v = 0.0f;  // a NaN from a demod glitch must not write garbage
@@ -353,6 +380,16 @@ void Recorder::writeAudio(const float* s, std::size_t n) {
             // round(v * 32768) in double: float->double and the power-of-two
             // multiply are both exact, so the quantizer is deterministic.
             // +1.0 lands on 32768, which int16 cannot hold -> saturate.
+            if (afmt == kRecordAudioInt24) {
+                // P7: 24-bit integer audio, round(v * 8388608), saturated, three little-endian bytes.
+                long q24 = std::lround(static_cast<double>(v) * 8388608.0);
+                if (q24 > 8388607) { q24 = 8388607; }
+                const std::uint32_t u = static_cast<std::uint32_t>(q24) & 0xFFFFFFu;
+                p[3 * i] = static_cast<unsigned char>(u & 0xFFu);
+                p[3 * i + 1] = static_cast<unsigned char>((u >> 8) & 0xFFu);
+                p[3 * i + 2] = static_cast<unsigned char>((u >> 16) & 0xFFu);
+                continue;
+            }
             long q = std::lround(static_cast<double>(v) * 32768.0);
             if (q > 32767) {
                 q = 32767;
@@ -360,14 +397,14 @@ void Recorder::writeAudio(const float* s, std::size_t n) {
             putU16(p + 2 * i,
                    static_cast<std::uint16_t>(static_cast<std::int16_t>(q)));
         }
-        flushStage(take * 2u, 2u);
+        flushStage(take * fb, fb);
         done += take;
     }
     // See writeIq: a block that lands exactly on the ceiling ends the take
     // here rather than leaving a full file open for a call that may not come,
     // and a refused write is the other reason to be here, not this one.
     if (!writeFailed_.load(std::memory_order_relaxed) &&
-        (maxDataBytes_ - dataBytes_.load(std::memory_order_relaxed)) / 2u == 0) {
+        (maxDataBytes_ - dataBytes_.load(std::memory_order_relaxed)) / frameBytes_.load(std::memory_order_relaxed) == 0) {
         endAtSizeLimit();
     }
 }

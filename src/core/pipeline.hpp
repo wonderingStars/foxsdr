@@ -156,6 +156,12 @@
 #include "core/patch_runner.hpp"
 #include "dsp/resampler.hpp"
 #include "dsp/spectrum.hpp"
+#include "dsp/spectrum_block.hpp"
+#include "dsp/iq_correct.hpp"
+#include "dsp/afc.hpp"
+#include "dsp/zoom_fft.hpp"
+#include "dsp/cw_filter.hpp"
+#include "dsp/stereo_place.hpp"
 #include "dsp/spsc_ring.hpp"
 #include "dsp/squelch.hpp"
 #include "dsp/oirt_stereo.hpp"
@@ -475,6 +481,7 @@ public:
     // exactly like signalPowerDb(). pilotLocked() is the decoder's own lock
     // flag (meaningful only while WFM is running); stereoActive() is what the
     // "ST" indicator should light on: WFM AND enabled AND locked.
+    double pilotOffsetHz() const;   // the stereo decoder's pilot PLL residual, Hz (R18); 0 when not WFM or not locked
     bool pilotLocked() const;
     float pilotLevel() const;
     bool stereoActive() const;
@@ -586,6 +593,71 @@ public:
     bool eqBypassed() const;
     bool setCwPitchHz(double hz);
     double cwPitchHz() const;
+    // THE SPECTRUM'S SIZE, WINDOW AND FRAME RATE (engine serial lane A, rows S1 S2 S3; dsp/spectrum_block.hpp). fftSize: a power of two, 1,024 to 131,072; window: 0 rectangular, 1 Hann, 2 Hamming,
+    // 3 Blackman-Harris (the default), 4 flat-top; frameRateHz: 0 = automatic (30 a second on the block path), else 1 to 120. 1,024 / Blackman-Harris / automatic is the LEGACY estimator (the frame every
+    // drained block, as it has always been); anything else runs the spectrum block, fed the same samples, its tone level lowered by the legacy estimator's (uncompensated) Blackman-Harris offset so a
+    // choice never moves a displayed level. The audio chain is not touched: its block stays the construction FFT size. False (nothing changed) for a value outside those. Any control thread.
+    bool setSpectrum(std::size_t fftSize, int window, double frameRateHz);
+    std::size_t spectrumFftSize() const;
+    int spectrumWindow() const;
+    double spectrumFrameRateHz() const;
+    // The bins of the newest frame (the ring's reader sees a frame of this many): fftSize on both paths.
+    std::size_t spectrumBinCount() const;
+    // I/Q CORRECTION AT THE SOURCE RATE (engine serial lane A, row F16; dsp/iq_correct.hpp): mask bit 0 removes the DC offset, bit 1 balances gain and phase (blind image rejection,
+    // for a signal alike either side of its centre), bit 2 swaps I and Q. It runs on the drained block in place BEFORE the spectrum, the audio chain and the I/Q recorder see it, and
+    // costs nothing while the mask is 0 (the default: the samples are untouched). False (nothing changed) for a mask above 7. Any thread; kept across a rate change.
+    // AUTOMATIC FREQUENCY CONTROL (engine serial lane A, row F13; dsp/afc.hpp): follows a drifting carrier by nudging the VFO. NFM, WFM and AM track the block's mean frequency, CW the strongest
+    // line (a keyed carrier); the other modes have no carrier to follow and are left alone. pullInHz (50 to 20,000) is how far from the tuned frequency a carrier is caught, and twice that how
+    // far it is followed once caught. The nudge is added to the user's offset (vfoOffsetHz() stays the user's own) and a retune forgets it. False (nothing changed) outside the range.
+    // ZOOM FFT OF THE IF PASSBAND (engine serial lane A, row S12; dsp/zoom_fft.hpp): a second, high-resolution spectrum of the channel (the IF after the VFO, centred on DC), fed at the channel rate.
+    // fftSize 0 turns it off; otherwise a power of two from 256 to 16384. spanHz is the width of the whole picture (100 Hz up to the channel rate); the decimation is the channel rate over it, rounded, so the span
+    // actually shown is zoomFrame()'s outputRateHz. Rebuilt with the channel blocks (a change of input rate keeps the setting). Returns false for a value out of range. Any thread.
+    struct ZoomFrameInfo {
+        std::uint64_t frame = 0;        // 0 = none yet
+        std::size_t bins = 0;
+        double binHz = 0.0;
+        double spanHz = 0.0;            // the whole picture (the output rate of the zoom decimator)
+        double usableSpanHz = 0.0;      // the middle part that is clean (80 %)
+    };
+    bool setIfZoom(std::size_t fftSize, double spanHz);
+    // Copies the newest zoom frame (bins dB values, fftshifted: bin bins/2 is DC) into out (capacity cap); frame 0 = none (off, or not a full frame yet) or cap too small.
+    ZoomFrameInfo zoomFrame(float* out, std::size_t cap) const;
+    std::size_t ifZoomFftSize() const;   // 0 = off
+    bool setAfc(bool on, double pullInHz);
+    bool afcOn() const;
+    double afcPullInHz() const;
+    double afcCorrectionHz() const;   // what is added to the VFO now (0 while off, unlocked or in a mode without a carrier)
+    bool afcLocked() const;
+    // THE CW PEAK FILTER (engine serial lane A, row F8; dsp/cw_filter.hpp CwPeakFilter): an audio peaking filter centred on the CW pitch (it follows setCwPitchHz), width 30 to 500 Hz, boost 0 to
+    // 24 dB, on the finished audio of CW mode only (after the equaliser; the decoder tap is far upstream and never sees it). Off, or in any other mode, it is a bit-exact no-op. False (nothing
+    // changed) for a width or boost outside those. Any thread.
+    bool setCwPeak(bool on, double widthHz, double boostDb);
+    bool cwPeakOn() const;
+    double cwPeakWidthHz() const;
+    double cwPeakBoostDb() const;
+    // STEREO PLACEMENT OF A MONO RECEIVER (engine serial lane A, rows F20 and D5; dsp/stereo_place.hpp): mode 0 off (left = right, as it always was), 1 pan (value -1 left ear only .. +1 right ear
+    // only, constant power), 2 pseudo-stereo (value 0..1, the amount: complementary combs, a mono sum keeps the signal), 3 binaural (value -90..+90 degrees of azimuth: a time and level difference).
+    // Runs on the finished audio after the equaliser, and only while the audio is mono: a stereo broadcast keeps its own two channels. False (nothing changed) outside those. Any thread.
+    bool setStereoPlace(int mode, double value);
+    int stereoPlaceMode() const;
+    double stereoPlaceValue() const;
+    // THE CHANNEL FILTER'S SHAPE (engine serial lane A, row F6; Vfo::setChannelShape): 0 the filter the VFO has always had, 1 sharp, 2 medium, 3 soft. Applies where the VFO has a narrow stage (a bandwidth under a quarter of the
+    // channel rate); channelShapeActive() says whether it does now. Posted; kept across a rate change. False (nothing changed) outside 0..3.
+    bool setChannelShape(int shape);
+    int channelShape() const;
+    bool channelShapeActive() const;
+    // THE FM MULTIPLEX AS A FILE (engine serial lane A, row D4): in WFM the composite (the discriminator's output before the stereo decoder: mono, the 19 kHz pilot, the 38 kHz difference, the 57 kHz RDS)
+    // is resampled to 192 kHz and handed to this recorder (an Audio take, so a 32-bit float WAV when its sample format is set so) for a program such as RDS Spy to open. Nothing is written in any
+    // other mode. Like setIqRecorder: after the setter returns no write against the old recorder is in flight; nullptr stops it. Any thread.
+    static constexpr double kMpxRateHz = 192000.0;
+    void setMpxRecorder(Recorder* r);
+    // THE IF AS A FILE (engine serial lane A, row P4): the channel after the VFO has mixed it to DC and the channel filter has taken everything but the passband out, at the channel rate (channelRateHz()), as
+    // I/Q to this recorder (a BasebandIq take: 32-bit float or 16-bit integer by its sample format). Before the demodulator, so it is the same in every mode; the squelch does not gate it. Like setIqRecorder:
+    // after the setter returns no write against the old recorder is in flight; nullptr stops it. A change of input rate changes the channel rate: the engine ends the take then. Any thread.
+    void setIfRecorder(Recorder* r);
+    bool setIqCorrection(int mask);
+    int iqCorrection() const;
+    double iqImageRejectionDb() const;   // the balance estimator's reading of the input, dB (200 while nothing is measured)
     int manualNotchCount() const;   // slots that are on
     bool setNoiseReductionMethod(int method);
     int noiseReductionMethod() const;
@@ -1128,9 +1200,47 @@ private:
     // NOISE-REDUCTION METHOD: the choice and what the posted switch and strength last said (so a method built later starts from them), and the two channels' alternative reducers.
     cascade::dsp::AudioEq eqL_{kAudioRateHz};
     cascade::dsp::AudioEq eqR_{kAudioRateHz};
+    cascade::dsp::StereoPlacer placer_{kAudioRateHz};     // (F20/D5: setters are atomics, process() runs on the DSP thread)
+    std::vector<float> placeIn_;
+    std::atomic<int> mirrorPlaceMode_{0};
+    std::atomic<double> mirrorPlaceValue_{0.0};
+    cascade::dsp::CwPeakFilter cwPeakL_{kAudioRateHz};   // (F8: setters are atomics, process() runs on the DSP thread)
+    cascade::dsp::CwPeakFilter cwPeakR_{kAudioRateHz};
+    std::atomic<bool> mirrorCwPeakOn_{false};
+    std::atomic<double> mirrorCwPeakWidth_{100.0};
+    std::atomic<double> mirrorCwPeakBoost_{12.0};
     cascade::dsp::NotchBank notchBankL_{kAudioRateHz};
     cascade::dsp::NotchBank notchBankR_{kAudioRateHz};
+    std::unique_ptr<cascade::dsp::IqCorrector> iqCorr_;   // swapped only while the DSP thread is quiesced (a rate change)
+    std::atomic<int> iqMask_{0};
+    // AFC (setAfc): the DSP thread's copies, the tracker (rebuilt with the channel blocks) and the lock-free mirrors the control thread reads.
+    // IF ZOOM (setIfZoom): the settings (DSP thread's copy, mirrored for the control thread), and the block, swapped whole so a reader holds it while a rebuild replaces it.
+    std::size_t zoomFft_ = 0;
+    double zoomSpanHz_ = 0.0;
+    std::atomic<std::size_t> mirrorZoomFft_{0};
+    std::atomic<std::shared_ptr<cascade::dsp::ZoomFft>> zoom_;
+    void rebuildZoom(double chanRate);
+    std::unique_ptr<cascade::dsp::AfcTracker> afc_;
+    bool afcOn_ = false;
+    double afcPullHz_ = 2500.0;
+    double userOffsetHz_ = 0.0;      // the VFO offset the user asked for; the VFO runs at this plus afcAppliedHz_
+    double afcAppliedHz_ = 0.0;
+    std::atomic<bool> mirrorAfcOn_{false};
+    std::atomic<double> mirrorAfcPullHz_{2500.0};
+    std::atomic<double> mirrorAfcCorrHz_{0.0};
+    std::atomic<bool> mirrorAfcLocked_{false};
+    int chanShapeNow_ = 0;                       // F6 (DSP thread's copy)
+    std::atomic<int> mirrorChanShape_{0};
+    std::atomic<bool> mirrorChanShapeActive_{false};
     double cwPitchNow_ = 700.0;
+    // The spectrum block path (setSpectrum): the block exists from the first non-default choice on and is never freed while the pipeline lives; specOn_ says whether the DSP thread feeds it.
+    std::unique_ptr<cascade::dsp::SpectrumBlock> specBlock_;
+    std::atomic<bool> specOn_{false};
+    std::size_t specFft_ = 0;       // the choice (0 = the construction size); all of these under frameMutex_, which also makes the block's ONE control thread (latest, swapIn, collectRetired) one lock
+    int specWindow_ = 3;
+    double specFps_ = 0.0;
+    std::vector<float> specScratch_;   // getLatestFrame's read buffer
+    void rebuildSpectrumBlock();   // the choice -> the block (any control thread; takes frameMutex_ for the hand-over only)
     std::unique_ptr<cascade::dsp::NoiseSquelch> noiseSq_;
     bool noiseSqOn_ = false;
     double noiseSqThresholdDb_ = -30.0;
@@ -1334,6 +1444,11 @@ private:
     RdsSnapshot rdsPublished_;
     // Recorder taps (P6): non-owning, audioMutex_-guarded like the chain
     // blocks above — see the set*Recorder contract in the public section.
+    std::atomic<double> pilotOffsetHz_{0.0};            // R18
+    Recorder* ifRecorder_ = nullptr;                     // P4 (under audioMutex_)
+    Recorder* mpxRecorder_ = nullptr;                    // D4 (under audioMutex_)
+    cascade::dsp::RationalResampler mpxResampler_{192000u, 200000u};   // composite rate -> 192 kHz; rebuilt with the channel blocks
+    std::vector<float> mpxBuf_;
     Recorder* iqRecorder_ = nullptr;
     Recorder* audioRecorder_ = nullptr;
 

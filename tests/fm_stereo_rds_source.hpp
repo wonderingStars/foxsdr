@@ -143,6 +143,11 @@ public:
     explicit FmStereoSource(std::vector<int> rdsLevels, double rateHz = kInputRateHz)
         : levels_(std::move(rdsLevels)), rate_(rateHz) {}
 
+    // THE RECEIVER'S CRYSTAL IS `ppm` FAST (engine serial lane A, row R18): every frequency of the transmitter lands 1/(1+ppm e-6) of where it should, the pilot included. 0 (the default) leaves every other test as it was.
+    void setClockPpm(double ppm) { clockScale_ = 1.0 / (1.0 + ppm * 1e-6); }
+    // The peak deviation of the transmitter, Hz (default kPeakDeviationHz = 50 kHz, which puts the 9 % pilot at 0.67 of what the stereo decoder expects of a broadcast station's 75 kHz: below its lock-on level).
+    void setPeakDeviationHz(double hz) { deviationHz_ = hz; }
+
     bool start() override {
         running_ = true;
         return true;
@@ -160,9 +165,9 @@ public:
 
     std::size_t read(std::complex<float>* dst, std::size_t n) override {
         for (std::size_t i = 0; i < n; ++i) {
-            const double t = static_cast<double>(sample_) / rate_;
+            const double t = static_cast<double>(sample_) / rate_ * clockScale_;
             ++sample_;
-            phase_ += kTwoPi * kPeakDeviationHz * mpx(t) / rate_;
+            phase_ += kTwoPi * deviationHz_ * mpx(t) / rate_;
             if (phase_ > kTwoPi) { phase_ -= kTwoPi; }
             if (phase_ < -kTwoPi) { phase_ += kTwoPi; }
             dst[i] = std::complex<float>(static_cast<float>(std::cos(phase_)),
@@ -175,6 +180,8 @@ public:
     const char* lastError() const override { return ""; }
 
 private:
+    double clockScale_ = 1.0;
+    double deviationHz_ = kPeakDeviationHz;
     // The composite, normalised to unit peak so kPeakDeviationHz really is
     // the peak deviation. Proportions are the standard ones: 45% sum, 9%
     // pilot, 45% difference on a suppressed 38 kHz carrier, ~5% RDS.

@@ -283,6 +283,8 @@ std::vector<double> readEq(const json& j) {
 }
 int sanitiseHp(int v) { return (v == 100 || v == 300) ? v : 0; }
 int sanitiseLp(int v) { return (v == 2400 || v == 3000 || v == 6000) ? v : 0; }
+int sanitiseSpectrumFft(int v) { return (v >= 1024 && v <= 131072 && (v & (v - 1)) == 0) ? v : 1024; }
+double sanitiseSpectrumFps(double v) { return !(v > 0.0) ? 0.0 : (v < 1.0 ? 1.0 : (v > 120.0 ? 120.0 : v)); }
 
 void clampToneSquelch(int& kind, double& hz, int& code, int& pol) {
     kind = kind < 0 ? 0 : (kind > 2 ? 2 : kind);
@@ -309,7 +311,7 @@ std::vector<ManualNotchSetting> sanitiseNotchBank(std::vector<ManualNotchSetting
 // Radios 2 to 8 as a file may have them, made safe. A number is "not >= lo" clamped so one that is not a number cannot pass; a value that names no thing
 // (a tone, a rate, a frequency below zero) becomes 0, which the engine reads as "leave what the radio opens with".
 std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
-    static const char* const kKinds[] = {"siggen", "soapy", "rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "aor", "hydrasdr", "pluto", "rtltcp", "kiwisdr", "file"};
+    static const char* const kKinds[] = {"siggen", "soapy", "rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "aor", "hydrasdr", "pluto", "rtltcp", "kiwisdr", "rawiq", "file"};
     std::vector<SavedRadio> out;
     std::set<int> taken;
     for (SavedRadio& r : in) {
@@ -342,6 +344,24 @@ std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
         r.cwPitchHz = !(r.cwPitchHz >= 300.0) ? 700.0 : (r.cwPitchHz > 1200.0 ? 1200.0 : r.cwPitchHz);
         r.audioHighPassHz = sanitiseHp(r.audioHighPassHz);
         r.audioLowPassHz = sanitiseLp(r.audioLowPassHz);
+        r.filterShape = r.filterShape < 0 || r.filterShape > 3 ? 0 : r.filterShape;
+        r.recordIqFormat = r.recordIqFormat < 0 || r.recordIqFormat > 1 ? 0 : r.recordIqFormat;
+        r.recordAudioFormat = r.recordAudioFormat < 0 || r.recordAudioFormat > 2 ? 0 : r.recordAudioFormat;
+        r.vfoActive = r.vfoActive == 1 ? 1 : 0;
+        r.vfoOtherMode = r.vfoOtherMode < 1 || r.vfoOtherMode > 8 ? 0 : r.vfoOtherMode;
+        r.vfoOtherHz = !(r.vfoOtherHz > 0.0) || r.vfoOtherHz > 1e12 || r.vfoOtherMode == 0 ? 0.0 : r.vfoOtherHz;
+        r.vfoOtherBwHz = !(r.vfoOtherBwHz > 0.0) ? 0.0 : (r.vfoOtherBwHz > 1e9 ? 0.0 : r.vfoOtherBwHz);
+        r.stereoPlaceMode = r.stereoPlaceMode < 0 || r.stereoPlaceMode > 3 ? 0 : r.stereoPlaceMode;
+        r.stereoPlaceValue = !(r.stereoPlaceValue >= -90.0) ? 0.0 : (r.stereoPlaceValue > 90.0 ? 0.0 : r.stereoPlaceValue);
+        if (r.stereoPlaceMode == 1 && (r.stereoPlaceValue < -1.0 || r.stereoPlaceValue > 1.0)) { r.stereoPlaceValue = 0.0; }
+        if (r.stereoPlaceMode == 2 && (r.stereoPlaceValue < 0.0 || r.stereoPlaceValue > 1.0)) { r.stereoPlaceValue = 0.0; }
+        r.cwPeakWidthHz = !(r.cwPeakWidthHz >= 30.0) ? 100.0 : (r.cwPeakWidthHz > 500.0 ? 500.0 : r.cwPeakWidthHz);
+        r.cwPeakBoostDb = !(r.cwPeakBoostDb >= 0.0) ? 12.0 : (r.cwPeakBoostDb > 24.0 ? 24.0 : r.cwPeakBoostDb);
+        r.afcPullInHz = !(r.afcPullInHz >= 50.0) ? 2500.0 : (r.afcPullInHz > 20000.0 ? 20000.0 : r.afcPullInHz);
+        r.iqCorrect = r.iqCorrect < 0 || r.iqCorrect > 7 ? 0 : r.iqCorrect;
+        r.spectrumFftSize = sanitiseSpectrumFft(r.spectrumFftSize);
+        r.spectrumWindow = r.spectrumWindow < 0 ? 3 : (r.spectrumWindow > 4 ? 3 : r.spectrumWindow);
+        r.spectrumFrameRateHz = sanitiseSpectrumFps(r.spectrumFrameRateHz);
         if (r.eqDb.size() != 8) { r.eqDb.clear(); }
         r.noiseSquelchThresholdDb = !(r.noiseSquelchThresholdDb >= -90.0) ? -90.0 : (r.noiseSquelchThresholdDb > 0.0 ? 0.0 : r.noiseSquelchThresholdDb);
         r.noiseSquelchTailMs = !(r.noiseSquelchTailMs >= 0.0) ? 0.0 : (r.noiseSquelchTailMs > 2000.0 ? 2000.0 : r.noiseSquelchTailMs);
@@ -659,6 +679,25 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     out.eqDb = readEq(j);
     getInt(j, "audioHighPassHz", out.audioHighPassHz);
     getInt(j, "audioLowPassHz", out.audioLowPassHz);
+    getInt(j, "filterShape", out.filterShape);
+    getBool(j, "ctun", out.ctun);
+    getInt(j, "recordAudioFormat", out.recordAudioFormat);
+    getInt(j, "recordIqFormat", out.recordIqFormat);
+    getDouble(j, "vfoOtherBwHz", out.vfoOtherBwHz);
+    getInt(j, "vfoOtherMode", out.vfoOtherMode);
+    getDouble(j, "vfoOtherHz", out.vfoOtherHz);
+    getInt(j, "vfoActive", out.vfoActive);
+    getDouble(j, "stereoPlaceValue", out.stereoPlaceValue);
+    getInt(j, "stereoPlaceMode", out.stereoPlaceMode);
+    getDouble(j, "cwPeakBoostDb", out.cwPeakBoostDb);
+    getDouble(j, "cwPeakWidthHz", out.cwPeakWidthHz);
+    getBool(j, "cwPeakOn", out.cwPeakOn);
+    getDouble(j, "afcPullInHz", out.afcPullInHz);
+    getBool(j, "afcOn", out.afcOn);
+    getInt(j, "iqCorrect", out.iqCorrect);
+    getDouble(j, "spectrumFrameRateHz", out.spectrumFrameRateHz);
+    getInt(j, "spectrumWindow", out.spectrumWindow);
+    getInt(j, "spectrumFftSize", out.spectrumFftSize);
     getBool(j, "noiseSquelchOn", out.noiseSquelchOn);
     getDouble(j, "noiseSquelchThresholdDb", out.noiseSquelchThresholdDb);
     getDouble(j, "noiseSquelchTailMs", out.noiseSquelchTailMs);
@@ -1083,6 +1122,25 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
                 r.eqDb = readEq(e);
                 getInt(e, "audioHighPassHz", r.audioHighPassHz);
                 getInt(e, "audioLowPassHz", r.audioLowPassHz);
+                getInt(e, "filterShape", r.filterShape);
+                getBool(e, "ctun", r.ctun);
+                getInt(e, "recordAudioFormat", r.recordAudioFormat);
+                getInt(e, "recordIqFormat", r.recordIqFormat);
+                getDouble(e, "vfoOtherBwHz", r.vfoOtherBwHz);
+                getInt(e, "vfoOtherMode", r.vfoOtherMode);
+                getDouble(e, "vfoOtherHz", r.vfoOtherHz);
+                getInt(e, "vfoActive", r.vfoActive);
+                getDouble(e, "stereoPlaceValue", r.stereoPlaceValue);
+                getInt(e, "stereoPlaceMode", r.stereoPlaceMode);
+                getDouble(e, "cwPeakBoostDb", r.cwPeakBoostDb);
+                getDouble(e, "cwPeakWidthHz", r.cwPeakWidthHz);
+                getBool(e, "cwPeakOn", r.cwPeakOn);
+                getDouble(e, "afcPullInHz", r.afcPullInHz);
+                getBool(e, "afcOn", r.afcOn);
+                getInt(e, "iqCorrect", r.iqCorrect);
+                getDouble(e, "spectrumFrameRateHz", r.spectrumFrameRateHz);
+                getInt(e, "spectrumWindow", r.spectrumWindow);
+                getInt(e, "spectrumFftSize", r.spectrumFftSize);
                 getBool(e, "noiseSquelchOn", r.noiseSquelchOn);
                 getDouble(e, "noiseSquelchThresholdDb", r.noiseSquelchThresholdDb);
                 getDouble(e, "noiseSquelchTailMs", r.noiseSquelchTailMs);
@@ -1318,6 +1376,24 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     out.cwPitchHz = !(out.cwPitchHz >= 300.0) ? 700.0 : (out.cwPitchHz > 1200.0 ? 1200.0 : out.cwPitchHz);
     out.audioHighPassHz = sanitiseHp(out.audioHighPassHz);
     out.audioLowPassHz = sanitiseLp(out.audioLowPassHz);
+    out.filterShape = out.filterShape < 0 || out.filterShape > 3 ? 0 : out.filterShape;
+    out.recordIqFormat = out.recordIqFormat < 0 || out.recordIqFormat > 1 ? 0 : out.recordIqFormat;
+    out.recordAudioFormat = out.recordAudioFormat < 0 || out.recordAudioFormat > 2 ? 0 : out.recordAudioFormat;
+    out.vfoActive = out.vfoActive == 1 ? 1 : 0;
+    out.vfoOtherMode = out.vfoOtherMode < 1 || out.vfoOtherMode > 8 ? 0 : out.vfoOtherMode;
+    out.vfoOtherHz = !(out.vfoOtherHz > 0.0) || out.vfoOtherHz > 1e12 || out.vfoOtherMode == 0 ? 0.0 : out.vfoOtherHz;
+    out.vfoOtherBwHz = !(out.vfoOtherBwHz > 0.0) ? 0.0 : (out.vfoOtherBwHz > 1e9 ? 0.0 : out.vfoOtherBwHz);
+    out.stereoPlaceMode = out.stereoPlaceMode < 0 || out.stereoPlaceMode > 3 ? 0 : out.stereoPlaceMode;
+    out.stereoPlaceValue = !(out.stereoPlaceValue >= -90.0) ? 0.0 : (out.stereoPlaceValue > 90.0 ? 0.0 : out.stereoPlaceValue);
+    if (out.stereoPlaceMode == 1 && (out.stereoPlaceValue < -1.0 || out.stereoPlaceValue > 1.0)) { out.stereoPlaceValue = 0.0; }
+    if (out.stereoPlaceMode == 2 && (out.stereoPlaceValue < 0.0 || out.stereoPlaceValue > 1.0)) { out.stereoPlaceValue = 0.0; }
+    out.cwPeakWidthHz = !(out.cwPeakWidthHz >= 30.0) ? 100.0 : (out.cwPeakWidthHz > 500.0 ? 500.0 : out.cwPeakWidthHz);
+    out.cwPeakBoostDb = !(out.cwPeakBoostDb >= 0.0) ? 12.0 : (out.cwPeakBoostDb > 24.0 ? 24.0 : out.cwPeakBoostDb);
+    out.afcPullInHz = !(out.afcPullInHz >= 50.0) ? 2500.0 : (out.afcPullInHz > 20000.0 ? 20000.0 : out.afcPullInHz);
+    out.iqCorrect = out.iqCorrect < 0 || out.iqCorrect > 7 ? 0 : out.iqCorrect;
+    out.spectrumFftSize = sanitiseSpectrumFft(out.spectrumFftSize);
+    out.spectrumWindow = out.spectrumWindow < 0 ? 3 : (out.spectrumWindow > 4 ? 3 : out.spectrumWindow);
+    out.spectrumFrameRateHz = sanitiseSpectrumFps(out.spectrumFrameRateHz);
     out.noiseSquelchThresholdDb = !(out.noiseSquelchThresholdDb >= -90.0) ? -90.0 : (out.noiseSquelchThresholdDb > 0.0 ? 0.0 : out.noiseSquelchThresholdDb);
     out.noiseSquelchTailMs = !(out.noiseSquelchTailMs >= 0.0) ? 0.0 : (out.noiseSquelchTailMs > 2000.0 ? 2000.0 : out.noiseSquelchTailMs);
     out.notchBank = sanitiseNotchBank(std::move(out.notchBank));
@@ -1350,7 +1426,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
         out.sourceKind != "mirisdr" && out.sourceKind != "rx888" &&
         out.sourceKind != "pluto" && out.sourceKind != "soundcard" &&
         out.sourceKind != "aor" && out.sourceKind != "hydrasdr" &&
-        out.sourceKind != "rtltcp" && out.sourceKind != "kiwisdr") {
+        out.sourceKind != "rtltcp" && out.sourceKind != "kiwisdr" && out.sourceKind != "rawiq") {
         out.sourceKind = defaults.sourceKind;
     }
     // The sound card's settings, each back to its default on its own when
@@ -1675,6 +1751,25 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     if (cfg.eqDb.size() == 8) { j["eqDb"] = cfg.eqDb; }
     j["audioHighPassHz"] = cfg.audioHighPassHz;
     j["audioLowPassHz"] = cfg.audioLowPassHz;
+    j["filterShape"] = cfg.filterShape;
+    j["ctun"] = cfg.ctun;
+    j["recordAudioFormat"] = cfg.recordAudioFormat;
+    j["recordIqFormat"] = cfg.recordIqFormat;
+    j["vfoOtherBwHz"] = cfg.vfoOtherBwHz;
+    j["vfoOtherMode"] = cfg.vfoOtherMode;
+    j["vfoOtherHz"] = cfg.vfoOtherHz;
+    j["vfoActive"] = cfg.vfoActive;
+    j["stereoPlaceValue"] = cfg.stereoPlaceValue;
+    j["stereoPlaceMode"] = cfg.stereoPlaceMode;
+    j["cwPeakBoostDb"] = cfg.cwPeakBoostDb;
+    j["cwPeakWidthHz"] = cfg.cwPeakWidthHz;
+    j["cwPeakOn"] = cfg.cwPeakOn;
+    j["afcPullInHz"] = cfg.afcPullInHz;
+    j["afcOn"] = cfg.afcOn;
+    j["iqCorrect"] = cfg.iqCorrect;
+    j["spectrumFrameRateHz"] = cfg.spectrumFrameRateHz;
+    j["spectrumWindow"] = cfg.spectrumWindow;
+    j["spectrumFftSize"] = cfg.spectrumFftSize;
     j["noiseSquelchOn"] = cfg.noiseSquelchOn;
     j["noiseSquelchThresholdDb"] = cfg.noiseSquelchThresholdDb;
     j["noiseSquelchTailMs"] = cfg.noiseSquelchTailMs;
@@ -1880,6 +1975,25 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
             if (r.eqDb.size() == 8) { e["eqDb"] = r.eqDb; }
             e["audioHighPassHz"] = r.audioHighPassHz;
             e["audioLowPassHz"] = r.audioLowPassHz;
+            e["filterShape"] = r.filterShape;
+            e["ctun"] = r.ctun;
+            e["recordAudioFormat"] = r.recordAudioFormat;
+            e["recordIqFormat"] = r.recordIqFormat;
+            e["vfoOtherBwHz"] = r.vfoOtherBwHz;
+            e["vfoOtherMode"] = r.vfoOtherMode;
+            e["vfoOtherHz"] = r.vfoOtherHz;
+            e["vfoActive"] = r.vfoActive;
+            e["stereoPlaceValue"] = r.stereoPlaceValue;
+            e["stereoPlaceMode"] = r.stereoPlaceMode;
+            e["cwPeakBoostDb"] = r.cwPeakBoostDb;
+            e["cwPeakWidthHz"] = r.cwPeakWidthHz;
+            e["cwPeakOn"] = r.cwPeakOn;
+            e["afcPullInHz"] = r.afcPullInHz;
+            e["afcOn"] = r.afcOn;
+            e["iqCorrect"] = r.iqCorrect;
+            e["spectrumFrameRateHz"] = r.spectrumFrameRateHz;
+            e["spectrumWindow"] = r.spectrumWindow;
+            e["spectrumFftSize"] = r.spectrumFftSize;
             e["noiseSquelchOn"] = r.noiseSquelchOn;
             e["noiseSquelchThresholdDb"] = r.noiseSquelchThresholdDb;
             e["noiseSquelchTailMs"] = r.noiseSquelchTailMs;

@@ -292,6 +292,12 @@ constexpr std::size_t kAudioTapSize = 4096;
 // returned, not that the thread was merely slow.
 constexpr std::chrono::seconds kSourceJoinWait{3};
 
+// The spectrum choice (setSpectrum): the largest FFT it takes, the frame rate "automatic" means on the block path, and the figure the block's compensated tone level is lowered by to match the legacy
+// estimator's uncompensated Blackman-Harris reading (20 log10 of that window's coherent gain, its first coefficient 0.35875).
+constexpr std::size_t kSpectrumMaxFft = 131072;
+constexpr double kAutoSpectrumFps = 30.0;
+const float kLegacyToneOffsetDb = static_cast<float>(20.0 * std::log10(0.35875));
+
 }  // namespace
 
 Pipeline::Pipeline(Config cfg)
@@ -327,6 +333,8 @@ Pipeline::Pipeline(Config cfg)
     active_ = &builtin_;  // the generator feeds the ring until setSource says otherwise
     airView_.bind(active_);  // no converter until the caller sets one
     estimator_.setAlpha(cfg.averagingAlpha);
+    iqCorr_ = std::make_unique<cascade::dsp::IqCorrector>(cfg.sampleRateHz);
+    mpxResampler_ = cascade::dsp::RationalResampler(static_cast<unsigned>(kMpxRateHz), static_cast<unsigned>(cfg.sampleRateHz / static_cast<double>(vfoDecim_) + 0.5));   // D4
     demod_.setMode(cascade::dsp::DemodMode::WFM);  // default mode per spec
     // WFM de-emphasis belongs to StereoFm, never to the discriminator (see the
     // ownership note in the header), so for the default mode this leaves the
@@ -472,6 +480,12 @@ void Pipeline::rebuildChannelBlocks(double chanRate) {
     noiseSq_->setThresholdDb(noiseSqThresholdDb_);
     noiseSq_->setTailMs(noiseSqTailMs_);
     noiseSq_->setEnabled(noiseSqOn_);
+    rebuildZoom(chanRate);   // S12: the zoom listens at the channel rate too
+    afc_ = std::make_unique<cascade::dsp::AfcTracker>(chanRate);   // (the AFC measures at the channel rate: rebuilt with it, its settings put back)
+    afc_->setPullInHz(afcPullHz_);
+    afc_->setHoldHz(2.0 * afcPullHz_);
+    afc_->setEnabled(afcOn_);
+    afcAppliedHz_ = 0.0;
     toneHpL_.configure(kAudioRateHz);
     toneHpR_.configure(kAudioRateHz);
     stereo_ = std::make_unique<cascade::dsp::StereoFm>(chanRate);
@@ -509,6 +523,7 @@ void Pipeline::applyChannelBandwidthLocked() {
                            m == cascade::dsp::DemodMode::CW);
     if (!sideband) {
         vfo_.setBandwidthHz(vfoBandwidthHz_);
+        mirrorChanShapeActive_.store(vfo_.channelShapeActive(), std::memory_order_relaxed);
         return;
     }
     // The demodulator clamps B for its channel rate; the channel filter is
@@ -516,9 +531,18 @@ void Pipeline::applyChannelBandwidthLocked() {
     // clamps its own width, so a very wide request stays inside the channel.)
     demod_.setSsbBandwidthHz(vfoBandwidthHz_);
     vfo_.setBandwidthHz(kSidebandChannelFactor * demod_.ssbBandwidthHz());
+    mirrorChanShapeActive_.store(vfo_.channelShapeActive(), std::memory_order_relaxed);
 }
 
 void Pipeline::resetDecodersLocked() {
+    // (AFC: a retune is a different station - the nudge that followed the old carrier is taken off and the tracker starts again)
+    if (afc_) {
+        afc_->reset();
+        if (afcAppliedHz_ != 0.0) {
+            afcAppliedHz_ = 0.0;
+            vfo_.setOffsetHz(userOffsetHz_);
+        }
+    }
     rds_->reset();
     stereo_->reset();  // stream state only; force-mono and tau are settings
     oirt_->reset();
@@ -1046,6 +1070,21 @@ bool Pipeline::running() const {
 
 bool Pipeline::getLatestFrame(SpectrumFrame& out) {
     std::lock_guard<std::mutex> lk(frameMutex_);
+    if (specOn_.load(std::memory_order_acquire)) {
+        // THE SPECTRUM BLOCK PATH (setSpectrum): the newest block frame, if one is newer than the last pulled, becomes the latest frame. The legacy estimator's tone level is
+        // uncompensated for the window (a full-scale tone under Blackman-Harris reads 20 log10(0.35875) = -8.9 dB), and the block's is compensated: lowering by the same figure keeps every
+        // level the application shows (the S-meter calibration, the noise floor, the thresholds) where it was whatever size and window are chosen.
+        cascade::dsp::SpectrumBlock& blk = *specBlock_;   // (a reference: the containment scan reads "->columns(" as a plugin call)
+        const std::size_t cols = blk.columns();
+        if (specScratch_.size() < cols) { specScratch_.resize(cols); }
+        std::uint64_t blockSeq = 0;
+        const std::size_t got = blk.latest(specScratch_.data(), specScratch_.size(), &blockSeq);
+        if (got > 0) {
+            latest_.dbBins.resize(got);
+            for (std::size_t i = 0; i < got; ++i) { latest_.dbBins[i] = specScratch_[i] + kLegacyToneOffsetDb; }
+            latest_.seq += 1;
+        }
+    }
     if (latest_.seq <= out.seq) { return false; }
     out = latest_;
     return true;
@@ -1128,6 +1167,8 @@ bool Pipeline::oirtActive() const {
 bool Pipeline::stereoEnabled() const {
     return mirrorStereoEnabled_.load(std::memory_order_relaxed);
 }
+
+double Pipeline::pilotOffsetHz() const { return pilotOffsetHz_.load(std::memory_order_relaxed); }
 
 bool Pipeline::pilotLocked() const {
     return pilotLocked_.load(std::memory_order_relaxed);
@@ -1280,12 +1321,202 @@ bool Pipeline::setAudioFilters(int hp, int lp) {
 }
 bool Pipeline::eqBypassed() const { return eqL_.isBypassed(); }
 
+// --- the spectrum's size, window and frame rate (engine serial lane A, S1 S2 S3) ------------------------------------------------------------------
+bool Pipeline::setSpectrum(std::size_t fftSize, int window, double frameRateHz) {
+    if (!cascade::dsp::specSizeValid(fftSize) || fftSize > kSpectrumMaxFft || window < 0 || window > 4) { return false; }
+    if (!std::isfinite(frameRateHz) || frameRateHz < 0.0 || frameRateHz > 120.0 || (frameRateHz > 0.0 && frameRateHz < 1.0)) { return false; }
+    {
+        std::lock_guard<std::mutex> lk(frameMutex_);
+        specFft_ = fftSize;
+        specWindow_ = window;
+        specFps_ = frameRateHz;
+    }
+    rebuildSpectrumBlock();
+    return true;
+}
+
+void Pipeline::rebuildSpectrumBlock() {
+    std::size_t fft = 0;
+    int win = 3;
+    double fps = 0.0;
+    {
+        std::lock_guard<std::mutex> lk(frameMutex_);
+        fft = specFft_ == 0 ? cfg_.fftSize : specFft_;
+        win = specWindow_;
+        fps = specFps_;
+    }
+    if (fft == cfg_.fftSize && win == 3 && fps == 0.0) {
+        specOn_.store(false, std::memory_order_release);   // the legacy estimator again (the block stays allocated, idle)
+        return;
+    }
+    cascade::dsp::SpecConfig c;
+    c.fftSize = fft;
+    c.window = static_cast<cascade::dsp::SpecWindow>(win);
+    c.sampleRateHz = mirrorInputRateHz_.load(std::memory_order_relaxed);
+    c.frameRateHz = fps > 0.0 ? fps : kAutoSpectrumFps;
+    c.hop = 0;
+    c.columns = 0;
+    c.mode = cascade::dsp::SpecMode::Average;
+    c.scale = cascade::dsp::SpecScale::Tone;
+    c.alpha = cfg_.averagingAlpha;
+    std::unique_ptr<cascade::dsp::SpectrumBlock::Engine> e = cascade::dsp::SpectrumBlock::prepare(c);   // allocates and plans: outside the lock
+    if (!e) { return; }
+    std::lock_guard<std::mutex> lk(frameMutex_);
+    if (!specBlock_) {
+        specBlock_ = std::make_unique<cascade::dsp::SpectrumBlock>(c);
+    } else {
+        specBlock_->swapIn(std::move(e));
+    }
+    specOn_.store(true, std::memory_order_release);
+}
+
+std::size_t Pipeline::spectrumFftSize() const { return specFft_ == 0 ? cfg_.fftSize : specFft_; }
+int Pipeline::spectrumWindow() const { return specWindow_; }
+double Pipeline::spectrumFrameRateHz() const { return specFps_; }
+std::size_t Pipeline::spectrumBinCount() const { return specFft_ == 0 ? cfg_.fftSize : specFft_; }
+
+// --- I/Q correction (engine serial lane A, F16) ----------------------------------------------------------------------------------------------------------
+bool Pipeline::setIqCorrection(int mask) {
+    if (mask < 0 || mask > 7) { return false; }
+    iqMask_.store(mask, std::memory_order_relaxed);
+    iqCorr_->setDcRemoval((mask & 1) != 0);
+    iqCorr_->setBalance((mask & 2) != 0);
+    iqCorr_->setSwap((mask & 4) != 0);
+    return true;
+}
+int Pipeline::iqCorrection() const { return iqMask_.load(std::memory_order_relaxed); }
+double Pipeline::iqImageRejectionDb() const { return iqCorr_->imageRejectionDb(); }
+
+// --- IF zoom (engine serial lane A, S12) ---------------------------------------------------------------------------------------------------------------
+void Pipeline::rebuildZoom(double chanRate) {
+    if (zoomFft_ == 0 || !(chanRate > 0.0)) {
+        zoom_.store(nullptr);
+        return;
+    }
+    const std::size_t m = static_cast<std::size_t>(std::max(1.0, std::floor(chanRate / zoomSpanHz_ + 0.5)));
+    zoom_.store(std::make_shared<cascade::dsp::ZoomFft>(chanRate, m, zoomFft_));
+}
+bool Pipeline::setIfZoom(std::size_t fftSize, double spanHz) {
+    if (fftSize != 0) {
+        if (fftSize < 256 || fftSize > 16384 || (fftSize & (fftSize - 1)) != 0) { return false; }
+        if (!std::isfinite(spanHz) || spanHz < 100.0 || spanHz > channelRateHz()) { return false; }
+    }
+    post([this, fftSize, spanHz] {
+             zoomFft_ = fftSize;
+             zoomSpanHz_ = fftSize == 0 ? 0.0 : spanHz;
+             rebuildZoom(vfo_.channelRateHz());
+         },
+         [this, fftSize] { mirrorZoomFft_.store(fftSize, std::memory_order_relaxed); });
+    return true;
+}
+std::size_t Pipeline::ifZoomFftSize() const { return mirrorZoomFft_.load(std::memory_order_relaxed); }
+Pipeline::ZoomFrameInfo Pipeline::zoomFrame(float* out, std::size_t cap) const {
+    ZoomFrameInfo info;
+    const std::shared_ptr<cascade::dsp::ZoomFft> z = zoom_.load();
+    if (!z || cap < z->fftSize() || out == nullptr) { return info; }
+    info.frame = z->latest(out);
+    info.bins = z->fftSize();
+    info.binHz = z->binHz();
+    info.spanHz = z->outputRateHz();
+    info.usableSpanHz = z->usableSpanHz();
+    return info;
+}
+
+// --- AFC (engine serial lane A, F13) -------------------------------------------------------------------------------------------------------------------
+bool Pipeline::setAfc(bool on, double pullInHz) {
+    if (!std::isfinite(pullInHz) || pullInHz < 50.0 || pullInHz > 20000.0) { return false; }
+    post([this, on, pullInHz] {
+             afcOn_ = on;
+             afcPullHz_ = pullInHz;
+             if (afc_) {
+                 afc_->setPullInHz(pullInHz);
+                 afc_->setHoldHz(2.0 * pullInHz);
+                 if (!on) { afc_->setEnabled(false); }
+             }
+             if (!on && afcAppliedHz_ != 0.0) {
+                 afcAppliedHz_ = 0.0;
+                 vfo_.setOffsetHz(userOffsetHz_);
+             }
+             if (!on) {
+                 mirrorAfcCorrHz_.store(0.0, std::memory_order_relaxed);
+                 mirrorAfcLocked_.store(false, std::memory_order_relaxed);
+             }
+         },
+         [this, on, pullInHz] {
+             mirrorAfcOn_.store(on, std::memory_order_relaxed);
+             mirrorAfcPullHz_.store(pullInHz, std::memory_order_relaxed);
+         });
+    return true;
+}
+bool Pipeline::afcOn() const { return mirrorAfcOn_.load(std::memory_order_relaxed); }
+double Pipeline::afcPullInHz() const { return mirrorAfcPullHz_.load(std::memory_order_relaxed); }
+double Pipeline::afcCorrectionHz() const { return mirrorAfcCorrHz_.load(std::memory_order_relaxed); }
+bool Pipeline::afcLocked() const { return mirrorAfcLocked_.load(std::memory_order_relaxed); }
+
+// --- the CW peak filter (engine serial lane A, F8) -----------------------------------------------------------------------------------------------------
+bool Pipeline::setCwPeak(bool on, double widthHz, double boostDb) {
+    if (!std::isfinite(widthHz) || widthHz < cascade::dsp::CwPeakFilter::kMinWidthHz || widthHz > cascade::dsp::CwPeakFilter::kMaxWidthHz) { return false; }
+    if (!std::isfinite(boostDb) || boostDb < 0.0 || boostDb > cascade::dsp::CwPeakFilter::kMaxGainDb) { return false; }
+    for (cascade::dsp::CwPeakFilter* f : {&cwPeakL_, &cwPeakR_}) {
+        f->setWidthHz(widthHz);
+        f->setGainDb(boostDb);
+        f->setEnabled(on);
+    }
+    mirrorCwPeakWidth_.store(widthHz, std::memory_order_relaxed);
+    mirrorCwPeakBoost_.store(boostDb, std::memory_order_relaxed);
+    mirrorCwPeakOn_.store(on, std::memory_order_relaxed);
+    return true;
+}
+bool Pipeline::cwPeakOn() const { return mirrorCwPeakOn_.load(std::memory_order_relaxed); }
+double Pipeline::cwPeakWidthHz() const { return mirrorCwPeakWidth_.load(std::memory_order_relaxed); }
+double Pipeline::cwPeakBoostDb() const { return mirrorCwPeakBoost_.load(std::memory_order_relaxed); }
+
+// --- stereo placement (engine serial lane A, F20 and D5) -------------------------------------------------------------------------------------------------
+bool Pipeline::setStereoPlace(int mode, double value) {
+    if (mode < 0 || mode > 3 || !std::isfinite(value)) { return false; }
+    if (mode == 1 && (value < -1.0 || value > 1.0)) { return false; }
+    if (mode == 2 && (value < 0.0 || value > 1.0)) { return false; }
+    if (mode == 3 && (value < -90.0 || value > 90.0)) { return false; }
+    placer_.setEnabled(mode != 0);
+    if (mode == 1) {
+        placer_.setMode(cascade::dsp::StereoMode::Pan);
+        placer_.setPan(value);
+    } else if (mode == 2) {
+        placer_.setMode(cascade::dsp::StereoMode::Pseudo);
+        placer_.setPseudoAmount(value);
+    } else if (mode == 3) {
+        placer_.setMode(cascade::dsp::StereoMode::Binaural);
+        placer_.setAzimuthDeg(value);
+    }
+    mirrorPlaceValue_.store(value, std::memory_order_relaxed);
+    mirrorPlaceMode_.store(mode, std::memory_order_relaxed);
+    return true;
+}
+int Pipeline::stereoPlaceMode() const { return mirrorPlaceMode_.load(std::memory_order_relaxed); }
+double Pipeline::stereoPlaceValue() const { return mirrorPlaceValue_.load(std::memory_order_relaxed); }
+
+// --- the channel filter's shape (engine serial lane A, F6) ---------------------------------------------------------------------------------------------------
+bool Pipeline::setChannelShape(int shape) {
+    if (shape < 0 || shape > 3) { return false; }
+    post([this, shape] {
+             chanShapeNow_ = shape;
+             vfo_.setChannelShape(shape);
+             mirrorChanShapeActive_.store(vfo_.channelShapeActive(), std::memory_order_relaxed);
+         },
+         [this, shape] { mirrorChanShape_.store(shape, std::memory_order_relaxed); });
+    return true;
+}
+int Pipeline::channelShape() const { return mirrorChanShape_.load(std::memory_order_relaxed); }
+bool Pipeline::channelShapeActive() const { return mirrorChanShapeActive_.load(std::memory_order_relaxed); }
+
 // --- CW pitch -------------------------------------------------------------------------------------------------------------------------------------
 bool Pipeline::setCwPitchHz(double hz) {
     if (!std::isfinite(hz) || hz < 300.0 || hz > 1200.0) { return false; }
     post([this, hz] {
              cwPitchNow_ = hz;
              demod_.setCwPitchHz(hz);
+             cwPeakL_.setPitchHz(hz);   // (F8: the peak filter sits on the pitch)
+             cwPeakR_.setPitchHz(hz);
          },
          [this, hz] { mirrorCwPitchHz_.store(hz, std::memory_order_relaxed); });
     return true;
@@ -1471,7 +1702,8 @@ void Pipeline::setVfoOffsetHz(double offsetHz) {
     // setter returns (AppWindow::tuneAbsoluteHz and the slider both do).
     post(
         [this, offsetHz] {
-            if (vfo_.offsetHz() == offsetHz) { return; }  // no move, nothing to forget
+            if (afcAppliedHz_ == 0.0 && vfo_.offsetHz() == offsetHz) { return; }  // no move, nothing to forget
+            userOffsetHz_ = offsetHz;
             vfo_.setOffsetHz(offsetHz);
             // A retune is a different station: the RDS content and the pilot lock
             // that belonged to the old one must not survive it. (The SOURCE centre
@@ -1638,6 +1870,9 @@ bool Pipeline::setInputRateHz(double rateHz) {
         const float nbThresholdDb = vfo_.noiseBlankerThresholdDb();
         vfo_ = cascade::dsp::Vfo(rateHz, decim, vfoBandwidthHz_);
         vfo_.setOffsetHz(offset);
+        afcAppliedHz_ = 0.0;   // (the tracker is rebuilt below with the channel blocks; the nudge goes with it)
+        vfo_.setOffsetHz(userOffsetHz_);
+        vfo_.setChannelShape(chanShapeNow_);   // (F6: the user's shape put back on the rebuilt filter)
         vfo_.setNoiseBlankerThresholdDb(nbThresholdDb);
         vfo_.setNoiseBlankerEnabled(nbOn);
 
@@ -1694,6 +1929,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
         resamplerD_ = cascade::dsp::RationalResampler(
             static_cast<unsigned>(kAudioRateHz + 0.5),
             static_cast<unsigned>(chanRate + 0.5));
+        mpxResampler_ = cascade::dsp::RationalResampler(static_cast<unsigned>(kMpxRateHz), static_cast<unsigned>(chanRate + 0.5));   // (D4)
 
         // New rate regime: relearn the gain and the S-meter from neutral.
         // (Their per-sample time constants stay tuned for ~200 kHz channels,
@@ -1723,6 +1959,15 @@ bool Pipeline::setInputRateHz(double rateHz) {
     // ...and the lock-free mirror inputRateHz() reads, in the same breath as
     // the field it mirrors, so the two can never disagree.
     mirrorInputRateHz_.store(rateHz, std::memory_order_relaxed);
+    rebuildSpectrumBlock();   // a frame rate asked for in hertz needs the new input rate (a no-op on the legacy path)
+    {
+        // The corrector's time constants are in samples: a new one for the new rate (the DSP thread is parked here), with the user's choice put back.
+        iqCorr_ = std::make_unique<cascade::dsp::IqCorrector>(rateHz);
+        const int m = iqMask_.load(std::memory_order_relaxed);
+        iqCorr_->setDcRemoval((m & 1) != 0);
+        iqCorr_->setBalance((m & 2) != 0);
+        iqCorr_->setSwap((m & 4) != 0);
+    }
     // ONE LINE PER ACCEPTED CHANGE (0.99.85), here at the commit rather than at
     // any caller, because every way the rate moves - the rail's Rate combo, a
     // plugin preset, the browser, a retune the driver answered with another
@@ -1764,6 +2009,16 @@ void Pipeline::setIqRecorder(Recorder* r) {
     // serialization guarantee the header documents for record toggles.
     std::lock_guard<std::mutex> lk(audioMutex_);
     iqRecorder_ = r;
+}
+
+void Pipeline::setIfRecorder(Recorder* r) {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    ifRecorder_ = r;
+}
+
+void Pipeline::setMpxRecorder(Recorder* r) {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    mpxRecorder_ = r;
 }
 
 void Pipeline::setAudioRecorder(Recorder* r) {
@@ -2128,14 +2383,20 @@ void Pipeline::dspThreadBody() {
             continue;
         }
         filled = 0;
+        iqCorr_->process(acc.data(), n);   // F16: the I/Q correction (nothing at all while its mask is 0)
         dspBeat("spectrum");
         const auto blockBegan = std::chrono::steady_clock::now();
-        estimator_.process(acc.data(), db.data());
+        if (specOn_.load(std::memory_order_acquire)) {
+            // The spectrum block (setSpectrum): frames come at its own rate from these same samples and are pulled by getLatestFrame.
+            specBlock_->process(acc.data(), n);
+        } else {
+            estimator_.process(acc.data(), db.data());
 
-        {
-            std::lock_guard<std::mutex> lk(frameMutex_);
-            latest_.dbBins = db;  // vector assignment reuses capacity after the first frame
-            latest_.seq += 1;     // strictly increasing; never reset (see header)
+            {
+                std::lock_guard<std::mutex> lk(frameMutex_);
+                latest_.dbBins = db;  // vector assignment reuses capacity after the first frame
+                latest_.seq += 1;     // strictly increasing; never reset (see header)
+            }
         }
 
         // Duplicate the same drained block into the audio path (the spectrum
@@ -2201,6 +2462,27 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     nbStandingDown_.store(vfo_.noiseBlankerStandingDown(), std::memory_order_relaxed);
     if (m == 0) { return; }
 
+    // AFC (F13): measured on the channel baseband AFTER the correction in force, so each block sees the residual; the nudge goes onto the VFO for the next block.
+    if (afc_ && afcOn_) {
+        const cascade::dsp::DemodMode md = demod_.mode();
+        if (md == cascade::dsp::DemodMode::NFM || md == cascade::dsp::DemodMode::WFM || md == cascade::dsp::DemodMode::AM || md == cascade::dsp::DemodMode::CW) {
+            afc_->setEnabled(true);
+            afc_->setMode(md == cascade::dsp::DemodMode::CW ? cascade::dsp::AfcMode::Peak : cascade::dsp::AfcMode::MeanFrequency);
+            afc_->process(chanBuf_.data(), m);
+            const double corr = afc_->correctionHz();
+            if (std::fabs(corr - afcAppliedHz_) >= 0.5) {
+                afcAppliedHz_ = corr;
+                vfo_.setOffsetHz(userOffsetHz_ + corr);
+            }
+        } else if (afcAppliedHz_ != 0.0) {
+            afc_->reset();
+            afcAppliedHz_ = 0.0;
+            vfo_.setOffsetHz(userOffsetHz_);
+        }
+        mirrorAfcCorrHz_.store(afcAppliedHz_, std::memory_order_relaxed);
+        mirrorAfcLocked_.store(afcAppliedHz_ != 0.0 && afc_->locked(), std::memory_order_relaxed);
+    }
+
     // S-meter: channel power (post-filter, pre-demod), snapshotted for the GUI.
     meter_.process(chanBuf_.data(), m);
     signalDb_.store(meter_.powerDb(), std::memory_order_relaxed);
@@ -2215,6 +2497,10 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // line can never block, never fail and never wait for the GUI, which is
     // the condition on anything added to this thread.
     scopeIq_.push(chanBuf_.data(), m);
+    if (ifRecorder_ != nullptr) { ifRecorder_->writeIq(chanBuf_.data(), m); }   // P4: the IF, the passband only
+    if (zoomFft_ != 0) {   // S12: the zoom FFT of the passband (the block is held while it runs)
+        if (const std::shared_ptr<cascade::dsp::ZoomFft> z = zoom_.load()) { z->push(chanBuf_.data(), m); }
+    }
 
     // Demodulate 1:1 at the channel rate. In WFM this is the COMPOSITE (MPX)
     // with no de-emphasis applied — see the ownership note in the header.
@@ -2243,6 +2529,13 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // furniture, and this application does not draw furniture. The scope's own
     // liveness rule watches written(), so a mode change simply stops the tube.
     if (wfm) { scopeMpx_.push(audioBuf_.data(), m); }
+    // D4: the same instant, resampled to 192 kHz, into the multiplex recorder when one is set.
+    if (wfm && mpxRecorder_ != nullptr) {
+        const std::size_t cap = mpxResampler_.maxOut(m);
+        mpxBuf_.resize(cap);
+        const std::size_t got = mpxResampler_.process(audioBuf_.data(), m, mpxBuf_.data(), cap);
+        if (got > 0) { mpxRecorder_->writeAudio(mpxBuf_.data(), got); }
+    }
 
     // RDS gets the RAW discriminator output: no de-emphasis, no scaling, no
     // AGC, no squelch — bit-for-bit the signal the --rds-check bench path
@@ -2336,6 +2629,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         } else {
             stereo_->process(audioBuf_.data(), m, leftBuf_.data(), rightBuf_.data());
             pilotLocked_.store(stereo_->pilotLocked(), std::memory_order_relaxed);
+            pilotOffsetHz_.store(stereo_->pilotOffsetHz(), std::memory_order_relaxed);
             pilotLevel_.store(stereo_->pilotLevel(), std::memory_order_relaxed);
             stereoActive_.store(stereoEnabled_ && stereo_->pilotLocked() &&
                                     stereo_->stereoCapable(),
@@ -2485,6 +2779,16 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // THE EQUALISER AND THE AUDIO FILTERS, after the noise reduction (bit-exact passthrough while everything is flat and off).
     eqL_.process(outL_.data(), k);
     eqR_.process(outR_.data(), k);
+    // STEREO PLACEMENT (F20, D5): a mono receiver's audio into the pair of ears; a stereo decode keeps its own two channels.
+    if (mirrorPlaceMode_.load(std::memory_order_relaxed) != 0 && !stereoActive_.load(std::memory_order_relaxed)) {
+        placeIn_.assign(outL_.data(), outL_.data() + k);
+        placer_.process(placeIn_.data(), k, outL_.data(), outR_.data());
+    }
+    // THE CW PEAK FILTER (F8), CW mode only: a peaking section at the pitch on the finished audio.
+    if (mode == cascade::dsp::DemodMode::CW) {
+        cwPeakL_.process(outL_.data(), k);
+        cwPeakR_.process(outR_.data(), k);
+    }
 
     // --- IN-CHAIN AUDIO PROCESSOR PLUGINS (host API level 1) ----------------
     //

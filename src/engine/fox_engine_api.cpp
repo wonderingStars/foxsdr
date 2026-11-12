@@ -1966,6 +1966,23 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
                        ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_NOISE_SQUELCH:
             return (c.ival[1] == 0 || (c.num[0] >= -90.0 && c.num[0] <= 0.0 && c.num[1] >= 0.0 && c.num[1] <= 2000.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_SPECTRUM:
+            return (c.ival[0] >= 1024 && c.ival[0] <= 131072 && (c.ival[0] & (c.ival[0] - 1)) == 0 && c.ival[1] >= 0 && c.ival[1] <= 4 &&
+                    (c.num[0] == 0.0 || (c.num[0] >= 1.0 && c.num[0] <= 120.0))) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_IQ_CORRECT:
+            return (c.ival[0] >= 0 && c.ival[0] <= 7) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_AFC:
+            return (c.ival[1] == 0 || (c.num[0] >= 50.0 && c.num[0] <= 20000.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_CW_PEAK:
+            return (c.ival[1] == 0 || (c.num[0] >= 30.0 && c.num[0] <= 500.0 && c.num[1] >= 0.0 && c.num[1] <= 24.0)) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_STEREO_PLACE:
+            return (c.ival[0] >= 0 && c.ival[0] <= 3 && std::isfinite(c.num[0]) &&
+                    (c.ival[0] == 0 || (c.ival[0] == 1 && c.num[0] >= -1.0 && c.num[0] <= 1.0) || (c.ival[0] == 2 && c.num[0] >= 0.0 && c.num[0] <= 1.0) ||
+                     (c.ival[0] == 3 && c.num[0] >= -90.0 && c.num[0] <= 90.0))) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_RECORD_FORMAT:
+            return (c.ival[0] >= 0 && c.ival[0] <= 1 && c.ival[1] >= 0 && c.ival[1] <= 2) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
+        case FOXAPI_OP_SET_FILTER_SHAPE:
+            return (c.ival[0] >= 0 && c.ival[0] <= 3) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_CW_PITCH:
             return (c.num[0] >= 300.0 && c.num[0] <= 1200.0) ? FOXAPI_OK : FOXAPI_OUT_OF_RANGE;
         case FOXAPI_OP_SET_NOTCH_SLOT: {
@@ -2010,6 +2027,7 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
                            std::strncmp(c.text, "open-pluto:", 11) == 0 ||
                            std::strncmp(c.text, "open-rtltcp:", 12) == 0 ||
                            std::strncmp(c.text, "open-kiwisdr:", 13) == 0 ||   // (an outward connection to an address the remote client chose)
+                           std::strncmp(c.text, "open-rawiq:", 11) == 0 ||   // (a socket this machine connects to or listens on, at an address the remote client chose)
                            std::strncmp(c.text, "soundcard:", 10) == 0)) {
                 return FOXAPI_DENIED;
             }

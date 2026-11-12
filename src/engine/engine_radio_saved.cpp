@@ -107,6 +107,25 @@ SavedRadio Engine::savedRadioOf(std::size_t slot) {
     }
     r.audioHighPassHz = rx().audioHpHz_;
     r.audioLowPassHz = rx().audioLpHz_;
+    r.filterShape = rx().filterShape_;
+    r.ctun = rx().ctun_;
+    r.recordIqFormat = rx().recordIqFormat_;
+    r.recordAudioFormat = rx().recordAudioFormat_;
+    r.vfoActive = rx().vfoActive_;
+    r.vfoOtherHz = rx().vfoOther_.set ? rx().vfoOther_.hz : 0.0;
+    r.vfoOtherMode = rx().vfoOther_.set ? rx().vfoOther_.mode + 1 : 0;
+    r.vfoOtherBwHz = rx().vfoOther_.set ? rx().vfoOther_.bwHz : 0.0;
+    r.stereoPlaceMode = rx().stereoPlaceMode_;
+    r.stereoPlaceValue = rx().stereoPlaceValue_;
+    r.cwPeakOn = rx().cwPeakOn_;
+    r.cwPeakWidthHz = rx().cwPeakWidthHz_;
+    r.cwPeakBoostDb = rx().cwPeakBoostDb_;
+    r.afcOn = rx().afcOn_;
+    r.afcPullInHz = rx().afcPullInHz_;
+    r.iqCorrect = rx().iqCorrect_;
+    r.spectrumFftSize = rx().spectrumFft_;
+    r.spectrumWindow = rx().spectrumWindow_;
+    r.spectrumFrameRateHz = rx().spectrumFps_;
     r.noiseSquelchOn = rx().noiseSquelchOn_;
     r.noiseSquelchThresholdDb = rx().noiseSquelchThresholdDb_;
     r.noiseSquelchTailMs = rx().noiseSquelchTailMs_;
@@ -278,6 +297,38 @@ void Engine::restoreSavedRadios(const cascade::core::AppConfig& cfg) {
                 send(eq);
             }
             send(cmd::makeInt(FOXAPI_OP_SET_AUDIO_FILTERS, s.audioHighPassHz, s.audioLowPassHz));
+            send(cmd::makeInt(FOXAPI_OP_SET_FILTER_SHAPE, s.filterShape));
+            send(cmd::makeInt(FOXAPI_OP_SET_CTUN, s.ctun ? 1 : 0));
+            send(cmd::makeInt(FOXAPI_OP_SET_RECORD_FORMAT, s.recordIqFormat, s.recordAudioFormat));
+            if (s.vfoOtherMode >= 1 && s.vfoOtherHz > 0.0) {
+                FoxCommand vs = cmd::makeInt(FOXAPP_OP_VFO_STORE, 1, s.vfoOtherMode);
+                vs.num[0] = s.vfoOtherHz;
+                vs.num[1] = s.vfoOtherBwHz;
+                vs.num[2] = s.vfoActive == 1 ? 1.0 : 0.0;
+                send(vs);
+            }
+            {
+                FoxCommand sp = cmd::makeInt(FOXAPI_OP_SET_STEREO_PLACE, s.stereoPlaceMode);
+                sp.num[0] = s.stereoPlaceValue;
+                send(sp);
+            }
+            {
+                FoxCommand pk = cmd::makeInt(FOXAPI_OP_SET_CW_PEAK, s.cwPeakOn ? 1 : 0, 1);
+                pk.num[0] = s.cwPeakWidthHz;
+                pk.num[1] = s.cwPeakBoostDb;
+                send(pk);
+            }
+            {
+                FoxCommand afc = cmd::makeInt(FOXAPI_OP_SET_AFC, s.afcOn ? 1 : 0, 1);
+                afc.num[0] = s.afcPullInHz;
+                send(afc);
+            }
+            send(cmd::makeInt(FOXAPI_OP_SET_IQ_CORRECT, s.iqCorrect));
+            {
+                FoxCommand spc = cmd::makeInt(FOXAPI_OP_SET_SPECTRUM, s.spectrumFftSize, s.spectrumWindow);
+                spc.num[0] = s.spectrumFrameRateHz;
+                send(spc);
+            }
             {
                 FoxCommand nsq = cmd::makeInt(FOXAPI_OP_SET_NOISE_SQUELCH, s.noiseSquelchOn ? 1 : 0, 1);
                 nsq.num[0] = s.noiseSquelchThresholdDb;

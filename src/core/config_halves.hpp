@@ -102,6 +102,25 @@ struct ConfigFieldInfo {
     X(eqDb,                    Engine,    false) \
     X(audioHighPassHz,         Engine,    false) \
     X(audioLowPassHz,          Engine,    false) \
+    X(filterShape,               Engine,    false) \
+    X(ctun,                      Engine,    false) \
+    X(recordAudioFormat,         Engine,    false) \
+    X(recordIqFormat,            Engine,    false) \
+    X(vfoOtherBwHz,              Engine,    false) \
+    X(vfoOtherMode,              Engine,    false) \
+    X(vfoOtherHz,                Engine,    false) \
+    X(vfoActive,                 Engine,    false) \
+    X(stereoPlaceValue,          Engine,    false) \
+    X(stereoPlaceMode,           Engine,    false) \
+    X(cwPeakBoostDb,             Engine,    false) \
+    X(cwPeakWidthHz,             Engine,    false) \
+    X(cwPeakOn,                  Engine,    false) \
+    X(afcPullInHz,               Engine,    false) \
+    X(afcOn,                     Engine,    false) \
+    X(iqCorrect,                 Engine,    false) \
+    X(spectrumFrameRateHz,       Engine,    false) \
+    X(spectrumWindow,            Engine,    false) \
+    X(spectrumFftSize,           Engine,    false) \
     X(noiseSquelchOn,          Engine,    false) \
     X(noiseSquelchThresholdDb, Engine,    false) \
     X(noiseSquelchTailMs,      Engine,    false) \

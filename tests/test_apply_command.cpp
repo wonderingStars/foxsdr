@@ -458,6 +458,23 @@ struct AppWindowTestAccess {
     static double notchSlotHz(AppWindow& a, int i) { return rd(a, [&] { return th::engine(a).receivers_[0]->manualNotch_[static_cast<std::size_t>(i)].hz; }); }
     static int notchBankPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.manualNotchCount(); }); }
     static double cwPitchRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->cwPitchHz_; }); }
+    static int spectrumFftRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->spectrumFft_; }); }
+    static std::size_t spectrumFftPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.spectrumFftSize(); }); }
+    static int iqCorrectRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->iqCorrect_; }); }
+    static int iqCorrectPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.iqCorrection(); }); }
+    static bool afcRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->afcOn_; }); }
+    static bool afcPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.afcOn(); }); }
+    static bool cwPeakRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->cwPeakOn_; }); }
+    static bool cwPeakPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.cwPeakOn(); }); }
+    static int placeRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->stereoPlaceMode_; }); }
+    static int placePipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.stereoPlaceMode(); }); }
+    static int vfoActiveRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->vfoActive_; }); }
+    static bool vfoOtherSetRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->vfoOther_.set; }); }
+    static int recIqFmtRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->recordIqFormat_; }); }
+    static int recIqFmtRec(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->iqRecorder_.sampleFormat(cascade::core::RecordKind::BasebandIq); }); }
+    static bool ctunRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->ctun_; }); }
+    static int shapeRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->filterShape_; }); }
+    static int shapePipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.channelShape(); }); }
     static double cwPitchPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.cwPitchHz(); }); }
     static bool nsqRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->noiseSquelchOn_; }); }
     static double nsqThrRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->noiseSquelchThresholdDb_; }); }
@@ -1278,6 +1295,151 @@ void receiverOps(AppWindow& a) {
         CHECK(!A::nsqRx(a) && !A::nsqPipe(a) && A::nsqThrRx(a) == -42.0);
     }
 
+    covering(FOXAPI_OP_SET_SPECTRUM);
+    {
+        CHECK(A::spectrumFftRx(a) == 1024 && A::spectrumFftPipe(a) == 1024);
+        FoxCommand sp = ints(FOXAPI_OP_SET_SPECTRUM, 8192, 1);
+        sp.num[0] = 20.0;
+        CHECK(ok(A::apply(a, sp)));
+        CHECK(A::spectrumFftRx(a) == 8192 && A::spectrumFftPipe(a) == 8192);
+        sp.ival[0] = 5000;
+        CHECK(refused(A::apply(a, sp), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::spectrumFftRx(a) == 8192 && A::spectrumFftPipe(a) == 8192);
+        sp.ival[0] = 1024;
+        sp.ival[1] = 3;
+        sp.num[0] = 0.0;
+        CHECK(ok(A::apply(a, sp)));
+        CHECK(A::spectrumFftRx(a) == 1024 && A::spectrumFftPipe(a) == 1024);
+    }
+    covering(FOXAPI_OP_SET_IQ_CORRECT);
+    {
+        CHECK(A::iqCorrectRx(a) == 0 && A::iqCorrectPipe(a) == 0);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_IQ_CORRECT, 5))));
+        CHECK(A::iqCorrectRx(a) == 5 && A::iqCorrectPipe(a) == 5);
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_IQ_CORRECT, 8)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::iqCorrectRx(a) == 5 && A::iqCorrectPipe(a) == 5);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_IQ_CORRECT, 0))));
+        CHECK(A::iqCorrectRx(a) == 0 && A::iqCorrectPipe(a) == 0);
+    }
+    covering(FOXAPI_OP_SET_AFC);
+    {
+        CHECK(!A::afcRx(a) && !A::afcPipe(a));
+        FoxCommand af = ints(FOXAPI_OP_SET_AFC, 1, 1);
+        af.num[0] = 4000.0;
+        CHECK(ok(A::apply(a, af)));
+        CHECK(A::afcRx(a) && A::afcPipe(a));
+        af.num[0] = 10.0;
+        CHECK(refused(A::apply(a, af), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::afcRx(a) && A::afcPipe(a));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_AFC, 0, 0))));
+        CHECK(!A::afcRx(a) && !A::afcPipe(a));
+    }
+    covering(FOXAPI_OP_SET_CW_PEAK);
+    {
+        CHECK(!A::cwPeakRx(a) && !A::cwPeakPipe(a));
+        FoxCommand pk = ints(FOXAPI_OP_SET_CW_PEAK, 1, 1);
+        pk.num[0] = 80.0;
+        pk.num[1] = 15.0;
+        CHECK(ok(A::apply(a, pk)));
+        CHECK(A::cwPeakRx(a) && A::cwPeakPipe(a));
+        pk.num[0] = 10.0;
+        CHECK(refused(A::apply(a, pk), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::cwPeakRx(a) && A::cwPeakPipe(a));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_CW_PEAK, 0, 0))));
+        CHECK(!A::cwPeakRx(a) && !A::cwPeakPipe(a));
+    }
+    covering(FOXAPI_OP_SET_STEREO_PLACE);
+    {
+        CHECK(A::placeRx(a) == 0 && A::placePipe(a) == 0);
+        FoxCommand sp = ints(FOXAPI_OP_SET_STEREO_PLACE, 1);
+        sp.num[0] = -0.5;
+        CHECK(ok(A::apply(a, sp)));
+        CHECK(A::placeRx(a) == 1 && A::placePipe(a) == 1);
+        sp.num[0] = 2.0;
+        CHECK(refused(A::apply(a, sp), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::placeRx(a) == 1 && A::placePipe(a) == 1);
+        sp.ival[0] = 0;
+        sp.num[0] = 0.0;
+        CHECK(ok(A::apply(a, sp)));
+        CHECK(A::placeRx(a) == 0 && A::placePipe(a) == 0);
+    }
+    // VFO A / B (FOXAPP_OP_VFO_SELECT / VFO_SWAP / VFO_STORE; the retuning is tests/test_engine_api_vfoab.cpp's)
+    covering(FOXAPP_OP_VFO_SELECT);
+    covering(FOXAPP_OP_VFO_SWAP);
+    covering(FOXAPP_OP_VFO_STORE);
+    {
+        CHECK(A::vfoActiveRx(a) == 0 && !A::vfoOtherSetRx(a));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_VFO_SWAP, 0)), FOXAPI_NO_CHANGE));    // nothing in the other VFO yet
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_VFO_SELECT, 2)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_VFO_SELECT, 0)), FOXAPI_NO_CHANGE));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_VFO_STORE, 0))));
+        CHECK(A::vfoOtherSetRx(a));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_VFO_SELECT, 1))));
+        CHECK(A::vfoActiveRx(a) == 1);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_VFO_SELECT, 0))));
+        CHECK(A::vfoActiveRx(a) == 0);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_VFO_SWAP, 0))));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_VFO_STORE, 3)), FOXAPI_OUT_OF_RANGE));
+    }
+    covering(FOXAPI_OP_SET_RECORD_FORMAT);
+    {
+        CHECK(A::recIqFmtRx(a) == 0 && A::recIqFmtRec(a) == 0);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_RECORD_FORMAT, 1, 2))));
+        CHECK(A::recIqFmtRx(a) == 1 && A::recIqFmtRec(a) == 1);
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_RECORD_FORMAT, 2, 0)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_RECORD_FORMAT, 0, 3)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::recIqFmtRx(a) == 1 && A::recIqFmtRec(a) == 1);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_RECORD_FORMAT, 0, 0))));
+        CHECK(A::recIqFmtRx(a) == 0 && A::recIqFmtRec(a) == 0);
+    }
+    covering(FOXAPI_OP_SET_CTUN);
+    {
+        CHECK(!A::ctunRx(a));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_CTUN, 1))));
+        CHECK(A::ctunRx(a));
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_CTUN, 1)), FOXAPI_NO_CHANGE));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_CTUN, 0))));
+        CHECK(!A::ctunRx(a));
+    }
+    covering(FOXAPP_OP_SET_FM_WIDTH);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_FM_WIDTH, 5)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_FM_WIDTH, -1)), FOXAPI_OUT_OF_RANGE));
+    }
+    covering(FOXAPP_OP_CHANNEL_CLAIM);
+    covering(FOXAPP_OP_CHANNEL_RELEASE);
+    {
+        FoxCommand cl = num(FOXAPP_OP_CHANNEL_CLAIM, 0.0);
+        CHECK(refused(A::apply(a, cl), FOXAPI_OUT_OF_RANGE));             // not a frequency
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_CHANNEL_RELEASE, 1)), FOXAPI_NO_CHANGE));   // radio 1 is not claimed
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_CHANNEL_RELEASE, 7)), FOXAPI_NO_DEVICE));
+    }
+    covering(FOXAPI_OP_SET_FILTER_SHAPE);
+    {
+        CHECK(A::shapeRx(a) == 0 && A::shapePipe(a) == 0);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_FILTER_SHAPE, 2))));
+        CHECK(A::shapeRx(a) == 2 && A::shapePipe(a) == 2);
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_FILTER_SHAPE, 4)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::shapeRx(a) == 2 && A::shapePipe(a) == 2);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_FILTER_SHAPE, 0))));
+        CHECK(A::shapeRx(a) == 0 && A::shapePipe(a) == 0);
+    }
+    covering(FOXAPP_OP_MPX_RECORD);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_MPX_RECORD, 0)), FOXAPI_NO_CHANGE));      // nothing is recording
+    }
+    covering(FOXAPP_OP_IF_RECORD);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_IF_RECORD, 0)), FOXAPI_NO_CHANGE));       // nothing is recording
+    }
+    covering(FOXAPP_OP_PPM_MEASURE);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_PPM_MEASURE, 0)), FOXAPI_NO_CHANGE));     // nothing is measuring
+    }
+    covering(FOXAPP_OP_SET_IF_ZOOM);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_IF_ZOOM, 0)), FOXAPI_NO_CHANGE));      // the zoom is off already
+    }
     covering(FOXAPI_OP_SET_CW_PITCH);
     {
         CHECK(A::cwPitchRx(a) == 700.0 && A::cwPitchPipe(a) == 700.0);
@@ -2496,6 +2658,12 @@ void macroOps(AppWindow& a) {
     CHECK(refused(A::apply(a, text(FOXAPP_OP_SET_RECORD_NAME, "{mode}/{date}")), FOXAPI_NO_CHANGE));
     CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_RECORD_NAME, ""))));
     // THE STEREO SYSTEM (FOXAPP_OP_SET_STEREO_SYSTEM; the decoding itself is tests/test_pipeline_oirt.cpp's and the engine's behaviour tests/test_engine_api_oirt.cpp's).
+    // THE SEEK BAR AND THE A-B LOOP (FOXAPP_OP_FILE_SEEK / FILE_LOOP; the playing itself is tests/test_iq_file_seek.cpp's and tests/test_engine_api_fileseek.cpp's): the window's radio is on the generator.
+    covering(FOXAPP_OP_FILE_SEEK);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_FILE_SEEK, 0)), FOXAPI_UNSUPPORTED));
+    covering(FOXAPP_OP_FILE_LOOP);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_FILE_LOOP, 1)), FOXAPI_UNSUPPORTED));
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_FILE_LOOP, 0)), FOXAPI_UNSUPPORTED));
     covering(FOXAPP_OP_SET_STEREO_SYSTEM);
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 3)), FOXAPI_OUT_OF_RANGE));
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 0)), FOXAPI_NO_CHANGE));   // automatic is the default
