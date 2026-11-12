@@ -45,6 +45,11 @@ struct AppWindowTestAccess {
         return e.configSnapshot();
     }
     static void restore(Engine& e, const cascade::core::AppConfig& c) { e.applyConfig(c); }
+    // What the window does to switch the selected radio to another source (engine serial lane A, R18): install it, then follow its rate.
+    static void useSource(Engine& e, std::unique_ptr<cascade::source::IqSource> src) {
+        e.installSource(std::move(src));
+        e.followInputRate();
+    }
     // HOT-PLUG (engine serial lane A, R10): a watcher that listens to nobody but inject(), a short settle time, and the saved-radio retry the arrival must bring forward.
     static void hotplugStart(Engine& e, std::int64_t settleMs) {
         cascade::core::sys::ArrivalConfig c;

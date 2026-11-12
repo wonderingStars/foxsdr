@@ -1432,6 +1432,10 @@ void receiverOps(AppWindow& a) {
     {
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_IF_RECORD, 0)), FOXAPI_NO_CHANGE));       // nothing is recording
     }
+    covering(FOXAPP_OP_PPM_MEASURE);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_PPM_MEASURE, 0)), FOXAPI_NO_CHANGE));     // nothing is measuring
+    }
     covering(FOXAPI_OP_SET_CW_PITCH);
     {
         CHECK(A::cwPitchRx(a) == 700.0 && A::cwPitchPipe(a) == 700.0);

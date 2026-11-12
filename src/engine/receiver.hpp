@@ -36,6 +36,7 @@
 #include "core/noise_floor_tracker.hpp"
 #include "core/pipeline.hpp"
 #include "core/receiver_snapshot.hpp"
+#include "core/ppm_auto.hpp"
 #include "core/recorder.hpp"
 #include "core/record_finish.hpp"
 #include "core/retune_coalescer.hpp"
@@ -445,6 +446,8 @@ struct Receiver {
     // stop*Recording clears the pointer before stopping the recorder.
     cascade::core::Recorder iqRecorder_;
     cascade::core::Recorder audioRecorder_;
+    cascade::core::ppmauto::Measurement ppmAuto_;   // the pilot-based ppm measurement (engine serial lane A, R18)
+    double ppmAutoLastReadS_ = 0.0;
     cascade::core::Recorder ifRecorder_;   // the IF take (engine serial lane A, P4): I/Q at the channel rate
     double ifRecordRateHz_ = 0.0;          // the channel rate its header was written for
     cascade::core::Recorder mpxRecorder_;   // the FM multiplex take (engine serial lane A, D4): a 32-bit float audio take at 192 kHz

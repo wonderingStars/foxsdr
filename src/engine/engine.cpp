@@ -7731,6 +7731,22 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         }
         case FOXAPP_OP_CHANNEL_CLAIM: return claimChannel(c);
         case FOXAPP_OP_CHANNEL_RELEASE: return releaseChannel(c);
+        case FOXAPP_OP_PPM_MEASURE: {
+            Receiver& rxs = rx();
+            if (on == rxs.ppmAuto_.active()) { return refuse(FOXAPI_NO_CHANGE, on ? "a ppm measurement is running already" : "no ppm measurement is running"); }
+            if (!on) {
+                rxs.ppmAuto_.cancel();
+                ++ppmAutoVersion_;
+                return res;
+            }
+            if (rxs.modeIndex_ != 1) { return refuse(FOXAPI_UNSUPPORTED, "the 19 kHz pilot is a WFM station's: tune a broadcast station in WFM"); }
+            if (!(c.num[0] >= 0.0) || c.num[0] > 300.0) { return refuse(FOXAPI_OUT_OF_RANGE, "the measurement time is 10 to 300 seconds (0 = 30)"); }
+            rxs.ppmAuto_.start(c.num[0] == 0.0 ? 30.0 : c.num[0], clockS());
+            rxs.ppmAutoLastReadS_ = -1.0;
+            ++ppmAutoVersion_;
+            res.applied[0] = rxs.ppmAuto_.seconds();
+            return res;
+        }
         case FOXAPP_OP_IF_RECORD: {
             Receiver& rxs = rx();
             if (on == rxs.ifRecorder_.recording()) { return refuse(FOXAPI_NO_CHANGE, on ? "the IF is being recorded already" : "the IF is not being recorded"); }
@@ -10986,6 +11002,7 @@ void Engine::pumpWorkers() {
     // every pass with nothing armed.
     pollSavedRadioRetry();
     pumpHotplug();   // R10: a settled burst of device arrivals / removals
+    pumpPpmAuto();   // R18
     // Release a wheel-burst retune the coalescer held back (~50 ms pacing).
     pollPendingRetune();
     pollStereoSystem();

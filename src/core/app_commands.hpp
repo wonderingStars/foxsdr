@@ -189,6 +189,12 @@
 //   recordings folder. The same in every mode, before the demodulator and the squelch. NO_CHANGE when it is so already, FAILED with the recorder's words; it ends with the radio and when the input rate
 //   changes (the channel rate with it). fact.radio.<n>.ifrec reads 1 while it records. The file start blocks for the disk once.
 #define FOXAPP_OP_IF_RECORD              0x8623u /* ival[0]: 1 start / 0 stop. Addresses one radio (target) */
+//   PPM_MEASURE (SETTINGS; engine serial lane A, row R18, core/ppm_auto.hpp): measure the selected radio's (target) crystal error from the 19 kHz stereo pilot of the broadcast station it is tuned to. ival[0] 1 starts,
+//   0 cancels; num[0] the time in seconds (10 to 300; 0 = 30). WFM only (UNSUPPORTED otherwise); NO_CHANGE when it is so already. It reads the pilot PLL every 100 ms, ignores the first two seconds and any reading
+//   without a locked pilot of level 0.5 or more, and ends Done (20 or more readings) or Failed (fewer: no pilot). The number is a SUGGESTION: nothing is applied (SET_PPM applies a value). fact.radio.<n>.ppmauto.state is
+//   idle / measuring / done / failed, .progress 0..1, .ppm (positive = the crystal runs fast, the sign of SET_PPM), .uncertainty (one standard error, statistical only: the station's own pilot accuracy is not known
+//   here), .readings. A reading is only as good as the station: measure two or three and trust the ones that agree.
+#define FOXAPP_OP_PPM_MEASURE            0x8624u /* ival[0]: 1 start / 0 cancel; num[0]: seconds (10..300, 0 = 30). Addresses one radio (target) */
 #define FOXAPP_OP_SET_STEREO_SYSTEM      0x8619u /* ival[0]: 0 automatic / 1 pilot tone / 2 OIRT. Addresses one radio (target) */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

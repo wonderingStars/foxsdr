@@ -1167,6 +1167,8 @@ bool Pipeline::stereoEnabled() const {
     return mirrorStereoEnabled_.load(std::memory_order_relaxed);
 }
 
+double Pipeline::pilotOffsetHz() const { return pilotOffsetHz_.load(std::memory_order_relaxed); }
+
 bool Pipeline::pilotLocked() const {
     return pilotLocked_.load(std::memory_order_relaxed);
 }
@@ -2588,6 +2590,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         } else {
             stereo_->process(audioBuf_.data(), m, leftBuf_.data(), rightBuf_.data());
             pilotLocked_.store(stereo_->pilotLocked(), std::memory_order_relaxed);
+            pilotOffsetHz_.store(stereo_->pilotOffsetHz(), std::memory_order_relaxed);
             pilotLevel_.store(stereo_->pilotLevel(), std::memory_order_relaxed);
             stereoActive_.store(stereoEnabled_ && stereo_->pilotLocked() &&
                                     stereo_->stereoCapable(),

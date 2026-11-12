@@ -208,6 +208,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(recordNameVersion_); // the recording file-name template (FOXAPP_OP_SET_RECORD_NAME)
     f.value(stereoSystemVersion_);  // the stereo system of every radio (FOXAPP_OP_SET_STEREO_SYSTEM)
     f.value(poolVersion_);   // which radios a pool claim holds (engine_pool.cpp)
+    f.value(ppmAutoVersion_);   // the pilot ppm measurements (engine_mpx.cpp)
     f.value(mpxVersion_);   // which radios record their multiplex (engine_mpx.cpp)
     f.value(hotplugVersion_);   // the hot-plug counts (engine_hotplug.cpp)
     f.text(markerError_);
@@ -1396,6 +1397,24 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         fact(pre + "claimed", receivers_[n - 1u]->claimed_ ? "1" : "0");
         fact(pre + "mpx", receivers_[n - 1u]->mpxRecorder_.recording() ? "1" : "0");
         fact(pre + "ifrec", receivers_[n - 1u]->ifRecorder_.recording() ? "1" : "0");
+        {
+            const cascade::core::ppmauto::Result pr = receivers_[n - 1u]->ppmAuto_.result(clockS());
+            const char* word = pr.state == cascade::core::ppmauto::State::Measuring ? "measuring" : (pr.state == cascade::core::ppmauto::State::Done ? "done" : (pr.state == cascade::core::ppmauto::State::Failed ? "failed" : "idle"));
+            fact(pre + "ppmauto.state", word);
+            if (pr.state != cascade::core::ppmauto::State::Idle) {
+                char pb[48];
+                std::snprintf(pb, sizeof pb, "%.3f", pr.progress);
+                fact(pre + "ppmauto.progress", pb);
+                std::snprintf(pb, sizeof pb, "%d", pr.readings);
+                fact(pre + "ppmauto.readings", pb);
+                if (pr.readings > 0) {
+                    std::snprintf(pb, sizeof pb, "%.2f", pr.ppm);
+                    fact(pre + "ppmauto.ppm", pb);
+                    std::snprintf(pb, sizeof pb, "%.3f", pr.uncertaintyPpm);
+                    fact(pre + "ppmauto.uncertainty", pb);
+                }
+            }
+        }
         {
             const int sys = receivers_[n - 1u]->stereoSystem_;
             fact(pre + "stereo.system", sys == 1 ? "pilot" : (sys == 2 ? "oirt" : "auto"));

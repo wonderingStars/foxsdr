@@ -480,6 +480,7 @@ public:
     // exactly like signalPowerDb(). pilotLocked() is the decoder's own lock
     // flag (meaningful only while WFM is running); stereoActive() is what the
     // "ST" indicator should light on: WFM AND enabled AND locked.
+    double pilotOffsetHz() const;   // the stereo decoder's pilot PLL residual, Hz (R18); 0 when not WFM or not locked
     bool pilotLocked() const;
     float pilotLevel() const;
     bool stereoActive() const;
@@ -1422,6 +1423,7 @@ private:
     RdsSnapshot rdsPublished_;
     // Recorder taps (P6): non-owning, audioMutex_-guarded like the chain
     // blocks above — see the set*Recorder contract in the public section.
+    std::atomic<double> pilotOffsetHz_{0.0};            // R18
     Recorder* ifRecorder_ = nullptr;                     // P4 (under audioMutex_)
     Recorder* mpxRecorder_ = nullptr;                    // D4 (under audioMutex_)
     cascade::dsp::RationalResampler mpxResampler_{192000u, 200000u};   // composite rate -> 192 kHz; rebuilt with the channel blocks

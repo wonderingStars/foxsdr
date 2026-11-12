@@ -22,4 +22,19 @@ void Engine::stopIfRecording() {
     }
 }
 
+void Engine::pumpPpmAuto() {
+    for (std::size_t slot = 0; slot < kMaxReceivers; ++slot) {
+        if (!receiverLive(static_cast<std::uint32_t>(slot) + 1u)) { continue; }
+        SlotScope scope(this, slot);
+        Receiver& r = rx();
+        if (!r.ppmAuto_.active()) { continue; }
+        const double now = clockS();
+        if (r.ppmAutoLastReadS_ >= 0.0 && now - r.ppmAutoLastReadS_ < 0.1) { continue; }
+        r.ppmAutoLastReadS_ = now;
+        const bool wfm = r.modeIndex_ == 1;
+        r.ppmAuto_.add(now, wfm && r.pipeline_.pilotLocked(), wfm ? static_cast<double>(r.pipeline_.pilotLevel()) : 0.0, r.pipeline_.pilotOffsetHz());
+        ++ppmAutoVersion_;
+    }
+}
+
 }  // namespace cascade::engine
