@@ -78,7 +78,7 @@ const std::set<std::string>& engineWritten() {
         "airspy", "audioBufferMs", "audioBufferAutoMs", "ppmCorrection", "ppm", "autoGainByRadio",
         "manualGainByRadio", "plutoUri", "rtlTcpAddr", "iqFilePath", "soundCard", "centerHz", "mode", "bandwidthHz",
         "squelchDb", "squelchAuto", "volume", "dbMin", "dbMax", "vfoOffsetHz", "sampleRateHz", "stereoEnabled", "deemphasisIndex",
-        "nrEnabled", "nrStrength", "agcMode", "agcFixedGainDb", "nbEnabled", "nbThresholdDb", "toneSquelchKind", "toneSquelchHz", "toneSquelchCode", "toneSquelchPolarity", "toneRemove", "meterUnits", "nrMethod", "cwPitchHz", "noiseSquelchOn", "noiseSquelchThresholdDb", "noiseSquelchTailMs", "eqDb", "audioHighPassHz", "audioLowPassHz", "recordIqFormat", "recordAudioFormat", "vfoActive", "vfoOtherHz", "vfoOtherMode", "vfoOtherBwHz", "stereoPlaceMode", "stereoPlaceValue", "cwPeakOn", "cwPeakWidthHz", "cwPeakBoostDb", "afcOn", "afcPullInHz", "iqCorrect", "spectrumFftSize", "spectrumWindow", "spectrumFrameRateHz", "notchBank", "smeterCal", "notchEnabled", "notchFreqHz", "notchQ", "autoNotch", "bandPlanFollowMode", "bandPlanSelection",
+        "nrEnabled", "nrStrength", "agcMode", "agcFixedGainDb", "nbEnabled", "nbThresholdDb", "toneSquelchKind", "toneSquelchHz", "toneSquelchCode", "toneSquelchPolarity", "toneRemove", "meterUnits", "nrMethod", "cwPitchHz", "noiseSquelchOn", "noiseSquelchThresholdDb", "noiseSquelchTailMs", "eqDb", "audioHighPassHz", "audioLowPassHz", "ctun", "recordIqFormat", "recordAudioFormat", "vfoActive", "vfoOtherHz", "vfoOtherMode", "vfoOtherBwHz", "stereoPlaceMode", "stereoPlaceValue", "cwPeakOn", "cwPeakWidthHz", "cwPeakBoostDb", "afcOn", "afcPullInHz", "iqCorrect", "spectrumFftSize", "spectrumWindow", "spectrumFrameRateHz", "notchBank", "smeterCal", "notchEnabled", "notchFreqHz", "notchQ", "autoNotch", "bandPlanFollowMode", "bandPlanSelection",
         "transmitOpen", "transmitMode", "transmitInput", "transmitPowerDb", "transmitSplit", "transmitSplitHz",
         "transmitToneHz", "transmitMonitor", "transmitArgs", "rxPositionSet", "rxLatDeg", "rxLonDeg",
         "pluginCatalogueUrl", "pluginLastUpdateCheck", "pluginTuneAllowed", "pluginSettingsAllowed", "pluginTransmitAllowed",
@@ -159,6 +159,7 @@ AppConfig seeded() {
     c.noiseSquelchOn = true;
     c.noiseSquelchThresholdDb = -42.5;
     c.noiseSquelchTailMs = 160.0;
+    c.ctun = true;
     c.recordIqFormat = 1;
     c.recordAudioFormat = 2;
     c.vfoActive = 1;
@@ -459,6 +460,7 @@ int main() {
     CHECK(afterFirst["stereoPlaceMode"] == 3 && afterFirst["stereoPlaceValue"] == -40.0);
     CHECK(afterFirst["vfoActive"] == 1 && afterFirst["vfoOtherHz"] == 14070000.0 && afterFirst["vfoOtherMode"] == 5 && afterFirst["vfoOtherBwHz"] == 2700.0);
     CHECK(afterFirst["recordIqFormat"] == 1 && afterFirst["recordAudioFormat"] == 2);
+    CHECK(afterFirst["ctun"] == true);
     CHECK(afterFirst["notchEnabled"] == true);
     CHECK(afterFirst["deemphasisIndex"] == 1);
     CHECK(afterFirst["stereoEnabled"] == false);

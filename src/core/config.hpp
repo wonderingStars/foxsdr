@@ -243,6 +243,7 @@ struct SavedRadio {
     double vfoOtherBwHz = 0.0;       // its bandwidth, Hz
     int recordIqFormat = 0;          // baseband I/Q takes: 0 float32 / 1 int16 (engine serial lane A)
     int recordAudioFormat = 0;       // audio takes: 0 int16 / 1 int24 / 2 float32
+    bool ctun = false;               // centre tuning (engine serial lane A)
     std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
@@ -556,6 +557,7 @@ struct AppConfig {
     double vfoOtherBwHz = 0.0;       // its bandwidth, Hz
     int recordIqFormat = 0;          // baseband I/Q takes: 0 float32 / 1 int16 (engine serial lane A)
     int recordAudioFormat = 0;       // audio takes: 0 int16 / 1 int24 / 2 float32
+    bool ctun = false;               // centre tuning (engine serial lane A)
     std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;

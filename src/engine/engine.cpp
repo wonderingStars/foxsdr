@@ -4901,6 +4901,7 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         for (std::size_t i = 0; i < rxa.eqDb_.size(); ++i) { r.eqDb[i] = rxa.eqDb_[i]; }
         r.audioHighPassHz = static_cast<std::uint32_t>(rxa.audioHpHz_);
         r.audioLowPassHz = static_cast<std::uint32_t>(rxa.audioLpHz_);
+        r.ctun = rxa.ctun_ ? 1u : 0u;
         r.recordIqFormat = static_cast<std::uint32_t>(rxa.recordIqFormat_);
         r.recordAudioFormat = static_cast<std::uint32_t>(rxa.recordAudioFormat_);
         r.vfoActive = static_cast<std::uint32_t>(rxa.vfoActive_);
@@ -6566,6 +6567,18 @@ void Engine::tuneAbsoluteHz(double absHz, bool isPluginPreset) {
     // readback, which simply won't move. isPluginPreset is only ever true from
     // applyPluginPreset, forwarded so a mismatch this produces can say which
     // plugin's button asked for it — see applyRetuneNow.
+    // CENTRE TUNING (engine serial lane A, row T4; Receiver::ctun_): with it ON a tune that lands inside the span the radio is already showing moves the VFO and leaves the radio's centre (and so the
+    // spectrum and waterfall) where they are; one that lands outside it moves the centre, as it always did, and keeps the offset. OFF is the old rule: the offset is kept and the centre follows.
+    if (rx().ctun_ && !isPluginPreset) {
+        const double centre = rx().pipeline_.activeSource().centerFrequencyHz();
+        const double rate = rx().pipeline_.inputRateHz();
+        const double off = absHz - centre;
+        if (rate > 0.0 && std::fabs(off) + 0.5 * rx().vfoBandwidthHz_ <= 0.45 * rate) {
+            rx().pipeline_.setVfoOffsetHz(off);
+            if (scopedSlot() == 0u && rx().pipeline_.running() && !scanner_.active()) { audioOutputTunePending_ = true; }
+            return;
+        }
+    }
     retuneSourceHz(absHz - rx().pipeline_.vfoOffsetHz(), isPluginPreset);
     // A MANUAL TUNE gives an audio-output decoder its first chance to play (an independent wake signal before it has an instance to
     // report as the playing plugin); the pass's lifecycle step consumes it (engine_plugin_run.cpp).
@@ -7730,6 +7743,13 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             (void)rxs.audioRecorder_.setSampleFormat(cascade::core::RecordKind::Audio, rxs.recordAudioFormat_);
             res.applied[0] = static_cast<double>(rxs.recordIqFormat_);
             res.applied[1] = static_cast<double>(rxs.recordAudioFormat_);
+            return res;
+        }
+        case FOXAPI_OP_SET_CTUN: {
+            Receiver& rxs = rx();
+            if (rxs.ctun_ == on) { return refuse(FOXAPI_NO_CHANGE, on ? "centre tuning is on already" : "centre tuning is off already"); }
+            rxs.ctun_ = on;
+            res.applied[0] = on ? 1.0 : 0.0;
             return res;
         }
         case FOXAPI_OP_SET_CW_PITCH: {
@@ -9615,6 +9635,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         for (std::size_t i = 0; i < cfg.eqDb.size() && i < 8; ++i) { rx().eqDb_[i] = cfg.eqDb[i]; }
         rx().audioHpHz_ = cfg.audioHighPassHz;
         rx().audioLpHz_ = cfg.audioLowPassHz;
+        rx().ctun_ = cfg.ctun;
         rx().recordIqFormat_ = cfg.recordIqFormat;
         rx().recordAudioFormat_ = cfg.recordAudioFormat;
         rx().vfoActive_ = cfg.vfoActive;
@@ -10211,6 +10232,7 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
         }
         cfg.audioHighPassHz = rxa.audioHpHz_;
         cfg.audioLowPassHz = rxa.audioLpHz_;
+        cfg.ctun = rxa.ctun_;
         cfg.recordIqFormat = rxa.recordIqFormat_;
         cfg.recordAudioFormat = rxa.recordAudioFormat_;
         cfg.vfoActive = rxa.vfoActive_;

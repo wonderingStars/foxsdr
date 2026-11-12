@@ -482,6 +482,9 @@ typedef struct FoxReceiverState {
     /* ---- 0.3 (recording sample format; docs/API.md 6.19): settings, they move modeSeq. ---- */
     uint32_t recordIqFormat;           /* 0 32-bit float (default), 1 16-bit integer */
     uint32_t recordAudioFormat;        /* 0 16-bit integer (default), 1 24-bit integer, 2 32-bit float */
+    /* ---- 0.3 (centre tuning; docs/API.md 6.19): a setting, it moves modeSeq. ---- */
+    uint32_t ctun;                     /* 0/1, default 0 */
+    uint32_t ctunPad;                  /* reserved, 0 */
 } FoxReceiverState;
 #define FOXAPI_EQ_BANDS 8
 #define FOXAPI_NOTCH_SLOTS 10
@@ -666,6 +669,7 @@ typedef struct FoxCommand {
 #define FOXAPI_OP_SET_CW_PEAK            0x011Fu /* ival[0]: 0/1 the CW peak filter; ival[1]=1: num[0] is its width, Hz 30..500 (default 100), num[1] its boost, dB 0..24 (default 12). Centred on the CW pitch; CW mode only. Addresses one radio (target) */
 #define FOXAPI_OP_SET_STEREO_PLACE       0x0120u /* ival[0]: 0 off / 1 pan / 2 pseudo-stereo / 3 binaural; num[0]: the pan -1 (left ear) .. +1 (right ear), the pseudo-stereo amount 0..1, or the azimuth -90..+90 degrees. A mono receiver only (a stereo decode keeps its channels). Addresses one radio (target) */
 #define FOXAPI_OP_SET_RECORD_FORMAT      0x0121u /* ival[0]: the sample format of baseband I/Q takes - 0 32-bit float (default), 1 16-bit integer; ival[1]: of audio takes - 0 16-bit integer (default), 1 24-bit integer, 2 32-bit float. For takes that start after this; one under way keeps its format. Addresses one radio (target) */
+#define FOXAPI_OP_SET_CTUN               0x0122u /* ival[0]: 0/1 centre tuning - on, a tune inside the span on show moves the VFO and leaves the radio's centre where it is; off (default), the VFO offset is kept and the centre follows. Addresses one radio (target) */
 #define FOXAPI_OP_SET_TONE_REMOVE   0x0114u /* ival[0]: 0/1: the high-pass that takes the sub-audible tone out of the audio. Addresses one radio (target) */
 /* Display */
 #define FOXAPI_OP_SET_DISPLAY_RANGE 0x0201u /* num[0]: dbMin, num[1]: dbMax (min span enforced) */

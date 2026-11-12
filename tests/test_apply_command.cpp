@@ -472,6 +472,7 @@ struct AppWindowTestAccess {
     static bool vfoOtherSetRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->vfoOther_.set; }); }
     static int recIqFmtRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->recordIqFormat_; }); }
     static int recIqFmtRec(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->iqRecorder_.sampleFormat(cascade::core::RecordKind::BasebandIq); }); }
+    static bool ctunRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->ctun_; }); }
     static double cwPitchPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.cwPitchHz(); }); }
     static bool nsqRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->noiseSquelchOn_; }); }
     static double nsqThrRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->noiseSquelchThresholdDb_; }); }
@@ -1388,6 +1389,15 @@ void receiverOps(AppWindow& a) {
         CHECK(A::recIqFmtRx(a) == 1 && A::recIqFmtRec(a) == 1);
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_RECORD_FORMAT, 0, 0))));
         CHECK(A::recIqFmtRx(a) == 0 && A::recIqFmtRec(a) == 0);
+    }
+    covering(FOXAPI_OP_SET_CTUN);
+    {
+        CHECK(!A::ctunRx(a));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_CTUN, 1))));
+        CHECK(A::ctunRx(a));
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_CTUN, 1)), FOXAPI_NO_CHANGE));
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_CTUN, 0))));
+        CHECK(!A::ctunRx(a));
     }
     covering(FOXAPI_OP_SET_CW_PITCH);
     {

@@ -153,6 +153,8 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
                       f.vfoActive != o.vfoActive || f.vfoOtherHz != o.vfoOtherHz || f.vfoOtherMode != o.vfoOtherMode || f.vfoOtherBandwidthHz != o.vfoOtherBandwidthHz ||
                       // the recording sample formats (settings)
                       f.recordIqFormat != o.recordIqFormat || f.recordAudioFormat != o.recordAudioFormat ||
+                      // centre tuning (a setting)
+                      f.ctun != o.ctun ||
                       // the noise squelch's three settings (its level and its gate are measurements)
                       f.noiseSquelchOn != o.noiseSquelchOn || f.noiseSquelchThresholdDb != o.noiseSquelchThresholdDb || f.noiseSquelchTailMs != o.noiseSquelchTailMs ||
                       // the manual notch bank's switches, frequencies and widths (all settings)

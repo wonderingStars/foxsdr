@@ -107,6 +107,7 @@ SavedRadio Engine::savedRadioOf(std::size_t slot) {
     }
     r.audioHighPassHz = rx().audioHpHz_;
     r.audioLowPassHz = rx().audioLpHz_;
+    r.ctun = rx().ctun_;
     r.recordIqFormat = rx().recordIqFormat_;
     r.recordAudioFormat = rx().recordAudioFormat_;
     r.vfoActive = rx().vfoActive_;
@@ -295,6 +296,7 @@ void Engine::restoreSavedRadios(const cascade::core::AppConfig& cfg) {
                 send(eq);
             }
             send(cmd::makeInt(FOXAPI_OP_SET_AUDIO_FILTERS, s.audioHighPassHz, s.audioLowPassHz));
+            send(cmd::makeInt(FOXAPI_OP_SET_CTUN, s.ctun ? 1 : 0));
             send(cmd::makeInt(FOXAPI_OP_SET_RECORD_FORMAT, s.recordIqFormat, s.recordAudioFormat));
             if (s.vfoOtherMode >= 1 && s.vfoOtherHz > 0.0) {
                 FoxCommand vs = cmd::makeInt(FOXAPP_OP_VFO_STORE, 1, s.vfoOtherMode);

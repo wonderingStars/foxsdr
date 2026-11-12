@@ -678,6 +678,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     out.eqDb = readEq(j);
     getInt(j, "audioHighPassHz", out.audioHighPassHz);
     getInt(j, "audioLowPassHz", out.audioLowPassHz);
+    getBool(j, "ctun", out.ctun);
     getInt(j, "recordAudioFormat", out.recordAudioFormat);
     getInt(j, "recordIqFormat", out.recordIqFormat);
     getDouble(j, "vfoOtherBwHz", out.vfoOtherBwHz);
@@ -1119,6 +1120,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
                 r.eqDb = readEq(e);
                 getInt(e, "audioHighPassHz", r.audioHighPassHz);
                 getInt(e, "audioLowPassHz", r.audioLowPassHz);
+                getBool(e, "ctun", r.ctun);
                 getInt(e, "recordAudioFormat", r.recordAudioFormat);
                 getInt(e, "recordIqFormat", r.recordIqFormat);
                 getDouble(e, "vfoOtherBwHz", r.vfoOtherBwHz);
@@ -1745,6 +1747,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     if (cfg.eqDb.size() == 8) { j["eqDb"] = cfg.eqDb; }
     j["audioHighPassHz"] = cfg.audioHighPassHz;
     j["audioLowPassHz"] = cfg.audioLowPassHz;
+    j["ctun"] = cfg.ctun;
     j["recordAudioFormat"] = cfg.recordAudioFormat;
     j["recordIqFormat"] = cfg.recordIqFormat;
     j["vfoOtherBwHz"] = cfg.vfoOtherBwHz;
@@ -1967,6 +1970,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
             if (r.eqDb.size() == 8) { e["eqDb"] = r.eqDb; }
             e["audioHighPassHz"] = r.audioHighPassHz;
             e["audioLowPassHz"] = r.audioLowPassHz;
+            e["ctun"] = r.ctun;
             e["recordAudioFormat"] = r.recordAudioFormat;
             e["recordIqFormat"] = r.recordIqFormat;
             e["vfoOtherBwHz"] = r.vfoOtherBwHz;
