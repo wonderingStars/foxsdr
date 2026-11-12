@@ -224,6 +224,11 @@ constexpr OpEntry kOps[] = {
     {FOXAPI_OP_SET_SPECTRUM, "SET_SPECTRUM", true},
     {FOXAPP_OP_FILE_SEEK, "APP_FILE_SEEK", true},
     {FOXAPP_OP_FILE_LOOP, "APP_FILE_LOOP", true},
+    // wire-b begin
+    {FOXAPP_OP_FIELD_TABLE, "APP_FIELD_TABLE", true},
+    {FOXAPP_OP_FIELD_CONFIG, "APP_FIELD_CONFIG", true},
+    {FOXAPP_OP_FIELD_READ, "APP_FIELD_READ", true},
+    // wire-b end
 };
 
 constexpr std::size_t kOpCount = sizeof(kOps) / sizeof(kOps[0]);

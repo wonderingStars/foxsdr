@@ -9295,6 +9295,9 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             return res;
 
         default:
+            // wire-b begin: the lane's operation block (engine_wire_b.cpp)
+            if (c.op >= 0x8900u && c.op <= 0x89FFu) { return applyWireB(c, text, res); }
+            // wire-b end
             break;
     }
     return refuse(FOXAPI_UNSUPPORTED, "this build has no such operation");

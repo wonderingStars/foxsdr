@@ -157,6 +157,7 @@ struct EngineDiskWorkDeleter {
 
 // The function a front end installs to apply one plugin directive to the plugin UI it owns (Engine::setPluginUiApplier).
 using PluginUiApplier = std::function<void(const cascade::core::PluginDirective&)>;
+struct WireBState;   // wire-b: engine_wire_b.hpp
 
 class Engine {
 public:
@@ -3228,6 +3229,13 @@ private:
     void macroFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
     std::string macrosFilePath() const;
     std::int64_t macroNowMs() const;
+    // wire-b begin: the measurement / radio-source wiring lane (engine_wire_b.cpp, wire_b_*; operation block 0x8900-0x89FF). One state object for all of it.
+    std::shared_ptr<WireBState> wireB_;
+    std::uint64_t wireBVersion_ = 1;   // moves whenever a wire-b result or setting changes (the fact block's fingerprint)
+    WireBState& wireBState();
+    FoxCommandResult applyWireB(const FoxCommand& c, const std::string& text, FoxCommandResult res);
+    void wireBFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    // wire-b end
     std::vector<cascade::core::macros::Macro> macros_;
     cascade::core::macros::Player macroPlayer_;
     std::string macrosError_;     // the file's refusal, "" when it loaded (or is absent)

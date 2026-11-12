@@ -266,6 +266,21 @@
 // BAD_ARGUMENT for empty text, OUT_OF_RANGE for a coordinate that is negative or past 32 bits; NO_CHANGE when nothing was delivered (no such picture, the plugin takes
 // no input, its picture is inert, the click is outside the picture, or the plugin is switched off). A REMOTE session is DENIED.
 #define FOXAPP_OP_IMAGE_PRESS            0x870Fu /* text: the plugin's name; ival[0]: x, ival[1]: y, in the picture's pixels */
+// wire-b begin: MEASUREMENT AND RADIO-SOURCE WIRING (docs/multi-radio-records/wire-b.md; block 0x8900-0x89FF, ascending, this lane's alone). All LOCAL sessions only
+// (application ops are refused to a REMOTE session). A read operation answers in a LOCAL fact (the record names each) and never writes to disk.
+//   FIELD_TABLE (SETTINGS; core/field_strength.hpp): text (or long text): a user-supplied CSV table "<frequency>,<dB>" per line (the model's rules: strictly increasing
+//   frequency, 65536 points, 1 MiB); ival[0]: 0 the ANTENNA FACTOR table (dB per metre), 1 the CABLE LOSS table (dB); ival[1]: the frequency unit of the file, 0 Hz,
+//   1 kHz, 2 MHz (the default), 3 GHz. Empty text clears the table. BAD_ARGUMENT with the model's words and the line for a table it refuses (the old table stays);
+//   OUT_OF_RANGE for another table or unit; NO_CHANGE when clearing an empty table. applied[0]: the points now held.
+//   FIELD_CONFIG (SETTINGS): num[0]: the preamp gain in dB (-100..100), num[1]: the input impedance in ohm (1..1000); ival[0]: 1 show the field strength, 0 hide it.
+//   NO_CHANGE when all three are what they were. Not saved.
+//   FIELD_READ (SETTINGS; addresses one radio (target)): reads the radio's level now (signalDbm: calibrated, or the dBFS standing in as an estimate) at its tuned frequency through
+//   the tables. FAILED with a sentence when no antenna-factor table is loaded. applied[0]: dBuV/m; applied[1]: bits 1 the antenna factor was HELD from the table's end, 2 the cable
+//   loss was held, 4 the level is NOT calibrated (an estimate). The fact radio.<n>.field.readout holds the text "<x> dBuV/m at <f> MHz" and the held-value note.
+#define FOXAPP_OP_FIELD_TABLE            0x8900u /* long text: the CSV table; ival[0]: 0 antenna factor / 1 cable loss; ival[1]: unit 0 Hz / 1 kHz / 2 MHz / 3 GHz */
+#define FOXAPP_OP_FIELD_CONFIG           0x8901u /* num[0]: preamp gain dB; num[1]: input ohm; ival[0]: 1 show / 0 hide */
+#define FOXAPP_OP_FIELD_READ             0x8902u /* addresses one radio (target); applied[0]: dBuV/m, applied[1]: the flag bits */
+// wire-b end
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.
 #define FOXAPP_TXBIT_DECLARED  1u   /* the runner has a transmit-audio instance of it */

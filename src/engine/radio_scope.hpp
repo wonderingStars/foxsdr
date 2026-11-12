@@ -72,6 +72,9 @@ inline bool isRadioScopedOp(std::uint32_t op) {
         case FOXAPP_OP_IF_RECORD:
         case FOXAPP_OP_SET_IF_ZOOM:
         case FOXAPP_OP_PPM_MEASURE:
+        // wire-b begin (the lane's per-radio operations; global ones are not listed)
+        case FOXAPP_OP_FIELD_READ:
+        // wire-b end
         case FOXAPP_OP_CAL_MEASURE:
         case FOXAPP_OP_CAL_CLEAR:
         case FOXAPP_OP_RADIO_LOCK:

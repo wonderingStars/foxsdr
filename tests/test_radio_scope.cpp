@@ -105,6 +105,14 @@ void testTheList() {
         FOXAPP_OP_PATCH_SET_GRAPH, FOXAPP_OP_AIRBAND, 0x7FFFu,
     };
     for (const std::uint32_t op : global) { CHECK(!isRadioScopedOp(op)); }
+    // wire-b begin: the lane's own lists (kept apart from the counts above): per-radio reads are scoped, the global tables and configs are not
+    {
+        const std::uint32_t wireBScoped[] = {FOXAPP_OP_FIELD_READ};
+        const std::uint32_t wireBGlobal[] = {FOXAPP_OP_FIELD_TABLE, FOXAPP_OP_FIELD_CONFIG};
+        for (const std::uint32_t op : wireBScoped) { CHECK(isRadioScopedOp(op)); }
+        for (const std::uint32_t op : wireBGlobal) { CHECK(!isRadioScopedOp(op)); }
+    }
+    // wire-b end
 }
 
 void testTheFocusBump() {
