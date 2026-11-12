@@ -1024,6 +1024,12 @@ endif()
 # and the key ends "because the interface stopped answering" - the rule
 # working, on a machine too busy for the probe to hold up its end.
 set_tests_properties(test_engine_api_transmit test_engine_api_merge PROPERTIES TIMEOUT 600 RUN_SERIAL TRUE)
+
+# The core-formats tests (docs/feature-records/core-formats.md). test_rf64_writer WRITES MORE THAN 4 GiB for real (about 15 s idle, 60 s on a
+# loaded shared machine; it deletes the file and skips when under 12 GiB are free); test_decode_db writes a million records; test_alert_rules and
+# test_dsp_benchmark time a loop. None of them fails on a speed: the longer limit is for the machine being slow, not for a hang.
+set_tests_properties(test_rf64_writer PROPERTIES TIMEOUT 900)
+set_tests_properties(test_decode_db test_alert_rules test_dsp_benchmark PROPERTIES TIMEOUT 300)
 # The disk-work tests (stub campaign B19) are made of fixed waits - a 2.5 s "slow disk" a dozen times over - and run 50 - 95 s on the owner's desk, so the
 # inherited 120 s bound leaves a shared runner no room; a timeout is not what they are about.
 set_tests_properties(test_gui_file_jobs test_failure_files PROPERTIES TIMEOUT 300)
