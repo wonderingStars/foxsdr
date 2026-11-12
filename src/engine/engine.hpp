@@ -158,6 +158,7 @@ struct EngineDiskWorkDeleter {
 // The function a front end installs to apply one plugin directive to the plugin UI it owns (Engine::setPluginUiApplier).
 using PluginUiApplier = std::function<void(const cascade::core::PluginDirective&)>;
 struct WireBState;   // wire-b: engine_wire_b.hpp
+namespace wireb { struct SourceKind; }   // wire-b: wire_b_sources.hpp
 
 class Engine {
 public:
@@ -3233,6 +3234,7 @@ private:
     std::shared_ptr<WireBState> wireB_;
     std::uint64_t wireBVersion_ = 1;   // moves whenever a wire-b result or setting changes (the fact block's fingerprint)
     WireBState& wireBState();
+    void openWireBSourceAt(const wireb::SourceKind& kind, const std::string& typed);   // "open-<key>:<arguments>" (wire_b_sources.cpp)
     FoxCommandResult applyWireB(const FoxCommand& c, const std::string& text, FoxCommandResult res);
     FoxCommandResult sigmeasOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     void wireBFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;

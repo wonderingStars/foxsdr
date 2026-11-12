@@ -12,6 +12,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "engine/engine.hpp"
+#include "engine/wire_b_sources.hpp"   // wire-b
 
 #include <algorithm>
 #include <cmath>
@@ -128,6 +129,11 @@ FoxCommandResult Engine::radioAddOp(const FoxCommand& c, const std::string& text
             std::string rwhy;
             if (!cascade::source::rawiq::parseSpec(rest.rfind("rawiq=", 0) == 0 ? rest.substr(6) : rest, rspec, rwhy)) { return refuse(FOXAPI_BAD_ARGUMENT, rwhy); }
             key = pc::makeDeviceKey("rawiq", rest.rfind("rawiq=", 0) == 0 ? rest : "rawiq=" + rest);
+        } else if (const cascade::engine::wireb::SourceKind* wb = cascade::engine::wireb::findSourceByOpenWord(kind)) {
+            // wire-b: a row of the lane's source table. The key radio 1's open leaves in deviceArgs_ is "<key>=<arguments>"; the arguments are checked here so a typo is refused before a slot is made.
+            std::string wbArgs, wbWhy;
+            if (!cascade::engine::wireb::normaliseSourceArgs(*wb, text.substr(colon + 1), wbArgs, wbWhy)) { return refuse(FOXAPI_BAD_ARGUMENT, wbWhy); }
+            key = pc::makeDeviceKey(wb->key, wbArgs);
         } else if (kind == "open-rtltcp") {
             // (the key radio 1's open leaves in deviceArgs_: "rtltcp=<address>", whichever spelling was typed, so the same server twice is refused)
             const std::string rest = text.substr(colon + 1);
