@@ -4,6 +4,7 @@
 // comment is not a use.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <cctype>
 #include <string>
 #include <vector>
@@ -42,6 +43,18 @@ void scan() {
             CHECK(src.find(bad) == std::string::npos);
         }
         CHECK(!hasCall(src, "printf") && !hasCall(src, "puts") && !hasCall(src, "fprintf") && !hasCall(src, "putchar"));
+        // every nlohmann dump() in this lane's files passes error_handler_t::replace (tests/test_json_dump_policy.cpp holds the same rule for all of src/; this is
+        // the lane's own check, added after the policy test caught hid_map.hpp's saveMapping)
+        {
+            std::size_t dp = 0;
+            while ((dp = src.find(".dump(", dp)) != std::string::npos) {
+                const std::size_t stop = std::min(src.size(), dp + 300);
+                const std::size_t semi = src.find(';', dp);
+                const std::string stmt = src.substr(dp, std::min(semi == std::string::npos ? stop : semi, stop) - dp);
+                CHECK(stmt.find("error_handler_t::replace") != std::string::npos);
+                dp += 6;
+            }
+        }
         // threads
         for (const char* bad : {"std::thread", "std::async", "std::jthread", "_beginthread", "CreateThread", "pthread_create"}) { CHECK(src.find(bad) == std::string::npos); }
         // network safety

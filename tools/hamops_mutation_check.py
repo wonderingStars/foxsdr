@@ -33,6 +33,7 @@ MUTATIONS = [
      "while (segs_.size() > cfg_.maxSegments || bytes_ > cfg_.maxBytes)", "test_transcript_store"),
     ("scan-stderr", "src/core/qso_log.hpp", "inline std::string upperAscii(std::string s) {",
      "inline void hamopsDebug() { std::fputs(\"x\", stderr); }\ninline std::string upperAscii(std::string s) {", "test_hamops_scan"),
+    ("scan-dump", "src/input_hid/hid_map.hpp", "return j.dump(2, 0x20, false, nlohmann::json::error_handler_t::replace);", "return j.dump(2);", "test_hamops_scan"),
     ("xplane-send", "src/net/xplane_listener.hpp", "void stop() { lo::closeSock(sock_);", "void stop() { lo::udpSendTo(sock_, lo::kLoopbackHost, 9, \"x\", 1); lo::closeSock(sock_);", "test_xplane_udp"),
 ]
 

@@ -272,7 +272,7 @@ inline std::string saveMapping(const MappingFile& m) {
         if (!b.params.empty()) { o["params"] = b.params; }
         j["bindings"].push_back(o);
     }
-    return j.dump(2);
+    return j.dump(2, 0x20, false, nlohmann::json::error_handler_t::replace);
 }
 
 struct ActionOut {
