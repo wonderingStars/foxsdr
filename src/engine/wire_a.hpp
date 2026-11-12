@@ -29,6 +29,7 @@
 #include "core/bookmark.hpp"
 #include "core/bookmark_notes.hpp"
 #include "core/channel_plans.hpp"
+#include "core/csv_overlay.hpp"
 #include "core/disk_job.hpp"
 #include "core/rec_daily.hpp"
 #include "core/record_lock.hpp"
@@ -135,6 +136,7 @@ public:
         bool cancelled = false;
         std::string message;   // words, never a path
         std::string json;      // the job's own numbers
+        std::function<void()> onDone;   // run on the control thread when the result is collected (a successful job hands its product over here)
     };
     struct JobCtl {
         std::atomic<bool> cancel{false};
@@ -154,6 +156,15 @@ private:
 
     // ---- records: analyser project, attachments, SigMF annotations (wire_a_records.cpp) ----
     Result recordsOp(const FoxCommand& c, const std::string& text, Result res);
+
+    // ---- display: station overlay, gradient (wire_a_display.cpp) ----
+    Result displayOp(const FoxCommand& c, const std::string& text, Result res);
+    void displayFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    void gradientLoadOnce();
+    std::shared_ptr<cascade::core::tuning::StationOverlay> overlay_;
+    std::string overlayLookup_;
+    std::string gradientText_, gradientError_;
+    bool gradientLoaded_ = false;
 
     // ---- recording: the lock while recording (wire_a_recording.cpp) ----
     Result lockOp(const FoxCommand& c, const std::string& text, Result res);

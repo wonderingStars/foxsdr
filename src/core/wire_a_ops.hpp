@@ -121,6 +121,20 @@
 //   built yet). NO_CHANGE when it is so already. fact.record.lock "1"/"0", fact.record.lock.gain, fact.record.lock.frozen.<n> (the settings frozen on radio n now, newline-separated, for the screen to grey out).
 #define FOXAPP_OP_RECORD_LOCK            0x8817u /* ival[0]: 1 lock while recording / 0 off; ival[1]: 1 lock gain too */
 
+//   OVERLAY_LOAD / OVERLAY_LOOKUP (SETTINGS; core/csv_overlay.hpp): columns of the user's OWN station database (a CSV they name) shown next to what is tuned, by frequency; the file is read, never copied or changed.
+//   OVERLAY_LOAD: text = JSON {"path":"<full path of the CSV>", "config":{"version":1,"freqColumn":"frequency","unit":"Hz"|"kHz"|"MHz","columns":["name","location"] (1 to 16),"delimiter":","|";"|"\t"}} -> the lane's job
+//   (the file is read and parsed on the worker; at most the model's limits); text "" removes the overlay. BAD_ARGUMENT: bad JSON, a path that is not a full path, a config the model refuses. When the job is done
+//   fact.overlay.rows / .skipped (rows that were not usable: counted, not fatal) / .cleaned (cells repaired) / .columns say what was loaded; a file the model refuses is a failed job (fact.job.message). OVERLAY_LOOKUP:
+//   num[0] = a frequency, num[1] = the tolerance in Hz (0 = 500), ival[0] = at most that many rows (0 = 1; up to 8): fact.overlay.lookup = JSON [[["column","value"],...],...] for the rows nearest within the tolerance;
+//   applied[0] = how many. NO_CHANGE when no overlay is loaded; OUT_OF_RANGE for a frequency, tolerance or count that is not one.
+#define FOXAPP_OP_OVERLAY_LOAD           0x8818u /* text: JSON {path, config}, or "" to remove */
+#define FOXAPP_OP_OVERLAY_LOOKUP         0x8819u /* num[0]: Hz; num[1]: tolerance Hz (0 = 500); ival[0]: how many rows (0 = 1, up to 8) */
+//   GRADIENT_SET (SETTINGS; core/gradient_model.hpp): the waterfall's own colour gradient, as the model's text form "FOXGRAD1|..." (2 to 32 colour stops, an interpolation, a name). The engine checks the text with the model's
+//   parser, keeps it in display-gradient.json beside markers.json and serves it back (the screen applies toTable(); the colour table itself lives in the screen's compositor): text "" goes back to the stock maps. BAD_ARGUMENT
+//   with the model's sentence ("A gradient needs at least two colour stops." ...) for a text it refuses (nothing changes); NO_CHANGE when it is in force already. applied[0] = the number of stops. fact.display.gradient is the
+//   text in force ("" = none), fact.display.gradient.error a damaged file's reason.
+#define FOXAPP_OP_GRADIENT_SET           0x881Au /* text: FOXGRAD1|...  or "" */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -147,7 +161,10 @@
     {FOXAPP_OP_SIGMF_ANNOTATE, "APP_SIGMF_ANNOTATE", true}, \
     {FOXAPP_OP_KEY_ACTION, "APP_KEY_ACTION", true}, \
     {FOXAPP_OP_SET_RECORD_DAILY, "APP_SET_RECORD_DAILY", true}, \
-    {FOXAPP_OP_RECORD_LOCK, "APP_RECORD_LOCK", true},
+    {FOXAPP_OP_RECORD_LOCK, "APP_RECORD_LOCK", true}, \
+    {FOXAPP_OP_OVERLAY_LOAD, "APP_OVERLAY_LOAD", true}, \
+    {FOXAPP_OP_OVERLAY_LOOKUP, "APP_OVERLAY_LOOKUP", true}, \
+    {FOXAPP_OP_GRADIENT_SET, "APP_GRADIENT_SET", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP

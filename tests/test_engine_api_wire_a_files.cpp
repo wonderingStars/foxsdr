@@ -16,13 +16,18 @@
 //   F5  WAV HEADER CENTRE: an I/Q file whose RIFF auxi chunk says where it was recorded plays at that frequency (not at the frequency the radio happened to be on); one with a zero centre or no auxi chunk keeps
 //       the nominal one; fact.iqfile.1.centreFromHeader says which.
 //
+//   F6  STATION OVERLAY AND GRADIENT: a user's own CSV (frequencies in kHz, three columns, one bad row) is loaded as the lane's job, looked up by frequency within a tolerance (several rows, none, bad numbers),
+//       removed; a damaged CSV and a bad config are refused; the gradient text from the model is kept, read back, refused when wrong, written to the file and read by a new engine.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <string>
 
+#include "core/gradient_model.hpp"
 #include "wire_a_rig.hpp"
 
 using namespace wire_a_rig;
@@ -369,6 +374,77 @@ void testWavCentre() {
     CHECK(std::fabs(std::strtod(r.fact("tuned.1.centreHz").c_str(), nullptr) - 137.912e6) > 1.0e6);   // a zero centre is "unknown"
 }
 
+void testOverlayGradient() {
+    std::printf("F6: station overlay and gradient\n");
+    const fs::path csv = g_dir / "stations.csv";
+    spit(csv, "Frequency,Name,Location,Note\n145500,Calling,Hilltop,main\n145500,Echo,Valley,link\n433920,Sensors,Garden,ISM\nnotanumber,Broken,Nowhere,x\n162550,Weather,Coast,wx\n");
+    Rig r(g_dir / "user6");
+    const std::string cfg = "{\"version\":1,\"freqColumn\":\"frequency\",\"unit\":\"kHz\",\"columns\":[\"name\",\"location\"],\"delimiter\":\",\"}";
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_OVERLAY_LOOKUP, 145.5e6)).status(), FOXAPI_NO_CHANGE);   // nothing loaded
+    const std::string load = "{\"path\":\"" + csv.generic_string() + "\",\"config\":" + cfg + "}";
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_OVERLAY_LOAD), &load).status(), FOXAPI_OK);
+    CHECK(r.until([&] { return r.fact("job.state") != "running"; }, 20000));
+    CHECK_EQ(r.fact("job.state"), std::string("done"));
+    r.settle(100);
+    CHECK_EQ(r.fact("overlay.rows"), std::string("4"));
+    CHECK_EQ(r.fact("overlay.skipped"), std::string("1"));   // the row that is not a frequency
+    CHECK(r.fact("overlay.columns").find("name") != std::string::npos);
+    testing::Outcome o = r.send(testing::cmd(FOXAPP_OP_OVERLAY_LOOKUP, 145.5e6, 8));
+    CHECK_EQ(o.status(), FOXAPI_OK);
+    CHECK_EQ(static_cast<int>(o.result.applied[0]), 2);
+    CHECK(r.fact("overlay.lookup").find("Calling") != std::string::npos && r.fact("overlay.lookup").find("Echo") != std::string::npos);
+    o = r.send(testing::cmd(FOXAPP_OP_OVERLAY_LOOKUP, 145.5e6, 1));
+    CHECK_EQ(static_cast<int>(o.result.applied[0]), 1);
+    o = r.send(testing::cmd(FOXAPP_OP_OVERLAY_LOOKUP, 146.0e6, 8));   // nothing within 500 Hz
+    CHECK_EQ(static_cast<int>(o.result.applied[0]), 0);
+    CHECK_EQ(r.fact("overlay.lookup"), std::string("[]"));
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_OVERLAY_LOOKUP, -5.0)).status(), FOXAPI_OUT_OF_RANGE);
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_OVERLAY_LOOKUP, 145.5e6, 99)).status(), FOXAPI_OUT_OF_RANGE);
+    // refusals: bad JSON, relative path, a config the model refuses, a CSV without the frequency column
+    const std::string badJson = "{nope", rel = "{\"path\":\"x.csv\",\"config\":" + cfg + "}";
+    const std::string badCfg = "{\"path\":\"" + csv.generic_string() + "\",\"config\":{\"version\":1,\"freqColumn\":\"frequency\",\"unit\":\"GHz\",\"columns\":[\"name\"],\"delimiter\":\",\"}}";
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_OVERLAY_LOAD), &badJson).status(), FOXAPI_BAD_ARGUMENT);
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_OVERLAY_LOAD), &rel).status(), FOXAPI_BAD_ARGUMENT);
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_OVERLAY_LOAD), &badCfg).status(), FOXAPI_BAD_ARGUMENT);
+    spit(g_dir / "nofreq.csv", "Name,Location\nA,B\n");
+    const std::string noFreq = "{\"path\":\"" + (g_dir / "nofreq.csv").generic_string() + "\",\"config\":" + cfg + "}";
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_OVERLAY_LOAD), &noFreq).status(), FOXAPI_OK);
+    CHECK(r.until([&] { return r.fact("job.state") != "running"; }, 20000));
+    CHECK_EQ(r.fact("job.state"), std::string("failed"));
+    CHECK_EQ(r.fact("overlay.rows"), std::string("4"));   // a failed load leaves the one in force
+    // remove
+    const std::string none;
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_OVERLAY_LOAD), &none).status(), FOXAPI_OK);
+    CHECK_EQ(r.fact("overlay.rows"), std::string("0"));
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_OVERLAY_LOAD), &none).status(), FOXAPI_NO_CHANGE);
+    // ---- gradient
+    const std::string stock = cascade::core::gradient::serialise(cascade::core::gradient::defaultGradient());
+    const fs::path user = g_dir / "user6g";
+    {
+        Rig g(user);
+        CHECK_EQ(g.send(testing::cmd(FOXAPP_OP_GRADIENT_SET), &stock).status(), FOXAPI_OK);
+        CHECK_EQ(g.fact("display.gradient"), stock);
+        CHECK_EQ(g.send(testing::cmd(FOXAPP_OP_GRADIENT_SET), &stock).status(), FOXAPI_NO_CHANGE);
+        const std::string bad = "FOXGRAD1|nonsense", bad2 = "not a gradient";
+        CHECK_EQ(g.send(testing::cmd(FOXAPP_OP_GRADIENT_SET), &bad).status(), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(g.send(testing::cmd(FOXAPP_OP_GRADIENT_SET), &bad2).status(), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(g.fact("display.gradient"), stock);   // a refusal changes nothing
+        CHECK(g.until([&] {
+            std::ifstream f(user / "display-gradient.json");
+            std::string t((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            return t.find("FOXGRAD1") != std::string::npos;
+        }, 6000));
+    }
+    {
+        Rig g(user);
+        g.settle(200);
+        CHECK_EQ(g.fact("display.gradient"), stock);   // a new engine reads it
+        const std::string off;
+        CHECK_EQ(g.send(testing::cmd(FOXAPP_OP_GRADIENT_SET), &off).status(), FOXAPI_OK);
+        CHECK_EQ(g.fact("display.gradient"), std::string());
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -383,6 +459,7 @@ int main() {
     testFavourites();
     testPacks();
     testWavCentre();
+    testOverlayGradient();
     fs::remove_all(g_dir, ec);
     return check::finish("test_engine_api_wire_a_files");
 }

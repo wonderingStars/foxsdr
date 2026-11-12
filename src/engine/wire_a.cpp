@@ -42,6 +42,10 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
             return dailyOp(c, text, res);
         case FOXAPP_OP_RECORD_LOCK:
             return lockOp(c, text, res);
+        case FOXAPP_OP_OVERLAY_LOAD:
+        case FOXAPP_OP_OVERLAY_LOOKUP:
+        case FOXAPP_OP_GRADIENT_SET:
+            return displayOp(c, text, res);
         case FOXAPP_OP_MARKER_EXPORT:
         case FOXAPP_OP_MARKER_IMPORT:
             return markerIoOp(c, text, res);
@@ -93,6 +97,7 @@ bool WireA::drain(std::chrono::milliseconds bound) {
 }
 
 void WireA::pass() {
+    gradientLoadOnce();
     for (std::size_t slot = 0; slot < 8; ++slot) {
         if (e_.receiverLive(static_cast<std::uint32_t>(slot) + 1u)) { lockSync(slot); }
     }
@@ -114,6 +119,7 @@ void WireA::facts(const std::function<void(const std::string&, const std::string
     scanFacts(fact);
     jobFacts(fact);
     recordingFacts(fact);
+    displayFacts(fact);
 }
 
 void WireA::tunedFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {
