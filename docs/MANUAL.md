@@ -4,6 +4,37 @@ Every feature in detail: the receiver, plugins, frequency lists, airband, the pa
 
 Back to the [README](../README.md).
 
+## Contents
+
+- [What is in the current build](#what-is-in-the-current-build)
+- [CAT control](#cat-control)
+- [Plugins](#plugins)
+- [Frequency lists](#frequency-lists)
+- [Airband](#airband)
+- [Tuning with the mouse on the spectrum and the waterfall](#tuning-with-the-mouse-on-the-spectrum-and-the-waterfall)
+- [Markers on the waterfall](#markers-on-the-waterfall)
+- [Peak hold and average on the spectrum](#peak-hold-and-average-on-the-spectrum)
+- [The range of the spectrum and the waterfall](#the-range-of-the-spectrum-and-the-waterfall)
+- [The patch view](#the-patch-view)
+- [The new window](#the-new-window)
+- [Several radios at once](#several-radios-at-once)
+- [Language and country](#language-and-country)
+- [Keyboard](#keyboard)
+- [Browser access](#browser-access)
+- [HTTPS and listeners](#https-and-listeners)
+- [Network features and what they send in the clear](#network-features-and-what-they-send-in-the-clear)
+- [How it looks](#how-it-looks)
+- [The satellites map](#the-satellites-map)
+- [Privacy](#privacy)
+- [When it crashes or freezes](#when-it-crashes-or-freezes)
+- [Installing](#installing)
+- [Installing from a script, and the command line](#installing-from-a-script-and-the-command-line)
+- [Libraries you add yourself](#libraries-you-add-yourself) <!-- PENDING MERGE: libraries -->
+- [Helper plugins](#helper-plugins) <!-- PENDING MERGE: helpers -->
+- [New and updated decoder plugins](#new-and-updated-decoder-plugins) <!-- PENDING MERGE: new-plugins -->
+- [Decoder plugins and the network](#decoder-plugins-and-the-network) <!-- PENDING MERGE: new-plugins -->
+- [How far each decoder plugin has been proved](#how-far-each-decoder-plugin-has-been-proved) <!-- PENDING MERGE: plugin-proof -->
+
 ## What is in the current build
 
 Working and in use, and still pre-1.0 — the interface and the plugin catalogue
@@ -233,6 +264,14 @@ are still moving. What is in the current build:
   whether something is broken or something you dislike); nothing is sent until
   you press SEND, and there is no queue. See [Privacy](#privacy) for exactly
   what leaves the machine.
+
+- **Several radios at once** (on the `engine/multi-radio` branch, merged, not yet released). The main window opens up to
+  eight radios, each with its own source, frequency, mode, squelch and decoders, shown one, two or four to a page and
+  mixed to the speakers with a route, mute, solo and volume for each. See [Several radios at once](#several-radios-at-once).
+  The patch canvas keeps its own limit of five Radio nodes.
+- **The new window** (same branch). The window `foxsdr-slint.exe` starts, with saved layouts, waterfall export, more trace
+  and display choices, A/B markers, scope analysis keys, scanner lockouts and memories, and a status-bar clock. See
+  [The new window](#the-new-window).
 
 **Verification, honestly stated.** The DSP core and every decoder carry unit
 tests (`ctest` runs 82 entries: 75 test binaries and seven checks on the
@@ -1014,7 +1053,7 @@ itself, operated on its own face.
 
 | Part | What it does |
 |---|---|
-| **Radio** | One device of its own - up to five in a patch, all running at once. Choose the device and its sample rate in the panel on the right and type its centre on the node. A device can be on one Radio only; the list greys out a device another Radio already has. Its **ON/OFF** switch, first on its face, closes that radio alone while the rest of the patch keeps running. A Radio can also play an **I/Q recording**: every 2-channel WAV (16-bit PCM or 32-bit float) in the recordings folder is in its device list (the patch's own speaker recordings are left out), played on a loop in real time. The recording sets the rate; the Radio's centre is the frequency the recording was made at, so type the frequency it was tuned to. Several Radios can play different recordings at once; one recording can be on one Radio only. |
+| **Radio** | One device of its own - up to five Radio nodes in a patch, all running at once. (This is the patch canvas's own limit; the main window opens up to eight radios, see [Several radios at once](#several-radios-at-once).) Choose the device and its sample rate in the panel on the right and type its centre on the node. A device can be on one Radio only; the list greys out a device another Radio already has. Its **ON/OFF** switch, first on its face, closes that radio alone while the rest of the patch keeps running. A Radio can also play an **I/Q recording**: every 2-channel WAV (16-bit PCM or 32-bit float) in the recordings folder is in its device list (the patch's own speaker recordings are left out), played on a loop in real time. The recording sets the rate; the Radio's centre is the frequency the recording was made at, so type the frequency it was tuned to. Several Radios can play different recordings at once; one recording can be on one Radio only. |
 | **Channel** | One frequency out of that capture, tuned, filtered and decimated. Its frequency is typed on its face; its live level is shown above. |
 | **Demod** | AM or FM demodulation of a channel, with a **squelch**: on by default at -50 dB, its threshold on a slider and the channel's live level beside it, so a speaker or a recording hears signals rather than the noise between them. Decoders behind it still get every sample. |
 | **Speaker** | Where the demodulated channel wired to it goes: a **WAV file** (the default), an **MP3 file**, **the speakers**, or any other sound output - chosen in the panel on the right. Files go in the recordings folder, one per speaker, named after it. |
@@ -1045,6 +1084,220 @@ uses Windows' own encoder; on Linux the MP3 choice is unavailable and WAV is
 written instead. A decoder module that can decode straight from the radio's I/Q
 is offered only that way - its audio variant, which needs a demodulator in
 front of it, is not shown.
+
+## The new window
+
+*Status: built on the `engine/multi-radio` branch (merged there at 090e7039, not yet released). Everything below was
+exercised with scripted input on a hidden desktop and with test radios (the signal generator, I/Q-file radios and a
+stand-in RTL-SDR); no second real radio has been used with it and no pass with a real mouse and keyboard on a visible
+desktop has been recorded yet. Where a choice is not remembered, or a control only stores a value, the paragraph says
+so.*
+
+FoxSDR installs two programs. **`foxsdr-slint.exe`**, the new window, is the one the Start menu, the Desktop icon and
+`foxsdr:` links start; **`cascade.exe`**, the classic window, stays installed beside it and has its own Start-menu entry,
+"FoxSDR (classic window)". The rest of this manual describes the controls of the classic window in the places where the
+two differ; this section is what is particular to the new one. The five banks are the same keys on the rail:
+**SIGNAL** (F1), **DECODE** (F2), **TOOLS** (F3), **EXTEND** (F4) and **SYSTEM** (F5), and the tab row above the
+spectrum holds **RECEIVER**, **PATCH**, **SCOPE**, the plugins' own pages and **+ Window**.
+
+**The App menu.** Click the brand at the left of the title bar ("FoxSDR" and the version). The menu holds **About
+FoxSDR...**, **Key bindings** (F7), **Save a screenshot** (Ctrl+W), **Help: the manual** (opens this manual in your web
+browser), **Keyboard shortcuts** (Shift+F1), **Recordings...** and **Quit**. A right-click on the title bar does nothing.
+
+**Keyboard shortcuts and recordings.** The Shift+F1 sheet lists every action in your saved key table with its key.
+**Recordings...** lists the recorder's folder, newest first: the kind (I/Q or Audio), the size and the date, with **Open**
+on each row, **Open folder** and **Close**. **Open** plays an I/Q take as the I/Q file; any other file is handed to the
+program Windows has for it. Neither the clipboard nor the Windows hand-over has been tried against the real thing.
+
+**Layouts.** The **Layouts** key at the right of the title bar, beside the notification bell, opens a menu of
+arrangements of the window. A layout holds the bank and which of its sections are open, whether the left panel is
+folded, the tab (RECEIVER, PATCH or SCOPE), the split between spectrum and waterfall, the radio layout (One, Side by
+side or 2 x 2), Link tuning, which radio is selected and the 3D waterfall setting. It never starts or stops a radio, a
+recording, a decoder, a patch or a scan, and it does not remember which radios are open. Two layouts come with the
+program: **Airband** (the TOOLS bank with only the Airband section open, the radio layout Side by side) and **HF DX**
+(the SIGNAL bank with Source and Radio open, layout One). Choosing one in the menu applies it. **Save the current
+layout...** and **Manage layouts...** open the same sheet: a row per layout with **Apply**, and for your own layouts
+**Rename** and **Delete**; a **Layout name** field (up to 24 bytes); the tick **Include tuning (the frequency and
+mode of the selected radio)**, off by default, which also stores that radio's frequency and mode and re-tunes to them
+when the layout is applied; and **Save the current layout**. Saving under a name that exists, in any letter case,
+replaces that layout. You can keep 12 layouts of your own. Applying a layout while a patch is running leaves the window
+on the PATCH tab and says so. Layouts are saved with the settings. There is no key binding for a layout and the command
+palette does not list them. Not yet tried: a layout across a restart of the window, and one applied while a patch is
+running.
+
+**Display choices.** At the foot of **SYSTEM > Display** are the choices of the spectrum and the waterfall:
+
+| Label | Choices (default first) |
+|---|---|
+| **Colour map** | Classic, Deep sea, Ember, Slate, Spectrum, Blue-yellow safe (can be told apart by people who confuse red and green). Changing it clears the waterfall: old lines cannot be recoloured. |
+| **Waterfall speed** | Every frame; 10, 4, 2 or 1 lines a second; 1 line every 2, 5, 10 or 30 seconds; 1 line every minute. A slow line keeps the strongest level of every bin since the last line, so a short signal is not lost. |
+| **Time stamps** | Age (seconds ago); Clock time, UTC; Clock time, local. |
+| **Trace** | Peak hold, Normal, Average, Persistence, Min hold. Persistence draws the last seconds as a fading density. Min hold keeps the lowest level each column has reached and is offered only here and in the right-click menu. |
+| **Trace shape** | Line, Filled, Bars. Works with every trace but Persistence. |
+| **Peak labels** | Off, 3, 5 or 8 strongest: names the strongest signals on the spectrum and the waterfall with frequency and level, four times a second. |
+| **Band zoom** | Full span; one entry for each band of the band plan inside what the radio is delivering; the tuned frequency at 50 kHz, 200 kHz or 2 MHz wide (only widths narrower than the full span). |
+| **SNR readout**, **Channel power**, **Frequency tracker**, **Signal history graph** | Four ticks, all off. SNR compares the strongest bin in the passband with the median of the bins outside it. Channel power adds the passband's bins and is relative, not corrected for the window's noise bandwidth; with markers A and B both set it reads the power between them. The tracker shows the offset of the strongest peak from the tuned frequency and its drift over ten seconds: it is not a frequency counter, and a drift of less than about one bin in ten seconds cannot be seen. The graph shows the SNR over the last two minutes. |
+| **Save signal history (CSV)** | Writes `foxsdr-signal-history.csv` (utc, peak_dbfs, floor_dbfs, snr_db, power_dbfs) into the `exports` folder beside the settings file. It never overwrites a file. |
+| **Save the trace as the reference**, **Show the reference trace**, **Clear the reference trace** | Keeps the current spectrum as a violet line behind the live one, tied to frequency so that it follows zoom, pan and retuning. |
+| **Compact window** | Forces the compact receiver strip and radio bar at any width. |
+
+**These choices are the window's, not saved with the settings: the colour map, speed, time stamps, trace, shape, peak
+labels, readouts, reference and compact setting return to their defaults the next time FoxSDR starts.** This differs from
+the classic window, which remembers its trace mode (see [Peak hold and average on the spectrum](#peak-hold-and-average-on-the-spectrum)).
+The same Display section also holds **Digit grouping** (`1.090.000.000` or `1090.000.000`; typing a frequency accepts
+either style, two or more dots being grouping marks and one dot a decimal point) and **High contrast** (black grounds,
+white lines and text and one yellow accent; it also turns itself on whenever Windows' own high-contrast setting is on).
+Whether these rows are cut off in the longest languages has not been swept.
+
+**Right-click menus.** Right-click the spectrum for the **Trace** menu (Normal, Peak hold, Average, Persistence, Min
+hold, Reset trace, **Average length** from 100 ms to 10 s, **Persistence decay** Fast, Medium or Slow, then the display
+range as described in [The range of the spectrum and the waterfall](#the-range-of-the-spectrum-and-the-waterfall)); right-click the waterfall for the marker menu
+([Markers on the waterfall](#markers-on-the-waterfall)). Both end with **Set marker A here**, **Set marker B here** and
+**Clear markers A and B**; B's name carries the difference to A, in frequency and in level. **Reset display to
+defaults** also puts the trace back to Normal. A bookmark's name drawn on the spectrum is a key: click it to tune there.
+Two-finger pinch on the plot is built to zoom about the point between the fingers; it has not been tried on a touch
+screen.
+
+**Names of plugin marks.** Marks from plugins are named on the spectrum and now on the waterfall too, stacked left to
+right in rows (one to three on the spectrum, two or three on the waterfall); the line is always drawn. A name that fits no
+row is counted into a tab marked **+N**; click it for a list headed **Names that did not fit**, and pick one to tune
+there. The tip of a name gives its frequency and, when a plugin made it, "from" that plugin's name. No credit for the
+data source (HamQTH, say) can be shown yet.
+
+**Export.** **TOOLS > Export** writes the waterfall of the selected radio as a file. The line at the top reads, for
+example, "Radio 1 at 100.300 MHz, span 2.4 MHz: 5 min stored, 3.2 MB". **Save to** takes a folder and file name typed in
+full; a name with no folder goes into the `exports` folder beside the settings file, the extension is added, and a file
+that exists is never overwritten (" (2)" is added). There is no file chooser, and the path, length and format are not
+remembered. **Data length** is 1, 5 (the default), 15 or 60 minutes and **Data format** is CSV (the default) or FSW, the
+FoxSDR spectrum file, one byte for each level in steps of 0.6 dB. **Save waterfall picture** writes a PNG of the waterfall
+as it is drawn, with a frequency scale, a time scale and a caption; the picture holds about the last eight seconds.
+**Save waterfall data** writes the levels, in dBFS, of the chosen length: at most 1024 columns, a row every 250 ms, an hour
+kept. Only a radio whose pane is shown keeps levels.
+
+**The Demod scope.** The window opened from **TOOLS > Demod scope** has four more keys under the input keys: **WATERFALL**
+(the audio spectrum over time), **AUTOCORR** (the autocorrelation of the audio: a repeating pattern is a peak at its
+period), **CEPSTRUM** (a voice's pitch shows as a peak at the spacing of its harmonics) and **EYE** (the baseband I
+folded on two symbols; there is no symbol-clock recovery, so set TIME until one symbol fills five divisions). A second
+press of the lit key returns to the tube. The set of keys is a window setting and is not saved. The pictures are lettered
+in capital words in a fixed small type that is not translated.
+
+**Tuning aids.** Right-click the counter for the **Counter face** (Nixie tubes, Neon, Plain), **Show tuner switches**,
+**Copy frequency**, **Paste frequency**, **Lock the tuning step** (every digit and the wheel then step by the Tune step),
+**Delta lock** (click-to-tune keeps the VFO offset and moves the centre) and **Remember the width of each mode**, all off.
+**Enlarge figures**, **Normal size** and **Enlarge every reading** are in the same menu and are saved but do not yet make
+anything larger. A **padlock** key above the counter, left of the RCVR lamp, locks the frequency of the selected radio:
+the counter, wheel, click-to-tune, slider, bookmarks, scanner and presets sent from this window are refused and the
+counter says "Frequency locked". The lock stops this window only: a plugin, the web page, CAT or another client can still
+tune. On the airband, 118 to 137 MHz, the counter's caption names the 8.33 kHz channel ("Channel 118.005").
+The **status bar's clock** at its right end reads UTC by default; a press changes it to local time and then to none, and
+the choice is saved.
+
+**Scanner and memories (TOOLS).** In the Scanner section: **Mute while scanning** silences the receiver while the scan
+steps and lets you hear it when it stops on a signal; **Log what the scan finds** writes one line a signal, with the UTC
+time, the frequency in hertz and the seconds heard, to `scan-log.csv` in the settings folder (the file itself has not been
+inspected); during a scan of ticked bookmark rows **Lock out 10 min**, **Lock out for good** and **Clear lockouts** are
+live (they are not offered in a range scan). **Priority MHz**, **Every s** and **Scan threshold dB** are only saved: the
+scanner does not use them yet, and the window says so. Below the bookmark list, a tuned bookmark has a memory of
+**Squelch dB** (sent when the receiver comes onto the bookmark with no scan running), **Scan threshold dB** and **Tone Hz**
+(both stored only), which the bookmark file and its export do not carry. **Store into a memory** and the eight keys M1 to
+M8 keep and recall a frequency, mode and width. These fields are kept in `lanec.json` beside the settings file.
+
+**Pages.** The decoder output bar has **Copy**, which puts every held line on the clipboard. A plugin's picture zooms with
+the wheel from 1x to 16x about the pointer, pans by dragging and has a **Fit** key while zoomed. **Save as BMP** writes into
+a `pictures` folder beside the settings file, not into the recordings folder, and greys while it writes. A map page has
+**Trails** and **Altitude colours** ticks and a **Line** or **Ribbon** choice (with **Trail width** and **Trail style** also
+under SYSTEM > Display). A plugin's setting that names a file has **BROWSE FILES** beside it. Dropping a `.wav` on the window
+opens it as the I/Q file, dropping an `.xml` or `.csv` imports it as a frequency list, and any other file is answered with
+"That file is neither a recording nor a frequency list." (A real drag from Windows has not been tried.) **SYSTEM >
+Diagnostics > Copy diagnostics** puts the diagnostics bundle on the clipboard. When the SDRplay driver has trouble reaching
+its service, the Source section shows **RESTART SDRPLAY SERVICE**; Windows asks permission before it runs, and it has not
+been run against hardware.
+
+**Not built.** Spoken announcements, band stacking, mode presets, the SDRplay diagnostic dialog, controller knobs and
+gamepads, and sending the symbol rate to plugins do not exist in this build.
+
+**Narrow windows.** Several radios at once need a window of at least 1280 x 720; in a smaller one a multi-pane layout is
+kept but one radio is shown, with a notice. At 800 pixels wide the strip, tab row and title bar are wider than the window
+in 20 to 30 of the languages.
+
+## Several radios at once
+
+*Status: built on the `engine/multi-radio` branch (merged there at 090e7039, not yet released); the screen is in the
+new window only ([The new window](#the-new-window)). Proof: eight test radios (the signal generator) ran together for the
+engine's measurements, and a B200 and an RTL-SDR ran together for 30 minutes with the sound at zero. Nobody has listened
+to several radios at once, and no other real radio has been tried.*
+
+**How many.** The main window opens up to **eight** radios at once, numbered Radio 1 to Radio 8. That limit counts every
+open radio, including the radios of a patch: the ninth is refused with "at most 8 radios can be open at once", followed by
+who holds the others. A given physical radio can be open on one radio at a time ("in use by Radio 2"); any number of the
+eight can be signal generators. **The patch canvas is a separate limit:** a patch holds at most **five** Radio nodes (see
+[The patch view](#the-patch-view)).
+
+**Opening a second radio.** The **Add a radio** key at the right of the status bar, or the same card drawn in an empty pane,
+offers: **Signal generator**, each radio found that no other radio holds, and boxes for **I/Q file** (an I/Q file path),
+**rtl_tcp** (host and port) and **ADALM-Pluto (network)** (an address), each with an **Add** key, then **Sound card**. **Look
+for radios again** searches again; **No other radio found.** says there is nothing to add. A radio added from the card
+starts running, on 100.000 MHz. The sound card belongs to the first radio, so the engine refuses it as a second radio and
+the card shows its words. The first radio you add beside radio 1 switches the layout to Side by side. A network radio that
+cannot be reached is added without a sentence about why.
+
+**Removing one.** Radios 2 to 8 have a close key at the right of their pane's header ("Remove Radio n"). A stopped radio
+goes at once; a running or recording radio asks first ("This radio is running. Removing it stops it and lets go of its
+device." or "...is recording. Removing it ends the recording..."). Radio 1 cannot be removed. The plugins of a removed radio
+go back to radio 1 and are stopped.
+
+**The layout.** With more than one radio open, a bar appears over the receiver view: **Layout** with **One** (today's
+single receiver view), **Side by side** (two panes) and **2 x 2** (four panes), and, when a radio lives beyond the first
+page, page keys such as **Radios 1-4** and **Radios 5-8** (in Side by side the pages are pairs). Never more than four panes
+are drawn. A pane holds a header (the radio's coloured tag with its number, the device, the frequency, the mode, the lamps
+RUN, DEC, MUTE and FAIL, a STOP or START key, **Link** and the close key), a row of readouts (GAIN, SQL, VOL, RATE, BIAS,
+the decoder, the span, PEAK IN PASSBAND), a compact spectrum and waterfall and a splitter between them that is
+remembered for each radio. A click on a pane's tag, header or readouts selects that radio, as does a right-click; click,
+drag, wheel and the other pointer actions on a pane act on that pane's radio. A window narrower than 1760 pixels carries the
+radio selector, the STOP keys and the MASTER lamps in this bar; a wider one carries them at the left end of the receiver
+strip (**Controls follow** with **R1** to **R8**, **STOP R**n, **STOP ALL** or **START ALL**, and one MASTER lamp for each
+open radio: green running, red failed, dark stopped). The banks (SIGNAL, DECODE and the rest), the gain, antenna, sample-rate
+and decoder lists follow the **selected** radio.
+
+**Keys.** **Ctrl+1** to **Ctrl+8** select a radio; **Alt+PageUp** and **Alt+PageDown** turn the page of radios (in layout One
+they select the neighbouring radio). They are rows of the key table, group Radio, and can be changed like any other. A radio
+that is not open is left alone.
+
+**Link tuning and Start together.** **Link tuning** (off by default) makes the open radios move together: a change of any
+linked radio's frequency, by click, counter, key, bookmark or another window, is copied to the others by the same number of
+hertz, so the gaps between them are kept. A radio added while it is on joins; the **Link** key in a pane header, shown only
+while Link tuning is on, takes that radio out and puts it back; a pane whose radio could not follow goes red. At a device's
+tuning limit the radio stays where the device lets it. **Start together** starts every open radio with one command.
+
+**The sound.** The foot of the sections panel carries **Audio mix** while several radios are open: for each radio a key
+**Output of Radio n** that cycles **Both**, **Left**, **Right** and **None** (default Both), **MUTE**, **SOLO** ("Hear only
+the radios marked SOLO") and a volume slider. Each radio plays through its own stream to the first radio's output device and
+Windows mixes them. Solo is not saved: a restart clears it.
+
+**What each radio keeps.** Its own source and device, sample rate, antenna, frequency, mode, bandwidth, VFO offset, squelch,
+volume, mute, FM de-emphasis, stereo, noise reduction, AGC, noise blanker, notch and audio route, and whether it was
+running. Gains and device options belong to the device and come back when that device is opened again. Shared by all
+radios: the bookmark list, the band plan, the recordings folder, the one scanner (it works on the radio it was started on),
+the Airband monitor, plugin settings and the sound card. Radios 2 to 8 are saved with the settings and restored in order;
+one whose device is missing or busy stays on the generator with its settings and says why in its pane ("RTL-SDR did not
+open: ..." or "Radio 3: in use by Radio 2"). **An older version of FoxSDR reads radio 1 and forgets radios 2 to 8 the next
+time it saves.**
+
+**Decoders.** With more than one radio open each plugin's entry in DECODE > Decoders carries a **Runs on** row of keys, one
+for each radio ("The radio this plugin listens to. Choose another to move it there."). The default is radio 1; the choice is
+saved; a plugin that transmits stays on radio 1. 43 installed plugins were placed on radio 2 in a test and four real decoders
+decoded their own recordings on radios 2 to 5; no plugin has run on a second real radio.
+
+**New audio and noise controls.** The SIGNAL bank's Audio filters section has **AGC** (Auto, Fast, Medium, Slow, Off, with
+**Fixed gain** from -20 to +40 dB live only in Off), a **Noise blanker** tick with a **Threshold** slider (6 to 30 dB,
+default 15) and **De-emph** (50 us, 75 us or off, live in NFM and WFM only). All three apply to the selected radio. Auto is the
+original loop; Fast, Medium and Slow differ in how quickly the gain recovers after a loud signal. These were proved on
+generated signals only and nobody has listened to them.
+
+**Not built, or without a control.** The engine also has a tone squelch (CTCSS and DCS), S-meter units and calibration, a
+choice of noise-reduction method, a bank of ten notches, a CW pitch, an FM noise squelch, an equaliser, timed recordings, a
+recording file-name template and macros; **none has a control in either window**, and they are reachable only through the
+settings file or a program that talks to the engine. They are not described here as features.
 
 ## Language and country
 
@@ -1262,6 +1515,58 @@ folder recordings go to, device serial numbers or plugin file names.
 - **Not built:** a listener tuning on their own, independently of the owner and
   of other listeners. That needs a receiver chain and an audio stream per listener;
   everyone listens to the same radio.
+
+## Network features and what they send in the clear
+
+*Status: built on the `engine/multi-radio` branch (merged there at 090e7039, not yet released). Every server below is
+**off** by default and, once switched on, listens on this machine only until you say otherwise. No real browser, Hamlib
+program or TCI program has been run against this build; the behaviour described is what the code and its stand-in tests
+do.*
+
+**A plain warning first.** None of the servers and clients in this section encrypts its traffic in this build. The page in [Browser access](#browser-access) is plain HTTP in this build (the HTTPS switch described in
+[HTTPS and listeners](#https-and-listeners) does not exist yet). Anyone who can see the traffic between FoxSDR and the
+other end, on the same Wi-Fi, the same switch or any router in between, can read what is listed in the table and, for the
+servers that accept commands, can send the same commands themselves. The safe uses are **this machine only (127.0.0.1)**
+and **a LAN you trust**. Do not forward any of these ports from your router to the internet, and do not switch a server to
+listen on every interface on a network you do not control. A password protects only the web page; the CAT, TCI and UDP
+audio ports have none.
+
+| Feature | What it sends or accepts, with no encryption | Default | How it is switched on |
+|---|---|---|---|
+| **Web page** ([Browser access](#browser-access)) | HTTP. Everything the page shows: tuning, spectrum, audio, decoded plugin text, bookmarks, and, to the owner, the antenna location, the recordings folder and radio serial numbers. The sign-in password travels in the clear in the login request, and the session cookie can be copied by anyone on the path (it is marked Secure only with HTTPS, which has no switch). | Off; address 127.0.0.1, port 8073 | **EXTEND > Web access**: tick **Serve a browser page**, then **Reachable from** (**This machine only** or **Every network interface**), **Port**, **User name**, **Password**, **Confirm**, and press **Apply**. A bind beyond this machine without a password is refused: "set a password before allowing access from other machines". |
+| **CAT (Hamlib rigctld protocol)** ([CAT control](#cat-control)) | Text lines: the receiver's frequency, mode and bandwidth to anyone who asks, and it **accepts commands that retune the receiver**: centre frequency, VFO offset, mode and bandwidth. A request to transmit is answered as receive and refused. **There is no password.** At most 4 connections. | Off; 127.0.0.1, port 4532 | **EXTEND > CAT**: tick **Accept CAT connections**, set **Port**; tick **Reachable from other machines** to listen on every interface. With that ticked the window says: "This protocol has no password. Anything that can reach the port can retune the receiver." |
+| **TCI server** (TCI 2.1 over a plain `ws://` WebSocket) | The receiver's state (frequency, mode, filter, squelch, start or stop) and, when a client asks, **the receiver's audio**. It accepts start, stop, centre frequency, VFO offset, mode, bandwidth and squelch. Every transmit command is answered false. **No password.** The code was not found to check which program or web page is connecting (not tested), so a web page open in a browser on this same machine might be able to try it. At most 4 clients. | Off; 127.0.0.1, port 50001 | **No control in the window.** Settings file only: see below. |
+| **Audio over the network (UDP)** | The audio of one radio as raw 48 kHz, 16-bit, mono datagrams to **one** host and port, with nothing read back. Whoever can see the path to that address can listen. | Off; sent to 127.0.0.1, port 7355, radio 1 | **No control in the window.** Settings file only: see below. |
+| **rtl_tcp radio** (a client) | FoxSDR connects out to an rtl_tcp server you name and sends it tuning and gain commands; the server returns raw 8-bit I/Q. Both directions are plain TCP with no password. | Nothing is contacted until you press **Open** | Source list entry **rtl_tcp**, box **rtl_tcp host and port** (port 1234 if left out). |
+| **ADALM-Pluto radio** (a client) | FoxSDR connects out to the Pluto's own service on port 30431 over the network. Control and I/Q travel in the clear. | Nothing is contacted until you press **Open** | Source list entry **ADALM-Pluto (network)**, box **Pluto address**, for example `ip:192.168.2.1`. |
+
+**Switching on a server in the settings file (TCI and UDP audio).** These two have no switch on any screen. They are keys in
+`%APPDATA%\foxsdr\config.json`, read when FoxSDR starts; edit the file with FoxSDR closed, because the program writes the
+file itself when it saves. Whether a hand-edited key survives in the installed program has not been confirmed on a real
+installation; the engine's tests restore these keys from a settings file the engine wrote itself.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `tciEnabled` | `false` | The TCI server on or off. |
+| `tciBindAll` | `false` | `true` listens on every interface instead of 127.0.0.1. |
+| `tciPort` | `50001` | 1024 to 65535. If another program holds the port, the server reports that it cannot listen and the setting stays on. |
+| `udpAudioEnabled` | `false` | The UDP audio sender on or off. |
+| `udpAudioHost` | `"127.0.0.1"` | Where the datagrams go. An empty value resets to 127.0.0.1. Any other address is a deliberate choice to send your radio's audio across the network. |
+| `udpAudioPort` | `7355` | The destination port. |
+| `udpAudioRadio` | `1` | Which radio, 1 to 8. |
+| `udpAudioPacketFrames` | `480` | 480 (10 ms) or 960 (20 ms) samples in a datagram. |
+
+A settings bundle imported from another machine always arrives with the web page, CAT, TCI and UDP audio switched **off**:
+the program says "was imported as OFF; switch it on again yourself if you want it". The operation that starts a listener is
+refused to a remote, web, TCI or CAT session, so a connection cannot switch another server on. No real TCI program has been connected to this server, so whether a particular logging or
+digital-mode program works with it is **not known**.
+
+**A KiwiSDR as a radio.** The engine can open a KiwiSDR receiver over the network as audio only, but no control in the
+window offers it, so it is not described further here.
+
+**Plugins have their own network connections.** The host gives a plugin no network access; a plugin that needs one opens
+its own socket and encrypts nothing unless its page says so. Read a plugin's page before you switch one of
+its network outputs on.
 
 ## How it looks
 
@@ -2037,3 +2342,372 @@ the session carries on with an empty device list. If a scan finds nothing, the
 diagnostics log distinguishes "no devices" from "the search crashed" and from
 "a device stopped answering and the search was cut off" — three answers that
 used to look identical.
+
+## Installing from a script, and the command line
+
+*Status: read from `installer/cascade.iss` and `src/engine/process_boot.cpp` at the merged tip (090e7039). The switches
+marked "run" are the ones `tools/release.ps1` uses in its install test; the others were read from the installer script
+and not run. `docs/silent-install-switches.md` lists where each statement comes from.*
+
+The setup is `foxsdr-setup-<version>.exe`, an Inno Setup installer. It is not code-signed, so an interactive double-click
+may meet SmartScreen. These switches are accepted on its command line:
+
+| Switch | What it does |
+|---|---|
+| `/VERYSILENT` | No wizard and no progress window (run). `/SILENT` shows a progress window instead (run). |
+| `/SUPPRESSMSGBOXES` | Message boxes are answered with their default, so a script never waits for a click (run). Give it with a silent switch. |
+| `/NORESTART` | Never restart Windows. The setup needs no restart (run). |
+| `/CURRENTUSER` | Install for the current user only, with no administrator prompt (run). Without it, or with `/ALLUSERS`, the setup asks for administrator rights and installs under Program Files. |
+| `/DIR="<folder>"` | The install folder. Quote it if it contains a space: an unquoted `C:\Program Files\FoxSDR` was seen installing into `C:\Program\`. |
+| `/TASKS="desktopicon"` | Chooses exactly the listed tasks. The script has two: `desktopicon` (the Desktop shortcut, on by default) and `cleaninstall` (off by default). |
+| `/LOG="<file>"` | Writes the setup's log (run). |
+| `/CLEANINSTALL=1` | FoxSDR's own switch: deletes your existing FoxSDR settings, plugins, caches and logs (`%APPDATA%\foxsdr` and `%LOCALAPPDATA%\FoxSDR`) **before** the files go down. Recordings are never touched. Write it with `=1`. |
+
+An upgrade over an existing install keeps your settings. A silent install never starts the program afterwards. Close FoxSDR
+first: a running FoxSDR can stop an install. Before installing, the setup silently uninstalls a FoxSDR found in the other
+scope (a per-user install removes a machine-wide one and the reverse); your settings are not touched by that.
+
+The uninstaller is `unins000.exe` in the install folder and takes the same `/VERYSILENT`, `/SILENT`, `/SUPPRESSMSGBOXES`,
+`/NORESTART` and `/LOG` switches. FoxSDR's own two are `/CLEANDATA=1`, which also deletes `%APPDATA%\foxsdr` and
+`%LOCALAPPDATA%\FoxSDR` without asking, and `/KEEPDATA=1`, which keeps them without asking and wins if both are given. **A
+silent uninstall keeps your data unless `/CLEANDATA=1` is given**, because an upgrade runs exactly that command.
+Recordings in `Documents\SDR-recordings` are never removed by setup or uninstall.
+
+```powershell
+# for the current user, no administrator prompt, into a folder of your choice
+$p = Start-Process -FilePath .\foxsdr-setup-<version>.exe -Wait -PassThru -ArgumentList @(
+    '/CURRENTUSER', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/DIR="D:\Apps\FoxSDR"', '/LOG="D:\Apps\foxsdr-install.log"')
+$p.ExitCode    # 0 is success
+```
+
+**The programs' command lines.** `foxsdr-slint.exe` and `cascade.exe` read the same flags. The ones meant for you:
+
+| Flag | What it does |
+|---|---|
+| `--version` | Prints one line, `FoxSDR <version>`, and exits. |
+| `--safe-plugins` | Starts with no plugin loaded for this run. Holding **Shift** while the window starts does the same (Windows only). |
+| `--rtlsdr-check`, `--soapy-check` | Bench checks that print what was found and exit; see [Installing](#installing). They need the hardware. |
+
+Support tools, hidden from the usage line on purpose: `--selftest` (a headless check of the receiver chain, exit 0 on pass),
+`--benchmark` (times the DSP blocks, about ten seconds of CPU), `--record-check`, `--rds-check <MHz>` and `--tone-check`
+(each needs hardware, writes to disk or plays a sound), and `--update-check [download]`, which **makes a network call** to
+the update server and, with `download`, also downloads and verifies the installer without running it. An unknown flag prints
+`unknown argument '...'` and the usage line and exits 1. No flag opens a radio, picks a source or sets a frequency.
+
+`--frames <N>`, `--diag-stall`, `--diag-toggle`, `--link-tester`, `--sentinel`, `--enumerate-json`, `--list-drivers`,
+`--sdrplay-service-state` and `--sdrplay-probe` are for tests and for FoxSDR's own helper processes. They are not supported
+and may change without notice. The headless `foxsdr-engine` program has its own flags (`--seconds`, `--config`,
+`--use-config`, `--web-enable`, `--cat-enable` and their companions); the setup does not install it.
+
+**Environment variables you can set.**
+
+| Variable | Effect | Window |
+|---|---|---|
+| `FOXSDR_LANGUAGE` | A language code that overrides the saved language for this run only. | both |
+| `FOXSDR_DIAG_DIR` | Moves the diagnostics and crash-report folder. | both |
+| `FOXSDR_SOAPY_DEBUG` | `1`, `true`, `yes` or `on` passes SoapySDR's debug logging into the log. | both |
+| `SOAPY_SDR_PLUGIN_PATH`, `UHD_IMAGES_DIR`, `CONDA_PREFIX` | Where SoapySDR vendor modules are looked for and, for a B200, where the UHD firmware images are; see [Installing](#installing). | both |
+| `FOXSDR_GL` | `auto`, `software` or `hardware`: whether the bundled software OpenGL may stand in for the graphics driver. | classic only |
+| `FOXSDR_UI_SCALE`, `FOXSDR_LANG_FILE` | The interface scale for this run; a translator's catalogue file to try without a build. | classic only |
+| `FOXSDR_GPS_PORT`, `FOXSDR_GPS_BAUD` | Read the receiver's position from a GPS on that serial port at start-up (see [What is in the current build](#what-is-in-the-current-build)). | classic only |
+
+Other `FOXSDR_*` and `CASCADE_*` variables exist for tests and measurements; do not set them.
+
+<!-- PENDING MERGE begin: libraries (oss-userlibs, oss-voice, oss-libs, oss-radios). Drop everything to the matching end marker, and its line in the contents list, if the branch does not ship. -->
+## Libraries you add yourself
+
+*Status: **pending merge.** The code for the libraries below is on lane branches (oss-userlibs, oss-voice, oss-libs,
+oss-radios) that are not merged into `engine/multi-radio`; none of it is in the merged tip 090e7039. Every statement is
+from the lane records. FoxSDR ships **none** of these libraries and never downloads them; you obtain the file from its
+maker and put it where the record says. Every proof so far used a stand-in library written for the test, not the real
+one, except where stated.*
+
+A library you add is a program file that runs inside FoxSDR with the same rights you have. The lane that built the loader
+says a person who picks one must be told so, in the same words as for an ExtIO driver. The loader reads the file's bytes
+first: a 32-bit file in the 64-bit program is named plainly and not loaded, and a file that will not load is reported
+without a Windows error box. It looks only in a folder or at a path you gave, or in the folders on PATH, never in the
+current directory and never beside the program. Messages carry the file name, never its folder.
+
+| Library | What it enables | File name | Where you put it | Status text when it is missing |
+|---|---|---|---|---|
+| **mbelib** (ISC licence) | The half-rate voice of DMR, NXDN, P25 phase 2 and narrow-band Fusion in the DMR and D-STAR Monitor plugin. FoxSDR has no half-rate decoder of its own. | `mbelib.dll`, then `libmbe.dll`, then `mbe.dll`; it must export `mbe_initMbeParms`, `mbe_processAmbe3600x2450Frame` and `mbe_processAmbe2450Data` (a build from mbelib's own CMake does not export them on Windows unless the builder arranges it, and the status text says so) | In the plugin folder, or in the folder named by the plugin setting **mbelib library folder** (empty means the folder the plugin file is in). Turn on **Half-rate voice (your mbelib)**; it is off by default. | "half-rate voice (DMR, NXDN, P25 phase 2) needs an mbelib library that you add: put mbelib.dll in the plugin folder". There are other sentences for a file that fails to load, a missing export and a fault; their wording is not quoted in the record. |
+| **Codec 2** (LGPL) | The FreeDV receive plugin (modes 1600, 700C, 700D, 700E and 2020). The plugin contains no FreeDV code, no modem and no codec. | `codec2.dll` | Beside the plugin, or give its file or folder in the plugin setting **Codec 2 library**. Choose the mode in **FreeDV mode** (default 700D). A changed mode or path takes effect the next time the plugin is started. | "FreeDV needs the Codec 2 library, which you add yourself: put codec2.dll next to this plugin or give its path in the settings." |
+| **FFmpeg libraries** (a shared LGPL build) | DAB+ sound decoded inside the DAB plugin. Without them the plugin uses the `ffmpeg` program if one is installed (see below). | `avcodec-NN.dll` and `avutil-NN.dll` | The plugin setting **FFmpeg libraries (folder)**, or the plugin's own folder. | "AAC audio needs the FFmpeg libraries (avcodec and avutil, a shared LGPL build): put them in the plugin's folder or name the folder in the settings" |
+| **FFmpeg program** (older route) | DAB+ sound through `ffmpeg.exe` started as a separate program. DAB with MPEG Layer II sound needs nothing. | `ffmpeg.exe` | The plugin setting **DAB+ decoder (ffmpeg)**, else the PATH, else the usual install places (Program Files, winget, Chocolatey). | The panel's Decoder row reads "DAB+ sound needs ffmpeg". |
+| **SDRplay API 3.x** | Every SDRplay RSP. This one is in the current build. | `sdrplay_api.dll`, found in `C:\Program Files\SDRplay\API\x64\` first | Install the API from sdrplay.com; it also installs the service and the RSP's driver. | The **RADIO SETUP** page: "vendor software missing" with "Install the SDRplay API 3.x from sdrplay.com (it installs the service and the RSP's driver), then press CHECK AGAIN." |
+| **WiNRADiO G39DDC and G33DDC** | Those receivers as sources. | `G39DDCAPI.dll`, `G33DDCAPI.dll` | The source's **WiNRADiO library folder** (empty means the PATH folders). | Not in the merged build: no source or control for them is registered yet. |
+
+How well each is proved:
+
+* **mbelib.** The bridge has never been run against a real mbelib file; the test uses a stand-in that decodes nothing. Three real
+  amateur-band recordings contained no DMR, D-STAR, Fusion or P25 frame at all, so every voice path is proved on generated
+  signals only. Nobody has listened to the audio. The half-rate vocoder is covered by a patent the record gives as active
+  until 2028-05-20, and the record has not assessed what that means for a user; you are responsible for what the law where you
+  live allows you to listen to, and the plugin says so once when a voice switch is first turned on. Calls the radio marks
+  encrypted are muted, never decrypted.
+* **Codec 2.** The real, unmodified Codec 2 1.2.0 `codec2.dll` was run for its plain decode calls and nothing faulted. No
+  FreeDV signal and no real FreeDV session has been run through the plugin.
+* **FFmpeg libraries.** Tested only against stand-ins; none was loaded. The `ffmpeg` program route was timed with a real
+  `ffmpeg` on the lane's machine.
+* **WiNRADiO.** Stand-in only. The maker's pages call the file a 32-bit library and also say 64-bit programs can use it; which
+  is true was not found out, and a 32-bit file is refused by FoxSDR's 64-bit program.
+* **FTDI D2XX, the Icom IC-R8600 firmware, Fobos, Perseus, RFNM, Harogic and RF Explorer.** Not usable. The SDR-IQ source
+  stops short of the FTDI call (it says "the SDR-IQ talks through FTDI's D2XX driver, which this build does not include");
+  the IC-R8600 source waits for Icom's own firmware, which FoxSDR neither includes nor downloads; the others were not built.
+  No control exists for any of them.
+
+The bitness (32-bit or 64-bit) of the file you need is not stated in the records for mbelib, Codec 2 or FFmpeg; the loader
+refuses a 32-bit file.
+<!-- PENDING MERGE end: libraries -->
+
+<!-- PENDING MERGE begin: helpers (oss-helperhost and the gh-* helper repository). Drop everything to the matching end marker, and its line in the contents list, if the branch does not ship. -->
+## Helper plugins
+
+*Status: **pending merge, and not yet complete.** The helper host is on the lane branch oss-helperhost and the helpers are
+in a separate GPL repository that is local and unpublished; none of it is in the merged tip 090e7039. Nothing here has run
+through FoxSDR's real window: the host side was tested against a test helper and a fake host only, and no real helper has
+been run through it. This section says only what the design and the lane records say; where they are silent it says so.*
+
+**What a helper is.** Some decoders exist only under a licence (GPL or AGPL) that does not allow their code inside
+FoxSDR. Each is therefore built as a **separate program**, a command-line program that is useful without FoxSDR, in its own
+GPL repository. FoxSDR never links its code and it never links FoxSDR's. A small FoxSDR plugin, the **Helper bridge**,
+starts it as a separate process, feeds it samples and shows what it prints. A helper is GPL software with its own licence
+and its own source; it is not part of FoxSDR and cannot see FoxSDR's data.
+
+**How they talk.** The bridge writes raw samples to the helper's standard input (16-bit or float audio, or 16-bit or float
+I/Q) and reads one line of JSON for each event from its standard output. Nothing flows back to the radio. Every helper must
+be receive-only, must not decrypt anything, must have no network access, no telemetry and no window, and must exit when its
+input closes. Each ships a manifest file (`<name>.helper.json`) saying its name, version, licence, where the source is, what
+input it takes and at what rate.
+
+**The Helper bridge's settings.** **Helper program** is the path of the helper (up to 520 characters, empty by default;
+for example `C:\path\to\helper.exe`); **Helper options** is a line of extra command-line options (up to 400 characters). The
+bridge's panel, headed **Helper bridge**, shows State, Program, Licence, Source, Input, Samples (sent and dropped), Restarts,
+Output (lines and bad lines), what the helper says, and a log. Before it starts anything the bridge checks that the file is a
+runnable 64-bit program for this Windows, so a wrong file produces a sentence, not a Windows error box. Its status lines
+include "helper not installed - set the helper program in the plugin settings", "helper refused: not an executable for this
+Windows", "helper started", "helper stopped: exited with code N after T; restarting in S" and "helper stopped: ... quick
+failures in a row ... not being restarted again", and "too slow: N samples dropped so far" when the helper cannot keep up. A
+helper that stops is restarted after 1, 2, 4 and 8 seconds and given up on after five quick failures in a row. A helper runs
+in a job that ends with FoxSDR, so it cannot outlive it.
+
+**How the helpers are proved.** The helpers were built and tested outside FoxSDR. Only the **generated signals only** rows
+are listed here; wherever the README says a real recording was used it is named:
+
+| Helper | What it decodes | Evidence |
+|---|---|---|
+| atn | The network layers carried in VDL Mode 2 frames (X.25, CLNP, CPDLC, ADS-C and others), from frames given as hex text; not a demodulator | Synthetic only: nothing was decoded from a real over-the-air frame. |
+| fldigimodes | Olivia, Contestia, MFSK, MT63, THOR, RSID | Generated signals only. |
+| hamdrm | HamDRM (digital SSTV) pictures | Not proved against a real transmitter or the real programs. |
+| msumrcal | Meteor-M infrared calibration to brightness temperature (not a signal decoder) | Proves the arithmetic, not agreement with a real satellite pass. |
+| trunkctl | Motorola SmartNet and SmartZone Type II and EDACS control channels | Generated signals only. |
+| tetrapol | TETRAPOL control-channel signalling (no voice, data content or keys) | Generated signals only; no real recording. |
+| trunkfmt | LJ1200, Tait 1200, Fleetsync II, MPT-1327, LTR and Passport signalling | Generated from the upstream program's own constants only. |
+| hfserial | STANAG 4285, MIL-STD-188-110 serial tone, PACTOR-1/2/3 receive | Generated signals only, apart from two real PACTOR-3 test fields. |
+| dvframes | The frames and signalling (no voice) of Yaesu Fusion, DMR, NXDN and dPMR | Generated signals only; one real try decoded nothing. |
+| sondes | Radiosondes: LMS6, Mk IIa, MRZ, MTS01, CF-06, RS92 | Generated from upstream constants; RS92 unverified. |
+| hfmodes | HF telegraphy (SITOR-A and B, ARQ-E and N, G-TOR, Piccolo, Coquelet, CIS modes and others) | Generated signals only, except SITOR-B, which ran on one real recording. |
+
+Other helpers have some real-signal evidence: hfdl (a 127 s off-air recording gave 50 decoded messages), stdc (a published
+Inmarsat-C recording), js8 (the program's own sample files), multimon (real POCSAG and FLEX recordings), weakmodes (real
+MSK144 and JT9 samples; FT2L never decoded a real signal), weakmodes2 (FST4, FST4W and Q65 on real sample recordings), and
+rtl433 (a cross-check on four real recordings). direwolf's README states both that it was proved on generated signals and
+that two cases decode a real recording; it is not clear which holds for the rest. For the helpers that have no helper
+README, there is nothing to document.
+
+**Installing and switching one on.** The records do not describe this from the user's side, so this manual does not
+either. What exists is: you type the path of the helper into **Helper program** in the bridge's settings (it is read at
+least every 250 ms); a store that installs a helper's files beside the bridge, with consent lines, a row reading "GPL
+helper - source: ..." and a detail text that names the helper, its version, its licence and its source, is a design that is
+not built; and the helpers' repository is local and unpublished until the owner decides otherwise. The following are
+**not answered by any document**: where you obtain a helper, which folder it goes in, what the Plugins page shows for it,
+how it is removed, where its full licence text is shown, whether Windows will warn about running it, and which helper
+needs which bridge. Several helpers take text, or the FM discriminator's audio, which nothing documented provides to the
+generic bridge.
+<!-- PENDING MERGE end: helpers -->
+
+<!-- PENDING MERGE begin: new-plugins (oss/aero, dvbs2drm, files, hfmodes, misc, pictures, remoteid, signalling, tables, voice). Drop everything to the matching end marker, and its line in the contents list, if the branch does not ship. -->
+## New and updated decoder plugins
+
+*Status: **pending merge.** These are plugin lanes of 2026-11-12 on the branches oss/aero, oss/dvbs2drm, oss/files,
+oss/hfmodes, oss/misc, oss/pictures, oss/remoteid, oss/signalling, oss/tables and oss/voice of the plugins repository. None
+is in the merged tip 090e7039, none is in the plugin catalogue yet (each record says the merge lane regenerates it), and
+none was run in the FoxSDR window: each was driven through the plugin interface by a test program that stands in for the
+host. **Where this section says "experimental", the only evidence is generated signals or a stand-in program; the plugin has
+never decoded a real signal of that kind.** All of them are receive-only. How you install or enable one is the ordinary
+store flow in [Plugins](#plugins); the records add nothing to it.*
+
+The version collision is unresolved: two lanes both raise the ADS-B decoder from 1.11.0 to 1.12.0, so the number it ends up
+with is not known.
+
+| Plugin (version change) | What it does | Settings (default) | Evidence |
+|---|---|---|---|
+| **ACARS 1.1.2, VDL Mode 2 0.2.2, HFDL 0.2.2** | ACARS text lines now carry the decoded layers inside: ADS-C reports and contracts, MIAM, OHMA (protected payloads reported, never decrypted) and the ARINC 622 wrapper. ADS-C reports put aircraft positions in the text lines; whether a setting should hide them is an open owner question. | None new. | **Experimental**: generated signals and one published decode; no real MIAM, OHMA or uplink ADS-C message. ATN header compression is not built. |
+| **UAT 978 MHz 0.2.0** | The 978 MHz UAT payloads: state vectors, mode status, target state, TIS-B and ADS-R counts, ground uplink and FIS-B headers. Aircraft addresses, call signs and positions are not in any text line. | None new. | **Experimental**: generated bursts only; no real 978 MHz recording exists on the machine. FIS-B weather and NOTAM products are not decoded. |
+| **DVB receiver 0.3.0** | DVB-S2 normal frames, all 28 modulation and coding combinations, with ACM and VCM, out through the existing UDP sink. No video or audio decoding, no conditional access. Short frames, multiple input streams and DVB-S2X are counted, not decoded. | In `dvb.cfg`: `system dvbs2`, `symbolrate`, `s2rolloff` (0.35), `s2code` (0). | **Experimental**: "Nothing here has seen a broadcast." |
+| **DRM 0.3.0** | Robustness mode E (DRM+) channel information and a packet-mode data layer. The mode E audio is **not** decoded. | In `drm.cfg`: `robustness e` or `abcd` (default). Mode E needs a receiver running at 192 kS/s or more. | **Experimental**: nothing here has seen an off-air DRM+ signal. |
+| **Rig link 0.1.0** | Follows DXLab Commander or N1MM+ and tunes FoxSDR to the logger's frequency; can send FoxSDR's frequency back. Needs the TUNE grant, and the SETTINGS grant for the mode. | Everything off; labels include **Follow DXLab Commander**, **Follow N1MM+ (UDP on this PC)**, **N1MM+ broadcast port (UDP)** (12060), **Send FoxSDR's frequency to Commander**, **Mark the logger's frequency**. | **Experimental**: tested against stand-ins only; never against the real logging programs. |
+| **UK CB channels 0.1.0** | Presets for five UK CB channels (27 and 81 MHz). | None. | The channel table could not be checked at its source. |
+| **DX spots 0.4.1, Demod Analyzer 0.3.1, Meteor ping 0.1.1, Touchstone viewer 0.2.0, RF measurements 0.1.1** | Reverse Beacon Network comment parsing; reading the `auxi` and `inf1` chunks of an I/Q file for its frequency and time; the RMOB month table; NanoVNA import from a saved capture (no serial link); the equivalent noise bandwidth of the window. | None new. | Tests and a few real lines or files only; a real NanoVNA was never used. |
+| **CCIR selcall 0.2.0, HF ARQ decoder 0.2.0, HF modem identifier 0.2.0, GSC decoder 0.2.0, PACTOR monitor 0.1.0** | More selcall tone sets (CCIR, EEA, EIA, ZVEI-1 to 3, DZVEI, PZVEI); ARQ-E; the tone header of a MIL-STD-188-110A hybrid waveform; Golay Sequential Code paging; and **identification only** of PACTOR-II and PACTOR-III (no payload). | `ccir.set` (1 to 8, 1 = CCIR); `hfarq.mode`; `known_words`; `pactor.details` (off). | **Experimental**: generated signals only; no PACTOR recording exists. |
+| **Falcon 9 legacy 0.1.0** | Decodes **recordings** of the stage-2 S-band downlink made before April 2021, when it was reported to have become encrypted; it cannot be pointed at today's signal. Holds no key. | **Show debug-log text** (on); **Video file (MPEG-TS)** (empty = off). | **Experimental**: generated signals only. |
+| **Call uploader 0.1.0** | Uploads finished call recordings from a folder to **your own** Rdio Scanner server. | Off; no address built in. **Upload calls**, **Folder to watch**, **Rdio Scanner address (http://)**, **Plain http to private LAN**, **Server API key**. | **Experimental**: tested only against a stand-in server. See the warning in [Decoder plugins and the network](#decoder-plugins-and-the-network). |
+| **EnOcean 0.2.0** | Shows the equipment profile name for a telegram (names only; data bytes stay raw). | **Equipment profile (name shown)**, empty. | Tests only. |
+| **Map imagery 1.3.0** | Named tile presets: OpenStreetMap, OpenTopoMap, NASA GIBS, CARTO Voyager, Positron and Dark Matter. | `presets=` in `openmaptiles.conf` (none by default); **Map key (your own API key)**. CARTO presets need **your own** key, which FoxSDR never ships. | Tests only; no outside connection was made. |
+| **LRPT 0.4.0** | Adds Meteor-M 80k interleaved to the 72k and plain 80k it had. | `interleaved-80k` in `lrpt.cfg`, yes by default. | 80k: **experimental**, generated only. The 72k path still decodes the real recording it always did. |
+| **KG-STV decoder 0.1.0** | Receives the KG-STV amateur image and text mode. Sends nothing; text and callsigns are kept nowhere. | No settings. | **Experimental**: generated signals only; the program's author says full compatibility is not yet established. |
+| **Radiosonde decoder 0.3.0** | Adds Meteomodem M10 and M20, Meisei iMS-100 and RS-11G, Graw DFM and InterMet iMet-4. | None new. | **Experimental**: generated signals only; the DFM scaling was checked against 19 telemetry lines printed in a thesis. |
+| **C-QUAM stereo 0.1.0** | Decodes AM stereo; stereo audio through the host. | None. | **Experimental**: generated signals only. |
+| **Bluetooth LE advertising 0.4.0** | LE Coded PHY (long range) packets and Bluetooth 5 extended advertising, and the Remote ID packs inside them, shown with identifiers hidden. | **Long-range (Coded PHY) receive** (on), **Decode long-range packets** (on), **Scan secondary channels** (off: about three times the CPU). | Coded PHY and Remote ID: **experimental**, generated only. The ordinary LE 1M path met three real recordings (1,782 advertising packets, no Remote ID because no drone was near). Wi-Fi Remote ID is not built. |
+| **Z-Wave monitor 0.1.0** | Z-Wave 868 MHz (EU), 9.6, 40 and 100 kbit/s, one line a frame. Nothing is decrypted; the payload is not shown. | **Hide network and device IDs** (on); a preset at 869.1 MHz, 2 MS/s. | 40 and 100 kbit/s: one real 300 s recording gave 15 valid frames. 9.6 kbit/s: **experimental**. |
+| **P25 trunk follower 0.1.0** | Follows a Phase 1 control channel and, only when you switch following on, tunes to the talkgroups you list. Encrypted, data and unit-to-unit calls are never followed; unit addresses are never printed. Needs the TUNE grant. | **Follow talkgroups** (off), **Talkgroups to follow**, **Control channel (MHz)**, **Only this NAC (decimal)**, **Hold after last frame (s)** (3), **Longest call to stay on (s)** (120). | **Experimental**: no off-air P25 recording. Phase 2 and recording per talkgroup are not built. |
+| **Tait CCDI monitor 0.1.0** | A read-only monitor of a Tait radio's CCDI link, from a log file or a COM port opened read-only. | **CCDI source (file or COMn)**, empty = off; **CCDI baud (COM only)** (28800). | Not verified: no radio and no real capture. |
+| **M17 0.1.1, packet TNC 0.2.1** | M17 end-of-transmission and restart handling; FX.25 with four Reed-Solomon conventions. | None new. | Generated signals and one published worked example. |
+| **APT 1.2.0, ADS-B decoder 1.12.0, Aircraft Info 1.3.0, Satellites 1.4.0** | NOAA infrared constants so the picture's temperature scale needs no file; magnetic variation, a military flag, airline and route in the JSON outputs; an offline table of 17,139 airframes; import of a SatNOGS transmitter list you save yourself. | Mostly none new; Satellites reads `transmitters <file>`. | Driven by test programs only. The APT temperature was judged plausible, not checked against a reference. |
+| **DMR and D-STAR Monitor 0.8.0** (named "EXPERIMENTAL, voice off by default") | Voice through the host's audio for D-STAR, P25 phase 1 and Fusion wide, and, with your own mbelib ([Libraries you add yourself](#libraries-you-add-yourself)), half-rate DMR. Encrypted calls are muted, never decrypted. One DMR timeslot at a time. | All off: **D-STAR voice decoding**, **P25 voice decoding**, **Fusion wide voice (experiment)**, **Half-rate voice (your mbelib)**; **mbelib library folder**. | **Experimental**: generated signals only; three real amateur-band captures held no voice frame. Nobody has listened to the audio. |
+
+**Not built.** Inmarsat Aero (JAERO), FIS-B products, DVB-S2 short frames and DVB-T2, DRM hierarchical modulation and
+mode E audio, Hamlib CAT in Rig link, the NanoVNA serial link, STANAG 4285, PACTOR payloads, Falcon 9 GPS fields,
+Broadcastify and OpenMHz upload, LMS6 radiosondes, MDC-1200, RADE, P25 phase 2, ProVoice, NXDN voice and narrow-band
+Fusion voice.
+
+## Decoder plugins and the network
+
+*Status: the rows say where each plugin stands. Plugins have their own sockets; the host gives them none. Nothing below is
+encrypted unless it says so.*
+
+* **Call uploader** (pending merge). Uploads each finished call recording to the Rdio Scanner address you type, over plain
+  `http://` only (a numeric address or localhost; a private LAN address only with **Plain http to private LAN** ticked; a
+  public address is refused). **The server API key and the audio cross the network unencrypted.** Off until you switch it on.
+* **Rig link** (pending merge). Connects to DXLab Commander on 127.0.0.1 and listens for N1MM+'s UDP broadcast on 127.0.0.1
+  only, so nothing leaves this machine. Port 12060 is also the DX-spots logger-feed default: both bind it exclusively, so one
+  must change port.
+* **CW skimmer** (a plugin lane, not merged). An optional spot server that sends DX-cluster-style spot lines to a logging
+  program: off by default, 127.0.0.1 port 7300. When **Spot server address** is changed so that it is reachable from other
+  computers the host log warns that it is. It sends nothing to any outside service. No real logging program has been tried
+  with it.
+* **Event outputs** (a plugin lane): PostgreSQL rows and e-mail. **Neither has TLS or STARTTLS**; credentials are sent only to
+  loopback or private-network addresses and are otherwise refused. Both outputs are off by default. Never tried against a
+  real database or mail server.
+* **APRS decoder 1.2.0 (APRS-IS)** (a plugin lane): optional receive-only login, or, if you type a callsign and passcode, a
+  login that **sends the passcode in the clear**, and an optional iGate of the packets it hears. Both are off by default;
+  nothing is pre-filled. Never tried against a real APRS-IS server.
+* **DX spots** (a plugin lane): a DX-cluster or Reverse Beacon Network client over plain Telnet, off until you switch it on.
+* **Tait CCDI monitor** (pending merge). Only reads a file or a COM port.
+
+Whether the lane plugins of the plugins repository are in the catalogue you see is not known: they are on the branch
+`plugins-linux` of that repository, not on its `master`.
+<!-- PENDING MERGE end: new-plugins -->
+
+<!-- PENDING MERGE begin: plugin-proof (plugins repository, branch plugins-merged). Drop everything to the matching end marker, and its line in the contents list, if the branch does not ship. -->
+## How far each decoder plugin has been proved
+
+*Status: from the lane records of the plugins repository, whose lane branches are merged into its `plugins-merged` branch
+(pushed as `plugins-linux`, not on its `master`). Whether the live catalogue serves these versions, and whether each plugin
+loads and shows its window in the current FoxSDR window, was not checked: no lane ran FoxSDR itself. No record claims
+hardware proof for any plugin.*
+
+The manual has described how plugins work, not what each plugin is worth. This table says, for each plugin in the catalogue
+file at that branch, the evidence its lane record gives, in four words used the same way throughout: **generated signals
+only** means the plugin has decoded signals made by a test program and nothing else; **some real recordings were used**
+means at least one real off-air recording was decoded, while anything added later (named in the record) rests on generated
+signals; **stand-in server only** means it was tested against a program on 127.0.0.1 that imitates the real service; and
+**model or published test vectors only** means a calculation checked against published examples. The **catalogue badge**
+column is the catalogue file's own EXPERIMENTAL flag. Six plugins carry no badge although their evidence is generated
+signals only: treat any plugin whose evidence is "generated signals only" as experimental. A plugin on this list that has
+never decoded a real signal may decode nothing on air.
+
+| Plugin | The evidence the lane record gives | Catalogue badge |
+|---|---|---|
+| acars-decoder (ACARS) | Some real recordings were used; the newer parts are generated signals only | not marked |
+| adsb-decoder (ADS-B) | Some real recordings were used; the newer parts are generated signals only | not marked |
+| ils-meter (ILS meter) | Generated signals only | EXPERIMENTAL |
+| per-tester (Packet error rate tester) | Generated signals only | EXPERIMENTAL |
+| demod-analyzer (Demod Analyzer) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| vor-decoder (VOR) | Generated signals only | not marked, although the evidence is generated signals only |
+| aircraft-info (Aircraft info) | Generated signals only | not marked, although the evidence is generated signals only |
+| avdb (Airports & Navaids; not in index.json by that id) | Model or published test vectors only | not in the catalogue |
+| selcal-decoder (SELCAL) | Generated signals only | not marked, although the evidence is generated signals only |
+| uat-978 | Generated signals only | EXPERIMENTAL |
+| hfdl-decoder (HFDL) | A real off-air recording decoded | EXPERIMENTAL |
+| vdl2-decoder (VDL Mode 2) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| ais-decoder (AIS) | Some real recordings were used; the newer parts are generated signals only | not marked |
+| aprs-decoder (APRS) | Some real recordings were used; the newer parts are generated signals only | not marked |
+| packet-tnc (Packet TNC KISS) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| radio-email (Winlink-compatible) | Stand-in server only | EXPERIMENTAL |
+| cw-decoder (Morse) | Some real recordings were used; the newer parts are generated signals only | not marked |
+| rtty-decoder (RTTY) | Some real recordings were used; the newer parts are generated signals only | not marked |
+| cw-skimmer (CW Skimmer) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| ft8-decoder (FT8, +FT4) | FT8: real off-air decodes (a real 28.074 MHz recording). FT4: synthetic signals only | not marked |
+| psk31-decoder (PSK31/63/125) | Generated signals only | EXPERIMENTAL |
+| wspr-decoder (WSPR) | Generated signals only; one real 10 m recording gave no decodes | EXPERIMENTAL |
+| jt65-decoder (JT65) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| m17-decoder (M17, no voice) | Generated signals only | EXPERIMENTAL |
+| dtmf-decoder (DTMF) | Generated signals only | EXPERIMENTAL |
+| olivia-decoder (Olivia, MFSK16) | Generated signals only | EXPERIMENTAL |
+| dominoex-decoder | Generated signals only | EXPERIMENTAL |
+| feld-hell (Feld-Hell, picture) | Generated signals only | EXPERIMENTAL |
+| timesig-decoder (time signals) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| ccir-selcall | Generated signals only | EXPERIMENTAL |
+| sitora-decoder (SITOR-A) | Generated signals only | EXPERIMENTAL |
+| synop-decoder | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| ale-decoder (ALE 2G) | Generated signals only | EXPERIMENTAL |
+| hfarq-decoder (ARQ-M2/M4, E3, G-TOR, Twinplex) | Generated signals only | EXPERIMENTAL |
+| hf-modem-id (MIL-STD-188-110C ID only) | Generated signals only | EXPERIMENTAL |
+| stanag4285-id | Generated signals only | EXPERIMENTAL |
+| pocsag-decoder (POCSAG) | Some real recordings were used; the newer parts are generated signals only | not marked |
+| flex-decoder (FLEX) | Some real recordings were used; the newer parts are generated signals only | not marked |
+| eas-decoder (EAS/SAME) | Some real recordings were used; the newer parts are generated signals only | not marked |
+| twotone-decoder | Some real recordings were used; the newer parts are generated signals only | not marked |
+| gsc-decoder (GSC Golay) | Generated signals only | EXPERIMENTAL |
+| voice-inversion-detector | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| mpt1327-monitor | Generated signals only | EXPERIMENTAL |
+| dmr-monitor (DMR, D-STAR, Fusion, dPMR; signalling only) | Generated signals only | EXPERIMENTAL |
+| tetra-decoder (TETRA, signalling only) | Generated signals only | not marked, although the evidence is generated signals only |
+| x10rf-decoder | Generated signals only | EXPERIMENTAL |
+| fmsfsk-decoder (FMS) | Generated signals only | EXPERIMENTAL |
+| clipfsk-decoder (Caller ID) | Generated signals only | EXPERIMENTAL |
+| remote-monitor (keyless remotes) | Generated signals only | EXPERIMENTAL |
+| lora-monitor (LoRa, Meshtastic header) | Generated signals only | EXPERIMENTAL |
+| enocean-monitor | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| ble-advertising (BLE + Remote ID) | Generated signals only | EXPERIMENTAL |
+| wifi-occupancy / lte-cell-search / gsm-broadcast / ieee802154-frames | Generated signals only | EXPERIMENTAL |
+| weather-decoder (433 MHz Sensors) | Some real recordings were used; the newer parts are generated signals only | not marked |
+| ert-decoder (ERT) | Generated signals only | not marked, although the evidence is generated signals only |
+| wmbus-decoder (Wireless M-Bus) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| nrf24-framing / fpv-detector | Generated signals only | EXPERIMENTAL |
+| fox-hunt / meteor-ping | Generated signals only | EXPERIMENTAL |
+| signal-identifier (Signal Identifier) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| survey-engine (Survey Engine) | Some real recordings were used; the newer parts are generated signals only | not marked |
+| openmaptiles-basemap (Map imagery) | Stand-in server only | not marked |
+| touchstone-viewer | Model or published test vectors only | EXPERIMENTAL |
+| clip-uploader | Stand-in server only | EXPERIMENTAL |
+| effect-chain / screen-recorder | Model or published test vectors only | EXPERIMENTAL |
+| workbench (Decoder Workbench) | Generated signals only | not marked, although the evidence is generated signals only |
+| dx-spots (DX spots) | Real HamQTH and PSK Reporter answers parsed; the cluster, RBN, POTA and logger inputs only against stand-in servers | EXPERIMENTAL |
+| metar (METAR) | Stand-in server only | EXPERIMENTAL |
+| station-labels (EiBi) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| propagation-tools | Stand-in server only | EXPERIMENTAL |
+| solar-system-view | Model or published test vectors only | EXPERIMENTAL |
+| satellites (Satellites) | Model or published test vectors only | not marked |
+| radiosonde-decoder | Generated signals only | EXPERIMENTAL |
+| apt-decoder (NOAA APT) | Some real recordings were used; the newer parts are generated signals only | not marked |
+| wefax-decoder (WEFAX) | Some real recordings were used; the newer parts are generated signals only | not marked |
+| lrpt-decoder (Meteor LRPT) | A real off-air recording decoded | EXPERIMENTAL |
+| goes (GOES HRIT/LRIT) | Some real recordings were used; the newer parts are generated signals only | not marked |
+| hrpt-decoder (NOAA HRPT) | Generated signals only | EXPERIMENTAL |
+| sstv-decoder (SSTV) | Some real recordings were used; the newer parts are generated signals only | not marked |
+| analogue-tv | Generated signals only | EXPERIMENTAL |
+| loran-c | Generated signals only | EXPERIMENTAL |
+| dvb-receiver (DVB-S, DVB-T) | Generated signals only | EXPERIMENTAL |
+| dab (DAB/DAB+) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| nrsc5-radio-dynamic (IBOC Radio / HD Radio) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| drm (DRM; built by CMake, NOT in index.json) | Generated signals only | not in the catalogue |
+| rade-decoder (RADE; CMake only, NOT in index.json) | A stand-in interface only; it decodes nothing | not in the catalogue |
+| navtex-dsc-decoder | Some real recordings were used; the newer parts are generated signals only | not marked |
+| epirb-decoder (406 MHz) | Some real recordings were used; the newer parts are generated signals only | not marked |
+| stdc-decoder (Inmarsat-C EGC) | Generated signals only | EXPERIMENTAL |
+| dgps-decoder | Generated signals only | EXPERIMENTAL |
+| rf-measurements | Generated signals only | EXPERIMENTAL |
+| event-outputs (PostgreSQL / e-mail) | Stand-in server only | EXPERIMENTAL |
+<!-- PENDING MERGE end: plugin-proof -->
