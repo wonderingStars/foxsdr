@@ -3,6 +3,14 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 void wireAOps(AppWindow& a) {
+    covering(FOXAPP_OP_RECORDINGS_SCAN);
+    covering(FOXAPP_OP_RECORDINGS_LIST);
+    covering(FOXAPP_OP_RECORDINGS_OPEN);
+    {
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_RECORDINGS_SCAN, "{\"folder\":\"relative\"}")), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_RECORDINGS_LIST, "{}")), FOXAPI_NO_CHANGE));   // no scan made
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_RECORDINGS_OPEN, 0, 0)), FOXAPI_NO_CHANGE));
+    }
     covering(FOXAPP_OP_RECORD_CONTAINER);
     {
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_RECORD_CONTAINER, 5)), FOXAPI_OUT_OF_RANGE));

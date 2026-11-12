@@ -44,6 +44,10 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
             return lockOp(c, text, res);
         case FOXAPP_OP_RECORD_CONTAINER:
             return containerOp(c, res);
+        case FOXAPP_OP_RECORDINGS_SCAN:
+        case FOXAPP_OP_RECORDINGS_LIST:
+        case FOXAPP_OP_RECORDINGS_OPEN:
+            return recordingsOp(c, text, res);
         case FOXAPP_OP_OVERLAY_LOAD:
         case FOXAPP_OP_OVERLAY_LOOKUP:
         case FOXAPP_OP_GRADIENT_SET:
@@ -106,6 +110,7 @@ bool WireA::drain(std::chrono::milliseconds bound) {
 }
 
 void WireA::pass() {
+    recordingsPass();
     containerPass();
     framesLoadOnce();
     gradientLoadOnce();
@@ -130,6 +135,7 @@ void WireA::facts(const std::function<void(const std::string&, const std::string
     scanFacts(fact);
     jobFacts(fact);
     recordingFacts(fact);
+    recordingsFacts(fact);
     displayFacts(fact);
     framesFacts(fact);
 }

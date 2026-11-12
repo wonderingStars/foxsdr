@@ -13,6 +13,7 @@ inline bool isWireARadioScoped(std::uint32_t op) {
     switch (op) {
         case FOXAPP_OP_HISTORY_STEP:
         case FOXAPP_OP_CHANNEL:
+        case FOXAPP_OP_RECORDINGS_OPEN:
         case FOXAPP_OP_WF_HISTORY:
         case FOXAPP_OP_KEY_ACTION:
         case FOXAPP_OP_SCAN_PLAN:

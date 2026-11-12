@@ -233,6 +233,17 @@ public:
     bool recordGuard(const FoxCommand& c, std::string& why);
 
 private:
+    // ---- the recordings browser (wire_a_recordings.cpp) ----
+    struct Browser;
+    Result recordingsOp(const FoxCommand& c, const std::string& text, Result res);
+    void recordingsPass();
+    void recordingsFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    std::shared_ptr<Browser> browser_;
+    std::string recordingsState_ = "idle", recordingsList_, recordingsError_;
+    std::size_t recordingsCount_ = 0, recordingsProbed_ = 0, recordingsBroken_ = 0;
+    bool recordingsTruncated_ = false;
+    std::uint64_t recordingsScanId_ = 0;
+
     // ---- recording: FLAC for audio takes (wire_a_container.cpp) ----
     Result containerOp(const FoxCommand& c, Result res);
     void containerPass();

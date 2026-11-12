@@ -171,6 +171,18 @@
 //   fact.record.container "wav" / "flac", fact.record.container.keep "0" / "1". Kept in record-container.json beside markers.json.
 #define FOXAPP_OP_RECORD_CONTAINER       0x881Fu /* ival[0]: 0 wav / 1 flac; ival[1]: 1 keep the WAV too */
 
+//   THE RECORDINGS BROWSER (SETTINGS; core/rec_browser.hpp): the I/Q and audio recordings in a folder, each file's HEADER read (rate, centre, length, start time where the format or the name carries one), without reading
+//   the samples. RECORDINGS_SCAN: text = JSON {"folder":"<full path>" ("" = the recordings folder), "maxDepth":0..6 (3), "maxEntries":1..20000 (20000)}; the scan runs on the model's own worker and the op returns at once
+//   (a scan still running is replaced). fact.recordings.state "idle" / "scanning" / "done" / "cancelled", .count (entries so far), .probed, .broken, .truncated ("1" when there were more than maxEntries), .folderError
+//   (words, never the path), .scanId. RECORDINGS_LIST: text = JSON {"sort":"name"|"modified"|"start"|"duration"|"size"|"rate"|"center"|"kind" (name), "ascending":true, "text":"" (a part of the file name), "iq":true, "audio":true,
+//   "hideBroken":false, "offset":0, "limit":1..200 (50)} -> fact.recordings.list = JSON [{"id","scanId","name","kind":"iq"|"audio","kindGuessed","container","format","rateHz","centerHz","durationS","startUnixMs",
+//   "startSource","sizeBytes","channels","bits","broken","error","truncated","ifRecording","mode","bandwidthHz"}] (the file's NAME only, never its path), applied[0] = how many matched. NO_CHANGE when no scan was made.
+//   RECORDINGS_OPEN: the selected radio (target) plays the recording whose id and scanId are ival[0] and ival[1] (the same worker as SELECT_SOURCE "file:"): only 16-bit integer and 32-bit float two-channel WAV I/Q
+//   files can be played today (UNSUPPORTED for anything else, with the reason in the reply); NOT_FOUND for an id that is not in the scan that has that scanId. OUT_OF_RANGE / BAD_ARGUMENT for bad values.
+#define FOXAPP_OP_RECORDINGS_SCAN        0x8820u /* text: JSON {folder, maxDepth, maxEntries} */
+#define FOXAPP_OP_RECORDINGS_LIST        0x8821u /* text: JSON {sort, ascending, text, iq, audio, hideBroken, offset, limit} */
+#define FOXAPP_OP_RECORDINGS_OPEN        0x8822u /* ival[0]: id; ival[1]: scanId. Addresses one radio (target) */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -205,7 +217,10 @@
     {FOXAPP_OP_WF_HISTORY, "APP_WF_HISTORY", true}, \
     {FOXAPP_OP_TRACE_MODE, "APP_TRACE_MODE", true}, \
     {FOXAPP_OP_BOOKMARK_FIELDS, "APP_BOOKMARK_FIELDS", true}, \
-    {FOXAPP_OP_RECORD_CONTAINER, "APP_RECORD_CONTAINER", true},
+    {FOXAPP_OP_RECORD_CONTAINER, "APP_RECORD_CONTAINER", true}, \
+    {FOXAPP_OP_RECORDINGS_SCAN, "APP_RECORDINGS_SCAN", true}, \
+    {FOXAPP_OP_RECORDINGS_LIST, "APP_RECORDINGS_LIST", true}, \
+    {FOXAPP_OP_RECORDINGS_OPEN, "APP_RECORDINGS_OPEN", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP
