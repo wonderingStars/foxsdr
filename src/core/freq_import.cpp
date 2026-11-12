@@ -4,6 +4,7 @@
 #include "core/airband_monitor.hpp"
 #include "core/file_read.hpp"
 #include "core/freq_import_foreign.hpp"
+#include "core/freq_import_sdruno.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -439,6 +440,9 @@ ImportResult importFrequencyList(std::string_view text) {
     // ';'-separated numeric lines). Both formats are UNVERIFIED against a real file (docs/feature-records/core-formats.md): the generic
     // CSV below stays the fallback for anything they do not recognise.
     const std::string_view body = foreign::dropBom(text);
+    // SDRuno's memory bank (.s1b, core/freq_import_sdruno.hpp): an 8 or 9 column CSV with the frequency in hertz first and a Scan cell of Y or
+    // nothing second. Tried before the generic CSV, which would read the Scan column as the name.
+    if (sdruno::looksLikeS1b(body)) { return fromForeign(sdruno::importS1b(text)); }
     if (foreign::looksLikeCubicSdr(body) || foreign::looksLikeGqrx(body)) { return fromForeign(importForeignBookmarks(text)); }
     return importCsv(text);
 }

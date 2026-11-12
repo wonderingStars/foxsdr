@@ -33,6 +33,79 @@ paths:
             text/html:
               schema:
                 type: string
+  /status.json:
+    get:
+      tags: [page]
+      operationId: getStatusJson
+      summary: The public receiver listing (off by default)
+      description: "The document a receiver directory (Receiverbook) reads to list a web receiver (src/net/receiver_listing.hpp). Needs no sign-in, because a directory's crawler has no cookie; it reads no receiver state and holds only what the user typed (receiver name, location text, optional latitude and longitude, a list of bands with a centre frequency and a sample rate each), plus the program version and the listener limit. It holds no operator e-mail address, altitude, serial number, radio model, address of this machine or session. The listing is OFF until the user turns it on and fills it in; while it is off, or when it was never set, the route answers 404 exactly as a path that was never served would. A request for it is not counted as program usage."
+      security: []
+      responses:
+        "200":
+          description: "The listing, as JSON."
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [receiver, max_clients, version, sdrs]
+                properties:
+                  receiver:
+                    type: object
+                    required: [name, location]
+                    properties:
+                      name:
+                        type: string
+                        description: "The receiver's public name, 1 to 64 bytes."
+                      location:
+                        type: string
+                        description: "Free text, at most 96 bytes; may be empty."
+                      gps:
+                        type: object
+                        description: "Present only when the user typed both a latitude and a longitude."
+                        required: [lat, lon]
+                        properties:
+                          lat:
+                            type: number
+                            description: "Degrees, -90 to 90."
+                          lon:
+                            type: number
+                            description: "Degrees, -180 to 180."
+                  max_clients:
+                    type: integer
+                    description: "The listener limit the host publishes, 1 to 1000."
+                  version:
+                    type: string
+                    description: "The program version, at most 32 printable ASCII characters."
+                  sdrs:
+                    type: array
+                    description: "Always one entry, named like the receiver, of type FoxSDR."
+                    items:
+                      type: object
+                      required: [name, type, profiles]
+                      properties:
+                        name:
+                          type: string
+                        type:
+                          type: string
+                          description: "The constant FoxSDR."
+                        profiles:
+                          type: array
+                          description: "The listed bands (at most 32), in the order the user typed them."
+                          items:
+                            type: object
+                            required: [name, center_freq, sample_rate]
+                            properties:
+                              name:
+                                type: string
+                                description: "1 to 48 bytes."
+                              center_freq:
+                                type: integer
+                                description: "Hz, rounded, 1 to 1e12."
+                              sample_rate:
+                                type: integer
+                                description: "Hz, rounded, 1 to 1e10."
+        "404":
+          description: "The listing is off (the default) or was never set."
   /app.css:
     get:
       tags: [page]

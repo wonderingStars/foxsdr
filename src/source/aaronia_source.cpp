@@ -326,7 +326,31 @@ bool AaroniaSource::open(const std::string& args) {
     const std::string fmt = argValue(args, "format");
     format_ = aa::SampleFormat::Json;
     if (fmt == "float32") { format_ = aa::SampleFormat::Float32; }
-    else if (!fmt.empty() && fmt != "json") { return failOpen("the format must be json or float32"); }
+    else if (fmt == "int16") { format_ = aa::SampleFormat::Int16; }
+    else if (!fmt.empty() && fmt != "json") { return failOpen("the format must be json, float32 or int16"); }
+    remoteConfig_ = false;
+    demodBlock_ = "Block_IQDemodulator_1";
+    spectranBlock_ = "Block_Spectran_V6B_1";
+    spectranOffsetHz_ = 0.0;
+    requestCounter_ = 0;
+    const std::string ctl = argValue(args, "control");
+    if (ctl == "remoteconfig") { remoteConfig_ = true; }
+    else if (!ctl.empty() && ctl != "capture") { return failOpen("control must be capture or remoteconfig"); }
+    if (args.find("demod=") != std::string::npos || args.find("DEMOD=") != std::string::npos) {
+        demodBlock_ = argValue(args, "demod");
+        if (!aa::validBlockName(demodBlock_)) { return failOpen("the demodulator block name must be 1 to 64 letters, digits, spaces, dots, dashes or underscores"); }
+    }
+    if (args.find("spectran=") != std::string::npos || args.find("SPECTRAN=") != std::string::npos) {
+        spectranBlock_ = argValue(args, "spectran");
+        if (!spectranBlock_.empty() && !aa::validBlockName(spectranBlock_)) { return failOpen("the SPECTRAN block name must be 1 to 64 letters, digits, spaces, dots, dashes or underscores, or empty for none"); }
+    }
+    const std::string off = argValue(args, "spectranoffset");
+    if (!off.empty()) {
+        char* e = nullptr;
+        const double v = std::strtod(off.c_str(), &e);
+        if (e == off.c_str() || *e != 0 || !std::isfinite(v) || std::fabs(v) > 1e11) { return failOpen("the SPECTRAN centre offset must be a number of hertz"); }
+        spectranOffsetHz_ = v;
+    }
     spanHz_ = 0.0;
     captureDirty_ = false;
     const std::string rt = argValue(args, "rate");
@@ -371,17 +395,17 @@ void AaroniaSource::closeDevice() {
     const std::string keep = lastError();
     const bool wasActive = active_;
     closeStream();
-    if (wasActive) { control(aa::streamingRequest(false), "stopping the stream"); }
+    if (wasActive && !remoteConfig_) { control(aa::streamingRequest(false), "stopping the stream"); }
     active_ = false;
     markOpen(false);
     if (!keep.empty()) { setError(keep); }
     setName("network radio: (not connected)");
 }
 
-bool AaroniaSource::control(const std::string& json, const char* what) {
+bool AaroniaSource::control(const std::string& json, const char* what, const char* path) {
     int status = 0;
     std::string body, err;
-    if (!httpRoundTrip(host_, port_, "PUT", "/control", json, timeoutMs_, status, body, err)) {
+    if (!httpRoundTrip(host_, port_, "PUT", path, json, timeoutMs_, status, body, err)) {
         setError(std::string(what) + ": " + err);
         return false;
     }
@@ -392,6 +416,16 @@ bool AaroniaSource::control(const std::string& json, const char* what) {
 
 bool AaroniaSource::sendCapture() {
     if (!(centerHz_ > 0.0) && !(spanHz_ > 0.0)) { return true; }
+    if (remoteConfig_) {
+        // The reference client's way: the IQ demodulator block gets the centre and the rate, the SPECTRAN block the centre
+        // (plus an offset the user may give). Both numbered requests are PUT to /remoteconfig.
+        const double centre = centerHz_ > 0.0 ? centerHz_ : 0.0;
+        if (!control(aa::demodulatorRequest(++requestCounter_, demodBlock_, centre, spanHz_ > 0.0 ? spanHz_ : 0.0), "setting the demodulator", "/remoteconfig")) { return false; }
+        if (!spectranBlock_.empty() && centre > 0.0 &&
+            !control(aa::tuneRequest(++requestCounter_, spectranBlock_, centre + spectranOffsetHz_), "tuning the SPECTRAN block", "/remoteconfig")) { return false; }
+        captureDirty_ = false;
+        return true;
+    }
     if (!control(aa::captureRequest(centerHz_, spanHz_ > 0.0 ? spanHz_ : 0.0), "setting the capture")) { return false; }
     captureDirty_ = false;
     return true;
@@ -403,7 +437,8 @@ bool AaroniaSource::start() {
     if (faulted()) { return false; }
     if (active_) { return true; }
     if (captureDirty_ && !sendCapture()) { return false; }
-    if (!control(aa::streamingRequest(true), "starting the stream")) { return false; }
+    // In remoteconfig mode the mission is already running (the reference client sends no start): only the stream is opened.
+    if (!remoteConfig_ && !control(aa::streamingRequest(true), "starting the stream")) { return false; }
     std::string err;
     const SockT s = connectTcp(host_, port_, timeoutMs_, err);
     if (s == kBad) { setError(err); return false; }
@@ -411,7 +446,7 @@ bool AaroniaSource::start() {
     st->sock = s;
     st->silentLimit = std::max(3, timeoutMs_ / kPollMs);
     std::string path = "/stream?format=";
-    path += format_ == aa::SampleFormat::Json ? "json" : "float32";
+    path += format_ == aa::SampleFormat::Json ? "json" : (format_ == aa::SampleFormat::Int16 ? "int16&scale=32767" : "float32");
     path += "&rate_adaption=0";
     const std::string req = "GET " + path + " HTTP/1.1\r\nHost: " + host_ + ":" + std::to_string(port_) + "\r\nAccept: */*\r\n\r\n";
     if (!sendAllBytes(s, req)) { setError("could not send the stream request"); return false; }
@@ -429,7 +464,7 @@ void AaroniaSource::stop() {
     const bool was = active_;
     closeStream();
     active_ = false;
-    if (was) { control(aa::streamingRequest(false), "stopping the stream"); }
+    if (was && !remoteConfig_) { control(aa::streamingRequest(false), "stopping the stream"); }
 }
 
 double AaroniaSource::sampleRateHz() const {

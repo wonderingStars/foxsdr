@@ -15,13 +15,33 @@
 // "the binary part starts behind the record separator character", the 8 MByte drop rule, the Basic and
 // RToken authorisation. SDRangel's Aaronia plug-in (GPL) was NOT read.
 //
-// WHAT THE DOCUMENT DOES NOT SAY, so is a HYPOTHESIS (UNVERIFIED on hardware, built as the stand-in's own
-// reading): (1) the exact order and delimiters around a raw record (taken as: JSON object, an optional LF, one
-// RS byte (0x1E), then samples*2*width bytes, the next record following at once); (2) the I/Q sample rate
-// (taken as the number of pairs divided by endTime - startTime of a packet; the document gives no field for
-// it); (3) that frequencySpan sets the I/Q rate; (4) that an int16 value divided by the packet's scale is the
-// float value (int16 is not offered); (5) the default port (54664 appears in the document's examples; the
-// server block's port is configurable) and the byte order of float32 (little-endian assumed).
+// SECOND SOURCE, added by the oss-net lane (2026-11-12): two MIT-licensed programs by Frank Werner-Krippendorf that
+// drive a SPECTRAN V6 through the same HTTP server, opened and read with their LICENSE files (MIT, "Copyright (c) 2021
+// Frank Werner-Krippendorf"): https://github.com/hb9fxq/gr-aaronia_rtsa (commit 72b291b09c503fa38ce7a7805d1e4e7b860e73ba;
+// a GNU Radio block, but every file read carries the MIT header and none is GPL: lib/rtsa_http_server_source_impl.{cc,h},
+// include/.../rtsa_http_server_source.h, grc/*.yml) and the library it calls, https://github.com/hb9fxq/libspectranstream
+// (commit d50791e5de02d49132e62314909dd18c8d871b57: lib/spectranstream.{cpp,h}, app/test_req.http, README.md). From them
+// (behaviour of a client that worked against a real SPECTRAN V6; the code here is this project's own):
+//   * a raw record is: the JSON header, up to and including one 0x1E byte, then immediately samples * 2 * width bytes of
+//     binary (samples counts COMPLEX samples), then the next record: the reading this parser already had (its optional
+//     LF is part of the JSON bytes in the reference), so the document's ambiguity about the delimiting (earlier hypothesis 1) and the int16 scale (earlier hypothesis 4) are
+//     settled by a working client;
+//   * the stream URLs are "/stream?format=float32" and "/stream?format=int16&scale=32767" (int16 / 32767 is the value);
+//   * the rate and the centre are set by PUT /remoteconfig {"request":n,"receiverName":block,"config":{"type":"group",
+//     "items":[{"type":"group","name":"main","items":[{"type":"float","name":"centerfreq","value":..},
+//     {"type":"float","name":"samplerate","value":..},{"type":"float","name":"spanfreq","value":..}]}]}} to an
+//     "IQ Demodulator" block (samplerate and spanfreq both the wanted rate) and centerfreq to the SPECTRAN block;
+//     the blocks are named by the user's mission (defaults "Block_IQDemodulator_1", "Block_Spectran_V6B_1");
+//   * the probe is a GET /info whose answer contains "HTTPServer"; no start/stop request is sent by the reference.
+// Not opened: SatDump, SDR++, SDRangel and sdr-aaronia-rs (GPL), and no vendor SDK.
+//
+// WHAT NEITHER SOURCE SAYS, so is still a HYPOTHESIS (UNVERIFIED on hardware, built as the stand-in's own reading;
+// the numbers keep the earlier list's):
+// (2) that the I/Q sample rate of a stream is the number of pairs divided by endTime - startTime of a packet (the
+// reference takes the rate it configured; the measured rate is kept as a cross-check); (3) that frequencySpan sets the
+// rate in the /control path (the /remoteconfig path of the reference sets it explicitly); (5) the default port (54664
+// appears in the document's examples and in the reference's default endpoint 127.0.0.1:54664) and the byte order of
+// float32 (little-endian: the reference copies the bytes as they come, on little-endian machines).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
@@ -33,6 +53,7 @@
 #include <cstdint>
 #include <cstring>
 #include <map>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -178,7 +199,12 @@ private:
     bool finished_ = false;
 };
 
-enum class SampleFormat { Json, Float32 };
+// Json: the samples are a JSON array. Float32: raw little-endian float32 pairs after the record separator. Int16: raw
+// little-endian int16 pairs after it, requested with scale=32767 so that value / 32767 is the float (the reference client
+// below does exactly this: "/stream?format=int16&scale=32767").
+enum class SampleFormat { Json, Float32, Int16 };
+
+inline bool isRaw(SampleFormat f) { return f != SampleFormat::Json; }
 
 struct IqRecord {
     double startTime = 0, endTime = 0;
@@ -232,13 +258,21 @@ public:
                         buf_.erase(buf_.begin(), buf_.begin() + static_cast<std::ptrdiff_t>(i + 1));
                         binaryDelimiterDone_ = true;
                     }
-                    const std::size_t need = static_cast<std::size_t>(rawPairs_) * 8;
+                    const std::size_t pairBytes = fmt_ == SampleFormat::Int16 ? 4 : 8;
+                    const std::size_t need = static_cast<std::size_t>(rawPairs_) * pairBytes;
                     if (buf_.size() < need) { return; }
                     cur_.samples.reserve(static_cast<std::size_t>(rawPairs_));
                     for (std::size_t k = 0; k < static_cast<std::size_t>(rawPairs_); ++k) {
                         float re, im;
-                        std::memcpy(&re, &buf_[8 * k], 4);
-                        std::memcpy(&im, &buf_[8 * k + 4], 4);
+                        if (fmt_ == SampleFormat::Int16) {
+                            const std::int16_t a = static_cast<std::int16_t>(buf_[4 * k] | (buf_[4 * k + 1] << 8));
+                            const std::int16_t b = static_cast<std::int16_t>(buf_[4 * k + 2] | (buf_[4 * k + 3] << 8));
+                            re = static_cast<float>(a) / 32767.0f;
+                            im = static_cast<float>(b) / 32767.0f;
+                        } else {
+                            std::memcpy(&re, &buf_[8 * k], 4);
+                            std::memcpy(&im, &buf_[8 * k + 4], 4);
+                        }
                         if (!std::isfinite(re) || !std::isfinite(im)) { re = 0; im = 0; ++nonFinite_; }
                         cur_.samples.emplace_back(re, im);
                     }
@@ -288,7 +322,7 @@ private:
         const bool a = num("startFrequency", cur_.startFrequency), b = num("endFrequency", cur_.endFrequency);
         cur_.hasFrequency = a && b;
         if (!isIq_) {
-            if (j.contains("samples") && j["samples"].is_number() && fmt_ == SampleFormat::Float32) {
+            if (j.contains("samples") && j["samples"].is_number() && isRaw(fmt_)) {
                 // a non-I/Q raw packet still carries binary data of a size we cannot know: stop rather than guess
                 err_ = "a non-I/Q packet arrived in the raw format, whose size this client cannot know";
                 return false;
@@ -343,6 +377,47 @@ inline std::string captureRequest(double centerHz, double spanHz) {
     j["type"] = "capture";
     return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
+
+// The second way to set the rate and the centre, taken from the MIT-licensed reference client (hb9fxq/libspectranstream,
+// app/test_req.http and lib/spectranstream.cpp, UpdateDemodulator; see THIRD-PARTY-NOTICES.md): a PUT of
+// /remoteconfig with a numbered request addressed to a named block of the user's RTSA-Suite mission. The reference
+// configures an "IQ Demodulator" block (centerfreq, samplerate, spanfreq: the last two both the wanted sample rate) and,
+// separately, the SPECTRAN block's centerfreq. Block names are the mission's own: the reference's defaults are
+// "Block_IQDemodulator_1" and "Block_Spectran_V6B_1".
+inline std::string remoteConfigRequest(long long requestId, const std::string& receiverName, const std::vector<std::pair<std::string, double>>& floats) {
+    nlohmann::json items = nlohmann::json::array();
+    for (const auto& f : floats) {
+        nlohmann::json it;
+        it["type"] = "float";
+        it["name"] = f.first;
+        it["value"] = f.second;
+        items.push_back(it);
+    }
+    nlohmann::json main;
+    main["type"] = "group";
+    main["name"] = "main";
+    main["items"] = items;
+    nlohmann::json cfg;
+    cfg["type"] = "group";
+    cfg["items"] = nlohmann::json::array({main});
+    nlohmann::json j;
+    j["request"] = requestId;
+    j["receiverName"] = receiverName;
+    j["config"] = cfg;
+    return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+}
+inline std::string demodulatorRequest(long long id, const std::string& block, double centerHz, double rateHz) {
+    return remoteConfigRequest(id, block, {{"centerfreq", centerHz}, {"samplerate", rateHz}, {"spanfreq", rateHz}});
+}
+inline std::string tuneRequest(long long id, const std::string& block, double centerHz) {
+    return remoteConfigRequest(id, block, {{"centerfreq", centerHz}});
+}
+// A block name the user typed: 1..64 printable ASCII characters, none of which can break out of a JSON string by itself.
+inline bool validBlockName(const std::string& n) {
+    if (n.empty() || n.size() > 64) { return false; }
+    return std::all_of(n.begin(), n.end(), [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-' || c == '.' || c == ' '; });
+}
+
 inline std::string streamingRequest(bool start) {
     nlohmann::json j;
     j["start"] = start;

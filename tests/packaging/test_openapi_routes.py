@@ -267,7 +267,10 @@ def handler_statuses(body):
     for i, ln in enumerate(lines):
         if 'res.set_content(' in ln or 'serveFont(' in ln or 'set_chunked_content_provider' in ln:
             before = chr(10).join(lines[max(0, i - 3):i])
-            if 'res.status' not in before:
+            # a status assigned inside an if-block that has already been closed (and returned) before this line does not
+            # colour the answer below it
+            tail = before[before.rfind('res.status'):] if 'res.status' in before else ''
+            if 'res.status' not in before or '}' in tail:
                 out.add('200')
     if re.search(r'if\s*\(!authorised\(req\)\)', body):
         out.add('401')
