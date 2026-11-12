@@ -169,6 +169,10 @@ foreach(src ${_foxsdr_slint_test_sources})
             # (../export_logic.cpp is added by name above: the unit's own logic file)
             list(APPEND _extra "${FOXSDR_REPO_ROOT}/src/core/png_decode.cpp")
         endif()
+        if(unit STREQUAL "mapj")
+            # SCREEN LANE J (docs/multi-radio-records/screen-j.md): ../mapj_logic.cpp (added by name above) over the compositor it feeds (cells, grid, washed and thin trails).
+            list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../map_compositor.cpp" "${FOXSDR_REPO_ROOT}/src/core/nmea.cpp")
+        endif()
         if(unit STREQUAL "input")
             # The scripted input's parser and driver (docs 6.47): ../input_script.cpp, no Slint - the fake target in the test stands for the window.
             list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../input_script.cpp")
