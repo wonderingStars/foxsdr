@@ -58,6 +58,9 @@ public:
     // received). False with lastError() set.
     bool connectTo(const std::string& host, std::uint16_t port);
     std::uint16_t localPort() const { return localPort_; }
+    // Asks the OS for a larger receive queue (a reader that is descheduled for a few tens of ms on a busy
+    // machine otherwise loses packets of a fast stream). Best effort; false if the OS refused.
+    bool setReceiveBuffer(int bytes);
 
     bool sendAll(const void* data, std::size_t n) override;
     bool recvAll(void* data, std::size_t n) override;
