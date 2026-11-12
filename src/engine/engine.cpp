@@ -4902,6 +4902,18 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         r.spectrumFftSize = static_cast<std::uint32_t>(rxa.spectrumFft_);
         r.spectrumWindow = static_cast<std::uint32_t>(rxa.spectrumWindow_);
         r.spectrumFrameRateHz = rxa.spectrumFps_;
+        if (const cascade::source::IqFileSource* fs = dynamic_cast<const cascade::source::IqFileSource*>(&const_cast<cascade::core::Pipeline&>(rxa.pipeline_).rawSource() /* (read only: the file source's readers are atomics) */); fs != nullptr && fs->totalFrames() > 0) {
+            const double rate = fs->sampleRateHz();
+            r.fileSource = 1u;
+            r.filePositionSec = static_cast<double>(fs->positionFrames()) / rate;
+            r.fileDurationSec = static_cast<double>(fs->totalFrames()) / rate;
+            if (fs->loopOn()) {
+                r.fileLoopStartSec = static_cast<double>(fs->loopStartFrame()) / rate;
+                r.fileLoopEndSec = static_cast<double>(fs->loopEndFrame()) / rate;
+            }
+            r.fileStartUnixMs = static_cast<double>(fs->startUnixMs());
+            r.fileStartSource = static_cast<std::uint32_t>(fs->startSource());
+        }
         r.noiseSquelchOn = rxa.noiseSquelchOn_ ? 1u : 0u;
         r.noiseSquelchThresholdDb = rxa.noiseSquelchThresholdDb_;
         r.noiseSquelchTailMs = rxa.noiseSquelchTailMs_;
@@ -7303,6 +7315,34 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             std::string why;
             const std::int32_t st = applyRecordNameOp(c, text, why);
             if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
+            return res;
+        }
+        case FOXAPP_OP_FILE_SEEK: {
+            cascade::source::IqFileSource* file = dynamic_cast<cascade::source::IqFileSource*>(&rx().pipeline_.rawSource());
+            if (file == nullptr || file->totalFrames() == 0) { return refuse(FOXAPI_UNSUPPORTED, "this radio is not playing an I/Q file"); }
+            const double rate = file->sampleRateHz();
+            const double lengthSec = static_cast<double>(file->totalFrames()) / rate;
+            double sec = c.num[0];
+            if (c.ival[0] == 1) { sec *= lengthSec; }
+            if (!std::isfinite(sec) || sec < 0.0 || sec >= lengthSec) { return refuse(FOXAPI_OUT_OF_RANGE, "the place is inside the recording"); }
+            if (!file->seekFrame(static_cast<std::uint64_t>(std::llround(sec * rate)))) { return refuse(FOXAPI_OUT_OF_RANGE, "the place is inside the recording"); }
+            res.applied[0] = sec;
+            return res;
+        }
+        case FOXAPP_OP_FILE_LOOP: {
+            cascade::source::IqFileSource* file = dynamic_cast<cascade::source::IqFileSource*>(&rx().pipeline_.rawSource());
+            if (file == nullptr || file->totalFrames() == 0) { return refuse(FOXAPI_UNSUPPORTED, "this radio is not playing an I/Q file"); }
+            if (c.ival[0] == 0) {
+                file->clearLoop();
+                return res;
+            }
+            const double rate = file->sampleRateHz();
+            const double a = c.num[0], b = c.num[1];
+            if (!std::isfinite(a) || !std::isfinite(b) || a < 0.0 || !(a < b) || !file->setLoopFrames(static_cast<std::uint64_t>(std::llround(a * rate)), static_cast<std::uint64_t>(std::llround(b * rate)))) {
+                return refuse(FOXAPI_OUT_OF_RANGE, "the loop runs from a start to a later end, both inside the recording");
+            }
+            res.applied[0] = a;
+            res.applied[1] = b;
             return res;
         }
         case FOXAPP_OP_SET_STEREO_SYSTEM:

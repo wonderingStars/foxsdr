@@ -451,6 +451,14 @@ typedef struct FoxReceiverState {
     uint32_t spectrumFftSize;          /* a power of two, 1024..131072 (default 1024); the spectrum frames carry this many bins (a reader's cap reduces them) */
     uint32_t spectrumWindow;           /* 0 rectangular, 1 Hann, 2 Hamming, 3 Blackman-Harris (default), 4 flat-top */
     double spectrumFrameRateHz;        /* 0 automatic (the legacy cadence at 1024 / Blackman-Harris, else 30 a second), or 1..120 */
+    /* ---- 0.3 (I/Q file playback; docs/API.md 6.19): measurements about a radio that is playing an I/Q file - they move nothing. ---- */
+    double filePositionSec;            /* where the next sample comes from, seconds from the start of the recording */
+    double fileDurationSec;            /* the length of the recording, seconds (0 when the radio is not playing a file) */
+    double fileLoopStartSec;           /* the A-B loop, seconds; both 0 when there is none */
+    double fileLoopEndSec;
+    double fileStartUnixMs;            /* the recording's real start, milliseconds since 1970 UTC (0 unknown) */
+    uint32_t fileSource;               /* 1 while this radio plays an I/Q file */
+    uint32_t fileStartSource;          /* where fileStartUnixMs came from: 0 unknown, 1 the file's name, 2 the file's last-write time minus its length */
 } FoxReceiverState;
 #define FOXAPI_EQ_BANDS 8
 #define FOXAPI_NOTCH_SLOTS 10

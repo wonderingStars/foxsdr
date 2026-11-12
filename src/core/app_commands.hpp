@@ -160,6 +160,12 @@
 //   (OIRT polar modulation while the tuned frequency is inside 65.8 to 74 MHz, the pilot-tone system everywhere else: the default), 1 = the pilot-tone system always, 2 = OIRT always; any other value is
 //   OUT_OF_RANGE. NO_CHANGE when it is already so. Not saved (a restart returns to automatic). fact.radio.<n>.stereo.system reads auto / pilot / oirt, fact.radio.<n>.stereo.decoder the decoder in the
 //   path now (pilot / oirt: the OIRT decoder runs only in WFM at a channel rate of 100 kHz or more).
+//   FILE_SEEK and FILE_LOOP (SETTINGS; engine serial lane A, row P15, source/iq_file_source.hpp, docs/api-0.3-additions.md 9.39): the seek bar and the A-B loop of a radio that is playing an I/Q file (target).
+//   FILE_SEEK: num[0] is the place to play from, ival[0] = 0 in seconds from the start of the recording, 1 as a fraction 0..1 of its length; OUT_OF_RANGE past either end, UNSUPPORTED when the radio is
+//   not playing a file. FILE_LOOP: ival[0] = 1 loops between num[0] and num[1] seconds (0 <= start < end <= the length; the playing wraps from the end back to the start with no gap), ival[0] = 0 clears
+//   the loop. The position, length, loop and real start time are read back from the radio's state (filePositionSec and its neighbours); none of it is saved (a file starts from the top).
+#define FOXAPP_OP_FILE_SEEK              0x861Au /* ival[0]: 0 seconds / 1 fraction of the length; num[0]: the place. Addresses one radio (target) */
+#define FOXAPP_OP_FILE_LOOP              0x861Bu /* ival[0]: 1 loop between num[0] and num[1] seconds / 0 clear. Addresses one radio (target) */
 #define FOXAPP_OP_SET_STEREO_SYSTEM      0x8619u /* ival[0]: 0 automatic / 1 pilot tone / 2 OIRT. Addresses one radio (target) */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

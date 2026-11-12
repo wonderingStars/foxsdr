@@ -583,6 +583,10 @@ void countersMoveByGroup() {
         {"the CW pitch", [](PublishedState& p) { p.rx.cwPitchHz = 600.0; }, "seq mode"},
         {"an equaliser band", [](PublishedState& p) { p.rx.eqDb[4] = 5.0; }, "seq mode"},
         {"the audio high-pass", [](PublishedState& p) { p.rx.audioHighPassHz = 300; }, "seq mode"},
+        {"the file position (a measurement)", [](PublishedState& p) { p.rx.filePositionSec = 12.5; }, ""},
+        {"the file length (a measurement)", [](PublishedState& p) { p.rx.fileDurationSec = 60.0; p.rx.fileSource = 1; }, ""},
+        {"the file loop (a measurement)", [](PublishedState& p) { p.rx.fileLoopStartSec = 1.0; p.rx.fileLoopEndSec = 2.0; }, ""},
+        {"the file start (a measurement)", [](PublishedState& p) { p.rx.fileStartUnixMs = 1.7e12; p.rx.fileStartSource = 1; }, ""},
         {"the audio low-pass", [](PublishedState& p) { p.rx.audioLowPassHz = 2400; }, "seq mode"},
         {"the spectrum FFT size", [](PublishedState& p) { p.rx.spectrumFftSize = 8192; }, "seq mode"},
         {"the spectrum window", [](PublishedState& p) { p.rx.spectrumWindow = 1; }, "seq mode"},
@@ -694,7 +698,7 @@ void rdsGroupAndLayout() {
     CHECK(offsetof(FoxReceiverState, toneHz) < offsetof(FoxReceiverState, toneCode));
     CHECK(offsetof(FoxReceiverState, toneDetectedHz) > offsetof(FoxReceiverState, toneRemove));
     CHECK(offsetof(FoxReceiverState, audioGate) > offsetof(FoxReceiverState, toneGate));
-    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, spectrumFrameRateHz) + sizeof(double)) < 8u);
+    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, fileStartSource) + sizeof(std::uint32_t)) < 8u);
     CHECK(FOXAPI_RDS_PS_CHARS == 9 && FOXAPI_RDS_TEXT_CHARS == 65);
     // The six RDS bits are one word's low bits, each its own.
     const std::uint32_t bits[] = {FOXAPI_RDS_SYNCED, FOXAPI_RDS_PI_VALID, FOXAPI_RDS_PS_VALID,
@@ -779,7 +783,7 @@ void scanGroupAndLayout() {
     CHECK(offsetof(FoxReceiverState, toneHz) < offsetof(FoxReceiverState, toneCode));
     CHECK(offsetof(FoxReceiverState, toneDetectedHz) > offsetof(FoxReceiverState, toneRemove));
     CHECK(offsetof(FoxReceiverState, audioGate) > offsetof(FoxReceiverState, toneGate));
-    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, spectrumFrameRateHz) + sizeof(double)) < 8u);
+    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, fileStartSource) + sizeof(std::uint32_t)) < 8u);
     // The state words are 0..3, each its own.
     CHECK(FOXAPI_SCANNER_IDLE == 0u && FOXAPI_SCANNER_SCANNING == 1u && FOXAPI_SCANNER_PAUSED == 2u &&
           FOXAPI_SCANNER_HOLDING == 3u);

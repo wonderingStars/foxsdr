@@ -2514,6 +2514,12 @@ void macroOps(AppWindow& a) {
     CHECK(refused(A::apply(a, text(FOXAPP_OP_SET_RECORD_NAME, "{mode}/{date}")), FOXAPI_NO_CHANGE));
     CHECK(ok(A::apply(a, text(FOXAPP_OP_SET_RECORD_NAME, ""))));
     // THE STEREO SYSTEM (FOXAPP_OP_SET_STEREO_SYSTEM; the decoding itself is tests/test_pipeline_oirt.cpp's and the engine's behaviour tests/test_engine_api_oirt.cpp's).
+    // THE SEEK BAR AND THE A-B LOOP (FOXAPP_OP_FILE_SEEK / FILE_LOOP; the playing itself is tests/test_iq_file_seek.cpp's and tests/test_engine_api_fileseek.cpp's): the window's radio is on the generator.
+    covering(FOXAPP_OP_FILE_SEEK);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_FILE_SEEK, 0)), FOXAPI_UNSUPPORTED));
+    covering(FOXAPP_OP_FILE_LOOP);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_FILE_LOOP, 1)), FOXAPI_UNSUPPORTED));
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_FILE_LOOP, 0)), FOXAPI_UNSUPPORTED));
     covering(FOXAPP_OP_SET_STEREO_SYSTEM);
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 3)), FOXAPI_OUT_OF_RANGE));
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 0)), FOXAPI_NO_CHANGE));   // automatic is the default

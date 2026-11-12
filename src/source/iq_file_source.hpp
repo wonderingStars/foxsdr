@@ -90,6 +90,27 @@ public:
     // this by parking the source thread across restarts).
     std::size_t read(std::complex<float>* dst, std::size_t n) override;
 
+    // SEEK, A-B LOOP AND POSITION (engine serial lane A, row P15). Any thread may call these; they only record the request (atomics, no file I/O) and read() applies it
+    // on the source thread BEFORE it produces anything, so the first block delivered after seekFrame() returned starts at the new frame. A loop wraps inside one read():
+    // frame b-1 is followed by frame a, no gap and no repeat; a loop end moved below the play position, or a seek past b, continues from a. With no loop the file wraps
+    // from its last frame to its first as it always did. totalFrames() is zero before a successful open().
+    std::uint64_t totalFrames() const { return frameCount_; }
+    // The frame read() will deliver next (a seek is reflected at once, before the reader has applied it).
+    std::uint64_t positionFrames() const { return position_.load(std::memory_order_acquire); }
+    // False (nothing changed) when no file is open or `frame` is not below totalFrames().
+    bool seekFrame(std::uint64_t frame);
+    // False (nothing changed) unless a < b <= totalFrames().
+    bool setLoopFrames(std::uint64_t a, std::uint64_t b);
+    void clearLoop();
+    bool loopOn() const { return loopOn_.load(std::memory_order_acquire); }
+    std::uint64_t loopStartFrame() const { return loopA_.load(std::memory_order_acquire); }
+    std::uint64_t loopEndFrame() const { return loopB_.load(std::memory_order_acquire); }
+    // The recording's real start, ms since 1970 UTC, and where it came from: 1 the date and time in the file name (YYYYMMDD_HHMMSS or YYYY-MM-DD_HH-MM-SS, read as the
+    // computer's local time, which is how FoxSDR names its takes), 2 the file's last-write time minus its length (a recording ends when its file was last written),
+    // 0 unknown (then 0 ms). Worked out once at open().
+    std::int64_t startUnixMs() const { return startUnixMs_; }
+    int startSource() const { return startSource_; }
+
     // "IQ file: <basename>" after a successful open, "IQ file" before.
     const char* name() const override { return name_.c_str(); }
 
@@ -167,6 +188,15 @@ private:
     // See faulted(): set by read() on the source thread, read by anyone.
     std::atomic<bool> faulted_{false};
     std::vector<unsigned char> ioBuf_;  // small streaming buffer, never the file
+    // P15: the published position, the pending seek (-1 none) and the loop. Written by any thread, applied by read().
+    std::atomic<std::uint64_t> position_{0};
+    std::atomic<std::int64_t> seekRequest_{-1};
+    std::atomic<bool> loopOn_{false};
+    std::atomic<std::uint64_t> loopA_{0};
+    std::atomic<std::uint64_t> loopB_{0};
+    std::int64_t startUnixMs_ = 0;
+    int startSource_ = 0;
+    void seekTo(std::uint64_t frame);   // the source thread's (or start()'s): moves the stream and nextFrame_
 };
 
 }  // namespace cascade::source

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "source/iq_file_source.hpp"
+#include "source/file_start_time.hpp"
 
 #include <bit>
 #include <cmath>
@@ -231,8 +232,18 @@ bool IqFileSource::open(const std::string& wavPath) {
     dataOffset_ = dataOff;
     frameCount_ = frames;
     nextFrame_ = 0;
+    position_.store(0, std::memory_order_release);
+    seekRequest_.store(-1, std::memory_order_release);
+    loopOn_.store(false, std::memory_order_release);
+    loopA_.store(0, std::memory_order_release);
+    loopB_.store(0, std::memory_order_release);
     bytesPerFrame_ = bpf;
     ioBuf_.assign(kIoFrames * bpf, 0);
+    {
+        const auto when = cascade::source::recordingStart(wavPath, static_cast<double>(frames) / static_cast<double>(rateHz));
+        startUnixMs_ = when.first;
+        startSource_ = when.second;
+    }
     const std::size_t sep = wavPath.find_last_of("/\\");
     name_ = "IQ file: " +
             (sep == std::string::npos ? wavPath : wavPath.substr(sep + 1));
@@ -250,9 +261,9 @@ bool IqFileSource::start() {
     }
     // Rewind so every start() replays deterministically from frame 0 —
     // reproducibility is the whole point of a file source.
-    file_.clear();
-    file_.seekg(static_cast<std::streamoff>(dataOffset_));
-    nextFrame_ = 0;
+    // (a seek made while stopped is honoured: the position bar is a promise)
+    const std::int64_t pending = seekRequest_.exchange(-1, std::memory_order_acq_rel);
+    seekTo(pending >= 0 && static_cast<std::uint64_t>(pending) < frameCount_ ? static_cast<std::uint64_t>(pending) : 0u);
     running_.store(true, std::memory_order_release);
     return true;
 }
@@ -307,6 +318,30 @@ void IqFileSource::convertFrames(const unsigned char* raw,
     }
 }
 
+void IqFileSource::seekTo(std::uint64_t frame) {
+    file_.clear();
+    file_.seekg(static_cast<std::streamoff>(dataOffset_ + frame * bytesPerFrame_));
+    nextFrame_ = frame;
+    position_.store(frame, std::memory_order_release);
+}
+
+bool IqFileSource::seekFrame(std::uint64_t frame) {
+    if (!opened_ || frame >= frameCount_) { return false; }
+    seekRequest_.store(static_cast<std::int64_t>(frame), std::memory_order_release);
+    position_.store(frame, std::memory_order_release);   // the bar jumps the moment it is clicked
+    return true;
+}
+
+bool IqFileSource::setLoopFrames(std::uint64_t a, std::uint64_t b) {
+    if (!opened_ || !(a < b) || b > frameCount_) { return false; }
+    loopA_.store(a, std::memory_order_release);
+    loopB_.store(b, std::memory_order_release);
+    loopOn_.store(true, std::memory_order_release);
+    return true;
+}
+
+void IqFileSource::clearLoop() { loopOn_.store(false, std::memory_order_release); }
+
 std::size_t IqFileSource::readRaw(unsigned char* dst, std::size_t bytes) {
     file_.read(reinterpret_cast<char*>(dst),
                static_cast<std::streamsize>(bytes));
@@ -356,17 +391,23 @@ std::size_t IqFileSource::read(std::complex<float>* dst, std::size_t n) {
         if (!running_.load(std::memory_order_acquire)) {
             return delivered;
         }
-        if (nextFrame_ >= frameCount_) {
-            // The loop seam: jump straight back to frame 0 so the first
-            // frame follows the last with no gap and no repeats. clear()
-            // first — the previous read may have parked the stream on EOF
+        // A seek asked for since the last chunk is applied before anything is produced from the old place.
+        const std::int64_t pending = seekRequest_.exchange(-1, std::memory_order_acq_rel);
+        if (pending >= 0 && static_cast<std::uint64_t>(pending) < frameCount_) { seekTo(static_cast<std::uint64_t>(pending)); }
+        // The end of what plays: the loop's end while a loop is set (and it lies inside the file), else the end of the file.
+        const bool looping = loopOn_.load(std::memory_order_acquire);
+        const std::uint64_t loopA = loopA_.load(std::memory_order_acquire);
+        const std::uint64_t loopB = loopB_.load(std::memory_order_acquire);
+        const bool loopOk = looping && loopA < loopB && loopB <= frameCount_;
+        const std::uint64_t endFrame = loopOk ? loopB : frameCount_;
+        if (nextFrame_ >= endFrame) {
+            // The loop seam: jump straight back (to the loop's start, else to frame 0) so the first frame follows the last
+            // with no gap and no repeats. clear() first - the previous read may have parked the stream on EOF
             // when the data chunk runs to the end of the file.
-            file_.clear();
-            file_.seekg(static_cast<std::streamoff>(dataOffset_));
-            nextFrame_ = 0;
+            seekTo(loopOk ? loopA : 0u);
         }
         std::size_t want = n - delivered;
-        const std::uint64_t left = frameCount_ - nextFrame_;
+        const std::uint64_t left = endFrame - nextFrame_;
         if (static_cast<std::uint64_t>(want) > left) {
             want = static_cast<std::size_t>(left);
         }
@@ -392,6 +433,7 @@ std::size_t IqFileSource::read(std::complex<float>* dst, std::size_t n) {
         }
         convertFrames(ioBuf_.data(), dst + delivered, want);
         nextFrame_ += want;
+        if (seekRequest_.load(std::memory_order_acquire) < 0) { position_.store(nextFrame_, std::memory_order_release); }   // (a seek asked for meanwhile owns the bar)
         delivered += want;
     }
     return delivered;
