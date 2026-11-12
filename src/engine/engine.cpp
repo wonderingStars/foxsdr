@@ -4899,6 +4899,8 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         for (std::size_t i = 0; i < rxa.eqDb_.size(); ++i) { r.eqDb[i] = rxa.eqDb_[i]; }
         r.audioHighPassHz = static_cast<std::uint32_t>(rxa.audioHpHz_);
         r.audioLowPassHz = static_cast<std::uint32_t>(rxa.audioLpHz_);
+        r.stereoPlaceMode = static_cast<std::uint32_t>(rxa.stereoPlaceMode_);
+        r.stereoPlaceValue = rxa.stereoPlaceValue_;
         r.cwPeakOn = rxa.cwPeakOn_ ? 1u : 0u;
         r.cwPeakWidthHz = rxa.cwPeakWidthHz_;
         r.cwPeakBoostDb = rxa.cwPeakBoostDb_;
@@ -7660,6 +7662,16 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[1] = boost;
             return res;
         }
+        case FOXAPI_OP_SET_STEREO_PLACE: {
+            Receiver& rxs = rx();
+            if (!rxs.pipeline_.setStereoPlace(static_cast<int>(c.ival[0]), c.num[0])) {
+                return refuse(FOXAPI_OUT_OF_RANGE, "stereo placement is 0 off, 1 pan (-1 to 1), 2 pseudo-stereo (0 to 1) or 3 binaural (-90 to 90 degrees)");
+            }
+            rxs.stereoPlaceMode_ = static_cast<int>(c.ival[0]);
+            rxs.stereoPlaceValue_ = c.num[0];
+            res.applied[0] = c.num[0];
+            return res;
+        }
         case FOXAPI_OP_SET_CW_PITCH: {
             Receiver& rxs = rx();
             if (!rxs.pipeline_.setCwPitchHz(c.num[0])) { return refuse(FOXAPI_OUT_OF_RANGE, "the CW pitch is 300 to 1200 Hz"); }
@@ -9543,6 +9555,8 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         for (std::size_t i = 0; i < cfg.eqDb.size() && i < 8; ++i) { rx().eqDb_[i] = cfg.eqDb[i]; }
         rx().audioHpHz_ = cfg.audioHighPassHz;
         rx().audioLpHz_ = cfg.audioLowPassHz;
+        rx().stereoPlaceMode_ = cfg.stereoPlaceMode;
+        rx().stereoPlaceValue_ = cfg.stereoPlaceValue;
         rx().cwPeakOn_ = cfg.cwPeakOn;
         rx().cwPeakWidthHz_ = cfg.cwPeakWidthHz;
         rx().cwPeakBoostDb_ = cfg.cwPeakBoostDb;
@@ -9557,6 +9571,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         rx().noiseSquelchThresholdDb_ = cfg.noiseSquelchThresholdDb;
         rx().noiseSquelchTailMs_ = cfg.noiseSquelchTailMs;
         (void)rx().pipeline_.setNoiseSquelch(rx().noiseSquelchOn_, rx().noiseSquelchThresholdDb_, rx().noiseSquelchTailMs_);
+        (void)rx().pipeline_.setStereoPlace(rx().stereoPlaceMode_, rx().stereoPlaceValue_);
         (void)rx().pipeline_.setCwPeak(rx().cwPeakOn_, rx().cwPeakWidthHz_, rx().cwPeakBoostDb_);
         (void)rx().pipeline_.setAfc(rx().afcOn_, rx().afcPullInHz_);
         (void)rx().pipeline_.setIqCorrection(rx().iqCorrect_);
@@ -10130,6 +10145,8 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
         }
         cfg.audioHighPassHz = rxa.audioHpHz_;
         cfg.audioLowPassHz = rxa.audioLpHz_;
+        cfg.stereoPlaceMode = rxa.stereoPlaceMode_;
+        cfg.stereoPlaceValue = rxa.stereoPlaceValue_;
         cfg.cwPeakOn = rxa.cwPeakOn_;
         cfg.cwPeakWidthHz = rxa.cwPeakWidthHz_;
         cfg.cwPeakBoostDb = rxa.cwPeakBoostDb_;
@@ -10247,6 +10264,7 @@ void Engine::initialise() {
         (void)rx().pipeline_.setCwPitchHz(rx().cwPitchHz_);
         pushAudioEq();
         (void)rx().pipeline_.setNoiseSquelch(rx().noiseSquelchOn_, rx().noiseSquelchThresholdDb_, rx().noiseSquelchTailMs_);
+        (void)rx().pipeline_.setStereoPlace(rx().stereoPlaceMode_, rx().stereoPlaceValue_);
         (void)rx().pipeline_.setCwPeak(rx().cwPeakOn_, rx().cwPeakWidthHz_, rx().cwPeakBoostDb_);
         (void)rx().pipeline_.setAfc(rx().afcOn_, rx().afcPullInHz_);
         (void)rx().pipeline_.setIqCorrection(rx().iqCorrect_);

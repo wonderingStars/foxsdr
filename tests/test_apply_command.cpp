@@ -466,6 +466,8 @@ struct AppWindowTestAccess {
     static bool afcPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.afcOn(); }); }
     static bool cwPeakRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->cwPeakOn_; }); }
     static bool cwPeakPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.cwPeakOn(); }); }
+    static int placeRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->stereoPlaceMode_; }); }
+    static int placePipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.stereoPlaceMode(); }); }
     static double cwPitchPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.cwPitchHz(); }); }
     static bool nsqRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->noiseSquelchOn_; }); }
     static double nsqThrRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->noiseSquelchThresholdDb_; }); }
@@ -1338,6 +1340,21 @@ void receiverOps(AppWindow& a) {
         CHECK(A::cwPeakRx(a) && A::cwPeakPipe(a));
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_CW_PEAK, 0, 0))));
         CHECK(!A::cwPeakRx(a) && !A::cwPeakPipe(a));
+    }
+    covering(FOXAPI_OP_SET_STEREO_PLACE);
+    {
+        CHECK(A::placeRx(a) == 0 && A::placePipe(a) == 0);
+        FoxCommand sp = ints(FOXAPI_OP_SET_STEREO_PLACE, 1);
+        sp.num[0] = -0.5;
+        CHECK(ok(A::apply(a, sp)));
+        CHECK(A::placeRx(a) == 1 && A::placePipe(a) == 1);
+        sp.num[0] = 2.0;
+        CHECK(refused(A::apply(a, sp), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::placeRx(a) == 1 && A::placePipe(a) == 1);
+        sp.ival[0] = 0;
+        sp.num[0] = 0.0;
+        CHECK(ok(A::apply(a, sp)));
+        CHECK(A::placeRx(a) == 0 && A::placePipe(a) == 0);
     }
     covering(FOXAPI_OP_SET_CW_PITCH);
     {

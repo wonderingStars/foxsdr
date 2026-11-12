@@ -1429,6 +1429,30 @@ bool Pipeline::cwPeakOn() const { return mirrorCwPeakOn_.load(std::memory_order_
 double Pipeline::cwPeakWidthHz() const { return mirrorCwPeakWidth_.load(std::memory_order_relaxed); }
 double Pipeline::cwPeakBoostDb() const { return mirrorCwPeakBoost_.load(std::memory_order_relaxed); }
 
+// --- stereo placement (engine serial lane A, F20 and D5) -------------------------------------------------------------------------------------------------
+bool Pipeline::setStereoPlace(int mode, double value) {
+    if (mode < 0 || mode > 3 || !std::isfinite(value)) { return false; }
+    if (mode == 1 && (value < -1.0 || value > 1.0)) { return false; }
+    if (mode == 2 && (value < 0.0 || value > 1.0)) { return false; }
+    if (mode == 3 && (value < -90.0 || value > 90.0)) { return false; }
+    placer_.setEnabled(mode != 0);
+    if (mode == 1) {
+        placer_.setMode(cascade::dsp::StereoMode::Pan);
+        placer_.setPan(value);
+    } else if (mode == 2) {
+        placer_.setMode(cascade::dsp::StereoMode::Pseudo);
+        placer_.setPseudoAmount(value);
+    } else if (mode == 3) {
+        placer_.setMode(cascade::dsp::StereoMode::Binaural);
+        placer_.setAzimuthDeg(value);
+    }
+    mirrorPlaceValue_.store(value, std::memory_order_relaxed);
+    mirrorPlaceMode_.store(mode, std::memory_order_relaxed);
+    return true;
+}
+int Pipeline::stereoPlaceMode() const { return mirrorPlaceMode_.load(std::memory_order_relaxed); }
+double Pipeline::stereoPlaceValue() const { return mirrorPlaceValue_.load(std::memory_order_relaxed); }
+
 // --- CW pitch -------------------------------------------------------------------------------------------------------------------------------------
 bool Pipeline::setCwPitchHz(double hz) {
     if (!std::isfinite(hz) || hz < 300.0 || hz > 1200.0) { return false; }
@@ -2675,6 +2699,11 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // THE EQUALISER AND THE AUDIO FILTERS, after the noise reduction (bit-exact passthrough while everything is flat and off).
     eqL_.process(outL_.data(), k);
     eqR_.process(outR_.data(), k);
+    // STEREO PLACEMENT (F20, D5): a mono receiver's audio into the pair of ears; a stereo decode keeps its own two channels.
+    if (mirrorPlaceMode_.load(std::memory_order_relaxed) != 0 && !stereoActive_.load(std::memory_order_relaxed)) {
+        placeIn_.assign(outL_.data(), outL_.data() + k);
+        placer_.process(placeIn_.data(), k, outL_.data(), outR_.data());
+    }
     // THE CW PEAK FILTER (F8), CW mode only: a peaking section at the pitch on the finished audio.
     if (mode == cascade::dsp::DemodMode::CW) {
         cwPeakL_.process(outL_.data(), k);

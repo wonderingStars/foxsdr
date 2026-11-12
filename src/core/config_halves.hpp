@@ -102,6 +102,8 @@ struct ConfigFieldInfo {
     X(eqDb,                    Engine,    false) \
     X(audioHighPassHz,         Engine,    false) \
     X(audioLowPassHz,          Engine,    false) \
+    X(stereoPlaceValue,          Engine,    false) \
+    X(stereoPlaceMode,           Engine,    false) \
     X(cwPeakBoostDb,             Engine,    false) \
     X(cwPeakWidthHz,             Engine,    false) \
     X(cwPeakOn,                  Engine,    false) \

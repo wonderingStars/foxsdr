@@ -2655,6 +2655,9 @@ At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTT
 ### 9.42 The CW peak filter (engine serial lane A, row F8; dsp/cw_filter.hpp CwPeakFilter)
 
 * Op `FOXAPI_OP_SET_CW_PEAK` 0x011F (receiver-scoped; in no web, CAT or TCI profile): `ival[0]` 0/1; with `ival[1]` = 1 `num[0]` is the width, Hz 30 to 500 (default 100), `num[1]` the boost, dB 0 to 24 (default 12). An audio peaking filter centred on the CW pitch (it follows `SET_CW_PITCH`), on the finished audio of CW mode only, after the equaliser; the decoder tap never sees it. State, appended after `afcLocked`: `cwPeakWidthHz cwPeakBoostDb cwPeakOn` (settings, they move `modeSeq`). Saved per radio.
+### 9.43 Stereo placement of a mono receiver (engine serial lane A, rows F20 and D5; dsp/stereo_place.hpp)
+
+* Op `FOXAPI_OP_SET_STEREO_PLACE` 0x0120 (receiver-scoped; in no web, CAT or TCI profile): `ival[0]` 0 off, 1 pan, 2 pseudo-stereo, 3 binaural; `num[0]` the pan (-1 left ear only .. +1 right ear only, constant power: the centre is -3 dB in each ear), the pseudo-stereo amount (0..1; complementary combs, a mono sum keeps the signal, the ears decorrelate as the amount grows) or the azimuth (-90..+90 degrees: an interaural time and level difference, Woodworth's head model). It runs on the finished audio after the equaliser and only while the audio is mono: a stereo decode (WFM with its pilot locked) keeps its own two channels. Off, left and right are the same samples, as before. State, appended after `cwPeakOn`: `stereoPlaceValue stereoPlaceMode` (settings, they move `modeSeq`). Saved per radio. Pseudo-stereo (row D5) is placed as a plugin by `plugin-or-host.md`; the block was already in the host as one mode of the placer and costs nothing there, so it is offered here too; the plugin route is not closed by it.
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

@@ -235,6 +235,8 @@ struct SavedRadio {
     bool cwPeakOn = false;            // the CW peak filter (engine serial lane A)
     double cwPeakWidthHz = 100.0;     // 30..500
     double cwPeakBoostDb = 12.0;      // 0..24
+    int stereoPlaceMode = 0;          // 0 off / 1 pan / 2 pseudo-stereo / 3 binaural (engine serial lane A)
+    double stereoPlaceValue = 0.0;    // the pan -1..1, the amount 0..1 or the azimuth -90..90
     std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
@@ -540,6 +542,8 @@ struct AppConfig {
     bool cwPeakOn = false;            // the CW peak filter (engine serial lane A)
     double cwPeakWidthHz = 100.0;     // 30..500
     double cwPeakBoostDb = 12.0;      // 0..24
+    int stereoPlaceMode = 0;          // 0 off / 1 pan / 2 pseudo-stereo / 3 binaural (engine serial lane A)
+    double stereoPlaceValue = 0.0;    // the pan -1..1, the amount 0..1 or the azimuth -90..90
     std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;

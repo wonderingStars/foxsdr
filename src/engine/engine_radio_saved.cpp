@@ -107,6 +107,8 @@ SavedRadio Engine::savedRadioOf(std::size_t slot) {
     }
     r.audioHighPassHz = rx().audioHpHz_;
     r.audioLowPassHz = rx().audioLpHz_;
+    r.stereoPlaceMode = rx().stereoPlaceMode_;
+    r.stereoPlaceValue = rx().stereoPlaceValue_;
     r.cwPeakOn = rx().cwPeakOn_;
     r.cwPeakWidthHz = rx().cwPeakWidthHz_;
     r.cwPeakBoostDb = rx().cwPeakBoostDb_;
@@ -287,6 +289,11 @@ void Engine::restoreSavedRadios(const cascade::core::AppConfig& cfg) {
                 send(eq);
             }
             send(cmd::makeInt(FOXAPI_OP_SET_AUDIO_FILTERS, s.audioHighPassHz, s.audioLowPassHz));
+            {
+                FoxCommand sp = cmd::makeInt(FOXAPI_OP_SET_STEREO_PLACE, s.stereoPlaceMode);
+                sp.num[0] = s.stereoPlaceValue;
+                send(sp);
+            }
             {
                 FoxCommand pk = cmd::makeInt(FOXAPI_OP_SET_CW_PEAK, s.cwPeakOn ? 1 : 0, 1);
                 pk.num[0] = s.cwPeakWidthHz;

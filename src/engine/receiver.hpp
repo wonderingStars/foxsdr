@@ -375,6 +375,8 @@ struct Receiver {
     bool cwPeakOn_ = false;        // the CW peak filter (engine serial lane A, F8)
     double cwPeakWidthHz_ = 100.0;
     double cwPeakBoostDb_ = 12.0;
+    int stereoPlaceMode_ = 0;      // stereo placement of a mono receiver (engine serial lane A, F20/D5)
+    double stereoPlaceValue_ = 0.0;
     int nrMethod_ = 0;
     std::array<double, 8> eqDb_{};   // the equaliser's bands (engine wiring lane 1): all flat
     int audioHpHz_ = 0;              // the audio high-pass: 0 off / 100 / 300

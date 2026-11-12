@@ -471,6 +471,9 @@ typedef struct FoxReceiverState {
     double cwPeakWidthHz;              /* 30..500 (default 100) */
     double cwPeakBoostDb;              /* 0..24 (default 12) */
     uint32_t cwPeakOn;                 /* 0/1 */
+    /* ---- 0.3 (stereo placement; docs/API.md 6.19): settings, they move modeSeq. ---- */
+    double stereoPlaceValue;           /* the pan, the pseudo-stereo amount or the azimuth, by mode */
+    uint32_t stereoPlaceMode;          /* 0 off (default), 1 pan, 2 pseudo-stereo, 3 binaural */
 } FoxReceiverState;
 #define FOXAPI_EQ_BANDS 8
 #define FOXAPI_NOTCH_SLOTS 10
@@ -653,6 +656,7 @@ typedef struct FoxCommand {
 #define FOXAPI_OP_SET_IQ_CORRECT         0x011Du /* ival[0]: the I/Q correction bits - 1 DC removal, 2 gain and phase balance, 4 swap I and Q (0..7, default 0 = untouched). Addresses one radio (target) */
 #define FOXAPI_OP_SET_AFC                0x011Eu /* ival[0]: 0/1 automatic frequency control; ival[1]=1: num[0] is the pull-in range, Hz 50..20000 (default 2500; twice that is how far a caught carrier is followed). NFM, WFM, AM and CW only. Addresses one radio (target) */
 #define FOXAPI_OP_SET_CW_PEAK            0x011Fu /* ival[0]: 0/1 the CW peak filter; ival[1]=1: num[0] is its width, Hz 30..500 (default 100), num[1] its boost, dB 0..24 (default 12). Centred on the CW pitch; CW mode only. Addresses one radio (target) */
+#define FOXAPI_OP_SET_STEREO_PLACE       0x0120u /* ival[0]: 0 off / 1 pan / 2 pseudo-stereo / 3 binaural; num[0]: the pan -1 (left ear) .. +1 (right ear), the pseudo-stereo amount 0..1, or the azimuth -90..+90 degrees. A mono receiver only (a stereo decode keeps its channels). Addresses one radio (target) */
 #define FOXAPI_OP_SET_TONE_REMOVE   0x0114u /* ival[0]: 0/1: the high-pass that takes the sub-audible tone out of the audio. Addresses one radio (target) */
 /* Display */
 #define FOXAPI_OP_SET_DISPLAY_RANGE 0x0201u /* num[0]: dbMin, num[1]: dbMax (min span enforced) */

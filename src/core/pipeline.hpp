@@ -160,6 +160,7 @@
 #include "dsp/iq_correct.hpp"
 #include "dsp/afc.hpp"
 #include "dsp/cw_filter.hpp"
+#include "dsp/stereo_place.hpp"
 #include "dsp/spsc_ring.hpp"
 #include "dsp/squelch.hpp"
 #include "dsp/oirt_stereo.hpp"
@@ -618,6 +619,12 @@ public:
     bool cwPeakOn() const;
     double cwPeakWidthHz() const;
     double cwPeakBoostDb() const;
+    // STEREO PLACEMENT OF A MONO RECEIVER (engine serial lane A, rows F20 and D5; dsp/stereo_place.hpp): mode 0 off (left = right, as it always was), 1 pan (value -1 left ear only .. +1 right ear
+    // only, constant power), 2 pseudo-stereo (value 0..1, the amount: complementary combs, a mono sum keeps the signal), 3 binaural (value -90..+90 degrees of azimuth: a time and level difference).
+    // Runs on the finished audio after the equaliser, and only while the audio is mono: a stereo broadcast keeps its own two channels. False (nothing changed) outside those. Any thread.
+    bool setStereoPlace(int mode, double value);
+    int stereoPlaceMode() const;
+    double stereoPlaceValue() const;
     bool setIqCorrection(int mask);
     int iqCorrection() const;
     double iqImageRejectionDb() const;   // the balance estimator's reading of the input, dB (200 while nothing is measured)
@@ -1163,6 +1170,10 @@ private:
     // NOISE-REDUCTION METHOD: the choice and what the posted switch and strength last said (so a method built later starts from them), and the two channels' alternative reducers.
     cascade::dsp::AudioEq eqL_{kAudioRateHz};
     cascade::dsp::AudioEq eqR_{kAudioRateHz};
+    cascade::dsp::StereoPlacer placer_{kAudioRateHz};     // (F20/D5: setters are atomics, process() runs on the DSP thread)
+    std::vector<float> placeIn_;
+    std::atomic<int> mirrorPlaceMode_{0};
+    std::atomic<double> mirrorPlaceValue_{0.0};
     cascade::dsp::CwPeakFilter cwPeakL_{kAudioRateHz};   // (F8: setters are atomics, process() runs on the DSP thread)
     cascade::dsp::CwPeakFilter cwPeakR_{kAudioRateHz};
     std::atomic<bool> mirrorCwPeakOn_{false};

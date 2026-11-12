@@ -344,6 +344,10 @@ std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
         r.cwPitchHz = !(r.cwPitchHz >= 300.0) ? 700.0 : (r.cwPitchHz > 1200.0 ? 1200.0 : r.cwPitchHz);
         r.audioHighPassHz = sanitiseHp(r.audioHighPassHz);
         r.audioLowPassHz = sanitiseLp(r.audioLowPassHz);
+        r.stereoPlaceMode = r.stereoPlaceMode < 0 || r.stereoPlaceMode > 3 ? 0 : r.stereoPlaceMode;
+        r.stereoPlaceValue = !(r.stereoPlaceValue >= -90.0) ? 0.0 : (r.stereoPlaceValue > 90.0 ? 0.0 : r.stereoPlaceValue);
+        if (r.stereoPlaceMode == 1 && (r.stereoPlaceValue < -1.0 || r.stereoPlaceValue > 1.0)) { r.stereoPlaceValue = 0.0; }
+        if (r.stereoPlaceMode == 2 && (r.stereoPlaceValue < 0.0 || r.stereoPlaceValue > 1.0)) { r.stereoPlaceValue = 0.0; }
         r.cwPeakWidthHz = !(r.cwPeakWidthHz >= 30.0) ? 100.0 : (r.cwPeakWidthHz > 500.0 ? 500.0 : r.cwPeakWidthHz);
         r.cwPeakBoostDb = !(r.cwPeakBoostDb >= 0.0) ? 12.0 : (r.cwPeakBoostDb > 24.0 ? 24.0 : r.cwPeakBoostDb);
         r.afcPullInHz = !(r.afcPullInHz >= 50.0) ? 2500.0 : (r.afcPullInHz > 20000.0 ? 20000.0 : r.afcPullInHz);
@@ -668,6 +672,8 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     out.eqDb = readEq(j);
     getInt(j, "audioHighPassHz", out.audioHighPassHz);
     getInt(j, "audioLowPassHz", out.audioLowPassHz);
+    getDouble(j, "stereoPlaceValue", out.stereoPlaceValue);
+    getInt(j, "stereoPlaceMode", out.stereoPlaceMode);
     getDouble(j, "cwPeakBoostDb", out.cwPeakBoostDb);
     getDouble(j, "cwPeakWidthHz", out.cwPeakWidthHz);
     getBool(j, "cwPeakOn", out.cwPeakOn);
@@ -1101,6 +1107,8 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
                 r.eqDb = readEq(e);
                 getInt(e, "audioHighPassHz", r.audioHighPassHz);
                 getInt(e, "audioLowPassHz", r.audioLowPassHz);
+                getDouble(e, "stereoPlaceValue", r.stereoPlaceValue);
+                getInt(e, "stereoPlaceMode", r.stereoPlaceMode);
                 getDouble(e, "cwPeakBoostDb", r.cwPeakBoostDb);
                 getDouble(e, "cwPeakWidthHz", r.cwPeakWidthHz);
                 getBool(e, "cwPeakOn", r.cwPeakOn);
@@ -1345,6 +1353,10 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     out.cwPitchHz = !(out.cwPitchHz >= 300.0) ? 700.0 : (out.cwPitchHz > 1200.0 ? 1200.0 : out.cwPitchHz);
     out.audioHighPassHz = sanitiseHp(out.audioHighPassHz);
     out.audioLowPassHz = sanitiseLp(out.audioLowPassHz);
+    out.stereoPlaceMode = out.stereoPlaceMode < 0 || out.stereoPlaceMode > 3 ? 0 : out.stereoPlaceMode;
+    out.stereoPlaceValue = !(out.stereoPlaceValue >= -90.0) ? 0.0 : (out.stereoPlaceValue > 90.0 ? 0.0 : out.stereoPlaceValue);
+    if (out.stereoPlaceMode == 1 && (out.stereoPlaceValue < -1.0 || out.stereoPlaceValue > 1.0)) { out.stereoPlaceValue = 0.0; }
+    if (out.stereoPlaceMode == 2 && (out.stereoPlaceValue < 0.0 || out.stereoPlaceValue > 1.0)) { out.stereoPlaceValue = 0.0; }
     out.cwPeakWidthHz = !(out.cwPeakWidthHz >= 30.0) ? 100.0 : (out.cwPeakWidthHz > 500.0 ? 500.0 : out.cwPeakWidthHz);
     out.cwPeakBoostDb = !(out.cwPeakBoostDb >= 0.0) ? 12.0 : (out.cwPeakBoostDb > 24.0 ? 24.0 : out.cwPeakBoostDb);
     out.afcPullInHz = !(out.afcPullInHz >= 50.0) ? 2500.0 : (out.afcPullInHz > 20000.0 ? 20000.0 : out.afcPullInHz);
@@ -1709,6 +1721,8 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     if (cfg.eqDb.size() == 8) { j["eqDb"] = cfg.eqDb; }
     j["audioHighPassHz"] = cfg.audioHighPassHz;
     j["audioLowPassHz"] = cfg.audioLowPassHz;
+    j["stereoPlaceValue"] = cfg.stereoPlaceValue;
+    j["stereoPlaceMode"] = cfg.stereoPlaceMode;
     j["cwPeakBoostDb"] = cfg.cwPeakBoostDb;
     j["cwPeakWidthHz"] = cfg.cwPeakWidthHz;
     j["cwPeakOn"] = cfg.cwPeakOn;
@@ -1923,6 +1937,8 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
             if (r.eqDb.size() == 8) { e["eqDb"] = r.eqDb; }
             e["audioHighPassHz"] = r.audioHighPassHz;
             e["audioLowPassHz"] = r.audioLowPassHz;
+            e["stereoPlaceValue"] = r.stereoPlaceValue;
+            e["stereoPlaceMode"] = r.stereoPlaceMode;
             e["cwPeakBoostDb"] = r.cwPeakBoostDb;
             e["cwPeakWidthHz"] = r.cwPeakWidthHz;
             e["cwPeakOn"] = r.cwPeakOn;

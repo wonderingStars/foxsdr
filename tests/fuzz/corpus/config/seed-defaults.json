@@ -75,6 +75,8 @@
     "cwPitchHz": 700.0,
     "audioHighPassHz": 0,
     "audioLowPassHz": 0,
+    "stereoPlaceMode": 0,
+    "stereoPlaceValue": 0.0,
     "cwPeakOn": false,
     "cwPeakWidthHz": 100.0,
     "cwPeakBoostDb": 12.0,
