@@ -125,13 +125,138 @@ The hand-off asks for "an engine slicer tap on a radio's magnitude stream that f
 - D4 (orchestrator): playback (varispeed S12, seek, A-B) is not in any wiring lane's brief: assign it or leave it.
 - D5 (owner): Aaronia authentication (a secret) - nothing stored; retention of coverage / track positions on disk; the `/status.json` listing privacy rules (stays off).
 
-## 4. SCREEN HAND-OFF, ABI REQUESTS, operations, keys, break-it, not-done list, config hashes
+## 4. FINAL: status of every survey row, SCREEN HAND-OFF, ABI REQUESTS, operations and keys, not-done list, owner decisions, config hashes
 
-(filled in Phase 1)
+Everything below is OFF by default, LOCAL only (application ops are denied to REMOTE sessions; the open-id source kinds are denied to REMOTE as well), not saved to the configuration, and UNVERIFIED on hardware. Every op of the lane has a `covering()` case in `tests/wire_b_apply_cases.inc` and a line in the `test_radio_scope` lists.
 
-ABI REQUESTS (so far): a host call for a decoder to push a frame record (bytes, length, CRC state, protocol name) into the engine's `FrameLog` (S10); a host call for an MFSK decoder to hand per-symbol tone energies (S11).
+### 4.1 Final status of the survey rows (section 5 has the commit rows and result lines)
 
-Config file sha256 at Phase 0 start: `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (to be re-checked at the end).
+| Rows | Final status |
+|---|---|
+| S1-S8 (bandwidth, modulation, symbols, vstime, bursts, hopchirp, audio, drift, histogram) | WIRED: nine ops 0x8903-0x890B (section 5 row 4). Symbol FILE save of S3 (Float32 / text / 0-1 string) is NOT wired: the answer carries the symbols, the file write belongs to the screen's file chooser (listed) |
+| S9 cursors, S10 frame log (read side) | WIRED (section 5 row 9). The plugin push into the frame log is an ABI REQUEST |
+| S11 MFSK confidence | BLOCKED: needs an ABI call (ABI REQUESTS) |
+| S12 varispeed | NOT WIRED: needs the owner's decision D4 (nobody owns playback) |
+| B1-B5 bit view | WIRED: eleven ops 0x890D-0x8917 (row 7) |
+| B6 bit editor | NOT WIRED by design: the editor is a screen-side model |
+| R1 RBW trace | NOT WIRED: decision D2 (screen K draws detectors from the published frame) |
+| R2 limit mask | WIRED (row 10); no I/Q pre-roll (no ring exists) |
+| R3 field strength, R4 pseudo-Doppler, R5 follow (engine half) | WIRED (rows 3, 6, 13); hover-to-listen stays the screen's |
+| G1 GPU spectrum | WIRED for the legacy pipeline spectrum path (row 8); the spectrum BLOCK (SET_SPECTRUM large sizes) is not reached |
+| X1 tinySA sweep host, Y5 HackRF sweep | WIRED (rows 11, 17); X2 stitched sweep of an ordinary radio NOT done; SWEEP_HISTORY save / load NOT done |
+| X3, X5, X6, X7, Y7, Z1, Z2 and the open path of Y2, Y3, Y11 | WIRED as the eleven-kind SOURCE TABLE (row 5) with stand-in tests for hpsdr1, hpsdr2, rfspace, aaronia, spyserver, soapyremote, sdrconnect; icr8600, funcube, g39ddc, g33ddc are registered and their refusal paths tested, their success path through the engine is NOT tested |
+| X4 second HPSDR-1 source | `hpsdr1` registered, `HpsdrSource` left unregistered (D3, my recommendation applied) |
+| X8, Y6, Z4 SDRplay rate map and low-IF | NOT WIRED on purpose: no hardware, and it changes the existing SDRplay driver |
+| Y1 SDR-IQ | stays unregistered (instruction) |
+| Y4 Hermes-Lite 2 profile | registered through `hpsdr1`; the HL2 profile has no engine-level test |
+| Y8 | folded into the Aaronia kind (row 5) |
+| Y9 `.s1b` label, Y12 `iqrate=`, Y13 radio-setup text | WIRED (rows 1, 5, 2) |
+| Y10 `/status.json` listing | stays unwired (owner decision) |
+| Z3 ExtIO helper | NOT WIRED: needs an `IqSource` adapter, helper build lines in the root CMake and the installer line |
+| Z5 network I/Q out, Z6 SBS out, Z7 coverage grid, Z8 track store | WIRED (rows 12, 14, 16, 15), memory only; Beast and AIS out need an ABI change |
+| Z9 combiner and direction finding | BLOCKED: no coherent two-channel source exists |
+| Z10 transmit | none present; every source test pins "no transmit-side byte" |
+
+### 4.2 SCREEN HAND-OFF (what a screen needs; every string is English, not translated; every control is OFF until the user acts)
+
+Facts are strings read with `get_setting("fact.<key>")`, LOCAL sessions only. A per-radio op addresses the radio by the command's target. Replies: OK, NO_CHANGE, BAD_ARGUMENT (names the key), OUT_OF_RANGE, FAILED / BUSY / DENIED with a sentence. Op comments in `src/core/app_commands.hpp` (the `wire-b begin` block) hold the full text.
+
+| Screen / control | Op (number) | JSON keys, ranges, defaults | Fact |
+|---|---|---|---|
+| Field strength: "Antenna factor table...", "Cable loss table...", unit | FIELD_TABLE 0x8900 | long text = CSV (frequency, value); ival[0] 0 antenna / 1 cable; ival[1] unit 0 Hz 1 kHz 2 MHz (default) 3 GHz; empty text clears | `field.afPoints`, `field.cablePoints` |
+| Preamp gain, input ohm, show | FIELD_CONFIG 0x8901 | num[0] -100..100 dB, num[1] 1..1000 ohm, ival[0] 1 show / 0 hide | `field.show` |
+| Read-out dBuV/m | FIELD_READ 0x8902 | none (one radio) | `radio.<n>.field.readout` |
+| Measurements (nine) | SIGMEAS_* 0x8903-0x890B | common: `duration_s` 0.001..10 (0.25), `end_ago_s` 0..60 (0); SPAN LIMIT: the scope I/Q tap holds 262144 samples = 1.31 s at 200 kHz (the audio block reads the audio tap, which holds what its own size holds; a longer request is cut to what the tap holds), no raw-band ring (D1 YES); frequencies in Hz from the channel centre | `radio.<n>.sigmeas.<name>` |
+| Occupied bandwidth | SIGMEAS_BANDWIDTH 0x8903 | `obw_percent` 50.1..99.9, `centre_hz`, `width_hz`, `floor_power`, `detect_margin_db` 0.1..60, `nfft`, `band_low_hz`, `band_high_hz` | `...bandwidth` |
+| FM deviation / AM depth | SIGMEAS_MODULATION 0x8904 | `audio_bandwidth_hz` 0..1e9 | `...modulation` |
+| Symbols | SIGMEAS_SYMBOLS 0x8905 | `mode` fsk / ook / cursor, `min_baud_hz`, `max_baud_hz`, `tolerance` 0.01..0.5, `max_bits` 1..65536, `max_pulses` 1..4096, `t0_s`, `t1_s`, `symbol_count` | `...symbols` |
+| Amplitude / frequency / phase vs time | SIGMEAS_VSTIME 0x8906 | `centre_hz`, `bandwidth_hz` (0 = full rate then thinned), `max_points` 2..16384, `remove_linear_phase` | `...vstime` |
+| Bursts | SIGMEAS_BURSTS 0x8907 | `block_samples`, `min_contrast_db` 0.5..120, `bridge_blocks`, `min_burst_blocks`, `max_bursts` | `...bursts` |
+| Hop / chirp | SIGMEAS_HOPCHIRP 0x8908 | `frame_samples`, `hop_samples`, `min_snr_db`, `dwell_tolerance_hz` | `...hopchirp` |
+| SINAD / THD / SFDR / ENOB | SIGMEAS_AUDIO 0x8909 | `tone_hz`, `max_harmonic` 2..64, `band_low_hz`, `band_high_hz`, `full_scale`, `nfft` (reads the finished 48 kHz audio) | `...audio` |
+| Drift | SIGMEAS_DRIFT 0x890A | `min_hz_per_s`, `max_hz_per_s`, `steps` 8..4096, `decimate` 0..4096 (0 = automatic: the span is averaged to about 12.5 kHz) | `...drift` |
+| Histogram / CCDF | SIGMEAS_HISTOGRAM 0x890B | `source`, `bins` 1..65536, `ccdf`, `ccdf_range_db`, `ccdf_step_db`, `range_low`, `range_high` | `...histogram` |
+| Pseudo-Doppler bearing | PSEUDO_DOPPLER 0x890C | `samples_per_dwell` 8..1e6 (100), `start_sample` 0..1e9 (0) + the span keys; SPAN LIMIT 1.31 s at 200 kHz (the scope I/Q tap) | `...pseudodoppler` |
+| Bit view | BITS_KEEP 0x890D ... BITS_TABLE_CHECK 0x8917 | SPAN LIMIT of KEEP: the scope I/Q tap, 1.31 s at 200 kHz; see the op comment: KEEP `duration_s, end_ago_s, label, smooth_us, threshold, min_span_ratio`; REDECODE / SWEEP `slice, line_codes, invert, balance, chip_us, phase, sync, sync_errors, both_polarities, framing, fixed_bits, flag, unstuff, whiten, max_frames, max_frame_bits`; FIND_CRC / FIND_SUM `max_head_bytes, max_tail_bytes, max_hits, widths`; DIFF `a, b`; SPEC_CHECK / SPEC_RUN / TABLE_CHECK take the file text (SPEC_RUN ival[0] slice, 0 = all) | `radio.<n>.bits.<name>` |
+| "GPU spectrum" CPU / Auto / GPU | GPU_FFT_MODE 0x8918 | ival[0] 0 CPU (default every start), 1 Auto (GPU from 65536 points), 2 GPU; every open radio | `radio.<n>.gpufft`, `gpu_fft.mode` |
+| Eight cursors (ENGINE COPY, see 4.7 D2) | CURSOR_SET 0x8919 / CURSOR_READ 0x891A / CURSOR_MARKS 0x891B | READ span limit 1.31 s at 200 kHz (scope I/Q tap); SET `mode` free / locked / harmonic, `spacing_hz`, `reference` 1..8, `range_low_hz`, `range_high_hz`, `set` [{cursor, freq_hz}]; READ `duration_s, end_ago_s, search_hz, snap`; MARKS `kind` harmonic / sideband, `base_hz` or `carrier_hz`, `spacing_hz`, `count`, `low_hz`, `high_hz`, `search_hz` | `radio.<n>.sigmeas.cursors`, `...marks` |
+| Frame log "Keep frames with CRC errors" | FRAMELOG_CONFIG 0x891C / FRAMELOG_READ 0x891D | ival[0] -1 keep / 0 / 1, ival[1] capacity 1..4096; READ ival[0] 1 include failed | `framelog` |
+| Limit lines | MASK_LOAD 0x891E / MASK_CONFIG 0x891F | long text `foxmask 1`; `enabled, raise_frames` 1..100 (3), `clear_frames` 1..100 (5), `capture` (false), `post_roll_s` 0..60 (2), `min_interval_s` 0..3600 (10) | `radio.<n>.mask` |
+| Sweep device (tinySA / HackRF) | SWEEP_OPEN 0x8920 / CLOSE 0x8921 / CONFIG 0x8922 / READ 0x8923 | OPEN tinySA: `kind, port, start_mhz, stop_mhz, points` 2..1048576 (450), `interval_ms` 0..60000; OPEN HackRF: `kind "hackrf", serial, start_mhz, stop_mhz` (whole MHz 1..6000), `step_mhz` 1..20 (10), `lna_db` 0..40 (16), `vga_db` 0..62 (16), `amp`, `sample_rate_msps` 2..20 (20), `fft_size` 32..65536 power of two (1024); CONFIG `heatmap {cols, rows, freq_mode, time_mode}`, `occupancy {start_mhz, stop_mhz, step_khz, margin_db, floor_percentile, fixed_floor_db}` or null; READ `max_points` 2..4096 (512), `x` 0..1, `occupancy` | `sweep.state`, `sweep.read` |
+| Network I/Q out | IQ_OUT_START 0x8924 / STOP 0x8925 | `format` u8 / s16 / f32, `header`, `udp`, `port`, `dest` 127.0.0.1 only | `radio.<n>.iqout` |
+| Follow a master, "Lock follower", "Keep this distance", "Stop following" | FOLLOW_SET 0x8926 / CLEAR 0x8927 / LOCK 0x8928 / KEEP 0x8929 | ival[0] follower 1..8, ival[1] master (SET) or 1 / 0 (LOCK) | `matrix.rows` |
+| SBS out | SBS_OUT_START 0x892A / STOP 0x892B | `port` 0..65535 (0 = OS picks); loopback only | `sbs.out` |
+| Track store | TRACKS_CONFIG 0x892C / TRACKS_READ 0x892D | CONFIG `enabled, retention_s` 60..2592000 (21600), `clear`; READ `t, kind, max` or `trail {id, kind, t0, t1, max_points}` or `range` | `tracks.state`, `tracks.read` |
+| Coverage grid | COVERAGE_CONFIG 0x892E / COVERAGE_READ 0x892F | CONFIG `enabled, rx_lat, rx_lon` (caller-given, required to enable), `cell_deg` 0.001..1 (0.05), `half_life_s`, `clear`; READ `band` -1..6, `max_cells` 1..20000 (2000), `min_weight` | `coverage.state`, `coverage.read` |
+| Network radios | SELECT_SOURCE `open-<key>:<args>` | keys rfspace, hpsdr1, hpsdr2, aaronia, spyserver, soapyremote, sdrconnect, icr8600, funcube, g39ddc, g33ddc (arguments as in section 1.5-1.7); REMOTE sessions denied | the radio's own facts |
+| NEEDED LIBRARIES: the list with what is missing | NEEDED_LIB_CHECK 0x8930 ("Check again") | `id` (one library id; absent = every row), `path` (a folder or a FILE the user picked, judged only and never copied; a vendor-library row only: "Choose the file...") | `needed.libs` (always there) |
+| "Open the download page", "Open that folder" | none in the engine | the row's `official_page` is EMPTY while `page_status` is "unverified" (every row today): the screen shows no address and no button then; the link registry supplies the address by `library_id`; opening a page or a folder is the shared component's (an ABI REQUEST if the plugin interface has no call) | `needed.libs` |
+
+### 4.2a NEEDED LIBRARIES (the owner's needed-library rule, 2026-11-12 22:00)
+
+STRUCTURE, defined here FIRST for the merge lane to align with `feat/radio-bridges` (`D:/foxsdr-wt/en-osslibs`): the type is `cascade::engine::wireb::NeededLibrary` in `src/engine/wire_b_needed_libs.hpp` (fields: `libraryId`, `sourceKind`, `name`, `kind` {VendorLibrary, SoapyModule, RunningProgram, RemoteSoftware, UserFile}, `fileNames`, `minVersion`, `bits64`, `why`, `officialPage`, `pageStatus`, `installKind`, `folderNote`, `steps`, `licence`, `notSupplied`, `fetchAllowed`); the table is `neededLibraries()` in `wire_b_needed_libs.cpp`; a row is shown as JSON by `neededToJson()` (the fact `needed.libs`); the check is `recheckNeeded(row, where, NeededEnv)` answering `{state, sentence, looked_in, found_in, file}` with state `found | not-found | wrong-32-bit | unusable | cannot-check`. The other lane adds its seven rows to the same table (same `libraryId` rule: lower-case, hyphens) and the same check, or keeps its own type with the same field names; the merge lane decides.
+
+What the check does and does NOT say: it reads FILE HEADERS only (`source/vendor_lib.hpp checkFile`); it never loads the vendor's code; no VERSION is read from a file, so "found but too old" and "found but would not load" are NOT answers it can give (loading is tried when the radio is opened, and the source then says why it refused). Nothing is opened, copied or downloaded by this code. No publisher page was read by this lane: every `official_page` is empty and `page_status` is "unverified" (nothing is shown to users); no minimum version is stated; no licence text was read; `fetch allowed` is `no (unverified)` for every row.
+
+| library id | Feature (source kind) | Library | File names looked for | Min version | Official page | Install kind | Folder for a copy-in | Licence | fetch allowed |
+|---|---|---|---|---|---|---|---|---|---|
+| `winradio-g39ddc` | WiNRADiO G39DDC (`g39ddc`) | G39DDCAPI.dll, 64-bit | `G39DDCAPI.dll` (the folder / file named by `lib=`, else the PATH) | not stated | (unverified; the oss-libs lane read the SDK page winradio.com/home/g39ddc_sdk-doc.htm, which is documentation, not a download address) | copy-in | any folder, given as `lib=` | not read (the SDK page states none) | no (unverified) |
+| `winradio-g33ddc` | WiNRADiO G33DDC (`g33ddc`) | G33DDCAPI.dll, 64-bit | `G33DDCAPI.dll` | not stated | (unverified; documentation page winradio.com/home/g33ddc_sdk-doc.htm) | copy-in | as above | not read | no (unverified) |
+| `soapy-bladerf` | SoapySDR source, bladeRF | SoapyBladeRF module (+ Nuand driver) | a file with `bladerf` in its name in the module folder of a PothosSDR / radioconda / `SOAPY_SDR_ROOT` install | not stated | (unverified) | installer | the install's `lib/SoapySDR/modules*` (found by FoxSDR itself) | not read | no (unverified) |
+| `soapy-plutosdr` | SoapySDR source, ADALM-Pluto (optional: FoxSDR's own Pluto source and the AntSDR need nothing installed) | SoapyPlutoSDR module | a file with `pluto` in its name, as above | not stated | (unverified) | installer | as above | not read | no (unverified) |
+| `sdrplay-sdrconnect` | SDRconnect (`sdrconnect`) | SDRplay SDRconnect program, running with its server on | none (a program that must be RUNNING; reported when the radio is opened) | not stated | (unverified) | running program | - | not read | no (unverified) |
+| `soapyremote-server` | SoapyRemote (`soapyremote`) | SoapySDRServer on the machine with the radio | none on this PC | not stated | (unverified) | software on another machine | - | Boost (its LICENSE_1_0.txt was opened by the lane that wrote the client; nothing of it is in FoxSDR) | no (unverified) |
+| `aaronia-rtsa-suite` | Aaronia (`aaronia`) | RTSA-Suite with the HTTP stream server block, running | none (running program; the document's example port is 54664) | not stated | (unverified) | running program | - | not read | no (unverified) |
+| `icom-icr8600-firmware` | IC-R8600 (`icr8600`) | the Icom firmware file, only when the radio waits for it | none by name: the user's own file, given as `firmware=` | not stated | (unverified) | your own file | wherever the user keeps it | not read | no (unverified) |
+
+Not in the table, on purpose: `sdriq` (unregistered), `funcube` and the network protocols that need no installation (`rfspace`, `hpsdr1`, `hpsdr2`, `spyserver`), ExtIO (not wired), and the vendor libraries of the `feat/radio-bridges` lane (its own rows).
+
+### 4.3 ABI REQUESTS (the lane changed no ABI)
+
+1. A host call for a decoder to push a frame record (bytes, length, CRC state, protocol name) into the engine's `FrameLog` (S10): without it the log stays empty in a running engine.
+2. A host call for an MFSK decoder to hand per-symbol tone energies (S11).
+3. Beast and AIS network out need the plugin track structure to carry what those formats need (Z6 sends SBS only, with no callsign, squawk or label).
+
+### 4.4 Operations and configuration keys
+
+49 operations 0x8900-0x8930 (table 4.2). NO configuration key is added or persisted: every setting is runtime state, off after a restart (the config file is not touched by the lane; hashes in 4.7).
+
+### 4.5 Not done, in order of importance
+
+1. R1 RBW trace in the engine (D2: NO, screen K draws it; the eight-cursor copy of S9 was built before that answer, see 4.7). 2. S12 varispeed / playback (D4). 3. X2 stitched sweep of an ordinary radio. 4. SWEEP_HISTORY save / load. 5. Z3 ExtIO helper (adapter, helper build lines, installer line). 6. Y6 / Z4 / X8 SDRplay rate map and low-IF (no hardware; touches the existing driver). 7. The spectrum-block GPU path (SET_SPECTRUM large sizes). 8. I/Q pre-roll for the mask capture (needs an I/Q ring). 9. S3 symbol file save and B6 bit editor (screen side). 10. Persistence of network sources in the configuration (a saved radio of these kinds). 11. Success path through the engine for icr8600, funcube, g39ddc, g33ddc and the HL2 profile (stand-ins exist only at the model level). 12. Beast / AIS out (ABI). 13. Z9 combiner and direction finding (no coherent source).
+
+### 4.6 Owner decisions
+
+D1 spans from the channel tap (1.3 s) or a raw-band ring; D2 engine copies of R1 / S9 next to screen K's; D3 `hpsdr1` only (applied); D4 who owns playback; Aaronia authentication (nothing stored); retention of track and coverage positions on disk (none written); `/status.json` listing privacy rules; the interleaved HackRF sweep (GPL code); the SDR-IQ FTDI link; the owner's wider-bind rule for the network outputs (loopback only now).
+
+### 4.7 Orchestrator answers received (2026-11-12, after the Phase 0 report)
+
+- D1 YES: spans from the scope I/Q tap and the audio tap, no raw-band ring; the limit (1.31 s at 200 kHz) is in each measurement row of 4.2.
+- D2 NO engine copies of what screen K already draws from the published frame (detector trace, eight cursors): the RBW trace (R1) was never wired. HONEST CAVEAT: the eight-cursor engine copy (S9: `CURSOR_SET` / `CURSOR_READ` / `CURSOR_MARKS`, commit f2e06dc1, with the frame log S10 in the same commit) was committed BEFORE this answer arrived. It is off and unused unless called and nothing else depends on it (its facts are `radio.<n>.sigmeas.cursors` / `marks`); to follow D2 the merge lane may drop the cursor part of that commit (`engine/wire_b_cursors.hpp`, `Engine::cursorOp`, three ops 0x8919-0x891B and their tests); the frame log stays. Reason it is listed under "not done": K already has the eight cursors.
+- D3 `hpsdr1` registered (class `Hpsdr1Source`, with the Hermes-Lite 2 profile and the fuller stand-in tests of the radio-families lane); `HpsdrSource` (`hpsdr_source.*` with the hpsdrduo frame layer, protocol 1 as well) was LEFT UNREGISTERED because it is the second implementation of the same protocol and would be a second menu entry for the same radios.
+- D4 playback is wire-a's: `iq_file_source.*` was not touched.
+- Owner items stay open: Aaronia authentication (nothing stored), on-disk retention of coverage and track positions (memory only), `/status.json` (off, unwired).
+
+### 4.8 Gate and config hashes
+
+**Build:** Release, Slint OFF, SoftGL OFF, `D:/foxsdr-build/en-sigmeas`, whole tree rebuilt after the last source change (`EXIT 0`, no compile error). The binaries carry the stamp of a4898dd9-dirty (the N1 commit 52fe5ae0 came after the stamp).
+
+**Headless gate** (`ctest -C Release -L headless -I a,b -j4 --timeout 300`; 1006 tests, numbers up to 1080; slices by test NUMBER): 1-100 (161 s), 101-350 (942 s: the machine was loaded), 351-500 (444 s), 501-650 (275 s), 651-800 (284 s), 801-950 (333 s), 951-1100 (24 s, 100 % of 56). Reds in the slices (20), then ALL re-run together and the persistent ones alone:
+
+| Test | Slice | Re-run | Verdict |
+|---|---|---|---|
+| test_airband_data, test_band_plan, test_converter_call_sites, test_page_resize_id, test_png_decode | 1, 1, 1, 351, 351 | red again | KNOWN false failures of `engine-merge.md` section 4 |
+| test_engine_api_source_kinds | 101-350 | red again | known: the `scope.wav` fixture is missing from this tree (also red before this lane) |
+| test_diagnostics_free | 801 | red again, text read | STALE STAMP: "git HEAD now 52fe5ae02963, binary says a4898dd929e1-dirty"; it passes on a fresh stamp (engine-merge.md) |
+| test_window_failed_app | 651 | red again, text read | ENVIRONMENT: the SoftGL folder (`opengl32.dll`, `libgallium_wgl.dll`) is not in this build (SoftGL OFF); the log-order checks fail after it; not touched by this lane |
+| test_engine_api_decode_radio | 101-350 (Timeout) | Timeout at the 120 s limit twice alone | NOT this lane: the same test in `D:/foxsdr-build/en-bitview` (another lane's build, none of this lane's code) times out at 120.01 s too |
+| test_audio_open, test_bookmark_save_async, test_engine_api_plugin_smoke_radio (Timeout), test_engine_api_schedule, test_engine_api_zoom, test_engine_main_smoke, test_failure_files, test_pass_control, test_plugin_store_window, test_pump_live_traffic, test_tci_engine | slices | PASSED in the together-run | load flakes (the machine was loaded: the 250-test slice took 942 s) |
+
+`test_pipeline_afc` PASSED in the gate (the brief's "capture its failure text" case did not arise). Not run by this lane: the GUI gate (`-L gui`): this build has Slint OFF, so the GUI gate is the MERGE LANE's.
+
+Lane tests (all Passed in the final build): `test_engine_api_wireb_{field,sigmeas,sources,hpsdr1,hpsdr2,rfspace,aaronia,spyserver,soapyremote,sdrconnect,bits,gpufft,cursors,mask,sweep,hackrfsweep,iqout,follow,sbs,tracks,coverage,neededlibs}`; neighbours `test_apply_command` 2130/0, `test_radio_scope` 212/0, `test_thread_inventory` 14048/0, `test_json_dump_policy` 3/0, `test_file_kind`, `test_radio_setup`.
+
+**Config file** `%APPDATA%/foxsdr/config.json` sha256 BEFORE (Phase 0 start) `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3`; AFTER (23:12, all tests run) `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3`: byte-identical.
 
 ## 5. WIRED ITEMS (Phase 1, base e7e25fc9; one commit each; decisive result lines are real output)
 
