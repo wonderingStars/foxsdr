@@ -1,0 +1,33 @@
+#! frames=1600 size=1600x4600 bank=4 sections=4:0,14
+# lanek-tools (screen lane K, rows: limit lines / mask, eight-cursor tool, gradient editor): the Spectrum tools section and the two sheets. The mask is a text file the model parses (an example is written into the exports folder);
+# its status says how many lines were loaded and the margin against the trace. The cursor tool holds eight cursors in three modes (free, fixed spacing, harmonics of cursor 1). The gradient editor makes a 256-step colour scale
+# from stops and the waterfall uses it once it is ticked.
+10 state running == 1
++1 click "Write an example mask file"
++8 click "Load the mask"
++8 state lk.maskloaded == 1
++30 state lk.maskpass != "-"
++1 shot "lanek-mask.png"
+# the cursors: harmonics of cursor 1
++1 click "Eight-cursor tool..."
++8 state lk.sheet == 8
++1 choose "Cursors move" "As harmonics of cursor 1"
++8 state lk.cursormode == 2
++1 type "Cursor 1 (MHz)" "100.1"
++1 key enter
++8 state lk.cursor.0 == 100100000
+state lk.cursor.3 == 400400000
++1 shot "lanek-cursors.png"
++1 click "Done"
++8 state lk.sheet == 0
+# the gradient: the last stop's colour is the top of the scale
++1 click "Gradient editor..."
++8 state lk.sheet == 7
++1 click "Use my gradient for the waterfall"
++8 state lk.gradon == 1
++1 type "Stop 2 colour (position 1.000)" "FF0000"
++1 key enter
++8 state lk.gradtop == 16711680
++1 click "Add a stop in the middle"
++8 state lk.gradstops == 3
++1 shot "lanek-gradient.png"

@@ -3272,3 +3272,40 @@ The status bar and the One layout's plot (the S6 leftovers), one-click layouts, 
 | 4717 | Demod scope: AUTOCORR key (autocorrelation of the audio) | key | PRESENT | S17. Lane B. |
 | 4718 | Demod scope: CEPSTRUM key (cepstrum of the audio, pitch) | key | PRESENT | S17. Lane B. |
 | 4719 | Demod scope: EYE key (eye diagram of the baseband I) | key | PRESENT | S18. Lane B. |
+| 5200 | Settings and backup: Export settings (one file into the exports folder; secrets and the install id left out) | key | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5201 | Settings and backup: Back up settings now (own backups folder, pruned to the newest N) | key | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5202 | Settings and backup: Back up automatically when FoxSDR closes | checkbox | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5203 | Settings and backup: Backups kept (5, 10, 20, 50) | dropdown | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5204 | Settings and backup: Files in the exports folder (pick one to import) | dropdown | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5205 | Settings and backup: File to import (a path) | field | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5206 | Settings and backup: Import settings... and its confirmation sheet (Import and close FoxSDR, Cancel) | key | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5207 | Settings and backup: Profile list, Use this profile, Delete profile | dropdown | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5208 | Settings and backup: Name for a new profile and Save as profile... | field | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5209 | Settings and backup: Shared folder for syncing profiles, Sync profiles now | field | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5210 | Settings and backup: Run the first-time setup again | key | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5211 | Settings and backup: Reset everything to defaults... (confirmation sheet, Also set aside plugins / logs, Reset and close) | key | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5212 | Settings and backup: Undo the reset | key | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5213 | First-run setup sheet: Next, Back, Skip setup, Done | key | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5214 | First-run setup sheet: Which radio do you have? (eleven choices) | dropdown | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5215 | First-run setup sheet: Starting stations (none, or one of the presets for that radio) | dropdown | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5216 | First-run setup sheet: Send anonymous usage reports (the wizard offers the existing switch) | checkbox | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5217 | Performance: CPU, memory, computer memory and graphics readouts | readout | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5218 | Performance: Reduced effects (Automatic, On, Off) | dropdown | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5219 | Accessibility: Colour set (Normal and three colour-blind-safe sets) | dropdown | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5220 | Accessibility: Number format and Digits | dropdown | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5221 | Accessibility: Speak the frequency, mode and level now | key | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5222 | Accessibility: Speak changes automatically, first state on start, frequency, mode, level, interrupt | checkbox | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5223 | Accessibility: Signal level as, waits, smallest change, level step (spoken readout) | slider | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5224 | Accessibility: Play a tone that follows the signal (and its pitch, levels, volume, squelch) | checkbox | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5225 | Accessibility: screen reader sentences for the spectrum, the waterfall and the frequency | behaviour | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5226 | Community: Forum and Discord links (App menu and the Community section; empty setting = hidden) | key | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5227 | Display body: Averaging (Off, Linear, RMS, Log, Exponential), Frames, Time constant | dropdown | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5228 | Display body: Zoom to a dragged selection (and Ctrl+drag) | checkbox | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5229 | Spectrum: a dragged selection (rubber band) zooms the view | behaviour | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5230 | Display body: Gradient editor... (sheet: Use my gradient, Blend in, stop colour, position, remove, add, reverse, reset, Done) | key | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5231 | Spectrum tools: Trace detector (As drawn, Peak, Negative peak, RMS, Voltage average, Log average, Sample) | dropdown | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5232 | Spectrum tools: Resolution bandwidth readout | readout | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5233 | Spectrum tools: Limit mask - Mask file, Write an example mask file, Load the mask, Show the limit lines, margin and breach readouts | key | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5234 | Spectrum tools: Eight-cursor tool... (sheet: mode, spacing, reference, eight cursor fields, place by click, tuned, snap, show) | key | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5235 | Spectrum tools: Show the cursors | checkbox | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+| 5236 | Audio mix: Matrix key and the Matrix sheet (one row per radio; hover previews, click keeps, double click selects) | key | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |

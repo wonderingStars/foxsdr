@@ -50,6 +50,8 @@ list(APPEND foxsdr_slint_sources globe_scene.cpp solar_ephemeris.cpp globe_logic
 list(APPEND foxsdr_slint_sources gaps_logic.cpp gaps_win.cpp)
 # SCREEN LANE C (docs/multi-radio-records/screen-c.md): the scanner block, the memories, the delta lock, the clock and the two sheets (lanec_logic: pure; lanec_publish: the LaneC global)
 list(APPEND foxsdr_slint_sources lanec_logic.cpp lanec_publish.cpp)
+# SCREEN LANE K (docs/multi-radio-records/screen-k.md): the rows lane K adds to the SYSTEM bank, the sheets, the Matrix (lanek_logic: pure; lanek_publish: the LaneK and LaneKMatrix globals)
+list(APPEND foxsdr_slint_sources lanek_logic.cpp lanek_spectrum.cpp lanek_audio.cpp lanek_publish.cpp)
 if(WIN32)
     enable_language(RC)
     add_executable(foxsdr-slint WIN32 ${foxsdr_slint_sources} "${CMAKE_SOURCE_DIR}/resources/icon/foxsdr.rc")

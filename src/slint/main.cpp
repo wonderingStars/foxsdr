@@ -94,6 +94,9 @@
 #include "mark_layout.hpp"
 #include "core/disk_job.hpp"
 #include "lanec_publish.hpp"   // screen lane C (docs/multi-radio-records/screen-c.md)
+#include "lanek_publish.hpp"   // screen lane K (docs/multi-radio-records/screen-k.md)
+#include "core/sys_first_run.hpp"
+#include "core/zoom_select.hpp"
 #include "workspace_testseam.hpp"
 #include "plugin_kit.hpp"
 #include "signal_publish.hpp"
@@ -204,6 +207,8 @@ int main(int argc, char** argv) {
 
     // THE RESTORE (the plugin scan, the settings file's load, the receiver's half applied...), then CASCADE_CONFIG_TEST's read-back line.
     const EngineService::Restored restored = service.restore();
+    // SCREEN LANE K: a NEW profile (no settings file was loaded and no first-run marker): the setup opens at the first tick. Decided here, before the engine's start writes the settings file.
+    const bool laneKFirstRun = boot.frames < 0 && !configPath.empty() && !restored.loaded && cascade::core::sys::firstRunNeeded(std::filesystem::path(configPath).parent_path());
     if (boot.announceConfig && service.persistent()) { EngineService::announce(restored); }
 
     // THE FREQUENCY LOCK (slint-gaps.md item 3): every publisher is handed this copy of the table, whose submit and submit_text refuse the tuning commands of a locked radio (gaps_logic.hpp)
@@ -677,6 +682,10 @@ int main(int argc, char** argv) {
     foxsdr::slintlanec::LaneCPublisher laneC(std::move(laneCEnv));
     const bool laneCOff = bounded.bounded() && std::getenv("FOXSDR_SLINT_LANEC_OFF") != nullptr;
     laneC.wire();
+    // SCREEN LANE K (docs/multi-radio-records/screen-k.md): constructed further down, once the skin and the radios exist; the menus and the tick reach it through this pointer
+    std::unique_ptr<foxsdr::slintlanek::LaneKPublisher> laneKp;
+    double lastZoomSelected = 0.0;   // the span the last dragged selection zoomed to (state lk.zoomspan)
+    const bool laneKOff = bounded.bounded() && std::getenv("FOXSDR_SLINT_LANEK_OFF") != nullptr;
     publisher.setClipboardSink([&](const std::string& t) { clipSet(t); });   // W16c: the Decoder output page's Copy key (clipSet is the window's clipboard, or the bounded run's stand-in)
     // THE ENGINE AS THE WORKSPACE SEES IT (workspace_logic.hpp EngineReads): the facts fact.radio.count and fact.radio.<n>.state, and RADIO_FOCUS. With the test seam they are answered from the made-up radios.
     // SEAM FOR ENGINE STAGE 4: nothing else changes when stage 4 is merged: the facts name the radios it opens and RADIO_FOCUS moves the session's focus for real.
@@ -906,6 +915,11 @@ int main(int argc, char** argv) {
                     }
                     rows.push_back({ss(cascade::i18n::tr(names[logical])), ss(chip), tone, logical != 9 && openSections[4].count(logical) > 0, LampState::Off, false});
                 }
+                // SCREEN LANE K: five sections after About (logical rows 10 to 14; the window's system-extra-base says where they start)
+                {
+                    const char* const kNames[5] = {cascade::i18n::tr("Settings and backup"), cascade::i18n::tr("Performance"), cascade::i18n::tr("Accessibility"), cascade::i18n::tr("Community"), cascade::i18n::tr("Spectrum tools")};
+                    for (int k = 0; k < 5; ++k) { rows.push_back({ss(kNames[k]), ss(""), ChipTone::Neutral, openSections[4].count(10 + k) > 0, LampState::Off, false}); }
+                }
                 break;
             }
         }
@@ -1028,6 +1042,8 @@ int main(int argc, char** argv) {
                 e.push_back(entry(MenuItemKind::Item, 605, "Help: the manual"));
                 e.push_back(entry(MenuItemKind::Item, 606, "Keyboard shortcuts", "Shift F1"));
                 e.push_back(entry(MenuItemKind::Item, 607, "Recordings..."));
+                if (laneKp && !laneKp->forumUrl().empty()) { e.push_back(entry(MenuItemKind::Item, 608, cascade::i18n::tr("Forum"))); }          // lane K: an empty setting hides the entry
+                if (laneKp && !laneKp->discordUrl().empty()) { e.push_back(entry(MenuItemKind::Item, 609, cascade::i18n::tr("Discord"))); }
                 e.push_back(entry(MenuItemKind::Separator, 0, ""));
                 e.push_back(entry(MenuItemKind::Item, 604, "Quit"));
                 break;
@@ -1062,6 +1078,7 @@ int main(int argc, char** argv) {
                 const foxsdr::slintlook::SkinId id = hcNow ? foxsdr::slintlook::SkinId::HighContrast : foxsdr::slintlook::skinOfTheme(half.uiTheme);
                 ui->global<Theme>().set_skin(id == foxsdr::slintlook::SkinId::HighContrast ? ui->global<HighContrast>().get_value() : id == foxsdr::slintlook::SkinId::NightWatch ? ui->global<NightWatch>().get_value() : ui->global<Workbench>().get_value());
                 skinNow = foxsdr::slintlook::skinName(id);
+                if (laneKp) { laneKp->restyle(); }   // lane K: the palette and the reduced effects go over the new base
                 std::fprintf(stderr, "foxsdr-slint: look: theme '%s' is drawn in the %s skin\n", half.uiTheme.c_str(), foxsdr::slintlook::skinName(id));
             }
             const foxsdr::slintlook::CounterFace cf = foxsdr::slintlook::faceOfStyle(half.tunerDisplayStyle);
@@ -1324,6 +1341,8 @@ int main(int argc, char** argv) {
             case 109: laneC.toggleBwMemory(); break;                                   // F7
             case 606: laneC.openShortcuts(foxsdr::slintsystem::keyTableFromConfig(duties.interfaceHalf().keyBindings)); break;   // U10
             case 607: laneC.openRecordings(); break;                                   // P11
+            case 608: if (laneKp) { laneKp->openCommunity(false); } break;             // lane K: the forum
+            case 609: if (laneKp) { laneKp->openCommunity(true); } break;              // lane K: Discord
             case 111: face = Face::Nixie; applyFace(); break;
             case 112: face = Face::Drum; applyFace(); break;
             case 113: face = Face::Plain; applyFace(); break;
@@ -1551,6 +1570,73 @@ int main(int argc, char** argv) {
     // (the bias tee's two callbacks - on -> off at once, and the question's "Turn it on" with the radio the question named - are the signal publisher's: signal_publish.cpp wire())
     ui->on_stop_muting_plugin([&] { for (const auto& name : lists.muteCauses) { FoxCommand c = op(FOXAPI_OP_DECODER_STOP); std::snprintf(c.text, sizeof(c.text), "%s", name.c_str()); submit(c); } });
 
+    // ---- SCREEN LANE K (docs/multi-radio-records/screen-k.md): the Settings and backup, Performance, Accessibility, Community and Spectrum tools sections, the first-run setup, the Matrix ----
+    {
+        foxsdr::slintlanek::LaneKPublisher::Env e;
+        e.ui = &*ui;
+        e.api = api;
+        e.session = session;
+        const std::filesystem::path settingsFolder = configPath.empty() ? std::filesystem::path() : std::filesystem::path(configPath).parent_path();
+        e.settingsDir = settingsFolder.string();
+        {
+            const char* local = std::getenv("LOCALAPPDATA");
+            e.dataDir = (local != nullptr && *local != '\0') ? (std::filesystem::path(local) / "FoxSDR").string() : std::string();
+        }
+        e.exportsDir = settingsFolder.empty() ? std::string() : (settingsFolder / "exports").string();
+        e.version = cascade::versionString();
+        e.bounded = bounded.bounded();
+        e.firstRun = laneKFirstRun;
+        e.submit = [&](const FoxCommand& c, std::uint32_t radio) { submit(c, radio); };
+        e.nowMs = [] { return static_cast<double>(nowMs()); };
+        e.unixNow = [] { return static_cast<std::int64_t>(std::time(nullptr)); };
+        e.selectedRadio = [&] { return workspace.selectedRadio(); };
+        e.soloRadio = [&] { return soloRadio; };
+        e.matrix = [&] {
+            std::vector<foxsdr::slintlanek::MatrixInput> v;
+            for (int k = 0; k < kMaxRadios; ++k) {
+                if (!workspace.occupied(k) || !deckHave[static_cast<std::size_t>(k)]) { continue; }   // every open radio's last state, as the strip and the mix read them (a hidden radio's picture is not read)
+                const FoxReceiverState& st = deckStates[static_cast<std::size_t>(k)];
+                foxsdr::slintlanek::MatrixInput m;
+                m.slot = k;
+                m.running = (st.flags & FOXAPI_RX_RUNNING) != 0;
+                m.tunedHz = st.tunedHz;
+                m.demod = st.demodMode;
+                m.signalDb = st.signalDb;
+                m.sMeter = st.sMeter;
+                m.muted = (st.flags & FOXAPI_RX_MUTED) != 0;
+                v.push_back(m);
+            }
+            return v;
+        };
+        e.baseSkin = [&] {
+            Skin sk = skinNow == "highcontrast" ? ui->global<HighContrast>().get_value() : skinNow == "night" ? ui->global<NightWatch>().get_value() : ui->global<Workbench>().get_value();
+            sk.digit_face = face == Face::Nixie ? DigitFace::Nixie : face == Face::Drum ? DigitFace::Drum : DigitFace::Plain;
+            return sk;
+        };
+        e.quit = [] { slint::quit_event_loop(); };
+        laneKp = std::make_unique<foxsdr::slintlanek::LaneKPublisher>(std::move(e));
+        laneKp->wire();
+    }
+    // lane K, DEPTH-GAPS A2 Display: a dragged selection of the plot zooms to it (core/zoom_select.hpp), frequency only
+    ui->global<SpectrumEvents>().on_zoom_selected([&](int r, float x0, float x1) {
+        RadioView& rv = r > 0 ? radios.at(r - 1) : selected();
+        const ViewWindow cur = rv.currentView();
+        if (!(cur.spanHz > 0.0) || !(x1 > x0)) { return; }
+        cascade::core::SpectrumView v;
+        v.centreHz = cur.centreHz; v.spanHz = cur.spanHz; v.topDb = rv.state.dbMax; v.bottomDb = rv.state.dbMin;
+        cascade::core::ZoomLimits lim;
+        lim.fullLoHz = rv.fullCentre() - rv.fullSpan() / 2.0;
+        lim.fullHiHz = rv.fullCentre() + rv.fullSpan() / 2.0;
+        lim.minSpanHz = std::max(1.0, rv.state.sampleRateHz / 1000.0);
+        const double plotW = 1000.0;
+        const cascade::core::ZoomResult z = cascade::core::zoomToSelection(v, cascade::core::DragRect{static_cast<double>(x0) * plotW, 0.0, static_cast<double>(x1) * plotW, 100.0}, plotW, 100.0, lim, cascade::core::ZoomAxes::FrequencyOnly);
+        if (!z.changed) { return; }
+        rv.view = ViewWindow{z.view.centreHz, z.view.spanHz};
+        if (rv.view.spanHz >= rv.fullSpan() * 0.999) { rv.view = {0, 0}; }
+        rv.lastBandDragTick = tickNo;
+        lastZoomSelected = z.view.spanHz;
+    });
+
     // ---- rail + panel ----
     ui->on_bank_selected([&](int i) { bankIndex = std::clamp(i, 0, 4); ui->set_bank_index(bankIndex); });
     ui->on_section_clicked([&](int i) {
@@ -1598,6 +1684,7 @@ int main(int argc, char** argv) {
     ui->on_spectrum_hover(hover);
     ui->on_waterfall_hover(hover);
     const auto clickTune = [&](float x, bool shift) {
+        if (laneKp && laneKp->placeCursorAt(hzAtFrac(x))) { return; }   // lane K: the eight-cursor tool places a cursor instead of tuning
         FoxCommand c = op(FOXAPP_OP_VFO_TO_ABSOLUTE); c.num[0] = hzAtFrac(x); c.ival[0] = shift ? 0 : 1; submit(c);
     };
     ui->on_spectrum_clicked(clickTune);
@@ -1932,7 +2019,7 @@ int main(int argc, char** argv) {
             switch (foxsdr::slintsystem::escapeStep(open)) {
                 case foxsdr::slintsystem::EscapeStep::ImportDialog: ui->global<SignalEvents>().invoke_import_closed(); break;
                 case foxsdr::slintsystem::EscapeStep::StorePluginPage: ui->global<ExtendEvents>().invoke_store_plugin_back(); break;
-                case foxsdr::slintsystem::EscapeStep::Overlays: ui->set_editing(false); ui->set_about_open(false); ui->set_bias_question_open(false); laneC.closeOverlays(); break;
+                case foxsdr::slintsystem::EscapeStep::Overlays: ui->set_editing(false); ui->set_about_open(false); ui->set_bias_question_open(false); laneC.closeOverlays(); if (laneKp) { laneKp->closeOverlays(); } break;
             }
         }
         else if (id == "uiSizeAuto") { systemBank.setInterfaceSize(0); }   // Ctrl+0: back to Auto (saved; the look takes it on the next tick)
@@ -2051,18 +2138,26 @@ int main(int argc, char** argv) {
                     else { boxLines.push_back("TRK NO SIGNAL"); }
                 }
             }
-            paintTrace(rv.wells.traceMemory(), px.traceW, px.traceH, sub, subN, st.dbMin, st.dbMax, rv.traceState, mode,
+            // LANE K: the frame the mask, the cursors and the RBW readout look at; the trace's own bins: averaged (Display) and reduced by the chosen detector (Spectrum tools)
+            foxsdr::slintlanek::LaneKPublisher::TraceSource tsrc{sub, subN};
+            if (laneKp && !laneKOff) {
+                laneKp->frameSeen(rv.slot, rv.slot == radios.selected, frame.data(), frame.size(), info.centreHz, info.spanHz, st.sampleRateHz);
+                tsrc = laneKp->traceSource(rv.slot, frame.data(), frame.size(), b0, subN, static_cast<double>(t) / 1000.0, static_cast<std::uint64_t>(info.centreHz) ^ (static_cast<std::uint64_t>(info.spanHz) << 1), px.traceW);
+            }
+            paintTrace(rv.wells.traceMemory(), px.traceW, px.traceH, tsrc.data, tsrc.n, st.dbMin, st.dbMax, rv.traceState, mode,
                        Rgba{0x7a, 0xd7, 0xff, 255}, Rgba{0xff, 0x9f, 0x43, 255}, Rgba{0xf1, 0xea, 0xd6, 255});
+            if (laneKp && !laneKOff) { laneKp->paintOver(rv.wells.traceMemory(), px.traceW, px.traceH, cur.centreHz - cur.spanHz / 2.0, cur.centreHz + cur.spanHz / 2.0, st.dbMin, st.dbMax); }
             if (!boxLines.empty()) { foxsdr::slintextras::paintMeasureBox(rv.wells.traceMemory(), px.traceW, px.traceH, boxLines); }
             if (lookHistory) { foxsdr::slintextras::paintHistoryGraph(rv.wells.traceMemory(), px.traceW, px.traceH, rv.history, 0, 120.0); }
             // S10: a line is made at the chosen rate (the strongest of the frames since the last line); S7: painted through the chosen colour map
             {
-                const double wantLps = foxsdr::slintextras::speedLinesPerSecond(speedIdx);
+                double wantLps = foxsdr::slintextras::speedLinesPerSecond(speedIdx);
+                if (laneKp && laneKp->waterfallRowsPerSecondCap() > 0 && (wantLps == 0.0 || wantLps > laneKp->waterfallRowsPerSecondCap())) { wantLps = laneKp->waterfallRowsPerSecondCap(); }   // lane K: reduced effects
                 if (rv.pacer.linesPerSecond() != wantLps) { rv.pacer.setLinesPerSecond(wantLps); }
                 const double steadyS = static_cast<double>(t) / 1000.0;
                 if (rv.pacer.feed(sub, subN, steadyS)) {
                     const auto& row = rv.pacer.row();
-                    scrollWaterfallRow(rv.wells.picture.data(), px.wfW, px.wfH, row.data(), row.size(), st.dbMin, st.dbMax, paletteIdx == 0 ? nullptr : foxsdr::slintextras::paletteTable(paletteIdx).data());
+                    scrollWaterfallRow(rv.wells.picture.data(), px.wfW, px.wfH, row.data(), row.size(), st.dbMin, st.dbMax, (laneKp && laneKp->gradientTable() != nullptr) ? laneKp->gradientTable() : (paletteIdx == 0 ? nullptr : foxsdr::slintextras::paletteTable(paletteIdx).data()));
                     rv.lastRowUtcS = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()) / 1000.0;
                 }
                 rv.secondsPerRow = wantLps > 0.0 ? 1.0 / wantLps : (fps > 0 ? 1.0 / fps : 0.0);
@@ -2345,6 +2440,11 @@ int main(int argc, char** argv) {
             if (!dropInstalled && tickNo >= 20 && tickNo % 15 == 0) {   // the OS file drop: once the window exists, our drop target takes the place of the backend's
                 if (void* hw = foxsdr::slintgaps::findMainWindow()) { dropInstalled = foxsdr::slintgaps::installFileDrop(hw, [&](const std::string& p) { if (handleDrop) { handleDrop(p); } }); }
             }
+            if (laneKp && !laneKOff) {
+                ui->set_system_extra_base(systemBank.testerShown() ? 10 : 9);
+                laneKp->tick(state, static_cast<long>(tickNo));
+                if (laneKp->takeGradientChanged()) { eachRadio([&](RadioView& rv) { rv.wells.picture.assign(rv.wells.picture.size(), Rgba{0x06, 0x07, 0x0a, 255}); }); }   // the user's gradient: old lines cannot be recoloured
+            }   // screen lane K (FOXSDR_SLINT_LANEK_OFF=1, a bounded run only, leaves it out)
             if (!laneCOff) { laneC.tick(state, static_cast<long>(tickNo)); }   // screen lane C: scanner block, memories, clock, sheets (FOXSDR_SLINT_LANEC_OFF=1, a bounded run only, leaves it out: the frame-cost comparison)
             if (!lists.converter && !(noteTick > 0 && tickNo - noteTick < 90)) {   // T9: the airband channel's name where the counter says "via ..." (a note or a converter keeps the place)
                 const std::string ch = cascade::core::airbandChannelName(state.tunedHz);
@@ -3052,6 +3152,8 @@ int main(int argc, char** argv) {
         if (name == "lanec.logcopies") { out = std::to_string(publisher.copyCount()); return std::string(); }
         if (name == "lanec.logcopy") { out = publisher.lastCopy(); return std::string(); }
         if (name.rfind("lanec.", 0) == 0) { return laneC.readState(name.substr(6), out); }
+        if (name == "lk.zoomspan") { out = fmt("%.0f", lastZoomSelected); return std::string(); }
+        if (name.rfind("lk.", 0) == 0) { return laneKp ? laneKp->readState(name.substr(3), out) : std::string("no lane K"); }
         // gaps.<what>: the classic-window gaps (docs/multi-radio-records/slint-gaps.md)
         if (name.rfind("gaps.", 0) == 0) {
             const std::string w = name.substr(5);
@@ -3235,6 +3337,7 @@ int main(int argc, char** argv) {
         if (what == "menu") { ui->invoke_menu_activated(static_cast<int>(toneHz)); return std::string(); }   // lane B, TEST ONLY: a pick of a right-click menu's item
         if (what == "menuslider") { ui->invoke_menu_slider_changed(static_cast<int>(toneHz), static_cast<float>(hz2)); return std::string(); }
         if (what == "menuhz") { menuHz = toneHz; return std::string(); }
+        if (what == "zoomsel") { ui->global<SpectrumEvents>().invoke_zoom_selected(0, static_cast<float>(toneHz), static_cast<float>(hz2)); return std::string(); }   // lane K, TEST ONLY: a dragged selection from plot fraction `toneHz` to `hz2` (the scripted drag starts on a control, not on the plot)
         if (what == "pinch") { ui->global<SpectrumEvents>().invoke_pinch(0, static_cast<float>(toneHz), static_cast<float>(hz2)); return std::string(); }   // TEST ONLY: a pinch of factor `toneHz` about the plot fraction `hz2`
         if (what == "tune" || what == "mode" || what == "bw") {   // setup of a radio a script added: the ordinary op, aimed at that radio
             FoxCommand c = op(what == "tune" ? FOXAPI_OP_SET_FREQUENCY : what == "mode" ? FOXAPI_OP_SET_MODE : FOXAPI_OP_SET_BANDWIDTH);
@@ -3371,6 +3474,8 @@ int main(int argc, char** argv) {
     kit.release();
     service.stop();
     duties.closed();
+    // SCREEN LANE K: the automatic backup, then the import, reset or profile switch the user asked for: after the engine's last save, or that save would overwrite it
+    if (laneKp) { laneKp->flush(); const std::string laneKEnd = laneKp->finishAtExit(); if (!laneKEnd.empty()) { std::fprintf(stderr, "foxsdr-slint: lane K at exit: %s\n", laneKEnd.c_str()); } }
     api->close_session(session);
 
     int exitCode = scriptRefused ? 2 : 0;

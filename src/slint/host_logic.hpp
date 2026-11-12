@@ -11,6 +11,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include "core/access_number_format.hpp"
 #include <deque>
 #include <string>
 #include <vector>
@@ -40,6 +41,9 @@ bool isPerRadioList(std::uint32_t list);
 std::int32_t readListFor(const FoxEngineApi* api, FoxSession* session, std::uint32_t radio, std::uint32_t list, std::uint32_t index, FoxListItem* out);
 
 // ---- readouts ----
+// LANE K (access): the number format the readouts use: nullptr = today's text, a dot and no grouping, byte for byte (the default; every test sees it). Set from the Accessibility section
+// ("Follow the Windows regional settings"); fmtMHz, fmtKHz, spanText and cursorText then write the decimal sign the symbols name (core/access_number_format.hpp formatNumber).
+void setNumberLocale(const cascade::core::access::NumberSymbols* symbols, cascade::core::access::DigitPolicy policy = cascade::core::access::DigitPolicy::Latin);
 std::string fmtMHz(double hz);                             // "145.500000 MHz"
 std::string fmtRate(double hz);                            // "2.400 MS/s", "--" when there is no rate
 std::string fmtKHz(double hz);                             // "12.5 kHz"

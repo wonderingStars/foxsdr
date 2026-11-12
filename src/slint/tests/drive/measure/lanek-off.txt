@@ -1,0 +1,4 @@
+#! frames=900 size=1600x2600 bank=4 sections=4:14 FOXSDR_SLINT_FRAME_LOG=1 FOXSDR_SLINT_LANEK_OFF=1
+# lanek-off (lane K frame cost): the window with lane K's tick left out (FOXSDR_SLINT_LANEK_OFF=1), one radio, the same section open as lanek-on.
+10 state running == 1
++800 state running == 1
