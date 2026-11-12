@@ -14,4 +14,12 @@ void Engine::stopMpxRecording() {
     }
 }
 
+void Engine::stopIfRecording() {
+    rx().pipeline_.setIfRecorder(nullptr);
+    if (rx().ifRecorder_.recording()) {
+        rx().ifRecorder_.stop();
+        ++mpxVersion_;
+    }
+}
+
 }  // namespace cascade::engine

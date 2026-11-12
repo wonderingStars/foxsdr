@@ -1973,6 +1973,11 @@ void Pipeline::setIqRecorder(Recorder* r) {
     iqRecorder_ = r;
 }
 
+void Pipeline::setIfRecorder(Recorder* r) {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    ifRecorder_ = r;
+}
+
 void Pipeline::setMpxRecorder(Recorder* r) {
     std::lock_guard<std::mutex> lk(audioMutex_);
     mpxRecorder_ = r;
@@ -2454,6 +2459,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // line can never block, never fail and never wait for the GUI, which is
     // the condition on anything added to this thread.
     scopeIq_.push(chanBuf_.data(), m);
+    if (ifRecorder_ != nullptr) { ifRecorder_->writeIq(chanBuf_.data(), m); }   // P4: the IF, the passband only
 
     // Demodulate 1:1 at the channel rate. In WFM this is the COMPOSITE (MPX)
     // with no de-emphasis applied — see the ownership note in the header.

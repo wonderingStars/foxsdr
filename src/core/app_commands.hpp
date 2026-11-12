@@ -184,6 +184,11 @@
 //   RDS Spy to open. UNSUPPORTED unless the radio is in WFM (the multiplex exists only there), NO_CHANGE when it is so already, FAILED with the recorder's words when the file cannot be made. It ends with the
 //   radio (stop, removal, shutdown). fact.radio.<n>.mpx reads 1 while it records. The file start blocks for the disk (a control-thread call, like a settings write).
 #define FOXAPP_OP_MPX_RECORD             0x8622u /* ival[0]: 1 start / 0 stop. Addresses one radio (target) */
+//   IF_RECORD (SETTINGS; engine serial lane A, row P4): ival[0] 1 starts, 0 stops a recording of the IF of the selected radio (target): the channel after the VFO has mixed it to DC and the channel filter has taken
+//   everything outside the passband away, at the channel rate (about 200 kHz), as I/Q in the radio's I/Q file format (SET_RECORD_FORMAT: 32-bit float or 16-bit integer), in if_<date>_<time>_<rate>Hz.wav in the
+//   recordings folder. The same in every mode, before the demodulator and the squelch. NO_CHANGE when it is so already, FAILED with the recorder's words; it ends with the radio and when the input rate
+//   changes (the channel rate with it). fact.radio.<n>.ifrec reads 1 while it records. The file start blocks for the disk once.
+#define FOXAPP_OP_IF_RECORD              0x8623u /* ival[0]: 1 start / 0 stop. Addresses one radio (target) */
 #define FOXAPP_OP_SET_STEREO_SYSTEM      0x8619u /* ival[0]: 0 automatic / 1 pilot tone / 2 OIRT. Addresses one radio (target) */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

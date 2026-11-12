@@ -1395,6 +1395,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         fact(pre + "locked", receivers_[n - 1u]->tuneLocked_ ? "1" : "0");
         fact(pre + "claimed", receivers_[n - 1u]->claimed_ ? "1" : "0");
         fact(pre + "mpx", receivers_[n - 1u]->mpxRecorder_.recording() ? "1" : "0");
+        fact(pre + "ifrec", receivers_[n - 1u]->ifRecorder_.recording() ? "1" : "0");
         {
             const int sys = receivers_[n - 1u]->stereoSystem_;
             fact(pre + "stereo.system", sys == 1 ? "pilot" : (sys == 2 ? "oirt" : "auto"));

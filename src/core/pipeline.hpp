@@ -635,6 +635,10 @@ public:
     // other mode. Like setIqRecorder: after the setter returns no write against the old recorder is in flight; nullptr stops it. Any thread.
     static constexpr double kMpxRateHz = 192000.0;
     void setMpxRecorder(Recorder* r);
+    // THE IF AS A FILE (engine serial lane A, row P4): the channel after the VFO has mixed it to DC and the channel filter has taken everything but the passband out, at the channel rate (channelRateHz()), as
+    // I/Q to this recorder (a BasebandIq take: 32-bit float or 16-bit integer by its sample format). Before the demodulator, so it is the same in every mode; the squelch does not gate it. Like setIqRecorder:
+    // after the setter returns no write against the old recorder is in flight; nullptr stops it. A change of input rate changes the channel rate: the engine ends the take then. Any thread.
+    void setIfRecorder(Recorder* r);
     bool setIqCorrection(int mask);
     int iqCorrection() const;
     double iqImageRejectionDb() const;   // the balance estimator's reading of the input, dB (200 while nothing is measured)
@@ -1418,6 +1422,7 @@ private:
     RdsSnapshot rdsPublished_;
     // Recorder taps (P6): non-owning, audioMutex_-guarded like the chain
     // blocks above — see the set*Recorder contract in the public section.
+    Recorder* ifRecorder_ = nullptr;                     // P4 (under audioMutex_)
     Recorder* mpxRecorder_ = nullptr;                    // D4 (under audioMutex_)
     cascade::dsp::RationalResampler mpxResampler_{192000u, 200000u};   // composite rate -> 192 kHz; rebuilt with the channel blocks
     std::vector<float> mpxBuf_;

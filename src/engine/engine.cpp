@@ -3153,6 +3153,7 @@ void Engine::followInputRate() {
     if (rx().iqRecorder_.recording() && rx().pipeline_.inputRateHz() != rx().iqRecordRateHz_) {
         stopIqRecording();
     }
+    if (rx().ifRecorder_.recording() && rx().pipeline_.channelRateHz() != rx().ifRecordRateHz_) { stopIfRecording(); }   // P4: the channel rate moved with the input rate
 
     // Every source change funnels through here, which makes it the one place
     // that can keep the decoder instances honest about the rate and centre
@@ -6129,6 +6130,7 @@ void Engine::stopReceiver(const char* who) {
     if (iq) { stopIqRecording(); }
     if (audio) { stopAudioRecording(); }
     if (rx().mpxRecorder_.recording()) { stopMpxRecording(); }
+    if (rx().ifRecorder_.recording()) { stopIfRecording(); }
     const long long recordersMs = static_cast<long long>(
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - recordersFrom).count());
     // WHO ASKED, in the log (0.99.68): that same report's log showed the stop's cost and nothing of its cause. One line, before the stop
@@ -7729,6 +7731,24 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         }
         case FOXAPP_OP_CHANNEL_CLAIM: return claimChannel(c);
         case FOXAPP_OP_CHANNEL_RELEASE: return releaseChannel(c);
+        case FOXAPP_OP_IF_RECORD: {
+            Receiver& rxs = rx();
+            if (on == rxs.ifRecorder_.recording()) { return refuse(FOXAPI_NO_CHANGE, on ? "the IF is being recorded already" : "the IF is not being recorded"); }
+            if (!on) {
+                stopIfRecording();
+                res.applied[0] = 0.0;
+                return res;
+            }
+            (void)rxs.ifRecorder_.setSampleFormat(cascade::core::RecordKind::BasebandIq, rxs.recordIqFormat_);
+            const double rate = rxs.pipeline_.channelRateHz();
+            std::string why;
+            if (!rxs.ifRecorder_.start(cascade::core::RecordKind::BasebandIq, recordDir_, rate, why, "if")) { return refuse(FOXAPI_FAILED, why.c_str()); }
+            rxs.ifRecordRateHz_ = rate;
+            rxs.pipeline_.setIfRecorder(&rxs.ifRecorder_);
+            ++mpxVersion_;
+            res.applied[0] = rate;
+            return res;
+        }
         case FOXAPP_OP_MPX_RECORD: {
             Receiver& rxs = rx();
             if (on == rxs.mpxRecorder_.recording()) { return refuse(FOXAPI_NO_CHANGE, on ? "the multiplex is being recorded already" : "the multiplex is not being recorded"); }
@@ -10635,6 +10655,7 @@ void Engine::teardown() {
         stopIqRecording();
         stopAudioRecording();
         stopMpxRecording();
+        stopIfRecording();
     });
     // (Every added radio's pipeline is stopped by shutdownStop's loop, or - for an engine torn down without it - by its Receiver's destructor, which joins
     // the pipeline's threads.)
@@ -10881,6 +10902,7 @@ void Engine::shutdownQuiesce() {
         stopIqRecording();
         stopAudioRecording();
         stopMpxRecording();
+        stopIfRecording();
     });
 
     // THE BOUNDED RUN'S PLUGIN STATUS REPORT (CASCADE_PLUGIN_STATUS; shell retirement R4), where the window used to call reportPluginStatus - right
