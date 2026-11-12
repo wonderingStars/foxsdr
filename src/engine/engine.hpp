@@ -3241,6 +3241,7 @@ private:
     FoxCommandResult cursorOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     FoxCommandResult sweepOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     FoxCommandResult iqOutOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
+    FoxCommandResult followOp(const FoxCommand& c, FoxCommandResult res, bool& changed);
     void wireBStopIqOut(std::size_t slot);   // the radio's output ends (the pipeline's tap is cleared first)
     void wireBShutdown();                    // the engine is going: every output ends while the pipelines still exist
 public:
@@ -3248,6 +3249,7 @@ public:
 private:
     void wireBFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
     std::uint64_t wireBStamp() const;
+    void pumpFollow();   // (inside pumpWireB, with the lane's mutex held)
     void pumpWireB();   // once per control pass (the Back part): the limit mask of every open radio
     // wire-b end
     std::vector<cascade::core::macros::Macro> macros_;

@@ -62,6 +62,16 @@ void wireBOps(AppWindow& a) {
     CHECK(refused(A::apply(a, text(FOXAPP_OP_IQ_OUT_START, "{\"bind\":\"0.0.0.0\"}")), FOXAPI_BAD_ARGUMENT));
     covering(FOXAPP_OP_IQ_OUT_STOP);
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_IQ_OUT_STOP, 0)), FOXAPI_NO_CHANGE));
+    // RADIOS THAT FOLLOW A MASTER: the window has one radio, so a link needs a second one (the engine test does that); the refusals that need none
+    covering(FOXAPP_OP_FOLLOW_SET);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_FOLLOW_SET, 1, 1)), FOXAPI_BAD_ARGUMENT));   // a radio cannot follow itself
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_FOLLOW_SET, 9, 1)), FOXAPI_OUT_OF_RANGE));
+    covering(FOXAPP_OP_FOLLOW_CLEAR);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_FOLLOW_CLEAR, 0)), FOXAPI_NO_CHANGE));
+    covering(FOXAPP_OP_FOLLOW_LOCK);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_FOLLOW_LOCK, 2, 1)), FOXAPI_NO_CHANGE));
+    covering(FOXAPP_OP_FOLLOW_KEEP);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_FOLLOW_KEEP, 2)), FOXAPI_NO_CHANGE));
     covering(FOXAPP_OP_GPU_FFT_MODE);
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 3)), FOXAPI_OUT_OF_RANGE));
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 0)), FOXAPI_NO_CHANGE));

@@ -260,10 +260,122 @@ FoxCommandResult Engine::cursorOp(const FoxCommand& c, const std::string& text, 
     return res;
 }
 
+// --- rfmon: radios that follow a master (core/radio_matrix_model.hpp) -------------------------------------------------------------------------------
+namespace {
+// The absolute tuned frequency of radio `n` (1..8) from its published state; false when it is not open or has none yet.
+bool tunedOf(const std::array<std::unique_ptr<Receiver>, kMaxReceivers>& rs, std::size_t slot, double& hz) {
+    if (slot >= rs.size() || !rs[slot] || rs[slot]->receiverSnapshot_ == nullptr) { return false; }
+    cascade::core::PublishedState ps;
+    if (!rs[slot]->receiverSnapshot_->read(ps) || !(ps.rx.tunedHz > 0.0)) { return false; }
+    hz = ps.rx.tunedHz;
+    return true;
+}
+}  // namespace
+
+FoxCommandResult Engine::followOp(const FoxCommand& c, FoxCommandResult res, bool& changed) {
+    WireBState& w = wireBState();
+    const auto live = [&](long long n) { return n >= 1 && n <= static_cast<long long>(kMaxReceivers) && receivers_[static_cast<std::size_t>(n - 1)] != nullptr; };
+    switch (c.op) {
+        case FOXAPP_OP_FOLLOW_SET: {
+            if (c.ival[0] < 1 || c.ival[0] > 8 || c.ival[1] < 1 || c.ival[1] > 8) { return refusal(res, FOXAPI_OUT_OF_RANGE, "radio numbers are 1 to 8"); }
+            if (c.ival[0] == c.ival[1]) { return refusal(res, FOXAPI_BAD_ARGUMENT, "a radio cannot follow itself"); }
+            if (!live(c.ival[0]) || !live(c.ival[1])) { return refusal(res, FOXAPI_NO_DEVICE, "both radios must be open"); }
+            const std::size_t f = static_cast<std::size_t>(c.ival[0] - 1), m = static_cast<std::size_t>(c.ival[1] - 1);
+            double fh = 0.0, mh = 0.0;
+            if (!tunedOf(receivers_, f, fh) || !tunedOf(receivers_, m, mh)) { return refusal(res, FOXAPI_FAILED, "a radio has no frequency yet"); }
+            const cascade::core::FollowError e = w.follow.link(static_cast<int>(f), static_cast<int>(m), fh, mh);
+            switch (e) {
+                case cascade::core::FollowError::None: break;
+                case cascade::core::FollowError::AlreadyFollowing: return refusal(res, FOXAPI_BUSY, "that radio follows another one already (FOLLOW_CLEAR first)");
+                case cascade::core::FollowError::Cycle: return refusal(res, FOXAPI_BAD_ARGUMENT, "that would make the radios follow each other in a circle");
+                case cascade::core::FollowError::SameRadio: return refusal(res, FOXAPI_BAD_ARGUMENT, "a radio cannot follow itself");
+                default: return refusal(res, FOXAPI_BAD_ARGUMENT, "that link is not possible");
+            }
+            w.followLastHz[m] = mh;
+            w.followHaveLast[m] = true;
+            w.followNote[f].clear();
+            res.applied[0] = fh - mh;
+            changed = true;
+            return res;
+        }
+        case FOXAPP_OP_FOLLOW_CLEAR: {
+            if (c.ival[0] < 0 || c.ival[0] > 8) { return refusal(res, FOXAPI_OUT_OF_RANGE, "radio numbers are 1 to 8 (0 for every link)"); }
+            if (w.follow.linkCount() == 0) { return refusal(res, FOXAPI_NO_CHANGE, "no radio follows another"); }
+            if (c.ival[0] == 0) {
+                for (int i = 0; i < 8; ++i) { w.follow.unlink(i); w.followNote[static_cast<std::size_t>(i)].clear(); }
+            } else {
+                if (w.follow.masterOf(static_cast<int>(c.ival[0] - 1)) < 0) { return refusal(res, FOXAPI_NO_CHANGE, "that radio follows nothing"); }
+                w.follow.unlink(static_cast<int>(c.ival[0] - 1));
+                w.followNote[static_cast<std::size_t>(c.ival[0] - 1)].clear();
+            }
+            changed = true;
+            return res;
+        }
+        case FOXAPP_OP_FOLLOW_LOCK: {
+            if (c.ival[0] < 1 || c.ival[0] > 8) { return refusal(res, FOXAPI_OUT_OF_RANGE, "radio numbers are 1 to 8"); }
+            const int f = static_cast<int>(c.ival[0] - 1);
+            if (w.follow.masterOf(f) < 0) { return refusal(res, FOXAPI_NO_CHANGE, "that radio follows nothing"); }
+            const bool want = c.ival[1] != 0;
+            if (w.follow.locked(f) == want) { return refusal(res, FOXAPI_NO_CHANGE, want ? "the link is locked already" : "the link is not locked"); }
+            w.follow.setLocked(f, want);
+            changed = true;
+            return res;
+        }
+        case FOXAPP_OP_FOLLOW_KEEP: {
+            if (c.ival[0] < 1 || c.ival[0] > 8) { return refusal(res, FOXAPI_OUT_OF_RANGE, "radio numbers are 1 to 8"); }
+            const int f = static_cast<int>(c.ival[0] - 1);
+            const int m = w.follow.masterOf(f);
+            if (m < 0) { return refusal(res, FOXAPI_NO_CHANGE, "that radio follows nothing"); }
+            double fh = 0.0, mh = 0.0;
+            if (!tunedOf(receivers_, static_cast<std::size_t>(f), fh) || !tunedOf(receivers_, static_cast<std::size_t>(m), mh)) { return refusal(res, FOXAPI_FAILED, "a radio has no frequency yet"); }
+            w.follow.setOffset(f, fh - mh);
+            res.applied[0] = fh - mh;
+            changed = true;
+            return res;
+        }
+        default:
+            return refusal(res, FOXAPI_UNSUPPORTED, "this build has no such operation");
+    }
+}
+
+// Once per control pass: a master whose tuned frequency moved retunes what follows it (the model's order: a master before its own followers) through the ordinary SET_FREQUENCY.
+void Engine::pumpFollow() {
+    WireBState& w = *wireB_;
+    if (w.follow.linkCount() == 0) { return; }
+    bool moved = false;
+    std::array<bool, 8> known{};
+    for (std::size_t i = 0; i < 8; ++i) { known[i] = receivers_[i] != nullptr; }
+    for (std::size_t m = 0; m < 8; ++m) {
+        bool isMaster = false;
+        for (int f = 0; f < 8; ++f) { if (w.follow.masterOf(f) == static_cast<int>(m)) { isMaster = true; } }
+        if (!isMaster) { continue; }
+        double hz = 0.0;
+        if (!tunedOf(receivers_, m, hz)) { continue; }
+        const bool had = w.followHaveLast[m];
+        const double last = w.followLastHz[m];
+        w.followLastHz[m] = hz;
+        w.followHaveLast[m] = true;
+        if (!had || hz == last) { continue; }
+        for (const cascade::core::FollowMove& mv : w.follow.onMasterMoved(static_cast<int>(m), hz, known)) {
+            const std::size_t f = static_cast<std::size_t>(mv.radioId);
+            FoxCommand cmd = cascade::core::cmd::makeNum(FOXAPI_OP_SET_FREQUENCY, mv.newHz);
+            cmd.target = static_cast<std::uint32_t>(f) + 1u;
+            const FoxCommandResult r = applyCommand(cmd);
+            w.followNote[f] = r.status == FOXAPI_OK ? std::string(mv.clamped ? "held at the end of the range" : "") : std::string("could not follow: ") + r.message;
+            if (r.status == FOXAPI_OK) { w.followLastHz[f] = mv.newHz; }
+            moved = true;
+        }
+    }
+    if (moved) { ++wireBVersion_; }
+}
+
 // --- net-outputs: network I/Q out (net/iq_out.hpp) -----------------------------------------------------------------------------------------------
 void Engine::wireBStopIqOut(std::size_t slot) {
     if (wireB_ == nullptr || slot >= wireB_->iqOut.size()) { return; }
     std::lock_guard<std::mutex> lk(wireB_->mutex);
+    wireB_->follow.radioClosed(static_cast<int>(slot));   // (every link this radio was in ends with it)
+    wireB_->followHaveLast[slot] = false;
+    wireB_->followNote[slot].clear();
     WireBState::IqOutRadio& o = wireB_->iqOut[slot];
     if (o.out == nullptr) { return; }
     if (receivers_[slot]) { receivers_[slot]->pipeline_.setIqSink(nullptr); }   // (returns once no block is inside the sink)
@@ -495,6 +607,12 @@ FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text
         case FOXAPP_OP_IQ_OUT_STOP:
             res = iqOutOp(c, text, res, changed);
             break;
+        case FOXAPP_OP_FOLLOW_SET:
+        case FOXAPP_OP_FOLLOW_CLEAR:
+        case FOXAPP_OP_FOLLOW_LOCK:
+        case FOXAPP_OP_FOLLOW_KEEP:
+            res = followOp(c, res, changed);
+            break;
         case FOXAPP_OP_SWEEP_OPEN:
         case FOXAPP_OP_SWEEP_CLOSE:
         case FOXAPP_OP_SWEEP_CONFIG:
@@ -598,6 +716,7 @@ std::uint64_t Engine::wireBStamp() const {
         h = (h ^ (r.engaged ? r.submitted / 256u : 0u)) * 1099511628211ull;
         // (a coarse step: about 2 s of a 240 kS/s radio; a counter that moving every pass would rebuild the fact block every pass)
         if (wireB_ != nullptr && wireB_->iqOut[i].out != nullptr) { h = (h ^ (wireB_->iqOut[i].out->stats().samplesIn >> 19) ^ (wireB_->iqOut[i].out->stats().tcp.accepted << 40)) * 1099511628211ull; h = (h ^ 0x5151u) * 1099511628211ull; }
+        if (wireB_ != nullptr) { h = (h ^ static_cast<std::uint64_t>(wireB_->follow.masterOf(static_cast<int>(i)) + 2 + 16 * (wireB_->follow.locked(static_cast<int>(i)) ? 1 : 0) + 64 * static_cast<std::uint64_t>(wireB_->followNote[i].size()))) * 1099511628211ull; }
         if (wireB_ != nullptr && i == 0) {
             const wireb::SweepStatus s = wireB_->sweep.status();
             h = (h ^ static_cast<std::uint64_t>((s.open ? 1 : 2) + 4 * s.lastError.size() + 64 * (s.sweeps / 16u) + 100003 * (s.heatRows / 4u))) * 1099511628211ull;   // (a coarse step: the counters move every sweep)
@@ -612,7 +731,12 @@ std::uint64_t Engine::wireBStamp() const {
 
 // THE LIMIT MASK, once per control pass: for every open radio the newest spectrum frame against the mask, the monitor's debounce, the log line of a new event, the capture of a breach.
 void Engine::pumpWireB() {
-    if (wireB_ == nullptr || !wireB_->maskEnabled || !wireB_->maskLoaded) { return; }
+    if (wireB_ == nullptr) { return; }
+    {
+        std::lock_guard<std::mutex> lk(wireB_->mutex);
+        pumpFollow();
+    }
+    if (!wireB_->maskEnabled || !wireB_->maskLoaded) { return; }
     WireBState& w = *wireB_;
     std::lock_guard<std::mutex> lk(w.mutex);
     const double nowS = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -683,6 +807,20 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
             j["stop_hz"] = s.stopHz; j["heat_rows"] = s.heatRows; j["heat_cols"] = s.heatCols; j["occ_channels"] = s.occChannels; j["occ_sweeps"] = s.occSweeps;
             fact("sweep.state", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
         }
+    }
+    {
+        wireb::Json rows = wireb::Json::array();
+        for (std::size_t i = 0; i < receivers_.size(); ++i) {
+            if (!receivers_[i]) { continue; }
+            cascade::core::PublishedState ps;
+            const bool have = receivers_[i]->receiverSnapshot_ != nullptr && receivers_[i]->receiverSnapshot_->read(ps);
+            const int master = wireB_->follow.masterOf(static_cast<int>(i));
+            rows.push_back({{"radio", i + 1}, {"state", receivers_[i]->pipeline_.running() ? "running" : "stopped"}, {"tuned_hz", have ? ps.rx.tunedHz : 0.0},
+                            {"mode", have ? static_cast<int>(ps.rx.demodMode) : 0}, {"level_dbfs", have ? ps.rx.signalDb : -200.0}, {"muted", have && (ps.rx.flags & FOXAPI_RX_MUTED) != 0u},
+                            {"follows", master < 0 ? 0 : master + 1}, {"locked", wireB_->follow.locked(static_cast<int>(i))}, {"offset_hz", wireB_->follow.offsetOf(static_cast<int>(i))},
+                            {"follow_note", wireB_->followNote[i]}});
+        }
+        if (!rows.empty()) { fact("matrix.rows", rows.dump(-1, ' ', false, wireb::Json::error_handler_t::replace)); }
     }
     for (std::size_t i = 0; i < receivers_.size(); ++i) {
         if (!receivers_[i] || wireB_->iqOut[i].out == nullptr) { continue; }

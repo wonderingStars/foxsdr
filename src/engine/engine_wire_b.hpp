@@ -20,6 +20,7 @@
 #include <array>
 
 #include "core/field_strength.hpp"
+#include "core/radio_matrix_model.hpp"
 #include "core/spectrum_mask.hpp"
 #include "engine/wire_b_sweep.hpp"
 #include "core/pipeline.hpp"
@@ -87,6 +88,12 @@ struct WireBState {
         double rateHz = 0.0;
     };
     std::array<IqOutRadio, 8> iqOut;
+
+    // --- rfmon: radios that follow a master (indices are the radios' 0-based slots) ---
+    cascade::core::FollowSet follow;
+    std::array<double, 8> followLastHz{};
+    std::array<bool, 8> followHaveLast{};
+    std::array<std::string, 8> followNote;
     wireb::SerialLinkFactory sweepFactory = wireb::defaultSerialLinkFactory();
 };
 

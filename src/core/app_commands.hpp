@@ -369,6 +369,17 @@
 //   samples_in, samples_dropped, clients_accepted}. A radio that is removed stops its output; nothing is saved: after a restart every output is off.
 #define FOXAPP_OP_IQ_OUT_START           0x8924u /* addresses one radio (target): text JSON */
 #define FOXAPP_OP_IQ_OUT_STOP            0x8925u /* addresses one radio (target) */
+//   RADIOS THAT FOLLOW A MASTER (SETTINGS; core/radio_matrix_model.hpp FollowSet, SDRuno's follow / LO LOCK), LOCAL sessions only, not saved. A follower keeps the distance it had when it was linked: when
+//   the master's tuned frequency changes, the engine retunes the follower (and what follows it) to master + offset on its next control pass, through the ordinary SET_FREQUENCY, so a follower that is
+//   frequency-locked or cannot reach the frequency stays put and the fact says so. FOLLOW_SET: ival[0] the FOLLOWER radio 1..8, ival[1] its MASTER 1..8; applied[0]: the offset in Hz recorded now (follower
+//   minus master). NO_DEVICE for a radio that is not open, BAD_ARGUMENT for the same radio twice or a link that would make a cycle, BUSY when the follower follows another master already (FOLLOW_CLEAR first).
+//   FOLLOW_CLEAR: ival[0] the follower (0 = every link); NO_CHANGE when there is none. FOLLOW_LOCK: ival[0] the follower, ival[1] 1 lock (it stays while its master moves) / 0 unlock; NO_CHANGE when it is so
+//   already or the radio follows nothing. FOLLOW_KEEP: ival[0] the follower: the distance it has NOW (it was nudged) becomes its offset. Facts: matrix.rows = a JSON array with one row per open radio
+//   {radio, state, tuned_hz, mode, level_dbfs, muted, follows (0 none), locked, offset_hz, follow_note}; a radio that is closed or removed leaves every link it was in.
+#define FOXAPP_OP_FOLLOW_SET             0x8926u /* ival[0]: follower 1..8; ival[1]: master 1..8; applied[0]: the offset */
+#define FOXAPP_OP_FOLLOW_CLEAR           0x8927u /* ival[0]: follower (0 = all) */
+#define FOXAPP_OP_FOLLOW_LOCK            0x8928u /* ival[0]: follower; ival[1]: 1 lock / 0 unlock */
+#define FOXAPP_OP_FOLLOW_KEEP            0x8929u /* ival[0]: follower: the distance it has now is its offset */
 // wire-b end
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.
