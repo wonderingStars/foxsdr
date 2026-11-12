@@ -135,6 +135,20 @@
 //   text in force ("" = none), fact.display.gradient.error a damaged file's reason.
 #define FOXAPP_OP_GRADIENT_SET           0x881Au /* text: FOXGRAD1|...  or "" */
 
+//   DISPLAY_AVERAGE (SETTINGS; dsp/trace_average.hpp): what is done to the spectrum frame between the pipeline and every screen: averaging, smoothing along the frequency axis, and removal of a regular comb of spurs. text =
+//   JSON {"average":"off"|"linear"|"rms"|"log"|"exponential" (default off), "frames":1..128 (8), "timeConstantS":0.005..60 (0.5), "smoothing":"none"|"moving"|"savgol" (none), "smoothWidth":odd 3..101 (9),
+//   "smoothOrder":0..8 below the width (2), "comb":true|false (false), "combPeriod":0 (auto) or 4.., "combStrength":0..1 (1), "dcBins":0..9 (0), "combMemory":0..0.99 (0)}; a missing field keeps its default (the text is the
+//   WHOLE setting). It is applied to the frame published to the API's spectrum ring (the picture every screen and the web page draw) for every open radio; the engine's own looks at the spectrum (centre_signal,
+//   scan) see the raw frame. All off is the default and costs nothing. BAD_ARGUMENT for bad JSON or a value out of range (nothing changes); NO_CHANGE when it is in force already. fact.display.average = the JSON in force.
+//   WF_HISTORY (SETTINGS; core/waterfall_history.hpp): pause and scroll back the waterfall. Per radio (target). ival[0]: 5 = switch the history for this radio on (ival[1] 1, num[0] = megabytes 16..1024, 0 = 192) or off
+//   (ival[1] 0: the memory is freed); it is OFF by default (a history is up to 192 MiB a radio, allocated at the first frame after it is switched on). While on, every frame published for the radio is also kept as a line
+//   of one byte a bin (0.59 dB steps over -150..0 dB). 0 = pause (hold the view where it is), 1 = back to live, 2 = scroll back num[0] lines and hold (num[1] = the window height in lines, default 256), 3 = scroll forward
+//   num[0] lines (reaching the newest line returns to live), 4 = go to the line nearest the time num[0] (unix milliseconds). NO_CHANGE when the history is off, empty, or the view is where it was asked to be;
+//   OUT_OF_RANGE for a count, size or time that is not one. The lines themselves are read by the host through WireA::waterfallCopy (the API has no call for them); fact.wf.<n>.* (on, megabytes, lines, behind, held,
+//   slid, epoch, capacity) is the state as of the last change of anything in the fact block (it does not move on every frame).
+#define FOXAPP_OP_DISPLAY_AVERAGE        0x881Bu /* text: JSON, see above */
+#define FOXAPP_OP_WF_HISTORY             0x881Cu /* ival[0]: 0 pause / 1 live / 2 back / 3 forward / 4 seek / 5 on-off; num[0], num[1], ival[1]: see above. Addresses one radio (target) */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -164,7 +178,9 @@
     {FOXAPP_OP_RECORD_LOCK, "APP_RECORD_LOCK", true}, \
     {FOXAPP_OP_OVERLAY_LOAD, "APP_OVERLAY_LOAD", true}, \
     {FOXAPP_OP_OVERLAY_LOOKUP, "APP_OVERLAY_LOOKUP", true}, \
-    {FOXAPP_OP_GRADIENT_SET, "APP_GRADIENT_SET", true},
+    {FOXAPP_OP_GRADIENT_SET, "APP_GRADIENT_SET", true}, \
+    {FOXAPP_OP_DISPLAY_AVERAGE, "APP_DISPLAY_AVERAGE", true}, \
+    {FOXAPP_OP_WF_HISTORY, "APP_WF_HISTORY", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP

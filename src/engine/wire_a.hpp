@@ -30,6 +30,7 @@
 #include "core/bookmark_notes.hpp"
 #include "core/channel_plans.hpp"
 #include "core/csv_overlay.hpp"
+#include "core/waterfall_history.hpp"
 #include "core/disk_job.hpp"
 #include "core/rec_daily.hpp"
 #include "core/record_lock.hpp"
@@ -142,7 +143,7 @@ public:
         std::atomic<bool> cancel{false};
         std::atomic<double> progress{0.0};
     };
-    ~WireA();
+    ~WireA();   // (wire_a_jobs.cpp)
 
 private:
     Result jobOp(const FoxCommand& c, const std::string& text, Result res);
@@ -156,6 +157,37 @@ private:
 
     // ---- records: analyser project, attachments, SigMF annotations (wire_a_records.cpp) ----
     Result recordsOp(const FoxCommand& c, const std::string& text, Result res);
+
+    // ---- display: the published spectrum frame (wire_a_frames.cpp) ----
+public:
+    struct FrameChain;   // per radio: the averager, the smoother, the de-comb
+    // The engine's tap (fox_engine_api.cpp endPass, once for each radio's newly published frame): the chain of DISPLAY_AVERAGE applied to the frame in place, then the line kept for the waterfall history.
+    void displayFrame(std::size_t slot, std::vector<float>& bins, double centreHz, double spanHz, double nowS);
+    // The host's read of a radio's waterfall history: up to `rows` lines of the view, oldest first, one byte a bin (`bins` returned). Returns the number of lines (0 when the history is off or empty).
+    std::size_t waterfallCopy(std::size_t slot, std::size_t rows, std::vector<std::uint8_t>& out, std::size_t& bins, std::vector<cascade::core::wfhistory::LineMeta>* meta = nullptr);
+
+private:
+    Result framesOp(const FoxCommand& c, const std::string& text, Result res);
+    Result wfOp(const FoxCommand& c, Result res);
+    void framesFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    void framesLoadOnce();
+    std::string averageJson() const;
+    struct AverageCfg {
+        int mode = 0;               // dsp::AvgMode
+        long long frames = 8;
+        double tauS = 0.5;
+        int smoothing = 0;          // 0 none, 1 moving, 2 savgol
+        long long width = 9, order = 2;
+        bool comb = false;
+        long long period = 0, dcBins = 0;
+        double strength = 1.0, memory = 0.0;
+        bool active() const { return mode != 0 || smoothing != 0 || comb; }
+    };
+    AverageCfg avgCfg_;
+    bool framesLoaded_ = false;
+    std::array<std::shared_ptr<FrameChain>, 8> chains_;
+    struct Wf;
+    std::array<std::shared_ptr<Wf>, 8> wf_;
 
     // ---- display: station overlay, gradient (wire_a_display.cpp) ----
     Result displayOp(const FoxCommand& c, const std::string& text, Result res);

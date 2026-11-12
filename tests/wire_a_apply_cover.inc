@@ -3,6 +3,12 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 void wireAOps(AppWindow& a) {
+    covering(FOXAPP_OP_DISPLAY_AVERAGE);
+    covering(FOXAPP_OP_WF_HISTORY);
+    {
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_DISPLAY_AVERAGE, "{\"frames\":9999}")), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_WF_HISTORY, 0)), FOXAPI_NO_CHANGE));   // the history is off
+    }
     covering(FOXAPP_OP_OVERLAY_LOAD);
     covering(FOXAPP_OP_OVERLAY_LOOKUP);
     covering(FOXAPP_OP_GRADIENT_SET);
