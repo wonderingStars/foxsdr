@@ -7,6 +7,9 @@
 //   F2  BOOKMARK NOTES AND TAGS: set, read back, text search, tag search, the same again is NO_CHANGE, a bad tag / over-long note / bad JSON / unknown id are refused and change nothing,
 //       a bookmark retuned by the window takes its note with it, the file reaches the disk and a new engine reads it.
 //
+//   F3  FAVOURITES: save the radio's whole state under a name, change the radio, recall it (frequency, mode, bandwidth, AGC, noise reduction, noise blanker, notch, squelch, de-emphasis come
+//       back; the picture's own numbers come back in fact.favourite.recalled), rename, remove, a replaced name, the refusals, the file and a new engine reading it.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cmath>
 #include <cstdio>
@@ -163,6 +166,82 @@ void testNotes() {
     }
 }
 
+FoxCommand op1(std::uint32_t op, double n0, long long i0, long long i1 = 0) {
+    FoxCommand c = testing::cmd(op, n0, i0);
+    c.ival[1] = i1;
+    return c;
+}
+
+void testFavourites() {
+    std::printf("F3: favourites\n");
+    const fs::path user = g_dir / "user3";
+    {
+        Rig r(user);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RUN, 0, 1)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_FREQUENCY, 118.3e6, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(op1(FOXAPI_OP_SET_AGC, 0.0, FOXAPI_AGC_SLOW)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(op1(FOXAPI_OP_SET_NR, 0.8, 1, 1)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(op1(FOXAPI_OP_SET_NB, 0.0, 1)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_SQUELCH, -55.0, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_DEEMPHASIS, 0.0, 1)).status(), FOXAPI_OK);
+        const std::string save = R"({"name":"Tower","displaySpanHz":500000,"waterfallFloorDb":-100,"waterfallCeilingDb":-40})";
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_FAVOURITE_SAVE), &save).status(), FOXAPI_OK);
+        CHECK_EQ(r.fact("favourite.names"), std::string("Tower"));
+        // change everything, then recall
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_FREQUENCY, 98.0e6, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(op1(FOXAPI_OP_SET_AGC, 0.0, FOXAPI_AGC_FAST)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(op1(FOXAPI_OP_SET_NR, 0.2, 0, 1)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(op1(FOXAPI_OP_SET_NB, 0.0, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_SQUELCH, -90.0, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_DEEMPHASIS, 0.0, 2)).status(), FOXAPI_OK);
+        const std::string tower = "Tower";
+        testing::Outcome o = r.send(testing::cmd(FOXAPP_OP_FAVOURITE_RECALL), &tower);
+        CHECK_EQ(o.status(), FOXAPI_OK);
+        CHECK(std::fabs(o.result.applied[0] - 118.3e6) < 2.0);
+        // read the radio back through a second save (the state is what the engine holds)
+        const std::string save2 = R"({"name":"Probe"})";
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_FAVOURITE_SAVE), &save2).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_FAVOURITE_RECALL), &tower).status(), FOXAPI_OK);
+        const std::string rec = r.fact("favourite.recalled");
+        CHECK(rec.find("\"agc\":\"slow\"") != std::string::npos);
+        CHECK(rec.find("\"noiseReduction\":true") != std::string::npos);
+        CHECK(rec.find("\"noiseBlanker\":true") != std::string::npos);
+        CHECK(rec.find("\"squelchDb\":-55.0") != std::string::npos);
+        CHECK(rec.find("\"deemphasis\":\"75us\"") != std::string::npos);
+        CHECK(rec.find("\"displaySpanHz\":500000.0") != std::string::npos);
+        // the probe, taken after the first recall, equals the saved one in every DSP field the engine holds
+        const std::string probe = "Probe";
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_FAVOURITE_RECALL), &probe).status(), FOXAPI_OK);
+        const std::string pr = r.fact("favourite.recalled");
+        CHECK(pr.find("\"agc\":\"slow\"") != std::string::npos && pr.find("\"deemphasis\":\"75us\"") != std::string::npos && pr.find("\"squelchDb\":-55.0") != std::string::npos);
+        // rename and remove
+        const std::string ren = "Tower\tTower 118.3";
+        CHECK_EQ(r.send(op1(FOXAPP_OP_FAVOURITE_EDIT, 0.0, 1), &ren).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_FAVOURITE_RECALL), &tower).status(), FOXAPI_NOT_FOUND);
+        CHECK_EQ(r.send(op1(FOXAPP_OP_FAVOURITE_EDIT, 0.0, 1), &ren).status(), FOXAPI_NOT_FOUND);   // the old name is gone
+        const std::string clash = "Probe\tTower 118.3";
+        CHECK_EQ(r.send(op1(FOXAPP_OP_FAVOURITE_EDIT, 0.0, 1), &clash).status(), FOXAPI_BAD_ARGUMENT);   // a name that is taken
+        const std::string probeName = "Probe";
+        CHECK_EQ(r.send(op1(FOXAPP_OP_FAVOURITE_EDIT, 0.0, 0), &probeName).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(op1(FOXAPP_OP_FAVOURITE_EDIT, 0.0, 0), &probeName).status(), FOXAPI_NOT_FOUND);
+        CHECK_EQ(r.send(op1(FOXAPP_OP_FAVOURITE_EDIT, 0.0, 5), &probeName).status(), FOXAPI_OUT_OF_RANGE);
+        CHECK_EQ(r.fact("favourite.count"), std::string("1"));
+        // refusals: bad JSON, no name, a bad picture value, a ceiling under the floor
+        const std::string bad1 = "{", bad2 = R"({"x":1})", bad3 = R"({"name":"A","displaySpanHz":"wide"})", bad4 = R"({"name":"B","waterfallFloorDb":-20,"waterfallCeilingDb":-60})";
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_FAVOURITE_SAVE), &bad1).status(), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_FAVOURITE_SAVE), &bad2).status(), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_FAVOURITE_SAVE), &bad3).status(), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_FAVOURITE_SAVE), &bad4).status(), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(r.fact("favourite.count"), std::string("1"));
+        CHECK(r.until([&] { return fs::exists(user / "favourites.json"); }, 6000));
+    }
+    {
+        Rig r(user);
+        r.settle(200);
+        CHECK_EQ(r.fact("favourite.names"), std::string("Tower 118.3"));
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -174,6 +253,7 @@ int main() {
     fs::create_directories(g_dir, ec);
     testMarkers();
     testNotes();
+    testFavourites();
     fs::remove_all(g_dir, ec);
     return check::finish("test_engine_api_wire_a_files");
 }

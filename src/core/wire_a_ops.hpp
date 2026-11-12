@@ -34,6 +34,16 @@
 #define FOXAPP_OP_BOOKMARK_NOTE          0x8804u /* ival[0]: bookmark id; ival[1]: 0 set / 1 read; long text: JSON {note, tags} */
 #define FOXAPP_OP_BOOKMARK_FIND          0x8805u /* ival[0]: 0 text / 1 tag; text: the query */
 
+//   FAVOURITE_SAVE / FAVOURITE_RECALL / FAVOURITE_EDIT (SETTINGS): favourites that keep a WHOLE state (core/favourite_state.hpp), up to 200, in favourites.json beside markers.json. SAVE (the selected radio, target):
+//   text = JSON {"name":"...", and optionally the picture's own numbers the screen owns: "displayCentreHz", "displaySpanHz", "spectrumTopDb", "spectrumRangeDb", "waterfallFloorDb", "waterfallCeilingDb"}; the engine
+//   fills the frequency, mode, bandwidth and the DSP (AGC, noise reduction and its level, noise blanker, notch, squelch, de-emphasis) from the radio. A name that exists is replaced. BAD_ARGUMENT: bad JSON, a name that is
+//   empty / over 64 bytes, a value out of range; LIMIT: the 201st name. RECALL (the selected radio): text = the name; retunes the radio, sets the mode, bandwidth and the DSP, and puts the whole favourite as JSON in
+//   fact.favourite.recalled (the picture's numbers are for the screen to apply). NOT_FOUND: no such name. EDIT: ival[0] 0 = remove the favourite the text names, 1 = rename (text "old<TAB>new"; NOT_FOUND / BAD_ARGUMENT
+//   when it cannot). fact.favourite.names (newline-separated), fact.favourite.count.
+#define FOXAPP_OP_FAVOURITE_SAVE         0x8806u /* text: JSON {name, display...}. Addresses one radio (target) */
+#define FOXAPP_OP_FAVOURITE_RECALL       0x8807u /* text: the name. Addresses one radio (target) */
+#define FOXAPP_OP_FAVOURITE_EDIT         0x8808u /* ival[0]: 0 remove / 1 rename; text: name, or "old<TAB>new" */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -42,7 +52,10 @@
     {FOXAPP_OP_MARKER_EXPORT, "APP_MARKER_EXPORT", true}, \
     {FOXAPP_OP_MARKER_IMPORT, "APP_MARKER_IMPORT", true}, \
     {FOXAPP_OP_BOOKMARK_NOTE, "APP_BOOKMARK_NOTE", true}, \
-    {FOXAPP_OP_BOOKMARK_FIND, "APP_BOOKMARK_FIND", true},
+    {FOXAPP_OP_BOOKMARK_FIND, "APP_BOOKMARK_FIND", true}, \
+    {FOXAPP_OP_FAVOURITE_SAVE, "APP_FAVOURITE_SAVE", true}, \
+    {FOXAPP_OP_FAVOURITE_RECALL, "APP_FAVOURITE_RECALL", true}, \
+    {FOXAPP_OP_FAVOURITE_EDIT, "APP_FAVOURITE_EDIT", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP

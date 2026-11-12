@@ -3,6 +3,14 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 void wireAOps(AppWindow& a) {
+    covering(FOXAPP_OP_FAVOURITE_SAVE);
+    covering(FOXAPP_OP_FAVOURITE_RECALL);
+    covering(FOXAPP_OP_FAVOURITE_EDIT);
+    {
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_FAVOURITE_SAVE, "{not json")), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_FAVOURITE_RECALL, "no such favourite")), FOXAPI_NOT_FOUND));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_FAVOURITE_EDIT, "no such favourite")), FOXAPI_NOT_FOUND));
+    }
     covering(FOXAPP_OP_BOOKMARK_NOTE);
     covering(FOXAPP_OP_BOOKMARK_FIND);
     {

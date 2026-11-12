@@ -26,6 +26,7 @@
 #include "core/bookmark.hpp"
 #include "core/bookmark_notes.hpp"
 #include "core/channel_plans.hpp"
+#include "core/favourite_state.hpp"
 #include "core/freq_history.hpp"
 #include "foxsdr_api.h"
 
@@ -104,7 +105,17 @@ private:
     std::string noteLast_, noteLastId_, findLast_;
     std::string notesError_;
 
+    // ---- favourites (wire_a_bookmarks.cpp) ----
+    Result favouriteOp(const FoxCommand& c, const std::string& text, Result res);
+    void favouritesChanged();
+    cascade::core::tuning::FavouriteStore favourites_;
+    bool favouritesDirty_ = false;
+    double favouritesDueS_ = 0.0;
+    std::string favouriteRecalled_, favouritesError_;
+
     // ---- shared helpers (wire_a.cpp) ----
+    // Applies an engine op to the selected radio as a sub-command (the clamping and the bookkeeping of the op itself); the caller is inside the radio's RadioWork.
+    Result subCommand(std::uint32_t op, double n0, long long i0, long long i1 = 0, double n1 = 0.0);
     // A full path the user typed (absolute, no control characters, under 1024 bytes). False with `why` when it is not.
     static bool fullPath(const std::string& p, std::string& why);
     // Reads a user's file up to maxBytes (a bigger one, a directory, a device, a missing one: false with `why`; never throws).

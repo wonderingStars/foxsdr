@@ -42,6 +42,10 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
             return bookmarkNoteOp(c, text, res);
         case FOXAPP_OP_BOOKMARK_FIND:
             return bookmarkFindOp(c, text, res);
+        case FOXAPP_OP_FAVOURITE_SAVE:
+        case FOXAPP_OP_FAVOURITE_RECALL:
+        case FOXAPP_OP_FAVOURITE_EDIT:
+            return favouriteOp(c, text, res);
         default:
             return refused(res, FOXAPI_UNSUPPORTED, "this operation is not in this build");
     }
@@ -49,6 +53,7 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
 
 bool WireA::drain(std::chrono::milliseconds bound) {
     notesDueS_ = 0.0;   // anything dirty goes out now
+    favouritesDueS_ = 0.0;
     bookmarksPass();
     const auto end = std::chrono::steady_clock::now() + bound;
     bool ok = true;
@@ -87,6 +92,17 @@ void WireA::tunedFacts(const std::function<void(const std::string&, const std::s
 }
 
 // ---- shared helpers -------------------------------------------------------------------------------------------------------------------------
+
+WireA::Result WireA::subCommand(std::uint32_t op, double n0, long long i0, long long i1, double n1) {
+    FoxCommand c{};
+    c.structSize = sizeof(c);
+    c.op = op;
+    c.num[0] = n0;
+    c.num[1] = n1;
+    c.ival[0] = i0;
+    c.ival[1] = i1;
+    return e_.applyCommand(c, std::string());
+}
 
 void WireA::tuneTo(double hz, const std::string& mode, double bandwidthHz) {
     for (int m = 0; m < 8; ++m) {
