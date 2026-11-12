@@ -31,6 +31,7 @@
 #include "engine/fox_engine_api.hpp"
 #include "core/receiver_tables.hpp"
 #include "engine/server_host.hpp"
+#include "engine/wire_a.hpp"   // wire-a
 #include "core/soundcard_panel.hpp"
 #include "net/web_policy.hpp"
 #include "source/airspy_source.hpp"
@@ -207,6 +208,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(radioLockVersion_);  // the frequency lock of every radio (FOXAPP_OP_RADIO_LOCK)
     f.value(recordNameVersion_); // the recording file-name template (FOXAPP_OP_SET_RECORD_NAME)
     f.value(stereoSystemVersion_);  // the stereo system of every radio (FOXAPP_OP_SET_STEREO_SYSTEM)
+    f.value(WireA::of(*this).version());   // wire-a: the tuning / recording / display wiring lane's facts
     f.value(poolVersion_);   // which radios a pool claim holds (engine_pool.cpp)
     f.value(ppmAutoVersion_);   // the pilot ppm measurements (engine_mpx.cpp)
     f.value(mpxVersion_);   // which radios record their multiplex (engine_mpx.cpp)
@@ -1362,6 +1364,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // (both, left, right, none: only "both" until slots 1 and up carry audio) and the decoder plugins running on it, their module files separated by commas.
     scheduleFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // (LOCAL: a recording plan is the operator's)
     macroFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // (LOCAL: a macro is the operator's)
+    WireA::of(*this).facts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // wire-a (LOCAL)
     // THE S-METER CALIBRATION (engine wiring lane 1; LOCAL: a device's key can name a serial number): what the last measurement did, and how many devices hold a calibration.
     if (!recordNameLoaded_) { loadRecordName(); }   // (the file is read once, here or at the first take, whichever asks first)
     fact("record.nameTemplate", recordNameTemplate_, true);   // (LOCAL: a file-name template can carry a person's own words)

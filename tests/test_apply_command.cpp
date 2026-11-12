@@ -3935,6 +3935,8 @@ void queueDrainsInOrder(AppWindow& a) {
     CHECK(A::squelch(a) == -30.0f);
 }
 
+#include "wire_a_apply_cover.inc"   // wire-a
+
 void everyOpHasACase() {
     std::printf("  [coverage] every op applyCommand implements has a case, and only those\n");
     std::size_t n = 0;
@@ -3980,6 +3982,7 @@ int main() {
         otherOps(app);
         statusLineOps(app);
         queueDrainsInOrder(app);
+        wireAOps(app);   // wire-a
     }
     everyOpHasACase();
     ImGui::DestroyContext();

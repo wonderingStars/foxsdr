@@ -107,3 +107,11 @@ Build warm-up: see section 4. No commit made. The survey is the only change in t
 ## 4. Build warm-up log
 
 Full `cmake --build D:/foxsdr-build/en-tuning --config Release --parallel 4` of 090e7039 (Slint OFF configure arguments kept): first slice cut by a 520 s limit (own `timeout`, no orphan), second run `EXIT=0` (log `D:/foxsdr-build/en-tuning/wa-warm.log`). No test run in Phase 0.
+
+## 5. WHAT WAS WIRED (one commit per item, in the order done; result lines are from this session's runs)
+
+Infrastructure (first commit): `src/engine/wire_a.{hpp,cpp}` (class `WireA`, a friend of `Engine`, made at first use), `wire_a_scope.hpp`, `src/core/wire_a_ops.hpp` (the op block, included from the end of `app_commands.hpp`; its table rows are the one macro `WIRE_A_KOPS` at the end of `kOps`). Shared-file edits, each bracketed `wire-a`: `engine.hpp` (friend + holder), `engine.cpp` (one dispatch line for `0x8800-0x88FF`, one `pass()` call), `engine_api_lists.cpp` (facts + fingerprint), `radio_scope.hpp` (`default:` returns `isWireARadioScoped`), `app_commands.{hpp,cpp}`, `tests/test_apply_command.cpp` (the coverage include + call). Test rig `tests/wire_a_rig.hpp`.
+
+| # | Row | Result | Break-it |
+|---|---|---|---|
+| 1 | Row 9 frequency history: `0x8800 HISTORY_STEP`, `fact.history.<n>.*` | `test_engine_api_wire_a_tuning: 25 checks passed, 0 failed` (retunes recorded, back / forward retune radio, step not recorded, forward entries dropped on a new retune, bad direction OUT_OF_RANGE, missing radio NO_DEVICE); `test_apply_command`, `test_radio_scope` pass | `historyPass()` removed: `12 checks passed, 13 failed`; restored green |

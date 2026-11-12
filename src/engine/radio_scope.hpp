@@ -23,6 +23,7 @@
 #include <cstdint>
 
 #include "core/app_commands.hpp"
+#include "engine/wire_a_scope.hpp"   // wire-a
 #include "foxsdr_api.h"
 
 namespace cascade::engine {
@@ -115,7 +116,7 @@ inline bool isRadioScopedOp(std::uint32_t op) {
         case FOXAPP_OP_SCANNER_RANGE:
             return true;
         default:
-            return false;
+            return isWireARadioScoped(op);   // wire-a (engine/wire_a_scope.hpp)
     }
 }
 

@@ -5,6 +5,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "engine/engine.hpp"
+#include "engine/wire_a.hpp"   // wire-a
 
 #include "core/band_mode.hpp"
 #include "core/config_halves.hpp"
@@ -7329,6 +7330,9 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
     const std::string text = cmd::textOf(c, longText);
     // THE FREQUENCY LOCK (FOXAPP_OP_RADIO_LOCK): a tuning command aimed at a locked radio is refused whoever sent it - the window, a plugin, the web page, CAT.
     if (rx().tuneLocked_ && isTuningCommandOfLock(c)) { return refuse(FOXAPI_DENIED, "this radio's frequency is locked"); }
+    // wire-a begin: every op of 0x8800-0x88FF is the tuning / recording / display wiring lane's (engine/wire_a*.cpp)
+    if (c.op >= FOXAPP_OP_WIRE_A_FIRST && c.op <= FOXAPP_OP_WIRE_A_LAST) { return WireA::of(*this).apply(c, text, res); }
+    // wire-a end
 
     switch (c.op) {
         // --- the radios (multi-radio stage 4; engine_radios.cpp) ---------------
@@ -10749,6 +10753,7 @@ void Engine::pumpPlugins() {
         RadioWork scannerWork(*this, receivers_[scannerSlot_] ? scannerSlot_ : 0u);
         scannerFrame();
     }
+    WireA::of(*this).pass();   // wire-a: history, ticks and saves of the wiring lane (engine/wire_a.cpp)
     // THE AIRBAND MONITOR'S STEP, for the scanner's reason and in its place: a retune made this pass is already applied when it looks (stub
     // campaign B6). Inert while nothing listens.
     airbandFrame();
