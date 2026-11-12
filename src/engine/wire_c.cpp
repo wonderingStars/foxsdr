@@ -38,6 +38,11 @@ constexpr Spec kSpecs[] = {
     {"access.palette", Kind::Choice, 0, 0, "normal", "normal|deuteranopia|protanopia|tritanopia|highcontrast"},
     // --- the Plugin store (webmodels, store sort) ---
     {"store.sort", Kind::Choice, 0, 0, "catalogue", "catalogue|name|updated"},   // the order of the store's list; "popular" and "rating" wait for the server's data (none exists)
+    // --- ham operations (hamops): programs followed, receive only ---
+    {"hamops.radioinfo.enabled", Kind::Bool, 0, 0, "0", ""},    // follow the radio information a logger (DXLab Commander, N1MM+) broadcasts; shown only, never retunes FoxSDR
+    {"hamops.radioinfo.address", Kind::Text, 0, 15, "127.0.0.1", ""},   // the address to listen on (dotted IPv4; the local machine unless allow_other)
+    {"hamops.radioinfo.port", Kind::Int, 0, 65535, "0", ""},    // the port the logger sends to (0 = not configured: nothing is opened)
+    {"hamops.radioinfo.allow_other", Kind::Bool, 0, 0, "0", ""},   // accept an address other than this computer
     // --- web (webmodels) ---
     {"web.cors_origins", Kind::Text, 0, 2000, "", ""},        // allowed origins, one per line (empty = no cross-origin page may read)
     {"web.metrics", Kind::Bool, 0, 0, "0", ""},               // the /metrics page for a signed-in browser (Prometheus text format); off = as if it did not exist

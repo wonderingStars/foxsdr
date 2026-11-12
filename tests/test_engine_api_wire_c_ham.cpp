@@ -8,8 +8,15 @@
 //   Q3  ADIF: a header and one record per QSO that can be written; nothing writable is refused
 //   Q4  PRIVACY: no fact carries a call sign, a frequency or an exchange
 //   Q5  a REMOTE session cannot send any of the ops
+//   R1  RadioInfo (H6): off by default and nothing bound; port 0 is "not configured" with a sentence; an address that is not this computer is refused; a datagram from a logger shows as
+//       facts (frequency in Hz, mode, split, transmitting, the program) and garbage is not accepted; a radio never heard is empty; FoxSDR is NOT retuned; switching off closes the socket
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <chrono>
+#include <cstring>
+#include <thread>
+
+#include "net/loopback_sock.hpp"
 #include "wire_c_rig.hpp"
 
 using namespace wirec_test;
@@ -141,6 +148,69 @@ void testRemote(const fs::path& dir) {
     CHECK(r.fact("ham.qso.count") == "0");
 }
 
+// H6: the radio information a logger broadcasts
+void testRadioInfo(const fs::path& dir) {
+    namespace lo = cascade::net::lo;
+    Rig r(dir);
+    // a free UDP port on this machine
+    int port = 0;
+    {
+        const lo::Sock s = lo::udpOpen(0x7F000001u, 0);
+        CHECK(s != lo::kBad);
+        port = lo::boundPortOf(s);
+        lo::closeSock(s);
+    }
+    CHECK(port > 0);
+    const double tunedBefore = r.local->state().tunedHz;
+    CHECK(r.fact("ham.radioinfo.running") == "0");
+    // port 0 is "not configured": nothing is opened and the sentence says what to do
+    CHECK(r.status(setting("hamops.radioinfo.enabled", "1")) == FOXAPI_OK);
+    r.pass(4);
+    CHECK(r.fact("ham.radioinfo.running") == "0");
+    CHECK(r.fact("ham.radioinfo.error").find("port") != std::string::npos);
+    // an address that is not this computer is refused unless switched on
+    CHECK(r.status(setting("hamops.radioinfo.address", "192.168.1.5")) == FOXAPI_OK);
+    CHECK(r.status(setting("hamops.radioinfo.port", std::to_string(port))) == FOXAPI_OK);
+    r.pass(4);
+    CHECK(r.fact("ham.radioinfo.running") == "0");
+    CHECK(!r.fact("ham.radioinfo.error").empty());
+    CHECK(r.status(setting("hamops.radioinfo.address", "127.0.0.1")) == FOXAPI_OK);
+    r.pass(4);
+    CHECK(r.fact("ham.radioinfo.running") == "1");
+    CHECK(r.fact("ham.radioinfo.port") == std::to_string(port));
+    // a datagram from the logger
+    const char* kExample =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<RadioInfo>\n<app>N1MM</app>\n<RadioNr>1</RadioNr>\n<Freq>352211</Freq>\n<TXFreq>352211</TXFreq>\n<Mode>CW</Mode>\n<IsSplit>False</IsSplit>\n"
+        "<ActiveRadioNr>1</ActiveRadioNr>\n<IsTransmitting>False</IsTransmitting>\n</RadioInfo>";
+    const lo::Sock tx = lo::udpOpen(0x7F000001u, 0);
+    CHECK(tx != lo::kBad);
+    CHECK(lo::udpSendTo(tx, 0x7F000001u, port, "garbage that is not RadioInfo", 29) > 0);
+    CHECK(lo::udpSendTo(tx, 0x7F000001u, port, kExample, std::strlen(kExample)) > 0);
+    bool heard = false;
+    for (int i = 0; i < 100 && !heard; ++i) {
+        r.pass(2);
+        heard = r.fact("ham.radioinfo.1.freq_hz") == "3522110";
+        if (!heard) { std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+    }
+    CHECK(heard);
+    CHECK(r.fact("ham.radioinfo.1.mode") == "CW");
+    CHECK(r.fact("ham.radioinfo.1.app") == "N1MM");
+    CHECK(r.fact("ham.radioinfo.1.split") == "0" && r.fact("ham.radioinfo.1.transmitting") == "0");
+    CHECK(r.fact("ham.radioinfo.2.freq_hz").empty());   // a radio never heard is empty, not 0
+    CHECK(r.local->state().tunedHz == tunedBefore);     // DISPLAY ONLY: FoxSDR is not retuned by what the logger says
+    lo::closeSock(tx);
+    // switched off: the socket is closed and the values go
+    CHECK(r.status(setting("hamops.radioinfo.enabled", "0")) == FOXAPI_OK);
+    r.pass(4);
+    CHECK(r.fact("ham.radioinfo.running") == "0");
+    CHECK(r.fact("ham.radioinfo.1.freq_hz").empty());
+    {   // and the port is free again
+        const lo::Sock s = lo::udpOpen(0x7F000001u, port);
+        CHECK(s != lo::kBad);
+        lo::closeSock(s);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -148,7 +218,7 @@ int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     const fs::path root = scratch("ham");
     int n = 0;
-    for (auto fn : {testLog, testCabrilloAndAdif, testRemote}) {
+    for (auto fn : {testLog, testCabrilloAndAdif, testRemote, testRadioInfo}) {
         const fs::path d = root / std::to_string(n++) / "foxsdr";
         std::error_code ec;
         fs::create_directories(d, ec);

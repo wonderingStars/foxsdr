@@ -225,6 +225,13 @@ void Engine::wireCFacts(const std::function<void(const std::string&, const std::
     fact("wirec.version", std::to_string(wireCVersion()));
     fact("wirec.error", s.settings().error());
     // POWER AND RESOURCES (wire_c_power.hpp). "" is "not available" - a reading that could not be made is never shown as 0.
+    // THE LOGGER'S RADIO INFORMATION (row H6): what the program we follow says its radios are doing; LOCAL only like every fact of this lane
+    fact("ham.radioinfo.running", s.radioInfo.running() ? "1" : "0");
+    fact("ham.radioinfo.port", s.radioInfo.running() ? std::to_string(s.radioInfo.boundPort()) : std::string());
+    fact("ham.radioinfo.error", s.radioInfo.error());
+    for (int n = 1; n <= 4; ++n) {
+        for (const char* what : {"freq_hz", "tx_hz", "mode", "split", "transmitting", "app"}) { fact("ham.radioinfo." + std::to_string(n) + "." + what, s.radioInfo.value(n, what)); }
+    }
     // THE QSO LOG (wire_c_ham.hpp): counts and sentences only - never a call sign, a frequency or an exchange
     fact("ham.qso.count", std::to_string(s.qsos().size()));
     fact("ham.error", s.hamError);
@@ -420,6 +427,20 @@ void Engine::pumpWireC() {
             if (servers().webServer().setCors(lines, err)) { s.corsApplied = origins; }
             else { s.corsApplied = origins; cascade::core::diagLogf("web: the cross-origin list was refused (%s)", err.c_str()); }
         }
+    }
+    // THE RADIO INFORMATION OF A LOGGER (row H6; wire_c_net.hpp): a UDP listener polled here, receive only, off by default; a change of settings reopens it
+    {
+        const bool on = s.settings().getBool("hamops.radioinfo.enabled");
+        const std::string addr = s.settings().get("hamops.radioinfo.address");
+        const int port = static_cast<int>(s.settings().getInt("hamops.radioinfo.port"));
+        const bool other = s.settings().getBool("hamops.radioinfo.allow_other");
+        const std::string sig = std::string(on ? "1" : "0") + "|" + addr + "|" + std::to_string(port) + "|" + (other ? "1" : "0");
+        if (sig != s.radioInfoApplied) {
+            s.radioInfoApplied = sig;
+            s.radioInfo.configure(on, addr, port, other);
+            ++wireCVersion_;
+        }
+        if (s.radioInfo.poll(static_cast<std::int64_t>(std::time(nullptr)))) { ++wireCVersion_; }
     }
     // THE METRICS PAGE (row L3): switched with web.metrics; while on, about once a second a snapshot of counts and levels goes to the page (never a decoded text, a callsign, a
     // position or an address: the decode tally counts events per plugin NAME).

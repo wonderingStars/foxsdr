@@ -25,6 +25,7 @@
 
 #include "engine/wire_c_power.hpp"
 #include "engine/wire_c_ham.hpp"
+#include "engine/wire_c_net.hpp"
 #include "engine/wire_c_sys.hpp"
 
 namespace cascade::engine::wirec {
@@ -80,6 +81,8 @@ public:
     const std::filesystem::path& folder() const { return folder_; }
     SysOps& sys() { return sys_; }
     QsoBook& qsos() { return qsoBook_; }
+    RadioInfoFollow radioInfo;            // the radio information followed (row H6)
+    std::string radioInfoApplied = "0|127.0.0.1|0|0";   // the settings it was last configured with (the defaults: nothing to apply at the first pass, so no counter moves)
     std::string hamError, hamExportLast, hamCabrilloProblems;
     // What the system operations last said (facts fact.sys.*): strings the ops fill and the engine publishes.
     std::string sysError, sysExportLast, sysImportPlan, sysImportToken, sysImportNotes, sysResetPlan, sysResetToken, sysBackupLast, sysLastBoot;
