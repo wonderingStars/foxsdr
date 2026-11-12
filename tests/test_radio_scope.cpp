@@ -115,7 +115,8 @@ void testTheList() {
                                              FOXAPP_OP_IQ_OUT_START, FOXAPP_OP_IQ_OUT_STOP};
         const std::uint32_t wireBGlobal[] = {FOXAPP_OP_FIELD_TABLE, FOXAPP_OP_FIELD_CONFIG, FOXAPP_OP_GPU_FFT_MODE, FOXAPP_OP_FRAMELOG_CONFIG, FOXAPP_OP_FRAMELOG_READ, FOXAPP_OP_MASK_LOAD, FOXAPP_OP_MASK_CONFIG,
                                            FOXAPP_OP_SWEEP_OPEN, FOXAPP_OP_SWEEP_CLOSE, FOXAPP_OP_SWEEP_CONFIG, FOXAPP_OP_SWEEP_READ,
-                                           FOXAPP_OP_FOLLOW_SET, FOXAPP_OP_FOLLOW_CLEAR, FOXAPP_OP_FOLLOW_LOCK, FOXAPP_OP_FOLLOW_KEEP};
+                                           FOXAPP_OP_FOLLOW_SET, FOXAPP_OP_FOLLOW_CLEAR, FOXAPP_OP_FOLLOW_LOCK, FOXAPP_OP_FOLLOW_KEEP,
+                                           FOXAPP_OP_SBS_OUT_START, FOXAPP_OP_SBS_OUT_STOP};
         for (const std::uint32_t op : wireBScoped) { CHECK(isRadioScopedOp(op)); }
         for (const std::uint32_t op : wireBGlobal) { CHECK(!isRadioScopedOp(op)); }
     }

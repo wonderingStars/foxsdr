@@ -267,6 +267,8 @@ constexpr OpEntry kOps[] = {
     {FOXAPP_OP_FOLLOW_CLEAR, "APP_FOLLOW_CLEAR", true},
     {FOXAPP_OP_FOLLOW_LOCK, "APP_FOLLOW_LOCK", true},
     {FOXAPP_OP_FOLLOW_KEEP, "APP_FOLLOW_KEEP", true},
+    {FOXAPP_OP_SBS_OUT_START, "APP_SBS_OUT_START", true},
+    {FOXAPP_OP_SBS_OUT_STOP, "APP_SBS_OUT_STOP", true},
     // wire-b end
 };
 

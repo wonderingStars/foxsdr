@@ -380,6 +380,14 @@
 #define FOXAPP_OP_FOLLOW_CLEAR           0x8927u /* ival[0]: follower (0 = all) */
 #define FOXAPP_OP_FOLLOW_LOCK            0x8928u /* ival[0]: follower; ival[1]: 1 lock / 0 unlock */
 #define FOXAPP_OP_FOLLOW_KEEP            0x8929u /* ival[0]: follower: the distance it has now is its offset */
+//   SBS (BASESTATION) TEXT OUT (SETTINGS; net/aircraft_out.hpp SbsOut): the aircraft tracks the plugins publish (CASCADE_TRACK_AIRCRAFT with a six-digit ICAO hex id and a position) as MSG,3 (airborne
+//   position: altitude in feet, latitude, longitude) and MSG,4 (velocity: ground speed in knots, track) lines on a TCP port, for the map programs that read this format. OFF until SBS_OUT_START
+//   (text: JSON {port 0..65535 (0 = the OS picks; the port is in applied[0])}); the server binds 127.0.0.1 ONLY (no key for a wider bind: the owner's decision), LOCAL sessions only, not saved. A line is
+//   sent when a track's position, altitude, speed or course changed (to about a metre); no callsign (MSG,1), squawk or any label is ever sent, and nothing is written to disk. BAD_ARGUMENT for a wrong
+//   key or value, BUSY when it is on, FAILED with the socket's sentence. SBS_OUT_STOP: NO_CHANGE when off. Fact sbs.out = {running, port, lines_sent, tracks_seen, clients_accepted}. The tracks come
+//   from what the front end hands the engine (the window's plugin poll): a headless engine with no window has none, so no line is sent there.
+#define FOXAPP_OP_SBS_OUT_START          0x892Au /* text JSON; applied[0]: the port; fact sbs.out */
+#define FOXAPP_OP_SBS_OUT_STOP           0x892Bu
 // wire-b end
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.

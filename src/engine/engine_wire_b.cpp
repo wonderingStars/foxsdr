@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -260,6 +261,96 @@ FoxCommandResult Engine::cursorOp(const FoxCommand& c, const std::string& text, 
     return res;
 }
 
+// --- net-outputs: SBS text out of the aircraft tracks (net/aircraft_out.hpp) ----------------------------------------------------------------------
+FoxCommandResult Engine::sbsOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed) {
+    WireBState& w = wireBState();
+    if (c.op == FOXAPP_OP_SBS_OUT_STOP) {
+        if (w.sbs == nullptr) { return refusal(res, FOXAPI_NO_CHANGE, "the SBS output is off"); }
+        w.sbs->stop();
+        w.sbs.reset();
+        w.sbsLast.clear();
+        changed = true;
+        return res;
+    }
+    if (w.sbs != nullptr) { return refusal(res, FOXAPI_BUSY, "the SBS output is on already"); }
+    wireb::Json p = wireb::Json::object();
+    if (!text.empty()) {
+        p = wireb::Json::parse(text, nullptr, false);
+        if (p.is_discarded() || !p.is_object()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the parameters are not a JSON object"); }
+    }
+    wireb::detail::Params q(p);
+    double port = 0.0;
+    if (!q.number("port", port, 0.0, 65535.0) || !q.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, q.error); }
+    cascade::net::FanoutConfig cfg = cascade::net::BeastOut::defaultConfig(static_cast<std::uint16_t>(port));
+    cfg.bindAddress = "127.0.0.1";
+    cfg.allowAllInterfaces = false;
+    auto out = std::make_unique<cascade::net::SbsOut>(cfg);
+    std::string why;
+    if (!out->start(why)) { return refusal(res, FOXAPI_FAILED, why.empty() ? std::string("the output could not start") : why); }
+    res.applied[0] = static_cast<double>(out->port());
+    w.sbs = std::move(out);
+    w.sbsLines = 0;
+    w.sbsSeen = 0;
+    w.sbsLast.clear();
+    changed = true;
+    return res;
+}
+
+// Once per control pass: the aircraft the front end handed over (the plugins' polled tracks) as SBS lines, only what changed.
+void Engine::pumpSbs() {
+    WireBState& w = *wireB_;
+    if (w.sbs == nullptr) { return; }
+    const std::shared_ptr<const TrackFeed> feed = trackFeed();
+    if (feed == nullptr) { return; }
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    std::uint64_t seen = 0;
+    for (const cascade::core::HostTrack& ht : feed->polled) {
+        const CascadeTrack& t = ht.t;
+        if (t.kind != CASCADE_TRACK_AIRCRAFT || !cascade::core::trackHasPosition(t)) { continue; }
+        // an ICAO address is six upper-case hex digits: anything else (an MMSI, a callsign) is not an aircraft this format can carry
+        const std::string id(t.id, strnlen(t.id, CASCADE_TRACK_ID_CHARS));
+        if (id.size() != 6) { continue; }
+        bool hex = true;
+        for (const char ch : id) { hex = hex && ((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'F')); }
+        if (!hex) { continue; }
+        ++seen;
+        WireBState::SbsLast now;
+        now.lat = std::round(t.latDeg * 1e5) / 1e5;
+        now.lon = std::round(t.lonDeg * 1e5) / 1e5;
+        now.alt = std::isfinite(t.altM) ? std::round(t.altM) : -99999.0;
+        now.course = std::isfinite(t.courseDeg) ? std::round(t.courseDeg) : -1.0;
+        now.speed = std::isfinite(t.speedMps) ? std::round(t.speedMps * 10.0) / 10.0 : -1.0;
+        auto it = w.sbsLast.find(id);
+        const bool posChanged = it == w.sbsLast.end() || it->second.lat != now.lat || it->second.lon != now.lon || it->second.alt != now.alt;
+        const bool velChanged = it == w.sbsLast.end() || it->second.course != now.course || it->second.speed != now.speed;
+        if (!posChanged && !velChanged) { continue; }
+        w.sbsLast[id] = now;
+        if (w.sbsLast.size() > 4096) { w.sbsLast.erase(w.sbsLast.begin()); }
+        cascade::net::SbsMessage m;
+        std::snprintf(m.hexIdent, sizeof(m.hexIdent), "%s", id.c_str());
+        m.generated = cascade::net::sbsTimeFromUnixMs(static_cast<std::int64_t>(nowMs));
+        if (posChanged) {
+            m.transmissionType = 3;
+            if (std::isfinite(t.altM)) { m.altitudeFt = static_cast<int>(std::lround(t.altM * 3.280839895)); }
+            m.latitude = t.latDeg;
+            m.longitude = t.lonDeg;
+            if (w.sbs->submit(m)) { ++w.sbsLines; }
+        }
+        if (velChanged && (std::isfinite(t.speedMps) || std::isfinite(t.courseDeg))) {
+            cascade::net::SbsMessage v;
+            std::snprintf(v.hexIdent, sizeof(v.hexIdent), "%s", id.c_str());
+            v.generated = m.generated;
+            v.transmissionType = 4;
+            if (std::isfinite(t.speedMps)) { v.groundSpeedKt = static_cast<int>(std::lround(t.speedMps * 1.943844492)); }
+            if (std::isfinite(t.courseDeg)) { v.trackDeg = t.courseDeg; }
+            if (w.sbs->submit(v)) { ++w.sbsLines; }
+        }
+    }
+    const std::uint64_t before = w.sbsLines;
+    (void)before;
+    if (seen != w.sbsSeen || w.sbsLines != w.sbsLinesReported) { w.sbsSeen = seen; w.sbsLinesReported = w.sbsLines; ++wireBVersion_; }
+}
+
 // --- rfmon: radios that follow a master (core/radio_matrix_model.hpp) -------------------------------------------------------------------------------
 namespace {
 // The absolute tuned frequency of radio `n` (1..8) from its published state; false when it is not open or has none yet.
@@ -387,6 +478,7 @@ void Engine::wireBStopIqOut(std::size_t slot) {
 
 void Engine::wireBShutdown() {
     if (wireB_ == nullptr) { return; }
+    if (wireB_->sbs != nullptr) { wireB_->sbs->stop(); wireB_->sbs.reset(); }
     for (std::size_t i = 0; i < wireB_->iqOut.size(); ++i) { wireBStopIqOut(i); }
 }
 
@@ -607,6 +699,10 @@ FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text
         case FOXAPP_OP_IQ_OUT_STOP:
             res = iqOutOp(c, text, res, changed);
             break;
+        case FOXAPP_OP_SBS_OUT_START:
+        case FOXAPP_OP_SBS_OUT_STOP:
+            res = sbsOp(c, text, res, changed);
+            break;
         case FOXAPP_OP_FOLLOW_SET:
         case FOXAPP_OP_FOLLOW_CLEAR:
         case FOXAPP_OP_FOLLOW_LOCK:
@@ -735,6 +831,7 @@ void Engine::pumpWireB() {
     {
         std::lock_guard<std::mutex> lk(wireB_->mutex);
         pumpFollow();
+        pumpSbs();
     }
     if (!wireB_->maskEnabled || !wireB_->maskLoaded) { return; }
     WireBState& w = *wireB_;
@@ -807,6 +904,11 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
             j["stop_hz"] = s.stopHz; j["heat_rows"] = s.heatRows; j["heat_cols"] = s.heatCols; j["occ_channels"] = s.occChannels; j["occ_sweeps"] = s.occSweeps;
             fact("sweep.state", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
         }
+    }
+    if (wireB_->sbs != nullptr) {
+        wireb::Json j = wireb::Json::object();
+        j["running"] = true; j["port"] = wireB_->sbs->port(); j["lines_sent"] = wireB_->sbsLines; j["tracks_seen"] = wireB_->sbsSeen; j["clients_accepted"] = wireB_->sbs->stats().accepted;
+        fact("sbs.out", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
     }
     {
         wireb::Json rows = wireb::Json::array();

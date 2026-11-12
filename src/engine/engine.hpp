@@ -3242,6 +3242,8 @@ private:
     FoxCommandResult sweepOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     FoxCommandResult iqOutOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     FoxCommandResult followOp(const FoxCommand& c, FoxCommandResult res, bool& changed);
+    FoxCommandResult sbsOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
+    void pumpSbs();   // (inside pumpWireB, with the lane's mutex held)
     void wireBStopIqOut(std::size_t slot);   // the radio's output ends (the pipeline's tap is cleared first)
     void wireBShutdown();                    // the engine is going: every output ends while the pipelines still exist
 public:

@@ -24,6 +24,7 @@
 #include "core/spectrum_mask.hpp"
 #include "engine/wire_b_sweep.hpp"
 #include "core/pipeline.hpp"
+#include "net/aircraft_out.hpp"
 #include "net/iq_out.hpp"
 #include "engine/wire_b_bits.hpp"
 #include "engine/wire_b_cursors.hpp"
@@ -90,6 +91,12 @@ struct WireBState {
     std::array<IqOutRadio, 8> iqOut;
 
     // --- rfmon: radios that follow a master (indices are the radios' 0-based slots) ---
+    // --- net-outputs: SBS text out of the aircraft tracks (one server) ---
+    struct SbsLast { double lat = 0, lon = 0, alt = 0, course = 0, speed = 0; };
+    std::unique_ptr<cascade::net::SbsOut> sbs;
+    std::map<std::string, SbsLast> sbsLast;
+    std::uint64_t sbsLines = 0, sbsSeen = 0, sbsLinesReported = 0;
+
     cascade::core::FollowSet follow;
     std::array<double, 8> followLastHz{};
     std::array<bool, 8> followHaveLast{};

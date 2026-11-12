@@ -72,6 +72,11 @@ void wireBOps(AppWindow& a) {
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_FOLLOW_LOCK, 2, 1)), FOXAPI_NO_CHANGE));
     covering(FOXAPP_OP_FOLLOW_KEEP);
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_FOLLOW_KEEP, 2)), FOXAPI_NO_CHANGE));
+    // SBS OUT: no key for a wider bind; nothing to stop is no change
+    covering(FOXAPP_OP_SBS_OUT_START);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SBS_OUT_START, "{\"bind\":\"0.0.0.0\"}")), FOXAPI_BAD_ARGUMENT));
+    covering(FOXAPP_OP_SBS_OUT_STOP);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_SBS_OUT_STOP, 0)), FOXAPI_NO_CHANGE));
     covering(FOXAPP_OP_GPU_FFT_MODE);
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 3)), FOXAPI_OUT_OF_RANGE));
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 0)), FOXAPI_NO_CHANGE));
