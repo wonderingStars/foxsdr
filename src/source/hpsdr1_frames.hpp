@@ -118,6 +118,9 @@ struct CommandState {
     bool preamp = false;
     std::uint8_t attenDb = 0;    // 0..31
     bool attenEnable = false;
+    // Hermes-Lite 2 only (hl2_protocol.hpp): address 10 carries the DIRECT LNA gain, C4 = 0x40 | (dB + 12).
+    bool lnaDirect = false;
+    std::uint8_t lnaCode = 0;    // 0..60
 };
 
 // The addresses of one full refresh: general, transmitter frequency, the receivers' frequencies, drive,
@@ -153,7 +156,8 @@ inline std::array<std::uint8_t, kFrameBytes> buildCommandFrame(const CommandStat
     } else if (address == kAddrDrive) {
         f[4] = 0;
     } else if (address == kAddrAtten) {
-        f[7] = static_cast<std::uint8_t>((s.attenEnable ? 0x20 : 0x00) | (s.attenDb & 0x1F));
+        f[7] = s.lnaDirect ? static_cast<std::uint8_t>(0x40 | (s.lnaCode & 0x3F))
+                           : static_cast<std::uint8_t>((s.attenEnable ? 0x20 : 0x00) | (s.attenDb & 0x1F));
     }
     return f;
 }

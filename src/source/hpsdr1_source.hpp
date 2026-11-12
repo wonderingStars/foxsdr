@@ -32,13 +32,14 @@
 #include <string>
 #include <vector>
 
+#include "source/hl2_protocol.hpp"
 #include "source/hpsdr1_frames.hpp"
 #include "source/hpsdr_source.hpp"
 #include "source/net_sample_source.hpp"
 
 namespace cascade::source {
 
-enum class Hpsdr1Profile { Generic, RedPitaya };
+enum class Hpsdr1Profile { Generic, RedPitaya, HermesLite2 };
 
 class Hpsdr1Source : public NetSampleSource {
 public:
@@ -76,6 +77,10 @@ public:
     std::uint64_t badPackets() const;      // wrong envelope, wrong sync, wrong length
     std::uint64_t overloadFrames() const;  // frames whose status said "A/D overflow"
     std::uint64_t commandPacketsSent() const;
+    // Hermes-Lite 2 profile only (profile=hl2): the extended discovery reply of the radio that was opened, and the
+    // latest status words its data frames carried (raw counts). Empty / zero for other profiles.
+    hl2::Info hl2Info() const;
+    hl2::Telemetry hl2Telemetry() const;
 
 private:
     struct Rx;
@@ -88,6 +93,8 @@ private:
     bool active_ = false;
     int timeoutMs_ = 2000;
     double freqHz_ = 0.0;
+    bool hl2WatchdogOff_ = false;
+    hl2::Info hl2Info_;
 };
 
 }  // namespace cascade::source

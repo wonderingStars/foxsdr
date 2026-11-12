@@ -51,6 +51,8 @@ bool parseDiscoveryReply(const std::uint8_t* d, std::size_t n, DiscoveryReply& o
     for (int i = 0; i < 6; ++i) { r.mac[static_cast<std::size_t>(i)] = d[3 + i]; }
     r.codeVersion = d[9];
     r.boardId = d[10];
+    r.rawSize = n < r.raw.size() ? n : r.raw.size();
+    for (std::size_t i = 0; i < r.rawSize; ++i) { r.raw[i] = d[i]; }
     out = r;
     return true;
 }

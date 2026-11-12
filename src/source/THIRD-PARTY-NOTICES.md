@@ -148,3 +148,26 @@ style, not pasted) from the permissively licensed projects listed here. Files re
 > SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 > THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
 > ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+## Hermes-Lite 2 wiki page "Protocol" - FACTS ONLY - used by hl2_protocol.hpp, the hl2 profile of hpsdr1_source.{hpp,cpp}
+
+* Page: https://github.com/softerhardware/Hermes-Lite2/wiki/Protocol (raw wiki markdown read on 2026-11-12).
+* NO LICENCE: the repository (softerhardware/Hermes-Lite2) has no licence file, the page states none, and the gateware
+  files carry "GNU GPL v2 or later" headers. Nothing of the repository was read or used - no gateware, no software, no
+  file - and no code was copied from the page (it holds none). What was taken is the content of an interface
+  description (which bit means what, which address holds what), re-expressed in this repository's own words and
+  code. The page says of itself that it is "based on the original protocol1 from openHPSDR" (the USB-protocol and
+  Metis documents the earlier lanes used).
+* Not built, by decision: every word that writes to the radio's own hardware or stored settings (I2C, AD9866 SPI,
+  PA bias, EEPROM with its fixed IP and MAC, clock/synchronisation/master commands, reset on disconnect), transmit,
+  PureSignal, CW, the wide-band stream.
+
+## openHPSDR documents (earlier lane feat/hpsdrduo; re-read in part by this lane)
+
+* "openHPSDR Ethernet Protocol v4.4" (Phil Harman VK6PH and contributors, March 2019,
+  https://github.com/TAPR/OpenHPSDR-Firmware/tree/master/Protocol%202/Documentation - the repository as a whole is
+  GPL-3.0, no firmware or gateware was opened; the PDF states no licence): used for src/source/hpsdr2_protocol.*.
+  This lane re-checked the Board Type list (0 Atlas, 1 and 2 Hermes, 3 Angela, 4 Orion, 5 Orion Mk II, 6 Hermes Lite,
+  10 Saturn) and Appendix A for board 1 (DSP clock 122.88 MHz, one RF ADC, 48 to 1536 ksps, 238 I&Q samples per 24-bit
+  packet) against the existing tables: they agree.
+* "Metis - How it works" V1.33 and the USB data protocol V1.58/V1.60: src/source/hpsdr_protocol.* and hpsdr1_frames.hpp.

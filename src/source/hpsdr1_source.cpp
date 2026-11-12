@@ -17,6 +17,8 @@ namespace {
 
 constexpr int kPollMs = 200;
 constexpr int kRefreshMs = 100;
+constexpr double kHl2MaxHz = 38400000.0;  // the Hermes-Lite 2 wiki: ADC 76.8 MHz, "0 Hz to 38.4 MHz (76.8/2)"
+constexpr int kHl2DefaultLnaDb = 20;      // the Hermes-compatible default of +20 dB, so a fresh start behaves like one
 constexpr double kRedPitayaMaxHz = 61440000.0;  // Pavel Demin's Red Pitaya page: "from 0 Hz to 61.44 MHz"
 
 }  // namespace
@@ -39,6 +41,9 @@ struct Hpsdr1Source::Rx {
     std::chrono::steady_clock::time_point armDeadline{};
     std::atomic<std::uint64_t> bad{0};
     std::atomic<std::uint64_t> overload{0};
+    std::atomic<bool> hl2{false};
+    std::mutex telMutex;
+    hl2::Telemetry latest;  // merged over addresses 0, 1 and 2 (Hermes-Lite 2 profile)
     int silentTicks = 0;
     int silentLimit = 10;
     std::chrono::steady_clock::time_point nextRefresh{};
@@ -117,6 +122,26 @@ struct Hpsdr1Source::Rx {
                 continue;
             }
             if (st.adcOverload()) { overload.fetch_add(1, std::memory_order_relaxed); }
+            if (hl2.load(std::memory_order_relaxed)) {
+                const hl2::Telemetry t = hl2::decodeStatus(st.c0, st.c1, st.c2, st.c3, st.c4);
+                if (t.valid) {
+                    std::lock_guard<std::mutex> tl(telMutex);
+                    latest.valid = true;
+                    if (t.radioAddress == 0) {
+                        latest.adcOverload = t.adcOverload;
+                        latest.txInhibitBit = t.txInhibitBit;
+                        latest.fifoFlags = t.fifoFlags;
+                        latest.txFifoMsb = t.txFifoMsb;
+                        latest.firmwareVersion = t.firmwareVersion;
+                    } else if (t.radioAddress == 1) {
+                        latest.temperature = t.temperature;
+                        latest.forwardPower = t.forwardPower;
+                    } else if (t.radioAddress == 2) {
+                        latest.reversePower = t.reversePower;
+                        latest.current = t.current;
+                    }
+                }
+            }
             if (!perRx.empty() && !perRx[0].empty()) { link.pushSamples(perRx[0].data(), perRx[0].size()); }
         }
         return true;
@@ -147,7 +172,15 @@ bool Hpsdr1Source::open(const std::string& args) {
     const std::string prof = argValue(args, "profile");
     profile_ = Hpsdr1Profile::Generic;
     if (prof == "redpitaya") { profile_ = Hpsdr1Profile::RedPitaya; }
-    else if (!prof.empty() && prof != "generic") { setError("the profile must be generic or redpitaya"); return false; }
+    else if (prof == "hl2") { profile_ = Hpsdr1Profile::HermesLite2; }
+    else if (!prof.empty() && prof != "generic") { setError("the profile must be generic, redpitaya or hl2"); return false; }
+    hl2WatchdogOff_ = false;
+    const std::string wd = argValue(args, "watchdog");
+    if (!wd.empty()) {
+        if (profile_ != Hpsdr1Profile::HermesLite2) { setError("watchdog= belongs to the hl2 profile"); return false; }
+        if (wd != "on" && wd != "off") { setError("watchdog is on or off"); return false; }
+        hl2WatchdogOff_ = wd == "off";
+    }
     int rate = 192000;
     const std::string rt = argValue(args, "rate");
     if (!rt.empty()) {
@@ -176,6 +209,16 @@ bool Hpsdr1Source::open(const std::string& args) {
         return false;
     }
     dev_ = *chosen;
+    hl2Info_ = hl2::Info{};
+    if (profile_ == Hpsdr1Profile::HermesLite2) {
+        hl2Info_ = hl2::parseDiscovery(dev_.reply.raw.data(), dev_.reply.rawSize);
+        if (!hl2Info_.valid) {
+            setError(dev_.reply.boardId == hl2::kBoardId
+                         ? "this Hermes-Lite 2 sent a discovery reply too short to carry its extension (60 bytes expected)"
+                         : "the radio that answered is not a Hermes-Lite 2 (it says board " + std::string(hp::boardName(dev_.reply.boardId)) + ")");
+            return false;
+        }
+    }
     std::unique_ptr<UdpTransport> u = UdpTransport::bindLocal("0.0.0.0", 0, std::chrono::milliseconds(kPollMs), err);
     if (!u) { setError(err); return false; }
     if (!u->connectTo(dev_.ip, dev_.port)) { setError(u->lastError()); return false; }
@@ -186,6 +229,11 @@ bool Hpsdr1Source::open(const std::string& args) {
     rx->udp = udp_;
     rx->cmd.speedCode = h1::speedCodeForRate(rate);
     rx->cmd.receivers = 1;
+    if (profile_ == Hpsdr1Profile::HermesLite2) {
+        rx->cmd.lnaDirect = true;
+        rx->cmd.lnaCode = static_cast<std::uint8_t>(kHl2DefaultLnaDb - hl2::kLnaMinDb);
+        rx->hl2.store(true);
+    }
     rx->silentLimit = std::max(3, timeoutMs_ / kPollMs);
     rx_ = rx;
     freqHz_ = 0.0;
@@ -204,7 +252,8 @@ void Hpsdr1Source::closeDevice() {
     if (!rx_ && !isOpen()) { endReader(); return; }
     const std::string keep = lastError();
     if (udp_ && active_) {
-        const std::vector<std::uint8_t> stopCmd = hp::buildStartStop(hp::kStopAll);
+        const std::vector<std::uint8_t> stopCmd =
+            hp::buildStartStop(profile_ == Hpsdr1Profile::HermesLite2 ? hl2::stopCommand(hl2WatchdogOff_) : hp::kStopAll);
         udp_->sendAll(stopCmd.data(), stopCmd.size());  // best effort
     }
     active_ = false;
@@ -239,7 +288,8 @@ bool Hpsdr1Source::start() {
         setError(std::string("could not send the radio's settings: ") + udp_->lastError());
         return false;
     }
-    const std::vector<std::uint8_t> cmd = hp::buildStartStop(hp::kStartIq);
+    const std::vector<std::uint8_t> cmd =
+        hp::buildStartStop(profile_ == Hpsdr1Profile::HermesLite2 ? hl2::startCommand(hl2WatchdogOff_) : hp::kStartIq);
     if (!udp_->sendAll(cmd.data(), cmd.size())) {
         setError(std::string("could not send the start command: ") + udp_->lastError());
         return false;
@@ -252,7 +302,8 @@ void Hpsdr1Source::stop() {
     std::lock_guard<std::mutex> lk(mutex_);
     stopKeeping();
     if (active_ && udp_) {
-        const std::vector<std::uint8_t> cmd = hp::buildStartStop(hp::kStopAll);
+        const std::vector<std::uint8_t> cmd =
+            hp::buildStartStop(profile_ == Hpsdr1Profile::HermesLite2 ? hl2::stopCommand(hl2WatchdogOff_) : hp::kStopAll);
         udp_->sendAll(cmd.data(), cmd.size());
     }
     active_ = false;
@@ -269,7 +320,7 @@ std::vector<double> Hpsdr1Source::supportedSampleRatesHz() const {
     std::lock_guard<std::mutex> lk(mutex_);
     if (!isOpen()) { return {}; }
     std::vector<double> v{48000.0, 96000.0, 192000.0};
-    if (profile_ == Hpsdr1Profile::Generic) { v.push_back(384000.0); }
+    if (profile_ != Hpsdr1Profile::RedPitaya) { v.push_back(384000.0); }  // the Hermes-Lite 2 wiki: speed 11 = 384 kHz
     return v;
 }
 
@@ -303,6 +354,10 @@ bool Hpsdr1Source::setCenterFrequencyHz(double hz) {
         setError("the Red Pitaya receiver tunes 0 to 61.44 MHz");
         return false;
     }
+    if (profile_ == Hpsdr1Profile::HermesLite2 && hz > kHl2MaxHz) {
+        setError("the Hermes-Lite 2 receiver tunes 0 to 38.4 MHz");
+        return false;
+    }
     if (hz > 4294967295.0) { setError("the frequency field is 32 bits: 4.29 GHz at most"); return false; }
     {
         std::lock_guard<std::mutex> cl(rx_->cmdMutex);
@@ -315,6 +370,11 @@ bool Hpsdr1Source::setCenterFrequencyHz(double hz) {
 
 bool Hpsdr1Source::frequencyRangeHz(double& lo, double& hi) const {
     std::lock_guard<std::mutex> lk(mutex_);
+    if (profile_ == Hpsdr1Profile::HermesLite2) {
+        lo = 0.0;
+        hi = kHl2MaxHz;
+        return true;
+    }
     if (profile_ != Hpsdr1Profile::RedPitaya) { return false; }
     lo = 0.0;
     hi = kRedPitayaMaxHz;
@@ -324,7 +384,14 @@ bool Hpsdr1Source::frequencyRangeHz(double& lo, double& hi) const {
 std::vector<GainInfo> Hpsdr1Source::gains() const {
     std::lock_guard<std::mutex> lk(mutex_);
     std::vector<GainInfo> v;
-    if (isOpen() && profile_ == Hpsdr1Profile::Generic) {
+    if (isOpen() && profile_ == Hpsdr1Profile::HermesLite2) {
+        GainInfo g;  // address 10, bit 6 set: LNA[5:0] straight to the AD9866, -12 dB (0) to +48 dB (60)
+        g.name = "LNA gain";
+        g.minDb = hl2::kLnaMinDb;
+        g.maxDb = hl2::kLnaMaxDb;
+        g.stepDb = 1.0;
+        v.push_back(g);
+    } else if (isOpen() && profile_ == Hpsdr1Profile::Generic) {
         GainInfo g;
         g.name = "Attenuator";
         g.minDb = 0.0;
@@ -338,6 +405,20 @@ std::vector<GainInfo> Hpsdr1Source::gains() const {
 bool Hpsdr1Source::setGainDb(const std::string& name, double db) {
     std::lock_guard<std::mutex> lk(mutex_);
     if (!isOpen() || !rx_) { setError("setGainDb() called with no HPSDR radio open"); return false; }
+    if (profile_ == Hpsdr1Profile::HermesLite2) {
+        if (name != "LNA gain") { setError("this radio has one gain, \"LNA gain\""); return false; }
+        if (!std::isfinite(db) || db != std::floor(db) || !hl2::lnaDbValid(static_cast<int>(db))) {
+            setError("the LNA gain takes whole decibels, -12 to +48");
+            return false;
+        }
+        {
+            std::lock_guard<std::mutex> cl(rx_->cmdMutex);
+            rx_->cmd.lnaDirect = true;
+            rx_->cmd.lnaCode = static_cast<std::uint8_t>(static_cast<int>(db) - hl2::kLnaMinDb);
+        }
+        if (active_ && !rx_->sendRefresh()) { setError("could not send the new LNA gain to the radio"); return false; }
+        return true;
+    }
     if (profile_ != Hpsdr1Profile::Generic || name != "Attenuator") {
         setError(profile_ == Hpsdr1Profile::RedPitaya ? "this radio has no gain control" : "this radio has one gain, \"Attenuator\"");
         return false;
@@ -354,8 +435,12 @@ bool Hpsdr1Source::setGainDb(const std::string& name, double db) {
 
 double Hpsdr1Source::gainDb(const std::string& name) const {
     std::lock_guard<std::mutex> lk(mutex_);
-    if (!rx_ || name != "Attenuator") { return 0.0; }
+    if (!rx_) { return 0.0; }
     std::lock_guard<std::mutex> cl(rx_->cmdMutex);
+    if (profile_ == Hpsdr1Profile::HermesLite2) {
+        return name == "LNA gain" ? static_cast<double>(rx_->cmd.lnaCode) + hl2::kLnaMinDb : 0.0;
+    }
+    if (name != "Attenuator") { return 0.0; }
     return rx_->cmd.attenDb;
 }
 
@@ -391,6 +476,18 @@ std::uint64_t Hpsdr1Source::badPackets() const {
 std::uint64_t Hpsdr1Source::overloadFrames() const {
     std::lock_guard<std::mutex> lk(mutex_);
     return rx_ ? rx_->overload.load() : 0;
+}
+
+hl2::Info Hpsdr1Source::hl2Info() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return hl2Info_;
+}
+
+hl2::Telemetry Hpsdr1Source::hl2Telemetry() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (!rx_) { return hl2::Telemetry{}; }
+    std::lock_guard<std::mutex> tl(rx_->telMutex);
+    return rx_->latest;
 }
 
 std::uint64_t Hpsdr1Source::commandPacketsSent() const {

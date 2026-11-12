@@ -72,6 +72,10 @@ struct DiscoveryReply {
     std::array<std::uint8_t, 6> mac{};
     std::uint8_t codeVersion = 0;
     std::uint8_t boardId = 0;
+    // The datagram itself (up to 60 bytes), for boards that put more in the bytes after Board_ID than the base protocol
+    // defines (the Hermes-Lite 2 does: see hl2_protocol.hpp). Never interpreted here.
+    std::array<std::uint8_t, 60> raw{};
+    std::size_t rawSize = 0;
     std::string macText() const;     // "aa:bb:cc:dd:ee:ff"
 };
 
