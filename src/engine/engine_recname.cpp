@@ -27,6 +27,7 @@
 #include "core/recorder.hpp"
 #include "core/status_clock.hpp"
 #include "engine/engine.hpp"
+#include "engine/wire_a.hpp"   // wire-a
 
 namespace cascade::engine {
 
@@ -109,6 +110,7 @@ std::int32_t Engine::applyRecordNameOp(const FoxCommand& c, const std::string& t
 }
 
 void Engine::applyRecordName(cascade::core::Recorder::OpenRequest& req) {
+    WireA::of(*this).applyDaily(req);   // wire-a: the day's folder first (a file-name template then works below it)
     if (!recordNameLoaded_) { loadRecordName(); }
     if (recordNameTemplate_.empty()) { return; }
     const std::int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();

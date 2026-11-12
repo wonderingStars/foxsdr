@@ -30,6 +30,8 @@
 #include "core/bookmark_notes.hpp"
 #include "core/channel_plans.hpp"
 #include "core/disk_job.hpp"
+#include "core/rec_daily.hpp"
+#include "core/recorder.hpp"
 #include "core/favourite_state.hpp"
 #include "core/scan_plan.hpp"
 #include "core/scan_trigger.hpp"
@@ -152,6 +154,19 @@ private:
     // ---- records: analyser project, attachments, SigMF annotations (wire_a_records.cpp) ----
     Result recordsOp(const FoxCommand& c, const std::string& text, Result res);
 
+    // ---- recording: daily folders (wire_a_recording.cpp) ----
+    Result dailyOp(const FoxCommand& c, const std::string& text, Result res);
+    void recordingFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    void dailyLoadOnce();
+    std::string dailyJson() const;
+    cascade::core::recdaily::Options daily_ = [] { cascade::core::recdaily::Options o; o.style = cascade::core::recdaily::Style::None; return o; }();
+    bool dailyLoaded_ = false;
+
+public:
+    // The take's place: its folder is the day's folder below the recordings folder (engine.cpp's applyRecordName calls it first).
+    void applyDaily(cascade::core::Recorder::OpenRequest& req);
+
+private:
     // ---- the scanner (wire_a_scan.cpp) ----
     Result scanOp(const FoxCommand& c, const std::string& text, Result res);
     Result scanPlanOp(const FoxCommand& c, const std::string& text, Result res);

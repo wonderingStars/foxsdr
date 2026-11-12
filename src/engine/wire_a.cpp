@@ -38,6 +38,8 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
             return channelOp(c, text, res);
         case FOXAPP_OP_KEY_ACTION:
             return keyActionOp(c, text, res);
+        case FOXAPP_OP_SET_RECORD_DAILY:
+            return dailyOp(c, text, res);
         case FOXAPP_OP_MARKER_EXPORT:
         case FOXAPP_OP_MARKER_IMPORT:
             return markerIoOp(c, text, res);
@@ -89,6 +91,7 @@ bool WireA::drain(std::chrono::milliseconds bound) {
 }
 
 void WireA::pass() {
+    dailyLoadOnce();
     jobPass();
     scanPass();
     bookmarksPass();
@@ -104,6 +107,7 @@ void WireA::facts(const std::function<void(const std::string&, const std::string
     bookmarkFacts(fact);
     scanFacts(fact);
     jobFacts(fact);
+    recordingFacts(fact);
 }
 
 void WireA::tunedFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {

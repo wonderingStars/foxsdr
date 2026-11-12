@@ -106,6 +106,13 @@
 //   actions), the frequency (centre_signal, bookmarks) or the mode number from 1 (cycle_mode).
 #define FOXAPP_OP_KEY_ACTION             0x8815u /* text: the action id. Addresses one radio (target) */
 
+//   SET_RECORD_DAILY (SETTINGS; core/rec_daily.hpp): every recording take goes into a folder for the day it STARTS (a take that crosses midnight stays where it began), below the recordings folder (and above the
+//   folders a file-name template makes, SET_RECORD_NAME). text = JSON {"style":0..4 (0 none = today's behaviour, the default; 1 "2026-11-11"; 2 "2026/11/11"; 3 "2026-11/11"; 4 "20261111"), "utc":true|false (the
+//   date in UTC, the default, or the computer's local time), "template":"" (or a custom one with {yyyy} {mm} {dd} {date} {compact}, which replaces the style)}. The folder is made level by level inside the
+//   recordings folder (a link, a junction or a file in the way is refused and the take keeps its default place, said in the log). BAD_ARGUMENT for bad JSON, a style out of range or a template the model
+//   refuses (nothing changes); NO_CHANGE when it is in force already. Kept in record-daily.json beside markers.json. fact.record.daily is the JSON in force.
+#define FOXAPP_OP_SET_RECORD_DAILY       0x8816u /* text: JSON {style, utc, template} */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -130,7 +137,8 @@
     {FOXAPP_OP_PROJECT, "APP_PROJECT", true}, \
     {FOXAPP_OP_ATTACH, "APP_ATTACH", true}, \
     {FOXAPP_OP_SIGMF_ANNOTATE, "APP_SIGMF_ANNOTATE", true}, \
-    {FOXAPP_OP_KEY_ACTION, "APP_KEY_ACTION", true},
+    {FOXAPP_OP_KEY_ACTION, "APP_KEY_ACTION", true}, \
+    {FOXAPP_OP_SET_RECORD_DAILY, "APP_SET_RECORD_DAILY", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP
