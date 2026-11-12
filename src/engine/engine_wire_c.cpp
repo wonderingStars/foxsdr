@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -16,6 +17,7 @@
 #include "core/diag_log.hpp"
 #include "engine/engine.hpp"
 #include "core/plugin_repo_helper.hpp"   // wire-c
+#include "core/safe_file_io.hpp"
 #include "core/store_sort.hpp"
 #include "engine/wire_c.hpp"
 
@@ -29,7 +31,22 @@ wc::State& Engine::wireC() {
         const std::filesystem::path folder = wireCFolderForTest_.empty()
             ? std::filesystem::path(cascade::core::ConfigStore::defaultPath()).parent_path()
             : std::filesystem::path(wireCFolderForTest_);
-        wireC_ = std::make_unique<wc::State>(folder);
+        // the data folder (plugins, logs): the per-user one (%LOCALAPPDATA%\foxsdr, or the XDG data folder), or - in a test - a sibling of the scratch folder; both are named foxsdr
+        std::filesystem::path data;
+        if (!wireCFolderForTest_.empty()) {
+            data = folder.parent_path() / "wcdata" / "foxsdr";
+        } else if (const char* local = std::getenv("LOCALAPPDATA"); local != nullptr && *local != '\0') {
+            data = std::filesystem::path(local) / "foxsdr";
+        } else if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg != nullptr && *xdg != '\0') {
+            data = std::filesystem::path(xdg) / "foxsdr";
+        } else if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') {
+            data = std::filesystem::path(home) / ".local" / "share" / "foxsdr";
+        }
+        wireC_ = std::make_unique<wc::State>(folder, data);
+        {   // what the last start did with a staged import or reset (written by bootProcess step 2c)
+            std::string boot;
+            if (cascade::core::safeio::readCapped(folder / "wirec-last-boot.txt", 4096, boot) == cascade::core::safeio::ReadResult::Ok) { wireC_->sysLastBoot = boot; }
+        }
     }
     return *wireC_;
 }
@@ -52,6 +69,76 @@ std::int32_t Engine::applyWireC(const FoxCommand& c, const std::string& text, Fo
                 case wc::SetResult::SaveFailed: return FOXAPI_FAILED;
             }
             return FOXAPI_FAILED;
+        }
+        case FOXAPP_OP_SYS_FIRSTRUN:
+        case FOXAPP_OP_SYS_EXPORT:
+        case FOXAPP_OP_SYS_IMPORT_PLAN:
+        case FOXAPP_OP_SYS_IMPORT_COMMIT:
+        case FOXAPP_OP_SYS_BACKUP:
+        case FOXAPP_OP_SYS_RESET_PLAN:
+        case FOXAPP_OP_SYS_RESET_COMMIT:
+        case FOXAPP_OP_SYS_PENDING_CANCEL: {
+            wc::State& s = wireC();
+            wc::SysOps& sys = s.sys();
+            s.sysError.clear();
+            bool ok = false;
+            std::int32_t bad = FOXAPI_BAD_ARGUMENT;
+            switch (c.op) {
+                case FOXAPP_OP_SYS_FIRSTRUN: {
+                    ok = sys.wizardVerb(text, why);
+                    if (ok && sys.wizardFinished()) {
+                        const cascade::core::sys::WizardOutcome out = sys.wizardOutcome();
+                        if (out.applied) {
+                            if (!out.bookmarks.empty()) {
+                                freqMgr_.addMany(out.bookmarks);
+                                saveBookmarks();
+                            }
+                            if (sys.telemetryChosen()) { (void)applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_TELEMETRY_CONSENT, out.telemetryEnabled ? 1 : 0)); }
+                        }
+                        (void)sys.markDone();
+                    }
+                    break;
+                }
+                case FOXAPP_OP_SYS_EXPORT: {
+                    std::size_t stripped = 0;
+                    ok = sys.exportTo(text, why, &stripped);
+                    if (ok) { s.sysExportLast = "exported to the file you chose (" + std::to_string(stripped) + " secret or identity item(s) left out)"; }
+                    break;
+                }
+                case FOXAPP_OP_SYS_IMPORT_PLAN:
+                    ok = sys.importPlan(text, s.sysImportPlan, s.sysImportToken, s.sysImportNotes, why);
+                    if (!ok) { s.sysImportPlan.clear(); s.sysImportToken.clear(); s.sysImportNotes.clear(); }
+                    break;
+                case FOXAPP_OP_SYS_IMPORT_COMMIT:
+                    ok = sys.importCommit(text, why);
+                    if (ok) { s.sysImportToken.clear(); }
+                    break;
+                case FOXAPP_OP_SYS_BACKUP: {
+                    std::string name;
+                    const std::size_t keep = c.ival[0] > 0 ? static_cast<std::size_t>(std::min<std::int64_t>(c.ival[0], 50)) : static_cast<std::size_t>(s.settings().getInt("sys.backup_keep"));
+                    ok = sys.backupNow(keep, name, why);
+                    if (ok) { s.sysBackupLast = name; }
+                    break;
+                }
+                case FOXAPP_OP_SYS_RESET_PLAN:
+                    ok = sys.resetPlan(c.ival[0] != 0, c.ival[1] != 0, s.sysResetPlan, s.sysResetToken, why);
+                    if (!ok) { s.sysResetPlan.clear(); s.sysResetToken.clear(); }
+                    break;
+                case FOXAPP_OP_SYS_RESET_COMMIT:
+                    ok = sys.resetStage(text, why);
+                    if (ok) { s.sysResetToken.clear(); }
+                    break;
+                default:   // SYS_PENDING_CANCEL
+                    ok = sys.cancelPending(why);
+                    bad = FOXAPI_NO_CHANGE;
+                    break;
+            }
+            ++wireCVersion_;
+            if (!ok) {
+                s.sysError = why;
+                return bad;
+            }
+            return FOXAPI_OK;
         }
         case FOXAPP_OP_STORE_HELPER_CONSENT: {
             if (commandFromRemote_) {
@@ -89,6 +176,22 @@ void Engine::wireCFacts(const std::function<void(const std::string&, const std::
     fact("wirec.version", std::to_string(wireCVersion()));
     fact("wirec.error", s.settings().error());
     // POWER AND RESOURCES (wire_c_power.hpp). "" is "not available" - a reading that could not be made is never shown as 0.
+    // THE SYSTEM OPERATIONS (wire_c_sys.hpp): what they last said, and the first-run wizard's state
+    fact("sys.error", s.sysError);
+    fact("sys.export.last", s.sysExportLast);
+    fact("sys.import.plan", s.sysImportPlan);
+    fact("sys.import.token", s.sysImportToken);
+    fact("sys.import.notes", s.sysImportNotes);
+    fact("sys.reset.plan", s.sysResetPlan);
+    fact("sys.reset.token", s.sysResetToken);
+    fact("sys.backup.last", s.sysBackupLast);
+    fact("sys.lastboot", s.sysLastBoot);
+    fact("sys.pending", s.sys().pendingKind());
+    fact("sys.firstrun.needed", s.sys().firstRunNeeded() ? "1" : "0");
+    fact("sys.firstrun.step", s.sys().wizardStepName());
+    fact("sys.firstrun.done", s.sys().wizardFinished() ? "1" : "0");
+    fact("sys.firstrun.radios", s.sys().radioLines());
+    fact("sys.firstrun.presets", s.sys().presetLines());
     // (always published, so a client can read them before the first pass has made the power object; the perf.* facts are read at the call: wireCLiveFact)
     fact("sys.keepawake", s.hasPower() && s.power().keepAwakeHeld() && s.power().keepAwakeActive() ? "1" : "0");
     fact("sys.resume.count", std::to_string(s.resumeActions));

@@ -2674,6 +2674,16 @@ void macroOps(AppWindow& a) {
     CHECK(refused(A::apply(a, text(FOXAPP_OP_WIREC_SETTING, "nokey")), FOXAPI_BAD_ARGUMENT));
     CHECK(refused(A::apply(a, text(FOXAPP_OP_WIREC_SETTING, std::string("no.such.key") + '' + "1")), FOXAPI_NOT_FOUND));
     CHECK(refused(A::apply(a, text(FOXAPP_OP_WIREC_SETTING, std::string("sys.backup_keep") + '' + "0")), FOXAPI_OUT_OF_RANGE));
+    for (const std::uint32_t o : {FOXAPP_OP_SYS_FIRSTRUN, FOXAPP_OP_SYS_EXPORT, FOXAPP_OP_SYS_IMPORT_PLAN, FOXAPP_OP_SYS_IMPORT_COMMIT, FOXAPP_OP_SYS_BACKUP, FOXAPP_OP_SYS_RESET_PLAN,
+                                  FOXAPP_OP_SYS_RESET_COMMIT, FOXAPP_OP_SYS_PENDING_CANCEL}) {
+        covering(o);   // (each is answered here, with a refusal that changes nothing; the engine behaviour is tests/test_engine_api_wire_c_sys.cpp's)
+    }
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_FIRSTRUN, "bogus-step")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_EXPORT, "")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_IMPORT_PLAN, "no-such-file.foxsdr-bundle")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_IMPORT_COMMIT, "IMPORT-00000000")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_RESET_COMMIT, "RESET-00000000")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, cmd::make(FOXAPP_OP_SYS_PENDING_CANCEL)), FOXAPI_NO_CHANGE));
     covering(FOXAPP_OP_STORE_HELPER_CONSENT);   // (the install gate and the facts are tests/test_engine_api_wire_c_store.cpp's)
     CHECK(refused(A::apply(a, text(FOXAPP_OP_STORE_HELPER_CONSENT, "no-such-plugin", 1)), FOXAPI_NOT_FOUND));
     // wire-c end

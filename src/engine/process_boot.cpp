@@ -1175,6 +1175,8 @@ BootResult bootProcess(ProcessKind kind, int argc, char** argv) {
     // BEFORE the crash handlers read the log folder and before the config path is decided; a marker that cannot be honoured stops the start (exit 1, the sentence
     // on stderr and in foxsdr-portable-error.txt) - it never falls back to the PC's own folders. No marker: no change. (engine/wire_c_portable.cpp)
     if (const PortableBoot pb = applyPortableModeToProcess(); pb.refused) { return finish(1); }
+    // STEP 2c (wire-c, rows S7 / S8): a settings import or reset the person staged is carried out now, before anything reads the settings (engine/wire_c_sys.hpp).
+    applyPendingSystemActionsToProcess(argc, argv);
     // STEP 3: the crash handlers, then the config read under them, then capture.
     armDiagnostics(kind, argc, argv, boot);
     // STEP 4: the instance name is claimed before the flags are parsed.

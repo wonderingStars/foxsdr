@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "engine/wire_c_power.hpp"
+#include "engine/wire_c_sys.hpp"
 
 namespace cascade::engine::wirec {
 
@@ -74,8 +75,11 @@ private:
 // lane builds nothing and reads no file) from the per-user folder. Items add their own members here as they are wired.
 class State {
 public:
-    explicit State(std::filesystem::path folder) : folder_(std::move(folder)), settings_(folder_ / "wirec.json") {}
+    State(std::filesystem::path folder, std::filesystem::path dataDir) : folder_(std::move(folder)), dataDir_(std::move(dataDir)), settings_(folder_ / "wirec.json"), sys_(folder_, dataDir_) {}
     const std::filesystem::path& folder() const { return folder_; }
+    SysOps& sys() { return sys_; }
+    // What the system operations last said (facts fact.sys.*): strings the ops fill and the engine publishes.
+    std::string sysError, sysExportLast, sysImportPlan, sysImportToken, sysImportNotes, sysResetPlan, sysResetToken, sysBackupLast, sysLastBoot;
     Settings& settings() { return settings_; }
     const Settings& settings() const { return settings_; }
 
@@ -101,7 +105,9 @@ public:
 
 private:
     std::filesystem::path folder_;
+    std::filesystem::path dataDir_;
     Settings settings_;
+    SysOps sys_;
     mutable std::mutex powerMu_;
     std::unique_ptr<Power> power_;
 };

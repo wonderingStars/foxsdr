@@ -213,6 +213,26 @@
 //   program; confirm ..."); ADD ALL never fetches a helper plugin without it. NOT_FOUND: no such entry, or the entry is not a helper plugin. NO_CHANGE: already so.
 //   Not saved (a restart asks again); never on the web profile (a browser cannot have read the notice).
 #define FOXAPP_OP_STORE_HELPER_CONSENT   0x8A01u /* text: catalogue key; ival[0]: 1 consent / 0 withdraw */
+//   THE SYSTEM OPERATIONS (wiring lane C rows S7, S8, S10; src/engine/wire_c_sys.hpp), SETTINGS, LOCAL sessions only. Their answers are facts (fact.sys.*, LOCAL): the words of a refusal are
+//   fact.sys.error and the op's message. IMPORT and RESET are STAGED and carried out at the NEXT START (the running engine would write config.json over them when it closes): fact.sys.pending
+//   says "import" or "reset" until then, SYS_PENDING_CANCEL withdraws it; nothing is ever deleted (an import keeps what it replaces as <name>.before-import-<stamp>, a reset moves the
+//   files into reset-<stamp>).
+//   SYS_FIRSTRUN: text: a step of the first-run wizard: "radio:<n>" (n indexes fact.sys.firstrun.radios), "preset:<id>" ("" none; fact.sys.firstrun.presets lists "<id>\t<title>"), "telemetry:0|1",
+//   "next", "back", "skip". BAD_ARGUMENT for a choice that does not fit or a step whose choice is missing. When the wizard ends (done or skipped) its choices are applied (the bookmarks of the
+//   chosen set; the usage-reports switch ONLY if the person chose it here) and fact.sys.firstrun.done is "1".
+//   SYS_EXPORT: text: the file to write. One bundle of config.json, bookmarks.json and markers.json; passwords, tokens and the install id are never in it. fact.sys.export.last.
+//   SYS_IMPORT_PLAN: text: a bundle file. Validated whole; fact.sys.import.plan ("<name>\tNew|Replace|Identical" lines), fact.sys.import.token, fact.sys.import.notes. SYS_IMPORT_COMMIT: text: the token.
+//   SYS_BACKUP: ival[0]: how many backups to keep (0 = the sys.backup_keep setting). A bundle in <settings>/backups; fact.sys.backup.last.
+//   SYS_RESET_PLAN: ival[0] 1 = also the plugins folder, ival[1] 1 = also the logs. fact.sys.reset.plan, fact.sys.reset.token. SYS_RESET_COMMIT: text: the token.
+//   SYS_PENDING_CANCEL: withdraws a staged import or reset (NO_CHANGE when none).
+#define FOXAPP_OP_SYS_FIRSTRUN           0x8A02u /* text: "radio:<n>" | "preset:<id>" | "telemetry:0|1" | "next" | "back" | "skip" */
+#define FOXAPP_OP_SYS_EXPORT             0x8A03u /* text: the file to write */
+#define FOXAPP_OP_SYS_IMPORT_PLAN        0x8A04u /* text: a bundle file */
+#define FOXAPP_OP_SYS_IMPORT_COMMIT      0x8A05u /* text: the confirm token */
+#define FOXAPP_OP_SYS_BACKUP             0x8A06u /* ival[0]: how many to keep (0 = the setting) */
+#define FOXAPP_OP_SYS_RESET_PLAN         0x8A07u /* ival[0]: also plugins; ival[1]: also logs */
+#define FOXAPP_OP_SYS_RESET_COMMIT       0x8A08u /* text: the confirm token */
+#define FOXAPP_OP_SYS_PENDING_CANCEL     0x8A09u
 // wire-c end
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

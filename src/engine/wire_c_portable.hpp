@@ -28,4 +28,9 @@ PortableBoot applyPortableMode(const std::filesystem::path& exeDir, const std::f
 // (best effort, inside the folder the marker is in) and to the standard error stream. Returns the same result.
 PortableBoot applyPortableModeToProcess();
 
+// bootProcess STEP 2c (wire-c, rows S7 / S8): a staged settings import or reset (wire_c_sys.hpp) is carried out BEFORE anything reads the settings. Writes what it did to
+// wirec-last-boot.txt beside the settings (the engine publishes it as fact.sys.lastboot) and to the standard error stream. Never throws; nothing staged = nothing happens.
+// A run that only prints something (--version, --help, --selftest, --benchmark and the other tool modes) never carries a staged action out: it is for a real start.
+void applyPendingSystemActionsToProcess(int argc, char** argv);
+
 }  // namespace cascade::engine

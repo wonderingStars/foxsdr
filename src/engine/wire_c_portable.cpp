@@ -11,7 +11,9 @@
 #include <windows.h>
 #endif
 
+#include "core/config.hpp"
 #include "core/sys_portable.hpp"
+#include "engine/wire_c_sys.hpp"
 
 namespace cascade::engine {
 
@@ -55,6 +57,36 @@ PortableBoot applyPortableModeToProcess() {
         if (f) { f << r.message << "\n"; }
     }
     return r;
+}
+
+void applyPendingSystemActionsToProcess(int argc, char** argv) {
+    try {
+        static const char* const kToolFlags[] = {"--version", "--help", "-h", "--selftest", "--benchmark", "--rds-check", "--record-check", "--update-check", "--enumerate-json"};
+        for (int i = 1; i < argc && argv != nullptr; ++i) {
+            for (const char* flag : kToolFlags) {
+                if (argv[i] != nullptr && std::string(argv[i]) == flag) { return; }
+            }
+        }
+        const std::filesystem::path settings = std::filesystem::path(cascade::core::ConfigStore::defaultPath()).parent_path();
+        if (settings.empty()) { return; }
+        std::error_code ec;
+        if (!std::filesystem::exists(settings / "wirec-pending.json", ec)) { return; }
+        std::filesystem::path data;
+#if defined(_WIN32)
+        if (const char* local = std::getenv("LOCALAPPDATA"); local != nullptr && *local != '\0') { data = std::filesystem::path(local) / "foxsdr"; }
+#else
+        if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg != nullptr && *xdg != '\0') { data = std::filesystem::path(xdg) / "foxsdr"; }
+        else if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') { data = std::filesystem::path(home) / ".local" / "share" / "foxsdr"; }
+#endif
+        bool ok = true;
+        const std::string said = wirec::applyPendingAtBoot(settings, data, ok);
+        if (said.empty()) { return; }
+        std::fprintf(stderr, "%s\n", said.c_str());
+        std::ofstream f(settings / "wirec-last-boot.txt", std::ios::binary | std::ios::trunc);
+        if (f) { f << said << "\n"; }
+    } catch (...) {
+        // a start must never fail because of this
+    }
 }
 
 }  // namespace cascade::engine
