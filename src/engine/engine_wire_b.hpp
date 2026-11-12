@@ -22,6 +22,7 @@
 #include "core/field_strength.hpp"
 #include "core/radio_matrix_model.hpp"
 #include "core/track_store.hpp"
+#include "core/adsb_coverage.hpp"
 #include "core/spectrum_mask.hpp"
 #include "engine/wire_b_sweep.hpp"
 #include "core/pipeline.hpp"
@@ -105,6 +106,12 @@ struct WireBState {
     struct TrackLast { double lat = 0, lon = 0, alt = 0; };
     std::map<std::string, TrackLast> trackLast;
     std::uint64_t tracksChanged = 0;
+
+    // --- net-map-models: the ADS-B coverage grid (memory only; the receiver position is the caller's) ---
+    std::unique_ptr<cascade::core::adsbcov::AdsbCoverage> coverage;
+    bool coverageEnabled = false;
+    double coverageLat = 0.0, coverageLon = 0.0, coverageCell = 0.05, coverageHalfLife = 3.0 * 86400.0;
+    std::map<std::string, TrackLast> coverageLast;
 
     cascade::core::FollowSet follow;
     std::array<double, 8> followLastHz{};

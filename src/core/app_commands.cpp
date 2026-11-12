@@ -271,6 +271,8 @@ constexpr OpEntry kOps[] = {
     {FOXAPP_OP_SBS_OUT_STOP, "APP_SBS_OUT_STOP", true},
     {FOXAPP_OP_TRACKS_CONFIG, "APP_TRACKS_CONFIG", true},
     {FOXAPP_OP_TRACKS_READ, "APP_TRACKS_READ", true},
+    {FOXAPP_OP_COVERAGE_CONFIG, "APP_COVERAGE_CONFIG", true},
+    {FOXAPP_OP_COVERAGE_READ, "APP_COVERAGE_READ", true},
     // wire-b end
 };
 

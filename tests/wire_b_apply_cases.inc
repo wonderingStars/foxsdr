@@ -83,6 +83,12 @@ void wireBOps(AppWindow& a) {
     CHECK(refused(A::apply(a, text(FOXAPP_OP_TRACKS_CONFIG, "{\"enabled\":false}")), FOXAPI_NO_CHANGE));
     covering(FOXAPP_OP_TRACKS_READ);
     CHECK(refused(A::apply(a, text(FOXAPP_OP_TRACKS_READ, "not json")), FOXAPI_BAD_ARGUMENT));
+    // THE COVERAGE GRID: off by default; enabling needs the receiver position from the caller; reading needs it on
+    covering(FOXAPP_OP_COVERAGE_CONFIG);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_COVERAGE_CONFIG, "not json")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_COVERAGE_CONFIG, "{\"enabled\":true}")), FOXAPI_BAD_ARGUMENT));   // no position given
+    covering(FOXAPP_OP_COVERAGE_READ);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_COVERAGE_READ, "{}")), FOXAPI_FAILED));
     covering(FOXAPP_OP_GPU_FFT_MODE);
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 3)), FOXAPI_OUT_OF_RANGE));
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 0)), FOXAPI_NO_CHANGE));

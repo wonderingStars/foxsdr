@@ -367,9 +367,77 @@ FoxCommandResult Engine::tracksOp(const FoxCommand& c, const std::string& text, 
     return res;
 }
 
+FoxCommandResult Engine::coverageOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed) {
+    WireBState& w = wireBState();
+    wireb::Json p = wireb::Json::object();
+    if (!text.empty()) {
+        p = wireb::Json::parse(text, nullptr, false);
+        if (p.is_discarded() || !p.is_object()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the parameters are not a JSON object"); }
+    }
+    wireb::detail::Params q(p);
+    if (c.op == FOXAPP_OP_COVERAGE_CONFIG) {
+        bool enabled = w.coverageEnabled, clear = false;
+        double lat = w.coverageLat, lon = w.coverageLon, cell = w.coverageCell, half = w.coverageHalfLife;
+        if (!q.flag("enabled", enabled) || !q.number("rx_lat", lat, -90.0, 90.0) || !q.number("rx_lon", lon, -180.0, 180.0) || !q.number("cell_deg", cell, 0.001, 1.0) ||
+            !q.number("half_life_s", half, 3600.0, 31536000.0) || !q.flag("clear", clear) || !q.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, q.error); }
+        const bool havePos = (p.contains("rx_lat") && p.contains("rx_lon")) || w.coverage != nullptr;
+        if (enabled && !havePos) { return refusal(res, FOXAPI_BAD_ARGUMENT, "give the receiver's position (rx_lat and rx_lon) to enable the coverage grid"); }
+        if (p.contains("rx_lat") != p.contains("rx_lon")) { return refusal(res, FOXAPI_BAD_ARGUMENT, "rx_lat and rx_lon go together"); }
+        if (enabled == w.coverageEnabled && !clear && !p.contains("rx_lat") && !p.contains("cell_deg") && !p.contains("half_life_s")) { return refusal(res, FOXAPI_NO_CHANGE, "the coverage grid is set so already"); }
+        w.coverageEnabled = enabled;
+        w.coverageLat = lat; w.coverageLon = lon; w.coverageCell = cell; w.coverageHalfLife = half;
+        if (!enabled) { w.coverage.reset(); w.coverageLast.clear(); }
+        else if (w.coverage == nullptr || clear || p.contains("rx_lat") || p.contains("cell_deg") || p.contains("half_life_s")) {
+            cascade::core::adsbcov::Config cfg;
+            cfg.rxLat = lat; cfg.rxLon = lon; cfg.cellDeg = cell; cfg.halfLifeSec = half;
+            w.coverage = std::make_unique<cascade::core::adsbcov::AdsbCoverage>(cfg);
+            w.coverageLast.clear();
+        }
+        changed = true;
+        return res;
+    }
+    if (w.coverage == nullptr) { return refusal(res, FOXAPI_FAILED, "the coverage grid is off"); }
+    double band = -1.0, minWeight = 0.05;
+    std::size_t maxCells = 2000;
+    if (!q.number("band", band, -1.0, 6.0) || !q.count("max_cells", maxCells, 1, 20000) || !q.number("min_weight", minWeight, 0.0, 1e12) || !q.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, q.error); }
+    const double nowS = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+    wireb::Json out = wireb::Json::object();
+    wireb::Json cells = wireb::Json::array();
+    for (const cascade::core::adsbcov::HeatCell& h : w.coverage->heat(nowS, minWeight, maxCells)) { cells.push_back({{"lat", h.lat}, {"lon", h.lon}, {"weight", h.weight}}); }
+    wireb::Json km = wireb::Json::array();
+    for (const double v : w.coverage->outlineKm(nowS, static_cast<int>(band))) { km.push_back(v); }
+    out["cells"] = cells; out["bin_deg"] = w.coverage->config().binDeg; out["outline_km"] = km; out["max_range_km"] = w.coverage->maxRangeKm(nowS, static_cast<int>(band));
+    out["band"] = static_cast<int>(band); out["band_label"] = band >= 0 ? cascade::core::adsbcov::bandLabel(static_cast<int>(band)) : "every band";
+    w.facts["coverage.read"] = out.dump(-1, ' ', false, wireb::Json::error_handler_t::replace);
+    changed = true;
+    return res;
+}
+
 // Once per control pass, while enabled: every track the front end hands over, at the time its plugin last heard it, when its position moved.
 void Engine::pumpTracks() {
     WireBState& w = *wireB_;
+    // the coverage grid takes the aircraft of the same feed (altitude in feet; the position of the receiver is the caller's)
+    if (w.coverageEnabled && w.coverage != nullptr) {
+        const std::shared_ptr<const TrackFeed> cf = trackFeed();
+        if (cf != nullptr) {
+            const double nowC = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+            bool anyC = false;
+            for (const cascade::core::HostTrack& ht : cf->polled) {
+                const CascadeTrack& t = ht.t;
+                if (t.kind != CASCADE_TRACK_AIRCRAFT || !cascade::core::trackHasPosition(t)) { continue; }
+                const std::string id(t.id, strnlen(t.id, CASCADE_TRACK_ID_CHARS));
+                WireBState::TrackLast now;
+                now.lat = std::round(t.latDeg * 1e5) / 1e5; now.lon = std::round(t.lonDeg * 1e5) / 1e5; now.alt = std::isfinite(t.altM) ? std::round(t.altM) : -99999.0;
+                const auto it = w.coverageLast.find(id);
+                if (it != w.coverageLast.end() && it->second.lat == now.lat && it->second.lon == now.lon && it->second.alt == now.alt) { continue; }
+                w.coverageLast[id] = now;
+                if (w.coverageLast.size() > 20000) { w.coverageLast.erase(w.coverageLast.begin()); }
+                (void)w.coverage->add(nowC - static_cast<double>(t.ageMs) / 1000.0, t.latDeg, t.lonDeg, std::isfinite(t.altM) ? t.altM * 3.280839895 : std::numeric_limits<double>::quiet_NaN());
+                anyC = true;
+            }
+            if (anyC) { ++wireBVersion_; }
+        }
+    }
     if (!w.tracksEnabled || w.trackStore == nullptr) { return; }
     const std::shared_ptr<const TrackFeed> feed = trackFeed();
     if (feed == nullptr) { return; }
@@ -846,6 +914,10 @@ FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text
         case FOXAPP_OP_TRACKS_READ:
             res = tracksOp(c, text, res, changed);
             break;
+        case FOXAPP_OP_COVERAGE_CONFIG:
+        case FOXAPP_OP_COVERAGE_READ:
+            res = coverageOp(c, text, res, changed);
+            break;
         case FOXAPP_OP_FOLLOW_SET:
         case FOXAPP_OP_FOLLOW_CLEAR:
         case FOXAPP_OP_FOLLOW_LOCK:
@@ -1048,6 +1120,14 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
             j["stop_hz"] = s.stopHz; j["heat_rows"] = s.heatRows; j["heat_cols"] = s.heatCols; j["occ_channels"] = s.occChannels; j["occ_sweeps"] = s.occSweeps;
             fact("sweep.state", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
         }
+    }
+    if (wireB_->coverage != nullptr) {
+        const cascade::core::adsbcov::Stats s = wireB_->coverage->stats();
+        const double nowS = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+        wireb::Json j = wireb::Json::object();
+        j["enabled"] = wireB_->coverageEnabled; j["cells"] = wireB_->coverage->cellCount(); j["added"] = s.added; j["bad_input"] = s.badInput; j["too_far"] = s.tooFar; j["stale"] = s.stale;
+        j["future"] = s.future; j["max_range_km"] = wireB_->coverage->maxRangeKm(nowS);
+        fact("coverage.state", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
     }
     if (wireB_->trackStore != nullptr || wireB_->tracksEnabled) {
         wireb::Json j = wireb::Json::object();

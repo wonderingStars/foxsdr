@@ -397,6 +397,14 @@
 //   for the first and last time held): the answer is the LOCAL fact tracks.read. Fact tracks.state = {enabled, retention_s, added, replaced, refused, too_old, evicted, tracks}.
 #define FOXAPP_OP_TRACKS_CONFIG          0x892Cu /* text JSON; fact tracks.state */
 #define FOXAPP_OP_TRACKS_READ            0x892Du /* text JSON; fact tracks.read */
+//   THE ADS-B COVERAGE GRID (SETTINGS; core/adsb_coverage.hpp: a heat map of the positions heard with an ageing weight and, per altitude band, the greatest distance heard in each bearing in the last 24 hours), LOCAL
+//   sessions only. IN MEMORY ONLY (the model's save / load are not called), OFF until enabled, not saved; disabling drops everything. COVERAGE_CONFIG (text: JSON {enabled bool, rx_lat -90..90, rx_lon -180..180
+//   (the receiver's position: GIVEN BY THE CALLER, never read from the GPS or the location of the machine; needed to enable), cell_deg 0.001..1 (0.05), half_life_s 3600..31536000 (3 days), clear bool}): while
+//   enabled, once per control pass every aircraft track the front end hands the engine with a position is added (altitude in feet from altM; NaN = the unknown band) when it moved. COVERAGE_READ (JSON:
+//   band -1..6 (-1 every band), max_cells 1..20000 (default 2000), min_weight (0.05)): the heat cells (centre, weight) and the range outline (kilometres per bearing bin) in the fact coverage.read; the
+//   receiver position is NOT in the answer. Fact coverage.state = {enabled, cells, added, bad_input, too_far, stale, future, max_range_km}.
+#define FOXAPP_OP_COVERAGE_CONFIG        0x892Eu /* text JSON; fact coverage.state */
+#define FOXAPP_OP_COVERAGE_READ          0x892Fu /* text JSON; fact coverage.read */
 // wire-b end
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.
