@@ -30,3 +30,13 @@ style, not pasted) from the permissively licensed projects listed here. Files re
 > THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
 > CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 > DEALINGS IN THE SOFTWARE.
+
+## RFspace / MoeTronix interface specifications - used by sdriq_protocol.hpp, sdriq_source.{hpp,cpp} and the checks in tests/test_ascp_maker_spec.cpp
+
+* Documents (published by the maker for implementers at https://moetronix.com/svdownload.htm; opened and read
+  2026-11-12; none states a licence, so no text is reproduced, only the item numbers, byte layouts and numeric
+  limits that an interface consists of): "SDR-IQ Interface Specification" Ver. 1.04 (Dec 18, 2013),
+  "NetSDR Interface Specification" Rev. 1.05 (Sept 8, 2014), "SDR-IP Interface Specification" Ver. 1.03.
+* CuteSDR (Simplified BSD, Copyright 2010-2011 Moe Wheatley) is the reference implementation named in the brief
+  and the source of the earlier ascp_protocol.hpp numbers; it was NOT read again for the SDR-IQ (its siqs/
+  folder is GPL-3 and stays closed).
