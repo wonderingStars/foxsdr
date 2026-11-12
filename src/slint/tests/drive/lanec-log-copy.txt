@@ -1,0 +1,14 @@
+#! frames=800 bank=1 plugins=cw-decoder open=module:cw-decoder-1.1.0-abi3-win-x64.dll iqfile=cw-decoder.wav centre=14060000 mode=CW bandwidth=500 size=1600x1600
+# lanec-log-copy (docs/multi-radio-records/screen-c.md, row W16c): the Decoder output page's Copy key puts every decoded line on the clipboard (a bounded run keeps its own clipboard: state lanec.logcopy reads what would have been copied).
+# The fixture is the CW decoder's "CQ CQ DE FOXSDR" (fixture-cw-decoder).
+120 state kit.plugins == 1
++1 click "START"
++60 state decodersRunning >= 1
++400 state list.decoderLines.details contains FOXSDR
++1 click "Decoder output"
++10 expect "Copy" enabled equals "true"
++1 state lanec.logcopies == 0
++1 click "Copy"
++5 state lanec.logcopies == 1
++1 state lanec.logcopy contains FOXSDR
++1 state gaps.clip contains FOXSDR

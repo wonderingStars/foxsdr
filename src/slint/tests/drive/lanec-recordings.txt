@@ -1,0 +1,19 @@
+#! frames=800 size=1600x900 bank=0 sections=0:6 FOXSDR_SLINT_MENU=200:607
+# lanec-recordings (docs/multi-radio-records/screen-c.md, row P11): the recordings browser, from the App menu (a bounded-run seam presses "Recordings..." at tick 200, after two takes were made). The sheet lists the recorder's folder, newest first,
+# with its kind, size and date; "Open" on an I/Q take plays it as the I/Q file (the source of a dropped recording), on an audio take it hands it to the system's player (a bounded run opens nothing and says which file it would have opened).
+10 state running == 1
+state lanec.recordingsopen == 0
++1 click "Record IQ"
++30 state recordingIq == 1
++5 click "Stop IQ"
++30 state recordingIq == 0
++1 click "Record audio"
++30 state recordingAudio == 1
++5 click "Stop audio"
++30 state recordingAudio == 0
+200 state lanec.recordingsopen == 1
++40 state lanec.recordings >= 2
++1 click "Open"#1
++5 state lanec.opened contains .wav
++1 click "Close"#2
++5 state lanec.recordingsopen == 0

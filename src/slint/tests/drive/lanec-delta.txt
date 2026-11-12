@@ -1,0 +1,12 @@
+#! frames=300 size=1600x900 FOXSDR_SLINT_MENU=15:108
+# lanec-delta (docs/multi-radio-records/screen-c.md, row T8): the delta lock, from the counter's right-click menu (turned on at tick 15 by a bounded-run seam). The receiver starts at centre 100.000 MHz with the channel 300 kHz above it. Locked, a click on
+# the waterfall becomes a retune of the counter: the channel keeps its place in the picture and the picture scrolls under it (the centre moves, the VFO offset does not). lanec-delta-off is the same click without the lock.
+10 state running == 1
+state centreHz == 100000000
+state vfoOffsetHz == 300000
++10 state lanec.deltamask == 1
++1 press "Waterfall"
++15 state tunedHz != 100300000
++1 state vfoOffsetHz == 300000
++1 state centreHz != 100000000
++1 state lanec.deltaconversions >= 1

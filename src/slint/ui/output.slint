@@ -56,11 +56,13 @@ export component LogView inherits Rectangle {
     // ---- the words it draws itself, so a host can hand in its translations ----
     in property <string> follow-text: @tr("Follow");
     in property <string> clear-text: @tr("Clear");
+    in property <string> copy-text: @tr("Copy");           // screen lane C, W16c: the decoder text to the clipboard
     // ---- how it behaves ----
     in property <bool> enabled: true;                    // the bar's two controls; the log itself always scrolls
     in property <string> tooltip;                        // shown while the pointer rests over the log
     in property <length> line-h: 17px;                   // the pitch of a line
     callback clear-clicked();
+    callback copy-clicked();
     callback follow-toggled(bool);
 
     property <length> bar-h: 10px + Theme.key-xs-h + Theme.hairline;   // 5 px above and below the 20 px key, then the 1 px rule
@@ -202,8 +204,17 @@ export component LogView inherits Rectangle {
         enabled: root.enabled;
         clicked => { root.clear-clicked(); }
     }
+    copy-key := Key {
+        x: clear-key.x + clear-key.width + 6px;
+        y: 5px;
+        width: self.preferred-width;
+        xs: true;
+        label: root.copy-text;
+        enabled: root.enabled && root.lines.length > 0;
+        clicked => { root.copy-clicked(); }
+    }
     Text {
-        x: clear-key.x + clear-key.width + 8px;
+        x: copy-key.x + copy-key.width + 8px;
         y: 5px;
         width: max(0px, parent.width - self.x - root.pad-h);
         height: Theme.key-xs-h;
@@ -245,7 +256,7 @@ export component PicturePane inherits Rectangle {
     callback pressed(int, int);                          // a click on the picture, in its own pixels
     callback save-clicked();
     // what the pointer shows (a test cannot read the cursor itself): the hand over a picture that takes clicks
-    out property <bool> hand: area.has-hover;
+    out property <bool> hand: area.has-hover && root.have && root.enabled && root.interactive;
 
     property <length> status-h: Theme.key-xs-h + 8px;       // the xs key with 4 px above and below
     property <length> pad: 10px;
@@ -259,6 +270,18 @@ export component PicturePane inherits Rectangle {
     property <length> fit-h: root.nat-h * root.unit;
     property <length> fit-x: root.pad + (root.area-w - root.fit-w) / 2;
     property <length> fit-y: root.status-h + (root.area-h - root.fit-h) / 2;
+    // SCREEN LANE C, W16a: zoom (the wheel, up to 16 times, about the pointer) and pan (drag while zoomed); a click is still the picture's own pixel under the pointer
+    in-out property <float> zoom: 1.0;
+    in-out property <float> pan-x: 0.0;                  // the left edge of what is shown, in picture pixels
+    in-out property <float> pan-y: 0.0;
+    property <float> view-w: root.nat-w / root.zoom;
+    property <float> view-h: root.nat-h / root.zoom;
+    property <float> vx: Math.clamp(root.pan-x, 0.0, Math.max(0.0, root.nat-w - root.view-w));
+    property <float> vy: Math.clamp(root.pan-y, 0.0, Math.max(0.0, root.nat-h - root.view-h));
+    property <float> img-scale: root.nat-w > 0 ? root.picture.width / root.nat-w : 1.0;
+    property <float> drag-x0;
+    property <float> drag-y0;
+    property <bool> dragged;
 
     accessible-role: groupbox;
     accessible-label: root.status;
@@ -301,6 +324,15 @@ export component PicturePane inherits Rectangle {
                 clicked => { root.save-clicked(); }
             }
         }
+        if root.zoom > 1.0 : VerticalLayout {
+            alignment: center;
+            Key {
+                xs: true;
+                label: @tr("Fit");
+                tooltip: @tr("Shows the whole picture again.");
+                clicked => { root.zoom = 1.0; root.pan-x = 0.0; root.pan-y = 0.0; }
+            }
+        }
         Text {
             horizontal-stretch: 1;
             text: root.save-note;
@@ -312,12 +344,27 @@ export component PicturePane inherits Rectangle {
         }
     }
 
-    if root.have : Image {
+    if root.have && root.zoom <= 1.0 : Image {
         x: root.fit-x;
         y: root.fit-y;
         width: root.fit-w;
         height: root.fit-h;
         source: root.picture;
+        image-fit: contain;
+        accessible-role: image;
+        accessible-label: root.status;
+    }
+    // zoomed (screen lane C, W16a): the same picture, clipped to the part in view
+    if root.have && root.zoom > 1.0 : Image {
+        x: root.fit-x;
+        y: root.fit-y;
+        width: root.fit-w;
+        height: root.fit-h;
+        source: root.picture;
+        source-clip-x: Math.round(root.vx * root.img-scale);
+        source-clip-y: Math.round(root.vy * root.img-scale);
+        source-clip-width: Math.max(1, Math.round(root.view-w * root.img-scale));
+        source-clip-height: Math.max(1, Math.round(root.view-h * root.img-scale));
         image-fit: contain;
         accessible-role: image;
         accessible-label: root.status;
@@ -329,11 +376,39 @@ export component PicturePane inherits Rectangle {
         y: root.fit-y;
         width: root.fit-w;
         height: root.fit-h;
-        enabled: root.have && root.enabled && root.interactive;
-        mouse-cursor: (root.have && root.enabled && root.interactive) ? MouseCursor.pointer : MouseCursor.default;
+        enabled: root.have && root.enabled;
+        accessible-role: image;
+        accessible-label: @tr("Picture");
+        mouse-cursor: root.dragged ? MouseCursor.grabbing : (root.have && root.enabled && root.interactive) ? MouseCursor.pointer : MouseCursor.default;
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) { root.drag-x0 = root.vx; root.drag-y0 = root.vy; root.dragged = false; }
+        }
+        moved => {
+            if (self.pressed && root.zoom > 1.0 && root.unit > 0px) {
+                if (Math.abs(self.mouse-x - self.pressed-x) > 4px || Math.abs(self.mouse-y - self.pressed-y) > 4px) { root.dragged = true; }
+                if (root.dragged) {
+                    root.pan-x = Math.clamp(root.drag-x0 - (self.mouse-x - self.pressed-x) / (root.unit * root.zoom), 0.0, root.nat-w - root.view-w);
+                    root.pan-y = Math.clamp(root.drag-y0 - (self.mouse-y - self.pressed-y) / (root.unit * root.zoom), 0.0, root.nat-h - root.view-h);
+                }
+            }
+        }
+        scroll-event(e) => {
+            if (!root.have || root.nat-w <= 0 || root.fit-w <= 0px) { return reject; }
+            let fx = self.mouse-x / root.fit-w;
+            let fy = self.mouse-y / root.fit-h;
+            let px = root.vx + fx * root.view-w;
+            let py = root.vy + fy * root.view-h;
+            let z = Math.clamp(root.zoom * (e.delta-y > 0px ? 1.25 : 0.8), 1.0, 16.0);
+            root.zoom = z;
+            root.pan-x = Math.clamp(px - fx * root.nat-w / z, 0.0, root.nat-w - root.nat-w / z);
+            root.pan-y = Math.clamp(py - fy * root.nat-h / z, 0.0, root.nat-h - root.nat-h / z);
+            return accept;
+        }
         clicked => {
-            root.pressed(Math.min(Math.max(Math.floor(self.mouse-x / root.unit), 0), root.nat-w - 1),
-                         Math.min(Math.max(Math.floor(self.mouse-y / root.unit), 0), root.nat-h - 1));
+            if (root.interactive && !root.dragged) {
+                root.pressed(Math.min(Math.max(Math.floor(root.vx + self.mouse-x / (root.unit * root.zoom)), 0), root.nat-w - 1),
+                             Math.min(Math.max(Math.floor(root.vy + self.mouse-y / (root.unit * root.zoom)), 0), root.nat-h - 1));
+            }
         }
     }
 

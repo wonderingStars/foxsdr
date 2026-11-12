@@ -64,6 +64,11 @@ double airbandChannelHz(int channelKhz);
 // Whether a channel name is on the 8.33 kHz raster rather than the 25 kHz one.
 bool airband833(int channelKhz);
 
+// T9 (screen lane C): the channel name(s) a tuned frequency answers to on the 8.33 kHz airband raster (118 to 137 MHz), the inverse of airbandChannelHz:
+// "118.010" on an 8.33 channel, "118.000 / 118.005" on a frequency that is both a 25 kHz channel and an 8.33 one (both names are said on air),
+// "" outside the band or more than 200 Hz from a channel.
+std::string airbandChannelName(double hz);
+
 // Parses the table format tools/make-airband-data.py writes. Lines that do
 // not parse are skipped (and counted in `skipped`); an F line before any A
 // line is skipped. Airports end up in file order, frequencies ascending.

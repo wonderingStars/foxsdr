@@ -568,6 +568,162 @@ component LabelledField inherits VerticalLayout {
     }
 }
 
+// ================================================ SCREEN LANE C (docs/multi-radio-records/screen-c.md) ================================================
+// One global carries every control of lane C: the host (lanec_publish.cpp) sets the properties once a tick and answers `act(id, text)`, so the rows added by this lane
+// cost the existing bodies one line each and no callback of theirs. The ids are the host's (lanec_publish.cpp `act`).
+export struct LCQuick { label: string, set: bool }
+export struct LCShortcut { keys: string, what: string }
+export struct LCRecording { name: string, kind: string, size: string, date: string, iq: bool, index: int }
+export global LaneC {
+    // the Scanner block: lockouts (C3), priority channels (C2), mute while scanning (C5), the scan's log and what it found (C4)
+    in property <bool> lock-enabled;                    // a scan is running
+    in property <string> lock-text;                     // "2 locked out", "" for none
+    in property <string> priority-text;                 // "162.55, 121.5"
+    in property <string> priority-every-text;           // seconds
+    in property <bool> mute-scan;
+    in property <bool> log-scan;
+    in property <string> scan-stats;                    // what the scan found, "" until it found something
+    in property <bool> scan-engine-note;                // the engine does not read the priority list and the thresholds yet
+    // the Bookmarks block: the memory of the frequency the receiver is on (C12, C1, T10) and the quick memories (T5)
+    in property <bool> mem-enabled;                     // the tuned frequency is a bookmark
+    in property <string> mem-title;                     // "145.6000 MHz  GB3XX", or the sentence that says why not
+    in property <string> mem-squelch;
+    in property <string> mem-threshold;
+    in property <string> mem-offset;
+    in property <string> mem-tone;
+    in property <string> mem-tx;                        // "Transmit 145.0000 MHz" for a repeater entry, "" for simplex
+    in property <[LCQuick]> quick;
+    in property <bool> quick-store;                     // pressing a memory stores into it
+    // the status bar's clock (T12), the shortcut overlay (U10) and the recordings sheet (P11)
+    in property <string> clock-text;
+    in-out property <bool> shortcuts-open;
+    in property <[LCShortcut]> shortcuts;
+    in-out property <bool> recordings-open;
+    in property <[LCRecording]> recordings;
+    in property <string> recordings-note;               // "" or "No recordings in this folder"
+    callback act(string, string);
+}
+
+component LaneCScanBlock inherits VerticalLayout {
+    spacing: 6px;
+    alignment: start;
+    Rectangle { height: Theme.hairline; background: Theme.line; }
+    Line {
+        gap: 6px;
+        Key {
+            horizontal-stretch: 1; small: true; min-w: 0px;
+            label: @tr("Lock out 10 min");
+            tooltip: @tr("Passes over the frequency the scan is on for ten minutes. In a scan of the ticked rows the row is unticked and ticked again when the time is up.");
+            enabled: LaneC.lock-enabled;
+            clicked => { LaneC.act("lock-temp", ""); }   // not-translated: the host's action id
+        }
+        Key {
+            horizontal-stretch: 1; small: true; min-w: 0px;
+            label: @tr("Lock out for good");
+            tooltip: @tr("Passes over the frequency the scan is on until the lockouts are cleared. In a scan of the ticked rows the row is unticked.");
+            enabled: LaneC.lock-enabled;
+            clicked => { LaneC.act("lock-perm", ""); }   // not-translated: the host's action id
+        }
+    }
+    Line {
+        gap: 6px;
+        Key {
+            horizontal-stretch: 1; small: true; min-w: 0px;
+            label: @tr("Clear lockouts");
+            enabled: LaneC.lock-text != "";
+            clicked => { LaneC.act("lock-clear", ""); }   // not-translated: the host's action id
+        }
+        Text {
+            horizontal-stretch: 1; min-width: 0px; vertical-alignment: center; overflow: elide;
+            text: LaneC.lock-text;
+            color: Theme.dim; font-family: Theme.font-ui; font-size: Theme.font-small;
+        }
+    }
+    Line {
+        height: 40px;
+        gap: 6px;
+        pr := LabelledField {
+            horizontal-stretch: 2;
+            label: @tr("Priority MHz");
+            value: LaneC.priority-text;
+            tooltip: @tr("Frequencies the scan looks at every few seconds, in turn, whatever else it is doing. Separate them with commas.");
+            committed(t) => { LaneC.act("priority", t); }   // not-translated: the host's action id
+        }
+        pe := LabelledField {
+            horizontal-stretch: 1;
+            label: @tr("Every s");
+            value: LaneC.priority-every-text;
+            committed(t) => { LaneC.act("priority-every", t); }   // not-translated: the host's action id
+        }
+    }
+    Line {
+        Tick {
+            horizontal-stretch: 1;
+            label: @tr("Mute while scanning");
+            on: LaneC.mute-scan;
+            tooltip: @tr("Silences the receiver while the scan steps and lets you hear it when it stops on a signal.");
+            toggled(v) => { LaneC.act("mute-scan", v ? "1" : "0"); }   // not-translated: the host's action id
+        }
+    }
+    Line {
+        Tick {
+            horizontal-stretch: 1;
+            label: @tr("Log what the scan finds");
+            on: LaneC.log-scan;
+            tooltip: @tr("Adds a line to scan-log.csv in the settings folder for each signal the scan stops on: the time, the frequency and how long it was heard.");
+            toggled(v) => { LaneC.act("log-scan", v ? "1" : "0"); }   // not-translated: the host's action id
+        }
+    }
+    if LaneC.scan-stats != "" : Note { wrap-w: root.width; text: LaneC.scan-stats; }
+    if LaneC.scan-engine-note : Note { wrap-w: root.width; text: @tr("The priority list and the scan thresholds are saved; this scanner does not use them yet."); tone: ChipTone.warn; }
+}
+
+component LaneCMemoryBlock inherits VerticalLayout {
+    spacing: 6px;
+    alignment: start;
+    Rectangle { height: Theme.hairline; background: Theme.line; }
+    Text {
+        min-width: 0px; overflow: elide;
+        text: LaneC.mem-title;
+        color: LaneC.mem-enabled ? Theme.fg-soft : Theme.dim; font-family: Theme.font-ui; font-size: Theme.font-small;
+    }
+    Line {
+        height: 40px;
+        gap: 6px;
+        LabelledField { horizontal-stretch: 1; label: @tr("Squelch dB"); value: LaneC.mem-squelch; enabled: LaneC.mem-enabled; committed(t) => { LaneC.act("mem-squelch", t); } }   // not-translated: the host's action id
+        LabelledField { horizontal-stretch: 1; label: @tr("Scan threshold dB"); value: LaneC.mem-threshold; enabled: LaneC.mem-enabled; committed(t) => { LaneC.act("mem-threshold", t); } }   // not-translated: the host's action id
+    }
+    Line {
+        height: 40px;
+        gap: 6px;
+        LabelledField { horizontal-stretch: 1; label: @tr("Offset kHz"); value: LaneC.mem-offset; enabled: LaneC.mem-enabled; committed(t) => { LaneC.act("mem-offset", t); } }   // not-translated: the host's action id
+        LabelledField { horizontal-stretch: 1; label: @tr("Tone Hz"); value: LaneC.mem-tone; enabled: LaneC.mem-enabled; committed(t) => { LaneC.act("mem-tone", t); } }   // not-translated: the host's action id
+    }
+    if LaneC.mem-tx != "" : Note { wrap-w: root.width; text: LaneC.mem-tx; }
+    Rectangle { height: Theme.hairline; background: Theme.line; }
+    Line {
+        Tick {
+            horizontal-stretch: 1;
+            label: @tr("Store into a memory");
+            on: LaneC.quick-store;
+            tooltip: @tr("Switch on, then press a memory to keep the frequency, mode and width the receiver is on in it.");
+            toggled(v) => { LaneC.act("quick-store", v ? "1" : "0"); }   // not-translated: the host's action id
+        }
+    }
+    Rectangle {
+        height: 2 * Theme.key-xs-h + 4px;
+        for q[i] in LaneC.quick : Key {
+            x: mod(i, 4) * (parent.width + 4px) / 4;
+            y: floor(i / 4) * (Theme.key-xs-h + 4px);
+            width: (parent.width - 12px) / 4;
+            xs: true; min-w: 0px;
+            label: q.label;
+            on: q.set && !LaneC.quick-store;
+            clicked => { LaneC.act("quick", "\{i}"); }   // not-translated: the host's action id
+        }
+    }
+}
+
 // A key that holds a whole sentence: the full-width offers of the Radar fold ("Use the middle of the 14 aircraft heard  (51.5072, -0.1276)"). The sentence wraps and
 // the key grows to hold it, where the ImGui window draws the text smaller to fit (text_fit.hpp): a wrapped sentence keeps its figures at the size of every other key.
 component OfferKey inherits Rectangle {
@@ -1129,6 +1285,7 @@ component BookmarkRowView inherits Rectangle {
 }
 
 export component BookmarksBody inherits VerticalLayout {
+    in property <bool> lane-c: true;                    // screen lane C's block under the body; the specimens of the earlier tests switch it off (their sheets stand at fixed offsets)
     in property <BookmarksModel> model;
 
     callback bookmark-name(string);
@@ -1343,11 +1500,13 @@ export component BookmarksBody inherits VerticalLayout {
         }
     }
     if root.model.error != "" : Note { wrap-w: root.width; text: root.model.error; tone: ChipTone.err; }
+    if root.lane-c : LaneCMemoryBlock { }
 }
 
 // ================================================ Scanner ================================================
 
 export component ScannerBody inherits VerticalLayout {
+    in property <bool> lane-c: true;                    // screen lane C's block under the body; the specimens of the earlier tests switch it off (their sheets stand at fixed offsets)
     in property <ScannerModel> model;
 
     callback scanner-ticked(bool);
@@ -1450,6 +1609,7 @@ export component ScannerBody inherits VerticalLayout {
         }
     }
     if root.model.status != "" : Note { wrap-w: root.width; text: root.model.status; tone: root.model.status-tone; }
+    if root.lane-c : LaneCScanBlock { }
 }
 
 // ================================================ Airband ================================================

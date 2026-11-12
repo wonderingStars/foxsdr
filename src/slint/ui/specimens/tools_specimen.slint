@@ -61,6 +61,7 @@ component SpecRadar inherits RadarBody {
 }
 
 component SpecBookmarks inherits BookmarksBody {
+    lane-c: false;
     bookmark-name(a) => { Rec.rec("bookmark-name", a); }
     bookmark-add() => { Rec.rec("bookmark-add", ""); }
     bookmark-group(a) => { Rec.rec("bookmark-group", a); }
@@ -85,6 +86,7 @@ component SpecBookmarks inherits BookmarksBody {
 }
 
 component SpecScanner inherits ScannerBody {
+    lane-c: false;
     scanner-ticked(a) => { Rec.rec("scanner-ticked", a ? "1" : "0"); }
     scanner-start(a) => { Rec.rec("scanner-start", a); }
     scanner-stop(a) => { Rec.rec("scanner-stop", a); }
@@ -364,9 +366,9 @@ export component ToolsSpecimen inherits Window {
     b1 := Section { x: 316px; y: 10px; width: 296px; small: true; open: true; name: "Bookmarks"; chip: "7"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
         SpecBookmarks { model: root.m-bm; } }
     b2 := Section { x: 316px; y: b1.y + b1.height + 10px; width: 296px; small: true; open: true; name: "Bookmarks"; chip: "2"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
-        BookmarksBody { model: root.m-bm-plain; } }
+        BookmarksBody { lane-c: false; model: root.m-bm-plain; } }
     b3 := Section { x: 316px; y: b2.y + b2.height + 10px; width: 296px; small: true; open: true; name: "Bookmarks"; chip: "14"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
-        BookmarksBody { model: root.m-bm-long; } }
+        BookmarksBody { lane-c: false; model: root.m-bm-long; } }
 
     // ============================ column C (x 622) ============================
     c1 := Section { x: 622px; y: 10px; width: 296px; small: true; open: true; name: "Scanner"; chip: "IDLE"; show-dot: true;
@@ -374,7 +376,7 @@ export component ToolsSpecimen inherits Window {
     c2 := Section { x: 622px; y: c1.y + c1.height + 10px; width: 296px; small: true; open: true; name: "Scanner"; chip: "SCAN"; tone: ChipTone.good; show-dot: true; dot: LampState.green;
         SpecScanner { model: root.m-sc-run; } }
     c3 := Section { x: 622px; y: c2.y + c2.height + 10px; width: 296px; small: true; open: true; name: "Scanner"; chip: "IDLE"; show-dot: true;
-        ScannerBody { model: root.m-sc-ticked; } }
+        ScannerBody { lane-c: false; model: root.m-sc-ticked; } }
     c4 := Section { x: 622px; y: c3.y + c3.height + 10px; width: 296px; small: true; open: true; name: "Airband"; chip: "IDLE"; show-dot: true;
         SpecAirband { model: root.m-ab; } }
 
@@ -393,10 +395,10 @@ export component ToolsSpecimen inherits Window {
     // ============================ rule 11: bare bodies in a 254-wide cell ============================
     // (the cell's width, if a body asks for more than 254 px, would be wider)
     HorizontalLayout { x: 10px; y: root.probe-y; width: 254px; height: 20px; p1 := Rectangle { RadarBody { model: root.m-radar; } } }
-    HorizontalLayout { x: 280px; y: root.probe-y; width: 254px; height: 20px; p2 := Rectangle { BookmarksBody { model: root.m-bm; } } }
-    HorizontalLayout { x: 550px; y: root.probe-y; width: 254px; height: 20px; p3 := Rectangle { ScannerBody { model: root.m-sc; } } }
+    HorizontalLayout { x: 280px; y: root.probe-y; width: 254px; height: 20px; p2 := Rectangle { BookmarksBody { lane-c: false; model: root.m-bm; } } }
+    HorizontalLayout { x: 550px; y: root.probe-y; width: 254px; height: 20px; p3 := Rectangle { ScannerBody { lane-c: false; model: root.m-sc; } } }
     HorizontalLayout { x: 820px; y: root.probe-y; width: 254px; height: 20px; p4 := Rectangle { AirbandBody { model: root.m-ab; } } }
-    HorizontalLayout { x: 10px; y: root.probe-y + 40px; width: 254px; height: 20px; p5 := Rectangle { BookmarksBody { model: root.m-bm-long; } } }
+    HorizontalLayout { x: 10px; y: root.probe-y + 40px; width: 254px; height: 20px; p5 := Rectangle { BookmarksBody { lane-c: false; model: root.m-bm-long; } } }
     HorizontalLayout { x: 280px; y: root.probe-y + 40px; width: 254px; height: 20px; p6 := Rectangle { AirbandBody { model: root.m-ab-long; } } }
     HorizontalLayout { x: 550px; y: root.probe-y + 40px; width: 254px; height: 20px; p7 := Rectangle { AirbandBody { model: root.m-ab-run; } } }
     HorizontalLayout { x: 820px; y: root.probe-y + 40px; width: 254px; height: 20px; p8 := Rectangle { p8v := PositionOffersView { offers: root.m-radar.offers; } } }

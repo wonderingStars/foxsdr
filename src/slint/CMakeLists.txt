@@ -46,6 +46,8 @@ list(APPEND foxsdr_slint_sources layouts_prefs.cpp export_logic.cpp mark_layout.
 list(APPEND foxsdr_slint_sources globe_scene.cpp solar_ephemeris.cpp globe_logic.cpp globe_draw.cpp globe_compositor.cpp globe_publish.cpp)
 # THE CLASSIC-WINDOW GAPS (docs/multi-radio-records/slint-gaps.md): the frequency lock, the digit grouping, the file drop, the help entry (gaps_logic: pure; gaps_win: Win32)
 list(APPEND foxsdr_slint_sources gaps_logic.cpp gaps_win.cpp)
+# SCREEN LANE C (docs/multi-radio-records/screen-c.md): the scanner block, the memories, the delta lock, the clock and the two sheets (lanec_logic: pure; lanec_publish: the LaneC global)
+list(APPEND foxsdr_slint_sources lanec_logic.cpp lanec_publish.cpp)
 if(WIN32)
     enable_language(RC)
     add_executable(foxsdr-slint WIN32 ${foxsdr_slint_sources} "${CMAKE_SOURCE_DIR}/resources/icon/foxsdr.rc")

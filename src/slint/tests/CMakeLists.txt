@@ -311,6 +311,26 @@ foreach(src ${_foxsdr_slint_test_sources})
         foxsdr_slint_copy_dll(${name})
         add_test(NAME ${name} COMMAND ${name})
         set_tests_properties(${name} PROPERTIES LABELS "slint")
+    elseif(family STREQUAL "lanec_host")
+        # SCREEN LANE C (docs/multi-radio-records/screen-c.md): ../lanec_logic.cpp over the key table (system_logic and the core units it quotes, as test_slint_host_keydispatch has them) and the airband channel names.
+        set(_lc "${CMAKE_CURRENT_SOURCE_DIR}/..")
+        add_executable(${name} ${name}.cpp "${_lc}/host_logic.cpp" "${_lc}/lanec_logic.cpp" "${_lc}/system_logic.cpp" "${_lc}/signal_logic.cpp" "${_lc}/key_dispatch.cpp" "${_lc}/look_logic.cpp"
+                       "${FOXSDR_REPO_ROOT}/src/core/airband_data.cpp" "${FOXSDR_REPO_ROOT}/src/core/countries.cpp" "${FOXSDR_REPO_ROOT}/src/core/feature_request.cpp" "${FOXSDR_REPO_ROOT}/src/core/problem_report.cpp"
+                       "${FOXSDR_REPO_ROOT}/src/core/pasted_report.cpp" "${FOXSDR_REPO_ROOT}/src/core/tester_usage.cpp" "${FOXSDR_REPO_ROOT}/src/core/serial_port.cpp" "${FOXSDR_REPO_ROOT}/src/core/plugin_repo_data.cpp"
+                       "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/system_core_stubs.cpp")
+        target_compile_features(${name} PRIVATE cxx_std_20)
+        target_link_libraries(${name} PRIVATE slint_i18n)
+        target_include_directories(${name} PRIVATE "${_lc}" "${FOXSDR_REPO_ROOT}/src" "${FOXSDR_REPO_ROOT}/tests" "${FOXSDR_REPO_ROOT}/third_party/foxsdr_api" "${FOXSDR_REPO_ROOT}/third_party/imgui")
+        target_include_directories(${name} SYSTEM PRIVATE "${FOXSDR_REPO_ROOT}/third_party/nlohmann_json/include")
+        if(MSVC)
+            target_compile_options(${name} PRIVATE /utf-8)
+            target_compile_definitions(${name} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+        endif()
+        if(WIN32)
+            target_link_libraries(${name} PRIVATE winhttp)
+        endif()
+        add_test(NAME ${name} COMMAND ${name})
+        set_tests_properties(${name} PROPERTIES LABELS "slint")
     elseif(family STREQUAL "workspace_host")
         # The radio workspace's host logic (docs/multi-radio-records/screen-s3.md, S3, ../workspace_logic.cpp) and the test seam's made-up radios (../workspace_testseam.cpp): no window, but a RadioView owns Slint pixel buffers.
         add_executable(${name} ${name}.cpp "${CMAKE_CURRENT_SOURCE_DIR}/../host_logic.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../workspace_logic.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../workspace_testseam.cpp")

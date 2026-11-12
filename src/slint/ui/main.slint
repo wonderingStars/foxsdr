@@ -35,6 +35,7 @@ import { ToolsEvents, PositionOffers, RadarModel, BookmarkRow, BookmarksModel, S
 import { ExtendEvents, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory, StoreSite, UpdateRow, StorePluginPage, StoreModel,
          WebBody, CatBody } from "extend_bank.slint";
 import { Checkbox } from "fields.slint";
+import { LaneC, LCQuick, LCShortcut, LCRecording } from "tools_bank.slint";   // screen lane C (docs/multi-radio-records/screen-c.md): its one global and the row structs
 import { Card, Banner, CardTone } from "cards.slint";
 import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode, SpectrumView } from "spectrum.slint";
 import { LayoutRow, LayoutsModel, LayoutsBody } from "layouts_ui.slint";
@@ -71,6 +72,7 @@ export { StripRadio, MasterLamp, MixRow, AddChoice }
 import { RadioPaneData } from "radio_pane.slint";
 export { WorkspaceModel, WorkspaceCell, RadioPaneData }   // the radio workspace (docs/multi-radio-records/screen-s3.md): the host publishes its model and answers its callbacks
 export { GlobeEvents, GlobeModel, GlobeControl, GlobeChipModel }
+export { LaneC, LCQuick, LCShortcut, LCRecording }   // screen lane C: the host (lanec_publish.cpp) sets the global and answers its act(id, text)
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
 export struct StatusCard { key: string, value: string, detail: string, tone: ChipTone, lamp: LampState, show-lamp: bool, lines: [string] }
@@ -798,6 +800,14 @@ export component MainWindow inherits Window {
                             if WorkspaceModel.can-add : VerticalLayout { alignment: center; Key { label: WorkspaceModel.add-key; ghost: true; small: true; min-w: 0px; tooltip: WorkspaceModel.add-key-tip; clicked => { WorkspaceModel.add-open-requested(); } } }
                             VerticalLayout { alignment: center; Key { label: @tr("Request a feature"); ghost: true; small: true; min-w: 0px; tooltip: @tr("Ask for a feature"); clicked => { root.feature-request-clicked(); } } }
                             VerticalLayout { alignment: center; Key { label: @tr("Report a bug / dislike"); ghost: true; small: true; min-w: 0px; tooltip: @tr("Report a problem"); clicked => { root.bug-report-clicked(); } } }
+                            // SCREEN LANE C (T12): the clock; a press cycles UTC, local time, off
+                            if LaneC.clock-text != "" : VerticalLayout { alignment: center; Rectangle {
+                                width: clock-label.preferred-width + 12px; height: Theme.key-sm-h;
+                                accessible-role: button; accessible-label: @tr("Clock"); accessible-description: @tr("Press to change between UTC, local time and no clock");
+                                accessible-action-default => { LaneC.act("clock-cycle", ""); }   // not-translated: the host's action id
+                                clock-label := Text { x: 6px; vertical-alignment: center; text: LaneC.clock-text; color: Theme.dim; font-family: Theme.font-mono; font-size: Theme.font-small; }
+                                TouchArea { clicked => { LaneC.act("clock-cycle", ""); } }   // not-translated: the host's action id
+                            } }
                             Rectangle { width: 8px; }
                         }
                     }
@@ -876,6 +886,39 @@ export component MainWindow inherits Window {
         Text { text: @tr("Typefaces: Inter (The Inter Project Authors) and JetBrains Mono (JetBrains), both under the SIL Open Font License 1.1; the licence texts travel with the fonts in third_party/fonts. Built with Slint:"); wrap: word-wrap; color: Theme.dim; font-size: Theme.font-hint; }
         AboutSlint { }
         HorizontalLayout { alignment: end; Key { label: @tr("Close"); clicked => { root.about-open = false; } } }
+    }
+    // SCREEN LANE C (U10): the keyboard-shortcut overlay, F1 or the App menu; every bound action of the saved key table
+    if LaneC.shortcuts-open : Sheet { title: @tr("Keyboard shortcuts"); sheet-w: 560px; dismissed => { LaneC.shortcuts-open = false; }
+        Flickable {
+            height: min(420px, sc-list.preferred-height); viewport-height: sc-list.preferred-height;
+            sc-list := VerticalLayout { spacing: 4px;
+                for r in LaneC.shortcuts : HorizontalLayout { spacing: 12px;
+                    Text { width: 170px; text: r.keys; color: Theme.accent-soft; font-family: Theme.font-mono; font-size: Theme.font-small; overflow: elide; }
+                    Text { horizontal-stretch: 1; text: r.what; color: Theme.fg-soft; font-family: Theme.font-ui; font-size: Theme.font-small; overflow: elide; }
+                }
+            }
+        }
+        HorizontalLayout { alignment: end; Key { label: @tr("Close"); clicked => { LaneC.shortcuts-open = false; } } }
+    }
+    // SCREEN LANE C (P11): the recordings browser, from the App menu; the files of the recorder's folder, newest first
+    if LaneC.recordings-open : Sheet { title: @tr("Recordings"); sheet-w: 640px; dismissed => { LaneC.recordings-open = false; }
+        if LaneC.recordings-note != "" : Text { text: LaneC.recordings-note; wrap: word-wrap; color: Theme.dim; font-size: Theme.font-small; }
+        Flickable {
+            height: min(380px, rec-list.preferred-height); viewport-height: rec-list.preferred-height;
+            rec-list := VerticalLayout { spacing: 4px;
+                for r in LaneC.recordings : HorizontalLayout { spacing: 10px; height: Theme.key-sm-h;
+                    Text { horizontal-stretch: 1; min-width: 0px; vertical-alignment: center; text: r.name; color: Theme.fg; font-family: Theme.font-mono; font-size: Theme.font-small; overflow: elide; }
+                    Text { width: 40px; vertical-alignment: center; text: r.kind; color: Theme.dim; font-family: Theme.font-ui; font-size: Theme.font-small; }
+                    Text { width: 70px; vertical-alignment: center; horizontal-alignment: right; text: r.size; color: Theme.dim; font-family: Theme.font-mono; font-size: Theme.font-small; }
+                    Text { width: 110px; vertical-alignment: center; text: r.date; color: Theme.dim; font-family: Theme.font-mono; font-size: Theme.font-small; }
+                    Key { small: true; min-w: 0px; label: @tr("Open"); tooltip: r.name; clicked => { LaneC.act("rec-open", "\{r.index}"); } }   // not-translated: the host's action id
+                }
+            }
+        }
+        HorizontalLayout { spacing: 8px; alignment: end;
+            Key { label: @tr("Open folder"); clicked => { LaneC.act("rec-folder", ""); } }   // not-translated: the host's action id
+            Key { label: @tr("Close"); on: true; clicked => { LaneC.recordings-open = false; } }
+        }
     }
     // ===================== the tip layer: LAST, so a tooltip draws over the pages, the torn-off windows and the sheets =====================
     TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }

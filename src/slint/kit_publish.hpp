@@ -16,6 +16,7 @@
 #include <set>
 #include <map>
 #include <memory>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -51,6 +52,10 @@ public:
     void setFilePickSeam(const std::string& path) { filePickSeam_ = path; }
     // slint-gaps.md item 4, a bounded run only (FOXSDR_SLINT_SAVE_DELAY_MS): the picture save's worker waits this long, so the Saving... state can be seen; and the note of the page that saved last
     void setSaveDelayForTest(int ms) { saveDelayMs_ = ms; }
+    // screen lane C, W16c: where the Decoder output page's Copy key sends the text (the host's clipboard, or its stand-in in a bounded run), and what the key last did (the drive scripts read them)
+    void setClipboardSink(std::function<void(const std::string&)> sink) { clipboardSink_ = std::move(sink); }
+    int copyCount() const { return copies_; }
+    const std::string& lastCopy() const { return lastCopy_; }
     std::string lastSaveNote() const;
     // A bounded run's self-capture (FOXSDR_SLINT_DECODE_DRAWER=1): the DECODE bank's "Turn on and off plugins" drawer open, whatever language the row's label is in.
     void openPluginDrawerForCapture() { decodeOpen_["plugins"] = true; }
@@ -177,6 +182,9 @@ private:
     std::future<std::string> saveJob_;                // item 4: the picture being written on a worker (one at a time); its sentence is the page's note when it is back
     std::string savePlugin_;
     int saveDelayMs_ = 0;
+    std::function<void(const std::string&)> clipboardSink_;
+    int copies_ = 0;
+    std::string lastCopy_;
     std::set<std::string> browsed_;   // the settings (file + 0x1F + key) whose last edit came from BROWSE FILES
     void pollSave();
     void browseSetting(const std::string& file, int id);

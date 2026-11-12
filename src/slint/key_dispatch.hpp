@@ -19,6 +19,7 @@ namespace foxsdr::slintsystem {
 constexpr const char* kShortcutEscape = "escape";          // Esc cancels what is being typed, a dialog, the full-screen scope
 constexpr const char* kShortcutPalette = "palette";        // Ctrl+K opens the command palette
 constexpr const char* kShortcutUiSizeAuto = "uiSizeAuto";  // Ctrl+0
+constexpr const char* kShortcutOverlay = "shortcuts";        // Shift+F1 (screen lane C, U10): the keyboard-shortcut overlay
 
 // One key press as the window names it. `key` is the chord key's canonical name ("F2", "PageUp", "Plus", "M"); the modifiers are the event's.
 // `glyphShifted` says the character typed needs Shift on a standard keyboard ("+" is Shift+"=", "_" Shift+"-"): Shift is then part of how
