@@ -1725,6 +1725,15 @@ else()
     message(STATUS "no python: packaging_openapi_routes is not registered")
 endif()
 
+# wire-c begin: wiring lane C's test settings in ONE block (each item appends its own lines inside it)
+foreach(_t IN ITEMS test_wire_c_portable)
+    if(TARGET ${_t})
+        target_compile_definitions(${_t} PRIVATE WIRE_C_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+        add_dependencies(${_t} foxsdr-engine)   # (the end-to-end half runs a copy of the real engine program)
+    endif()
+endforeach()
+# wire-c end
+
 # Label APPENDED, not set: the sanitizer and TSan passes above put their own
 # labels on some tests (sanitize-excluded, tsan, fuzz on the corpus replays)
 # and those must survive.
