@@ -163,7 +163,6 @@ Each row is one mutation of one header by `D:/foxsdr-build/tuning-mut.py`: apply
 | S2 nearest-bin fallback | RED rc=1 test_tuning_scan: 1850 checks, 1 failed |
 | S2 out-of-span count | RED rc=1 test_tuning_scan: 1850 checks, 2 failed |
 | S3 shared points kept once | RED rc=1 test_tuning_scan: 1850 checks, 1 failed |
-| S4 backward direction | OLD TEXT NOT FOUND |
 | S4 step back wraps | RED rc=1 test_tuning_scan: 1850 checks, 2 failed |
 | S5 duplicate hit refused | RED rc=1 test_tuning_scan: 1850 checks, 2 failed |
 | S3 point cap | RED rc=1 test_tuning_scan: 1850 checks, 1 failed |
