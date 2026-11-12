@@ -1400,6 +1400,18 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         {
             const cascade::core::ppmauto::Result pr = receivers_[n - 1u]->ppmAuto_.result(clockS());
             const char* word = pr.state == cascade::core::ppmauto::State::Measuring ? "measuring" : (pr.state == cascade::core::ppmauto::State::Done ? "done" : (pr.state == cascade::core::ppmauto::State::Failed ? "failed" : "idle"));
+            {
+                const std::size_t zf = receivers_[n - 1u]->pipeline_.ifZoomFftSize();
+                if (zf == 0) {
+                    fact(pre + "zoom", "off");
+                } else {
+                    char zb[96];
+                    const double chan = receivers_[n - 1u]->pipeline_.channelRateHz();
+                    const double m = std::max(1.0, std::floor(chan / receivers_[n - 1u]->ifZoomSpanHz_ + 0.5));
+                    std::snprintf(zb, sizeof zb, "%zu bins of %.3f Hz over %.0f Hz", zf, chan / m / static_cast<double>(zf), chan / m);
+                    fact(pre + "zoom", zb);
+                }
+            }
             fact(pre + "ppmauto.state", word);
             if (pr.state != cascade::core::ppmauto::State::Idle) {
                 char pb[48];

@@ -3425,6 +3425,9 @@ public:
     // ~Engine does both for a front end that did not. GUI thread in 3a.
     void initialise();
     // HOT-PLUG (engine serial lane A, R10; engine_hotplug.cpp): the OS device-change notice. The real service starts it after initialise(); stop is also done by shutdownQuiesce().
+    // THE IF ZOOM FRAME (engine serial lane A, S12): the newest high-resolution spectrum of radio `radio`'s passband (1-based), bins dB values fftshifted, DC at bins/2. frame 0 = none (off, no such radio, cap too small).
+    // In process only: the C API serves one spectrum frame per radio. Any thread.
+    cascade::core::Pipeline::ZoomFrameInfo zoomFrame(std::uint32_t radio, float* out, std::size_t cap);
     void startHotplugWatch(bool registerWithOs, cascade::core::sys::ArrivalConfig cfg = {});
     void stopHotplugWatch();
     void loadBookmarks();

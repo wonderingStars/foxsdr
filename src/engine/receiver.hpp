@@ -446,6 +446,7 @@ struct Receiver {
     // stop*Recording clears the pointer before stopping the recorder.
     cascade::core::Recorder iqRecorder_;
     cascade::core::Recorder audioRecorder_;
+    double ifZoomSpanHz_ = 0.0;   // the span asked of the IF zoom (engine serial lane A, S12); the size is the pipeline's
     cascade::core::ppmauto::Measurement ppmAuto_;   // the pilot-based ppm measurement (engine serial lane A, R18)
     double ppmAutoLastReadS_ = 0.0;
     cascade::core::Recorder ifRecorder_;   // the IF take (engine serial lane A, P4): I/Q at the channel rate

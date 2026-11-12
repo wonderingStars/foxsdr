@@ -7731,6 +7731,27 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         }
         case FOXAPP_OP_CHANNEL_CLAIM: return claimChannel(c);
         case FOXAPP_OP_CHANNEL_RELEASE: return releaseChannel(c);
+        case FOXAPP_OP_SET_IF_ZOOM: {
+            Receiver& rxs = rx();
+            const std::int64_t size = c.ival[0];
+            if (size < 0 || size > 16384 || (size != 0 && (size < 256 || (size & (size - 1)) != 0))) { return refuse(FOXAPI_OUT_OF_RANGE, "the zoom FFT size is 0 (off) or a power of two from 256 to 16384"); }
+            if (size == 0) {
+                if (rxs.pipeline_.ifZoomFftSize() == 0) { return refuse(FOXAPI_NO_CHANGE, "the IF zoom is off already"); }
+                (void)rxs.pipeline_.setIfZoom(0, 0.0);
+                rxs.ifZoomSpanHz_ = 0.0;
+                res.applied[0] = 0.0;
+                ++ppmAutoVersion_;
+                return res;
+            }
+            const double chan = rxs.pipeline_.channelRateHz();
+            if (!(c.num[0] >= 100.0) || c.num[0] > chan) { return refuse(FOXAPI_OUT_OF_RANGE, "the zoom width is 100 Hz up to the channel rate"); }
+            if (rxs.pipeline_.ifZoomFftSize() == static_cast<std::size_t>(size) && rxs.ifZoomSpanHz_ == c.num[0]) { return refuse(FOXAPI_NO_CHANGE, "the IF zoom is so already"); }
+            if (!rxs.pipeline_.setIfZoom(static_cast<std::size_t>(size), c.num[0])) { return refuse(FOXAPI_OUT_OF_RANGE, "the zoom was refused"); }
+            rxs.ifZoomSpanHz_ = c.num[0];
+            ++ppmAutoVersion_;
+            res.applied[0] = chan / std::max(1.0, std::floor(chan / c.num[0] + 0.5));
+            return res;
+        }
         case FOXAPP_OP_PPM_MEASURE: {
             Receiver& rxs = rx();
             if (on == rxs.ppmAuto_.active()) { return refuse(FOXAPI_NO_CHANGE, on ? "a ppm measurement is running already" : "no ppm measurement is running"); }

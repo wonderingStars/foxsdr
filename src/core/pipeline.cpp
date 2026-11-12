@@ -480,6 +480,7 @@ void Pipeline::rebuildChannelBlocks(double chanRate) {
     noiseSq_->setThresholdDb(noiseSqThresholdDb_);
     noiseSq_->setTailMs(noiseSqTailMs_);
     noiseSq_->setEnabled(noiseSqOn_);
+    rebuildZoom(chanRate);   // S12: the zoom listens at the channel rate too
     afc_ = std::make_unique<cascade::dsp::AfcTracker>(chanRate);   // (the AFC measures at the channel rate: rebuilt with it, its settings put back)
     afc_->setPullInHz(afcPullHz_);
     afc_->setHoldHz(2.0 * afcPullHz_);
@@ -1385,6 +1386,41 @@ bool Pipeline::setIqCorrection(int mask) {
 }
 int Pipeline::iqCorrection() const { return iqMask_.load(std::memory_order_relaxed); }
 double Pipeline::iqImageRejectionDb() const { return iqCorr_->imageRejectionDb(); }
+
+// --- IF zoom (engine serial lane A, S12) ---------------------------------------------------------------------------------------------------------------
+void Pipeline::rebuildZoom(double chanRate) {
+    if (zoomFft_ == 0 || !(chanRate > 0.0)) {
+        zoom_.store(nullptr);
+        return;
+    }
+    const std::size_t m = static_cast<std::size_t>(std::max(1.0, std::floor(chanRate / zoomSpanHz_ + 0.5)));
+    zoom_.store(std::make_shared<cascade::dsp::ZoomFft>(chanRate, m, zoomFft_));
+}
+bool Pipeline::setIfZoom(std::size_t fftSize, double spanHz) {
+    if (fftSize != 0) {
+        if (fftSize < 256 || fftSize > 16384 || (fftSize & (fftSize - 1)) != 0) { return false; }
+        if (!std::isfinite(spanHz) || spanHz < 100.0 || spanHz > channelRateHz()) { return false; }
+    }
+    post([this, fftSize, spanHz] {
+             zoomFft_ = fftSize;
+             zoomSpanHz_ = fftSize == 0 ? 0.0 : spanHz;
+             rebuildZoom(vfo_.channelRateHz());
+         },
+         [this, fftSize] { mirrorZoomFft_.store(fftSize, std::memory_order_relaxed); });
+    return true;
+}
+std::size_t Pipeline::ifZoomFftSize() const { return mirrorZoomFft_.load(std::memory_order_relaxed); }
+Pipeline::ZoomFrameInfo Pipeline::zoomFrame(float* out, std::size_t cap) const {
+    ZoomFrameInfo info;
+    const std::shared_ptr<cascade::dsp::ZoomFft> z = zoom_.load();
+    if (!z || cap < z->fftSize() || out == nullptr) { return info; }
+    info.frame = z->latest(out);
+    info.bins = z->fftSize();
+    info.binHz = z->binHz();
+    info.spanHz = z->outputRateHz();
+    info.usableSpanHz = z->usableSpanHz();
+    return info;
+}
 
 // --- AFC (engine serial lane A, F13) -------------------------------------------------------------------------------------------------------------------
 bool Pipeline::setAfc(bool on, double pullInHz) {
@@ -2462,6 +2498,9 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // the condition on anything added to this thread.
     scopeIq_.push(chanBuf_.data(), m);
     if (ifRecorder_ != nullptr) { ifRecorder_->writeIq(chanBuf_.data(), m); }   // P4: the IF, the passband only
+    if (zoomFft_ != 0) {   // S12: the zoom FFT of the passband (the block is held while it runs)
+        if (const std::shared_ptr<cascade::dsp::ZoomFft> z = zoom_.load()) { z->push(chanBuf_.data(), m); }
+    }
 
     // Demodulate 1:1 at the channel rate. In WFM this is the COMPOSITE (MPX)
     // with no de-emphasis applied — see the ownership note in the header.

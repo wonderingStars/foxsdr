@@ -37,4 +37,9 @@ void Engine::pumpPpmAuto() {
     }
 }
 
+cascade::core::Pipeline::ZoomFrameInfo Engine::zoomFrame(std::uint32_t radio, float* out, std::size_t cap) {
+    if (!receiverLive(radio)) { return {}; }
+    return receivers_[radio - 1u]->pipeline_.zoomFrame(out, cap);
+}
+
 }  // namespace cascade::engine

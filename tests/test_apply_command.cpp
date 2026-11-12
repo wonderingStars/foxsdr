@@ -1436,6 +1436,10 @@ void receiverOps(AppWindow& a) {
     {
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_PPM_MEASURE, 0)), FOXAPI_NO_CHANGE));     // nothing is measuring
     }
+    covering(FOXAPP_OP_SET_IF_ZOOM);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_IF_ZOOM, 0)), FOXAPI_NO_CHANGE));      // the zoom is off already
+    }
     covering(FOXAPI_OP_SET_CW_PITCH);
     {
         CHECK(A::cwPitchRx(a) == 700.0 && A::cwPitchPipe(a) == 700.0);

@@ -195,6 +195,11 @@
 //   idle / measuring / done / failed, .progress 0..1, .ppm (positive = the crystal runs fast, the sign of SET_PPM), .uncertainty (one standard error, statistical only: the station's own pilot accuracy is not known
 //   here), .readings. A reading is only as good as the station: measure two or three and trust the ones that agree.
 #define FOXAPP_OP_PPM_MEASURE            0x8624u /* ival[0]: 1 start / 0 cancel; num[0]: seconds (10..300, 0 = 30). Addresses one radio (target) */
+//   SET_IF_ZOOM (SETTINGS; engine serial lane A, row S12): a second, high-resolution spectrum of the selected radio's (target) IF passband (dsp/zoom_fft.hpp). ival[0] the FFT size (0 off; a power of two from 256 to
+//   16384); num[0] the width of the whole picture in Hz (100 up to the channel rate; the decimation is the channel rate over it, rounded, so applied[0] says the span actually shown). The frame is read in process with
+//   Engine::zoomFrame(radio, ...): the engine C API still serves ONE spectrum frame per radio, so the zoom frame is not on the wire yet. fact.radio.<n>.zoom is off, or "<bins> bins of <binHz> Hz over <span> Hz".
+//   Not saved with the radio: it is a view, set again by the screen that wants it. OUT_OF_RANGE for a size or width that is not allowed, NO_CHANGE when it is so already.
+#define FOXAPP_OP_SET_IF_ZOOM            0x8625u /* ival[0]: FFT size or 0 off; num[0]: span Hz. Addresses one radio (target) */
 #define FOXAPP_OP_SET_STEREO_SYSTEM      0x8619u /* ival[0]: 0 automatic / 1 pilot tone / 2 OIRT. Addresses one radio (target) */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

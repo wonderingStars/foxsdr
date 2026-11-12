@@ -159,6 +159,7 @@
 #include "dsp/spectrum_block.hpp"
 #include "dsp/iq_correct.hpp"
 #include "dsp/afc.hpp"
+#include "dsp/zoom_fft.hpp"
 #include "dsp/cw_filter.hpp"
 #include "dsp/stereo_place.hpp"
 #include "dsp/spsc_ring.hpp"
@@ -608,6 +609,20 @@ public:
     // AUTOMATIC FREQUENCY CONTROL (engine serial lane A, row F13; dsp/afc.hpp): follows a drifting carrier by nudging the VFO. NFM, WFM and AM track the block's mean frequency, CW the strongest
     // line (a keyed carrier); the other modes have no carrier to follow and are left alone. pullInHz (50 to 20,000) is how far from the tuned frequency a carrier is caught, and twice that how
     // far it is followed once caught. The nudge is added to the user's offset (vfoOffsetHz() stays the user's own) and a retune forgets it. False (nothing changed) outside the range.
+    // ZOOM FFT OF THE IF PASSBAND (engine serial lane A, row S12; dsp/zoom_fft.hpp): a second, high-resolution spectrum of the channel (the IF after the VFO, centred on DC), fed at the channel rate.
+    // fftSize 0 turns it off; otherwise a power of two from 256 to 16384. spanHz is the width of the whole picture (100 Hz up to the channel rate); the decimation is the channel rate over it, rounded, so the span
+    // actually shown is zoomFrame()'s outputRateHz. Rebuilt with the channel blocks (a change of input rate keeps the setting). Returns false for a value out of range. Any thread.
+    struct ZoomFrameInfo {
+        std::uint64_t frame = 0;        // 0 = none yet
+        std::size_t bins = 0;
+        double binHz = 0.0;
+        double spanHz = 0.0;            // the whole picture (the output rate of the zoom decimator)
+        double usableSpanHz = 0.0;      // the middle part that is clean (80 %)
+    };
+    bool setIfZoom(std::size_t fftSize, double spanHz);
+    // Copies the newest zoom frame (bins dB values, fftshifted: bin bins/2 is DC) into out (capacity cap); frame 0 = none (off, or not a full frame yet) or cap too small.
+    ZoomFrameInfo zoomFrame(float* out, std::size_t cap) const;
+    std::size_t ifZoomFftSize() const;   // 0 = off
     bool setAfc(bool on, double pullInHz);
     bool afcOn() const;
     double afcPullInHz() const;
@@ -1199,6 +1214,12 @@ private:
     std::unique_ptr<cascade::dsp::IqCorrector> iqCorr_;   // swapped only while the DSP thread is quiesced (a rate change)
     std::atomic<int> iqMask_{0};
     // AFC (setAfc): the DSP thread's copies, the tracker (rebuilt with the channel blocks) and the lock-free mirrors the control thread reads.
+    // IF ZOOM (setIfZoom): the settings (DSP thread's copy, mirrored for the control thread), and the block, swapped whole so a reader holds it while a rebuild replaces it.
+    std::size_t zoomFft_ = 0;
+    double zoomSpanHz_ = 0.0;
+    std::atomic<std::size_t> mirrorZoomFft_{0};
+    std::atomic<std::shared_ptr<cascade::dsp::ZoomFft>> zoom_;
+    void rebuildZoom(double chanRate);
     std::unique_ptr<cascade::dsp::AfcTracker> afc_;
     bool afcOn_ = false;
     double afcPullHz_ = 2500.0;
