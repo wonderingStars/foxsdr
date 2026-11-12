@@ -14,6 +14,7 @@
 #define CASCADE_ENGINE_WIRE_A_HPP
 
 #include <array>
+#include <atomic>
 #include <limits>
 #include <utility>
 #include <chrono>
@@ -28,6 +29,7 @@
 #include "core/bookmark.hpp"
 #include "core/bookmark_notes.hpp"
 #include "core/channel_plans.hpp"
+#include "core/disk_job.hpp"
 #include "core/favourite_state.hpp"
 #include "core/scan_plan.hpp"
 #include "core/scan_trigger.hpp"
@@ -121,6 +123,30 @@ private:
     bool favouritesDirty_ = false;
     double favouritesDueS_ = 0.0;
     std::string favouriteRecalled_, favouritesError_;
+
+    // ---- the one background job (wire_a_jobs.cpp) ----
+public:
+    struct JobResult {
+        bool ok = false;
+        bool cancelled = false;
+        std::string message;   // words, never a path
+        std::string json;      // the job's own numbers
+    };
+    struct JobCtl {
+        std::atomic<bool> cancel{false};
+        std::atomic<double> progress{0.0};
+    };
+    ~WireA();
+
+private:
+    Result jobOp(const FoxCommand& c, const std::string& text, Result res);
+    // Starts `work` on the worker; BUSY while a job is out. `name` is a fixed English word.
+    Result startJob(Result res, const char* name, std::function<JobResult(JobCtl&)> work);
+    void jobPass();
+    void jobFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    cascade::core::DiskJob<JobResult> job_{"wire-a job"};
+    std::shared_ptr<JobCtl> jobCtl_;
+    std::string jobName_, jobState_ = "idle", jobMessage_, jobJson_;
 
     // ---- the scanner (wire_a_scan.cpp) ----
     Result scanOp(const FoxCommand& c, const std::string& text, Result res);

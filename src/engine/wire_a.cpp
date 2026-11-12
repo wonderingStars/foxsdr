@@ -49,6 +49,9 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
         case FOXAPP_OP_PACK_EXPORT:
         case FOXAPP_OP_PACK_IMPORT:
             return packOp(c, text, res);
+        case FOXAPP_OP_JOB_CANCEL:
+        case FOXAPP_OP_EXPORT_BOX:
+            return jobOp(c, text, res);
         case FOXAPP_OP_SCAN_PLAN:
         case FOXAPP_OP_SCAN_BACK:
         case FOXAPP_OP_SCAN_SAVE_HIT:
@@ -79,6 +82,7 @@ bool WireA::drain(std::chrono::milliseconds bound) {
 }
 
 void WireA::pass() {
+    jobPass();
     scanPass();
     bookmarksPass();
     historyPass();
@@ -92,6 +96,7 @@ void WireA::facts(const std::function<void(const std::string&, const std::string
     filesFacts(fact);
     bookmarkFacts(fact);
     scanFacts(fact);
+    jobFacts(fact);
 }
 
 void WireA::tunedFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {

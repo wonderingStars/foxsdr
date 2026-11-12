@@ -71,6 +71,18 @@
 #define FOXAPP_OP_SCAN_TRIGGER           0x880Eu /* ival[0]: 0 off / 1 on; text: the trigger JSON (optional) */
 #define FOXAPP_OP_SCANNER_EXTRAS         0x880Fu /* ival[0]: 0 priority / 1 lock out / 2 clear / 3 mute / 4 thresholds / 5 locked list; ival[1], num[0], num[1], text: see above */
 
+//   THE LANE'S ONE BACKGROUND JOB (the engine's pass does no disk work: a job that reads or writes a recording runs on a worker of core/disk_job.hpp, one at a time; BUSY while one is out). Its state is read from
+//   fact.job.state ("idle", "running", "done", "failed", "cancelled"), fact.job.name, fact.job.progress (0..1), fact.job.message (words, never a path) and fact.job.result (JSON; the job's own numbers).
+//   JOB_CANCEL: asks the running job to stop at its next block (a cancelled export leaves a valid file of what was written). NO_CHANGE when none is running.
+//   EXPORT_BOX (SETTINGS; dsp/box_export.hpp): the part of a recorded I/Q file inside a time-and-frequency box, mixed to baseband, filtered and decimated, written as I/Q or demodulated audio. text = JSON
+//   {"input":"<full path of the recording (.wav, .rf64, .sigmf-meta, .sigmf-data, .cu8, .cs16, .cf32)>", "output":"<full path of the new file>", "t0":s, "t1":s, "loHz":Hz, "hiHz":Hz (absolute RF),
+//   "mode":"iq"|"am"|"fm"|"usb"|"lsb", "format":"float32"|"pcm16"|"cf32", and optionally "attenuationDb" (40..120, default 80), "minOutRateHz", "audioGain", "fmDeviationHz", "sampleRateHz" and "centerHz" (for a raw
+//   file or one whose header has none)}. The output file is never an existing file. BAD_ARGUMENT: bad JSON, a path that is not a full path, an unknown mode or format, a missing number; BUSY: a job is out.
+//   The refusals the plan makes (a box outside the band, an export over 4 GiB, a rate the file does not have...) arrive as fact.job.state "failed" with the plan's words in fact.job.message. On success
+//   fact.job.result carries {"outRateHz","frames","decimation","taps","designAttenuationDb","clipped","peak"}.
+#define FOXAPP_OP_JOB_CANCEL             0x8810u
+#define FOXAPP_OP_EXPORT_BOX             0x8811u /* text: JSON, see above */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -89,7 +101,9 @@
     {FOXAPP_OP_SCAN_BACK, "APP_SCAN_BACK", true}, \
     {FOXAPP_OP_SCAN_SAVE_HIT, "APP_SCAN_SAVE_HIT", true}, \
     {FOXAPP_OP_SCAN_TRIGGER, "APP_SCAN_TRIGGER", true}, \
-    {FOXAPP_OP_SCANNER_EXTRAS, "APP_SCANNER_EXTRAS", true},
+    {FOXAPP_OP_SCANNER_EXTRAS, "APP_SCANNER_EXTRAS", true}, \
+    {FOXAPP_OP_JOB_CANCEL, "APP_JOB_CANCEL", true}, \
+    {FOXAPP_OP_EXPORT_BOX, "APP_EXPORT_BOX", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP
