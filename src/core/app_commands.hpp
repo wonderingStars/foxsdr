@@ -357,6 +357,8 @@
 //   {cols 1..65536, rows 2..65536, freq_mode "max"|"mean", time_mode}, "occupancy": {start_mhz, stop_mhz, step_khz, margin_db 0..200, floor_percentile 0..0.5, fixed_floor_db} or null to drop it): works while
 //   open or not; the model's refusal words come back. SWEEP_READ (JSON: max_points 2..4096 default 512, x 0..1 for the click-to-tune frequency, occupancy true for the channel table as CSV): answers in
 //   the fact sweep.read. Fact sweep.state = {open, kind, sweeps, refused, last_error, points, start_hz, stop_hz, heat_rows, heat_cols, occ_channels, occ_sweeps}. UNVERIFIED on a real device.
+//   (KIND "hackrf": a HackRF in sweep mode, RECEIVE ONLY: JSON {kind "hackrf", serial (optional), start_mhz, stop_mhz (ONE range of whole MHz, 1..6000), step_mhz 1..20 (10), lna_db 0..40 (16), vga_db 0..62 (16), amp bool,
+//   sample_rate_msps 2..20 (20), fft_size 32..65536 (1024)}; a "port" is refused; the LINEAR sweep only: the interleaved style needs GPL code, the owner's decision.)
 #define FOXAPP_OP_SWEEP_OPEN             0x8920u /* text JSON; fact sweep.state */
 #define FOXAPP_OP_SWEEP_CLOSE            0x8921u
 #define FOXAPP_OP_SWEEP_CONFIG           0x8922u /* text JSON */

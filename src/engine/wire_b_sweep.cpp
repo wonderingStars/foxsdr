@@ -62,12 +62,82 @@ bool SweepHost::start(const SerialLinkFactory& factory, const std::string& kind,
     return true;
 }
 
+HackRfFactory defaultHackRfFactory() {
+    return [](const std::string& args, std::string& why) -> std::unique_ptr<cascade::source::hackrf_sweep::HackRfSweeper> {
+        auto sw = std::make_unique<cascade::source::hackrf_sweep::HackRfSweeper>();
+        if (!sw->open(args)) {
+            why = sw->lastError().empty() ? std::string("no HackRF could be opened (is it plugged in, with the WinUSB driver, and free?)") : sw->lastError();
+            return nullptr;
+        }
+        return sw;
+    };
+}
+
+bool SweepHost::startHackRf(const HackRfFactory& factory, const std::string& args, const cascade::source::hackrf_sweep::SweepConfig& cfg, std::string& why) {
+    stop();
+    if (!factory) { why = "no way to open a HackRF on this build"; return false; }
+    std::unique_ptr<cascade::source::hackrf_sweep::HackRfSweeper> sw = factory(args, why);
+    if (sw == nullptr) {
+        if (why.empty()) { why = "the HackRF could not be opened"; }
+        return false;
+    }
+    if (!sw->configure(cfg)) { why = sw->lastError().empty() ? std::string("the HackRF refused the sweep settings") : sw->lastError(); return false; }
+    if (!sw->start()) { why = sw->lastError().empty() ? std::string("the HackRF would not start sweeping") : sw->lastError(); return false; }
+    const double a = static_cast<double>(cfg.plan.rangesMHz.front().first) * 1e6, b = static_cast<double>(cfg.plan.rangesMHz.front().second) * 1e6;
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        hackrf_ = std::move(sw);
+        link_.reset();
+        req_ = cascade::source::tinysa::SweepRequest{};
+        req_.startHz = a;
+        req_.stopHz = b;
+        req_.points = 0;
+        kind_ = "hackrf";
+        sweeps_ = 0;
+        refused_ = 0;
+        lastError_.clear();
+        haveLast_ = false;
+        cascade::core::HeatmapConfig hc;
+        hc.startHz = a;
+        hc.stopHz = b;
+        std::string hwhy;
+        heatReady_ = heat_.configure(hc, &hwhy);
+    }
+    stopFlag_.store(false);
+    running_.store(true);
+    th_ = std::thread([this] { loopHackRf(); });
+    return true;
+}
+
+void SweepHost::loopHackRf() {
+    std::vector<cascade::core::SweepLine> lines;
+    while (!stopFlag_.load()) {
+        lines.clear();
+        const double now = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+        const bool ok = hackrf_->poll(lines, 200, now);
+        std::lock_guard<std::mutex> lk(m_);
+        for (cascade::core::SweepLine& l : lines) {
+            ++sweeps_;
+            if (heatReady_) { std::string w; (void)heat_.addLine(l, &w); }
+            if (occReady_) { std::string w; (void)occ_.addSweep(l, &w); }
+            last_ = l;
+            haveLast_ = true;
+        }
+        if (!ok) {
+            lastError_ = "the HackRF stopped sending";
+            running_.store(false);
+            return;
+        }
+    }
+}
+
 void SweepHost::stop() {
     stopFlag_.store(true);
     if (th_.joinable()) { th_.join(); }
     running_.store(false);
     std::lock_guard<std::mutex> lk(m_);
     link_.reset();
+    if (hackrf_ != nullptr) { hackrf_->stop(); hackrf_->close(); hackrf_.reset(); }
 }
 
 void SweepHost::loop() {

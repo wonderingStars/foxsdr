@@ -23,6 +23,7 @@
 #include "core/sweep_line.hpp"
 #include "core/sweep_occupancy.hpp"
 #include "core/sweep_stitch.hpp"
+#include "source/hackrf_sweep.hpp"
 #include "source/tinysa_protocol.hpp"
 
 namespace cascade::engine::wireb {
@@ -31,6 +32,10 @@ using SerialLinkFactory = std::function<std::unique_ptr<cascade::source::tinysa:
 
 // The factory the engine uses unless a test gives another: a Windows COM port opened by its validated name (false and a sentence on any other build or an invalid name).
 SerialLinkFactory defaultSerialLinkFactory();
+
+// A HackRF in sweep mode (source/hackrf_sweep.hpp, the oss-radios lane): made by a factory (the default opens the first HackRF on USB; the tests give a stand-in USB transport). One range, LINEAR style.
+using HackRfFactory = std::function<std::unique_ptr<cascade::source::hackrf_sweep::HackRfSweeper>(const std::string& args, std::string& why)>;
+HackRfFactory defaultHackRfFactory();
 
 struct SweepStatus {
     bool open = false;
@@ -55,6 +60,8 @@ public:
     // Opens the link and starts the worker. False with `why` when the link cannot be made. Never blocks on the device.
     bool start(const SerialLinkFactory& factory, const std::string& kind, const std::string& port, cascade::source::tinysa::Model model, double startHz, double stopHz, std::size_t points,
                int intervalMs, std::string& why);
+    // The HackRF kind: the sweeper is opened by the factory with `args` ("serial=..." or "index=n", "" = the first), configured with `cfg` and started; its passes feed the same heatmap and occupancy.
+    bool startHackRf(const HackRfFactory& factory, const std::string& args, const cascade::source::hackrf_sweep::SweepConfig& cfg, std::string& why);
     void stop();
     bool running() const { return running_.load(); }
 
@@ -71,6 +78,8 @@ public:
 
 private:
     void loop();
+    void loopHackRf();
+    std::unique_ptr<cascade::source::hackrf_sweep::HackRfSweeper> hackrf_;
     mutable std::mutex m_;
     std::thread th_;
     std::atomic<bool> running_{false};

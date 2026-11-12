@@ -118,6 +118,7 @@ struct WireBState {
     std::array<bool, 8> followHaveLast{};
     std::array<std::string, 8> followNote;
     wireb::SerialLinkFactory sweepFactory = wireb::defaultSerialLinkFactory();
+    wireb::HackRfFactory hackrfFactory = wireb::defaultHackRfFactory();
 };
 
 }  // namespace cascade::engine

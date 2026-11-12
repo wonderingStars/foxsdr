@@ -756,12 +756,41 @@ FoxCommandResult Engine::sweepOp(const FoxCommand& c, const std::string& text, F
     wireb::detail::Params q(p);
     switch (c.op) {
         case FOXAPP_OP_SWEEP_OPEN: {
-            std::string kind = "tinysa", port;
-            double startMhz = 0.0, stopMhz = 0.0, interval = 0.0;
-            std::size_t points = 450;
-            if (!q.word("kind", kind) || !q.word("port", port) || !q.number("start_mhz", startMhz, 0.0, 1e6) || !q.number("stop_mhz", stopMhz, 0.0, 1e6) || !q.count("points", points, 2, 1048576) ||
-                !q.number("interval_ms", interval, 0.0, 60000.0) || !q.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, q.error); }
-            if (kind != "tinysa" && kind != "tinysa_ultra") { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"kind\" is tinysa or tinysa_ultra"); }
+            std::string kind = "tinysa", port, serial;
+            double startMhz = 0.0, stopMhz = 0.0, interval = 0.0, stepMhz = 10.0, lna = 16.0, vga = 16.0, rateMsps = 20.0;
+            std::size_t points = 450, fft = 1024;
+            bool amp = false;
+            if (!q.word("kind", kind) || !q.word("port", port) || !q.word("serial", serial) || !q.number("start_mhz", startMhz, 0.0, 1e6) || !q.number("stop_mhz", stopMhz, 0.0, 1e6) ||
+                !q.count("points", points, 2, 1048576) || !q.number("interval_ms", interval, 0.0, 60000.0) || !q.number("step_mhz", stepMhz, 1.0, 20.0) || !q.number("lna_db", lna, 0.0, 40.0) ||
+                !q.number("vga_db", vga, 0.0, 62.0) || !q.flag("amp", amp) || !q.number("sample_rate_msps", rateMsps, 2.0, 20.0) || !q.count("fft_size", fft, 32, 65536) || !q.finish()) {
+                return refusal(res, FOXAPI_BAD_ARGUMENT, q.error);
+            }
+            if (kind == "hackrf") {
+                // A HackRF in sweep mode (receive only): ONE range of whole MHz, 1 to 6000, LINEAR style; a USB radio has no port name.
+                if (!port.empty()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "a HackRF has no port: use serial to pick one of several"); }
+                if (!(stopMhz > startMhz) || startMhz < 1.0 || stopMhz > 6000.0 || startMhz != std::floor(startMhz) || stopMhz != std::floor(stopMhz)) {
+                    return refusal(res, FOXAPI_BAD_ARGUMENT, "the range is whole MHz, 1 to 6000, with the stop above the start");
+                }
+                if (fft == 0 || (fft & (fft - 1)) != 0) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"fft_size\" is a power of two, 32 to 65536"); }
+                if (w.sweep.running()) { return refusal(res, FOXAPI_BUSY, "a sweep device is open already"); }
+                cascade::source::hackrf_sweep::SweepConfig hc;
+                hc.plan.rangesMHz = {{static_cast<std::uint16_t>(startMhz), static_cast<std::uint16_t>(stopMhz)}};
+                hc.plan.stepWidthHz = static_cast<std::uint32_t>(stepMhz * 1e6);
+                hc.plan.offsetHz = hc.plan.stepWidthHz / 2;
+                hc.spectrum.sampleRateHz = rateMsps * 1e6;
+                hc.spectrum.fftSize = fft;
+                hc.spectrum.stepHz = stepMhz * 1e6;
+                hc.lnaDb = lna; hc.vgaDb = vga; hc.ampOn = amp;
+                const std::string perr = cascade::source::hackrf_sweep::validate(hc.plan);
+                if (!perr.empty()) { return refusal(res, FOXAPI_BAD_ARGUMENT, perr); }
+                std::string why;
+                if (!w.sweep.startHackRf(w.hackrfFactory, serial.empty() ? std::string() : "serial=" + serial, hc, why)) { return refusal(res, FOXAPI_FAILED, why); }
+                cascade::core::diagLogf("sweep: opened a HackRF sweep device");
+                changed = true;
+                break;
+            }
+            if (!serial.empty()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"serial\" is for a HackRF"); }
+            if (kind != "tinysa" && kind != "tinysa_ultra") { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"kind\" is tinysa, tinysa_ultra or hackrf"); }
             if (!cascade::source::tinysa::isValidComPortName(port)) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"port\" is a COM port name, COM1 to COM256"); }
             if (!(stopMhz > startMhz)) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the stop frequency must be above the start frequency"); }
             if (w.sweep.running()) { return refusal(res, FOXAPI_BUSY, "a sweep device is open already"); }
