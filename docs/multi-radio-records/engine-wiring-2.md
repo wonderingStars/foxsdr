@@ -180,4 +180,25 @@ Plugin ABI facts for the work above: `CASCADE_PLUGIN_ABI_VERSION` 3, `CASCADE_HO
 growth rule `CASCADE_HOST_COVERS`. The plugins repo has NO byte-compare test of `plugin_abi.h` (only `test_plugin_abi3_compat`, which loads published binaries from
 `FOXSDR_PUBLISHED_PLUGINS_DIR` and prints SKIP without it): the "identical copy" check is a manual diff, listed for `plugins-merge-3`.
 
-(Sections 3 onward are appended as the items below are finished.)
+## 3. What was wired, in the order done (one commit each)
+
+Break-it column: the behaviour removed (or the lock/gate disabled), the result seen RED, then restored and GREEN.
+
+| # | Commit | Item (brief) | What was wired | Proof (decisive result) | Break-it |
+|---|---|---|---|---|---|
+| 1 | 1b0d69a0 | `test_engine_api_merge` access violation (first job) | lock around PortAudio's open-stream list (section 0) | merge test alone `Passed 44.59 sec`; 3 at once: no access violation (before: 3 of 3); `test_pa_open_list_race` 11 checks | lock removed: `the open waited: 0, the close waited: 0`, 11 checks 2 failed |
+| 2 | 857eeb1c | merges (item 1-10) | `tests/thread_inventory_rows.inc`: rows for the 5 merged headers that start a thread | `test_thread_inventory` Passed (before: 5 failed of 11673) | - (the test names the missing rows) |
+| 3 | 923b8ccd | telemetry/log list, W1 gap | `kiwisdr=`, `soapyremote=`, `sdrconnect=` in the log address scrubber (`core/diag_log.cpp maskKeyedHosts`) | `test_upload_scrub` Passed; neighbours `test_crash_upload` (hidden desktop), `test_diag_log_lock`, `test_issue_report`, `fuzz_corpus_crash_report` pass | before the change 2 of the 4 new cases failed (`got == want`) |
+| 4 | bf330b36 | core-formats 8, DSP benchmark | `--benchmark` tool mode (`process_boot.cpp`, `tool_modes.cpp/.hpp`), kept out of the usage string | `foxsdr-engine.exe --benchmark` -> `benchmark PASS: 21 items, 0 failed`, exit 0; `test_tool_benchmark`, `test_process_boot_kind` pass | dispatch line removed: `b.exit && b.exitCode == 0` fails twice |
+| 5 | d583200c | core-formats 4, gqrx/CubicSDR import | `importFrequencyList` recognises both by content and folds the result into `ImportResult` | `test_freq_import_foreign` +31 lines; `test_freq_import`, `_formats`, `fuzz_corpus_freq_import` pass | dispatch removed: 9 of 102 checks fail |
+| 6 | c7743ba3 | array-maths/desk R12, E4000 offset tuning | `SET_DEVICE_OPTION "offset_tuning"` on an rtl_tcp radio whose header names an E4000 (`withOffsetTuning`, presence at open, list item, fingerprint) | `test_engine_api_source_kinds` B2: R820T gets nothing; E4000 radio 2 hears 0/1/0; radio 1 lists it off/on/off | dispatch branch off: 6 checks fail (`-6 vs 0`, server never hears 1) |
+| 7 | fecdd2d9 | array-maths W12, driver allow-list | `driverpolicy::decide` gates `radio_setup.cpp installTarget` and `winusb_install.cpp isRtlInterfaceZeroId` (the elevated helper's refusal) | `test_radio_setup`, `test_winusb_install`, `test_driver_policy`, `test_radio_setup_inventory` pass | RTL policy row -> NotAllowed: `test_radio_setup` :160 x2, :199 and `test_winusb_install` :41, :44, :47 fail |
+| 8 | e2955e1e | platform `confirmStartup` | `confirmStartupFor` (new, pure) called by `bootProcess` step 7b, Linux only, after the tool modes | `test_linux_update` `testConfirmStartupFor` passes | kind gate removed: 6 checks fail (:724/:725 x the five other kinds) |
+| 9 | e75e0810 | item 12, private plugins | `CASCADE_FLAG_PRIVATE_DATA` (bit 31, a flag outside `CASCADE_CAP_ALL_KNOWN`); web "decoded", "tracks", served pictures, REMOTE decoder lines, copied diagnostics all skip a private plugin | `test_engine_api_private` P1-P6 (28 checks), `test_plugin_validate`, `test_plugin_api/host`, `test_module_census`, `test_plugins_view`, `test_plugin_abi3_compat`, `test_server_host` pass; `test_engine_api_03` Passed alone 55.65 s after one failure in a parallel batch | all five sinks mutated: 7 checks fail, one group per sink |
+
+Notes on the proofs
+* Everything above that touches the Linux-only lines (`confirmLinuxUpdate`) or the Windows installer (W12) is proven through its pure functions only: the Linux lines were not compiled here, and nothing was installed or opened.
+* The E4000 and benchmark rows were exercised end to end (stand-in server; the real engine executable), not only by unit tests.
+* A slip, found and fixed in the commit that caused it (bf330b36): a plain `boot()` in `test_process_boot_kind` starts the crash sentinel, which is a child of the test's own executable and re-runs the test; six chained copies were stopped by hand (my own processes). A second slip: `test_crash_upload` is a gui test and was run once on the visible desktop; it failed there, passed on the hidden desktop; every gui test since runs on the hidden desktop only.
+
+(Further sections are appended as the remaining items are finished.)
