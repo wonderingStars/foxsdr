@@ -164,6 +164,13 @@
 //   meaning in the window's memory is not specified: UNVERIFIED). NOT_FOUND no such bookmark; BAD_ARGUMENT bad JSON or a value out of range; NO_CHANGE when it is as it was.
 #define FOXAPP_OP_BOOKMARK_FIELDS        0x881Eu /* ival[0]: bookmark id; ival[1]: 0 set / 1 read; text: JSON */
 
+//   RECORD_CONTAINER (SETTINGS; core/flac_writer.hpp): the file kind of AUDIO takes. ival[0]: 0 = WAV (the default, as always), 1 = FLAC: when an audio take ends, the lane's job (one at a time; a conversion that
+//   finds it busy waits for the next pass) reads the finished WAV in blocks, writes the same name with .flac (lossless: 16-bit for a 16-bit take, 24-bit for a 24-bit take; a 32-bit float take is written as 24-bit,
+//   which is not lossless for a float: said in fact.job.message "float take written as 24-bit"), and, only when the FLAC was written whole, deletes the WAV unless ival[1] = 1 (keep both). A FLAC that cannot be
+//   written leaves the WAV where it is and the job fails with the reason. I/Q takes stay WAV (RF64 and SigMF are not built). OUT_OF_RANGE for a value other than 0 or 1; NO_CHANGE when it is so already.
+//   fact.record.container "wav" / "flac", fact.record.container.keep "0" / "1". Kept in record-container.json beside markers.json.
+#define FOXAPP_OP_RECORD_CONTAINER       0x881Fu /* ival[0]: 0 wav / 1 flac; ival[1]: 1 keep the WAV too */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -197,7 +204,8 @@
     {FOXAPP_OP_DISPLAY_AVERAGE, "APP_DISPLAY_AVERAGE", true}, \
     {FOXAPP_OP_WF_HISTORY, "APP_WF_HISTORY", true}, \
     {FOXAPP_OP_TRACE_MODE, "APP_TRACE_MODE", true}, \
-    {FOXAPP_OP_BOOKMARK_FIELDS, "APP_BOOKMARK_FIELDS", true},
+    {FOXAPP_OP_BOOKMARK_FIELDS, "APP_BOOKMARK_FIELDS", true}, \
+    {FOXAPP_OP_RECORD_CONTAINER, "APP_RECORD_CONTAINER", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP

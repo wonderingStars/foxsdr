@@ -7,6 +7,9 @@
 //   L1  LOCK WHILE RECORDING: during an I/Q take the sample rate, the source and the centre are refused with the model's sentence (and nothing moves), re-sending the frozen centre is allowed, the VFO may
 //       still move; after the take every one is allowed again; an audio take freezes none of them; the gain lock is its own switch; the lock can be turned off and the setting is kept in record-lock.json.
 //
+//   C1  FLAC FOR AUDIO TAKES: the default is WAV; with FLAC chosen an audio take on the generator ends as a .flac (the WAV removed), whose STREAMINFO (rate, channels, bits, sample count, MD5) is checked against the
+//       samples of the take's own WAV (a second take is made with "keep both" so the WAV is there to compare); a take with the container off stays a WAV; refusals; persistence.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <chrono>
 #include <fstream>
@@ -16,6 +19,8 @@
 #include <string>
 #include <vector>
 
+#include "core/flac_writer.hpp"
+#include "source/wav_meta.hpp"
 #include "wire_a_rig.hpp"
 
 using namespace wire_a_rig;
@@ -211,6 +216,99 @@ void testLock() {
     }
 }
 
+std::vector<fs::path> filesWithExt(const fs::path& dir, const char* ext) {
+    std::vector<fs::path> out;
+    std::error_code ec;
+    for (const auto& e : fs::recursive_directory_iterator(dir, ec)) {
+        if (e.is_regular_file() && e.path().extension() == ext) { out.push_back(e.path()); }
+    }
+    return out;
+}
+
+void testFlac() {
+    std::printf("C1: FLAC for audio takes\n");
+    const fs::path rec = g_dir / "rec4", user = g_dir / "user4";
+    fs::create_directories(rec);
+    {
+        Rig r(user, rec);
+        CHECK_EQ(r.fact("record.container"), std::string("wav"));
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_RECORD_CONTAINER, 0.0, 0)).status(), FOXAPI_NO_CHANGE);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_RECORD_CONTAINER, 0.0, 7)).status(), FOXAPI_OUT_OF_RANGE);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_FREQUENCY, 100.1e6, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RUN, 0, 1)).status(), FOXAPI_OK);
+        // WAV by default
+        {
+            CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_AUDIO, 0, 1)).status(), FOXAPI_OK);
+            r.settle(700);
+            CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_AUDIO, 0, 0)).status(), FOXAPI_OK);
+            r.settle(1200);
+            CHECK_EQ(filesWithExt(rec, ".wav").size(), std::size_t(1));
+            CHECK(filesWithExt(rec, ".flac").empty());
+        }
+        // FLAC, keep both
+        FoxCommand keep = testing::cmd(FOXAPP_OP_RECORD_CONTAINER, 0.0, 1);
+        keep.ival[1] = 1;
+        CHECK_EQ(r.send(keep).status(), FOXAPI_OK);
+        CHECK_EQ(r.fact("record.container"), std::string("flac"));
+        CHECK_EQ(r.fact("record.container.keep"), std::string("1"));
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_AUDIO, 0, 1)).status(), FOXAPI_OK);
+        r.settle(900);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_AUDIO, 0, 0)).status(), FOXAPI_OK);
+        CHECK(r.until([&] { return r.fact("job.name") == "FLAC conversion" && r.fact("job.state") != "running"; }, 20000));
+        CHECK_EQ(r.fact("job.state"), std::string("done"));
+        const std::vector<fs::path> flacs = filesWithExt(rec, ".flac");
+        CHECK_EQ(flacs.size(), std::size_t(1));
+        CHECK_EQ(filesWithExt(rec, ".wav").size(), std::size_t(2));   // both kept
+        if (!flacs.empty()) {
+            fs::path wav = flacs[0];
+            wav.replace_extension(".wav");
+            CHECK(fs::exists(wav));
+            // STREAMINFO of the FLAC against the WAV's own samples
+            std::ifstream f(flacs[0], std::ios::binary);
+            std::vector<unsigned char> head(8 + 34);
+            f.read(reinterpret_cast<char*>(head.data()), static_cast<std::streamsize>(head.size()));
+            CHECK(head[0] == 'f' && head[1] == 'L' && head[2] == 'a' && head[3] == 'C');
+            const unsigned char* si = head.data() + 8;
+            const unsigned rate = (si[10] << 12) | (si[11] << 4) | (si[12] >> 4);
+            const unsigned channels = ((si[12] >> 1) & 7) + 1;
+            const unsigned bps = (((si[12] & 1) << 4) | (si[13] >> 4)) + 1;
+            const std::uint64_t total = (static_cast<std::uint64_t>(si[13] & 15) << 32) | (static_cast<std::uint64_t>(si[14]) << 24) | (si[15] << 16) | (si[16] << 8) | si[17];
+            const cascade::source::wavmeta::WavMeta m = cascade::source::wavmeta::readWavMeta(wav);
+            CHECK(m.ok);
+            CHECK_EQ(rate, m.sampleRateHz);
+            CHECK_EQ(channels, m.channels);
+            CHECK_EQ(bps, 16u);   // the default audio take is 16-bit
+            CHECK_EQ(total, m.dataBytes / (m.channels * (m.bitsPerSample / 8)));
+            // the MD5 of the samples, made here from the WAV (the RFC's definition: little-endian samples sign-extended to whole bytes; 16-bit = the samples as they are)
+            std::ifstream w(wav, std::ios::binary);
+            w.seekg(static_cast<std::streamoff>(m.dataOffset));
+            std::vector<unsigned char> pcm(static_cast<std::size_t>(m.dataBytes));
+            w.read(reinterpret_cast<char*>(pcm.data()), static_cast<std::streamsize>(pcm.size()));
+            cascade::core::flac::Md5 md5;
+            md5.update(pcm.data(), pcm.size());
+            const auto sum = md5.finish();
+            bool same = true;
+            for (int i = 0; i < 16; ++i) { same = same && sum[i] == si[18 + i]; }
+            CHECK(same);
+        }
+        // FLAC, WAV removed
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_RECORD_CONTAINER, 0.0, 1)).status(), FOXAPI_OK);
+        const std::size_t flacBefore = filesWithExt(rec, ".flac").size();
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_AUDIO, 0, 1)).status(), FOXAPI_OK);
+        r.settle(700);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_AUDIO, 0, 0)).status(), FOXAPI_OK);
+        CHECK(r.until([&] { return filesWithExt(rec, ".flac").size() > flacBefore; }, 20000));
+        r.settle(500);
+        CHECK_EQ(filesWithExt(rec, ".wav").size(), std::size_t(2));   // the new take's WAV is gone; the two kept ones remain
+        CHECK(r.until([&] { return fs::exists(user / "record-container.json"); }, 6000));
+    }
+    {
+        Rig r(user, rec);
+        r.settle(200);
+        CHECK_EQ(r.fact("record.container"), std::string("flac"));   // a new engine reads it
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -223,6 +321,7 @@ int main() {
     testDaily();
     testJunction();
     testLock();
+    testFlac();
     fs::remove_all(g_dir, ec);
     return check::finish("test_engine_api_wire_a_record");
 }

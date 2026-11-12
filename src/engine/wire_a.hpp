@@ -233,6 +233,16 @@ public:
     bool recordGuard(const FoxCommand& c, std::string& why);
 
 private:
+    // ---- recording: FLAC for audio takes (wire_a_container.cpp) ----
+    Result containerOp(const FoxCommand& c, Result res);
+    void containerPass();
+    void containerLoadOnce();
+    int container_ = 0;           // 0 wav, 1 flac
+    bool containerKeep_ = false;
+    bool containerLoaded_ = false;
+    std::array<std::string, 8> takePath_;   // the audio take open on each radio (its path), "" when none
+    std::vector<std::string> convertQueue_;
+
     // ---- recording: daily folders (wire_a_recording.cpp) ----
     Result dailyOp(const FoxCommand& c, const std::string& text, Result res);
     void recordingFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;

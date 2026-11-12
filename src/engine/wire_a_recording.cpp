@@ -117,6 +117,8 @@ void WireA::applyDaily(cascade::core::Recorder::OpenRequest& req) {
 
 void WireA::recordingFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {
     fact("record.daily", dailyJson());
+    fact("record.container", container_ == 1 ? "flac" : "wav");
+    fact("record.container.keep", containerKeep_ ? "1" : "0");
     fact("record.lock", lockPolicy_.lockWhileRecording ? "1" : "0");
     fact("record.lock.gain", lockPolicy_.lockGain ? "1" : "0");
     fact("record.lock.reason", lockReason_);
