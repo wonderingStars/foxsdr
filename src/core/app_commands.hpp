@@ -320,6 +320,12 @@
 #define FOXAPP_OP_BITS_SPEC_CHECK        0x8915u /* long text: a decoder file; errors with line numbers: fact ...bits.speccheck */
 #define FOXAPP_OP_BITS_SPEC_RUN          0x8916u /* long text: a decoder file; ival[0]: slice id (0 all): fact ...bits.specrun */
 #define FOXAPP_OP_BITS_TABLE_CHECK       0x8917u /* long text: a code-table file; errors with line numbers: fact ...bits.tablecheck */
+//   GPU_FFT_MODE (SETTINGS; core/pipeline_gpufft.cpp, dsp/gpu_fft.hpp): ival[0]: 0 CPU (the DEFAULT at every start: no Direct3D device is ever made), 1 AUTO (the GPU only from 65 536 points; the legacy spectrum
+//   path of the pipeline is smaller, so Auto stays on the CPU estimator there), 2 GPU (always). Applies to every radio OPEN NOW (a radio added later starts on CPU) and is NOT saved. OUT_OF_RANGE for another
+//   value, NO_CHANGE when every radio is on that mode. A failure of the GPU path is never an error: the CPU path runs on, silently, and the facts say what runs. The device is made off the DSP thread.
+//   Facts (LOCAL): radio.<n>.gpufft = one JSON object {mode, engaged, backend ("cpu"/"gpu"), submitted, completed_gpu, completed_cpu, dropped_frames, device_lost, error}; gpu_fft.mode = the last mode asked for.
+//   Not reached by this operation: the spectrum BLOCK (SET_SPECTRUM, the large FFT sizes) - see the record.
+#define FOXAPP_OP_GPU_FFT_MODE           0x8918u /* ival[0]: 0 CPU / 1 Auto / 2 GPU; every open radio; facts radio.<n>.gpufft, gpu_fft.mode */
 // wire-b end
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.

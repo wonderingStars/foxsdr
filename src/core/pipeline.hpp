@@ -967,6 +967,18 @@ public:
     // writeIq/writeAudio ignore wrong-kind and stopped recorders by their
     // own contract, so the DSP hot path needs only the null checks.
     void setIqRecorder(Recorder* r);
+    // wire-b begin: THE GPU SPECTRUM (core/pipeline_gpufft.cpp; dsp/gpu_fft.hpp). Mode 0 Cpu (the DEFAULT: no device is ever made), 1 Auto (the GPU only from 65 536 points: at the legacy
+    // size of this path the CPU estimator keeps running), 2 Gpu. Any thread. Every failure falls back to the CPU path silently; the report says what is running and why not.
+    void setGpuFftMode(int mode);
+    struct GpuFftReport {
+        int mode = 0;                 // what was asked for
+        bool engaged = false;         // the GPU engine is publishing this path's frames
+        int backend = 0;              // 0 the engine computes on the CPU, 1 on the GPU
+        std::uint64_t submitted = 0, completedGpu = 0, completedCpu = 0, droppedFrames = 0, deviceLost = 0;
+        std::string error;            // the latest GPU problem, text only (no adapter name)
+    };
+    GpuFftReport gpuFftReport() const;
+    // wire-b end
     void setAudioRecorder(Recorder* r);
 
 private:
@@ -1122,6 +1134,12 @@ private:
     // a different capacity, and only while neither worker thread runs.
     std::unique_ptr<cascade::dsp::SpscRing<std::complex<float>>> ring_;
     cascade::dsp::SpectrumEstimator estimator_;   // touched only by the DSP thread while running
+    // wire-b begin: the GPU spectrum's state (pipeline_gpufft.cpp)
+    struct GpuFftState;
+    static std::shared_ptr<GpuFftState> makeGpuFftState();
+    std::shared_ptr<GpuFftState> gpuFft_ = makeGpuFftState();
+    int gpuFrame(const std::complex<float>* acc, std::size_t n, float* db);   // DSP thread: 0 not engaged, 1 a frame is in db, 2 none ready
+    // wire-b end
 
     // Single latest-frame slot. seq lives inside latest_ and NEVER resets —
     // not even across stop()/start() — so a consumer that kept its last seen

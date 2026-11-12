@@ -208,6 +208,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(recordNameVersion_); // the recording file-name template (FOXAPP_OP_SET_RECORD_NAME)
     f.value(stereoSystemVersion_);  // the stereo system of every radio (FOXAPP_OP_SET_STEREO_SYSTEM)
     f.value(wireBVersion_);         // wire-b: the results and settings of the measurement / source operations (engine_wire_b.cpp)
+    f.value(wireBStamp());          // wire-b: what the GPU spectrum of each radio is doing (not its counters)
     f.value(poolVersion_);   // which radios a pool claim holds (engine_pool.cpp)
     f.value(ppmAutoVersion_);   // the pilot ppm measurements (engine_mpx.cpp)
     f.value(mpxVersion_);   // which radios record their multiplex (engine_mpx.cpp)

@@ -249,6 +249,7 @@ constexpr OpEntry kOps[] = {
     {FOXAPP_OP_BITS_SPEC_CHECK, "APP_BITS_SPEC_CHECK", true},
     {FOXAPP_OP_BITS_SPEC_RUN, "APP_BITS_SPEC_RUN", true},
     {FOXAPP_OP_BITS_TABLE_CHECK, "APP_BITS_TABLE_CHECK", true},
+    {FOXAPP_OP_GPU_FFT_MODE, "APP_GPU_FFT_MODE", true},
     // wire-b end
 };
 

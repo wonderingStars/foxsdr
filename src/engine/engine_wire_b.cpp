@@ -253,6 +253,21 @@ FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text
         case FOXAPP_OP_PSEUDO_DOPPLER:
             res = sigmeasOp(c, text, res, changed);
             break;
+        case FOXAPP_OP_GPU_FFT_MODE: {
+            if (c.ival[0] < 0 || c.ival[0] > 2) { return refusal(res, FOXAPI_OUT_OF_RANGE, "the GPU spectrum mode is 0 CPU, 1 Auto or 2 GPU"); }
+            bool all = true;
+            for (std::size_t i = 0; i < receivers_.size(); ++i) {
+                if (receivers_[i] && receivers_[i]->pipeline_.gpuFftReport().mode != static_cast<int>(c.ival[0])) { all = false; }
+            }
+            if (all) { return refusal(res, FOXAPI_NO_CHANGE, "every open radio is on that mode already"); }
+            for (std::size_t i = 0; i < receivers_.size(); ++i) {
+                if (receivers_[i]) { receivers_[i]->pipeline_.setGpuFftMode(static_cast<int>(c.ival[0])); }
+            }
+            w.facts["gpu_fft.mode"] = std::to_string(c.ival[0]);
+            res.applied[0] = static_cast<double>(c.ival[0]);
+            changed = true;
+            break;
+        }
         case FOXAPP_OP_BITS_KEEP:
         case FOXAPP_OP_BITS_LIST:
         case FOXAPP_OP_BITS_REDECODE:
@@ -273,7 +288,28 @@ FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text
     return res;
 }
 
+// What of the GPU spectrum's state a reader of the fact block would notice (not the counters, which move every pass): folded into the block's fingerprint.
+std::uint64_t Engine::wireBStamp() const {
+    std::uint64_t h = 1469598103934665603ull;
+    for (std::size_t i = 0; i < receivers_.size(); ++i) {
+        if (!receivers_[i]) { continue; }
+        const cascade::core::Pipeline::GpuFftReport r = receivers_[i]->pipeline_.gpuFftReport();
+        h = (h ^ static_cast<std::uint64_t>(r.mode + 1 + 4 * (r.engaged ? 1 : 0) + 8 * r.backend + 16 * static_cast<int>(r.error.size()) + 1000 * static_cast<int>(i))) * 1099511628211ull;
+        h = (h ^ (r.engaged ? r.submitted / 256u : 0u)) * 1099511628211ull;   // (the counters themselves move every pass: a coarse step keeps the facts from going stale for long)
+    }
+    return h;
+}
+
 void Engine::wireBFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {
+    // The GPU spectrum of every open radio (the pipeline keeps the numbers; nothing is stored here).
+    for (std::size_t i = 0; i < receivers_.size(); ++i) {
+        if (!receivers_[i]) { continue; }
+        const cascade::core::Pipeline::GpuFftReport r = receivers_[i]->pipeline_.gpuFftReport();
+        wireb::Json j = wireb::Json::object();
+        j["mode"] = r.mode; j["engaged"] = r.engaged; j["backend"] = r.backend == 1 ? "gpu" : "cpu"; j["submitted"] = r.submitted; j["completed_gpu"] = r.completedGpu;
+        j["completed_cpu"] = r.completedCpu; j["dropped_frames"] = r.droppedFrames; j["device_lost"] = r.deviceLost; j["error"] = r.error;
+        fact("radio." + std::to_string(i + 1) + ".gpufft", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
+    }
     if (wireB_ == nullptr) { return; }
     std::lock_guard<std::mutex> lk(wireB_->mutex);
     for (const auto& kv : wireB_->facts) { fact(kv.first, kv.second); }

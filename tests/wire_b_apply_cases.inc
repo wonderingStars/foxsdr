@@ -30,4 +30,8 @@ void wireBOps(AppWindow& a) {
         CHECK(refused(A::apply(a, text(op, "not json")), FOXAPI_BAD_ARGUMENT));
     }
     for (const std::uint32_t op : {FOXAPP_OP_BITS_SPEC_CHECK, FOXAPP_OP_BITS_SPEC_RUN, FOXAPP_OP_BITS_TABLE_CHECK}) { covering(op); }
+    // GPU SPECTRUM: a mode that is not 0, 1 or 2 is refused; the CPU mode is the default, so asking for it is no change (the GPU is never brought up by a test of the window)
+    covering(FOXAPP_OP_GPU_FFT_MODE);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 3)), FOXAPI_OUT_OF_RANGE));
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 0)), FOXAPI_NO_CHANGE));
 }

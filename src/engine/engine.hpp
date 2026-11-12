@@ -3239,6 +3239,7 @@ private:
     FoxCommandResult sigmeasOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     FoxCommandResult bitsOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     void wireBFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    std::uint64_t wireBStamp() const;
     // wire-b end
     std::vector<cascade::core::macros::Macro> macros_;
     cascade::core::macros::Player macroPlayer_;

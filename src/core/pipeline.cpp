@@ -2390,9 +2390,12 @@ void Pipeline::dspThreadBody() {
             // The spectrum block (setSpectrum): frames come at its own rate from these same samples and are pulled by getLatestFrame.
             specBlock_->process(acc.data(), n);
         } else {
-            estimator_.process(acc.data(), db.data());
+            // wire-b begin: the GPU spectrum (pipeline_gpufft.cpp), OFF by default: 0 = not engaged, the CPU estimator runs; 1 = a GPU frame is in db; 2 = none ready this block
+            const int gpuState = gpuFrame(acc.data(), n, db.data());
+            if (gpuState == 0) { estimator_.process(acc.data(), db.data()); }
+            // wire-b end
 
-            {
+            if (gpuState != 2) {
                 std::lock_guard<std::mutex> lk(frameMutex_);
                 latest_.dbBins = db;  // vector assignment reuses capacity after the first frame
                 latest_.seq += 1;     // strictly increasing; never reset (see header)

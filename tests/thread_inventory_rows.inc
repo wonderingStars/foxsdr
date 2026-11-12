@@ -148,6 +148,8 @@ const Row kRows[] = {
     {"src/slint/kit_publish.cpp", 0, 1, 0, 0, "",
      "the Slint plugin pages' Save as BMP: one write of a picture the user asked for, run so the window does not touch the disk (docs/multi-radio-records/slint-gaps.md item 4); the window polls its answer each tick and the key is greyed while it runs, so there is no loop to beat in - NOT COVERED by this batch"},
     {"src/slint/signal_publish.cpp", 1, 0, 1, 1, "kThreadDriverInstall", ""},
+    {"src/core/pipeline_gpufft.cpp", 0, 1, 0, 0, "",
+     "wire-b: the GPU spectrum's one-shot build of its Direct3D engine (GpuSpectrumEngine), run so the DSP thread never waits for a device to be made; the DSP thread polls the future each block and waits for it only to switch the mode off (a build is short) - NOT COVERED by this batch: it holds no loop, it ends by itself"},
     {"src/slint/host_duties.cpp", 0, 2, 0, 0, "",
      "the Slint window's update download (core::downloadUpdate over WinHTTP, its own timeouts, a cancel flag the future's destructor sets) and the one-shot launch of the downloaded installer; the same gap as app_window.cpp's - NOT COVERED by this batch (a known gap)"},
 };
