@@ -191,4 +191,23 @@ None. No web page or document was opened for this lane; the Direct3D 11 API usag
 
 ## Gates run
 
-(filled in below at the end of the lane)
+Build: whole tree, `cmake --build D:/foxsdr-build/en-gpufft --config Release --parallel 3` (562 test sources, no compile or link error; the engine fence and `cascade_engine_link_check` configured and built with the new files).
+
+Own tests: `test_gpu_fft` 170 checks, 0 failed; `test_gpu_fft_bench` 54 checks, 0 failed (full run).
+
+Headless set (705 tests, `ctest -L headless -I a,b -j4..8 --timeout 90..120`, six slices each under 10 minutes, logs `D:/foxsdr-build/gpufft-gate-1.log` to `-6.log`):
+
+| Slice | Tests | Failed first time |
+| --- | --- | --- |
+| 1 | 100 | 7: test_airband_data, test_band_plan, test_bounded_hooks, test_converter_call_sites, test_engine_api_decode_radio (timeout), test_engine_api_merge, test_engine_api_plugin_smoke_radio (timeout) |
+| 2 | 100 | 7: test_engine_api_schedule, test_engine_api_source_kinds, test_engine_api_transmit, test_engine_main_sentinel, test_engine_shell_guard (timeout), test_excuse_cap, test_failure_files |
+| 3 | 120 | 7: test_pa_stream_list_guard, test_page_resize_id, test_pass_control, test_patch_dest_async, test_plugin_hostile, test_plugin_repo, test_png_decode |
+| 4 | 140 | 10: test_radio_setup, test_record_start, test_rtl_tcp_source, test_sdrplay_probe (timeout), test_sentinel, test_soapy_enum_proc (timeout), test_soundcard_source, test_thread_beats (timeout), test_tx_audio, test_usb_bounded_walk (segfault) |
+| 5 | 130 | 9: test_window_failed_app, test_window_threaded_look, test_converter_app_paths_stepped (segfault), test_health_app_stepped (timeout), test_patch_dest_async_stepped, test_scanner_draft_input_free (segfault), test_crash_upload_free, test_diag_hang_free, test_diagnostics_free |
+| 6 | 115 | 2: test_stop_ends_recordings_free, telemetry_worker (timeout) |
+
+663 of 705 passed first time; 42 failed. The machine was at 100% CPU with about 40 other jobs. Re-run of the 42 by name (`-j2`, 150 s timeout, cut at 575 s by my wrapper after 21 of the 42): test_stop_ends_recordings_free, test_engine_main_sentinel and test_patch_dest_async passed; test_bounded_hooks also passed when run alone earlier. Still failing on re-run: the five known false failures (test_airband_data, test_band_plan, test_converter_call_sites, test_page_resize_id, test_png_decode), test_engine_api_source_kinds (its fixture `scope.wav` is not in `src/slint/tests/drive/fixtures` of this worktree), test_radio_setup (a real probe: "sdrplay api dll not found, service not installed; uhd found"; 3 checks on the probe state), and timing / timeout tests under load (test_engine_api_merge ran 3 s against a 900 ms rule, test_engine_api_decode_radio, test_engine_api_plugin_smoke_radio, test_engine_shell_guard, test_excuse_cap, test_failure_files, test_engine_api_schedule (an empty 44-byte recording), test_pa_stream_list_guard, test_plugin_repo, test_record_start, telemetry_worker). The other 21 of the 42 were not re-run (time); not classified.
+
+None of these is caused by this lane: the change is new files only, nothing in the engine calls the new code, and a scan of every test executable in the build folder for the class name (`GpuSpectrumEngine`) finds it in exactly two, `test_gpu_fft.exe` and `test_gpu_fft_bench.exe`. The static library does not pull an object nobody references, so the binaries of all the failing tests contain none of this lane's code. A baseline run on the parent commit was NOT done, so "pre-existing" is shown by that argument, not by a second run.
+
+config.json sha256 at the end: `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (unchanged; only hashed, never opened for writing).
