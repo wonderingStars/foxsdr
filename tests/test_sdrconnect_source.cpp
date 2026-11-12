@@ -74,6 +74,7 @@ Bytes textFrame(const std::string& s) { return frame(1, Bytes(s.begin(), s.end()
 
 class FakeSdrConnect {
 public:
+    std::uint16_t port() const { return srv_.port(); }
     ~FakeSdrConnect() { stop(); }
     bool start() {
         props_ = {{"api_version", "1.0.3"},          {"device_sample_rate", "2000000"},
@@ -472,6 +473,50 @@ void testHappyPath() {
     CHECK(fake.closes() == 1);
 }
 
+// The two numbers the document does not give are settings: the port (inside sdrconnect=host:port) and the I/Q stream's rate (iqrate=).
+void testPortAndRateSettings() {
+    // The stand-in listens on a port the OS picked; the client reaches it only because the setting names it, and the default port is not assumed.
+    {
+        FakeSdrConnect fake;
+        CHECK(fake.start());
+        CHECK(fake.port() != cascade::source::kSdrConnectDefaultPort);
+        SdrConnectSource src;
+        CHECK(cascade::source::kSdrConnectDefaultPort == 5454);  // (a default the document does not give: the setting overrides it)
+        CHECK(src.open("sdrconnect=127.0.0.1:" + std::to_string(fake.port())));
+        CHECK_NEAR(src.sampleRateHz(), 2000000.0, 0.001);  // no iqrate: the device's own rate
+        src.closeDevice();
+    }
+    // iqrate: the stream is treated as that rate, whatever the device reports; the device's own rate is not touched.
+    {
+        FakeSdrConnect fake;
+        CHECK(fake.start());
+        SdrConnectSource src;
+        CHECK(src.open(fake.args("iqrate=250000")));
+        CHECK_NEAR(src.sampleRateHz(), 250000.0, 0.001);
+        CHECK(fake.prop("device_sample_rate") == "2000000");
+        CHECK(src.supportedSampleRatesHz() == std::vector<double>{250000.0});
+        CHECK(src.setSampleRateHz(250000.0));
+        CHECK(!src.setSampleRateHz(500000.0));
+        CHECK(std::string(src.lastError()).find("iqrate") != std::string::npos);
+        CHECK(fake.prop("device_sample_rate") == "2000000");
+        CHECK(src.setCenterFrequencyHz(7100000.0));
+        src.closeDevice();
+        // A later open without it goes back to the device's rate.
+        CHECK(src.open(fake.args()));
+        CHECK_NEAR(src.sampleRateHz(), 2000000.0, 0.001);
+        src.closeDevice();
+    }
+    // Refused values.
+    for (const char* bad : {"iqrate=abc", "iqrate=0", "iqrate=-5", "iqrate=999", "iqrate=2e9", "iqrate=nan", "iqrate=1000x"}) {
+        FakeSdrConnect fake;
+        CHECK(fake.start());
+        SdrConnectSource src;
+        CHECK(!src.open(fake.args(bad)));
+        CHECK(!src.isOpen());
+        CHECK(std::string(src.lastError()).find("I/Q rate") != std::string::npos);
+    }
+}
+
 void testOpenRefusals() {
     {  // connection refused
         SdrConnectSource s;
@@ -673,6 +718,7 @@ int main() {
     STEP(testWebSocketLayer());
     STEP(testMessages());
     STEP(testHappyPath());
+    STEP(testPortAndRateSettings());
     STEP(testOpenRefusals());
     STEP(testStreamFaults());
     STEP(testStartStopAndShutdown());

@@ -164,6 +164,17 @@ bool SdrConnectSource::openImpl(const std::string& args, std::shared_ptr<iiod::T
         if (v < 100 || v > 60000) { setError("the timeout must be 100 to 60000 ms"); return false; }
         timeoutMs_ = static_cast<int>(v);
     }
+    iqRateHz_ = 0.0;
+    const std::string iqr = argValue(args, "iqrate");
+    if (!iqr.empty()) {
+        char* end = nullptr;
+        const double v = std::strtod(iqr.c_str(), &end);
+        if (end == iqr.c_str() || *end != '\0' || !std::isfinite(v) || v < 1000.0 || v > 1.0e9) {
+            setError("the I/Q rate must be a number of samples per second from 1000 to 1000000000");
+            return false;
+        }
+        iqRateHz_ = v;
+    }
     const std::string serial = argValue(args, "serial"), mode = argValue(args, "mode"),
                       dname = argValue(args, "name"), index = argValue(args, "index");
 
@@ -382,6 +393,7 @@ void SdrConnectSource::stop() {
 }
 
 double SdrConnectSource::sampleRateHz() const {
+    if (iqRateHz_ > 0.0) { return iqRateHz_; }
     const std::string v = prop("device_sample_rate");
     return v.empty() ? 0.0 : std::strtod(v.c_str(), nullptr);
 }
@@ -390,6 +402,11 @@ bool SdrConnectSource::setSampleRateHz(double hz) {
     std::lock_guard<std::mutex> lk(ctlMutex_);
     if (!isOpen()) { setError("setSampleRateHz() called with no SDRconnect open"); return false; }
     if (!(hz > 0.0) || !std::isfinite(hz) || hz > 1e9) { setError("setSampleRateHz() requires a positive rate"); return false; }
+    if (iqRateHz_ > 0.0) {
+        if (hz == iqRateHz_) { return true; }
+        setError("the I/Q rate is fixed by the iqrate setting");
+        return false;
+    }
     char buf[40];
     std::snprintf(buf, sizeof(buf), "%.0f", hz);
     return setProperty("device_sample_rate", buf);
