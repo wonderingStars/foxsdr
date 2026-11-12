@@ -79,6 +79,7 @@ struct Rig {
         }
         return o;
     }
+    const FoxEngineApi* api() const { return wire_a_rig::api(); }
     std::string fact(const std::string& key) {
         char buf[8192];
         const int32_t n = api()->get_setting(local->raw(), ("fact." + key).c_str(), buf, sizeof(buf));

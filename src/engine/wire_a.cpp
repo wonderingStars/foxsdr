@@ -35,6 +35,9 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
             return historyStep(c, res);
         case FOXAPP_OP_CHANNEL:
             return channelOp(c, text, res);
+        case FOXAPP_OP_MARKER_EXPORT:
+        case FOXAPP_OP_MARKER_IMPORT:
+            return markerIoOp(c, text, res);
         default:
             return refused(res, FOXAPI_UNSUPPORTED, "this operation is not in this build");
     }
@@ -49,6 +52,7 @@ void WireA::facts(const std::function<void(const std::string&, const std::string
     historyFacts(fact);
     channelFacts(fact);
     tunedFacts(fact);
+    filesFacts(fact);
 }
 
 void WireA::tunedFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {
@@ -80,6 +84,35 @@ void WireA::tuneTo(double hz, const std::string& mode, double bandwidthHz) {
         e_.applyChannelBandwidth();
         e_.rx().bandwidthIndex_ = cascade::gui::bandwidthStepIndex(e_.rx().vfoBandwidthHz_);
     }
+}
+
+bool WireA::fullPath(const std::string& p, std::string& why) {
+    if (p.empty() || p.size() > 1024) { why = "give the full path of a file"; return false; }
+    for (const unsigned char ch : p) {
+        if (ch < 0x20) { why = "the path has a control character"; return false; }
+    }
+    const std::filesystem::path fp(p);
+    if (!fp.is_absolute() || !fp.has_filename()) { why = "give the full path of a file"; return false; }
+    return true;
+}
+
+bool WireA::readUserFile(const std::string& path, std::size_t maxBytes, std::string& text, std::string& why) {
+    std::error_code ec;
+    const std::filesystem::path fp(path);
+    if (!std::filesystem::is_regular_file(fp, ec)) { why = "that is not a file that can be read"; return false; }
+    const std::uintmax_t size = std::filesystem::file_size(fp, ec);
+    if (ec) { why = "the file could not be read"; return false; }
+    if (size > maxBytes) { why = "the file is too big"; return false; }
+    if (cascade::core::readTextFile(fp, text) != cascade::core::ReadResult::Ok) { why = "the file could not be read"; return false; }
+    return true;
+}
+
+bool WireA::writeNewFile(const std::string& path, const std::string& text, std::string& why) {
+    std::error_code ec;
+    if (std::filesystem::exists(std::filesystem::path(path), ec)) { why = "a file with that name exists already"; return false; }
+    std::string err;
+    if (!cascade::core::FreqMarkers::writeFile(path, text, err)) { why = err.empty() ? "the file could not be written" : err; return false; }
+    return true;
 }
 
 // ---- persistence ----------------------------------------------------------------------------------------------------------------------------

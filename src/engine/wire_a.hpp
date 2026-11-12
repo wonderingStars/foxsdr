@@ -74,7 +74,19 @@ private:
     // fact.tuned.<n>.hz / .mode / .bandwidthHz: where each radio is (the engine's state in words a screen and a test can read without the state block).
     void tunedFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
 
+    // ---- files of the user's choosing: markers, packs, notes ... (wire_a_files.cpp) ----
+    Result markerIoOp(const FoxCommand& c, const std::string& text, Result res);
+    void filesFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    std::string markerIoLast_;   // fact.markerio.last: what the last export / import did, in words (no path)
+    std::string markerIoError_;
+
     // ---- shared helpers (wire_a.cpp) ----
+    // A full path the user typed (absolute, no control characters, under 1024 bytes). False with `why` when it is not.
+    static bool fullPath(const std::string& p, std::string& why);
+    // Reads a user's file up to maxBytes (a bigger one, a directory, a device, a missing one: false with `why`; never throws).
+    static bool readUserFile(const std::string& path, std::size_t maxBytes, std::string& text, std::string& why);
+    // Writes a new file (temp + rename, directory made); a file that exists is refused.
+    static bool writeNewFile(const std::string& path, const std::string& text, std::string& why);
     // Tunes the selected radio (the caller is inside its RadioWork): the mode by name (""/unknown = keep), then the absolute frequency, then the bandwidth (0 = keep).
     void tuneTo(double hz, const std::string& mode, double bandwidthHz);
 
