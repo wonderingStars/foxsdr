@@ -5624,6 +5624,9 @@ void Engine::pumpDecoderOutput() {
         // A PRIVATE PLUGIN'S LINE stays in this log for the host's own windows and is marked here, the one place that sees them all, so
         // the web mirror, a remote API session and the copied diagnostics can leave it out.
         l.privateData = pluginIsPrivate(l.plugin);
+        // THE EVENT FEED (CascadeEvent, plugin_abi.h; docs/PLUGIN-API.md "Decode events"): every drained line is also an event of kind "text", so a plugin that
+        // reads events sees what the host's panel shows - except a private plugin's, which only that plugin reads.
+        if (pluginApi_) { pluginApi_->hostPostEvent(l.plugin, l.privateData, CASCADE_EVENT_KIND_TEXT, l.text, currentAbsoluteHz()); }
         // COUNTED HERE BECAUSE THIS IS THE ONLY PLACE THAT SEES THEM ALL.
         // decoderLog_ is a bounded tail and drops its oldest entries, so its
         // size is not a count of anything; the status column's rate card

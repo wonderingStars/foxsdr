@@ -2316,6 +2316,10 @@ void ApiHostImpl::applyTestHook(const Pending& p, FoxCommandResult& r, const std
         const std::size_t bar = val.find('|');
         engine_.decoderLog_.push_back({val.substr(0, bar), bar == std::string::npos ? std::string() : val.substr(bar + 1)});
         engine_.decoderLog_.back().privateData = engine_.pluginIsPrivate(engine_.decoderLog_.back().plugin);   // as pumpDecoderOutput stamps it
+        if (engine_.pluginApi_) {   // ...and feeds the event ring
+            const cascade::core::DecodedLine& line = engine_.decoderLog_.back();
+            engine_.pluginApi_->hostPostEvent(line.plugin, line.privateData, CASCADE_EVENT_KIND_TEXT, line.text, engine_.currentAbsoluteHz());
+        }
         while (engine_.decoderLog_.size() > Engine::kDecoderLogMax) { engine_.decoderLog_.pop_front(); }
         ++engine_.decoderLinesTotal_;
     } else if (key == "test.muteBy") {

@@ -118,7 +118,8 @@ void testTable() {
     // The new members are the LAST two, appended after settings_seq: no existing member moved.
     static_assert(offsetof(CascadeHostApi, set_schedule_hint) >= offsetof(CascadeHostApi, settings_seq) + sizeof(uint64_t (*)(void*)), "appended after settings_seq");
     static_assert(offsetof(CascadeHostApi, clear_schedule_hints) == offsetof(CascadeHostApi, set_schedule_hint) + sizeof(void*), "the two are adjacent");
-    static_assert(sizeof(CascadeHostApi) == offsetof(CascadeHostApi, clear_schedule_hints) + sizeof(void*), "and last");
+    // (the decode events were appended after them - tests/test_plugin_events.cpp holds that - so the pair is followed by exactly the three event members)
+    static_assert(sizeof(CascadeHostApi) == offsetof(CascadeHostApi, clear_schedule_hints) + sizeof(void*) + 3u * sizeof(void*), "and followed by the three event members only");
     Counts n;
     PluginUi ui;
     ui.setServices(services(&n));

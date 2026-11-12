@@ -5,6 +5,7 @@
 #include "core/plugin_api.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -1065,6 +1066,129 @@ std::int32_t PluginApiCore::clearScheduleHints(const PluginApiClient& c) {
         ++hintsSeq_;
     }
     return CASCADE_API_OK;
+}
+
+// ---- DECODE EVENTS (plugin_abi.h CascadeEvent; engine wiring W2) ------------------------------------------------------------------------------
+
+namespace {
+
+std::int64_t eventNowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+bool validEventKind(const char* kind, std::size_t cap) {
+    std::size_t n = 0;
+    while (n < cap && kind[n] != '\0') { ++n; }
+    if (n == 0 || n >= cap) { return false; }   // empty, or not terminated inside the field
+    for (std::size_t i = 0; i < n; ++i) {
+        const char ch = kind[i];
+        const bool ok = (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-';
+        if (!ok) { return false; }
+    }
+    return true;
+}
+
+}  // namespace
+
+std::int32_t PluginApiCore::postEvent(const PluginApiClient& c, const CascadeEvent* e) {
+    const std::int32_t g = gate(c);
+    if (g != CASCADE_API_OK) { return g; }
+    if (e == nullptr || e->structSize < offsetof(CascadeEvent, text) + CASCADE_EVENT_TEXT_CHARS) { return CASCADE_API_BAD_ARGUMENT; }
+    // Copied FIRST: everything after this line reads the host's own copy (the plugin may reuse its buffer at once).
+    CascadeEvent x{};
+    std::memcpy(&x, e, std::min<std::size_t>(e->structSize, sizeof(CascadeEvent)));
+    if (!validEventKind(x.kind, sizeof(x.kind))) { return CASCADE_API_BAD_ARGUMENT; }
+    if (!std::isfinite(x.frequencyHz)) { return CASCADE_API_BAD_ARGUMENT; }
+    if (x.frequencyHz < 0.0 || x.frequencyHz > 6.0e9) { return CASCADE_API_OUT_OF_RANGE; }
+    // The text is a fixed array in the PLUGIN's struct, which it may have filled to the last byte: re-terminate, make control characters spaces, cut back to a
+    // whole character.
+    char raw[CASCADE_EVENT_TEXT_CHARS];
+    std::memcpy(raw, x.text, sizeof(raw));
+    raw[CASCADE_EVENT_TEXT_CHARS - 1] = '\0';
+    for (char& ch : raw) {
+        if (ch != '\0' && (static_cast<unsigned char>(ch) < 0x20u || static_cast<unsigned char>(ch) == 0x7Fu)) { ch = ' '; }
+    }
+    std::memset(x.text, 0, sizeof(x.text));
+    copyBoundedUtf8(x.text, sizeof(x.text), raw);
+    std::string name;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        if (!c.live.load(std::memory_order_acquire)) { return CASCADE_API_DETACHED; }
+        name = c.name;
+    }
+    const bool priv = (c.capabilities & CASCADE_FLAG_PRIVATE_DATA) != 0u;
+    x.structSize = static_cast<std::uint32_t>(sizeof(CascadeEvent));
+    x.flags = priv ? CASCADE_EVENT_FLAG_PRIVATE : 0u;
+    x.unixMs = eventNowMs();
+    std::memset(x.plugin, 0, sizeof(x.plugin));
+    copyBoundedUtf8(x.plugin, sizeof(x.plugin), name.c_str());
+    std::lock_guard<std::mutex> lk(eventsMutex_);
+    x.seq = eventsNext_++;
+    events_.push_back(x);
+    while (events_.size() > CASCADE_EVENT_RING) { events_.pop_front(); }
+    return CASCADE_API_OK;
+}
+
+void PluginApiCore::hostPostEvent(const std::string& plugin, bool privateData, const std::string& kind, const std::string& text, double frequencyHz,
+                                  std::int64_t unixMs) {
+    CascadeEvent x{};
+    x.structSize = static_cast<std::uint32_t>(sizeof(CascadeEvent));
+    x.flags = privateData ? CASCADE_EVENT_FLAG_PRIVATE : 0u;
+    x.unixMs = unixMs != 0 ? unixMs : eventNowMs();
+    x.frequencyHz = (std::isfinite(frequencyHz) && frequencyHz >= 0.0 && frequencyHz <= 6.0e9) ? frequencyHz : 0.0;
+    copyBoundedUtf8(x.plugin, sizeof(x.plugin), plugin.c_str());
+    copyBoundedUtf8(x.kind, sizeof(x.kind), kind.c_str());
+    std::string clean = text;
+    for (char& ch : clean) {
+        if (static_cast<unsigned char>(ch) < 0x20u || static_cast<unsigned char>(ch) == 0x7Fu) { ch = ' '; }
+    }
+    copyBoundedUtf8(x.text, sizeof(x.text), clean.c_str());
+    std::lock_guard<std::mutex> lk(eventsMutex_);
+    x.seq = eventsNext_++;
+    events_.push_back(x);
+    while (events_.size() > CASCADE_EVENT_RING) { events_.pop_front(); }
+}
+
+std::int32_t PluginApiCore::readEvents(const PluginApiClient& c, std::uint64_t afterSeq, CascadeEvent* out, std::uint32_t cap) const {
+    const std::int32_t g = gate(c);
+    if (g != CASCADE_API_OK) { return g; }
+    if (cap == 0u) { return 0; }
+    if (out == nullptr) { return CASCADE_API_BAD_ARGUMENT; }
+    std::string self;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        self = c.name;
+    }
+    std::uint32_t n = 0;
+    std::lock_guard<std::mutex> lk(eventsMutex_);
+    for (const CascadeEvent& e : events_) {
+        if (e.seq <= afterSeq) { continue; }
+        // A private plugin's events are its own and the host's windows': never another plugin's.
+        if ((e.flags & CASCADE_EVENT_FLAG_PRIVATE) != 0u && self != e.plugin) { continue; }
+        const std::uint32_t keep = out[n].structSize;
+        const std::size_t want = std::min<std::size_t>(keep, sizeof(CascadeEvent));
+        if (want < offsetof(CascadeEvent, text) + CASCADE_EVENT_TEXT_CHARS) { return n > 0 ? static_cast<std::int32_t>(n) : CASCADE_API_BAD_ARGUMENT; }
+        std::memcpy(&out[n], &e, want);
+        out[n].structSize = keep;
+        if (++n >= cap) { break; }
+    }
+    return static_cast<std::int32_t>(n);
+}
+
+std::vector<CascadeEvent> PluginApiCore::hostEvents(std::uint64_t afterSeq, std::size_t max) const {
+    std::vector<CascadeEvent> out;
+    std::lock_guard<std::mutex> lk(eventsMutex_);
+    for (const CascadeEvent& e : events_) {
+        if (e.seq <= afterSeq) { continue; }
+        out.push_back(e);
+        if (out.size() >= max) { break; }
+    }
+    return out;
+}
+
+std::uint64_t PluginApiCore::eventsSeq() const {
+    std::lock_guard<std::mutex> lk(eventsMutex_);
+    return eventsNext_ - 1u;
 }
 
 std::uint64_t PluginApiCore::scheduleHintsSeq() const {

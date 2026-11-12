@@ -11,9 +11,12 @@
 //   P4  the web status ("tracks"): the private plugin's targets are not in it, the others are
 //   P5  the pictures: the served set lists a private plugin's slot with no bitmap (width 0, not complete) and the others' as they are
 //   P6  the diagnostics a person copies: the "plugin text:" lines leave a private plugin's text out
+//   P7  the event ring (CascadeEvent, plugin_abi.h): every drained decoder line is an event of kind "text", a private plugin's is stamped private (the host reads
+//       it, a plugin that is not that plugin does not), the frequency is the radio's
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -238,6 +241,26 @@ void testSinks() {
             }
         }
         CHECK(sawSecret && sawOpen);
+    }
+
+    // P7 - the event ring: the two injected lines are in it, the private one flagged
+    {
+        const std::vector<CascadeEvent> evs = d.eng.pluginApiShared()->hostEvents(0);
+        const CascadeEvent* secret = nullptr;
+        const CascadeEvent* open = nullptr;
+        for (const CascadeEvent& e : evs) {
+            if (std::string(e.text) == "id-4711") { secret = &e; }
+            if (std::string(e.text) == "hello") { open = &e; }
+        }
+        CHECK(secret != nullptr && open != nullptr);
+        if (secret != nullptr && open != nullptr) {
+            CHECK_EQ(std::string(secret->kind), std::string(CASCADE_EVENT_KIND_TEXT));
+            CHECK_EQ(std::string(secret->plugin), std::string("SECRETPLUG"));
+            CHECK((secret->flags & CASCADE_EVENT_FLAG_PRIVATE) != 0u);
+            CHECK((open->flags & CASCADE_EVENT_FLAG_PRIVATE) == 0u);
+            CHECK(open->seq > 0u && secret->seq > 0u && open->seq != secret->seq);
+            CHECK(std::fabs(open->frequencyHz - local.state().tunedHz) < 1.0);   // the tuned frequency the radio reports
+        }
     }
 
     // P6 - the diagnostics: the five newest decoded lines are printed, a private plugin's is not among them
