@@ -75,6 +75,8 @@
     "cwPitchHz": 700.0,
     "audioHighPassHz": 0,
     "audioLowPassHz": 0,
+    "recordIqFormat": 0,
+    "recordAudioFormat": 0,
     "vfoActive": 0,
     "vfoOtherHz": 0.0,
     "vfoOtherMode": 0,

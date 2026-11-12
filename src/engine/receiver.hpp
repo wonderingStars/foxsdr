@@ -386,6 +386,8 @@ struct Receiver {
     };
     int vfoActive_ = 0;
     VfoReg vfoOther_;
+    int recordIqFormat_ = 0;       // the sample format of the next takes (engine serial lane A, P7)
+    int recordAudioFormat_ = 0;
     int nrMethod_ = 0;
     std::array<double, 8> eqDb_{};   // the equaliser's bands (engine wiring lane 1): all flat
     int audioHpHz_ = 0;              // the audio high-pass: 0 off / 100 / 300

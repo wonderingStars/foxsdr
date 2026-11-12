@@ -102,6 +102,8 @@ struct ConfigFieldInfo {
     X(eqDb,                    Engine,    false) \
     X(audioHighPassHz,         Engine,    false) \
     X(audioLowPassHz,          Engine,    false) \
+    X(recordAudioFormat,         Engine,    false) \
+    X(recordIqFormat,            Engine,    false) \
     X(vfoOtherBwHz,              Engine,    false) \
     X(vfoOtherMode,              Engine,    false) \
     X(vfoOtherHz,                Engine,    false) \

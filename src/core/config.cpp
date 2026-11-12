@@ -344,6 +344,8 @@ std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
         r.cwPitchHz = !(r.cwPitchHz >= 300.0) ? 700.0 : (r.cwPitchHz > 1200.0 ? 1200.0 : r.cwPitchHz);
         r.audioHighPassHz = sanitiseHp(r.audioHighPassHz);
         r.audioLowPassHz = sanitiseLp(r.audioLowPassHz);
+        r.recordIqFormat = r.recordIqFormat < 0 || r.recordIqFormat > 1 ? 0 : r.recordIqFormat;
+        r.recordAudioFormat = r.recordAudioFormat < 0 || r.recordAudioFormat > 2 ? 0 : r.recordAudioFormat;
         r.vfoActive = r.vfoActive == 1 ? 1 : 0;
         r.vfoOtherMode = r.vfoOtherMode < 1 || r.vfoOtherMode > 8 ? 0 : r.vfoOtherMode;
         r.vfoOtherHz = !(r.vfoOtherHz > 0.0) || r.vfoOtherHz > 1e12 || r.vfoOtherMode == 0 ? 0.0 : r.vfoOtherHz;
@@ -676,6 +678,8 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     out.eqDb = readEq(j);
     getInt(j, "audioHighPassHz", out.audioHighPassHz);
     getInt(j, "audioLowPassHz", out.audioLowPassHz);
+    getInt(j, "recordAudioFormat", out.recordAudioFormat);
+    getInt(j, "recordIqFormat", out.recordIqFormat);
     getDouble(j, "vfoOtherBwHz", out.vfoOtherBwHz);
     getInt(j, "vfoOtherMode", out.vfoOtherMode);
     getDouble(j, "vfoOtherHz", out.vfoOtherHz);
@@ -1115,6 +1119,8 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
                 r.eqDb = readEq(e);
                 getInt(e, "audioHighPassHz", r.audioHighPassHz);
                 getInt(e, "audioLowPassHz", r.audioLowPassHz);
+                getInt(e, "recordAudioFormat", r.recordAudioFormat);
+                getInt(e, "recordIqFormat", r.recordIqFormat);
                 getDouble(e, "vfoOtherBwHz", r.vfoOtherBwHz);
                 getInt(e, "vfoOtherMode", r.vfoOtherMode);
                 getDouble(e, "vfoOtherHz", r.vfoOtherHz);
@@ -1365,6 +1371,8 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     out.cwPitchHz = !(out.cwPitchHz >= 300.0) ? 700.0 : (out.cwPitchHz > 1200.0 ? 1200.0 : out.cwPitchHz);
     out.audioHighPassHz = sanitiseHp(out.audioHighPassHz);
     out.audioLowPassHz = sanitiseLp(out.audioLowPassHz);
+    out.recordIqFormat = out.recordIqFormat < 0 || out.recordIqFormat > 1 ? 0 : out.recordIqFormat;
+    out.recordAudioFormat = out.recordAudioFormat < 0 || out.recordAudioFormat > 2 ? 0 : out.recordAudioFormat;
     out.vfoActive = out.vfoActive == 1 ? 1 : 0;
     out.vfoOtherMode = out.vfoOtherMode < 1 || out.vfoOtherMode > 8 ? 0 : out.vfoOtherMode;
     out.vfoOtherHz = !(out.vfoOtherHz > 0.0) || out.vfoOtherHz > 1e12 || out.vfoOtherMode == 0 ? 0.0 : out.vfoOtherHz;
@@ -1737,6 +1745,8 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     if (cfg.eqDb.size() == 8) { j["eqDb"] = cfg.eqDb; }
     j["audioHighPassHz"] = cfg.audioHighPassHz;
     j["audioLowPassHz"] = cfg.audioLowPassHz;
+    j["recordAudioFormat"] = cfg.recordAudioFormat;
+    j["recordIqFormat"] = cfg.recordIqFormat;
     j["vfoOtherBwHz"] = cfg.vfoOtherBwHz;
     j["vfoOtherMode"] = cfg.vfoOtherMode;
     j["vfoOtherHz"] = cfg.vfoOtherHz;
@@ -1957,6 +1967,8 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
             if (r.eqDb.size() == 8) { e["eqDb"] = r.eqDb; }
             e["audioHighPassHz"] = r.audioHighPassHz;
             e["audioLowPassHz"] = r.audioLowPassHz;
+            e["recordAudioFormat"] = r.recordAudioFormat;
+            e["recordIqFormat"] = r.recordIqFormat;
             e["vfoOtherBwHz"] = r.vfoOtherBwHz;
             e["vfoOtherMode"] = r.vfoOtherMode;
             e["vfoOtherHz"] = r.vfoOtherHz;

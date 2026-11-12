@@ -114,6 +114,20 @@ namespace cascade::core {
 
 enum class RecordKind { BasebandIq, Audio };
 
+// THE SAMPLE FORMAT OF A TAKE (engine serial lane A, row P7). 0 is what every take has always been (baseband I/Q: 32-bit float; audio: 16-bit integer); the others trade size or reach for it:
+// baseband I/Q 1 = 16-bit integer (half the size; round(v * 32768), saturated: a sample beyond +-1 clips, which a float take would have kept; IqFileSource replays it),
+// audio 1 = 24-bit integer (round(v * 8388608), saturated), audio 2 = 32-bit float (bit-exact). A take keeps the format it started with; setSampleFormat() is for the NEXT take.
+inline constexpr int kRecordSampleDefault = 0;
+inline constexpr int kRecordIqInt16 = 1;
+inline constexpr int kRecordAudioInt24 = 1;
+inline constexpr int kRecordAudioFloat32 = 2;
+inline bool validRecordSampleFormat(RecordKind kind, int fmt) { return fmt >= 0 && fmt <= (kind == RecordKind::BasebandIq ? 1 : 2); }
+// Bytes in one frame (one I/Q pair, or one audio sample) of a take of this kind and format.
+inline std::size_t recordFrameBytes(RecordKind kind, int fmt) {
+    if (kind == RecordKind::BasebandIq) { return fmt == kRecordIqInt16 ? 4u : 8u; }
+    return fmt == kRecordAudioInt24 ? 3u : (fmt == kRecordAudioFloat32 ? 4u : 2u);
+}
+
 class Recorder {
 public:
     Recorder();
@@ -140,6 +154,14 @@ public:
     bool start(RecordKind kind, const std::string& directory, double sampleRateHz,
                std::string& error, const std::string& namePrefix);
 
+    // The sample format of the NEXT take (kRecord* above; 0 = the default for its kind). False, nothing changed, for a value its kind does not have. A take under way is not touched.
+    bool setSampleFormat(RecordKind kind, int fmt) {
+        if (!validRecordSampleFormat(kind, fmt)) { return false; }
+        (kind == RecordKind::BasebandIq ? iqFormat_ : audioFormat_).store(fmt, std::memory_order_relaxed);
+        return true;
+    }
+    int sampleFormat(RecordKind kind) const { return (kind == RecordKind::BasebandIq ? iqFormat_ : audioFormat_).load(std::memory_order_relaxed); }
+
     // The file the current or most recent take went to; "" before any start.
     std::string path() const;
 
@@ -158,6 +180,7 @@ public:
         // used comes back in OpenedFile::path.
         std::string path;
         std::array<unsigned char, 44> header{};  // zero-length data chunk
+        int sampleFormat = 0;                    // the take's kRecord* format (P7)
     };
 
     // A closed-over FILE*: fclose by default, replaceable only so a test can
@@ -180,6 +203,7 @@ public:
         FilePtr file{nullptr, &Recorder::closeFile};
         std::string path;  // the name ACTUALLY USED (see OpenRequest::path): what begin() keeps
         RecordKind kind = RecordKind::BasebandIq;
+        int sampleFormat = 0;
 
         OpenedFile() = default;
         OpenedFile(OpenedFile&&) = default;
@@ -193,6 +217,7 @@ public:
                 file = std::move(other.file);
                 path = std::move(other.path);
                 kind = other.kind;
+                sampleFormat = other.sampleFormat;
             }
             return *this;
         }
@@ -371,6 +396,10 @@ private:
 
     std::FILE* file_ = nullptr;
     std::atomic<RecordKind> kind_{RecordKind::BasebandIq};
+    std::atomic<int> iqFormat_{0};           // P7: the format the next baseband I/Q take starts with
+    std::atomic<int> audioFormat_{0};        // and the next audio take
+    std::atomic<int> takeFormat_{0};         // the format of the take under way (set by begin())
+    std::atomic<std::size_t> frameBytes_{8}; // its frame size (set by begin())
     std::atomic<bool> recording_{false};
     std::atomic<std::uint64_t> frames_{0};
     std::atomic<std::uint64_t> dataBytes_{0};

@@ -45,6 +45,7 @@ struct AppWindowTestAccess {
         return e.configSnapshot();
     }
     static void restore(Engine& e, const cascade::core::AppConfig& c) { e.applyConfig(c); }
+    static void recordDir(Engine& e, const std::string& dir) { e.recordDir_ = dir; }   // (engine serial lane A: a scratch recordings folder)
     static std::size_t transmitSlot(const Engine& e) { return e.transmitRadioSlot(); }
     static std::string transmitArgs(const Engine& e) { return e.transmitArgs_; }
     static std::string deviceArgs(Engine& e, std::size_t slot) { return e.receivers_[slot] ? e.receivers_[slot]->deviceArgs_ : std::string("<no radio>"); }

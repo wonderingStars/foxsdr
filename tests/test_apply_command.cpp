@@ -470,6 +470,8 @@ struct AppWindowTestAccess {
     static int placePipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.stereoPlaceMode(); }); }
     static int vfoActiveRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->vfoActive_; }); }
     static bool vfoOtherSetRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->vfoOther_.set; }); }
+    static int recIqFmtRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->recordIqFormat_; }); }
+    static int recIqFmtRec(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->iqRecorder_.sampleFormat(cascade::core::RecordKind::BasebandIq); }); }
     static double cwPitchPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.cwPitchHz(); }); }
     static bool nsqRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->noiseSquelchOn_; }); }
     static double nsqThrRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->noiseSquelchThresholdDb_; }); }
@@ -1375,6 +1377,17 @@ void receiverOps(AppWindow& a) {
         CHECK(A::vfoActiveRx(a) == 0);
         CHECK(ok(A::apply(a, ints(FOXAPP_OP_VFO_SWAP, 0))));
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_VFO_STORE, 3)), FOXAPI_OUT_OF_RANGE));
+    }
+    covering(FOXAPI_OP_SET_RECORD_FORMAT);
+    {
+        CHECK(A::recIqFmtRx(a) == 0 && A::recIqFmtRec(a) == 0);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_RECORD_FORMAT, 1, 2))));
+        CHECK(A::recIqFmtRx(a) == 1 && A::recIqFmtRec(a) == 1);
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_RECORD_FORMAT, 2, 0)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPI_OP_SET_RECORD_FORMAT, 0, 3)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::recIqFmtRx(a) == 1 && A::recIqFmtRec(a) == 1);
+        CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_RECORD_FORMAT, 0, 0))));
+        CHECK(A::recIqFmtRx(a) == 0 && A::recIqFmtRec(a) == 0);
     }
     covering(FOXAPI_OP_SET_CW_PITCH);
     {
