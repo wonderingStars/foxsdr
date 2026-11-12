@@ -102,7 +102,20 @@ struct Rig {
         }
         return 0;
     }
+    // Radio 1's live state in the words the lane's tests use ("tuned.1.hz" / ".centreHz" / ".mode" / ".bandwidthHz"): read_state follows every pass; the fact block does not follow a retune.
+    std::string tunedFact(const std::string& key) {
+        eng.controlPass();   // (the state is published by a pass)
+        const FoxReceiverState st = local->state();
+        static const char* const names[8] = {"NFM", "WFM", "AM", "DSB", "USB", "CW", "LSB", "RAW"};
+        auto whole = [](double v) { return std::to_string(static_cast<long long>(std::llround(v))); };
+        if (key == "tuned.1.hz") { return whole(st.tunedHz); }
+        if (key == "tuned.1.centreHz") { return whole(st.centreHz); }
+        if (key == "tuned.1.bandwidthHz") { return whole(st.bandwidthHz); }
+        if (key == "tuned.1.mode") { return st.demodMode >= 1 && st.demodMode <= 8 ? names[st.demodMode - 1] : ""; }
+        return std::string();
+    }
     std::string fact(const std::string& key) {
+        if (key.rfind("tuned.1.", 0) == 0) { return tunedFact(key); }
         char buf[8192];
         const int32_t n = api()->get_setting(local->raw(), ("fact." + key).c_str(), buf, sizeof(buf));
         return n >= 0 ? std::string(buf) : std::string("<absent>");

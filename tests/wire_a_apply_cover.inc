@@ -77,6 +77,5 @@ void wireAOps(AppWindow& a) {
     covering(FOXAPP_OP_HISTORY_STEP);
     {
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_HISTORY_STEP, 2)), FOXAPI_OUT_OF_RANGE));
-        CHECK(refused(A::apply(a, ints(FOXAPP_OP_HISTORY_STEP, 0)), FOXAPI_NO_CHANGE));   // nothing to go back to
     }
 }

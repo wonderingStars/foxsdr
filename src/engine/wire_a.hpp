@@ -89,7 +89,7 @@ private:
     Result channelOp(const FoxCommand& c, const std::string& text, Result res);
     Result keyActionOp(const FoxCommand& c, const std::string& text, Result res);
     void channelFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
-    // fact.tuned.<n>.hz / .mode / .bandwidthHz: where each radio is (the engine's state in words a screen and a test can read without the state block).
+    // fact.iqfile.<n>.centreFromHeader (the radio's own tune is in read_state, which follows every pass; the fact block follows changes of its own inputs and a retune is not one of them).
     void tunedFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
 
     // ---- files of the user's choosing: markers, packs, notes ... (wire_a_files.cpp) ----

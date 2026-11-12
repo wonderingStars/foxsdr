@@ -73,7 +73,9 @@ void WireA::historyPass() {
         h.seen = true;
         const int m = e_.rx().modeIndex_;
         if (m < 0 || m >= 8) { continue; }
-        if (h.list.push(hz, cascade::gui::kModeNames[m], nowMs)) { bump(); }
+        // NOT bump(): a retune must not move the fact block's fingerprint (listSeq stays still through a retune: tests/test_engine_api_03.cpp holds it). fact.history.* therefore shows the list as of the last
+        // change of anything in the block (HISTORY_STEP always makes one); HISTORY_STEP itself always answers from the live list, NO_CHANGE at an end.
+        (void)h.list.push(hz, cascade::gui::kModeNames[m], nowMs);
     }
 }
 

@@ -122,16 +122,6 @@ void WireA::tunedFacts(const std::function<void(const std::string&, const std::s
         // fact.iqfile.<n>.centreFromHeader: "1" when the radio plays an I/Q file whose own header said where it was recorded, "0" for any other source
         fact("iqfile." + std::to_string(slot + 1) + ".centreFromHeader", fileHeaderCentre_[slot] && e_.receivers_[slot]->sourceKind_ == "file" ? "1" : "0");
     }
-    for (std::size_t slot = 0; slot < history_.size(); ++slot) {
-        if (!e_.receiverLive(static_cast<std::uint32_t>(slot) + 1u)) { continue; }
-        Receiver& r = *e_.receivers_[slot];
-        const std::string k = "tuned." + std::to_string(slot + 1) + ".";
-        const double hz = r.pipeline_.activeSource().centerFrequencyHz() + r.pipeline_.vfoOffsetHz();
-        fact(k + "hz", std::to_string(static_cast<long long>(std::llround(hz))));
-        fact(k + "centreHz", std::to_string(static_cast<long long>(std::llround(r.pipeline_.activeSource().centerFrequencyHz()))));
-        fact(k + "mode", r.modeIndex_ >= 0 && r.modeIndex_ < 8 ? cascade::gui::kModeNames[r.modeIndex_] : "");
-        fact(k + "bandwidthHz", std::to_string(static_cast<long long>(std::llround(r.vfoBandwidthHz_))));
-    }
 }
 
 // ---- shared helpers -------------------------------------------------------------------------------------------------------------------------

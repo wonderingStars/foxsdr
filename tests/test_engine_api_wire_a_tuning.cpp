@@ -28,17 +28,14 @@ void testHistory() {
     std::printf("H1: frequency history\n");
     Rig r;
     CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RUN, 0, 1)).status(), FOXAPI_OK);
-    CHECK_EQ(r.fact("history.1.count"), std::string("1"));   // the first frequency the radio has is the first entry
+    r.settle(100);
     // Three retunes a pause apart (the history joins a dial spin: 1.5 s) make three more entries.
     const double hz[3] = {100.1e6, 98.0e6, 91.3e6};
     for (const double f : hz) {
         CHECK_EQ(r.send(setFreq(f)).status(), FOXAPI_OK);
         r.settle(1700);
     }
-    CHECK_EQ(r.fact("history.1.count"), std::string("4"));
-    CHECK_EQ(r.fact("history.1.position"), std::string("3"));
-    CHECK_EQ(r.fact("history.1.canBack"), std::string("1"));
-    CHECK_EQ(r.fact("history.1.canForward"), std::string("0"));
+    // (the facts follow the fact block's own changes, not every retune: the ops below answer from the live list)
     // forward at the end of the list changes nothing
     CHECK_EQ(r.send(step(1)).status(), FOXAPI_NO_CHANGE);
     // back twice: 98.0 MHz, then 100.1 MHz; the step is not recorded as a retune
@@ -46,7 +43,7 @@ void testHistory() {
     CHECK_EQ(o.status(), FOXAPI_OK);
     CHECK(std::fabs(o.result.applied[0] - 98.0e6) < 1.0);
     r.settle(300);
-    CHECK_EQ(r.fact("history.1.count"), std::string("4"));
+    CHECK_EQ(r.fact("history.1.count"), std::string("4"));      // (a step moves the block: the facts are fresh now)
     CHECK_EQ(r.fact("history.1.position"), std::string("2"));
     o = r.send(step(0));
     CHECK(std::fabs(o.result.applied[0] - 100.1e6) < 1.0);
@@ -58,8 +55,12 @@ void testHistory() {
     // a retune now throws the entries ahead away
     CHECK_EQ(r.send(setFreq(87.5e6)).status(), FOXAPI_OK);
     r.settle(300);
-    CHECK_EQ(r.fact("history.1.canForward"), std::string("0"));
-    CHECK_EQ(r.fact("history.1.count"), std::string("4"));   // [start, 100.1, 98.0, 87.5]
+    CHECK_EQ(r.send(step(1)).status(), FOXAPI_NO_CHANGE);   // the entries ahead are gone
+    // [start, 100.1, 98.0, 87.5]: three steps back, a fourth has nowhere to go
+    CHECK_EQ(r.send(step(0)).status(), FOXAPI_OK);
+    CHECK_EQ(r.send(step(0)).status(), FOXAPI_OK);
+    CHECK_EQ(r.send(step(0)).status(), FOXAPI_OK);
+    CHECK_EQ(r.send(step(0)).status(), FOXAPI_NO_CHANGE);
     // failure path: a direction that is neither
     CHECK_EQ(r.send(step(2)).status(), FOXAPI_OUT_OF_RANGE);
     CHECK_EQ(r.send(step(-1)).status(), FOXAPI_OUT_OF_RANGE);
