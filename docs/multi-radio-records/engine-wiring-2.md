@@ -200,11 +200,24 @@ Break-it column: the behaviour removed (or the lock/gate disabled), the result s
 | 12 | acdcc9d7 | slint-gaps item 3, engine half of the frequency lock (C3) | `APP_RADIO_LOCK` (0x8617): `Receiver::tuneLocked_`, every tuning command DENIED, `retuneSourceHz` no-op; `fact.radio.n.locked` | `test_engine_api_lock` L1-L6 | op-level refusal and choke point disabled: L2 fails for 7 commands, L4 3 checks |
 | 13 | 969f7137 | recording-models 3, file-name template (naming) | `APP_SET_RECORD_NAME` (0x8618): template in `record-name.txt`, validated on SET, expanded at each take's start; `fact.record.nameTemplate` | `test_engine_api_recname` N1-N5: a real take on the generator is `100.1/WFM_2026.wav` | validation off: N1 fails 9x; take path never set: N3 fails |
 | 14 | ff1d753e | W1 "not reached" F, marker cap | `CASCADE_MAX_MARKERS_PER_PLUGIN` 64 -> 256, `fact.plugin.markerLimit` | `test_engine_api_markerlimit` K1-K3 | fact removed: K1 fails twice |
+| 15 | 2adfa987 | array-maths D3, OIRT stereo | `Pipeline::setStereoSystem`, an `OirtStereo` beside `StereoFm`, `APP_SET_STEREO_SYSTEM` (0x8619; 0 automatic by band, 1 pilot, 2 OIRT), `pollStereoSystem` each pass per radio, `fact.radio.n.stereo.system/decoder` | `test_pipeline_oirt` (generated FM OIRT through a real `Pipeline`): **56.6 dB separation, lamp on, carrier level 1.00**; pilot-tone decoder on the same signal: mono; `test_engine_api_oirt` S1-S6 | pipeline never choosing OIRT: 6 checks fail; band test removed: 7 checks fail |
 
 Notes on the proofs
 * Everything above that touches the Linux-only lines (`confirmLinuxUpdate`) or the Windows installer (W12) is proven through its pure functions only: the Linux lines were not compiled here, and nothing was installed or opened.
 * The E4000 and benchmark rows were exercised end to end (stand-in server; the real engine executable), not only by unit tests.
 * A slip, found and fixed in the commit that caused it (bf330b36): a plain `boot()` in `test_process_boot_kind` starts the crash sentinel, which is a child of the test's own executable and re-runs the test; six chained copies were stopped by hand (my own processes). A second slip: `test_crash_upload` is a gui test and was run once on the visible desktop; it failed there, passed on the hidden desktop; every gui test since runs on the hidden desktop only.
+
+## 3b. Brief items 14 and 15, what the reading found (no code)
+
+* **Item 15, `mbe_voice` integration:** the voice lane's record (`feat/plugins-voice`, `docs/feature-records/voice-expired.md` section 9) names NO host change: decoded voice reaches the host through the existing
+  `CASCADE_CAP_AUDIO_OUT` table (`pull(handle, float* interleaved, size_t frames)` and `active(handle)`), at 8,000 Hz and mono. **Verified in this tree** (`core/plugin_host.cpp` lines 760-790): the validator accepts
+  `sampleRateHz` from `CASCADE_AUDIO_RATE_MIN_HZ` (1,000) up and `channels` 1 or 2, and the host resamples. The integration is therefore a plugin-side one (the P25 receiver in `dmr-monitor` or a P25 plugin, the M17 plugin);
+  the hardware-vocoder packet layer stays off unless the user attaches a device. Nothing was wired in the host.
+* **Item 14, row B9 (does the NFM path pass about 7 kHz of discriminator audio unfiltered for 9600 baud packet?):** READ FROM THE CODE, NOT MEASURED. The audio a decoder plugin receives is taken in `Pipeline::process`
+  ("DECODER TAP, BEFORE the AGC and the squelch"): the demodulator's output (NFM: the quadrature discriminator followed by the user's one-pole de-emphasis, which is flat when the control says Off) after the channel filter,
+  resampled to the decoder rate by `resamplerD_`. No audio low-pass, high-pass, equaliser, notch or noise reduction sits in front of it (those come after, "notch, auto-notch and noise reduction ... every one of them damages data").
+  So 9600 baud needs: the **De-emph control Off** (50 or 75 us costs about 10 dB at 7 kHz) and a **channel bandwidth of 20 kHz or more** (the 12.5 kHz default filter clips the sidebands). Whether the TNC plugin's settings
+  make that so was not checked, and no 9600 baud signal was generated: UNVERIFIED.
 
 ## 4. Gates
 
@@ -234,8 +247,7 @@ Order = suggested order of the next session. "Needs" says what is missing.
    KiwiSDR source pattern (`kXDriverKey`, `makeDeviceSource`, `openXAt`, SELECT_SOURCE dispatch and exclusion list, second-radio key, REMOTE-deny list at `fox_engine_api.cpp:2010`) in about ten files; the telemetry word first.
 3. **Network I/Q out, SBS out, metrics, webhooks, MCP server:** each needs a `ServerHost` listener key (and its `AppConfig` fields) - the metrics page and the phone-web pieces (N26) need `web_server.cpp`, owned by
    `feat/web-secure` (not merged here), so they are listed, not touched. Webhooks and the MCP server also need the thread rows (present as exempt rows) and a credential decision.
-4. **OIRT stereo** (`dsp/oirt_stereo`): the model's output rate is its own (`composite / decimation`); the pipeline's stereo stage is rate-preserving, so it fits with decimation 1. Needs: an `FoxCommand` op and a
-   per-radio setting (the C3 pattern: about 25 files, the vendored header, the mock engine) or the owner's word that "automatic by band" is wanted; a pipeline test that FM-modulates the model's generator.
+4. ~~OIRT stereo~~ DONE (row 15 of section 3). What it still needs: the screen's "Stereo system" choice (section 7), a real OIRT recording, and the standard's maximum-deviation table to confirm the 50 kHz.
 5. **FLAC, IF recording, rollover, RF64/SigMF writers, recordings browser, seek and A-B loop, scanner priority and lockouts (`scan_aids`), operating aids (VFO A/B, band stacking), CLI options (`cli_options`), UTC clock:**
    see the Step 0 table (section 2). The writers need a second sink beside `Recorder` and a stop path in `stopReceiver` and `shutdownQuiesce`; scan_aids is superseded by screen-c's scanner extras (the op number
    `0x860C` it proposes collides with this tree: use `0x860A`/`0x860B`, free here, at the screen merge); the CLI parser needs a branch in `process_boot.cpp parseFlags`.
@@ -258,6 +270,7 @@ Order = suggested order of the next session. "Needs" says what is missing.
 * Macros: a list reading `fact.macro.names` with "Macros", "Run", "Stop", "Reload macros"; `fact.macro.running`, `fact.macro.last`, `fact.macro.error` for the status line.
 * Recording file name: a "File name" field with the hint "{freq_mhz}/{mode}_{datetime}", `FOXAPP_OP_SET_RECORD_NAME`, `fact.record.nameTemplate`; the model's refusal words come back as the op's message.
 * E4000 offset tuning: a row "Offset tuning" (tooltip "Moves the E4000 tuner's oscillator off the wanted frequency to keep its centre spike out of the picture."): the Signal bank's option table (`signal_logic.cpp`, near line 703) ignores an unknown option name.
+* OIRT stereo: a "Stereo system" choice in the WFM controls (English: "Stereo system", "Automatic", "Pilot tone", "OIRT (65.8-74 MHz)"), `FOXAPP_OP_SET_STEREO_SYSTEM` (target = the radio, `ival[0]` 0/1/2), `fact.radio.<n>.stereo.system` and `.stereo.decoder` as its read-back; the lamp already reads `pilotLocked` / `stereoActive`.
 * `--benchmark` is a command-line mode (kept out of the usage text); a Settings > About button is optional.
 
 **To `engine-merge`:** the screen branches B (`feat/screen-b`), C (`feat/screen-c`) and S1 are not in this tree. Op numbers: screen-c's proposed `FOXAPP_OP_SCANNER_EXTRAS 0x860C` collides with this tree (0x860C-0x8613 are SCHEDULE_* and CAL_*; this lane added 0x8614-0x8618); its `0x860A`/`0x860B` are free here. The engine hand-offs C1-C9 are in section 2.7. The `thread_inventory_rows.inc`
@@ -278,6 +291,7 @@ The privacy plugins (Remote ID, trunking, meters, BLE, LoRa) should set `CASCADE
 6. **Event ring:** a plugin may post without a quota (it only displaces others' events from a ring of 1,024). Add a quota?
 7. **Marker cap 256** (plugin ABI constant): confirm; a plugin built against it on an older host gets `LIMIT` at the older host's quota.
 8. **Two APRS-IS paths:** the plugin's (receive and iGate, `qAO`) is the one that works; the core client (`net/aprs_is.*`, `qAO` enforced at `aprs_is.cpp:274`) stays an unwired model so no station runs two iGates.
+9a. **OIRT stereo:** automatic by band (65.8 to 74 MHz, both edges in) is the default for every radio in WFM; the choice is not saved (a restart is automatic); 50 kHz is the OIRT deviation the decoder is scaled for (UNVERIFIED against the standard). Confirm "automatic" as the default.
 9. **PortAudio is patched in the vendored tree** (`third_party/portaudio/src/common/pa_front.c`, fenced, recorded in `FOXSDR-PATCHES.md`): a lock around its open-stream list. Upstream's fix, if any, should replace it at the next upgrade.
 
 ## 10. Unverified (everything not run)
