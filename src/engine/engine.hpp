@@ -3239,6 +3239,7 @@ private:
         int passes = 0;
     };
     std::vector<WireCDeferredStart> wireCDeferred_;
+    std::set<std::string> wireCHelperConsent_;   // catalogue keys the user has consented to install the helper program of (this run only)
     std::string wireCStartLabel_;   // the label of the take being started, for applyRecordName (empty = a user's take)
     void wireCLabelTake(cascade::core::Recorder::OpenRequest& req);
     bool wireCRecordingBusy() const;

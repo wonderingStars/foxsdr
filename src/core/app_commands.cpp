@@ -226,6 +226,7 @@ constexpr OpEntry kOps[] = {
     {FOXAPP_OP_FILE_LOOP, "APP_FILE_LOOP", true},
     // wire-c begin
     {FOXAPP_OP_WIREC_SETTING, "APP_WIREC_SETTING", true},
+    {FOXAPP_OP_STORE_HELPER_CONSENT, "APP_STORE_HELPER_CONSENT", true},
     // wire-c end
 };
 

@@ -202,11 +202,17 @@
 #define FOXAPP_OP_SET_IF_ZOOM            0x8625u /* ival[0]: FFT size or 0 off; num[0]: span Hz. Addresses one radio (target) */
 #define FOXAPP_OP_SET_STEREO_SYSTEM      0x8619u /* ival[0]: 0 automatic / 1 pilot tone / 2 OIRT. Addresses one radio (target) */
 // wire-c begin (wiring lane C, operation block 0x8A00-0x8AFF; docs/multi-radio-records/wire-c.md, src/engine/wire_c.hpp)
-//   WIREC_SETTING (SETTINGS; LOCAL sessions only like every app op): text: "<key><value>". One key of wiring lane C's own settings file (wirec.json in the per-user
+//   WIREC_SETTING (SETTINGS; LOCAL sessions only like every app op): text: "<key>\x1F<value>". One key of wiring lane C's own settings file (wirec.json in the per-user
 //   folder; config.json is untouched). OK: changed and saved; NO_CHANGE: already so; NOT_FOUND: no such key; BAD_ARGUMENT: the value is not of the key's kind;
 //   OUT_OF_RANGE: a number or a choice outside the key's range; FAILED: the file could not be written (nothing changed). Every key is published as fact.wirec.<key>,
 //   and fact.wirec.version moves with any change (the keys, their kinds and defaults are in the record's "new keys" table).
-#define FOXAPP_OP_WIREC_SETTING          0x8A00u /* text: "<key><value>" */
+#define FOXAPP_OP_WIREC_SETTING          0x8A00u /* text: "<key>\x1F<value>" */
+//   STORE_HELPER_CONSENT (ADMIN; LOCAL sessions only): the user's SEPARATE consent for installing a GPL HELPER plugin (a bridge plugin that starts a separate program;
+//   core/plugin_repo_helper.hpp), given or withdrawn per catalogue entry. text: the entry's catalogue key (as STORE_INSTALL names it); ival[0]: 1 consent, 0 withdraw.
+//   Until it is given STORE_INSTALL of that entry is refused with fact.store.<key>.helper.consent "0" and the sentence in installError ("this plugin runs a separate
+//   program; confirm ..."); ADD ALL never fetches a helper plugin without it. NOT_FOUND: no such entry, or the entry is not a helper plugin. NO_CHANGE: already so.
+//   Not saved (a restart asks again); never on the web profile (a browser cannot have read the notice).
+#define FOXAPP_OP_STORE_HELPER_CONSENT   0x8A01u /* text: catalogue key; ival[0]: 1 consent / 0 withdraw */
 // wire-c end
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

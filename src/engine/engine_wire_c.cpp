@@ -12,6 +12,7 @@
 #include "core/config.hpp"
 #include "core/diag_log.hpp"
 #include "engine/engine.hpp"
+#include "core/plugin_repo_helper.hpp"   // wire-c
 #include "engine/wire_c.hpp"
 
 namespace cascade::engine {
@@ -47,6 +48,29 @@ std::int32_t Engine::applyWireC(const FoxCommand& c, const std::string& text, Fo
                 case wc::SetResult::SaveFailed: return FOXAPI_FAILED;
             }
             return FOXAPI_FAILED;
+        }
+        case FOXAPP_OP_STORE_HELPER_CONSENT: {
+            if (commandFromRemote_) {
+                why = "the plugin store's helper programs are fitted from this computer only";
+                return FOXAPI_DENIED;
+            }
+            for (const cascade::core::PluginCatalogEntry& ce : catalog_) {
+                if (cascade::core::PluginRepo::catalogueKey(ce.source, ce.id) != text) { continue; }
+                if (!ce.helper.present) {
+                    why = "that plugin does not run a separate program";
+                    return FOXAPI_NOT_FOUND;
+                }
+                const bool had = wireCHelperConsent_.count(text) != 0;
+                if (c.ival[0] != 0) { wireCHelperConsent_.insert(text); } else { wireCHelperConsent_.erase(text); }
+                if ((c.ival[0] != 0) == had) {
+                    why = "already so";
+                    return FOXAPI_NO_CHANGE;
+                }
+                ++wireCVersion_;
+                return FOXAPI_OK;
+            }
+            why = "no catalogue entry with that key";
+            return FOXAPI_NOT_FOUND;
         }
         default:
             break;

@@ -5,6 +5,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "engine/engine.hpp"
+#include "core/plugin_repo_helper.hpp"   // wire-c
 
 #include "core/band_mode.hpp"
 #include "core/config_halves.hpp"
@@ -3941,6 +3942,10 @@ std::string Engine::pluginInstallBlockedReason(int idx, bool acknowledged) const
     // notice always had.
     if ((!e.legalNotice.empty() || !e.source.empty()) && !acknowledged) {
         return cascade::gui::kLegalNoticeFirstReason;
+    }
+    // wire-c: a plugin that runs a separate PROGRAM needs the user's own consent on top of the licence tick (FOXAPP_OP_STORE_HELPER_CONSENT)
+    if (e.helper.present && wireCHelperConsent_.count(cascade::core::PluginRepo::catalogueKey(e.source, e.id)) == 0) {
+        return cascade::core::helperstore::kConsentRefusal;
     }
     return {};
 }

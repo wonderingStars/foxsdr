@@ -28,6 +28,7 @@
 #include "core/serial_port.hpp"
 #include "core/device_scan_plan.hpp"
 #include "engine/engine.hpp"
+#include "core/plugin_repo_helper.hpp"   // wire-c
 #include "engine/fox_engine_api.hpp"
 #include "core/receiver_tables.hpp"
 #include "engine/server_host.hpp"
@@ -1047,6 +1048,14 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         b.store.push_back(std::move(se));
         const std::string k = "store." + key + ".";
         fact(k + "legal", e.legalNotice);
+        // wire-c: a GPL helper plugin (core/plugin_repo_helper.hpp): the one-line badge, the detail lines (newline separated) and whether the user has consented ("" when not a helper)
+        fact(k + "helper", cascade::core::helperstore::rowLine(e));
+        {
+            std::string lines;
+            for (const std::string& l : cascade::core::helperstore::detailLines(e)) { lines += (lines.empty() ? "" : "\n") + l; }
+            fact(k + "helper.detail", lines);
+            fact(k + "helper.consent", e.helper.present ? (wireCHelperConsent_.count(key) != 0 ? "1" : "0") : "");
+        }
         fact(k + "summary", e.summary);
         fact(k + "description", e.description);
         fact(k + "homepage", e.homepage);
