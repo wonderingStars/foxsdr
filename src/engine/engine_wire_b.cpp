@@ -260,6 +260,80 @@ FoxCommandResult Engine::cursorOp(const FoxCommand& c, const std::string& text, 
     return res;
 }
 
+// --- net-outputs: network I/Q out (net/iq_out.hpp) -----------------------------------------------------------------------------------------------
+void Engine::wireBStopIqOut(std::size_t slot) {
+    if (wireB_ == nullptr || slot >= wireB_->iqOut.size()) { return; }
+    std::lock_guard<std::mutex> lk(wireB_->mutex);
+    WireBState::IqOutRadio& o = wireB_->iqOut[slot];
+    if (o.out == nullptr) { return; }
+    if (receivers_[slot]) { receivers_[slot]->pipeline_.setIqSink(nullptr); }   // (returns once no block is inside the sink)
+    o.sink.target = nullptr;
+    o.out->stop();
+    o.out.reset();
+    ++wireBVersion_;
+}
+
+void Engine::wireBShutdown() {
+    if (wireB_ == nullptr) { return; }
+    for (std::size_t i = 0; i < wireB_->iqOut.size(); ++i) { wireBStopIqOut(i); }
+}
+
+FoxCommandResult Engine::iqOutOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed) {
+    WireBState& w = wireBState();
+    const std::size_t slot = scopedSlot();
+    WireBState::IqOutRadio& o = w.iqOut[slot < w.iqOut.size() ? slot : 0];
+    if (c.op == FOXAPP_OP_IQ_OUT_STOP) {
+        if (o.out == nullptr) { return refusal(res, FOXAPI_NO_CHANGE, "this radio sends no I/Q"); }
+        rx().pipeline_.setIqSink(nullptr);
+        o.sink.target = nullptr;
+        o.out->stop();
+        o.out.reset();
+        changed = true;
+        return res;
+    }
+    if (o.out != nullptr) { return refusal(res, FOXAPI_BUSY, "this radio sends I/Q already"); }
+    wireb::Json p = wireb::Json::object();
+    if (!text.empty()) {
+        p = wireb::Json::parse(text, nullptr, false);
+        if (p.is_discarded() || !p.is_object()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the parameters are not a JSON object"); }
+    }
+    wireb::detail::Params q(p);
+    std::string format = "u8", dest = "127.0.0.1";
+    bool header = false, udp = false;
+    double port = 0.0;
+    if (!q.word("format", format) || !q.flag("header", header) || !q.flag("udp", udp) || !q.number("port", port, 0.0, 65535.0) || !q.word("dest", dest) || !q.finish()) {
+        return refusal(res, FOXAPI_BAD_ARGUMENT, q.error);
+    }
+    if (format != "u8" && format != "s16" && format != "f32") { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"format\" is u8, s16 or f32"); }
+    if (dest != "127.0.0.1") { return refusal(res, FOXAPI_BAD_ARGUMENT, "the destination is 127.0.0.1: another one is the owner's decision"); }
+    if (udp && port < 1.0) { return refusal(res, FOXAPI_BAD_ARGUMENT, "UDP needs a port, 1 to 65535"); }
+    cascade::core::PublishedState ps;
+    const bool have = rx().receiverSnapshot_ != nullptr && rx().receiverSnapshot_->read(ps);
+    const double rate = rx().pipeline_.inputRateHz();
+    cascade::net::IqOutConfig cfg;
+    cfg.format = format == "u8" ? cascade::net::IqFormat::U8 : format == "s16" ? cascade::net::IqFormat::S16 : cascade::net::IqFormat::F32;
+    cfg.header = header;
+    cfg.sampleRateHz = static_cast<std::uint32_t>(std::llround(rate));
+    cfg.centreHz = have ? ps.rx.centreHz : 0.0;
+    cfg.udp = udp;
+    cfg.tcp.bindAddress = "127.0.0.1";
+    cfg.tcp.allowAllInterfaces = false;
+    cfg.tcp.port = static_cast<std::uint16_t>(udp ? 0 : port);
+    cfg.udpCfg.destAddress = "127.0.0.1";
+    cfg.udpCfg.port = static_cast<std::uint16_t>(udp ? port : 0);
+    if (header && cfg.sampleRateHz == 0) { return refusal(res, FOXAPI_FAILED, "the radio has no sample rate yet"); }
+    auto out = std::make_unique<cascade::net::IqOut>(cfg);
+    std::string why;
+    if (!out->start(why)) { return refusal(res, FOXAPI_FAILED, why.empty() ? std::string("the output could not start") : why); }
+    o.sink.target = out.get();
+    o.out = std::move(out);
+    o.udp = udp; o.header = header; o.format = format == "u8" ? 1 : format == "s16" ? 2 : 3; o.rateHz = rate;
+    rx().pipeline_.setIqSink(&o.sink);
+    res.applied[0] = udp ? 0.0 : static_cast<double>(o.out->tcpPort());
+    changed = true;
+    return res;
+}
+
 // --- sweepsrc: the sweep device (wire_b_sweep.hpp) -----------------------------------------------------------------------------------------------
 FoxCommandResult Engine::sweepOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed) {
     WireBState& w = wireBState();
@@ -417,6 +491,10 @@ FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text
         case FOXAPP_OP_CURSOR_MARKS:
             res = cursorOp(c, text, res, changed);
             break;
+        case FOXAPP_OP_IQ_OUT_START:
+        case FOXAPP_OP_IQ_OUT_STOP:
+            res = iqOutOp(c, text, res, changed);
+            break;
         case FOXAPP_OP_SWEEP_OPEN:
         case FOXAPP_OP_SWEEP_CLOSE:
         case FOXAPP_OP_SWEEP_CONFIG:
@@ -518,6 +596,8 @@ std::uint64_t Engine::wireBStamp() const {
         const cascade::core::Pipeline::GpuFftReport r = receivers_[i]->pipeline_.gpuFftReport();
         h = (h ^ static_cast<std::uint64_t>(r.mode + 1 + 4 * (r.engaged ? 1 : 0) + 8 * r.backend + 16 * static_cast<int>(r.error.size()) + 1000 * static_cast<int>(i))) * 1099511628211ull;
         h = (h ^ (r.engaged ? r.submitted / 256u : 0u)) * 1099511628211ull;
+        // (a coarse step: about 2 s of a 240 kS/s radio; a counter that moving every pass would rebuild the fact block every pass)
+        if (wireB_ != nullptr && wireB_->iqOut[i].out != nullptr) { h = (h ^ (wireB_->iqOut[i].out->stats().samplesIn >> 19) ^ (wireB_->iqOut[i].out->stats().tcp.accepted << 40)) * 1099511628211ull; h = (h ^ 0x5151u) * 1099511628211ull; }
         if (wireB_ != nullptr && i == 0) {
             const wireb::SweepStatus s = wireB_->sweep.status();
             h = (h ^ static_cast<std::uint64_t>((s.open ? 1 : 2) + 4 * s.lastError.size() + 64 * (s.sweeps / 16u) + 100003 * (s.heatRows / 4u))) * 1099511628211ull;   // (a coarse step: the counters move every sweep)
@@ -603,6 +683,15 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
             j["stop_hz"] = s.stopHz; j["heat_rows"] = s.heatRows; j["heat_cols"] = s.heatCols; j["occ_channels"] = s.occChannels; j["occ_sweeps"] = s.occSweeps;
             fact("sweep.state", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
         }
+    }
+    for (std::size_t i = 0; i < receivers_.size(); ++i) {
+        if (!receivers_[i] || wireB_->iqOut[i].out == nullptr) { continue; }
+        const WireBState::IqOutRadio& o = wireB_->iqOut[i];
+        const cascade::net::IqStats s = o.out->stats();
+        wireb::Json j = wireb::Json::object();
+        j["running"] = true; j["udp"] = o.udp; j["port"] = o.udp ? 0 : o.out->tcpPort(); j["format"] = o.format == 1 ? "u8" : o.format == 2 ? "s16" : "f32"; j["header"] = o.header;
+        j["rate_hz"] = o.rateHz; j["samples_in"] = s.samplesIn; j["samples_dropped"] = s.samplesDropped; j["clients_accepted"] = s.tcp.accepted;
+        fact("radio." + std::to_string(i + 1) + ".iqout", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
     }
     if (wireB_->maskLoaded) {
         for (std::size_t i = 0; i < receivers_.size(); ++i) {

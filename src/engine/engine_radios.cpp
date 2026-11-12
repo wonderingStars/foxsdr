@@ -226,6 +226,7 @@ FoxCommandResult Engine::radioRemoveOp(const FoxCommand& c, FoxCommandResult res
 
 void Engine::removeReceiverSlot(std::size_t slot) {
     if (slot == 0 || slot >= kMaxReceivers || !receivers_[slot]) { return; }
+    wireBStopIqOut(slot);   // wire-b: the radio's network I/Q output ends before its pipeline goes
     cascade::core::diagLogf("radio: radio %u removed", static_cast<unsigned>(slot + 1u));
     {
         RadioWork w(*this, slot);

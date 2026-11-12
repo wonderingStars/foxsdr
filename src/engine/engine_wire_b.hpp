@@ -22,6 +22,8 @@
 #include "core/field_strength.hpp"
 #include "core/spectrum_mask.hpp"
 #include "engine/wire_b_sweep.hpp"
+#include "core/pipeline.hpp"
+#include "net/iq_out.hpp"
 #include "engine/wire_b_bits.hpp"
 #include "engine/wire_b_cursors.hpp"
 
@@ -71,6 +73,20 @@ struct WireBState {
 
     // --- sweepsrc: the sweep device host (one device) and the way its link is made (the tests give a stand-in: no test opens a COM port) ---
     wireb::SweepHost sweep;
+
+    // --- net-outputs: network I/Q out, one per radio (the sink is what the pipeline is given; it forwards to the output) ---
+    struct IqOutRadio {
+        std::unique_ptr<cascade::net::IqOut> out;
+        struct Sink final : cascade::core::Pipeline::IqSink {
+            cascade::net::IqOut* target = nullptr;
+            void submit(const float* iq, std::size_t n) noexcept override { if (target != nullptr) { (void)target->submit(iq, n); } }
+        };
+        Sink sink;
+        bool udp = false, header = false;
+        int format = 1;
+        double rateHz = 0.0;
+    };
+    std::array<IqOutRadio, 8> iqOut;
     wireb::SerialLinkFactory sweepFactory = wireb::defaultSerialLinkFactory();
 };
 

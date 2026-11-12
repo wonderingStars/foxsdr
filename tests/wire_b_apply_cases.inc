@@ -57,6 +57,11 @@ void wireBOps(AppWindow& a) {
     CHECK(refused(A::apply(a, text(FOXAPP_OP_SWEEP_CONFIG, "not json")), FOXAPI_BAD_ARGUMENT));
     covering(FOXAPP_OP_SWEEP_READ);
     CHECK(refused(A::apply(a, text(FOXAPP_OP_SWEEP_READ, "{}")), FOXAPI_FAILED));
+    // NETWORK I/Q OUT: a key that does not exist is refused before any socket is made; nothing to stop is no change
+    covering(FOXAPP_OP_IQ_OUT_START);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_IQ_OUT_START, "{\"bind\":\"0.0.0.0\"}")), FOXAPI_BAD_ARGUMENT));
+    covering(FOXAPP_OP_IQ_OUT_STOP);
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_IQ_OUT_STOP, 0)), FOXAPI_NO_CHANGE));
     covering(FOXAPP_OP_GPU_FFT_MODE);
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 3)), FOXAPI_OUT_OF_RANGE));
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 0)), FOXAPI_NO_CHANGE));

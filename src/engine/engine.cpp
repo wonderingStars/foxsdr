@@ -246,6 +246,7 @@ void Engine::frameKick() {
 // specific needs doing, and detaching is the only safe choice. Proven with
 // tests/test_engine_fallback_teardown.cpp (a throwing constructor seam).
 Engine::~Engine() {
+    wireBShutdown();   // wire-b: every network I/Q output ends while the pipelines still exist
     cascade::core::beats::Registry::clearKeyedProbe(this);
     if (!tornDown_) {
         host_ = &ownHost_;

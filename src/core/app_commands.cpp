@@ -261,6 +261,8 @@ constexpr OpEntry kOps[] = {
     {FOXAPP_OP_SWEEP_CLOSE, "APP_SWEEP_CLOSE", true},
     {FOXAPP_OP_SWEEP_CONFIG, "APP_SWEEP_CONFIG", true},
     {FOXAPP_OP_SWEEP_READ, "APP_SWEEP_READ", true},
+    {FOXAPP_OP_IQ_OUT_START, "APP_IQ_OUT_START", true},
+    {FOXAPP_OP_IQ_OUT_STOP, "APP_IQ_OUT_STOP", true},
     // wire-b end
 };
 

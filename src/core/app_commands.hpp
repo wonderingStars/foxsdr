@@ -361,6 +361,14 @@
 #define FOXAPP_OP_SWEEP_CLOSE            0x8921u
 #define FOXAPP_OP_SWEEP_CONFIG           0x8922u /* text JSON */
 #define FOXAPP_OP_SWEEP_READ             0x8923u /* text JSON; fact sweep.read */
+//   NETWORK I/Q OUT (SETTINGS; net/iq_out.hpp, a tap on the radio RAW BAND at the input rate where the I/Q recorder is fed), per radio (target), LOCAL sessions only. OFF until IQ_OUT_START. IQ_OUT_START
+//   (text: JSON {format "u8" (default) | "s16" | "f32", header bool (the 28-byte FXIQ header, default false), udp bool (default false: TCP), port 0..65535 (0 = the OS picks; UDP needs 1..65535),
+//   dest "127.0.0.1" (UDP; nothing else is accepted)}): the TCP server binds 127.0.0.1 ONLY (a wider bind raises the firewall prompt and is the owner's decision, so the operation has no key for it);
+//   BAD_ARGUMENT for a wrong key or value, BUSY when this radio sends already, FAILED with the model's sentence when the socket cannot be made. applied[0]: the TCP port. IQ_OUT_STOP: NO_CHANGE
+//   when this radio does not send. The producer is never slowed: a slow client drops samples and the facts count them. Fact radio.<n>.iqout = {running, udp, port, format, header, rate_hz,
+//   samples_in, samples_dropped, clients_accepted}. A radio that is removed stops its output; nothing is saved: after a restart every output is off.
+#define FOXAPP_OP_IQ_OUT_START           0x8924u /* addresses one radio (target): text JSON */
+#define FOXAPP_OP_IQ_OUT_STOP            0x8925u /* addresses one radio (target) */
 // wire-b end
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.

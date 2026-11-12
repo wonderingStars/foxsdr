@@ -967,6 +967,14 @@ public:
     // writeIq/writeAudio ignore wrong-kind and stopped recorders by their
     // own contract, so the DSP hot path needs only the null checks.
     void setIqRecorder(Recorder* r);
+    // wire-b begin: A TAP FOR THE RAW BAND (network I/Q out, engine/engine_wire_b.cpp). Given the drained block at the input rate exactly where the I/Q recorder gets it, on the DSP thread: submit must be
+    // wait-free and allocation-free (net::IqOut::submit is). Set / cleared under audioMutex_, so once setIqSink(nullptr) returns no block is inside the old sink and it may be destroyed.
+    struct IqSink {
+        virtual ~IqSink() = default;
+        virtual void submit(const float* iq, std::size_t nComplex) noexcept = 0;
+    };
+    void setIqSink(IqSink* s);
+    // wire-b end
     // wire-b begin: THE GPU SPECTRUM (core/pipeline_gpufft.cpp; dsp/gpu_fft.hpp). Mode 0 Cpu (the DEFAULT: no device is ever made), 1 Auto (the GPU only from 65 536 points: at the legacy
     // size of this path the CPU estimator keeps running), 2 Gpu. Any thread. Every failure falls back to the CPU path silently; the report says what is running and why not.
     void setGpuFftMode(int mode);
@@ -1468,6 +1476,7 @@ private:
     cascade::dsp::RationalResampler mpxResampler_{192000u, 200000u};   // composite rate -> 192 kHz; rebuilt with the channel blocks
     std::vector<float> mpxBuf_;
     Recorder* iqRecorder_ = nullptr;
+    IqSink* iqSink_ = nullptr;   // wire-b: guarded by audioMutex_ (see setIqSink)
     Recorder* audioRecorder_ = nullptr;
 
     // Control operations (start/stop/setSource/setInputRateHz/dtor) serialize

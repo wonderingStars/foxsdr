@@ -3240,6 +3240,9 @@ private:
     FoxCommandResult bitsOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     FoxCommandResult cursorOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     FoxCommandResult sweepOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
+    FoxCommandResult iqOutOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
+    void wireBStopIqOut(std::size_t slot);   // the radio's output ends (the pipeline's tap is cleared first)
+    void wireBShutdown();                    // the engine is going: every output ends while the pipelines still exist
 public:
     WireBState& wireBStateForTest() { return wireBState(); }   // TESTS ONLY: a frame log nobody can fill yet (no plugin call) is filled by the test through this
 private:

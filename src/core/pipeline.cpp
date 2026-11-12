@@ -2011,6 +2011,13 @@ void Pipeline::setIqRecorder(Recorder* r) {
     iqRecorder_ = r;
 }
 
+// wire-b begin: the raw-band tap (see pipeline.hpp)
+void Pipeline::setIqSink(IqSink* s) {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    iqSink_ = s;
+}
+// wire-b end
+
 void Pipeline::setIfRecorder(Recorder* r) {
     std::lock_guard<std::mutex> lk(audioMutex_);
     ifRecorder_ = r;
@@ -2425,6 +2432,9 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // ignores stopped/wrong-kind recorders (its contract), so the hot path
     // pays only this null check when idle.
     if (iqRecorder_ != nullptr) { iqRecorder_->writeIq(in, n); }
+    // wire-b begin: network I/Q out, the same raw block (std::complex<float> is two floats laid out as an array of them)
+    if (iqSink_ != nullptr) { iqSink_->submit(reinterpret_cast<const float*>(in), n); }
+    // wire-b end
 
     // I/Q decoder plugins tap the RAW device band here, at the same point the
     // I/Q recorder does and for the same reason: this is the last place the
