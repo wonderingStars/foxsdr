@@ -125,6 +125,7 @@ void WebWireC::pruneViewers() {
 void WebWireC::installRoutes(httplib::Server& svr, WebWireCHooks hooks) {
     hooks_ = std::move(hooks);
     installBookmarkRoutes(svr);
+    installMetricsRoute(svr);
 }
 
 void WebWireC::installBookmarkRoutes(httplib::Server& svr) {

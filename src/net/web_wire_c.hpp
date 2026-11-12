@@ -15,11 +15,13 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
 
+#include "net/metrics.hpp"
 #include "net/web_bookmarks.hpp"
 #include "net/web_cors.hpp"
 
@@ -56,8 +58,15 @@ public:
     // The viewer's sign-in ended (sign-out): drop what is kept for them.
     void forgetViewer(const std::string& token);
 
+    // METRICS PAGE (row L3; net/metrics.hpp): GET /metrics in the Prometheus text format, for a SIGNED-IN browser only (the server's own sign-in rule; no token of any
+    // kind is kept: a scraper that cannot use the cookie is an owner decision). Off (404, as if it did not exist) until switched on.
+    void setMetricsEnabled(bool on) { metricsOn_.store(on, std::memory_order_relaxed); }
+    bool metricsEnabled() const { return metricsOn_.load(std::memory_order_relaxed); }
+    void publishMetrics(const metrics::EngineSnapshot& s);
+
 private:
     void installBookmarkRoutes(httplib::Server& svr);
+    void installMetricsRoute(httplib::Server& svr);
     std::string viewerOf(const httplib::Request& req) const;
     void pruneViewers();
 
@@ -65,6 +74,9 @@ private:
     mutable std::mutex mu_;
     CorsPolicy cors_;
     WebBookmarkBook bookmarks_;
+    std::atomic<bool> metricsOn_{false};
+    metrics::MetricsRegistry metricsRegistry_;
+    metrics::StandardMetrics standardMetrics_{metricsRegistry_};
 };
 
 }  // namespace cascade::net

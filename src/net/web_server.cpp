@@ -3431,6 +3431,12 @@ public:
     // The public listing (net/receiver_listing.hpp): the document is built once, when the listing is set, and served as it is; a disabled
     // listing is an empty document and the route answers 404.
     bool wireCSetCors(const std::vector<std::string>& origins, std::string& error) { return wireC_.setCors(origins, error); }   // wire-c
+    void wireCSetMetrics(bool on) { wireC_.setMetricsEnabled(on); }   // wire-c
+    void wireCPublishMetrics(const metrics::EngineSnapshot& s) {   // wire-c: the connected-browsers figure is the server's own
+        metrics::EngineSnapshot x = s;
+        x.connectedClients = static_cast<int>(sessionCount());
+        wireC_.publishMetrics(x);
+    }
     bool setReceiverListing(const ReceiverListing& listing, std::string& error) {
         error = validateListing(listing);
         if (!error.empty()) { return false; }
@@ -4816,6 +4822,8 @@ bool WebServer::setReceiverListing(const ReceiverListing& listing, std::string& 
     return impl_->setReceiverListing(listing, error);
 }
 bool WebServer::setCors(const std::vector<std::string>& origins, std::string& error) { return impl_->wireCSetCors(origins, error); }   // wire-c
+void WebServer::setMetricsEnabled(bool on) { impl_->wireCSetMetrics(on); }   // wire-c
+void WebServer::publishMetrics(const cascade::net::metrics::EngineSnapshot& snapshot) { impl_->wireCPublishMetrics(snapshot); }   // wire-c
 std::vector<WebServer::TileRequest> WebServer::takePendingTileRequests() {
     return impl_->takePendingTileRequests();
 }

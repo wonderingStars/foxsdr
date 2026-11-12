@@ -94,6 +94,10 @@ public:
     std::uint64_t perfSeen = 0;           // the last perf version the engine's fingerprint counted
     std::uint64_t resumeActions = 0;      // resume actions the engine has carried out
     std::string corsApplied;              // the web.cors_origins text the web server was last given ("" = off, the default)
+    bool metricsApplied = false;          // whether the metrics page was last switched on
+    std::int64_t metricsLastMs = 0;       // when the engine last published a snapshot to it
+    std::uint64_t eventsTallied = 0;      // the host event ring's sequence the decode tally has counted up to
+    std::map<std::string, std::uint64_t> decodeTally;   // events per plugin since start (a count of lines, never their text)
 
 private:
     std::filesystem::path folder_;

@@ -2,6 +2,9 @@
 // The settings registry and the state are in wire_c.{hpp,cpp}; each feature of the lane adds its own file next to this one and one `case` here.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <mutex>
@@ -253,6 +256,32 @@ void Engine::pumpWireC() {
             std::string err;
             if (servers().webServer().setCors(lines, err)) { s.corsApplied = origins; }
             else { s.corsApplied = origins; cascade::core::diagLogf("web: the cross-origin list was refused (%s)", err.c_str()); }
+        }
+    }
+    // THE METRICS PAGE (row L3): switched with web.metrics; while on, about once a second a snapshot of counts and levels goes to the page (never a decoded text, a callsign, a
+    // position or an address: the decode tally counts events per plugin NAME).
+    {
+        const bool metricsOn = s.settings().getBool("web.metrics");
+        if (metricsOn != s.metricsApplied) {
+            servers().webServer().setMetricsEnabled(metricsOn);
+            s.metricsApplied = metricsOn;
+            s.metricsLastMs = 0;
+        }
+        if (metricsOn) {
+            const std::int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (nowMs - s.metricsLastMs >= 1000) {
+                s.metricsLastMs = nowMs;
+                for (const CascadeEvent& ev : pluginApi_->hostEvents(s.eventsTallied)) {
+                    s.eventsTallied = std::max<std::uint64_t>(s.eventsTallied, ev.seq);
+                    ++s.decodeTally[ev.plugin];
+                }
+                cascade::net::metrics::EngineSnapshot snap;
+                snap.decodesByDecoder = s.decodeTally;
+                snap.droppedSamples = rx().pipeline_.ringDroppedSamples();
+                const double level = static_cast<double>(rx().pipeline_.signalPowerDb());
+                if (std::isfinite(level) && level > -199.0) { snap.signalLevelDbfs = level; }
+                servers().webServer().publishMetrics(snap);
+            }
         }
     }
     if (p.takeResume()) {

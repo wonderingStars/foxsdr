@@ -13,6 +13,9 @@
 #endif
 #include <httplib.h>
 
+#include <chrono>
+#include <thread>
+
 #include "net/web_auth.hpp"
 #include "net/web_server.hpp"
 #include "wire_c_rig.hpp"
@@ -238,6 +241,54 @@ void testBookmarks(const fs::path& dir) {
     }
 }
 
+void testMetrics(const fs::path& dir) {
+    WebRig w(dir);
+    if (w.port <= 0) { return; }
+    httplib::Client cli("127.0.0.1", w.port);
+    cli.set_connection_timeout(5, 0);
+    const std::string cookie = signIn(cli);
+    CHECK(!cookie.empty());
+    const httplib::Headers h = headers({{"Cookie", cookie.c_str()}});
+    // off by default: as if it did not exist, signed in or not
+    {
+        auto a = cli.Get("/metrics");
+        auto b = cli.Get("/metrics", h);
+        CHECK(static_cast<bool>(a) && a->status == 404);
+        CHECK(static_cast<bool>(b) && b->status == 404);
+    }
+    CHECK(w.rig.status(setting("web.metrics", "on")) == FOXAPI_OK);
+    w.settle();
+    // an event the host posts (a decoder's line): only its COUNT may reach the page
+    w.rig.eng.pluginApiShared()->hostPostEvent("pocsag-decoder", false, "text", "TOP-SECRET-MESSAGE-TEXT 1234567", 148.0e6, 0);
+    w.rig.eng.pluginApiShared()->hostPostEvent("pocsag-decoder", false, "text", "another line", 148.0e6, 0);
+    {
+        auto none = cli.Get("/metrics");   // signed out: refused, like every protected page
+        CHECK(static_cast<bool>(none) && none->status == 401);
+    }
+    std::string body;
+    bool seen = false;
+    for (int i = 0; i < 80 && !seen; ++i) {
+        w.rig.pass(2);
+        auto r = cli.Get("/metrics", h);
+        if (r && r->status == 200) {
+            body = r->body;
+            seen = body.find("foxsdr_decodes_total{decoder=\"pocsag-decoder\"} 2") != std::string::npos;
+            if (i == 0) { CHECK(r->get_header_value("Content-Type").find("text/plain; version=0.0.4") != std::string::npos); }
+        }
+        if (!seen) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); }
+    }
+    CHECK(seen);
+    CHECK(body.find("# TYPE foxsdr_decodes_total counter") != std::string::npos);
+    CHECK(body.find("foxsdr_connected_clients 1") != std::string::npos);
+    CHECK(body.find("foxsdr_dropped_samples_total") != std::string::npos);
+    CHECK(body.find("TOP-SECRET") == std::string::npos && body.find("another line") == std::string::npos && body.find("148000000") == std::string::npos);   // never the text or the frequency
+    // switched off again
+    CHECK(w.rig.status(setting("web.metrics", "off")) == FOXAPI_OK);
+    w.settle();
+    auto off = cli.Get("/metrics", h);
+    CHECK(static_cast<bool>(off) && off->status == 404);
+}
+
 }  // namespace
 
 int main() {
@@ -245,7 +296,7 @@ int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     const fs::path root = scratch("web");
     int n = 0;
-    for (auto fn : {testCors, testBookmarks}) {
+    for (auto fn : {testCors, testBookmarks, testMetrics}) {
         const fs::path d = root / std::to_string(n++);
         std::error_code ec;
         fs::create_directories(d, ec);

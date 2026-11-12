@@ -40,6 +40,7 @@ constexpr Spec kSpecs[] = {
     {"store.sort", Kind::Choice, 0, 0, "catalogue", "catalogue|name|updated"},   // the order of the store's list; "popular" and "rating" wait for the server's data (none exists)
     // --- web (webmodels) ---
     {"web.cors_origins", Kind::Text, 0, 2000, "", ""},        // allowed origins, one per line (empty = no cross-origin page may read)
+    {"web.metrics", Kind::Bool, 0, 0, "0", ""},               // the /metrics page for a signed-in browser (Prometheus text format); off = as if it did not exist
     {"web.cors_credentials", Kind::Choice, 0, 0, "off", "off"},   // credentialed cross-origin requests: never (the session cookie is SameSite=Strict; an owner decision with HTTPS)
 };
 constexpr std::size_t kSpecCount = sizeof(kSpecs) / sizeof(kSpecs[0]);
