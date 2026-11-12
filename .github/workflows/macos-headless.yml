@@ -1,0 +1,26 @@
+# macOS: does the code configure, build and pass its headless tests on a Mac?
+#
+# MANUAL DISPATCH ONLY. NEVER RUN: written 2026-11-11 on a Windows PC. Expect it to FAIL the first time -
+# that is its job: the first failures are the work list for the macOS port (docs/feature-records/platform.md
+# lists every file that is Windows-only or Linux-only by #if). It proves nothing about running the
+# application, audio, USB radios, or signing.
+name: macos-headless
+
+on:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: brew install cmake ninja pkg-config openssl@3 soapysdr
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCASCADE_BUILD_SLINT=OFF -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+      - name: Build
+        run: cmake --build build -j"$(sysctl -n hw.ncpu)"
+      - name: Headless tests
+        run: ctest --test-dir build -L headless --output-on-failure -j4 --timeout 300
