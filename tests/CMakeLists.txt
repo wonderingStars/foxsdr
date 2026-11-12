@@ -1758,3 +1758,39 @@ foreach(_hamops_t test_cabrillo test_contest_macros test_adif_qso test_adif_broa
         target_compile_definitions(${_hamops_t} PRIVATE HAMOPS_SRC_DIR="${CMAKE_SOURCE_DIR}")
     endif()
 endforeach()
+
+# --- lane osslibs: stand-in vendor libraries for the run-time bridges ------------------------------------------------------------------------------
+# G39DDCAPI.dll (a stand-in written from WiNRADiO's published document), a library that exports too little, and a pair where the first needs the
+# second; the second is built into a folder of its own so a copy of the first, taken alone, cannot find it. They misbehave on purpose and live in
+# fixture_osslibs/. The tests find them beside the test executable (tests/<config>/ -> tests/fixture_osslibs/<config>/).
+if(WIN32)
+    set(_eol_dir "${CMAKE_CURRENT_BINARY_DIR}/fixture_osslibs")
+    add_library(eol_g39ddc_standin MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/g39ddc_standin.cpp")
+    target_include_directories(eol_g39ddc_standin PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    set_target_properties(eol_g39ddc_standin PROPERTIES PREFIX "" OUTPUT_NAME "G39DDCAPI"
+        LIBRARY_OUTPUT_DIRECTORY "${_eol_dir}/$<CONFIG>" RUNTIME_OUTPUT_DIRECTORY "${_eol_dir}/$<CONFIG>")
+    add_library(eol_g33ddc_standin MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/g33ddc_standin.cpp")
+    target_include_directories(eol_g33ddc_standin PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    set_target_properties(eol_g33ddc_standin PROPERTIES PREFIX "" OUTPUT_NAME "G33DDCAPI"
+        LIBRARY_OUTPUT_DIRECTORY "${_eol_dir}/$<CONFIG>" RUNTIME_OUTPUT_DIRECTORY "${_eol_dir}/$<CONFIG>")
+    add_library(eol_partial_standin MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/eol_partial_lib.cpp")
+    set_target_properties(eol_partial_standin PROPERTIES PREFIX "" OUTPUT_NAME "eol_partial"
+        LIBRARY_OUTPUT_DIRECTORY "${_eol_dir}/$<CONFIG>" RUNTIME_OUTPUT_DIRECTORY "${_eol_dir}/$<CONFIG>")
+    add_library(eol_dep SHARED "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/eol_dep_lib.cpp")
+    set_target_properties(eol_dep PROPERTIES PREFIX "" OUTPUT_NAME "eol_dep"
+        LIBRARY_OUTPUT_DIRECTORY "${_eol_dir}/dep/$<CONFIG>" RUNTIME_OUTPUT_DIRECTORY "${_eol_dir}/dep/$<CONFIG>")
+    add_library(eol_needs_dep MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/eol_needs_dep_lib.cpp")
+    target_link_libraries(eol_needs_dep PRIVATE eol_dep)
+    set_target_properties(eol_needs_dep PROPERTIES PREFIX "" OUTPUT_NAME "eol_needs_dep"
+        LIBRARY_OUTPUT_DIRECTORY "${_eol_dir}/$<CONFIG>" RUNTIME_OUTPUT_DIRECTORY "${_eol_dir}/$<CONFIG>")
+    foreach(_eol_t test_g39ddc_source test_g33ddc_source)
+        if(TARGET ${_eol_t})
+            target_compile_definitions(${_eol_t} PRIVATE EOL_SRC_DIR="${CMAKE_SOURCE_DIR}")
+        endif()
+    endforeach()
+    foreach(_eol_t test_vendor_lib test_g39ddc_source test_g33ddc_source)
+        if(TARGET ${_eol_t})
+            add_dependencies(${_eol_t} eol_g39ddc_standin eol_g33ddc_standin eol_partial_standin eol_dep eol_needs_dep)
+        endif()
+    endforeach()
+endif()

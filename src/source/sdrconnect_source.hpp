@@ -19,6 +19,12 @@
 //   name=...                 select by display name (selected_device_name)
 //   index=N                  select by index (selected_device)
 //   timeout=ms               the bound on a request and its answer (default 3000)
+//   iqrate=Hz                the sample rate the I/Q STREAM is treated as having (default: the device's own
+//                            device_sample_rate). The document does not say whether the stream is decimated
+//                            ("IQ Lite" suggests it may be), so a person who has measured the real rate can state
+//                            it here; with iqrate set the rate is fixed (setSampleRateHz accepts only that value
+//                            and supportedSampleRatesHz offers only it) and the device's own rate is left alone.
+//   The port is the part of sdrconnect=host:port; it is never assumed beyond the default 5454 (NOT VERIFIED).
 // With none of serial/name/index the device SDRconnect already has active is used.
 //
 // WHAT open() DOES: handshake, start the reader, read api_version (the proof this is SDRconnect),
@@ -102,6 +108,7 @@ private:
     std::vector<std::string> devices_;
     int lnaMin_ = 0, lnaMax_ = 0;
     bool hasLna_ = false;
+    double iqRateHz_ = 0.0;  // 0 = use device_sample_rate
 };
 
 }  // namespace cascade::source

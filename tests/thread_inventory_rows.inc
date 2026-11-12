@@ -122,6 +122,8 @@ const Row kRows[] = {
     {"src/source/airspyhf_source.cpp", 1, 0, 0, 0, "", R_DRIVER},
     {"src/source/aor_source.cpp", 1, 0, 0, 0, "", R_DRIVER},
     {"src/source/hackrf_source.cpp", 1, 0, 0, 0, "", R_DRIVER},
+    {"src/source/vendor_apartment.cpp", 1, 0, 0, 0, "",
+     "the run-time bridges' apartment thread (WiNRADiO): the one thread that calls the maker's library (its document allows one thread per receiver); every caller waits on it with a bound and abandons it past the bound (Recovered::ReaderLeak), and the pipeline's source thread reads the ring with a timeout - NOT COVERED by this batch (a known gap)"},
     {"src/source/mirisdr_source.cpp", 1, 0, 0, 0, "", R_DRIVER},
     {"src/source/kiwisdr_client.cpp", 2, 0, 0, 0, "", R_DRIVER},
     {"src/source/pluto_source.cpp", 1, 0, 0, 0, "", R_DRIVER},
