@@ -155,6 +155,8 @@ void ReceiverSnapshot::publish(const PublishedState& facts,
                       f.recordIqFormat != o.recordIqFormat || f.recordAudioFormat != o.recordAudioFormat ||
                       // centre tuning (a setting)
                       f.ctun != o.ctun ||
+                      // the channel filter shape (a setting; whether it is in the filter is a measurement)
+                      f.filterShape != o.filterShape ||
                       // the noise squelch's three settings (its level and its gate are measurements)
                       f.noiseSquelchOn != o.noiseSquelchOn || f.noiseSquelchThresholdDb != o.noiseSquelchThresholdDb || f.noiseSquelchTailMs != o.noiseSquelchTailMs ||
                       // the manual notch bank's switches, frequencies and widths (all settings)

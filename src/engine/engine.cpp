@@ -4913,6 +4913,8 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         for (std::size_t i = 0; i < rxa.eqDb_.size(); ++i) { r.eqDb[i] = rxa.eqDb_[i]; }
         r.audioHighPassHz = static_cast<std::uint32_t>(rxa.audioHpHz_);
         r.audioLowPassHz = static_cast<std::uint32_t>(rxa.audioLpHz_);
+        r.filterShape = static_cast<std::uint32_t>(rxa.filterShape_);
+        r.filterShapeActive = rxa.pipeline_.channelShapeActive() ? 1u : 0u;
         r.ctun = rxa.ctun_ ? 1u : 0u;
         r.recordIqFormat = static_cast<std::uint32_t>(rxa.recordIqFormat_);
         r.recordAudioFormat = static_cast<std::uint32_t>(rxa.recordAudioFormat_);
@@ -7781,6 +7783,13 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[0] = on ? 1.0 : 0.0;
             return res;
         }
+        case FOXAPI_OP_SET_FILTER_SHAPE: {
+            Receiver& rxs = rx();
+            if (!rxs.pipeline_.setChannelShape(static_cast<int>(c.ival[0]))) { return refuse(FOXAPI_OUT_OF_RANGE, "the filter shape is 0 default, 1 sharp, 2 medium or 3 soft"); }
+            rxs.filterShape_ = static_cast<int>(c.ival[0]);
+            res.applied[0] = static_cast<double>(c.ival[0]);
+            return res;
+        }
         case FOXAPI_OP_SET_CW_PITCH: {
             Receiver& rxs = rx();
             if (!rxs.pipeline_.setCwPitchHz(c.num[0])) { return refuse(FOXAPI_OUT_OF_RANGE, "the CW pitch is 300 to 1200 Hz"); }
@@ -9676,6 +9685,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         for (std::size_t i = 0; i < cfg.eqDb.size() && i < 8; ++i) { rx().eqDb_[i] = cfg.eqDb[i]; }
         rx().audioHpHz_ = cfg.audioHighPassHz;
         rx().audioLpHz_ = cfg.audioLowPassHz;
+        rx().filterShape_ = cfg.filterShape;
         rx().ctun_ = cfg.ctun;
         rx().recordIqFormat_ = cfg.recordIqFormat;
         rx().recordAudioFormat_ = cfg.recordAudioFormat;
@@ -9697,6 +9707,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         rx().noiseSquelchThresholdDb_ = cfg.noiseSquelchThresholdDb;
         rx().noiseSquelchTailMs_ = cfg.noiseSquelchTailMs;
         (void)rx().pipeline_.setNoiseSquelch(rx().noiseSquelchOn_, rx().noiseSquelchThresholdDb_, rx().noiseSquelchTailMs_);
+        (void)rx().pipeline_.setChannelShape(rx().filterShape_);
         (void)rx().iqRecorder_.setSampleFormat(cascade::core::RecordKind::BasebandIq, rx().recordIqFormat_);
         (void)rx().audioRecorder_.setSampleFormat(cascade::core::RecordKind::Audio, rx().recordAudioFormat_);
         (void)rx().pipeline_.setStereoPlace(rx().stereoPlaceMode_, rx().stereoPlaceValue_);
@@ -10273,6 +10284,7 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
         }
         cfg.audioHighPassHz = rxa.audioHpHz_;
         cfg.audioLowPassHz = rxa.audioLpHz_;
+        cfg.filterShape = rxa.filterShape_;
         cfg.ctun = rxa.ctun_;
         cfg.recordIqFormat = rxa.recordIqFormat_;
         cfg.recordAudioFormat = rxa.recordAudioFormat_;
@@ -10399,6 +10411,7 @@ void Engine::initialise() {
         (void)rx().pipeline_.setCwPitchHz(rx().cwPitchHz_);
         pushAudioEq();
         (void)rx().pipeline_.setNoiseSquelch(rx().noiseSquelchOn_, rx().noiseSquelchThresholdDb_, rx().noiseSquelchTailMs_);
+        (void)rx().pipeline_.setChannelShape(rx().filterShape_);
         (void)rx().iqRecorder_.setSampleFormat(cascade::core::RecordKind::BasebandIq, rx().recordIqFormat_);
         (void)rx().audioRecorder_.setSampleFormat(cascade::core::RecordKind::Audio, rx().recordAudioFormat_);
         (void)rx().pipeline_.setStereoPlace(rx().stereoPlaceMode_, rx().stereoPlaceValue_);

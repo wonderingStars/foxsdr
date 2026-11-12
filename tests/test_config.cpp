@@ -398,6 +398,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.cwPitchHz == b.cwPitchHz);
     CHECK(a.eqDb == b.eqDb && a.audioHighPassHz == b.audioHighPassHz && a.audioLowPassHz == b.audioLowPassHz);
     CHECK(a.noiseSquelchOn == b.noiseSquelchOn && a.noiseSquelchThresholdDb == b.noiseSquelchThresholdDb && a.noiseSquelchTailMs == b.noiseSquelchTailMs);
+    CHECK(a.filterShape == b.filterShape);
     CHECK(a.ctun == b.ctun);
     CHECK(a.recordIqFormat == b.recordIqFormat && a.recordAudioFormat == b.recordAudioFormat);
     CHECK(a.vfoActive == b.vfoActive && a.vfoOtherHz == b.vfoOtherHz && a.vfoOtherMode == b.vfoOtherMode && a.vfoOtherBwHz == b.vfoOtherBwHz);
@@ -948,6 +949,7 @@ int main() {
         in.audioLowPassHz = 2400;
         in.noiseSquelchThresholdDb = -42.5;   // (default -30)
         in.noiseSquelchTailMs = 160.0;        // (default 100)
+        in.filterShape = 2;   // (default 0)
         in.ctun = true;   // (default off)
         in.recordIqFormat = 1;   // (default 0)
         in.recordAudioFormat = 2;   // (default 0)

@@ -521,6 +521,7 @@ void Pipeline::applyChannelBandwidthLocked() {
                            m == cascade::dsp::DemodMode::CW);
     if (!sideband) {
         vfo_.setBandwidthHz(vfoBandwidthHz_);
+        mirrorChanShapeActive_.store(vfo_.channelShapeActive(), std::memory_order_relaxed);
         return;
     }
     // The demodulator clamps B for its channel rate; the channel filter is
@@ -528,6 +529,7 @@ void Pipeline::applyChannelBandwidthLocked() {
     // clamps its own width, so a very wide request stays inside the channel.)
     demod_.setSsbBandwidthHz(vfoBandwidthHz_);
     vfo_.setBandwidthHz(kSidebandChannelFactor * demod_.ssbBandwidthHz());
+    mirrorChanShapeActive_.store(vfo_.channelShapeActive(), std::memory_order_relaxed);
 }
 
 void Pipeline::resetDecodersLocked() {
@@ -1454,6 +1456,20 @@ bool Pipeline::setStereoPlace(int mode, double value) {
 int Pipeline::stereoPlaceMode() const { return mirrorPlaceMode_.load(std::memory_order_relaxed); }
 double Pipeline::stereoPlaceValue() const { return mirrorPlaceValue_.load(std::memory_order_relaxed); }
 
+// --- the channel filter's shape (engine serial lane A, F6) ---------------------------------------------------------------------------------------------------
+bool Pipeline::setChannelShape(int shape) {
+    if (shape < 0 || shape > 3) { return false; }
+    post([this, shape] {
+             chanShapeNow_ = shape;
+             vfo_.setChannelShape(shape);
+             mirrorChanShapeActive_.store(vfo_.channelShapeActive(), std::memory_order_relaxed);
+         },
+         [this, shape] { mirrorChanShape_.store(shape, std::memory_order_relaxed); });
+    return true;
+}
+int Pipeline::channelShape() const { return mirrorChanShape_.load(std::memory_order_relaxed); }
+bool Pipeline::channelShapeActive() const { return mirrorChanShapeActive_.load(std::memory_order_relaxed); }
+
 // --- CW pitch -------------------------------------------------------------------------------------------------------------------------------------
 bool Pipeline::setCwPitchHz(double hz) {
     if (!std::isfinite(hz) || hz < 300.0 || hz > 1200.0) { return false; }
@@ -1817,6 +1833,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
         vfo_.setOffsetHz(offset);
         afcAppliedHz_ = 0.0;   // (the tracker is rebuilt below with the channel blocks; the nudge goes with it)
         vfo_.setOffsetHz(userOffsetHz_);
+        vfo_.setChannelShape(chanShapeNow_);   // (F6: the user's shape put back on the rebuilt filter)
         vfo_.setNoiseBlankerThresholdDb(nbThresholdDb);
         vfo_.setNoiseBlankerEnabled(nbOn);
 

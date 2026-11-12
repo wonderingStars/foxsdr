@@ -485,6 +485,9 @@ typedef struct FoxReceiverState {
     /* ---- 0.3 (centre tuning; docs/API.md 6.19): a setting, it moves modeSeq. ---- */
     uint32_t ctun;                     /* 0/1, default 0 */
     uint32_t ctunPad;                  /* reserved, 0 */
+    /* ---- 0.3 (channel filter shape; docs/API.md 6.19): filterShape is a setting (moves modeSeq), filterShapeActive a measurement. ---- */
+    uint32_t filterShape;              /* 0 default, 1 sharp, 2 medium, 3 soft */
+    uint32_t filterShapeActive;        /* 1 while the shape is in the filter (it needs a narrow channel stage) - measured */
 } FoxReceiverState;
 #define FOXAPI_EQ_BANDS 8
 #define FOXAPI_NOTCH_SLOTS 10
@@ -670,6 +673,7 @@ typedef struct FoxCommand {
 #define FOXAPI_OP_SET_STEREO_PLACE       0x0120u /* ival[0]: 0 off / 1 pan / 2 pseudo-stereo / 3 binaural; num[0]: the pan -1 (left ear) .. +1 (right ear), the pseudo-stereo amount 0..1, or the azimuth -90..+90 degrees. A mono receiver only (a stereo decode keeps its channels). Addresses one radio (target) */
 #define FOXAPI_OP_SET_RECORD_FORMAT      0x0121u /* ival[0]: the sample format of baseband I/Q takes - 0 32-bit float (default), 1 16-bit integer; ival[1]: of audio takes - 0 16-bit integer (default), 1 24-bit integer, 2 32-bit float. For takes that start after this; one under way keeps its format. Addresses one radio (target) */
 #define FOXAPI_OP_SET_CTUN               0x0122u /* ival[0]: 0/1 centre tuning - on, a tune inside the span on show moves the VFO and leaves the radio's centre where it is; off (default), the VFO offset is kept and the centre follows. Addresses one radio (target) */
+#define FOXAPI_OP_SET_FILTER_SHAPE       0x0123u /* ival[0]: the channel filter shape - 0 the filter the VFO has always had, 1 sharp (shape factor 1.3), 2 medium (1.8), 3 soft (3.157, Gaussian). Where the VFO has a narrow stage (bandwidth under a quarter of the channel rate). Addresses one radio (target) */
 #define FOXAPI_OP_SET_TONE_REMOVE   0x0114u /* ival[0]: 0/1: the high-pass that takes the sub-audible tone out of the audio. Addresses one radio (target) */
 /* Display */
 #define FOXAPI_OP_SET_DISPLAY_RANGE 0x0201u /* num[0]: dbMin, num[1]: dbMax (min span enforced) */

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/vfo.hpp"
+#include "dsp/cw_filter.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -99,6 +100,24 @@ std::vector<unsigned> primeFactorsDescending(unsigned n) {
 }
 }  // namespace
 
+std::vector<float> Vfo::narrowStageTaps(double channelRate, double bw) const {
+    if (shape_ != 0) {
+        const ChannelShape sh = shape_ == 1 ? ChannelShape::Sharp : (shape_ == 2 ? ChannelShape::Medium : ChannelShape::Soft);
+        ChannelDesign d = designChannelFilter(channelRate, bw, sh);
+        if (!d.taps.empty()) { return d.taps; }
+    }
+    return narrowTaps(channelRate, bw);
+}
+
+bool Vfo::setChannelShape(int shape) {
+    if (shape < 0 || shape > 3) { return false; }
+    if (shape == shape_) { return true; }
+    shape_ = shape;
+    stages_ = designStages(bandwidth_);
+    placeNoiseBlanker();
+    return true;
+}
+
 Vfo::Vfo(double inputRateHz, unsigned decimation, double bandwidthHz)
     : inputRate_(inputRateHz),
       // Folding 0 to 1 keeps the arithmetic below finite even if the release
@@ -185,7 +204,7 @@ std::vector<FirDecimator> Vfo::designStages(double bwRequest) const {
     if (inputRate_ >= kStagedMinInputRateHz) { factors = primeFactorsDescending(decimFactor_); }
     if (factors.size() < 2) {
         stages.emplace_back(channelTaps(inputRate_, channelRate, bw), decimFactor_);
-        if (narrow) { stages.emplace_back(narrowTaps(channelRate, bwRequest), 1); }
+        if (narrow) { stages.emplace_back(narrowStageTaps(channelRate, bwRequest), 1); }
         return stages;
     }
     // Every factor but the smallest becomes an alias-guard stage; the
@@ -208,7 +227,7 @@ std::vector<FirDecimator> Vfo::designStages(double bwRequest) const {
         rate = out;
     }
     stages.emplace_back(channelTaps(rate, channelRate, bw), factors.back());
-    if (narrow) { stages.emplace_back(narrowTaps(channelRate, bwRequest), 1); }
+    if (narrow) { stages.emplace_back(narrowStageTaps(channelRate, bwRequest), 1); }
     return stages;
 }
 

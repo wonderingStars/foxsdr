@@ -75,6 +75,7 @@
     "cwPitchHz": 700.0,
     "audioHighPassHz": 0,
     "audioLowPassHz": 0,
+    "filterShape": 0,
     "ctun": false,
     "recordIqFormat": 0,
     "recordAudioFormat": 0,

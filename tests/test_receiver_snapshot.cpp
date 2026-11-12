@@ -605,6 +605,8 @@ void countersMoveByGroup() {
         {"the I/Q recording format", [](PublishedState& p) { p.rx.recordIqFormat = 1; }, "seq mode"},
         {"the audio recording format", [](PublishedState& p) { p.rx.recordAudioFormat = 2; }, "seq mode"},
         {"centre tuning", [](PublishedState& p) { p.rx.ctun = 1; }, "seq mode"},
+        {"the channel filter shape", [](PublishedState& p) { p.rx.filterShape = 2; }, "seq mode"},
+        {"the channel filter shape in use (a measurement)", [](PublishedState& p) { p.rx.filterShapeActive = 1; }, ""},
         {"the audio low-pass", [](PublishedState& p) { p.rx.audioLowPassHz = 2400; }, "seq mode"},
         {"the spectrum FFT size", [](PublishedState& p) { p.rx.spectrumFftSize = 8192; }, "seq mode"},
         {"the spectrum window", [](PublishedState& p) { p.rx.spectrumWindow = 1; }, "seq mode"},
@@ -716,7 +718,7 @@ void rdsGroupAndLayout() {
     CHECK(offsetof(FoxReceiverState, toneHz) < offsetof(FoxReceiverState, toneCode));
     CHECK(offsetof(FoxReceiverState, toneDetectedHz) > offsetof(FoxReceiverState, toneRemove));
     CHECK(offsetof(FoxReceiverState, audioGate) > offsetof(FoxReceiverState, toneGate));
-    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, ctunPad) + sizeof(std::uint32_t)) < 8u);
+    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, filterShapeActive) + sizeof(std::uint32_t)) < 8u);
     CHECK(FOXAPI_RDS_PS_CHARS == 9 && FOXAPI_RDS_TEXT_CHARS == 65);
     // The six RDS bits are one word's low bits, each its own.
     const std::uint32_t bits[] = {FOXAPI_RDS_SYNCED, FOXAPI_RDS_PI_VALID, FOXAPI_RDS_PS_VALID,
@@ -801,7 +803,7 @@ void scanGroupAndLayout() {
     CHECK(offsetof(FoxReceiverState, toneHz) < offsetof(FoxReceiverState, toneCode));
     CHECK(offsetof(FoxReceiverState, toneDetectedHz) > offsetof(FoxReceiverState, toneRemove));
     CHECK(offsetof(FoxReceiverState, audioGate) > offsetof(FoxReceiverState, toneGate));
-    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, ctunPad) + sizeof(std::uint32_t)) < 8u);
+    CHECK(sizeof(FoxReceiverState) - (offsetof(FoxReceiverState, filterShapeActive) + sizeof(std::uint32_t)) < 8u);
     // The state words are 0..3, each its own.
     CHECK(FOXAPI_SCANNER_IDLE == 0u && FOXAPI_SCANNER_SCANNING == 1u && FOXAPI_SCANNER_PAUSED == 2u &&
           FOXAPI_SCANNER_HOLDING == 3u);

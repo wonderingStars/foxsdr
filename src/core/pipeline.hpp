@@ -625,6 +625,11 @@ public:
     bool setStereoPlace(int mode, double value);
     int stereoPlaceMode() const;
     double stereoPlaceValue() const;
+    // THE CHANNEL FILTER'S SHAPE (engine serial lane A, row F6; Vfo::setChannelShape): 0 the filter the VFO has always had, 1 sharp, 2 medium, 3 soft. Applies where the VFO has a narrow stage (a bandwidth under a quarter of the
+    // channel rate); channelShapeActive() says whether it does now. Posted; kept across a rate change. False (nothing changed) outside 0..3.
+    bool setChannelShape(int shape);
+    int channelShape() const;
+    bool channelShapeActive() const;
     bool setIqCorrection(int mask);
     int iqCorrection() const;
     double iqImageRejectionDb() const;   // the balance estimator's reading of the input, dB (200 while nothing is measured)
@@ -1193,6 +1198,9 @@ private:
     std::atomic<double> mirrorAfcPullHz_{2500.0};
     std::atomic<double> mirrorAfcCorrHz_{0.0};
     std::atomic<bool> mirrorAfcLocked_{false};
+    int chanShapeNow_ = 0;                       // F6 (DSP thread's copy)
+    std::atomic<int> mirrorChanShape_{0};
+    std::atomic<bool> mirrorChanShapeActive_{false};
     double cwPitchNow_ = 700.0;
     // The spectrum block path (setSpectrum): the block exists from the first non-default choice on and is never freed while the pipeline lives; specOn_ says whether the DSP thread feeds it.
     std::unique_ptr<cascade::dsp::SpectrumBlock> specBlock_;
