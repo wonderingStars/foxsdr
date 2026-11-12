@@ -1028,6 +1028,8 @@ int main(int argc, char** argv) {
                 e.push_back(entry(MenuItemKind::Item, 605, "Help: the manual"));
                 e.push_back(entry(MenuItemKind::Item, 606, "Keyboard shortcuts", "Shift F1"));
                 e.push_back(entry(MenuItemKind::Item, 607, "Recordings..."));
+                e.push_back(entry(MenuItemKind::Item, 650, "Sky positions..."));          // screen lane J
+                e.push_back(entry(MenuItemKind::Item, 651, "Antenna calculator..."));     // screen lane J
                 e.push_back(entry(MenuItemKind::Separator, 0, ""));
                 e.push_back(entry(MenuItemKind::Item, 604, "Quit"));
                 break;
@@ -1324,6 +1326,8 @@ int main(int argc, char** argv) {
             case 109: laneC.toggleBwMemory(); break;                                   // F7
             case 606: laneC.openShortcuts(foxsdr::slintsystem::keyTableFromConfig(duties.interfaceHalf().keyBindings)); break;   // U10
             case 607: laneC.openRecordings(); break;                                   // P11
+            case 650: publisher.openSkyPage(); break;                                  // screen lane J, M8
+            case 651: publisher.openAntennaPage(); break;                              // screen lane J, Q7a
             case 111: face = Face::Nixie; applyFace(); break;
             case 112: face = Face::Drum; applyFace(); break;
             case 113: face = Face::Plain; applyFace(); break;
@@ -3044,6 +3048,8 @@ int main(int argc, char** argv) {
         }
         // globe.<propagation|ft8|goes|solar|satellites|status>: the 3D views' state (globe_publish.hpp stateText, docs 6.65)
         if (name.rfind("globe.", 0) == 0) { out = publisher.globeState(name.substr(6)); return std::string(); }
+        // mapj.<what>: screen lane J's state (kit_publish_mapj.cpp mapJState: layers, cells, grid, labels, lines, hidden, units, replay, replaySpeed, replayPos, recorded, filter, conditions, antennaRows, antennaError, skyRows)
+        if (name.rfind("mapj.", 0) == 0) { out = publisher.mapJState(name.substr(5)); return std::string(); }
         // scope.<what>: the scope modes' own state (scope_publish.hpp readState: demodOpen, signal, live, audioCount, bins, segments, ..., radarOn, range ...)
         if (name.rfind("scope.", 0) == 0) { return scopeBank.readState(name.substr(6), out); }
         // view3d.<what>: the 3D views' own state (view3d_publish.hpp readState: wf.on, wf.azimuth, wf.elevation, wf.zoom, wf.depth, wf.shading, wf.renders, wf.triangles, wf.pixels ...)

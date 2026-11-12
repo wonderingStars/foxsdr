@@ -56,6 +56,13 @@ export struct LegendRow {
     color: color,
 }
 
+// SCREEN LANE J: the caption of a Maidenhead grid cell, placed by the host: x, y are fractions of the pane (the cell's centre).
+export struct GridLabel {
+    x: float,
+    y: float,
+    text: string,
+}
+
 // A caption on a map: the ink with a 1 px halo of the ground colour all round (four copies one pixel up, down, left and right), so it
 // reads on the sea, on land and on a pale tile alike.
 component HaloText inherits Rectangle {
@@ -70,6 +77,7 @@ component HaloText inherits Rectangle {
     for d in [{ dx: -1px, dy: 0px }, { dx: 1px, dy: 0px }, { dx: 0px, dy: -1px }, { dx: 0px, dy: 1px }] : Text {
         x: d.dx;
         y: d.dy;
+        width: root.width;       // lane J: a caption longer than max-w is elided in every copy (the shadow copies ran past the pane's edge)
         text: root.text;
         color: Theme.bg;
         font-family: Theme.font-ui;
@@ -82,6 +90,7 @@ component HaloText inherits Rectangle {
     ink-text := Text {
         x: 0px;
         y: 0px;
+        width: root.width;
         text: root.text;
         color: root.ink;
         font-family: Theme.font-ui;
@@ -98,6 +107,7 @@ export component MapPane inherits Rectangle {
     in property <image> base;
     in property <[MapTarget]> targets;
     in property <[LegendRow]> legend;
+    in property <[GridLabel]> grid-labels;           // lane J: the Maidenhead grid's captions (at most 120)
     in property <string> scale-text;                 // "10 km"
     in property <float> scale-frac;                  // the bar's length as a fraction of the pane's width; 0 draws no bar
     in property <string> attribution;
@@ -401,6 +411,9 @@ export component MapPane inherits Rectangle {
             changed has-hover => { root.target-hover(i, self.has-hover); }
         }
     }
+
+    // ================= lane J: the Maidenhead grid's captions =================
+    for g in root.grid-labels : HaloText { x: g.x * root.width - self.width / 2; y: g.y * root.height - self.height / 2; text: g.text; ink: Theme.accent-soft; text-size: Theme.font-hint; max-w: 80px; }
 
     // ================= the legend, top right =================
     if root.legend.length > 0 : Rectangle {

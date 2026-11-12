@@ -1,0 +1,48 @@
+#! frames=1500 bank=1 sections=2:1 plugins=adsb-decoder open=module:adsb-decoder-1.9.1-abi3-win-x64.dll iqfile=adsb-decoder.wav centre=1090000000 mode=RAW bandwidth=2400000 size=1600x1600 FOXSDR_SLINT_TEST_LOCATORS=1 FOXSDR_SLINT_TEST_RFTRACK=1
+# mapj-layers (docs/multi-radio-records/screen-j.md, rows M1a, M1b, M2, Q5 and the Maidenhead overlay): the map page's layer switches, read back as state mapj.*.
+# The aircraft is decoded from the synthetic ADS-B recording (ICAO 4D2025, FOXSDR1, 35000 ft near 51.5 N 0.1 W); the worked / heard squares and the signal-level track are made up below the plugin ABI (the two test seams in the header).
+120 state kit.plugins == 1
++1 click "START"
++60 state decodersRunning >= 1
++300 state kit.tracks >= 1
+# the receiver's position (the aircraft is about 13 NM from Heathrow), set from the TOOLS bank as the radar scope's drive does
++1 key f3
++4 state bank == 2
++1 type "Latitude" "51.4775"
++1 key enter
++1 type "Longitude" "-0.4614"
++1 key enter
++3 click "Set RX here"
++25 state positionSet == 1
++1 click "DECODE"
++4 state bank == 1
++1 click "ADS-B map"
++30 state kit.mapPages >= 1
++1 click "Layers"
++5 state mapj.layers == "100000100"
+# the three sources that need their terms and a key stay off: the switch is dimmed and a press does nothing
++1 expect "Weather radar" enabled equals "false"
++1 expect "Receiver map" enabled equals "false"
++1 expect "Repeaters" enabled equals "false"
++1 expect "Airspaces" checked equals "true"
++1 expect "APRS paths" checked equals "true"
++1 click "Heat map"
++30 state mapj.layers == "100010100"
++10 state mapj.cells >= 1
++1 click "24 h range"
++10 state mapj.layers == "100011100"
++1 click "Signal level"
++10 state mapj.layers == "100011101"
++5 state mapj.cells >= 3
++1 click "Locator grid"
++10 state mapj.layers == "100011111"
++10 state mapj.grid >= 1
++1 state mapj.labels >= 1
++1 shot "mapj-layers.png"
++1 click "Heat map"
++1 click "24 h range"
++1 click "Signal level"
++1 click "Locator grid"
++10 state mapj.layers == "100000100"
++5 state mapj.grid == 0
++1 state mapj.labels == 0

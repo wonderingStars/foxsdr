@@ -50,6 +50,8 @@ list(APPEND foxsdr_slint_sources globe_scene.cpp solar_ephemeris.cpp globe_logic
 list(APPEND foxsdr_slint_sources gaps_logic.cpp gaps_win.cpp)
 # SCREEN LANE C (docs/multi-radio-records/screen-c.md): the scanner block, the memories, the delta lock, the clock and the two sheets (lanec_logic: pure; lanec_publish: the LaneC global)
 list(APPEND foxsdr_slint_sources lanec_logic.cpp lanec_publish.cpp)
+# SCREEN LANE J (docs/multi-radio-records/screen-j.md): the map page's layers, replay, filter and units, the Sky and Antenna pages (mapj_logic: pure; kit_publish_mapj: KitPublisher members; ui/mapj.slint)
+list(APPEND foxsdr_slint_sources mapj_logic.cpp kit_publish_mapj.cpp)
 if(WIN32)
     enable_language(RC)
     add_executable(foxsdr-slint WIN32 ${foxsdr_slint_sources} "${CMAKE_SOURCE_DIR}/resources/icon/foxsdr.rc")

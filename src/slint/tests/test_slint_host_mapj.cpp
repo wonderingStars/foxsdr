@@ -293,6 +293,8 @@ void sectionModels() {
     CHECK((heatRgba(0.0) >> 24) < (heatRgba(0.5) >> 24));
     CHECK(((heatRgba(1.0) >> 16) & 0xffu) < ((heatRgba(0.5) >> 16) & 0xffu));
     CHECK((heatRgba(0.0) & 0xffu) < (heatRgba(1.0) & 0xffu));
+    CHECK(((heatRgba(0.0) >> 8) & 0xffu) > ((heatRgba(0.0) >> 24) & 0xffu));        // cold is bluer than red
+    CHECK(((heatRgba(1.0) >> 24) & 0xffu) > ((heatRgba(1.0) >> 8) & 0xffu));        // hot is redder than blue
     CHECK(heatRgba(std::nan("")) == heatRgba(0.0));
     CHECK(heatRgba(7.0) == heatRgba(1.0));
     // the outline: a polygon through the receiver where nothing was heard, closed, washed, one colour per band
