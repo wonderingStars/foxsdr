@@ -468,6 +468,8 @@ struct AppWindowTestAccess {
     static bool cwPeakPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.cwPeakOn(); }); }
     static int placeRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->stereoPlaceMode_; }); }
     static int placePipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.stereoPlaceMode(); }); }
+    static int vfoActiveRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->vfoActive_; }); }
+    static bool vfoOtherSetRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->vfoOther_.set; }); }
     static double cwPitchPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.cwPitchHz(); }); }
     static bool nsqRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->noiseSquelchOn_; }); }
     static double nsqThrRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->noiseSquelchThresholdDb_; }); }
@@ -1355,6 +1357,24 @@ void receiverOps(AppWindow& a) {
         sp.num[0] = 0.0;
         CHECK(ok(A::apply(a, sp)));
         CHECK(A::placeRx(a) == 0 && A::placePipe(a) == 0);
+    }
+    // VFO A / B (FOXAPP_OP_VFO_SELECT / VFO_SWAP / VFO_STORE; the retuning is tests/test_engine_api_vfoab.cpp's)
+    covering(FOXAPP_OP_VFO_SELECT);
+    covering(FOXAPP_OP_VFO_SWAP);
+    covering(FOXAPP_OP_VFO_STORE);
+    {
+        CHECK(A::vfoActiveRx(a) == 0 && !A::vfoOtherSetRx(a));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_VFO_SWAP, 0)), FOXAPI_NO_CHANGE));    // nothing in the other VFO yet
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_VFO_SELECT, 2)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_VFO_SELECT, 0)), FOXAPI_NO_CHANGE));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_VFO_STORE, 0))));
+        CHECK(A::vfoOtherSetRx(a));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_VFO_SELECT, 1))));
+        CHECK(A::vfoActiveRx(a) == 1);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_VFO_SELECT, 0))));
+        CHECK(A::vfoActiveRx(a) == 0);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_VFO_SWAP, 0))));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_VFO_STORE, 3)), FOXAPI_OUT_OF_RANGE));
     }
     covering(FOXAPI_OP_SET_CW_PITCH);
     {

@@ -474,6 +474,11 @@ typedef struct FoxReceiverState {
     /* ---- 0.3 (stereo placement; docs/API.md 6.19): settings, they move modeSeq. ---- */
     double stereoPlaceValue;           /* the pan, the pseudo-stereo amount or the azimuth, by mode */
     uint32_t stereoPlaceMode;          /* 0 off (default), 1 pan, 2 pseudo-stereo, 3 binaural */
+    /* ---- 0.3 (VFO A/B, receive only; docs/API.md 6.19): the radio's tune is the active letter's; vfoOther* is the other letter's register. Settings, they move modeSeq. ---- */
+    double vfoOtherHz;                 /* the other VFO's frequency, Hz (0 while it has never been set) */
+    double vfoOtherBandwidthHz;
+    uint32_t vfoActive;                /* 0 = VFO A, 1 = VFO B */
+    uint32_t vfoOtherMode;             /* the other VFO's mode, FOXAPI_DEMOD_* (0 while it has never been set) */
 } FoxReceiverState;
 #define FOXAPI_EQ_BANDS 8
 #define FOXAPI_NOTCH_SLOTS 10

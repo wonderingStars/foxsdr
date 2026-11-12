@@ -237,6 +237,10 @@ struct SavedRadio {
     double cwPeakBoostDb = 12.0;      // 0..24
     int stereoPlaceMode = 0;          // 0 off / 1 pan / 2 pseudo-stereo / 3 binaural (engine serial lane A)
     double stereoPlaceValue = 0.0;    // the pan -1..1, the amount 0..1 or the azimuth -90..90
+    int vfoActive = 0;               // VFO A / B: the active letter (engine serial lane A)
+    double vfoOtherHz = 0.0;         // the other letter's frequency, Hz (0 = never set)
+    int vfoOtherMode = 0;            // its mode, 1-based FOXAPI_DEMOD_* (0 = never set)
+    double vfoOtherBwHz = 0.0;       // its bandwidth, Hz
     std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;
@@ -544,6 +548,10 @@ struct AppConfig {
     double cwPeakBoostDb = 12.0;      // 0..24
     int stereoPlaceMode = 0;          // 0 off / 1 pan / 2 pseudo-stereo / 3 binaural (engine serial lane A)
     double stereoPlaceValue = 0.0;    // the pan -1..1, the amount 0..1 or the azimuth -90..90
+    int vfoActive = 0;               // VFO A / B: the active letter (engine serial lane A)
+    double vfoOtherHz = 0.0;         // the other letter's frequency, Hz (0 = never set)
+    int vfoOtherMode = 0;            // its mode, 1-based FOXAPI_DEMOD_* (0 = never set)
+    double vfoOtherBwHz = 0.0;       // its bandwidth, Hz
     std::vector<ManualNotchSetting> notchBank;   // the manual notch bank: only the slots that are on or were set (engine wiring lane 1)
     bool notchEnabled = false;
     double notchFreqHz = 1000.0;

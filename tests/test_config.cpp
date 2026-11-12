@@ -398,6 +398,7 @@ void checkEqual(const AppConfig& a, const AppConfig& b) {
     CHECK(a.cwPitchHz == b.cwPitchHz);
     CHECK(a.eqDb == b.eqDb && a.audioHighPassHz == b.audioHighPassHz && a.audioLowPassHz == b.audioLowPassHz);
     CHECK(a.noiseSquelchOn == b.noiseSquelchOn && a.noiseSquelchThresholdDb == b.noiseSquelchThresholdDb && a.noiseSquelchTailMs == b.noiseSquelchTailMs);
+    CHECK(a.vfoActive == b.vfoActive && a.vfoOtherHz == b.vfoOtherHz && a.vfoOtherMode == b.vfoOtherMode && a.vfoOtherBwHz == b.vfoOtherBwHz);
     CHECK(a.stereoPlaceMode == b.stereoPlaceMode && a.stereoPlaceValue == b.stereoPlaceValue);
     CHECK(a.cwPeakOn == b.cwPeakOn && a.cwPeakWidthHz == b.cwPeakWidthHz && a.cwPeakBoostDb == b.cwPeakBoostDb);
     CHECK(a.afcOn == b.afcOn && a.afcPullInHz == b.afcPullInHz);
@@ -945,6 +946,10 @@ int main() {
         in.audioLowPassHz = 2400;
         in.noiseSquelchThresholdDb = -42.5;   // (default -30)
         in.noiseSquelchTailMs = 160.0;        // (default 100)
+        in.vfoActive = 1;   // (default 0)
+        in.vfoOtherHz = 14070000.0;   // (default 0 = never set)
+        in.vfoOtherMode = 5;
+        in.vfoOtherBwHz = 2700.0;
         in.stereoPlaceMode = 3;   // (default off)
         in.stereoPlaceValue = -40.0;   // (default 0)
         in.cwPeakOn = true;   // (default off)

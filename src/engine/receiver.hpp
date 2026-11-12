@@ -377,6 +377,15 @@ struct Receiver {
     double cwPeakBoostDb_ = 12.0;
     int stereoPlaceMode_ = 0;      // stereo placement of a mono receiver (engine serial lane A, F20/D5)
     double stereoPlaceValue_ = 0.0;
+    // VFO A / B (engine serial lane A, T6): which letter the radio's own tune belongs to, and the register of the other one (vfoExchange).
+    struct VfoReg {
+        double hz = 0.0;
+        int mode = 0;          // the modeIndex_ (0-based)
+        double bwHz = 0.0;
+        bool set = false;
+    };
+    int vfoActive_ = 0;
+    VfoReg vfoOther_;
     int nrMethod_ = 0;
     std::array<double, 8> eqDb_{};   // the equaliser's bands (engine wiring lane 1): all flat
     int audioHpHz_ = 0;              // the audio high-pass: 0 off / 100 / 300

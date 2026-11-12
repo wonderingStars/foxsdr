@@ -3185,6 +3185,9 @@ private:
     // THE FREQUENCY LOCK (FOXAPP_OP_RADIO_LOCK, engine wiring W2; Receiver::tuneLocked_): which commands it refuses, and the fingerprint counter of its facts.
     static bool isTuningCommandOfLock(const FoxCommand& c);
     // THE STEREO SYSTEM (FOXAPP_OP_SET_STEREO_SYSTEM, engine wiring W2): run once a pass for every radio, under its scope, after its retune is polled.
+    // VFO A / B (engine serial lane A, row T6; engine_vfo.cpp): the radio's own tune is the active letter's, Receiver::vfoOther_ is the other letter's register; this swaps them (the active
+    // radio's frequency, mode and bandwidth against the register's) and retunes. Used by FOXAPP_OP_VFO_SELECT and VFO_SWAP, under the radio's scope.
+    void vfoExchange();
     void pollStereoSystem();
     std::uint64_t stereoSystemVersion_ = 1;
     // RECORDING FILE NAMES FROM A TEMPLATE (engine_recname.cpp; FOXAPP_OP_SET_RECORD_NAME, engine wiring W2).

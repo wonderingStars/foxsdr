@@ -166,6 +166,9 @@
 //   the loop. The position, length, loop and real start time are read back from the radio's state (filePositionSec and its neighbours); none of it is saved (a file starts from the top).
 #define FOXAPP_OP_FILE_SEEK              0x861Au /* ival[0]: 0 seconds / 1 fraction of the length; num[0]: the place. Addresses one radio (target) */
 #define FOXAPP_OP_FILE_LOOP              0x861Bu /* ival[0]: 1 loop between num[0] and num[1] seconds / 0 clear. Addresses one radio (target) */
+#define FOXAPP_OP_VFO_SELECT                 0x861Cu /* ival[0]: 0 = VFO A, 1 = VFO B. Addresses one radio (target) */
+#define FOXAPP_OP_VFO_SWAP                   0x861Du /* swap the two VFOs: the radio takes the other letter's frequency, mode and bandwidth and the other letter keeps what it had. Addresses one radio (target) */
+#define FOXAPP_OP_VFO_STORE                  0x861Eu /* ival[0] = 0: copy the radio's tune into the other VFO; 1: set the other VFO to ival[1] mode (1-based FOXAPI_DEMOD), num[0] Hz, num[1] bandwidth Hz, and the active letter to num[2] (0/1). Addresses one radio (target) */
 #define FOXAPP_OP_SET_STEREO_SYSTEM      0x8619u /* ival[0]: 0 automatic / 1 pilot tone / 2 OIRT. Addresses one radio (target) */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

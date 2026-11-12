@@ -4899,6 +4899,10 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
         for (std::size_t i = 0; i < rxa.eqDb_.size(); ++i) { r.eqDb[i] = rxa.eqDb_[i]; }
         r.audioHighPassHz = static_cast<std::uint32_t>(rxa.audioHpHz_);
         r.audioLowPassHz = static_cast<std::uint32_t>(rxa.audioLpHz_);
+        r.vfoActive = static_cast<std::uint32_t>(rxa.vfoActive_);
+        r.vfoOtherHz = rxa.vfoOther_.set ? rxa.vfoOther_.hz : 0.0;
+        r.vfoOtherBandwidthHz = rxa.vfoOther_.set ? rxa.vfoOther_.bwHz : 0.0;
+        r.vfoOtherMode = rxa.vfoOther_.set ? static_cast<std::uint32_t>(rxa.vfoOther_.mode + 1) : 0u;
         r.stereoPlaceMode = static_cast<std::uint32_t>(rxa.stereoPlaceMode_);
         r.stereoPlaceValue = rxa.stereoPlaceValue_;
         r.cwPeakOn = rxa.cwPeakOn_ ? 1u : 0u;
@@ -7672,6 +7676,40 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[0] = c.num[0];
             return res;
         }
+        case FOXAPP_OP_VFO_SELECT: {
+            Receiver& rxs = rx();
+            if (c.ival[0] != 0 && c.ival[0] != 1) { return refuse(FOXAPI_OUT_OF_RANGE, "the VFOs are A (0) and B (1)"); }
+            if (rxs.vfoActive_ == static_cast<int>(c.ival[0])) { return refuse(FOXAPI_NO_CHANGE, "that VFO is in use already"); }
+            if (rxs.tuneLocked_) { return refuse(FOXAPI_DENIED, "the frequency is locked"); }
+            vfoExchange();
+            rxs.vfoActive_ = static_cast<int>(c.ival[0]);
+            res.applied[0] = static_cast<double>(rxs.vfoActive_);
+            return res;
+        }
+        case FOXAPP_OP_VFO_SWAP: {
+            Receiver& rxs = rx();
+            if (!rxs.vfoOther_.set) { return refuse(FOXAPI_NO_CHANGE, "the other VFO has not been set"); }
+            if (rxs.tuneLocked_) { return refuse(FOXAPI_DENIED, "the frequency is locked"); }
+            vfoExchange();
+            res.applied[0] = rxs.vfoOther_.hz;
+            return res;
+        }
+        case FOXAPP_OP_VFO_STORE: {
+            Receiver& rxs = rx();
+            if (c.ival[0] == 0) {
+                rxs.vfoOther_ = {currentAbsoluteHz(), rxs.modeIndex_, rxs.vfoBandwidthHz_, true};
+            } else if (c.ival[0] == 1) {
+                if (c.ival[1] < 1 || c.ival[1] > 8 || !(c.num[0] > 0.0) || c.num[0] > 1e12 || !(c.num[1] >= 0.0) || c.num[1] > 1e9 || (c.num[2] != 0.0 && c.num[2] != 1.0)) {
+                    return refuse(FOXAPI_OUT_OF_RANGE, "a VFO register is a frequency, a mode 1 to 8 and a bandwidth");
+                }
+                rxs.vfoOther_ = {c.num[0], static_cast<int>(c.ival[1] - 1), c.num[1], true};
+                rxs.vfoActive_ = static_cast<int>(c.num[2]);
+            } else {
+                return refuse(FOXAPI_OUT_OF_RANGE, "VFO_STORE copies (0) or sets (1)");
+            }
+            res.applied[0] = rxs.vfoOther_.hz;
+            return res;
+        }
         case FOXAPI_OP_SET_CW_PITCH: {
             Receiver& rxs = rx();
             if (!rxs.pipeline_.setCwPitchHz(c.num[0])) { return refuse(FOXAPI_OUT_OF_RANGE, "the CW pitch is 300 to 1200 Hz"); }
@@ -9555,6 +9593,8 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         for (std::size_t i = 0; i < cfg.eqDb.size() && i < 8; ++i) { rx().eqDb_[i] = cfg.eqDb[i]; }
         rx().audioHpHz_ = cfg.audioHighPassHz;
         rx().audioLpHz_ = cfg.audioLowPassHz;
+        rx().vfoActive_ = cfg.vfoActive;
+        rx().vfoOther_ = {cfg.vfoOtherHz, cfg.vfoOtherMode - 1, cfg.vfoOtherBwHz, cfg.vfoOtherMode >= 1 && cfg.vfoOtherHz > 0.0};
         rx().stereoPlaceMode_ = cfg.stereoPlaceMode;
         rx().stereoPlaceValue_ = cfg.stereoPlaceValue;
         rx().cwPeakOn_ = cfg.cwPeakOn;
@@ -10145,6 +10185,10 @@ void Engine::fillConfig(cascade::core::AppConfig& cfg) {
         }
         cfg.audioHighPassHz = rxa.audioHpHz_;
         cfg.audioLowPassHz = rxa.audioLpHz_;
+        cfg.vfoActive = rxa.vfoActive_;
+        cfg.vfoOtherHz = rxa.vfoOther_.set ? rxa.vfoOther_.hz : 0.0;
+        cfg.vfoOtherMode = rxa.vfoOther_.set ? rxa.vfoOther_.mode + 1 : 0;
+        cfg.vfoOtherBwHz = rxa.vfoOther_.set ? rxa.vfoOther_.bwHz : 0.0;
         cfg.stereoPlaceMode = rxa.stereoPlaceMode_;
         cfg.stereoPlaceValue = rxa.stereoPlaceValue_;
         cfg.cwPeakOn = rxa.cwPeakOn_;
