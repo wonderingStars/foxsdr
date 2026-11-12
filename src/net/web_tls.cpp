@@ -191,7 +191,7 @@ void describe(Credential& c) {
 // Reads the key's export policy: false only when it says "not exportable".
 bool keyIsExportable(NCRYPT_KEY_HANDLE k) {
     DWORD policy = 0, cb = 0;
-    if (NCryptGetProperty(k, NCRYPT_EXPORT_POLICY_PROPERTY, reinterpret_cast<PBYTE>(&policy), sizeof(policy), &cb, 0) != ERROR_SUCCESS) { return true; }
+    if (NCryptGetProperty(k, NCRYPT_EXPORT_POLICY_PROPERTY, reinterpret_cast<PBYTE>(&policy), sizeof(policy), &cb, NCRYPT_SILENT_FLAG) != ERROR_SUCCESS) { return true; }
     return policy != 0;
 }
 
@@ -264,9 +264,9 @@ bool encodeExt(LPCSTR structType, const void* info, LPCSTR oid, bool critical, s
 // The key's public point as the certificate carries it: 0x04 | X | Y.
 bool keyPublicPoint(NCRYPT_KEY_HANDLE key, Bytes& point) {
     DWORD sz = 0;
-    if (NCryptExportKey(key, 0, BCRYPT_ECCPUBLIC_BLOB, nullptr, nullptr, 0, &sz, 0) != ERROR_SUCCESS) { return false; }
+    if (NCryptExportKey(key, 0, BCRYPT_ECCPUBLIC_BLOB, nullptr, nullptr, 0, &sz, NCRYPT_SILENT_FLAG) != ERROR_SUCCESS) { return false; }
     Bytes blob(sz);
-    if (NCryptExportKey(key, 0, BCRYPT_ECCPUBLIC_BLOB, nullptr, blob.data(), sz, &sz, 0) != ERROR_SUCCESS) { return false; }
+    if (NCryptExportKey(key, 0, BCRYPT_ECCPUBLIC_BLOB, nullptr, blob.data(), sz, &sz, NCRYPT_SILENT_FLAG) != ERROR_SUCCESS) { return false; }
     if (blob.size() < sizeof(BCRYPT_ECCKEY_BLOB)) { return false; }
     const BCRYPT_ECCKEY_BLOB* h = reinterpret_cast<const BCRYPT_ECCKEY_BLOB*>(blob.data());
     if (blob.size() < sizeof(BCRYPT_ECCKEY_BLOB) + 2 * static_cast<std::size_t>(h->cbKey)) { return false; }
@@ -305,16 +305,16 @@ bool openKey(Credential& c, const std::wstring& name, bool create, std::string& 
     SECURITY_STATUS ss = NCryptOpenStorageProvider(&c.prov, MS_KEY_STORAGE_PROVIDER, 0);
     if (ss != ERROR_SUCCESS) { error = codeText("opening the key storage provider", ss); return false; }
     if (!name.empty()) {
-        ss = NCryptOpenKey(c.prov, &c.key, name.c_str(), 0, 0);
+        ss = NCryptOpenKey(c.prov, &c.key, name.c_str(), 0, NCRYPT_SILENT_FLAG);
         if (ss == ERROR_SUCCESS) { return true; }
         if (!create) { error = codeText("opening the stored key", ss); return false; }
     }
-    ss = NCryptCreatePersistedKey(c.prov, &c.key, BCRYPT_ECDSA_P256_ALGORITHM, name.empty() ? nullptr : name.c_str(), 0, 0);
+    ss = NCryptCreatePersistedKey(c.prov, &c.key, BCRYPT_ECDSA_P256_ALGORITHM, name.empty() ? nullptr : name.c_str(), 0, NCRYPT_SILENT_FLAG);
     if (ss != ERROR_SUCCESS) { error = codeText("creating the key", ss); return false; }
     DWORD policy = 0;  // NOT EXPORTABLE
-    ss = NCryptSetProperty(c.key, NCRYPT_EXPORT_POLICY_PROPERTY, reinterpret_cast<PBYTE>(&policy), sizeof(policy), NCRYPT_PERSIST_FLAG);
+    ss = NCryptSetProperty(c.key, NCRYPT_EXPORT_POLICY_PROPERTY, reinterpret_cast<PBYTE>(&policy), sizeof(policy), NCRYPT_PERSIST_FLAG | NCRYPT_SILENT_FLAG);
     if (ss != ERROR_SUCCESS) { error = codeText("making the key non-exportable", ss); return false; }
-    ss = NCryptFinalizeKey(c.key, 0);
+    ss = NCryptFinalizeKey(c.key, NCRYPT_SILENT_FLAG);
     if (ss != ERROR_SUCCESS) { error = codeText("finalising the key", ss); return false; }
     return true;
 }
@@ -427,6 +427,7 @@ bool makeSelfSignedCert(Credential& c, const TlsOptions& opt, const std::wstring
         kpi.pwszContainerName = nameCopy.data();
         kpi.pwszProvName = provName.data();
         kpi.dwProvType = 0;
+        kpi.dwFlags = NCRYPT_SILENT_FLAG;   // a key that cannot be used silently is an error, never a dialog
         kpi.dwKeySpec = 0;
         if (!CertSetCertificateContextProperty(c.cert, CERT_KEY_PROV_INFO_PROP_ID, 0, &kpi)) {
             error = codeText("attaching the key to the certificate", GetLastError());
@@ -470,6 +471,7 @@ bool loadOrMakeSelfSigned(Credential& c, const TlsOptions& opt, std::string& err
                 kpi.pwszContainerName = nameCopy.data();
                 kpi.pwszProvName = provName.data();
                 kpi.dwProvType = 0;
+                kpi.dwFlags = NCRYPT_SILENT_FLAG;
                 kpi.dwKeySpec = 0;
                 if (CertSetCertificateContextProperty(stored, CERT_KEY_PROV_INFO_PROP_ID, 0, &kpi)) {
                     c.cert = stored;
@@ -515,44 +517,90 @@ bool loadOrMakeSelfSigned(Credential& c, const TlsOptions& opt, std::string& err
     return true;
 }
 
-bool findByThumbprint(Credential& c, const std::string& hex, std::string& error) {
+// May a certificate's private key be used by this program with certainty that no dialog can appear? Only keys in Microsoft's own SOFTWARE
+// providers qualify: a smart card, a token or a TPM-backed provider may ask for a PIN or a card on the user's screen, and Schannel would ask
+// them from inside a handshake. The provider is read from the certificate's properties without touching the key.
+bool softwareKeyProvider(PCCERT_CONTEXT cert, std::string& why) {
+    DWORD n = 0;
+    if (!CertGetCertificateContextProperty(cert, CERT_KEY_PROV_INFO_PROP_ID, nullptr, &n) || n == 0) {
+        why = "the certificate with that thumbprint has no private key on this computer";
+        return false;
+    }
+    Bytes buf(n);
+    if (!CertGetCertificateContextProperty(cert, CERT_KEY_PROV_INFO_PROP_ID, buf.data(), &n)) {
+        why = "the certificate's key provider could not be read";
+        return false;
+    }
+    const CRYPT_KEY_PROV_INFO* kpi = reinterpret_cast<const CRYPT_KEY_PROV_INFO*>(buf.data());
+    const std::wstring prov = kpi->pwszProvName != nullptr ? kpi->pwszProvName : L"";
+    static const wchar_t* const allowed[] = {
+        L"Microsoft Software Key Storage Provider", L"Microsoft Enhanced RSA and AES Cryptographic Provider",
+        L"Microsoft Enhanced Cryptographic Provider v1.0", L"Microsoft Strong Cryptographic Provider", L"Microsoft Base Cryptographic Provider v1.0",
+        L"Microsoft Enhanced DSS and Diffie-Hellman Cryptographic Provider", L"Microsoft DH SChannel Cryptographic Provider"};
+    for (const wchar_t* a : allowed) {
+        if (prov == a) { return true; }
+    }
+    why = "the key of the certificate with that thumbprint is in a hardware or smart-card provider, which could ask for a PIN on screen in the middle of a "
+          "connection; only certificates whose key is in a Microsoft software provider are used";
+    return false;
+}
+
+// Looks `store` over for the thumbprint and takes the certificate, or says why it will not.
+bool takeFromStore(HCERTSTORE store, CRYPT_HASH_BLOB* blob, Credential& c, std::string& error, bool& found) {
+    found = false;
+    PCCERT_CONTEXT cert = CertFindCertificateInStore(store, X509_ASN_ENCODING, 0, CERT_FIND_SHA1_HASH, blob, nullptr);
+    if (cert == nullptr) { return false; }
+    found = true;
+    if (!softwareKeyProvider(cert, error)) {
+        CertFreeCertificateContext(cert);
+        return false;
+    }
+    if (CertVerifyTimeValidity(nullptr, cert->pCertInfo) != 0) {
+        CertFreeCertificateContext(cert);
+        error = "the certificate with that thumbprint is expired or not yet valid";
+        return false;
+    }
+    // The key must be reachable SILENTLY now, so that Schannel never has to ask. (A key that is missing makes a software provider answer
+    // with an error; it does not ask for anything.)
+    HCRYPTPROV_OR_NCRYPT_KEY_HANDLE kh = 0;
+    DWORD spec = 0;
+    BOOL mustFree = FALSE;
+    if (!CryptAcquireCertificatePrivateKey(cert, CRYPT_ACQUIRE_SILENT_FLAG | CRYPT_ACQUIRE_PREFER_NCRYPT_KEY_FLAG, nullptr, &kh, &spec, &mustFree)) {
+        CertFreeCertificateContext(cert);
+        error = "the private key of the certificate with that thumbprint cannot be used without asking (missing, or needs a password)";
+        return false;
+    }
+    c.exportable = true;
+    if (spec == CERT_NCRYPT_KEY_SPEC) { c.exportable = keyIsExportable(kh); }
+    if (mustFree) {
+        if (spec == CERT_NCRYPT_KEY_SPEC) { NCryptFreeObject(kh); } else { CryptReleaseContext(kh, 0); }
+    }
+    c.cert = cert;
+    c.selfSigned = false;
+    return true;
+}
+
+bool findByThumbprint(Credential& c, const std::string& hex, void* searchStore, std::string& error) {
     Bytes hash;
     for (std::size_t i = 0; i + 1 < hex.size(); i += 2) {
         const auto nib = [](char h) { return h <= '9' ? h - '0' : (h | 0x20) - 'a' + 10; };
         hash.push_back(static_cast<std::uint8_t>(nib(hex[i]) * 16 + nib(hex[i + 1])));
     }
     CRYPT_HASH_BLOB blob{static_cast<DWORD>(hash.size()), hash.data()};
+    bool found = false;
+    if (searchStore != nullptr) {   // a test's in-memory store, and nothing else
+        if (takeFromStore(static_cast<HCERTSTORE>(searchStore), &blob, c, error, found)) { return true; }
+        if (!found) { error = "no certificate with that thumbprint was found in the Personal store of the current user or of this computer"; }
+        return false;
+    }
+    // READ ONLY, and only to find the one certificate the user named: nothing is ever added to a store or changed in it.
     for (const DWORD where : {static_cast<DWORD>(CERT_SYSTEM_STORE_CURRENT_USER), static_cast<DWORD>(CERT_SYSTEM_STORE_LOCAL_MACHINE)}) {
         HCERTSTORE store = CertOpenStore(CERT_STORE_PROV_SYSTEM_W, 0, 0, where | CERT_STORE_OPEN_EXISTING_FLAG | CERT_STORE_READONLY_FLAG, L"MY");
         if (store == nullptr) { continue; }
-        PCCERT_CONTEXT found = CertFindCertificateInStore(store, X509_ASN_ENCODING, 0, CERT_FIND_SHA1_HASH, &blob, nullptr);
+        const bool ok = takeFromStore(store, &blob, c, error, found);
         CertCloseStore(store, 0);
-        if (found == nullptr) { continue; }
-        DWORD n = 0;
-        const bool hasKey = CertGetCertificateContextProperty(found, CERT_KEY_PROV_INFO_PROP_ID, nullptr, &n) ||
-                            CertGetCertificateContextProperty(found, CERT_KEY_CONTEXT_PROP_ID, nullptr, &n);
-        if (!hasKey) {
-            CertFreeCertificateContext(found);
-            error = "the certificate with that thumbprint has no private key on this computer";
-            return false;
-        }
-        if (CertVerifyTimeValidity(nullptr, found->pCertInfo) != 0) {
-            CertFreeCertificateContext(found);
-            error = "the certificate with that thumbprint is expired or not yet valid";
-            return false;
-        }
-        c.cert = found;
-        c.selfSigned = false;
-        // Best effort: is its key exportable?
-        HCRYPTPROV_OR_NCRYPT_KEY_HANDLE kh = 0;
-        DWORD spec = 0;
-        BOOL free = FALSE;
-        c.exportable = true;
-        if (CryptAcquireCertificatePrivateKey(found, CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG | CRYPT_ACQUIRE_SILENT_FLAG, nullptr, &kh, &spec, &free)) {
-            c.exportable = keyIsExportable(kh);
-            if (free) { NCryptFreeObject(kh); }
-        }
-        return true;
+        if (ok) { return true; }
+        if (found) { return false; }   // found, and refused for a reason that is in `error`
     }
     error = "no certificate with that thumbprint was found in the Personal store of the current user or of this computer";
     return false;
@@ -594,7 +642,7 @@ public:
         auto fresh = std::make_unique<Credential>();
         bool ok = false;
         if (!opt.thumbprint.empty()) {
-            ok = findByThumbprint(*fresh, opt.thumbprint, error);
+            ok = findByThumbprint(*fresh, opt.thumbprint, opt.searchStore, error);
         } else {
             ok = loadOrMakeSelfSigned(*fresh, opt, error);
         }

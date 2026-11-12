@@ -1117,12 +1117,8 @@ void testHttpsRefusals() {
     c.tlsCertThumbprint = "not-a-thumbprint";
     CHECK(!server.start(c, error));
     CHECK(server.decision().verdict == BindVerdict::RefusedTlsCertificate);
-    c.tlsCertThumbprint = std::string(40, 'a');   // well-formed, and in no store
-    c.port = 18398;
-    CHECK(!server.start(c, error));
-    CHECK(error.find("HTTPS") != std::string::npos);
-    CHECK(error.find("no certificate with that thumbprint") != std::string::npos);
-    CHECK(!server.running() && !server.tlsInfo().active);
+    // (A well-formed thumbprint that is in no store is tested in test_web_tls against an in-memory store: this test never opens a Windows certificate store.)
+    c.tlsCertThumbprint.clear();
     // A port already taken: the sentence names it, and nothing is left running.
     c.tlsCertThumbprint.clear();
     SchannelClient::wsa();

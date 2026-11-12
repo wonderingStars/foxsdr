@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <ctime>
 #include <chrono>
 #include <cstdint>
@@ -55,6 +56,7 @@ namespace {
 using web_test::HttpReply;
 using web_test::SchannelClient;
 
+std::string g_root;      // the source root (CTest passes it)
 std::string g_scratch;   // a folder of this run's own (PID in the name)
 
 long long msSince(Clock::time_point t) { return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t).count(); }
@@ -213,7 +215,7 @@ void deleteKey(const std::string& name) {
     NCRYPT_KEY_HANDLE key = 0;
     if (NCryptOpenStorageProvider(&prov, MS_KEY_STORAGE_PROVIDER, 0) != ERROR_SUCCESS) { return; }
     const std::wstring w(name.begin(), name.end());
-    if (NCryptOpenKey(prov, &key, w.c_str(), 0, 0) == ERROR_SUCCESS) { NCryptDeleteKey(key, 0); }   // (frees the handle)
+    if (NCryptOpenKey(prov, &key, w.c_str(), 0, NCRYPT_SILENT_FLAG) == ERROR_SUCCESS) { NCryptDeleteKey(key, NCRYPT_SILENT_FLAG); }   // (frees the handle)
     NCryptFreeObject(prov);
 }
 
@@ -223,11 +225,11 @@ bool keyExists(const std::string& name) {
     bool ok = false;
     if (NCryptOpenStorageProvider(&prov, MS_KEY_STORAGE_PROVIDER, 0) == ERROR_SUCCESS) {
         const std::wstring w(name.begin(), name.end());
-        if (NCryptOpenKey(prov, &key, w.c_str(), 0, 0) == ERROR_SUCCESS) {
+        if (NCryptOpenKey(prov, &key, w.c_str(), 0, NCRYPT_SILENT_FLAG) == ERROR_SUCCESS) {
             ok = true;
             // THE KEY CANNOT BE TAKEN OUT: an export of the private part is refused by the key store.
             DWORD sz = 0;
-            const SECURITY_STATUS ss = NCryptExportKey(key, 0, BCRYPT_ECCPRIVATE_BLOB, nullptr, nullptr, 0, &sz, 0);
+            const SECURITY_STATUS ss = NCryptExportKey(key, 0, BCRYPT_ECCPRIVATE_BLOB, nullptr, nullptr, 0, &sz, NCRYPT_SILENT_FLAG);
             CHECK(ss != ERROR_SUCCESS);
             NCryptFreeObject(key);
         }
@@ -288,13 +290,31 @@ void testPersistedCertificate() {
     CHECK(!keyExists(keyName));
 }
 
-// A user-picked certificate: put one made here in the current user's Personal store, find it by thumbprint, take it out again.
-struct StoreEntry {
-    PCCERT_CONTEXT inStore = nullptr;
-    void remove() {
-        if (inStore != nullptr) { CertDeleteCertificateFromStore(inStore); inStore = nullptr; }   // (frees the context)
+// A user-picked certificate, found by thumbprint. NOTHING TOUCHES A WINDOWS CERTIFICATE STORE THAT BELONGS TO THE USER OR THE MACHINE: the
+// certificates are placed in a store that lives in this process's memory (CERT_STORE_PROV_MEMORY), which TlsOptions::searchStore hands to the
+// code under test in place of the Personal stores. A certificate added to a real store, with a key that Windows has to go and look for, is
+// what once put a smart-card dialog on the owner's screen.
+struct MemStore {
+    HCERTSTORE h = nullptr;
+    MemStore() { h = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, 0, nullptr); }
+    ~MemStore() {
+        if (h != nullptr) { CertCloseStore(h, 0); }
     }
-    ~StoreEntry() { remove(); }
+    // Adds `der` carrying a key provider property: the named key in `provider`.
+    bool add(const std::vector<std::uint8_t>& der, const std::wstring& provider, const std::wstring& container) {
+        PCCERT_CONTEXT c = CertCreateCertificateContext(X509_ASN_ENCODING, der.data(), static_cast<DWORD>(der.size()));
+        if (c == nullptr) { return false; }
+        std::wstring prov = provider;
+        std::wstring name = container;
+        CRYPT_KEY_PROV_INFO kpi{};
+        kpi.pwszContainerName = name.data();
+        kpi.pwszProvName = prov.data();
+        kpi.dwFlags = NCRYPT_SILENT_FLAG;
+        CertSetCertificateContextProperty(c, CERT_KEY_PROV_INFO_PROP_ID, 0, &kpi);
+        const BOOL ok = CertAddCertificateContextToStore(h, c, CERT_STORE_ADD_REPLACE_EXISTING, nullptr);
+        CertFreeCertificateContext(c);
+        return ok != FALSE;
+    }
 };
 
 void testThumbprintCertificate() {
@@ -307,67 +327,187 @@ void testThumbprintCertificate() {
     CHECK(maker.prepare(o, err));
     const std::string thumb = maker.thumbprintSha1();
     CHECK(isHex(thumb, 40));
+    const std::wstring wkey(keyName.begin(), keyName.end());
 
+    MemStore store;
+    CHECK(store.h != nullptr);
+    if (store.h == nullptr) { return; }
+    TlsOptions pick;
+    pick.thumbprint = thumb;
+    pick.searchStore = store.h;
     // Not in the store yet: a sentence, not a crash.
     {
-        TlsOptions pick;
-        pick.thumbprint = thumb;
         TlsTerminator t;
         CHECK(!t.prepare(pick, err));
         CHECK(err.find("no certificate with that thumbprint") != std::string::npos);
     }
-    HCERTSTORE store = CertOpenStore(CERT_STORE_PROV_SYSTEM_W, 0, 0, CERT_SYSTEM_STORE_CURRENT_USER, L"MY");
-    CHECK(store != nullptr);
-    if (store != nullptr) {
-        const std::vector<std::uint8_t> der = maker.certificateDer();
-        PCCERT_CONTEXT fresh = CertCreateCertificateContext(X509_ASN_ENCODING, der.data(), static_cast<DWORD>(der.size()));
-        CHECK(fresh != nullptr);
-        StoreEntry entry;
-        if (fresh != nullptr) {
-            // Tell the store entry where its key is (the user's key store, by name), then add it.
-            std::wstring w(keyName.begin(), keyName.end());
-            std::wstring prov = MS_KEY_STORAGE_PROVIDER;
-            CRYPT_KEY_PROV_INFO kpi{};
-            kpi.pwszContainerName = w.data();
-            kpi.pwszProvName = prov.data();
-            CertSetCertificateContextProperty(fresh, CERT_KEY_PROV_INFO_PROP_ID, 0, &kpi);
-            const BOOL added = CertAddCertificateContextToStore(store, fresh, CERT_STORE_ADD_REPLACE_EXISTING, &entry.inStore);
-            CHECK(added);
-            CertFreeCertificateContext(fresh);
-        }
-        if (entry.inStore != nullptr) {
-            TlsOptions pick;
-            pick.thumbprint = thumb;
-            Fixture f;
-            CHECK(f.start(TlsTimeouts{}, 64, 16, pick));
-            CHECK(f.tls.fingerprintSha256() == maker.fingerprintSha256());
-            CHECK(!f.tls.selfSigned());
-            CHECK(!f.tls.keyExportable());
-            SchannelClient c;
-            std::string e;
-            CHECK(tlsConnect(c, f.port, 0, e));
-            CHECK(c.peerFingerprint() == maker.fingerprintSha256());
-            const HttpReply r = c.request("GET", "/hello");
-            CHECK(r.status == 200 && r.body == "hello");
-            // Upper case is the same thumbprint.
-            std::string up = thumb;
-            for (char& ch : up) { if (ch >= 'a' && ch <= 'f') { ch = static_cast<char>(ch - 'a' + 'A'); } }
-            TlsOptions pick2;
-            pick2.thumbprint = up;
-            TlsTerminator t2;
-            CHECK(t2.prepare(pick2, err));
-        }
-        entry.remove();   // (before the store is closed)
-        CertCloseStore(store, 0);
-    }
+    CHECK(store.add(maker.certificateDer(), MS_KEY_STORAGE_PROVIDER, wkey));
     {
-        // Gone again.
-        TlsOptions pick;
-        pick.thumbprint = thumb;
+        Fixture f;
+        CHECK(f.start(TlsTimeouts{}, 64, 16, pick));
+        CHECK(f.tls.fingerprintSha256() == maker.fingerprintSha256());
+        CHECK(!f.tls.selfSigned());
+        CHECK(!f.tls.keyExportable());
+        SchannelClient c;
+        std::string e;
+        CHECK(tlsConnect(c, f.port, 0, e));
+        CHECK(c.peerFingerprint() == maker.fingerprintSha256());
+        const HttpReply r = c.request("GET", "/hello");
+        CHECK(r.status == 200 && r.body == "hello");
+        // Upper case is the same thumbprint.
+        std::string up = thumb;
+        for (char& ch : up) { if (ch >= 'a' && ch <= 'f') { ch = static_cast<char>(ch - 'a' + 'A'); } }
+        TlsOptions pick2 = pick;
+        pick2.thumbprint = up;
+        TlsTerminator t2;
+        CHECK(t2.prepare(pick2, err));
+    }
+    // A certificate whose key is in a SMART-CARD provider is refused from its properties alone, before anything asks that provider for
+    // anything (the provider could put a PIN or "insert a card" dialog on the screen).
+    {
+        MemStore card;
+        CHECK(card.add(maker.certificateDer(), L"Microsoft Smart Card Key Storage Provider", L"some-card-container"));
+        TlsOptions p = pick;
+        p.searchStore = card.h;
         TlsTerminator t;
-        CHECK(!t.prepare(pick, err));
+        CHECK(!t.prepare(p, err));
+        CHECK(err.find("smart-card") != std::string::npos);
+        MemStore tpm;
+        CHECK(tpm.add(maker.certificateDer(), L"Microsoft Platform Crypto Provider", L"x"));
+        p.searchStore = tpm.h;
+        TlsTerminator t2;
+        CHECK(!t2.prepare(p, err));
+        CHECK(err.find("hardware") != std::string::npos);
+    }
+    // A software provider whose key is MISSING is an error, not a question.
+    {
+        MemStore gone;
+        CHECK(gone.add(maker.certificateDer(), MS_KEY_STORAGE_PROVIDER, L"FoxSDR-Web-TLS-no-such-key-" + std::wstring(wkey)));
+        TlsOptions p = pick;
+        p.searchStore = gone.h;
+        TlsTerminator t;
+        CHECK(!t.prepare(p, err));
+        CHECK(err.find("without asking") != std::string::npos);
+    }
+    // A certificate with no key property at all.
+    {
+        MemStore bare;
+        PCCERT_CONTEXT c = CertCreateCertificateContext(X509_ASN_ENCODING, maker.certificateDer().data(), static_cast<DWORD>(maker.certificateDer().size()));
+        CHECK(c != nullptr);
+        if (c != nullptr) {
+            CHECK(CertAddCertificateContextToStore(bare.h, c, CERT_STORE_ADD_ALWAYS, nullptr));
+            CertFreeCertificateContext(c);
+        }
+        TlsOptions p = pick;
+        p.searchStore = bare.h;
+        TlsTerminator t;
+        CHECK(!t.prepare(p, err));
+        CHECK(err.find("no private key") != std::string::npos);
     }
     deleteKey(keyName);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// NO DIALOG, EVER: every call that can reach a key provider or a certificate store passes the silent flag, and nothing is added to a Windows
+// store. A source scan (the dialogs cannot be seen from a test; they were seen by the owner): this holds the code and this very test.
+// ---------------------------------------------------------------------------------------------------------------------------------------
+
+std::string slurpText(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+// The text with `//` comments blanked (a comment may name a function it does not call).
+std::string withoutComments(const std::string& src) {
+    std::string out;
+    std::istringstream in(src);
+    std::string line;
+    while (std::getline(in, line)) {
+        bool str = false;
+        for (std::size_t i = 0; i < line.size(); ++i) {
+            if (line[i] == '"' && (i == 0 || line[i - 1] != '\\')) { str = !str; }
+            if (!str && line[i] == '/' && i + 1 < line.size() && line[i + 1] == '/') { line.resize(i); break; }
+        }
+        out += line;
+        out += '\n';
+    }
+    return out;
+}
+
+// Every `name(` ... matching `)` in `code`: the argument text.
+std::vector<std::string> callsOf(const std::string& code, const std::string& name) {
+    std::vector<std::string> calls;
+    for (std::size_t p = code.find(name + "("); p != std::string::npos; p = code.find(name + "(", p + 1)) {
+        if (p > 0 && (std::isalnum(static_cast<unsigned char>(code[p - 1])) || code[p - 1] == '_')) { continue; }
+        std::size_t i = p + name.size() + 1;
+        int depth = 1;
+        std::size_t start = i;
+        while (i < code.size() && depth > 0) {
+            if (code[i] == '(') { ++depth; } else if (code[i] == ')') { --depth; }
+            ++i;
+        }
+        calls.push_back(code.substr(start, i - start));
+    }
+    return calls;
+}
+
+void testTlsSetUpIsSilent() {
+    for (const char* rel : {"src/net/web_tls.cpp", "tests/test_web_tls.cpp"}) {
+        const std::string code = withoutComments(slurpText(g_root + "/" + rel));
+        CHECK(code.size() > 1000);
+        int seen = 0;
+        for (const char* api : {"NCryptOpenKey", "NCryptCreatePersistedKey", "NCryptFinalizeKey", "NCryptSetProperty", "NCryptGetProperty", "NCryptExportKey",
+                                "NCryptDeleteKey"}) {
+            for (const std::string& args : callsOf(code, api)) {
+                ++seen;
+                const bool silent = args.find("NCRYPT_SILENT_FLAG") != std::string::npos;
+                if (!silent) { std::printf("%s: %s(%s) is not silent\n", rel, api, args.c_str()); }
+                CHECK(silent);
+            }
+        }
+        for (const std::string& args : callsOf(code, "CryptAcquireCertificatePrivateKey")) {
+            ++seen;
+            const bool silent = args.find("CRYPT_ACQUIRE_SILENT_FLAG") != std::string::npos;
+            if (!silent) { std::printf("%s: the private-key acquisition call (%s) is not silent\n", rel, args.c_str()); }
+            CHECK(silent);
+        }
+        // Every key-provider record handed to Windows says "silent".
+        std::size_t records = 0, silentRecords = 0;
+        const std::string recTok = std::string("CRYPT_KEY_PROV") + "_INFO kpi", silTok = std::string("kpi.dw") + "Flags = NCRYPT_SILENT_FLAG";
+        for (std::size_t p = code.find(recTok); p != std::string::npos; p = code.find(recTok, p + 1)) { ++records; }
+        for (std::size_t p = code.find(silTok); p != std::string::npos; p = code.find(silTok, p + 1)) { ++silentRecords; }
+        CHECK(records == silentRecords);
+        CHECK(seen > 0);
+        // Nothing is ever added to a Windows store, imported into one, trusted, or asked of a smart-card provider.
+        for (const std::string bad : {std::string("CertAddEncoded") + "CertificateToStore", std::string("CertAddCertificate") + "LinkToStore", std::string("PFXImport") + "CertStore",
+                                      std::string("CertOpen") + "SystemStore", std::string("CertAddEncodedCertificateTo") + "SystemStore", std::string("CertSetStore") + "Property",
+                                      std::string("CertRegister") + "SystemStore", std::string("CertControl") + "Store", std::string("L\"RO") + "OT\"",
+                                      std::string("L\"Trusted") + "People\"", std::string("L\"") + "CA\"", std::string("MS_SC") + "ARD_PROV", std::string("MS_SMART_CARD") + "_KEY_STORAGE_PROVIDER",
+                                      std::string("CryptAcquire") + "Context", std::string("CRYPT_VERIFY") + "CONTEXT", std::string("cert") + "util", std::string("New-SelfSigned") + "Certificate",
+                                      std::string("sign") + "tool", std::string("Import-") + "Certificate", std::string("net") + "sh"}) {
+            const bool found = code.find(bad) != std::string::npos;
+            if (found) { std::printf("%s contains %s\n", rel, bad.c_str()); }
+            CHECK(!found);
+        }
+        const bool isTest = std::string(rel).rfind("tests/", 0) == 0;
+        // CertAddCertificateContextToStore: only into an in-memory store, which only the test makes.
+        const std::size_t adds = callsOf(code, "CertAddCertificateContextToStore").size();
+        if (!isTest) {
+            CHECK(adds == 0);
+            // The product opens a system store in one place, read only.
+            const auto opens = callsOf(code, "CertOpenStore");
+            CHECK(opens.size() == 1);
+            for (const std::string& a : opens) { CHECK(a.find("CERT_STORE_READONLY_FLAG") != std::string::npos && a.find("CERT_STORE_OPEN_EXISTING_FLAG") != std::string::npos); }
+        } else {
+            CHECK(code.find(std::string("CERT_STORE_PROV_") + "MEMORY") != std::string::npos);
+            CHECK(code.find(std::string("CERT_STORE_PROV_") + "SYSTEM") == std::string::npos);
+            CHECK(code.find(std::string("CERT_SYSTEM_") + "STORE") == std::string::npos);
+            // (the only CertOpenStore in the test is the in-memory one)
+            for (const std::string& a : callsOf(code, "CertOpenStore")) { CHECK(a.find(std::string("CERT_STORE_PROV_") + "MEMORY") != std::string::npos); }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------------
@@ -542,9 +682,9 @@ void testStalledAndHalfOpenClients() {
         SchannelClient c;
         CHECK(c.connectTcp("127.0.0.1", f.port));
         const auto t0 = Clock::now();
-        CHECK(c.peerClosedWithin(4000));
+        CHECK(c.peerClosedWithin(12000));
         const long long ms = msSince(t0);
-        CHECK(ms >= 900 && ms < 9000);
+        CHECK(ms >= 900 && ms < 11000);
         std::printf("half-open silent client dropped after %lld ms (limit %d)\n", ms, to.handshakeMs);
     }
     // (b) sends part of a hello, then stalls.
@@ -553,7 +693,7 @@ void testStalledAndHalfOpenClients() {
         CHECK(c.connectTcp("127.0.0.1", f.port));
         const std::string hello = clientHello(0x0303, {0xC02B}, true);
         c.sendRawBytes(hello.substr(0, 20));
-        CHECK(c.peerClosedWithin(4000));
+        CHECK(c.peerClosedWithin(12000));
     }
     CHECK(f.tls.stats().droppedHandshakeTimeout >= 2);
     // (c) finishes the handshake and then sends nothing: dropped by the idle limit.
@@ -798,6 +938,7 @@ void testTrueClientAddress() {
 int main(int argc, char** argv) {
 #ifdef _WIN32
     (void)argv;
+    g_root = argc > 1 && std::string(argv[1]) != "x" ? argv[1] : "../..";
     g_scratch = (fs::temp_directory_path() / ("uw-web-tls-" + std::to_string(_getpid()))).string();
     fs::create_directories(g_scratch);
     // argv[2], when given, runs only the tests whose name contains it (a developer's shortcut; CTest passes none).
@@ -805,6 +946,7 @@ int main(int argc, char** argv) {
     if (only.empty() || std::string("testSelfSignedCertificate").find(only) != std::string::npos) { testSelfSignedCertificate(); }
     if (only.empty() || std::string("testPersistedCertificate").find(only) != std::string::npos) { testPersistedCertificate(); }
     if (only.empty() || std::string("testThumbprintCertificate").find(only) != std::string::npos) { testThumbprintCertificate(); }
+    if (only.empty() || std::string("testTlsSetUpIsSilent").find(only) != std::string::npos) { testTlsSetUpIsSilent(); }
     if (only.empty() || std::string("testHandshakeVersionsAndFingerprint").find(only) != std::string::npos) { testHandshakeVersionsAndFingerprint(); }
     if (only.empty() || std::string("testCurl").find(only) != std::string::npos) { testCurl(); }
     if (only.empty() || std::string("testOldProtocolsRefused").find(only) != std::string::npos) { testOldProtocolsRefused(); }

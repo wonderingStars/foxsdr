@@ -1229,8 +1229,9 @@ and your browser will warn about an unknown certificate the first time: compare
 the fingerprint it shows with FoxSDR's before you accept. Instead you can name a
 certificate you already have, by the 40 digits Windows shows as its thumbprint,
 from the Personal store of your account or of the computer (it needs its private
-key). A client that does not finish the handshake, says nothing for half a
-minute, or stops reading is dropped.
+key, and the key must be in one of Windows' own software providers: a smart card, a token or a TPM-backed key is refused, because it could put a PIN
+dialog on the screen in the middle of a connection; FoxSDR only looks at the certificate list, never changes it). A client that does not finish the handshake,
+says nothing for half a minute, or stops reading is dropped.
 
 **Listeners.** With listeners on, there are two kinds of people on the page. You,
 the **owner**, sign in with the account the page always had and control

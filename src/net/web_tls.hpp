@@ -43,6 +43,7 @@ struct TlsOptions {
     std::string keyName = "FoxSDR-Web-TLS";   // self-signed with certFile: the key's name in the user's key store
     std::vector<std::string> names;   // self-signed: extra DNS names and IP literals for the subject alternative name
     bool includeMachineNames = true;  // self-signed: this computer's name, "localhost", 127.0.0.1, ::1 and every LAN IPv4 address
+    void* searchStore = nullptr;      // TESTS ONLY: a Windows HCERTSTORE (an in-memory one) searched for `thumbprint` INSTEAD of the system stores
 };
 
 struct TlsTimeouts {
