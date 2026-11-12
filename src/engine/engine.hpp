@@ -922,6 +922,11 @@ private:
     // drawUi unconditionally, because the runner's buffer is bounded and
     // draining only when the panel is visible would drop output silently.
     void pumpDecoderOutput();
+    // PRIVATE PLUGINS (engine wiring W2; docs/PLUGIN-API.md "Private data"): the plugins whose descriptor carries CASCADE_FLAG_PRIVATE_DATA.
+    // The set is rebuilt from the loaded list on the control pass (refreshPrivatePlugins) and READ FROM ANY THREAD (the image feed's worker
+    // asks while it encodes): a shared immutable vector under a short lock, so a reload never changes what a reader holds.
+    void refreshPrivatePlugins();
+    bool pluginIsPrivate(const std::string& name) const;
     // Rebuilds every decoder instance against the CURRENT source rate and
     // centre frequency. Called after any source change, because both are
     // passed to a decoder's create() and cannot be changed afterwards.
@@ -2438,6 +2443,10 @@ private:
     // Decoded output, newest last, bounded. The panel is a tail, not an
     // archive; the recorder is where a permanent copy belongs.
     std::deque<cascade::core::DecodedLine> decoderLog_;
+    mutable std::mutex privatePluginsMutex_;
+    std::shared_ptr<const std::vector<std::string>> privatePlugins_;
+    // TESTS ONLY (reached through the friend): plugin names treated as private besides the loaded plugins' own flag; empty in a product run.
+    std::vector<std::string> testPrivatePlugins_;
     static constexpr std::size_t kDecoderLogMax = cascade::engine::kDecoderLogMax;
     // THE ONLY MESSAGE COUNT THIS APPLICATION HAS. No decoder plugin reports a
     // message tally over the ABI and the runner keeps none, so the one

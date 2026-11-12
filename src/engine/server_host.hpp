@@ -216,6 +216,9 @@ public:
         std::function<cascade::net::UdpAudioSender::Reader(int radio)> udpReader;
         // PluginRunner::pollImages (stage 5e): the image feed's one accumulator polls the decoders through it.
         std::function<void(std::vector<cascade::core::HostImage>&)> pollImages;
+        // Whether a plugin set CASCADE_FLAG_PRIVATE_DATA (engine wiring W2): the image feed does not encode its pictures into the served set,
+        // so the web page never receives them. Any thread.
+        std::function<bool(const std::string&)> isPrivatePlugin;
     };
     void attach(Providers p);
 

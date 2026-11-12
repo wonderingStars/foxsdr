@@ -1477,6 +1477,7 @@ public:
             d.number = total - (log.size() - i) + 1;
             d.node = log[i].node;
             d.radio = log[i].radio;
+            d.priv = log[i].privateData;
             copyText(d.plugin, log[i].plugin.c_str());
             copyText(d.text, log[i].text.c_str());
             ++decoderLinesNext_;
@@ -1815,6 +1816,7 @@ private:
         uint64_t number = 0;
         uint64_t node = 0;       // API 0.3 8.12: the patch decoder node the line came from, 0 = the receiver's own
         uint32_t radio = 0;      // the radio whose decoder said it (stage 7; DECODER_LINES value[1]), 0 = a patch decoder
+        bool priv = false;       // the plugin set CASCADE_FLAG_PRIVATE_DATA (engine wiring W2): a REMOTE session reads the line with its text blank
         char plugin[96] = {};
         char text[160] = {};
     };
@@ -2313,6 +2315,7 @@ void ApiHostImpl::applyTestHook(const Pending& p, FoxCommandResult& r, const std
         // pumpDecoderOutput appends it.
         const std::size_t bar = val.find('|');
         engine_.decoderLog_.push_back({val.substr(0, bar), bar == std::string::npos ? std::string() : val.substr(bar + 1)});
+        engine_.decoderLog_.back().privateData = engine_.pluginIsPrivate(engine_.decoderLog_.back().plugin);   // as pumpDecoderOutput stamps it
         while (engine_.decoderLog_.size() > Engine::kDecoderLogMax) { engine_.decoderLog_.pop_front(); }
         ++engine_.decoderLinesTotal_;
     } else if (key == "test.muteBy") {
@@ -3329,7 +3332,9 @@ int32_t ApiHostImpl::readList(const ApiSession* s, uint32_t list, uint32_t index
                 const DecoderLine& d = decoderLines_[(decoderLinesNext_ - n + index) % kDecoderLines];
                 it.id = d.number;
                 copyText(it.name, d.plugin);
-                copyText(it.detail, d.text);
+                // A PRIVATE PLUGIN'S LINE reaches a REMOTE session (the web page, a network client) with its text blank: the line is still
+                // counted and numbered, so a reader's cursor and the line count stay true, and the plugin's name says who was quiet.
+                if (!(d.priv && (s->flags & FOXAPI_SESSION_REMOTE) != 0u)) { copyText(it.detail, d.text); }
                 it.value[0] = static_cast<double>(d.node);  // (API 0.3 8.12) the patch decoder node, 0 = the receiver's
                 it.value[1] = static_cast<double>(d.radio); // (stage 7) the radio whose decoder said it; 0 = a patch decoder's line
             }

@@ -153,7 +153,12 @@ void ImageFeed::cycle() {
             std::string err;
             // A decoder that has produced no pixels yet encodes to nothing; the slot is still published so the browser can show that it
             // exists and is waiting, rather than the picture appearing from nowhere later.
-            if (!cascade::core::encodeBmp24(src, w.bmp, err)) { w.bmp.clear(); }
+            if (isPrivate_ && isPrivate_(src.plugin)) {
+                w.bmp.clear();   // a private plugin's picture is never served: the slot says it exists and carries no bitmap
+                w.width = 0;
+                w.height = 0;
+                w.complete = false;
+            } else if (!cascade::core::encodeBmp24(src, w.bmp, err)) { w.bmp.clear(); }
         } else if (i < served_.size()) {
             next[i] = served_[i];  // the picture it was: not encoded again
         }

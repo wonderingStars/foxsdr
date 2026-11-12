@@ -592,10 +592,21 @@ void testValidator() {
     }
     {   // a capability the host does not know, alongside a good one, is ignored; its (wrong) size is not this host's business
         const CascadeCapabilityEntry e[] = {{CASCADE_CAP_DECODER, static_cast<uint32_t>(sizeof(CascadeDecoderApi)), &kDecoder},
-                                            {0x80000000u, 7u, &kDecoder}};
+                                            {0x40000000u, 7u, &kDecoder}};
         CascadePluginDesc d = descriptor(e, 2);
-        d.capabilities |= 0x80000000u;
+        d.capabilities |= 0x40000000u;
         CHECK(cascade::core::validatePluginDesc(&d) == PluginRejection::None);
+    }
+    {   // CASCADE_FLAG_PRIVATE_DATA (engine wiring W2) is a flag with no table: beside a real capability the plugin validates, and nothing is asked of a table for it
+        const CascadeCapabilityEntry e[] = {{CASCADE_CAP_DECODER, static_cast<uint32_t>(sizeof(CascadeDecoderApi)), &kDecoder}};
+        CascadePluginDesc d = descriptor(e, 1);
+        d.capabilities |= CASCADE_FLAG_PRIVATE_DATA;
+        CHECK(cascade::core::validatePluginDesc(&d) == PluginRejection::None);
+        // ...and it is not a facility: a plugin that declares only the flag provides this host nothing and is refused as one that declares only unknown bits
+        const CascadeCapabilityEntry none[] = {{0u, 0u, nullptr}};
+        CascadePluginDesc only = descriptor(none, 1);
+        only.capabilities = CASCADE_FLAG_PRIVATE_DATA;
+        CHECK(cascade::core::validatePluginDesc(&only) == PluginRejection::NoUsableCapability);
     }
     CHECK(std::string(cascade::core::pluginRejectionMessage(PluginRejection::DuplicateCapabilityTable)) != "unknown rejection");
 }

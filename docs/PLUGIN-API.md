@@ -780,6 +780,36 @@ The host does not trust a plugin's code to be right, and a plugin that is wrong 
   the rest of the session (unmapping it would end the process under the thread), and the log line is
   `plugin: <id> broke a rule of the plugin API (<kind>)`.
 
+## Private data (`CASCADE_FLAG_PRIVATE_DATA`)
+
+A plugin that handles identifiers of people or devices - a Remote ID serial, a trunked radio's subscriber id, a meter number, a Bluetooth address, a
+callsign - sets one more bit in `capabilities`, beside the capabilities it really has:
+
+```c
+desc.capabilities = CASCADE_CAP_DECODER | CASCADE_CAP_PANEL | CASCADE_FLAG_PRIVATE_DATA;
+```
+
+It is a **flag, not a capability**: bit 31, no table, no entry in `capabilityTables`, outside `CASCADE_CAP_ALL_KNOWN`, and a plugin that declares only the
+flag provides the host nothing and is refused like one that declares only bits the host does not know. A host that predates the flag ignores it, as
+it ignores every bit it does not know (ABI 3's rule), so setting it never stops a plugin loading anywhere.
+
+What a host that knows it does with the plugin's output:
+
+| Sink | Private plugin's data |
+|---|---|
+| the host's own windows (decoder panel, map, rows, instruments) | shown, as always (memory only) |
+| the web page ("decoded" lines, "tracks", the pictures served at `/api/image`) | **left out**: the lines and targets are not in the status; a picture's slot is listed with no bitmap (width 0, not complete) |
+| a REMOTE engine-API session (`FOXAPI_LIST_DECODER_LINES`) | the line arrives numbered and named with its **text blank** |
+| the diagnostics a person copies (the newest decoded lines) | **left out** |
+| the diagnostic log and every report the host uploads | nothing of a plugin's text is ever written there: `poll_text` and `log` are memory only, whether or not the flag is set |
+
+The flag changes none of the plugin's own duties, which the host cannot enforce: **never print an identifier to stderr or stdout** (the host captures a
+process's stderr into its log, from which reports are made), and **never put an identifier, salt or decoded value into a setting** (`settings_set` writes
+every value to the configuration file, with dated backup copies). A plugin that does either is not made private by this flag.
+
+Settings of the PASSWORD kind travel the same configuration file as any other setting: whether they are protected at rest there is not decided
+(owner decision pending) and this flag does not change it.
+
 ## Checklist before you ship
 
 - Every level-1 call is behind `CASCADE_HOST_HAS`, and the plugin says what it

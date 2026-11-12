@@ -269,6 +269,20 @@ extern "C" {
 #define CASCADE_CAP_ALL_KNOWN 0x0001FFFFu /* OR of every bit THIS host knows */
 
 /*
+ * A FLAG, NOT A CAPABILITY: CASCADE_FLAG_PRIVATE_DATA (bit 31, host 0.99.109; engine wiring W2).
+ *
+ * A plugin that handles identifiers of people or devices (a Remote ID serial, a trunked radio's subscriber id, a meter number, a Bluetooth
+ * address) sets this bit in `capabilities` beside the capabilities it really has. It has no table and provides nothing by itself, so it is
+ * NOT part of CASCADE_CAP_ALL_KNOWN (the module census asks every capability bit for a table and this one has none) and an older host
+ * ignores it like any bit it does not know. A host that knows it keeps this plugin's decoded text, tracks and pictures for its own
+ * windows (memory only, as always) and does NOT hand them to the web page mirror ("decoded", "tracks", /api/image), to a REMOTE engine-API
+ * session (its decoder lines arrive empty) or to the diagnostics a person copies. It does not change what the plugin may do and does not
+ * make the plugin's own files private: a plugin still never prints to stderr or stdout and never puts an identifier into a setting
+ * (docs/PLUGIN-API.md, "Private data").
+ */
+#define CASCADE_FLAG_PRIVATE_DATA 0x80000000u
+
+/*
  * The four bits above 0x04 were added WITHOUT an ABI bump, which is the whole
  * claim ABI 3 made and this is the proof of it: they are new entries in the
  * capability table, the descriptor did not change size, and every plugin built

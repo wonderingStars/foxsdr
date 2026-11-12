@@ -151,6 +151,7 @@ Engine::Engine(EngineHost& host)
     // (stage 5e) The receiver plugins' pictures: the host's image feed owns the ONE accumulator that polls the decoders (a decoder offers a
     // picture once, so two pollers would split them), through the runner this engine owns.
     providers.pollImages = [this](std::vector<cascade::core::HostImage>& out) { pollAllImages(out); };
+    providers.isPrivatePlugin = [this](const std::string& name) { return pluginIsPrivate(name); };
     servers_.attach(std::move(providers));
 }
 
@@ -5583,6 +5584,28 @@ void Engine::stopMutingPlugins(const std::vector<std::string>& keys) {
     refreshPluginRunner();
 }
 
+void Engine::refreshPrivatePlugins() {
+    std::vector<std::string> names;
+    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
+        if ((p.capabilities & CASCADE_FLAG_PRIVATE_DATA) != 0u && !p.name.empty()) { names.push_back(p.name); }
+    }
+    names.insert(names.end(), testPrivatePlugins_.begin(), testPrivatePlugins_.end());
+    std::sort(names.begin(), names.end());
+    std::lock_guard<std::mutex> lk(privatePluginsMutex_);
+    if (privatePlugins_ == nullptr || *privatePlugins_ != names) {
+        privatePlugins_ = std::make_shared<const std::vector<std::string>>(std::move(names));
+    }
+}
+
+bool Engine::pluginIsPrivate(const std::string& name) const {
+    std::shared_ptr<const std::vector<std::string>> v;
+    {
+        std::lock_guard<std::mutex> lk(privatePluginsMutex_);
+        v = privatePlugins_;
+    }
+    return v != nullptr && std::binary_search(v->begin(), v->end(), name);
+}
+
 void Engine::pumpDecoderOutput() {
     // Called from drawUi every frame, NOT from the panel. The runner's queue
     // is bounded and drops silently by design (the DSP thread must never
@@ -5596,7 +5619,11 @@ void Engine::pumpDecoderOutput() {
         for (cascade::core::DecodedLine& l : more) { l.radio = static_cast<std::uint32_t>(slot) + 1u; }
         drained.insert(drained.end(), std::make_move_iterator(more.begin()), std::make_move_iterator(more.end()));
     }
+    refreshPrivatePlugins();
     for (cascade::core::DecodedLine& l : drained) {
+        // A PRIVATE PLUGIN'S LINE stays in this log for the host's own windows and is marked here, the one place that sees them all, so
+        // the web mirror, a remote API session and the copied diagnostics can leave it out.
+        l.privateData = pluginIsPrivate(l.plugin);
         // COUNTED HERE BECAUSE THIS IS THE ONLY PLACE THAT SEES THEM ALL.
         // decoderLog_ is a bounded tail and drops its oldest entries, so its
         // size is not a count of anything; the status column's rate card
@@ -6928,6 +6955,7 @@ void Engine::fillStatusLists(cascade::net::RadioStatus& s, const std::string& fa
         // terms - that presentation is the web UI's decision, not this one's.
         // (The WHOLE track, flags included - stub campaign B16, 0.99.78: an aircraft whose position the source carried forward stays for 180 s, here as on the map.)
         if (!cascade::core::trackPresentation(t.t).visible) { continue; }
+        if (pluginIsPrivate(t.plugin)) { continue; }   // a private plugin's targets never reach the web page
         cascade::net::RadioStatus::Track w;
         w.id = t.t.id;
         w.label = t.t.label;
@@ -7028,6 +7056,7 @@ void Engine::fillStatusLists(cascade::net::RadioStatus& s, const std::string& fa
         const std::size_t total = decoderLog_.size();
         const std::size_t from = (total > kMaxWebDecoded) ? total - kMaxWebDecoded : 0;
         for (std::size_t i = from; i < total; ++i) {
+            if (decoderLog_[i].privateData) { continue; }   // a private plugin's text never reaches the web page
             s.decoded.push_back({decoderLog_[i].plugin, decoderLog_[i].text});
         }
     }
