@@ -1718,3 +1718,6 @@ endif()
 add_executable(foxsdr_manifest_sign "${CMAKE_SOURCE_DIR}/tools/manifest_sign.cpp")
 target_link_libraries(foxsdr_manifest_sign PRIVATE cascade_engine)
 add_dependencies(test_sys_manifest_tool foxsdr_manifest_sign)
+# sigmeas lane: a stand-alone runner of the sigmeas blocks on a real recording (numbers on stdout only; not a ctest).
+add_executable(sigmeas_realdata sigmeas_realdata.cpp)
+target_include_directories(sigmeas_realdata PRIVATE "${CMAKE_SOURCE_DIR}/src")
