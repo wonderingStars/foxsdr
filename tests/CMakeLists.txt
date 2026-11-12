@@ -1726,12 +1726,14 @@ else()
 endif()
 
 # wire-c begin: wiring lane C's test settings in ONE block (each item appends its own lines inside it)
-foreach(_t IN ITEMS test_wire_c_portable)
+foreach(_t IN ITEMS test_wire_c_portable test_wire_c_updater)
     if(TARGET ${_t})
         target_compile_definitions(${_t} PRIVATE WIRE_C_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-        add_dependencies(${_t} foxsdr-engine)   # (the end-to-end half runs a copy of the real engine program)
     endif()
 endforeach()
+if(TARGET test_wire_c_portable)
+    add_dependencies(test_wire_c_portable foxsdr-engine)   # (the end-to-end half runs a copy of the real engine program)
+endif()
 # wire-c end
 
 # Label APPENDED, not set: the sanitizer and TSan passes above put their own

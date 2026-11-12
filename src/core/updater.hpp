@@ -25,6 +25,7 @@
 #ifndef CASCADE_CORE_UPDATER_HPP
 #define CASCADE_CORE_UPDATER_HPP
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -186,6 +187,10 @@ std::string updateEndpoint();
 //
 // True when it is set and not empty; read from the environment on each call.
 bool updateManifestFakeSet();
+
+// wire-c (row S6): TESTS ONLY - the keys the manifest signature is checked against instead of the owner's (none, nullptr = the owner's again; an empty vector
+// would mean "no key", i.e. signatures not enforced). The program never calls it.
+void setManifestTrustedKeysForTest(const std::vector<std::array<std::uint8_t, 32>>* keys);
 
 // Downloads the installer named by `info`, verifies its sha256, and leaves it
 // in a temp directory. Returns the path through `outPath`.
