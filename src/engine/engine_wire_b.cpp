@@ -153,6 +153,65 @@ FoxCommandResult Engine::sigmeasOp(const FoxCommand& c, const std::string& text,
     return res;
 }
 
+// --- bitview: the bit-view library as operations (wire_b_bits.hpp) --------------------------------------------------------------------------------
+FoxCommandResult Engine::bitsOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed) {
+    struct Row { std::uint32_t op; wireb::BitsOp which; const char* name; bool jsonText; };
+    static const Row rows[] = {
+        {FOXAPP_OP_BITS_KEEP, wireb::BitsOp::Keep, "keep", true},         {FOXAPP_OP_BITS_LIST, wireb::BitsOp::List, "list", true},
+        {FOXAPP_OP_BITS_REDECODE, wireb::BitsOp::Redecode, "redecode", true}, {FOXAPP_OP_BITS_SWEEP, wireb::BitsOp::Sweep, "sweep", true},
+        {FOXAPP_OP_BITS_FIND_CRC, wireb::BitsOp::FindCrc, "findcrc", true},   {FOXAPP_OP_BITS_FIND_SUM, wireb::BitsOp::FindSum, "findsum", true},
+        {FOXAPP_OP_BITS_INFER, wireb::BitsOp::Infer, "infer", true},      {FOXAPP_OP_BITS_DIFF, wireb::BitsOp::Diff, "diff", true},
+        {FOXAPP_OP_BITS_SPEC_CHECK, wireb::BitsOp::SpecCheck, "speccheck", false}, {FOXAPP_OP_BITS_SPEC_RUN, wireb::BitsOp::SpecRun, "specrun", false},
+        {FOXAPP_OP_BITS_TABLE_CHECK, wireb::BitsOp::TableCheck, "tablecheck", false},
+    };
+    const Row* row = nullptr;
+    for (const Row& r : rows) {
+        if (r.op == c.op) { row = &r; }
+    }
+    if (row == nullptr) { return refusal(res, FOXAPI_UNSUPPORTED, "this build has no such operation"); }
+    wireb::Json params = wireb::Json::object();
+    if (row->jsonText && !text.empty()) {
+        params = wireb::Json::parse(text, nullptr, false);
+        if (params.is_discarded() || !params.is_object()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the parameters are not a JSON object"); }
+    }
+    const std::size_t slot = scopedSlot();
+    WireBState& w = wireBState();
+    std::vector<std::complex<float>> iq;
+    double rate = 0.0;
+    if (row->which == wireb::BitsOp::Keep) {
+        wireb::SpanSpec span;
+        std::string why;
+        if (!wireb::spanOf(params, span, why)) { return refusal(res, FOXAPI_BAD_ARGUMENT, why); }
+        cascade::core::Pipeline& pl = rx().pipeline_;
+        rate = pl.channelRateHz();
+        if (!(rate > 0.0) || !pl.running()) { return refusal(res, FOXAPI_FAILED, "the radio is not running"); }
+        const std::size_t ago = static_cast<std::size_t>(std::ceil(span.endAgoS * rate));
+        const std::size_t len = std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil(span.durationS * rate)));
+        const std::size_t want = std::min(pl.scopeIq().capacity(), ago + len);
+        iq.resize(want);
+        const std::size_t got = pl.scopeIq().snapshot(iq.data(), want);
+        if (got == 0) { return refusal(res, FOXAPI_FAILED, "the radio tap holds no samples yet"); }
+        const std::size_t endCut = std::min(ago, got - 1);
+        const std::size_t used = std::min(len, got - endCut);
+        const std::size_t first = got - endCut - used;
+        iq = std::vector<std::complex<float>>(iq.begin() + static_cast<std::ptrdiff_t>(first), iq.begin() + static_cast<std::ptrdiff_t>(first + used));
+    }
+    const wireb::RunResult rr = wireb::bitsRun(row->which, w.bits[slot < w.bits.size() ? slot : 0], iq.empty() ? nullptr : iq.data(), iq.size(), rate, text, c.ival[0], params);
+    if (!rr.ok) { return refusal(res, FOXAPI_BAD_ARGUMENT, rr.why); }
+    wireb::Json doc = wireb::Json::object();
+    doc["op"] = row->name;
+    doc["radio"] = slot + 1u;
+    doc["valid"] = rr.valid;
+    doc["reason"] = rr.reason;
+    doc["result"] = rr.out;
+    w.facts["radio." + std::to_string(slot + 1u) + ".bits." + row->name] = doc.dump(-1, ' ', false, wireb::Json::error_handler_t::replace);
+    changed = true;
+    res.applied[0] = rr.valid ? 1.0 : 0.0;
+    if (row->which == wireb::BitsOp::Keep && rr.out.contains("id") && rr.out["id"].is_number()) { res.applied[1] = rr.out["id"].get<double>(); }
+    if (!rr.valid) { std::snprintf(res.message, sizeof(res.message), "%s", rr.reason.c_str()); }
+    return res;
+}
+
 FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text, FoxCommandResult res) {
     WireBState& w = wireBState();
     std::lock_guard<std::mutex> lk(w.mutex);
@@ -193,6 +252,19 @@ FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text
         case FOXAPP_OP_SIGMEAS_HISTOGRAM:
         case FOXAPP_OP_PSEUDO_DOPPLER:
             res = sigmeasOp(c, text, res, changed);
+            break;
+        case FOXAPP_OP_BITS_KEEP:
+        case FOXAPP_OP_BITS_LIST:
+        case FOXAPP_OP_BITS_REDECODE:
+        case FOXAPP_OP_BITS_SWEEP:
+        case FOXAPP_OP_BITS_FIND_CRC:
+        case FOXAPP_OP_BITS_FIND_SUM:
+        case FOXAPP_OP_BITS_INFER:
+        case FOXAPP_OP_BITS_DIFF:
+        case FOXAPP_OP_BITS_SPEC_CHECK:
+        case FOXAPP_OP_BITS_SPEC_RUN:
+        case FOXAPP_OP_BITS_TABLE_CHECK:
+            res = bitsOp(c, text, res, changed);
             break;
         default:
             return refusal(res, FOXAPI_UNSUPPORTED, "this build has no such operation");

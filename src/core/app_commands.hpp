@@ -302,6 +302,24 @@
 //   "duration_s" / "end_ago_s". It ESTIMATES from I/Q already in the span: the antenna switch is hardware this program does not drive. Answer in the fact radio.<n>.sigmeas.pseudodoppler:
 //   bearing_deg (counter-clockwise from antenna 0 towards the transmitter), quality 0 to 1, weak (quality under 0.5) and the sentence "Signal too weak or not steady for a bearing".
 #define FOXAPP_OP_PSEUDO_DOPPLER         0x890Cu /* addresses one radio (target): fact radio.<n>.sigmeas.pseudodoppler */
+//   THE BIT VIEW (SETTINGS; core/bits/*.hpp through engine/wire_b_bits.hpp), eleven operations, each addressing one radio (target); LOCAL sessions only; nothing is written to disk. KEEP slices the
+//   newest span of the radio channel I/Q on demand (no tap in the receive path) into the radio bounded ring of level runs (256 slices); the other operations work on the kept slices and on the frames
+//   of the last REDECODE. text is ONE JSON object of parameters (unknown key = BAD_ARGUMENT naming it) except SPEC_CHECK / SPEC_RUN (text = the decoder file, "foxsdr-bitspec 1") and
+//   TABLE_CHECK (text = the code-table file). The answer is the LOCAL fact radio.<n>.bits.<name> (one JSON object: ok / valid / reason and the result); the command is OK with applied[0] 1 when
+//   there is a result and 0 when there is none (message: the reason). KEEP: duration_s, end_ago_s, label, smooth_us, threshold, min_span_ratio; applied[1] is the new slice id (0 when none).
+//   REDECODE / SWEEP: slice (id, 0 = the newest), line_codes (one to three words), invert, balance, chip_us, phase, sync, sync_errors, both_polarities, framing, fixed_bits, flag, unstuff, whiten,
+//   max_frames, max_frame_bits. FIND_CRC / FIND_SUM: max_head_bytes, max_tail_bytes, max_hits, widths. DIFF: a, b (frame numbers from 1). SPEC_RUN: ival[0] the slice (0 = every kept slice).
+#define FOXAPP_OP_BITS_KEEP              0x890Du /* addresses one radio (target): fact radio.<n>.bits.keep */
+#define FOXAPP_OP_BITS_LIST              0x890Eu /* fact ...bits.list */
+#define FOXAPP_OP_BITS_REDECODE          0x890Fu /* fact ...bits.redecode (the frames are kept for FIND_CRC, FIND_SUM, INFER and DIFF) */
+#define FOXAPP_OP_BITS_SWEEP             0x8910u /* every line code and polarity on one slice, ranked: fact ...bits.sweep */
+#define FOXAPP_OP_BITS_FIND_CRC          0x8911u /* fact ...bits.findcrc */
+#define FOXAPP_OP_BITS_FIND_SUM          0x8912u /* fact ...bits.findsum */
+#define FOXAPP_OP_BITS_INFER             0x8913u /* field inference over the decoded frames: fact ...bits.infer */
+#define FOXAPP_OP_BITS_DIFF              0x8914u /* two decoded frames aligned: fact ...bits.diff */
+#define FOXAPP_OP_BITS_SPEC_CHECK        0x8915u /* long text: a decoder file; errors with line numbers: fact ...bits.speccheck */
+#define FOXAPP_OP_BITS_SPEC_RUN          0x8916u /* long text: a decoder file; ival[0]: slice id (0 all): fact ...bits.specrun */
+#define FOXAPP_OP_BITS_TABLE_CHECK       0x8917u /* long text: a code-table file; errors with line numbers: fact ...bits.tablecheck */
 // wire-b end
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.

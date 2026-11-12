@@ -23,4 +23,11 @@ void wireBOps(AppWindow& a) {
         covering(op);
         CHECK(refused(A::apply(a, text(op, "not json")), FOXAPI_BAD_ARGUMENT));
     }
+    // THE BIT VIEW: parameter text that is not a JSON object is refused first; a decoder or table text goes to its own checker (an error list, not a refusal)
+    const std::uint32_t bitsJsonOps[] = {FOXAPP_OP_BITS_KEEP, FOXAPP_OP_BITS_LIST, FOXAPP_OP_BITS_REDECODE, FOXAPP_OP_BITS_SWEEP, FOXAPP_OP_BITS_FIND_CRC, FOXAPP_OP_BITS_FIND_SUM, FOXAPP_OP_BITS_INFER, FOXAPP_OP_BITS_DIFF};
+    for (const std::uint32_t op : bitsJsonOps) {
+        covering(op);
+        CHECK(refused(A::apply(a, text(op, "not json")), FOXAPI_BAD_ARGUMENT));
+    }
+    for (const std::uint32_t op : {FOXAPP_OP_BITS_SPEC_CHECK, FOXAPP_OP_BITS_SPEC_RUN, FOXAPP_OP_BITS_TABLE_CHECK}) { covering(op); }
 }

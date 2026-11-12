@@ -3237,6 +3237,7 @@ private:
     void openWireBSourceAt(const wireb::SourceKind& kind, const std::string& typed);   // "open-<key>:<arguments>" (wire_b_sources.cpp)
     FoxCommandResult applyWireB(const FoxCommand& c, const std::string& text, FoxCommandResult res);
     FoxCommandResult sigmeasOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
+    FoxCommandResult bitsOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     void wireBFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
     // wire-b end
     std::vector<cascade::core::macros::Macro> macros_;

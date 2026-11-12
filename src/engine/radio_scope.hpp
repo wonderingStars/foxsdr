@@ -84,6 +84,17 @@ inline bool isRadioScopedOp(std::uint32_t op) {
         case FOXAPP_OP_SIGMEAS_DRIFT:
         case FOXAPP_OP_SIGMEAS_HISTOGRAM:
         case FOXAPP_OP_PSEUDO_DOPPLER:
+        case FOXAPP_OP_BITS_KEEP:
+        case FOXAPP_OP_BITS_LIST:
+        case FOXAPP_OP_BITS_REDECODE:
+        case FOXAPP_OP_BITS_SWEEP:
+        case FOXAPP_OP_BITS_FIND_CRC:
+        case FOXAPP_OP_BITS_FIND_SUM:
+        case FOXAPP_OP_BITS_INFER:
+        case FOXAPP_OP_BITS_DIFF:
+        case FOXAPP_OP_BITS_SPEC_CHECK:
+        case FOXAPP_OP_BITS_SPEC_RUN:
+        case FOXAPP_OP_BITS_TABLE_CHECK:
         // wire-b end
         case FOXAPP_OP_CAL_MEASURE:
         case FOXAPP_OP_CAL_CLEAR:

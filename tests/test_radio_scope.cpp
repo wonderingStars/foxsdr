@@ -109,7 +109,8 @@ void testTheList() {
     {
         const std::uint32_t wireBScoped[] = {FOXAPP_OP_FIELD_READ, FOXAPP_OP_SIGMEAS_BANDWIDTH, FOXAPP_OP_SIGMEAS_MODULATION, FOXAPP_OP_SIGMEAS_SYMBOLS,
                                              FOXAPP_OP_SIGMEAS_VSTIME, FOXAPP_OP_SIGMEAS_BURSTS, FOXAPP_OP_SIGMEAS_HOPCHIRP, FOXAPP_OP_SIGMEAS_AUDIO,
-                                             FOXAPP_OP_SIGMEAS_DRIFT, FOXAPP_OP_SIGMEAS_HISTOGRAM, FOXAPP_OP_PSEUDO_DOPPLER};
+                                             FOXAPP_OP_SIGMEAS_DRIFT, FOXAPP_OP_SIGMEAS_HISTOGRAM, FOXAPP_OP_PSEUDO_DOPPLER,
+                                             FOXAPP_OP_BITS_KEEP, FOXAPP_OP_BITS_LIST, FOXAPP_OP_BITS_REDECODE, FOXAPP_OP_BITS_SWEEP, FOXAPP_OP_BITS_FIND_CRC, FOXAPP_OP_BITS_FIND_SUM, FOXAPP_OP_BITS_INFER, FOXAPP_OP_BITS_DIFF, FOXAPP_OP_BITS_SPEC_CHECK, FOXAPP_OP_BITS_SPEC_RUN, FOXAPP_OP_BITS_TABLE_CHECK};
         const std::uint32_t wireBGlobal[] = {FOXAPP_OP_FIELD_TABLE, FOXAPP_OP_FIELD_CONFIG};
         for (const std::uint32_t op : wireBScoped) { CHECK(isRadioScopedOp(op)); }
         for (const std::uint32_t op : wireBGlobal) { CHECK(!isRadioScopedOp(op)); }

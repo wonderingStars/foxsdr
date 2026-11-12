@@ -16,7 +16,10 @@
 #include <mutex>
 #include <string>
 
+#include <array>
+
 #include "core/field_strength.hpp"
+#include "engine/wire_b_bits.hpp"
 
 namespace cascade::engine {
 
@@ -31,6 +34,9 @@ struct WireBState {
     double preampGainDb = 0.0;
     double impedanceOhm = 50.0;
     bool showField = false;
+
+    // --- bitview: one ring of kept bursts and the last decoded frames per radio ---
+    std::array<wireb::BitsRadio, 8> bits;
 };
 
 }  // namespace cascade::engine
