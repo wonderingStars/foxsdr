@@ -228,7 +228,7 @@ Notes on the proofs
   is not this lane's change. Its gui sibling `test_crash_upload` passes on the hidden desktop (22.7 s).
 * **First-third GUI gate:** started on the hidden desktop (`FOXSDR_FRAME_CAP_HZ=60`, `-L gui -j3`), 278 tests; 21 had run (all passed) after 10 minutes, a rate that makes the gate about two
   hours, and a build cannot be made while it runs, so it was stopped by hand (my own `ctest`). The GUI gate is therefore run ONCE, at the end, on the final tip (section 8).
-* Second-third and final gates: section 8.
+* Second-third and final gates: section 8 (the second headless gate found two real regressions of this lane, both fixed; the final one has only the known reds).
 
 ## 5. Telemetry, for the Worker (NOT deployed; the standing go-ahead for the Worker is the orchestrator's to use)
 
@@ -280,6 +280,32 @@ rows for `flac_writer`, `if_recorder`, `rec_browser`, `mcp_http`, `webhook` are 
 The privacy plugins (Remote ID, trunking, meters, BLE, LoRa) should set `CASCADE_FLAG_PRIVATE_DATA` in their descriptors.
 `test_plugin_abi3_compat` has a STALE assertion (`(p.capabilities & ~0x7FFu) == 0u`: no published plugin declares a capability above `CASCADE_CAP_AUDIO_OUT`): 13 of the 43 newest published binaries declare higher bits, so with
 `FOXSDR_PUBLISHED_PLUGINS_DIR` set it reports 13 failures although all 43 load.
+
+## 8. Final gates, flake loops and the configuration hashes
+
+Machine: about thirty other lanes; a Release build under `D:/foxsdr-build/mr-engine1` (Slint ON); the GUI tests on the hidden desktop `FoxSDRTestsW2` (`FOXSDR_FRAME_CAP_HZ=60`, `-j3`); headless in slices of 100 test numbers (`-I`, `-j4`, `--timeout 300`).
+
+| Gate | Tip | Result |
+|---|---|---|
+| headless + slint, first third | before the macros commit | 883 tests, 8 red: 5 known false failures + `test_diagnostics_free` (stale stamp) + `test_engine_main_password_not_in_argv` (Passed alone, 7.21 s) + **`test_crash_upload_free`** (fails alone at `test_crash_upload.cpp:1782`, and the same line fails in two OTHER lanes' base builds) |
+| headless + slint, second third | ff1d753e | 891 tests, 9 red: the same known ones plus **two real ones that this lane's changes made red, found here and fixed in dd60cfb6**: `test_plugin_misuse` (marker flood of 100 against a quota that is now 256) and `test_health_paths` (the count of host-fault trampolines, six -> seven with `events_seq`) |
+| **headless + slint, final** | 0ef71199 (tree identical in code to 2adfa987) | **893 tests, 7 red: `test_airband_data`, `test_band_plan`, `test_converter_call_sites`, `test_page_resize_id`, `test_png_decode` (the five known false failures), `test_crash_upload_free` (pre-existing, above), `test_health_app_stepped` (Passed alone twice: 45.30 s and 44.94 s, load)**. 886 passed. |
+| GUI (`-L gui`, 278 tests) | dd60cfb6 | 277 passed, 1 red: `test_diagnostics` (stale stamp, the known one) in 2,111 s |
+| GUI subset at the final tip | 0ef71199 | 26 of 26 passed, including `test_diagnostics` (the stamp is fresh now): `slint_drive_` deck-audio, gaps-lock, keys-radio, radio-state, restart-multi-radio, runs-on-radio2, the 12 signal-* drives, plugin-radio-email, fixture-nearby-signal-catch; `test_radio_setup_app`, `test_stop_ends_recordings`, `test_tx_audio_page_app`, `test_tx_audio_plate_app`, `test_crash_upload`, `test_plugin_window`, `test_window_threaded_look` |
+
+The full GUI gate was NOT repeated at the final tip (it takes about 35 minutes of a loaded machine when nothing else of this lane runs): the commits after dd60cfb6 are the OIRT stereo (pipeline, engine lists, one op, two tests) and
+documentation; the 26-test subset above is the radio, signal, recorder and stereo-adjacent part.
+
+**Flake loops** (md5-pinned binaries, 20 runs each, through ctest): `test_engine_api_lock`, `_macros`, `_recname`, `_private`, `test_plugin_events`, `test_engine_api_markerlimit`, `test_pa_open_list_race`: **140 of 140 passed** (before OIRT; `test_pipeline_oirt` and `test_engine_api_oirt` were run 2 to 3 times each and passed).
+
+**`test_engine_api_merge`** at the final tip: alone through ctest `Passed 20.89 sec`; six concurrent copies (two batches of three, each under the debugger launcher): **no access violation in any (avs=0 six times)**. The first batch ended with `unclean` 1 to 4 (a missing result inside the 3 s wait, load: three copies of 24 threads at once, one `Passed` standing alone minutes before), the second batch `4 checks passed, 0 failed` three times with no rerun.
+The merge-sweep residual of section 6 item 1 did not show in these.
+
+**The real `%APPDATA%/foxsdr/config.json`:** sha256 before (the start of the lane, as given in the brief) `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3`; after (checked at 03:xx, 05:xx and at the end)
+`c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3`. Byte-identical. Every engine test ran with the profile redirected (`engine_api_test::hermetic`) or in a scratch folder.
+
+**Windows prompts:** none raised by this lane's tests; the GUI tests ran on the hidden desktop only. One slip: `test_crash_upload` (a gui test) was run once on the visible desktop with several others at once; it failed there and passed on the hidden desktop; no dialog was observed.
+**Stray processes:** one slip of this lane's, stopped by hand (section 3): a test that re-ran itself through the crash sentinel; no other process of this lane is left.
 
 ## 9. Decisions for the owner (this lane's)
 
