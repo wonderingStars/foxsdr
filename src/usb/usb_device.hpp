@@ -245,6 +245,22 @@ public:
         return -1;
     }
 
+    // One synchronous bulk IN read of up to `cap` bytes from `endpoint`, bounded by
+    // `timeoutMs` (rule 3): the answer to a short command on a pipe that is NOT the
+    // streaming ring's (the IC-R8600's CI-V acknowledgements arrive on 0x88 while I/Q
+    // streams on 0x86). Returns the bytes read, 0 when nothing arrived in time, or a
+    // negative value on failure. NOT PURE, like writeBulk: a transport without it
+    // refuses (negative, empty lastError()). Must not be used on the endpoint the bulk
+    // ring is reading.
+    virtual int readBulkOnce(std::uint8_t endpoint, std::uint8_t* dst, std::size_t cap,
+                             unsigned timeoutMs) {
+        (void)endpoint;
+        (void)dst;
+        (void)cap;
+        (void)timeoutMs;
+        return -1;
+    }
+
     // Isochronous IN streaming, shaped like the bulk ring above and bound by
     // the same three rules. beginIsoStream queues `transferCount` transfers
     // of `packetsPerTransfer` packet slots each on `endpoint`. `packetBytes`

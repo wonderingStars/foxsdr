@@ -601,6 +601,75 @@ public:
         return static_cast<int>(std::min<std::size_t>(moved, len));
     }
 
+    // --- bulk IN, one synchronous read ----------------------------------------
+    //
+    // WinUsb_ReadPipe, overlapped, on its own heap Request, exactly mirroring
+    // writeBulk() above (added for the IC-R8600's CI-V acknowledgements, which
+    // arrive on a different pipe than the I/Q ring). NOT RUN on any device: the
+    // only thing it adds to writeBulk's proven shape is the direction.
+    int readBulkOnce(std::uint8_t endpoint, std::uint8_t* dst, std::size_t cap,
+                     unsigned timeoutMs) override {
+        if (winusb_ == nullptr) {
+            setError("bulk read on a closed device");
+            return -1;
+        }
+        if (api_->readPipe == nullptr) {
+            setError("this WinUSB transport has no WinUsb_ReadPipe");
+            return -1;
+        }
+        if (dst == nullptr || cap == 0 || cap > 0x10000u) {
+            setError("a single bulk read takes 1 to 65536 bytes");
+            return -1;
+        }
+        std::lock_guard<std::mutex> lk(bulkInMutex_);
+        if (bulkIn_ == nullptr) {
+            auto fresh = std::make_unique<Request>();
+            fresh->event = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            if (fresh->event == nullptr) {
+                setError(lastErrorText("CreateEvent for a bulk read", ::GetLastError()));
+                return -1;
+            }
+            bulkIn_ = std::move(fresh);
+        }
+        Request& req = *bulkIn_;
+        req.buffer.assign(cap, 0);
+        std::memset(&req.overlapped, 0, sizeof(req.overlapped));
+        ::ResetEvent(req.event);
+        req.overlapped.hEvent = req.event;
+        ULONG moved = 0;
+        if (api_->readPipe(winusb_, endpoint, req.buffer.data(), static_cast<ULONG>(cap), &moved,
+                           &req.overlapped) != FALSE) {
+            const std::size_t n = std::min<std::size_t>(moved, cap);
+            std::memcpy(dst, req.buffer.data(), n);
+            return static_cast<int>(n);
+        }
+        const DWORD err = ::GetLastError();
+        if (err != ERROR_IO_PENDING) {
+            setError(lastErrorText("a bulk read", err));
+            return -1;
+        }
+        if (::WaitForSingleObject(req.event, timeoutMs) != WAIT_OBJECT_0) {
+            api_->abortPipe(winusb_, endpoint);
+            api_->cancelIoEx(file_, &req.overlapped);
+            if (::WaitForSingleObject(req.event, static_cast<DWORD>(kAbortDrainWait.count())) !=
+                WAIT_OBJECT_0) {
+                abandonRequest(std::move(bulkIn_));
+                setError("a bulk read did not complete within its timeout, and its cancellation "
+                         "did not complete within the drain bound; its buffer is deliberately "
+                         "leaked rather than freed under the device");
+                return -1;
+            }
+            return 0;  // nothing arrived in time: not an error
+        }
+        if (api_->getOverlappedResult(winusb_, &req.overlapped, &moved, FALSE) == FALSE) {
+            setError(lastErrorText("a bulk read", ::GetLastError()));
+            return -1;
+        }
+        const std::size_t n = std::min<std::size_t>(moved, cap);
+        std::memcpy(dst, req.buffer.data(), n);
+        return static_cast<int>(n);
+    }
+
     // --- isochronous IN (Windows 8.1 and later) -------------------------------
     //
     // Microsoft's documented shape (WinUSB isochronous transfers): register
@@ -960,6 +1029,8 @@ private:
 
     std::mutex bulkOutMutex_;
     std::unique_ptr<Request> bulkOut_;  // created on first use; see writeBulk()
+    std::mutex bulkInMutex_;
+    std::unique_ptr<Request> bulkIn_;  // created on first use; see readBulkOnce()
 
     std::unique_ptr<IsoRing> iso_;
     std::uint8_t isoEndpoint_ = 0;
