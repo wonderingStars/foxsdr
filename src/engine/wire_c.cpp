@@ -13,6 +13,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/safe_file_io.hpp"
+#include "net/web_cors.hpp"
 
 namespace cascade::engine::wirec {
 
@@ -37,7 +38,7 @@ constexpr Spec kSpecs[] = {
     {"access.palette", Kind::Choice, 0, 0, "normal", "normal|deuteranopia|protanopia|tritanopia|highcontrast"},
     // --- web (webmodels) ---
     {"web.cors_origins", Kind::Text, 0, 2000, "", ""},        // allowed origins, one per line (empty = no cross-origin page may read)
-    {"web.cors_credentials", Kind::Bool, 0, 0, "0", ""},      // answering credentialed cross-origin requests (needs HTTPS: refused unless the web server is secure)
+    {"web.cors_credentials", Kind::Choice, 0, 0, "off", "off"},   // credentialed cross-origin requests: never (the session cookie is SameSite=Strict; an owner decision with HTTPS)
 };
 constexpr std::size_t kSpecCount = sizeof(kSpecs) / sizeof(kSpecs[0]);
 
@@ -53,6 +54,26 @@ std::string numberText(double v) {
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%.9g", v);
     return buf;
+}
+
+// Rules a key has beyond its kind (empty = fine). Called with the normalised value.
+std::string extraRule(const std::string& key, const std::string& value) {
+    if (key == "web.cors_origins") {
+        std::size_t count = 0, from = 0;
+        while (from <= value.size()) {
+            std::size_t to = value.find('\n', from);
+            if (to == std::string::npos) { to = value.size(); }
+            std::string line = value.substr(from, to - from);
+            if (!line.empty() && line.back() == '\r') { line.pop_back(); }
+            if (!line.empty()) {
+                std::string canonical;
+                if (!cascade::net::parseCorsOrigin(line, true, canonical)) { return "\"" + line + "\" is not an origin (scheme://host[:port], no path)"; }
+                if (++count > cascade::net::kMaxCorsOrigins) { return "too many origins"; }
+            }
+            from = to + 1;
+        }
+    }
+    return std::string();
 }
 
 }  // namespace
@@ -164,6 +185,8 @@ SetResult Settings::set(const std::string& key, const std::string& value, std::s
     std::string norm;
     SetResult bad = SetResult::BadValue;
     if (!normalise(*s, value, norm, bad, why)) { return bad; }
+    why = extraRule(key, norm);
+    if (!why.empty()) { return SetResult::BadValue; }
     std::lock_guard<std::mutex> lk(m_);
     const auto it = values_.find(key);
     const std::string current = it == values_.end() ? std::string(s->def) : it->second;

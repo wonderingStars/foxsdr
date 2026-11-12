@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "core/app_commands.hpp"
 #include "core/config.hpp"
@@ -121,6 +122,25 @@ void Engine::pumpWireC() {
     if (p.perfVersion() != s.perfSeen) {
         s.perfSeen = p.perfVersion();
         ++wireCVersion_;
+    }
+    // WEB: the cross-origin allow-list (net/web_wire_c.hpp). The server takes a new list at any time; a list it refuses is logged and the old one stays.
+    {
+        const std::string origins = s.settings().get("web.cors_origins");
+        if (origins != s.corsApplied) {
+            std::vector<std::string> lines;
+            std::size_t from = 0;
+            while (from <= origins.size()) {
+                std::size_t to = origins.find('\n', from);
+                if (to == std::string::npos) { to = origins.size(); }
+                std::string line = origins.substr(from, to - from);
+                if (!line.empty() && line.back() == '\r') { line.pop_back(); }
+                if (!line.empty()) { lines.push_back(line); }
+                from = to + 1;
+            }
+            std::string err;
+            if (servers().webServer().setCors(lines, err)) { s.corsApplied = origins; }
+            else { s.corsApplied = origins; cascade::core::diagLogf("web: the cross-origin list was refused (%s)", err.c_str()); }
+        }
     }
     if (p.takeResume()) {
         if (s.settings().getBool("sys.resume_reopen")) {

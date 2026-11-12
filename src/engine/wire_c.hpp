@@ -93,6 +93,7 @@ public:
     bool powerStarted = false;            // the worker and the watcher are started (control pass only)
     std::uint64_t perfSeen = 0;           // the last perf version the engine's fingerprint counted
     std::uint64_t resumeActions = 0;      // resume actions the engine has carried out
+    std::string corsApplied;              // the web.cors_origins text the web server was last given ("" = off, the default)
 
 private:
     std::filesystem::path folder_;

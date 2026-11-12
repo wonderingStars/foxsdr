@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "net/web_server.hpp"
+#include "net/web_wire_c.hpp"   // wire-c
 
 #include "core/health_events.hpp"
 #include "core/thread_beats.hpp"
@@ -3429,6 +3430,7 @@ public:
 
     // The public listing (net/receiver_listing.hpp): the document is built once, when the listing is set, and served as it is; a disabled
     // listing is an empty document and the route answers 404.
+    bool wireCSetCors(const std::vector<std::string>& origins, std::string& error) { return wireC_.setCors(origins, error); }   // wire-c
     bool setReceiverListing(const ReceiverListing& listing, std::string& error) {
         error = validateListing(listing);
         if (!error.empty()) { return false; }
@@ -3549,6 +3551,10 @@ private:
     // The public receiver listing's document ("" = off).
     mutable std::mutex listingMutex_;
     std::string listingDoc_;
+
+    // wire-c begin: wiring lane C's web features (net/web_wire_c.hpp): the cross-origin allow-list, and what later rows add
+    WebWireC wireC_;
+    // wire-c end
 
     // Basemap tiles published by the application, and the requests waiting for
     // it. An entry with an empty bmp means the plugin said MISSING — a real
@@ -3697,8 +3703,14 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
     // Headers applied to every response. nosniff because several routes serve
     // caller-influenced JSON, and no-store because nothing here is worth a
     // cache entry and a cached /api/status is a stale readout.
+    // wire-c begin: an allowed cross-origin PREFLIGHT is answered before routing (204 + the model's headers); nothing else is stopped here
+    svr.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
+        return wireC_.preRouting(req, res) ? httplib::Server::HandlerResponse::Handled : httplib::Server::HandlerResponse::Unhandled;
+    });
+    // wire-c end
     svr.set_post_routing_handler(
         [this](const httplib::Request& req, httplib::Response& res) {
+            wireC_.addHeaders(req, res);   // wire-c: the cross-origin headers, when an allow-list is set
             res.set_header("X-Content-Type-Options", "nosniff");
             res.set_header("Cache-Control", "no-store");
             res.set_header("Referrer-Policy", "no-referrer");
@@ -4791,6 +4803,7 @@ void WebServer::setImages(std::vector<WebImage> images) {
 bool WebServer::setReceiverListing(const ReceiverListing& listing, std::string& error) {
     return impl_->setReceiverListing(listing, error);
 }
+bool WebServer::setCors(const std::vector<std::string>& origins, std::string& error) { return impl_->wireCSetCors(origins, error); }   // wire-c
 std::vector<WebServer::TileRequest> WebServer::takePendingTileRequests() {
     return impl_->takePendingTileRequests();
 }

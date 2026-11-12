@@ -574,6 +574,11 @@ public:
     // (a sentence for the settings panel) when the listing is enabled but invalid; the previous listing then stays in force.
     bool setReceiverListing(const ReceiverListing& listing, std::string& error);
 
+    // wire-c begin (wiring lane C, row W7a; net/web_wire_c.hpp): the cross-origin allow-list. An empty list is off (the default: no header is ever added). Callable at any time, from any
+    // thread. False with `error` when an origin is not acceptable; the previous list then stays. Credentials are never allowed.
+    bool setCors(const std::vector<std::string>& origins, std::string& error);
+    // wire-c end
+
     // --- Basemap tiles -------------------------------------------------------
     // GET /api/tile/{z}/{x}/{y} is demand-driven by the BROWSER's viewport,
     // which this process cannot predict — but the plugin that has the tiles
