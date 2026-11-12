@@ -7,6 +7,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <chrono>
+#include <limits>
 #include <filesystem>
 #include <string>
 
@@ -15,13 +16,16 @@
 #include "core/app_commands.hpp"
 #include "core/diag_log.hpp"
 #include "core/rec_daily.hpp"
+#include "core/record_lock.hpp"
 #include "core/status_clock.hpp"
 #include "engine/engine.hpp"
 #include "engine/wire_a.hpp"
+#include "core/receiver_tables.hpp"
 
 namespace cascade::engine {
 
 namespace rd = cascade::core::recdaily;
+namespace rl = cascade::core::reclock;
 
 namespace {
 bool parseDaily(const std::string& text, rd::Options& out, std::string& err) {
@@ -113,6 +117,117 @@ void WireA::applyDaily(cascade::core::Recorder::OpenRequest& req) {
 
 void WireA::recordingFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {
     fact("record.daily", dailyJson());
+    fact("record.lock", lockPolicy_.lockWhileRecording ? "1" : "0");
+    fact("record.lock.gain", lockPolicy_.lockGain ? "1" : "0");
+    fact("record.lock.reason", lockReason_);
+    for (std::size_t slot = 0; slot < 8; ++slot) {
+        if (!e_.receiverLive(static_cast<std::uint32_t>(slot) + 1u)) { continue; }
+        std::string names;
+        for (const rl::RecordLock::Entry& en : lock_.frozenSettings(static_cast<int>(slot))) {
+            if (!names.empty()) { names += '\n'; }
+            names += en.label;
+        }
+        fact("record.lock.frozen." + std::to_string(slot + 1), names);
+    }
+}
+
+// ---- the lock while recording --------------------------------------------------------------------------------------------------------------------
+// core/record_lock.hpp: what a take has frozen, and the sentence that says why. The engine's recorders are the truth: the model's slot for a radio is brought into line with them whenever a guarded
+// command arrives (and once a pass), so a take started a moment ago is locked from the first command after it.
+
+namespace rl = cascade::core::reclock;
+
+void WireA::lockLoadOnce() {
+    if (lockLoaded_ || dir().empty()) { return; }
+    lockLoaded_ = true;
+    const std::string text = readFile("record-lock.json");
+    if (text.empty()) { return; }
+    const nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
+    if (j.is_discarded() || !j.is_object()) { return; }
+    rl::Policy p;
+    p.lockWhileRecording = j.value("lock", true);
+    p.lockGain = j.value("gain", false);
+    lockPolicy_ = p;
+    lock_.setPolicy(p);
+}
+
+void WireA::lockSync(std::size_t slot) {
+    if (slot >= 8 || !e_.receivers_[slot]) { return; }
+    Receiver& r = *e_.receivers_[slot];
+    const bool iq = r.iqRecorder_.recording(), ifr = r.ifRecorder_.recording(), au = r.audioRecorder_.recording();
+    const int radio = static_cast<int>(slot);
+    if (!iq && !ifr && !au) {
+        if (lock_.recording(radio)) { lock_.recordingStopped(radio); bump(); }
+        return;
+    }
+    if (lock_.recording(radio)) { return; }   // frozen at the first look after the take started
+    rl::Frozen f;
+    f.centerHz = r.pipeline_.activeSource().centerFrequencyHz();
+    f.sampleRateHz = r.pipeline_.inputRateHz();
+    f.channelHz = r.pipeline_.activeSource().centerFrequencyHz() + r.pipeline_.vfoOffsetHz();
+    f.channelBandwidthHz = r.vfoBandwidthHz_;
+    f.channelMode = r.modeIndex_;
+    f.sourceId = 0;
+    f.audioRateHz = 0.0;
+    const rl::RecordKind kind = iq ? rl::RecordKind::BasebandIq : (ifr ? rl::RecordKind::ChannelIf : rl::RecordKind::Audio);
+    lock_.recordingStarted(radio, kind, f, false);
+    bump();
+}
+
+bool WireA::recordGuard(const FoxCommand& c, std::string& why) {
+    lockLoadOnce();
+    rl::Setting what;
+    double value = std::numeric_limits<double>::quiet_NaN();   // NaN is never "the same value": the request is judged a change
+    const std::size_t slot = e_.scopedSlot();
+    Receiver& r = e_.rx();
+    switch (c.op) {
+        case FOXAPI_OP_SET_CENTRE:
+            what = rl::Setting::CenterFrequency;
+            value = c.num[0];
+            break;
+        case FOXAPI_OP_SET_FREQUENCY:
+            if (r.ifRecorder_.recording()) {
+                what = rl::Setting::ChannelFrequency;
+                value = c.num[0];
+            } else if (r.ctun_) {
+                return false;   // the VFO moves, the centre stays
+            } else {
+                what = rl::Setting::CenterFrequency;
+                value = c.num[0] - r.pipeline_.vfoOffsetHz();
+            }
+            break;
+        case FOXAPI_OP_SET_SAMPLE_RATE: what = rl::Setting::SampleRate; value = c.num[0]; break;
+        case FOXAPI_OP_SELECT_SOURCE: what = rl::Setting::Source; break;
+        case FOXAPP_OP_SET_PPM: what = rl::Setting::FrequencyCorrection; break;
+        case FOXAPP_OP_SET_CONVERTER: what = rl::Setting::ConverterOffset; break;
+        case FOXAPI_OP_RADIO_REMOVE: what = rl::Setting::CloseRadio; value = 1.0; break;
+        case FOXAPI_OP_SET_GAIN: what = rl::Setting::Gain; break;
+        case FOXAPI_OP_SET_MODE: what = rl::Setting::ChannelMode; value = static_cast<double>(c.ival[0] - 1); break;
+        case FOXAPI_OP_SET_BANDWIDTH: what = rl::Setting::ChannelBandwidth; value = c.num[0]; break;
+        default: return false;
+    }
+    lockSync(slot);
+    const rl::Verdict v = lock_.check(static_cast<int>(slot), what, value);
+    if (v.allowed) { return false; }
+    why = v.reason;
+    lockReason_ = v.reason;   // the whole sentence: the reply's message is short (FOXAPI_MESSAGE_CHARS)
+    bump();
+    return true;
+}
+
+WireA::Result WireA::lockOp(const FoxCommand& c, const std::string& text, Result res) {
+    (void)text;
+    lockLoadOnce();
+    if ((c.ival[0] != 0 && c.ival[0] != 1) || (c.ival[1] != 0 && c.ival[1] != 1)) { return refused(res, FOXAPI_OUT_OF_RANGE, "the switches are 0 or 1"); }
+    rl::Policy now;
+    now.lockWhileRecording = c.ival[0] == 1;
+    now.lockGain = c.ival[1] == 1;
+    if (lockPolicy_.lockWhileRecording == now.lockWhileRecording && lockPolicy_.lockGain == now.lockGain) { return refused(res, FOXAPI_NO_CHANGE, "it is so already"); }
+    lockPolicy_ = now;
+    lock_.setPolicy(now);
+    saveFile("record-lock.json", nlohmann::json{{"lock", now.lockWhileRecording}, {"gain", now.lockGain}}.dump() + "\n");
+    bump();
+    return res;
 }
 
 }  // namespace cascade::engine

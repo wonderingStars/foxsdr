@@ -7335,6 +7335,12 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
     const std::string text = cmd::textOf(c, longText);
     // THE FREQUENCY LOCK (FOXAPP_OP_RADIO_LOCK): a tuning command aimed at a locked radio is refused whoever sent it - the window, a plugin, the web page, CAT.
     if (rx().tuneLocked_ && isTuningCommandOfLock(c)) { return refuse(FOXAPI_DENIED, "this radio's frequency is locked"); }
+    // wire-a begin: settings a take that is open has frozen (core/record_lock.hpp)
+    {
+        std::string lockWhy;
+        if (WireA::of(*this).recordGuard(c, lockWhy)) { return refuse(FOXAPI_DENIED, lockWhy.c_str()); }
+    }
+    // wire-a end
     // wire-a begin: every op of 0x8800-0x88FF is the tuning / recording / display wiring lane's (engine/wire_a*.cpp)
     if (c.op >= FOXAPP_OP_WIRE_A_FIRST && c.op <= FOXAPP_OP_WIRE_A_LAST) { return WireA::of(*this).apply(c, text, res); }
     // wire-a end

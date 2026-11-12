@@ -31,6 +31,7 @@
 #include "core/channel_plans.hpp"
 #include "core/disk_job.hpp"
 #include "core/rec_daily.hpp"
+#include "core/record_lock.hpp"
 #include "core/recorder.hpp"
 #include "core/favourite_state.hpp"
 #include "core/scan_plan.hpp"
@@ -154,6 +155,20 @@ private:
     // ---- records: analyser project, attachments, SigMF annotations (wire_a_records.cpp) ----
     Result recordsOp(const FoxCommand& c, const std::string& text, Result res);
 
+    // ---- recording: the lock while recording (wire_a_recording.cpp) ----
+    Result lockOp(const FoxCommand& c, const std::string& text, Result res);
+    void lockLoadOnce();
+    void lockSync(std::size_t slot);
+    cascade::core::reclock::RecordLock lock_;
+    bool lockLoaded_ = false;
+    cascade::core::reclock::Policy lockPolicy_;
+    std::string lockReason_;
+
+public:
+    // The engine's hook in applyCommand: true (with the model's sentence) when this command would change a setting a take that is open on the radio it names has frozen.
+    bool recordGuard(const FoxCommand& c, std::string& why);
+
+private:
     // ---- recording: daily folders (wire_a_recording.cpp) ----
     Result dailyOp(const FoxCommand& c, const std::string& text, Result res);
     void recordingFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;

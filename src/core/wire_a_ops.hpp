@@ -113,6 +113,14 @@
 //   refuses (nothing changes); NO_CHANGE when it is in force already. Kept in record-daily.json beside markers.json. fact.record.daily is the JSON in force.
 #define FOXAPP_OP_SET_RECORD_DAILY       0x8816u /* text: JSON {style, utc, template} */
 
+//   RECORD_LOCK (SETTINGS; core/record_lock.hpp): while a radio has a take open, the settings that would make the file lie are refused (FOXAPI_DENIED, with the model's sentence: "The sample rate is locked while an
+//   I/Q recording is open: the file stores one sample rate ... Stop the recording first."). ival[0]: 1 = lock while recording (DEFAULT ON, as the screen hand-off says), 0 = off; ival[1]: 1 = gain is locked as well
+//   (default 0). Guarded, for the radio a command names: SET_CENTRE and a SET_FREQUENCY that moves the centre (not while centre tuning keeps it) and SET_SAMPLE_RATE, SELECT_SOURCE, SET_PPM, SET_CONVERTER and RADIO_REMOVE
+//   during an I/Q take (a request that re-sends the frozen centre or rate is allowed; for SET_PPM, SET_CONVERTER and SELECT_SOURCE the frozen value is not known to the lane, so any request is refused), SET_FREQUENCY,
+//   SET_MODE and SET_BANDWIDTH during an IF take, RADIO_REMOVE during any take, SET_GAIN when the gain lock is on. A SigMF take, which logs its own retunes, will leave centre and correction free (the format is not
+//   built yet). NO_CHANGE when it is so already. fact.record.lock "1"/"0", fact.record.lock.gain, fact.record.lock.frozen.<n> (the settings frozen on radio n now, newline-separated, for the screen to grey out).
+#define FOXAPP_OP_RECORD_LOCK            0x8817u /* ival[0]: 1 lock while recording / 0 off; ival[1]: 1 lock gain too */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -138,7 +146,8 @@
     {FOXAPP_OP_ATTACH, "APP_ATTACH", true}, \
     {FOXAPP_OP_SIGMF_ANNOTATE, "APP_SIGMF_ANNOTATE", true}, \
     {FOXAPP_OP_KEY_ACTION, "APP_KEY_ACTION", true}, \
-    {FOXAPP_OP_SET_RECORD_DAILY, "APP_SET_RECORD_DAILY", true},
+    {FOXAPP_OP_SET_RECORD_DAILY, "APP_SET_RECORD_DAILY", true}, \
+    {FOXAPP_OP_RECORD_LOCK, "APP_RECORD_LOCK", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP

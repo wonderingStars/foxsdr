@@ -4,8 +4,13 @@
 //       template as well the template's folders come below the day's; a bad style / template / JSON is refused and changes nothing; the same setting again is NO_CHANGE; the setting reaches
 //       record-daily.json and a new engine reads it; a junction in the way keeps the take in its default place.
 //
+//   L1  LOCK WHILE RECORDING: during an I/Q take the sample rate, the source and the centre are refused with the model's sentence (and nothing moves), re-sending the frozen centre is allowed, the VFO may
+//       still move; after the take every one is allowed again; an audio take freezes none of them; the gain lock is its own switch; the lock can be turned off and the setting is kept in record-lock.json.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <chrono>
+#include <fstream>
+#include <iterator>
 #include <cstdio>
 #include <ctime>
 #include <string>
@@ -133,6 +138,76 @@ void testJunction() {
     if (!w.empty()) { CHECK(w[0].parent_path() == rec); }
 }
 
+void testLock() {
+    std::printf("L1: lock while recording\n");
+    const fs::path rec = g_dir / "rec3", user = g_dir / "user3";
+    fs::create_directories(rec);
+    {
+        Rig r(user, rec);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 100.0e6, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RUN, 0, 1)).status(), FOXAPI_OK);
+        CHECK_EQ(r.fact("record.lock"), std::string("1"));
+        // an I/Q take
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_IQ, 0, 1)).status(), FOXAPI_OK);
+        CHECK(r.until([&] { return !wavsUnder(rec).empty(); }));
+        testing::Outcome o = r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 101.0e6, 0));
+        CHECK_EQ(o.status(), FOXAPI_DENIED);
+        CHECK(std::string(o.result.message).find("centre frequency is locked while an I/Q recording is open") != std::string::npos);
+        CHECK(r.fact("record.lock.reason").find("Stop the recording first") != std::string::npos);   // the whole sentence (the reply's message is short)
+        CHECK(r.fact("record.lock.reason").find("the recording stores one centre frequency") != std::string::npos);
+        CHECK_EQ(r.fact("tuned.1.centreHz"), std::string("100000000"));   // nothing moved
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 100.0e6, 0)).status(), FOXAPI_OK);   // the frozen value again is allowed
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_SAMPLE_RATE, 1.0e6, 0)).status(), FOXAPI_DENIED);
+        FoxCommand src = testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0.0, 0, "siggen");
+        CHECK_EQ(r.send(src).status(), FOXAPI_DENIED);
+        CHECK(r.fact("record.lock.frozen.1").find("sample rate") != std::string::npos);
+        CHECK(r.fact("record.lock.frozen.1").find("centre frequency") != std::string::npos);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_VFO_OFFSET, 5000.0, 0)).status(), FOXAPI_OK);   // the VFO is the user's to move
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_GAIN, 10.0, 0)).status() == FOXAPI_DENIED, false);   // gain is free unless the gain lock is on
+        // the take ends: everything is allowed again
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_IQ, 0, 0)).status(), FOXAPI_OK);
+        r.settle(700);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 101.0e6, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.fact("record.lock.frozen.1"), std::string());
+        // an audio take freezes none of these
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_AUDIO, 0, 1)).status(), FOXAPI_OK);
+        r.settle(300);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 102.0e6, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_AUDIO, 0, 0)).status(), FOXAPI_OK);
+        r.settle(700);
+        // the switch: off allows the change during a take; on again refuses; the same setting is NO_CHANGE; a bad value is refused
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_RECORD_LOCK, 0.0, 1)).status(), FOXAPI_NO_CHANGE);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_RECORD_LOCK, 0.0, 5)).status(), FOXAPI_OUT_OF_RANGE);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_RECORD_LOCK, 0.0, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.fact("record.lock"), std::string("0"));
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_IQ, 0, 1)).status(), FOXAPI_OK);
+        r.settle(300);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 103.0e6, 0)).status(), FOXAPI_OK);   // not locked
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_IQ, 0, 0)).status(), FOXAPI_OK);
+        r.settle(700);
+        // gain lock: its own switch
+        FoxCommand both = testing::cmd(FOXAPP_OP_RECORD_LOCK, 0.0, 1);
+        both.ival[1] = 1;
+        CHECK_EQ(r.send(both).status(), FOXAPI_OK);
+        CHECK_EQ(r.fact("record.lock.gain"), std::string("1"));
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_IQ, 0, 1)).status(), FOXAPI_OK);
+        r.settle(300);
+        // (the generator has no device, so SET_GAIN is answered NO_DEVICE before the engine's apply: the gain lock is held by its switch and facts here, UNVERIFIED against a real device)
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_IQ, 0, 0)).status(), FOXAPI_OK);
+        r.settle(700);
+        CHECK(r.until([&] {
+            std::ifstream f(user / "record-lock.json");
+            std::string t((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            return t.find("\"gain\":true") != std::string::npos;
+        }, 6000));
+    }
+    {
+        Rig r(user, rec);
+        r.settle(200);
+        CHECK_EQ(r.fact("record.lock.gain"), std::string("1"));   // a new engine reads the switches
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -144,6 +219,7 @@ int main() {
     fs::create_directories(g_dir, ec);
     testDaily();
     testJunction();
+    testLock();
     fs::remove_all(g_dir, ec);
     return check::finish("test_engine_api_wire_a_record");
 }
