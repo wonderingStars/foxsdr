@@ -155,6 +155,15 @@
 //   draws the trace; the engine only keeps the choice (fact.display.trace) and answers every client with it. A damaged file is ignored (fact.display.trace.error says why).
 #define FOXAPP_OP_TRACE_MODE             0x881Du /* text: the mode word */
 
+//   BOOKMARK_FIELDS (SETTINGS; screen C's engine hand-off 2): four values a bookmark can carry, kept by the engine in bookmark_fields.json beside markers.json keyed by (frequency, mode) like the notes (so core/bookmark.hpp,
+//   freq_manager.cpp and the list item stay as they are: the list item has room for four numbers only; a retuned bookmark takes its fields with it). ival[0]: the bookmark's id; ival[1]: 0 = set, 1 = read. set: text = JSON
+//   {"squelchDb":-200..20, "thresholdDb":-200..50, "offsetKhz":-1000000..1000000, "toneHz":CTCSS Hz > 0} (a missing or null field is "none"; the text is the WHOLE record, "" or {} removes it). read: the record as JSON in
+//   fact.bookmark.fields.last (id in fact.bookmark.fields.lastId; "" when none). squelchDb and toneHz are APPLIED when the bookmark is tuned (BOOKMARK_TUNE, a click, the web remote), except while a scan runs (a scan would
+//   change the squelch at every step: the per-entry threshold is the way): the radio's squelch is set to squelchDb, and the CTCSS tone squelch to toneHz (NFM only; a tone the detectors do not know is left, and said in the log).
+//   thresholdDb is the scanner's per-entry threshold for that entry of a list or plan scan (a threshold set with SCANNER_EXTRAS 4 for the same frequency wins). offsetKhz is STORED and read back but not applied (its
+//   meaning in the window's memory is not specified: UNVERIFIED). NOT_FOUND no such bookmark; BAD_ARGUMENT bad JSON or a value out of range; NO_CHANGE when it is as it was.
+#define FOXAPP_OP_BOOKMARK_FIELDS        0x881Eu /* ival[0]: bookmark id; ival[1]: 0 set / 1 read; text: JSON */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -187,7 +196,8 @@
     {FOXAPP_OP_GRADIENT_SET, "APP_GRADIENT_SET", true}, \
     {FOXAPP_OP_DISPLAY_AVERAGE, "APP_DISPLAY_AVERAGE", true}, \
     {FOXAPP_OP_WF_HISTORY, "APP_WF_HISTORY", true}, \
-    {FOXAPP_OP_TRACE_MODE, "APP_TRACE_MODE", true},
+    {FOXAPP_OP_TRACE_MODE, "APP_TRACE_MODE", true}, \
+    {FOXAPP_OP_BOOKMARK_FIELDS, "APP_BOOKMARK_FIELDS", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP

@@ -6259,6 +6259,7 @@ void Engine::tuneToBookmark(const cascade::core::Bookmark& b) {
     // real figure and ticks nothing.
     rx().bandwidthIndex_ = bandwidthStepIndex(rx().vfoBandwidthHz_);
     if (rx().vfoBandwidthHz_ != bwBefore) { logBandwidthChange("bookmark"); }
+    WireA::of(*this).afterBookmarkTune(b);   // wire-a: the squelch and tone the bookmark carries
 }
 
 std::uint64_t Engine::addBookmarkHere(const std::string& name, const std::string& group) {

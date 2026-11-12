@@ -14,6 +14,7 @@
 #define CASCADE_ENGINE_WIRE_A_HPP
 
 #include <array>
+#include <cmath>
 #include <atomic>
 #include <limits>
 #include <utility>
@@ -103,6 +104,23 @@ private:
     // ---- bookmarks: notes and tags (wire_a_bookmarks.cpp) ----
     Result bookmarkNoteOp(const FoxCommand& c, const std::string& text, Result res);
     Result bookmarkFindOp(const FoxCommand& c, const std::string& text, Result res);
+    Result bookmarkFieldsOp(const FoxCommand& c, const std::string& text, Result res);
+    struct BmFields {
+        double squelchDb = std::numeric_limits<double>::quiet_NaN();
+        double thresholdDb = std::numeric_limits<double>::quiet_NaN();
+        double offsetKhz = std::numeric_limits<double>::quiet_NaN();
+        double toneHz = std::numeric_limits<double>::quiet_NaN();
+        bool empty() const { return std::isnan(squelchDb) && std::isnan(thresholdDb) && std::isnan(offsetKhz) && std::isnan(toneHz); }
+    };
+    std::map<cascade::core::tuning::BookmarkNotes::Key, BmFields> fields_;
+    bool fieldsDirty_ = false;
+    double fieldsDueS_ = 0.0;
+    std::string fieldsLast_, fieldsLastId_;
+    const BmFields* fieldsFor(double hz, const std::string& mode) const;
+
+public:
+    // The engine's hook at the end of tuneToBookmark: the bookmark's squelch and tone are applied (not while a scan runs).
+    void afterBookmarkTune(const cascade::core::Bookmark& b);
     void bookmarksPass();
     void bookmarkFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
     void bookmarksLoadOnce();

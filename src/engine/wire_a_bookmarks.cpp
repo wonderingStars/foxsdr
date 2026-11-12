@@ -18,6 +18,7 @@
 #include "core/app_commands.hpp"
 #include "core/bookmark.hpp"
 #include "core/bookmark_pack.hpp"
+#include "core/diag_log.hpp"
 #include "core/receiver_tables.hpp"
 #include "engine/engine.hpp"
 #include "engine/wire_a.hpp"
@@ -43,6 +44,26 @@ void WireA::bookmarksLoadOnce() {
             notesError_ = j.is_discarded() ? "the notes file is not JSON" : err;
             notes_.clear();
             bump();
+        }
+    }
+    text = readFile("bookmark_fields.json");
+    if (!text.empty()) {
+        const nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
+        if (!j.is_discarded() && j.is_object() && j.contains("fields") && j["fields"].is_array()) {
+            for (const auto& e : j["fields"]) {
+                if (!e.is_object() || !e.contains("hz") || !e["hz"].is_number_integer() || !e.contains("mode") || !e["mode"].is_string()) { continue; }
+                t::BookmarkNotes::Key k;
+                if (!t::BookmarkNotes::makeKey(static_cast<double>(e["hz"].get<std::int64_t>()), e["mode"].get<std::string>(), k)) { continue; }
+                BmFields f;
+                auto num = [&](const char* name, double& dst, double lo, double hi) {
+                    if (e.contains(name) && e[name].is_number() && std::isfinite(e[name].get<double>()) && e[name].get<double>() >= lo && e[name].get<double>() <= hi) { dst = e[name].get<double>(); }
+                };
+                num("squelchDb", f.squelchDb, -200.0, 20.0);
+                num("thresholdDb", f.thresholdDb, -200.0, 50.0);
+                num("offsetKhz", f.offsetKhz, -1.0e6, 1.0e6);
+                num("toneHz", f.toneHz, 0.001, 1000.0);
+                if (!f.empty() && fields_.size() < 20000) { fields_[k] = f; }
+            }
         }
     }
     text = readFile("favourites.json");
@@ -90,12 +111,32 @@ void WireA::bookmarksPass() {
             const auto it = bookmarkKeys_.find(id);
             if (it == bookmarkKeys_.end() || it->second == k || present.count(it->second) != 0) { continue; }
             if (notes_.rekey(static_cast<double>(it->second.first), it->second.second, static_cast<double>(k.first), k.second)) { notesChanged(); }
+            if (const auto f = fields_.find(it->second); f != fields_.end() && fields_.count(k) == 0) {
+                fields_[k] = f->second;
+                fields_.erase(f);
+                fieldsDirty_ = true;
+                fieldsDueS_ = e_.clockS() + 0.5;
+                bump();
+            }
         }
         bookmarkKeys_ = std::move(now);
     }
     if (favouritesDirty_ && e_.clockS() >= favouritesDueS_) {
         favouritesDirty_ = false;
         saveFile("favourites.json", favourites_.toJson().dump(1) + "\n");
+    }
+    if (fieldsDirty_ && e_.clockS() >= fieldsDueS_) {
+        fieldsDirty_ = false;
+        nlohmann::json arr = nlohmann::json::array();
+        for (const auto& [k, f] : fields_) {
+            nlohmann::json o = {{"hz", k.first}, {"mode", k.second}};
+            if (!std::isnan(f.squelchDb)) { o["squelchDb"] = f.squelchDb; }
+            if (!std::isnan(f.thresholdDb)) { o["thresholdDb"] = f.thresholdDb; }
+            if (!std::isnan(f.offsetKhz)) { o["offsetKhz"] = f.offsetKhz; }
+            if (!std::isnan(f.toneHz)) { o["toneHz"] = f.toneHz; }
+            arr.push_back(std::move(o));
+        }
+        saveFile("bookmark_fields.json", nlohmann::json{{"version", 1}, {"fields", arr}}.dump(1) + "\n");
     }
     if (notesDirty_ && e_.clockS() >= notesDueS_) {
         notesDirty_ = false;
@@ -173,6 +214,9 @@ void WireA::bookmarkFacts(const std::function<void(const std::string&, const std
     fact("bookmark.note.last", noteLast_);
     fact("bookmark.note.lastId", noteLastId_);
     fact("bookmark.find", findLast_);
+    fact("bookmark.fields.last", fieldsLast_);
+    fact("bookmark.fields.lastId", fieldsLastId_);
+    fact("bookmark.fields.count", std::to_string(fields_.size()));
     std::string names;
     for (const std::string& n : favourites_.names()) {
         if (!names.empty()) { names += '\n'; }
@@ -360,6 +404,81 @@ WireA::Result WireA::packOp(const FoxCommand& c, const std::string& text, Result
     bump();
     if (full) { return refused(res, FOXAPI_LIMIT, "the bookmark list is full; what fitted was added"); }
     return res;
+}
+
+// ---- bookmark-carried fields ------------------------------------------------------------------------------------------------------------------------
+
+const WireA::BmFields* WireA::fieldsFor(double hz, const std::string& mode) const {
+    t::BookmarkNotes::Key k;
+    if (!t::BookmarkNotes::makeKey(hz, mode, k)) { return nullptr; }
+    const auto it = fields_.find(k);
+    return it == fields_.end() ? nullptr : &it->second;
+}
+
+WireA::Result WireA::bookmarkFieldsOp(const FoxCommand& c, const std::string& text, Result res) {
+    bookmarksLoadOnce();
+    if (c.ival[0] <= 0) { return refused(res, FOXAPI_NOT_FOUND, "no bookmark with that id"); }
+    const cascade::core::Bookmark* b = bookmarkById(static_cast<std::uint64_t>(c.ival[0]));
+    if (b == nullptr) { return refused(res, FOXAPI_NOT_FOUND, "no bookmark with that id"); }
+    t::BookmarkNotes::Key k;
+    if (!t::BookmarkNotes::makeKey(b->freqHz, b->mode, k)) { return refused(res, FOXAPI_BAD_ARGUMENT, "the bookmark has no usable frequency or mode"); }
+    if (c.ival[1] == 1) {
+        fieldsLastId_ = std::to_string(c.ival[0]);
+        const auto it = fields_.find(k);
+        nlohmann::json o = nlohmann::json::object();
+        if (it != fields_.end()) {
+            if (!std::isnan(it->second.squelchDb)) { o["squelchDb"] = it->second.squelchDb; }
+            if (!std::isnan(it->second.thresholdDb)) { o["thresholdDb"] = it->second.thresholdDb; }
+            if (!std::isnan(it->second.offsetKhz)) { o["offsetKhz"] = it->second.offsetKhz; }
+            if (!std::isnan(it->second.toneHz)) { o["toneHz"] = it->second.toneHz; }
+        }
+        fieldsLast_ = it == fields_.end() ? std::string() : o.dump();
+        bump();
+        return res;
+    }
+    if (c.ival[1] != 0) { return refused(res, FOXAPI_OUT_OF_RANGE, "ival[1] is 0 set or 1 read"); }
+    BmFields f;
+    if (!text.empty()) {
+        const nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
+        if (j.is_discarded() || !j.is_object()) { return refused(res, FOXAPI_BAD_ARGUMENT, "the text is not a JSON object"); }
+        std::string bad;
+        auto num = [&](const char* name, double& dst, double lo, double hi) {
+            if (!j.contains(name) || j[name].is_null()) { return; }
+            if (!j[name].is_number() || !std::isfinite(j[name].get<double>()) || j[name].get<double>() < lo || j[name].get<double>() > hi) { bad = std::string("the field ") + name + " is not valid"; return; }
+            dst = j[name].get<double>();
+        };
+        num("squelchDb", f.squelchDb, -200.0, 20.0);
+        num("thresholdDb", f.thresholdDb, -200.0, 50.0);
+        num("offsetKhz", f.offsetKhz, -1.0e6, 1.0e6);
+        num("toneHz", f.toneHz, 0.001, 1000.0);
+        if (!bad.empty()) { return refused(res, FOXAPI_BAD_ARGUMENT, bad); }
+    }
+    const auto it = fields_.find(k);
+    auto same = [](double a, double b2) { return (std::isnan(a) && std::isnan(b2)) || a == b2; };
+    const bool unchanged = it == fields_.end() ? f.empty() : (same(it->second.squelchDb, f.squelchDb) && same(it->second.thresholdDb, f.thresholdDb) && same(it->second.offsetKhz, f.offsetKhz) && same(it->second.toneHz, f.toneHz));
+    if (unchanged) { return refused(res, FOXAPI_NO_CHANGE, "the bookmark's values are as they were"); }
+    if (f.empty()) {
+        fields_.erase(k);
+    } else {
+        if (it == fields_.end() && fields_.size() >= 20000) { return refused(res, FOXAPI_LIMIT, "too many bookmarks carry values"); }
+        fields_[k] = f;
+    }
+    fieldsDirty_ = true;
+    fieldsDueS_ = e_.clockS() + 0.5;
+    bump();
+    return res;
+}
+
+void WireA::afterBookmarkTune(const cascade::core::Bookmark& b) {
+    bookmarksLoadOnce();
+    if (e_.scanner_.active()) { return; }   // a scan would change the squelch at every step
+    const BmFields* f = fieldsFor(b.freqHz, b.mode);
+    if (f == nullptr) { return; }
+    if (!std::isnan(f->squelchDb)) { (void)subCommand(FOXAPI_OP_SET_SQUELCH, f->squelchDb, 0); }
+    if (!std::isnan(f->toneHz) && f->toneHz > 0.0) {
+        const Result r = subCommand(FOXAPI_OP_SET_TONE_SQUELCH, f->toneHz, FOXAPI_TONE_CTCSS, 1);
+        if (r.status != FOXAPI_OK) { cascade::core::diagLogf("bookmark: its CTCSS tone could not be applied (status %d)", static_cast<int>(r.status)); }
+    }
 }
 
 }  // namespace cascade::engine

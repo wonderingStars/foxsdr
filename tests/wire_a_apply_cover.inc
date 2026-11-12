@@ -3,6 +3,10 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 void wireAOps(AppWindow& a) {
+    covering(FOXAPP_OP_BOOKMARK_FIELDS);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_BOOKMARK_FIELDS, 987654321)), FOXAPI_NOT_FOUND));
+    }
     covering(FOXAPP_OP_TRACE_MODE);
     {
         CHECK(refused(A::apply(a, text(FOXAPP_OP_TRACE_MODE, "sparkly")), FOXAPI_OUT_OF_RANGE));

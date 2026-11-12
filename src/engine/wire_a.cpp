@@ -58,6 +58,8 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
             return bookmarkNoteOp(c, text, res);
         case FOXAPP_OP_BOOKMARK_FIND:
             return bookmarkFindOp(c, text, res);
+        case FOXAPP_OP_BOOKMARK_FIELDS:
+            return bookmarkFieldsOp(c, text, res);
         case FOXAPP_OP_FAVOURITE_SAVE:
         case FOXAPP_OP_FAVOURITE_RECALL:
         case FOXAPP_OP_FAVOURITE_EDIT:

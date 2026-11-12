@@ -19,6 +19,9 @@
 //   F6  STATION OVERLAY AND GRADIENT: a user's own CSV (frequencies in kHz, three columns, one bad row) is loaded as the lane's job, looked up by frequency within a tolerance (several rows, none, bad numbers),
 //       removed; a damaged CSV and a bad config are refused; the gradient text from the model is kept, read back, refused when wrong, written to the file and read by a new engine.
 //
+//   F7  BOOKMARK FIELDS: a bookmark carries a squelch level, a CTCSS tone, a scan threshold and an offset; tuning to it applies the squelch and the tone (the radio's squelch and tone squelch read back from
+//       the state), not while a scan runs; the values are read back, NO_CHANGE when as they were, removed with "", refused when out of range; a retuned bookmark takes them along; the file is read by a new engine.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cmath>
 #include <cstdio>
@@ -445,6 +448,83 @@ void testOverlayGradient() {
     }
 }
 
+void testBookmarkFields() {
+    std::printf("F7: bookmark fields\n");
+    const fs::path user = g_dir / "user7";
+    {
+        Rig r(user);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RUN, 0, 1)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_MODE, 0.0, FOXAPI_DEMOD_NFM)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_FREQUENCY, 145.5e6, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_BOOKMARK_ADD, 0, 0, "Calling")).status(), FOXAPI_OK);
+        const std::uint64_t id = r.bookmarkId(145.5e6);
+        CHECK(id != 0);
+        FoxCommand setF = testing::cmd(FOXAPP_OP_BOOKMARK_FIELDS, 0.0, static_cast<long long>(id));
+        const std::string f1 = R"({"squelchDb":-55,"toneHz":88.5,"thresholdDb":-70,"offsetKhz":12.5})";
+        CHECK_EQ(r.send(setF, &f1).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(setF, &f1).status(), FOXAPI_NO_CHANGE);
+        FoxCommand rd = testing::cmd(FOXAPP_OP_BOOKMARK_FIELDS, 0.0, static_cast<long long>(id));
+        rd.ival[1] = 1;
+        CHECK_EQ(r.send(rd).status(), FOXAPI_OK);
+        CHECK(r.fact("bookmark.fields.last").find("\"squelchDb\":-55.0") != std::string::npos);
+        CHECK(r.fact("bookmark.fields.last").find("\"toneHz\":88.5") != std::string::npos);
+        CHECK(r.fact("bookmark.fields.last").find("\"offsetKhz\":12.5") != std::string::npos);
+        // elsewhere, with another squelch and no tone; tuning to the bookmark applies its squelch and tone
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_FREQUENCY, 100.0e6, 0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_SQUELCH, -10.0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.local->state().squelchDb, -10.0);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_BOOKMARK_TUNE, 0.0, static_cast<long long>(id))).status(), FOXAPI_OK);
+        r.eng.controlPass();
+        FoxReceiverState st = r.local->state();
+        CHECK_EQ(st.squelchDb, -55.0);
+        CHECK_EQ(st.toneKind, FOXAPI_TONE_CTCSS);
+        CHECK_EQ(st.toneHz, 88.5);
+        CHECK(std::fabs(st.tunedHz - 145.5e6) < 2.0);
+        // out of range, bad JSON, unknown id; "" removes; the record gone means a tune leaves the squelch alone
+        const std::string bad1 = R"({"squelchDb":500})", bad2 = "{nope", bad3 = R"({"toneHz":"high"})";
+        CHECK_EQ(r.send(setF, &bad1).status(), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(r.send(setF, &bad2).status(), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(r.send(setF, &bad3).status(), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_BOOKMARK_FIELDS, 0.0, 987654), &f1).status(), FOXAPI_NOT_FOUND);
+        CHECK_EQ(r.fact("bookmark.fields.count"), std::string("1"));
+        // a retuned bookmark takes its fields along (the window edits the list)
+        {
+            cascade::core::FreqManager& fm = Access::bookmarks(r.eng);
+            const std::size_t i = fm.indexOfId(id);
+            cascade::core::Bookmark b = fm.list()[i];
+            b.freqHz = 145.55e6;
+            fm.updateAt(i, b);
+        }
+        r.settle(100);
+        const std::uint64_t id2 = r.bookmarkId(145.55e6);
+        CHECK(id2 != 0);
+        FoxCommand rd2 = testing::cmd(FOXAPP_OP_BOOKMARK_FIELDS, 0.0, static_cast<long long>(id2));
+        rd2.ival[1] = 1;
+        CHECK_EQ(r.send(rd2).status(), FOXAPI_OK);
+        CHECK(r.fact("bookmark.fields.last").find("\"toneHz\":88.5") != std::string::npos);
+        CHECK(r.until([&] {
+            std::ifstream f(user / "bookmark_fields.json");
+            std::string t((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            return t.find("145550000") != std::string::npos;
+        }, 6000));
+        // a scan running: tuning to a bookmark does not touch the squelch
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_SQUELCH, -10.0)).status(), FOXAPI_OK);
+        FoxCommand run = testing::cmd(FOXAPI_OP_SCANNER_RUN, 100.0e6, 1);
+        run.num[1] = 100.1e6;
+        run.num[2] = 25.0e3;
+        CHECK_EQ(r.send(run).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_BOOKMARK_TUNE, 0.0, static_cast<long long>(id2))).status(), FOXAPI_OK);
+        r.eng.controlPass();
+        CHECK_EQ(r.local->state().squelchDb, -10.0);   // a scan would change the squelch at every step: not applied
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SCANNER_RUN, 0, 0)).status(), FOXAPI_OK);
+    }
+    {
+        Rig r(user);
+        r.settle(200);
+        CHECK_EQ(r.fact("bookmark.fields.count"), std::string("1"));   // a new engine reads the file
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -460,6 +540,7 @@ int main() {
     testPacks();
     testWavCentre();
     testOverlayGradient();
+    testBookmarkFields();
     fs::remove_all(g_dir, ec);
     return check::finish("test_engine_api_wire_a_files");
 }

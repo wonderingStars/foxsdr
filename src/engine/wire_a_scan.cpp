@@ -87,12 +87,20 @@ void WireA::adjustScannerParams(cascade::core::ScannerParams& p) {
     p.lockedHz = lockedHz_;
     p.muteWhileScanning = muteWhileScanning_;
     p.thresholdDb.clear();
-    if (!p.list.empty() && !thresholds_.empty()) {
+    if (!p.list.empty() && (!thresholds_.empty() || !fields_.empty())) {
         bool any = false;
         std::vector<double> th(p.list.size(), std::numeric_limits<double>::quiet_NaN());
         for (std::size_t i = 0; i < p.list.size(); ++i) {
             for (const auto& [hz, db] : thresholds_) {
                 if (std::fabs(hz - p.list[i]) <= 1.0) { th[i] = db; any = true; break; }
+            }
+            if (std::isnan(th[i]) && !fields_.empty()) {
+                // a threshold a bookmark carries (the first bookmark at that frequency that has one)
+                for (const cascade::core::Bookmark& b : e_.freqMgr_.list()) {
+                    if (std::fabs(b.freqHz - p.list[i]) > 1.0) { continue; }
+                    const BmFields* f = fieldsFor(b.freqHz, b.mode);
+                    if (f != nullptr && !std::isnan(f->thresholdDb)) { th[i] = f->thresholdDb; any = true; break; }
+                }
             }
         }
         if (any) { p.thresholdDb = std::move(th); }
