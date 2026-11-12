@@ -345,6 +345,13 @@ std::size_t WebBookmarkBook::viewerCount() const {
     return sets_.size();
 }
 
+std::vector<std::string> WebBookmarkBook::viewers() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    std::vector<std::string> out;
+    for (const auto& kv : sets_) { out.push_back(kv.first); }
+    return out;
+}
+
 std::size_t WebBookmarkBook::size(const std::string& viewerToken) const {
     std::lock_guard<std::mutex> lk(mu_);
     const auto it = sets_.find(viewerToken);

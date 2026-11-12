@@ -3708,6 +3708,16 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         return wireC_.preRouting(req, res) ? httplib::Server::HandlerResponse::Handled : httplib::Server::HandlerResponse::Unhandled;
     });
     // wire-c end
+    // wire-c begin: wiring lane C's routes (net/web_wire_c.hpp): MY BOOKMARKS, and what later rows add. They use the server's own sign-in rule, its session token and its one refusal shape.
+    {
+        WebWireCHooks hooks;
+        hooks.signedIn = [this](const httplib::Request& req) { return authorised(req); };
+        hooks.viewerToken = [](const httplib::Request& req) { return cookieValue(req.get_header_value("Cookie"), kCookieName); };
+        hooks.tokenStillValid = [this](const std::string& token) { return identifyToken(token, true, false).role != Role::None; };
+        hooks.deny = [](httplib::Response& res, const std::string& message, int status) { deny(res, message, status); };
+        wireC_.installRoutes(svr, std::move(hooks));
+    }
+    // wire-c end
     svr.set_post_routing_handler(
         [this](const httplib::Request& req, httplib::Response& res) {
             wireC_.addHeaders(req, res);   // wire-c: the cross-origin headers, when an allow-list is set
@@ -3946,6 +3956,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
     svr.Post("/api/logout", [this](const httplib::Request& req, httplib::Response& res) {
         const std::string token = cookieValue(req.get_header_value("Cookie"), kCookieName);
         room_.revoke(token, now());
+        wireC_.forgetViewer(token);   // wire-c: what this sign-in kept (my bookmarks) goes with it
         // Expire the cookie regardless, so a token this server has never heard
         // of does not linger in the browser.
         res.set_header("Set-Cookie", std::string(kCookieName) + "=" +
@@ -4544,6 +4555,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         }
         res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
     });
+
 }
 
 bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {

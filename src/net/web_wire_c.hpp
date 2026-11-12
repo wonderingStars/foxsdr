@@ -7,21 +7,37 @@
 // unconfigured: no header is ever added, so the server behaves exactly as before. CREDENTIALS are never allowed: the session cookie is SameSite=Strict, so a
 // cross-origin page could not send it anyway, and changing that is an owner decision that needs HTTPS (docs/webmodels-handoff.md 7a).
 //
+// MY BOOKMARKS (row W2): a viewer's own bookmarks, kept in memory per sign-in (the session cookie's value is the key; it is never logged, stored or sent to
+// anyone). Routes, all behind the server's own sign-in rule: GET/POST /api/mybookmarks, PUT/DELETE /api/mybookmarks/<id>, GET /api/mybookmarks/export,
+// POST /api/mybookmarks/import?replace=0|1. They never touch the receiver (a listener may use them). The set is forgotten at sign-out and when the sign-in has
+// ended. Where the server needs no sign-in (loopback, no password) there are no sessions, so every browser shares ONE set.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
 
+#include "net/web_bookmarks.hpp"
 #include "net/web_cors.hpp"
 
 namespace httplib {
+class Server;
 struct Request;
 struct Response;
 }  // namespace httplib
 
 namespace cascade::net {
+
+// What the server tells this object about a request (so none of the server's internals leak here).
+struct WebWireCHooks {
+    std::function<bool(const httplib::Request&)> signedIn;                 // the server's own sign-in rule: true when the request may use the page
+    std::function<std::string(const httplib::Request&)> viewerToken;       // the session's token ("" when the server has no sessions)
+    std::function<bool(const std::string&)> tokenStillValid;               // the sign-in behind a token has not ended
+    std::function<void(httplib::Response&, const std::string&, int)> deny; // the server's one refusal shape
+};
 
 class WebWireC {
 public:
@@ -34,9 +50,21 @@ public:
     // Adds the model's headers (Vary, Access-Control-Allow-Origin ...) to an answer. Called after routing, for every answer.
     void addHeaders(const httplib::Request& req, httplib::Response& res);
 
+    // Registers this lane's routes on the server (called once, from installRoutes).
+    void installRoutes(httplib::Server& svr, WebWireCHooks hooks);
+
+    // The viewer's sign-in ended (sign-out): drop what is kept for them.
+    void forgetViewer(const std::string& token);
+
 private:
+    void installBookmarkRoutes(httplib::Server& svr);
+    std::string viewerOf(const httplib::Request& req) const;
+    void pruneViewers();
+
+    WebWireCHooks hooks_;
     mutable std::mutex mu_;
     CorsPolicy cors_;
+    WebBookmarkBook bookmarks_;
 };
 
 }  // namespace cascade::net

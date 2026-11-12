@@ -130,6 +130,114 @@ void testCors(const fs::path& dir) {
     }
 }
 
+// Signs in over loopback and returns the Cookie header value ("" on failure).
+std::string signIn(httplib::Client& cli) {
+    auto r = cli.Post("/api/login", "{\"username\":\"admin\",\"password\":\"a-good-long-password\"}", "application/json");
+    if (!r || r->status != 200) { return std::string(); }
+    const std::string sc = r->get_header_value("Set-Cookie");
+    const std::size_t end = sc.find(';');
+    return sc.substr(0, end);
+}
+
+void testBookmarks(const fs::path& dir) {
+    WebRig w(dir);
+    if (w.port <= 0) { return; }
+    httplib::Client cli("127.0.0.1", w.port);
+    cli.set_connection_timeout(5, 0);
+    // not signed in: 401 on every route
+    CHECK(cli.Get("/api/mybookmarks")->status == 401);
+    CHECK(cli.Post("/api/mybookmarks", "{}", "application/json")->status == 401);
+    CHECK(cli.Delete("/api/mybookmarks/1")->status == 401);
+    CHECK(cli.Get("/api/mybookmarks/export")->status == 401);
+    const std::string c1 = signIn(cli);
+    CHECK(!c1.empty());
+    if (c1.empty()) { return; }
+    const httplib::Headers h1 = headers({{"Cookie", c1.c_str()}});
+    const std::string one = "{\"name\":\"Tower\",\"freqHz\":118300000,\"mode\":\"AM\",\"bandwidthHz\":8000,\"group\":\"Air\",\"tags\":[\"Tower\",\"vhf\"]}";
+    auto add = cli.Post("/api/mybookmarks", h1, one, "application/json");
+    CHECK(static_cast<bool>(add));
+    std::uint64_t id = 0;
+    if (add) {
+        CHECK(add->status == 200);
+        const auto j = nlohmann::json::parse(add->body, nullptr, false);
+        CHECK(!j.is_discarded() && j.value("ok", false));
+        id = j.value("id", 0ull);
+        CHECK(id != 0u);
+    }
+    {   // listed, with its group
+        auto r = cli.Get("/api/mybookmarks", h1);
+        CHECK(static_cast<bool>(r) && r->status == 200);
+        const auto j = nlohmann::json::parse(r->body, nullptr, false);
+        CHECK(!j.is_discarded() && j["bookmarks"].size() == 1u);
+        CHECK(j["bookmarks"][0]["name"] == "Tower");
+        CHECK(j["bookmarks"][0]["mode"] == "AM");
+        CHECK(j["bookmarks"][0]["tags"].size() == 2u);
+        CHECK(j["groups"].size() == 1u && j["groups"][0] == "Air");
+    }
+    {   // search
+        auto hit = cli.Get("/api/mybookmarks?text=tow&min=118000000&max=119000000", h1);
+        CHECK(static_cast<bool>(hit) && nlohmann::json::parse(hit->body)["bookmarks"].size() == 1u);
+        auto miss = cli.Get("/api/mybookmarks?text=nothing-like-it", h1);
+        CHECK(static_cast<bool>(miss) && nlohmann::json::parse(miss->body)["bookmarks"].empty());
+    }
+    {   // refusals: each is a 400 with a sentence and changes nothing
+        const char* bad[] = {"{\"name\":\"\",\"freqHz\":1000000,\"mode\":\"AM\"}", "{\"name\":\"x\",\"freqHz\":0,\"mode\":\"AM\"}",
+                             "{\"name\":\"x\",\"freqHz\":1000000,\"mode\":\"BOGUS\"}", "not json", "[1,2]",
+                             "{\"name\":\"x\",\"freqHz\":1000000,\"mode\":\"AM\",\"bandwidthHz\":1}"};
+        for (const char* b : bad) {
+            auto r = cli.Post("/api/mybookmarks", h1, b, "application/json");
+            CHECK(static_cast<bool>(r));
+            if (r) {
+                if (r->status != 400) { std::printf("      '%s' answered %d\n", b, r->status); }
+                CHECK(r->status == 400);
+                const auto j = nlohmann::json::parse(r->body, nullptr, false);
+                CHECK(!j.is_discarded() && !j.value("ok", true) && !j.value("error", std::string()).empty());
+            }
+        }
+        auto dup = cli.Post("/api/mybookmarks", h1, one, "application/json");   // a duplicate
+        CHECK(static_cast<bool>(dup) && dup->status == 400);
+        auto r = cli.Get("/api/mybookmarks", h1);
+        CHECK(nlohmann::json::parse(r->body)["bookmarks"].size() == 1u);
+    }
+    {   // update, a missing id is a 404
+        const std::string upd = "{\"name\":\"Tower 2\",\"freqHz\":118400000,\"mode\":\"AM\",\"bandwidthHz\":8000}";
+        auto r = cli.Put(("/api/mybookmarks/" + std::to_string(id)).c_str(), h1, upd, "application/json");
+        CHECK(static_cast<bool>(r) && r->status == 200);
+        auto l = cli.Get("/api/mybookmarks", h1);
+        CHECK(nlohmann::json::parse(l->body)["bookmarks"][0]["name"] == "Tower 2");
+        auto missing = cli.Put("/api/mybookmarks/99999", h1, upd, "application/json");
+        CHECK(static_cast<bool>(missing) && missing->status == 404);
+    }
+    {   // export, delete (a second delete is a 404), import back with replace
+        auto ex = cli.Get("/api/mybookmarks/export", h1);
+        CHECK(static_cast<bool>(ex) && ex->status == 200);
+        CHECK(ex->get_header_value("Content-Disposition").find("foxsdr-bookmarks.json") != std::string::npos);
+        auto del = cli.Delete(("/api/mybookmarks/" + std::to_string(id)).c_str(), h1);
+        CHECK(static_cast<bool>(del) && del->status == 200);
+        auto del2 = cli.Delete(("/api/mybookmarks/" + std::to_string(id)).c_str(), h1);
+        CHECK(static_cast<bool>(del2) && del2->status == 404);
+        auto imp = cli.Post("/api/mybookmarks/import?replace=1", h1, ex->body, "application/json");
+        CHECK(static_cast<bool>(imp) && imp->status == 200);
+        if (imp) { CHECK(nlohmann::json::parse(imp->body)["imported"] == 1); }
+        auto bad = cli.Post("/api/mybookmarks/import", h1, "{broken", "application/json");
+        CHECK(static_cast<bool>(bad) && bad->status == 400);
+        // the server's own body cap still holds: a file over it never reaches the model
+        auto big = cli.Post("/api/mybookmarks/import", h1, std::string(20000, ' '), "application/json");
+        CHECK(!big || big->status == 413 || big->status == 400);
+    }
+    // sign out: the set goes with the sign-in; a new sign-in starts empty
+    auto out = cli.Post("/api/logout", h1, "", "application/json");
+    CHECK(static_cast<bool>(out) && out->status == 200);
+    CHECK(cli.Get("/api/mybookmarks", h1)->status == 401);
+    const std::string c2 = signIn(cli);
+    CHECK(!c2.empty() && c2 != c1);
+    if (!c2.empty()) {
+        auto r = cli.Get("/api/mybookmarks", headers({{"Cookie", c2.c_str()}}));
+        CHECK(static_cast<bool>(r) && r->status == 200);
+        CHECK(nlohmann::json::parse(r->body)["bookmarks"].empty());
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -137,7 +245,7 @@ int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     const fs::path root = scratch("web");
     int n = 0;
-    for (auto fn : {testCors}) {
+    for (auto fn : {testCors, testBookmarks}) {
         const fs::path d = root / std::to_string(n++);
         std::error_code ec;
         fs::create_directories(d, ec);
