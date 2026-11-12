@@ -388,6 +388,15 @@
 //   from what the front end hands the engine (the window's plugin poll): a headless engine with no window has none, so no line is sent there.
 #define FOXAPP_OP_SBS_OUT_START          0x892Au /* text JSON; applied[0]: the port; fact sbs.out */
 #define FOXAPP_OP_SBS_OUT_STOP           0x892Bu
+//   THE TRACK STORE (SETTINGS; core/track_store.hpp, positions kept for a chosen time and asked "as at T" with interpolation, for a replay), LOCAL sessions only. IN MEMORY ONLY: nothing is written to
+//   disk (the model's save / load are not wired: the positions of other people's aircraft and ships on disk is the owner's decision), OFF until enabled, not saved: every restart starts empty and off.
+//   TRACKS_CONFIG (text: JSON {enabled bool, retention_s 60..2592000 (default 21600, six hours), clear bool (drops every point)}; unknown key = BAD_ARGUMENT; NO_CHANGE when nothing differs). While enabled, once per
+//   control pass the engine adds to the store every track the front end hands it (the window's plugin poll: aircraft, vessels and stations with a position and an id of 1 to 24 of letters, digits and _ . / -),
+//   at the time the plugin last heard it (now minus ageMs), when its position changed (about a metre). A headless engine has no front end, so it stores nothing. TRACKS_READ (text: JSON {t unix seconds
+//   (default now), kind "aircraft" | "vessel" | "station" (default all), max 1..2000 (default 500)} for the picture at T; or {trail: {id, kind, t0, t1, max_points 2..2000}} for one track; or {range: true}
+//   for the first and last time held): the answer is the LOCAL fact tracks.read. Fact tracks.state = {enabled, retention_s, added, replaced, refused, too_old, evicted, tracks}.
+#define FOXAPP_OP_TRACKS_CONFIG          0x892Cu /* text JSON; fact tracks.state */
+#define FOXAPP_OP_TRACKS_READ            0x892Du /* text JSON; fact tracks.read */
 // wire-b end
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.

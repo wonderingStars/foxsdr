@@ -77,6 +77,12 @@ void wireBOps(AppWindow& a) {
     CHECK(refused(A::apply(a, text(FOXAPP_OP_SBS_OUT_START, "{\"bind\":\"0.0.0.0\"}")), FOXAPI_BAD_ARGUMENT));
     covering(FOXAPP_OP_SBS_OUT_STOP);
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_SBS_OUT_STOP, 0)), FOXAPI_NO_CHANGE));
+    // THE TRACK STORE: off by default; a parameter that is not JSON is refused, reading needs nothing held, clearing nothing is no change
+    covering(FOXAPP_OP_TRACKS_CONFIG);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_TRACKS_CONFIG, "not json")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_TRACKS_CONFIG, "{\"enabled\":false}")), FOXAPI_NO_CHANGE));
+    covering(FOXAPP_OP_TRACKS_READ);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_TRACKS_READ, "not json")), FOXAPI_BAD_ARGUMENT));
     covering(FOXAPP_OP_GPU_FFT_MODE);
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 3)), FOXAPI_OUT_OF_RANGE));
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 0)), FOXAPI_NO_CHANGE));

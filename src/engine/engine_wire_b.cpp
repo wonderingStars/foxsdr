@@ -261,6 +261,145 @@ FoxCommandResult Engine::cursorOp(const FoxCommand& c, const std::string& text, 
     return res;
 }
 
+// --- net-map-models: the track store (core/track_store.hpp) --------------------------------------------------------------------------------------
+namespace {
+bool trackKindOf(std::uint32_t k, cascade::core::tracks::Kind& out) {
+    switch (k) {
+        case CASCADE_TRACK_AIRCRAFT: out = cascade::core::tracks::Kind::Aircraft; return true;
+        case CASCADE_TRACK_VESSEL: out = cascade::core::tracks::Kind::Ship; return true;
+        case CASCADE_TRACK_STATION: out = cascade::core::tracks::Kind::Station; return true;
+        default: return false;
+    }
+}
+const char* trackKindWord(cascade::core::tracks::Kind k) {
+    switch (k) {
+        case cascade::core::tracks::Kind::Aircraft: return "aircraft";
+        case cascade::core::tracks::Kind::Ship: return "vessel";
+        case cascade::core::tracks::Kind::Station: return "station";
+        case cascade::core::tracks::Kind::Balloon: return "balloon";
+    }
+    return "?";
+}
+bool trackKindFromWord(const std::string& w, cascade::core::tracks::Kind& out) {
+    if (w == "aircraft") { out = cascade::core::tracks::Kind::Aircraft; return true; }
+    if (w == "vessel") { out = cascade::core::tracks::Kind::Ship; return true; }
+    if (w == "station") { out = cascade::core::tracks::Kind::Station; return true; }
+    return false;
+}
+}  // namespace
+
+FoxCommandResult Engine::tracksOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed) {
+    WireBState& w = wireBState();
+    wireb::Json p = wireb::Json::object();
+    if (!text.empty()) {
+        p = wireb::Json::parse(text, nullptr, false);
+        if (p.is_discarded() || !p.is_object()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the parameters are not a JSON object"); }
+    }
+    wireb::detail::Params q(p);
+    if (c.op == FOXAPP_OP_TRACKS_CONFIG) {
+        bool enabled = w.tracksEnabled, clear = false;
+        double retention = w.tracksRetentionS;
+        if (!q.flag("enabled", enabled) || !q.number("retention_s", retention, 60.0, 2592000.0) || !q.flag("clear", clear) || !q.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, q.error); }
+        if (enabled == w.tracksEnabled && retention == w.tracksRetentionS && !clear) { return refusal(res, FOXAPI_NO_CHANGE, "the track store is set so already"); }
+        if (clear && w.trackStore == nullptr && !enabled) { return refusal(res, FOXAPI_NO_CHANGE, "the track store holds nothing"); }
+        w.tracksEnabled = enabled;
+        w.tracksRetentionS = retention;
+        if (enabled && w.trackStore == nullptr) { w.trackStore = std::make_unique<cascade::core::tracks::TrackStore>(); }
+        if (w.trackStore != nullptr) { w.trackStore->setRetentionSec(retention); }
+        if (clear) { w.trackStore = enabled ? std::make_unique<cascade::core::tracks::TrackStore>() : nullptr; if (w.trackStore) { w.trackStore->setRetentionSec(retention); } w.trackLast.clear(); }
+        if (!enabled) { w.trackStore.reset(); w.trackLast.clear(); }   // (disabling drops everything held: the positions are not kept a moment longer than asked)
+        changed = true;
+        return res;
+    }
+    // TRACKS_READ
+    if (w.trackStore == nullptr) { return refusal(res, FOXAPI_FAILED, "the track store is off or empty"); }
+    wireb::Json out = wireb::Json::object();
+    q.seen.insert("trail");
+    q.seen.insert("range");
+    q.seen.insert("t");
+    q.seen.insert("kind");
+    q.seen.insert("max");
+    if (!q.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, q.error); }
+    const double nowS = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+    if (p.contains("range") && p["range"].is_boolean() && p["range"].get<bool>()) {
+        double a = 0.0, b = 0.0;
+        out["has_range"] = w.trackStore->timeRange(a, b);
+        out["first_s"] = a; out["last_s"] = b;
+    } else if (p.contains("trail")) {
+        const wireb::Json& t = p["trail"];
+        if (!t.is_object()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"trail\" is an object"); }
+        wireb::detail::Params tq(t);
+        std::string id, kind = "aircraft";
+        double t0 = 0.0, t1 = nowS;
+        std::size_t maxPoints = 500;
+        if (!tq.word("id", id) || !tq.word("kind", kind) || !tq.number("t0", t0, 0.0, 1e12) || !tq.number("t1", t1, 0.0, 1e12) || !tq.count("max_points", maxPoints, 2, 2000) || !tq.finish()) {
+            return refusal(res, FOXAPI_BAD_ARGUMENT, tq.error);
+        }
+        cascade::core::tracks::Kind k;
+        if (!trackKindFromWord(kind, k)) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"kind\" is aircraft, vessel or station"); }
+        if (!cascade::core::tracks::idOk(id)) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"id\" is 1 to 24 letters, digits and _ . / -"); }
+        wireb::Json pts = wireb::Json::array();
+        for (const cascade::core::tracks::Point& pt : w.trackStore->trail(k, id, t0, t1, maxPoints)) {
+            pts.push_back({{"t", pt.t}, {"lat", pt.lat}, {"lon", pt.lon}, {"alt_m", wireb::detail::numberOrNull(pt.altM)}});
+        }
+        out["id"] = id; out["kind"] = kind; out["points"] = pts;
+    } else {
+        double at = nowS;
+        std::string kind;
+        std::size_t maxN = 500;
+        if (!q.number("t", at, 0.0, 1e12) || !q.word("kind", kind) || !q.count("max", maxN, 1, 2000)) { return refusal(res, FOXAPI_BAD_ARGUMENT, q.error); }
+        std::optional<cascade::core::tracks::Kind> only;
+        if (!kind.empty()) {
+            cascade::core::tracks::Kind k;
+            if (!trackKindFromWord(kind, k)) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"kind\" is aircraft, vessel or station"); }
+            only = k;
+        }
+        wireb::Json list = wireb::Json::array();
+        for (const cascade::core::tracks::Entry& e : w.trackStore->snapshot(at, only)) {
+            if (list.size() >= maxN) { break; }
+            list.push_back({{"id", e.id}, {"kind", trackKindWord(e.kind)}, {"lat", e.at.lat}, {"lon", e.at.lon}, {"alt_m", wireb::detail::numberOrNull(e.at.altM)},
+                            {"interpolated", e.at.interpolated}, {"held", e.at.held}, {"age_s", e.at.ageSec}});
+        }
+        out["t"] = at; out["tracks"] = list;
+    }
+    w.facts["tracks.read"] = out.dump(-1, ' ', false, wireb::Json::error_handler_t::replace);
+    changed = true;
+    return res;
+}
+
+// Once per control pass, while enabled: every track the front end hands over, at the time its plugin last heard it, when its position moved.
+void Engine::pumpTracks() {
+    WireBState& w = *wireB_;
+    if (!w.tracksEnabled || w.trackStore == nullptr) { return; }
+    const std::shared_ptr<const TrackFeed> feed = trackFeed();
+    if (feed == nullptr) { return; }
+    const double nowS = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+    bool any = false;
+    for (const cascade::core::HostTrack& ht : feed->polled) {
+        const CascadeTrack& t = ht.t;
+        cascade::core::tracks::Kind kind;
+        if (!trackKindOf(t.kind, kind) || !cascade::core::trackHasPosition(t)) { continue; }
+        const std::string id(t.id, strnlen(t.id, CASCADE_TRACK_ID_CHARS));
+        WireBState::TrackLast now;
+        now.lat = std::round(t.latDeg * 1e5) / 1e5;
+        now.lon = std::round(t.lonDeg * 1e5) / 1e5;
+        now.alt = std::isfinite(t.altM) ? std::round(t.altM) : -99999.0;
+        const std::string key = std::string(1, static_cast<char>(kind)) + id;
+        const auto it = w.trackLast.find(key);
+        if (it != w.trackLast.end() && it->second.lat == now.lat && it->second.lon == now.lon && it->second.alt == now.alt) { continue; }
+        cascade::core::tracks::Point pt;
+        pt.t = nowS - static_cast<double>(t.ageMs) / 1000.0;
+        pt.lat = t.latDeg;
+        pt.lon = t.lonDeg;
+        pt.altM = t.altM;
+        (void)w.trackStore->add(kind, id, pt);
+        w.trackLast[key] = now;
+        if (w.trackLast.size() > 20000) { w.trackLast.erase(w.trackLast.begin()); }
+        any = true;
+    }
+    if (any) { ++wireBVersion_; }
+}
+
 // --- net-outputs: SBS text out of the aircraft tracks (net/aircraft_out.hpp) ----------------------------------------------------------------------
 FoxCommandResult Engine::sbsOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed) {
     WireBState& w = wireBState();
@@ -703,6 +842,10 @@ FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text
         case FOXAPP_OP_SBS_OUT_STOP:
             res = sbsOp(c, text, res, changed);
             break;
+        case FOXAPP_OP_TRACKS_CONFIG:
+        case FOXAPP_OP_TRACKS_READ:
+            res = tracksOp(c, text, res, changed);
+            break;
         case FOXAPP_OP_FOLLOW_SET:
         case FOXAPP_OP_FOLLOW_CLEAR:
         case FOXAPP_OP_FOLLOW_LOCK:
@@ -832,6 +975,7 @@ void Engine::pumpWireB() {
         std::lock_guard<std::mutex> lk(wireB_->mutex);
         pumpFollow();
         pumpSbs();
+        pumpTracks();
     }
     if (!wireB_->maskEnabled || !wireB_->maskLoaded) { return; }
     WireBState& w = *wireB_;
@@ -904,6 +1048,14 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
             j["stop_hz"] = s.stopHz; j["heat_rows"] = s.heatRows; j["heat_cols"] = s.heatCols; j["occ_channels"] = s.occChannels; j["occ_sweeps"] = s.occSweeps;
             fact("sweep.state", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
         }
+    }
+    if (wireB_->trackStore != nullptr || wireB_->tracksEnabled) {
+        wireb::Json j = wireb::Json::object();
+        const cascade::core::tracks::Stats s = wireB_->trackStore != nullptr ? wireB_->trackStore->stats() : cascade::core::tracks::Stats{};
+        j["enabled"] = wireB_->tracksEnabled; j["retention_s"] = wireB_->tracksRetentionS; j["added"] = s.added; j["replaced"] = s.replaced; j["refused"] = s.refused; j["too_old"] = s.tooOld;
+        j["evicted"] = s.tracksEvicted;
+        j["tracks"] = wireB_->trackStore != nullptr ? wireB_->trackStore->snapshot(std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count()).size() : 0u;
+        fact("tracks.state", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
     }
     if (wireB_->sbs != nullptr) {
         wireb::Json j = wireb::Json::object();

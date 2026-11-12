@@ -21,6 +21,7 @@
 
 #include "core/field_strength.hpp"
 #include "core/radio_matrix_model.hpp"
+#include "core/track_store.hpp"
 #include "core/spectrum_mask.hpp"
 #include "engine/wire_b_sweep.hpp"
 #include "core/pipeline.hpp"
@@ -96,6 +97,14 @@ struct WireBState {
     std::unique_ptr<cascade::net::SbsOut> sbs;
     std::map<std::string, SbsLast> sbsLast;
     std::uint64_t sbsLines = 0, sbsSeen = 0, sbsLinesReported = 0;
+
+    // --- net-map-models: the track store (memory only) fed from the same track feed ---
+    std::unique_ptr<cascade::core::tracks::TrackStore> trackStore;
+    bool tracksEnabled = false;
+    double tracksRetentionS = 6 * 3600.0;
+    struct TrackLast { double lat = 0, lon = 0, alt = 0; };
+    std::map<std::string, TrackLast> trackLast;
+    std::uint64_t tracksChanged = 0;
 
     cascade::core::FollowSet follow;
     std::array<double, 8> followLastHz{};
