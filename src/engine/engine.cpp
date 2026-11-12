@@ -252,6 +252,7 @@ Engine::~Engine() {
         // The front end's applier points into a window that is, by construction of this path, no longer there.
         setPluginUiApplier({});
         stopTransfers();
+        wireCShutdown();   // wire-c: the listeners and CAT sessions of wiring lane C are closed while the API host they use still stands (an engine that is destroyed without shutdownQuiesce)
         teardown();
     }
 #ifdef _WIN32
@@ -10905,6 +10906,7 @@ void Engine::shutdownQuiesce() {
     // request open: here it blocks THE CALLER (the window's run, as ~AppWindow did before), never the pass - the control thread runs on until
     // the next step. A hard stop each - no thread of either server runs after it returns - and idempotent.
     servers_.shutdown();
+    wireCShutdown();   // wire-c: the listeners and sessions of wiring lane C (CAT emulation, the logger follower)
 
     // STAGE 3b: the control thread is stopped next - it lets go of every key
     // at once, from this thread, and then joins (stopControlThread); every

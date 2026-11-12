@@ -3230,6 +3230,7 @@ private:
     void wireCFacts(const std::function<void(const std::string&, const std::string&)>& fact);
     std::uint64_t wireCVersion();
     void pumpWireC();
+    void wireCShutdown();
     // The recorder a plugin may ask for (plugin_abi.h recorder_start / recorder_stop): drained once a pass; one take per radio, remembered by radio slot -> plugin client.
     void wireCPluginRecorder();
     std::map<std::size_t, std::size_t> wireCPluginTakes_;

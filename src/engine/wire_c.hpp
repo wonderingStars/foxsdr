@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "engine/wire_c_power.hpp"
+#include "engine/wire_c_cat.hpp"
 #include "engine/wire_c_ham.hpp"
 #include "engine/wire_c_net.hpp"
 #include "engine/wire_c_sys.hpp"
@@ -81,6 +82,13 @@ public:
     const std::filesystem::path& folder() const { return folder_; }
     SysOps& sys() { return sys_; }
     QsoBook& qsos() { return qsoBook_; }
+    CatEmulation catEmu;                  // CAT emulation for logging programs (row L7)
+    std::string catEmuApplied = "0|kenwood-ts480|0|0";   // the settings it was last configured with (the defaults: nothing to do at the first pass)
+    std::uint64_t catEmuSeen = 0;         // clients and commands the last published fact block counted
+    void shutdown() {                     // the engine's teardown: every listener and session this lane holds is let go
+        catEmu.stop();
+        radioInfo.configure(false, "127.0.0.1", 0, false);
+    }
     RadioInfoFollow radioInfo;            // the radio information followed (row H6)
     std::string radioInfoApplied = "0|127.0.0.1|0|0";   // the settings it was last configured with (the defaults: nothing to apply at the first pass, so no counter moves)
     std::string hamError, hamExportLast, hamCabrilloProblems;

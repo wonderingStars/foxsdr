@@ -225,6 +225,12 @@ void Engine::wireCFacts(const std::function<void(const std::string&, const std::
     fact("wirec.version", std::to_string(wireCVersion()));
     fact("wirec.error", s.settings().error());
     // POWER AND RESOURCES (wire_c_power.hpp). "" is "not available" - a reading that could not be made is never shown as 0.
+    // CAT EMULATION (row L7)
+    fact("cat.emulation.running", s.catEmu.running() ? "1" : "0");
+    fact("cat.emulation.port", s.catEmu.running() ? std::to_string(s.catEmu.boundPort()) : std::string());
+    fact("cat.emulation.clients", std::to_string(s.catEmu.clients()));
+    fact("cat.emulation.commands", std::to_string(s.catEmu.commands()));
+    fact("cat.emulation.error", s.catEmu.error());
     // THE LOGGER'S RADIO INFORMATION (row H6): what the program we follow says its radios are doing; LOCAL only like every fact of this lane
     fact("ham.radioinfo.running", s.radioInfo.running() ? "1" : "0");
     fact("ham.radioinfo.port", s.radioInfo.running() ? std::to_string(s.radioInfo.boundPort()) : std::string());
@@ -283,6 +289,12 @@ bool Engine::wireCLiveFact(const std::string& key, std::string& value) {
     else if (key == "perf.switch.background_map_redraw") { value = f.switches.backgroundMapRedraw ? "1" : "0"; }
     else { return false; }
     return true;
+}
+
+// The engine's teardown: every listener and session of this lane is let go (called from shutdownQuiesce, before the control thread stops).
+void Engine::wireCShutdown() {
+    std::lock_guard<std::mutex> lk(wireCMutex_);
+    if (wireC_) { wireC_->shutdown(); }
 }
 
 std::uint64_t Engine::wireCVersion() {
@@ -441,6 +453,32 @@ void Engine::pumpWireC() {
             ++wireCVersion_;
         }
         if (s.radioInfo.poll(static_cast<std::int64_t>(std::time(nullptr)))) { ++wireCVersion_; }
+    }
+    // CAT EMULATION (row L7; wire_c_cat.hpp): a TCP port that answers like a rig, receive only, off by default; a change of settings reopens it
+    {
+        const bool on = s.settings().getBool("cat.emulation.enabled");
+        const std::string dialect = s.settings().get("cat.emulation.dialect");
+        const int port = static_cast<int>(s.settings().getInt("cat.emulation.port"));
+        const bool all = s.settings().getBool("cat.emulation.bind_all");
+        const std::string sig = std::string(on ? "1" : "0") + "|" + dialect + "|" + std::to_string(port) + "|" + (all ? "1" : "0");
+        if (sig != s.catEmuApplied) {
+            s.catEmuApplied = sig;
+            wc::CatEmulation::Opener opener;
+            opener.table = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+            opener.open = [this]() -> FoxSession* {
+                std::int32_t st = FOXAPI_OK;
+                return api().openInternalSession(InternalKind::Cat, "CAT emulation", &st);
+            };
+            s.catEmu.configure(on, dialect, port, all, opener);
+            ++wireCVersion_;
+        }
+        if (s.catEmu.running()) {
+            const std::uint64_t seen = static_cast<std::uint64_t>(s.catEmu.clients()) + (s.catEmu.commands() << 8);
+            if (seen != s.catEmuSeen) {
+                s.catEmuSeen = seen;
+                ++wireCVersion_;
+            }
+        }
     }
     // THE METRICS PAGE (row L3): switched with web.metrics; while on, about once a second a snapshot of counts and levels goes to the page (never a decoded text, a callsign, a
     // position or an address: the decode tally counts events per plugin NAME).

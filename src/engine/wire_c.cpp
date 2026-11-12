@@ -43,6 +43,11 @@ constexpr Spec kSpecs[] = {
     {"hamops.radioinfo.address", Kind::Text, 0, 15, "127.0.0.1", ""},   // the address to listen on (dotted IPv4; the local machine unless allow_other)
     {"hamops.radioinfo.port", Kind::Int, 0, 65535, "0", ""},    // the port the logger sends to (0 = not configured: nothing is opened)
     {"hamops.radioinfo.allow_other", Kind::Bool, 0, 0, "0", ""},   // accept an address other than this computer
+    // --- CAT emulation for logging programs (receive only) ---
+    {"cat.emulation.enabled", Kind::Bool, 0, 0, "0", ""},       // answer like a rig on a TCP port: read and set the frequency and mode; every transmit command is refused
+    {"cat.emulation.dialect", Kind::Choice, 0, 0, "kenwood-ts480", "kenwood-ts480|yaesu-ft891"},
+    {"cat.emulation.port", Kind::Int, 0, 65535, "0", ""},       // the port the logging program connects to (0 = not configured; 4532 is the rigctl server's)
+    {"cat.emulation.bind_all", Kind::Bool, 0, 0, "0", ""},      // listen on every address instead of this computer only
     // --- web (webmodels) ---
     {"web.cors_origins", Kind::Text, 0, 2000, "", ""},        // allowed origins, one per line (empty = no cross-origin page may read)
     {"web.metrics", Kind::Bool, 0, 0, "0", ""},               // the /metrics page for a signed-in browser (Prometheus text format); off = as if it did not exist
