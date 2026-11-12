@@ -12,6 +12,7 @@
 #include "core/diag_log.hpp"
 #include "core/i18n.hpp"
 #include "core/image_write.hpp"
+#include "core/unique_file.hpp"
 #include "core/utf8_text.hpp"
 #include "core/plugin_calls.hpp"
 
@@ -189,7 +190,8 @@ void PluginKit::tick(const FoxReceiverState& state, bool listSeqMoved, const std
     port_->applyNewestDirective();
     port_->poll();
     port_->pollImages(images_);
-    if (listSeqMoved || lists_.rows.empty()) {
+    if (listSeqMoved || lists_.rows.empty() || rereadLists_) {
+        rereadLists_ = false;   // a settings edit was answered: the stored values are read again (the lists' sequence does not move for a setting)
         ReadOptions o;
         o.fittedFacts = true;
         o.settings = true;
@@ -346,7 +348,7 @@ void PluginKit::pollResults() {
     const std::int32_t got = env_.api->poll_results(env_.session, r, 32);
     for (std::int32_t i = 0; i < got; ++i) {
         if (r[i].op == FOXAPP_OP_PLUGIN_SETTING_EDIT) {
-            (void)edits_.deliver(r[i].ticket, verdictFromAnswer(r[i].status, r[i].applied[0]));
+            if (edits_.deliver(r[i].ticket, verdictFromAnswer(r[i].status, r[i].applied[0]))) { rereadLists_ = true; }
             continue;
         }
         if (r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) {
@@ -453,6 +455,28 @@ void PluginKit::editSetting(const std::string& file, const SettingSpec& f, const
     const std::uint64_t ticket = submit(cascade::core::cmd::makeText(FOXAPP_OP_PLUGIN_SETTING_EDIT, text));
     if (ticket == 0u) { edits_.refusedAtOnce(file, f.key); }
     else { edits_.sent(file, f.key, ticket, expect); }
+}
+
+std::function<std::string()> PluginKit::prepareSavePicture(const std::string& plugin, std::string& refusal) {
+    const cascade::core::HostImage* img = imageOf(plugin);
+    if (img == nullptr || img->width == 0u) { refusal = cascade::i18n::tr("Nothing to save yet."); return {}; }
+    const std::filesystem::path dir = std::filesystem::path(env_.configPath).parent_path() / "pictures";
+    std::string name = plugin;
+    for (char& ch : name) { if (!std::isalnum(static_cast<unsigned char>(ch))) { ch = '_'; } }
+    const std::time_t t = std::time(nullptr);
+    char stamp[32];
+    std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", std::localtime(&t));
+    const std::string wanted = (dir / (name + "-" + stamp + ".bmp")).string();
+    return [copy = *img, dirText = dir.string(), wanted]() -> std::string {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(dirText), ec);
+        std::string used;
+        bool exhausted = false;
+        if (!cascade::core::reserveUnique(wanted, used, exhausted)) { return cascade::i18n::tr("The picture could not be saved."); }   // two saves in one second are two files, never one over the other
+        std::string err;
+        if (!cascade::core::writeBmp24(copy, used, err)) { return err.empty() ? std::string(cascade::i18n::tr("The picture could not be saved.")) : err; }
+        return cascade::core::formatText(cascade::i18n::tr("Saved %s"), used.c_str());
+    };
 }
 
 std::string PluginKit::savePicture(const std::string& plugin) {

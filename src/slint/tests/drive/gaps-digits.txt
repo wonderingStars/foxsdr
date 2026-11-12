@@ -1,0 +1,32 @@
+#! frames=520 bank=4 sections=4:0 size=1600x900 restart=gaps-digits-2.txt
+# gaps-digits (docs/multi-radio-records/slint-gaps.md item 2): how the counter groups its digits, 1.090.000.000 (the present style) or 1090.000.000 (MHz.kHz.Hz), chosen in SYSTEM > Display and saved in the
+# window half. The typed editor is seeded in the chosen style and reads EITHER style whatever the option says (and the old entries: 101.1 is MHz). The second start proves the choice is remembered.
+10 state running == 1
+state gaps.dots == 0
+state tunedHz == 100300000
++1 expect "Digit grouping" value contains "1.090.000.000"
+# the present style seeds the editor as it always did
++1 click "1 MHz digit"
++3 state gaps.editor == "100.300000"
++1 key escape
++3 choose "Digit grouping" "1090.000.000"
++10 state gaps.dots == 1
++1 expect "Digit grouping" value contains "1090.000.000"
++1 click "1 MHz digit"
++3 state gaps.editor == "100.300.000"
+# dotted entry in the MHz.kHz.Hz style
++1 type "Frequency in MHz" "101.100.000"
++1 key enter
++12 state tunedHz == 101100000
+# the other style, thousands from the right, while the option says MHz.kHz.Hz
++1 click "1 MHz digit"
++3 type "Frequency in MHz" "102.200.000"
++1 key enter
++12 state tunedHz == 102200000
+# and the old entry: one dot is MHz
++1 click "1 MHz digit"
++3 type "Frequency in MHz" "103.3"
++1 key enter
++12 state tunedHz == 103300000
+# the saved window half carries the choice
++1 state gaps.dots == 1

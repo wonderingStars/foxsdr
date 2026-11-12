@@ -3174,3 +3174,19 @@ Two audio features of the selected radio, below the Auto notch row of the Audio 
 | 4403 | Noise blanker | checkbox | PRESENT | Tick -> filter-nb(on) -> opNb: SET_NB ival[0] = on, ival[1] = 0; off by default |
 | 4404 | Noise blanker Threshold | slider | PRESENT | SliderRow, 6 .. 30 dB over 0..1 (whole dB), greyed unless the blanker is on -> filter-nb-threshold(norm) -> opNbThreshold: SET_NB with the switch in force and ival[1] = 1 |
 | 4405 | Blanking n % / Standing down | readout | PRESENT | the engine's nbBlankedPct (rounded) as 'Blanking n %', or the amber 'Standing down: signal too strong' while nbStandingDown; shown only while the blanker is on |
+| 4600 | FM de-emphasis choice (50 us / 75 us / Off) | dropdown | PRESENT | DropKey in the Audio filters section, the classic's De-emph combo; live in NFM and WFM, greyed elsewhere -> filter-deemph(i) -> opDeemph: SET_DEEMPHASIS ival[0] |
+| 4601 | Digit grouping (counter dots 1.090.000.000 / 1090.000.000) | dropdown | PRESENT | DropKey in SYSTEM > Display -> the host's record (workspace entry, dg=); FrequencyCounter.dot-style |
+| 4602 | Typed frequency accepts dotted entries in either style | field | PRESENT | parseTypedFrequencyHz: two or more dots are grouping marks; one dot is a decimal MHz as before |
+| 4603 | Frequency lock key by the counter | key | PRESENT | Key with a padlock icon, lit while locked -> lock-toggled; per radio, saved (fl=) |
+| 4604 | Locked radio: tuning refused, note under the counter | behaviour | PRESENT | lockedApi refuses every tuning command of a locked radio (ops listed in gaps_logic.hpp); the note replaces the counter's caption for three seconds |
+| 4605 | Picture page: Save as BMP shows Saving... and greys the key while the file is written | key | PRESENT | KitPublisher: the write runs on a worker (PluginKit::prepareSavePicture); the key is greyed and the note says Saving... until the sentence comes back |
+| 4606 | Map page: Line / Ribbon trail style keys | segment | PRESENT | SegKey pair beside Altitude colours; the setting SYSTEM > Display's Trail style saves (mapTrailStyle) |
+| 4607 | Counter right-click menu: Enlarge figures / Normal size / Enlarge every reading save their settings | menu item | PRESENT | menu ids 101, 102, 104 save counterScale and readingsScale in the interface half (the figures are not drawn larger yet) |
+| 4608 | Counter right-click menu: Copy frequency / Paste frequency | menu item | PRESENT | menu ids 105 and 106; the dotted text in force goes to the clipboard, a pasted frequency (either style) is tuned through the lock |
+| 4609 | BROWSE FILES on a plugin PATH setting | key | PRESENT | KitPublisher::browseSetting -> core::pickFile; the chosen path is entered as if typed (editSetting) |
+| 4610 | File dropped on the window (recording, frequency list, other) | behaviour | PRESENT | gaps_win's drop target -> handleDrop; .wav opens as the I/Q file, .xml and .csv go to the import, anything else is refused with a note |
+| 4611 | RESTART SDRPLAY SERVICE key | key | PRESENT | Key in the Source section while the driver has trouble reaching the service; SdrPlayServiceRestart on a worker (UAC prompt) |
+| 4612 | Copy diagnostics | key | PRESENT | SystemPublisher::copyDiagnostics: the bundle to the clipboard and to <reports>/diagnostics.txt; the status line says where |
+| 4613 | Help: the manual (app menu) | menu item | PRESENT | menu id 605 opens docs/MANUAL.md of the public repository in the default browser |
+| 4614 | Run SDRplay diagnostic and its bias-tee question | key | DEFERRED | the probe child process of the classic window (source/sdrplay_probe) is not ported; the key still says so in the log |
+| 4615 | High contrast option and skin | checkbox | PRESENT | Tick in SYSTEM > Display (hc=); the HighContrast skin is a palette; also forced on while Windows' own setting is on |

@@ -1,0 +1,15 @@
+#! frames=300 bank=4 sections=4:6 size=1600x900 FOXSDR_SLINT_HELP_TEST=120
+# gaps-misc (docs/multi-radio-records/slint-gaps.md items 9 and 10): Copy diagnostics (the bundle is built and saved beside the reports and the status line says so; a bounded run leaves the desk's
+# clipboard alone) and the Help entry of the app menu. A popup's rows cannot be reached by label, so the entry is activated by a seam at tick 120 through the menu's own callback; the address it opens is read
+# back and no browser is started.
+10 state running == 1
+state gaps.diagcopies == 0
+state gaps.help == 0
++1 scroll "Record crashes and freezes, and send the report next time" 700
++3 click "Copy diagnostics"
++5 state gaps.diagcopies == 1
++1 state gaps.diagstatus contains "Copied to the clipboard"
++1 state gaps.diagstatus contains "diagnostics.txt"
+115 state gaps.help == 0
++10 state gaps.help == 1
++1 state gaps.helpurl contains "docs/MANUAL.md"

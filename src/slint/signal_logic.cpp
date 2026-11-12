@@ -347,6 +347,19 @@ std::vector<SelectItem> agcModes() {
     return out;
 }
 
+std::vector<SelectItem> deemphModes() {
+    // the classic's kDeemphLabels (app_window.cpp), in FOXAPI_OP_SET_DEEMPHASIS order; the three words are already in every catalogue
+    const char* words[3] = {tr("50 us (EU/world)"), tr("75 us (Americas)"), tr("Off")};
+    std::vector<SelectItem> out;
+    for (int i = 0; i < 3; ++i) {
+        SelectItem s;
+        s.label = words[i];
+        s.id = std::to_string(i);
+        out.push_back(std::move(s));
+    }
+    return out;
+}
+
 std::string filtersChip(int filtersOn) {
     if (filtersOn <= 0) { return tr("OFF"); }
     return cc::formatText(tr("%d ON"), filtersOn);
@@ -1116,6 +1129,10 @@ AudioFiltersModel readAudioFilters(const FoxReceiverState& st) {
     m.nb_threshold_text = cc::formatText("%.0f dB", st.nbThresholdDb);
     m.nb_pct = static_cast<int>(std::lround(std::clamp(st.nbBlankedPct, 0.0, 100.0)));
     m.nb_standing = m.nb_on && st.nbStandingDown != 0u;
+    m.deemph_modes = deemphModes();
+    m.deemph_index = static_cast<int>(std::min<std::uint32_t>(st.deemphasis, 2u));
+    m.deemph_text = m.deemph_modes[static_cast<std::size_t>(m.deemph_index)].label;
+    m.deemph_enabled = st.demodMode == FOXAPI_DEMOD_NFM || st.demodMode == FOXAPI_DEMOD_WFM;   // the classic greys the combo outside the two FM modes
     m.agc_gain_tip = cc::formatText(tr("AGC gain now: %d dB"), m.agc_gain_int);
     if (m.nb_on) { m.nb_read = m.nb_standing ? std::string(tr("Standing down: signal too strong")) : cc::formatText(tr("Blanking %d %%"), m.nb_pct); }
     return m;
@@ -1575,6 +1592,11 @@ Command opNotchFreq(float norm) { return make(cmd::makeNum(FOXAPP_OP_SET_NOTCH_F
 Command opNotchQ(float norm) { return make(cmd::makeNum(FOXAPP_OP_SET_NOTCH_Q, notchQFromNorm(norm))); }
 Command opAutoNotch(bool on) { return make(cmd::makeInt(FOXAPI_OP_SET_AUTO_NOTCH, on ? 1 : 0)); }
 // The mode alone leaves the fixed gain alone (ival[1] = 0).
+Command opDeemph(int index) {
+    if (index < 0 || index > 2) { return {}; }
+    return make(cmd::makeInt(FOXAPI_OP_SET_DEEMPHASIS, index));
+}
+
 Command opAgcMode(int index) {
     if (index < 0 || index > static_cast<int>(FOXAPI_AGC_OFF)) { return {}; }
     return make(cmd::makeInt(FOXAPI_OP_SET_AGC, index, 0));

@@ -1,0 +1,16 @@
+4600	ASSERTED	gaps-deemph	choose each of the three, read back as state deemphasis == 0 / 1 / 2; the combo is enabled in WFM and NFM and greyed in AM
+4601	ASSERTED	gaps-digits	choose 1090.000.000, read back as state gaps.dots == 1 and the editor's seed '100.300.000'; the second start finds it saved
+4602	ASSERTED	gaps-digits	101.100.000, 102.200.000 and 103.3 typed, each read back as state tunedHz
+4603	ASSERTED	gaps-lock	click, state gaps.locked / gaps.lockmask; the second start finds the lock saved
+4604	ASSERTED	gaps-lock	Ctrl+Up, a digit nudge, the wheel, a typed entry and a click on the waterfall are each refused (state tunedHz unchanged, state gaps.lockrefusals counts them); mode still changes
+4605	ASSERTED	gaps-picture-save	click, expect enabled false, state gaps.savenote == Saving..., then Saved ..., enabled true again (the worker is held 700 ms by a bounded-run seam)
+4606	ASSERTED	gaps-map-trail	click Ribbon / Line, read back as cfg.mapTrailStyle 1 / 0; greyed while Trails is off
+4607	ASSERTED	gaps-counter-menu	each entry activated through the menu's callback by a bounded-run seam, read back as cfg.counterScale and cfg.readingsScale
+4608	ASSERTED	gaps-counter-menu	copy read back as state gaps.clip, a typed change tuned away and pasted back
+4609	ASSERTED	gaps-browse-files	the IBOC Radio 'nrsc5 library file' field: the seam's file shown in the box and read back from the engine as fact.plugin.setting.<id>
+4610	DRIVEN	gaps-drop	the handler is called directly by a bounded-run seam (a real OS drag cannot be scripted); verdicts read back as state gaps.drops, gaps.refuseddrops, gaps.dropnote; the OS drop is not exercised
+4611	ASSERTED	gaps-sdrplay	up to the call boundary: the key shown by a seam, pressed, the elevated launcher replaced by a stand-in that counts the call (state gaps.sdrplaycalls == 1); the real restart is UNVERIFIED ON HARDWARE
+4612	ASSERTED	gaps-misc	click, state gaps.diagcopies == 1 and the status line (a bounded run does not touch the desk's clipboard)
+4613	DRIVEN	gaps-misc	the entry is activated through the menu's callback by a seam; the address read back as state gaps.helpurl (no browser is started)
+4614	NOT_DRIVABLE	-	not built: needs an SDRplay radio to prove (record: NOT DONE)
+4615	ASSERTED	gaps-contrast	the option and a stand-in for Windows' setting each switch the skin (state gaps.skin); the palette's pairs are held at 7 : 1 by test_slint_hc_palette

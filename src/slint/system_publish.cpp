@@ -11,6 +11,8 @@
 #include <optional>
 
 #include "cjk_register.hpp"
+#include <fstream>
+#include "gaps_win.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 #include "core/feature_request.hpp"
@@ -109,7 +111,7 @@ struct Synced {
 };
 
 struct SystemPublisher::Lists {
-    Synced<::SelectItem> scales, themes, freqDisplays, figures, trailStyles, bandSizes, bandColours, regions, languages, countries, gpsPorts, bauds, problemKinds;
+    Synced<::SelectItem> scales, themes, freqDisplays, figures, digitGroupings, trailStyles, bandSizes, bandColours, regions, languages, countries, gpsPorts, bauds, problemKinds;
     Synced<slint::SharedString> serialPorts, usagePayload, featureEvidence, bugEvidence;
     Synced<::KeyGroup> keyGroups;
     std::vector<Synced<::KeyRow>> keyRows;
@@ -271,6 +273,38 @@ void SystemPublisher::pollTelemetry() {
 
 // The diagnostics a bug report attaches: the bundle the ImGui window's "Copy diagnostics" is made from, with what a window-less host can say (the engine's context
 // block, the log ring, the counters). The session-history sections, the SDRplay service line and the ring's figures are the ImGui window's own reads and are left out.
+// COPY DIAGNOSTICS (item 9): the same bundle, built now (a person's own click), put on the clipboard AND saved beside the reports, because a clipboard does not survive the next copy. The disk is touched on
+// the window's thread for this one small text file, as the classic does under its watchdog pause. A bounded run leaves the desk's clipboard alone (the file is still written).
+void SystemPublisher::copyDiagnostics() {
+    cc::DiagBundleInput in;
+    in.contextBlock = cc::diagContextBlock();
+    in.logLines = cc::DiagLog::instance().ringSnapshot();
+    in.logLinesTotal = cc::DiagLog::instance().linesWritten();
+    in.logPath = cc::DiagLog::instance().filePath();
+    in.crashDir = opts_.reports_path;
+    in.lastRunUnclean = lastRunUnclean_;
+    in.launches = std::strtoull(fact("fact.diag.launches").c_str(), nullptr, 10);
+    in.crashes = std::strtoull(fact("fact.diag.crashes").c_str(), nullptr, 10);
+    cc::ringCounters(in.ringDroppedSamples, in.sourceSamplesRead);
+    const std::string bundle = cc::prepareDiagnosticsForReport(cc::buildDiagnosticsBundle(in));
+    if (!bounded_) { (void)foxsdr::slintgaps::setClipboardText(bundle); }
+    bundleStatus_ = cascade::i18n::tr("Copied to the clipboard.");
+    const std::string dir = cc::diagCrashDir();
+    if (!dir.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(dir), ec);
+        const std::string path = dir + "/diagnostics.txt";
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        if (out) {
+            out << bundle;
+            out.close();
+            bundleStatus_ = cc::formatText(cascade::i18n::tr("Copied to the clipboard, and saved as %s"), path.c_str());
+        }
+    }
+    cc::diagLogf("diagnostics bundle produced (%zu bytes)", bundle.size());
+    diagCopies_++;
+}
+
 void SystemPublisher::refreshBundle() {
     if (!opts_.bug.shown || !opts_.bug.attach) { return; }
     const std::uint64_t lines = cc::DiagLog::instance().linesWritten();
@@ -426,6 +460,9 @@ void SystemPublisher::execute(const Effect& e, const char* what) {
     o.freq_display_index = m.freq_display_index;
     o.figures = lists_->figures.set(items(m.figures));
     o.figures_index = m.figures_index;
+    o.digit_groupings = lists_->digitGroupings.set(items(m.digit_groupings));
+    o.high_contrast = highContrast_ ? highContrast_() : m.high_contrast;
+    o.digit_grouping_index = digitGrouping_ ? (digitGrouping_() == 1 ? 1 : 0) : m.digit_grouping_index;
     o.tuner_switches = m.tuner_switches;
     o.enlarge_readings = m.enlarge_readings;
     o.icon_px = toNorm(m.icon_px, m.icon_min, m.icon_max);
@@ -561,6 +598,7 @@ void SystemPublisher::execute(const Effect& e, const char* what) {
     o.what_label = ss(m.what_label);
     o.sent_text = ss(m.sent_text);
     o.dump_note = ss(m.dump_note);
+    o.bundle_status = ss(bundleStatus_);
     // The pointer ledger, Copy diagnostics' status and the SDRplay diagnostic are window-bound in the ImGui window (the input ledger, the clipboard, a child
     // process) and have no host model: left empty, which hides the SDRplay block.
     return o;
@@ -841,7 +879,7 @@ void SystemPublisher::wire() {
     // The UI's three extras have no host effect: the pointer ledger, Copy diagnostics and the SDRplay diagnostic are window-bound in the ImGui window (the input
     // ledger, the clipboard, a child process). A line says so; nothing else happens.
     ev.on_diag_ledger([](bool) { say("the pointer ledger is the ImGui window's (its input ledger); nothing to show here"); });
-    ev.on_diag_copy([] { say("Copy diagnostics needs the clipboard and the full bundle, which this window does not have yet; nothing copied"); });
+    ev.on_diag_copy([this] { copyDiagnostics(); });
     ev.on_diag_sdrplay([] { say("the SDRplay diagnostic is a child process of the ImGui window; not started"); });
 
     // ---- Usage reporting ----

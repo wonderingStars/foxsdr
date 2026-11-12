@@ -1,0 +1,18 @@
+#! frames=420 bank=0 sections=0:1 size=1600x900 FOXSDR_SLINT_DROP=40:C:\gaps\notes.txt;100:C:\gaps\missing-recording.wav;160:C:\gaps\frequencies.xml;220:C:\gaps\setup.exe
+# gaps-drop (docs/multi-radio-records/slint-gaps.md item 8): a file dropped on the window. A real OS drag cannot be scripted on the hidden desktop, so the drop handler the OS drop target calls is
+# called directly (FOXSDR_SLINT_DROP=<tick>:<path>;...): a .txt is refused with a note under the counter, a .wav is opened as the I/Q file (the files named here do not exist: the handler's verdict and
+# the command it sends are what is read back), a .xml frequency list goes to the import, a .exe is refused. The OS side (the drop target on the window) is UNVERIFIED.
+10 state running == 1
+state gaps.drops == 0
+state gaps.refuseddrops == 0
+50 state gaps.refuseddrops == 1
+state gaps.dropnote contains "neither a recording nor a frequency list"
+state gaps.lockedlabel contains "neither a recording"
+110 state gaps.drops == 1
+state gaps.dropnote == "recording"
+state fact.source.row == 1
+170 state gaps.drops == 2
+state gaps.dropnote == "list"
+230 state gaps.refuseddrops == 2
+state gaps.drops == 2
+state gaps.dropinstalled == 1

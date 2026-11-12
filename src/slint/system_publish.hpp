@@ -33,6 +33,11 @@ namespace foxsdr::slintsystem {
 
 class SystemPublisher {
 public:
+    // the counter's digit grouping is the host's own record (workspace_prefs, `dg=`); the Display body shows it and the host applies a pick (SystemEvents.display-digit-grouping is wired by the host)
+    int diagCopies() const { return diagCopies_; }                 // the drive scripts' read-back of Copy diagnostics
+    const std::string& bundleStatus() const { return bundleStatus_; }
+    void setDigitGroupingSource(std::function<int()> f) { digitGrouping_ = std::move(f); }
+    void setHighContrastSource(std::function<bool()> f) { highContrast_ = std::move(f); }
     struct Hooks {
         std::function<void()> updateCardChanged;   // the duties changed the update card's state (a re-tick, "Show it again"): the host applies it
         std::function<void()> rangeManual;         // a dB slider was dragged: the range is Manual from then on (the host's own flag and the strip's key follow)
@@ -100,6 +105,9 @@ private:
     void pollReports();
     void pollTelemetry();
     void refreshBundle();
+    void copyDiagnostics();           // slint-gaps.md item 9: Copy diagnostics (the classic's copyDiagnosticsBundle): the bundle to the clipboard and to <reports>/diagnostics.txt
+    int diagCopies_ = 0;
+    std::string bundleStatus_;        // the line under the key ("Copied to the clipboard.")
     SenderView senderViewOf(bool feature) const;
     ReportInputs& inputsOf(int kind) { return kind == 0 ? opts_.feature : opts_.bug; }
 
@@ -108,6 +116,8 @@ private:
 
     // ---- the models ----
     ::DisplayModel mapDisplay(const DisplayModel& m);
+    std::function<bool()> highContrast_;
+    std::function<int()> digitGrouping_;   // slint-gaps.md item 2: the saved grouping (0 | 1), which the host keeps in the workspace entry of the window half
     ::LanguageModel mapLanguage(const LanguageModel& m);
     ::UpdatesModel mapUpdates(const UpdatesModel& m);
     ::SerialPortsModel mapSerial(const SerialPortsModel& m);

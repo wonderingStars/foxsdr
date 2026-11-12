@@ -1,0 +1,6 @@
+#! frames=150 bank=4 sections=4:0 size=1600x900 FOXSDR_SLINT_WINDOWS_HC=1
+# gaps-contrast, the second start on the same scratch profile with Windows' high-contrast setting stood in as ON: the option was left on, and the skin is the high-contrast one either way.
+10 state running == 1
+state gaps.hc == 1
++40 state gaps.winhc == 1
++1 state gaps.skin == highcontrast

@@ -15,7 +15,7 @@ constexpr float kSame = 0.001f;
 }  // namespace
 
 SkinId skinOfTheme(const std::string& uiTheme) { return uiTheme == "night" ? SkinId::NightWatch : SkinId::Workbench; }
-const char* skinName(SkinId id) { return id == SkinId::NightWatch ? "night" : "workbench"; }
+const char* skinName(SkinId id) { return id == SkinId::NightWatch ? "night" : id == SkinId::HighContrast ? "highcontrast" : "workbench"; }
 
 CounterFace faceOfStyle(const std::string& style) {
     if (style == "neon") { return CounterFace::Drum; }
