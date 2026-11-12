@@ -913,17 +913,22 @@ bool RtlSdrSource::retuneLocked(double hz) {
     // dongle has nothing below 24 MHz but the demodulator's own ADC input,
     // which is what the usual direct-sampling modification wires an antenna
     // to.
-    const bool wantDirect = !tuner.blogV4() && hz < kDirectSamplingBelowHz;
+    // The mode wanted: the user's choice (R11) over the automatic rule. 0 off, 1 the I branch, 2 the Q branch.
+    const int choice = directChoice_.load(std::memory_order_relaxed);
+    const int wantMode = tuner.blogV4() ? 0 : (choice == 1 ? 0 : (choice == 2 ? 1 : (choice == 3 ? 2 : (hz < kDirectSamplingBelowHz ? 2 : 0))));
+    const bool wantDirect = wantMode != 0;
     const bool isDirect = rtl.directSampling() != 0;
-    if (wantDirect != isDirect) {
+    if (wantDirect && isDirect && rtl.directSampling() != wantMode) {
+        rtl.setDirectSampling(wantMode);   // the other branch: the tuner is already asleep and the demodulator already set up
+    } else if (wantDirect != isDirect) {
         if (wantDirect) {
             rtl.setI2cRepeater(true);
             tuner.standby();
             rtl.setI2cRepeater(false);
             rtl.demodWriteReg(1, 0xb1, 0x1a, 1);
             rtl.demodWriteReg(1, 0x15, 0x00, 1);
-            // Mode 2: the Q branch, which is where the modification puts it.
-            rtl.setDirectSampling(2);
+            // Mode 2 (the Q branch, where the modification puts it) unless the user chose the I branch.
+            rtl.setDirectSampling(wantMode);
         } else {
             rtl.setI2cRepeater(true);
             tuner.init();
@@ -1006,10 +1011,51 @@ bool RtlSdrSource::setCenterFrequencyHz(double hz) {
     return true;
 }
 
+bool RtlSdrSource::directSamplingSupported() const {
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
+    return lk.owns_lock() && link_->tuner && !link_->tuner->blogV4();
+}
+
+int RtlSdrSource::directSamplingMode() const {
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
+    return (lk.owns_lock() && link_->rtl) ? link_->rtl->directSampling() : 0;
+}
+
+bool RtlSdrSource::setDirectSamplingChoice(int choice) {
+    if (choice < 0 || choice > 3) { return false; }
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
+    if (!lk.owns_lock()) {
+        setError("the radio is busy; try again");
+        return false;
+    }
+    if (!link_->rtl || !link_->tuner) {
+        setError("setDirectSamplingChoice() with no radio open");
+        return false;
+    }
+    if (choice != 0 && link_->tuner->blogV4()) {
+        setError("this radio has an upconverter for HF and never leaves its tuner: direct sampling is not for it");
+        return false;
+    }
+    directChoice_.store(choice, std::memory_order_relaxed);
+    // Where the radio is now, put through the rule again: forced on, it goes direct (when that is inside the first Nyquist zone); off or automatic, back to the tuner.
+    const double hz = centerFrequencyHz_.load(std::memory_order_relaxed);
+    if (hz > 0.0) {
+        double lo = 0.0, hi = 0.0;
+        if (rangeLocked(lo, hi) && (hz < lo || hz > hi)) { return true; }   // outside what the new choice accepts: it takes effect at the next tune
+        if (!retuneLocked(hz)) { setError("the radio would not retune after the direct-sampling change"); return false; }
+    }
+    return true;
+}
+
 bool RtlSdrSource::rangeLocked(double& loHz, double& hiHz) const {
     if (!link_->tuner) { return false; }
     loHz = link_->tuner->blogV4() ? kBlogV4LoHz : kR82xxLoHz;
     hiHz = kR82xxHiHz;
+    const int choice = directChoice_.load(std::memory_order_relaxed);
+    if ((choice == 2 || choice == 3) && !link_->tuner->blogV4()) {
+        loHz = kDirectLoHz;   // a forced direct-sampling radio hears the HF band the tuner cannot (R11)
+        hiHz = kDirectHiHz;
+    }
     return true;
 }
 

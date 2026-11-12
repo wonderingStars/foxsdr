@@ -322,6 +322,14 @@ bool withOffsetTuning(cascade::source::DeviceSource* dev, Fn&& fn) {
     return fn(*rt);
 }
 
+// DIRECT SAMPLING (row R11): the native RTL-SDR driver on a tuner that is not a Blog V4; a choice, not a switch (0 automatic, 1 never, 2 I branch, 3 Q branch).
+template <typename Fn>
+bool withDirectSampling(cascade::source::DeviceSource* dev, Fn&& fn) {
+    auto* rt = dynamic_cast<cascade::source::RtlSdrSource*>(dev);
+    if (rt == nullptr || !rt->directSamplingSupported()) { return false; }
+    return fn(*rt);
+}
+
 template <typename Fn>
 bool withHdrMode(cascade::source::DeviceSource* dev, Fn&& fn) {
     auto* sp = dynamic_cast<cascade::source::SdrPlaySource*>(dev);
@@ -3064,6 +3072,10 @@ void Engine::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::s
     });
     rx().deviceHdrPresent_ = withHdrMode(&dev, [this](auto& d) {
         rx().deviceHdr_ = d.hdrMode();
+        return true;
+    });
+    rx().deviceDirectPresent_ = withDirectSampling(&dev, [this](auto& d) {
+        rx().deviceDirectChoice_ = d.directSamplingChoice();
         return true;
     });
     rx().deviceOffsetTuningPresent_ = withOffsetTuning(&dev, [this](auto& d) {
@@ -8178,6 +8190,18 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                     rx().deviceDabNotch_ = d.dabNotch();
                     return true;
                 });
+            } else if (text == "direct_sampling" && rx().deviceDirectPresent_) {
+                // ival[0] is the choice here, not a switch: 0 automatic, 1 never, 2 the I branch, 3 the Q branch (R11)
+                if (c.ival[0] < 0 || c.ival[0] > 3) { return refuse(FOXAPI_OUT_OF_RANGE, "direct sampling is 0 automatic, 1 never, 2 the I branch or 3 the Q branch"); }
+                bool took = false;
+                withDirectSampling(rx().device_, [this, &c, &took](auto& d) {
+                    took = d.setDirectSamplingChoice(static_cast<int>(c.ival[0]));
+                    if (!took) { rx().sourceError_ = d.lastError(); }
+                    rx().deviceDirectChoice_ = d.directSamplingChoice();
+                    return true;
+                });
+                if (!took) { return refuse(FOXAPI_FAILED, rx().sourceError_.c_str()); }
+                res.applied[0] = static_cast<double>(rx().deviceDirectChoice_);
             } else if (text == "offset_tuning" && rx().deviceOffsetTuningPresent_) {
                 rx().deviceOffsetTuning_ = on;
                 withOffsetTuning(rx().device_, [this](auto& d) {
