@@ -1632,6 +1632,28 @@ set(CASCADE_GUI_TESTS
     test_window_platform_app
 )
 
+# PACKAGING (lane feat/packaging; docs/feature-records/packaging.md). Files and scripts only, no build of the product needed:
+#  * packaging_manifests: tools/make-package-manifests.ps1 and the winget, Scoop and Chocolatey templates (needs PowerShell 7;
+#    runs `winget validate` read-only when winget is on the PC). Writes only to its own scratch folder; contacts nothing.
+#  * packaging_openapi_routes: docs/api/openapi.yaml against the web server's source, so the file cannot rot (needs Python 3).
+# The SDK template under sdk/ has its own CMake project and is built by hand (sdk/README.md).
+find_program(CASCADE_TEST_PWSH NAMES pwsh)
+if(CASCADE_TEST_PWSH)
+    add_test(NAME packaging_manifests
+        COMMAND ${CASCADE_TEST_PWSH} -NoProfile -File ${CMAKE_SOURCE_DIR}/tests/packaging/test_package_manifests.ps1)
+    set_tests_properties(packaging_manifests PROPERTIES TIMEOUT 600)
+else()
+    message(STATUS "no pwsh (PowerShell 7): packaging_manifests is not registered")
+endif()
+find_program(CASCADE_TEST_PYTHON NAMES python3 python)
+if(CASCADE_TEST_PYTHON)
+    add_test(NAME packaging_openapi_routes
+        COMMAND ${CASCADE_TEST_PYTHON} -I ${CMAKE_SOURCE_DIR}/tests/packaging/test_openapi_routes.py)
+    set_tests_properties(packaging_openapi_routes PROPERTIES TIMEOUT 120)
+else()
+    message(STATUS "no python: packaging_openapi_routes is not registered")
+endif()
+
 # Label APPENDED, not set: the sanitizer and TSan passes above put their own
 # labels on some tests (sanitize-excluded, tsan, fuzz on the corpus replays)
 # and those must survive.
