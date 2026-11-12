@@ -4,6 +4,9 @@
 //   H1  FREQUENCY HISTORY: a retune from any source (here SET_FREQUENCY) is recorded once a pass; HISTORY_STEP back and forward retune the radio and its mode; an end
 //       of the list is NO_CHANGE; a bad direction is OUT_OF_RANGE; the step is not recorded as a new entry; facts say where the list is.
 //
+//   C1  CHANNEL MODE: choose a plan, the radio lands on channel 1 in the plan's mode and width; next / previous wrap; go to a label; a marine channel with two
+//       frequencies shows both; leaving; the refusals (unknown plan, unknown label, no plan chosen, bad ival).
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cmath>
 #include <cstdio>
@@ -63,11 +66,59 @@ void testHistory() {
     CHECK_EQ(r.send(c).status(), FOXAPI_NO_DEVICE);
 }
 
+FoxCommand chan(int what, const char* text = nullptr) { return testing::cmd(FOXAPP_OP_CHANNEL, 0.0, what, text); }
+
+void testChannels() {
+    std::printf("C1: channel mode\n");
+    Rig r;
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RUN, 0, 1)).status(), FOXAPI_OK);
+    CHECK_EQ(r.send(chan(1)).status(), FOXAPI_NO_CHANGE);               // no plan chosen
+    CHECK_EQ(r.send(chan(4)).status(), FOXAPI_NO_CHANGE);
+    CHECK_EQ(r.send(chan(0, "no-such-plan")).status(), FOXAPI_OUT_OF_RANGE);
+    CHECK_EQ(r.send(chan(9)).status(), FOXAPI_OUT_OF_RANGE);
+    CHECK(r.fact("channel.plans").find("pmr446-analogue") != std::string::npos);
+    CHECK(r.fact("channel.plans").find("marine-vhf-itu") != std::string::npos);
+    // PMR446 analogue: channel 1 is 446.00625 MHz, NFM, 12.5 kHz
+    testing::Outcome o = r.send(chan(0, "pmr446-analogue"));
+    CHECK_EQ(o.status(), FOXAPI_OK);
+    CHECK(std::fabs(o.result.applied[0] - 446.00625e6) < 2.0);
+    CHECK_EQ(r.fact("channel.1.label"), std::string("1"));
+    CHECK_EQ(r.fact("channel.1.modeHint"), std::string("NFM"));
+    CHECK_EQ(r.fact("tuned.1.mode"), std::string("NFM"));
+    CHECK_EQ(r.fact("tuned.1.bandwidthHz"), std::string("12500"));
+    // next: channel 2 at +12.5 kHz; previous twice wraps to channel 16
+    o = r.send(chan(1));
+    CHECK(std::fabs(o.result.applied[0] - 446.01875e6) < 2.0);
+    CHECK_EQ(r.fact("channel.1.label"), std::string("2"));
+    CHECK_EQ(r.send(chan(2)).status(), FOXAPI_OK);
+    o = r.send(chan(2));
+    CHECK_EQ(r.fact("channel.1.label"), std::string("16"));
+    CHECK(std::fabs(o.result.applied[0] - (446.00625e6 + 15 * 12500.0)) < 2.0);
+    // go to a label, and a label the plan does not have
+    CHECK_EQ(r.send(chan(3, "7")).status(), FOXAPI_OK);
+    CHECK_EQ(r.fact("channel.1.label"), std::string("7"));
+    CHECK_EQ(r.send(chan(3, "99")).status(), FOXAPI_OUT_OF_RANGE);
+    CHECK_EQ(r.fact("channel.1.label"), std::string("7"));              // a refusal changes nothing
+    // CB is AM at 10 kHz; marine channel 01 has two frequencies (ship 156.050, coast 160.650)
+    CHECK_EQ(r.send(chan(0, "cb-cept-40")).status(), FOXAPI_OK);
+    CHECK_EQ(r.fact("tuned.1.mode"), std::string("AM"));
+    CHECK_EQ(r.send(chan(0, "marine-vhf-itu")).status(), FOXAPI_OK);
+    CHECK_EQ(r.send(chan(3, "01")).status(), FOXAPI_OK);
+    CHECK_EQ(r.fact("channel.1.freqHz"), std::string("156050000"));
+    CHECK_EQ(r.fact("channel.1.altHz"), std::string("160650000"));
+    // leaving keeps the radio where it is
+    const std::string where = r.fact("tuned.1.hz");
+    CHECK_EQ(r.send(chan(4)).status(), FOXAPI_OK);
+    CHECK_EQ(r.fact("channel.1.plan"), std::string());
+    CHECK_EQ(r.fact("tuned.1.hz"), where);
+}
+
 }  // namespace
 
 int main() {
     engine_api_test::hermetic("wire_a_tuning");
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     testHistory();
+    testChannels();
     return check::finish("test_engine_api_wire_a_tuning");
 }

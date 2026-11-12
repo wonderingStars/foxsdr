@@ -12,6 +12,7 @@ namespace cascade::engine {
 inline bool isWireARadioScoped(std::uint32_t op) {
     switch (op) {
         case FOXAPP_OP_HISTORY_STEP:
+        case FOXAPP_OP_CHANNEL:
             return true;
         default:
             return false;

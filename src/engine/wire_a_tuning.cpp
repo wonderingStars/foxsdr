@@ -9,6 +9,11 @@
 //   of the list; any other ival[0] is OUT_OF_RANGE; a radio with no source open cannot tune: FAILED.
 //   fact.history.<n>.count, .position (from 0), .canBack, .canForward: for each live radio n.
 //
+//
+// CHANNEL MODE (core/channel_plans.hpp, row 11): CHANNEL (see core/wire_a_ops.hpp) puts a radio on a numbered plan (PMR446, CB, FRS, GMRS, MURS, marine VHF), steps
+// it channel by channel and goes to a channel by its label; each channel retunes the radio, sets the plan's mode hint and the plan's width as the bandwidth. The cursor is per
+// radio and in memory (a plan chosen is the user's for the session). Leaving the mode leaves the radio where it is.
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cmath>
 #include <cstring>
@@ -79,6 +84,67 @@ void WireA::historyFacts(const std::function<void(const std::string&, const std:
         fact(k + "position", std::to_string(h.list.position()));
         fact(k + "canBack", h.list.canBack() ? "1" : "0");
         fact(k + "canForward", h.list.canForward() ? "1" : "0");
+    }
+}
+
+// ---- channel mode ---------------------------------------------------------------------------------------------------------------------------
+
+WireA::Result WireA::channelOp(const FoxCommand& c, const std::string& text, Result res) {
+    namespace t = cascade::core::tuning;
+    const std::size_t slot = e_.scopedSlot();
+    if (slot >= channel_.size()) { return refused(res, FOXAPI_NO_DEVICE, "there is no radio with that number"); }
+    t::ChannelCursor& cur = channel_[slot];
+    const t::PlanChannel* ch = nullptr;
+    switch (c.ival[0]) {
+        case 0:
+            if (!cur.setPlan(text)) { return refused(res, FOXAPI_OUT_OF_RANGE, "there is no channel plan with that name"); }
+            ch = cur.current();
+            break;
+        case 1:
+        case 2:
+        case 3:
+            if (!cur.active()) { return refused(res, FOXAPI_NO_CHANGE, "no channel plan is chosen"); }
+            if (c.ival[0] == 3) {
+                if (!cur.goTo(text)) { return refused(res, FOXAPI_OUT_OF_RANGE, "the plan has no channel with that number"); }
+                ch = cur.current();
+            } else {
+                ch = c.ival[0] == 1 ? cur.next() : cur.prev();
+            }
+            break;
+        case 4:
+            if (!cur.active()) { return refused(res, FOXAPI_NO_CHANGE, "channel mode is not on"); }
+            cur = t::ChannelCursor();
+            bump();
+            return res;
+        default:
+            return refused(res, FOXAPI_OUT_OF_RANGE, "ival[0] is 0 plan, 1 next, 2 previous, 3 go to, 4 leave");
+    }
+    if (ch == nullptr || cur.plan() == nullptr) { return refused(res, FOXAPI_FAILED, "the plan has no channels"); }
+    tuneTo(ch->freqHz, cur.plan()->modeHint, cur.plan()->tuneBandwidthHz());
+    res.applied[0] = e_.currentAbsoluteHz();
+    bump();
+    return res;
+}
+
+void WireA::channelFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {
+    std::string plans;
+    for (const cascade::core::tuning::ChannelPlan& p : cascade::core::tuning::channelPlans()) {
+        if (!plans.empty()) { plans += '\n'; }
+        plans += p.id + '\t' + p.name;
+    }
+    fact("channel.plans", plans);
+    for (std::size_t slot = 0; slot < channel_.size(); ++slot) {
+        if (!e_.receiverLive(static_cast<std::uint32_t>(slot) + 1u)) { continue; }
+        const std::string k = "channel." + std::to_string(slot + 1) + ".";
+        const cascade::core::tuning::ChannelCursor& cur = channel_[slot];
+        const cascade::core::tuning::PlanChannel* ch = cur.current();
+        fact(k + "plan", cur.plan() != nullptr ? cur.plan()->id : std::string());
+        fact(k + "label", ch != nullptr ? ch->label : std::string());
+        fact(k + "freqHz", ch != nullptr ? std::to_string(static_cast<long long>(std::llround(ch->freqHz))) : std::string());
+        fact(k + "altHz", ch != nullptr && ch->altHz > 0.0 ? std::to_string(static_cast<long long>(std::llround(ch->altHz))) : std::string());
+        fact(k + "note", ch != nullptr ? ch->note : std::string());
+        fact(k + "modeHint", cur.plan() != nullptr ? cur.plan()->modeHint : std::string());
+        fact(k + "numberingIsOurs", cur.plan() != nullptr && cur.plan()->numberingIsOurs ? "1" : "0");
     }
 }
 

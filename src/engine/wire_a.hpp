@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "core/background_saver.hpp"
+#include "core/channel_plans.hpp"
 #include "core/freq_history.hpp"
 #include "foxsdr_api.h"
 
@@ -68,6 +69,15 @@ private:
     void historyPass();
     void historyFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
 
+    Result channelOp(const FoxCommand& c, const std::string& text, Result res);
+    void channelFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    // fact.tuned.<n>.hz / .mode / .bandwidthHz: where each radio is (the engine's state in words a screen and a test can read without the state block).
+    void tunedFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+
+    // ---- shared helpers (wire_a.cpp) ----
+    // Tunes the selected radio (the caller is inside its RadioWork): the mode by name (""/unknown = keep), then the absolute frequency, then the bandwidth (0 = keep).
+    void tuneTo(double hz, const std::string& mode, double bandwidthHz);
+
     Engine& e_;
     std::uint64_t version_ = 1;
     std::map<std::string, std::unique_ptr<cascade::gui::BackgroundSaver>> savers_;
@@ -78,6 +88,7 @@ private:
         bool seen = false;
     };
     std::array<History, 8> history_;
+    std::array<cascade::core::tuning::ChannelCursor, 8> channel_;
 };
 
 }  // namespace cascade::engine
