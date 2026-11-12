@@ -2675,6 +2675,9 @@ At most `WebServer::kMaxEventListeners` (4) streams at once, each holding an HTT
 ### 9.48 Centre tuning (engine serial lane A, row T4; Engine::tuneAbsoluteHz)
 
 * Op `FOXAPI_OP_SET_CTUN` 0x0122 (receiver-scoped; in no web, CAT or TCI profile): `ival[0]` 0/1, `NO_CHANGE` when it is so already. Off (the default and the rule until now): a tune keeps the VFO offset and the radio's centre follows. On: a tune that lands inside the span on show (the channel inside 90 % of the band, i.e. |offset| + bandwidth / 2 <= 0.45 x the input rate) moves the VFO and leaves the radio's centre, so the spectrum and waterfall stay still; one that lands outside it moves the centre as before. A plugin preset keeps the old rule. State, appended after `recordAudioFormat`: `ctun` (a setting, moves `modeSeq`) and a reserved word `ctunPad`. Saved per radio as `ctun`.
+### 9.49 FM width presets (engine serial lane A, row D7; core/receiver_tables.hpp kFmWidthHz)
+
+* Op `FOXAPP_OP_SET_FM_WIDTH` 0x861F (receiver-scoped): `ival[0]` 0 narrow 12.5 kHz, 1 medium 30 kHz, 2 medium-wide 50 kHz, 3 broadcast 150 kHz, 4 super-wide 225 kHz, applied to the channel filter in NFM or WFM (`UNSUPPORTED` in another mode, `OUT_OF_RANGE` outside 0..4). The channel filter cannot pass more than 0.9 of the channel rate (the engine chooses a channel rate of 150 to 300 kHz): a width above that is held lower and the result carries `CLAMPED`; `applied[0]` is the width in force. No new state: `bandwidthHz` shows it. The Bandwidth combo's six steps are unchanged.
 ## 10. What stays a GAP after 0.3
 
 From 0.2's list (API.md 10.7), 0.3 serves the RDS snapshot (1) and the

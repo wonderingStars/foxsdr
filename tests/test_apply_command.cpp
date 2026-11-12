@@ -1399,6 +1399,11 @@ void receiverOps(AppWindow& a) {
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_CTUN, 0))));
         CHECK(!A::ctunRx(a));
     }
+    covering(FOXAPP_OP_SET_FM_WIDTH);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_FM_WIDTH, 5)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_FM_WIDTH, -1)), FOXAPI_OUT_OF_RANGE));
+    }
     covering(FOXAPI_OP_SET_CW_PITCH);
     {
         CHECK(A::cwPitchRx(a) == 700.0 && A::cwPitchPipe(a) == 700.0);

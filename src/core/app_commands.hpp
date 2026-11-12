@@ -169,6 +169,9 @@
 #define FOXAPP_OP_VFO_SELECT                 0x861Cu /* ival[0]: 0 = VFO A, 1 = VFO B. Addresses one radio (target) */
 #define FOXAPP_OP_VFO_SWAP                   0x861Du /* swap the two VFOs: the radio takes the other letter's frequency, mode and bandwidth and the other letter keeps what it had. Addresses one radio (target) */
 #define FOXAPP_OP_VFO_STORE                  0x861Eu /* ival[0] = 0: copy the radio's tune into the other VFO; 1: set the other VFO to ival[1] mode (1-based FOXAPI_DEMOD), num[0] Hz, num[1] bandwidth Hz, and the active letter to num[2] (0/1). Addresses one radio (target) */
+//   SET_FM_WIDTH (SETTINGS; engine serial lane A, row D7): ival[0] 0..4 = narrow 12.5 kHz, medium 30 kHz, medium-wide 50 kHz, broadcast 150 kHz, super-wide 225 kHz (core/receiver_tables.hpp kFmWidthHz), applied
+//   to the selected radio's (target) channel filter in NFM or WFM (UNSUPPORTED in any other mode); a width the channel cannot pass (0.9 of its rate) is held lower and the result carries CLAMPED. applied[0] is the width.
+#define FOXAPP_OP_SET_FM_WIDTH           0x861Fu /* ival[0]: 0..4 narrow / medium / medium-wide / broadcast / super-wide. Addresses one radio (target) */
 #define FOXAPP_OP_SET_STEREO_SYSTEM      0x8619u /* ival[0]: 0 automatic / 1 pilot tone / 2 OIRT. Addresses one radio (target) */
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

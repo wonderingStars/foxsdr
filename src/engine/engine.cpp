@@ -7697,6 +7697,21 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[0] = c.num[0];
             return res;
         }
+        case FOXAPP_OP_SET_FM_WIDTH: {
+            Receiver& rxs = rx();
+            if (c.ival[0] < 0 || c.ival[0] >= kFmWidthCount) { return refuse(FOXAPI_OUT_OF_RANGE, "the FM widths are 0 narrow, 1 medium, 2 medium-wide, 3 broadcast and 4 super-wide"); }
+            if (rxs.modeIndex_ != 0 && rxs.modeIndex_ != 1) { return refuse(FOXAPI_UNSUPPORTED, "the FM widths are for NFM and WFM"); }
+            const double want = kFmWidthHz[c.ival[0]];
+            const double hi = kVfoBwMaxChanFrac * rxs.pipeline_.channelRateHz();
+            const double before = rxs.vfoBandwidthHz_;
+            rxs.vfoBandwidthHz_ = std::max(kVfoBwMinHz, std::min(want, hi));
+            applyChannelBandwidth();
+            rxs.bandwidthIndex_ = bandwidthStepIndex(rxs.vfoBandwidthHz_);
+            if (rxs.vfoBandwidthHz_ != before) { logBandwidthChange("FM width preset"); }
+            if (rxs.vfoBandwidthHz_ != want) { res.flags |= FOXAPI_RESULT_CLAMPED; }
+            res.applied[0] = rxs.vfoBandwidthHz_;
+            return res;
+        }
         case FOXAPP_OP_VFO_SELECT: {
             Receiver& rxs = rx();
             if (c.ival[0] != 0 && c.ival[0] != 1) { return refuse(FOXAPI_OUT_OF_RANGE, "the VFOs are A (0) and B (1)"); }
