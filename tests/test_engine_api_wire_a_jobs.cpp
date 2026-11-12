@@ -4,6 +4,10 @@
 //       with the tone at +37 Hz (measured from the output), the job state goes running -> done and the result carries the rate; an existing output file, a box outside the band, an unknown mode, a
 //       relative path, bad JSON and a second job while one is out are refused with the right words; JOB_CANCEL with nothing running is NO_CHANGE and with one out is OK.
 //
+//   J2  RECORD FILES, all through the same job slot: PROJECT hash (the SHA-256 of a file of three bytes is the published vector for "abc") and verify (match, a flipped byte, a missing file, a damaged
+//       project); ATTACH (a note, a PNG and a clip are added, a program renamed .png is refused, list, edit, verify, remove, the manifest is the folder's own file); SIGMF_ANNOTATE (two annotations added with
+//       their uuids and a box rounded to samples, listed, one removed, a bad box and a bad index refused, the metadata's other keys untouched).
+//
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cmath>
 #include <complex>
@@ -16,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "core/analyser_project.hpp"
 #include "wire_a_rig.hpp"
 
 using namespace wire_a_rig;
@@ -174,6 +179,122 @@ void testExport() {
     }
 }
 
+// Runs one record op as a job and waits for it: returns the job's state; the message and result are read after.
+std::string runJob(Rig& r, std::uint32_t op, const std::string& body) {
+    FoxCommand c = testing::cmd(op);
+    const testing::Outcome o = r.send(c, &body);
+    if (o.status() != FOXAPI_OK) { return "refused:" + std::to_string(o.status()); }
+    r.until([&] { return r.fact("job.state") != "running"; }, 20000);
+    return r.fact("job.state");
+}
+
+void spit(const fs::path& p, const std::string& s, bool binary = true) {
+    std::ofstream f(p, binary ? std::ios::binary : std::ios::out);
+    f << s;
+}
+
+void testRecords() {
+    std::printf("J2: project, attachments, SigMF annotations\n");
+    Rig r;
+    // ---- PROJECT hash / verify
+    const fs::path abc = g_dir / "abc.bin";
+    spit(abc, "abc");
+    CHECK_EQ(runJob(r, FOXAPP_OP_PROJECT, "{\"action\":\"hash\",\"recording\":\"" + abc.generic_string() + "\"}"), std::string("done"));
+    CHECK(r.fact("job.result").find("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") != std::string::npos);
+    CHECK(r.fact("job.result").find("\"sizeBytes\":3") != std::string::npos);
+    CHECK_EQ(runJob(r, FOXAPP_OP_PROJECT, "{\"action\":\"hash\",\"recording\":\"" + (g_dir / "none.bin").generic_string() + "\"}"), std::string("failed"));
+    CHECK_EQ(runJob(r, FOXAPP_OP_PROJECT, "{\"action\":\"nope\"}"), std::string("refused:") + std::to_string(FOXAPI_BAD_ARGUMENT));
+    CHECK_EQ(runJob(r, FOXAPP_OP_PROJECT, "{\"action\":\"hash\",\"recording\":\"rel.bin\"}"), std::string("refused:") + std::to_string(FOXAPI_BAD_ARGUMENT));
+    {
+        namespace an = cascade::core::analyser;
+        an::Project p;
+        p.recording.path = abc.string();
+        p.recording.sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        p.recording.sizeBytes = 3;
+        p.recording.sampleRateHz = 48000.0;
+        p.recording.centerHz = 1.0e8;
+        p.recording.durationSec = 1.0;
+        std::string err;
+        const fs::path proj = g_dir / "t.fxproj";
+        CHECK(an::saveFile(proj, p, &err));
+        const std::string pj = proj.generic_string();
+        CHECK_EQ(runJob(r, FOXAPP_OP_PROJECT, "{\"action\":\"verify\",\"project\":\"" + pj + "\"}"), std::string("done"));
+        CHECK(r.fact("job.result").find("\"state\":\"match\"") != std::string::npos);
+        spit(abc, "abd");   // one byte differs, the size is the same
+        CHECK_EQ(runJob(r, FOXAPP_OP_PROJECT, "{\"action\":\"verify\",\"project\":\"" + pj + "\"}"), std::string("done"));
+        CHECK(r.fact("job.result").find("\"state\":\"hashDiffers\"") != std::string::npos);
+        const fs::path moved = g_dir / "moved.bin";
+        spit(moved, "abc");   // the recording was moved: a path given overrides the project's
+        CHECK_EQ(runJob(r, FOXAPP_OP_PROJECT, "{\"action\":\"verify\",\"project\":\"" + pj + "\",\"recording\":\"" + moved.generic_string() + "\"}"), std::string("done"));
+        CHECK(r.fact("job.result").find("\"state\":\"match\"") != std::string::npos);
+        CHECK_EQ(runJob(r, FOXAPP_OP_PROJECT, "{\"action\":\"verify\",\"project\":\"" + pj + "\",\"recording\":\"" + (g_dir / "gone.bin").generic_string() + "\"}"), std::string("done"));
+        CHECK(r.fact("job.result").find("\"state\":\"missing\"") != std::string::npos);
+        spit(g_dir / "bad.fxproj", "{\"format\":\"foxsdr-analyser-project\",\"version\":9}");
+        CHECK_EQ(runJob(r, FOXAPP_OP_PROJECT, "{\"action\":\"verify\",\"project\":\"" + (g_dir / "bad.fxproj").generic_string() + "\"}"), std::string("failed"));
+        CHECK(r.fact("job.message").find(g_dir.generic_string()) == std::string::npos);
+    }
+    // ---- ATTACH
+    const fs::path folder = g_dir / "record1";
+    fs::create_directories(folder);
+    const std::string fj = folder.generic_string();
+    const fs::path png = g_dir / "shot.png";
+    spit(png, std::string("\x89PNG\r\n\x1a\n", 8) + std::string(64, 'x'));
+    const fs::path fake = g_dir / "evil.png";
+    spit(fake, std::string("MZ") + std::string(64, 'x'));
+    const fs::path clip = g_dir / "rec.wav";   // written by J1 (a WAV)
+    CHECK_EQ(runJob(r, FOXAPP_OP_ATTACH, "{\"folder\":\"" + fj + "\",\"action\":\"add\",\"kind\":\"note\",\"title\":\"First\",\"text\":\"heard at 18:00\"}"), std::string("done"));
+    CHECK(r.fact("job.result").find("heard at 18:00") != std::string::npos);
+    CHECK_EQ(runJob(r, FOXAPP_OP_ATTACH, "{\"folder\":\"" + fj + "\",\"action\":\"add\",\"kind\":\"screenshot\",\"path\":\"" + png.generic_string() + "\",\"title\":\"Waterfall\"}"), std::string("done"));
+    CHECK_EQ(runJob(r, FOXAPP_OP_ATTACH, "{\"folder\":\"" + fj + "\",\"action\":\"add\",\"kind\":\"screenshot\",\"path\":\"" + fake.generic_string() + "\",\"title\":\"x\"}"), std::string("failed"));
+    CHECK(r.fact("job.message").find(g_dir.generic_string()) == std::string::npos);
+    CHECK_EQ(runJob(r, FOXAPP_OP_ATTACH, "{\"folder\":\"" + fj + "\",\"action\":\"add\",\"kind\":\"clip\",\"path\":\"" + clip.generic_string() + "\",\"title\":\"Audio\"}"), std::string("done"));
+    CHECK(fs::exists(folder / "attachments.json"));
+    CHECK_EQ(runJob(r, FOXAPP_OP_ATTACH, "{\"folder\":\"" + fj + "\",\"action\":\"verify\"}"), std::string("done"));
+    {
+        const std::string res = r.fact("job.result");
+        std::size_t ok = 0, at = 0;
+        while ((at = res.find("\"state\":\"ok\"", at)) != std::string::npos) { ++ok; ++at; }
+        CHECK_EQ(ok, std::size_t(2));   // the two files; the note has no file
+    }
+    CHECK_EQ(runJob(r, FOXAPP_OP_ATTACH, "{\"folder\":\"" + fj + "\",\"action\":\"edit\",\"id\":1,\"title\":\"First, renamed\",\"text\":\"heard at 18:05\"}"), std::string("done"));
+    CHECK(r.fact("job.result").find("First, renamed") != std::string::npos);
+    CHECK_EQ(runJob(r, FOXAPP_OP_ATTACH, "{\"folder\":\"" + fj + "\",\"action\":\"remove\",\"id\":2}"), std::string("done"));
+    CHECK_EQ(runJob(r, FOXAPP_OP_ATTACH, "{\"folder\":\"" + fj + "\",\"action\":\"remove\",\"id\":99}"), std::string("failed"));
+    CHECK_EQ(runJob(r, FOXAPP_OP_ATTACH, "{\"folder\":\"" + (g_dir / "nofolder").generic_string() + "\",\"action\":\"list\"}"), std::string("failed"));
+    CHECK_EQ(runJob(r, FOXAPP_OP_ATTACH, "{\"folder\":\"rel\",\"action\":\"list\"}"), std::string("refused:") + std::to_string(FOXAPI_BAD_ARGUMENT));
+    CHECK_EQ(runJob(r, FOXAPP_OP_ATTACH, "{\"folder\":\"" + fj + "\",\"action\":\"add\",\"kind\":\"gif\"}"), std::string("refused:") + std::to_string(FOXAPI_BAD_ARGUMENT));
+    // ---- SIGMF_ANNOTATE
+    const fs::path meta = g_dir / "cap.sigmf-meta";
+    spit(meta, R"({"global":{"core:datatype":"cf32_le","core:sample_rate":48000,"core:version":"1.0.0","x:keep":"me"},"captures":[{"core:sample_start":0,"core:frequency":100000000}],"annotations":[]})");
+    const std::string mj = meta.generic_string();
+    const std::string a1 = "{\"meta\":\"" + mj + "\",\"action\":\"add\",\"startSec\":0.5,\"endSec\":0.75,\"loHz\":100004000,\"hiHz\":100006000,\"sampleRateHz\":48000,\"totalSamples\":48000,\"label\":\"burst\",\"comment\":\"first\"}";
+    const std::string a2 = "{\"meta\":\"" + mj + "\",\"action\":\"add\",\"startSec\":0.1,\"endSec\":0.2,\"loHz\":100001000,\"hiHz\":100002000,\"sampleRateHz\":48000,\"totalSamples\":48000,\"label\":\"early\"}";
+    CHECK_EQ(runJob(r, FOXAPP_OP_SIGMF_ANNOTATE, a1), std::string("done"));
+    CHECK_EQ(runJob(r, FOXAPP_OP_SIGMF_ANNOTATE, a2), std::string("done"));
+    CHECK(r.fact("job.result").find("\"annotations\":2") != std::string::npos);
+    {
+        std::ifstream f(meta, std::ios::binary);
+        std::ostringstream o;
+        o << f.rdbuf();
+        const std::string t = o.str();
+        CHECK(t.find("\"x:keep\"") != std::string::npos);                       // the metadata's other keys are kept
+        CHECK(t.find("\"core:sample_start\": 24000") != std::string::npos || t.find("\"core:sample_start\":24000") != std::string::npos);   // 0.5 s at 48 kS/s
+        CHECK(t.find("core:uuid") != std::string::npos);
+        CHECK(t.find("FoxSDR") != std::string::npos);
+        CHECK(t.find("\"core:sample_start\": 4800") < t.find("\"core:sample_start\": 24000") || t.find("\"core:sample_start\":4800") < t.find("\"core:sample_start\":24000"));   // sorted by start
+    }
+    CHECK_EQ(runJob(r, FOXAPP_OP_SIGMF_ANNOTATE, "{\"meta\":\"" + mj + "\",\"action\":\"remove\",\"index\":0}"), std::string("done"));
+    CHECK(r.fact("job.result").find("\"annotations\":1") != std::string::npos);
+    CHECK_EQ(runJob(r, FOXAPP_OP_SIGMF_ANNOTATE, "{\"meta\":\"" + mj + "\",\"action\":\"remove\",\"index\":7}"), std::string("failed"));
+    const std::string backwards = "{\"meta\":\"" + mj + "\",\"action\":\"add\",\"startSec\":0.9,\"endSec\":0.5,\"loHz\":1,\"hiHz\":2,\"sampleRateHz\":48000}";
+    CHECK_EQ(runJob(r, FOXAPP_OP_SIGMF_ANNOTATE, backwards), std::string("failed"));
+    const std::string beyond = "{\"meta\":\"" + mj + "\",\"action\":\"add\",\"startSec\":0.5,\"endSec\":9.5,\"loHz\":1,\"hiHz\":2,\"sampleRateHz\":48000,\"totalSamples\":48000}";
+    CHECK_EQ(runJob(r, FOXAPP_OP_SIGMF_ANNOTATE, beyond), std::string("failed"));
+    CHECK_EQ(runJob(r, FOXAPP_OP_SIGMF_ANNOTATE, "{\"meta\":\"" + (g_dir / "nometa.sigmf-meta").generic_string() + "\",\"action\":\"list\"}"), std::string("failed"));
+    CHECK_EQ(runJob(r, FOXAPP_OP_SIGMF_ANNOTATE, "{\"meta\":\"" + mj + "\",\"action\":\"add\"}"), std::string("refused:") + std::to_string(FOXAPI_BAD_ARGUMENT));
+    CHECK_EQ(runJob(r, FOXAPP_OP_SIGMF_ANNOTATE, "{\"meta\":\"" + mj + "\",\"action\":\"explode\"}"), std::string("refused:") + std::to_string(FOXAPI_BAD_ARGUMENT));
+}
+
 }  // namespace
 
 int main() {
@@ -184,6 +305,7 @@ int main() {
     fs::remove_all(g_dir, ec);
     fs::create_directories(g_dir, ec);
     testExport();
+    testRecords();
     fs::remove_all(g_dir, ec);
     return check::finish("test_engine_api_wire_a_jobs");
 }

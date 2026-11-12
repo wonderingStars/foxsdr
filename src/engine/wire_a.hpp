@@ -148,6 +148,9 @@ private:
     std::shared_ptr<JobCtl> jobCtl_;
     std::string jobName_, jobState_ = "idle", jobMessage_, jobJson_;
 
+    // ---- records: analyser project, attachments, SigMF annotations (wire_a_records.cpp) ----
+    Result recordsOp(const FoxCommand& c, const std::string& text, Result res);
+
     // ---- the scanner (wire_a_scan.cpp) ----
     Result scanOp(const FoxCommand& c, const std::string& text, Result res);
     Result scanPlanOp(const FoxCommand& c, const std::string& text, Result res);

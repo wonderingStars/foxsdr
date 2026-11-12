@@ -3,6 +3,14 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 void wireAOps(AppWindow& a) {
+    covering(FOXAPP_OP_PROJECT);
+    covering(FOXAPP_OP_ATTACH);
+    covering(FOXAPP_OP_SIGMF_ANNOTATE);
+    {
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_PROJECT, "{\"action\":\"nope\"}")), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_ATTACH, "{\"folder\":\"relative\",\"action\":\"list\"}")), FOXAPI_BAD_ARGUMENT));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_SIGMF_ANNOTATE, "[1]")), FOXAPI_BAD_ARGUMENT));
+    }
     covering(FOXAPP_OP_JOB_CANCEL);
     covering(FOXAPP_OP_EXPORT_BOX);
     {

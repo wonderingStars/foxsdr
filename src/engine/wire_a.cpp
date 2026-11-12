@@ -52,6 +52,10 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
         case FOXAPP_OP_JOB_CANCEL:
         case FOXAPP_OP_EXPORT_BOX:
             return jobOp(c, text, res);
+        case FOXAPP_OP_PROJECT:
+        case FOXAPP_OP_ATTACH:
+        case FOXAPP_OP_SIGMF_ANNOTATE:
+            return recordsOp(c, text, res);
         case FOXAPP_OP_SCAN_PLAN:
         case FOXAPP_OP_SCAN_BACK:
         case FOXAPP_OP_SCAN_SAVE_HIT:

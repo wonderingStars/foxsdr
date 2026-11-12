@@ -83,6 +83,21 @@
 #define FOXAPP_OP_JOB_CANCEL             0x8810u
 #define FOXAPP_OP_EXPORT_BOX             0x8811u /* text: JSON, see above */
 
+//   PROJECT (SETTINGS; core/analyser_project.hpp): the two jobs of the analyser project that read a whole recording; the project's own file (JSON, versioned) is the screen's to make and parse with the header.
+//   text = JSON {"action":"hash","recording":"<full path>"} -> a job that hashes the recording (SHA-256, in 1 MiB reads, cancellable, fact.job.progress) and answers fact.job.result {"sha256","sizeBytes"};
+//   {"action":"verify","project":"<full path of the .fxproj>","recording":"<full path, optional: where the recording is now>"} -> a job that loads the project and says whether the recording found is the one
+//   it was made on: fact.job.result {"state":"match"|"missing"|"sizeDiffers"|"hashDiffers"|"notHashed"|"cancelled"|"readError","tags":N}. BAD_ARGUMENT for bad JSON, a path that is not a full path or an unknown action;
+//   BUSY while a job is out. ATTACH (SETTINGS; core/record_attachments.hpp): screenshots, clips and notes kept with a record, in the record's own folder (an existing folder the text names) and its manifest
+//   attachments.json (versioned, atomic). text = JSON {"folder":"<full path>", "action":"add"|"edit"|"remove"|"verify"|"list", and for add "kind":"screenshot"|"clip"|"note", "path":"<file to copy in>" (or "text" for
+//   a note), "title":"...", for edit/remove "id":N (edit: "title" and, for a note, "text")}; the file's type is decided by its first bytes (a program renamed .png is refused), the copy is hashed, limits 500 items
+//   and 1 GiB per record; runs as the lane's job; fact.job.result {"items":[{"id","kind","title","sizeBytes","state"?}]} (verify adds each file's state: ok, missing, sizeChanged, hashChanged, readError).
+//   SIGMF_ANNOTATE (SETTINGS; source/sigmf_annotations.hpp): edits the annotations of a finished SigMF recording's .sigmf-meta (a job; every other key is kept, written as a temp file and renamed): text = JSON
+//   {"meta":"<full path>", "action":"add", "startSec","endSec","loHz","hiHz" (an analyser box), "sampleRateHz", "totalSamples" (0 = not checked), "label","comment"} or {"meta", "action":"remove", "index":N} or
+//   {"meta", "action":"list"}; fact.job.result {"annotations":N}.
+#define FOXAPP_OP_PROJECT                0x8812u /* text: JSON {action: hash|verify, ...} */
+#define FOXAPP_OP_ATTACH                 0x8813u /* text: JSON {folder, action, ...} */
+#define FOXAPP_OP_SIGMF_ANNOTATE         0x8814u /* text: JSON {meta, action, ...} */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -103,7 +118,10 @@
     {FOXAPP_OP_SCAN_TRIGGER, "APP_SCAN_TRIGGER", true}, \
     {FOXAPP_OP_SCANNER_EXTRAS, "APP_SCANNER_EXTRAS", true}, \
     {FOXAPP_OP_JOB_CANCEL, "APP_JOB_CANCEL", true}, \
-    {FOXAPP_OP_EXPORT_BOX, "APP_EXPORT_BOX", true},
+    {FOXAPP_OP_EXPORT_BOX, "APP_EXPORT_BOX", true}, \
+    {FOXAPP_OP_PROJECT, "APP_PROJECT", true}, \
+    {FOXAPP_OP_ATTACH, "APP_ATTACH", true}, \
+    {FOXAPP_OP_SIGMF_ANNOTATE, "APP_SIGMF_ANNOTATE", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP
