@@ -1,0 +1,23 @@
+// A black window with one white line of text; the host sets `line` and the alignment mode
+// (0 left, 1 center, 2 right, 3 start, 4 end).
+export component Probe inherits Window {
+    in property <string> line;
+    in property <int> align-mode: 0;
+    width: 600px;
+    height: 100px;
+    background: black;
+    Text {
+        x: 0px;
+        y: 20px;
+        width: 600px;
+        text: root.line;
+        color: white;
+        font-size: 40px;
+        font-family: "Segoe UI";
+        horizontal-alignment: root.align-mode == 0 ? TextHorizontalAlignment.left
+            : root.align-mode == 1 ? TextHorizontalAlignment.center
+            : root.align-mode == 2 ? TextHorizontalAlignment.right
+            : root.align-mode == 3 ? TextHorizontalAlignment.start
+            : TextHorizontalAlignment.end;
+    }
+}
