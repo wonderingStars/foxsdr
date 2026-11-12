@@ -2684,6 +2684,15 @@ void macroOps(AppWindow& a) {
     CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_IMPORT_COMMIT, "IMPORT-00000000")), FOXAPI_BAD_ARGUMENT));
     CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_RESET_COMMIT, "RESET-00000000")), FOXAPI_BAD_ARGUMENT));
     CHECK(refused(A::apply(a, cmd::make(FOXAPP_OP_SYS_PENDING_CANCEL)), FOXAPI_NO_CHANGE));
+    for (const std::uint32_t o : {FOXAPP_OP_QSO_ADD, FOXAPP_OP_QSO_REMOVE, FOXAPP_OP_QSO_CLEAR, FOXAPP_OP_CABRILLO_HEADER, FOXAPP_OP_CABRILLO_EXPORT, FOXAPP_OP_ADIF_EXPORT}) {
+        covering(o);   // (the engine behaviour is tests/test_engine_api_wire_c_ham.cpp's)
+    }
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_QSO_ADD, "not json")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_QSO_REMOVE, 1)), FOXAPI_NOT_FOUND));
+    CHECK(refused(A::apply(a, cmd::make(FOXAPP_OP_QSO_CLEAR)), FOXAPI_NO_CHANGE));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_CABRILLO_HEADER, "not json")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_CABRILLO_EXPORT, "")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_ADIF_EXPORT, "")), FOXAPI_BAD_ARGUMENT));
     covering(FOXAPP_OP_STORE_HELPER_CONSENT);   // (the install gate and the facts are tests/test_engine_api_wire_c_store.cpp's)
     CHECK(refused(A::apply(a, text(FOXAPP_OP_STORE_HELPER_CONSENT, "no-such-plugin", 1)), FOXAPI_NOT_FOUND));
     // wire-c end

@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "engine/wire_c_power.hpp"
+#include "engine/wire_c_ham.hpp"
 #include "engine/wire_c_sys.hpp"
 
 namespace cascade::engine::wirec {
@@ -78,6 +79,8 @@ public:
     State(std::filesystem::path folder, std::filesystem::path dataDir) : folder_(std::move(folder)), dataDir_(std::move(dataDir)), settings_(folder_ / "wirec.json"), sys_(folder_, dataDir_) {}
     const std::filesystem::path& folder() const { return folder_; }
     SysOps& sys() { return sys_; }
+    QsoBook& qsos() { return qsoBook_; }
+    std::string hamError, hamExportLast, hamCabrilloProblems;
     // What the system operations last said (facts fact.sys.*): strings the ops fill and the engine publishes.
     std::string sysError, sysExportLast, sysImportPlan, sysImportToken, sysImportNotes, sysResetPlan, sysResetToken, sysBackupLast, sysLastBoot;
     Settings& settings() { return settings_; }
@@ -108,6 +111,7 @@ private:
     std::filesystem::path dataDir_;
     Settings settings_;
     SysOps sys_;
+    QsoBook qsoBook_{folder_ / "qso-log.json"};
     mutable std::mutex powerMu_;
     std::unique_ptr<Power> power_;
 };

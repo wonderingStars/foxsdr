@@ -142,7 +142,7 @@ bool SysOps::importCommit(const std::string& token, std::string& why) {
     j["action"] = "import";
     j["stamp"] = utcStamp();
     j["files"] = names;
-    if (!writeFile(pendingFile(), j.dump(1) + "\n")) {
+    if (!writeFile(pendingFile(), j.dump(1, ' ', false, json::error_handler_t::replace) + "\n")) {
         fs::remove_all(pendingDir(), ec);
         why = "the import could not be staged";
         return false;
@@ -211,7 +211,7 @@ bool SysOps::resetStage(const std::string& token, std::string& why) {
     j["logs"] = resetOptions_.includeLogs;
     std::error_code ec;
     fs::remove_all(pendingDir(), ec);
-    if (!writeFile(pendingFile(), j.dump(1) + "\n")) {
+    if (!writeFile(pendingFile(), j.dump(1, ' ', false, json::error_handler_t::replace) + "\n")) {
         why = "the reset could not be staged";
         return false;
     }

@@ -233,6 +233,19 @@
 #define FOXAPP_OP_SYS_RESET_PLAN         0x8A07u /* ival[0]: also plugins; ival[1]: also logs */
 #define FOXAPP_OP_SYS_RESET_COMMIT       0x8A08u /* text: the confirm token */
 #define FOXAPP_OP_SYS_PENDING_CANCEL     0x8A09u
+//   THE QSO LOG (wiring lane C rows H1, H3; src/engine/wire_c_ham.hpp), SETTINGS, LOCAL sessions only. A LOG the person keeps - FoxSDR is a receiver and never transmits: a QSO is a contact
+//   they typed in. The file is qso-log.json beside the settings; callsigns are never in a setting, a report, the log or a fact (the facts carry counts and the problem sentences).
+//   QSO_ADD: text (or long text): {"t":unix seconds (0 / absent = now),"f":kHz,"m":"CW","c":"K1ABC","me":"G4XYZ","s":["599","12"],"r":["599","14"]}. BAD_ARGUMENT with the reason (fact.ham.error)
+//   for a time that is not a date, a frequency that is not one, a missing mode, a call sign with a character other than A-Z 0-9 /, an exchange value that is not letters and digits; LIMIT at 20,000.
+//   QSO_REMOVE: ival[0]: the QSO's number from 1. NOT_FOUND. QSO_CLEAR: NO_CHANGE when empty. CABRILLO_HEADER: text (or long text): {"contest":"CQ-WW-CW","callsign":..., "location":..., "name":...,
+//   "address":[...], "operators":[...], "soapbox":[...], and the category fields}. CABRILLO_EXPORT: text: the file; fact.ham.cabrillo.problems lists what the model refused, by QSO number; a QSO
+//   the contest's table cannot lay out is skipped and counted. ADIF_EXPORT: text: the file (ADIF 3: one record per QSO that can be written). fact.ham.export.last says what was written.
+#define FOXAPP_OP_QSO_ADD                0x8A0Au /* text / long text: the QSO as JSON */
+#define FOXAPP_OP_QSO_REMOVE             0x8A0Bu /* ival[0]: the QSO's number from 1 */
+#define FOXAPP_OP_QSO_CLEAR              0x8A0Cu
+#define FOXAPP_OP_CABRILLO_HEADER        0x8A0Du /* text / long text: the Cabrillo header as JSON */
+#define FOXAPP_OP_CABRILLO_EXPORT        0x8A0Eu /* text: the file to write */
+#define FOXAPP_OP_ADIF_EXPORT            0x8A0Fu /* text: the file to write */
 // wire-c end
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

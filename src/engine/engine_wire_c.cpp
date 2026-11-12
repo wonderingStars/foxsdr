@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -140,6 +141,54 @@ std::int32_t Engine::applyWireC(const FoxCommand& c, const std::string& text, Fo
             }
             return FOXAPI_OK;
         }
+        case FOXAPP_OP_QSO_ADD:
+        case FOXAPP_OP_QSO_REMOVE:
+        case FOXAPP_OP_QSO_CLEAR:
+        case FOXAPP_OP_CABRILLO_HEADER:
+        case FOXAPP_OP_CABRILLO_EXPORT:
+        case FOXAPP_OP_ADIF_EXPORT: {
+            wc::State& s = wireC();
+            wc::QsoBook& book = s.qsos();
+            s.hamError.clear();
+            bool ok = false;
+            std::int32_t bad = FOXAPI_BAD_ARGUMENT;
+            switch (c.op) {
+                case FOXAPP_OP_QSO_ADD:
+                    ok = book.add(text, static_cast<std::int64_t>(std::time(nullptr)), why);
+                    if (!ok && why == "the log is full") { bad = FOXAPI_LIMIT; }
+                    break;
+                case FOXAPP_OP_QSO_REMOVE:
+                    ok = book.remove(c.ival[0] > 0 ? static_cast<std::size_t>(c.ival[0]) : 0u, why);
+                    bad = FOXAPI_NOT_FOUND;
+                    break;
+                case FOXAPP_OP_QSO_CLEAR:
+                    ok = book.clear();
+                    if (!ok) { why = "the log is empty"; }
+                    bad = FOXAPI_NO_CHANGE;
+                    break;
+                case FOXAPP_OP_CABRILLO_HEADER:
+                    ok = book.setHeader(text, why);
+                    break;
+                case FOXAPP_OP_CABRILLO_EXPORT: {
+                    int lines = 0, skipped = 0;
+                    ok = book.exportCabrillo(text, s.hamCabrilloProblems, lines, skipped, why);
+                    if (ok) { s.hamExportLast = "Cabrillo: " + std::to_string(lines) + " QSO line(s) written, " + std::to_string(skipped) + " skipped"; }
+                    break;
+                }
+                default: {   // ADIF_EXPORT
+                    int written = 0, skipped = 0;
+                    ok = book.exportAdif(text, written, skipped, why);
+                    if (ok) { s.hamExportLast = "ADIF: " + std::to_string(written) + " record(s) written, " + std::to_string(skipped) + " skipped"; }
+                    break;
+                }
+            }
+            ++wireCVersion_;
+            if (!ok) {
+                s.hamError = why;
+                return bad;
+            }
+            return FOXAPI_OK;
+        }
         case FOXAPP_OP_STORE_HELPER_CONSENT: {
             if (commandFromRemote_) {
                 why = "the plugin store's helper programs are fitted from this computer only";
@@ -176,6 +225,17 @@ void Engine::wireCFacts(const std::function<void(const std::string&, const std::
     fact("wirec.version", std::to_string(wireCVersion()));
     fact("wirec.error", s.settings().error());
     // POWER AND RESOURCES (wire_c_power.hpp). "" is "not available" - a reading that could not be made is never shown as 0.
+    // THE QSO LOG (wire_c_ham.hpp): counts and sentences only - never a call sign, a frequency or an exchange
+    fact("ham.qso.count", std::to_string(s.qsos().size()));
+    fact("ham.error", s.hamError);
+    fact("ham.log.error", s.qsos().error());
+    fact("ham.export.last", s.hamExportLast);
+    fact("ham.cabrillo.problems", s.hamCabrilloProblems);
+    {
+        std::string ids;
+        for (const cascade::core::ham::ContestDef& d : cascade::core::ham::cabrilloContests()) { ids += (ids.empty() ? "" : "\n") + d.id; }
+        fact("ham.cabrillo.contests", ids);
+    }
     // THE SYSTEM OPERATIONS (wire_c_sys.hpp): what they last said, and the first-run wizard's state
     fact("sys.error", s.sysError);
     fact("sys.export.last", s.sysExportLast);
