@@ -627,8 +627,8 @@ int main() {
             CHECK(r.graph.wires()[1].fromPort == 1u && r.graph.wires()[1].toPort == 3u);
         }
         CHECK(nameAt(r.graph, 2) == "Sky and sea");
-        // A kind past Map in a file is dropped, not guessed at.
-        const LoadResult bad = parse(header2() + "node 1 7 0 0 0 232 128 0 0 - - 0 1 -50 1 X\n");
+        // A kind past the last one (Scope, 10: the second pass added four after Map) in a file is dropped, not guessed at.
+        const LoadResult bad = parse(header2() + "node 1 11 0 0 0 232 128 0 0 - - 0 1 -50 1 X\n");
         CHECK(bad.ok);
         CHECK(bad.graph.nodes().empty());
         CHECK(bad.dropped == 1);

@@ -128,6 +128,25 @@ inline std::size_t recordFrameBytes(RecordKind kind, int fmt) {
     return fmt == kRecordAudioInt24 ? 3u : (fmt == kRecordAudioFloat32 ? 4u : 2u);
 }
 
+// wire-a second pass begin: THE CONTAINER OF A BASEBAND I/Q TAKE. 0 is what every take has always been: this recorder's own WAV writer (4 GiB ceiling, then the take ends). 1 is RF64: the same samples in a WAV
+// whose header reserves room to become RF64, so a take is no longer ended at 4 GiB (source/rf64_writer.hpp). 2 is SigMF: a .sigmf-data file of raw I/Q beside a .sigmf-meta file that logs the take's centre
+// frequency, and every retune as a new capture segment (source/sigmf_writer.hpp). Audio takes ignore it. A take keeps the container it started with; the setting is for the NEXT take.
+// The two writers live behind IqBackend (core/recorder_containers.cpp); the recorder keeps its own counters, so recording(), bytesWritten() and samplesWritten() mean the same thing for all three.
+inline constexpr int kIqContainerWav = 0;
+inline constexpr int kIqContainerRf64 = 1;
+inline constexpr int kIqContainerSigmf = 2;
+class IqBackend {
+public:
+    virtual ~IqBackend() = default;
+    // The DSP thread. False: the disk refused a write (the recorder latches writeFailed()).
+    virtual bool write(const std::complex<float>* s, std::size_t n) = 0;
+    // The DSP thread, before the next block: the centre frequency changed. Only SigMF records it.
+    virtual void retune(double centreHz) { (void)centreHz; }
+    // The finishing worker, once the take is detached: the headers / metadata. False if they did not reach the disk.
+    virtual bool close() = 0;
+};
+// wire-a second pass end
+
 class Recorder {
 public:
     Recorder();
@@ -165,6 +184,19 @@ public:
     // The file the current or most recent take went to; "" before any start.
     std::string path() const;
 
+    // wire-a second pass begin: the container of the NEXT baseband I/Q take (see kIqContainer*); false (unchanged) for a value outside 0..2.
+    bool setIqContainer(int c) {
+        if (c < kIqContainerWav || c > kIqContainerSigmf) { return false; }
+        iqContainer_.store(c, std::memory_order_relaxed);
+        return true;
+    }
+    int iqContainer() const { return iqContainer_.load(std::memory_order_relaxed); }
+    // The container of the take under way (or the last one), set when it began.
+    int takeContainer() const { return takeContainer_.load(std::memory_order_relaxed); }
+    // The radio's centre frequency: the SigMF metadata of a take that starts now opens with it, and a take under way logs a change as a new capture segment. Any thread; the same value twice is ignored.
+    void noteCentre(double hz);
+    // wire-a second pass end
+
     // --- start() taken apart (see "Slow disks" above) ------------------------
 
     // Everything the blocking step needs, by value: the directory to create,
@@ -181,6 +213,10 @@ public:
         std::string path;
         std::array<unsigned char, 44> header{};  // zero-length data chunk
         int sampleFormat = 0;                    // the take's kRecord* format (P7)
+        int container = 0;                       // wire-a second pass: kIqContainer*
+        double sampleRateHz = 0.0;               // (for the containers that write their own header)
+        double centreHz = 0.0;
+        std::int64_t startUnixNs = 0;
     };
 
     // A closed-over FILE*: fclose by default, replaceable only so a test can
@@ -204,6 +240,8 @@ public:
         std::string path;  // the name ACTUALLY USED (see OpenRequest::path): what begin() keeps
         RecordKind kind = RecordKind::BasebandIq;
         int sampleFormat = 0;
+        std::unique_ptr<IqBackend> backend;   // wire-a second pass: a take in RF64 / SigMF has this and no stdio file
+        int container = 0;
 
         OpenedFile() = default;
         OpenedFile(OpenedFile&&) = default;
@@ -218,6 +256,8 @@ public:
                 path = std::move(other.path);
                 kind = other.kind;
                 sampleFormat = other.sampleFormat;
+                backend = std::move(other.backend);   // wire-a
+                container = other.container;
             }
             return *this;
         }
@@ -248,6 +288,7 @@ public:
         std::vector<char> buffer;
         FilePtr file{nullptr, &Recorder::closeFile};
         std::uint64_t dataBytes = 0;  // what the header's two size fields must say
+        std::unique_ptr<IqBackend> backend;   // wire-a second pass: closed instead of the stdio file
 
         FinishRequest() = default;
         FinishRequest(FinishRequest&&) = default;
@@ -257,6 +298,7 @@ public:
                 buffer = std::move(other.buffer);
                 file = std::move(other.file);
                 dataBytes = other.dataBytes;
+                backend = std::move(other.backend);   // wire-a
             }
             return *this;
         }
@@ -375,6 +417,8 @@ public:
     // before start(); lowering it under a take already in progress underflows
     // the room subtraction. Never called by the application.
     void setMaxDataBytesForTest(std::uint64_t bytes);
+    // wire-a second pass: the size at which an RF64-container take promotes its header, lowered so a test proves the promotion without writing 4 GiB (0 = the format's own limit). Applies to takes OPENED afterwards.
+    static void setRf64PlainLimitForTest(std::uint64_t bytes);
 
 private:
     // fwrite the first `bytes` of stage_ with truthful accounting: counters
@@ -395,6 +439,14 @@ private:
     void endAtSizeLimit();
 
     std::FILE* file_ = nullptr;
+    // wire-a second pass begin: the container of the next / the current take, and the live backend of a take in RF64 or SigMF (file_ is null then)
+    std::atomic<int> iqContainer_{0};
+    std::atomic<int> takeContainer_{0};
+    std::atomic<double> centreHz_{0.0};
+    std::atomic<double> pendingCentre_{0.0};
+    std::atomic<bool> centreDirty_{false};
+    std::unique_ptr<IqBackend> backend_;
+    // wire-a second pass end
     std::atomic<RecordKind> kind_{RecordKind::BasebandIq};
     std::atomic<int> iqFormat_{0};           // P7: the format the next baseband I/Q take starts with
     std::atomic<int> audioFormat_{0};        // and the next audio take
@@ -424,5 +476,8 @@ private:
     std::string path_;                   // set by start(), on the caller's thread
     Opener opener_;                      // the blocking step; see bindOpener()
 };
+
+// wire-a second pass: opens the RF64 or SigMF file of a take on the opener's worker (core/recorder_containers.cpp). The name is reserved exclusively first, like a WAV take's.
+bool openIqContainer(const Recorder::OpenRequest& req, Recorder::OpenedFile& out, std::string& error);
 
 }  // namespace cascade::core

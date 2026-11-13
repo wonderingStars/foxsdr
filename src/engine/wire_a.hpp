@@ -43,6 +43,9 @@
 #include "core/scan_trigger.hpp"
 #include "core/scanner_params.hpp"
 #include "core/freq_history.hpp"
+#include "core/airband_gate.hpp"
+#include "core/patch_graph.hpp"
+#include "core/rit_xit.hpp"
 #include "foxsdr_api.h"
 
 namespace cascade::engine {
@@ -158,6 +161,7 @@ public:
         std::string message;   // words, never a path
         std::string json;      // the job's own numbers
         std::function<void()> onDone;   // run on the control thread when the result is collected (a successful job hands its product over here)
+        std::function<void()> onFinish; // wire-a second pass: run on the control thread when ANY result is collected, success or not (before onDone), for the facts of a feature that reads or writes a user's file
     };
     struct JobCtl {
         std::atomic<bool> cancel{false};
@@ -187,6 +191,68 @@ public:
     std::size_t waterfallCopy(std::size_t slot, std::size_t rows, std::vector<std::uint8_t>& out, std::size_t& bins, std::vector<cascade::core::wfhistory::LineMeta>* meta = nullptr);
 
 private:
+    // ---- the level store of every open radio (wire_a_levels.cpp) ----
+public:
+    // The newest `rows` rows of radio `slot`'s level store, oldest first, one byte a bin (`bins` returned), with each row's time / centre / span. Same-process; 0 rows when the store is off or empty.
+    std::size_t levelCopy(std::size_t slot, std::size_t rows, std::vector<std::uint8_t>& out, std::size_t& bins, std::vector<cascade::core::wfhistory::LineMeta>* meta = nullptr);
+private:
+    struct Lv;
+    Result levelOp(const FoxCommand& c, Result res);
+    void levelFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    void levelFeed(std::size_t slot, const std::vector<float>& bins, double centreHz, double spanHz, double nowS);
+    std::array<std::shared_ptr<Lv>, 8> lv_;
+    std::array<bool, 8> levelStats_{};
+    bool levelOn_ = false;
+    std::size_t levelCapMb_ = 16;
+
+    // ---- the airband monitor's per-channel settings (wire_a_airband.cpp) ----
+public:
+    // The gate factory for the set the monitor is about to build (null function when no channel has settings of its own).
+    cascade::core::MonitorGateFactory airbandGates();
+private:
+    Result airbandChannelOp(const FoxCommand& c, const std::string& text, Result res);
+    void airbandChannelFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    void airbandChannelLoadOnce();
+    void airbandReap();
+    void airbandChannelSave();
+    cascade::core::airband::ChannelTable airbandTable_;
+    bool airbandTableLoaded_ = false;
+
+    // ---- the patch page's edit history, selection, copy / paste and bypass (wire_a_patchedit.cpp) ----
+    Result patchEditOp(const FoxCommand& c, const std::string& text, Result res);
+    void patchHistoryPass();
+    void patchEditFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    static constexpr std::size_t kPatchHistoryDepth = 100;
+    std::vector<cascade::core::patch::Graph> patchUndo_, patchRedo_;
+    cascade::core::patch::Graph patchCur_;        // the graph as the history last saw it
+    std::uint64_t patchSeenVersion_ = 0;
+    bool patchHistInit_ = false;
+    std::vector<cascade::core::patch::NodeId> patchSel_;
+    struct PatchClip {
+        std::vector<cascade::core::patch::Node> nodes;   // positions relative to the top-left of the set
+        std::vector<cascade::core::patch::Wire> wires;   // by the nodes' old ids
+    } patchClip_;
+    void patchApply(cascade::core::patch::Graph g);   // the graph becomes `g` as a new version, without a history step
+
+    // ---- CW surround (wire_a_rit.cpp, beside the clarifier: both live in the audio / oscillator stage) ----
+    Result surroundOp(const FoxCommand& c, const std::string& text, Result res);
+    void surroundFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+
+    // ---- the receive clarifier (wire_a_rit.cpp) ----
+    Result ritOp(const FoxCommand& c, Result res);
+    void ritPass();
+    void ritFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    struct Rit {
+        cascade::core::tuning::RitXit model;
+        double seenHz = 0.0;
+        bool seen = false;
+    };
+    std::array<Rit, 8> rit_;
+
+    // ---- the I/Q file transport: speed, pause, step (wire_a_transport.cpp) ----
+    Result transportOp(const FoxCommand& c, Result res);
+    void transportFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+
     Result framesOp(const FoxCommand& c, const std::string& text, Result res);
     Result traceModeOp(const std::string& text, Result res);
     std::string traceMode_ = "normal", traceError_;
@@ -282,6 +348,11 @@ private:
     int container_ = 0;           // 0 wav, 1 flac
     bool containerKeep_ = false;
     bool containerLoaded_ = false;
+    // ---- recording: the container of I/Q takes, RF64 and SigMF (wire_a_container.cpp, second pass) ----
+    Result iqContainerOp(const FoxCommand& c, Result res);
+    void iqContainerPass();
+    int iqContainer_ = 0;         // 0 wav, 1 rf64, 2 sigmf
+    bool iqContainerLoaded_ = false;
     std::array<std::string, 8> takePath_;   // the audio take open on each radio (its path), "" when none
     std::vector<std::string> convertQueue_;
 
@@ -343,6 +414,7 @@ private:
     // A full path the user typed (absolute, no control characters, under 1024 bytes). False with `why` when it is not.
     static bool fullPath(const std::string& p, std::string& why);
     // Reads a user's file up to maxBytes (a bigger one, a directory, a device, a missing one: false with `why`; never throws).
+    void packImportApply(const std::string& body);   // (second pass: the control thread's half of PACK_IMPORT)
     static bool readUserFile(const std::string& path, std::size_t maxBytes, std::string& text, std::string& why);
     // Writes a new file (temp + rename, directory made); a file that exists is refused.
     static bool writeNewFile(const std::string& path, const std::string& text, std::string& why);

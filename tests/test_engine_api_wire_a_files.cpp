@@ -52,6 +52,13 @@ void spit(const fs::path& p, const std::string& s) {
 
 int markerCount(Rig& r) { return r.api()->read_list(r.local->raw(), FOXAPI_LIST_FREQ_MARKERS, 0, nullptr); }
 
+// The lane's one job (second pass: the small file reads and writes are on its worker): waits for it to end and returns its state, "done" or "failed" (the words are fact.job.message).
+std::string jobEnd(Rig& r) {
+    std::string st;
+    CHECK(r.until([&] { st = r.fact("job.state"); return st == "done" || st == "failed" || st == "cancelled"; }, 15000));
+    return st;
+}
+
 void testMarkers() {
     std::printf("F1: marker export and import\n");
     Rig r;
@@ -62,7 +69,10 @@ void testMarkers() {
     const fs::path csv = g_dir / "m.csv";
     const fs::path json = g_dir / "m.json";
     CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_MARKER_EXPORT, 0.0, 0, csv.string().c_str())).status(), FOXAPI_OK);
+    CHECK_EQ(jobEnd(r), std::string("done"));
+    CHECK_EQ(r.fact("job.name"), std::string("marker-export"));
     CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_MARKER_EXPORT, 0.0, 1, json.string().c_str())).status(), FOXAPI_OK);
+    CHECK_EQ(jobEnd(r), std::string("done"));
     const std::string body = slurp(csv);
     CHECK(body.find("number,freq_hz,noted_unix,note") == 0u);
     CHECK(body.find("145500000.000") != std::string::npos);
@@ -70,7 +80,10 @@ void testMarkers() {
     CHECK(slurp(json).find("\"version\": 1") != std::string::npos);
     CHECK_EQ(r.fact("markerio.last"), std::string("exported 2"));
     // an existing file is never overwritten; a relative path; a bad direction
-    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_MARKER_EXPORT, 0.0, 0, csv.string().c_str())).status(), FOXAPI_FAILED);
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_MARKER_EXPORT, 0.0, 0, csv.string().c_str())).status(), FOXAPI_OK);   // (started: the worker refuses it)
+    CHECK_EQ(jobEnd(r), std::string("failed"));
+    CHECK(r.fact("job.message").find("exists already") != std::string::npos);
+    CHECK(r.fact("markerio.error").find("exists already") != std::string::npos);
     CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_MARKER_EXPORT, 0.0, 0, "rel/m.csv")).status(), FOXAPI_BAD_ARGUMENT);
     CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_MARKER_EXPORT, 0.0, 7, (g_dir / "x.csv").string().c_str())).status(), FOXAPI_OUT_OF_RANGE);
     // clear, import the CSV: both come back, the note unguarded
@@ -78,29 +91,35 @@ void testMarkers() {
     CHECK_EQ(markerCount(r), 0);
     testing::Outcome o = r.send(testing::cmd(FOXAPP_OP_MARKER_IMPORT, 0.0, 0, csv.string().c_str()));
     CHECK_EQ(o.status(), FOXAPI_OK);
-    CHECK_EQ(static_cast<int>(o.result.applied[0]), 2);
+    CHECK_EQ(jobEnd(r), std::string("done"));
+    CHECK_EQ(r.fact("job.result"), std::string("{\"added\":2,\"merged\":0}"));
     CHECK_EQ(markerCount(r), 2);
     CHECK_EQ(r.fact("markers.note.1"), std::string("=SUM(1,1) beacon"));
     // the same file again merges both (nothing added), the JSON too
     o = r.send(testing::cmd(FOXAPP_OP_MARKER_IMPORT, 0.0, 0, json.string().c_str()));
     CHECK_EQ(o.status(), FOXAPI_OK);
-    CHECK_EQ(static_cast<int>(o.result.applied[0]), 0);
-    CHECK_EQ(static_cast<int>(o.result.applied[1]), 2);
+    CHECK_EQ(jobEnd(r), std::string("done"));
     CHECK_EQ(r.fact("markerio.last"), std::string("added 0, merged 2"));
     // a file with one bad row changes nothing and says so
     spit(g_dir / "bad.csv", "number,freq_hz,noted_unix,note\r\n7,146000000,0,ok\r\n8,notanumber,0,bad\r\n");
     o = r.send(testing::cmd(FOXAPP_OP_MARKER_IMPORT, 0.0, 0, (g_dir / "bad.csv").string().c_str()));
-    CHECK_EQ(o.status(), FOXAPI_BAD_ARGUMENT);
+    CHECK_EQ(o.status(), FOXAPI_OK);
+    CHECK_EQ(jobEnd(r), std::string("failed"));
+    CHECK(r.fact("job.message").find("the file was refused") != std::string::npos);
     CHECK_EQ(markerCount(r), 2);
     CHECK(!r.fact("markerio.error").empty() && r.fact("markerio.error") != "<absent>");
     // a missing file; a reach out of range; empty list export
-    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_MARKER_IMPORT, 0.0, 0, (g_dir / "none.csv").string().c_str())).status(), FOXAPI_FAILED);
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_MARKER_IMPORT, 0.0, 0, (g_dir / "none.csv").string().c_str())).status(), FOXAPI_OK);
+    CHECK_EQ(jobEnd(r), std::string("failed"));
+    CHECK(r.fact("job.message").find("not a file that can be read") != std::string::npos);
     CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_MARKER_IMPORT, -1.0, 0, csv.string().c_str())).status(), FOXAPI_OUT_OF_RANGE);
     CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_MARKER_CLEAR)).status(), FOXAPI_OK);
     CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_MARKER_EXPORT, 0.0, 0, (g_dir / "empty.csv").string().c_str())).status(), FOXAPI_NO_CHANGE);
     // a file over the size limit is refused unread
     spit(g_dir / "big.csv", std::string((1u << 20) + 10, 'a'));
-    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_MARKER_IMPORT, 0.0, 0, (g_dir / "big.csv").string().c_str())).status(), FOXAPI_FAILED);
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_MARKER_IMPORT, 0.0, 0, (g_dir / "big.csv").string().c_str())).status(), FOXAPI_OK);
+    CHECK_EQ(jobEnd(r), std::string("failed"));
+    CHECK(r.fact("job.message").find("too big") != std::string::npos);
 }
 
 FoxCommand noteSet(std::uint64_t id) { return testing::cmd(FOXAPP_OP_BOOKMARK_NOTE, 0.0, static_cast<long long>(id)); }
@@ -279,19 +298,23 @@ void testPacks() {
         testing::Outcome o = r.send(testing::cmd(FOXAPP_OP_PACK_EXPORT), &exp);
         CHECK_EQ(o.status(), FOXAPI_OK);
         CHECK_EQ(static_cast<int>(o.result.applied[0]), 2);
+        CHECK_EQ(jobEnd(r), std::string("done"));
         CHECK_EQ(r.fact("pack.last"), std::string("exported 2"));
         const std::string body = slurp(pack);
         CHECK(body.find("foxsdr-pack") != std::string::npos);
         CHECK(body.find("Approach") != std::string::npos && body.find("Airband view") != std::string::npos);
         CHECK(body.find("heard") == std::string::npos);   // nothing of this session's goes in
-        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_PACK_EXPORT), &exp).status(), FOXAPI_FAILED);   // never overwrites
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_PACK_EXPORT), &exp).status(), FOXAPI_OK);   // started; the worker never overwrites
+        CHECK_EQ(jobEnd(r), std::string("failed"));
+        CHECK_EQ(r.fact("pack.last"), std::string("not written"));
     }
     {
         Rig r(g_dir / "user4b");
         const std::string p = pack.generic_string();
         testing::Outcome o = r.send(testing::cmd(FOXAPP_OP_PACK_IMPORT, 0.0, 0, p.c_str()));
         CHECK_EQ(o.status(), FOXAPI_OK);
-        CHECK_EQ(static_cast<int>(o.result.applied[0]), 2);
+        CHECK_EQ(jobEnd(r), std::string("done"));
+        CHECK_EQ(r.fact("job.result"), std::string("{\"added\":2,\"duplicates\":0}"));
         CHECK_EQ(r.fact("pack.last"), std::string("added 2, 0 already there"));
         CHECK(r.bookmarkId(118.3e6) != 0 && r.bookmarkId(121.5e6) != 0);
         CHECK_EQ(r.fact("bookmark.notes.count"), std::string("1"));
@@ -299,14 +322,18 @@ void testPacks() {
         // again: all duplicates, nothing added
         o = r.send(testing::cmd(FOXAPP_OP_PACK_IMPORT, 0.0, 0, p.c_str()));
         CHECK_EQ(o.status(), FOXAPI_OK);
-        CHECK_EQ(static_cast<int>(o.result.applied[0]), 0);
-        CHECK_EQ(static_cast<int>(o.result.applied[1]), 2);
+        CHECK_EQ(jobEnd(r), std::string("done"));
+        CHECK_EQ(r.fact("job.result"), std::string("{\"added\":0,\"duplicates\":2}"));
         // a hostile pack and a missing file
         spit(g_dir / "bad.json", R"({"format":"foxsdr-pack","version":1,"name":"x","description":"","bookmarks":[{"name":"","freqHz":-5}],"favourites":[]})");
         const std::string bad = (g_dir / "bad.json").generic_string();
-        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_PACK_IMPORT, 0.0, 0, bad.c_str())).status(), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_PACK_IMPORT, 0.0, 0, bad.c_str())).status(), FOXAPI_OK);
+        CHECK_EQ(jobEnd(r), std::string("failed"));
+        CHECK(r.fact("job.message").find("the pack was refused") != std::string::npos);
         const std::string none = (g_dir / "none.json").generic_string();
-        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_PACK_IMPORT, 0.0, 0, none.c_str())).status(), FOXAPI_FAILED);
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_PACK_IMPORT, 0.0, 0, none.c_str())).status(), FOXAPI_OK);
+        CHECK_EQ(jobEnd(r), std::string("failed"));
+        CHECK_EQ(r.fact("pack.last"), std::string("not read"));
         CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_PACK_IMPORT, 0.0, 0, "air.json")).status(), FOXAPI_BAD_ARGUMENT);
         CHECK(r.bookmarkId(118.3e6) != 0);
     }

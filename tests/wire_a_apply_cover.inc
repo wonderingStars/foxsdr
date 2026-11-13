@@ -3,6 +3,51 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 void wireAOps(AppWindow& a) {
+    covering(FOXAPP_OP_LEVEL_STORE);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_LEVEL_STORE, 9)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_LEVEL_STORE, 0)), FOXAPI_NO_CHANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_LEVEL_STORE, 2)), FOXAPI_NO_CHANGE));
+    }
+    covering(FOXAPP_OP_AIRBAND_CHANNEL);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_AIRBAND_CHANNEL, 9)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_AIRBAND_CHANNEL, 2)), FOXAPI_NO_CHANGE));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_AIRBAND_CHANNEL, "junk")), FOXAPI_BAD_ARGUMENT));
+    }
+    covering(FOXAPP_OP_PATCH_UNDO);
+    covering(FOXAPP_OP_PATCH_REDO);
+    covering(FOXAPP_OP_PATCH_SELECT);
+    covering(FOXAPP_OP_PATCH_COPY);
+    covering(FOXAPP_OP_PATCH_PASTE);
+    covering(FOXAPP_OP_PATCH_BYPASS);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_PATCH_UNDO, 0)), FOXAPI_NO_CHANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_PATCH_REDO, 0)), FOXAPI_NO_CHANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_PATCH_SELECT, 9)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_PATCH_COPY, 0)), FOXAPI_NO_CHANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_PATCH_PASTE, 0)), FOXAPI_NO_CHANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_PATCH_BYPASS, 5)), FOXAPI_OUT_OF_RANGE));
+    }
+    covering(FOXAPP_OP_RECORD_IQ_CONTAINER);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_RECORD_IQ_CONTAINER, 3)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_RECORD_IQ_CONTAINER, 0)), FOXAPI_NO_CHANGE));
+    }
+    covering(FOXAPP_OP_CW_SURROUND);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_CW_SURROUND, 7)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, text(FOXAPP_OP_CW_SURROUND, "{nope")), FOXAPI_BAD_ARGUMENT));
+    }
+    covering(FOXAPP_OP_RIT);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_RIT, 9)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_RIT, 2)), FOXAPI_NO_CHANGE));   // clear already
+    }
+    covering(FOXAPP_OP_FILE_TRANSPORT);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_FILE_TRANSPORT, 0)), FOXAPI_UNSUPPORTED));   // the window's radio is on the generator
+    }
     covering(FOXAPP_OP_FFT_SCAN);
     {
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_FFT_SCAN, 7)), FOXAPI_OUT_OF_RANGE));

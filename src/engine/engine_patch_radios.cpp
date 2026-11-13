@@ -746,12 +746,12 @@ void Engine::patchPublishSets() {
     // --- each radio's set -------------------------------------------------------
     for (auto& [id, radio] : patchRadios_) {
         const double rate = radio->rateHz();
-        const std::string sig = pc::radioSignature(patchPlan_, patchGraph_, id, rate,
+        const std::string sig = pc::radioSignature(patchPlan_, patchEffective_, id, rate,
                                                    &patchCatalogue_, &patchApis_, patchDests_);
         const auto have = patchRadioSig_.find(id);
         if (have != patchRadioSig_.end() && have->second == sig) { continue; }
         std::shared_ptr<pc::StripSet> set = pc::buildRadioSet(
-            patchPlan_, patchGraph_, id, rate, &patchCatalogue_, &patchApis_, patchDests_);
+            patchPlan_, patchEffective_, id, rate, &patchCatalogue_, &patchApis_, patchDests_);
         patchRefusedBy_[id] = set->refused;
         for (const auto& d : set->decoders) {
             patchDecoderFaces_.erase(d->node);
@@ -966,7 +966,8 @@ void Engine::syncPatchGraphVersion() {
 void Engine::compilePatchPlan() {
     // EACH RADIO ITS OWN (0.99.17): every channel is measured against the radio it hangs off - the running device's
     // readback, or the node's settings before it opens.
-    patchPlan_ = pc::compile(patchGraph_, patchRadioInfos(), &patchCatalogue_);
+    patchEffective_ = patchGraph_.effective();   // wire-a second pass: bypassed parts are spliced out of what is planned and built (the document keeps them)
+    patchPlan_ = pc::compile(patchEffective_, patchRadioInfos(), &patchCatalogue_);
     // A radio whose device would not open is a problem only the attempt could find, as a refusing plugin is. (It
     // also clears `runnable`.)
     for (const auto& [id, as] : patchRadioFailedAs_) {

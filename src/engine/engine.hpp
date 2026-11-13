@@ -2127,6 +2127,7 @@ private:
     // radio, START's and ALL OFF's switches). The window never writes it
     // (docs/engine-stage3.md OPEN 6).
     cascade::core::patch::Graph patchGraph_;
+    cascade::core::patch::Graph patchEffective_;   // wire-a second pass: patchGraph_ with its bypassed parts spliced out; what compilePatchPlan() planned and the sets were built from
     // How many times patchGraph_ has been replaced by a NEW DOCUMENT
     // (FOXAPP_PATCH_GRAPH_DOCUMENT) - read by the window, whose draft edit of
     // the old document must not be put on top of the new one.

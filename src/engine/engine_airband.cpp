@@ -502,8 +502,11 @@ void Engine::airbandTuneBlock(std::size_t index) {
     airbandFirstId_ = airbandNextId_;
     airbandNextId_ += static_cast<cc::patch::NodeId>(cc::kMaxBlockChannels);
     if (airbandNextId_ > 0xF0000000u) { airbandNextId_ = 0x40000000u; }
+    // wire-a second pass begin
+    const cc::MonitorGateFactory wireAGates = WireA::of(*this).airbandGates();
+    // wire-a second pass end
     std::shared_ptr<cc::patch::StripSet> set =
-        cc::buildMonitorSet(airbandPlanned_, blk, airbandCentreHz_, airbandRateHz_, airbandSquelchDb_, airbandFirstId_);
+        cc::buildMonitorSet(airbandPlanned_, blk, airbandCentreHz_, airbandRateHz_, airbandSquelchDb_, airbandFirstId_, cc::patch::kOutRateHz, &wireAGates);   // wire-a second pass: the channels with settings of their own
     if (!set) {
         airbandStop(tr("The receiver's sample rate cannot be divided down to an audio rate."));
         return;

@@ -63,6 +63,7 @@ void WireA::jobPass() {
     jobState_ = r.ok ? "done" : (r.cancelled ? "cancelled" : "failed");
     jobMessage_ = r.message;
     jobJson_ = r.json;
+    if (r.onFinish) { r.onFinish(); }   // wire-a second pass
     if (r.ok && r.onDone) { r.onDone(); }
     bump();
 }

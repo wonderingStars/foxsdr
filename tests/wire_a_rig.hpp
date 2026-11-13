@@ -42,6 +42,10 @@ struct AppWindowTestAccess {
             return ok;
         });
     }
+    // The WAV recorder's size ceiling for I/Q takes of radio 1, lowered so a test reaches it in a second.
+    static void iqWavLimit(Engine& e, std::uint64_t bytes) { e.rx().iqRecorder_.setMaxDataBytesForTest(bytes); }
+    // The newest audio of the selected radio (the pipeline's 85 ms tap, both channels): frames copied.
+    static std::size_t audioTap(Engine& e, float* left, float* right, std::size_t n) { return e.rx().pipeline_.audioTapStereo(left, right, n); }
     // The generator source of radio 1 (nullptr when it is not the generator): a tone `slot` at `offsetHz` from its centre.
     static bool genTone(Engine& e, int slot, double offsetHz, float amplitudeDb) {
         cascade::source::SigGen* g = &e.rx().pipeline_.sigGen();

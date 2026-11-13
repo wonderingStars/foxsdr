@@ -77,6 +77,9 @@ namespace cascade::core::patch {
 
 inline constexpr const char* kPatchMagic = "foxsdr-patch";
 inline constexpr int kPatchFormat = 6;
+// wire-a second pass: format 7 adds a bypass flag and a settings token to every node line. A document is written as format 7 ONLY when a node needs it (a bypassed node, a node's own settings, one of the four
+// node kinds added in the second pass); every other patch is written as format 6, byte for byte as before, so a patch made without the new features still opens in the previous version.
+inline constexpr int kPatchFormatNodes = 7;
 
 // The largest size a loaded node may claim. A hand-edited or corrupt file can
 // say anything, and a node 10^9 units wide covers the whole canvas and every
@@ -184,7 +187,9 @@ inline std::string serialise(const Graph& g, float panX, float panY, float zoom)
     constexpr int kD = std::numeric_limits<double>::max_digits10;
     std::ostringstream o;
     o << std::setprecision(kF);
-    o << kPatchMagic << ' ' << kPatchFormat << '\n';
+    bool v7 = false;
+    for (const Node& n : g.nodes()) { v7 = v7 || n.bypass || !n.settings.empty() || n.kind > NodeKind::Map; }
+    o << kPatchMagic << ' ' << (v7 ? kPatchFormatNodes : kPatchFormat) << '\n';
     o << "view " << panX << ' ' << panY << ' ' << zoom << '\n';
     for (const Node& n : g.nodes()) {
         // The feed is what the node's FIRST port carries - the value
@@ -202,8 +207,9 @@ inline std::string serialise(const Graph& g, float panX, float panY, float zoom)
           << n.h << ' ' << std::setprecision(kD) << n.freqHz << std::setprecision(kF) << ' '
           << n.mode << ' ' << encodePluginKey(n.plugin) << ' ' << encodePluginKey(n.device)
           << ' ' << std::setprecision(kD) << n.rateHz << std::setprecision(kF) << ' '
-          << (n.squelch ? 1 : 0) << ' ' << n.squelchDb << ' ' << (n.on ? 1 : 0) << ' '
-          << sanitiseName(n.name) << '\n';
+          << (n.squelch ? 1 : 0) << ' ' << n.squelchDb << ' ' << (n.on ? 1 : 0) << ' ';
+        if (v7) { o << (n.bypass ? 1 : 0) << ' ' << encodePluginKey(n.settings) << ' '; }
+        o << sanitiseName(n.name) << '\n';
     }
     for (const Wire& w : g.wires()) {
         o << "wire " << w.from << ' ' << w.fromPort << ' ' << w.to << ' ' << w.toPort << '\n';
@@ -259,7 +265,7 @@ inline LoadResult parse(const std::string& text, Ids ids = Ids::Remap) {
                 ++r.dropped;
                 continue;
             }
-            if (kind > static_cast<unsigned>(NodeKind::Map) ||
+            if (kind > static_cast<unsigned>(NodeKind::Scope) ||
                 feed > static_cast<unsigned>(PortType::Track) ||
                 (ids == Ids::Keep && fileId > std::numeric_limits<NodeId>::max())) {
                 ++r.dropped;
@@ -326,6 +332,18 @@ inline LoadResult parse(const std::string& text, Ids ids = Ids::Remap) {
                 continue;
             }
 
+            // Format 7's bypass flag and settings token (wire-a second pass); older documents have neither.
+            int bypassFlag = 0;
+            std::string settings;
+            if (version == 7) {   // (exactly 7: a later format's lines are read as format 6 is, as the "future format" test pins)
+                std::string token;
+                if (!(s >> bypassFlag >> token)) {
+                    ++r.dropped;
+                    continue;
+                }
+                if (!decodePluginKey(token, settings)) { ++r.dropped; }
+            }
+
             std::string name;
             std::getline(s, name);
             if (!name.empty() && name.front() == ' ') { name.erase(0, 1); }
@@ -351,6 +369,8 @@ inline LoadResult parse(const std::string& text, Ids ids = Ids::Remap) {
                 n->squelch = squelchOn != 0;
                 n->squelchDb = squelchDb;
                 n->on = onFlag != 0;
+                n->bypass = bypassFlag != 0 && canBypass(*n);   // wire-a second pass: a flag the node cannot honour is not kept
+                n->settings = settings;
                 // A size is taken only when it is a real one. Zero, negative
                 // or NaN (every comparison false) keeps the default addNode
                 // gave the kind; anything absurdly large is clamped.

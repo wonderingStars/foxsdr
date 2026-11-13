@@ -44,6 +44,19 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
             return lockOp(c, text, res);
         case FOXAPP_OP_RECORD_CONTAINER:
             return containerOp(c, res);
+        case FOXAPP_OP_RECORD_IQ_CONTAINER:
+            return iqContainerOp(c, res);
+        case FOXAPP_OP_AIRBAND_CHANNEL:
+            return airbandChannelOp(c, text, res);
+        case FOXAPP_OP_LEVEL_STORE:
+            return levelOp(c, res);
+        case FOXAPP_OP_PATCH_UNDO:
+        case FOXAPP_OP_PATCH_REDO:
+        case FOXAPP_OP_PATCH_SELECT:
+        case FOXAPP_OP_PATCH_COPY:
+        case FOXAPP_OP_PATCH_PASTE:
+        case FOXAPP_OP_PATCH_BYPASS:
+            return patchEditOp(c, text, res);
         case FOXAPP_OP_BAND_MEMORY:
         case FOXAPP_OP_BAND_MEMORY_NOTE:
             return bandOp(c, text, res);
@@ -59,6 +72,12 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
         case FOXAPP_OP_WF_HISTORY:
         case FOXAPP_OP_FFT_SCAN:
             return framesOp(c, text, res);
+        case FOXAPP_OP_FILE_TRANSPORT:
+            return transportOp(c, res);
+        case FOXAPP_OP_RIT:
+            return ritOp(c, res);
+        case FOXAPP_OP_CW_SURROUND:
+            return surroundOp(c, text, res);
         case FOXAPP_OP_TRACE_MODE:
             return traceModeOp(text, res);
         case FOXAPP_OP_MARKER_EXPORT:
@@ -118,6 +137,10 @@ void WireA::pass() {
     bandPass();
     recordingsPass();
     containerPass();
+    iqContainerPass();
+    patchHistoryPass();
+    airbandChannelLoadOnce();
+    airbandReap();
     framesLoadOnce();
     gradientLoadOnce();
     for (std::size_t slot = 0; slot < 8; ++slot) {
@@ -129,6 +152,7 @@ void WireA::pass() {
     scanPass();
     bookmarksPass();
     historyPass();
+    ritPass();
     drainSaves();
 }
 
@@ -145,6 +169,13 @@ void WireA::facts(const std::function<void(const std::string&, const std::string
     bandFacts(fact);
     displayFacts(fact);
     framesFacts(fact);
+    transportFacts(fact);
+    ritFacts(fact);
+    surroundFacts(fact);
+    patchEditFacts(fact);
+    airbandChannelFacts(fact);
+    levelFacts(fact);
+    fact("record.iqcontainer", iqContainer_ == 2 ? "sigmf" : (iqContainer_ == 1 ? "rf64" : "wav"));
 }
 
 void WireA::tunedFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {

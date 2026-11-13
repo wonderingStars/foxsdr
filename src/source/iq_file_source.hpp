@@ -114,6 +114,37 @@ public:
     std::int64_t startUnixMs() const { return startUnixMs_; }
     int startSource() const { return startSource_; }
 
+    // wire-a second pass begin: PLAYBACK TRANSPORT (speed 0.25x to 8x, pause, step). Any thread may call these; read() applies them on the source thread.
+    // SPEED. Two policies, chosen by setSpeedBlockSkip. VARISPEED (default): every delivered frame is the linear interpolation of the file at position p0 + k*s, so time runs s times
+    // faster and every frequency in the recording is multiplied by s (a tape); there is no anti-alias filter, so above s = 1 only the lowest 1/s of the band is clean. BLOCK SKIP: grains of
+    // 2048 consecutive frames are delivered at normal speed and the position jumps by 2048*(s-1) frames between grains (forward for s > 1, back for s < 1, which plays part of the last grain
+    // again), so frequencies are unchanged but time is chopped, with a click at each join. At speed exactly 1 neither policy touches a frame: read() is the unchanged path.
+    // PAUSE AND STEP. While paused, read() returns 0 UNLESS a step is pending: stepBlocks(n) (paused only, n != 0, |n| <= 4096) then makes read() deliver exactly n * kStepBlockFrames frames at the
+    // current speed and return 0 again; a negative n first moves the position back |n| blocks (clamped to the first frame) and delivers one block. The pipeline's free-running loop paces by its own clock and writes
+    // nothing for a 0, so a paused file simply leaves the ring dry (the spectrum stays on its last frame, the audio goes quiet): this is the ONE case in which the "a free-running source never returns 0"
+    // rule below does not hold. wantsRead() says whether a read would deliver.
+    static constexpr double kMinPlaySpeed = 0.25;
+    static constexpr double kMaxPlaySpeed = 8.0;
+    static constexpr std::size_t kStepBlockFrames = 4096;
+    static constexpr long long kMaxStepBlocks = 4096;
+    // False (nothing changed) for NaN, infinity or a value outside 0.25 .. 8.
+    bool setPlaySpeed(double s);
+    double playSpeed() const { return speed_.load(std::memory_order_acquire); }
+    void setSpeedBlockSkip(bool on) { blockSkip_.store(on, std::memory_order_release); }
+    bool speedBlockSkip() const { return blockSkip_.load(std::memory_order_acquire); }
+    void pausePlayback() { paused_.store(true, std::memory_order_release); }
+    void resumePlayback() {
+        paused_.store(false, std::memory_order_release);
+        stepFrames_.store(0, std::memory_order_release);   // a step left over from the pause must not fire later
+    }
+    bool playbackPaused() const { return paused_.load(std::memory_order_acquire); }
+    // False (nothing changed) while playing, for n == 0, for |n| over kMaxStepBlocks and with no file open.
+    bool stepBlocks(long long n);
+    long long stepFramesPending() const { return stepFrames_.load(std::memory_order_acquire); }
+    // True when read() has something to deliver: playing, or paused with a step pending. A caller that would rather not poll a held file asks this first.
+    bool wantsRead() const { return !paused_.load(std::memory_order_acquire) || stepFrames_.load(std::memory_order_acquire) > 0; }
+    // wire-a second pass end
+
     // "IQ file: <basename>" after a successful open, "IQ file" before.
     const char* name() const override { return name_.c_str(); }
 
@@ -201,6 +232,20 @@ private:
     std::int64_t startUnixMs_ = 0;
     int startSource_ = 0;
     void seekTo(std::uint64_t frame);   // the source thread's (or start()'s): moves the stream and nextFrame_
+    // wire-a second pass begin: transport state. The atomics are written by any thread; the rest belongs to the source thread (start() resets it while the thread is parked).
+    std::atomic<double> speed_{1.0};
+    std::atomic<bool> blockSkip_{false};
+    std::atomic<bool> paused_{false};
+    std::atomic<long long> stepFrames_{0};
+    std::vector<std::complex<float>> win_;   // varispeed: source frames from the integer position floor(frac_)
+    double frac_ = 0.0;
+    std::size_t grainLeft_ = 2048;           // block skip: frames of the current grain still to deliver
+    double skipFrac_ = 0.0;
+    std::size_t readNormal(std::complex<float>* dst, std::size_t n);   // the unchanged read (seek, loop, seam)
+    std::size_t readVaried(std::complex<float>* dst, std::size_t n, double s);
+    std::size_t readSkipping(std::complex<float>* dst, std::size_t n, double s);
+    void jumpBy(long long frames);
+    // wire-a second pass end
 };
 
 }  // namespace cascade::source

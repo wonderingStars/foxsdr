@@ -272,6 +272,7 @@ void WireA::displayFrame(std::size_t slot, std::vector<float>& bins, double cent
             f.have = true;
         }
     }
+    levelFeed(slot, bins, centreHz, spanHz, nowS);   // wire-a second pass: the level store of every open radio
     // the history keeps what is drawn
     if (std::shared_ptr<Wf> w = wf_[slot]; w && w->on) {
         if (!w->hist || w->bins != bins.size()) {

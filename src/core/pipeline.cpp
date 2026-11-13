@@ -391,7 +391,7 @@ void Pipeline::publishParamMirrorsLocked() {
     // given: notchFrequencyHz() and the channel rate are clamped/derived, and
     // mirroring an un-clamped request would have changed a readout while fixing
     // a stall. See the header for why these mirrors exist at all.
-    mirrorVfoOffsetHz_.store(vfo_.offsetHz(), std::memory_order_relaxed);
+    mirrorVfoOffsetHz_.store(ritHz_ != 0.0 ? vfo_.offsetHz() - ritHz_ : vfo_.offsetHz(), std::memory_order_relaxed);   // wire-a: the dial's offset is the user's, without the receive clarifier
     mirrorChannelRateHz_.store(vfo_.channelRateHz(), std::memory_order_relaxed);
     mirrorDemodMode_.store(static_cast<int>(demod_.mode()), std::memory_order_relaxed);
     mirrorDeemphasisUs_.store(deemphasisUs_, std::memory_order_relaxed);
@@ -540,7 +540,7 @@ void Pipeline::resetDecodersLocked() {
         afc_->reset();
         if (afcAppliedHz_ != 0.0) {
             afcAppliedHz_ = 0.0;
-            vfo_.setOffsetHz(userOffsetHz_);
+            vfo_.setOffsetHz(userOffsetHz_ + ritHz_);   // wire-a: the receive clarifier rides on the user's offset
         }
     }
     rds_->reset();
@@ -1435,7 +1435,7 @@ bool Pipeline::setAfc(bool on, double pullInHz) {
              }
              if (!on && afcAppliedHz_ != 0.0) {
                  afcAppliedHz_ = 0.0;
-                 vfo_.setOffsetHz(userOffsetHz_);
+                 vfo_.setOffsetHz(userOffsetHz_ + ritHz_);   // wire-a: the receive clarifier rides on the user's offset
              }
              if (!on) {
                  mirrorAfcCorrHz_.store(0.0, std::memory_order_relaxed);
@@ -1492,6 +1492,35 @@ bool Pipeline::setStereoPlace(int mode, double value) {
     mirrorPlaceMode_.store(mode, std::memory_order_relaxed);
     return true;
 }
+// wire-a second pass begin: CW surround
+bool Pipeline::setCwSurround(bool on, const cascade::dsp::CwSurroundConfig& cfg) {
+    cascade::dsp::CwSurround probe(48000.0);
+    if (!probe.setConfig(cfg)) { return false; }
+    post(
+        [this, on, cfg] {
+            cwSurround_.setConfig(cfg);
+            cwSurround_.setEnabled(on);
+        },
+        [this, on, cfg] {
+            mirrorSurroundOn_.store(on, std::memory_order_relaxed);
+            mirrorSurroundCentre_.store(cfg.centrePitchHz, std::memory_order_relaxed);
+            mirrorSurroundSpread_.store(cfg.spreadHz, std::memory_order_relaxed);
+            mirrorSurroundInvert_.store(cfg.invert, std::memory_order_relaxed);
+            mirrorSurroundRatio_.store(cfg.toneRatio, std::memory_order_relaxed);
+            mirrorSurroundHold_.store(cfg.holdMs, std::memory_order_relaxed);
+        });
+    return true;
+}
+cascade::dsp::CwSurroundConfig Pipeline::cwSurroundConfig() const {
+    cascade::dsp::CwSurroundConfig c;
+    c.centrePitchHz = mirrorSurroundCentre_.load(std::memory_order_relaxed);
+    c.spreadHz = mirrorSurroundSpread_.load(std::memory_order_relaxed);
+    c.invert = mirrorSurroundInvert_.load(std::memory_order_relaxed);
+    c.toneRatio = mirrorSurroundRatio_.load(std::memory_order_relaxed);
+    c.holdMs = mirrorSurroundHold_.load(std::memory_order_relaxed);
+    return c;
+}
+// wire-a second pass end
 int Pipeline::stereoPlaceMode() const { return mirrorPlaceMode_.load(std::memory_order_relaxed); }
 double Pipeline::stereoPlaceValue() const { return mirrorPlaceValue_.load(std::memory_order_relaxed); }
 
@@ -1702,9 +1731,9 @@ void Pipeline::setVfoOffsetHz(double offsetHz) {
     // setter returns (AppWindow::tuneAbsoluteHz and the slider both do).
     post(
         [this, offsetHz] {
-            if (afcAppliedHz_ == 0.0 && vfo_.offsetHz() == offsetHz) { return; }  // no move, nothing to forget
+            if (afcAppliedHz_ == 0.0 && vfo_.offsetHz() == offsetHz + ritHz_) { return; }  // no move, nothing to forget   (wire-a: the clarifier is part of what the oscillator runs at)
             userOffsetHz_ = offsetHz;
-            vfo_.setOffsetHz(offsetHz);
+            vfo_.setOffsetHz(offsetHz + ritHz_);
             // A retune is a different station: the RDS content and the pilot lock
             // that belonged to the old one must not survive it. (The SOURCE centre
             // moving is invisible from here — that caller has to call resetRds().)
@@ -1716,6 +1745,23 @@ void Pipeline::setVfoOffsetHz(double offsetHz) {
 double Pipeline::vfoOffsetHz() const {
     return mirrorVfoOffsetHz_.load(std::memory_order_relaxed);
 }
+
+// wire-a second pass begin: RECEIVE CLARIFIER (RIT). The receive oscillator runs at the user's offset + the clarifier (+ the AFC's nudge); vfoOffsetHz(), the number the dial and the tuning arithmetic read, stays the user's:
+// the clarifier moves what is HEARD and nothing else. 0 (the default) adds exactly 0.0 everywhere, so the signal path is bit-identical to before. No decoder is reset: it is the same station.
+void Pipeline::setRitHz(double hz) {
+    post(
+        [this, hz] {
+            if (ritHz_ == hz) { return; }
+            ritHz_ = hz;
+            vfo_.setOffsetHz(userOffsetHz_ + ritHz_ + afcAppliedHz_);
+        },
+        [this, hz] { mirrorRitHz_.store(hz, std::memory_order_relaxed); });
+}
+
+double Pipeline::ritHz() const {
+    return mirrorRitHz_.load(std::memory_order_relaxed);
+}
+// wire-a second pass end
 
 void Pipeline::setVfoBandwidthHz(double bandwidthHz) {
     // The filter redesign this runs is the heaviest thing any setter does; it now
@@ -1871,7 +1917,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
         vfo_ = cascade::dsp::Vfo(rateHz, decim, vfoBandwidthHz_);
         vfo_.setOffsetHz(offset);
         afcAppliedHz_ = 0.0;   // (the tracker is rebuilt below with the channel blocks; the nudge goes with it)
-        vfo_.setOffsetHz(userOffsetHz_);
+        vfo_.setOffsetHz(userOffsetHz_ + ritHz_);   // wire-a: the receive clarifier rides on the user's offset
         vfo_.setChannelShape(chanShapeNow_);   // (F6: the user's shape put back on the rebuilt filter)
         vfo_.setNoiseBlankerThresholdDb(nbThresholdDb);
         vfo_.setNoiseBlankerEnabled(nbOn);
@@ -2485,12 +2531,12 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
             const double corr = afc_->correctionHz();
             if (std::fabs(corr - afcAppliedHz_) >= 0.5) {
                 afcAppliedHz_ = corr;
-                vfo_.setOffsetHz(userOffsetHz_ + corr);
+                vfo_.setOffsetHz(userOffsetHz_ + ritHz_ + corr);   // wire-a
             }
         } else if (afcAppliedHz_ != 0.0) {
             afc_->reset();
             afcAppliedHz_ = 0.0;
-            vfo_.setOffsetHz(userOffsetHz_);
+            vfo_.setOffsetHz(userOffsetHz_ + ritHz_);   // wire-a: the receive clarifier rides on the user's offset
         }
         mirrorAfcCorrHz_.store(afcAppliedHz_, std::memory_order_relaxed);
         mirrorAfcLocked_.store(afcAppliedHz_ != 0.0 && afc_->locked(), std::memory_order_relaxed);
@@ -2801,6 +2847,13 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     if (mode == cascade::dsp::DemodMode::CW) {
         cwPeakL_.process(outL_.data(), k);
         cwPeakR_.process(outR_.data(), k);
+        // wire-a second pass: CW SURROUND, one call - the pitch of the signal places it between the ears (off by default; a stereo placement or a stereo decode of its own wins)
+        if (mirrorSurroundOn_.load(std::memory_order_relaxed) && mirrorPlaceMode_.load(std::memory_order_relaxed) == 0 && !stereoActive_.load(std::memory_order_relaxed)) {
+            surroundIn_.assign(outL_.data(), outL_.data() + k);
+            cwSurround_.process(surroundIn_.data(), outL_.data(), outR_.data(), k);
+            mirrorSurroundPitch_.store(cwSurround_.pitchHz(), std::memory_order_relaxed);
+            mirrorSurroundPan_.store(cwSurround_.pan(), std::memory_order_relaxed);
+        }
     }
 
     // --- IN-CHAIN AUDIO PROCESSOR PLUGINS (host API level 1) ----------------

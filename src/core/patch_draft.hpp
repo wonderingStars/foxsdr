@@ -196,7 +196,7 @@ inline bool graphsEqual(const Graph& a, const Graph& b) {
             !detail::sameValue(x.freqHz, y.freqHz) || x.mode != y.mode || x.plugin != y.plugin ||
             x.device != y.device || !detail::sameValue(x.rateHz, y.rateHz) || x.squelch != y.squelch ||
             !detail::sameValue(x.squelchDb, y.squelchDb) || x.on != y.on ||
-            x.centreChosen != y.centreChosen) {
+            x.centreChosen != y.centreChosen || x.bypass != y.bypass || x.settings != y.settings) {
             return false;
         }
     }
@@ -247,6 +247,8 @@ inline Graph rebaseDraft(const Graph& base, const Graph& draft, const Graph& now
         if (d.squelch != b->squelch) { o->squelch = d.squelch; }
         if (!detail::sameValue(d.squelchDb, b->squelchDb)) { o->squelchDb = d.squelchDb; }
         if (d.on != b->on) { o->on = d.on; }
+        if (d.bypass != b->bypass) { o->bypass = d.bypass; }          // wire-a second pass
+        if (d.settings != b->settings) { o->settings = d.settings; }
     }
     for (const Node& d : draft.nodes()) {
         if (base.find(d.id) != nullptr) { continue; }

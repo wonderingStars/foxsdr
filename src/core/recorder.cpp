@@ -151,6 +151,15 @@ bool Recorder::prepare(RecordKind kind, const std::string& directory, double sam
     out.kind = kind;
     out.sampleFormat = fmt;
     out.directory = dir.string();
+    // wire-a second pass begin: an I/Q take in RF64 is the same .wav name; one in SigMF is a .sigmf-data (its .sigmf-meta is made beside it)
+    out.container = kind == RecordKind::BasebandIq ? iqContainer_.load(std::memory_order_relaxed) : kIqContainerWav;
+    out.sampleRateHz = sampleRateHz;
+    out.centreHz = centreHz_.load(std::memory_order_relaxed);
+    out.startUnixNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    if (out.container == kIqContainerSigmf && fileName.size() > 4 && fileName.compare(fileName.size() - 4, 4, ".wav") == 0) {
+        fileName.replace(fileName.size() - 4, 4, ".sigmf-data");
+    }
+    // wire-a second pass end
     out.path = (dir / fileName).string();
 
     // The zero-length header, flushed by the opener as soon as the file
@@ -175,6 +184,7 @@ bool Recorder::prepare(RecordKind kind, const std::string& directory, double sam
 }
 
 bool Recorder::openFile(const OpenRequest& req, OpenedFile& out, std::string& error) {
+    if (req.container != kIqContainerWav && req.kind == RecordKind::BasebandIq) { return openIqContainer(req, out, error); }   // wire-a second pass
     // EVERYTHING IN HERE WAITS ON THE DISK, and nothing in here may touch a
     // Recorder: it runs on a worker that can be abandoned at quit.
     const fs::path dir(req.directory);
@@ -229,7 +239,7 @@ bool Recorder::begin(OpenedFile&& opened, std::string& error) {
         error = "recorder: already recording — stop the current file first";
         return false;
     }
-    if (!opened.file) {
+    if (!opened.file && !opened.backend) {   // wire-a second pass: a take in RF64 / SigMF has a backend and no stdio file
         error = "recorder: no file was opened";
         return false;
     }
@@ -245,6 +255,9 @@ bool Recorder::begin(OpenedFile&& opened, std::string& error) {
     takeFormat_.store(opened.sampleFormat, std::memory_order_relaxed);
     frameBytes_.store(recordFrameBytes(opened.kind, opened.sampleFormat), std::memory_order_relaxed);
     file_ = opened.file.release();
+    backend_ = std::move(opened.backend);   // wire-a second pass
+    takeContainer_.store(backend_ ? opened.container : kIqContainerWav, std::memory_order_relaxed);
+    centreDirty_.store(false, std::memory_order_relaxed);
     path_ = opened.path;
     // The take's clock starts here, before recording() can read true: a
     // reader that sees the take running finds its start already stamped.
@@ -270,6 +283,19 @@ void Recorder::writeIq(const std::complex<float>* s, std::size_t n) {
     if (!recording_.load(std::memory_order_acquire) ||
         kind_.load(std::memory_order_relaxed) != RecordKind::BasebandIq ||
         s == nullptr || n == 0 || writeFailed_.load(std::memory_order_acquire)) {
+        return;
+    }
+    if (backend_) {
+        // wire-a second pass: a take in RF64 or SigMF. No 4 GiB ceiling, no staging here: the writer encodes. A retune since the last block is logged first, so the new capture segment
+        // starts at this block's first sample.
+        if (centreDirty_.exchange(false, std::memory_order_acq_rel)) { backend_->retune(pendingCentre_.load(std::memory_order_relaxed)); }
+        const std::size_t fb = frameBytes_.load(std::memory_order_relaxed);
+        if (backend_->write(s, n)) {
+            dataBytes_.fetch_add(n * fb, std::memory_order_relaxed);
+            frames_.fetch_add(n, std::memory_order_relaxed);
+        } else {
+            writeFailed_.store(true, std::memory_order_release);
+        }
         return;
     }
     std::size_t done = 0;
@@ -443,8 +469,15 @@ std::atomic<Recorder::FinishHook> g_finishHook{nullptr};
 void Recorder::setFinishHookForTest(FinishHook hook) { g_finishHook.store(hook); }
 
 bool Recorder::detachFile(FinishRequest& out) {
-    if (file_ == nullptr) {
+    if (file_ == nullptr && !backend_) {
         return false;  // idempotent, and safe without a prior start()
+    }
+    if (backend_) {   // wire-a second pass: the take's writer goes to the finishing worker, which closes it
+        out.backend = std::move(backend_);
+        backend_.reset();
+        endedNs_.store(steadyNs(), std::memory_order_release);
+        out.dataBytes = dataBytes_.load(std::memory_order_relaxed);
+        return true;
     }
     // The buffer BEFORE the file in `out` (declaration order makes it die after
     // it), and both moved out of the recorder, so a following begin() finds an
@@ -465,6 +498,7 @@ bool Recorder::finishFile(FinishRequest&& req) {
     // EVERYTHING FROM HERE WAITS ON THE DISK, and nothing in here may touch a
     // Recorder: it runs on a worker that can be abandoned at quit.
     FinishRequest owned = std::move(req);
+    if (owned.backend) { return owned.backend->close(); }   // wire-a second pass: RF64 / SigMF write their own headers and metadata
     if (!owned.file) { return true; }  // nothing to finish
     std::FILE* f = owned.file.get();
     if (const FinishHook hook = g_finishHook.load()) { hook(f); }
@@ -516,6 +550,15 @@ void Recorder::stop() {
     // the counters alone.
     finalizeFile();
     // Counters deliberately keep their final values until the next start().
+}
+
+// wire-a second pass: the radio's centre frequency (see the header)
+void Recorder::noteCentre(double hz) {
+    if (!std::isfinite(hz)) { return; }
+    if (hz == centreHz_.load(std::memory_order_relaxed)) { return; }
+    centreHz_.store(hz, std::memory_order_relaxed);
+    pendingCentre_.store(hz, std::memory_order_relaxed);
+    centreDirty_.store(true, std::memory_order_release);
 }
 
 void Recorder::setMaxDataBytesForTest(std::uint64_t bytes) {

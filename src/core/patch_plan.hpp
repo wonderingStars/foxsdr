@@ -34,6 +34,7 @@
 #include "core/i18n.hpp"  // FOX_TR_NOOP: problemText is drawn through tr()
 #include "core/patch_devices.hpp"
 #include "core/patch_graph.hpp"
+#include "core/patch_nodes.hpp"   // wire-a second pass
 
 namespace cascade::core::patch {
 
@@ -63,13 +64,14 @@ enum class Problem : std::uint8_t {
     DeviceTwice,       // a Radio naming a device another Radio already uses
     RadioFailed,       // the device would not open - set by the caller, not by compile()
     NoTracks,          // a decoder wired to a Map whose module puts nothing on a map
+    NodeNotRun,        // wire-a second pass: a Mixer, IF filter, Generator or Scope node: drawn, wired and saved, but this build does not run it yet - advisory
 };
 
 // Advisory problems do not stop a patch running; they are worth saying and not
 // worth refusing. A decoder wired to nothing still decodes, it just has no
 // window - that is a thing people do deliberately while building a patch.
 inline bool isAdvisory(Problem p) {
-    return p == Problem::NothingListens || p == Problem::NoTracks;
+    return p == Problem::NothingListens || p == Problem::NoTracks || p == Problem::NodeNotRun;
 }
 
 inline const char* problemText(Problem p) {
@@ -93,6 +95,7 @@ inline const char* problemText(Problem p) {
             return FOX_TR_NOOP("another radio in this patch already uses that device - one device, one radio");
         case Problem::RadioFailed: return FOX_TR_NOOP("the device would not open");
         case Problem::NoTracks: return FOX_TR_NOOP("this decoder puts nothing on a map");
+        case Problem::NodeNotRun: return FOX_TR_NOOP("this part is saved with the patch but this build does not run it yet");
     }
     return FOX_TR_NOOP("this cannot run");
 }
@@ -228,6 +231,9 @@ struct AudioSinkPlan {
     NodeId sink = kNoNode;
     NodeId channel = kNoNode;
     NodeId radio = kNoNode;
+    // wire-a second pass: a sink fed through a Mixer part plays the SUM of the channels on the mixer's inputs, each times its gain (0 when muted). Empty = the one `channel`, as it always was.
+    std::vector<NodeId> mixChannels;
+    std::vector<float> mixGains;
 };
 
 // What one radio is actually doing: its node, and the rate and centre the
@@ -658,7 +664,40 @@ inline Plan compile(const Graph& g, const std::vector<RadioInfo>& radios,
         if (!isFed(n.id)) { continue; }
         const NodeId chan = channelFeeding(g, n.id);
         if (chan == kNoNode || findChannel(plan, chan) == nullptr) { continue; }
-        plan.sinks.push_back({n.id, chan, radioOf(g, n.id)});
+        AudioSinkPlan sp{n.id, chan, radioOf(g, n.id)};
+        // wire-a second pass: a Mixer directly in front of the sink
+        {
+            NodeId feeder = kNoNode;
+            for (const Wire& w : g.wires()) { if (w.to == n.id && w.toPort == 0) { feeder = w.from; break; } }
+            const Node* mx = feeder == kNoNode ? nullptr : g.find(feeder);
+            if (mx != nullptr && mx->kind == NodeKind::Mixer) {
+                MixerSettings ms;
+                std::string why;
+                if (!parseMixerSettings(mx->settings, ms, why)) { ms = MixerSettings(); }
+                for (const Wire& w : g.wires()) {
+                    if (w.to != mx->id || w.toPort >= kMixerInputs) { continue; }
+                    // the channel behind this input: walk up from the node that feeds it
+                    NodeId at = w.from, found = kNoNode;
+                    for (std::size_t step = 0; step < g.nodes().size() + 1 && found == kNoNode; ++step) {
+                        const Node* an = g.find(at);
+                        if (an == nullptr) { break; }
+                        if (an->kind == NodeKind::Channel) { found = an->id; break; }
+                        NodeId up = kNoNode;
+                        for (const Wire& x : g.wires()) { if (x.to == at) { up = x.from; break; } }
+                        if (up == kNoNode) { break; }
+                        at = up;
+                    }
+                    if (found == kNoNode || findChannel(plan, found) == nullptr) { continue; }
+                    if (std::find(sp.mixChannels.begin(), sp.mixChannels.end(), found) != sp.mixChannels.end()) { continue; }
+                    sp.mixChannels.push_back(found);
+                    sp.mixGains.push_back(ms.mute[w.toPort] ? 0.0f : ms.gain[w.toPort]);
+                }
+                if (sp.mixChannels.empty()) { continue; }
+                sp.channel = sp.mixChannels.front();
+                sp.radio = radioOf(g, sp.channel);
+            }
+        }
+        plan.sinks.push_back(std::move(sp));
     }
 
     // A decoder wired to a Map whose module has nothing to put on one. Said on
@@ -689,6 +728,40 @@ inline Plan compile(const Graph& g, const std::vector<RadioInfo>& radios,
         if (!heard) { plan.problems.push_back({n.id, Problem::NothingListens}); }
     }
 
+    // wire-a second pass: the four node kinds added after the Map are part of the document and the wiring rules; the runner does not build them yet, and a part that does nothing must say so
+    // wire-a second pass: an IF filter whose every output goes to a channel (or to another IF filter that does) is RUN: the runner puts it between the radio and those channels. Every other part of the four new kinds, and an IF
+    // filter wired to anything else, is not run yet.
+    auto ifFilterRuns = [&](NodeId id) {
+        std::vector<NodeId> todo{id};
+        bool any = false;
+        for (std::size_t guard = 0; guard < g.nodes().size() + 1 && !todo.empty(); ++guard) {
+            const NodeId at = todo.back();
+            todo.pop_back();
+            for (const Wire& w : g.wires()) {
+                if (w.from != at) { continue; }
+                const Node* d = g.find(w.to);
+                if (d == nullptr) { continue; }
+                if (d->kind == NodeKind::Channel) { any = true; }
+                else if (d->kind == NodeKind::IfFilter) { todo.push_back(d->id); }
+                else { return false; }
+            }
+        }
+        return any;
+    };
+    auto mixerRuns = [&](NodeId id) {
+        bool any = false;
+        for (const Wire& w : g.wires()) {
+            if (w.from != id) { continue; }
+            const Node* d = g.find(w.to);
+            if (d == nullptr || d->kind != NodeKind::Sink) { return false; }
+            any = true;
+        }
+        return any;
+    };
+    for (const Node& n : g.nodes()) {
+        const bool runs = (n.kind == NodeKind::IfFilter && ifFilterRuns(n.id)) || (n.kind == NodeKind::Mixer && mixerRuns(n.id));
+        if (n.kind > NodeKind::Map && !runs) { plan.problems.push_back({n.id, Problem::NodeNotRun}); }
+    }
     const bool blocked = std::any_of(plan.problems.begin(), plan.problems.end(),
                                      [](const NodeProblem& p) { return !isAdvisory(p.problem); });
     // A patch with nothing in it is not "runnable" - there is nothing to run.

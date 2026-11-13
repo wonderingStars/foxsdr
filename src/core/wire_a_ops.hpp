@@ -23,6 +23,9 @@
 //   BAD_ARGUMENT: a path that is not a full path, or a file that exists; FAILED: the write failed (the message says why). MARKER_IMPORT (SETTINGS): the file the text names (CSV or JSON,
 //   chosen by the file's extension; at most 1 MiB), read strictly: any bad row refuses the whole file and changes nothing. A marker within num[0] Hz of one in the list is merged (a note is kept
 //   when the list's marker has none), a new one is added with the next number. applied[0] = added, applied[1] = merged. LIMIT: the list is full (what fit is kept). fact.markerio.* says what happened.
+// SECOND PASS: MARKER_EXPORT, MARKER_IMPORT, PACK_EXPORT and PACK_IMPORT do their file work on the lane's job worker (the pass does no disk work). The answer is OK for "started" (BUSY while another job is out; the argument
+// refusals that need no disk - a relative path, a bad direction, an empty list - are still answered at once); how it ended is fact.job.state ("done" / "failed"), fact.job.message, fact.job.result (JSON counts) and the
+// old facts fact.markerio.* / fact.pack.last. A file that cannot be read, is too big, already exists, or is refused by its parser arrives as a FAILED job with the words.
 #define FOXAPP_OP_MARKER_EXPORT          0x8802u /* text: full path; ival[0]: 0 CSV / 1 JSON */
 #define FOXAPP_OP_MARKER_IMPORT          0x8803u /* text: full path; num[0]: merge reach, Hz (0 = same frequency only) */
 
@@ -202,6 +205,70 @@
 //   NO_CHANGE when read while it is off or before the first frame. The facts do not move on every frame: a read is the way to see a result.
 #define FOXAPP_OP_FFT_SCAN               0x8825u /* ival[0]: 0 configure / 1 read; text: JSON. Addresses one radio (target) */
 
+//   FILE_TRANSPORT (SETTINGS; source/iq_file_source.hpp, the transport of a recorded I/Q file; second pass): speed, pause and step of the radio that plays an I/Q file. Per radio (target). UNSUPPORTED when the radio is not
+//   playing a file. ival[0] picks the action: 0 speed (num[0] = 0.25 .. 8; OUT_OF_RANGE outside it, NO_CHANGE when it is that already), 1 policy (ival[1] = 0 varispeed, 1 block skip; NO_CHANGE when the same),
+//   2 pause (NO_CHANGE when paused already), 3 resume (NO_CHANGE when playing), 4 step (only while paused; ival[1] = blocks of 4096 frames, 1 .. 4096 forward, -4096 .. -1 back and one block played from there;
+//   DENIED while playing, OUT_OF_RANGE for 0 or beyond 4096). VARISPEED multiplies every frequency in the recording by the speed (a tape); BLOCK SKIP keeps the frequencies and chops the time into 2048-frame grains.
+//   At speed 1 the frames are untouched either way. Facts: fact.playback.<n>.speed ("1" ...), .policy ("varispeed" / "blockskip"), .paused ("0" / "1"). The position is
+//   read_state's filePositionSec as before (FILE_SEEK moves it). Speed and pause are NOT remembered: a file opened again plays at speed 1.
+#define FOXAPP_OP_FILE_TRANSPORT         0x8826u /* ival[0]: 0 speed / 1 policy / 2 pause / 3 resume / 4 step; num[0] speed; ival[1] policy or blocks. Addresses one radio (target) */
+
+//   RIT (SETTINGS; core/rit_xit.hpp, second pass): the RECEIVE CLARIFIER of one radio (receive only: there is no XIT in this program). It shifts what is HEARD by `offset` hertz while the dial, the tuning arithmetic,
+//   the bookmarks and the CAT answer stay where they are: the receive oscillator runs at the tuned offset + the clarifier. Per radio (target). ival[0] picks the action: 0 SET (num[0] = the offset in Hz, ival[1] = 1 on / 0 off;
+//   OUT_OF_RANGE beyond the limit; NO_CHANGE when both are the same), 1 STEP (num[0] = Hz to add, the clarifier is switched on; the result is clamped to the limit and applied[0] is the offset now in force),
+//   2 CLEAR (offset 0, off; NO_CHANGE when it already is), 3 LIMITS (num[0] = the largest offset, 1 to 20000 Hz, default 9999; num[1] = a retune larger than this many Hz clears the clarifier, 0 = never, the default;
+//   OUT_OF_RANGE for either outside its range). Facts: fact.rit.<n>.on ("0"/"1"), .hz (the offset, whole Hz), .max, .clearOnRetune. Never saved: a clarifier that came back after a restart would put the receiver off its
+//   station. A retune over the clear limit is noticed once a pass (the same way the history is), so the clarifier is cleared within one control pass of the retune.
+#define FOXAPP_OP_RIT                    0x8827u /* ival[0]: 0 set / 1 step / 2 clear / 3 limits; num[0] Hz; ival[1] on. Addresses one radio (target) */
+
+//   CW_SURROUND (SETTINGS; dsp/cw_surround.hpp, second pass): "digital surround" for CW. The pitch of a CW signal decides where it sits between the ears: a lower pitch to the left, a higher one to the right, so two stations a
+//   few hundred hertz apart are also a few degrees apart. Per radio (target); OFF by default and only audible in CW mode on a mono receiver with no stereo placement of its own (STEREO_PLACE wins; a stereo decode keeps its two
+//   channels). ival[0] = 0 configures from the JSON object {"enabled":bool, "centreHz":200..1500 (700), "spreadHz":50..2000 (400), "invert":bool, "toneRatio":2..1000 (100), "holdMs":0..5000 (400)}: a key left out keeps its
+//   value, an unknown key or a key of the wrong type is BAD_ARGUMENT, a number outside its range is OUT_OF_RANGE, the same settings are NO_CHANGE; nothing is saved (a restart is off again). ival[0] = 1 reads the live
+//   pitch estimate (Hz, 0 before a tone was heard) into applied[0] and the pan being applied (-1 left .. +1 right) into applied[1]. Facts: fact.cwsurround.<n>.on / .centre / .spread / .invert / .ratio / .hold.
+#define FOXAPP_OP_CW_SURROUND            0x8828u /* ival[0]: 0 configure / 1 read; text: JSON. Addresses one radio (target) */
+
+//   RECORD_IQ_CONTAINER (SETTINGS; core/recorder.hpp IqBackend, source/rf64_writer.hpp, source/sigmf_writer.hpp, second pass): the file kind of BASEBAND I/Q takes, for every radio. ival[0]: 0 = this recorder's own WAV (the
+//   default, as always: the take ends at 4 GiB), 1 = RF64 (a .wav whose header can become RF64: the take is no longer ended at 4 GiB; float32 or, with SET_RECORD_FORMAT 16-bit, int16), 2 = SigMF (a .sigmf-data of raw
+//   I/Q plus a .sigmf-meta beside it with the sample rate, the centre frequency, the start time, and every retune of the take as a new capture segment, logged at the block it happened in). The next take starts in it; a
+//   take under way keeps its own. With the record lock on (RECORD_LOCK), a SigMF take lets the centre frequency change, because its metadata records it; a WAV or RF64 take does not. NO_CHANGE for the same container,
+//   OUT_OF_RANGE for another value. Kept in record-iq-container.json beside markers.json; fact.record.iqcontainer is "wav", "rf64" or "sigmf".
+#define FOXAPP_OP_RECORD_IQ_CONTAINER    0x8829u /* ival[0]: 0 wav / 1 rf64 / 2 sigmf */
+
+//   THE PATCH PAGE'S EDIT HISTORY (second pass; core/patch_graph.hpp). The engine keeps the patch the page sends (PATCH_SET_GRAPH) and now remembers it: every change of the graph that is not just the running radios' own state (on/off,
+//   the centre they learnt, the rate) is one step of history, at most 100, in memory only; a new edit clears what could be redone. Not radio-addressed.
+//   PATCH_UNDO / PATCH_REDO: the graph goes back / forward one step, as a new graph version (fact.patch.version moves, the page re-reads it); the radios keep their own state. NO_CHANGE at an end.
+//   PATCH_SELECT: ival[0] 0 replace / 1 add / 2 toggle / 3 clear / 4 all, text {"ids":[..]} for 0-2; an id that is not in the graph is BAD_ARGUMENT and nothing changes. The selection is not history.
+//   PATCH_COPY: the selected parts and the wires with BOTH ends inside the selection go to the engine's clipboard (positions kept relative to the top-left of the set); NO_CHANGE when nothing is selected.
+//   PATCH_PASTE: num[0], num[1] = where the set's top-left goes. New parts get new ids from the graph, the inside wires are made again on them, the pasted set becomes the selection; one history step. All or nothing: a part the graph
+//   refuses (a sixth radio) puts everything back and the answer is OUT_OF_RANGE; a wire it refuses is counted, applied[0] = parts pasted, applied[1] = wires refused. NO_CHANGE for an empty clipboard.
+//   PATCH_BYPASS: ival[0] 1 on / 0 off, text {"ids":[..]} or, with no text, the selection. A bypassed part is spliced out of what runs (what fed its input 0 feeds what its output 0 fed) and stays in the document; a part
+//   whose input 0 and output 0 are not the same type cannot be bypassed (OUT_OF_RANGE, nothing changes). NO_CHANGE when it is so already. Facts: fact.patchedit.undo / .redo (steps), .selection ("1,2"), .clipboard (parts).
+#define FOXAPP_OP_PATCH_UNDO             0x882Au /* none */
+#define FOXAPP_OP_PATCH_REDO             0x882Bu /* none */
+#define FOXAPP_OP_PATCH_SELECT           0x882Cu /* ival[0]: 0 replace / 1 add / 2 toggle / 3 clear / 4 all; text: {"ids":[..]} */
+#define FOXAPP_OP_PATCH_COPY             0x882Du /* none: copies the selection */
+#define FOXAPP_OP_PATCH_PASTE            0x882Eu /* num[0], num[1]: where the set's top-left goes */
+#define FOXAPP_OP_PATCH_BYPASS           0x882Fu /* ival[0]: 1 on / 0 off; text: {"ids":[..]} or none = the selection */
+
+//   AIRBAND_CHANNEL (SETTINGS; core/airband_channel.hpp, core/airband_gate.hpp, core/airband_writer.hpp, second pass): the airband monitor's PER-CHANNEL settings. A monitor channel (a ticked row, found by its frequency in whole
+//   hertz) can have settings of its own: a high-pass, a low-pass and up to three notches on its audio, its own squelch (a LEVEL threshold with its hold, or an SNR threshold with hysteresis and hang), and an output it
+//   asks for: nothing (the default), a WAV file of the audio before the gate (in <recordings folder>/airband/<UTC day>/, written on a worker thread, split at the size cap) or the gated audio as a UDP stream to 127.0.0.1 and the
+//   port chosen. A channel with no settings of its own is the monitor's channel exactly as before (the shared squelch). ival[0] = 0 sets one from the text FOXAIRCH1|... (the model's strict one-line form: BAD_ARGUMENT when it
+//   does not parse, OUT_OF_RANGE with the model's sentence when a value is outside its range or a file output has no recordings folder, NO_CHANGE for the same settings); ival[0] = 1 clears the one at num[0] Hz
+//   (NO_CHANGE when it has none); ival[0] = 2 clears them all. Takes effect at once when the monitor is listening (the block on the air is built again, which restarts its squelches) and otherwise at the next LISTEN.
+//   Kept in airband-channels.json beside markers.json. Facts: fact.airband.channels (how many), fact.airband.channel.<Hz> (the text). Receive only: the stream goes to this computer's loopback and nowhere else.
+#define FOXAPP_OP_AIRBAND_CHANNEL        0x8830u /* ival[0]: 0 set (text) / 1 clear one (num[0] Hz) / 2 clear all */
+
+//   LEVEL_STORE (SETTINGS; core/waterfall_history.hpp as the ring, second pass): a LEVEL STORE FOR EVERY OPEN RADIO, so a radio on another page, or none, still has its last hour of levels when the screen asks (the screen stores only
+//   the frames of the panes it paints). One row every 250 ms of the spectrum the radio publishes (after the display chain), at most 1024 bins (a wider frame is max-pooled to 1024, so a narrow peak survives), one byte a bin
+//   (dB quantised over -150 .. 0), with the time, the centre and the span of each row: a retune starts a new SEGMENT (the centre or span changed), and a change of bin count starts a new epoch. A FIXED RING, in memory only
+//   (never written to disk), 14400 rows (one hour) at the most, and capped in bytes per radio. OFF by default. ival[0]: 0 off (the rings are freed), 1 on (num[0] = the cap per radio in MiB, 1 .. 64, 0 = 16; the cap is
+//   applied to rings made afterwards, so change it with the store off), 2 clear every ring, 3 read the statistics of the radio addressed (target) into fact.levels.<n>.rows / .seconds / .bytes / .bins / .segments and
+//   applied[0] = bytes of its ring (UNKNOWN radio: NO_DEVICE; no ring yet: NO_CHANGE). Memory: a ring of 1024 bins x 14400 rows is 14400 x (1024 + 24) = 15,091,200 bytes, so eight radios an hour each cost about 121 MB
+//   (the 16 MiB default cap per radio holds an hour of 1024-bin rows; a smaller cap holds less). Same-process read: WireA::levelCopy. fact.levels.on / .capMb say the setting.
+#define FOXAPP_OP_LEVEL_STORE            0x8831u /* ival[0]: 0 off / 1 on (num[0] cap MiB per radio) / 2 clear / 3 read stats of the radio addressed. Addresses one radio for 3 (target) */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -242,7 +309,19 @@
     {FOXAPP_OP_RECORDINGS_OPEN, "APP_RECORDINGS_OPEN", true}, \
     {FOXAPP_OP_BAND_MEMORY, "APP_BAND_MEMORY", true}, \
     {FOXAPP_OP_BAND_MEMORY_NOTE, "APP_BAND_MEMORY_NOTE", true}, \
-    {FOXAPP_OP_FFT_SCAN, "APP_FFT_SCAN", true},
+    {FOXAPP_OP_FFT_SCAN, "APP_FFT_SCAN", true}, \
+    {FOXAPP_OP_FILE_TRANSPORT, "APP_FILE_TRANSPORT", true}, \
+    {FOXAPP_OP_RIT, "APP_RIT", true}, \
+    {FOXAPP_OP_CW_SURROUND, "APP_CW_SURROUND", true}, \
+    {FOXAPP_OP_RECORD_IQ_CONTAINER, "APP_RECORD_IQ_CONTAINER", true}, \
+    {FOXAPP_OP_PATCH_UNDO, "APP_PATCH_UNDO", true}, \
+    {FOXAPP_OP_PATCH_REDO, "APP_PATCH_REDO", true}, \
+    {FOXAPP_OP_PATCH_SELECT, "APP_PATCH_SELECT", true}, \
+    {FOXAPP_OP_PATCH_COPY, "APP_PATCH_COPY", true}, \
+    {FOXAPP_OP_PATCH_PASTE, "APP_PATCH_PASTE", true}, \
+    {FOXAPP_OP_PATCH_BYPASS, "APP_PATCH_BYPASS", true}, \
+    {FOXAPP_OP_AIRBAND_CHANNEL, "APP_AIRBAND_CHANNEL", true}, \
+    {FOXAPP_OP_LEVEL_STORE, "APP_LEVEL_STORE", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP
