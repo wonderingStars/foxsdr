@@ -161,6 +161,7 @@
 #include "dsp/afc.hpp"
 #include "dsp/zoom_fft.hpp"
 #include "dsp/cw_filter.hpp"
+#include "dsp/cw_surround.hpp"   // wire-a second pass
 #include "dsp/stereo_place.hpp"
 #include "dsp/spsc_ring.hpp"
 #include "dsp/squelch.hpp"
@@ -432,6 +433,13 @@ public:
     // VFO tuning offset from the input center, Hz (phase-continuous retune).
     void setVfoOffsetHz(double offsetHz);
     double vfoOffsetHz() const;
+    // wire-a second pass: CW SURROUND, the pitch of a CW signal decides where it sits between the ears (dsp/cw_surround.hpp). Off by default; CW mode only, and only for a mono receiver with no stereo placement
+    // of its own (an explicit placement wins). False (nothing changes) for a configuration the block refuses.
+    bool setCwSurround(bool on, const cascade::dsp::CwSurroundConfig& cfg);
+    bool cwSurroundOn() const { return mirrorSurroundOn_.load(std::memory_order_relaxed); }
+    cascade::dsp::CwSurroundConfig cwSurroundConfig() const;
+    double cwSurroundPitchHz() const { return mirrorSurroundPitch_.load(std::memory_order_relaxed); }
+    double cwSurroundPan() const { return mirrorSurroundPan_.load(std::memory_order_relaxed); }
     // wire-a second pass: the receive clarifier, Hz added to what the oscillator runs at (not to vfoOffsetHz(): the dial stays). 0 = off.
     void setRitHz(double hz);
     double ritHz() const;
@@ -1231,6 +1239,13 @@ private:
     cascade::dsp::AudioEq eqR_{kAudioRateHz};
     cascade::dsp::StereoPlacer placer_{kAudioRateHz};     // (F20/D5: setters are atomics, process() runs on the DSP thread)
     std::vector<float> placeIn_;
+    // wire-a second pass: CW surround (DSP-thread state; the mirrors are what the control thread reads)
+    cascade::dsp::CwSurround cwSurround_{kAudioRateHz};
+    std::vector<float> surroundIn_;
+    std::atomic<bool> mirrorSurroundOn_{false};
+    std::atomic<double> mirrorSurroundCentre_{700.0}, mirrorSurroundSpread_{400.0}, mirrorSurroundRatio_{100.0}, mirrorSurroundHold_{400.0};
+    std::atomic<bool> mirrorSurroundInvert_{false};
+    std::atomic<double> mirrorSurroundPitch_{0.0}, mirrorSurroundPan_{0.0};
     std::atomic<int> mirrorPlaceMode_{0};
     std::atomic<double> mirrorPlaceValue_{0.0};
     cascade::dsp::CwPeakFilter cwPeakL_{kAudioRateHz};   // (F8: setters are atomics, process() runs on the DSP thread)

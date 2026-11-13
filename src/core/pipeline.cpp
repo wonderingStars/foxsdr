@@ -1492,6 +1492,35 @@ bool Pipeline::setStereoPlace(int mode, double value) {
     mirrorPlaceMode_.store(mode, std::memory_order_relaxed);
     return true;
 }
+// wire-a second pass begin: CW surround
+bool Pipeline::setCwSurround(bool on, const cascade::dsp::CwSurroundConfig& cfg) {
+    cascade::dsp::CwSurround probe(48000.0);
+    if (!probe.setConfig(cfg)) { return false; }
+    post(
+        [this, on, cfg] {
+            cwSurround_.setConfig(cfg);
+            cwSurround_.setEnabled(on);
+        },
+        [this, on, cfg] {
+            mirrorSurroundOn_.store(on, std::memory_order_relaxed);
+            mirrorSurroundCentre_.store(cfg.centrePitchHz, std::memory_order_relaxed);
+            mirrorSurroundSpread_.store(cfg.spreadHz, std::memory_order_relaxed);
+            mirrorSurroundInvert_.store(cfg.invert, std::memory_order_relaxed);
+            mirrorSurroundRatio_.store(cfg.toneRatio, std::memory_order_relaxed);
+            mirrorSurroundHold_.store(cfg.holdMs, std::memory_order_relaxed);
+        });
+    return true;
+}
+cascade::dsp::CwSurroundConfig Pipeline::cwSurroundConfig() const {
+    cascade::dsp::CwSurroundConfig c;
+    c.centrePitchHz = mirrorSurroundCentre_.load(std::memory_order_relaxed);
+    c.spreadHz = mirrorSurroundSpread_.load(std::memory_order_relaxed);
+    c.invert = mirrorSurroundInvert_.load(std::memory_order_relaxed);
+    c.toneRatio = mirrorSurroundRatio_.load(std::memory_order_relaxed);
+    c.holdMs = mirrorSurroundHold_.load(std::memory_order_relaxed);
+    return c;
+}
+// wire-a second pass end
 int Pipeline::stereoPlaceMode() const { return mirrorPlaceMode_.load(std::memory_order_relaxed); }
 double Pipeline::stereoPlaceValue() const { return mirrorPlaceValue_.load(std::memory_order_relaxed); }
 
@@ -2818,6 +2847,13 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     if (mode == cascade::dsp::DemodMode::CW) {
         cwPeakL_.process(outL_.data(), k);
         cwPeakR_.process(outR_.data(), k);
+        // wire-a second pass: CW SURROUND, one call - the pitch of the signal places it between the ears (off by default; a stereo placement or a stereo decode of its own wins)
+        if (mirrorSurroundOn_.load(std::memory_order_relaxed) && mirrorPlaceMode_.load(std::memory_order_relaxed) == 0 && !stereoActive_.load(std::memory_order_relaxed)) {
+            surroundIn_.assign(outL_.data(), outL_.data() + k);
+            cwSurround_.process(surroundIn_.data(), outL_.data(), outR_.data(), k);
+            mirrorSurroundPitch_.store(cwSurround_.pitchHz(), std::memory_order_relaxed);
+            mirrorSurroundPan_.store(cwSurround_.pan(), std::memory_order_relaxed);
+        }
     }
 
     // --- IN-CHAIN AUDIO PROCESSOR PLUGINS (host API level 1) ----------------

@@ -188,6 +188,10 @@ public:
     std::size_t waterfallCopy(std::size_t slot, std::size_t rows, std::vector<std::uint8_t>& out, std::size_t& bins, std::vector<cascade::core::wfhistory::LineMeta>* meta = nullptr);
 
 private:
+    // ---- CW surround (wire_a_rit.cpp, beside the clarifier: both live in the audio / oscillator stage) ----
+    Result surroundOp(const FoxCommand& c, const std::string& text, Result res);
+    void surroundFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+
     // ---- the receive clarifier (wire_a_rit.cpp) ----
     Result ritOp(const FoxCommand& c, Result res);
     void ritPass();

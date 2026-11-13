@@ -218,6 +218,13 @@
 //   station. A retune over the clear limit is noticed once a pass (the same way the history is), so the clarifier is cleared within one control pass of the retune.
 #define FOXAPP_OP_RIT                    0x8827u /* ival[0]: 0 set / 1 step / 2 clear / 3 limits; num[0] Hz; ival[1] on. Addresses one radio (target) */
 
+//   CW_SURROUND (SETTINGS; dsp/cw_surround.hpp, second pass): "digital surround" for CW. The pitch of a CW signal decides where it sits between the ears: a lower pitch to the left, a higher one to the right, so two stations a
+//   few hundred hertz apart are also a few degrees apart. Per radio (target); OFF by default and only audible in CW mode on a mono receiver with no stereo placement of its own (STEREO_PLACE wins; a stereo decode keeps its two
+//   channels). ival[0] = 0 configures from the JSON object {"enabled":bool, "centreHz":200..1500 (700), "spreadHz":50..2000 (400), "invert":bool, "toneRatio":2..1000 (100), "holdMs":0..5000 (400)}: a key left out keeps its
+//   value, an unknown key or a key of the wrong type is BAD_ARGUMENT, a number outside its range is OUT_OF_RANGE, the same settings are NO_CHANGE; nothing is saved (a restart is off again). ival[0] = 1 reads the live
+//   pitch estimate (Hz, 0 before a tone was heard) into applied[0] and the pan being applied (-1 left .. +1 right) into applied[1]. Facts: fact.cwsurround.<n>.on / .centre / .spread / .invert / .ratio / .hold.
+#define FOXAPP_OP_CW_SURROUND            0x8828u /* ival[0]: 0 configure / 1 read; text: JSON. Addresses one radio (target) */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -260,7 +267,8 @@
     {FOXAPP_OP_BAND_MEMORY_NOTE, "APP_BAND_MEMORY_NOTE", true}, \
     {FOXAPP_OP_FFT_SCAN, "APP_FFT_SCAN", true}, \
     {FOXAPP_OP_FILE_TRANSPORT, "APP_FILE_TRANSPORT", true}, \
-    {FOXAPP_OP_RIT, "APP_RIT", true},
+    {FOXAPP_OP_RIT, "APP_RIT", true}, \
+    {FOXAPP_OP_CW_SURROUND, "APP_CW_SURROUND", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP
