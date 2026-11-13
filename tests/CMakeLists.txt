@@ -1868,3 +1868,11 @@ if(WIN32)
     endif()
 endif()
 # radio-bridges end -----------------------------------------------------------------------------------------------------------------------------
+# wire-b second pass begin ----------------------------------------------------------------------------------------------------------------------
+# The WiNRADiO engine test loads the stand-in G39DDCAPI.dll / G33DDCAPI.dll of the osslibs lane (defined above), which must be built first.
+if(WIN32)
+    if(TARGET test_engine_api_wireb_winradio)
+        add_dependencies(test_engine_api_wireb_winradio eol_g39ddc_standin eol_g33ddc_standin)
+    endif()
+endif()
+# wire-b second pass end ------------------------------------------------------------------------------------------------------------------------
