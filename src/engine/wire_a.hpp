@@ -161,6 +161,7 @@ public:
         std::string message;   // words, never a path
         std::string json;      // the job's own numbers
         std::function<void()> onDone;   // run on the control thread when the result is collected (a successful job hands its product over here)
+        std::function<void()> onFinish; // wire-a second pass: run on the control thread when ANY result is collected, success or not (before onDone), for the facts of a feature that reads or writes a user's file
     };
     struct JobCtl {
         std::atomic<bool> cancel{false};
@@ -413,6 +414,7 @@ private:
     // A full path the user typed (absolute, no control characters, under 1024 bytes). False with `why` when it is not.
     static bool fullPath(const std::string& p, std::string& why);
     // Reads a user's file up to maxBytes (a bigger one, a directory, a device, a missing one: false with `why`; never throws).
+    void packImportApply(const std::string& body);   // (second pass: the control thread's half of PACK_IMPORT)
     static bool readUserFile(const std::string& path, std::size_t maxBytes, std::string& text, std::string& why);
     // Writes a new file (temp + rename, directory made); a file that exists is refused.
     static bool writeNewFile(const std::string& path, const std::string& text, std::string& why);

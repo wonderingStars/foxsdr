@@ -41,48 +41,63 @@ WireA::Result WireA::markerIoOp(const FoxCommand& c, const std::string& text, Re
         const std::vector<cascade::core::FreqMarker>& list = e_.freqMarkers_.list();
         if (list.empty()) { return refused(res, FOXAPI_NO_CHANGE, "there are no markers to export"); }
         const std::string body = c.ival[0] == 0 ? t::markersToCsv(list) : t::markersToJson(list).dump(2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
-        if (!writeNewFile(text, body, why)) {
-            markerIoError_ = why;
-            bump();
-            return refused(res, FOXAPI_FAILED, why);
-        }
-        markerIoError_.clear();
-        markerIoLast_ = "exported " + std::to_string(list.size());
-        res.applied[0] = static_cast<double>(list.size());
-        bump();
-        return res;
+        // THE FILE IS WRITTEN ON THE JOB WORKER (second pass: the pass does no disk work); the text is made here, from the list as it is now. The answer is OK for "started"; how it ended is fact.job.* and fact.markerio.*.
+        const std::size_t count = list.size();
+        const std::string path = text;
+        Result started = startJob(res, "marker-export", [this, path, body, count](JobCtl&) {
+            JobResult j;
+            std::string err;
+            j.ok = writeNewFile(path, body, err);
+            j.message = j.ok ? "exported " + std::to_string(count) : err;
+            j.onFinish = [this, ok = j.ok, msg = j.message]() {
+                markerIoError_ = ok ? std::string() : msg;
+                if (ok) { markerIoLast_ = msg; }
+            };
+            return j;
+        });
+        if (started.status == FOXAPI_OK) { started.applied[0] = static_cast<double>(count); }
+        return started;
     }
     // MARKER_IMPORT
     if (!(c.num[0] >= 0.0) || c.num[0] > 1.0e6) { return refused(res, FOXAPI_OUT_OF_RANGE, "the merge reach is 0 to 1000000 Hz"); }
-    std::string body;
-    if (!readUserFile(text, kMaxImportBytes, body, why)) {
-        markerIoError_ = why;
-        bump();
-        return refused(res, FOXAPI_FAILED, why);
-    }
-    std::vector<cascade::core::FreqMarker> in;
-    std::string err;
-    bool parsed = false;
-    if (hasJsonExtension(text)) {
-        const nlohmann::json j = nlohmann::json::parse(body, nullptr, false, false);
-        parsed = !j.is_discarded() && t::parseMarkersJson(j, in, err);
-        if (j.is_discarded()) { err = "the file is not JSON"; }
-    } else {
-        parsed = t::parseMarkersCsv(body, in, err);
-    }
-    if (!parsed) {
-        markerIoError_ = err;
-        bump();
-        return refused(res, FOXAPI_BAD_ARGUMENT, "the file was refused: " + err);
-    }
-    const t::MarkerImportResult r = t::importInto(e_.freqMarkers_, in, c.num[0]);
-    markerIoError_.clear();
-    markerIoLast_ = "added " + std::to_string(r.added) + ", merged " + std::to_string(r.merged);
-    res.applied[0] = r.added;
-    res.applied[1] = r.merged;
-    bump();
-    if (r.listFull) { return refused(res, FOXAPI_LIMIT, "the marker list is full; what fitted was kept"); }
-    return res;
+    // THE FILE IS READ ON THE JOB WORKER (second pass); what it held is parsed and merged on the control thread when the job is collected (onDone). The answer is OK for "started"; how it ended is fact.job.state / .message
+    // ("done", or "failed" with the words: the file could not be read, was refused, the list is full) and fact.markerio.*.
+    const std::string path = text;
+    const double reach = c.num[0];
+    return startJob(res, "marker-import", [this, path, reach](JobCtl&) {
+        JobResult j;
+        auto body = std::make_shared<std::string>();
+        std::string err;
+        j.ok = readUserFile(path, kMaxImportBytes, *body, err);
+        j.message = j.ok ? std::string() : err;
+        j.onFinish = [this, ok = j.ok, msg = j.message]() { if (!ok) { markerIoError_ = msg; } };
+        j.onDone = [this, body, path, reach]() {
+            namespace t = cascade::core::tuning;
+            std::vector<cascade::core::FreqMarker> in;
+            std::string why;
+            bool parsed = false;
+            if (hasJsonExtension(path)) {
+                const nlohmann::json js = nlohmann::json::parse(*body, nullptr, false, false);
+                parsed = !js.is_discarded() && t::parseMarkersJson(js, in, why);
+                if (js.is_discarded()) { why = "the file is not JSON"; }
+            } else {
+                parsed = t::parseMarkersCsv(*body, in, why);
+            }
+            if (!parsed) {
+                markerIoError_ = why;
+                jobState_ = "failed";
+                jobMessage_ = "the file was refused: " + why;
+                return;
+            }
+            const t::MarkerImportResult r = t::importInto(e_.freqMarkers_, in, reach);
+            markerIoError_.clear();
+            markerIoLast_ = "added " + std::to_string(r.added) + ", merged " + std::to_string(r.merged);
+            jobMessage_ = markerIoLast_;
+            jobJson_ = nlohmann::json{{"added", r.added}, {"merged", r.merged}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+            if (r.listFull) { jobState_ = "failed"; jobMessage_ += "; the marker list is full, what fitted was kept"; }
+        };
+        return j;
+    });
 }
 
 void WireA::filesFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {

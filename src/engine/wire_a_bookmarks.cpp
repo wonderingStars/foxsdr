@@ -359,27 +359,46 @@ WireA::Result WireA::packOp(const FoxCommand& c, const std::string& text, Result
         int skipped = 0;
         const std::string body = t::exportPack(name, description, list, &notes_, favs, &skipped);
         if (body.empty() || body.size() > t::kPackMaxBytes) { return refused(res, FOXAPI_FAILED, "the pack could not be made (the name or description is not valid, or it is too big)"); }
-        if (!writeNewFile(path, body, why)) {
-            packLast_ = "not written";
-            bump();
-            return refused(res, FOXAPI_FAILED, why);
+        // written on the job worker (second pass); the answer is OK for "started", the end is fact.job.* and fact.pack.last
+        const int exportedCount = static_cast<int>(list.size()) - skipped;
+        Result started = startJob(res, "pack-export", [this, path, body, exportedCount](JobCtl&) {
+            JobResult j;
+            std::string err;
+            j.ok = writeNewFile(path, body, err);
+            j.message = j.ok ? "exported " + std::to_string(exportedCount) : err;
+            j.onFinish = [this, ok = j.ok, msg = j.message]() { packLast_ = ok ? msg : "not written"; };
+            return j;
+        });
+        if (started.status == FOXAPI_OK) {
+            started.applied[0] = static_cast<double>(exportedCount);
+            started.applied[1] = skipped;
         }
-        packLast_ = "exported " + std::to_string(static_cast<int>(list.size()) - skipped);
-        res.applied[0] = static_cast<double>(list.size()) - skipped;
-        res.applied[1] = skipped;
-        bump();
-        return res;
+        return started;
     }
     // PACK_IMPORT
     if (!fullPath(text, why)) { return refused(res, FOXAPI_BAD_ARGUMENT, why); }
-    std::string body;
-    if (!readUserFile(text, t::kPackMaxBytes, body, why)) { packLast_ = "not read"; bump(); return refused(res, FOXAPI_FAILED, why); }
+    // read on the job worker (second pass), applied on the control thread when the job is collected
+    const std::string path = text;
+    return startJob(res, "pack-import", [this, path](JobCtl&) {
+        JobResult j;
+        auto body = std::make_shared<std::string>();
+        std::string err;
+        j.ok = readUserFile(path, t::kPackMaxBytes, *body, err);
+        j.message = j.ok ? std::string() : err;
+        j.onFinish = [this, ok = j.ok]() { if (!ok) { packLast_ = "not read"; } };
+        j.onDone = [this, body]() { packImportApply(*body); };
+        return j;
+    });
+}
+
+void WireA::packImportApply(const std::string& body) {
     t::Pack pack;
     std::string err;
     if (!t::importPack(body, pack, err)) {
         packLast_ = "refused";
-        bump();
-        return refused(res, FOXAPI_BAD_ARGUMENT, "the pack was refused: " + err);
+        jobState_ = "failed";
+        jobMessage_ = "the pack was refused: " + err;
+        return;
     }
     const t::PackImportPlan plan = t::planImport(pack, e_.freqMgr_.list());
     int added = 0;
@@ -399,11 +418,9 @@ WireA::Result WireA::packOp(const FoxCommand& c, const std::string& text, Result
         if (favourites_.set(f)) { favouritesChanged(); }
     }
     packLast_ = "added " + std::to_string(added) + ", " + std::to_string(plan.duplicates) + " already there";
-    res.applied[0] = added;
-    res.applied[1] = plan.duplicates;
-    bump();
-    if (full) { return refused(res, FOXAPI_LIMIT, "the bookmark list is full; what fitted was added"); }
-    return res;
+    jobMessage_ = packLast_;
+    jobJson_ = nlohmann::json{{"added", added}, {"duplicates", plan.duplicates}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    if (full) { jobState_ = "failed"; jobMessage_ += "; the bookmark list is full, what fitted was added"; }
 }
 
 // ---- bookmark-carried fields ------------------------------------------------------------------------------------------------------------------------

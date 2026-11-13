@@ -23,6 +23,9 @@
 //   BAD_ARGUMENT: a path that is not a full path, or a file that exists; FAILED: the write failed (the message says why). MARKER_IMPORT (SETTINGS): the file the text names (CSV or JSON,
 //   chosen by the file's extension; at most 1 MiB), read strictly: any bad row refuses the whole file and changes nothing. A marker within num[0] Hz of one in the list is merged (a note is kept
 //   when the list's marker has none), a new one is added with the next number. applied[0] = added, applied[1] = merged. LIMIT: the list is full (what fit is kept). fact.markerio.* says what happened.
+// SECOND PASS: MARKER_EXPORT, MARKER_IMPORT, PACK_EXPORT and PACK_IMPORT do their file work on the lane's job worker (the pass does no disk work). The answer is OK for "started" (BUSY while another job is out; the argument
+// refusals that need no disk - a relative path, a bad direction, an empty list - are still answered at once); how it ended is fact.job.state ("done" / "failed"), fact.job.message, fact.job.result (JSON counts) and the
+// old facts fact.markerio.* / fact.pack.last. A file that cannot be read, is too big, already exists, or is refused by its parser arrives as a FAILED job with the words.
 #define FOXAPP_OP_MARKER_EXPORT          0x8802u /* text: full path; ival[0]: 0 CSV / 1 JSON */
 #define FOXAPP_OP_MARKER_IMPORT          0x8803u /* text: full path; num[0]: merge reach, Hz (0 = same frequency only) */
 
