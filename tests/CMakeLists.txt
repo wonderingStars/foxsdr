@@ -1736,6 +1736,20 @@ if(TARGET test_wire_c_portable)
 endif()
 # wire-c end
 
+# THE DESKTOP GUARD (engine fixes 4, item 3; tests/gui_desktop_guard.hpp says why). A gui-labelled test opens a window on the desktop its process runs on; nothing in the
+# test runners creates or switches a desktop. So every gui test REQUIRES the CTest fixture `gui_desktop`, whose setup test `gui_desktop_guard` fails (one line, no window, no
+# dialog) when the process runs on the visible desktop, and ctest then does not start the gui tests (they are counted as not run = failed). FOXSDR_ALLOW_VISIBLE_GUI_TESTS=1
+# is the override. src/slint/CMakeLists.txt gives the same property to its gui tests; the loop below asserts it for the ones registered here.
+add_executable(gui_desktop_guard gui_desktop_guard.cpp)
+target_compile_features(gui_desktop_guard PRIVATE cxx_std_20)
+add_test(NAME gui_desktop_guard COMMAND gui_desktop_guard)
+set_tests_properties(gui_desktop_guard PROPERTIES FIXTURES_SETUP gui_desktop TIMEOUT 30)
+list(APPEND CASCADE_GUI_TESTS gui_desktop_guard)
+if(TARGET test_gui_desktop_guard)
+    target_compile_definitions(test_gui_desktop_guard PRIVATE GUI_GUARD_EXE="$<TARGET_FILE:gui_desktop_guard>")
+    add_dependencies(test_gui_desktop_guard gui_desktop_guard)
+endif()
+
 # Label APPENDED, not set: the sanitizer and TSan passes above put their own
 # labels on some tests (sanitize-excluded, tsan, fuzz on the corpus replays)
 # and those must survive.
@@ -1749,6 +1763,9 @@ endforeach()
 foreach(t ${_cascade_registered_tests})
     if(t IN_LIST CASCADE_GUI_TESTS)
         set_property(TEST ${t} APPEND PROPERTY LABELS gui)
+        if(NOT t STREQUAL "gui_desktop_guard")
+            set_property(TEST ${t} APPEND PROPERTY FIXTURES_REQUIRED gui_desktop)
+        endif()
     else()
         set_property(TEST ${t} APPEND PROPERTY LABELS headless)
     endif()

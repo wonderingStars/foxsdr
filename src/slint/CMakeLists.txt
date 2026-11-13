@@ -207,13 +207,14 @@ else()
     target_compile_definitions(test_slint_drive_run PRIVATE FOXSDR_DRIVE_PYTHON="python3")
 endif()
 add_dependencies(test_slint_drive_run foxsdr-slint)
+# Every gui test here requires the fixture gui_desktop (tests/CMakeLists.txt, "THE DESKTOP GUARD"): none starts on the visible desktop.
 add_test(NAME test_slint_drive_run COMMAND test_slint_drive_run)
-set_tests_properties(test_slint_drive_run PROPERTIES LABELS "gui;drive" TIMEOUT 300)
+set_tests_properties(test_slint_drive_run PROPERTIES LABELS "gui;drive" FIXTURES_REQUIRED gui_desktop TIMEOUT 300)
 file(GLOB _foxsdr_slint_drive_scripts CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/drive/*.txt")
 foreach(_script ${_foxsdr_slint_drive_scripts})
     get_filename_component(_drive_name "${_script}" NAME_WE)
     add_test(NAME slint_drive_${_drive_name} COMMAND test_slint_drive_run "${_script}")
-    set_tests_properties(slint_drive_${_drive_name} PROPERTIES LABELS "gui;drive" TIMEOUT 600)
+    set_tests_properties(slint_drive_${_drive_name} PROPERTIES LABELS "gui;drive" FIXTURES_REQUIRED gui_desktop TIMEOUT 600)
 endforeach()
 
 # THE COVERAGE LEDGER (tools/slint_drive_ledger.py, docs 6.47): every row of docs/slint-port-tick.md classified from tests/drive/coverage.tsv
@@ -237,7 +238,7 @@ if(TARGET cascade)
     add_dependencies(test_slint_config_roundtrip cascade)
 endif()
 add_test(NAME test_slint_config_roundtrip COMMAND test_slint_config_roundtrip)
-set_tests_properties(test_slint_config_roundtrip PROPERTIES LABELS "gui" TIMEOUT 600)
+set_tests_properties(test_slint_config_roundtrip PROPERTIES LABELS "gui" FIXTURES_REQUIRED gui_desktop TIMEOUT 600)
 
 # THE RETUNE DRIVE (2026-11-09, a tester's band switch; src/slint/tests/drive_retune_run.cpp): spawns foxsdr-slint bounded on a
 # scratch profile with FOXSDR_SLINT_RETUNE_PROBE and reads its summary line - a zoomed picture follows a typed retune into another
@@ -254,7 +255,7 @@ target_include_directories(test_slint_retune_run PRIVATE
 target_compile_definitions(test_slint_retune_run PRIVATE FOXSDR_SLINT_EXE="$<TARGET_FILE:foxsdr-slint>")
 add_dependencies(test_slint_retune_run foxsdr-slint)
 add_test(NAME test_slint_retune_run COMMAND test_slint_retune_run)
-set_tests_properties(test_slint_retune_run PROPERTIES LABELS "gui" TIMEOUT 300)
+set_tests_properties(test_slint_retune_run PROPERTIES LABELS "gui" FIXTURES_REQUIRED gui_desktop TIMEOUT 300)
 
 # The translation generator's own tests (tools/test_slint_po.py): temp-dir fixtures, nothing of the build tree. -I keeps the
 # interpreter out of the current directory and the user's site-packages (the script is standard-library only).
