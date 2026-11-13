@@ -1161,7 +1161,12 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
         }
         fact("needed.libs", rows.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
     }
-    if (wireB_ == nullptr) { return; }
+    if (wireB_ == nullptr) {
+        // nothing of this lane has run: the two stores are off, and the facts say so
+        fact("coverage.state", "{\"enabled\":false,\"cells\":0,\"added\":0,\"bad_input\":0,\"too_far\":0,\"stale\":0,\"future\":0,\"max_range_km\":0.0}");
+        fact("tracks.state", "{\"enabled\":false,\"retention_s\":21600.0,\"added\":0,\"replaced\":0,\"refused\":0,\"too_old\":0,\"evicted\":0,\"tracks\":0}");
+        return;
+    }
     std::lock_guard<std::mutex> lk(wireB_->mutex);
     {
         const wireb::SweepStatus s = wireB_->sweep.status();
@@ -1172,7 +1177,10 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
             fact("sweep.state", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
         }
     }
-    if (wireB_->coverage != nullptr) {
+    if (wireB_->coverage == nullptr) {
+        // second pass (screen lane L's finding): a fact that says "off" instead of no fact at all
+        fact("coverage.state", "{\"enabled\":false,\"cells\":0,\"added\":0,\"bad_input\":0,\"too_far\":0,\"stale\":0,\"future\":0,\"max_range_km\":0.0}");
+    } else {
         const cascade::core::adsbcov::Stats s = wireB_->coverage->stats();
         const double nowS = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
         wireb::Json j = wireb::Json::object();
@@ -1180,7 +1188,7 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
         j["future"] = s.future; j["max_range_km"] = wireB_->coverage->maxRangeKm(nowS);
         fact("coverage.state", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
     }
-    if (wireB_->trackStore != nullptr || wireB_->tracksEnabled) {
+    {
         wireb::Json j = wireb::Json::object();
         const cascade::core::tracks::Stats s = wireB_->trackStore != nullptr ? wireB_->trackStore->stats() : cascade::core::tracks::Stats{};
         j["enabled"] = wireB_->tracksEnabled; j["retention_s"] = wireB_->tracksRetentionS; j["added"] = s.added; j["replaced"] = s.replaced; j["refused"] = s.refused; j["too_old"] = s.tooOld;

@@ -106,6 +106,8 @@ private:
     bool haveLast_ = false;
     cascade::core::SweepHeatmap heat_;
     bool heatReady_ = false;
+    // the heat map's own settings (columns, rows, modes), kept across opens: SWEEP_CONFIG works with no device open (second pass)
+    cascade::core::HeatmapConfig heatPrefs_;
     cascade::core::OccupancyModel occ_;
     bool occReady_ = false;
 };

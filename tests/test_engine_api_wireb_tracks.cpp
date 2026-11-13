@@ -88,12 +88,14 @@ int main() {
     Rig r;
 
     std::printf("T1: off by default\n");
-    CHECK(factJson(r, "tracks.state").is_null());
+    CHECK(factJson(r, "tracks.state").is_object());   // second pass (screen lane L): the fact is there and says it is off
+    CHECK_EQ(factJson(r, "tracks.state")["enabled"].get<bool>(), false);
+    CHECK_EQ(factJson(r, "tracks.state")["tracks"].get<std::uint64_t>(), static_cast<std::uint64_t>(0));
     CHECK_EQ(sendText(r, FOXAPP_OP_TRACKS_READ, "{}").status(), FOXAPI_FAILED);
     CHECK_EQ(sendText(r, FOXAPP_OP_TRACKS_CONFIG, "{\"enabled\":false}").status(), FOXAPI_NO_CHANGE);
     feed(r, {track("A1B2C3", CASCADE_TRACK_AIRCRAFT, 51.5, -0.12, 10000.0)});
     r.pump(10);
-    CHECK(factJson(r, "tracks.state").is_null());   // nothing was stored while off
+    CHECK_EQ(factJson(r, "tracks.state")["added"].get<std::uint64_t>(), static_cast<std::uint64_t>(0));   // nothing was stored while off
     CHECK_EQ(sendText(r, FOXAPP_OP_TRACKS_CONFIG, "{\"enabled\":true}").status(), FOXAPI_OK);
     CHECK_EQ(sendText(r, FOXAPP_OP_TRACKS_CONFIG, "{\"enabled\":true}").status(), FOXAPI_NO_CHANGE);
     CHECK(factJson(r, "tracks.state").is_object());

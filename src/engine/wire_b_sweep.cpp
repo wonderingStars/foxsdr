@@ -50,7 +50,7 @@ bool SweepHost::start(const SerialLinkFactory& factory, const std::string& kind,
         refused_ = 0;
         lastError_.clear();
         haveLast_ = false;
-        cascade::core::HeatmapConfig hc;
+        cascade::core::HeatmapConfig hc = heatPrefs_;
         hc.startHz = startHz;
         hc.stopHz = stopHz;
         std::string hwhy;
@@ -108,7 +108,7 @@ bool SweepHost::startRfe(const RfeLinkFactory& factory, const std::string& port,
         refused_ = 0;
         lastError_.clear();
         haveLast_ = false;
-        cascade::core::HeatmapConfig hc;
+        cascade::core::HeatmapConfig hc = heatPrefs_;
         hc.startHz = startHz;
         hc.stopHz = stopHz;
         std::string hwhy;
@@ -199,7 +199,7 @@ bool SweepHost::startHackRf(const HackRfFactory& factory, const std::string& arg
         refused_ = 0;
         lastError_.clear();
         haveLast_ = false;
-        cascade::core::HeatmapConfig hc;
+        cascade::core::HeatmapConfig hc = heatPrefs_;
         hc.startHz = a;
         hc.stopHz = b;
         std::string hwhy;
@@ -306,8 +306,16 @@ bool SweepHost::configureHeatmap(const cascade::core::HeatmapConfig& cfg, std::s
     std::lock_guard<std::mutex> lk(m_);
     cascade::core::HeatmapConfig c = cfg;
     if (c.startHz == 0.0 && c.stopHz == 0.0) { c.startHz = req_.startHz; c.stopHz = req_.stopHz; }
+    const bool haveRange = c.stopHz > c.startHz;
+    // with no device ever opened there is no range yet: the settings are checked against a stand-in range and kept for the next open
+    cascade::core::HeatmapConfig probe = c;
+    if (!haveRange) { probe.startHz = 0.0; probe.stopHz = 1.0e6; }
     cascade::core::SweepHeatmap fresh;
-    if (!fresh.configure(c, &why)) { return false; }
+    if (!fresh.configure(probe, &why)) { return false; }
+    heatPrefs_ = c;
+    heatPrefs_.startHz = 0.0;
+    heatPrefs_.stopHz = 0.0;
+    if (!haveRange) { return true; }
     heat_ = std::move(fresh);
     heatReady_ = true;
     return true;
