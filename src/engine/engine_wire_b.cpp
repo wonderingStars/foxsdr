@@ -908,6 +908,54 @@ FoxCommandResult Engine::sweepOp(const FoxCommand& c, const std::string& text, F
             changed = true;
             break;
         }
+        case FOXAPP_OP_SWEEP_HISTORY: {
+            std::string action, path, format = "csv";
+            if (!q.word("action", action) || !q.word("path", path) || !q.word("format", format) || !q.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, q.error); }
+            if (action != "save" && action != "load" && action != "clear") { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"action\" is save, load or clear"); }
+            if (action == "clear") {
+                if (p.contains("path") || p.contains("format")) { return refusal(res, FOXAPI_BAD_ARGUMENT, "clear takes no path or format"); }
+                if (w.sweep.historyInfo().lines == 0) { return refusal(res, FOXAPI_NO_CHANGE, "the history is empty already"); }
+                w.sweep.historyClear();
+                w.sweepHistoryNote = "cleared";
+                changed = true;
+                break;
+            }
+            std::string why;
+            if (!wireb::historyFullPath(path, why)) { return refusal(res, FOXAPI_BAD_ARGUMENT, why); }
+            if (action == "save") {
+                cascade::core::HistoryFormat f = cascade::core::HistoryFormat::Csv;
+                if (format == "json") { f = cascade::core::HistoryFormat::Json; }
+                else if (format == "xml") { f = cascade::core::HistoryFormat::Xml; }
+                else if (format != "csv") { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"format\" is csv, json or xml"); }
+                const cascade::core::SweepHistory h = w.sweep.historySnapshot();
+                if (h.sweeps.empty()) { return refusal(res, FOXAPI_NO_CHANGE, "there is no sweep history to save"); }
+                const std::string body = cascade::core::historyToText(h, f, &why);
+                if (body.empty()) { w.sweepHistoryNote = "not saved: " + why; ++wireBVersion_; return refusal(res, FOXAPI_FAILED, why); }
+                if (body.size() > wireb::kSweepFileBytes) { why = "the history is too big for one file (4 MiB): clear it or save less"; w.sweepHistoryNote = "not saved: " + why; ++wireBVersion_; return refusal(res, FOXAPI_FAILED, why); }
+                if (!wireb::historyWriteNewFile(path, body, why)) { w.sweepHistoryNote = "not saved: " + why; ++wireBVersion_; return refusal(res, FOXAPI_FAILED, why); }
+                w.sweepHistoryNote = "saved " + std::to_string(h.sweeps.size()) + " sweeps";
+                res.applied[0] = static_cast<double>(h.sweeps.size());
+                changed = true;
+                break;
+            }
+            // load
+            if (p.contains("format")) { return refusal(res, FOXAPI_BAD_ARGUMENT, "load finds the format by itself"); }
+            if (w.sweep.running()) { return refusal(res, FOXAPI_BUSY, "close the sweep first: a history is loaded only while nothing is sweeping"); }
+            std::string body;
+            if (!wireb::historyReadFile(path, wireb::kSweepFileBytes, body, why)) { w.sweepHistoryNote = "not loaded: " + why; ++wireBVersion_; return refusal(res, FOXAPI_FAILED, why); }
+            const cascade::core::HistoryLoad ld = cascade::core::historyFromText(body);
+            if (!ld.ok) {
+                why = ld.line != 0 ? "line " + std::to_string(ld.line) + ": " + ld.error : ld.error;
+                w.sweepHistoryNote = "not loaded: " + why;
+                ++wireBVersion_;
+                return refusal(res, FOXAPI_BAD_ARGUMENT, "the file was refused, " + why);
+            }
+            if (!w.sweep.historyLoad(ld.history, why)) { w.sweepHistoryNote = "not loaded: " + why; ++wireBVersion_; return refusal(res, FOXAPI_FAILED, why); }
+            w.sweepHistoryNote = "loaded " + std::to_string(ld.history.sweeps.size()) + " sweeps";
+            res.applied[0] = static_cast<double>(ld.history.sweeps.size());
+            changed = true;
+            break;
+        }
         default:
             return refusal(res, FOXAPI_UNSUPPORTED, "this build has no such operation");
     }
@@ -999,6 +1047,7 @@ FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text
         case FOXAPP_OP_SWEEP_CLOSE:
         case FOXAPP_OP_SWEEP_CONFIG:
         case FOXAPP_OP_SWEEP_READ:
+        case FOXAPP_OP_SWEEP_HISTORY:
             res = sweepOp(c, text, res, changed);
             break;
         case FOXAPP_OP_MASK_LOAD: {
@@ -1208,6 +1257,7 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
     }
     if (wireB_ == nullptr) {
         // nothing of this lane has run: the two stores are off, and the facts say so
+        fact("sweep.history", "{\"lines\":0,\"points\":0,\"first_time_s\":0.0,\"last_time_s\":0.0,\"note\":\"\",\"keep_points\":300000}");
         fact("coverage.state", "{\"enabled\":false,\"cells\":0,\"added\":0,\"bad_input\":0,\"too_far\":0,\"stale\":0,\"future\":0,\"max_range_km\":0.0}");
         fact("tracks.state", "{\"enabled\":false,\"retention_s\":21600.0,\"added\":0,\"replaced\":0,\"refused\":0,\"too_old\":0,\"evicted\":0,\"tracks\":0}");
         return;
@@ -1221,6 +1271,12 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
             j["stop_hz"] = s.stopHz; j["heat_rows"] = s.heatRows; j["heat_cols"] = s.heatCols; j["occ_channels"] = s.occChannels; j["occ_sweeps"] = s.occSweeps;
             fact("sweep.state", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
         }
+    }
+    {
+        const wireb::SweepHost::HistoryInfo hi = wireB_->sweep.historyInfo();
+        wireb::Json j = wireb::Json::object();
+        j["lines"] = hi.lines; j["points"] = hi.points; j["first_time_s"] = hi.firstTimeS; j["last_time_s"] = hi.lastTimeS; j["note"] = wireB_->sweepHistoryNote; j["keep_points"] = wireb::kSweepKeepPoints;
+        fact("sweep.history", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
     }
     if (wireB_->stitch.steps() != 0) {
         const wireb::StitchRun& sr = wireB_->stitch;

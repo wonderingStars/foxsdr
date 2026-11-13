@@ -20,9 +20,11 @@
 #include <thread>
 #include <vector>
 
+#include "core/sweep_history.hpp"
 #include "core/sweep_line.hpp"
 #include "core/sweep_occupancy.hpp"
 #include "core/sweep_stitch.hpp"
+#include "engine/wire_b_history.hpp"
 #include "source/hackrf_sweep.hpp"
 #include "source/rfexplorer_protocol.hpp"
 #include "source/rfexplorer_serial_win.hpp"
@@ -59,6 +61,14 @@ struct SweepStatus {
 
 class SweepHost {
 public:
+    // second pass (item 37): the lines received, in memory (wire_b_history.hpp), and their save / load
+    struct HistoryInfo { std::size_t lines = 0, points = 0; double firstTimeS = 0.0, lastTimeS = 0.0; };
+    HistoryInfo historyInfo() const;
+    cascade::core::SweepHistory historySnapshot() const;
+    void historyClear();
+    // Replaces the history with a loaded one and rebuilds the heat map from it (the host is "history" and closed afterwards). False with `why` when a device is open or the history is over the budget.
+    bool historyLoad(const cascade::core::SweepHistory& h, std::string& why);
+
     SweepHost() = default;
     ~SweepHost() { stop(); }
     SweepHost(const SweepHost&) = delete;
@@ -112,6 +122,7 @@ private:
     cascade::core::SweepHeatmap heat_;
     bool heatReady_ = false;
     bool external_ = false;
+    SweepKeep keep_;
     // the heat map's own settings (columns, rows, modes), kept across opens: SWEEP_CONFIG works with no device open (second pass)
     cascade::core::HeatmapConfig heatPrefs_;
     cascade::core::OccupancyModel occ_;

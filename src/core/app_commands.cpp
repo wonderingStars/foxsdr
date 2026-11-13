@@ -274,6 +274,7 @@ constexpr OpEntry kOps[] = {
     {FOXAPP_OP_COVERAGE_CONFIG, "APP_COVERAGE_CONFIG", true},
     {FOXAPP_OP_COVERAGE_READ, "APP_COVERAGE_READ", true},
     {FOXAPP_OP_NEEDED_LIB_CHECK, "APP_NEEDED_LIB_CHECK", true},
+    {FOXAPP_OP_SWEEP_HISTORY, "APP_SWEEP_HISTORY", true},
     // wire-b end
     // wire-c begin
     {FOXAPP_OP_WIREC_SETTING, "APP_WIREC_SETTING", true},

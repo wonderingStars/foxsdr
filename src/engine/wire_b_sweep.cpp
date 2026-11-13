@@ -161,7 +161,8 @@ void SweepHost::loopRfe() {
             req_.points = line.db.size();
             if (heatReady_) { std::string w; (void)heat_.addLine(line, &w); }
             if (occReady_) { std::string w; (void)occ_.addSweep(line, &w); }
-            last_ = std::move(line);
+            keep_.add(line);
+                last_ = std::move(line);
             haveLast_ = true;
         } else if (r == rfe::Result::Refused) {
             ++refused_;
@@ -222,6 +223,7 @@ void SweepHost::loopHackRf() {
             ++sweeps_;
             if (heatReady_) { std::string w; (void)heat_.addLine(l, &w); }
             if (occReady_) { std::string w; (void)occ_.addSweep(l, &w); }
+            keep_.add(l);
             last_ = l;
             haveLast_ = true;
         }
@@ -268,6 +270,7 @@ void SweepHost::ingestLine(const cascade::core::SweepLine& line) {
     req_.points = line.db.size();
     if (heatReady_) { std::string w; (void)heat_.addLine(line, &w); }
     if (occReady_) { std::string w; (void)occ_.addSweep(line, &w); }
+    keep_.add(line);
     last_ = line;
     haveLast_ = true;
 }
@@ -310,6 +313,7 @@ void SweepHost::loop() {
                 ++sweeps_;
                 if (heatReady_) { std::string w; (void)heat_.addLine(line, &w); }
                 if (occReady_) { std::string w; (void)occ_.addSweep(line, &w); }
+                keep_.add(line);
                 last_ = std::move(line);
                 haveLast_ = true;
             } else if (r == tsa::SweepResult::Refused || r == tsa::SweepResult::Malformed) {
@@ -381,6 +385,57 @@ void SweepHost::clearOccupancy() {
     std::lock_guard<std::mutex> lk(m_);
     occ_ = cascade::core::OccupancyModel{};
     occReady_ = false;
+}
+
+SweepHost::HistoryInfo SweepHost::historyInfo() const {
+    std::lock_guard<std::mutex> lk(m_);
+    HistoryInfo i;
+    i.lines = keep_.lines();
+    i.points = keep_.points();
+    i.firstTimeS = keep_.firstTimeS();
+    i.lastTimeS = keep_.lastTimeS();
+    return i;
+}
+
+cascade::core::SweepHistory SweepHost::historySnapshot() const {
+    std::lock_guard<std::mutex> lk(m_);
+    return keep_.snapshot();
+}
+
+void SweepHost::historyClear() {
+    std::lock_guard<std::mutex> lk(m_);
+    keep_.clear();
+}
+
+bool SweepHost::historyLoad(const cascade::core::SweepHistory& h, std::string& why) {
+    std::lock_guard<std::mutex> lk(m_);
+    if (running_.load()) { why = "close the sweep first: a history is loaded only while nothing is sweeping"; return false; }
+    if (h.sweeps.empty()) { why = "the history holds no sweep"; return false; }
+    if (!keep_.replace(h, why)) { return false; }
+    double lo = h.sweeps.front().startHz, hi = h.sweeps.front().stopHz;
+    for (const cascade::core::SweepLine& l : h.sweeps) { lo = std::min(lo, l.startHz); hi = std::max(hi, l.stopHz); }
+    cascade::core::HeatmapConfig hc = heatPrefs_;
+    hc.startHz = lo;
+    hc.stopHz = hi > lo ? hi : lo + 1.0;
+    std::string hwhy;
+    cascade::core::SweepHeatmap fresh;
+    heatReady_ = fresh.configure(hc, &hwhy);
+    if (heatReady_) {
+        heat_ = std::move(fresh);
+        for (const cascade::core::SweepLine& l : h.sweeps) { std::string w; (void)heat_.addLine(l, &w); }
+    }
+    last_ = h.sweeps.back();
+    haveLast_ = true;
+    req_ = tsa::SweepRequest{};
+    req_.startHz = lo;
+    req_.stopHz = hc.stopHz;
+    req_.points = last_.db.size();
+    kind_ = "history";
+    sweeps_ = h.sweeps.size();
+    refused_ = 0;
+    lastError_.clear();
+    external_ = false;
+    return true;
 }
 
 bool SweepHost::lastLine(std::size_t maxPoints, cascade::core::SweepLine& out) const {

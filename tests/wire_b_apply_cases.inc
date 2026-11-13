@@ -91,6 +91,12 @@ void wireBOps(AppWindow& a) {
     CHECK(refused(A::apply(a, text(FOXAPP_OP_NEEDED_LIB_CHECK, "{\"id\":\"no-such-library\"}")), FOXAPI_BAD_ARGUMENT));
     CHECK(refused(A::apply(a, text(FOXAPP_OP_NEEDED_LIB_CHECK, "{\"path\":\"C:/x\"}")), FOXAPI_BAD_ARGUMENT));
     CHECK(refused(A::apply(a, text(FOXAPP_OP_NEEDED_LIB_CHECK, "{\"id\":\"sdrplay-sdrconnect\",\"path\":\"C:/x\"}")), FOXAPI_BAD_ARGUMENT));
+    // THE SWEEP HISTORY: not JSON, an unknown action, a relative path, clear/save with nothing kept
+    covering(FOXAPP_OP_SWEEP_HISTORY);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SWEEP_HISTORY, "not json")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SWEEP_HISTORY, "{\"action\":\"burn\"}")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SWEEP_HISTORY, "{\"action\":\"save\",\"path\":\"relative.csv\"}")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SWEEP_HISTORY, "{\"action\":\"clear\"}")), FOXAPI_NO_CHANGE));
     covering(FOXAPP_OP_GPU_FFT_MODE);
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 3)), FOXAPI_OUT_OF_RANGE));
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_GPU_FFT_MODE, 0)), FOXAPI_NO_CHANGE));
