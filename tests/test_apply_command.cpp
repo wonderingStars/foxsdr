@@ -2693,6 +2693,8 @@ void macroOps(AppWindow& a) {
     CHECK(refused(A::apply(a, text(FOXAPP_OP_CABRILLO_HEADER, "not json")), FOXAPI_BAD_ARGUMENT));
     CHECK(refused(A::apply(a, text(FOXAPP_OP_CABRILLO_EXPORT, "")), FOXAPI_BAD_ARGUMENT));
     CHECK(refused(A::apply(a, text(FOXAPP_OP_ADIF_EXPORT, "")), FOXAPI_BAD_ARGUMENT));
+    covering(FOXAPP_OP_PLUGIN_OPEN_CONFIRM);   // (the held request, the stand-in opener and the facts are tests/test_engine_api_wire_c_open.cpp's)
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_PLUGIN_OPEN_CONFIRM, "no-separator")), FOXAPI_BAD_ARGUMENT));
     covering(FOXAPP_OP_STORE_HELPER_CONSENT);   // (the install gate and the facts are tests/test_engine_api_wire_c_store.cpp's)
     CHECK(refused(A::apply(a, text(FOXAPP_OP_STORE_HELPER_CONSENT, "no-such-plugin", 1)), FOXAPI_NOT_FOUND));
     // wire-c end

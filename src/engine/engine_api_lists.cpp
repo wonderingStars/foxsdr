@@ -397,6 +397,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(transmitter_.haveSink());
     // Plugin marks, the band plan, the presets people saved.
     f.value(pluginMarkersSeq_);
+    f.value(pluginApi_ ? pluginApi_->openSeq() : 0u);   // wire-c: what plugins asked the user to open
     f.text(bandPlanSelection_);
     f.text(bandPlan_.name());
     f.value(bandPlan_.entries().size());
@@ -1147,6 +1148,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     fact("transmit.args", b.txArgs, true);
     // PLUGIN MARKS on the spectrum.
     for (const cascade::core::HostMarker& m : pluginMarkers_) {
+        if (m.m.credit[0] != '\0') { fact("plugin.marker.credit." + std::to_string(b.markers.size() + 1u), m.m.credit, true); }   // wire-c: the credit a data source asks for, by the mark's place in the list
         b.markers.push_back({m.m.id, m.m.label, m.name, m.m.freqHz, m.m.widthHz, m.m.colourRgba,
                              m.m.kind == CASCADE_MARKER_SPAN, (m.m.flags & CASCADE_MARKER_FLAG_DASHED) != 0u,
                              (m.m.flags & CASCADE_MARKER_FLAG_SPECTRUM_ONLY) != 0u});

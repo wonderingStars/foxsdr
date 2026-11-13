@@ -1760,6 +1760,7 @@ typedef struct CascadeScheduleHint {
  * plugin (CASCADE_API_DENIED without it), it is queued and applied by the host's next pass (CASCADE_API_OK means ACCEPTED, not started), and the host
  * refuses a start while the radio is already recording (a take the user started is never taken over, and a plugin can stop only a take it started). The file
  * goes to the recordings folder named with the label first. A plugin that is stopped, unloaded or detached has its take ended by the host. */
+#define CASCADE_OPEN_URL_CHARS 201 /* wiring lane C: an address of at most 200 bytes, plus the terminator */
 #define CASCADE_RECORDER_LABEL_CHARS 33 /* the longest label is 32 bytes of [A-Za-z0-9._-], plus the terminator */
 
 /* ---- Decode events (appended after host API level 2; engine wiring W2, brief item 13 "AD3"): check CASCADE_HOST_HAS(host, post_event). ----------
@@ -1790,6 +1791,7 @@ typedef struct CascadeEvent {
  * mark). A plugin built against the old header still works - it simply never asks for more than 64; a plugin built against this one on an OLDER host gets
  * LIMIT at that host's own quota, which it must treat as the end of its marks, not as an error. The host publishes the number in fact.plugin.markerLimit. */
 #define CASCADE_MAX_MARKERS_PER_PLUGIN 256u
+#define CASCADE_MARKER_CREDIT_CHARS 48 /* wiring lane C: the longest credit is 47 bytes */
 typedef struct CascadeMarker {
     uint32_t structSize;
     uint32_t id;                /* the plugin's own; setting an id REPLACES */
@@ -1800,6 +1802,10 @@ typedef struct CascadeMarker {
     uint32_t colourRgba;        /* 0xRRGGBBAA; 0 = the host's plugin colour */
     uint32_t reserved;          /* 0 */
     char label[CASCADE_MARKER_LABEL_CHARS]; /* may be empty; UTF-8 */
+    /* Appended (wiring lane C, 0.99.109): the credit a data source asks for ("Data provided by HamQTH.com"), shown with the mark; may be empty; UTF-8,
+     * NUL-terminated. A plugin built before this field passes the smaller structSize: the host takes it and the credit is empty. A host older than this
+     * ignores bytes it does not know: the plugin still works there, without the credit. */
+    char credit[CASCADE_MARKER_CREDIT_CHARS];
 } CascadeMarker;
 
 /* The settings store. Keys: 1..63 bytes of [A-Za-z0-9._-]. Values: UTF-8
@@ -2009,6 +2015,21 @@ typedef struct CascadeHostApi {
     int32_t (*recorder_start)(void *ctx, const char *label);
     /* Ends the take THIS plugin started (no effect on any other). Same codes; a stop with no take of this plugin's running is accepted and does nothing. */
     int32_t (*recorder_stop)(void *ctx);
+
+    /* ---- Symbol rate, open-a-page and open-the-library-folder (appended after host API level 2; wiring lane C): check CASCADE_HOST_HAS(host, symbol_rate) etc. ---- */
+
+    /* The symbol rate in baud that the USER has set for the receiver (a number field on the host's own screen), 0 when none is set. Cheap to poll; a decoder that can
+     * use it (a PSK or FSK decoder with a choice of rates) reads it at the start of a block. It is a hint from the user, never a measurement. */
+    double (*symbol_rate)(void *ctx);
+    /* Asks the host to offer the user a button that opens `url` in their web browser: for a library the plugin needs and the user must fetch. NOTHING OPENS HERE.
+     * The host shows the address and the plugin's name, and opens it only when the user presses that button. The address must be https:// (nothing else is
+     * accepted), at most CASCADE_OPEN_URL_CHARS-1 bytes of printable ASCII with no space, no user name or password, a host name, no backslash. One request per
+     * plugin is held: a new one replaces the old. CASCADE_API_OK: held; CASCADE_API_BAD_ARGUMENT (NULL, empty, not an acceptable address); CASCADE_API_OUT_OF_RANGE
+     * (too long); CASCADE_API_DENIED (the plugin is stopped); CASCADE_API_DETACHED. */
+    int32_t (*request_open_url)(void *ctx, const char *url);
+    /* Asks the host to offer a button that opens THIS PLUGIN'S OWN LIBRARY FOLDER in the file manager (the host makes the folder; the plugin cannot name any
+     * other path). Same rules and codes as request_open_url, without an argument. */
+    int32_t (*request_open_library_folder)(void *ctx);
 } CascadeHostApi;
 
 /*

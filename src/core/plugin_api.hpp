@@ -408,6 +408,24 @@ public:
     void takeRecorderRequests(std::vector<RecorderRequest>& out);   // the pass
     // Whether a drained request may still be applied NOW (the module is live, not stopped, and still holds the SETTINGS grant). A stop is always allowed for a live module.
     bool recorderRequestStillAllowed(const RecorderRequest& r) const;
+    // wire-c begin: SYMBOL RATE (the user's value, set by the engine; 0 = none), and the two OPEN REQUESTS (plugin_abi.h symbol_rate, request_open_url,
+    // request_open_library_folder). A request opens NOTHING: it is held (one URL and one folder per plugin, the newest replacing the old) until the host's screen shows it
+    // and the user presses its button, which takes it (takeOpenRequest) and carries it out.
+    std::uint64_t openSeq() const { return openSeq_.load(std::memory_order_acquire); }
+    void setSymbolRate(double baud) { symbolRate_.store(baud, std::memory_order_release); }
+    double symbolRate() const { return symbolRate_.load(std::memory_order_acquire); }
+    std::int32_t openRequest(const PluginApiClient& c, bool folder, const char* url);
+    struct OpenRequest {
+        std::string key;     // the module file (the key the settings forms use)
+        std::string name;    // the plugin's name
+        bool folder = false;
+        std::string url;     // "" for the folder request
+    };
+    std::vector<OpenRequest> openRequests() const;   // live plugins only, in client order, URL before folder
+    bool takeOpenRequest(const std::string& key, bool folder, OpenRequest& out);
+    // Whether `url` is an address the host will hold: https only, no user name, printable ASCII, a host name. Pure.
+    static bool acceptableOpenUrl(const char* url, std::int32_t& why);
+    // wire-c end
     std::int32_t readEvents(const PluginApiClient& c, std::uint64_t afterSeq, CascadeEvent* out, std::uint32_t cap) const;
     std::uint64_t eventsSeq() const;
     // The host's own read of the ring (its windows, and the alert and decode-database parts that will read decode events): everything after `afterSeq`, oldest first,
@@ -509,6 +527,12 @@ private:
     // The recorder requests (wiring lane C): a small ring under its own lock, drained by the pass.
     mutable std::mutex recorderMutex_;
     std::deque<RecorderRequest> recorderQueue_;
+    // wire-c begin
+    std::atomic<double> symbolRate_{0.0};
+    std::atomic<std::uint64_t> openSeq_{0};
+    mutable std::mutex openMutex_;   // taken AFTER mutex_ when both are needed
+    std::map<std::pair<std::size_t, int>, std::string> openRequests_;   // (client index, 0 url / 1 folder) -> url
+    // wire-c end
     mutable std::mutex mutex_;
     std::vector<std::unique_ptr<PluginApiClient>> clients_;
     std::vector<ClientState> state_;

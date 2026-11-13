@@ -119,7 +119,7 @@ void testTable() {
     static_assert(offsetof(CascadeHostApi, set_schedule_hint) >= offsetof(CascadeHostApi, settings_seq) + sizeof(uint64_t (*)(void*)), "appended after settings_seq");
     static_assert(offsetof(CascadeHostApi, clear_schedule_hints) == offsetof(CascadeHostApi, set_schedule_hint) + sizeof(void*), "the two are adjacent");
     // (the decode events were appended after them - tests/test_plugin_events.cpp holds that - so the pair is followed by exactly the three event members)
-    static_assert(sizeof(CascadeHostApi) == offsetof(CascadeHostApi, clear_schedule_hints) + sizeof(void*) + 5u * sizeof(void*), "and followed by the three event members and the two recorder members (wiring lane C) only");
+    static_assert(sizeof(CascadeHostApi) == offsetof(CascadeHostApi, clear_schedule_hints) + sizeof(void*) + 8u * sizeof(void*), "and followed by the three event members, the two recorder members and the three of wiring lane C (symbol rate, open a page, open the library folder) only");
     Counts n;
     PluginUi ui;
     ui.setServices(services(&n));
