@@ -233,11 +233,58 @@ void SweepHost::loopHackRf() {
     }
 }
 
+bool SweepHost::beginExternal(const std::string& kind, double startHz, double stopHz, std::string& why) {
+    stop();
+    if (!(stopHz > startHz)) { why = "the stop frequency must be above the start frequency"; return false; }
+    std::lock_guard<std::mutex> lk(m_);
+    link_.reset();
+    req_ = tsa::SweepRequest{};
+    req_.startHz = startHz;
+    req_.stopHz = stopHz;
+    req_.points = 0;
+    kind_ = kind;
+    sweeps_ = 0;
+    refused_ = 0;
+    lastError_.clear();
+    haveLast_ = false;
+    heatReady_ = false;   // (the first line sets the range)
+    external_ = true;
+    stopFlag_.store(false);
+    running_.store(true);
+    return true;
+}
+
+void SweepHost::ingestLine(const cascade::core::SweepLine& line) {
+    std::lock_guard<std::mutex> lk(m_);
+    if (line.db.empty()) { return; }
+    if (external_ && !heatReady_) {
+        cascade::core::HeatmapConfig hc = heatPrefs_;
+        hc.startHz = line.startHz;
+        hc.stopHz = line.stopHz > line.startHz ? line.stopHz : line.startHz + 1.0;
+        std::string w;
+        heatReady_ = heat_.configure(hc, &w);
+    }
+    ++sweeps_;
+    req_.points = line.db.size();
+    if (heatReady_) { std::string w; (void)heat_.addLine(line, &w); }
+    if (occReady_) { std::string w; (void)occ_.addSweep(line, &w); }
+    last_ = line;
+    haveLast_ = true;
+}
+
+void SweepHost::endExternal(const std::string& sentence) {
+    std::lock_guard<std::mutex> lk(m_);
+    lastError_ = sentence;
+    external_ = false;
+    running_.store(false);
+}
+
 void SweepHost::stop() {
     stopFlag_.store(true);
     if (th_.joinable()) { th_.join(); }
     running_.store(false);
     std::lock_guard<std::mutex> lk(m_);
+    external_ = false;
     link_.reset();
     if (hackrf_ != nullptr) { hackrf_->stop(); hackrf_->close(); hackrf_.reset(); }
 }

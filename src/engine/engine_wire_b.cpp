@@ -4,6 +4,7 @@
 // ops radio_scope.hpp lists. Each op group lives in its own section below; the pure work is in the model headers (core/field_strength.hpp ...).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -675,6 +676,7 @@ void Engine::wireBStopIqOut(std::size_t slot) {
 
 void Engine::wireBShutdown() {
     if (wireB_ == nullptr) { return; }
+    if (wireB_->stitch.active()) { std::lock_guard<std::mutex> lk(wireB_->mutex); stitchEnd(std::string()); }   // (the radio's own centre goes back before anything closes)
     if (wireB_->sbs != nullptr) { wireB_->sbs->stop(); wireB_->sbs.reset(); }
     for (std::size_t i = 0; i < wireB_->iqOut.size(); ++i) { wireBStopIqOut(i); }
 }
@@ -750,12 +752,40 @@ FoxCommandResult Engine::sweepOp(const FoxCommand& c, const std::string& text, F
             double startMhz = 0.0, stopMhz = 0.0, interval = 0.0, stepMhz = 10.0, lna = 16.0, vga = 16.0, rateMsps = 20.0, baud = 500000.0, topDbm = -10.0, bottomDbm = -120.0;
             std::size_t points = 450, fft = 1024;
             bool amp = false;
+            // second pass: the stitched sweep of an ordinary radio (kind "radio")
+            wireb::StitchSettings ss;
+            std::size_t radioNo = 0, ssFrames = static_cast<std::size_t>(ss.frames), ssSettle = static_cast<std::size_t>(ss.settleMs), ssTimeout = static_cast<std::size_t>(ss.timeoutMs), ssPasses = static_cast<std::size_t>(ss.passes);
+            if (!q.count("radio", radioNo, 1, 8) || !q.number("step_fraction", ss.stepFraction, 0.0, 10.0) || !q.number("trim", ss.trimFraction, 0.0, 1.0) || !q.count("settle_ms", ssSettle, 0, 1000000) ||
+                !q.count("frames", ssFrames, 1, 1000000) || !q.count("timeout_ms", ssTimeout, 0, 100000000) || !q.count("passes", ssPasses, 0, 1000000000)) {
+                return refusal(res, FOXAPI_BAD_ARGUMENT, q.error);
+            }
             if (!q.word("kind", kind) || !q.word("port", port) || !q.word("serial", serial) || !q.number("start_mhz", startMhz, 0.0, 1e6) || !q.number("stop_mhz", stopMhz, 0.0, 1e6) ||
                 !q.count("points", points, 2, 1048576) || !q.number("interval_ms", interval, 0.0, 60000.0) || !q.number("step_mhz", stepMhz, 1.0, 20.0) || !q.number("lna_db", lna, 0.0, 40.0) ||
                 !q.number("vga_db", vga, 0.0, 62.0) || !q.flag("amp", amp) || !q.number("sample_rate_msps", rateMsps, 2.0, 20.0) || !q.count("fft_size", fft, 32, 65536) ||
                 !q.number("baud", baud, 1.0, 5e6) || !q.number("top_dbm", topDbm, -500.0, 0.0) || !q.number("bottom_dbm", bottomDbm, -500.0, 0.0) || !q.finish()) {
                 return refusal(res, FOXAPI_BAD_ARGUMENT, q.error);
             }
+            const bool anyRadioKey = p.contains("radio") || p.contains("step_fraction") || p.contains("trim") || p.contains("settle_ms") || p.contains("frames") || p.contains("timeout_ms") || p.contains("passes");
+            if (kind == "radio") {
+                // THE STITCHED SWEEP OF AN ORDINARY RADIO: retunes the radio the user names, one centre after another (receive only: only SET_CENTRE is ever sent), and puts the pieces into one wide line.
+                if (!port.empty() || !serial.empty() || p.contains("points") || p.contains("interval_ms") || p.contains("step_mhz") || p.contains("lna_db") || p.contains("vga_db") || p.contains("amp") ||
+                    p.contains("sample_rate_msps") || p.contains("fft_size") || p.contains("baud") || p.contains("top_dbm") || p.contains("bottom_dbm")) {
+                    return refusal(res, FOXAPI_BAD_ARGUMENT, "a stitched sweep of a radio takes radio, start_mhz, stop_mhz, step_fraction, trim, settle_ms, frames, timeout_ms and passes only");
+                }
+                ss.startHz = startMhz * 1e6;
+                ss.stopHz = stopMhz * 1e6;
+                ss.frames = static_cast<int>(std::min<std::size_t>(ssFrames, 1000000));
+                ss.settleMs = static_cast<int>(std::min<std::size_t>(ssSettle, 1000000));
+                ss.timeoutMs = static_cast<int>(std::min<std::size_t>(ssTimeout, 100000000));
+                ss.passes = static_cast<int>(std::min<std::size_t>(ssPasses, 1000000000));
+                if (!p.contains("passes")) { ss.passes = 1; }
+                const std::size_t slot = radioNo != 0 ? radioNo - 1 : scopedSlot();
+                res = stitchStart(slot, ss, res);
+                if (res.status != FOXAPI_OK) { return res; }
+                changed = true;
+                break;
+            }
+            if (anyRadioKey) { return refusal(res, FOXAPI_BAD_ARGUMENT, "radio, step_fraction, trim, settle_ms, frames, timeout_ms and passes are for kind \"radio\""); }
             if (kind == "rfexplorer") {
                 // An RF Explorer spectrum analyser over a COM port (radio-bridges): whole kHz, the display's top and bottom in dBm; the device's own number of points. The device limits the range and span.
                 if (!serial.empty() || p.contains("points") || p.contains("interval_ms") || p.contains("step_mhz") || p.contains("lna_db") || p.contains("vga_db") || p.contains("amp") || p.contains("sample_rate_msps") || p.contains("fft_size")) {
@@ -819,6 +849,7 @@ FoxCommandResult Engine::sweepOp(const FoxCommand& c, const std::string& text, F
                 w.sweep.stop();   // (a worker that ended by itself is joined here, so nothing is left behind)
                 return refusal(res, FOXAPI_NO_CHANGE, "no sweep device is open");
             }
+            if (w.stitch.active()) { stitchEnd(std::string()); }   // a stitched run: the radio's own centre goes back first
             w.sweep.stop();
             changed = true;
             break;
@@ -1088,6 +1119,7 @@ void Engine::pumpWireB() {
         pumpFollow();
         pumpSbs();
         pumpTracks();
+        pumpStitch();
     }
     if (!wireB_->maskEnabled || !wireB_->maskLoaded) { return; }
     WireBState& w = *wireB_;
@@ -1176,6 +1208,14 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
             j["stop_hz"] = s.stopHz; j["heat_rows"] = s.heatRows; j["heat_cols"] = s.heatCols; j["occ_channels"] = s.occChannels; j["occ_sweeps"] = s.occSweeps;
             fact("sweep.state", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
         }
+    }
+    if (wireB_->stitch.steps() != 0) {
+        const wireb::StitchRun& sr = wireB_->stitch;
+        wireb::Json j = wireb::Json::object();
+        j["active"] = sr.active(); j["radio"] = wireB_->stitchSlot + 1; j["centres"] = sr.steps(); j["step"] = sr.step() + (sr.active() ? 1u : 0u); j["passes_done"] = sr.passesDone();
+        j["seams"] = sr.seams(); j["seams_aligned"] = sr.alignedSeams(); j["bin_hz"] = sr.lastBinHz(); j["note"] = sr.active() ? sr.note() : sr.failure(); j["step_fraction"] = sr.settings().stepFraction;
+        j["original_centre_hz"] = wireB_->stitchOrigCentreHz;
+        fact("sweep.stitch", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
     }
     if (wireB_->coverage == nullptr) {
         // second pass (screen lane L's finding): a fact that says "off" instead of no fact at all

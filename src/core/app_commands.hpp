@@ -398,6 +398,12 @@
 //   the fact sweep.read. Fact sweep.state = {open, kind, sweeps, refused, last_error, points, start_hz, stop_hz, heat_rows, heat_cols, occ_channels, occ_sweeps}. UNVERIFIED on a real device.
 //   (KIND "hackrf": a HackRF in sweep mode, RECEIVE ONLY: JSON {kind "hackrf", serial (optional), start_mhz, stop_mhz (ONE range of whole MHz, 1..6000), step_mhz 1..20 (10), lna_db 0..40 (16), vga_db 0..62 (16), amp bool,
 //   sample_rate_msps 2..20 (20), fft_size 32..65536 (1024)}; a "port" is refused; the LINEAR sweep only: the interleaved style needs GPL code, the owner's decision.)
+//   (KIND "radio", second pass: the STITCHED SWEEP OF AN ORDINARY RADIO, RECEIVE ONLY: JSON {kind "radio", radio 1..8 (default: the session's radio), start_mhz, stop_mhz, step_fraction 0.3..0.7 (0.6), trim 0..0.4 (0.12),
+//   settle_ms 0..5000 (150), frames 1..64 (2), timeout_ms 500..60000 (4000), passes 0..1000000 (1; 0 = until SWEEP_CLOSE)}; no port. The radio must be RUNNING (FAILED otherwise). The engine retunes it with the
+//   ordinary SET_CENTRE, one centre after another, averages `frames` frames per centre (power), stitches a pass into ONE wide line (core/sweep_stitch.hpp: roll-off trimmed, levels aligned in the overlaps) and
+//   feeds it to the same heat map; the radio's own centre is put back when the run ends however it ends (pass count reached, SWEEP_CLOSE, a sentence). BAD_ARGUMENT for a range needing over 512 centres at the
+//   radio's sample rate; a retune that does not show, no frames, a changed sample rate or centre end the run with a sentence in sweep.state.last_error. Fact sweep.stitch = {active, radio, centres, step,
+//   passes_done, seams, seams_aligned, bin_hz, note, step_fraction, original_centre_hz}. UNVERIFIED on a real radio.)
 #define FOXAPP_OP_SWEEP_OPEN             0x8920u /* text JSON; fact sweep.state */
 #define FOXAPP_OP_SWEEP_CLOSE            0x8921u
 #define FOXAPP_OP_SWEEP_CONFIG           0x8922u /* text JSON */

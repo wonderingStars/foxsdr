@@ -159,7 +159,7 @@ struct EngineDiskWorkDeleter {
 // The function a front end installs to apply one plugin directive to the plugin UI it owns (Engine::setPluginUiApplier).
 using PluginUiApplier = std::function<void(const cascade::core::PluginDirective&)>;
 struct WireBState;   // wire-b: engine_wire_b.hpp
-namespace wireb { struct SourceKind; }   // wire-b: wire_b_sources.hpp
+namespace wireb { struct SourceKind; struct StitchSettings; }   // wire-b: wire_b_sources.hpp
 
 class WireA;   // wire-a (engine/wire_a.hpp)
 
@@ -3277,6 +3277,10 @@ private:
     void pumpSbs();   // (inside pumpWireB, with the lane's mutex held)
     FoxCommandResult tracksOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     void pumpTracks();   // (inside pumpWireB, with the lane's mutex held)
+    // second pass: the stitched sweep of an ordinary radio (engine_wire_b_stitch.cpp; the lane's mutex held in all three)
+    FoxCommandResult stitchStart(std::size_t slot, const wireb::StitchSettings& s, FoxCommandResult res);
+    void pumpStitch();
+    void stitchEnd(const std::string& sentence);   // restores the radio's centre and closes the sweep host's run
     FoxCommandResult coverageOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     FoxCommandResult neededLibOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     void wireBStopIqOut(std::size_t slot);   // the radio's output ends (the pipeline's tap is cleared first)

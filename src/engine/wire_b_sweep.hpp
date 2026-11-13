@@ -74,6 +74,11 @@ public:
     bool startRfe(const RfeLinkFactory& factory, const std::string& port, int baud, double startHz, double stopHz, int topDbm, int bottomDbm, std::string& why);
     void stop();
     bool running() const { return running_.load(); }
+    // A run that is not a device (second pass, the stitched sweep of an ordinary radio, wire_b_stitch.hpp): no worker thread; the host is "open" (so SWEEP_OPEN is BUSY and SWEEP_CLOSE ends it) while the
+    // engine's control pass feeds finished lines through ingestLine(). The heat map takes its range from the first line. endExternal() ends the run; its sentence ("" = ended normally) is the last error.
+    bool beginExternal(const std::string& kind, double startHz, double stopHz, std::string& why);
+    void ingestLine(const cascade::core::SweepLine& line);
+    void endExternal(const std::string& sentence);
 
     SweepStatus status() const;
     // Heatmap and occupancy configuration (while running or not); the heatmap restarts.
@@ -106,6 +111,7 @@ private:
     bool haveLast_ = false;
     cascade::core::SweepHeatmap heat_;
     bool heatReady_ = false;
+    bool external_ = false;
     // the heat map's own settings (columns, rows, modes), kept across opens: SWEEP_CONFIG works with no device open (second pass)
     cascade::core::HeatmapConfig heatPrefs_;
     cascade::core::OccupancyModel occ_;
