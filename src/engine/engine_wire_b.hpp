@@ -119,6 +119,7 @@ struct WireBState {
     std::array<std::string, 8> followNote;
     wireb::SerialLinkFactory sweepFactory = wireb::defaultSerialLinkFactory();
     wireb::HackRfFactory hackrfFactory = wireb::defaultHackRfFactory();
+    wireb::RfeLinkFactory rfeFactory = wireb::defaultRfeLinkFactory();   // radio-bridges: the RF Explorer
     // the needed-libraries check: what it may touch (a test gives a fabricated machine) and the last answer per library id (JSON text)
     wireb::NeededEnv neededEnv = wireb::defaultNeededEnv();
     std::map<std::string, std::string> neededChecks;

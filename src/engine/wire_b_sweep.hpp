@@ -24,6 +24,8 @@
 #include "core/sweep_occupancy.hpp"
 #include "core/sweep_stitch.hpp"
 #include "source/hackrf_sweep.hpp"
+#include "source/rfexplorer_protocol.hpp"
+#include "source/rfexplorer_serial_win.hpp"
 #include "source/tinysa_protocol.hpp"
 
 namespace cascade::engine::wireb {
@@ -36,6 +38,11 @@ SerialLinkFactory defaultSerialLinkFactory();
 // A HackRF in sweep mode (source/hackrf_sweep.hpp, the oss-radios lane): made by a factory (the default opens the first HackRF on USB; the tests give a stand-in USB transport). One range, LINEAR style.
 using HackRfFactory = std::function<std::unique_ptr<cascade::source::hackrf_sweep::HackRfSweeper>(const std::string& args, std::string& why)>;
 HackRfFactory defaultHackRfFactory();
+
+// An RF Explorer spectrum analyser (source/rfexplorer_protocol.hpp, the radio-bridges lane) over a serial link made by a factory (the default opens the COM port by a validated name and baud; the
+// tests give a stand-in link). The worker does the connect and configure, so starting never blocks on the device; a refusal arrives as the status sentence and the worker ends.
+using RfeLinkFactory = std::function<std::unique_ptr<cascade::source::tinysa::SerialLink>(const std::string& port, int baud, std::string& why)>;
+RfeLinkFactory defaultRfeLinkFactory();
 
 struct SweepStatus {
     bool open = false;
@@ -62,6 +69,9 @@ public:
                int intervalMs, std::string& why);
     // The HackRF kind: the sweeper is opened by the factory with `args` ("serial=..." or "index=n", "" = the first), configured with `cfg` and started; its passes feed the same heatmap and occupancy.
     bool startHackRf(const HackRfFactory& factory, const std::string& args, const cascade::source::hackrf_sweep::SweepConfig& cfg, std::string& why);
+    // The RF Explorer kind: one span in Hz (whole kHz), the top and bottom of the device's display in dBm (the device scales its amplitude byte by them). The link is opened here; the worker connects,
+    // configures and then takes one complete sweep after another. False with `why` when the link cannot be made or the baud is not one of the page's list.
+    bool startRfe(const RfeLinkFactory& factory, const std::string& port, int baud, double startHz, double stopHz, int topDbm, int bottomDbm, std::string& why);
     void stop();
     bool running() const { return running_.load(); }
 
@@ -79,6 +89,8 @@ public:
 private:
     void loop();
     void loopHackRf();
+    void loopRfe();
+    int rfeTopDbm_ = -10, rfeBottomDbm_ = -120;
     std::unique_ptr<cascade::source::hackrf_sweep::HackRfSweeper> hackrf_;
     mutable std::mutex m_;
     std::thread th_;

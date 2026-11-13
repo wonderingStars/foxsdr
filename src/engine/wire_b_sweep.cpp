@@ -73,6 +73,108 @@ HackRfFactory defaultHackRfFactory() {
     };
 }
 
+RfeLinkFactory defaultRfeLinkFactory() {
+    return [](const std::string& port, int baud, std::string& why) -> std::unique_ptr<tsa::SerialLink> {
+        auto link = std::make_unique<cascade::source::rfexplorer::RfeSerialLink>();
+        if (!link->open(port, baud, 100, why)) {
+            if (why.empty()) { why = "the RF Explorer's port could not be opened"; }
+            return nullptr;
+        }
+        return link;
+    };
+}
+
+bool SweepHost::startRfe(const RfeLinkFactory& factory, const std::string& port, int baud, double startHz, double stopHz, int topDbm, int bottomDbm, std::string& why) {
+    stop();
+    if (!factory) { why = "no way to open an RF Explorer on this build"; return false; }
+    if (!cascade::source::rfexplorer::isSupportedBaud(baud)) { why = "the baud rate is not one of 500000, 115200, 57600, 38400, 19200, 9600, 4800, 2400, 1200"; return false; }
+    std::unique_ptr<tsa::SerialLink> link = factory(port, baud, why);
+    if (link == nullptr) {
+        if (why.empty()) { why = "the RF Explorer could not be opened"; }
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        link_ = std::move(link);
+        req_ = tsa::SweepRequest{};
+        req_.startHz = startHz;
+        req_.stopHz = stopHz;
+        req_.points = 0;   // the device's own
+        rfeTopDbm_ = topDbm;
+        rfeBottomDbm_ = bottomDbm;
+        intervalMs_ = 0;
+        kind_ = "rfexplorer";
+        sweeps_ = 0;
+        refused_ = 0;
+        lastError_.clear();
+        haveLast_ = false;
+        cascade::core::HeatmapConfig hc;
+        hc.startHz = startHz;
+        hc.stopHz = stopHz;
+        std::string hwhy;
+        heatReady_ = heat_.configure(hc, &hwhy);
+    }
+    stopFlag_.store(false);
+    running_.store(true);
+    th_ = std::thread([this] { loopRfe(); });
+    return true;
+}
+
+void SweepHost::loopRfe() {
+    namespace rfe = cascade::source::rfexplorer;
+    tsa::SerialLink* link;
+    double a, b;
+    int top, bottom;
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        link = link_.get();
+        a = req_.startHz;
+        b = req_.stopHz;
+        top = rfeTopDbm_;
+        bottom = rfeBottomDbm_;
+    }
+    rfe::Sweeper sw(*link);
+    const auto fail = [this](const std::string& sentence) {
+        std::lock_guard<std::mutex> lk(m_);
+        lastError_ = sentence;   // never the port
+        running_.store(false);
+    };
+    std::string why;
+    rfe::Result r = sw.connect(30, &why);
+    if (r != rfe::Result::Ok) { fail(why.empty() ? std::string("no RF Explorer answered: check the port, that it is switched on and that its baud rate is the default (500000)") : why); return; }
+    rfe::Request req;
+    req.startHz = a;
+    req.stopHz = b;
+    req.topDbm = top;
+    req.bottomDbm = bottom;
+    req.maxIdleReads = 30;
+    r = sw.configure(req, &why);
+    if (r != rfe::Result::Ok) { fail(why.empty() ? std::string("the RF Explorer did not take that range") : why); return; }
+    while (!stopFlag_.load()) {
+        const double now = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+        cascade::core::SweepLine line;
+        why.clear();
+        r = sw.nextLine(line, now, 30, &why);
+        std::lock_guard<std::mutex> lk(m_);
+        if (r == rfe::Result::Ok) {
+            ++sweeps_;
+            req_.points = line.db.size();
+            if (heatReady_) { std::string w; (void)heat_.addLine(line, &w); }
+            if (occReady_) { std::string w; (void)occ_.addSweep(line, &w); }
+            last_ = std::move(line);
+            haveLast_ = true;
+        } else if (r == rfe::Result::Refused) {
+            ++refused_;
+            lastError_ = why.empty() ? std::string("the RF Explorer refused a sweep") : why;
+        } else {
+            lastError_ = why.empty() ? std::string(rfe::resultWord(r)) : why;
+            running_.store(false);
+            return;
+        }
+    }
+    sw.hold();
+}
+
 bool SweepHost::startHackRf(const HackRfFactory& factory, const std::string& args, const cascade::source::hackrf_sweep::SweepConfig& cfg, std::string& why) {
     stop();
     if (!factory) { why = "no way to open a HackRF on this build"; return false; }

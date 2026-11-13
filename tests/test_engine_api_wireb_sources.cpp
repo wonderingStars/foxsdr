@@ -29,7 +29,7 @@ void testArguments() {
     std::printf("W1: the argument text\n");
     std::size_t n = 0;
     const wb::SourceKind* rows = wb::sourceKinds(n);
-    CHECK_EQ(n, static_cast<std::size_t>(11));
+    CHECK_EQ(n, static_cast<std::size_t>(12));   // engine merge 3: the eleventh row of wire-b plus the radio-bridges row "sdriq"
     std::set<std::string> keys;
     for (std::size_t i = 0; i < n; ++i) {
         CHECK(keys.insert(rows[i].key).second);   // every key once
@@ -65,6 +65,17 @@ void testArguments() {
         CHECK(wb::normaliseSourceArgs(*ic, "timeout=900", args, why));
         CHECK_EQ(args, std::string("timeout=900"));
     }
+    const wb::SourceKind* sq = wb::findSourceByKey("sdriq");   // radio-bridges, registered in engine merge 3: options only, no address
+    CHECK(sq != nullptr);
+    if (sq != nullptr) {
+        CHECK(!sq->needsAddress);
+        CHECK_EQ(sq->requestRateHz, 196078.0);
+        CHECK(wb::normaliseSourceArgs(*sq, "", args, why));
+        CHECK_EQ(args, std::string());
+        CHECK(wb::normaliseSourceArgs(*sq, "sdriq=AB12,timeout=900", args, why));
+        CHECK_EQ(args, std::string("sdriq=AB12,timeout=900"));
+    }
+    CHECK(wb::isSourceOpenId("open-sdriq:"));
     CHECK(wb::isSourceOpenId("open-spyserver:host"));
     CHECK(!wb::isSourceOpenId("open-pluto:host"));
     CHECK(!wb::isSourceOpenId("spyserver:host"));

@@ -746,14 +746,37 @@ FoxCommandResult Engine::sweepOp(const FoxCommand& c, const std::string& text, F
     switch (c.op) {
         case FOXAPP_OP_SWEEP_OPEN: {
             std::string kind = "tinysa", port, serial;
-            double startMhz = 0.0, stopMhz = 0.0, interval = 0.0, stepMhz = 10.0, lna = 16.0, vga = 16.0, rateMsps = 20.0;
+            double startMhz = 0.0, stopMhz = 0.0, interval = 0.0, stepMhz = 10.0, lna = 16.0, vga = 16.0, rateMsps = 20.0, baud = 500000.0, topDbm = -10.0, bottomDbm = -120.0;
             std::size_t points = 450, fft = 1024;
             bool amp = false;
             if (!q.word("kind", kind) || !q.word("port", port) || !q.word("serial", serial) || !q.number("start_mhz", startMhz, 0.0, 1e6) || !q.number("stop_mhz", stopMhz, 0.0, 1e6) ||
                 !q.count("points", points, 2, 1048576) || !q.number("interval_ms", interval, 0.0, 60000.0) || !q.number("step_mhz", stepMhz, 1.0, 20.0) || !q.number("lna_db", lna, 0.0, 40.0) ||
-                !q.number("vga_db", vga, 0.0, 62.0) || !q.flag("amp", amp) || !q.number("sample_rate_msps", rateMsps, 2.0, 20.0) || !q.count("fft_size", fft, 32, 65536) || !q.finish()) {
+                !q.number("vga_db", vga, 0.0, 62.0) || !q.flag("amp", amp) || !q.number("sample_rate_msps", rateMsps, 2.0, 20.0) || !q.count("fft_size", fft, 32, 65536) ||
+                !q.number("baud", baud, 1.0, 5e6) || !q.number("top_dbm", topDbm, -500.0, 0.0) || !q.number("bottom_dbm", bottomDbm, -500.0, 0.0) || !q.finish()) {
                 return refusal(res, FOXAPI_BAD_ARGUMENT, q.error);
             }
+            if (kind == "rfexplorer") {
+                // An RF Explorer spectrum analyser over a COM port (radio-bridges): whole kHz, the display's top and bottom in dBm; the device's own number of points. The device limits the range and span.
+                if (!serial.empty() || p.contains("points") || p.contains("interval_ms") || p.contains("step_mhz") || p.contains("lna_db") || p.contains("vga_db") || p.contains("amp") || p.contains("sample_rate_msps") || p.contains("fft_size")) {
+                    return refusal(res, FOXAPI_BAD_ARGUMENT, "an RF Explorer takes port, baud, start_mhz, stop_mhz, top_dbm and bottom_dbm only");
+                }
+                if (!cascade::source::tinysa::isValidComPortName(port)) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"port\" is a COM port name, COM1 to COM256"); }
+                if (baud != std::floor(baud) || !cascade::source::rfexplorer::isSupportedBaud(static_cast<int>(baud))) {
+                    return refusal(res, FOXAPI_BAD_ARGUMENT, "\"baud\" is one of 500000, 115200, 57600, 38400, 19200, 9600, 4800, 2400, 1200");
+                }
+                const double startHz = std::round(startMhz * 1e3) * 1e3, stopHz = std::round(stopMhz * 1e3) * 1e3;
+                if (!(stopHz > startHz) || startHz < 1000.0) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the stop frequency must be above the start frequency (whole kHz, from 1 kHz)"); }
+                if (!(bottomDbm < topDbm)) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"bottom_dbm\" must be below \"top_dbm\""); }
+                if (w.sweep.running()) { return refusal(res, FOXAPI_BUSY, "a sweep device is open already"); }
+                std::string why;
+                if (!w.sweep.startRfe(w.rfeFactory, port, static_cast<int>(baud), startHz, stopHz, static_cast<int>(std::lround(topDbm)), static_cast<int>(std::lround(bottomDbm)), why)) {
+                    return refusal(res, FOXAPI_FAILED, why);
+                }
+                cascade::core::diagLogf("sweep: opened an RF Explorer sweep device");
+                changed = true;
+                break;
+            }
+            if (p.contains("baud") || p.contains("top_dbm") || p.contains("bottom_dbm")) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"baud\", \"top_dbm\" and \"bottom_dbm\" are for the RF Explorer"); }
             if (kind == "hackrf") {
                 // A HackRF in sweep mode (receive only): ONE range of whole MHz, 1 to 6000, LINEAR style; a USB radio has no port name.
                 if (!port.empty()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "a HackRF has no port: use serial to pick one of several"); }
@@ -779,7 +802,7 @@ FoxCommandResult Engine::sweepOp(const FoxCommand& c, const std::string& text, F
                 break;
             }
             if (!serial.empty()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"serial\" is for a HackRF"); }
-            if (kind != "tinysa" && kind != "tinysa_ultra") { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"kind\" is tinysa, tinysa_ultra or hackrf"); }
+            if (kind != "tinysa" && kind != "tinysa_ultra") { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"kind\" is tinysa, tinysa_ultra, hackrf or rfexplorer"); }
             if (!cascade::source::tinysa::isValidComPortName(port)) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"port\" is a COM port name, COM1 to COM256"); }
             if (!(stopMhz > startMhz)) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the stop frequency must be above the start frequency"); }
             if (w.sweep.running()) { return refusal(res, FOXAPI_BUSY, "a sweep device is open already"); }
