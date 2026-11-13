@@ -190,6 +190,20 @@ public:
     std::size_t waterfallCopy(std::size_t slot, std::size_t rows, std::vector<std::uint8_t>& out, std::size_t& bins, std::vector<cascade::core::wfhistory::LineMeta>* meta = nullptr);
 
 private:
+    // ---- the level store of every open radio (wire_a_levels.cpp) ----
+public:
+    // The newest `rows` rows of radio `slot`'s level store, oldest first, one byte a bin (`bins` returned), with each row's time / centre / span. Same-process; 0 rows when the store is off or empty.
+    std::size_t levelCopy(std::size_t slot, std::size_t rows, std::vector<std::uint8_t>& out, std::size_t& bins, std::vector<cascade::core::wfhistory::LineMeta>* meta = nullptr);
+private:
+    struct Lv;
+    Result levelOp(const FoxCommand& c, Result res);
+    void levelFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    void levelFeed(std::size_t slot, const std::vector<float>& bins, double centreHz, double spanHz, double nowS);
+    std::array<std::shared_ptr<Lv>, 8> lv_;
+    std::array<bool, 8> levelStats_{};
+    bool levelOn_ = false;
+    std::size_t levelCapMb_ = 16;
+
     // ---- the airband monitor's per-channel settings (wire_a_airband.cpp) ----
 public:
     // The gate factory for the set the monitor is about to build (null function when no channel has settings of its own).

@@ -257,6 +257,15 @@
 //   Kept in airband-channels.json beside markers.json. Facts: fact.airband.channels (how many), fact.airband.channel.<Hz> (the text). Receive only: the stream goes to this computer's loopback and nowhere else.
 #define FOXAPP_OP_AIRBAND_CHANNEL        0x8830u /* ival[0]: 0 set (text) / 1 clear one (num[0] Hz) / 2 clear all */
 
+//   LEVEL_STORE (SETTINGS; core/waterfall_history.hpp as the ring, second pass): a LEVEL STORE FOR EVERY OPEN RADIO, so a radio on another page, or none, still has its last hour of levels when the screen asks (the screen stores only
+//   the frames of the panes it paints). One row every 250 ms of the spectrum the radio publishes (after the display chain), at most 1024 bins (a wider frame is max-pooled to 1024, so a narrow peak survives), one byte a bin
+//   (dB quantised over -150 .. 0), with the time, the centre and the span of each row: a retune starts a new SEGMENT (the centre or span changed), and a change of bin count starts a new epoch. A FIXED RING, in memory only
+//   (never written to disk), 14400 rows (one hour) at the most, and capped in bytes per radio. OFF by default. ival[0]: 0 off (the rings are freed), 1 on (num[0] = the cap per radio in MiB, 1 .. 64, 0 = 16; the cap is
+//   applied to rings made afterwards, so change it with the store off), 2 clear every ring, 3 read the statistics of the radio addressed (target) into fact.levels.<n>.rows / .seconds / .bytes / .bins / .segments and
+//   applied[0] = bytes of its ring (UNKNOWN radio: NO_DEVICE; no ring yet: NO_CHANGE). Memory: a ring of 1024 bins x 14400 rows is 14400 x (1024 + 24) = 15,091,200 bytes, so eight radios an hour each cost about 121 MB
+//   (the 16 MiB default cap per radio holds an hour of 1024-bin rows; a smaller cap holds less). Same-process read: WireA::levelCopy. fact.levels.on / .capMb say the setting.
+#define FOXAPP_OP_LEVEL_STORE            0x8831u /* ival[0]: 0 off / 1 on (num[0] cap MiB per radio) / 2 clear / 3 read stats of the radio addressed. Addresses one radio for 3 (target) */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -308,7 +317,8 @@
     {FOXAPP_OP_PATCH_COPY, "APP_PATCH_COPY", true}, \
     {FOXAPP_OP_PATCH_PASTE, "APP_PATCH_PASTE", true}, \
     {FOXAPP_OP_PATCH_BYPASS, "APP_PATCH_BYPASS", true}, \
-    {FOXAPP_OP_AIRBAND_CHANNEL, "APP_AIRBAND_CHANNEL", true},
+    {FOXAPP_OP_AIRBAND_CHANNEL, "APP_AIRBAND_CHANNEL", true}, \
+    {FOXAPP_OP_LEVEL_STORE, "APP_LEVEL_STORE", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP
