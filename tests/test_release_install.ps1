@@ -90,7 +90,7 @@ function Invoke-Planned { param($What, $File, $Arguments, $TimeoutSec, $WorkDir)
     # The Slint window as the application (installer\cascade.iss, SlintIsApp): two more files in {app} and the classic window's own
     # Start-menu entry. The classic installer has none of them; the classic-slint-* cases put them there anyway.
     $slintFiles = @((Join-Path $script:InstallDir 'foxsdr-slint.exe'), (Join-Path $script:InstallDir 'slint_cpp.dll'))
-    $classicLnk = Join-Path $script:CaseRoot 'StartMenu\FoxSDR (classic window).lnk'
+    $classicLnk = Join-Path $script:CaseRoot 'StartMenu\FoxSDR (Legacy).lnk'
     $script:Unlogged = @()
     if (-not $ClassicInstaller) {
         if ($script:CaseName -ne 'slint-no-exe') { $script:Payload += $slintFiles[0] }
@@ -172,7 +172,7 @@ function Complete-FakeUninstall {
                 ($script:CaseName -eq 'leftover-shortcut' -and $p -like '*OneDrive Desktop\FoxSDR.lnk') -or
                 ($script:CaseName -eq 'slint-leftover-exe' -and $p -like '*foxsdr-slint.exe') -or
                 ($script:CaseName -eq 'slint-leftover-dll' -and $p -like '*slint_cpp.dll') -or
-                ($script:CaseName -eq 'slint-leftover-classic-shortcut' -and $p -like '*(classic window).lnk')
+                ($script:CaseName -eq 'slint-leftover-classic-shortcut' -and $p -like '*(Legacy).lnk')
         if (-not $keep) { Remove-Item -LiteralPath $p -Force }
     }
     foreach ($p in $script:Unlogged) { if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force } }
@@ -271,7 +271,7 @@ try {
         } elseif ($isDry) {
             $problem = ''
             $dryText = $script:Messages -join "`n"
-            $slintPlans = @('installed foxsdr-slint\.exe and slint_cpp\.dll have the sha256 of the built files', 'installed foxsdr-slint\.exe --version prints "FoxSDR <version>"', 'foxsdr-slint\.exe --frames 60 .*FOXSDR_LANGUAGE=fr.*"60 of 60 ticks".*"language fr \(bundled\)"', '"FoxSDR \(classic window\)"')
+            $slintPlans = @('installed foxsdr-slint\.exe and slint_cpp\.dll have the sha256 of the built files', 'installed foxsdr-slint\.exe --version prints "FoxSDR <version>"', 'foxsdr-slint\.exe --frames 60 .*FOXSDR_LANGUAGE=fr.*"60 of 60 ticks".*"language fr \(bundled\)"', '"FoxSDR \(Legacy\)"')
             if ($errorText -or $result -ne 'done' -or $script:InstallCalls -ne 0 -or $script:UninstallCalls -ne 0 -or $script:Done -or $script:Registry.Count -ne 0 -or (Test-Path -LiteralPath $env:LOCALAPPDATA) -or (Test-Path -LiteralPath $script:RC.Scratch) -or @(Get-ChildItem -LiteralPath $script:RC.Verify -Force).Count -ne 0) { $problem = 'dry-run changed scratch user paths/state or invoked an installer' }
             elseif ($name -eq 'dry-run-slint') {
                 foreach ($pl in $slintPlans) { if ($dryText -notmatch ('(?m)^DRY check : .*' + $pl)) { $problem = 'the plan does not say: ' + $pl } }

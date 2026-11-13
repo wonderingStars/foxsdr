@@ -89,7 +89,7 @@ switches above (winget picks them itself for an Inno setup; Chocolatey's script 
 
 ## The program's own command line
 
-Both programs (`cascade.exe`, the classic window, and `foxsdr-slint.exe`, the new window) and `foxsdr-engine` read their
+Both programs (`cascade.exe`, the Legacy window, and `foxsdr-slint.exe`, the new window) and `foxsdr-engine` read their
 arguments in `src/engine/process_boot.cpp`. This table is read from that file (SCRIPT-level proof only; meanings come from
 the code's own comments). **Window** = the windowed programs, **engine** = `foxsdr-engine` only, **all** = both.
 

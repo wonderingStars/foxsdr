@@ -1094,8 +1094,8 @@ desktop has been recorded yet. Where a choice is not remembered, or a control on
 so.*
 
 FoxSDR installs two programs. **`foxsdr-slint.exe`**, the new window, is the one the Start menu, the Desktop icon and
-`foxsdr:` links start; **`cascade.exe`**, the classic window, stays installed beside it and has its own Start-menu entry,
-"FoxSDR (classic window)". The rest of this manual describes the controls of the classic window in the places where the
+`foxsdr:` links start; **`cascade.exe`**, the Legacy window, stays installed beside it and has its own Start-menu entry,
+"FoxSDR (Legacy)". The rest of this manual describes the controls of the Legacy window in the places where the
 two differ; this section is what is particular to the new one. The five banks are the same keys on the rail:
 **SIGNAL** (F1), **DECODE** (F2), **TOOLS** (F3), **EXTEND** (F4) and **SYSTEM** (F5), and the tab row above the
 spectrum holds **RECEIVER**, **PATCH**, **SCOPE**, the plugins' own pages and **+ Window**.
@@ -1143,7 +1143,7 @@ running.
 
 **These choices are the window's, not saved with the settings: the colour map, speed, time stamps, trace, shape, peak
 labels, readouts, reference and compact setting return to their defaults the next time FoxSDR starts.** This differs from
-the classic window, which remembers its trace mode (see [Peak hold and average on the spectrum](#peak-hold-and-average-on-the-spectrum)).
+the Legacy window, which remembers its trace mode (see [Peak hold and average on the spectrum](#peak-hold-and-average-on-the-spectrum)).
 The same Display section also holds **Digit grouping** (`1.090.000.000` or `1090.000.000`; typing a frequency accepts
 either style, two or more dots being grouping marks and one dot a decimal point) and **High contrast** (black grounds,
 white lines and text and one yellow accent; it also turns itself on whenever Windows' own high-contrast setting is on).
@@ -2407,9 +2407,9 @@ and may change without notice. The headless `foxsdr-engine` program has its own 
 | `FOXSDR_DIAG_DIR` | Moves the diagnostics and crash-report folder. | both |
 | `FOXSDR_SOAPY_DEBUG` | `1`, `true`, `yes` or `on` passes SoapySDR's debug logging into the log. | both |
 | `SOAPY_SDR_PLUGIN_PATH`, `UHD_IMAGES_DIR`, `CONDA_PREFIX` | Where SoapySDR vendor modules are looked for and, for a B200, where the UHD firmware images are; see [Installing](#installing). | both |
-| `FOXSDR_GL` | `auto`, `software` or `hardware`: whether the bundled software OpenGL may stand in for the graphics driver. | classic only |
-| `FOXSDR_UI_SCALE`, `FOXSDR_LANG_FILE` | The interface scale for this run; a translator's catalogue file to try without a build. | classic only |
-| `FOXSDR_GPS_PORT`, `FOXSDR_GPS_BAUD` | Read the receiver's position from a GPS on that serial port at start-up (see [What is in the current build](#what-is-in-the-current-build)). | classic only |
+| `FOXSDR_GL` | `auto`, `software` or `hardware`: whether the bundled software OpenGL may stand in for the graphics driver. | Legacy only |
+| `FOXSDR_UI_SCALE`, `FOXSDR_LANG_FILE` | The interface scale for this run; a translator's catalogue file to try without a build. | Legacy only |
+| `FOXSDR_GPS_PORT`, `FOXSDR_GPS_BAUD` | Read the receiver's position from a GPS on that serial port at start-up (see [What is in the current build](#what-is-in-the-current-build)). | Legacy only |
 
 Other `FOXSDR_*` and `CASCADE_*` variables exist for tests and measurements; do not set them.
 

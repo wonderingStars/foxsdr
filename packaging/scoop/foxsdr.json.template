@@ -20,7 +20,7 @@
         ],
         [
             "cascade.exe",
-            "FoxSDR (classic window)"
+            "FoxSDR (Legacy)"
         ]
     ],
     "persist": "plugins",

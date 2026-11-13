@@ -1019,7 +1019,7 @@ function Get-InstallTestFiles([string]$LogPath, [string]$InstallDir, [bool]$Slin
     foreach ($name in $required) {
         if ($files -notcontains (Join-Path $InstallDir $name)) { $valid = $false }
     }
-    if ($SlintApp -and @($files | Where-Object { [System.IO.Path]::GetFileName($_) -eq 'FoxSDR (classic window).lnk' }).Count -eq 0) { $valid = $false }
+    if ($SlintApp -and @($files | Where-Object { [System.IO.Path]::GetFileName($_) -eq 'FoxSDR (Legacy).lnk' }).Count -eq 0) { $valid = $false }
     Assert-Check $valid 'install log valid' ($files.Count.ToString() + ' file records') 'expected timestamped absolute file paths, the core payload and Installation process succeeded; read verify\install.log'
     # Inno generates its .dat separately from normal Dest filename records.
     return @($files + (Join-Path $InstallDir 'unins000.dat') | Sort-Object -Unique)
@@ -1103,12 +1103,12 @@ function Step-InstallTest {
         Write-Plan 'check' 'installed cascade.exe --version prints "FoxSDR <version>" (read from redirected pipes, so a windows-subsystem exe works)'
         Write-Plan 'check' 'installed cascade.exe --selftest prints "selftest PASS", and --frames 60 exits 0 having rendered 60 frames, with scratch APPDATA/LOCALAPPDATA/CASCADE_CONFIG_TEST'
         if ($ClassicInstaller) {
-            Write-Plan 'check' 'classic installer (-ClassicInstaller): cascade.exe is the application and the installer carries no Slint files: foxsdr-slint.exe, slint_cpp.dll and the FoxSDR (classic window) entry are asserted absent (disk and install log)'
+            Write-Plan 'check' 'classic installer (-ClassicInstaller): cascade.exe is the application and the installer carries no Slint files: foxsdr-slint.exe, slint_cpp.dll and the FoxSDR (Legacy) entry are asserted absent (disk and install log)'
         } else {
             Write-Plan 'check' 'installed foxsdr-slint.exe and slint_cpp.dll have the sha256 of the built files (build state slintExeSha256 / slintDllSha256); cascade.exe stays installed beside them as the classic window'
             Write-Plan 'check' 'installed foxsdr-slint.exe --version prints "FoxSDR <version>" (read from redirected pipes, so a windows-subsystem exe works)'
             Write-Plan 'check' 'installed foxsdr-slint.exe --frames 60 with FOXSDR_LANGUAGE=fr and scratch APPDATA/LOCALAPPDATA/USERPROFILE/HOME/CASCADE_CONFIG_TEST exits 0, prints "60 of 60 ticks" and "language fr (bundled)" (the translations are inside the installed exe)'
-            Write-Plan 'check' 'the install log must record foxsdr-slint.exe, slint_cpp.dll and the Start-menu entry "FoxSDR (classic window)"; all three must be gone after the uninstall'
+            Write-Plan 'check' 'the install log must record foxsdr-slint.exe, slint_cpp.dll and the Start-menu entry "FoxSDR (Legacy)"; all three must be gone after the uninstall'
         }
         Write-Result 'DRY' 'uninstall' (Format-CommandLine (Join-Path $installDir 'unins000.exe') @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/LOG=' + (Join-Path $RC.Verify 'uninstall.log'))))
         Write-Plan 'check' ('validate install.log; poll every recorded installed file (including shortcuts outside the app), unins000.exe/.dat, uninstall keys and foxsdr: handlers until gone; only an unlogged plugins directory may remain under ' + $installDir)
@@ -1166,9 +1166,9 @@ function Step-InstallTest {
         $slintExe = Join-Path $installDir 'foxsdr-slint.exe'
         if ($ClassicInstaller) {
             # The classic installer carries none of the Slint window: not in the install log, not on disk.
-            $slintLogged = @($installedFiles | Where-Object { @('foxsdr-slint.exe', 'slint_cpp.dll', 'FoxSDR (classic window).lnk') -contains [System.IO.Path]::GetFileName($_) })
+            $slintLogged = @($installedFiles | Where-Object { @('foxsdr-slint.exe', 'slint_cpp.dll', 'FoxSDR (Legacy).lnk') -contains [System.IO.Path]::GetFileName($_) })
             $slintOnDisk = @('foxsdr-slint.exe', 'slint_cpp.dll' | Where-Object { Test-Path -LiteralPath (Join-Path $installDir $_) })
-            Assert-Check ($slintLogged.Count + $slintOnDisk.Count -eq 0) 'classic installer installs no Slint files' 'none of foxsdr-slint.exe, slint_cpp.dll, the FoxSDR (classic window) entry' ('found: ' + ((@($slintLogged) + @($slintOnDisk)) -join ', ') + '; the installer was built with the Slint application (SlintIsApp=1), so run the installer step with -ClassicInstaller too')
+            Assert-Check ($slintLogged.Count + $slintOnDisk.Count -eq 0) 'classic installer installs no Slint files' 'none of foxsdr-slint.exe, slint_cpp.dll, the FoxSDR (Legacy) entry' ('found: ' + ((@($slintLogged) + @($slintOnDisk)) -join ', ') + '; the installer was built with the Slint application (SlintIsApp=1), so run the installer step with -ClassicInstaller too')
         } else {
             Assert-Check ($buildInfo.ContainsKey('slintExeSha256') -and $buildInfo.ContainsKey('slintDllSha256')) 'build state records the Slint hashes' 'slintExeSha256, slintDllSha256' 'the recorded build predates them; run tools\release.ps1 -Steps build -Force'
             Assert-Check (Test-Path -LiteralPath $slintExe) 'installed foxsdr-slint.exe' $slintExe 'the installer reported success but the Slint application is not there (SlintIsApp)'

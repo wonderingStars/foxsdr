@@ -3,7 +3,7 @@
 ; Builds a self-contained setup.exe: cascade.exe + SoapySDR.dll (the hardware
 ; ABI boundary — the ONLY runtime DLL the build produces, enforced below; with the
 ; default SlintIsApp=1 the Slint window foxsdr-slint.exe + its slint_cpp.dll are the
-; application and cascade.exe stays as the "classic window", see SlintIsApp below) plus
+; application and cascade.exe stays as the Legacy window, see SlintIsApp below) plus
 ; app-local MSVC runtime DLLs (msvcp140/vcruntime140/vcruntime140_1, sourced
 ; from the VS Redist folder — mirrors mayhem-b200's app-local-CRT approach; the
 ; UCRT is inbox on Windows 10+). Hardware vendor modules (SoapyUHD etc.) are
@@ -53,7 +53,7 @@
 ; build\src\slint\Release, with its runtime slint_cpp.dll beside it) is what the Start-menu entry, the desktop
 ; icon, the Add/Remove Programs icon, the foxsdr: protocol handler and the run-after-install entry start.
 ; cascade.exe (the ImGui window) is STILL INSTALLED beside it, with one secondary Start-menu entry, "FoxSDR
-; (classic window)", because the store, bookmarks, scanner, airband and recorder pages are not ported yet.
+; (Legacy)", because the store, bookmarks, scanner, airband and recorder pages are not ported yet.
 ; Both exes are in {app}, so ONE {app}\plugins folder serves both (each looks for plugins\ beside itself).
 ; To build the classic installer (cascade.exe the application, no Slint files, nothing else changed):
 ;   ISCC.exe /DSlintIsApp=0 installer\cascade.iss
@@ -252,7 +252,7 @@ Source: "{#SlintDir}\slint_cpp.dll"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Comment: "Start {#AppName}"
 Name: "{group}\Hardware setup notes"; Filename: "{app}\POSTINSTALL.txt"
 #if SlintOn
-Name: "{group}\{#AppName} (classic window)"; Filename: "{app}\cascade.exe"; WorkingDir: "{app}"; Comment: "Start the classic {#AppName} window (the store, bookmarks, scanner, airband and recorder pages)"
+Name: "{group}\{#AppName} (Legacy)"; Filename: "{app}\cascade.exe"; WorkingDir: "{app}"; Comment: "Start the Legacy {#AppName} window (the store, bookmarks, scanner, airband and recorder pages)"
 #endif
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Comment: "Start {#AppName}"; Tasks: desktopicon
@@ -296,6 +296,9 @@ Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName} now"; WorkingDir: "
 ; before the new files go down.
 Type: files; Name: "{app}\foxsdr-radar.exe"
 Type: files; Name: "{group}\Radar unit.lnk"
+; The classic window's Start-menu entry was "{#AppName} (classic window)" up to 0.99.108 and is "{#AppName} (Legacy)" from 0.99.109 (a change of name only,
+; the same cascade.exe). Inno only adds on an upgrade, so the old entry is removed here or it would sit beside the new one.
+Type: files; Name: "{group}\{#AppName} (classic window).lnk"
 
 [UninstallDelete]
 ; The app never writes into {app} at runtime (config lives under the user
