@@ -446,7 +446,12 @@ LoadedPlugin loadOne(const fs::path& p, const PluginHost::LoadGate& gate) {
         // specs and keeps one (or a pointer into nowhere) took the process down there with a report that named nobody, and the same death at every launch with no
         // breaker. settingFieldsFrom is the very reader the engine will use later, so a table it cannot read to the end is a corrupt descriptor NOW: the fault is
         // caught by this guard and the module is refused. (What it builds is thrown away; the form is drawn from the table, as ever.)
-        if (rec.settingsUi != nullptr) { (void)settingFieldsFrom(rec.settingsUi); }
+        // wire-c begin: the named choices are read the same way, in the same guard (the options are the plugin's memory too).
+        rec.settingChoices = (desc->capabilities & CASCADE_CAP_SETTING_CHOICES) != 0u
+                                 ? static_cast<const CascadeSettingChoicesApi*>(findCapabilityTable(desc, CASCADE_CAP_SETTING_CHOICES))
+                                 : nullptr;
+        if (rec.settingsUi != nullptr) { (void)settingFieldsFrom(rec.settingsUi, rec.settingChoices); }
+        // wire-c end
         rec.basemap = (desc->capabilities & CASCADE_CAP_BASEMAP) != 0u
                           ? static_cast<const CascadeBasemapApi*>(
                                 findCapabilityTable(desc, CASCADE_CAP_BASEMAP))
@@ -912,6 +917,22 @@ PluginRejection validatePluginDesc(const CascadePluginDesc* desc) {
         // own, doing anything for the user - the same reason as presets.
     }
 
+    // wire-c begin: named choices for settings fields (0.99.109). Not counted toward `usable`, like the form itself.
+    if ((desc->capabilities & CASCADE_CAP_SETTING_CHOICES) != 0u) {
+        const void* raw = findCapabilityTable(desc, CASCADE_CAP_SETTING_CHOICES);
+        if (raw == nullptr) {
+            return PluginRejection::MissingSettingChoicesApi;
+        }
+        const auto* c = static_cast<const CascadeSettingChoicesApi*>(raw);
+        if (c->structSize != static_cast<uint32_t>(sizeof(CascadeSettingChoicesApi))) {
+            return PluginRejection::SettingChoicesStructSizeMismatch;
+        }
+        if (c->choices == nullptr || c->count == 0u || c->count > CASCADE_MAX_SETTING_CHOICE_LISTS) {
+            return PluginRejection::SettingChoicesBadTable;
+        }
+    }
+    // wire-c end
+
     if ((desc->capabilities & CASCADE_CAP_BASEMAP) != 0u) {
         const void* raw = findCapabilityTable(desc, CASCADE_CAP_BASEMAP);
         if (raw == nullptr) {
@@ -1026,6 +1047,12 @@ const char* pluginRejectionMessage(PluginRejection r) {
             return "track-photo table size does not match this host's";
         case PluginRejection::MissingTrackPhotoFunction:
             return "track-photo table has a null function pointer";
+        case PluginRejection::MissingSettingChoicesApi:
+            return "declares CASCADE_CAP_SETTING_CHOICES but supplies no table";
+        case PluginRejection::SettingChoicesStructSizeMismatch:
+            return "named-choices table size does not match this host's";
+        case PluginRejection::SettingChoicesBadTable:
+            return "named-choices table has no entries, too many, or a null entry list";
         case PluginRejection::TrackPhotoNeedsTrackInfo:
             return "track photos require CASCADE_CAP_TRACK_INFO, whose instance they use";
         case PluginRejection::ImageDecoderStructSizeMismatch:
@@ -1509,6 +1536,7 @@ std::size_t resolveDuplicatePlugins(std::vector<LoadedPlugin>& records) {
         r.hostClient = nullptr;
         r.preset = nullptr;
         r.settingsUi = nullptr;
+        r.settingChoices = nullptr;   // wire-c
         r.basemap = nullptr;
         r.trackInfo = nullptr;
         r.trackPhoto = nullptr;

@@ -35,6 +35,7 @@ const char* verdictWords(cascade::core::SettingEditResult r) {
         case cascade::core::SettingEditResult::StoreFull: return "not saved: the plugin's settings are full";
         case cascade::core::SettingEditResult::StoreError: return "not saved: the store refused it";
         case cascade::core::SettingEditResult::Refused: return "not saved: this field is not one the host can store";
+        case cascade::core::SettingEditResult::NotAnOption: return "not saved: that is not one of the choices";   // wire-c
     }
     return "";
 }
@@ -57,7 +58,7 @@ std::int32_t Engine::applyPluginSettingEdit(const std::string& text, double& ver
     for (const cascade::core::LoadedPlugin& lp : pluginHost_.plugins()) {
         if (!lp.loaded || lp.settingsUi == nullptr || cascade::core::pluginKey(lp) != file) { continue; }
         // THE FIELD IS THE PLUGIN'S OWN, from its static table: an edit names a field the module declares or it is not one.
-        for (const cascade::core::SettingField& f : cascade::core::settingFieldsFrom(lp.settingsUi)) {
+        for (const cascade::core::SettingField& f : cascade::core::settingFieldsFrom(lp.settingsUi, lp.settingChoices)) {
             if (f.key != key) { continue; }
             // The store is keyed by the descriptor name - the same identity the plugin's own settings_get / settings_set use.
             const std::uint64_t generation = pluginApi_->settingsGeneration();
@@ -73,7 +74,8 @@ std::int32_t Engine::applyPluginSettingEdit(const std::string& text, double& ver
                 case cascade::core::SettingEditResult::Accepted: return FOXAPI_OK;
                 case cascade::core::SettingEditResult::TooLong: return FOXAPI_OUT_OF_RANGE;
                 case cascade::core::SettingEditResult::NotANumber:
-                case cascade::core::SettingEditResult::BadText: return FOXAPI_BAD_ARGUMENT;
+                case cascade::core::SettingEditResult::BadText:
+                case cascade::core::SettingEditResult::NotAnOption: return FOXAPI_BAD_ARGUMENT;   // wire-c: NotAnOption
                 case cascade::core::SettingEditResult::StoreFull: return FOXAPI_LIMIT;
                 case cascade::core::SettingEditResult::StoreError: return FOXAPI_FAILED;
                 case cascade::core::SettingEditResult::Refused: return FOXAPI_NOT_FOUND;

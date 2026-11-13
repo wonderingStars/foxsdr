@@ -77,7 +77,7 @@ bool PluginSettingsFormState::deliver(std::uint64_t ticket, core::SettingEditRes
 core::SettingEditResult settingVerdictFromAnswer(int status, double applied0) {
     if (status == FOXAPI_OK || status == FOXAPI_NO_CHANGE) { return core::SettingEditResult::Accepted; }
     const int v = static_cast<int>(applied0);
-    if (v >= static_cast<int>(core::SettingEditResult::TooLong) && v <= static_cast<int>(core::SettingEditResult::Refused)) {
+    if (v >= static_cast<int>(core::SettingEditResult::TooLong) && v <= static_cast<int>(core::SettingEditResult::NotAnOption)) {
         return static_cast<core::SettingEditResult>(v);
     }
     return status == FOXAPI_NOT_FOUND ? core::SettingEditResult::Refused : core::SettingEditResult::StoreError;
@@ -116,6 +116,8 @@ const char* settingEditMessage(core::SettingEditResult r) {
             return tr("Not saved: the store refused it.");
         case core::SettingEditResult::Refused:
             return tr("Not saved: this field is not one the host can store.");
+        case core::SettingEditResult::NotAnOption:
+            return tr("Not saved: that is not one of the choices.");   // wire-c
     }
     return "";
 }
@@ -169,6 +171,30 @@ int drawPluginSettingsForm(SettingsEditSink& sink, const std::string& pluginName
             ImGui::SameLine();
             if (ImGui::Checkbox("##v", &on)) {
                 if (handOver(sink, pluginName, f, fs, on ? "1" : "") == Handed::Accepted) { ++stored; }
+            }
+        } else if (!f.choices.empty()) {
+            // wire-c: NAMED CHOICES - a drop-down of the plugin's own names. What is stored is the option's value text; a stored value that matches none shows as itself.
+            const std::string current = follow ? fs.expect : shown;
+            std::string preview = current;
+            for (const core::SettingField::Choice& c : f.choices) { if (c.value == current) { preview = c.label; } }
+            ImGui::TextUnformatted(f.label.c_str());
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            if (ImGui::BeginCombo("##v", preview.c_str())) {
+                for (const core::SettingField::Choice& c : f.choices) {
+                    ImGui::PushID(c.value.c_str());
+                    const bool picked = ImGui::Selectable(c.label.c_str(), c.value == current);
+                    ImGui::PopID();
+                    if (picked && c.value != current) {
+                        if (handOver(sink, pluginName, f, fs, c.value) == Handed::Accepted) { ++stored; }
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            if (cascade::gui::census::enabled()) {
+                const ImVec2 a = ImGui::GetItemRectMin();
+                const ImVec2 b = ImGui::GetItemRectMax();
+                census::note("settings:choice:", f.key);
+                census::rect("settings:choice:" + f.key, a.x, a.y, b.x, b.y);
             }
         } else {
             // A PATH FIELD (0.99.74) IS THIS SAME BOX WITH A KEY ON ITS LINE.

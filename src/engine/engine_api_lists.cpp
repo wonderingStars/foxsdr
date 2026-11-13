@@ -997,7 +997,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             const ApiListBlock::Plugin& w = b.plugins[i];
             const cascade::core::LoadedPlugin& p = records[i];
             if (w.key.empty() || !w.loaded || p.settingsUi == nullptr) { continue; }
-            for (const cascade::core::SettingField& sf : cascade::core::settingFieldsFrom(p.settingsUi)) {
+            for (const cascade::core::SettingField& sf : cascade::core::settingFieldsFrom(p.settingsUi, p.settingChoices)) {
                 ApiListBlock::PluginSetting s;
                 s.file = w.key;
                 s.key = sf.key;
@@ -1009,6 +1009,14 @@ void Engine::buildApiLists03(ApiListBlock& b) {
                 const std::string k = "plugin.setting." + std::to_string(b.pluginSettings.size() + 1u);
                 fact(k, s.value, true);
                 fact(k + ".spec", s.key + '\x1F' + s.placeholder, true);
+                if (!sf.choices.empty()) {   // wire-c: the named options, "value US label" pairs joined by RS (0x1E); absent for a plain box
+                    std::string opts;
+                    for (const cascade::core::SettingField::Choice& ch : sf.choices) {
+                        if (!opts.empty()) { opts += '\x1E'; }
+                        opts += ch.value + '\x1F' + ch.label;
+                    }
+                    fact(k + ".choices", opts, true);
+                }
                 b.pluginSettings.push_back(std::move(s));
             }
         }

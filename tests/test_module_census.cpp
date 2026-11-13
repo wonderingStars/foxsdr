@@ -86,6 +86,7 @@ const CascadeHostClientApi kHostClientApi{};
 const CascadePresetApi kPresetApi{};
 const CascadeTrackInfoApi kTrackInfoApi{};
 const CascadeTrackPhotoApi kTrackPhotoApi{};
+const CascadeSettingChoicesApi kSettingChoicesApi{};   // wire-c
 const CascadeAudioOutApi kAudioOutApi{};
 const CascadeAudioProcessorApi kAudioProcessorApi{};  // host API level 1
 const CascadeSettingsUiApi kSettingsUiApi{};          // 0.99.43
@@ -222,6 +223,7 @@ int main() {
         all.txAudio = &kTxAudioApi;
         all.imageInput = &kImageInputApi;
         all.trackPhoto = &kTrackPhotoApi;
+        all.settingChoices = &kSettingChoicesApi;   // wire-c
         for (std::uint32_t bit = 1u; bit != 0u; bit <<= 1) {
             if ((static_cast<std::uint32_t>(CASCADE_CAP_ALL_KNOWN) & bit) == 0u) { continue; }
             if (!moduleProvides(all, bit)) {

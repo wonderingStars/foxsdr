@@ -133,7 +133,7 @@ bool isDecimalNumber(const std::string& t) {
 
 }  // namespace
 
-std::vector<SettingField> settingFieldsFrom(const CascadeSettingsUiApi* api) {
+std::vector<SettingField> settingFieldsFrom(const CascadeSettingsUiApi* api, const CascadeSettingChoicesApi* choices) {
     std::vector<SettingField> out;
     if (api == nullptr) { return out; }
     if (api->structSize != static_cast<std::uint32_t>(sizeof(CascadeSettingsUiApi))) {
@@ -203,12 +203,55 @@ std::vector<SettingField> settingFieldsFrom(const CascadeSettingsUiApi* api) {
         }
         out.push_back(std::move(f));
     }
+    // wire-c begin: NAMED CHOICES. Read from the plugin's static table with the same bounds as the specs; an entry of an unknown size, for a key that is not a TEXT or NUMBER
+    // field of this form, or with fewer than two usable options, leaves the field a plain box.
+    if (choices != nullptr && choices->structSize == static_cast<std::uint32_t>(sizeof(CascadeSettingChoicesApi)) && choices->choices != nullptr &&
+        choices->count != 0u && choices->count <= CASCADE_MAX_SETTING_CHOICE_LISTS) {
+        for (std::uint32_t i = 0; i < choices->count; ++i) {
+            const CascadeSettingChoice& c = choices->choices[i];
+            if (c.structSize != static_cast<std::uint32_t>(sizeof(CascadeSettingChoice))) { continue; }
+            if (c.optionCount < 2u || c.optionCount > CASCADE_CHOICE_MAX_OPTIONS) { continue; }
+            const std::string key(c.key, boundedLength(c.key, CASCADE_SETTING_KEY_CHARS));
+            SettingField* target = nullptr;
+            for (SettingField& f : out) { if (f.key == key) { target = &f; } }
+            if (target == nullptr || (target->kind != CASCADE_SETTING_TEXT && target->kind != CASCADE_SETTING_NUMBER)) { continue; }
+            std::vector<SettingField::Choice> opts;
+            for (std::uint32_t k = 0; k < c.optionCount; ++k) {
+                const CascadeChoiceOption& o = c.options[k];
+                const std::string value(o.value, boundedLength(o.value, CASCADE_CHOICE_VALUE_CHARS));
+                if (value.empty() || value.size() >= CASCADE_CHOICE_VALUE_CHARS || !isCleanLine(value)) { continue; }
+                if (target->kind == CASCADE_SETTING_NUMBER && (!isDecimalNumber(value) || !std::isfinite(std::strtod(value.c_str(), nullptr)))) { continue; }
+                if (target->kind == CASCADE_SETTING_TEXT && value.size() > target->maxLength) { continue; }
+                bool repeat = false;
+                for (const SettingField::Choice& e : opts) { repeat = repeat || e.value == value; }
+                if (repeat) { continue; }
+                SettingField::Choice ch;
+                ch.value = value;
+                ch.label = cleanPluginText(o.label, CASCADE_CHOICE_LABEL_CHARS);
+                if (ch.label.empty()) { ch.label = value; }
+                opts.push_back(std::move(ch));
+            }
+            if (opts.size() >= 2u) { target->choices = std::move(opts); }
+        }
+    }
+    // wire-c end
     return out;
 }
 
 SettingEditResult prepareSettingEdit(const SettingField& f, const std::string& typed,
                                      std::string& stored) {
     stored.clear();
+    // wire-c begin: a field with named choices stores one of their values and nothing else (the NUMBER's trimming does not apply: the value is an option's text).
+    if (!f.choices.empty()) {
+        for (const SettingField::Choice& c : f.choices) {
+            if (c.value == typed) {
+                stored = typed;
+                return SettingEditResult::Accepted;
+            }
+        }
+        return SettingEditResult::NotAnOption;
+    }
+    // wire-c end
     switch (f.kind) {
         case CASCADE_SETTING_TEXT:
         case CASCADE_SETTING_PATH:

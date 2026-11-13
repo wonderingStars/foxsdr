@@ -266,7 +266,8 @@ extern "C" {
 #define CASCADE_CAP_TX_AUDIO 0x00004000u /* host API level 2: transmit audio under an operator-armed grant - see below */
 #define CASCADE_CAP_IMAGE_INPUT 0x00008000u /* optional input for a plugin's primary image */
 #define CASCADE_CAP_TRACK_PHOTO 0x00010000u /* a target's photo, on the track-info handle */
-#define CASCADE_CAP_ALL_KNOWN 0x0001FFFFu /* OR of every bit THIS host knows */
+#define CASCADE_CAP_SETTING_CHOICES 0x00020000u /* named options for settings-form fields (wiring lane C, 0.99.109) - see "Named choices" below the settings form */
+#define CASCADE_CAP_ALL_KNOWN 0x0003FFFFu /* OR of every bit THIS host knows */
 
 /*
  * A FLAG, NOT A CAPABILITY: CASCADE_FLAG_PRIVATE_DATA (bit 31, host 0.99.109; engine wiring W2).
@@ -2128,6 +2129,58 @@ typedef struct CascadeSettingsUiApi {
 } CascadeSettingsUiApi;
 
 /*
+ * NAMED CHOICES (CASCADE_CAP_SETTING_CHOICES, 0.99.109, wiring lane C) - a field whose values have NAMES.
+ *
+ * A combined plugin (hf-keyboard-modes) has a "mode" setting whose values are 1, 2, 3...; until now the form could only show a number box ("Mode 1PSK 2Olivia
+ * 3MFSK16 4DEX"). A plugin that declares this capability names the values, and a host that knows it draws a DROP-DOWN of the names instead.
+ *
+ * HOW A PLUGIN DECLARES ONE. The field is declared in the ordinary settings table as a NUMBER (or a TEXT) whose default is one of the option values, exactly as
+ * before; THAT is what a host older than this one draws, so the plugin stays usable there (a number box, with the plugin's own placeholder as the hint:
+ * "1=PSK 2=Olivia"). Then, in a SECOND table under this capability, each such key is given its options. A host that knows the capability replaces the box of that
+ * key with a drop-down; what is stored is still the option's `value` text, so settings_get returns the same text on every host.
+ *
+ *   * `key` must name a TEXT or NUMBER field of the settings table (not BOOL, PATH or PASSWORD); a choice for any other key is ignored.
+ *   * An option whose `value` is not valid for the field (a NUMBER's must be a decimal number; a TEXT's must fit its maxLength and be a clean line), a repeated
+ *     value, and an empty `value` are skipped; with fewer than two options left the field stays a plain box. `label` is shown as-is (never translated); an
+ *     empty label shows the value.
+ *   * The host refuses to store anything that is not one of the options (SettingEditResult::NotAnOption); a value already in the store that matches none
+ *     (written by the plugin itself, or by an older host) is shown as it is, unselected, until the user picks one.
+ *   * An older host never sees the table: it ignores the capability bit (ABI 3: unknown bits are ignored), so the plugin LOADS there and shows the number box.
+ *   * structSize of each struct is checked; the table is refused (the plugin is rejected, like any other malformed table) when count is 0 or above
+ *     CASCADE_MAX_SETTING_CHOICE_LISTS or choices is NULL; an ENTRY of an unrecognised size is skipped.
+ */
+#define CASCADE_MAX_SETTING_CHOICE_LISTS 16u
+#define CASCADE_CHOICE_MAX_OPTIONS 32u
+#define CASCADE_CHOICE_VALUE_CHARS 16
+#define CASCADE_CHOICE_LABEL_CHARS 32
+
+typedef struct CascadeChoiceOption {
+    /* The text stored in the settings store when this option is picked: 1..15 bytes, NUL-terminated. */
+    char value[CASCADE_CHOICE_VALUE_CHARS];
+    /* What the drop-down shows, NUL-terminated UTF-8, no newlines. */
+    char label[CASCADE_CHOICE_LABEL_CHARS];
+} CascadeChoiceOption;
+
+typedef struct CascadeSettingChoice {
+    /* sizeof(CascadeSettingChoice) as the PLUGIN compiled it. An entry of another size is skipped. */
+    uint32_t structSize;
+    /* The key of a TEXT or NUMBER field in the settings table. */
+    char key[CASCADE_SETTING_KEY_CHARS];
+    /* Number of valid entries in `options`, 2..CASCADE_CHOICE_MAX_OPTIONS. */
+    uint32_t optionCount;
+    CascadeChoiceOption options[CASCADE_CHOICE_MAX_OPTIONS];
+} CascadeSettingChoice;
+
+typedef struct CascadeSettingChoicesApi {
+    /* sizeof(CascadeSettingChoicesApi) as the PLUGIN compiled it. Checked. */
+    uint32_t structSize;
+    /* Number of entries at `choices`, 1..CASCADE_MAX_SETTING_CHOICE_LISTS. */
+    uint32_t count;
+    /* `count` entries, static storage, non-NULL, valid for as long as the module is loaded. */
+    const CascadeSettingChoice *choices;
+} CascadeSettingChoicesApi;
+
+/*
  * ==========================================================================
  * CASCADE_CAP_PRESET - "where do I listen for this?"
  * ==========================================================================
@@ -2747,6 +2800,11 @@ static inline const CascadeTrackPhotoApi *cascade_plugin_track_photo(
     const CascadePluginDesc *desc) {
     return (const CascadeTrackPhotoApi *)cascade_plugin_capability(desc,
                                                                    CASCADE_CAP_TRACK_PHOTO);
+}
+
+static inline const CascadeSettingChoicesApi *cascade_plugin_setting_choices(
+    const CascadePluginDesc *desc) {
+    return (const CascadeSettingChoicesApi *)cascade_plugin_capability(desc, CASCADE_CAP_SETTING_CHOICES);
 }
 
 static inline const CascadePresetApi *cascade_plugin_preset(
