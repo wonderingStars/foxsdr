@@ -202,6 +202,14 @@
 //   NO_CHANGE when read while it is off or before the first frame. The facts do not move on every frame: a read is the way to see a result.
 #define FOXAPP_OP_FFT_SCAN               0x8825u /* ival[0]: 0 configure / 1 read; text: JSON. Addresses one radio (target) */
 
+//   FILE_TRANSPORT (SETTINGS; source/iq_file_source.hpp, the transport of a recorded I/Q file; second pass): speed, pause and step of the radio that plays an I/Q file. Per radio (target). UNSUPPORTED when the radio is not
+//   playing a file. ival[0] picks the action: 0 speed (num[0] = 0.25 .. 8; OUT_OF_RANGE outside it, NO_CHANGE when it is that already), 1 policy (ival[1] = 0 varispeed, 1 block skip; NO_CHANGE when the same),
+//   2 pause (NO_CHANGE when paused already), 3 resume (NO_CHANGE when playing), 4 step (only while paused; ival[1] = blocks of 4096 frames, 1 .. 4096 forward, -4096 .. -1 back and one block played from there;
+//   DENIED while playing, OUT_OF_RANGE for 0 or beyond 4096). VARISPEED multiplies every frequency in the recording by the speed (a tape); BLOCK SKIP keeps the frequencies and chops the time into 2048-frame grains.
+//   At speed 1 the frames are untouched either way. Facts: fact.playback.<n>.speed ("1" ...), .policy ("varispeed" / "blockskip"), .paused ("0" / "1"). The position is
+//   read_state's filePositionSec as before (FILE_SEEK moves it). Speed and pause are NOT remembered: a file opened again plays at speed 1.
+#define FOXAPP_OP_FILE_TRANSPORT         0x8826u /* ival[0]: 0 speed / 1 policy / 2 pause / 3 resume / 4 step; num[0] speed; ival[1] policy or blocks. Addresses one radio (target) */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -242,7 +250,8 @@
     {FOXAPP_OP_RECORDINGS_OPEN, "APP_RECORDINGS_OPEN", true}, \
     {FOXAPP_OP_BAND_MEMORY, "APP_BAND_MEMORY", true}, \
     {FOXAPP_OP_BAND_MEMORY_NOTE, "APP_BAND_MEMORY_NOTE", true}, \
-    {FOXAPP_OP_FFT_SCAN, "APP_FFT_SCAN", true},
+    {FOXAPP_OP_FFT_SCAN, "APP_FFT_SCAN", true}, \
+    {FOXAPP_OP_FILE_TRANSPORT, "APP_FILE_TRANSPORT", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP

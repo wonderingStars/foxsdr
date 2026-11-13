@@ -187,6 +187,10 @@ public:
     std::size_t waterfallCopy(std::size_t slot, std::size_t rows, std::vector<std::uint8_t>& out, std::size_t& bins, std::vector<cascade::core::wfhistory::LineMeta>* meta = nullptr);
 
 private:
+    // ---- the I/Q file transport: speed, pause, step (wire_a_transport.cpp) ----
+    Result transportOp(const FoxCommand& c, Result res);
+    void transportFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+
     Result framesOp(const FoxCommand& c, const std::string& text, Result res);
     Result traceModeOp(const std::string& text, Result res);
     std::string traceMode_ = "normal", traceError_;

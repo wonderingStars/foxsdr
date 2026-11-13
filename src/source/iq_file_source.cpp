@@ -3,6 +3,7 @@
 #include "source/file_start_time.hpp"
 #include "source/wav_meta.hpp"   // wire-a
 
+#include <algorithm>   // wire-a
 #include <bit>
 #include <cmath>
 #include <cstring>
@@ -272,6 +273,7 @@ bool IqFileSource::start() {
     // (a seek made while stopped is honoured: the position bar is a promise)
     const std::int64_t pending = seekRequest_.exchange(-1, std::memory_order_acq_rel);
     seekTo(pending >= 0 && static_cast<std::uint64_t>(pending) < frameCount_ ? static_cast<std::uint64_t>(pending) : 0u);
+    win_.clear(); frac_ = 0.0; grainLeft_ = 2048; skipFrac_ = 0.0;   // wire-a: the transport starts from the top as well
     running_.store(true, std::memory_order_release);
     return true;
 }
@@ -362,7 +364,115 @@ std::size_t IqFileSource::readHeaderRaw(unsigned char* dst, std::size_t bytes) {
     return IqFileSource::readRaw(dst, bytes);
 }
 
+// wire-a second pass begin: the transport around the unchanged read (see the header). At speed 1 and not paused this is exactly readNormal.
+bool IqFileSource::setPlaySpeed(double s) {
+    if (!std::isfinite(s) || s < kMinPlaySpeed || s > kMaxPlaySpeed) { return false; }
+    speed_.store(s, std::memory_order_release);
+    return true;
+}
+
+bool IqFileSource::stepBlocks(long long n) {
+    if (!opened_ || !paused_.load(std::memory_order_acquire) || n == 0 || n > kMaxStepBlocks || n < -kMaxStepBlocks) { return false; }
+    if (n > 0) {
+        stepFrames_.fetch_add(n * static_cast<long long>(kStepBlockFrames), std::memory_order_acq_rel);
+        return true;
+    }
+    const std::uint64_t back = static_cast<std::uint64_t>(-n) * kStepBlockFrames;
+    const std::uint64_t cur = position_.load(std::memory_order_acquire);
+    seekFrame(cur > back ? cur - back : 0);
+    stepFrames_.fetch_add(static_cast<long long>(kStepBlockFrames), std::memory_order_acq_rel);
+    return true;
+}
+
 std::size_t IqFileSource::read(std::complex<float>* dst, std::size_t n) {
+    if (!running_.load(std::memory_order_acquire) || dst == nullptr || n == 0) { return 0; }
+    const bool paused = paused_.load(std::memory_order_acquire);
+    if (paused) {
+        const long long pend = stepFrames_.load(std::memory_order_acquire);
+        if (pend <= 0) { return 0; }
+        n = std::min<std::size_t>(n, static_cast<std::size_t>(pend));
+    }
+    const double s = speed_.load(std::memory_order_acquire);
+    std::size_t got;
+    if (s == 1.0) {
+        if (!win_.empty()) { win_.clear(); frac_ = 0.0; }
+        got = readNormal(dst, n);
+    } else if (blockSkip_.load(std::memory_order_acquire)) {
+        got = readSkipping(dst, n, s);
+    } else {
+        got = readVaried(dst, n, s);
+    }
+    if (paused && got > 0) { stepFrames_.fetch_sub(static_cast<long long>(got), std::memory_order_acq_rel); }
+    return got;
+}
+
+std::size_t IqFileSource::readVaried(std::complex<float>* dst, std::size_t n, double s) {
+    if (seekRequest_.load(std::memory_order_acquire) >= 0) { win_.clear(); frac_ = 0.0; }   // a seek is about to move the stream: what was held is from the old place
+    const std::size_t need = static_cast<std::size_t>(std::floor(frac_ + static_cast<double>(n - 1) * s)) + 2;
+    while (win_.size() < need) {
+        const std::size_t want = std::min<std::size_t>(need - win_.size(), kIoFrames * 4);
+        const std::size_t old = win_.size();
+        win_.resize(old + want);
+        const std::size_t got = readNormal(win_.data() + old, want);
+        win_.resize(old + got);
+        if (got < want) { break; }   // stopped
+    }
+    std::size_t out = 0;
+    for (; out < n; ++out) {
+        const std::size_t i = static_cast<std::size_t>(frac_);
+        if (i + 1 >= win_.size()) { break; }
+        const float t = static_cast<float>(frac_ - static_cast<double>(i));
+        dst[out] = win_[i] * (1.0f - t) + win_[i + 1] * t;
+        frac_ += s;
+    }
+    const std::size_t drop = std::min<std::size_t>(static_cast<std::size_t>(frac_), win_.size());
+    if (drop > 0) {
+        win_.erase(win_.begin(), win_.begin() + static_cast<std::ptrdiff_t>(drop));
+        frac_ -= static_cast<double>(drop);
+    }
+    return out;
+}
+
+void IqFileSource::jumpBy(long long frames) {
+    const bool looping = loopOn_.load(std::memory_order_acquire);
+    const std::uint64_t a = loopA_.load(std::memory_order_acquire);
+    const std::uint64_t b = loopB_.load(std::memory_order_acquire);
+    const bool loopOk = looping && a < b && b <= frameCount_;
+    const std::uint64_t start = loopOk ? a : 0u;
+    const std::uint64_t end = loopOk ? b : frameCount_;
+    if (end <= start) { return; }
+    std::uint64_t pos = nextFrame_;
+    if (pos < start || pos > end) { pos = start; }
+    if (frames >= 0) {
+        pos = start + (pos - start + static_cast<std::uint64_t>(frames)) % (end - start);
+    } else {
+        const std::uint64_t back = static_cast<std::uint64_t>(-frames);
+        pos = pos > start + back ? pos - back : start;
+    }
+    seekTo(pos);
+}
+
+std::size_t IqFileSource::readSkipping(std::complex<float>* dst, std::size_t n, double s) {
+    constexpr std::size_t kGrain = 2048;
+    if (seekRequest_.load(std::memory_order_acquire) >= 0) { grainLeft_ = kGrain; skipFrac_ = 0.0; }   // the seek starts a fresh grain
+    std::size_t done = 0;
+    while (done < n) {
+        if (grainLeft_ == 0) {
+            const double jump = static_cast<double>(kGrain) * (s - 1.0) + skipFrac_;
+            const double whole = std::floor(jump);
+            skipFrac_ = jump - whole;
+            jumpBy(static_cast<long long>(whole));
+            grainLeft_ = kGrain;
+        }
+        const std::size_t got = readNormal(dst + done, std::min(n - done, grainLeft_));
+        if (got == 0) { break; }
+        grainLeft_ -= got;
+        done += got;
+    }
+    return done;
+}
+
+std::size_t IqFileSource::readNormal(std::complex<float>* dst, std::size_t n) {
     if (!running_.load(std::memory_order_acquire) || dst == nullptr || n == 0) {
         // Not an error, so lastError_ is deliberately untouched: the
         // pipeline may poll a stopped source and must not see error spam.

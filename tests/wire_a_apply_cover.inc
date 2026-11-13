@@ -3,6 +3,10 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 void wireAOps(AppWindow& a) {
+    covering(FOXAPP_OP_FILE_TRANSPORT);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_FILE_TRANSPORT, 0)), FOXAPI_UNSUPPORTED));   // the window's radio is on the generator
+    }
     covering(FOXAPP_OP_FFT_SCAN);
     {
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_FFT_SCAN, 7)), FOXAPI_OUT_OF_RANGE));
