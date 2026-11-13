@@ -29,6 +29,9 @@ struct SourceKind {
     bool needsAddress;          // the first item of the arguments is a host[:port]
     double requestRateHz;       // the rate the open asks the source for (a default; a rate in the arguments wins inside the source)
     std::unique_ptr<cascade::source::DeviceSource> (*make)();
+    // second pass (item 33): for a row with no address, the arguments an EMPTY open is saved under: the source's own documented default of one option, so the saved radio has a non-empty argument list
+    // (an empty one is the generator to the configuration) and the source behaves exactly as it does with nothing typed. nullptr for a row that needs an address.
+    const char* defaultArgs = nullptr;
 };
 
 // The table (every row, in order) and its length.

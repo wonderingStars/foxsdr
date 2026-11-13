@@ -43,11 +43,11 @@ const SourceKind kTable[] = {
     {"spyserver", "SpyServer (network)", true, 2500000.0, &makeOne<src::SpyServerSource>},
     {"soapyremote", "SoapyRemote server (network)", true, 2000000.0, &makeOne<src::SoapyRemoteSource>},
     {"sdrconnect", "SDRconnect (network)", true, 2000000.0, &makeOne<src::SdrConnectSource>},
-    {"icr8600", "Icom IC-R8600 (USB I/Q)", false, 1920000.0, &makeOne<src::Icr8600Source>},
-    {"funcube", "FUNcube Dongle Pro / Pro+", false, 192000.0, &makeOne<src::FuncubeSource>},
-    {"g39ddc", "WiNRADiO G39DDC (vendor library)", false, 192000.0, &makeOne<src::G39DdcSource>},
-    {"g33ddc", "WiNRADiO G33DDC (vendor library)", false, 192000.0, &makeOne<src::G33DdcSource>},
-    {"sdriq", "RFspace SDR-IQ (USB; needs FTDI's D2XX driver)", false, 196078.0, &makeOne<src::SdriqSource>},   // radio-bridges (engine merge 3)
+    {"icr8600", "Icom IC-R8600 (USB I/Q)", false, 1920000.0, &makeOne<src::Icr8600Source>, "timeout=1500"},
+    {"funcube", "FUNcube Dongle Pro / Pro+", false, 192000.0, &makeOne<src::FuncubeSource>, "index=0"},
+    {"g39ddc", "WiNRADiO G39DDC (vendor library)", false, 192000.0, &makeOne<src::G39DdcSource>, "timeout=5000"},
+    {"g33ddc", "WiNRADiO G33DDC (vendor library)", false, 192000.0, &makeOne<src::G33DdcSource>, "timeout=5000"},
+    {"sdriq", "RFspace SDR-IQ (USB; needs FTDI's D2XX driver)", false, 196078.0, &makeOne<src::SdriqSource>, "timeout=3000"},   // radio-bridges (engine merge 3)
 };
 
 bool hasControlChar(const std::string& s) {
@@ -89,7 +89,7 @@ bool normaliseSourceArgs(const SourceKind& kind, const std::string& typed, std::
     if (hasControlChar(t)) { why = "the arguments hold a control character"; return false; }
     const std::string prefix = std::string(kind.key) + "=";
     if (!kind.needsAddress) {
-        args = t;   // device options only ("lib=...,serial=..."); may be empty
+        args = (t.empty() && kind.defaultArgs != nullptr) ? std::string(kind.defaultArgs) : t;   // device options only ("lib=...,serial=..."); an empty list is saved as the source's own default (item 33)
         return true;
     }
     if (t.rfind(prefix, 0) != 0) {
