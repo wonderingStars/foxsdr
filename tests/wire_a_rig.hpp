@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -29,6 +30,18 @@ struct AppWindowTestAccess {
     static void markerPath(Engine& e, const std::string& path) { e.markerPath_ = path; }
     static cascade::core::FreqManager& bookmarks(Engine& e) { return e.freqMgr_; }
     static void bandPlanDir(Engine& e, const std::string& dir) { e.bandPlanDirForTest_ = dir; e.loadBandPlan(); }
+    // The NEXT I/Q take's file open (a worker's: core/recorder.hpp Opener) returns `ms` later than the file is on disk, once, so the take is "starting" - its file
+    // exists, the engine has not collected the open - for that long. The window a real take has for a few milliseconds, made wide enough to act in.
+    static void slowIqOpenOnce(Engine& e, int ms) {
+        cascade::core::Recorder& rec = e.rx().iqRecorder_;
+        cascade::core::Recorder::Opener inner = rec.opener();
+        auto done = std::make_shared<std::atomic<bool>>(false);
+        rec.bindOpener([inner, ms, done](const cascade::core::Recorder::OpenRequest& q, cascade::core::Recorder::OpenedFile& f, std::string& err) {
+            const bool ok = inner(q, f, err);
+            if (!done->exchange(true)) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
+            return ok;
+        });
+    }
     // The generator source of radio 1 (nullptr when it is not the generator): a tone `slot` at `offsetHz` from its centre.
     static bool genTone(Engine& e, int slot, double offsetHz, float amplitudeDb) {
         cascade::source::SigGen* g = &e.rx().pipeline_.sigGen();

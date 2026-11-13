@@ -155,7 +155,10 @@ void testLock() {
         CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_RECORD_LOCK, 0.0, 0)).status(), FOXAPI_NO_CHANGE);
         CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_RECORD_LOCK, 0.0, 1)).status(), FOXAPI_OK);
         CHECK_EQ(r.fact("record.lock"), std::string("1"));
-        // an I/Q take
+        // an I/Q take. Its file is opened by a worker: the file is on disk BEFORE the engine collects the open and arms the recorder. That window is a few milliseconds in
+        // real life and made 1.5 s wide here, so the retune below arrives inside it every time (before engine fix 4 it was accepted in the window: the test then passed
+        // or failed with the machine's speed, about 1 run in 15).
+        Access::slowIqOpenOnce(r.eng, 1500);
         CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_IQ, 0, 1)).status(), FOXAPI_OK);
         CHECK(r.until([&] { return !wavsUnder(rec).empty(); }));
         testing::Outcome o = r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 101.0e6, 0));
@@ -172,7 +175,10 @@ void testLock() {
         CHECK(r.fact("record.lock.frozen.1").find("centre frequency") != std::string::npos);
         CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_VFO_OFFSET, 5000.0, 0)).status(), FOXAPI_OK);   // the VFO is the user's to move
         CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_GAIN, 10.0, 0)).status() == FOXAPI_DENIED, false);   // gain is free unless the gain lock is on
-        // the take ends: everything is allowed again
+        // the slow open comes back and the take is armed: the lock holds on the same frozen values; then the take ends and everything is allowed again
+        r.settle(1800);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 101.0e6, 0)).status(), FOXAPI_DENIED);
+        CHECK_EQ(r.fact("tuned.1.centreHz"), std::string("100000000"));
         CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_IQ, 0, 0)).status(), FOXAPI_OK);
         r.settle(700);
         CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 101.0e6, 0)).status(), FOXAPI_OK);
