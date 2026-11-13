@@ -95,6 +95,7 @@
 #include "core/disk_job.hpp"
 #include "lanec_publish.hpp"   // screen lane C (docs/multi-radio-records/screen-c.md)
 #include "lanek_publish.hpp"   // screen lane K (docs/multi-radio-records/screen-k.md)
+#include "lanel_publish.hpp"   // screen lane L (docs/multi-radio-records/screen-l.md)
 #include "core/sys_first_run.hpp"
 #include "core/zoom_select.hpp"
 #include "workspace_testseam.hpp"
@@ -684,6 +685,7 @@ int main(int argc, char** argv) {
     laneC.wire();
     // SCREEN LANE K (docs/multi-radio-records/screen-k.md): constructed further down, once the skin and the radios exist; the menus and the tick reach it through this pointer
     std::unique_ptr<foxsdr::slintlanek::LaneKPublisher> laneKp;
+    std::unique_ptr<foxsdr::slintlanel::LaneLPublisher> laneLp;   // screen lane L
     double lastZoomSelected = 0.0;   // the span the last dragged selection zoomed to (state lk.zoomspan)
     const bool laneKOff = bounded.bounded() && std::getenv("FOXSDR_SLINT_LANEK_OFF") != nullptr;
     publisher.setClipboardSink([&](const std::string& t) { clipSet(t); });   // W16c: the Decoder output page's Copy key (clipSet is the window's clipboard, or the bounded run's stand-in)
@@ -919,6 +921,11 @@ int main(int argc, char** argv) {
                 {
                     const char* const kNames[5] = {cascade::i18n::tr("Settings and backup"), cascade::i18n::tr("Performance"), cascade::i18n::tr("Accessibility"), cascade::i18n::tr("Community"), cascade::i18n::tr("Spectrum tools")};
                     for (int k = 0; k < 5; ++k) { rows.push_back({ss(kNames[k]), ss(""), ChipTone::Neutral, openSections[4].count(10 + k) > 0, LampState::Off, false}); }
+                }
+                // SCREEN LANE L: eleven more sections after lane K's (logical rows 15 to 25)
+                {
+                    const char* const lNames[11] = {cascade::i18n::tr("Tuning and memories"), cascade::i18n::tr("Scanning"), cascade::i18n::tr("Recording and files"), cascade::i18n::tr("Measurement"), cascade::i18n::tr("Sweep"), cascade::i18n::tr("Network radios"), cascade::i18n::tr("Outputs and tracks"), cascade::i18n::tr("Needed libraries"), cascade::i18n::tr("System"), cascade::i18n::tr("Web"), cascade::i18n::tr("Ham tools")};
+                    for (int k = 0; k < 11; ++k) { rows.push_back({ss(lNames[k]), ss(""), ChipTone::Neutral, openSections[4].count(15 + k) > 0, LampState::Off, false}); }
                 }
                 break;
             }
@@ -1620,6 +1627,32 @@ int main(int argc, char** argv) {
         e.quit = [] { slint::quit_event_loop(); };
         laneKp = std::make_unique<foxsdr::slintlanek::LaneKPublisher>(std::move(e));
         laneKp->wire();
+    }
+    // ---- SCREEN LANE L (docs/multi-radio-records/screen-l.md): eleven sections after lane K's, the controls of what the wiring lanes built ----
+    {
+        foxsdr::slintlanel::LaneLPublisher::Env e;
+        e.ui = &*ui;
+        e.api = api;
+        e.session = session;
+        e.bounded = bounded.bounded();
+        e.submit = [&](const FoxCommand& cin, std::uint32_t radio, const std::string* longText) {
+            foxsdr::slintlanel::SubmitOutcome out;
+            FoxCommand c = cin;
+            c.structSize = sizeof(c);
+            aimAt(c, radio);
+            FoxSubmitResult r{}; r.structSize = sizeof(r);
+            const bool useLong = longText != nullptr && FOXAPI_HAS(api, submit_text);
+            const int32_t rc = useLong ? api->submit_text(session, &c, longText->data(), static_cast<uint32_t>(longText->size()), &r) : api->submit(session, &c, 1, &r);
+            if (rc < 0) { out.status = rc; out.message = cascade::i18n::tr("The engine would not take that command."); return out; }
+            out.status = r.status;
+            out.ticket = r.ticket;
+            if (r.status == FOXAPI_BUSY) { out.message = cascade::i18n::tr("The engine is busy: try again in a moment."); }
+            return out;
+        };
+        e.selectedRadio = [&] { return workspace.selectedRadio(); };
+        e.radioCount = [&] { int n = 0; for (int k = 0; k < kMaxRadios; ++k) { if (workspace.occupied(k)) { ++n; } } return n; };
+        laneLp = std::make_unique<foxsdr::slintlanel::LaneLPublisher>(std::move(e));
+        laneLp->wire();
     }
     // lane K, DEPTH-GAPS A2 Display: a dragged selection of the plot zooms to it (core/zoom_select.hpp), frequency only
     ui->global<SpectrumEvents>().on_zoom_selected([&](int r, float x0, float x1) {
@@ -2449,6 +2482,7 @@ int main(int argc, char** argv) {
                 laneKp->tick(state, static_cast<long>(tickNo));
                 if (laneKp->takeGradientChanged()) { eachRadio([&](RadioView& rv) { rv.wells.picture.assign(rv.wells.picture.size(), Rgba{0x06, 0x07, 0x0a, 255}); }); }   // the user's gradient: old lines cannot be recoloured
             }   // screen lane K (FOXSDR_SLINT_LANEK_OFF=1, a bounded run only, leaves it out)
+            if (laneLp && !laneKOff) { laneLp->tick(static_cast<long>(tickNo)); }   // screen lane L (the same switch leaves it out)
             if (!laneCOff) { laneC.tick(state, static_cast<long>(tickNo)); }   // screen lane C: scanner block, memories, clock, sheets (FOXSDR_SLINT_LANEC_OFF=1, a bounded run only, leaves it out: the frame-cost comparison)
             if (!lists.converter && !(noteTick > 0 && tickNo - noteTick < 90)) {   // T9: the airband channel's name where the counter says "via ..." (a note or a converter keeps the place)
                 const std::string ch = cascade::core::airbandChannelName(state.tunedHz);
@@ -2715,6 +2749,7 @@ int main(int argc, char** argv) {
             patchBank.onAnswer(r[i]);   // the draft's SET_GRAPH (its commit is settled by this answer) and the radio scan's
             transmitBank.onAnswer(r[i]);   // a refused LATCH or consent (the Transmit page's key note)
             deckOnAnswer(r[i]);
+            if (laneLp) { laneLp->onAnswer(r[i]); }   // screen lane L: the refusal of an op it sent
             if (r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) { std::fprintf(stderr, "foxsdr-slint: op 0x%04x answered %d: %s\n", r[i].op, r[i].status, r[i].message); }
         }
 
@@ -2722,7 +2757,7 @@ int main(int argc, char** argv) {
         // the browser's tiles, the track-info lines, the plugin-use table, the events and the tickets - then its pages (kit_publish.cpp).
         kit.tick(state, listMoved, face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain");
         extendBank.publish(state);   // before the kit's pages: the store page of kind 9 is built from the model this hands over
-        for (const FoxCommandResult& r2 : kit.takeUnclaimedResults()) { patchBank.onAnswer(r2); transmitBank.onAnswer(r2); deckOnAnswer(r2); }   // an answer the kit's own poll took first: the draft waits for it
+        for (const FoxCommandResult& r2 : kit.takeUnclaimedResults()) { patchBank.onAnswer(r2); transmitBank.onAnswer(r2); deckOnAnswer(r2); if (laneLp) { laneLp->onAnswer(r2); } }   // an answer the kit's own poll took first: the draft waits for it
         patchBank.publish(state);    // before the kit's pages too: the Patch presets page of kind 10 is built from the model this hands over
         transmitBank.publish(state); // ... and the Transmit page of kind 11 (and the key's batch for this tick)
         // THE MAP'S LOOK, from the interface half each tick (SYSTEM > Display saves it there): the aircraft icon size, the trail width and the trail style, bounded
@@ -3159,6 +3194,7 @@ int main(int argc, char** argv) {
         if (name == "lanec.logcopy") { out = publisher.lastCopy(); return std::string(); }
         if (name.rfind("lanec.", 0) == 0) { return laneC.readState(name.substr(6), out); }
         if (name == "lk.zoomspan") { out = fmt("%.0f", lastZoomSelected); return std::string(); }
+        if (name.rfind("ll.", 0) == 0) { return laneLp ? laneLp->readState(name.substr(3), out) : std::string("no lane L"); }
         if (name.rfind("lk.", 0) == 0) { return laneKp ? laneKp->readState(name.substr(3), out) : std::string("no lane K"); }
         // gaps.<what>: the classic-window gaps (docs/multi-radio-records/slint-gaps.md)
         if (name.rfind("gaps.", 0) == 0) {

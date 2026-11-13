@@ -11,9 +11,9 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2321 | 673 | 107 | 1541 | 0 |
+| 2330 | 681 | 108 | 1541 | 0 |
 
-Of the 1434 rows that are controls (the 887 readout-like rows left out): 673 asserted, 107 driven without a read-back, 654 not drivable.
+Of the 1443 rows that are controls (the 887 readout-like rows left out): 681 asserted, 108 driven without a read-back, 654 not drivable.
 
 NOT DRIVABLE by reason: readout 887, other 222, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 71, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
@@ -207,6 +207,7 @@ NOT DRIVABLE by reason: readout 887, other 222, needs a signal (no fixture) 120,
 | Lane B (docs/multi-radio-records/screen-b.md; rows 4700 and up are this lane's) | 20 | 20 | 0 | 0 | 0 | 0 |
 | Screen lane J - the map rows (rows 4900 and up are this lane's; docs/multi-radio-records/screen-j.md) | 15 | 12 | 0 | 3 | 0 | 0 |
 | Screen lane K - the remaining rows (rows 5200 and up are this lane's; docs/multi-radio-records/screen-k.md) | 37 | 26 | 11 | 0 | 0 | 0 |
+| Screen lane L - the controls of what the wiring lanes built (rows 5300 and up are this lane's; docs/multi-radio-records/screen-l.md) | 9 | 8 | 1 | 0 | 0 | 0 |
 
 ## Every row
 
@@ -3460,4 +3461,18 @@ NOT DRIVABLE by reason: readout 887, other 222, needs a signal (no fixture) 120,
 | 5234 | Spectrum tools: Eight-cursor tool... (sheet: mode, spacing, reference, eight cursor fields, place by click, tuned, snap, show) | key | DRIVEN+ASSERTED | lanek-tools | state lk.sheet == 8, lk.cursormode, lk.cursor.0 / .3 in the harmonic mode |
 | 5235 | Spectrum tools: Show the cursors | checkbox | DRIVEN | lanek-tools | the cursors are drawn into the trace picture (test_slint_lanek_spectrum_host reads the pixels) |
 | 5236 | Audio mix: Matrix key and the Matrix sheet (one row per radio; hover previews, click keeps, double click selects) | key | DRIVEN+ASSERTED | lanek-matrix | state lk.tiles == 3, lk.baseline, lk.matrixsolo; the pointer's own hover is the final real-mouse drive's |
+
+### Screen lane L - the controls of what the wiring lanes built (rows 5300 and up are this lane's; docs/multi-radio-records/screen-l.md)
+
+| # | control | type | class | script | detail |
+|---|---|---|---|---|---|
+| 5300 | Tuning and memories: Back and Forward (the radio's frequency history) | key | DRIVEN+ASSERTED | lanel-tuning | state ll.note.tuning contains Nothing changed (the engine's answer to Back at the start); Forward answered |
+| 5301 | Tuning and memories: Channel plan list, Next channel, Previous channel, Go to channel, Leave channel mode | dropdown | DRIVEN+ASSERTED | lanel-tuning | state ll.fact.channel.1.plan == marine-vhf-itu, ll.fact.channel.1.label == 16, Leave channel mode done |
+| 5302 | Tuning and memories: Markers file, Export CSV..., Export JSON..., Merge markers within, Import... | key | DRIVEN+ASSERTED | lanel-tuning | Export CSV... with no markers: ll.note.tuning contains Nothing changed; the import is read back by the engine tests only |
+| 5303 | Tuning and memories: Bookmark number, Bookmark note, Bookmark tags, Save / Read / Remove the note, Search notes and tags, Find, Find by tag | key | DRIVEN+ASSERTED | lanel-tuning | state ll.note.tuning contains Save note: Refused (the engine's own reason for a bookmark that is not there) |
+| 5304 | Tuning and memories: Bookmark squelch, threshold, offset, tone and Save / Read / Remove the fields | key | DRIVEN+ASSERTED | lanel-tuning | a value outside the range is refused before it is sent (ll.refused); the engine's refusal is read for a missing bookmark |
+| 5305 | Tuning and memories: Favourite's name, Save view as favourite, Recall, New name, Rename, Remove | key | DRIVEN+ASSERTED | lanel-tuning | state ll.fact.favourite.count == 1 then the new name in ll.fact.favourite.names then count == 0 |
+| 5306 | Tuning and memories: Pack file, name, description, Export pack..., Import pack... | key | DRIVEN | lanel-tuning | with no bookmarks the engine answers Nothing changed (ll.note.tuning contains Export pack); a pack file is not written in a bounded run |
+| 5307 | Tuning and memories: Remember per band, Volume, AGC, Forget every band | checkbox | DRIVEN+ASSERTED | lanel-tuning | state ll.fact.bandmem.on == 1 then != 1 |
+| 5308 | Tuning and memories: Bandwidth up, Bandwidth down, Cycle mode, Centre on the signal, Next bookmark, Previous bookmark | key | DRIVEN+ASSERTED | lanel-tuning | state ll.note.tuning contains Cycle mode: done |
 

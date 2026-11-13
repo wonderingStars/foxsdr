@@ -1,0 +1,9 @@
+5300	ASSERTED	lanel-tuning	state ll.note.tuning contains Nothing changed (the engine's answer to Back at the start); Forward answered
+5301	ASSERTED	lanel-tuning	state ll.fact.channel.1.plan == marine-vhf-itu, ll.fact.channel.1.label == 16, Leave channel mode done
+5302	ASSERTED	lanel-tuning	Export CSV... with no markers: ll.note.tuning contains Nothing changed; the import is read back by the engine tests only
+5303	ASSERTED	lanel-tuning	state ll.note.tuning contains Save note: Refused (the engine's own reason for a bookmark that is not there)
+5304	ASSERTED	lanel-tuning	a value outside the range is refused before it is sent (ll.refused); the engine's refusal is read for a missing bookmark
+5305	ASSERTED	lanel-tuning	state ll.fact.favourite.count == 1 then the new name in ll.fact.favourite.names then count == 0
+5306	DRIVEN	lanel-tuning	with no bookmarks the engine answers Nothing changed (ll.note.tuning contains Export pack); a pack file is not written in a bounded run
+5307	ASSERTED	lanel-tuning	state ll.fact.bandmem.on == 1 then != 1
+5308	ASSERTED	lanel-tuning	state ll.note.tuning contains Cycle mode: done

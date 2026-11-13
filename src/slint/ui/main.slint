@@ -29,7 +29,7 @@ import { SignalEvents, SelectItem, GainStage, OptionRow, SourceModel, RadioExtra
          RecorderBody, RadioSetupSheet, ImportDialog } from "signal_bank.slint";
 import { SystemEvents, SpectrumLook, DisplayModel, LanguageModel, UpdatesModel, GpsRow, SerialPortsModel, KeyRow, KeyGroup, KeyBindingsModel, DiagnosticsModel,
          UsageModel, TesterModel, ReportPageModel, DisplayBody, LanguageBody, UpdatesBody, SerialPortsBody, KeyBindingsBody, DiagnosticsBody,
-         UsageBody, TesterBody, ReportSheet, KRow, KPanel, LaneK } from "system_bank.slint";
+         UsageBody, TesterBody, ReportSheet, KRow, KPanel, LaneK, LaneL } from "system_bank.slint";
 import { ToolsEvents, PositionOffers, RadarModel, BookmarkRow, BookmarksModel, ScannerModel, AirbandRow, AirportRow, AirbandModel, MarkerRow,
          MarkersModel, RadarBody, BookmarksBody, ScannerBody, AirbandBody, MarkersSheet } from "tools_bank.slint";
 import { ExtendEvents, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory, StoreSite, UpdateRow, StorePluginPage, StoreModel,
@@ -76,6 +76,7 @@ export { LaneC, LCQuick, LCShortcut, LCRecording }   // screen lane C: the host 
 import { MapJEvents, LayerRow, ReplayModel, FilterModel, MapJModel, PolarDot, SkyModel, AntennaModel } from "mapj.slint";   // screen lane J (docs/multi-radio-records/screen-j.md): the map's layers, replay and filter, the Sky and Antenna pages
 import { GridLabel } from "map.slint";
 export { MapJEvents, LayerRow, ReplayModel, FilterModel, MapJModel, PolarDot, SkyModel, AntennaModel, GridLabel }
+export { LaneL }   // screen lane L (docs/multi-radio-records/screen-l.md): the host (lanel_publish.cpp) sets the global and answers its act(id, text)
 export { KRow, LaneK, KTile, LaneKMatrix }   // screen lane K (docs/multi-radio-records/screen-k.md): the host (lanek_publish.cpp) sets the globals and answers their act(id, text)
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
@@ -626,6 +627,18 @@ export component MainWindow inherits Window {
                                         if root.bank-index == 4 && i == root.system-extra-base + 2 : KPanel { rows: LaneK.rows-access; act(id, t) => { LaneK.act(id, t); } }
                                         if root.bank-index == 4 && i == root.system-extra-base + 3 : KPanel { rows: LaneK.rows-community; act(id, t) => { LaneK.act(id, t); } }
                                         if root.bank-index == 4 && i == root.system-extra-base + 4 : KPanel { rows: LaneK.rows-spectrum; act(id, t) => { LaneK.act(id, t); } }
+                                        // screen lane L: eleven more sections after lane K's, the controls of what the wiring lanes built (lanel_publish.cpp): Tuning and memories, Scanning, Recording and files, Measurement, Sweep, Network radios, Outputs and tracks, Needed libraries, System, Web, Ham tools
+                                        if root.bank-index == 4 && i == root.system-extra-base + 5 : KPanel { rows: LaneL.rows-tuning; act(id, t) => { LaneL.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 6 : KPanel { rows: LaneL.rows-scan; act(id, t) => { LaneL.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 7 : KPanel { rows: LaneL.rows-record; act(id, t) => { LaneL.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 8 : KPanel { rows: LaneL.rows-measure; act(id, t) => { LaneL.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 9 : KPanel { rows: LaneL.rows-sweep; act(id, t) => { LaneL.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 10 : KPanel { rows: LaneL.rows-sources; act(id, t) => { LaneL.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 11 : KPanel { rows: LaneL.rows-outputs; act(id, t) => { LaneL.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 12 : KPanel { rows: LaneL.rows-libs; act(id, t) => { LaneL.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 13 : KPanel { rows: LaneL.rows-system; act(id, t) => { LaneL.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 14 : KPanel { rows: LaneL.rows-web; act(id, t) => { LaneL.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 15 : KPanel { rows: LaneL.rows-ham; act(id, t) => { LaneL.act(id, t); } }
                                         // the SIGNAL bank's bodies (signal_bank.slint), by row: 1 Source, 3 Audio filters, 4 Sinks, 6 Recorder, 7 Frequency correction
                                         if root.bank-index == 0 && i == 1 : SourceBody { model: root.source-model; ppm-block: false; }   // the ppm block is row 7
                                         if root.bank-index == 0 && i == 2 : RadioExtras { model: root.radio-extras; }

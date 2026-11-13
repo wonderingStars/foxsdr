@@ -3334,3 +3334,17 @@ The status bar and the One layout's plot (the S6 leftovers), one-click layouts, 
 | 5234 | Spectrum tools: Eight-cursor tool... (sheet: mode, spacing, reference, eight cursor fields, place by click, tuned, snap, show) | key | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
 | 5235 | Spectrum tools: Show the cursors | checkbox | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
 | 5236 | Audio mix: Matrix key and the Matrix sheet (one row per radio; hover previews, click keeps, double click selects) | key | PRESENT | Lane K (docs/multi-radio-records/screen-k.md). |
+
+## Screen lane L - the controls of what the wiring lanes built (rows 5300 and up are this lane's; docs/multi-radio-records/screen-l.md)
+
+| # | Control | Type | Status | Note |
+|---|---|---|---|---|
+| 5300 | Tuning and memories: Back and Forward (the radio's frequency history) | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5301 | Tuning and memories: Channel plan list, Next channel, Previous channel, Go to channel, Leave channel mode | dropdown | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5302 | Tuning and memories: Markers file, Export CSV..., Export JSON..., Merge markers within, Import... | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5303 | Tuning and memories: Bookmark number, Bookmark note, Bookmark tags, Save / Read / Remove the note, Search notes and tags, Find, Find by tag | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5304 | Tuning and memories: Bookmark squelch, threshold, offset, tone and Save / Read / Remove the fields | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5305 | Tuning and memories: Favourite's name, Save view as favourite, Recall, New name, Rename, Remove | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5306 | Tuning and memories: Pack file, name, description, Export pack..., Import pack... | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5307 | Tuning and memories: Remember per band, Volume, AGC, Forget every band | checkbox | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5308 | Tuning and memories: Bandwidth up, Bandwidth down, Cycle mode, Centre on the signal, Next bookmark, Previous bookmark | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
