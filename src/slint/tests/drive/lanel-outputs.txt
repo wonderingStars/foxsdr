@@ -27,12 +27,13 @@ state ll.fact.radio.1.iqout contains "\"running\":true"
 state ll.fact.sbs.out contains "\"running\":true"
 +1 click "Stop the SBS output"
 +15 state ll.note.outputs contains "Stop the SBS output: done"
-# B18: nothing exists until it is ticked (the engine publishes no state), and switching it off drops what it held
-+1 state ll.fact.tracks.state == ""
+# B18: nothing is kept until it is ticked, and switching it off drops what it held. Engine merge 4: wire-b's second pass made the fact
+# ALWAYS present (an absent fact could not be told from "no engine"): off is {"enabled":false} with zero counts, not an empty value
++1 state ll.fact.tracks.state contains "\"enabled\":false"
 +1 click "Keep tracks"
 +15 state ll.fact.tracks.state contains "\"enabled\":true"
 +1 click "Keep tracks"
-+15 state ll.fact.tracks.state == ""
++15 state ll.fact.tracks.state contains "\"enabled\":false"
 # B19: the grid cannot be switched on without the person's own position; with it, it can
 +1 click "Coverage grid"
 +6 state ll.note.outputs contains "Coverage grid: Your latitude"
@@ -43,4 +44,4 @@ state ll.fact.sbs.out contains "\"running\":true"
 +2 click "Coverage grid"
 +15 state ll.fact.coverage.state contains "\"enabled\":true"
 +1 click "Coverage grid"
-+15 state ll.fact.coverage.state == ""
++15 state ll.fact.coverage.state contains "\"enabled\":false"

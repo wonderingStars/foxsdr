@@ -24,13 +24,14 @@
 # closing what is not open changes nothing
 +1 click "Close the sweep device"
 +12 state ll.note.sweep contains "Nothing changed"
-# the heat map takes its columns over the device's own range: with no device the engine refuses, in its own words
+# the heat map's settings are accepted with no device open (engine merge 4: wire-b's second pass fixed the engine, which used to refuse
+# with "frequency range unusable" while closed; the settings reach the next open)
 +1 type "Heat map columns" "512"
 +1 key enter
 +1 type "Heat map rows" "100"
 +1 key enter
 +2 click "Apply heat map and occupancy"
-+12 state ll.note.sweep contains "Heat map and occupancy: Refused: frequency range unusable"
++12 state ll.note.sweep contains "Heat map and occupancy: done"
 # the SDR-IQ and the other network and vendor radios: the choice is a draft; the keys are never pressed here (they connect)
 +1 click "RFspace SDR-IQ (USB; needs FTDI's D2XX driver)"
 +8 state ll.draft.n.kind == 11
