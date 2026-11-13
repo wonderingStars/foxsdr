@@ -89,6 +89,52 @@ inline bool parseIfSettings(const std::string& text, IfSettings& out, std::strin
     return true;
 }
 
+// MIXER (NodeKind::Mixer): "gain=<g0>,<g1>,<g2>,<g3>;mute=<m0>,<m1>,<m2>,<m3>" in either order, both optional. A gain is a linear factor 0 to 4 (1 = as it is; fewer numbers than inputs leave the rest at 1), a mute is 0 or 1.
+// A mixer is a plain sum of the inputs' audio, each times its gain and not at all when muted (the stereo AudioMixer model, with balance, solo and a limiter, is not used yet). Empty = every input at 1.
+struct MixerSettings {
+    float gain[kMixerInputs] = {1.0f, 1.0f, 1.0f, 1.0f};
+    bool mute[kMixerInputs] = {false, false, false, false};
+    bool operator==(const MixerSettings& o) const {
+        for (std::size_t i = 0; i < kMixerInputs; ++i) { if (gain[i] != o.gain[i] || mute[i] != o.mute[i]) { return false; } }
+        return true;
+    }
+};
+
+inline bool parseMixerSettings(const std::string& text, MixerSettings& out, std::string& why) {
+    MixerSettings m;
+    std::size_t at = 0;
+    while (at < text.size()) {
+        std::size_t semi = text.find(';', at);
+        if (semi == std::string::npos) { semi = text.size(); }
+        const std::string part = text.substr(at, semi - at);
+        at = semi + 1;
+        if (part.empty()) { continue; }
+        const std::size_t eq = part.find('=');
+        if (eq == std::string::npos) { why = "a mixer setting is name=values"; return false; }
+        const std::string name = part.substr(0, eq), values = part.substr(eq + 1);
+        if (name != "gain" && name != "mute") { why = "the mixer settings are gain and mute"; return false; }
+        std::size_t i = 0, p = 0;
+        while (p <= values.size() && !values.empty()) {
+            std::size_t comma = values.find(',', p);
+            if (comma == std::string::npos) { comma = values.size(); }
+            double v = 0.0;
+            if (i >= kMixerInputs || !parseNumber(values.substr(p, comma - p), v)) { why = "a mixer has four inputs, each setting a number"; return false; }
+            if (name == "gain") {
+                if (v < 0.0 || v > 4.0) { why = "a mixer gain is 0 to 4"; return false; }
+                m.gain[i] = static_cast<float>(v);
+            } else {
+                if (v != 0.0 && v != 1.0) { why = "a mixer mute is 0 or 1"; return false; }
+                m.mute[i] = v == 1.0;
+            }
+            ++i;
+            p = comma + 1;
+            if (comma >= values.size()) { break; }
+        }
+    }
+    out = m;
+    return true;
+}
+
 // Configures a filter at sample rate and centre from the settings (all off when `s` has nothing).
 inline void applyIfSettings(dsp::IfFilter& f, const IfSettings& s, double centreRfHz) {
     f.setCentre(centreRfHz);

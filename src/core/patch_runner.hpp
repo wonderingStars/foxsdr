@@ -258,6 +258,10 @@ struct StripSet {
         std::unique_ptr<cascade::dsp::RationalResampler> rs;
         std::vector<float> out;
         std::shared_ptr<AudioDest> dest;
+        // wire-a second pass: a tap fed through a Mixer sums these channels (indices into `channels`, each times its gain) at the strips' common rate, then resamples the sum once
+        std::vector<std::size_t> mixIdx;
+        std::vector<float> mixGain;
+        std::vector<float> mixBuf;
     };
     std::vector<AudioTap> taps;
 };
@@ -576,6 +580,18 @@ inline std::shared_ptr<StripSet> buildRadioSet(const Plan& plan, const Graph& g,
             StripSet::AudioTap t;
             t.sink = sp.sink;
             t.chanIndex = i;
+            // wire-a second pass: a mixer in front of the sink: the channels of this radio on its inputs that run at the same rate as the first
+            if (sp.mixChannels.size() > 1) {
+                for (std::size_t k = 0; k < sp.mixChannels.size(); ++k) {
+                    for (std::size_t j = 0; j < set->channels.size(); ++j) {
+                        if (set->channels[j].node == sp.mixChannels[k] && std::fabs(set->channels[j].strip.outRateHz() - inRate) < 1e-6) {
+                            t.mixIdx.push_back(j);
+                            t.mixGain.push_back(sp.mixGains[k]);
+                        }
+                    }
+                }
+                t.mixBuf.assign(kMaxBlockAudio, 0.0f);
+            }
             t.rs = std::make_unique<cascade::dsp::RationalResampler>(
                 static_cast<unsigned>(kOutRateHz + 0.5), static_cast<unsigned>(inRate + 0.5));
             t.out.assign(t.rs->maxOut(kMaxBlockAudio) + 8, 0.0f);
@@ -609,6 +625,10 @@ inline std::string radioSignature(const Plan& plan, const Graph& g, NodeId radio
                       static_cast<unsigned>(sp.channel),
                       static_cast<const void*>(destFor(dests, sp.sink).get()));
         s += buf;
+        for (std::size_t k = 0; k < sp.mixChannels.size(); ++k) {   // wire-a second pass: what the mixer sums, and how
+            std::snprintf(buf, sizeof(buf), "m%u*%.9g|", static_cast<unsigned>(sp.mixChannels[k]), static_cast<double>(sp.mixGains[k]));
+            s += buf;
+        }
     }
     return s;
 }
@@ -971,6 +991,24 @@ private:
 
         // EVERY SPEAKER'S OUTPUT, from this block of its channel.
         for (StripSet::AudioTap& t : active_->taps) {
+            if (!t.mixIdx.empty() && t.rs && t.dest) {   // wire-a second pass: the sum of the mixer's inputs
+                std::size_t m = 0;
+                for (const std::size_t ci : t.mixIdx) { m = std::max(m, active_->channels[ci].produced); }
+                m = std::min(m, t.mixBuf.size());
+                if (m == 0) { continue; }
+                std::fill(t.mixBuf.begin(), t.mixBuf.begin() + static_cast<std::ptrdiff_t>(m), 0.0f);
+                for (std::size_t k = 0; k < t.mixIdx.size(); ++k) {
+                    const RunningChannel& mc = active_->channels[t.mixIdx[k]];
+                    const float* heard = mc.squelch ? mc.gated.data() : mc.audio.data();
+                    const std::size_t cnt = std::min(mc.produced, m);
+                    const float g = t.mixGain[k];
+                    if (g == 0.0f) { continue; }
+                    for (std::size_t i = 0; i < cnt; ++i) { t.mixBuf[i] += g * heard[i]; }
+                }
+                const std::size_t got = t.rs->process(t.mixBuf.data(), m, t.out.data(), t.out.size());
+                if (got > 0) { t.dest->write(t.out.data(), got); }
+                continue;
+            }
             const RunningChannel& rc = active_->channels[t.chanIndex];
             if (rc.produced == 0 || !t.rs || !t.dest) { continue; }
             // What the speaker hears is the SQUELCHED audio.
