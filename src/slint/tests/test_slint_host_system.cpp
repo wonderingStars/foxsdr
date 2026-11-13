@@ -994,7 +994,7 @@ void displayEffects() {
     // saved interface size is the scale the window is moved to - so a pick saved here and not applied by the window would fail one of these.
     {
         namespace look = foxsdr::slintlook;
-        const look::SkinId skinOf[6] = {look::SkinId::Workbench, look::SkinId::Workbench, look::SkinId::NightWatch, look::SkinId::Workbench, look::SkinId::Workbench, look::SkinId::Workbench};
+        const look::SkinId skinOf[6] = {look::SkinId::Workbench, look::SkinId::Workbench, look::SkinId::NightWatch, look::SkinId::GlassCockpit, look::SkinId::DaylightLab, look::SkinId::FieldRadio};
         const look::CounterFace faceOf[6] = {look::CounterFace::Nixie, look::CounterFace::Nixie, look::CounterFace::Drum, look::CounterFace::Plain, look::CounterFace::Plain, look::CounterFace::Plain};
         core::AppConfig from = plain;
         from.uiTheme = "bogus";   // every index differs from what is in force, so every pick is saved

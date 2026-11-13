@@ -20,7 +20,9 @@ bool near(float a, float b) { return std::fabs(a - b) < 1e-4f; }
 
 void skins() {
     CHECK(skinOfTheme("night") == SkinId::NightWatch);
-    for (const char* key : {"today", "classic-xl", "glass", "daylight", "field", "", "NIGHT", "nigh", "bogus"}) { CHECK(skinOfTheme(key) == SkinId::Workbench); }
+    for (const char* key : {"today", "classic-xl", "", "NIGHT", "nigh", "bogus"}) { CHECK(skinOfTheme(key) == SkinId::Workbench); }
+    CHECK(skinOfTheme("glass") == SkinId::GlassCockpit && skinOfTheme("daylight") == SkinId::DaylightLab && skinOfTheme("field") == SkinId::FieldRadio);
+    CHECK(std::string(skinName(SkinId::GlassCockpit)) == "glass" && std::string(skinName(SkinId::DaylightLab)) == "daylight" && std::string(skinName(SkinId::FieldRadio)) == "field");
     CHECK(std::string(skinName(SkinId::NightWatch)) == "night");
     CHECK(std::string(skinName(SkinId::Workbench)) == "workbench");
 }

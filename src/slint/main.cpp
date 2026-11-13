@@ -1075,6 +1075,15 @@ int main(int argc, char** argv) {
         ui->set_menu_entries(std::make_shared<slint::VectorModel<MenuEntry>>(std::move(e)));
         ui->invoke_open_menu(x, y);
     };
+    // THE SKIN BY NAME (look_logic skinName): the six looks the window can wear (window-gaps-2.md, rows 148 to 152).
+    const auto skinValueOf = [&](const std::string& name) -> Skin {
+        if (name == "highcontrast") { return ui->global<HighContrast>().get_value(); }
+        if (name == "night") { return ui->global<NightWatch>().get_value(); }
+        if (name == "glass") { return ui->global<GlassCockpit>().get_value(); }
+        if (name == "daylight") { return ui->global<DaylightLab>().get_value(); }
+        if (name == "field") { return ui->global<FieldRadio>().get_value(); }
+        return ui->global<Workbench>().get_value();
+    };
     const auto applyFace = [&] {
         Skin s = ui->global<Theme>().get_skin();
         s.digit_face = face == Face::Nixie ? DigitFace::Nixie : face == Face::Drum ? DigitFace::Drum : DigitFace::Plain;
@@ -1099,7 +1108,7 @@ int main(int argc, char** argv) {
             lookStyle = half.tunerDisplayStyle;
             if (themeMoved) {
                 const foxsdr::slintlook::SkinId id = hcNow ? foxsdr::slintlook::SkinId::HighContrast : foxsdr::slintlook::skinOfTheme(half.uiTheme);
-                ui->global<Theme>().set_skin(id == foxsdr::slintlook::SkinId::HighContrast ? ui->global<HighContrast>().get_value() : id == foxsdr::slintlook::SkinId::NightWatch ? ui->global<NightWatch>().get_value() : ui->global<Workbench>().get_value());
+                ui->global<Theme>().set_skin(skinValueOf(foxsdr::slintlook::skinName(id)));
                 skinNow = foxsdr::slintlook::skinName(id);
                 if (laneKp) { laneKp->restyle(); }   // lane K: the palette and the reduced effects go over the new base
                 std::fprintf(stderr, "foxsdr-slint: look: theme '%s' is drawn in the %s skin\n", half.uiTheme.c_str(), foxsdr::slintlook::skinName(id));
@@ -1634,7 +1643,7 @@ int main(int argc, char** argv) {
             return v;
         };
         e.baseSkin = [&] {
-            Skin sk = skinNow == "highcontrast" ? ui->global<HighContrast>().get_value() : skinNow == "night" ? ui->global<NightWatch>().get_value() : ui->global<Workbench>().get_value();
+            Skin sk = skinValueOf(skinNow);
             sk.digit_face = face == Face::Nixie ? DigitFace::Nixie : face == Face::Drum ? DigitFace::Drum : DigitFace::Plain;
             return sk;
         };

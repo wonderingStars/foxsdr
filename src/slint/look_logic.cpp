@@ -14,8 +14,23 @@ constexpr float kMaxScale = 4.0f;
 constexpr float kSame = 0.001f;
 }  // namespace
 
-SkinId skinOfTheme(const std::string& uiTheme) { return uiTheme == "night" ? SkinId::NightWatch : SkinId::Workbench; }
-const char* skinName(SkinId id) { return id == SkinId::NightWatch ? "night" : id == SkinId::HighContrast ? "highcontrast" : "workbench"; }
+SkinId skinOfTheme(const std::string& uiTheme) {
+    if (uiTheme == "night") { return SkinId::NightWatch; }
+    if (uiTheme == "glass") { return SkinId::GlassCockpit; }
+    if (uiTheme == "daylight") { return SkinId::DaylightLab; }
+    if (uiTheme == "field") { return SkinId::FieldRadio; }
+    return SkinId::Workbench;   // today, classic-xl (the same palette; its figures are the counter scale) and anything unknown
+}
+const char* skinName(SkinId id) {
+    switch (id) {
+        case SkinId::NightWatch: return "night";
+        case SkinId::HighContrast: return "highcontrast";
+        case SkinId::GlassCockpit: return "glass";
+        case SkinId::DaylightLab: return "daylight";
+        case SkinId::FieldRadio: return "field";
+        default: return "workbench";
+    }
+}
 
 CounterFace faceOfStyle(const std::string& style) {
     if (style == "neon") { return CounterFace::Drum; }
