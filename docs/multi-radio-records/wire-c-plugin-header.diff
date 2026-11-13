@@ -1,0 +1,143 @@
+diff --git a/src/core/plugin_abi.h b/src/core/plugin_abi.h
+index 69455ca0..6325e2fa 100644
+--- a/src/core/plugin_abi.h
++++ b/src/core/plugin_abi.h
+@@ -266,7 +266,8 @@ extern "C" {
+ #define CASCADE_CAP_TX_AUDIO 0x00004000u /* host API level 2: transmit audio under an operator-armed grant - see below */
+ #define CASCADE_CAP_IMAGE_INPUT 0x00008000u /* optional input for a plugin's primary image */
+ #define CASCADE_CAP_TRACK_PHOTO 0x00010000u /* a target's photo, on the track-info handle */
+-#define CASCADE_CAP_ALL_KNOWN 0x0001FFFFu /* OR of every bit THIS host knows */
++#define CASCADE_CAP_SETTING_CHOICES 0x00020000u /* named options for settings-form fields (wiring lane C, 0.99.109) - see "Named choices" below the settings form */
++#define CASCADE_CAP_ALL_KNOWN 0x0003FFFFu /* OR of every bit THIS host knows */
+ 
+ /*
+  * A FLAG, NOT A CAPABILITY: CASCADE_FLAG_PRIVATE_DATA (bit 31, host 0.99.109; engine wiring W2).
+@@ -1759,6 +1760,7 @@ typedef struct CascadeScheduleHint {
+  * plugin (CASCADE_API_DENIED without it), it is queued and applied by the host's next pass (CASCADE_API_OK means ACCEPTED, not started), and the host
+  * refuses a start while the radio is already recording (a take the user started is never taken over, and a plugin can stop only a take it started). The file
+  * goes to the recordings folder named with the label first. A plugin that is stopped, unloaded or detached has its take ended by the host. */
++#define CASCADE_OPEN_URL_CHARS 201 /* wiring lane C: an address of at most 200 bytes, plus the terminator */
+ #define CASCADE_RECORDER_LABEL_CHARS 33 /* the longest label is 32 bytes of [A-Za-z0-9._-], plus the terminator */
+ 
+ /* ---- Decode events (appended after host API level 2; engine wiring W2, brief item 13 "AD3"): check CASCADE_HOST_HAS(host, post_event). ----------
+@@ -1789,6 +1791,7 @@ typedef struct CascadeEvent {
+  * mark). A plugin built against the old header still works - it simply never asks for more than 64; a plugin built against this one on an OLDER host gets
+  * LIMIT at that host's own quota, which it must treat as the end of its marks, not as an error. The host publishes the number in fact.plugin.markerLimit. */
+ #define CASCADE_MAX_MARKERS_PER_PLUGIN 256u
++#define CASCADE_MARKER_CREDIT_CHARS 48 /* wiring lane C: the longest credit is 47 bytes */
+ typedef struct CascadeMarker {
+     uint32_t structSize;
+     uint32_t id;                /* the plugin's own; setting an id REPLACES */
+@@ -1799,6 +1802,10 @@ typedef struct CascadeMarker {
+     uint32_t colourRgba;        /* 0xRRGGBBAA; 0 = the host's plugin colour */
+     uint32_t reserved;          /* 0 */
+     char label[CASCADE_MARKER_LABEL_CHARS]; /* may be empty; UTF-8 */
++    /* Appended (wiring lane C, 0.99.109): the credit a data source asks for ("Data provided by HamQTH.com"), shown with the mark; may be empty; UTF-8,
++     * NUL-terminated. A plugin built before this field passes the smaller structSize: the host takes it and the credit is empty. A host older than this
++     * ignores bytes it does not know: the plugin still works there, without the credit. */
++    char credit[CASCADE_MARKER_CREDIT_CHARS];
+ } CascadeMarker;
+ 
+ /* The settings store. Keys: 1..63 bytes of [A-Za-z0-9._-]. Values: UTF-8
+@@ -2008,6 +2015,21 @@ typedef struct CascadeHostApi {
+     int32_t (*recorder_start)(void *ctx, const char *label);
+     /* Ends the take THIS plugin started (no effect on any other). Same codes; a stop with no take of this plugin's running is accepted and does nothing. */
+     int32_t (*recorder_stop)(void *ctx);
++
++    /* ---- Symbol rate, open-a-page and open-the-library-folder (appended after host API level 2; wiring lane C): check CASCADE_HOST_HAS(host, symbol_rate) etc. ---- */
++
++    /* The symbol rate in baud that the USER has set for the receiver (a number field on the host's own screen), 0 when none is set. Cheap to poll; a decoder that can
++     * use it (a PSK or FSK decoder with a choice of rates) reads it at the start of a block. It is a hint from the user, never a measurement. */
++    double (*symbol_rate)(void *ctx);
++    /* Asks the host to offer the user a button that opens `url` in their web browser: for a library the plugin needs and the user must fetch. NOTHING OPENS HERE.
++     * The host shows the address and the plugin's name, and opens it only when the user presses that button. The address must be https:// (nothing else is
++     * accepted), at most CASCADE_OPEN_URL_CHARS-1 bytes of printable ASCII with no space, no user name or password, a host name, no backslash. One request per
++     * plugin is held: a new one replaces the old. CASCADE_API_OK: held; CASCADE_API_BAD_ARGUMENT (NULL, empty, not an acceptable address); CASCADE_API_OUT_OF_RANGE
++     * (too long); CASCADE_API_DENIED (the plugin is stopped); CASCADE_API_DETACHED. */
++    int32_t (*request_open_url)(void *ctx, const char *url);
++    /* Asks the host to offer a button that opens THIS PLUGIN'S OWN LIBRARY FOLDER in the file manager (the host makes the folder; the plugin cannot name any
++     * other path). Same rules and codes as request_open_url, without an argument. */
++    int32_t (*request_open_library_folder)(void *ctx);
+ } CascadeHostApi;
+ 
+ /*
+@@ -2065,7 +2087,7 @@ typedef struct CascadeHostApi {
+ #define CASCADE_SETTING_LABEL_CHARS 32
+ #define CASCADE_SETTING_PLACEHOLDER_CHARS 64
+ #define CASCADE_SETTING_DEFAULT_CHARS 64
+-#define CASCADE_MAX_SETTING_SPECS 16u /* per plugin; well under the store's 64 keys */
++#define CASCADE_MAX_SETTING_SPECS 32u /* per plugin; half of the store's 64 keys (raised from 16 in 0.99.109: a host older than that REFUSES TO LOAD a plugin whose table has 17..32 rows - validatePluginDesc returns SettingsUiBadTable and the whole plugin is rejected, not only its form; a plugin that must load on every host keeps to 16) */
+ 
+ /* Field kinds. An unknown kind is skipped (not drawn, not refused) so a
+  * plugin built for a later host still shows the fields this host knows. */
+@@ -2127,6 +2149,58 @@ typedef struct CascadeSettingsUiApi {
+     const CascadeSettingSpec *specs;
+ } CascadeSettingsUiApi;
+ 
++/*
++ * NAMED CHOICES (CASCADE_CAP_SETTING_CHOICES, 0.99.109, wiring lane C) - a field whose values have NAMES.
++ *
++ * A combined plugin (hf-keyboard-modes) has a "mode" setting whose values are 1, 2, 3...; until now the form could only show a number box ("Mode 1PSK 2Olivia
++ * 3MFSK16 4DEX"). A plugin that declares this capability names the values, and a host that knows it draws a DROP-DOWN of the names instead.
++ *
++ * HOW A PLUGIN DECLARES ONE. The field is declared in the ordinary settings table as a NUMBER (or a TEXT) whose default is one of the option values, exactly as
++ * before; THAT is what a host older than this one draws, so the plugin stays usable there (a number box, with the plugin's own placeholder as the hint:
++ * "1=PSK 2=Olivia"). Then, in a SECOND table under this capability, each such key is given its options. A host that knows the capability replaces the box of that
++ * key with a drop-down; what is stored is still the option's `value` text, so settings_get returns the same text on every host.
++ *
++ *   * `key` must name a TEXT or NUMBER field of the settings table (not BOOL, PATH or PASSWORD); a choice for any other key is ignored.
++ *   * An option whose `value` is not valid for the field (a NUMBER's must be a decimal number; a TEXT's must fit its maxLength and be a clean line), a repeated
++ *     value, and an empty `value` are skipped; with fewer than two options left the field stays a plain box. `label` is shown as-is (never translated); an
++ *     empty label shows the value.
++ *   * The host refuses to store anything that is not one of the options (SettingEditResult::NotAnOption); a value already in the store that matches none
++ *     (written by the plugin itself, or by an older host) is shown as it is, unselected, until the user picks one.
++ *   * An older host never sees the table: it ignores the capability bit (ABI 3: unknown bits are ignored), so the plugin LOADS there and shows the number box.
++ *   * structSize of each struct is checked; the table is refused (the plugin is rejected, like any other malformed table) when count is 0 or above
++ *     CASCADE_MAX_SETTING_CHOICE_LISTS or choices is NULL; an ENTRY of an unrecognised size is skipped.
++ */
++#define CASCADE_MAX_SETTING_CHOICE_LISTS 16u
++#define CASCADE_CHOICE_MAX_OPTIONS 32u
++#define CASCADE_CHOICE_VALUE_CHARS 16
++#define CASCADE_CHOICE_LABEL_CHARS 32
++
++typedef struct CascadeChoiceOption {
++    /* The text stored in the settings store when this option is picked: 1..15 bytes, NUL-terminated. */
++    char value[CASCADE_CHOICE_VALUE_CHARS];
++    /* What the drop-down shows, NUL-terminated UTF-8, no newlines. */
++    char label[CASCADE_CHOICE_LABEL_CHARS];
++} CascadeChoiceOption;
++
++typedef struct CascadeSettingChoice {
++    /* sizeof(CascadeSettingChoice) as the PLUGIN compiled it. An entry of another size is skipped. */
++    uint32_t structSize;
++    /* The key of a TEXT or NUMBER field in the settings table. */
++    char key[CASCADE_SETTING_KEY_CHARS];
++    /* Number of valid entries in `options`, 2..CASCADE_CHOICE_MAX_OPTIONS. */
++    uint32_t optionCount;
++    CascadeChoiceOption options[CASCADE_CHOICE_MAX_OPTIONS];
++} CascadeSettingChoice;
++
++typedef struct CascadeSettingChoicesApi {
++    /* sizeof(CascadeSettingChoicesApi) as the PLUGIN compiled it. Checked. */
++    uint32_t structSize;
++    /* Number of entries at `choices`, 1..CASCADE_MAX_SETTING_CHOICE_LISTS. */
++    uint32_t count;
++    /* `count` entries, static storage, non-NULL, valid for as long as the module is loaded. */
++    const CascadeSettingChoice *choices;
++} CascadeSettingChoicesApi;
++
+ /*
+  * ==========================================================================
+  * CASCADE_CAP_PRESET - "where do I listen for this?"
+@@ -2749,6 +2823,11 @@ static inline const CascadeTrackPhotoApi *cascade_plugin_track_photo(
+                                                                    CASCADE_CAP_TRACK_PHOTO);
+ }
+ 
++static inline const CascadeSettingChoicesApi *cascade_plugin_setting_choices(
++    const CascadePluginDesc *desc) {
++    return (const CascadeSettingChoicesApi *)cascade_plugin_capability(desc, CASCADE_CAP_SETTING_CHOICES);
++}
++
+ static inline const CascadePresetApi *cascade_plugin_preset(
+     const CascadePluginDesc *desc) {
+     return (const CascadePresetApi *)cascade_plugin_capability(desc, CASCADE_CAP_PRESET);
