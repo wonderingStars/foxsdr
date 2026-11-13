@@ -69,3 +69,20 @@ GUI: `ctest -L gui -j3 --timeout 300` through the launcher on `FoxSDRTestsEM` wi
 * The header-only reading of `working` for the file rows (item 4) is a decision the owner may want to change (an eighth state or the old words).
 * The EnOcean feed expectation (item 5) is stale against the plugin's own output and was not rewritten; the A5 line of its output was not seen.
 * The 12 vs 13 count: the commit message of 76c7eab8 says "13 rows"; twelve rows and two shared rows were edited.
+
+## Item 6 (follow-up). A take queued behind a finishing one counts as open: FIXED
+
+* Reachable from the public operations: stop a take (its file closes on a worker), press `RECORD_IQ 1` before the close ends: `Engine::iqStartQueued_` (audio: `audioStartQueued_`) is set and the take starts when the close ends (`engine.cpp` `startIqRecording`, `pollRecordFinishes`).
+* Reproduced deterministically: new section L2 of `test_engine_api_wire_a_record` makes the close slow (`Recorder::setFinishHookForTest`, 2500 ms), stops a locked take, presses Record behind it and retunes. RED without the fix: `FAIL ...test_engine_api_wire_a_record.cpp:257: o.status() == FOXAPI_DENIED  (0 vs -1)`, `("102000000" vs "100000000")`, `test_engine_api_wire_a_record: 123 checks passed, 3 failed`.
+* Fix: `WireA::lockSync` also counts `iqStartQueued_` and `audioStartQueued_` as an open take (commit 90ba734d). GREEN: Passed; the red-then-green pair is the break-it. Loop alone: `ctest --repeat until-fail:20` = 20 of 20 Passed, `Total Test time (real) = 438.68 sec`, exit 0.
+
+## Item 7 (follow-up). The EnOcean feed case: the EXPECTATION was stale (fixture and plugin are right)
+
+* Fixture: `tests/feed/feedsignals.hpp` `enocean()` builds three ERP1 telegrams (RPS F6 data 30, 1BS D5 data 09, 4BS A5 data 00 00 55 08, three sub-telegrams each; CRC-8 poly 0x107; 8-to-12 line code), consistent with what the plugin decodes (it printed the F6 and D5 telegrams with `CRC-8 ok`).
+* Plugin: `mode_enocean.h:157` prints the RORG type name since enocean-monitor 0.2.0, and the plugin's own tests pin it (`test_enocean.cpp:583-591`: `RORG 0xA5 (4BS) data`, `0xF6 (RPS) data`, `0xD5 (1BS) data`; read only in plug-merge). No plugin fault, no hand-off.
+* Fix (commit 103034f7): the expectation in `feed-cases-new.tsv` now carries `(RPS)`, `(1BS)`, `(4BS)`; data bytes unchanged. Run against the built `short-range-frames-0.4.1` (headless, hidden desktop): `PASS enocean-monitor-gen 1.6s`, `feed check: 2 PASS, 0 FAIL, 0 SKIP`.
+* Item 4 note: `screen-handoff-L.md` section C has a new row: a `working` with `depth` "headers" is shown as "Found (not test-loaded)", never "Working" (only `depth` "loaded", the `ftdi-d2xx` row, may be "Found and working").
+
+### Gate for items 6 and 7 (code tip 103034f7)
+
+Headless + slint, 1122 tests, four slices through the launcher: `99% tests passed, 3 tests failed out of 280` (308.62 s: the known test_airband_data, test_band_plan, test_converter_call_sites); `99% tests passed, 1 tests failed out of 280` (608.47 s: test_page_resize_id); `99% tests passed, 2 tests failed out of 280` (320.41 s: test_png_decode and test_tci_engine); `100% tests passed out of 282` (329.13 s). 1117 passed, 5 red: the four known false failures plus `test_tci_engine`. `test_tci_engine` failed alone (`tests/test_tci_engine.cpp:474  strtoull(sentFact) >= got.size()`, `fact.udp.sent = "151", datagrams received 152`), then passed twice and failed once in a repeat of 6: a pre-existing INTERMITTENT race in the TCI UDP counter (wire-c's test; this lane touches nothing of it: `git diff bbdbb8ca HEAD` over `src/engine/tci*` and the test is empty); it passed in the first gate of this lane. Not fixed here. No GUI gate: no gui-labelled test and no `.slint` file changed. Stamp tests: their result after the rebuild at the final commit is in the lane's final report. config.json sha256 at the end: c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3, unchanged.
