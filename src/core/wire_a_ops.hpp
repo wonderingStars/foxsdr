@@ -210,6 +210,14 @@
 //   read_state's filePositionSec as before (FILE_SEEK moves it). Speed and pause are NOT remembered: a file opened again plays at speed 1.
 #define FOXAPP_OP_FILE_TRANSPORT         0x8826u /* ival[0]: 0 speed / 1 policy / 2 pause / 3 resume / 4 step; num[0] speed; ival[1] policy or blocks. Addresses one radio (target) */
 
+//   RIT (SETTINGS; core/rit_xit.hpp, second pass): the RECEIVE CLARIFIER of one radio (receive only: there is no XIT in this program). It shifts what is HEARD by `offset` hertz while the dial, the tuning arithmetic,
+//   the bookmarks and the CAT answer stay where they are: the receive oscillator runs at the tuned offset + the clarifier. Per radio (target). ival[0] picks the action: 0 SET (num[0] = the offset in Hz, ival[1] = 1 on / 0 off;
+//   OUT_OF_RANGE beyond the limit; NO_CHANGE when both are the same), 1 STEP (num[0] = Hz to add, the clarifier is switched on; the result is clamped to the limit and applied[0] is the offset now in force),
+//   2 CLEAR (offset 0, off; NO_CHANGE when it already is), 3 LIMITS (num[0] = the largest offset, 1 to 20000 Hz, default 9999; num[1] = a retune larger than this many Hz clears the clarifier, 0 = never, the default;
+//   OUT_OF_RANGE for either outside its range). Facts: fact.rit.<n>.on ("0"/"1"), .hz (the offset, whole Hz), .max, .clearOnRetune. Never saved: a clarifier that came back after a restart would put the receiver off its
+//   station. A retune over the clear limit is noticed once a pass (the same way the history is), so the clarifier is cleared within one control pass of the retune.
+#define FOXAPP_OP_RIT                    0x8827u /* ival[0]: 0 set / 1 step / 2 clear / 3 limits; num[0] Hz; ival[1] on. Addresses one radio (target) */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -251,7 +259,8 @@
     {FOXAPP_OP_BAND_MEMORY, "APP_BAND_MEMORY", true}, \
     {FOXAPP_OP_BAND_MEMORY_NOTE, "APP_BAND_MEMORY_NOTE", true}, \
     {FOXAPP_OP_FFT_SCAN, "APP_FFT_SCAN", true}, \
-    {FOXAPP_OP_FILE_TRANSPORT, "APP_FILE_TRANSPORT", true},
+    {FOXAPP_OP_FILE_TRANSPORT, "APP_FILE_TRANSPORT", true}, \
+    {FOXAPP_OP_RIT, "APP_RIT", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP

@@ -432,6 +432,9 @@ public:
     // VFO tuning offset from the input center, Hz (phase-continuous retune).
     void setVfoOffsetHz(double offsetHz);
     double vfoOffsetHz() const;
+    // wire-a second pass: the receive clarifier, Hz added to what the oscillator runs at (not to vfoOffsetHz(): the dial stays). 0 = off.
+    void setRitHz(double hz);
+    double ritHz() const;
 
     // Channel filter bandwidth, Hz (clamped by Vfo to what the channel rate
     // supports; the filter is redesigned and its history cleared).
@@ -1249,6 +1252,8 @@ private:
     std::unique_ptr<cascade::dsp::AfcTracker> afc_;
     bool afcOn_ = false;
     double afcPullHz_ = 2500.0;
+    double ritHz_ = 0.0;             // wire-a: the receive clarifier (DSP-thread state); the oscillator runs at userOffsetHz_ + ritHz_ + afcAppliedHz_
+    std::atomic<double> mirrorRitHz_{0.0};
     double userOffsetHz_ = 0.0;      // the VFO offset the user asked for; the VFO runs at this plus afcAppliedHz_
     double afcAppliedHz_ = 0.0;
     std::atomic<bool> mirrorAfcOn_{false};

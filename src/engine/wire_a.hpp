@@ -43,6 +43,7 @@
 #include "core/scan_trigger.hpp"
 #include "core/scanner_params.hpp"
 #include "core/freq_history.hpp"
+#include "core/rit_xit.hpp"
 #include "foxsdr_api.h"
 
 namespace cascade::engine {
@@ -187,6 +188,17 @@ public:
     std::size_t waterfallCopy(std::size_t slot, std::size_t rows, std::vector<std::uint8_t>& out, std::size_t& bins, std::vector<cascade::core::wfhistory::LineMeta>* meta = nullptr);
 
 private:
+    // ---- the receive clarifier (wire_a_rit.cpp) ----
+    Result ritOp(const FoxCommand& c, Result res);
+    void ritPass();
+    void ritFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    struct Rit {
+        cascade::core::tuning::RitXit model;
+        double seenHz = 0.0;
+        bool seen = false;
+    };
+    std::array<Rit, 8> rit_;
+
     // ---- the I/Q file transport: speed, pause, step (wire_a_transport.cpp) ----
     Result transportOp(const FoxCommand& c, Result res);
     void transportFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;

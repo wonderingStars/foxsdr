@@ -61,6 +61,8 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
             return framesOp(c, text, res);
         case FOXAPP_OP_FILE_TRANSPORT:
             return transportOp(c, res);
+        case FOXAPP_OP_RIT:
+            return ritOp(c, res);
         case FOXAPP_OP_TRACE_MODE:
             return traceModeOp(text, res);
         case FOXAPP_OP_MARKER_EXPORT:
@@ -131,6 +133,7 @@ void WireA::pass() {
     scanPass();
     bookmarksPass();
     historyPass();
+    ritPass();
     drainSaves();
 }
 
@@ -148,6 +151,7 @@ void WireA::facts(const std::function<void(const std::string&, const std::string
     displayFacts(fact);
     framesFacts(fact);
     transportFacts(fact);
+    ritFacts(fact);
 }
 
 void WireA::tunedFacts(const std::function<void(const std::string&, const std::string&)>& fact) const {
