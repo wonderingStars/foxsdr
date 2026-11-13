@@ -43,6 +43,7 @@
 #include "core/scan_trigger.hpp"
 #include "core/scanner_params.hpp"
 #include "core/freq_history.hpp"
+#include "core/airband_gate.hpp"
 #include "core/patch_graph.hpp"
 #include "core/rit_xit.hpp"
 #include "foxsdr_api.h"
@@ -189,6 +190,19 @@ public:
     std::size_t waterfallCopy(std::size_t slot, std::size_t rows, std::vector<std::uint8_t>& out, std::size_t& bins, std::vector<cascade::core::wfhistory::LineMeta>* meta = nullptr);
 
 private:
+    // ---- the airband monitor's per-channel settings (wire_a_airband.cpp) ----
+public:
+    // The gate factory for the set the monitor is about to build (null function when no channel has settings of its own).
+    cascade::core::MonitorGateFactory airbandGates();
+private:
+    Result airbandChannelOp(const FoxCommand& c, const std::string& text, Result res);
+    void airbandChannelFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    void airbandChannelLoadOnce();
+    void airbandReap();
+    void airbandChannelSave();
+    cascade::core::airband::ChannelTable airbandTable_;
+    bool airbandTableLoaded_ = false;
+
     // ---- the patch page's edit history, selection, copy / paste and bypass (wire_a_patchedit.cpp) ----
     Result patchEditOp(const FoxCommand& c, const std::string& text, Result res);
     void patchHistoryPass();

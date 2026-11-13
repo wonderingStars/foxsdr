@@ -46,6 +46,8 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
             return containerOp(c, res);
         case FOXAPP_OP_RECORD_IQ_CONTAINER:
             return iqContainerOp(c, res);
+        case FOXAPP_OP_AIRBAND_CHANNEL:
+            return airbandChannelOp(c, text, res);
         case FOXAPP_OP_PATCH_UNDO:
         case FOXAPP_OP_PATCH_REDO:
         case FOXAPP_OP_PATCH_SELECT:
@@ -135,6 +137,8 @@ void WireA::pass() {
     containerPass();
     iqContainerPass();
     patchHistoryPass();
+    airbandChannelLoadOnce();
+    airbandReap();
     framesLoadOnce();
     gradientLoadOnce();
     for (std::size_t slot = 0; slot < 8; ++slot) {
@@ -167,6 +171,7 @@ void WireA::facts(const std::function<void(const std::string&, const std::string
     ritFacts(fact);
     surroundFacts(fact);
     patchEditFacts(fact);
+    airbandChannelFacts(fact);
     fact("record.iqcontainer", iqContainer_ == 2 ? "sigmf" : (iqContainer_ == 1 ? "rf64" : "wav"));
 }
 

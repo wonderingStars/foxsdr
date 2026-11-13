@@ -248,6 +248,15 @@
 #define FOXAPP_OP_PATCH_PASTE            0x882Eu /* num[0], num[1]: where the set's top-left goes */
 #define FOXAPP_OP_PATCH_BYPASS           0x882Fu /* ival[0]: 1 on / 0 off; text: {"ids":[..]} or none = the selection */
 
+//   AIRBAND_CHANNEL (SETTINGS; core/airband_channel.hpp, core/airband_gate.hpp, core/airband_writer.hpp, second pass): the airband monitor's PER-CHANNEL settings. A monitor channel (a ticked row, found by its frequency in whole
+//   hertz) can have settings of its own: a high-pass, a low-pass and up to three notches on its audio, its own squelch (a LEVEL threshold with its hold, or an SNR threshold with hysteresis and hang), and an output it
+//   asks for: nothing (the default), a WAV file of the audio before the gate (in <recordings folder>/airband/<UTC day>/, written on a worker thread, split at the size cap) or the gated audio as a UDP stream to 127.0.0.1 and the
+//   port chosen. A channel with no settings of its own is the monitor's channel exactly as before (the shared squelch). ival[0] = 0 sets one from the text FOXAIRCH1|... (the model's strict one-line form: BAD_ARGUMENT when it
+//   does not parse, OUT_OF_RANGE with the model's sentence when a value is outside its range or a file output has no recordings folder, NO_CHANGE for the same settings); ival[0] = 1 clears the one at num[0] Hz
+//   (NO_CHANGE when it has none); ival[0] = 2 clears them all. Takes effect at once when the monitor is listening (the block on the air is built again, which restarts its squelches) and otherwise at the next LISTEN.
+//   Kept in airband-channels.json beside markers.json. Facts: fact.airband.channels (how many), fact.airband.channel.<Hz> (the text). Receive only: the stream goes to this computer's loopback and nowhere else.
+#define FOXAPP_OP_AIRBAND_CHANNEL        0x8830u /* ival[0]: 0 set (text) / 1 clear one (num[0] Hz) / 2 clear all */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -298,7 +307,8 @@
     {FOXAPP_OP_PATCH_SELECT, "APP_PATCH_SELECT", true}, \
     {FOXAPP_OP_PATCH_COPY, "APP_PATCH_COPY", true}, \
     {FOXAPP_OP_PATCH_PASTE, "APP_PATCH_PASTE", true}, \
-    {FOXAPP_OP_PATCH_BYPASS, "APP_PATCH_BYPASS", true},
+    {FOXAPP_OP_PATCH_BYPASS, "APP_PATCH_BYPASS", true}, \
+    {FOXAPP_OP_AIRBAND_CHANNEL, "APP_AIRBAND_CHANNEL", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP

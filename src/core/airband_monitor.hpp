@@ -52,6 +52,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <numeric>
 #include <string_view>
@@ -316,11 +317,15 @@ inline float nfmMixLevel(double bandwidthHz, double outRateHz) {
 // reports from the old one's.
 // Null when no whole decimation of `deviceRateHz` lands in the audio band.
 // GUI THREAD ONLY - it allocates.
+// wire-a second pass: asks, for each member channel, for that channel's own gate (null = the shared level squelch at `squelchDb`, as it always was).
+using MonitorGateFactory = std::function<std::unique_ptr<patch::ChannelGate>(const MonitorChannel&, std::size_t index, double outRateHz)>;
+
 inline std::shared_ptr<patch::StripSet> buildMonitorSet(const std::vector<MonitorChannel>& channels,
                                                         const AirbandBlock& block,
                                                         double centreHz, double deviceRateHz,
                                                         float squelchDb, patch::NodeId firstId,
-                                                        double audioRateHz = patch::kOutRateHz) {
+                                                        double audioRateHz = patch::kOutRateHz,
+                                                        const MonitorGateFactory* gates = nullptr) {
     const patch::RateChoice rc = patch::chooseChannelRate(deviceRateHz);
     if (!rc.ok || block.members.empty()) { return nullptr; }
     auto set = std::make_shared<patch::StripSet>();
@@ -344,6 +349,7 @@ inline std::shared_ptr<patch::StripSet> buildMonitorSet(const std::vector<Monito
         ch.squelch->setThresholdDb(squelchDb);
         ch.gated.assign(patch::kMaxBlockAudio, 0.0f);
         ch.audio.assign(patch::kMaxBlockAudio, 0.0f);
+        if (gates != nullptr && *gates) { ch.gate = (*gates)(c, i, ch.strip.outRateHz()); }   // wire-a second pass
         set->channels.push_back(std::move(ch));
     }
     const double inRate = set->channels.front().strip.outRateHz();

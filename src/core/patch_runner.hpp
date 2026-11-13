@@ -76,6 +76,17 @@ namespace cascade::core::patch {
 
 // One running channel: the strip, what it is demodulating, and where its audio
 // goes. `audio` is preallocated so process() never grows it on the DSP thread.
+// wire-a second pass begin: A CHANNEL'S OWN GATE. The airband monitor's per-channel settings (core/airband_gate.hpp) replace the shared level squelch of one channel with that channel's own: a filter chain, a level or
+// SNR squelch, optional outputs. process() works in place on the channel's copy of the audio and says whether the gate is open; levelDb() / isOpen() are what the squelch meters read. Audio thread only.
+class ChannelGate {
+public:
+    virtual ~ChannelGate() = default;
+    virtual bool process(const std::complex<float>* baseband, float* audio, std::size_t n) = 0;
+    virtual float levelDb() const = 0;
+    virtual bool isOpen() const = 0;
+};
+// wire-a second pass end
+
 struct RunningChannel {
     NodeId node = kNoNode;
     Strip strip;
@@ -95,6 +106,7 @@ struct RunningChannel {
     // a demodulator: "off" is a threshold nothing falls below, so turning it
     // on and off never rebuilds the set (which would restart its decoders).
     std::unique_ptr<cascade::dsp::Squelch> squelch;
+    std::unique_ptr<ChannelGate> gate;   // wire-a second pass: when set, it does the squelch's work for this channel (the squelch above stays, unused, so every reader of `squelch` keeps its meaning)
     float squelchDb = 0.0f;       // the threshold the squelch is set to now
     std::vector<float> gated;
     // THIS CHANNEL'S SHARE OF THE MIX (0.99.66), times StripSet::mixGain, in
@@ -867,12 +879,22 @@ private:
                     rc.squelch->setThresholdDb(want);
                 }
                 for (std::size_t i = 0; i < take; ++i) { rc.gated[i] = rc.audio[i]; }
+                if (rc.gate) {   // wire-a second pass: the channel's own gate (airband per-channel settings)
+                    rc.gate->process(iqScratch_.data(), rc.gated.data(), take);
+                    if (ci < kSquelchSlots) {
+                        SqRead& r = sqRead_[ci];
+                        r.db.store(rc.gate->levelDb(), std::memory_order_relaxed);
+                        r.open.store(rc.gate->isOpen(), std::memory_order_relaxed);
+                        r.node.store(rc.node, std::memory_order_release);
+                    }
+                } else {
                 rc.squelch->process(iqScratch_.data(), take, rc.gated.data());
                 if (ci < kSquelchSlots) {
                     SqRead& r = sqRead_[ci];
                     r.db.store(rc.squelch->levelDb(), std::memory_order_relaxed);
                     r.open.store(rc.squelch->isOpen(), std::memory_order_relaxed);
                     r.node.store(rc.node, std::memory_order_release);
+                }
                 }
             }
             const float* heard = rc.squelch ? rc.gated.data() : rc.audio.data();
