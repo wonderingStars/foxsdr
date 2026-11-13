@@ -2,12 +2,15 @@
 #include "core/freq_markers.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <set>
+#include <system_error>
+#include <thread>
 
 #include <nlohmann/json.hpp>
 
@@ -35,6 +38,15 @@ namespace {
 // int, which a number at the top of the range made them do: the next marker was
 // handed a number the list already held (tests/test_freq_markers.cpp).
 constexpr int kMaxMarkerNumber = 1'000'000'000;
+
+#ifdef _WIN32
+// How many times writeFile() tries a refused replace again, and which refusals are "the target is open right now" (ERROR_ACCESS_DENIED 5, ERROR_SHARING_VIOLATION 32,
+// ERROR_LOCK_VIOLATION 33; the numbers, so this file needs no <windows.h>).
+constexpr int kReplaceRetries = 5;
+bool transientReplaceFailure(const std::error_code& ec) {
+    return ec.category() == std::system_category() && (ec.value() == 5 || ec.value() == 32 || ec.value() == 33);
+}
+#endif
 
 }  // namespace
 
@@ -286,6 +298,17 @@ bool FreqMarkers::writeFile(const std::string& path, const std::string& text,
         }
     }
     fs::rename(tmp, target, ec);
+    // A TARGET SOMEONE HAS OPEN FOR A MOMENT (engine fixes 5, item 3). On Windows the replace fails with "Access is denied" / a sharing violation while any other handle on the
+    // target is open - a reader polling the file, a virus scanner, the search indexer, a backup - and the handle is normally closed within milliseconds. Dropping the save then
+    // loses the person's setting with nothing to retry it (the saver only reports it), so the replace is tried again a few times with a short, growing wait (10 + 20 + 40 + 80 +
+    // 160 ms at most, on the worker thread this runs on - never the GUI's). A handle held longer than that is still reported, with the system's own words.
+#ifdef _WIN32
+    for (int attempt = 0; ec && transientReplaceFailure(ec) && attempt < kReplaceRetries; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10 << attempt));
+        ec.clear();
+        fs::rename(tmp, target, ec);
+    }
+#endif
     if (ec) {
         std::error_code ignored;
         fs::remove(tmp, ignored);

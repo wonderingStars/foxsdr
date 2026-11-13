@@ -10,12 +10,15 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/freq_markers.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <limits>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 
 #ifdef _WIN32
 #include <process.h>
@@ -258,6 +261,61 @@ void testRounding() {
     CHECK(cascade::core::markerMhzText(7'074'050.4) == "7.07405");
 }
 
+// A TARGET SOMEONE HAS OPEN FOR A MOMENT (engine fixes 5, item 3: the intermittent failure of test_engine_api_wire_a_display). On Windows the atomic replace is refused with
+// "Access is denied" while another handle on the target is open (a polling reader, a virus scanner, the indexer). writeFile() tries a refused replace again a few times (10, 20,
+// 40, 80, 160 ms): a handle that closes inside that time costs nothing; one held longer is reported with the system's words and the old file is untouched.
+void testTargetBusyForAMoment() {
+#ifdef _WIN32
+    const std::string path = p("busy.json");
+    std::string err;
+    CHECK(FreqMarkers::writeFile(path, "one", err));
+    auto readAll = [&] { std::ifstream f(path, std::ios::binary); return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); };
+    CHECK(readAll() == "one");
+    {   // held for 120 ms (ifstream: no delete sharing): the replace waits it out and lands
+        std::ifstream held(path);
+        CHECK(held.is_open());
+        std::thread closer([&held] { std::this_thread::sleep_for(std::chrono::milliseconds(120)); held.close(); });
+        err.clear();
+        const bool ok = FreqMarkers::writeFile(path, "two", err);
+        closer.join();
+        CHECK(ok);
+        CHECK(err.empty());
+        CHECK(readAll() == "two");
+    }
+    {   // held for the whole retry window and beyond: refused honestly, old content intact, no temp file left
+        std::ifstream held(path);
+        CHECK(held.is_open());
+        err.clear();
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool ok = FreqMarkers::writeFile(path, "three", err);
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        CHECK(!ok);
+        CHECK(err.find("atomic replace") != std::string::npos);
+        CHECK(err.find("Access is denied") != std::string::npos);
+        CHECK(ms >= 250 && ms < 4000);   // the waits add up to 310 ms; bounded
+        held.close();
+        CHECK(readAll() == "two");
+        int tmps = 0;
+        for (const auto& e : fs::directory_iterator(g_root)) { if (e.path().extension() == ".tmp") { ++tmps; } }
+        CHECK(tmps == 0);
+    }
+    err.clear();
+    CHECK(FreqMarkers::writeFile(path, "four", err));   // closed again: straight through
+    CHECK(readAll() == "four");
+    {   // a directory in the target's place is refused too (Windows words it "Access is denied" as well, so it waits out the same bounded retries) and nothing hangs
+        fs::create_directories(p("adir.json"));
+        err.clear();
+        const auto t0 = std::chrono::steady_clock::now();
+        CHECK(!FreqMarkers::writeFile(p("adir.json"), "x", err));
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        CHECK(!err.empty());
+        std::printf("  a directory in the target's place: refused after %lld ms (%s)\n", static_cast<long long>(ms), err.c_str());
+    }
+#else
+    std::printf("  (Windows only: skipped)\n");
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -274,6 +332,7 @@ int main() {
     testLoadDamage();
     testAHugeNumberCannotWrapTheCounter();
     testRounding();
+    testTargetBusyForAMoment();
 
     const int rc = testSummary("test_freq_markers");
     if (rc == 0) { fs::remove_all(g_root, ec); }
