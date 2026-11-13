@@ -533,7 +533,11 @@ export global Theme {
 
     // ---- metrics: the Workbench arrangement's measurements (the artboards' CSS), fixed in phase 1 ----
     out property <length> title-h: 36px;        // custom title bar, every platform
-    out property <length> strip-h: 104px;       // receiver strip
+    // THE COUNTER SCALE AND THE READINGS SCALE (window-gaps-2, rows 35, 36, 40, 156, 158, 1394, 1396): the saved counterScale (1 = normal, 2 = enlarged figures) and readingsScale (1.0, or 1.4 for every reading),
+    // set by the host from the interface half. The counter's figures, the receiver strip that holds them and the live readings follow; nothing else moves.
+    in-out property <float> counter-scale: 1.0;
+    in-out property <float> reading-scale: 1.0;
+    out property <length> strip-h: 104px + (root.counter-scale - 1.0) * 52px;       // receiver strip
     out property <length> rail-w: 64px;         // icon rail
     out property <length> rail-key: 56px;       // a rail key is square
     out property <length> panel-w: 296px;       // sections panel
@@ -552,8 +556,8 @@ export global Theme {
     out property <length> chip-h: 20px;
     out property <length> lamp-dot: 9px;
     out property <length> lamp-dot-sm: 8px;     // .ld
-    out property <length> digit-w: 34px;
-    out property <length> digit-h: 52px;
+    out property <length> digit-w: 34px * root.counter-scale;
+    out property <length> digit-h: 52px * root.counter-scale;
     out property <length> nudge-h: 10px;
     out property <length> slider-track-h: 6px;
     out property <length> slider-knob-d: 16px;  // knob diameter (slider-knob is its colour)
@@ -571,9 +575,9 @@ export global Theme {
     out property <length> font-hint: 10px;
     out property <length> font-tiny: 9px;
     out property <length> font-micro: 8px;
-    out property <length> font-readout: 16px;   // the peak figure
-    out property <length> font-digit: 30px;     // the counter numerals
-    out property <length> font-counter-dot: 22px;
+    out property <length> font-readout: 16px * root.reading-scale;   // the peak figure
+    out property <length> font-digit: 30px * root.counter-scale;     // the counter numerals
+    out property <length> font-counter-dot: 22px * root.counter-scale;
     out property <length> cap-spacing: 0.8px;   // .cap letter-spacing .08em at 10px
     out property <int> weight-regular: 400;
     out property <int> weight-medium: 500;

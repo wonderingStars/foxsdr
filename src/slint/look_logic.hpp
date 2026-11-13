@@ -25,6 +25,8 @@ enum class SkinId { Workbench, NightWatch, HighContrast, GlassCockpit, DaylightL
 
 // The skin a saved theme key ("today", "classic-xl", "night", "glass", "daylight", "field"; anything else is Today) is drawn in.
 SkinId skinOfTheme(const std::string& uiTheme);
+// Ctrl+= and Ctrl+- (the classic's handleInterfaceScaleKeys): from `nowPercent` the next offered step above (dir > 0) or below (dir < 0) through 100 to 250 %; 0 when there is none (already at the end).
+int stepUiSizePercent(int nowPercent, int dir);
 const char* skinName(SkinId id);   // "workbench", "night"
 
 enum class CounterFace { Plain, Drum, Nixie };

@@ -469,7 +469,7 @@ export component MainWindow inherits Window {
                                     tooltip: root.freq-locked ? @tr("Frequency locked - press to unlock") : @tr("Lock the frequency");
                                     clicked => { root.lock-toggled(); } }
                                 Lamp { caption: @tr("RCVR"); state: root.running ? LampState.amber : LampState.off; }
-                                Text { text: root.tuned-text; font-family: Theme.font-mono; font-size: Theme.font-small; color: Theme.accent-soft; vertical-alignment: center; }
+                                Text { text: root.tuned-text; font-family: Theme.font-mono; font-size: Theme.font-small * Theme.reading-scale; color: Theme.accent-soft; vertical-alignment: center; }
                             }
                         }
                         counter := FrequencyCounter {   // the caption slot under the figures: the converter line when one is active, else the sheet's tune hint
@@ -521,7 +521,7 @@ export component MainWindow inherits Window {
                             HorizontalLayout { spacing: 6px;   // the VOLUME meter, relocated under the volume slider (Workbench IA 2)
                                 Text { text: @tr("Level"); font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; }
                                 VerticalLayout { alignment: center; horizontal-stretch: 1; LevelBar { value: root.level-norm; } }
-                                Text { text: root.level-text; font-family: Theme.font-mono; font-size: Theme.font-hint; color: Theme.muted; vertical-alignment: center; }
+                                Text { text: root.level-text; font-family: Theme.font-mono; font-size: Theme.font-hint * Theme.reading-scale; color: Theme.muted; vertical-alignment: center; }
                             }
                         }
                     }

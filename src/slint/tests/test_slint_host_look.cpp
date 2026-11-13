@@ -27,6 +27,13 @@ void skins() {
     CHECK(std::string(skinName(SkinId::Workbench)) == "workbench");
 }
 
+void steps() {
+    // Ctrl+= and Ctrl+- (window-gaps-2, row 145): the next offered step through 100 to 250 %, none past either end, and a number between steps lands on its neighbour
+    CHECK(stepUiSizePercent(100, 1) == 125 && stepUiSizePercent(125, 1) == 150 && stepUiSizePercent(200, 1) == 250 && stepUiSizePercent(250, 1) == 0);
+    CHECK(stepUiSizePercent(250, -1) == 200 && stepUiSizePercent(125, -1) == 100 && stepUiSizePercent(100, -1) == 0);
+    CHECK(stepUiSizePercent(110, 1) == 125 && stepUiSizePercent(110, -1) == 100 && stepUiSizePercent(300, 1) == 0 && stepUiSizePercent(50, -1) == 0);
+}
+
 void faces() {
     CHECK(faceOfStyle("nixie") == CounterFace::Nixie);
     CHECK(faceOfStyle("neon") == CounterFace::Drum);
@@ -111,6 +118,7 @@ void follower() {
 
 int main() {
     skins();
+    steps();
     faces();
     wanted();
     resizing();

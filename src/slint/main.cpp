@@ -75,6 +75,7 @@
 #include "input_script.hpp"
 #include "key_dispatch.hpp"
 #include "look_logic.hpp"
+#include "gui/ui_scale.hpp"
 #include "kit_publish.hpp"
 #include "cjk_register.hpp"
 #include "patch_publish.hpp"
@@ -492,6 +493,7 @@ int main(int argc, char** argv) {
     bool bandPlanOn = true;
     double tuneStepHz = kDefaultTuneStepHz;   // Ctrl+Up/Down and the Tune step picker (10 kHz, as the key table's text says)
     bool showNudges = true;
+    bool lastSwitches = true;   // the saved counterSwitches last applied to showNudges
     if (const char* e = std::getenv("FOXSDR_SLINT_TUNE_STEP"); e != nullptr && bounded.bounded()) { const double v = std::atof(e); if (v >= 1.0 && v <= 1.0e7) { tuneStepHz = v; } }   // a bounded run only: the Link scripts keep their 12.5 kHz arithmetic
     Face face = Face::Plain;
     bool followBandPlan = true;                // the engine's switch (fact.bandPlan.followMode), read when the lists move
@@ -2033,10 +2035,18 @@ int main(int argc, char** argv) {
     // ---- the shortcuts, by config id (the key table of the ImGui window, as the user has SAVED it: docs 6.56) ----
     // The root FocusScope names a key press and asks here; the answer is the config id of the action that holds the chord in the saved table (the interface half the
     // host keeps, so a rebinding the Key bindings body has just saved answers on the very next press), "" when nothing does.
+    // CTRL+= AND CTRL+- STEP THE INTERFACE SIZE (window-gaps-2, row 145), as the classic's handleInterfaceScaleKeys does: from the size in force to the next of 100 to 250 %, ALONGSIDE whatever the key table binds the chord
+    // to (stock: the spectrum zoom, which the classic also does on the same press). Answered here, where a key reaches the window and not a text field.
+    const auto stepUiSize = [&](int dir) {
+        const int next = foxsdr::slintlook::stepUiSizePercent(static_cast<int>(std::lround(static_cast<double>(ui->window().scale_factor()) * 100.0)), dir);
+        for (int i = 0; next > 0 && i < cascade::gui::uiscale::kStepCount; ++i) { if (cascade::gui::uiscale::kSteps[i] == next) { systemBank.setInterfaceSize(i + 1); } }
+    };
     ui->on_key_answer([&](slint::SharedString key, bool ctrl, bool shift, bool alt, bool glyphShifted) {
         foxsdr::slintsystem::KeyPress press;
         press.key = std::string(key);
         press.ctrl = ctrl; press.shift = shift; press.alt = alt; press.glyphShifted = glyphShifted;
+        if (ctrl && !alt && (press.key == "Plus" || press.key == "Equal" || press.key == "NumPlus")) { stepUiSize(1); }
+        else if (ctrl && !shift && !alt && (press.key == "Minus" || press.key == "NumMinus")) { stepUiSize(-1); }
         return ss(foxsdr::slintsystem::shortcutForPress(press, foxsdr::slintsystem::keyTableFromConfig(duties.interfaceHalf().keyBindings)));
     });
     // A PNG of the window to `path` ("" = the refusal); the screenshot key stamps a name under the settings file's screenshots folder,
@@ -2583,6 +2593,15 @@ int main(int argc, char** argv) {
         ui->set_bias_hint(ss(biasHint(biasPresent, biasOn)));
         ui->set_bias_question_text(ss(std::string(state.deviceName) + ": FoxSDR will switch it on again whenever this radio is opened, until you turn it off."));
         ui->set_muted_by(ss(state.audioMutedBy));
+        // THE SAVED COUNTER SCALE, READINGS SCALE AND TUNER SWITCHES (window-gaps-2, rows 35, 36, 40, 156, 158, 1394, 1396): the interface half's values drive the figures; a change is applied once.
+        {
+            const cascade::core::AppConfig& lh = duties.interfaceHalf();
+            const float wantCounter = lh.counterScale >= 2 ? 2.0f : 1.0f;
+            const float wantReadings = std::clamp(lh.readingsScale, 1.0f, 3.0f);
+            if (ui->global<Theme>().get_counter_scale() != wantCounter) { ui->global<Theme>().set_counter_scale(wantCounter); }
+            if (ui->global<Theme>().get_reading_scale() != wantReadings) { ui->global<Theme>().set_reading_scale(wantReadings); }
+            if (lh.counterSwitches != lastSwitches) { lastSwitches = lh.counterSwitches; showNudges = lh.counterSwitches; }
+        }
         ui->set_show_nudges(showNudges);
 
         // the rail and the panel
@@ -3274,6 +3293,9 @@ int main(int argc, char** argv) {
             if (w == "hc") { out = wsMemory.saved().highContrast ? "1" : "0"; return std::string(); }
             if (w == "winhc") { out = winHc ? "1" : "0"; return std::string(); }
             if (w == "skin") { out = skinNow; return std::string(); }
+            if (w == "counterscale") { out = std::to_string(static_cast<int>(ui->global<Theme>().get_counter_scale())); return std::string(); }
+            if (w == "readingscale") { out = std::to_string(static_cast<int>(ui->global<Theme>().get_reading_scale() * 10.0f + 0.5f)); return std::string(); }
+            if (w == "nudges") { out = showNudges ? "1" : "0"; return std::string(); }
             if (w == "clip") { out = fakeClip; return std::string(); }
             if (w == "savenote") { out = publisher.lastSaveNote(); return std::string(); }
             if (w == "helpurl") { out = helpUrlOverride; return std::string(); }

@@ -14,6 +14,17 @@ constexpr float kMaxScale = 4.0f;
 constexpr float kSame = 0.001f;
 }  // namespace
 
+int stepUiSizePercent(int nowPercent, int dir) {
+    const int* steps = cascade::gui::uiscale::kSteps;
+    const int count = cascade::gui::uiscale::kStepCount;
+    if (dir > 0) {
+        for (int i = 0; i < count; ++i) { if (steps[i] > nowPercent) { return steps[i]; } }
+        return 0;
+    }
+    for (int i = count - 1; i >= 0; --i) { if (steps[i] < nowPercent) { return steps[i]; } }
+    return 0;
+}
+
 SkinId skinOfTheme(const std::string& uiTheme) {
     if (uiTheme == "night") { return SkinId::NightWatch; }
     if (uiTheme == "glass") { return SkinId::GlassCockpit; }

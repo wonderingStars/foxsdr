@@ -1,0 +1,17 @@
+#! frames=300 bank=4 sections=4:0 size=1600x900
+# wg2-size-keys (window-gaps-2, row 145): Ctrl+= and Ctrl+- step the interface size through 100 to 250 % from the size in force (the classic's handleInterfaceScaleKeys), and Ctrl+0 returns to Auto.
+# The step is saved (cfg.interfaceScale) and the window takes it on the next tick (look.scale).
+10 state running == 1
+state look.scale == 1.00
++2 key ctrl+=
++12 state cfg.interfaceScale == 125
+state look.scale == 1.25
++2 key ctrl+=
++12 state cfg.interfaceScale == 150
+state look.scale == 1.50
++2 key ctrl+-
++12 state cfg.interfaceScale == 125
++2 key ctrl+-
++12 state cfg.interfaceScale == 100
++2 key ctrl+0
++12 state cfg.interfaceScale == auto
