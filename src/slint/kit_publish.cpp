@@ -277,6 +277,13 @@ std::shared_ptr<slint::Model<SettingField>> KitPublisher::fieldsModel(const std:
         f.placeholder = ss(s.placeholder);
         f.max_length = static_cast<int>(s.maxLength);
         f.error = ss(kit_.edits().error(file, s.key));
+        {   // screen lane M, row 18: a field with named choices is drawn as a list of options (the plain box when it has none)
+            std::vector<slint::SharedString> values, labels;
+            for (const auto& ch : parseChoices(s.choices)) { values.push_back(ss(ch.first)); labels.push_back(ss(ch.second)); }
+            f.choice_values = std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(values));
+            f.choice_labels = std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(labels));
+            sig += "c" + s.choices + ";";
+        }
         f.pending = kit_.edits().pending(file, s.key) && browsed_.count(file + "|" + s.key) == 0u;   // a path chosen with BROWSE FILES is shown at once (the box would otherwise keep what it has until the engine answers)
         sig += s.key + "=" + shown + (f.pending ? "?" : "") + std::string(f.error) + ";";
         fields.push_back(std::move(f));
@@ -291,8 +298,10 @@ std::shared_ptr<slint::Model<SettingField>> KitPublisher::fieldsModel(const std:
     for (std::size_t i = 0; i < fields.size(); ++i) {
         const SettingField& now = fields[i];
         const SettingField was = *cached->row_data(i);
+        const auto choicesOf = [](const SettingField& x) { std::string c; if (x.choice_values) { for (std::size_t j = 0; j < x.choice_values->row_count(); ++j) { c += std::string(*x.choice_values->row_data(j)) + ""; } } return c; };
+        const std::string nowChoices = choicesOf(now), wasChoices = choicesOf(was);
         if (was.id != now.id || was.value != now.value || was.error != now.error || was.pending != now.pending || was.checked != now.checked ||
-            was.label != now.label || was.kind != now.kind || was.placeholder != now.placeholder || was.max_length != now.max_length) {
+            was.label != now.label || was.kind != now.kind || was.placeholder != now.placeholder || was.max_length != now.max_length || wasChoices != nowChoices) {
             cached->set_row_data(i, now);
         }
     }

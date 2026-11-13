@@ -277,6 +277,10 @@ const char* kindCaption(pc::NodeKind k) {
         case pc::NodeKind::Display: return tr("DISPLAY");
         case pc::NodeKind::Sink: return tr("SINK");
         case pc::NodeKind::Map: return tr("MAP");
+        case pc::NodeKind::Mixer: return tr("MIXER");
+        case pc::NodeKind::IfFilter: return tr("IF FILTER");
+        case pc::NodeKind::Generator: return tr("GENERATOR");
+        case pc::NodeKind::Scope: return tr("SCOPE");
     }
     return tr("NODE");
 }
@@ -291,6 +295,7 @@ const char* refusalText(pc::Connect why) {
         case pc::Connect::AlreadyWired: return tr("those are already wired together");
         case pc::Connect::SelfLoop: return tr("a node cannot feed itself");
         case pc::Connect::WouldCycle: return tr("that would make a loop");
+        case pc::Connect::TransmitRefused: return tr("a test source cannot feed anything that transmits");   // screen lane M, row 6
     }
     return tr("that connection was refused");
 }
@@ -313,15 +318,18 @@ struct PartSpec {
     pc::NodeKind kind;
     pc::PortType feed;
 };
-const PartSpec kParts[7] = {
+const PartSpec kParts[11] = {
     {FOX_TR_NOOP("Radio"), pc::NodeKind::Radio, pc::PortType::Iq},       {FOX_TR_NOOP("Channel"), pc::NodeKind::Channel, pc::PortType::Iq},
     {FOX_TR_NOOP("Demod"), pc::NodeKind::Demod, pc::PortType::Iq},       {FOX_TR_NOOP("Spectrum"), pc::NodeKind::Display, pc::PortType::Iq},
     {FOX_TR_NOOP("Speaker"), pc::NodeKind::Sink, pc::PortType::Audio},   {FOX_TR_NOOP("Text out"), pc::NodeKind::Sink, pc::PortType::Text},
     {FOX_TR_NOOP("Map"), pc::NodeKind::Map, pc::PortType::Track},
+    // screen lane M (docs/multi-radio-records/screen-m.md, row 6): the four parts the wiring second pass added. Only the Mixer and the IF filter run; the plan says so of the other two.
+    {FOX_TR_NOOP("Mixer"), pc::NodeKind::Mixer, pc::PortType::Audio},    {FOX_TR_NOOP("IF filter"), pc::NodeKind::IfFilter, pc::PortType::Iq},
+    {FOX_TR_NOOP("Generator"), pc::NodeKind::Generator, pc::PortType::Iq}, {FOX_TR_NOOP("Scope"), pc::NodeKind::Scope, pc::PortType::Iq},
 };
 }  // namespace
 
-std::string partLabelEnglish(int kind) { return kind >= 0 && kind < 7 ? std::string(kParts[kind].label) : std::string(); }
+std::string partLabelEnglish(int kind) { return kind >= 0 && kind < 11 ? std::string(kParts[kind].label) : std::string(); }
 
 std::string converterNameText(const cc::ConverterSetting& s) {
     const std::string lo = cc::converterHzText(s.loHz);
@@ -984,13 +992,14 @@ PatchModel PatchPage::bandModel() const {
     }
 
     // THE SEVEN FIXED PARTS. AT MOST FIVE RADIOS: the key goes grey at five and says why.
-    for (int i = 0; i < 7; ++i) {
+    for (int i = 0; i < 11; ++i) {
         PartKey k;
         k.label = tr(kParts[i].label);
         k.kind = i;
         const bool full = kParts[i].kind == pc::NodeKind::Radio && draft_.graph().count(pc::NodeKind::Radio) >= pc::kMaxRadios;
         k.enabled = !full;
         if (full) { cc::formatUtf8(k.tooltip, tr("A patch has at most %zu radios."), pc::kMaxRadios); }
+        if (kParts[i].kind == pc::NodeKind::Generator || kParts[i].kind == pc::NodeKind::Scope) { k.tooltip = tr("Saved with the patch, but this build does not run this part yet."); }   // screen lane M, row 6
         m.parts.push_back(std::move(k));
     }
 
@@ -1684,7 +1693,7 @@ InspectorModel PatchPage::inspectorModel() const {
 // =================================================================================================================================
 
 void PatchPage::partPressed(int kind, Submitter& sub) {
-    if (kind < 0 || kind > 6) { return; }
+    if (kind < 0 || kind > 10) { return; }
     // A PRESS IS PLACED once the canvas has a size: a new node lands inside the canvas in view (newPartPosition), not at the world origin, which after any pan is off the screen.
     const pg::Vec2 at = pg::newPartPosition(canvas_.drawView(), canvas_.canvas_w, canvas_.canvas_h, nodes_placed_);
     pc::Graph& g = draft_.graph();

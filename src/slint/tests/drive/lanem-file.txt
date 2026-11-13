@@ -1,0 +1,60 @@
+#! frames=1500 size=1600x6000 bank=0 sections=0:1 FOXSDR_FILE_PICK={fixtures}/ais-decoder.wav
+# lanem-file (screen lane M, docs/multi-radio-records/screen-m.md; row 1): the I/Q file's transport in the Source section. The rows exist only while the selected radio plays a file; speed, policy, pause, resume and step are each read back from fact.playback.1.*, and a step while playing is the engine's refusal in its own words.
+10 state running == 1
+# no file is playing: nothing of the transport is drawn
+state lm.rows.source == 0
+state lm.fact.playback.1.speed == ""
++1 choose "Source"#2 "IQ file"
++5 expect "Browse..." enabled equals "true"
++1 type "I/Q file path" "{fixtures}/ais-decoder.wav"
++1 key enter
++2 click "Open"
++40 state deviceName contains ais-decoder
++10 state lm.fact.playback.1.speed == 1
++3 state lm.rows.source > 8
+# it plays at the speed it was recorded at, as a tape (varispeed), not paused: the defaults, read from the engine
+state lm.fact.playback.1.policy == varispeed
+state lm.fact.playback.1.paused == 0
++1 expect "Step forward" enabled equals "false"
++1 expect "Step back" enabled equals "false"
++1 expect "Resume" enabled equals "false"
+# a speed outside 0.25 to 8 is refused here; a good one is read back
++1 type "Playback speed" "9"
++1 key enter
++2 click "Set the speed"
++6 state lm.note.source contains "Set the speed: allowed"
++1 type "Playback speed" "2"
++1 key enter
++2 click "Set the speed"
++12 state lm.fact.playback.1.speed == 2
++1 type "Playback speed" "0.25"
++1 key enter
++2 click "Set the speed"
++12 state lm.fact.playback.1.speed == 0.25
+# the policy
++1 click "Block skip"
++12 state lm.fact.playback.1.policy == blockskip
++1 click "Varispeed"
++12 state lm.fact.playback.1.policy == varispeed
++1 type "Playback speed" "1"
++1 key enter
++2 click "Set the speed"
++12 state lm.fact.playback.1.speed == 1
+# pause holds the position and enables the step keys; a step of 0 is refused here, a step goes through
++1 click "Pause"
++12 state lm.fact.playback.1.paused == 1
++1 expect "Step forward" enabled equals "true"
++1 expect "Resume" enabled equals "true"
++1 expect "Pause" enabled equals "false"
++1 type "Blocks to step" "0"
++1 key enter
++2 click "Step forward"
++6 state lm.note.source contains "Step: a step is at least one block"
++1 type "Blocks to step" "2"
++1 key enter
++2 click "Step forward"
++12 state lm.note.source contains "Step forward: done"
++1 shot "lanem-file.png"
++1 click "Resume"
++12 state lm.fact.playback.1.paused == 0
++1 state running == 1

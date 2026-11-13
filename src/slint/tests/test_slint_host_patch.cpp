@@ -347,7 +347,9 @@ void everySentenceIsADrawers() {
     const std::string drawers = joinedSource("gui/app_window.cpp") + joinedSource("gui/app_window_patch.cpp") + joinedSource("gui/app_window_patch_radios.cpp") +
                                 joinedSource("gui/app_window_patch_blueprints.cpp") + joinedSource("gui/app_window_patch_presets.cpp") + joinedSource("gui/patch_view.cpp") + joinedSource("gui/scope_view.cpp");   // (START and STOP are the dome's own word)
     static const std::regex literal(R"re(\btr\(\s*("(?:[^"\\]|\\.)*")\s*\))re");
-    const std::set<std::string> newKeys = {"\"%zu line\"", "\"%zu lines\""};
+    // screen lane M (row 6) adds six: the captions of the four parts the wiring second pass added, the refusal of a test source feeding a transmitting sink and the two parts' "not run yet" tooltip
+    const std::set<std::string> newKeys = {"\"%zu line\"", "\"%zu lines\"", "\"MIXER\"", "\"IF FILTER\"", "\"GENERATOR\"", "\"SCOPE\"", "\"a test source cannot feed anything that transmits\"",
+                                           "\"Saved with the patch, but this build does not run this part yet.\""};
     int seen = 0, missing = 0, news = 0;
     std::set<std::string> distinct;
     for (std::sregex_iterator it(mine.begin(), mine.end(), literal), end; it != end; ++it) {
@@ -650,6 +652,7 @@ void smallRules() {
     EQ(std::string(refusalText(pc::Connect::AlreadyWired)), std::string("those are already wired together"));
     EQ(std::string(refusalText(pc::Connect::SelfLoop)), std::string("a node cannot feed itself"));
     EQ(std::string(refusalText(pc::Connect::WouldCycle)), std::string("that would make a loop"));
+    EQ(std::string(refusalText(pc::Connect::TransmitRefused)), std::string("a test source cannot feed anything that transmits"));   // screen lane M, row 6
     EQ(std::string(refusalText(static_cast<pc::Connect>(99))), std::string("that connection was refused"));
     EQ(portTone(PortType::Iq), 0);
     EQ(portTone(PortType::Audio), 1);
@@ -663,7 +666,12 @@ void smallRules() {
     EQ(partLabelEnglish(4), std::string("Speaker"));
     EQ(partLabelEnglish(5), std::string("Text out"));
     EQ(partLabelEnglish(6), std::string("Map"));
-    EQ(partLabelEnglish(7), std::string(""));
+    EQ(partLabelEnglish(7), std::string("Mixer"));   // screen lane M: the four parts after Map
+    EQ(partLabelEnglish(8), std::string("IF filter"));
+    EQ(partLabelEnglish(9), std::string("Generator"));
+    EQ(partLabelEnglish(10), std::string("Scope"));
+    EQ(partLabelEnglish(11), std::string(""));
+    EQ(partLabelEnglish(-1), std::string(""));
     // the converter's name
     cc::ConverterSetting s;
     s.mode = cc::ConverterMode::Down;
@@ -2050,12 +2058,15 @@ void theTabChip() {
 void thePartKeys() {
     Fx f(chain().g);
     const PatchModel m = f.page.bandModel();
-    EQ(m.parts.size(), std::size_t{7});
-    const char* labels[7] = {"Radio", "Channel", "Demod", "Spectrum", "Speaker", "Text out", "Map"};
-    for (std::size_t i = 0; i < 7; ++i) {
+    EQ(m.parts.size(), std::size_t{11});   // screen lane M: the seven fixed parts and the four the wiring second pass added
+    const char* labels[11] = {"Radio", "Channel", "Demod", "Spectrum", "Speaker", "Text out", "Map", "Mixer", "IF filter", "Generator", "Scope"};
+    for (std::size_t i = 0; i < 11; ++i) {
         EQ(at(m.parts, i).label, std::string(labels[i]));
         EQ(at(m.parts, i).kind, static_cast<int>(i));
-        CHECK(at(m.parts, i).enabled && at(m.parts, i).tooltip.empty());
+        CHECK(at(m.parts, i).enabled);
+        // the two parts that are saved and not run say so on their key; the others have no tooltip
+        if (i == 9 || i == 10) { EQ(at(m.parts, i).tooltip, std::string("Saved with the patch, but this build does not run this part yet.")); }
+        else { CHECK(at(m.parts, i).tooltip.empty()); }
     }
     // AT MOST FIVE RADIOS: the Radio key goes dim at five and still says why
     pc::Graph g = chain().g;
@@ -2068,6 +2079,32 @@ void thePartKeys() {
     CHECK(!at(five.parts, 0).enabled);
     EQ(at(five.parts, 0).tooltip, std::string("A patch has at most 5 radios."));
     CHECK(at(five.parts, 1).enabled && at(five.parts, 1).tooltip.empty());
+}
+
+// screen lane M, row 6: the four new parts are placed as nodes of their own kinds, with their English names stored as data
+void theNewPartKeysPlaceNodes() {
+    Fx f(chain().g);
+    f.sub.clear();
+    const char* names[4] = {"Mixer", "IF filter", "Generator", "Scope"};
+    const NodeKind kinds[4] = {NodeKind::Mixer, NodeKind::IfFilter, NodeKind::Generator, NodeKind::Scope};
+    const char* captions[4] = {"MIXER", "IF FILTER", "GENERATOR", "SCOPE"};
+    for (int k = 0; k < 4; ++k) {
+        const std::size_t before = f.g().nodes().size();
+        f.page.draft().dirty = false;
+        f.page.partPressed(7 + k, f.sub);
+        EQ(f.g().nodes().size(), before + 1);
+        const pc::Node& n = lastNode(f.g());
+        CHECK(n.kind == kinds[k] && n.name == names[k]);
+    }
+    // a press outside the eleven places nothing
+    const std::size_t all = f.g().nodes().size();
+    f.page.partPressed(11, f.sub);
+    EQ(f.g().nodes().size(), all);
+    // each new node is drawn with its own caption, not the generic NODE
+    const CanvasModel c = f.page.canvasModel();
+    int found = 0;
+    for (const CanvasNode& n : c.nodes) { for (int k = 0; k < 4; ++k) { if (n.kind_caption == captions[k]) { ++found; } } }
+    EQ(found, 4);
 }
 
 void thePartKeysPlaceNodes() {
@@ -4105,6 +4142,7 @@ int main() {
     RUN(theTabChip);
     RUN(thePartKeys);
     RUN(thePartKeysPlaceNodes);
+    RUN(theNewPartKeysPlaceNodes);   // screen lane M, row 6
     RUN(theRadioPartTakesTheDeviceAfterTheScan);
     RUN(theDecoderKeys);
     RUN(aDecoderKeyPlacesTheDecoder);

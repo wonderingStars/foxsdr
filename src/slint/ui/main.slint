@@ -29,7 +29,7 @@ import { SignalEvents, SelectItem, GainStage, OptionRow, SourceModel, RadioExtra
          RecorderBody, RadioSetupSheet, ImportDialog } from "signal_bank.slint";
 import { SystemEvents, SpectrumLook, DisplayModel, LanguageModel, UpdatesModel, GpsRow, SerialPortsModel, KeyRow, KeyGroup, KeyBindingsModel, DiagnosticsModel,
          UsageModel, TesterModel, ReportPageModel, DisplayBody, LanguageBody, UpdatesBody, SerialPortsBody, KeyBindingsBody, DiagnosticsBody,
-         UsageBody, TesterBody, ReportSheet, KRow, KPanel, LaneK, LaneL } from "system_bank.slint";
+         UsageBody, TesterBody, ReportSheet, KRow, KPanel, LaneK, LaneL, LaneM } from "system_bank.slint";
 import { ToolsEvents, PositionOffers, RadarModel, BookmarkRow, BookmarksModel, ScannerModel, AirbandRow, AirportRow, AirbandModel, MarkerRow,
          MarkersModel, RadarBody, BookmarksBody, ScannerBody, AirbandBody, MarkersSheet } from "tools_bank.slint";
 import { ExtendEvents, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory, StoreSite, UpdateRow, StorePluginPage, StoreModel,
@@ -77,6 +77,7 @@ import { MapJEvents, LayerRow, ReplayModel, FilterModel, MapJModel, PolarDot, Sk
 import { GridLabel } from "map.slint";
 export { MapJEvents, LayerRow, ReplayModel, FilterModel, MapJModel, PolarDot, SkyModel, AntennaModel, GridLabel }
 export { LaneL }   // screen lane L (docs/multi-radio-records/screen-l.md): the host (lanel_publish.cpp) sets the global and answers its act(id, text)
+export { LaneM }   // screen lane M (docs/multi-radio-records/screen-m.md): the host (lanem_publish.cpp) sets the global and answers its act(id, text)
 export { KRow, LaneK, KTile, LaneKMatrix }   // screen lane K (docs/multi-radio-records/screen-k.md): the host (lanek_publish.cpp) sets the globals and answers their act(id, text)
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
@@ -652,6 +653,17 @@ export component MainWindow inherits Window {
                                         if root.bank-index == 0 && i == 2 : Slider { value: root.passband-norm; accessible-label: @tr("Passband"); changed(v) => { root.passband-changed(v); } }
                                         if root.bank-index == 0 && i == 2 : BodyRow { label: @tr("Tune step"); SelectKey { value: root.tune-step-text; clicked => { root.tune-step-clicked(self.absolute-position.x, self.absolute-position.y + self.height); } } }
                                         if root.bank-index == 0 && i == 2 : Checkbox { label: @tr("Follow the band plan's mode when retuning"); checked <=> root.follow-band-plan; toggled(v) => { root.follow-band-plan-toggled(v); } }
+                                        // screen lane M (docs/multi-radio-records/screen-m.md): the controls of the wiring second passes, each appended to the section the person looks in (an empty list draws nothing)
+                                        if root.bank-index == 0 && i == 0 : KPanel { rows: LaneM.rows-patch; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 0 && i == 1 : KPanel { rows: LaneM.rows-source; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 0 && i == 2 : KPanel { rows: LaneM.rows-radio; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 0 && i == 3 : KPanel { rows: LaneM.rows-audio; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 0 && i == 6 : KPanel { rows: LaneM.rows-record; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 2 && i == 4 : KPanel { rows: LaneM.rows-airband; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 2 && i == 5 : KPanel { rows: LaneM.rows-levels; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 4 && i == 6 : KPanel { rows: LaneM.rows-diag; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 9 : KPanel { rows: LaneM.rows-sweep; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 12 : KPanel { rows: LaneM.rows-libs; act(id, t) => { LaneM.act(id, t); } }
                                     }
                                 }
                             }

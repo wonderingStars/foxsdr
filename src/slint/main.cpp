@@ -96,6 +96,8 @@
 #include "lanec_publish.hpp"   // screen lane C (docs/multi-radio-records/screen-c.md)
 #include "lanek_publish.hpp"   // screen lane K (docs/multi-radio-records/screen-k.md)
 #include "lanel_publish.hpp"   // screen lane L (docs/multi-radio-records/screen-l.md)
+#include "lanem_logic.hpp"     // screen lane M (docs/multi-radio-records/screen-m.md): a mark's credit line
+#include "lanem_publish.hpp"   // screen lane M: the controls of the wiring second passes
 #include "core/sys_first_run.hpp"
 #include "core/zoom_select.hpp"
 #include "workspace_testseam.hpp"
@@ -145,7 +147,7 @@ struct ListsSnapshot {
     bool converter = false; std::string converterName; double converterLoHz = 0;
     struct Band { std::string name; double startHz, stopHz; };
     std::vector<Band> bands;
-    struct Mark { std::string name; double hz, widthHz; std::uint32_t rgba; bool span, dashed, spectrumOnly; std::string plugin; };   // plugin: the module that set it (the list item's detail)
+    struct Mark { std::string name; double hz, widthHz; std::uint32_t rgba; bool span, dashed, spectrumOnly; std::string plugin; std::string credit; };   // plugin: the module that set it (the list item's detail); credit: the plugin's credit line for the mark (screen lane M, row 21)
     std::vector<Mark> marks;
     struct Bookmark { std::uint64_t id; std::string name; double hz; bool favourite; };
     std::vector<Bookmark> bookmarks;
@@ -686,6 +688,8 @@ int main(int argc, char** argv) {
     // SCREEN LANE K (docs/multi-radio-records/screen-k.md): constructed further down, once the skin and the radios exist; the menus and the tick reach it through this pointer
     std::unique_ptr<foxsdr::slintlanek::LaneKPublisher> laneKp;
     std::unique_ptr<foxsdr::slintlanel::LaneLPublisher> laneLp;   // screen lane L
+    std::unique_ptr<foxsdr::slintlanem::LaneMPublisher> laneMp;   // screen lane M
+    double lastFilePositionSec = 0.0;   // screen lane M: the selected radio's position in the file it plays (set once a tick)
     double lastZoomSelected = 0.0;   // the span the last dragged selection zoomed to (state lk.zoomspan)
     const bool laneKOff = bounded.bounded() && std::getenv("FOXSDR_SLINT_LANEK_OFF") != nullptr;
     publisher.setClipboardSink([&](const std::string& t) { clipSet(t); });   // W16c: the Decoder output page's Copy key (clipSet is the window's clipboard, or the bounded run's stand-in)
@@ -808,7 +812,17 @@ int main(int argc, char** argv) {
         readList(FOXAPI_LIST_ANTENNAS, [&](const FoxListItem& it) { ++l.antennaCount; if (it.flags & FOXAPI_ITEM_ACTIVE) { l.antenna = it.name; } });
         readList(FOXAPI_LIST_CONVERTERS, [&](const FoxListItem& it) { if ((it.flags & FOXAPI_ITEM_ACTIVE) && it.value[0] != 0) { l.converter = true; l.converterName = it.name; l.converterLoHz = it.value[1]; } });
         readList(FOXAPI_LIST_BAND_PLAN, [&](const FoxListItem& it) { l.bands.push_back({it.name, it.value[0], it.value[1]}); });
-        readList(FOXAPI_LIST_MARKERS, [&](const FoxListItem& it) { l.marks.push_back({it.name, it.value[0], it.value[1], static_cast<std::uint32_t>(it.value[2]), (it.flags & FOXAPI_ITEM_SPAN) != 0, (it.flags & FOXAPI_ITEM_DASHED) != 0, (it.flags & FOXAPI_ITEM_SPECTRUM_ONLY) != 0, std::string(it.detail)}); });
+        readList(FOXAPI_LIST_MARKERS, [&](const FoxListItem& it) {
+            // screen lane M, row 21: the credit a plugin owes its data source, fact.plugin.marker.credit.<n> with n the mark's place in the list from 1
+            std::string credit;
+            {
+                char cb[96] = {};
+                const std::string key = "fact.plugin.marker.credit." + std::to_string(l.marks.size() + 1);
+                const int32_t cn = api->get_setting(session, key.c_str(), cb, sizeof(cb));
+                if (cn > 0) { credit.assign(cb, static_cast<std::size_t>(std::min<int32_t>(cn, 95))); }
+            }
+            l.marks.push_back({it.name, it.value[0], it.value[1], static_cast<std::uint32_t>(it.value[2]), (it.flags & FOXAPI_ITEM_SPAN) != 0, (it.flags & FOXAPI_ITEM_DASHED) != 0, (it.flags & FOXAPI_ITEM_SPECTRUM_ONLY) != 0, std::string(it.detail), credit});
+        });
         // TEST ONLY (a bounded run's FOXSDR_SLINT_TEST_MARKS=<n>): n made-up marks fed BELOW the plugin ABI (which caps a plugin at 64), spread over the selected radio's band with crowds, so the names' declutter
         // and its cost can be shown at 64 and 256 marks without a plugin that sets them
         if (testMarks > 0) {
@@ -1654,6 +1668,32 @@ int main(int argc, char** argv) {
         laneLp = std::make_unique<foxsdr::slintlanel::LaneLPublisher>(std::move(e));
         laneLp->wire();
     }
+    // ---- SCREEN LANE M (docs/multi-radio-records/screen-m.md): the controls of the wiring second passes, each in the section the person looks in ----
+    {
+        foxsdr::slintlanem::LaneMPublisher::Env e;
+        e.ui = &*ui;
+        e.api = api;
+        e.session = session;
+        e.bounded = bounded.bounded();
+        e.submit = [&](const FoxCommand& cin, std::uint32_t radio, const std::string* longText) {
+            foxsdr::slintlanem::SubmitOutcome out;
+            FoxCommand c = cin;
+            c.structSize = sizeof(c);
+            aimAt(c, radio);
+            FoxSubmitResult r{}; r.structSize = sizeof(r);
+            const bool useLong = longText != nullptr && FOXAPI_HAS(api, submit_text);
+            const int32_t rc = useLong ? api->submit_text(session, &c, longText->data(), static_cast<uint32_t>(longText->size()), &r) : api->submit(session, &c, 1, &r);
+            if (rc < 0) { out.status = rc; out.message = cascade::i18n::tr("The engine would not take that command."); return out; }
+            out.status = r.status;
+            out.ticket = r.ticket;
+            if (r.status == FOXAPI_BUSY) { out.message = cascade::i18n::tr("The engine is busy: try again in a moment."); }
+            return out;
+        };
+        e.selectedRadio = [&] { return workspace.selectedRadio(); };
+        e.filePositionSec = [&] { return lastFilePositionSec; };
+        laneMp = std::make_unique<foxsdr::slintlanem::LaneMPublisher>(std::move(e));
+        laneMp->wire();
+    }
     // lane K, DEPTH-GAPS A2 Display: a dragged selection of the plot zooms to it (core/zoom_select.hpp), frequency only
     ui->global<SpectrumEvents>().on_zoom_selected([&](int r, float x0, float x1) {
         RadioView& rv = r > 0 ? radios.at(r - 1) : selected();
@@ -2262,7 +2302,7 @@ int main(int argc, char** argv) {
             FigureMark fm{static_cast<float>(f), static_cast<float>(w), m.name, 0, 0, 0, 0, m.dashed};
             fm.hz = m.hz;
             if (fm.dashed && ++dashedSeen > 8) { fm.dashed = false; }
-            fm.tip = m.plugin;   // (the module's name for now; the layout below turns it into the tooltip of a name that is drawn)
+            fm.tip = m.plugin + '' + m.credit;   // (the module's name and its credit for now, joined by US; the layout below turns them into the tooltip of a name that is drawn)
             if (m.rgba != 0) { fm.a = a; fm.r = static_cast<std::uint8_t>(m.rgba >> 24); fm.g = static_cast<std::uint8_t>(m.rgba >> 16); fm.b = static_cast<std::uint8_t>(m.rgba >> 8); }
             fig.marks.push_back(fm);
             if (!m.spectrumOnly) { fig.wfMarks.push_back(fm); }
@@ -2293,9 +2333,11 @@ int main(int argc, char** argv) {
                 for (std::size_t i = 0; i < marks.size(); ++i) {
                     FigureMark& m = marks[i];
                     m.row = lay.row[i];
-                    const std::string plugin = m.tip;
+                    const std::size_t us = m.tip.find('');
+                    const std::string plugin = us == std::string::npos ? m.tip : m.tip.substr(0, us);
+                    const std::string credit = us == std::string::npos ? std::string() : m.tip.substr(us + 1);
                     m.tip.clear();
-                    if (m.row >= 0) { m.tip = foxsdr::slintmarks::tooltipText(m.label, fmtMHz(m.hz), plugin.empty() ? std::string() : cascade::core::formatText(cascade::i18n::tr("from %s"), plugin.c_str())); }
+                    if (m.row >= 0) { m.tip = foxsdr::slintlanem::withCredit(foxsdr::slintmarks::tooltipText(m.label, fmtMHz(m.hz), plugin.empty() ? std::string() : cascade::core::formatText(cascade::i18n::tr("from %s"), plugin.c_str())), credit); }
                 }
                 for (const auto& t : lay.tabs) {
                     PaneFigures::MarkTabFig tab;
@@ -2483,6 +2525,8 @@ int main(int argc, char** argv) {
                 if (laneKp->takeGradientChanged()) { eachRadio([&](RadioView& rv) { rv.wells.picture.assign(rv.wells.picture.size(), Rgba{0x06, 0x07, 0x0a, 255}); }); }   // the user's gradient: old lines cannot be recoloured
             }   // screen lane K (FOXSDR_SLINT_LANEK_OFF=1, a bounded run only, leaves it out)
             if (laneLp && !laneKOff) { laneLp->tick(static_cast<long>(tickNo)); }   // screen lane L (the same switch leaves it out)
+            lastFilePositionSec = state.filePositionSec;   // screen lane M: the selected radio's position in the file it plays
+            if (laneMp && !laneKOff) { laneMp->tick(static_cast<long>(tickNo)); }   // screen lane M (the same switch leaves it out)
             if (!laneCOff) { laneC.tick(state, static_cast<long>(tickNo)); }   // screen lane C: scanner block, memories, clock, sheets (FOXSDR_SLINT_LANEC_OFF=1, a bounded run only, leaves it out: the frame-cost comparison)
             if (!lists.converter && !(noteTick > 0 && tickNo - noteTick < 90)) {   // T9: the airband channel's name where the counter says "via ..." (a note or a converter keeps the place)
                 const std::string ch = cascade::core::airbandChannelName(state.tunedHz);
@@ -2750,6 +2794,7 @@ int main(int argc, char** argv) {
             transmitBank.onAnswer(r[i]);   // a refused LATCH or consent (the Transmit page's key note)
             deckOnAnswer(r[i]);
             if (laneLp) { laneLp->onAnswer(r[i]); }   // screen lane L: the refusal of an op it sent
+            if (laneMp) { laneMp->onAnswer(r[i]); }   // screen lane M: the same
             if (r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) { std::fprintf(stderr, "foxsdr-slint: op 0x%04x answered %d: %s\n", r[i].op, r[i].status, r[i].message); }
         }
 
@@ -2757,7 +2802,7 @@ int main(int argc, char** argv) {
         // the browser's tiles, the track-info lines, the plugin-use table, the events and the tickets - then its pages (kit_publish.cpp).
         kit.tick(state, listMoved, face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain");
         extendBank.publish(state);   // before the kit's pages: the store page of kind 9 is built from the model this hands over
-        for (const FoxCommandResult& r2 : kit.takeUnclaimedResults()) { patchBank.onAnswer(r2); transmitBank.onAnswer(r2); deckOnAnswer(r2); if (laneLp) { laneLp->onAnswer(r2); } }   // an answer the kit's own poll took first: the draft waits for it
+        for (const FoxCommandResult& r2 : kit.takeUnclaimedResults()) { patchBank.onAnswer(r2); transmitBank.onAnswer(r2); deckOnAnswer(r2); if (laneLp) { laneLp->onAnswer(r2); } if (laneMp) { laneMp->onAnswer(r2); } }   // an answer the kit's own poll took first: the draft waits for it
         patchBank.publish(state);    // before the kit's pages too: the Patch presets page of kind 10 is built from the model this hands over
         transmitBank.publish(state); // ... and the Transmit page of kind 11 (and the key's batch for this tick)
         // THE MAP'S LOOK, from the interface half each tick (SYSTEM > Display saves it there): the aircraft icon size, the trail width and the trail style, bounded
@@ -3195,6 +3240,7 @@ int main(int argc, char** argv) {
         if (name.rfind("lanec.", 0) == 0) { return laneC.readState(name.substr(6), out); }
         if (name == "lk.zoomspan") { out = fmt("%.0f", lastZoomSelected); return std::string(); }
         if (name.rfind("ll.", 0) == 0) { return laneLp ? laneLp->readState(name.substr(3), out) : std::string("no lane L"); }
+        if (name.rfind("lm.", 0) == 0) { return laneMp ? laneMp->readState(name.substr(3), out) : std::string("no lane M"); }
         if (name.rfind("lk.", 0) == 0) { return laneKp ? laneKp->readState(name.substr(3), out) : std::string("no lane K"); }
         // gaps.<what>: the classic-window gaps (docs/multi-radio-records/slint-gaps.md)
         if (name.rfind("gaps.", 0) == 0) {

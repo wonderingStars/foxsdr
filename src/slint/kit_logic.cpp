@@ -242,6 +242,7 @@ void readKitLists(TableReader& t, KitLists& c, const ReadOptions& o) {
             f.kind = static_cast<std::uint32_t>(it.value[0]);
             f.maxLength = static_cast<std::size_t>(it.value[1] > 0.0 ? it.value[1] : 0.0);
             f.value = factOf(t, "fact.plugin.setting." + id);
+            f.choices = factOf(t, "fact.plugin.setting." + id + ".choices");   // screen lane M, row 18
             c.settings.back().fields.push_back(std::move(f));
         }
     }
@@ -689,6 +690,24 @@ std::string countText(std::size_t shown, std::size_t total, std::size_t unplaced
     }
     return unplaced > 0 ? cascade::core::formatText(cascade::i18n::tr("%d targets, %d heard without a position"), to, un)
                         : cascade::core::formatText(cascade::i18n::tr("%d targets"), to);
+}
+
+// screen lane M (row 18): the named options of a settings field (the engine's fact, "value US label" pairs joined by RS).
+std::vector<std::pair<std::string, std::string>> parseChoices(const std::string& choices) {
+    std::vector<std::pair<std::string, std::string>> out;
+    std::size_t pos = 0;
+    while (pos <= choices.size() && !choices.empty()) {
+        std::size_t end = choices.find('', pos);
+        if (end == std::string::npos) { end = choices.size(); }
+        const std::string item = choices.substr(pos, end - pos);
+        pos = end + 1;
+        const std::size_t us = item.find('');
+        const std::string value = us == std::string::npos ? item : item.substr(0, us);
+        const std::string label = us == std::string::npos ? item : item.substr(us + 1);
+        if (!value.empty()) { out.emplace_back(value, label.empty() ? value : label); }
+        if (out.size() >= 32) { break; }
+    }
+    return out;
 }
 
 }  // namespace foxsdr::slintkit

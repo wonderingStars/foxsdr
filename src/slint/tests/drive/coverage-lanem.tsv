@@ -1,0 +1,15 @@
+5400	ASSERTED	lanem-file	speed, policy, paused read back from fact.playback.1.*; step is dead while playing
+5401	ASSERTED	lanem-signal	fact.rit.1.*
+5402	ASSERTED	lanem-signal	fact.wirec.sig.symbol_rate
+5403	ASSERTED	lanem-signal	fact.cwsurround.1.*
+5404	ASSERTED	lanem-signal	fact.record.iqcontainer
+5405	DRIVEN	lanem-signal	an empty patch: the engine's answers are read in the note; the effect on a patch with parts is tested by the engine tests
+5406	NOT_DRIVABLE	-	placed by test_slint_host_patch (nodes, captions, refusal); the canvas is not label-addressable
+5407	ASSERTED	lanem-tools	fact.airband.channel.<Hz>
+5408	ASSERTED	lanem-tools	fact.levels.*
+5409	ASSERTED	lanem-system	a real stitched run over the test generator left one sweep in fact.sweep.history
+5410	DRIVEN	lanem-system	save and load need a writable full path the script cannot name portably; refusals and the clear are read
+5411	NOT_DRIVABLE	-	a readout, not a control
+5412	NOT_DRIVABLE	-	no plugin makes a request in a test and pressing it would open a browser; the request parser is tested by test_slint_lanem_host
+5413	NOT_DRIVABLE	-	covered by test_slint_forms section 12b; no installed plugin gives choices
+5414	NOT_DRIVABLE	-	a tooltip; withCredit is tested by test_slint_lanem_host

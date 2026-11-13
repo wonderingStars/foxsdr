@@ -1,0 +1,110 @@
+#! frames=1500 size=1600x6000 bank=0 sections=0:0,2,3,6
+# lanem-signal (screen lane M, docs/multi-radio-records/screen-m.md; rows 2, 3, 4, 5, 20): the SIGNAL bank. The Patch section (undo, redo, select, copy, paste, bypass), the Radio section (the receive clarifier and the symbol rate), the Audio filters section (CW surround) and the Recorder section (the I/Q take's file kind), each read back from the engine's own facts.
+10 state running == 1
++3 state lm.rows.radio > 5
++1 click "More clarifier controls"
++3 state lm.draft.c.open == 1
+# row 2: the clarifier is OFF at 0 Hz until acted on; a step adds and switches it on, clear takes it back; each is read back from fact.rit.1.*
+state lm.fact.rit.1.on != 1
+state lm.fact.rit.1.hz == 0
++1 click "+100 Hz"
++12 state lm.fact.rit.1.hz == 100
++1 state lm.fact.rit.1.on == 1
++1 click "+10 Hz"
++12 state lm.fact.rit.1.hz == 110
++1 click "-100 Hz"
++12 state lm.fact.rit.1.hz == 10
++1 click "Clear the clarifier"
++12 state lm.fact.rit.1.hz == 0
++1 state lm.fact.rit.1.on != 1
+# an offset beyond the limit is refused on the screen, before it is sent
++1 type "Clarifier offset (Hz)" "10000"
++1 key enter
++2 click "Set the clarifier"
++6 state lm.note.radio contains "Set the clarifier: allowed"
+# a smaller limit is read back, and an offset beyond it is refused; the limit goes back to the default
++1 type "Largest offset (Hz)" "500"
++1 key enter
++1 click "Set the limits"
++12 state lm.fact.rit.1.max == 500
++1 type "Clarifier offset (Hz)" "600"
++1 key enter
++2 click "Set the clarifier"
++6 state lm.note.radio contains "Set the clarifier: allowed"
++1 type "Largest offset (Hz)" "9999"
++1 key enter
++1 click "Set the limits"
++12 state lm.fact.rit.1.max == 9999
+# a good offset is set and read back, then cleared
++1 type "Clarifier offset (Hz)" "300"
++1 key enter
++2 click "Set the clarifier"
++12 state lm.fact.rit.1.hz == 300
++1 click "Clear the clarifier"
++12 state lm.fact.rit.1.hz == 0
+# row 20: the symbol rate is a setting the engine keeps; a number is read back, a negative one is refused here
++1 type "Symbol rate (baud)" "1200"
++1 key enter
++12 state lm.fact.wirec.sig.symbol_rate == 1200
++1 type "Symbol rate (baud)" "-5"
++1 key enter
++6 state lm.note.radio contains "Symbol rate: allowed"
++1 type "Symbol rate (baud)" "0"
++1 key enter
++12 state lm.fact.wirec.sig.symbol_rate == 0
+# row 3: CW surround is OFF until ticked; numbers outside the range are refused here; an applied number is read back
++1 shot "lanem-signal.png"
+state lm.fact.cwsurround.1.on != 1
++1 click "CW surround"
++12 state lm.fact.cwsurround.1.on == 1
++1 type "Centre pitch (Hz)" "5000"
++1 key enter
++2 click "Apply the CW surround settings"
++6 state lm.note.audio contains "Centre pitch (Hz): allowed"
++1 type "Centre pitch (Hz)" "800"
++1 key enter
++2 click "Apply the CW surround settings"
++12 state lm.fact.cwsurround.1.centre == 800
++1 click "Invert left and right"
++12 state lm.fact.cwsurround.1.invert == 1
++1 click "Read the pitch now"
++12 state lm.read.cw contains "Hz"
++1 click "Invert left and right"
++12 state lm.fact.cwsurround.1.invert != 1
++1 click "CW surround"
++12 state lm.fact.cwsurround.1.on != 1
+# row 4: the I/Q take's file kind, WAV at every start; each kind is read back from fact.record.iqcontainer
+state lm.fact.record.iqcontainer == wav
++1 click "RF64"
++12 state lm.fact.record.iqcontainer == rf64
++1 click "SigMF"
++12 state lm.fact.record.iqcontainer == sigmf
++1 click "WAV"
++12 state lm.fact.record.iqcontainer == wav
+# row 5: the patch edit, on the engine's copy. The parts that are not in the patch are refused by the engine in its own words; an empty clipboard and an empty history change nothing
++1 click "Undo"
++6 state lm.note.patch contains "Undo:"
++1 click "Redo"
++6 state lm.note.patch contains "Redo:"
++1 click "Select all"
++6 state lm.note.patch contains "Select all:"
++1 click "Select none"
++6 state lm.note.patch contains "Select none:"
++1 type "Part numbers" "99999"
++1 key enter
++1 click "Select these parts"
++6 state lm.note.patch contains "Select these parts: Refused"
++1 type "Part numbers" "1 x"
++1 key enter
++1 click "Select these parts"
++6 state lm.note.patch contains "a part number is a whole number from 1"
++1 click "Paste"
++6 state lm.note.patch contains "Paste: Nothing changed"
++1 click "Copy the selection"
++6 state lm.note.patch contains "Copy the selection:"
++1 type "Paste at x" "abc"
++1 key enter
++1 click "Paste"
++6 state lm.note.patch contains "Paste at x"
++1 click "Bypass the selection"
++6 state lm.note.patch contains "Bypass the selection:"

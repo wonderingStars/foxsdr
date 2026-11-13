@@ -35,7 +35,8 @@ export enum SettingKind { text, number, bool, path, password }
 // One field of a plugin's form (core::SettingField and what the host knows of its edit): `id` is the engine's number for it, `key` its
 // name, `kind` maps to CASCADE_SETTING_* (password is the sheet's new kind and drawn as such), `value` the stored text, `checked` the stored
 // bool, `max-length` 0 = no limit, `error` the host's sentence ("" none), `pending` an edit that has been sent and not answered.
-export struct SettingField { id: int, key: string, label: string, kind: SettingKind, value: string, checked: bool, placeholder: string, max-length: int, error: string, pending: bool }
+// screen lane M (docs/multi-radio-records/screen-m.md, row 18): `choice-values` / `choice-labels` are the named options of a field the plugin gave a choice list (both empty = the plain box); a pick commits the option's value.
+export struct SettingField { id: int, key: string, label: string, kind: SettingKind, value: string, checked: bool, placeholder: string, max-length: int, error: string, pending: bool, choice-values: [string], choice-labels: [string] }
 
 // A wrapped line of small type (the sheet's `.n`): a Rectangle whose height is the text's wrapped height at the width it is given.
 component NoteText inherits Rectangle {
@@ -68,7 +69,7 @@ component SettingCell inherits Rectangle {
     in-out property <bool> on;
     property <bool> dirty;
 
-    height: fld.height;
+    height: root.f.choice-labels.length > 0 ? 22px + root.f.choice-labels.length * (Theme.key-xs-h + 3px) + (root.f.error != "" ? 34px : 0px) : fld.height;
 
     init => {
         root.text = root.f.value;
@@ -81,10 +82,42 @@ component SettingCell inherits Rectangle {
         }
     }
 
+    // a field with named choices: its label, then one small key per option (the stored one is lit); a pick commits that option's value
+    if root.f.choice-labels.length > 0 : VerticalLayout {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        spacing: 3px;
+        Text {
+            height: 19px;
+            text: root.f.label;
+            color: Theme.dim;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        for lab[i] in root.f.choice-labels : Key {
+            label: lab;
+            xs: true;
+            on: root.f.choice-values[i] == root.f.value;
+            enabled: root.enabled && !root.f.pending;
+            tooltip: root.f.error != "" ? root.f.error : root.f.placeholder;
+            clicked => { root.committed(root.f.choice-values[i]); }
+        }
+        if root.f.error != "" : Text {
+            text: root.f.error;
+            color: Theme.chip-err-fg;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            wrap: word-wrap;
+        }
+    }
     fld := Field {
         x: 0px;
         y: 0px;
         width: root.width;
+        visible: root.f.choice-labels.length == 0;
         label: root.f.label;
         kind: root.f.kind == SettingKind.number ? FieldKind.number
             : root.f.kind == SettingKind.bool ? FieldKind.bool
@@ -121,8 +154,8 @@ component SettingSlot inherits Rectangle {
     callback toggled(int, bool);
     callback browse-clicked(int);
 
-    property <bool> left-full: root.left.kind == SettingKind.path || root.left.kind == SettingKind.password;
-    property <bool> right-full: root.right.kind == SettingKind.path || root.right.kind == SettingKind.password;
+    property <bool> left-full: root.left.kind == SettingKind.path || root.left.kind == SettingKind.password || root.left.choice-labels.length > 0;
+    property <bool> right-full: root.right.kind == SettingKind.path || root.right.kind == SettingKind.password || root.right.choice-labels.length > 0;
     property <bool> shares: root.has-right && !root.left-full && !root.right-full;
     property <bool> own-row: root.has-right && !root.shares;
 

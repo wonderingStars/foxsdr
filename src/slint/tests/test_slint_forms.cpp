@@ -660,6 +660,58 @@ int main() {
     }
 
     // =========================================================================================================
+    // 12b. screen lane M (docs/multi-radio-records/screen-m.md, row 18): a field with named choices is a label and one key per option, the stored option lit;
+    //      a pick commits that option's VALUE (not its label) with the field's id; a field without choices is the plain box as before
+    // =========================================================================================================
+    {
+        const auto strings = [](std::initializer_list<const char*> v) {
+            std::vector<slint::SharedString> out;
+            for (const char* t : v) { out.push_back(slint::SharedString(t)); }
+            return std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(out));
+        };
+        SettingField mode = sf(21, "mode", "Mode", SettingKind::Number, "2", false, "1=PSK 2=Olivia 3=RTTY", 0, "", false);
+        mode.choice_values = strings({"1", "2", "3"});
+        mode.choice_labels = strings({"PSK", "Olivia", "RTTY"});
+        auto rail = std::make_shared<slint::VectorModel<SettingField>>(std::vector<SettingField>{mode, sf(22, "call", "Callsign filter", SettingKind::Text, "M0ABC", false, "", 0, "", false)});
+        ui->set_fields_rail(rail);
+        const Frame lit2 = render(ui, kW, kH);
+        // the form is the fold line, the 4 px top, the chooser (a 19 px label and three 20 px keys, 3 px apart), 8 px, one plain field (52) and 8 px
+        CHECKV(std::abs(ui->get_f3_height() - (24.0 + 4.0 + 22.0 + 3.0 * 23.0 + 8.0 + 52.0 + 8.0)) < 0.6, "the form with a chooser: height %.1f", ui->get_f3_height());
+        const int x = kLx + kPad;
+        const int keyY[3] = {f3Row + 22, f3Row + 22 + 23, f3Row + 22 + 46};
+        // the stored option (the second) is the lit key; the first is not: the two rows differ where a lit key is drawn
+        rail->set_row_data(0, [&] { SettingField m = mode; m.value = "1"; return m; }());
+        const Frame lit1 = render(ui, kW, kH);
+        CHECKV(differing(lit2, lit1, x + 2, keyY[0] + 2, x + 60, keyY[0] + 18) >= 30, "the lit option moved from the second key to the first (%d pixels changed on the first)", differing(lit2, lit1, x + 2, keyY[0] + 2, x + 60, keyY[0] + 18));
+        rail->set_row_data(0, mode);
+        render(ui, kW, kH);
+        // a pick commits the value with the field's id
+        reset();
+        clk(x + 30, keyY[2] + 10);
+        CHECKV(ui->get_commits() == 1 && ui->get_last_id() == 21 && sval(ui->get_last_text()) == "3" && sval(ui->get_last_form()) == "F3", "third option: %d commits, id %d, '%s'", ui->get_commits(), ui->get_last_id(), sval(ui->get_last_text()).c_str());
+        reset();
+        clk(x + 30, keyY[0] + 10);
+        CHECKV(ui->get_commits() == 1 && sval(ui->get_last_text()) == "1", "first option: '%s'", sval(ui->get_last_text()).c_str());
+        // the plain field under it still types and commits
+        reset();
+        const int plainIn = f3Row + (22 + 3 * 23) + 8 + kInputDy;
+        clk(x + 100, plainIn + 12);
+        tap(slint::platform::key_codes::End);
+        tap(u8"Q");
+        tap(slint::platform::key_codes::Return);
+        CHECKV(ui->get_commits() == 1 && ui->get_last_id() == 22 && sval(ui->get_last_text()) == "M0ABCQ", "plain field under a chooser: id %d, '%s'", ui->get_last_id(), sval(ui->get_last_text()).c_str());
+        // an edit in flight (pending) leaves the option keys dead, so a second pick cannot overtake the first
+        rail->set_row_data(0, [&] { SettingField m = mode; m.pending = true; return m; }());
+        render(ui, kW, kH);
+        reset();
+        clk(x + 30, keyY[2] + 10);
+        CHECKV(ui->get_commits() == 0, "a pick while an edit is pending committed %d", ui->get_commits());
+        park();
+        ui->set_fields_rail(std::make_shared<slint::VectorModel<SettingField>>(std::vector<SettingField>{}));
+        render(ui, kW, kH);
+    }
+
+    // =========================================================================================================
     // 13. G1 and G2: toggled callbacks carry the NEW state; GRANT turns into a lit REVOKE; the transmit line goes hot
     // =========================================================================================================
     {

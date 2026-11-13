@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <set>
 
 #include <nlohmann/json.hpp>
 
@@ -101,6 +102,7 @@ struct LaneLPublisher::Impl {
     std::map<std::string, std::string> draft;     // what the person typed or chose and has not sent (never saved)
     std::map<std::uint64_t, std::pair<int, std::string>> pending;   // ticket -> section, what it was
     std::map<std::uint64_t, std::string> pendingDraft;              // ticket -> the field whose typed text is dropped once the engine has taken it (the row then shows the engine's own fact)
+    std::set<std::uint64_t> asyncTickets;                           // screen lane M, row 9: tickets of the marker and pack file operations, whose OK means STARTED (the job's fact says how it ended)
     std::array<std::string, kSecCount> noteText;
     std::array<int, kSecCount> noteTone{};
     std::array<std::string, kSecCount> sig;
@@ -125,7 +127,7 @@ struct LaneLPublisher::Impl {
     // ---------------------------------------------------------------- the one place a command leaves
     void setNote(Sec s, const std::string& t, int tone) { noteText[s] = t; noteTone[s] = tone; dirty = true; }
 
-    void send(Sec s, const std::string& what, const Cmd& k, std::uint32_t radio = 0, const std::string& draftToDrop = std::string()) {
+    void send(Sec s, const std::string& what, const Cmd& k, std::uint32_t radio = 0, const std::string& draftToDrop = std::string(), bool async = false) {
         if (!env.submit) { return; }
         FoxCommand c{};
         c.structSize = sizeof(c);
@@ -143,17 +145,18 @@ struct LaneLPublisher::Impl {
         } else {
             pending[o.ticket] = {static_cast<int>(s), what};
             if (!draftToDrop.empty()) { pendingDraft[o.ticket] = draftToDrop; }
+            if (async) { asyncTickets.insert(o.ticket); }
             setNote(s, what + ": " + tr("sent"), kDim);
         }
     }
     static bool slintlanelRefusal(int status) { return statusIsRefusal(status); }
     void refuseHere(Sec s, const std::string& what, const std::string& why) { ++refused; setNote(s, what + ": " + why, kErr); }
     // sends a built JSON text, or says why it cannot be built
-    void sendBuilt(Sec s, const std::string& what, const Built& b, std::uint32_t op, long long i0 = 0, long long i1 = 0, std::uint32_t radio = 0) {
+    void sendBuilt(Sec s, const std::string& what, const Built& b, std::uint32_t op, long long i0 = 0, long long i1 = 0, std::uint32_t radio = 0, bool async = false) {
         if (!b.ok) { refuseHere(s, what, b.err); return; }
         Cmd c = cmd(op, i0, b.text);
         c.i1 = i1;
-        send(s, what, c, radio);
+        send(s, what, c, radio, std::string(), async);
     }
 
     void onAnswer(const FoxCommandResult& r) {
@@ -162,11 +165,12 @@ struct LaneLPublisher::Impl {
         const Sec s = static_cast<Sec>(it->second.first);
         const std::string what = it->second.second;
         pending.erase(it);
+        const bool wasAsync = asyncTickets.erase(r.ticket) != 0;
         ++answered;
         const auto pd = pendingDraft.find(r.ticket);
         if (pd != pendingDraft.end()) { if (r.status == FOXAPI_OK || r.status == FOXAPI_NO_CHANGE) { draft.erase(pd->second); } pendingDraft.erase(pd); }
         const std::string msg = trim(r.message);
-        if (r.status == FOXAPI_OK) { setNote(s, what + ": " + tr("done") + (msg.empty() ? std::string() : " (" + msg + ")"), kGood); }
+        if (r.status == FOXAPI_OK) { setNote(s, what + ": " + (wasAsync ? tr("started") : tr("done")) + (msg.empty() ? std::string() : " (" + msg + ")"), kGood); }   // a marker or pack file operation only STARTED a job: the job's fact says how it ended
         else if (r.status == FOXAPI_NO_CHANGE) { setNote(s, what + ": " + refusalText(r.status, msg), kDim); }
         else { ++refused; setNote(s, what + ": " + refusalText(r.status, msg), kErr); }
         dirty = true;
@@ -241,13 +245,13 @@ struct LaneLPublisher::Impl {
 
         v.push_back(rHeading(tr("Markers")));
         field(v, "t.mk-path", tr("Markers file"), "", tr("The full path of the file to write or read (CSV or JSON). An export never overwrites a file that exists."));
-        key(v, "t.mk-csv", tr("Export CSV..."), [this] { send(kTuning, tr("Export markers"), cmd(FOXAPP_OP_MARKER_EXPORT, 0, trim(dv("t.mk-path")))); }, !trim(dv("t.mk-path")).empty());
-        key(v, "t.mk-json", tr("Export JSON..."), [this] { send(kTuning, tr("Export markers"), cmd(FOXAPP_OP_MARKER_EXPORT, 1, trim(dv("t.mk-path")))); }, !trim(dv("t.mk-path")).empty());
+        key(v, "t.mk-csv", tr("Export CSV..."), [this] { send(kTuning, tr("Export markers"), cmd(FOXAPP_OP_MARKER_EXPORT, 0, trim(dv("t.mk-path"))), 0, std::string(), true); }, !trim(dv("t.mk-path")).empty());
+        key(v, "t.mk-json", tr("Export JSON..."), [this] { send(kTuning, tr("Export markers"), cmd(FOXAPP_OP_MARKER_EXPORT, 1, trim(dv("t.mk-path"))), 0, std::string(), true); }, !trim(dv("t.mk-path")).empty());
         field(v, "t.mk-reach", tr("Merge markers within (Hz)"), "0", tr("A marker this close to one in the list is merged with it; 0 = the same frequency only"));
         key(v, "t.mk-import", tr("Import..."), [this] {
             double r = 0; std::string e;
             if (!parseNumber(dv("t.mk-reach", "0"), 0.0, 1e9, r, e)) { refuseHere(kTuning, tr("Import markers"), e); return; }
-            Cmd c = cmd(FOXAPP_OP_MARKER_IMPORT, 0, trim(dv("t.mk-path"))); c.n0 = r; send(kTuning, tr("Import markers"), c);
+            Cmd c = cmd(FOXAPP_OP_MARKER_IMPORT, 0, trim(dv("t.mk-path"))); c.n0 = r; send(kTuning, tr("Import markers"), c, 0, std::string(), true);
         }, !trim(dv("t.mk-path")).empty());
         const std::string mio = fact("markerio.last");
         if (!mio.empty()) { v.push_back(rReadout(tr("Last markers file"), mio)); }
@@ -303,8 +307,8 @@ struct LaneLPublisher::Impl {
         field(v, "t.pack-path", tr("Pack file"), "", tr("The full path of the pack to write or read"));
         field(v, "t.pack-name", tr("Pack name"), "");
         field(v, "t.pack-desc", tr("Pack description"), "");
-        key(v, "t.pack-export", tr("Export pack..."), [this] { sendBuilt(kTuning, tr("Export pack"), packExportJson(dv("t.pack-path"), dv("t.pack-name"), dv("t.pack-desc")), FOXAPP_OP_PACK_EXPORT); }, !trim(dv("t.pack-path")).empty());
-        key(v, "t.pack-import", tr("Import pack..."), [this] { send(kTuning, tr("Import pack"), cmd(FOXAPP_OP_PACK_IMPORT, 0, trim(dv("t.pack-path")))); }, !trim(dv("t.pack-path")).empty());
+        key(v, "t.pack-export", tr("Export pack..."), [this] { sendBuilt(kTuning, tr("Export pack"), packExportJson(dv("t.pack-path"), dv("t.pack-name"), dv("t.pack-desc")), FOXAPP_OP_PACK_EXPORT, 0, 0, 0, true); }, !trim(dv("t.pack-path")).empty());
+        key(v, "t.pack-import", tr("Import pack..."), [this] { send(kTuning, tr("Import pack"), cmd(FOXAPP_OP_PACK_IMPORT, 0, trim(dv("t.pack-path"))), 0, std::string(), true); }, !trim(dv("t.pack-path")).empty());
         const std::string pk = fact("pack.last");
         if (!pk.empty()) { v.push_back(rReadout(tr("Last pack"), pk)); }
 
@@ -693,7 +697,7 @@ struct LaneLPublisher::Impl {
         key(v, "w.cfg", tr("Apply heat map and occupancy"), [this] {
             const Built b = sweepHeatmapJson(dv("w.hm-cols"), dv("w.hm-rows"), pv("w.hm-mode", 0), bv("w.occ-on", false), dv("w.occ-start"), dv("w.occ-stop"), dv("w.occ-step"), dv("w.occ-margin", "10"), dv("w.occ-pct", "0.1"), dv("w.occ-floor", "-100"));
             sendBuilt(kSweep, tr("Heat map and occupancy"), b, FOXAPP_OP_SWEEP_CONFIG);
-        }, true, tr("The columns are laid over the device's own frequency range, so the engine takes this once a device is open."));
+        }, true, tr("The columns are laid over the device's own frequency range. The engine takes this with no device open too."));
         v.push_back(rHeading(tr("Read the sweep")));
         field(v, "w.rd-points", tr("Points to read"), "512", tr("2 to 4096"));
         field(v, "w.rd-x", tr("Position across the sweep"), "0.5", tr("0 (left) to 1 (right): the frequency there is reported"));
