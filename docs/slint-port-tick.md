@@ -3382,3 +3382,18 @@ The status bar and the One layout's plot (the S6 leftovers), one-click layouts, 
 | 5340 | Ham tools: Export Cabrillo log..., Export ADIF log... | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
 | 5341 | Ham tools: Follow radio info (switch, address, port, other addresses) | checkbox | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
 | 5342 | Ham tools: Answer CAT commands (switch, dialect, port, every address) | checkbox | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5400 | Source: I/Q file playback speed, speed policy (varispeed / block skip), Pause, Resume, Step back, Step forward | key | PRESENT | Lane M (docs/multi-radio-records/screen-m.md). |
+| 5401 | Radio: Receive clarifier (on, offset, step keys, clear, limits) | key | PRESENT | Lane M (docs/multi-radio-records/screen-m.md). |
+| 5402 | Radio: Symbol rate (baud) | field | PRESENT | Lane M (docs/multi-radio-records/screen-m.md). |
+| 5403 | Audio filters: CW surround (on, invert, centre, spread, ratio, hold, read the pitch) | key | PRESENT | Lane M (docs/multi-radio-records/screen-m.md). |
+| 5404 | Recorder: I/Q take file (WAV, RF64, SigMF) | radio key | PRESENT | Lane M (docs/multi-radio-records/screen-m.md). |
+| 5405 | Patch: Undo, Redo, Select, Copy, Paste, Bypass | key | PRESENT | Lane M (docs/multi-radio-records/screen-m.md). |
+| 5406 | Patch page: Mixer, IF filter, Generator, Scope part keys | key | PRESENT | Lane M (docs/multi-radio-records/screen-m.md). |
+| 5407 | Airband: one channel's settings (set, load, clear, clear all) | key | PRESENT | Lane M (docs/multi-radio-records/screen-m.md). |
+| 5408 | Export: Level store (on, size, clear, read) | checkbox | PRESENT | Lane M (docs/multi-radio-records/screen-m.md). |
+| 5409 | Sweep: Sweep this radio, Stop the stitched sweep | key | PRESENT | Lane M (docs/multi-radio-records/screen-m.md). |
+| 5410 | Sweep: history Save, Load, Clear and the read-out | key | PRESENT | Lane M (docs/multi-radio-records/screen-m.md). |
+| 5411 | Diagnostics: the spectrum's GPU counters | readout | PRESENT | Lane M (docs/multi-radio-records/screen-m.md). |
+| 5412 | Needed libraries: Open the download page / Open that folder (a plugin's request) | key | PRESENT | Lane M (docs/multi-radio-records/screen-m.md). |
+| 5413 | Plugin settings: a field with named choices drawn as option keys | key | PRESENT | Lane M (docs/multi-radio-records/screen-m.md). |
+| 5414 | Spectrum: a plugin mark's credit line in its tooltip | tooltip | PRESENT | Lane M (docs/multi-radio-records/screen-m.md). |

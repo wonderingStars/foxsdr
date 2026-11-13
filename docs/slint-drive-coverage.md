@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2364 | 708 | 115 | 1541 | 0 |
+| 2379 | 716 | 117 | 1546 | 0 |
 
-Of the 1477 rows that are controls (the 887 readout-like rows left out): 708 asserted, 115 driven without a read-back, 654 not drivable.
+Of the 1491 rows that are controls (the 888 readout-like rows left out): 716 asserted, 117 driven without a read-back, 658 not drivable.
 
-NOT DRIVABLE by reason: readout 887, other 222, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 71, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 71, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 2.
 
 ## Per section
 
@@ -207,7 +207,7 @@ NOT DRIVABLE by reason: readout 887, other 222, needs a signal (no fixture) 120,
 | Lane B (docs/multi-radio-records/screen-b.md; rows 4700 and up are this lane's) | 20 | 20 | 0 | 0 | 0 | 0 |
 | Screen lane J - the map rows (rows 4900 and up are this lane's; docs/multi-radio-records/screen-j.md) | 15 | 12 | 0 | 3 | 0 | 0 |
 | Screen lane K - the remaining rows (rows 5200 and up are this lane's; docs/multi-radio-records/screen-k.md) | 37 | 26 | 11 | 0 | 0 | 0 |
-| Screen lane L - the controls of what the wiring lanes built (rows 5300 and up are this lane's; docs/multi-radio-records/screen-l.md) | 43 | 35 | 8 | 0 | 0 | 0 |
+| Screen lane L - the controls of what the wiring lanes built (rows 5300 and up are this lane's; docs/multi-radio-records/screen-l.md) | 58 | 43 | 10 | 5 | 1 | 0 |
 
 ## Every row
 
@@ -3509,4 +3509,19 @@ NOT DRIVABLE by reason: readout 887, other 222, needs a signal (no fixture) 120,
 | 5340 | Ham tools: Export Cabrillo log..., Export ADIF log... | key | DRIVEN | lanel-system | a file is not written in a bounded run |
 | 5341 | Ham tools: Follow radio info (switch, address, port, other addresses) | checkbox | DRIVEN | lanel-system | no logger to follow; port 0 opens nothing |
 | 5342 | Ham tools: Answer CAT commands (switch, dialect, port, every address) | checkbox | DRIVEN+ASSERTED | lanel-system | state ll.fact.cat.emulation.running != 1 with port 4532 |
+| 5400 | Source: I/Q file playback speed, speed policy (varispeed / block skip), Pause, Resume, Step back, Step forward | key | DRIVEN+ASSERTED | lanem-file | speed, policy, paused read back from fact.playback.1.*; step is dead while playing |
+| 5401 | Radio: Receive clarifier (on, offset, step keys, clear, limits) | key | DRIVEN+ASSERTED | lanem-signal | fact.rit.1.* |
+| 5402 | Radio: Symbol rate (baud) | field | DRIVEN+ASSERTED | lanem-signal | fact.wirec.sig.symbol_rate |
+| 5403 | Audio filters: CW surround (on, invert, centre, spread, ratio, hold, read the pitch) | key | DRIVEN+ASSERTED | lanem-signal | fact.cwsurround.1.* |
+| 5404 | Recorder: I/Q take file (WAV, RF64, SigMF) | radio key | DRIVEN+ASSERTED | lanem-signal | fact.record.iqcontainer |
+| 5405 | Patch: Undo, Redo, Select, Copy, Paste, Bypass | key | DRIVEN | lanem-signal | an empty patch: the engine's answers are read in the note; the effect on a patch with parts is tested by the engine tests |
+| 5406 | Patch page: Mixer, IF filter, Generator, Scope part keys | key | NOT DRIVABLE | - | placed by test_slint_host_patch (nodes, captions, refusal); the canvas is not label-addressable |
+| 5407 | Airband: one channel's settings (set, load, clear, clear all) | key | DRIVEN+ASSERTED | lanem-tools | fact.airband.channel.<Hz> |
+| 5408 | Export: Level store (on, size, clear, read) | checkbox | DRIVEN+ASSERTED | lanem-tools | fact.levels.* |
+| 5409 | Sweep: Sweep this radio, Stop the stitched sweep | key | DRIVEN+ASSERTED | lanem-system | a real stitched run over the test generator left one sweep in fact.sweep.history |
+| 5410 | Sweep: history Save, Load, Clear and the read-out | key | DRIVEN | lanem-system | save and load need a writable full path the script cannot name portably; refusals and the clear are read |
+| 5411 | Diagnostics: the spectrum's GPU counters | readout | NOT DRIVABLE | - | a readout, not a control |
+| 5412 | Needed libraries: Open the download page / Open that folder (a plugin's request) | key | NOT DRIVABLE | - | no plugin makes a request in a test and pressing it would open a browser; the request parser is tested by test_slint_lanem_host |
+| 5413 | Plugin settings: a field with named choices drawn as option keys | key | NOT DRIVABLE | - | covered by test_slint_forms section 12b; no installed plugin gives choices |
+| 5414 | Spectrum: a plugin mark's credit line in its tooltip | tooltip | NOT DRIVABLE | - | a tooltip; withCredit is tested by test_slint_lanem_host |
 
