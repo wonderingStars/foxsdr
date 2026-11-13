@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "engine/engine.hpp"
 #include "engine/wire_a.hpp"   // wire-a
+#include "core/plugin_repo_helper.hpp"   // wire-c
 
 #include "core/band_mode.hpp"
 #include "core/config_halves.hpp"
@@ -254,6 +255,7 @@ Engine::~Engine() {
         // The front end's applier points into a window that is, by construction of this path, no longer there.
         setPluginUiApplier({});
         stopTransfers();
+        wireCShutdown();   // wire-c: the listeners and CAT sessions of wiring lane C are closed while the API host they use still stands (an engine that is destroyed without shutdownQuiesce)
         teardown();
     }
 #ifdef _WIN32
@@ -3948,6 +3950,10 @@ std::string Engine::pluginInstallBlockedReason(int idx, bool acknowledged) const
     if ((!e.legalNotice.empty() || !e.source.empty()) && !acknowledged) {
         return cascade::gui::kLegalNoticeFirstReason;
     }
+    // wire-c: a plugin that runs a separate PROGRAM needs the user's own consent on top of the licence tick (FOXAPP_OP_STORE_HELPER_CONSENT)
+    if (e.helper.present && wireCHelperConsent_.count(cascade::core::PluginRepo::catalogueKey(e.source, e.id)) == 0) {
+        return cascade::core::helperstore::kConsentRefusal;
+    }
     return {};
 }
 
@@ -7357,6 +7363,14 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
     if (c.op >= FOXAPP_OP_WIRE_A_FIRST && c.op <= FOXAPP_OP_WIRE_A_LAST) { return WireA::of(*this).apply(c, text, res); }
     // wire-a end
 
+    // wire-c begin: the whole block 0x8A00-0x8AFF is wiring lane C's (engine_wire_c.cpp)
+    if ((c.op & 0xFF00u) == 0x8A00u) {
+        std::string why;
+        const std::int32_t st = applyWireC(c, text, res, why);
+        if (st != FOXAPI_OK) { return refuse(st, why.c_str()); }
+        return res;
+    }
+    // wire-c end
     switch (c.op) {
         // --- the radios (multi-radio stage 4; engine_radios.cpp) ---------------
         case FOXAPI_OP_RADIO_ADD:
@@ -10924,6 +10938,7 @@ void Engine::shutdownQuiesce() {
     // request open: here it blocks THE CALLER (the window's run, as ~AppWindow did before), never the pass - the control thread runs on until
     // the next step. A hard stop each - no thread of either server runs after it returns - and idempotent.
     servers_.shutdown();
+    wireCShutdown();   // wire-c: the listeners and sessions of wiring lane C (CAT emulation, the logger follower)
 
     // STAGE 3b: the control thread is stopped next - it lets go of every key
     // at once, from this thread, and then joins (stopControlThread); every
@@ -11376,6 +11391,7 @@ void Engine::runPassPart(PassPart part) {
             pumpSchedule();   // (timed recordings: engine_schedule.cpp)
             pumpMacros();     // (a macro being played: engine_macros.cpp)
             pumpWireB();      // (wire-b: the limit mask of every open radio: engine_wire_b.cpp)
+            pumpWireC();      // wire-c (engine_wire_c.cpp)
             pollSmeterCal();  // (a calibration being measured: engine_smeter.cpp)
             break;
     }

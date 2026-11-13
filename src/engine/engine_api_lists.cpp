@@ -28,6 +28,7 @@
 #include "core/serial_port.hpp"
 #include "core/device_scan_plan.hpp"
 #include "engine/engine.hpp"
+#include "core/plugin_repo_helper.hpp"   // wire-c
 #include "engine/fox_engine_api.hpp"
 #include "core/receiver_tables.hpp"
 #include "engine/server_host.hpp"
@@ -215,6 +216,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(ppmAutoVersion_);   // the pilot ppm measurements (engine_mpx.cpp)
     f.value(mpxVersion_);   // which radios record their multiplex (engine_mpx.cpp)
     f.value(hotplugVersion_);   // the hot-plug counts (engine_hotplug.cpp)
+    f.value(wireCVersion());   // wire-c: the settings of wiring lane C (engine_wire_c.cpp)
     f.text(markerError_);
     // The DSP chain's input rate (API 0.3 8.5, fact.input.rateHz): the source's rate
     // unless the chain refused a change of it, and then the one the display is
@@ -1032,7 +1034,9 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // The update plans, once for the whole block (planUpdates walks the catalogue against the install records):
     // STORE_UPDATES, and each entry's updateReason below.
     const std::vector<cascade::core::PluginUpdate> updates = plannedPluginUpdates();
-    for (const cascade::core::PluginCatalogEntry& e : catalog_) {
+    const std::vector<std::size_t> wireCOrder = wireCStoreOrder();   // wire-c: the list's order (key store.sort; the catalogue's own by default)
+    for (const std::size_t wireCAt : wireCOrder) {   // wire-c (was: for (e : catalog_))
+        const cascade::core::PluginCatalogEntry& e = catalog_[wireCAt];
         const cascade::core::PluginPlatform* const here = e.thisPlatform();
         // BY CATALOGUE KEY (0.99.74): the id for an official plugin - every name and key that existed before sites is unchanged - and
         // "<id>@<site label>" for a plugin from a site the user added.
@@ -1050,6 +1054,14 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         b.store.push_back(std::move(se));
         const std::string k = "store." + key + ".";
         fact(k + "legal", e.legalNotice);
+        // wire-c: a GPL helper plugin (core/plugin_repo_helper.hpp): the one-line badge, the detail lines (newline separated) and whether the user has consented ("" when not a helper)
+        fact(k + "helper", cascade::core::helperstore::rowLine(e));
+        {
+            std::string lines;
+            for (const std::string& l : cascade::core::helperstore::detailLines(e)) { lines += (lines.empty() ? "" : "\n") + l; }
+            fact(k + "helper.detail", lines);
+            fact(k + "helper.consent", e.helper.present ? (wireCHelperConsent_.count(key) != 0 ? "1" : "0") : "");
+        }
         fact(k + "summary", e.summary);
         fact(k + "description", e.description);
         fact(k + "homepage", e.homepage);
@@ -1368,6 +1380,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     macroFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // (LOCAL: a macro is the operator's)
     WireA::of(*this).facts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // wire-a (LOCAL)
     wireBFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // wire-b (LOCAL: a measurement of the signal is the operator's)
+    wireCFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // wire-c (LOCAL: the operator's own settings file)
     // THE S-METER CALIBRATION (engine wiring lane 1; LOCAL: a device's key can name a serial number): what the last measurement did, and how many devices hold a calibration.
     if (!recordNameLoaded_) { loadRecordName(); }   // (the file is read once, here or at the first take, whichever asks first)
     fact("record.nameTemplate", recordNameTemplate_, true);   // (LOCAL: a file-name template can carry a person's own words)

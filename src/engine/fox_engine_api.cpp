@@ -1029,6 +1029,11 @@ public:
             // transport has no business reading it.
             if ((s->flags & FOXAPI_SESSION_LOCAL) == 0u) { return FOXAPI_DENIED; }
             v = engine_.interfaceConfigDocument();
+        } else if (std::strncmp(key, "fact.perf.", 10) == 0) {
+            // wire-c (row S5): THE RESOURCE READ-OUT, read AT THE CALL from the sampler's last published figures (engine_wire_c.cpp), not from the list block: the figures
+            // change every second, and a fact in the block would move the list counter (listSeq) every second for every client. LOCAL.
+            if ((s->flags & FOXAPI_SESSION_LOCAL) == 0u) { return FOXAPI_DENIED; }
+            if (!engine_.wireCLiveFact(key + 5, v)) { return FOXAPI_NOT_FOUND; }
         } else if (std::strncmp(key, "fact.", 5) == 0) {
             // API 0.3's read-only facts, from the list block the pumping
             // thread built (docs/api-0.3-additions.md).

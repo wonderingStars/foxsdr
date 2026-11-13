@@ -99,6 +99,7 @@
 #include "engine/device_ledger.hpp"
 #include "engine/engine_host.hpp"
 #include "engine/engine_types.hpp"
+#include "engine/wire_c.hpp"   // wire-c
 #include "engine/fox_engine_api.hpp"
 #include "engine/server_host.hpp"
 #include "engine/pass_stats.hpp"
@@ -3227,6 +3228,35 @@ private:
     std::uint64_t recordNameVersion_ = 1;
     std::string recordNamePathForTest_;   // TESTS ONLY (through the friend): the file to use instead of the per-user folder's
     std::uint64_t radioLockVersion_ = 1;
+    // wire-c begin (wiring lane C; engine_wire_c.cpp, wire_c.hpp): the op block 0x8A00-0x8AFF, its facts and its pump
+    cascade::engine::wirec::State& wireC();
+    std::int32_t applyWireC(const FoxCommand& c, const std::string& text, FoxCommandResult& res, std::string& why);
+    void wireCFacts(const std::function<void(const std::string&, const std::string&)>& fact);
+    std::uint64_t wireCVersion();
+    void pumpWireC();
+    void wireCShutdown();
+    // The recorder a plugin may ask for (plugin_abi.h recorder_start / recorder_stop): drained once a pass; one take per radio, remembered by radio slot -> plugin client.
+    void wireCPluginRecorder();
+    std::map<std::size_t, std::size_t> wireCPluginTakes_;
+    // a start asked for while the radio's previous file is still being closed waits (up to about two seconds) rather than being queued by the recorder, which would lose its label
+    struct WireCDeferredStart {
+        cascade::core::PluginApiCore::RecorderRequest req;
+        int passes = 0;
+    };
+    std::vector<WireCDeferredStart> wireCDeferred_;
+    std::set<std::string> wireCHelperConsent_;   // catalogue keys the user has consented to install the helper program of (this run only)
+    std::string wireCStartLabel_;   // the label of the take being started, for applyRecordName (empty = a user's take)
+    void wireCLabelTake(cascade::core::Recorder::OpenRequest& req);
+    bool wireCRecordingBusy() const;
+    void wireCResumeAction();
+    // The resource facts ("perf.cpu_percent" ...), read at the call (fox_engine_api.cpp, a friend); false for a key that is not one.
+    bool wireCLiveFact(const std::string& key, std::string& value);
+    std::vector<std::size_t> wireCStoreOrder();   // the order the store's list is built in (key store.sort; the catalogue's own order by default)
+    std::unique_ptr<cascade::engine::wirec::State> wireC_;
+    std::mutex wireCMutex_;
+    std::uint64_t wireCVersion_ = 1;
+    std::string wireCFolderForTest_;   // TESTS ONLY (through the friend): the folder wirec.json lives in, instead of the per-user one
+    // wire-c end
     void loadMacros();
     std::int32_t applyMacroOp(const FoxCommand& c, const std::string& text, std::string& why);
     void macroFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
