@@ -2065,7 +2065,7 @@ typedef struct CascadeHostApi {
 #define CASCADE_SETTING_LABEL_CHARS 32
 #define CASCADE_SETTING_PLACEHOLDER_CHARS 64
 #define CASCADE_SETTING_DEFAULT_CHARS 64
-#define CASCADE_MAX_SETTING_SPECS 16u /* per plugin; well under the store's 64 keys */
+#define CASCADE_MAX_SETTING_SPECS 32u /* per plugin; half of the store's 64 keys (raised from 16 in 0.99.109: a host older than that REFUSES TO LOAD a plugin whose table has 17..32 rows - validatePluginDesc returns SettingsUiBadTable and the whole plugin is rejected, not only its form; a plugin that must load on every host keeps to 16) */
 
 /* Field kinds. An unknown kind is skipped (not drawn, not refused) so a
  * plugin built for a later host still shows the fields this host knows. */

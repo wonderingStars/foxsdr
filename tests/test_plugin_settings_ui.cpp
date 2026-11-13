@@ -346,6 +346,26 @@ void testFields() {
         spec("preset", "Preset", CASCADE_SETTING_PASSWORD, 20, "type it", "hunter2"),
         spec("later", "Later", CASCADE_SETTING_PASSWORD + 1u, 20, "", ""),  // kind 5: skipped
     };
+    // wire-c begin: the limit is 32 rows (it was 16: event-outputs declares 17 rows and ft8-decoder had no room for its WSPR options). 16, 17 and 32 rows are accepted by the
+    // loader check AND yield that many fields; 33 is refused by both, and so is a count far above.
+    CHECK(CASCADE_MAX_SETTING_SPECS == 32u);
+    {
+        std::vector<CascadeSettingSpec> rows;
+        for (int i = 0; i < 33; ++i) {
+            rows.push_back(spec(("key" + std::to_string(i)).c_str(), ("Row " + std::to_string(i)).c_str(), CASCADE_SETTING_TEXT, 12, "", ""));
+        }
+        for (const std::uint32_t n : {16u, 17u, 32u}) {
+            CascadeSettingsUiApi t{sz, n, rows.data()};
+            CHECK(validateWith(&t, sz) == PluginRejection::None);
+            CHECK(cascade::core::settingFieldsFrom(&t).size() == n);
+        }
+        for (const std::uint32_t n : {33u, 64u, 65u, 1000u}) {
+            CascadeSettingsUiApi t{sz, n, rows.data()};
+            CHECK(validateWith(&t, sz) == PluginRejection::SettingsUiBadTable);
+            CHECK(cascade::core::settingFieldsFrom(&t).empty());
+        }
+    }
+    // wire-c end
     CascadeSettingsUiApi uiQ{static_cast<std::uint32_t>(sizeof(CascadeSettingsUiApi)), 5u,
                              secretSpecs};
     const std::vector<SettingField> qf = cascade::core::settingFieldsFrom(&uiQ);
