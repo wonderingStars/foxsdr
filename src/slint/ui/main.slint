@@ -654,16 +654,16 @@ export component MainWindow inherits Window {
                                         if root.bank-index == 0 && i == 2 : BodyRow { label: @tr("Tune step"); SelectKey { value: root.tune-step-text; clicked => { root.tune-step-clicked(self.absolute-position.x, self.absolute-position.y + self.height); } } }
                                         if root.bank-index == 0 && i == 2 : Checkbox { label: @tr("Follow the band plan's mode when retuning"); checked <=> root.follow-band-plan; toggled(v) => { root.follow-band-plan-toggled(v); } }
                                         // screen lane M (docs/multi-radio-records/screen-m.md): the controls of the wiring second passes, each appended to the section the person looks in (an empty list draws nothing)
-                                        if root.bank-index == 0 && i == 0 : KPanel { rows: LaneM.rows-patch; act(id, t) => { LaneM.act(id, t); } }
-                                        if root.bank-index == 0 && i == 1 : KPanel { rows: LaneM.rows-source; act(id, t) => { LaneM.act(id, t); } }
-                                        if root.bank-index == 0 && i == 2 : KPanel { rows: LaneM.rows-radio; act(id, t) => { LaneM.act(id, t); } }
-                                        if root.bank-index == 0 && i == 3 : KPanel { rows: LaneM.rows-audio; act(id, t) => { LaneM.act(id, t); } }
-                                        if root.bank-index == 0 && i == 6 : KPanel { rows: LaneM.rows-record; act(id, t) => { LaneM.act(id, t); } }
-                                        if root.bank-index == 2 && i == 4 : KPanel { rows: LaneM.rows-airband; act(id, t) => { LaneM.act(id, t); } }
-                                        if root.bank-index == 2 && i == 5 : KPanel { rows: LaneM.rows-levels; act(id, t) => { LaneM.act(id, t); } }
-                                        if root.bank-index == 4 && i == 6 : KPanel { rows: LaneM.rows-diag; act(id, t) => { LaneM.act(id, t); } }
-                                        if root.bank-index == 4 && i == root.system-extra-base + 9 : KPanel { rows: LaneM.rows-sweep; act(id, t) => { LaneM.act(id, t); } }
-                                        if root.bank-index == 4 && i == root.system-extra-base + 12 : KPanel { rows: LaneM.rows-libs; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 0 && i == 0 && LaneM.rows-patch.length > 0 : KPanel { rows: LaneM.rows-patch; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 0 && i == 1 && LaneM.rows-source.length > 0 : KPanel { rows: LaneM.rows-source; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 0 && i == 2 && LaneM.rows-radio.length > 0 : KPanel { rows: LaneM.rows-radio; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 0 && i == 3 && LaneM.rows-audio.length > 0 : KPanel { rows: LaneM.rows-audio; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 0 && i == 6 && LaneM.rows-record.length > 0 : KPanel { rows: LaneM.rows-record; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 2 && i == 4 && LaneM.rows-airband.length > 0 : KPanel { rows: LaneM.rows-airband; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 2 && i == 5 && LaneM.rows-levels.length > 0 : KPanel { rows: LaneM.rows-levels; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 4 && i == 6 && LaneM.rows-diag.length > 0 : KPanel { rows: LaneM.rows-diag; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 9 && LaneM.rows-sweep.length > 0 : KPanel { rows: LaneM.rows-sweep; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 12 && LaneM.rows-libs.length > 0 : KPanel { rows: LaneM.rows-libs; act(id, t) => { LaneM.act(id, t); } }
                                     }
                                 }
                             }

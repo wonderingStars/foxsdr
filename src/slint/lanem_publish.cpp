@@ -235,6 +235,10 @@ struct LaneMPublisher::Impl {
     // ================================================================ SIGNAL > Radio: the receive clarifier (row 2) and the symbol rate (row 20)
     void buildRadio(std::vector<Row>& v) {
         const std::string n = rn();
+        // the whole panel is folded away until asked for: the Radio section is open at every start and, at the default window height, a longer body pushed the Transmit row (and the sections under it) off the screen
+        const bool more = bv("c.open", false);
+        key(v, "c.more", more ? tr("Hide the clarifier controls") : tr("More clarifier controls"), [this, more] { draft["c.open"] = more ? "0" : "1"; });
+        if (!more) { endNote(v, kRadio); return; }
         v.push_back(rHeading(tr("Receive clarifier (RIT)")));
         v.push_back(rNote(tr("Shifts what you HEAR by an offset while the dial, the bookmarks and the CAT answer stay where they are. It is never saved: it is off at every start.")));
         const bool on = fact("rit." + n + ".on") == "1";
@@ -243,10 +247,7 @@ struct LaneMPublisher::Impl {
         const std::string clearAt = fact("rit." + n + ".clearOnRetune");
         v.push_back(rReadout(tr("Clarifier"), on ? tr("on") + ", " + signedHzText(hz) : tr("off") + ", " + signedHzText(hz)));
         tick(v, "c.on", tr("Clarifier on"), on, [this, hz](bool o) { Cmd c = cmd(FOXAPP_OP_RIT, 0); c.n0 = hz; c.i1 = o ? 1 : 0; send(kRadio, tr("Clarifier"), c); });
-        // the rest is folded away until asked for: the Radio section is open at every start and a long list would push the sections under it off the screen
-        const bool more = bv("c.open", false);
-        key(v, "c.more", more ? tr("Hide the clarifier controls") : tr("More clarifier controls"), [this, more] { draft["c.open"] = more ? "0" : "1"; });
-        if (more) {
+        {
         field(v, "c.hz", tr("Clarifier offset (Hz)"), numberText(hz), tr("Inside the limit below (9999 Hz unless you changed it); negative lowers what you hear"));
         key(v, "c.set", tr("Set the clarifier"), [this, lim] {
             double h = 0; std::string e;
