@@ -85,9 +85,13 @@ it was verified: [docs/HARDWARE.md](docs/HARDWARE.md).
   of an airport at once.
   Import with an empty box opens a drop zone
   and Browse window; a bare filename is also looked for in the recordings folder.
-- **Patch view:** build a receiver by hand on a canvas. Up to five radios,
-  channels, demodulators, speakers, files, decoders and a map, all running
-  together.
+- **Patch view:** build a receiver by hand on a canvas. Up to five Radio nodes
+  in a patch, with channels, demodulators, speakers, files, decoders and a map,
+  all running together.
+- **Several radios:** the main window opens up to eight radios at once (the
+  new window shows one, two or four at a time, with Link tuning and a mix of
+  their sound). On the `engine/multi-radio` branch; not yet released. See
+  [Several radios at once](docs/MANUAL.md#several-radios-at-once).
 - **Instruments:** a bench oscilloscope for the audio and the I/Q, a radar scope
   for ADS-B traffic, and plugin instruments drawn as the equipment they are: a
   pager, a message printer, a VOR course indicator, a distress-beacon receiver.

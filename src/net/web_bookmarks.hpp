@@ -125,6 +125,8 @@ public:
     void forgetViewer(const std::string& viewerToken);
     void clear();
     std::size_t viewerCount() const;
+    // wire-c: the tokens that hold a set, so the server can forget those whose sign-in has ended
+    std::vector<std::string> viewers() const;
     std::size_t size(const std::string& viewerToken) const;
 
 private:

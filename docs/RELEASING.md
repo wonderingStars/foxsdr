@@ -109,6 +109,7 @@ versions, `ssh <host> true`, `gh auth status`, the public Store catalogue query 
 | `github` | HEAD is on `origin/master`; the notes' hashes equal the files'; annotated tag `v<version>` on HEAD, pushed; draft release; every asset's name, size and digest equal the local file's; only then `--draft=false --latest`. |
 | `store` | See below. |
 | `store-status` | The public catalogue answers; the package version is decoded (four 16-bit numbers; product major = package major - 1); compared with `StoreAppVersion` in the site's `version.go`. |
+| `package-manifests` | After `ci` (it needs `dist\sha256.txt`): the setup file's sha256 equals the one `sha256.txt` lists, then `tools\make-package-manifests.ps1` writes the winget, Scoop and Chocolatey folders under `<release folder>\packages` (with `-RunWingetValidate`, read-only), the hash it printed equals `sha256.txt`. **Publishes nothing**: submitting to winget-pkgs, a Scoop bucket or Chocolatey needs the owner's accounts (`packaging\README.md`). |
 
 `site-release.ps1`: `bump` (the five hash constants in `version.go` and on `web/index.html`
 equal the files in `dist\`, no `PENDING-` token left, new versions in place), `test` (`go vet`,

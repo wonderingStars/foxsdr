@@ -1,0 +1,4 @@
+#! frames=200
+# lanek-backup, the second start on the same scratch profile: the import was applied after the engine's last save, so the exported theme (Night Watch) is the one in force.
+10 state running == 1
+state cfg.uiTheme == night

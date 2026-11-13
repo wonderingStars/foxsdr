@@ -2636,6 +2636,10 @@ void scheduleOps(AppWindow& a) {
 
 // MACROS (engine wiring W2; src/engine/engine_macros.cpp). The profile this test runs in has no macro file, so there are no macros: an unknown name is NOT_FOUND, a stop with
 // nothing running is NO_CHANGE, and a reload of an absent file is fine. The playing of steps, the refusals of a bad file and the REMOTE denial are tests/test_engine_api_macros.cpp's.
+// wire-b begin: the lane's cases (a separate file so the three wiring lanes' additions do not collide)
+#include "wire_b_apply_cases.inc"
+// wire-b end
+
 void macroOps(AppWindow& a) {
     covering(FOXAPP_OP_MACRO_RELOAD);
     CHECK(ok(A::apply(a, text(FOXAPP_OP_MACRO_RELOAD, ""))));
@@ -2669,6 +2673,33 @@ void macroOps(AppWindow& a) {
     CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 0)), FOXAPI_NO_CHANGE));   // automatic is the default
     CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 2))));
     CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_STEREO_SYSTEM, 0))));
+    // wire-c begin: the op block 0x8A00-0x8AFF (the engine behaviour is tests/test_engine_api_wire_c*.cpp's; each op named here is answered, never merely known)
+    covering(FOXAPP_OP_WIREC_SETTING);
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_WIREC_SETTING, "nokey")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_WIREC_SETTING, std::string("no.such.key") + '' + "1")), FOXAPI_NOT_FOUND));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_WIREC_SETTING, std::string("sys.backup_keep") + '' + "0")), FOXAPI_OUT_OF_RANGE));
+    for (const std::uint32_t o : {FOXAPP_OP_SYS_FIRSTRUN, FOXAPP_OP_SYS_EXPORT, FOXAPP_OP_SYS_IMPORT_PLAN, FOXAPP_OP_SYS_IMPORT_COMMIT, FOXAPP_OP_SYS_BACKUP, FOXAPP_OP_SYS_RESET_PLAN,
+                                  FOXAPP_OP_SYS_RESET_COMMIT, FOXAPP_OP_SYS_PENDING_CANCEL}) {
+        covering(o);   // (each is answered here, with a refusal that changes nothing; the engine behaviour is tests/test_engine_api_wire_c_sys.cpp's)
+    }
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_FIRSTRUN, "bogus-step")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_EXPORT, "")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_IMPORT_PLAN, "no-such-file.foxsdr-bundle")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_IMPORT_COMMIT, "IMPORT-00000000")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_RESET_COMMIT, "RESET-00000000")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, cmd::make(FOXAPP_OP_SYS_PENDING_CANCEL)), FOXAPI_NO_CHANGE));
+    for (const std::uint32_t o : {FOXAPP_OP_QSO_ADD, FOXAPP_OP_QSO_REMOVE, FOXAPP_OP_QSO_CLEAR, FOXAPP_OP_CABRILLO_HEADER, FOXAPP_OP_CABRILLO_EXPORT, FOXAPP_OP_ADIF_EXPORT}) {
+        covering(o);   // (the engine behaviour is tests/test_engine_api_wire_c_ham.cpp's)
+    }
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_QSO_ADD, "not json")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_QSO_REMOVE, 1)), FOXAPI_NOT_FOUND));
+    CHECK(refused(A::apply(a, cmd::make(FOXAPP_OP_QSO_CLEAR)), FOXAPI_NO_CHANGE));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_CABRILLO_HEADER, "not json")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_CABRILLO_EXPORT, "")), FOXAPI_BAD_ARGUMENT));
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_ADIF_EXPORT, "")), FOXAPI_BAD_ARGUMENT));
+    covering(FOXAPP_OP_STORE_HELPER_CONSENT);   // (the install gate and the facts are tests/test_engine_api_wire_c_store.cpp's)
+    CHECK(refused(A::apply(a, text(FOXAPP_OP_STORE_HELPER_CONSENT, "no-such-plugin", 1)), FOXAPI_NOT_FOUND));
+    // wire-c end
 }
 
 void airbandOps(AppWindow& a) {
@@ -3977,6 +4008,7 @@ int main() {
         markerOps(app);
         scheduleOps(app);
         macroOps(app);
+        wireBOps(app);   // wire-b
         transmitterOps(app);
         radioOps(app);
         otherOps(app);

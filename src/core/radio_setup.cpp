@@ -879,4 +879,25 @@ Inventory collectInventory() {
 
 #endif  // _WIN32
 
+// wire-b begin: guidance for radios the USB check has no entry for (radio_setup.hpp DriverGuidance)
+const DriverGuidance* guidanceForDriver(const std::string& driverKey) {
+    static const DriverGuidance kBladeRf{
+        "bladerf", "BladeRF", "SoapyBladeRF",
+        "Install Nuand's bladeRF driver and the SoapySDR module for it (SoapyBladeRF), for example through PothosSDR or radioconda, then unplug "
+        "the radio and plug it back in."};
+    static const DriverGuidance kPluto{
+        "pluto", "ADALM-Pluto", "SoapyPlutoSDR",
+        "FoxSDR talks to the Pluto directly over its network address; no driver is needed. To use SoapySDR instead, install the SoapyPlutoSDR "
+        "module."};
+    static const DriverGuidance kAntSdr{
+        "antsdr", "AntSDR", "",
+        "Give FoxSDR the AntSDR's network address (the factory address is 192.168.1.10) in the ADALM-Pluto source."};
+    const std::string k = lowerAscii(driverKey);
+    if (k == "bladerf") { return &kBladeRf; }
+    if (k == "pluto" || k == "plutosdr" || k == "adalm-pluto") { return &kPluto; }
+    if (k == "antsdr") { return &kAntSdr; }
+    return nullptr;
+}
+// wire-b end
+
 }  // namespace cascade::core::radiosetup

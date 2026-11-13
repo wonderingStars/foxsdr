@@ -1,0 +1,15 @@
+4900	ASSERTED	mapj-layers	click Layers; the nine switches are read back as state mapj.layers
+4901	ASSERTED	mapj-layers	Heat map, 24 h range, Signal level, Locator grid clicked on and off; state mapj.layers, mapj.cells, mapj.grid, mapj.labels follow
+4902	ASSERTED	mapj-layers	expect "Weather radar" / "Receiver map" / "Repeaters" enabled equals false
+4903	NOT_DRIVABLE	-	a readout
+4904	ASSERTED	mapj-replay-filter	Replay, Play, the speed key and Now: state mapj.replay and mapj.replaySpeed
+4905	NOT_DRIVABLE	-	a slider with no accessible label in the bounded run; the scrub arithmetic is test_slint_host_mapj
+4906	ASSERTED	mapj-replay-filter	Filter aircraft, Hide on ground, Military or interesting: state mapj.filter and mapj.conditions
+4907	ASSERTED	mapj-replay-filter	callsign and altitude typed: state mapj.hidden follows; a bad altitude drops the condition
+4908	ASSERTED	mapj-replay-filter	the key cycles through the five systems: state mapj.units
+4909	NOT_DRIVABLE	-	nothing fills the cache from the screen (the basemap plugin fetches its own tiles); the cache itself is test_tile_cache
+4910	ASSERTED	mapj-layers	state mapj.grid >= 1 and mapj.labels >= 1 with the Locator grid on; shot mapj-layers.png
+4911	ASSERTED	mapj-sky	state mapj.skyRows == 7 after the position is set
+4912	ASSERTED	mapj-sky	state mapj.passMax >= 60 with the made-up pass; shot mapj-sky.png
+4913	ASSERTED	mapj-antenna	typed values read back as the dipole and path-loss numbers; a bad value shows the error
+4914	ASSERTED	mapj-antenna	state mapj.antennaRows >= 10, >= 14 with nine Yagi elements

@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2269 | 635 | 96 | 1538 | 0 |
+| 2364 | 708 | 115 | 1541 | 0 |
 
-Of the 1382 rows that are controls (the 887 readout-like rows left out): 635 asserted, 96 driven without a read-back, 651 not drivable.
+Of the 1477 rows that are controls (the 887 readout-like rows left out): 708 asserted, 115 driven without a read-back, 654 not drivable.
 
-NOT DRIVABLE by reason: readout 887, other 220, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 70, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
+NOT DRIVABLE by reason: readout 887, other 222, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 71, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
 ## Per section
 
@@ -205,6 +205,9 @@ NOT DRIVABLE by reason: readout 887, other 220, needs a signal (no fixture) 120,
 | Lane S1 (docs/multi-radio-records/screen-s1.md; rows 4500 and up are this lane's) | 23 | 20 | 0 | 3 | 0 | 0 |
 | Screen lane C - tuning, scanning, memories and controls (rows 4800 and up are this lane's; docs/multi-radio-records/screen-c.md) | 23 | 20 | 2 | 1 | 0 | 0 |
 | Lane B (docs/multi-radio-records/screen-b.md; rows 4700 and up are this lane's) | 20 | 20 | 0 | 0 | 0 | 0 |
+| Screen lane J - the map rows (rows 4900 and up are this lane's; docs/multi-radio-records/screen-j.md) | 15 | 12 | 0 | 3 | 0 | 0 |
+| Screen lane K - the remaining rows (rows 5200 and up are this lane's; docs/multi-radio-records/screen-k.md) | 37 | 26 | 11 | 0 | 0 | 0 |
+| Screen lane L - the controls of what the wiring lanes built (rows 5300 and up are this lane's; docs/multi-radio-records/screen-l.md) | 43 | 35 | 8 | 0 | 0 | 0 |
 
 ## Every row
 
@@ -3396,4 +3399,114 @@ NOT DRIVABLE by reason: readout 887, other 220, needs a signal (no fixture) 120,
 | 4717 | Demod scope: AUTOCORR key (autocorrelation of the audio) | key | DRIVEN+ASSERTED | scope-analysis | AUTOCORR finds the tone (peak 95 to 105 Hz for the 100 Hz tone) |
 | 4718 | Demod scope: CEPSTRUM key (cepstrum of the audio, pitch) | key | DRIVEN+ASSERTED | scope-analysis | CEPSTRUM reads a pitch of 90 to 110 Hz for the tone |
 | 4719 | Demod scope: EYE key (eye diagram of the baseband I) | key | DRIVEN+ASSERTED | scope-analysis | EYE folds the baseband I (traces read back); a second press goes back to the tube |
+
+### Screen lane J - the map rows (rows 4900 and up are this lane's; docs/multi-radio-records/screen-j.md)
+
+| # | control | type | class | script | detail |
+|---|---|---|---|---|---|
+| 4900 | Map page: Layers key (opens the switches of the nine layers) | key | DRIVEN+ASSERTED | mapj-layers | click Layers; the nine switches are read back as state mapj.layers |
+| 4901 | Map page: Airspaces, APRS paths, Heat map, 24 h range, Locator grid, Signal level switches | checkbox | DRIVEN+ASSERTED | mapj-layers | Heat map, 24 h range, Signal level, Locator grid clicked on and off; state mapj.layers, mapj.cells, mapj.grid, mapj.labels follow |
+| 4902 | Map page: Weather radar, Receiver map, Repeaters switches | checkbox | DRIVEN+ASSERTED | mapj-layers | expect "Weather radar" / "Receiver map" / "Repeaters" enabled equals false |
+| 4903 | Map page: legend rows and credit line of the layers that are on | legend | NOT DRIVABLE | - | a readout |
+| 4904 | Map page: Replay key and the transport (Play / Pause, speed 1x 4x 16x 64x, Now) | key | DRIVEN+ASSERTED | mapj-replay-filter | Replay, Play, the speed key and Now: state mapj.replay and mapj.replaySpeed |
+| 4905 | Map page: Replay slider (move through the recorded time) | slider | NOT DRIVABLE | - | a slider with no accessible label in the bounded run; the scrub arithmetic is test_slint_host_mapj |
+| 4906 | Map page: Filter key, Filter aircraft, Hide on ground, Military or interesting | checkbox | DRIVEN+ASSERTED | mapj-replay-filter | Filter aircraft, Hide on ground, Military or interesting: state mapj.filter and mapj.conditions |
+| 4907 | Map page: filter fields (Callsign contains, Altitude from / to, Type contains, Operator contains) | field | DRIVEN+ASSERTED | mapj-replay-filter | callsign and altitude typed: state mapj.hidden follows; a bad altitude drops the condition |
+| 4908 | Map page: Units key (Automatic, Metric, Imperial, Aviation, Nautical) | key | DRIVEN+ASSERTED | mapj-replay-filter | the key cycles through the five systems: state mapj.units |
+| 4909 | Map page: tile cache line and Clear tile cache key | key | NOT DRIVABLE | - | nothing fills the cache from the screen (the basemap plugin fetches its own tiles); the cache itself is test_tile_cache |
+| 4910 | Map page: Maidenhead grid lines and cell captions | overlay/marker | DRIVEN+ASSERTED | mapj-layers | state mapj.grid >= 1 and mapj.labels >= 1 with the Locator grid on; shot mapj-layers.png |
+| 4911 | Sky page (App menu > Sky positions...): the table of the Sun, the Moon and five radio sources | table | DRIVEN+ASSERTED | mapj-sky | state mapj.skyRows == 7 after the position is set |
+| 4912 | Sky page: the polar sky plot and a pass on it | plot | DRIVEN+ASSERTED | mapj-sky | state mapj.passMax >= 60 with the made-up pass; shot mapj-sky.png |
+| 4913 | Antenna page (App menu > Antenna calculator...): Frequency, Distance, Coax, Velocity factor, Yagi elements fields | field | DRIVEN+ASSERTED | mapj-antenna | typed values read back as the dipole and path-loss numbers; a bad value shows the error |
+| 4914 | Antenna page: the table of lengths in metres and feet | table | DRIVEN+ASSERTED | mapj-antenna | state mapj.antennaRows >= 10, >= 14 with nine Yagi elements |
+
+### Screen lane K - the remaining rows (rows 5200 and up are this lane's; docs/multi-radio-records/screen-k.md)
+
+| # | control | type | class | script | detail |
+|---|---|---|---|---|---|
+| 5200 | Settings and backup: Export settings (one file into the exports folder; secrets and the install id left out) | key | DRIVEN+ASSERTED | lanek-backup | state lk.status contains Exported, state lk.exports == 1; the bundle is read back by test_slint_lanek_host (no secret in it) |
+| 5201 | Settings and backup: Back up settings now (own backups folder, pruned to the newest N) | key | DRIVEN+ASSERTED | lanek-backup | state lk.status contains Backed up; the pruning by test_slint_lanek_host |
+| 5202 | Settings and backup: Back up automatically when FoxSDR closes | checkbox | DRIVEN | lanek-backup | the tick is operated by test_slint_lanek_host only through the keeper (the write at exit is main.cpp finishAtExit: log line lane K at exit) |
+| 5203 | Settings and backup: Backups kept (5, 10, 20, 50) | dropdown | DRIVEN | lanek-backup | a saved choice; the pruning bound is read back by test_slint_lanek_host |
+| 5204 | Settings and backup: Files in the exports folder (pick one to import) | dropdown | DRIVEN+ASSERTED | lanek-backup | state lk.importpath |
+| 5205 | Settings and backup: File to import (a path) | field | DRIVEN+ASSERTED | lanek-backup | the export fills it; the import key reads it |
+| 5206 | Settings and backup: Import settings... and its confirmation sheet (Import and close FoxSDR, Cancel) | key | DRIVEN+ASSERTED | lanek-backup | state lk.sheet == 2, Cancel changes nothing (lk.pending == 0), the import sets lk.pending == 1 and the SECOND START reads the imported theme back (restart/lanek-backup-2) |
+| 5207 | Settings and backup: Profile list, Use this profile, Delete profile | dropdown | DRIVEN | lanek-backup | the keeper (save, list, switch planned again at exit, delete) is asserted by test_slint_lanek_host; the keys follow the saved profile in lanek-backup |
+| 5208 | Settings and backup: Name for a new profile and Save as profile... | field | DRIVEN+ASSERTED | lanek-backup | state lk.profiles == 1, state lk.status contains Saved the profile |
+| 5209 | Settings and backup: Shared folder for syncing profiles, Sync profiles now | field | DRIVEN | lanek-backup | the sync (push, pull, conflicts left alone) is asserted by test_slint_lanek_host; no shared folder in a drive run |
+| 5210 | Settings and backup: Run the first-time setup again | key | DRIVEN+ASSERTED | lanek-wizard | FOXSDR_SLINT_FIRSTRUN opens the same sheet; state lk.wizardstep |
+| 5211 | Settings and backup: Reset everything to defaults... (confirmation sheet, Also set aside plugins / logs, Reset and close) | key | DRIVEN+ASSERTED | lanek-backup | state lk.sheet == 4; a scratch profile is not a folder named foxsdr, so the sheet refuses and Reset and close is disabled (expect enabled false); the real reset, its folder guard and the undo are asserted by test_slint_lanek_host |
+| 5212 | Settings and backup: Undo the reset | key | DRIVEN | lanek-backup | enabled only after a reset; asserted by test_slint_lanek_host (the file work at exit) |
+| 5213 | First-run setup sheet: Next, Back, Skip setup, Done | key | DRIVEN+ASSERTED | lanek-wizard | state lk.wizardstep 0, 1, 2, 3; Next is disabled on the radio page until one is chosen |
+| 5214 | First-run setup sheet: Which radio do you have? (eleven choices) | dropdown | DRIVEN+ASSERTED | lanek-wizard | click RTL-SDR dongle enables Next |
+| 5215 | First-run setup sheet: Starting stations (none, or one of the presets for that radio) | dropdown | DRIVEN+ASSERTED | lanek-wizard | click FM broadcast band; state lk.status contains starting station after Done |
+| 5216 | First-run setup sheet: Send anonymous usage reports (the wizard offers the existing switch) | checkbox | DRIVEN | lanek-wizard | the telemetry op is the existing FOXAPP_OP_TELEMETRY_CONSENT; its own switch is SYSTEM > Usage reporting (already built) |
+| 5217 | Performance: CPU, memory, computer memory and graphics readouts | readout | DRIVEN+ASSERTED | lanek-perf | state lk.samples, lk.mem; a figure that cannot be read says n/a |
+| 5218 | Performance: Reduced effects (Automatic, On, Off) | dropdown | DRIVEN+ASSERTED | lanek-perf | state lk.perfmode, lk.reduced |
+| 5219 | Accessibility: Colour set (Normal and three colour-blind-safe sets) | dropdown | DRIVEN+ASSERTED | lanek-access | state lk.palette; the contrast and colour-vision numbers of the palettes are in test_access_palette (the access lane) |
+| 5220 | Accessibility: Number format and Digits | dropdown | DRIVEN | lanek-access | the dot-only default is byte for byte today's text (every existing test); the comma form is asserted by test_slint_host_numbers |
+| 5221 | Accessibility: Speak the frequency, mode and level now | key | DRIVEN+ASSERTED | lanek-access | state lk.spokencount, lk.spoken (a recording stand-in in a bounded run: nobody hears it) |
+| 5222 | Accessibility: Speak changes automatically, first state on start, frequency, mode, level, interrupt | checkbox | DRIVEN | lanek-access | Speak the mode is operated; the announcer's policy is asserted by test_access_speech |
+| 5223 | Accessibility: Signal level as, waits, smallest change, level step (spoken readout) | slider | DRIVEN | lanek-access | saved choices feeding the announcer policy |
+| 5224 | Accessibility: Play a tone that follows the signal (and its pitch, levels, volume, squelch) | checkbox | DRIVEN+ASSERTED | lanek-access | state lk.toneon, lk.tonehz (the parameters are computed; no device is opened in a bounded run) |
+| 5225 | Accessibility: screen reader sentences for the spectrum, the waterfall and the frequency | behaviour | DRIVEN+ASSERTED | lanek-access | state lk.sr.spectrum, lk.sr.waterfall, lk.sr.counter (the text the accessible description carries) |
+| 5226 | Community: Forum and Discord links (App menu and the Community section; empty setting = hidden) | key | DRIVEN+ASSERTED | lanek-community | state lk.forumurl == empty, lk.discordurl == empty: no address is set in this copy |
+| 5227 | Display body: Averaging (Off, Linear, RMS, Log, Exponential), Frames, Time constant | dropdown | DRIVEN+ASSERTED | lanek-spectrum | state lk.avgmode; the averaging closed forms by test_trace_average |
+| 5228 | Display body: Zoom to a dragged selection (and Ctrl+drag) | checkbox | DRIVEN+ASSERTED | lanek-spectrum | state lk.zoomselect, then radio zoomsel (the plot's own call) narrows the span: state lk.zoomspan |
+| 5229 | Spectrum: a dragged selection (rubber band) zooms the view | behaviour | DRIVEN | lanek-spectrum | the scripted drag starts on a control, not on the plot: the real pointer drag is the final real-mouse drive's |
+| 5230 | Display body: Gradient editor... (sheet: Use my gradient, Blend in, stop colour, position, remove, add, reverse, reset, Done) | key | DRIVEN+ASSERTED | lanek-tools | state lk.sheet == 7, lk.gradon, lk.gradtop == the last stop's colour, lk.gradstops |
+| 5231 | Spectrum tools: Trace detector (As drawn, Peak, Negative peak, RMS, Voltage average, Log average, Sample) | dropdown | DRIVEN+ASSERTED | lanek-spectrum | state lk.detector; the reductions by test_slint_lanek_spectrum_host (closed forms for noise) |
+| 5232 | Spectrum tools: Resolution bandwidth readout | readout | DRIVEN+ASSERTED | lanek-spectrum | state lk.rbw > 0 |
+| 5233 | Spectrum tools: Limit mask - Mask file, Write an example mask file, Load the mask, Show the limit lines, margin and breach readouts | key | DRIVEN+ASSERTED | lanek-tools | state lk.maskloaded, lk.maskpass; the lines by test_slint_lanek_spectrum_host |
+| 5234 | Spectrum tools: Eight-cursor tool... (sheet: mode, spacing, reference, eight cursor fields, place by click, tuned, snap, show) | key | DRIVEN+ASSERTED | lanek-tools | state lk.sheet == 8, lk.cursormode, lk.cursor.0 / .3 in the harmonic mode |
+| 5235 | Spectrum tools: Show the cursors | checkbox | DRIVEN | lanek-tools | the cursors are drawn into the trace picture (test_slint_lanek_spectrum_host reads the pixels) |
+| 5236 | Audio mix: Matrix key and the Matrix sheet (one row per radio; hover previews, click keeps, double click selects) | key | DRIVEN+ASSERTED | lanek-matrix | state lk.tiles == 3, lk.baseline, lk.matrixsolo; the pointer's own hover is the final real-mouse drive's |
+
+### Screen lane L - the controls of what the wiring lanes built (rows 5300 and up are this lane's; docs/multi-radio-records/screen-l.md)
+
+| # | control | type | class | script | detail |
+|---|---|---|---|---|---|
+| 5300 | Tuning and memories: Back and Forward (the radio's frequency history) | key | DRIVEN+ASSERTED | lanel-tuning | state ll.note.tuning contains Nothing changed (the engine's answer to Back at the start); Forward answered |
+| 5301 | Tuning and memories: Channel plan list, Next channel, Previous channel, Go to channel, Leave channel mode | dropdown | DRIVEN+ASSERTED | lanel-tuning | state ll.fact.channel.1.plan == marine-vhf-itu, ll.fact.channel.1.label == 16, Leave channel mode done |
+| 5302 | Tuning and memories: Markers file, Export CSV..., Export JSON..., Merge markers within, Import... | key | DRIVEN+ASSERTED | lanel-tuning | Export CSV... with no markers: ll.note.tuning contains Nothing changed; the import is read back by the engine tests only |
+| 5303 | Tuning and memories: Bookmark number, Bookmark note, Bookmark tags, Save / Read / Remove the note, Search notes and tags, Find, Find by tag | key | DRIVEN+ASSERTED | lanel-tuning | state ll.note.tuning contains Save note: Refused (the engine's own reason for a bookmark that is not there) |
+| 5304 | Tuning and memories: Bookmark squelch, threshold, offset, tone and Save / Read / Remove the fields | key | DRIVEN+ASSERTED | lanel-tuning | a value outside the range is refused before it is sent (ll.refused); the engine's refusal is read for a missing bookmark |
+| 5305 | Tuning and memories: Favourite's name, Save view as favourite, Recall, New name, Rename, Remove | key | DRIVEN+ASSERTED | lanel-tuning | state ll.fact.favourite.count == 1 then the new name in ll.fact.favourite.names then count == 0 |
+| 5306 | Tuning and memories: Pack file, name, description, Export pack..., Import pack... | key | DRIVEN | lanel-tuning | with no bookmarks the engine answers Nothing changed (ll.note.tuning contains Export pack); a pack file is not written in a bounded run |
+| 5307 | Tuning and memories: Remember per band, Volume, AGC, Forget every band | checkbox | DRIVEN+ASSERTED | lanel-tuning | state ll.fact.bandmem.on == 1 then != 1 |
+| 5308 | Tuning and memories: Bandwidth up, Bandwidth down, Cycle mode, Centre on the signal, Next bookmark, Previous bookmark | key | DRIVEN+ASSERTED | lanel-tuning | state ll.note.tuning contains Cycle mode: done |
+| 5309 | Scanning: Ranges, Direction, Set / Start / Clear the plan, Scan back, Save hit as bookmark | key | DRIVEN+ASSERTED | lanel-scan | state ll.fact.scan.plan contains 144000000; a malformed range refused before it is sent |
+| 5310 | Scanning: Trigger mode, level, margin, hysteresis, floor rise, Use this trigger, Back to the squelch | key | DRIVEN+ASSERTED | lanel-scan | state ll.fact.scan.trigger.on == 1 then 0; level -170 refused with the allowed range |
+| 5311 | Scanning: Per-entry thresholds, Set, Clear | key | DRIVEN+ASSERTED | lanel-scan | state ll.note.scan contains Set the thresholds: done |
+| 5312 | Scanning: Scan whole span without retuning (switch, grid, mode, margin, level, merge, Apply, Read the hits) | checkbox | DRIVEN+ASSERTED | lanel-scan | state ll.note.scan contains Span scan: done |
+| 5313 | Scanning: Station database (path, frequency column, unit, columns, delimiter, Load, Remove, Look up) | key | DRIVEN+ASSERTED | lanel-scan | a missing file fails on the worker: state ll.fact.job.state == failed; Look up: Nothing changed |
+| 5314 | Recording and files: Daily folders (five styles), Use UTC | dropdown | DRIVEN+ASSERTED | lanel-record | state ll.fact.record.daily contains style 2 / utc false |
+| 5315 | Recording and files: Lock settings while recording, Also lock gain, Locked now | checkbox | DRIVEN+ASSERTED | lanel-record | state ll.fact.record.lock == 1 then != 1; the default (off) is not changed |
+| 5316 | Recording and files: Audio file format WAV / FLAC, Keep the WAV | dropdown | DRIVEN+ASSERTED | lanel-record | state ll.fact.record.container == flac then wav; container.keep == 1 |
+| 5317 | Recording and files: Analyser job read-out, Cancel, Export selection, Hash the recording, project check | key | DRIVEN+ASSERTED | lanel-record | Cancel disabled with no job; a missing recording: state ll.fact.job.state == failed; a bad box refused here |
+| 5318 | Recording and files: Attachments (add screenshot / clip / note, list, check, remove) | key | DRIVEN | lanel-record | needs a record folder with files; the JSON is tested by test_slint_lanel_host only |
+| 5319 | Recording and files: SigMF annotation (save, list) | key | DRIVEN | lanel-record | needs a finished SigMF recording; not driven |
+| 5320 | Measurement: Antenna factor table, Cable loss table, unit, Preamp gain, Input ohm, Show, Read dBuV/m now | checkbox | DRIVEN+ASSERTED | lanel-measure | state ll.fact.field.show == 1; the read is refused with the engine's sentence when no table is loaded |
+| 5321 | Measurement: the nine signal measurements and Pseudo-Doppler bearing | key | DRIVEN+ASSERTED | lanel-measure | state ll.fact.radio.1.sigmeas.bandwidth contains valid; Length 20 refused with the allowed range |
+| 5322 | Measurement: Bit view (keep, list, decode again, try every line code, find CRC, checksum, infer, compare, decoder and code-table files) | key | DRIVEN | lanel-measure | Keep a burst and List answered; the others need kept bursts |
+| 5323 | Measurement: GPU spectrum CPU / Auto / GPU | dropdown | DRIVEN+ASSERTED | lanel-measure | state ll.fact.gpu_fft.mode == 1 then 0 (GPU is not pressed in a test: it makes a Direct3D device) |
+| 5324 | Measurement: Keep / Drop frames with CRC errors, Read the frame log | key | DRIVEN+ASSERTED | lanel-measure | state ll.note.measure contains Frame log: done |
+| 5325 | Measurement: Limit alarm (mask file, load, remove, alarm on, frames, capture, post-roll, interval, Apply) | key | DRIVEN+ASSERTED | lanel-measure | enabling with no mask: state ll.note.measure contains Limit alarm: Refused (the engine's words) |
+| 5326 | Sweep: Kind, port, baud, start, stop, points, interval, step, gains, amplifier, top, bottom, Open, Close | key | DRIVEN+ASSERTED | lanel-sweep | a bad port and a fractional HackRF start are refused before sending; Close: Nothing changed; NO port is opened |
+| 5327 | Sweep: Heat map and occupancy, Read the sweep | key | DRIVEN+ASSERTED | lanel-sweep | the engine refuses with no device: Refused: frequency range unusable |
+| 5328 | Network radios: Source, Address and arguments, Add this as another radio, Use for the selected radio | dropdown | DRIVEN | lanel-sweep | the choice is read back (ll.draft.n.kind); the two keys connect and are never pressed in a test |
+| 5329 | Outputs and tracks: Follow a master, Stop following, Lock / Unlock follower, Keep this distance | key | DRIVEN+ASSERTED | lanel-outputs | state ll.fact.matrix.rows contains follows 1, locked true / false |
+| 5330 | Outputs and tracks: Network I/Q out (format, header, UDP, port, Start, Stop) | key | DRIVEN+ASSERTED | lanel-outputs | state ll.fact.radio.1.iqout contains running true |
+| 5331 | Outputs and tracks: SBS output (port, Start, Stop) | key | DRIVEN+ASSERTED | lanel-outputs | state ll.fact.sbs.out contains running true |
+| 5332 | Outputs and tracks: Track store (Keep tracks, Keep for, Clear, Read the time held) | checkbox | DRIVEN+ASSERTED | lanel-outputs | state ll.fact.tracks.state contains enabled true |
+| 5333 | Outputs and tracks: Coverage grid (position, cell, half life, switch, Clear, Read) | checkbox | DRIVEN+ASSERTED | lanel-outputs | refused without a position; state ll.fact.coverage.state contains enabled true |
+| 5334 | Needed libraries: the nine rows (name, why, files, state, where to get it, steps, licence, Check again, path and Check this file) | key | DRIVEN+ASSERTED | lanel-libs | state ll.libs == 9; ll.lib.<id> words; never Working for a header-only check; no key opens a page or a folder |
+| 5335 | System: Keep the PC awake while recording, Look for radios again after the PC wakes, What the last start did | checkbox | DRIVEN+ASSERTED | lanel-system | state ll.fact.wirec.sys.keep_awake == 0 then 1 |
+| 5336 | System: Order of the plugin store | dropdown | DRIVEN+ASSERTED | lanel-system | state ll.fact.wirec.store.sort == name |
+| 5337 | Web: Show the /metrics page, Allowed web origins | checkbox | DRIVEN+ASSERTED | lanel-system | state ll.fact.wirec.web.cors_origins == https://example.org; a bad origin refused with the engine's words |
+| 5338 | Ham tools: Contest header form | key | DRIVEN | lanel-system | the JSON is tested by test_slint_lanel_host; the engine facts are not read |
+| 5339 | Ham tools: Log a QSO, Remove, Clear the log (asks twice) | key | DRIVEN+ASSERTED | lanel-system | state ll.fact.ham.qso.count 1, 0, 1, still 1 after the first Clear, 0 after the second |
+| 5340 | Ham tools: Export Cabrillo log..., Export ADIF log... | key | DRIVEN | lanel-system | a file is not written in a bounded run |
+| 5341 | Ham tools: Follow radio info (switch, address, port, other addresses) | checkbox | DRIVEN | lanel-system | no logger to follow; port 0 opens nothing |
+| 5342 | Ham tools: Answer CAT commands (switch, dialect, port, every address) | checkbox | DRIVEN+ASSERTED | lanel-system | state ll.fact.cat.emulation.running != 1 with port 4532 |
 

@@ -1,0 +1,48 @@
+name = "foxsdr-links"
+main = "src/worker.js"
+# The telemetry Worker's date: a date this account's wrangler is already known to accept. Raise it
+# deliberately (and re-run the tests) rather than by habit.
+compatibility_date = "2026-08-18"
+
+# Until the hostname below is decided and uncommented, this Worker has NO public address at all:
+# workers.dev is switched off on purpose (a workers.dev name would be reachable the moment it is
+# deployed, and an address compiled into the program must be one we own).
+workers_dev = false
+
+# The checker: once a day, at a quiet minute (UTC). A cron trigger takes up to 15 minutes to reach
+# the network after a deploy (developers.cloudflare.com/workers/configuration/cron-triggers).
+[triggers]
+crons = ["17 4 * * *"]
+
+# THE STATE: one KV key ("state") that holds, for every id, the live status, the failed-runs
+# counter and the last 30 results. One read and one write per run, so the whole run stays inside the
+# 50 subrequests the free plan allows (KV calls count as subrequests); the value is a few hundred
+# kilobytes at most against a 25 MiB limit; only the cron writes it, so nothing races; and a
+# request that reads it a little late (KV is eventually consistent) only shows yesterday's status.
+# D1 would add a schema and migrations for queries nobody makes; R2 and Durable Objects are for
+# other shapes. DEPLOY.md step 2 creates the namespace and pastes its id here.
+[[kv_namespaces]]
+binding = "LINKS_STATE"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Subrequests the daily run may spend (every address is at most one request; a redirect hop or a
+# HEAD retry is one more). 45 + one KV read + one KV write = 47, under the free plan's 50. On the
+# Workers Paid plan raise it (DEPLOY.md): rows beyond the budget are not skipped for good - they
+# are taken first on the next run.
+[vars]
+CHECK_BUDGET = "45"
+
+# ADMIN_TOKEN is a SECRET and is NOT written here: `npx wrangler secret put ADMIN_TOKEN`
+# (DEPLOY.md step 4). With it unset the admin endpoint answers 503 to everyone.
+
+# No request logs: the same stance as the telemetry Worker (nothing about who asked is kept).
+[observability]
+enabled = false
+
+# HOSTNAME - AN OWNER DECISION (DEPLOY.md step 3). The telemetry Worker answers on
+# telemetry.foxsdr.com as a custom domain; this one is proposed as links.foxsdr.com. Uncomment
+# after the owner has said yes to the name. Like the telemetry URL, it will be compiled into
+# every shipped program, so it has to be a name we can repoint.
+# [[routes]]
+# pattern = "links.foxsdr.com"
+# custom_domain = true

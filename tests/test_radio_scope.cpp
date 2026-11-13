@@ -105,6 +105,22 @@ void testTheList() {
         FOXAPP_OP_PATCH_SET_GRAPH, FOXAPP_OP_AIRBAND, 0x7FFFu,
     };
     for (const std::uint32_t op : global) { CHECK(!isRadioScopedOp(op)); }
+    // wire-b begin: the lane's own lists (kept apart from the counts above): per-radio reads are scoped, the global tables and configs are not
+    {
+        const std::uint32_t wireBScoped[] = {FOXAPP_OP_FIELD_READ, FOXAPP_OP_SIGMEAS_BANDWIDTH, FOXAPP_OP_SIGMEAS_MODULATION, FOXAPP_OP_SIGMEAS_SYMBOLS,
+                                             FOXAPP_OP_SIGMEAS_VSTIME, FOXAPP_OP_SIGMEAS_BURSTS, FOXAPP_OP_SIGMEAS_HOPCHIRP, FOXAPP_OP_SIGMEAS_AUDIO,
+                                             FOXAPP_OP_SIGMEAS_DRIFT, FOXAPP_OP_SIGMEAS_HISTOGRAM, FOXAPP_OP_PSEUDO_DOPPLER,
+                                             FOXAPP_OP_BITS_KEEP, FOXAPP_OP_BITS_LIST, FOXAPP_OP_BITS_REDECODE, FOXAPP_OP_BITS_SWEEP, FOXAPP_OP_BITS_FIND_CRC, FOXAPP_OP_BITS_FIND_SUM, FOXAPP_OP_BITS_INFER, FOXAPP_OP_BITS_DIFF, FOXAPP_OP_BITS_SPEC_CHECK, FOXAPP_OP_BITS_SPEC_RUN, FOXAPP_OP_BITS_TABLE_CHECK,
+                                             FOXAPP_OP_IQ_OUT_START, FOXAPP_OP_IQ_OUT_STOP};
+        const std::uint32_t wireBGlobal[] = {FOXAPP_OP_FIELD_TABLE, FOXAPP_OP_FIELD_CONFIG, FOXAPP_OP_GPU_FFT_MODE, FOXAPP_OP_FRAMELOG_CONFIG, FOXAPP_OP_FRAMELOG_READ, FOXAPP_OP_MASK_LOAD, FOXAPP_OP_MASK_CONFIG,
+                                           FOXAPP_OP_SWEEP_OPEN, FOXAPP_OP_SWEEP_CLOSE, FOXAPP_OP_SWEEP_CONFIG, FOXAPP_OP_SWEEP_READ,
+                                           FOXAPP_OP_FOLLOW_SET, FOXAPP_OP_FOLLOW_CLEAR, FOXAPP_OP_FOLLOW_LOCK, FOXAPP_OP_FOLLOW_KEEP,
+                                           FOXAPP_OP_SBS_OUT_START, FOXAPP_OP_SBS_OUT_STOP,
+                                           FOXAPP_OP_TRACKS_CONFIG, FOXAPP_OP_TRACKS_READ, FOXAPP_OP_COVERAGE_CONFIG, FOXAPP_OP_COVERAGE_READ, FOXAPP_OP_NEEDED_LIB_CHECK};
+        for (const std::uint32_t op : wireBScoped) { CHECK(isRadioScopedOp(op)); }
+        for (const std::uint32_t op : wireBGlobal) { CHECK(!isRadioScopedOp(op)); }
+    }
+    // wire-b end
 }
 
 void testTheFocusBump() {

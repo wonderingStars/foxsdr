@@ -1,0 +1,71 @@
+#! frames=1000 size=1600x8000 bank=4 sections=4:23,24,25
+# lanel-system (screen lane L, docs/multi-radio-records/screen-l.md; rows D1, D2, D5, D7, D9 to D12): the System, Web and Ham tools sections against the real engine: the power switches, the plugin store's order, the web switches (cross-origin sign-in stays off), the QSO log kept by hand (a destructive key asks twice) and the CAT emulation, which is OFF until ticked and refuses port 4532.
+10 state running == 1
++3 state ll.rows.system > 6
+# D1, D2: two switches, ON by default, read back from wire-c's own facts
++1 state ll.fact.wirec.sys.keep_awake != 0
++1 click "Keep the PC awake while recording"
++12 state ll.fact.wirec.sys.keep_awake == 0
++1 click "Keep the PC awake while recording"
++12 state ll.fact.wirec.sys.keep_awake == 1
++1 click "Look for radios again after the PC wakes"
++12 state ll.fact.wirec.sys.resume_reopen == 0
++1 click "Look for radios again after the PC wakes"
++12 state ll.fact.wirec.sys.resume_reopen == 1
+# D7
++1 click "By name"
++12 state ll.fact.wirec.store.sort == name
++1 click "Catalogue order"
++12 state ll.fact.wirec.store.sort == catalogue
++1 shot "lanel-system.png"
+# D9: the metrics page is OFF; the origins are stored one to a line; a bad origin is refused with the engine's words
++1 state ll.fact.wirec.web.metrics != 1
++1 click "Show the /metrics page to signed-in browsers"
++12 state ll.fact.wirec.web.metrics == 1
++1 click "Show the /metrics page to signed-in browsers"
++12 state ll.fact.wirec.web.metrics == 0
++1 type "Allowed web origins" "https://example.com;http://localhost:3000"
++1 key enter
++12 state ll.fact.wirec.web.cors_origins contains "https://example.com"
++1 type "Allowed web origins" "not an origin"
++1 key enter
++12 state ll.note.web contains "Allowed web origins: Refused"
++1 type "Allowed web origins" "https://example.org"
++1 key enter
++12 state ll.note.web contains "Allowed web origins: done"
+state ll.fact.wirec.web.cors_origins == "https://example.org"
+# D10: a QSO typed by hand is kept in the engine's log and can be removed; clearing asks twice
++1 type "Frequency (kHz)" "14025"
++1 key enter
++1 type "Mode" "CW"
++1 key enter
++1 type "Call sign worked" "K1ABC"
++1 key enter
++2 click "Log a QSO"
++15 state ll.fact.ham.qso.count == 1
++1 type "QSO number" "1"
++1 key enter
++2 click "Remove the QSO"
++15 state ll.fact.ham.qso.count == 0
++1 click "Log a QSO"
++15 state ll.fact.ham.qso.count == 1
++1 click "Clear the log"
++8 state ll.note.ham contains "press the key again"
+state ll.fact.ham.qso.count == 1
++1 click "Press again to clear the whole log"
++15 state ll.fact.ham.qso.count == 0
+# a QSO with no frequency is refused here
++1 type "Frequency (kHz)" "abc"
++1 key enter
++2 click "Log a QSO"
++6 state ll.note.ham contains "Log a QSO: Frequency (kHz)"
+# D12: CAT emulation is OFF; 4532 belongs to the rigctl server and the engine refuses it
++1 state ll.fact.cat.emulation.running != 1
++1 type "CAT port" "4532"
++1 key enter
++12 state ll.note.ham contains "CAT port"
++1 click "Answer CAT commands from a logging program"
++15 state ll.fact.cat.emulation.running != 1
++1 click "Answer CAT commands from a logging program"
++15 state ll.fact.wirec.cat.emulation.enabled == 0
++1 shot "lanel-ham.png"

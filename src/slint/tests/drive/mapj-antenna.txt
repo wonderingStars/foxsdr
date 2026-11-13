@@ -1,0 +1,25 @@
+#! frames=400 bank=1 plugins=adsb-decoder open=antenna iqfile=adsb-decoder.wav centre=1090000000 mode=RAW bandwidth=2400000 size=1280x720
+# mapj-antenna (row Q7a): the antenna calculators; typed values are read back as the numbers they give.
+120 state kit.plugins == 1
++10 state mapj.antennaRows >= 10
++1 state mapj.dipole contains "10.07"
++1 expect "Frequency (MHz)" value equals "14.2"
++1 type "Frequency (MHz)" "7.1"
++1 key enter
++5 state mapj.dipole contains "20.14"
++1 type "Frequency (MHz)" "abc"
++1 key enter
++5 state mapj.antennaError contains "not a number"
++1 type "Frequency (MHz)" "7.1"
++1 key enter
++5 state mapj.antennaError == ""
++1 type "Distance (km)" "100"
++1 key enter
++5 state mapj.loss contains "89.5"
++1 type "Yagi elements" "9"
++1 key enter
++5 state mapj.antennaRows >= 14
++1 type "Yagi elements" "1"
++1 key enter
++5 state mapj.antennaError contains "not a number"
++1 shot "mapj-antenna.png"

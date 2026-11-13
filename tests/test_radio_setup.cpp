@@ -544,6 +544,20 @@ void testFamilyForDriver() {
     CHECK(rs::familyForDriver("lime") == rs::kFamilyLime);
     CHECK(rs::familyForDriver("pluto").empty());
     CHECK(rs::familyForDriver("").empty());
+    // wire-b: guidance for the radios the USB table has no entry for (BladeRF, Pluto, AntSDR); the table itself is unchanged
+    {
+        const rs::DriverGuidance* b = rs::guidanceForDriver("BladeRF");
+        CHECK(b != nullptr);
+        if (b != nullptr) { CHECK(std::string(b->module) == "SoapyBladeRF" && std::string(b->text).find("SoapyBladeRF") != std::string::npos); }
+        const rs::DriverGuidance* p = rs::guidanceForDriver("plutosdr");
+        CHECK(p != nullptr);
+        if (p != nullptr) { CHECK(std::string(p->text).find("no driver is needed") != std::string::npos && std::string(p->module) == "SoapyPlutoSDR"); }
+        const rs::DriverGuidance* a = rs::guidanceForDriver("ANTSDR");
+        CHECK(a != nullptr);
+        if (a != nullptr) { CHECK(std::string(a->text).find("192.168.1.10") != std::string::npos && std::string(a->text).find("ADALM-Pluto source") != std::string::npos); }
+        CHECK(rs::guidanceForDriver("rtlsdr") == nullptr);
+        CHECK(rs::guidanceForDriver("") == nullptr);
+    }
 }
 
 void testTheKindNames() {

@@ -50,6 +50,12 @@ list(APPEND foxsdr_slint_sources globe_scene.cpp solar_ephemeris.cpp globe_logic
 list(APPEND foxsdr_slint_sources gaps_logic.cpp gaps_win.cpp)
 # SCREEN LANE C (docs/multi-radio-records/screen-c.md): the scanner block, the memories, the delta lock, the clock and the two sheets (lanec_logic: pure; lanec_publish: the LaneC global)
 list(APPEND foxsdr_slint_sources lanec_logic.cpp lanec_publish.cpp)
+# SCREEN LANE J (docs/multi-radio-records/screen-j.md): the map page's layers, replay, filter and units, the Sky and Antenna pages (mapj_logic: pure; kit_publish_mapj: KitPublisher members; ui/mapj.slint)
+list(APPEND foxsdr_slint_sources mapj_logic.cpp kit_publish_mapj.cpp)
+# SCREEN LANE K (docs/multi-radio-records/screen-k.md): the rows lane K adds to the SYSTEM bank, the sheets, the Matrix (lanek_logic: pure; lanek_publish: the LaneK and LaneKMatrix globals)
+list(APPEND foxsdr_slint_sources lanek_logic.cpp lanek_spectrum.cpp lanek_audio.cpp lanek_publish.cpp)
+# SCREEN LANE L (docs/multi-radio-records/screen-l.md): eleven more SYSTEM sections over the wiring lanes' operations and facts (lanel_logic: pure; lanel_publish: the LaneL global)
+list(APPEND foxsdr_slint_sources lanel_logic.cpp lanel_publish.cpp)
 if(WIN32)
     enable_language(RC)
     add_executable(foxsdr-slint WIN32 ${foxsdr_slint_sources} "${CMAKE_SOURCE_DIR}/resources/icon/foxsdr.rc")
@@ -203,13 +209,14 @@ else()
     target_compile_definitions(test_slint_drive_run PRIVATE FOXSDR_DRIVE_PYTHON="python3")
 endif()
 add_dependencies(test_slint_drive_run foxsdr-slint)
+# Every gui test here requires the fixture gui_desktop (tests/CMakeLists.txt, "THE DESKTOP GUARD"): none starts on the visible desktop.
 add_test(NAME test_slint_drive_run COMMAND test_slint_drive_run)
-set_tests_properties(test_slint_drive_run PROPERTIES LABELS "gui;drive" TIMEOUT 300)
+set_tests_properties(test_slint_drive_run PROPERTIES LABELS "gui;drive" FIXTURES_REQUIRED gui_desktop TIMEOUT 300)
 file(GLOB _foxsdr_slint_drive_scripts CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/drive/*.txt")
 foreach(_script ${_foxsdr_slint_drive_scripts})
     get_filename_component(_drive_name "${_script}" NAME_WE)
     add_test(NAME slint_drive_${_drive_name} COMMAND test_slint_drive_run "${_script}")
-    set_tests_properties(slint_drive_${_drive_name} PROPERTIES LABELS "gui;drive" TIMEOUT 600)
+    set_tests_properties(slint_drive_${_drive_name} PROPERTIES LABELS "gui;drive" FIXTURES_REQUIRED gui_desktop TIMEOUT 600)
 endforeach()
 
 # THE COVERAGE LEDGER (tools/slint_drive_ledger.py, docs 6.47): every row of docs/slint-port-tick.md classified from tests/drive/coverage.tsv
@@ -233,7 +240,7 @@ if(TARGET cascade)
     add_dependencies(test_slint_config_roundtrip cascade)
 endif()
 add_test(NAME test_slint_config_roundtrip COMMAND test_slint_config_roundtrip)
-set_tests_properties(test_slint_config_roundtrip PROPERTIES LABELS "gui" TIMEOUT 600)
+set_tests_properties(test_slint_config_roundtrip PROPERTIES LABELS "gui" FIXTURES_REQUIRED gui_desktop TIMEOUT 600)
 
 # THE RETUNE DRIVE (2026-11-09, a tester's band switch; src/slint/tests/drive_retune_run.cpp): spawns foxsdr-slint bounded on a
 # scratch profile with FOXSDR_SLINT_RETUNE_PROBE and reads its summary line - a zoomed picture follows a typed retune into another
@@ -250,7 +257,7 @@ target_include_directories(test_slint_retune_run PRIVATE
 target_compile_definitions(test_slint_retune_run PRIVATE FOXSDR_SLINT_EXE="$<TARGET_FILE:foxsdr-slint>")
 add_dependencies(test_slint_retune_run foxsdr-slint)
 add_test(NAME test_slint_retune_run COMMAND test_slint_retune_run)
-set_tests_properties(test_slint_retune_run PROPERTIES LABELS "gui" TIMEOUT 300)
+set_tests_properties(test_slint_retune_run PROPERTIES LABELS "gui" FIXTURES_REQUIRED gui_desktop TIMEOUT 300)
 
 # The translation generator's own tests (tools/test_slint_po.py): temp-dir fixtures, nothing of the build tree. -I keeps the
 # interpreter out of the current directory and the user's site-packages (the script is standard-library only).

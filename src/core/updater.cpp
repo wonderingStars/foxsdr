@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/updater.hpp"
+#include "core/sys_manifest_sig.hpp"   // wire-c
 
 #include <nlohmann/json.hpp>
 
@@ -10,6 +11,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -73,6 +75,33 @@ std::string clipUtf8(std::string s, std::size_t maxBytes) {
     s.resize(cut);
     return s;
 }
+
+// wire-c begin (wiring lane C row S6; core/sys_manifest_sig.hpp): THE SIGNATURE ON THE UPDATE MANIFEST. When the program carries an owner key (kOwnerKeyHex in
+// sys_manifest_sig.cpp, EMPTY until the owner supplies one) the body must be a signed envelope whose payload is the manifest, and the manifest that is parsed is
+// the payload; anything else - unsigned, signed by another key, altered, a format this build does not know - is refused with one sentence and counted as a failed
+// check. With NO key the body is parsed exactly as before (signatures are not enforced yet: a decision the owner has not made), so today's behaviour is unchanged.
+std::mutex g_manifestKeysMutex;
+bool g_manifestKeysOverridden = false;
+std::vector<cascade::core::sys::Ed25519PublicKey> g_manifestKeysForTest;
+
+bool unwrapSignedManifest(std::string& body, std::string& error) {
+    std::vector<cascade::core::sys::Ed25519PublicKey> keys;
+    {
+        std::lock_guard<std::mutex> lk(g_manifestKeysMutex);
+        keys = g_manifestKeysOverridden ? g_manifestKeysForTest : cascade::core::sys::ownerTrustedKeys();
+    }
+    if (keys.empty()) { return true; }
+    std::string payload;
+    const cascade::core::sys::SigResult r = cascade::core::sys::verifyEnvelope(body, keys, payload);
+    if (r != cascade::core::sys::SigResult::Ok) {
+        diagWarnf("update: the manifest signature check refused the answer (%s)", cascade::core::sys::sigResultName(r));
+        error = "the update information is not signed by FoxSDR";
+        return false;
+    }
+    body = std::move(payload);
+    return true;
+}
+// wire-c end
 
 // The canned answer's file (FOXSDR_FAKE_UPDATE_MANIFEST), at most a manifest's worth of it.
 // False when it is not there or cannot be opened.
@@ -385,7 +414,7 @@ bool checkForUpdate(const std::string& baseUrl, const std::string& currentVersio
             health::noteUpdateCheckFailed();
             return false;
         }
-        if (!parseUpdateManifest(canned, currentVersion, out, error)) {
+        if (!unwrapSignedManifest(canned, error) || !parseUpdateManifest(canned, currentVersion, out, error)) {   // wire-c: the signature check first
             health::noteUpdateCheckFailed();
             return false;
         }
@@ -408,12 +437,21 @@ bool checkForUpdate(const std::string& baseUrl, const std::string& currentVersio
         health::noteUpdateCheckFailed();
         return false;
     }
-    if (!parseUpdateManifest(body, currentVersion, out, error)) {
+    if (!unwrapSignedManifest(body, error) || !parseUpdateManifest(body, currentVersion, out, error)) {   // wire-c: the signature check first
         health::noteUpdateCheckFailed();
         return false;
     }
     return true;
 }
+
+// wire-c begin: the test seam of the signature check (updater.hpp)
+void setManifestTrustedKeysForTest(const std::vector<std::array<std::uint8_t, 32>>* keys) {
+    std::lock_guard<std::mutex> lk(g_manifestKeysMutex);
+    g_manifestKeysOverridden = keys != nullptr;
+    g_manifestKeysForTest.clear();
+    if (keys != nullptr) { g_manifestKeysForTest.assign(keys->begin(), keys->end()); }
+}
+// wire-c end
 
 bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& error,
                     std::atomic<float>* progress, std::atomic<bool>* cancel) {

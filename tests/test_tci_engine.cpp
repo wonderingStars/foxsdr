@@ -470,7 +470,14 @@ void testUdp() {
     std::size_t odd = 0;
     for (const std::string& p : got) { odd += p.size() != 960 ? 1u : 0u; }
     CHECK(odd == 0);
-    const std::string sentFact = r.fact("fact.udp.sent");
+    // The sender counts a datagram AFTER its sendto returns, and the stream is still running while this reads: the datagram the receiver took last can be
+    // on this side a few microseconds before the counter has moved. The figure that matters is the settled one, so the read waits (bounded, 2 s) until the
+    // counter has caught up with what was received; the assertion below is unchanged (it fails if the counter never reaches the delivered count).
+    std::string sentFact = r.fact("fact.udp.sent");
+    for (int i = 0; i < 200 && std::strtoull(sentFact.c_str(), nullptr, 10) < got.size(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        sentFact = r.fact("fact.udp.sent");
+    }
     CHECK(std::strtoull(sentFact.c_str(), nullptr, 10) >= got.size());
     if (std::strtoull(sentFact.c_str(), nullptr, 10) < got.size()) { std::printf("      fact.udp.sent = \"%s\", datagrams received %zu\n", sentFact.c_str(), got.size()); }
     // the packet size changes; the stream goes on

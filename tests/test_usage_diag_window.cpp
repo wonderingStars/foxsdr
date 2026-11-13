@@ -409,7 +409,15 @@ void testBundle() {
     AppWindow& a = env.a();
     // The engine's pass renders the block; the window never asked it to.
     pass(a);
-    const std::string engines = cascade::core::diagContextBlock();
+    std::string engines = cascade::core::diagContextBlock();
+    // Engine merge 3: the foreign-module watch scans on a thread of its own after the first pass, and the block says "foreign-modules: (not scanned yet)" until a LATER pass renders the
+    // finished scan. The bundle below must contain "the engine's block, whole", and the block it holds by then is the scanned one, so this test waits (at most ten seconds) for the scan
+    // to be rendered before it takes the block to compare. (Found by a debug print of the two blocks: they differed in that one line and nowhere else.) The assertion is unchanged.
+    for (int waited = 0; waited < 100 && engines.find("foreign-modules: (not scanned yet)") != std::string::npos; ++waited) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        pass(a);
+        engines = cascade::core::diagContextBlock();
+    }
     CHECK(has(engines, std::string("version: ") + cascade::versionString() + "\n"));
 
     Access::setCounters(a, 41, 5);

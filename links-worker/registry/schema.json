@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "foxsdr-link-registry-schema-1",
+  "title": "FoxSDR link registry, schema version 1",
+  "description": "Documents the shape of libraries.json. The AUTHORITY is src/validate.js (tools/validate.mjs runs it); test/schema-sync.test.mjs fails if this file and that one disagree on fields, enums or required lists. Rules a JSON Schema cannot say are listed under x-rules.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "registry_version", "updated", "libraries"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "registry_version": { "type": "integer", "minimum": 1, "description": "Goes up by one on every deployed change. The program refuses a registry whose number is lower than the one it holds." },
+    "updated": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "libraries": {
+      "type": "array",
+      "maxItems": 200,
+      "items": { "$ref": "#/$defs/row" }
+    }
+  },
+  "$defs": {
+    "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "https": { "type": "string", "pattern": "^https://[a-z0-9.-]+(/[^\\s#]*)?$", "maxLength": 500 },
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "publisher", "files", "min_version", "page_url", "download", "licence", "fetch_allowed", "fetch_evidence", "install_kind", "allowed_hosts", "status", "last_checked", "last_changed"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 40, "description": "Stable. Two lanes that need the same library use the same id." },
+        "name": { "type": "string", "minLength": 1, "maxLength": 600 },
+        "publisher": { "type": "string", "minLength": 1, "maxLength": 600 },
+        "files": { "type": "array", "maxItems": 20, "items": { "type": "string" }, "description": "The file names FoxSDR looks for (plain names, no folders)." },
+        "min_version": { "type": ["string", "null"], "pattern": "^\\d+(\\.\\d+){0,3}$" },
+        "page_url": { "oneOf": [{ "$ref": "#/$defs/https" }, { "type": "null" }], "description": "The publisher's own official page." },
+        "download": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["url", "size_bytes", "sha256"],
+              "properties": {
+                "url": { "$ref": "#/$defs/https" },
+                "size_bytes": { "type": ["integer", "null"], "minimum": 1 },
+                "sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" }
+              }
+            }
+          ]
+        },
+        "licence": { "type": "string", "minLength": 1, "maxLength": 600 },
+        "fetch_allowed": { "enum": ["yes", "no (patent)", "no (terms)", "no (unverified)"] },
+        "fetch_evidence": { "type": "string", "minLength": 1, "maxLength": 600 },
+        "install_kind": { "enum": ["installer", "copy-in", "helper-program"] },
+        "allowed_hosts": { "type": "array", "maxItems": 10, "items": { "type": "string" }, "uniqueItems": true },
+        "status": { "enum": ["ok", "moved", "broken", "unverified"] },
+        "status_note": { "type": "string", "maxLength": 600 },
+        "last_checked": { "oneOf": [{ "$ref": "#/$defs/date" }, { "type": "null" }] },
+        "last_changed": { "$ref": "#/$defs/date" }
+      }
+    }
+  },
+  "x-rules": [
+    "every address is https, lower-case host, no user name or password, no port, no #fragment",
+    "the host of page_url and of download.url is listed in allowed_hosts",
+    "status unverified means page_url null, download null and allowed_hosts empty (no address is ever invented)",
+    "any other status needs a page_url",
+    "fetch_allowed yes needs status ok, a download, an install_kind other than helper-program, and fetch_evidence that quotes the licence sentence and address",
+    "ids are unique"
+  ]
+}

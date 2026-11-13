@@ -97,7 +97,7 @@ void testTable() {
     static_assert(offsetof(CascadeHostApi, post_event) == offsetof(CascadeHostApi, clear_schedule_hints) + sizeof(void*), "appended after the schedule hints");
     static_assert(offsetof(CascadeHostApi, read_events) == offsetof(CascadeHostApi, post_event) + sizeof(void*), "adjacent");
     static_assert(offsetof(CascadeHostApi, events_seq) == offsetof(CascadeHostApi, read_events) + sizeof(void*), "adjacent");
-    static_assert(sizeof(CascadeHostApi) == offsetof(CascadeHostApi, events_seq) + sizeof(void*), "and last");
+    static_assert(offsetof(CascadeHostApi, recorder_start) == offsetof(CascadeHostApi, events_seq) + sizeof(void*), "and the recorder calls (wiring lane C) follow it");
     PluginUi ui;
     ui.setServices(services());
     ui.rebuild({plug(0, "A")});

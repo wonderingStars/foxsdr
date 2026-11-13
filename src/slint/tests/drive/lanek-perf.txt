@@ -1,0 +1,15 @@
+#! frames=900 size=1600x2200 bank=4 sections=4:11
+# lanek-perf (screen lane K, rows: CPU/GPU/memory readout, low-end / reduced-effects mode): the Performance section. The meter reads this program's CPU and memory, the computer's memory and the graphics counters once a second
+# (a figure that cannot be read says n/a, never 0). Reduced effects On drops the waterfall to at most 15 lines a second and takes the shadows and lamp glow off the skin; Off puts them back; Automatic follows the load.
+10 state running == 1
++40 state lk.samples >= 2
+state lk.mem != "-"
++1 shot "lanek-perf.png"
++1 choose "Reduced effects" "On"
++40 state lk.reduced == 1
+state lk.perfmode == 1
++1 choose "Reduced effects" "Off"
++40 state lk.reduced == 0
+state lk.perfmode == 2
++1 choose "Reduced effects" "Automatic"
++5 state lk.perfmode == 0
