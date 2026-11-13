@@ -1,29 +1,49 @@
 // test_engine_api_wireb_neededlibs.cpp - THE NEEDED LIBRARIES AS STRUCTURED DATA (wire-b; the owner's needed-library rule; FOXAPP_OP_NEEDED_LIB_CHECK 0x8930, fact needed.libs;
 // engine/wire_b_needed_libs.{hpp,cpp}). The machine is FABRICATED: a temp folder with a library that is really a system DLL copied under the maker's file name, a text file under
-// that name, and a SoapySDR module folder; nothing is downloaded, opened or copied by the code under test, and no vendor code is loaded (the check reads headers).
+// that name, and a SoapySDR module folder; nothing is downloaded, opened or copied by the code under test, and no vendor code is loaded by any row but ftdi-d2xx (the others read headers).
+// Engine fixes 4: the table is ONE (needed::Info, nine rows: wire-b's eight and ftdi-d2xx); the states are the seven words of needed::stateWord (a header-only "found" is `working` with
+// depth "headers", a file that is not a library is `not-a-library`); the ftdi row is proved against its stand-in in test_engine_api_wireb_ftdi.
 //
 //   N1  the fact is there from the start: every row carries its structure (id, kind, file names, minimum version note, 64-bit, why, page status "unverified" and NO address, steps, licence,
-//       "does not include or supply it", fetch allowed "no ..."), "check" is null
-//   N2  checking everything: a vendor library not on the PATH is not-found and says where it looked; the program / remote / file rows are cannot-check with a sentence; nothing is found
-//   N3  a user-picked FOLDER holding a text file named G39DDCAPI.dll is unusable (not a library); the same name holding a real 64-bit DLL is found, with the folder and no full path; a
-//       32-bit DLL is wrong-32-bit (when the system has one); a picked path is refused for a program row
+//       "does not include or supply it", fetch allowed "no ..."), "check" is null; the ftdi-d2xx row is the ninth and the only one with a verified page
+//   N2  checking everything (PATH held empty so the real machine's FTDI driver is not looked at): a vendor library not on the PATH is not-found and says where it looked; the program /
+//       remote / file rows are cannot-check with a sentence; nothing is working
+//   N3  a user-picked FOLDER holding a text file named G39DDCAPI.dll is not-a-library; the same name holding a real 64-bit DLL is working (depth headers, nothing loaded: the loader's
+//       counter does not move), with the folder and no full path; a 32-bit DLL is wrong-32-bit (when the system has one); a picked path is refused for a program row
 //   N4  SoapySDR modules: a fabricated install with a module folder and a file with 'bladerf' in its name is found, 'pluto' is not-found; an empty machine is not-found with a sentence
 //   N5  REMOTE sessions are DENIED
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
 
 #include "engine/engine_wire_b.hpp"
+#include "source/needed_library.hpp"
+#include "source/vendor_lib.hpp"
 #include "wire1_rig.hpp"
 
 namespace {
 
 namespace fs = std::filesystem;
+
+// The PATH both copies of the environment (the CRT's and the OS's) hold, so the check of a row that looks on the PATH sees a folder of this test's choosing.
+void setPath(const std::string& v) {
+    _putenv_s("PATH", v.c_str());
+    SetEnvironmentVariableA("PATH", v.c_str());
+}
 
 testing::Outcome sendText(Rig& r, std::uint32_t op, const std::string& text, testing::Session* who = nullptr) {
     FoxCommand c = testing::cmd(op, 0.0, 0, nullptr);
@@ -82,7 +102,11 @@ int main() {
     if (have32) { fs::copy_file(sys32, tmp / "x32" / "G39DDCAPI.dll", fs::copy_options::overwrite_existing, ec); }
     { std::ofstream f(tmp / "conda" / "lib" / "SoapySDR" / "modules0.8" / "bladeRFSupport.dll", std::ios::binary); f << "x"; }
     const std::string root = (tmp / "conda").generic_string();
-    w.neededEnv = cascade::engine::wireb::defaultNeededEnv();
+    w.neededEnv = cascade::source::needed::defaultEnv();
+    const char* oldPath = std::getenv("PATH");
+    const std::string savedPath = oldPath != nullptr ? oldPath : "";
+    fs::create_directories(tmp / "emptypath");
+    setPath((tmp / "emptypath").string());   // nothing on the PATH: restored before the end
     bool withRoot = false;
     w.neededEnv.getenv = [&](const char* n) -> std::string { return withRoot && std::strcmp(n, "SOAPY_SDR_ROOT") == 0 ? root : std::string(); };
 
@@ -90,7 +114,14 @@ int main() {
     {
         const json all = json::parse(rawFact(r, "needed.libs"), nullptr, false);
         CHECK(all.is_array());
-        CHECK_EQ(all.size(), static_cast<std::size_t>(8));
+        CHECK_EQ(all.size(), static_cast<std::size_t>(9));
+        CHECK_EQ(all[8].value("library_id", std::string()), std::string("ftdi-d2xx"));   // wire-b's eight, then the SDR-IQ bridge's row
+        CHECK_EQ(all[8].value("source_kind", std::string()), std::string("sdriq"));
+        CHECK_EQ(all[8].value("kind", std::string()), std::string("library-file"));
+        CHECK_EQ(all[8].value("page_status", std::string()), std::string("verified"));
+        CHECK_EQ(all[8].value("official_page", std::string()), std::string("https://www.ftdichip.com"));
+        const std::string kinds[] = {"library-file", "library-file", "soapy-module", "soapy-module", "running-program", "remote-software", "running-program", "user-file", "library-file"};
+        for (std::size_t i = 0; i < all.size() && i < 9; ++i) { CHECK_EQ(all[i].value("kind", std::string()), kinds[i]); }
         const json g = row(r, "winradio-g39ddc");
         CHECK(g.is_object());
         CHECK_EQ(g.value("source_kind", std::string()), std::string("g39ddc"));
@@ -105,7 +136,7 @@ int main() {
         CHECK(!g.value("min_version_note", std::string()).empty());
         for (const json& j : all) {
             CHECK(!j.value("library_id", std::string()).empty() && !j.value("why", std::string()).empty() && !j.value("licence", std::string()).empty() && !j.value("install_kind", std::string()).empty());
-            CHECK_EQ(j.value("official_page", std::string("?")), std::string());
+            if (j.value("page_status", std::string()) != "verified") { CHECK_EQ(j.value("official_page", std::string("?")), std::string()); }   // an unverified address is shown to nobody
         }
     }
 
@@ -122,6 +153,11 @@ int main() {
         CHECK_EQ(row(r, "soapyremote-server")["check"].value("state", std::string()), std::string("cannot-check"));
         CHECK_EQ(row(r, "icom-icr8600-firmware")["check"].value("state", std::string()), std::string("cannot-check"));
         CHECK_EQ(row(r, "soapy-bladerf")["check"].value("state", std::string()), std::string("not-found"));
+        const json f = row(r, "ftdi-d2xx")["check"];   // the ninth row: the PATH holds nothing, so there is no driver to find
+        std::printf("  ftdi-d2xx: %s\n", f.dump().c_str());
+        CHECK_EQ(f.value("state", std::string()), std::string("not-found"));
+        CHECK(f.value("sentence", std::string()).find("ftd2xx.dll") != std::string::npos);
+        for (const char* id : {"sdrplay-sdrconnect", "soapyremote-server", "icom-icr8600-firmware"}) { CHECK_EQ(row(r, id)["check"].value("depth", std::string("?")), std::string()); }
     }
 
     std::printf("N3: a picked folder\n");
@@ -129,14 +165,18 @@ int main() {
         CHECK_EQ(sendText(r, FOXAPP_OP_NEEDED_LIB_CHECK, "{\"id\":\"winradio-g39ddc\",\"path\":" + quoted(tmp / "textonly") + "}").status(), FOXAPI_OK);
         json c = row(r, "winradio-g39ddc")["check"];
         std::printf("  text file: %s\n", c.dump().c_str());
-        CHECK_EQ(c.value("state", std::string()), std::string("unusable"));
+        CHECK_EQ(c.value("state", std::string()), std::string("not-a-library"));
+        CHECK_EQ(c.value("depth", std::string()), std::string("headers"));
         if (have64) {
+            const std::uint64_t loads0 = cascade::source::vendorlib::Library::silentLoadCount();
             const auto o = sendText(r, FOXAPP_OP_NEEDED_LIB_CHECK, "{\"id\":\"winradio-g39ddc\",\"path\":" + quoted(tmp / "good") + "}");
             CHECK_EQ(o.status(), FOXAPI_OK);
             CHECK_EQ(o.result.applied[0], 1.0);
             c = row(r, "winradio-g39ddc")["check"];
             std::printf("  64-bit: %s\n", c.dump().c_str());
-            CHECK_EQ(c.value("state", std::string()), std::string("found"));
+            CHECK_EQ(c.value("state", std::string()), std::string("working"));
+            CHECK_EQ(c.value("depth", std::string()), std::string("headers"));
+            CHECK_EQ(cascade::source::vendorlib::Library::silentLoadCount(), loads0);   // a header-only row never asks the loader for the vendor's file
             CHECK_EQ(c.value("file", std::string()), std::string("G39DDCAPI.dll"));
             CHECK(c.value("found_in", std::string()).find("good") != std::string::npos);
             CHECK(c.value("found_in", std::string()).find("G39DDCAPI.dll") == std::string::npos);   // a folder, not a file path
@@ -156,7 +196,7 @@ int main() {
         CHECK_EQ(sendText(r, FOXAPP_OP_NEEDED_LIB_CHECK, "{\"id\":\"soapy-bladerf\"}").status(), FOXAPI_OK);
         json c = row(r, "soapy-bladerf")["check"];
         std::printf("  bladerf: %s\n", c.dump().c_str());
-        CHECK_EQ(c.value("state", std::string()), std::string("found"));
+        CHECK_EQ(c.value("state", std::string()), std::string("working"));
         CHECK_EQ(c.value("file", std::string()), std::string("bladeRFSupport.dll"));
         CHECK_EQ(sendText(r, FOXAPP_OP_NEEDED_LIB_CHECK, "{\"id\":\"soapy-plutosdr\"}").status(), FOXAPI_OK);
         c = row(r, "soapy-plutosdr")["check"];
@@ -173,6 +213,7 @@ int main() {
         CHECK(remote.ok());
         CHECK_EQ(sendText(r, FOXAPP_OP_NEEDED_LIB_CHECK, "{}", &remote).status(), FOXAPI_DENIED);
     }
+    setPath(savedPath);
     fs::remove_all(tmp, ec);
     return check::finish("test_engine_api_wireb_neededlibs");
 }

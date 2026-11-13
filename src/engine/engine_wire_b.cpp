@@ -333,23 +333,24 @@ FoxCommandResult Engine::neededLibOp(const FoxCommand& c, const std::string& tex
     wireb::detail::Params q(p);
     std::string id, path;
     if (!q.word("id", id) || !q.word("path", path) || !q.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, q.error); }
-    std::vector<const wireb::NeededLibrary*> rows;
+    namespace nl = cascade::source::needed;
+    std::vector<const nl::Info*> rows;
     if (id.empty()) {
         if (!path.empty()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "a path goes with one library id"); }
-        for (const wireb::NeededLibrary& r : wireb::neededLibraries()) { rows.push_back(&r); }
+        for (const nl::Info& r : nl::neededTable()) { rows.push_back(&r); }
     } else {
-        const wireb::NeededLibrary* r = wireb::findNeededLibrary(id);
+        const nl::Info* r = nl::findNeeded(id);
         if (r == nullptr) { return refusal(res, FOXAPI_BAD_ARGUMENT, "no such library id"); }
-        if (!path.empty() && r->kind != wireb::NeededKind::VendorLibrary) { return refusal(res, FOXAPI_BAD_ARGUMENT, "a file you pick is judged for a vendor library only"); }
+        if (!path.empty() && r->kind != nl::Kind::LibraryFile) { return refusal(res, FOXAPI_BAD_ARGUMENT, "a file you pick is judged for a library file only"); }
         rows.push_back(r);
     }
-    for (const wireb::NeededLibrary* r : rows) { w.neededChecks[r->libraryId] = wireb::recheckNeeded(*r, path, w.neededEnv).dump(-1, ' ', false, wireb::Json::error_handler_t::replace); }
-    std::int64_t found = 0;
-    for (const wireb::NeededLibrary& r : wireb::neededLibraries()) {
+    for (const nl::Info* r : rows) { w.neededChecks[r->libraryId] = wireb::checkToJson(nl::runCheck(*r, path, w.neededEnv)).dump(-1, ' ', false, wireb::Json::error_handler_t::replace); }
+    std::int64_t found = 0;   // rows whose last check says "working"
+    for (const nl::Info& r : nl::neededTable()) {
         const auto it = w.neededChecks.find(r.libraryId);
         if (it == w.neededChecks.end()) { continue; }
         const wireb::Json j = wireb::Json::parse(it->second, nullptr, false);
-        if (j.is_object() && j.value("state", std::string()) == "found") { ++found; }
+        if (j.is_object() && j.value("state", std::string()) == nl::stateWord(nl::State::Working)) { ++found; }
     }
     res.applied[0] = static_cast<double>(found);
     changed = true;
@@ -1154,7 +1155,7 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
         std::unique_lock<std::mutex> nlk;
         if (wireB_ != nullptr) { nlk = std::unique_lock<std::mutex>(wireB_->mutex); }
         wireb::Json rows = wireb::Json::array();
-        for (const wireb::NeededLibrary& r : wireb::neededLibraries()) {
+        for (const cascade::source::needed::Info& r : cascade::source::needed::neededTable()) {
             const bool have = wireB_ != nullptr && wireB_->neededChecks.find(r.libraryId) != wireB_->neededChecks.end();
             rows.push_back(wireb::neededToJson(r, have ? wireb::Json::parse(wireB_->neededChecks[r.libraryId], nullptr, false) : wireb::Json()));
         }

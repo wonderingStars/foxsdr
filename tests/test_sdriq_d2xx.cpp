@@ -515,6 +515,17 @@ void testNeededLibrary() {
     CHECK(std::string(needed::stateWord(needed::State::Working)) == "working" && std::string(needed::stateWord(needed::State::TooOld)) == "too-old" &&
           std::string(needed::stateWord(needed::State::Wrong32Bit)) == "wrong-32-bit" && std::string(needed::stateWord(needed::State::WouldNotLoad)) == "would-not-load" &&
           std::string(needed::stateWord(needed::State::NotFound)) == "not-found" && std::string(needed::stateWord(needed::State::NotALibrary)) == "not-a-library");
+    // the one table (engine fixes 4): the seventh state; this row is the table's ninth, a library file that serves the "sdriq" source, and its check is checkFtd2xx
+    CHECK(std::string(needed::stateWord(needed::State::CannotCheck)) == "cannot-check");
+    CHECK(info.kind == needed::Kind::LibraryFile && info.sourceKind == "sdriq" && info.check != nullptr && info.pageStatus == "verified");
+    CHECK(needed::neededTable().size() == 9 && needed::neededTable().back().libraryId == "ftdi-d2xx" && needed::findNeeded("ftdi-d2xx") != nullptr);
+    CHECK(needed::findNeeded("no-such-id") == nullptr);
+    {
+        PathGuard pg(L"");   // nothing on the PATH: the real machine's FTDI driver is not looked at
+        const needed::Check viaTable = needed::runCheck(info, "", needed::defaultEnv());
+        const needed::Check direct = checkFtd2xx();
+        CHECK(viaTable.state == needed::State::NotFound && viaTable.state == direct.state && viaTable.sentence == direct.sentence);
+    }
 
     const auto dir = eol::scratch("d2xxneed");
     const auto fx = eol::fixtureDir();

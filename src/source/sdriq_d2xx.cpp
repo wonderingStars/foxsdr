@@ -332,10 +332,17 @@ SdriqOpener d2xxSdriqOpener(const std::string& libraryWhere) {
 // ---------------------------------------------------------------------------------------------------------------------
 // the needed-library data
 // ---------------------------------------------------------------------------------------------------------------------
+// The row's check in the one needed-library table (needed_library.hpp): this is the ONE row whose "Check again" loads the vendor's library (silently, and
+// unloads it again), because this bridge already had that check before the table was one.
+static needed::Check checkFtd2xxRow(const needed::Info&, const std::string& where, const needed::Env&) { return checkFtd2xx(where); }
+
 const needed::Info& ftd2xxNeededInfo() {
     static const needed::Info info = [] {
         needed::Info i;
         i.libraryId = "ftdi-d2xx";
+        i.sourceKind = "sdriq";
+        i.kind = needed::Kind::LibraryFile;
+        i.check = &checkFtd2xxRow;
         i.name = "FTDI D2XX driver";
         i.fileNames = {"ftd2xx.dll", "ftd2xx64.dll"};
         i.minVersion = "";  // none is known: the classic calls FoxSDR uses are the oldest ones; "too old" here means one of the eight is missing
@@ -345,6 +352,7 @@ const needed::Info& ftd2xxNeededInfo() {
         // The only address read in the publisher's own documentation (the D2XX Programmer's Guide names "our web site www.ftdichip.com"). The page of the
         // D2XX downloads on it was NOT read (FTDI's site refused the tool), so no deeper address is given: (unverified).
         i.officialAddress = "https://www.ftdichip.com";
+        i.pageStatus = "verified";   // the address is the one FTDI's own guide names (the site, not a download page); see the comment above
         i.installKind = "installer";
         i.copyInFolder = "";
         i.steps = {
@@ -386,6 +394,7 @@ needed::Check checkFtd2xx(const std::string& libraryWhere) {
     r.version = needed::fileVersion(path);
     vendorlib::Library lib;
     const vendorlib::Check c = lib.open(path);
+    r.depth = c.ok() || c.verdict == vendorlib::Verdict::LoadFailed ? "loaded" : "headers";   // refused from its bytes: the loader was not asked
     if (!c.ok()) {
         switch (c.verdict) {
             case vendorlib::Verdict::Wrong32Bit:
