@@ -1750,6 +1750,22 @@ if(TARGET test_gui_desktop_guard)
     add_dependencies(test_gui_desktop_guard gui_desktop_guard)
 endif()
 
+# THE REAL-HARDWARE GUARD (engine fixes 5, item 1; tests/hardware_guard.hpp says why). No test opens the person's own radio unless they set FOXSDR_ALLOW_REAL_HARDWARE_TESTS=1.
+# test_rtlsdr_live is wholly about the dongle: without the variable it prints "SKIP real hardware ..." and CTest reports it SKIPPED (not passed, not failed). test_usb_winusb and
+# test_soapy_source keep their fake-based sections and skip only their real-hardware parts (their own line; they pass). test_hardware_guard proves both branches and scans for new
+# unguarded tests.
+if(TARGET test_rtlsdr_live)
+    set_tests_properties(test_rtlsdr_live PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP real hardware")
+endif()
+if(TARGET test_hardware_guard AND TARGET test_rtlsdr_live AND TARGET test_usb_winusb AND TARGET test_soapy_source)
+    target_compile_definitions(test_hardware_guard PRIVATE
+        RTLSDR_LIVE_EXE="$<TARGET_FILE:test_rtlsdr_live>"
+        USB_WINUSB_EXE="$<TARGET_FILE:test_usb_winusb>"
+        SOAPY_SOURCE_EXE="$<TARGET_FILE:test_soapy_source>"
+        TESTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_dependencies(test_hardware_guard test_rtlsdr_live test_usb_winusb test_soapy_source)
+endif()
+
 # Label APPENDED, not set: the sanitizer and TSan passes above put their own
 # labels on some tests (sanitize-excluded, tsan, fuzz on the corpus replays)
 # and those must survive.

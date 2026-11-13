@@ -32,6 +32,7 @@
 #include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
 #include "core/telemetry.hpp"
+#include "hardware_guard.hpp"
 #include "source/soapy_enum_proc.hpp"
 
 #include <SoapySDR/Device.hpp>
@@ -819,7 +820,12 @@ int main() {
         CHECK(!helper.empty());
         setEnumHelper(helper);
     }
-    {
+    // THE PERSON'S OWN RADIOS (engine fixes 5, item 1): these two scans run every vendor module's find function over the real bus (a driver may open a dongle to read its
+    // strings), so they run only when the person asked for real-hardware tests by name (tests/hardware_guard.hpp). The fake-driver blocks below always run.
+    if (!cascade::testguard::realHardwareAllowed()) {
+        std::printf("real-bus scans SKIPPED (not allowed): nothing was enumerated; set %s=1 to scan the real bus on purpose.\n",
+                    cascade::testguard::kRealHardwareVariable);
+    } else {
         const std::vector<SoapyDeviceInfo> devices = SoapySource::enumerate();
         std::printf("soapy devices: %zu\n", devices.size());
         for (const SoapyDeviceInfo& d : devices) {
@@ -1003,8 +1009,10 @@ int main() {
         CHECK(true);
 
         // enumerate() still works after the churn (no global state broken).
-        const std::vector<SoapyDeviceInfo> devices = SoapySource::enumerate();
-        std::printf("soapy devices after churn: %zu\n", devices.size());
+        if (cascade::testguard::realHardwareAllowed()) {   // the real bus: only when asked for (engine fixes 5, item 1)
+            const std::vector<SoapyDeviceInfo> devices = SoapySource::enumerate();
+            std::printf("soapy devices after churn: %zu\n", devices.size());
+        }
     }
 
     // --- one driver asked alone lists what the whole bus would list ---------
@@ -1035,7 +1043,11 @@ int main() {
 
         // The whole-bus walk agrees: nothing from fakeecho there either.
         bool echoOnBus = false;
-        for (const SoapyDeviceInfo& d : SoapySource::enumerateInProcess()) {
+        // (the whole-bus walk reaches every real vendor module: only when the person asked for real hardware; engine fixes 5, item 1)
+        const std::vector<SoapyDeviceInfo> wholeBus = cascade::testguard::realHardwareAllowed()
+                                                          ? SoapySource::enumerateInProcess()
+                                                          : std::vector<SoapyDeviceInfo>{};
+        for (const SoapyDeviceInfo& d : wholeBus) {
             if (d.args.find("fakeecho") != std::string::npos) { echoOnBus = true; }
         }
         CHECK(!echoOnBus);

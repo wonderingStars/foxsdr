@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "hardware_guard.hpp"
 #include "test_check.hpp"
 #include "usb/usb_device.hpp"
 #include "usb/usb_fake.hpp"
@@ -163,7 +164,13 @@ int main() {
     }
 
     // --- 4. A real device, if there is one ----------------------------------
-    {
+    // THE PERSON'S OWN RADIO (engine fixes 5, item 1): opening a real dongle and sending it a control transfer only when they asked for it by name
+    // (tests/hardware_guard.hpp). The other sections of this file are fakes and listings and always run, so this half says it was skipped on a line that
+    // does not carry the whole-test marker.
+    if (!cascade::testguard::realHardwareAllowed()) {
+        std::printf("hardware half SKIPPED (not allowed): nothing was opened; set %s=1 to open a real RTL2832U on purpose.\n",
+                    cascade::testguard::kRealHardwareVariable);
+    } else {
         const std::vector<UsbDeviceInfo> found = cascade::usb::enumerateWinUsb(kRtlIds);
         if (found.empty()) {
             std::printf("hardware half SKIPPED: no RTL2832U is bound to WinUSB on this "

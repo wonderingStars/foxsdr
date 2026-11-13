@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "core/diag_log.hpp"
+#include "hardware_guard.hpp"
 #include "source/rtlsdr_source.hpp"
 #include "source/sample_pattern.hpp"
 #include "test_check.hpp"
@@ -265,6 +266,8 @@ bool oneCycle(const std::string& args, int cycle) {
 }  // namespace
 
 int main() {
+    // THE PERSON'S OWN RADIO: nothing is enumerated or opened unless they asked for this test by name (tests/hardware_guard.hpp; engine fixes 5, item 1).
+    if (cascade::testguard::skipUnlessRealHardwareAllowed("test_rtlsdr_live", "opens the real RTL-SDR dongle")) { return 0; }
     const std::vector<NativeDeviceInfo> found = cascade::source::enumerateRtlSdr();
     std::printf("live check: %zu RTL-SDR(s) bound to WinUSB\n", found.size());
     for (const NativeDeviceInfo& d : found) {
