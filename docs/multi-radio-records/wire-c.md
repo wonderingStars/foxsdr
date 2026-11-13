@@ -324,4 +324,24 @@ Questions put to the orchestrator in Phase 0 and not answered: Q2 (the audio rou
 
 ## 9. Gates and the two config hashes
 
-See section 10 (written after the gate runs).
+See section 10.
+
+## 10. Gate results (headless label, 997 tests, Slint OFF, tip 7a5816ca, config Release, `-j4`)
+
+The GUI gate was NOT run: this build has Slint OFF; the merge lane runs it.
+
+| Slice | Result | Reds |
+|---|---|---|
+| 1-200 | 195/200 | test_airband_data, test_band_plan, test_converter_call_sites (the five false failures with the two below), test_engine_api_source_kinds (base red, missing fixture), test_engine_api_decode_radio (base red, timeout) |
+| 201-400 | 199/200 | test_page_resize_id (known) |
+| 401-600 | 197/200 | test_png_decode (known); test_rtlsdr_live and test_sdrplay_source failed at 26-29 s under load and PASSED alone (36 s each) |
+| 601-800 | 199/200 | test_window_failed_app (known, Slint-off configuration) |
+| 801-1100 | 197/197 | none |
+
+Earlier first pass (before commit 7a5816ca) had one real regression: test_usage_diag_window_free (the resource sampler's late PDH handles moved the diagnostics bundle's handle counters). Fixed by making the first sample synchronous at the first pump; it passes in the final run. test_diagnostics_free failed once on an uncommitted tree (stale-stamp family) and passes after commit and rebuild.
+
+Flakes seen and passing alone: test_engine_main_smoke (about 1 run in 6, also on the engine-merge lane's baseline binary D:/foxsdr-build/mr-dsp), test_engine_api_03 and test_engine_api_merge (under `-j4` load), test_plugin_store_window_free, test_record_start_stepped, test_remote_key_release_free, test_rtlsdr_live, test_sdrplay_source. test_plugin_abi3_compat against the 106 published plugin binaries: 269 checks, 134 failed, identical on the baseline binary (not caused by this lane).
+
+Config hashes: real `%APPDATA%/foxsdr/config.json` sha256 before `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3`, after the same.
+
+Stray processes: none of this lane's. Two foreign test processes exist (test_engine_api_03 from D:/foxsdr-build/en-tuning, started 2026-11-13 09:40; test_soapy_enum_proc, started 2026-11-12 00:28) and were left alone. Incidents: none.
