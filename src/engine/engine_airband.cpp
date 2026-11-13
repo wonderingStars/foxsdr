@@ -45,6 +45,7 @@
 #include "core/patch_plan.hpp"
 #include "core/utf8_text.hpp"
 #include "engine/engine.hpp"
+#include "engine/wire_a.hpp"   // wire-a
 #include "engine/fox_engine_api.hpp"
 #include "core/tune_control.hpp"
 
@@ -122,11 +123,13 @@ void Engine::configureScanner() {
         scanList_ = p.list;
     }
     scanner_.configure(std::move(p));
+    WireA::of(*this).scanConfigured();   // wire-a: the trigger's floors start again
     // The reconfigure re-emits a first tune on the next tick; the user-tune baseline re-arms from that retune's readback.
     scannerHasExpected_ = false;
 }
 
 std::int32_t Engine::applyScannerListOp(const FoxCommand& c, std::string& why) {
+    WireA::of(*this).planOff();   // wire-a: a list scan (or leaving list mode) ends plan mode
     switch (c.ival[0]) {
         case 0:
         case 1:

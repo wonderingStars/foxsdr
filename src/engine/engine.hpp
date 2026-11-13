@@ -158,6 +158,8 @@ struct EngineDiskWorkDeleter {
 // The function a front end installs to apply one plugin directive to the plugin UI it owns (Engine::setPluginUiApplier).
 using PluginUiApplier = std::function<void(const cascade::core::PluginDirective&)>;
 
+class WireA;   // wire-a (engine/wire_a.hpp)
+
 class Engine {
 public:
     // A HEADLESS ENGINE: its host is its own EngineHost, whose answers are
@@ -3911,6 +3913,10 @@ private:
     // FOXAPI_OP_SCAN_SERIAL_PORTS (API 0.3): the ports the last scan found.
     std::vector<std::string> serialPorts_;
     std::uint64_t serialPortsScans_ = 0;
+    // wire-a begin: the tuning / recording / display wiring lane's state (engine/wire_a.hpp); made at first use, a friend of this class.
+    friend class WireA;
+    std::shared_ptr<void> wireA_;
+    // wire-a end
     // LAST, so it is destroyed FIRST: nothing of the engine it names is gone
     // yet when it goes, and the control thread is stopped (teardown) before
     // any member is destroyed.

@@ -65,6 +65,9 @@ public:
     // Nominal only — a file has no tuner. Stored and reported so the
     // frequency display stays coherent.
     double centerFrequencyHz() const override { return centerFrequencyHz_; }
+    // wire-a begin: true when open() took the centre from the file's own header (the RIFF auxi chunk SpectraVue / HDSDR / SDRangel write), not from the nominal frequency
+    bool centerFromHeader() const { return centerFromHeader_; }
+    // wire-a end
     bool setCenterFrequencyHz(double hz) override;
 
     // Fills dst with exactly n samples while running (looping seamlessly at
@@ -176,6 +179,7 @@ private:
     SampleFormat format_ = SampleFormat::none;
     double sampleRateHz_ = 0.0;
     double centerFrequencyHz_ = 0.0;
+    bool centerFromHeader_ = false;   // wire-a
     std::uint64_t dataOffset_ = 0;    // file byte offset of the first frame
     std::uint64_t frameCount_ = 0;    // complete frames in the data chunk
     std::uint64_t nextFrame_ = 0;     // next frame index read() will deliver

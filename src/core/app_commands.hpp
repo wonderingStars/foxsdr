@@ -493,6 +493,10 @@
 #define FOXAPP_OP_FIRST 0x8000u
 #define FOXAPP_OP_LAST  0x8FFFu
 
+// wire-a begin
+#include "core/wire_a_ops.hpp"
+// wire-a end
+
 namespace cascade::core::cmd {
 
 // FOXAPP_OP_CLEAR_STATUS's ival[0]. Each resets exactly one field a status

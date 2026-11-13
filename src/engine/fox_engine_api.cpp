@@ -42,6 +42,7 @@
 #include "core/seqlock_box.hpp"
 #include "core/utf8_text.hpp"
 #include "engine/engine.hpp"
+#include "engine/wire_a.hpp"   // wire-a
 #include "engine/plugin_ui_port.hpp"
 #include "dsp/tone_squelch.hpp"
 #include "engine/radio_scope.hpp"
@@ -2756,6 +2757,7 @@ void ApiHostImpl::endPass() {
     // pass - the lock the window took once a frame before stage 4).
     if (engine_.pipeline_.getLatestFrame(frame_) && !frame_.dbBins.empty()) {
         cascade::source::IqSource& src = engine_.pipeline_.activeSource();
+        WireA::of(engine_).displayFrame(0, frame_.dbBins, src.centerFrequencyHz(), src.sampleRateHz(), engine_.clockS());   // wire-a: the display chain and the waterfall history
         spectrum_.publish(frame_.dbBins.data(), frame_.dbBins.size(), src.centerFrequencyHz(), src.sampleRateHz(),
                           unixMs());
     }
@@ -2767,6 +2769,7 @@ void ApiHostImpl::endPass() {
         cascade::core::SpectrumFrame& mine = radioFrames_[slot];
         if (rcv->pipeline_.getLatestFrame(mine) && !mine.dbBins.empty()) {
             cascade::source::IqSource& src = rcv->pipeline_.activeSource();
+            WireA::of(engine_).displayFrame(slot, mine.dbBins, src.centerFrequencyHz(), src.sampleRateHz(), engine_.clockS());   // wire-a
             radioRingForPass(slot).publish(mine.dbBins.data(), mine.dbBins.size(), src.centerFrequencyHz(), src.sampleRateHz(), unixMs());
         }
     }
