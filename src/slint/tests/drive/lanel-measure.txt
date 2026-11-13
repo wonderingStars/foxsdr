@@ -1,0 +1,45 @@
+#! frames=1000 size=1600x8000 bank=4 sections=4:18
+# lanel-measure (screen lane L, docs/multi-radio-records/screen-l.md; rows B1 to B7, B9, B10): the Measurement section against the real engine and its test generator: field strength, the nine measurements, the bit view, the GPU switch (Auto only: no Direct3D device is made), the frame log and the limit alarm's refusal.
+10 state running == 1
++30 state ll.rows.measure > 50
+# B1 to B3: the field strength is hidden until ticked; with no antenna factor table the read is refused with the engine's sentence
++1 state ll.fact.field.show != 1
++1 click "Show"
++12 state ll.fact.field.show == 1
++1 click "Read dBuV/m now"
++12 state ll.note.measure contains "Read dBuV/m"
+state ll.note.measure contains "Refused"
++1 click "Show"
++12 state ll.fact.field.show != 1
+# B4: a measurement of the generator's tone: the engine answers and the fact holds its result
++1 click "Occupied bandwidth"
++15 state ll.note.measure contains "Occupied bandwidth: done"
+state ll.fact.radio.1.sigmeas.bandwidth contains "valid"
++1 shot "lanel-measure.png"
++1 type "Length (s)" "20"
++1 key enter
++2 click "Drift"
++6 state ll.note.measure contains "Length (s): allowed"
+# B5
++1 click "Pseudo-Doppler bearing"
++15 state ll.note.measure contains "Pseudo-Doppler bearing"
+# B6: keep a burst, then list the kept ones
++1 click "Keep a burst"
++15 state ll.note.measure contains "Keep a burst"
++1 click "List kept bursts"
++15 state ll.note.measure contains "List kept bursts"
+# B7: the GPU spectrum is CPU at every start; Auto stays on the CPU below 65536 points, and the choice is read back
++1 state ll.fact.gpu_fft.mode != 2
++1 click "Auto (the GPU from 65536 points)"
++15 state ll.fact.gpu_fft.mode == 1
++1 click "CPU"
++15 state ll.fact.gpu_fft.mode == 0
+# B9
++1 click "Keep frames with CRC errors"
++12 state ll.note.measure contains "Frame log: done"
++1 click "Read the frame log"
++12 state ll.note.measure contains "Read the frame log"
+# B10: the alarm cannot be enabled with no mask loaded: the engine's refusal is shown
++1 click "Alarm on"
++1 click "Apply the alarm settings"
++12 state ll.note.measure contains "Limit alarm: Refused"

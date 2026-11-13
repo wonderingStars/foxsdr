@@ -109,16 +109,28 @@ std::int32_t readListFor(const FoxEngineApi* api, FoxSession* session, std::uint
 }
 
 // ---- readouts ----
-std::string fmtMHz(double hz) { return fmt("%.6f MHz", hz / 1e6); }
+namespace {
+cascade::core::access::NumberSymbols g_numSymbols;
+bool g_numLocal = false;
+cascade::core::access::DigitPolicy g_numPolicy = cascade::core::access::DigitPolicy::Latin;
+// a value with `decimals` places in the chosen format, or the plain text (a dot) when no locale is set
+std::string locNum(double v, int decimals, const char* plain) { return g_numLocal ? cascade::core::access::formatNumber(v, decimals, g_numSymbols, g_numPolicy) : fmt(plain, v); }
+}  // namespace
+void setNumberLocale(const cascade::core::access::NumberSymbols* symbols, cascade::core::access::DigitPolicy policy) {
+    g_numLocal = symbols != nullptr;
+    if (symbols != nullptr) { g_numSymbols = *symbols; }
+    g_numPolicy = policy;
+}
+std::string fmtMHz(double hz) { return locNum(hz / 1e6, 6, "%.6f") + " MHz"; }
 std::string fmtRate(double hz) { return hz > 0.0 ? fmt("%.3f MS/s", hz / 1e6) : std::string("--"); }
-std::string fmtKHz(double hz) { return fmt("%.1f kHz", hz / 1e3); }
+std::string fmtKHz(double hz) { return locNum(hz / 1e3, 1, "%.1f") + " kHz"; }
 std::string spanText(double hz) {
-    if (hz >= 1e9) { return cascade::core::formatText(cascade::i18n::tr("SPAN %s"), fmt("%.3f GHz", hz / 1e9).c_str()); }
-    if (hz >= 1e6) { return cascade::core::formatText(cascade::i18n::tr("SPAN %s"), fmt("%.3f MHz", hz / 1e6).c_str()); }
-    if (hz >= 1e3) { return cascade::core::formatText(cascade::i18n::tr("SPAN %s"), fmt("%.1f kHz", hz / 1e3).c_str()); }
+    if (hz >= 1e9) { return cascade::core::formatText(cascade::i18n::tr("SPAN %s"), (locNum(hz / 1e9, 3, "%.3f") + " GHz").c_str()); }
+    if (hz >= 1e6) { return cascade::core::formatText(cascade::i18n::tr("SPAN %s"), (locNum(hz / 1e6, 3, "%.3f") + " MHz").c_str()); }
+    if (hz >= 1e3) { return cascade::core::formatText(cascade::i18n::tr("SPAN %s"), (locNum(hz / 1e3, 1, "%.1f") + " kHz").c_str()); }
     return cascade::core::formatText(cascade::i18n::tr("SPAN %s"), fmt("%.0f Hz", hz).c_str());
 }
-std::string cursorText(double hz, double db) { return fmt("%.3f MHz", hz / 1e6) + kDot + fmt("%.1f dB", db); }
+std::string cursorText(double hz, double db) { return locNum(hz / 1e6, 3, "%.3f") + " MHz" + kDot + locNum(db, 1, "%.1f") + " dB"; }
 std::string axisUnit(double) { return "MHz"; }
 
 bool parseFrequencyHz(const std::string& text, double& hz) {

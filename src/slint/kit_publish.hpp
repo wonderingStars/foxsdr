@@ -25,6 +25,7 @@
 #include "main.h"
 #include "globe_publish.hpp"
 #include "map_compositor.hpp"
+#include "mapj_state.hpp"
 #include "plugin_kit.hpp"
 #include "signatures.hpp"
 
@@ -71,6 +72,14 @@ public:
     // A bounded run's self-capture (FOXSDR_SLINT_OPEN="output,fitted,panel:<name>,instrument:<name>|<title>,image:<name>,map:<name>,module:<file>"):
     // the pages named are opened on the first publish that knows the plugins, the last one named is shown. Never set in a release.
     void openFromEnv(const std::string& spec);
+
+    // SCREEN LANE J (docs/multi-radio-records/screen-j.md): the Sky page (kind 12, id "sky") and the Antenna page (kind 13, id "antenna"), and the seams a wiring lane fills.
+    void openSkyPage();
+    void openAntennaPage();
+    foxsdr::slintmapj::MapJShared& mapJ() { return mj_; }
+    const foxsdr::slintmapj::MapJShared& mapJ() const { return mj_; }
+    // the state the drive scripts read ("mapj.layers", "mapj.replay", "mapj.filter", "mapj.units", "mapj.cells", "mapj.grid", "mapj.antenna", "mapj.sky"): "" for what is not known
+    std::string mapJState(const std::string& what) const;
 
     // THE PLUGIN STORE PAGE (kind 9, id "store"; docs 6.42). The KIT OWNS THE PAGE - its PageTab, its place in the tab row, its tear-off, the DECODE bank's row that opens
     // it - and the EXTEND publisher (extend_publish.*) owns what the page SHOWS: it computes the whole ::StoreModel from extend_logic's read and hands it over here
@@ -138,6 +147,7 @@ private:
         std::vector<std::string> listIds;           // the i-th list row's id
         bool sourceSet = false;
         std::string sourceAttribution;
+        foxsdr::slintmapj::MapJSurface j;           // screen lane J: the layers, the replay, the filter, the units
     };
 
     // pages
@@ -218,6 +228,15 @@ private:
     std::string storeChip_;                           // the DECODE row's chip ("" until the EXTEND publisher's first read: the row says IDLE, the word nothing has been asked)
     ::ChipTone storeChipTone_ = ::ChipTone::Neutral;
     bool storeLit_ = false;
+    foxsdr::slintmapj::MapJShared mj_;                 // screen lane J
+    void feedMapSurfaces(const FoxReceiverState& state);
+    std::vector<cascade::core::HostTrack> replayTracks(MapSurface& s, const std::string& plugin) const;
+    void applyFilter(MapSurface& s, std::vector<const cascade::core::HostTrack*>& mine) const;
+    std::string drawMapLayers(MapSurface& s, MapPage* pg, bool trailsOn, const std::string& plugin, std::vector<slintmap::Trail>& trails, std::vector<::GridLabel>& labels, std::string& sig);
+    void fillMapJModel(MapSurface& s, MapPage* pg, const std::string& status, std::vector<::GridLabel>& labels, const std::string& baseCredit, ::MapModel& m, std::string& sig);
+    void fillSky(PageTab& t, const FoxReceiverState& state, std::string& sig);
+    void fillAntenna(PageTab& t, std::string& sig);
+    void mapJAct(int page, const std::string& op, const std::string& arg);
     FoxReceiverState state_{};
     std::int64_t nowMs_ = 0;
     std::string envSpec_;

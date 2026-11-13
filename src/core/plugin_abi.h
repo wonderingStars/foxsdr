@@ -1753,6 +1753,14 @@ typedef struct CascadeScheduleHint {
     char decoderName[CASCADE_SCHEDULE_LABEL_CHARS]; /* the plugin the user would want started with it, "" none (informational: the host does not start it) */
 } CascadeScheduleHint;
 
+/* ---- Recorder (appended after host API level 2; wiring lane C): check CASCADE_HOST_HAS(host, recorder_start). ----------------------------------
+ * A plugin asks the host to start and stop an AUDIO take of the radio it runs on - the demodulated audio, as the user's own Record key makes - under a LABEL
+ * the plugin names ("tg-1234", "ch16"), for example one take per talkgroup. It is a request, like set_mode: it needs the SETTINGS grant the user gives the
+ * plugin (CASCADE_API_DENIED without it), it is queued and applied by the host's next pass (CASCADE_API_OK means ACCEPTED, not started), and the host
+ * refuses a start while the radio is already recording (a take the user started is never taken over, and a plugin can stop only a take it started). The file
+ * goes to the recordings folder named with the label first. A plugin that is stopped, unloaded or detached has its take ended by the host. */
+#define CASCADE_RECORDER_LABEL_CHARS 33 /* the longest label is 32 bytes of [A-Za-z0-9._-], plus the terminator */
+
 /* ---- Decode events (appended after host API level 2; engine wiring W2, brief item 13 "AD3"): check CASCADE_HOST_HAS(host, post_event). ----------
  * A plugin POSTS a structured event (a decoded message, an alert, a position) and READS the events other plugins posted - and, as events of kind "text",
  * every decoder line the host drained. The host keeps the newest CASCADE_EVENT_RING of them in one ring in memory (never written to disk by the host);
@@ -1990,6 +1998,16 @@ typedef struct CascadeHostApi {
     int32_t (*read_events)(void *ctx, uint64_t afterSeq, CascadeEvent *out, uint32_t cap);
     /* The newest sequence number the host has assigned (0 = none yet): cheap to poll, so a plugin calls read_events only when it moved. */
     uint64_t (*events_seq)(void *ctx);
+
+    /* ---- Recorder (appended after host API level 2; wiring lane C: check CASCADE_HOST_HAS(host, recorder_start)). SETTINGS grant. ---------------- */
+
+    /* Asks for an audio take under `label` (1 to 32 bytes of [A-Za-z0-9._-]). CASCADE_API_OK: accepted and queued; CASCADE_API_DENIED (no SETTINGS grant, or the
+     * plugin is stopped); CASCADE_API_BAD_ARGUMENT (NULL, empty or an unusable label); CASCADE_API_OUT_OF_RANGE (a label over 32 bytes); CASCADE_API_BUSY (the
+     * plugin's small request queue is full: ask again next block); CASCADE_API_DETACHED. Whether the take really began is not answered here: the host
+     * refuses it while the radio is already recording or a file is being finished, and says so in its own log. */
+    int32_t (*recorder_start)(void *ctx, const char *label);
+    /* Ends the take THIS plugin started (no effect on any other). Same codes; a stop with no take of this plugin's running is accepted and does nothing. */
+    int32_t (*recorder_stop)(void *ctx);
 } CascadeHostApi;
 
 /*

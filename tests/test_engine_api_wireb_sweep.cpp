@@ -126,6 +126,9 @@ int main() {
         return f;
     };
 
+    // engine merge 3: the RF Explorer kind is registered now (test_engine_api_wireb_rfexplorer.cpp tests it); here no test may reach a real COM port, so its factory refuses
+    w.rfeFactory = [](const std::string&, int, std::string& why) -> std::unique_ptr<tsa::SerialLink> { why = "no port in this test"; return nullptr; };
+
     std::printf("S6a: nothing open yet\n");
     CHECK_EQ(sendText(r, FOXAPP_OP_SWEEP_READ, "{}").status(), FOXAPI_FAILED);
     CHECK_EQ(sendText(r, FOXAPP_OP_SWEEP_CLOSE, "").status(), FOXAPI_NO_CHANGE);
@@ -230,7 +233,7 @@ int main() {
 
     std::printf("S6: refusals\n");
     {
-        CHECK_EQ(sendText(r, FOXAPP_OP_SWEEP_OPEN, "{\"kind\":\"rfexplorer\",\"port\":\"COM3\",\"start_mhz\":1,\"stop_mhz\":2}").status(), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(sendText(r, FOXAPP_OP_SWEEP_OPEN, "{\"kind\":\"rfexplorer\",\"port\":\"COM3\",\"start_mhz\":1,\"stop_mhz\":2,\"points\":5}").status(), FOXAPI_BAD_ARGUMENT);   // (was: an unknown kind; the kind exists since engine merge 3 and points is not one of its keys)
         CHECK_EQ(sendText(r, FOXAPP_OP_SWEEP_OPEN, "{\"kind\":\"tinysa\",\"port\":\"LPT1\",\"start_mhz\":1,\"stop_mhz\":2}").status(), FOXAPI_BAD_ARGUMENT);
         CHECK_EQ(sendText(r, FOXAPP_OP_SWEEP_OPEN, "{\"kind\":\"tinysa\",\"port\":\"COM999\",\"start_mhz\":1,\"stop_mhz\":2}").status(), FOXAPI_BAD_ARGUMENT);
         CHECK_EQ(sendText(r, FOXAPP_OP_SWEEP_OPEN, "{\"kind\":\"tinysa\",\"port\":\"COM3\",\"start_mhz\":5,\"stop_mhz\":2}").status(), FOXAPI_BAD_ARGUMENT);

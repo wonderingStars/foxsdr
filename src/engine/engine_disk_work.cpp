@@ -50,6 +50,7 @@
 #include "core/utf8_text.hpp"
 #include "core/write_fault.hpp"
 #include "engine/engine.hpp"
+#include "engine/wire_a.hpp"   // wire-a
 #include "engine/engine_disk_state.hpp"
 #include "engine/fox_engine_api.hpp"
 
@@ -166,13 +167,14 @@ void Engine::installOpenedIqFile(std::unique_ptr<cascade::source::IqFileSource> 
     // tuning bug. The AIR frequency carries over; the file is told it through its own converter, which is off unless the user set one for I/Q
     // files.
     const double fileRadioHz = radioHzForSource("file", std::string(), rx().pipeline_.activeSource().centerFrequencyHz());
-    if (fileRadioHz >= 0.0) { file->setCenterFrequencyHz(fileRadioHz); }
+    if (fileRadioHz >= 0.0 && !file->centerFromHeader()) { file->setCenterFrequencyHz(fileRadioHz); }   // wire-a: a centre in the file's own header wins
     rx().device_ = nullptr;  // before setSource destroys a live device
     rx().soapyView_ = nullptr;
     rx().deviceArgs_.clear();
     rx().deviceModel_.clear();
     rx().sourceError_.clear();
     ++rx().sourceGen_;  // a device open still in flight is now stale
+    WireA::of(*this).iqFileOpened(scopedSlot(), file->centerFromHeader());   // wire-a
     installSource(std::move(file));
     rx().sourceKind_ = "file";
     applyConverterForSource();

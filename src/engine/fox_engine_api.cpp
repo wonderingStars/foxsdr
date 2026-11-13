@@ -43,6 +43,7 @@
 #include "core/seqlock_box.hpp"
 #include "core/utf8_text.hpp"
 #include "engine/engine.hpp"
+#include "engine/wire_a.hpp"   // wire-a
 #include "engine/plugin_ui_port.hpp"
 #include "dsp/tone_squelch.hpp"
 #include "engine/radio_scope.hpp"
@@ -1028,6 +1029,11 @@ public:
             // transport has no business reading it.
             if ((s->flags & FOXAPI_SESSION_LOCAL) == 0u) { return FOXAPI_DENIED; }
             v = engine_.interfaceConfigDocument();
+        } else if (std::strncmp(key, "fact.perf.", 10) == 0) {
+            // wire-c (row S5): THE RESOURCE READ-OUT, read AT THE CALL from the sampler's last published figures (engine_wire_c.cpp), not from the list block: the figures
+            // change every second, and a fact in the block would move the list counter (listSeq) every second for every client. LOCAL.
+            if ((s->flags & FOXAPI_SESSION_LOCAL) == 0u) { return FOXAPI_DENIED; }
+            if (!engine_.wireCLiveFact(key + 5, v)) { return FOXAPI_NOT_FOUND; }
         } else if (std::strncmp(key, "fact.", 5) == 0) {
             // API 0.3's read-only facts, from the list block the pumping
             // thread built (docs/api-0.3-additions.md).
@@ -2758,6 +2764,7 @@ void ApiHostImpl::endPass() {
     // pass - the lock the window took once a frame before stage 4).
     if (engine_.pipeline_.getLatestFrame(frame_) && !frame_.dbBins.empty()) {
         cascade::source::IqSource& src = engine_.pipeline_.activeSource();
+        WireA::of(engine_).displayFrame(0, frame_.dbBins, src.centerFrequencyHz(), src.sampleRateHz(), engine_.clockS());   // wire-a: the display chain and the waterfall history
         spectrum_.publish(frame_.dbBins.data(), frame_.dbBins.size(), src.centerFrequencyHz(), src.sampleRateHz(),
                           unixMs());
     }
@@ -2769,6 +2776,7 @@ void ApiHostImpl::endPass() {
         cascade::core::SpectrumFrame& mine = radioFrames_[slot];
         if (rcv->pipeline_.getLatestFrame(mine) && !mine.dbBins.empty()) {
             cascade::source::IqSource& src = rcv->pipeline_.activeSource();
+            WireA::of(engine_).displayFrame(slot, mine.dbBins, src.centerFrequencyHz(), src.sampleRateHz(), engine_.clockS());   // wire-a
             radioRingForPass(slot).publish(mine.dbBins.data(), mine.dbBins.size(), src.centerFrequencyHz(), src.sampleRateHz(), unixMs());
         }
     }

@@ -123,8 +123,12 @@ int main() {
                     p.name.c_str(), p.version.c_str(), static_cast<unsigned>(p.capabilities),
                     p.error.c_str());
         CHECK(p.loaded);
-        // None of them knows level 1 exists: it declares no bit above AUDIO_OUT.
-        CHECK((p.capabilities & ~0x7FFu) == 0u);
+        // Every capability bit a published binary declares is a bit THIS host still knows (CASCADE_CAP_ALL_KNOWN, plus the PRIVATE_DATA flag, which is not a capability): capability
+        // bits are only ever added to the header, never reused or dropped, so a bit that fell out of the known set would silently take a published plugin's feature away.
+        // This replaces "declares no bit above AUDIO_OUT" (mask 0x7FF), which was true of the first 30 binaries and stopped being true when later published binaries declared
+        // SETTINGS_UI (0x1000), RECEIVER_LOCATOR (0x2000), TX_AUDIO (0x4000) and IMAGE_INPUT (0x8000): 13 of the 43 do, all four are defined in plugin_abi.h and are members of
+        // CASCADE_CAP_ALL_KNOWN, and all 43 load (engine fixes 4, item 2). None declares AUDIO_PROCESSOR (0x800), the level-1 bit.
+        CHECK((p.capabilities & ~(static_cast<unsigned>(CASCADE_CAP_ALL_KNOWN) | static_cast<unsigned>(CASCADE_FLAG_PRIVATE_DATA))) == 0u);
         if (p.hostClient != nullptr) { ++hostClients; }
     }
     CHECK(host.plugins().size() == candidates);

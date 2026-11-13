@@ -815,6 +815,29 @@ if (n > 0) seen = out[n - 1].seq;
 * **Not in this change:** the rest of the planned "level 3" list (azimuth and elevation, the symbol rate, several pictures per decoder) and any consumer inside the host (the alert
   rules and the decode database read the same ring through `PluginApiCore::hostEvents`).
 
+## Recorder (appended after host API level 2)
+
+A plugin can ask the host to start and stop an **audio take** of the radio it runs on, under a label it names - one take per talkgroup, per channel. Two calls,
+appended at the end of `CascadeHostApi` (check `CASCADE_HOST_HAS(host, recorder_start)`; `apiLevel` is unchanged - the struct size is the version).
+
+```c
+if (CASCADE_HOST_HAS(host, recorder_start)) {
+    int32_t r = host->recorder_start(host->ctx, "tg-1234");   /* 1 to 32 bytes of [A-Za-z0-9._-] */
+    /* CASCADE_API_OK = accepted and queued, NOT "the file is open" */
+}
+...
+host->recorder_stop(host->ctx);                                /* ends the take THIS plugin started */
+```
+
+* **A request, like `set_mode`.** It needs the **SETTINGS grant** the user gives the plugin (`CASCADE_API_DENIED` without it; the host offers the grant key to a plugin
+  that has asked), it is queued (eight at most per host: `CASCADE_API_BUSY` when full) and applied by the host's next pass.
+* **What the host does with it.** It starts the radio's own audio take, exactly as the user's Record key does, and the file goes to the recordings folder with the
+  label first (`tg-1234_foxsdr_audio_<date>_<time>.wav`); with a recording file-name template in force the label is the template's `{bookmark}`.
+* **What it never does.** It never takes over a take the user started (a start while the radio is recording is refused and logged, and the plugin is not told), and a
+  plugin can stop only the take it started. A plugin that is stopped, unloaded or loses its grant has its take ended by the host. One take per radio.
+* **Refusals.** `BAD_ARGUMENT` (NULL, an empty label, a character outside `[A-Za-z0-9._-]`), `OUT_OF_RANGE` (a label over 32 bytes), `DETACHED` (the plugin is not live).
+  Nothing is recorded that the user could not record themselves, and nothing here keys a transmitter.
+
 ## Private data (`CASCADE_FLAG_PRIVATE_DATA`)
 
 A plugin that handles identifiers of people or devices - a Remote ID serial, a trunked radio's subscriber id, a meter number, a Bluetooth address, a

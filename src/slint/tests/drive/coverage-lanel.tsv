@@ -1,0 +1,43 @@
+5300	ASSERTED	lanel-tuning	state ll.note.tuning contains Nothing changed (the engine's answer to Back at the start); Forward answered
+5301	ASSERTED	lanel-tuning	state ll.fact.channel.1.plan == marine-vhf-itu, ll.fact.channel.1.label == 16, Leave channel mode done
+5302	ASSERTED	lanel-tuning	Export CSV... with no markers: ll.note.tuning contains Nothing changed; the import is read back by the engine tests only
+5303	ASSERTED	lanel-tuning	state ll.note.tuning contains Save note: Refused (the engine's own reason for a bookmark that is not there)
+5304	ASSERTED	lanel-tuning	a value outside the range is refused before it is sent (ll.refused); the engine's refusal is read for a missing bookmark
+5305	ASSERTED	lanel-tuning	state ll.fact.favourite.count == 1 then the new name in ll.fact.favourite.names then count == 0
+5306	DRIVEN	lanel-tuning	with no bookmarks the engine answers Nothing changed (ll.note.tuning contains Export pack); a pack file is not written in a bounded run
+5307	ASSERTED	lanel-tuning	state ll.fact.bandmem.on == 1 then != 1
+5308	ASSERTED	lanel-tuning	state ll.note.tuning contains Cycle mode: done
+5309	ASSERTED	lanel-scan	state ll.fact.scan.plan contains 144000000; a malformed range refused before it is sent
+5310	ASSERTED	lanel-scan	state ll.fact.scan.trigger.on == 1 then 0; level -170 refused with the allowed range
+5311	ASSERTED	lanel-scan	state ll.note.scan contains Set the thresholds: done
+5312	ASSERTED	lanel-scan	state ll.note.scan contains Span scan: done
+5313	ASSERTED	lanel-scan	a missing file fails on the worker: state ll.fact.job.state == failed; Look up: Nothing changed
+5314	ASSERTED	lanel-record	state ll.fact.record.daily contains style 2 / utc false
+5315	ASSERTED	lanel-record	state ll.fact.record.lock == 1 then != 1; the default (off) is not changed
+5316	ASSERTED	lanel-record	state ll.fact.record.container == flac then wav; container.keep == 1
+5317	ASSERTED	lanel-record	Cancel disabled with no job; a missing recording: state ll.fact.job.state == failed; a bad box refused here
+5318	DRIVEN	lanel-record	needs a record folder with files; the JSON is tested by test_slint_lanel_host only
+5319	DRIVEN	lanel-record	needs a finished SigMF recording; not driven
+5320	ASSERTED	lanel-measure	state ll.fact.field.show == 1; the read is refused with the engine's sentence when no table is loaded
+5321	ASSERTED	lanel-measure	state ll.fact.radio.1.sigmeas.bandwidth contains valid; Length 20 refused with the allowed range
+5322	DRIVEN	lanel-measure	Keep a burst and List answered; the others need kept bursts
+5323	ASSERTED	lanel-measure	state ll.fact.gpu_fft.mode == 1 then 0 (GPU is not pressed in a test: it makes a Direct3D device)
+5324	ASSERTED	lanel-measure	state ll.note.measure contains Frame log: done
+5325	ASSERTED	lanel-measure	enabling with no mask: state ll.note.measure contains Limit alarm: Refused (the engine's words)
+5326	ASSERTED	lanel-sweep	a bad port and a fractional HackRF start are refused before sending; Close: Nothing changed; NO port is opened
+5327	ASSERTED	lanel-sweep	the engine refuses with no device: Refused: frequency range unusable
+5328	DRIVEN	lanel-sweep	the choice is read back (ll.draft.n.kind); the two keys connect and are never pressed in a test
+5329	ASSERTED	lanel-outputs	state ll.fact.matrix.rows contains follows 1, locked true / false
+5330	ASSERTED	lanel-outputs	state ll.fact.radio.1.iqout contains running true
+5331	ASSERTED	lanel-outputs	state ll.fact.sbs.out contains running true
+5332	ASSERTED	lanel-outputs	state ll.fact.tracks.state contains enabled true
+5333	ASSERTED	lanel-outputs	refused without a position; state ll.fact.coverage.state contains enabled true
+5334	ASSERTED	lanel-libs	state ll.libs == 9; ll.lib.<id> words; never Working for a header-only check; no key opens a page or a folder
+5335	ASSERTED	lanel-system	state ll.fact.wirec.sys.keep_awake == 0 then 1
+5336	ASSERTED	lanel-system	state ll.fact.wirec.store.sort == name
+5337	ASSERTED	lanel-system	state ll.fact.wirec.web.cors_origins == https://example.org; a bad origin refused with the engine's words
+5338	DRIVEN	lanel-system	the JSON is tested by test_slint_lanel_host; the engine facts are not read
+5339	ASSERTED	lanel-system	state ll.fact.ham.qso.count 1, 0, 1, still 1 after the first Clear, 0 after the second
+5340	DRIVEN	lanel-system	a file is not written in a bounded run
+5341	DRIVEN	lanel-system	no logger to follow; port 0 opens nothing
+5342	ASSERTED	lanel-system	state ll.fact.cat.emulation.running != 1 with port 4532

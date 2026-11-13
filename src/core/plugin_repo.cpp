@@ -9,6 +9,7 @@
 
 #include "core/file_read.hpp"
 #include "core/i18n.hpp"
+#include "core/plugin_repo_helper.hpp"   // wire-c
 #include "core/utf8_text.hpp"
 
 #include <algorithm>
@@ -1701,6 +1702,13 @@ bool PluginRepo::parseIndex(const std::string& text, std::vector<PluginCatalogEn
         // its first build exists is a legitimate state, and thisPlatform()
         // simply reports nullptr.
 
+        // wire-c begin: the helper program of a GPL helper plugin and its companion files (core/plugin_repo_helper.hpp). Unlike the shop-window fields, a
+        // half-understood helper document refuses the whole catalogue, like every field that decides what is written to disk.
+        if (!helperstore::parseHelperFields(pj, e, where, error)) {
+            return false;
+        }
+        // wire-c end
+
         // The shop-window fields last: they cannot fail the entry, and `e.id`
         // is settled by now for the report to name.
         readShopFields(pj, e, report);
@@ -3220,6 +3228,12 @@ bool PluginRepo::installImpl(const PluginCatalogEntry& e, const std::string& plu
         }
     }
 
+    // wire-c: a helper plugin brings a separate PROGRAM; one from a plugin site is a stranger's native program, which this store does not install (before any socket)
+    if (e.helper.present && !e.source.empty()) {
+        error = "\"" + e.name + "\" comes from " + siteLabel(e.source) + " and runs a separate program; the store does not install programs from plugin sites";
+        return false;
+    }
+
     std::error_code ec;
     fs::create_directories(fs::path(pluginsDir), ec);
     if (!fs::is_directory(fs::path(pluginsDir), ec)) {
@@ -3296,15 +3310,38 @@ bool PluginRepo::installImpl(const PluginCatalogEntry& e, const std::string& plu
         return false;
     }
 
+    // wire-c begin: THE HELPER PROGRAM'S COMPANION FILES, as one transaction with the bridge (core/plugin_repo_helper.hpp): staged and verified FIRST (the bridge is verified
+    // already), moved in, then the bridge; any failure puts everything back as it was, so a failed install leaves nothing behind.
+    helperstore::Txn helperTxn{fs::path(pluginsDir)};
+    if (e.helper.present) {
+        std::string stageError;
+        if (!helperTxn.stage(e, *p, &progress_, &cancel_, stageError)) {
+            fs::remove(tmp, ignored);
+            error = stageError;
+            failClass = stageError.find("integrity") != std::string::npos ? health::InstallClass::Hash : health::InstallClass::Net;
+            return false;
+        }
+        std::string commitError;
+        if (!helperTxn.commit(commitError)) {
+            fs::remove(tmp, ignored);
+            error = commitError;
+            failClass = health::InstallClass::Write;
+            return false;
+        }
+    }
+    // wire-c end
+
     fs::rename(tmp, target, ec);
     if (ec) {
         // Most likely the DLL is currently loaded by this very process.
         fs::remove(tmp, ignored);
+        helperTxn.rollback();   // wire-c: the helper's files go back as they were
         error = "cannot move the verified plugin into place at \"" + target.string() +
                 "\": " + ec.message();
         failClass = health::InstallClass::Write;
         return false;
     }
+    helperTxn.finish();   // wire-c: the backups of replaced companions are dropped now the plugin is in place
 
     progress_.store(1.0f, std::memory_order_relaxed);
     installedPath = target.string();
@@ -3361,6 +3398,18 @@ bool PluginRepo::recordInstall(const std::string& pluginsDir, const PluginCatalo
     // from some later fetch that may never happen.
     const std::vector<PluginCatalogEntry> one{e};
     mergePolicies(inv.policies, one);
+    // wire-c: the companion files of a helper plugin are listed beside the manifest, so removing the plugin removes them (an ordinary plugin clears any old list)
+    {
+        std::vector<std::string> names;
+        if (e.helper.present) {
+            for (const HelperCompanion& c : p->companions) { names.push_back(c.installAs); }
+        }
+        std::string helperError;
+        if (!helperstore::recordCompanions(pluginsDir, safeName, names, helperError)) {
+            error = helperError;
+            return false;
+        }
+    }
     return saveManifest(pluginsDir, inv.plugins, inv.policies, error);
 }
 
@@ -3445,6 +3494,14 @@ bool PluginRepo::remove(const std::string& pluginsDir, const std::string& fileNa
         error = "cannot delete \"" + target.string() + "\": " +
                 (ec ? ec.message() : std::string("the file is probably in use"));
         return false;
+    }
+    // wire-c: a helper plugin's companion files (the program, its manifest and licence) go with it
+    {
+        std::string helperError;
+        if (!helperstore::removeCompanions(pluginsDir, safeName, helperError)) {
+            error = "the plugin was deleted, but its helper program was not: " + helperError;
+            return false;
+        }
     }
     return forgetFile(pluginsDir, safeName, error);
 }

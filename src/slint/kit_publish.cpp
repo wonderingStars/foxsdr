@@ -16,6 +16,7 @@
 #include "core/plugin_ui_data.hpp"
 #include "core/utf8_text.hpp"
 #include "gui/track_metrics.hpp"
+#include "mapj_logic.hpp"
 
 namespace foxsdr::slintkit {
 
@@ -456,6 +457,16 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
     const bool home = (state.flags & FOXAPI_RX_POSITION_SET) != 0u;
     std::vector<const cascade::core::HostTrack*> mine;
     for (const cascade::core::HostTrack& tr : kit_.tracks()) { if (tr.plugin == p.plugin) { mine.push_back(&tr); } }
+    // SCREEN LANE J: while a replay runs the targets are what the recorder held at the instant shown; the aircraft filter then drops what it does not pass
+    std::vector<cascade::core::HostTrack> replayHeld;
+    if (s.j.replay.active) {
+        replayHeld = replayTracks(s, p.plugin);
+        mine.clear();
+        for (const cascade::core::HostTrack& h : replayHeld) { mine.push_back(&h); }
+    }
+    applyFilter(s, mine);
+    std::string mapJStatus;
+    std::vector<::GridLabel> mapJLabels;
     // the view: fitted to the first tracks, then the operator's
     if (pg != nullptr && !pg->viewFitted && !mine.empty()) {
         std::vector<cascade::core::HostTrack> copy;
@@ -491,18 +502,7 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
             s.comp.setCoverage(km);
         } else { s.comp.setCoverage({}); }
         std::vector<slintmap::Trail> trails;
-        if (s.trailsOn) {
-            for (const cascade::core::HostPath& path : kit_.paths()) {
-                if (path.plugin != p.plugin) { continue; }
-                slintmap::Trail tr;
-                for (const CascadePathPoint& pt : path.points) { tr.points.emplace_back(pt.latDeg, pt.lonDeg); }
-                const slint::Color c = kindColour(path.kind);
-                tr.rgba = (static_cast<std::uint32_t>(c.red()) << 24) | (static_cast<std::uint32_t>(c.green()) << 16) | (static_cast<std::uint32_t>(c.blue()) << 8) | 0xb0u;
-                tr.dashed = (path.flags & CASCADE_PATH_FLAG_DASHED) != 0u;
-                tr.closed = (path.flags & CASCADE_PATH_FLAG_CLOSED) != 0u;
-                trails.push_back(std::move(tr));
-            }
-        }
+        mapJStatus = drawMapLayers(s, pg, s.trailsOn, p.plugin, trails, mapJLabels, sig);   // lane J: the paths by layer (the old loop's colours and flags), the heat, the outline, the grid
         s.comp.setTrails(trails);
         auto& buf = s.buffers[static_cast<std::size_t>(s.which)];
         if (buf.width() != static_cast<std::uint32_t>(s.w) || buf.height() != static_cast<std::uint32_t>(s.h)) { buf = slint::SharedPixelBuffer<slint::Rgba8Pixel>(static_cast<std::uint32_t>(s.w), static_cast<std::uint32_t>(s.h)); }
@@ -579,7 +579,10 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
         std::string note;
         if (!cascade::core::trackHasPosition(tr.t)) { note = cascade::gui::unplacedRowNote(tr.t.altM, kindOf(tr.t.kind), cascade::i18n::tr); }
         else if (cascade::core::trackIsEstimated(tr.t)) { note = cascade::gui::estimatedRowNote(cascade::i18n::tr); }
-        else if (std::isfinite(row.distanceKm)) { note = fmt("%.0f km ", row.distanceKm) + fmt("%03.0f", row.bearingDeg); }
+        else if (std::isfinite(row.distanceKm)) {
+            const bool legacy = s.j.units == cascade::core::access::UnitSystem::Automatic || s.j.units == cascade::core::access::UnitSystem::Metric;   // lane J: the unit choice
+            note = (legacy ? fmt("%.0f km", row.distanceKm) : foxsdr::slintmapj::distanceText(s.j.units, static_cast<int>(tr.t.kind), row.distanceKm * 1000.0)) + " " + fmt("%03.0f", row.bearingDeg);
+        }
         t2.cells = model(std::vector<slint::SharedString>{ss(row.label), ss(row.id), ss(note)});
         t2.kind = RowKind::Cells;
         t2.tone = pg != nullptr && pg->selectedId == row.id ? RowTone::Key : RowTone::Normal;
@@ -618,6 +621,11 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
         for (double st : steps) { if (st / mpp <= 0.3 * s.w) { pick = st; } }
         m.scale_frac = static_cast<float>(pick / mpp / s.w);
         m.scale_text = ss(pick >= 1000 ? fmt("%.0f km", pick / 1000) : fmt("%.0f m", pick));
+        if (s.j.units != cascade::core::access::UnitSystem::Automatic) {   // lane J: the unit choice (Automatic keeps the steps above, byte for byte)
+            const foxsdr::slintmapj::ScaleBar bar = foxsdr::slintmapj::scaleBar(s.j.units, mpp, s.w);
+            m.scale_frac = static_cast<float>(bar.frac);
+            m.scale_text = ss(bar.text);
+        }
     }
     m.attribution = ss(tiles ? bm.attribution() : cascade::i18n::tr("Coastline: Natural Earth (public domain)"));
     m.zoom_in = pg != nullptr && pg->spanDeg > slintmap::TileCompositor::kMinSpanDeg;
@@ -640,6 +648,7 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
     sig += std::string(m.count_text) + std::string(m.following) + std::string(m.coverage_status) + (s.pickArmed ? "P" : "") + s.hoverText + std::string(m.scale_text) + std::string(m.attribution);
     sig += std::to_string(s.coverageOn) + std::to_string(s.trailsOn) + std::to_string(s.altColours) + std::to_string(s.onScreenOnly) + std::to_string(s.sortKey) + std::to_string(s.sortAscending);
     sig += "L" + std::to_string(look_.iconPx) + "." + std::to_string(look_.trailWidthPx) + "." + std::to_string(static_cast<int>(look_.trailStyle));   // the icon size is in the targets: a change of look is a change of page
+    fillMapJModel(s, pg, mapJStatus, mapJLabels, std::string(), m, sig);   // lane J: the switches, the legend rows and credit of the layers, the replay and filter bars
     t.map = m;
 }
 
@@ -989,6 +998,15 @@ PageTab KitPublisher::pageModel(const Page& p, const FoxReceiverState& state, st
     t.store = blankStoreModel();
     t.patch_presets = blankPatchPresetsModel();
     t.transmit = blankTransmitModel();
+    t.map.j.layers = model(std::vector<::LayerRow>{});      // lane J: every list present and empty on a page of another kind
+    t.map.j.grid_labels = model(std::vector<::GridLabel>{});
+    t.sky.columns = model(std::vector<slint::SharedString>{});
+    t.sky.rows = model(std::vector<TableRow>{});
+    t.sky.widths = model(std::vector<float>{});
+    t.sky.dots = model(std::vector<::PolarDot>{});
+    t.antenna.columns = model(std::vector<slint::SharedString>{});
+    t.antenna.rows = model(std::vector<TableRow>{});
+    t.antenna.widths = model(std::vector<float>{});
     sig = p.id + (p.torn ? "T" : "") + fmt("%.0f", p.tx) + fmt("%.0f", p.ty) + fmt("%.0f", p.tw) + fmt("%.0f", p.th) + (p.rolled ? "r" : "") + (p.follow ? "f" : "");
     const PluginRow* r = rowOf(p);
     bool chipIdle = false;   // the chip says IDLE or WAIT (decided from the state: the words themselves are translated)
@@ -1004,6 +1022,8 @@ PageTab KitPublisher::pageModel(const Page& p, const FoxReceiverState& state, st
         case 9: fillStore(t, sig); break;
         case 10: fillPatchPresets(t, sig); break;
         case 11: fillTransmit(t, sig); break;
+        case 12: fillSky(t, state, sig); break;
+        case 13: fillAntenna(t, sig); break;
         default: break;
     }
     t.chip_tone = p.kind == 11 ? transmitChipTone_ : p.kind == 9 ? storeChipTone_ : chipIdle || std::string(t.chip) == "IDLE" || std::string(t.chip) == "WAIT" || std::string(t.chip).empty() ? ChipTone::Neutral : ChipTone::Good;   // the engine's own chip words (teleprinter, beacon, meter, weather) stay English
@@ -1014,6 +1034,7 @@ PageTab KitPublisher::pageModel(const Page& p, const FoxReceiverState& state, st
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 void KitPublisher::publishPages(const FoxReceiverState& state) {
+    feedMapSurfaces(state);   // lane J: the replay's clock, the recorder and the coverage model, for every open map page
     std::string setSig;
     for (const Page& p : pages_) { setSig += p.id + ";"; }
     const bool rebuilt = setSig != pagesSig_;
@@ -1292,6 +1313,8 @@ void KitPublisher::publish(const FoxReceiverState& state) {
             else if (kind == "store") { openPage("store", 9, "", "", cascade::i18n::tr("PLUGIN STORE")); }
             else if (kind == "patch-presets") { openPatchPresetsPage(); }
             else if (kind == "transmit") { openTransmitPage(); }
+            else if (kind == "sky") { openSkyPage(); }
+            else if (kind == "antenna") { openAntennaPage(); }
             else if (kind == "module") { const PluginRow* r = rowByFile(kit_.lists().rows, arg); if (r != nullptr) { openPage(id, 7, r->name, r->file, r->name); } }
             else {
                 const std::size_t bar = arg.find('|');
@@ -1578,7 +1601,12 @@ void KitPublisher::wire() {
         if (t < 0 || t >= static_cast<int>(s->targetIds.size())) { return; }
         for (const cascade::core::HostTrack& tr : kit_.tracks()) {
             if (tr.plugin != p->plugin || s->targetIds[static_cast<std::size_t>(t)] != tr.t.id) { continue; }
-            s->hoverText = std::string(tr.t.label[0] != '\0' ? tr.t.label : tr.t.id) + (std::isfinite(tr.t.altM) ? fmt(" \xC2\xB7 %.0f ft", tr.t.altM * 3.28084) : "") + (std::isfinite(tr.t.speedMps) ? fmt(" \xC2\xB7 %.0f kt", tr.t.speedMps * 1.94384) : "");
+            if (s->j.units == cascade::core::access::UnitSystem::Automatic) {
+                s->hoverText = std::string(tr.t.label[0] != '\0' ? tr.t.label : tr.t.id) + (std::isfinite(tr.t.altM) ? fmt(" \xC2\xB7 %.0f ft", tr.t.altM * 3.28084) : "") + (std::isfinite(tr.t.speedMps) ? fmt(" \xC2\xB7 %.0f kt", tr.t.speedMps * 1.94384) : "");
+            } else {   // lane J: the unit choice
+                const std::string alt = foxsdr::slintmapj::altitudeText(s->j.units, static_cast<int>(tr.t.kind), tr.t.altM), spd = foxsdr::slintmapj::speedTextOf(s->j.units, static_cast<int>(tr.t.kind), tr.t.speedMps);
+                s->hoverText = std::string(tr.t.label[0] != 0 ? tr.t.label : tr.t.id) + (alt.empty() ? "" : " \xC2\xB7 " + alt) + (spd.empty() ? "" : " \xC2\xB7 " + spd);
+            }
             break;
         }
     });
@@ -1656,6 +1684,8 @@ void KitPublisher::wire() {
     ui_.global<::KitEvents>().on_page_map_stop_following([mapPage](int i) { if (MapPage* pg = mapPage(i)) { pg->followedId.clear(); } });
     ui_.global<::KitEvents>().on_page_map_sort_clicked([surface](int i) { if (MapSurface* s = surface(i)) { s->sortKey = (s->sortKey + 1) % cascade::gui::kTrackSortKeyCount; } });
     ui_.global<::KitEvents>().on_page_map_sort_dir([surface](int i) { if (MapSurface* s = surface(i)) { s->sortAscending = !s->sortAscending; } });
+    // SCREEN LANE J: the map's layers, replay, filter and unit key, and the Antenna page's fields: one callback (ui/mapj.slint, MapJEvents.act)
+    ui_.global<::MapJEvents>().on_act([this](int i, slint::SharedString op, slint::SharedString arg) { mapJAct(i, std::string(op), std::string(arg)); });
     // Fitted modules
     const auto fittedRow = [this](int i, int row) -> const PluginRow* {
         Page* p = i >= 0 && i < static_cast<int>(pages_.size()) ? &pages_[static_cast<std::size_t>(i)] : nullptr;

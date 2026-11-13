@@ -1,0 +1,37 @@
+5200	ASSERTED	lanek-backup	state lk.status contains Exported, state lk.exports == 1; the bundle is read back by test_slint_lanek_host (no secret in it)
+5201	ASSERTED	lanek-backup	state lk.status contains Backed up; the pruning by test_slint_lanek_host
+5202	DRIVEN	lanek-backup	the tick is operated by test_slint_lanek_host only through the keeper (the write at exit is main.cpp finishAtExit: log line lane K at exit)
+5203	DRIVEN	lanek-backup	a saved choice; the pruning bound is read back by test_slint_lanek_host
+5204	ASSERTED	lanek-backup	state lk.importpath
+5205	ASSERTED	lanek-backup	the export fills it; the import key reads it
+5206	ASSERTED	lanek-backup	state lk.sheet == 2, Cancel changes nothing (lk.pending == 0), the import sets lk.pending == 1 and the SECOND START reads the imported theme back (restart/lanek-backup-2)
+5207	DRIVEN	lanek-backup	the keeper (save, list, switch planned again at exit, delete) is asserted by test_slint_lanek_host; the keys follow the saved profile in lanek-backup
+5208	ASSERTED	lanek-backup	state lk.profiles == 1, state lk.status contains Saved the profile
+5209	DRIVEN	lanek-backup	the sync (push, pull, conflicts left alone) is asserted by test_slint_lanek_host; no shared folder in a drive run
+5210	ASSERTED	lanek-wizard	FOXSDR_SLINT_FIRSTRUN opens the same sheet; state lk.wizardstep
+5211	ASSERTED	lanek-backup	state lk.sheet == 4; a scratch profile is not a folder named foxsdr, so the sheet refuses and Reset and close is disabled (expect enabled false); the real reset, its folder guard and the undo are asserted by test_slint_lanek_host
+5212	DRIVEN	lanek-backup	enabled only after a reset; asserted by test_slint_lanek_host (the file work at exit)
+5213	ASSERTED	lanek-wizard	state lk.wizardstep 0, 1, 2, 3; Next is disabled on the radio page until one is chosen
+5214	ASSERTED	lanek-wizard	click RTL-SDR dongle enables Next
+5215	ASSERTED	lanek-wizard	click FM broadcast band; state lk.status contains starting station after Done
+5216	DRIVEN	lanek-wizard	the telemetry op is the existing FOXAPP_OP_TELEMETRY_CONSENT; its own switch is SYSTEM > Usage reporting (already built)
+5217	ASSERTED	lanek-perf	state lk.samples, lk.mem; a figure that cannot be read says n/a
+5218	ASSERTED	lanek-perf	state lk.perfmode, lk.reduced
+5219	ASSERTED	lanek-access	state lk.palette; the contrast and colour-vision numbers of the palettes are in test_access_palette (the access lane)
+5220	DRIVEN	lanek-access	the dot-only default is byte for byte today's text (every existing test); the comma form is asserted by test_slint_host_numbers
+5221	ASSERTED	lanek-access	state lk.spokencount, lk.spoken (a recording stand-in in a bounded run: nobody hears it)
+5222	DRIVEN	lanek-access	Speak the mode is operated; the announcer's policy is asserted by test_access_speech
+5223	DRIVEN	lanek-access	saved choices feeding the announcer policy
+5224	ASSERTED	lanek-access	state lk.toneon, lk.tonehz (the parameters are computed; no device is opened in a bounded run)
+5225	ASSERTED	lanek-access	state lk.sr.spectrum, lk.sr.waterfall, lk.sr.counter (the text the accessible description carries)
+5226	ASSERTED	lanek-community	state lk.forumurl == empty, lk.discordurl == empty: no address is set in this copy
+5227	ASSERTED	lanek-spectrum	state lk.avgmode; the averaging closed forms by test_trace_average
+5228	ASSERTED	lanek-spectrum	state lk.zoomselect, then radio zoomsel (the plot's own call) narrows the span: state lk.zoomspan
+5229	DRIVEN	lanek-spectrum	the scripted drag starts on a control, not on the plot: the real pointer drag is the final real-mouse drive's
+5230	ASSERTED	lanek-tools	state lk.sheet == 7, lk.gradon, lk.gradtop == the last stop's colour, lk.gradstops
+5231	ASSERTED	lanek-spectrum	state lk.detector; the reductions by test_slint_lanek_spectrum_host (closed forms for noise)
+5232	ASSERTED	lanek-spectrum	state lk.rbw > 0
+5233	ASSERTED	lanek-tools	state lk.maskloaded, lk.maskpass; the lines by test_slint_lanek_spectrum_host
+5234	ASSERTED	lanek-tools	state lk.sheet == 8, lk.cursormode, lk.cursor.0 / .3 in the harmonic mode
+5235	DRIVEN	lanek-tools	the cursors are drawn into the trace picture (test_slint_lanek_spectrum_host reads the pixels)
+5236	ASSERTED	lanek-matrix	state lk.tiles == 3, lk.baseline, lk.matrixsolo; the pointer's own hover is the final real-mouse drive's

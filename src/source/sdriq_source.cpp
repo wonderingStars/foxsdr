@@ -1,4 +1,5 @@
 #include "source/sdriq_source.hpp"
+#include "source/sdriq_d2xx.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -26,11 +27,9 @@ std::string tame(const std::string& s) {
 
 }  // namespace
 
-std::unique_ptr<SdriqLink> defaultSdriqOpener(const std::string&, std::string& error) {
-    error =
-        "the SDR-IQ talks through FTDI's D2XX driver, which this build does not include "
-        "(install FTDI's driver and use a build that has the D2XX link)";
-    return nullptr;
+std::unique_ptr<SdriqLink> defaultSdriqOpener(const std::string& serial, std::string& error) {
+    // radio-bridges lane: the link over FTDI's D2XX library the user installed (sdriq_d2xx.cpp); a sentence naming it when it is absent.
+    return openD2xxSdriq(std::string(), serial, error);
 }
 
 // ---------------------------------------------------------------------------------------

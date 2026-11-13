@@ -1,0 +1,11 @@
+#! frames=900 size=1600x5200 bank=4 sections=4:0,12,14 FOXSDR_SLINT_FRAME_LOG=1
+# lanek-on (lane K frame cost): ONE radio with everything of lane K that works on every frame on: RMS averaging, the Peak detector, a loaded limit mask drawn and evaluated, the eight cursors drawn with their levels, the signal tone's parameters,
+# the resource meter once a second, and the screen reader's sentences. The same section open as lanek-off.
+10 state running == 1
++1 choose "Averaging" "RMS (mean of the powers)"
++3 choose "Trace detector" "Peak"
++3 click "Write an example mask file"
++8 click "Load the mask"
++8 click "Show the cursors"
++3 click "Play a tone that follows the signal"
++700 state running == 1

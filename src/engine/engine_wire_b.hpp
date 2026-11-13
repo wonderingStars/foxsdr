@@ -30,7 +30,7 @@
 #include "net/aircraft_out.hpp"
 #include "net/iq_out.hpp"
 #include "engine/wire_b_bits.hpp"
-#include "engine/wire_b_cursors.hpp"
+#include "engine/wire_b_framelog.hpp"
 
 namespace cascade::engine {
 
@@ -49,8 +49,7 @@ struct WireBState {
     // --- bitview: one ring of kept bursts and the last decoded frames per radio ---
     std::array<wireb::BitsRadio, 8> bits;
 
-    // --- sigmeas: the eight cursors of each radio and the one frame log ---
-    std::array<cascade::sigmeas::CursorSet8, 8> cursors;
+    // --- sigmeas: the one frame log ---
     std::unique_ptr<cascade::sigmeas::FrameLog> frameLog = std::make_unique<cascade::sigmeas::FrameLog>(256);
 
     // --- rfmon: the limit mask (one mask, one evaluator and monitor per radio) ---
@@ -120,8 +119,9 @@ struct WireBState {
     std::array<std::string, 8> followNote;
     wireb::SerialLinkFactory sweepFactory = wireb::defaultSerialLinkFactory();
     wireb::HackRfFactory hackrfFactory = wireb::defaultHackRfFactory();
+    wireb::RfeLinkFactory rfeFactory = wireb::defaultRfeLinkFactory();   // radio-bridges: the RF Explorer
     // the needed-libraries check: what it may touch (a test gives a fabricated machine) and the last answer per library id (JSON text)
-    wireb::NeededEnv neededEnv = wireb::defaultNeededEnv();
+    cascade::source::needed::Env neededEnv = cascade::source::needed::defaultEnv();
     std::map<std::string, std::string> neededChecks;
 };
 

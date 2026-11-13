@@ -1,0 +1,53 @@
+#! frames=900 size=1600x6000 bank=4 sections=4:17
+# lanel-record (screen lane L, docs/multi-radio-records/screen-l.md; rows A17 to A20): the Recording and files section: daily folders, the record lock (OFF until ticked), the audio file format, the analyser job and its refusals.
+10 state running == 1
++3 state ll.rows.record > 40
+# A17: a daily folder style and UTC, read back from the engine's JSON
++1 click "2026/11/11"
++12 state ll.fact.record.daily contains "\"style\":2"
++1 click "Use UTC"
++12 state ll.fact.record.daily contains "\"utc\":false"
++1 click "None"
++12 state ll.fact.record.daily contains "\"style\":0"
+# A18: the lock is OFF until ticked; the engine's state is read back each way; the default is not changed
++1 state ll.fact.record.lock != 1
++1 click "Lock settings while recording"
++12 state ll.fact.record.lock == 1
++1 click "Also lock gain"
++12 state ll.fact.record.lock.gain == 1
++1 click "Lock settings while recording"
++12 state ll.fact.record.lock != 1
++1 click "Also lock gain"
++12 state ll.fact.record.lock.gain != 1
+# A19: FLAC for audio takes, with or without the WAV
++1 click "FLAC"
++12 state ll.fact.record.container == flac
++1 click "Keep the WAV"
++12 state ll.fact.record.container.keep == 1
++1 click "WAV"
++12 state ll.fact.record.container == wav
++1 shot "lanel-record.png"
+# A20: no job is running, so Cancel is dead; a recording that is not there fails with words on the worker
++1 expect "Cancel" enabled equals "false"
++1 type "Recording" "C:/foxsdr-lanel-test/none/take.wav"
++1 key enter
++2 click "Hash the recording"
++12 state ll.note.record contains "Hash the recording"
++30 state ll.fact.job.state == failed
++1 type "Project file" "C:/foxsdr-lanel-test/none/p.fxproj"
++1 key enter
++2 click "Check the project's recording"
++12 state ll.note.record contains "Check the project"
+# an export box whose end is before its start is refused here, before it is sent
++1 type "From (s)" "5"
++1 key enter
++1 type "To (s)" "1"
++1 key enter
++1 type "Lowest frequency (Hz)" "1000"
++1 key enter
++1 type "Highest frequency (Hz)" "2000"
++1 key enter
++1 type "New file" "C:/foxsdr-lanel-test/none/out.wav"
++1 key enter
++2 click "Export selection"
++6 state ll.note.record contains "Export selection: the box needs"

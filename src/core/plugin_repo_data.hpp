@@ -25,6 +25,24 @@ namespace cascade::core {
 // non-empty, `url` an https:// URL, `sha256` exactly 64 hexadecimal digits.
 // `sizeBytes` is ADVISORY - shown in the UI, never used as a buffer size or
 // as a download limit.
+// wire-c begin (GPL helper programs in the store: core/plugin_repo_helper.hpp): one companion file of a helper plugin's platform row.
+struct HelperCompanion {
+    std::string role;       // "helper" (the program), "manifest", "licence" or "other"
+    std::string file;       // the file name served at `url`
+    std::string installAs;  // the bare name written beside the plugin
+    std::string url;        // https:// only
+    std::string sha256;     // 64 lower-case hex digits, mandatory
+    std::uint64_t sizeBytes = 0;
+    bool executable = false;   // true only for the helper program
+};
+
+// The entry-level description of the separate program a helper plugin runs (all fields required when present).
+struct HelperInfo {
+    bool present = false;
+    std::string name, version, licence, sourceUrl, sourceCommit;
+};
+// wire-c end
+
 struct PluginPlatform {
     std::string os;    // "windows", "linux", "macos" (matched case-insensitively)
     std::string arch;  // "x64", "arm64", "x86"
@@ -32,6 +50,7 @@ struct PluginPlatform {
     std::string url;   // https:// only
     std::string sha256;  // 64 hex digits, mandatory
     std::uint64_t sizeBytes = 0;
+    std::vector<HelperCompanion> companions;   // wire-c: the helper's files (empty for every ordinary plugin)
 };
 
 // One picture of a plugin at work, as the catalogue names it (0.99.72, the
@@ -122,6 +141,8 @@ struct PluginCatalogEntry {
     // can present its entry as the official one (or as another site's) by
     // saying so. Part of the entry's identity: (source, id).
     std::string source;
+
+    HelperInfo helper;   // wire-c: set for a helper plugin only (core/plugin_repo_helper.hpp)
 
     // The platform record matching the host we are running on, or nullptr if
     // the catalogue has no build for it. The pointer aliases `platforms`, so

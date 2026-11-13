@@ -1,14 +1,9 @@
 // sdriq_source.hpp - RFspace SDR-IQ (USB, 14-bit, 0 to 30 MHz) as a source: the protocol layer and the control
 // and streaming logic, up to the FTDI driver call. The SDR-IQ reaches the PC through an FTDI FT245RL; RFspace's
-// own specification (section 4.3) says the host uses FTDI's driver "read and write functions". THE OWNER
-// DECIDED that this build stops at that call: SdriqLink below is the seam, nothing in this repository loads
-// FTDI's D2XX library, and defaultSdriqOpener() answers with a plain sentence saying so.
-//
-// HAND-OFF for the call itself (a small job once the owner permits it): an SdriqLink over FTDI's D2XX API -
-// FT_ListDevices / FT_OpenEx by serial number, FT_SetTimeouts(read, write), FT_Purge(RX|TX), FT_Read / FT_Write,
-// FT_Close, loaded at run time from the driver the USER installed (ftd2xx.dll), never shipped. interrupt() can
-// be a short read timeout (the pump polls every kPollMs). Whether to use D2XX or FTDI's VCP is the owner's call;
-// the spec says D2XX-style read/write.
+// own specification (section 4.3) says the host uses FTDI's driver "read and write functions". SdriqLink below is the seam. THE OWNER
+// PERMITTED (2026-11-12) loading FTDI's D2XX library when the USER installed it: sdriq_d2xx.{hpp,cpp} is the link over it (ftd2xx.dll found
+// through the shared vendor-library loader at run time, never shipped or downloaded) and defaultSdriqOpener() uses it. Without the library the
+// source says so in a sentence that names FTDI's D2XX driver. UNVERIFIED on a real SDR-IQ.
 //
 // Receive only. The firmware-update, RS232 pass-through and security-code items of the document are never sent.
 // Off until the user picks it; nothing here raises a dialog; an absent radio is reported plainly by open().
@@ -46,8 +41,8 @@ public:
 // when there is no such radio or no way to reach it.
 using SdriqOpener = std::function<std::unique_ptr<SdriqLink>(const std::string& serial, std::string& error)>;
 
-// The production opener of this build: always null, with the sentence
-// "the SDR-IQ talks through FTDI's D2XX driver, which this build does not include".
+// The production opener: the D2XX link (sdriq_d2xx.hpp) with the library searched for in the PATH directories; null with a plain sentence that
+// names FTDI's D2XX driver when it is absent, of the wrong bitness or too old.
 std::unique_ptr<SdriqLink> defaultSdriqOpener(const std::string& serial, std::string& error);
 
 class SdriqSource : public NetSampleSource {

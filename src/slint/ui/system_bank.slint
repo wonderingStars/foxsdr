@@ -835,6 +835,86 @@ export global SpectrumLook {
     callback compact-toggled(bool);
 }
 
+// ================================================ SCREEN LANE K (docs/multi-radio-records/screen-k.md) ================================================
+// ONE generic row panel for every body lane K adds (Settings and backup, Performance, Accessibility, Community, Spectrum tools) and for the sheets (the first-run
+// setup, the confirmations, the cursor tool, the gradient editor). The host (lanek_publish.cpp) builds the rows - each one a kind, an id, a label, a value - and answers
+// `act(id, text)`, so a row added by the lane costs C++ and no .slint recompile. Labels arrive already translated (cascade::i18n::tr in the host); the few words this file
+// itself draws are @tr. The kinds: 0 heading, 1 note (wrapped; tone 0 dim, 1 warn, 2 error, 3 good), 2 key, 3 tick, 4 choice list (the options, `pick` = the chosen one),
+// 5 text field, 6 readout (label and figure), 7 slider (`level` 0..1, `value` its readout), 8 level bar (`level` 0..1, `value` its readout).
+export struct KRow { kind: int, id: string, label: string, value: string, note: string, on: bool, enabled: bool, options: [string], pick: int, level: float, tone: int }
+
+export global LaneK {
+    in property <[KRow]> rows-backup;
+    in property <[KRow]> rows-perf;
+    in property <[KRow]> rows-access;
+    in property <[KRow]> rows-community;
+    in property <[KRow]> rows-spectrum;
+    in property <[KRow]> rows-display;
+    in-out property <bool> sheet-open;
+    in property <string> sheet-title;
+    in property <[KRow]> sheet-rows;
+    in property <int> sheet-width: 460;               // logical px
+    callback act(string, string);
+}
+
+// SCREEN LANE L (docs/multi-radio-records/screen-l.md): the controls of what the wiring lanes built, drawn with lane K's row panel. The host (lanel_publish.cpp) builds the rows and answers `act(id, text)`.
+export global LaneL {
+    in property <[KRow]> rows-tuning;
+    in property <[KRow]> rows-scan;
+    in property <[KRow]> rows-record;
+    in property <[KRow]> rows-measure;
+    in property <[KRow]> rows-sweep;
+    in property <[KRow]> rows-sources;
+    in property <[KRow]> rows-outputs;
+    in property <[KRow]> rows-libs;
+    in property <[KRow]> rows-system;
+    in property <[KRow]> rows-web;
+    in property <[KRow]> rows-ham;
+    callback act(string, string);
+}
+
+export component KPanel inherits VerticalLayout {
+    in property <[KRow]> rows;
+    callback act(string, string);
+    spacing: 6px;
+    alignment: start;
+    for r[i] in root.rows : VerticalLayout {
+        spacing: 3px;
+        if r.kind == 0 : Text { text: r.label; font-family: Theme.font-ui; font-size: Theme.font-small; font-weight: Theme.weight-semibold; color: Theme.fg; wrap: word-wrap; accessible-role: text; }
+        if r.kind == 1 : Note { text: r.label; tone: r.tone == 1 ? ChipTone.warn : r.tone == 2 ? ChipTone.err : r.tone == 3 ? ChipTone.good : ChipTone.neutral; }
+        if r.kind == 2 : Line {
+            Mid { Key { label: r.label; enabled: r.enabled; on: r.on; tooltip: r.note; xs: true; clicked => { root.act(r.id, ""); } } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if r.kind == 3 : Line { Tick { horizontal-stretch: 1; label: r.label; on: r.on; enabled: r.enabled; tooltip: r.note; toggled(v) => { root.act(r.id, v ? "1" : "0"); } } }
+        if r.kind == 4 : VerticalLayout {
+            spacing: 2px;
+            Line { RowLabel { text: r.label; } }
+            for o[j] in r.options : RadioChoice { label: o; on: j == r.pick; enabled: r.enabled; tooltip: r.note != "" ? r.note : o; chosen => { root.act(r.id, "\{j}"); } }
+        }
+        if r.kind == 5 : VerticalLayout {
+            spacing: 2px;
+            Line { RowLabel { text: r.label; } }
+            LineInput { value: r.value; enabled: r.enabled; name: r.label; tooltip: r.note; mono: true; committed(t) => { root.act(r.id, t); } }
+        }
+        if r.kind == 6 : Line {
+            RowLabel { text: r.label; width: 120px; }
+            Readout { horizontal-stretch: 1; text: r.value; horizontal-alignment: right; accessible-role: text; accessible-label: r.label; accessible-description: r.value; }
+        }
+        if r.kind == 7 : SliderRow { label: r.label; readout: r.value; value: r.level; enabled: r.enabled; tooltip: r.note; changed(v) => { root.act(r.id, "\{v}"); } }
+        if r.kind == 8 : Line {
+            RowLabel { text: r.label; width: 84px; }
+            Rectangle {
+                horizontal-stretch: 1;
+                height: 8px; y: (Theme.field-h - 8px) / 2;
+                background: Theme.field; border-radius: 2px;
+                Rectangle { x: 0px; y: 0px; height: parent.height; width: parent.width * max(0.0, min(1.0, r.level)); border-radius: 2px; background: Theme.accent; }
+            }
+            Readout { width: 64px; text: r.value; horizontal-alignment: right; }
+        }
+    }
+}
+
 export component DisplayBody inherits VerticalLayout {
     in property <DisplayModel> model;
 
@@ -1066,6 +1146,7 @@ export component DisplayBody inherits VerticalLayout {
     Line { Key { horizontal-stretch: 1; small: true; label: @tr("Clear the reference trace"); enabled: SpectrumLook.reference-set; clicked => { SpectrumLook.reference-clear(); } } }
     Line { Tick { horizontal-stretch: 1; label: @tr("Compact window"); on: SpectrumLook.compact; toggled(v) => { SpectrumLook.compact-toggled(v); } } }
     if SpectrumLook.status != "" : Note { text: SpectrumLook.status; }
+    KPanel { rows: LaneK.rows-display; act(id, t) => { LaneK.act(id, t); } }   // screen lane K: averaging, the gradient editor and zoom to a selection (an empty list draws nothing)
     // </content>
 }
 

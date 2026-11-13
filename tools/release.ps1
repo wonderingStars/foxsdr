@@ -127,7 +127,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 . (Join-Path $PSScriptRoot 'release-common.ps1')
 
-$script:StepOrder = @('preflight', 'build', 'installer', 'msix', 'install-test', 'ci', 'symbols', 'github', 'store', 'store-status')
+$script:StepOrder = @('preflight', 'build', 'installer', 'msix', 'install-test', 'ci', 'symbols', 'github', 'store', 'store-status', 'package-manifests')
 $script:Results = New-Object System.Collections.ArrayList
 $script:StoreSeamAnnounced = $false
 $script:Ctx.DryRun = [bool]$DryRun
@@ -2140,6 +2140,47 @@ function Step-StoreStatus {
 }
 
 # ---------------------------------------------------------------------------
+# package-manifests: the winget, Scoop and Chocolatey files for THIS release's setup (wire-c; docs/feature-records/packaging.md)
+# ---------------------------------------------------------------------------
+# It writes three small folders under <release folder>\packages and PUBLISHES NOTHING: submitting them to winget-pkgs, a Scoop
+# bucket or the Chocolatey community repository needs an account of the owner's (packaging/README.md has the commands).
+# tools\make-package-manifests.ps1 contacts no service by design (a test scans it for that).
+function Step-PackageManifests {
+    $RC = $script:RC
+    $setup = Join-Path $RC.Dist $RC.InstallerName
+    $outDir = Join-Path $RC.ReleaseDir 'packages'
+    $gen = Join-Path $RC.Repo 'tools\make-package-manifests.ps1'
+    $ps = (Get-Process -Id $PID).Path
+    $args1 = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $gen, '-SetupFile', $setup, '-OutDir', $outDir, '-Force')
+    if ($script:Ctx.DryRun) {
+        Write-Plan 'check' ('the setup file ' + $RC.InstallerName + ' is in dist and its sha256 is the one in dist\sha256.txt')
+        Write-Result 'DRY' 'generate the manifests' (Format-CommandLine $ps ($args1 + @('-RunWingetValidate')))
+        Write-Plan 'check' 'the hash the generator printed equals dist\sha256.txt (nothing is published)'
+        return 'done'
+    }
+    Assert-Check (Test-Path -LiteralPath $setup) ('setup file ' + $RC.InstallerName) $setup 'run the installer step first'
+    $local = Get-Sha256 $setup
+    $listed = ''
+    $shaFile = Join-Path $RC.Dist 'sha256.txt'
+    if (Test-Path -LiteralPath $shaFile) {
+        foreach ($line in [System.IO.File]::ReadAllLines($shaFile)) {
+            if ($line -match ('^\s*([0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($RC.InstallerName) + '\s*$')) { $listed = $Matches[1].ToLowerInvariant() }
+        }
+    }
+    Assert-Check ($listed -ne '') 'dist\sha256.txt lists the setup file' $shaFile 'run the ci step first (it writes sha256.txt)'
+    Assert-Check ($listed -eq $local) 'setup file hash equals dist\sha256.txt' $local ('sha256.txt says ' + $listed)
+    $r = Invoke-Exe -File $ps -Arguments ($args1 + @('-RunWingetValidate')) -TimeoutSec 600 -Label 'make-package-manifests'
+    Assert-Check ($r.ExitCode -eq 0) 'make-package-manifests exits 0' ('exit ' + $r.ExitCode) ($r.StdErr)
+    $printed = ($r.StdOut + ' ' + $r.StdErr).ToLowerInvariant()
+    Assert-Check ($printed.Contains($local)) 'the generator printed the setup file hash' $local 'compare its output with dist\sha256.txt by hand'
+    foreach ($f in @('winget', 'scoop', 'chocolatey')) {
+        Assert-Check (Test-Path -LiteralPath (Join-Path $outDir $f)) ('package folder ' + $f) (Join-Path $outDir $f) ''
+    }
+    Write-Result 'INFO' 'not published' 'submitting these to winget-pkgs, a Scoop bucket and Chocolatey needs the owner (packaging\README.md)'
+    return 'done'
+}
+
+# ---------------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------------
 
@@ -2198,6 +2239,7 @@ try {
             'github'       { $outcome = Step-Github }
             'store'        { $outcome = Step-Store }
             'store-status' { $outcome = Step-StoreStatus }
+            'package-manifests' { $outcome = Step-PackageManifests }
         }
         if ($DryRun -and $outcome -eq 'done') { $outcome = 'planned (dry run)' }
         [void]$script:Results.Add(@{ Step = $step; Outcome = $outcome })

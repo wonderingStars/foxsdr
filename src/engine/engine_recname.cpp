@@ -27,6 +27,7 @@
 #include "core/recorder.hpp"
 #include "core/status_clock.hpp"
 #include "engine/engine.hpp"
+#include "engine/wire_a.hpp"   // wire-a
 
 namespace cascade::engine {
 
@@ -109,8 +110,12 @@ std::int32_t Engine::applyRecordNameOp(const FoxCommand& c, const std::string& t
 }
 
 void Engine::applyRecordName(cascade::core::Recorder::OpenRequest& req) {
+    WireA::of(*this).applyDaily(req);   // wire-a: the day's folder first (a file-name template then works below it)
     if (!recordNameLoaded_) { loadRecordName(); }
-    if (recordNameTemplate_.empty()) { return; }
+    if (recordNameTemplate_.empty()) {
+        wireCLabelTake(req);   // wire-c: a take a plugin asked for carries its label (engine_wire_c.cpp); a user's take is untouched
+        return;
+    }
     const std::int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     rn::Fields f;
     f.unixMs = nowMs;
@@ -118,7 +123,7 @@ void Engine::applyRecordName(cascade::core::Recorder::OpenRequest& req) {
     f.frequencyHz = currentAbsoluteHz();
     f.mode = cascade::gui::kModeNames[rx().modeIndex_ >= 0 && rx().modeIndex_ < 8 ? rx().modeIndex_ : 0];
     f.radio = radioLabel();
-    f.bookmark = "unknown";
+    f.bookmark = wireCStartLabel_.empty() ? std::string("unknown") : wireCStartLabel_;   // wire-c: {bookmark} is a plugin take's label
     const rn::Expanded e = rn::expand(recordNameTemplate_, f, false);
     std::string err;
     const std::string full = e.ok ? rn::resolvePath(req.directory, e.relPath, "wav", &err) : std::string();

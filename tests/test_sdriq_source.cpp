@@ -4,6 +4,9 @@
 // SDR-IQ. Byte strings in testLiterals are the ones printed in the document (section numbers in comments).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -410,11 +413,20 @@ void testOpenAndIdentify() {
 }
 
 void testOpenRefusals() {
-    {   // the production opener: FTDI's driver is not part of this build
+    {   // the production opener looks for FTDI's D2XX library the user installed (PATH only); with no PATH it says so, naming FTDI and D2XX
+        // (radio-bridges lane: the link itself is tested in test_sdriq_d2xx.cpp). PATH is emptied so the test never touches a real driver.
+#if defined(_WIN32)
+        wchar_t old[32768];
+        const DWORD oldLen = ::GetEnvironmentVariableW(L"PATH", old, 32768);
+        ::SetEnvironmentVariableW(L"PATH", L"");
+#endif
         SdriqSource s;
         CHECK(!s.open(""));
         const std::string e = s.lastError();
         CHECK(e.find("FTDI") != std::string::npos && e.find("D2XX") != std::string::npos && !s.isOpen());
+#if defined(_WIN32)
+        if (oldLen > 0 && oldLen < 32768) { ::SetEnvironmentVariableW(L"PATH", old); }
+#endif
     }
     {   // an opener that finds no radio says so
         SdriqSource s;

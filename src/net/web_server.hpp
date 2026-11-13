@@ -36,6 +36,7 @@
 #include <thread>
 #include <vector>
 
+#include "net/metrics.hpp"   // wire-c
 #include "net/receiver_listing.hpp"
 #include "net/web_audio.hpp"
 #include "net/web_auth.hpp"
@@ -573,6 +574,14 @@ public:
     // anyone reach the page at all (loopback by default). Callable at any time, from any thread, running or not. Returns false with `error`
     // (a sentence for the settings panel) when the listing is enabled but invalid; the previous listing then stays in force.
     bool setReceiverListing(const ReceiverListing& listing, std::string& error);
+
+    // wire-c begin (wiring lane C, row W7a; net/web_wire_c.hpp): the cross-origin allow-list. An empty list is off (the default: no header is ever added). Callable at any time, from any
+    // thread. False with `error` when an origin is not acceptable; the previous list then stays. Credentials are never allowed.
+    bool setCors(const std::vector<std::string>& origins, std::string& error);
+    // The metrics page (row L3): off by default; the engine publishes a snapshot about once a second while it is on. Signed-in browsers only.
+    void setMetricsEnabled(bool on);
+    void publishMetrics(const cascade::net::metrics::EngineSnapshot& snapshot);
+    // wire-c end
 
     // --- Basemap tiles -------------------------------------------------------
     // GET /api/tile/{z}/{x}/{y} is demand-driven by the BROWSER's viewport,

@@ -1,0 +1,18 @@
+#! frames=900 size=1600x1000 bank=4 sections=4:0 testradios=3
+# lanek-matrix (screen lane K, row: a Matrix overview of all receivers with hover-to-listen, DEPTH-GAPS A2 Multi-radio): the Matrix key at the head of the Audio mix block opens a sheet with a row per open radio. A pointer
+# resting on a row previews that radio's sound through the existing solo call after a short dwell; a click keeps it (a second click lets it go); a double click selects the radio. The pointer's own hover is the final real-mouse
+# drive's; here a click moves the pointer onto the row (and so previews it) and keeps it.
+10 state running == 1
++3 click "Matrix"
++10 state lk.tiles == 3
++1 shot "lanek-matrix.png"
++1 click "Radio 2"
++15 state lk.baseline == 2
+state lk.matrixsolo == 2
++1 click "Radio 2"
++15 state lk.baseline == 0
+state lk.matrixsolo == 0
++1 click "Radio 3"
++15 state lk.baseline == 3
++1 key escape
++15 state lk.matrixsolo == 3

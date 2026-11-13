@@ -1,0 +1,19 @@
+#! frames=1100 bank=1 sections=2:1 plugins=adsb-decoder open=module:adsb-decoder-1.9.1-abi3-win-x64.dll iqfile=adsb-decoder.wav centre=1090000000 mode=RAW bandwidth=2400000 size=1600x900 FOXSDR_SLINT_FRAME_LOG=1 
+# mapj-off (screen lane J, frame cost): the ADS-B map page open with the receiver position set and every new layer off; nothing is asserted, the run's "host tick time" line is the figure.
+120 state kit.plugins == 1
++1 click "START"
++60 state decodersRunning >= 1
++300 state kit.tracks >= 1
++1 key f3
++4 state bank == 2
++1 type "Latitude" "51.4775"
++1 key enter
++1 type "Longitude" "-0.4614"
++1 key enter
++3 click "Set RX here"
++25 state positionSet == 1
++1 click "DECODE"
++4 state bank == 1
++1 click "ADS-B map"
++30 state kit.mapPages >= 1
++600 state kit.mapPages >= 1

@@ -201,6 +201,52 @@
 //   Not saved with the radio: it is a view, set again by the screen that wants it. OUT_OF_RANGE for a size or width that is not allowed, NO_CHANGE when it is so already.
 #define FOXAPP_OP_SET_IF_ZOOM            0x8625u /* ival[0]: FFT size or 0 off; num[0]: span Hz. Addresses one radio (target) */
 #define FOXAPP_OP_SET_STEREO_SYSTEM      0x8619u /* ival[0]: 0 automatic / 1 pilot tone / 2 OIRT. Addresses one radio (target) */
+// wire-c begin (wiring lane C, operation block 0x8A00-0x8AFF; docs/multi-radio-records/wire-c.md, src/engine/wire_c.hpp)
+//   WIREC_SETTING (SETTINGS; LOCAL sessions only like every app op): text: "<key>\x1F<value>". One key of wiring lane C's own settings file (wirec.json in the per-user
+//   folder; config.json is untouched). OK: changed and saved; NO_CHANGE: already so; NOT_FOUND: no such key; BAD_ARGUMENT: the value is not of the key's kind;
+//   OUT_OF_RANGE: a number or a choice outside the key's range; FAILED: the file could not be written (nothing changed). Every key is published as fact.wirec.<key>,
+//   and fact.wirec.version moves with any change (the keys, their kinds and defaults are in the record's "new keys" table).
+#define FOXAPP_OP_WIREC_SETTING          0x8A00u /* text: "<key>\x1F<value>" */
+//   STORE_HELPER_CONSENT (ADMIN; LOCAL sessions only): the user's SEPARATE consent for installing a GPL HELPER plugin (a bridge plugin that starts a separate program;
+//   core/plugin_repo_helper.hpp), given or withdrawn per catalogue entry. text: the entry's catalogue key (as STORE_INSTALL names it); ival[0]: 1 consent, 0 withdraw.
+//   Until it is given STORE_INSTALL of that entry is refused with fact.store.<key>.helper.consent "0" and the sentence in installError ("this plugin runs a separate
+//   program; confirm ..."); ADD ALL never fetches a helper plugin without it. NOT_FOUND: no such entry, or the entry is not a helper plugin. NO_CHANGE: already so.
+//   Not saved (a restart asks again); never on the web profile (a browser cannot have read the notice).
+#define FOXAPP_OP_STORE_HELPER_CONSENT   0x8A01u /* text: catalogue key; ival[0]: 1 consent / 0 withdraw */
+//   THE SYSTEM OPERATIONS (wiring lane C rows S7, S8, S10; src/engine/wire_c_sys.hpp), SETTINGS, LOCAL sessions only. Their answers are facts (fact.sys.*, LOCAL): the words of a refusal are
+//   fact.sys.error and the op's message. IMPORT and RESET are STAGED and carried out at the NEXT START (the running engine would write config.json over them when it closes): fact.sys.pending
+//   says "import" or "reset" until then, SYS_PENDING_CANCEL withdraws it; nothing is ever deleted (an import keeps what it replaces as <name>.before-import-<stamp>, a reset moves the
+//   files into reset-<stamp>).
+//   SYS_FIRSTRUN: text: a step of the first-run wizard: "radio:<n>" (n indexes fact.sys.firstrun.radios), "preset:<id>" ("" none; fact.sys.firstrun.presets lists "<id>\t<title>"), "telemetry:0|1",
+//   "next", "back", "skip". BAD_ARGUMENT for a choice that does not fit or a step whose choice is missing. When the wizard ends (done or skipped) its choices are applied (the bookmarks of the
+//   chosen set; the usage-reports switch ONLY if the person chose it here) and fact.sys.firstrun.done is "1".
+//   SYS_EXPORT: text: the file to write. One bundle of config.json, bookmarks.json and markers.json; passwords, tokens and the install id are never in it. fact.sys.export.last.
+//   SYS_IMPORT_PLAN: text: a bundle file. Validated whole; fact.sys.import.plan ("<name>\tNew|Replace|Identical" lines), fact.sys.import.token, fact.sys.import.notes. SYS_IMPORT_COMMIT: text: the token.
+//   SYS_BACKUP: ival[0]: how many backups to keep (0 = the sys.backup_keep setting). A bundle in <settings>/backups; fact.sys.backup.last.
+//   SYS_RESET_PLAN: ival[0] 1 = also the plugins folder, ival[1] 1 = also the logs. fact.sys.reset.plan, fact.sys.reset.token. SYS_RESET_COMMIT: text: the token.
+//   SYS_PENDING_CANCEL: withdraws a staged import or reset (NO_CHANGE when none).
+#define FOXAPP_OP_SYS_FIRSTRUN           0x8A02u /* text: "radio:<n>" | "preset:<id>" | "telemetry:0|1" | "next" | "back" | "skip" */
+#define FOXAPP_OP_SYS_EXPORT             0x8A03u /* text: the file to write */
+#define FOXAPP_OP_SYS_IMPORT_PLAN        0x8A04u /* text: a bundle file */
+#define FOXAPP_OP_SYS_IMPORT_COMMIT      0x8A05u /* text: the confirm token */
+#define FOXAPP_OP_SYS_BACKUP             0x8A06u /* ival[0]: how many to keep (0 = the setting) */
+#define FOXAPP_OP_SYS_RESET_PLAN         0x8A07u /* ival[0]: also plugins; ival[1]: also logs */
+#define FOXAPP_OP_SYS_RESET_COMMIT       0x8A08u /* text: the confirm token */
+#define FOXAPP_OP_SYS_PENDING_CANCEL     0x8A09u
+//   THE QSO LOG (wiring lane C rows H1, H3; src/engine/wire_c_ham.hpp), SETTINGS, LOCAL sessions only. A LOG the person keeps - FoxSDR is a receiver and never transmits: a QSO is a contact
+//   they typed in. The file is qso-log.json beside the settings; callsigns are never in a setting, a report, the log or a fact (the facts carry counts and the problem sentences).
+//   QSO_ADD: text (or long text): {"t":unix seconds (0 / absent = now),"f":kHz,"m":"CW","c":"K1ABC","me":"G4XYZ","s":["599","12"],"r":["599","14"]}. BAD_ARGUMENT with the reason (fact.ham.error)
+//   for a time that is not a date, a frequency that is not one, a missing mode, a call sign with a character other than A-Z 0-9 /, an exchange value that is not letters and digits; LIMIT at 20,000.
+//   QSO_REMOVE: ival[0]: the QSO's number from 1. NOT_FOUND. QSO_CLEAR: NO_CHANGE when empty. CABRILLO_HEADER: text (or long text): {"contest":"CQ-WW-CW","callsign":..., "location":..., "name":...,
+//   "address":[...], "operators":[...], "soapbox":[...], and the category fields}. CABRILLO_EXPORT: text: the file; fact.ham.cabrillo.problems lists what the model refused, by QSO number; a QSO
+//   the contest's table cannot lay out is skipped and counted. ADIF_EXPORT: text: the file (ADIF 3: one record per QSO that can be written). fact.ham.export.last says what was written.
+#define FOXAPP_OP_QSO_ADD                0x8A0Au /* text / long text: the QSO as JSON */
+#define FOXAPP_OP_QSO_REMOVE             0x8A0Bu /* ival[0]: the QSO's number from 1 */
+#define FOXAPP_OP_QSO_CLEAR              0x8A0Cu
+#define FOXAPP_OP_CABRILLO_HEADER        0x8A0Du /* text / long text: the Cabrillo header as JSON */
+#define FOXAPP_OP_CABRILLO_EXPORT        0x8A0Eu /* text: the file to write */
+#define FOXAPP_OP_ADIF_EXPORT            0x8A0Fu /* text: the file to write */
+// wire-c end
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */
 #define FOXAPP_OP_USER_PRESET_FORGET_AT  0x8702u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */
@@ -326,17 +372,10 @@
 //   Facts (LOCAL): radio.<n>.gpufft = one JSON object {mode, engaged, backend ("cpu"/"gpu"), submitted, completed_gpu, completed_cpu, dropped_frames, device_lost, error}; gpu_fft.mode = the last mode asked for.
 //   Not reached by this operation: the spectrum BLOCK (SET_SPECTRUM, the large FFT sizes) - see the record.
 #define FOXAPP_OP_GPU_FFT_MODE           0x8918u /* ival[0]: 0 CPU / 1 Auto / 2 GPU; every open radio; facts radio.<n>.gpufft, gpu_fft.mode */
-//   THE EIGHT CURSORS AND THE FRAME LOG (SETTINGS; dsp/sigmeas_cursors.hpp, dsp/sigmeas_framelog.hpp through engine/wire_b_cursors.hpp), LOCAL sessions only, nothing written to disk. The engine keeps one
-//   CursorSet8 per radio (mode free / locked / harmonic, spacing, reference, eight frequencies from the CHANNEL CENTRE; not saved). CURSOR_SET (text: JSON; keys mode, spacing_hz, reference 1-8,
-//   range_low_hz + range_high_hz, set: [{"cursor": 1-8, "freq_hz": n}]) changes a copy and keeps it only when every part was accepted (else BAD_ARGUMENT naming the key; nothing changes).
-//   CURSOR_READ (JSON: duration_s, end_ago_s, search_hz, snap) reads the level under every cursor from the Welch spectrum of the newest span of the radio's channel I/Q and, with snap and in free mode, moves
-//   the cursors onto the peaks. CURSOR_MARKS (JSON: kind harmonic / sideband, base_hz or carrier_hz, spacing_hz, count, low_hz, high_hz, search_hz) lists harmonic or sideband marks with their levels.
-//   Facts radio.<n>.sigmeas.cursors (SET and READ) and radio.<n>.sigmeas.marks. FRAMELOG_CONFIG (ival[0]: -1 keep, 0 drop / 1 keep frames that FAILED their CRC; ival[1]: capacity 1..4096, 0 keep) and
-//   FRAMELOG_READ (ival[0]: 1 include the failed frames) work on the engine's one FRAME LOG: frames kept IN MEMORY ONLY with their CRC flag (no plugin call fills it yet: an ABI request); the fact framelog
-//   holds the frames as hex only when READ asks, LOCAL only.
-#define FOXAPP_OP_CURSOR_SET             0x8919u /* addresses one radio (target): text JSON; fact radio.<n>.sigmeas.cursors */
-#define FOXAPP_OP_CURSOR_READ            0x891Au /* addresses one radio (target): text JSON; fact radio.<n>.sigmeas.cursors */
-#define FOXAPP_OP_CURSOR_MARKS           0x891Bu /* addresses one radio (target): text JSON; fact radio.<n>.sigmeas.marks */
+//   THE FRAME LOG (SETTINGS; dsp/sigmeas_framelog.hpp through engine/wire_b_framelog.hpp), LOCAL sessions only, nothing written to disk. FRAMELOG_CONFIG (ival[0]: -1 keep, 0 drop / 1 keep
+//   frames that FAILED their CRC; ival[1]: capacity 1..4096, 0 keep) and FRAMELOG_READ (ival[0]: 1 include the failed frames) work on the engine's one FRAME LOG: frames kept IN MEMORY ONLY with their
+//   CRC flag (no plugin call fills it yet: an ABI request); the fact framelog holds the frames as hex only when READ asks, LOCAL only.
+//   0x8919-0x891B (the eight cursors, CURSOR_SET / READ / MARKS) were DROPPED in engine merge 3 (decision D2: no engine copies of the screen lane K traces); the numbers stay unused.
 #define FOXAPP_OP_FRAMELOG_CONFIG        0x891Cu /* ival[0]: -1 keep / 0 / 1 keep CRC-failed frames; ival[1]: capacity 1..4096 (0 keep) */
 #define FOXAPP_OP_FRAMELOG_READ          0x891Du /* ival[0]: 1 include CRC-failed frames; fact framelog */
 //   THE LIMIT MASK (SETTINGS; core/spectrum_mask.hpp, the rfmon lane limit lines with pass / fail, alarm and capture on breach), LOCAL sessions only. MASK_LOAD (text, long text: a "foxmask 1" file of
@@ -641,6 +680,10 @@
 
 #define FOXAPP_OP_FIRST 0x8000u
 #define FOXAPP_OP_LAST  0x8FFFu
+
+// wire-a begin
+#include "core/wire_a_ops.hpp"
+// wire-a end
 
 namespace cascade::core::cmd {
 

@@ -216,51 +216,6 @@ FoxCommandResult Engine::bitsOp(const FoxCommand& c, const std::string& text, Fo
     return res;
 }
 
-// --- sigmeas: the eight cursors and the marks (wire_b_cursors.hpp) ----------------------------------------------------------------------------------
-FoxCommandResult Engine::cursorOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed) {
-    wireb::Json params = wireb::Json::object();
-    if (!text.empty()) {
-        params = wireb::Json::parse(text, nullptr, false);
-        if (params.is_discarded() || !params.is_object()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the parameters are not a JSON object"); }
-    }
-    const wireb::CursorOp op = c.op == FOXAPP_OP_CURSOR_SET ? wireb::CursorOp::Set : c.op == FOXAPP_OP_CURSOR_READ ? wireb::CursorOp::Read : wireb::CursorOp::Marks;
-    std::vector<std::complex<float>> iq;
-    double rate = 0.0;
-    if (op != wireb::CursorOp::Set) {
-        wireb::SpanSpec span;
-        std::string why;
-        if (!wireb::spanOf(params, span, why)) { return refusal(res, FOXAPI_BAD_ARGUMENT, why); }
-        cascade::core::Pipeline& pl = rx().pipeline_;
-        rate = pl.channelRateHz();
-        if (!(rate > 0.0) || !pl.running()) { return refusal(res, FOXAPI_FAILED, "the radio is not running"); }
-        const std::size_t ago = static_cast<std::size_t>(std::ceil(span.endAgoS * rate));
-        const std::size_t len = std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil(span.durationS * rate)));
-        const std::size_t want = std::min(pl.scopeIq().capacity(), ago + len);
-        iq.resize(want);
-        const std::size_t got = pl.scopeIq().snapshot(iq.data(), want);
-        if (got == 0) { return refusal(res, FOXAPI_FAILED, "the radio tap holds no samples yet"); }
-        const std::size_t endCut = std::min(ago, got - 1);
-        const std::size_t used = std::min(len, got - endCut);
-        const std::size_t first = got - endCut - used;
-        iq = std::vector<std::complex<float>>(iq.begin() + static_cast<std::ptrdiff_t>(first), iq.begin() + static_cast<std::ptrdiff_t>(first + used));
-    }
-    const std::size_t slot = scopedSlot();
-    WireBState& w = wireBState();
-    const wireb::RunResult rr = wireb::cursorRun(op, w.cursors[slot < w.cursors.size() ? slot : 0], iq.empty() ? nullptr : iq.data(), iq.size(), rate, params);
-    if (!rr.ok) { return refusal(res, FOXAPI_BAD_ARGUMENT, rr.why); }
-    wireb::Json doc = wireb::Json::object();
-    doc["op"] = op == wireb::CursorOp::Marks ? "marks" : "cursors";
-    doc["radio"] = slot + 1u;
-    doc["valid"] = rr.valid;
-    doc["reason"] = rr.reason;
-    doc["result"] = rr.out;
-    w.facts["radio." + std::to_string(slot + 1u) + ".sigmeas." + (op == wireb::CursorOp::Marks ? "marks" : "cursors")] = doc.dump(-1, ' ', false, wireb::Json::error_handler_t::replace);
-    changed = true;
-    res.applied[0] = rr.valid ? 1.0 : 0.0;
-    if (!rr.valid) { std::snprintf(res.message, sizeof(res.message), "%s", rr.reason.c_str()); }
-    return res;
-}
-
 // --- net-map-models: the track store (core/track_store.hpp) --------------------------------------------------------------------------------------
 namespace {
 bool trackKindOf(std::uint32_t k, cascade::core::tracks::Kind& out) {
@@ -378,23 +333,24 @@ FoxCommandResult Engine::neededLibOp(const FoxCommand& c, const std::string& tex
     wireb::detail::Params q(p);
     std::string id, path;
     if (!q.word("id", id) || !q.word("path", path) || !q.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, q.error); }
-    std::vector<const wireb::NeededLibrary*> rows;
+    namespace nl = cascade::source::needed;
+    std::vector<const nl::Info*> rows;
     if (id.empty()) {
         if (!path.empty()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "a path goes with one library id"); }
-        for (const wireb::NeededLibrary& r : wireb::neededLibraries()) { rows.push_back(&r); }
+        for (const nl::Info& r : nl::neededTable()) { rows.push_back(&r); }
     } else {
-        const wireb::NeededLibrary* r = wireb::findNeededLibrary(id);
+        const nl::Info* r = nl::findNeeded(id);
         if (r == nullptr) { return refusal(res, FOXAPI_BAD_ARGUMENT, "no such library id"); }
-        if (!path.empty() && r->kind != wireb::NeededKind::VendorLibrary) { return refusal(res, FOXAPI_BAD_ARGUMENT, "a file you pick is judged for a vendor library only"); }
+        if (!path.empty() && r->kind != nl::Kind::LibraryFile) { return refusal(res, FOXAPI_BAD_ARGUMENT, "a file you pick is judged for a library file only"); }
         rows.push_back(r);
     }
-    for (const wireb::NeededLibrary* r : rows) { w.neededChecks[r->libraryId] = wireb::recheckNeeded(*r, path, w.neededEnv).dump(-1, ' ', false, wireb::Json::error_handler_t::replace); }
-    std::int64_t found = 0;
-    for (const wireb::NeededLibrary& r : wireb::neededLibraries()) {
+    for (const nl::Info* r : rows) { w.neededChecks[r->libraryId] = wireb::checkToJson(nl::runCheck(*r, path, w.neededEnv)).dump(-1, ' ', false, wireb::Json::error_handler_t::replace); }
+    std::int64_t found = 0;   // rows whose last check says "working"
+    for (const nl::Info& r : nl::neededTable()) {
         const auto it = w.neededChecks.find(r.libraryId);
         if (it == w.neededChecks.end()) { continue; }
         const wireb::Json j = wireb::Json::parse(it->second, nullptr, false);
-        if (j.is_object() && j.value("state", std::string()) == "found") { ++found; }
+        if (j.is_object() && j.value("state", std::string()) == nl::stateWord(nl::State::Working)) { ++found; }
     }
     res.applied[0] = static_cast<double>(found);
     changed = true;
@@ -791,14 +747,37 @@ FoxCommandResult Engine::sweepOp(const FoxCommand& c, const std::string& text, F
     switch (c.op) {
         case FOXAPP_OP_SWEEP_OPEN: {
             std::string kind = "tinysa", port, serial;
-            double startMhz = 0.0, stopMhz = 0.0, interval = 0.0, stepMhz = 10.0, lna = 16.0, vga = 16.0, rateMsps = 20.0;
+            double startMhz = 0.0, stopMhz = 0.0, interval = 0.0, stepMhz = 10.0, lna = 16.0, vga = 16.0, rateMsps = 20.0, baud = 500000.0, topDbm = -10.0, bottomDbm = -120.0;
             std::size_t points = 450, fft = 1024;
             bool amp = false;
             if (!q.word("kind", kind) || !q.word("port", port) || !q.word("serial", serial) || !q.number("start_mhz", startMhz, 0.0, 1e6) || !q.number("stop_mhz", stopMhz, 0.0, 1e6) ||
                 !q.count("points", points, 2, 1048576) || !q.number("interval_ms", interval, 0.0, 60000.0) || !q.number("step_mhz", stepMhz, 1.0, 20.0) || !q.number("lna_db", lna, 0.0, 40.0) ||
-                !q.number("vga_db", vga, 0.0, 62.0) || !q.flag("amp", amp) || !q.number("sample_rate_msps", rateMsps, 2.0, 20.0) || !q.count("fft_size", fft, 32, 65536) || !q.finish()) {
+                !q.number("vga_db", vga, 0.0, 62.0) || !q.flag("amp", amp) || !q.number("sample_rate_msps", rateMsps, 2.0, 20.0) || !q.count("fft_size", fft, 32, 65536) ||
+                !q.number("baud", baud, 1.0, 5e6) || !q.number("top_dbm", topDbm, -500.0, 0.0) || !q.number("bottom_dbm", bottomDbm, -500.0, 0.0) || !q.finish()) {
                 return refusal(res, FOXAPI_BAD_ARGUMENT, q.error);
             }
+            if (kind == "rfexplorer") {
+                // An RF Explorer spectrum analyser over a COM port (radio-bridges): whole kHz, the display's top and bottom in dBm; the device's own number of points. The device limits the range and span.
+                if (!serial.empty() || p.contains("points") || p.contains("interval_ms") || p.contains("step_mhz") || p.contains("lna_db") || p.contains("vga_db") || p.contains("amp") || p.contains("sample_rate_msps") || p.contains("fft_size")) {
+                    return refusal(res, FOXAPI_BAD_ARGUMENT, "an RF Explorer takes port, baud, start_mhz, stop_mhz, top_dbm and bottom_dbm only");
+                }
+                if (!cascade::source::tinysa::isValidComPortName(port)) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"port\" is a COM port name, COM1 to COM256"); }
+                if (baud != std::floor(baud) || !cascade::source::rfexplorer::isSupportedBaud(static_cast<int>(baud))) {
+                    return refusal(res, FOXAPI_BAD_ARGUMENT, "\"baud\" is one of 500000, 115200, 57600, 38400, 19200, 9600, 4800, 2400, 1200");
+                }
+                const double startHz = std::round(startMhz * 1e3) * 1e3, stopHz = std::round(stopMhz * 1e3) * 1e3;
+                if (!(stopHz > startHz) || startHz < 1000.0) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the stop frequency must be above the start frequency (whole kHz, from 1 kHz)"); }
+                if (!(bottomDbm < topDbm)) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"bottom_dbm\" must be below \"top_dbm\""); }
+                if (w.sweep.running()) { return refusal(res, FOXAPI_BUSY, "a sweep device is open already"); }
+                std::string why;
+                if (!w.sweep.startRfe(w.rfeFactory, port, static_cast<int>(baud), startHz, stopHz, static_cast<int>(std::lround(topDbm)), static_cast<int>(std::lround(bottomDbm)), why)) {
+                    return refusal(res, FOXAPI_FAILED, why);
+                }
+                cascade::core::diagLogf("sweep: opened an RF Explorer sweep device");
+                changed = true;
+                break;
+            }
+            if (p.contains("baud") || p.contains("top_dbm") || p.contains("bottom_dbm")) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"baud\", \"top_dbm\" and \"bottom_dbm\" are for the RF Explorer"); }
             if (kind == "hackrf") {
                 // A HackRF in sweep mode (receive only): ONE range of whole MHz, 1 to 6000, LINEAR style; a USB radio has no port name.
                 if (!port.empty()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "a HackRF has no port: use serial to pick one of several"); }
@@ -824,7 +803,7 @@ FoxCommandResult Engine::sweepOp(const FoxCommand& c, const std::string& text, F
                 break;
             }
             if (!serial.empty()) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"serial\" is for a HackRF"); }
-            if (kind != "tinysa" && kind != "tinysa_ultra") { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"kind\" is tinysa, tinysa_ultra or hackrf"); }
+            if (kind != "tinysa" && kind != "tinysa_ultra") { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"kind\" is tinysa, tinysa_ultra, hackrf or rfexplorer"); }
             if (!cascade::source::tinysa::isValidComPortName(port)) { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"port\" is a COM port name, COM1 to COM256"); }
             if (!(stopMhz > startMhz)) { return refusal(res, FOXAPI_BAD_ARGUMENT, "the stop frequency must be above the start frequency"); }
             if (w.sweep.running()) { return refusal(res, FOXAPI_BUSY, "a sweep device is open already"); }
@@ -960,11 +939,6 @@ FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text
             changed = true;
             break;
         }
-        case FOXAPP_OP_CURSOR_SET:
-        case FOXAPP_OP_CURSOR_READ:
-        case FOXAPP_OP_CURSOR_MARKS:
-            res = cursorOp(c, text, res, changed);
-            break;
         case FOXAPP_OP_IQ_OUT_START:
         case FOXAPP_OP_IQ_OUT_STOP:
             res = iqOutOp(c, text, res, changed);
@@ -1181,7 +1155,7 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
         std::unique_lock<std::mutex> nlk;
         if (wireB_ != nullptr) { nlk = std::unique_lock<std::mutex>(wireB_->mutex); }
         wireb::Json rows = wireb::Json::array();
-        for (const wireb::NeededLibrary& r : wireb::neededLibraries()) {
+        for (const cascade::source::needed::Info& r : cascade::source::needed::neededTable()) {
             const bool have = wireB_ != nullptr && wireB_->neededChecks.find(r.libraryId) != wireB_->neededChecks.end();
             rows.push_back(wireb::neededToJson(r, have ? wireb::Json::parse(wireB_->neededChecks[r.libraryId], nullptr, false) : wireb::Json()));
         }

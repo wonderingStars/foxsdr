@@ -1685,13 +1685,37 @@ set(CASCADE_GUI_TESTS
 #  * packaging_openapi_routes: docs/api/openapi.yaml against the web server's source, so the file cannot rot (needs Python 3).
 # The SDK template under sdk/ has its own CMake project and is built by hand (sdk/README.md).
 find_program(CASCADE_TEST_PWSH NAMES pwsh)
+# wire-c begin: the WindowsApps pwsh.exe is an app-execution alias that can answer "found" and then fail to start from some environments
+# (the engine-merge lanes saw it): ask it a question first, and when it cannot answer register the test as a visible SKIP (exit 77), never silently absent.
 if(CASCADE_TEST_PWSH)
+    execute_process(COMMAND ${CASCADE_TEST_PWSH} -NoProfile -Command "exit 0" RESULT_VARIABLE CASCADE_TEST_PWSH_RC OUTPUT_QUIET ERROR_QUIET TIMEOUT 60)
+    if(NOT CASCADE_TEST_PWSH_RC EQUAL 0)
+        message(STATUS "pwsh (${CASCADE_TEST_PWSH}) does not run here: packaging_manifests will report SKIP")
+        set(CASCADE_TEST_PWSH_RUNS FALSE)
+    else()
+        set(CASCADE_TEST_PWSH_RUNS TRUE)
+    endif()
+endif()
+# wire-c end
+if(CASCADE_TEST_PWSH AND CASCADE_TEST_PWSH_RUNS)
     add_test(NAME packaging_manifests
         COMMAND ${CASCADE_TEST_PWSH} -NoProfile -File ${CMAKE_SOURCE_DIR}/tests/packaging/test_package_manifests.ps1)
     set_tests_properties(packaging_manifests PROPERTIES TIMEOUT 600)
 else()
-    message(STATUS "no pwsh (PowerShell 7): packaging_manifests is not registered")
+    # wire-c begin
+    message(STATUS "no usable pwsh (PowerShell 7): packaging_manifests reports SKIP")
+    add_test(NAME packaging_manifests
+        COMMAND ${CMAKE_COMMAND} -E echo "SKIP packaging_manifests: PowerShell 7 (pwsh) is not usable on this PC; run tests/packaging/test_package_manifests.ps1 with it")
+    set_tests_properties(packaging_manifests PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP packaging_manifests")
+    # wire-c end
 endif()
+# wire-c begin: the release script's package-manifests step, fake-only (no generator run, nothing published)
+if(CASCADE_TEST_PWSH AND CASCADE_TEST_PWSH_RUNS)
+    add_test(NAME release_package_step
+        COMMAND ${CASCADE_TEST_PWSH} -NoProfile -File ${CMAKE_SOURCE_DIR}/tests/test_release_packaging_step.ps1)
+    set_tests_properties(release_package_step PROPERTIES TIMEOUT 300)
+endif()
+# wire-c end
 find_program(CASCADE_TEST_PYTHON NAMES python3 python)
 if(CASCADE_TEST_PYTHON)
     add_test(NAME packaging_openapi_routes
@@ -1699,6 +1723,31 @@ if(CASCADE_TEST_PYTHON)
     set_tests_properties(packaging_openapi_routes PROPERTIES TIMEOUT 120)
 else()
     message(STATUS "no python: packaging_openapi_routes is not registered")
+endif()
+
+# wire-c begin: wiring lane C's test settings in ONE block (each item appends its own lines inside it)
+foreach(_t IN ITEMS test_wire_c_portable test_wire_c_updater)
+    if(TARGET ${_t})
+        target_compile_definitions(${_t} PRIVATE WIRE_C_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    endif()
+endforeach()
+if(TARGET test_wire_c_portable)
+    add_dependencies(test_wire_c_portable foxsdr-engine)   # (the end-to-end half runs a copy of the real engine program)
+endif()
+# wire-c end
+
+# THE DESKTOP GUARD (engine fixes 4, item 3; tests/gui_desktop_guard.hpp says why). A gui-labelled test opens a window on the desktop its process runs on; nothing in the
+# test runners creates or switches a desktop. So every gui test REQUIRES the CTest fixture `gui_desktop`, whose setup test `gui_desktop_guard` fails (one line, no window, no
+# dialog) when the process runs on the visible desktop, and ctest then does not start the gui tests (they are counted as not run = failed). FOXSDR_ALLOW_VISIBLE_GUI_TESTS=1
+# is the override. src/slint/CMakeLists.txt gives the same property to its gui tests; the loop below asserts it for the ones registered here.
+add_executable(gui_desktop_guard gui_desktop_guard.cpp)
+target_compile_features(gui_desktop_guard PRIVATE cxx_std_20)
+add_test(NAME gui_desktop_guard COMMAND gui_desktop_guard)
+set_tests_properties(gui_desktop_guard PROPERTIES FIXTURES_SETUP gui_desktop TIMEOUT 30)
+list(APPEND CASCADE_GUI_TESTS gui_desktop_guard)
+if(TARGET test_gui_desktop_guard)
+    target_compile_definitions(test_gui_desktop_guard PRIVATE GUI_GUARD_EXE="$<TARGET_FILE:gui_desktop_guard>")
+    add_dependencies(test_gui_desktop_guard gui_desktop_guard)
 endif()
 
 # Label APPENDED, not set: the sanitizer and TSan passes above put their own
@@ -1714,6 +1763,9 @@ endforeach()
 foreach(t ${_cascade_registered_tests})
     if(t IN_LIST CASCADE_GUI_TESTS)
         set_property(TEST ${t} APPEND PROPERTY LABELS gui)
+        if(NOT t STREQUAL "gui_desktop_guard")
+            set_property(TEST ${t} APPEND PROPERTY FIXTURES_REQUIRED gui_desktop)
+        endif()
     else()
         set_property(TEST ${t} APPEND PROPERTY LABELS headless)
     endif()
@@ -1794,3 +1846,25 @@ if(WIN32)
         endif()
     endforeach()
 endif()
+
+# radio-bridges begin ---------------------------------------------------------------------------------------------------------------------------
+# A stand-in ftd2xx.dll (written from FTDI's published D2XX programmer's guide) for test_sdriq_d2xx, beside the other stand-in vendor libraries.
+if(WIN32)
+    set(_rb_dir "${CMAKE_CURRENT_BINARY_DIR}/fixture_osslibs")
+    add_library(rb_ftd2xx_standin MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ftd2xx_standin.cpp")
+    target_include_directories(rb_ftd2xx_standin PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    set_target_properties(rb_ftd2xx_standin PROPERTIES PREFIX "" OUTPUT_NAME "ftd2xx"
+        LIBRARY_OUTPUT_DIRECTORY "${_rb_dir}/$<CONFIG>" RUNTIME_OUTPUT_DIRECTORY "${_rb_dir}/$<CONFIG>")
+    foreach(_rb_t test_sdriq_d2xx test_engine_api_wireb_ftdi)   # (the second: the ftdi-d2xx row of the one needed-library table, through the engine; engine fixes 4)
+        if(TARGET ${_rb_t})
+            target_compile_definitions(${_rb_t} PRIVATE EOL_SRC_DIR="${CMAKE_SOURCE_DIR}")
+            add_dependencies(${_rb_t} rb_ftd2xx_standin eol_partial_standin eol_needs_dep)
+        endif()
+    endforeach()
+endif()
+if(WIN32)
+    if(TARGET test_rfexplorer_source)
+        target_compile_definitions(test_rfexplorer_source PRIVATE RB_SRC_DIR="${CMAKE_SOURCE_DIR}")
+    endif()
+endif()
+# radio-bridges end -----------------------------------------------------------------------------------------------------------------------------

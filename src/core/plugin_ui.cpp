@@ -604,6 +604,12 @@ std::int32_t l1PostEvent(void* ctx, const CascadeEvent* e) {
 std::int32_t l1ReadEvents(void* ctx, std::uint64_t afterSeq, CascadeEvent* out, std::uint32_t cap) {
     return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.readEvents(c, afterSeq, out, cap); });
 }
+std::int32_t l1RecorderStart(void* ctx, const char* label) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.recorderRequest(c, true, label); });
+}
+std::int32_t l1RecorderStop(void* ctx) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.recorderRequest(c, false, nullptr); });
+}
 std::uint64_t l1EventsSeq(void* ctx) {
     // No CASCADE_API_* channel on this signature (as l1SettingsSeq): an unattached or unknown ctx reads as "nothing yet".
     try {
@@ -690,6 +696,8 @@ void fillLevel1(HostCtx& c) {
     t.post_event = &l1PostEvent;
     t.read_events = &l1ReadEvents;
     t.events_seq = &l1EventsSeq;
+    t.recorder_start = &l1RecorderStart;   // wire-c
+    t.recorder_stop = &l1RecorderStop;     // wire-c
 }
 
 }  // namespace

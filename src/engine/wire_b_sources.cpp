@@ -18,6 +18,7 @@
 #include "source/hpsdr2_source.hpp"
 #include "source/icr8600_source.hpp"
 #include "source/sdrconnect_source.hpp"
+#include "source/sdriq_source.hpp"
 #include "source/soapy_remote_source.hpp"
 #include "source/spyserver_source.hpp"
 
@@ -46,6 +47,7 @@ const SourceKind kTable[] = {
     {"funcube", "FUNcube Dongle Pro / Pro+", false, 192000.0, &makeOne<src::FuncubeSource>},
     {"g39ddc", "WiNRADiO G39DDC (vendor library)", false, 192000.0, &makeOne<src::G39DdcSource>},
     {"g33ddc", "WiNRADiO G33DDC (vendor library)", false, 192000.0, &makeOne<src::G33DdcSource>},
+    {"sdriq", "RFspace SDR-IQ (USB; needs FTDI's D2XX driver)", false, 196078.0, &makeOne<src::SdriqSource>},   // radio-bridges (engine merge 3)
 };
 
 bool hasControlChar(const std::string& s) {

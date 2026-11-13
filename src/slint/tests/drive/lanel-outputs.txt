@@ -1,0 +1,46 @@
+#! frames=1000 size=1600x6000 bank=4 sections=4:21
+# lanel-outputs (screen lane L, docs/multi-radio-records/screen-l.md; rows B15 to B19): the Outputs and tracks section against the real engine: a follower of a master (a second generator radio), the network I/Q out and the SBS output (loopback only, started and stopped), the track store and the coverage grid (OFF until ticked; the coverage grid needs the person's own position).
+10 state running == 1
++1 radio add 2
++20 state workspace.radios == 2
++3 state ll.rows.outputs > 30
+# B16: radio 2 follows radio 1 and keeps the distance it had; the matrix says so; stopping ends it
++1 click "Follow a master"
++15 state ll.note.outputs contains "Follow a master: done"
+state ll.fact.matrix.rows contains "\"follows\":1"
++1 click "Lock follower"
++15 state ll.fact.matrix.rows contains "\"locked\":true"
++1 click "Unlock follower"
++15 state ll.fact.matrix.rows contains "\"locked\":false"
++1 shot "lanel-outputs.png"
++1 click "Stop following"
++15 state ll.note.outputs contains "Stop following: done"
+# B15: the network I/Q out binds this computer only; it starts and stops
++1 click "Start the I/Q output"
++20 state ll.note.outputs contains "Network I/Q out: done"
+state ll.fact.radio.1.iqout contains "\"running\":true"
++1 click "Stop the I/Q output"
++15 state ll.note.outputs contains "Stop the I/Q output: done"
+# B17
++1 click "Start the SBS output"
++20 state ll.note.outputs contains "SBS output: done"
+state ll.fact.sbs.out contains "\"running\":true"
++1 click "Stop the SBS output"
++15 state ll.note.outputs contains "Stop the SBS output: done"
+# B18: nothing exists until it is ticked (the engine publishes no state), and switching it off drops what it held
++1 state ll.fact.tracks.state == ""
++1 click "Keep tracks"
++15 state ll.fact.tracks.state contains "\"enabled\":true"
++1 click "Keep tracks"
++15 state ll.fact.tracks.state == ""
+# B19: the grid cannot be switched on without the person's own position; with it, it can
++1 click "Coverage grid"
++6 state ll.note.outputs contains "Coverage grid: Your latitude"
++1 type "Your latitude" "51.5"
++1 key enter
++1 type "Your longitude" "-0.1"
++1 key enter
++2 click "Coverage grid"
++15 state ll.fact.coverage.state contains "\"enabled\":true"
++1 click "Coverage grid"
++15 state ll.fact.coverage.state == ""

@@ -1,0 +1,14 @@
+{
+  "name": "foxsdr-links",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "FoxSDR link registry Worker: serves the list of libraries a user may need to install, and checks every address daily. No dependencies: the tests use node --test.",
+  "scripts": {
+    "validate": "node tools/validate.mjs",
+    "build": "node tools/build-bundle.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
+    "predeploy": "node tools/predeploy.mjs",
+    "deploy": "node tools/predeploy.mjs && npx wrangler deploy"
+  }
+}
