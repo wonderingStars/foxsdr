@@ -67,10 +67,10 @@ item (the section is named in brackets).
 ### PENDING MERGE: new and updated decoder plugins (branches oss/aero, dvbs2drm, files, hfmodes, misc, pictures, remoteid, signalling, tables, voice)
 
 - **EXPERIMENTAL, generated signals or stand-in programs only:** UAT 978 MHz, DVB-S2, DRM+ mode E, the ACARS, VDL Mode 2 and
-  HFDL payload layers, the new selcall sets, ARQ-E, PACTOR identification, Falcon 9 legacy recordings, KG-STV, more
+  HFDL payload layers, the new selcall sets, ARQ-E, PACTOR identification (a detector of the Signal identifier), Falcon 9 legacy recordings, KG-STV (a mode of the SSTV decoder), more
   radiosonde types, C-QUAM AM stereo, Bluetooth LE Coded PHY and Remote ID, P25 trunk following, Tait CCDI monitoring, the
   half-rate and D-STAR voice of the DMR and D-STAR Monitor, Rig link and the Call uploader.
-- Z-Wave (40 and 100 kbit/s) has been seen in one real recording; Bluetooth LE 1M met three real recordings.
+- Z-Wave (40 and 100 kbit/s; a protocol of Short-Range Frames) has been seen in one real recording; Bluetooth LE 1M met three real recordings.
   [New and updated decoder plugins]
 - Still unsettled: two lanes both call the ADS-B decoder 1.12.0.
 

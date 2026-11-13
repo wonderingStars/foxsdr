@@ -2550,17 +2550,17 @@ with is not known.
 | **Rig link 0.1.0** | Follows DXLab Commander or N1MM+ and tunes FoxSDR to the logger's frequency; can send FoxSDR's frequency back. Needs the TUNE grant, and the SETTINGS grant for the mode. | Everything off; labels include **Follow DXLab Commander**, **Follow N1MM+ (UDP on this PC)**, **N1MM+ broadcast port (UDP)** (12060), **Send FoxSDR's frequency to Commander**, **Mark the logger's frequency**. | **Experimental**: tested against stand-ins only; never against the real logging programs. |
 | **UK CB channels 0.1.0** | Presets for five UK CB channels (27 and 81 MHz). | None. | The channel table could not be checked at its source. |
 | **DX spots 0.4.1, Demod Analyzer 0.3.1, Meteor ping 0.1.1, Touchstone viewer 0.2.0, RF measurements 0.1.1** | Reverse Beacon Network comment parsing; reading the `auxi` and `inf1` chunks of an I/Q file for its frequency and time; the RMOB month table; NanoVNA import from a saved capture (no serial link); the equivalent noise bandwidth of the window. | None new. | Tests and a few real lines or files only; a real NanoVNA was never used. |
-| **CCIR selcall 0.2.0, HF ARQ decoder 0.2.0, HF modem identifier 0.2.0, GSC decoder 0.2.0, PACTOR monitor 0.1.0** | More selcall tone sets (CCIR, EEA, EIA, ZVEI-1 to 3, DZVEI, PZVEI); ARQ-E; the tone header of a MIL-STD-188-110A hybrid waveform; Golay Sequential Code paging; and **identification only** of PACTOR-II and PACTOR-III (no payload). | `ccir.set` (1 to 8, 1 = CCIR); `hfarq.mode`; `known_words`; `pactor.details` (off). | **Experimental**: generated signals only; no PACTOR recording exists. |
+| **CCIR selcall 0.2.0, HF ARQ decoder 0.2.0, Signal identifier (the HF modem identifier, STANAG 4285 and PACTOR monitor detectors), GSC decoder 0.2.0** | More selcall tone sets (CCIR, EEA, EIA, ZVEI-1 to 3, DZVEI, PZVEI); ARQ-E; the tone header of a MIL-STD-188-110A hybrid waveform; Golay Sequential Code paging; and **identification only** of PACTOR-II and PACTOR-III (no payload). | `ccir.set` (1 to 8, 1 = CCIR); `hfarq.mode`; `known_words`; in Signal identifier, the ticks **Detector: HF Modem Identifier** (on), **Detector: STANAG 4285** (on) and **Detector: PACTOR Monitor** (on), and `pactor.details` (**PACTOR: show measurements**, off). The PACTOR monitor and the HF modem identifier are no longer plugins of their own. | **Experimental**: generated signals only; no PACTOR recording exists. |
 | **Falcon 9 legacy 0.1.0** | Decodes **recordings** of the stage-2 S-band downlink made before April 2021, when it was reported to have become encrypted; it cannot be pointed at today's signal. Holds no key. | **Show debug-log text** (on); **Video file (MPEG-TS)** (empty = off). | **Experimental**: generated signals only. |
 | **Call uploader 0.1.0** | Uploads finished call recordings from a folder to **your own** Rdio Scanner server. | Off; no address built in. **Upload calls**, **Folder to watch**, **Rdio Scanner address (http://)**, **Plain http to private LAN**, **Server API key**. | **Experimental**: tested only against a stand-in server. See the warning in [Decoder plugins and the network](#decoder-plugins-and-the-network). |
-| **EnOcean 0.2.0** | Shows the equipment profile name for a telegram (names only; data bytes stay raw). | **Equipment profile (name shown)**, empty. | Tests only. |
+| **Short-Range Frames (EnOcean, Zigbee / 802.15.4, nRF24, Z-Wave)** (EnOcean is no longer a plugin of its own) | EnOcean: shows the equipment profile name for a telegram (names only; data bytes stay raw). Choose the protocol with the **Protocol EnOcean/Zigbee/nRF/ZW** setting: `enocean`, `zigbee` or `802.15.4`, `nrf24` or `zwave`; blank picks it from the tuned band (868.3 MHz is EnOcean). | **Equipment profile (name shown)**, empty. | Tests only. |
 | **Map imagery 1.3.0** | Named tile presets: OpenStreetMap, OpenTopoMap, NASA GIBS, CARTO Voyager, Positron and Dark Matter. | `presets=` in `openmaptiles.conf` (none by default); **Map key (your own API key)**. CARTO presets need **your own** key, which FoxSDR never ships. | Tests only; no outside connection was made. |
 | **LRPT 0.4.0** | Adds Meteor-M 80k interleaved to the 72k and plain 80k it had. | `interleaved-80k` in `lrpt.cfg`, yes by default. | 80k: **experimental**, generated only. The 72k path still decodes the real recording it always did. |
-| **KG-STV decoder 0.1.0** | Receives the KG-STV amateur image and text mode. Sends nothing; text and callsigns are kept nowhere. | No settings. | **Experimental**: generated signals only; the program's author says full compatibility is not yet established. |
+| **SSTV and KG-STV Image Decoder** (KG-STV is no longer a plugin of its own) | Receives the KG-STV amateur image and text mode. Sends nothing; text and callsigns are kept nowhere. Choose it with the **Force mode** setting of the SSTV decoder, value `KG-STV`. | **Force mode** (`KG-STV` for this mode). | **Experimental**: generated signals only; the program's author says full compatibility is not yet established. |
 | **Radiosonde decoder 0.3.0** | Adds Meteomodem M10 and M20, Meisei iMS-100 and RS-11G, Graw DFM and InterMet iMet-4. | None new. | **Experimental**: generated signals only; the DFM scaling was checked against 19 telemetry lines printed in a thesis. |
 | **C-QUAM stereo 0.1.0** | Decodes AM stereo; stereo audio through the host. | None. | **Experimental**: generated signals only. |
 | **Bluetooth LE advertising 0.4.0** | LE Coded PHY (long range) packets and Bluetooth 5 extended advertising, and the Remote ID packs inside them, shown with identifiers hidden. | **Long-range (Coded PHY) receive** (on), **Decode long-range packets** (on), **Scan secondary channels** (off: about three times the CPU). | Coded PHY and Remote ID: **experimental**, generated only. The ordinary LE 1M path met three real recordings (1,782 advertising packets, no Remote ID because no drone was near). Wi-Fi Remote ID is not built. |
-| **Z-Wave monitor 0.1.0** | Z-Wave 868 MHz (EU), 9.6, 40 and 100 kbit/s, one line a frame. Nothing is decrypted; the payload is not shown. | **Hide network and device IDs** (on); a preset at 869.1 MHz, 2 MS/s. | 40 and 100 kbit/s: one real 300 s recording gave 15 valid frames. 9.6 kbit/s: **experimental**. |
+| **Short-Range Frames, Z-Wave** (Z-Wave is no longer a plugin of its own) | Z-Wave 868 MHz (EU), 9.6, 40 and 100 kbit/s, one line a frame. Nothing is decrypted; the payload is not shown. Choose it with the **Protocol EnOcean/Zigbee/nRF/ZW** setting, value `zwave` (or blank while tuned to 868.7 to 869.9 MHz). | **Z-Wave: hide network/device IDs** (on); the preset **Z-Wave EU 869.1 MHz (R1 R2 R3)**. | 40 and 100 kbit/s: one real 300 s recording gave 15 valid frames. 9.6 kbit/s: **experimental**. |
 | **P25 trunk follower 0.1.0** | Follows a Phase 1 control channel and, only when you switch following on, tunes to the talkgroups you list. Encrypted, data and unit-to-unit calls are never followed; unit addresses are never printed. Needs the TUNE grant. | **Follow talkgroups** (off), **Talkgroups to follow**, **Control channel (MHz)**, **Only this NAC (decimal)**, **Hold after last frame (s)** (3), **Longest call to stay on (s)** (120). | **Experimental**: no off-air P25 recording. Phase 2 and recording per talkgroup are not built. |
 | **Tait CCDI monitor 0.1.0** | A read-only monitor of a Tait radio's CCDI link, from a log file or a COM port opened read-only. | **CCDI source (file or COMn)**, empty = off; **CCDI baud (COM only)** (28800). | Not verified: no radio and no real capture. |
 | **M17 0.1.1, packet TNC 0.2.1** | M17 end-of-transmission and restart handling; FX.25 with four Reed-Solomon conventions. | None new. | Generated signals and one published worked example. |
@@ -2583,7 +2583,7 @@ encrypted unless it says so.*
 * **Rig link** (pending merge). Connects to DXLab Commander on 127.0.0.1 and listens for N1MM+'s UDP broadcast on 127.0.0.1
   only, so nothing leaves this machine. Port 12060 is also the DX-spots logger-feed default: both bind it exclusively, so one
   must change port.
-* **CW skimmer** (a plugin lane, not merged). An optional spot server that sends DX-cluster-style spot lines to a logging
+* **CW skimmer** (a view of the Morse (CW) decoder, plugin lane, not merged; pick it with the setting **Skimmer**, `cwskim.view`). An optional spot server that sends DX-cluster-style spot lines to a logging
   program: off by default, 127.0.0.1 port 7300. When **Spot server address** is changed so that it is reachable from other
   computers the host log warns that it is. It sends nothing to any outside service. No real logging program has been tried
   with it.
@@ -2638,24 +2638,24 @@ never decoded a real signal may decode nothing on air.
 | radio-email (Winlink-compatible) | Stand-in server only | EXPERIMENTAL |
 | cw-decoder (Morse) | Some real recordings were used; the newer parts are generated signals only | not marked |
 | rtty-decoder (RTTY) | Some real recordings were used; the newer parts are generated signals only | not marked |
-| cw-skimmer (CW Skimmer) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| cw-decoder, Skimmer view (the former cw-skimmer; pick it with the setting "Skimmer", `cwskim.view`, or the View key on the panel) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
 | ft8-decoder (FT8, +FT4) | FT8: real off-air decodes (a real 28.074 MHz recording). FT4: synthetic signals only | not marked |
-| psk31-decoder (PSK31/63/125) | Generated signals only | EXPERIMENTAL |
-| wspr-decoder (WSPR) | Generated signals only; one real 10 m recording gave no decodes | EXPERIMENTAL |
-| jt65-decoder (JT65) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| hf-keyboard-modes, PSK mode (the former psk31-decoder; Mode 1, `hfkb.mode`, the default; PSK31/63/125) | Generated signals only | EXPERIMENTAL |
+| ft8-decoder, WSPR mode (the former wspr-decoder; mode field `wspr`) | Generated signals only; one real 10 m recording gave no decodes | EXPERIMENTAL |
+| ft8-decoder, JT65 mode (the former jt65-decoder; mode field `jt65`) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
 | m17-decoder (M17, no voice) | Generated signals only | EXPERIMENTAL |
 | dtmf-decoder (DTMF) | Generated signals only | EXPERIMENTAL |
-| olivia-decoder (Olivia, MFSK16) | Generated signals only | EXPERIMENTAL |
-| dominoex-decoder | Generated signals only | EXPERIMENTAL |
+| hf-keyboard-modes, Olivia and MFSK16 modes (the former olivia-decoder; Mode 2 is Olivia, Mode 3 is MFSK16) | Generated signals only | EXPERIMENTAL |
+| hf-keyboard-modes, DominoEX mode (the former dominoex-decoder; Mode 4) | Generated signals only | EXPERIMENTAL |
 | feld-hell (Feld-Hell, picture) | Generated signals only | EXPERIMENTAL |
 | timesig-decoder (time signals) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
 | ccir-selcall | Generated signals only | EXPERIMENTAL |
-| sitora-decoder (SITOR-A) | Generated signals only | EXPERIMENTAL |
+| hfarq-decoder, SITOR-A mode (the former sitora-decoder; Mode setting 7, `hfarq.mode`) | Generated signals only | EXPERIMENTAL |
 | synop-decoder | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
 | ale-decoder (ALE 2G) | Generated signals only | EXPERIMENTAL |
 | hfarq-decoder (ARQ-M2/M4, E3, G-TOR, Twinplex) | Generated signals only | EXPERIMENTAL |
-| hf-modem-id (MIL-STD-188-110C ID only) | Generated signals only | EXPERIMENTAL |
-| stanag4285-id | Generated signals only | EXPERIMENTAL |
+| signal-identifier, HF modem identifier detector (the former hf-modem-id; MIL-STD-188-110C ID only; tick "Detector: HF Modem Identifier", on by default) | Generated signals only | EXPERIMENTAL |
+| signal-identifier, STANAG 4285 detector (the former stanag4285-id; tick "Detector: STANAG 4285", on by default) | Generated signals only | EXPERIMENTAL |
 | pocsag-decoder (POCSAG) | Some real recordings were used; the newer parts are generated signals only | not marked |
 | flex-decoder (FLEX) | Some real recordings were used; the newer parts are generated signals only | not marked |
 | eas-decoder (EAS/SAME) | Some real recordings were used; the newer parts are generated signals only | not marked |
@@ -2665,18 +2665,20 @@ never decoded a real signal may decode nothing on air.
 | mpt1327-monitor | Generated signals only | EXPERIMENTAL |
 | dmr-monitor (DMR, D-STAR, Fusion, dPMR; signalling only) | Generated signals only | EXPERIMENTAL |
 | tetra-decoder (TETRA, signalling only) | Generated signals only | not marked, although the evidence is generated signals only |
-| x10rf-decoder | Generated signals only | EXPERIMENTAL |
+| weather-decoder, X10 RF remote (the former x10rf-decoder; tick "X10 RF Remote Decoder", `x10rf.on`) | Generated signals only | EXPERIMENTAL |
 | fmsfsk-decoder (FMS) | Generated signals only | EXPERIMENTAL |
 | clipfsk-decoder (Caller ID) | Generated signals only | EXPERIMENTAL |
-| remote-monitor (keyless remotes) | Generated signals only | EXPERIMENTAL |
+| weather-decoder, Remote Monitor (the former remote-monitor; keyless remotes; tick "Remote Monitor (key fobs)", `rcmon.on`, which unticks at every start) | Generated signals only | EXPERIMENTAL |
 | lora-monitor (LoRa, Meshtastic header) | Generated signals only | EXPERIMENTAL |
-| enocean-monitor | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
+| short-range-frames, EnOcean protocol (the former enocean-monitor; Protocol `enocean`, or blank at 868.3 MHz) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
 | ble-advertising (BLE + Remote ID) | Generated signals only | EXPERIMENTAL |
-| wifi-occupancy / lte-cell-search / gsm-broadcast / ieee802154-frames | Generated signals only | EXPERIMENTAL |
+| wifi-occupancy / lte-cell-search / gsm-broadcast | Generated signals only | EXPERIMENTAL |
+| short-range-frames, IEEE 802.15.4 / Zigbee protocol (the former ieee802154-frames; Protocol `zigbee` or `802.15.4`, or blank at 2.4 GHz) | Generated signals only | EXPERIMENTAL |
 | weather-decoder (433 MHz Sensors) | Some real recordings were used; the newer parts are generated signals only | not marked |
 | ert-decoder (ERT) | Generated signals only | not marked, although the evidence is generated signals only |
 | wmbus-decoder (Wireless M-Bus) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
-| nrf24-framing / fpv-detector | Generated signals only | EXPERIMENTAL |
+| fpv-detector | Generated signals only | EXPERIMENTAL |
+| short-range-frames, nRF24 protocol (the former nrf24-framing; Protocol `nrf24`, which must be chosen) | Generated signals only | EXPERIMENTAL |
 | fox-hunt / meteor-ping | Generated signals only | EXPERIMENTAL |
 | signal-identifier (Signal Identifier) | Some real recordings were used; the newer parts are generated signals only | EXPERIMENTAL |
 | survey-engine (Survey Engine) | Some real recordings were used; the newer parts are generated signals only | not marked |
