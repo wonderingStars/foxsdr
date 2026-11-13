@@ -984,6 +984,8 @@ public:
         int backend = 0;              // 0 the engine computes on the CPU, 1 on the GPU
         std::uint64_t submitted = 0, completedGpu = 0, completedCpu = 0, droppedFrames = 0, deviceLost = 0;
         std::string error;            // the latest GPU problem, text only (no adapter name)
+        std::uint64_t blockGpu = 0, blockCpu = 0;   // second pass: frames of the SPECTRUM BLOCK (SET_SPECTRUM) the Direct3D device / the engine's CPU computation finished
+        bool blockUp = false;         // a device is up for the spectrum block
     };
     GpuFftReport gpuFftReport() const;
     // wire-b end
@@ -1153,7 +1155,7 @@ private:
     // not even across stop()/start() — so a consumer that kept its last seen
     // seq keeps receiving frames after a restart. latest_.seq == 0 means
     // "nothing published yet".
-    std::mutex frameMutex_;
+    mutable std::mutex frameMutex_;
     SpectrumFrame latest_;
 
     // Worker-thread fault state. faulted() latches until the next start(),

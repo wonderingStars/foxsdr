@@ -1,7 +1,7 @@
 // Spectrum block with a choice of FFT size (1,024 .. 524,288) and window, fixed frame rate through overlap, average / peak hold /
 // min hold, and max-per-column reduction to display columns (a narrow carrier never vanishes between columns).
 //
-// STAND-ALONE: nothing in the engine uses it yet. It reuses dsp::ComplexFFT (pffft) and nothing else of the existing spectrum path
+// (Stand-alone when it was written; the pipeline's SET_SPECTRUM path uses it now.) STAND-ALONE: nothing in the engine uses it yet. It reuses dsp::ComplexFFT (pffft) and nothing else of the existing spectrum path
 // (dsp/spectrum.hpp has fixed windows and no hold modes; core/receiver_tables.hpp:40 fixes kFftSize = 1024).
 //
 // WINDOWS (periodic, sum of cosines w[n] = sum_k (-1)^k a_k cos(2 pi k n / N)):
@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "dsp/fft.hpp"
+#include "dsp/spectrum_block_gpu.hpp"   // wire-b second pass: the GPU stage (OFF by default)
 
 namespace cascade::dsp {
 
@@ -218,15 +219,27 @@ public:
         }
         void frame() {
             const std::size_t tail = n_ - w_;
-            for (std::size_t i = 0; i < tail; ++i) { work_[i] = ring_[w_ + i] * window_[i]; }
-            for (std::size_t i = 0; i < w_; ++i) { work_[tail + i] = ring_[i] * window_[tail + i]; }
-            fft_.forward(work_.data(), spec_.data());
             const float sc = cfg_.scale == SpecScale::Tone ? toneScale_ : psdScale_;
-            // fftshift while converting to power: output index n/2 is DC.
-            const std::size_t h = n_ / 2;
-            for (std::size_t k = 0; k < h; ++k) {
-                power_[k + h] = std::norm(spec_[k]) * sc;
-                power_[k] = std::norm(spec_[k + h]) * sc;
+            // wire-b second pass: the GPU stage (spectrum_block_gpu.hpp), OFF unless the process policy asks: 0 = not engaged (the CPU FFT below), 1 = the GPU's frame is in power_, 2 = none finished yet
+            const int gpuWanted = policy_ != nullptr ? policy_->load(std::memory_order_relaxed) : 0;
+            int gpuState = 0;
+            if (gpuWanted != 0) { gpuState = gpu_.step(gpuWanted, n_, window_.data(), ring_.data(), w_); }
+            if (gpuState == 2) { return; }   // (a frame arrives a hop or two late; this hop publishes none)
+            if (gpuState == 1) {
+                // the engine returns dB of |FFT(x w)|^2 / N^2, fftshifted: back to this block's power scale
+                const float* g = gpu_.db();
+                const float n2 = static_cast<float>(n_) * static_cast<float>(n_);
+                for (std::size_t k = 0; k < n_; ++k) { power_[k] = std::pow(10.0f, g[k] / 10.0f) * n2 * sc; }
+            } else {
+                for (std::size_t i = 0; i < tail; ++i) { work_[i] = ring_[w_ + i] * window_[i]; }
+                for (std::size_t i = 0; i < w_; ++i) { work_[tail + i] = ring_[i] * window_[tail + i]; }
+                fft_.forward(work_.data(), spec_.data());
+                // fftshift while converting to power: output index n/2 is DC.
+                const std::size_t h = n_ / 2;
+                for (std::size_t k = 0; k < h; ++k) {
+                    power_[k + h] = std::norm(spec_[k]) * sc;
+                    power_[k] = std::norm(spec_[k + h]) * sc;
+                }
             }
             const float* out = power_.data();
             if (cfg_.mode != SpecMode::Instant) {
@@ -272,6 +285,8 @@ public:
         std::size_t w_ = 0, valid_ = 0, phase_ = 0;
         double frameSeconds_ = 0.0;
         bool primed_ = false;
+        BlockGpu gpu_;
+        const std::atomic<int>* policy_ = nullptr;   // the owning block's GPU switch (set by the block before the engine runs)
         int wr_ = 0;  // writer's slot; slot 1 starts as the ready one, slot 2 as the reader's
         std::atomic<int> ready_{1};
         int rd_ = 2;
@@ -282,6 +297,7 @@ public:
     explicit SpectrumBlock(const SpecConfig& cfg) {
         if (!specSizeValid(cfg.fftSize)) { throw std::invalid_argument("fft size"); }
         active_ = new Engine(cfg);
+        active_->policy_ = &gpuPolicy_;
         forReader_.store(active_, std::memory_order_release);
     }
     ~SpectrumBlock() {
@@ -347,6 +363,12 @@ public:
     std::size_t fftSize() const { return forReader_.load(std::memory_order_acquire)->n_; }
     std::uint64_t framesProduced() const { return forReader_.load(std::memory_order_acquire)->frames_; }
     const Engine& engine() const { return *forReader_.load(std::memory_order_acquire); }
+    // CONTROL THREAD. The GPU stage's switch (spectrum_block_gpu.hpp): 0 CPU (the default), 1 Auto (from 65 536 points), 2 GPU. Takes effect at the next frame, with no rebuild.
+    void setGpuPolicy(int p) { gpuPolicy_.store(p < 0 || p > 2 ? 0 : p, std::memory_order_release); }
+    // Frames of the running engine finished on the Direct3D device / on the GPU engine's own CPU computation (0 while the GPU stage is off), and whether a device is up.
+    std::uint64_t gpuFramesOnGpu() const { return forReader_.load(std::memory_order_acquire)->gpu_.framesOnGpu(); }
+    std::uint64_t gpuFramesOnCpu() const { return forReader_.load(std::memory_order_acquire)->gpu_.framesOnCpu(); }
+    bool gpuUp() const { return forReader_.load(std::memory_order_acquire)->gpu_.usingGpu(); }
 
 private:
     void adopt() {
@@ -357,6 +379,7 @@ private:
             Engine* np = pending_.exchange(nullptr, std::memory_order_acq_rel);
             if (np == nullptr) { return; }
             Engine* old = active_;
+            np->policy_ = &gpuPolicy_;
             active_ = np;
             forReader_.store(np, std::memory_order_release);  // the reader moves off the old engine BEFORE it can be collected
             slot.store(old, std::memory_order_release);
@@ -364,6 +387,7 @@ private:
         }
     }
 
+    std::atomic<int> gpuPolicy_{0};   // 0 CPU (default), 1 Auto, 2 GPU: read by the engine at every frame
     Engine* active_ = nullptr;  // DSP thread's
     std::atomic<Engine*> forReader_{nullptr};
     std::atomic<Engine*> pending_{nullptr};

@@ -11,6 +11,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -131,6 +132,9 @@ struct WireBState {
     double stitchOrigCentreHz = 0.0;
     bool stitchRetuned = false;
     cascade::core::SpectrumFrame stitchFrame;
+    // second pass: the GPU spectrum's counters move without any command: the facts are republished (at most twice a second) when one did
+    std::array<std::uint64_t, 8> gpuSeen{};
+    std::chrono::steady_clock::time_point gpuSeenAt{};
 };
 
 }  // namespace cascade::engine

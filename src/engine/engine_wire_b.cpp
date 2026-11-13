@@ -1120,6 +1120,18 @@ void Engine::pumpWireB() {
         pumpSbs();
         pumpTracks();
         pumpStitch();
+        {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - wireB_->gpuSeenAt >= std::chrono::milliseconds(500)) {
+                wireB_->gpuSeenAt = now;
+                for (std::size_t i = 0; i < receivers_.size() && i < wireB_->gpuSeen.size(); ++i) {
+                    if (!receivers_[i]) { continue; }
+                    const cascade::core::Pipeline::GpuFftReport g = receivers_[i]->pipeline_.gpuFftReport();
+                    const std::uint64_t seen = g.submitted + g.blockGpu + g.blockCpu;
+                    if (seen != wireB_->gpuSeen[i]) { wireB_->gpuSeen[i] = seen; ++wireBVersion_; }
+                }
+            }
+        }
     }
     if (!wireB_->maskEnabled || !wireB_->maskLoaded) { return; }
     WireBState& w = *wireB_;
@@ -1180,6 +1192,7 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
         wireb::Json j = wireb::Json::object();
         j["mode"] = r.mode; j["engaged"] = r.engaged; j["backend"] = r.backend == 1 ? "gpu" : "cpu"; j["submitted"] = r.submitted; j["completed_gpu"] = r.completedGpu;
         j["completed_cpu"] = r.completedCpu; j["dropped_frames"] = r.droppedFrames; j["device_lost"] = r.deviceLost; j["error"] = r.error;
+        j["block_gpu_frames"] = r.blockGpu; j["block_cpu_frames"] = r.blockCpu; j["block_gpu_up"] = r.blockUp;
         fact("radio." + std::to_string(i + 1) + ".gpufft", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
     }
     {
