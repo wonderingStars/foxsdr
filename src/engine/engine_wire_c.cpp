@@ -415,6 +415,7 @@ void Engine::pumpWireC() {
     wc::Power& p = s.power();
     if (!s.powerStarted) {
         s.powerStarted = true;
+        p.sampleOnce();   // the first reading is made HERE, once, so the counters and handles the sampler's first query opens are in place before the engine's next pass reports its own (diagnostic bundles compare them)
         p.startSampler();
         p.startResumeWatch();
     }
