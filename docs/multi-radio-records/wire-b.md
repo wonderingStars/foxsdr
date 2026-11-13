@@ -223,6 +223,8 @@ Not in the table, on purpose: `sdriq` (unregistered), `funcube` and the network 
 
 ### 4.5 Not done, in order of importance
 
+**Note added in the SECOND PASS (section 6):** items 3, 7, 10 and 11 of the list below are DONE now (the stitched sweep, the spectrum-block GPU path, the configuration persistence of the network sources, and the success path for icr8600 / funcube / g39ddc / g33ddc / HL2), and item 4 (SWEEP_HISTORY) is done as the save and load; the list that is still true is section 6.10.
+
 1. R1 RBW trace in the engine (D2: NO, screen K draws it; the eight-cursor copy of S9 was built before that answer, see 4.7). 2. S12 varispeed / playback (D4). 3. X2 stitched sweep of an ordinary radio. 4. SWEEP_HISTORY save / load. 5. Z3 ExtIO helper (adapter, helper build lines, installer line). 6. Y6 / Z4 / X8 SDRplay rate map and low-IF (no hardware; touches the existing driver). 7. The spectrum-block GPU path (SET_SPECTRUM large sizes). 8. I/Q pre-roll for the mask capture (needs an I/Q ring). 9. S3 symbol file save and B6 bit editor (screen side). 10. Persistence of network sources in the configuration (a saved radio of these kinds). 11. Success path through the engine for icr8600, funcube, g39ddc, g33ddc and the HL2 profile (stand-ins exist only at the model level). 12. Beast / AIS out (ABI). 13. Z9 combiner and direction finding (no coherent source).
 
 ### 4.6 Owner decisions
@@ -284,3 +286,162 @@ Lane tests (all Passed in the final build): `test_engine_api_wireb_{field,sigmea
 **ENGINE MERGE 3 NOTE (2026-11-12):** the eight-cursor engine copy of this record (S9: CURSOR_SET 0x8919, CURSOR_READ 0x891A, CURSOR_MARKS 0x891B, `Engine::cursorOp`, the per-radio CursorSet8 and `test_engine_api_wireb_cursors`) was DROPPED in the merge on the orchestrator's decision D2; the frame log (FRAMELOG_CONFIG 0x891C, FRAMELOG_READ 0x891D) stays, its code in `engine/wire_b_framelog.hpp` and its test in `test_engine_api_wireb_framelog`. See `engine-merge-3.md`. Every mention of the cursor operations above describes what the lane built, not what is in the tree.
 
 **Note added in engine fixes 4 (`engine-fixes-4.md`, item 4):** the NEEDED LIBRARIES text above describes what this lane built. In the tree, `wireb::NeededLibrary` is gone: the eight rows are rows of the one table `cascade::source::needed::neededTable()` (`src/source/needed_library.{hpp,cpp}`) beside the SDR-IQ's `ftdi-d2xx` row (nine rows); a header-only file check answers `working` (depth `headers`) and `not-a-library` where this record says `found` and `unusable`; `cannot-check` is the seventh state. `src/engine/wire_b_needed_libs.{hpp,cpp}` only writes that table as JSON.
+
+## 6. SECOND PASS (owner go-ahead 2026-11-13 08:15; brief `D:/foxsdr-build/prep/queued-briefs/wave7/wire-second-pass.md`)
+
+**Start tip.** `git merge --no-ff engine/multi-radio` (the local branch, tip `437bfedd`) into `feat/wire-b` at `b5d79f4a`: merge commit **`9677d7cf`**, CLEAN (no conflict, nothing resolved by hand). What the merge and the fix agent had changed in this lane's code, read before editing the same files: the eight-cursor engine copy and operations 0x8919-0x891B are GONE (decision D2; not re-added, the three numbers not reused); the frame log is `wire_b_framelog.hpp`; `wireb::NeededLibrary` is gone and the ONE needed-library table is `needed::neededTable()` in `src/source/needed_library.*`; `sdriq` and `rfexplorer` are registered in this lane's tables. Build of the whole tree after the merge: `EXIT 0`.
+
+End tip of this pass: the record commit below. Operation numbers used: **0x8931 only**; lane B continues at **0x8932**. No `.slint` file, no `src/core/plugin_abi.h`, no `pipeline.cpp`, no recorder and no `IqFileSource` was touched. Nothing pushed, nothing merged into this branch after the one merge above, no other worktree touched, no radio opened, no download, no outside request.
+
+### 6.1 The screen lane's three findings (`screen-l.md`, ENGINE HAND-OFF) - commit `0cb15852`
+
+| Finding | Verdict | What was done |
+|---|---|---|
+| `SWEEP_CONFIG` before a device is open is refused ("frequency range unusable"), though the hand-off says it works while closed | **THE ENGINE WAS WRONG** (the hand-off text was right) | The heat map took its frequency range from the open device, and with none open `SweepHeatmap::configure` refused the whole call. `SweepHost` now keeps the heat map's OWN settings (columns, rows, both modes) as preferences (`heatPrefs_`): with no range known they are checked against a stand-in range (0..1 MHz) so the limits and refusals are exactly as when open, and kept; every start (tinySA, RF Explorer, HackRF, the stitched sweep, a loaded history) builds its heat map from them. The occupancy plan never depended on a device and worked closed before. |
+| `tracks.state` and `coverage.state` vanish when disabled | **THE ENGINE WAS WRONG** (an absent fact cannot be told from "no engine") | Both facts are now ALWAYS present. Off: `enabled:false` with zero counts (`tracks.state` keeps `retention_s` 21600, the default). With the lane's state not created yet, the same two facts are emitted before the early return in `wireBFacts`. |
+| (third point of the same section) SDR-IQ status line: `lastError()` is in no fact | NOT DONE, and not in this pass's items. A fact `radio.<n>.source.error` is one line in `wireBFacts` reading the source's `lastError()`; it is the merge lane's or a later lane's to add. The other hand-off points of that section (a read-back fact for the frame log's keep-CRC setting, a host call that tunes the selected radio to `sweep.read.click_hz`, the CAT port 4532 wording) are likewise untouched: none is this lane's item and none is an engine defect. |
+
+Decisive output: `test_engine_api_wireb_sweep: 59 checks passed, 0 failed` (new section S0: config with no device accepted, refused the same way as when open, no sweep fact appears, and the settings reach the next open - 512 heat columns instead of the default 1024, with S0's 20 occupancy channels), `test_engine_api_wireb_tracks: 50 checks passed, 0 failed`, `test_engine_api_wireb_coverage: 44 checks passed, 0 failed`.
+
+### 6.2 Item 10: the stitched sweep of an ordinary radio - commit `276de3e2`
+
+`engine/wire_b_stitch.{hpp,cpp}` (`StitchRun`: the pure state machine - plan, retune, settle, collect, line, passes, failure sentences; no engine, clock or radio in it) and `engine/engine_wire_b_stitch.cpp` (`Engine::stitchStart` / `pumpStitch` / `stitchEnd`, driven once per control pass inside `pumpWireB`). `SweepHost` gained `beginExternal` / `ingestLine` / `endExternal` (no worker thread; "open" while the run lasts so `SWEEP_OPEN` is BUSY; the heat map takes its range from the first line). NO NEW OPERATION NUMBER: it is **kind `"radio"`** of `SWEEP_OPEN` 0x8920, with keys `radio` 1..8, `start_mhz`, `stop_mhz`, `step_fraction` 0.3..0.7 (0.6), `trim` 0..0.4 (0.12), `settle_ms` 0..5000 (150), `frames` 1..64 (2), `timeout_ms` 500..60000 (4000), `passes` 0..1000000 (1; 0 = until `SWEEP_CLOSE`); those keys are refused on every other kind, and the other kinds' keys on this one. At most 512 centres per pass. New fact `sweep.stitch` = {active, radio, centres, step, passes_done, seams, seams_aligned, bin_hz, note, step_fraction, original_centre_hz}.
+
+RECEIVE ONLY: the only thing the loop ever asks of the radio is the ordinary `SET_CENTRE` through `applyCommand`, so the record lock, a follower's lock and every other refusal of a retune apply as they do for a person; the radio's own centre is put back when the run ends however it ends (pass count reached, `SWEEP_CLOSE`, a failure, engine shutdown). The radio must be running. A REMOTE session is DENIED (`SWEEP_OPEN`'s existing rule). Frames of one centre are averaged as POWER.
+
+Decisive output - `test_engine_api_wireb_stitch: 69 checks passed, 0 failed` on a real Engine with a synthetic source (four tones at absolute frequencies, noise, and a receiver gain that DROPS 8 dB above a 100.25 MHz centre so the seams need level alignment):
+
+```
+sweep.stitch {"active":false,"bin_hz":234.375,"centres":4,"note":"","original_centre_hz":100000000.0,"passes_done":1,"radio":1,"seams":3,"seams_aligned":3,"step":0,"step_fraction":0.6}
+line: 100.0000 - 100.5998 MHz, 2560 points
+tone 1: expected 100.050 MHz, at 100.0499 MHz, -19.5 dB
+tone 2: expected 100.200 MHz, at 100.2000 MHz, -29.5 dB
+tone 3: expected 100.350 MHz, at 100.3500 MHz, -20.1 dB
+tone 4: expected 100.500 MHz, at 100.4999 MHz, -35.7 dB
+last error: the radio did not retune to 100.091 MHz (is it playing a file, or locked?)
+```
+
+(tone 3 is the same tone as tone 1, SEEN 8 dB lower, and reads 0.6 dB below it after the alignment; 4 retunes plus the one home; `passes` 0 repeats until closed and nothing retunes after the close.) And `test_wire_b_stitch: 94 checks, 0 failed` on the state machine alone: the plan covers both ends and never spaces centres wider than the step, a narrow range is one centre, over 512 centres is refused, every setting just outside its range is refused, power averaging reads `mean level -82.60 dB (power mean -82.6, dB mean -85.0)`, and each failure branch gives its sentence (radio that does not follow, same frame repeated, no frames, sample rate changed, centre moved mid-run, bin count changed, the caller's own `fail()`).
+
+### 6.3 Item 8: the spectrum-block GPU path - commit `cafe6546`
+
+`dsp/spectrum_block_gpu.{hpp,cpp}` (`BlockGpu`): the GPU stage of one spectrum-block engine, the same contract as the legacy path's `core/pipeline_gpufft.cpp` - OFF by default, the device built in ONE one-shot async task so the DSP thread never waits for it, a frame submitted each hop and the oldest finished one collected without waiting (so a frame arrives a hop or two late and a hop with none ready publishes none), any failure leaves the block's CPU FFT running, no adapter name in any log. The engine is given the block's own window as a custom window, so the numbers are the CPU numbers: the block multiplies the returned dB of |FFT(x·w)|²/N² back by N² and its own scale (tone or PSD), and its averaging, hold modes and column reduction run on the GPU frame unchanged. `SpectrumBlock::setGpuPolicy(0 CPU / 1 Auto from 65 536 points / 2 GPU)` is read at every frame, so a change takes effect on a running block with no rebuild; counters `gpuFramesOnGpu` / `gpuFramesOnCpu` / `gpuUp`.
+
+NO NEW OPERATION: `Pipeline::setGpuFftMode` (the lane's own file, not `pipeline.cpp`) now also sets the block's policy for that radio - and makes the idle block when none exists yet, so a radio set to GPU before it picks a large size still gets it - so the one existing operation `GPU_FFT_MODE` 0x8918 covers the standard path AND the spectrum block for every open radio. Fact `radio.<n>.gpufft` gains `block_gpu_frames`, `block_cpu_frames`, `block_gpu_up`; the counters move with no command, so `pumpWireB` republishes the facts (at most twice a second) when one moved. `thread_inventory_rows.inc`: a row for the one `std::async`.
+
+Decisive output - `test_spectrum_block_gpu: 24 checks, 0 failed` on this machine's hardware adapter:
+
+```
+B2: policy GPU, scale tone
+  GPU block: 19 frames, 6 finished on the device; CPU block 20 frames
+  tone -12.04 dB (cpu -12.04), floor median -88.54 dB (cpu -88.45)
+B2: policy GPU, scale psd
+  tone -30.70 dB (cpu -30.70), floor median -107.17 dB (cpu -107.17)
+```
+
+(Auto leaves a 4 096-point block on the CPU with nothing made; back to CPU the device counters stop and frames go on; an invalid policy value is CPU. With no hardware adapter the stage never engages and the checks that name the GPU are not counted.) Through the engine, `test_engine_api_wireb_gpufft: 160 checks passed, 0 failed`, new section G5: `block on the GPU: 88 frames, tone bin 4096 at 0.00 dB; block GPU frames 96, block cpu-fallback frames 0, device up 1`, the same bin and level as the CPU block, and after mode 0 the device counter stops.
+
+### 6.4 Item 33: network sources saved in the configuration - commit `81a6d97c`
+
+The twelve radios of the wire-b source table opened but never came back: the file loader turned an unknown `sourceKind` into the generator, and `gui::isNativeSourceKind` - the ONE list the save, the restore and the "keep the name when an open fails" rule read - did not list them. `core/wire_b_source_kinds.hpp` holds the twelve keys once (`isWireBSourceKind`); `isNativeSourceKind` and `config.cpp`'s sanitiser accept them. NO NEW KEY of my own: the EXISTING keys `sourceKind` / `nativeArgs` (radio 1) and `radios[].sourceKind` / `radios[].args` (radios 2-8) now accept twelve more values. A hand-edited unknown kind is still the generator.
+
+**A GAP FOUND AND CLOSED:** a device row with no address (`icr8600`, `funcube`, `g39ddc`, `g33ddc`, `sdriq`) opened with nothing typed was saved with an EMPTY argument list, and an empty list is the generator to the configuration (`savedRadioOf` and both restores read it so), so those five could never have been restored. `SourceKind` gained `defaultArgs`: the source's own documented default of one option (`timeout=1500`, `index=0`, `timeout=5000` twice, `timeout=3000`), used only when the typed list is empty, so the source behaves exactly as with nothing typed and the saved radio is never empty. What a person typed always wins.
+
+Nothing secret is saved: no source of the table takes a password or token (an Aaronia server that asks for one is refused), and the engine test pins that the written file holds no "password" and no "token".
+
+Decisive output - `test_wire_b_saved_kinds: 248 checks, 0 failed` (`engine table 12 keys, core list 12 keys`, held equal in both directions; `icr8600 with nothing typed -> timeout=1500`, `funcube -> index=0`, `g39ddc -> timeout=5000`, `g33ddc -> timeout=5000`, `sdriq -> timeout=3000`) and `test_engine_api_wireb_savedkinds: 60 checks passed, 0 failed` against the RFspace stand-in on 127.0.0.1: `saved: kind rfspace, args rfspace=127.0.0.1:53251,udpport=0`, a restart from the file alone puts the radio back on the stand-in (receiver switched on, tone in the spectrum, volume 0.37 and centre 7.1 MHz restored), and with the peer gone the generator stands in while the file still names the radio: `Radio 2: other did not open: could not reach the radio at 127.0.0.1:53251 (connection refused) - is the address right, and is the radio's control port open?. The receiver is running on the signal generator.`
+
+### 6.5 Item 34: the success path through the engine for five sources - commit `108ac4c9`
+
+The first pass proved these only at the model level and, through the engine, only their failure paths. Each now has a test on a real Engine against a stand-in peer; no USB bus, HID device, sound card or vendor library of the user's is touched and nothing of any maker's is in a test. `tests/wire1_rig.hpp` gained `Access::setMakeDevice` (one function) so a test can hand the engine its stand-in device; `tests/CMakeLists.txt` has its own block making the WiNRADiO test depend on the two stand-in DLL targets of the osslibs lane.
+
+| Test | Decisive output |
+|---|---|
+| `test_engine_api_wireb_hl2` | `51 checks passed, 0 failed`: HL2 profile through `open-hpsdr1:<addr>,profile=hl2`, 9 kHz tone in the spectrum, receive-only measured at the peer (only command addresses 0,1,2,9,10; no MOX, drive 0, no payload, no bad frame, never the wide-band stream), retune reaches it, `saved: hpsdr1=127.0.0.1:63900,profile=hl2` and restored, and a Hermes asked for as an HL2 is refused: `the radio that answered is not a Hermes-Lite 2 (it says board Hermes)` |
+| `test_engine_api_wireb_winradio` | `62 checks passed, 0 failed` for G39DDC and G33DDC through the stand-in `G39DDCAPI.dll` / `G33DDCAPI.dll`: `the radio runs at 192000 S/s; the library saw 1 open(s), 1 start(s)`, the tone 5 kHz above the tuned centre, every library call on ONE thread with no overlap, stop and remove end the stream and close the device, `saved: kind g39ddc, args lib=D:\foxsdr-build\en-sigmeas\tests\fixture_osslibs\Release` and restored, and `no WiNRADiO G39DDC receiver is connected` refused |
+| `test_engine_api_wireb_icr8600` | `51 checks passed, 0 failed`: `the radio runs at 1920000 S/s`, 20 kHz tone in the spectrum, every CI-V command received is a documented receive-side one (05, 11, 12, 14, 16, 1A 13 only), retune reaches it, stop switches the I/Q output off, remove closes the device, `saved: kind icr8600, args timeout=1500` and restored, `no IC-R8600 I/Q port found` refused |
+| `test_engine_api_wireb_funcube` | `31 checks passed, 0 failed`: `the radio runs at 192000 S/s`, 12 kHz tone, HID commands only the documented query / tune / gain / bias ones and NEVER reset-to-bootloader, remove closes the link, `saved: kind funcube, args index=0` and restored, `no stereo sound input with "FUNcube" in its name was found` refused |
+
+### 6.6 Item 37, first half: the sweep history saved and loaded - commit `8b7b7196`
+
+Orchestrator's decision, as asked: **a plain text file with a header line.** `engine/wire_b_history.{hpp,cpp}`: `SweepKeep` remembers every line the sweep host receives (tinySA, RF Explorer, HackRF, the stitched sweep, a loaded history), newest last, IN MEMORY ONLY - at most 300 000 points (about 3.6 MB of CSV) and 100 000 lines, the oldest going first - plus three small file helpers with the marker export's rules. `SweepHost`: `historyInfo` / `historySnapshot` / `historyClear` / `historyLoad` (replaces the history, rebuilds the heat map from it, makes the host `"history"` and closed with its last line readable by `SWEEP_READ`).
+
+**New operation `SWEEP_HISTORY` 0x8931** (text JSON, LOCAL only): `{action "save"|"load"|"clear", path (a FULL path), format "csv" (default) | "json" | "xml" (save only)}`. Save writes `core/sweep_history.hpp`'s text - by default the CSV whose FIRST line is `#foxsdr-sweep-history,csv,1` and whose second is `time_s,start_hz,stop_hz,points,db`, then one sweep per row (JSON and XML carry the same data and version); a file that exists is NEVER overwritten (FAILED), an empty history is NO_CHANGE, a text over 4 MiB is FAILED. Load reads any of the three (found by the first character, at most 4 MiB), BAD_ARGUMENT with the file's line and reason for a file the reader refuses (nothing changes), FAILED for one that cannot be read, BUSY while a device or a stitched run is open. Clear empties the memory. The path must be absolute with a file name, no control character, under 1024 bytes; no fact carries a path; the file holds no name, no device identifier and no position. `applied[0]` = the sweeps saved or loaded. New fact `sweep.history` = {lines, points, first_time_s, last_time_s, note, keep_points}, always present.
+
+Like wire-a's marker export, this file I/O runs on the control thread for a file of at most 4 MiB at a person's request (the same deviation from "the pass does no disk work", and the same reason).
+
+Decisive output - `test_engine_api_wireb_history: 95 checks passed, 0 failed`:
+
+```
+kept 8 sweeps of 450 points
+csv: 31518 bytes, header "#foxsdr-sweep-history,csv,1"
+.csv: sweep.state kind history, open 0, heat 8 x 1024
+.json: sweep.state kind history, open 0, heat 8 x 1024
+.xml: sweep.state kind history, open 0, heat 8 x 1024
+corrupt file -> -5 "the file was refused, line 11: fewer than 5 fields"
+```
+
+(after a clear, load of each of the three files brings back EXACTLY the saved lines - `SweepHistory == kept`, bit for bit - and `SWEEP_READ` then shows the stand-in's 100 MHz tone; a second save to the same path is refused and the file is untouched; a file over 4 MiB, a folder, a junk file and a load while sweeping are refused; no fact carries the folder or file name.)
+
+### 6.7 Break-it table (every item; each mutation restored, the file touched and rebuilt before the green re-run was trusted)
+
+| Behaviour removed | RED seen | Restored |
+|---|---|---|
+| The heat map's saved preferences (`heatPrefs_ = c`) | `test_engine_api_wireb_sweep` 58/1: `j["heat_cols"] == 512 (1024 vs 512)` | 59/0 |
+| The always-present `tracks.state` (the pre-change `if (trackStore != nullptr \|\| tracksEnabled)`) | `test_engine_api_wireb_tracks` dies at T1 (the fact is null again) | 50/0 |
+| The stitched sweep's restore of the radio's own centre | `test_engine_api_wireb_stitch` 65/4: retunes `4 vs 5` and the centre check in three places | 69/0 |
+| The stitched sweep's "the frame must be newer" guard | `test_wire_b_stitch` 94/3: the repeated frame passes instead of failing | 94/0 |
+| The spectrum block's N² power rescale of the GPU frame | `test_spectrum_block_gpu` 24/4: `dTone < 0.5` and `dFloor < 0.5` in both scales | 24/0 |
+| `setGpuFftMode`'s call to the block's policy setter | `test_engine_api_wireb_gpufft` 2006/3: G5 never engages the GPU | 160/0 |
+| The config sanitiser's acceptance of the twelve keys | `test_wire_b_saved_kinds` 248/40, and the engine test saves the radio as `siggen` and never restores it | 248/0 and 60/0 |
+| `defaultArgs` (the saved argument list of a device row empty again) | `test_engine_api_wireb_icr8600` and `..._funcube`: saved as the generator, never restored (8 failures); `..._winradio` stays GREEN, as it must (its arguments are never empty) | 51/0, 31/0, 62/0 |
+| `historyLoad`'s replacement of the kept lines | `test_engine_api_wireb_history`: the history is not the saved one and the next clear refuses | 95/0 |
+
+### 6.8 SCREEN HAND-OFF (second pass): control, where, operation or key, fact, range, default
+
+| Control | Where | Operation / key | Fact | Range, default |
+|---|---|---|---|---|
+| "Heat map and occupancy" now works with NO device open | Sweep (the existing section) | `SWEEP_CONFIG` 0x8922, unchanged keys | `sweep.state` (absent until a device or history exists) | as before; the screen's "Refused: frequency range unusable" note no longer appears while closed |
+| "Sweep this radio" (start the stitched sweep) | Sweep, a section of its own | `SWEEP_OPEN` 0x8920 with `kind:"radio"` | `sweep.stitch` (`active`, `step` of `centres`, `note`), `sweep.state`, `sweep.read` | `radio` 1..8 (the session's radio), `start_mhz` / `stop_mhz` (the stop above the start; at most 512 centres), `step_fraction` 0.3..0.7 (0.6), `trim` 0..0.4 (0.12), `settle_ms` 0..5000 (150), `frames` 1..64 (2), `timeout_ms` 500..60000 (4000), `passes` 0..1000000 (1; 0 = until closed) |
+| "Stop" of a stitched sweep | the same section | `SWEEP_CLOSE` 0x8921 | `sweep.stitch.active` false | - (it also puts the radio's own centre back) |
+| "Save the history..." (a typed full path) + format | Sweep | `SWEEP_HISTORY` 0x8931 `{"action":"save","path":...,"format":...}` | `sweep.history.note` | format csv (default) / json / xml; a file that exists is refused |
+| "Load a history..." (a typed full path) | Sweep | `SWEEP_HISTORY` `{"action":"load","path":...}` | `sweep.history`, `sweep.state` (kind `history`) | the format is found by itself; refused while sweeping |
+| "Clear the history" | Sweep | `SWEEP_HISTORY` `{"action":"clear"}` | `sweep.history.lines` 0 | NO_CHANGE when empty |
+| the history read-out ("N sweeps, M points of 300000") | Sweep | none (read-only) | `sweep.history` {lines, points, first_time_s, last_time_s, note, keep_points} | always present |
+| GPU spectrum read-out gains the spectrum block's own counters | System / diagnostics, beside the existing GPU mode | the EXISTING `GPU_FFT_MODE` 0x8918 (it now drives both paths) | `radio.<n>.gpufft` + `block_gpu_frames`, `block_cpu_frames`, `block_gpu_up` | mode 0 CPU (default) / 1 Auto (from 65 536 points) / 2 GPU |
+| Track store / coverage grid "off" can be SHOWN as off | Outputs and tracks | unchanged (`TRACKS_CONFIG` 0x892C, `COVERAGE_CONFIG` 0x892E) | `tracks.state`, `coverage.state` - ALWAYS present now, `enabled:false` with zero counts when off | `tracks.state.retention_s` 21600 by default |
+| (no control) the twelve `open-<key>:` network and vendor radios now come back at the next start | Radio setup | none; the existing saved-radio keys | `radio.<n>.source`, `radio.restore` | a device row opened with nothing typed is saved with its source's own default option |
+
+### 6.9 ITEM 36 (the SDRplay rate map and low-IF): **NOT REACHED - not started, no code written**
+
+Plainly: it was last in the brief and "only if time remains"; the time went on items 10, 8, 33, 34 and 37. Nothing of it was changed, so today's default path is byte-identical by construction (`sdrPlayRatePlan` in `sdrplay_source.cpp` is untouched and still zero-IF only). What was done is READING, so the next lane starts from facts rather than a survey: `source/sdrplay_rate_map.hpp` (the RSPduo / single-tuner output-rate map ported from SoapySDRPlay3 as facts) and `source/sdrplay_if_mode.hpp` (the IF-mode choice, the six documented low-IF combinations, `sdrPlaySupportedRatesForMode`, and `sdrPlayLowIfRateVerdict`) are both STAND-ALONE with NO caller; `SdrPlaySource` has no IF-mode member, its rate menu is `sdrPlaySupportedRatesHz()` and `setSampleRateHz` calls `sdrPlayRatePlan` directly. Wiring it needs: a mode setting on the source, the rate menu from `sdrPlaySupportedRatesForMode`, `sdrPlayRatePlanForMode` in place of the two `sdrPlayRatePlan` calls, and - the reason 0.99.44 retired low-IF - `sdrPlayLowIfRateVerdict` run on the FIRST real stream with low-IF refused on `DeliversAdcRate`, all of it behind a test that pins the zero-IF default plan byte-identical. There is no RSPduo here, so it stays UNVERIFIED ON HARDWARE whatever is built.
+
+### 6.10 Not done in this pass, with the reason
+
+1. **Item 36** - not reached (6.9).
+2. **Item 9, the I/Q pre-roll for the limit-mask capture** - a hand-off only, by the brief (the ring belongs in `pipeline.cpp`, which is lane A's). THE EXACT HAND-OFF: the mask capture starts the radio's I/Q recording at the moment a breach is CONFIRMED, which is `raise_frames` frames plus the debounce after the signal that caused it, so the take never holds what opened the event. What the capture side wants from the pipeline: a bounded pre-roll ring of the channel I/Q, allocated only while `MASK_CONFIG capture` is on (off by default), with one call shaped like `bool preRollCopy(double seconds, std::vector<std::complex<float>>& out, double& rateHz, double& centreHz)` that copies the newest N seconds (0.25..5 s, the ring's own bound) under the same lock discipline as `getLatestFrame`, plus a recorder entry that writes that block before the live stream continues. Nothing else of the mask side changes: `Engine::pumpWireB` would call it where it calls `startIqRecording()` today.
+3. **Items 11 and 12** (Beast / AIS network output; the frame-log feed and MFSK tone-energy hand-over) - they need plugin-interface appends, which are lane C's alone in this pass. The ABI REQUESTS of section 4.3 stand unchanged.
+4. **Item 32** (symbol file save, bit editor) - screen side.
+5. **Item 35** (ExtIO helper) - its own lane later.
+6. **Items 39, 40, 41** - the owner's loopback-only rule; and the two dropped by decision D2.
+7. The other `screen-l.md` ENGINE HAND-OFF points (SDR-IQ `lastError` fact, frame-log keep-CRC read-back, a click-to-tune host call, CAT port wording) - see 6.1: none is an engine defect or an item of this pass.
+
+### 6.11 Decisions I made for the owner to confirm
+
+1. **The sweep-history file is plain text, CSV by default**, with the header line `#foxsdr-sweep-history,csv,1` and a fixed column line (JSON and XML offered for the same data). The memory budget is 300 000 points, oldest first, and one file is capped at 4 MiB. (The format was the orchestrator's decision; the budget and the cap are mine.)
+2. **`defaultArgs` for the five device rows with no address** (`timeout=1500`, `index=0`, `timeout=5000`, `timeout=5000`, `timeout=3000`): a saved radio must not have an empty argument list, and each value is that source's own documented default, so nothing behaves differently. If the owner would rather mark "nothing typed" another way, this is the one line to change.
+3. **The stitched sweep retunes the person's own radio**, so it is an explicit operation only, never automatic, and the radio's centre is always put back; default step fraction 0.6 (16 % overlap after the 12 % trim); `passes` default 1.
+4. **One switch for both GPU spectrum paths.** `GPU_FFT_MODE` now drives the standard path and the spectrum block together. Separating them would need a second operation; I judged one switch to be what a person means.
+5. Still open from the first pass, unchanged: **Aaronia authentication** (nothing is stored), **on-disk retention of coverage and track positions** (memory only), **`/status.json`** (off, unwired).
+
+### 6.12 Gate, build and config hash
+
+**The gate was NOT run in this pass, by instruction** (orchestrator, 2026-11-13: an engine merge agent gates everything together; "Do NOT run the full gate"). What WAS run, in the foreground, at the final code tip: the whole tree built, `EXIT 0`, no `error C`, no `error LNK`, no `error MSB` (an earlier full build had two toolchain-level failures - `link.exe` exited with `-1073741502` and `CL.exe` with `1073807364`, the machine-under-load symptom with no compile error of its own - and the clean re-run at the same tip is the result above).
+
+Lane and neighbour tests at the final tip, all GREEN: `test_engine_api_wireb_{sweep 59/0, stitch 69/0, tracks 50/0, coverage 44/0, gpufft 160/0, savedkinds 60/0, sources 199/0, hl2 51/0, winradio 62/0, icr8600 51/0, funcube 31/0, history 95/0}`, `test_wire_b_stitch 94/0`, `test_wire_b_saved_kinds 248/0`, `test_spectrum_block_gpu 24/0`, `test_apply_command 2295/0`, `test_radio_scope 210/0`, `test_thread_inventory 14884/0`. A `ctest` selection over those plus the configuration and saved-radio tests reported `100% tests passed out of 14` on its last run. No GUI gate: no `gui`-labelled test was touched (and every such test now needs the `gui_desktop` fixture, which was never bypassed - `FOXSDR_ALLOW_VISIBLE_GUI_TESTS` was never set). Nothing appeared on the visible desktop and no Windows dialog was raised.
+
+**The real `%APPDATA%/foxsdr/config.json`** is `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` at the start of this pass and the same at the end: BYTE-IDENTICAL.
+
+### 6.13 UNVERIFIED
+
+Everything in this pass is unverified on hardware: no radio, sweep device, dongle or vendor library of a user's was opened - every peer is a stand-in on 127.0.0.1, a fake USB or HID device, or a stand-in DLL this project builds from a published document. In particular: the stitched sweep against a real tuner's settle time and a source that rounds its centre; the Hermes-Lite 2, IC-R8600, FUNcube, G39DDC, G33DDC and the twelve saved kinds on the real thing; the GPU spectrum stage on any adapter but the one in this machine; the sweep history on a real tinySA. Low-IF and the SDRplay rate map are untouched (6.9). The GPU stage can leave the displayed frame one or two hops behind at the large sizes; nothing else about the display changes.
