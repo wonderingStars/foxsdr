@@ -23,7 +23,7 @@
 
 const Row kRows[] = {
     {"src/core/airband_gate.hpp", 1, 0, 0, 0, "",
-     "wire-a: the per-channel airband WAV output's writer (AsyncWavOutput): one worker per open channel file, fed by a try-lock hand-over from the audio thread (a full queue drops and counts), stopped and joined by its destructor; it only writes a file and has no wait that could wedge the engine - NOT COVERED by this batch (engine merge 4 added the row: the lane's branch did not carry it)"},
+     "wire-a: the per-channel airband WAV output's writer (BasicAsyncWavOutput): one DETACHED worker per open channel file, fed by a try-lock hand-over into a pre-allocated ring from the audio thread (a full ring drops and counts); the owner's destructor never joins it and never touches the disk - it only tells the worker to finish, and the worker writes what is queued and closes the file by itself, counted with the recorders' finishes so that quit drains it against a deadline (tests/test_airband_gate_blocking.cpp holds both). The worker itself CAN wait on the disk (a stalled share parks it, harmlessly: nothing waits for it) and registers no heartbeat, so a stuck disk is not reported by name - NOT COVERED by this batch (a known gap, as for the patch speaker's MP3 writer)"},
     {"src/core/audio_open.hpp", 1, 1, 0, 0, "",
      "AudioOpen's open worker (a PortAudio / WASAPI call the window bounds itself, kOpenBound, under a WatchdogPause) and the reap that abandons it - NOT COVERED by this batch (the window's own bound is its watch)"},
     {"src/core/config_writer.hpp", 1, 1, 1, 1, "kThreadConfigWrite", R_REAP},

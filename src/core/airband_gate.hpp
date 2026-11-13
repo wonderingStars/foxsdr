@@ -5,16 +5,19 @@
 // or an SNR threshold with hysteresis) gates the audio; and, only if the user switched one on for THAT channel, the audio before the gate goes to a WAV file (written on a worker thread, in the recordings folder, a
 // folder per UTC day) or the gated audio to a UDP stream on 127.0.0.1 and the port chosen. Both outputs are OFF unless asked for; a channel with no row in the table is the monitor's channel exactly as before.
 //
-// THREADS. process() runs on the audio thread: no allocation, no lock it can wait on (the file output hands its blocks to its worker through a try-lock and DROPS the block when the lock is busy, counted), no file or
-// socket call. The worker and the UDP sender are threads of their own, started when the set is built and joined when it is destroyed.
+// THREADS. process() runs on the audio thread: no allocation, no lock it can wait on (the file output copies its blocks into a ring allocated when the set was built, through a try-lock, and DROPS the block when the lock is busy or the ring is full, counted), no file or
+// socket call. The UDP sender is a thread of its own, started when the set is built and joined when it is destroyed. The file output's worker is NOT joined: destroying the output (on the control thread, when a plan is
+// retired) only tells it to finish, and it writes what is queued, closes the file and ends by itself (see BasicAsyncWavOutput).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstring>
 #include <ctime>
 #include <deque>
 #include <map>
@@ -27,6 +30,7 @@
 #include "core/airband_channel.hpp"
 #include "core/airband_writer.hpp"
 #include "core/patch_runner.hpp"
+#include "core/record_finish.hpp"
 
 namespace cascade::core::airband {
 
@@ -48,66 +52,128 @@ inline UtcStamp utcNow() {
     return s;
 }
 
-// The WAV output of one channel: blocks of pre-gate audio and the gate's state, handed over by try-lock, written by a worker thread.
-class AsyncWavOutput {
+// The WAV output of one channel: blocks of pre-gate audio and the gate's state, handed over by try-lock into a pre-allocated ring, written by a worker thread.
+// A template on the writer only so that a test can put a writer that blocks on demand in its place (the product uses ChannelWavWriter).
+//
+// DESTROYING IT NEVER WAITS FOR THE DISK (engine fixes 6). The gate that owns it lives in a patch plan, and a retired plan is destroyed on the control
+// thread: a destructor that joined the worker and closed the file waited for the disk on the thread that applies the person's commands. So the worker
+// is detached and owns everything it touches (the shared state below: ring, writer, flags) by shared pointer; the destructor only tells it to stop and
+// returns. The worker writes what is still queued, closes the file, and ends - the same shape as the patch speaker's MP3 destination
+// (core/patch_audio.cpp). The retirement is counted with the recorders' finishes (RecordFinisher::externalBegin / externalEnd), so that a quit gives
+// the close the same bounded chance (drain(deadline)) and never waits past it; a close that does not land leaves the header the burst's last block
+// patched, which is what a crash would have left.
+template <class Writer>
+class BasicAsyncWavOutput {
 public:
-    explicit AsyncWavOutput(const WriterConfig& cfg) : writer_(cfg) { thread_ = std::thread([this] { run(); }); }
-    ~AsyncWavOutput() {
-        {
-            std::lock_guard<std::mutex> lk(m_);
-            stop_ = true;
-        }
-        cv_.notify_all();
-        if (thread_.joinable()) { thread_.join(); }
-        writer_.close();
-    }
-    AsyncWavOutput(const AsyncWavOutput&) = delete;
-    AsyncWavOutput& operator=(const AsyncWavOutput&) = delete;
+    // The hand-over: up to kMaxQueued blocks in a ring of kRingFloats samples, allocated here (the control thread), never on the audio thread.
+    static constexpr std::size_t kMaxQueued = 256;
+    static constexpr std::size_t kRingFloats = std::size_t{1} << 18;   // 5.4 s at 48 kHz
 
-    // Audio thread. Drops (and counts) the block when the worker holds the lock or the queue is long.
+    explicit BasicAsyncWavOutput(const WriterConfig& cfg) : s_(std::make_shared<Shared>(cfg)) {
+        std::thread([s = s_] { work(*s); }).detach();
+    }
+    ~BasicAsyncWavOutput() {
+        {
+            std::lock_guard<std::mutex> lk(s_->m);
+            s_->stop = true;
+            if (!s_->ended) {
+                s_->counted = true;
+                RecordFinisher::externalBegin();
+            }
+        }
+        s_->cv.notify_all();
+    }
+    BasicAsyncWavOutput(const BasicAsyncWavOutput&) = delete;
+    BasicAsyncWavOutput& operator=(const BasicAsyncWavOutput&) = delete;
+
+    // Audio thread. No allocation, no wait: drops (and counts) the block when the worker holds the lock, the queue is full, or the ring cannot hold it.
     void push(const float* audio, std::size_t n, bool open) {
-        std::unique_lock<std::mutex> lk(m_, std::try_to_lock);
-        if (!lk.owns_lock() || queue_.size() >= kMaxQueued) {
-            dropped_.fetch_add(n, std::memory_order_relaxed);
+        if (n == 0) { return; }
+        Shared& s = *s_;
+        std::unique_lock<std::mutex> lk(s.m, std::try_to_lock);
+        if (!lk.owns_lock() || s.count >= kMaxQueued || n > kRingFloats - s.used) {
+            s.dropped.fetch_add(n, std::memory_order_relaxed);
             return;
         }
-        queue_.push_back(Block{std::vector<float>(audio, audio + n), open});   // (one allocation per block: the audio thread's price for an output that was asked for)
+        const std::size_t first = std::min(n, kRingFloats - s.tail);
+        std::memcpy(s.ring.data() + s.tail, audio, first * sizeof(float));
+        if (n > first) { std::memcpy(s.ring.data(), audio + first, (n - first) * sizeof(float)); }
+        s.meta[(s.mhead + s.count) % kMaxQueued] = Meta{s.tail, n, open};
+        s.tail = (s.tail + n) % kRingFloats;
+        s.used += n;
+        ++s.count;
         lk.unlock();
-        cv_.notify_one();
+        s.cv.notify_one();
     }
-    std::uint64_t droppedFrames() const { return dropped_.load(std::memory_order_relaxed); }
-    std::uint64_t writtenFrames() const { return written_.load(std::memory_order_relaxed); }
-    bool failed() const { return failed_.load(std::memory_order_relaxed); }
+    std::uint64_t droppedFrames() const { return s_->dropped.load(std::memory_order_relaxed); }
+    std::uint64_t writtenFrames() const { return s_->written.load(std::memory_order_relaxed); }
+    bool failed() const { return s_->failed.load(std::memory_order_relaxed); }
 
 private:
-    struct Block {
-        std::vector<float> audio;
+    struct Meta {
+        std::size_t at = 0;
+        std::size_t len = 0;
         bool open = false;
     };
-    static constexpr std::size_t kMaxQueued = 256;
-    void run() {
-        for (;;) {
-            Block b;
-            {
-                std::unique_lock<std::mutex> lk(m_);
-                cv_.wait(lk, [this] { return stop_ || !queue_.empty(); });
-                if (queue_.empty()) { return; }   // stopping, and nothing left
-                b = std::move(queue_.front());
-                queue_.pop_front();
+    struct Shared {
+        explicit Shared(const WriterConfig& cfg) : writer(cfg), ring(kRingFloats, 0.0f), meta(kMaxQueued) {}
+        Writer writer;
+        std::mutex m;
+        std::condition_variable cv;
+        std::vector<float> ring;
+        std::vector<Meta> meta;
+        std::size_t tail = 0;     // where the next block goes
+        std::size_t used = 0;     // samples held (a block being written is held until it is done)
+        std::size_t mhead = 0;    // the oldest block's slot in `meta`
+        std::size_t count = 0;    // blocks held
+        bool stop = false;        // the output was destroyed: write what is left, close, end
+        bool ended = false;       // the worker has finished (its file closed)
+        bool counted = false;     // the retirement is counted in RecordFinisher until `ended`
+        std::atomic<std::uint64_t> dropped{0}, written{0};
+        std::atomic<bool> failed{false};
+    };
+    // The worker's last act, however it ends: tell the quit drain it is done.
+    struct EndGuard {
+        Shared& s;
+        ~EndGuard() {
+            std::lock_guard<std::mutex> lk(s.m);
+            s.ended = true;
+            if (s.counted) {
+                s.counted = false;
+                RecordFinisher::externalEnd();
             }
-            if (!writer_.write(b.audio.data(), b.audio.size(), b.open, utcNow())) { failed_.store(true, std::memory_order_relaxed); }
-            written_.fetch_add(b.audio.size(), std::memory_order_relaxed);
         }
+    };
+    static void work(Shared& s) {
+        const EndGuard guard{s};
+        std::vector<float> block;   // the worker's own copy of a block (it may allocate: it is not the audio thread)
+        for (;;) {
+            Meta mt;
+            {
+                std::unique_lock<std::mutex> lk(s.m);
+                s.cv.wait(lk, [&s] { return s.stop || s.count > 0; });
+                if (s.count == 0) { break; }   // stopping, and nothing left
+                mt = s.meta[s.mhead];
+            }
+            // The block stays held (the producer cannot overwrite it) while it is copied out and written, so no lock is held across the disk.
+            block.resize(mt.len);
+            const std::size_t first = std::min(mt.len, kRingFloats - mt.at);
+            std::memcpy(block.data(), s.ring.data() + mt.at, first * sizeof(float));
+            if (mt.len > first) { std::memcpy(block.data() + first, s.ring.data(), (mt.len - first) * sizeof(float)); }
+            if (!s.writer.write(block.data(), block.size(), mt.open, utcNow())) { s.failed.store(true, std::memory_order_relaxed); }
+            s.written.fetch_add(mt.len, std::memory_order_relaxed);
+            {
+                std::lock_guard<std::mutex> lk(s.m);
+                s.mhead = (s.mhead + 1) % kMaxQueued;
+                --s.count;
+                s.used -= mt.len;
+            }
+        }
+        s.writer.close();
     }
-    ChannelWavWriter writer_;
-    std::mutex m_;
-    std::condition_variable cv_;
-    std::deque<Block> queue_;
-    bool stop_ = false;
-    std::atomic<std::uint64_t> dropped_{0}, written_{0};
-    std::atomic<bool> failed_{false};
-    std::thread thread_;
+    std::shared_ptr<Shared> s_;
 };
+using AsyncWavOutput = BasicAsyncWavOutput<ChannelWavWriter>;
 
 // One channel's gate: filters, then its own squelch, then its outputs.
 class ChannelGateImpl final : public patch::ChannelGate {
