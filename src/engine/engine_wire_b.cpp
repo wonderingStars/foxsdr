@@ -4,6 +4,7 @@
 // ops radio_scope.hpp lists. Each op group lives in its own section below; the pure work is in the model headers (core/field_strength.hpp ...).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -675,6 +676,7 @@ void Engine::wireBStopIqOut(std::size_t slot) {
 
 void Engine::wireBShutdown() {
     if (wireB_ == nullptr) { return; }
+    if (wireB_->stitch.active()) { std::lock_guard<std::mutex> lk(wireB_->mutex); stitchEnd(std::string()); }   // (the radio's own centre goes back before anything closes)
     if (wireB_->sbs != nullptr) { wireB_->sbs->stop(); wireB_->sbs.reset(); }
     for (std::size_t i = 0; i < wireB_->iqOut.size(); ++i) { wireBStopIqOut(i); }
 }
@@ -750,12 +752,40 @@ FoxCommandResult Engine::sweepOp(const FoxCommand& c, const std::string& text, F
             double startMhz = 0.0, stopMhz = 0.0, interval = 0.0, stepMhz = 10.0, lna = 16.0, vga = 16.0, rateMsps = 20.0, baud = 500000.0, topDbm = -10.0, bottomDbm = -120.0;
             std::size_t points = 450, fft = 1024;
             bool amp = false;
+            // second pass: the stitched sweep of an ordinary radio (kind "radio")
+            wireb::StitchSettings ss;
+            std::size_t radioNo = 0, ssFrames = static_cast<std::size_t>(ss.frames), ssSettle = static_cast<std::size_t>(ss.settleMs), ssTimeout = static_cast<std::size_t>(ss.timeoutMs), ssPasses = static_cast<std::size_t>(ss.passes);
+            if (!q.count("radio", radioNo, 1, 8) || !q.number("step_fraction", ss.stepFraction, 0.0, 10.0) || !q.number("trim", ss.trimFraction, 0.0, 1.0) || !q.count("settle_ms", ssSettle, 0, 1000000) ||
+                !q.count("frames", ssFrames, 1, 1000000) || !q.count("timeout_ms", ssTimeout, 0, 100000000) || !q.count("passes", ssPasses, 0, 1000000000)) {
+                return refusal(res, FOXAPI_BAD_ARGUMENT, q.error);
+            }
             if (!q.word("kind", kind) || !q.word("port", port) || !q.word("serial", serial) || !q.number("start_mhz", startMhz, 0.0, 1e6) || !q.number("stop_mhz", stopMhz, 0.0, 1e6) ||
                 !q.count("points", points, 2, 1048576) || !q.number("interval_ms", interval, 0.0, 60000.0) || !q.number("step_mhz", stepMhz, 1.0, 20.0) || !q.number("lna_db", lna, 0.0, 40.0) ||
                 !q.number("vga_db", vga, 0.0, 62.0) || !q.flag("amp", amp) || !q.number("sample_rate_msps", rateMsps, 2.0, 20.0) || !q.count("fft_size", fft, 32, 65536) ||
                 !q.number("baud", baud, 1.0, 5e6) || !q.number("top_dbm", topDbm, -500.0, 0.0) || !q.number("bottom_dbm", bottomDbm, -500.0, 0.0) || !q.finish()) {
                 return refusal(res, FOXAPI_BAD_ARGUMENT, q.error);
             }
+            const bool anyRadioKey = p.contains("radio") || p.contains("step_fraction") || p.contains("trim") || p.contains("settle_ms") || p.contains("frames") || p.contains("timeout_ms") || p.contains("passes");
+            if (kind == "radio") {
+                // THE STITCHED SWEEP OF AN ORDINARY RADIO: retunes the radio the user names, one centre after another (receive only: only SET_CENTRE is ever sent), and puts the pieces into one wide line.
+                if (!port.empty() || !serial.empty() || p.contains("points") || p.contains("interval_ms") || p.contains("step_mhz") || p.contains("lna_db") || p.contains("vga_db") || p.contains("amp") ||
+                    p.contains("sample_rate_msps") || p.contains("fft_size") || p.contains("baud") || p.contains("top_dbm") || p.contains("bottom_dbm")) {
+                    return refusal(res, FOXAPI_BAD_ARGUMENT, "a stitched sweep of a radio takes radio, start_mhz, stop_mhz, step_fraction, trim, settle_ms, frames, timeout_ms and passes only");
+                }
+                ss.startHz = startMhz * 1e6;
+                ss.stopHz = stopMhz * 1e6;
+                ss.frames = static_cast<int>(std::min<std::size_t>(ssFrames, 1000000));
+                ss.settleMs = static_cast<int>(std::min<std::size_t>(ssSettle, 1000000));
+                ss.timeoutMs = static_cast<int>(std::min<std::size_t>(ssTimeout, 100000000));
+                ss.passes = static_cast<int>(std::min<std::size_t>(ssPasses, 1000000000));
+                if (!p.contains("passes")) { ss.passes = 1; }
+                const std::size_t slot = radioNo != 0 ? radioNo - 1 : scopedSlot();
+                res = stitchStart(slot, ss, res);
+                if (res.status != FOXAPI_OK) { return res; }
+                changed = true;
+                break;
+            }
+            if (anyRadioKey) { return refusal(res, FOXAPI_BAD_ARGUMENT, "radio, step_fraction, trim, settle_ms, frames, timeout_ms and passes are for kind \"radio\""); }
             if (kind == "rfexplorer") {
                 // An RF Explorer spectrum analyser over a COM port (radio-bridges): whole kHz, the display's top and bottom in dBm; the device's own number of points. The device limits the range and span.
                 if (!serial.empty() || p.contains("points") || p.contains("interval_ms") || p.contains("step_mhz") || p.contains("lna_db") || p.contains("vga_db") || p.contains("amp") || p.contains("sample_rate_msps") || p.contains("fft_size")) {
@@ -819,6 +849,7 @@ FoxCommandResult Engine::sweepOp(const FoxCommand& c, const std::string& text, F
                 w.sweep.stop();   // (a worker that ended by itself is joined here, so nothing is left behind)
                 return refusal(res, FOXAPI_NO_CHANGE, "no sweep device is open");
             }
+            if (w.stitch.active()) { stitchEnd(std::string()); }   // a stitched run: the radio's own centre goes back first
             w.sweep.stop();
             changed = true;
             break;
@@ -874,6 +905,54 @@ FoxCommandResult Engine::sweepOp(const FoxCommand& c, const std::string& text, F
             if (x >= 0.0) { double hz = 0.0; if (w.sweep.heatmapFrequencyAt(x, hz)) { j["click_hz"] = hz; } }
             if (occupancy) { j["occupancy_csv"] = w.sweep.occupancyCsv(); }
             w.facts["sweep.read"] = j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace);
+            changed = true;
+            break;
+        }
+        case FOXAPP_OP_SWEEP_HISTORY: {
+            std::string action, path, format = "csv";
+            if (!q.word("action", action) || !q.word("path", path) || !q.word("format", format) || !q.finish()) { return refusal(res, FOXAPI_BAD_ARGUMENT, q.error); }
+            if (action != "save" && action != "load" && action != "clear") { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"action\" is save, load or clear"); }
+            if (action == "clear") {
+                if (p.contains("path") || p.contains("format")) { return refusal(res, FOXAPI_BAD_ARGUMENT, "clear takes no path or format"); }
+                if (w.sweep.historyInfo().lines == 0) { return refusal(res, FOXAPI_NO_CHANGE, "the history is empty already"); }
+                w.sweep.historyClear();
+                w.sweepHistoryNote = "cleared";
+                changed = true;
+                break;
+            }
+            std::string why;
+            if (!wireb::historyFullPath(path, why)) { return refusal(res, FOXAPI_BAD_ARGUMENT, why); }
+            if (action == "save") {
+                cascade::core::HistoryFormat f = cascade::core::HistoryFormat::Csv;
+                if (format == "json") { f = cascade::core::HistoryFormat::Json; }
+                else if (format == "xml") { f = cascade::core::HistoryFormat::Xml; }
+                else if (format != "csv") { return refusal(res, FOXAPI_BAD_ARGUMENT, "\"format\" is csv, json or xml"); }
+                const cascade::core::SweepHistory h = w.sweep.historySnapshot();
+                if (h.sweeps.empty()) { return refusal(res, FOXAPI_NO_CHANGE, "there is no sweep history to save"); }
+                const std::string body = cascade::core::historyToText(h, f, &why);
+                if (body.empty()) { w.sweepHistoryNote = "not saved: " + why; ++wireBVersion_; return refusal(res, FOXAPI_FAILED, why); }
+                if (body.size() > wireb::kSweepFileBytes) { why = "the history is too big for one file (4 MiB): clear it or save less"; w.sweepHistoryNote = "not saved: " + why; ++wireBVersion_; return refusal(res, FOXAPI_FAILED, why); }
+                if (!wireb::historyWriteNewFile(path, body, why)) { w.sweepHistoryNote = "not saved: " + why; ++wireBVersion_; return refusal(res, FOXAPI_FAILED, why); }
+                w.sweepHistoryNote = "saved " + std::to_string(h.sweeps.size()) + " sweeps";
+                res.applied[0] = static_cast<double>(h.sweeps.size());
+                changed = true;
+                break;
+            }
+            // load
+            if (p.contains("format")) { return refusal(res, FOXAPI_BAD_ARGUMENT, "load finds the format by itself"); }
+            if (w.sweep.running()) { return refusal(res, FOXAPI_BUSY, "close the sweep first: a history is loaded only while nothing is sweeping"); }
+            std::string body;
+            if (!wireb::historyReadFile(path, wireb::kSweepFileBytes, body, why)) { w.sweepHistoryNote = "not loaded: " + why; ++wireBVersion_; return refusal(res, FOXAPI_FAILED, why); }
+            const cascade::core::HistoryLoad ld = cascade::core::historyFromText(body);
+            if (!ld.ok) {
+                why = ld.line != 0 ? "line " + std::to_string(ld.line) + ": " + ld.error : ld.error;
+                w.sweepHistoryNote = "not loaded: " + why;
+                ++wireBVersion_;
+                return refusal(res, FOXAPI_BAD_ARGUMENT, "the file was refused, " + why);
+            }
+            if (!w.sweep.historyLoad(ld.history, why)) { w.sweepHistoryNote = "not loaded: " + why; ++wireBVersion_; return refusal(res, FOXAPI_FAILED, why); }
+            w.sweepHistoryNote = "loaded " + std::to_string(ld.history.sweeps.size()) + " sweeps";
+            res.applied[0] = static_cast<double>(ld.history.sweeps.size());
             changed = true;
             break;
         }
@@ -968,6 +1047,7 @@ FoxCommandResult Engine::applyWireB(const FoxCommand& c, const std::string& text
         case FOXAPP_OP_SWEEP_CLOSE:
         case FOXAPP_OP_SWEEP_CONFIG:
         case FOXAPP_OP_SWEEP_READ:
+        case FOXAPP_OP_SWEEP_HISTORY:
             res = sweepOp(c, text, res, changed);
             break;
         case FOXAPP_OP_MASK_LOAD: {
@@ -1088,6 +1168,19 @@ void Engine::pumpWireB() {
         pumpFollow();
         pumpSbs();
         pumpTracks();
+        pumpStitch();
+        {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - wireB_->gpuSeenAt >= std::chrono::milliseconds(500)) {
+                wireB_->gpuSeenAt = now;
+                for (std::size_t i = 0; i < receivers_.size() && i < wireB_->gpuSeen.size(); ++i) {
+                    if (!receivers_[i]) { continue; }
+                    const cascade::core::Pipeline::GpuFftReport g = receivers_[i]->pipeline_.gpuFftReport();
+                    const std::uint64_t seen = g.submitted + g.blockGpu + g.blockCpu;
+                    if (seen != wireB_->gpuSeen[i]) { wireB_->gpuSeen[i] = seen; ++wireBVersion_; }
+                }
+            }
+        }
     }
     if (!wireB_->maskEnabled || !wireB_->maskLoaded) { return; }
     WireBState& w = *wireB_;
@@ -1148,6 +1241,7 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
         wireb::Json j = wireb::Json::object();
         j["mode"] = r.mode; j["engaged"] = r.engaged; j["backend"] = r.backend == 1 ? "gpu" : "cpu"; j["submitted"] = r.submitted; j["completed_gpu"] = r.completedGpu;
         j["completed_cpu"] = r.completedCpu; j["dropped_frames"] = r.droppedFrames; j["device_lost"] = r.deviceLost; j["error"] = r.error;
+        j["block_gpu_frames"] = r.blockGpu; j["block_cpu_frames"] = r.blockCpu; j["block_gpu_up"] = r.blockUp;
         fact("radio." + std::to_string(i + 1) + ".gpufft", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
     }
     {
@@ -1161,7 +1255,13 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
         }
         fact("needed.libs", rows.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
     }
-    if (wireB_ == nullptr) { return; }
+    if (wireB_ == nullptr) {
+        // nothing of this lane has run: the two stores are off, and the facts say so
+        fact("sweep.history", "{\"lines\":0,\"points\":0,\"first_time_s\":0.0,\"last_time_s\":0.0,\"note\":\"\",\"keep_points\":300000}");
+        fact("coverage.state", "{\"enabled\":false,\"cells\":0,\"added\":0,\"bad_input\":0,\"too_far\":0,\"stale\":0,\"future\":0,\"max_range_km\":0.0}");
+        fact("tracks.state", "{\"enabled\":false,\"retention_s\":21600.0,\"added\":0,\"replaced\":0,\"refused\":0,\"too_old\":0,\"evicted\":0,\"tracks\":0}");
+        return;
+    }
     std::lock_guard<std::mutex> lk(wireB_->mutex);
     {
         const wireb::SweepStatus s = wireB_->sweep.status();
@@ -1172,7 +1272,24 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
             fact("sweep.state", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
         }
     }
-    if (wireB_->coverage != nullptr) {
+    {
+        const wireb::SweepHost::HistoryInfo hi = wireB_->sweep.historyInfo();
+        wireb::Json j = wireb::Json::object();
+        j["lines"] = hi.lines; j["points"] = hi.points; j["first_time_s"] = hi.firstTimeS; j["last_time_s"] = hi.lastTimeS; j["note"] = wireB_->sweepHistoryNote; j["keep_points"] = wireb::kSweepKeepPoints;
+        fact("sweep.history", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
+    }
+    if (wireB_->stitch.steps() != 0) {
+        const wireb::StitchRun& sr = wireB_->stitch;
+        wireb::Json j = wireb::Json::object();
+        j["active"] = sr.active(); j["radio"] = wireB_->stitchSlot + 1; j["centres"] = sr.steps(); j["step"] = sr.step() + (sr.active() ? 1u : 0u); j["passes_done"] = sr.passesDone();
+        j["seams"] = sr.seams(); j["seams_aligned"] = sr.alignedSeams(); j["bin_hz"] = sr.lastBinHz(); j["note"] = sr.active() ? sr.note() : sr.failure(); j["step_fraction"] = sr.settings().stepFraction;
+        j["original_centre_hz"] = wireB_->stitchOrigCentreHz;
+        fact("sweep.stitch", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
+    }
+    if (wireB_->coverage == nullptr) {
+        // second pass (screen lane L's finding): a fact that says "off" instead of no fact at all
+        fact("coverage.state", "{\"enabled\":false,\"cells\":0,\"added\":0,\"bad_input\":0,\"too_far\":0,\"stale\":0,\"future\":0,\"max_range_km\":0.0}");
+    } else {
         const cascade::core::adsbcov::Stats s = wireB_->coverage->stats();
         const double nowS = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
         wireb::Json j = wireb::Json::object();
@@ -1180,7 +1297,7 @@ void Engine::wireBFacts(const std::function<void(const std::string&, const std::
         j["future"] = s.future; j["max_range_km"] = wireB_->coverage->maxRangeKm(nowS);
         fact("coverage.state", j.dump(-1, ' ', false, wireb::Json::error_handler_t::replace));
     }
-    if (wireB_->trackStore != nullptr || wireB_->tracksEnabled) {
+    {
         wireb::Json j = wireb::Json::object();
         const cascade::core::tracks::Stats s = wireB_->trackStore != nullptr ? wireB_->trackStore->stats() : cascade::core::tracks::Stats{};
         j["enabled"] = wireB_->tracksEnabled; j["retention_s"] = wireB_->tracksRetentionS; j["added"] = s.added; j["replaced"] = s.replaced; j["refused"] = s.refused; j["too_old"] = s.tooOld;

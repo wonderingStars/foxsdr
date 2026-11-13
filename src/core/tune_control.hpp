@@ -20,6 +20,7 @@
 #include "core/i18n.hpp"
 #include "core/patch_devices.hpp"
 #include "core/plugin_abi.h"
+#include "core/wire_b_source_kinds.hpp"   // wire-b second pass: the table's keys are native kinds
 #include "core/plugin_ui_data.hpp"  // MutePreset (the data; the machinery, core/plugin_ui.hpp, is not the interface's - the fence)
 #include "core/user_presets.hpp"
 #include "core/utf8_text.hpp"  // utf8Floor: joinMuteNamesInto cuts on a character
@@ -1752,7 +1753,8 @@ inline bool fallbackNamesTheSameDongle(const std::string& nativeKey,
 inline bool isNativeSourceKind(const std::string& kind) {
     return kind == "rtlsdr" || kind == "hackrf" || kind == "airspy" || kind == "airspyhf" ||
            kind == "sdrplay" || kind == "mirisdr" || kind == "rx888" || kind == "pluto" ||
-           kind == "aor" || kind == "hydrasdr" || kind == "rtltcp" || kind == "kiwisdr" || kind == "rawiq";
+           kind == "aor" || kind == "hydrasdr" || kind == "rtltcp" || kind == "kiwisdr" || kind == "rawiq" ||
+           cascade::core::isWireBSourceKind(kind);   // wire-b second pass (item 33): the twelve radios of the wire-b source table save and restore like the rest
 }
 
 // WHAT TO CALL A RECORDING ON SCREEN: its own name, not the path it lives at.

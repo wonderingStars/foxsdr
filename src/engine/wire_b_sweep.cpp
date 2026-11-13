@@ -50,7 +50,7 @@ bool SweepHost::start(const SerialLinkFactory& factory, const std::string& kind,
         refused_ = 0;
         lastError_.clear();
         haveLast_ = false;
-        cascade::core::HeatmapConfig hc;
+        cascade::core::HeatmapConfig hc = heatPrefs_;
         hc.startHz = startHz;
         hc.stopHz = stopHz;
         std::string hwhy;
@@ -108,7 +108,7 @@ bool SweepHost::startRfe(const RfeLinkFactory& factory, const std::string& port,
         refused_ = 0;
         lastError_.clear();
         haveLast_ = false;
-        cascade::core::HeatmapConfig hc;
+        cascade::core::HeatmapConfig hc = heatPrefs_;
         hc.startHz = startHz;
         hc.stopHz = stopHz;
         std::string hwhy;
@@ -161,7 +161,8 @@ void SweepHost::loopRfe() {
             req_.points = line.db.size();
             if (heatReady_) { std::string w; (void)heat_.addLine(line, &w); }
             if (occReady_) { std::string w; (void)occ_.addSweep(line, &w); }
-            last_ = std::move(line);
+            keep_.add(line);
+                last_ = std::move(line);
             haveLast_ = true;
         } else if (r == rfe::Result::Refused) {
             ++refused_;
@@ -199,7 +200,7 @@ bool SweepHost::startHackRf(const HackRfFactory& factory, const std::string& arg
         refused_ = 0;
         lastError_.clear();
         haveLast_ = false;
-        cascade::core::HeatmapConfig hc;
+        cascade::core::HeatmapConfig hc = heatPrefs_;
         hc.startHz = a;
         hc.stopHz = b;
         std::string hwhy;
@@ -222,6 +223,7 @@ void SweepHost::loopHackRf() {
             ++sweeps_;
             if (heatReady_) { std::string w; (void)heat_.addLine(l, &w); }
             if (occReady_) { std::string w; (void)occ_.addSweep(l, &w); }
+            keep_.add(l);
             last_ = l;
             haveLast_ = true;
         }
@@ -233,11 +235,59 @@ void SweepHost::loopHackRf() {
     }
 }
 
+bool SweepHost::beginExternal(const std::string& kind, double startHz, double stopHz, std::string& why) {
+    stop();
+    if (!(stopHz > startHz)) { why = "the stop frequency must be above the start frequency"; return false; }
+    std::lock_guard<std::mutex> lk(m_);
+    link_.reset();
+    req_ = tsa::SweepRequest{};
+    req_.startHz = startHz;
+    req_.stopHz = stopHz;
+    req_.points = 0;
+    kind_ = kind;
+    sweeps_ = 0;
+    refused_ = 0;
+    lastError_.clear();
+    haveLast_ = false;
+    heatReady_ = false;   // (the first line sets the range)
+    external_ = true;
+    stopFlag_.store(false);
+    running_.store(true);
+    return true;
+}
+
+void SweepHost::ingestLine(const cascade::core::SweepLine& line) {
+    std::lock_guard<std::mutex> lk(m_);
+    if (line.db.empty()) { return; }
+    if (external_ && !heatReady_) {
+        cascade::core::HeatmapConfig hc = heatPrefs_;
+        hc.startHz = line.startHz;
+        hc.stopHz = line.stopHz > line.startHz ? line.stopHz : line.startHz + 1.0;
+        std::string w;
+        heatReady_ = heat_.configure(hc, &w);
+    }
+    ++sweeps_;
+    req_.points = line.db.size();
+    if (heatReady_) { std::string w; (void)heat_.addLine(line, &w); }
+    if (occReady_) { std::string w; (void)occ_.addSweep(line, &w); }
+    keep_.add(line);
+    last_ = line;
+    haveLast_ = true;
+}
+
+void SweepHost::endExternal(const std::string& sentence) {
+    std::lock_guard<std::mutex> lk(m_);
+    lastError_ = sentence;
+    external_ = false;
+    running_.store(false);
+}
+
 void SweepHost::stop() {
     stopFlag_.store(true);
     if (th_.joinable()) { th_.join(); }
     running_.store(false);
     std::lock_guard<std::mutex> lk(m_);
+    external_ = false;
     link_.reset();
     if (hackrf_ != nullptr) { hackrf_->stop(); hackrf_->close(); hackrf_.reset(); }
 }
@@ -263,6 +313,7 @@ void SweepHost::loop() {
                 ++sweeps_;
                 if (heatReady_) { std::string w; (void)heat_.addLine(line, &w); }
                 if (occReady_) { std::string w; (void)occ_.addSweep(line, &w); }
+                keep_.add(line);
                 last_ = std::move(line);
                 haveLast_ = true;
             } else if (r == tsa::SweepResult::Refused || r == tsa::SweepResult::Malformed) {
@@ -306,8 +357,16 @@ bool SweepHost::configureHeatmap(const cascade::core::HeatmapConfig& cfg, std::s
     std::lock_guard<std::mutex> lk(m_);
     cascade::core::HeatmapConfig c = cfg;
     if (c.startHz == 0.0 && c.stopHz == 0.0) { c.startHz = req_.startHz; c.stopHz = req_.stopHz; }
+    const bool haveRange = c.stopHz > c.startHz;
+    // with no device ever opened there is no range yet: the settings are checked against a stand-in range and kept for the next open
+    cascade::core::HeatmapConfig probe = c;
+    if (!haveRange) { probe.startHz = 0.0; probe.stopHz = 1.0e6; }
     cascade::core::SweepHeatmap fresh;
-    if (!fresh.configure(c, &why)) { return false; }
+    if (!fresh.configure(probe, &why)) { return false; }
+    heatPrefs_ = c;
+    heatPrefs_.startHz = 0.0;
+    heatPrefs_.stopHz = 0.0;
+    if (!haveRange) { return true; }
     heat_ = std::move(fresh);
     heatReady_ = true;
     return true;
@@ -326,6 +385,57 @@ void SweepHost::clearOccupancy() {
     std::lock_guard<std::mutex> lk(m_);
     occ_ = cascade::core::OccupancyModel{};
     occReady_ = false;
+}
+
+SweepHost::HistoryInfo SweepHost::historyInfo() const {
+    std::lock_guard<std::mutex> lk(m_);
+    HistoryInfo i;
+    i.lines = keep_.lines();
+    i.points = keep_.points();
+    i.firstTimeS = keep_.firstTimeS();
+    i.lastTimeS = keep_.lastTimeS();
+    return i;
+}
+
+cascade::core::SweepHistory SweepHost::historySnapshot() const {
+    std::lock_guard<std::mutex> lk(m_);
+    return keep_.snapshot();
+}
+
+void SweepHost::historyClear() {
+    std::lock_guard<std::mutex> lk(m_);
+    keep_.clear();
+}
+
+bool SweepHost::historyLoad(const cascade::core::SweepHistory& h, std::string& why) {
+    std::lock_guard<std::mutex> lk(m_);
+    if (running_.load()) { why = "close the sweep first: a history is loaded only while nothing is sweeping"; return false; }
+    if (h.sweeps.empty()) { why = "the history holds no sweep"; return false; }
+    if (!keep_.replace(h, why)) { return false; }
+    double lo = h.sweeps.front().startHz, hi = h.sweeps.front().stopHz;
+    for (const cascade::core::SweepLine& l : h.sweeps) { lo = std::min(lo, l.startHz); hi = std::max(hi, l.stopHz); }
+    cascade::core::HeatmapConfig hc = heatPrefs_;
+    hc.startHz = lo;
+    hc.stopHz = hi > lo ? hi : lo + 1.0;
+    std::string hwhy;
+    cascade::core::SweepHeatmap fresh;
+    heatReady_ = fresh.configure(hc, &hwhy);
+    if (heatReady_) {
+        heat_ = std::move(fresh);
+        for (const cascade::core::SweepLine& l : h.sweeps) { std::string w; (void)heat_.addLine(l, &w); }
+    }
+    last_ = h.sweeps.back();
+    haveLast_ = true;
+    req_ = tsa::SweepRequest{};
+    req_.startHz = lo;
+    req_.stopHz = hc.stopHz;
+    req_.points = last_.db.size();
+    kind_ = "history";
+    sweeps_ = h.sweeps.size();
+    refused_ = 0;
+    lastError_.clear();
+    external_ = false;
+    return true;
 }
 
 bool SweepHost::lastLine(std::size_t maxPoints, cascade::core::SweepLine& out) const {

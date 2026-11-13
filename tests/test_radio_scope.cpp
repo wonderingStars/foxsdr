@@ -116,7 +116,7 @@ void testTheList() {
                                            FOXAPP_OP_SWEEP_OPEN, FOXAPP_OP_SWEEP_CLOSE, FOXAPP_OP_SWEEP_CONFIG, FOXAPP_OP_SWEEP_READ,
                                            FOXAPP_OP_FOLLOW_SET, FOXAPP_OP_FOLLOW_CLEAR, FOXAPP_OP_FOLLOW_LOCK, FOXAPP_OP_FOLLOW_KEEP,
                                            FOXAPP_OP_SBS_OUT_START, FOXAPP_OP_SBS_OUT_STOP,
-                                           FOXAPP_OP_TRACKS_CONFIG, FOXAPP_OP_TRACKS_READ, FOXAPP_OP_COVERAGE_CONFIG, FOXAPP_OP_COVERAGE_READ, FOXAPP_OP_NEEDED_LIB_CHECK};
+                                           FOXAPP_OP_TRACKS_CONFIG, FOXAPP_OP_TRACKS_READ, FOXAPP_OP_COVERAGE_CONFIG, FOXAPP_OP_COVERAGE_READ, FOXAPP_OP_NEEDED_LIB_CHECK, FOXAPP_OP_SWEEP_HISTORY};
         for (const std::uint32_t op : wireBScoped) { CHECK(isRadioScopedOp(op)); }
         for (const std::uint32_t op : wireBGlobal) { CHECK(!isRadioScopedOp(op)); }
     }

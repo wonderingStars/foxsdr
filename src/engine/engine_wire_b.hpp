@@ -11,6 +11,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -31,6 +32,8 @@
 #include "net/iq_out.hpp"
 #include "engine/wire_b_bits.hpp"
 #include "engine/wire_b_framelog.hpp"
+#include "engine/wire_b_stitch.hpp"
+#include "core/spectrum_frame.hpp"
 
 namespace cascade::engine {
 
@@ -123,6 +126,16 @@ struct WireBState {
     // the needed-libraries check: what it may touch (a test gives a fabricated machine) and the last answer per library id (JSON text)
     cascade::source::needed::Env neededEnv = cascade::source::needed::defaultEnv();
     std::map<std::string, std::string> neededChecks;
+    // second pass: the stitched sweep of an ordinary radio (SWEEP_OPEN kind "radio"; engine_wire_b_stitch.cpp)
+    wireb::StitchRun stitch;
+    std::string sweepHistoryNote;   // the last save / load / clear of the sweep history, in words (never a path)
+    std::size_t stitchSlot = 0;
+    double stitchOrigCentreHz = 0.0;
+    bool stitchRetuned = false;
+    cascade::core::SpectrumFrame stitchFrame;
+    // second pass: the GPU spectrum's counters move without any command: the facts are republished (at most twice a second) when one did
+    std::array<std::uint64_t, 8> gpuSeen{};
+    std::chrono::steady_clock::time_point gpuSeenAt{};
 };
 
 }  // namespace cascade::engine

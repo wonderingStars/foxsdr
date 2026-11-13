@@ -24,6 +24,7 @@
 
 #include "core/pipeline.hpp"
 #include "dsp/gpu_fft.hpp"
+#include "dsp/spectrum_block_gpu.hpp"
 
 namespace cascade::core {
 
@@ -51,6 +52,17 @@ std::shared_ptr<Pipeline::GpuFftState> Pipeline::makeGpuFftState() { return std:
 void Pipeline::setGpuFftMode(int mode) {
     const int m = (mode < 0 || mode > 2) ? 0 : mode;
     gpuFft_->wanted.store(m, std::memory_order_release);
+    {
+        // second pass: the spectrum block (SET_SPECTRUM) follows the same switch (dsp/spectrum_block_gpu.hpp). A block that does not exist yet is made now (idle: the DSP thread feeds it only once
+        // SET_SPECTRUM turns it on), so a radio set to GPU before it picks a large size still gets it.
+        std::lock_guard<std::mutex> blk(frameMutex_);
+        if (!specBlock_ && m != 0) {
+            cascade::dsp::SpecConfig c;
+            c.sampleRateHz = mirrorInputRateHz_.load(std::memory_order_relaxed);
+            specBlock_ = std::make_unique<cascade::dsp::SpectrumBlock>(c);
+        }
+        if (specBlock_) { specBlock_->setGpuPolicy(m); }
+    }
     std::lock_guard<std::mutex> lk(gpuFft_->mu);
     gpuFft_->report.mode = m;
 }
@@ -59,6 +71,10 @@ Pipeline::GpuFftReport Pipeline::gpuFftReport() const {
     std::lock_guard<std::mutex> lk(gpuFft_->mu);
     GpuFftReport r = gpuFft_->report;
     r.mode = gpuFft_->wanted.load(std::memory_order_acquire);
+    {
+        std::lock_guard<std::mutex> blk(frameMutex_);
+        if (specBlock_) { r.blockGpu = specBlock_->gpuFramesOnGpu(); r.blockCpu = specBlock_->gpuFramesOnCpu(); r.blockUp = specBlock_->gpuUp(); }
+    }
     return r;
 }
 

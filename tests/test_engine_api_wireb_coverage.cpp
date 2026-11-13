@@ -88,7 +88,8 @@ int main() {
     Rig r;
 
     std::printf("C1: off by default\n");
-    CHECK(factJson(r, "coverage.state").is_null());
+    CHECK(factJson(r, "coverage.state").is_object());   // second pass (screen lane L): the fact is there and says it is off
+    CHECK_EQ(factJson(r, "coverage.state")["enabled"].get<bool>(), false);
     CHECK_EQ(sendText(r, FOXAPP_OP_COVERAGE_READ, "{}").status(), FOXAPI_FAILED);
     CHECK_EQ(sendText(r, FOXAPP_OP_COVERAGE_CONFIG, "{\"enabled\":true}").status(), FOXAPI_BAD_ARGUMENT);
     CHECK_EQ(sendText(r, FOXAPP_OP_COVERAGE_CONFIG, "{\"enabled\":true,\"rx_lat\":51.5}").status(), FOXAPI_BAD_ARGUMENT);
@@ -159,7 +160,7 @@ int main() {
         CHECK_EQ(read(r, "{}")["cells"].size(), static_cast<std::size_t>(0));
         CHECK_EQ(sendText(r, FOXAPP_OP_COVERAGE_CONFIG, "{\"enabled\":false}").status(), FOXAPI_OK);
         CHECK_EQ(sendText(r, FOXAPP_OP_COVERAGE_READ, "{}").status(), FOXAPI_FAILED);
-        CHECK(factJson(r, "coverage.state").is_null());
+        CHECK_EQ(factJson(r, "coverage.state")["enabled"].get<bool>(), false);   // off again: the fact says so instead of vanishing
     }
     return check::finish("test_engine_api_wireb_coverage");
 }

@@ -133,6 +133,14 @@ int main() {
     CHECK_EQ(sendText(r, FOXAPP_OP_SWEEP_READ, "{}").status(), FOXAPI_FAILED);
     CHECK_EQ(sendText(r, FOXAPP_OP_SWEEP_CLOSE, "").status(), FOXAPI_NO_CHANGE);
 
+    // second pass (screen lane L's finding): the heat map and occupancy settings are taken with NO device open and kept for the next open
+    std::printf("S0: SWEEP_CONFIG with no device\n");
+    CHECK_EQ(sendText(r, FOXAPP_OP_SWEEP_CONFIG, "{\"heatmap\":{\"cols\":512,\"rows\":64}}").status(), FOXAPI_OK);
+    CHECK_EQ(sendText(r, FOXAPP_OP_SWEEP_CONFIG, "{\"heatmap\":{\"cols\":0}}").status(), FOXAPI_BAD_ARGUMENT);   // the same limits as when open
+    CHECK_EQ(sendText(r, FOXAPP_OP_SWEEP_CONFIG, "{\"heatmap\":{\"time_mode\":\"median\"}}").status(), FOXAPI_BAD_ARGUMENT);
+    CHECK_EQ(sendText(r, FOXAPP_OP_SWEEP_CONFIG, "{\"occupancy\":{\"start_mhz\":88,\"stop_mhz\":108,\"step_khz\":1000}}").status(), FOXAPI_OK);
+    CHECK(bigFact(r, "sweep.state") == "<absent>");   // still no device: no sweep fact, and nothing was opened by it
+
     std::printf("S1: open\n");
     CHECK_EQ(sendText(r, FOXAPP_OP_SWEEP_OPEN, kOpen).status(), FOXAPI_OK);
     CHECK(r.until([&] { const json j = state(r); return j.is_object() && j["sweeps"].get<std::uint64_t>() >= 8; }, 20000));
@@ -141,7 +149,8 @@ int main() {
         std::printf("  sweeps %llu, heatmap %zu rows x %zu cols\n", static_cast<unsigned long long>(j["sweeps"].get<std::uint64_t>()), j["heat_rows"].get<std::size_t>(), j["heat_cols"].get<std::size_t>());
         CHECK(j["open"].get<bool>());
         CHECK_EQ(j["kind"].get<std::string>(), std::string("tinysa"));
-        CHECK_EQ(j["heat_cols"].get<std::size_t>(), static_cast<std::size_t>(1024));
+        CHECK_EQ(j["heat_cols"].get<std::size_t>(), static_cast<std::size_t>(512));    // S0's setting, applied at the open (the default would be 1024)
+        CHECK_EQ(j["occ_channels"].get<std::size_t>(), static_cast<std::size_t>(20));  // and S0's occupancy plan
         CHECK(j["heat_rows"].get<std::size_t>() >= 1);
         CHECK(bigFact(r, "sweep.state").find("COM7") == std::string::npos);   // the port name is in no fact
     }

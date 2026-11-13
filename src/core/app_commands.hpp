@@ -403,6 +403,12 @@
 //   the fact sweep.read. Fact sweep.state = {open, kind, sweeps, refused, last_error, points, start_hz, stop_hz, heat_rows, heat_cols, occ_channels, occ_sweeps}. UNVERIFIED on a real device.
 //   (KIND "hackrf": a HackRF in sweep mode, RECEIVE ONLY: JSON {kind "hackrf", serial (optional), start_mhz, stop_mhz (ONE range of whole MHz, 1..6000), step_mhz 1..20 (10), lna_db 0..40 (16), vga_db 0..62 (16), amp bool,
 //   sample_rate_msps 2..20 (20), fft_size 32..65536 (1024)}; a "port" is refused; the LINEAR sweep only: the interleaved style needs GPL code, the owner's decision.)
+//   (KIND "radio", second pass: the STITCHED SWEEP OF AN ORDINARY RADIO, RECEIVE ONLY: JSON {kind "radio", radio 1..8 (default: the session's radio), start_mhz, stop_mhz, step_fraction 0.3..0.7 (0.6), trim 0..0.4 (0.12),
+//   settle_ms 0..5000 (150), frames 1..64 (2), timeout_ms 500..60000 (4000), passes 0..1000000 (1; 0 = until SWEEP_CLOSE)}; no port. The radio must be RUNNING (FAILED otherwise). The engine retunes it with the
+//   ordinary SET_CENTRE, one centre after another, averages `frames` frames per centre (power), stitches a pass into ONE wide line (core/sweep_stitch.hpp: roll-off trimmed, levels aligned in the overlaps) and
+//   feeds it to the same heat map; the radio's own centre is put back when the run ends however it ends (pass count reached, SWEEP_CLOSE, a sentence). BAD_ARGUMENT for a range needing over 512 centres at the
+//   radio's sample rate; a retune that does not show, no frames, a changed sample rate or centre end the run with a sentence in sweep.state.last_error. Fact sweep.stitch = {active, radio, centres, step,
+//   passes_done, seams, seams_aligned, bin_hz, note, step_fraction, original_centre_hz}. UNVERIFIED on a real radio.)
 #define FOXAPP_OP_SWEEP_OPEN             0x8920u /* text JSON; fact sweep.state */
 #define FOXAPP_OP_SWEEP_CLOSE            0x8921u
 #define FOXAPP_OP_SWEEP_CONFIG           0x8922u /* text JSON */
@@ -458,6 +464,14 @@
 //   in "check": state found | not-found | wrong-32-bit | unusable | cannot-check, sentence, looked_in, found_in (a folder), file. BAD_ARGUMENT for an unknown id or key, or a path for another kind of row.
 //   applied[0]: the number of rows now "found".
 #define FOXAPP_OP_NEEDED_LIB_CHECK       0x8930u /* text JSON; fact needed.libs */
+//   THE SWEEP HISTORY (second pass, item 37 first half; engine/wire_b_history.hpp over core/sweep_history.hpp), LOCAL sessions only. The sweep host keeps every line it receives in MEMORY (at most 300000 points,
+//   the oldest go first). SWEEP_HISTORY (text JSON {action "save" | "load" | "clear", path (a FULL path), format "csv" (default) | "json" | "xml" (save only)}): "save" writes a PLAIN TEXT file, by default the
+//   CSV whose first line is the header `#foxsdr-sweep-history,csv,1` and whose second is `time_s,start_hz,stop_hz,points,db`, then one sweep per row (JSON and XML carry the same data); a file that exists is
+//   never overwritten (FAILED), an empty history is NO_CHANGE, a text over 4 MiB is FAILED. "load" reads such a file back (any of the three, found by its first character; at most 4 MiB), replaces the history,
+//   rebuilds the heat map from it and makes the host "history" and closed; BUSY while a device or a stitched sweep is running, BAD_ARGUMENT with the file's line and the reason for a file the reader refuses
+//   (nothing changes), FAILED for a file that cannot be read. "clear" empties the memory (NO_CHANGE when empty). The path is a full path typed or picked by the person; no fact carries it. Fact sweep.history =
+//   {lines, points, first_time_s, last_time_s, note (the last save / load / refusal in words), keep_points (the budget)}, always present. applied[0] = the sweeps saved or loaded.
+#define FOXAPP_OP_SWEEP_HISTORY          0x8931u /* text JSON; fact sweep.history */
 // wire-b end
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.

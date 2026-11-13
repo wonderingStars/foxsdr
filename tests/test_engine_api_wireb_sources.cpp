@@ -61,7 +61,7 @@ void testArguments() {
     CHECK(ic != nullptr);
     if (ic != nullptr) {
         CHECK(wb::normaliseSourceArgs(*ic, "", args, why));
-        CHECK_EQ(args, std::string());
+        CHECK_EQ(args, std::string("timeout=1500"));   // second pass (item 33): an empty list is saved as the source's own default, so a saved radio is never an empty argument list
         CHECK(wb::normaliseSourceArgs(*ic, "timeout=900", args, why));
         CHECK_EQ(args, std::string("timeout=900"));
     }
@@ -71,7 +71,7 @@ void testArguments() {
         CHECK(!sq->needsAddress);
         CHECK_EQ(sq->requestRateHz, 196078.0);
         CHECK(wb::normaliseSourceArgs(*sq, "", args, why));
-        CHECK_EQ(args, std::string());
+        CHECK_EQ(args, std::string("timeout=3000"));   // (as above)
         CHECK(wb::normaliseSourceArgs(*sq, "sdriq=AB12,timeout=900", args, why));
         CHECK_EQ(args, std::string("sdriq=AB12,timeout=900"));
     }

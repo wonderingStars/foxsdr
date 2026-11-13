@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/config.hpp"
+#include "core/wire_b_source_kinds.hpp"   // wire-b second pass (item 33)
 #include "dsp/tone_squelch.hpp"
 #include "core/smeter_cal.hpp"
 
@@ -320,6 +321,7 @@ std::vector<SavedRadio> sanitiseSavedRadios(std::vector<SavedRadio> in) {
         if (r.number != 0) { taken.insert(r.number); }
         bool known = false;
         for (const char* k : kKinds) { known = known || r.sourceKind == k; }
+        known = known || isWireBSourceKind(r.sourceKind);   // wire-b second pass (item 33): a radio of the wire-b source table
         if (!known) { r.sourceKind = "siggen"; }
         if (r.sourceKind == "siggen") { r.args.clear(); }
         if (r.args.size() > 512u) { r.args.clear(); r.sourceKind = "siggen"; }
@@ -1426,7 +1428,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
         out.sourceKind != "mirisdr" && out.sourceKind != "rx888" &&
         out.sourceKind != "pluto" && out.sourceKind != "soundcard" &&
         out.sourceKind != "aor" && out.sourceKind != "hydrasdr" &&
-        out.sourceKind != "rtltcp" && out.sourceKind != "kiwisdr" && out.sourceKind != "rawiq") {
+        out.sourceKind != "rtltcp" && out.sourceKind != "kiwisdr" && out.sourceKind != "rawiq" && !isWireBSourceKind(out.sourceKind)) {
         out.sourceKind = defaults.sourceKind;
     }
     // The sound card's settings, each back to its default on its own when

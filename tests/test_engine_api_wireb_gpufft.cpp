@@ -20,6 +20,7 @@
 #include <thread>
 #include <vector>
 
+#include "dsp/gpu_fft.hpp"
 #include "wire1_rig.hpp"
 
 namespace {
@@ -144,6 +145,43 @@ int main() {
     CHECK(again.frames >= 20);
     CHECK_EQ(again.peakBin, cpu.peakBin);
     CHECK(std::fabs(again.peakDb - cpu.peakDb) < 1.0f);
+
+    // second pass (item 8): the SPECTRUM BLOCK (SET_SPECTRUM, large sizes) follows the same switch; the numbers do not change
+    std::printf("G5: the spectrum block at 65536 points\n");
+    {
+        bool hw = false;
+        for (const cascade::dsp::GpuAdapterInfo& a : cascade::dsp::enumerateGpuAdapters()) { if (!a.software) { hw = true; } }
+        FoxCommand big = testing::cmd(FOXAPI_OP_SET_SPECTRUM, 0.0, 0, nullptr);
+        big.ival[0] = 65536; big.ival[1] = 3; big.num[0] = 0.0;
+        CHECK_EQ(r.send(big).status(), FOXAPI_OK);
+        const Reading blockCpu = read(r, 3000);
+        std::printf("  block on the CPU: %d frames, tone bin %zu at %.2f dB; GPU frames %llu\n", blockCpu.frames, blockCpu.peakBin, blockCpu.peakDb, static_cast<unsigned long long>(gpuFact(r)["block_gpu_frames"].get<std::uint64_t>()));
+        CHECK(blockCpu.frames >= 5);
+        CHECK_EQ(gpuFact(r)["block_gpu_frames"].get<std::uint64_t>(), static_cast<std::uint64_t>(0));
+        CHECK_EQ(r.send(mode(2)).status(), FOXAPI_OK);
+        if (hw) { CHECK(r.until([&] { return gpuFact(r)["block_gpu_frames"].get<std::uint64_t>() >= 5; }, 30000)); }
+        const Reading blockGpu = read(r, 3000);
+        const json j = gpuFact(r);
+        std::printf("  block on the GPU: %d frames, tone bin %zu at %.2f dB; block GPU frames %llu, block cpu-fallback frames %llu, device up %d\n", blockGpu.frames, blockGpu.peakBin, blockGpu.peakDb,
+                    static_cast<unsigned long long>(j["block_gpu_frames"].get<std::uint64_t>()), static_cast<unsigned long long>(j["block_cpu_frames"].get<std::uint64_t>()), j["block_gpu_up"].get<bool>() ? 1 : 0);
+        if (hw) {
+            CHECK(j["block_gpu_frames"].get<std::uint64_t>() >= 5);
+            CHECK(j["block_gpu_up"].get<bool>());
+        } else {
+            CHECK_EQ(j["block_gpu_frames"].get<std::uint64_t>(), static_cast<std::uint64_t>(0));
+        }
+        CHECK(blockGpu.frames >= 3);
+        CHECK_EQ(blockGpu.peakBin, blockCpu.peakBin);
+        CHECK(std::fabs(blockGpu.peakDb - blockCpu.peakDb) < 1.0f);
+        CHECK_EQ(r.send(mode(0)).status(), FOXAPI_OK);
+        const std::uint64_t stopAt = gpuFact(r)["block_gpu_frames"].get<std::uint64_t>();
+        const Reading blockAgain = read(r, 2500);
+        CHECK(blockAgain.frames >= 3);
+        CHECK_EQ(gpuFact(r)["block_gpu_frames"].get<std::uint64_t>(), stopAt);   // the device finishes nothing more
+        FoxCommand small = testing::cmd(FOXAPI_OP_SET_SPECTRUM, 0.0, 0, nullptr);
+        small.ival[0] = 1024; small.ival[1] = 3; small.num[0] = 0.0;
+        CHECK_EQ(r.send(small).status(), FOXAPI_OK);
+    }
 
     std::printf("G4: refusals\n");
     CHECK_EQ(r.send(mode(3)).status(), FOXAPI_OUT_OF_RANGE);
