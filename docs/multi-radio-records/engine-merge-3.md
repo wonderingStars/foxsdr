@@ -2,7 +2,7 @@
 
 Date 2026-11-12 to 2026-11-13. Worktree `C:\Users\steve\foxsdr-wt\mr-dsp`, build `D:/foxsdr-build/mr-dsp` (Slint ON, Release, `--parallel 4`), scratch `D:/foxsdr-build/m3-scratch/`.
 Start tip `e7e25fc9`, branch `engine/multi-radio`, `git status --short` empty (both verified before the first merge). Method: `engine-merge.md` and `engine-merge-2.md` (same gate commands, hidden desktop `FoxSDRTestsEM`, `FOXSDR_FRAME_CAP_HZ=60`).
-Nothing pushed. No download, no outside request, no radio opened. The code tip is the commit that fixes the stale drive-script expectation (section 5, GUI); the commit that adds the three record files sits on top and changes only `docs/`. Commits of this lane after e7e25fc9 (first-parent): the eight merge commits, eb52816c (manual sentence), 857807ce and ede57fa7 (wire-b drop and repair), f9348683 (registration), the drive-script fix, the records.
+Nothing pushed. No download, no outside request, no radio opened. The code tip is b62be3a2 (the `test_usage_diag_window` wait, section 5); the commits after it change only `docs/`. Commits of this lane after e7e25fc9 (first-parent): the eight merge commits, eb52816c (manual sentence), 857807ce and ede57fa7 (wire-b drop and repair), f9348683 (registration), the drive-script fix a6803747, the records ec5b412e, the usage-diagnostics test fix b62be3a2, the record update.
 
 Every branch tip was verified equal to the commit ordered: feat/manual 7541ac6d, feat/links-worker a7b33903, feat/screen-j 423f4854, feat/screen-k cc2f75d8, feat/wire-a a93b7568, feat/wire-b b5d79f4a, feat/wire-c 1d07d036, feat/radio-bridges ef409552 (added by the orchestrator's message of 23:35), claude/iq-file-open-paste-112c87 b74cc386.
 
