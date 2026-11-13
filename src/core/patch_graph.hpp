@@ -69,7 +69,15 @@ enum class NodeKind : std::uint8_t {
     Display,  // a view: consumes, produces nothing
     Sink,     // speaker, recorder, network: consumes, produces nothing
     Map,      // targets from up to kMapInputs decoders on one map (0.99.18)
+    // wire-a second pass (appended at the END: a number saved in an old patch file means what it always did)
+    Mixer,      // kMixerInputs separate Audio inputs added into one Audio output (dsp/audio_mixer.hpp)
+    IfFilter,   // Iq in, Iq out: a band-pass / notch on the I/Q before the channels (dsp/if_filter.hpp)
+    Generator,  // Iq out: the internal test source of the RECEIVE chain (dsp/siggen_model.hpp). It has NO transmit path and is refused on every transmit sink
+    Scope,      // consumes Audio or Iq: a triggered picture (dsp/scope_model.hpp)
 };
+
+// wire-a second pass: how many audio inputs a Mixer node has.
+inline constexpr std::size_t kMixerInputs = 4;
 
 // HOW MANY DECODERS ONE MAP TAKES (owner, 2026-09-23: "allow one map to take
 // up to 5 radio inputs") - one per radio a patch can have, so aircraft from
@@ -87,6 +95,7 @@ enum class Connect : std::uint8_t {
     AlreadyWired,    // this exact pair is already connected
     SelfLoop,        // a node wired to itself
     WouldCycle,      // the wire would close a loop
+    TransmitRefused, // wire-a second pass: a Generator node (a test source) may not feed a sink that transmits
 };
 
 struct Wire {
@@ -179,6 +188,12 @@ struct Node {
     //                    patch saved with such a node reads back as "none",
     //                    and the radio then reports where it is.
     bool centreChosen = false;
+    //   any     bypass   (wire-a second pass) the node is switched out of the signal path: Graph::effective() splices it out, so what fed its input 0 feeds
+    //                    whatever its output 0 fed. Only a node whose input 0 and output 0 are the same type can be bypassed (Graph::canBypass). Saved.
+    //   Mixer / IfFilter / Generator / Scope   settings   (wire-a second pass) the node's own settings as one text, the format each kind documents
+    //                    in core/patch_nodes.hpp. Empty = the defaults. Saved (patch file format 7).
+    bool bypass = false;
+    std::string settings;
 };
 
 // WHETHER A RADIO NODE HAS A CENTRE YET. The document stores 0 for "none
@@ -246,6 +261,20 @@ inline void portsFor(NodeKind kind, PortType feed, std::vector<PortType>& in,
         case NodeKind::Map:
             for (std::size_t i = 0; i < kMapInputs; ++i) { in.push_back(PortType::Track); }
             break;
+        case NodeKind::Mixer:
+            for (std::size_t i = 0; i < kMixerInputs; ++i) { in.push_back(PortType::Audio); }
+            out.push_back(PortType::Audio);
+            break;
+        case NodeKind::IfFilter:
+            in.push_back(PortType::Iq);
+            out.push_back(PortType::Iq);
+            break;
+        case NodeKind::Generator:
+            out.push_back(PortType::Iq);
+            break;
+        case NodeKind::Scope:
+            in.push_back(feed == PortType::Iq ? PortType::Iq : PortType::Audio);
+            break;
     }
 }
 
@@ -269,6 +298,10 @@ inline void defaultNodeSize(NodeKind kind, float& w, float& h) {
         case NodeKind::Display: w = 300.0f; h = 188.0f; return;
         case NodeKind::Sink: w = 216.0f; h = 116.0f; return;
         case NodeKind::Map: w = 420.0f; h = 320.0f; return;
+        case NodeKind::Mixer: w = 232.0f; h = 156.0f; return;
+        case NodeKind::IfFilter: w = 232.0f; h = 116.0f; return;
+        case NodeKind::Generator: w = 232.0f; h = 124.0f; return;
+        case NodeKind::Scope: w = 300.0f; h = 188.0f; return;
     }
     w = 216.0f;
     h = 108.0f;
@@ -279,6 +312,22 @@ inline void defaultNodeSize(NodeKind kind, float& w, float& h) {
 // handle and a close key - a node dragged to nothing cannot be dragged back.
 inline constexpr float kMinNodeW = 132.0f;
 inline constexpr float kMinNodeH = 56.0f;
+
+// wire-a second pass begin: WHERE A GENERATOR NODE MAY NOT GO. This program receives and does not transmit, and the signal generator is an "internal test source for the receive chain": it must never be
+// able to feed anything that sends a signal out. A sink is accepted for a generator only when its device is one of the receive-side destinations that exist (a file, the speakers, a sound device, an
+// I/Q file); any other device string - including every name that says it transmits - is refused, so a transmit sink added to the program later is refused by default and has to be allowed here on purpose.
+inline bool generatorMaySink(const std::string& deviceIn) {
+    std::string device = deviceIn;
+    for (char& ch : device) { if (ch >= 'A' && ch <= 'Z') { ch = static_cast<char>(ch - 'A' + 'a'); } }
+    if (device.empty() || device == "wav" || device == "mp3" || device == "speakers" || device == "iq" || device == "iqfile") { return true; }
+    return device.rfind("audio:", 0) == 0 && device.find("tx") == std::string::npos && device.find("transmit") == std::string::npos;
+}
+
+// Whether a node of this kind and ports can be switched out of the path: it has an input 0 and an output 0 of the same type.
+inline bool canBypass(const Node& n) {
+    return !n.inputs.empty() && !n.outputs.empty() && n.inputs[0] == n.outputs[0];
+}
+// wire-a second pass end
 
 class Graph {
 public:
@@ -338,6 +387,8 @@ public:
             return Connect::NoSuchPort;
         }
         if (src->outputs[fromPort] != dst->inputs[toPort]) { return Connect::TypeMismatch; }
+        // wire-a second pass: the test source may not feed a sink that transmits (see generatorMaySink)
+        if (src->kind == NodeKind::Generator && dst->kind == NodeKind::Sink && !generatorMaySink(dst->device)) { return Connect::TransmitRefused; }
 
         // FAN-IN IS A PROPERTY OF THE TYPE, not of the port.
         //
@@ -363,6 +414,51 @@ public:
         wires_.push_back(want);
         return Connect::Ok;
     }
+
+    // wire-a second pass begin: SWITCH A NODE OUT OF THE PATH. False (nothing changes) for an unknown node or one that cannot be bypassed (canBypass).
+    bool setBypass(NodeId id, bool on) {
+        Node* n = mutableNode(id);
+        if (n == nullptr || !canBypass(*n)) { return false; }
+        n->bypass = on;
+        return true;
+    }
+    // The graph the runner builds from: every bypassed node is gone and its input 0 is joined to whatever its output 0 fed (a bypassed node with nothing on input 0 cuts what it fed; its other ports are dropped).
+    // Chains of bypassed nodes resolve. A graph with no bypassed node comes back as it is.
+    Graph effective() const {
+        bool any = false;
+        for (const Node& n : nodes_) { any = any || n.bypass; }
+        if (!any) { return *this; }
+        Graph out = *this;
+        // follow: where an output of `from` really comes from once bypassed nodes are looked through
+        auto source = [&](Wire w) -> Wire {
+            for (std::size_t guard = 0; guard < nodes_.size() + 1; ++guard) {
+                const Node* n = find(w.from);
+                if (n == nullptr || !n->bypass || w.fromPort != 0) { return w; }
+                bool fed = false;
+                for (const Wire& in : wires_) {
+                    if (in.to == n->id && in.toPort == 0) { w.from = in.from; w.fromPort = in.fromPort; fed = true; break; }
+                }
+                if (!fed) { return Wire{kNoNode, 0, w.to, w.toPort}; }
+            }
+            return Wire{kNoNode, 0, w.to, w.toPort};
+        };
+        std::vector<Wire> wires;
+        for (const Wire& w : wires_) {
+            const Node* dst = find(w.to);
+            if (dst == nullptr || dst->bypass) { continue; }
+            const Wire s = source(w);
+            if (s.from == kNoNode) { continue; }
+            const Node* src = find(s.from);
+            if (src == nullptr || src->bypass) { continue; }
+            if (std::find(wires.begin(), wires.end(), s) == wires.end()) { wires.push_back(s); }
+        }
+        std::vector<Node> nodes;
+        for (const Node& n : nodes_) { if (!n.bypass) { nodes.push_back(n); } }
+        out.nodes_ = std::move(nodes);
+        out.wires_ = std::move(wires);
+        return out;
+    }
+    // wire-a second pass end
 
     bool disconnect(const Wire& w) {
         const auto it = std::find(wires_.begin(), wires_.end(), w);

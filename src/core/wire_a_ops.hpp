@@ -232,6 +232,22 @@
 //   OUT_OF_RANGE for another value. Kept in record-iq-container.json beside markers.json; fact.record.iqcontainer is "wav", "rf64" or "sigmf".
 #define FOXAPP_OP_RECORD_IQ_CONTAINER    0x8829u /* ival[0]: 0 wav / 1 rf64 / 2 sigmf */
 
+//   THE PATCH PAGE'S EDIT HISTORY (second pass; core/patch_graph.hpp). The engine keeps the patch the page sends (PATCH_SET_GRAPH) and now remembers it: every change of the graph that is not just the running radios' own state (on/off,
+//   the centre they learnt, the rate) is one step of history, at most 100, in memory only; a new edit clears what could be redone. Not radio-addressed.
+//   PATCH_UNDO / PATCH_REDO: the graph goes back / forward one step, as a new graph version (fact.patch.version moves, the page re-reads it); the radios keep their own state. NO_CHANGE at an end.
+//   PATCH_SELECT: ival[0] 0 replace / 1 add / 2 toggle / 3 clear / 4 all, text {"ids":[..]} for 0-2; an id that is not in the graph is BAD_ARGUMENT and nothing changes. The selection is not history.
+//   PATCH_COPY: the selected parts and the wires with BOTH ends inside the selection go to the engine's clipboard (positions kept relative to the top-left of the set); NO_CHANGE when nothing is selected.
+//   PATCH_PASTE: num[0], num[1] = where the set's top-left goes. New parts get new ids from the graph, the inside wires are made again on them, the pasted set becomes the selection; one history step. All or nothing: a part the graph
+//   refuses (a sixth radio) puts everything back and the answer is OUT_OF_RANGE; a wire it refuses is counted, applied[0] = parts pasted, applied[1] = wires refused. NO_CHANGE for an empty clipboard.
+//   PATCH_BYPASS: ival[0] 1 on / 0 off, text {"ids":[..]} or, with no text, the selection. A bypassed part is spliced out of what runs (what fed its input 0 feeds what its output 0 fed) and stays in the document; a part
+//   whose input 0 and output 0 are not the same type cannot be bypassed (OUT_OF_RANGE, nothing changes). NO_CHANGE when it is so already. Facts: fact.patchedit.undo / .redo (steps), .selection ("1,2"), .clipboard (parts).
+#define FOXAPP_OP_PATCH_UNDO             0x882Au /* none */
+#define FOXAPP_OP_PATCH_REDO             0x882Bu /* none */
+#define FOXAPP_OP_PATCH_SELECT           0x882Cu /* ival[0]: 0 replace / 1 add / 2 toggle / 3 clear / 4 all; text: {"ids":[..]} */
+#define FOXAPP_OP_PATCH_COPY             0x882Du /* none: copies the selection */
+#define FOXAPP_OP_PATCH_PASTE            0x882Eu /* num[0], num[1]: where the set's top-left goes */
+#define FOXAPP_OP_PATCH_BYPASS           0x882Fu /* ival[0]: 1 on / 0 off; text: {"ids":[..]} or none = the selection */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -276,7 +292,13 @@
     {FOXAPP_OP_FILE_TRANSPORT, "APP_FILE_TRANSPORT", true}, \
     {FOXAPP_OP_RIT, "APP_RIT", true}, \
     {FOXAPP_OP_CW_SURROUND, "APP_CW_SURROUND", true}, \
-    {FOXAPP_OP_RECORD_IQ_CONTAINER, "APP_RECORD_IQ_CONTAINER", true},
+    {FOXAPP_OP_RECORD_IQ_CONTAINER, "APP_RECORD_IQ_CONTAINER", true}, \
+    {FOXAPP_OP_PATCH_UNDO, "APP_PATCH_UNDO", true}, \
+    {FOXAPP_OP_PATCH_REDO, "APP_PATCH_REDO", true}, \
+    {FOXAPP_OP_PATCH_SELECT, "APP_PATCH_SELECT", true}, \
+    {FOXAPP_OP_PATCH_COPY, "APP_PATCH_COPY", true}, \
+    {FOXAPP_OP_PATCH_PASTE, "APP_PATCH_PASTE", true}, \
+    {FOXAPP_OP_PATCH_BYPASS, "APP_PATCH_BYPASS", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP

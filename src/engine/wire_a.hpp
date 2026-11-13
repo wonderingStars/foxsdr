@@ -43,6 +43,7 @@
 #include "core/scan_trigger.hpp"
 #include "core/scanner_params.hpp"
 #include "core/freq_history.hpp"
+#include "core/patch_graph.hpp"
 #include "core/rit_xit.hpp"
 #include "foxsdr_api.h"
 
@@ -188,6 +189,22 @@ public:
     std::size_t waterfallCopy(std::size_t slot, std::size_t rows, std::vector<std::uint8_t>& out, std::size_t& bins, std::vector<cascade::core::wfhistory::LineMeta>* meta = nullptr);
 
 private:
+    // ---- the patch page's edit history, selection, copy / paste and bypass (wire_a_patchedit.cpp) ----
+    Result patchEditOp(const FoxCommand& c, const std::string& text, Result res);
+    void patchHistoryPass();
+    void patchEditFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    static constexpr std::size_t kPatchHistoryDepth = 100;
+    std::vector<cascade::core::patch::Graph> patchUndo_, patchRedo_;
+    cascade::core::patch::Graph patchCur_;        // the graph as the history last saw it
+    std::uint64_t patchSeenVersion_ = 0;
+    bool patchHistInit_ = false;
+    std::vector<cascade::core::patch::NodeId> patchSel_;
+    struct PatchClip {
+        std::vector<cascade::core::patch::Node> nodes;   // positions relative to the top-left of the set
+        std::vector<cascade::core::patch::Wire> wires;   // by the nodes' old ids
+    } patchClip_;
+    void patchApply(cascade::core::patch::Graph g);   // the graph becomes `g` as a new version, without a history step
+
     // ---- CW surround (wire_a_rit.cpp, beside the clarifier: both live in the audio / oscillator stage) ----
     Result surroundOp(const FoxCommand& c, const std::string& text, Result res);
     void surroundFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;

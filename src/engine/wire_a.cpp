@@ -46,6 +46,13 @@ FoxCommandResult WireA::apply(const FoxCommand& c, const std::string& text, FoxC
             return containerOp(c, res);
         case FOXAPP_OP_RECORD_IQ_CONTAINER:
             return iqContainerOp(c, res);
+        case FOXAPP_OP_PATCH_UNDO:
+        case FOXAPP_OP_PATCH_REDO:
+        case FOXAPP_OP_PATCH_SELECT:
+        case FOXAPP_OP_PATCH_COPY:
+        case FOXAPP_OP_PATCH_PASTE:
+        case FOXAPP_OP_PATCH_BYPASS:
+            return patchEditOp(c, text, res);
         case FOXAPP_OP_BAND_MEMORY:
         case FOXAPP_OP_BAND_MEMORY_NOTE:
             return bandOp(c, text, res);
@@ -127,6 +134,7 @@ void WireA::pass() {
     recordingsPass();
     containerPass();
     iqContainerPass();
+    patchHistoryPass();
     framesLoadOnce();
     gradientLoadOnce();
     for (std::size_t slot = 0; slot < 8; ++slot) {
@@ -158,6 +166,7 @@ void WireA::facts(const std::function<void(const std::string&, const std::string
     transportFacts(fact);
     ritFacts(fact);
     surroundFacts(fact);
+    patchEditFacts(fact);
     fact("record.iqcontainer", iqContainer_ == 2 ? "sigmf" : (iqContainer_ == 1 ? "rf64" : "wav"));
 }
 

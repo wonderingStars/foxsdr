@@ -63,13 +63,14 @@ enum class Problem : std::uint8_t {
     DeviceTwice,       // a Radio naming a device another Radio already uses
     RadioFailed,       // the device would not open - set by the caller, not by compile()
     NoTracks,          // a decoder wired to a Map whose module puts nothing on a map
+    NodeNotRun,        // wire-a second pass: a Mixer, IF filter, Generator or Scope node: drawn, wired and saved, but this build does not run it yet - advisory
 };
 
 // Advisory problems do not stop a patch running; they are worth saying and not
 // worth refusing. A decoder wired to nothing still decodes, it just has no
 // window - that is a thing people do deliberately while building a patch.
 inline bool isAdvisory(Problem p) {
-    return p == Problem::NothingListens || p == Problem::NoTracks;
+    return p == Problem::NothingListens || p == Problem::NoTracks || p == Problem::NodeNotRun;
 }
 
 inline const char* problemText(Problem p) {
@@ -93,6 +94,7 @@ inline const char* problemText(Problem p) {
             return FOX_TR_NOOP("another radio in this patch already uses that device - one device, one radio");
         case Problem::RadioFailed: return FOX_TR_NOOP("the device would not open");
         case Problem::NoTracks: return FOX_TR_NOOP("this decoder puts nothing on a map");
+        case Problem::NodeNotRun: return FOX_TR_NOOP("this part is saved with the patch but this build does not run it yet");
     }
     return FOX_TR_NOOP("this cannot run");
 }
@@ -689,6 +691,10 @@ inline Plan compile(const Graph& g, const std::vector<RadioInfo>& radios,
         if (!heard) { plan.problems.push_back({n.id, Problem::NothingListens}); }
     }
 
+    // wire-a second pass: the four node kinds added after the Map are part of the document and the wiring rules; the runner does not build them yet, and a part that does nothing must say so
+    for (const Node& n : g.nodes()) {
+        if (n.kind > NodeKind::Map) { plan.problems.push_back({n.id, Problem::NodeNotRun}); }
+    }
     const bool blocked = std::any_of(plan.problems.begin(), plan.problems.end(),
                                      [](const NodeProblem& p) { return !isAdvisory(p.problem); });
     // A patch with nothing in it is not "runnable" - there is nothing to run.
