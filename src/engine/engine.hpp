@@ -3240,7 +3240,6 @@ private:
     FoxCommandResult applyWireB(const FoxCommand& c, const std::string& text, FoxCommandResult res);
     FoxCommandResult sigmeasOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     FoxCommandResult bitsOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
-    FoxCommandResult cursorOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     FoxCommandResult sweepOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     FoxCommandResult iqOutOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
     FoxCommandResult followOp(const FoxCommand& c, FoxCommandResult res, bool& changed);
