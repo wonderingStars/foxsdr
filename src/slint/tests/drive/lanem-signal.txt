@@ -1,7 +1,9 @@
 #! frames=1500 size=1600x6000 bank=0 sections=0:0,2,3,6
 # lanem-signal (screen lane M, docs/multi-radio-records/screen-m.md; rows 2, 3, 4, 5, 20): the SIGNAL bank. The Patch section (undo, redo, select, copy, paste, bypass), the Radio section (the receive clarifier and the symbol rate), the Audio filters section (CW surround) and the Recorder section (the I/Q take's file kind), each read back from the engine's own facts.
 10 state running == 1
-+3 state lm.rows.radio > 10
++3 state lm.rows.radio > 5
++1 click "More clarifier controls"
++3 state lm.draft.c.open == 1
 # row 2: the clarifier is OFF at 0 Hz until acted on; a step adds and switches it on, clear takes it back; each is read back from fact.rit.1.*
 state lm.fact.rit.1.on != 1
 state lm.fact.rit.1.hz == 0

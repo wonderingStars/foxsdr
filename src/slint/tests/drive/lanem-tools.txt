@@ -1,8 +1,11 @@
 #! frames=1500 size=1600x6000 bank=2 sections=2:4,5
 # lanem-tools (screen lane M, docs/multi-radio-records/screen-m.md; rows 7 and 8): the TOOLS bank. The Airband section's per-channel settings (a channel's own squelch, filter and output; a stored line is read back and loaded into the fields) and the Export section's level store (OFF until ticked; its size, clear and statistics).
 10 state running == 1
-+3 state lm.rows.airband > 20
++3 state lm.rows.airband > 2
 # row 7: no channel has settings of its own (the shared squelch); a channel with none says so
+state lm.rows.airband < 8
++1 click "Edit this channel's own settings"
++3 state lm.rows.airband > 20
 state lm.fact.airband.channels != 1
 +1 type "Channel frequency (MHz)" "118.1"
 +1 key enter

@@ -243,6 +243,10 @@ struct LaneMPublisher::Impl {
         const std::string clearAt = fact("rit." + n + ".clearOnRetune");
         v.push_back(rReadout(tr("Clarifier"), on ? tr("on") + ", " + signedHzText(hz) : tr("off") + ", " + signedHzText(hz)));
         tick(v, "c.on", tr("Clarifier on"), on, [this, hz](bool o) { Cmd c = cmd(FOXAPP_OP_RIT, 0); c.n0 = hz; c.i1 = o ? 1 : 0; send(kRadio, tr("Clarifier"), c); });
+        // the rest is folded away until asked for: the Radio section is open at every start and a long list would push the sections under it off the screen
+        const bool more = bv("c.open", false);
+        key(v, "c.more", more ? tr("Hide the clarifier controls") : tr("More clarifier controls"), [this, more] { draft["c.open"] = more ? "0" : "1"; });
+        if (more) {
         field(v, "c.hz", tr("Clarifier offset (Hz)"), numberText(hz), tr("Inside the limit below (9999 Hz unless you changed it); negative lowers what you hear"));
         key(v, "c.set", tr("Set the clarifier"), [this, lim] {
             double h = 0; std::string e;
@@ -262,6 +266,7 @@ struct LaneMPublisher::Impl {
             if (!parseRitLimits(dv("c.max", "9999"), dv("c.clear-at", "0"), a, b, e)) { refuseHere(kRadio, tr("Set the limits"), e); return; }
             Cmd c = cmd(FOXAPP_OP_RIT, 3); c.n0 = a; c.n1 = b; send(kRadio, tr("Set the limits"), c);
         });
+        }
 
         v.push_back(rHeading(tr("Symbol rate")));
         const std::string sr = fact("wirec.sig.symbol_rate");
@@ -375,11 +380,14 @@ struct LaneMPublisher::Impl {
         v.push_back(rNote(tr("A channel with no settings of its own uses the monitor's shared squelch. Outputs are off until you choose one: a file goes into the recordings folder, a stream goes to this computer only.")));
         const std::string count = fact("airband.channels");
         v.push_back(rReadout(tr("Channels with settings of their own"), count.empty() ? "0" : count));
+        const bool open = bv("a.open", false);   // the editor is folded away until asked for: the Airband section is open at every start
+        key(v, "a.more", open ? tr("Hide the channel editor") : tr("Edit this channel's own settings"), [this, open] { draft["a.open"] = open ? "0" : "1"; });
+        if (!open) { endNote(v, kAirband); return; }
         field(v, "a.freq", tr("Channel frequency (MHz)"), "", tr("The frequency of a channel in the monitor's list, for example 118.1"));
         key(v, "a.load", tr("Load this channel's settings"), [this] { airbandLoad(dv("a.freq")); }, !trim(dv("a.freq")).empty(), tr("Fills the fields below with what the engine holds for that frequency."));
         v.push_back(rHeading(tr("Channel")));
         field(v, "a.bw", tr("Channel width (kHz)"), "10", tr("1 to 200"));
-        choiceD(v, "a.mode", tr("Channel mode"), {"AM", "NFM"}, 0);
+        choiceD(v, "a.mode", tr("Channel mode"), {tr("AM channel"), tr("NFM channel")}, 0);
         v.push_back(rHeading(tr("Squelch")));
         choiceD(v, "a.sqkind", tr("Squelch kind"), {tr("Level"), tr("Signal to noise")}, 0);
         field(v, "a.level", tr("Squelch level (dB)"), "-50", tr("-120 to 0: the channel's power below which it is silent (level squelch)"));

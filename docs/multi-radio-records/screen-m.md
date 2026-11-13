@@ -29,3 +29,59 @@ Classes: `build` = a control is drawn; `DUPLICATE: not built (kept: ...)`; `skip
 | 19 Open the download page / folder button | build | Needed libraries section (lane L's), second panel | nothing opens until pressed |
 | 20 Symbol rate (baud) | build | SIGNAL, Radio section | key `sig.symbol_rate`; 0 = none |
 | 21 Credit of a plugin mark | build | the mark's tooltip on the spectrum | |
+
+## What was built, where it was put, and the proof
+
+Architecture: `ui/system_bank.slint` has a global `LaneM` (ten `[KRow]` lists and `act(id, text)`); `ui/main.slint` appends a `KPanel` to the body of the section the hand-off names (SIGNAL: Patch 0, Source 1, Radio 2, Audio filters 3, Recorder 6; TOOLS: Airband 4, Export 5; SYSTEM: Diagnostics 6, lane L's Sweep and Needed libraries sections). `lanem_logic.{hpp,cpp}` is pure (typed fields, the JSON or FOXAIRCH1 text of each operation, the fact readers); `lanem_publish.{hpp,cpp}` builds the rows from the engine's facts (twice a second and at once after an action), keeps only unsent drafts, and turns each answer into a sentence under the section. Only the Source panel is conditional (drawn while the selected radio plays a file).
+
+| Rows | Where | Proof (real lines, hidden desktop `FoxSDRTestsSM`, the real engine and its test generator) |
+|---|---|---|
+| 1 transport | SIGNAL, Source | `lanem-file: input script: 53 steps, 53 ran, 0 failed, 0 not reached` (speed 2, 0.25, 1; policy block skip and back; pause, step refused at 0, step forward done, resume; all read back from `fact.playback.1.*`; nothing drawn before a file plays) |
+| 2 RIT, 3 CW surround, 4 container, 5 patch edit, 20 symbol rate | SIGNAL, Radio / Audio filters / Recorder / Patch | `lanem-signal: input script: 98 steps, 98 ran, 0 failed, 0 not reached` (clarifier steps +100, +10, -100, clear; an offset over the limit refused on the screen; limits 500 then 9999; CW surround on, centre 800, invert, read pitch; WAV, RF64, SigMF read back; the engine refuses part 99999 in its own words; empty paste is "Nothing changed") |
+| 7 airband channel, 8 level store | TOOLS, Airband / Export | `lanem-tools: input script: 59 steps, 59 ran, 0 failed, 0 not reached` (the model's own sentences refuse a high-pass above the low-pass and a stream with no port; a good set read back as `FOXAIRCH1\|118100000\|10000\|0\|0\|-600\|`; load fills the fields; clear one, clear all asks twice; level store OFF until ticked, 70 MiB refused, 8 MiB read back, off again) |
+| 11 to 15, 19 | SYSTEM, Sweep / Diagnostics / Needed libraries | `lanem-system: input script: 53 steps, 53 ran, 0 failed, 0 not reached` (every field refused before sending; a REAL stitched sweep of the test generator ran and `fact.sweep.history` read `"lines":1` (778 points); a relative history path refused, a file that is not there fails in the engine's words, clear asks twice; no open request exists so nothing is drawn) |
+| 6 four new parts | the Patch page's parts bin | `test_slint_host_patch`: eleven keys, labels, the two "not run yet" tooltips, four nodes of their own kinds placed, captions MIXER / IF FILTER / GENERATOR / SCOPE, the `TransmitRefused` sentence |
+| 18 choices | plugin settings form (`forms.slint`) | `test_slint_forms: 350 checks, 0 failed` (section 12b); `test_slint_host_kit: 131 checks, 0 failed` (`parseChoices`, limits of 32) |
+| 21 credit | the spectrum's mark tooltip | `test_slint_lanem_host` (`withCredit`); main.cpp reads `fact.plugin.marker.credit.<n>` |
+| 9, 10 | lane L's Tuning and Sweep sections | marker / pack operations say "started"; heat-map tooltip corrected; lane L's own drive scripts still pass (gate below) |
+| pure rules | | `test_slint_lanem_host: 126 checks, 0 failed` |
+
+## Break-it checks
+
+| Mutation | Red |
+|---|---|
+| step of 0 accepted; history path not required to be full; a "shell" open request accepted; the airband model's validate skipped | `test_slint_lanem_host: 126 checks, 6 failed`; restored, `0 failed` |
+| the RIT step's sign flipped; the I/Q container always 0 | `lanem-signal: ... 98 ran, 5 failed`; restored, `0 failed` |
+| the choice key commits its label instead of its value | `test_slint_forms: 350 checks, 2 failed`; restored, `0 failed` |
+
+NOT break-it-checked: the Patch-section keys (only the engine's answer text is read), the sweep and airband panels' wiring beyond the facts they read back.
+
+## Frame cost
+Nothing is drawn every frame: the rows are rebuilt about twice a second (about 60 `get_setting` reads over ten sections) and at once after an action; an unchanged section keeps its model. Not measured; the clip sweep was not re-run. UNVERIFIED.
+
+## New English strings
+225 new keys (every `tr("...")` of `lanem_logic.cpp`, `lanem_publish.cpp`, the patch captions and refusal) in all 33 catalogues, MACHINE-MADE and UNCHECKED by a speaker; `tools/i18n_keys.py`: 3823 keys, 0 empty, 0 missing, 0 stale per catalogue. Translators' notes: some agents kept decimal commas in ranges (bg, ca, cs, sv, tr, uk); the Vietnamese file leaves "clarifier", "CW surround", "Notch", "Varispeed" in English; Lithuanian and Latvian leave "Varispeed"; the bare key "of" is "/" in Turkish. The engine's own sentences (refusals, `problemText` of the airband model) are shown as the engine gives them.
+
+## Rows not built, with the reason
+* 16 (tracks and coverage shown as off): DUPLICATE, lane L's Outputs and tracks already reads `enabled:false` (lane L's drive scripts assert it).
+* 17: no control.
+* Patch chords Ctrl+Z / Y / C / V and a bypass key: the window's keys come from the saved key table (`key_dispatch`), which is the key-bindings page's; needs table rows (HAND-OFF).
+* Settings text of the new patch parts (IF filter `low=;high=;notch=`, Mixer `gain=;mute=`): edited only through the patch draft graph in the inspector, which is the patch page's; not drawn (HAND-OFF).
+
+## ENGINE / SCREEN HAND-OFF
+* The patch canvas's own click-selection is never sent to the engine (`PATCH_SELECT`); the Patch section selects by part number. A canvas that sent `PATCH_SELECT` on each selection change would let Copy / Bypass work on what is highlighted. File: `patch_logic.cpp` / `patch_publish.cpp`.
+* Key-table rows for patch undo, redo, copy, paste and bypass.
+* Inspector forms for the IF filter and Mixer settings text.
+* A save and a load of the sweep history need a typed full path (no file dialog may be raised); a "Save as" picker is a screen piece.
+
+## Decisions made for the owner to confirm
+1. No Sweep page exists in the window, so the stitched sweep and the history are a second panel in lane L's SYSTEM Sweep section, kept beside the device sweep.
+2. The Diagnostics panel is read only; the GPU mode stays lane L's single control (a second one would be two mechanisms).
+3. Option lists of a settings field are drawn as one small key per option (the stored one lit), not a pop-up: `forms.slint` has no pop-up component.
+4. "Clear every channel's settings" and "Clear the history" ask for a second press.
+5. The level store's size field applies when the store is turned on (engine rule), and the default size is untouched.
+
+## UNVERIFIED
+* No real device: no radio, port or sweep device opened; the stitched sweep ran on the test generator only. Saving and loading a history file, a real plugin's open request (pressing it would open a browser), a plugin that gives named choices, a plugin mark with a credit, and the Patch keys on a patch with parts were not exercised end to end.
+* A real pointer and a screen reader were not used. One screenshot of the SIGNAL bank showed the Audio filters panel's last key drawn over the next section's header while the panel was still growing; not investigated (a layout animation, or a clipped height).
+* Frame cost and the clip sweep not measured. All 33 translations unchecked.
