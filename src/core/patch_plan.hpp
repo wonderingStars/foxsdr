@@ -692,8 +692,27 @@ inline Plan compile(const Graph& g, const std::vector<RadioInfo>& radios,
     }
 
     // wire-a second pass: the four node kinds added after the Map are part of the document and the wiring rules; the runner does not build them yet, and a part that does nothing must say so
+    // wire-a second pass: an IF filter whose every output goes to a channel (or to another IF filter that does) is RUN: the runner puts it between the radio and those channels. Every other part of the four new kinds, and an IF
+    // filter wired to anything else, is not run yet.
+    auto ifFilterRuns = [&](NodeId id) {
+        std::vector<NodeId> todo{id};
+        bool any = false;
+        for (std::size_t guard = 0; guard < g.nodes().size() + 1 && !todo.empty(); ++guard) {
+            const NodeId at = todo.back();
+            todo.pop_back();
+            for (const Wire& w : g.wires()) {
+                if (w.from != at) { continue; }
+                const Node* d = g.find(w.to);
+                if (d == nullptr) { continue; }
+                if (d->kind == NodeKind::Channel) { any = true; }
+                else if (d->kind == NodeKind::IfFilter) { todo.push_back(d->id); }
+                else { return false; }
+            }
+        }
+        return any;
+    };
     for (const Node& n : g.nodes()) {
-        if (n.kind > NodeKind::Map) { plan.problems.push_back({n.id, Problem::NodeNotRun}); }
+        if (n.kind > NodeKind::Map && !(n.kind == NodeKind::IfFilter && ifFilterRuns(n.id))) { plan.problems.push_back({n.id, Problem::NodeNotRun}); }
     }
     const bool blocked = std::any_of(plan.problems.begin(), plan.problems.end(),
                                      [](const NodeProblem& p) { return !isAdvisory(p.problem); });

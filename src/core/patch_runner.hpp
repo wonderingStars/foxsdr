@@ -66,6 +66,7 @@
 #include "core/plugin_abi.h"
 #include "core/plugin_calls.hpp"
 #include "core/host_image.hpp"
+#include "core/patch_nodes.hpp"   // wire-a second pass
 #include "core/patch_plan.hpp"
 #include "core/patch_audio.hpp"
 #include "core/patch_strip.hpp"
@@ -89,6 +90,9 @@ public:
 
 struct RunningChannel {
     NodeId node = kNoNode;
+    // wire-a second pass: the IF filter parts between the radio and this channel, nearest the radio first (core/patch_nodes.hpp). Each runs on a copy of the radio's block before the strip sees it.
+    std::vector<std::unique_ptr<cascade::dsp::IfFilter>> pre;
+    std::vector<std::complex<float>> preIq;
     Strip strip;
     Demod mode = Demod::Am;
     std::vector<float> audio;
@@ -416,6 +420,9 @@ inline std::string dspSignature(const Plan& plan, const Graph& g, double deviceR
                       c.offsetHz, c.decimation, mode);
         s += buf;
     }
+    for (const Node& n : g.nodes()) {   // wire-a second pass: an IF filter's settings are part of what the set is built from
+        if (n.kind == NodeKind::IfFilter) { s += "if" + std::to_string(n.id) + ":" + n.settings + "|"; }
+    }
     for (const DecoderPlan& d : plan.decoders) {
         std::snprintf(buf, sizeof(buf), "d%u s%u ch%u i%.17g o%.17g f%.17g|",
                       static_cast<unsigned>(d.node), static_cast<unsigned>(d.source),
@@ -440,6 +447,30 @@ inline std::string dspSignature(const Plan& plan, const Graph& g, double deviceR
     return s;
 }
 
+// wire-a second pass: the IF filters wired between the radio and `channel` (a part with nothing switched on in it is left out: it would pass the samples untouched). `centreHz` is the radio's centre.
+inline void attachIfFilters(RunningChannel& rc, const Graph& g, NodeId channel, double deviceRateHz, double centreHz) {
+    std::vector<const Node*> chain;
+    NodeId at = channel;
+    for (std::size_t guard = 0; guard <= g.nodes().size(); ++guard) {
+        NodeId feeder = kNoNode;
+        for (const Wire& w : g.wires()) {
+            if (w.to == at && w.toPort == 0) { feeder = w.from; break; }
+        }
+        const Node* n = feeder == kNoNode ? nullptr : g.find(feeder);
+        if (n == nullptr || n->kind != NodeKind::IfFilter) { break; }
+        chain.push_back(n);
+        at = feeder;
+    }
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        IfSettings s;
+        std::string why;
+        if (!parseIfSettings((*it)->settings, s, why) || (!s.band && s.notches.empty())) { continue; }
+        auto f = std::make_unique<cascade::dsp::IfFilter>(deviceRateHz);
+        applyIfSettings(*f, s, centreHz);
+        rc.pre.push_back(std::move(f));
+    }
+}
+
 inline std::shared_ptr<StripSet> buildStripSet(const Plan& plan, const Graph& g,
                                                double deviceRateHz, NodeId listening,
                                                double audioRateHz = 48000.0,
@@ -453,6 +484,7 @@ inline std::shared_ptr<StripSet> buildStripSet(const Plan& plan, const Graph& g,
         RunningChannel rc;
         rc.node = cp.node;
         rc.strip.configure(cp.offsetHz, deviceRateHz, cp.decimation);
+        if (const Node* cn = g.find(cp.node); cn != nullptr) { attachIfFilters(rc, g, cp.node, deviceRateHz, cn->freqHz - cp.offsetHz); }   // wire-a second pass
 
         // What this channel is demodulated as comes from the Demod node it
         // feeds, if it feeds one. A channel wired straight to a display has
@@ -856,7 +888,14 @@ private:
             iqScratch_.clear();
             // The squelch judges the channel's own I/Q, so it is asked for
             // whenever there is a squelch, not only for an I/Q decoder.
-            rc.strip.process(in, n, rc.mode, scratch_,
+            const std::complex<float>* stripIn = in;
+            if (!rc.pre.empty()) {   // wire-a second pass: the IF filters between the radio and this channel, on a copy of the block
+                if (rc.preIq.size() < n) { rc.preIq.resize(n); }
+                std::copy(in, in + n, rc.preIq.begin());
+                for (const std::unique_ptr<cascade::dsp::IfFilter>& f : rc.pre) { f->process(rc.preIq.data(), n); }
+                stripIn = rc.preIq.data();
+            }
+            rc.strip.process(stripIn, n, rc.mode, scratch_,
                              (rc.wantIq || rc.squelch) ? &iqScratch_ : nullptr);
             const std::size_t take = (scratch_.size() < rc.audio.size()) ? scratch_.size()
                                                                          : rc.audio.size();
