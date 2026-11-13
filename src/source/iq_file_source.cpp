@@ -101,9 +101,14 @@ bool IqFileSource::open(const std::string& wavPath) {
 
     unsigned char hdr[12];
     if (fileSize < 12 || !readAt(0, hdr, 12) ||
-        std::memcmp(hdr, "RIFF", 4) != 0 || std::memcmp(hdr + 8, "WAVE", 4) != 0) {
+        (std::memcmp(hdr, "RIFF", 4) != 0 && std::memcmp(hdr, "RF64", 4) != 0) || std::memcmp(hdr + 8, "WAVE", 4) != 0) {
         return fail("not a RIFF/WAVE file: " + wavPath);
     }
+    // wire-a second pass begin: an RF64 file (a take over 4 GiB, or one the RF64 container of the recorder wrote): the data chunk's size field says 0xFFFFFFFF and the real size is in the ds64 chunk
+    const bool rf64 = std::memcmp(hdr, "RF64", 4) == 0;
+    bool haveDs64 = false;
+    std::uint64_t ds64DataSize = 0;
+    // wire-a second pass end
     // The RIFF size field itself is deliberately ignored: real-world writers
     // routinely leave it stale, and the chunk walk below is bounded by the
     // actual file size, which is the ground truth.
@@ -164,9 +169,18 @@ bool IqFileSource::open(const std::string& wavPath) {
             rateHz = u32le(f + 4);
             bits = u16le(f + 14);
             haveFmt = true;
+        } else if (rf64 && !haveDs64 && std::memcmp(ch, "ds64", 4) == 0 && size >= 24) {
+            unsigned char d[24];
+            if (!readAt(body, d, 24)) { return fail("ds64 chunk extends past end of file"); }
+            ds64DataSize = static_cast<std::uint64_t>(u32le(d + 8)) | (static_cast<std::uint64_t>(u32le(d + 12)) << 32);
+            haveDs64 = true;
         } else if (std::memcmp(ch, "data", 4) == 0 && !haveData) {
             dataOff = body;
             dataSize = size;
+            if (rf64 && size == 0xFFFFFFFFu) {
+                if (!haveDs64) { return fail("RF64 file without a ds64 chunk before its data: " + wavPath); }
+                dataSize = ds64DataSize;   // wire-a second pass
+            }
             haveData = true;
         }
         pos = body + size + (size & 1u);

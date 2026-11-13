@@ -302,6 +302,11 @@ private:
     int container_ = 0;           // 0 wav, 1 flac
     bool containerKeep_ = false;
     bool containerLoaded_ = false;
+    // ---- recording: the container of I/Q takes, RF64 and SigMF (wire_a_container.cpp, second pass) ----
+    Result iqContainerOp(const FoxCommand& c, Result res);
+    void iqContainerPass();
+    int iqContainer_ = 0;         // 0 wav, 1 rf64, 2 sigmf
+    bool iqContainerLoaded_ = false;
     std::array<std::string, 8> takePath_;   // the audio take open on each radio (its path), "" when none
     std::vector<std::string> convertQueue_;
 

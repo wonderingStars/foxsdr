@@ -225,6 +225,13 @@
 //   pitch estimate (Hz, 0 before a tone was heard) into applied[0] and the pan being applied (-1 left .. +1 right) into applied[1]. Facts: fact.cwsurround.<n>.on / .centre / .spread / .invert / .ratio / .hold.
 #define FOXAPP_OP_CW_SURROUND            0x8828u /* ival[0]: 0 configure / 1 read; text: JSON. Addresses one radio (target) */
 
+//   RECORD_IQ_CONTAINER (SETTINGS; core/recorder.hpp IqBackend, source/rf64_writer.hpp, source/sigmf_writer.hpp, second pass): the file kind of BASEBAND I/Q takes, for every radio. ival[0]: 0 = this recorder's own WAV (the
+//   default, as always: the take ends at 4 GiB), 1 = RF64 (a .wav whose header can become RF64: the take is no longer ended at 4 GiB; float32 or, with SET_RECORD_FORMAT 16-bit, int16), 2 = SigMF (a .sigmf-data of raw
+//   I/Q plus a .sigmf-meta beside it with the sample rate, the centre frequency, the start time, and every retune of the take as a new capture segment, logged at the block it happened in). The next take starts in it; a
+//   take under way keeps its own. With the record lock on (RECORD_LOCK), a SigMF take lets the centre frequency change, because its metadata records it; a WAV or RF64 take does not. NO_CHANGE for the same container,
+//   OUT_OF_RANGE for another value. Kept in record-iq-container.json beside markers.json; fact.record.iqcontainer is "wav", "rf64" or "sigmf".
+#define FOXAPP_OP_RECORD_IQ_CONTAINER    0x8829u /* ival[0]: 0 wav / 1 rf64 / 2 sigmf */
+
 #define FOXAPP_OP_WIRE_A_FIRST           0x8800u
 #define FOXAPP_OP_WIRE_A_LAST            0x88FFu
 
@@ -268,7 +275,8 @@
     {FOXAPP_OP_FFT_SCAN, "APP_FFT_SCAN", true}, \
     {FOXAPP_OP_FILE_TRANSPORT, "APP_FILE_TRANSPORT", true}, \
     {FOXAPP_OP_RIT, "APP_RIT", true}, \
-    {FOXAPP_OP_CW_SURROUND, "APP_CW_SURROUND", true},
+    {FOXAPP_OP_CW_SURROUND, "APP_CW_SURROUND", true}, \
+    {FOXAPP_OP_RECORD_IQ_CONTAINER, "APP_RECORD_IQ_CONTAINER", true},
 // wire-a end
 
 #endif  // CASCADE_CORE_WIRE_A_OPS_HPP

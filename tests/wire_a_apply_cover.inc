@@ -3,6 +3,11 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 void wireAOps(AppWindow& a) {
+    covering(FOXAPP_OP_RECORD_IQ_CONTAINER);
+    {
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_RECORD_IQ_CONTAINER, 3)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_RECORD_IQ_CONTAINER, 0)), FOXAPI_NO_CHANGE));
+    }
     covering(FOXAPP_OP_CW_SURROUND);
     {
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_CW_SURROUND, 7)), FOXAPI_OUT_OF_RANGE));

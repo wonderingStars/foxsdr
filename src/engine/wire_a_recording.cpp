@@ -176,7 +176,9 @@ void WireA::lockSync(std::size_t slot) {
     f.sourceId = 0;
     f.audioRateHz = 0.0;
     const rl::RecordKind kind = iq ? rl::RecordKind::BasebandIq : (ifr ? rl::RecordKind::ChannelIf : rl::RecordKind::Audio);
-    lock_.recordingStarted(radio, kind, f, false);
+    // a SigMF I/Q take logs its own retunes (a new capture segment), so the lock lets the centre change (core/record_lock.hpp metadataLogsRetunes); a WAV or RF64 take cannot
+    const int container = r.iqRecorder_.recording() ? r.iqRecorder_.takeContainer() : r.iqRecorder_.iqContainer();
+    lock_.recordingStarted(radio, kind, f, iq && container == cascade::core::kIqContainerSigmf);
     bump();
 }
 

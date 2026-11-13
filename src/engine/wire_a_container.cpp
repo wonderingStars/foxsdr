@@ -139,6 +139,37 @@ WireA::JobResult convert(const std::string& wavPath, bool keepWav, WireA::JobCtl
 
 }  // namespace
 
+// ---- the container of I/Q takes (second pass) ----------------------------------------------------------------------------------------------
+
+WireA::Result WireA::iqContainerOp(const FoxCommand& c, Result res) {
+    iqContainerPass();   // (loads the saved setting first)
+    if (c.ival[0] < 0 || c.ival[0] > 2) { return refused(res, FOXAPI_OUT_OF_RANGE, "ival[0] is 0 WAV, 1 RF64 or 2 SigMF"); }
+    if (iqContainer_ == c.ival[0]) { return refused(res, FOXAPI_NO_CHANGE, "it is so already"); }
+    iqContainer_ = static_cast<int>(c.ival[0]);
+    saveFile("record-iq-container.json", json{{"container", iqContainer_}}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
+    iqContainerPass();
+    bump();
+    return res;
+}
+
+// Every pass: the saved setting is read once, then every radio's recorder is given the container for its next take and the radio's centre frequency (a SigMF take logs a change of it).
+void WireA::iqContainerPass() {
+    if (!iqContainerLoaded_ && !dir().empty()) {
+        iqContainerLoaded_ = true;
+        const json j = json::parse(readFile("record-iq-container.json"), nullptr, false);
+        if (!j.is_discarded() && j.is_object()) {
+            const int v = j.value("container", 0);
+            if (v >= 0 && v <= 2) { iqContainer_ = v; bump(); }
+        }
+    }
+    for (std::size_t slot = 0; slot < 8; ++slot) {
+        if (!e_.receivers_[slot]) { continue; }
+        Receiver& rx = *e_.receivers_[slot];
+        (void)rx.iqRecorder_.setIqContainer(iqContainer_);
+        rx.iqRecorder_.noteCentre(rx.pipeline_.activeSource().centerFrequencyHz());
+    }
+}
+
 void WireA::containerPass() {
     containerLoadOnce();
     for (std::size_t slot = 0; slot < takePath_.size(); ++slot) {
