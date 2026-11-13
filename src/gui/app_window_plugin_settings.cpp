@@ -103,6 +103,21 @@ const PluginSettingsLists& AppWindow::settingsLists() {
         f.label = it.name;
         f.kind = static_cast<std::uint32_t>(it.value[0]);
         f.maxLength = static_cast<std::size_t>(it.value[1] > 0.0 ? it.value[1] : 0.0);
+        // wire-c: the named options of a drop-down field ("value US label" pairs joined by RS); no such fact for a plain box.
+        std::snprintf(factKey, sizeof(factKey), "fact.plugin.setting.%llu.choices", static_cast<unsigned long long>(it.id));
+        std::string opts;
+        if (readFactText(factKey, opts) && !opts.empty()) {
+            std::size_t from = 0;
+            while (from <= opts.size()) {
+                std::size_t rs = opts.find('\x1E', from);
+                if (rs == std::string::npos) { rs = opts.size(); }
+                const std::string pair = opts.substr(from, rs - from);
+                const std::size_t sep = pair.find('\x1F');
+                if (sep != std::string::npos) { f.choices.push_back({pair.substr(0, sep), pair.substr(sep + 1u)}); }
+                from = rs + 1u;
+            }
+            if (f.choices.size() < 2u) { f.choices.clear(); }
+        }
         c.sets.back().fields.push_back(std::move(f));
         c.sets.back().ids.push_back(it.id);
     }

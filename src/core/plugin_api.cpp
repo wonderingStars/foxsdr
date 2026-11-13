@@ -934,7 +934,8 @@ std::int32_t PluginApiCore::requestControl(PluginApiClient& c, const PluginContr
 std::int32_t PluginApiCore::setMarker(const PluginApiClient& c, const CascadeMarker* m) {
     const std::int32_t g = gate(c);
     if (g != CASCADE_API_OK) { return g; }
-    if (m == nullptr || m->structSize < sizeof(CascadeMarker)) { return CASCADE_API_BAD_ARGUMENT; }
+    // wire-c: a marker of the size before the credit field existed is still taken (its credit is empty)
+    if (m == nullptr || m->structSize < offsetof(CascadeMarker, credit)) { return CASCADE_API_BAD_ARGUMENT; }
     // Copied FIRST, and only as much as both sides know: everything after
     // this line reads the host's own copy, never the plugin's memory again.
     CascadeMarker mk{};
@@ -958,6 +959,15 @@ std::int32_t PluginApiCore::setMarker(const PluginApiClient& c, const CascadeMar
     std::memcpy(label, mk.label, sizeof(label));
     label[CASCADE_MARKER_LABEL_CHARS - 1] = '\0';
     copyBoundedUtf8(mk.label, sizeof(mk.label), label);
+    // wire-c begin: the credit, bounded and cut back to a whole character the same way (an old-sized marker left it zero)
+    {
+        char credit[CASCADE_MARKER_CREDIT_CHARS];
+        std::memcpy(credit, mk.credit, sizeof(credit));
+        credit[CASCADE_MARKER_CREDIT_CHARS - 1] = '\0';
+        std::memset(mk.credit, 0, sizeof(mk.credit));
+        copyBoundedUtf8(mk.credit, sizeof(mk.credit), credit);
+    }
+    // wire-c end
 
     std::lock_guard<std::mutex> lk(mutex_);
     // RE-CHECKED UNDER THE LOCK: setLiveSet flips `live` holding this same
@@ -1157,6 +1167,86 @@ std::int32_t PluginApiCore::recorderRequest(PluginApiClient& c, bool start, cons
     recorderQueue_.push_back(req);
     return CASCADE_API_OK;
 }
+
+// wire-c begin: the open requests.
+bool PluginApiCore::acceptableOpenUrl(const char* url, std::int32_t& why) {
+    why = CASCADE_API_BAD_ARGUMENT;
+    if (url == nullptr) { return false; }
+    const std::size_t n = ::strnlen(url, CASCADE_OPEN_URL_CHARS + 1);
+    if (n == 0) { return false; }
+    if (n > CASCADE_OPEN_URL_CHARS - 1) {
+        why = CASCADE_API_OUT_OF_RANGE;
+        return false;
+    }
+    static const char kScheme[] = "https://";
+    if (n <= sizeof(kScheme) - 1 || std::memcmp(url, kScheme, sizeof(kScheme) - 1) != 0) { return false; }   // lower case https:// only
+    for (std::size_t i = 0; i < n; ++i) {
+        const unsigned char ch = static_cast<unsigned char>(url[i]);
+        if (ch <= 0x20u || ch >= 0x7Fu || ch == '\\') { return false; }   // control, space, non-ASCII, backslash
+    }
+    // the authority: up to the first '/', '?' or '#'
+    std::size_t end = sizeof(kScheme) - 1;
+    while (end < n && url[end] != '/' && url[end] != '?' && url[end] != '#') { ++end; }
+    const std::string authority(url + sizeof(kScheme) - 1, end - (sizeof(kScheme) - 1));
+    if (authority.empty() || authority.find('@') != std::string::npos) { return false; }   // no user name or password
+    if (authority.front() == '.' || authority.front() == ':' || authority.front() == '-') { return false; }
+    why = CASCADE_API_OK;
+    return true;
+}
+
+std::int32_t PluginApiCore::openRequest(const PluginApiClient& c, bool folder, const char* url) {
+    const std::int32_t g = gate(c);
+    if (g != CASCADE_API_OK) { return g; }
+    if ((c.grants.load(std::memory_order_acquire) & CASCADE_STATE_STOPPED) != 0u) { return CASCADE_API_DENIED; }
+    std::string held;
+    if (!folder) {
+        std::int32_t why = CASCADE_API_BAD_ARGUMENT;
+        if (!acceptableOpenUrl(url, why)) { return why; }
+        held = url;
+    }
+    std::lock_guard<std::mutex> lk(openMutex_);
+    openRequests_[{c.index, folder ? 1 : 0}] = held;
+    openSeq_.fetch_add(1, std::memory_order_release);
+    return CASCADE_API_OK;
+}
+
+std::vector<PluginApiCore::OpenRequest> PluginApiCore::openRequests() const {
+    std::vector<OpenRequest> out;
+    std::lock_guard<std::mutex> lk(mutex_);
+    std::lock_guard<std::mutex> lk2(openMutex_);
+    for (const auto& kv : openRequests_) {
+        if (kv.first.first >= clients_.size()) { continue; }
+        const PluginApiClient& cl = *clients_[kv.first.first];
+        if (!cl.live.load(std::memory_order_acquire) || (cl.grants.load(std::memory_order_acquire) & CASCADE_STATE_STOPPED) != 0u) { continue; }
+        OpenRequest r;
+        r.key = cl.key;
+        r.name = cl.name;
+        r.folder = kv.first.second == 1;
+        r.url = kv.second;
+        out.push_back(std::move(r));
+    }
+    return out;
+}
+
+bool PluginApiCore::takeOpenRequest(const std::string& key, bool folder, OpenRequest& out) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    std::lock_guard<std::mutex> lk2(openMutex_);
+    for (std::size_t i = 0; i < clients_.size(); ++i) {
+        const PluginApiClient& cl = *clients_[i];
+        if (cl.key != key || !cl.live.load(std::memory_order_acquire)) { continue; }
+        const auto it = openRequests_.find({i, folder ? 1 : 0});
+        if (it == openRequests_.end()) { return false; }
+        out.key = cl.key;
+        out.name = cl.name;
+        out.folder = folder;
+        out.url = it->second;
+        openRequests_.erase(it);
+        openSeq_.fetch_add(1, std::memory_order_release);
+        return true;
+    }
+    return false;
+}
+// wire-c end
 
 void PluginApiCore::takeRecorderRequests(std::vector<RecorderRequest>& out) {
     std::lock_guard<std::mutex> lk(recorderMutex_);

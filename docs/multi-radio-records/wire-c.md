@@ -142,3 +142,233 @@ Status words: **wire now** / **decision (whose)** / **blocked (why)** / **transm
 S11 check, K1, A5, W7a, W1/W4/W8 (page JS), S1, S6, S4, S5, S2/S3, P1, then A1/A2, S7-S10, W2/W6/W5, G1, H3/H4/H1, H5-H8/H11, L1, L3, L4, L7, L8, L2, L5, L6, A3/A4, P3/P4, P2 when forwarded.
 
 (Sections 1 onward are written in Phase 1: what was wired, break-it table, SCREEN HAND-OFF, ABI REQUESTS, operations and keys, not done, owner decisions, config hashes.)
+
+---
+
+## 1. FINAL STATE (Phase 1, branch `feat/wire-c`, base e7e25fc9; 16 commits)
+
+Row statuses after the work (the survey in section 0.2 stays as written; this table is the outcome). "WIRED" = engine entry + a test through that entry, with the break-it checks of section 3.
+
+| Row | Final | Commit / note |
+|---|---|---|
+| S1 portable mode | WIRED | e358b1cc, bootProcess STEP 2b |
+| S2 device arrival | ALREADY WIRED by serial lane A (engine_hotplug.cpp, ef015b1e): not done twice | - |
+| S3 resume | WIRED, narrower than the hand-off: looks for the radios again and tries a waiting saved radio; does NOT close and reopen a healthy open radio (not settled) | 50b70895 |
+| S4 keep awake | WIRED | 50b70895 |
+| S5 resource meter + effects policy | WIRED; figures read at the call, in coarse steps (a fingerprint fix) | 50b70895, 41dad270 |
+| S6 manifest signature | WIRED (no owner key = today's behaviour) | 439a733d |
+| S7 export / import / backup | WIRED; import staged for the next start | dd1aa3de |
+| S8 reset | WIRED; staged for the next start; undo of an applied reset NOT wired | dd1aa3de |
+| S9 settings profiles, per-radio map, folder sync | NOT DONE (needs the same staged mechanism; list item 1) | - |
+| S10 first-run wizard | WIRED; opening the chosen radio is not (the choice is a fact) | dd1aa3de |
+| S11 telemetry switch | already built | - |
+| S12 code-signed setup | blocked (certificate) | - |
+| A1 units, A2 number format | NOT DONE (call sites in track_metrics.hpp, map_view.cpp, host_logic.cpp; the keys `access.units`, `access.number_format`, `access.digits`, `access.palette` exist in the registry and persist; nothing reads them yet) | list item 2 |
+| A3 speech, A4 sonification | NOT DONE (the audio route, question Q2, is unanswered) | list item 3 |
+| A5 palette | engine half only: the key persists and is a fact; the `.slint` fill is screen lane K's | 17e87b39 |
+| A6 | not mine | - |
+| W1, W4, W8 page JavaScript | NOT DONE (edits of a page string that no browser was available to check) | list item 4 |
+| W2 my bookmarks | WIRED | c65b0e0a |
+| W3 clip in the browser | NOT DONE | list item 5 |
+| W5 web profiles | NOT DONE (needs S9) | - |
+| W6 control arbiter | NOT DONE | list item 6 |
+| W7a CORS | WIRED | c0ec098c |
+| W7b UPnP | left unwired as the record says | - |
+| W9 store sort | WIRED (catalogue, name, updated; popular and rating need a server) | 41dad270 |
+| H1 QSO log + Cabrillo, H3 ADIF export | WIRED as file exports (the ADIF UDP/TCP broadcaster is NOT wired) | 9bd99710 |
+| H2 contest macros | transmit: stays unwired | - |
+| H4 contest score, H5 band map | NOT DONE | list item 7 |
+| H6 RadioInfo | WIRED, display only | 830deb1b |
+| H7 X-Plane | NOT WIRED (no slot can be filled without a real dataref list) | - |
+| H8 Antenna Genius | NOT DONE ("Select antenna" stays unwired) | list item 8 |
+| H9, H10, H12, H13 | blocked / transmit as in the survey | - |
+| H11 OmniRig read | NOT DONE | list item 9 |
+| K1 packaging step | WIRED | 19e074d5 |
+| P1 recorder start / stop | WIRED (ABI append) | c95a6bec |
+| P2 ABI requests of wire-a / wire-b | none reached me | - |
+| P3, P4 more ABI appends | NOT DONE | list item 10 |
+| G1 helper programs in the store | WIRED | 0f74888c |
+| L1 CLI options | NOT DONE | list item 11 |
+| L2 decode database / alert rules | NOT DONE | list item 12 |
+| L3 metrics page | WIRED | 36af574a |
+| L4 webhooks, L5 MCP server | NOT DONE | list items 13, 14 |
+| L6 CAT follower | NOT DONE | list item 15 |
+| L7 CAT emulation | WIRED (TCP; the serial variant is not) | 1d07d036 |
+| L8 Discord presence | NOT DONE | list item 16 |
+
+Counts: of the 56 survey rows, 19 are wired (S1 S3 S4 S5 S6 S7 S8 S10, W2 W7a W9, H1/H3 H6, K1 P1 G1, L3 L7, and the foundation), 1 was already built by serial lane A, 4 are blocked, 3 are transmit-side, 1 left unwired by decision, 28 not done.
+
+## 2. What was wired, with the decisive result lines (full text in each commit message)
+
+| Commit | Item | Test (file, real result) |
+|---|---|---|
+| 19e074d5 | K1 `package-manifests` step; `packaging_manifests` no longer silently absent | `release_package_step` 14 checks 0 failed; `packaging_manifests` Passed 17.68 s |
+| 17e87b39 | the block, `wirec.json`, `FOXAPP_OP_WIREC_SETTING` | `test_engine_api_wire_c` all checks pass |
+| e358b1cc | S1 | `test_wire_c_portable` 65 checks, 0 failed |
+| 439a733d | S6 | `test_wire_c_updater` 30 checks, 0 failed |
+| 50b70895 | S3 S4 S5 | `test_engine_api_wire_c_power` 56 checks, 0 failed |
+| c0ec098c | W7a | `test_engine_api_wire_c_web` (CORS part) |
+| c65b0e0a | W2 | `test_engine_api_wire_c_web` 91 checks at that commit |
+| c95a6bec | P1 | `test_plugin_recorder`; `test_engine_api_wire_c_recorder` 26 checks (40 of 40 clean runs) |
+| 0f74888c | G1 | `test_plugin_repo_helper` 199 checks; `test_engine_api_wire_c_store` 40 checks |
+| 41dad270 | W9, S5 fix | `test_engine_api_wire_c_store` 53 checks; `test_engine_api_03` Passed after the fix |
+| 36af574a | L3 | `test_engine_api_wire_c_web` 107 checks |
+| dd1aa3de | S7 S8 S10 | `test_engine_api_wire_c_sys` 116 checks |
+| 9bd99710 | H1 H3 | `test_engine_api_wire_c_ham` 84 checks |
+| 830deb1b | H6 | `test_engine_api_wire_c_ham` 111 checks |
+| 1d07d036 | L7, the ~Engine ordering fix | `test_engine_api_wire_c_cat` 46 checks (12 of 12 clean runs) |
+
+## 3. Break-it table (the behaviour removed, red seen, restored, green)
+
+| Item | Mutation | Result |
+|---|---|---|
+| K1 | hash comparison replaced by true | `release_package_step`: 1 failed; restored 14/0 |
+| S1 | the call in bootProcess removed | `test_wire_c_portable`: 7 failed; restored 65/0 |
+| S6 | the key-present check always passes | `test_wire_c_updater`: 13 failed; restored 30/0 |
+| S4 | the keep-awake pass removed | `test_engine_api_wire_c_power`: 9 failed |
+| S3 | the resume handling disabled | same test: 3 failed; restored 56/0 |
+| W7a | the policy never stored | `test_engine_api_wire_c_web`: 6 failed |
+| W2 | the sign-in gate removed | same: 5 failed |
+| P1 | the engine's drain removed | `test_engine_api_wire_c_recorder`: 6 failed |
+| G1 | program-image check disabled; rollback removed; consent gate removed | `test_plugin_repo_helper`: 8 failed; 2 failed; `test_engine_api_wire_c_store`: 5 failed |
+| W9 | name order disabled | `test_engine_api_wire_c_store`: 1 failed |
+| L3 | sign-in gate removed | `test_engine_api_wire_c_web`: 1 failed |
+| S7 / S8 | import token check removed; tool-flag skip removed | `test_engine_api_wire_c_sys`: 2 failed each |
+| H1 | call-sign check removed | `test_engine_api_wire_c_ham`: 8 failed |
+| H6 | the socket never closed on a change | same: 2 failed |
+| L7 | the 4532 refusal removed | `test_engine_api_wire_c_cat`: 2 failed |
+
+Not break-it-checked: the settings registry's range rules (covered by refusals, not by a mutant), the first-run preset facts, the metrics fact values.
+
+## 4. SCREEN HAND-OFF (every control a screen lane must draw; English strings; none translated)
+
+Settings: send `FOXAPP_OP_WIREC_SETTING` with text `<key>` + 0x1F + `<value>`; read `fact.wirec.<key>` (all LOCAL).
+
+| Control (English label) | Op / fact | Range | Default |
+|---|---|---|---|
+| "Keep the PC awake while recording" | key `sys.keep_awake` | on/off | on |
+| "Look for radios again after the PC wakes" | `sys.resume_reopen`; read-out `fact.sys.resume.count` | on/off | on |
+| "Reduced effects" | `perf.mode` | auto / on / off | auto |
+| read-out "CPU %s%%   Memory %s MB   GPU %s%%" ("n/a" when ""), "Reduced effects are on" | `fact.perf.cpu_percent`, `.memory_mb`, `.system_memory_percent`, `.gpu_percent`, `.reduced`; the six switches `fact.perf.switch.ui_frame_cap_hz`, `.waterfall_rows_per_second`, `.animations`, `.glow_and_shadows`, `.three_d_views_live`, `.background_map_redraw` (read at the call, LOCAL, coarse steps) | - | - |
+| "Back up settings when FoxSDR closes" | key `sys.backup_on_close` (the closing-time backup itself is NOT wired: list item 1) | on/off | off |
+| "Back up settings now" | `FOXAPP_OP_SYS_BACKUP` ival[0] keep (0 = key `sys.backup_keep`, 1..50, default 10); `fact.sys.backup.last` | - | - |
+| "Export settings..." | `FOXAPP_OP_SYS_EXPORT` text path; `fact.sys.export.last` ("exported to the file you chose (N secret or identity item(s) left out)") | - | - |
+| "Import settings..." then confirm "Replace %d file(s)? Your current ones are kept as .before-import copies." + button "Import" | `SYS_IMPORT_PLAN` text path, then `fact.sys.import.plan` (lines "<name>", a tab, New / Replace / Identical), `.token`, `.notes`; `SYS_IMPORT_COMMIT` text token; then "Restart FoxSDR to finish importing" while `fact.sys.pending` is "import" | - | - |
+| "Reset everything to defaults..." | `SYS_RESET_PLAN` ival[0] plugins, ival[1] logs, then `fact.sys.reset.plan`, `.token`; `SYS_RESET_COMMIT` text token; "Restart FoxSDR to finish" while `fact.sys.pending` is "reset" | - | - |
+| "Cancel the pending change" | `SYS_PENDING_CANCEL` (NO_CHANGE when none) | - | - |
+| "What the last start did" | `fact.sys.lastboot` | - | - |
+| First-run pages | `SYS_FIRSTRUN` text `radio:<n>` (n indexes `fact.sys.firstrun.radios`, newline separated labels), `preset:<id>` (`fact.sys.firstrun.presets`: "<id>", a tab, "<title>" per line; "" = none), `telemetry:0` or `telemetry:1`, `next`, `back`, `skip`; `fact.sys.firstrun.needed`, `.step` (welcome, radio, preset, privacy, done), `.done` | - | - |
+| "Shared folder for syncing profiles" | key `sys.sync_folder` (stored, NOT used: S9 not done) | text | empty |
+| "Order" in the Plugin store | key `store.sort` | catalogue / name / updated | catalogue |
+| helper plugin badge and pane | `fact.store.<key>.helper` ("GPL helper - source: %s"), `.helper.detail` (newline separated: "This plugin uses a separate program, %s %s (%s). FoxSDR starts it and sends it audio; it is not part of FoxSDR and cannot see FoxSDR's data.", "Source code: %s", "Files that will be installed beside the plugin:", one line per file), `.helper.consent` | - | - |
+| "I understand this plugin installs a separate program" (a tick before "Install") | `FOXAPP_OP_STORE_HELPER_CONSENT` text key, ival[0] 1/0; the refusal sentence is "this plugin runs a separate program; confirm that you want it installed before it is fetched" | - | off |
+| "Show the /metrics page to signed-in browsers" | key `web.metrics` | on/off | off |
+| "Allowed web origins (one per line)" | key `web.cors_origins` | up to 32 origins | empty |
+| "Allow cross-origin sign-in" | key `web.cors_credentials`: only "off" is accepted (needs HTTPS: owner decision) | - | off |
+| Contest log: header form | `CABRILLO_HEADER` JSON (contest, callsign, location, name, address[], operators[], soapbox[], categories); `fact.ham.cabrillo.contests` | - | - |
+| "Log a QSO" | `QSO_ADD` JSON {t, f, m, c, me, s[], r[]}; `QSO_REMOVE` ival[0]; `QSO_CLEAR`; `fact.ham.qso.count`, `fact.ham.error` | 20,000 | - |
+| "Export Cabrillo log..." and "Export ADIF log..." | `CABRILLO_EXPORT` / `ADIF_EXPORT` text path; `fact.ham.export.last`, `fact.ham.cabrillo.problems` | - | - |
+| "Follow radio info from DXLab Commander or N1MM+" | keys `hamops.radioinfo.enabled`, `.address`, `.port` (1..65535), `.allow_other`; read-out `fact.ham.radioinfo.<1..4>.freq_hz`, `.tx_hz`, `.mode`, `.split`, `.transmitting`, `.app`, and `fact.ham.radioinfo.running`, `.port`, `.error` | - | off, 127.0.0.1, 0, off |
+| "Answer CAT commands from a logging program" | keys `cat.emulation.enabled`, `.dialect` (kenwood-ts480, yaesu-ft891), `.port` (not 4532), `.bind_all`; `fact.cat.emulation.running`, `.port`, `.clients`, `.error` | - | off |
+| Units, number format, digits, colour set | keys `access.units` (automatic, metric, imperial, aviation, nautical), `access.number_format` (dot, windows), `access.digits`, `access.palette`: stored and published; NOTHING READS THEM YET | - | automatic, dot, latin, normal |
+
+## 5. ABI REQUESTS and the diff for the plugins merge lane
+
+None reached me from wire-a or wire-b. The ABI header in this tree is `src/core/plugin_abi.h` (not `include/plugin_abi.h`). The exact append (`git diff e7e25fc9 HEAD -- src/core/plugin_abi.h`, 18 lines): `#define CASCADE_RECORDER_LABEL_CHARS 33`, its comment block "Recorder (appended after host API level 2; wiring lane C)", and two members appended at the END of `CascadeHostApi`, after `events_seq`: `int32_t (*recorder_start)(void *ctx, const char *label);` and `int32_t (*recorder_stop)(void *ctx);`. `apiLevel` is unchanged (the struct size is the version). `third_party/foxsdr_api/foxsdr_api.h` (the engine API) was NOT changed: every op of this lane is a FOXAPP op in `app_commands.hpp`. `docs/PLUGIN-API.md` has the "Recorder" section. Tests that asserted "events_seq is the last member" (`test_plugin_events`, `test_plugin_schedule_hint`) now expect the two new members after it. The plugins repository's copy must gain the same lines; there is still no byte-compare test (manual diff). `test_plugin_abi3_compat` against the 106 published binaries: `269 checks, 134 failed` in this build AND in the merge lane's build (the stale capability assertion): not caused by the append.
+
+## 6. New operations and keys
+
+Operations (each in `app_commands.hpp` and the `kOps` table, each named in `test_apply_command`'s coverage; all LOCAL sessions only, a REMOTE session is DENIED by the engine's rule for app ops): `0x8A00 WIREC_SETTING`, `0x8A01 STORE_HELPER_CONSENT`, `0x8A02 SYS_FIRSTRUN`, `0x8A03 SYS_EXPORT`, `0x8A04 SYS_IMPORT_PLAN`, `0x8A05 SYS_IMPORT_COMMIT`, `0x8A06 SYS_BACKUP`, `0x8A07 SYS_RESET_PLAN`, `0x8A08 SYS_RESET_COMMIT`, `0x8A09 SYS_PENDING_CANCEL`, `0x8A0A QSO_ADD`, `0x8A0B QSO_REMOVE`, `0x8A0C QSO_CLEAR`, `0x8A0D CABRILLO_HEADER`, `0x8A0E CABRILLO_EXPORT`, `0x8A0F ADIF_EXPORT`. The next free number in the block is `0x8A10`.
+
+Settings keys (file `wirec.json` beside `config.json`; `config.json` is NOT touched by this lane, so it stays loadable by earlier versions; default after each key; a feature that opens a port, a device or a file is off): `sys.keep_awake` 1, `sys.resume_reopen` 1, `sys.backup_on_close` 0, `sys.backup_keep` 10, `sys.sync_folder` empty, `perf.mode` auto, `access.units` automatic, `access.number_format` dot, `access.digits` latin, `access.palette` normal, `store.sort` catalogue, `web.cors_origins` empty, `web.metrics` 0, `web.cors_credentials` off (the only value), `hamops.radioinfo.enabled` 0, `.address` 127.0.0.1, `.port` 0, `.allow_other` 0, `cat.emulation.enabled` 0, `.dialect` kenwood-ts480, `.port` 0, `.bind_all` 0.
+
+Other files this lane writes (all beside the settings, each created only by the feature that needs it): `wirec.json`, `qso-log.json` (the person's own log), `wirec-pending.json` and `wirec-pending/` (a staged import or reset, removed when carried out or cancelled), `wirec-last-boot.txt`, `backups/`, `reset-<stamp>/`, `<name>.before-import-<stamp>`; beside the plugins: `helpers.json` (the companion files of each helper plugin) and a transient `.helper-stage-<pid>/`; beside the program: `foxsdr-portable-error.txt` on a refused portable start.
+
+Facts in the list block: `fact.wirec.*`, `fact.sys.*`, `fact.ham.*`, `fact.cat.emulation.*`, `fact.store.<key>.helper*`. Read AT THE CALL (so the counter `listSeq` never moves for them): `fact.perf.*`.
+
+## 7. Items not done, as an ORDERED list a follow-up can continue
+
+1. S9 settings profiles, per-radio map, folder-sync planner (`core/sys_profiles.hpp`) and the automatic backup at close (`sys.backup_on_close`): both write config.json, so they need the staged-at-next-start mechanism S7 and S8 now have (`wire_c_sys.cpp`: a new `action` in `wirec-pending.json`); W5 web profiles follow.
+2. A1 units, A2 number format: replace the literals named in `access.md` 8.2 (`track_metrics.hpp:1252...`, `map_view.cpp:89-103`, `host_logic.cpp:111-120,181-200`) with `quantify` / `formatNumber`, reading the keys; keep Automatic and dot byte-identical (a test pins it).
+3. A3 speech, A4 sonification: the audio route (Q2) is the only open design point.
+4. W1, W4, W8 page JavaScript in `web_server.cpp`'s embedded page (the model files carry the exact functions); no browser was available.
+5. W3 clip in the browser (the recorder must accept a path, or a timed take through the engine's audio recorder).
+6. W6 control arbiter (join, heartbeat, leave per session; `mayAct` before every tuning request; seven routes).
+7. H4 contest score and H5 band map (pure models over the QSO book and spot input).
+8. H8 Antenna Genius READ-OUT (status queries only; "Select antenna" stays unwired).
+9. H11 OmniRig read (frequency and mode; a stand-in port in every test).
+10. P3, P4 more ABI appends (airline and route strings in `CascadeTrackInfo`, marker level, choice-list setting kind); append only.
+11. L1 CLI options (`process_boot.cpp parseFlags`; start-up ops after the engine is up).
+12. L2 decode database and alert rules (in memory only; disk is an owner decision).
+13. L4 webhooks (http only, off, a stand-in receiver).
+14. L5 MCP server (op list SET_CENTRE and SET_MODE only, loopback, off).
+15. L6 Kenwood / Yaesu CAT follower (`source/rig_cat.*`; reads the rig, never writes).
+16. L8 Discord presence (off until an id is given; a local pipe).
+17. The ADIF UDP/TCP broadcaster of H3, X-Plane slots (H7), the serial variant of the CAT emulation, an undo of an applied reset, and `docs/api/openapi.yaml` entries for `/api/mybookmarks*` and `/metrics` (its test scans `web_server.cpp` only: extend it to `web_wire_c_*.cpp` first).
+
+## 8. Owner decisions (new or still open)
+
+1. Manifest signature: who holds the Ed25519 seed and when `kOwnerKeyHex` is filled (S6 is wired and inert until then); and whether HTTPS alone suffices.
+2. A code-signing certificate (S12).
+3. First-run wizard: the usage-reports switch changes only if the person chooses it in the wizard, the program's default stays. Say if the wizard should ask.
+4. The number-format default "follow Windows" (kept "always a dot" until A2 is wired).
+5. Helper programs: the separate consent tick is built (required by default); code signing of helper executables (SmartScreen); where helpers are hosted; a store shelf for them.
+6. The metrics page has no scraper token (no credential storage): a Prometheus scraper cannot sign in with a cookie. Say if a token is wanted and where it may be kept.
+7. CORS credentials (needs HTTPS and a change of the session cookie's SameSite): `web.cors_credentials` accepts only "off".
+8. UPnP (left unwired), the decode database on disk, webhook cleartext URLs, CAT emulation exposure (`bind_all`).
+9. Passwords at rest: NOT decided; this lane built no credential storage. Present behaviour (unchanged): PASSWORD-kind plugin settings and the web password hash are written to `config.json` (dated backup copies included); protection at rest is unverified. The export bundle strips every key whose name looks like a secret.
+10. S3 resume: whether a healthy open radio should be closed and reopened after a sleep.
+11. The QSO log (call signs the person typed) is on disk in `qso-log.json`: confirm that a user-typed log file is acceptable (it is in no report, setting, log line or fact).
+
+Questions put to the orchestrator in Phase 0 and not answered: Q2 (the audio route for speech and tones) and Q3 (the QSO store: built as proposed, please confirm).
+
+## 9. Gates and the two config hashes
+
+See section 10.
+
+## 10. Gate results (headless label, 997 tests, Slint OFF, tip 7a5816ca, config Release, `-j4`)
+
+The GUI gate was NOT run: this build has Slint OFF; the merge lane runs it.
+
+| Slice | Result | Reds |
+|---|---|---|
+| 1-200 | 195/200 | test_airband_data, test_band_plan, test_converter_call_sites (the five false failures with the two below), test_engine_api_source_kinds (base red, missing fixture), test_engine_api_decode_radio (base red, timeout) |
+| 201-400 | 199/200 | test_page_resize_id (known) |
+| 401-600 | 197/200 | test_png_decode (known); test_rtlsdr_live and test_sdrplay_source failed at 26-29 s under load and PASSED alone (36 s each) |
+| 601-800 | 199/200 | test_window_failed_app (known, Slint-off configuration) |
+| 801-1100 | 197/197 | none |
+
+Earlier first pass (before commit 7a5816ca) had one real regression: test_usage_diag_window_free (the resource sampler's late PDH handles moved the diagnostics bundle's handle counters). Fixed by making the first sample synchronous at the first pump; it passes in the final run. test_diagnostics_free failed once on an uncommitted tree (stale-stamp family) and passes after commit and rebuild.
+
+Flakes seen and passing alone: test_engine_main_smoke (about 1 run in 6, also on the engine-merge lane's baseline binary D:/foxsdr-build/mr-dsp), test_engine_api_03 and test_engine_api_merge (under `-j4` load), test_plugin_store_window_free, test_record_start_stepped, test_remote_key_release_free, test_rtlsdr_live, test_sdrplay_source. test_plugin_abi3_compat against the 106 published plugin binaries: 269 checks, 134 failed, identical on the baseline binary (not caused by this lane).
+
+Config hashes: real `%APPDATA%/foxsdr/config.json` sha256 before `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3`, after the same.
+
+Stray processes: none of this lane's. Two foreign test processes exist (test_engine_api_03 from D:/foxsdr-build/en-tuning, started 2026-11-13 09:40; test_soapy_enum_proc, started 2026-11-12 00:28) and were left alone. Incidents: none.
+
+
+## 11. PLUGIN HEADER HAND-OFF (the plugin interface work after the gates; for the plugins merge lane)
+
+The plugins repository's copy of `plugin_abi.h` is changed by the plugin merge lane, not by wire-c. The exact diff of this tree's header against the merged tip 1d07d036 is in `docs/multi-radio-records/wire-c-plugin-header.diff` (the file `src/core/plugin_abi.h` only; every other change is host code). Everything is APPEND-ONLY: `CASCADE_PLUGIN_ABI_VERSION` stays 3 and `CASCADE_HOST_API_LEVEL` stays 2 (a table's size is its version; `CASCADE_HOST_HAS(host, fn)` is the test). A plugin built against the new header loads on every older host; what an older host does is stated per row.
+
+| # | What | Header change | What a plugin author does | Older host (0.99.104 and before) |
+|---|---|---|---|---|
+| f1 | Settings-table limit 16 to 32 | `CASCADE_MAX_SETTING_SPECS 32u` (the struct layouts are unchanged; the store's 64 keys are the other limit) | declare up to 32 rows (event-outputs 0.1.0 has 17; ft8-decoder may add its WSPR rows) | **REFUSES TO LOAD a plugin whose table has 17 to 32 rows**: `validatePluginDesc` returns `SettingsUiBadTable`, so the whole plugin is rejected, not only its form. A plugin that must load on a released host keeps to 16 rows until that host is replaced |
+| 3 | Named choices (the choice-list setting kind) | new capability bit `CASCADE_CAP_SETTING_CHOICES 0x00020000u` (`CASCADE_CAP_ALL_KNOWN` becomes `0x0003FFFFu`); structs `CascadeChoiceOption`, `CascadeSettingChoice`, `CascadeSettingChoicesApi`; accessor `cascade_plugin_setting_choices()` | keep declaring the field as an ordinary NUMBER (or TEXT) row whose default is one of the option values, then add a table under the new capability that names the options of that key (up to 32 options of value 15 bytes and label 31 bytes, up to 16 such keys); put the bit in `capabilities` and one entry `{CASCADE_CAP_SETTING_CHOICES, sizeof(CascadeSettingChoicesApi), &table}` in `capabilityTables` | ignores the unknown bit (ABI 3), so the plugin LOADS; the field is the plain number or text box it was, with the plugin's own placeholder as the hint ("1=PSK 2=Olivia"). Nothing breaks; stored values are the same text |
+| a | Symbol rate to a plugin | `double (*symbol_rate)(void *ctx)` appended to `CascadeHostApi` after `recorder_stop` | `if (CASCADE_HOST_HAS(host, symbol_rate)) baud = host->symbol_rate(host->ctx);` at the start of a block; 0 means the user set none; it is the USER's value (key `sig.symbol_rate`, set with `FOXAPP_OP_WIREC_SETTING`), never a measurement | the member is not in the table: `CASCADE_HOST_HAS` is false, use the plugin's own setting |
+| b | Credit on plugin marks | `char credit[CASCADE_MARKER_CREDIT_CHARS]` (48) appended at the end of `CascadeMarker`; `CASCADE_MARKER_CREDIT_CHARS 48` | fill `credit` ("Data provided by HamQTH.com") and set `structSize = sizeof(CascadeMarker)` | a plugin built before the field passes the smaller structSize and the host (new) accepts it with an empty credit; a plugin built with the field on an OLDER host passes a larger structSize and the old host copies what it knows (`min`), so it works without the credit |
+| f | Open a page / open the library folder | `int32_t (*request_open_url)(void *ctx, const char *url)` and `int32_t (*request_open_library_folder)(void *ctx)` appended after `symbol_rate`; `CASCADE_OPEN_URL_CHARS 201` | call `request_open_url(host->ctx, "https://...")` when a library is missing; NOTHING OPENS: the host lists the request, shows the address and the plugin's name, and opens it only when the user presses the button (`FOXAPP_OP_PLUGIN_OPEN_CONFIRM`); one URL and one folder request per plugin are held, the newest replacing. https only, at most 200 bytes of printable ASCII, no space, no user name or password, a host name, no backslash; any other address is BAD_ARGUMENT (OUT_OF_RANGE when too long). The folder is the plugin's own (`<per-user folder>/plugin-libs/<plugin name made safe>`), made by the host; the plugin can name no path | not in the table: `CASCADE_HOST_HAS` false; the plugin shows the address as text instead |
+| e | Recorder start / stop | (done earlier: commit c95a6bec) | | |
+
+NOT DONE, with what each needs (ABI requests of wire-b and the pick-a-file call):
+* **c. Frame-log push (wire-b).** A call by which a decoder plugin pushes frames into the engine's frame log: `int32_t (*push_frame)(void *ctx, const CascadeFrame *f)` appended after `request_open_library_folder`, with `CascadeFrame { uint32_t structSize; uint32_t protocol (an id the log keeps, 0..255); uint32_t flags (CRC ok, FEC corrected); double freqHz; uint32_t length (at most 512); uint8_t bytes[512]; char summary[96]; }`; a SETTINGS-free call (a frame is data the plugin already decoded), a bounded per-plugin queue like `recorderQueue_` (BUSY when full), drained by the engine's pass into the frame log wire-b builds. Needs wire-b's frame log type (not in this tree) to drain into; the host test is the recorder test's pattern (queue, refusals, who may). Not built: the consumer does not exist yet.
+* **d. MFSK tone energies (wire-b).** `int32_t (*read_tone_energies)(void *ctx, double centreHz, double spacingHz, uint32_t tones, float *out, uint32_t cap)` appended after c: the engine's audio FFT bins summed per tone for the block just processed. Needs wire-b's sigmeas tap (`dsp/sigmeas_*`) wired into the engine and a decision on which block (the one the plugin was just given). Not built.
+* **Choose-a-file.** `int32_t (*request_pick_file)(void *ctx, const char *title, const char *filter)` plus `int32_t (*picked_file)(void *ctx, char *out, size_t cap)`: the same request-then-user-click pattern as f (the host's file dialog is a UI thing: classic window `drawPluginSettingsForm` already has `state.pick`; the Slint window needs a dialog). The result is a path the plugin reads back, so the host must (1) show a dialog only on the user's click, (2) hand back only the path, (3) for the needed-library rule copy the file into the plugin's library folder itself after checking name, 64-bit and exports, so the plugin never receives a path outside it. Not built: it is a screen piece first.
+
+SCREEN HAND-OFF for these rows (the Slint window and the classic window): (1) a drop-down for a field whose list item has fact `plugin.setting.<n>.choices` ("value US label" pairs joined by RS 0x1E; US = 0x1F): the classic window draws it now (`drawPluginSettingsForm`), the Slint drop-down is a screen row; (2) for each `fact.plugin.open.<n>` ("<module file> US <plugin name> US url|folder US <address or folder path>", `fact.plugin.open.count`) a button "Open the download page" / "Open that folder" showing the address, whose press sends `FOXAPP_OP_PLUGIN_OPEN_CONFIRM` with text "<module file> US url|folder"; `fact.plugin.open.last` says how it went; (3) a number field "Symbol rate (baud)" for the key `sig.symbol_rate`; (4) the credit of a mark is `fact.plugin.marker.credit.<n>` where n is the mark's place in `FOXAPI_LIST_MARKERS` (from 1).
+
+Files the interface work touched, for the merge agent (`engine/multi-radio` moved to 437bfedd after 1d07d036 and was NOT merged here): `src/core/plugin_abi.h`, `plugin_host.cpp`, `plugin_host_data.hpp`, `plugin_settings_ui.{hpp,cpp}`, `plugin_api.{hpp,cpp}`, `plugin_ui.cpp`, `plugin_repo.cpp`, `src/gui/module_census.cpp`, `plugin_settings_form.cpp`, `app_window_plugin_settings.cpp`, `src/engine/engine_api_lists.cpp`, `engine_plugin_settings.cpp`, `engine_wire_c.cpp`, `wire_c.{hpp,cpp}`, new `wire_c_open.{hpp,cpp}`, `src/core/app_commands.{hpp,cpp}` (op 0x8A10); tests `test_plugin_settings_ui.cpp`, `test_plugin_recorder.cpp`, `test_plugin_schedule_hint.cpp`, `test_module_census.cpp`, `test_plugin_repo.cpp`, `test_apply_command.cpp`, new `test_engine_api_wire_c_open.cpp`.
+
+NEEDED LIBRARIES (the owner's needed-library rule) for this lane's group: none of the wired items needs a library the user installs. The rows that would are not wired: A3/A4 speech and sonification use SAPI (Windows' own, `sapi.dll`; voices the user adds in Windows Settings; fetch allowed: no (part of Windows)), H8 OmniRig (OmniRig COM server from https://dxatlas.com/omnirig (unverified), installer, GPL-free freeware; fetch allowed: no (unverified)). The helper programs of the Plugin store (G1) need the Visual C++ x64 runtime (`vcruntime140.dll`, `msvcp140.dll`; from Microsoft's own page (unverified); id `vc-runtime-x64`); the store's install check for it (a plain-words "what is needed, that it comes from Microsoft, steps, check again" report) is NOT built: it needs a probe for the two DLLs on the helper's load path and a fact the screen draws; list item for the next allowance.
+
+TESTS RUN for this section (Release, Slint OFF, tree at 872fdb4f): test_plugin_settings_ui, test_plugin_recorder, test_engine_api_wire_c_open, test_apply_command, test_module_census, test_plugin_repo, test_tx_audio, fuzz_smoke_plugin_hostapi and fuzz_corpus_plugin_hostapi, plus a 117-test slice of everything named plugin / settings / store / census / wire_c / engine_api_03: all pass (the first run had two reds that were this work's own, both fixed: the fuzz marker rule and test_tx_audio's exact ALL_KNOWN line). The full headless gate was NOT re-run after this work. Commits: bb17724b (limit 32), b7a5952c (choices), 872fdb4f (host calls).

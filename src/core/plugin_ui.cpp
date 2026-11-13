@@ -607,6 +607,24 @@ std::int32_t l1ReadEvents(void* ctx, std::uint64_t afterSeq, CascadeEvent* out, 
 std::int32_t l1RecorderStart(void* ctx, const char* label) {
     return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.recorderRequest(c, true, label); });
 }
+// wire-c begin
+double l1SymbolRate(void* ctx) {
+    try {
+        auto* c = static_cast<HostCtx*>(ctx);
+        if (c == nullptr || !c->core) { return 0.0; }
+        return c->core->symbolRate();
+    } catch (...) {
+        raiseHostFault();
+        return 0.0;
+    }
+}
+std::int32_t l1RequestOpenUrl(void* ctx, const char* url) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.openRequest(c, false, url); });
+}
+std::int32_t l1RequestOpenFolder(void* ctx) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.openRequest(c, true, nullptr); });
+}
+// wire-c end
 std::int32_t l1RecorderStop(void* ctx) {
     return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.recorderRequest(c, false, nullptr); });
 }
@@ -698,6 +716,9 @@ void fillLevel1(HostCtx& c) {
     t.events_seq = &l1EventsSeq;
     t.recorder_start = &l1RecorderStart;   // wire-c
     t.recorder_stop = &l1RecorderStop;     // wire-c
+    t.symbol_rate = &l1SymbolRate;                          // wire-c
+    t.request_open_url = &l1RequestOpenUrl;                 // wire-c
+    t.request_open_library_folder = &l1RequestOpenFolder;   // wire-c
 }
 
 }  // namespace

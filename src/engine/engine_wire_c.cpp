@@ -21,6 +21,7 @@
 #include "core/safe_file_io.hpp"
 #include "core/store_sort.hpp"
 #include "engine/wire_c.hpp"
+#include "engine/wire_c_open.hpp"
 
 namespace cascade::engine {
 
@@ -189,6 +190,35 @@ std::int32_t Engine::applyWireC(const FoxCommand& c, const std::string& text, Fo
             }
             return FOXAPI_OK;
         }
+        case FOXAPP_OP_PLUGIN_OPEN_CONFIRM: {
+            if (commandFromRemote_) {
+                why = "a plugin's page or folder is opened from this computer only";
+                return FOXAPI_DENIED;
+            }
+            const std::size_t us = text.find('\x1F');
+            if (us == std::string::npos) { why = "give the module file and url or folder"; return FOXAPI_BAD_ARGUMENT; }
+            const std::string kind = text.substr(us + 1u);
+            if (kind != "url" && kind != "folder") { why = "the second part is url or folder"; return FOXAPI_BAD_ARGUMENT; }
+            const bool folder = kind == "folder";
+            cascade::core::PluginApiCore::OpenRequest req;
+            if (!pluginApi_->takeOpenRequest(text.substr(0, us), folder, req)) {
+                why = "that plugin has no such request";
+                return FOXAPI_NOT_FOUND;
+            }
+            wc::State& s = wireC();
+            std::string target = req.url;
+            if (folder) {
+                const std::filesystem::path dir = wc::libraryFolderFor(s.settings().path().parent_path(), req.name);
+                std::error_code ec;
+                std::filesystem::create_directories(dir, ec);
+                target = dir.string();
+            }
+            bool ok = false;
+            if (s.openTarget) { ok = s.openTarget(target, folder, why); } else { ok = wc::openWithSystem(target, folder, why); }
+            s.openLast = ok ? (folder ? "opened the library folder" : "opened the page") : why;
+            ++wireCVersion_;
+            return ok ? FOXAPI_OK : FOXAPI_FAILED;
+        }
         case FOXAPP_OP_STORE_HELPER_CONSENT: {
             if (commandFromRemote_) {
                 why = "the plugin store's helper programs are fitted from this computer only";
@@ -225,6 +255,18 @@ void Engine::wireCFacts(const std::function<void(const std::string&, const std::
     fact("wirec.version", std::to_string(wireCVersion()));
     fact("wirec.error", s.settings().error());
     // POWER AND RESOURCES (wire_c_power.hpp). "" is "not available" - a reading that could not be made is never shown as 0.
+    // WHAT PLUGINS ASKED THE USER TO OPEN (plugin_abi.h request_open_url / request_open_library_folder): "<module file> US <plugin name> US url|folder US <address, or the library folder's path>".
+    // The screen draws one button per row, showing the address; the press is PLUGIN_OPEN_CONFIRM. Nothing opens before it.
+    {
+        const std::vector<cascade::core::PluginApiCore::OpenRequest> reqs = pluginApi_->openRequests();
+        fact("plugin.open.count", std::to_string(reqs.size()));
+        for (std::size_t i = 0; i < reqs.size(); ++i) {
+            const auto& r = reqs[i];
+            const std::string where = r.folder ? wc::libraryFolderFor(s.settings().path().parent_path(), r.name).string() : r.url;
+            fact("plugin.open." + std::to_string(i + 1u), r.key + '\x1F' + r.name + '\x1F' + (r.folder ? "folder" : "url") + '\x1F' + where);
+        }
+        fact("plugin.open.last", s.openLast);
+    }
     // CAT EMULATION (row L7)
     fact("cat.emulation.running", s.catEmu.running() ? "1" : "0");
     fact("cat.emulation.port", s.catEmu.running() ? std::to_string(s.catEmu.boundPort()) : std::string());
@@ -415,9 +457,11 @@ void Engine::pumpWireC() {
     wc::Power& p = s.power();
     if (!s.powerStarted) {
         s.powerStarted = true;
+        p.sampleOnce();   // the first reading is made HERE, once, so the counters and handles the sampler's first query opens are in place before the engine's next pass reports its own (diagnostic bundles compare them)
         p.startSampler();
         p.startResumeWatch();
     }
+    pluginApi_->setSymbolRate(s.settings().getReal("sig.symbol_rate"));   // the user's symbol rate for the plugins that ask (plugin_abi.h symbol_rate)
     const std::string mode = s.settings().get("perf.mode");
     p.setPerfMode(mode == "on" ? cascade::core::sys::EffectsMode::On : mode == "off" ? cascade::core::sys::EffectsMode::Off : cascade::core::sys::EffectsMode::Auto);
     if (p.keepAwakePass(s.settings().getBool("sys.keep_awake") && wireCRecordingBusy())) { ++wireCVersion_; }

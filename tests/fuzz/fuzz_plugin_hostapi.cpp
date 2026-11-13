@@ -95,7 +95,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
                 if (declared >= 4) { std::memcpy(raw.data(), &declared, 4); }
                 const std::int32_t r = core.setMarker(c, declared != 0 ? reinterpret_cast<const CascadeMarker*>(raw.data()) : nullptr);
                 FUZZ_REQUIRE(isAbiAnswer(r));
-                if (declared < sizeof(CascadeMarker)) { FUZZ_REQUIRE(r == CASCADE_API_BAD_ARGUMENT || r == CASCADE_API_DETACHED); }   // a short struct is refused, never read past
+                if (declared < offsetof(CascadeMarker, credit)) { FUZZ_REQUIRE(r == CASCADE_API_BAD_ARGUMENT || r == CASCADE_API_DETACHED); }   // a struct shorter than the ORIGINAL marker (before the credit field, wiring lane C) is refused, never read past
                 break;
             }
             case 6: FUZZ_REQUIRE(isAbiAnswer(core.removeMarker(c, in.u32()))); break;

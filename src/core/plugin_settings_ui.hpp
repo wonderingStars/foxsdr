@@ -35,6 +35,14 @@ struct SettingField {
     // TEXT and PATH: the plugin's limit in UTF-8 bytes, clamped to
     // 1..CASCADE_SETTING_VALUE_BYTES-1. NUMBER: kMaxNumberChars. BOOL: 1.
     std::size_t maxLength = 0;
+    // wire-c begin: NAMED CHOICES (CASCADE_CAP_SETTING_CHOICES): when non-empty (two or more) the field is a drop-down of these, and only one of their values can be stored.
+    // `kind` stays the underlying TEXT or NUMBER, so a surface that does not draw a drop-down yet still shows an ordinary box.
+    struct Choice {
+        std::string value;
+        std::string label;
+    };
+    std::vector<Choice> choices;
+    // wire-c end
 };
 
 // Longest decimal text a NUMBER field accepts. A double needs at most 24
@@ -51,7 +59,8 @@ constexpr std::size_t kMaxNumberChars = 32;
 // size, null specs, or a count of 0 or above CASCADE_MAX_SETTING_SPECS yield
 // no fields at all (the loader has already refused a plugin with such a
 // table; this is the second line, for a record built any other way).
-std::vector<SettingField> settingFieldsFrom(const CascadeSettingsUiApi* api);
+// wire-c: `choices` (may be null) gives named options to TEXT and NUMBER fields; see plugin_abi.h "NAMED CHOICES".
+std::vector<SettingField> settingFieldsFrom(const CascadeSettingsUiApi* api, const CascadeSettingChoicesApi* choices = nullptr);
 
 // What an attempted edit came to. Anything but Accepted is shown beside the
 // field, and the field goes back to showing what the store holds.
@@ -73,6 +82,7 @@ enum class SettingEditResult {
     Refused,     // the field's own `kind` is not TEXT/NUMBER/BOOL/PATH - internal:
                  // settingFieldsFrom already filters these out, so a caller
                  // going through the normal path never sees this either
+    NotAnOption,  // wire-c: a field with named choices was given a value that is none of them (appended last: the numbers above are on the wire)
 };
 
 // Decides whether `typed` may be stored in `f`, and if so, exactly what text

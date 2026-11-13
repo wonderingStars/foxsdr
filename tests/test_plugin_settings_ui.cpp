@@ -178,6 +178,153 @@ PluginRejection validateWith(const CascadeSettingsUiApi* ui, std::uint32_t table
     return cascade::core::validatePluginDesc(&d);
 }
 
+// wire-c begin: NAMED CHOICES (CASCADE_CAP_SETTING_CHOICES).
+CascadeSettingChoice choice(const char* key, std::initializer_list<std::pair<const char*, const char*>> opts) {
+    CascadeSettingChoice c{};
+    c.structSize = static_cast<std::uint32_t>(sizeof(CascadeSettingChoice));
+    std::snprintf(c.key, sizeof(c.key), "%s", key);
+    std::uint32_t n = 0;
+    for (const auto& o : opts) {
+        std::snprintf(c.options[n].value, sizeof(c.options[n].value), "%s", o.first);
+        std::snprintf(c.options[n].label, sizeof(c.options[n].label), "%s", o.second);
+        ++n;
+    }
+    c.optionCount = n;
+    return c;
+}
+
+PluginRejection validateChoices(const CascadeSettingChoicesApi* t, std::uint32_t tableSize) {
+    static const CascadeSettingSpec one[1] = {spec("mode", "Mode", CASCADE_SETTING_NUMBER, 0, "1=PSK 2=Olivia", "1")};
+    static const CascadeSettingsUiApi ui{static_cast<std::uint32_t>(sizeof(CascadeSettingsUiApi)), 1u, one};
+    CascadeCapabilityEntry caps[3] = {
+        {CASCADE_CAP_DECODER, static_cast<std::uint32_t>(sizeof(CascadeDecoderApi)), &kDec},
+        {CASCADE_CAP_SETTINGS_UI, static_cast<std::uint32_t>(sizeof(CascadeSettingsUiApi)), &ui},
+        {CASCADE_CAP_SETTING_CHOICES, tableSize, t},
+    };
+    CascadePluginDesc d{};
+    d.structSize = static_cast<std::uint32_t>(sizeof(CascadePluginDesc));
+    d.abiVersion = CASCADE_PLUGIN_ABI_VERSION;
+    d.name = "Choices";
+    d.version = "1.0.0";
+    d.author = "";
+    d.licence = "MIT";
+    d.capabilities = CASCADE_CAP_DECODER | CASCADE_CAP_SETTINGS_UI | CASCADE_CAP_SETTING_CHOICES;
+    d.capabilityCount = 3;
+    d.capabilityTables = caps;
+    return cascade::core::validatePluginDesc(&d);
+}
+
+void testChoices() {
+    std::printf("[C] named choices\n");
+    const CascadeSettingSpec specs[] = {
+        spec("mode", "Mode", CASCADE_SETTING_NUMBER, 0, "1=PSK 2=Olivia 3=MFSK16", "1"),
+        spec("band", "Band", CASCADE_SETTING_TEXT, 4, "", "20m"),
+        spec("on", "On", CASCADE_SETTING_BOOL, 0, "", ""),
+        spec("other", "Other", CASCADE_SETTING_NUMBER, 0, "", ""),
+        spec("odd", "Odd", CASCADE_SETTING_NUMBER, 0, "", ""),
+        spec("pw", "Pw", CASCADE_SETTING_PASSWORD, 8, "", ""),
+    };
+    CascadeSettingChoice cs[] = {
+        choice("mode", {{"1", "PSK31"}, {"2", "Olivia"}, {"3", "MFSK16"}, {"2", "Olivia again"}, {"x", "not a number"}, {"4", ""}}),
+        choice("band", {{"20m", "20 metres"}, {"40m", "40 metres"}, {"toolong", "too long for maxLength 4"}}),
+        choice("on", {{"1", "Yes"}, {"0", "No"}}),             // a BOOL: ignored
+        choice("other", {{"1", "Only one"}}),                   // fewer than two options: stays a plain box
+        choice("odd", {{"1", "A"}, {"2", "B"}}),                // its structSize is wrong: skipped
+        choice("pw", {{"a", "A"}, {"b", "B"}}),                 // a PASSWORD: ignored
+        choice("nokey", {{"1", "A"}, {"2", "B"}}),              // names no field
+    };
+    cs[4].structSize += 4u;
+    const CascadeSettingsUiApi ui{static_cast<std::uint32_t>(sizeof(CascadeSettingsUiApi)), 6u, specs};
+    const CascadeSettingChoicesApi table{static_cast<std::uint32_t>(sizeof(CascadeSettingChoicesApi)), 7u, cs};
+
+    const std::vector<SettingField> plain = cascade::core::settingFieldsFrom(&ui);   // an older host / no table: ordinary boxes
+    CHECK(plain.size() == 6u);
+    for (const SettingField& f : plain) { CHECK(f.choices.empty()); }
+
+    const std::vector<SettingField> fs = cascade::core::settingFieldsFrom(&ui, &table);
+    CHECK(fs.size() == 6u);
+    const auto find = [&](const char* key) -> const SettingField& {
+        for (const SettingField& f : fs) { if (f.key == key) { return f; } }
+        return fs.front();
+    };
+    const SettingField& mode = find("mode");
+    CHECK(mode.kind == CASCADE_SETTING_NUMBER);   // the underlying kind is unchanged
+    CHECK(mode.choices.size() == 4u);             // the repeat of "2" and the non-number "x" are skipped
+    if (mode.choices.size() == 4u) {
+        CHECK(mode.choices[0].value == "1" && mode.choices[0].label == "PSK31");
+        CHECK(mode.choices[1].value == "2" && mode.choices[1].label == "Olivia");
+        CHECK(mode.choices[2].value == "3" && mode.choices[2].label == "MFSK16");
+        CHECK(mode.choices[3].value == "4" && mode.choices[3].label == "4");   // an empty label shows the value
+    }
+    const SettingField& band = find("band");
+    CHECK(band.choices.size() == 2u);   // "toolong" does not fit maxLength 4
+    CHECK(find("on").choices.empty());
+    CHECK(find("other").choices.empty());
+    CHECK(find("odd").choices.empty());
+    CHECK(find("pw").choices.empty());
+
+    // The edit rule: only an option's value is stored.
+    std::string stored;
+    CHECK(cascade::core::prepareSettingEdit(mode, "2", stored) == cascade::core::SettingEditResult::Accepted && stored == "2");
+    CHECK(cascade::core::prepareSettingEdit(mode, "9", stored) == cascade::core::SettingEditResult::NotAnOption && stored.empty());
+    CHECK(cascade::core::prepareSettingEdit(mode, "", stored) == cascade::core::SettingEditResult::NotAnOption);
+    CHECK(cascade::core::prepareSettingEdit(mode, " 2", stored) == cascade::core::SettingEditResult::NotAnOption);   // not trimmed into a match
+    CHECK(cascade::core::prepareSettingEdit(band, "40m", stored) == cascade::core::SettingEditResult::Accepted);
+    CHECK(cascade::core::prepareSettingEdit(band, "15m", stored) == cascade::core::SettingEditResult::NotAnOption);
+    // A field without named choices keeps its old rule exactly.
+    CHECK(cascade::core::prepareSettingEdit(find("other"), "9", stored) == cascade::core::SettingEditResult::Accepted);
+    CHECK(cascade::core::prepareSettingEdit(plain[0], "9", stored) == cascade::core::SettingEditResult::Accepted);
+    // The default of the field is still its spec's default.
+    CHECK(mode.defaultValue == "1");
+
+    // A table of a wrong size, with NULL entries or a count out of range gives no choices (the loader refuses such a plugin; this is the second line).
+    CascadeSettingChoicesApi bad = table;
+    bad.structSize += 4u;
+    for (const SettingField& f : cascade::core::settingFieldsFrom(&ui, &bad)) { CHECK(f.choices.empty()); }
+    bad = table;
+    bad.count = 0u;
+    for (const SettingField& f : cascade::core::settingFieldsFrom(&ui, &bad)) { CHECK(f.choices.empty()); }
+    bad = table;
+    bad.count = CASCADE_MAX_SETTING_CHOICE_LISTS + 1u;
+    for (const SettingField& f : cascade::core::settingFieldsFrom(&ui, &bad)) { CHECK(f.choices.empty()); }
+    bad = table;
+    bad.choices = nullptr;
+    for (const SettingField& f : cascade::core::settingFieldsFrom(&ui, &bad)) { CHECK(f.choices.empty()); }
+    // An unterminated key or label is read to its bound, never past it.
+    {
+        CascadeSettingChoice wild = choice("mode", {{"1", "A"}, {"2", "B"}});
+        std::memset(wild.options[0].label, 'L', sizeof(wild.options[0].label));
+        std::memset(wild.options[1].value, '7', sizeof(wild.options[1].value));
+        const CascadeSettingChoicesApi t{static_cast<std::uint32_t>(sizeof(CascadeSettingChoicesApi)), 1u, &wild};
+        const std::vector<SettingField> w = cascade::core::settingFieldsFrom(&ui, &t);
+        CHECK(w.size() == 6u);   // the unterminated value "7777777777777777" is too long to be a value: only one option is left, so no drop-down
+        CHECK(w[0].choices.empty());
+    }
+
+    // The loader check, and an older host's view: the capability alone is not a plugin, and a plugin without it loads as before.
+    const CascadeSettingChoicesApi ok{static_cast<std::uint32_t>(sizeof(CascadeSettingChoicesApi)), 1u, cs};
+    const auto csz = static_cast<std::uint32_t>(sizeof(CascadeSettingChoicesApi));
+    CHECK(validateChoices(&ok, csz) == PluginRejection::None);
+    CHECK(validateChoices(nullptr, csz) == PluginRejection::MissingSettingChoicesApi);
+    CascadeSettingChoicesApi b2 = ok;
+    b2.structSize += 4u;
+    CHECK(validateChoices(&b2, csz) == PluginRejection::SettingChoicesStructSizeMismatch);
+    b2 = ok;
+    b2.count = 0u;
+    CHECK(validateChoices(&b2, csz) == PluginRejection::SettingChoicesBadTable);
+    b2 = ok;
+    b2.count = CASCADE_MAX_SETTING_CHOICE_LISTS + 1u;
+    CHECK(validateChoices(&b2, csz) == PluginRejection::SettingChoicesBadTable);
+    b2 = ok;
+    b2.choices = nullptr;
+    CHECK(validateChoices(&b2, csz) == PluginRejection::SettingChoicesBadTable);
+    for (PluginRejection r : {PluginRejection::MissingSettingChoicesApi, PluginRejection::SettingChoicesStructSizeMismatch, PluginRejection::SettingChoicesBadTable}) {
+        CHECK(std::string(cascade::core::pluginRejectionMessage(r)) != "unknown rejection");
+    }
+    CHECK((CASCADE_CAP_ALL_KNOWN & CASCADE_CAP_SETTING_CHOICES) != 0u);
+}
+// wire-c end
+
 void testValidation() {
     std::printf("[V] loader check of the settings table\n");
     const CascadeSettingSpec one[1] = {spec("callsign", "Callsign", CASCADE_SETTING_TEXT, 12, "",
@@ -199,6 +346,26 @@ void testValidation() {
     bad = ui;
     bad.count = CASCADE_MAX_SETTING_SPECS + 1u;
     CHECK(validateWith(&bad, sz) == PluginRejection::SettingsUiBadTable);
+    // wire-c begin: the limit is 32 rows (it was 16: event-outputs declares 17 rows and ft8-decoder had no room for its WSPR options). 16, 17 and 32 rows are accepted by the
+    // loader check AND yield that many fields; 33 is refused by both, and so is a count far above.
+    CHECK(CASCADE_MAX_SETTING_SPECS == 32u);
+    {
+        std::vector<CascadeSettingSpec> rows;
+        for (int i = 0; i < 33; ++i) {
+            rows.push_back(spec(("key" + std::to_string(i)).c_str(), ("Row " + std::to_string(i)).c_str(), CASCADE_SETTING_TEXT, 12, "", ""));
+        }
+        for (const std::uint32_t n : {16u, 17u, 32u}) {
+            CascadeSettingsUiApi t{sz, n, rows.data()};
+            CHECK(validateWith(&t, sz) == PluginRejection::None);
+            CHECK(cascade::core::settingFieldsFrom(&t).size() == n);
+        }
+        for (const std::uint32_t n : {33u, 64u, 65u, 1000u}) {
+            CascadeSettingsUiApi t{sz, n, rows.data()};
+            CHECK(validateWith(&t, sz) == PluginRejection::SettingsUiBadTable);
+            CHECK(cascade::core::settingFieldsFrom(&t).empty());
+        }
+    }
+    // wire-c end
     // Each has its own words, not the catch-all.
     for (PluginRejection r : {PluginRejection::MissingSettingsUiApi,
                               PluginRejection::SettingsUiStructSizeMismatch,
@@ -1553,6 +1720,7 @@ int main(int argc, char** argv) {
 #endif
     testMaidenhead();
     testValidation();
+    testChoices();   // wire-c
     testFields();
     testEdits();
     testOldPlugin();

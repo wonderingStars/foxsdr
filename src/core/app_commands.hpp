@@ -246,6 +246,11 @@
 #define FOXAPP_OP_CABRILLO_HEADER        0x8A0Du /* text / long text: the Cabrillo header as JSON */
 #define FOXAPP_OP_CABRILLO_EXPORT        0x8A0Eu /* text: the file to write */
 #define FOXAPP_OP_ADIF_EXPORT            0x8A0Fu /* text: the file to write */
+//   PLUGIN_OPEN_CONFIRM (wiring lane C, the plugin interface's request_open_url / request_open_library_folder), SETTINGS, LOCAL sessions only: the USER PRESSED the button the screen
+//   drew for a plugin's request (fact.plugin.open.<n> lists them). Text: "<module file>\x1F<url|folder>". The engine takes that plugin's held request and opens it: an https address in the
+//   browser, or the plugin's own library folder (created if need be) in the file manager. NOT_FOUND: the plugin has no such request; BAD_ARGUMENT: the second part is neither; FAILED: the system
+//   would not open it (fact.plugin.open.last says why). The request is used up either way: the plugin asks again if it still needs to. Nothing else ever opens a page for a plugin.
+#define FOXAPP_OP_PLUGIN_OPEN_CONFIRM    0x8A10u /* text: "<module file>\x1F<url|folder>" */
 // wire-c end
 // Plugins and the store.
 #define FOXAPP_OP_USER_PRESET_APPLY      0x8701u /* text: plugin key; ival[0]: ordinal among that plugin's user presets */

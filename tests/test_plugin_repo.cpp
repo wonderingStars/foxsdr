@@ -3025,7 +3025,7 @@ int main() {
                 "CASCADE_CAP_AUDIO_OUT",      "CASCADE_CAP_AUDIO_PROCESSOR",
                 "CASCADE_CAP_SETTINGS_UI",    "CASCADE_CAP_RECEIVER_LOCATOR",
                 "CASCADE_CAP_TX_AUDIO", "CASCADE_CAP_IMAGE_INPUT",
-                "CASCADE_CAP_TRACK_PHOTO"};
+                "CASCADE_CAP_TRACK_PHOTO", "CASCADE_CAP_SETTING_CHOICES"};
             const std::uint32_t bits[] = {
                 CASCADE_CAP_DECODER,        CASCADE_CAP_IQ_DECODER,
                 CASCADE_CAP_IMAGE_DECODER,  CASCADE_CAP_TRACK_SOURCE,
@@ -3035,7 +3035,7 @@ int main() {
                 CASCADE_CAP_AUDIO_OUT,      CASCADE_CAP_AUDIO_PROCESSOR,
                 CASCADE_CAP_SETTINGS_UI,    CASCADE_CAP_RECEIVER_LOCATOR,
                 CASCADE_CAP_TX_AUDIO, CASCADE_CAP_IMAGE_INPUT,
-                CASCADE_CAP_TRACK_PHOTO};
+                CASCADE_CAP_TRACK_PHOTO, CASCADE_CAP_SETTING_CHOICES};
             std::uint32_t all = 0;
             for (std::size_t i = 0; i < sizeof(bits) / sizeof(bits[0]); ++i) {
                 CHECK(PluginRepo::capabilityBitForName(names[i]) == bits[i]);

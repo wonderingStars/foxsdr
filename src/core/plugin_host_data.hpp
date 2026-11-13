@@ -142,6 +142,10 @@ enum class PluginRejection {
     TrackPhotoStructSizeMismatch,
     MissingTrackPhotoFunction,
     TrackPhotoNeedsTrackInfo,  // rides on the track-info handle; refused without it
+    // --- CASCADE_CAP_SETTING_CHOICES (wiring lane C, 0.99.109) ---
+    MissingSettingChoicesApi,
+    SettingChoicesStructSizeMismatch,
+    SettingChoicesBadTable,  // choices NULL, or count 0 or above CASCADE_MAX_SETTING_CHOICE_LISTS
     // --- plugin containment P1, load-time validation (docs/engine-stage4.md 6.28) ----------------------------------------------
     DuplicateCapabilityTable,    // two entries claim one declared capability: which table is the plugin's?
 };
@@ -213,6 +217,8 @@ struct LoadedPlugin {
     // A static table, like `preset`; core/plugin_settings_ui.hpp turns it
     // into fields.
     const CascadeSettingsUiApi* settingsUi = nullptr;
+    // CASCADE_CAP_SETTING_CHOICES (wiring lane C, 0.99.109): the named options of some of settingsUi's fields. Static, like settingsUi.
+    const CascadeSettingChoicesApi* settingChoices = nullptr;
     const CascadeBasemapApi* basemap = nullptr;            // CASCADE_CAP_BASEMAP
     const CascadeTrackInfoApi* trackInfo = nullptr;        // CASCADE_CAP_TRACK_INFO
     // CASCADE_CAP_TRACK_PHOTO (0.99.98). No create/destroy: called on the

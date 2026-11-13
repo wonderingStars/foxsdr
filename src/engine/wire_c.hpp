@@ -83,6 +83,9 @@ public:
     SysOps& sys() { return sys_; }
     QsoBook& qsos() { return qsoBook_; }
     CatEmulation catEmu;                  // CAT emulation for logging programs (row L7)
+    // the carrying-out of a confirmed open (plugin_abi.h request_open_url / _library_folder); empty = the system's own (wire_c_open.hpp). TESTS set it.
+    std::function<bool(const std::string& what, bool isFolder, std::string& why)> openTarget;
+    std::string openLast;   // the last confirmed open's outcome, a sentence
     std::string catEmuApplied = "0|kenwood-ts480|0|0";   // the settings it was last configured with (the defaults: nothing to do at the first pass)
     std::uint64_t catEmuSeen = 0;         // clients and commands the last published fact block counted
     void shutdown() {                     // the engine's teardown: every listener and session this lane holds is let go
