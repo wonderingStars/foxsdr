@@ -86,9 +86,11 @@ int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     const char* dirEnv = std::getenv("FOXSDR_PUBLISHED_PLUGINS_DIR");
     if (dirEnv == nullptr || dirEnv[0] == '\0') {
-        std::printf("SKIP: set FOXSDR_PUBLISHED_PLUGINS_DIR to the plugin repository's plugins/ "
-                    "directory to load the published binaries. NOTHING WAS PROVED.\n");
-        return testSummary("test_plugin_abi3_compat");
+        // A SKIP, NEVER A PASS (engine fixes 5, item 4). Without the published binaries this test checks nothing, and "0 checks, 0 failed" read as a pass in every ordinary gate. The
+        // line below is what CTest looks for (SKIP_REGULAR_EXPRESSION in tests/CMakeLists.txt), so the test is reported Skipped, with the reason and how to run it.
+        std::printf("SKIPPED (nothing was proved): test_plugin_abi3_compat loads the published plugin binaries and none was given. Set FOXSDR_PUBLISHED_PLUGINS_DIR to "
+                    "a folder holding the published *-win-x64.dll files (the plugin repository's plugins/ directory) and run it again.\n");
+        return 0;
     }
     const fs::path dir = fs::absolute(dirEnv);
     std::printf("published plugins: %s\n", dir.string().c_str());

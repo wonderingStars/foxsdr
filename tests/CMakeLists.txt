@@ -1750,6 +1750,12 @@ if(TARGET test_gui_desktop_guard)
     add_dependencies(test_gui_desktop_guard gui_desktop_guard)
 endif()
 
+# test_plugin_abi3_compat checks nothing unless FOXSDR_PUBLISHED_PLUGINS_DIR names the published plugin binaries (engine fixes 5, item 4): without it the test prints a line that begins
+# "SKIPPED (nothing was proved)" and CTest reports it Skipped, not Passed.
+if(TARGET test_plugin_abi3_compat)
+    set_tests_properties(test_plugin_abi3_compat PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED .nothing was proved")
+endif()
+
 # THE REAL-HARDWARE GUARD (engine fixes 5, item 1; tests/hardware_guard.hpp says why). No test opens the person's own radio unless they set FOXSDR_ALLOW_REAL_HARDWARE_TESTS=1.
 # test_rtlsdr_live is wholly about the dongle: without the variable it prints "SKIP real hardware ..." and CTest reports it SKIPPED (not passed, not failed). test_usb_winusb and
 # test_soapy_source keep their fake-based sections and skip only their real-hardware parts (their own line; they pass). test_hardware_guard proves both branches and scans for new
