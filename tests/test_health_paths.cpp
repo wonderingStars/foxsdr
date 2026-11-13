@@ -246,7 +246,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         CHECK(ui.find("globalLedger") == std::string::npos);
         std::size_t raises = 0;
         for (std::size_t at = 0; (at = ui.find("raiseHostFault();", at)) != std::string::npos; at += 10) { ++raises; }
-        CHECK(raises == 7);            // the four host calls and the two level-1 helpers' catch blocks, and events_seq's (the decode events, engine wiring W2: a call with no status channel)
+        CHECK(raises == 8);            // the four host calls and the two level-1 helpers' catch blocks, and events_seq's (the decode events, engine wiring W2: a call with no status channel), and symbol_rate's (wire-c: a double with no status channel; engine merge 4 raised this from 7)
         CHECK(ui.find("health::raiseRecovered(cascade::core::health::Recovered::PluginApi)") != std::string::npos);
     }
     // 3. Every word of the vocabulary has the sites the survey names, and no others.
