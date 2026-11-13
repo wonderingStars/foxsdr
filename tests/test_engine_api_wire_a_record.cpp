@@ -17,9 +17,11 @@
 #include <cstdio>
 #include <ctime>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "core/flac_writer.hpp"
+#include "core/recorder.hpp"
 #include "source/wav_meta.hpp"
 #include "wire_a_rig.hpp"
 
@@ -231,6 +233,37 @@ std::vector<fs::path> filesWithExt(const fs::path& dir, const char* ext) {
     return out;
 }
 
+// The finish hook: the NEXT take's file takes a moment to close, so a Record pressed behind it is QUEUED (Engine::iqStartQueued_), not started.
+void slowClose(std::FILE*) { std::this_thread::sleep_for(std::chrono::milliseconds(2500)); }
+
+void testLockQueued() {
+    std::printf("L2: lock while a take is queued behind a finishing one\n");
+    const fs::path rec = g_dir / "rec6", user = g_dir / "user6";
+    fs::create_directories(rec);
+    Rig r(user, rec);
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 100.0e6, 0)).status(), FOXAPI_OK);
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RUN, 0, 1)).status(), FOXAPI_OK);
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_RECORD_LOCK, 0.0, 1)).status(), FOXAPI_OK);
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_IQ, 0, 1)).status(), FOXAPI_OK);
+    CHECK(r.until([&] { return !wavsUnder(rec).empty(); }));
+    r.settle(500);
+    cascade::core::Recorder::setFinishHookForTest(&slowClose);
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_IQ, 0, 0)).status(), FOXAPI_OK);   // the take ends; its file is still closing
+    r.settle(300);
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 101.0e6, 0)).status(), FOXAPI_OK);   // nothing is recording and nothing is queued yet: allowed
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 100.0e6, 0)).status(), FOXAPI_OK);
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_IQ, 0, 1)).status(), FOXAPI_OK);        // pressed behind the finish: queued
+    testing::Outcome o = r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 102.0e6, 0));
+    CHECK_EQ(o.status(), FOXAPI_DENIED);                                                   // the person has asked for a take: the centre is frozen
+    CHECK_EQ(r.fact("tuned.1.centreHz"), std::string("100000000"));
+    r.settle(3500);                                                                        // the close ends, the queued take starts
+    cascade::core::Recorder::setFinishHookForTest(nullptr);
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 102.0e6, 0)).status(), FOXAPI_DENIED);   // and the lock holds in the take itself
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RECORD_IQ, 0, 0)).status(), FOXAPI_OK);
+    r.settle(3000);
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_CENTRE, 102.0e6, 0)).status(), FOXAPI_OK);
+}
+
 void testFlac() {
     std::printf("C1: FLAC for audio takes\n");
     const fs::path rec = g_dir / "rec4", user = g_dir / "user4";
@@ -327,6 +360,7 @@ int main() {
     testDaily();
     testJunction();
     testLock();
+    testLockQueued();
     testFlac();
     fs::remove_all(g_dir, ec);
     return check::finish("test_engine_api_wire_a_record");

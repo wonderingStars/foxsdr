@@ -158,8 +158,9 @@ void WireA::lockSync(std::size_t slot) {
     Receiver& r = *e_.receivers_[slot];
     // A take is open from the moment its file is being opened, not from the moment the engine collects the opened file and arms the recorder: the open runs on a
     // worker (RecordStart), the file is on disk while it is still out, and a retune that arrives in that window would change the centre the take is about to store.
+    // A Record pressed behind a take's finish is QUEUED (iqStartQueued_ / audioStartQueued_) until the file is closed: the person has asked for a take, so it counts too.
     // starting() is true from the request until the open is collected or withdrawn (a Stop in the meantime ends it: nothing is held for a cancelled take).
-    const bool iq = r.iqRecorder_.recording() || r.iqStart_.starting(), ifr = r.ifRecorder_.recording(), au = r.audioRecorder_.recording() || r.audioStart_.starting();
+    const bool iq = r.iqRecorder_.recording() || r.iqStart_.starting() || r.iqStartQueued_, ifr = r.ifRecorder_.recording(), au = r.audioRecorder_.recording() || r.audioStart_.starting() || r.audioStartQueued_;
     const int radio = static_cast<int>(slot);
     if (!iq && !ifr && !au) {
         if (lock_.recording(radio)) { lock_.recordingStopped(radio); bump(); }
