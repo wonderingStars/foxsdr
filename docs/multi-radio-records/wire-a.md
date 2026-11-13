@@ -214,3 +214,92 @@ The GUI gate is the merge lane's (Slint OFF here). `%APPDATA%/foxsdr/config.json
 5. Agreed: the Slint host may call the pure analyser-project header; the waterfall history bytes are read through WireA::waterfallCopy (same process); the per-radio level store, when built, is off by default with a 64 MB cap.
 6. CW surround may be one call in the audio stage (no collision with wire-b): item 4 of the not-done list.
 7. The two ABI requests (symbol rate, credit field) were forwarded to wire-c.
+
+## 12. SECOND PASS (2026-11-13, owner go-ahead 08:15; brief `D:/foxsdr-build/prep/queued-briefs/wave7/wire-second-pass.md`; items are the numbers of `not-wired-after-merge-3.md`)
+
+**Start tip.** Step 1 done: the tree was clean at `a93b7568`; `git merge --no-ff engine/multi-radio` (tip `437bfedd`) merged without a conflict as `3c9a2d46`, built twice (the new test targets registered on the second configure), the lane's own tests run. Everything below is on `feat/wire-a`, nothing pushed, no other worktree touched. Two session restarts (an API 403 from the network side) cut turns off; the work in the tree was brought to a compiling, tested state and committed each time.
+
+### 12.1 What was built, per item (one commit each; the decisive output line is from this session's runs)
+
+| Item | Commit | Built | Decisive output |
+|---|---|---|---|
+| 1 I/Q playback speed, pause, step | `3a4b2697` | `IqFileSource::setPlaySpeed` (0.25 to 8, varispeed or block skip), `pausePlayback` / `resumePlayback`, `stepBlocks` (forward and back, blocks of 4096 frames), `wantsRead`; `read()` is a thin transport around the unchanged body (`readNormal`), identical at speed 1. Operation `FILE_TRANSPORT 0x8826`, facts `playback.<n>.speed/.policy/.paused`. `pipeline.cpp` needed NO change: the free-running loop already paces by its own clock and writes nothing for a 0 (a hook was written, shown redundant by a break-it that stayed green, and removed). | `test_iq_file_transport: 624 checks, 0 failed` (2x delivers x[2j] exactly, 0.5x interpolates a ramp to 2e-9, a tone at 0.5/1/2/3x is 500/1000/2000/3000 Hz, block-skip grains and jumps); `test_engine_api_wire_a_transport: 64 checks passed, 0 failed` (two blocks move the position exactly 8192 frames, one block at 2x moves 8192, pause holds it to the frame) |
+| 3 receive clarifier RIT | `6c2d57d7` | `Pipeline::setRitHz`: the receive oscillator runs at the user's offset + the clarifier (+ the AFC nudge); the dial number `vfoOffsetHz()` stays the user's (the mirror line in `publishParamMirrorsLocked` subtracts it: found by the first run, the dial moved by 300 Hz without it). Operation `RIT 0x8827` (set / step / clear / limits, clear-on-retune seen once a pass), facts `rit.<n>.*`. Receive only; CAT max RIT stays 0 (owner). | `test_engine_api_wire_a_rit: 62 checks passed, 0 failed`: an upper-sideband tone heard at 1500.0 Hz, RIT +300 puts it at 1200.0 Hz with tuned frequency, centre and offset unchanged, -400 Hz gives 1900.0 Hz |
+| 2 CW surround | `f9c3d663` | one call in the audio stage after the CW peak filter (`Pipeline::setCwSurround`; off by default; CW mode, mono receiver, no stereo placement of its own: a placement wins). Operation `CW_SURROUND 0x8828` (JSON config / read), facts `cwsurround.<n>.*`. | `test_engine_api_wire_a_surround: 60 checks passed, 0 failed`: +300 Hz carrier: pitch 999.8 Hz, pan +0.75, ears 0.1115 / 0.5599; -300 Hz: 399.7 Hz, pan -0.75, 0.5592 / 0.1117 |
+| 4 RF64 and SigMF writers | `b561c0b5` | `IqBackend` in the recorder (`recorder_containers.cpp`): RF64 (no 4 GiB end, JUNK to ds64 header) and SigMF (data + meta, a capture segment per retune at block precision); `IqFileSource` now opens RF64. Operation `RECORD_IQ_CONTAINER 0x8829`, fact `record.iqcontainer`. The record lock's "SigMF logs its own retunes" flag is now true for a SigMF take. | `test_engine_api_wire_a_iqcontainer: 62 checks passed, 0 failed`: WAV ended at 1048620 bytes against a 1 MiB ceiling, the RF64 take went on to 19.0 MB with a correct ds64 and replays; SigMF captures 100 / 101 / 102.5 MHz at frames 0 / 1359872 / 2799616 |
+| 5 patch nodes + edit history | `0c1e5575`, `3fa478df`, `b116b954` | Four node kinds appended (Mixer 7, IfFilter 8, Generator 9, Scope 10), bypass, `Graph::effective()`, patch file format 7 (written only when needed), `Connect::TransmitRefused` (**the generator is refused on every transmit sink**, allowlist: a transmit sink added later is refused by default), the engine edit history (`PATCH_UNDO/REDO/SELECT/COPY/PASTE/BYPASS 0x882A-0x882F`), and the RUNNER now runs the IF filter (settings `low=;high=;notch=`) and the Mixer (settings `gain=;mute=`). The Generator and the Scope are drawn, saved and refused where they must be, but NOT run: the plan says so (`Problem::NodeNotRun`, advisory). | `test_patch_nodes_wire_a: 121 checks, 0 failed` (16 transmit device names refused, also through the document loader); `test_engine_api_wire_a_patchedit: 117 checks passed`; `test_patch_iffilter_wire_a: 96 checks, 0 failed` (no filter 0.3159, pass-band holding the channel 0.3157, elsewhere 0.00000); `test_patch_mixer_wire_a: 134 checks, 0 failed` (both tones 0.2480 / 0.2488 in the sum, gain, mute) |
+| 6 airband per channel | `fa8bc30c` | `patch::ChannelGate` hook, `core/airband_gate.hpp` (filters, own level or SNR squelch, WAV file output on a worker, UDP loopback output), operation `AIRBAND_CHANNEL 0x8830` (FOXAIRCH1 text), `airband-channels.json`, effective at once while listening; a pass now reaps the runner's retired sets. | `test_engine_api_wire_a_airband: 46 checks passed, 0 failed`: High shut at its 0 dB threshold (level -30.0 dB) while Low opens at -120 dB (level -112 dB); 5 datagrams on 127.0.0.1; a 242 KB WAV under `airband/<day>/` |
+| 7 per-radio level store | `3993d624` | rows every 250 ms, at most 1024 bins (max-pooled), 14400 rows, one ring per radio (`wfhistory`), memory only, OFF by default, cap per radio 1 to 64 MiB (default 16). Operation `LEVEL_STORE 0x8831`, facts `levels.*`, `WireA::levelCopy`. **Memory measured: 14400 x (1024 + 24) = 15,091,200 bytes (15.1 MB) a radio; eight radios an hour each about 121 MB.** | `test_engine_api_wire_a_levels: 48 checks passed, 0 failed` (two radios open, one selected, both fill; a retune gives only its own ring a second segment) |
+| 30 small file I/O on the worker | `55b1308e` | marker export / import and pack export / import: file work on the job worker, text made / parsed on the control thread; `JobResult::onFinish`. Behaviour change: a missing / too big / existing / refused file is now a FAILED job (`fact.job.*`) instead of the op's own FAILED / BAD_ARGUMENT answer. | `test_engine_api_wire_a_files: 258 checks passed, 0 failed`; `test_gui_disk_audit: 93 checks, 0 failed` |
+| 31 open ends | (this record) | decided, none built: see 12.4 | - |
+
+### 12.2 Break-it table (the behaviour removed, RED seen, restored, GREEN)
+
+| Item | What was removed | RED |
+|---|---|---|
+| 1 | speed ignored + step cap removed (source test); pause removed from `read()` (source + engine tests); a pipeline hook disabled (stayed GREEN: so the hook was dropped) | 18 failed; 8+ failed and every settled-position check failed; 0 failed |
+| 3 | clarifier not added to the oscillator; mirror not corrected; clear-on-retune disabled | 5 failed; 1 failed (dial +300 Hz); 2 failed |
+| 2 | the placement rule; the surround call | 1 failed; 7 failed |
+| 4 | retune log; lock flag back to false; RF64 acceptance in the file source | 1 failed; 2 failed; 1 failed |
+| 5 | transmit rule; bypass check + `effective()`; history push; paste rollback; radio state counted as an edit; the filtered copy not given to the strip; filter settings out of the signature; the mixer sum; mute ignored + mix out of the signature | 3 failed per device; red; 24 failed; 1 failed; 1 failed; 2 failed; 1 failed; 5 failed; 5 failed |
+| 6 | the gate not handed to the channel | 7 failed |
+| 7 | rate limit; segment detection; the feed | 1 failed; 1 failed; 1 failed (no rows) |
+| 30 | `onFinish` not called | 5 failed |
+
+### 12.3 SCREEN HAND-OFF (control, where, operation or key, fact, range, default)
+
+| Control | Where | Operation | Fact | Range | Default |
+|---|---|---|---|---|---|
+| Playback speed, policy, pause / resume, step | the I/Q-file transport bar of a file radio | `FILE_TRANSPORT 0x8826` ival[0] 0 speed (num[0]) / 1 policy (ival[1] 0 varispeed 1 block skip) / 2 pause / 3 resume / 4 step (ival[1] blocks, -4096..4096, never 0; only while paused) | `playback.<n>.speed/.policy/.paused`; the position is read_state `filePositionSec` | speed 0.25 to 8 | 1, varispeed, playing; not remembered |
+| RIT | the tuning readout / a clarifier knob | `RIT 0x8827` ival[0] 0 set (num[0] Hz, ival[1] on) / 1 step (num[0]) / 2 clear / 3 limits (num[0] max, num[1] clear-on-retune Hz) | `rit.<n>.on/.hz/.max/.clearOnRetune` | +-9999 Hz (limit 1..20000) | off, 0, never cleared; never saved |
+| CW surround | audio / CW section | `CW_SURROUND 0x8828` ival[0] 0 JSON {enabled, centreHz, spreadHz, invert, toneRatio, holdMs} / 1 read (applied[0] pitch, applied[1] pan) | `cwsurround.<n>.on/.centre/.spread/.invert/.ratio/.hold` | centre 200..1500, spread 50..2000, ratio 2..1000, hold 0..5000 | off, 700, 400, off |
+| I/Q take container | record section | `RECORD_IQ_CONTAINER 0x8829` ival[0] 0 WAV / 1 RF64 / 2 SigMF | `record.iqcontainer` | 0..2 | wav; saved in `record-iq-container.json` |
+| Patch page: undo / redo / copy / paste / select / bypass | patch canvas, Ctrl+Z / Y / C / V, a bypass key | `PATCH_UNDO 0x882A`, `PATCH_REDO 0x882B`, `PATCH_SELECT 0x882C` (ival[0] 0..4, text {"ids":[..]}), `PATCH_COPY 0x882D`, `PATCH_PASTE 0x882E` (num[0], num[1] origin), `PATCH_BYPASS 0x882F` (ival[0], text ids or the selection) | `patchedit.undo/.redo/.selection/.clipboard`; `patch.graph` carries bypass and settings (format 7) | 100 steps | memory only |
+| Patch page: four new parts | parts bin | node kinds 7 Mixer, 8 IfFilter, 9 Generator, 10 Scope; `settings` text per kind: IfFilter `low=;high=;notch=f/w,..`, Mixer `gain=a,b,c,d;mute=0,0,0,0` (the Generator and the Scope have none yet) | `Problem::NodeNotRun` text "this part is saved with the patch but this build does not run it yet" for Generator and Scope; the refusal sentence for `Connect::TransmitRefused` is for the canvas (captions for the kinds and the refusal are not added: `patch_view.cpp` / `patch_logic.cpp` switches have a fall-through) | Mixer gains 0..4 | - |
+| Airband per-channel settings | the monitor's channel table row | `AIRBAND_CHANNEL 0x8830` ival[0] 0 set (text FOXAIRCH1\|...) / 1 clear (num[0] Hz) / 2 clear all | `airband.channels`, `airband.channel.<Hz>` | model ranges | none (the shared squelch); outputs off; saved in `airband-channels.json` |
+| Level store | data / export page | `LEVEL_STORE 0x8831` ival[0] 0 off / 1 on (num[0] MiB per radio, 0 = 16) / 2 clear / 3 read stats of the radio addressed | `levels.on/.capMb`, `levels.<n>.rows/.seconds/.bytes/.bins/.segments` (after a read); rows through `WireA::levelCopy` | 1..64 MiB | OFF |
+| Marker / pack import and export | files section | same operations as before, now ASYNC: OK means started | `job.state/.name/.message/.result`, `markerio.*`, `pack.last` | - | - |
+
+New operation numbers: `0x8826` to `0x8831` (twelve operations including the six patch edit ops); next free for lane A: `0x8832`. Nothing in `plugin_abi.h`, no `.slint` file. The record lock default stays OFF.
+
+### 12.4 Not done, and decisions
+
+Not done, with the reason:
+* Patch parts **Generator** and **Scope** run: the Generator needs a stream source beside the radios (a Radio part on the device "siggen" already is one); the Scope needs a frame read call in the engine API. Both say so in the plan.
+* The Mixer is a plain sum with gain and mute (no balance, solo or limiter: the stereo `AudioMixer` model is not used), and only channels at the same strip rate as the first are in the sum.
+* The daily-folder `ensureFolder` at a take's start (item 30's second half): its containment proof must run before the take's path is decided; moving it to the recorder's opener needs the proof in `OpenRequest` and a failed take on a refusal, and its link case cannot be run here (R2 skips for lack of a privilege). Left as it was.
+* A key to start a CW-surround "learn"; band-memory attenuator and antenna (below).
+
+Item 31 decisions (open ends inside done rows), each with my recommendation for the owner:
+1. **Bookmark `offsetKhz`** (stored, read back, never applied): its meaning is not specified. Recommendation: a receive offset in kHz from the bookmark's frequency (the use is tuning an off-frequency carrier), applied as the VFO offset when the bookmark is tuned, like the squelch and tone. Not built until the owner says so.
+2. **FFT scan "retune by the span and repeat"**: not built. It would retune the user's radio under them; the scanner exists for that. Recommendation: leave it to the caller (`SET_CENTRE` then `FFT_SCAN` read), as documented.
+3. **Analyser-project save / open**: stays with the screen (the pure header; decided earlier).
+4. **Band memory attenuator and antenna**: `SET_GAIN` (text stage) and `SET_ANTENNA` (text) exist, but the engine holds no per-radio read-back to file; it needs the device's current stage / antenna name. Recommendation: file them from the radio's own list facts once a device with an antenna list is open; cannot be tested here beyond the fake radio.
+
+Decisions I made for the owner to confirm: (a) the level store is OFF by default with a 16 MiB cap per radio (15.1 MB holds an hour of 1024-bin rows; eight radios 121 MB worst case) rather than a 64 MB total; (b) an explicit stereo placement wins over CW surround; (c) the generator part may reach only receive-side sinks (an allowlist, so a future transmit sink is refused by default); (d) an undo restores the graph as a new version but keeps the running radios' own state; (e) the marker / pack ops became asynchronous (a screen that showed the op's own answer reads `fact.job.*` instead).
+
+Notes: an I/Q file's speed is varispeed by default, so every frequency in the recording is multiplied by the speed (a tape); block skip keeps frequencies and chops time. `dsp/cw_surround.hpp` copies a 1 KB vector once per 10 ms hop on the audio thread (against its "no allocation" note): harmless, UNVERIFIED under load.
+
+### 12.5 Gates (code tip `b116b954`, Release, `D:/foxsdr-build/en-tuning`, Slint OFF, full build `rc=0`; hidden desktop `FoxSDRTestsEM`, `FOXSDR_FRAME_CAP_HZ=60`, through `run_on_hidden_desktop.ps1`; a shared machine)
+
+`ctest -C Release -L "headless|slint" -I a,b -j4 --timeout 300`, 1042 tests in four slices, one after another (`D:/foxsdr-build/wa2-scratch/wa2-gate.bat`):
+
+| Slice | Result |
+|---|---|
+| 1-280 | `98% tests passed, 6 tests failed out of 280` (542.88 s): `test_engine_api_03`, `test_converter_call_sites`, `test_airband_data`, `test_band_plan`, `test_engine_api_source_kinds`, `test_engine_api_decode_radio` (timeout) |
+| 281-560 | `99% tests passed, 4 tests failed out of 280` (434.58 s): `test_raw_iq_net_source`, `test_i18n`, `test_page_resize_id`, `test_png_decode` |
+| 561-840 | `99% tests passed, 4 tests failed out of 280` (326.40 s): `test_rtlsdr_live`, `test_apply_command_free`, `test_thread_inventory`, `test_window_failed_app` |
+| 841-1120 | `100% tests passed out of 202` (256.82 s) |
+
+Classification (the 14 reds):
+* The five known false failures: `test_airband_data`, `test_band_plan`, `test_converter_call_sites`, `test_page_resize_id`, `test_png_decode`.
+* The other nine are LOAD FLAKES of a four-way parallel run: each was re-run ALONE, one at a time, through ctest on the hidden desktop (`wa2-rerun.bat`) and passed (`exit 0` for `test_engine_api_03`, `test_engine_api_source_kinds`, `test_engine_api_decode_radio`, `test_raw_iq_net_source`, `test_i18n`, `test_rtlsdr_live`, `test_apply_command_free`, `test_thread_inventory`, `test_window_failed_app`). `test_engine_api_03` had also failed 4 checks once under load earlier and passed 3 of 3 alone.
+* All of this pass's new tests passed inside the gate: `test_engine_api_wire_a_{transport,rit,surround,iqcontainer,patchedit,airband,levels}`, `test_iq_file_transport`, `test_patch_{nodes,iffilter,mixer}_wire_a`; the lane's older tests too. The stamp tests are expected to need a rebuild at the very last commit (this record's commit changes only the document). No GUI gate: no `gui`-labelled test was touched.
+* `%APPDATA%/foxsdr/config.json` sha256 at the start and at the end: `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (unchanged; every run used a scratch profile). Nothing pushed, nothing merged into another branch, no download, no outside connection, no radio opened; nothing appeared on the visible desktop (every window-capable run went through the launcher).
+
+### 12.6 UNVERIFIED
+* A real take beyond 4 GiB (the RF64 promotion point was lowered by a test hook), and a SigMF validator on the metadata.
+* The SNR squelch opening in the engine (the generator has no modulated audio); the airband filter chain in the engine (held by the model's own test).
+* The IF filter restarting at a retune inside a patch (the set is rebuilt) as audible; a channel pulled to a different rate by an I/Q decoder dropping out of a mixer's sum.
+* Pause / step / speed on a real recording; the CW surround with real off-air CW; varispeed aliasing above 1x is by design.
+* The level store's memory under eight real radios (measured on two, the rest is arithmetic: 15,091,200 bytes each).
