@@ -1,0 +1,10 @@
+#! frames=300 size=1600x2400 bank=0 sections=0:0,2,3,6
+# layout-section-overlap-1600 (engine fixes 6, item 2): a section's body is as tall as its wrapped notes. The Patch note (three wrapped lines, ends at y=868) and the
+# CW surround's last key (ends at y=2028) used to be drawn over the next section's header (Source at 854, Sinks at 1976) because the section counted a wrapped
+# note as one line. The next header must start at or below the last control above it.
+10 state running == 1
++3 expect "Stop bypassing the selection" bottom <= "828"
++1 expect "Source"#1 top >= "868"
++1 expect "Read the pitch now" bottom <= "2028"
++1 expect "Sinks"#1 top >= "2028"
++1 shot "layout-section-overlap-1600.png"

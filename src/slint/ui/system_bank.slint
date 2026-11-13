@@ -896,7 +896,7 @@ export component KPanel inherits VerticalLayout {
     for r[i] in root.rows : VerticalLayout {
         spacing: 3px;
         if r.kind == 0 : Text { text: r.label; font-family: Theme.font-ui; font-size: Theme.font-small; font-weight: Theme.weight-semibold; color: Theme.fg; wrap: word-wrap; accessible-role: text; }
-        if r.kind == 1 : Note { text: r.label; tone: r.tone == 1 ? ChipTone.warn : r.tone == 2 ? ChipTone.err : r.tone == 3 ? ChipTone.good : ChipTone.neutral; }
+        if r.kind == 1 : Note { height: self.preferred-height; text: r.label; tone: r.tone == 1 ? ChipTone.warn : r.tone == 2 ? ChipTone.err : r.tone == 3 ? ChipTone.good : ChipTone.neutral; }
         if r.kind == 2 : Line {
             Mid { Key { label: r.label; enabled: r.enabled; on: r.on; tooltip: r.note; xs: true; clicked => { root.act(r.id, ""); } } }
             Rectangle { horizontal-stretch: 1; }
