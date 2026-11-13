@@ -22,7 +22,11 @@ void wireAOps(AppWindow& a) {
     covering(FOXAPP_OP_PATCH_PASTE);
     covering(FOXAPP_OP_PATCH_BYPASS);
     {
+        // In the _free variant the engine's own passes have already seen the patch graph the earlier ops of this test changed, so the edit
+        // history holds steps (engine merge 4): drain it (bounded by the 100-step history) before the "nothing to undo / redo" refusals.
+        for (int i = 0; i < 120 && ok(A::apply(a, ints(FOXAPP_OP_PATCH_UNDO, 0))); ++i) {}
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_PATCH_UNDO, 0)), FOXAPI_NO_CHANGE));
+        for (int i = 0; i < 120 && ok(A::apply(a, ints(FOXAPP_OP_PATCH_REDO, 0))); ++i) {}
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_PATCH_REDO, 0)), FOXAPI_NO_CHANGE));
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_PATCH_SELECT, 9)), FOXAPI_OUT_OF_RANGE));
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_PATCH_COPY, 0)), FOXAPI_NO_CHANGE));
