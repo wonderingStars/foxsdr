@@ -85,7 +85,10 @@ struct SettingSpec {
     std::string key, label, placeholder, value;
     std::uint32_t kind = 0;      // CASCADE_SETTING_* (0 TEXT 1 NUMBER 2 BOOL 3 PATH; 4 would be PASSWORD when the core serves it)
     std::size_t maxLength = 0;
+    std::string choices;         // screen lane M (row 18): fact.plugin.setting.<id>.choices, "value US label" pairs joined by RS (0x1E); "" = the plain box
 };
+// The options of a field with named choices, in order: (value, label). A pair with no US takes its value as its label; an empty value is skipped.
+std::vector<std::pair<std::string, std::string>> parseChoices(const std::string& choices);
 struct SettingsSet { std::string file; std::vector<SettingSpec> fields; };
 struct BlockedRow { std::string file, why, id, message; };
 

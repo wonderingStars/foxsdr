@@ -83,6 +83,7 @@ StubTable sample() {
     t.facts["fact.plugin.setting.1"] = "M0ABC";
     t.facts["fact.plugin.setting.2.spec"] = std::string("log_to_file") + '\x1F' + "";
     t.facts["fact.plugin.setting.2"] = "1";
+    t.facts["fact.plugin.setting.1.choices"] = std::string("1") + '' + "PSK" + '' + "2" + '' + "Olivia";   // screen lane M, row 18: named choices on the first field only
     t.facts["fact.blocked.adsb-decoder-1.4.0-abi3-win-x64.dll.message"] = "adsb-decoder 1.4.0 is retired: needs FoxSDR 0.99";
     t.facts["fact.blocked.adsb-decoder-1.4.0-abi3-win-x64.dll.id"] = "adsb-decoder";
     t.facts["fact.mute.subject"] = "APRS / AX.25 Packet Decoder";
@@ -133,6 +134,19 @@ int main() {
         CHECK(k.settings.size() == 1 && k.settings[0].file == aprs.file && k.settings[0].fields.size() == 2);
         CHECK(k.settings[0].fields[0].key == "callsign_filter" && k.settings[0].fields[0].placeholder == "e.g. M0ABC" && k.settings[0].fields[0].value == "M0ABC" && k.settings[0].fields[0].maxLength == 16);
         CHECK(k.settings[0].fields[1].kind == 2 && k.settings[0].fields[1].value == "1" && k.settings[0].fields[1].id == 2);
+        // screen lane M (row 18): the choices are carried with the field that has them, and only that one
+        CHECK(k.settings[0].fields[0].choices == std::string("1") + '' + "PSK" + '' + "2" + '' + "Olivia" && k.settings[0].fields[1].choices.empty());
+        {
+            const auto ch = parseChoices(k.settings[0].fields[0].choices);
+            CHECK(ch.size() == 2 && ch[0].first == "1" && ch[0].second == "PSK" && ch[1].first == "2" && ch[1].second == "Olivia");
+            CHECK(parseChoices("").empty());                                                                          // the plain box
+            CHECK(parseChoices(std::string("a") + '' + "b").size() == 2 && parseChoices(std::string("a") + '' + "b")[1].second == "b");   // no US: the value is the label
+            CHECK(parseChoices(std::string("") + '' + "no value" + '' + "v" + '' + "ok").size() == 1);   // an empty value is skipped
+            CHECK(parseChoices(std::string("v") + '' + "").front().second == "v");                                // an empty label shows its value
+            std::string many;
+            for (int i = 0; i < 40; ++i) { many += std::to_string(i + 1) + '' + "x" + ''; }
+            CHECK(parseChoices(many).size() == 32);                                                                   // at most 32 options a field
+        }
         CHECK(k.blocked.size() == 1 && k.blocked[0].message == "adsb-decoder 1.4.0 is retired: needs FoxSDR 0.99" && k.blocked[0].id == "adsb-decoder");
         CHECK(k.muteSubject == "APRS / AX.25 Packet Decoder" && k.muteKeptRunning && k.lastDenied == aprs.file && k.pluginDir == "C:\\plugins");
         CHECK(k.catalogueUrl == "https://example.test/index.json");

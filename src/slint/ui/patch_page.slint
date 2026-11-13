@@ -778,6 +778,9 @@ component PatchBand inherits Rectangle {
                 { label: root.model.parts[2].label, index: 2, tooltip: "" }, { label: root.model.parts[3].label, index: 3, tooltip: "" },
                 { label: root.model.parts[4].label, index: 4, tooltip: "" }, { label: root.model.parts[5].label, index: 5, tooltip: "" },
                 { label: root.model.parts[6].label, index: 6, tooltip: "" },
+                // screen lane M (docs/multi-radio-records/screen-m.md, row 6): the four parts the wiring second pass added (Mixer, IF filter, Generator, Scope); the host publishes eleven keys
+                { label: root.model.parts[7].label, index: 7, tooltip: "" }, { label: root.model.parts[8].label, index: 8, tooltip: "" },
+                { label: root.model.parts[9].label, index: 9, tooltip: "" }, { label: root.model.parts[10].label, index: 10, tooltip: "" },
             ];
         }
         for p[i] in root.model.parts : Key {

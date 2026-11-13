@@ -444,6 +444,13 @@ struct PatchPublisher::Impl {
             f.max_length = static_cast<int>(s.maxLength);
             f.error = ss(self.kit_.edits().error(d.settings_module, s.key));
             f.pending = self.kit_.edits().pending(d.settings_module, s.key);
+            {   // screen lane M, row 18: named choices, as the plugin pages draw them
+                std::vector<slint::SharedString> values, labels;
+                for (const auto& ch : foxsdr::slintkit::parseChoices(s.choices)) { values.push_back(ss(ch.first)); labels.push_back(ss(ch.second)); }
+                f.choice_values = std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(values));
+                f.choice_labels = std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(labels));
+                sig += "c" + s.choices + ";";
+            }
             sig += s.key + "=" + shown + (f.pending ? "?" : "") + std::string(f.error) + ";";
             fields.push_back(std::move(f));
         }
@@ -455,8 +462,9 @@ struct PatchPublisher::Impl {
         for (std::size_t i = 0; i < fields.size(); ++i) {
             const ::SettingField& now = fields[i];
             const ::SettingField was = *cached->row_data(i);
+            const auto choicesOf = [](const ::SettingField& x) { std::string c; if (x.choice_values) { for (std::size_t j = 0; j < x.choice_values->row_count(); ++j) { c += std::string(*x.choice_values->row_data(j)) + ""; } } return c; };
             if (was.id != now.id || was.value != now.value || was.error != now.error || was.pending != now.pending || was.checked != now.checked || was.label != now.label ||
-                was.kind != now.kind || was.placeholder != now.placeholder || was.max_length != now.max_length) {
+                was.kind != now.kind || was.placeholder != now.placeholder || was.max_length != now.max_length || choicesOf(was) != choicesOf(now)) {
                 cached->set_row_data(i, now);
             }
         }

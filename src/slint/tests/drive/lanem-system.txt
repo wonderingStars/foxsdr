@@ -1,0 +1,62 @@
+#! frames=1500 size=1600x6000 bank=4 sections=4:6,19,22
+# lanem-system (screen lane M, docs/multi-radio-records/screen-m.md; rows 11 to 16 and 19): the SYSTEM bank. The Diagnostics section's GPU read-out (read only), the Sweep section's stitched sweep and history (the radio swept is the test generator; no port or device is opened), and the Needed libraries section's open requests (none exist: nothing is drawn and nothing can open).
+10 state running == 1
++3 state lm.rows.sweep > 14
+# row 15: the counters are read from the radio's own fact, the mode control stays lane L's (Measurement)
+state lm.rows.diag > 2
+# rows 11 to 14: every field is checked here before anything is sent
++1 type "Radio sweep start (MHz)" "100"
++1 key enter
++1 type "Radio sweep stop (MHz)" "99"
++1 key enter
++2 click "Sweep this radio"
++6 state lm.note.sweep contains "Sweep this radio: the stop must be above the start"
++1 type "Radio sweep stop (MHz)" "101"
++1 key enter
++1 type "Radio to sweep" "9"
++1 key enter
++2 click "Sweep this radio"
++6 state lm.note.sweep contains "Radio to sweep: allowed"
++1 type "Radio to sweep" "1"
++1 key enter
++1 type "Step (part of the span)" "0.9"
++1 key enter
++2 click "Sweep this radio"
++6 state lm.note.sweep contains "Step (part of the span): allowed"
++1 type "Step (part of the span)" "0.6"
++1 key enter
+# the history is empty at the start
+state lm.fact.sweep.history contains "\"lines\":0"
+# a real run over the test generator (the radio swept is the engine's own signal generator: nothing is opened): the stitched sweep starts, runs and ends by itself after one pass, and the radio's own centre is put back
++1 type "Radio sweep start (MHz)" "99.5"
++1 key enter
++1 type "Radio sweep stop (MHz)" "100.5"
++1 key enter
++2 click "Sweep this radio"
++6 state lm.note.sweep contains "Sweep this radio:"
++40 state lm.fact.sweep.stitch contains "radio"
++1 state lm.fact.sweep.stitch contains "original_centre_hz"
++1 shot "lanem-sweep-run.png"
++90 state lm.fact.sweep.history contains "\"lines\":1"
++1 state lm.rows.sweep > 20
+# stopping with nothing running changes nothing
++1 click "Stop the stitched sweep"
++6 state lm.note.sweep contains "Stop the stitched sweep:"
+# the history: a path must be a full path; a file that is not there fails in the engine's words
++1 type "History file" "history.csv"
++1 key enter
++2 click "Save the history..."
++6 state lm.note.sweep contains "Save the history: that is not a full path"
++1 type "History file" "C:/foxsdr-lanem-test/none/history.csv"
++1 key enter
++2 click "Load a history..."
++12 state lm.note.sweep contains "Load a history:"
++1 click "Clear the history"
++6 state lm.note.sweep contains "press the key again"
++1 click "Press again to clear the history"
++12 state lm.note.sweep contains "Clear the history:"
++1 shot "lanem-system.png"
+# row 19: no plugin has asked to open anything: nothing is drawn, and nothing can open
+state lm.rows.libs == 0
+state lm.fact.plugin.open.count != 1
++1 state running == 1

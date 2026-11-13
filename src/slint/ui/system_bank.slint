@@ -873,6 +873,21 @@ export global LaneL {
     callback act(string, string);
 }
 
+// SCREEN LANE M (docs/multi-radio-records/screen-m.md): the controls of what the wiring second passes built, each in the section the person looks in (a KPanel appended to that section's body in main.slint). The host (lanem_publish.cpp) builds the rows and answers `act(id, text)`; an empty list draws nothing.
+export global LaneM {
+    in property <[KRow]> rows-source;     // SIGNAL, Source: the I/Q file's transport (only while the selected radio plays a file)
+    in property <[KRow]> rows-radio;      // SIGNAL, Radio: the receive clarifier and the symbol rate
+    in property <[KRow]> rows-audio;      // SIGNAL, Audio filters: CW surround
+    in property <[KRow]> rows-record;     // SIGNAL, Recorder: the I/Q take's file kind
+    in property <[KRow]> rows-patch;      // SIGNAL, Patch: undo, redo, copy, paste, select, bypass
+    in property <[KRow]> rows-airband;    // TOOLS, Airband: per-channel settings
+    in property <[KRow]> rows-levels;     // TOOLS, Export: the level store
+    in property <[KRow]> rows-sweep;      // SYSTEM, Sweep: the stitched sweep and the history
+    in property <[KRow]> rows-diag;       // SYSTEM, Diagnostics: the spectrum's GPU counters
+    in property <[KRow]> rows-libs;       // SYSTEM, Needed libraries: a plugin's requests to open a page or a folder
+    callback act(string, string);
+}
+
 export component KPanel inherits VerticalLayout {
     in property <[KRow]> rows;
     callback act(string, string);
