@@ -11,9 +11,9 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2330 | 681 | 108 | 1541 | 0 |
+| 2364 | 708 | 115 | 1541 | 0 |
 
-Of the 1443 rows that are controls (the 887 readout-like rows left out): 681 asserted, 108 driven without a read-back, 654 not drivable.
+Of the 1477 rows that are controls (the 887 readout-like rows left out): 708 asserted, 115 driven without a read-back, 654 not drivable.
 
 NOT DRIVABLE by reason: readout 887, other 222, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 71, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 1.
 
@@ -207,7 +207,7 @@ NOT DRIVABLE by reason: readout 887, other 222, needs a signal (no fixture) 120,
 | Lane B (docs/multi-radio-records/screen-b.md; rows 4700 and up are this lane's) | 20 | 20 | 0 | 0 | 0 | 0 |
 | Screen lane J - the map rows (rows 4900 and up are this lane's; docs/multi-radio-records/screen-j.md) | 15 | 12 | 0 | 3 | 0 | 0 |
 | Screen lane K - the remaining rows (rows 5200 and up are this lane's; docs/multi-radio-records/screen-k.md) | 37 | 26 | 11 | 0 | 0 | 0 |
-| Screen lane L - the controls of what the wiring lanes built (rows 5300 and up are this lane's; docs/multi-radio-records/screen-l.md) | 9 | 8 | 1 | 0 | 0 | 0 |
+| Screen lane L - the controls of what the wiring lanes built (rows 5300 and up are this lane's; docs/multi-radio-records/screen-l.md) | 43 | 35 | 8 | 0 | 0 | 0 |
 
 ## Every row
 
@@ -3475,4 +3475,38 @@ NOT DRIVABLE by reason: readout 887, other 222, needs a signal (no fixture) 120,
 | 5306 | Tuning and memories: Pack file, name, description, Export pack..., Import pack... | key | DRIVEN | lanel-tuning | with no bookmarks the engine answers Nothing changed (ll.note.tuning contains Export pack); a pack file is not written in a bounded run |
 | 5307 | Tuning and memories: Remember per band, Volume, AGC, Forget every band | checkbox | DRIVEN+ASSERTED | lanel-tuning | state ll.fact.bandmem.on == 1 then != 1 |
 | 5308 | Tuning and memories: Bandwidth up, Bandwidth down, Cycle mode, Centre on the signal, Next bookmark, Previous bookmark | key | DRIVEN+ASSERTED | lanel-tuning | state ll.note.tuning contains Cycle mode: done |
+| 5309 | Scanning: Ranges, Direction, Set / Start / Clear the plan, Scan back, Save hit as bookmark | key | DRIVEN+ASSERTED | lanel-scan | state ll.fact.scan.plan contains 144000000; a malformed range refused before it is sent |
+| 5310 | Scanning: Trigger mode, level, margin, hysteresis, floor rise, Use this trigger, Back to the squelch | key | DRIVEN+ASSERTED | lanel-scan | state ll.fact.scan.trigger.on == 1 then 0; level -170 refused with the allowed range |
+| 5311 | Scanning: Per-entry thresholds, Set, Clear | key | DRIVEN+ASSERTED | lanel-scan | state ll.note.scan contains Set the thresholds: done |
+| 5312 | Scanning: Scan whole span without retuning (switch, grid, mode, margin, level, merge, Apply, Read the hits) | checkbox | DRIVEN+ASSERTED | lanel-scan | state ll.note.scan contains Span scan: done |
+| 5313 | Scanning: Station database (path, frequency column, unit, columns, delimiter, Load, Remove, Look up) | key | DRIVEN+ASSERTED | lanel-scan | a missing file fails on the worker: state ll.fact.job.state == failed; Look up: Nothing changed |
+| 5314 | Recording and files: Daily folders (five styles), Use UTC | dropdown | DRIVEN+ASSERTED | lanel-record | state ll.fact.record.daily contains style 2 / utc false |
+| 5315 | Recording and files: Lock settings while recording, Also lock gain, Locked now | checkbox | DRIVEN+ASSERTED | lanel-record | state ll.fact.record.lock == 1 then != 1; the default (off) is not changed |
+| 5316 | Recording and files: Audio file format WAV / FLAC, Keep the WAV | dropdown | DRIVEN+ASSERTED | lanel-record | state ll.fact.record.container == flac then wav; container.keep == 1 |
+| 5317 | Recording and files: Analyser job read-out, Cancel, Export selection, Hash the recording, project check | key | DRIVEN+ASSERTED | lanel-record | Cancel disabled with no job; a missing recording: state ll.fact.job.state == failed; a bad box refused here |
+| 5318 | Recording and files: Attachments (add screenshot / clip / note, list, check, remove) | key | DRIVEN | lanel-record | needs a record folder with files; the JSON is tested by test_slint_lanel_host only |
+| 5319 | Recording and files: SigMF annotation (save, list) | key | DRIVEN | lanel-record | needs a finished SigMF recording; not driven |
+| 5320 | Measurement: Antenna factor table, Cable loss table, unit, Preamp gain, Input ohm, Show, Read dBuV/m now | checkbox | DRIVEN+ASSERTED | lanel-measure | state ll.fact.field.show == 1; the read is refused with the engine's sentence when no table is loaded |
+| 5321 | Measurement: the nine signal measurements and Pseudo-Doppler bearing | key | DRIVEN+ASSERTED | lanel-measure | state ll.fact.radio.1.sigmeas.bandwidth contains valid; Length 20 refused with the allowed range |
+| 5322 | Measurement: Bit view (keep, list, decode again, try every line code, find CRC, checksum, infer, compare, decoder and code-table files) | key | DRIVEN | lanel-measure | Keep a burst and List answered; the others need kept bursts |
+| 5323 | Measurement: GPU spectrum CPU / Auto / GPU | dropdown | DRIVEN+ASSERTED | lanel-measure | state ll.fact.gpu_fft.mode == 1 then 0 (GPU is not pressed in a test: it makes a Direct3D device) |
+| 5324 | Measurement: Keep / Drop frames with CRC errors, Read the frame log | key | DRIVEN+ASSERTED | lanel-measure | state ll.note.measure contains Frame log: done |
+| 5325 | Measurement: Limit alarm (mask file, load, remove, alarm on, frames, capture, post-roll, interval, Apply) | key | DRIVEN+ASSERTED | lanel-measure | enabling with no mask: state ll.note.measure contains Limit alarm: Refused (the engine's words) |
+| 5326 | Sweep: Kind, port, baud, start, stop, points, interval, step, gains, amplifier, top, bottom, Open, Close | key | DRIVEN+ASSERTED | lanel-sweep | a bad port and a fractional HackRF start are refused before sending; Close: Nothing changed; NO port is opened |
+| 5327 | Sweep: Heat map and occupancy, Read the sweep | key | DRIVEN+ASSERTED | lanel-sweep | the engine refuses with no device: Refused: frequency range unusable |
+| 5328 | Network radios: Source, Address and arguments, Add this as another radio, Use for the selected radio | dropdown | DRIVEN | lanel-sweep | the choice is read back (ll.draft.n.kind); the two keys connect and are never pressed in a test |
+| 5329 | Outputs and tracks: Follow a master, Stop following, Lock / Unlock follower, Keep this distance | key | DRIVEN+ASSERTED | lanel-outputs | state ll.fact.matrix.rows contains follows 1, locked true / false |
+| 5330 | Outputs and tracks: Network I/Q out (format, header, UDP, port, Start, Stop) | key | DRIVEN+ASSERTED | lanel-outputs | state ll.fact.radio.1.iqout contains running true |
+| 5331 | Outputs and tracks: SBS output (port, Start, Stop) | key | DRIVEN+ASSERTED | lanel-outputs | state ll.fact.sbs.out contains running true |
+| 5332 | Outputs and tracks: Track store (Keep tracks, Keep for, Clear, Read the time held) | checkbox | DRIVEN+ASSERTED | lanel-outputs | state ll.fact.tracks.state contains enabled true |
+| 5333 | Outputs and tracks: Coverage grid (position, cell, half life, switch, Clear, Read) | checkbox | DRIVEN+ASSERTED | lanel-outputs | refused without a position; state ll.fact.coverage.state contains enabled true |
+| 5334 | Needed libraries: the nine rows (name, why, files, state, where to get it, steps, licence, Check again, path and Check this file) | key | DRIVEN+ASSERTED | lanel-libs | state ll.libs == 9; ll.lib.<id> words; never Working for a header-only check; no key opens a page or a folder |
+| 5335 | System: Keep the PC awake while recording, Look for radios again after the PC wakes, What the last start did | checkbox | DRIVEN+ASSERTED | lanel-system | state ll.fact.wirec.sys.keep_awake == 0 then 1 |
+| 5336 | System: Order of the plugin store | dropdown | DRIVEN+ASSERTED | lanel-system | state ll.fact.wirec.store.sort == name |
+| 5337 | Web: Show the /metrics page, Allowed web origins | checkbox | DRIVEN+ASSERTED | lanel-system | state ll.fact.wirec.web.cors_origins == https://example.org; a bad origin refused with the engine's words |
+| 5338 | Ham tools: Contest header form | key | DRIVEN | lanel-system | the JSON is tested by test_slint_lanel_host; the engine facts are not read |
+| 5339 | Ham tools: Log a QSO, Remove, Clear the log (asks twice) | key | DRIVEN+ASSERTED | lanel-system | state ll.fact.ham.qso.count 1, 0, 1, still 1 after the first Clear, 0 after the second |
+| 5340 | Ham tools: Export Cabrillo log..., Export ADIF log... | key | DRIVEN | lanel-system | a file is not written in a bounded run |
+| 5341 | Ham tools: Follow radio info (switch, address, port, other addresses) | checkbox | DRIVEN | lanel-system | no logger to follow; port 0 opens nothing |
+| 5342 | Ham tools: Answer CAT commands (switch, dialect, port, every address) | checkbox | DRIVEN+ASSERTED | lanel-system | state ll.fact.cat.emulation.running != 1 with port 4532 |
 

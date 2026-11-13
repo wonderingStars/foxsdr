@@ -100,6 +100,7 @@ struct LaneLPublisher::Impl {
     std::map<std::string, Handler> handlers;
     std::map<std::string, std::string> draft;     // what the person typed or chose and has not sent (never saved)
     std::map<std::uint64_t, std::pair<int, std::string>> pending;   // ticket -> section, what it was
+    std::map<std::uint64_t, std::string> pendingDraft;              // ticket -> the field whose typed text is dropped once the engine has taken it (the row then shows the engine's own fact)
     std::array<std::string, kSecCount> noteText;
     std::array<int, kSecCount> noteTone{};
     std::array<std::string, kSecCount> sig;
@@ -124,7 +125,7 @@ struct LaneLPublisher::Impl {
     // ---------------------------------------------------------------- the one place a command leaves
     void setNote(Sec s, const std::string& t, int tone) { noteText[s] = t; noteTone[s] = tone; dirty = true; }
 
-    void send(Sec s, const std::string& what, const Cmd& k, std::uint32_t radio = 0) {
+    void send(Sec s, const std::string& what, const Cmd& k, std::uint32_t radio = 0, const std::string& draftToDrop = std::string()) {
         if (!env.submit) { return; }
         FoxCommand c{};
         c.structSize = sizeof(c);
@@ -141,6 +142,7 @@ struct LaneLPublisher::Impl {
             setNote(s, what + ": " + refusalText(o.status, o.message), kErr);
         } else {
             pending[o.ticket] = {static_cast<int>(s), what};
+            if (!draftToDrop.empty()) { pendingDraft[o.ticket] = draftToDrop; }
             setNote(s, what + ": " + tr("sent"), kDim);
         }
     }
@@ -161,6 +163,8 @@ struct LaneLPublisher::Impl {
         const std::string what = it->second.second;
         pending.erase(it);
         ++answered;
+        const auto pd = pendingDraft.find(r.ticket);
+        if (pd != pendingDraft.end()) { if (r.status == FOXAPI_OK || r.status == FOXAPI_NO_CHANGE) { draft.erase(pd->second); } pendingDraft.erase(pd); }
         const std::string msg = trim(r.message);
         if (r.status == FOXAPI_OK) { setNote(s, what + ": " + tr("done") + (msg.empty() ? std::string() : " (" + msg + ")"), kGood); }
         else if (r.status == FOXAPI_NO_CHANGE) { setNote(s, what + ": " + refusalText(r.status, msg), kDim); }
@@ -197,7 +201,7 @@ struct LaneLPublisher::Impl {
     }
     void endNote(std::vector<Row>& v, Sec s) { if (!noteText[s].empty()) { v.push_back(rNote(noteText[s], noteTone[s])); } }
     // wire-c's settings: key "<key>\x1F<value>", read back as fact.wirec.<key>
-    void setting(Sec s, const std::string& what, const std::string& k, const std::string& value) { send(s, what, cmd(FOXAPP_OP_WIREC_SETTING, 0, k + "\x1F" + value)); }
+    void setting(Sec s, const std::string& what, const std::string& k, const std::string& value, const std::string& draftToDrop = std::string()) { send(s, what, cmd(FOXAPP_OP_WIREC_SETTING, 0, k + "\x1F" + value), 0, draftToDrop); }
     std::string wirec(const std::string& k) { return fact("wirec." + k); }
     void settingTick(std::vector<Row>& v, Sec s, const std::string& id, const std::string& label, const std::string& k, bool def, const std::string& tip = std::string()) {
         const std::string f = wirec(k);
@@ -689,7 +693,7 @@ struct LaneLPublisher::Impl {
         key(v, "w.cfg", tr("Apply heat map and occupancy"), [this] {
             const Built b = sweepHeatmapJson(dv("w.hm-cols"), dv("w.hm-rows"), pv("w.hm-mode", 0), bv("w.occ-on", false), dv("w.occ-start"), dv("w.occ-stop"), dv("w.occ-step"), dv("w.occ-margin", "10"), dv("w.occ-pct", "0.1"), dv("w.occ-floor", "-100"));
             sendBuilt(kSweep, tr("Heat map and occupancy"), b, FOXAPP_OP_SWEEP_CONFIG);
-        });
+        }, true, tr("The columns are laid over the device's own frequency range, so the engine takes this once a device is open."));
         v.push_back(rHeading(tr("Read the sweep")));
         field(v, "w.rd-points", tr("Points to read"), "512", tr("2 to 4096"));
         field(v, "w.rd-x", tr("Position across the sweep"), "0.5", tr("0 (left) to 1 (right): the frequency there is reported"));
@@ -755,9 +759,8 @@ struct LaneLPublisher::Impl {
             if (rows.is_array()) {
                 for (const auto& r : rows) {
                     if (!r.is_object() || !r.contains("follows") || !r["follows"].is_number() || r["follows"].get<double>() <= 0) { continue; }
-                    char t[160];
                     const std::string lockedWord = r.value("locked", false) ? ", " + tr("locked") : std::string();
-                    std::snprintf(t, sizeof(t), "%s %d %s %d%s, %s %.0f Hz", tr("Radio").c_str(), static_cast<int>(r.value("radio", 0)), tr("follows radio").c_str(), static_cast<int>(r.value("follows", 0)), lockedWord.c_str(), tr("offset").c_str(), r.value("offset_hz", 0.0));
+                    const std::string t = tr("Radio") + " " + std::to_string(static_cast<int>(r.value("radio", 0))) + " " + tr("follows radio") + " " + std::to_string(static_cast<int>(r.value("follows", 0))) + lockedWord + ", " + tr("offset") + " " + numberText(std::round(r.value("offset_hz", 0.0))) + " Hz";
                     v.push_back(rReadout(tr("Linked"), t));
                     const std::string fn = r.value("follow_note", std::string());
                     if (!fn.empty()) { v.push_back(rNote(fn, kWarn)); }
@@ -832,7 +835,7 @@ struct LaneLPublisher::Impl {
         if (!rc.empty()) { v.push_back(rReadout(tr("Times the radios were looked for again"), rc)); }
         v.push_back(rHeading(tr("Plugin store")));
         const std::string so = wirec("store.sort");
-        choice(v, "y.store-sort", tr("Order of the plugin store"), {tr("Catalogue order"), tr("Name"), tr("Last updated")}, so == "name" ? 1 : so == "updated" ? 2 : 0, [this](int i) { static const char* const w[3] = {"catalogue", "name", "updated"}; setting(kSystem, tr("Order of the plugin store"), "store.sort", w[std::clamp(i, 0, 2)]); },
+        choice(v, "y.store-sort", tr("Order of the plugin store"), {tr("Catalogue order"), tr("By name"), tr("By last update")}, so == "name" ? 1 : so == "updated" ? 2 : 0, [this](int i) { static const char* const w[3] = {"catalogue", "name", "updated"}; setting(kSystem, tr("Order of the plugin store"), "store.sort", w[std::clamp(i, 0, 2)]); },
                tr("Popular and best rated need a server's figures, which do not exist yet."));
         v.push_back(rHeading(tr("About")));
         const std::string lb = fact("sys.lastboot");
@@ -856,7 +859,7 @@ struct LaneLPublisher::Impl {
             if (!trim(cur).empty()) { items.push_back(trim(cur)); }
             for (const auto& it : items) { if (!out.empty()) { out += "\n"; } out += it; }
             draft["b.origins"] = t;
-            setting(kWeb, tr("Allowed web origins"), "web.cors_origins", out);
+            setting(kWeb, tr("Allowed web origins"), "web.cors_origins", out, "b.origins");
         };
         v.push_back(rNote(tr("Cross-origin sign-in stays off: it needs HTTPS, which is the owner's decision.")));
         endNote(v, kWeb);
@@ -910,9 +913,9 @@ struct LaneLPublisher::Impl {
         v.push_back(rNote(tr("Shows the frequency, mode and split that DXLab Commander or N1MM+ broadcast on the network. It is only shown: it never retunes FoxSDR and never sends anything.")));
         settingTick(v, kHam, "h.ri-on", tr("Follow radio info from DXLab Commander or N1MM+"), "hamops.radioinfo.enabled", false);
         v.push_back(rField("h.ri-addr", tr("Listen on address"), dv("h.ri-addr", wirec("hamops.radioinfo.address")), tr("127.0.0.1 = this computer only")));
-        handlers["h.ri-addr"] = [this](const std::string& t) { draft["h.ri-addr"] = t; setting(kHam, tr("Listen on address"), "hamops.radioinfo.address", trim(t)); };
+        handlers["h.ri-addr"] = [this](const std::string& t) { draft["h.ri-addr"] = t; setting(kHam, tr("Listen on address"), "hamops.radioinfo.address", trim(t), "h.ri-addr"); };
         v.push_back(rField("h.ri-port", tr("Listen on port"), dv("h.ri-port", wirec("hamops.radioinfo.port")), tr("The port the logging program sends to; 0 = not set up, nothing is opened")));
-        handlers["h.ri-port"] = [this](const std::string& t) { draft["h.ri-port"] = t; setting(kHam, tr("Listen on port"), "hamops.radioinfo.port", trim(t)); };
+        handlers["h.ri-port"] = [this](const std::string& t) { draft["h.ri-port"] = t; setting(kHam, tr("Listen on port"), "hamops.radioinfo.port", trim(t), "h.ri-port"); };
         settingTick(v, kHam, "h.ri-other", tr("Accept an address other than this computer"), "hamops.radioinfo.allow_other", false);
         for (int i = 1; i <= 4; ++i) {
             const std::string pfx = "ham.radioinfo." + std::to_string(i) + ".";
@@ -929,7 +932,7 @@ struct LaneLPublisher::Impl {
         const std::string dia = wirec("cat.emulation.dialect");
         choice(v, "h.cat-dialect", tr("CAT dialect"), {"Kenwood TS-480", "Yaesu FT-891"}, dia == "yaesu-ft891" ? 1 : 0, [this](int i) { setting(kHam, tr("CAT dialect"), "cat.emulation.dialect", i == 1 ? "yaesu-ft891" : "kenwood-ts480"); });
         v.push_back(rField("h.cat-port", tr("CAT port"), dv("h.cat-port", wirec("cat.emulation.port")), tr("The port the logging program connects to (not 4532, which the rigctl server uses); 0 = not set up")));
-        handlers["h.cat-port"] = [this](const std::string& t) { draft["h.cat-port"] = t; setting(kHam, tr("CAT port"), "cat.emulation.port", trim(t)); };
+        handlers["h.cat-port"] = [this](const std::string& t) { draft["h.cat-port"] = t; setting(kHam, tr("CAT port"), "cat.emulation.port", trim(t), "h.cat-port"); };
         settingTick(v, kHam, "h.cat-all", tr("Listen on every address"), "cat.emulation.bind_all", false, tr("Off = this computer only. On lets other computers on the network connect."));
         const std::string run = fact("cat.emulation.running");
         v.push_back(rReadout(tr("CAT emulation"), run == "1" ? tr("running") + ", " + fact("cat.emulation.clients") + " " + tr("clients") : tr("not running")));

@@ -3348,3 +3348,37 @@ The status bar and the One layout's plot (the S6 leftovers), one-click layouts, 
 | 5306 | Tuning and memories: Pack file, name, description, Export pack..., Import pack... | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
 | 5307 | Tuning and memories: Remember per band, Volume, AGC, Forget every band | checkbox | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
 | 5308 | Tuning and memories: Bandwidth up, Bandwidth down, Cycle mode, Centre on the signal, Next bookmark, Previous bookmark | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5309 | Scanning: Ranges, Direction, Set / Start / Clear the plan, Scan back, Save hit as bookmark | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5310 | Scanning: Trigger mode, level, margin, hysteresis, floor rise, Use this trigger, Back to the squelch | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5311 | Scanning: Per-entry thresholds, Set, Clear | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5312 | Scanning: Scan whole span without retuning (switch, grid, mode, margin, level, merge, Apply, Read the hits) | checkbox | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5313 | Scanning: Station database (path, frequency column, unit, columns, delimiter, Load, Remove, Look up) | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5314 | Recording and files: Daily folders (five styles), Use UTC | dropdown | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5315 | Recording and files: Lock settings while recording, Also lock gain, Locked now | checkbox | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5316 | Recording and files: Audio file format WAV / FLAC, Keep the WAV | dropdown | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5317 | Recording and files: Analyser job read-out, Cancel, Export selection, Hash the recording, project check | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5318 | Recording and files: Attachments (add screenshot / clip / note, list, check, remove) | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5319 | Recording and files: SigMF annotation (save, list) | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5320 | Measurement: Antenna factor table, Cable loss table, unit, Preamp gain, Input ohm, Show, Read dBuV/m now | checkbox | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5321 | Measurement: the nine signal measurements and Pseudo-Doppler bearing | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5322 | Measurement: Bit view (keep, list, decode again, try every line code, find CRC, checksum, infer, compare, decoder and code-table files) | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5323 | Measurement: GPU spectrum CPU / Auto / GPU | dropdown | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5324 | Measurement: Keep / Drop frames with CRC errors, Read the frame log | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5325 | Measurement: Limit alarm (mask file, load, remove, alarm on, frames, capture, post-roll, interval, Apply) | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5326 | Sweep: Kind, port, baud, start, stop, points, interval, step, gains, amplifier, top, bottom, Open, Close | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5327 | Sweep: Heat map and occupancy, Read the sweep | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5328 | Network radios: Source, Address and arguments, Add this as another radio, Use for the selected radio | dropdown | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5329 | Outputs and tracks: Follow a master, Stop following, Lock / Unlock follower, Keep this distance | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5330 | Outputs and tracks: Network I/Q out (format, header, UDP, port, Start, Stop) | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5331 | Outputs and tracks: SBS output (port, Start, Stop) | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5332 | Outputs and tracks: Track store (Keep tracks, Keep for, Clear, Read the time held) | checkbox | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5333 | Outputs and tracks: Coverage grid (position, cell, half life, switch, Clear, Read) | checkbox | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5334 | Needed libraries: the nine rows (name, why, files, state, where to get it, steps, licence, Check again, path and Check this file) | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5335 | System: Keep the PC awake while recording, Look for radios again after the PC wakes, What the last start did | checkbox | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5336 | System: Order of the plugin store | dropdown | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5337 | Web: Show the /metrics page, Allowed web origins | checkbox | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5338 | Ham tools: Contest header form | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5339 | Ham tools: Log a QSO, Remove, Clear the log (asks twice) | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5340 | Ham tools: Export Cabrillo log..., Export ADIF log... | key | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5341 | Ham tools: Follow radio info (switch, address, port, other addresses) | checkbox | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |
+| 5342 | Ham tools: Answer CAT commands (switch, dialect, port, every address) | checkbox | PRESENT | Lane L (docs/multi-radio-records/screen-l.md). |

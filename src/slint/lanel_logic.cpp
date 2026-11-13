@@ -66,9 +66,7 @@ bool parseNumber(const std::string& text, double lo, double hi, double& out, std
     const auto r = std::from_chars(first, last, v);
     if (r.ec != std::errc() || r.ptr != last || !std::isfinite(v)) { err = tr("that is not a number (use a dot for decimals)"); return false; }
     if (v < lo || v > hi) {
-        char b[96];
-        std::snprintf(b, sizeof(b), "%s %s to %s", tr("allowed:"), numberText(lo).c_str(), numberText(hi).c_str());
-        err = b;
+        err = std::string(tr("allowed:")) + " " + numberText(lo) + " - " + numberText(hi);
         return false;
     }
     out = v;
@@ -85,9 +83,7 @@ bool parseInteger(const std::string& text, long long lo, long long hi, long long
     const auto r = std::from_chars(first, last, v);
     if (r.ec != std::errc() || r.ptr != last) { err = tr("that is not a whole number"); return false; }
     if (v < lo || v > hi) {
-        char b[96];
-        std::snprintf(b, sizeof(b), "%s %lld to %lld", tr("allowed:"), lo, hi);
-        err = b;
+        err = std::string(tr("allowed:")) + " " + std::to_string(lo) + " - " + std::to_string(hi);
         return false;
     }
     out = v;
@@ -161,8 +157,8 @@ Built scanPlanJson(const std::string& rangesText, int direction, const std::stri
             i = j;
         }
         const std::string label = trim(ln.substr(std::min(i, ln.size())));
-        char which[40];
-        std::snprintf(which, sizeof(which), "%s %d", tr("Range"), line);
+        const std::string whichText = std::string(tr("Range")) + " " + std::to_string(line);
+        const char* which = whichText.c_str();
         if (w.size() < 5) { return bad(std::string(which) + ": " + tr("write start MHz, stop MHz, step kHz, mode, bandwidth kHz")); }
         double a = 0, b = 0, st = 0, bw = 0;
         std::string err;

@@ -1,0 +1,30 @@
+#! frames=500 size=1600x8000 bank=4 sections=4:22
+# lanel-libs (screen lane L, docs/multi-radio-records/screen-l.md; rows C1 to C8): the Needed libraries section: nine rows from the engine's one table, "Check again" reading file headers only (nothing is loaded except the FTDI check's own silent load, nothing is downloaded, opened or copied), a header-only result shown as "Found (not test-loaded)" and never as "Working", a program that cannot be checked said so, and no key that opens a page or a folder.
+10 state running == 1
++3 state ll.libs == 9
+state ll.lib.ftdi-d2xx == "Not checked yet"
+state ll.lib.winradio-g39ddc == "Not checked yet"
+# the two copy-in rows take a file; the file key is dead until a path is typed
++1 expect "Check this file: WiNRADiO G39DDC library (G39DDCAPI.dll)" enabled equals "false"
++1 type "Path of the file you downloaded: WiNRADiO G39DDC library (G39DDCAPI.dll)" "C:/foxsdr-lanel-test/none/G39DDCAPI.dll"
++1 key enter
++8 expect "Check this file: WiNRADiO G39DDC library (G39DDCAPI.dll)" enabled equals "true"
+# check every row: a program that is running cannot be seen from here; no row says "Working"
++1 click "Check every row again"
++20 state ll.note.libs contains "Check again: done"
++10 state ll.lib.sdrplay-sdrconnect == "Cannot be checked from here"
+state ll.lib.aaronia-rtsa-suite == "Cannot be checked from here"
+state ll.lib.soapyremote-server == "Cannot be checked from here"
+state ll.lib.icom-icr8600-firmware == "Cannot be checked from here"
+state ll.lib.winradio-g39ddc != "Working"
+state ll.lib.winradio-g39ddc != "Found and working"
+state ll.lib.soapy-bladerf != "Working"
+state ll.lib.soapy-bladerf != "Found and working"
++1 shot "lanel-libs.png"
+# a file that is not there is not found, and the sentence says so (the file is judged where it is: never copied)
++1 click "Check this file: WiNRADiO G39DDC library (G39DDCAPI.dll)"
++20 state ll.note.libs contains "Check this file: done"
++10 state ll.lib.winradio-g39ddc == "Not found"
+# one row on its own
++1 click "Check again: FTDI D2XX driver"
++20 state ll.note.libs contains "Check again: done"

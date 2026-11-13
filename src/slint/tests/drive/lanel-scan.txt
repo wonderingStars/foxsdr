@@ -1,0 +1,51 @@
+#! frames=900 size=1600x6000 bank=4 sections=4:16
+# lanel-scan (screen lane L, docs/multi-radio-records/screen-l.md; rows A7, A7c, A8, A9): the Scanning section: the engine's scan plan, trigger and per-entry thresholds, the whole-span scan and the station database. The engine answers each key; the facts the rows name are read back.
+10 state running == 1
++3 state ll.rows.scan > 30
+# the plan: a line that is not a range is refused before anything is sent; a good one is set, then cleared
++1 type "Ranges" "144 146"
++1 key enter
++2 click "Set the plan"
++6 state ll.note.scan contains "Set the plan: Range 1"
++1 type "Ranges" "144 144.1 12.5 nfm 12.5 two metres"
++1 key enter
++2 click "Set the plan"
++12 state ll.note.scan contains "Set the plan: done"
+state ll.fact.scan.plan contains "144000000"
++1 shot "lanel-scan.png"
++1 click "Clear the plan"
++10 state ll.note.scan contains "Clear the plan"
+# the trigger: on, read back from the engine, then back to the squelch
++1 click "Use this trigger"
++12 state ll.fact.scan.trigger.on == 1
++1 type "Trigger level (dB)" "-170"
++1 key enter
++2 click "Use this trigger"
++6 state ll.note.scan contains "allowed"
++1 click "Back to the squelch"
++12 state ll.fact.scan.trigger.on == 0
+# per-entry thresholds
++1 type "Thresholds" "145.5 -90"
++1 key enter
++2 click "Set the thresholds"
++12 state ll.note.scan contains "Set the thresholds: done"
++1 click "Clear the thresholds"
++10 state ll.note.scan contains "Clear the thresholds"
+# the whole-span scan is OFF until ticked
++1 click "Scan whole span without retuning"
++1 click "Apply the span scan"
++12 state ll.note.scan contains "Span scan: done"
++1 click "Read the hits"
++10 state ll.note.scan contains "Read the hits"
+# the station database: a file that is not there fails on the engine's worker, with words, and nothing is loaded
++1 type "Station database" "C:/foxsdr-lanel-test/none/stations.csv"
++1 key enter
++1 type "Columns" "name, location"
++1 key enter
++2 click "Load the database"
++12 state ll.note.scan contains "Load the database"
++30 state ll.fact.job.state == failed
++1 type "Look up (MHz)" "145.5"
++1 key enter
++2 click "Look up"
++12 state ll.note.scan contains "Look up: Nothing changed"
