@@ -2636,6 +2636,10 @@ void scheduleOps(AppWindow& a) {
 
 // MACROS (engine wiring W2; src/engine/engine_macros.cpp). The profile this test runs in has no macro file, so there are no macros: an unknown name is NOT_FOUND, a stop with
 // nothing running is NO_CHANGE, and a reload of an absent file is fine. The playing of steps, the refusals of a bad file and the REMOTE denial are tests/test_engine_api_macros.cpp's.
+// wire-b begin: the lane's cases (a separate file so the three wiring lanes' additions do not collide)
+#include "wire_b_apply_cases.inc"
+// wire-b end
+
 void macroOps(AppWindow& a) {
     covering(FOXAPP_OP_MACRO_RELOAD);
     CHECK(ok(A::apply(a, text(FOXAPP_OP_MACRO_RELOAD, ""))));
@@ -3977,6 +3981,7 @@ int main() {
         markerOps(app);
         scheduleOps(app);
         macroOps(app);
+        wireBOps(app);   // wire-b
         transmitterOps(app);
         radioOps(app);
         otherOps(app);

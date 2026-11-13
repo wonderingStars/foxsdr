@@ -62,6 +62,7 @@
 #include "source/iq_file_source.hpp"
 #include "source/raw_iq_net_source.hpp"
 #include "source/kiwisdr_source.hpp"
+#include "engine/wire_b_sources.hpp"   // wire-b
 #include "source/rsp_rows.hpp"
 #include "source/soapy_enum_proc.hpp"
 #include "core/device_scan_plan.hpp"
@@ -246,6 +247,7 @@ void Engine::frameKick() {
 // specific needs doing, and detaching is the only safe choice. Proven with
 // tests/test_engine_fallback_teardown.cpp (a throwing constructor seam).
 Engine::~Engine() {
+    wireBShutdown();   // wire-b: every network I/Q output ends while the pipelines still exist
     cascade::core::beats::Registry::clearKeyedProbe(this);
     if (!tornDown_) {
         host_ = &ownHost_;
@@ -2484,6 +2486,9 @@ std::unique_ptr<cascade::source::DeviceSource> Engine::makeDeviceSource(
     if (kind == kRtlTcpDriverKey) { return std::make_unique<cascade::source::RtlTcpSource>(); }
     if (kind == kKiwiSdrDriverKey) { return std::make_unique<cascade::source::KiwiSdrSource>(); }
     if (kind == kRawIqDriverKey) { return std::make_unique<cascade::source::RawIqNetSource>(); }
+    // wire-b begin: the lane's source table (wire_b_sources.cpp)
+    if (const wireb::SourceKind* wb = wireb::findSourceByKey(kind)) { return wb->make(); }
+    // wire-b end
     if (kind == "soapy") { return std::make_unique<cascade::source::SoapySource>(); }
     return nullptr;
 }
@@ -6353,6 +6358,12 @@ bool Engine::selectSourceById(const std::string& id) {
         openRawIqAt(args);
         return true;
     }
+    // wire-b begin: "open-<key>:<arguments>" of the lane's source table
+    if (const wireb::SourceKind* wb = wireb::findSourceByOpenWord(kind)) {
+        openWireBSourceAt(*wb, args);
+        return true;
+    }
+    // wire-b end
     // The KIND is matched too - a native row and a Soapy row for one dongle
     // carry the same serial.
     if (cascade::gui::isNativeSourceKind(kind)) {
@@ -8145,7 +8156,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // which; a scanned device's id is "<kind>:<args>", the same spelling its key has.
             if (const std::size_t colon = text.find(':'); colon != std::string::npos) {
                 const std::string kind = text.substr(0, colon);
-                if (kind != "file" && kind != "open-pluto" && kind != "open-rtltcp" && kind != "open-kiwisdr" && kind != "open-rawiq" && kind != "row" && kind != "soundcard") {
+                if (kind != "file" && kind != "open-pluto" && kind != "open-rtltcp" && kind != "open-kiwisdr" && kind != "open-rawiq" && kind != "row" && kind != "soundcard" && wireb::findSourceByOpenWord(kind) == nullptr /* wire-b */) {
                     const std::string key = cascade::core::patch::makeDeviceKey(kind, text.substr(colon + 1));
                     rebuildDeviceLedger();
                     const DeviceHolder holder = deviceLedger_.holderOf(key);
@@ -9312,6 +9323,9 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             return res;
 
         default:
+            // wire-b begin: the lane's operation block (engine_wire_b.cpp)
+            if (c.op >= 0x8900u && c.op <= 0x89FFu) { return applyWireB(c, text, res); }
+            // wire-b end
             break;
     }
     return refuse(FOXAPI_UNSUPPORTED, "this build has no such operation");
@@ -11361,6 +11375,7 @@ void Engine::runPassPart(PassPart part) {
             pumpExtraReceivers();
             pumpSchedule();   // (timed recordings: engine_schedule.cpp)
             pumpMacros();     // (a macro being played: engine_macros.cpp)
+            pumpWireB();      // (wire-b: the limit mask of every open radio: engine_wire_b.cpp)
             pollSmeterCal();  // (a calibration being measured: engine_smeter.cpp)
             break;
     }

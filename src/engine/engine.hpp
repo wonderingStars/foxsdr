@@ -157,6 +157,8 @@ struct EngineDiskWorkDeleter {
 
 // The function a front end installs to apply one plugin directive to the plugin UI it owns (Engine::setPluginUiApplier).
 using PluginUiApplier = std::function<void(const cascade::core::PluginDirective&)>;
+struct WireBState;   // wire-b: engine_wire_b.hpp
+namespace wireb { struct SourceKind; }   // wire-b: wire_b_sources.hpp
 
 class WireA;   // wire-a (engine/wire_a.hpp)
 
@@ -3230,6 +3232,34 @@ private:
     void macroFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
     std::string macrosFilePath() const;
     std::int64_t macroNowMs() const;
+    // wire-b begin: the measurement / radio-source wiring lane (engine_wire_b.cpp, wire_b_*; operation block 0x8900-0x89FF). One state object for all of it.
+    std::shared_ptr<WireBState> wireB_;
+    std::uint64_t wireBVersion_ = 1;   // moves whenever a wire-b result or setting changes (the fact block's fingerprint)
+    WireBState& wireBState();
+    void openWireBSourceAt(const wireb::SourceKind& kind, const std::string& typed);   // "open-<key>:<arguments>" (wire_b_sources.cpp)
+    FoxCommandResult applyWireB(const FoxCommand& c, const std::string& text, FoxCommandResult res);
+    FoxCommandResult sigmeasOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
+    FoxCommandResult bitsOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
+    FoxCommandResult cursorOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
+    FoxCommandResult sweepOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
+    FoxCommandResult iqOutOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
+    FoxCommandResult followOp(const FoxCommand& c, FoxCommandResult res, bool& changed);
+    FoxCommandResult sbsOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
+    void pumpSbs();   // (inside pumpWireB, with the lane's mutex held)
+    FoxCommandResult tracksOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
+    void pumpTracks();   // (inside pumpWireB, with the lane's mutex held)
+    FoxCommandResult coverageOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
+    FoxCommandResult neededLibOp(const FoxCommand& c, const std::string& text, FoxCommandResult res, bool& changed);
+    void wireBStopIqOut(std::size_t slot);   // the radio's output ends (the pipeline's tap is cleared first)
+    void wireBShutdown();                    // the engine is going: every output ends while the pipelines still exist
+public:
+    WireBState& wireBStateForTest() { return wireBState(); }   // TESTS ONLY: a frame log nobody can fill yet (no plugin call) is filled by the test through this
+private:
+    void wireBFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
+    std::uint64_t wireBStamp() const;
+    void pumpFollow();   // (inside pumpWireB, with the lane's mutex held)
+    void pumpWireB();   // once per control pass (the Back part): the limit mask of every open radio
+    // wire-b end
     std::vector<cascade::core::macros::Macro> macros_;
     cascade::core::macros::Player macroPlayer_;
     std::string macrosError_;     // the file's refusal, "" when it loaded (or is absent)

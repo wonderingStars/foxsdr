@@ -209,6 +209,8 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(recordNameVersion_); // the recording file-name template (FOXAPP_OP_SET_RECORD_NAME)
     f.value(stereoSystemVersion_);  // the stereo system of every radio (FOXAPP_OP_SET_STEREO_SYSTEM)
     f.value(WireA::of(*this).version());   // wire-a: the tuning / recording / display wiring lane's facts
+    f.value(wireBVersion_);         // wire-b: the results and settings of the measurement / source operations (engine_wire_b.cpp)
+    f.value(wireBStamp());          // wire-b: what the GPU spectrum of each radio is doing (not its counters)
     f.value(poolVersion_);   // which radios a pool claim holds (engine_pool.cpp)
     f.value(ppmAutoVersion_);   // the pilot ppm measurements (engine_mpx.cpp)
     f.value(mpxVersion_);   // which radios record their multiplex (engine_mpx.cpp)
@@ -1365,6 +1367,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     scheduleFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // (LOCAL: a recording plan is the operator's)
     macroFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // (LOCAL: a macro is the operator's)
     WireA::of(*this).facts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // wire-a (LOCAL)
+    wireBFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // wire-b (LOCAL: a measurement of the signal is the operator's)
     // THE S-METER CALIBRATION (engine wiring lane 1; LOCAL: a device's key can name a serial number): what the last measurement did, and how many devices hold a calibration.
     if (!recordNameLoaded_) { loadRecordName(); }   // (the file is read once, here or at the first take, whichever asks first)
     fact("record.nameTemplate", recordNameTemplate_, true);   // (LOCAL: a file-name template can carry a person's own words)

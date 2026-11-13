@@ -13,6 +13,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "engine/fox_engine_api.hpp"
+#include "engine/wire_b_sources.hpp"   // wire-b
 
 #include <algorithm>
 #include <array>
@@ -2029,6 +2030,7 @@ int32_t ApiHostImpl::validate(const ApiSession& s, const FoxCommand& c, const Fo
                            std::strncmp(c.text, "open-rtltcp:", 12) == 0 ||
                            std::strncmp(c.text, "open-kiwisdr:", 13) == 0 ||   // (an outward connection to an address the remote client chose)
                            std::strncmp(c.text, "open-rawiq:", 11) == 0 ||   // (a socket this machine connects to or listens on, at an address the remote client chose)
+                           cascade::engine::wireb::isSourceOpenId(c.text) ||   // wire-b: an outward connection or a library load at an address or path the remote client chose
                            std::strncmp(c.text, "soundcard:", 10) == 0)) {
                 return FOXAPI_DENIED;
             }

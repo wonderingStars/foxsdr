@@ -285,6 +285,19 @@ private:
     unsigned finished_ = 0;
 };
 
+// wire-b begin: GUIDANCE FOR RADIOS THE USB CHECK DOES NOT KNOW (oss-libs item 3). BladeRF, ADALM-Pluto and AntSDR have no entry in the known-radio table (no USB id
+// was read from a vendor file, so none is guessed), but a person who owns one still needs to be told what it needs. English only, NOT translated (the screen lane
+// carries the text through the catalogues); the sentences are the ones the oss-libs record lists. Whether PothosSDR / radioconda carry the named modules was NOT
+// verified from their package lists. nullptr for any other key. Case-insensitive; "bladerf", "pluto" and "antsdr" (also "plutosdr", "adalm-pluto").
+struct DriverGuidance {
+    const char* family;   // "bladerf" / "pluto" / "antsdr"
+    const char* name;     // a product name
+    const char* module;   // the SoapySDR module the guidance names ("" when none is needed)
+    const char* text;     // what to do, English
+};
+const DriverGuidance* guidanceForDriver(const std::string& driverKey);
+// wire-b end
+
 }  // namespace cascade::core::radiosetup
 
 #endif  // CASCADE_CORE_RADIO_SETUP_HPP

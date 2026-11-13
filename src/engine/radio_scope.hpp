@@ -73,6 +73,35 @@ inline bool isRadioScopedOp(std::uint32_t op) {
         case FOXAPP_OP_IF_RECORD:
         case FOXAPP_OP_SET_IF_ZOOM:
         case FOXAPP_OP_PPM_MEASURE:
+        // wire-b begin (the lane's per-radio operations; global ones are not listed)
+        case FOXAPP_OP_FIELD_READ:
+        case FOXAPP_OP_SIGMEAS_BANDWIDTH:
+        case FOXAPP_OP_SIGMEAS_MODULATION:
+        case FOXAPP_OP_SIGMEAS_SYMBOLS:
+        case FOXAPP_OP_SIGMEAS_VSTIME:
+        case FOXAPP_OP_SIGMEAS_BURSTS:
+        case FOXAPP_OP_SIGMEAS_HOPCHIRP:
+        case FOXAPP_OP_SIGMEAS_AUDIO:
+        case FOXAPP_OP_SIGMEAS_DRIFT:
+        case FOXAPP_OP_SIGMEAS_HISTOGRAM:
+        case FOXAPP_OP_PSEUDO_DOPPLER:
+        case FOXAPP_OP_BITS_KEEP:
+        case FOXAPP_OP_BITS_LIST:
+        case FOXAPP_OP_BITS_REDECODE:
+        case FOXAPP_OP_BITS_SWEEP:
+        case FOXAPP_OP_BITS_FIND_CRC:
+        case FOXAPP_OP_BITS_FIND_SUM:
+        case FOXAPP_OP_BITS_INFER:
+        case FOXAPP_OP_BITS_DIFF:
+        case FOXAPP_OP_BITS_SPEC_CHECK:
+        case FOXAPP_OP_BITS_SPEC_RUN:
+        case FOXAPP_OP_BITS_TABLE_CHECK:
+        case FOXAPP_OP_CURSOR_SET:
+        case FOXAPP_OP_CURSOR_READ:
+        case FOXAPP_OP_CURSOR_MARKS:
+        case FOXAPP_OP_IQ_OUT_START:
+        case FOXAPP_OP_IQ_OUT_STOP:
+        // wire-b end
         case FOXAPP_OP_CAL_MEASURE:
         case FOXAPP_OP_CAL_CLEAR:
         case FOXAPP_OP_RADIO_LOCK:

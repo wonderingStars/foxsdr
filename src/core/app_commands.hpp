@@ -266,6 +266,155 @@
 // BAD_ARGUMENT for empty text, OUT_OF_RANGE for a coordinate that is negative or past 32 bits; NO_CHANGE when nothing was delivered (no such picture, the plugin takes
 // no input, its picture is inert, the click is outside the picture, or the plugin is switched off). A REMOTE session is DENIED.
 #define FOXAPP_OP_IMAGE_PRESS            0x870Fu /* text: the plugin's name; ival[0]: x, ival[1]: y, in the picture's pixels */
+// wire-b begin: MEASUREMENT AND RADIO-SOURCE WIRING (docs/multi-radio-records/wire-b.md; block 0x8900-0x89FF, ascending, this lane's alone). All LOCAL sessions only
+// (application ops are refused to a REMOTE session). A read operation answers in a LOCAL fact (the record names each) and never writes to disk.
+//   FIELD_TABLE (SETTINGS; core/field_strength.hpp): text (or long text): a user-supplied CSV table "<frequency>,<dB>" per line (the model's rules: strictly increasing
+//   frequency, 65536 points, 1 MiB); ival[0]: 0 the ANTENNA FACTOR table (dB per metre), 1 the CABLE LOSS table (dB); ival[1]: the frequency unit of the file, 0 Hz,
+//   1 kHz, 2 MHz (the default), 3 GHz. Empty text clears the table. BAD_ARGUMENT with the model's words and the line for a table it refuses (the old table stays);
+//   OUT_OF_RANGE for another table or unit; NO_CHANGE when clearing an empty table. applied[0]: the points now held.
+//   FIELD_CONFIG (SETTINGS): num[0]: the preamp gain in dB (-100..100), num[1]: the input impedance in ohm (1..1000); ival[0]: 1 show the field strength, 0 hide it.
+//   NO_CHANGE when all three are what they were. Not saved.
+//   FIELD_READ (SETTINGS; addresses one radio (target)): reads the radio's level now (signalDbm: calibrated, or the dBFS standing in as an estimate) at its tuned frequency through
+//   the tables. FAILED with a sentence when no antenna-factor table is loaded. applied[0]: dBuV/m; applied[1]: bits 1 the antenna factor was HELD from the table's end, 2 the cable
+//   loss was held, 4 the level is NOT calibrated (an estimate). The fact radio.<n>.field.readout holds the text "<x> dBuV/m at <f> MHz" and the held-value note.
+#define FOXAPP_OP_FIELD_TABLE            0x8900u /* long text: the CSV table; ival[0]: 0 antenna factor / 1 cable loss; ival[1]: unit 0 Hz / 1 kHz / 2 MHz / 3 GHz */
+#define FOXAPP_OP_FIELD_CONFIG           0x8901u /* num[0]: preamp gain dB; num[1]: input ohm; ival[0]: 1 show / 0 hide */
+#define FOXAPP_OP_FIELD_READ             0x8902u /* addresses one radio (target); applied[0]: dBuV/m, applied[1]: the flag bits */
+//   SIGNAL MEASUREMENTS (SETTINGS; dsp/sigmeas_*.hpp through engine/wire_b_sigmeas.hpp): nine READ operations, one per measurement block, each addressing one radio (target).
+//   text (or long text): ONE JSON object of parameters, every key optional, an unknown key or a value outside its range is BAD_ARGUMENT naming the key (nothing is measured).
+//   The span is read from the radio's channel taps: the channel I/Q after the VFO at the channel rate (the audio block reads the finished 48 kHz audio) - at most the newest 1.3 s
+//   (the tap's size). "duration_s" (default 0.25, 0.001 to 10) is the length and "end_ago_s" (default 0, 0 to 60) how long before the newest sample the span ENDS; a span the tap
+//   does not hold is cut to what it holds. Frequencies in every answer are Hz from the CHANNEL CENTRE (the tuned frequency). FAILED when the radio is not running or its tap is empty.
+//   The answer is the LOCAL fact radio.<n>.sigmeas.<name> (one JSON object: op, radio, tuned_hz, rate_hz, samples, valid, reason and "result"); the command result says OK, with
+//   applied[0] 1 when the block measured something and 0 when it could not (message: the block's one-phrase reason: "span too short", "no signal found" ...), applied[1] the samples used.
+//   The keys of each block are in docs/multi-radio-records/wire-b.md (SCREEN HAND-OFF). Nothing is written to disk; nothing is saved.
+#define FOXAPP_OP_SIGMEAS_BANDWIDTH      0x8903u /* occupied and x-dB bandwidth: fact radio.<n>.sigmeas.bandwidth */
+#define FOXAPP_OP_SIGMEAS_MODULATION     0x8904u /* FM deviation and AM depth: fact ...sigmeas.modulation */
+#define FOXAPP_OP_SIGMEAS_SYMBOLS        0x8905u /* "mode": fsk / ook / cursor (symbol period from two cursors): fact ...sigmeas.symbols */
+#define FOXAPP_OP_SIGMEAS_VSTIME         0x8906u /* amplitude, frequency and phase against time: fact ...sigmeas.vstime */
+#define FOXAPP_OP_SIGMEAS_BURSTS         0x8907u /* burst list and repeat period: fact ...sigmeas.bursts */
+#define FOXAPP_OP_SIGMEAS_HOPCHIRP       0x8908u /* frequency hopping and chirp tracking: fact ...sigmeas.hopchirp */
+#define FOXAPP_OP_SIGMEAS_AUDIO          0x8909u /* SINAD, THD, SFDR, ENOB of the finished audio: fact ...sigmeas.audio */
+#define FOXAPP_OP_SIGMEAS_DRIFT          0x890Au /* drift search (de-chirp): fact ...sigmeas.drift */
+#define FOXAPP_OP_SIGMEAS_HISTOGRAM      0x890Bu /* amplitude / magnitude histogram and the power CCDF: fact ...sigmeas.histogram */
+//   PSEUDO_DOPPLER (SETTINGS; dsp/pseudo_doppler.hpp, the rfmon lane bearing from one receiver and a switched four-antenna array): the same span rules as the measurements above (one radio,
+//   JSON text, the channel I/Q); keys "samples_per_dwell" (8 to 1e6, default 100) and "start_sample" (0 to 1e9, default 0: where antenna 0 first dwell begins in the span), plus
+//   "duration_s" / "end_ago_s". It ESTIMATES from I/Q already in the span: the antenna switch is hardware this program does not drive. Answer in the fact radio.<n>.sigmeas.pseudodoppler:
+//   bearing_deg (counter-clockwise from antenna 0 towards the transmitter), quality 0 to 1, weak (quality under 0.5) and the sentence "Signal too weak or not steady for a bearing".
+#define FOXAPP_OP_PSEUDO_DOPPLER         0x890Cu /* addresses one radio (target): fact radio.<n>.sigmeas.pseudodoppler */
+//   THE BIT VIEW (SETTINGS; core/bits/*.hpp through engine/wire_b_bits.hpp), eleven operations, each addressing one radio (target); LOCAL sessions only; nothing is written to disk. KEEP slices the
+//   newest span of the radio channel I/Q on demand (no tap in the receive path) into the radio bounded ring of level runs (256 slices); the other operations work on the kept slices and on the frames
+//   of the last REDECODE. text is ONE JSON object of parameters (unknown key = BAD_ARGUMENT naming it) except SPEC_CHECK / SPEC_RUN (text = the decoder file, "foxsdr-bitspec 1") and
+//   TABLE_CHECK (text = the code-table file). The answer is the LOCAL fact radio.<n>.bits.<name> (one JSON object: ok / valid / reason and the result); the command is OK with applied[0] 1 when
+//   there is a result and 0 when there is none (message: the reason). KEEP: duration_s, end_ago_s, label, smooth_us, threshold, min_span_ratio; applied[1] is the new slice id (0 when none).
+//   REDECODE / SWEEP: slice (id, 0 = the newest), line_codes (one to three words), invert, balance, chip_us, phase, sync, sync_errors, both_polarities, framing, fixed_bits, flag, unstuff, whiten,
+//   max_frames, max_frame_bits. FIND_CRC / FIND_SUM: max_head_bytes, max_tail_bytes, max_hits, widths. DIFF: a, b (frame numbers from 1). SPEC_RUN: ival[0] the slice (0 = every kept slice).
+#define FOXAPP_OP_BITS_KEEP              0x890Du /* addresses one radio (target): fact radio.<n>.bits.keep */
+#define FOXAPP_OP_BITS_LIST              0x890Eu /* fact ...bits.list */
+#define FOXAPP_OP_BITS_REDECODE          0x890Fu /* fact ...bits.redecode (the frames are kept for FIND_CRC, FIND_SUM, INFER and DIFF) */
+#define FOXAPP_OP_BITS_SWEEP             0x8910u /* every line code and polarity on one slice, ranked: fact ...bits.sweep */
+#define FOXAPP_OP_BITS_FIND_CRC          0x8911u /* fact ...bits.findcrc */
+#define FOXAPP_OP_BITS_FIND_SUM          0x8912u /* fact ...bits.findsum */
+#define FOXAPP_OP_BITS_INFER             0x8913u /* field inference over the decoded frames: fact ...bits.infer */
+#define FOXAPP_OP_BITS_DIFF              0x8914u /* two decoded frames aligned: fact ...bits.diff */
+#define FOXAPP_OP_BITS_SPEC_CHECK        0x8915u /* long text: a decoder file; errors with line numbers: fact ...bits.speccheck */
+#define FOXAPP_OP_BITS_SPEC_RUN          0x8916u /* long text: a decoder file; ival[0]: slice id (0 all): fact ...bits.specrun */
+#define FOXAPP_OP_BITS_TABLE_CHECK       0x8917u /* long text: a code-table file; errors with line numbers: fact ...bits.tablecheck */
+//   GPU_FFT_MODE (SETTINGS; core/pipeline_gpufft.cpp, dsp/gpu_fft.hpp): ival[0]: 0 CPU (the DEFAULT at every start: no Direct3D device is ever made), 1 AUTO (the GPU only from 65 536 points; the legacy spectrum
+//   path of the pipeline is smaller, so Auto stays on the CPU estimator there), 2 GPU (always). Applies to every radio OPEN NOW (a radio added later starts on CPU) and is NOT saved. OUT_OF_RANGE for another
+//   value, NO_CHANGE when every radio is on that mode. A failure of the GPU path is never an error: the CPU path runs on, silently, and the facts say what runs. The device is made off the DSP thread.
+//   Facts (LOCAL): radio.<n>.gpufft = one JSON object {mode, engaged, backend ("cpu"/"gpu"), submitted, completed_gpu, completed_cpu, dropped_frames, device_lost, error}; gpu_fft.mode = the last mode asked for.
+//   Not reached by this operation: the spectrum BLOCK (SET_SPECTRUM, the large FFT sizes) - see the record.
+#define FOXAPP_OP_GPU_FFT_MODE           0x8918u /* ival[0]: 0 CPU / 1 Auto / 2 GPU; every open radio; facts radio.<n>.gpufft, gpu_fft.mode */
+//   THE EIGHT CURSORS AND THE FRAME LOG (SETTINGS; dsp/sigmeas_cursors.hpp, dsp/sigmeas_framelog.hpp through engine/wire_b_cursors.hpp), LOCAL sessions only, nothing written to disk. The engine keeps one
+//   CursorSet8 per radio (mode free / locked / harmonic, spacing, reference, eight frequencies from the CHANNEL CENTRE; not saved). CURSOR_SET (text: JSON; keys mode, spacing_hz, reference 1-8,
+//   range_low_hz + range_high_hz, set: [{"cursor": 1-8, "freq_hz": n}]) changes a copy and keeps it only when every part was accepted (else BAD_ARGUMENT naming the key; nothing changes).
+//   CURSOR_READ (JSON: duration_s, end_ago_s, search_hz, snap) reads the level under every cursor from the Welch spectrum of the newest span of the radio's channel I/Q and, with snap and in free mode, moves
+//   the cursors onto the peaks. CURSOR_MARKS (JSON: kind harmonic / sideband, base_hz or carrier_hz, spacing_hz, count, low_hz, high_hz, search_hz) lists harmonic or sideband marks with their levels.
+//   Facts radio.<n>.sigmeas.cursors (SET and READ) and radio.<n>.sigmeas.marks. FRAMELOG_CONFIG (ival[0]: -1 keep, 0 drop / 1 keep frames that FAILED their CRC; ival[1]: capacity 1..4096, 0 keep) and
+//   FRAMELOG_READ (ival[0]: 1 include the failed frames) work on the engine's one FRAME LOG: frames kept IN MEMORY ONLY with their CRC flag (no plugin call fills it yet: an ABI request); the fact framelog
+//   holds the frames as hex only when READ asks, LOCAL only.
+#define FOXAPP_OP_CURSOR_SET             0x8919u /* addresses one radio (target): text JSON; fact radio.<n>.sigmeas.cursors */
+#define FOXAPP_OP_CURSOR_READ            0x891Au /* addresses one radio (target): text JSON; fact radio.<n>.sigmeas.cursors */
+#define FOXAPP_OP_CURSOR_MARKS           0x891Bu /* addresses one radio (target): text JSON; fact radio.<n>.sigmeas.marks */
+#define FOXAPP_OP_FRAMELOG_CONFIG        0x891Cu /* ival[0]: -1 keep / 0 / 1 keep CRC-failed frames; ival[1]: capacity 1..4096 (0 keep) */
+#define FOXAPP_OP_FRAMELOG_READ          0x891Du /* ival[0]: 1 include CRC-failed frames; fact framelog */
+//   THE LIMIT MASK (SETTINGS; core/spectrum_mask.hpp, the rfmon lane limit lines with pass / fail, alarm and capture on breach), LOCAL sessions only. MASK_LOAD (text, long text: a "foxmask 1" file of
+//   upper / lower segments in absolute Hz and dB; empty text removes the mask) - BAD_ARGUMENT with the model's words and the LINE for a file it refuses (the old mask stays), NO_CHANGE for removing a
+//   mask that is not there. MASK_CONFIG (text: one JSON object, every key optional: enabled, raise_frames 1-100 (default 3), clear_frames 1-100 (5), capture (record I/Q on a breach, default false),
+//   post_roll_s 0-60 (2), min_interval_s 0-3600 (10); unknown key = BAD_ARGUMENT; FAILED when enabled is asked with no mask loaded). While enabled, once per control pass and for every open radio the engine
+//   evaluates the radio newest spectrum frame (absolute frequencies from its centre and sample rate) against the mask: pass / worst margin, an alarm raised after raise_frames failing frames in a
+//   row and cleared after clear_frames passing ones, a log line per event (kind, margin, frequency, frames: no identifier). With capture on, the alarm starts the radio normal I/Q recording (in
+//   the recordings folder) unless it is recording already or the minimum interval has not passed, and stops it post_roll_s later. THERE IS NO I/Q PRE-ROLL RING: the pre-roll of the model is 0.
+//   Fact radio.<n>.mask = {enabled, loaded, pass, worst_margin_db, worst_freq_hz, alarm, events [...], captures, capture_note}. Not saved.
+#define FOXAPP_OP_MASK_LOAD              0x891Eu /* long text: the foxmask file; empty removes it; fact radio.<n>.mask */
+#define FOXAPP_OP_MASK_CONFIG            0x891Fu /* text: JSON {enabled, raise_frames, clear_frames, capture, post_roll_s, min_interval_s} */
+//   THE SWEEP DEVICE (SETTINGS; engine/wire_b_sweep.hpp over source/tinysa_protocol.hpp, core/sweep_stitch.hpp, core/sweep_occupancy.hpp), LOCAL sessions only: a tinySA / tinySA Ultra on a serial
+//   port as a SOURCE OF SWEEP LINES (not I/Q: it is not a radio of the engine). OFF until SWEEP_OPEN. SWEEP_OPEN (text: JSON {kind "tinysa" | "tinysa_ultra", port "COM1".."COM256", start_mhz, stop_mhz,
+//   points 2..1048576 (default 450), interval_ms 0..60000 (default 0)}): BAD_ARGUMENT for a key or value that is wrong (an invalid port name never reaches the system), BUSY when a device is open already,
+//   FAILED with a sentence when the port cannot be opened. One worker thread asks for a sweep over and over and feeds every line to a stitched heatmap and, when configured, an occupancy model; a device
+//   that stops answering ends the worker with a sentence (the port name is never put in a fact, a log or a report). SWEEP_CLOSE: NO_CHANGE when nothing is open. SWEEP_CONFIG (JSON: "heatmap":
+//   {cols 1..65536, rows 2..65536, freq_mode "max"|"mean", time_mode}, "occupancy": {start_mhz, stop_mhz, step_khz, margin_db 0..200, floor_percentile 0..0.5, fixed_floor_db} or null to drop it): works while
+//   open or not; the model's refusal words come back. SWEEP_READ (JSON: max_points 2..4096 default 512, x 0..1 for the click-to-tune frequency, occupancy true for the channel table as CSV): answers in
+//   the fact sweep.read. Fact sweep.state = {open, kind, sweeps, refused, last_error, points, start_hz, stop_hz, heat_rows, heat_cols, occ_channels, occ_sweeps}. UNVERIFIED on a real device.
+//   (KIND "hackrf": a HackRF in sweep mode, RECEIVE ONLY: JSON {kind "hackrf", serial (optional), start_mhz, stop_mhz (ONE range of whole MHz, 1..6000), step_mhz 1..20 (10), lna_db 0..40 (16), vga_db 0..62 (16), amp bool,
+//   sample_rate_msps 2..20 (20), fft_size 32..65536 (1024)}; a "port" is refused; the LINEAR sweep only: the interleaved style needs GPL code, the owner's decision.)
+#define FOXAPP_OP_SWEEP_OPEN             0x8920u /* text JSON; fact sweep.state */
+#define FOXAPP_OP_SWEEP_CLOSE            0x8921u
+#define FOXAPP_OP_SWEEP_CONFIG           0x8922u /* text JSON */
+#define FOXAPP_OP_SWEEP_READ             0x8923u /* text JSON; fact sweep.read */
+//   NETWORK I/Q OUT (SETTINGS; net/iq_out.hpp, a tap on the radio RAW BAND at the input rate where the I/Q recorder is fed), per radio (target), LOCAL sessions only. OFF until IQ_OUT_START. IQ_OUT_START
+//   (text: JSON {format "u8" (default) | "s16" | "f32", header bool (the 28-byte FXIQ header, default false), udp bool (default false: TCP), port 0..65535 (0 = the OS picks; UDP needs 1..65535),
+//   dest "127.0.0.1" (UDP; nothing else is accepted)}): the TCP server binds 127.0.0.1 ONLY (a wider bind raises the firewall prompt and is the owner's decision, so the operation has no key for it);
+//   BAD_ARGUMENT for a wrong key or value, BUSY when this radio sends already, FAILED with the model's sentence when the socket cannot be made. applied[0]: the TCP port. IQ_OUT_STOP: NO_CHANGE
+//   when this radio does not send. The producer is never slowed: a slow client drops samples and the facts count them. Fact radio.<n>.iqout = {running, udp, port, format, header, rate_hz,
+//   samples_in, samples_dropped, clients_accepted}. A radio that is removed stops its output; nothing is saved: after a restart every output is off.
+#define FOXAPP_OP_IQ_OUT_START           0x8924u /* addresses one radio (target): text JSON */
+#define FOXAPP_OP_IQ_OUT_STOP            0x8925u /* addresses one radio (target) */
+//   RADIOS THAT FOLLOW A MASTER (SETTINGS; core/radio_matrix_model.hpp FollowSet, SDRuno's follow / LO LOCK), LOCAL sessions only, not saved. A follower keeps the distance it had when it was linked: when
+//   the master's tuned frequency changes, the engine retunes the follower (and what follows it) to master + offset on its next control pass, through the ordinary SET_FREQUENCY, so a follower that is
+//   frequency-locked or cannot reach the frequency stays put and the fact says so. FOLLOW_SET: ival[0] the FOLLOWER radio 1..8, ival[1] its MASTER 1..8; applied[0]: the offset in Hz recorded now (follower
+//   minus master). NO_DEVICE for a radio that is not open, BAD_ARGUMENT for the same radio twice or a link that would make a cycle, BUSY when the follower follows another master already (FOLLOW_CLEAR first).
+//   FOLLOW_CLEAR: ival[0] the follower (0 = every link); NO_CHANGE when there is none. FOLLOW_LOCK: ival[0] the follower, ival[1] 1 lock (it stays while its master moves) / 0 unlock; NO_CHANGE when it is so
+//   already or the radio follows nothing. FOLLOW_KEEP: ival[0] the follower: the distance it has NOW (it was nudged) becomes its offset. Facts: matrix.rows = a JSON array with one row per open radio
+//   {radio, state, tuned_hz, mode, level_dbfs, muted, follows (0 none), locked, offset_hz, follow_note}; a radio that is closed or removed leaves every link it was in.
+#define FOXAPP_OP_FOLLOW_SET             0x8926u /* ival[0]: follower 1..8; ival[1]: master 1..8; applied[0]: the offset */
+#define FOXAPP_OP_FOLLOW_CLEAR           0x8927u /* ival[0]: follower (0 = all) */
+#define FOXAPP_OP_FOLLOW_LOCK            0x8928u /* ival[0]: follower; ival[1]: 1 lock / 0 unlock */
+#define FOXAPP_OP_FOLLOW_KEEP            0x8929u /* ival[0]: follower: the distance it has now is its offset */
+//   SBS (BASESTATION) TEXT OUT (SETTINGS; net/aircraft_out.hpp SbsOut): the aircraft tracks the plugins publish (CASCADE_TRACK_AIRCRAFT with a six-digit ICAO hex id and a position) as MSG,3 (airborne
+//   position: altitude in feet, latitude, longitude) and MSG,4 (velocity: ground speed in knots, track) lines on a TCP port, for the map programs that read this format. OFF until SBS_OUT_START
+//   (text: JSON {port 0..65535 (0 = the OS picks; the port is in applied[0])}); the server binds 127.0.0.1 ONLY (no key for a wider bind: the owner's decision), LOCAL sessions only, not saved. A line is
+//   sent when a track's position, altitude, speed or course changed (to about a metre); no callsign (MSG,1), squawk or any label is ever sent, and nothing is written to disk. BAD_ARGUMENT for a wrong
+//   key or value, BUSY when it is on, FAILED with the socket's sentence. SBS_OUT_STOP: NO_CHANGE when off. Fact sbs.out = {running, port, lines_sent, tracks_seen, clients_accepted}. The tracks come
+//   from what the front end hands the engine (the window's plugin poll): a headless engine with no window has none, so no line is sent there.
+#define FOXAPP_OP_SBS_OUT_START          0x892Au /* text JSON; applied[0]: the port; fact sbs.out */
+#define FOXAPP_OP_SBS_OUT_STOP           0x892Bu
+//   THE TRACK STORE (SETTINGS; core/track_store.hpp, positions kept for a chosen time and asked "as at T" with interpolation, for a replay), LOCAL sessions only. IN MEMORY ONLY: nothing is written to
+//   disk (the model's save / load are not wired: the positions of other people's aircraft and ships on disk is the owner's decision), OFF until enabled, not saved: every restart starts empty and off.
+//   TRACKS_CONFIG (text: JSON {enabled bool, retention_s 60..2592000 (default 21600, six hours), clear bool (drops every point)}; unknown key = BAD_ARGUMENT; NO_CHANGE when nothing differs). While enabled, once per
+//   control pass the engine adds to the store every track the front end hands it (the window's plugin poll: aircraft, vessels and stations with a position and an id of 1 to 24 of letters, digits and _ . / -),
+//   at the time the plugin last heard it (now minus ageMs), when its position changed (about a metre). A headless engine has no front end, so it stores nothing. TRACKS_READ (text: JSON {t unix seconds
+//   (default now), kind "aircraft" | "vessel" | "station" (default all), max 1..2000 (default 500)} for the picture at T; or {trail: {id, kind, t0, t1, max_points 2..2000}} for one track; or {range: true}
+//   for the first and last time held): the answer is the LOCAL fact tracks.read. Fact tracks.state = {enabled, retention_s, added, replaced, refused, too_old, evicted, tracks}.
+#define FOXAPP_OP_TRACKS_CONFIG          0x892Cu /* text JSON; fact tracks.state */
+#define FOXAPP_OP_TRACKS_READ            0x892Du /* text JSON; fact tracks.read */
+//   THE ADS-B COVERAGE GRID (SETTINGS; core/adsb_coverage.hpp: a heat map of the positions heard with an ageing weight and, per altitude band, the greatest distance heard in each bearing in the last 24 hours), LOCAL
+//   sessions only. IN MEMORY ONLY (the model's save / load are not called), OFF until enabled, not saved; disabling drops everything. COVERAGE_CONFIG (text: JSON {enabled bool, rx_lat -90..90, rx_lon -180..180
+//   (the receiver's position: GIVEN BY THE CALLER, never read from the GPS or the location of the machine; needed to enable), cell_deg 0.001..1 (0.05), half_life_s 3600..31536000 (3 days), clear bool}): while
+//   enabled, once per control pass every aircraft track the front end hands the engine with a position is added (altitude in feet from altM; NaN = the unknown band) when it moved. COVERAGE_READ (JSON:
+//   band -1..6 (-1 every band), max_cells 1..20000 (default 2000), min_weight (0.05)): the heat cells (centre, weight) and the range outline (kilometres per bearing bin) in the fact coverage.read; the
+//   receiver position is NOT in the answer. Fact coverage.state = {enabled, cells, added, bad_input, too_far, stale, future, max_range_km}.
+#define FOXAPP_OP_COVERAGE_CONFIG        0x892Eu /* text JSON; fact coverage.state */
+#define FOXAPP_OP_COVERAGE_READ          0x892Fu /* text JSON; fact coverage.read */
+//   NEEDED LIBRARIES (SETTINGS; engine/wire_b_needed_libs.hpp; the owner's needed-library rule), LOCAL sessions only, nothing written, nothing opened, copied or downloaded. The fact needed.libs is ALWAYS there: a JSON array
+//   with one row per thing the user must install or run before a source works (library id, source kind, name, file names looked for, minimum version, 64-bit, why, official page and its status (an unverified address is
+//   shown to nobody), install kind, folder note, numbered steps, licence, "FoxSDR does not include or supply it", fetch allowed, and "check": the last answer or null). NEEDED_LIB_CHECK (text: JSON {id (one library id;
+//   absent = every row), path (a folder or a FILE the user picked, judged only, never copied; for a vendor-library row only)}) looks AGAIN now, without a restart, by reading file HEADERS (nothing is loaded) and answers
+//   in "check": state found | not-found | wrong-32-bit | unusable | cannot-check, sentence, looked_in, found_in (a folder), file. BAD_ARGUMENT for an unknown id or key, or a path for another kind of row.
+//   applied[0]: the number of rows now "found".
+#define FOXAPP_OP_NEEDED_LIB_CHECK       0x8930u /* text JSON; fact needed.libs */
+// wire-b end
 // fact.plugin.<module file>.tx: ONE DECIMAL NUMBER, the bits of what the plate says about a module that declares CASCADE_CAP_TX_AUDIO (core::PluginRunner::txBits plus the two the
 // engine adds). The window turns them into the plate's sentence (gui::txPlateState); the engine never words it.
 #define FOXAPP_TXBIT_DECLARED  1u   /* the runner has a transmit-audio instance of it */
