@@ -56,4 +56,21 @@ All Slint and host strings are the classic's own words, already in the catalogue
 - A second link-request token that arrives while a question is up waits until the question is answered (as the classic).
 
 ## UNVERIFIED
-GATE_AND_UNVERIFIED
+### Gates (tip f5aeaa5b plus this record, Release, `D:/foxsdr-build/en-screen-j`, hidden desktop `FoxSDRGaps1`, `FOXSDR_FRAME_CAP_HZ=60`, a shared and slow machine)
+* Own tests: `test_slint_gaps1_host`, `test_slint_duties`, `test_slint_house_rules`, `test_i18n` pass; all 19 `slint_drive_gaps1-*` scripts pass (`100% tests passed out of 20`, with `gui_desktop_guard`), run again after the mutations were reversed.
+* Headless gate `ctest -L "headless|slint"` in four slices (1149 tests): slice 1-350 `99% tests passed, 3 tests failed out of 350` (test_airband_data, test_band_plan, test_converter_call_sites), slice 351-700 `2 tests failed out of 350` (test_page_resize_id, test_png_decode), slice 701-1050 `100% tests passed out of 350`, slice 1051-1550 `100% tests passed out of 99`. All five reds are the known false failures; none is mine.
+* GUI gate `-L gui` (363 tests): STARTED and STOPPED BY THE ORCHESTRATOR'S ORDER (usage limit) after 30 tests, all 30 passed. NOT RUN to the end: the other 333 tests. My own process was stopped by PID; the one `ctest` still running on the machine is another lane's.
+* Ledger: `ledger: 2379 rows, 753 asserted, 116 driven, 1510 not drivable, 0 unclassified`.
+* Real `%APPDATA%/foxsdr/config.json` sha256 `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3`, read at the end: unchanged. Nothing pushed, no outside connection, no download, FOXSDR_ALLOW_* never set; the owner's copy under `D:/foxsdr-build/show/` was not touched.
+
+### WHERE I STOPPED AND WHAT IS NEXT
+All eight brief rows and the fault cards are done and committed (65e2c322, f5aeaa5b, then this record). Next, in order: (1) run the rest of the GUI gate (`ctest -L gui -j3` through the launcher with a desktop of your own; `slint_drive_gaps1-*` already pass) and re-run each red alone; (2) run `tools/slint_clip_sweep.py` (not run: the new sheets and cards were checked on one screenshot each at 1280 x 800 only); (3) re-run `test_diagnostics` / `test_diagnostics_free` after a build at the final commit (the stamp reads HEAD); (4) at the merge, regenerate `src/core/lang_assets.hpp` and `docs/slint-drive-coverage.md`.
+
+### UNVERIFIED
+* The real Microsoft Store check and install (no Store copy; the canned `FOXSDR_FAKE_STORE_UPDATE` / `FOXSDR_FAKE_STORE_INSTALL` answers stood in) and that Windows' dialogs take the main window as owner.
+* The title rail's right-click and the real system menu on this frameless window (only the handle and the menu's entry count are read on the hidden desktop).
+* The live site's answer to a tester link (a canned answer stood in; nothing was sent) and the real link-request file written by the process boot (a copy of its format was seeded).
+* The engine's real start notices for the fault cards (stood in by `FOXSDR_FAKE_FAULT_NOTICES`); RE-ENABLE was read back as the host's own record of the id it sent, not as the engine re-enabling a real plugin.
+* The "Sound is muted" question with a real muting plugin (a made-up plugin name; the two keys' engine commands are the plugin kit's own).
+* Open reports folder and the real clipboard in the live window (a bounded run opens no folder and keeps the clipboard text in a stand-in).
+* The 33 translations of the one new key are machine-made and unchecked. The Store key's full label is elided on the card (tooltip carries it). Frame cost and the clip sweep were not measured.
