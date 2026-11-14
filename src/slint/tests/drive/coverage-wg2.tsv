@@ -1,0 +1,50 @@
+35	ASSERTED	system-look	Bench Classic XL picked in Theme: state gaps.counterscale == 2 (the counter figures are drawn at twice the size), back to Today: 1
+36	ASSERTED	system-look	Today's bench picked after XL: state gaps.counterscale == 1
+40	ASSERTED	system-look	Bench Classic XL: state gaps.readingscale == 14 (every reading 1.4 times), Today: 10
+156	ASSERTED	system-look	the Counter figures setting the XL theme saves is drawn: gaps.counterscale; gaps-counter-menu saves it by the menu
+158	ASSERTED	system-look	Enlarge every reading: state gaps.readingscale == 14
+1394	ASSERTED	system-look	counter figures drawn at the saved scale: state gaps.counterscale
+1396	ASSERTED	system-look	every reading drawn at the saved scale: state gaps.readingscale
+145	ASSERTED	wg2-size-keys	key ctrl+= and ctrl+- step cfg.interfaceScale 100 > 125 > 150 > 125 > 100 and the window follows (look.scale); ctrl+0 back to auto
+148	ASSERTED	system-look	Bench Classic XL: the Workbench palette (look.bg) with gaps.counterscale == 2, gaps.readingscale == 14, gaps.nudges == 0
+150	ASSERTED	system-look	Glass Cockpit: state look.bg == #070b0f and look.accent == #7df3ff
+151	ASSERTED	system-look	Daylight Lab: state look.bg == #cfd5dc and look.accent == #1d4ed8
+152	ASSERTED	system-look	Field Radio: state look.bg == #23271a and look.accent == #d6bf5e
+258	ASSERTED	wg2-bandplan	the Colour choice is saved (cfg.bandPlanPalette); what each palette paints is held by test_slint_host_bandpalette (the scratch profile has no band in view to read)
+269	ASSERTED	wg2-bandplan	choose Size Large / Medium / Small: state gaps.ribbonsize == 3 / 2 / 1, the ribbon tier the window draws
+270	ASSERTED	wg2-bandplan	choose Colour Vivid / Mono / Classic: state cfg.bandPlanPalette
+50	ASSERTED	wg2-meters	the meter menu pick (a seam calls its callback: a popup's rows are not reachable by label): state gaps.meterstyles
+52	ASSERTED	wg2-meters	style 0 (classic) picked for the sample rate meter: gaps.meterstyles == classic,...
+53	ASSERTED	wg2-meters	style 1 (needle) picked: gaps.meterstyles == needle,peak
+54	ASSERTED	wg2-meters	style 2 (led) picked: gaps.meterstyles == led,classic
+55	ASSERTED	wg2-meters	style 3 (peak) picked for the volume meter: gaps.meterstyles == led,peak
+162	ASSERTED	wg2-meters	each meter keeps its own style: SAMPLE RATE and VOLUME read back separately
+1318	ASSERTED	wg2-signal	expect Signal strength value contains dB while the generator runs
+1457	ASSERTED	wg2-diagnostics	click the pointer ledger tick: state gaps.ledger == 1 and gaps.ledgerline contains os cursor / client origin; off again: line empty
+1458	ASSERTED	gaps-misc	click Copy diagnostics: state gaps.diagcopies == 1 and the status line (one function, diag_copy.cpp)
+1460	ASSERTED	wg2-diagnostics	the SDRplay block (intro, key, status) is drawn: expect Run SDRplay diagnostic enabled
+1461	ASSERTED	wg2-diagnostics	click Run SDRplay diagnostic: the dialog opens (expect Run the diagnostic)
+1464	NOT_DRIVABLE	-	a readout: the warning words are held by test_slint_host_sdrplaydiag
+1465	ASSERTED	wg2-diagnostics	click Also test the bias tee: asks (expect Yes, switch it on); after a yes expect checked == true
+1466	ASSERTED	wg2-diagnostics	the bias question appears on the tick and goes on Cancel (expect Yes, switch it on, then the tick back unchecked)
+1467	ASSERTED	wg2-diagnostics	click Yes, switch it on: the box shows ticked and the stand-in child is started with the bias tee (state gaps.probebias == 1)
+1468	ASSERTED	wg2-diagnostics	click Cancel on the question: the bias tee stays off (expect Also test the bias tee checked == false)
+1469	ASSERTED	wg2-diagnostics	click Run the diagnostic: state gaps.probestarts counts the stand-in child, gaps.probereport reads its file
+1470	ASSERTED	wg2-diagnostics	click Cancel on the dialog: state gaps.probestarts unchanged
+4614	ASSERTED	wg2-diagnostics	the key runs the stand-in probe and its report is read; the real probe on an RSP is UNVERIFIED
+1383	ASSERTED	gaps-drop	a dropped list goes to the import (state gaps.drops, gaps.dropnote == list); the OS drag itself is UNVERIFIED
+1647	ASSERTED	gaps-drop	a dropped .xml is taken as a frequency list (state gaps.dropnote == list)
+1651	ASSERTED	gaps-drop	the same drop handler serves the TOOLS import (state gaps.dropnote == list)
+1384	ASSERTED	wg2-import	click Browse...: the stand-in choice (FOXSDR_FILE_PICK) arrives in the box (expect Import path value contains frequencies.xml); the real file chooser is UNVERIFIED
+1652	ASSERTED	wg2-import	the same Browse... key of the shared dialog
+1385	NOT_DRIVABLE	-	a readout: the waiting line's words are held by test_slint_host_signal (diskWaitLine)
+1653	NOT_DRIVABLE	-	a readout: the waiting line of the shared dialog
+1369	NOT_DRIVABLE	-	the moment a take is being closed is too short to catch from a script; the Saving label and the dead key are held by test_slint_host_signal
+1374	NOT_DRIVABLE	-	as row 1369, for the audio take
+1317	ASSERTED	gaps-deemph	choose each of the three, read back as state deemphasis
+1292	ASSERTED	gaps-sdrplay	click RESTART SDRPLAY SERVICE: the stand-in counts the call (UAC prompt UNVERIFIED)
+1293	NOT_DRIVABLE	-	a readout: the restart progress line
+1294	NOT_DRIVABLE	-	a readout: the restart outcome line
+1492	NOT_DRIVABLE	-	NOT DONE: the Slint host has no beta-tester usage recorder; see window-gaps-2.md
+274	ASSERTED	tools-bookmarks-options	click On the spectrum; state cfg.bookmarkMarkers false/true (the marks follow it)
+275	ASSERTED	tools-bookmarks-options	click Stack close names; state cfg.bookmarkStackNames false/true

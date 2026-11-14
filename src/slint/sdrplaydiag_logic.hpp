@@ -22,10 +22,10 @@ public:
 };
 
 // The real one: the program's own executable again with --sdrplay-probe (source::SdrPlayProbeChild).
-std::unique_ptr<ProbeRunner> makeProbeChildRunner();
+std::unique_ptr<ProbeRunner> makeProbeChildRunner();   // defined in sdrplaydiag_child.cpp: the product only, a test never links it
 // A STAND-IN for the child (a bounded run and every test): start() writes a small report file at once, running() stays true for `polls` looks, the exit code is 0. It never touches an SDRplay radio,
 // the service or the vendor API.
-std::unique_ptr<ProbeRunner> makeStandInRunner(int polls);   // sdrplaydiag_child.cpp (the product only: a test never links it)
+std::unique_ptr<ProbeRunner> makeStandInRunner(int polls);
 
 class SdrPlayDiag {
 public:

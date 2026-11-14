@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2379 | 716 | 117 | 1546 | 0 |
+| 2379 | 750 | 117 | 1512 | 0 |
 
-Of the 1491 rows that are controls (the 888 readout-like rows left out): 716 asserted, 117 driven without a read-back, 658 not drivable.
+Of the 1501 rows that are controls (the 878 readout-like rows left out): 750 asserted, 117 driven without a read-back, 634 not drivable.
 
-NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 71, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 2.
+NOT DRIVABLE by reason: readout 878, other 229, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 71, deferred 45, needs hardware 32, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 2.
 
 ## Per section
 
@@ -27,9 +27,9 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | Main window frame — BIAS TEE key | 2 | 0 | 0 | 2 | 1 | 0 |
 | Main window frame — TUNED - HERTZ counter | 10 | 2 | 1 | 7 | 6 | 0 |
 | Main window frame — Frequency editor (typed entry) | 1 | 0 | 0 | 1 | 0 | 0 |
-| Main window frame — Counter right-click menu | 7 | 0 | 0 | 7 | 1 | 0 |
+| Main window frame — Counter right-click menu | 7 | 3 | 0 | 4 | 1 | 0 |
 | Main window frame — GAIN / SQUELCH / VOLUME dials | 7 | 3 | 0 | 4 | 2 | 0 |
-| Main window frame — SAMPLE RATE and VOLUME meters | 8 | 0 | 0 | 8 | 3 | 0 |
+| Main window frame — SAMPLE RATE and VOLUME meters | 8 | 5 | 0 | 3 | 3 | 0 |
 | Main window frame — Sound muted banner (deck) | 2 | 0 | 0 | 2 | 1 | 0 |
 | Main window frame — FUNCTION SELECT rail (left column) | 15 | 9 | 0 | 6 | 5 | 0 |
 | Main window frame — Folded strips | 2 | 1 | 0 | 1 | 0 | 0 |
@@ -41,9 +41,9 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | Main window frame — Turn on the bias tee? (dialog) | 3 | 0 | 0 | 3 | 1 | 0 |
 | Main window frame — FoxSDR did not close normally last time (diagnostics offer) | 5 | 0 | 0 | 5 | 1 | 0 |
 | Main window frame — Link this FoxSDR? (beta tester link prompt) | 5 | 0 | 0 | 5 | 2 | 0 |
-| Main window frame — Shortcuts | 27 | 9 | 1 | 17 | 0 | 0 |
+| Main window frame — Shortcuts | 27 | 10 | 1 | 16 | 0 | 0 |
 | Main window frame — Themes and sizes | 6 | 6 | 0 | 0 | 0 | 0 |
-| Main window frame — Themes and sizes: the Display section's settings | 11 | 10 | 0 | 1 | 0 | 0 |
+| Main window frame — Themes and sizes: the Display section's settings | 11 | 11 | 0 | 0 | 0 | 0 |
 | Spectrum and waterfall — Spectrum panel (top of the centre of the Receiver view) | 16 | 1 | 0 | 15 | 15 | 0 |
 | Spectrum and waterfall — Waterfall panel (bottom of the centre of the Receiver view) | 12 | 0 | 0 | 12 | 11 | 0 |
 | Spectrum and waterfall — Mouse and keyboard gestures on the spectrum | 14 | 4 | 0 | 10 | 4 | 0 |
@@ -53,8 +53,8 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | Spectrum and waterfall — Display block (end of both right-click menus) | 7 | 2 | 0 | 5 | 2 | 0 |
 | Spectrum and waterfall — Markers window (List markers...) | 14 | 0 | 1 | 13 | 6 | 0 |
 | Spectrum and waterfall — Waterfall markers drawn on the plots | 4 | 0 | 0 | 4 | 4 | 0 |
-| Spectrum and waterfall — Overlays on the spectrum from other features | 11 | 0 | 0 | 11 | 11 | 0 |
-| Spectrum and waterfall — Settings that change what the centre draws (live elsewhere) | 8 | 0 | 1 | 7 | 1 | 0 |
+| Spectrum and waterfall — Overlays on the spectrum from other features | 11 | 1 | 0 | 10 | 10 | 0 |
+| Spectrum and waterfall — Settings that change what the centre draws (live elsewhere) | 8 | 4 | 1 | 3 | 1 | 0 |
 | DECODE bank and plugin host — DECODE group caption | 2 | 1 | 0 | 1 | 1 | 0 |
 | DECODE bank and plugin host — Plugin store (rail row) | 5 | 2 | 0 | 3 | 3 | 0 |
 | DECODE bank and plugin host — Disabled (retired plugins), under the store row | 6 | 0 | 0 | 6 | 3 | 0 |
@@ -141,16 +141,16 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | SIGNAL bank — Source (rail section): Airspy panel | 10 | 0 | 0 | 10 | 2 | 0 |
 | SIGNAL bank — Source (rail section): converter | 8 | 4 | 0 | 4 | 4 | 0 |
 | SIGNAL bank — Source (rail section): frequency correction | 7 | 1 | 0 | 6 | 5 | 0 |
-| SIGNAL bank — Source (rail section): SDRplay service restart | 3 | 0 | 0 | 3 | 2 | 0 |
+| SIGNAL bank — Source (rail section): SDRplay service restart | 3 | 1 | 0 | 2 | 0 | 0 |
 | SIGNAL bank — Turn on the bias tee? (modal dialog) | 7 | 0 | 0 | 7 | 3 | 0 |
 | SIGNAL bank — Radio setup page (first-run / driver / find my radio page) | 10 | 2 | 0 | 8 | 4 | 0 |
-| SIGNAL bank — Radio (rail section) | 10 | 2 | 0 | 8 | 3 | 0 |
+| SIGNAL bank — Radio (rail section) | 10 | 4 | 0 | 6 | 2 | 0 |
 | SIGNAL bank — Audio filters (rail section) | 9 | 5 | 1 | 3 | 2 | 0 |
 | SIGNAL bank — Sinks (rail section: audio output) | 7 | 1 | 0 | 6 | 4 | 0 |
 | SIGNAL bank — Transmit (rail row) | 2 | 1 | 0 | 1 | 1 | 0 |
 | SIGNAL bank — TRANSMIT page | 25 | 7 | 0 | 18 | 8 | 0 |
 | SIGNAL bank — Recorder (rail section) | 15 | 4 | 0 | 11 | 6 | 0 |
-| SIGNAL bank — Frequency-list import dialog | 7 | 2 | 1 | 4 | 2 | 0 |
+| SIGNAL bank — Frequency-list import dialog | 7 | 4 | 1 | 2 | 1 | 0 |
 | SYSTEM bank — Display | 17 | 13 | 0 | 4 | 3 | 0 |
 | SYSTEM bank — Language & country | 9 | 4 | 0 | 5 | 3 | 0 |
 | SYSTEM bank — Frequency correction | 7 | 1 | 0 | 6 | 5 | 0 |
@@ -158,11 +158,11 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | SYSTEM bank — Update banner and team messages (top of the rail column, every bank) | 9 | 0 | 0 | 9 | 0 | 0 |
 | SYSTEM bank — Serial ports | 6 | 1 | 1 | 4 | 3 | 0 |
 | SYSTEM bank — Key bindings | 7 | 2 | 0 | 5 | 5 | 0 |
-| SYSTEM bank — Diagnostics | 13 | 2 | 0 | 11 | 6 | 0 |
-| SYSTEM bank — SDRplay diagnostic dialog (window, 520 px, closable) | 7 | 0 | 0 | 7 | 1 | 0 |
+| SYSTEM bank — Diagnostics | 13 | 6 | 0 | 7 | 5 | 0 |
+| SYSTEM bank — SDRplay diagnostic dialog (window, 520 px, closable) | 7 | 6 | 0 | 1 | 0 | 0 |
 | SYSTEM bank — "FoxSDR did not close normally last time" dialog (520 px) | 4 | 0 | 0 | 4 | 1 | 0 |
 | SYSTEM bank — Usage reporting | 7 | 1 | 0 | 6 | 4 | 0 |
-| SYSTEM bank — Beta tester | 11 | 0 | 0 | 11 | 6 | 0 |
+| SYSTEM bank — Beta tester | 11 | 0 | 0 | 11 | 5 | 0 |
 | SYSTEM bank — "Link this FoxSDR?" window (460 px, closable) | 3 | 0 | 0 | 3 | 1 | 0 |
 | SYSTEM bank — Full-page screens: Request a feature (page) | 9 | 0 | 0 | 9 | 5 | 0 |
 | SYSTEM bank — Full-page screens: Report a bug or dislike (page) | 19 | 0 | 0 | 19 | 9 | 0 |
@@ -173,8 +173,8 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | TOOLS bank — Receiver position controls (shared: Radar fold, radar-scope empty state, map pages) | 15 | 3 | 0 | 12 | 5 | 0 |
 | TOOLS bank — Radar scope (full-window mode) | 31 | 9 | 0 | 22 | 17 | 0 |
 | TOOLS bank — Radar data panel (LCD) - three tabs | 15 | 9 | 0 | 6 | 6 | 0 |
-| TOOLS bank — Bookmarks (rail section) | 31 | 14 | 2 | 15 | 6 | 0 |
-| TOOLS bank — Import a frequency list (dialog) | 8 | 2 | 0 | 6 | 4 | 0 |
+| TOOLS bank — Bookmarks (rail section) | 31 | 15 | 2 | 14 | 6 | 0 |
+| TOOLS bank — Import a frequency list (dialog) | 8 | 4 | 0 | 4 | 2 | 0 |
 | TOOLS bank — Scanner (rail section) | 14 | 10 | 1 | 3 | 1 | 0 |
 | TOOLS bank — Airband (rail section) | 35 | 17 | 4 | 14 | 9 | 0 |
 | TOOLS bank — Map page (window per track-source plugin) | 17 | 0 | 0 | 17 | 5 | 0 |
@@ -201,7 +201,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
 | 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 96 | 48 | 0 | 48 | 35 | 0 |
 | 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 107 | 70 | 9 | 28 | 19 | 0 |
-| SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md) | 22 | 18 | 3 | 1 | 0 | 0 |
+| SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md) | 22 | 19 | 3 | 0 | 0 | 0 |
 | Lane S1 (docs/multi-radio-records/screen-s1.md; rows 4500 and up are this lane's) | 23 | 20 | 0 | 3 | 0 | 0 |
 | Screen lane C - tuning, scanning, memories and controls (rows 4800 and up are this lane's; docs/multi-radio-records/screen-c.md) | 23 | 20 | 2 | 1 | 0 | 0 |
 | Lane B (docs/multi-radio-records/screen-b.md; rows 4700 and up are this lane's) | 20 | 20 | 0 | 0 | 0 | 0 |
@@ -279,12 +279,12 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 34 | Menu title | readout | NOT DRIVABLE | - | a readout, not a control |
-| 35 | Enlarge figures | menu item (checked when on) | NOT DRIVABLE | - | deferred: the counter scale is the interface-size setting of phase 2; the items are in the menu and log their request |
-| 36 | Normal size | menu item (checked when on) | NOT DRIVABLE | - | deferred: the counter scale is the interface-size setting of phase 2; the items are in the menu and log their request |
+| 35 | Enlarge figures | menu item (checked when on) | DRIVEN+ASSERTED | system-look | Bench Classic XL picked in Theme: state gaps.counterscale == 2 (the counter figures are drawn at twice the size), back to Today: 1 |
+| 36 | Normal size | menu item (checked when on) | DRIVEN+ASSERTED | system-look | Today's bench picked after XL: state gaps.counterscale == 1 |
 | 37 | Show tuner switches | menu item (checkmark) | NOT DRIVABLE | - | a counter right-click menu row: no right-click verb |
 | 38 | Counter face | menu item (submenu) | NOT DRIVABLE | - | a counter right-click submenu row: no right-click verb |
 | 39 | Nixie tubes / Neon / Plain | menu item (radio-style check) | NOT DRIVABLE | - | a counter right-click menu row (Nixie / Neon / Plain): no right-click verb |
-| 40 | Enlarge every reading | menu item (checkmark) | NOT DRIVABLE | - | deferred: the counter scale is the interface-size setting of phase 2; the items are in the menu and log their request |
+| 40 | Enlarge every reading | menu item (checkmark) | DRIVEN+ASSERTED | system-look | Bench Classic XL: state gaps.readingscale == 14 (every reading 1.4 times), Today: 10 |
 
 ### Main window frame — GAIN / SQUELCH / VOLUME dials
 
@@ -304,12 +304,12 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 |---|---|---|---|---|---|
 | 48 | Sample rate meter | meter | NOT DRIVABLE | - | a readout, not a control |
 | 49 | Volume meter | meter | NOT DRIVABLE | - | a readout, not a control |
-| 50 | Meter right-click menu | context menu | NOT DRIVABLE | - | deferred: no deck meter on Workbench; the Meter component takes menu-requested for the instruments of phase 3 |
+| 50 | Meter right-click menu | context menu | DRIVEN+ASSERTED | wg2-meters | the meter menu pick (a seam calls its callback: a popup's rows are not reachable by label): state gaps.meterstyles |
 | 51 | Meter hover hint | tooltip | NOT DRIVABLE | - | a readout, not a control |
-| 52 | Classic | menu item (check) | NOT DRIVABLE | - | a meter right-click menu row: not on the main screen (the Meter component's style, instruments of phase 3) |
-| 53 | Analogue needle | menu item (check) | NOT DRIVABLE | - | a meter right-click menu row: not on the main screen (the Meter component's style, instruments of phase 3) |
-| 54 | LED ladder | menu item (check) | NOT DRIVABLE | - | a meter right-click menu row: not on the main screen (the Meter component's style, instruments of phase 3) |
-| 55 | Peak meter | menu item (check) | NOT DRIVABLE | - | a meter right-click menu row: not on the main screen (the Meter component's style, instruments of phase 3) |
+| 52 | Classic | menu item (check) | DRIVEN+ASSERTED | wg2-meters | style 0 (classic) picked for the sample rate meter: gaps.meterstyles == classic,...; a meter right-click menu row: not on the main screen (the Meter component's style, instruments of phase 3) |
+| 53 | Analogue needle | menu item (check) | DRIVEN+ASSERTED | wg2-meters | style 1 (needle) picked: gaps.meterstyles == needle,peak; a meter right-click menu row: not on the main screen (the Meter component's style, instruments of phase 3) |
+| 54 | LED ladder | menu item (check) | DRIVEN+ASSERTED | wg2-meters | style 2 (led) picked: gaps.meterstyles == led,classic; a meter right-click menu row: not on the main screen (the Meter component's style, instruments of phase 3) |
+| 55 | Peak meter | menu item (check) | DRIVEN+ASSERTED | wg2-meters | style 3 (peak) picked for the volume meter: gaps.meterstyles == led,peak; a meter right-click menu row: not on the main screen (the Meter component's style, instruments of phase 3) |
 
 ### Main window frame — Sound muted banner (deck)
 
@@ -459,7 +459,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 142 | F7 | Settings and key bindings - goes to SYSTEM and opens the Key bindings row (openSettings) | DRIVEN+ASSERTED | main-shortcuts.txt | key f7; state bank == 4 (the Key bindings section it opens is not read back) |
 | 143 | F12 | Always saves a screenshot (hard-wired, not in the table) | NOT DRIVABLE | - | writes a screenshot file only, nothing to read back (the shot verb covers the capture itself) |
 | 144 | Esc | Cancels the counter editor, the key-capture, a dialog; leaves Scope mode when nothing is being edited and no popup is open | DRIVEN | main-editor-probe.txt | press a counter digit to open the editor, key escape; nothing read back (it clears editor flags that have no engine state) |
-| 145 | Ctrl+= / Ctrl+- / Ctrl+0 | Interface size: step up / step down through 100-250%, Ctrl+0 back to Auto. Not rebindable; ignored while text is being typed | NOT DRIVABLE | - | deferred: Ctrl+0 (back to Auto) is answered and applied: key-dispatch names uiSizeAuto, main.cpp saves interfaceScale = auto through SystemPublisher::setInterfaceSize and the window's look moves the scale on the next tick (docs 6.61, drive system-look.txt: pin 150%, Ctrl+0, scale 1.00). Ctrl+= and Ctrl+- are NOT the interface size here: the key table binds them to the band zoom (Ctrl+Plus / Ctrl+Minus), so stepping the size through 100-250% by the keyboard stays deferred; the dropdown steps it |
+| 145 | Ctrl+= / Ctrl+- / Ctrl+0 | Interface size: step up / step down through 100-250%, Ctrl+0 back to Auto. Not rebindable; ignored while text is being typed | DRIVEN+ASSERTED | wg2-size-keys | key ctrl+= and ctrl+- step cfg.interfaceScale 100 > 125 > 150 > 125 > 100 and the window follows (look.scale); ctrl+0 back to auto |
 | 146 | Mouse wheel over a counter figure, a dial | Tunes that digit / turns the dial | NOT DRIVABLE | - | the scripted input has no wheel verb |
 
 ### Main window frame — Themes and sizes
@@ -467,11 +467,11 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 147 | Today's bench () | The default brass-and-enamel bench; serif ("bench-serif") fonts, Nixie counter | DRIVEN+ASSERTED | system-look.txt | choose "Theme" "Today's bench"; state cfg.uiTheme == today; look.bg == "#15171b", look.face == nixie after Today's bench (system-look.txt) |
-| 148 | Bench Classic XL () | Today's palette, counter figures doubled, switches put away, every reading 1.4x | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Bench Classic XL"; state cfg.uiTheme == classic-xl (the look is saved, not applied: the row is DEFERRED, the setting is real) |
+| 148 | Bench Classic XL () | Today's palette, counter figures doubled, switches put away, every reading 1.4x | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Bench Classic XL"; state cfg.uiTheme == classic-xl (the look is saved, not applied: the row is DEFERRED, the setting is real); Bench Classic XL: the Workbench palette (look.bg) with gaps.counterscale == 2, gaps.readingscale == 14, gaps.nudges == 0 |
 | 149 | Night Watch () | Dark red-black palette with red sheen/highlights (preserves night vision); mono fonts, flat keys | DRIVEN+ASSERTED | system-look.txt | choose "Theme" "Night Watch"; state cfg.uiTheme == night; look.bg == "#070303", look.accent == "#ff6a4c", look.face == neon after Night Watch (system-look.txt) |
-| 150 | Glass Cockpit () | Dark blue-grey; sans UI font, condensed captions, chrome knobs, radius 8 | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Glass Cockpit"; state cfg.uiTheme == glass (the look is saved, not applied: the row is DEFERRED, the setting is real) |
-| 151 | Daylight Lab () | Light grey/white; sans fonts, chrome knobs, radius 6 | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Daylight Lab"; state cfg.uiTheme == daylight (the look is saved, not applied: the row is DEFERRED, the setting is real) |
-| 152 | Field Radio () | Olive/khaki; mono body with stencil captions | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Field Radio"; state cfg.uiTheme == field (the look is saved, not applied: the row is DEFERRED, the setting is real) |
+| 150 | Glass Cockpit () | Dark blue-grey; sans UI font, condensed captions, chrome knobs, radius 8 | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Glass Cockpit"; state cfg.uiTheme == glass (the look is saved, not applied: the row is DEFERRED, the setting is real); Glass Cockpit: state look.bg == #070b0f and look.accent == #7df3ff |
+| 151 | Daylight Lab () | Light grey/white; sans fonts, chrome knobs, radius 6 | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Daylight Lab"; state cfg.uiTheme == daylight (the look is saved, not applied: the row is DEFERRED, the setting is real); Daylight Lab: state look.bg == #cfd5dc and look.accent == #1d4ed8 |
+| 152 | Field Radio () | Olive/khaki; mono body with stencil captions | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Field Radio"; state cfg.uiTheme == field (the look is saved, not applied: the row is DEFERRED, the setting is real); Field Radio: state look.bg == #23271a and look.accent == #d6bf5e |
 
 ### Main window frame — Themes and sizes: the Display section's settings
 
@@ -480,13 +480,13 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 153 | Interface size | dropdown "Interface size" | DRIVEN+ASSERTED | system-look.txt | choose "Interface size" "125%"; state cfg.interfaceScale == 125; choose "Interface size" "200%": look.scale == 2.00 (system-look.txt) |
 | 154 | Theme | dropdown "Theme" | DRIVEN+ASSERTED | system-look.txt | choose "Theme" x6; state cfg.uiTheme and the preset fields; expect "Theme" value; look.bg / look.face per theme (system-look.txt) |
 | 155 | Frequency display | dropdown "Frequency display" | DRIVEN+ASSERTED | system-display.txt | choose "Frequency display" Neon / Plain / Nixie tubes; state cfg.tunerDisplayStyle |
-| 156 | Counter figures | dropdown "Counter figures" | DRIVEN+ASSERTED | system-display.txt | choose "Counter figures" Enlarged figures / Normal size; state cfg.counterScale |
+| 156 | Counter figures | dropdown "Counter figures" | DRIVEN+ASSERTED | system-display.txt | choose "Counter figures" Enlarged figures / Normal size; state cfg.counterScale; the Counter figures setting the XL theme saves is drawn: gaps.counterscale; gaps-counter-menu saves it by the menu |
 | 157 | Tuner switches | checkbox "Tuner switches" | DRIVEN+ASSERTED | system-display.txt | click "Tuner switches" x2; state cfg.counterSwitches; expect checked |
-| 158 | Enlarge every reading | checkbox | DRIVEN+ASSERTED | system-display.txt | click "Enlarge every reading" x2; state cfg.readingsScale; expect checked |
+| 158 | Enlarge every reading | checkbox | DRIVEN+ASSERTED | system-display.txt | click "Enlarge every reading" x2; state cfg.readingsScale; expect checked; Enlarge every reading: state gaps.readingscale == 14 |
 | 159 | Min dB / Max dB | slider x2 | DRIVEN+ASSERTED | system-display-map.txt | slider "Min dB" 0.1, slider "Max dB" 0.95; state dbMin < -125, state dbMax > 5 |
 | 160 | Aircraft icons | slider | DRIVEN+ASSERTED | system-display-map.txt | slider "Aircraft icons" 0.9 then 0.0; state cfg.aircraftIconPx > 70 then < 25 |
 | 161 | Trail width | slider () | DRIVEN+ASSERTED | system-display-map.txt | slider "Trail width" 0.5; state cfg.mapTrailWidthPx > 8 |
-| 162 | Meter style (x2) | right-click menu on each deck meter | NOT DRIVABLE | - | deferred: no deck meter on Workbench |
+| 162 | Meter style (x2) | right-click menu on each deck meter | DRIVEN+ASSERTED | wg2-meters | each meter keeps its own style: SAMPLE RATE and VOLUME read back separately |
 | 163 | Band plan | checkbox + size/colour/region combos | DRIVEN+ASSERTED | system-display-map.txt | click "Band plan"#1 x2; state cfg.bandPlanOverlay true/false (size and colour: rows 1400, 1401) |
 
 ### Spectrum and waterfall — Spectrum panel (top of the centre of the Receiver view)
@@ -632,7 +632,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 257 | Band-plan ribbon | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
-| 258 | Band-plan palette | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 258 | Band-plan palette | overlay/marker | DRIVEN+ASSERTED | wg2-bandplan | the Colour choice is saved (cfg.bandPlanPalette); what each palette paints is held by test_slint_host_bandpalette (the scratch profile has no band in view to read) |
 | 259 | Bookmark ticks | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 260 | Bookmark names | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 261 | Plugin mark: point | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
@@ -648,13 +648,13 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 268 | Band plan | checkbox | DRIVEN | main-spectrum-keys.txt | click the toolbar's Band plan key twice; only expect enabled: the toggle has no engine state and the key has no checked flag |
-| 269 | Size | dropdown/combo | NOT DRIVABLE | - | deferred: the Display and Bookmarks section bodies are phase-3 banks |
-| 270 | Colour | dropdown/combo | NOT DRIVABLE | - | deferred: the Display and Bookmarks section bodies are phase-3 banks |
+| 269 | Size | dropdown/combo | DRIVEN+ASSERTED | wg2-bandplan | choose Size Large / Medium / Small: state gaps.ribbonsize == 3 / 2 / 1, the ribbon tier the window draws |
+| 270 | Colour | dropdown/combo | DRIVEN+ASSERTED | wg2-bandplan | choose Colour Vivid / Mono / Classic: state cfg.bandPlanPalette |
 | 271 | Plan status text | readout | NOT DRIVABLE | - | a readout, not a control |
 | 272 | Min dB | slider | NOT DRIVABLE | - | a slider in the right-click Display block: no right-click verb |
 | 273 | Max dB | slider | NOT DRIVABLE | - | a slider in the right-click Display block: no right-click verb |
-| 274 | On the spectrum | checkbox | NOT DRIVABLE | - | deferred: the Display and Bookmarks section bodies are phase-3 banks |
-| 275 | Stack close names | checkbox | NOT DRIVABLE | - | deferred: the Display and Bookmarks section bodies are phase-3 banks |
+| 274 | On the spectrum | checkbox | DRIVEN+ASSERTED | tools-bookmarks-options | click On the spectrum; state cfg.bookmarkMarkers false/true (the marks follow it) |
+| 275 | Stack close names | checkbox | DRIVEN+ASSERTED | tools-bookmarks-options | click Stack close names; state cfg.bookmarkStackNames false/true |
 
 ### DECODE bank and plugin host — DECODE group caption
 
@@ -2106,9 +2106,9 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1292 | RESTART SDRPLAY SERVICE | button | NOT DRIVABLE | - | deferred: not found in signal_bank.slint: signal_logic builds the key (sdrplay_key_shown / _label / _enabled) but the Slint SourceModel has no field for it and SourceBody draws no such key; the elevated restart is a local helper |
-| 1293 | Restart progress | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1294 | Restart outcome | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1292 | RESTART SDRPLAY SERVICE | button | DRIVEN+ASSERTED | gaps-sdrplay | click RESTART SDRPLAY SERVICE: the stand-in counts the call (UAC prompt UNVERIFIED) |
+| 1293 | Restart progress | readout | NOT DRIVABLE | - | a readout: the restart progress line |
+| 1294 | Restart outcome | readout | NOT DRIVABLE | - | a readout: the restart outcome line |
 
 ### SIGNAL bank — Turn on the bias tee? (modal dialog)
 
@@ -2146,8 +2146,8 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 1314 | VFO | slider | NOT DRIVABLE | - | relocated: no offset slider in the Radio body; the tuned band on the spectrum (click or drag -> FOXAPP_OP_VFO_TO_ABSOLUTE) and the counter set the VFO (a judgement: the +-500 kHz slider itself is not drawn) |
 | 1315 | Bandwidth | dropdown/combo | DRIVEN+ASSERTED | signal-radio | slider Passband 0.1 then 0.9; state bandwidthHz < 100000, > 3000, then > 120000 (the Passband slider takes the width list's place) |
 | 1316 | Squelch | slider | NOT DRIVABLE | - | relocated: the strip's SQUELCH lane, -120..0 dB, with its AUTO key (row 44) |
-| 1317 | De-emph | dropdown/combo | NOT DRIVABLE | - | deferred: not found in signal_bank.slint (nor in the Radio body of main.slint): no FM de-emphasis choice is drawn |
-| 1318 | Signal strength | meter | NOT DRIVABLE | - | a readout, not a control |
+| 1317 | De-emph | dropdown/combo | DRIVEN+ASSERTED | gaps-deemph | choose each of the three, read back as state deemphasis |
+| 1318 | Signal strength | meter | DRIVEN+ASSERTED | wg2-signal | expect Signal strength value contains dB while the generator runs |
 | 1319 | Stereo | checkbox | DRIVEN+ASSERTED | signal-radio | click Stereo; state stereo == 0; click; state stereo == 1; expect checked |
 | 1320 | Stereo state | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
 | 1321 | RDS block | readout | NOT DRIVABLE | - | a readout, not a control |
@@ -2223,12 +2223,12 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 1366 | Record folder | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1367 | Record IQ | button (full width) | DRIVEN+ASSERTED | signal-recorder | click Record IQ; state recordingIq == 1; state count.recordings >= 1 |
 | 1368 | Starting IQ | button | NOT DRIVABLE | - | the Starting IQ state is too short to catch reliably on the worker; its cancel is not driven |
-| 1369 | Saving (IQ) | button (disabled) | NOT DRIVABLE | - | deferred: not found in signal_bank.slint: RecorderModel has no finalising state, so the key reads 'Record IQ' while the last take is still being written |
+| 1369 | Saving (IQ) | button (disabled) | NOT DRIVABLE | - | the moment a take is being closed is too short to catch from a script; the Saving label and the dead key are held by test_slint_host_signal |
 | 1370 | Stop IQ | button | DRIVEN+ASSERTED | signal-recorder | click Stop IQ; state recordingIq == 0; expect Record IQ enabled equals true |
 | 1371 | IQ progress | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1372 | Record audio | button (full width) | DRIVEN+ASSERTED | signal-recorder | click Record audio; state recordingAudio == 1; state count.recordings >= 1 |
 | 1373 | Starting audio | button | NOT DRIVABLE | - | the Starting audio state is too short to catch reliably on the worker; its cancel is not driven |
-| 1374 | Saving (audio) | button (disabled) | NOT DRIVABLE | - | deferred: not found in signal_bank.slint: RecorderModel has no finalising state, so the key reads 'Record audio' while the last take is still being written |
+| 1374 | Saving (audio) | button (disabled) | NOT DRIVABLE | - | as row 1369, for the audio take |
 | 1375 | Stop audio | button | DRIVEN+ASSERTED | signal-recorder | click Stop audio; state recordingAudio == 0; expect Record audio enabled equals true |
 | 1376 | Audio progress | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1377 | Muted warning | readout | NOT DRIVABLE | - | a readout, not a control |
@@ -2242,9 +2242,9 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 1380 | Dialog | dialog | DRIVEN+ASSERTED | signal-recorder | click Import; expect Browse... enabled equals true (the dialog opened) |
 | 1381 | Reason line | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1382 | Preset note | readout | DRIVEN+ASSERTED | tools-airband-import.txt | the dialog opened for the preset: the rows of the typed path land in the preset Towers (the preset line itself is read by test_slint_signal) |
-| 1383 | Drop zone | drag/gesture | NOT DRIVABLE | - | deferred: drawn as words only; no file-drop event is wired into the Slint window (not found in signal_bank.slint, main.slint or main.cpp), so a dropped file imports nothing; the path field is the way in |
-| 1384 | or / Browse... | button | NOT DRIVABLE | - | deferred: the OS file chooser: a path field takes its place (Enter imports: FOXAPP_OP_BOOKMARK_IMPORT_FILE for a frequency list, SELECT_SOURCE 'file:' for an I/Q recording); the Browse key is drawn and calls import-open, the host's local pickFile |
-| 1385 | Reading line | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1383 | Drop zone | drag/gesture | DRIVEN+ASSERTED | gaps-drop | a dropped list goes to the import (state gaps.drops, gaps.dropnote == list); the OS drag itself is UNVERIFIED |
+| 1384 | or / Browse... | button | DRIVEN+ASSERTED | wg2-import | click Browse...: the stand-in choice (FOXSDR_FILE_PICK) arrives in the box (expect Import path value contains frequencies.xml); the real file chooser is UNVERIFIED |
+| 1385 | Reading line | readout | NOT DRIVABLE | - | a readout: the waiting line's words are held by test_slint_host_signal (diskWaitLine) |
 | 1386 | Cancel | button | DRIVEN | signal-recorder | click Cancel; the dialog closing is not read back (no engine state, no element left to expect absent) |
 
 ### SYSTEM bank — Display
@@ -2258,9 +2258,9 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 1391 | Min dB | slider | DRIVEN+ASSERTED | system-display-map.txt | slider "Min dB" 0.1; state dbMin < -125 |
 | 1392 | Max dB | slider | DRIVEN+ASSERTED | system-display-map.txt | slider "Max dB" 0.95; state dbMax > 5 |
 | 1393 | Frequency display | dropdown/combo | DRIVEN+ASSERTED | system-display.txt | choose "Frequency display" Neon / Plain / Nixie tubes; state cfg.tunerDisplayStyle |
-| 1394 | Counter figures | dropdown/combo | DRIVEN+ASSERTED | system-display.txt | choose "Counter figures" Enlarged figures / Normal size; state cfg.counterScale |
+| 1394 | Counter figures | dropdown/combo | DRIVEN+ASSERTED | system-display.txt | choose "Counter figures" Enlarged figures / Normal size; state cfg.counterScale; counter figures drawn at the saved scale: state gaps.counterscale |
 | 1395 | Tuner switches | checkbox | DRIVEN+ASSERTED | system-display.txt | click "Tuner switches" x2; state cfg.counterSwitches; expect checked |
-| 1396 | Enlarge every reading | checkbox | DRIVEN+ASSERTED | system-display.txt | click "Enlarge every reading" x2; state cfg.readingsScale; expect checked |
+| 1396 | Enlarge every reading | checkbox | DRIVEN+ASSERTED | system-display.txt | click "Enlarge every reading" x2; state cfg.readingsScale; expect checked; every reading drawn at the saved scale: state gaps.readingscale |
 | 1397 | Aircraft icons | slider | DRIVEN+ASSERTED | system-display-map.txt | slider "Aircraft icons" 0.9 then 0.0; state cfg.aircraftIconPx |
 | 1398 | Trail width | slider | DRIVEN+ASSERTED | system-display-map.txt | slider "Trail width" 0.5; state cfg.mapTrailWidthPx > 8 |
 | 1399 | Band plan | checkbox | DRIVEN+ASSERTED | system-display-map.txt | click "Band plan"#1 x2; state cfg.bandPlanOverlay |
@@ -2356,11 +2356,11 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 1454 | Also write a full memory dump beside a crash report | checkbox | DRIVEN+ASSERTED | system-diagnostics.txt | click the checkbox x2; state cfg.diagnosticsMinidump |
 | 1455 | Log path | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1456 | Reports path | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1457 | Show the pointer ledger across the top of the window | checkbox | NOT DRIVABLE | - | deferred: Tick drawn (diag-ledger, ledger, ledger-note) but system_logic has no effect or field for it: the pointer ledger is window-bound state of the ImGui build (header comment: not covered) |
-| 1458 | Copy diagnostics | button | NOT DRIVABLE | - | deferred: small Key drawn (diag-copy, bundle-status) but system_logic has no effect for it: the clipboard and the diagnostics bundle are window-bound (header comment: not covered) |
+| 1457 | Show the pointer ledger across the top of the window | checkbox | DRIVEN+ASSERTED | wg2-diagnostics | click the pointer ledger tick: state gaps.ledger == 1 and gaps.ledgerline contains os cursor / client origin; off again: line empty |
+| 1458 | Copy diagnostics | button | DRIVEN+ASSERTED | gaps-misc | click Copy diagnostics: state gaps.diagcopies == 1 and the status line (one function, diag_copy.cpp) |
 | 1459 | Open reports folder | button | NOT DRIVABLE | - | opens a folder; withheld in a bounded run |
-| 1460 | SDRplay intro | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1461 | Run SDRplay diagnostic | button | NOT DRIVABLE | - | deferred: the Key (diag-sdrplay, sdrplay-enabled) is drawn only with sdrplay-text and has no effect in system_logic; no probe dialog follows (rows below) |
+| 1460 | SDRplay intro | readout | DRIVEN+ASSERTED | wg2-diagnostics | the SDRplay block (intro, key, status) is drawn: expect Run SDRplay diagnostic enabled |
+| 1461 | Run SDRplay diagnostic | button | DRIVEN+ASSERTED | wg2-diagnostics | click Run SDRplay diagnostic: the dialog opens (expect Run the diagnostic) |
 | 1462 | What exactly is in a report? | button (small) | NOT DRIVABLE | - | a local disclosure toggle with no read-back (text rows only) |
 | 1463 | Report field list | readout | NOT DRIVABLE | - | a readout, not a control |
 
@@ -2368,13 +2368,13 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1464 | Warning text | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1465 | Also test the bias tee | checkbox | NOT DRIVABLE | - | deferred: not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
-| 1466 | Bias confirmation | dialog (inline) | NOT DRIVABLE | - | deferred: not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
-| 1467 | Yes, switch it on | button | NOT DRIVABLE | - | deferred: not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
-| 1468 | Cancel (bias) | button | NOT DRIVABLE | - | deferred: not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
-| 1469 | Run the diagnostic | button | NOT DRIVABLE | - | deferred: not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
-| 1470 | Cancel | button | NOT DRIVABLE | - | deferred: not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
+| 1464 | Warning text | readout | NOT DRIVABLE | - | a readout: the warning words are held by test_slint_host_sdrplaydiag |
+| 1465 | Also test the bias tee | checkbox | DRIVEN+ASSERTED | wg2-diagnostics | click Also test the bias tee: asks (expect Yes, switch it on); after a yes expect checked == true |
+| 1466 | Bias confirmation | dialog (inline) | DRIVEN+ASSERTED | wg2-diagnostics | the bias question appears on the tick and goes on Cancel (expect Yes, switch it on, then the tick back unchecked) |
+| 1467 | Yes, switch it on | button | DRIVEN+ASSERTED | wg2-diagnostics | click Yes, switch it on: the box shows ticked and the stand-in child is started with the bias tee (state gaps.probebias == 1) |
+| 1468 | Cancel (bias) | button | DRIVEN+ASSERTED | wg2-diagnostics | click Cancel on the question: the bias tee stays off (expect Also test the bias tee checked == false) |
+| 1469 | Run the diagnostic | button | DRIVEN+ASSERTED | wg2-diagnostics | click Run the diagnostic: state gaps.probestarts counts the stand-in child, gaps.probereport reads its file |
+| 1470 | Cancel | button | DRIVEN+ASSERTED | wg2-diagnostics | click Cancel on the dialog: state gaps.probestarts unchanged |
 
 ### SYSTEM bank — "FoxSDR did not close normally last time" dialog (520 px)
 
@@ -2411,7 +2411,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 1489 | Use this code | button | NOT DRIVABLE | - | Use this code: the Beta tester section (8) is hidden in the sections list, so no dump and no label; needs a linked tester or the network |
 | 1490 | What is sent | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1491 | Show / Hide what is sent | button (small) | NOT DRIVABLE | - | Show / Hide what is sent: the Beta tester section (8) is hidden in the sections list, so no dump and no label; needs a linked tester or the network |
-| 1492 | Preview | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1492 | Preview | readout | NOT DRIVABLE | - | NOT DONE: the Slint host has no beta-tester usage recorder; see window-gaps-2.md |
 
 ### SYSTEM bank — "Link this FoxSDR?" window (460 px, closable)
 
@@ -2626,7 +2626,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 1644 | Row delete | button | DRIVEN+ASSERTED | tools-bookmarks-rows.txt | click "Delete this bookmark"#1; state count.bookmarks == 1 |
 | 1645 | Error line | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1646 | Spectrum markers | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
-| 1647 | Drop-a-file import | drag/gesture | NOT DRIVABLE | - | deferred: not found in tools_bank.slint, main.slint or main.cpp: no file-drop event is wired into the Slint window (the same gap as row 1383); the path box and the import dialog are the ways in |
+| 1647 | Drop-a-file import | drag/gesture | DRIVEN+ASSERTED | gaps-drop | a dropped .xml is taken as a frequency list (state gaps.dropnote == list) |
 
 ### TOOLS bank — Import a frequency list (dialog)
 
@@ -2635,9 +2635,9 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 1648 | Dialog | dialog | NOT DRIVABLE | - | a readout, not a control |
 | 1649 | Reason line | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1650 | Preset line | readout | DRIVEN+ASSERTED | tools-airband-import.txt | the Airband Import over an empty box opens the dialog for the preset; the rows join it |
-| 1651 | Drop zone | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
-| 1652 | or / Browse... | button | NOT DRIVABLE | - | deferred: the SIGNAL family's dialog has a path field in place of the system file chooser (row 1384) |
-| 1653 | Waiting line | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1651 | Drop zone | overlay/marker | DRIVEN+ASSERTED | gaps-drop | the same drop handler serves the TOOLS import (state gaps.dropnote == list) |
+| 1652 | or / Browse... | button | DRIVEN+ASSERTED | wg2-import | the same Browse... key of the shared dialog |
+| 1653 | Waiting line | readout | NOT DRIVABLE | - | a readout: the waiting line of the shared dialog |
 | 1654 | Cancel | button | NOT DRIVABLE | - | relocated: the SIGNAL family's Cancel key (row 1386) |
 | 1655 | Escape | key (keyboard) | DRIVEN+ASSERTED | escape-leaves-dialog.txt | click "Import" (empty box), key escape; state shown.import 1 then 0, twice; Esc with nothing open changes nothing (docs 6.61, RED first: it stayed 1) |
 
@@ -3316,7 +3316,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 4611 | RESTART SDRPLAY SERVICE key | key | DRIVEN+ASSERTED | gaps-sdrplay | up to the call boundary: the key shown by a seam, pressed, the elevated launcher replaced by a stand-in that counts the call (state gaps.sdrplaycalls == 1); the real restart is UNVERIFIED ON HARDWARE |
 | 4612 | Copy diagnostics | key | DRIVEN+ASSERTED | gaps-misc | click, state gaps.diagcopies == 1 and the status line (a bounded run does not touch the desk's clipboard) |
 | 4613 | Help: the manual (app menu) | menu item | DRIVEN | gaps-misc | the entry is activated through the menu's callback by a seam; the address read back as state gaps.helpurl (no browser is started) |
-| 4614 | Run SDRplay diagnostic and its bias-tee question | key | NOT DRIVABLE | - | not built: needs an SDRplay radio to prove (record: NOT DONE) |
+| 4614 | Run SDRplay diagnostic and its bias-tee question | key | DRIVEN+ASSERTED | wg2-diagnostics | the key runs the stand-in probe and its report is read; the real probe on an RSP is UNVERIFIED; not built: needs an SDRplay radio to prove (record: NOT DONE) |
 | 4615 | High contrast option and skin | checkbox | DRIVEN+ASSERTED | gaps-contrast | the option and a stand-in for Windows' setting each switch the skin (state gaps.skin); the palette's pairs are held at 7 : 1 by test_slint_hc_palette |
 
 ### Lane S1 (docs/multi-radio-records/screen-s1.md; rows 4500 and up are this lane's)

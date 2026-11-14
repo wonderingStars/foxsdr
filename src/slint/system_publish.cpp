@@ -155,7 +155,7 @@ void SystemPublisher::publishMeters() {
     const cc::AppConfig& half = duties_.interfaceHalf();
     const double rate = state_.sampleRateHz;
     const bool haveRate = std::isfinite(rate) && rate > 0.0;
-    const bool haveAudio = (state_.flags & FOXAPI_RX_SINK_OPEN) != 0u && std::isfinite(state_.audioLevelDb);
+    const bool haveAudio = (state_.flags & FOXAPI_RX_SINK_OPEN) != 0u && std::isfinite(state_.audioLevelDb) && state_.audioLevelDb > -199.0;   // the engine's -200 is "nothing yet"
     const float rateValue = haveRate ? static_cast<float>(std::clamp(rate / 10.0e6, 0.0, 1.0)) : 0.0f;
     const float volValue = haveAudio ? static_cast<float>(std::clamp((state_.audioLevelDb + 60.0) / 60.0, 0.0, 1.0)) : 0.0f;
     const std::string rateText = haveRate ? cc::formatText("%.3f MS/s", rate / 1.0e6) : std::string("--");
