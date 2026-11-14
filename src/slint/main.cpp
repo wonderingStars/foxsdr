@@ -565,6 +565,7 @@ int main(int argc, char** argv) {
     // THE 3D VIEWS (view3d_publish.hpp, docs 6.64): the receiver's waterfall as a surface; the views of the other pages are published here too as they land
     foxsdr::slintview3d::View3DPublisher view3dBank(*ui, duties, bounded.bounded(), kit);
     view3dBank.wire();
+    view3dBank.setRadarPickHook([&](const std::string& id) { scopeBank.selectContact(id); });   // a click on an aircraft in the 3D airspace (row 3042)
     foxsdr::slinttools::ToolsPublisher::Hooks toolsHooks;
     toolsHooks.demodScopeClicked = [&] { scopeBank.toggleDemod(); };
     toolsHooks.radarScopeClicked = [&] { scopeBank.toggleRadar(); };
@@ -2140,6 +2141,7 @@ int main(int argc, char** argv) {
     // The plot of layout One: the pixels the spectrum and waterfall boxes of ui/main.slint lay their axes over. A pane's plot is its own size, passed the same way.
     // THE ONE-LAYOUT PLOT: the pixels the spectrum really has (the window reports them, main.slint one-plot-h / one-plot-w), 980 x 330 until it has
     PlotSize layoutOnePlot{980, 330};
+    std::size_t airMarksMax = 0;   // window gaps lane 4: the most Airband marks any published picture had (a drive read-back)
     // The radio's spectrum frame. Today's engine API has one spectrum, the focused radio's; the per-radio read (read_radio_spectrum, engine stage 3) answers here by rv.slot.
     const auto readSpectrum = [&](RadioView& rv, FoxSpectrumInfo& info) -> int32_t {
         if (seam && seam->fake(rv.slot)) { return seam->spectrum(rv.slot, rv.sinceSeq, info, rv.bins.data(), static_cast<uint32_t>(rv.bins.size()), realState); }
@@ -2402,9 +2404,15 @@ int main(int argc, char** argv) {
             ui->set_spectrum_caption(ss(fig.spectrumCaption));
             ui->set_span_text(ss(fig.spanText));
             ui->set_waterfall_foot_left(ss(fig.footLeft));
-            if (psigs.changed("age", sigOf(fig.ageTicks))) {
+            // window gaps lane 4: a figure that would meet the reception-gap break's two ages is left out, the break's own two ages own that room (the classic's rule: two figures printed over each other say less than either)
+            const float gapAt = fig.wfChrome.gapPos;
+            if (psigs.changed("age", sigOf(fig.ageTicks) + fmt("|g%.4f", static_cast<double>(gapAt)))) {
                 std::vector<AgeTick> ticks;
-                for (const auto& tk : fig.ageTicks) { ticks.push_back({static_cast<float>(tk.frac == 0.0 ? 22.0 / rv.wells.size.wfH : tk.frac), ss(tk.label)}); }   // "now" sits under the Age caption, as the sheet draws it
+                for (const auto& tk : fig.ageTicks) {
+                    const float at = static_cast<float>(tk.frac == 0.0 ? 22.0 / rv.wells.size.wfH : tk.frac);
+                    { const float rows = (at - gapAt) * static_cast<float>(rv.wells.size.wfH); if (gapAt >= 0.0f && rows > -26.0f && rows < 15.0f) { continue; } }   // a figure's top edge is its place: its 12 rows must not meet the break's two labels (13 rows above the rail, 14 below)
+                    ticks.push_back({at, ss(tk.label)});
+                }   // "now" sits under the Age caption, as the sheet draws it
                 ui->set_age_ticks(std::make_shared<slint::VectorModel<AgeTick>>(std::move(ticks)));
             }
             ui->set_show_peak(fig.showPeak && !fig.airListening);   // no passband peak while the Airband monitor listens: the band is not drawn
@@ -2416,6 +2424,7 @@ int main(int argc, char** argv) {
         ui->set_vfo_pos(fig.vfoPos);
         ui->set_vfo_half(fig.vfoHalf);
         ui->set_show_vfo(!fig.airListening);
+        airMarksMax = std::max(airMarksMax, fig.airMarks.size());
         if (fig.airListening) { ui->set_show_peak(false); }
         {   // window gaps lane 4: the Airband captions and marks, the gap break, the key's coverage note and the range rail
             ui->set_airband_block(ss(fig.airBlock));
@@ -3122,6 +3131,7 @@ int main(int argc, char** argv) {
             else if (what == "cover") { out = std::to_string(rv.fig.wfChrome.coveredRows); }
             else if (what == "airlistening") { out = rv.fig.airListening ? "1" : "0"; }
             else if (what == "airmarks") { out = std::to_string(rv.fig.airMarks.size()); }
+            else if (what == "airmarksmax") { out = std::to_string(airMarksMax); }   // the most marks any picture of this run has had: a block lands and moves, so one tick may have none
             else if (what == "airopen") { std::size_t n = 0; for (const auto& m : rv.fig.airMarks) { n += m.open ? 1u : 0u; } out = std::to_string(n); }
             else if (what == "airblock") { out = rv.fig.airBlock.empty() ? std::string("-") : rv.fig.airBlock; }
             else if (what == "airhearing") { out = rv.fig.airHearing.empty() ? std::string("-") : rv.fig.airHearing; }

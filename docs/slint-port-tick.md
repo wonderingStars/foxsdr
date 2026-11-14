@@ -2955,7 +2955,7 @@ The 3D view is an ADDED view toggle everywhere; the 2D screen keeps everything i
 | 3039 | Unknown altitude | overlay/marker | PRESENT | an aircraft with no altitude stands ON THE GROUND as a grey diamond labelled "NO ALT" - never at an invented height |
 | 3040 | Empty state | readout | PRESENT | with nothing plotted the HOME list's own empty title ("NOTHING BEING HEARD" / "NOTHING CURRENT") over the empty box |
 | 3041 | The view and the camera are remembered | setting | PRESENT | view3d, name radar: on, azimuth, elevation, zoom, ALTITUDE SCALE |
-| 3042 | Click an aircraft on the airspace to select it | gesture | DEFERRED | needs picking (the nearest projected marker); the HOME list still selects, and the selection is drawn |
+| 3042 | Click an aircraft on the airspace to select it | gesture | PRESENT | window gaps lane 4: a click on the 3D airspace selects the aircraft whose marker is nearest it (within 16 px): Radar3dResult::picks (each marker projected by the scene), pickRadar3d, Scene3DWell.picked (a press that did not drag) -> View3D.radar-picked -> ScopePublisher::selectContact, as a HOME row does; test_slint_host_radar3d testPick. The click itself was not driven (the scripted input cannot aim at a marker): UNVERIFIED live |
 
 ### The demod scope's 3D TUNNEL (THREED.md section 4, DEMOD SCOPE with input I/Q, VIEW VECTOR / 3D TUNNEL)
 

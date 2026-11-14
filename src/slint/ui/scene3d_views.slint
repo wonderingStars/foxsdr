@@ -55,6 +55,7 @@ export global View3D {
     callback radar-view-selected(bool);
     callback radar-scale-selected(int);
     callback radar-reset-view();
+    callback radar-picked(float, float);                  // a click (no drag) on the airspace, as fractions of the picture: the host picks the aircraft nearest it (row 3042)
 
     // ---- the demod scope's 3D TUNNEL (the DEMOD SCOPE window on a baseband input, VIEW VECTOR / 3D TUNNEL) ----
     in-out property <bool> tunnel-on: false;              // the tunnel is chosen (it shows while the input is I/Q or VECTOR; the vector figure is the default)
@@ -283,6 +284,7 @@ export component Radar3DWell inherits Rectangle {
         zoom <=> View3D.radar-zoom;
         min-elevation: 5; max-elevation: 85;
         reset-view => { View3D.radar-reset-view(); }
+        picked(fx, fy) => { View3D.radar-picked(fx, fy); }
     }
     Text { x: 8px; y: 6px; text: root.plotted-text; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.digit; }
     if root.range-corner != "" : Text { x: parent.width - self.preferred-width - 8px; y: 6px; text: root.range-corner; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.digit; }

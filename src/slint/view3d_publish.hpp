@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -58,6 +59,8 @@ public:
     void publishTunnel(const TunnelFeed& feed, std::int64_t nowMs);
     // The Survey Engine page's 3D SURFACE: reads the plugin's panel from the kit itself. Repainted only while that page is on screen (docked and current, or torn off) with the surface chosen.
     void publishSurvey(std::int64_t nowMs);
+    // A click on an aircraft in the radar scope's 3D airspace (window gaps lane 4, row 3042): the host selects that contact, as a row of the HOME list does.
+    void setRadarPickHook(std::function<void(const std::string& id)> hook);
     // The Survey Engine's channels as CSV text (window gaps lane 4, row 3075), "" when no survey panel is up: the host writes it (the key is View3D.survey-export-csv).
     std::string surveyCsv() const;
     // The Radiosondes map page's 3D TRACK: the host records each balloon's heard positions and altitudes from the kit's tracks every tick (the track is what it has heard since it has been

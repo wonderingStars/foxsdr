@@ -2,7 +2,7 @@
 186	NOT_DRIVABLE	-	needs a change of the display range (a menu slider the scripted input cannot reach); test_slint_host_wfrows holds the run of rows
 187	NOT_DRIVABLE	-	needs a change of the display range (a menu slider the scripted input cannot reach); test_slint_host_wfrows holds the rail position
 212	DRIVEN	airband-spectrum	the tip is a hover; the monitor listening is driven and the plots read back
-264	ASSERTED	airband-spectrum	state wf.airmarks > 0 while listening, 0 after STOP
+264	ASSERTED	airband-spectrum	state wf.airmarksmax > 0 while listening (a block lands and moves, so one tick may have none), wf.airmarks == 0 after STOP
 265	ASSERTED	airband-spectrum	state wf.airblock is the engine's block sentence while listening
 266	DRIVEN	airband-spectrum	the names appear only while a squelch is open, which the generator source does not guarantee; test_slint_host_tools holds the sentence
 267	ASSERTED	airband-spectrum	state wf.showvfo == 0 and wf.showpeak == 0 while listening, 1 after STOP
@@ -18,7 +18,7 @@
 1713	ASSERTED	gaps-map-trail	Line and Ribbon read back as cfg.mapTrailStyle
 1714	ASSERTED	map-bar	the Width slider read back as cfg.mapTrailWidthPx
 1731	NOT_DRIVABLE	-	a readout under the list
-1745	DRIVEN	globe-satellites	WHOLE WORLD is clicked on the satellites window; the span has no read-back
+1745	NOT_DRIVABLE	-	the key is drawn once the page has satellite tracks (a satellite page is known by its tracks); the drive's satellites plugin publishes none offline
 1750	NOT_DRIVABLE	-	captions
 1752	NOT_DRIVABLE	-	a note
 1756	NOT_DRIVABLE	-	the Off key throws the Trails flag (driven by the Trails tick in gaps-map-trail); not driven on the satellites page
@@ -30,3 +30,4 @@
 4087	ASSERTED	globe-satellites	NIGHT SIDE toggled, state globe.satellites night=0 / 1
 3075	ASSERTED	survey-3d	EXPORT CSV clicked twice, state view3d.survey.exportnote names the file and then "(2)"
 4091	NOT_DRIVABLE	-	deferred: Doppler and GRANT RECEIVER CONTROL are not built
+3042	NOT_DRIVABLE	-	a click aimed at a projected marker: the scripted input cannot aim at one; test_slint_host_radar3d testPick holds the pick

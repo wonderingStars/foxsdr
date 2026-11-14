@@ -245,8 +245,33 @@ void testPaint() {
 
 }  // namespace
 
+// WINDOW GAPS LANE 4, row 3042: a click on an aircraft in the airspace names the aircraft whose marker is nearest it
+void testPick() {
+    s3::Scene scene;
+    std::vector<s3::Rgba> px(420 * 300);
+    Radar3dInput in = base();
+    in.aircraft = {ac("A1", "BAW123", 20, 10, 31000, 45), ac("A2", "RYR8KJ", -30, 40, 24000, 200), ac("A3", "EZY45", 50, -20, 12000, 300)};
+    const Radar3dResult r = paintRadar3d(scene, px.data(), 420, 300, in);
+    CHECK(r.picks.size() == 3u);
+    for (const Radar3dPick& p : r.picks) {
+        CHECK(p.x > 0.0f && p.x < 1.0f && p.y > 0.0f && p.y < 1.0f);
+        CHECK(pickRadar3d(r.picks, p.x, p.y, 420, 300) == p.id);                              // exactly on a marker
+        CHECK(pickRadar3d(r.picks, p.x + 6.0f / 420.0f, p.y - 5.0f / 300.0f, 420, 300) == p.id);   // a few pixels off
+        CHECK(pickRadar3d(r.picks, p.x + 60.0f / 420.0f, p.y, 420, 300).empty() || pickRadar3d(r.picks, p.x + 60.0f / 420.0f, p.y, 420, 300) != p.id);   // far off: not this one
+    }
+    CHECK(pickRadar3d(r.picks, 0.001f, 0.001f, 420, 300).empty());                          // empty sky
+    CHECK(pickRadar3d({}, 0.5f, 0.5f, 420, 300).empty());
+    CHECK(pickRadar3d(r.picks, 0.5f, 0.5f, 0, 300).empty());
+    CHECK(pickRadar3d(r.picks, std::nanf(""), 0.5f, 420, 300).empty());
+    // two markers equally near: the first listed wins; a smaller reach picks nothing
+    const std::vector<Radar3dPick> two = {{"X", 0.4f, 0.5f}, {"Y", 0.6f, 0.5f}};
+    CHECK(pickRadar3d(two, 0.5f, 0.5f, 100, 100, 20.0f) == "X");
+    CHECK(pickRadar3d(two, 0.5f, 0.5f, 100, 100, 5.0f).empty());
+}
+
 int main() {
     testLogic();
     testPaint();
+    testPick();
     return testSummary("test_slint_host_radar3d");
 }

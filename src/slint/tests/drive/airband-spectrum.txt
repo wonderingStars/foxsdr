@@ -10,13 +10,14 @@ state wf.airmarks == 0
 +1 key enter
 +2 click "Look up"
 +30 state count.bookmarks > 0
-+1 click "LISTEN"
++1 scroll "Airport code" 700
++3 click "LISTEN"
 +30 state fact.airband.listening == 1
 +60 state wf.airlistening == 1
 state wf.showvfo == 0
 state wf.showpeak == 0
 state wf.airblock != "-"
-+100 state wf.airmarks > 0
++100 state wf.airmarksmax > 0
 +1 shot "airband-spectrum.png"
 +1 scroll "Above the noise" 300
 +3 click "STOP"

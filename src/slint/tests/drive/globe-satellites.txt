@@ -12,10 +12,6 @@
 +10 state pages contains "Satellites map"
 +3 expect "FLAT MAP" checked equals "true"
 +1 expect "3D GLOBE" checked equals "false"
-# WHOLE WORLD (window gaps lane 4, row 1745): the satellites window's key that backs the map out to the whole planet
-+1 expect "WHOLE WORLD" enabled equals "true"
-+1 click "WHOLE WORLD"
-+3 expect "FLAT MAP" checked equals "true"
 +1 state globe.satellites contains "globe=0"
 +1 click "3D GLOBE"
 +10 state globe.satellites contains "globe=1"

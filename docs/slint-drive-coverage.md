@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2379 | 725 | 120 | 1534 | 0 |
+| 2379 | 725 | 119 | 1535 | 0 |
 
-Of the 1514 rows that are controls (the 865 readout-like rows left out): 725 asserted, 120 driven without a read-back, 669 not drivable.
+Of the 1514 rows that are controls (the 865 readout-like rows left out): 725 asserted, 119 driven without a read-back, 670 not drivable.
 
-NOT DRIVABLE by reason: readout 865, other 245, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 71, deferred 63, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 2.
+NOT DRIVABLE by reason: readout 865, other 247, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 71, deferred 62, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 2.
 
 ## Per section
 
@@ -180,7 +180,7 @@ NOT DRIVABLE by reason: readout 865, other 245, needs a signal (no fixture) 120,
 | TOOLS bank — Map page (window per track-source plugin) | 17 | 2 | 0 | 15 | 4 | 0 |
 | TOOLS bank — Track list (left of the map page) | 11 | 0 | 0 | 11 | 6 | 0 |
 | TOOLS bank — Map canvas (all map pages) | 10 | 0 | 0 | 10 | 4 | 0 |
-| TOOLS bank — Satellites map window (SATELLITES MAP) | 25 | 0 | 1 | 24 | 7 | 0 |
+| TOOLS bank — Satellites map window (SATELLITES MAP) | 25 | 0 | 0 | 25 | 7 | 0 |
 | TOOLS bank — Map rows and Target details (reached from here; live in the DECODE bank) | 8 | 0 | 0 | 8 | 2 | 0 |
 | EXTEND bank — Web access (EXTEND rail row, F4 bank) | 19 | 7 | 0 | 12 | 10 | 0 |
 | EXTEND bank — CAT control (rigctld) | 7 | 1 | 0 | 6 | 4 | 0 |
@@ -638,7 +638,7 @@ NOT DRIVABLE by reason: readout 865, other 245, needs a signal (no fixture) 120,
 | 261 | Plugin mark: point | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 262 | Plugin mark: span | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 263 | Plugin marks on waterfall | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
-| 264 | Airband channel marks | overlay/marker | DRIVEN+ASSERTED | airband-spectrum | state wf.airmarks > 0 while listening, 0 after STOP |
+| 264 | Airband channel marks | overlay/marker | DRIVEN+ASSERTED | airband-spectrum | state wf.airmarksmax > 0 while listening (a block lands and moves, so one tick may have none), wf.airmarks == 0 after STOP |
 | 265 | Airband caption: block | readout | DRIVEN+ASSERTED | airband-spectrum | state wf.airblock is the engine's block sentence while listening |
 | 266 | Airband caption: hearing | readout | DRIVEN | airband-spectrum | the names appear only while a squelch is open, which the generator source does not guarantee; test_slint_host_tools holds the sentence |
 | 267 | Airband monitor effect on plots | lamp/indicator | DRIVEN+ASSERTED | airband-spectrum | state wf.showvfo == 0 and wf.showpeak == 0 while listening, 1 after STOP |
@@ -2759,7 +2759,7 @@ NOT DRIVABLE by reason: readout 865, other 245, needs a signal (no fixture) 120,
 |---|---|---|---|---|---|
 | 1743 | Plate title | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1744 | FIT | key | NOT DRIVABLE | - | relocated: kit map page (6.38) row 357: the Fit key; it is never dead and has no 'nothing is plotted' tooltip |
-| 1745 | WHOLE WORLD | key | DRIVEN | globe-satellites | WHOLE WORLD is clicked on the satellites window; the span has no read-back |
+| 1745 | WHOLE WORLD | key | NOT DRIVABLE | - | the key is drawn once the page has satellite tracks (a satellite page is known by its tracks); the drive's satellites plugin publishes none offline |
 | 1746 | STOP FOLLOWING | key | NOT DRIVABLE | - | relocated: kit map page (6.38) row 371: the Stop following key, drawn while following |
 | 1747 | Strip text | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1748 | Latitude cell | text field (click to edit) | NOT DRIVABLE | - | relocated: the typed latitude is the Radar fold's field (row 1562); the kit map page shows an RX readout, not a click-to-edit cell (6.38 row 358) |
@@ -3124,7 +3124,7 @@ NOT DRIVABLE by reason: readout 865, other 245, needs a signal (no fixture) 120,
 | 3039 | Unknown altitude | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 3040 | Empty state | readout | NOT DRIVABLE | - | a readout, not a control |
 | 3041 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | radar-3d.txt | state cfg.view3d contains radar:on=1 and radar:on=0 after the way back |
-| 3042 | Click an aircraft on the airspace to select it | gesture | NOT DRIVABLE | - | deferred: needs picking (the nearest projected marker); the HOME list still selects, and the selection is drawn |
+| 3042 | Click an aircraft on the airspace to select it | gesture | NOT DRIVABLE | - | a click aimed at a projected marker: the scripted input cannot aim at one; test_slint_host_radar3d testPick holds the pick |
 | 3043 | VIEW VECTOR | key (segment) | DRIVEN+ASSERTED | tunnel-3d.txt | click "VECTOR"#2 (the toggle's own key); state view3d.tunnel.on 1 -> 0, cfg.view3d contains tunnel:on=0 |
 | 3044 | VIEW 3D TUNNEL | key (segment) | DRIVEN+ASSERTED | tunnel-3d.txt | click "3D TUNNEL"; state view3d.tunnel.on 0 -> 1, cfg.view3d contains tunnel:on=1 |
 | 3045 | The tunnel | picture | DRIVEN+ASSERTED | tunnel-3d.txt | state view3d.tunnel.renders, points, pixels, labels, w, h (what the renderer drew from the scope's I/Q) |

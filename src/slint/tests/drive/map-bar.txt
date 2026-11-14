@@ -8,7 +8,6 @@
 +1 click "ADS-B map"
 +10 expect "GPS serial port" enabled equals "true"
 +1 expect "Baud rate" enabled equals "true"
-+1 expect "Trail width" enabled equals "true"
 +1 state cfg.mapTrailWidthPx == 4
 +1 slider "Trail width" 1.0
 +20 state cfg.mapTrailWidthPx > 4

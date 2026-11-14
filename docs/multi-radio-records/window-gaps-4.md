@@ -31,8 +31,8 @@ Legend: BUILT = built here and proven as stated; ALREADY BUILT = found in the co
 | 1968 brass case | REPLACED ON PURPOSE | old look; the scale the user reads (rings, bearing ticks, knob figures) is on the tube and knob. |
 | 4087 night side | BUILT | NIGHT SIDE switch on the satellites globe, saved in the 3D views' setting (inverted in `opt[2]`, so an old setting reads as on). Drive `globe-satellites.txt`. |
 | 3075 EXPORT CSV | BUILT | `survey3d_logic` `surveyCsv`; written beside the other exports (no system dialog), never over a file. `test_slint_host_survey3d`; drive `survey-3d.txt`. |
-| 3021 marker menu on the 3D surface | NOT DONE | needs the pointer unprojected onto the surface mesh. `scene3d.hpp` has `project` but no inverse; the cheap honest route is to project the surface's grid vertices and take the nearest to the pointer. Estimated half a day with its test. |
-| 3042 click an aircraft in the 3D airspace | NOT DONE | needs the aircraft labels to be clickable and the label-to-contact mapping kept by `view3d_publish`; the HOME list still selects. |
+| 3021 marker menu on the 3D surface | NOT DONE | needs the pointer unprojected onto the surface mesh (3042's `Scene3DWell.picked` gives the click; the frequency under it is the missing half). `scene3d.hpp` has `project` but no inverse; the cheap honest route is to project the surface's grid vertices and take the nearest to the pointer. Estimated half a day with its test. |
+| 3042 click an aircraft in the 3D airspace | BUILT, click UNVERIFIED live | `Radar3dResult::picks` (each marker projected by the scene), `pickRadar3d` (nearest marker within 16 px), `Scene3DWell.picked` (a press that did not drag), `View3D.radar-picked`, `ScopePublisher::selectContact` (what a HOME row does). `test_slint_host_radar3d` `testPick`; the scripted input cannot aim at a marker, so the click itself was not driven. |
 | 3054 to 3058, 3071 to 3074, 3076, 3094 to 3096, 4010, 4011, 4027, 4047 to 4049, 4088 to 4090 | NEEDS DATA | see HAND-OFF: each row's exact value and who must publish it. |
 | U2 empty map says why | BUILT | the Maps row's note is now the classic's census sentence (`trackSourceAbsenceNote` over `trackCensus`): stopped by you, refused, did not start, or none fitted. |
 | U3 zoom tips, MAP NOW | BUILT | the zoom keys carry the classic's four tips; the armed Set RX here key reads "CLICK THE MAP NOW". |
@@ -57,7 +57,7 @@ Checked first against `src/core/plugin_abi.h` (the new `symbol_rate` call is the
 * 4027 FT8: the reports received about this station (`reporter, country, snr`) and a callsign-prefix table in the host.
 * 4047 to 4049 GOES: the picture's `band` (1-16), `segment`, `segments_total` and the `spacecraft` id.
 * 4088 to 4090 satellites: orbital elements (or an inertial path), predicted positions with times, and pass events (AOS, LOS, maximum elevation); the Doppler read-out needs the same plus the receiver's tuned frequency.
-* 3021, 3042: no data needed, work not done (rows above).
+* 3021: no data needed, work not done (row above).
 
 ## Gate, UNVERIFIED and the config hash
 (filled in at the end of the lane)

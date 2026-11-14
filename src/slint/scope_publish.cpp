@@ -431,6 +431,8 @@ void ScopePublisher::radarPublish(const FoxReceiverState& state, double nowS) {
     ui_.set_radar_scope_model(m);
 }
 
+void ScopePublisher::selectContact(const std::string& id) { impl_->radar.selectContact(id); }
+
 void ScopePublisher::toggleRadar() {
     if (ui_.get_view_index() == 2) { leaveRadar(); } else { ui_.set_view_index(2); }
 }

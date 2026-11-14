@@ -132,6 +132,10 @@ Radar3dResult paintRadar3d(scene3d::Scene& scene, Rgba* px, int w, int h, const 
         if (a.selected) { scene.point(pl.p, kSelected, 7.0f); }
         if (a.emergency) { scene.point(pl.p, kEmergency, 8.5f); }
         scene.marker(pl.p, std::isfinite(a.altFt) ? Marker::Dot : Marker::Diamond, pl.c, 8.0f);
+        {   // the marker's place on the picture, for a click (row 3042)
+            const scene3d::ScreenPoint sp = scene.project(pl.p);
+            if (sp.inFront && w > 0 && h > 0) { res.picks.push_back({a.id, sp.x / static_cast<float>(w), sp.y / static_cast<float>(h)}); }
+        }
         ++res.aircraft;
         if (!std::isfinite(a.altFt)) { ++res.onGround; }
     }
@@ -153,6 +157,18 @@ Radar3dResult paintRadar3d(scene3d::Scene& scene, Rgba* px, int w, int h, const 
         if (scene3d::addLabel(scene, res.labels, placed[i].p, text, packed(placed[i].c), 1, 2, false)) { res.labels.back().x += 9.0f / static_cast<float>(std::max(1, w)); }
     }
     return res;
+}
+
+std::string pickRadar3d(const std::vector<Radar3dPick>& picks, float fx, float fy, int w, int h, float maxPx) {
+    if (w <= 0 || h <= 0 || !(maxPx > 0.0f) || !std::isfinite(fx) || !std::isfinite(fy)) { return std::string(); }
+    float best = maxPx * maxPx;
+    const Radar3dPick* hit = nullptr;
+    for (const Radar3dPick& p : picks) {
+        const float dx = (p.x - fx) * static_cast<float>(w), dy = (p.y - fy) * static_cast<float>(h);
+        const float d2 = dx * dx + dy * dy;
+        if (d2 <= best && (hit == nullptr || d2 < best)) { best = d2; hit = &p; }
+    }
+    return hit != nullptr ? hit->id : std::string();
 }
 
 }  // namespace foxsdr::slintview3d
