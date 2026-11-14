@@ -59,5 +59,39 @@ Checked first against `src/core/plugin_abi.h` (the new `symbol_rate` call is the
 * 4088 to 4090 satellites: orbital elements (or an inertial path), predicted positions with times, and pass events (AOS, LOS, maximum elevation); the Doppler read-out needs the same plus the receiver's tuned frequency.
 * 3021: no data needed, work not done (row above).
 
-## Gate, UNVERIFIED and the config hash
-(filled in at the end of the lane)
+## Proof, with the break-it checks
+
+Unit tests (all 0 failed): `test_slint_host_wfrows` 38 checks, `test_slint_host_airmarks` 18, `test_slint_host_mapicons` 41, `test_slint_host_survey3d` 89, `test_slint_host_radar` 650 (new `tileGround`), `test_slint_host_radar3d` 91 (new `testPick`), `test_slint_host_mapj` 712, `test_slint_host_globe` 1187, `test_slint_host_kit` 131, `test_slint_host_map` 754.
+Drive scripts on the hidden desktop `FoxSDRGaps4` (all pass on the final binary): `wf-gap`, `airband-spectrum`, `map-bar` (new); `globe-satellites`, `survey-3d` (extended). `airband-spectrum` failed once on a single-tick read of the marks (a block lands and moves) before it read `wf.airmarksmax`; it passed on the runs before and after.
+
+| Mutation (the behaviour removed) | Result | Restored |
+|---|---|---|
+| the gap break never drawn (`wfChrome`) | `test_slint_host_wfrows`: 38 checks, 3 failed | 0 failed |
+| a mark has no 3 px floor (`airbandMarks`) | `test_slint_host_airmarks`: 18 checks, 2 failed | 0 failed |
+| HEAVY draws the airliner (`aircraftIconIndex`) | `test_slint_host_mapicons`: 41 checks, 1 failed | 0 failed |
+| CSV cells never quoted (`surveyCsv`) | `test_slint_host_survey3d`: 89 checks, 2 failed | 0 failed |
+| a pending tile not reported (`paintTiles`) | `test_slint_host_radar`: 650 checks, 1 failed | 0 failed |
+| the tuned band always shown while the monitor listens | drive `airband-spectrum` RED: `state wf.showvfo == 0 -> FAILED: it is 1` | green |
+| the gap break always cleared | drive `wf-gap` RED: `state wf.gap > 0 -> FAILED: it is -1.000` | green |
+| NIGHT SIDE always on | drive `globe-satellites` RED: `state globe.satellites contains night=0 -> FAILED` | green |
+
+Not break-it checked: the rail and coverage note (the unit test holds them; a drive cannot change the display range), the tips, the map bar's new keys, the satellites notes, the knob figures, the squelch dial's Airband rule, `Scene3DWell.picked`.
+
+## UNVERIFIED
+* No real device and no real basemap plugin: the radar tiles were proven with a stand-in tile source only; the tile pictures' look (the green read of a tile) was not seen.
+* The 4 s rest tips, the zoom-key tips, the row and Demod scope tooltips: tooltips, not driven (the scripted input has no hover).
+* "Stop following?" asked on a drag: the drive cannot drag a followed target; the state (`MapPage::followAsk`) and the card are not driven.
+* The 3D airspace click (3042) and the survey's key were run only through unit tests and the survey drive; a real pointer and a screen reader were not used.
+* The squelch dial reading and setting the monitor's squelch while the Airband listens was not driven (the monitor's own slider is, by `tools-airband`).
+* The multi-radio panes (`radio_pane.slint`) do not carry the Airband plots, the gap break or the coverage key: layout One's picture does.
+* All new strings' translations are the existing catalogues' where the key exists (most) and English otherwise; none checked by a speaker.
+* Frame cost not measured; the clip sweep not re-run.
+
+## WHERE THE LANE STOPPED (2026-11-14 about 03:05, usage limit) AND WHAT IS NEXT
+* Committed: `d30f3c18` (all the rows above) and `a7a2fbee` (row 3042, drive fixes, break-it checks); this record is committed after them. The tree was clean at `a7a2fbee`.
+* NOT built after the last C++ edit: `main.cpp`'s age-figure filter for the reception-gap break (the figures within -26 to +15 rows of the break are left out; the first version, 20 rows each side, left "2 s" overprinting the break's "3s" in the `wf-gap` screenshot). It is in `a7a2fbee` but was never compiled; a full build (`cmake --build D:/foxsdr-build/en-sysmodels --config Release --parallel 3`, which I killed at about 03:05 when the stop came) must show it compiles, then `wf-gap` should be re-run and its screenshot looked at.
+* NEXT, in order: (1) full build of the build folder (the Slint compile of main.slint is about 6 minutes, the generated C++ about 35); (2) `ctest -L "headless|slint" -j4 --timeout 300` through the hidden-desktop launcher in slices, each red re-run alone (known false failures: test_airband_data, test_band_plan, test_converter_call_sites, test_page_resize_id, test_png_decode); (3) the GUI gate `-L gui -j3` with `FOXSDR_FRAME_CAP_HZ=60`; (4) `python -I tools/slint_drive_ledger.py --check` and `tools/i18n_keys.py` (the new English strings are listed above; `test_i18n` / `test_slint_po` / `test_slint_house_rules` have not been run on this branch); (5) re-prove the real config hash `c21ce98d...` is unchanged; (6) write the gate totals here.
+* NOT DONE rows: 3021 (needs the pointer unprojected onto the 3D surface), 4091 in part (Doppler, GRANT RECEIVER CONTROL), 4902 and the data-needing 3D rows (written up above). Rows 1745 and the satellites notes are built but the drive cannot show them (they need satellite tracks).
+
+## Gate, config hash
+NOT RUN: the full headless and GUI gates were not run (see above). Only the targeted tests and drive scripts listed under Proof were run. The real `%APPDATA%/foxsdr/config.json` was never opened by this lane; its hash was not re-read (UNVERIFIED, expected `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3`).
