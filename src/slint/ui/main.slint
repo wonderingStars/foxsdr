@@ -597,7 +597,7 @@ export component MainWindow inherits Window {
                             }
                             if root.update-shown : Rectangle { height: upd.preferred-height + 10px;
                                 upd := Card { x: 10px; y: 10px; width: parent.width - 20px; title: root.update-headline; subtitle: @tr("you are running {}", root.version); critical: root.update-critical; tone: root.update-withdrawn ? CardTone.warn : CardTone.neutral; lines: root.update-notes;
-                                    primary-label: root.update-primary; secondary-label: @tr("Not now"); progress: root.update-progress; note: root.update-note; error: root.update-error;
+                                    primary-label: root.update-primary; primary-tooltip: root.update-primary; secondary-label: @tr("Not now"); progress: root.update-progress; note: root.update-note; error: root.update-error;
                                     primary-clicked => { root.update-primary-clicked(); } secondary-clicked => { root.update-dismissed(); } }
                             }
                             // the DECODE bank is the plugin kit's (pages.slint): its rows, drawers and keys come from the host's kit models

@@ -384,11 +384,11 @@ void HostDuties::start(const DutyStart& s) {
                                           iface_.crashUploadBlockedUntil);
     crashAtStart_ = crashState_;
 
-    // The last run's marker was false: the ImGui window opens its "did not close normally" offer here. This window says so in the log,
-    // and the offer is a companion screen of a later phase.
+    // The last run's marker was false: the ImGui window opens its "did not close normally" offer here. This window says so in the log, and raises the
+    // offer as a sheet (gaps1_publish: offerDiagnostics, from main.cpp).
     if (s.lastRunUnclean) {
         w_.say(std::string("the last run did not end normally") +
-               (iface_.diagnosticsEnabled ? "; the offer to send a report is a companion screen of a later phase" : ""));
+               (iface_.diagnosticsEnabled ? "; the offer to send a report is raised" : ""));
     }
 
     // THE USER'S DIAGNOSTICS CHOICES, applied the way run() applies them (applyDiagnosticsEnabled): boot armed capture from the stored

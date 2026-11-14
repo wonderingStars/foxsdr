@@ -1743,7 +1743,7 @@ int main() {
         const std::size_t sent = w.submitted.size();
         d.teamMessageSeen();
         CHECK(w.submitted.size() == sent + 1);                                        // saved at once
-        CHECK(w.submitted.back().find("AAAAAAAA") != std::string::npos);
+        CHECK(!w.submitted.empty() && w.submitted.back().find("AAAAAAAA") != std::string::npos);
         CHECK(d.takeTeamChange() && d.teamMessage().id == "BBBBBBBB" && d.updateStatus().unseenMessages == 1);
         d.teamMessageSeen();
         CHECK(d.takeTeamChange() && !d.teamMessage().shown && d.updateStatus().unseenMessages == 0);
