@@ -65,7 +65,7 @@ void flow() {
     CHECK(!v.keyEnabled && v.status == "FoxSDR has the SDRplay radio open - choose another source first.");
 
     // the key opens the dialog; nothing is asked and nothing started
-    d.press();
+    d.openDialog();
     v = d.view(false);
     CHECK(v.dialogShown && !v.biasAsk && !v.biasOn && spy.starts == 0);
     // ticking the bias box only ASKS
@@ -93,7 +93,7 @@ void flow() {
     v = d.view(false);
     CHECK(spy.starts == 1 && spy.lastBias && d.lastStartedWithBias() && !v.dialogShown && !v.keyEnabled && d.running());
     CHECK(v.status == "SDRplay diagnostic running - this takes a minute or two...");
-    d.press();   // a press while it runs does nothing
+    d.openDialog();   // a press while it runs does nothing
     CHECK(!d.view(false).dialogShown);
     for (int i = 0; i < 2; ++i) { d.poll(); CHECK(d.running()); }
     for (int i = 0; i < 4; ++i) { d.poll(); }
@@ -101,7 +101,7 @@ void flow() {
     CHECK(d.view(false).status.find("SDRplay diagnostic finished: ") == 0 && d.view(false).keyEnabled);
 
     // a second diagnostic: the bias tee does not outlive the first dialog
-    d.press();
+    d.openDialog();
     CHECK(!d.view(false).biasOn);
     d.run();
     CHECK(spy.starts == 2 && !spy.lastBias && !d.lastStartedWithBias());
@@ -109,7 +109,7 @@ void flow() {
     CHECK(d.report() == "report bias=off\n");
 
     // Cancel on the dialog starts nothing; run() with no dialog starts nothing
-    d.press();
+    d.openDialog();
     d.cancel();
     d.run();
     CHECK(spy.starts == 2 && !d.view(false).dialogShown);
@@ -123,7 +123,7 @@ void failure() {
     Spy spy;
     SdrPlayDiag d = make(spy);
     spy.failNext = true;
-    d.press();
+    d.openDialog();
     d.run();
     const SdrPlayDiag::View v = d.view(false);
     CHECK(spy.starts == 1 && !d.running() && v.keyEnabled && v.status == "SDRplay diagnostic could not start: Windows would not start it");
@@ -135,7 +135,7 @@ void failure() {
         int exitCode() const override { return 3; }
     };
     SdrPlayDiag e([] { return std::unique_ptr<ProbeRunner>(new Silent()); }, [] { return scratch().string(); });
-    e.press();
+    e.openDialog();
     e.run();
     CHECK(e.running());
     e.poll();
@@ -153,7 +153,7 @@ void walk() {
         const int a = std::rand() % 8;
         const SdrPlayDiag::View before = d.view(false);
         switch (a) {
-            case 0: d.press(); if (!d.running()) { dialog = true; yesInThisDialog = false; } break;
+            case 0: d.openDialog(); if (!d.running()) { dialog = true; yesInThisDialog = false; } break;
             case 1: d.tickBias(true); break;
             case 2: d.tickBias(false); if (dialog && !before.biasAsk) { yesInThisDialog = false; } break;
             case 3: if (before.biasAsk) { yesInThisDialog = true; } d.biasYes(); break;

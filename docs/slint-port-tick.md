@@ -2164,7 +2164,7 @@ Every control row of the SYSTEM bank of `inventory/extend-system-store-patch.txt
 | 1458 | Copy diagnostics | button | PRESENT | Copy diagnostics: ONE function, diag_copy.cpp copyDiagnostics (clipboard plus <reports>/diagnostics.txt), called by SystemPublisher::copyDiagnostics; the 'did not close normally' dialog must call the same one; gaps-misc.txt |
 | 1459 | Open reports folder | button | PRESENT | small Key -> diag-open-reports -> applyDiagOpenReports: local, opens the folder (text = reports_path) |
 | 1460 | SDRplay intro | readout | PRESENT | SDRplay intro: DiagnosticsModel.sdrplay-text from sdrplaydiag_logic.cpp view().intro, so the block is drawn (system_publish.cpp mapDiagnostics) |
-| 1461 | Run SDRplay diagnostic | button | PRESENT | Run SDRplay diagnostic: Key (system_bank.slint) -> SdrPlayDiag::press opens the dialog; dead while a probe runs or FoxSDR holds an RSP; wg2-diagnostics.txt |
+| 1461 | Run SDRplay diagnostic | button | PRESENT | Run SDRplay diagnostic: Key (system_bank.slint) -> SdrPlayDiag::openDialog opens the dialog; dead while a probe runs or FoxSDR holds an RSP; wg2-diagnostics.txt |
 | 1462 | What exactly is in a report? | button (small) | PRESENT | xs Key -> diag-what -> applyDiagWhat: local flag shared with Usage reporting's what-open |
 | 1463 | Report field list | readout | PRESENT | Note what-text while the flag is open |
 

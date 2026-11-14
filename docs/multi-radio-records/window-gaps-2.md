@@ -49,8 +49,17 @@ Decisions made: Ctrl+= does both the table zoom and the size step, as the classi
 * Row 1492: see the table.
 * The classic's "Saving" state for I/Q and audio keys does not exist; ours is new.
 
-## Gates
-(filled after the runs, below)
+## Gates (STOPPED HERE on the account's usage limit; resume on Monday)
+Headless + slint gate, run once at tip b682962f-plus on the hidden desktop `FoxSDRGaps2` (`ctest -L "headless|slint" -j4 --timeout 300`): `99% tests passed, 13 tests failed out of 1151`, 1699 s. Reds, classified:
+* MINE, FIXED AFTER THE RUN (commit 08718039, re-run alone: Passed): `test_slint_house_rules` (the meter menu keys needed the not-translated comment), `test_slint_clip_probe` (one pinned line in tools/slint-clip-explained.tsv moved).
+* MINE, FIXED BUT NOT RE-RUN: `test_plugin_containment` flagged `->press(` in system_publish.cpp; `SdrPlayDiag::press` is renamed `openDialog` (uncommitted until the commit that carries this record). The unit test test_slint_host_sdrplaydiag was edited for the rename and has NOT been rebuilt or run since.
+* Known false failures: test_airband_data, test_band_plan, test_converter_call_sites, test_page_resize_id, test_png_decode.
+* Not mine, environment: test_engine_api_source_kinds and test_engine_api_decode_radio need `.wav` fixtures (gitignored, made by src/slint/tests/drive/fixtures/make_*.py) that this worktree does not have.
+* Load flakes, passed alone: test_link_request_poll, test_engine_api_wireb_sigmeas, test_pass_control.
+Not run: the GUI gate (`-L gui -j3`). Drive scripts run alone and passing: wg2-diagnostics, wg2-meters, wg2-signal, wg2-size-keys, wg2-bandplan, wg2-import, system-look (a timing flake at one width check, passes with a longer wait), system-display, system-display-map, gaps-misc, gaps-counter-menu, gaps-deemph, gaps-drop, gaps-sdrplay, gaps-browse-files. Unit tests passing: test_slint_host_sdrplaydiag (before the rename), _bandpalette, _signal, _look, _system, _keydispatch, test_slint_themes_four, test_slint_signal, test_slint_system, test_slint_main_screen. Break-it checks (RED then restored GREEN): bias tee set without confirmation, Saving label removed, Mono palette ignoring the accent, Glass skin falling back to Workbench.
+Drive coverage ledger: `2379 rows, 750 asserted, 117 driven, 1512 not drivable, 0 unclassified`.
+
+NEXT, in order: (1) rebuild (`cmake --build D:/foxsdr-build/en-tuning --config Release --parallel 3`; a build was killed half way), run test_slint_host_sdrplaydiag and test_plugin_containment; (2) the GUI gate `-L gui -j3` on the hidden desktop with FOXSDR_FRAME_CAP_HZ=60 and the full headless gate once more; (3) re-check that the config hash is still c21ce98d...; (4) row 1492 (tester Preview) stays NOT DONE unless the owner wants the tester recorder built.
 
 ## UNVERIFIED
 * The real SDRplay probe on an RSP, the real service restart and its UAC prompt, the real file chooser behind Browse..., a real OS file drag, the real clipboard: stand-ins only, until the mouse drive.

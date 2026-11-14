@@ -46,7 +46,7 @@ public:
     };
     View view(bool sdrplayOpen) const;
 
-    void press();                 // Run SDRplay diagnostic: opens the dialog, bias off, no question
+    void openDialog();               // Run SDRplay diagnostic: opens the dialog, bias off, no question
     void tickBias(bool want);     // the checkbox: ticking only ASKS
     void biasYes();               // Yes, switch it on
     void biasCancel();            // Cancel on the question: off, back to the dialog

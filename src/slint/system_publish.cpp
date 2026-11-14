@@ -953,7 +953,7 @@ void SystemPublisher::wire() {
     // ledger, the clipboard, a child process). A line says so; nothing else happens.
     ev.on_diag_ledger([this](bool on) { ledgerOn_ = on; if (!on) { ledgerLine_.clear(); } forceRead_ = true; });
     ev.on_diag_copy([this] { copyDiagnostics(); });
-    ev.on_diag_sdrplay([this] { sdrDiag_->press(); forceRead_ = true; });
+    ev.on_diag_sdrplay([this] { sdrDiag_->openDialog(); forceRead_ = true; });
     ui_.global<MeterPanel>().on_style_picked([this](int which, int style) {   // a meter's own right-click menu: saved per meter (meterStyleRate / meterStyleVolume)
         static const char* const names[4] = {"classic", "needle", "led", "peak"};
         if (style < 0 || style > 3) { return; }

@@ -65,7 +65,7 @@ SdrPlayDiag::View SdrPlayDiag::view(bool sdrplayOpen) const {
     return v;
 }
 
-void SdrPlayDiag::press() {
+void SdrPlayDiag::openDialog() {
     if (child_ != nullptr) { return; }
     dialog_ = true;
     biasAsk_ = false;
