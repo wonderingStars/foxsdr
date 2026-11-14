@@ -218,6 +218,11 @@ foreach(src ${_foxsdr_slint_test_sources})
                 "${FOXSDR_REPO_ROOT}/src/core/patch_presets.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp")
         endif()
+        if(unit STREQUAL "patchfaces")
+            # The PATCH page's Spectrum and Map faces (docs/multi-radio-records/patch-faces.md): ../patch_faces.cpp over the compositor it projects through, the kit's fitView and the receiver's painters
+            # (host_logic.cpp, already in the list). patch_logic.hpp is quoted for its types only; no engine, no Slint.
+            list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../patch_faces.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../map_compositor.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../kit_logic.cpp")
+        endif()
         if(unit STREQUAL "perf3d")
             # the frame time of every 3D view (docs 6.64) runs every view's painter
             foreach(_v waterfall radar tunnel survey sonde)

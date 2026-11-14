@@ -2983,12 +2983,21 @@ void theDisplayAndMapFaces() {
     EQ(lineTexts(nodeOf(f.page.canvasModel(), disp2).face.lines), std::string("[1:No spectrum yet - its radio is not running.]"));
     // nothing wired
     EQ(lineTexts(nodeOf(f.page.canvasModel(), disp3).face.lines), std::string("[1:Wire the radio or a channel here to see its spectrum.]"));
-    // the radio is open: the deferred face draws nothing but its plate
+    // the radio is open but no spectrum frame of it has arrived (the publisher's read_node_spectrum has not answered): the window's own words, "No spectrum yet"
     f.t.add(FOXAPI_LIST_PATCH_RADIOS, c.radio, "siggen", "", kActive, 2.0e6, 100.0e6, 0);
     f.tickBump();
+    EQ(lineTexts(nodeOf(f.page.canvasModel(), disp).face.lines), std::string("[1:No spectrum yet - its radio is not running.]"));
+    EQ(lineTexts(nodeOf(f.page.canvasModel(), disp2).face.lines), std::string("[1:No spectrum yet - its radio is not running.]"));
+    EQ(lineTexts(nodeOf(f.page.canvasModel(), disp3).face.lines), std::string("[1:Wire the radio or a channel here to see its spectrum.]"));
+    // the frame arrives: the sentences go, the face is the live picture the publisher draws (patch_faces.hpp)
+    f.page.setSpectrumHave({c.radio});
     EQ(lineTexts(nodeOf(f.page.canvasModel(), disp).face.lines), std::string(""));
     EQ(lineTexts(nodeOf(f.page.canvasModel(), disp2).face.lines), std::string(""));
     EQ(lineTexts(nodeOf(f.page.canvasModel(), disp3).face.lines), std::string("[1:Wire the radio or a channel here to see its spectrum.]"));
+    // a frame of ANOTHER radio is not this part's: it hangs off its own radio
+    f.page.setSpectrumHave({c.radio + 100});
+    EQ(lineTexts(nodeOf(f.page.canvasModel(), disp).face.lines), std::string("[1:No spectrum yet - its radio is not running.]"));
+    f.page.setSpectrumHave({c.radio});
     // an unplanned channel is not a spectrum source
     f.t.lists[FOXAPI_LIST_PATCH_PLAN].clear();
     f.tickBump();
@@ -3009,6 +3018,83 @@ void theDisplayAndMapFaces() {
     EQ(lineTexts(nodeOf(f.page.canvasModel(), mapn).face.lines), std::string("[2:2 aircraft  1 vessels  0 stations]"));
     f.page.setTracks({{"ADS-B", CASCADE_TRACK_STATION}, {"ADS-B", 99u}});
     EQ(lineTexts(nodeOf(f.page.canvasModel(), mapn).face.lines), std::string("[2:0 aircraft  0 vessels  1 stations  +]"));
+}
+
+// THE SPECTRUM SLICE AND ITS MARKS (patch_faces, ledger row 1924): what a Spectrum part shows, from the graph and the lists alone.
+void theSpectrumSliceAndItsMarks() {
+    const Chain c = chain();
+    pc::Graph g = c.g;
+    const pc::NodeId fromRadio = g.addNode(NodeKind::Display, "Whole band", PortType::Iq, 40, 400);
+    const pc::NodeId fromChannel = g.addNode(NodeKind::Display, "One channel", PortType::Iq, 340, 400);
+    const pc::NodeId unwired = g.addNode(NodeKind::Display, "Nothing", PortType::Iq, 640, 400);
+    g.connect(c.radio, 0, fromRadio, 0);
+    g.connect(c.channel, 0, fromChannel, 0);
+    // a second radio with its own channel and its own spectrum: a part is the spectrum of ITS radio
+    const pc::NodeId radio2 = g.addNode(NodeKind::Radio, "Radio 2", PortType::Iq, 60, 600);
+    const pc::NodeId channel2 = g.addNode(NodeKind::Channel, "Second", PortType::Iq, 360, 600);
+    const pc::NodeId fromRadio2 = g.addNode(NodeKind::Display, "Whole band 2", PortType::Iq, 640, 600);
+    g.connect(radio2, 0, channel2, 0);
+    g.connect(radio2, 0, fromRadio2, 0);
+    Fx f(g);
+    fillPlan(f.t, c);
+    f.t.add(FOXAPI_LIST_PATCH_PLAN, channel2, "", "channel", 0, -250000.0, 12000.0, 100.0, static_cast<double>(radio2));
+    f.tickBump();
+    const PatchLists& L = f.page.lists();
+    const pc::Graph& G = f.g();
+
+    // no radio open: a Radio feeder has no rate, so it is not wired; a Channel feeder is (the plan holds it) but its radio is not open
+    SpectrumSlice s = spectrumSliceOf(G, fromRadio, L);
+    CHECK(!s.wired && !s.radio_open);
+    s = spectrumSliceOf(G, fromChannel, L);
+    CHECK(s.wired && s.channel && !s.radio_open && s.rate_hz == 0.0);
+    CHECK(!spectrumSliceOf(G, unwired, L).wired);
+    CHECK(spectrumMarkersOf(G, fromRadio, L, spectrumSliceOf(G, fromRadio, L)).empty());
+
+    f.t.add(FOXAPI_LIST_PATCH_RADIOS, c.radio, "siggen", "", kActive, 2.0e6, 100.0e6, 0);
+    f.t.add(FOXAPI_LIST_PATCH_RADIOS, radio2, "siggen", "", kActive, 1.0e6, 7.0e6, 0);
+    f.tickBump();
+    // FROM A RADIO: the whole capture, centre to centre, the radio's own rate
+    s = spectrumSliceOf(f.g(), fromRadio, f.page.lists());
+    CHECK(s.wired && !s.channel && s.radio == c.radio && s.radio_open);
+    CHECK(s.rate_hz == 2.0e6 && s.lo_hz == -1.0e6 && s.hi_hz == 1.0e6);
+    // FROM A CHANNEL: that channel's slice - its offset (100 kHz) and half its output rate (48 kHz) either side, narrower than the radio's
+    s = spectrumSliceOf(f.g(), fromChannel, f.page.lists());
+    CHECK(s.wired && s.channel && s.radio == c.radio && s.radio_open && s.rate_hz == 2.0e6);
+    CHECK(s.lo_hz == 100000.0 - 24000.0 && s.hi_hz == 100000.0 + 24000.0);
+    CHECK((s.hi_hz - s.lo_hz) < 0.05 * (spectrumSliceOf(f.g(), fromRadio, f.page.lists()).hi_hz - spectrumSliceOf(f.g(), fromRadio, f.page.lists()).lo_hz));
+    // THE OTHER RADIO'S PART reads the other radio, at the other rate
+    s = spectrumSliceOf(f.g(), fromRadio2, f.page.lists());
+    CHECK(s.wired && s.radio == radio2 && s.rate_hz == 1.0e6 && s.lo_hz == -0.5e6 && s.hi_hz == 0.5e6);
+    // nothing wired is still not wired
+    CHECK(!spectrumSliceOf(f.g(), unwired, f.page.lists()).wired);
+
+    // THE MARKS: from a radio, only ITS planned channels, each named, each where its offset falls across the slice
+    std::vector<SpectrumMarker> m = spectrumMarkersOf(f.g(), fromRadio, f.page.lists(), spectrumSliceOf(f.g(), fromRadio, f.page.lists()));
+    EQ(m.size(), std::size_t{1});
+    EQ(m[0].label, std::string("Tower"));
+    CHECK(std::fabs(m[0].pos - 0.55f) < 1e-6f);                                  // +100 kHz of a 2 MHz slice: (100k + 1M) / 2M
+    m = spectrumMarkersOf(f.g(), fromRadio2, f.page.lists(), spectrumSliceOf(f.g(), fromRadio2, f.page.lists()));
+    EQ(m.size(), std::size_t{1});
+    EQ(m[0].label, std::string("Second"));
+    CHECK(std::fabs(m[0].pos - 0.25f) < 1e-6f);                                  // -250 kHz of 1 MHz: (-250k + 500k) / 1M
+    // from a channel: its centre, unnamed, in the middle of its own slice
+    m = spectrumMarkersOf(f.g(), fromChannel, f.page.lists(), spectrumSliceOf(f.g(), fromChannel, f.page.lists()));
+    EQ(m.size(), std::size_t{1});
+    CHECK(m[0].pos == 0.5f && m[0].label.empty());
+    // a channel outside the radio's slice has no mark (a plan row beyond the rate)
+    f.t.add(FOXAPI_LIST_PATCH_PLAN, 77, "", "channel", 0, 5.0e6, 12000.0, 100.0, static_cast<double>(c.radio));
+    f.tickBump();
+    CHECK(spectrumMarkersOf(f.g(), fromRadio, f.page.lists(), spectrumSliceOf(f.g(), fromRadio, f.page.lists())).size() == 1u);
+    // unwired: no marks
+    CHECK(spectrumMarkersOf(f.g(), unwired, f.page.lists(), spectrumSliceOf(f.g(), unwired, f.page.lists())).empty());
+
+    // THE TWO SENTENCES, per part, with one radio's frame and not the other's
+    f.page.setSpectrumHave({c.radio});
+    EQ(lineTexts(nodeOf(f.page.canvasModel(), fromRadio).face.lines), std::string(""));
+    EQ(lineTexts(nodeOf(f.page.canvasModel(), fromChannel).face.lines), std::string(""));
+    EQ(lineTexts(nodeOf(f.page.canvasModel(), fromRadio2).face.lines), std::string("[1:No spectrum yet - its radio is not running.]"));
+    EQ(lineTexts(nodeOf(f.page.canvasModel(), unwired).face.lines), std::string("[1:Wire the radio or a channel here to see its spectrum.]"));
+    CHECK(f.page.spectrumHave(c.radio) && !f.page.spectrumHave(radio2));
 }
 
 }  // namespace
@@ -4163,6 +4249,7 @@ int main() {
     RUN(textOutQueuesAreBoundedAndForgotten);
     RUN(theDecoderFaceReadsLinesAndPicture);
     RUN(theDisplayAndMapFaces);
+    RUN(theSpectrumSliceAndItsMarks);
     RUN(theInspectorOfAnythingNamesTheNode);
     RUN(theRadioInspectorLists);
     RUN(theRadioInspectorRatesAndLines);
