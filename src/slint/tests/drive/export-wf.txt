@@ -17,7 +17,9 @@
 # let the store fill: a row a quarter second, ten seconds
 +330 state export.rows >= 30
 state export.segments == 1
-+1 type "Save to" "scripted/wf"
+# (the section is as tall as its notes now, engine fixes 6: the box has scrolled out of view above by the time the store has filled; bring it back)
++1 scroll "Save waterfall picture" -300
++12 type "Save to" "scripted/wf"
 +1 scroll "Save to" 400
 +1 click "Save waterfall picture"
 +40 state export.working == 0
@@ -43,6 +45,7 @@ state export.peakoffset < 62000
 state export.note contains "wf.csv"
 state export.fileinfo contains "csv rows="
 # the length choices
-+1 click "Data length 15 minutes"
++1 scroll "Save waterfall data" -300
++12 click "Data length 15 minutes"
 +3 state export.length == 2
 +1 shot "export-wf.png"
