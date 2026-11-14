@@ -27,10 +27,10 @@ component MeterCell inherits Rectangle {
     in property <string> value-text;
     in property <bool> has-reading: true;
     property <[SelectItem]> styles: [
-        { label: @tr("Classic"), id: "classic", enabled: true, note: "" },
-        { label: @tr("Analogue needle"), id: "needle", enabled: true, note: "" },
-        { label: @tr("LED ladder"), id: "led", enabled: true, note: "" },
-        { label: @tr("Peak meter"), id: "peak", enabled: true, note: "" },
+        { label: @tr("Classic"), id: "classic", enabled: true, note: "" },   // not-translated: the saved style key
+        { label: @tr("Analogue needle"), id: "needle", enabled: true, note: "" },   // not-translated: the saved style key
+        { label: @tr("LED ladder"), id: "led", enabled: true, note: "" },   // not-translated: the saved style key
+        { label: @tr("Peak meter"), id: "peak", enabled: true, note: "" },   // not-translated: the saved style key
     ];
     property <length> menu-x: 0px;
     property <length> menu-y: 0px;
