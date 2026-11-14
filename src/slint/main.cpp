@@ -495,6 +495,8 @@ int main(int argc, char** argv) {
     double tuneStepHz = kDefaultTuneStepHz;   // Ctrl+Up/Down and the Tune step picker (10 kHz, as the key table's text says)
     bool showNudges = true;
     bool lastSwitches = true;   // the saved counterSwitches last applied to showNudges
+    std::uint32_t lastRibbonRgba = 0;   // the colour of the first band of the last ribbon built (a drive script reads it: gaps.ribboncolour)
+    bool haveRibbon = false;
     if (const char* e = std::getenv("FOXSDR_SLINT_TUNE_STEP"); e != nullptr && bounded.bounded()) { const double v = std::atof(e); if (v >= 1.0 && v <= 1.0e7) { tuneStepHz = v; } }   // a bounded run only: the Link scripts keep their 12.5 kHz arithmetic
     Face face = Face::Plain;
     bool followBandPlan = true;                // the engine's switch (fact.bandPlan.followMode), read when the lists move
@@ -2302,12 +2304,14 @@ int main(int argc, char** argv) {
         fig.vfoPos = rv.frac(st.tunedHz);
         fig.vfoHalf = static_cast<float>(v.spanHz > 0 ? st.bandwidthHz / 2.0 / v.spanHz : 0.0);
         const std::uint32_t accentRgb = [&] { const slint::Color c = ui->global<Theme>().get_accent(); return (static_cast<std::uint32_t>(c.red()) << 16) | (static_cast<std::uint32_t>(c.green()) << 8) | c.blue(); }();
+        haveRibbon = false;
         for (const auto& b : lists.bands) {
             const double f0 = fracOf(b.startHz, v.centreHz, v.spanHz), f1 = fracOf(b.stopHz, v.centreHz, v.spanHz);
             if (f1 < 0 || f0 > 1) { continue; }
             // THE BAND PLAN'S PALETTE (window-gaps-2, rows 258, 270): the saved Colour picks each band's colour by its service class
             fig.ribbon.push_back({static_cast<float>(std::clamp(f0, 0.0, 1.0)), static_cast<float>(std::clamp(f1, 0.0, 1.0)), b.name,
                                   foxsdr::slintbands::bandPlanColour(duties.interfaceHalf().bandPlanPalette, b.service, b.colour, accentRgb)});
+            if (!haveRibbon || fig.ribbon.size() == 1) { lastRibbonRgba = fig.ribbon.back().rgba; haveRibbon = true; }
         }
         // THE BOOKMARK MARKS (docs 6.52): none while "On the spectrum" is off (bookmarkMarkers, as the classic drawBookmarkMarkers has it); the
         // names stack onto up to three rows while "Stack close names" is on (bookmarkStackNames), one row otherwise - bookmarkNameRows is the rule.
@@ -3305,6 +3309,12 @@ int main(int argc, char** argv) {
             if (w == "hc") { out = wsMemory.saved().highContrast ? "1" : "0"; return std::string(); }
             if (w == "winhc") { out = winHc ? "1" : "0"; return std::string(); }
             if (w == "meterstyles") { out = duties.interfaceHalf().meterStyleRate + "," + duties.interfaceHalf().meterStyleVolume; return std::string(); }
+            if (w == "ribbonsize") { out = std::to_string(ui->get_ribbon_size()); return std::string(); }   // the band plan ribbon's tier now drawn: 1 small, 2 medium, 3 large
+            if (w == "ribboncolour") {   // the first band of the last ribbon built: its colour as #rrggbbaa, "none" when no band was in view
+                if (!haveRibbon) { out = "none"; return std::string(); }
+                char b[16]; std::snprintf(b, sizeof(b), "#%08x", lastRibbonRgba); out = b;
+                return std::string();
+            }
             if (w == "ledger") { out = systemBank.ledgerOn() ? "1" : "0"; return std::string(); }   // window-gaps-2: the pointer ledger's tick
             if (w == "ledgerline") { out = systemBank.ledgerLine(); return std::string(); }
             if (w == "probestarts") { out = std::to_string(systemBank.sdrPlayDiag().startsCalled()); return std::string(); }   // the SDRplay diagnostic's stand-in child was started this many times

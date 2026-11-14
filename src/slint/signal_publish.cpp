@@ -473,6 +473,13 @@ void SignalPublisher::openImportForPreset(const std::string& preset) {
 }
 
 void SignalPublisher::importBrowse() {
+    // THE SYSTEM FILE CHOOSER IS A WINDOWS DIALOG: a bounded run never raises it (window-gaps-2, rows 1384 and 1652). FOXSDR_FILE_PICK stands in for the choice (the I/Q row's Browse key reads the same variable); without
+    // it a bounded run's Browse key does nothing. The real dialog is UNVERIFIED until the mouse drive.
+    if (bounded_) {
+        if (!filePickSeam_.has_value() || filePickSeam_->empty()) { return; }
+        importPath(*filePickSeam_);
+        return;
+    }
     if (!cascade::core::filePickAvailable()) { return; }
     cascade::core::FilePickRequest rq;
     std::string recordDir = fact("fact.recorder.dir");
