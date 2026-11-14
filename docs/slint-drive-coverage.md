@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2379 | 716 | 117 | 1546 | 0 |
+| 2379 | 721 | 117 | 1541 | 0 |
 
-Of the 1491 rows that are controls (the 888 readout-like rows left out): 716 asserted, 117 driven without a read-back, 658 not drivable.
+Of the 1503 rows that are controls (the 876 readout-like rows left out): 721 asserted, 117 driven without a read-back, 665 not drivable.
 
-NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 71, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 2.
+NOT DRIVABLE by reason: readout 876, other 236, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 71, deferred 68, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 2.
 
 ## Per section
 
@@ -56,7 +56,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | Spectrum and waterfall — Overlays on the spectrum from other features | 11 | 0 | 0 | 11 | 11 | 0 |
 | Spectrum and waterfall — Settings that change what the centre draws (live elsewhere) | 8 | 0 | 1 | 7 | 1 | 0 |
 | DECODE bank and plugin host — DECODE group caption | 2 | 1 | 0 | 1 | 1 | 0 |
-| DECODE bank and plugin host — Plugin store (rail row) | 5 | 2 | 0 | 3 | 3 | 0 |
+| DECODE bank and plugin host — Plugin store (rail row) | 5 | 3 | 0 | 2 | 1 | 0 |
 | DECODE bank and plugin host — Disabled (retired plugins), under the store row | 6 | 0 | 0 | 6 | 3 | 0 |
 | DECODE bank and plugin host — Plugins (rail row) | 4 | 1 | 0 | 3 | 3 | 0 |
 | DECODE bank and plugin host — Turn on and off plugins (rail drawer; internal id "decoders") | 19 | 0 | 1 | 18 | 8 | 0 |
@@ -67,16 +67,16 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | DECODE bank and plugin host — Decoder output (window; rail key "Show decoder output") | 6 | 0 | 0 | 6 | 3 | 0 |
 | DECODE bank and plugin host — Picture window ("<PLUGIN> IMAGE") | 8 | 0 | 0 | 8 | 4 | 0 |
 | DECODE bank and plugin host — Panel window (plugin's own table) | 5 | 0 | 0 | 5 | 2 | 0 |
-| DECODE bank and plugin host — Instrument window | 6 | 0 | 0 | 6 | 4 | 0 |
+| DECODE bank and plugin host — Instrument window | 6 | 0 | 0 | 6 | 2 | 0 |
 | DECODE bank and plugin host — Map page (generic, non-satellite) - brief, map agent owns the detail | 17 | 1 | 0 | 16 | 3 | 0 |
 | DECODE bank and plugin host — Target details (window) | 5 | 0 | 0 | 5 | 2 | 0 |
 | DECODE bank and plugin host — Fitted modules (window; rail key "Plugins"): top bar and list | 15 | 2 | 2 | 11 | 6 | 0 |
-| DECODE bank and plugin host — Module page (click a name) | 14 | 0 | 0 | 14 | 7 | 0 |
+| DECODE bank and plugin host — Module page (click a name) | 14 | 0 | 0 | 14 | 6 | 0 |
 | DECODE bank and plugin host — Preset bar (window-side preset keys) | 4 | 0 | 0 | 4 | 1 | 0 |
 | DECODE bank and plugin host — Sound muted dialog and banner (generic plugin mute behaviour) | 2 | 0 | 0 | 2 | 2 | 0 |
 | DECODE bank and plugin host — Instrument faces: generic face (kind 0 or unknown) | 6 | 0 | 0 | 6 | 6 | 0 |
 | DECODE bank and plugin host — Instrument faces: pager face (kind 1) | 7 | 0 | 0 | 7 | 7 | 0 |
-| DECODE bank and plugin host — Instrument faces: teleprinter face (kind 2) | 4 | 0 | 0 | 4 | 4 | 0 |
+| DECODE bank and plugin host — Instrument faces: teleprinter face (kind 2) | 4 | 0 | 0 | 4 | 3 | 0 |
 | DECODE bank and plugin host — Instrument faces: tone-alert face (kind 3) | 6 | 0 | 0 | 6 | 6 | 0 |
 | DECODE bank and plugin host — Instrument faces: VOR (nav bearing) face (kind 4) | 8 | 0 | 0 | 8 | 7 | 0 |
 | DECODE bank and plugin host — Instrument faces: radiofax recorder face (kind 5) | 6 | 0 | 0 | 6 | 6 | 0 |
@@ -94,7 +94,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | Plugins: aircraft and marine — VOR Navigation Decoder (vor-decoder 1.0.1) | 12 | 4 | 1 | 7 | 7 | 0 |
 | Plugins: aircraft and marine — AIS Ship Tracking Decoder (ais-decoder 1.0.2) | 9 | 2 | 0 | 7 | 6 | 0 |
 | Plugins: aircraft and marine — Inmarsat-C / EGC Decoder (stdc-decoder 0.1.1) | 7 | 0 | 0 | 7 | 5 | 0 |
-| Plugins: aircraft and marine — 406 MHz Distress Beacon Decoder (EPIRB / ELT / PLB) (epirb-decoder 1.0.0) | 19 | 2 | 0 | 17 | 11 | 0 |
+| Plugins: aircraft and marine — 406 MHz Distress Beacon Decoder (EPIRB / ELT / PLB) (epirb-decoder 1.0.0) | 19 | 3 | 0 | 16 | 11 | 0 |
 | Plugins: aircraft and marine — NAVTEX & DSC (marine) (navtex-dsc-decoder 1.0.0) | 25 | 12 | 0 | 13 | 12 | 0 |
 | Plugins: broadcast and text — SSTV Image Decoder (sstv-decoder 1.0.0) | 12 | 2 | 0 | 10 | 5 | 0 |
 | Plugins: broadcast and text — Morse (CW) Decoder (cw-decoder 1.1.0) | 9 | 7 | 0 | 2 | 2 | 0 |
@@ -184,11 +184,11 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | TOOLS bank — Map rows and Target details (reached from here; live in the DECODE bank) | 8 | 0 | 0 | 8 | 2 | 0 |
 | EXTEND bank — Web access (EXTEND rail row, F4 bank) | 19 | 7 | 0 | 12 | 10 | 0 |
 | EXTEND bank — CAT control (rigctld) | 7 | 1 | 0 | 6 | 4 | 0 |
-| Plugin store — window: rail rows, top bar, Browse and Updates lists | 33 | 5 | 0 | 28 | 14 | 0 |
+| Plugin store — window: rail rows, top bar, Browse and Updates lists | 33 | 5 | 0 | 28 | 12 | 0 |
 | Plugin store — SITES panel (under the top bar when SITES is on) | 6 | 2 | 0 | 4 | 2 | 0 |
-| Plugin store — Plugin page (opened from a card or an update row) | 14 | 0 | 0 | 14 | 9 | 0 |
-| Fitted modules — window (rail key Plugins): top bar and list | 14 | 2 | 2 | 10 | 5 | 0 |
-| Fitted modules — Module page (click a row) | 12 | 0 | 0 | 12 | 5 | 0 |
+| Plugin store — Plugin page (opened from a card or an update row) | 14 | 3 | 0 | 11 | 7 | 0 |
+| Fitted modules — window (rail key Plugins): top bar and list | 14 | 2 | 2 | 10 | 4 | 0 |
+| Fitted modules — Module page (click a row) | 12 | 0 | 0 | 12 | 4 | 0 |
 | Fitted modules — Retired modules ("Disabled" rows on the rail, under the store row) | 5 | 0 | 0 | 5 | 2 | 0 |
 | Patch — rail entries (the main window's other face) | 2 | 0 | 0 | 2 | 0 | 0 |
 | Patch — top band: transport, parts bin, decoder row, blueprints | 9 | 3 | 2 | 4 | 3 | 0 |
@@ -668,8 +668,8 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 278 | Plugin store switch row | key (latched toggle) | DRIVEN+ASSERTED | decode-store.txt | click "Plugin store"; state pages contains "PLUGIN STORE" |
-| 279 | Store chip + lamp | readout / lamp | NOT DRIVABLE | - | a readout, not a control |
-| 280 | Row tooltip | tooltip | NOT DRIVABLE | - | a readout, not a control |
+| 279 | Store chip + lamp | readout / lamp | DRIVEN+ASSERTED | wg3-store-page | store.chip == OK after the catalogue was read; BUSY / IDLE / n UPD in test railChip |
+| 280 | Row tooltip | tooltip | NOT DRIVABLE | - | a tooltip |
 | 281 | Catalogue index.json URL | text field | DRIVEN+ASSERTED | decode-store-catalogue.txt | type Catalogue, key enter; state fact.store.url == the typed URL; expect value |
 | 282 | Enforcement error | readout | NOT DRIVABLE | - | a readout, not a control |
 
@@ -798,8 +798,8 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 351 | Preset bar, Plugin settings fold | key set / tree node | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 352 | Face | readout | NOT DRIVABLE | - | a readout, not a control |
 | 353 | Memory table | table | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
-| 354 | Fax chart panel | readout (clickable) | NOT DRIVABLE | - | a readout, not a control |
-| 355 | NEW hold | lamp | NOT DRIVABLE | - | a readout, not a control |
+| 354 | Fax chart panel | readout (clickable) | NOT DRIVABLE | - | needs a fax plugin run |
+| 355 | NEW hold | lamp | NOT DRIVABLE | - | a lamp; the hold is tested in test_slint_host_kit |
 
 ### DECODE bank and plugin host — Map page (generic, non-satellite) - brief, map agent owns the detail
 
@@ -850,7 +850,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 388 | STOP / START | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 389 | REMOVE | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 390 | CONFIRM | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
-| 391 | Cleanup foot | button + dialog | NOT DRIVABLE | - | deferred: CLEAN UP OLD VERSIONS (n) and its dialog: the store is a later beta (the foot is in FittedModules; the host feeds it no label) |
+| 391 | Cleanup foot | button + dialog | NOT DRIVABLE | - | needs old copies in the engine; label, question and command tested in windowGaps3 and test_slint_fitted |
 | 392 | Empty-list text | readout | NOT DRIVABLE | - | a readout, not a control |
 
 ### DECODE bank and plugin host — Module page (click a name)
@@ -870,7 +870,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 403 | Keep running | checkbox | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 404 | Notes | readout | NOT DRIVABLE | - | a readout, not a control |
 | 405 | FILE / PLUGIN ABI / fitted date | readout | NOT DRIVABLE | - | a readout, not a control |
-| 406 | Catalogue body | readout/key | NOT DRIVABLE | - | a readout, not a control |
+| 406 | Catalogue body | readout/key | NOT DRIVABLE | - | the module page body needs a fitted catalogued plugin; logic tested in test_slint_host_extend windowGaps3 |
 
 ### DECODE bank and plugin host — Preset bar (window-side preset keys)
 
@@ -915,7 +915,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 426 | Paper strip | readout | NOT DRIVABLE | - | a readout, not a control |
+| 426 | Paper strip | readout | NOT DRIVABLE | - | a readout; needs a teleprinter plugin run |
 | 427 | STATUS group | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
 | 428 | MESSAGES | readout | NOT DRIVABLE | - | a readout, not a control |
 | 429 | Controls | - | NOT DRIVABLE | - | a readout, not a control |
@@ -1210,7 +1210,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 628 | Burst log col 2 | column | NOT DRIVABLE | - | a readout, not a control |
 | 629 | Burst log col 3 | column | NOT DRIVABLE | - | a readout, not a control |
 | 630 | Burst log col 4 | column | NOT DRIVABLE | - | a readout, not a control |
-| 631 | Safety wording | description text | NOT DRIVABLE | - | deferred: the store's catalogue body is a later beta |
+| 631 | Safety wording | description text | DRIVEN+ASSERTED | wg3-store-page | store.notice, store.keyEnabled before and after the tick; deferred: the store's catalogue body is a later beta |
 
 ### Plugins: aircraft and marine — NAVTEX & DSC (marine) (navtex-dsc-decoder 1.0.0)
 
@@ -2838,8 +2838,8 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 |---|---|---|---|---|---|
 | 1802 | Rail catalogue URL | text field | DRIVEN+ASSERTED | decode-store-catalogue.txt | type Catalogue, key enter; state fact.store.url == the typed URL; expect value |
 | 1803 | Rail "Disabled" rows | list | NOT DRIVABLE | - | a readout, not a control |
-| 1804 | Too-narrow message | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1805 | Too-small message | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1804 | Too-narrow message | readout | NOT DRIVABLE | - | a message |
+| 1805 | Too-small message | readout | NOT DRIVABLE | - | a message |
 | 1806 | Search | text field (with loupe) | DRIVEN+ASSERTED | decode-store-controls.txt | type "Search plugins"#2; expect value equals "adsb" (a [local] box: no engine read-back) |
 | 1807 | BROWSE tab | key (latched) | DRIVEN+ASSERTED | decode-store-controls.txt | click BROWSE; expect checked true, "UPDATES (0)" checked false |
 | 1808 | UPDATES (n) tab | key (latched) | DRIVEN+ASSERTED | decode-store-controls.txt | click "UPDATES (0)"; expect checked true, BROWSE checked false |
@@ -2889,22 +2889,22 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 1842 | Header | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1843 | Page key | button | NOT DRIVABLE | - | withheld in a bounded run (network): a plugin page opens from a card and no card exists |
 | 1844 | Install report/error | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1845 | SCREENSHOTS | readout + strip | NOT DRIVABLE | - | a readout, not a control |
-| 1846 | Strip arrows | button | NOT DRIVABLE | - | deferred: drawn (a Key either side, greyed at the ends) and given no effect: store-picture(i) -> applyStorePicture returns an empty Effect and the draft holds no picture index, so picture-index (a field the host must set) does not move unless the publisher keeps one; they are drawn always, not only on overflow |
+| 1845 | SCREENSHOTS | readout + strip | DRIVEN+ASSERTED | wg3-store-page | frames and captions read back (store.frames, the caption label) |
+| 1846 | Strip arrows | button | DRIVEN+ASSERTED | wg3-store-page | store.pictureIndex 0 -> 1 -> 2 -> 1; the arrow greys at the end |
 | 1847 | WHAT IT DOES | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1848 | WHAT'S NEW | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1849 | BEFORE YOU FIT IT | readout (amber box) | NOT DRIVABLE | - | a readout, not a control |
 | 1850 | Notice tick | checkbox | NOT DRIVABLE | - | withheld in a bounded run (network): a plugin page opens from a card and no card exists |
 | 1851 | DETAILS | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1852 | SHOW DETAILS / HIDE DETAILS | button | NOT DRIVABLE | - | withheld in a bounded run (network): a plugin page opens from a card and no card exists |
-| 1853 | Facts grid | table | NOT DRIVABLE | - | a readout, not a control |
+| 1853 | Facts grid | table | DRIVEN+ASSERTED | wg3-store-page | store.facts and the MAKER row label |
 | 1854 | Reach lead | readout | NOT DRIVABLE | - | a readout, not a control |
 
 ### Fitted modules — window (rail key Plugins): top bar and list
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1855 | Too-narrow message | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1855 | Too-narrow message | readout | NOT DRIVABLE | - | a message |
 | 1856 | Search | text field | DRIVEN+ASSERTED | decode-fitted.txt | type "Search fitted modules"#2; expect value equals the typed text (the filter has no engine read-back) |
 | 1857 | State chips (6) | toggle | DRIVEN+ASSERTED | decode-fitted.txt | click each of the six chips (FED, IDLE, NOT DECODING, TAKES NO SIGNAL, STOPPED, REFUSED) twice; expect checked false then true |
 | 1858 | RESET WINDOW SIZES | button | DRIVEN | decode-fitted.txt | click "RESET WINDOW SIZES"; no read-back (no torn window exists): state running == 1 only |
@@ -2917,7 +2917,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 1865 | Row STOP / START | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 1866 | Row REMOVE | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 1867 | Row CONFIRM | button | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
-| 1868 | CLEAN UP OLD VERSIONS | button + modal | NOT DRIVABLE | - | deferred: phase 2 row 391 is DEFERRED and still true: FittedModules has the foot key (cleanup-label) but kit_publish.cpp feeds it an empty label and the page-fitted-cleanup handler is empty; the store's confirm panel (row 1832) is not reachable from the Fitted page |
+| 1868 | CLEAN UP OLD VERSIONS | button + modal | NOT DRIVABLE | - | needs old copies in the engine; question drawn and answered in test_slint_fitted |
 
 ### Fitted modules — Module page (click a row)
 
@@ -2934,7 +2934,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 1877 | Keep running | checkbox | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 1878 | Notes | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1879 | FILE / PLUGIN ABI / fitted date | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1880 | Shared page body | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1880 | Shared page body | readout | NOT DRIVABLE | - | needs a fitted catalogued plugin; logic tested in windowGaps3 |
 
 ### Fitted modules — Retired modules ("Disabled" rows on the rail, under the store row)
 

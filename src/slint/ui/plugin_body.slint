@@ -132,7 +132,7 @@ component PictureStrip inherits Rectangle {
                     background: Theme.well;
                     clip: true;
                     accessible-role: image;
-                    accessible-label: f.caption != "" ? f.caption : f.word;
+                    accessible-label: f.word;
                     if f.image.width > 0 : Image {
                         x: 2px;
                         y: 2px;
@@ -168,7 +168,7 @@ component PictureStrip inherits Rectangle {
                     font-size: Theme.font-small;
                     wrap: word-wrap;
                     overflow: clip;
-                    accessible-role: none;
+                    accessible-role: text;
                 }
             }
         }
