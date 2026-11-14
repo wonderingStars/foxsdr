@@ -47,7 +47,7 @@ list(APPEND foxsdr_slint_sources layouts_prefs.cpp export_logic.cpp mark_layout.
 list(APPEND foxsdr_slint_sources spectrum_extras.cpp scope_analysis.cpp)
 list(APPEND foxsdr_slint_sources globe_scene.cpp solar_ephemeris.cpp globe_logic.cpp globe_draw.cpp globe_compositor.cpp globe_publish.cpp)
 # THE CLASSIC-WINDOW GAPS (docs/multi-radio-records/slint-gaps.md): the frequency lock, the digit grouping, the file drop, the help entry (gaps_logic: pure; gaps_win: Win32)
-list(APPEND foxsdr_slint_sources gaps_logic.cpp gaps_win.cpp)
+list(APPEND foxsdr_slint_sources gaps_logic.cpp gaps_win.cpp diag_copy.cpp bandplan_palette.cpp sdrplaydiag_logic.cpp sdrplaydiag_child.cpp pointer_ledger.cpp)
 # SCREEN LANE C (docs/multi-radio-records/screen-c.md): the scanner block, the memories, the delta lock, the clock and the two sheets (lanec_logic: pure; lanec_publish: the LaneC global)
 list(APPEND foxsdr_slint_sources lanec_logic.cpp lanec_publish.cpp)
 # SCREEN LANE J (docs/multi-radio-records/screen-j.md): the map page's layers, replay, filter and units, the Sky and Antenna pages (mapj_logic: pure; kit_publish_mapj: KitPublisher members; ui/mapj.slint)

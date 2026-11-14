@@ -1,0 +1,11 @@
+#! frames=260 bank=4 sections=4:0 size=1600x900 FOXSDR_SLINT_DROP=60:meter:0:2;100:meter:1:3;140:meter:0:1;180:meter:0:0
+# wg2-meters (window-gaps-2, rows 50, 51, 52 to 55, 162): the two bench meters in SYSTEM > Display. A popup's rows cannot be reached by label, so a pick of the meter's right-click menu is made through a seam
+# (FOXSDR_SLINT_DROP=<tick>:meter:<which>:<style>) that calls the menu's own callback; the saved style of each meter is read back from the interface half. Each meter keeps its OWN style.
+10 state running == 1
+state gaps.meterstyles == "classic,classic"
+expect "SAMPLE RATE" label contains "SAMPLE"
+expect "VOLUME" label contains "VOLUME"
+65 state gaps.meterstyles == "led,classic"
+105 state gaps.meterstyles == "led,peak"
+145 state gaps.meterstyles == "needle,peak"
+185 state gaps.meterstyles == "classic,peak"

@@ -17,6 +17,7 @@ import { TipTimer, TipLayer, ElidedHint } from "tooltip.slint";
 import { Caption, Key, KeyNames, KeyFocus, SegGroup, SegKey, RailKey, StopKey } from "keys.slint";
 import { Lamp, StatusChip, VLine } from "lamps.slint";
 import { FrequencyCounter } from "digits.slint";
+import { SdrPlayDialog, SdrPlayDialogState, SdrPlayDialogModel, PointerLedger, PointerLedgerStrip } from "diag_overlays.slint";
 import { Slider, LevelBar, SliderGroup } from "sliders.slint";
 import { Section, BodyRow, SelectKey } from "sections.slint";
 import { Tab, TornWindow, Splitter } from "tabs.slint";
@@ -49,6 +50,8 @@ import { FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, Port
 import { TxChoice, TransmitPageModel, TransmitEvents } from "transmit_page.slint";   // the Transmit page (kit page kind 11; docs 6.58): its model and gestures reach C++ through main.h
 import { AboutSlint } from "std-widgets.slint";
 
+export { SdrPlayDialogState, SdrPlayDialogModel, PointerLedger } from "diag_overlays.slint";
+export { MeterPanel } from "meters_panel.slint";
 export { Theme, Skin, Workbench, NightWatch, GlassCockpit, DaylightLab, FieldRadio, HighContrast, DigitFace, MeterStyle, SrText, ChipTone, LampState, MenuItemKind, MenuEntry, CardTone,
          AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode, SpectrumEvents, WaterfallLook, AgeTick, PaletteResult, LayoutRow, LayoutsModel, ExportModel,
          KitEvents, DecodeRow, PluginEntry, RunsOnKey, DecoderBar, PageTab, MapModel, FittedModel, ModuleModel, DetailsModel,
@@ -899,6 +902,8 @@ export component MainWindow inherits Window {
     // the SIGNAL bank's companion sheets: the Radio-setup page and the recorder's import dialog (shown by their models)
     if root.radio-setup.shown : RadioSetupSheet { model: root.radio-setup; }
     if root.import-dialog.shown : ImportDialog { model: root.import-dialog; }
+    // THE SDRPLAY DIAGNOSTIC'S DIALOG (window-gaps-2, diag_overlays.slint): shown by its own global's model
+    SdrPlayDialog { x: 0px; y: 0px; width: root.width; height: root.height; visible: SdrPlayDialogState.model.shown; }
     if root.report-page.shown : ReportSheet { model: root.report-page; }
     if root.markers-model.shown : MarkersSheet { model: root.markers-model; }
     // THE DEMOD SCOPE: a window of its own over the centre, opened where the classic opens it (the lower right, inside the main window)
@@ -999,6 +1004,8 @@ export component MainWindow inherits Window {
         }
         HorizontalLayout { alignment: end; Key { label: @tr("Close"); clicked => { LaneKMatrix.open = false; LaneKMatrix.act("leave", "0"); } } }   // not-translated: the host's action id
     }
+    // THE POINTER LEDGER (window-gaps-2, row 1457): one line across the top of the window while its tick is on; it takes no clicks
+    PointerLedgerStrip { x: 0px; y: 0px; width: root.width; }
     // ===================== the tip layer: LAST, so a tooltip draws over the pages, the torn-off windows and the sheets =====================
     TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

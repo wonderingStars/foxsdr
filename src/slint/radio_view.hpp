@@ -93,7 +93,7 @@ struct WellBuffers {
 // What a picture shows besides the two images, derived from the radio's state, view and the shared lists. Plain data: the host turns it into
 // the main window's properties (layout One) or, later, one element of the pane model. `newFrame` says the engine published a frame this tick,
 // and the frame-only fields (caption, span, foot, age ticks, peak) are meaningful only then.
-struct FigureBand { float from = 0, to = 0; std::string label; };
+struct FigureBand { float from = 0, to = 0; std::string label; std::uint32_t rgba = 0; };   // rgba: 0xRRGGBBAA, the palette's colour for the band (0 = the theme's)
 struct FigureBookmark { float pos = 0; std::string label; bool favourite = false; int row = 0; };
 struct FigureMark { float pos = 0, width = 0; std::string label; std::uint8_t a = 0, r = 0, g = 0, b = 0; bool dashed = false; int row = -1; std::string tip; double hz = 0; };   // row, tip, hz: lane S1 (mark_layout.hpp)
 struct FigureMarker { float pos = 0; std::string label; };

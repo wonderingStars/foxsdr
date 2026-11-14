@@ -221,6 +221,10 @@ struct RadioExtrasModel {
     Tone stereo_tone = Tone::Neutral;      // Good, Warn, Neutral
     bool rds_shown = false;
     std::string rds_ps, rds_rt, rds_pi;
+    // SIGNAL STRENGTH (window-gaps-2, row 1318): the channel power over the squelch slider's own -120 to 0 dB span, as the classic's bar under the stereo and RDS lines
+    bool signal_has = false;
+    float signal_frac = 0.0f;
+    std::string signal_text;               // "-62.4 dB"
     // host extras
     std::string stereo_tooltip, pilot_text, rds_status, rds_stats;
 };
@@ -458,7 +462,7 @@ SinkChip sinkChip(const FoxReceiverState& state);
 // recorder
 enum class Take { Iq, Audio };
 // "Record IQ" / "Stop IQ" / "Starting IQ - click to cancel" / "Cancelling IQ start..." (and the audio ones); start: fact.recorder.start's character (0, 1, 2)
-std::string recorderLabel(Take take, int start, bool recording);
+std::string recorderLabel(Take take, int start, bool recording, bool finishing = false);   // finishing: the last take's file is being closed ("Saving IQ...", the key dead)
 std::string takeProgress(Take take, double seconds, double bytes);   // "IQ 3.2 s | 3200000 samples | 25.6 MB"
 std::string diskWaitLine(double waitedS);                            // "Waiting for the disk to open the file: 2 s" from one second, else ""
 int recorderStartOf(const std::string& startFact, Take take);       // the take's character of fact.recorder.start, 0 when absent

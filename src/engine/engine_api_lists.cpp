@@ -1664,6 +1664,9 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // is being opened, '2' the start was withdrawn and the worker has not answered yet. (Stub campaign B18; it was a field of the window's own recorder before the
     // split.)
     fact("recorder.start", std::string{static_cast<char>('0' + recordStartState(rx().iqStart_)), static_cast<char>('0' + recordStartState(rx().audioStart_))}, true);
+    // A FINISHED TAKE'S FILE IS BEING CLOSED ON A WORKER (RecordFinisher, 0.99.65): two characters, the I/Q take's and the audio take's, '1' while its file is still being written out. The window says "Saving" on
+    // that take's key until it is done; a Record pressed meanwhile is remembered and starts when the file is closed (window-gaps-2, ledger rows 1369 and 1374).
+    fact("recorder.finishing", std::string{takeFinishing(true) ? '1' : '0', takeFinishing(false) ? '1' : '0'}, true);
     for (int k = 0; k < 2; ++k) {
         const cascade::core::Recorder& rec = k == 0 ? rx().iqRecorder_ : rx().audioRecorder_;
         const std::string path = rec.path();

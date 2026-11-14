@@ -70,8 +70,7 @@ int main(int argc, char** argv) {
             CHECK(a != sk.end() && b != sk.end());
             if (a == sk.end() || b == sk.end()) { return; }
             const double r = ratio(a->second.substr(0, 7), b->second.substr(0, 7));
-            if (r < min) { std::printf("  %s: %s on %s is %.2f : 1 (wanted %.1f)
-", g, fg, bg, r, min); }
+            if (r < min) { std::printf("  %s: %s on %s is %.2f : 1 (wanted %.1f)\n", g, fg, bg, r, min); }
             CHECK(r >= min);
         };
         for (const char* ground : {"bg", "strip", "panel", "panel-alt", "card", "well", "menu"}) { need("fg", ground, 4.5); need("muted", ground, 4.5); }

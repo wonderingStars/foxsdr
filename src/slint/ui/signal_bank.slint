@@ -28,6 +28,7 @@ import { Caption, Key } from "keys.slint";
 import { Checkbox } from "fields.slint";
 import { Slider } from "sliders.slint";
 import { SelectKey } from "sections.slint";
+import { ReadBar } from "instruments.slint";
 import { CardTone } from "cards.slint";
 import { TipTimer, ElidedHint } from "tooltip.slint";
 
@@ -63,7 +64,8 @@ export struct SourceModel {
     sdrplay-key-shown: bool, sdrplay-key-enabled: bool, sdrplay-key-label: string, sdrplay-line: string,
 }
 
-export struct RadioExtrasModel { wfm: bool, stereo: bool, stereo-word: string, stereo-tone: ChipTone, rds-shown: bool, rds-ps: string, rds-rt: string, rds-pi: string }
+export struct RadioExtrasModel { wfm: bool, stereo: bool, stereo-word: string, stereo-tone: ChipTone, rds-shown: bool, rds-ps: string, rds-rt: string, rds-pi: string,
+    signal-has: bool, signal-frac: float, signal-text: string }   // the S-meter: the channel power over -120 to 0 dB (window-gaps-2, row 1318)
 
 export struct AudioFiltersModel {
     chain-note: string, nr-on: bool, nr-strength: float, nr-text: string, notch-on: bool, notch-freq: float, notch-freq-text: string,
@@ -171,7 +173,7 @@ export global SignalEvents {
 // ================================================ the pieces the bodies are made of ================================================
 
 // A row of a body: 24 px (.rw min-height), the children side by side 8 px apart.
-component Line inherits Rectangle {
+export component Line inherits Rectangle {
     in property <length> gap: 8px;
     height: max(Theme.field-h, line-row.preferred-height);   // a label that wraps (docs 6.62) makes the row taller by its second line; with one line the row is the 24 px it always was
     line-row := HorizontalLayout {
@@ -181,12 +183,12 @@ component Line inherits Rectangle {
 }
 
 // Keeps a fixed-height child (a 20 px key, a 14 px box) in the middle of a Line.
-component Mid inherits VerticalLayout {
+export component Mid inherits VerticalLayout {
     alignment: center;
 }
 
 // A sentence of a body: 11 px, wrapped, dim unless a tone says otherwise (the sheet's .n, .n.am, .n.rd, .n.gn).
-component Note inherits Text {
+export component Note inherits Text {
     in property <ChipTone> tone: ChipTone.neutral;
     min-width: 0px;
     wrap: word-wrap;
@@ -219,7 +221,7 @@ component Readout inherits Text {
 
 // The .ck checkbox, driven by the host's value: the Checkbox keeps its own `checked` after a press, so the model's value is pushed back into it every
 // time the user presses and every time the model changes (a refusal leaves the box where it was).
-component Tick inherits Rectangle {
+export component Tick inherits Rectangle {
     in property <string> label;
     in property <bool> on;
     in property <bool> enabled: true;
@@ -401,7 +403,7 @@ component LineInput inherits Rectangle {
 }
 
 // One row of a dropdown's list: the tick of the chosen one, the label, the dim note at the right; a greyed row cannot be picked.
-component DropRow inherits Rectangle {
+export component DropRow inherits Rectangle {
     in property <SelectItem> item;
     in property <bool> chosen;
     callback activated();
@@ -1121,6 +1123,21 @@ export component RadioExtras inherits VerticalLayout {
     spacing: 6px;
     alignment: start;
 
+    // SIGNAL STRENGTH (row 1318): the classic's bar under the Radio row, "-62.4 dB" over the squelch slider's own -120 to 0 dB scale
+    Line {
+        RowLabel { text: @tr("Signal strength"); horizontal-stretch: 0; min-width: 96px; }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            ReadBar {
+                value: root.model.signal-frac;
+                has-reading: root.model.signal-has;
+                accessible-label: @tr("Signal strength");
+                accessible-value: root.model.signal-has ? root.model.signal-text : "";
+            }
+        }
+        Readout { text: root.model.signal-has ? root.model.signal-text : "--"; horizontal-stretch: 0; min-width: 60px; horizontal-alignment: right; }   // not-translated: a level in dB
+    }
     if root.model.wfm : Line {
         Tick {
             horizontal-stretch: 1;
@@ -1365,7 +1382,7 @@ export component RecorderBody inherits VerticalLayout {
 // ================================================ the two companion sheets ================================================
 
 // A centred sheet on a dimmed backdrop (the IA's dialog form, as main.slint's Sheet): fills the element it is placed in; a click on the backdrop dismisses.
-component SheetFrame inherits Rectangle {
+export component SheetFrame inherits Rectangle {
     in property <string> title;
     in property <length> sheet-w: 460px;
     in property <length> sheet-h: 0px;                  // 0: as high as the content wants

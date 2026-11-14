@@ -7,12 +7,16 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <optional>
 
 #include "cjk_register.hpp"
 #include <fstream>
 #include "gaps_win.hpp"
+#include "diag_copy.hpp"
+#include "pointer_ledger.hpp"
+#include "core/engine_vocab.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 #include "core/feature_request.hpp"
@@ -139,6 +143,52 @@ SystemPublisher::SystemPublisher(MainWindow& ui, foxsdr::slintkit::PluginKit& ki
     // report as whichever came first) and the attach box unticked until the kind says otherwise.
     opts_.feature.shown = false;
     opts_.bug.shown = false;
+    // THE SDRPLAY DIAGNOSTIC (window-gaps-2): the probe is a child process of the real program; a bounded run NEVER starts it (a stand-in answers), so no test touches an SDRplay radio, service or API.
+    sdrDiag_ = std::make_unique<foxsdr::slintdiag::SdrPlayDiag>(
+        [bounded] { return bounded ? foxsdr::slintdiag::makeStandInRunner(6) : foxsdr::slintdiag::makeProbeChildRunner(); },
+        [] { std::string d = cc::diagCrashDir(); return d.empty() ? cc::diagLogDir() : d; });
+}
+
+// THE TWO BENCH METERS (meters_panel.slint): SAMPLE RATE over 0 to 10 MS/s as the deck had it, VOLUME the level of what reaches the speakers over -60 to 0 dB; each with its own saved style.
+void SystemPublisher::publishMeters() {
+    const auto styleIndex = [](const std::string& name) { return name == "needle" ? 1 : name == "led" ? 2 : name == "peak" ? 3 : 0; };
+    const cc::AppConfig& half = duties_.interfaceHalf();
+    const double rate = state_.sampleRateHz;
+    const bool haveRate = std::isfinite(rate) && rate > 0.0;
+    const bool haveAudio = (state_.flags & FOXAPI_RX_SINK_OPEN) != 0u && std::isfinite(state_.audioLevelDb);
+    const float rateValue = haveRate ? static_cast<float>(std::clamp(rate / 10.0e6, 0.0, 1.0)) : 0.0f;
+    const float volValue = haveAudio ? static_cast<float>(std::clamp((state_.audioLevelDb + 60.0) / 60.0, 0.0, 1.0)) : 0.0f;
+    const std::string rateText = haveRate ? cc::formatText("%.3f MS/s", rate / 1.0e6) : std::string("--");
+    const std::string volText = haveAudio ? cc::formatText("%.1f dB", state_.audioLevelDb) : std::string("--");
+    const int rs = styleIndex(half.meterStyleRate), vs = styleIndex(half.meterStyleVolume);
+    const std::string sig = cc::formatText("%d|%d|%.4f|%.4f|%d|%d|", rs, vs, static_cast<double>(rateValue), static_cast<double>(volValue), haveRate ? 1 : 0, haveAudio ? 1 : 0) + rateText + "|" + volText;
+    if (sig == metersSig_) { return; }
+    metersSig_ = sig;
+    auto g = ui_.global<MeterPanel>();
+    g.set_rate_style(rs);
+    g.set_volume_style(vs);
+    g.set_rate_value(rateValue);
+    g.set_rate_text(ss(rateText));
+    g.set_rate_has(haveRate);
+    g.set_volume_value(volValue);
+    g.set_volume_text(ss(volText));
+    g.set_volume_has(haveAudio);
+}
+
+void SystemPublisher::setProbeFactory(foxsdr::slintdiag::SdrPlayDiag::RunnerFactory f) {
+    sdrDiag_ = std::make_unique<foxsdr::slintdiag::SdrPlayDiag>(std::move(f), [] { std::string d = cc::diagCrashDir(); return d.empty() ? cc::diagLogDir() : d; });
+}
+
+// FoxSDR itself holds an RSP when the selected row is a native SDRplay one and a device is open: the service gives a radio to one owner, and the probe must be it (the classic's sdrplayOpen).
+bool SystemPublisher::sdrPlayInUse() {
+    if ((state_.flags & FOXAPI_RX_DEVICE_OPEN) == 0u) { return false; }
+    const std::string rowFact = fact("fact.source.row");
+    const int row = rowFact.empty() ? -1 : static_cast<int>(std::strtol(rowFact.c_str(), nullptr, 10));
+    if (row < cascade::core::kNativeRowBase) { return false; }
+    FoxListItem it{};
+    it.structSize = sizeof(it);
+    if (table_.readList(FOXAPI_LIST_DEVICES, static_cast<std::uint32_t>(row), &it) <= row) { return false; }
+    return std::strncmp(it.detail, "sdrplay:", 8) == 0;
 }
 
 SystemPublisher::~SystemPublisher() = default;
@@ -276,32 +326,15 @@ void SystemPublisher::pollTelemetry() {
 // COPY DIAGNOSTICS (item 9): the same bundle, built now (a person's own click), put on the clipboard AND saved beside the reports, because a clipboard does not survive the next copy. The disk is touched on
 // the window's thread for this one small text file, as the classic does under its watchdog pause. A bounded run leaves the desk's clipboard alone (the file is still written).
 void SystemPublisher::copyDiagnostics() {
-    cc::DiagBundleInput in;
-    in.contextBlock = cc::diagContextBlock();
-    in.logLines = cc::DiagLog::instance().ringSnapshot();
-    in.logLinesTotal = cc::DiagLog::instance().linesWritten();
-    in.logPath = cc::DiagLog::instance().filePath();
-    in.crashDir = opts_.reports_path;
+    // the one effect behind every Copy diagnostics key (diag_copy.hpp); a bounded run leaves the desk's clipboard alone (the file is still written)
+    foxsdr::slintdiag::DiagCopyInput in;
+    in.reportsPath = opts_.reports_path;
     in.lastRunUnclean = lastRunUnclean_;
     in.launches = std::strtoull(fact("fact.diag.launches").c_str(), nullptr, 10);
     in.crashes = std::strtoull(fact("fact.diag.crashes").c_str(), nullptr, 10);
-    cc::ringCounters(in.ringDroppedSamples, in.sourceSamplesRead);
-    const std::string bundle = cc::prepareDiagnosticsForReport(cc::buildDiagnosticsBundle(in));
-    if (!bounded_) { (void)foxsdr::slintgaps::setClipboardText(bundle); }
-    bundleStatus_ = cascade::i18n::tr("Copied to the clipboard.");
-    const std::string dir = cc::diagCrashDir();
-    if (!dir.empty()) {
-        std::error_code ec;
-        std::filesystem::create_directories(std::filesystem::path(dir), ec);
-        const std::string path = dir + "/diagnostics.txt";
-        std::ofstream out(path, std::ios::binary | std::ios::trunc);
-        if (out) {
-            out << bundle;
-            out.close();
-            bundleStatus_ = cc::formatText(cascade::i18n::tr("Copied to the clipboard, and saved as %s"), path.c_str());
-        }
-    }
-    cc::diagLogf("diagnostics bundle produced (%zu bytes)", bundle.size());
+    if (bounded_) { in.clipboard = [](const std::string&) { return false; }; }
+    const foxsdr::slintdiag::DiagCopyResult r = foxsdr::slintdiag::copyDiagnostics(in);
+    bundleStatus_ = r.status;
     diagCopies_++;
 }
 
@@ -599,8 +632,17 @@ void SystemPublisher::execute(const Effect& e, const char* what) {
     o.sent_text = ss(m.sent_text);
     o.dump_note = ss(m.dump_note);
     o.bundle_status = ss(bundleStatus_);
-    // The pointer ledger, Copy diagnostics' status and the SDRplay diagnostic are window-bound in the ImGui window (the input ledger, the clipboard, a child
-    // process) and have no host model: left empty, which hides the SDRplay block.
+    // THE POINTER LEDGER'S TICK AND HELP, and the SDRplay diagnostic's block (window-gaps-2): the classic's words
+    o.ledger = ledgerOn_;
+    o.ledger_note = ss(cascade::i18n::tr("For a click that lands away from the control it was aimed at: switch
+this on, hold the pointer over the control, take a screenshot and send
+it with the log. Nothing is saved or sent by the switch itself."));
+    {
+        const foxsdr::slintdiag::SdrPlayDiag::View sv = sdrDiag_->view(sdrPlayInUse());
+        o.sdrplay_text = ss(sv.intro);
+        o.sdrplay_enabled = sv.keyEnabled;
+        o.sdrplay_status = ss(sv.status);
+    }
     return o;
 }
 
@@ -722,6 +764,39 @@ void SystemPublisher::publish(const FoxReceiverState& state) {
     const std::int64_t nowMs = static_cast<std::int64_t>(nowS() * 1000.0);
     pollReports();
     pollTelemetry();
+    publishMeters();
+    // the SDRplay diagnostic's child is looked at once a tick (a non-blocking look), and its dialog and the pointer ledger's line follow what they say now
+    {
+        const bool wasRunning = sdrDiag_->running();
+        sdrDiag_->poll();
+        if (wasRunning != sdrDiag_->running()) { forceRead_ = true; }
+        const foxsdr::slintdiag::SdrPlayDiag::View sv = sdrDiag_->view(sdrPlayInUse());
+        const std::string sig = std::string(sv.dialogShown ? "1" : "0") + (sv.biasAsk ? "1" : "0") + (sv.biasOn ? "1" : "0");
+        if (sig != sdrDialogSig_) {
+            sdrDialogSig_ = sig;
+            ::SdrPlayDialogModel dm{};
+            dm.shown = sv.dialogShown;
+            dm.warning = ss(sv.warning);
+            dm.bias_ask = sv.biasAsk;
+            dm.bias_question = ss(sv.biasQuestion);
+            dm.bias_on = sv.biasOn;
+            ui_.global<SdrPlayDialogState>().set_model(dm);
+            forceRead_ = true;
+        }
+        if (ledgerOn_) {
+            foxsdr::slintgaps::LedgerInputs li;
+            li.window = foxsdr::slintgaps::findMainWindow();
+            const auto pos = ui_.window().position();
+            const auto size = ui_.window().size();
+            li.slintX = pos.x; li.slintY = pos.y; li.slintW = static_cast<int>(size.width); li.slintH = static_cast<int>(size.height);
+            li.scale = ui_.window().scale_factor();
+            const std::string line = foxsdr::slintgaps::pointerLedgerLine(li);
+            if (line != ledgerLine_) { ledgerLine_ = line; ui_.global<PointerLedger>().set_line(ss(line)); }
+        } else if (!ledgerLine_.empty()) {
+            ledgerLine_.clear();
+            ui_.global<PointerLedger>().set_line(ss(std::string()));
+        }
+    }
     // The lists and facts are read at 10 Hz (and at once after a gesture): the ImGui window reads them every frame, this one does not need a thirtieth of a second.
     if (!forceRead_ && haveModels_ && nowMs - lastReadMs_ < 100) { return; }
     forceRead_ = false;
@@ -878,9 +953,28 @@ void SystemPublisher::wire() {
     ev.on_diag_open_reports([this] { execute(applyDiagOpenReports(opts_.reports_path), "diag-open-reports"); });
     // The UI's three extras have no host effect: the pointer ledger, Copy diagnostics and the SDRplay diagnostic are window-bound in the ImGui window (the input
     // ledger, the clipboard, a child process). A line says so; nothing else happens.
-    ev.on_diag_ledger([](bool) { say("the pointer ledger is the ImGui window's (its input ledger); nothing to show here"); });
+    ev.on_diag_ledger([this](bool on) { ledgerOn_ = on; if (!on) { ledgerLine_.clear(); } forceRead_ = true; });
     ev.on_diag_copy([this] { copyDiagnostics(); });
-    ev.on_diag_sdrplay([] { say("the SDRplay diagnostic is a child process of the ImGui window; not started"); });
+    ev.on_diag_sdrplay([this] { sdrDiag_->press(); forceRead_ = true; });
+    ui_.global<MeterPanel>().on_style_picked([this](int which, int style) {   // a meter's own right-click menu: saved per meter (meterStyleRate / meterStyleVolume)
+        static const char* const names[4] = {"classic", "needle", "led", "peak"};
+        if (style < 0 || style > 3) { return; }
+        cc::AppConfig half = duties_.interfaceHalf();
+        std::string& slot = which == 0 ? half.meterStyleRate : half.meterStyleVolume;
+        if (slot == names[style]) { return; }
+        slot = names[style];
+        ++saves_;
+        (void)duties_.saveInterfaceHalf(half);
+        metersSig_.clear();
+    });
+    {
+        auto g = ui_.global<SdrPlayDialogState>();
+        g.on_tick_bias([this](bool want) { sdrDiag_->tickBias(want); forceRead_ = true; });
+        g.on_bias_yes([this] { sdrDiag_->biasYes(); forceRead_ = true; });
+        g.on_bias_cancel([this] { sdrDiag_->biasCancel(); forceRead_ = true; });
+        g.on_run([this] { sdrDiag_->run(); forceRead_ = true; });
+        g.on_cancel([this] { sdrDiag_->cancel(); forceRead_ = true; });
+    }
 
     // ---- Usage reporting ----
     ev.on_usage_send([this](bool on) {

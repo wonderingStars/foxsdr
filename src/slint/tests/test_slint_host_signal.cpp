@@ -599,6 +599,24 @@ int main() {
         CHECK(!off.ppm_on && !off.ppm_shown_value && off.ppm_note.empty() && off.ppm_refusal.empty() && off.ppm_chip == "OFF" && off.ppm_text == "+1.5 ppm");
     }
 
+    // ---- SIGNAL STRENGTH (window-gaps-2, row 1318): the channel power over -120 to 0 dB, only while the radio runs ----
+    {
+        FoxReceiverState s{};
+        s.structSize = sizeof(s);
+        s.demodMode = FOXAPI_DEMOD_NFM;
+        s.signalDb = -60.0;
+        CHECK(!readRadioExtras(s).signal_has);                       // stopped: no reading
+        s.flags = FOXAPI_RX_RUNNING;
+        const RadioExtrasModel a = readRadioExtras(s);
+        CHECK(a.signal_has && a.signal_text == "-60.0 dB" && std::fabs(a.signal_frac - 0.5f) < 1e-4f);
+        s.signalDb = -120.0;
+        CHECK(readRadioExtras(s).signal_frac == 0.0f);
+        s.signalDb = 6.0;
+        CHECK(readRadioExtras(s).signal_frac == 1.0f && readRadioExtras(s).signal_text == "6.0 dB");   // over full scale clamps the bar, not the figure
+        s.signalDb = -200.0;
+        CHECK(!readRadioExtras(s).signal_has);                       // the engine's "nothing yet"
+    }
+
     // ---- the Radio row's WFM extras ----
     {
         FoxReceiverState s{};
@@ -795,6 +813,27 @@ int main() {
         st.o.audio_start_wait_s = 1.0;
         const RecorderModel mc = readRecorder(st.t, st.s, st.o);
         CHECK(mc.audio_label == "Cancelling audio start..." && !mc.audio_enabled && mc.iq_enabled && mc.audio_progress == "Waiting for the disk to open the file: 1 s" && mc.audio_start == 2);
+
+        // THE LAST TAKE'S FILE IS BEING CLOSED (window-gaps-2, rows 1369 and 1374): the key says Saving and is dead until the engine's fact goes back to 0
+        {
+            Rig sv;
+            sv.t.facts["fact.recorder.start"] = "00";
+            sv.t.facts["fact.recorder.finishing"] = "10";
+            const RecorderModel a = readRecorder(sv.t, sv.s, sv.o);
+            CHECK(a.iq_label == "Saving IQ..." && !a.iq_enabled && !a.iq_running && a.audio_label == "Record audio" && a.audio_enabled);
+            sv.t.facts["fact.recorder.finishing"] = "01";
+            const RecorderModel b = readRecorder(sv.t, sv.s, sv.o);
+            CHECK(b.audio_label == "Saving audio..." && !b.audio_enabled && b.iq_label == "Record IQ" && b.iq_enabled);
+            sv.t.facts["fact.recorder.finishing"] = "11";
+            const RecorderModel both = readRecorder(sv.t, sv.s, sv.o);
+            CHECK(!both.iq_enabled && !both.audio_enabled);
+            sv.t.facts["fact.recorder.finishing"] = "00";
+            const RecorderModel done = readRecorder(sv.t, sv.s, sv.o);
+            CHECK(done.iq_label == "Record IQ" && done.iq_enabled && done.audio_label == "Record audio" && done.audio_enabled);
+            sv.t.facts.erase("fact.recorder.finishing");   // an engine that does not publish it: nothing is saving
+            CHECK(readRecorder(sv.t, sv.s, sv.o).iq_enabled);
+            CHECK(recorderLabel(Take::Iq, 0, false, true) == "Saving IQ..." && recorderLabel(Take::Audio, 0, false, true) == "Saving audio..." && recorderLabel(Take::Iq, 0, true, true) == "Stop IQ");
+        }
 
         Rig full;
         full.t.add(FOXAPI_LIST_RECORDINGS, 0, "iq-2.wav", "C:\\r\\iq-2.wav", FOXAPI_ITEM_FULL, 1, 4.29e9, 2.4e6, 300.0);

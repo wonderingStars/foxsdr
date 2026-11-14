@@ -415,7 +415,9 @@ SinkChip sinkChip(const FoxReceiverState& st) {
     return c;
 }
 
-std::string recorderLabel(Take take, int start, bool recording) {
+std::string recorderLabel(Take take, int start, bool recording, bool finishing) {
+    // THE LAST TAKE'S FILE IS BEING CLOSED ON A WORKER (fact.recorder.finishing; window-gaps-2, rows 1369 and 1374): the key is dead and says so until it is done
+    if (finishing && start == 0 && !recording) { return take == Take::Iq ? std::string(tr("Saving IQ...")) : std::string(tr("Saving audio...")); }
     if (take == Take::Iq) {
         if (start == 2) { return tr("Cancelling IQ start..."); }
         if (start != 0) { return tr("Starting IQ - click to cancel"); }
@@ -1061,6 +1063,12 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
 RadioExtrasModel readRadioExtras(const FoxReceiverState& st) {
     RadioExtrasModel m;
     m.wfm = st.demodMode == FOXAPI_DEMOD_WFM;
+    // THE S-METER (the classic's progress bar): channel power mapped over the squelch slider's own [-120, 0] dB span, so the bar and the threshold share a scale; drawn only while the radio runs
+    m.signal_has = (st.flags & FOXAPI_RX_RUNNING) != 0u && std::isfinite(st.signalDb) && st.signalDb > -199.0;
+    if (m.signal_has) {
+        m.signal_frac = static_cast<float>(std::clamp((st.signalDb + 120.0) / 120.0, 0.0, 1.0));
+        m.signal_text = cc::formatText("%.1f dB", st.signalDb);
+    }
     if (!m.wfm) { return m; }
     m.stereo = (st.flags & FOXAPI_RX_STEREO_ENABLED) != 0u;
     m.stereo_tooltip = tr("Decode the 38 kHz difference channel when a 19 kHz\n"
@@ -1207,16 +1215,19 @@ RecorderModel readRecorder(TableReader& t, const FoxReceiverState& st, const Rea
     m.iq_start = recorderStartOf(startFact, Take::Iq);
     m.audio_start = recorderStartOf(startFact, Take::Audio);
     // THE OPEN IS ON A WORKER: between the press and the file being there the button says so, and after a second the line under it says how long.
-    m.iq_label = recorderLabel(Take::Iq, m.iq_start, iqOn);
-    m.iq_enabled = m.iq_start != 2;
+    const std::string finishingFact = factOf(t, "fact.recorder.finishing");
+    const bool iqFinishing = finishingFact.size() > 0 && finishingFact[0] == '1';
+    const bool audioFinishing = finishingFact.size() > 1 && finishingFact[1] == '1';
+    m.iq_label = recorderLabel(Take::Iq, m.iq_start, iqOn, iqFinishing);
+    m.iq_enabled = m.iq_start != 2 && !(iqFinishing && !iqOn && m.iq_start == 0);
     m.iq_running = iqOn;
     if (m.iq_start != 0) {
         m.iq_progress = diskWaitLine(o.iq_start_wait_s);
     } else if (iqOn) {
         m.iq_progress = takeProgress(Take::Iq, iq.seconds, iq.bytes);
     }
-    m.audio_label = recorderLabel(Take::Audio, m.audio_start, audioOn);
-    m.audio_enabled = m.audio_start != 2;
+    m.audio_label = recorderLabel(Take::Audio, m.audio_start, audioOn, audioFinishing);
+    m.audio_enabled = m.audio_start != 2 && !(audioFinishing && !audioOn && m.audio_start == 0);
     m.audio_running = audioOn;
     if (m.audio_start != 0) {
         m.audio_progress = diskWaitLine(o.audio_start_wait_s);

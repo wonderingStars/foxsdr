@@ -732,6 +732,9 @@ void SignalPublisher::updateClocks() {
     o.rds_ps = ss(m.rds_ps);
     o.rds_rt = ss(m.rds_rt);
     o.rds_pi = ss(m.rds_pi);
+    o.signal_has = m.signal_has;
+    o.signal_frac = m.signal_frac;
+    o.signal_text = ss(m.signal_text);
     return o;
 }
 
@@ -1025,7 +1028,7 @@ void SignalPublisher::publish(const FoxReceiverState& state) {
                                     m.source.converter_alias, m.source.converter_lo, m.source.converter_inverts, m.source.converter_error, m.source.converter_on_air, m.source.sdrplay_key_shown, m.source.sdrplay_key_enabled, m.source.sdrplay_key_label, m.source.sdrplay_line))) {
         ui_.set_source_model(mapSource(m.source));
     }
-    if (sigs_.changed("radio", cat(m.radio.wfm, m.radio.stereo, m.radio.stereo_word, m.radio.stereo_tone, m.radio.rds_shown, m.radio.rds_ps, m.radio.rds_rt, m.radio.rds_pi))) {
+    if (sigs_.changed("radio", cat(m.radio.wfm, m.radio.stereo, m.radio.stereo_word, m.radio.stereo_tone, m.radio.rds_shown, m.radio.rds_ps, m.radio.rds_rt, m.radio.rds_pi, m.radio.signal_has, m.radio.signal_frac, m.radio.signal_text))) {
         ui_.set_radio_extras(mapRadio(m.radio));
     }
     if (sigs_.changed("filters", cat(m.filters.chain_note, m.filters.nr_on, m.filters.nr_strength, m.filters.nr_text, m.filters.notch_on, m.filters.notch_freq,
