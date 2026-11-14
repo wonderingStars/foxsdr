@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "core/app_commands.hpp"
+#include "core/companion_fault.hpp"
 #include "core/config.hpp"
 #include "core/diag_log.hpp"
 #include "engine/engine.hpp"
@@ -453,6 +454,7 @@ std::vector<std::size_t> Engine::wireCStoreOrder() {
 
 void Engine::pumpWireC() {
     wireCPluginRecorder();
+    cascade::core::companion::drain(*pluginApi_);   // engine fixes 7: the companion fault reports plugins made since the last pass (held back while the switch is off)
     wc::State& s = wireC();
     wc::Power& p = s.power();
     if (!s.powerStarted) {

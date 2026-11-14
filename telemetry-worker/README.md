@@ -58,6 +58,8 @@ The release that carries the plugin containment (docs/engine-stage4.md 6.28) add
 
 Merging master's 0.99.100 into the engine branch (docs/engine-merge-0.99.100.md) joined those five words (the four above and `recovered.threadwedge`) to master's thirty-three, so the Worker's family is thirty-eight words, in master's order and then the branch's; every one is also an issue report (core/issue_report.hpp). Deploy-before applies to the whole union: the branch's release ships after a Worker that has all thirty-eight (`worker.test.mjs`, the merged-vocabulary test).
 
+**The companion-program words (engine fixes 7)**: `recovered.companioncrash`, `recovered.companionstall`, `recovered.companionbreak` and `recovered.companiongaveup` (a program a plugin runs beside FoxSDR ended, stopped answering, lost its link, or was given up on; plugin_abi.h `report_fault`). The Worker file in this tree lists them, and NOTHING WAS DEPLOYED. The app sends them only while `kCompanionFaultReportsOn` in `src/core/companion_fault.hpp` is true, and it is false: deploy this Worker first, confirm it accepts the four words, then flip that one constant in the release that should send them.
+
 **The early-warning words are the same case again** (field-early-warning): `recovered.devlatch` (an SDRplay
 stream failure latched the source) and `recovered.softgl` (the window is drawn by the software OpenGL
 renderer) are new words of the `recovered` family, so **this Worker is deployed before the application that

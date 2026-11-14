@@ -1248,6 +1248,50 @@ bool PluginApiCore::takeOpenRequest(const std::string& key, bool folder, OpenReq
 }
 // wire-c end
 
+// engine fixes 7 begin: which radio, and the fault reports.
+namespace {
+std::int64_t steadyMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+std::atomic<std::int64_t (*)()> g_faultClock{&steadyMs};
+}  // namespace
+
+void PluginApiCore::setFaultClockForTest(std::int64_t (*clockMs)()) { g_faultClock.store(clockMs != nullptr ? clockMs : &steadyMs, std::memory_order_release); }
+
+std::int32_t PluginApiCore::radioIndex(const PluginApiClient& c) const {
+    const std::int32_t g = gate(c);
+    if (g != CASCADE_API_OK) { return g; }
+    const std::uint32_t r = c.radio.load(std::memory_order_acquire);
+    return static_cast<std::int32_t>(r >= 1u && r <= kRadios ? r : 1u);   // radio 1 until the user says otherwise; never 0
+}
+
+std::int32_t PluginApiCore::reportFault(PluginApiClient& c, std::uint32_t kind, std::uint32_t count) {
+    const std::int32_t g = gate(c);
+    if (g != CASCADE_API_OK) { return g; }
+    if (kind < CASCADE_FAULT_CRASH || kind > CASCADE_FAULT_GAVE_UP || count == 0u) { return CASCADE_API_BAD_ARGUMENT; }
+    if (count > CASCADE_FAULT_COUNT_MAX) { return CASCADE_API_OUT_OF_RANGE; }
+    const std::int64_t now = g_faultClock.load(std::memory_order_acquire)();
+    std::atomic<std::int64_t>& last = c.faultLastMs[kind - 1u];
+    std::int64_t before = last.load(std::memory_order_acquire);
+    for (;;) {
+        if (before >= 0 && now - before < kFaultMinGapMs) { return CASCADE_API_BUSY; }
+        if (last.compare_exchange_weak(before, now, std::memory_order_acq_rel)) { break; }
+    }
+    std::lock_guard<std::mutex> lk(faultMutex_);
+    std::uint64_t& sum = faultPending_[kind - 1u];
+    sum = std::min<std::uint64_t>(sum + count, 1'000'000'000ull);
+    return CASCADE_API_OK;
+}
+
+void PluginApiCore::takeFaultReports(std::array<std::uint64_t, 4>& out) {
+    std::lock_guard<std::mutex> lk(faultMutex_);
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        out[i] += faultPending_[i];
+        faultPending_[i] = 0;
+    }
+}
+// engine fixes 7 end
+
 void PluginApiCore::takeRecorderRequests(std::vector<RecorderRequest>& out) {
     std::lock_guard<std::mutex> lk(recorderMutex_);
     for (const RecorderRequest& r : recorderQueue_) { out.push_back(r); }

@@ -1763,6 +1763,15 @@ typedef struct CascadeScheduleHint {
 #define CASCADE_OPEN_URL_CHARS 201 /* wiring lane C: an address of at most 200 bytes, plus the terminator */
 #define CASCADE_RECORDER_LABEL_CHARS 33 /* the longest label is 32 bytes of [A-Za-z0-9._-], plus the terminator */
 
+/* ---- Which radio, and a fault report (appended after host API level 2; engine fixes 7): check CASCADE_HOST_HAS(host, radio_index) / report_fault. ----
+ * report_fault's `kind`: what happened to a program the plugin runs beside itself (a companion). The host files it as an anonymous issue report; NOTHING else
+ * crosses the call - no name, no path, no message. */
+#define CASCADE_FAULT_CRASH 1u   /* the companion ended by itself, unexpectedly */
+#define CASCADE_FAULT_STALL 2u   /* the companion stopped answering and was stopped by the plugin */
+#define CASCADE_FAULT_BREAK 3u   /* the companion's link to the plugin broke (a pipe, a socket, a file that changed under it) */
+#define CASCADE_FAULT_GAVE_UP 4u /* the plugin stopped restarting the companion */
+#define CASCADE_FAULT_COUNT_MAX 1000000u /* the largest `count` one call may carry */
+
 /* ---- Decode events (appended after host API level 2; engine wiring W2, brief item 13 "AD3"): check CASCADE_HOST_HAS(host, post_event). ----------
  * A plugin POSTS a structured event (a decoded message, an alert, a position) and READS the events other plugins posted - and, as events of kind "text",
  * every decoder line the host drained. The host keeps the newest CASCADE_EVENT_RING of them in one ring in memory (never written to disk by the host);
@@ -2030,6 +2039,21 @@ typedef struct CascadeHostApi {
     /* Asks the host to offer a button that opens THIS PLUGIN'S OWN LIBRARY FOLDER in the file manager (the host makes the folder; the plugin cannot name any
      * other path). Same rules and codes as request_open_url, without an argument. */
     int32_t (*request_open_library_folder)(void *ctx);
+
+    /* ---- Which radio, and a fault report (appended after host API level 2; engine fixes 7): check CASCADE_HOST_HAS(host, radio_index) etc. Any thread, no grant. ---- */
+
+    /* The number of the radio this plugin runs on, as the host numbers its radios: 1 to 8 (1 is the first radio). Cheap: a plugin that labels its output with the radio
+     * reads it where it labels. It can change while the plugin runs (the user moves the plugin to another radio; its instances are rebuilt then), so read it again
+     * where you label rather than keeping it for the life of the process. CASCADE_API_DETACHED (a negative number) when the plugin is not live; never 0. An older host
+     * has no such member: CASCADE_HOST_HAS is false there and the plugin labels nothing. */
+    int32_t (*radio_index)(void *ctx);
+    /* Tells the host that a program this plugin runs beside itself crashed, stalled, broke or was given up on (`kind` is one of CASCADE_FAULT_*; `count` how many times
+     * since the last report, 1 to CASCADE_FAULT_COUNT_MAX). The host files it as an anonymous report, at most one per plugin and kind in a minute and one a session on the
+     * feed; no identifier, path or text crosses the call and the host adds none. CASCADE_API_OK: accepted (the host may hold the report back: OK is not an answer to
+     * "was it sent"); CASCADE_API_BAD_ARGUMENT (a kind that is not one of the four, a count of 0); CASCADE_API_OUT_OF_RANGE (a count over the maximum); CASCADE_API_BUSY (this
+     * plugin already reported this kind in the last minute: keep counting and report the sum later); CASCADE_API_DETACHED. An older host has no such member:
+     * CASCADE_HOST_HAS is false and the plugin keeps its own log. */
+    int32_t (*report_fault)(void *ctx, uint32_t kind, uint32_t count);
 } CascadeHostApi;
 
 /*

@@ -141,8 +141,15 @@ enum class Recovered : std::uint8_t {
     PluginWedge,       // a plugin call never returned and the host let it go, or an unload timed out inside a plugin's call
     PluginOveruse,     // a plugin call overran its budget
     ThreadWedge, // a worker thread missed its heartbeat budget and was reported by name (core/thread_beats.hpp)
+    // THE COMPANION PROGRAMS' FOUR (engine fixes 7; plugin_abi.h report_fault): a program a plugin runs beside itself ended, stopped answering, lost its link
+    // or was given up on. Counted and filed by core/companion_fault.cpp, and ONLY while its switch (kCompanionFaultReportsOn) is on - which it is not until the
+    // telemetry Worker accepts these four words (the deploy-before rule).
+    CompanionCrash,
+    CompanionStall,
+    CompanionBreak,
+    CompanionGaveUp,
 };
-inline constexpr std::size_t kRecoveredCount = 40;
+inline constexpr std::size_t kRecoveredCount = 44;
 
 // HOW FAR A SESSION GOT (field-early-warning): the stages between "the program started" and
 // "the radio is doing its job", one fixed word each. They are the working-session metric and

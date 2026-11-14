@@ -79,6 +79,10 @@ constexpr RecoveredInfo kRecovered[kRecoveredCount] = {
     {"pluginwedge", false},       // each is a call that never returned (or an unload that timed out inside one)
     {"pluginoveruse", true},      // a plugin that is slow is slow every frame: "this session had one" is the fact
     {"threadwedge", false}, // each is a worker reported late by the watchdog's poll; a thread must recover before it can be counted again
+    {"companioncrash", false},   // engine fixes 7: each report carries its own count (the plugin batches, at most one a minute per kind); the issue report is once a session
+    {"companionstall", false},
+    {"companionbreak", false},
+    {"companiongaveup", false},
 };
 
 // The frame timer's own names for the scopes, but for `user-wait`.

@@ -135,7 +135,8 @@ void testEveryTokenIsLegalAndNothingElseIs() {
     // and the per-thread watchdog's threadwedge); and, FIRST in the written order, the 7
     // stages a session reaches (field-early-warning: launched ... working). 0.99.107 adds the setup finding,
     // 6 kinds x 8 families = 48 more failure tokens.
-    CHECK(all.size() == 7 + 220 + 48 + 54 + 40);
+    // engine fixes 7: four more recovered words (companioncrash, companionstall, companionbreak, companiongaveup: a plugin's companion program failed) = 44.
+    CHECK(all.size() == 7 + 220 + 48 + 54 + 44);
     std::set<std::string> unique(all.begin(), all.end());
     CHECK(unique.size() == all.size());
     for (const std::string& t : all) {
@@ -954,7 +955,8 @@ void testRecoveredWordsAndCap() {
                                             "usbstuck", "ratesdefault", "gainrefused", "ppmrefused",
                                             "iqfilegone", "cataloguebad", "catstop", "filekept",
                                             "takeheader", "sentinelgone", "displaywatch", "devlatch", "softgl",
-                                            "pluginfault", "pluginquarantine", "pluginwedge", "pluginoveruse", "threadwedge"};
+                                            "pluginfault", "pluginquarantine", "pluginwedge", "pluginoveruse", "threadwedge",
+                                            "companioncrash", "companionstall", "companionbreak", "companiongaveup"};
     CHECK(health::recoveredWords() == words);
     CHECK(health::kRecoveredCount == words.size());
     for (std::size_t i = 0; i < words.size(); ++i) {

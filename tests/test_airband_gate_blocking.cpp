@@ -26,11 +26,13 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
 #include "core/airband_gate.hpp"
 #include "core/record_finish.hpp"
+#include "core/thread_beats.hpp"
 #include "dspmodels_alloc.hpp"
 #include "test_check.hpp"
 
@@ -303,6 +305,49 @@ void testDropAndCount() {
     CHECK(waitFor([] { return RecordFinisher::inFlight() == 0; }, 5000));
 }
 
+// --- G: a stuck disk is reported BY NAME (engine fixes 7), a writer with nothing to do is not ------------------------------------------------
+// The worker holds a heartbeat (core/thread_beats.hpp, kThreadDiskJob): idle it is parked on its queue (a declared wait, no cap), inside the disk it is "write". The Disk kind's budget
+// is 60 s; the test shortens it to 200 ms and polls the registry the way the watchdog does.
+void testStuckDiskIsNamed() {
+    namespace beats = cascade::core::beats;
+    auto& reg = beats::Registry::instance();
+    reg.setBudgetOverrideForTest(beats::Kind::Disk, 200);
+    // (1) idle: nothing to write, the worker parked on its queue - never late, however long
+    g.reset();
+    {
+        auto idle = std::make_unique<StuckOut>(WriterConfig{});
+        nap(700);
+        const beats::PollResult r = reg.poll();
+        bool named = false;
+        for (const beats::Finding& f : r.wedged) { named = named || f.name == "disk-job"; }
+        std::printf("G: an idle writer for 700 ms: %zu worker(s) reported late\n", r.wedged.size());
+        CHECK(!named);
+        idle.reset();
+        CHECK(waitFor([] { return g.closed.load(); }, 5000));
+    }
+    // (2) stuck inside the disk: reported once, by the thread's name and the phase it was in
+    g.reset();
+    g.blockWrite = true;
+    auto out = std::make_unique<StuckOut>(WriterConfig{});
+    pushNumbered(*out, 1);
+    CHECK(waitFor([] { return g.inWrite.load() >= 1; }, 5000));
+    nap(700);
+    const beats::PollResult r = reg.poll();
+    bool named = false;
+    std::string phase;
+    for (const beats::Finding& f : r.wedged) {
+        if (f.name == "disk-job") { named = true; phase = f.phase; }
+    }
+    std::printf("G: a writer stuck in the disk for 700 ms: reported %s (phase \"%s\")\n", named ? "by name" : "NOT", phase.c_str());
+    CHECK(named);
+    CHECK(phase == "write");
+    g.blockWrite = false;
+    out.reset();
+    CHECK(waitFor([] { return g.closed.load(); }, 10000));
+    CHECK(waitFor([] { return RecordFinisher::inFlight() == 0; }, 5000));
+    reg.clearOverridesForTest();
+}
+
 }  // namespace
 
 int main() {
@@ -316,6 +361,7 @@ int main() {
     testHealthyTakeIsValidAndComplete(scratch);
     testPushAllocatesNothing(scratch);
     testDropAndCount();
+    testStuckDiskIsNamed();
     fs::remove_all(scratch, ec);
     return testSummary("test_airband_gate_blocking");
 }

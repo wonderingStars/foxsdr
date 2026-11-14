@@ -31,6 +31,7 @@
 #include "core/airband_writer.hpp"
 #include "core/patch_runner.hpp"
 #include "core/record_finish.hpp"
+#include "core/thread_beats.hpp"
 
 namespace cascade::core::airband {
 
@@ -146,12 +147,18 @@ private:
     };
     static void work(Shared& s) {
         const EndGuard guard{s};
+        // THE HEARTBEAT (core/thread_beats.hpp; engine fixes 7): the worker is parked on its queue when idle (a declared wait, no cap) and alive when it writes, so a disk that
+        // never answers is reported by the watchdog's poll after the Disk kind's budget, by this thread's name - the same registration the other disk workers hold.
+        cascade::core::beats::Registration beat(cascade::core::beats::kThreadDiskJob);
         std::vector<float> block;   // the worker's own copy of a block (it may allocate: it is not the audio thread)
         for (;;) {
             Meta mt;
             {
                 std::unique_lock<std::mutex> lk(s.m);
-                s.cv.wait(lk, [&s] { return s.stop || s.count > 0; });
+                {
+                    cascade::core::beats::WaitScope parked(beat, cascade::core::beats::kWaitJob);
+                    s.cv.wait(lk, [&s] { return s.stop || s.count > 0; });
+                }
                 if (s.count == 0) { break; }   // stopping, and nothing left
                 mt = s.meta[s.mhead];
             }
@@ -160,6 +167,7 @@ private:
             const std::size_t first = std::min(mt.len, kRingFloats - mt.at);
             std::memcpy(block.data(), s.ring.data() + mt.at, first * sizeof(float));
             if (mt.len > first) { std::memcpy(block.data() + first, s.ring.data(), (mt.len - first) * sizeof(float)); }
+            beat.beat("write");
             if (!s.writer.write(block.data(), block.size(), mt.open, utcNow())) { s.failed.store(true, std::memory_order_relaxed); }
             s.written.fetch_add(mt.len, std::memory_order_relaxed);
             {
@@ -169,6 +177,7 @@ private:
                 s.used -= mt.len;
             }
         }
+        beat.beat("close");
         s.writer.close();
     }
     std::shared_ptr<Shared> s_;

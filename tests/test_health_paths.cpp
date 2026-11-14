@@ -299,6 +299,9 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         {"CatStop", "src/net/cat_server.cpp", 1},
         {"FileKept", "src/engine/engine.cpp", 2}, {"FileKept", "src/engine/engine_service.cpp", 1},
         {"TakeHeader", "src/engine/engine.cpp", 1},
+        // ENGINE FIXES 7: a plugin's companion program failed (plugin_abi.h report_fault); the one site is the switch-guarded mapping of a kind to its word.
+        {"CompanionCrash", "src/core/companion_fault.cpp", 1}, {"CompanionStall", "src/core/companion_fault.cpp", 1},
+        {"CompanionBreak", "src/core/companion_fault.cpp", 1}, {"CompanionGaveUp", "src/core/companion_fault.cpp", 1},
         {"SentinelGone", "src/core/sentinel_host_win.cpp", 2}, {"SentinelGone", "src/core/sentinel_host_posix.cpp", 2},
         {"DisplayWatch", "src/gui/win_frame.cpp", 1},
         // THE EARLY-WARNING PAIR (field-early-warning): the window counts the software renderer; the SDRplay source raises the stream-failure latch.

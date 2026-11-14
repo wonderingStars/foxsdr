@@ -615,6 +615,10 @@ by itself, so a count of 1 means "this session had it".
 | `pluginwedge` | a call into a plugin never returned within its allowance (or an unload timed out inside one), and FoxSDR let go of it, switched the plugin off and wrote a freeze report naming it. Counted each time. |
 | `pluginoveruse` | a call into a plugin took longer than the allowance FoxSDR gives that kind of call, but returned. Once a session. |
 | `threadwedge` | one of FoxSDR's own worker threads (the signal processing, the radio's reader, the settings keeper, a server, a disk job) stopped answering for longer than its allowance, and the watchdog wrote a freeze report naming it. Once for each time a thread stops; it is counted again only after the thread has answered again. |
+| `companioncrash` | a program that one of your plugins runs beside FoxSDR (a decoder in a program of its own) ended unexpectedly, and the plugin carried on without it. Counted by how many times the plugin reports it, at most one report a minute for each plugin. No plugin's name and nothing the program said is in it. Not sent by any release until the usage Worker accepts the word. |
+| `companionstall` | a program that one of your plugins runs beside FoxSDR stopped answering and the plugin stopped it. Counted the same way, and held back the same way. |
+| `companionbreak` | the link between one of your plugins and a program it runs beside FoxSDR broke. Counted the same way, and held back the same way. |
+| `companiongaveup` | one of your plugins stopped restarting a program it runs beside FoxSDR after it kept failing. Counted the same way, and held back the same way. |
 
 **Stages reached.** One word each, in the order a session reaches them. `launched` is
 counted by every session that measures the stages, so a record's `reached.launched` is

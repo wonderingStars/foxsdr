@@ -885,6 +885,7 @@ The sites that are counted:
 | `pluginwedge` | `fault::totals().wedges`: a guarded call never returned (the stage-2 finding of the call budget), or an unload timed out inside one | the engine's pass |
 | `pluginoveruse` | `fault::totals().overruns`: a guarded call overran its budget (the stage-1 finding), once a session | the engine's pass |
 | `threadwedge` | `HangWatchdog`'s poll found a registered worker thread past its budget and wrote a freeze report naming it (see *A worker that stops answering is reported by name*) | the engine's pass, from `beats::Registry::wedgesFound()` (a counter, like the four above) |
+| `companioncrash`, `companionstall`, `companionbreak`, `companiongaveup` | `core/companion_fault.cpp`, `wordOfKind`: a plugin's `report_fault(kind, count)` call (plugin_abi.h; at most one a minute per plugin and kind, the sums kept in `PluginApiCore`) drained by the engine's pass (`pumpWireC`). HELD BACK while `kCompanionFaultReportsOn` is false (it is, until the Worker lists the four words); nothing of the plugin is kept | the engine's pass |
 
 **Surveyed and deliberately not counted**, so the next reader does not re-do the
 survey: the person's own actions that look like recoveries (re-picking a stopped

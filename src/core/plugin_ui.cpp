@@ -625,6 +625,14 @@ std::int32_t l1RequestOpenFolder(void* ctx) {
     return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.openRequest(c, true, nullptr); });
 }
 // wire-c end
+// engine fixes 7 begin
+std::int32_t l1RadioIndex(void* ctx) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.radioIndex(c); });
+}
+std::int32_t l1ReportFault(void* ctx, std::uint32_t kind, std::uint32_t count) {
+    return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.reportFault(c, kind, count); });
+}
+// engine fixes 7 end
 std::int32_t l1RecorderStop(void* ctx) {
     return level1(ctx, [&](PluginApiCore& a, PluginApiClient& c) { return a.recorderRequest(c, false, nullptr); });
 }
@@ -719,6 +727,8 @@ void fillLevel1(HostCtx& c) {
     t.symbol_rate = &l1SymbolRate;                          // wire-c
     t.request_open_url = &l1RequestOpenUrl;                 // wire-c
     t.request_open_library_folder = &l1RequestOpenFolder;   // wire-c
+    t.radio_index = &l1RadioIndex;                          // engine fixes 7
+    t.report_fault = &l1ReportFault;                        // engine fixes 7
 }
 
 }  // namespace

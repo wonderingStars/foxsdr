@@ -162,6 +162,8 @@ struct PluginApiClient {
     // THE RADIO THIS PLUGIN RUNS ON (multi-radio engine, stage 6): 1..PluginApiCore::kRadios, written by the engine when the user moves the plugin, read lock-free by every
     // call that answers from a radio (get_state, get_gain, the rates, the stream clock, a control request). Radio 1 until the user says otherwise.
     std::atomic<std::uint32_t> radio{1};
+    // The steady-clock millisecond of this plugin's last ACCEPTED fault report, per kind 1..4 (index kind-1); -1 = none yet (engine fixes 7, report_fault's one-a-minute rule).
+    std::array<std::atomic<std::int64_t>, 4> faultLastMs{{-1, -1, -1, -1}};
 };
 
 // One queued receiver-control request. Plain data: the queue is a fixed ring.
@@ -426,6 +428,16 @@ public:
     // Whether `url` is an address the host will hold: https only, no user name, printable ASCII, a host name. Pure.
     static bool acceptableOpenUrl(const char* url, std::int32_t& why);
     // wire-c end
+    // engine fixes 7 begin: WHICH RADIO and FAULT REPORTS (plugin_abi.h radio_index, report_fault). radioIndex answers the client's radio (1..kRadios) or DETACHED. reportFault
+    // validates (kind 1..4, count 1..CASCADE_FAULT_COUNT_MAX), keeps the one-a-minute-per-plugin-per-kind rule (BUSY inside the minute), and adds the count to the pending sum of
+    // that kind; the pass drains the sums (takeFaultReports) and the host's companion-fault part (core/companion_fault.hpp) decides what is filed. Nothing but the kind and
+    // the count is kept: no plugin name, no text. `faultClock` is the millisecond clock the minute is read from (a test replaces it; default steady_clock).
+    static constexpr std::int64_t kFaultMinGapMs = 60'000;
+    std::int32_t radioIndex(const PluginApiClient& c) const;
+    std::int32_t reportFault(PluginApiClient& c, std::uint32_t kind, std::uint32_t count);
+    void takeFaultReports(std::array<std::uint64_t, 4>& out);   // the pass: the sums since the last call (index kind-1), then zero
+    static void setFaultClockForTest(std::int64_t (*clockMs)());
+    // engine fixes 7 end
     std::int32_t readEvents(const PluginApiClient& c, std::uint64_t afterSeq, CascadeEvent* out, std::uint32_t cap) const;
     std::uint64_t eventsSeq() const;
     // The host's own read of the ring (its windows, and the alert and decode-database parts that will read decode events): everything after `afterSeq`, oldest first,
@@ -533,6 +545,8 @@ private:
     mutable std::mutex openMutex_;   // taken AFTER mutex_ when both are needed
     std::map<std::pair<std::size_t, int>, std::string> openRequests_;   // (client index, 0 url / 1 folder) -> url
     // wire-c end
+    mutable std::mutex faultMutex_;                    // engine fixes 7: the pending fault sums, under their own lock
+    std::array<std::uint64_t, 4> faultPending_{};
     mutable std::mutex mutex_;
     std::vector<std::unique_ptr<PluginApiClient>> clients_;
     std::vector<ClientState> state_;

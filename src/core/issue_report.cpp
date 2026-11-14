@@ -130,6 +130,14 @@ constexpr const char* kSentences[health::kRecoveredCount] = {
     // ThreadWedge
     "one of FoxSDR's worker threads stopped answering its watchdog for longer than its allowance "
     "and was reported by name",
+    // CompanionCrash (engine fixes 7: the four words of a plugin's companion program, filed only while core/companion_fault.hpp's switch is on)
+    "a program that a plugin runs beside FoxSDR ended unexpectedly, and the plugin carried on without it",
+    // CompanionStall
+    "a program that a plugin runs beside FoxSDR stopped answering, and the plugin stopped it",
+    // CompanionBreak
+    "the link between a plugin and a program it runs beside FoxSDR broke, and the plugin carried on without it",
+    // CompanionGaveUp
+    "a plugin stopped restarting a program it runs beside FoxSDR, after it kept failing",
 };
 static_assert(sizeof(kSentences) / sizeof(kSentences[0]) == health::kRecoveredCount,
               "every recovered-from word has an issue sentence");

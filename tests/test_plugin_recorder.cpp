@@ -77,7 +77,7 @@ void testTable() {
     static_assert(offsetof(CascadeHostApi, symbol_rate) == offsetof(CascadeHostApi, recorder_stop) + sizeof(void*), "the symbol rate follows");
     static_assert(offsetof(CascadeHostApi, request_open_url) == offsetof(CascadeHostApi, symbol_rate) + sizeof(void*), "adjacent");
     static_assert(offsetof(CascadeHostApi, request_open_library_folder) == offsetof(CascadeHostApi, request_open_url) + sizeof(void*), "adjacent");
-    static_assert(sizeof(CascadeHostApi) == offsetof(CascadeHostApi, request_open_library_folder) + sizeof(void*), "and last");
+    static_assert(offsetof(CascadeHostApi, radio_index) == offsetof(CascadeHostApi, request_open_library_folder) + sizeof(void*), "engine fixes 7 appended after it (test_plugin_radio_fault.cpp pins the end)");
     PluginUi ui;
     ui.setServices(services());
     ui.rebuild({plug(0, "A")});
