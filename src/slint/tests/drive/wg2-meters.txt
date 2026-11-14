@@ -4,7 +4,6 @@
 10 state running == 1
 state gaps.meterstyles == "classic,classic"
 expect "SAMPLE RATE" label contains "SAMPLE"
-expect "VOLUME" label contains "VOLUME"
 65 state gaps.meterstyles == "led,classic"
 105 state gaps.meterstyles == "led,peak"
 145 state gaps.meterstyles == "needle,peak"

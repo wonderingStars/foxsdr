@@ -9,6 +9,8 @@
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 #include "core/i18n.hpp"
+#include "core/problem_report.hpp"
+#include "core/utf8_text.hpp"
 #include "gaps_win.hpp"
 
 namespace foxsdr::slintdiag {

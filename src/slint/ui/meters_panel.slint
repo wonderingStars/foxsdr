@@ -32,6 +32,8 @@ component MeterCell inherits Rectangle {
         { label: @tr("LED ladder"), id: "led", enabled: true, note: "" },
         { label: @tr("Peak meter"), id: "peak", enabled: true, note: "" },
     ];
+    property <length> menu-x: 0px;
+    property <length> menu-y: 0px;
     property <length> popup-w: 150px;
     property <length> popup-h: 4 * Theme.menu-item-h + 2 * (4px + Theme.hairline);
     width: meter.width;
@@ -46,11 +48,11 @@ component MeterCell inherits Rectangle {
         value-text: root.value-text;
         has-reading: root.has-reading;
         style: root.style-index == 1 ? MeterStyle.analogue : root.style-index == 2 ? MeterStyle.led-ladder : root.style-index == 3 ? MeterStyle.peak : MeterStyle.classic;
-        menu-requested(mx, my) => { menu.x = Math.min(mx, root.width - root.popup-w); menu.y = Math.min(my, root.height - root.popup-h); menu.show(); }
+        menu-requested(mx, my) => { root.menu-x = Math.max(0px, Math.min(mx, root.width - root.popup-w)); root.menu-y = Math.max(0px, Math.min(my, root.height - root.popup-h)); menu.show(); }
     }
     menu := PopupWindow {
-        x: 0px;
-        y: 0px;
+        x: root.menu-x;
+        y: root.menu-y;
         width: root.popup-w;
         height: root.popup-h;
         close-policy: close-on-click-outside;

@@ -7,7 +7,7 @@
 state gaps.ledger == 0
 state gaps.ledgerline == ""
 state gaps.probestarts == 0
-+1 scroll "Show the pointer ledger across the top of the window" 400
++1 scroll "Record crashes and freezes, and send the report next time" 700
 +3 click "Show the pointer ledger across the top of the window"
 +8 state gaps.ledger == 1
 state gaps.ledgerline contains "os cursor"
@@ -16,7 +16,7 @@ state gaps.ledgerline contains "client origin"
 +8 state gaps.ledger == 0
 state gaps.ledgerline == ""
 # the SDRplay diagnostic: the key, the dialog, the question
-+2 scroll "Run SDRplay diagnostic" 400
++2 scroll "Copy diagnostics" 300
 +2 expect "Run SDRplay diagnostic" enabled equals "true"
 +2 click "Run SDRplay diagnostic"
 +4 expect "Run the diagnostic" enabled equals "true"

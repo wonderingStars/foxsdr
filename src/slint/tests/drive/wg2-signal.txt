@@ -1,0 +1,5 @@
+#! frames=200 bank=0 sections=0:2 size=1600x900
+# wg2-signal (window-gaps-2, row 1318): the Radio section's SIGNAL STRENGTH bar, the classic's S-meter over the squelch slider's own -120 to 0 dB span. The generator feeds the receiver; the bar's accessible
+# value is the figure ("-61.3 dB") and the section's De-emph row (row 1317) is still there beside it.
+10 state running == 1
++30 expect "Signal strength" value contains "dB"

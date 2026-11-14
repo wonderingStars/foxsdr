@@ -164,7 +164,7 @@ void SystemPublisher::publishMeters() {
     const std::string sig = cc::formatText("%d|%d|%.4f|%.4f|%d|%d|", rs, vs, static_cast<double>(rateValue), static_cast<double>(volValue), haveRate ? 1 : 0, haveAudio ? 1 : 0) + rateText + "|" + volText;
     if (sig == metersSig_) { return; }
     metersSig_ = sig;
-    auto g = ui_.global<MeterPanel>();
+    const auto& g = ui_.global<MeterPanel>();
     g.set_rate_style(rs);
     g.set_volume_style(vs);
     g.set_rate_value(rateValue);
@@ -634,9 +634,7 @@ void SystemPublisher::execute(const Effect& e, const char* what) {
     o.bundle_status = ss(bundleStatus_);
     // THE POINTER LEDGER'S TICK AND HELP, and the SDRplay diagnostic's block (window-gaps-2): the classic's words
     o.ledger = ledgerOn_;
-    o.ledger_note = ss(cascade::i18n::tr("For a click that lands away from the control it was aimed at: switch
-this on, hold the pointer over the control, take a screenshot and send
-it with the log. Nothing is saved or sent by the switch itself."));
+    o.ledger_note = ss(cascade::i18n::tr("For a click that lands away from the control it was aimed at: switch\nthis on, hold the pointer over the control, take a screenshot and send\nit with the log. Nothing is saved or sent by the switch itself."));
     {
         const foxsdr::slintdiag::SdrPlayDiag::View sv = sdrDiag_->view(sdrPlayInUse());
         o.sdrplay_text = ss(sv.intro);
@@ -968,7 +966,7 @@ void SystemPublisher::wire() {
         metersSig_.clear();
     });
     {
-        auto g = ui_.global<SdrPlayDialogState>();
+        const auto& g = ui_.global<SdrPlayDialogState>();
         g.on_tick_bias([this](bool want) { sdrDiag_->tickBias(want); forceRead_ = true; });
         g.on_bias_yes([this] { sdrDiag_->biasYes(); forceRead_ = true; });
         g.on_bias_cancel([this] { sdrDiag_->biasCancel(); forceRead_ = true; });

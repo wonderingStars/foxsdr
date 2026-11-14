@@ -86,7 +86,7 @@ bool knownKey(const std::string& k) {
         if (rest.rfind(m, 0) == 0) { rest.erase(0, std::strlen(m)); ++mods; }
     }
     if (mods == 0 || rest.empty()) { return false; }
-    if (rest.size() == 1) { return std::isalnum(static_cast<unsigned char>(rest[0])) != 0; }
+    if (rest.size() == 1) { return std::isalnum(static_cast<unsigned char>(rest[0])) != 0 || rest[0] == '=' || rest[0] == '-' || rest[0] == '+'; }   // ctrl+= and ctrl+- step the interface size (window-gaps-2, row 145)
     if (rest.rfind("ctrl+", 0) == 0 || rest.rfind("shift+", 0) == 0 || rest.rfind("alt+", 0) == 0) { return false; }   // the modifiers are in the order ctrl, shift, alt, once each
     return knownKey(rest);
 }
