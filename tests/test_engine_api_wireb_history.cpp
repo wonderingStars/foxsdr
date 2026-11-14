@@ -17,7 +17,12 @@
 #include "test_engine_api_wireb_sweep.cpp"
 #undef main
 
+#ifdef _WIN32
 #include <process.h>
+#else
+#include <unistd.h>
+#define _getpid getpid
+#endif
 #include <filesystem>
 #include <fstream>
 

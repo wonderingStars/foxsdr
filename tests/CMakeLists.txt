@@ -4,6 +4,20 @@
 # name for test_json_dump_policy.
 file(GLOB CASCADE_TESTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test_*.cpp")
 
+# Tests whose subject is a Windows facility (an ExtIO DLL host, the Win32 desktop guard, DLL loading, the Windows process API) stay Windows-only:
+# they are not built or registered elsewhere. Nothing is removed on Windows.
+if(NOT WIN32)
+    set(CASCADE_WINDOWS_ONLY_TESTS
+        test_extio                   # the ExtIO helper process and its stand-in DLLs
+        test_gui_desktop_guard       # the Win32 desktop guard
+        test_vendor_lib test_g33ddc_source test_g39ddc_source test_sdriq_d2xx    # stand-in vendor DLLs loaded by path (tests/eol_fixture.hpp)
+        test_engine_api_wireb_ftdi test_engine_api_wireb_winradio test_engine_api_wireb_neededlibs
+        test_hardware_guard)
+    foreach(_t ${CASCADE_WINDOWS_ONLY_TESTS})
+        list(REMOVE_ITEM CASCADE_TESTS "${CMAKE_CURRENT_SOURCE_DIR}/${_t}.cpp")
+    endforeach()
+endif()
+
 # A REAL plugin module for test_plugin_settings_ui (CASCADE_CAP_SETTINGS_UI):
 # built as a MODULE exactly as a third-party plugin is - plugin_abi.h only,
 # never linked against cascade_lib - into a directory of its own, so the test
@@ -1884,10 +1898,8 @@ if(WIN32)
         endif()
     endforeach()
 endif()
-if(WIN32)
-    if(TARGET test_rfexplorer_source)
-        target_compile_definitions(test_rfexplorer_source PRIVATE RB_SRC_DIR="${CMAKE_SOURCE_DIR}")
-    endif()
+if(TARGET test_rfexplorer_source)
+    target_compile_definitions(test_rfexplorer_source PRIVATE RB_SRC_DIR="${CMAKE_SOURCE_DIR}")
 endif()
 # radio-bridges end -----------------------------------------------------------------------------------------------------------------------------
 # wire-b second pass begin ----------------------------------------------------------------------------------------------------------------------

@@ -140,7 +140,7 @@ void drift24h(std::int64_t periodNs, double fps, const char* name) {
     auto emit = [&](std::int64_t t, const float*, std::uint32_t n) {
         // line k must start exactly at first + k * period
         const std::int64_t want = expectFirst + static_cast<std::int64_t>(lines) * periodNs;
-        maxDev = std::max(maxDev, std::llabs(t - want));
+        maxDev = std::max<std::int64_t>(maxDev, std::llabs(t - want));
         if (t != want) { ++bad; }
         ++lines;
         lastT = t;

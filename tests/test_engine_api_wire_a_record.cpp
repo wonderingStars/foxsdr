@@ -23,6 +23,10 @@
 #include "core/flac_writer.hpp"
 #include "core/recorder.hpp"
 #include "source/wav_meta.hpp"
+#ifndef _WIN32
+#include <unistd.h>
+#define _getpid getpid
+#endif
 #include "wire_a_rig.hpp"
 
 using namespace wire_a_rig;

@@ -22,6 +22,10 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
+#ifndef _WIN32
+#include <unistd.h>
+#define _getpid getpid
+#endif
 #include "wire_a_rig.hpp"
 #include "engine/wire_a.hpp"
 
