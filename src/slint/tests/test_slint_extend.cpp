@@ -93,9 +93,9 @@ std::string list(const std::vector<int>& v) {
 constexpr int kColA = 10, kColB = 316;
 constexpr int kSecRow = 30, kBodyPad = 4, kBodyX = 30, kBodyW = 254;
 constexpr int kRow = 24, kPitch = 30;          // the artboard's .rw (min-height 24) and the .sbd gap of 6
-constexpr int kW = 1240, kH = 3230;
+constexpr int kW = 1240, kH = 3430;
 constexpr int kNarrowX = 622, kNarrowY = 10, kNarrowW = 500, kNarrowH = 700;
-constexpr int kStX = 10, kBrowseY = 1070, kUpdatesY = 1790, kPluginY = 2510, kStW = 1000, kStH = 700;
+constexpr int kStX = 10, kBrowseY = 1070, kUpdatesY = 1790, kPluginY = 2510, kStW = 1000, kStH = 700, kPluginH = 900;   // the plugin page is 900 high: its body is longer now (the strip with captions, what it may do, the facts grid)
 
 }  // namespace
 
@@ -657,12 +657,12 @@ int main() {
     const int barP = yOf(ui->get_plugin_bar_h());
     {
         const Frame f = shot();
-        crop(f, "crop-st-plugin.png", pxp, pyp, kStW, kStH, 1);
+        crop(f, "crop-st-plugin.png", pxp, pyp, kStW, kPluginH, 1);
         topBar(f, pxp, pyp, kStW, barP, true, "Plugin page");
         const int ty = pyp + barP + 12;
         CHECKV(f.near(pxp + 12 + 12, ty, keyLine, 0) && f.near(pxp + 12 + 12, ty + 23, keyLine, 0) && f.near(pxp + 12, ty + 12, keyLine, 0) && f.near(pxp + 12 + 12, ty - 1, panel, 0), "< BROWSE: a 24 px key at the left");
         CHECKV(f.countNear(pxp + 12 + 8, ty + 5, pxp + 12 + 80, ty + 19, keyFg, 60) >= 40, "< BROWSE: its words");
-        CHECKV(f.countNear(pxp + 988 - 80, ty + 1, pxp + 988, ty + 23, accent, 0) >= 700 && f.near(pxp + 987, ty + 12, accent, 0), "the page key (UPDATE) is lit and flush right");
+        CHECKV(f.countNear(pxp + 12 + 640 - 80, ty + 1, pxp + 12 + 640, ty + 23, accent, 0) >= 700 && f.near(pxp + 12 + 639, ty + 12, accent, 0), "the page key (UPDATE) is lit and flush right of the 640 px reading column");
         // the header: the glyph tile, the name, the version and origin line, the badges, the install report
         const int hy = ty + 24 + 8;
         CHECKV(f.near(pxp + 12 + 15, hy, lineStrong, 0) && f.near(pxp + 12 + 15, hy + 29, lineStrong, 0) && f.near(pxp + 12, hy + 15, lineStrong, 0), "the glyph tile is 30 px");
@@ -673,23 +673,23 @@ int main() {
         CHECKV(f.countNear(pxp + 12, by2 + 28, pxp + 12 + 300, by2 + 44, goodFg, 40) >= 60, "the install report is green");
         // the screenshots: a heading, a framed strip 132 high with an arrow each side, the note under it
         int stripT = -1;
-        for (int y = by2 + 40; y < pyp + kStH && stripT < 0; ++y) { if (f.near(pxp + 12 + 26 + 300, y, lineStrong, 0) && f.near(pxp + 12 + 26 + 300, y + 3, well, 0)) { stripT = y; } }
+        for (int y = by2 + 40; y < pyp + kPluginH && stripT < 0; ++y) { if (f.near(pxp + 12 + 26 + 100, y, lineStrong, 0) && f.near(pxp + 12 + 26 + 100, y + 3, well, 0)) { stripT = y; } }
         CHECKV(stripT > 0, "the strip's frame (top %d)", stripT);
         if (stripT > 0) {
             CHECKV(f.countNear(pxp + 12, stripT - 18, pxp + 12 + 120, stripT - 6, muted, 30) >= 30, "SCREENSHOTS: the cap heading");
-            CHECKV(f.near(pxp + 12 + 26 + 300, stripT + 131, lineStrong, 0) && f.near(pxp + 12 + 26, stripT + 60, lineStrong, 0) && f.near(pxp + 12 + 26 + 923, stripT + 60, lineStrong, 0), "the strip is 132 high, 26 px in from each side");
-            CHECKV(f.countInk(pxp + 12 + 26 + 100, stripT + 10, pxp + 12 + 26 + 800, stripT + 122, well) >= 400, "the picture is drawn in the strip");
+            CHECKV(f.near(pxp + 12 + 26 + 100, stripT + 131, lineStrong, 0) && f.near(pxp + 12 + 26, stripT + 60, lineStrong, 0) && f.near(pxp + 12 + 26 + 210, stripT + 60, lineStrong, 0), "the first frame is 211 x 132, 26 px in from the column's edge (room for the arrow)");
+            CHECKV(f.countInk(pxp + 12 + 26 + 20, stripT + 10, pxp + 12 + 26 + 190, stripT + 122, well) >= 400, "the picture is drawn in the first frame");
             const int ay = stripT + 56;
             CHECKV(f.near(pxp + 12 + 10, ay, dis, 8) && f.near(pxp + 12 + 10, ay + 19, dis, 8), "the left arrow is greyed on the first picture");
-            CHECKV(f.near(pxp + 988 - 10, ay, keyLine, 0) && f.near(pxp + 988 - 10, ay + 19, keyLine, 0), "the right arrow answers");
-            CHECKV(f.countNear(pxp + 12, stripT + 136, pxp + 12 + 200, stripT + 150, dim, 24) >= 30, "Map with trails: the caption under the strip");
-            Ev e = hit(pxp + 988 - 10, ay + 10);
+            CHECKV(f.near(pxp + 12 + 640 - 10, ay, keyLine, 0) && f.near(pxp + 12 + 640 - 10, ay + 19, keyLine, 0), "the right arrow answers");
+            CHECKV(f.countNear(pxp + 12 + 26, stripT + 138, pxp + 12 + 26 + 200, stripT + 152, dim, 24) >= 30, "Map with trails: the caption under its own frame");
+            Ev e = hit(pxp + 12 + 640 - 10, ay + 10);
             CHECKV(e.name == "store-picture" && e.args == "1", "the right arrow asks for picture 1: '%s' '%s'", e.name.c_str(), e.args.c_str());
             e = hit(pxp + 12 + 10, ay + 10);
             CHECKV(e.name.empty(), "the left arrow on the first picture asks for nothing: '%s'", e.name.c_str());
             // the notice box (BEFORE YOU FIT IT): the amber ground, the maker's words, the ticked tick
             int nbT = -1;
-            for (int y = stripT + 150; y < pyp + kStH && nbT < 0; ++y) { if (f.near(pxp + 12 + 500, y, cardWarnLine, 0)) { nbT = y; } }
+            for (int y = stripT + 170; y < pyp + kPluginH && nbT < 0; ++y) { if (f.near(pxp + 12 + 500, y, cardWarnLine, 0)) { nbT = y; } }
             CHECKV(nbT > 0 && f.near(pxp + 12 + 500, nbT + 4, cardWarn, 0), "the notice box on the card-warn ground (top %d)", nbT);
             if (nbT > 0) {
                 CHECKV(f.countNear(pxp + 12 + 8, nbT + 8, pxp + 12 + 200, nbT + 22, warnFg, 40) >= 40, "BEFORE YOU FIT IT: the cap heading in amber");
@@ -700,18 +700,18 @@ int main() {
                 CHECKV(e.name == "store-plugin-notice" && e.args == "0", "the sentence unticks the notice: '%s' '%s'", e.name.c_str(), e.args.c_str());
                 // DETAILS: the cap heading, HIDE DETAILS as an xs key at the right, the facts in the mono face
                 int dkT = -1;
-                for (int y = nbT + 40; y < pyp + kStH && dkT < 0; ++y) { if (f.near(pxp + 988 - 20, y, keyLine, 0) && f.near(pxp + 988 - 20, y - 1, panel, 0)) { dkT = y; } }
-                CHECKV(dkT > 0 && f.near(pxp + 987, dkT + 10, keyLine, 0) && f.near(pxp + 988 - 20, dkT + 19, keyLine, 0), "HIDE DETAILS: an xs key flush right (top %d)", dkT);
+                for (int y = nbT + 40; y < pyp + kPluginH && dkT < 0; ++y) { if (f.near(pxp + 12 + 640 - 20, y, keyLine, 0) && f.near(pxp + 12 + 640 - 20, y - 1, panel, 0)) { dkT = y; } }
+                CHECKV(dkT > 0 && f.near(pxp + 12 + 639, dkT + 10, keyLine, 0) && f.near(pxp + 12 + 640 - 20, dkT + 19, keyLine, 0), "HIDE DETAILS: an xs key flush right of the column (top %d)", dkT);
                 CHECKV(f.countNear(pxp + 12, dkT + 2, pxp + 12 + 80, dkT + 18, muted, 30) >= 30, "DETAILS: the cap heading");
-                CHECKV(f.countNear(pxp + 12, dkT + 26, pxp + 12 + 400, dkT + 58, fgSoft, 40) >= 80, "the facts are drawn in the mono face");
-                CHECKV(f.countNear(pxp + 12, dkT + 60, pxp + 12 + 600, dkT + 80, dim, 24) >= 100, "the reach sentence under the facts is dim");
-                e = hit(pxp + 988 - 30, dkT + 10);
+                CHECKV(f.countNear(pxp + 12 + 10, dkT + 28, pxp + 12 + 140, dkT + 44, muted, 30) >= 30, "the facts are a grid: the first fact's name in the cap column");
+                CHECKV(f.countNear(pxp + 12 + 160, dkT + 28, pxp + 12 + 600, dkT + 44, fg, 40) >= 40, "the first fact's value beside it");
+                e = hit(pxp + 12 + 640 - 30, dkT + 10);
                 CHECKV(e.name == "store-plugin-details" && e.args == "0", "HIDE DETAILS asks to hide them: '%s' '%s'", e.name.c_str(), e.args.c_str());
             }
         }
         Ev e = hit(pxp + 12 + 40, ty + 12);
         CHECKV(e.name == "store-plugin-back", "< BROWSE: '%s'", e.name.c_str());
-        e = hit(pxp + 988 - 30, ty + 12);
+        e = hit(pxp + 12 + 640 - 30, ty + 12);
         CHECKV(e.name == "store-plugin-key", "the page key: '%s'", e.name.c_str());
         park();
     }

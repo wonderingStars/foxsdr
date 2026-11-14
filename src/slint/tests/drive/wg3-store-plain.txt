@@ -1,0 +1,14 @@
+#! frames=420 bank=1 store=plain-decoder FOXSDR_SLINT_STORE_LOCAL=fixtures/wg3-index.json
+# wg3-store-plain (window gaps 3, row 1845 and the picture-less page): a plugin with no pictures and no legal notice. The page has no empty frame and no
+# arrows (it says "No pictures published yet" in one line), GET is not held back by a notice, and what it may do is said in words.
+10 state running == 1
++200 state store.whatItDoes contains "nothing to warn about"
+state store.frames == 0
+state store.notice == ""
+state store.keyEnabled == 1
+state store.reach == "Audio decoder|Map targets"
+expect "No pictures published yet" label contains "No pictures"
++1 click "SHOW DETAILS"
++10 state store.facts >= 10
++1 click "< BROWSE"
++10 state shown.storePlugin == 0

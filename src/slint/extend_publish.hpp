@@ -24,6 +24,8 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -71,6 +73,9 @@ public:
     // A bounded run's evidence: the web and CAT status words, the catalogue line, the card count and the open page.
     std::string summaryLine() const;
     const ExtendModels& models() const { return last_; }
+    // What a drive script reads back (main.cpp's "store.<what>" states, window gaps 3): the store page's picture strip and facts, a fitted module's body by catalogue key.
+    // False: the name is not one of these.
+    bool stateOf(const std::string& what, std::string& out) const;
     std::size_t commandsSent() const { return sent_; }
 
 private:
@@ -97,7 +102,8 @@ private:
     ::WebModel mapWeb(const WebModel& m);
     ::CatModel mapCat(const CatModel& m);
     ::StoreModel mapStore(const StoreModel& m);
-    std::shared_ptr<slint::Model<slint::Image>> mapScreenshots(const StorePluginPage& p, std::string& note);
+    ::PluginBodyModel mapBody(const StorePluginPage& p, int pictureIndex);
+    void handModuleBodies();                   // the catalogue bodies of the shown fitted modules' pages, handed to the kit when their content moved
 
     MainWindow& ui_;
     foxsdr::slintkit::PluginKit& kit_;
@@ -128,6 +134,11 @@ private:
     std::uint64_t picturesAskedSeq_ = ~std::uint64_t{0};
     std::uint64_t listSeq_ = 0;
     std::int64_t nowUnix_ = 0;
+    std::map<std::string, int> modulePicture_;     // a fitted module's page: the frame its strip starts at, by catalogue key
+    std::set<std::string> moduleDetails_;          // the keys whose DETAILS are open
+    std::vector<std::string> moduleKeys_;          // the catalogue keys of the shown module pages (the last tick's)
+    std::string moduleSig_;
+    std::uint64_t moduleAskedSeq_ = ~std::uint64_t{0};
     int pictureIndex_ = 0;                     // the screenshot the strip shows (the page keeps it; store-picture moves it)
     std::string pictureIndexPage_;             // the plugin page it belongs to
     std::string captureId_;                    // FOXSDR_SLINT_STORE_PAGE

@@ -1,0 +1,78 @@
+{
+ "schemaVersion": 1,
+ "plugins": [
+  {
+   "id": "radar-sweep",
+   "name": "Radar Sweep",
+   "version": "1.0.0",
+   "author": "Example Author",
+   "licence": "MIT",
+   "summary": "A sweep of the radar.",
+   "description": "Shows what the radar sweep does, in a few plain words, so the page has a paragraph to read before anything is fitted.",
+   "legalNotice": "Receiving radar returns can be an offence in some countries. You are responsible for what you receive.",
+   "abiVersion": 3,
+   "capabilities": [
+    "CASCADE_CAP_IQ_DECODER",
+    "CASCADE_CAP_HOST_CLIENT",
+    "CASCADE_CAP_TX_AUDIO"
+   ],
+   "screenshots": [
+    {
+     "url": "https://example.invalid/pic0.png",
+     "sha256": "1010101010101010101010101010101010101010101010101010101010101010",
+     "caption": "Picture number 1 of the page"
+    },
+    {
+     "url": "https://example.invalid/pic1.png",
+     "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+     "caption": "Picture number 2 of the page"
+    },
+    {
+     "url": "https://example.invalid/pic2.png",
+     "sha256": "1212121212121212121212121212121212121212121212121212121212121212",
+     "caption": "Picture number 3 of the page"
+    },
+    {
+     "url": "https://example.invalid/pic3.png",
+     "sha256": "1313131313131313131313131313131313131313131313131313131313131313",
+     "caption": "Picture number 4 of the page"
+    }
+   ],
+   "platforms": [
+    {
+     "os": "windows",
+     "arch": "x64",
+     "file": "radar-sweep-1.0.0-abi3-win-x64.dll",
+     "url": "https://example.invalid/dl/radar-sweep.dll",
+     "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+     "sizeBytes": 123456
+    }
+   ],
+   "whatsNew": "First release of the sweep."
+  },
+  {
+   "id": "plain-decoder",
+   "name": "Plain Decoder",
+   "version": "1.0.0",
+   "author": "Example Author",
+   "licence": "MIT",
+   "summary": "No notice, no pictures.",
+   "description": "A decoder with nothing to warn about.",
+   "abiVersion": 3,
+   "capabilities": [
+    "CASCADE_CAP_DECODER",
+    "CASCADE_CAP_TRACK_SOURCE"
+   ],
+   "platforms": [
+    {
+     "os": "windows",
+     "arch": "x64",
+     "file": "plain-decoder-1.0.0-abi3-win-x64.dll",
+     "url": "https://example.invalid/dl/plain-decoder.dll",
+     "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+     "sizeBytes": 123456
+    }
+   ]
+  }
+ ]
+}

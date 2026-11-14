@@ -3154,6 +3154,10 @@ int main(int argc, char** argv) {
         // look.<what>: what the window is DRAWN with (docs 6.61), read from the window itself, not from the settings: scale (Window::scale_factor), width / height (the
         // logical size the screen lays out in), bg (the ground colour in force, "#rrggbb"), accent, face (nixie / neon / plain)
         // shown.<what>: whether a dialog or page is up (docs 6.61): import (the import dialog), storePlugin (the Plugin store's plugin page), about
+        if (name.rfind("store.", 0) == 0) {   // window gaps 3: the store page's strip, facts and notice, a fitted module's body, the DECODE row's chip, the clean-up foot
+            if (!extendBank.stateOf(name.substr(6), out)) { return "store.<pictureIndex|frames|reach|facts|notice|noticeTick|keyEnabled|whatItDoes|chip|chipLit|cleanupLabel|cleanupOpen|cleanupReport|module.<key>.<frames|index|details|whatItDoes|facts|catalogued>>, not " + name; }
+            return std::string();
+        }
         if (name.rfind("shown.", 0) == 0) {
             const std::string what = name.substr(6);
             if (what == "import") { out = ui->get_import_dialog().shown ? "1" : "0"; return std::string(); }

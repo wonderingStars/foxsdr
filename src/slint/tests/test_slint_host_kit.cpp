@@ -103,6 +103,18 @@ const PluginRow& rowNamed(const KitLists& k, const char* name) {
 }  // namespace
 
 int main() {
+    // ---- the NEW lamp holds four seconds from the first sight of an event (the old window's kInstrumentNewHoldSec), the teleprinter prints the last named column (window gaps 3) ----
+    {
+        NewHold h;
+        CHECK(!h.step(false, 5, 1000));                    // no reading: never lit, and nothing is remembered
+        CHECK(h.step(true, 5, 1000));                      // the first sight of event 5: lit
+        CHECK(h.step(true, 5, 4999));                      // 3999 ms on: still lit
+        CHECK(!h.step(true, 5, 5000));                     // four seconds: out
+        CHECK(!h.step(true, 5, 60000));                    // and it stays out while the event is the same one
+        CHECK(h.step(true, 6, 60000));                     // a new event lights it again
+        CHECK(!h.step(false, 6, 60001));                   // the reading went away
+        CHECK(paperColumn(3, 8) == 2 && paperColumn(1, 8) == 0 && paperColumn(0, 8) == 7 && paperColumn(20, 8) == 7 && paperColumn(5, 0) == 0);
+    }
     // ---- the reader's joins ----
     {
         StubTable t = sample();

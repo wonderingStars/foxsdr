@@ -23,6 +23,7 @@ import { Lamp } from "lamps.slint";
 import { Checkbox } from "fields.slint";
 import { StateChipModel, StateChips, GrantKeys } from "forms.slint";
 import { PlateKeys } from "presets.slint";
+import { PluginBody, PluginBodyModel } from "plugin_body.slint";
 
 // One module of the list. `name` is the module's own name (its file name when the host refused it), `group` the store's heading for its
 // category ("" none), `state` the chip's word with its `tone` and `dot` lamp, `note` the line under the name in `note-tone`. `can-stop`
@@ -337,6 +338,12 @@ export component FittedModules inherits Rectangle {
     in property <string> cleanup-label;               // "CLEAN UP OLD VERSIONS (3)"; "" draws no foot
     in property <string> cleanup-note;                // the old copies, beside the key
     in property <string> cleanup-report;              // what the last clean-up did (green), under the key
+    in property <bool> cleanup-open;                  // the question is up: it is answered before anything is removed
+    in property <string> cleanup-title: @tr("Remove old plugin versions");
+    in property <string> cleanup-text: @tr("Each of these is an older copy of a plugin whose newer version is installed and running. Only these files are deleted.");
+    in property <[string]> cleanup-lines;             // every old copy, a line each
+    in property <string> cleanup-yes;                 // "Remove 3 files"
+    in property <string> cleanup-no: @tr("Keep them");
     in property <bool> enabled: true;
     in property <string> search-placeholder: @tr("Search fitted modules");
     in property <string> scan-text: @tr("SCAN AGAIN");
@@ -356,6 +363,7 @@ export component FittedModules inherits Rectangle {
     callback scan-clicked();
     callback reset-windows-clicked();
     callback cleanup-clicked();
+    callback cleanup-answered(bool);                  // true: remove them, false: keep them
 
     // what the page's parts measure, for a host or a test to aim by
     out property <length> bar-height: root.bar-h;
@@ -364,6 +372,8 @@ export component FittedModules inherits Rectangle {
     out property <length> scrolled: body.scrolled;
     out property <length> content-height: col.preferred-height;
 
+    property <bool> too-small: root.width < 40px || root.height < 40px;
+    property <bool> too-narrow: !root.too-small && (root.width < 240px || root.height < 160px);
     property <string> status: root.error != "" ? root.error : root.report;
     property <length> keys-w: reset-key.preferred-width + 10px + scan-key.preferred-width;
     property <length> search-w: max(100px, min(220px, root.width - 12px - 18px - root.keys-w - 12px));     // gives way to the keys on a narrow page
@@ -520,6 +530,59 @@ export component FittedModules inherits Rectangle {
             }
         }
     }
+
+    // ---- the question before CLEAN UP OLD VERSIONS deletes anything: a small panel in the lower right corner ----
+    if root.cleanup-open : Rectangle {
+        width: min(320px, root.width - 16px);
+        height: ask-col.preferred-height + 20px;
+        x: root.width - self.width - 8px;
+        y: root.height - self.height - 8px;
+        background: Theme.menu;
+        border-width: Theme.hairline;
+        border-color: Theme.knob-ring;
+        border-radius: Theme.radius-panel;
+        accessible-role: groupbox;
+        accessible-label: root.cleanup-title;
+        TouchArea { }
+        ask-col := VerticalLayout {
+            x: 10px;
+            y: 10px;
+            width: parent.width - 20px;
+            spacing: 6px;
+            alignment: start;
+            Lines { text: root.cleanup-title; ink: Theme.fg; size: Theme.font-body; weight: Theme.weight-semibold; }
+            Lines { text: root.cleanup-text; ink: Theme.fg-soft; }
+            for l in root.cleanup-lines : Lines { text: l; ink: Theme.dim; }
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                Key { small: true; on: true; label: root.cleanup-yes; clicked => { root.cleanup-answered(true); } }
+                Key { small: true; label: root.cleanup-no; clicked => { root.cleanup-answered(false); } }
+            }
+        }
+    }
+
+    // ---- too small to lay the page out: it says so (the old window's words) ----
+    if root.too-narrow || root.too-small : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: Theme.panel;
+        TouchArea { }
+        Text {
+            x: 8px;
+            y: 8px;
+            width: max(1px, root.width - 16px);
+            height: max(1px, root.height - 16px);
+            text: root.too-small ? @tr("Too small - drag the window larger.") : @tr("Too narrow to draw. Widen the window.");
+            color: Theme.muted;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+            overflow: clip;
+        }
+    }
 }
 
 // "o Audio decoder" and the sentence under it (pv drawReachRow): a gold dot with a halo when the capability reaches outward, a hollow
@@ -640,7 +703,7 @@ export component ModulePage inherits Rectangle {
     in property <string> file-path;
     in property <string> abi-text;
     in property <string> fitted-text;
-    in property <string> catalogue-note;              // the place of the catalogue body (the store is a later beta)
+    in property <PluginBodyModel> body;               // the catalogue body: pictures, what it does, what's new, DETAILS (window gaps 3)
     in property <bool> enabled: true;
     // ---- the words and the sentences the page draws itself ----
     in property <string> back-text: @tr("< FITTED");
@@ -661,6 +724,8 @@ export component ModulePage inherits Rectangle {
     callback command-pressed(int);
     callback reenable-clicked();
     callback keep-toggled(bool);
+    callback body-picked(string, int);                // the strip asks for a frame of this module's pictures
+    callback body-details(string, bool);              // DETAILS opened or closed
 
     out property <length> scrolled: scroller.scrolled;
     out property <length> content-height: col.preferred-height;
@@ -678,7 +743,7 @@ export component ModulePage inherits Rectangle {
         height: root.height;
         content-height: col.preferred-height;
         col := VerticalLayout {
-            width: parent.width;
+            width: min(parent.width, 672px);             // a readable measure, not the width of the window
             alignment: start;
             padding-left: 16px;
             padding-right: 16px;
@@ -810,22 +875,10 @@ export component ModulePage inherits Rectangle {
             if root.file-path != "" : FactRow { key: root.file-text; value: root.file-path; }
             if root.abi-text != "" : FactRow { key: root.abi-key-text; value: root.abi-text; ink: Theme.fg; }
             if root.fitted-text != "" : Lines { text: root.fitted-text; ink: Theme.muted; }
-            if root.catalogue-note != "" : Rectangle {
-                height: cat-t.preferred-height + 20px;
-                border-radius: Theme.radius-panel;
-                border-width: Theme.hairline;
-                border-color: Theme.line;
-                background: Theme.well;
-                cat-t := Text {
-                    x: 10px;
-                    y: 10px;
-                    width: max(0px, parent.width - 20px);
-                    text: root.catalogue-note;
-                    color: Theme.dim;
-                    font-family: Theme.font-ui;
-                    font-size: Theme.font-small;
-                    wrap: word-wrap;
-                }
+            if root.body.shown : PluginBody {
+                body: root.body;
+                picked(i) => { root.body-picked(root.body.key, i); }
+                details-toggled(on) => { root.body-details(root.body.key, on); }
             }
         }
     }

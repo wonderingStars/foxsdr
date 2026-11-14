@@ -629,6 +629,25 @@ int main() {
         const int footTop = bodyTop1 + kBodyH1 - 64;
         clk(kF1x + 12 + 60, footTop + 24);
         CHECKV(ui->get_cleanups() == 1, "CLEAN UP OLD VERSIONS: %d", ui->get_cleanups());
+        // THE QUESTION: pressing the key opens it and removes nothing; a panel in the lower right corner (320 wide, 8 px in) lists every old copy and asks
+        CHECKV(ui->get_fm1_cleanup_open() && ui->get_cleanup_answer() == 0, "the key asks first: open %d, answer %d", ui->get_fm1_cleanup_open() ? 1 : 0, ui->get_cleanup_answer());
+        park();
+        {
+            const Frame q = shot();
+            const int pr = kF1x + kF1w - 8, pl = pr - 320, pb = kF1y + kF1h - 8;
+            CHECKV(q.near(pr - 1, pb - 30, tok(wb.knob_ring), 0) && q.near(pl, pb - 30, tok(wb.knob_ring), 0), "the question's panel is 320 wide, 8 px from the page's corner: %s / %s", hex(q.at(pr - 1, pb - 30)).c_str(), hex(q.at(pl, pb - 30)).c_str());
+            CHECK(q.countNear(pl + 10, pb - 120, pr - 10, pb - 40, dim, 40) >= 80);   // the old copies are listed, dim
+            // KEEP THEM sends nothing and closes it; the key again, then the lit key answers yes
+            clk(pl + 10 + 80 + 40, pb - 22);
+            CHECKV(ui->get_cleanup_answer() == 2 && !ui->get_fm1_cleanup_open(), "Keep them: answer %d, open %d", ui->get_cleanup_answer(), ui->get_fm1_cleanup_open() ? 1 : 0);
+            ui->set_cleanup_answer(0);
+            ui->set_fm1_cleanup_open(true);
+            park();
+            clk(pl + 10 + 40, pb - 22);
+            CHECKV(ui->get_cleanup_answer() == 1 && !ui->get_fm1_cleanup_open(), "Remove 3 files: answer %d, open %d", ui->get_cleanup_answer(), ui->get_fm1_cleanup_open() ? 1 : 0);
+            ui->set_cleanup_answer(0);
+            park();
+        }
         // a row's key works while the body is scrolled: STOP of the last row (row 11, START) at its scrolled place
         const int t11 = bodyTop1 + kBodyH1 - 64 - kRowH;
         const Frame sc = shot();
@@ -811,11 +830,11 @@ int main() {
             CHECK(f0.countNear(x + 8, y + 3, x + cell - 8, y + 21, plateFg, 40) >= 12);
         }
         CHECK(f0.near(kM1x + m1Pad + 20, plate + 24, panelAlt) && f0.near(kM1x + m1Pad + 20, plate + 29, panelAlt));       // 6 px between the rows
-        // the page scrolls: 826 px of content in 600
-        CHECK_NEAR(ui->get_mp1_content(), 826.0, 1.5);
+        // the page scrolls: 771 px of content in 600 (826 with the old catalogue note, 55 px, which the real catalogue body has replaced)
+        CHECK_NEAR(ui->get_mp1_content(), 771.0, 1.5);
         const int thumbX = kM1x + kMw - 9;
-        CHECK(f0.colNear(thumbX + 3, kM1y + 4, kM1y + 430, knobRing));
-        CHECK(f0.near(thumbX + 3, kM1y + 440, panelAlt));
+        CHECK(f0.colNear(thumbX + 3, kM1y + 4, kM1y + 460, knobRing));
+        CHECK(f0.near(thumbX + 3, kM1y + 475, panelAlt));
     }
 
     // =========================================================================================================
@@ -881,10 +900,7 @@ int main() {
         const double end = ui->get_mp1_scrolled();
         CHECK_NEAR(end, ui->get_mp1_content() - kMh, 0.6);
         const Frame e = shot();
-        // the catalogue block: well ground, a line border, 24 px above the content's end
         const int endY = kM1y + kMh - 24;
-        CHECKV(e.near(kM1x + m1Pad + 4, endY - 4, well) && e.near(kM1x + m1Pad, endY - 20, line) && e.near(kM1x + m1Pad + 4, endY + 3, panelAlt), "catalogue block: %s / %s / %s", hex(e.at(kM1x + m1Pad + 4, endY - 4)).c_str(), hex(e.at(kM1x + m1Pad, endY - 20)).c_str(), hex(e.at(kM1x + m1Pad + 4, endY + 3)).c_str());
-        CHECK(e.countNear(kM1x + m1Pad + 10, endY - 40, kM1x + kMw - m1Pad - 10, endY - 2, dim, 40) >= 60);
         // the KEEP RUNNING tick: found by its accent box in the left column below the grants
         int tick = -1;
         for (int y = kM1y + 2; y < kM1y + kMh - 30; ++y) { if (e.near(kM1x + m1Pad + 3, y, accent, 6) && e.near(kM1x + m1Pad + 3, y - 1, panelAlt, 6)) { tick = y; } }
@@ -892,7 +908,7 @@ int main() {
         const Ink keep = inkBox(e, kM1x + m1Pad + 16, tick - 2, kM1x + 300, tick + 16, panelAlt);
         CHECKV(keep.n > 40 && keep.x0 >= kM1x + m1Pad + 14 + 6 && keep.x0 <= kM1x + m1Pad + 14 + 10, "Keep running label starts %d px after the box", keep.x0 - (kM1x + m1Pad + 14));
         // the facts: FILE and PLUGIN ABI with their caps at the left and the values 150 px in; the notice line in accent-soft above them
-        CHECK(e.countNear(kM1x + m1Pad, kM1y + kMh - 24 - 47 - 8 - 60, kM1x + m1Pad + 140, kM1y + kMh - 24 - 47 - 8, muted, 40) >= 15);
+        CHECK(e.countNear(kM1x + m1Pad, kM1y + kMh - 24 - 60, kM1x + m1Pad + 140, kM1y + kMh - 24, muted, 40) >= 15);
         CHECK(e.countNear(kM1x + m1Pad, tick + 20, kM1x + kMw - m1Pad, tick + 80, accentSoft, 40) >= 40);
         // the tick explains itself: the ImGui sentence under its 14 px box (the page is scrolled: the tip follows the box)
         mv(kM1x + m1Pad + 60, tick + 7);

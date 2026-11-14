@@ -1097,7 +1097,7 @@ void storePluginPage() {
     // no picture published: one frame that says so
     t.facts["fact.store.adsb.pictures"] = "";
     m = storeModel(t, o);
-    CHECK(m.plugin.screenshots.size() == 1 && at(m.plugin.screenshots, 0).word == "No pictures published yet" && at(m.plugin.screenshots, 0).sha256.empty());
+    CHECK(m.plugin.screenshots.empty() && m.plugin.no_pictures == "No pictures published yet");   // no frame: the sentence only (window gaps 3)
     // THE DETAILS: the facts grid, in order, each with a source or the hatched reason
     const std::vector<PageFact>& f = m.plugin.facts;
     Names keys;
@@ -1548,6 +1548,80 @@ void readsAreStable() {
 
 }  // namespace
 
+// WINDOW GAPS 3: what the plugin page says it may do (audit U6), the legal notice before an install, the catalogue body of a fitted module's page, and the Fitted modules
+// page's clean-up foot read with the store page closed.
+void windowGaps3() {
+    // WHAT IT MAY DO, said before it is fitted: the old window's sentence for each capability
+    StubTable t = storeTable();
+    ReadOptions o;
+    o.store.page_id = "adsb";
+    StoreModel m = storeModel(t, o);
+    CHECK(m.plugin.reach.size() == 2);
+    if (m.plugin.reach.size() == 2) {
+        CHECK(m.plugin.reach[0].key == "Audio decoder" && m.plugin.reach[0].detail == "Fed the demodulated audio the speakers get." && !m.plugin.reach[0].outward);
+        CHECK(m.plugin.reach[1].key == "Map targets" && m.plugin.reach[1].detail == "Publishes positions the host draws on its map." && !m.plugin.reach[1].outward);
+    }
+    // a capability that reaches outward says so, in the old words
+    t.facts["fact.store.adsb.capabilities"] = std::to_string(CASCADE_CAP_IQ_DECODER | CASCADE_CAP_TX_AUDIO | CASCADE_CAP_HOST_CLIENT);
+    m = storeModel(t, o);
+    bool iq = false, tx = false, move = false;
+    for (const ReachLine& r : m.plugin.reach) {
+        if (r.key == "I/Q decoder" && r.detail == "Fed complex baseband straight from the receiver." && !r.outward) { iq = true; }
+        if (r.key == "Can transmit through FoxSDR" && r.outward && r.detail.find("Nothing goes out unless you grant it the TRANSMIT permission AND arm it") != std::string::npos) { tx = true; }
+        if (r.key == "Can ask to move the receiver" && r.outward && r.detail.rfind("Refused unless you grant it, per module.", 0) == 0) { move = true; }
+    }
+    CHECK(iq && tx && move);
+    // no capability recorded: no rows (the REACHES fact is hatched instead), never an invented "reaches nothing"
+    t.facts["fact.store.adsb.capabilities"] = "";
+    CHECK(storeModel(t, o).plugin.reach.empty());
+
+    // THE LEGAL NOTICE is on the page, verbatim, while the plugin is not fitted
+    o.store.page_id = "pager";
+    m = storeModel(t, o);
+    CHECK(m.plugin.notice_shown && m.plugin.notice == "Receiving pager traffic is an offence in some places. You are responsible." && !m.plugin.key_enabled);
+    o.store.notice_tick = true;
+    CHECK(storeModel(t, o).plugin.key_enabled);   // GET answers once the notice is ticked
+
+    // A FITTED MODULE'S PAGE has the catalogue body of its entry: pictures, what it does, what is new, the facts - and no reach rows (the page has its own list)
+    ReadOptions mo;
+    mo.module_keys = {"adsb", "nothing-like-it"};
+    mo.module_details.insert("adsb");
+    m = storeModel(storeTable(), mo);
+    CHECK(m.module_pages.size() == 2 && !m.plugin.shown);
+    if (m.module_pages.size() == 2) {
+        const StorePluginPage& a = m.module_pages[0];
+        CHECK(a.shown && a.catalogued && a.id == "adsb" && a.screenshots.size() == 3 && a.what_it_does == "Aircraft positions in full." && a.whats_new == "Faster decoding.");
+        CHECK(a.details_open && a.details_label == "HIDE DETAILS" && !a.facts.empty() && a.reach.empty());
+        CHECK(at(a.screenshots, 0).caption == "The map view" && at(a.screenshots, 1).caption == "The settings");
+        const StorePluginPage& b = m.module_pages[1];
+        CHECK(!b.shown && !b.catalogued);
+    }
+    mo.module_details.clear();
+    CHECK(!storeModel(storeTable(), mo).module_pages[0].details_open);
+
+    // CLEAN UP OLD VERSIONS is read with the store page closed: the Fitted modules page has the same foot and the same question
+    StubTable cl = storeTable();
+    cl.facts["fact.store.oldCopies"] = "ais-1.0.0.dll\tAIS Decoder\t1.0.0\tais-1.1.0.dll\t1.1.0\n";
+    ReadOptions closed;
+    closed.read_store = false;
+    StoreModel c = readStore(cl, closed);
+    CHECK(c.cleanup_label == "CLEAN UP OLD VERSIONS (1)" && c.cleanup_yes == "Remove 1 file" && c.cleanup_lines.size() == 1 && c.cleanup_enabled && !c.cleanup_open);
+    // the question is answered before anything is removed: the key opens it, only YES sends the command, NO sends nothing
+    Effect e = applyStoreCleanup(c);
+    CHECK(e.commands.empty() && e.local == Local::Store && e.store.cleanup_open);
+    closed.store.cleanup_open = true;
+    c = readStore(cl, closed);
+    CHECK(c.cleanup_open && applyStoreCleanupConfirm(c, false).commands.empty());
+    e = applyStoreCleanupConfirm(c, true);
+    CHECK(e.commands.size() == 1 && fcOf(e, 0).op == FOXAPP_OP_STORE_CLEAN_OLD);
+    // a transfer in flight greys it; nothing old: no key and the question closes itself
+    cl.add(FOXAPI_LIST_STORE_ACTIVITY, 1, "", "", kActive, 0.0, 1);
+    CHECK(!readStore(cl, closed).cleanup_enabled);
+    cl.facts["fact.store.oldCopies"] = "";
+    c = readStore(cl, closed);
+    CHECK(c.cleanup_label.empty() && !c.cleanup_open && c.draft_changed);
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);   // a crash must not eat the lines before it
     sourcesStateWhatWeSend();
@@ -1563,6 +1637,7 @@ int main() {
     storeUpdatesRead();
     storeSitesAndCleanup();
     storePluginPage();
+    windowGaps3();
     storeNotices();
     railChip();
     storeEffects();

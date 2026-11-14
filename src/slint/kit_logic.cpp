@@ -710,4 +710,18 @@ std::vector<std::pair<std::string, std::string>> parseChoices(const std::string&
     return out;
 }
 
+bool NewHold::step(bool have, std::int64_t eventSeq, std::int64_t nowMs) {
+    if (have && seq != eventSeq) {
+        seq = eventSeq;
+        atMs = nowMs;
+    }
+    return have && seq == eventSeq && nowMs - atMs < kHoldMs;
+}
+
+std::size_t paperColumn(std::size_t headings, std::size_t maxColumns) {
+    if (maxColumns == 0u) { return 0u; }
+    if (headings == 0u || headings > maxColumns) { headings = maxColumns; }
+    return headings - 1u;
+}
+
 }  // namespace foxsdr::slintkit

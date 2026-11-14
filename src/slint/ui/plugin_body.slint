@@ -1,0 +1,310 @@
+// FoxSDR Slint front end - THE CATALOGUE BODY OF A PLUGIN PAGE (window-gaps lane 3): SCREENSHOTS, WHAT IT DOES, WHAT'S NEW and DETAILS, one component for the two pages that
+// show a plugin - the plugin store's page (extend_bank.slint, StorePage) and a fitted module's page (fitted.slint, ModulePage). The old window draws them with ONE renderer
+// (gui/plugin_store_view.cpp drawModulePageBody) and so does this one: a module's pictures, description and facts read the same in both.
+//
+//   PluginBody   `body` (the host's PluginBodyModel). The pictures are a strip of 16:10 frames, each with its own caption under it; the arrows (drawn only when the frames
+//                are wider than the strip) and the wheel over the strip move it one frame, and every move is asked of the host through `picked(index)`; the host keeps which
+//                frame the strip starts at. A page with no picture shows its sentence ("No pictures published yet") and no frame. DETAILS is folded behind SHOW DETAILS /
+//                HIDE DETAILS (`details-toggled(want)`); open, it is a grid of rows (the fact's name in a cap column, its value beside it), a fact with no source is lettered
+//                dim and slanted with the reason, a URL or a digest is read-only selectable text. `@children` sits between WHAT'S NEW and DETAILS: the store page puts the
+//                maker's legal notice there (BEFORE YOU FIT IT), the module page puts nothing.
+//
+// The component asks nothing of its parents (rule 11): it takes the width it is given and reports its own height.
+import { Theme } from "theme.slint";
+import { Caption, Key } from "keys.slint";
+
+// One frame of the strip: the picture (an empty image while it loads, failed or did not decode), the caption under it, and the frame's own words when it has no picture
+// ("loading...", the failure's reason).
+export struct BodyFrame { image: image, caption: string, word: string }
+
+// One row of the DETAILS grid. `hatched`: the fact has no source and `value` says why. `copyable`: a URL or a digest, shown as selectable read-only text.
+export struct BodyFact { key: string, value: string, hatched: bool, copyable: bool }
+
+// One line of what the plugin may do (the old window's reach rows): the capability's name, the sentence under it, and whether it reaches outward.
+export struct BodyReach { key: string, detail: string, outward: bool }
+
+export struct PluginBodyModel {
+    key: string,                  // which plugin the body is of: the catalogue key ("" = no body); a gesture of a fitted module's page names it
+    shown: bool,                  // false: draw nothing at all
+    catalogued: bool,             // false: DETAILS only (the plugin is not in the catalogue)
+    frames: [BodyFrame],
+    picture-index: int,           // the frame the strip starts at
+    no-pictures: string,          // the sentence under the cap when there is no frame; "" none
+    what-it-does: string,
+    whats-new: string,
+    details-open: bool,
+    details-label: string,        // "" = SHOW DETAILS / HIDE DETAILS
+    facts: [BodyFact],
+    reach: [BodyReach],           // what the plugin declares it may do, in words (the store page only: the module page has its own list)
+    reach-lead: string,           // the sentence under the open grid; "" none
+}
+
+// The gestures of a fitted module's page body (the plugin store page has ExtendEvents): which plugin (the catalogue key) and what was asked.
+export global ModuleBodyEvents {
+    callback picked(string, int);          // the strip asks for this frame
+    callback details(string, bool);        // DETAILS wanted open or closed
+}
+
+// A sentence: 11 px, wrapped at `wrap-w`, an empty one takes no height.
+component Words inherits Rectangle {
+    in property <string> text;
+    in property <color> ink: Theme.dim;
+    in property <length> wrap-w;
+    min-width: 0px;
+    height: root.text == "" ? 0px : words.preferred-height;
+    words := Text {
+        x: 0px;
+        y: 0px;
+        width: root.wrap-w > 0px ? root.wrap-w : root.width;
+        text: root.text;
+        wrap: word-wrap;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        color: root.ink;
+    }
+}
+
+// The strip. Frames are 16:10 at 132 px high; the strip shows as many as fit and moves one frame a step. `index` is where the host says it starts; a width that cannot hold
+// the frames clamps it, and the arrows ask for the clamped index +- 1 so they never ask for a frame the strip cannot reach.
+component PictureStrip inherits Rectangle {
+    in property <[BodyFrame]> frames;
+    in property <int> index;
+    callback picked(int);
+
+    property <length> fh: 132px;
+    property <length> fw: 211px;
+    property <length> gap: 8px;
+    property <length> arrow-w: 22px;
+    property <length> total: root.frames.length * root.fw + max(0, root.frames.length - 1) * root.gap;
+    property <bool> overflow: root.total > root.width;
+    property <length> view-x: root.overflow ? root.arrow-w + 4px : 0px;
+    property <length> view-w: root.overflow ? root.width - 2 * (root.arrow-w + 4px) : root.width;
+    property <length> max-scroll: max(0px, root.total - root.view-w);
+    property <length> step: root.fw + root.gap;
+    property <int> max-index: Math.ceil(root.max-scroll / root.step);
+    property <int> eff: max(0, min(root.index, root.max-index));
+    property <length> scroll-x: min(root.eff * root.step, root.max-scroll);
+    property <length> cap-h: 30px;
+    out property <int> effective-index: root.eff;
+    out property <bool> arrows: root.overflow;
+
+    height: root.fh + 6px + root.cap-h;
+    min-width: 0px;
+    accessible-role: list;
+    accessible-label: @tr("Screenshots");
+
+    if root.overflow : Key {
+        x: 0px;
+        y: (root.fh - self.height) / 2;
+        width: root.arrow-w;
+        xs: true;
+        min-w: 0px;
+        label: "\u{2039}";
+        enabled: root.eff > 0;
+        accessible-label: @tr("Previous picture");
+        clicked => { root.picked(root.eff - 1); }
+    }
+    viewport := Rectangle {
+        x: root.view-x;
+        y: 0px;
+        width: root.view-w;
+        height: parent.height;
+        clip: true;
+        strip := Rectangle {
+            x: -root.scroll-x;
+            y: 0px;
+            width: root.total;
+            height: parent.height;
+            animate x { duration: 200ms; easing: ease-in-out; }
+            for f[i] in root.frames : Rectangle {
+                x: i * root.step;
+                y: 0px;
+                width: root.fw;
+                height: parent.height;
+                Rectangle {
+                    x: 0px;
+                    y: 0px;
+                    width: root.fw;
+                    height: root.fh;
+                    border-radius: 4px;
+                    border-width: Theme.hairline;
+                    border-color: Theme.line-strong;
+                    background: Theme.well;
+                    clip: true;
+                    accessible-role: image;
+                    accessible-label: f.caption != "" ? f.caption : f.word;
+                    if f.image.width > 0 : Image {
+                        x: 2px;
+                        y: 2px;
+                        width: parent.width - 4px;
+                        height: parent.height - 4px;
+                        source: f.image;
+                        image-fit: contain;
+                        accessible-role: none;
+                    }
+                    if f.image.width == 0 : Text {
+                        x: 8px;
+                        y: 0px;
+                        width: parent.width - 16px;
+                        height: parent.height;
+                        text: f.word;
+                        color: Theme.dim;
+                        font-family: Theme.font-ui;
+                        font-size: Theme.font-small;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                        accessible-role: none;
+                    }
+                }
+                Text {
+                    x: 0px;
+                    y: root.fh + 6px;
+                    width: root.fw;
+                    height: root.cap-h;
+                    text: f.caption;
+                    color: Theme.dim;
+                    font-family: Theme.font-ui;
+                    font-size: Theme.font-small;
+                    wrap: word-wrap;
+                    overflow: clip;
+                    accessible-role: none;
+                }
+            }
+        }
+        // the wheel over the strip moves it a frame, and only while it can move: at its ends the page's own scroll gets the wheel
+        TouchArea {
+            scroll-event(e) => {
+                if (!root.overflow) { return reject; }
+                if (e.delta-y < 0 || e.delta-x < 0) {
+                    if (root.eff < root.max-index) { root.picked(root.eff + 1); return accept; }
+                } else if (e.delta-y > 0 || e.delta-x > 0) {
+                    if (root.eff > 0) { root.picked(root.eff - 1); return accept; }
+                }
+                return reject;
+            }
+        }
+    }
+    if root.overflow : Key {
+        x: root.width - root.arrow-w;
+        y: (root.fh - self.height) / 2;
+        width: root.arrow-w;
+        xs: true;
+        min-w: 0px;
+        label: "\u{203a}";
+        enabled: root.eff < root.max-index;
+        accessible-label: @tr("Next picture");
+        clicked => { root.picked(root.eff + 1); }
+    }
+}
+
+// One row of the DETAILS grid: the name in a 150 px cap column, the value beside it. A fact without a source reads dim and slanted over a darker ground (it says why it
+// has none); a URL or a digest is selectable, read-only text.
+component FactLine inherits Rectangle {
+    in property <BodyFact> fact;
+    property <length> key-w: 150px;
+    property <length> val-w: max(40px, root.width - root.key-w - 20px);
+    property <length> val-h: root.fact.copyable && !root.fact.hatched ? copy.preferred-height : plain.preferred-height;
+    height: max(14px, root.val-h) + 12px;
+    background: root.fact.hatched ? Theme.well-deep : Theme.well.with-alpha(0.7);
+    Rectangle {
+        x: 0px;
+        y: parent.height - Theme.hairline;
+        width: parent.width;
+        height: Theme.hairline;
+        background: Theme.line;
+    }
+    Caption {
+        x: 10px;
+        y: 6px;
+        width: root.key-w - 14px;
+        height: 14px;
+        label: root.fact.key;
+    }
+    plain := Text {
+        visible: !(root.fact.copyable && !root.fact.hatched);
+        x: root.key-w + 10px;
+        y: 6px;
+        width: root.val-w;
+        text: root.fact.value;
+        wrap: word-wrap;
+        color: root.fact.hatched ? Theme.faint : Theme.fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        font-italic: root.fact.hatched;
+        accessible-role: text;
+        accessible-label: root.fact.key + ": " + root.fact.value;
+    }
+    copy := TextInput {
+        visible: root.fact.copyable && !root.fact.hatched;
+        x: root.key-w + 10px;
+        y: 6px;
+        width: root.val-w;
+        text: root.fact.value;
+        read-only: true;
+        single-line: false;
+        wrap: word-wrap;
+        color: Theme.fg;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+        selection-background-color: Theme.accent;
+        selection-foreground-color: Theme.accent-ink;
+        accessible-label: root.fact.key;
+    }
+}
+
+export component PluginBody inherits VerticalLayout {
+    in property <PluginBodyModel> body;
+    callback picked(int);
+    callback details-toggled(bool);
+
+    spacing: 8px;
+    alignment: start;
+    min-width: 0px;
+    if root.body.shown && root.body.catalogued : Caption { label: @tr("Screenshots"); }
+    if root.body.shown && root.body.catalogued && root.body.frames.length > 0 : strip := PictureStrip {
+        frames: root.body.frames;
+        index: root.body.picture-index;
+        picked(i) => { root.picked(i); }
+    }
+    if root.body.shown && root.body.catalogued && root.body.frames.length == 0 && root.body.no-pictures != "" : Words { wrap-w: root.width; text: root.body.no-pictures; }
+    if root.body.shown && root.body.catalogued : Caption { label: @tr("What it does"); }
+    if root.body.shown && root.body.catalogued && root.body.what-it-does != "" : Words { wrap-w: root.width; text: root.body.what-it-does; ink: Theme.fg; }
+    if root.body.shown && root.body.catalogued : Caption { label: @tr("What's new"); }
+    if root.body.shown && root.body.catalogued && root.body.whats-new != "" : Words { wrap-w: root.width; text: root.body.whats-new; ink: Theme.fg; }
+    if root.body.shown && root.body.reach.length > 0 : Caption { label: @tr("WHAT THIS MODULE REACHES"); }
+    for r in root.body.reach : VerticalLayout {
+        spacing: 1px;
+        HorizontalLayout {
+            spacing: 6px;
+            Text { text: r.outward ? "\u{25cf}" : "\u{25cb}"; color: r.outward ? Theme.accent-soft : Theme.faint; font-size: Theme.font-small; vertical-alignment: center; }
+            Text { horizontal-stretch: 1; min-width: 0px; text: r.key; color: r.outward ? Theme.fg : Theme.fg-soft; font-family: Theme.font-ui; font-size: Theme.font-body; overflow: elide; }
+        }
+        Words { wrap-w: root.width - 16px; text: r.detail; }
+    }
+    @children
+    if root.body.shown : Rectangle {
+        height: Theme.key-xs-h + 4px;
+        Text { x: 0px; y: 0px; width: max(0px, details-key.x - 8px); height: parent.height; text: @tr("DETAILS"); color: Theme.muted; font-family: Theme.font-ui; font-size: Theme.font-cap; font-weight: Theme.weight-semibold; letter-spacing: Theme.cap-spacing; vertical-alignment: center; }
+        details-key := Key {
+            x: root.width - self.width;
+            y: 2px;
+            width: self.preferred-width;
+            xs: true;
+            label: root.body.details-label != "" ? root.body.details-label : (root.body.details-open ? @tr("HIDE DETAILS") : @tr("SHOW DETAILS"));
+            clicked => { root.details-toggled(!root.body.details-open); }
+        }
+    }
+    if root.body.shown && root.body.details-open : Rectangle {
+        height: grid.preferred-height;
+        border-width: Theme.hairline;
+        border-color: Theme.line-strong;
+        grid := VerticalLayout {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            for fact in root.body.facts : FactLine { fact: fact; }
+        }
+    }
+    if root.body.shown && root.body.details-open && root.body.reach-lead != "" : Words { wrap-w: root.width; text: root.body.reach-lead; }
+}

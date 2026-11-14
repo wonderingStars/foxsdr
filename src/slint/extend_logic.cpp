@@ -488,6 +488,57 @@ std::vector<std::string> reachKeys(const StoreEntry& e) {
     return r;
 }
 
+// WHAT THE PLUGIN MAY DO, in words (gui/plugin_store_view.cpp moduleReachRows): the capability's name, the sentence under it, and whether it reaches outward. The
+// sentences are the old window's, so a user reads what a plugin may do before fitting it.
+std::vector<ReachLine> reachLines(const StoreEntry& e) {
+    std::vector<ReachLine> r;
+    if (!e.have_capabilities) { return r; }
+    const std::uint32_t c = e.capabilities;
+    const auto add = [&](const char* key, const std::string& detail, bool outward) { r.push_back(ReachLine{T(key), detail, outward}); };
+    if ((c & CASCADE_CAP_DECODER) != 0u) { add("Audio decoder", T("Fed the demodulated audio the speakers get."), false); }
+    if ((c & CASCADE_CAP_IQ_DECODER) != 0u) { add("I/Q decoder", T("Fed complex baseband straight from the receiver."), false); }
+    if ((c & CASCADE_CAP_IMAGE_DECODER) != 0u) { add("Image decoder", T("Fed samples; returns pictures the host displays."), false); }
+    if ((c & CASCADE_CAP_AUDIO_OUT) != 0u) { add("Plays sound through FoxSDR", T("Replaces the receiver's audio while it is decoding."), false); }
+    if ((c & CASCADE_CAP_AUDIO_PROCESSOR) != 0u) { add("Audio processor", T("Changes the receiver's audio before you hear it."), false); }
+    if ((c & CASCADE_CAP_TX_AUDIO) != 0u) {
+        add("Can transmit through FoxSDR",
+            T("Sends the host audio to transmit. Nothing goes out unless you grant it the TRANSMIT permission AND arm it on the TRANSMIT page; FoxSDR chooses the "
+              "frequency, the power and the mode, and any fault, the page closing or the arming window running out stops it."),
+            true);
+    }
+    if ((c & CASCADE_CAP_TRACK_SOURCE) != 0u) { add("Map targets", T("Publishes positions the host draws on its map."), false); }
+    if ((c & CASCADE_CAP_PANEL) != 0u) { add("A window of its own", T("Rows and controls the host draws for it."), false); }
+    if ((c & CASCADE_CAP_INSTRUMENT) != 0u) { add("An instrument of its own", T("A face the host draws as a piece of equipment, fed by the module."), false); }
+    if ((c & CASCADE_CAP_PRESET) != 0u) { add("Presets", T("Publishes where it listens. A suggestion - pressing one is the user tuning, not the module."), false); }
+    if ((c & CASCADE_CAP_HOST_CLIENT) != 0u) {
+        std::string d;
+        if (!e.have_tune_grant) {
+            d = T("Refused unless you grant it, per module. This grant, the radio-settings grant and the transmit grant are the only permissions the console actually enforces.");
+        } else if (e.tune_granted) {
+            d = T("GRANTED. It may retune the receiver on its own, without asking again.");
+        } else {
+            d = T("Not granted, so every request to retune is answered DENIED.");
+        }
+        add("Can ask to move the receiver", d, true);
+    }
+    if ((c & CASCADE_CAP_RECEIVER_LOCATOR) != 0u) {
+        add("Can read your receiver's locator",
+            T("Sees a 6-character Maidenhead grid square for wherever the receiver's position is set (GPS, \"Set RX here\", or typed) - a few kilometres' precision, not an exact "
+              "point. What it does with that is up to the module; some report it onward, such as an optional PSK Reporter upload."),
+            true);
+    }
+    if ((c & CASCADE_CAP_BASEMAP) != 0u) { add("Map imagery", T("Supplies the map tiles from whatever source it chose - which may be an online tile server. Nothing here points it at one."), true); }
+    if ((c & CASCADE_CAP_TRACK_INFO) != 0u) { add("Target look-up", T("Looks up who a target is, from whatever source it chose - which may be an online service."), true); }
+    if (r.empty()) {
+        if (c == 0u) {
+            add("Declares nothing", T("The record carries no capability bits."), false);
+        } else {
+            add("Declares a capability this build does not know", T("The module was built against a newer host."), true);
+        }
+    }
+    return r;
+}
+
 enum class PlateState { NotFitted, Refused, Stopped, NoSignal, Started };
 PlateState plateState(const StoreEntry& e) {
     constexpr std::uint32_t kSignalCaps = CASCADE_CAP_DECODER | CASCADE_CAP_IQ_DECODER | CASCADE_CAP_IMAGE_DECODER;
@@ -995,6 +1046,64 @@ std::vector<StoreBadge> badgesOf(const StoreEntry& e) {
 
 int pictureStateOf(double v) { return v == 1.0 ? kPicPending : v == 2.0 ? kPicReady : v == 3.0 ? kPicFailed : kPicNone; }
 
+
+// The catalogue body of a plugin's page - the pictures with a caption each, what it does, what's new, the facts and what it may do - shared by the store's page and a
+// fitted module's page (the old window's one renderer, drawModulePageBody).
+void fillBody(StorePluginPage& p, const StoreEntry& e, bool detailsOpen, bool withReach) {
+    p.catalogued = true;
+    p.screenshots.clear();
+    p.no_pictures.clear();
+    if (e.pictures.empty()) {
+        p.no_pictures = T("No pictures published yet");
+    } else {
+        for (PictureFrame f : e.pictures) {
+            if (f.state == kPicReady) {
+                f.word.clear();
+            } else if (f.state == kPicFailed) {
+                f.word = trReason(f.word);
+            } else {
+                f.word = T("loading...");
+            }
+            for (char& c : f.caption) {
+                if (c == '\n' || c == '\r' || c == '\t') { c = ' '; }
+            }
+            p.screenshots.push_back(std::move(f));
+        }
+    }
+    const std::string& blurb = e.blurb.empty() ? e.summary : e.blurb;
+    p.what_it_does = blurb.empty() ? T("not stated") : blurb;
+    p.whats_new = whatsNewText(e);
+    p.facts = pageFacts(e);
+    p.details.clear();
+    for (const PageFact& f : p.facts) { p.details += (p.details.empty() ? "" : "\n") + f.key + ": " + f.value; }
+    p.details_open = detailsOpen;
+    p.details_label = detailsOpen ? T("HIDE DETAILS") : T("SHOW DETAILS");
+    p.reach.clear();
+    if (withReach) { p.reach = reachLines(e); }
+}
+
+// CLEAN UP OLD VERSIONS: the key's label, the first three old copies beside it, every copy for the question, what the last clean-up did. Read for the store's UPDATES tab AND for the
+// Fitted modules page's foot, whether or not the store page is open.
+void fillCleanup(StoreModel& m, const std::vector<OldCopy>& oldCopies, const std::string& cleanupReport, bool transfer, StoreDraft& d) {
+    m.cleanup_enabled = !transfer;
+    m.cleanup_report = cleanupReport;
+    for (std::size_t i = 0; i < oldCopies.size(); ++i) {
+        const OldCopy& c = oldCopies[i];
+        const std::string text = oldCopyLine(c.name, c.version, c.file, c.keptVersion);
+        m.cleanup_all.push_back(text);
+        if (i < kCleanupListed) { m.cleanup_lines.push_back(text); }
+    }
+    if (oldCopies.size() > kCleanupListed) { m.cleanup_lines.push_back(cc::formatText(tr("and %zu more"), oldCopies.size() - kCleanupListed)); }
+    if (!oldCopies.empty()) { m.cleanup_label = cleanupKeyLabel(oldCopies.size()); }
+    m.cleanup_yes = cleanupConfirmLabel(oldCopies.size());
+    // An empty list closes the confirmation (the popup closes itself), and the draft says so: the confirmation must not come back when a later update leaves a copy again.
+    if (d.cleanup_open && oldCopies.empty()) {
+        d.cleanup_open = false;
+        m.draft_changed = true;
+    }
+    m.cleanup_open = d.cleanup_open;
+}
+
 }  // namespace
 
 StoreRailChip readStoreChip(TableReader& t) {
@@ -1052,6 +1161,10 @@ StoreModel readStore(TableReader& t, const ReadOptions& o) {
     m.bulk_tick = d.bulk_tick;
     m.updates_label = cc::formatText(tr("UPDATES (%zu)"), static_cast<std::size_t>(0));
     if (!o.read_store) {
+        // the store page is not open: the model holds its draft, and what the Fitted modules page's foot needs - the old copies and the question
+        bool busyNow = false;
+        eachItem(t, FOXAPI_LIST_STORE_ACTIVITY, [&](int, const FoxListItem& it) { if (it.id == 1u) { busyNow = true; } });
+        fillCleanup(m, parseOldCopies(factOf(t, "fact.store.oldCopies")), factOf(t, "fact.store.cleanupReport"), busyNow, d);
         m.draft = d;
         return m;
     }
@@ -1306,27 +1419,26 @@ StoreModel readStore(TableReader& t, const ReadOptions& o) {
     }
 
     // the cleanup foot (the UPDATES tab's) is read for both: the model is cheap and the publisher shows it by tab
-    m.cleanup_enabled = !transfer;
-    m.cleanup_report = cleanupReport;
-    for (std::size_t i = 0; i < oldCopies.size(); ++i) {
-        const OldCopy& c = oldCopies[i];
-        const std::string text = oldCopyLine(c.name, c.version, c.file, c.keptVersion);
-        m.cleanup_all.push_back(text);
-        if (i < kCleanupListed) { m.cleanup_lines.push_back(text); }
-    }
-    if (oldCopies.size() > kCleanupListed) { m.cleanup_lines.push_back(cc::formatText(tr("and %zu more"), oldCopies.size() - kCleanupListed)); }
-    if (!oldCopies.empty()) { m.cleanup_label = cleanupKeyLabel(oldCopies.size()); }
-    m.cleanup_yes = cleanupConfirmLabel(oldCopies.size());
-    // An empty list closes the confirmation (the popup closes itself), and the draft says so: the confirmation must not come back when a later update leaves a copy again.
-    if (d.cleanup_open && oldCopies.empty()) {
-        d.cleanup_open = false;
-        m.draft_changed = true;
-    }
-    m.cleanup_open = d.cleanup_open;
+    fillCleanup(m, oldCopies, cleanupReport, transfer, d);
 
     KeyIn kin;
     kin.busy_id = busyId;
     kin.busy_any = transfer;
+
+    // ---- THE CATALOGUE BODIES of the fitted modules' pages that are open ----
+    for (const std::string& key : o.module_keys) {
+        StorePluginPage mp;
+        mp.id = key;
+        for (const StoreEntry& e : entries) {
+            if (e.id != key) { continue; }
+            fillBody(mp, e, o.module_details.count(key) > 0, false);
+            mp.shown = true;
+            mp.name = e.name;
+            break;
+        }
+        if (!mp.shown) { mp.catalogued = false; }
+        m.module_pages.push_back(std::move(mp));
+    }
 
     // ---- THE PLUGIN PAGE ----
     if (onPage) {
@@ -1361,32 +1473,8 @@ StoreModel readStore(TableReader& t, const ReadOptions& o) {
                 p.report_tone = resultError.empty() ? Tone::Good : Tone::Err;
             }
         }
-        if (e.pictures.empty()) {
-            PictureFrame f;
-            f.word = T("No pictures published yet");
-            p.screenshots.push_back(std::move(f));
-        } else {
-            for (PictureFrame f : e.pictures) {
-                if (f.state == kPicReady) {
-                    f.word.clear();
-                } else if (f.state == kPicFailed) {
-                    f.word = trReason(f.word);
-                } else {
-                    f.word = T("loading...");
-                }
-                for (char& c : f.caption) {
-                    if (c == '\n' || c == '\r' || c == '\t') { c = ' '; }
-                }
-                p.screenshots.push_back(std::move(f));
-            }
-        }
-        const std::string& blurb = e.blurb.empty() ? e.summary : e.blurb;
-        p.what_it_does = blurb.empty() ? T("not stated") : blurb;
-        p.whats_new = whatsNewText(e);
-        p.facts = pageFacts(e);
-        for (const PageFact& f : p.facts) { p.details += (p.details.empty() ? "" : "\n") + f.key + ": " + f.value; }
-        p.details_open = d.details_open;
-        p.details_label = d.details_open ? T("HIDE DETAILS") : T("SHOW DETAILS");
+        fillBody(p, e, d.details_open, true);
+        p.shown = true;
         p.notice_shown = !e.legal_notice.empty() && e.install == InstallKind::NotInstalled;
         if (p.notice_shown) { p.notice = e.legal_notice; }
         p.notice_tick = d.notice_tick;

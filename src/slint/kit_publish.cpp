@@ -45,7 +45,9 @@ std::string cell(const char* c) { return std::string(c, ::strnlen(c, CASCADE_PAN
     s.footnotes = model(std::vector<slint::SharedString>{});
     s.cleanup_lines = model(std::vector<slint::SharedString>{});
     s.plugin.badges = model(std::vector<::StoreBadge>{});
-    s.plugin.screenshots = model(std::vector<slint::Image>{});
+    s.plugin.body.frames = model(std::vector<::BodyFrame>{});
+    s.plugin.body.facts = model(std::vector<::BodyFact>{});
+    s.plugin.body.reach = model(std::vector<::BodyReach>{});
     return s;
 }
 const ::StoreModel& blankStoreModel() {
@@ -429,7 +431,10 @@ void KitPublisher::fillInstrument(const Page& p, PageTab& t, std::string& sig) {
         for (int i = 0; i < 8; ++i) { values[static_cast<std::size_t>(i)] = static_cast<float>(in->state.values[i]); texts[static_cast<std::size_t>(i)] = ss(std::string(in->state.text[i], ::strnlen(in->state.text[i], CASCADE_INSTRUMENT_TEXT_CHARS))); }
         // NEW: the event arrived while the page was not showing; the page marks it seen as it draws (the chip of a closed page keeps saying NEW)
         const std::string key = windowKey("instrument", p.plugin, p.title);
-        s.unread = in->have && kit_.instrumentSeen(key) != in->state.seq;
+        // THE NEW LAMP HOLDS FOR FOUR SECONDS from the moment the page first sees a new event (the old window's kInstrumentNewHoldSec), then goes out; the rail chip of a
+        // closed page keeps saying NEW until the page has drawn (instrumentSeen)
+        s.unread = newHold_[key].step(in->have, static_cast<std::int64_t>(in->state.seq), nowMs_);
+        sig += s.unread ? "N" : "n";
         kit_.markInstrumentSeen(key, in->state.seq);
         sig += "I" + std::to_string(in->state.seq) + (in->have ? "h" : "-") + std::to_string(in->state.flags);
         for (int i = 0; i < 8; ++i) { sig += fmt("%.4g,", in->state.values[i]) + std::string(texts[static_cast<std::size_t>(i)]) + "|"; }
@@ -437,6 +442,15 @@ void KitPublisher::fillInstrument(const Page& p, PageTab& t, std::string& sig) {
         for (const std::string& c : in->headings) { cols.push_back(ss(c)); sig += c; }
         t.columns = model(std::move(cols));
         t.rows = model(tableRows(in->rows, in->headings.size(), r != nullptr ? r->commands : kNone, sig));
+        if (in->kind == CASCADE_INSTRUMENT_TELEPRINTER && in->have) {
+            // the paper is the memory rows, OLDEST FIRST: the newest print is the last row's last cell, the one before it the row above (gui/instrument_teleprinter.cpp printedLine)
+            const std::size_t col = paperColumn(in->headings.size(), CASCADE_PANEL_MAX_COLUMNS);
+            const auto line = [&](const CascadePanelRow& row) { return std::string(row.cells[col], ::strnlen(row.cells[col], CASCADE_PANEL_CELL_CHARS)); };
+            const std::size_t n = in->rows.size();
+            if (n > 0u) { t.paper_newest = ss(line(in->rows[n - 1u])); }
+            if (n > 1u) { t.paper_previous = ss(line(in->rows[n - 2u])); }
+            sig += std::string(t.paper_newest) + "|" + std::string(t.paper_previous);
+        }
     } else {
         s.have = false;
         t.columns = model(std::vector<slint::SharedString>{});
@@ -449,6 +463,7 @@ void KitPublisher::fillInstrument(const Page& p, PageTab& t, std::string& sig) {
     if (s.alert) { sig += std::to_string((nowMs_ / 250) % 2); }   // the blink
     if (in != nullptr && in->kind == CASCADE_INSTRUMENT_FAX) {
         const cascade::core::HostImage* img = kit_.imageOf(p.plugin);
+        fillPicture(p, t, sig);   // the chart beside the memory table: the same picture, status and press as the plugin's picture page
         s.chart = pictureImage(p.plugin);
         s.chart_complete = img != nullptr && img->complete;
         if (img != nullptr) { sig += "C" + std::to_string(img->revision); }
@@ -729,7 +744,17 @@ void KitPublisher::fillFitted(PageTab& t, const FoxReceiverState& state, std::st
     f.error = ss(kit_.lists().installError);
     f.empty_text = ss(kit_.lists().rows.empty() ? cascade::i18n::tr("No module the host can load was found in the folder above, so nothing is fitted. The plugin store is where one is fitted from.")
                                                  : cascade::i18n::tr("Every fitted module is hidden by the keys above. Press one to show it again."));
-    f.cleanup_label = ss("");
+    f.cleanup_label = ss(cleanup_.label);
+    f.cleanup_note = ss(cleanup_.note);
+    f.cleanup_report = ss(cleanup_.report);
+    f.cleanup_open = cleanup_.open;
+    f.cleanup_yes = ss(cleanup_.yes);
+    {
+        std::vector<slint::SharedString> all;
+        for (const std::string& l : cleanup_.lines) { all.push_back(ss(l)); }
+        f.cleanup_lines = model(std::move(all));
+    }
+    sig += "K" + cleanup_.label + cleanup_.note + cleanup_.report + cleanup_.yes + (cleanup_.open ? "o" : "c");
     sig += std::string(f.verdict) + std::string(f.report) + std::string(f.error) + fittedSearch_;
     t.fitted = f;
 }
@@ -790,7 +815,11 @@ void KitPublisher::fillModule(const Page& p, PageTab& t, const FoxReceiverState&
     m.file_path = ss(r->path.empty() ? std::string(cascade::i18n::tr("not recorded")) : r->path);
     m.abi_text = ss(abiText(r->abiVersion, static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION)));
     m.fitted_text = ss(fittedDateText(r->fittedAtUnix));
-    m.catalogue_note = ss(r->hasRecord && !r->catalogueKey.empty() ? cascade::core::formatText(cascade::i18n::tr("Catalogue entry: %s (the store's pictures and description come with a later beta)"), r->catalogueKey.c_str()) : std::string());
+    {
+        // the catalogue body: what the EXTEND publisher built for this module's catalogue key; a module the catalogue does not list shows none
+        const auto body = r->catalogueKey.empty() ? moduleBodies_.end() : moduleBodies_.find(r->catalogueKey);
+        if (body != moduleBodies_.end()) { m.body = body->second; sig += "B" + moduleBodiesSig_; }
+    }
     sig += std::string(m.state_word) + std::string(m.sentence) + std::string(m.tx_state) + std::string(m.notice) + std::to_string(r->tuneAllowed) + std::to_string(r->settingsAllowed) + std::to_string(r->txBits) + std::to_string(r->runMode) + std::to_string(r->commands.size());
     t.module = m;
 }
@@ -956,6 +985,24 @@ void KitPublisher::setStoreModel(const ::StoreModel& model) {
     storeModel_ = model;
     ++storeRevision_;
 }
+
+std::vector<std::string> KitPublisher::moduleCatalogueKeys() const {
+    std::vector<std::string> out;
+    for (std::size_t i = 0; i < pages_.size(); ++i) {
+        if (pages_[i].kind != 7) { continue; }
+        if (!(pages_[i].torn || currentPage() == static_cast<int>(i))) { continue; }
+        const PluginRow* r = rowByFile(kit_.lists().rows, pages_[i].file);
+        if (r != nullptr && !r->catalogueKey.empty() && std::find(out.begin(), out.end(), r->catalogueKey) == out.end()) { out.push_back(r->catalogueKey); }
+    }
+    return out;
+}
+
+void KitPublisher::setModuleBodies(const std::map<std::string, ::PluginBodyModel>& bodies, const std::string& sig) {
+    moduleBodies_ = bodies;
+    moduleBodiesSig_ = sig;
+}
+
+void KitPublisher::setCleanupFoot(const CleanupFoot& foot) { cleanup_ = foot; }
 
 void KitPublisher::setStoreRail(const std::string& word, ::ChipTone tone, bool lit) {
     storeChip_ = word;

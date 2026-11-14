@@ -137,7 +137,10 @@ Header parseHeader(const std::string& script) {
                 std::replace(text.begin(), text.end(), '_', ' ');
                 h.logContains.push_back(text);
             }
-            else if (key.rfind("FOXSDR_", 0) == 0 || key.rfind("CASCADE_", 0) == 0) { h.env[key] = value; }
+            else if (key.rfind("FOXSDR_", 0) == 0 || key.rfind("CASCADE_", 0) == 0) {
+                // a value that starts "fixtures/" names a file under tests/drive/fixtures (a local catalogue for FOXSDR_SLINT_STORE_LOCAL, window gaps 3)
+                h.env[key] = value.rfind("fixtures/", 0) == 0 ? std::string(FOXSDR_DRIVE_FIXTURES_DIR) + "/" + value.substr(9) : value;
+            }
         }
     }
     return h;

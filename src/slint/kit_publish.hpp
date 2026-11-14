@@ -89,8 +89,21 @@ public:
     StoreView storeView() const;
     void setStoreModel(const ::StoreModel& model);
     void setStoreRail(const std::string& word, ::ChipTone tone, bool lit);
+    const std::string& storeChipWord() const { return storeChip_; }   // what the DECODE row says (a drive script reads it back)
+    bool storeChipLit() const { return storeLit_; }
     // Opens the store page and shows it (the DECODE row's key, a bounded run's FOXSDR_SLINT_OPEN=store).
     void openStorePage();
+
+    // THE CATALOGUE BODY OF A FITTED MODULE'S PAGE (window gaps 3): the EXTEND publisher builds it from the catalogue (the store's page and a module's page are one renderer in
+    // the old window) and hands it over by catalogue key; the kit says which keys its shown module pages need, and shows the CLEAN UP OLD VERSIONS foot the store's facts give.
+    std::vector<std::string> moduleCatalogueKeys() const;                                  // the keys of the module pages that are showing (the current tab, or torn off)
+    void setModuleBodies(const std::map<std::string, ::PluginBodyModel>& bodies, const std::string& sig);
+    struct CleanupFoot {
+        std::string label, note, report, yes;
+        std::vector<std::string> lines;
+        bool open = false;
+    };
+    void setCleanupFoot(const CleanupFoot& foot);
 
     // THE PATCH PRESETS PAGE (kind 10, id "patch-presets"; docs 6.44), the same seam as the store's. The KIT owns the page - its PageTab, its tab, its tear-off; the PATCH publisher
     // (patch_publish.*) computes the whole ::PatchPresetsModel and hands it over (setPatchPresetsModel), reads whether the page is up (patchPresetsView) and opens and closes it
@@ -217,6 +230,10 @@ private:
     std::vector<std::string> muteNames_, muteKeys_;   // the "Sound is muted" question's subject
     bool muteQuestionOpen_ = false;
     std::string catalogueUrl_;
+    std::map<std::string, NewHold> newHold_;
+    std::map<std::string, ::PluginBodyModel> moduleBodies_;
+    std::string moduleBodiesSig_;
+    CleanupFoot cleanup_;
     ::StoreModel storeModel_{};                       // what the EXTEND publisher last handed over for the page of kind 9
     ::PatchPresetsModel patchPresetsModel_{};         // what the PATCH publisher last handed over for the page of kind 10
     std::uint64_t patchPresetsRevision_ = 0;
