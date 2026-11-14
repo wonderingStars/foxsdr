@@ -3432,6 +3432,7 @@ void AppWindow::drawUi() {
     if (crashUploadStartPending_ && crashUploadStart()) { crashUploadStartPending_ = false; }
     // ...AND, FROM THEN ON, AN ISSUE REPORT THE ENGINE'S PASS HAS FILED IS SENT NOW, not at the next start (0.99.101).
     crashUploadPoll();
+    handoverPoll();   // engine fixes 7: the FOXSDR_HANDOVER_AT test seam (nothing when it is not set)
     // WHEN THE GUI TOOK DELIVERY of the spectrum frame readSpectrum just took, which
     // is what the spectrum's "HEARD n s AGO" line reports. SpectrumFrame carries a
     // sequence number and no timestamp, so the closest honest measurement available is
@@ -6520,6 +6521,7 @@ void AppWindow::drawMenuColumn() {
             // starts closed and remembers how the user left it
             // (AppConfig::displayOpen); see drawDisplaySection.
             drawDisplaySection();
+            drawWindowSection();   // engine fixes 7: the way back to the new window
             drawLanguageSection();
             // The crystal correction (0.99.56): the owner asked for it "in
             // settings"; the Source section carries the same controls.

@@ -261,6 +261,21 @@ add_dependencies(test_slint_retune_run foxsdr-slint)
 add_test(NAME test_slint_retune_run COMMAND test_slint_retune_run)
 set_tests_properties(test_slint_retune_run PROPERTIES LABELS "gui" FIXTURES_REQUIRED gui_desktop TIMEOUT 300)
 
+# THE HAND-OVER DRIVE (engine fixes 7; src/slint/tests/drive_handover_run.cpp): Legacy as a choice inside the new window, through the real programs on a scratch profile - the record
+# seam in both directions, the settings lock let go before the launch, the remembered choice, the missing program, and one REAL hand-over each way (the second window comes up on the
+# first one's settings). Windows are opened: the GUI gate's label, run on the hidden desktop. It needs the classic program beside the build, so it depends on it.
+add_executable(test_slint_handover_run tests/drive_handover_run.cpp)
+target_compile_features(test_slint_handover_run PRIVATE cxx_std_20)
+target_link_libraries(test_slint_handover_run PRIVATE cascade_engine)
+target_include_directories(test_slint_handover_run PRIVATE
+    "${CMAKE_SOURCE_DIR}/src"
+    "${CMAKE_SOURCE_DIR}/tests"
+    "${CMAKE_SOURCE_DIR}/third_party/foxsdr_api")
+target_compile_definitions(test_slint_handover_run PRIVATE FOXSDR_SLINT_EXE="$<TARGET_FILE:foxsdr-slint>" FOXSDR_LEGACY_EXE="$<TARGET_FILE:cascade>")
+add_dependencies(test_slint_handover_run foxsdr-slint cascade)
+add_test(NAME test_slint_handover_run COMMAND test_slint_handover_run)
+set_tests_properties(test_slint_handover_run PROPERTIES LABELS "gui" FIXTURES_REQUIRED gui_desktop TIMEOUT 600)
+
 # The translation generator's own tests (tools/test_slint_po.py): temp-dir fixtures, nothing of the build tree. -I keeps the
 # interpreter out of the current directory and the user's site-packages (the script is standard-library only).
 if(Python3_Interpreter_FOUND)

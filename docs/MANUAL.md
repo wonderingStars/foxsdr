@@ -1096,7 +1096,7 @@ so.*
 FoxSDR installs two programs. **`foxsdr-slint.exe`**, the new window, is the one the Start menu, the Desktop icon and
 `foxsdr:` links start; **`cascade.exe`**, the Legacy window, stays installed beside it and has its own Start-menu entry,
 "FoxSDR (Legacy)". The rest of this manual describes the controls of the Legacy window in the places where the
-two differ; this section is what is particular to the new one. The five banks are the same keys on the rail:
+two differ; this section is what is particular to the new one. Legacy is also a choice inside the new window: **Layouts, Legacy** closes the new window and opens the Legacy window on the same settings and the same radio (it asks first while a recording or a patch is running), and **Window layout, Switch to the new window** in the Legacy window (the SYSTEM bank) comes back. The next start of FoxSDR opens the window you last chose; the "FoxSDR (Legacy)" Start-menu entry always opens the Legacy window. The five banks are the same keys on the rail:
 **SIGNAL** (F1), **DECODE** (F2), **TOOLS** (F3), **EXTEND** (F4) and **SYSTEM** (F5), and the tab row above the
 spectrum holds **RECEIVER**, **PATCH**, **SCOPE**, the plugins' own pages and **+ Window**.
 

@@ -40,6 +40,7 @@ import { Card, Banner, CardTone } from "cards.slint";
 import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode, SpectrumView, SpectrumEvents } from "spectrum.slint";
 import { LayoutRow, LayoutsModel, LayoutsBody } from "layouts_ui.slint";
 import { ExportModel, ExportBody } from "export_ui.slint";
+import { Handover } from "handover_ui.slint";   // engine fixes 7: the switch to the Legacy window
 import { AgeTick, WaterfallView, WaterfallLook } from "waterfall.slint";
 import { View3D, Scene3DLabel, SurveyRankRow, SondeLegendRow, Scene3DViewToggle, Wf3DView } from "scene3d_views.slint";
 import { CommandField, CommandPalette, PaletteResult } from "palette.slint";
@@ -50,7 +51,7 @@ import { TxChoice, TransmitPageModel, TransmitEvents } from "transmit_page.slint
 import { AboutSlint } from "std-widgets.slint";
 
 export { Theme, Skin, Workbench, NightWatch, HighContrast, DigitFace, MeterStyle, SrText, ChipTone, LampState, MenuItemKind, MenuEntry, CardTone,
-         AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode, SpectrumEvents, WaterfallLook, AgeTick, PaletteResult, LayoutRow, LayoutsModel, ExportModel,
+         AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode, SpectrumEvents, WaterfallLook, AgeTick, PaletteResult, LayoutRow, LayoutsModel, ExportModel, Handover,
          KitEvents, DecodeRow, PluginEntry, RunsOnKey, DecoderBar, PageTab, MapModel, FittedModel, ModuleModel, DetailsModel,
          PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
          InstrumentState, MapTarget, LegendRow, RowKind, RowTone, TableRow,
@@ -878,6 +879,14 @@ export component MainWindow inherits Window {
         HorizontalLayout { spacing: 8px; alignment: end;
             Key { label: root.mute-stop-label; clicked => { root.mute-question-open = false; KitEvents.mute-stop-clicked(); } }
             Key { label: @tr("Keep it running"); on: true; clicked => { root.mute-question-open = false; KitEvents.mute-keep-clicked(); } }
+        }
+    }
+    // ENGINE FIXES 7: the question before switching to the Legacy window while something is running, and the sentence when the other window could not be opened (the host fills the words)
+    if Handover.open : Sheet { title: Handover.title; dismissed => { Handover.stay(); }
+        Text { text: Handover.text; wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; }
+        HorizontalLayout { spacing: 8px; alignment: end;
+            if Handover.go-label != "" : Key { label: Handover.go-label; clicked => { Handover.go(); } }
+            Key { label: Handover.stay-label; on: true; clicked => { Handover.stay(); } }
         }
     }
     // LANE S1: the layouts sheet (the list of layouts, Apply / Rename / Delete, the save form)

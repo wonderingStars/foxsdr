@@ -1,0 +1,14 @@
+// handover_ui.slint - THE WORDS OF A SWITCH BETWEEN THE NEW WINDOW AND THE LEGACY WINDOW (engine fixes 7; src/core/window_handover.hpp).
+//
+// One sheet, filled by the host: the question asked before leaving while a recording or a patch is running ("Switch" / "Stay here"), and the sentence a window shows when the other one could
+// not be opened ("OK"). Nothing here decides anything: the host writes the words (through the translation call) and answers the two callbacks. The sheet itself is drawn in main.slint,
+// where the other sheets are.
+export global Handover {
+    in-out property <bool> open;
+    in property <string> title;
+    in property <string> text;
+    in property <string> go-label;     // "" for a sentence with nothing to decide: the sheet then shows only the stay key
+    in property <string> stay-label;
+    callback go();
+    callback stay();
+}

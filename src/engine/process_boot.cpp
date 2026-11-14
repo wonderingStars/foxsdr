@@ -34,6 +34,7 @@
 #include "core/linux_update.hpp"
 #include "core/linux_update_host.hpp"
 #include "core/relaunch_marker.hpp"
+#include "core/window_handover.hpp"
 #include "core/sentinel.hpp"
 #include "core/stop_signal.hpp"
 #include "core/tester_link.hpp"
@@ -452,11 +453,16 @@ void claimInstance(ProcessKind kind, int argc, char** argv, BootResult& boot) {
         cascade::core::diagLogf("window: started again by process %s to use the software renderer",
                                 softglParent.empty() ? "?" : softglParent.c_str());
     }
+    // A WINDOW STARTED BY THE OTHER WINDOW'S HAND-OVER (core/window_handover.hpp, engine fixes 7) is the primary instance the same way: the window that started it holds the claim for the
+    // moment it takes to end, and has let go of everything else (the settings lock, the radios) before it started this one.
+    const cascade::core::handover::Marker handedOver = cascade::core::handover::takeMarker();
+    if (handedOver.present) { cascade::core::diagLogf("window: started by the %s window's hand-over (process %lu)", cascade::core::handover::windowWord(handedOver.from), handedOver.parentPid); }
+    boot.handover = handedOver;
     const bool primaryInstance =
         cascade::core::claimPrimaryInstance(
             std::filesystem::path(cascade::core::ConfigStore::defaultPath()).parent_path().string(),
             instanceTestHook, instanceScope != nullptr ? std::string(instanceScope) : std::string()) ||
-        softglRelaunched;
+        softglRelaunched || handedOver.present;
     boot.primaryInstance = primaryInstance;
 }
 

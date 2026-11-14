@@ -708,6 +708,11 @@ public:
     // gone, and ends with the second process's exit code.
     bool relaunchWithSoftwareGl() const { return relaunchWithSoftwareGl_; }
 
+    // ENGINE FIXES 7, LEGACY IS A CHOICE (core/window_handover.hpp; gui/app_window_handover.cpp): the person pressed "Switch to the new window" (or the test seam did). run()
+    // returned; main() starts the new window once this object and the engine service are gone. `setHandoverNote` is the sentence a failed switch left for this window to say.
+    bool handoverRequested() const { return handoverRequested_; }
+    void setHandoverNote(const std::string& sentence) { handoverNote_ = sentence; }
+
     // Where hang reports go, and whether the frame loop should stage a
     // deliberate stall. Both are decided in main(), because only main() knows
     // whether this is a real session or a bounded CI run - and a bounded run
@@ -866,6 +871,10 @@ private:
     // useful thing this application can say to them, and it is worth more than
     // whatever they opened the panel for.
     void drawUpdatesSection();
+    void drawWindowSection();    // engine fixes 7: "Window layout", the way back to the new window
+    void handoverChoose();       // preflight, the question while something runs, then the hand-over
+    void handoverGo();           // end this run so that main() starts the new window
+    void handoverPoll();         // once a frame: the FOXSDR_HANDOVER_AT seam
     void drawUpdateBanner();
     // A MESSAGE FROM THE TEAM (0.99.79; stub campaign B14, src/gui/app_window_updates.cpp): a card above the update banner for each message the
     // update service carries that this copy has not marked Seen - whether or not there is an update. Not drawn when the Updates tick is off, or for a
@@ -2885,6 +2894,13 @@ private:
     GLFWwindow* mainWindow_ = nullptr;
     // run() handed this run to a second process on the software renderer.
     bool relaunchWithSoftwareGl_ = false;
+    // engine fixes 7: the hand-over to the new window (app_window_handover.cpp)
+    bool handoverRequested_ = false;   // the person chose the new window; run() ends and main() starts it
+    bool handoverAsking_ = false;      // the question "a recording is running, switch anyway?" is on show
+    std::string handoverNote_;         // the sentence the last attempt (this window's or the other's) left
+    std::string handoverAsk_;          // the question's words
+    long handoverFrames_ = 0;          // frames seen, for the FOXSDR_HANDOVER_AT seam
+    int handoverAt_ = -1;              // the seam's frame (-1: not read yet, 0: none)
     // THE TWO HALVES OF THE WINDOW'S END (shell retirement R8): run() brings the window up and leaves the GL context, ImGui and GLFW standing when its
     // loop ends - the engine is stopped by the host while they still are - and closeWindow() takes them down. `glUp_` is whether there is anything for
     // closeWindow to take down (set once the backends are up; cleared by closeWindow, which is then idempotent); `renderedFrames_` and

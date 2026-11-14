@@ -45,6 +45,7 @@
 #include "core/diag_log.hpp"
 #include "core/engine_measure.hpp"
 #include "core/sentinel.hpp"
+#include "core/window_handover.hpp"
 #include "engine/engine_service.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "engine/host_measure.hpp"
@@ -63,6 +64,10 @@ int main(int argc, char** argv) {
         cascade::engine::bootProcess(cascade::engine::ProcessKind::Host, argc, argv);
     if (boot.exit) { return boot.exitCode; }
 
+    // ENGINE FIXES 7, LEGACY IS A CHOICE (core/window_handover.hpp): declared before the engine's scope so it is destroyed AFTER it - the service (the settings lock, the radios)
+    // and the window are gone when it starts the new window, which the person chose in "Window layout" (this program always opens the Legacy window: that is what its Start-menu
+    // entry says; only a window started by a hand-over carries a sentence to say).
+    cascade::core::handover::HandoverAtExit handoverExit;
     int exitCode = 0;
     bool softglRelaunch = false;
     {
@@ -123,6 +128,7 @@ int main(int argc, char** argv) {
         // work in a session that started with diagnostics off. The watchdog still
         // runs and still logs a recovered stall to the ring either way, but it puts
         // no file on a machine that only asked for a smoke test.
+        app.setHandoverNote(cascade::core::handover::noteSentence(boot.handover, cascade::core::handover::Window::Legacy));   // a switch that could not open the new window left a sentence
         app.setDiagnosticsDir(boot.mayWrite ? cascade::core::diagCrashDir() : std::string());
         app.setDiagStallMs(boot.diagStallMs);
         app.setDiagToggle(boot.diagToggle);
@@ -150,6 +156,14 @@ int main(int argc, char** argv) {
         // against the shutdown budget until this line (core/hang_watchdog.hpp). A no-op when run() never made a window.
         app.closeWindow();
         softglRelaunch = app.relaunchWithSoftwareGl();
+        if (app.handoverRequested()) {
+            cascade::core::handover::Request r;
+            r.from = cascade::core::handover::Window::Legacy;
+            r.target = cascade::core::handover::Window::New;
+            r.configPath = boot.configPath;
+            r.safePlugins = boot.safePlugins;
+            handoverExit.set(r);   // started when this scope's service has let the lock go: handoverExit's destructor, at the end of main()
+        }
     }
     // THE GRAPHICS DRIVER COULD NOT BE USED, AND THE SOFTWARE RENDERER IS TO BE (0.99.90,
     // gui/software_gl.hpp): a second process, started only now that this one's application object -

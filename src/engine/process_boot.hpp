@@ -59,6 +59,7 @@
 
 #include <string>
 
+#include "core/window_handover.hpp"
 #include "engine/provision.hpp"
 #include "engine/tool_modes.hpp"
 
@@ -97,6 +98,7 @@ struct BootResult {
     // --- boot's own bookkeeping, public so a test can read what boot decided ---
     bool wanted = false;           // the stored Diagnostics switch, honoured before the disk
     bool primaryInstance = false;  // this process holds the instance name (Host only)
+    cascade::core::handover::Marker handover;   // this process was started by the other window's hand-over (core/window_handover.hpp; Host only)
     bool argv1IsLinkActivation = false;  // argv[1] was a foxsdr: link, consumed by boot
     bool sentinelTest = false;     // CASCADE_SENTINEL_TEST on a bounded run
     ToolRequest tool;              // the tool mode the command line asked for, if any

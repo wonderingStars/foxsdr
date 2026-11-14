@@ -102,6 +102,9 @@
 #include "core/zoom_select.hpp"
 #include "workspace_testseam.hpp"
 #include "plugin_kit.hpp"
+#include "handover_host.hpp"   // engine fixes 7: Legacy as a choice in the Layouts menu
+#include "core/window_handover.hpp"
+#include "core/sentinel.hpp"
 #include "signal_publish.hpp"
 #include "signatures.hpp"
 #include "system_publish.hpp"
@@ -180,6 +183,23 @@ int main(int argc, char** argv) {
     BoundedRun bounded(boot.frames);
     // The settings file this run owns: boot's answer, whatever it is (see the header comment).
     const std::string configPath = boot.configPath;
+    // ENGINE FIXES 7, LEGACY IS A CHOICE (core/window_handover.hpp): declared FIRST so it is destroyed LAST - a window that chose the other window starts it from this object's destructor,
+    // after the engine service (the settings lock, the radios), the plugin kit and the screen are gone.
+    cascade::core::handover::HandoverAtExit handoverExit;
+    // The start of the main entry: a person who last chose Legacy gets Legacy. Nothing exists yet - no lock, no radio, no window. A window started BY a hand-over never hands back (the loop
+    // guard), and a Legacy program that is not there leaves the person in this window.
+    if (!boot.handover.present && !configPath.empty() && cascade::core::handover::readChoice(configPath) == cascade::core::handover::Window::Legacy &&
+        cascade::core::handover::preflight(cascade::core::handover::Window::Legacy).empty()) {
+        cascade::core::handover::Request r;
+        r.from = cascade::core::handover::Window::New;
+        r.target = cascade::core::handover::Window::Legacy;
+        r.configPath = configPath;
+        r.safePlugins = boot.safePlugins;
+        handoverExit.set(r);
+        cascade::core::sentinelSetEnabled(false);   // nothing of this run was started: its ending is not a report
+        std::fprintf(stderr, "foxsdr-slint: the Legacy window was the last one chosen: opening it\n");
+        return 0;
+    }
 
     // THE ENGINE'S SERVICE, as src/main.cpp holds it: built first, destroyed last; the window is its client. The diagnostics directory is
     // empty unless this run is ALLOWED to write - which is not the same as whether the user wants it: the stored switch decides that.
@@ -1019,6 +1039,8 @@ int main(int argc, char** argv) {
                 e.push_back(entry(MenuItemKind::Separator, 0, ""));
                 e.push_back(entry(MenuItemKind::Item, 1990, std::string(cascade::i18n::tr("Save the current layout...")).c_str()));
                 e.push_back(entry(MenuItemKind::Item, 1991, std::string(cascade::i18n::tr("Manage layouts...")).c_str()));
+                e.push_back(entry(MenuItemKind::Separator, 0, ""));
+                e.push_back(entry(MenuItemKind::Item, 1993, "Legacy", std::string(cascade::i18n::tr("The previous FoxSDR layout")).c_str()));   // engine fixes 7: closes this window, opens the Legacy one
                 break;
             }
             case MenuKind::MarkTab: {   // lane S1: the names a "+N" tab stands for; a pick tunes to that mark
@@ -1194,6 +1216,22 @@ int main(int argc, char** argv) {
         if ((held & foxsdr::slintlayouts::kHeldSelection) != 0) { layoutNote += ". " + std::string(cascade::i18n::tr("The radio that layout names is not open, so the selection stays")); layoutNoteBad = true; }
         publishLayouts();
     };
+    // ENGINE FIXES 7: LEGACY IS A CHOICE (src/slint/handover_host.hpp): the Layouts menu's "Legacy" entry (id 1993), the question while something runs, and the sentence a failed switch leaves.
+    foxsdr::slinthost::HandoverHost handoverHost(
+        {[&] { cascade::core::handover::Busy b; b.recording = lists.recording; b.patch = (state.flags & FOXAPI_RX_PATCH_RUNNING) != 0; return b; },
+         [] { slint::quit_event_loop(); },
+         [&](const foxsdr::slinthost::HandoverHost::Sheet& s) {
+             auto& g = ui->global<Handover>();
+             g.set_title(ss(s.title)); g.set_text(ss(s.text)); g.set_go_label(ss(s.goLabel)); g.set_stay_label(ss(s.stayLabel)); g.set_open(true);
+         },
+         [&] { ui->global<Handover>().set_open(false); },
+         [](const char* s) { return std::string(cascade::i18n::tr(s)); }},
+        handoverExit, configPath, boot.safePlugins);
+    ui->global<Handover>().on_go([&] { handoverHost.confirm(); });
+    ui->global<Handover>().on_stay([&] { handoverHost.cancel(); });
+    int handoverAt = 0;   // FOXSDR_HANDOVER_AT=<tick>: a drive script chooses Legacy at that tick (window_handover.hpp, test seams)
+    if (const char* e = std::getenv(cascade::core::handover::kAtEnv); e != nullptr) { handoverAt = std::atoi(e); }
+    handoverHost.showNote(cascade::core::handover::noteSentence(boot.handover, cascade::core::handover::Window::New));   // started by a hand-over that could not open the other window
     {
         using SR = foxsdr::slintlayouts::SaveResult;
         auto& lm = ui->global<LayoutsModel>();
@@ -1379,6 +1417,7 @@ int main(int argc, char** argv) {
             case 411: selected().ab.setA(menuHz); break;   // lane B (S21)
             case 412: selected().ab.setB(menuHz); break;
             case 413: selected().ab.clear(); break;
+            case 1993: handoverHost.choose(); break;   // engine fixes 7
             case 1990: case 1991: layoutNote.clear(); layoutNoteBad = false; layoutRenaming = -1; ui->global<LayoutsModel>().set_open(true); publishLayouts(); break;
             case 211: case 212: case 213: case 214: case 215: case 216: case 217: {
                 const double presets[7] = {0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0};
@@ -2473,6 +2512,7 @@ int main(int argc, char** argv) {
             ui->set_follow_band_plan(followBandPlan);
         }
         ++tickNo;
+        if (handoverAt > 0 && tickNo == handoverAt) { ui->invoke_menu_activated(1993); }   // engine fixes 7 (test seam)
         if (addSheetCapture) { addSheetCapture(tickNo); }
         if (tickNo % 8 == 3) {   // lane B: the band zoom's list follows the baseband and the bands (the first publish may precede the first frame)
             std::string zsig;
