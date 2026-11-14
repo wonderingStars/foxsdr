@@ -49,5 +49,19 @@ None: every sentence reuses a key the old window already had (reach sentences, "
 * A fitted module whose install record names no catalogue key, or whose entry the catalogue does not list, gets no body (the page keeps its own FILE / PLUGIN ABI lines); the old window also drew a DETAILS grid built from the host record for such a module. Not built: it would repeat the lines the page already has.
 * Companion applications shelf: see above.
 
+## WHERE I STOPPED (usage limit, 2026-11-14) AND WHAT IS NEXT
+
+All 16 rows of the lane are built or re-proved and committed (tip: see `git log`; nothing pushed). Proof so far, all real runs on this build folder:
+* `test_slint_host_extend` and `test_slint_host_kit`: passed (409 and 139 checks) after the work; break-it: removing the move-the-receiver reach row, the 4 s hold, the closed-page clean-up read and the module bodies each turned them RED (`iq && tx && move`, `!h.step(true, 5, 5000)`, `module_pages.size() == 2`), restored, green.
+* `test_slint_extend` and `test_slint_fitted` (hidden desktop `FoxSDRGaps3`): passed, including the new strip, facts grid and the clean-up question; break-it (KEEP THEM answering yes) RED at test_slint_fitted.cpp:642, restored.
+* drive `wg3-store-page`: 35 of 36 steps passed on the hidden desktop (strip index 0->1->2->1, arrows grey at the ends, notice tick and GET, reach list, facts, chip OK); the 36th (the caption read by label) was fixed afterwards by making the caption an accessible text and NOT re-run. `wg3-store-plain`: passed after the size/open fixes (last run before that fix had one failing step, now removed from the script).
+
+NOT YET DONE, in order:
+1. Finish the full build in `D:/foxsdr-build/en-sigmeas` (`cmake --build . --config Release --parallel 3`; it was in the long main.slint compile of `test_slint_main_screen` when stopped, 1060 targets done, no compile error so far), then re-run `wg3-store-page` and `wg3-store-plain` (ctest -R slint_drive_wg3 via `D:/foxsdr-build/wg3-scratch/run-drive.bat` on the hidden desktop `FoxSDRGaps3`).
+2. Run `tests/drive/wg3-manual/wg3-module-page.txt` BY HAND (it is outside the ctest glob because it fits a plugin): set `FOXSDR_DRIVE_PLUGINS_DIR=D:oxsdr-build\wg3-scratch\plugins` (holds a built `aprs-decoder-1.0.3` DLL from `D:/foxsdr-build/plug-real/out/Release` and an `installed.json` with id `aprs-decoder`), then `test_slint_drive_run.exe <script>` through the hidden-desktop launcher. This is the only end-to-end proof of a fitted module's page body; until it runs it is UNVERIFIED (the logic is unit tested and the component is rendered in the store page).
+3. The full gate: `ctest -L "headless|slint" -j4 --timeout 300`, the GUI gate `-L gui -j3` with `FOXSDR_FRAME_CAP_HZ=60` on the hidden desktop, `tools/i18n_keys.py` (clean: 3828 keys, 0 stale, 0 missing in 33 catalogues), `slint_drive_ledger` (regenerated: 0 unclassified). Stamp tests after the rebuild at the final commit; name every red and classify it (known false failures: test_airband_data, test_band_plan, test_converter_call_sites, test_page_resize_id, test_png_decode).
+4. Confirm the real `%APPDATA%/foxsdr/config.json` sha256 is still `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (no test of this lane touched it; not re-hashed yet).
+
 ## UNVERIFIED
-(to be completed with the gate: see the end of this file)
+* The fitted module page end to end (step 2 above), the fax chart beside the memory keys (354) and the teleprinter paper feed (426) in a real plugin run, the engine's removal of real old copies through the clean-up question (the command is checked as an effect; no old copies were made), the strip's wheel scroll, a real pointer, the gate totals. The "n UPD" and BUSY chip words are checked by the existing `railChip` unit test, not driven.
+* All strings reuse existing keys, so there are no new translations to check.

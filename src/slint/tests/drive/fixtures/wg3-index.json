@@ -73,6 +73,53 @@
      "sizeBytes": 123456
     }
    ]
+  },
+  {
+   "id": "aprs-decoder",
+   "name": "APRS / AX.25 Packet Decoder",
+   "version": "1.0.3",
+   "author": "Example Author",
+   "licence": "MIT",
+   "summary": "APRS packets.",
+   "description": "Decodes APRS packets and lists the stations it hears; this paragraph is the module page's WHAT IT DOES.",
+   "abiVersion": 3,
+   "capabilities": [
+    "CASCADE_CAP_DECODER",
+    "CASCADE_CAP_PANEL"
+   ],
+   "screenshots": [
+    {
+     "url": "https://example.invalid/aprs0.png",
+     "sha256": "3030303030303030303030303030303030303030303030303030303030303030",
+     "caption": "Packet view 1"
+    },
+    {
+     "url": "https://example.invalid/aprs1.png",
+     "sha256": "3131313131313131313131313131313131313131313131313131313131313131",
+     "caption": "Packet view 2"
+    },
+    {
+     "url": "https://example.invalid/aprs2.png",
+     "sha256": "3232323232323232323232323232323232323232323232323232323232323232",
+     "caption": "Packet view 3"
+    },
+    {
+     "url": "https://example.invalid/aprs3.png",
+     "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+     "caption": "Packet view 4"
+    }
+   ],
+   "platforms": [
+    {
+     "os": "windows",
+     "arch": "x64",
+     "file": "aprs-decoder-1.0.3-abi3-win-x64.dll",
+     "url": "https://example.invalid/dl/aprs-decoder.dll",
+     "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+     "sizeBytes": 123456
+    }
+   ],
+   "whatsNew": "Packets are listed as they arrive."
   }
  ]
 }

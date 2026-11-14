@@ -1,0 +1,23 @@
+#! frames=620 size=1400x1500 plugins=aprs-decoder open=module:aprs-decoder-1.0.3-abi3-win-x64.dll FOXSDR_SLINT_STORE_LOCAL=fixtures/wg3-index.json
+# wg3-module-page (window gaps 3, rows 406 1880): a FITTED module's page shows the catalogue body of its entry. RUN BY HAND, not by ctest (it is in a folder the
+# suite does not glob), because it fits a plugin from a scratch folder: set FOXSDR_DRIVE_PLUGINS_DIR to a folder holding aprs-decoder-1.0.3-abi3-win-x64.dll and an
+# installed.json whose record is {"id":"aprs-decoder", ...}; the run never reads the user's own plugin folder then. Nothing is fetched: the catalogue is the local
+# stand-in fixtures/wg3-index.json (aprs-decoder has four pictures that cannot be reached, so each frame shows its own words).
+120 state kit.plugins == 1
++200 state store.module.aprs-decoder.catalogued == 1
+state store.module.aprs-decoder.frames == 4
+state store.module.aprs-decoder.whatItDoes contains "module page's WHAT IT DOES"
+state store.module.aprs-decoder.details == 0
+expect "Next picture" enabled equals "true"
+expect "Previous picture" enabled equals "false"
++1 click "Next picture"
++10 state store.module.aprs-decoder.index == 1
+expect "Previous picture" enabled equals "true"
+expect "Packet view 2" label contains "Packet view 2"
++1 click "SHOW DETAILS"
++10 state store.module.aprs-decoder.details == 1
+state store.module.aprs-decoder.facts >= 10
+expect "HIDE DETAILS" enabled equals "true"
++1 click "HIDE DETAILS"
++10 state store.module.aprs-decoder.details == 0
++1 shot "wg3-module-page.png"
