@@ -1580,6 +1580,7 @@
   "Link": "Привязать",
   "Link Radio %d": "Связать SDR %d",
   "Link this FoxSDR to beta tester %s?": "Привязать это FoxSDR к бета-тестеру %s?",
+  "Link this FoxSDR to tester %s?": "Привязать это FoxSDR к тестировщику %s?",
   "Link this FoxSDR?": "Привязать это FoxSDR?",
   "Link tuning": "Связанная настройка",
   "Linked": "Связано",

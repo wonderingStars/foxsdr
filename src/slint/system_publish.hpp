@@ -41,6 +41,7 @@ public:
     struct Hooks {
         std::function<void()> updateCardChanged;   // the duties changed the update card's state (a re-tick, "Show it again"): the host applies it
         std::function<void()> rangeManual;         // a dB slider was dragged: the range is Manual from then on (the host's own flag and the strip's key follow)
+        std::function<void(const std::string& appToken)> testerLink;   // a 40-hex tester link was pasted: put it to the site and ask "Link this FoxSDR?" (window gaps, lane 1)
     };
     SystemPublisher(MainWindow& ui, foxsdr::slintkit::PluginKit& kit, foxsdr::slinthost::HostDuties& duties, foxsdr::slinthost::LiveWorld& world,
                     const FoxEngineApi* api, FoxSession* session, bool bounded, Hooks hooks);

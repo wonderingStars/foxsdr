@@ -1,0 +1,13 @@
+#! frames=260 FOXSDR_FAKE_FAULT_NOTICES=aprs-decoder;1.0.2;1;0;process|adsb;2.0;2;1;process
+# gaps1-faults (window gaps lane 1, audit item U1): the start-up plugin fault cards. The engine's start notices (stood in by FOXSDR_FAKE_FAULT_NOTICES: the previous run's plugin marker is a
+# binary file no test can seed) name two plugins: aprs-decoder was left out of this start (strike one), adsb stays off until re-enabled (strike two). One card each, "Started without a
+# plugin", RE-ENABLE and Seen. RE-ENABLE sends the engine's own re-enable for that plugin and puts the card away; Seen puts it away alone.
+60 state gaps1.faults == 2
++1 expect "RE-ENABLE"#1 enabled equals "true"
++1 expect "Seen"#2 enabled equals "true"
++1 click "RE-ENABLE"#1
++6 state gaps1.reenabled == aprs-decoder
++1 state gaps1.faults == 1
++1 click "Seen"#1
++6 state gaps1.faults == 0
++1 state gaps1.reenabled == aprs-decoder

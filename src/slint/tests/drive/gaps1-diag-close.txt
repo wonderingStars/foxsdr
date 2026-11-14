@@ -1,0 +1,5 @@
+#! frames=160 config=gaps1-unclean.json
+# gaps1-diag-close (window gaps lane 1, ledger row 111): the offer's close box (the sheet's own "Close", the second one after the title bar's) puts the offer away like Not now.
+10 state gaps1.diag == 1
++2 click "Close"#2
++4 state gaps1.diag == 0

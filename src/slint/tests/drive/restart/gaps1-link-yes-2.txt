@@ -1,0 +1,5 @@
+#! frames=160 bank=4 sections=4:8
+# gaps1-link-yes, the second start on the same scratch profile: the settings still hold the link, so the name it was linked to is still held (SYSTEM > Beta tester reads it as "Linked to Ada") and no question is asked again.
+60 state gaps1.link == none
++1 state gaps1.stored == 0
++1 state gaps1.held == Ada

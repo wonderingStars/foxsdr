@@ -1,0 +1,22 @@
+#! frames=300 updatecheck=on manifest=gaps1-team.json restart=gaps1-team-message-2.txt
+# gaps1-team-message (window gaps lane 1, ledger rows 1429 and 1430): the update service's answer carries two team messages and no newer build. The card shows the first (important:
+# the title is red, its date and its two lines), says one more waits behind it, and Seen saves its id at once through the settings half and brings the second; Seen on the second
+# leaves no card. The id reaches the saved settings (the second start of this profile, gaps1-team-message-2, shows no card and a Seen list of both).
+80 state team.shown == 1
++1 state team.id == msgAAAA1
++1 state team.important == 1
++1 state team.date == "2026-11-01"
++1 state team.lines contains "The Tuesday net moves to 19:00."
++1 state team.lines contains "Bring your own antenna."
++1 state team.more == 1
++1 state update.shown == 0
++1 expect "Seen" enabled equals "true"
++1 click "Seen"
++6 state team.id == msgBBBB2
++1 state team.important == 0
++1 state team.more == 0
++1 state team.seen == msgAAAA1
++10 click "Seen"
++8 state team.shown == 0
++1 state team.seen contains "msgBBBB2"
++30 state running == 1

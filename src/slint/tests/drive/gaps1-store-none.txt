@@ -1,0 +1,5 @@
+#! frames=200 updatecheck=on FOXSDR_FAKE_PACKAGE=FoxSDR.Test_1.0.0.0_x64__test FOXSDR_FAKE_STORE_UPDATE=none
+# gaps1-store-none (window gaps lane 1): the Store says it has nothing, so no banner. A failed check (FOXSDR_FAKE_STORE_UPDATE=error) is never a banner either (gaps1-store-error).
+80 state update.shown == 0
++1 state update.error == ""
++1 state team.shown == 0

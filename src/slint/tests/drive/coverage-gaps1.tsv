@@ -1,0 +1,39 @@
+14	ASSERTED	gaps1-sysmenu.txt	state sysmenu.items > 0: the main window's handle is reached and the window has a system menu (GetMenuItemCount, nothing shown); the right-click itself and the look of the real menu are UNVERIFIED until the mouse drive
+67	NOT_DRIVABLE	-	REPLACED ON PURPOSE: the enamel fade is the ImGui window's look; the panel width animates on fold instead (main.slint, animate width 160ms)
+100	ASSERTED	gaps1-store-banner.txt	the Store banner's "Waiting for Windows..." note while the install request is with Windows is held by test_slint_duties (the canned install answers in one tick); the banner and its outcome notes are read back through state update.*
+101	ASSERTED	gaps1-store-banner.txt	state update.note contains "You cancelled the update, so nothing was changed." after the canned install answers cancelled; gaps1-store-mandatory.txt reads the installed outcome
+102	ASSERTED	gaps1-store-banner.txt	click "Install from the Microsoft Store" (the canned fake install, no Windows dialog); state update.note and state update.primary read the outcome back
+104	ASSERTED	gaps1-mute-stop.txt	state mute.text reads the message with the plugin's name; the question is forced in a bounded run (FOXSDR_SLINT_MUTE_QUESTION)
+105	ASSERTED	gaps1-mute-stop.txt	click "Stop APRS-Decoder and resume sound"; state mute.action == "stop:<the keys the message named>"
+106	ASSERTED	gaps1-mute-keep.txt	click "Keep it running"; state mute.action == keep and the question goes
+110	ASSERTED	gaps1-diag-offer.txt	state gaps1.diag == 1 with the last run's clean-exit marker false and diagnostics on; == 0 without (gaps1-diag-none.txt, gaps1-diag-off.txt)
+111	ASSERTED	gaps1-diag-close.txt	click "Close"#2 (the sheet's close box); state gaps1.diag == 0
+112	ASSERTED	gaps1-diag-offer.txt	click "Copy diagnostics"; state diagcopies == 1
+113	ASSERTED	gaps1-diag-offer.txt	click "Open reports folder" (a bounded run opens no folder, so the effect is not read back; the sheet stays up, which is read back)
+115	ASSERTED	gaps1-link.txt	state gaps1.link == pending and state gaps1.linkname == Ada: the question names the tester the site gave
+116	ASSERTED	gaps1-link-yes.txt	click "Link"; state gaps1.stored == 1 and gaps1.storedname == Ada; the second start (gaps1-link-yes-2) reads gaps1.held == Ada
+118	ASSERTED	gaps1-link-invalid.txt; gaps1-link-network.txt	state gaps1.link == error and gaps1.linkerr read the sentence back
+119	ASSERTED	gaps1-link-network.txt	click "Close"#2 on the error variant; state gaps1.link == none
+227	ASSERTED	gaps1-markers.txt	click the toolbar's Markers key with three seeded markers; state markers.shown == 1 and markers.rows == 3
+228	ASSERTED	gaps1-markers.txt	click "Copy markers to clipboard"; state clip contains the list (the bounded run's clipboard stand-in)
+239	ASSERTED	gaps1-markers.txt	state markers.shown == 1 after the Markers key, == 0 after the sheet's Close
+240	ASSERTED	gaps1-markers-damaged.txt	state markers.error contains "is not a JSON object" for a damaged markers.json
+241	ASSERTED	gaps1-markers-damaged.txt	state markers.empty contains "No markers yet."
+242	ASSERTED	gaps1-markers.txt	state markers.rows == 3 then 2 then 0 as markers are removed
+243	ASSERTED	gaps1-markers.txt	state markers.row.1 starts with "M1"
+244	ASSERTED	gaps1-markers.txt	state markers.row.1 contains the frequency
+245	ASSERTED	gaps1-markers.txt	state markers.row.1 contains the noted time
+246	ASSERTED	gaps1-markers.txt	type "Note"#1 then state markers.row.1 contains the typed note (the engine's list has it back)
+247	ASSERTED	gaps1-markers.txt	click "Tune"#2; state tunedHz == 14230000
+248	ASSERTED	gaps1-markers.txt	click "Bookmark"#3; state count.bookmarks == 1
+249	ASSERTED	gaps1-markers.txt	click "Remove this marker"#2; state count.freqMarkers == 2
+250	ASSERTED	gaps1-markers.txt	the same Copy key as 228 (the sheet's key; the menu item of 228 shares its effect)
+1429	ASSERTED	gaps1-team-message.txt	state team.shown, team.id, team.important, team.date, team.lines, team.more read the card as the duties made it
+1430	ASSERTED	gaps1-team-message.txt	click "Seen"; state team.id moves to the second message and team.seen holds the first; gaps1-team-message-2 proves the id was saved (a second start shows no card)
+1436	ASSERTED	gaps1-store-banner.txt	state update.shown == 1 and update.headline for a Store copy with a canned Store answer; gaps1-store-mandatory.txt the red variant; gaps1-store-none.txt and gaps1-store-error.txt no banner
+1437	ASSERTED	gaps1-store-banner.txt	click "Install from the Microsoft Store"; the canned install's outcome is read back
+1472	ASSERTED	gaps1-diag-offer.txt	click "Copy diagnostics" on the offer; state diagcopies == 1
+1474	ASSERTED	gaps1-diag-offer.txt	click "Not now"; state gaps1.diag == 0
+1493	ASSERTED	gaps1-link.txt	state gaps1.link == pending (the question) after the link-request file is claimed and the canned site answers
+1494	ASSERTED	gaps1-link-yes.txt	click "Link"; state gaps1.stored == 1
+1495	ASSERTED	gaps1-link.txt	click "Not now"; state gaps1.link == none and gaps1.stored == 0

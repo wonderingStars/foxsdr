@@ -25,7 +25,7 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | 11 | Maximise / restore key | button | PRESENT | icon keys with tooltips and accessible labels; the host minimises / maximises-restores / quits |
 | 12 | Close key | button | PRESENT | icon keys with tooltips and accessible labels; the host minimises / maximises-restores / quits |
 | 13 | Rail drag handle | drag/gesture | PRESENT | press-drag the empty bar moves the window (title-drag -> set_position); double-click toggles maximise |
-| 14 | Rail system menu | context menu | DEFERRED | Windows' own system menu needs the native handle, which the Slint C++ API does not expose: phase 2 (callback system-menu-requested exists) |
+| 14 | Rail system menu | context menu | PRESENT | the right-click on the title rail asks Windows' own system menu of the main window: sysmenu_win.cpp (GetSystemMenu + TrackPopupMenuEx at the pointer, the picked command posted back as WM_SYSCOMMAND), main.cpp on_system_menu_requested; the handle IS reachable now (gaps_win findMainWindow). Proved on the hidden desktop by state sysmenu.items (the window has a system menu; nothing is shown) and test_slint_gaps1_host (the hand-over with a stand-in); the real menu's look on this frameless window and the right-click itself are UNVERIFIED until the mouse drive |
 | 15 | Window edges and corners | drag/gesture | PRESENT | right, bottom and corner edges drag-resize (resize-drag -> set_size); left and top edges follow in phase 2 |
 
 ## Main window frame — STOP / START dome and MASTER lamps
@@ -123,7 +123,7 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | 64 | Bank key EXTEND | key (latched, radio group) | PRESENT | RailKey with icon, caption and F-key hint; F1..F5; a caption longer than the 64 px rail elides and the tip says it first (6.62) |
 | 65 | Bank key SYSTEM | key (latched, radio group) | PRESENT | RailKey with icon, caption and F-key hint; F1..F5; a caption longer than the 64 px rail elides and the tip says it first (6.62) |
 | 66 | Bank group caption | readout | PRESENT | the panel's head caption |
-| 67 | Bank curtain | readout (animation) | DEFERRED | the enamel fade is the ImGui window's; the panel width animates on fold instead (cosmetic) |
+| 67 | Bank curtain | readout (animation) | RELOCATED | REPLACED ON PURPOSE: the enamel fade is the ImGui window's look and carries no information; the panel's width animates on fold instead (main.slint, animate width 160ms) |
 | 68 | View key RECEIVER | key (latched, 2-way) | RELOCATED | the RECEIVER tab of the tab row (Workbench IA 4) |
 | 69 | View key PATCH | key (latched, 2-way) | RELOCATED | the PATCH tab; its page is PatchPage (patch_page.slint, rows 1888 to 1963) |
 | 70 | Sections area | list | PRESENT | the bank's rows with state chips in a Flickable; the Radio body is drawn (passband, tune step, band-plan checkbox), the SIGNAL bank's bodies are drawn (phase 3); TOOLS, EXTEND and SYSTEM remain |
@@ -181,18 +181,18 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 |---|---|---|---|---|
 | 98 | Headline | banner | PRESENT | Card properties: headline (red when critical), 'you are running', notes as bullets, primary key or progress bar, note, error, Not now; hidden until the table carries updater state (none in API 0.3: phase 2) |
 | 99 | Running version | readout | PRESENT | Card properties: headline (red when critical), 'you are running', notes as bullets, primary key or progress bar, note, error, Not now; hidden until the table carries updater state (none in API 0.3: phase 2) |
-| 100 | Waiting notice | readout | DEFERRED | the Store's install flow has no table state in API 0.3; the same Card draws it in phase 2 |
-| 101 | Outcome text | readout | DEFERRED | the Store's install flow has no table state in API 0.3; the same Card draws it in phase 2 |
-| 102 | Install from the Microsoft Store | button (full width) | DEFERRED | the Store's install flow has no table state in API 0.3; the same Card draws it in phase 2 |
+| 100 | Waiting notice | readout | PRESENT | the Store card's waiting note: host_duties.cpp storeCardFor (installPending: Waiting for Windows... and the dialogs sentence), drawn by the update Card (main.slint); held by test_slint_duties (window gaps lane 1). The real Store call is UNVERIFIED on a Store copy |
+| 101 | Outcome text | readout | PRESENT | the Store card's outcome notes (installed / cancelled / nothing to install / could not install: ...): host_duties.cpp storeCardFor; gaps1-store-banner.txt and gaps1-store-mandatory.txt read them back |
+| 102 | Install from the Microsoft Store | button (full width) | PRESENT | Install from the Microsoft Store: the update Card's primary key for a Store copy (host_duties.cpp storeCardFor, HostDuties::startStoreInstall over DutyWorld::storeInstallStart, core::requestStoreUpdateInstall; the canned FOXSDR_FAKE_STORE_INSTALL seam in tests); the real Store is UNVERIFIED |
 | 103 | Not now | button (small) | PRESENT | Card properties: headline (red when critical), 'you are running', notes as bullets, primary key or progress bar, note, error, Not now; hidden until the table carries updater state (none in API 0.3: phase 2) |
 
 ## Main window frame — Sound is muted (dialog)
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 104 | Message | dialog | DEFERRED | a companion dialog (phase 3); the banner path with 'Stop plugin' exists |
-| 105 | Stop and resume | button | DEFERRED | a companion dialog (phase 3); the banner path with 'Stop plugin' exists |
-| 106 | Keep it running | button | DEFERRED | a companion dialog (phase 3); the banner path with 'Stop plugin' exists |
+| 104 | Message | dialog | PRESENT | the Sheet 'Sound is muted' (main.slint) with the classic's sentence naming the plugin(s) (kit_publish.cpp publishMuteQuestion 1236); gaps1-mute-stop.txt reads the message back |
+| 105 | Stop and resume | button | PRESENT | Stop <plugin> and resume sound: KitEvents.mute-stop-clicked -> kit_.stopList(exactly the plugins the message named) (kit_publish.cpp); gaps1-mute-stop.txt (state mute.action) |
+| 106 | Keep it running | button | PRESENT | Keep it running: KitEvents.mute-keep-clicked -> kit_.keepMuteRunning (FOXAPP_OP_MUTE_KEEP_RUNNING), the banner then keeps the mute from being silent; gaps1-mute-keep.txt |
 
 ## Main window frame — Turn on the bias tee? (dialog)
 
@@ -206,21 +206,21 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 110 | Explanation | dialog | DEFERRED | a companion dialog (phase 3) |
-| 111 | Close box (title X) | button | DEFERRED | a companion dialog (phase 3) |
-| 112 | Copy diagnostics | button | DEFERRED | a companion dialog (phase 3) |
-| 113 | Open reports folder | button | DEFERRED | a companion dialog (phase 3) |
+| 110 | Explanation | dialog | PRESENT | the Sheet 'FoxSDR did not close normally last time' (main.slint) over gaps1_publish.cpp / ui/gaps1.slint: the classic's explanation (states the attempt, never the outcome), shown at start when the last run did not end normally AND diagnostics were on (gaps1_logic diagOfferDue); gaps1-diag-offer.txt, gaps1-diag-none.txt, gaps1-diag-off.txt |
+| 111 | Close box (title X) | button | PRESENT | the sheet's close box (Sheet closable: true, main.slint) puts the offer away like Not now; gaps1-diag-close.txt |
+| 112 | Copy diagnostics | button | PRESENT | Copy diagnostics on the offer calls the SYSTEM bank's own Copy diagnostics (SystemEvents.diag-copy: the bundle to the clipboard and beside the reports); gaps1-diag-offer.txt (state diagcopies) |
+| 113 | Open reports folder | button | PRESENT | Open reports folder on the offer calls the SYSTEM bank's own key (SystemEvents.diag-open-reports); a bounded run opens no folder, so only the key and the sheet staying up are read back |
 | 114 | Not now | button | PRESENT | Card properties: headline (red when critical), 'you are running', notes as bullets, primary key or progress bar, note, error, Not now; hidden until the table carries updater state (none in API 0.3: phase 2) |
 
 ## Main window frame — Link this FoxSDR? (beta tester link prompt)
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 115 | Prompt text | dialog | DEFERRED | a companion dialog (phase 3) |
-| 116 | Link | button | DEFERRED | a companion dialog (phase 3) |
+| 115 | Prompt text | dialog | PRESENT | the Sheet 'Link this FoxSDR?' (main.slint): the question 'Link this FoxSDR to tester NAME?' (a replacement says 'This FoxSDR is linked to A. Replace with B?'), asked once the site has named the link's owner (gaps1_logic LinkFlow, gaps1_publish.cpp); gaps1-link.txt (the site's answer stood in: FOXSDR_FAKE_LINK_NAME) |
+| 116 | Link | button | PRESENT | Link: stores the confirmed link through the settings half (testerAppToken, testerAppTokenName; the portal code is superseded); nothing is stored before the press; gaps1-link-yes.txt and its second start |
 | 117 | Not now | button | PRESENT | Card properties: headline (red when critical), 'you are running', notes as bullets, primary key or progress bar, note, error, Not now; hidden until the table carries updater state (none in API 0.3: phase 2) |
-| 118 | Error variant | dialog | DEFERRED | a companion dialog (phase 3) |
-| 119 | Close box | button | DEFERRED | a companion dialog (phase 3) |
+| 118 | Error variant | dialog | PRESENT | the error variant: 'that link is not valid' or 'could not check that link - try again', with Not now and no Link key; gaps1-link-invalid.txt, gaps1-link-network.txt |
+| 119 | Close box | button | PRESENT | the sheet's close box (Sheet closable: true) puts the question away like Not now; gaps1-link-network.txt |
 
 ## Main window frame — Shortcuts
 
@@ -373,8 +373,8 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | 224 | Drop marker here | menu item | PRESENT | FOXAPP_OP_MARKER_DROP at the pointer frequency (merge reach 2 px) |
 | 225 | Remove marker M<n> | menu item | PRESENT | FOXAPP_OP_MARKER_REMOVE when a marker is within 6 px |
 | 226 | (separator) |  | PRESENT | menu separator |
-| 227 | List markers... | menu item | DEFERRED | the Markers window is a companion window (phase 3; the Table component exists); the item logs |
-| 228 | Copy markers to clipboard | menu item | DEFERRED | the text is built; the clipboard needs a platform call the C++ API lacks in 1.18 (phase 2) |
+| 227 | List markers... | menu item | PRESENT | Markers window: ui/tools_bank.slint MarkersSheet (2155), mounted main.slint (the sheet after the import dialog), host tools_publish.cpp applyMarkers* / tools_logic.cpp (applyMarkerTune 1277, applyMarkerBookmark 1284, applyMarkersCopy 1300); proved by gaps1-markers.txt (window gaps lane 1) |
+| 228 | Copy markers to clipboard | menu item | PRESENT | Markers window: ui/tools_bank.slint MarkersSheet (2155), mounted main.slint (the sheet after the import dialog), host tools_publish.cpp applyMarkers* / tools_logic.cpp (applyMarkerTune 1277, applyMarkerBookmark 1284, applyMarkersCopy 1300); proved by gaps1-markers.txt (window gaps lane 1) |
 | 229 | Clear all markers | submenu | PRESENT | opens the are-you-sure menu |
 | 230 | Yes, remove all N | menu item | PRESENT | FOXAPP_OP_MARKER_CLEAR |
 | 231 | Display block | (see below) | PRESENT | the Display block at the foot of both menus |
@@ -395,18 +395,18 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 239 | Window | dialog | DEFERRED | the Markers window is a companion window (phase 3) |
-| 240 | Error line | readout | DEFERRED | the Markers window is a companion window (phase 3) |
-| 241 | Empty message | readout | DEFERRED | the Markers window is a companion window (phase 3) |
-| 242 | Marker table | table | DEFERRED | the Markers window is a companion window (phase 3) |
-| 243 | M<n> cell | readout | DEFERRED | the Markers window is a companion window (phase 3) |
-| 244 | Frequency cell | readout | DEFERRED | the Markers window is a companion window (phase 3) |
-| 245 | Noted cell | readout | DEFERRED | the Markers window is a companion window (phase 3) |
-| 246 | Note field | text field | DEFERRED | the Markers window is a companion window (phase 3) |
-| 247 | Tune | button | DEFERRED | the Markers window is a companion window (phase 3) |
-| 248 | Bookmark | button | DEFERRED | the Markers window is a companion window (phase 3) |
-| 249 | x | button | DEFERRED | the Markers window is a companion window (phase 3) |
-| 250 | Copy markers to clipboard | button | DEFERRED | the text is built; the clipboard needs a platform call the C++ API lacks in 1.18 (phase 2) |
+| 239 | Window | dialog | PRESENT | Markers window: ui/tools_bank.slint MarkersSheet (2155), mounted main.slint (the sheet after the import dialog), host tools_publish.cpp applyMarkers* / tools_logic.cpp (applyMarkerTune 1277, applyMarkerBookmark 1284, applyMarkersCopy 1300); proved by gaps1-markers.txt (window gaps lane 1) |
+| 240 | Error line | readout | PRESENT | Markers window: ui/tools_bank.slint MarkersSheet (2155), mounted main.slint (the sheet after the import dialog), host tools_publish.cpp applyMarkers* / tools_logic.cpp (applyMarkerTune 1277, applyMarkerBookmark 1284, applyMarkersCopy 1300); proved by gaps1-markers.txt (window gaps lane 1) |
+| 241 | Empty message | readout | PRESENT | Markers window: ui/tools_bank.slint MarkersSheet (2155), mounted main.slint (the sheet after the import dialog), host tools_publish.cpp applyMarkers* / tools_logic.cpp (applyMarkerTune 1277, applyMarkerBookmark 1284, applyMarkersCopy 1300); proved by gaps1-markers.txt (window gaps lane 1) |
+| 242 | Marker table | table | PRESENT | Markers window: ui/tools_bank.slint MarkersSheet (2155), mounted main.slint (the sheet after the import dialog), host tools_publish.cpp applyMarkers* / tools_logic.cpp (applyMarkerTune 1277, applyMarkerBookmark 1284, applyMarkersCopy 1300); proved by gaps1-markers.txt (window gaps lane 1) |
+| 243 | M<n> cell | readout | PRESENT | Markers window: ui/tools_bank.slint MarkersSheet (2155), mounted main.slint (the sheet after the import dialog), host tools_publish.cpp applyMarkers* / tools_logic.cpp (applyMarkerTune 1277, applyMarkerBookmark 1284, applyMarkersCopy 1300); proved by gaps1-markers.txt (window gaps lane 1) |
+| 244 | Frequency cell | readout | PRESENT | Markers window: ui/tools_bank.slint MarkersSheet (2155), mounted main.slint (the sheet after the import dialog), host tools_publish.cpp applyMarkers* / tools_logic.cpp (applyMarkerTune 1277, applyMarkerBookmark 1284, applyMarkersCopy 1300); proved by gaps1-markers.txt (window gaps lane 1) |
+| 245 | Noted cell | readout | PRESENT | Markers window: ui/tools_bank.slint MarkersSheet (2155), mounted main.slint (the sheet after the import dialog), host tools_publish.cpp applyMarkers* / tools_logic.cpp (applyMarkerTune 1277, applyMarkerBookmark 1284, applyMarkersCopy 1300); proved by gaps1-markers.txt (window gaps lane 1) |
+| 246 | Note field | text field | PRESENT | Markers window: ui/tools_bank.slint MarkersSheet (2155), mounted main.slint (the sheet after the import dialog), host tools_publish.cpp applyMarkers* / tools_logic.cpp (applyMarkerTune 1277, applyMarkerBookmark 1284, applyMarkersCopy 1300); proved by gaps1-markers.txt (window gaps lane 1) |
+| 247 | Tune | button | PRESENT | Markers window: ui/tools_bank.slint MarkersSheet (2155), mounted main.slint (the sheet after the import dialog), host tools_publish.cpp applyMarkers* / tools_logic.cpp (applyMarkerTune 1277, applyMarkerBookmark 1284, applyMarkersCopy 1300); proved by gaps1-markers.txt (window gaps lane 1) |
+| 248 | Bookmark | button | PRESENT | Markers window: ui/tools_bank.slint MarkersSheet (2155), mounted main.slint (the sheet after the import dialog), host tools_publish.cpp applyMarkers* / tools_logic.cpp (applyMarkerTune 1277, applyMarkerBookmark 1284, applyMarkersCopy 1300); proved by gaps1-markers.txt (window gaps lane 1) |
+| 249 | x | button | PRESENT | Markers window: ui/tools_bank.slint MarkersSheet (2155), mounted main.slint (the sheet after the import dialog), host tools_publish.cpp applyMarkers* / tools_logic.cpp (applyMarkerTune 1277, applyMarkerBookmark 1284, applyMarkersCopy 1300); proved by gaps1-markers.txt (window gaps lane 1) |
+| 250 | Copy markers to clipboard | button | PRESENT | Markers window: ui/tools_bank.slint MarkersSheet (2155), mounted main.slint (the sheet after the import dialog), host tools_publish.cpp applyMarkers* / tools_logic.cpp (applyMarkerTune 1277, applyMarkerBookmark 1284, applyMarkersCopy 1300); proved by gaps1-markers.txt (window gaps lane 1) |
 | 251 | Clear all markers | button | PRESENT | opens the are-you-sure menu |
 | 252 | Yes, remove all N | menu item | PRESENT | FOXAPP_OP_MARKER_CLEAR |
 
@@ -2117,15 +2117,15 @@ Every control row of the SYSTEM bank of `inventory/extend-system-store-patch.txt
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1429 | Team message card | card | DEFERRED | the Card exists in main.slint, but the host duties leave the team message cards out: main.cpp keeps team_message_shown false (phase-1 row 87) |
-| 1430 | Seen | button | DEFERRED | on_team_message_seen is an empty lambda in main.cpp and the Seen list (the interface half's messagesSeen) is not written by the Slint host (phase-1 row 88) |
+| 1429 | Team message card | card | PRESENT | the team message Card in the sections panel is fed by HostDuties::teamMessage (host_duties.cpp teamMessageFor: the first message the Seen list does not cover, none when the Updates tick is off or for a Store copy), applied by main.cpp applyTeamCard; gaps1-team-message.txt |
+| 1430 | Seen | button | PRESENT | Seen: HostDuties::teamMessageSeen saves the id at once through the interface half (the list is bounded at 50, oldest dropped, and forgets ids the service no longer carries) and brings the next message; gaps1-team-message.txt and its second start |
 | 1431 | Update banner (site) | card | RELOCATED | the update Card at the foot of the sections panel, drawn by the host duties (updateCardFor / applyUpdateCard); phase-1 rows 89-91 |
 | 1432 | Download update | button | RELOCATED | the Card's primary key with the progress bar and the size note (phase-1 rows 92-93) |
 | 1433 | Install now and restart | button | RELOCATED | the Card's primary key after the verified download (phase-1 row 94) |
 | 1434 | Open foxsdr.com | button | RELOCATED | the Card's primary key on a non-Windows build (phase-1 row 95) |
 | 1435 | Not now | button (small) | RELOCATED | the Card's secondary key (update-dismissed; phase-1 row 96); Show it again in the Updates body brings the Card back |
-| 1436 | Update banner (Store) | card | DEFERRED | the duties hide the Card for a Store copy (updateCardFor: packaged) and log the Store flow as deferred (UpdatePlan::StoreDeferred); no Store banner is drawn |
-| 1437 | Install from the Microsoft Store | button | DEFERRED | the Store's install flow is deferred in host_duties (phase-1 row 102); no key, and UpdatesFacts carries no Store facts |
+| 1436 | Update banner (Store) | card | PRESENT | the Store copy's banner is the update Card in the Store's words (host_duties.cpp storeCardFor; red when the package is mandatory, no version number); a Store copy asks the Store (UpdatePlan::StoreAsk) and never foxsdr.com; gaps1-store-banner.txt, gaps1-store-mandatory.txt, gaps1-store-none.txt, gaps1-store-error.txt |
+| 1437 | Install from the Microsoft Store | button | PRESENT | Install from the Microsoft Store: see row 102; the Updates section's chip and sentence read the Store facts (UpdateStatus storeOffered / storeMandatory / storeInstalling -> UpdatesFacts) |
 
 ## SYSTEM bank — Serial ports
 
@@ -2185,9 +2185,9 @@ Every control row of the SYSTEM bank of `inventory/extend-system-store-patch.txt
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
 | 1471 | Dialog | dialog | RELOCATED | an amber Note at the top of the Diagnostics body (DiagnosticsModel.offer, set while ReadOptions::last_run_unclean and diagnostics are on); no window at start-up, the duties write a log line instead (host_duties.hpp) |
-| 1472 | Copy diagnostics | button | DEFERRED | the body's Copy diagnostics key has no effect (see the Diagnostics block) |
+| 1472 | Copy diagnostics | button | PRESENT | Copy diagnostics on the start-up offer: see row 112 (the SYSTEM section's own key, in the Diagnostics body, has had its effect since slint-gaps item 9) |
 | 1473 | Open reports folder | button | RELOCATED | the Diagnostics body's Open reports folder key (PRESENT there), which sits under the offer note |
-| 1474 | Not now | button | DEFERRED | not found in system_bank.slint: the offer note has no key or callback to dismiss it; it shows for as long as the offer is due |
+| 1474 | Not now | button | PRESENT | Not now on the offer: the sheet's key and close box put it away (gaps1_publish.cpp on_diag_not_now); gaps1-diag-offer.txt |
 
 ## SYSTEM bank — Usage reporting
 
@@ -2221,9 +2221,9 @@ Every control row of the SYSTEM bank of `inventory/extend-system-store-patch.txt
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1493 | Question | dialog | DEFERRED | not found in system_bank.slint: no Link prompt sheet; tester-use stops at Local::TesterResolve, and the confirm-by-name flow and its link poll are left out of the host duties |
-| 1494 | Link | button | DEFERRED | not found in system_bank.slint: no Link prompt sheet; tester-use stops at Local::TesterResolve, and the confirm-by-name flow and its link poll are left out of the host duties |
-| 1495 | Not now | button | DEFERRED | not found in system_bank.slint: no Link prompt sheet; tester-use stops at Local::TesterResolve, and the confirm-by-name flow and its link poll are left out of the host duties |
+| 1493 | Question | dialog | PRESENT | the link question: see row 115; a 40-hex link pasted in SYSTEM > Beta tester reaches it too (SystemPublisher::Hooks::testerLink), as does the one-shot link-request file the process boot writes (polled at about 1 Hz on a worker) |
+| 1494 | Link | button | PRESENT | Link: see row 116 |
+| 1495 | Not now | button | PRESENT | Not now: puts the question away, stores nothing; gaps1-link.txt |
 
 ## SYSTEM bank — Full-page screens: Request a feature (page)
 

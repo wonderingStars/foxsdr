@@ -98,6 +98,9 @@
 #include "lanel_publish.hpp"   // screen lane L (docs/multi-radio-records/screen-l.md)
 #include "lanem_logic.hpp"     // screen lane M (docs/multi-radio-records/screen-m.md): a mark's credit line
 #include "lanem_publish.hpp"   // screen lane M: the controls of the wiring second passes
+#include "sysmenu_win.hpp"   // window gaps lane 1: the title rail's own system menu (ledger row 14)
+#include "sysmenu_win.hpp"   // window gaps lane 1: the title rail's own system menu (ledger row 14)
+#include "gaps1_publish.hpp"   // window gaps lane 1: the start-up questions (did not close normally, Link this FoxSDR?) and the plugin fault cards
 #include "core/sys_first_run.hpp"
 #include "core/zoom_select.hpp"
 #include "workspace_testseam.hpp"
@@ -257,6 +260,7 @@ int main(int argc, char** argv) {
     // THE HOUSEKEEPING (host_duties.hpp): the interface's half read from the table, the update check, the crash sweep armed, the sentinel
     // left at "creating the window". The close it asks for (the installer has started, the console asked) is the event loop's end.
     LiveWorld world(api, session);
+    world.setOwnerWindowProvider([] { return foxsdr::slintgaps::findMainWindow(); });   // the owner of the Microsoft Store's own dialogs (a Store copy)
     HostDuties duties(world, [] { slint::quit_event_loop(); });
     {
         DutyStart s;
@@ -366,6 +370,17 @@ int main(int argc, char** argv) {
         ui->set_update_progress(c.progress);
         ui->set_update_note(ss(c.note));
         ui->set_update_error(ss(c.error));
+    };
+    // THE TEAM MESSAGE CARD (window gaps, lane 1): the first message the Seen list does not cover; Seen saves at once and brings the next
+    const auto applyTeamCard = [&] {
+        if (!duties.takeTeamChange()) { return; }
+        const foxsdr::slinthost::TeamMessageModel& t = duties.teamMessage();
+        std::vector<slint::SharedString> lines;
+        for (const auto& l : t.lines) { lines.push_back(ss(l)); }
+        ui->set_team_message_shown(t.shown);
+        ui->set_team_message_date(ss(t.date));
+        ui->set_team_message_important(t.important);
+        ui->set_team_message_lines(std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(lines)));
     };
 
     // ---- host state ----
@@ -538,9 +553,11 @@ int main(int argc, char** argv) {
     // THE SYSTEM BANK'S BODIES (system_publish.hpp): Display, Language & country, Updates, Serial ports, Key bindings, Diagnostics, Usage reporting, Beta tester and the
     // two report pages, published from system_logic's reads over the interface half the duties hold (once a tick, after the signal bank's) and wired to the effects
     // system_logic names. A bounded run sends and opens nothing.
+    std::unique_ptr<foxsdr::slintgaps1::Publisher> gaps1;         // window gaps lane 1 (made below, once the window's pieces exist; the SYSTEM bank's tester link reaches it)
     foxsdr::slintsystem::SystemPublisher::Hooks systemHooks;
     systemHooks.updateCardChanged = [&] { applyUpdateCard(); };
     systemHooks.rangeManual = [&] { rangeManual = true; ui->set_range_manual(true); };
+    systemHooks.testerLink = [&](const std::string& appToken) { if (gaps1) { gaps1->linkRequested(appToken); } };   // a pasted tester link: "Link this FoxSDR?"
     foxsdr::slintsystem::SystemPublisher systemBank(*ui, kit, duties, world, api, session, bounded.bounded(), systemHooks);
     systemBank.setLastRunUnclean(restored.lastRunUnclean);
     systemBank.wire();
@@ -568,6 +585,7 @@ int main(int argc, char** argv) {
     foxsdr::slinttools::ToolsPublisher::Hooks toolsHooks;
     toolsHooks.demodScopeClicked = [&] { scopeBank.toggleDemod(); };
     toolsHooks.radarScopeClicked = [&] { scopeBank.toggleRadar(); };
+    toolsHooks.clipboard = clipSet;   // the Markers window's "Copy markers to clipboard" (a bounded run keeps the text in its stand-in: `state clip`)
     toolsHooks.openImportDialog = [&](const std::string& preset) { signalBank.openImportForPreset(preset); };
     // the two spectrum options are the interface half's (docs 6.52): read at start, saved on each tick of a box, read again every tick by the spectrum's marks
     toolsHooks.onSpectrum = duties.interfaceHalf().bookmarkMarkers;
@@ -689,9 +707,16 @@ int main(int argc, char** argv) {
     std::unique_ptr<foxsdr::slintlanek::LaneKPublisher> laneKp;
     std::unique_ptr<foxsdr::slintlanel::LaneLPublisher> laneLp;   // screen lane L
     std::unique_ptr<foxsdr::slintlanem::LaneMPublisher> laneMp;   // screen lane M
+    std::function<std::string(const std::string&, std::string&)> sysMenuState;   // window gaps lane 1: `state sysmenu.<asks|items>`
     double lastFilePositionSec = 0.0;   // screen lane M: the selected radio's position in the file it plays (set once a tick)
     double lastZoomSelected = 0.0;   // the span the last dragged selection zoomed to (state lk.zoomspan)
     const bool laneKOff = bounded.bounded() && std::getenv("FOXSDR_SLINT_LANEK_OFF") != nullptr;
+    // WINDOW GAPS LANE 1: a bounded run's "Sound is muted" question (FOXSDR_SLINT_MUTE_QUESTION=<name>;<key>), asked of a made-up plugin; never in a real session
+    if (const char* mq = std::getenv("FOXSDR_SLINT_MUTE_QUESTION"); mq != nullptr && bounded.bounded()) {
+        const std::string spec(mq);
+        const std::size_t semi = spec.find(';');
+        publisher.forceMuteQuestion(spec.substr(0, semi), semi == std::string::npos ? spec : spec.substr(semi + 1));
+    }
     publisher.setClipboardSink([&](const std::string& t) { clipSet(t); });   // W16c: the Decoder output page's Copy key (clipSet is the window's clipboard, or the bounded run's stand-in)
     // THE ENGINE AS THE WORKSPACE SEES IT (workspace_logic.hpp EngineReads): the facts fact.radio.count and fact.radio.<n>.state, and RADIO_FOCUS. With the test seam they are answered from the made-up radios.
     // SEAM FOR ENGINE STAGE 4: nothing else changes when stage 4 is merged: the facts name the radios it opens and RADIO_FOCUS moves the session's focus for real.
@@ -1694,6 +1719,42 @@ int main(int argc, char** argv) {
         laneMp = std::make_unique<foxsdr::slintlanem::LaneMPublisher>(std::move(e));
         laneMp->wire();
     }
+    // ---- WINDOW GAPS LANE 1 (docs/multi-radio-records/window-gaps-1.md): what the classic window asks or says at start-up ----
+    {
+        foxsdr::slintgaps1::Publisher::Env e;
+        e.ui = &*ui;
+        if (!duties.about().configPath.empty()) { e.configDir = std::filesystem::path(duties.about().configPath).parent_path().string(); }
+        e.fact = [&](const char* key, std::string& value) {
+            value.clear();
+            // A bounded run's stand-in for the engine's start notices (the previous run's plugin marker is a binary file no test can seed): FOXSDR_FAKE_FAULT_NOTICES is the fact's text,
+            // one notice per '|', fields by ';' - "aprs-decoder;1.0.2;1;0;process|adsb;2.0;2;1;process".
+            if (bounded.bounded() && std::string(key) == "fact.plugins.fault.notices") {
+                if (const char* fake = std::getenv("FOXSDR_FAKE_FAULT_NOTICES"); fake != nullptr && *fake != '\0') {
+                    for (const char* c = fake; *c != '\0'; ++c) { value += *c == '|' ? '\n' : (*c == ';' ? '\t' : *c); }
+                    return true;
+                }
+            }
+            if (!FOXAPI_HAS(api, get_setting)) { return false; }
+            char buf[4096];
+            const int32_t n = api->get_setting(session, key, buf, sizeof(buf));
+            if (n < 0) { return false; }
+            value.assign(buf, static_cast<std::size_t>(std::min<int32_t>(n, static_cast<int32_t>(sizeof(buf)) - 1)));
+            return true;
+        };
+        e.reenable = [&](const std::string& id) { kit.reenable(id); };
+        e.copyDiagnostics = [&] { ui->global<SystemEvents>().invoke_diag_copy(); };
+        e.openReports = [&] { ui->global<SystemEvents>().invoke_diag_open_reports(); };
+        e.diagStatus = [&] { return systemBank.bundleStatus(); };
+        e.iface = [&] { return duties.interfaceHalf(); };
+        e.saveIface = [&](const cascade::core::AppConfig& half) { (void)duties.saveInterfaceHalf(half); };
+        e.say = [](const std::string& line) { std::fprintf(stderr, "foxsdr-slint: %s\n", line.c_str()); };
+        // A bounded run asks no site: FOXSDR_FAKE_LINK_NAME is the answer ("name", "!invalid" or "!network"), and without it nobody is asked.
+        if (!bounded.bounded()) { e.net = foxsdr::slintgaps1::makeLiveLinkNet(); }
+        else if (const char* fake = std::getenv("FOXSDR_FAKE_LINK_NAME"); fake != nullptr && *fake != '\0') { e.net = foxsdr::slintgaps1::makeCannedLinkNet(fake); }
+        gaps1 = std::make_unique<foxsdr::slintgaps1::Publisher>(std::move(e));
+        gaps1->wire();
+        gaps1->offerDiagnostics(foxsdr::slintgaps1::diagOfferDue(restored.lastRunUnclean, duties.interfaceHalf().diagnosticsEnabled));
+    }
     // lane K, DEPTH-GAPS A2 Display: a dragged selection of the plot zooms to it (core/zoom_select.hpp), frequency only
     ui->global<SpectrumEvents>().on_zoom_selected([&](int r, float x0, float x1) {
         RadioView& rv = r > 0 ? radios.at(r - 1) : selected();
@@ -1739,7 +1800,7 @@ int main(int argc, char** argv) {
     // FOLLOW THE BAND PLAN'S MODE WHEN RETUNING: the engine's switch (Engine::followBandModeOnTune, the rule shared with the ImGui window and the web
     // remote); the fact follows on the next publish, so the box is set here as well for the tick in between.
     ui->on_follow_band_plan_toggled([&](bool v) { followBandPlan = v; FoxCommand c = op(FOXAPI_OP_SET_BAND_FOLLOW); c.ival[0] = v ? 1 : 0; submit(c); });
-    ui->on_team_message_seen([&] {});
+    ui->on_team_message_seen([&] { duties.teamMessageSeen(); applyTeamCard(); });
     ui->on_update_primary_clicked([&] { duties.updatePrimaryClicked(); applyUpdateCard(); });
     ui->on_update_dismissed([&] { duties.updateDismissed(); applyUpdateCard(); });
 
@@ -2110,7 +2171,21 @@ int main(int argc, char** argv) {
         ui->window().set_position(slint::PhysicalPosition({pos.x + static_cast<int>(std::lround(dx * scale())), pos.y + static_cast<int>(std::lround(dy * scale()))}));
     });
     ui->on_title_double_clicked([&] { ui->window().set_maximized(!ui->window().is_maximized()); });
-    ui->on_system_menu_requested([&](float, float) { std::fprintf(stderr, "foxsdr-slint: the system menu needs the native handle (phase 2)\n"); });
+    // THE TITLE RAIL'S SYSTEM MENU (ledger row 14; sysmenu_win.hpp): the window's own, at the pointer. A bounded run raises no menu: it counts the asks (`state sysmenu.asks`) and reads the
+    // entries the window's system menu holds (`state sysmenu.items`), which proves the handle is reachable without showing anything.
+    auto sysMenu = std::shared_ptr<foxsdr::slintsysmenu::SystemMenu>(foxsdr::slintsysmenu::makeWindowsSystemMenu());
+    auto sysMenuAsks = std::make_shared<int>(0);
+    ui->on_system_menu_requested([&, sysMenu, sysMenuAsks](float, float) {
+        ++*sysMenuAsks;
+        if (bounded.bounded()) { return; }
+        std::string note;
+        if (!foxsdr::slintsysmenu::requestSystemMenu(*sysMenu, note)) { std::fprintf(stderr, "foxsdr-slint: %s\n", note.c_str()); }
+    });
+    sysMenuState = [sysMenu, sysMenuAsks](const std::string& what, std::string& out) {
+        if (what == "asks") { out = std::to_string(*sysMenuAsks); return std::string(); }
+        if (what == "items") { out = std::to_string(sysMenu->itemCount(sysMenu->window())); return std::string(); }
+        return std::string("sysmenu.asks|items, not ") + what;
+    };
     ui->on_brand_clicked([&] { openMenu(MenuKind::App, 12.f, 36.f); });
     ui->on_minimise_clicked([&] { ui->window().set_minimized(true); });
     ui->on_maximise_clicked([&] { ui->window().set_maximized(!ui->window().is_maximized()); });
@@ -2527,6 +2602,7 @@ int main(int argc, char** argv) {
             if (laneLp && !laneKOff) { laneLp->tick(static_cast<long>(tickNo)); }   // screen lane L (the same switch leaves it out)
             lastFilePositionSec = state.filePositionSec;   // screen lane M: the selected radio's position in the file it plays
             if (laneMp && !laneKOff) { laneMp->tick(static_cast<long>(tickNo)); }   // screen lane M (the same switch leaves it out)
+            if (gaps1) { gaps1->tick(static_cast<long>(tickNo)); }   // window gaps lane 1
             if (!laneCOff) { laneC.tick(state, static_cast<long>(tickNo)); }   // screen lane C: scanner block, memories, clock, sheets (FOXSDR_SLINT_LANEC_OFF=1, a bounded run only, leaves it out: the frame-cost comparison)
             if (!lists.converter && !(noteTick > 0 && tickNo - noteTick < 90)) {   // T9: the airband channel's name where the counter says "via ..." (a note or a converter keeps the place)
                 const std::string ch = cascade::core::airbandChannelName(state.tunedHz);
@@ -2596,7 +2672,6 @@ int main(int argc, char** argv) {
         ui->set_source_line(ss(sourceLine(state, band)));
         ui->set_rate_line(ss(rateLine(state)));
         ui->set_converter_line(ss(lists.converter ? "via " + lists.converterName + " \xC2\xB7 LO " + fmtMHz(lists.converterLoHz) : std::string()));
-        ui->set_team_message_shown(false);  // the team message cards are a later phase's (the update card is the duties': applyUpdateCard)
 
         // THE DECK (stage S4): every open radio's state - the selected one's is the strip's, the others are read per radio - then the strip, the lamps, the mix and the card into the window
         foxsdr::slintworkspace::DeckInputs deck;
@@ -2934,7 +3009,22 @@ int main(int argc, char** argv) {
             if (what == "note") { out = card.note; return std::string(); }
             if (what == "primary") { out = card.primary; return std::string(); }
             if (what == "withdrawn") { out = card.withdrawn ? "1" : "0"; return std::string(); }
-            return "update.shown|headline|note|primary|withdrawn, not " + name;
+            if (what == "critical") { out = card.critical ? "1" : "0"; return std::string(); }
+            if (what == "error") { out = card.error; return std::string(); }
+            return "update.shown|headline|note|primary|withdrawn|critical|error, not " + name;
+        }
+        // team.<shown|id|more|important|date|lines>: the team message card as the duties made it (window gaps lane 1: Seen is read back through these)
+        if (name.rfind("team.", 0) == 0) {
+            const foxsdr::slinthost::TeamMessageModel& t = duties.teamMessage();
+            const std::string what = name.substr(5);
+            if (what == "shown") { out = t.shown ? "1" : "0"; return std::string(); }
+            if (what == "id") { out = t.id; return std::string(); }
+            if (what == "more") { out = std::to_string(t.more); return std::string(); }
+            if (what == "important") { out = t.important ? "1" : "0"; return std::string(); }
+            if (what == "date") { out = t.date; return std::string(); }
+            if (what == "lines") { for (const std::string& l : t.lines) { out += (out.empty() ? "" : " / ") + l; } return std::string(); }
+            if (what == "seen") { for (const std::string& s : duties.interfaceHalf().messagesSeen) { out += (out.empty() ? "" : ",") + s; } return std::string(); }
+            return "team.shown|id|more|important|date|lines|seen, not " + name;
         }
         if (name.rfind("fact.", 0) == 0) { return world.fact(name.c_str(), out) ? std::string() : "no fact " + name; }
         // LANE S1 read-backs. layouts.count (the user's own), layouts.names (all, "|" between), layouts.open (the sheet), layouts.note; layout.<bank|sections|rail|view|split|workspace|link|wf3d|selected|tuned|mode>
@@ -3240,6 +3330,26 @@ int main(int argc, char** argv) {
         if (name.rfind("lanec.", 0) == 0) { return laneC.readState(name.substr(6), out); }
         if (name == "lk.zoomspan") { out = fmt("%.0f", lastZoomSelected); return std::string(); }
         if (name.rfind("ll.", 0) == 0) { return laneLp ? laneLp->readState(name.substr(3), out) : std::string("no lane L"); }
+        // markers.<shown|rows|error|empty|row.<n>>: the Markers window's model as the host last handed it over (window gaps lane 1; row.<n> = "M<number> <frequency> <noted> | <note>")
+        if (name.rfind("markers.", 0) == 0) {
+            const auto& mm = toolsBank.models().markers;
+            const std::string what = name.substr(8);
+            if (what == "shown") { out = mm.shown ? "1" : "0"; return std::string(); }
+            if (what == "rows") { out = std::to_string(mm.rows.size()); return std::string(); }
+            if (what == "error") { out = mm.error; return std::string(); }
+            if (what == "empty") { out = mm.empty_line; return std::string(); }
+            if (what.rfind("row.", 0) == 0) {
+                const std::size_t i = static_cast<std::size_t>(std::max(1, std::atoi(what.c_str() + 4))) - 1;
+                if (i >= mm.rows.size()) { return "no marker row " + what; }
+                const auto& r = mm.rows[i];
+                out = "M" + std::to_string(r.number) + " " + r.hz_text + " " + r.dropped + " | " + r.note;
+                return std::string();
+            }
+            return "markers.shown|rows|error|empty|row.<n>, not " + name;
+        }
+        if (name.rfind("mute.", 0) == 0) { return publisher.muteState(name.substr(5), out); }
+        if (name.rfind("sysmenu.", 0) == 0) { return sysMenuState ? sysMenuState(name.substr(8), out) : std::string("no system menu"); }
+        if (name.rfind("gaps1.", 0) == 0) { return gaps1 ? gaps1->readState(name.substr(6), out) : std::string("no window gaps 1"); }
         if (name.rfind("lm.", 0) == 0) { return laneMp ? laneMp->readState(name.substr(3), out) : std::string("no lane M"); }
         if (name.rfind("lk.", 0) == 0) { return laneKp ? laneKp->readState(name.substr(3), out) : std::string("no lane K"); }
         // gaps.<what>: the classic-window gaps (docs/multi-radio-records/slint-gaps.md)
@@ -3505,6 +3615,7 @@ int main(int argc, char** argv) {
         in.deviceOpening = (state.flags & FOXAPI_RX_DEVICE_OPENING) != 0;
         duties.poll(in);
         applyUpdateCard();
+        applyTeamCard();
         if (frameMeter) {
             frameMeter->tickEnd(meterBegan);
             if (frameMeter->wantsSnapshots() && bounded.ticks() % 5 == 0) {

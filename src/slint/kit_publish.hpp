@@ -54,6 +54,10 @@ public:
     // slint-gaps.md item 4, a bounded run only (FOXSDR_SLINT_SAVE_DELAY_MS): the picture save's worker waits this long, so the Saving... state can be seen; and the note of the page that saved last
     void setSaveDelayForTest(int ms) { saveDelayMs_ = ms; }
     // screen lane C, W16c: where the Decoder output page's Copy key sends the text (the host's clipboard, or its stand-in in a bounded run), and what the key last did (the drive scripts read them)
+    // WINDOW GAPS LANE 1: the "Sound is muted" question for a bounded run (FOXSDR_SLINT_MUTE_QUESTION=<name>;<key>): the question is asked of that plugin though none really mutes, and stays up
+    // until answered; the answer is read back with muteState (`state mute.<open|text|stop|action>`). Never called in a real session.
+    void forceMuteQuestion(const std::string& name, const std::string& key);
+    std::string muteState(const std::string& what, std::string& out) const;
     void setClipboardSink(std::function<void(const std::string&)> sink) { clipboardSink_ = std::move(sink); }
     int copyCount() const { return copies_; }
     const std::string& lastCopy() const { return lastCopy_; }
@@ -216,6 +220,8 @@ private:
     std::string presetNote_;                          // the rail's preset result note
     std::vector<std::string> muteNames_, muteKeys_;   // the "Sound is muted" question's subject
     bool muteQuestionOpen_ = false;
+    bool muteForced_ = false;                         // a bounded run's seam (forceMuteQuestion): the question stays up though no plugin really mutes
+    std::string muteAction_;                          // what the person's last answer was: "stop:<keys>" or "keep" (`state mute.action`)
     std::string catalogueUrl_;
     ::StoreModel storeModel_{};                       // what the EXTEND publisher last handed over for the page of kind 9
     ::PatchPresetsModel patchPresetsModel_{};         // what the PATCH publisher last handed over for the page of kind 10

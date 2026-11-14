@@ -1,0 +1,7 @@
+#! frames=240 rootfile=link-request:gaps1-link-request.txt FOXSDR_FAKE_LINK_NAME=!invalid
+# gaps1-link-invalid (window gaps lane 1, row 118): the site does not know the token, so the prompt is the error variant: "that link is not valid" and Not now (no Link key).
+60 state gaps1.link == error
++1 state gaps1.linkerr == "that link is not valid"
++1 state gaps1.stored == 0
++1 click "Not now"
++4 state gaps1.link == none

@@ -126,6 +126,9 @@ struct FakeWorld final : DutyWorld {
     bool installerReady = false, installerStarted = true;
     core::SweepOutcome sweepOutcome;
     core::SweepParams lastSweep;
+    bool storeSeamOn = false, storeCheckReady = false, storeInstallReady = false;
+    core::StoreUpdateCheck storeCheckOutcome;
+    core::StoreInstallOutcome storeInstallOutcome;
 
     bool fact(const char* key, std::string& value) override {
         calls.push_back(std::string("fact:") + key);
@@ -160,6 +163,21 @@ struct FakeWorld final : DutyWorld {
         if (!downloadReady) { return false; }
         downloadReady = false;
         out = downloadOutcome;
+        return true;
+    }
+    bool storeSeam() override { return storeSeamOn; }
+    void storeCheckStart() override { calls.push_back("storeCheckStart"); }
+    bool storeCheckPoll(core::StoreUpdateCheck& out) override {
+        if (!storeCheckReady) { return false; }
+        storeCheckReady = false;
+        out = storeCheckOutcome;
+        return true;
+    }
+    void storeInstallStart() override { calls.push_back("storeInstallStart"); }
+    bool storeInstallPoll(core::StoreInstallOutcome& out) override {
+        if (!storeInstallReady) { return false; }
+        storeInstallReady = false;
+        out = storeInstallOutcome;
         return true;
     }
     float downloadProgress() override { return progress; }
@@ -372,15 +390,17 @@ int main() {
         CHECK(updatePlanFor(true, false, false, false) == UpdatePlan::Hermetic);
         CHECK(updatePlanFor(true, true, false, true) == UpdatePlan::Run);
         CHECK(updatePlanFor(true, true, false, false) == UpdatePlan::OffByChoice);
-        CHECK(updatePlanFor(true, true, true, true) == UpdatePlan::StoreDeferred);
+        CHECK(updatePlanFor(true, true, true, true) == UpdatePlan::StoreDeferred);   // a bounded Store copy with no canned Store answer asks nobody
+        CHECK(updatePlanFor(true, false, true, true, true) == UpdatePlan::StoreAsk);   // ...with FOXSDR_FAKE_STORE_UPDATE it asks the Store (canned)
+        CHECK(updatePlanFor(true, false, false, true, true) == UpdatePlan::Hermetic);   // the seam on a copy that is not a Store copy changes nothing
         // an interactive run: the user's tick first, then the kind of copy
         CHECK(updatePlanFor(false, false, false, true) == UpdatePlan::Run);
         CHECK(updatePlanFor(false, false, false, false) == UpdatePlan::OffByChoice);
         CHECK(updatePlanFor(false, false, true, false) == UpdatePlan::OffByChoice);   // unticked asks nobody, the Store included
-        CHECK(updatePlanFor(false, false, true, true) == UpdatePlan::StoreDeferred);  // a Store copy never runs foxsdr-setup
+        CHECK(updatePlanFor(false, false, true, true) == UpdatePlan::StoreAsk);  // a Store copy asks the Store and never runs foxsdr-setup
         const std::set<std::string> lines = {updatePlanLine(UpdatePlan::Run), updatePlanLine(UpdatePlan::OffByChoice),
-                                             updatePlanLine(UpdatePlan::StoreDeferred), updatePlanLine(UpdatePlan::Hermetic)};
-        CHECK(lines.size() == 4);
+                                             updatePlanLine(UpdatePlan::StoreDeferred), updatePlanLine(UpdatePlan::Hermetic), updatePlanLine(UpdatePlan::StoreAsk)};
+        CHECK(lines.size() == 5);
         CHECK(lines.count("") == 0);
 
         // OFF MEANS OFF for uploading too
@@ -1554,7 +1574,8 @@ int main() {
         ph.updateCheckEnabled = true;
         (void)e.saveInterfaceHalf(ph);
         e.updateSettingChanged();
-        CHECK(countOf(p.calls, "updateCheckStart:0.99.104:") == 0 && e.updateStatus().packaged && !e.updateStatus().pending);
+        CHECK(countOf(p.calls, "updateCheckStart:0.99.104:") == 0 && e.updateStatus().packaged);   // never foxsdr.com
+        CHECK(countOf(p.calls, "storeCheckStart") == 1);   // asked once at the start; the check is still out, so the re-tick leaves it alone (its answer is the one wanted)
         FakeWorld b;
         HostDuties f(b, [] {});
         b.facts["fact.config.interface"] = interfaceDoc(true, true);
@@ -1564,6 +1585,190 @@ int main() {
         (void)f.saveInterfaceHalf(bh);
         f.updateSettingChanged();
         CHECK(countOf(b.calls, "updateCheckStart:0.99.104:beta") == 0);
+    }
+
+    // ---- window gaps, lane 1: the Microsoft Store banner ----
+    {
+        FakeWorld p;
+        p.packaged = true;
+        p.facts["fact.config.interface"] = interfaceDoc(true, true);
+        HostDuties e(p, [] {});
+        e.start(interactive());
+        CHECK(countOf(p.calls, "storeCheckStart") == 1 && countOf(p.calls, "updateCheckStart:0.99.104:") == 0);
+        CHECK(e.updateStatus().pending && !e.card().shown);                       // asked, no answer yet: nothing drawn
+
+        p.storeCheckReady = true;
+        p.storeCheckOutcome.ok = true;
+        p.storeCheckOutcome.updates = 1;
+        e.poll({});
+        CHECK(!e.updateStatus().pending && e.updateStatus().storeOffered && !e.updateStatus().storeMandatory);
+        CHECK(e.takeCardChange());
+        CHECK(e.card().shown && !e.card().critical && e.card().headline == "FoxSDR update available from the Microsoft Store");
+        CHECK(e.card().primary == "Install from the Microsoft Store" && e.card().note.find("Windows will ask you to confirm") != std::string::npos);
+        CHECK(e.card().notes.empty() && e.card().progress < 0.f);                // no version number, no notes: the Store gives none
+
+        e.updatePrimaryClicked();                                                // the key asks the Store to install
+        CHECK(countOf(p.calls, "storeInstallStart") == 1 && e.updateStatus().storeInstalling);
+        CHECK(e.card().primary.empty() && e.card().note.find("Waiting for Windows...") != std::string::npos);
+        e.updatePrimaryClicked();                                                // no key while Windows is asked: a second press is nothing
+        CHECK(countOf(p.calls, "storeInstallStart") == 1);
+
+        p.storeInstallReady = true;
+        p.storeInstallOutcome.result = core::StoreInstallResult::Cancelled;
+        e.poll({});
+        CHECK(!e.updateStatus().storeInstalling && e.card().note.find("You cancelled the update") != std::string::npos);
+        CHECK(e.card().primary == "Install from the Microsoft Store");           // asks again after a cancel
+        e.updatePrimaryClicked();
+        CHECK(countOf(p.calls, "storeInstallStart") == 2);
+        p.storeInstallReady = true;
+        p.storeInstallOutcome.result = core::StoreInstallResult::Failed;
+        p.storeInstallOutcome.reasonKey = "the Store refused";
+        p.storeInstallOutcome.detail = "0x803F6107";
+        e.poll({});
+        CHECK(e.card().error == "could not install: the Store refused (0x803F6107)" && e.card().primary == "Install from the Microsoft Store");
+        e.updatePrimaryClicked();
+        p.storeInstallReady = true;
+        p.storeInstallOutcome = core::StoreInstallOutcome{core::StoreInstallResult::Installed, nullptr, ""};
+        e.poll({});
+        CHECK(e.card().primary.empty() && e.card().note.find("Windows reports the update installed") != std::string::npos);
+        e.updateDismissed();                                                     // Not now hides it for this launch
+        CHECK(!e.card().shown);
+
+        // a mandatory package is the red banner; a failed check is never a banner, only the Updates section's line
+        FakeWorld m;
+        m.packaged = true;
+        m.facts["fact.config.interface"] = interfaceDoc(true, true);
+        HostDuties f(m, [] {});
+        f.start(interactive());
+        m.storeCheckReady = true;
+        m.storeCheckOutcome.ok = true;
+        m.storeCheckOutcome.updates = 2;
+        m.storeCheckOutcome.mandatory = true;
+        f.poll({});
+        CHECK(f.card().critical && f.card().headline == "Important FoxSDR update available from the Microsoft Store" && f.updateStatus().storeMandatory);
+
+        FakeWorld bad;
+        bad.packaged = true;
+        bad.facts["fact.config.interface"] = interfaceDoc(true, true);
+        HostDuties g(bad, [] {});
+        g.start(interactive());
+        bad.storeCheckReady = true;
+        bad.storeCheckOutcome.ok = false;
+        bad.storeCheckOutcome.error = "0x80070005: denied";
+        g.poll({});
+        CHECK(!g.card().shown && g.updateStatus().error == "0x80070005: denied" && !g.updateStatus().storeOffered);
+
+        // "none" is an answer too: nothing offered, nothing drawn
+        FakeWorld none;
+        none.packaged = true;
+        none.facts["fact.config.interface"] = interfaceDoc(true, true);
+        HostDuties h(none, [] {});
+        h.start(interactive());
+        none.storeCheckReady = true;
+        none.storeCheckOutcome.ok = true;
+        none.storeCheckOutcome.updates = 0;
+        h.poll({});
+        CHECK(!h.card().shown && !h.updateStatus().storeOffered);
+        h.updatePrimaryClicked();
+        CHECK(countOf(none.calls, "storeInstallStart") == 0);                    // nothing to install: the key does nothing
+
+        // a bounded run asks the Store only through its canned answer
+        FakeWorld b1;
+        b1.packaged = true;
+        b1.facts["fact.config.interface"] = interfaceDoc(true, true);
+        HostDuties i(b1, [] {});
+        i.start(bounded(30));
+        CHECK(countOf(b1.calls, "storeCheckStart") == 0);
+        FakeWorld b2;
+        b2.packaged = true;
+        b2.storeSeamOn = true;
+        b2.facts["fact.config.interface"] = interfaceDoc(true, true);
+        HostDuties j(b2, [] {});
+        j.start(bounded(30));
+        CHECK(countOf(b2.calls, "storeCheckStart") == 1);
+
+        // the updateCardFor of a Store view, as data
+        UpdateView sv;
+        sv.enabled = true;
+        sv.packaged = true;
+        sv.storeOffered = true;
+        CHECK(updateCardFor(sv).shown);
+        sv.enabled = false;
+        CHECK(!updateCardFor(sv).shown);
+        sv.enabled = true;
+        sv.storeOffered = false;
+        CHECK(!updateCardFor(sv).shown);
+        sv.storeInstallDone = true;
+        sv.storeOutcome.result = core::StoreInstallResult::NothingToInstall;
+        CHECK(updateCardFor(sv).shown && updateCardFor(sv).primary.empty() && updateCardFor(sv).note == "The Microsoft Store has no update to install now.");
+    }
+
+    // ---- window gaps, lane 1: the team message card and its Seen list ----
+    {
+        core::TeamMessage a, b;
+        a.id = "AAAAAAAA"; a.date = "2026-11-01"; a.lines = {"one", "two"}; a.important = true;
+        b.id = "BBBBBBBB"; b.lines = {"three"};
+        const std::vector<core::TeamMessage> both = {a, b};
+        TeamMessageModel m = teamMessageFor(true, false, both, {});
+        CHECK(m.shown && m.id == "AAAAAAAA" && m.important && m.date == "2026-11-01" && m.lines.size() == 2 && m.more == 1);
+        m = teamMessageFor(true, false, both, {"AAAAAAAA"});
+        CHECK(m.shown && m.id == "BBBBBBBB" && !m.important && m.more == 0);
+        CHECK(!teamMessageFor(true, false, both, {"AAAAAAAA", "BBBBBBBB"}).shown);   // all seen
+        CHECK(!teamMessageFor(false, false, both, {}).shown);                         // the Updates tick is off: nobody was asked
+        CHECK(!teamMessageFor(true, true, both, {}).shown);                           // a Store copy never hears one
+        CHECK(!teamMessageFor(true, false, {}, {}).shown);
+        // the list forgets what the service no longer carries, and is bounded, newest kept
+        CHECK(seenAfterCheck({"AAAAAAAA", "ZZZZZZZZ"}, both) == std::vector<std::string>{"AAAAAAAA"});
+        CHECK(seenAfterCheck({"AAAAAAAA"}, {}).empty());
+        std::vector<std::string> many;
+        for (std::size_t k = 0; k < core::AppConfig::kMaxMessagesSeen; ++k) { many.push_back("id" + std::to_string(k)); }
+        const std::vector<std::string> grown = seenWith(many, "NEWEST");
+        CHECK(grown.size() == core::AppConfig::kMaxMessagesSeen && grown.back() == "NEWEST" && grown.front() == "id1");
+        CHECK(seenWith({"x"}, "x") == std::vector<std::string>{"x"});               // not twice
+
+        // through the duties: the canned check names two messages; Seen saves the first at once and brings the second
+        FakeWorld w;
+        w.seam = true;
+        w.facts["fact.config.interface"] = interfaceDoc(true, true);
+        HostDuties d(w, [] {});
+        d.start(bounded(30));
+        w.checkReady = true;
+        w.checkOutcome.ok = true;
+        w.checkOutcome.info = newerInfo();
+        w.checkOutcome.info.newer = false;
+        w.checkOutcome.info.messages = both;
+        d.poll({});
+        CHECK(d.takeTeamChange() && d.teamMessage().shown && d.teamMessage().id == "AAAAAAAA");
+        CHECK(d.updateStatus().unseenMessages == 2);
+        const std::size_t sent = w.submitted.size();
+        d.teamMessageSeen();
+        CHECK(w.submitted.size() == sent + 1);                                        // saved at once
+        CHECK(w.submitted.back().find("AAAAAAAA") != std::string::npos);
+        CHECK(d.takeTeamChange() && d.teamMessage().id == "BBBBBBBB" && d.updateStatus().unseenMessages == 1);
+        d.teamMessageSeen();
+        CHECK(d.takeTeamChange() && !d.teamMessage().shown && d.updateStatus().unseenMessages == 0);
+        for (int k = 0; k <= HostDuties::kInterfaceSendGapTicks; ++k) { d.poll({}); }   // a press that follows another within the coalescing gap is held, then sent
+        CHECK(w.submitted.size() == sent + 2);
+        d.teamMessageSeen();                                                          // nothing shown: nothing saved
+        for (int k = 0; k <= HostDuties::kInterfaceSendGapTicks; ++k) { d.poll({}); }
+        CHECK(w.submitted.size() == sent + 2);
+
+        // a start that has already seen one: only the other is shown; the Seen list keeps an id the answer still carries
+        core::AppConfig seenCfg;
+        seenCfg.updateCheckEnabled = true;
+        seenCfg.messagesSeen = {"AAAAAAAA", "GONE0000"};
+        FakeWorld v;
+        v.seam = true;
+        v.facts["fact.config.interface"] = core::serializeInterfaceHalf(seenCfg);
+        HostDuties e(v, [] {});
+        e.start(bounded(30));
+        v.checkReady = true;
+        v.checkOutcome.ok = true;
+        v.checkOutcome.info = newerInfo();
+        v.checkOutcome.info.messages = both;
+        e.poll({});
+        CHECK(e.teamMessage().id == "BBBBBBBB");
+        CHECK(e.interfaceHalf().messagesSeen == std::vector<std::string>{"AAAAAAAA"});   // GONE0000 was withdrawn: forgotten, and saved
     }
 
     std::error_code cleanup;

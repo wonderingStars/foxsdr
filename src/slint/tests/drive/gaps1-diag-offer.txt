@@ -1,0 +1,15 @@
+#! frames=200 config=gaps1-unclean.json
+# gaps1-diag-offer (window gaps lane 1, ledger rows 110 to 113, 1472 to 1474): the previous run's clean-exit marker was false and diagnostics are on, so the start asks "FoxSDR did not
+# close normally last time": the explanation, Copy diagnostics (the bundle is built: state gaps.diagcopies), Open reports folder (a bounded run opens no folder), and Not now, which puts it away.
+# The window's own Close box is the same as Not now. The classic's sentence states the attempt, never the outcome.
+10 state gaps1.diag == 1
++1 expect "Copy diagnostics" enabled equals "true"
++1 expect "Open reports folder" enabled equals "true"
++1 expect "Not now" enabled equals "true"
++1 state gaps.diagcopies == 0
++1 click "Copy diagnostics"
++4 state gaps.diagcopies == 1
++1 click "Open reports folder"
++3 state gaps1.diag == 1
++1 click "Not now"
++4 state gaps1.diag == 0

@@ -98,6 +98,8 @@ struct Header {
     bool updateCheck = false; // updatecheck=on: the generator profile's "Check for updates at startup" tick is ON (it is off otherwise: a bounded run asks nobody)
     std::vector<std::string> logContains;   // logcontains=<text, underscores for spaces>: the run's diagnostic log must hold the text afterwards (docs 6.63: "a refused open reaches the log")
     std::string manifest;     // manifest=<file>: foxsdr.com's answer, canned (FOXSDR_FAKE_UPDATE_MANIFEST, core/updater.hpp); relative = under tests/drive/fixtures (docs 6.63)
+    std::vector<std::string> rootFiles;  // rootfile=<name>:<fixture>: the same, into the profile folder itself (beside config.json)
+    std::vector<std::string> appFiles;   // appfile=<name>:<fixture>: the fixture is copied to <profile>/appdata/foxsdr/<name> before the run (window gaps: markers.json, a bookmarks file, a team-message answer)
     std::string restart;      // restart=<file under tests/drive/restart>: after the run the SAME scratch profile (the settings file the first run wrote, the engine's own saved radios) is started again with this script (docs/multi-radio-records/screen-s6.md: "quit, start again")
     std::map<std::string, std::string> env;
 };
@@ -131,6 +133,8 @@ Header parseHeader(const std::string& script) {
             else if (key == "radios") { h.userRadios = (value == "user"); }   // the user's SoapySDR modules (docs 6.51: a hardware run)
             else if (key == "updatecheck") { h.updateCheck = (value == "on"); }   // the Updates tick on (docs 6.63: the kill switch's notice)
             else if (key == "restart") { h.restart = value; }
+            else if (key == "rootfile") { h.rootFiles.push_back(value); }
+            else if (key == "appfile") { h.appFiles.push_back(value); }              // a seeded file of the profile (window gaps)
             else if (key == "manifest") { h.manifest = value; }                   // the canned update answer (docs 6.63)
             else if (key == "logcontains") {                                      // a line the run must have written to its diagnostic log (docs 6.63)
                 std::string text = value;
@@ -271,6 +275,25 @@ int main(int argc, char** argv) {
     for (const char* url : {"FOXSDR_TELEMETRY_URL", "FOXSDR_CRASH_URL", "FOXSDR_UPDATE_URL", "FOXSDR_REPORTS_URL", "FOXSDR_FEATURE_URL", "FOXSDR_PROBLEM_URL"}) {
         setEnv(url, "http://127.0.0.1:9/");
     }
+    // THE SEEDED FILES (window gaps): `appfile=<name>:<fixture>` puts a fixture under the profile's foxsdr folder (markers.json, say) and `rootfile=<name>:<fixture>` in the profile's
+    // own folder (beside config.json: the tester link's one-shot link-request file) before the window starts.
+    const auto seedFile = [&](const std::string& spec, const fs::path& into) {
+        const std::size_t colon = spec.find(':');
+        if (colon == std::string::npos || colon == 0) { std::printf("  seed %s needs <name>:<fixture>\n", spec.c_str()); CHECK(false); return; }
+        fs::path from(spec.substr(colon + 1));
+        if (from.is_relative()) {
+            const char* fx = std::getenv("FOXSDR_DRIVE_FIXTURES_DIR");
+            from = (fx != nullptr && *fx != '\0') ? fs::path(fx) / from : fs::path(FOXSDR_DRIVE_FIXTURES_DIR) / from;
+        }
+        const std::string text = readFile(from);
+        if (text.empty()) { std::printf("  the seed fixture %s is missing or empty\n", from.string().c_str()); }
+        CHECK(!text.empty());
+        fs::create_directories(into, ec);
+        std::ofstream f(into / spec.substr(0, colon), std::ios::binary | std::ios::trunc);
+        f << text;
+    };
+    for (const std::string& spec : h.appFiles) { seedFile(spec, dir / "appdata" / "foxsdr"); }
+    for (const std::string& spec : h.rootFiles) { seedFile(spec, dir); }
     const fs::path cfg = dir / "config.json";
     if (!h.config.empty()) {
         // THE SEED FILE (docs 6.51): a complete settings document of the author's - a real radio's profile, say - copied as the run's config.json.

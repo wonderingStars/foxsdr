@@ -1,0 +1,9 @@
+#! frames=240 updatecheck=on FOXSDR_FAKE_PACKAGE=FoxSDR.Test_1.0.0.0_x64__test FOXSDR_FAKE_STORE_UPDATE=mandatory FOXSDR_FAKE_STORE_INSTALL=installed
+# gaps1-store-mandatory (window gaps lane 1): a package marked mandatory in Partner Center is the red banner ("Important ..."); the fake install answers "installed", the banner says to close
+# FoxSDR and open it again, and the key is gone (there is nothing left to install).
+80 state update.shown == 1
++1 state update.critical == 1
++1 state update.headline == "Important FoxSDR update available from the Microsoft Store"
++1 click "Install from the Microsoft Store"
++30 state update.note contains "Windows reports the update installed."
++1 state update.primary == ""

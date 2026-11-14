@@ -1,0 +1,6 @@
+#! frames=140 FOXSDR_SLINT_MUTE_QUESTION=APRS-Decoder;aprs-key.dll
+# gaps1-mute-keep (window gaps lane 1, ledger row 106): Keep it running leaves the plugin running, keeps the mute (the banner is what stops it being a silent state) and puts the question away.
+10 state mute.open == 1
++1 click "Keep it running"
++4 state mute.action == keep
++1 state mute.open == 0

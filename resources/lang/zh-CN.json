@@ -1580,6 +1580,7 @@
   "Link": "关联",
   "Link Radio %d": "关联 SDR %d",
   "Link this FoxSDR to beta tester %s?": "要将此 FoxSDR 关联到测试员 %s 吗?",
+  "Link this FoxSDR to tester %s?": "要将此 FoxSDR 关联到测试员 %s 吗?",
   "Link this FoxSDR?": "关联此 FoxSDR?",
   "Link tuning": "关联调谐",
   "Linked": "已链接",

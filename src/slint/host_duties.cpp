@@ -167,11 +167,12 @@ std::string aboutText(const AboutFacts& f) {
 }
 
 // ---- the decisions ----------------------------------------------------------------------------------------------------------
-UpdatePlan updatePlanFor(bool bounded, bool manifestSeam, bool packaged, bool userEnabled) {
-    if (bounded && !manifestSeam) { return UpdatePlan::Hermetic; }
+UpdatePlan updatePlanFor(bool bounded, bool manifestSeam, bool packaged, bool userEnabled, bool storeSeam) {
+    if (bounded && !manifestSeam && !(storeSeam && packaged)) { return UpdatePlan::Hermetic; }
     switch (core::updateCheckDisposition(packaged, userEnabled)) {
         case core::UpdateCheckDisposition::OffByChoice: return UpdatePlan::OffByChoice;
-        case core::UpdateCheckDisposition::AskStore: return UpdatePlan::StoreDeferred;
+        // The Store is asked in a real session, and in a bounded run only through its canned answer.
+        case core::UpdateCheckDisposition::AskStore: return (!bounded || storeSeam) ? UpdatePlan::StoreAsk : UpdatePlan::StoreDeferred;
         case core::UpdateCheckDisposition::Run: break;
     }
     return UpdatePlan::Run;
@@ -182,8 +183,8 @@ const char* updatePlanLine(UpdatePlan plan) {
         case UpdatePlan::Run: return "update: asking foxsdr.com whether a newer FoxSDR exists";
         case UpdatePlan::OffByChoice: return "update: asking nobody (the Updates tick is off)";
         case UpdatePlan::StoreDeferred:
-            return "update: this copy came from the Microsoft Store; its own check and install are a later phase of the Slint window, so "
-                   "nobody is asked (foxsdr.com never is)";
+            return "update: this copy came from the Microsoft Store and this is a bounded run, so nobody is asked (foxsdr.com never is)";
+        case UpdatePlan::StoreAsk: return "update: this copy came from the Microsoft Store; asking the Store (foxsdr.com never is)";
         case UpdatePlan::Hermetic: return "update: not asking (a bounded run stays hermetic)";
     }
     return "";
@@ -205,6 +206,82 @@ const char* sweepPlanLine(SweepPlan plan) {
 }
 
 // ---- the update card --------------------------------------------------------------------------------------------------------
+// THE MICROSOFT STORE COPY'S BANNER (drawStoreUpdateBanner): the words are the classic window's. Red for a package marked mandatory in Partner Center, amber otherwise.
+// The key asks again after a cancel or a failure: Windows' own dialog is the confirmation, so there is no second one here.
+UpdateCardModel storeCardFor(const UpdateView& v) {
+    UpdateCardModel c;
+    if (!v.enabled || v.dismissed) { return c; }
+    if (!v.storeOffered && !v.storeInstallPending && !v.storeInstallDone) { return c; }
+    c.shown = true;
+    c.critical = v.storeMandatory;
+    c.headline = v.storeMandatory ? std::string(cascade::i18n::tr("Important FoxSDR update available from the Microsoft Store"))
+                                  : std::string(cascade::i18n::tr("FoxSDR update available from the Microsoft Store"));
+    bool offerKey = v.storeOffered && !v.storeInstallPending;
+    if (v.storeInstallPending) {
+        c.note = std::string(cascade::i18n::tr("Waiting for Windows...")) + "\n" +
+                 cascade::i18n::tr("Windows shows its own dialogs for the download and the install - answer them to carry on.");
+    } else if (v.storeInstallDone) {
+        switch (v.storeOutcome.result) {
+            case core::StoreInstallResult::Installed:
+                c.note = cascade::i18n::tr("Windows reports the update installed. If FoxSDR is still open, close it and open it again to run the new version.");
+                offerKey = false;
+                break;
+            case core::StoreInstallResult::Cancelled: c.note = cascade::i18n::tr("You cancelled the update, so nothing was changed."); break;
+            case core::StoreInstallResult::NothingToInstall:
+                c.note = cascade::i18n::tr("The Microsoft Store has no update to install now.");
+                offerKey = false;
+                break;
+            case core::StoreInstallResult::Failed: {
+                std::string reason = v.storeOutcome.reasonKey != nullptr ? std::string(cascade::i18n::tr(v.storeOutcome.reasonKey)) : std::string();
+                if (!v.storeOutcome.detail.empty()) { reason += reason.empty() ? v.storeOutcome.detail : " (" + v.storeOutcome.detail + ")"; }
+                c.error = core::formatText(cascade::i18n::tr("could not install: %s"), reason.c_str());
+                break;
+            }
+        }
+    }
+    if (offerKey) {
+        c.primary = cascade::i18n::tr("Install from the Microsoft Store");
+        const std::string hint = cascade::i18n::tr("Windows will ask you to confirm, and FoxSDR may close while the update installs.");
+        c.note = c.note.empty() ? hint : c.note + "\n" + hint;
+    }
+    return c;
+}
+
+// ---- the team message card ----------------------------------------------------------------------------------------------------
+TeamMessageModel teamMessageFor(bool enabled, bool packaged, const std::vector<core::TeamMessage>& messages, const std::vector<std::string>& seen) {
+    TeamMessageModel m;
+    if (!enabled || packaged) { return m; }
+    for (const core::TeamMessage& t : messages) {
+        if (std::find(seen.begin(), seen.end(), t.id) != seen.end()) { continue; }
+        if (!m.shown) {
+            m.shown = true;
+            m.id = t.id;
+            m.date = t.date;
+            m.lines = t.lines;
+            m.important = t.important;
+        } else {
+            ++m.more;
+        }
+    }
+    return m;
+}
+
+std::vector<std::string> seenAfterCheck(const std::vector<std::string>& seen, const std::vector<core::TeamMessage>& messages) {
+    std::vector<std::string> kept;
+    for (const std::string& id : seen) {
+        for (const core::TeamMessage& m : messages) {
+            if (m.id == id) { kept.push_back(id); break; }
+        }
+    }
+    return kept;
+}
+
+std::vector<std::string> seenWith(std::vector<std::string> seen, const std::string& id) {
+    if (std::find(seen.begin(), seen.end(), id) == seen.end()) { seen.push_back(id); }
+    while (seen.size() > core::AppConfig::kMaxMessagesSeen) { seen.erase(seen.begin()); }
+    return seen;
+}
+
 UpdateCardModel updateCardFor(const UpdateView& v) {
     UpdateCardModel c;
     // HIDDEN, as drawUpdateBanner hides it: the Updates tick is off, "Not now" was pressed, a Store copy (its own banner), or nothing
@@ -216,7 +293,8 @@ UpdateCardModel updateCardFor(const UpdateView& v) {
     // sentences are plain English on purpose, as in drawUpdateBanner: a safety notice must not wait for the catalogues to be translated.
     const bool offered = v.info.newer && !v.info.offerWithdrawn;
     const bool recall = v.info.runningWithdrawn;
-    if (!v.enabled || v.dismissed || v.packaged || (!offered && !recall)) { return c; }
+    if (v.packaged) { return storeCardFor(v); }
+    if (!v.enabled || v.dismissed || (!offered && !recall)) { return c; }
     c.shown = true;
     c.withdrawn = recall;
     std::string advice;
@@ -319,11 +397,12 @@ void HostDuties::start(const DutyStart& s) {
 
     // THE UPDATE CHECK, once (app_window.cpp ~1405).
     const bool canned = w_.manifestSeam();
-    const UpdatePlan plan = updatePlanFor(bounded, canned, w_.inPackage(), iface_.updateCheckEnabled);
+    const UpdatePlan plan = updatePlanFor(bounded, canned, w_.inPackage(), iface_.updateCheckEnabled, w_.storeSeam());
     // (With the canned answer set, "asking foxsdr.com" would be a lie: the answer is a file and foxsdr.com is not asked.)
     w_.say(plan == UpdatePlan::Run && canned ? "update: reading the canned answer of FOXSDR_FAKE_UPDATE_MANIFEST; foxsdr.com is not asked"
                                              : updatePlanLine(plan));
     if (plan == UpdatePlan::Run) { startUpdateCheck(); }
+    if (plan == UpdatePlan::StoreAsk) { startStoreCheck(); }
 
     // THE CRASH SWEEP, armed here and started by the first poll that can say whose install id it carries (app_window.cpp ~1444).
     const SweepPlan sweep = sweepPlanFor(iface_.diagnosticsEnabled, s.diagnosticsDir);
@@ -391,13 +470,68 @@ void HostDuties::startUpdateCheck() {
     w_.updateCheckStart(cfg_.version, core::updateChannelParam(iface_.updateChannel));
 }
 
+void HostDuties::startStoreCheck() {
+    if (updateAsked_) { return; }
+    updateAsked_ = true;
+    updatePending_ = true;
+    updateError_.clear();
+    store_ = core::StoreUpdateCheck{};
+    storeInstallDone_ = false;
+    w_.diag(core::storeUpdateAskLine());
+    w_.storeCheckStart();
+}
+
+void HostDuties::startStoreInstall() {
+    if (storeInstallPending_ || !store_.ok || store_.updates <= 0) { return; }
+    storeInstallPending_ = true;
+    storeInstallDone_ = false;
+    storeOutcome_ = core::StoreInstallOutcome{};
+    w_.diag("store update: install requested from the banner");
+    w_.storeInstallStart();
+    refreshCard();
+}
+
+// The Store's answers, on the same terms as foxsdr.com's: a failure goes to the error the Updates section shows, never to a banner.
+void HostDuties::pollStore() {
+    core::StoreUpdateCheck checked;
+    if (w_.storeCheckPoll(checked)) {
+        updatePending_ = false;
+        if (checked.ok) {
+            store_ = checked;
+        } else {
+            store_ = core::StoreUpdateCheck{};
+            updateError_ = checked.error;
+        }
+        w_.say(checked.ok ? (checked.updates > 0 ? "update: the Microsoft Store has an update for this copy" : "update: the Microsoft Store has no update for this copy")
+                          : "update: the Microsoft Store check failed (" + checked.error + "); nothing is shown");
+        refreshCard();
+    }
+    core::StoreInstallOutcome installed;
+    if (w_.storeInstallPoll(installed)) {
+        storeInstallPending_ = false;
+        storeInstallDone_ = true;
+        storeOutcome_ = installed;
+        refreshCard();
+    }
+}
+
 void HostDuties::pollUpdate() {
+    if (w_.inPackage()) { pollStore(); return; }
     if (updatePending_ && stage_ != UpdateStage::Downloading) {
         core::UpdateCheckOutcome checked;
         if (w_.updateCheckPoll(checked)) {
             updatePending_ = false;
             if (checked.ok) {
                 update_ = checked.info;
+                {
+                    // THE SEEN LIST FORGETS WHAT THE SERVICE NO LONGER CARRIES (0.99.79); saved at once.
+                    const std::vector<std::string> kept = seenAfterCheck(iface_.messagesSeen, update_.messages);
+                    if (kept.size() != iface_.messagesSeen.size()) {
+                        core::AppConfig half = iface_;
+                        half.messagesSeen = kept;
+                        (void)saveInterfaceHalf(half);
+                    }
+                }
                 w_.say(update_.newer ? "update: FoxSDR " + update_.version + " is available"
                                      : "update: this is the newest version (the service offers " + update_.version + ")");
             } else {
@@ -470,6 +604,10 @@ void HostDuties::startInstaller() {
 
 void HostDuties::updatePrimaryClicked() {
     if (!card_.shown) { return; }
+    if (w_.inPackage()) {
+        if (!card_.primary.empty()) { startStoreInstall(); }
+        return;
+    }
     if (!cfg_.installerHere) {
         w_.say("update: there is no installer for this platform; the download is at https://foxsdr.com (this window opens no browser yet)");
         return;
@@ -498,11 +636,36 @@ void HostDuties::refreshCard() {
     v.stage = stage_;
     v.progress = progress_;
     v.error = updateError_;
+    v.storeOffered = store_.ok && store_.updates > 0;
+    v.storeMandatory = store_.mandatory;
+    v.storeInstallPending = storeInstallPending_;
+    v.storeInstallDone = storeInstallDone_;
+    v.storeOutcome = storeOutcome_;
     UpdateCardModel next = updateCardFor(v);
     if (!(next == card_)) {
         card_ = std::move(next);
         cardChanged_ = true;
     }
+    TeamMessageModel team = teamMessageFor(iface_.updateCheckEnabled, v.packaged, update_.messages, iface_.messagesSeen);
+    if (!(team == team_)) {
+        team_ = std::move(team);
+        teamChanged_ = true;
+    }
+}
+
+bool HostDuties::takeTeamChange() {
+    const bool changed = teamChanged_;
+    teamChanged_ = false;
+    return changed;
+}
+
+void HostDuties::teamMessageSeen() {
+    if (!team_.shown) { return; }
+    // REMEMBERED, AND SAVED AT ONCE: "it doesn't show up again" has to survive a quit or a crash that comes straight after the press.
+    core::AppConfig half = iface_;
+    half.messagesSeen = seenWith(iface_.messagesSeen, team_.id);
+    (void)saveInterfaceHalf(half);
+    refreshCard();
 }
 
 bool HostDuties::takeCardChange() {
@@ -602,6 +765,7 @@ void HostDuties::updateSettingChanged() {
     if (!iface_.updateCheckEnabled) {
         // Off means off immediately: the answer is discarded, and none is asked for again this launch.
         update_ = core::UpdateInfo{};
+        store_ = core::StoreUpdateCheck{};
         updateError_.clear();
         refreshCard();
         return;
@@ -609,11 +773,13 @@ void HostDuties::updateSettingChanged() {
     // A check already IN FLIGHT is left alone: it is about to deliver the very answer a re-tick or a channel change is asking for.
     if (updatePending_) { return; }
     update_ = core::UpdateInfo{};
+    store_ = core::StoreUpdateCheck{};
     updateError_.clear();
     updateAsked_ = false;
-    const UpdatePlan plan = updatePlanFor(cfg_.frames >= 0, w_.manifestSeam(), w_.inPackage(), iface_.updateCheckEnabled);
+    const UpdatePlan plan = updatePlanFor(cfg_.frames >= 0, w_.manifestSeam(), w_.inPackage(), iface_.updateCheckEnabled, w_.storeSeam());
     w_.say(updatePlanLine(plan));
     if (plan == UpdatePlan::Run) { startUpdateCheck(); }
+    if (plan == UpdatePlan::StoreAsk) { startStoreCheck(); }
     refreshCard();
 }
 
@@ -634,6 +800,9 @@ UpdateStatus HostDuties::updateStatus() const {
     s.runningWithdrawn = update_.runningWithdrawn;
     s.newVersion = update_.version;
     s.error = updateError_;
+    s.storeOffered = store_.ok && store_.updates > 0;
+    s.storeMandatory = store_.mandatory;
+    s.storeInstalling = storeInstallPending_;
     for (const core::TeamMessage& m : update_.messages) {
         if (std::find(iface_.messagesSeen.begin(), iface_.messagesSeen.end(), m.id) == iface_.messagesSeen.end()) { ++s.unseenMessages; }
     }
@@ -727,7 +896,7 @@ void LiveWorld::updateCheckStart(const std::string& version, const std::string& 
 }
 
 bool LiveWorld::updateCheckPoll(core::UpdateCheckOutcome& outcome) { return check_.poll(outcome); }
-void LiveWorld::updateCheckReap() { (void)check_.reap(); }
+void LiveWorld::updateCheckReap() { (void)check_.reap(); (void)storeCheck_.reap(); (void)storeInstall_.reap(); }
 
 void LiveWorld::downloadStart(const core::UpdateInfo& info) {
     // Cleared on entry, as the plugin installer clears its own: a cancel left over from an abandoned attempt must not kill this one, and
@@ -761,6 +930,20 @@ bool LiveWorld::installerPoll(bool& started) {
     if (!started) { core::health::noteUpdateRunFailed(); }
     return true;
 }
+
+bool LiveWorld::storeSeam() { return core::storeUpdateFake() != core::StoreUpdateFake::Off; }
+
+void LiveWorld::storeCheckStart() {
+    void* const owner = ownerWindow_ ? ownerWindow_() : nullptr;   // a handle is a number: nothing of `this` crosses to the worker
+    storeCheck_.start([owner]() { return core::checkStoreForUpdates(owner); });
+}
+bool LiveWorld::storeCheckPoll(core::StoreUpdateCheck& out) { return storeCheck_.poll(out); }
+
+void LiveWorld::storeInstallStart() {
+    void* const owner = ownerWindow_ ? ownerWindow_() : nullptr;
+    storeInstall_.start([owner]() { return core::requestStoreUpdateInstall(owner); });
+}
+bool LiveWorld::storeInstallPoll(core::StoreInstallOutcome& out) { return storeInstall_.poll(out); }
 
 void LiveWorld::sendersPoll(std::uint64_t nowEpoch) {
     feature_.poll(nowEpoch);

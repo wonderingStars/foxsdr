@@ -48,6 +48,9 @@ public:
         // effects are logged as deferred, as before.
         std::function<void()> demodScopeClicked;
         std::function<void()> radarScopeClicked;
+        // WHERE THE MARKERS WINDOW'S COPY KEY SENDS ITS TEXT (window gaps, lane 1): the host's clipboard, or its stand-in in a bounded run (a drive script reads it back with `state clip`).
+        // Without it a bounded run writes nothing, as before.
+        std::function<void(const std::string& text)> clipboard;
     };
     ToolsPublisher(MainWindow& ui, foxsdr::slintkit::PluginKit& kit, const FoxEngineApi* api, FoxSession* session, bool bounded, Hooks hooks);
     ~ToolsPublisher();

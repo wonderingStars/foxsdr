@@ -58,6 +58,8 @@ list(APPEND foxsdr_slint_sources lanek_logic.cpp lanek_spectrum.cpp lanek_audio.
 list(APPEND foxsdr_slint_sources lanel_logic.cpp lanel_publish.cpp)
 # SCREEN LANE M (docs/multi-radio-records/screen-m.md): the controls of the wiring second passes, each in the section the person looks in (lanem_logic: pure; lanem_publish: the LaneM global)
 list(APPEND foxsdr_slint_sources lanem_logic.cpp lanem_publish.cpp)
+# WINDOW GAPS LANE 1 (docs/multi-radio-records/window-gaps-1.md): the start-up questions and fault cards (gaps1_logic: pure; gaps1_publish: the Gaps1 global; ui/gaps1.slint)
+list(APPEND foxsdr_slint_sources gaps1_logic.cpp gaps1_publish.cpp sysmenu_win.cpp)
 if(WIN32)
     enable_language(RC)
     add_executable(foxsdr-slint WIN32 ${foxsdr_slint_sources} "${CMAKE_SOURCE_DIR}/resources/icon/foxsdr.rc")

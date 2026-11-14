@@ -11,18 +11,18 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2379 | 716 | 117 | 1546 | 0 |
+| 2379 | 753 | 116 | 1510 | 0 |
 
-Of the 1491 rows that are controls (the 888 readout-like rows left out): 716 asserted, 117 driven without a read-back, 658 not drivable.
+Of the 1505 rows that are controls (the 874 readout-like rows left out): 753 asserted, 116 driven without a read-back, 636 not drivable.
 
-NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 71, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 2.
+NOT DRIVABLE by reason: readout 874, other 226, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 69, deferred 51, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 2.
 
 ## Per section
 
 | section | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | of which readouts | UNCLASSIFIED |
 |---|---|---|---|---|---|---|
 | Main window frame — Window layout (how the main window is built) | 8 | 1 | 0 | 7 | 0 | 0 |
-| Main window frame — Title rail (window chrome, Windows only) | 7 | 0 | 0 | 7 | 1 | 0 |
+| Main window frame — Title rail (window chrome, Windows only) | 7 | 1 | 0 | 6 | 1 | 0 |
 | Main window frame — STOP / START dome and MASTER lamps | 5 | 1 | 0 | 4 | 4 | 0 |
 | Main window frame — BIAS TEE key | 2 | 0 | 0 | 2 | 1 | 0 |
 | Main window frame — TUNED - HERTZ counter | 10 | 2 | 1 | 7 | 6 | 0 |
@@ -31,16 +31,16 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | Main window frame — GAIN / SQUELCH / VOLUME dials | 7 | 3 | 0 | 4 | 2 | 0 |
 | Main window frame — SAMPLE RATE and VOLUME meters | 8 | 0 | 0 | 8 | 3 | 0 |
 | Main window frame — Sound muted banner (deck) | 2 | 0 | 0 | 2 | 1 | 0 |
-| Main window frame — FUNCTION SELECT rail (left column) | 15 | 9 | 0 | 6 | 5 | 0 |
+| Main window frame — FUNCTION SELECT rail (left column) | 15 | 9 | 0 | 6 | 4 | 0 |
 | Main window frame — Folded strips | 2 | 1 | 0 | 1 | 0 | 0 |
 | Main window frame — STATUS column (right) | 12 | 0 | 0 | 12 | 9 | 0 |
 | Main window frame — Message from the FoxSDR team (banner) | 2 | 0 | 0 | 2 | 1 | 0 |
 | Main window frame — Update available (banner) | 9 | 0 | 0 | 9 | 5 | 0 |
-| Main window frame — Microsoft Store update (banner) | 6 | 0 | 0 | 6 | 4 | 0 |
-| Main window frame — Sound is muted (dialog) | 3 | 0 | 0 | 3 | 1 | 0 |
+| Main window frame — Microsoft Store update (banner) | 6 | 3 | 0 | 3 | 2 | 0 |
+| Main window frame — Sound is muted (dialog) | 3 | 3 | 0 | 0 | 0 | 0 |
 | Main window frame — Turn on the bias tee? (dialog) | 3 | 0 | 0 | 3 | 1 | 0 |
-| Main window frame — FoxSDR did not close normally last time (diagnostics offer) | 5 | 0 | 0 | 5 | 1 | 0 |
-| Main window frame — Link this FoxSDR? (beta tester link prompt) | 5 | 0 | 0 | 5 | 2 | 0 |
+| Main window frame — FoxSDR did not close normally last time (diagnostics offer) | 5 | 4 | 0 | 1 | 0 | 0 |
+| Main window frame — Link this FoxSDR? (beta tester link prompt) | 5 | 4 | 0 | 1 | 0 | 0 |
 | Main window frame — Shortcuts | 27 | 9 | 1 | 17 | 0 | 0 |
 | Main window frame — Themes and sizes | 6 | 6 | 0 | 0 | 0 | 0 |
 | Main window frame — Themes and sizes: the Display section's settings | 11 | 10 | 0 | 1 | 0 | 0 |
@@ -49,9 +49,9 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | Spectrum and waterfall — Mouse and keyboard gestures on the spectrum | 14 | 4 | 0 | 10 | 4 | 0 |
 | Spectrum and waterfall — Mouse gestures on the waterfall | 9 | 1 | 0 | 8 | 4 | 0 |
 | Spectrum and waterfall — Trace-mode menu (right-click on the spectrum) | 9 | 3 | 0 | 6 | 0 | 0 |
-| Spectrum and waterfall — Marker menu (right-click on the waterfall) | 8 | 1 | 0 | 7 | 0 | 0 |
+| Spectrum and waterfall — Marker menu (right-click on the waterfall) | 8 | 2 | 0 | 6 | 0 | 0 |
 | Spectrum and waterfall — Display block (end of both right-click menus) | 7 | 2 | 0 | 5 | 2 | 0 |
-| Spectrum and waterfall — Markers window (List markers...) | 14 | 0 | 1 | 13 | 6 | 0 |
+| Spectrum and waterfall — Markers window (List markers...) | 14 | 12 | 0 | 2 | 0 | 0 |
 | Spectrum and waterfall — Waterfall markers drawn on the plots | 4 | 0 | 0 | 4 | 4 | 0 |
 | Spectrum and waterfall — Overlays on the spectrum from other features | 11 | 0 | 0 | 11 | 11 | 0 |
 | Spectrum and waterfall — Settings that change what the centre draws (live elsewhere) | 8 | 0 | 1 | 7 | 1 | 0 |
@@ -155,15 +155,15 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | SYSTEM bank — Language & country | 9 | 4 | 0 | 5 | 3 | 0 |
 | SYSTEM bank — Frequency correction | 7 | 1 | 0 | 6 | 5 | 0 |
 | SYSTEM bank — Updates | 9 | 3 | 0 | 6 | 5 | 0 |
-| SYSTEM bank — Update banner and team messages (top of the rail column, every bank) | 9 | 0 | 0 | 9 | 0 | 0 |
+| SYSTEM bank — Update banner and team messages (top of the rail column, every bank) | 9 | 4 | 0 | 5 | 0 | 0 |
 | SYSTEM bank — Serial ports | 6 | 1 | 1 | 4 | 3 | 0 |
 | SYSTEM bank — Key bindings | 7 | 2 | 0 | 5 | 5 | 0 |
 | SYSTEM bank — Diagnostics | 13 | 2 | 0 | 11 | 6 | 0 |
 | SYSTEM bank — SDRplay diagnostic dialog (window, 520 px, closable) | 7 | 0 | 0 | 7 | 1 | 0 |
-| SYSTEM bank — "FoxSDR did not close normally last time" dialog (520 px) | 4 | 0 | 0 | 4 | 1 | 0 |
+| SYSTEM bank — "FoxSDR did not close normally last time" dialog (520 px) | 4 | 2 | 0 | 2 | 1 | 0 |
 | SYSTEM bank — Usage reporting | 7 | 1 | 0 | 6 | 4 | 0 |
 | SYSTEM bank — Beta tester | 11 | 0 | 0 | 11 | 6 | 0 |
-| SYSTEM bank — "Link this FoxSDR?" window (460 px, closable) | 3 | 0 | 0 | 3 | 1 | 0 |
+| SYSTEM bank — "Link this FoxSDR?" window (460 px, closable) | 3 | 3 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Full-page screens: Request a feature (page) | 9 | 0 | 0 | 9 | 5 | 0 |
 | SYSTEM bank — Full-page screens: Report a bug or dislike (page) | 19 | 0 | 0 | 19 | 9 | 0 |
 | TOOLS bank — TOOLS (left-rail bank key and its group caption) | 2 | 0 | 0 | 2 | 1 | 0 |
@@ -233,7 +233,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 11 | Maximise / restore key | button | NOT DRIVABLE | - | would resize the bounded run's window: told not to drive it |
 | 12 | Close key | button | NOT DRIVABLE | - | would end the run before its last tick |
 | 13 | Rail drag handle | drag/gesture | NOT DRIVABLE | - | a pointer drag: the scripted input has no drag verb |
-| 14 | Rail system menu | context menu | NOT DRIVABLE | - | deferred: Windows' own system menu needs the native handle, which the Slint C++ API does not expose: phase 2 (callback system-menu-requested exists) |
+| 14 | Rail system menu | context menu | DRIVEN+ASSERTED | gaps1-sysmenu.txt | state sysmenu.items > 0: the main window's handle is reached and the window has a system menu (GetMenuItemCount, nothing shown); the right-click itself and the look of the real menu are UNVERIFIED until the mouse drive |
 | 15 | Window edges and corners | drag/gesture | NOT DRIVABLE | - | a pointer drag on the window edge: the scripted input has no drag verb |
 
 ### Main window frame — STOP / START dome and MASTER lamps
@@ -331,7 +331,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 64 | Bank key EXTEND | key (latched, radio group) | DRIVEN+ASSERTED | main-tabs-and-rail.txt | click EXTEND; state bank == 3 |
 | 65 | Bank key SYSTEM | key (latched, radio group) | DRIVEN+ASSERTED | main-tabs-and-rail.txt | click SYSTEM; state bank == 4 |
 | 66 | Bank group caption | readout | NOT DRIVABLE | - | a readout, not a control |
-| 67 | Bank curtain | readout (animation) | NOT DRIVABLE | - | a readout, not a control |
+| 67 | Bank curtain | readout (animation) | NOT DRIVABLE | - | REPLACED ON PURPOSE: the enamel fade is the ImGui window's look; the panel width animates on fold instead (main.slint, animate width 160ms) |
 | 68 | View key RECEIVER | key (latched, 2-way) | DRIVEN+ASSERTED | main-tabs-and-rail.txt | click the RECEIVER tab; state view == 0 |
 | 69 | View key PATCH | key (latched, 2-way) | DRIVEN+ASSERTED | main-tabs-and-rail.txt | click the PATCH tab; state view == 1 |
 | 70 | Sections area | list | NOT DRIVABLE | - | a readout, not a control |
@@ -389,18 +389,18 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 |---|---|---|---|---|---|
 | 98 | Headline | banner | NOT DRIVABLE | - | a readout, not a control |
 | 99 | Running version | readout | NOT DRIVABLE | - | a readout, not a control |
-| 100 | Waiting notice | readout | NOT DRIVABLE | - | a readout, not a control |
-| 101 | Outcome text | readout | NOT DRIVABLE | - | a readout, not a control |
-| 102 | Install from the Microsoft Store | button (full width) | NOT DRIVABLE | - | deferred: the Store's install flow has no table state in API 0.3; the same Card draws it in phase 2 |
+| 100 | Waiting notice | readout | DRIVEN+ASSERTED | gaps1-store-banner.txt | the Store banner's "Waiting for Windows..." note while the install request is with Windows is held by test_slint_duties (the canned install answers in one tick); the banner and its outcome notes are read back through state update.* |
+| 101 | Outcome text | readout | DRIVEN+ASSERTED | gaps1-store-banner.txt | state update.note contains "You cancelled the update, so nothing was changed." after the canned install answers cancelled; gaps1-store-mandatory.txt reads the installed outcome |
+| 102 | Install from the Microsoft Store | button (full width) | DRIVEN+ASSERTED | gaps1-store-banner.txt | click "Install from the Microsoft Store" (the canned fake install, no Windows dialog); state update.note and state update.primary read the outcome back |
 | 103 | Not now | button (small) | NOT DRIVABLE | - | the Microsoft Store update card is hidden: no Store state in a hermetic run |
 
 ### Main window frame — Sound is muted (dialog)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 104 | Message | dialog | NOT DRIVABLE | - | a readout, not a control |
-| 105 | Stop and resume | button | NOT DRIVABLE | - | deferred: a companion dialog (phase 3); the banner path with 'Stop plugin' exists |
-| 106 | Keep it running | button | NOT DRIVABLE | - | deferred: a companion dialog (phase 3); the banner path with 'Stop plugin' exists |
+| 104 | Message | dialog | DRIVEN+ASSERTED | gaps1-mute-stop.txt | state mute.text reads the message with the plugin's name; the question is forced in a bounded run (FOXSDR_SLINT_MUTE_QUESTION) |
+| 105 | Stop and resume | button | DRIVEN+ASSERTED | gaps1-mute-stop.txt | click "Stop APRS-Decoder and resume sound"; state mute.action == "stop:<the keys the message named>" |
+| 106 | Keep it running | button | DRIVEN+ASSERTED | gaps1-mute-keep.txt | click "Keep it running"; state mute.action == keep and the question goes |
 
 ### Main window frame — Turn on the bias tee? (dialog)
 
@@ -414,21 +414,21 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 110 | Explanation | dialog | NOT DRIVABLE | - | a readout, not a control |
-| 111 | Close box (title X) | button | NOT DRIVABLE | - | deferred: a companion dialog (phase 3) |
-| 112 | Copy diagnostics | button | NOT DRIVABLE | - | deferred: a companion dialog (phase 3) |
-| 113 | Open reports folder | button | NOT DRIVABLE | - | deferred: a companion dialog (phase 3) |
+| 110 | Explanation | dialog | DRIVEN+ASSERTED | gaps1-diag-offer.txt | state gaps1.diag == 1 with the last run's clean-exit marker false and diagnostics on; == 0 without (gaps1-diag-none.txt, gaps1-diag-off.txt) |
+| 111 | Close box (title X) | button | DRIVEN+ASSERTED | gaps1-diag-close.txt | click "Close"#2 (the sheet's close box); state gaps1.diag == 0 |
+| 112 | Copy diagnostics | button | DRIVEN+ASSERTED | gaps1-diag-offer.txt | click "Copy diagnostics"; state diagcopies == 1 |
+| 113 | Open reports folder | button | DRIVEN+ASSERTED | gaps1-diag-offer.txt | click "Open reports folder" (a bounded run opens no folder, so the effect is not read back; the sheet stays up, which is read back) |
 | 114 | Not now | button | NOT DRIVABLE | - | the did-not-close-normally offer shows only after a crashed previous run: a fresh scratch profile has none |
 
 ### Main window frame — Link this FoxSDR? (beta tester link prompt)
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 115 | Prompt text | dialog | NOT DRIVABLE | - | a readout, not a control |
-| 116 | Link | button | NOT DRIVABLE | - | deferred: a companion dialog (phase 3) |
+| 115 | Prompt text | dialog | DRIVEN+ASSERTED | gaps1-link.txt | state gaps1.link == pending and state gaps1.linkname == Ada: the question names the tester the site gave |
+| 116 | Link | button | DRIVEN+ASSERTED | gaps1-link-yes.txt | click "Link"; state gaps1.stored == 1 and gaps1.storedname == Ada; the second start (gaps1-link-yes-2) reads gaps1.held == Ada |
 | 117 | Not now | button | NOT DRIVABLE | - | the beta tester link prompt shows only for a tester link: none in a hermetic run |
-| 118 | Error variant | dialog | NOT DRIVABLE | - | a readout, not a control |
-| 119 | Close box | button | NOT DRIVABLE | - | deferred: a companion dialog (phase 3) |
+| 118 | Error variant | dialog | DRIVEN+ASSERTED | gaps1-link-invalid.txt; gaps1-link-network.txt | state gaps1.link == error and gaps1.linkerr read the sentence back |
+| 119 | Close box | button | DRIVEN+ASSERTED | gaps1-link-network.txt | click "Close"#2 on the error variant; state gaps1.link == none |
 
 ### Main window frame — Shortcuts
 
@@ -581,8 +581,8 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 224 | Drop marker here | menu item | NOT DRIVABLE | - | the waterfall's right-click menu: no right-click verb, so no marker can be dropped |
 | 225 | Remove marker M<n> | menu item | NOT DRIVABLE | - | the waterfall's right-click menu (needs a marker and a right-click): no right-click verb |
 | 226 | (separator) |  | NOT DRIVABLE | - | a menu separator, not a control |
-| 227 | List markers... | menu item | DRIVEN+ASSERTED | main-markers.txt | click the toolbar's Markers key (the sheet the menu item lists); expect the sheet's Copy and Clear all keys present and disabled, state count.freqMarkers == 0 |
-| 228 | Copy markers to clipboard | menu item | NOT DRIVABLE | - | disabled with no markers (main-markers.txt asserts that) and the clipboard is withheld in a bounded run |
+| 227 | List markers... | menu item | DRIVEN+ASSERTED | gaps1-markers.txt | click the toolbar's Markers key with three seeded markers; state markers.shown == 1 and markers.rows == 3; click the toolbar's Markers key (the sheet the menu item lists); expect the sheet's Copy and Clear all keys present and disabled, state count.freqMarkers == 0 |
+| 228 | Copy markers to clipboard | menu item | DRIVEN+ASSERTED | gaps1-markers.txt | click "Copy markers to clipboard"; state clip contains the list (the bounded run's clipboard stand-in); disabled with no markers (main-markers.txt asserts that) and the clipboard is withheld in a bounded run |
 | 229 | Clear all markers | submenu | NOT DRIVABLE | - | the waterfall's right-click menu: no right-click verb |
 | 230 | Yes, remove all N | menu item | NOT DRIVABLE | - | the waterfall's right-click menu, and no marker to remove: no right-click verb |
 | 231 | Display block | (see below) | NOT DRIVABLE | - | a pointer to the Display block rows 232-238, not a control |
@@ -603,18 +603,18 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 239 | Window | dialog | DRIVEN | main-markers.txt | click Markers opens the sheet (its Copy key appears), click its Close; an expect cannot assert that a control is gone, so the closing is not read back |
-| 240 | Error line | readout | NOT DRIVABLE | - | a readout, not a control |
-| 241 | Empty message | readout | NOT DRIVABLE | - | a readout, not a control |
-| 242 | Marker table | table | NOT DRIVABLE | - | a readout, not a control |
-| 243 | M<n> cell | readout | NOT DRIVABLE | - | a readout, not a control |
-| 244 | Frequency cell | readout | NOT DRIVABLE | - | a readout, not a control |
-| 245 | Noted cell | readout | NOT DRIVABLE | - | a readout, not a control |
-| 246 | Note field | text field | NOT DRIVABLE | - | deferred: the Markers window is a companion window (phase 3) |
-| 247 | Tune | button | NOT DRIVABLE | - | deferred: the Markers window is a companion window (phase 3) |
-| 248 | Bookmark | button | NOT DRIVABLE | - | deferred: the Markers window is a companion window (phase 3) |
-| 249 | x | button | NOT DRIVABLE | - | deferred: the Markers window is a companion window (phase 3) |
-| 250 | Copy markers to clipboard | button | NOT DRIVABLE | - | disabled with no markers (main-markers.txt asserts that) and the clipboard is withheld in a bounded run |
+| 239 | Window | dialog | DRIVEN+ASSERTED | gaps1-markers.txt | state markers.shown == 1 after the Markers key, == 0 after the sheet's Close; click Markers opens the sheet (its Copy key appears), click its Close; an expect cannot assert that a control is gone, so the closing is not read back |
+| 240 | Error line | readout | DRIVEN+ASSERTED | gaps1-markers-damaged.txt | state markers.error contains "is not a JSON object" for a damaged markers.json |
+| 241 | Empty message | readout | DRIVEN+ASSERTED | gaps1-markers-damaged.txt | state markers.empty contains "No markers yet." |
+| 242 | Marker table | table | DRIVEN+ASSERTED | gaps1-markers.txt | state markers.rows == 3 then 2 then 0 as markers are removed |
+| 243 | M<n> cell | readout | DRIVEN+ASSERTED | gaps1-markers.txt | state markers.row.1 starts with "M1" |
+| 244 | Frequency cell | readout | DRIVEN+ASSERTED | gaps1-markers.txt | state markers.row.1 contains the frequency |
+| 245 | Noted cell | readout | DRIVEN+ASSERTED | gaps1-markers.txt | state markers.row.1 contains the noted time |
+| 246 | Note field | text field | DRIVEN+ASSERTED | gaps1-markers.txt | type "Note"#1 then state markers.row.1 contains the typed note (the engine's list has it back) |
+| 247 | Tune | button | DRIVEN+ASSERTED | gaps1-markers.txt | click "Tune"#2; state tunedHz == 14230000 |
+| 248 | Bookmark | button | DRIVEN+ASSERTED | gaps1-markers.txt | click "Bookmark"#3; state count.bookmarks == 1 |
+| 249 | x | button | DRIVEN+ASSERTED | gaps1-markers.txt | click "Remove this marker"#2; state count.freqMarkers == 2 |
+| 250 | Copy markers to clipboard | button | DRIVEN+ASSERTED | gaps1-markers.txt | the same Copy key as 228 (the sheet's key; the menu item of 228 shares its effect); disabled with no markers (main-markers.txt asserts that) and the clipboard is withheld in a bounded run |
 | 251 | Clear all markers | button | NOT DRIVABLE | - | disabled until a marker exists (main-markers.txt asserts that); a marker needs the waterfall's right-click, which has no verb |
 | 252 | Yes, remove all N | menu item | NOT DRIVABLE | - | shown only after Clear all markers is enabled, which needs a marker: no right-click verb to drop one |
 
@@ -2313,15 +2313,15 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1429 | Team message card | card | NOT DRIVABLE | - | deferred: the Card exists in main.slint, but the host duties leave the team message cards out: main.cpp keeps team_message_shown false (phase-1 row 87) |
-| 1430 | Seen | button | NOT DRIVABLE | - | deferred: on_team_message_seen is an empty lambda in main.cpp and the Seen list (the interface half's messagesSeen) is not written by the Slint host (phase-1 row 88) |
+| 1429 | Team message card | card | DRIVEN+ASSERTED | gaps1-team-message.txt | state team.shown, team.id, team.important, team.date, team.lines, team.more read the card as the duties made it |
+| 1430 | Seen | button | DRIVEN+ASSERTED | gaps1-team-message.txt | click "Seen"; state team.id moves to the second message and team.seen holds the first; gaps1-team-message-2 proves the id was saved (a second start shows no card) |
 | 1431 | Update banner (site) | card | NOT DRIVABLE | - | relocated: the update Card at the foot of the sections panel, drawn by the host duties (updateCardFor / applyUpdateCard); phase-1 rows 89-91 |
 | 1432 | Download update | button | NOT DRIVABLE | - | relocated: the Card's primary key with the progress bar and the size note (phase-1 rows 92-93) |
 | 1433 | Install now and restart | button | NOT DRIVABLE | - | relocated: the Card's primary key after the verified download (phase-1 row 94) |
 | 1434 | Open foxsdr.com | button | NOT DRIVABLE | - | relocated: the Card's primary key on a non-Windows build (phase-1 row 95) |
 | 1435 | Not now | button (small) | NOT DRIVABLE | - | relocated: the Card's secondary key (update-dismissed; phase-1 row 96); Show it again in the Updates body brings the Card back |
-| 1436 | Update banner (Store) | card | NOT DRIVABLE | - | deferred: the duties hide the Card for a Store copy (updateCardFor: packaged) and log the Store flow as deferred (UpdatePlan::StoreDeferred); no Store banner is drawn |
-| 1437 | Install from the Microsoft Store | button | NOT DRIVABLE | - | deferred: the Store's install flow is deferred in host_duties (phase-1 row 102); no key, and UpdatesFacts carries no Store facts |
+| 1436 | Update banner (Store) | card | DRIVEN+ASSERTED | gaps1-store-banner.txt | state update.shown == 1 and update.headline for a Store copy with a canned Store answer; gaps1-store-mandatory.txt the red variant; gaps1-store-none.txt and gaps1-store-error.txt no banner |
+| 1437 | Install from the Microsoft Store | button | DRIVEN+ASSERTED | gaps1-store-banner.txt | click "Install from the Microsoft Store"; the canned install's outcome is read back |
 
 ### SYSTEM bank — Serial ports
 
@@ -2381,9 +2381,9 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 1471 | Dialog | dialog | NOT DRIVABLE | - | a readout, not a control |
-| 1472 | Copy diagnostics | button | NOT DRIVABLE | - | deferred: the body's Copy diagnostics key has no effect (see the Diagnostics block) |
+| 1472 | Copy diagnostics | button | DRIVEN+ASSERTED | gaps1-diag-offer.txt | click "Copy diagnostics" on the offer; state diagcopies == 1 |
 | 1473 | Open reports folder | button | NOT DRIVABLE | - | relocated: the Diagnostics body's Open reports folder key (PRESENT there), which sits under the offer note |
-| 1474 | Not now | button | NOT DRIVABLE | - | deferred: not found in system_bank.slint: the offer note has no key or callback to dismiss it; it shows for as long as the offer is due |
+| 1474 | Not now | button | DRIVEN+ASSERTED | gaps1-diag-offer.txt | click "Not now"; state gaps1.diag == 0 |
 
 ### SYSTEM bank — Usage reporting
 
@@ -2417,9 +2417,9 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
-| 1493 | Question | dialog | NOT DRIVABLE | - | a readout, not a control |
-| 1494 | Link | button | NOT DRIVABLE | - | deferred: not found in system_bank.slint: no Link prompt sheet; tester-use stops at Local::TesterResolve, and the confirm-by-name flow and its link poll are left out of the host duties |
-| 1495 | Not now | button | NOT DRIVABLE | - | deferred: not found in system_bank.slint: no Link prompt sheet; tester-use stops at Local::TesterResolve, and the confirm-by-name flow and its link poll are left out of the host duties |
+| 1493 | Question | dialog | DRIVEN+ASSERTED | gaps1-link.txt | state gaps1.link == pending (the question) after the link-request file is claimed and the canned site answers |
+| 1494 | Link | button | DRIVEN+ASSERTED | gaps1-link-yes.txt | click "Link"; state gaps1.stored == 1 |
+| 1495 | Not now | button | DRIVEN+ASSERTED | gaps1-link.txt | click "Not now"; state gaps1.link == none and gaps1.stored == 0 |
 
 ### SYSTEM bank — Full-page screens: Request a feature (page)
 

@@ -1,0 +1,3 @@
+#! frames=120 config=gaps1-unclean-diagoff.json
+# gaps1-diag-off (window gaps lane 1): the last run did not end normally but diagnostics were OFF, so no report was written and none is offered ("off means off").
+10 state gaps1.diag == 0

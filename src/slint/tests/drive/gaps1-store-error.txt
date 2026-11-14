@@ -1,0 +1,3 @@
+#! frames=200 updatecheck=on FOXSDR_FAKE_PACKAGE=FoxSDR.Test_1.0.0.0_x64__test FOXSDR_FAKE_STORE_UPDATE=error
+# gaps1-store-error (window gaps lane 1): the Store could not be asked. The user did not ask, so there is no banner; the failure is the Updates section's line only.
+80 state update.shown == 0

@@ -1233,9 +1233,32 @@ void KitPublisher::publishDecodeBank(const FoxReceiverState& state) {
     if (catalogueUrl_ != k.catalogueUrl) { catalogueUrl_ = k.catalogueUrl; ui_.set_catalogue_url(ss(catalogueUrl_)); }
 }
 
+namespace {
+std::string joinKeys(const std::vector<std::string>& keys) {
+    std::string out;
+    for (const std::string& k : keys) { out += (out.empty() ? "" : ",") + k; }
+    return out;
+}
+}  // namespace
+
+void KitPublisher::forceMuteQuestion(const std::string& name, const std::string& key) {
+    muteNames_.assign(1, name);
+    muteKeys_.assign(1, key);
+    muteQuestionOpen_ = true;
+    muteForced_ = true;
+}
+
+std::string KitPublisher::muteState(const std::string& what, std::string& out) const {
+    if (what == "open") { out = muteQuestionOpen_ ? "1" : "0"; return std::string(); }
+    if (what == "action") { out = muteAction_; return std::string(); }
+    if (what == "text") { out = std::string(ui_.get_mute_question_text()); return std::string(); }
+    if (what == "stop") { out = std::string(ui_.get_mute_stop_label()); return std::string(); }
+    return "mute.open|action|text|stop, not " + what;
+}
+
 void KitPublisher::publishMuteQuestion() {
     const KitLists& k = kit_.lists();
-    if (muteQuestionOpen_ && (!k.muteKeptRunning || k.muteCauses.empty())) { muteQuestionOpen_ = false; }
+    if (muteQuestionOpen_ && !muteForced_ && (!k.muteKeptRunning || k.muteCauses.empty())) { muteQuestionOpen_ = false; }
     if (muteQuestionOpen_) {
         std::string who;
         for (std::size_t i = 0; i < muteNames_.size(); ++i) {
@@ -1756,8 +1779,21 @@ void KitPublisher::wire() {
     ui_.global<::KitEvents>().on_page_details_follow([detailsFollow](int) { detailsFollow(); });
     ui_.global<::KitEvents>().on_page_details_close([this](int) { detailsId_.clear(); closePage("details"); });
     // the "Sound is muted" question
-    ui_.global<::KitEvents>().on_mute_stop_clicked([this] { kit_.stopList(muteKeys_, true); muteQuestionOpen_ = false; ui_.set_mute_question_open(false); });
-    ui_.global<::KitEvents>().on_mute_keep_clicked([this] { kit_.keepMuteRunning(); muteQuestionOpen_ = false; ui_.set_mute_question_open(false); });
+    // EXACTLY the plugins the message named (captured when it opened), stopped and their mute ended by one command; or: the mute is kept, and the banner is what stops it being a silent state
+    ui_.global<::KitEvents>().on_mute_stop_clicked([this] {
+        muteAction_ = "stop:" + joinKeys(muteKeys_);
+        kit_.stopList(muteKeys_, true);
+        muteQuestionOpen_ = false;
+        muteForced_ = false;
+        ui_.set_mute_question_open(false);
+    });
+    ui_.global<::KitEvents>().on_mute_keep_clicked([this] {
+        muteAction_ = "keep";
+        kit_.keepMuteRunning();
+        muteQuestionOpen_ = false;
+        muteForced_ = false;
+        ui_.set_mute_question_open(false);
+    });
 }
 
 }  // namespace foxsdr::slintkit
