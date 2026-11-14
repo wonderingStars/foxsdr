@@ -1264,7 +1264,16 @@ private:
     std::size_t zoomFft_ = 0;
     double zoomSpanHz_ = 0.0;
     std::atomic<std::size_t> mirrorZoomFft_{0};
+#if defined(_MSC_VER) || defined(__cpp_lib_atomic_shared_ptr)
     std::atomic<std::shared_ptr<cascade::dsp::ZoomFft>> zoom_;
+#else
+    // libstdc++ before GCC 12 has no std::atomic<std::shared_ptr>: the same load/store contract through the C++11 free functions.
+    struct ZoomSlot {
+        std::shared_ptr<cascade::dsp::ZoomFft> p;
+        std::shared_ptr<cascade::dsp::ZoomFft> load() const { return std::atomic_load(&p); }
+        void store(std::shared_ptr<cascade::dsp::ZoomFft> v) { std::atomic_store(&p, std::move(v)); }
+    } zoom_;
+#endif
     void rebuildZoom(double chanRate);
     std::unique_ptr<cascade::dsp::AfcTracker> afc_;
     bool afcOn_ = false;

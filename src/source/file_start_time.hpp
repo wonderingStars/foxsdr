@@ -92,7 +92,13 @@ inline std::pair<std::int64_t, int> recordingStart(const std::string& path, doub
     if (const auto ms = startFromName(p.filename().string())) { return {*ms, 1}; }
     const auto ft = std::filesystem::last_write_time(p, ec);
     if (ec) { return {0, 0}; }
+#if defined(_MSC_VER) || (defined(__cpp_lib_chrono) && __cpp_lib_chrono >= 201907L)
     const auto sys = std::chrono::clock_cast<std::chrono::system_clock>(ft);
+#else
+    // libstdc++ before GCC 13 has no clock_cast: the same instant as an offset from "now" read on both clocks (the precedent in crash_handler.cpp).
+    const auto sys = std::chrono::system_clock::now() +
+                     std::chrono::duration_cast<std::chrono::system_clock::duration>(ft - std::filesystem::file_time_type::clock::now());
+#endif
     const std::int64_t endMs = std::chrono::duration_cast<std::chrono::milliseconds>(sys.time_since_epoch()).count();
     const std::int64_t startMs = endMs - static_cast<std::int64_t>(durationSec * 1000.0);
     return startMs > 0 ? std::pair<std::int64_t, int>{startMs, 2} : std::pair<std::int64_t, int>{0, 0};
