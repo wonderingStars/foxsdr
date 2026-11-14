@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2379 | 716 | 117 | 1546 | 0 |
+| 2379 | 719 | 117 | 1543 | 0 |
 
-Of the 1491 rows that are controls (the 888 readout-like rows left out): 716 asserted, 117 driven without a read-back, 658 not drivable.
+Of the 1493 rows that are controls (the 886 readout-like rows left out): 719 asserted, 117 driven without a read-back, 657 not drivable.
 
-NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120, relocated 86, deferred 72, withheld in a bounded run 71, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 2.
+NOT DRIVABLE by reason: readout 886, other 225, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 71, deferred 71, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 2.
 
 ## Per section
 
@@ -194,8 +194,8 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | Patch — top band: transport, parts bin, decoder row, blueprints | 9 | 3 | 2 | 4 | 3 | 0 |
 | Patch — information pane (top-right of the band) | 5 | 0 | 0 | 5 | 5 | 0 |
 | Patch — canvas (patch_view.cpp) | 12 | 0 | 3 | 9 | 2 | 0 |
-| Patch — node faces (drawn over the plate) | 13 | 3 | 0 | 10 | 8 | 0 |
-| Patch — inspector drawer (right of the canvas; appears when a node is selected) | 24 | 0 | 0 | 24 | 9 | 0 |
+| Patch — node faces (drawn over the plate) | 13 | 5 | 0 | 8 | 6 | 0 |
+| Patch — inspector drawer (right of the canvas; appears when a node is selected) | 24 | 1 | 0 | 23 | 9 | 0 |
 | Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing) | 13 | 7 | 3 | 3 | 1 | 0 |
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
@@ -3008,8 +3008,8 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 1921 | Demod squelch | checkbox + slider + readout | NOT DRIVABLE | - | the Demod face was not in any dump yet (patch-canvas now adds a Demod node and dumps it); needs a third round |
 | 1922 | Speaker face | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1923 | Text-out face | list | NOT DRIVABLE | - | a readout, not a control |
-| 1924 | Spectrum face | readout + trace + waterfall | NOT DRIVABLE | - | a readout, not a control |
-| 1925 | Map face | readout + chart | NOT DRIVABLE | - | a readout, not a control |
+| 1924 | Spectrum face | readout + trace + waterfall | DRIVEN+ASSERTED | patch-faces | the generator radio started from the seeded patch: state patchface.s0.live == 1, span 2000000, peakfrac 0.63..0.67 (the tone at +300 kHz), abovefloor > 40, markers == 1; the Channel-fed part s1: span < 200000, peakfrac 0.40..0.60; both pictures change between two reads (moved); the window captured twice and the well's pixels measured |
+| 1925 | Map face | readout + chart | DRIVEN+ASSERTED | patch-faces-map | the ADS-B decoder's fixture aircraft (4D2025) on the part: state patchface.m0.sources == 1, targets >= 1, ids contains 4D2025, fitted == 1, the sentence "1 aircraft"; drag "Map"#2 moves the centre west, Zoom out / Zoom in double and halve the span |
 | 1926 | Decoder face | readout | NOT DRIVABLE | - | a readout, not a control |
 
 ### Patch — inspector drawer (right of the canvas; appears when a node is selected)
@@ -3029,7 +3029,7 @@ NOT DRIVABLE by reason: readout 888, other 225, needs a signal (no fixture) 120,
 | 1937 | Decoder: info | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1938 | Decoder: Plugin settings | list (form) | NOT DRIVABLE | - | the inspector needs a selected Decoder node and no decoder is fitted |
 | 1939 | Map: input count | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1940 | Map: Fit to targets / Whole world | button | NOT DRIVABLE | - | deferred: the Map face (the kit's MapPane on a node) is bespoke - next allowance; the inspector's Fit to targets / Whole world keys are drawn by the window only while a MapView exists, so they stay with the face |
+| 1940 | Map: Fit to targets / Whole world | button | DRIVEN+ASSERTED | patch-faces-map | press the Map node, click Whole world: state patchface.m0.span >= 360, lat == 0, lon == 0; click Fit to targets: span < 20, lat > 51 |
 | 1941 | Map: help | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1942 | Speaker: Sound goes to | dropdown/combo | NOT DRIVABLE | - | the inspector opens only when a node is selected, by a pointer press on a plate; no label yet |
 | 1943 | Speaker: readouts | readout | NOT DRIVABLE | - | a readout, not a control |

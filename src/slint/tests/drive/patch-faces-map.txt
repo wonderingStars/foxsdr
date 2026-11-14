@@ -1,0 +1,46 @@
+#! frames=900 size=1500x900 plugins=adsb-decoder open=module:adsb-decoder-1.9.1-abi3-win-x64.dll iqfile=adsb-decoder.wav centre=1090000000 mode=RAW bandwidth=2400000 patchdoc=patch-faces-map.patch
+# patch-faces-map (docs/multi-radio-records/patch-faces.md; ledger rows 1925 and 1940): the Map part's chart on the PATCH page. The ADS-B decoder plugin decodes the fixture recording (one aircraft, ICAO
+# 4D2025, callsign FOXSDR1, near 51.5 N 0.1 W: the same target tests/drive/fixture-adsb-decoder.txt reads back); the seeded patch holds the ADS-B part wired into a Map part, so the aircraft are
+# the targets of the part. Every figure is read from the part's view and its projected targets (`state patchface.m<k>.<what>`) and the window is captured.
+120 state kit.plugins == 1
++1 click "START"
++60 state decodersRunning >= 1
++300 state kit.tracks >= 1
+# to the PATCH page: the part has its source, its target, a view fitted to it and the sentence of its counts
++1 click "PATCH"
++40 state patchface.m0.sources == 1
+state patchface.m0.targets >= 1
+state patchface.m0.ids contains 4D2025
+state patchface.m0.fitted == 1
+state patchface.m0.sentence contains "1 aircraft"
+state patchface.m0.lat > 51
+state patchface.m0.lat < 52
+state patchface.m0.moved == 1
++1 shot "pf-map-1.png"
+# THE INSPECTOR'S TWO KEYS: Whole world shows the planet (the span the picture's shape needs, centred on 0, 0), Fit to targets comes back to the aircraft
++1 press "Aircraft map"
++5 expect "Whole world" enabled equals "true"
++1 click "Whole world"
++10 state patchface.m0.span >= 360
+state patchface.m0.lat == 0
+state patchface.m0.lon == 0
+state patchface.m0.moved == 1
++1 shot "pf-map-2.png"
++1 click "Fit to targets"
++10 state patchface.m0.span < 20
+state patchface.m0.lat > 51
+state patchface.m0.moved == 1
++1 shot "pf-map-3.png"
+# THE CHART'S OWN GESTURES: Zoom out doubles the span (the fitted one is about 0.15 degrees: one aircraft), Zoom in halves it again, a drag to the right pulls the picture with the hand so the centre goes west
++1 state patchface.m0.span < 0.2
++1 click "Zoom out"
++10 state patchface.m0.span > 0.25
+state patchface.m0.span < 0.4
++1 click "Zoom in"
++10 state patchface.m0.span < 0.2
++1 state patchface.m0.lon > -0.11
++1 drag "Map"#2 80 0
++10 state patchface.m0.lon < -0.11
+state patchface.m0.moved == 1
++1 shot "pf-map-4.png"
++1 dump

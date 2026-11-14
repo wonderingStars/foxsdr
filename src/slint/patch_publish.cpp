@@ -3,9 +3,13 @@
 #include "patch_publish.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <set>
 
@@ -13,6 +17,7 @@
 #include "core/config.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
+#include "patch_faces.hpp"
 #include "signatures.hpp"
 
 namespace foxsdr::slintpatch {
@@ -281,8 +286,19 @@ struct PatchPublisher::Impl {
     // The settings file's half: the saved patch, the presets, the previous-patch slot (the Interface half HostDuties holds).
     class Config final : public PatchConfig {
     public:
-        explicit Config(foxsdr::slinthost::HostDuties& d) : d_(d) {}
-        std::string patch() const override { return d_.interfaceHalf().patch; }
+        Config(foxsdr::slinthost::HostDuties& d, bool bounded) : d_(d), bounded_(bounded) {}
+        // FOXSDR_SLINT_PATCH_DOC (a bounded run only; the drive header's patchdoc=): a patch document the page restores in place of the profile's saved patch, so a script can start from a
+        // known graph (docs/multi-radio-records/patch-faces.md). Nothing is ever written to it.
+        std::string patch() const override {
+            if (bounded_) {
+                if (const char* f = std::getenv("FOXSDR_SLINT_PATCH_DOC"); f != nullptr && *f != '\0') {
+                    std::ifstream in(f, std::ios::binary);
+                    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                    if (!text.empty()) { return text; }
+                }
+            }
+            return d_.interfaceHalf().patch;
+        }
         std::vector<cc::PatchPreset> presets() const override { return d_.interfaceHalf().patchPresets; }
         std::string previous() const override { return d_.interfaceHalf().patchPresetPrevious; }
         void savePatch(const std::string& text) override {
@@ -299,6 +315,7 @@ struct PatchPublisher::Impl {
 
     private:
         foxsdr::slinthost::HostDuties& d_;
+        bool bounded_ = false;
     };
     // What a command's ticket costs: the kit's one submit.
     class Sub final : public Submitter {
@@ -342,7 +359,7 @@ struct PatchPublisher::Impl {
     std::vector<std::string> answers;
     std::int64_t tickNo = 0;
 
-    Impl(PatchPublisher& p, foxsdr::slinthost::HostDuties& duties) : self(p), table(p.api_, p.session_), config(duties), sub(*this) {
+    Impl(PatchPublisher& p, foxsdr::slinthost::HostDuties& duties) : self(p), table(p.api_, p.session_), config(duties, p.bounded_), sub(*this) {
         page.setConfig(&config);
         page.setKit(&p.kit_.lists());
     }
@@ -352,7 +369,15 @@ struct PatchPublisher::Impl {
     // ---- commands ----
     // A bounded run lets through only the two ops that touch the engine's graph and nothing outside it: the draft's SET_GRAPH and the view-shown flag. Every other op is said once
     // by its code and NOT sent (ticket 0: the logic then does what the window does with a refusal).
-    static bool boundedMaySend(std::uint32_t op) { return op == FOXAPP_OP_PATCH_SET_GRAPH || op == FOXAPP_OP_SET_PATCH_PAGE_OPEN; }
+    // FOXSDR_SLINT_PATCH_RUN=1 (a bounded run only; patch faces, docs/multi-radio-records/patch-faces.md): START and ALL OFF go through too, so a drive script can run a patch whose radio is
+    // the signal generator (a scratch run has no other device) and read the faces back. Nothing but the engine's own generator is ever opened by it.
+    static bool patchRunSeam() {
+        const char* e = std::getenv("FOXSDR_SLINT_PATCH_RUN");
+        return e != nullptr && e[0] == '1';
+    }
+    static bool boundedMaySend(std::uint32_t op) {
+        return op == FOXAPP_OP_PATCH_SET_GRAPH || op == FOXAPP_OP_SET_PATCH_PAGE_OPEN || (patchRunSeam() && (op == FOXAPI_OP_PATCH_RUN || op == FOXAPI_OP_PATCH_ALL_OFF));
+    }
 
     std::uint64_t send(const Command& c) {
         if (!c.valid) { return 0u; }
@@ -428,6 +453,315 @@ struct PatchPublisher::Impl {
     }
 
     // ---- the plugin settings form of a decoder node: the kit's rows, updated in place ----
+    // ---- THE LIVE FACES (patch_faces.hpp; docs/multi-radio-records/patch-faces.md) ----
+    // A Spectrum part keeps a well (its two pictures, painted by the receiver's own painters) and the images the window was last given; a radio's frame is read once a tick however many
+    // parts hang off it. A Map part keeps a view and a compositor of its own (the map pages' compositor), its targets and what MapPane places. All of it is touched only while the PATCH
+    // view is showing (publish() does not call into it otherwise) and exists only for the parts the draft holds.
+    struct SpecFace {
+        SpectrumWell well;
+        std::uint64_t pushedSeq = 0;
+        bool pushed = false, live = false;
+        slint::Image trace, waterfall;
+        std::uint64_t revision = 0;
+        std::vector<SpectrumMarker> markers;
+        SpectrumSlice slice;
+    };
+    struct RadioFrame {
+        std::vector<float> bins;
+        std::uint64_t seq = 0;
+        bool have = false;
+    };
+    struct MapFace {
+        foxsdr::slintmap::TileCompositor comp;
+        MapFaceView view;
+        int w = 0, h = 0;
+        bool sourceSet = false, placed = false, zoomIn = true, zoomOut = true;
+        std::string attribution, hover, scaleText;
+        float scaleFrac = 0.0f;
+        std::array<slint::SharedPixelBuffer<slint::Rgba8Pixel>, 2> buffers;
+        int which = 0;
+        slint::Image base;
+        std::vector<MapFaceTarget> targets;
+        std::vector<std::string> targetIds;
+        std::size_t sources = 0;
+        std::uint64_t revision = 0;
+    };
+    std::map<pc::NodeId, SpecFace> specs;
+    std::map<pc::NodeId, RadioFrame> radioFrames;
+    std::map<pc::NodeId, std::unique_ptr<MapFace>> maps;
+    std::shared_ptr<slint::VectorModel<::FaceLive>> lives = std::make_shared<slint::VectorModel<::FaceLive>>();
+    std::vector<std::string> liveSigs;
+    std::vector<float> frameScratch = std::vector<float>(16384);
+    mutable std::map<std::string, std::string> lastLook;      // faceState "moved": what the pictures looked like the last time it was read
+    mutable std::map<std::string, std::uint64_t> lastFrames;  // faceState "framesdelta": the frame count the last time it was read
+
+    static cc::TrackPresentation presentOf(const CascadeTrack& t) { return cc::trackPresentation(t); }
+
+    // One radio's newest frame (read_node_spectrum with the held sequence as the cursor: NO_CHANGE keeps the frame); NOT_FOUND drops it. The buffer is the engine's own bin count.
+    void readRadioFrame(pc::NodeId radio) {
+        RadioFrame& rf = radioFrames[radio];
+        if (frameScratch.size() < 4096u) { frameScratch.resize(4096u); }
+        FoxSpectrumInfo info{};
+        info.structSize = sizeof(info);
+        std::int32_t r = self.api_->read_node_spectrum(self.session_, radio, rf.have ? rf.seq : 0u, &info, frameScratch.data(), static_cast<std::uint32_t>(frameScratch.size()));
+        if (r == FOXAPI_OK && info.binCount > frameScratch.size()) {
+            frameScratch.resize(info.binCount);
+            r = self.api_->read_node_spectrum(self.session_, radio, 0u, &info, frameScratch.data(), static_cast<std::uint32_t>(frameScratch.size()));
+        }
+        if (r == FOXAPI_OK) {
+            rf.bins.assign(frameScratch.begin(), frameScratch.begin() + static_cast<std::ptrdiff_t>(std::min<std::size_t>(info.copied, frameScratch.size())));
+            rf.seq = info.seq;
+            rf.have = !rf.bins.empty();
+        } else if (r != FOXAPI_NO_CHANGE) {
+            rf.have = false;
+            rf.bins.clear();
+            rf.seq = 0;
+        }
+    }
+
+    static slint::Image imageOf(const std::vector<foxsdr::slinthost::Rgba>& px, std::uint32_t w, std::uint32_t h) {
+        slint::SharedPixelBuffer<slint::Rgba8Pixel> buf(w, h);
+        if (!px.empty() && px.size() == static_cast<std::size_t>(w) * h) { std::memcpy(buf.begin(), px.data(), sizeof(slint::Rgba8Pixel) * px.size()); }
+        return slint::Image(buf);
+    }
+
+    // ONCE A TICK WHILE THE VIEW SHOWS: every wired Spectrum part takes its radio's newest frame (a new row), is reshaped to its node's size and slice, and hands the window two new pictures.
+    void readSpectra() {
+        const pc::Graph& g = page.draft().graph();
+        std::set<pc::NodeId> displays;
+        for (const pc::Node& n : g.nodes()) {
+            if (n.kind == pc::NodeKind::Display) { displays.insert(n.id); }
+        }
+        for (auto it = specs.begin(); it != specs.end();) { it = displays.count(it->first) != 0u ? std::next(it) : specs.erase(it); }
+        std::map<pc::NodeId, SpectrumSlice> slices;
+        std::set<pc::NodeId> wanted;
+        for (const pc::NodeId id : displays) {
+            slices[id] = spectrumSliceOf(g, id, page.lists());
+            const SpectrumSlice& s = slices[id];
+            if (s.wired && s.radio_open && s.radio != pc::kNoNode) { wanted.insert(s.radio); }
+        }
+        for (auto it = radioFrames.begin(); it != radioFrames.end();) { it = wanted.count(it->first) != 0u ? std::next(it) : radioFrames.erase(it); }
+        const bool canRead = self.api_ != nullptr && self.session_ != nullptr && FOXAPI_HAS(self.api_, read_node_spectrum);
+        std::set<pc::NodeId> have;
+        for (const pc::NodeId radio : wanted) {
+            if (canRead) { readRadioFrame(radio); }
+            const auto it = radioFrames.find(radio);
+            if (it != radioFrames.end() && it->second.have) { have.insert(radio); }
+        }
+        page.setSpectrumHave(have);
+        for (const pc::NodeId id : displays) {
+            SpecFace& sf = specs[id];
+            const SpectrumSlice& s = slices[id];
+            const pc::Node* node = g.find(id);
+            const pg::Vec2 sz = node != nullptr ? pg::nodeSize(*node) : pg::Vec2{0.0f, 0.0f};
+            const WellSize ws = wellSizeOf(sz.x, sz.y);
+            sf.slice = s;
+            sf.markers = s.wired ? spectrumMarkersOf(g, id, page.lists(), s) : std::vector<SpectrumMarker>{};
+            if (!s.wired || have.count(s.radio) == 0u || !ws.usable()) {
+                if (sf.live) { ++sf.revision; }
+                sf.live = false;
+                sf.pushed = false;
+                continue;
+            }
+            if (sf.well.shape(ws, s.lo_hz, s.hi_hz, s.rate_hz)) { sf.pushed = false; }
+            const RadioFrame& rf = radioFrames[s.radio];
+            if (!sf.pushed || sf.pushedSeq != rf.seq) {
+                if (sf.well.push(rf.bins)) {
+                    sf.trace = imageOf(sf.well.trace(), sf.well.size().w, sf.well.size().traceH);
+                    sf.waterfall = imageOf(sf.well.waterfall(), sf.well.size().w, sf.well.size().wfH);
+                    sf.pushed = true;
+                    sf.pushedSeq = rf.seq;
+                    ++sf.revision;
+                }
+            }
+            if (!sf.live && sf.pushed) { ++sf.revision; }
+            sf.live = sf.pushed;
+        }
+    }
+
+    // ---- the Map faces ----
+    MapFace* mapFor(pc::NodeId node, bool create) {
+        const pc::Node* n = page.draft().graph().find(node);
+        if (n == nullptr || n->kind != pc::NodeKind::Map) { return nullptr; }
+        auto it = maps.find(node);
+        if (it == maps.end()) {
+            if (!create) { return nullptr; }
+            it = maps.emplace(node, std::make_unique<MapFace>()).first;
+        }
+        return it->second.get();
+    }
+    std::vector<cc::HostTrack> tracksOf(pc::NodeId node) const {
+        return tracksOfSources(self.kit_.tracks(), pc::mapSources(page.draft().graph(), node, page.lists().parts));
+    }
+    static std::string hoverTextOf(const cc::HostTrack& tr) {
+        std::string s = tr.t.label[0] != '\0' ? std::string(tr.t.label) : std::string(tr.t.id);
+        char b[48];
+        if (std::isfinite(tr.t.altM)) { std::snprintf(b, sizeof(b), " \xC2\xB7 %.0f ft", tr.t.altM * 3.28084); s += b; }
+        if (std::isfinite(tr.t.speedMps)) { std::snprintf(b, sizeof(b), " \xC2\xB7 %.0f kt", tr.t.speedMps * 1.94384); s += b; }
+        return s;
+    }
+    static slint::Color kindColour(std::uint32_t kind) {   // kit_publish.cpp's colours for a target's kind
+        switch (kind) {
+            case CASCADE_TRACK_AIRCRAFT: return slint::Color::from_argb_uint8(255, 0xf5, 0xa5, 0x24);
+            case CASCADE_TRACK_VESSEL: return slint::Color::from_argb_uint8(255, 0x7a, 0xd7, 0xff);
+            case CASCADE_TRACK_STATION: return slint::Color::from_argb_uint8(255, 0x3d, 0xdc, 0x84);
+            case CASCADE_TRACK_SATELLITE: return slint::Color::from_argb_uint8(255, 0xe6, 0xe8, 0xec);
+            default: return slint::Color::from_argb_uint8(255, 0xc9, 0xce, 0xd6);
+        }
+    }
+
+    // ONCE A TICK WHILE THE VIEW SHOWS: each Map part composes its picture (the basemap's tiles or the coastline, the graticule, the receiver's rings) and projects the targets of the
+    // decoders wired into it. The view is fitted to the targets the first time there are any, as the ImGui part's is.
+    void tickMaps(const FoxReceiverState& state) {
+        const pc::Graph& g = page.draft().graph();
+        std::set<pc::NodeId> present;
+        for (const pc::Node& n : g.nodes()) {
+            if (n.kind == pc::NodeKind::Map) { present.insert(n.id); }
+        }
+        for (auto it = maps.begin(); it != maps.end();) { it = present.count(it->first) != 0u ? std::next(it) : maps.erase(it); }
+        const bool home = (state.flags & FOXAPI_RX_POSITION_SET) != 0u;
+        for (const pc::NodeId id : present) {
+            MapFace& mf = *mapFor(id, true);
+            const std::vector<cc::HostTrack> mine = tracksOf(id);
+            mf.sources = pc::mapSources(g, id, page.lists().parts).size();
+            if (mf.w < 16 || mf.h < 16) { continue; }   // the picture's size comes with the face (face-map-resized)
+            if (!mf.placed) {
+                // A fresh part opens on the receiver's position when it has one, else the whole planet; the first targets pull it to them (below).
+                if (home) {
+                    mf.view.centreLat = state.rxLatDeg;
+                    mf.view.centreLon = state.rxLonDeg;
+                    mf.view.spanDeg = 20.0;
+                } else {
+                    wholeWorld(mf.view, mf.w, mf.h, false);
+                    mf.view.fitted = false;
+                }
+                mf.placed = true;
+            }
+            if (!mf.view.fitted && !mine.empty()) { (void)fitToTargets(mf.view, mine, mf.w, mf.h, &presentOf); }
+            foxsdr::slintkit::BasemapClient& bm = self.kit_.basemap();
+            const bool tiles = bm.active();
+            if (tiles != mf.sourceSet || (tiles && bm.attribution() != mf.attribution)) {
+                mf.sourceSet = tiles;
+                mf.attribution = tiles ? bm.attribution() : std::string();
+                if (tiles) {
+                    mf.comp.setTileSource([&bm](std::uint32_t z, std::uint32_t x, std::uint32_t y, std::vector<std::uint8_t>& rgb) { return static_cast<int>(bm.rawTile(z, x, y, rgb)); }, bm.tileSize(), bm.minZoom(),
+                                          bm.maxZoom());
+                } else {
+                    mf.comp.setTileSource(foxsdr::slintmap::TileSource{}, 256, 0, 0);
+                }
+                mf.comp.setMercator(tiles);
+            }
+            const foxsdr::slintmap::MapLook& look = self.pages_.mapLook();
+            mf.comp.setSize(mf.w, mf.h);
+            mf.comp.setView(mf.view.centreLat, mf.view.centreLon, mf.view.spanDeg);
+            mf.comp.setLayers(!tiles, true);
+            mf.comp.setTrailLook(look.trailWidthPx, look.iconPx, look.trailStyle);
+            mf.comp.setHome(home, state.rxLatDeg, state.rxLonDeg);
+            auto& buf = mf.buffers[static_cast<std::size_t>(mf.which)];
+            if (buf.width() != static_cast<std::uint32_t>(mf.w) || buf.height() != static_cast<std::uint32_t>(mf.h)) { buf = slint::SharedPixelBuffer<slint::Rgba8Pixel>(static_cast<std::uint32_t>(mf.w), static_cast<std::uint32_t>(mf.h)); }
+            bool changed = false;
+            if (mf.comp.compose(reinterpret_cast<std::uint8_t*>(buf.begin()), mf.w, mf.h)) {
+                mf.which ^= 1;
+                auto& other = mf.buffers[static_cast<std::size_t>(mf.which)];
+                if (other.width() != buf.width() || other.height() != buf.height()) { other = slint::SharedPixelBuffer<slint::Rgba8Pixel>(buf.width(), buf.height()); }
+                std::memcpy(other.begin(), buf.begin(), sizeof(slint::Rgba8Pixel) * buf.width() * buf.height());
+                mf.base = slint::Image(mf.buffers[static_cast<std::size_t>(mf.which ^ 1)]);
+                changed = true;
+            }
+            const std::vector<MapFaceTarget> now = projectTargets(mine, mf.comp, look, &presentOf);
+            std::string was, is;
+            for (const MapFaceTarget& t : mf.targets) { was += t.id + std::to_string(t.x) + std::to_string(t.y) + std::to_string(t.alpha) + ";"; }
+            for (const MapFaceTarget& t : now) { is += t.id + std::to_string(t.x) + std::to_string(t.y) + std::to_string(t.alpha) + ";"; }
+            if (was != is) { changed = true; }
+            mf.targets = now;
+            mf.targetIds.clear();
+            for (const MapFaceTarget& t : now) { mf.targetIds.push_back(t.id); }
+            // the scale bar, the map pages' own steps
+            std::string scale;
+            float frac = 0.0f;
+            const double mpp = mf.comp.metresPerPixel();
+            if (mpp > 0.0) {
+                static const double steps[] = {100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000, 2000000, 5000000};
+                double pick = steps[0];
+                for (const double st : steps) { if (st / mpp <= 0.3 * mf.w) { pick = st; } }
+                frac = static_cast<float>(pick / mpp / mf.w);
+                char b[32];
+                std::snprintf(b, sizeof(b), pick >= 1000.0 ? "%.0f km" : "%.0f m", pick >= 1000.0 ? pick / 1000.0 : pick);
+                scale = b;
+            }
+            const bool zi = mf.view.spanDeg > foxsdr::slintmap::TileCompositor::kMinSpanDeg, zo = mf.view.spanDeg < foxsdr::slintmap::TileCompositor::kMaxSpanDeg;
+            if (scale != mf.scaleText || frac != mf.scaleFrac || zi != mf.zoomIn || zo != mf.zoomOut) { changed = true; }
+            mf.scaleText = scale;
+            mf.scaleFrac = frac;
+            mf.zoomIn = zi;
+            mf.zoomOut = zo;
+            if (changed) { ++mf.revision; }
+        }
+    }
+
+    // What a node's FaceLive row says, as a signature (so a row is set only when it moved).
+    std::string liveSigOf(const CanvasNode& n) {
+        Sig g;
+        if (n.kind == static_cast<int>(pc::NodeKind::Display)) {
+            const auto it = specs.find(static_cast<pc::NodeId>(n.id));
+            if (it == specs.end()) { return std::string(); }
+            g << "S" << it->second.live << static_cast<long long>(it->second.revision);
+            for (const SpectrumMarker& m : it->second.markers) { g << m.pos << m.label; }
+        } else if (n.kind == static_cast<int>(pc::NodeKind::Map)) {
+            const auto it = maps.find(static_cast<pc::NodeId>(n.id));
+            if (it == maps.end()) { return std::string(); }
+            g << "M" << static_cast<long long>(it->second->revision) << it->second->hover << it->second->attribution;
+        }
+        return g.s;
+    }
+    ::FaceLive makeLive(const CanvasNode& n) {
+        ::FaceLive o{};
+        std::vector<::FaceMarker> markers;
+        std::vector<::MapTarget> targets;
+        if (n.kind == static_cast<int>(pc::NodeKind::Display)) {
+            const auto it = specs.find(static_cast<pc::NodeId>(n.id));
+            if (it != specs.end()) {
+                o.have_spectrum = it->second.live;
+                if (it->second.live) {
+                    o.trace = it->second.trace;
+                    o.waterfall = it->second.waterfall;
+                    for (const SpectrumMarker& m : it->second.markers) { markers.push_back(::FaceMarker{m.pos, ss(m.label)}); }
+                }
+            }
+        } else if (n.kind == static_cast<int>(pc::NodeKind::Map)) {
+            const auto it = maps.find(static_cast<pc::NodeId>(n.id));
+            o.have_map = it != maps.end();
+            if (it != maps.end()) {
+                const MapFace& mf = *it->second;
+                o.map_base = mf.base;
+                for (const MapFaceTarget& t : mf.targets) {
+                    ::MapTarget mt{};
+                    mt.id = ss(t.id);
+                    mt.x = t.x;
+                    mt.y = t.y;
+                    mt.heading = t.heading;
+                    mt.kind = t.kind;
+                    mt.label = ss(t.label);
+                    mt.alpha = t.alpha;
+                    mt.estimated = t.estimated;
+                    mt.emergency = t.emergency;
+                    mt.color = kindColour(static_cast<std::uint32_t>(t.kind));
+                    mt.size = t.size;
+                    targets.push_back(std::move(mt));
+                }
+                o.map_scale_text = ss(mf.scaleText);
+                o.map_scale_frac = mf.scaleFrac;
+                o.map_attribution = ss(mf.sourceSet ? mf.attribution : std::string(tr("Coastline: Natural Earth (public domain)")));
+                o.map_zoom_in = mf.zoomIn;
+                o.map_zoom_out = mf.zoomOut;
+                o.map_hover = ss(mf.hover);
+            }
+        }
+        o.markers = model(std::move(markers));
+        o.map_targets = model(std::move(targets));
+        return o;
+    }
+
     std::shared_ptr<slint::Model<::SettingField>> settingsModel(const InspectorDecoder& d, std::string& sig) {
         std::vector<::SettingField> fields;
         for (const foxsdr::slintkit::SettingSpec& s : d.settings) {
@@ -504,6 +838,10 @@ struct PatchPublisher::Impl {
         for (const CanvasWire& w : m.wires) { wireNow.push_back(w.path + "|" + std::to_string(w.tone) + (w.selected ? "s" : "")); }
         syncRows(nodes, nodeSigs, nodeNow, [&](std::size_t i) { return mapNode(m.nodes[i], pictureOf(static_cast<pc::NodeId>(m.nodes[i].id), m.nodes[i].face.picture_id, m.nodes[i].face.have_picture)); });
         syncRows(wires, wireSigs, wireNow, [&](std::size_t i) { return ::CanvasWire{ss(m.wires[i].path), m.wires[i].tone, m.wires[i].selected}; });
+        std::vector<std::string> liveNow;
+        liveNow.reserve(m.nodes.size());
+        for (const CanvasNode& n : m.nodes) { liveNow.push_back(liveSigOf(n)); }
+        syncRows(lives, liveSigs, liveNow, [&](std::size_t i) { return makeLive(m.nodes[i]); });
         Sig g;
         g << m.zoom << m.faces_live << m.grid_step << m.grid_ox << m.grid_oy << m.ghost << m.refusal.shown << m.refusal.text << m.refusal.x << m.refusal.y << m.keys_shown;
         for (const std::string& s : nodeNow) { g << s.size(); }
@@ -516,6 +854,7 @@ struct PatchPublisher::Impl {
         o.grid_oy = m.grid_oy;
         o.nodes = nodes;
         o.wires = wires;
+        o.lives = lives;
         o.ghost = ss(m.ghost);
         o.refusal = ::Refusal{m.refusal.shown, ss(m.refusal.text), m.refusal.x, m.refusal.y};
         o.keys_shown = m.keys_shown;
@@ -705,12 +1044,127 @@ void PatchPublisher::publish(const FoxReceiverState& state) {
     if (showing) {
         m.readPictures();
         m.dropGonePictures();
+        m.readSpectra();
+        m.tickMaps(state);
         if (bounded_ && probe_) { m.runProbe(); }
         m.publishBand();
         m.publishCanvas();
         m.publishInspector();
     }
     if (presets != View::Closed) { m.publishPresets(); }
+}
+
+// A BOUNDED RUN'S READ-BACK OF THE FACES (main.cpp: `state patchface.<s|m><k>.<what>`; s = the k-th Spectrum part, m = the k-th Map part, in the draft's order). Every figure is
+// measured from the pictures and the view the faces were painted from, so a drive script reads what the eye would.
+std::string PatchPublisher::faceState(const std::string& name, std::string& out) const {
+    const Impl& m = *impl_;
+    if (name.size() < 4 || (name[0] != 's' && name[0] != 'm')) { return "patchface.<s|m><k>.<what>, not patchface." + name; }
+    const std::size_t dot = name.find('.');
+    if (dot == std::string::npos || dot < 2) { return "patchface.<s|m><k>.<what>, not patchface." + name; }
+    const bool spectrum = name[0] == 's';
+    const std::size_t k = static_cast<std::size_t>(std::atoi(name.substr(1, dot - 1).c_str()));
+    const std::string what = name.substr(dot + 1);
+    const pc::Graph& g = m.page.draft().graph();
+    const pc::NodeKind want = spectrum ? pc::NodeKind::Display : pc::NodeKind::Map;
+    const pc::Node* node = nullptr;
+    std::size_t seen = 0;
+    for (const pc::Node& n : g.nodes()) {
+        if (n.kind != want) { continue; }
+        if (seen++ == k) { node = &n; break; }
+    }
+    if (node == nullptr) { return "no " + std::string(spectrum ? "Spectrum" : "Map") + " part number " + std::to_string(k); }
+    const auto num = [](double v) { char b[48]; std::snprintf(b, sizeof(b), "%.4f", v); return std::string(b); };
+    if (what == "id") { out = std::to_string(static_cast<long long>(node->id)); return std::string(); }
+    if (what == "sentence") {
+        const CanvasModel cm = m.page.canvasModel();
+        out.clear();
+        for (const CanvasNode& cn : cm.nodes) {
+            if (cn.id != static_cast<int>(node->id)) { continue; }
+            for (const FaceLine& l : cn.face.lines) { out += (out.empty() ? "" : " | ") + l.text; }
+        }
+        return std::string();
+    }
+    if (spectrum) {
+        const auto it = m.specs.find(node->id);
+        if (it == m.specs.end()) { return "that Spectrum part has not been looked at yet (the view is not showing?)"; }
+        const Impl::SpecFace& sf = it->second;
+        const SpectrumWell& w = sf.well;
+        if (what == "moved") {   // 1 when the two pictures differ from what the last read of this figure saw (the first read sees an empty well)
+            char b[40];
+            std::snprintf(b, sizeof(b), "%016llx%016llx", static_cast<unsigned long long>(w.traceHash()), static_cast<unsigned long long>(w.waterfallHash()));
+            std::string& last = m.lastLook["s" + std::to_string(k)];
+            out = last != b ? "1" : "0";
+            last = b;
+        }
+        else if (what == "framesdelta") {   // the frames the well has taken since the last read of this figure
+            std::uint64_t& last = m.lastFrames["s" + std::to_string(k)];
+            out = std::to_string(w.frames() >= last ? w.frames() - last : w.frames());
+            last = w.frames();
+        }
+        else if (what == "live") { out = sf.live ? "1" : "0"; }
+        else if (what == "wired") { out = sf.slice.wired ? "1" : "0"; }
+        else if (what == "channel") { out = sf.slice.channel ? "1" : "0"; }
+        else if (what == "frames") { out = std::to_string(w.frames()); }
+        else if (what == "span") { out = num(sf.slice.hi_hz - sf.slice.lo_hz); }
+        else if (what == "lo") { out = num(sf.slice.lo_hz); }
+        else if (what == "hi") { out = num(sf.slice.hi_hz); }
+        else if (what == "rate") { out = num(sf.slice.rate_hz); }
+        else if (what == "width") { out = std::to_string(w.size().w); }
+        else if (what == "traceh") { out = std::to_string(w.size().traceH); }
+        else if (what == "wfh") { out = std::to_string(w.size().wfH); }
+        else if (what == "peakcol") { out = std::to_string(w.peakColumn()); }
+        else if (what == "peakfrac") { out = num(w.size().w > 0 && w.peakColumn() >= 0 ? (static_cast<double>(w.peakColumn()) + 0.5) / static_cast<double>(w.size().w) : -1.0); }
+        else if (what == "peakdb") { out = num(w.peakDb()); }
+        else if (what == "floordb") { out = num(w.floorDb()); }
+        else if (what == "abovefloor") { out = num(static_cast<double>(w.peakDb()) - static_cast<double>(w.floorDb())); }
+        else if (what == "rows") { out = std::to_string(w.litWaterfallRows()); }
+        else if (what == "thash") { char b[24]; std::snprintf(b, sizeof(b), "%016llx", static_cast<unsigned long long>(w.traceHash())); out = b; }
+        else if (what == "whash") { char b[24]; std::snprintf(b, sizeof(b), "%016llx", static_cast<unsigned long long>(w.waterfallHash())); out = b; }
+        else if (what == "markers") { out = std::to_string(sf.markers.size()); }
+        else if (what == "markernames") { out.clear(); for (const SpectrumMarker& mk : sf.markers) { out += (out.empty() ? "" : " | ") + mk.label; } }
+        else if (what == "revision") { out = std::to_string(sf.revision); }
+        else { return "patchface.s<k>.<id|sentence|moved|framesdelta|live|wired|channel|frames|span|lo|hi|rate|width|traceh|wfh|peakcol|peakfrac|peakdb|floordb|abovefloor|rows|thash|whash|markers|markernames|revision>, not " + name; }
+        return std::string();
+    }
+    const auto it = m.maps.find(node->id);
+    if (it == m.maps.end()) { return "that Map part has not been looked at yet (the view is not showing?)"; }
+    const Impl::MapFace& mf = *it->second;
+    if (what == "moved") {   // 1 when the chart or its targets differ from what the last read of this figure saw
+        std::string look = std::to_string(mf.revision);
+        std::string& last = m.lastLook["m" + std::to_string(k)];
+        out = last != look ? "1" : "0";
+        last = look;
+    }
+    else if (what == "targets") { out = std::to_string(mf.targets.size()); }
+    else if (what == "sources") { out = std::to_string(mf.sources); }
+    else if (what == "span") { out = num(mf.view.spanDeg); }
+    else if (what == "lat") { out = num(mf.view.centreLat); }
+    else if (what == "lon") { out = num(mf.view.centreLon); }
+    else if (what == "fitted") { out = mf.view.fitted ? "1" : "0"; }
+    else if (what == "width") { out = std::to_string(mf.w); }
+    else if (what == "height") { out = std::to_string(mf.h); }
+    else if (what == "revision") { out = std::to_string(mf.revision); }
+    else if (what == "hover") { out = mf.hover; }
+    else if (what == "scale") { out = mf.scaleText; }
+    else if (what == "ids") { out.clear(); for (const std::string& id : mf.targetIds) { out += (out.empty() ? "" : " | ") + id; } }
+    else if (what == "xs") { out.clear(); for (const MapFaceTarget& t : mf.targets) { out += (out.empty() ? "" : " | ") + num(t.x); } }
+    else if (what == "ys") { out.clear(); for (const MapFaceTarget& t : mf.targets) { out += (out.empty() ? "" : " | ") + num(t.y); } }
+    else if (what == "basehash") {   // the composed picture's fingerprint (the pixels the pane was given)
+        std::uint64_t h = 1469598103934665603ull;
+        const auto& buf = mf.buffers[static_cast<std::size_t>(mf.which ^ 1)];
+        const slint::Rgba8Pixel* px = buf.begin();
+        const std::size_t n = static_cast<std::size_t>(buf.width()) * buf.height();
+        for (std::size_t i = 0; i < n; ++i) {
+            h = (h ^ px[i].r) * 1099511628211ull;
+            h = (h ^ px[i].g) * 1099511628211ull;
+            h = (h ^ px[i].b) * 1099511628211ull;
+        }
+        char b[24];
+        std::snprintf(b, sizeof(b), "%016llx", static_cast<unsigned long long>(h));
+        out = b;
+    }
+    else { return "patchface.m<k>.<id|sentence|moved|targets|sources|span|lat|lon|fitted|width|height|revision|hover|scale|ids|xs|ys|basehash>, not " + name; }
+    return std::string();
 }
 
 std::string PatchPublisher::summaryLine() const {
@@ -770,6 +1224,44 @@ void PatchPublisher::wire() {
     ev.on_face_mode([&page](int node, int index) { page.faceMode(node, index); });
     ev.on_face_squelch_on([&page](int node, bool on) { page.faceSquelchOn(node, on); });
     ev.on_face_squelch([&page](int node, float norm) { page.faceSquelch(node, norm); });
+    // the Map face (docs/multi-radio-records/patch-faces.md): the view moves as the map pages' does
+    ev.on_face_map_resized([m](int node, float w, float h) {
+        if (Impl::MapFace* mf = m->mapFor(node, true)) {
+            mf->w = static_cast<int>(std::clamp(w, 0.0f, 2400.0f));
+            mf->h = static_cast<int>(std::clamp(h, 0.0f, 2400.0f));
+        }
+    });
+    ev.on_face_map_panned([m](int node, float dx, float dy) {
+        if (Impl::MapFace* mf = m->mapFor(node, false)) { panView(mf->view, mf->comp, dx, dy); }
+    });
+    ev.on_face_map_zoomed([m](int node, int notches, float fx, float fy) {
+        if (Impl::MapFace* mf = m->mapFor(node, false)) { zoomView(mf->view, mf->comp, std::pow(0.85, notches), fx, fy); }
+    });
+    ev.on_face_map_zoom_key([m](int node, int dir) {
+        if (Impl::MapFace* mf = m->mapFor(node, false)) { zoomView(mf->view, mf->comp, dir > 0 ? 0.5 : 2.0, 0.5f, 0.5f); }
+    });
+    ev.on_face_map_hovered([m](int node, int index) {
+        Impl::MapFace* mf = m->mapFor(node, false);
+        if (mf == nullptr) { return; }
+        mf->hover.clear();
+        if (index >= 0 && index < static_cast<int>(mf->targetIds.size())) {
+            for (const cc::HostTrack& t : m->tracksOf(node)) {
+                if (mf->targetIds[static_cast<std::size_t>(index)] == t.t.id) {
+                    mf->hover = Impl::hoverTextOf(t);
+                    break;
+                }
+            }
+        }
+        ++mf->revision;
+    });
+    ev.on_inspector_map_fit([m] {
+        Impl::MapFace* mf = m->mapFor(m->page.selected(), false);
+        if (mf != nullptr && mf->w > 0 && mf->h > 0) { (void)fitToTargets(mf->view, m->tracksOf(m->page.selected()), mf->w, mf->h, &Impl::presentOf); }
+    });
+    ev.on_inspector_map_whole([m] {
+        Impl::MapFace* mf = m->mapFor(m->page.selected(), false);
+        if (mf != nullptr) { wholeWorld(mf->view, mf->w, mf->h, mf->sourceSet); }
+    });
 
     // ---- the inspector ----
     ev.on_inspector_fold([&page] { page.inspectorFold(); });

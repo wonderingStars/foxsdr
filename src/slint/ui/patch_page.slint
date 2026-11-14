@@ -41,6 +41,7 @@ import { SelectKey } from "sections.slint";
 import { TipTimer, PopupTipTimer } from "tooltip.slint";
 import { SelectItem } from "signal_bank.slint";
 import { SettingField, PluginSettingsForm } from "forms.slint";
+import { MapTarget, MapPane } from "map.slint";
 
 // A line of a face or of an inspector's readout: tone 0 plain (fg-soft), 1 muted (dim), 2 amber (a number or a note), 3 phosphor (what the radio received), 4 rust (a fault).
 export struct FaceLine { text: string, tone: int }
@@ -72,7 +73,15 @@ export struct CanvasNode {
 }                                                                                              // kind = core NodeKind: 0 Radio 1 Channel 2 Demod 3 Decoder 4 Display 5 Sink 6 Map
 export struct CanvasWire { path: string, tone: int, selected: bool }                           // path = SVG commands "M x y C x y x y x y" in canvas-local pixels; tone = the source output's port type
 export struct Refusal { shown: bool, text: string, x: length, y: length }                      // x, y = the bubble's top-left
-export struct CanvasModel { zoom: float, faces-live: bool, grid-step: length, grid-ox: length, grid-oy: length, nodes: [CanvasNode], wires: [CanvasWire], ghost: string, refusal: Refusal, keys-shown: bool }
+// THE TWO LIVE FACES (docs/multi-radio-records/patch-faces.md; ledger rows 1924, 1925): what a Spectrum part and a Map part draw that is a picture. One row per node, index-aligned with
+// `nodes` (the pictures change every frame, the node rows do not: a frame sets one of these rows and leaves the node's own row alone). A Spectrum row carries the trace (painted over a
+// transparent ground) and the waterfall, both painted by the host, and the marks over them (pos 0..1 across the face, a planned channel's name); a Map row carries what MapPane places.
+export struct FaceMarker { pos: float, label: string }
+export struct FaceLive {
+    have-spectrum: bool, trace: image, waterfall: image, markers: [FaceMarker],
+    have-map: bool, map-base: image, map-targets: [MapTarget], map-scale-text: string, map-scale-frac: float, map-attribution: string, map-zoom-in: bool, map-zoom-out: bool, map-hover: string,
+}
+export struct CanvasModel { zoom: float, faces-live: bool, grid-step: length, grid-ox: length, grid-oy: length, nodes: [CanvasNode], wires: [CanvasWire], ghost: string, refusal: Refusal, keys-shown: bool, lives: [FaceLive] }
 
 // ---- the inspector ----
 export struct InspectorRadio {
@@ -120,6 +129,13 @@ export global PatchEvents {
     callback face-mode(int, int);
     callback face-squelch-on(int, bool);
     callback face-squelch(int, float);
+    callback face-map-panned(int, float, float);       // the Map face (node id): the picture dragged by dx, dy, fractions of its size
+    callback face-map-zoomed(int, int, float, float);  // ... a wheel turned by notches (up positive) at fx, fy of the picture
+    callback face-map-zoom-key(int, int);              // ... a zoom key: +1 in, -1 out
+    callback face-map-resized(int, length, length);    // ... the picture's own size in pixels (the first one comes with the face)
+    callback face-map-hovered(int, int);               // ... the target under the pointer, -1 none
+    callback inspector-map-fit();                      // the Map inspector's Fit to targets
+    callback inspector-map-whole();                    // ... and Whole world
     callback inspector-fold();
     callback inspector-name(string);
     callback inspector-device-opened();
@@ -1097,12 +1113,59 @@ component FaceView inherits Rectangle {
     }
 }
 
+// THE SPECTRUM FACE (ledger row 1924): the live trace over its own ground and the waterfall under it, in the ImGui part's proportions (the trace the upper 38 %, a 2 px gap), with the
+// planned channels marked across both (a 1 px cream line and the channel's name). Both pictures are the host's - it paints them with the receiver's own trace and waterfall painters at
+// the part's own size (patch_faces.hpp) - so this only places them and scales them to the zoom.
+component SpectrumFace inherits Rectangle {
+    in property <FaceLive> live;
+    in property <float> zoom;
+    property <length> u: 1px * root.zoom;
+    property <length> trace-h: root.height * 0.38;
+    clip: true;
+    accessible-role: image;
+    accessible-label: @tr("Spectrum");
+    Image {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.trace-h;
+        source: root.live.trace;
+        image-fit: fill;
+    }
+    Image {
+        x: 0px;
+        y: root.trace-h + 2 * root.u;
+        width: root.width;
+        height: max(0px, root.height - root.trace-h - 2 * root.u);
+        source: root.live.waterfall;
+        image-fit: fill;
+    }
+    for m in root.live.markers : Rectangle {
+        x: m.pos * root.width;
+        y: 0px;
+        width: Theme.hairline;
+        height: root.height;
+        background: Theme.fg.with-alpha(0.56);
+    }
+    for m in root.live.markers : Text {
+        x: m.pos * root.width + 3 * root.u;
+        y: 1 * root.u;
+        width: max(0px, root.width - m.pos * root.width - 3 * root.u);
+        text: m.label;
+        font-family: Theme.font-ui;
+        font-size: 10 * root.u;
+        color: Theme.fg;
+        overflow: elide;
+    }
+}
+
 // One node: its plate, header, close key, grip, well, readings, face and ports, all by the model's x / y / w / h and z (the host sends pixels; the zoom scales the
 // header, the strokes and the face's text). LATER NODES ARE ON TOP: the canvas draws them in model order and their opaque plates cover earlier faces.
 component CanvasNodeView inherits Rectangle {
     in property <CanvasNode> node;
     in property <float> zoom;
     in property <bool> faces-live;
+    in property <FaceLive> live;
     callback face-switch(int);
     callback face-centre(int, string);
     callback face-freq(int, string);
@@ -1237,6 +1300,46 @@ component CanvasNodeView inherits Rectangle {
             face-mode(a, b) => { root.face-mode(a, b); }
             face-squelch-on(a, b) => { root.face-squelch-on(a, b); }
             face-squelch(a, b) => { root.face-squelch(a, b); }
+        }
+        // a Spectrum part's trace and waterfall (row 1924), over the face's own area; its two sentences are the FaceView's, drawn only while there is no picture
+        if root.node.kind == 4 && root.live.have-spectrum && root.face-shown : SpectrumFace {
+            x: 11 * root.u;
+            y: 24 * root.u;
+            width: max(0px, root.width - 22 * root.u);
+            height: max(0px, root.height - 40 * root.u);
+            live: root.live;
+            zoom: root.zoom;
+        }
+        // a Map part's chart (row 1925): the kit's MapPane under the sentence the FaceView draws above it (its height is measured here from the same words, at the same width and size)
+        map-head := Text {
+            x: 11 * root.u;
+            y: 24 * root.u;
+            width: max(0px, root.width - 22 * root.u);
+            text: root.node.kind == 6 && root.node.face.lines.length > 0 ? root.node.face.lines[0].text : "";
+            wrap: TextWrap.word-wrap;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small * 0.92 * root.zoom;
+            opacity: 0;
+        }
+        if root.node.kind == 6 && root.live.have-map && root.face-shown : MapPane {
+            x: 11 * root.u;
+            y: 24 * root.u + (map-head.preferred-height > 0px ? map-head.preferred-height + 3 * root.u : 0px);
+            width: max(0px, root.width - 22 * root.u);
+            height: max(0px, root.height - 40 * root.u - (map-head.preferred-height > 0px ? map-head.preferred-height + 3 * root.u : 0px));
+            base: root.live.map-base;
+            targets: root.live.map-targets;
+            scale-text: root.live.map-scale-text;
+            scale-frac: root.live.map-scale-frac;
+            attribution: root.live.map-attribution;
+            zoom-in-enabled: root.live.map-zoom-in;
+            zoom-out-enabled: root.live.map-zoom-out;
+            hover-text: root.live.map-hover;
+            init => { PatchEvents.face-map-resized(root.node.id, self.pane-w, self.pane-h); }
+            resized(w, h) => { PatchEvents.face-map-resized(root.node.id, w, h); }
+            panned(dx, dy) => { PatchEvents.face-map-panned(root.node.id, dx, dy); }
+            zoomed(n, fx, fy) => { PatchEvents.face-map-zoomed(root.node.id, n, fx, fy); }
+            zoom-key(d) => { PatchEvents.face-map-zoom-key(root.node.id, d); }
+            hovered(i) => { PatchEvents.face-map-hovered(root.node.id, i); }
         }
         // the grip: a right triangle with its legs along the bottom and right edges, accent-soft; fg while hot
         Path {
@@ -1400,12 +1503,13 @@ component PatchCanvasView inherits Rectangle {
         stroke-width: 1.6px * root.model.zoom;
     }
     // the nodes, in model order (later is on top)
-    for n in root.model.nodes : CanvasNodeView {
+    for n[i] in root.model.nodes : CanvasNodeView {
         x: n.x;
         y: n.y;
         width: n.w;
         height: n.h;
         node: n;
+        live: root.model.lives[i];
         zoom: root.model.zoom;
         faces-live: root.model.faces-live;
         face-switch(a) => { root.face-switch(a); }
@@ -1770,6 +1874,21 @@ component PatchInspector inherits Rectangle {
                             vertical-alignment: center;
                             overflow: elide;
                         }
+                    }
+                    // THE VIEW'S TWO KEYS (ledger row 1940): fit the chart to the targets wired in, or show the whole planet
+                    Key {
+                        wide: true;
+                        small: true;
+                        min-width: 0px;
+                        label: @tr("Fit to targets");
+                        clicked => { PatchEvents.inspector-map-fit(); }
+                    }
+                    Key {
+                        wide: true;
+                        small: true;
+                        min-width: 0px;
+                        label: @tr("Whole world");
+                        clicked => { PatchEvents.inspector-map-whole(); }
                     }
                     Note { wrap-w: root.iw; text: root.model.map-help; }
                 }

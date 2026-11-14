@@ -45,3 +45,6 @@
 1963	ASSERTED	patch-presets	click DELETE#2 on the Delete preset? question; expect the note Deleted "Probe2". label
 1960	NOT_DRIVABLE	-	the Replace preset? panel needs a name already taken; not reached in this round
 1962	ASSERTED	patch-presets	click DELETE on the selected preset; the Delete preset? panel then answers DELETE#2 and the note is read
+1924	ASSERTED	patch-faces	the generator radio started from the seeded patch: state patchface.s0.live == 1, span 2000000, peakfrac 0.63..0.67 (the tone at +300 kHz), abovefloor > 40, markers == 1; the Channel-fed part s1: span < 200000, peakfrac 0.40..0.60; both pictures change between two reads (moved); the window captured twice and the well's pixels measured
+1925	ASSERTED	patch-faces-map	the ADS-B decoder's fixture aircraft (4D2025) on the part: state patchface.m0.sources == 1, targets >= 1, ids contains 4D2025, fitted == 1, the sentence "1 aircraft"; drag "Map"#2 moves the centre west, Zoom out / Zoom in double and halve the span
+1940	ASSERTED	patch-faces-map	press the Map node, click Whole world: state patchface.m0.span >= 360, lat == 0, lon == 0; click Fit to targets: span < 20, lat > 51

@@ -98,6 +98,7 @@ struct Header {
     bool updateCheck = false; // updatecheck=on: the generator profile's "Check for updates at startup" tick is ON (it is off otherwise: a bounded run asks nobody)
     std::vector<std::string> logContains;   // logcontains=<text, underscores for spaces>: the run's diagnostic log must hold the text afterwards (docs 6.63: "a refused open reaches the log")
     std::string manifest;     // manifest=<file>: foxsdr.com's answer, canned (FOXSDR_FAKE_UPDATE_MANIFEST, core/updater.hpp); relative = under tests/drive/fixtures (docs 6.63)
+    std::string patchdoc;     // patchdoc=<file>: a patch document (core/patch_io.hpp) the PATCH page restores in place of the profile's saved patch (FOXSDR_SLINT_PATCH_DOC, a bounded run's seam); relative = under tests/drive/fixtures (docs/multi-radio-records/patch-faces.md)
     std::string restart;      // restart=<file under tests/drive/restart>: after the run the SAME scratch profile (the settings file the first run wrote, the engine's own saved radios) is started again with this script (docs/multi-radio-records/screen-s6.md: "quit, start again")
     std::map<std::string, std::string> env;
 };
@@ -131,6 +132,7 @@ Header parseHeader(const std::string& script) {
             else if (key == "radios") { h.userRadios = (value == "user"); }   // the user's SoapySDR modules (docs 6.51: a hardware run)
             else if (key == "updatecheck") { h.updateCheck = (value == "on"); }   // the Updates tick on (docs 6.63: the kill switch's notice)
             else if (key == "restart") { h.restart = value; }
+            else if (key == "patchdoc") { h.patchdoc = value; }
             else if (key == "manifest") { h.manifest = value; }                   // the canned update answer (docs 6.63)
             else if (key == "logcontains") {                                      // a line the run must have written to its diagnostic log (docs 6.63)
                 std::string text = value;
@@ -331,6 +333,17 @@ int main(int argc, char** argv) {
     // engine running as a session has it - the generator fed, the scanner able to scan, STOP meaning something. A header line
     // "CASCADE_DECODE_TEST=" (empty) keeps the receiver stopped for a script that wants that.
     setEnv("CASCADE_DECODE_TEST", "1");
+    // THE PATCH DOCUMENT (patchdoc=): resolved to a full path and handed to the window's bounded-run seam; every other run has none, whatever the test process inherited.
+    {
+        fs::path d(h.patchdoc);
+        if (!h.patchdoc.empty() && d.is_relative()) {
+            const char* fx = std::getenv("FOXSDR_DRIVE_FIXTURES_DIR");
+            d = (fx != nullptr && *fx != '\0') ? fs::path(fx) / d : fs::path(FOXSDR_DRIVE_FIXTURES_DIR) / d;
+        }
+        if (!h.patchdoc.empty() && !fs::exists(d)) { std::printf("  the patch document %s does not exist\n", d.string().c_str()); }
+        CHECK(h.patchdoc.empty() || fs::exists(d));
+        setEnv("FOXSDR_SLINT_PATCH_DOC", h.patchdoc.empty() ? std::string() : d.string());
+    }
     for (const auto& [k, v] : h.env) { setEnv(k.c_str(), v); }
     // THE CANNED UPDATE ANSWER (docs 6.63): a script that says `manifest=` is given foxsdr.com's answer as a file, under the fixtures folder when relative; every other
     // run has none (the test process may have inherited one), so the check is never asked and never answered.

@@ -1,0 +1,76 @@
+#! frames=1000 view=patch size=1500x900 patchdoc=patch-faces.patch FOXSDR_SLINT_PATCH_RUN=1
+# patch-faces (docs/multi-radio-records/patch-faces.md; ledger rows 1924 and 1945): the Spectrum part's live face on the PATCH page. The seeded patch is a signal-generator radio (tones at +300 kHz
+# and -500 kHz of a 2 MHz capture centred on 100 MHz), a Spectrum part off the radio, a Channel at +300 kHz and a Spectrum part off that channel, a Spectrum part wired to nothing and a Map.
+# Every figure is read back from the pictures the faces were painted from (`state patchface.s<k>.<what>`, k the part's number among the Spectrum parts in the draft's order), and the
+# window is captured so the pixels can be measured as well (shot).
+10 state count.patchNodes == 6
++1 click "Fit"
+# BEFORE THE PATCH RUNS: the window's two sentences, no picture, no figure from a frame that never came
++3 state patchface.s0.live == 0
+state patchface.s0.sentence contains "Wire the radio or a channel here to see its spectrum."
+state patchface.s1.live == 0
+state patchface.s1.sentence contains "No spectrum yet - its radio is not running."
+state patchface.s2.live == 0
+state patchface.s2.sentence contains "Wire the radio or a channel here to see its spectrum."
+state patchface.s0.frames == 0
+# RUN IT
++1 click "START"
++40 state patchRunning == 1
++60 state patchface.s0.live == 1
+state patchface.s1.live == 1
+state patchface.s2.live == 0
+state patchface.s0.sentence == ""
+state patchface.s1.sentence == ""
+state patchface.s2.sentence contains "Wire the radio or a channel here to see its spectrum."
+# THE RADIO-FED PART SHOWS THE WHOLE CAPTURE: 2 MHz across, the generator's +300 kHz tone 65 % of the way across and well above the floor, the channel marked and named
+state patchface.s0.span == 2000000
+state patchface.s0.channel == 0
+state patchface.s0.peakfrac > 0.63
+state patchface.s0.peakfrac < 0.67
+state patchface.s0.abovefloor > 40
+state patchface.s0.markers == 1
+state patchface.s0.markernames contains Channel
+# THE CHANNEL-FED PART SHOWS ITS SLICE: narrower than the capture by more than ten times, the same tone in the middle of it
+state patchface.s1.channel == 1
+state patchface.s1.span < 200000
+state patchface.s1.span > 1000
+state patchface.s1.peakfrac > 0.40
+state patchface.s1.peakfrac < 0.60
+state patchface.s1.abovefloor > 20
+state patchface.s1.markers == 1
+# A MOVING WATERFALL: rows keep arriving and the picture changes between two looks a second and a half apart (the first look sets the reference)
+state patchface.s0.rows >= 2
+state patchface.s0.moved == 1
++45 state patchface.s0.moved == 1
+state patchface.s1.moved == 1
++45 state patchface.s1.moved == 1
++1 shot "pf-green-1.png"
++30 shot "pf-green-2.png"
+# THE INSPECTOR OF A SPECTRUM PART: the window offers no setting for one, so the sentence stays (row 1945 is left alone)
++1 press "Radio spectrum"
++5 expect "This node has nothing to set yet." label equals "This node has nothing to set yet."
+# A PART FOLLOWS ITS NODE'S RESIZE: Larger makes the node, its pictures and the slice's columns bigger, and the picture starts again
++1 state patchface.s0.width > 200
++1 click "Larger"
++10 state patchface.s0.width > 340
++30 state patchface.s0.live == 1
+state patchface.s0.peakfrac > 0.63
+state patchface.s0.peakfrac < 0.67
++1 shot "pf-green-3.png"
+# A FACE COSTS NOTHING WHILE THE PAGE IS NOT SHOWN: on the receiver view the frames stop being taken (the first read sets the reference)
++1 state patchface.s0.framesdelta > 0
++30 state patchface.s0.framesdelta > 3
++1 click "RECEIVER"
++10 state patchface.s0.framesdelta >= 0
++40 state patchface.s0.framesdelta == 0
++1 state patchface.s1.framesdelta >= 0
++30 state patchface.s1.framesdelta == 0
+# AND BACK: the engine stopped the patch when the page went (its pass runs the patch only while the page is showing), so it is started again, and the faces take frames again
++1 click "PATCH"
++5 state patchRunning == 0
++1 click "START"
++60 state patchRunning == 1
++30 state patchface.s0.framesdelta > 3
++1 state patchface.s0.live == 1
+state patchface.s1.live == 1
++1 dump
