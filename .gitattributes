@@ -49,3 +49,7 @@ tests/fuzz/corpus/plugin_marker/*.bin binary
 tests/fuzz/corpus/plugin_module/*.bin binary
 tests/fuzz/corpus/plugin_records/*.bin binary
 tests/fuzz/corpus/plugin_settings/*.bin binary
+
+# THE PATCH DOCUMENTS THE DRIVE SCRIPTS RESTORE (docs/multi-radio-records/patch-faces.md) ARE LF ON EVERY CHECKOUT: the document's node lines end in the node's name, read to the end of the line, so a CRLF
+# checkout (autocrlf=true) would give every name a trailing carriage return and the scripts could no longer find a node by its name.
+src/slint/tests/drive/fixtures/*.patch text eol=lf
