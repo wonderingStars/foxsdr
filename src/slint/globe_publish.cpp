@@ -93,7 +93,7 @@ constexpr int kBand = 1, kGreyline = 2;                // propagation
 constexpr int kFt8Band = 1, kFt8Window = 2;            // FT8
 constexpr int kGoesSat = 1;                            // GOES
 constexpr int kScale = 1, kMoon = 2, kDate = 3, kToday = 4;   // solar system
-constexpr int kFootprint = 1, kTracks = 2;             // satellites
+constexpr int kFootprint = 1, kTracks = 2, kNight = 3;  // satellites
 
 const int kPropBands[] = {0, 6, 7, 8, 9, 10};          // ALL, 20 m, 17 m, 15 m, 12 m, 10 m: the bands the NCDXF beacons are on
 const int kFt8Bands[] = {0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};   // ALL and the FT8 bands (160 m .. 2 m, not 60 m)
@@ -522,8 +522,9 @@ void GlobePublisher::fillSatellites(Surface& s, const std::string& plugin, const
     in.selectedId = selected;
     const std::int64_t now = unixMs();
     const SunPosition sun = sunPosition(julianDay(now / 1000));
-    const std::uint64_t bake = earthBakeKey(&sun, false, 1024, 512);
-    if (s.earth.empty() || s.earth.key != bake) { bakeEarth(s.earth, land(), &sun, false); }
+    const SunPosition* shade = s.view.nightSide ? &sun : nullptr;   // NIGHT SIDE off: the whole globe lit
+    const std::uint64_t bake = earthBakeKey(shade, false, 1024, 512);
+    if (s.earth.empty() || s.earth.key != bake) { bakeEarth(s.earth, land(), shade, false); }
     s.initial = initialCamera(ViewKind::Satellites, rxKnown, rx);
     const GlobeDrawList list = drawSatellites(in, s.view, s.earth);
     std::string key = "T" + std::to_string(bake) + selected + (s.view.footprints ? "f" : "-") + (s.view.groundTracks ? "t" : "-") + (rxKnown ? latLonText(rx) : "-");
@@ -535,6 +536,7 @@ void GlobePublisher::fillSatellites(Surface& s, const std::string& plugin, const
     std::vector<::GlobeControl> c;
     c.push_back(checkbox(kFootprint, tr("FOOTPRINT"), s.view.footprints, tr("The circle on the ground the selected satellite can see")));
     c.push_back(checkbox(kTracks, tr("GROUND TRACKS"), s.view.groundTracks, tr("The ground tracks the plugin predicts")));
+    c.push_back(checkbox(kNight, tr("NIGHT SIDE"), s.view.nightSide, tr("Shades the half of the Earth the Sun is not lighting")));
     const SatIn* sel = nullptr;
     for (const SatIn& sat : in.sats) { if (sat.id == selected) { sel = &sat; } }
     if (sel != nullptr) {
@@ -594,6 +596,7 @@ void GlobePublisher::wire(::MainWindow& ui, std::function<std::string(int)> plug
                 case ViewKind::Satellites:
                     if (id == kFootprint) { s.view.footprints = on; }
                     else if (id == kTracks) { s.view.groundTracks = on; }
+                    else if (id == kNight) { s.view.nightSide = on; }
                     break;
                 default: break;
             }
@@ -672,9 +675,9 @@ std::string GlobePublisher::stateText(const std::string& plugin) const {
     const Surface* s = findSurface(plugin);
     if (s == nullptr) { return "none"; }
     char buf[256];
-    std::snprintf(buf, sizeof(buf), "globe=%d lon=%.1f lat=%.1f zoom=%.2f spin=%.0f tilt=%.0f band=%d window=%d log=%d moon=%d day=%d sat=%d greyline=%d composed=%d", s->view.globeOn ? 1 : 0,
+    std::snprintf(buf, sizeof(buf), "globe=%d lon=%.1f lat=%.1f zoom=%.2f spin=%.0f tilt=%.0f band=%d window=%d log=%d moon=%d day=%d sat=%d greyline=%d composed=%d night=%d", s->view.globeOn ? 1 : 0,
                   s->shown.centreLonDeg, s->shown.centreLatDeg, s->shown.zoom, s->view.spinDeg, s->view.tiltDeg, s->view.bandId, s->view.windowMinutes, s->view.logScale ? 1 : 0,
-                  s->view.showMoon ? 1 : 0, s->view.dayOffset, s->view.goesSatellite, s->view.greyline ? 1 : 0, s->composed ? 1 : 0);
+                  s->view.showMoon ? 1 : 0, s->view.dayOffset, s->view.goesSatellite, s->view.greyline ? 1 : 0, s->composed ? 1 : 0, s->view.nightSide ? 1 : 0);
     return buf;
 }
 

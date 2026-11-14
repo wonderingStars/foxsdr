@@ -161,6 +161,8 @@ export component SpectrumView inherits Rectangle {
         : root.pointer-zone == 2 ? root.edge-tooltip
         : root.off-band-tooltip != "" ? root.off-band-tooltip : root.tooltip;
     out property <bool> tip-shown;                                       // the rest tip is up
+    in property <string> rest-tip;                                       // the 4 s tip (rows 202, 213): said once the hand has rested four seconds; it replaces the gesture tip
+    out property <bool> rest-tip-shown;
     out property <MouseCursor> pointer-shape: root.pointer-zone == 1 ? MouseCursor.move
         : root.pointer-zone == 2 ? MouseCursor.ew-resize : MouseCursor.default;
 
@@ -626,7 +628,7 @@ export component SpectrumView inherits Rectangle {
             if (root.press-off-band && root.plot-w > 0px) { root.double-clicked(self.pressed-x / root.plot-w); }
         }
         changed pressed => {
-            root.tip-shown = false;                 // a button going down or up hides the tip and restarts the wait
+            root.tip-shown = false; root.rest-tip-shown = false;                 // a button going down or up hides the tip and restarts the wait
             root.rest-ticks = 0;
         }
         scroll-event(e) => {
@@ -656,7 +658,7 @@ export component SpectrumView inherits Rectangle {
     changed pointer => {
         if (!area.has-hover) {
             root.hover(-1, -1);
-            root.tip-shown = false;
+            root.tip-shown = false; root.rest-tip-shown = false;
             root.was-inside = false;
         } else if (root.plot-w > 0px && root.plot-h > 0px) {
             root.hover(area.mouse-x / root.plot-w, area.mouse-y / root.plot-h);
@@ -665,16 +667,17 @@ export component SpectrumView inherits Rectangle {
                 root.rest-x = area.mouse-x;
                 root.rest-y = area.mouse-y;
                 root.rest-ticks = 0;
-                root.tip-shown = false;
+                root.tip-shown = false; root.rest-tip-shown = false;
             }
         }
     }
     Timer {
         interval: 50ms;
-        running: area.has-hover && !area.pressed && root.active-tooltip != "" && !root.tip-shown;
+        running: area.has-hover && !area.pressed && (root.active-tooltip != "" || root.rest-tip != "") && !root.rest-tip-shown && !(root.tip-shown && root.rest-tip == "");
         triggered => {
-            root.rest-ticks += 1;                                           // the 13th tick is 600 to 650 ms after the rest began
-            if (root.rest-ticks >= 13) { root.tip-shown = true; }
+            root.rest-ticks += 1;                                           // the 13th tick is 600 to 650 ms after the rest began, the 80th four seconds
+            if (root.rest-ticks >= 13 && root.active-tooltip != "") { root.tip-shown = true; }
+            if (root.rest-ticks >= 80 && root.rest-tip != "") { root.rest-tip-shown = true; }
         }
     }
 
@@ -734,7 +737,12 @@ export component SpectrumView inherits Rectangle {
 
     // The tip is drawn inline, in the shared tooltip face, NOT through TipTimer: an open PopupWindow takes the
     // pointer events, so the plot saw the pointer leave and the first press after the tip appeared was lost.
-    if root.tip-shown && root.active-tooltip != "" : TooltipFace {
+    if root.rest-tip-shown && root.rest-tip != "" : TooltipFace {
+        text: root.rest-tip;
+        x: Math.max(2px, Math.min(root.gutter-w + root.rest-x, root.width - self.width - 4px));
+        y: root.plot-top + root.rest-y + 22px + self.height > root.height - 4px ? root.plot-top + root.rest-y - self.height - 8px : root.plot-top + root.rest-y + 22px;
+    }
+    if root.tip-shown && !root.rest-tip-shown && root.active-tooltip != "" : TooltipFace {
         text: root.active-tooltip;
         x: Math.max(2px, Math.min(root.gutter-w + root.rest-x, root.width - self.width - 4px));
         y: root.plot-top + root.rest-y + 22px + self.height > root.height - 4px ? root.plot-top + root.rest-y - self.height - 8px : root.plot-top + root.rest-y + 22px;

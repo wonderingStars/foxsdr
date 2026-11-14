@@ -814,6 +814,11 @@ void View3DPublisher::publishSonde(const SondeContext& ctx) { impl_->sondePublis
 
 int View3DPublisher::detaches() const { return impl_->surface.detaches() + impl_->radarSurface.detaches() + impl_->tunnelSurface.detaches() + impl_->surveySurface.detaches() + impl_->sondeSurface.detaches(); }
 
+std::string View3DPublisher::surveyCsv() const {
+    const SurveyFeed feed = impl_->surveyFeedNow();
+    return feed.shown ? foxsdr::slintview3d::surveyCsv(feed.channels) : std::string();
+}
+
 std::string View3DPublisher::readState(const std::string& what, std::string& out) const {
     const Impl& m = *impl_;
     char b[64];
@@ -849,6 +854,7 @@ std::string View3DPublisher::readState(const std::string& what, std::string& out
     if (what == "sonde.id") { out = m.sondeId; return std::string(); }
     if (what == "sonde.w") { out = std::to_string(m.sondeW); return std::string(); }
     if (what == "sonde.h") { out = std::to_string(m.sondeH); return std::string(); }
+    if (what == "survey.exportnote") { out = std::string(ui_.global<View3D>().get_survey_export_note()); if (out.empty()) { out = "-"; } return std::string(); }
     if (what == "survey.on") { out = m.survey.on ? "1" : "0"; return std::string(); }
     if (what == "survey.azimuth") { return num(m.survey.azimuth); }
     if (what == "survey.elevation") { return num(m.survey.elevation); }

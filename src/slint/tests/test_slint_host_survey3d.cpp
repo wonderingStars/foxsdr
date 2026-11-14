@@ -218,7 +218,26 @@ void testPaint() {
 
 }  // namespace
 
+void testCsv() {
+    const std::string nl = std::string(1, (char)13) + (char)10;
+    const std::string q(1, (char)34);
+    std::vector<SurveyChannel> ch;
+    SurveyChannel a;
+    a.freqHz = 145500000; a.widthHz = 12500; a.haveWidth = true; a.peakDb = -48.04; a.havePeak = true; a.overDb = 31.25; a.haveOver = true; a.seenPct = 86; a.haveSeen = true; a.guess = "FM, voice"; a.band = "2 m";
+    ch.push_back(a);
+    SurveyChannel b;                       // only a frequency: the other cells stay empty
+    b.freqHz = 7074000; b.band = "40 " + q + "m" + q;
+    ch.push_back(b);
+    const std::string head = "Frequency (Hz),Width (Hz),Peak (dB),Over floor (dB),Seen (%),Guess,Band" + nl;
+    const std::string csv = surveyCsv(ch);
+    CHECK(csv.find(head) == 0);
+    CHECK(csv.find("145500000,12500,-48.0,31.2,86.0," + q + "FM, voice" + q + ",2 m" + nl) != std::string::npos);
+    CHECK(csv.find("7074000,,,,,," + q + "40 " + q + q + "m" + q + q + q + nl) != std::string::npos);
+    CHECK(surveyCsv({}) == head);
+}
+
 int main() {
+    testCsv();
     testParse();
     testGrid();
     testPaint();

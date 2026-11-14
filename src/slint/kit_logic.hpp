@@ -205,6 +205,7 @@ struct MapPage {
     double centreLat = 20.0, centreLon = 0.0, spanDeg = 180.0;   // the view; fitted to the tracks on the first ones
     bool viewFitted = false;
     std::string followedId, selectedId;
+    bool followAsk = false;   // a drag was tried while following: the page asks "Stop following?" (window gaps lane 4)
 };
 void syncMapPages(std::vector<MapPage>& pages, const std::vector<std::string>& trackPluginNames, const std::vector<PluginRow>& rows);
 MapPage* findMapPage(std::vector<MapPage>& pages, const std::string& plugin);

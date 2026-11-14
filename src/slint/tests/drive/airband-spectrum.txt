@@ -1,0 +1,26 @@
+#! frames=700 bank=2 sections=2:4
+# airband-spectrum (window gaps lane 4, rows 212, 264 to 267): while the Airband monitor listens the spectrum and waterfall do not draw the tuned band, the peak or the band's grabs; they
+# show one mark for every channel of the block on the air, the engine's block sentence under the header, and the names of the channels whose squelch is open. Read back through the
+# figures the host publishes (wf.air*, wf.showvfo, wf.showpeak) and the engine's fact.airband.*.
+10 state running == 1
+state wf.airlistening == 0
+state wf.showvfo == 1
+state wf.airmarks == 0
++1 type "Airport code" "egll"
++1 key enter
++2 click "Look up"
++30 state count.bookmarks > 0
++1 click "LISTEN"
++30 state fact.airband.listening == 1
++60 state wf.airlistening == 1
+state wf.showvfo == 0
+state wf.showpeak == 0
+state wf.airblock != "-"
++100 state wf.airmarks > 0
++1 shot "airband-spectrum.png"
++1 scroll "Above the noise" 300
++3 click "STOP"
++30 state fact.airband.listening == 0
++10 state wf.airlistening == 0
+state wf.showvfo == 1
+state wf.airmarks == 0

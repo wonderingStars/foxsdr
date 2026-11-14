@@ -918,6 +918,7 @@ void ToolsPublisher::exec(const Effect& e, const char* what) {
         x.text = ss(r.text);
         x.heard_time = ss(r.heard_time);
         x.on_air = r.on_air;
+        x.tooltip = ss(r.tooltip);
         rows.push_back(std::move(x));
     }
     o.rows = lists_->airRows.set(rows);
@@ -1033,7 +1034,14 @@ void ToolsPublisher::publish(const FoxReceiverState& state, const foxsdr::slints
             setter(value);
         }
     };
-    setIf(lastSet_->radar, mapRadar(m.radar, gps), [&](const ::RadarModel& v) { ui_.set_radar_model(v); });
+    setIf(lastSet_->radar, mapRadar(m.radar, gps), [&](const ::RadarModel& v) {
+        ui_.set_radar_model(v);
+        // window gaps lane 4: the map pages' bar draws the same GPS row the Radar fold does
+        auto&& ex = ui_.global<::MapExtras>();
+        ex.set_gps_shown(v.offers.gps_shown);
+        ex.set_gps_hint(v.offers.gps_hint);
+        ex.set_gps(v.offers.gps);
+    });
     setIf(lastSet_->bookmarks, mapBookmarks(m.bookmarks), [&](const ::BookmarksModel& v) { ui_.set_bookmarks_model(v); });
     setIf(lastSet_->scanner, mapScanner(m.scanner), [&](const ::ScannerModel& v) { ui_.set_scanner_model(v); });
     setIf(lastSet_->airband, mapAirband(m.airband), [&](const ::AirbandModel& v) { ui_.set_airband_model(v); });

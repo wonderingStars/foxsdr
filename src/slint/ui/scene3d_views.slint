@@ -85,6 +85,8 @@ export global View3D {
     in-out property <int> survey-w;
     in-out property <int> survey-h;
     callback survey-view-selected(bool);
+    in property <string> survey-export-note;              // what the last EXPORT CSV did (the file it wrote, or why not)
+    callback survey-export-csv();
     callback survey-reset-view();
 
     // ---- the Radiosondes map page's 3D TRACK (the plugin's map page, VIEW MAP / 3D TRACK) ----
@@ -357,6 +359,8 @@ export component SurveyPanelPage inherits Rectangle {
         if !View3D.survey-on : HorizontalLayout { height: 36px; padding-left: 10px; alignment: start;
             VerticalLayout { alignment: center;
                 Scene3DViewToggleInline { three-d: false; label-2d: @tr("TABLE"); label-3d: @tr("3D SURFACE"); selected(on) => { View3D.survey-view-selected(on); } } }
+            VerticalLayout { alignment: center; KeyButton { label: @tr("EXPORT CSV"); small: true; min-w: 0px; tooltip: @tr("Save the channel table as a CSV file"); clicked => { View3D.survey-export-csv(); } } }
+            if View3D.survey-export-note != "" : Text { text: View3D.survey-export-note; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; overflow: elide; }
         }
         if View3D.survey-on : Scene3DCameraBar {
             elevation <=> View3D.survey-elevation;
@@ -364,6 +368,7 @@ export component SurveyPanelPage inherits Rectangle {
             reset-clicked => { View3D.survey-azimuth = -52; View3D.survey-elevation = 36; View3D.survey-zoom = 1; View3D.survey-reset-view(); }
             VerticalLayout { alignment: center;
                 Scene3DViewToggleInline { three-d: true; label-2d: @tr("TABLE"); label-3d: @tr("3D SURFACE"); selected(on) => { View3D.survey-view-selected(on); } } }
+            VerticalLayout { alignment: center; KeyButton { label: @tr("EXPORT CSV"); small: true; min-w: 0px; tooltip: @tr("Save the channel table as a CSV file"); clicked => { View3D.survey-export-csv(); } } }
         }
         if !View3D.survey-on : Table { vertical-stretch: 1; columns: root.columns; rows: root.rows; column-widths: root.widths; empty-text: root.empty-text;
             row-pressed(r) => { root.row-pressed(r); } clicked(r) => { root.clicked(r); } column-resized(c, w) => { root.column-resized(c, w); } }

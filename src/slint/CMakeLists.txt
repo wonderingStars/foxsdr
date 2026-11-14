@@ -58,6 +58,8 @@ list(APPEND foxsdr_slint_sources lanek_logic.cpp lanek_spectrum.cpp lanek_audio.
 list(APPEND foxsdr_slint_sources lanel_logic.cpp lanel_publish.cpp)
 # SCREEN LANE M (docs/multi-radio-records/screen-m.md): the controls of the wiring second passes, each in the section the person looks in (lanem_logic: pure; lanem_publish: the LaneM global)
 list(APPEND foxsdr_slint_sources lanem_logic.cpp lanem_publish.cpp)
+# WINDOW GAPS LANE 4 (docs/multi-radio-records/window-gaps-4.md): the waterfall's row log (gap break, key coverage, range rail) and the Airband monitor's marks on the spectrum
+list(APPEND foxsdr_slint_sources wfrows_logic.cpp airmarks_logic.cpp mapicons_logic.cpp)
 if(WIN32)
     enable_language(RC)
     add_executable(foxsdr-slint WIN32 ${foxsdr_slint_sources} "${CMAKE_SOURCE_DIR}/resources/icon/foxsdr.rc")

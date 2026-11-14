@@ -8,6 +8,8 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <vector>
 
 #include "radar_logic.hpp"
@@ -19,11 +21,22 @@ namespace foxsdr::slintscope {
 struct RadarPaintScratch {
     std::vector<float> x, y;
     std::vector<unsigned char> inside;
+    bool tilesPending = false;   // the last paint asked for a basemap tile that was not ready yet: paint again next tick (window gaps lane 4, row 1967)
+    int tilesDrawn = 0;          // pixels of the last paint that came from a tile
 };
+
+// A basemap plugin's tiles under the glass (the classic's scopeGroundPoint / scopeTileWindow path): the tile contract is the map's (map_compositor.hpp TileSource): 1 READY with `rgb`
+// filled (tileSize x tileSize x 3 bytes), 0 PENDING (asked; ask again), -1 MISSING.
+struct RadarTileSource {
+    std::function<int(std::uint32_t z, std::uint32_t x, std::uint32_t y, std::vector<std::uint8_t>& rgb)> tile;
+    std::uint32_t tileSize = 256, minZoom = 0, maxZoom = 19;
+};
+// The web-mercator zoom whose tile pixels are about as big as a pixel of the tube: `fullScaleNm` across `radiusPx` at latitude `latDeg`, held to [minZoom, maxZoom].
+int radarTileZoom(double fullScaleNm, double radiusPx, double latDeg, std::uint32_t tileSize, std::uint32_t minZoom, std::uint32_t maxZoom);
 
 // Paints the tube's ground into px (w x h, row-major, top row first; the tube is the square of the shorter side, centred, as RadarScope::setTubeSize was told). The frame the scope last
 // built (RadarScope::update) decides what is drawn: without a receiver position only the dark ground, under 40 px nothing at all. Returns the number of strokes drawn (a cost the tests report).
-std::size_t paintRadarGround(Rgba* px, int w, int h, const RadarScope& scope, RadarPaintScratch& scratch);
+std::size_t paintRadarGround(Rgba* px, int w, int h, const RadarScope& scope, RadarPaintScratch& scratch, const RadarTileSource* tiles = nullptr);
 
 // The sweep fan: a 55 degree wedge of the phosphor green with its LEADING EDGE straight up from the centre of a size x size picture and its tail 55 degrees anticlockwise of it (the sweep turns
 // clockwise), 44 steps, alpha 77 at the edge fading to nothing at the tail (scope_view.cpp addSweepFan), a disc of radius size / 2, transparent elsewhere. The view rotates it clockwise by

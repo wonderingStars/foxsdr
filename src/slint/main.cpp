@@ -1259,6 +1259,13 @@ int main(int argc, char** argv) {
 
     // THE WATERFALL AS A FILE (export_logic.hpp): the store of levels is filled where the picture is painted (paneTick); a click copies what the file needs and a core::DiskJob writes it, off the frame
     const auto exportBase = [&] { return (std::filesystem::path(configPath).parent_path() / "exports").string(); };
+    // THE SURVEY ENGINE'S EXPORT CSV (window gaps lane 4, row 3075): the channel table written beside the other exports, never over a file that is there; what happened is said beside the key
+    ui->global<View3D>().on_survey_export_csv([&] {
+        const std::string csv = view3dBank.surveyCsv();
+        if (csv.empty()) { ui->global<View3D>().set_survey_export_note(ss(cascade::i18n::tr("There is no survey to save."))); return; }
+        const foxsdr::slintexport::Outcome o = foxsdr::slintexport::saveText((std::filesystem::path(exportBase()) / "foxsdr-survey-channels").string(), exportBase(), csv, "csv");
+        ui->global<View3D>().set_survey_export_note(ss(o.ok ? cascade::core::formatText(cascade::i18n::tr("Saved %s"), o.path.c_str()) : cascade::core::formatText(cascade::i18n::tr("The file could not be written: %s"), o.error.c_str())));
+    });
     const auto utcNowMs = [] { return static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()); };
     {
         auto& em = ui->global<ExportModel>();
@@ -1583,7 +1590,10 @@ int main(int argc, char** argv) {
     ui->on_counter_menu_requested([&](float x, float y) { openMenu(MenuKind::Counter, x, y); });
     ui->on_mode_selected([&](int i) { setMode(demodOfIndex(i)); });
     ui->on_mode_picker_requested([&](float x, float y) { openMenu(MenuKind::Modes, x, y); });
-    ui->on_squelch_changed([&](float v) { setSquelch(squelchDbFromNorm(v)); });
+    ui->on_squelch_changed([&](float v) {
+        if (toolsBank.models().airband.listening) { ui->global<ToolsEvents>().invoke_airband_squelch(v); return; }   // while the Airband monitor listens the dial is the monitor's squelch (the classic deck's rule)
+        setSquelch(squelchDbFromNorm(v));
+    });
     ui->on_squelch_auto_clicked([&] { setSquelch(squelchAuto(state.squelchDb) ? -85.0 : -200.0); });
     ui->on_volume_changed([&](float v) { setVolume(v); });
     ui->on_gain_changed([&](float v) {
@@ -1781,8 +1791,10 @@ int main(int argc, char** argv) {
         selected().lastBandDragTick = tickNo;
     });
     ui->on_edge_dragged([&](float half) { FoxCommand c = op(FOXAPP_OP_SET_BANDWIDTH_DRAG); c.num[0] = 2.0 * half * currentView().spanHz; submit(c); });
+    // WINDOW GAPS LANE 4 (rows 264 to 267): while the Airband monitor listens the tuned band is not what is heard, so there is no band to slide (the classic's vfoHidden): Shift+wheel stays the zoom.
+    const auto airListeningNow = [&]() { return toolsBank.models().airband.listening; };
     const auto wheel = [&](float x, int notches, bool shift) {
-        if (shift) { stepTune(notches > 0 ? 1 : -1, modeStepHz(state.demodMode)); return; }
+        if (shift && !airListeningNow()) { stepTune(notches > 0 ? 1 : -1, modeStepHz(state.demodMode)); return; }
         zoomView(notches > 0 ? kZoomPerNotch : 1.0 / kZoomPerNotch, x);
     };
     ui->on_spectrum_wheel(wheel);
@@ -2145,7 +2157,7 @@ int main(int argc, char** argv) {
         // (view.spanHz > 0) is a window in absolute Hz that no retune touched; when the tuned frequency moved since the last tick and landed outside it, the
         // picture is recentred on it at the same width, inside the baseband the source now delivers (core/view_follow.hpp, the rule shared with the ImGui
         // window). Not within ten ticks of a drag of the band: the hand has it.
-        if (rv.view.spanHz > 0 && tickNo - rv.lastBandDragTick > 10) {
+        if (rv.view.spanHz > 0 && tickNo - rv.lastBandDragTick > 10 && !(selectedRadio && airListeningNow())) {   // not while the Airband monitor listens (the classic's rule)
             const double full = rv.fullSpan();
             const cascade::core::ViewFollow f = cascade::core::recentreOnRetune(rv.view.centreHz - rv.view.spanHz / 2.0, rv.view.centreHz + rv.view.spanHz / 2.0,
                                                                                 st.centreHz - full / 2.0, st.centreHz + full / 2.0, rv.lastTunedHz, st.tunedHz);
@@ -2236,6 +2248,7 @@ int main(int argc, char** argv) {
                     const auto& row = rv.pacer.row();
                     scrollWaterfallRow(rv.wells.picture.data(), px.wfW, px.wfH, row.data(), row.size(), st.dbMin, st.dbMax, (laneKp && laneKp->gradientTable() != nullptr) ? laneKp->gradientTable() : (paletteIdx == 0 ? nullptr : foxsdr::slintextras::paletteTable(paletteIdx).data()));
                     rv.lastRowUtcS = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()) / 1000.0;
+                    rv.wfRows.push(steadyS, st.dbMin, st.dbMax);   // rows 182, 186, 187: when this row arrived and the range it was mapped through
                 }
                 rv.secondsPerRow = wantLps > 0.0 ? 1.0 / wantLps : (fps > 0 ? 1.0 / fps : 0.0);
             }
@@ -2277,6 +2290,22 @@ int main(int argc, char** argv) {
         // the axes and overlays follow the view every tick (a zoom or pan changes them without a new frame)
         fig.freqTicks = frequencyTicks(v.centreHz, v.spanHz, plot.w);
         fig.dbTicks = dbTicks(st.dbMin, st.dbMax, plot.h);
+        {   // WINDOW GAPS LANE 4: the gap break, the key's coverage note and the range rail (read every tick: the ages grow while no line arrives), and the Airband monitor's marks
+            fig.wfChrome = foxsdr::slinthost::wfChrome(rv.wfRows, static_cast<double>(nowMs()) / 1000.0, std::clamp(static_cast<int>(rv.wells.size.wfH) / 36, 2, 8));
+            if (selectedRadio) {
+                const foxsdr::slinttools::AirbandModel& am = toolsBank.models().airband;
+                if (am.listening && !am.block.empty()) {
+                    fig.airListening = true;
+                    fig.airBlock = am.block;
+                    fig.airHearing = am.talking ? am.hearing_line : std::string();
+                    std::vector<foxsdr::slinthost::AirChannelMark> chans;
+                    for (const auto& mk : am.marks) { chans.push_back({mk.hz, mk.bw_hz, mk.open}); }
+                    fig.airMarks = foxsdr::slinthost::airbandMarks(chans, v.centreHz, v.spanHz, static_cast<double>(plot.w));
+                } else if (am.listening) {
+                    fig.airListening = true;   // listening, the block's sentence not read yet: the band is still hidden
+                }
+            }
+        }
         fig.vfoPos = rv.frac(st.tunedHz);
         fig.vfoHalf = static_cast<float>(v.spanHz > 0 ? st.bandwidthHz / 2.0 / v.spanHz : 0.0);
         for (const auto& b : lists.bands) {
@@ -2378,7 +2407,7 @@ int main(int argc, char** argv) {
                 for (const auto& tk : fig.ageTicks) { ticks.push_back({static_cast<float>(tk.frac == 0.0 ? 22.0 / rv.wells.size.wfH : tk.frac), ss(tk.label)}); }   // "now" sits under the Age caption, as the sheet draws it
                 ui->set_age_ticks(std::make_shared<slint::VectorModel<AgeTick>>(std::move(ticks)));
             }
-            ui->set_show_peak(fig.showPeak);
+            ui->set_show_peak(fig.showPeak && !fig.airListening);   // no passband peak while the Airband monitor listens: the band is not drawn
             ui->set_peak_text(ss(fig.peakText));
         }
         if (fig.peakAgeSet) { ui->set_peak_age(ss(fig.peakAge)); }
@@ -2386,7 +2415,25 @@ int main(int argc, char** argv) {
         if (psigs.changed("db", sigOf(fig.dbTicks))) { std::vector<DbTick> dt; for (const auto& tk : fig.dbTicks) { dt.push_back({static_cast<float>(tk.frac), ss(tk.label)}); } ui->set_db_ticks(std::make_shared<slint::VectorModel<DbTick>>(std::move(dt))); }
         ui->set_vfo_pos(fig.vfoPos);
         ui->set_vfo_half(fig.vfoHalf);
-        ui->set_show_vfo(true);
+        ui->set_show_vfo(!fig.airListening);
+        if (fig.airListening) { ui->set_show_peak(false); }
+        {   // window gaps lane 4: the Airband captions and marks, the gap break, the key's coverage note and the range rail
+            ui->set_airband_block(ss(fig.airBlock));
+            ui->set_airband_hearing(ss(fig.airHearing));
+            std::string sig; for (const auto& m : fig.airMarks) { sig += fmt("%.5f|", m.from) + fmt("%.5f|", m.to) + (m.open ? "o" : "s") + ";"; }
+            if (psigs.changed("airmarks", sig)) {
+                std::vector<AirbandChannel> chs;
+                for (const auto& m : fig.airMarks) { chs.push_back({m.from, m.to, m.open}); }
+                ui->set_airband_channels(std::make_shared<slint::VectorModel<AirbandChannel>>(std::move(chs)));
+            }
+            const auto& wc = fig.wfChrome;
+            ui->set_wf_gap_pos(wc.gapPos);
+            ui->set_wf_gap_above(ss(wc.gapAbove));
+            ui->set_wf_gap_below(ss(wc.gapBelow));
+            ui->set_wf_rail_pos(wc.railPos);
+            ui->set_wf_rail_label(ss(wc.railPos >= 0 ? cascade::i18n::tr("RANGE CHANGED") : std::string()));
+            ui->set_key_coverage(ss(wc.coveredRows > 0 ? std::string(cascade::i18n::tr("APPLIES TO")) + " " + cascade::core::formatText(cascade::i18n::tr("TOP %d LINES"), wc.coveredRows) : std::string()));
+        }
         {
             std::string sig; for (const auto& b : fig.ribbon) { sig += fmt("%.5f|", b.from) + fmt("%.5f|", b.to) + b.label + ";"; }
             if (psigs.changed("ribbon", sig)) {
@@ -2555,14 +2602,29 @@ int main(int argc, char** argv) {
             ui->set_gain_tooltip(ss("Gain - the radio's first stage; drag the slider, or scroll over it (" + lists.gainStage + ")"));
         } else {
             ui->set_gain_norm(0.f); ui->set_gain_hint(ss("no gain stage"));
-            ui->set_gain_tooltip(ss((state.flags & FOXAPI_RX_DEVICE_OPEN) ? "This radio has no gain stage" : "No radio is open - choose one in the Source section"));
+            std::string keep, srcError;   // WHY IT IS DEAD: no radio is open; when a saved radio did not open, the source error is the whole sentence (the Source section's own words)
+            world.fact("fact.source.keep", keep);
+            world.fact("fact.status.sourceError", srcError);
+            ui->set_gain_tooltip(ss((state.flags & FOXAPI_RX_DEVICE_OPEN) ? std::string("This radio has no gain stage")
+                                    : (!keep.empty() && !srcError.empty()) ? cascade::core::formatText(cascade::i18n::tr("No radio is open: %s"), srcError.c_str())
+                                    : std::string(cascade::i18n::tr("No radio is open - choose one in the Source section"))));
         }
         ui->set_gain_text(ss(gainTxt));
         const bool sqAuto = squelchAuto(state.squelchDb);
         ui->set_squelch_auto(sqAuto);
-        ui->set_squelch_norm(static_cast<float>(squelchNorm(state.squelchDb)));
-        ui->set_squelch_text(ss(sqAuto ? std::string("open") : fmt("%.0f dB", state.squelchDb)));
-        ui->set_squelch_hint(ss(sqAuto ? "Automatic: follows the noise floor" : "Manual threshold"));
+        {
+            const auto& air = toolsBank.models().airband;
+            ui->set_airband_on(air.listening);
+            if (air.listening) {   // THE MONITOR'S SQUELCH (over -110..0): the dial reads and sets that one, the receiver's is left where it was
+                ui->set_squelch_norm(air.squelch_norm);
+                ui->set_squelch_text(ss(fmt("%.0f dB", air.squelch_db)));
+                ui->set_squelch_hint(ss(""));
+            } else {
+                ui->set_squelch_norm(static_cast<float>(squelchNorm(state.squelchDb)));
+                ui->set_squelch_text(ss(sqAuto ? std::string("open") : fmt("%.0f dB", state.squelchDb)));
+                ui->set_squelch_hint(ss(sqAuto ? "Automatic: follows the noise floor" : "Manual threshold"));
+            }
+        }
         ui->set_squelch_auto_tooltip(ss(sqAuto ? "Automatic squelch - sits 8 dB above the measured noise floor" : "Automatic squelch - follows the noise floor so weak carriers open it and noise does not"));
         ui->set_volume_norm(static_cast<float>(state.volume));
         ui->set_volume_text(ss(fmt("%.2f", state.volume)));
@@ -3052,6 +3114,19 @@ int main(int argc, char** argv) {
             else if (what == "tick1") { out = rv.fig.ageTicks.size() > 1 ? rv.fig.ageTicks[1].label : std::string("-"); }
             else if (what == "tick1frac") { out = rv.fig.ageTicks.size() > 1 ? fmt("%.4f", rv.fig.ageTicks[1].frac) : std::string("-"); }
             else if (what == "foot") { out = rv.fig.footLeft; }
+            // window gaps lane 4: the gap break, the key's coverage, the range rail and what the Airband monitor puts on the plots
+            else if (what == "gap") { out = fmt("%.3f", static_cast<double>(rv.fig.wfChrome.gapPos)); }
+            else if (what == "gapabove") { out = rv.fig.wfChrome.gapAbove.empty() ? std::string("-") : rv.fig.wfChrome.gapAbove; }
+            else if (what == "gapbelow") { out = rv.fig.wfChrome.gapBelow.empty() ? std::string("-") : rv.fig.wfChrome.gapBelow; }
+            else if (what == "rail") { out = fmt("%.3f", static_cast<double>(rv.fig.wfChrome.railPos)); }
+            else if (what == "cover") { out = std::to_string(rv.fig.wfChrome.coveredRows); }
+            else if (what == "airlistening") { out = rv.fig.airListening ? "1" : "0"; }
+            else if (what == "airmarks") { out = std::to_string(rv.fig.airMarks.size()); }
+            else if (what == "airopen") { std::size_t n = 0; for (const auto& m : rv.fig.airMarks) { n += m.open ? 1u : 0u; } out = std::to_string(n); }
+            else if (what == "airblock") { out = rv.fig.airBlock.empty() ? std::string("-") : rv.fig.airBlock; }
+            else if (what == "airhearing") { out = rv.fig.airHearing.empty() ? std::string("-") : rv.fig.airHearing; }
+            else if (what == "showvfo") { out = ui->get_show_vfo() ? "1" : "0"; }
+            else if (what == "showpeak") { out = ui->get_show_peak() ? "1" : "0"; }
             else if (what.rfind("px", 0) == 0) {   // wf.px<x>: the newest line's colour at column x as RRGGBB
                 const std::size_t x = static_cast<std::size_t>(std::atoi(what.c_str() + 2));
                 if (x >= rv.wells.size.wfW) { return "wf.px<x>: x is off the picture"; }

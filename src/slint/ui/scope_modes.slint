@@ -292,6 +292,7 @@ export struct RadarScopeModel {
     targets: [RadarTargetItem], ring-labels: [RadarLabelItem], bearing-labels: [RadarLabelItem], show-bearing-digits: bool,
     sig-lit: int, sig-text: string, alt-lit: int, alt-text: string,
     drum-caption: string, drum-range: string, drum-tracks: string,
+    attribution: string,   // the basemap's credit line while its tiles are under the glass (window gaps lane 4, row 1967)
     knob-dead: bool, knob-frac: float, knob-ticks: [int], knob-lit: int, knob-readout: string, knob-note: string,
     power-on: bool, power-text: string,
     lcd-shown: bool, lcd-screen: int, home-count: string, home-sub: string, contacts: [RadarContactItem], home-empty-title: string, home-empty-body: string,
@@ -392,6 +393,8 @@ export component RadarTube inherits Rectangle {
         Image { x: 2px; y: 2px; width: parent.icon; height: parent.icon; source: @image-url("icons/map-aircraft.svg"); image-fit: contain; colorize: t.color; transform-rotation: t.heading * 1deg; accessible-role: none; }
         Text { x: parent.width + 1px; y: (parent.height - self.preferred-height) / 2; text: t.label; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: t.color; accessible-role: none; }
     }
+    // THE BASEMAP'S CREDIT, along the foot of the glass above the corner readouts: never dropped while tiles are drawn
+    if root.model.attribution != "" : Text { x: 8px; y: parent.height - 22px; width: max(0px, parent.width - 16px); text: root.model.attribution; font-size: Theme.font-tiny; color: Theme.dim; horizontal-alignment: center; overflow: elide; }
     // THE CORNERS
     Text { x: 8px; y: 6px; text: root.model.plotted-text; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.digit; }
     if root.model.range-corner != "" : Text { x: parent.width - self.preferred-width - 8px; y: 6px; text: root.model.range-corner; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.digit; }
@@ -445,9 +448,9 @@ component GainKnob inherits Rectangle {
         spacing: 2px;
         Text { text: @tr("GAIN"); font-size: Theme.font-tiny; color: Theme.fg-soft; horizontal-alignment: center; }
         Rectangle {
-            vertical-stretch: 1; min-height: 56px;
+            vertical-stretch: 1; min-height: 76px;
             knob := Rectangle {
-                width: min(parent.width, parent.height); height: self.width;
+                width: min(parent.width, parent.height) - 30px; height: self.width;   // 15 px each side for the scale's numbers
                 x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                 border-radius: self.width / 2;
                 background: root.model.knob-dead ? Theme.key-disabled-bg : Theme.key-bg;
@@ -459,6 +462,17 @@ component GainKnob inherits Rectangle {
                     transform-rotation: (root.model.knob-frac * 270 - 135) * 1deg;
                     transform-origin: { x: 1px, y: parent.height / 2 - 3px };
                 }
+            }
+            // THE KNOB'S SCALE (row 1588): the five detent figures round the dial on the pointer's arc, the one nearest the setting lit
+            for tick[i] in root.model.knob-ticks : Text {
+                width: 26px; height: 12px;
+                x: knob.x + knob.width / 2 + Math.sin((i * 67.5 - 135) * 1deg) * (knob.width / 2 + 8px) - self.width / 2;
+                y: knob.y + knob.height / 2 - Math.cos((i * 67.5 - 135) * 1deg) * (knob.width / 2 + 8px) - self.height / 2;
+                text: "" + tick;
+                font-size: Theme.font-tiny; font-family: Theme.font-mono;
+                color: root.model.knob-dead ? Theme.disabled : i == root.model.knob-lit ? Theme.accent : Theme.muted;
+                horizontal-alignment: center; vertical-alignment: center;
+                accessible-role: none;
             }
             TouchArea {
                 enabled: !root.model.knob-dead;

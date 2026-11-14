@@ -485,6 +485,12 @@ void SystemPublisher::execute(const Effect& e, const char* what) {
     o.switches_tooltip = ss(m.switches_tooltip);
     o.icon_tooltip = ss(m.icon_tooltip);
     o.trail_tooltip = ss(m.trail_tooltip);
+    {   // window gaps lane 4: the map pages' bar carries the same trail width slider
+        auto&& mx = ui_.global<::MapExtras>();
+        mx.set_trail_px(o.trail_px);
+        mx.set_trail_text(o.trail_text);
+        mx.set_trail_tooltip(o.trail_tooltip);
+    }
     return o;
 }
 

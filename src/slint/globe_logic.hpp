@@ -60,6 +60,7 @@ struct ViewState {
     // satellites
     bool footprints = true;
     bool groundTracks = true;
+    bool nightSide = true;                // the Sun's night shading (row 4087); saved inverted in opt[2] so an old setting reads as on
     // GOES: the spacecraft the picture came from
     int goesSatellite = 0;                // 0 East, 1 West
 };

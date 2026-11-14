@@ -725,6 +725,11 @@ AirbandModel readAirbandFrom(TableReader& t, const BookmarkStore& store, const F
         if (c != nullptr) { r.tooltip = cc::formatText(tr("Level %.0f dB (squelch %.0f dB)"), c->levelDb, facts.squelchDb); }
         m.rows.push_back(std::move(r));
     }
+    if (facts.listening) {
+        for (const Channel& c : live) {
+            if (c.onAir) { m.marks.push_back({c.hz, c.bwHz, c.open}); }
+        }
+    }
     m.count_line = cc::formatText(tr("%zu ticked of %zu"), ticked, rows.size());
     if (!rows.empty() && !group.empty()) {
         m.tick_all_label = T("Tick all");

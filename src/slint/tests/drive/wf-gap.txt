@@ -1,0 +1,17 @@
+#! frames=900 bank=0 sections=0:2
+# wf-gap (window gaps lane 4, rows 182, 186, 187): the waterfall's reception-gap break. A steady receiver has none and its key covers the whole picture (no coverage note, no range rail);
+# stop the receiver for nine seconds, start it again: the picture jumps in age at the row where the lines stopped, and the break is named with the ages either side of it.
+10 state running == 1
++30 state wf.lines > 15
+state wf.gap == -1
+state wf.cover == 0
+state wf.rail == -1
++1 click "Stop the receiver (Ctrl+F2)"
++10 state running == 0
++270 state running == 0
++1 click "Start the receiver (Ctrl+F2)"
++20 state running == 1
++60 state wf.gap > 0
+state wf.gapabove != "-"
+state wf.gapbelow != "-"
++1 shot "wf-gap.png"
