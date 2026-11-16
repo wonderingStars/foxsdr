@@ -51,6 +51,15 @@ constexpr Spec kSpecs[] = {
     {"cat.emulation.dialect", Kind::Choice, 0, 0, "kenwood-ts480", "kenwood-ts480|yaesu-ft891"},
     {"cat.emulation.port", Kind::Int, 0, 65535, "0", ""},       // the port the logging program connects to (0 = not configured; 4532 is the rigctl server's)
     {"cat.emulation.bind_all", Kind::Bool, 0, 0, "0", ""},      // listen on every address instead of this computer only
+    // --- CAT link: FoxSDR follows a rig, or answers a logging program on a virtual COM port (screen lane S5b; engine/cat_link.hpp). RECEIVE SIDE ONLY: the only messages sent to a rig are "FA;" and "MD;"/"MD0;" (reads).
+    {"cat.link.mode", Kind::Choice, 0, 0, "off", "off|follow|emulate|omnirig"},   // OFF: no port is opened and nothing is started until the person chooses a way and gives a port
+    {"cat.link.port", Kind::Text, 0, 12, "", ""},                // "COM3" (follow, emulate)
+    {"cat.link.dialect", Kind::Choice, 0, 0, "kenwood", "kenwood|yaesu"},
+    {"cat.link.baud", Kind::Int, 0, 4000000, "0", ""},           // the rig's own setting; 0 = not given (nothing is opened: no rate is assumed)
+    {"cat.link.stopbits", Kind::Choice, 0, 0, "1", "1|2"},
+    {"cat.link.rig", Kind::Int, 1, 2, "1", ""},                  // OmniRig's rig 1 or rig 2
+    {"cat.link.follow_frequency", Kind::Bool, 0, 0, "1", ""},    // move FoxSDR's centre when the rig's frequency changes
+    {"cat.link.follow_mode", Kind::Bool, 0, 0, "1", ""},         // change FoxSDR's mode when the rig's mode changes
     // --- web (webmodels) ---
     {"web.cors_origins", Kind::Text, 0, 2000, "", ""},        // allowed origins, one per line (empty = no cross-origin page may read)
     {"web.metrics", Kind::Bool, 0, 0, "0", ""},               // the /metrics page for a signed-in browser (Prometheus text format); off = as if it did not exist
@@ -113,6 +122,16 @@ std::string numberText(double v) {
 
 // Rules a key has beyond its kind (empty = fine). Called with the normalised value.
 std::string extraRule(const std::string& key, const std::string& value) {
+    if (key == "cat.link.port") {   // a serial port name and nothing else: COM1 to COM256, upper case (no path, no device of another kind)
+        if (value.empty()) { return std::string(); }
+        bool ok = value.size() >= 4 && value.size() <= 6 && value.compare(0, 3, "COM") == 0;
+        long n = 0;
+        for (std::size_t i = 3; ok && i < value.size(); ++i) {
+            if (value[i] < '0' || value[i] > '9') { ok = false; } else { n = n * 10 + (value[i] - '0'); }
+        }
+        if (!ok || n < 1 || n > 256) { return "a serial port is COM1 to COM256"; }
+        return std::string();
+    }
     if (key == "web.cors_origins") {
         std::size_t count = 0, from = 0;
         while (from <= value.size()) {

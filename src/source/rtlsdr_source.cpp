@@ -624,7 +624,7 @@ bool RtlSdrSource::bringUpLocked() {
     }
     sampleRateHz_.store(actual, std::memory_order_relaxed);
     rtl.setI2cRepeater(true);
-    tuner.setBandwidthHz(static_cast<int>(actual));
+    tuner.setBandwidthHz(ifBandwidthFor(actual));
     tuner.setAggregateGainTenthDb(kDefaultGainTenthDb);
     rtl.setI2cRepeater(false);
     rtl.setIfFreqHz(tuner.ifFreqHz());
@@ -893,7 +893,7 @@ bool RtlSdrSource::setSampleRateHz(double hz) {
         // has to be fed back to the demodulator's down-converter or the whole
         // spectrum sits at the wrong offset.
         link_->rtl->setI2cRepeater(true);
-        link_->tuner->setBandwidthHz(static_cast<int>(actual));
+        link_->tuner->setBandwidthHz(ifBandwidthFor(actual));
         link_->rtl->setI2cRepeater(false);
         link_->rtl->setIfFreqHz(link_->tuner->ifFreqHz());
         retuneLocked(centerFrequencyHz_.load(std::memory_order_relaxed));
@@ -1021,6 +1021,44 @@ bool RtlSdrSource::setCenterFrequencyHz(double hz) {
                  link_->rtl->lastError() + "]"));
         return false;
     }
+    return true;
+}
+
+// THE ANALOGUE IF BANDWIDTH (G1-14). 0 is automatic: the filter follows the sample rate exactly as it always did (ifBandwidthFor(rate) is then the rate itself, the value every call site passed before this setter existed).
+int RtlSdrSource::ifBandwidthFor(double rateHz) const {
+    const int user = ifBandwidthHz_.load(std::memory_order_relaxed);
+    return user > 0 ? user : static_cast<int>(rateHz);
+}
+
+bool RtlSdrSource::setIfBandwidthHz(int hz) {
+    if (hz != 0 && (hz < kIfBandwidthMinHz || hz > kIfBandwidthMaxHz)) {
+        setError("the analogue IF bandwidth is 0 (automatic) or 300 kHz to 8 MHz");
+        return false;
+    }
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
+    if (!lk.owns_lock()) {
+        setError("the radio is busy; try again");
+        return false;
+    }
+    if (!link_->rtl || !link_->tuner) {
+        setError("setIfBandwidthHz() with no radio open");
+        return false;
+    }
+    if (deviceDead()) {
+        setError("this radio has faulted; reopen it");
+        return false;
+    }
+    ifBandwidthHz_.store(hz, std::memory_order_relaxed);
+    // The IF the filter settles on moves with the bandwidth, and the demodulator's down-converter has to follow it (as after a rate change), then the tuner is put through its tune again.
+    link_->rtl->setI2cRepeater(true);
+    const bool ok = link_->tuner->setBandwidthHz(ifBandwidthFor(sampleRateHz_.load(std::memory_order_relaxed)));
+    link_->rtl->setI2cRepeater(false);
+    if (!ok) {
+        setError("the tuner would not accept that IF bandwidth: " + link_->tuner->lastError());
+        return false;
+    }
+    link_->rtl->setIfFreqHz(link_->tuner->ifFreqHz());
+    retuneLocked(centerFrequencyHz_.load(std::memory_order_relaxed));
     return true;
 }
 

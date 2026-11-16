@@ -211,8 +211,8 @@ int main() {
     {   // the radio list's ids
         CHECK(openRadioId(0, " 192.168.1.20 ").text == "open-rfspace:192.168.1.20");
         CHECK(openRadioId(11, "").text == "open-sdriq:" && openRadioId(11, "").ok);
-        CHECK(sourceKinds().size() == 12 && sourceKindNames().size() == 12 && channelPlanIds().size() == 8);
-        CHECK(!openRadioId(12, "x").ok && !openRadioId(-1, "x").ok && !openRadioId(0, std::string("a\nb")).ok && !openRadioId(0, std::string(201, 'a')).ok);
+        CHECK(sourceKinds().size() == 13 && sourceKindNames().size() == 13 && channelPlanIds().size() == 8);
+        CHECK(!openRadioId(13, "x").ok && !openRadioId(-1, "x").ok && !openRadioId(0, std::string("a\nb")).ok && !openRadioId(0, std::string(201, 'a')).ok);
     }
 
     // ---------------------------------------------------------------- readers

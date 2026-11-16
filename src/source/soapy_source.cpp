@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <condition_variable>
 #include <cstdio>
 #include <future>
@@ -3091,6 +3092,258 @@ std::string SoapySource::antennaReadback() {
         antenna_ = w.out;
     }
     return std::move(w.out);
+}
+
+// ============================================================================
+// THE DRIVER'S OWN BANDWIDTH AND SETTINGS (screen lane S5b, rows G1-15a/b)
+// ============================================================================
+namespace {
+// Text from a driver is shown on the screen and carried in facts: no control characters, no longer than a line.
+std::string tidyDriverText(std::string s, std::size_t maxLen = 160) {
+    for (char& c : s) {
+        if (static_cast<unsigned char>(c) < 0x20 || c == 0x7f) { c = ' '; }
+    }
+    if (s.size() > maxLen) { s.resize(maxLen); }
+    return s;
+}
+}  // namespace
+
+SoapySource::BandwidthInfo SoapySource::bandwidthInfo() {
+    BandwidthInfo out;
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        setError("the radio's driver is busy or not answering; try again");
+        return out;
+    }
+    if (link_->dev == nullptr) { return out; }   // no device: nothing to report, not an error
+    if (lateCallHoldsDriverLocked(0)) { refuseForLateCallLocked(); return out; }
+    if (deviceDead()) { return out; }
+
+    struct Job {
+        SoapySource* self;
+        BandwidthInfo info;
+        bool threw = false;
+        std::string message;
+    } j{this};
+    const bool completed = guardedVendorCall([&j]() noexcept {
+        try {
+            const std::vector<SoapySDR::Range> ranges = j.self->link_->dev->getBandwidthRange(SOAPY_SDR_RX, kChannel);
+            bool first = true;
+            for (const SoapySDR::Range& r : ranges) {
+                if (!(r.maximum() > 0.0) || !std::isfinite(r.minimum()) || !std::isfinite(r.maximum())) { continue; }
+                j.info.loHz = first ? r.minimum() : std::min(j.info.loHz, r.minimum());
+                j.info.hiHz = first ? r.maximum() : std::max(j.info.hiHz, r.maximum());
+                first = false;
+            }
+            j.info.supported = !first;
+            if (j.info.supported) { j.info.currentHz = j.self->link_->dev->getBandwidth(SOAPY_SDR_RX, kChannel); }
+        } catch (const std::exception& e) {
+            j.threw = true;
+            j.message = describe(e, "reading the bandwidth failed");
+        } catch (...) {
+            j.threw = true;
+            j.message = "reading the bandwidth failed: non-standard exception";
+        }
+    });
+    if (!completed) { noteVendorFault("reading the bandwidth"); return BandwidthInfo{}; }
+    if (j.threw) { setError(std::move(j.message)); return BandwidthInfo{}; }
+    return j.info;
+}
+
+bool SoapySource::setBandwidthHz(double hz, double* appliedHz) {
+    if (!(hz > 0.0) || !std::isfinite(hz)) {
+        setError("the bandwidth must be a positive number of Hz");
+        return false;
+    }
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        setError("the radio's driver is busy or not answering; try again");
+        return false;
+    }
+    if (link_->dev == nullptr) {
+        setError("setBandwidthHz() called with no device open");
+        return false;
+    }
+    if (lateCallHoldsDriverLocked(0)) { refuseForLateCallLocked(); return false; }
+    if (deviceDead()) { return false; }
+
+    struct Job {
+        SoapySource* self;
+        double hz;
+        double readback = 0.0;
+        bool supported = true, inRange = true;
+        double lo = 0.0, hi = 0.0;
+        bool threw = false;
+        std::string message;
+    } j{this, hz};
+    const bool completed = guardedVendorCall([&j]() noexcept {
+        try {
+            const std::vector<SoapySDR::Range> ranges = j.self->link_->dev->getBandwidthRange(SOAPY_SDR_RX, kChannel);
+            bool any = false;
+            bool within = false;
+            for (const SoapySDR::Range& r : ranges) {
+                if (!(r.maximum() > 0.0)) { continue; }
+                j.lo = any ? std::min(j.lo, r.minimum()) : r.minimum();
+                j.hi = any ? std::max(j.hi, r.maximum()) : r.maximum();
+                any = true;
+                if (j.hz >= r.minimum() && j.hz <= r.maximum()) { within = true; }
+            }
+            j.supported = any;
+            j.inRange = within;
+            if (!any || !within) { return; }
+            j.self->link_->dev->setBandwidth(SOAPY_SDR_RX, kChannel, j.hz);
+            j.readback = j.self->link_->dev->getBandwidth(SOAPY_SDR_RX, kChannel);
+        } catch (const std::exception& e) {
+            j.threw = true;
+            j.message = describe(e, "setBandwidth failed");
+        } catch (...) {
+            j.threw = true;
+            j.message = "setBandwidth failed: non-standard exception";
+        }
+    });
+    if (!completed) { noteVendorFault("setting the bandwidth"); return false; }
+    if (j.threw) { setError(std::move(j.message)); return false; }
+    if (!j.supported) { setError("this driver has no bandwidth setting"); return false; }
+    if (!j.inRange) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "the driver accepts bandwidths from %.0f to %.0f Hz", j.lo, j.hi);
+        setError(buf);
+        return false;
+    }
+    if (appliedHz != nullptr) { *appliedHz = j.readback; }
+    return true;
+}
+
+std::vector<SoapySource::SettingInfo> SoapySource::listSettings() {
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        setError("the radio's driver is busy or not answering; try again");
+        return {};
+    }
+    if (link_->dev == nullptr) { return {}; }   // no device, no settings - not an error
+    if (lateCallHoldsDriverLocked(0)) { refuseForLateCallLocked(); return {}; }
+    if (deviceDead()) { return {}; }
+
+    struct Job {
+        SoapySource* self;
+        std::vector<SettingInfo> out;
+        bool threw = false;
+        std::string message;
+    } j{this};
+    const bool completed = guardedVendorCall([&j]() noexcept {
+        try {
+            const SoapySDR::ArgInfoList infos = j.self->link_->dev->getSettingInfo();
+            for (const SoapySDR::ArgInfo& a : infos) {
+                if (j.out.size() >= 64 || a.key.empty() || a.key.size() > 100) { continue; }
+                SettingInfo s;
+                s.key = tidyDriverText(a.key, 100);
+                s.name = tidyDriverText(a.name.empty() ? a.key : a.name, 100);
+                s.description = tidyDriverText(a.description, 200);
+                s.units = tidyDriverText(a.units, 20);
+                s.defaultValue = tidyDriverText(a.value, 100);
+                switch (a.type) {
+                    case SoapySDR::ArgInfo::BOOL: s.type = SettingType::Bool; break;
+                    case SoapySDR::ArgInfo::INT: s.type = SettingType::Int; break;
+                    case SoapySDR::ArgInfo::FLOAT: s.type = SettingType::Float; break;
+                    default: s.type = SettingType::String; break;
+                }
+                if (a.range.maximum() > a.range.minimum() && std::isfinite(a.range.minimum()) && std::isfinite(a.range.maximum())) {
+                    s.hasRange = true;
+                    s.lo = a.range.minimum();
+                    s.hi = a.range.maximum();
+                }
+                for (std::size_t i = 0; i < a.options.size() && i < 32; ++i) {
+                    s.options.push_back(tidyDriverText(a.options[i], 60));
+                    s.optionNames.push_back(tidyDriverText(i < a.optionNames.size() ? a.optionNames[i] : a.options[i], 60));
+                }
+                try {
+                    s.value = tidyDriverText(j.self->link_->dev->readSetting(a.key), 100);
+                } catch (...) {
+                    s.value = s.defaultValue;   // a setting that cannot be read back shows the driver's own default
+                }
+                j.out.push_back(std::move(s));
+            }
+        } catch (const std::exception& e) {
+            j.threw = true;
+            j.message = describe(e, "getSettingInfo failed");
+        } catch (...) {
+            j.threw = true;
+            j.message = "getSettingInfo failed: non-standard exception";
+        }
+    });
+    if (!completed) { noteVendorFault("listing the driver settings"); return {}; }
+    if (j.threw) { setError(std::move(j.message)); return {}; }
+    return std::move(j.out);
+}
+
+bool SoapySource::writeSetting(const std::string& key, const std::string& value, std::string* readback) {
+    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
+    if (!devLk.owns_lock()) {
+        setError("the radio's driver is busy or not answering; try again");
+        return false;
+    }
+    if (link_->dev == nullptr) {
+        setError("writeSetting() called with no device open");
+        return false;
+    }
+    if (lateCallHoldsDriverLocked(0)) { refuseForLateCallLocked(); return false; }
+    if (deviceDead()) { return false; }
+
+    struct Job {
+        SoapySource* self;
+        const std::string* key;
+        const std::string* value;
+        bool known = false;
+        std::string refusal;   // our own judgement of the value against the driver's type, range and options
+        std::string readback;
+        bool threw = false;
+        std::string message;
+    } j{this, &key, &value};
+    const bool completed = guardedVendorCall([&j]() noexcept {
+        try {
+            const SoapySDR::ArgInfoList infos = j.self->link_->dev->getSettingInfo();
+            const SoapySDR::ArgInfo* hit = nullptr;
+            for (const SoapySDR::ArgInfo& a : infos) {
+                if (a.key == *j.key) { hit = &a; break; }
+            }
+            if (hit == nullptr) { return; }
+            j.known = true;
+            const std::string& v = *j.value;
+            if (!hit->options.empty()) {
+                if (std::find(hit->options.begin(), hit->options.end(), v) == hit->options.end()) {
+                    j.refusal = "that is not one of the values the driver accepts for this setting";
+                    return;
+                }
+            } else if (hit->type == SoapySDR::ArgInfo::BOOL) {
+                if (v != "true" && v != "false") { j.refusal = "this setting is on or off"; return; }
+            } else if (hit->type == SoapySDR::ArgInfo::INT || hit->type == SoapySDR::ArgInfo::FLOAT) {
+                char* end = nullptr;
+                const double d = std::strtod(v.c_str(), &end);
+                if (v.empty() || end == v.c_str() || *end != '\0' || !std::isfinite(d)) { j.refusal = "this setting is a number"; return; }
+                if (hit->type == SoapySDR::ArgInfo::INT && d != std::floor(d)) { j.refusal = "this setting is a whole number"; return; }
+                if (hit->range.maximum() > hit->range.minimum() && (d < hit->range.minimum() || d > hit->range.maximum())) {
+                    char buf[120];
+                    std::snprintf(buf, sizeof(buf), "the driver accepts %g to %g for this setting", hit->range.minimum(), hit->range.maximum());
+                    j.refusal = buf;
+                    return;
+                }
+            }
+            j.self->link_->dev->writeSetting(*j.key, v);
+            j.readback = j.self->link_->dev->readSetting(*j.key);
+        } catch (const std::exception& e) {
+            j.threw = true;
+            j.message = describe(e, "writeSetting failed");
+        } catch (...) {
+            j.threw = true;
+            j.message = "writeSetting failed: non-standard exception";
+        }
+    });
+    if (!completed) { noteVendorFault("writing a driver setting"); return false; }
+    if (j.threw) { setError(std::move(j.message)); return false; }
+    if (!j.known) { setError("the driver has no setting called \"" + tidyDriverText(key, 60) + "\""); return false; }
+    if (!j.refusal.empty()) { setError(j.refusal); return false; }
+    if (readback != nullptr) { *readback = tidyDriverText(j.readback, 100); }
+    return true;
 }
 
 }  // namespace cascade::source

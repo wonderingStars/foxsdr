@@ -203,6 +203,12 @@ public:
     static constexpr double kDirectHiHz = 14400000.0;
     bool setDirectSamplingChoice(int choice);
     int directSamplingChoice() const { return directChoice_.load(std::memory_order_relaxed); }
+    // THE ANALOGUE IF BANDWIDTH (screen lane S5b, row G1-14): the tuner's own filter in front of the ADC. 0 (the default) is automatic - the filter follows the sample rate, as it always has; otherwise 300 kHz to 8 MHz.
+    // False, nothing changed, for a value outside that, a closed or faulted radio, or a tuner that refuses the register writes. A rate change keeps the chosen value.
+    static constexpr int kIfBandwidthMinHz = 300000;
+    static constexpr int kIfBandwidthMaxHz = 8000000;
+    bool setIfBandwidthHz(int hz);
+    int ifBandwidthHz() const { return ifBandwidthHz_.load(std::memory_order_relaxed); }
     bool directSamplingSupported() const;     // a radio with a tuner that is not a Blog V4
     int directSamplingMode() const;           // what the demodulator is doing now: 0 off, 1 the I branch, 2 the Q branch
 
@@ -315,6 +321,8 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<double> sampleRateHz_{0.0};
     std::atomic<double> centerFrequencyHz_{0.0};
+    std::atomic<int> ifBandwidthHz_{0};  // G1-14: 0 automatic (the sample rate), else the user's analogue IF bandwidth in Hz
+    int ifBandwidthFor(double rateHz) const;
     std::atomic<int> directChoice_{0};   // R11: 0 automatic / 1 never / 2 I branch / 3 Q branch
     std::atomic<bool> biasTee_{false};
     std::atomic<bool> eepromValid_{false};

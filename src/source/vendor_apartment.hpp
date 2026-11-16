@@ -75,6 +75,9 @@ struct StreamLink {
     void deliver(const void* buffer, std::uint32_t n, std::uint32_t bits);
     // A callback the owner refused before it got here (the wrong channel): counted as a call and as bad.
     void countBad();
+    // The same for a library that delivers 32-bit floats: `floatCount` floats, interleaved I,Q. An odd count, a null buffer, no samples or more than 2M floats
+    // is dropped and counted; nothing past `floatCount` is ever read.
+    void deliverFloats(const float* buffer, std::uint32_t floatCount);
 };
 
 }  // namespace cascade::source::vendorapt

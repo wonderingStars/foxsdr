@@ -65,7 +65,7 @@ list(APPEND foxsdr_slint_sources lanes2_logic.cpp lanes2_publish.cpp lanes2_fold
 # SCREEN LANE S4 (docs/multi-radio-records/screen-s4-wave8.md): the scanner's saved hits, the TCI / UDP audio / MQTT / web address / keyword alert controls (s4_logic: pure; s4_publish: the LaneS4 global; ui/s4_bank.slint)
 list(APPEND foxsdr_slint_sources s4_logic.cpp s4_publish.cpp)
 # SCREEN LANE S5 (docs/multi-radio-records/screen-s5-sources.md): radios and sources a user could not reach or set (s5_logic: pure; s5_rows: the rows over injected facts and commands; s5_publish: the LaneS5 global; ui/s5_bank.slint)
-list(APPEND foxsdr_slint_sources s5_logic.cpp s5_rows.cpp s5_publish.cpp)
+list(APPEND foxsdr_slint_sources s5_logic.cpp s5_rows.cpp s5_publish.cpp s5b_logic.cpp s5b_rows.cpp)
 # SCREEN LANE S3 (docs/multi-radio-records/screen-s3-recplay.md): recording and playback controls (lanes3_logic: pure; lanes3_publish: the LaneS3 global)
 list(APPEND foxsdr_slint_sources lanes3_logic.cpp lanes3_publish.cpp)
 # LANE X (docs/multi-radio-records/lane-x.md): the in-window help (lanex_help: the topics and the search, pure), the DSP speed test (lanex_bench: the job, pure), lanex_publish: the LaneX global; ui/lane_x.slint

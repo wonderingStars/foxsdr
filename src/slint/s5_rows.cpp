@@ -79,6 +79,7 @@ void S5Rows::onAnswer(const FoxCommandResult& r) {
     if (r.status == FOXAPI_OK) {
         std::string extra;
         if (kind == kClaim) { extra = claimAnswerText(r.applied[0], r.applied[1]); }
+        if (kind == kSoapy && (!msg.empty() || r.applied[0] > 0.0)) { setNote(what + ": " + tr("the driver now has") + " " + (msg.empty() ? sll::numberText(r.applied[0] / 1000.0) + " kHz" : msg), kGood); dirty_ = true; return; }   // lane S5b: the driver's own readback
         setNote(what + ": " + (extra.empty() ? tr("done") : extra) + (msg.empty() ? std::string() : " (" + msg + ")"), kGood);
     } else if (r.status == FOXAPI_NO_CHANGE) { setNote(what + ": " + sll::refusalText(r.status, msg), kDim); }
     else { ++refused_; setNote(what + ": " + sll::refusalText(r.status, msg), kErr); }
@@ -123,6 +124,7 @@ std::vector<Row> S5Rows::build() {
         buildPpm(v);
         buildPool(v);
         buildDirect(v);
+        buildS5b(v);
     }
     if (!note_.empty()) { v.push_back(rNote(note_, noteTone_)); }
     return v;

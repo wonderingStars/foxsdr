@@ -12,7 +12,7 @@ if(NOT WIN32)
     set(CASCADE_WINDOWS_ONLY_TESTS
         test_extio                   # the ExtIO helper process and its stand-in DLLs
         test_gui_desktop_guard       # the Win32 desktop guard
-        test_vendor_lib test_g33ddc_source test_g39ddc_source test_sdriq_d2xx    # stand-in vendor DLLs loaded by path (tests/eol_fixture.hpp)
+        test_vendor_lib test_g33ddc_source test_g39ddc_source test_sdriq_d2xx test_fobos_source    # stand-in vendor DLLs loaded by path (tests/eol_fixture.hpp)
         test_engine_api_wireb_ftdi test_engine_api_wireb_winradio test_engine_api_wireb_neededlibs
         test_hardware_guard
         # Hot-plug detection (core/sys_device_watch.cpp) is a hidden window that receives WM_DEVICECHANGE; off Windows DeviceArrivalWatcher::start()
@@ -330,8 +330,8 @@ foreach(src ${CASCADE_TESTS})
     endif()
     target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     # SCREEN LANE S5 (docs/multi-radio-records/screen-s5-sources.md): this test drives the Source section's rows (src/slint/s5_rows.cpp, pure: no Slint) against the real engine.
-    if(name STREQUAL "test_engine_api_s5")
-        target_sources(${name} PRIVATE "${CMAKE_SOURCE_DIR}/src/slint/s5_logic.cpp" "${CMAKE_SOURCE_DIR}/src/slint/s5_rows.cpp" "${CMAKE_SOURCE_DIR}/src/slint/lanel_logic.cpp" "${CMAKE_SOURCE_DIR}/src/slint/lanek_logic.cpp")
+    if(name STREQUAL "test_engine_api_s5" OR name STREQUAL "test_engine_api_s5b")
+        target_sources(${name} PRIVATE "${CMAKE_SOURCE_DIR}/src/slint/s5_logic.cpp" "${CMAKE_SOURCE_DIR}/src/slint/s5_rows.cpp" "${CMAKE_SOURCE_DIR}/src/slint/s5b_logic.cpp" "${CMAKE_SOURCE_DIR}/src/slint/s5b_rows.cpp" "${CMAKE_SOURCE_DIR}/src/slint/lanel_logic.cpp" "${CMAKE_SOURCE_DIR}/src/slint/lanek_logic.cpp")
         target_include_directories(${name} PRIVATE "${CMAKE_SOURCE_DIR}/src/slint")
     endif()
     # The engine-API conformance ports (engine-stage4.md) use the reference
@@ -2005,3 +2005,18 @@ if(WIN32)
     endif()
 endif()
 # wire-b second pass end ------------------------------------------------------------------------------------------------------------------------
+
+# lane S5c begin ---------------------------------------------------------------------------------------------------------------------------------
+# A stand-in Fobos SDR library (written from the maker's public header, in this tree's own words) for test_fobos_source, beside the other stand-in vendor libraries.
+if(WIN32)
+    set(_s5c_dir "${CMAKE_CURRENT_BINARY_DIR}/fixture_osslibs")
+    add_library(s5c_fobos_standin MODULE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/fobos_standin.cpp")
+    target_include_directories(s5c_fobos_standin PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    set_target_properties(s5c_fobos_standin PROPERTIES PREFIX "" OUTPUT_NAME "fobos"
+        LIBRARY_OUTPUT_DIRECTORY "${_s5c_dir}/$<CONFIG>" RUNTIME_OUTPUT_DIRECTORY "${_s5c_dir}/$<CONFIG>")
+    if(TARGET test_fobos_source)
+        target_compile_definitions(test_fobos_source PRIVATE EOL_SRC_DIR="${CMAKE_SOURCE_DIR}")
+        add_dependencies(test_fobos_source s5c_fobos_standin eol_partial_standin eol_needs_dep)
+    endif()
+endif()
+# lane S5c end -----------------------------------------------------------------------------------------------------------------------------------

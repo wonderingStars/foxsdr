@@ -41,6 +41,8 @@ struct AppWindowTestAccess {
         Engine::testHooks_.soapyScan = &noSoapyRadios;
     }
     // wire-b second pass (item 34): the engine's device construction replaced by the test's stand-in (nullptr puts it back)
+    // Screen lane S5b: the SoapySDR scan the engine's Source list shows (nullptr puts the empty one back); the driver it names is an in-process stand-in the test registered (tests/soapy_standin.hpp).
+    static void setSoapyScan(std::vector<cascade::source::SoapyDeviceInfo> (*f)()) { Engine::testHooks_.soapyScan = f != nullptr ? f : &noSoapyRadios; }
     static void setMakeDevice(std::unique_ptr<cascade::source::DeviceSource> (*f)(const std::string& kind)) { Engine::testHooks_.makeDevice = f; }
     static cascade::core::AppConfig snapshot(Engine& e) {
         e.publishConfig();

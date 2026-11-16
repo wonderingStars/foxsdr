@@ -255,6 +255,23 @@ void Engine::wireCFacts(const std::function<void(const std::string&, const std::
     fact("cat.emulation.clients", std::to_string(s.catEmu.clients()));
     fact("cat.emulation.commands", std::to_string(s.catEmu.commands()));
     fact("cat.emulation.error", s.catEmu.error());
+    // THE CAT LINK (screen lane S5b; engine/cat_link.hpp): what FoxSDR is following, what the rig said last and what was done about it
+    {
+        const wc::CatLinkStatus cl = s.catLink.status();
+        fact("cat.link.state", cl.state);
+        fact("cat.link.kind", cl.kind);
+        fact("cat.link.error", cl.error);
+        fact("cat.link.rigHz", cl.rigKnown ? std::to_string(static_cast<long long>(cl.rigHz + 0.5)) : std::string());
+        fact("cat.link.rigMode", cl.rigMode);
+        fact("cat.link.polls", std::to_string(cl.polls));
+        fact("cat.link.answers", std::to_string(cl.answers));
+        fact("cat.link.rigErrors", std::to_string(cl.rigErrors));
+        fact("cat.link.applied", std::to_string(cl.applied));
+        fact("cat.link.refused", std::to_string(cl.refused));
+        fact("cat.link.blocked", std::to_string(cl.blocked));
+        fact("cat.link.served", std::to_string(cl.served));
+        fact("cat.link.omnirig.needed", wc::CatLink::omniRigNeededSentence());
+    }
     // THE LOGGER'S RADIO INFORMATION (row H6): what the program we follow says its radios are doing; LOCAL only like every fact of this lane
     fact("ham.radioinfo.running", s.radioInfo.running() ? "1" : "0");
     fact("ham.radioinfo.port", s.radioInfo.running() ? std::to_string(s.radioInfo.boundPort()) : std::string());
@@ -608,6 +625,37 @@ void Engine::pumpWireC() {
                 s.catEmuSeen = seen;
                 ++wireCVersion_;
             }
+        }
+    }
+    // THE CAT LINK (screen lane S5b; engine/cat_link.hpp): follows a rig over a serial port or OmniRig, or answers a logging program on a virtual COM port; receive side only, off by default; a change of settings restarts it
+    {
+        wc::CatLinkConfig cfg;
+        cfg.mode = s.settings().get("cat.link.mode");
+        cfg.port = s.settings().get("cat.link.port");
+        cfg.dialect = s.settings().get("cat.link.dialect");
+        cfg.baud = static_cast<int>(s.settings().getInt("cat.link.baud"));
+        cfg.stopBits = static_cast<int>(s.settings().getInt("cat.link.stopbits"));
+        cfg.rig = static_cast<int>(s.settings().getInt("cat.link.rig"));
+        cfg.followFrequency = s.settings().getBool("cat.link.follow_frequency");
+        cfg.followMode = s.settings().getBool("cat.link.follow_mode");
+        const std::string sig = cfg.mode + "|" + cfg.port + "|" + cfg.dialect + "|" + std::to_string(cfg.baud) + "|" + std::to_string(cfg.stopBits) + "|" + std::to_string(cfg.rig) + "|" +
+                                (cfg.followFrequency ? "1" : "0") + "|" + (cfg.followMode ? "1" : "0");
+        if (sig != s.catLinkApplied) {
+            s.catLinkApplied = sig;
+            wc::CatLinkSeams seams = s.catLinkSeams;
+            seams.table = cascade::engine::engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
+            seams.openSession = [this]() -> FoxSession* {
+                std::int32_t st = FOXAPI_OK;
+                return api().openInternalSession(InternalKind::Cat, "CAT link", &st);
+            };
+            s.catLink.configure(cfg, seams);
+            ++wireCVersion_;
+        }
+        const wc::CatLinkStatus cl = s.catLink.status();
+        const std::uint64_t seen = (cl.state == "off" && cl.error.empty()) ? 0u : cl.polls + (cl.applied << 20) + (cl.served << 40) + std::hash<std::string>{}(cl.state + cl.error + cl.rigMode);   // (an idle link counts as nothing: the first pass moves no version)
+        if (seen != s.catLinkSeen) {
+            s.catLinkSeen = seen;
+            ++wireCVersion_;
         }
     }
     // THE METRICS PAGE (row L3): switched with web.metrics; while on, about once a second a snapshot of counts and levels goes to the page (never a decoded text, a callsign, a
