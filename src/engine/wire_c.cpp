@@ -109,6 +109,8 @@ constexpr Spec kSpecs[] = {
     {"rot.az_max", Kind::Choice, 0, 0, "450", "360|450"},       // the controller's azimuth range
     {"rot.park_az", Kind::Real, 0, 450, "0", ""},
     {"rot.park_el", Kind::Real, 0, 180, "0", ""},
+    {"swl.operator", Kind::Text, 0, 16, "", ""},                // the listener's identifier written into the listening log's ADIF export
+    {"swl.grid", Kind::Text, 0, 8, "", ""},                     // the listener's Maidenhead square (2 to 8 characters), optional
 };
 constexpr std::size_t kSpecCount = sizeof(kSpecs) / sizeof(kSpecs[0]);
 
@@ -165,6 +167,17 @@ std::string extraRule(const std::string& key, const std::string& value) {
         bool com = value.size() >= 4 && value.size() <= 6 && (value.compare(0, 3, "COM") == 0);
         for (std::size_t i = 3; com && i < value.size(); ++i) { com = value[i] >= '0' && value[i] <= '9'; }
         if (!com) { return "the serial port is a name like COM3"; }
+    }
+    if (key == "swl.operator" && value.find_first_of("\r\n\t") != std::string::npos) { return "the identifier has a control character"; }
+    if (key == "swl.grid" && !value.empty()) {
+        bool ok = value.size() == 2 || value.size() == 4 || value.size() == 6 || value.size() == 8;
+        for (std::size_t i = 0; ok && i < value.size(); ++i) {
+            const char ch = value[i];
+            const bool letter = (ch >= 'A' && ch <= 'R') || (ch >= 'a' && ch <= 'r') || (i >= 4 && ((ch >= 'A' && ch <= 'X') || (ch >= 'a' && ch <= 'x')));
+            const bool digit = ch >= '0' && ch <= '9';
+            ok = (i % 4 < 2) ? (i % 2 == 0 ? letter : letter) : digit;
+        }
+        if (!ok) { return "the square is 2, 4, 6 or 8 characters like IO91 or IO91wm"; }
     }
     if (key == "alerts.keywords") { return cascade::engine::s4::parseKeywords(value).problem; }
     if (key == "rds.log.folder" && !value.empty() && !std::filesystem::path(value).is_absolute()) { return "the folder must be a full path"; }

@@ -72,6 +72,30 @@ std::int32_t Engine::applyWireC(const FoxCommand& c, const std::string& text, Fo
             return FOXAPI_FAILED;
         }
         case FOXAPP_OP_ROTATOR: return wireC().servers.rotatorOp(text, why);
+        case FOXAPP_OP_SWL: {
+            wc::State& s = wireC();
+            namespace s4b = cascade::engine::s4b;
+            s4b::RadioFigures rf;
+            {
+                const int radio = static_cast<int>(s.settings().getInt("srv.control.radio"));
+                const std::size_t slot = static_cast<std::size_t>(radio - 1);
+                cascade::core::PublishedState ps;
+                if (radio >= 1 && slot < receivers_.size() && receivers_[slot] && receivers_[slot]->receiverSnapshot_ != nullptr && receivers_[slot]->receiverSnapshot_->read(ps) && ps.rx.tunedHz > 0.0) {
+                    rf.valid = true;
+                    rf.hz = ps.rx.tunedHz;
+                    rf.mode = ps.rx.demodMode <= 8u ? cascade::core::kDemodNames[ps.rx.demodMode] : "";
+                    rf.peakDbfs = ps.rx.signalDb > -199.0 ? ps.rx.signalDb : std::nan("");
+                    rf.radio = radio;
+                }
+            }
+            std::string exported;
+            s.swlError.clear();
+            const std::int32_t st = s4b::swlOp(s.swl(), text, rf, static_cast<std::int64_t>(std::time(nullptr)), s.settings().get("swl.operator"), s.settings().get("swl.grid"), why, exported);
+            ++wireCVersion_;
+            if (st != FOXAPI_OK) { s.swlError = why; return st; }
+            if (!exported.empty()) { s.swlExportLast = exported; }
+            return FOXAPI_OK;
+        }
         case FOXAPP_OP_SYS_FIRSTRUN: {
             wc::State& s = wireC();
             wc::SysOps& sys = s.sys();
@@ -227,6 +251,9 @@ void Engine::wireCFacts(const std::function<void(const std::string&, const std::
     fact("rds.log.dropped", std::to_string(s.rdsLog.dropped()));
     fact("rds.log.error", s.rdsLog.error());
     s.servers.facts(fact);   // screen lane S4b: the servers other programs connect to (counts and sentences only)
+    fact("swl.count", std::to_string(s.swl().size()));      // the listening log: a COUNT and sentences only, never an entry
+    fact("swl.error", s.swlError.empty() ? s.swl().error() : s.swlError);
+    fact("swl.export.last", s.swlExportLast);
     // THE DECODED-TEXT OUTPUTS AND ALERTS (screen lane S4): counts and one sentence each - never a decoded line, a user name, a password or an address. The last alerts are the program's own
     // read-out for the operator (LOCAL only, like every fact of this lane): the matched keyword and the text, cut.
     {

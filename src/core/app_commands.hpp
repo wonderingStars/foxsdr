@@ -245,6 +245,13 @@
 //   accepted for the rotator's worker, not that the antenna has arrived: the position the controller reports is fact.rot.az / fact.rot.el, the state fact.rot.connected / .problem and the counts
 //   fact.rot.turns / .stops / .parks / .failures. NOTHING moves the antenna but this op, and nothing here reaches a transmitter.
 #define FOXAPP_OP_ROTATOR                0x8A20u /* text JSON: turn / stop / park */
+//   THE LISTENING (SWL) LOG (screen lane S4b, G3-49; engine/s4b_swl.hpp; SETTINGS; LOCAL sessions only): the person's own log of what they heard, in swl-log.json beside the settings. text JSON:
+//   {"action":"add","call":"","station":"","notes":""} logs what the control radio (wirec srv.control.radio) is tuned to NOW: the engine adds the time, the frequency, the mode and the signal level, the
+//   person's three texts are cleaned and cut to 200 bytes (FAILED when the radio is not open, LIMIT at 20000 entries, BAD_ARGUMENT for an unknown key or a text that is not a text);
+//   {"action":"remove","index":N} (NOT_FOUND for no such entry, numbered from 1); {"action":"clear"} (NO_CHANGE when empty); {"action":"export","path":"<a full path ending .adi or .adif>"} writes the
+//   entries as ADIF 3.1.8 listening-report records (the wirec keys swl.operator and swl.grid name the listener; BAD_ARGUMENT for a relative path, another extension or nothing to write).
+//   Facts: fact.swl.count, fact.swl.error, fact.swl.export.last (a sentence of counts). The log is never sent anywhere and never appears in a report; nothing is logged automatically.
+#define FOXAPP_OP_SWL                    0x8A21u /* text JSON: add / remove / clear / export */
 #define FOXAPP_OP_PLUGIN_OPEN_CONFIRM    0x8A10u /* text: "<module file>\x1F<url|folder>" */
 // wire-c end
 // Plugins and the store.

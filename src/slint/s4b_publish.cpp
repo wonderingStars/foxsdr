@@ -9,6 +9,8 @@
 #include <cstring>
 #include <map>
 
+#include <nlohmann/json.hpp>
+
 #include "core/app_commands.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
@@ -249,9 +251,54 @@ struct S4bPublisher::Impl {
         if (on && !serial && !fact("rot.scope").empty() && fact("rot.scope") != "this computer only") { v.push_back(rNote(fact("rot.scope"), kWarn)); }
     }
 
+    // the listening log's drafts: the station heard, a note, the file to export to; and whether "clear" was pressed once
+    std::string swlCall, swlNote, swlPath;
+    bool swlClearArmed = false;
+    void swlRows(std::vector<Row>& v, Sec S) {
+        v.push_back(rHeading(tr("Listening log")));
+        v.push_back(rNote(tr("Your own log of what you hear. Nothing is logged unless you press the key, and it never leaves this computer unless you export it."), kDim));
+        field(v, "swl.call", tr("Station heard"), swlCall, [this](const std::string& t) { swlCall = trim(t); dirty = true; }, tr("Its call sign or name, optional."));
+        field(v, "swl.note", tr("Note"), swlNote, [this](const std::string& t) { swlNote = trim(t); dirty = true; }, tr("Anything to remember about it, optional."));
+        key(v, "swl.add", tr("Log what I am hearing now"), [this, S] {
+            nlohmann::json j = {{"action", "add"}, {"call", swlCall}, {"station", swlCall}, {"notes", swlNote}};
+            if (swlCall.empty()) { j.erase("call"); j.erase("station"); }
+            if (swlNote.empty()) { j.erase("notes"); }
+            Cmd c;
+            c.op = FOXAPP_OP_SWL;
+            c.text = j.dump();
+            send(S, tr("Log what I am hearing now"), c);
+            swlClearArmed = false;
+        }, true, tr("Adds the time, the frequency, the mode and the signal level of the radio you are listening to."));
+        v.push_back(rReadout(tr("Entries in the log"), fact("swl.count")));
+        field(v, "swl.operator", tr("Your listener identifier"), fact("wirec.swl.operator"), [this, S](const std::string& t) { setting(S, tr("Your listener identifier"), "swl.operator", trim(t)); }, tr("Written into the exported file, optional."));
+        field(v, "swl.grid", tr("Your grid square"), fact("wirec.swl.grid"), [this, S](const std::string& t) { setting(S, tr("Your grid square"), "swl.grid", trim(t)); }, tr("Like IO91 or IO91wm, optional."));
+        field(v, "swl.path", tr("Listening log file to write"), swlPath, [this](const std::string& t) { swlPath = trim(t); dirty = true; }, tr("A full path ending .adi or .adif."));
+        key(v, "swl.export", tr("Export the listening log"), [this, S] {
+            if (swlPath.empty() || swlPath.size() > 500) { refuseHere(S, tr("Export the listening log"), tr("Type the full path of the file first.")); return; }
+            Cmd c;
+            c.op = FOXAPP_OP_SWL;
+            c.text = nlohmann::json({{"action", "export"}, {"path", swlPath}}).dump();
+            send(S, tr("Export the listening log"), c);
+            swlClearArmed = false;
+        });
+        const std::string last = fact("swl.export.last");
+        if (!last.empty()) { v.push_back(rReadout(tr("Last export"), last)); }
+        key(v, "swl.clear", swlClearArmed ? tr("Press again to clear the whole listening log") : tr("Clear the listening log"), [this, S] {
+            if (!swlClearArmed) { swlClearArmed = true; return; }
+            swlClearArmed = false;
+            Cmd c;
+            c.op = FOXAPP_OP_SWL;
+            c.text = "{\"action\":\"clear\"}";
+            send(S, tr("Clear the listening log"), c);
+        });
+        const std::string err = fact("swl.error");
+        if (!err.empty()) { v.push_back(rNote(err, kErr)); }
+    }
+
     // ================================================================ SYSTEM > Outputs
     void buildOut(std::vector<Row>& v) {
         const Sec S = kOut;
+        swlRows(v, S);
         rotatorRows(v, S);
         // ---- audio over TCP (G3-22)
         v.push_back(rHeading(tr("Audio over TCP")));

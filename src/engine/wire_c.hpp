@@ -31,6 +31,7 @@
 #include "engine/wire_c_sys.hpp"
 #include "engine/s4_outputs.hpp"
 #include "engine/s4b_servers.hpp"
+#include "engine/s4b_swl.hpp"
 
 namespace cascade::engine::wirec {
 
@@ -90,6 +91,8 @@ public:
     const std::filesystem::path& folder() const { return folder_; }
     SysOps& sys() { return sys_; }
     QsoBook& qsos() { return qsoBook_; }
+    cascade::engine::s4b::SwlBook& swl() { return swlBook_; }   // screen lane S4b: the listening (SWL) log
+    std::string swlError, swlExportLast;
     CatEmulation catEmu;                  // CAT emulation for logging programs (row L7)
     cascade::core::rdslog::Logger rdsLog; // the RDS log (engine lane E1): a worker of its own, started only while the user's switch is on
     std::uint64_t rdsLogSeen = 0;          // what the last published fact block counted of the log (lines, drops, the error)
@@ -150,6 +153,7 @@ private:
     Settings settings_;
     SysOps sys_;
     QsoBook qsoBook_{folder_ / "qso-log.json"};
+    cascade::engine::s4b::SwlBook swlBook_{folder_ / "swl-log.json"};
     mutable std::mutex powerMu_;
     std::unique_ptr<Power> power_;
 };

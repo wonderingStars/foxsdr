@@ -116,3 +116,21 @@
 +8 state s4b.fact.wirec.rot.serial == ""
 +1 click "rotctld (network)"
 +12 state s4b.fact.wirec.rot.kind == rotctld
+# the listening log (G3-49): the engine adds what the radio is on, the person the words; the count is read back FROM THE ENGINE; nothing is exported to a relative path
++1 state s4b.fact.swl.count == 0
++1 type "Station heard" "BBC World Service"
++1 key enter
++1 type "Note" "clear signal"
++1 key enter
++1 click "Log what I am hearing now"
++12 state s4b.fact.swl.count == 1
++1 click "Log what I am hearing now"
++12 state s4b.fact.swl.count == 2
++1 type "Listening log file to write" "heard.adi"
++1 key enter
++1 click "Export the listening log"
++12 state s4b.note.outputs contains "full path"
++1 click "Clear the listening log"
++3 state s4b.fact.swl.count == 2
++1 click "Press again to clear the whole listening log"
++12 state s4b.fact.swl.count == 0
