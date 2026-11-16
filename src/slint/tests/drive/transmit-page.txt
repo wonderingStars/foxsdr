@@ -5,7 +5,9 @@
 # refusal) and the DATA (flat) tick. The controls that need a radio are asserted greyed.
 10 state txAvailable == 0
 state transmit.page == closed
-+1 click "Transmit"
+# the rail of sections is taller than the default window (the Radio section is open at every start and grew by the Signal strength bar): the person wheels the list, and so does the script
++1 scroll "Audio filters" 400
++2 click "Transmit"
 +10 state transmit.page == shown
 state transmit.live == 1
 +1 dump
