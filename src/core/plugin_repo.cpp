@@ -2679,11 +2679,19 @@ bool PluginRepo::fetchRegionalIndex(const std::string& url, std::vector<PluginCa
     out.clear();
     error.clear();
 
+    // COUNTED, ANONYMOUSLY, like the public catalogue's own failure (fetchIndex): the regional list is
+    // foxsdr.com's too, and the store used to carry on without it and say nothing (error-path sweep, wave 8).
+    // A cancel is not counted; nothing of the error text is kept.
+    const auto failed = [&error]() {
+        if (error != "cancelled") { health::notePluginCatalogueFailed(); }
+        return false;
+    };
+
     // RULE 1, before any socket exists - same as fetchIndex(), and the same
     // reason: the refusal must be provable without a network stack present.
     if (!isHttpsUrl(url)) {
         error = "refusing a non-https regional catalogue URL: \"" + url + "\"";
-        return false;
+        return failed();
     }
     std::string body;
     body.reserve(4 * 1024);
@@ -2708,9 +2716,10 @@ bool PluginRepo::fetchRegionalIndex(const std::string& url, std::vector<PluginCa
     // this feature. See the release judge's finding on this delay.
     if (!httpsGet(url, kMaxRegionalIndexBytes, sink, nullptr, &cancel_, error,
                   HttpTimeouts{/*connectMs=*/4000, /*sendMs=*/4000, /*receiveMs=*/8000})) {
-        return false;
+        return failed();
     }
-    return parseIndex(body, out, error);
+    if (!parseIndex(body, out, error)) { return failed(); }
+    return true;
 }
 
 bool PluginRepo::fetchSiteIndex(const std::string& url, std::vector<PluginCatalogEntry>& out,
@@ -2959,6 +2968,17 @@ std::string PluginRepo::screenshotCachePath(const std::string& pluginsDir,
 
 bool PluginRepo::fetchScreenshot(const std::string& pluginsDir, const CatalogScreenshot& s,
                                  std::string& localPath, std::string& error) {
+    // COUNTED, ANONYMOUSLY (error-path sweep, wave 8): a picture the store could not have - not reachable, not the
+    // picture the catalogue named, the disk refused it - is the same kind of fault as a catalogue that could not be
+    // had, and the store used to show a blank frame and say nothing. A cancel is not counted; nothing of the
+    // error text, the address or the file is kept.
+    const bool ok = fetchScreenshotImpl(pluginsDir, s, localPath, error);
+    if (!ok && error != "cancelled") { health::notePluginCatalogueFailed(); }
+    return ok;
+}
+
+bool PluginRepo::fetchScreenshotImpl(const std::string& pluginsDir, const CatalogScreenshot& s,
+                                     std::string& localPath, std::string& error) {
     localPath.clear();
     error.clear();
     // A cancel that arrived between two operations must not kill this one (the
@@ -3351,6 +3371,16 @@ bool PluginRepo::installImpl(const PluginCatalogEntry& e, const std::string& plu
 
 bool PluginRepo::recordInstall(const std::string& pluginsDir, const PluginCatalogEntry& e,
                                std::string& error) {
+    // COUNTED, ANONYMOUSLY (error-path sweep, wave 8): the verified plugin is in place but its record could not be
+    // made, which leaves it unmanaged (the retirement check fails open for it). Counted as a failed install of the
+    // WRITE class, for the official catalogue's entries only, as install() counts (a site's is not).
+    const bool ok = recordInstallImpl(pluginsDir, e, error);
+    if (!ok && e.source.empty()) { health::notePluginInstallFailed(health::InstallClass::Write); }
+    return ok;
+}
+
+bool PluginRepo::recordInstallImpl(const std::string& pluginsDir, const PluginCatalogEntry& e,
+                                   std::string& error) {
     error.clear();
     if (e.id.empty()) {
         error = "cannot record an install for a catalogue entry with no id";
