@@ -29,6 +29,7 @@
 #include "engine/wire_c_ham.hpp"
 #include "engine/wire_c_net.hpp"
 #include "engine/wire_c_sys.hpp"
+#include "engine/s4_outputs.hpp"
 
 namespace cascade::engine::wirec {
 
@@ -47,6 +48,9 @@ struct Spec {
 const Spec* specs(std::size_t& count);
 const Spec* findSpec(const std::string& key);
 
+// True for a key whose value lives in the protected store and is never published (the lane S4 outputs' password and webhook address).
+bool isSecretKey(const std::string& key);
+
 enum class SetResult { Changed, NoChange, NotFound, BadValue, OutOfRange, SaveFailed };
 
 class Settings {
@@ -62,6 +66,7 @@ public:
     SetResult set(const std::string& key, const std::string& value, std::string& why);
     std::uint64_t version() const { return version_; }
     const std::string& error() const { return error_; }
+    const std::string& secretNote() const { return secretNote_; }
     const std::filesystem::path& path() const { return path_; }
     // Every key and its value, registry order.
     void each(const std::function<void(const std::string&, const std::string&)>& fn) const;
@@ -71,6 +76,7 @@ private:
     std::filesystem::path path_;
     std::map<std::string, std::string> values_;   // only keys that differ from their default are stored
     std::string error_;
+    std::string secretNote_;   // what the protected store could not open
     std::uint64_t version_ = 1;
     mutable std::mutex m_;
 };
@@ -95,8 +101,14 @@ public:
     void shutdown() {                     // the engine's teardown: every listener and session this lane holds is let go
         catEmu.stop();
         rdsLog.stop();
+        outputs.stop();
         radioInfo.configure(false, "127.0.0.1", 0, false);
     }
+    cascade::engine::s4::Hub outputs;     // screen lane S4: the decoded-text feed sent to MQTT / a webhook, and the keyword alerts (off until the user turns one on)
+    std::uint64_t outputsSeq = 0;         // the host event ring's sequence the outputs have read up to
+    std::uint64_t outputsSettingsVersion = 0;   // the settings version the outputs were last configured from
+    std::string outputsStatSig;           // what the last published outputs facts counted
+    bool outputsLive = false;             // the outputs were on at the last pass (the first pass after they come on starts from the ring's present end: no backlog is sent)
     RadioInfoFollow radioInfo;            // the radio information followed (row H6)
     std::string radioInfoApplied = "0|127.0.0.1|0|0";   // the settings it was last configured with (the defaults: nothing to apply at the first pass, so no counter moves)
     std::string hamError, hamExportLast, hamCabrilloProblems;
