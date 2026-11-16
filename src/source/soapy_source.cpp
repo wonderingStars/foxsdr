@@ -3146,13 +3146,13 @@ SoapySource::BandwidthInfo SoapySource::bandwidthInfo() {
         }
     });
     if (!completed) { noteVendorFault("reading the bandwidth"); return BandwidthInfo{}; }
-    if (j.threw) { setError(std::move(j.message)); return BandwidthInfo{}; }
+    if (j.threw) { rre::noteVendorCallFault(this, "soapy", "vendorcall", j.message); setError(std::move(j.message)); return BandwidthInfo{}; }
     return j.info;
 }
 
 bool SoapySource::setBandwidthHz(double hz, double* appliedHz) {
     if (!(hz > 0.0) || !std::isfinite(hz)) {
-        setError("the bandwidth must be a positive number of Hz");
+        setError(rre::noteControlRefusedText(this, "soapy", rre::Control::Bandwidth, "the bandwidth must be a positive number of Hz", /*userRange=*/true));
         return false;
     }
     std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
@@ -3202,12 +3202,12 @@ bool SoapySource::setBandwidthHz(double hz, double* appliedHz) {
         }
     });
     if (!completed) { noteVendorFault("setting the bandwidth"); return false; }
-    if (j.threw) { setError(std::move(j.message)); return false; }
-    if (!j.supported) { setError("this driver has no bandwidth setting"); return false; }
+    if (j.threw) { setError(rre::noteControlRefusedText(this, "soapy", rre::Control::Bandwidth, std::move(j.message))); return false; }
+    if (!j.supported) { setError(rre::noteControlRefusedText(this, "soapy", rre::Control::Bandwidth, "this driver has no bandwidth setting")); return false; }
     if (!j.inRange) {
         char buf[160];
         std::snprintf(buf, sizeof(buf), "the driver accepts bandwidths from %.0f to %.0f Hz", j.lo, j.hi);
-        setError(buf);
+        setError(rre::noteControlRefusedText(this, "soapy", rre::Control::Bandwidth, buf, /*userRange=*/true));
         return false;
     }
     if (appliedHz != nullptr) { *appliedHz = j.readback; }
@@ -3272,7 +3272,7 @@ std::vector<SoapySource::SettingInfo> SoapySource::listSettings() {
         }
     });
     if (!completed) { noteVendorFault("listing the driver settings"); return {}; }
-    if (j.threw) { setError(std::move(j.message)); return {}; }
+    if (j.threw) { rre::noteVendorCallFault(this, "soapy", "vendorcall", j.message); setError(std::move(j.message)); return {}; }
     return std::move(j.out);
 }
 
@@ -3339,9 +3339,9 @@ bool SoapySource::writeSetting(const std::string& key, const std::string& value,
         }
     });
     if (!completed) { noteVendorFault("writing a driver setting"); return false; }
-    if (j.threw) { setError(std::move(j.message)); return false; }
-    if (!j.known) { setError("the driver has no setting called \"" + tidyDriverText(key, 60) + "\""); return false; }
-    if (!j.refusal.empty()) { setError(j.refusal); return false; }
+    if (j.threw) { setError(rre::noteControlRefusedText(this, "soapy", rre::Control::Other, std::move(j.message))); return false; }
+    if (!j.known) { setError(rre::noteControlRefusedText(this, "soapy", rre::Control::Other, "the driver has no setting called \"" + tidyDriverText(key, 60) + "\"", /*userRange=*/true)); return false; }
+    if (!j.refusal.empty()) { setError(rre::noteControlRefusedText(this, "soapy", rre::Control::Other, j.refusal)); return false; }
     if (readback != nullptr) { *readback = tidyDriverText(j.readback, 100); }
     return true;
 }

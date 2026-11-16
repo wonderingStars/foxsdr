@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "eol_fixture.hpp"
+#include "radio_report_rig.hpp"
 #include "source/fobos_api.hpp"
 #include "source/fobos_source.hpp"
 #include "source/vendor_lib.hpp"
@@ -510,6 +511,80 @@ void testStreamFaults() {
     }
 }
 
+// The radio reports a Fobos failure raises (docs/multi-radio-records/second-merge.md, the MERGE NOTES of lane S5c): the engine registers the source as the radio; here the
+// test does, and reads what the reporter would send. A refused setting, a library that crashed, a stream that went silent.
+void testReports() {
+    namespace rr = cascade::core::radioreport;
+    const rr::RadioIdentity id = rr::identify("fobos", "serial=F0000001");
+    // a refused rate, tune and gain: one radio_settings each, naming the control (never the value)
+    {
+        g_fx.reset();
+        rrrig::Rig t;
+        FobosSource s;
+        CHECK(s.open(args()));
+        rr::registerSource(&s, id);
+        g_fx.set(kMisbehave, mRateFails);
+        CHECK(!s.setSampleRateHz(4.0e6));
+        g_fx.set(kMisbehave, mTuneFails);
+        CHECK(!s.setCenterFrequencyHz(7e6));
+        g_fx.set(kMisbehave, mGainFails);
+        CHECK(!s.setGainDb("LNA", 1.0));
+        g_fx.set(kMisbehave, 0);
+        const std::vector<rrrig::json> msgs = rrrig::ofKind(t.flush(), "radio_settings");
+        CHECK(msgs.size() == 3);
+        if (msgs.size() == 3) {
+            CHECK(msgs[0]["body"]["driver"] == id.driver);
+            CHECK(msgs[0]["body"]["refused"] == "rate");
+            CHECK(!msgs[1]["body"].contains("refused"));   // the frequency has no contract word: it is said in the reason
+            CHECK(std::string(msgs[1]["body"]["reason"]).rfind("refused: frequency", 0) == 0);
+            CHECK(msgs[2]["body"]["refused"] == "gain");
+        }
+        rr::forgetRadio(id.key);
+        s.closeDevice();
+    }
+    // a crash inside the library on a control call: a vendor fault that gave up, and the radio's end
+    {
+        g_fx.reset();
+        rrrig::Rig t;
+        FobosSource s;
+        CHECK(s.open(args()));
+        rr::registerSource(&s, id);
+        g_fx.set(kMisbehave, mTuneCrashes);
+        CHECK(!s.setCenterFrequencyHz(7e6));
+        CHECK(s.deviceDead());
+        const std::vector<rrrig::json> all = t.flush();
+        const std::vector<rrrig::json> rec = rrrig::ofKind(all, "radio_recovery");
+        CHECK(rec.size() == 1);
+        if (rec.size() == 1) {
+            CHECK(rec[0]["body"]["what"] == "vendorcall");
+            CHECK(rec[0]["body"]["phase"] == "gave-up");
+        }
+        CHECK(rrrig::ofKind(all, "radio_close").size() == 1);
+        rr::forgetRadio(id.key);
+        g_fx.set(kMisbehave, 0);
+        s.closeDevice();
+    }
+    // callbacks with an impossible length are counted as stream trouble (errors), once
+    {
+        g_fx.reset();
+        g_fx.set(kMisbehave, mBadLength);
+        rrrig::Rig t;
+        FobosSource s;
+        CHECK(s.open(args()));
+        rr::registerSource(&s, id);
+        CHECK(s.start());
+        std::complex<float> tmp[4096];
+        const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (std::chrono::steady_clock::now() < end) { s.read(tmp, 4096); }
+        const std::vector<rrrig::json> msgs = rrrig::ofKind(t.flush(), "radio_stream");
+        CHECK(!msgs.empty());
+        if (!msgs.empty()) { CHECK(msgs[0]["body"]["usbErrors"].get<int>() > 0); }
+        rr::forgetRadio(id.key);
+        s.stop();
+        s.closeDevice();
+    }
+}
+
 void testContainment() {
     // A stream call that never returns and a cancel that does nothing: the silence watchdog names it, closing returns in bounded time, the radio is dead.
     {
@@ -605,6 +680,7 @@ int main() {
     testStreamFaults();
     testReceiveOnly();
     testSinks();
+    testReports();
     testContainment();   // last: it leaves a library call in flight on purpose
     return testSummary("test_fobos_source");
 }

@@ -17,6 +17,7 @@
 #include <sstream>
 #include <thread>
 
+#include "core/radio_events.hpp"   // the radio-reports lane: a refused setting, a radio that went dead, a stream in trouble
 #include "source/fobos_api.hpp"
 #include "source/vendor_apartment.hpp"
 #include "source/vendor_guard.hpp"
@@ -25,6 +26,8 @@
 namespace cascade::source {
 
 namespace {
+
+namespace rre = ::cascade::core::radioreport;
 
 using vendorapt::Apartment;
 using vendorapt::nowMs;
@@ -124,16 +127,21 @@ struct FobosSource::Impl {
     double rateHz = 0.0, centerHz = 0.0;
     unsigned lna = 0, vga = 0;
     std::int64_t streamStartMs = 0;
+    const void* owner = nullptr;          // the FobosSource this is the state of: the engine registered it as the radio, and the reports name it
+    std::uint64_t badReported = 0;        // the bad callbacks already reported as stream trouble (touched by the reading thread only)
 
     void setError(const std::string& e) {
         std::lock_guard<std::mutex> lk(m);
         error = e;
     }
     void markDead(const char* during, const std::string& why) {
-        std::lock_guard<std::mutex> lk(m);
-        dead = true;
-        deadWhile = during;
-        error = why;
+        {
+            std::lock_guard<std::mutex> lk(m);
+            dead = true;
+            deadWhile = during;
+            error = why;
+        }
+        rre::noteDeviceFault(owner, "fobos", during, why);   // one radio_close event with its cause, from the place the driver finds out
     }
     bool call(const char* during, const std::function<void()>& fn) {
         if (!apt) {
@@ -143,9 +151,11 @@ struct FobosSource::Impl {
         switch (apt->run(fn, callMs)) {
             case Apartment::Result::Done: return true;
             case Apartment::Result::TimedOut:
+                rre::noteVendorCallFault(owner, "fobos", "vendorcall", std::string("the Fobos library did not answer while ") + during, false);
                 markDead(during, std::string("the Fobos library did not answer while ") + during + "; FoxSDR must be restarted to use this radio again");
                 break;
             case Apartment::Result::Faulted:
+                rre::noteVendorCallFault(owner, "fobos", "vendorcall", std::string("the Fobos library crashed while ") + during, false);
                 markDead(during, std::string("the Fobos library crashed while ") + during + " (FoxSDR caught it and carried on)");
                 break;
             case Apartment::Result::Dead:
@@ -176,7 +186,7 @@ struct FobosSource::Impl {
     }
 };
 
-FobosSource::FobosSource() : p_(std::make_unique<Impl>()) {}
+FobosSource::FobosSource() : p_(std::make_unique<Impl>()) { p_->owner = this; }
 FobosSource::~FobosSource() { closeDevice(); }
 
 const char* FobosSource::lastError() const {
@@ -528,6 +538,7 @@ void FobosSource::closeDevice() {
         Impl* leaked = p_.release();
         (void)leaked;
         p_ = std::make_unique<Impl>();
+        p_->owner = this;
         p_->dead = true;
         p_->deadWhile = wasDead && !keptWhile.empty() ? keptWhile : "closing the radio";   // the first thing that went wrong stays the one reported
         p_->error = wasDead && !keptError.empty() ? keptError : "the Fobos library did not answer; FoxSDR must be restarted to use this radio again";
@@ -585,6 +596,7 @@ bool FobosSource::start() {
         I.link->gate.store(false);
         I.streamThread.join();
         if (I.ss->faulted.load()) {
+            rre::noteVendorCallFault(I.owner, "fobos", "vendorcall", "the Fobos library crashed while starting the stream", false);
             I.markDead("starting the stream", "the Fobos library crashed while starting the stream (FoxSDR caught it and carried on)");
         } else {
             I.setError(Impl::refused(I.api, "the radio would not start streaming", rc));
@@ -625,6 +637,17 @@ std::size_t FobosSource::read(std::complex<float>* dst, std::size_t n) {
         streaming = I.streaming && !I.dead;
     }
     if (l == nullptr || !streaming) { return 0; }
+    {
+        const std::uint64_t bad = l->bad.load(std::memory_order_relaxed);
+        if (bad > I.badReported) {   // callbacks the library handed over wrong (no buffer, or longer than asked): stream trouble, bounded by the reporter
+            rre::StreamTrouble t;
+            t.windowSec = static_cast<double>(nowMs() - I.streamStartMs) / 1000.0;
+            t.samples = l->pairs.load();
+            t.errors = bad - I.badReported;
+            I.badReported = bad;
+            rre::noteStreamTrouble(I.owner, "fobos", t);
+        }
+    }
     std::size_t got = l->ring.read(dst, n);
     if (got == 0) {
         std::unique_lock<std::mutex> lk(l->m);
@@ -635,10 +658,17 @@ std::size_t FobosSource::read(std::complex<float>* dst, std::size_t n) {
     if (got == 0) {
         const std::int64_t silent = nowMs() - l->lastDataMs.load(std::memory_order_acquire);
         if (I.ss && I.ss->faulted.load()) {
+            rre::noteVendorCallFault(I.owner, "fobos", "vendorcall", "the Fobos library crashed while streaming", false);
             I.markDead("streaming", "the Fobos library crashed while streaming (FoxSDR caught it and carried on)");
         } else if (I.ss && I.ss->done.load() && I.ss->rc.load() != 0) {
             I.markDead("streaming", Impl::refused(I.api, "the Fobos SDR's stream ended", I.ss->rc.load()));
         } else if (silent > I.silenceMs) {
+            rre::StreamTrouble t;   // the silence watchdog fired: a stall, then the radio is given up on
+            t.windowSec = static_cast<double>(silent) / 1000.0;
+            t.samples = l->pairs.load();
+            t.timeouts = 1;
+            t.longestGapMs = static_cast<long long>(silent);
+            rre::noteStreamTrouble(I.owner, "fobos", t);
             I.markDead("streaming", "the Fobos SDR stopped delivering samples");
         }
     } else {
@@ -699,7 +729,7 @@ bool FobosSource::setSampleRateHz(double hz) {
         return false;
     }
     if (!o->ok) {
-        I.setError(o->e);
+        I.setError(rre::noteControlRefusedText(this, "fobos", rre::Control::Rate, o->e));
         if (wasRunning) { start(); }
         return false;
     }
@@ -738,7 +768,7 @@ bool FobosSource::setCenterFrequencyHz(double hz) {
         return false;
     }
     if (!o->ok) {
-        I.setError(o->e);
+        I.setError(rre::noteControlRefusedText(this, "fobos", rre::Control::Frequency, o->e));
         return false;
     }
     std::lock_guard<std::mutex> lk(I.m);
@@ -781,7 +811,7 @@ bool FobosSource::setGainDb(const std::string& name, double db) {
         return false;
     }
     if (!o->ok) {
-        I.setError(o->e);
+        I.setError(rre::noteControlRefusedText(this, "fobos", rre::Control::Gain, o->e));
         return false;
     }
     std::lock_guard<std::mutex> lk(I.m);

@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 
+#include "radio_report_rig.hpp"
 #include "soapy_standin.hpp"
 #include "test_check.hpp"
 
@@ -139,6 +140,45 @@ int main() {
         CHECK(g_log.count("writeSetting") == 0);
         src.closeDevice();
         CHECK(!src.writeSetting("biastee", "true"));
+    }
+
+    // G: the refusals are reported (the radio-reports lane's MERGE NOTES of S5b): an out-of-range bandwidth, a driver that refuses a setting and an unknown key each
+    // raise a radio_settings event naming the control (never the value). The reporter keeps one event per control and class in a window, so the unknown key has a rig of its own.
+    {
+        namespace rr = cascade::core::radioreport;
+        const rr::RadioIdentity id = rr::identify("soapy", "driver=standinrich");
+        const rr::RadioIdentity id2 = rr::identify("soapy", "driver=standinrich2");   // the reporter folds a repeat of one control on one radio for seconds: the second case is another radio
+        {
+            rrrig::Rig t;
+            SoapySource src;
+            CHECK(src.open("driver=standinrich"));
+            rr::registerSource(&src, id);
+            CHECK(!src.setBandwidthHz(100e3));
+            std::string rb;
+            CHECK(!src.writeSetting("refuses", "2", &rb));
+            const std::vector<rrrig::json> msgs = rrrig::ofKind(t.flush(), "radio_settings");
+            CHECK(msgs.size() == 2);
+            if (msgs.size() == 2) {
+                CHECK(msgs[0]["body"]["refused"] == "bandwidth");
+                CHECK(std::string(msgs[0]["body"]["reason"]).rfind("out of range: bandwidth", 0) == 0);
+                CHECK(std::string(msgs[1]["body"]["reason"]).rfind("refused: other", 0) == 0);
+            }
+            rr::forgetRadio(id.key);
+            src.closeDevice();
+        }
+        {
+            rrrig::Rig t;
+            SoapySource src;
+            CHECK(src.open("driver=standinrich"));
+            rr::registerSource(&src, id2);
+            std::string rb;
+            CHECK(!src.writeSetting("nokey", "1", &rb));
+            const std::vector<rrrig::json> msgs = rrrig::ofKind(t.flush(), "radio_settings");
+            CHECK(msgs.size() == 1);
+            if (msgs.size() == 1) { CHECK(std::string(msgs[0]["body"]["reason"]).rfind("out of range: other", 0) == 0); }
+            rr::forgetRadio(id2.key);
+            src.closeDevice();
+        }
     }
 
     // E: a hostile driver

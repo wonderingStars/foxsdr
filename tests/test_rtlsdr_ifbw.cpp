@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "radio_report_rig.hpp"
 #include "source/rtl2832u.hpp"
 #include "source/rtlsdr_source.hpp"
 #include "test_check.hpp"
@@ -139,6 +140,49 @@ int main() {
         const bool took = dead.setIfBandwidthHz(500000);
         std::printf("  a radio whose bus fails: setIfBandwidthHz -> %d (%s)\n", took ? 1 : 0, dead.lastError());
         CHECK(!took || dead.ifBandwidthHz() == 500000);
+    }
+
+    // G: the refusals are reported (the radio-reports lane's MERGE NOTES of S5b): a value outside the tuner's range is `out of range: bandwidth`, a tuner that will not
+    // take the write is `refused: bandwidth`; the value itself never leaves. (The reporter keeps one event per control and class in a window, so each case has its own rig.)
+    {
+        namespace rr = cascade::core::radioreport;
+        const rr::RadioIdentity id = rr::identify("rtlsdr", "serial=00000001");
+        const rr::RadioIdentity id2 = rr::identify("rtlsdr", "serial=00000002");   // the reporter folds a repeat of one control on one radio for seconds: the second case is another radio
+        {
+            rrrig::Rig t;
+            RtlSdrSource r;
+            auto fk = std::make_unique<FakeUsbDevice>();
+            dressAsR820T(*fk);
+            CHECK(r.openWithTransport(std::move(fk), "fake R820T dongle"));
+            rr::registerSource(&r, id);
+            CHECK(!r.setIfBandwidthHz(100000));
+            const std::vector<rrrig::json> msgs = rrrig::ofKind(t.flush(), "radio_settings");
+            CHECK(msgs.size() == 1);
+            if (msgs.size() == 1) {
+                CHECK(msgs[0]["body"]["refused"] == "bandwidth");
+                CHECK(std::string(msgs[0]["body"]["reason"]).rfind("out of range: bandwidth", 0) == 0);
+                CHECK(std::string(msgs[0]["body"]["reason"]).find("100") == std::string::npos);
+            }
+            rr::forgetRadio(id.key);
+        }
+        {
+            rrrig::Rig t;
+            RtlSdrSource r;
+            auto fk = std::make_unique<FakeUsbDevice>();
+            dressAsR820T(*fk);
+            FakeUsbDevice* fp = fk.get();
+            CHECK(r.openWithTransport(std::move(fk), "fake R820T dongle"));
+            rr::registerSource(&r, id2);
+            fp->failControlAfter = 0;
+            const bool took = r.setIfBandwidthHz(500000);
+            const std::vector<rrrig::json> msgs = rrrig::ofKind(t.flush(), "radio_settings");
+            std::printf("  a radio whose bus fails: took=%d, %zu radio_settings event(s)%s", took ? 1 : 0, msgs.size(), "\n");
+            if (!took) {   // the tuner would not take the write: that is the refusal reported
+                CHECK(msgs.size() == 1);
+                if (msgs.size() == 1) { CHECK(std::string(msgs[0]["body"]["reason"]).rfind("refused: bandwidth", 0) == 0); }
+            }
+            rr::forgetRadio(id2.key);
+        }
     }
 
     return testSummary("test_rtlsdr_ifbw");

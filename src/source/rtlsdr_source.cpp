@@ -1032,7 +1032,7 @@ int RtlSdrSource::ifBandwidthFor(double rateHz) const {
 
 bool RtlSdrSource::setIfBandwidthHz(int hz) {
     if (hz != 0 && (hz < kIfBandwidthMinHz || hz > kIfBandwidthMaxHz)) {
-        setError("the analogue IF bandwidth is 0 (automatic) or 300 kHz to 8 MHz");
+        setError(rre::noteControlRefusedText(this, "rtlsdr", rre::Control::Bandwidth, "the analogue IF bandwidth is 0 (automatic) or 300 kHz to 8 MHz", /*userRange=*/true));
         return false;
     }
     std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
@@ -1054,7 +1054,7 @@ bool RtlSdrSource::setIfBandwidthHz(int hz) {
     const bool ok = link_->tuner->setBandwidthHz(ifBandwidthFor(sampleRateHz_.load(std::memory_order_relaxed)));
     link_->rtl->setI2cRepeater(false);
     if (!ok) {
-        setError("the tuner would not accept that IF bandwidth: " + link_->tuner->lastError());
+        setError(rre::noteControlRefusedText(this, "rtlsdr", rre::Control::Bandwidth, "the tuner would not accept that IF bandwidth: " + link_->tuner->lastError()));
         return false;
     }
     link_->rtl->setIfFreqHz(link_->tuner->ifFreqHz());
