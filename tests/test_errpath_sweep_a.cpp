@@ -126,6 +126,14 @@ void testRegionalIndexIsCounted() {
     CHECK(err == "cancelled");
     CHECK(count("plug_cat") == 3u);
 
+    // THE CANCEL FLAG ITSELF (not just the word): cancel() before the fetch ends it as "cancelled" and counts nothing.
+    s->fail = false;
+    s->body = goodIndex();
+    repo.cancel();
+    CHECK(!repo.fetchRegionalIndex("https://example.invalid/regional.json", out, err));
+    CHECK(err == "cancelled");
+    CHECK(count("plug_cat") == 3u);
+
     // A plugin SITE's index failing is NOT counted (0.99.74: the counter is the official catalogue's).
     s->error = "the server returned HTTP 503";
     std::string raw;
@@ -186,6 +194,18 @@ void testScreenshotFailureIsCounted() {
     s->error = "cancelled";
     CHECK(!repo.fetchScreenshot(dir.string(), other, path, err));
     CHECK(count("plug_cat") == 3u);
+    // The cancel flag itself: fetchScreenshot clears a stale cancel on entry (like install), so a cancel can only arrive while it
+    // runs; the transport stand-in raises it from inside the transfer.
+    s->fail = false;
+    s->body = "partial";
+    PluginRepo::setTransportForTest([&repo](const std::string&, std::uint64_t, const std::function<bool(const void*, std::size_t)>&,
+                                            std::string& error) {
+        repo.cancel();
+        error = "cancelled";
+        return false;
+    });
+    CHECK(!repo.fetchScreenshot(dir.string(), other, path, err));
+    CHECK(count("plug_cat") == 3u);
     PluginRepo::setTransportForTest(nullptr);
 }
 
@@ -209,11 +229,38 @@ void testRecordInstallFailureIsCounted() {
     CHECK(!PluginRepo::recordInstall(dir, official, err));
     CHECK(count("plug_inst.write") == 2u);
 
+    // A REAL WRITE FAILURE: an entry that is fully valid for this machine, recorded into a "plugins folder" that is a plain file,
+    // so the manifest cannot be created. Counted write class; the same failure for a site's entry is not.
+    {
+        const fs::path notADir = g_root / "plugins-is-a-file";
+        { std::FILE* f = std::fopen(notADir.string().c_str(), "wb"); if (f != nullptr) { std::fputs("x", f); std::fclose(f); } }
+        PluginCatalogEntry e;
+        e.id = "probe";
+        e.name = "Probe";
+        e.version = "1.0.0";
+        e.abiVersion = static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION);
+        e.compatible = true;
+        cascade::core::PluginPlatform p;
+        p.os = PluginRepo::hostOs();
+        p.arch = PluginRepo::hostArch();
+        p.file = "probe.dll";
+        p.url = "https://example.invalid/probe.dll";
+        p.sha256 = std::string(64, 'a');
+        e.platforms.push_back(p);
+        const std::uint32_t before = count("plug_inst.write");
+        CHECK(!PluginRepo::recordInstall(notADir.string(), e, err));
+        CHECK(!err.empty());
+        CHECK(count("plug_inst.write") == before + 1u);
+        e.source = "https://example.invalid/site.json";
+        CHECK(!PluginRepo::recordInstall(notADir.string(), e, err));
+        CHECK(count("plug_inst.write") == before + 1u);
+    }
+
     // A plugin SITE's entry: the same failure, NOT counted.
     PluginCatalogEntry site = official;
     site.source = "https://example.invalid/site.json";
     CHECK(!PluginRepo::recordInstall(dir, site, err));
-    CHECK(count("plug_inst.write") == 2u);
+    CHECK(count("plug_inst.write") == 3u);
 }
 
 }  // namespace
