@@ -152,7 +152,10 @@ refusal of the whole message, with the code in brackets. The checks, in this ord
 3. (`serial-in-text`) the body's own non-empty `serial`, if 4 or more characters, appearing anywhere, case-insensitive; or
    one of the words `serial`, `serial_number`, `s/n`, `sn`, `_sn` (as a whole word, `_sn` as the end of a word such as
    `airspyhf_sn`), optionally followed by `:` or `=` and spaces, whose following value (up to a space, comma, semicolon,
-   closing bracket or quote) is present and is not exactly `<stripped>`.
+   closing bracket or quote, after the word `number`, `no`, `no.` or `#` if one follows the key, and without trailing `.` `!` `?` `:`) is
+   present and is not exactly `<stripped>`; the values `port`, `ports`, `bus`, `interface`, `cable`, `adapter`, `line`, `lines`, `connection` and
+   `communication` are not serial numbers ("serial port COM#"). The reference is `serialInText` in `telemetry-worker/radio-reports.js`, and
+   `test-fixtures/radio-text-rules.json` is the parity table every implementation is held to.
 4. (`frequency-in-text`) a number with a hertz unit: digits (with `.` or `,`), optional space, then `Hz`, `kHz`, `MHz` or
    `GHz` as a whole word, case-insensitive. The app's scrub turns these into `#`.
 
