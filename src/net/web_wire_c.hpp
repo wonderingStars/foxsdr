@@ -37,6 +37,7 @@ namespace cascade::net {
 struct WebWireCHooks {
     std::function<bool(const httplib::Request&)> signedIn;                 // the server's own sign-in rule: true when the request may use the page
     std::function<std::string(const httplib::Request&)> viewerToken;       // the session's token ("" when the server has no sessions)
+    std::function<bool()> mayChange;                                       // R1: false while the server has no password: every route that changes anything is refused
     std::function<bool(const std::string&)> tokenStillValid;               // the sign-in behind a token has not ended
     std::function<void(httplib::Response&, const std::string&, int)> deny; // the server's one refusal shape
 };

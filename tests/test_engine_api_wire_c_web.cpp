@@ -66,7 +66,9 @@ void testCors(const fs::path& dir) {
         CHECK(static_cast<bool>(r));
         if (r) {
             CHECK(!r->has_header("Access-Control-Allow-Origin"));
-            CHECK(r->status == 200);
+            // R1 (security review 2): with no list, a request that names another web site as its Origin is refused outright (was: answered 200
+            // with no CORS header, which the browser then hid from the page; the server itself still did the work)
+            CHECK(r->status == 403);
         }
     }
     CHECK(w.rig.status(setting("web.cors_origins", std::string(kOrigin) + "\nhttp://192.168.1.20:8080")) == FOXAPI_OK);

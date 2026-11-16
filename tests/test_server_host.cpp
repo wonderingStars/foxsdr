@@ -282,6 +282,7 @@ struct Rig {
     explicit Rig(const std::string& options, bool thread = false) : threaded(thread) {
         e.configureApi(options);
         e.initialise();
+        e.servers().webServer().allowOpenControlForTests(true);   // R1: a server with no password is read-only; these tests are about what a control does
         (void)e.applyCommand(cmd::makeInt(FOXAPI_OP_RUN, 1));
         e.controlPass();
         if (thread) { e.startControlThread(); }
