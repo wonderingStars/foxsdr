@@ -113,4 +113,30 @@ std::string lockoutLine(const Lockout& l) {
     return std::string(mhz) + ": " + left;
 }
 
+std::optional<double> parseDegrees(const std::string& text, double lo, double hi) {
+    std::string t = trimmed(text);
+    if (t.empty() || t.size() > 12) { return std::nullopt; }
+    for (char& c : t) { if (c == ',') { c = '.'; } }
+    std::size_t digits = 0, dots = 0;
+    for (std::size_t i = 0; i < t.size(); ++i) {
+        const char c = t[i];
+        if (c >= '0' && c <= '9') { ++digits; }
+        else if (c == '.') { ++dots; }
+        else if (!(i == 0 && (c == '-' || c == '+'))) { return std::nullopt; }
+    }
+    if (digits == 0 || dots > 1) { return std::nullopt; }
+    char* end = nullptr;
+    const double v = std::strtod(t.c_str(), &end);
+    if (end == t.c_str() || *end != '\0' || !std::isfinite(v) || v < lo || v > hi) { return std::nullopt; }
+    return v;
+}
+
+std::string rotatorTurnJson(double az, double el) {
+    char b[96];
+    std::snprintf(b, sizeof b, "{\"action\":\"turn\",\"az\":%.2f,\"el\":%.2f}", az, el);
+    return b;
+}
+
+std::string rotatorActionJson(const char* action) { return std::string("{\"action\":\"") + action + "\"}"; }
+
 }  // namespace foxsdr::slints4b

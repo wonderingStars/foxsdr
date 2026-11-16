@@ -71,6 +71,7 @@ std::int32_t Engine::applyWireC(const FoxCommand& c, const std::string& text, Fo
             }
             return FOXAPI_FAILED;
         }
+        case FOXAPP_OP_ROTATOR: return wireC().servers.rotatorOp(text, why);
         case FOXAPP_OP_SYS_FIRSTRUN: {
             wc::State& s = wireC();
             wc::SysOps& sys = s.sys();

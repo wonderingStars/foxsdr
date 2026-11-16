@@ -3,6 +3,11 @@
 #include "engine/s4b_servers.hpp"
 
 #include <chrono>
+#include <cstdio>
+
+#include <nlohmann/json.hpp>
+
+#include "foxsdr_api.h"
 
 #include "engine/wire_c.hpp"
 #include "net/ws_frame.hpp"
@@ -30,7 +35,42 @@ Config configFrom(const cascade::engine::wirec::Settings& s) {
     c.mcp = s.getBool("srv.mcp.enabled");
     c.mcpPort = static_cast<int>(s.getInt("srv.mcp.port"));
     c.mcpToken = s.get("srv.mcp.token");
+    c.rotator.enabled = s.getBool("rot.enabled");
+    c.rotator.serial = s.get("rot.kind") == "gs232";
+    c.rotator.host = s.get("rot.host");
+    c.rotator.port = static_cast<int>(s.getInt("rot.port"));
+    c.rotator.comPort = s.get("rot.serial");
+    c.rotator.baud = static_cast<int>(s.getInt("rot.baud"));
+    c.rotator.azMaxDeg = s.get("rot.az_max") == "360" ? 360 : 450;
+    c.rotator.parkAz = s.getReal("rot.park_az");
+    c.rotator.parkEl = s.getReal("rot.park_el");
     return c;
+}
+
+std::int32_t ServerSet::rotatorOp(const std::string& text, std::string& why) {
+    const nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
+    if (j.is_discarded() || !j.is_object() || !j.contains("action") || !j["action"].is_string()) { why = "the text is JSON with an action: turn, stop or park"; return FOXAPI_BAD_ARGUMENT; }
+    const std::string action = j["action"].get<std::string>();
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        const std::string& k = it.key();
+        if (k != "action" && !(action == "turn" && (k == "az" || k == "el"))) { why = "an unknown key for that action"; return FOXAPI_BAD_ARGUMENT; }
+    }
+    RotatorResult r;
+    if (action == "turn") {
+        if (!j.contains("az") || !j.contains("el") || !j["az"].is_number() || !j["el"].is_number()) { why = "turn takes az and el, two numbers"; return FOXAPI_BAD_ARGUMENT; }
+        r = rotator_.turn(j["az"].get<double>(), j["el"].get<double>());
+        if (!r.ok) { why = r.error; return r.error.find("off") != std::string::npos ? FOXAPI_FAILED : FOXAPI_OUT_OF_RANGE; }
+    } else if (action == "stop") {
+        r = rotator_.stopMotion();
+        if (!r.ok) { why = r.error; return FOXAPI_FAILED; }
+    } else if (action == "park") {
+        r = rotator_.park();
+        if (!r.ok) { why = r.error; return FOXAPI_FAILED; }
+    } else {
+        why = "the action is turn, stop or park";
+        return FOXAPI_BAD_ARGUMENT;
+    }
+    return FOXAPI_OK;
 }
 
 ServerSet::~ServerSet() { stop(); }
@@ -265,6 +305,7 @@ void ServerSet::configure(const Config& c) {
     applyRtl(c);
     applyApi(c);
     applyMcp(c);
+    rotator_.configure(c.rotator);
     cfg_ = c;
     configured_ = true;
 }
@@ -283,6 +324,7 @@ void ServerSet::stop() {
     }
     if (api_ != nullptr) { api_->stop(); api_.reset(); }
     if (mcp_ != nullptr) { mcp_->stop(); mcp_.reset(); }
+    rotator_.shutdown();
     hooks_ = Hooks{};   // stop() is the engine's teardown: the hooks hold the engine and must not be called after it
 }
 
@@ -327,6 +369,20 @@ void ServerSet::facts(const std::function<void(const std::string&, const std::st
     fact("srv.mcp.port", mcpOn ? std::to_string(mcp_->port()) : std::string());
     fact("srv.mcp.problem", mcpProblem_);
     fact("srv.mcp.scope", cfg_.mcp ? std::string("this computer only") : std::string());
+    const RotatorStatus rs2 = rotator_.status();
+    fact("rot.running", rs2.enabled ? "1" : "0");
+    fact("rot.connected", rs2.connected ? "1" : "0");
+    char pos[64];
+    std::snprintf(pos, sizeof pos, "%.1f", rs2.az);
+    fact("rot.az", rs2.haveMeasured ? std::string(pos) : std::string());
+    std::snprintf(pos, sizeof pos, "%.1f", rs2.el);
+    fact("rot.el", rs2.haveMeasured ? std::string(pos) : std::string());
+    fact("rot.turns", std::to_string(rs2.turns));
+    fact("rot.stops", std::to_string(rs2.stops));
+    fact("rot.parks", std::to_string(rs2.parks));
+    fact("rot.failures", std::to_string(rs2.failures));
+    fact("rot.problem", rs2.problem);
+    fact("rot.scope", cfg_.rotator.enabled ? (cfg_.rotator.serial ? std::string("a serial port of this computer") : (cascade::engine::s4::isLoopbackHost(cfg_.rotator.host) ? std::string("this computer only") : std::string("a computer on your network: the commands are sent without encryption or a password"))) : std::string());
 }
 
 std::string ServerSet::signature() const {
@@ -347,6 +403,10 @@ std::string ServerSet::signature() const {
         s += "p" + std::to_string(as.connections) + "," + std::to_string(as.wsOpened) + "," + std::to_string(as.sseOpened) + "," + std::to_string(as.messages >> 3) + "," + std::to_string(controlTunes_.load()) + "," + std::to_string(as.refusedRequests + as.authDenied);
     }
     s += "|" + apiProblem_ + "|" + mcpProblem_ + (mcp_ != nullptr ? "m" : "");
+    {
+        const RotatorStatus rs2 = rotator_.status();
+        s += "|t" + std::string(rs2.connected ? "1" : "0") + std::to_string(rs2.turns) + "," + std::to_string(rs2.stops) + "," + std::to_string(rs2.parks) + "," + std::to_string(rs2.failures) + "," + std::to_string(static_cast<int>(rs2.az * 10)) + "," + std::to_string(static_cast<int>(rs2.el * 10)) + rs2.problem;
+    }
     return s;
 }
 

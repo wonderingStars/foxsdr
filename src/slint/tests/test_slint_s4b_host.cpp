@@ -48,5 +48,10 @@ int main() {
         CHECK(lockoutLine(l[1]) == "100.3000 MHz: 9 min 52 s left");
         CHECK(lockoutLine({145500000.0, 7}) == "145.5000 MHz: 7 s left");
     }
+    // the rotator's bearings
+    CHECK(parseDegrees("123.4", 0, 450) == 123.4 && parseDegrees(" 90 ", 0, 450) == 90.0 && parseDegrees("12,5", 0, 450) == 12.5 && parseDegrees("0", 0, 450) == 0.0 && parseDegrees("450", 0, 450) == 450.0);
+    CHECK(!parseDegrees("450.1", 0, 450) && !parseDegrees("-1", 0, 450) && !parseDegrees("", 0, 450) && !parseDegrees("abc", 0, 450) && !parseDegrees("1e2", 0, 450) && !parseDegrees("1.2.3", 0, 450) && !parseDegrees(".", 0, 450));
+    CHECK(!parseDegrees("nan", 0, 450) && !parseDegrees("inf", 0, 450) && !parseDegrees("12345678901234", 0, 450) && !parseDegrees("1 2", 0, 450));
+    CHECK(rotatorTurnJson(123.456, 7) == "{\"action\":\"turn\",\"az\":123.46,\"el\":7.00}" && rotatorActionJson("stop") == "{\"action\":\"stop\"}");
     return testSummary("test_slint_s4b_host");
 }

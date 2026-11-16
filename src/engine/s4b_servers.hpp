@@ -24,6 +24,7 @@
 #include "net/api_server.hpp"
 #include "net/control_hub.hpp"
 #include "engine/s4b_mcp.hpp"
+#include "engine/s4b_rotator.hpp"
 #include "net/rtl_tcp_server.hpp"
 #include "net/web_auth.hpp"
 #include "net/tcp_audio.hpp"
@@ -55,8 +56,10 @@ struct Config {
     bool mcp = false;
     int mcpPort = 8075;
     std::string mcpToken;
+    // the antenna rotator (engine/s4b_rotator.hpp)
+    RotatorConfig rotator;
     bool operator==(const Config& o) const {
-        return api == o.api && apiAll == o.apiAll && apiPort == o.apiPort && mcp == o.mcp && mcpPort == o.mcpPort && mcpToken == o.mcpToken && tcpAudio == o.tcpAudio && tcpAudioAll == o.tcpAudioAll && tcpAudioPort == o.tcpAudioPort && tcpAudioRadio == o.tcpAudioRadio && tcpAudioPacket == o.tcpAudioPacket &&
+        return rotator == o.rotator && api == o.api && apiAll == o.apiAll && apiPort == o.apiPort && mcp == o.mcp && mcpPort == o.mcpPort && mcpToken == o.mcpToken && tcpAudio == o.tcpAudio && tcpAudioAll == o.tcpAudioAll && tcpAudioPort == o.tcpAudioPort && tcpAudioRadio == o.tcpAudioRadio && tcpAudioPacket == o.tcpAudioPacket &&
                controlRadio == o.controlRadio && rtl == o.rtl && rtlAll == o.rtlAll && rtlPort == o.rtlPort;
     }
 };
@@ -101,6 +104,10 @@ public:
     void configure(const Config& c);
     // Whether any server is switched on (the pass may skip the rest while this is false).
     bool active() const;
+    // The rotator: the engine's op hands the person's request here (the worker does the turning).
+    RotatorControl& rotator() { return rotator_; }
+    // FOXAPP_OP_ROTATOR: text JSON; returns the FOXAPI status and, for a refusal, the sentence in `why`.
+    std::int32_t rotatorOp(const std::string& text, std::string& why);
     // Once a control pass, on the pass thread: keeps the stream taps on the right receivers and applies what a client asked for.
     void pass();
     // True while the rtl_tcp server holds this radio's (1-based) raw-band tap: network I/Q out must not take it.
@@ -140,6 +147,7 @@ private:
     std::atomic<std::uint64_t> rtlTunes_{0}, rtlTuneRefused_{0}, rtlIgnored_{0};
 
     // the control hub (the API and the MCP server read and ask through it), the two servers, and what the pass keeps for them
+    RotatorControl rotator_;
     cascade::net::ControlHub hub_;
     std::unique_ptr<cascade::net::ApiServer> api_;
     std::string apiProblem_;

@@ -198,9 +198,61 @@ struct S4bPublisher::Impl {
         if (running) { v.push_back(rReadout(tr("Connected now"), fact(fx + ".clients"))); }
     }
 
+    // the rotator's bearing drafts (typed, not sent until "Turn the antenna")
+    std::string rotAz = "0", rotEl = "0";
+    void realField(std::vector<Row>& v, Sec s, const std::string& id, const std::string& label, const std::string& key, double lo, double hi) {
+        field(v, id, label, fact("wirec." + key), [this, s, label, key, lo, hi](const std::string& t) {
+            const auto p = parseDegrees(t, lo, hi);
+            if (!p) { refuseHere(s, label, cascade::core::formatText(cascade::i18n::tr("A number of degrees from %d to %d."), static_cast<int>(lo), static_cast<int>(hi))); return; }
+            char b[32];
+            std::snprintf(b, sizeof b, "%.2f", *p);
+            setting(s, label, key, b);
+        }, cascade::core::formatText(cascade::i18n::tr("%d to %d"), static_cast<int>(lo), static_cast<int>(hi)));
+    }
+    void rotatorRows(std::vector<Row>& v, Sec S) {
+        v.push_back(rHeading(tr("Antenna rotator")));
+        const bool on = fact("wirec.rot.enabled") == "1";
+        const bool serial = fact("wirec.rot.kind") == "gs232";
+        wircTick(v, S, "rot.on", tr("Connect to an antenna rotator"), "rot.enabled", tr("Nothing moves the antenna until you press Turn. Turning it never keys a transmitter."));
+        choice(v, "rot.kind", tr("Rotator controller"), {tr("rotctld (network)"), tr("Yaesu GS-232 (serial)")}, serial ? 1 : 0,
+               [this, S](int i) { setting(S, tr("Rotator controller"), "rot.kind", i == 1 ? "gs232" : "rotctld"); });
+        if (!serial) {
+            field(v, "rot.host", tr("rotctld address"), fact("wirec.rot.host"), [this, S](const std::string& t) { setting(S, tr("rotctld address"), "rot.host", trim(t)); }, tr("127.0.0.1 is this computer."));
+            wholeField(v, S, "rot.port", tr("rotctld port"), "rot.port", 1, 65535);
+        } else {
+            field(v, "rot.serial", tr("Rotator serial port"), fact("wirec.rot.serial"), [this, S](const std::string& t) { setting(S, tr("Rotator serial port"), "rot.serial", trim(t)); }, tr("A port name like COM3."));
+            choice(v, "rot.baud", tr("Rotator baud rate"), {"1200", "2400", "4800", "9600", "19200"}, std::max(0, std::min(4, [&] { const std::string b = fact("wirec.rot.baud"); return b == "1200" ? 0 : b == "2400" ? 1 : b == "4800" ? 2 : b == "19200" ? 4 : 3; }())),
+                   [this, S](int i) { static const char* const kB[] = {"1200", "2400", "4800", "9600", "19200"}; setting(S, tr("Rotator baud rate"), "rot.baud", kB[std::max(0, std::min(4, i))]); });
+        }
+        choice(v, "rot.azmax", tr("Rotator azimuth range"), {tr("0 to 360"), tr("0 to 450")}, fact("wirec.rot.az_max") == "360" ? 0 : 1,
+               [this, S](int i) { setting(S, tr("Rotator azimuth range"), "rot.az_max", i == 0 ? "360" : "450"); });
+        realField(v, S, "rot.parkaz", tr("Park azimuth"), "rot.park_az", 0, 450);
+        realField(v, S, "rot.parkel", tr("Park elevation"), "rot.park_el", 0, 180);
+        field(v, "rot.az", tr("Turn to azimuth"), rotAz, [this, S](const std::string& t) { rotAz = trim(t); dirty = true; (void)S; }, tr("Degrees."));
+        field(v, "rot.el", tr("Turn to elevation"), rotEl, [this, S](const std::string& t) { rotEl = trim(t); dirty = true; (void)S; }, tr("Degrees. Many rotators ignore it."));
+        key(v, "rot.turn", tr("Turn the antenna"), [this, S] {
+            const double azMax = fact("wirec.rot.az_max") == "360" ? 360.0 : 450.0;
+            const auto az = parseDegrees(rotAz, 0, azMax), el = parseDegrees(rotEl, 0, 180);
+            if (!az || !el) { refuseHere(S, tr("Turn the antenna"), tr("The bearing is an azimuth and an elevation in degrees.")); return; }
+            Cmd c;
+            c.op = FOXAPP_OP_ROTATOR;
+            c.text = rotatorTurnJson(*az, *el);
+            send(S, tr("Turn the antenna"), c);
+        }, on);
+        key(v, "rot.stop", tr("Stop the rotator"), [this, S] { Cmd c; c.op = FOXAPP_OP_ROTATOR; c.text = rotatorActionJson("stop"); send(S, tr("Stop the rotator"), c); }, on);
+        key(v, "rot.park", tr("Park the antenna"), [this, S] { Cmd c; c.op = FOXAPP_OP_ROTATOR; c.text = rotatorActionJson("park"); send(S, tr("Park the antenna"), c); }, on);
+        if (on) {
+            const std::string problem = fact("rot.problem");
+            v.push_back(rReadout(tr("Rotator"), !problem.empty() ? problem : (factOn("rot.connected") ? tr("connected") + ", " + fact("rot.scope") : tr("connecting"))));
+            if (!fact("rot.az").empty()) { v.push_back(rReadout(tr("Antenna at (azimuth, elevation)"), fact("rot.az") + ", " + fact("rot.el"))); }
+        }
+        if (on && !serial && !fact("rot.scope").empty() && fact("rot.scope") != "this computer only") { v.push_back(rNote(fact("rot.scope"), kWarn)); }
+    }
+
     // ================================================================ SYSTEM > Outputs
     void buildOut(std::vector<Row>& v) {
         const Sec S = kOut;
+        rotatorRows(v, S);
         // ---- audio over TCP (G3-22)
         v.push_back(rHeading(tr("Audio over TCP")));
         const bool tcpOn = fact("wirec.srv.tcpaudio.enabled") == "1";

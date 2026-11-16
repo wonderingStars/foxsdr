@@ -86,3 +86,33 @@
 +12 state s4b.fact.wirec.alerts.notify == 0
 +1 click "Show each alert as a desktop notification"
 +12 state s4b.fact.wirec.alerts.notify == 1
+# the antenna rotator (G3-20): off at start; nothing is dialled; the keys are dead until it is on; bad bearings refused on the screen
++1 state s4b.fact.rot.running == 0
++1 state s4b.fact.wirec.rot.enabled == 0
++1 expect "Turn the antenna" enabled equals "false"
++1 type "rotctld port" "47533"
++1 key enter
++12 state s4b.fact.wirec.rot.port == 47533
++1 type "rotctld port" "0"
++1 key enter
++8 state s4b.fact.wirec.rot.port == 47533
++1 type "Park azimuth" "500"
++1 key enter
++8 state s4b.fact.wirec.rot.park_az == 0
++1 type "Park azimuth" "90"
++1 key enter
++12 state s4b.fact.wirec.rot.park_az == 90
++1 type "Park azimuth" "0"
++1 key enter
++12 state s4b.fact.wirec.rot.park_az == 0
++1 click "0 to 360"
++12 state s4b.fact.wirec.rot.az_max == 360
++1 click "0 to 450"
++12 state s4b.fact.wirec.rot.az_max == 450
++1 click "Yaesu GS-232 (serial)"
++12 state s4b.fact.wirec.rot.kind == gs232
++1 type "Rotator serial port" "C:\x.txt"
++1 key enter
++8 state s4b.fact.wirec.rot.serial == ""
++1 click "rotctld (network)"
++12 state s4b.fact.wirec.rot.kind == rotctld

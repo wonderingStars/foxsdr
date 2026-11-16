@@ -94,6 +94,8 @@ const Row kRows[] = {
      "screen lane S4: the decoded-text outputs' one worker (a webhook post, an InfluxDB write or a desktop notification; each send is bounded by its client's own timeout and a cancel flag, the queue holds at most 200 jobs, stop() cancels and joins it): started only when an output is switched on (all are off by default) - NOT COVERED by a heartbeat (a known gap: the pass thread only queues, so a stalled send cannot stall the pass)"},
     {"src/engine/s4b_notify_win.cpp", 1, 0, 0, 0, "",
      "the desktop notification's message-only window thread (screen lane S4b): it waits for a message and shows a balloon, started by the first notification only and never in a test or a bounded run; stop joins it - NOT COVERED by this batch (a known gap): a thread that stops only silences the notice"},
+    {"src/engine/s4b_rotator.cpp", 1, 0, 0, 0, "",
+     "the antenna rotator's worker (screen lane S4b): it owns the link to the controller, waits up to 300 ms for a request and polls the position every two seconds, a connect or a command takes at most two seconds, and shutdown joins it - NOT COVERED by this batch (a known gap): a worker that stops only silences the rotator"},
     {"src/engine/server_host.cpp", 1, 1, 2, 2, "kThreadPasswordHash,kThreadServerHost", ""},
     {"src/engine/shutdown_guard.cpp", 1, 0, 0, 0, "",
      "the headless stop's budget guard: the watcher of the stop, which ends the process when the budget is spent; a watcher is not a worker"},

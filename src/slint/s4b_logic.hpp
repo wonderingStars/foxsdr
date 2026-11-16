@@ -37,4 +37,12 @@ std::vector<Lockout> parseLockouts(const std::string& factText, std::size_t maxI
 // "100.2000 MHz: until cleared" or "100.2000 MHz: 8 min 20 s left" (translated words).
 std::string lockoutLine(const Lockout& l);
 
+// ---- the antenna rotator ----
+
+// A number of degrees typed by the person (a decimal point or a decimal comma, spaces around it): nullopt for anything else or a value outside [lo, hi].
+std::optional<double> parseDegrees(const std::string& text, double lo, double hi);
+// The text FOXAPP_OP_ROTATOR takes: {"action":"turn","az":..,"el":..}, {"action":"stop"} or {"action":"park"}.
+std::string rotatorTurnJson(double az, double el);
+std::string rotatorActionJson(const char* action);
+
 }  // namespace foxsdr::slints4b

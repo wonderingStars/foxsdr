@@ -100,6 +100,15 @@ constexpr Spec kSpecs[] = {
     {"srv.mcp.enabled", Kind::Bool, 0, 0, "0", ""},             // the MCP server (five tools: status, bookmarks, recent decodes, tune, set mode); this computer only
     {"srv.mcp.port", Kind::Int, 1024, 65535, "8075", ""},
     {"srv.mcp.token", Kind::Text, 0, 128, "", ""},              // SECRET (protected store): when set, a client must send it as a bearer token
+    {"rot.enabled", Kind::Bool, 0, 0, "0", ""},                 // keep a link to an antenna rotator (turned only on the person's request; never at start-up)
+    {"rot.kind", Kind::Choice, 0, 0, "rotctld", "rotctld|gs232"},   // rotctld over TCP, or a Yaesu GS-232 controller on a serial port
+    {"rot.host", Kind::Text, 1, 253, "127.0.0.1", ""},          // rotctld: this computer unless the person types another host (no password, no encryption)
+    {"rot.port", Kind::Int, 1, 65535, "4533", ""},
+    {"rot.serial", Kind::Text, 0, 12, "", ""},                  // GS-232: a COM port name like COM3
+    {"rot.baud", Kind::Choice, 0, 0, "9600", "1200|2400|4800|9600|19200"},
+    {"rot.az_max", Kind::Choice, 0, 0, "450", "360|450"},       // the controller's azimuth range
+    {"rot.park_az", Kind::Real, 0, 450, "0", ""},
+    {"rot.park_el", Kind::Real, 0, 180, "0", ""},
 };
 constexpr std::size_t kSpecCount = sizeof(kSpecs) / sizeof(kSpecs[0]);
 
@@ -151,6 +160,12 @@ std::string extraRule(const std::string& key, const std::string& value) {
     if (key == "out.influx.token" && value.find_first_of("\r\n") != std::string::npos) { return "the token has a line break"; }
     if (key == "out.webhook.url") { return cascade::engine::s4::checkWebhookUrl(value); }
     if (key == "srv.mcp.token" && value.find_first_of("\r\n\t ") != std::string::npos) { return "the token has a space or a line break"; }
+    if (key == "rot.host" && !value.empty()) { return cascade::engine::s4::checkMqttHost(value); }
+    if (key == "rot.serial" && !value.empty()) {
+        bool com = value.size() >= 4 && value.size() <= 6 && (value.compare(0, 3, "COM") == 0);
+        for (std::size_t i = 3; com && i < value.size(); ++i) { com = value[i] >= '0' && value[i] <= '9'; }
+        if (!com) { return "the serial port is a name like COM3"; }
+    }
     if (key == "alerts.keywords") { return cascade::engine::s4::parseKeywords(value).problem; }
     if (key == "rds.log.folder" && !value.empty() && !std::filesystem::path(value).is_absolute()) { return "the folder must be a full path"; }
     return std::string();
