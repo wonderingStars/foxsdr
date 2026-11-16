@@ -1,0 +1,5 @@
+// fixture for tests/errpath_gate_selftest.cpp: scanned as TEXT, never compiled.
+void twice() {
+    diagWarnf("same text");
+    diagWarnf("same text");
+}
