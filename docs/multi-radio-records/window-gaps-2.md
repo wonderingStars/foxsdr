@@ -49,22 +49,63 @@ Decisions made: Ctrl+= does both the table zoom and the size step, as the classi
 * Row 1492: see the table.
 * The classic's "Saving" state for I/Q and audio keys does not exist; ours is new.
 
-## Gates (STOPPED HERE on the account's usage limit; resume on Monday)
-Headless + slint gate, run once at tip b682962f-plus on the hidden desktop `FoxSDRGaps2` (`ctest -L "headless|slint" -j4 --timeout 300`): `99% tests passed, 13 tests failed out of 1151`, 1699 s. Reds, classified:
-* MINE, FIXED AFTER THE RUN (commit 08718039, re-run alone: Passed): `test_slint_house_rules` (the meter menu keys needed the not-translated comment), `test_slint_clip_probe` (one pinned line in tools/slint-clip-explained.tsv moved).
-* MINE, FIXED BUT NOT RE-RUN: `test_plugin_containment` flagged `->press(` in system_publish.cpp; `SdrPlayDiag::press` is renamed `openDialog` (uncommitted until the commit that carries this record). The unit test test_slint_host_sdrplaydiag was edited for the rename and has NOT been rebuilt or run since.
-* Known false failures: test_airband_data, test_band_plan, test_converter_call_sites, test_page_resize_id, test_png_decode.
-* Not mine, environment: test_engine_api_source_kinds and test_engine_api_decode_radio need `.wav` fixtures (gitignored, made by src/slint/tests/drive/fixtures/make_*.py) that this worktree does not have.
-* Load flakes, passed alone: test_link_request_poll, test_engine_api_wireb_sigmeas, test_pass_control.
-Not run: the GUI gate (`-L gui -j3`). Drive scripts run alone and passing: wg2-diagnostics, wg2-meters, wg2-signal, wg2-size-keys, wg2-bandplan, wg2-import, system-look (a timing flake at one width check, passes with a longer wait), system-display, system-display-map, gaps-misc, gaps-counter-menu, gaps-deemph, gaps-drop, gaps-sdrplay, gaps-browse-files. Unit tests passing: test_slint_host_sdrplaydiag (before the rename), _bandpalette, _signal, _look, _system, _keydispatch, test_slint_themes_four, test_slint_signal, test_slint_system, test_slint_main_screen. Break-it checks (RED then restored GREEN): bias tee set without confirmation, Saving label removed, Mono palette ignoring the accent, Glass skin falling back to Workbench.
-Drive coverage ledger: `2379 rows, 750 asserted, 117 driven, 1512 not drivable, 0 unclassified`.
+## Resumed on Monday 2026-11-16 (second agent)
 
-NEXT, in order: (1) rebuild (`cmake --build D:/foxsdr-build/en-tuning --config Release --parallel 3`; a build was killed half way), run test_slint_host_sdrplaydiag and test_plugin_containment; (2) the GUI gate `-L gui -j3` on the hidden desktop with FOXSDR_FRAME_CAP_HZ=60 and the full headless gate once more; (3) re-check that the config hash is still c21ce98d...; (4) row 1492 (tester Preview) stays NOT DONE unless the owner wants the tester recorder built.
+* Tree at `2b867906` was clean; full rebuild at the tip exit 0 (no compile error: the `openDialog` rename was complete). `test_slint_host_sdrplaydiag` Passed, `test_plugin_containment` Passed (24.71 sec).
+* `test_engine_api_source_kinds` and `test_engine_api_decode_radio` are NOT environment reds once their fixtures exist: the `.wav` files are gitignored and made by the repository's own `src/slint/tests/drive/fixtures/make_*.py` (standard library only; the drive runner `test_slint_drive_run` makes a missing one itself, the two engine tests do not). Ran `python -I make_<name>.py` for all the generators in this worktree's fixtures folder (25 `.wav` files; nothing downloaded; `git status` still clean because the output is gitignored). Both then Passed in the same run (source_kinds 18.31 sec, decode_radio 36.46 sec). Anyone who sees them red in a fresh worktree runs the generators first.
+* Bench Classic XL at 1600 px: see the next section.
+
+## Bench Classic XL at 1600 px: measured, a real defect, fixed (commit 60bf4e68)
+
+Measured on the hidden desktop `FoxSDRGaps2` at 1600 x 900 with the `dump` verb (positions, logical px), Today's bench against Bench Classic XL:
+
+| | Today's bench | XL before | XL after |
+|---|---|---|---|
+| counter | 397 x 84 | 776 x 136 | 413 x 86 (1.04 times) |
+| Gain slider | 163 | 91 | 153 |
+| Squelch slider | 163 | 91 | 153 |
+| Volume slider ends at | 1435 | 1591 (past the 1584 padding) | 1435 |
+| Antenna power (bias tee) key | at 1464 to 1584 | not in the window | at 1464 to 1584 |
+
+Before the fix it was NOT only tighter: the three lanes had fallen to their 396 px minimum, the Gain and Squelch headers (caption, reading, AUTO key) overlapped ("N/A" over "AUTO", the SQUELCH caption gone) and the antenna key was clipped out of the window (the strip clips). At 2000 px it is the same (82 px short): the doubled figures need about 2200 px.
+Fix: `foxsdr::slintlook::fitCounterScale` (look_logic.cpp): the scale DRAWN is the one asked (1 or 2) less what would leave the three lanes under 525 px (150 more per whole step of the readings scale); measured lane widths: width - 1000 px below 1760 px, width - 1307 px from it. The saved choice is untouched. `gaps.counterscale` still reads the asked value, new `gaps.counterfit` reads the drawn one in per cent. At 1600 px XL therefore draws 1.04 times; the full doubling appears from about 2200 px. After the fix the SQUELCH caption still elides to "S..." at 1600 because of the 1.4 times readings (a caption elision; nothing overlaps or leaves the window; seen in a screenshot).
+Proof: `test_slint_host_look` 630 checks, 0 failed (new `counterFit`); new drive `wg2-xl-fit.txt` Passed (11.48 sec); BREAK-IT: `fitCounterScale` returning the asked value turned it RED (`counterfit` 200, Gain 90.67 px wide, the antenna key not in the window), restored, GREEN.
+Owner decision it leaves: the product has XL at about normal size on a 1600 px window; if the doubled figures must show there, the strip needs another arrangement (the antenna key and a lane on a second row), which is a design call. UNVERIFIED: a strip with more than one radio (the radio block widens the strip from 1760 px), languages with longer words.
+
+## Gates (resumed run, hidden desktop `FoxSDRGaps2`, `FOXSDR_FRAME_CAP_HZ=60`, machine shared)
+* Headless + slint gate at `2b867906` (`ctest -L "headless|slint" -j3 --timeout 300`): `99% tests passed, 10 tests failed out of 1151`, 2491.79 sec. Reds, classified:
+  * Known false failures: test_airband_data, test_band_plan, test_converter_call_sites, test_page_resize_id, test_png_decode.
+  * Load, passed alone: test_slint_fitted (13.52 sec), test_engine_api_plugin_smoke_radio (109.14 sec; timed out at 119 s in the gate), test_plugin_unload_handshake (3.33 sec), test_pass_control (passed on the second re-run, 59.56 sec; the first re-run failed its 2 ms floor check at 1.881 ms under load).
+  * test_health_app_stepped: failed in the gate and twice alone (`tests/test_health_app.cpp:1167 bindOrAbsentCount(onDisk, 1)`): the ledger it reads carried an extra `slow.startup.250ms=1` (the application's start took over 250 ms on this loaded machine), which the test's `withoutStagesOrMachine` does not strip. Neither the test nor `src/core/health*` is touched by this branch (`git diff 07e717e6 -- tests/test_health_app.cpp src/core/health*` is empty). Classified as a load flake; NOT proven by a quiet-machine pass: UNVERIFIED.
+* After the XL fix (`main.cpp`, `look_logic`, `test_slint_host_look`, `wg2-xl-fit.txt`): `ctest -L slint -j3`: `100% tests passed out of 96`.
+* GUI gate `ctest -L gui -j3 --timeout 400` at 60bf4e68: `99% tests passed, 3 tests failed out of 351`, 2992.78 sec. Reds:
+  * `slint_drive_transmit-page`: MINE, FIXED (commit bec1fbb1). The Signal strength bar (24 px plus 6 spacing in the always-open Radio section) pushed the Transmit header, already at the very foot of the list since engine-merge-5, out of the tree (`click "Transmit" -> no control labelled "Transmit"`). The script now wheels the list (`scroll "Audio filters" 400`) before the click; no assertion changed. Alone: Passed (15.67 sec).
+  * `slint_drive_system-look`: `look.width == 1600 -> FAILED: it is 800` at the line after "Interface size: Auto" (the first agent recorded the same line as a timing flake). With the SAME binary it passed 3 of 7 alone-runs (one of the failures had the wait lengthened to 90 frames), so it is a race, not a fixed wait: the window's size stays 800 after the pinned 200 % goes back to Auto although look.scale already reads 1.00. The script is left as committed. Cause NOT found and not shown to predate this branch (no baseline build was run): UNVERIFIED; listed below for a screen lane.
+  * `test_diagnostics`: `tests/test_diagnostics.cpp:941 gitCommit() == expect`: the build stamp is older than the commits made after the build (the known stamp family); see the stamp line below.
+* Drive coverage ledger (`slint_drive_ledger` Passed): the new script `wg2-xl-fit` is not a ledger row (rows 35 and 148 stay ASSERTED by system-look).
+* Real `%APPDATA%/foxsdr/config.json` sha256 after the resumed run: `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (unchanged).
 
 ## UNVERIFIED
 * The real SDRplay probe on an RSP, the real service restart and its UAC prompt, the real file chooser behind Browse..., a real OS file drag, the real clipboard: stand-ins only, until the mouse drive.
 * What the Vivid and Mono band colours look like on the screen (a bounded run has no band in view); the rule is unit-tested.
 * The "Saving" label while a real take is being closed (too short to catch from a script); the label is unit-tested.
 * The pointer ledger's OS cursor numbers on a real desktop (the hidden desktop will not give the cursor).
-* Bench Classic XL at the default 1600 px window: the doubled counter squeezes the gain and squelch lanes of the strip (seen in a screenshot); not judged by an owner.
+* Bench Classic XL at 1600 px: measured and fixed (see its section); a strip with several radios and longer-worded languages are not re-measured.
 * All new translations; a speaker has not read them.
+
+## OPEN ROWS FOR THE NEXT LANE
+
+| Row | What is missing | Kind of lane |
+|---|---|---|
+| 1492 (tester Preview box) | NOT DONE on purpose: the Slint host has no beta-tester usage recorder, sender or journal. It needs the recorder (marks for features, plugins and radios from the engine's facts), the sender and the journal in `HostDuties` (classic: `gui/app_window_tester.cpp`, about 450 lines); a preview alone would show a record nothing ever sends | screen (with an engine/host duty) |
+| 1292 to 1294, 1460 to 1470, 4614 (SDRplay diagnostic, RESTART SDRPLAY SERVICE) | the real probe on an RSP, the real service restart and its UAC prompt exist only behind stand-ins | mouse drive |
+| 1383 to 1385, 1647, 1651 to 1653 (import) | the real Windows file chooser behind Browse... and a real OS file drag | mouse drive |
+| 1457, 1458 (pointer ledger, Copy diagnostics) | OS cursor numbers on a real desktop; the real clipboard | mouse drive |
+| 258, 269, 270 (band-plan Vivid and Mono) | what the colours look like on screen with a band in view | mouse drive |
+| 1369, 1374 (Saving state) | the label while a real take is closed (too short to catch from a script) | mouse drive |
+| 148, 35 (Bench Classic XL) | owner decision: XL draws about normal size on a 1600 px window (doubling needs about 2200 px); a second strip row for the antenna key and a lane would allow it. Not measured: a strip with several radios, longer-worded languages | owner decision |
+| Transmit header at the foot of the SIGNAL list | still not visible without wheeling the list at 1600 x 900 (engine-merge-5's residual, now 30 px further down): Sinks closed by default or a shorter Source body | owner decision |
+| `slint_drive_system-look`, the line `state look.width == 1600` | intermittent: the window's size stays at the pinned 200 % value after Interface size goes back to Auto; cause not found | screen |
+| `test_health_app_stepped` | fails under load because `slow.startup.250ms` is counted in the ledger the test compares; the test should strip `slow.` counts or the threshold be loosened; not touched here | engine |
+| New translations ("Saving IQ...", "Saving audio...", "Signal strength") | machine-made, unread by a speaker | owner (translation pass) |
+| Lane 1 hand-off | `foxsdr::slintdiag::copyDiagnostics` must be the only copy when the branches meet (keep this one) | merge |
