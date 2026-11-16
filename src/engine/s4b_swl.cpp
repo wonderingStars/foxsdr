@@ -56,10 +56,27 @@ void SwlBook::load() {
         std::fclose(f);
     }
     const json j = json::parse(text, nullptr, false);
-    if (j.is_discarded() || !j.is_object() || !j.contains("entries") || !j["entries"].is_array()) { error_ = "the listening log is damaged and was not used"; return; }
+    // A field of the wrong type (a text where a number belongs) is a damaged file, never an exception at start-up: nlohmann's value() throws on a type mismatch.
+    bool damaged = j.is_discarded() || !j.is_object() || !j.contains("entries") || !j["entries"].is_array();
+    if (!damaged) {
+        const auto isStr = [](const json& e, const char* k) { const auto it = e.find(k); return it == e.end() || it->is_string(); };
+        const auto isNum = [](const json& e, const char* k) { const auto it = e.find(k); return it == e.end() || it->is_number(); };
+        const auto isInt = [](const json& e, const char* k) { const auto it = e.find(k); return it == e.end() || it->is_number_integer(); };
+        const auto isSmall = [](const json& e, const char* k) { const auto it = e.find(k); return it == e.end() || (it->is_number_integer() && it->get<double>() > -2.0e9 && it->get<double>() < 2.0e9); };
+        for (const json& e : j["entries"]) {
+            if (!e.is_object() || !isInt(e, "t") || !isNum(e, "d") || !isNum(e, "f") || !isStr(e, "m") || !isStr(e, "c") || !isStr(e, "s") || !isStr(e, "n") || !isSmall(e, "r") || !isNum(e, "p")) { damaged = true; break; }
+        }
+    }
+    if (damaged) {
+        error_ = "the listening log is damaged and was not used";
+        std::error_code mv;   // the damaged file is kept beside the log, so the next save does not destroy what the person may still repair
+        std::filesystem::path aside = file_;
+        aside += ".damaged";
+        std::filesystem::rename(file_, aside, mv);
+        return;
+    }
     for (const json& e : j["entries"]) {
         if (entries_.size() >= kMaxSwlEntries) { break; }
-        if (!e.is_object()) { continue; }
         ad::ListenEntry le;
         le.startUnix = e.value("t", static_cast<std::int64_t>(0));
         le.durationS = e.value("d", 0.0);
@@ -69,7 +86,7 @@ void SwlBook::load() {
         le.station = cleanLine(e.value("s", std::string()), kMaxText);
         le.notes = cleanLine(e.value("n", std::string()), kMaxText);
         le.radio = e.value("r", 0);
-        if (e.contains("p") && e["p"].is_number()) { le.peakDbfs = e["p"].get<double>(); }
+        if (e.contains("p")) { le.peakDbfs = e["p"].get<double>(); }
         if (!std::isfinite(le.frequencyHz) || le.frequencyHz <= 0.0 || le.startUnix <= 0) { continue; }
         entries_.push_back(std::move(le));
     }
