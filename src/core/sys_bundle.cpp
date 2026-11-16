@@ -112,6 +112,14 @@ const char* bundleErrorName(BundleError e) {
 
 bool allowedBundleFileName(const std::string& name) { return name == "config.json" || name == "bookmarks.json" || name == "markers.json"; }
 
+const std::vector<std::string>& importLeftOutKeys() {
+    static const std::vector<std::string> k = {"pluginCatalogueUrl", "pluginSites",
+                                               "webBindAddress", "catBindAll", "tciBindAll", "udpAudioHost",
+                                               "sourceKind", "soapyArgs", "nativeArgs", "plutoUri", "rtlTcpAddr", "iqFilePath", "radios",
+                                               "telemetryEnabled", "diagnosticsEnabled"};
+    return k;
+}
+
 bool secretKeyName(const std::string& key) {
     const std::string k = lowerOf(key);
     for (const char* frag : {"password", "passwd", "passphrase", "secret", "token", "apikey", "api_key", "privatekey", "private_key", "credential"}) {
@@ -224,6 +232,16 @@ ImportResult parseBundle(const std::string& text) {
         stripKeys(c, /*identity=*/true, "", removed);
         if (!removed.empty()) { r.notes.push_back(dl.name + ": " + std::to_string(removed.size()) + " secret or identity value(s) in the bundle were NOT imported"); }
         if (dl.name == "config.json") {
+            std::string left;
+            for (const std::string& k : importLeftOutKeys()) {
+                const auto it = c.find(k);
+                if (it == c.end()) { continue; }
+                c.erase(it);
+                left += (left.empty() ? "" : ", ") + k;
+            }
+            if (!left.empty()) {
+                r.notes.push_back("config.json: these settings decide where plugins come from, what this program listens on, which radio or file it opens at start, or whether it reports, so they were NOT imported (this computer keeps its own): " + left);
+            }
             for (const char* sw : {"webEnabled", "catEnabled", "tciEnabled", "udpAudioEnabled"}) {
                 const auto it = c.find(sw);
                 if (it != c.end() && it->is_boolean() && it->get<bool>()) {
@@ -312,7 +330,23 @@ bool commitImport(const ImportResult& r, const fs::path& destDir, const std::str
         }
         const fs::path tmp = destDir / (it->name + ".import-tmp");
         temps.push_back(tmp);
-        if (!writeAll(tmp, bytesOf(it->name))) { error = "cannot write " + it->name; rollback(); return false; }
+        std::string bytes = bytesOf(it->name);
+        if (it->name == "config.json" && it->action == ImportAction::Replace) {
+            // This computer's own values of the settings a bundle may never change (importLeftOutKeys) stay as they are.
+            std::string own;
+            if (readAll(target, kBundleMaxFileBytes * 2, own)) {
+                json mine = json::parse(own, nullptr, /*allow_exceptions=*/false);
+                json theirs = json::parse(bytes, nullptr, /*allow_exceptions=*/false);
+                if (mine.is_object() && theirs.is_object()) {
+                    for (const std::string& k : importLeftOutKeys()) {
+                        const auto m = mine.find(k);
+                        if (m != mine.end()) { theirs[k] = *m; }
+                    }
+                    bytes = dumpJson(theirs);
+                }
+            }
+        }
+        if (!writeAll(tmp, bytes)) { error = "cannot write " + it->name; rollback(); return false; }
     }
     // 3. rename into place.
     for (const auto* it : todo) {

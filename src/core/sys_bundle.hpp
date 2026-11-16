@@ -110,6 +110,13 @@ std::string backupFileName(const std::string& stamp);                           
 bool isBackupFileName(const std::string& name);                                                      // exactly that shape (stamp = 8 digits, '-', 6 digits)
 std::vector<std::string> pruneBackups(const std::filesystem::path& dir, std::size_t keepNewest);     // deletes only our own backup files beyond the newest N; returns their names
 
+// THE SETTINGS A BUNDLE MAY NEVER CHANGE (security reviews 1 and 2, M2 and R13). A bundle is a file from someone else (a forum post, an e-mail): these
+// top-level settings of config.json decide where plugins come from (pluginCatalogueUrl, pluginSites), what the program listens on
+// (webBindAddress, catBindAll, tciBindAll, udpAudioHost), which radio or file it opens at the next start (sourceKind, soapyArgs, nativeArgs, plutoUri,
+// rtlTcpAddr, iqFilePath, radios) and whether it reports (telemetryEnabled, diagnosticsEnabled). parseBundle drops them from the imported
+// config.json and says which were left out; commitImport puts this computer's own values back into the file it writes.
+const std::vector<std::string>& importLeftOutKeys();
+
 // The key-name rule, exposed for tests and for the UI's "what was left out" text.
 bool secretKeyName(const std::string& key);
 bool identityKeyName(const std::string& key);

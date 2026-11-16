@@ -114,8 +114,9 @@ void testExportStripsSecrets() {
     std::string err;
     CHECK(cascade::core::ConfigStore::load(out.string(), back, err));
     CHECK(back.webPort == 4321 && back.webPasswordRecord.empty() && back.testerToken.empty() && back.telemetryInstallId.empty());
-    // telemetryEnabled (a preference, not an identity) is kept.
-    CHECK(json::parse(cfgBytes).contains("telemetryEnabled"));
+    // telemetryEnabled and diagnosticsEnabled are NOT imported any more (security review 2, R13): a bundle from someone else must not switch a
+    // person's reporting on. (Was: kept, "a preference, not an identity".)
+    CHECK(!json::parse(cfgBytes).contains("telemetryEnabled") && !json::parse(cfgBytes).contains("diagnosticsEnabled"));
     // stripIdentity off keeps the identity but still drops every secret.
     ExportOptions keep;
     keep.stripIdentity = false;
@@ -229,6 +230,72 @@ void testListenersImportedOff() {
     // Already-off switches produce no note.
     const ImportResult q = parseBundle(rawBundle({{"config.json", "{\"webEnabled\":false}"}}));
     CHECK(q.error == BundleError::None && q.notes.empty());
+}
+
+// M2 and R13 (security reviews): a bundle from someone else must not change where plugins come from, what the program listens on, which radio or
+// file it opens at start, or the telemetry and diagnostics switches. A hostile bundle sets every one of them.
+void testHostileBundleLeavesTheGuardedSettingsAlone() {
+    json hostile;
+    hostile["pluginCatalogueUrl"] = "https://evil.example/catalogue.json";
+    hostile["pluginSites"] = json::array({"https://evil.example/plugins.json"});
+    hostile["webBindAddress"] = "0.0.0.0";
+    hostile["catBindAll"] = true;
+    hostile["tciBindAll"] = true;
+    hostile["udpAudioHost"] = "203.0.113.9";
+    hostile["sourceKind"] = "rtltcp";
+    hostile["soapyArgs"] = "driver=remote,remote=203.0.113.9";
+    hostile["nativeArgs"] = "evil";
+    hostile["plutoUri"] = "ip:203.0.113.9";
+    hostile["rtlTcpAddr"] = "203.0.113.9:1234";
+    hostile["iqFilePath"] = "//203.0.113.9/share/x.iq";
+    hostile["radios"] = json::array({json{{"number", 1}, {"sourceKind", "rtltcp"}, {"args", "203.0.113.9:1234"}}});
+    hostile["telemetryEnabled"] = true;
+    hostile["diagnosticsEnabled"] = true;
+    hostile["webPort"] = 8080;          // an ordinary setting: still imported
+    hostile["centerHz"] = 7100000.0;
+    const ImportResult r = parseBundle(rawBundle({{"config.json", dumpS(hostile)}}));
+    CHECK(r.error == BundleError::None);
+    const json c = json::parse(r.files[0].bytes);
+    for (const std::string& k : importLeftOutKeys()) { CHECK(!c.contains(k)); }
+    CHECK(c["webPort"] == 8080 && c["centerHz"] == 7100000.0);
+    CHECK(importLeftOutKeys().size() == 15);
+    // the person is told which were left out
+    std::string told;
+    for (const std::string& n : r.notes) { told += n + "\n"; }
+    for (const std::string& k : importLeftOutKeys()) { CHECK(told.find(k) != std::string::npos); }
+    CHECK(told.find("203.0.113.9") == std::string::npos && told.find("evil.example") == std::string::npos);   // the notes carry names, never the bundle's values
+
+    // committed over this computer's own settings: its own values stay
+    const fs::path dest = g_base / "hostile";
+    fs::remove_all(dest);
+    fs::create_directories(dest);
+    json mine;
+    mine["pluginCatalogueUrl"] = "https://mine.example/catalogue.json";
+    mine["rtlTcpAddr"] = "192.168.1.5:1234";
+    mine["sourceKind"] = "rtlsdr";
+    mine["telemetryEnabled"] = false;
+    mine["diagnosticsEnabled"] = false;
+    mine["webBindAddress"] = "127.0.0.1";
+    mine["webPort"] = 9999;
+    spit(dest / "config.json", dumpS(mine));
+    std::string err;
+    const ImportPlan plan = planImport(r, dest);
+    CHECK(commitImport(r, dest, plan.confirmToken, "20261111-221530", err));
+    const json after = json::parse(slurp(dest / "config.json"));
+    CHECK(after["pluginCatalogueUrl"] == "https://mine.example/catalogue.json");
+    CHECK(after["rtlTcpAddr"] == "192.168.1.5:1234" && after["sourceKind"] == "rtlsdr");
+    CHECK(after["telemetryEnabled"] == false && after["diagnosticsEnabled"] == false);
+    CHECK(after["webBindAddress"] == "127.0.0.1");
+    CHECK(after["webPort"] == 8080 && after["centerHz"] == 7100000.0);      // the rest of the bundle was imported
+    CHECK(!after.contains("pluginSites") && !after.contains("udpAudioHost") && !after.contains("radios"));   // this computer had none
+
+    // into a computer with no settings yet: the keys are simply absent (the program's defaults)
+    const fs::path fresh = g_base / "hostile-fresh";
+    fs::remove_all(fresh);
+    const ImportPlan pf = planImport(r, fresh);
+    CHECK(commitImport(r, fresh, pf.confirmToken, "20261111-221530", err));
+    const json freshCfg = json::parse(slurp(fresh / "config.json"));
+    for (const std::string& k : importLeftOutKeys()) { CHECK(!freshCfg.contains(k)); }
 }
 
 void testPlanAndCommit() {
@@ -427,6 +494,7 @@ int main() {
     testExportErrors();
     testParseRefusals();
     testListenersImportedOff();
+    testHostileBundleLeavesTheGuardedSettingsAlone();
     testPlanAndCommit();
     testRollback();
     testBackups();
