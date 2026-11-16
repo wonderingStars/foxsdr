@@ -335,6 +335,14 @@ bool withDirectSampling(cascade::source::DeviceSource* dev, Fn&& fn) {
     return fn(*rt);
 }
 
+// THE ANALOGUE IF BANDWIDTH (G1-14, screen lane S5b): the native RTL-SDR driver; 0 is automatic (the sample rate), else Hz.
+template <typename Fn>
+bool withIfBandwidth(cascade::source::DeviceSource* dev, Fn&& fn) {
+    auto* rt = dynamic_cast<cascade::source::RtlSdrSource*>(dev);
+    if (rt == nullptr) { return false; }
+    return fn(*rt);
+}
+
 template <typename Fn>
 bool withHdrMode(cascade::source::DeviceSource* dev, Fn&& fn) {
     auto* sp = dynamic_cast<cascade::source::SdrPlaySource*>(dev);
@@ -3084,6 +3092,10 @@ void Engine::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::s
     });
     rx().deviceDirectPresent_ = withDirectSampling(&dev, [this](auto& d) {
         rx().deviceDirectChoice_ = d.directSamplingChoice();
+        return true;
+    });
+    rx().deviceIfBwPresent_ = withIfBandwidth(&dev, [this](auto& d) {
+        rx().deviceIfBw_ = d.ifBandwidthHz();
         return true;
     });
     rx().deviceOffsetTuningPresent_ = withOffsetTuning(&dev, [this](auto& d) {
@@ -8327,6 +8339,18 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 });
                 if (!took) { return refuse(FOXAPI_FAILED, rx().sourceError_.c_str()); }
                 res.applied[0] = static_cast<double>(rx().deviceDirectChoice_);
+            } else if (text == "if_bandwidth" && rx().deviceIfBwPresent_) {
+                // ival[0] is the bandwidth in Hz, 0 = automatic (the sample rate); the driver's own range (300 kHz to 8 MHz) judges it (G1-14)
+                if (c.ival[0] < 0 || c.ival[0] > 100000000) { return refuse(FOXAPI_OUT_OF_RANGE, "the analogue IF bandwidth is 0 (automatic) or 300 kHz to 8 MHz"); }
+                bool took = false;
+                withIfBandwidth(rx().device_, [this, &c, &took](auto& d) {
+                    took = d.setIfBandwidthHz(static_cast<int>(c.ival[0]));
+                    if (!took) { rx().sourceError_ = d.lastError(); }
+                    rx().deviceIfBw_ = d.ifBandwidthHz();
+                    return true;
+                });
+                if (!took) { return refuse(FOXAPI_FAILED, rx().sourceError_.c_str()); }
+                res.applied[0] = static_cast<double>(rx().deviceIfBw_);
             } else if (text == "offset_tuning" && rx().deviceOffsetTuningPresent_) {
                 rx().deviceOffsetTuning_ = on;
                 withOffsetTuning(rx().device_, [this](auto& d) {

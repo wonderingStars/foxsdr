@@ -74,6 +74,7 @@ private:
     void buildPpm(std::vector<foxsdr::slintlanek::Row>& v);
     void buildPool(std::vector<foxsdr::slintlanek::Row>& v);
     void buildDirect(std::vector<foxsdr::slintlanek::Row>& v);
+    void buildS5b(std::vector<foxsdr::slintlanek::Row>& v);   // lane S5b's rows (s5b_rows.cpp): analogue IF bandwidth and the rows after it
 
     Env env_;
     std::map<std::string, std::function<void(const std::string&)>> handlers_;

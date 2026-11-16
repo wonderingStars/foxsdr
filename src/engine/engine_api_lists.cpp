@@ -426,6 +426,8 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(rx().deviceRandomiser_);
     f.value(rx().deviceDirectPresent_);
     f.value(rx().deviceDirectChoice_);
+    f.value(rx().deviceIfBwPresent_);
+    f.value(rx().deviceIfBw_);
     f.value(rx().deviceOffsetTuningPresent_);
     f.value(rx().deviceOffsetTuning_);
     f.value(biasTeePanel_.present);
@@ -1223,6 +1225,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             b.deviceOptions.emplace_back("randomiser", rx().deviceRandomiser_);
         }
         if (rx().deviceOffsetTuningPresent_) { b.deviceOptions.emplace_back("offset_tuning", rx().deviceOffsetTuning_); }
+        if (rx().deviceIfBwPresent_) { b.deviceOptions.emplace_back("if_bandwidth", rx().deviceIfBw_ != 0); }   // (value: chosen; the Hz itself is fact.radio.n.ifBandwidth)
         if (rx().deviceDirectPresent_) { b.deviceOptions.emplace_back("direct_sampling", rx().deviceDirectChoice_ != 0); }   // (value: forced; the choice itself is fact.radio.n.directSampling)
     }
     b.serialPorts = serialPorts_;
@@ -1427,6 +1430,8 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         fact(pre + "mpx", receivers_[n - 1u]->mpxRecorder_.recording() ? "1" : "0");
         fact(pre + "ifrec", receivers_[n - 1u]->ifRecorder_.recording() ? "1" : "0");
         // THE RTL-SDR'S DIRECT-SAMPLING CHOICE (0 automatic, 1 never, 2 the I branch, 3 the Q branch; screen lane S5): present only while the radio has the setting, so the screen can tell "none" from "automatic".
+        // THE RTL-SDR'S ANALOGUE IF BANDWIDTH in Hz (0 automatic; screen lane S5b, G1-14): present only on the native RTL-SDR driver.
+        if (receivers_[n - 1u]->deviceIfBwPresent_) { fact(pre + "ifBandwidth", std::to_string(receivers_[n - 1u]->deviceIfBw_)); }
         if (receivers_[n - 1u]->deviceDirectPresent_) { fact(pre + "directSampling", std::to_string(receivers_[n - 1u]->deviceDirectChoice_)); }
         {
             const cascade::core::ppmauto::Result pr = receivers_[n - 1u]->ppmAuto_.result(clockS());

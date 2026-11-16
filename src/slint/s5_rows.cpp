@@ -123,6 +123,7 @@ std::vector<Row> S5Rows::build() {
         buildPpm(v);
         buildPool(v);
         buildDirect(v);
+        buildS5b(v);
     }
     if (!note_.empty()) { v.push_back(rNote(note_, noteTone_)); }
     return v;

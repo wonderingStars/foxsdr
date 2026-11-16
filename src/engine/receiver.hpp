@@ -281,6 +281,8 @@ struct Receiver {
     bool tuneLocked_ = false;   // the frequency lock (FOXAPP_OP_RADIO_LOCK, engine wiring W2): every way a retune reaches this radio is refused or a no-op
     bool deviceDirectPresent_ = false;        // the native RTL-SDR driver on a tuner that is not a Blog V4 (R11): the "direct_sampling" choice
     int deviceDirectChoice_ = 0;              // 0 automatic / 1 never / 2 I branch / 3 Q branch
+    bool deviceIfBwPresent_ = false;          // the native RTL-SDR driver (G1-14, screen lane S5b): the "if_bandwidth" option, Hz, 0 = automatic
+    int deviceIfBw_ = 0;
     bool deviceOffsetTuningPresent_ = false;  // an rtl_tcp server's E4000 (R12), where its header names one
     bool deviceOffsetTuning_ = false;
     // The ACTIVE source's kind as the config store spells it. Tracked at each

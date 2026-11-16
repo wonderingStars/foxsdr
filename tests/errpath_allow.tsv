@@ -3189,3 +3189,10 @@ src/slint/s5_logic.cpp::validHost::errassign::type the address of the streams co
 src/slint/s5_logic.cpp::validHost::errassign::that address is too long	ALLOW	validation	2026-11-16
 src/slint/s5_logic.cpp::validHost::errassign::an address has letters digits dots dashes and colons only	ALLOW	validation	2026-11-16
 src/slint/s5_logic.cpp::parsePpmSeconds::errassign::allowed	ALLOW	validation	2026-11-16
+src/engine/engine.cpp::Engine::applyCommand::errassign::d lasterror#8	ALLOW	the refusal is the command's own answer to the person in the same call (refuse(FOXAPI_FAILED, sourceError_)); the radio-reports lane's hook at the shared refusal path covers it after the merge	2026-11-16
+src/slint/s5b_logic.cpp::parseIfBandwidthKHz::errassign::allowed	ALLOW	validation	2026-11-16
+src/source/rtlsdr_source.cpp::RtlSdrSource::setIfBandwidthHz::seterr::the analogue if bandwidth is # automatic or # khz to # mhz	ALLOW	validation	2026-11-16
+src/source/rtlsdr_source.cpp::RtlSdrSource::setIfBandwidthHz::seterr::the radio is busy try again	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/rtlsdr_source.cpp::RtlSdrSource::setIfBandwidthHz::seterr::setifbandwidthhz with no radio open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/rtlsdr_source.cpp::RtlSdrSource::setIfBandwidthHz::seterr::this radio has faulted reopen it	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/rtlsdr_source.cpp::RtlSdrSource::setIfBandwidthHz::seterr::the tuner would not accept that if bandwidth	ALLOW	user pick refused by the tuner: returned false to the engine command, which answers the person with the sentence (refuse FOXAPI_FAILED); MERGE NOTE: the radio-reports hook at that refusal path picks it up	2026-11-16
