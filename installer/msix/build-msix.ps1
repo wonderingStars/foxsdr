@@ -3,9 +3,12 @@
 #   powershell -ExecutionPolicy Bypass -File installer\msix\build-msix.ps1 `
 #       [-BuildDir <dir>] [-VcCrtDir <dir>] `
 #       [-IdentityName <name>] [-IdentityPublisher <X.500>] `
-#       [-PublisherDisplayName <name>] [-TestSign] [-Force]
+#       [-PublisherDisplayName <name>] [-TestSign] [-Force] [-CompanionsDir <dir>]
 #
 # Output: installer\msix\Output\FoxSDR-<version>-x64.msix
+#
+# -CompanionsDir packs the companion applications (separate open-source programs the companion plugins start) INSIDE the package, each with its licence text, notices and
+# statement of changes; see installer\msix\collect-companions.ps1, which makes the folder, and README.md section 9.
 #
 # WHAT IT DOES, in order:
 #   1. reads the version from cascade.exe --version (the binary's own claim)
@@ -66,7 +69,12 @@ param(
     # TESTING ONLY - see the header.
     [switch] $TestSign,
     # Overwrite an existing output package.
-    [switch] $Force
+    [switch] $Force,
+    # THE COMPANION APPLICATIONS (optional). A folder made by installer\msix\collect-companions.ps1: companions.manifest.json, and one subfolder per program with the
+    # built program and its legal texts. Each program is packed under companions\<folder>\ with its licence texts, notices and statement of changes, a list the host
+    # reads (companions\companions.json: id, file, path, sha256, size) and COMPANIONS.md at the package root. hfserial and dvframes are refused by name. Without this
+    # parameter the package is exactly what it was before the companions existed.
+    [string] $CompanionsDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -227,6 +235,93 @@ $plans = @(Get-ChildItem -LiteralPath $bandSrc -Filter *.json -File)
 if ($plans.Count -eq 0) { Fail "no band plans found in $bandSrc" }
 foreach ($plan in $plans) { Copy-Item -LiteralPath $plan.FullName -Destination $bandDst -Force }
 Write-Note "resources\bandplans: $($plans.Count) plan(s)"
+
+# THE COMPANION APPLICATIONS (only with -CompanionsDir). The Microsoft Store copy never downloads a program (Store policy 10.2.2 and 10.2.3), so the programs the
+# companion plugins start travel INSIDE the package. The host looks for them under <package root>\companions\ (src\core\companion_programs.hpp) and checks each against
+# the SHA-256 written here before it is copied into place and again before every start. Every program goes with: its licence text, its notices, its statement of changes
+# (UPSTREAM.md) - the three things the licences ask a built copy to carry (GPL 2 sections 1 and 2, GPL 3 sections 4 and 5; docs/multi-radio-records/companions-shelf.md).
+$companionCount = 0
+$companionBytes = [int64]0
+if (-not [string]::IsNullOrWhiteSpace($CompanionsDir)) {
+    Write-Step "companion applications: $CompanionsDir"
+    if (-not (Test-Path -LiteralPath $CompanionsDir)) { Fail "companions folder not found: $CompanionsDir" }
+    $CompanionsDir = (Resolve-Path -LiteralPath $CompanionsDir).Path
+    $cmPath = Join-Path $CompanionsDir "companions.manifest.json"
+    if (-not (Test-Path -LiteralPath $cmPath)) { Fail "no companions.manifest.json in $CompanionsDir - make the folder with installer\msix\collect-companions.ps1" }
+    $cm = [System.IO.File]::ReadAllText($cmPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $cmSource = [string]$cm.source
+    $cmCommit = [string]$cm.commit
+    if ($cmSource -notmatch '^https://') { Fail "the manifest names no https address for the source of the programs" }
+    $heldOut = @("hfserial", "dvframes")
+    $onAirFolders = @("hfmodes", "weakmodes2")
+    $companionsLayout = Join-Path $layoutDir "companions"
+    New-Item -ItemType Directory -Path $companionsLayout | Out-Null
+    $hostList = @()
+    $mdRows = @()
+    foreach ($c in @($cm.companions)) {
+        $folder = [string]$c.folder
+        $file = [string]$c.file
+        $cid = [string]$c.id
+        if ($folder -notmatch '^[a-z0-9]+$') { Fail "a companion folder name is not acceptable: '$folder'" }
+        if ($file -notmatch '^[A-Za-z0-9._-]+\.exe$') { Fail "$folder : the program name is not acceptable: '$file'" }
+        if ($cid -ne ("companion-" + $folder)) { Fail "$folder : its id is '$cid', expected companion-$folder" }
+        if (($heldOut -contains $folder.ToLowerInvariant()) -or ($heldOut -contains ($cid -replace '^companion-', '').ToLowerInvariant())) {
+            Fail "$folder : this program is held out and is never packed"
+        }
+        $srcFolder = Join-Path $CompanionsDir $folder
+        $srcProgram = Join-Path $srcFolder $file
+        if (-not (Test-Path -LiteralPath $srcProgram)) { Fail "$folder : the program $file is not in $srcFolder" }
+        $legalDir = Join-Path $srcFolder "legal"
+        $licenceFiles = @(Get-ChildItem -LiteralPath $legalDir -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '(?i)^(licen[cs]e|copying)' })
+        if ($licenceFiles.Count -eq 0) { Fail "$folder : no licence text in $legalDir - a built copy carries its licence" }
+        if (-not (Test-Path -LiteralPath (Join-Path $legalDir "UPSTREAM.md"))) { Fail "$folder : no statement of changes (UPSTREAM.md) in $legalDir" }
+        if ($onAirFolders -contains $folder) {
+            $terms = @(Get-ChildItem -LiteralPath $legalDir -File | Where-Object { $_.Name -match '(?i)^additional-terms' })
+            if ($terms.Count -eq 0) { Fail "$folder : the OnAir additional terms are missing (they must travel with the program)" }
+        }
+        if ($folder -eq "hamdrm" -and -not (Test-Path -LiteralPath (Join-Path $legalDir "COPYING"))) { Fail "hamdrm : QSSTV's COPYING is missing" }
+        $dstFolder = Join-Path $companionsLayout $folder
+        Copy-Item -LiteralPath $srcFolder -Destination $dstFolder -Recurse
+        $packed = Join-Path $dstFolder $file
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $packed).Hash.ToLowerInvariant()
+        $size = (Get-Item -LiteralPath $packed).Length
+        $companionBytes += (Get-ChildItem -LiteralPath $dstFolder -Recurse -File | Measure-Object -Property Length -Sum).Sum
+        $hostList += [ordered]@{ id = $cid; file = $file; path = ($folder + "/" + $file); sha256 = $hash; size = $size }
+        $mdRows += ("| {0} | {1} | {2} | {3} | companions\{4}\legal |" -f $file, [string]$c.upstream, [string]$c.licence, [string]$c.decodes, $folder)
+        $companionCount++
+        Write-Note ("{0,-12} {1} ({2:N0} bytes, sha256 {3}...)" -f $folder, $file, $size, $hash.Substring(0, 12))
+    }
+    if ($companionCount -eq 0) { Fail "the companions manifest lists no program" }
+    $utf8NoBomCm = New-Object System.Text.UTF8Encoding($false)
+    $hostDoc = [ordered]@{ version = 1; programs = @($hostList) }
+    [System.IO.File]::WriteAllText((Join-Path $companionsLayout "companions.json"), ($hostDoc | ConvertTo-Json -Depth 5), $utf8NoBomCm)
+
+    $md = New-Object System.Text.StringBuilder
+    [void]$md.AppendLine("# Companion applications in this package")
+    [void]$md.AppendLine("")
+    [void]$md.AppendLine("This package holds separate programs, the companion applications, beside FoxSDR. Each is another project's open-source program under ITS OWN licence, not FoxSDR's.")
+    [void]$md.AppendLine("FoxSDR starts one as a separate program and talks to it through a pipe; it is not combined with FoxSDR into one program.")
+    [void]$md.AppendLine("")
+    [void]$md.AppendLine("The source code of each program, matching the program in this package, is published at $cmSource (commit $cmCommit). It stays there for as long as this package is offered.")
+    [void]$md.AppendLine("For each program the folder named below holds the licence text, the notices and the statement of the changes made to the upstream project (UPSTREAM.md).")
+    [void]$md.AppendLine("")
+    [void]$md.AppendLine("| Program | Upstream project | Licence | What it decodes | Licence texts and notices |")
+    [void]$md.AppendLine("|---|---|---|---|---|")
+    foreach ($row in $mdRows) { [void]$md.AppendLine($row) }
+    [void]$md.AppendLine("")
+    [void]$md.AppendLine("Source address: $cmSource")
+    [System.IO.File]::WriteAllText((Join-Path $layoutDir "COMPANIONS.md"), $md.ToString(), $utf8NoBomCm)
+    Write-Note "COMPANIONS.md written ($companionCount programs)"
+
+    # THE DRAFT TERMS: appended to the package's licence text, marked as awaiting the owner's approval (it is a draft for him, not legal advice).
+    $draftPath = Join-Path $scriptDir "companions-licence-draft.txt"
+    if (-not (Test-Path -LiteralPath $draftPath)) { Fail "installer\msix\companions-licence-draft.txt is missing" }
+    $draft = [System.IO.File]::ReadAllText($draftPath, [System.Text.Encoding]::UTF8).Replace("@SOURCE@", $cmSource).Replace("@COMMIT@", $cmCommit)
+    $licenceStaged = Join-Path $layoutDir "LICENSE.txt"
+    $licenceText = [System.IO.File]::ReadAllText($licenceStaged, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText($licenceStaged, ($licenceText.TrimEnd() + "`r`n`r`n" + $draft), $utf8NoBomCm)
+    Write-Note "the DRAFT companion terms were appended to LICENSE.txt, marked as awaiting the owner's approval"
+}
 
 # NO PLUGINS ARE STAGED, and that is correct rather than an omission.
 # installer\cascade.iss ships none either: decoder modules come from the

@@ -43,6 +43,20 @@ struct HelperInfo {
 };
 // wire-c end
 
+// COMPANION APPLICATIONS (core/companion_programs.hpp): a catalogue row on the "companions" shelf carries a `companion` object describing the separate open-source program its
+// bridge plugin starts. Every field came off the wire; the program block is `usable` only when it is published, has a safe file name, an https address and a real SHA-256.
+struct ProgramInfo {
+    std::string file, url, sha256, status;   // sha256 lower-cased
+    std::string signature;                   // the owner's envelope over the program's statement (inert until a key is supplied), "" none
+    bool usable = false;                     // the ONLY state in which anything is ever fetched
+};
+struct CompanionInfo {
+    bool present = false;
+    std::string upstream, licence, whySeparate, source;   // source: an https address or ""
+    std::string identifierLine;                           // "This program cannot hide identifiers: ..." cut out of the description, "" when the row has none
+    ProgramInfo program;
+};
+
 struct PluginPlatform {
     std::string os;    // "windows", "linux", "macos" (matched case-insensitively)
     std::string arch;  // "x64", "arm64", "x86"
@@ -143,6 +157,7 @@ struct PluginCatalogEntry {
     std::string source;
 
     HelperInfo helper;   // wire-c: set for a helper plugin only (core/plugin_repo_helper.hpp)
+    CompanionInfo companion;   // set for a companion application's bridge only (core/companion_programs.hpp); never set by a plugin site's entry (mergeSite clears it)
 
     // The platform record matching the host we are running on, or nullptr if
     // the catalogue has no build for it. The pointer aliases `platforms`, so
