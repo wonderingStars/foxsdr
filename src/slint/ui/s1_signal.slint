@@ -2,6 +2,7 @@
 // section the person looks in (main.slint): the I/Q correction under Source; the meter's unit, the CW pitch and peak filter, the passband's presets and shape, the squelches and the frequency tracking under
 // Radio; the noise-reduction method, the notch bank, the audio high-pass and low-pass, the equaliser and the stereo placement under Audio filters. The host (s1_publish.cpp) builds the rows from the engine's
 // state of the selected radio and answers `act(id, text)`; an empty list draws nothing.
+import { Theme } from "theme.slint";   // (the house rule: every .slint file of the window names the theme it draws with; this one only holds a global)
 import { KRow } from "system_bank.slint";
 
 export global LaneS1 {

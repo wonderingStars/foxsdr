@@ -6,7 +6,9 @@
 10 state txAvailable == 0
 state transmit.page == closed
 # the rail of sections is taller than the default window (the Radio section is open at every start and grew by the Signal strength bar): the person wheels the list, and so does the script
-+1 scroll "Audio filters" 400
+# screen lane S1: the Radio and Audio filters sections gained folded groups, so the Audio filters header starts below the window: the list is wheeled from the Signal strength bar first
++1 scroll "Signal strength" 300
++6 scroll "Audio filters" 400
 +2 click "Transmit"
 +10 state transmit.page == shown
 state transmit.live == 1
@@ -60,8 +62,9 @@ state txAvailable == 0
 state transmit.sent.0a04 == 0
 state transmit.sent.0a0c == 0
 state txKeyed == 0
-# the row again closes the page
-+1 click "Transmit"
+# the row again closes the page (the list is wheeled again first, as at the start)
++6 scroll "Audio filters" 400
++2 click "Transmit"
 +10 state transmit.page == closed
 state transmit.live == 0
 +1 dump
