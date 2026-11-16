@@ -1,0 +1,72 @@
+// FoxSDR Slint front end - TWO DIAGNOSTIC OVERLAYS (window-gaps-2, rows 1457, 1460 to 1470, 4614):
+//   PointerLedgerStrip  the line across the top of the window while SYSTEM > Diagnostics > "Show the pointer ledger across the top of the window" is ticked (the classic's yellow input ledger);
+//                       it draws and takes no clicks, so it can never be the thing a click lands on.
+//   SdrPlayDialog       the "SDRplay diagnostic" dialog the key in SYSTEM > Diagnostics opens (the classic's drawSdrPlayProbeDialog): the warning, the "Also test the bias tee" tick, the bias
+//                       tee's own question (it puts DC power on the antenna socket), Run the diagnostic and Cancel.
+// Both read one global each; the host (system_publish.cpp) fills the globals and wires the callbacks.
+import { Theme } from "theme.slint";
+import { Key } from "keys.slint";
+import { SheetFrame, Line, Mid, Note, Tick } from "signal_bank.slint";
+import { ChipTone } from "chips.slint";
+
+export struct SdrPlayDialogModel { shown: bool, warning: string, bias-ask: bool, bias-question: string, bias-on: bool }
+
+export global SdrPlayDialogState {
+    in property <SdrPlayDialogModel> model;
+    callback tick-bias(bool);
+    callback bias-yes();
+    callback bias-cancel();
+    callback run();
+    callback cancel();
+}
+
+export global PointerLedger {
+    in property <string> line;   // "" = not shown
+}
+
+export component PointerLedgerStrip inherits Rectangle {
+    height: PointerLedger.line != "" ? 18px : 0px;
+    visible: PointerLedger.line != "";
+    background: Theme.well-deep.with-alpha(0.82);
+    Text {
+        x: 6px;
+        width: parent.width - 12px;
+        height: parent.height;
+        text: PointerLedger.line;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+        color: Theme.accent-soft;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+}
+
+export component SdrPlayDialog inherits Rectangle {
+    if SdrPlayDialogState.model.shown : SheetFrame {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        title: @tr("SDRplay diagnostic");
+        sheet-w: 520px;
+        dismissed => { SdrPlayDialogState.cancel(); }
+        Note { text: SdrPlayDialogState.model.warning; }
+        if SdrPlayDialogState.model.bias-ask : Note { text: SdrPlayDialogState.model.bias-question; tone: ChipTone.warn; }
+        if SdrPlayDialogState.model.bias-ask : Line {
+            Mid { Key { label: @tr("Yes, switch it on"); small: true; min-w: 0px; clicked => { SdrPlayDialogState.bias-yes(); } } }
+            Mid { Key { label: @tr("Cancel"); small: true; min-w: 0px; clicked => { SdrPlayDialogState.bias-cancel(); } } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if !SdrPlayDialogState.model.bias-ask : Tick {
+            label: @tr("Also test the bias tee");
+            on: SdrPlayDialogState.model.bias-on;
+            toggled(v) => { SdrPlayDialogState.tick-bias(v); }
+        }
+        if !SdrPlayDialogState.model.bias-ask : Line {
+            Mid { Key { label: @tr("Run the diagnostic"); small: true; min-w: 0px; clicked => { SdrPlayDialogState.run(); } } }
+            Mid { Key { label: @tr("Cancel"); small: true; min-w: 0px; clicked => { SdrPlayDialogState.cancel(); } } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+}

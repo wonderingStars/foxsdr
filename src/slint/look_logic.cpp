@@ -14,8 +14,45 @@ constexpr float kMaxScale = 4.0f;
 constexpr float kSame = 0.001f;
 }  // namespace
 
-SkinId skinOfTheme(const std::string& uiTheme) { return uiTheme == "night" ? SkinId::NightWatch : SkinId::Workbench; }
-const char* skinName(SkinId id) { return id == SkinId::NightWatch ? "night" : id == SkinId::HighContrast ? "highcontrast" : "workbench"; }
+int stepUiSizePercent(int nowPercent, int dir) {
+    const int* steps = cascade::gui::uiscale::kSteps;
+    const int count = cascade::gui::uiscale::kStepCount;
+    if (dir > 0) {
+        for (int i = 0; i < count; ++i) { if (steps[i] > nowPercent) { return steps[i]; } }
+        return 0;
+    }
+    for (int i = count - 1; i >= 0; --i) { if (steps[i] < nowPercent) { return steps[i]; } }
+    return 0;
+}
+
+float fitCounterScale(float requested, float readings, float windowWidth) {
+    if (!(requested > 1.0f)) { return 1.0f; }
+    constexpr float kPerScale = 379.0f;          // the counter's width grows by this for each whole step of scale
+    constexpr float kLanesNeed = 525.0f;         // three lanes whose headers (caption, reading, AUTO key) do not touch
+    constexpr float kLanesNeedPerReading = 150.0f;
+    const float lanesAtNormal = windowWidth >= 1760.0f ? windowWidth - 1307.0f : windowWidth - 1000.0f;
+    const float need = kLanesNeed + kLanesNeedPerReading * (std::max(readings, 1.0f) - 1.0f);
+    const float cap = 1.0f + (lanesAtNormal - need) / kPerScale;
+    return std::clamp(cap, 1.0f, requested);
+}
+
+SkinId skinOfTheme(const std::string& uiTheme) {
+    if (uiTheme == "night") { return SkinId::NightWatch; }
+    if (uiTheme == "glass") { return SkinId::GlassCockpit; }
+    if (uiTheme == "daylight") { return SkinId::DaylightLab; }
+    if (uiTheme == "field") { return SkinId::FieldRadio; }
+    return SkinId::Workbench;   // today, classic-xl (the same palette; its figures are the counter scale) and anything unknown
+}
+const char* skinName(SkinId id) {
+    switch (id) {
+        case SkinId::NightWatch: return "night";
+        case SkinId::HighContrast: return "highcontrast";
+        case SkinId::GlassCockpit: return "glass";
+        case SkinId::DaylightLab: return "daylight";
+        case SkinId::FieldRadio: return "field";
+        default: return "workbench";
+    }
+}
 
 CounterFace faceOfStyle(const std::string& style) {
     if (style == "neon") { return CounterFace::Drum; }

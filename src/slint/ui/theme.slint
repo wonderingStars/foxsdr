@@ -246,6 +246,123 @@ export global NightWatch {
     };
 }
 
+// Glass Cockpit (the classic window's preset of that name, gui/theme.cpp makeGlass): its 49 roles mapped onto the skin's tokens the way Night Watch's are (see above); the tokens the classic has no role for
+// (chip, lamp and card tints, the disabled and faint inks) are mixes of the roles, so a contrast pair is held by test_slint_themes_four.
+export global GlassCockpit {
+    out property <Skin> value: {
+        bg: #070B0F, strip: #0D141A, panel: #0E161D, panel-alt: #111C25,
+        card: #131E27, well: #05090C, well-deep: #0A1433, field: #05090C,
+        menu: #131E27, menu-hot: #1D2F3C, table-selected: #223e46, card-warn: #352f24,
+        card-warn-line: #936d34, card-err: #302026, card-err-line: #933c40, backdrop: #08090b9e,
+        line: #223340, line-strong: #28404F, line-faint: #18242e, knob-ring: #28404F,
+        fg: #DDE9F1, fg-soft: #c0d0db, muted: #7D97A9, dim: #677d8d,
+        faint: #516371, nudge: #617786, disabled: #6c8494, focus: #7DF3FF,
+        accent: #7DF3FF, accent-ink: #000000, accent-soft: #FFB547, accent-hover: #97f5ff,
+        digit: #7DF3FF, digit-glow: #7DF3FF55, digit-dim: #1C3A44, lamp-off: #223340,
+        lamp-ring: #28404F, lamp-green: #35E0A1, lamp-green-cap: #b3e7dd, lamp-amber: #FFB547,
+        lamp-amber-cap: #e6dcc6, lamp-red: #FF5C5C, lamp-red-cap: #e6c6cc, lamp-yellow: #ffcb7e,
+        lamp-yellow-cap: #e6e2d4, chip-bg: #16222C, chip-fg: #CFE0EC, chip-line: #28404F,
+        chip-good-bg: #143632, chip-good-fg: #35E0A1, chip-good-line: #227b5f, chip-warn-bg: #352f24,
+        chip-warn-fg: #FFB547, chip-warn-line: #866632, chip-err-bg: #352127, chip-err-fg: #FF5C5C,
+        chip-err-line: #86393c, key-bg: #16222C, key-line: #28404F, key-fg: #CFE0EC,
+        key-disabled-bg: #0E161D, key-disabled-fg: #728a9b, danger-bg: #22090C, danger-line: #FF5C5C,
+        danger-strong-line: #FF5C5C, danger-fg: #FFD6D6, danger-glyph: #ffbebe, hazard-line: #936d34,
+        hazard-stripe: #352f24, plate-line: #7DF3FF, plate-fg: #FFB547, slider-track: #223340,
+        slider-fill: #7DF3FF, slider-knob: #7DF3FF, slider-knob-ring: #0E161D, slider-disabled-fill: #465663,
+        slider-disabled-knob: #5c707f, level-bar: #35E0A1, meter-face: #0B1218, meter-ink: #9FC3D9,
+        meter-needle: #7DF3FF, meter-led-low: #35E0A1, meter-led-mid: #FFB547, meter-led-high: #FF5C5C,
+        meter-peak: #FFB547, trace-live: #35E0A1, trace-peak: #FFB547, trace-average: #DDE9F1,
+        radio-1: #4da3ff, radio-2: #f5a524, radio-3: #3ddc84, radio-4: #b48cff,
+        radio-ink: #070B0F, vfo: #FFB547, vfo-fill: #FFB54722, bandplan: #2f5861,
+        bandplan-fg: #c5ecf4, mark: #cf953f, mark-fill: #cf953f22, bookmark: #FFB547,
+        bookmark-tick: #7DF3FF, marker: #DDE9F1, cursor: #DDE9F166, cursor-chip-bg: #05090Cdd,
+        cursor-chip-line: #28404F, graticule: #16222b, axis-fg: #728a9b, wf-floor: #0A1433,
+        wf-mid: #1D4F85, wf-high: #25B39A, wf-hot: #F2E35C, wf-peak: #ffffff,
+        wf-vfo: #FFB547, wf-key-bg: #05090Cdd,
+        font-ui: "Inter", font-mono: "JetBrains Mono",   // not-translated: typeface names, not words
+        radius: 8px, radius-panel: 8px, radius-seg: 8px, radius-seg-key: 6px, radius-chip: 10px, radius-dome: 10px, radius-menu-item: 6px,
+        digit-face: DigitFace.plain, lamp-glow: true, shadows: true, hairline: 1px,
+    };
+}
+
+// Daylight Lab (the classic window's preset of that name, gui/theme.cpp makeDaylight): its 49 roles mapped onto the skin's tokens the way Night Watch's are (see above); the tokens the classic has no role for
+// (chip, lamp and card tints, the disabled and faint inks) are mixes of the roles, so a contrast pair is held by test_slint_themes_four.
+export global DaylightLab {
+    out property <Skin> value: {
+        bg: #CFD5DC, strip: #E8ECF0, panel: #FFFFFF, panel-alt: #EEF1F5,
+        card: #F5F7F9, well: #FFFFFF, well-deep: #F4F7FB, field: #FFFFFF,
+        menu: #FFFFFF, menu-hot: #EEF1F5, table-selected: #d6dff8, card-warn: #f3e3d8,
+        card-warn-line: #d6a078, card-err: #f5dfdf, card-err-line: #d88282, backdrop: #1f2a37a0,
+        line: #C3CAD3, line-strong: #B9C1CC, line-faint: #e1e4e9, knob-ring: #C3CAD3,
+        fg: #1F2A37, fg-soft: #2c3744, muted: #4B5563, dim: #6f7782,
+        faint: #9399a1, nudge: #78808a, disabled: #666e7a, focus: #0b3fb8,
+        accent: #1D4ED8, accent-ink: #ffffff, accent-soft: #1E3A8A, accent-hover: #173ead,
+        digit: #0F172A, digit-glow: #0F172A00, digit-dim: #C3CAD3, lamp-off: #D1D5DB,
+        lamp-ring: #B9C1CC, lamp-green: #15803D, lamp-green-cap: #1c4038, lamp-amber: #B45309,
+        lamp-amber-cap: #44342c, lamp-red: #B91C1C, lamp-red-cap: #462630, lamp-yellow: #ca8753,
+        lamp-yellow-cap: #4a413e, chip-bg: #EEF1F5, chip-fg: #1F2A37, chip-line: #B9C1CC,
+        chip-good-bg: #daebe0, chip-good-fg: #137337, chip-good-line: #8ac09e, chip-warn-bg: #f3e3d8,
+        chip-warn-fg: #a24b08, chip-warn-line: #daa984, chip-err-bg: #f4dbdb, chip-err-fg: #a61919,
+        chip-err-line: #dc8e8e, key-bg: #EEF1F5, key-line: #B9C1CC, key-fg: #1F2A37,
+        key-disabled-bg: #FFFFFF, key-disabled-fg: #5d6673, danger-bg: #B91C1C, danger-line: #7F1D1D,
+        danger-strong-line: #B91C1C, danger-fg: #FFFFFF, danger-glyph: #f1d2d2, hazard-line: #d6a078,
+        hazard-stripe: #f3e3d8, plate-line: #1D4ED8, plate-fg: #1E3A8A, slider-track: #C3CAD3,
+        slider-fill: #1D4ED8, slider-knob: #1D4ED8, slider-knob-ring: #FFFFFF, slider-disabled-fill: #a5aab1,
+        slider-disabled-knob: #818892, level-bar: #15803D, meter-face: #FFFFFF, meter-ink: #1F2A37,
+        meter-needle: #B91C1C, meter-led-low: #15803D, meter-led-mid: #B45309, meter-led-high: #B91C1C,
+        meter-peak: #1E3A8A, trace-live: #1D4ED8, trace-peak: #B45309, trace-average: #1F2A37,
+        radio-1: #1d4ed8, radio-2: #b45309, radio-3: #15803d, radio-4: #7e22ce,
+        radio-ink: #ffffff, vfo: #b91c1c, vfo-fill: #b91c1c22, bandplan: #bbcaf3,
+        bandplan-fg: #1f3157, mark: #4b61a1, mark-fill: #4b61a122, bookmark: #1E3A8A,
+        bookmark-tick: #1D4ED8, marker: #1F2A37, cursor: #1F2A3766, cursor-chip-bg: #FFFFFFdd,
+        cursor-chip-line: #C3CAD3, graticule: #dbdfe5, axis-fg: #5d6673, wf-floor: #F4F7FB,
+        wf-mid: #BCD4F6, wf-high: #3B6FD8, wf-hot: #0B1F5C, wf-peak: #0b1f5c,
+        wf-vfo: #B45309, wf-key-bg: #FFFFFFdd,
+        font-ui: "Inter", font-mono: "JetBrains Mono",   // not-translated: typeface names, not words
+        radius: 6px, radius-panel: 8px, radius-seg: 7px, radius-seg-key: 5px, radius-chip: 10px, radius-dome: 10px, radius-menu-item: 5px,
+        digit-face: DigitFace.plain, lamp-glow: false, shadows: true, hairline: 1px,
+    };
+}
+
+// Field Radio (the classic window's preset of that name, gui/theme.cpp makeField): its 49 roles mapped onto the skin's tokens the way Night Watch's are (see above); the tokens the classic has no role for
+// (chip, lamp and card tints, the disabled and faint inks) are mixes of the roles, so a contrast pair is held by test_slint_themes_four.
+export global FieldRadio {
+    out property <Skin> value: {
+        bg: #23271A, strip: #3A4128, panel: #343B24, panel-alt: #2C321E,
+        card: #3f4629, well: #0F140B, well-deep: #0F140B, field: #0F140B,
+        menu: #3f4629, menu-hot: #525c38, table-selected: #51532e, card-warn: #504d28,
+        card-warn-line: #937833, card-err: #4c4028, card-err-line: #934f33, backdrop: #08090b9e,
+        line: #5D6641, line-strong: #2C321E, line-faint: #485032, knob-ring: #2C321E,
+        fg: #E3DFC9, fg-soft: #d6d3ba, muted: #B8B797, dim: #9e9e80,
+        faint: #838569, nudge: #97987a, disabled: #a4a486, focus: #D6BF5E,
+        accent: #D6BF5E, accent-ink: #000000, accent-soft: #D6BF5E, accent-hover: #decc7e,
+        digit: #D6BF5E, digit-glow: #D6BF5E00, digit-dim: #4a5230, lamp-off: #2C321E,
+        lamp-ring: #2C321E, lamp-green: #9FE870, lamp-green-cap: #d2e1b3, lamp-amber: #E0A93F,
+        lamp-amber-cap: #e2d2a6, lamp-red: #E0603F, lamp-red-cap: #e2bfa6, lamp-yellow: #e9c379,
+        lamp-yellow-cap: #e4d8b5, chip-bg: #646E45, chip-fg: #F1EEDD, chip-line: #2C321E,
+        chip-good-bg: #455730, chip-good-fg: #9FE870, chip-good-line: #6a924a, chip-warn-bg: #504d28,
+        chip-warn-fg: #e9c379, chip-warn-line: #8a7232, chip-err-bg: #504128, chip-err-fg: #f0b09f,
+        chip-err-line: #8a4e32, key-bg: #646E45, key-line: #2C321E, key-fg: #F1EEDD,
+        key-disabled-bg: #343B24, key-disabled-fg: #abab8c, danger-bg: #93301C, danger-line: #1C2012,
+        danger-strong-line: #E0603F, danger-fg: #FFF4E6, danger-glyph: #f9d6c5, hazard-line: #937833,
+        hazard-stripe: #504d28, plate-line: #D6BF5E, plate-fg: #D6BF5E, slider-track: #5D6641,
+        slider-fill: #D6BF5E, slider-knob: #F1EEDD, slider-knob-ring: #343B24, slider-disabled-fill: #76795e,
+        slider-disabled-knob: #909274, level-bar: #9FE870, meter-face: #E9E4CF, meter-ink: #1C1F12,
+        meter-needle: #93301C, meter-led-low: #9FE870, meter-led-mid: #E0A93F, meter-led-high: #E0603F,
+        meter-peak: #D6BF5E, trace-live: #B6E36A, trace-peak: #E0A93F, trace-average: #E3DFC9,
+        radio-1: #4da3ff, radio-2: #f5a524, radio-3: #3ddc84, radio-4: #b48cff,
+        radio-ink: #23271A, vfo: #D6BF5E, vfo-fill: #D6BF5E22, bandplan: #545530,
+        bandplan-fg: #ebe9d9, mark: #b6a552, mark-fill: #b6a55222, bookmark: #D6BF5E,
+        bookmark-tick: #D6BF5E, marker: #E3DFC9, cursor: #E3DFC966, cursor-chip-bg: #0F140Bdd,
+        cursor-chip-line: #2C321E, graticule: #3e452b, axis-fg: #abab8c, wf-floor: #0F140B,
+        wf-mid: #2C4414, wf-high: #79A52C, wf-hot: #E0EE7A, wf-peak: #ffffff,
+        wf-vfo: #E0A93F, wf-key-bg: #0F140Bdd,
+        font-ui: "JetBrains Mono", font-mono: "JetBrains Mono",   // not-translated: typeface names, not words
+        radius: 2px, radius-panel: 2px, radius-seg: 2px, radius-seg-key: 2px, radius-chip: 3px, radius-dome: 10px, radius-menu-item: 2px,
+        digit-face: DigitFace.plain, lamp-glow: false, shadows: false, hairline: 1px,
+    };
+}
+
 // HIGH CONTRAST (docs/multi-radio-records/slint-gaps.md item 11): the third filling, a palette and nothing else - black grounds, white lines and text, one yellow accent, 2 px lines, no glow, no
 // shadow. Every reading pair is at least 7 : 1 (test_slint_hc_palette holds it). It is the window's own choice (SYSTEM > Display > High contrast) and it is forced on while Windows' own high-contrast
 // setting is on. Metrics and components are the Workbench's: only the tokens differ.
@@ -416,7 +533,11 @@ export global Theme {
 
     // ---- metrics: the Workbench arrangement's measurements (the artboards' CSS), fixed in phase 1 ----
     out property <length> title-h: 36px;        // custom title bar, every platform
-    out property <length> strip-h: 104px;       // receiver strip
+    // THE COUNTER SCALE AND THE READINGS SCALE (window-gaps-2, rows 35, 36, 40, 156, 158, 1394, 1396): the saved counterScale (1 = normal, 2 = enlarged figures) and readingsScale (1.0, or 1.4 for every reading),
+    // set by the host from the interface half. The counter's figures, the receiver strip that holds them and the live readings follow; nothing else moves.
+    in-out property <float> counter-scale: 1.0;
+    in-out property <float> reading-scale: 1.0;
+    out property <length> strip-h: 104px + (root.counter-scale - 1.0) * 52px;       // receiver strip
     out property <length> rail-w: 64px;         // icon rail
     out property <length> rail-key: 56px;       // a rail key is square
     out property <length> panel-w: 296px;       // sections panel
@@ -435,8 +556,8 @@ export global Theme {
     out property <length> chip-h: 20px;
     out property <length> lamp-dot: 9px;
     out property <length> lamp-dot-sm: 8px;     // .ld
-    out property <length> digit-w: 34px;
-    out property <length> digit-h: 52px;
+    out property <length> digit-w: 34px * root.counter-scale;
+    out property <length> digit-h: 52px * root.counter-scale;
     out property <length> nudge-h: 10px;
     out property <length> slider-track-h: 6px;
     out property <length> slider-knob-d: 16px;  // knob diameter (slider-knob is its colour)
@@ -454,9 +575,9 @@ export global Theme {
     out property <length> font-hint: 10px;
     out property <length> font-tiny: 9px;
     out property <length> font-micro: 8px;
-    out property <length> font-readout: 16px;   // the peak figure
-    out property <length> font-digit: 30px;     // the counter numerals
-    out property <length> font-counter-dot: 22px;
+    out property <length> font-readout: 16px * root.reading-scale;   // the peak figure
+    out property <length> font-digit: 30px * root.counter-scale;     // the counter numerals
+    out property <length> font-counter-dot: 22px * root.counter-scale;
     out property <length> cap-spacing: 0.8px;   // .cap letter-spacing .08em at 10px
     out property <int> weight-regular: 400;
     out property <int> weight-medium: 500;

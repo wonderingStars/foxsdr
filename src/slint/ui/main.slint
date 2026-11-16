@@ -11,12 +11,13 @@
 // row is here, relocated here as the Workbench IA says (deck meters into the status bar and the level line,
 // mode keys onto the strip, status cards into the status bar), or deferred with its reason in that list.
 
-import { Theme, Skin, Workbench, NightWatch, HighContrast, DigitFace, MeterStyle, SrText } from "theme.slint";
+import { Theme, Skin, Workbench, NightWatch, GlassCockpit, DaylightLab, FieldRadio, HighContrast, DigitFace, MeterStyle, SrText } from "theme.slint";
 import { Chip, LampDot, ChipTone, LampState } from "chips.slint";
 import { TipTimer, TipLayer, ElidedHint } from "tooltip.slint";
 import { Caption, Key, KeyNames, KeyFocus, SegGroup, SegKey, RailKey, StopKey } from "keys.slint";
 import { Lamp, StatusChip, VLine } from "lamps.slint";
 import { FrequencyCounter } from "digits.slint";
+import { SdrPlayDialog, SdrPlayDialogState, SdrPlayDialogModel, PointerLedger, PointerLedgerStrip } from "diag_overlays.slint";
 import { Slider, LevelBar, SliderGroup } from "sliders.slint";
 import { Section, BodyRow, SelectKey } from "sections.slint";
 import { Tab, TornWindow, Splitter } from "tabs.slint";
@@ -50,7 +51,9 @@ import { FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, Port
 import { TxChoice, TransmitPageModel, TransmitEvents } from "transmit_page.slint";   // the Transmit page (kit page kind 11; docs 6.58): its model and gestures reach C++ through main.h
 import { AboutSlint } from "std-widgets.slint";
 
-export { Theme, Skin, Workbench, NightWatch, HighContrast, DigitFace, MeterStyle, SrText, ChipTone, LampState, MenuItemKind, MenuEntry, CardTone,
+export { SdrPlayDialogState, SdrPlayDialogModel, PointerLedger } from "diag_overlays.slint";
+export { MeterPanel } from "meters_panel.slint";
+export { Theme, Skin, Workbench, NightWatch, GlassCockpit, DaylightLab, FieldRadio, HighContrast, DigitFace, MeterStyle, SrText, ChipTone, LampState, MenuItemKind, MenuEntry, CardTone,
          AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode, SpectrumEvents, WaterfallLook, AgeTick, PaletteResult, LayoutRow, LayoutsModel, ExportModel, Handover,
          KitEvents, DecodeRow, PluginEntry, RunsOnKey, DecoderBar, PageTab, MapModel, FittedModel, ModuleModel, DetailsModel,
          PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
@@ -470,7 +473,7 @@ export component MainWindow inherits Window {
                                     tooltip: root.freq-locked ? @tr("Frequency locked - press to unlock") : @tr("Lock the frequency");
                                     clicked => { root.lock-toggled(); } }
                                 Lamp { caption: @tr("RCVR"); state: root.running ? LampState.amber : LampState.off; }
-                                Text { text: root.tuned-text; font-family: Theme.font-mono; font-size: Theme.font-small; color: Theme.accent-soft; vertical-alignment: center; }
+                                Text { text: root.tuned-text; font-family: Theme.font-mono; font-size: Theme.font-small * Theme.reading-scale; color: Theme.accent-soft; vertical-alignment: center; }
                             }
                         }
                         counter := FrequencyCounter {   // the caption slot under the figures: the converter line when one is active, else the sheet's tune hint
@@ -522,7 +525,7 @@ export component MainWindow inherits Window {
                             HorizontalLayout { spacing: 6px;   // the VOLUME meter, relocated under the volume slider (Workbench IA 2)
                                 Text { text: @tr("Level"); font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; }
                                 VerticalLayout { alignment: center; horizontal-stretch: 1; LevelBar { value: root.level-norm; } }
-                                Text { text: root.level-text; font-family: Theme.font-mono; font-size: Theme.font-hint; color: Theme.muted; vertical-alignment: center; }
+                                Text { text: root.level-text; font-family: Theme.font-mono; font-size: Theme.font-hint * Theme.reading-scale; color: Theme.muted; vertical-alignment: center; }
                             }
                         }
                     }
@@ -908,6 +911,8 @@ export component MainWindow inherits Window {
     // the SIGNAL bank's companion sheets: the Radio-setup page and the recorder's import dialog (shown by their models)
     if root.radio-setup.shown : RadioSetupSheet { model: root.radio-setup; }
     if root.import-dialog.shown : ImportDialog { model: root.import-dialog; }
+    // THE SDRPLAY DIAGNOSTIC'S DIALOG (window-gaps-2, diag_overlays.slint): shown by its own global's model
+    SdrPlayDialog { x: 0px; y: 0px; width: root.width; height: root.height; visible: SdrPlayDialogState.model.shown; }
     if root.report-page.shown : ReportSheet { model: root.report-page; }
     if root.markers-model.shown : MarkersSheet { model: root.markers-model; }
     // THE DEMOD SCOPE: a window of its own over the centre, opened where the classic opens it (the lower right, inside the main window)
@@ -1008,6 +1013,8 @@ export component MainWindow inherits Window {
         }
         HorizontalLayout { alignment: end; Key { label: @tr("Close"); clicked => { LaneKMatrix.open = false; LaneKMatrix.act("leave", "0"); } } }   // not-translated: the host's action id
     }
+    // THE POINTER LEDGER (window-gaps-2, row 1457): one line across the top of the window while its tick is on; it takes no clicks
+    PointerLedgerStrip { x: 0px; y: 0px; width: root.width; }
     // ===================== the tip layer: LAST, so a tooltip draws over the pages, the torn-off windows and the sheets =====================
     TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

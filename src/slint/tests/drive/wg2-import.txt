@@ -1,0 +1,10 @@
+#! frames=260 bank=0 sections=0:6 size=1600x900 FOXSDR_FILE_PICK=C:\gaps\frequencies.xml
+# wg2-import (window-gaps-2, rows 1383 to 1385, 1647, 1651 to 1653): the frequency-list import dialog. Its drop zone says where a file goes (a drop on the window works too: gaps-drop.txt drives the drop
+# handler), its Browse... key hands over to the system file chooser, which a bounded run NEVER raises: FOXSDR_FILE_PICK stands in for the choice, so the hand-over is read back as the path in the box.
+# The real file chooser is UNVERIFIED until the mouse drive.
+10 state running == 1
++2 click "Import"
++6 expect "Import path" value equals ""
++1 click "Browse..."
++8 expect "Import path" value contains "frequencies.xml"
++2 click "Cancel"

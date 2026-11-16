@@ -20,9 +20,36 @@ bool near(float a, float b) { return std::fabs(a - b) < 1e-4f; }
 
 void skins() {
     CHECK(skinOfTheme("night") == SkinId::NightWatch);
-    for (const char* key : {"today", "classic-xl", "glass", "daylight", "field", "", "NIGHT", "nigh", "bogus"}) { CHECK(skinOfTheme(key) == SkinId::Workbench); }
+    for (const char* key : {"today", "classic-xl", "", "NIGHT", "nigh", "bogus"}) { CHECK(skinOfTheme(key) == SkinId::Workbench); }
+    CHECK(skinOfTheme("glass") == SkinId::GlassCockpit && skinOfTheme("daylight") == SkinId::DaylightLab && skinOfTheme("field") == SkinId::FieldRadio);
+    CHECK(std::string(skinName(SkinId::GlassCockpit)) == "glass" && std::string(skinName(SkinId::DaylightLab)) == "daylight" && std::string(skinName(SkinId::FieldRadio)) == "field");
     CHECK(std::string(skinName(SkinId::NightWatch)) == "night");
     CHECK(std::string(skinName(SkinId::Workbench)) == "workbench");
+}
+
+void steps() {
+    // Ctrl+= and Ctrl+- (window-gaps-2, row 145): the next offered step through 100 to 250 %, none past either end, and a number between steps lands on its neighbour
+    CHECK(stepUiSizePercent(100, 1) == 125 && stepUiSizePercent(125, 1) == 150 && stepUiSizePercent(200, 1) == 250 && stepUiSizePercent(250, 1) == 0);
+    CHECK(stepUiSizePercent(250, -1) == 200 && stepUiSizePercent(125, -1) == 100 && stepUiSizePercent(100, -1) == 0);
+    CHECK(stepUiSizePercent(110, 1) == 125 && stepUiSizePercent(110, -1) == 100 && stepUiSizePercent(300, 1) == 0 && stepUiSizePercent(50, -1) == 0);
+}
+
+void counterFit() {
+    // Bench Classic XL at 1600 px (window-gaps-2): the doubled figures left the lanes 221 px of 600 and pushed the antenna key out of the window; the scale drawn is what the strip holds.
+    const float at1600 = fitCounterScale(2.0f, 1.4f, 1600.0f);
+    CHECK(at1600 >= 1.0f && at1600 < 1.2f);                                   // the asked doubling cannot be drawn: the lanes keep their 525 + 60 px
+    CHECK(fitCounterScale(1.0f, 1.0f, 1600.0f) == 1.0f && fitCounterScale(1.0f, 1.4f, 800.0f) == 1.0f);   // normal size is never touched, whatever the width
+    CHECK(fitCounterScale(2.0f, 1.0f, 640.0f) == 1.0f && fitCounterScale(2.0f, 1.0f, 0.0f) == 1.0f);   // a window far too narrow: never below normal
+    CHECK(fitCounterScale(2.0f, 1.0f, 1600.0f) > at1600);                       // the readings scale takes some of the room too
+    CHECK(fitCounterScale(2.0f, 1.0f, 1759.0f) > fitCounterScale(2.0f, 1.0f, 1600.0f));   // a wider window holds larger figures
+    CHECK(fitCounterScale(2.0f, 1.4f, 2400.0f) == 2.0f && fitCounterScale(2.0f, 1.0f, 2216.0f) == 2.0f);   // wide enough: the full doubling
+    // the lanes left at the answer never fall under what they need: 600 - 379 * (s - 1) at 1600 px
+    for (float w = 1000.0f; w <= 3000.0f; w += 7.0f) {
+        const float s = fitCounterScale(2.0f, 1.4f, w);
+        const float lanes = (w >= 1760.0f ? w - 1307.0f : w - 1000.0f) - 379.0f * (s - 1.0f);
+        CHECK(s >= 1.0f && s <= 2.0f);
+        CHECK(s == 1.0f || lanes >= 585.0f - 0.01f);
+    }
 }
 
 void faces() {
@@ -109,6 +136,8 @@ void follower() {
 
 int main() {
     skins();
+    steps();
+    counterFit();
     faces();
     wanted();
     resizing();

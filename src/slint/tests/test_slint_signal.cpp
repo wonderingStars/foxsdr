@@ -961,7 +961,7 @@ int main() {
     }
     {
         // Radio extras: Stereo ticked beside a green STEREO chip, the RDS block; unticked with an amber MONO chip and no RDS; forwards to SignalEvents
-        const int xd = kColD + kBodyX, T3 = yOf(ui->get_d3_y()) + kSecRow + kBodyPad;
+        const int xd = kColD + kBodyX, T3 = yOf(ui->get_d3_y()) + kSecRow + kBodyPad + 30;   // + 30: the Signal strength row (window-gaps-2, row 1318) stands above the Stereo row
         const Frame f = shot();
         CHECK(f.countNear(xd, T3 + 5, xd + 14, T3 + 19, accent, 0) >= 100);
         const Ink chip = inkBox(f, xd + 150, T3, xd + kBodyW + 4, T3 + 24, panel);
@@ -977,11 +977,11 @@ int main() {
         fwd.clear();
         clk(xd + 40, T3 + 12);
         CHECKV(!fwd.empty() && fwd.back().name == "radio-stereo" && fwd.back().args == "0", "Stereo forwards to SignalEvents");
-        const int T4 = yOf(ui->get_d4_y()) + kSecRow + kBodyPad;
+        const int T4 = yOf(ui->get_d4_y()) + kSecRow + kBodyPad + 30;
         const Frame g = shot();
         CHECK(g.near(xd + kBodyW - 6, T4 + 12, tok(wb.chip_warn_bg), 2));
         CHECK(g.countNear(xd + 9, T4 + 5, xd + 9 + 14, T4 + 19, accent, 0) == 0);                                          // Stereo is not ticked
-        CHECKV(std::abs(ui->get_d4_body_h() - (kBodyPad + 24 + kBodyPadBottom)) < 1.0, "no RDS block: the body is %.1f high", ui->get_d4_body_h());
+        CHECKV(std::abs(ui->get_d4_body_h() - (kBodyPad + 30 + 24 + kBodyPadBottom)) < 1.0, "no RDS block: the body is %.1f high", ui->get_d4_body_h());
         // Transmit: a fault line in red, nothing else
         const int T5 = yOf(ui->get_d5_y()) + kSecRow + kBodyPad;
         CHECKV(g.countNear(xd, T5, xd + kBodyW, T5 + 14, errFg, 40) >= 80, "the transmit fault line is red");

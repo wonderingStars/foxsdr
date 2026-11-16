@@ -4,6 +4,7 @@
 
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
+#include "bandplan_slint.hpp"
 #include "host_logic.hpp"
 #include "radio_mix_logic.hpp"
 
@@ -196,10 +197,10 @@ void WorkspacePublisher::publishPane(RadioView& rv, const PaneContext& ctx) {
     if (d.vfo_pos != fig.vfoPos || d.vfo_half != fig.vfoHalf) { d.vfo_pos = fig.vfoPos; d.vfo_half = fig.vfoHalf; dirty = true; }
     {
         std::string sig;
-        for (const auto& b : fig.ribbon) { sig += f5(b.from) + f5(b.to) + b.label + ";"; }
+        for (const auto& b : fig.ribbon) { sig += f5(b.from) + f5(b.to) + b.label + std::to_string(b.rgba) + ";"; }
         if (sg.changed("pane.ribbon", sig)) {
             std::vector<BandSegment> ribbon;
-            for (const auto& b : fig.ribbon) { ribbon.push_back({b.from, b.to, ss(b.label), slint::Color::from_argb_uint8(0, 0, 0, 0)}); }
+            for (const auto& b : fig.ribbon) { ribbon.push_back({b.from, b.to, ss(b.label), foxsdr::slintbands::ribbonColour(b.rgba)}); }
             d.bands = std::make_shared<slint::VectorModel<BandSegment>>(std::move(ribbon));
             dirty = true;
         }

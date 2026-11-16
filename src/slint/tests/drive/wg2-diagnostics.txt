@@ -1,0 +1,46 @@
+#! frames=520 bank=4 sections=4:6 size=1600x900
+# wg2-diagnostics (window-gaps-2, rows 1457, 1460 to 1470, 4614): SYSTEM > Diagnostics. The pointer-ledger tick shows the line across the top of the window and takes it away again; the SDRplay
+# diagnostic's key opens the dialog, "Also test the bias tee" only ASKS (the bias tee puts DC power on the antenna socket), Cancel on the question leaves it off, "Yes, switch it on" is the one way it
+# reaches the probe, Run starts the probe and the finished file is read. A bounded run NEVER starts the real probe: a stand-in child answers (it writes a small file and touches no radio, no service
+# and no vendor API); the real probe and its report on an RSP are UNVERIFIED until the mouse drive.
+10 state running == 1
+state gaps.ledger == 0
+state gaps.ledgerline == ""
+state gaps.probestarts == 0
++1 scroll "Record crashes and freezes, and send the report next time" 700
++3 click "Show the pointer ledger across the top of the window"
++8 state gaps.ledger == 1
+state gaps.ledgerline contains "os cursor"
+state gaps.ledgerline contains "client origin"
++2 click "Show the pointer ledger across the top of the window"
++8 state gaps.ledger == 0
+state gaps.ledgerline == ""
+# the SDRplay diagnostic: the key, the dialog, the question
++2 scroll "Copy diagnostics" 300
++2 expect "Run SDRplay diagnostic" enabled equals "true"
++2 click "Run SDRplay diagnostic"
++4 expect "Run the diagnostic" enabled equals "true"
++2 expect "Also test the bias tee" checked equals "false"
++1 click "Also test the bias tee"
++4 expect "Yes, switch it on" enabled equals "true"
+# Cancel on the question: the bias tee stays off, the dialog is back
++1 click "Cancel"
++4 expect "Also test the bias tee" checked equals "false"
+# ask again, confirm, and run
++1 click "Also test the bias tee"
++4 click "Yes, switch it on"
++4 expect "Also test the bias tee" checked equals "true"
++1 click "Run the diagnostic"
++6 state gaps.probestarts == 1
+state gaps.probebias == 1
++30 state gaps.proberunning == 0
+state gaps.probereport contains "bias tee test: on"
+# a second run with no confirmation: the bias tee is off
++2 click "Run SDRplay diagnostic"
++4 click "Run the diagnostic"
++6 state gaps.probestarts == 2
+state gaps.probebias == 0
+# Cancel on the dialog starts nothing
++40 click "Run SDRplay diagnostic"
++4 click "Cancel"
++4 state gaps.probestarts == 2

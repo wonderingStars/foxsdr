@@ -71,12 +71,12 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
 | 34 | Menu title | readout | PRESENT | menu heading |
-| 35 | Enlarge figures | menu item (checked when on) | DEFERRED | the counter scale is the interface-size setting of phase 2; the items are in the menu and log their request |
-| 36 | Normal size | menu item (checked when on) | DEFERRED | the counter scale is the interface-size setting of phase 2; the items are in the menu and log their request |
+| 35 | Enlarge figures | menu item (checked when on) | PRESENT | Enlarge figures: the saved counterScale 2 is drawn - Theme.counter-scale (theme.slint) scales digit-w/h, the figure and dot fonts and the strip height; applied from the interface half in main.cpp (set_counter_scale); driven by system-look.txt |
+| 36 | Normal size | menu item (checked when on) | PRESENT | Normal size: counterScale 1 drawn (the same Theme.counter-scale); system-look.txt |
 | 37 | Show tuner switches | menu item (checkmark) | PRESENT | toggles show-nudges |
 | 38 | Counter face | menu item (submenu) | PRESENT | the faces as the skin's digit-face switch: Nixie tubes = nixie, Neon = drum, Plain = plain, applied through Theme.skin |
 | 39 | Nixie tubes / Neon / Plain | menu item (radio-style check) | PRESENT | the faces as the skin's digit-face switch: Nixie tubes = nixie, Neon = drum, Plain = plain, applied through Theme.skin |
-| 40 | Enlarge every reading | menu item (checkmark) | DEFERRED | the counter scale is the interface-size setting of phase 2; the items are in the menu and log their request |
+| 40 | Enlarge every reading | menu item (checkmark) | PRESENT | Enlarge every reading: readingsScale drawn - Theme.reading-scale scales the peak readout, the slider readouts, the tuned-frequency text and the level text (main.cpp set_reading_scale); system-look.txt |
 
 ## Main window frame — GAIN / SQUELCH / VOLUME dials
 
@@ -96,12 +96,12 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 |---|---|---|---|---|
 | 48 | Sample rate meter | meter | RELOCATED | the rate is a readout in the status bar's RECEIVER chip and the rail footer (Workbench IA 2); the Meter component with its four styles exists for instruments |
 | 49 | Volume meter | meter | RELOCATED | the level bar under the volume slider, -60 dB floor (Workbench IA 2) |
-| 50 | Meter right-click menu | context menu | DEFERRED | no deck meter on Workbench; the Meter component takes menu-requested for the instruments of phase 3 |
-| 51 | Meter hover hint | tooltip | DEFERRED | no deck meter on Workbench; the Meter component takes menu-requested for the instruments of phase 3 |
-| 52 | Classic | menu item (check) | PRESENT | the four styles of the Meter component (meters.slint); not on the main screen |
-| 53 | Analogue needle | menu item (check) | PRESENT | the four styles of the Meter component (meters.slint); not on the main screen |
-| 54 | LED ladder | menu item (check) | PRESENT | the four styles of the Meter component (meters.slint); not on the main screen |
-| 55 | Peak meter | menu item (check) | PRESENT | the four styles of the Meter component (meters.slint); not on the main screen |
+| 50 | Meter right-click menu | context menu | PRESENT | the Meter's right-click menu of four styles, in SYSTEM > Display (ui/meters_panel.slint, MeterCell; system_publish.cpp on_style_picked saves meterStyleRate / meterStyleVolume); wg2-meters.txt |
+| 51 | Meter hover hint | tooltip | PRESENT | the Meter's hover hint 'Right-click to change the meter style' (meters.slint tooltip), on both meters in SYSTEM > Display (ui/meters_panel.slint) |
+| 52 | Classic | menu item (check) | PRESENT | Classic: item of the meter menu (ui/meters_panel.slint), saved as 'classic'; wg2-meters.txt |
+| 53 | Analogue needle | menu item (check) | PRESENT | Analogue needle: item of the meter menu, saved as 'needle'; wg2-meters.txt |
+| 54 | LED ladder | menu item (check) | PRESENT | LED ladder: item of the meter menu, saved as 'led'; wg2-meters.txt |
+| 55 | Peak meter | menu item (check) | PRESENT | Peak meter: item of the meter menu, saved as 'peak'; wg2-meters.txt |
 
 ## Main window frame — Sound muted banner (deck)
 
@@ -251,7 +251,7 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | 142 | F7 | Settings and key bindings - goes to SYSTEM and opens the Key bindings row (openSettings) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
 | 143 | F12 | Always saves a screenshot (hard-wired, not in the table) | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
 | 144 | Esc | Cancels the counter editor, the key-capture, a dialog; leaves Scope mode when nothing is being edited and no popup is open | PRESENT | the root FocusScope names the key and the host answers the SAVED binding by config id (key_dispatch, docs 6.56); the host acts |
-| 145 | Ctrl+= / Ctrl+- / Ctrl+0 | Interface size: step up / step down through 100-250%, Ctrl+0 back to Auto. Not rebindable; ignored while text is being typed | DEFERRED | Ctrl+0 (back to Auto) is answered and applied: key-dispatch names uiSizeAuto, main.cpp saves interfaceScale = auto through SystemPublisher::setInterfaceSize and the window's look moves the scale on the next tick (docs 6.61, drive system-look.txt: pin 150%, Ctrl+0, scale 1.00). Ctrl+= and Ctrl+- are NOT the interface size here: the key table binds them to the band zoom (Ctrl+Plus / Ctrl+Minus), so stepping the size through 100-250% by the keyboard stays deferred; the dropdown steps it |
+| 145 | Ctrl+= / Ctrl+- / Ctrl+0 | Interface size: step up / step down through 100-250%, Ctrl+0 back to Auto. Not rebindable; ignored while text is being typed | PRESENT | Ctrl+= and Ctrl+- step the interface size through 100-250 % from the size in force (main.cpp stepUiSize in on_key_answer; look_logic.cpp stepUiSizePercent), alongside the key table's zoom on the same chord as the classic does; Ctrl+0 as before; wg2-size-keys.txt |
 | 146 | Mouse wheel over a counter figure, a dial | Tunes that digit / turns the dial | PRESENT | wheel over a figure steps it; wheel over a slider moves it 5 % |
 
 ## Main window frame — Themes and sizes
@@ -259,11 +259,11 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
 | 147 | Today's bench () | The default brass-and-enamel bench; serif ("bench-serif") fonts, Nixie counter | PRESENT | Workbench is the Slint filling and what the saved key 'today' is drawn in (look_logic skinOfTheme, applied at start and on a pick; drive system-look.txt reads look.bg / look.accent); the Nixie counter face comes with it (tunerDisplayStyle nixie). The serif fonts of the classic are not part of Workbench (Inter) |
-| 148 | Bench Classic XL () | Today's palette, counter figures doubled, switches put away, every reading 1.4x | DEFERRED | drawn in Workbench with the Nixie face (docs 6.61); the doubled counter figures, the put-away switches and the 1.4x readings are saved but not applied (rows 35, 36, 40, 156-158: the counter scale has no home in the Slint counter yet) |
+| 148 | Bench Classic XL () | Today's palette, counter figures doubled, switches put away, every reading 1.4x | PRESENT | Bench Classic XL: today's palette (Workbench), the counter figures doubled, the switches put away, every reading 1.4x - all drawn now (theme.slint counter-scale / reading-scale; main.cpp showNudges follows counterSwitches); system-look.txt |
 | 149 | Night Watch () | Dark red-black palette with red sheen/highlights (preserves night vision); mono fonts, flat keys | PRESENT | the ONE ported skin besides Workbench (docs 6.61): theme.slint NightWatch, the classic's makeNight palette mapped role by role (red-only; the reading pairs 4.5:1, test_slint_theme), the mono typeface, flat keys (2 px radius, no shadow), neon counter face; installed with one assignment (Theme.skin) at start and when 'night' is picked, no component changed (test_slint_main_screen renders the whole screen in it, drive system-look.txt reads look.bg #070303) |
-| 150 | Glass Cockpit () | Dark blue-grey; sans UI font, condensed captions, chrome knobs, radius 8 | DEFERRED | drawn in Workbench's colours with the plain counter face (docs 6.61: look_logic skinOfTheme names Workbench for every key but 'night'); the dark blue-grey skin with its sans fonts and radius 8 is one more NightWatch-style value of the Skin struct, not yet made |
-| 151 | Daylight Lab () | Light grey/white; sans fonts, chrome knobs, radius 6 | DEFERRED | drawn in Workbench's colours with the plain counter face (docs 6.61: look_logic skinOfTheme names Workbench for every key but 'night'); the light skin is one more Skin value, not yet made |
-| 152 | Field Radio () | Olive/khaki; mono body with stencil captions | DEFERRED | drawn in Workbench's colours with the plain counter face (docs 6.61: look_logic skinOfTheme names Workbench for every key but 'night'); the olive skin is one more Skin value, not yet made |
+| 150 | Glass Cockpit () | Dark blue-grey; sans UI font, condensed captions, chrome knobs, radius 8 | PRESENT | Glass Cockpit: its own skin GlassCockpit (theme.slint, the classic preset's colours, Inter, radius 8); look_logic.cpp skinOfTheme 'glass'; system-look.txt, test_slint_themes_four |
+| 151 | Daylight Lab () | Light grey/white; sans fonts, chrome knobs, radius 6 | PRESENT | Daylight Lab: its own skin DaylightLab (theme.slint, light, radius 6); skinOfTheme 'daylight'; system-look.txt, test_slint_themes_four |
+| 152 | Field Radio () | Olive/khaki; mono body with stencil captions | PRESENT | Field Radio: its own skin FieldRadio (theme.slint, olive and khaki, mono face, radius 2); skinOfTheme 'field'; system-look.txt, test_slint_themes_four |
 
 ## Main window frame — Themes and sizes: the Display section's settings
 
@@ -272,13 +272,13 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | 153 | Interface size | dropdown "Interface size" | PRESENT | the Display body's DropKey (row 1388); the window's scale follows it live (docs 6.61) |
 | 154 | Theme | dropdown "Theme" | PRESENT | the Display body's DropKey (row 1390); the window's skin and counter face follow it live (docs 6.61) |
 | 155 | Frequency display | dropdown "Frequency display" | PRESENT | the counter menu's Counter face |
-| 156 | Counter figures | dropdown "Counter figures" | DEFERRED | the SYSTEM > Display body is a phase-3 bank |
+| 156 | Counter figures | dropdown "Counter figures" | PRESENT | Counter figures: the dropdown (system_bank.slint) saves counterScale and the counter is drawn at it (Theme.counter-scale); system-look.txt |
 | 157 | Tuner switches | checkbox "Tuner switches" | PRESENT | the counter menu's Show tuner switches |
-| 158 | Enlarge every reading | checkbox | DEFERRED | the counter scale is the interface-size setting of phase 2; the items are in the menu and log their request |
+| 158 | Enlarge every reading | checkbox | PRESENT | Enlarge every reading: the tick saves readingsScale and the readings are drawn at it (Theme.reading-scale) |
 | 159 | Min dB / Max dB | slider x2 | PRESENT | the Display block's Floor / Ceiling sliders in the trace and marker menus |
 | 160 | Aircraft icons | slider | PRESENT | the slider is the SYSTEM Display body's (row 1397, saved as aircraftIconPx); the value is applied in the map: main.cpp hands slintmap::mapLookOf(interface half: aircraftIconPx, mapTrailWidthPx, mapTrailStyle) to KitPublisher::setMapLook every tick; kit_publish.cpp fillMap passes it to TileCompositor::setTrailLook and sets MapTarget.size of every aircraft; map.slint MapPane draws the icon, its rings, hit area and label at that size: 16..96 px across, 48 by default (gui/aircraft_icons.hpp bounds, copied in map_compositor.hpp and read against the source by test_slint_host_map) |
 | 161 | Trail width | slider () | PRESENT | the slider is the SYSTEM Display body's (row 1398, saved as mapTrailWidthPx); the value is applied in the map: main.cpp hands slintmap::mapLookOf(interface half: aircraftIconPx, mapTrailWidthPx, mapTrailStyle) to KitPublisher::setMapLook every tick; kit_publish.cpp fillMap passes it to TileCompositor::setTrailLook and sets MapTarget.size of every aircraft; map.slint MapPane draws the icon, its rings, hit area and label at that size (TileCompositor strokes the trails at the width, half-width = width / 2): 1 px up to the wingspan of the icon in force, 86 px at 96 |
-| 162 | Meter style (x2) | right-click menu on each deck meter | DEFERRED | no deck meter on Workbench |
+| 162 | Meter style (x2) | right-click menu on each deck meter | PRESENT | Meter style on each of the two meters: SAMPLE RATE and VOLUME in SYSTEM > Display, each with its own saved style (ui/meters_panel.slint); wg2-meters.txt |
 | 163 | Band plan | checkbox + size/colour/region combos | PRESENT | the toolbar's Band plan key; size / colour / region are the Display body of phase 3 |
 
 ## Spectrum and waterfall — Spectrum panel (top of the centre of the Receiver view)
@@ -424,7 +424,7 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
 | 257 | Band-plan ribbon | overlay/marker | PRESENT | FOXAPI_LIST_BAND_PLAN segments in the view |
-| 258 | Band-plan palette | overlay/marker | DEFERRED | Classic / Vivid / Mono palettes are the Display body's (phase 3); the ribbon draws Theme.bandplan |
+| 258 | Band-plan palette | overlay/marker | PRESENT | Band-plan palette: Classic / Vivid / Mono by service class (bandplan_palette.cpp, the classic's tables); the ribbon takes each band's colour (main.cpp ribbon, workspace_publish.cpp); test_slint_host_bandpalette. What it paints on the screen is UNVERIFIED by a drive (no band in view in a bounded run) |
 | 259 | Bookmark ticks | overlay/marker | PRESENT | 2 x 8 ticks above the axis, favourites with a guide line |
 | 260 | Bookmark names | overlay/marker | PRESENT | names under the header (one row; stacking rows with the Bookmarks setting in phase 3) |
 | 261 | Plugin mark: point | overlay/marker | PRESENT | FOXAPI_LIST_MARKERS lines in the mark's colour, dashed when flagged |
@@ -440,13 +440,13 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
 | 268 | Band plan | checkbox | PRESENT | the toolbar's Band plan key; size / colour / region are the Display body of phase 3 |
-| 269 | Size | dropdown/combo | DEFERRED | the Display and Bookmarks section bodies are phase-3 banks |
-| 270 | Colour | dropdown/combo | DEFERRED | the Display and Bookmarks section bodies are phase-3 banks |
-| 271 | Plan status text | readout | DEFERRED | the Display and Bookmarks section bodies are phase-3 banks |
+| 269 | Size | dropdown/combo | PRESENT | Size: the saved tier sets the ribbon's height on every pane (main.cpp set_ribbon_size: small 8, medium 13, large 20 px); wg2-bandplan.txt reads gaps.ribbonsize 3 / 2 / 1 |
+| 270 | Colour | dropdown/combo | PRESENT | Colour: the saved palette picks each band's colour (bandplan_palette.cpp, used by main.cpp and workspace_publish.cpp); test_slint_host_bandpalette; wg2-bandplan.txt saves each choice |
+| 271 | Plan status text | readout | PRESENT | Plan status text: system_logic.cpp:294 (plan_status), drawn system_bank.slint (the Note under Band plan) |
 | 272 | Min dB | slider | PRESENT | the Display block's sliders |
 | 273 | Max dB | slider | PRESENT | the Display block's sliders |
-| 274 | On the spectrum | checkbox | DEFERRED | the Display and Bookmarks section bodies are phase-3 banks |
-| 275 | Stack close names | checkbox | DEFERRED | the Display and Bookmarks section bodies are phase-3 banks |
+| 274 | On the spectrum | checkbox | PRESENT | On the spectrum: Tick in tools_bank.slint:1431 -> tools_publish.cpp saveBookmarkOptions; the marks are drawn only while it is on (main.cpp bookmarkMarkers) |
+| 275 | Stack close names | checkbox | PRESENT | Stack close names: Tick in tools_bank.slint:1440 -> tools_publish.cpp saveBookmarkOptions; names stack on up to three rows (main.cpp bookmarkNameRows) |
 
 # Phase 2: the plugin kit (docs 6.38) - the five plugin tabs walked row by row
 
@@ -1885,7 +1885,7 @@ Every row of `inventory/signal-bank.txt` (FoxSDR 0.99.104; the file calls itself
 | 1278 | Converter mode | dropdown/combo | PRESENT | DropKey Off / Up-converter / Down-converter with the tooltip -> FOXAPP_OP_SET_CONVERTER; Up is greyed for a real (mono) sound card |
 | 1279 | Alias / unusable notes | readout | PRESENT | amber Note (converter-alias) |
 | 1280 | Local oscillator | text field | PRESENT | LineInput (mono, right) with the tooltip, red border on a parse error; Enter -> SET_CONVERTER with the parsed LO; drawn only with a mode other than Off |
-| 1281 | LO quick-picks (3) | button (small) | DEFERRED | drawn but out of step with its command: the keys read 100 / 125 / 10 MHz and send index 0 / 1 / 2, which signal_logic maps to 125 / 100 / 2 MHz (kConverterQuickLoHz, the ImGui window's kQuickLoHz), so '100 MHz' sets 125 MHz and '10 MHz' sets 2 MHz; relabel the keys 125 / 100 / 2 MHz in signal_bank.slint before this row counts |
+| 1281 | LO quick-picks (3) | button (small) | PRESENT | the three keys read 125 / 100 / 2 MHz and send index 0 / 1 / 2, kConverterQuickLoHz (signal_logic.hpp) in the same order: the key says what it sets (signal_bank.slint converter-quick, signal_publish.cpp on_converter_quick); test_slint_host_signal opConverterQuick, signal-source-converter.txt |
 | 1282 | Inverts the spectrum | checkbox | PRESENT | Tick with the tooltip -> FOXAPP_OP_SET_CONVERTER (inverted); drawn only with a mode other than Off |
 | 1283 | LO parse error | readout | PRESENT | the LO field's red border and an amber Note (converter-error) |
 | 1284 | On-air line | readout | PRESENT | dim Note (converter-on-air) |
@@ -1906,9 +1906,9 @@ Every row of `inventory/signal-bank.txt` (FoxSDR 0.99.104; the file calls itself
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1292 | RESTART SDRPLAY SERVICE | button | DEFERRED | not found in signal_bank.slint: signal_logic builds the key (sdrplay_key_shown / _label / _enabled) but the Slint SourceModel has no field for it and SourceBody draws no such key; the elevated restart is a local helper |
-| 1293 | Restart progress | readout | DEFERRED | not found in signal_bank.slint: the progress sentence (sdrplay_line) has no field in the Slint SourceModel |
-| 1294 | Restart outcome | readout | DEFERRED | not found in signal_bank.slint: the outcome sentence (sdrplay_line) has no field in the Slint SourceModel |
+| 1292 | RESTART SDRPLAY SERVICE | button | PRESENT | RESTART SDRPLAY SERVICE: Key in SourceBody (signal_bank.slint sdrplay-key-shown) -> signal_publish.cpp sdrPlayRestartPressed; gaps-sdrplay.txt. The real elevated restart and its UAC prompt are UNVERIFIED until the mouse drive |
+| 1293 | Restart progress | readout | PRESENT | the restart's busy sentence: SourceModel.sdrplay-line (signal_logic.cpp sdrplay_line) |
+| 1294 | Restart outcome | readout | PRESENT | the restart's outcome sentence: SourceModel.sdrplay-line, the note beneath the key |
 
 ## SIGNAL bank — Turn on the bias tee? (modal dialog)
 
@@ -1946,8 +1946,8 @@ Every row of `inventory/signal-bank.txt` (FoxSDR 0.99.104; the file calls itself
 | 1314 | VFO | slider | RELOCATED | no offset slider in the Radio body; the tuned band on the spectrum (click or drag -> FOXAPP_OP_VFO_TO_ABSOLUTE) and the counter set the VFO (a judgement: the +-500 kHz slider itself is not drawn) |
 | 1315 | Bandwidth | dropdown/combo | RELOCATED | the Radio body's Passband slider in place of the width list (3 kHz to 0.9 of the channel rate -> FOXAPI_OP_SET_BANDWIDTH); dragging the band's edge on the spectrum sets it too |
 | 1316 | Squelch | slider | RELOCATED | the strip's SQUELCH lane, -120..0 dB, with its AUTO key (row 44) |
-| 1317 | De-emph | dropdown/combo | DEFERRED | not found in signal_bank.slint (nor in the Radio body of main.slint): no FM de-emphasis choice is drawn |
-| 1318 | Signal strength | meter | DEFERRED | not found in signal_bank.slint (nor in the Radio body of main.slint): the strip's level bar is the audio level, not the signal power |
+| 1317 | De-emph | dropdown/combo | PRESENT | De-emph: DropKey in AudioFiltersBody (signal_bank.slint deemph-modes) -> opDeemph, live in NFM and WFM; gaps-deemph.txt |
+| 1318 | Signal strength | meter | PRESENT | Signal strength: the S-meter bar in RadioExtras (signal_bank.slint, ReadBar) over -120 to 0 dB, text '-61.3 dB' (signal_logic.cpp readRadioExtras signal_*); test_slint_host_signal, wg2-signal.txt |
 | 1319 | Stereo | checkbox | PRESENT | RadioExtras Tick with the tooltip -> FOXAPI_OP_SET_STEREO; WFM only, under the Radio body |
 | 1320 | Stereo state | lamp/indicator | PRESENT | a Chip beside the tick (stereo green, forced mono amber, mono or no pilot dim) |
 | 1321 | RDS block | readout | PRESENT | Caption RDS, PI and PS readouts and the radio text; WFM only, once RDS data is valid |
@@ -2023,12 +2023,12 @@ Every row of `inventory/signal-bank.txt` (FoxSDR 0.99.104; the file calls itself
 | 1366 | Record folder | readout | PRESENT | mono dim path (fact.recorder.dir) at the top of RecorderBody |
 | 1367 | Record IQ | button (full width) | PRESENT | Key, danger look while recording -> FOXAPI_OP_RECORD_IQ 1; side by side with Record audio |
 | 1368 | Starting IQ | button | PRESENT | the same key reads 'Starting IQ - click to cancel' (a press withdraws: RECORD_IQ 0), then 'Cancelling IQ start...' greyed; the 'disk is slow' line shows after 1 s |
-| 1369 | Saving (IQ) | button (disabled) | DEFERRED | not found in signal_bank.slint: RecorderModel has no finalising state, so the key reads 'Record IQ' while the last take is still being written |
+| 1369 | Saving (IQ) | button (disabled) | PRESENT | Saving (IQ): the key reads 'Saving IQ...' and is dead while the last take's file is being closed (signal_logic.cpp recorderLabel, engine fact recorder.finishing in engine_api_lists.cpp); test_slint_host_signal. The classic window itself shows no such state on its Record IQ key |
 | 1370 | Stop IQ | button | PRESENT | the same key reads 'Stop IQ' -> FOXAPI_OP_RECORD_IQ 0 |
 | 1371 | IQ progress | readout | PRESENT | mono dim readout ('IQ 3.2 s / n samples / x MB') while recording |
 | 1372 | Record audio | button (full width) | PRESENT | Key -> FOXAPI_OP_RECORD_AUDIO 1 |
 | 1373 | Starting audio | button | PRESENT | the same key reads 'Starting audio - click to cancel', then 'Cancelling audio start...' greyed |
-| 1374 | Saving (audio) | button (disabled) | DEFERRED | not found in signal_bank.slint: RecorderModel has no finalising state, so the key reads 'Record audio' while the last take is still being written |
+| 1374 | Saving (audio) | button (disabled) | PRESENT | Saving (audio): 'Saving audio...' and a dead key, as row 1369 |
 | 1375 | Stop audio | button | PRESENT | the same key reads 'Stop audio' -> FOXAPI_OP_RECORD_AUDIO 0 |
 | 1376 | Audio progress | readout | PRESENT | mono dim readout while recording |
 | 1377 | Muted warning | readout | PRESENT | amber Note 'Muted by <plugin> - this take is silent' |
@@ -2042,9 +2042,9 @@ Every row of `inventory/signal-bank.txt` (FoxSDR 0.99.104; the file calls itself
 | 1380 | Dialog | dialog | PRESENT | ImportDialog: a 460 px sheet with a close key; the backdrop, Cancel and Esc close it (docs 6.61: SheetFrame's key scope takes the keyboard while the sheet is up and dismisses on Esc; the root handler's escapeStep names the dialog first); drive escape-leaves-dialog.txt |
 | 1381 | Reason line | readout | PRESENT | Note at the top (import-reason, error) |
 | 1382 | Preset note | readout | PRESENT | ImportDialogModel.preset (docs 6.61): an import opened for an Airband preset says 'The rows will join the preset "X".' where 'Import as' stood, and offers no I/Q file; a path typed in it is the section's own preset import (test_slint_signal renders it; drive tools-airband-import.txt reads the rows landing in the preset) |
-| 1383 | Drop zone | drag/gesture | DEFERRED | drawn as words only; no file-drop event is wired into the Slint window (not found in signal_bank.slint, main.slint or main.cpp), so a dropped file imports nothing; the path field is the way in |
-| 1384 | or / Browse... | button | DEFERRED | the OS file chooser: a path field takes its place (Enter imports: FOXAPP_OP_BOOKMARK_IMPORT_FILE for a frequency list, SELECT_SOURCE 'file:' for an I/Q recording); the Browse key is drawn and calls import-open, the host's local pickFile |
-| 1385 | Reading line | readout | DEFERRED | not found in signal_bank.slint: reading_line is a host extra with no field in the Slint ImportDialogModel |
+| 1383 | Drop zone | drag/gesture | PRESENT | Drop zone: the dialog's words (signal_bank.slint ImportDialog) and a file dropped anywhere on the window is taken (gaps_win.cpp installFileDrop, main.cpp handleDrop, SignalPublisher::importDroppedList); gaps-drop.txt drives the handler. The OS drag itself is UNVERIFIED until the mouse drive |
+| 1384 | or / Browse... | button | PRESENT | or / Browse...: signal_publish.cpp importBrowse hands over to the system file chooser; a bounded run never raises it (FOXSDR_FILE_PICK stands in): wg2-import.txt. The real dialog is UNVERIFIED until the mouse drive |
+| 1385 | Reading line | readout | PRESENT | Reading line: 'Waiting for the disk to open the file: N s' after a second (signal_logic.cpp reading_line, joined into the dialog's note by signal_publish.cpp mapImport) |
 | 1386 | Cancel | button | PRESENT | Key -> import-closed (local) |
 
 # Phase 3: the SYSTEM bank (docs 6.40) - `inventory/extend-system-store-patch.txt` lines 287-1380 walked row by row
@@ -2160,11 +2160,11 @@ Every control row of the SYSTEM bank of `inventory/extend-system-store-patch.txt
 | 1454 | Also write a full memory dump beside a crash report | checkbox | PRESENT | Tick -> diag-minidump -> applyDiagMinidump: save diagnosticsMinidump, apply Diagnostics; the dump-note sits under it |
 | 1455 | Log path | readout | PRESENT | MonoNote log-path ('Log: <path>' or 'Log: off ...'); the family adds an 'Open the log' key -> diag-open-log (local, applyDiagOpenLog) that the inventory does not list |
 | 1456 | Reports path | readout | PRESENT | MonoNote reports-path ('Reports: <path>' or '(unavailable)') |
-| 1457 | Show the pointer ledger across the top of the window | checkbox | DEFERRED | Tick drawn (diag-ledger, ledger, ledger-note) but system_logic has no effect or field for it: the pointer ledger is window-bound state of the ImGui build (header comment: not covered) |
-| 1458 | Copy diagnostics | button | DEFERRED | small Key drawn (diag-copy, bundle-status) but system_logic has no effect for it: the clipboard and the diagnostics bundle are window-bound (header comment: not covered) |
+| 1457 | Show the pointer ledger across the top of the window | checkbox | PRESENT | the pointer ledger tick: one line across the top of the window (ui/diag_overlays.slint PointerLedgerStrip; pointer_ledger.cpp: OS cursor, client origin and size, window rectangle, the toolkit's window, cursor in client; system_publish.cpp on_diag_ledger); wg2-diagnostics.txt |
+| 1458 | Copy diagnostics | button | PRESENT | Copy diagnostics: ONE function, diag_copy.cpp copyDiagnostics (clipboard plus <reports>/diagnostics.txt), called by SystemPublisher::copyDiagnostics; the 'did not close normally' dialog must call the same one; gaps-misc.txt |
 | 1459 | Open reports folder | button | PRESENT | small Key -> diag-open-reports -> applyDiagOpenReports: local, opens the folder (text = reports_path) |
-| 1460 | SDRplay intro | readout | DEFERRED | not found in system_bank.slint as a host source: sdrplay-text is a Slint field with no counterpart in system_logic's DiagnosticsModel, so the whole block (rule, text, key, status) stays hidden |
-| 1461 | Run SDRplay diagnostic | button | DEFERRED | the Key (diag-sdrplay, sdrplay-enabled) is drawn only with sdrplay-text and has no effect in system_logic; no probe dialog follows (rows below) |
+| 1460 | SDRplay intro | readout | PRESENT | SDRplay intro: DiagnosticsModel.sdrplay-text from sdrplaydiag_logic.cpp view().intro, so the block is drawn (system_publish.cpp mapDiagnostics) |
+| 1461 | Run SDRplay diagnostic | button | PRESENT | Run SDRplay diagnostic: Key (system_bank.slint) -> SdrPlayDiag::openDialog opens the dialog; dead while a probe runs or FoxSDR holds an RSP; wg2-diagnostics.txt |
 | 1462 | What exactly is in a report? | button (small) | PRESENT | xs Key -> diag-what -> applyDiagWhat: local flag shared with Usage reporting's what-open |
 | 1463 | Report field list | readout | PRESENT | Note what-text while the flag is open |
 
@@ -2172,13 +2172,13 @@ Every control row of the SYSTEM bank of `inventory/extend-system-store-patch.txt
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1464 | Warning text | readout | DEFERRED | not found in system_bank.slint: no SDRplay diagnostic dialog or bias confirmation is drawn (the Run SDRplay diagnostic key has no effect in system_logic, whose header lists the probe and its sheet as window-bound and not covered) |
-| 1465 | Also test the bias tee | checkbox | DEFERRED | not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
-| 1466 | Bias confirmation | dialog (inline) | DEFERRED | not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
-| 1467 | Yes, switch it on | button | DEFERRED | not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
-| 1468 | Cancel (bias) | button | DEFERRED | not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
-| 1469 | Run the diagnostic | button | DEFERRED | not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
-| 1470 | Cancel | button | DEFERRED | not found in system_bank.slint: no SDRplay diagnostic dialog is drawn |
+| 1464 | Warning text | readout | PRESENT | Warning text: ui/diag_overlays.slint SdrPlayDialog, words from sdrplaydiag_logic.cpp view().warning |
+| 1465 | Also test the bias tee | checkbox | PRESENT | Also test the bias tee: Tick in SdrPlayDialog; ticking only ASKS (SdrPlayDiag::tickBias); wg2-diagnostics.txt |
+| 1466 | Bias confirmation | dialog (inline) | PRESENT | Bias confirmation: the question replaces the tick and the keys while open; Run is refused until it is answered (SdrPlayDiag); test_slint_host_sdrplaydiag |
+| 1467 | Yes, switch it on | button | PRESENT | Yes, switch it on: the one road the bias tee reaches the probe (SdrPlayDiag::biasYes), spent when the probe starts; wg2-diagnostics.txt reads gaps.probebias == 1 |
+| 1468 | Cancel (bias) | button | PRESENT | Cancel (bias): leaves the bias tee off and returns to the dialog (SdrPlayDiag::biasCancel) |
+| 1469 | Run the diagnostic | button | PRESENT | Run the diagnostic: starts the child through ProbeRunner (the real child is source/sdrplay_probe, the program again with --sdrplay-probe); a bounded run and every test use a stand-in that touches no radio, service or API. The real probe on an RSP is UNVERIFIED |
+| 1470 | Cancel | button | PRESENT | Cancel: closes the dialog and starts nothing (SdrPlayDiag::cancel) |
 
 ## SYSTEM bank — "FoxSDR did not close normally last time" dialog (520 px)
 
@@ -2215,7 +2215,7 @@ Every control row of the SYSTEM bank of `inventory/extend-system-store-patch.txt
 | 1489 | Use this code | button | PRESENT | small Key: commits the draft, then tester-use -> applyTesterUse: a 32-hex portal token or a whole link is saved as testerToken; a 40-hex app token only reaches Local::TesterResolve because the Link prompt is deferred (rows below); anything else gives the error sentence |
 | 1490 | What is sent | readout | PRESENT | Note sent-text |
 | 1491 | Show / Hide what is sent | button (small) | PRESENT | xs Key, label swaps -> tester-show-sent -> applyTesterShowSent (local flag) |
-| 1492 | Preview | readout | DEFERRED | the box is drawn and shows 'Nothing - no code is set.' and the queue line, but the masked JSON of the session's record comes from the tester usage recorder, which the Slint host leaves out (tester_preview_json stays empty), so a linked tester sees an empty preview |
+| 1492 | Preview | readout | DEFERRED | NOT DONE (window-gaps-2): the Slint host has no beta-tester usage recorder (no TesterUsageRecorder, no sender, no journal in HostDuties), so the box still shows only 'Nothing - no code is set.' and the queue line; the preview needs the recorder, the marks from the engine's facts and the sender, which the classic window keeps in app_window_tester.cpp |
 
 ## SYSTEM bank — "Link this FoxSDR?" window (460 px, closable)
 
@@ -2434,7 +2434,7 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 | 1644 | Row delete | button | PRESENT | xs icon Key 'Delete this bookmark' -> bookmark-delete(id) -> FOXAPI_OP_BOOKMARK_REMOVE, at once |
 | 1645 | Error line | readout | PRESENT | red Note error (fact.status.bookmarkError) |
 | 1646 | Spectrum markers | overlay/marker | RELOCATED | the spectrum's own bookmark ticks and names (SpectrumView, main.cpp bookmarks marks): phase-1 rows 259 and 260; the strip's two settings are On the spectrum and Stack close names above |
-| 1647 | Drop-a-file import | drag/gesture | DEFERRED | not found in tools_bank.slint, main.slint or main.cpp: no file-drop event is wired into the Slint window (the same gap as row 1383); the path box and the import dialog are the ways in |
+| 1647 | Drop-a-file import | drag/gesture | PRESENT | Drop-a-file import: a dropped .xml or .csv goes to the import (main.cpp handleDrop classifyDrop FrequencyList -> importDroppedList); gaps-drop.txt. The OS drag is UNVERIFIED |
 
 ## TOOLS bank — Import a frequency list (dialog)
 
@@ -2443,9 +2443,9 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 | 1648 | Dialog | dialog | RELOCATED | the SIGNAL family's ImportDialog (row 1380), shared with this bank: opened by an empty Import path |
 | 1649 | Reason line | readout | RELOCATED | the SIGNAL family's ImportDialog reason line (row 1381) |
 | 1650 | Preset line | readout | PRESENT | the dialog's preset line (row 1382): the Airband Import over an empty box opens the dialog for the preset, and its rows join it (docs 6.61) |
-| 1651 | Drop zone | overlay/marker | DEFERRED | the drop zone is words only in the SIGNAL family's dialog and no file-drop event is wired (row 1383) |
-| 1652 | or / Browse... | button | DEFERRED | the SIGNAL family's dialog has a path field in place of the system file chooser (row 1384) |
-| 1653 | Waiting line | readout | DEFERRED | the SIGNAL family's dialog has no reading line (row 1385) |
+| 1651 | Drop zone | overlay/marker | PRESENT | Drop zone: the shared dialog's zone, as row 1383 |
+| 1652 | or / Browse... | button | PRESENT | or / Browse...: the shared dialog's key, as row 1384 |
+| 1653 | Waiting line | readout | PRESENT | Waiting line: the shared dialog's reading line, as row 1385 |
 | 1654 | Cancel | button | RELOCATED | the SIGNAL family's Cancel key (row 1386) |
 | 1655 | Escape | key (keyboard) | PRESENT | Esc closes the dialog: key_dispatch escapeStep takes the import dialog first, then the store's plugin page, else the overlays; the sheet's own key scope covers a focused field (docs 6.61; drive escape-leaves-dialog.txt) |
 
@@ -3188,7 +3188,7 @@ Two audio features of the selected radio, below the Auto notch row of the Audio 
 | 4611 | RESTART SDRPLAY SERVICE key | key | PRESENT | Key in the Source section while the driver has trouble reaching the service; SdrPlayServiceRestart on a worker (UAC prompt) |
 | 4612 | Copy diagnostics | key | PRESENT | SystemPublisher::copyDiagnostics: the bundle to the clipboard and to <reports>/diagnostics.txt; the status line says where |
 | 4613 | Help: the manual (app menu) | menu item | PRESENT | menu id 605 opens docs/MANUAL.md of the public repository in the default browser |
-| 4614 | Run SDRplay diagnostic and its bias-tee question | key | DEFERRED | the probe child process of the classic window (source/sdrplay_probe) is not ported; the key still says so in the log |
+| 4614 | Run SDRplay diagnostic and its bias-tee question | key | PRESENT | Run SDRplay diagnostic and its bias-tee question: sdrplaydiag_logic.cpp and ui/diag_overlays.slint, the probe child is source/sdrplay_probe (the program again with --sdrplay-probe); real probe UNVERIFIED |
 | 4615 | High contrast option and skin | checkbox | PRESENT | Tick in SYSTEM > Display (hc=); the HighContrast skin is a palette; also forced on while Windows' own setting is on |
 
 ## Lane S1 (docs/multi-radio-records/screen-s1.md; rows 4500 and up are this lane's)

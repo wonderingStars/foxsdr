@@ -75,6 +75,8 @@
 #include "input_script.hpp"
 #include "key_dispatch.hpp"
 #include "look_logic.hpp"
+#include "bandplan_slint.hpp"
+#include "gui/ui_scale.hpp"
 #include "kit_publish.hpp"
 #include "cjk_register.hpp"
 #include "patch_publish.hpp"
@@ -148,7 +150,7 @@ struct ListsSnapshot {
     std::string gainStage, gainUnit; double gainMin = 0, gainMax = 1, gainStep = 1; bool haveGain = false;
     std::string antenna; int antennaCount = 0;
     bool converter = false; std::string converterName; double converterLoHz = 0;
-    struct Band { std::string name; double startHz, stopHz; };
+    struct Band { std::string name; double startHz, stopHz; std::string service; std::uint32_t colour = 0; };   // service and colour: the plan list's detail and value[2] (the band-plan palettes, window-gaps-2)
     std::vector<Band> bands;
     struct Mark { std::string name; double hz, widthHz; std::uint32_t rgba; bool span, dashed, spectrumOnly; std::string plugin; std::string credit; };   // plugin: the module that set it (the list item's detail); credit: the plugin's credit line for the mark (screen lane M, row 21)
     std::vector<Mark> marks;
@@ -512,6 +514,10 @@ int main(int argc, char** argv) {
     bool bandPlanOn = true;
     double tuneStepHz = kDefaultTuneStepHz;   // Ctrl+Up/Down and the Tune step picker (10 kHz, as the key table's text says)
     bool showNudges = true;
+    bool lastSwitches = true;   // the saved counterSwitches last applied to showNudges
+    int askedCounter = 1;       // the saved counterScale (1 or 2) as asked; Theme.counter-scale is what the strip can hold of it
+    std::uint32_t lastRibbonRgba = 0;   // the colour of the first band of the last ribbon built (a drive script reads it: gaps.ribboncolour)
+    bool haveRibbon = false;
     if (const char* e = std::getenv("FOXSDR_SLINT_TUNE_STEP"); e != nullptr && bounded.bounded()) { const double v = std::atof(e); if (v >= 1.0 && v <= 1.0e7) { tuneStepHz = v; } }   // a bounded run only: the Link scripts keep their 12.5 kHz arithmetic
     Face face = Face::Plain;
     bool followBandPlan = true;                // the engine's switch (fact.bandPlan.followMode), read when the lists move
@@ -831,7 +837,7 @@ int main(int argc, char** argv) {
         readList(FOXAPI_LIST_GAINS, [&](const FoxListItem& it) { if (!l.haveGain) { l.haveGain = true; l.gainStage = it.name; l.gainUnit = it.detail; l.gainMin = it.value[0]; l.gainMax = it.value[1]; l.gainStep = it.value[2]; } });
         readList(FOXAPI_LIST_ANTENNAS, [&](const FoxListItem& it) { ++l.antennaCount; if (it.flags & FOXAPI_ITEM_ACTIVE) { l.antenna = it.name; } });
         readList(FOXAPI_LIST_CONVERTERS, [&](const FoxListItem& it) { if ((it.flags & FOXAPI_ITEM_ACTIVE) && it.value[0] != 0) { l.converter = true; l.converterName = it.name; l.converterLoHz = it.value[1]; } });
-        readList(FOXAPI_LIST_BAND_PLAN, [&](const FoxListItem& it) { l.bands.push_back({it.name, it.value[0], it.value[1]}); });
+        readList(FOXAPI_LIST_BAND_PLAN, [&](const FoxListItem& it) { l.bands.push_back({it.name, it.value[0], it.value[1], it.detail, static_cast<std::uint32_t>(it.value[2])}); });
         readList(FOXAPI_LIST_MARKERS, [&](const FoxListItem& it) {
             // screen lane M, row 21: the credit a plugin owes its data source, fact.plugin.marker.credit.<n> with n the mark's place in the list from 1
             std::string credit;
@@ -1097,6 +1103,15 @@ int main(int argc, char** argv) {
         ui->set_menu_entries(std::make_shared<slint::VectorModel<MenuEntry>>(std::move(e)));
         ui->invoke_open_menu(x, y);
     };
+    // THE SKIN BY NAME (look_logic skinName): the six looks the window can wear (window-gaps-2.md, rows 148 to 152).
+    const auto skinValueOf = [&](const std::string& name) -> Skin {
+        if (name == "highcontrast") { return ui->global<HighContrast>().get_value(); }
+        if (name == "night") { return ui->global<NightWatch>().get_value(); }
+        if (name == "glass") { return ui->global<GlassCockpit>().get_value(); }
+        if (name == "daylight") { return ui->global<DaylightLab>().get_value(); }
+        if (name == "field") { return ui->global<FieldRadio>().get_value(); }
+        return ui->global<Workbench>().get_value();
+    };
     const auto applyFace = [&] {
         Skin s = ui->global<Theme>().get_skin();
         s.digit_face = face == Face::Nixie ? DigitFace::Nixie : face == Face::Drum ? DigitFace::Drum : DigitFace::Plain;
@@ -1121,7 +1136,7 @@ int main(int argc, char** argv) {
             lookStyle = half.tunerDisplayStyle;
             if (themeMoved) {
                 const foxsdr::slintlook::SkinId id = hcNow ? foxsdr::slintlook::SkinId::HighContrast : foxsdr::slintlook::skinOfTheme(half.uiTheme);
-                ui->global<Theme>().set_skin(id == foxsdr::slintlook::SkinId::HighContrast ? ui->global<HighContrast>().get_value() : id == foxsdr::slintlook::SkinId::NightWatch ? ui->global<NightWatch>().get_value() : ui->global<Workbench>().get_value());
+                ui->global<Theme>().set_skin(skinValueOf(foxsdr::slintlook::skinName(id)));
                 skinNow = foxsdr::slintlook::skinName(id);
                 if (laneKp) { laneKp->restyle(); }   // lane K: the palette and the reduced effects go over the new base
                 std::fprintf(stderr, "foxsdr-slint: look: theme '%s' is drawn in the %s skin\n", half.uiTheme.c_str(), foxsdr::slintlook::skinName(id));
@@ -1613,6 +1628,8 @@ int main(int argc, char** argv) {
     // A FILE DROPPED ON THE WINDOW (item 8; the classic's submitPendingDrop): a WAV is a recording to play, an XML or CSV a frequency list to import, anything else is refused with a note under the counter.
     // The OS drop reaches this through gaps_win's drop target; a bounded run calls it directly (FOXSDR_SLINT_DROP=<tick>:<path>[;...]) because a real drag cannot be scripted.
     handleDrop = [&](const std::string& path) {
+        // a bounded run's seam for a meter's right-click menu (a popup's rows are not reachable by label): FOXSDR_SLINT_DROP=<tick>:meter:<which>:<style>
+        if (path.rfind("meter:", 0) == 0) { int which = 0, style = 0; if (std::sscanf(path.c_str(), "meter:%d:%d", &which, &style) == 2) { ui->global<MeterPanel>().invoke_style_picked(which, style); } return; }
         switch (foxsdr::slintgaps::classifyDrop(path)) {
             case foxsdr::slintgaps::DropKind::IqRecording: signalBank.openDroppedRecording(path); ++dropsTaken; dropNote = "recording"; break;
             case foxsdr::slintgaps::DropKind::FrequencyList: signalBank.importDroppedList(path); ++dropsTaken; dropNote = "list"; break;
@@ -1673,7 +1690,7 @@ int main(int argc, char** argv) {
             return v;
         };
         e.baseSkin = [&] {
-            Skin sk = skinNow == "highcontrast" ? ui->global<HighContrast>().get_value() : skinNow == "night" ? ui->global<NightWatch>().get_value() : ui->global<Workbench>().get_value();
+            Skin sk = skinValueOf(skinNow);
             sk.digit_face = face == Face::Nixie ? DigitFace::Nixie : face == Face::Drum ? DigitFace::Drum : DigitFace::Plain;
             return sk;
         };
@@ -2063,10 +2080,18 @@ int main(int argc, char** argv) {
     // ---- the shortcuts, by config id (the key table of the ImGui window, as the user has SAVED it: docs 6.56) ----
     // The root FocusScope names a key press and asks here; the answer is the config id of the action that holds the chord in the saved table (the interface half the
     // host keeps, so a rebinding the Key bindings body has just saved answers on the very next press), "" when nothing does.
+    // CTRL+= AND CTRL+- STEP THE INTERFACE SIZE (window-gaps-2, row 145), as the classic's handleInterfaceScaleKeys does: from the size in force to the next of 100 to 250 %, ALONGSIDE whatever the key table binds the chord
+    // to (stock: the spectrum zoom, which the classic also does on the same press). Answered here, where a key reaches the window and not a text field.
+    const auto stepUiSize = [&](int dir) {
+        const int next = foxsdr::slintlook::stepUiSizePercent(static_cast<int>(std::lround(static_cast<double>(ui->window().scale_factor()) * 100.0)), dir);
+        for (int i = 0; next > 0 && i < cascade::gui::uiscale::kStepCount; ++i) { if (cascade::gui::uiscale::kSteps[i] == next) { systemBank.setInterfaceSize(i + 1); } }
+    };
     ui->on_key_answer([&](slint::SharedString key, bool ctrl, bool shift, bool alt, bool glyphShifted) {
         foxsdr::slintsystem::KeyPress press;
         press.key = std::string(key);
         press.ctrl = ctrl; press.shift = shift; press.alt = alt; press.glyphShifted = glyphShifted;
+        if (ctrl && !alt && (press.key == "Plus" || press.key == "Equal" || press.key == "NumPlus")) { stepUiSize(1); }
+        else if (ctrl && !shift && !alt && (press.key == "Minus" || press.key == "NumMinus")) { stepUiSize(-1); }
         return ss(foxsdr::slintsystem::shortcutForPress(press, foxsdr::slintsystem::keyTableFromConfig(duties.interfaceHalf().keyBindings)));
     });
     // A PNG of the window to `path` ("" = the refusal); the screenshot key stamps a name under the settings file's screenshots folder,
@@ -2318,10 +2343,15 @@ int main(int argc, char** argv) {
         fig.dbTicks = dbTicks(st.dbMin, st.dbMax, plot.h);
         fig.vfoPos = rv.frac(st.tunedHz);
         fig.vfoHalf = static_cast<float>(v.spanHz > 0 ? st.bandwidthHz / 2.0 / v.spanHz : 0.0);
+        const std::uint32_t accentRgb = [&] { const slint::Color c = ui->global<Theme>().get_accent(); return (static_cast<std::uint32_t>(c.red()) << 16) | (static_cast<std::uint32_t>(c.green()) << 8) | c.blue(); }();
+        haveRibbon = false;
         for (const auto& b : lists.bands) {
             const double f0 = fracOf(b.startHz, v.centreHz, v.spanHz), f1 = fracOf(b.stopHz, v.centreHz, v.spanHz);
             if (f1 < 0 || f0 > 1) { continue; }
-            fig.ribbon.push_back({static_cast<float>(std::clamp(f0, 0.0, 1.0)), static_cast<float>(std::clamp(f1, 0.0, 1.0)), b.name});
+            // THE BAND PLAN'S PALETTE (window-gaps-2, rows 258, 270): the saved Colour picks each band's colour by its service class
+            fig.ribbon.push_back({static_cast<float>(std::clamp(f0, 0.0, 1.0)), static_cast<float>(std::clamp(f1, 0.0, 1.0)), b.name,
+                                  foxsdr::slintbands::bandPlanColour(duties.interfaceHalf().bandPlanPalette, b.service, b.colour, accentRgb)});
+            if (!haveRibbon || fig.ribbon.size() == 1) { lastRibbonRgba = fig.ribbon.back().rgba; haveRibbon = true; }
         }
         // THE BOOKMARK MARKS (docs 6.52): none while "On the spectrum" is off (bookmarkMarkers, as the classic drawBookmarkMarkers has it); the
         // names stack onto up to three rows while "Stack close names" is on (bookmarkStackNames), one row otherwise - bookmarkNameRows is the rule.
@@ -2427,10 +2457,10 @@ int main(int argc, char** argv) {
         ui->set_vfo_half(fig.vfoHalf);
         ui->set_show_vfo(true);
         {
-            std::string sig; for (const auto& b : fig.ribbon) { sig += fmt("%.5f|", b.from) + fmt("%.5f|", b.to) + b.label + ";"; }
+            std::string sig; for (const auto& b : fig.ribbon) { sig += fmt("%.5f|", b.from) + fmt("%.5f|", b.to) + b.label + fmt("|%08x;", b.rgba); }
             if (psigs.changed("ribbon", sig)) {
                 std::vector<BandSegment> ribbon;
-                for (const auto& b : fig.ribbon) { ribbon.push_back({b.from, b.to, ss(b.label), slint::Color::from_argb_uint8(0, 0, 0, 0)}); }
+                for (const auto& b : fig.ribbon) { ribbon.push_back({b.from, b.to, ss(b.label), foxsdr::slintbands::ribbonColour(b.rgba)}); }
                 ui->set_ribbon(std::make_shared<slint::VectorModel<BandSegment>>(std::move(ribbon)));
             }
         }
@@ -2614,7 +2644,23 @@ int main(int argc, char** argv) {
         ui->set_bias_hint(ss(biasHint(biasPresent, biasOn)));
         ui->set_bias_question_text(ss(std::string(state.deviceName) + ": FoxSDR will switch it on again whenever this radio is opened, until you turn it off."));
         ui->set_muted_by(ss(state.audioMutedBy));
+        // THE SAVED COUNTER SCALE, READINGS SCALE AND TUNER SWITCHES (window-gaps-2, rows 35, 36, 40, 156, 158, 1394, 1396): the interface half's values drive the figures; a change is applied once.
+        {
+            const cascade::core::AppConfig& lh = duties.interfaceHalf();
+            const float wantReadings = std::clamp(lh.readingsScale, 1.0f, 3.0f);
+            askedCounter = lh.counterScale >= 2 ? 2 : 1;
+            const float wantCounter = foxsdr::slintlook::fitCounterScale(static_cast<float>(askedCounter), wantReadings, static_cast<float>(ui->get_win_w()));   // what the strip can hold (Bench Classic XL at 1600 px)
+            if (ui->global<Theme>().get_counter_scale() != wantCounter) { ui->global<Theme>().set_counter_scale(wantCounter); }
+            if (ui->global<Theme>().get_reading_scale() != wantReadings) { ui->global<Theme>().set_reading_scale(wantReadings); }
+            if (lh.counterSwitches != lastSwitches) { lastSwitches = lh.counterSwitches; showNudges = lh.counterSwitches; }
+        }
         ui->set_show_nudges(showNudges);
+        // THE BAND PLAN'S SIZE (window-gaps-2, rows 269, 274): the saved tier sets the ribbon's height on every pane (small 8 px, medium 13, large 20)
+        {
+            const std::string& sz = duties.interfaceHalf().bandPlanSize;
+            const int tier = sz == "large" ? 3 : sz == "medium" ? 2 : 1;
+            if (ui->get_ribbon_size() != tier) { ui->set_ribbon_size(tier); }
+        }
 
         // the rail and the panel
         ui->set_bank_index(bankIndex);
@@ -3306,7 +3352,24 @@ int main(int argc, char** argv) {
             if (w == "diagstatus") { out = systemBank.bundleStatus(); return std::string(); }
             if (w == "hc") { out = wsMemory.saved().highContrast ? "1" : "0"; return std::string(); }
             if (w == "winhc") { out = winHc ? "1" : "0"; return std::string(); }
+            if (w == "meterstyles") { out = duties.interfaceHalf().meterStyleRate + "," + duties.interfaceHalf().meterStyleVolume; return std::string(); }
+            if (w == "ribbonsize") { out = std::to_string(ui->get_ribbon_size()); return std::string(); }   // the band plan ribbon's tier now drawn: 1 small, 2 medium, 3 large
+            if (w == "ribboncolour") {   // the first band of the last ribbon built: its colour as #rrggbbaa, "none" when no band was in view
+                if (!haveRibbon) { out = "none"; return std::string(); }
+                char b[16]; std::snprintf(b, sizeof(b), "#%08x", lastRibbonRgba); out = b;
+                return std::string();
+            }
+            if (w == "ledger") { out = systemBank.ledgerOn() ? "1" : "0"; return std::string(); }   // window-gaps-2: the pointer ledger's tick
+            if (w == "ledgerline") { out = systemBank.ledgerLine(); return std::string(); }
+            if (w == "probestarts") { out = std::to_string(systemBank.sdrPlayDiag().startsCalled()); return std::string(); }   // the SDRplay diagnostic's stand-in child was started this many times
+            if (w == "probebias") { out = systemBank.sdrPlayDiag().lastStartedWithBias() ? "1" : "0"; return std::string(); }
+            if (w == "proberunning") { out = systemBank.sdrPlayDiag().running() ? "1" : "0"; return std::string(); }
+            if (w == "probereport") { out = systemBank.sdrPlayDiag().report(); return std::string(); }
             if (w == "skin") { out = skinNow; return std::string(); }
+            if (w == "counterscale") { out = std::to_string(askedCounter); return std::string(); }
+            if (w == "counterfit") { out = std::to_string(static_cast<int>(ui->global<Theme>().get_counter_scale() * 100.0f + 0.5f)); return std::string(); }   // the scale DRAWN, in per cent: the asked one less what the strip cannot hold
+            if (w == "readingscale") { out = std::to_string(static_cast<int>(ui->global<Theme>().get_reading_scale() * 10.0f + 0.5f)); return std::string(); }
+            if (w == "nudges") { out = showNudges ? "1" : "0"; return std::string(); }
             if (w == "clip") { out = fakeClip; return std::string(); }
             if (w == "savenote") { out = publisher.lastSaveNote(); return std::string(); }
             if (w == "helpurl") { out = helpUrlOverride; return std::string(); }

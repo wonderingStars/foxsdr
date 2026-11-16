@@ -27,6 +27,7 @@
 #include "host_duties.hpp"
 #include "main.h"
 #include "plugin_kit.hpp"
+#include "sdrplaydiag_logic.hpp"
 #include "system_logic.hpp"
 
 namespace foxsdr::slintsystem {
@@ -34,6 +35,11 @@ namespace foxsdr::slintsystem {
 class SystemPublisher {
 public:
     // the counter's digit grouping is the host's own record (workspace_prefs, `dg=`); the Display body shows it and the host applies a pick (SystemEvents.display-digit-grouping is wired by the host)
+    // window-gaps-2: the pointer ledger's tick and line, and the SDRplay diagnostic's dialog (the drive scripts and the tests read them)
+    bool ledgerOn() const { return ledgerOn_; }
+    const std::string& ledgerLine() const { return ledgerLine_; }
+    foxsdr::slintdiag::SdrPlayDiag& sdrPlayDiag() { return *sdrDiag_; }
+    void setProbeFactory(foxsdr::slintdiag::SdrPlayDiag::RunnerFactory f);   // a stand-in for the probe child (a bounded run always has one)
     int diagCopies() const { return diagCopies_; }                 // the drive scripts' read-back of Copy diagnostics
     const std::string& bundleStatus() const { return bundleStatus_; }
     void setDigitGroupingSource(std::function<int()> f) { digitGrouping_ = std::move(f); }
@@ -107,6 +113,13 @@ private:
     void refreshBundle();
     void copyDiagnostics();           // slint-gaps.md item 9: Copy diagnostics (the classic's copyDiagnosticsBundle): the bundle to the clipboard and to <reports>/diagnostics.txt
     int diagCopies_ = 0;
+    bool ledgerOn_ = false;
+    std::string ledgerLine_;
+    std::unique_ptr<foxsdr::slintdiag::SdrPlayDiag> sdrDiag_;
+    std::string sdrDialogSig_;
+    void publishMeters();         // the two bench meters (rows 50 to 55, 162): live values and the saved styles
+    std::string metersSig_;
+    bool sdrPlayInUse();          // FoxSDR itself holds an RSP: the diagnostic must not take it
     std::string bundleStatus_;        // the line under the key ("Copied to the clipboard.")
     SenderView senderViewOf(bool feature) const;
     ReportInputs& inputsOf(int kind) { return kind == 0 ? opts_.feature : opts_.bug; }

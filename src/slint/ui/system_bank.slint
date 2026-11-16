@@ -30,6 +30,7 @@ import { Slider } from "sliders.slint";
 import { SelectKey } from "sections.slint";
 import { TipTimer, ElidedHint } from "tooltip.slint";
 import { SelectItem } from "signal_bank.slint";
+import { MetersBlock } from "meters_panel.slint";
 
 // The models. The contract's fields come first in each; the ADDED ones are the ImGui window's own words and states that the contract left out (the host,
 // system_logic.hpp, already carries most of them under these names). A host label that is "" falls back to the body's own @tr word.
@@ -1115,6 +1116,8 @@ export component DisplayBody inherits VerticalLayout {
             toggled(v) => { root.display-high-contrast(v); }
         }
     }
+    // THE TWO BENCH METERS (window-gaps-2, rows 50 to 55, 162): right-click one for its style
+    MetersBlock { }
     // LANE B: the waterfall and the trace (SpectrumLook above)
     Line {
         RowLabel { text: @tr("Colour map"); horizontal-stretch: 1; }

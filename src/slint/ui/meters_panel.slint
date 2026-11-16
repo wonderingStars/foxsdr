@@ -1,0 +1,84 @@
+// FoxSDR Slint front end - THE TWO BENCH METERS (window-gaps-2, rows 50, 51, 52 to 55, 162): SAMPLE RATE (full scale 10 MS/s) and VOLUME (the level of what comes out of the speakers), with the classic
+// window's right-click menu on each, "Classic / Analogue needle / LED ladder / Peak meter", and its hover hint "Right-click to change the meter style". Each meter keeps its OWN saved style (meterStyleRate,
+// meterStyleVolume). The old deck had them in its toolbar; this window has no deck, so they stand in SYSTEM > Display, where the style is chosen, and read live.
+// The host (system_publish.cpp) fills the global every tick and saves a pick.
+import { Theme, MeterStyle } from "theme.slint";
+import { Meter } from "meters.slint";
+import { SelectItem, DropRow } from "signal_bank.slint";
+
+export global MeterPanel {
+    in property <int> rate-style;       // 0 classic, 1 analogue needle, 2 LED ladder, 3 peak meter
+    in property <int> volume-style;
+    in property <float> rate-value;     // 0..1 of the scale
+    in property <string> rate-text;
+    in property <bool> rate-has: true;
+    in property <float> volume-value;
+    in property <string> volume-text;
+    in property <bool> volume-has: true;
+    callback style-picked(int, int);    // (which meter: 0 rate, 1 volume; the style index)
+}
+
+component MeterCell inherits Rectangle {
+    in property <string> caption;
+    in property <string> unit;
+    in property <int> which;
+    in property <int> style-index;
+    in property <float> value;
+    in property <string> value-text;
+    in property <bool> has-reading: true;
+    property <[SelectItem]> styles: [
+        { label: @tr("Classic"), id: "classic", enabled: true, note: "" },   // not-translated: the saved style key
+        { label: @tr("Analogue needle"), id: "needle", enabled: true, note: "" },   // not-translated: the saved style key
+        { label: @tr("LED ladder"), id: "led", enabled: true, note: "" },   // not-translated: the saved style key
+        { label: @tr("Peak meter"), id: "peak", enabled: true, note: "" },   // not-translated: the saved style key
+    ];
+    property <length> menu-x: 0px;
+    property <length> menu-y: 0px;
+    property <length> popup-w: 150px;
+    property <length> popup-h: 4 * Theme.menu-item-h + 2 * (4px + Theme.hairline);
+    width: meter.width;
+    height: meter.height;
+    meter := Meter {
+        x: 0px;
+        y: 0px;
+        face-w: 118px;
+        caption: root.caption;
+        unit: root.unit;
+        value: root.value;
+        value-text: root.value-text;
+        has-reading: root.has-reading;
+        style: root.style-index == 1 ? MeterStyle.analogue : root.style-index == 2 ? MeterStyle.led-ladder : root.style-index == 3 ? MeterStyle.peak : MeterStyle.classic;
+        menu-requested(mx, my) => { root.menu-x = Math.max(0px, Math.min(mx, root.width - root.popup-w)); root.menu-y = Math.max(0px, Math.min(my, root.height - root.popup-h)); menu.show(); }
+    }
+    menu := PopupWindow {
+        x: root.menu-x;
+        y: root.menu-y;
+        width: root.popup-w;
+        height: root.popup-h;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.menu;
+            border-width: Theme.hairline;
+            border-color: Theme.knob-ring;
+            border-radius: Theme.radius-panel;
+            for it[i] in root.styles : DropRow {
+                x: 4px + Theme.hairline;
+                y: 4px + Theme.hairline + i * Theme.menu-item-h;
+                width: root.popup-w - 2 * (4px + Theme.hairline);
+                item: it;
+                chosen: i == root.style-index;
+                activated => {
+                    MeterPanel.style-picked(root.which, i);
+                    menu.close();
+                }
+            }
+        }
+    }
+}
+
+export component MetersBlock inherits HorizontalLayout {
+    spacing: 8px;
+    alignment: start;
+    MeterCell { which: 0; caption: @tr("SAMPLE RATE"); unit: "MS/s"; style-index: MeterPanel.rate-style; value: MeterPanel.rate-value; value-text: MeterPanel.rate-text; has-reading: MeterPanel.rate-has; }   // not-translated: the unit
+    MeterCell { which: 1; caption: @tr("VOLUME"); unit: "dB"; style-index: MeterPanel.volume-style; value: MeterPanel.volume-value; value-text: MeterPanel.volume-text; has-reading: MeterPanel.volume-has; }   // not-translated: the unit
+}
