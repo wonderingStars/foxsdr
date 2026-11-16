@@ -63,8 +63,52 @@ All Slint and host strings are the classic's own words, already in the catalogue
 * Ledger: `ledger: 2379 rows, 753 asserted, 116 driven, 1510 not drivable, 0 unclassified`.
 * Real `%APPDATA%/foxsdr/config.json` sha256 `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3`, read at the end: unchanged. Nothing pushed, no outside connection, no download, FOXSDR_ALLOW_* never set; the owner's copy under `D:/foxsdr-build/show/` was not touched.
 
-### WHERE I STOPPED AND WHAT IS NEXT
-All eight brief rows and the fault cards are done and committed (65e2c322, f5aeaa5b, then this record). Next, in order: (1) run the rest of the GUI gate (`ctest -L gui -j3` through the launcher with a desktop of your own; `slint_drive_gaps1-*` already pass) and re-run each red alone; (2) run `tools/slint_clip_sweep.py` (not run: the new sheets and cards were checked on one screenshot each at 1280 x 800 only); (3) re-run `test_diagnostics` / `test_diagnostics_free` after a build at the final commit (the stamp reads HEAD); (4) at the merge, regenerate `src/core/lang_assets.hpp` and `docs/slint-drive-coverage.md`.
+### WHERE THE FIRST AGENT STOPPED (kept for history; finished below)
+All eight brief rows and the fault cards were done and committed (65e2c322, f5aeaa5b, 51abe4c3). Left: the rest of the GUI gate, the clip sweep, the stamp tests at the final commit, the merge-time regeneration.
+
+## RESUMED 2026-11-16 (second agent): what was finished
+
+Build folder `D:/foxsdr-build/en-screen-j`, hidden desktops `FoxSDRGaps1b`, `FoxSDRGaps1c`, `FoxSDRGaps1d`, scratch `D:/foxsdr-build/wg1-scratch/`. Start: tree clean at `51abe4c3`, 86 GB free on D:. A full rebuild at that tip compiled with 0 errors.
+
+### GUI gate (`ctest -C Release -L gui -j3 --timeout 600`, 363 tests, tip 51abe4c3's sources)
+`99% tests passed, 4 tests failed out of 363`, `Total Test time (real) = 3074.54 sec`. Every red run alone:
+* `test_health_app`: passed alone (59.91 s). Load flake (named in the standard rules).
+* `test_slow_frames_app`: passed alone (29.89 s). Load flake (named in the standard rules).
+* `test_shutdown_budget` (Timeout 120 s in the gate and again in the three-test re-run): `-V` alone it printed `test_shutdown_budget: 210 checks, 0 failed`, `Passed 74.05 sec`. It runs several full app starts and closes, one of them a deliberately wedged 55 s teardown, so on a loaded machine 120 s is too little: load timeout, not a failure.
+* `test_diagnostics`: the stamp family (the tree had an uncommitted edit while the gate ran, then HEAD moved); see "Stamp tests" below.
+All 19 `slint_drive_gaps1-*` scripts passed in this gate (and the 30 the first agent had run).
+
+### Clip sweep (`tools/slint_clip_sweep.py`, probe built with `-DFOXSDR_SLINT_CLIP_PROBE=ON`, hidden desktop)
+The first agent had checked the new sheets on one 1280x800 screenshot each. The sweep is the real check, so it gained eight views (commit ddd93451, `GAPS1_VIEWS` in the tool): `g1-diag-offer`, `g1-link`, `g1-store`, `g1-store-mandatory`, `g1-team`, `g1-faults`, `g1-mute`, `g1-markers`, each raised by the seed of its drive script. First run, all 34 languages: `SWEEP: 272 runs (34 languages x 8 views), 0 runs that did not finish`; `4388 items (EDGE 32, ELIDE 3540, OUT 816); 4345 explained, 43 UNEXPLAINED at 3 sites in 8 languages`:
+| Site | What | Verdict |
+|---|---|---|
+| `tools_bank.slint:230` (3 items) | the Markers table's "Noted" time ("2026-11-14 22:13:20", 126 px) in a 68 px box: every row elided, every language | MINE (the Markers window was proved by the first agent but looked at only in the model, not drawn at width): FIXED, column 150 px, sheet 700 px (it was 620) |
+| `cards.slint:79` (8 items) | the Store banner's right-hand hint "you are running 0.99.108" 1 to 8 px longer than half the card in Greek, Indonesian, Japanese, Ukrainian | MINE (the card carries it on the Store banner): FIXED, the hint may take 56 percent of the card |
+| `keys.slint:285` (32 items) | the spectrum toolbar's "Whole span" key past the window's right edge in Vietnamese, Russian, Estonian, Greek | NOT MINE: it is in every view of the window, not in a sheet or card of this lane; left (open row) |
+Commit of the two fixes: see the log (message starts "Window gaps lane 1: the clip sweep's findings"). Sweep after the fixes, the same 272 runs: `4377 items (EDGE 32, ELIDE 3529, OUT 816); 4345 explained, 32 UNEXPLAINED at 1 sites in 4 languages` (only `keys.slint:285`).
+
+### GUI drive gate again after the two .slint edits (`ctest -C Release -L drive -j2 --timeout 600`, 287 tests)
+`99% tests passed, 1 tests failed out of 287`, `Total Test time (real) = 3185.55 sec`. The one red is `slint_drive_system-look`: `state look.width == 1600 -> FAILED: it is 800` (line 50, after the Interface size is put back to Auto). It had PASSED (19.07 s) in the gate on the same sources before the two edits. Run alone it fails every time (4 of 4, on three different hidden desktops). It is NOT shown to be caused by the two edits: with `cards.slint` and `tools_bank.slint` put back to the text of the passing gate and the window rebuilt, it failed the same way. What differed was the build cache: the gate that passed had `FOXSDR_SLINT_CLIP_PROBE=OFF`, the failing runs had it `ON` (needed to build the sweep's probe). With the cache put back to OFF and the window rebuilt at the committed .slint files, `slint_drive_system-look` PASSED again (`Passed 18.59 sec`). So: a build folder configured with the probe ON gives a `foxsdr-slint` that fails this one script (cause not investigated; it is probably the probe directory's own generated `main.h`, which its comment says shares a name with the window's); the committed sources are not at fault. Do not run the GUI gate in a folder configured with the probe ON.
+
+### Config and the rest
+* Real `%APPDATA%/foxsdr/config.json` sha256 read at the end: `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (unchanged). Nothing pushed, no outside connection, no download, `FOXSDR_ALLOW_*` never set, no radio opened, the owner's copy under `D:/foxsdr-build/show/` not touched.
+* The two width fixes (Markers column and sheet, card hint) are not break-it-checked: they are measured by the sweep (the three sites went from 43 items to 0), which is the failing-then-passing evidence.
+* UNVERIFIED besides the open rows: the 287-test drive gate ran with the probe-ON build; after the cache was restored only `slint_drive_system-look` was re-run (it passed). The full 363-test GUI gate ran once, at the sources before the two width fixes.
+
+### What the first agent changed in `test_slint_duties` (stated precisely, for the owner)
+`updatePlanFor(bounded, manifestSeam, packaged, userEnabled)` decides who is asked about updates. In the old window (`src/gui/app_window_updates.cpp` 71 to 92, `AppWindow::startUpdateCheck`): `core::updateCheckDisposition(runningInPackage(), updateCheckEnabled_)`; `OffByChoice` returns (asks nobody); `AskStore` asks the Microsoft Store through Windows (`checkStoreForUpdates(owner)`) and never foxsdr.com; only `Run` goes to foxsdr.com. So a Store copy with the Updates tick on asks the Store there, as the file's own header says ("a Store copy asks the STORE and never the canned answer"). The first agent's Slint plan (07e717e6, `host_duties.cpp` 170 to 178) returned `StoreDeferred` for `AskStore` (a Store copy asked nobody, the Store flow being unbuilt); the lane built the Store flow, so the plan now returns `StoreAsk`. Expectations in `src/slint/tests/test_slint_duties.cpp`:
+* BEFORE: `CHECK(updatePlanFor(false, false, true, true) == UpdatePlan::StoreDeferred);  // a Store copy never runs foxsdr-setup`
+  AFTER:  `CHECK(updatePlanFor(false, false, true, true) == UpdatePlan::StoreAsk);  // a Store copy asks the Store and never runs foxsdr-setup`
+* BEFORE: `CHECK(lines.size() == 4);` (four plan lines)
+  AFTER:  `CHECK(lines.size() == 5);` (the fifth plan, `StoreAsk`, has its own line)
+The line `CHECK(updatePlanFor(true, true, true, true) == UpdatePlan::StoreDeferred)` is unchanged (only a comment was added): a BOUNDED run of a Store copy with no canned Store answer still asks nobody. Two new checks: with the canned-answer seam a bounded Store copy gets `StoreAsk`; the seam on a copy that is not a Store copy changes nothing (`Hermetic`). The unticked-box expectation (`OffByChoice`, the Store included) is unchanged. So the first agent changed ONE existing expectation (plus the count of lines); the change brings the Slint window to what the old window does. A decision, not a mutation-checked one.
+
+### Stamp tests
+Run after the final build at the record commit: results are in the lane's final report (they cannot be inside the commit they test, because the stamp reads HEAD).
+
+### Notes for the merge
+* `src/core/lang_assets.hpp` and `docs/slint-drive-coverage.md` are GENERATED: at the merge take the other side's, run `python tools/embed-lang.py` and `python tools/slint_drive_ledger.py` again (the catalogues of this lane carry one new key, `Link this FoxSDR to tester %s?`).
+* Window gaps lane 2 put the Copy diagnostics effect in ONE function, `foxsdr::slintdiag::copyDiagnostics` (`src/slint/diag_copy.hpp`, on ITS branch). It is not copied here. TODAY the "did not close normally" dialog's Copy diagnostics key calls `Gaps1.diag-copy` -> `env.copyDiagnostics` (`main.cpp` 1745) -> `SystemEvents.diag-copy` -> `SystemPublisher::copyDiagnostics()` (`system_publish.cpp` 278: builds the bundle with `buildDiagnosticsBundle`, puts it on the clipboard unless the run is bounded, writes `diagnostics.txt` in the crash folder). At the merge that key (`main.cpp` 1745, `e.copyDiagnostics`) must call `foxsdr::slintdiag::copyDiagnostics`, as the Diagnostics body's key must.
 
 ### UNVERIFIED
 * The real Microsoft Store check and install (no Store copy; the canned `FOXSDR_FAKE_STORE_UPDATE` / `FOXSDR_FAKE_STORE_INSTALL` answers stood in) and that Windows' dialogs take the main window as owner.
@@ -73,4 +117,24 @@ All eight brief rows and the fault cards are done and committed (65e2c322, f5aea
 * The engine's real start notices for the fault cards (stood in by `FOXSDR_FAKE_FAULT_NOTICES`); RE-ENABLE was read back as the host's own record of the id it sent, not as the engine re-enabling a real plugin.
 * The "Sound is muted" question with a real muting plugin (a made-up plugin name; the two keys' engine commands are the plugin kit's own).
 * Open reports folder and the real clipboard in the live window (a bounded run opens no folder and keeps the clipboard text in a stand-in).
-* The 33 translations of the one new key are machine-made and unchecked. The Store key's full label is elided on the card (tooltip carries it). Frame cost and the clip sweep were not measured.
+* The 33 translations of the one new key are machine-made and unchecked. The Store key's full label is elided on the card (tooltip carries it). Frame cost was not measured (the clip sweep has since been run, see above).
+
+## OPEN ROWS FOR THE NEXT LANE
+
+| Id | What is missing | Lane that should take it |
+|---|---|---|
+| GG1-1 | The real Microsoft Store check and install on a Store copy (only the canned `FOXSDR_FAKE_STORE_UPDATE` / `_INSTALL` answers were run), and that Windows' dialogs take the main window as owner | mouse drive (needs a Store copy; owner) |
+| GG1-2 | The title rail's right-click and the real system menu on the frameless window (only the handle and the entry count were read on the hidden desktop) | mouse drive |
+| GG1-3 | The live site's answer to a tester link and the real link-request file written by the process boot (a canned name and a copy of the file's format stood in; nothing was sent) | Worker/site (the site's answer) and mouse drive |
+| GG1-4 | The engine's real start notices for the plugin fault cards and a real RE-ENABLE (stood in by `FOXSDR_FAKE_FAULT_NOTICES`; the id sent was read back, not the engine re-enabling a real plugin) | engine, then mouse drive |
+| GG1-5 | "Sound is muted" with a real muting plugin (a made-up name was used; the two keys' engine commands are the plugin kit's) | plugins, then mouse drive |
+| GG1-6 | "Open reports folder" and the real clipboard in the live window (a bounded run opens no folder, the clipboard text is a stand-in) | mouse drive |
+| GG1-7 | The 33 translations of `Link this FoxSDR to tester %s?` are machine-made and unchecked | owner decision (the translation pass) |
+| GG1-8 | The Store key's full label is elided on the card (the tooltip carries it); decide whether a wider card or a shorter label is wanted | screen |
+| GG1-9 | The tester usage RECORDER (queue of session reports, `testerUsagePending`) is not in the Slint window by design of the duties; the link prompt stores only the identity, so the "will be kept" variant of the legacy-code sentence is never reached | engine (and an owner decision whether the Slint window records) |
+| GG1-10 | At the merge: the "did not close normally" dialog's Copy diagnostics key (`main.cpp` 1745, `e.copyDiagnostics`, today `SystemEvents.diag-copy` -> `SystemPublisher::copyDiagnostics`, `system_publish.cpp` 278) must call `foxsdr::slintdiag::copyDiagnostics` (`src/slint/diag_copy.hpp`, window gaps lane 2's branch) | merge lane |
+| GG1-11 | At the merge: regenerate `src/core/lang_assets.hpp` (`python tools/embed-lang.py`) and `docs/slint-drive-coverage.md` (`python tools/slint_drive_ledger.py`) | merge lane |
+| GG1-12 | `keys.slint:285` (the spectrum toolbar's "Whole span" key runs past the window's right edge in Vietnamese, Russian, Estonian, Greek; 32 sweep items, every view; not this lane's) | screen |
+| GG1-13 | A build folder configured with `-DFOXSDR_SLINT_CLIP_PROBE=ON` makes `slint_drive_system-look` fail at `state look.width == 1600 -> FAILED: it is 800` (5 of 5); with it OFF the script passes. Cause not found (the probe's generated `main.h` shares the window's name); anyone who builds the probe should use a folder of its own | screen |
+| GG1-14 | Not break-it-checked: the system menu hand-over, the two "Sound is muted" scripts, the Store plan, the Markers table rows beyond the Copy key | screen |
+| GG1-15 | Frame cost of the new sheets and cards not measured | screen |
