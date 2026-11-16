@@ -3563,7 +3563,8 @@ private:
     bool hasListenerRecord_ = false;
 
     mutable WebRoom room_;
-    mutable LoginThrottle throttle_;
+    mutable LoginThrottle throttle_;           // the OWNER's door: failures and successes of owner sign-ins only
+    mutable LoginThrottle listenerThrottle_;   // the LISTENER door: kept apart so a listener's success can never clear the owner's count (R3)
 
     // HTTPS: the terminator in front of the plain server (null when off), the plain server's private loopback port, and the limits a test sets.
     std::unique_ptr<TlsTerminator> tls_;
@@ -3894,12 +3895,6 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
 
         const std::string client = clientAddress(req);
         const std::int64_t t = now();
-        if (!throttle_.allow(client, t)) {
-            res.set_header("Retry-After",
-                           std::to_string(throttle_.retryAfterSeconds(client, t)));
-            deny(res, "too many failed sign-in attempts; try again later", 429);
-            return;
-        }
 
         std::string user;
         std::string password;
@@ -3932,6 +3927,15 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
 
         std::string verifyError;
         const bool listenerAttempt = listenersOn && user != expectedUser;
+        // THE TWO DOORS HAVE TWO COUNTERS (R3). The door is known only now, so the limit is looked at here, before any password work. A
+        // listener's success clears the LISTENER counter only: the owner's failures from the same address stay, so a holder of the shared
+        // listener password cannot keep resetting the owner-password limit between guesses.
+        LoginThrottle& door = listenerAttempt ? listenerThrottle_ : throttle_;
+        if (!door.allow(client, t)) {
+            res.set_header("Retry-After", std::to_string(door.retryAfterSeconds(client, t)));
+            deny(res, "too many failed sign-in attempts; try again later", 429);
+            return;
+        }
         if (listenerAttempt) {
             // A BANNED ADDRESS never gets as far as a password: the ban is on the address the connection really came from. (It applies to
             // listener sign-ins only: a ban can never lock the owner out of their own receiver; the throttle covers the owner's door.)
@@ -3941,7 +3945,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                 return;
             }
             if (!verifyPassword(password, listenerRecord, verifyError)) {
-                throttle_.recordFailure(client, t);
+                listenerThrottle_.recordFailure(client, t);
                 deny(res, "wrong user name or password", 401);
                 return;
             }
@@ -3975,7 +3979,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                     deny(res, "could not create a session (" + issueError + ")", 500);
                     return;
             }
-            throttle_.recordSuccess(client);
+            listenerThrottle_.recordSuccess(client);
             res.set_header("Set-Cookie", std::string(kCookieName) + "=" + token + cookieAttributes(secure));
             nlohmann::json j;
             j["ok"] = true;
@@ -4666,6 +4670,7 @@ bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {
         room_.configure(rc);   // (empties the room: sessions, bans, chat, note and audit never survive a restart)
     }
     throttle_.clear();
+    listenerThrottle_.clear();
 
     // HTTPS: the certificate is made or found BEFORE anything is bound, so a certificate that cannot be had fails the start cleanly.
     std::unique_ptr<TlsTerminator> tls;

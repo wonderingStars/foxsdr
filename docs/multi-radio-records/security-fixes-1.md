@@ -9,6 +9,7 @@ The machine was kept quiet: `--parallel 3`, only the suites that cover the chang
 | Finding | Verdict | Fix | Proof |
 |---|---|---|---|
 | R1 (Host and Origin never checked; password-less server drivable) | FIXED | `src/net/web_guard.{hpp,cpp}` (pure rules) called from the server's pre-routing handler: a foreign `Host` is 421, a foreign `Origin` 403, on every route. A server with no password is read-only (`/api/control` and the four bookmark change routes answer 403 with a sentence; `/api/session` carries `readOnly`; the page shows the sentence in a badge). | `test_web_guard` (52 checks, pure rules + fuzz); `test_web_server` R1 tests (foreign Host on ten GET routes and a POST; foreign and `null` Origin; no Origin from a tool still works signed in; listed origin reads but never changes; read-only on nine control bodies and four bookmark routes; with a password not read-only). Break-it: guard call removed -> 5 reds (foreign Host 421 checks); read-only rule removed -> 33 reds. Both restored, green (1291 checks). |
+| R3 (listener sign-in clears the owner throttle) | FIXED | `web_server.cpp`: `listenerThrottle_` beside `throttle_`; the door is decided after the body is read and each door consults, records and clears only its own counter. | `test_web_secure` `testListenerSuccessDoesNotResetTheOwnerThrottle` (20 checks). Break-it: listener success clears the owner counter -> 2 reds (the 429 checks); restored, 813 checks green. |
 
 ## R1: is 0.99.104 affected?
 
