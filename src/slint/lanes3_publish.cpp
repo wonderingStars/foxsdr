@@ -440,6 +440,9 @@ struct LaneS3Publisher::Impl {
             const std::string hdr = fact("radio." + rn() + ".file.header");
             if (hdr == "1") { v.push_back(rReadout(tr("Centre frequency"), tr("taken from the file's own header"))); }
         }
+        // The raw-file and waterfall rows are many: they are folded away (the Source section is open at every start, and the sections below it must stay in reach).
+        tickD(v, "src.fold", tr("Raw files and the whole-file waterfall"), false, tr("Opens the rows that play a file with no header and make one picture of a whole recording."));
+        if (!bv("src.fold", false)) { endNote(v, kSource); return; }
         // ---- a raw file: it has no header, so the format and the rate are stated here
         v.push_back(rHeading(tr("Open a raw I/Q file")));
         v.push_back(rNote(tr("A raw file holds only samples. Say how they are stored and the rate they were recorded at. A wrong guess plays as noise, never harms anything.")));

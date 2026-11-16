@@ -2,6 +2,7 @@
 # s3-overview (screen lane S3, docs/multi-radio-records/screen-s3-recplay.md; G3-14b): the whole-file waterfall is made on its own thread from a file the person names, with a picture of the size asked for; a missing file and a row count out of range are refused in words.
 10 state running == 1
 state s3.ov.state == idle
++1 click "Raw files and the whole-file waterfall"
 # rows out of range: refused on the screen, nothing started
 +1 type "Recording (full path)" "{fixtures}/s3-play.wav"
 +1 key enter

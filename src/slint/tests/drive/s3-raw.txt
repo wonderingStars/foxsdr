@@ -2,6 +2,7 @@
 # s3-raw (screen lane S3, docs/multi-radio-records/screen-s3-recplay.md; G3-13): a raw cu8 file has no header, so the person states the format and rate and the radio plays it. The rate and length are read back from the radio's own state; a wrong path is refused in the engine's words.
 10 state running == 1
 state s3.play.rate == 48000
++1 click "Raw files and the whole-file waterfall"
 # a rate that is not a number is refused on the screen
 +1 type "Raw file (full path)" "{fixtures}/s3-raw.cu8"
 +1 key enter
