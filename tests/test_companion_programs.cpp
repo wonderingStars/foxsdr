@@ -877,6 +877,73 @@ void testHostile() {
     fs::remove_all(dir);
 }
 
+// ---- C11 ---------------------------------------------------------------------------------------------------------------------------------
+// THE REAL PROGRAMS (optional): when FOXSDR_COMPANIONS_COLLECTED names the folder installer/msix/collect-companions.ps1 made, every real built companion program goes
+// through the Store copy's path (package list -> copy into helpers/ -> record -> the check before every start). Nothing is run: the programs are black boxes whose bytes are
+// hashed and whose image is looked at, never started. Skipped, and said so, when the variable is not set.
+void testRealPrograms() {
+    const char* env = std::getenv("FOXSDR_COMPANIONS_COLLECTED");
+    if (env == nullptr || *env == '\0') {
+        std::printf("[C11] the real programs: SKIPPED (FOXSDR_COMPANIONS_COLLECTED is not set)\n");
+        return;
+    }
+    std::printf("[C11] the real programs from %s\n", env);
+    const fs::path collected(env);
+    std::string manifestText = slurp(collected / "companions.manifest.json");
+    if (manifestText.size() >= 3 && static_cast<unsigned char>(manifestText[0]) == 0xEF) { manifestText.erase(0, 3); }   // a UTF-8 byte-order mark
+    const nlohmann::json manifest = nlohmann::json::parse(manifestText, nullptr, false);
+    CHECK(manifest.is_object() && manifest.contains("companions") && manifest["companions"].is_array());
+    if (!manifest.is_object() || !manifest.contains("companions")) { return; }
+    const fs::path pkg = g_dir / "c11-package";
+    const fs::path dir = g_dir / "c11";
+    fs::remove_all(pkg);
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    nlohmann::json list = nlohmann::json::array();
+    int count = 0;
+    for (const nlohmann::json& c : manifest["companions"]) {
+        const std::string folder = c["folder"].get<std::string>();
+        const std::string file = c["file"].get<std::string>();
+        CHECK(folder != "hfserial" && folder != "dvframes");
+        std::error_code ec;
+        fs::create_directories(pkg / folder, ec);
+        fs::copy_file(collected / folder / file, pkg / folder / file, fs::copy_options::overwrite_existing, ec);
+        std::string h, e2;
+        CHECK(PluginRepo::sha256File((pkg / folder / file).string(), h, e2));
+        list.push_back({{"id", "companion-" + folder}, {"file", file}, {"path", folder + "/" + file}, {"sha256", h}, {"size", fs::file_size(pkg / folder / file, ec)}});
+        ++count;
+    }
+    put(pkg / "companions.json", nlohmann::json({{"version", 1}, {"programs", list}}).dump());
+    cp::setPackagedForTest(1, pkg);
+    int installed = 0;
+    World w;
+    for (const nlohmann::json& c : manifest["companions"]) {
+        const std::string folder = c["folder"].get<std::string>();
+        const std::string file = c["file"].get<std::string>();
+        // the catalogue row for it: unpublished (the package is the authority), bridge named as the catalogue names it
+        const std::string dllName = std::string("companion-") + folder + "-0.1.2-abi3-" + PluginRepo::hostOs() + "-" + PluginRepo::hostArch() + TEST_MODULE_EXT;
+        const std::string dllUrl = "https://dl.example.invalid/plugins/" + dllName;
+        w.files[dllUrl] = "bridge " + folder;
+        const std::string doc = std::string("{\"schemaVersion\":1,\"plugins\":[{\"id\":\"companion-") + folder + "\",\"name\":\"Companion " + folder + "\",\"version\":\"0.1.2\",\"licence\":\"MIT\",\"abiVersion\":" +
+                                std::to_string(CASCADE_PLUGIN_ABI_VERSION) + ",\"category\":\"companions\",\"companion\":{\"upstream\":\"x\",\"licence\":\"GPL\",\"whySeparate\":\"x\",\"program\":{\"file\":\"" + file +
+                                "\",\"url\":\"\",\"sha256\":\"\",\"status\":\"unpublished\"}},\"platforms\":[{\"os\":\"" + PluginRepo::hostOs() + "\",\"arch\":\"" + PluginRepo::hostArch() + "\",\"file\":\"" + dllName +
+                                "\",\"url\":\"" + dllUrl + "\",\"sha256\":\"" + sha("bridge " + folder) + "\"}]}]}";
+        std::string err;
+        const bool ok = installOne(w, doc, dir, err);
+        if (!ok) { std::printf("      %s: %s\n", folder.c_str(), err.c_str()); }
+        CHECK(ok);
+        if (ok) {
+            ++installed;
+            CHECK(cp::checkBeforeStart((dir / dllName).string()).allowed);
+            CHECK(slurp(dir / "helpers" / file) == slurp(collected / folder / file));
+        }
+    }
+    CHECK(installed == count && count >= 18);
+    CHECK(w.hits == count);   // one request per bridge and NOT ONE for a program: the packaged path asks the transport for nothing else
+    std::printf("      %d real programs installed through the package path and checked before a start\n", installed);
+    cp::setPackagedForTest(-1);
+}
+
 }  // namespace
 
 int main() {
@@ -899,6 +966,7 @@ int main() {
     testRecord();
     testStates();
     testHostile();
+    testRealPrograms();
     cp::setPackagedForTest(-1);
     fs::remove_all(g_dir, ec);
     return testSummary("test_companion_programs");

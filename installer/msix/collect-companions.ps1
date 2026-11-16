@@ -7,7 +7,7 @@
 # it takes the BUILT program from the build folder (Release output of that copy's README commands) and copies, beside it, the legal TEXT files of that folder: every file whose
 # NAME says it is a licence, a copying notice, a notice, a third-party list, a trademark note, an additional-terms file or the upstream statement (UPSTREAM.md: the project it
 # is built from, the commit, the licence and the changes made). It selects files by NAME and EXTENSION only. It opens no source file and copies none: a source file extension
-# (c, cc, cpp, h, hpp, py, cmake, inc, sh, bat, json, ...) is never copied, whatever its name.
+# (c, cc, cpp, h, hpp, py, cmake, inc, sh, bat, json, ...) is never copied, whatever its name. (COPYING.LIB is the LGPL text of hfdl's libfec, not a library.)
 #
 # hfserial (AGPL, held out by the owner) and dvframes (held out of the public copy) are never collected, by name, whether or not a folder of that name exists.
 #
@@ -35,7 +35,7 @@ function Fail([string] $text) { throw "collect-companions: $text" }
 
 $Held = @("hfserial", "dvframes")
 $LegalName = '(?i)(licen[cs]e|copying|notice|third[_-]?party|trademark|additional-terms|upstream|copyright)'
-$SourceExt = @(".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inc", ".in", ".py", ".cmake", ".sh", ".bat", ".cmd", ".ps1", ".json", ".exe", ".dll", ".lib", ".obj", ".o", ".a", ".s", ".asm", ".rs", ".go", ".js", ".pl", ".txt.in")
+$SourceExt = @(".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inc", ".in", ".py", ".cmake", ".sh", ".bat", ".cmd", ".ps1", ".json", ".exe", ".dll", ".obj", ".o", ".a", ".s", ".asm", ".rs", ".go", ".js", ".pl", ".txt.in")
 $SkipDirs = @("test", "tests", "build", ".git", "patches")
 
 if (-not (Test-Path -LiteralPath $SourceDir)) { Fail "source copy not found: $SourceDir" }
@@ -73,7 +73,7 @@ foreach ($dir in (Get-ChildItem -LiteralPath $SourceDir -Directory | Sort-Object
     if (-not (Test-Path -LiteralPath $manifestFile)) { continue }
     if ($Held -contains $folder.ToLowerInvariant()) { Write-Host "    skipped (held out): $folder"; continue }
     $meta = [System.IO.File]::ReadAllText($manifestFile, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
-    $exe = [string]$meta.executable
+    $exe = $(if ($meta.PSObject.Properties['executable']) { [string]$meta.executable } else { "" })
     if ([string]::IsNullOrWhiteSpace($exe) -or $exe -notmatch '^[A-Za-z0-9._-]+\.exe$') { Fail "$folder : its manifest names no usable executable ($exe)" }
     $built = @(Get-ChildItem -LiteralPath $BuildDir -Recurse -File -Filter $exe -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '(?i)[\\/]Release[\\/]' })
     if ($built.Count -eq 0) { Fail "$folder : the built program $exe was not found under $BuildDir (a Release build of the source copy)" }
@@ -109,8 +109,8 @@ foreach ($dir in (Get-ChildItem -LiteralPath $SourceDir -Directory | Sort-Object
         folder   = $folder
         id       = "companion-" + $folder
         file     = $exe
-        licence  = [string]$meta.licence
-        upstream = [string]$meta.upstream
+        licence  = $(if ($meta.PSObject.Properties['licence']) { [string]$meta.licence } else { "" })
+        upstream = $(if ($meta.PSObject.Properties['upstream']) { [string]$meta.upstream } else { "" })
         decodes  = $(if ($decodes.ContainsKey($folder)) { $decodes[$folder] } else { "" })
     }
     Write-Host ("    {0,-12} {1,-22} {2,3} legal file(s)" -f $folder, $exe, $legalCount)

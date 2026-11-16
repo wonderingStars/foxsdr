@@ -15,7 +15,8 @@ state store.companion contains "PROGRAM: multimon-helper.exe  -  Fitting the plu
 # the same lines are DRAWN: the window's own controls carry them
 expect "UPSTREAM PROJECT: multimon-ng" label contains "multimon-ng"
 expect "PROGRAM LICENCE: GPL-2.0-or-later" label contains "GPL-2.0-or-later"
-expect "SOURCE CODE: https://github.com/wonderingStars/foxsdr-companions" label contains "wonderingStars/foxsdr-companions"
+# the source address is selectable text (a read-only field), labelled by its name; the value is read back through the model line above
+expect "SOURCE CODE" label contains "SOURCE CODE"
 # the maker's notice comes first: GET is greyed until it is ticked, then it answers (the transfer itself is withheld in a bounded run)
 state store.keyEnabled == 0
 +1 click "I have read the maker's notice"
