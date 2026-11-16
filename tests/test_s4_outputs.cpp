@@ -470,6 +470,131 @@ void testMqtt() {
     CHECK(!h4.stats().mqttProblem.empty());
 }
 
+
+cascade::core::powerlog::Record level(double dbfs) {
+    cascade::core::powerlog::Record r;
+    r.unixNs = 1794414024123000000LL;
+    r.radio = 1;
+    r.frequencyHz = 100.0e6;
+    r.signalDbfs = dbfs;
+    return r;
+}
+
+void testInflux() {
+    namespace pl = cascade::core::powerlog;
+    // off: never due, nothing sent
+    {
+        s4::Hub h;
+        CHECK(!h.levelsDue(1000000));
+        h.offerLevel(level(-50.0), 1000000);
+        CHECK(h.stats().influxOk == 0 && h.stats().influxFailed == 0);
+    }
+    // a stand-in sender: the line, the target (the token reaches the sender, never the stats), the interval, a failure, a record offered while one is in flight
+    {
+        s4::Hub h;
+        std::mutex mu;
+        std::vector<std::string> lines;
+        std::string token, host;
+        std::atomic<bool> fail{false};
+        std::atomic<bool> hold{false};
+        h.setInfluxSender([&](const pl::InfluxTarget& t, const std::vector<std::string>& l) {
+            while (hold) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+            std::lock_guard<std::mutex> lk(mu);
+            for (const auto& x : l) { lines.push_back(x); }
+            token = t.token;
+            host = t.host;
+            pl::SendResult r;
+            r.ok = !fail;
+            r.error = fail ? "HTTP 401" : "";
+            return r;
+        });
+        s4::Config c;
+        c.influx = true;
+        c.influxToken = "tok-unique-123";
+        c.influxEveryS = 10;
+        h.configure(c);
+        CHECK(h.levelsDue(0) && h.levelsDue(5000));
+        h.offerLevel(level(-42.5), 100000);
+        CHECK(h.drain(5000));
+        CHECK(!h.levelsDue(100000) && !h.levelsDue(109999) && h.levelsDue(110000));   // the interval is counted from the offer: 10 s
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            CHECK(lines.size() == 1 && lines[0].find("foxsdr_signal,radio=1") == 0 && lines[0].find("signal_dbfs=-42.5") != std::string::npos);
+            CHECK(token == "tok-unique-123" && host == "127.0.0.1");
+        }
+        CHECK(h.stats().influxOk == 1 && h.stats().influxProblem.empty());
+        fail = true;
+        h.offerLevel(level(-40.0), 200000);
+        CHECK(h.drain(5000));
+        CHECK(h.stats().influxFailed == 1 && h.stats().influxProblem == "HTTP 401" && h.stats().influxProblem.find("tok-unique") == std::string::npos);
+        fail = false;
+        hold = true;
+        h.offerLevel(level(-41.0), 300000);          // in flight
+        h.offerLevel(level(-41.5), 300500);          // dropped and counted
+        CHECK(h.stats().hookDropped >= 1);
+        hold = false;
+        CHECK(h.drain(5000));
+        CHECK(h.stats().influxOk == 2);
+    }
+    // a setting the sender could not use: said at once, and nothing is due
+    {
+        s4::Hub h;
+        s4::Config c;
+        c.influx = true;
+        c.influxBucket = "bad bucket";
+        h.configure(c);
+        CHECK(h.stats().influxProblem.rfind("settings:", 0) == 0 && !h.levelsDue(100000000));
+        s4::Hub h2;
+        c.influxBucket = "ok";
+        c.influxHost = "a b";
+        h2.configure(c);
+        CHECK(h2.stats().influxProblem.rfind("settings:", 0) == 0);
+        CHECK(!s4::checkInfluxText("", false).empty() && s4::checkInfluxText("", true).empty() && !s4::checkInfluxText(std::string(65, 'x'), true).empty() && s4::checkInfluxText(std::string(64, 'x'), true).empty());
+    }
+    // the real UDP sender to a socket of this test on 127.0.0.1: one datagram holds the line
+    {
+        pld::ensureNet();
+        pld::sock_t us = ::socket(AF_INET, SOCK_DGRAM, 0);
+        CHECK(!pld::badSock(us));
+        sockaddr_in a{};
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        a.sin_port = 0;
+        CHECK(::bind(us, reinterpret_cast<sockaddr*>(&a), sizeof a) == 0);
+#if defined(_WIN32)
+        int len = sizeof a;
+#else
+        socklen_t len = sizeof a;
+#endif
+        ::getsockname(us, reinterpret_cast<sockaddr*>(&a), &len);
+        s4::Hub h;
+        s4::Config c;
+        c.influx = true;
+        c.influxHttp = false;
+        c.influxPort = ntohs(a.sin_port);
+        h.configure(c);
+        h.offerLevel(level(-33.0), 1000);
+        CHECK(h.drain(5000));
+        fd_set r;
+        FD_ZERO(&r);
+        FD_SET(us, &r);
+        timeval tv{3, 0};
+#if defined(_WIN32)
+        const int ready = ::select(0, &r, nullptr, nullptr, &tv);
+#else
+        const int ready = ::select(us + 1, &r, nullptr, nullptr, &tv);
+#endif
+        CHECK(ready > 0);
+        if (ready > 0) {
+            char buf[2048];
+            const int n = ::recv(us, buf, sizeof buf, 0);
+            CHECK(n > 0 && std::string(buf, static_cast<std::size_t>(n)).find("signal_dbfs=-33") != std::string::npos);
+        }
+        CHECK(h.stats().influxOk == 1);
+        pld::closeSock(us);
+    }
+}
+
 void testConfigChange() {
     // a change of a setting re-applies; the same configuration again is a no-op; stop() returns the hub to off
     s4::Hub h;
@@ -495,6 +620,7 @@ int main() {
     testAlerts();
     testWebhook();
     testMqtt();
+    testInflux();
     testConfigChange();
     return testSummary("test_s4_outputs");
 }

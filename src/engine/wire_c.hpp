@@ -107,6 +107,7 @@ public:
     cascade::engine::s4::Hub outputs;     // screen lane S4: the decoded-text feed sent to MQTT / a webhook, and the keyword alerts (off until the user turns one on)
     std::uint64_t outputsSeq = 0;         // the host event ring's sequence the outputs have read up to
     std::uint64_t outputsSettingsVersion = 0;   // the settings version the outputs were last configured from
+    std::int64_t outputsInfluxMs = 0;     // the clock the level output's interval is counted on
     std::string outputsStatSig;           // what the last published outputs facts counted
     bool outputsLive = false;             // the outputs were on at the last pass (the first pass after they come on starts from the ring's present end: no backlog is sent)
     RadioInfoFollow radioInfo;            // the radio information followed (row H6)

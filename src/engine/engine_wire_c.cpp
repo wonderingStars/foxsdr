@@ -237,6 +237,10 @@ void Engine::wireCFacts(const std::function<void(const std::string&, const std::
         fact("out.webhook.dropped", std::to_string(o.hookDropped));
         fact("out.webhook.problem", o.hookProblem);
         fact("out.webhook.scope", s.settings().getBool("out.webhook.enabled") ? cascade::engine::s4::hookScope(s.settings().get("out.webhook.url")) : std::string());
+        fact("out.influx.ok", std::to_string(o.influxOk));
+        fact("out.influx.failed", std::to_string(o.influxFailed));
+        fact("out.influx.problem", o.influxProblem);
+        fact("out.influx.scope", s.settings().getBool("out.influx.enabled") ? cascade::engine::s4::mqttScope(s.settings().get("out.influx.host"), !s.settings().get("out.influx.token").empty()) : std::string());
         fact("alerts.raised", std::to_string(o.alertsRaised));
         fact("alerts.notified", std::to_string(o.notified));
         fact("alerts.notify_failed", std::to_string(o.notifyFailed));
@@ -493,6 +497,14 @@ void Engine::pumpWireC() {
             c.hook = s.settings().getBool("out.webhook.enabled");
             c.hookUrl = s.settings().get("out.webhook.url");
             c.hookAlerts = s.settings().get("out.webhook.send") == "alerts";
+            c.influx = s.settings().getBool("out.influx.enabled");
+            c.influxHost = s.settings().get("out.influx.host");
+            c.influxPort = static_cast<int>(s.settings().getInt("out.influx.port"));
+            c.influxHttp = s.settings().get("out.influx.mode") != "udp";
+            c.influxOrg = s.settings().get("out.influx.org");
+            c.influxBucket = s.settings().get("out.influx.bucket");
+            c.influxToken = s.settings().get("out.influx.token");
+            c.influxEveryS = static_cast<int>(s.settings().getInt("out.influx.every_s"));
             c.alerts = s.settings().getBool("alerts.enabled");
             c.keywords = s.settings().get("alerts.keywords");
             c.alertGapS = static_cast<int>(s.settings().getInt("alerts.gap_s"));
@@ -523,11 +535,24 @@ void Engine::pumpWireC() {
             s.outputsLive = false;
         }
         {
+            // the level output: the selected radio's channel power, read only when one is due
+            const std::int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (s.outputs.levelsDue(nowMs)) {
+                cascade::core::powerlog::Record rec;
+                rec.unixNs = static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+                rec.radio = static_cast<int>(tlsScopeEngine_ == this ? tlsScopeSlot_ : 0u) + 1;
+                rec.frequencyHz = currentAbsoluteHz();
+                const double level = static_cast<double>(rx().pipeline_.signalPowerDb());
+                if (std::isfinite(level) && level > -199.0) { rec.signalDbfs = level; }
+                s.outputs.offerLevel(rec, nowMs);
+            }
+        }
+        {
             // the facts above move with counts: a changed figure moves the fingerprint (as the RDS log's does)
             const s4::Stats o = s.outputs.stats();
             const std::string sig = std::to_string(o.seen) + "|" + std::to_string(o.mqttOffered) + "|" + o.mqttState + "|" + o.mqttProblem + "|" + std::to_string(o.hookOk) + "|" +
                                     std::to_string(o.hookFailed) + "|" + std::to_string(o.hookDropped) + "|" + o.hookProblem + "|" + std::to_string(o.alertsRaised) + "|" +
-                                    std::to_string(o.notified) + "|" + std::to_string(o.notifyFailed) + "|" + o.alertProblem + "|" + o.notifyProblem;
+                                    std::to_string(o.notified) + "|" + std::to_string(o.notifyFailed) + "|" + o.alertProblem + "|" + o.notifyProblem + "|" + std::to_string(o.influxOk) + "|" + std::to_string(o.influxFailed) + "|" + o.influxProblem;
             if (sig != s.outputsStatSig) {
                 s.outputsStatSig = sig;
                 ++wireCVersion_;

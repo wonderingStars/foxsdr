@@ -1,0 +1,31 @@
+#! frames=900 size=1600x900 bank=2 sections=2:3
+# s4-scan (screen lane S4, row G2-46): "Save each signal the scan stops on as a bookmark" under the Scanner body. It is OFF at every start; while it is off a scan that stops on a signal adds nothing. Switched on, a range scan
+# on the generator (its squelch open, so the scan stops on the first point) adds that frequency to the bookmarks: the bookmark count is read back FROM THE ENGINE.
+10 state running == 1
++1 state s4.auto == 0
++1 state count.bookmarks == 0
++1 type "Start MHz" "100.2"
++1 key enter
++1 type "Stop MHz" "100.4"
++1 key enter
++1 type "Step kHz" "100"
++1 key enter
++1 type "Dwell ms" "300"
++1 key enter
++1 click "Start scan"
++40 state scanner >= 1
++30 state s4.saved == 0
++1 state count.bookmarks == 0
++1 click "Stop scan"
++30 state scanner == 0
+# switched on: the next scan that stops on a signal saves it
++1 click "Save each signal the scan stops on as a bookmark"
++3 state s4.auto == 1
++1 click "Start scan"
++60 state s4.saved >= 1
++1 state count.bookmarks >= 1
++1 click "Stop scan"
++30 state scanner == 0
+# switched off again
++1 click "Save each signal the scan stops on as a bookmark"
++3 state s4.auto == 0

@@ -105,6 +105,13 @@ std::string checkMqttTopic(const std::string& topic) {
     return std::string();
 }
 
+std::string checkInfluxText(const std::string& text, bool mayBeEmpty) {
+    if (text.empty()) { return mayBeEmpty ? std::string() : std::string("this is needed"); }
+    if (text.size() > 64) { return "at most 64 bytes"; }
+    if (hasControlByte(text) || text.find(' ') != std::string::npos) { return "no spaces or control characters"; }
+    return std::string();
+}
+
 bool isLoopbackHost(const std::string& host) {
     const std::string h = lowerOf(host);
     return h == "localhost" || h == "::1" || h == "[::1]" || h.rfind("127.", 0) == 0;
@@ -141,6 +148,48 @@ void Hub::setPoster(Poster p) {
 bool Hub::active() const {
     std::lock_guard<std::mutex> lk(m_);
     return cfg_.mqtt || cfg_.hook || cfg_.alerts;
+}
+
+void Hub::setInfluxSender(InfluxSender f) {
+    std::lock_guard<std::mutex> lk(m_);
+    influxSender_ = std::move(f);
+}
+
+bool Hub::levelsDue(std::int64_t nowMs) const {
+    std::lock_guard<std::mutex> lk(m_);
+    return cfg_.influx && st_.influxProblem.rfind("settings:", 0) != 0 && nowMs - lastInfluxMs_ >= static_cast<std::int64_t>(std::clamp(cfg_.influxEveryS, 1, 3600)) * 1000;
+}
+
+void Hub::offerLevel(const cascade::core::powerlog::Record& r, std::int64_t nowMs) {
+    Config c;
+    InfluxSender sender;
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        if (!cfg_.influx) { return; }
+        lastInfluxMs_ = nowMs;
+        if (influxBusy_) { ++st_.hookDropped; return; }   // the last record is still being sent: this one is dropped and counted with the others
+        influxBusy_ = true;
+        c = cfg_;
+        sender = influxSender_;
+    }
+    post([this, c, sender, r] {
+        cascade::core::powerlog::InfluxTarget t;
+        t.enabled = true;
+        t.http = c.influxHttp;
+        t.host = c.influxHost;
+        t.port = c.influxPort;
+        t.org = c.influxOrg;
+        t.bucket = c.influxBucket;
+        t.token = c.influxToken;
+        const std::vector<std::string> lines{cascade::core::powerlog::influxLine(r)};
+        cascade::core::powerlog::SendResult res;
+        if (sender) { res = sender(t, lines); }
+        else { res = c.influxHttp ? cascade::core::powerlog::sendHttp(t, lines) : cascade::core::powerlog::sendUdp(t, lines); }
+        std::lock_guard<std::mutex> lk(m_);
+        influxBusy_ = false;
+        if (res.ok) { ++st_.influxOk; st_.influxProblem.clear(); }
+        else { ++st_.influxFailed; st_.influxProblem = res.error.empty() ? "no answer" : res.error; }   // the sender's sentence never holds the token
+    });
 }
 
 Stats Hub::stats() const {
@@ -223,13 +272,21 @@ void Hub::configure(const Config& c) {
             applyMqtt(c);
         }
         if (first || old.alerts != c.alerts || old.keywords != c.keywords || old.alertGapS != c.alertGapS) { applyAlerts(c); }
+        st_.influxProblem.clear();
+        if (c.influx) {
+            std::string why = checkMqttHost(c.influxHost);
+            if (why.empty()) { why = checkInfluxText(c.influxBucket, false); }
+            if (why.empty()) { why = checkInfluxText(c.influxOrg, true); }
+            if (why.empty() && (c.influxPort < 1 || c.influxPort > 65535)) { why = "the port is 1 to 65535"; }
+            if (!why.empty()) { st_.influxProblem = "settings: " + why; }
+        }
         st_.hookProblem.clear();
         if (c.hook) {
             const std::string why = checkWebhookUrl(c.hookUrl);
             if (!why.empty()) { st_.hookProblem = why; }
             else if (c.hookUrl.empty()) { st_.hookProblem = "an address is needed"; }
         }
-        startWorker = c.hook || (c.alerts && c.alertNotify);
+        startWorker = c.hook || c.influx || (c.alerts && c.alertNotify);
     }
     if (startWorker) {
         std::lock_guard<std::mutex> lk(qm_);
@@ -293,6 +350,7 @@ void Hub::stop() {
     if (mqtt_) { mqtt_->stop(); mqtt_.reset(); }
     cfg_ = Config{};
     configured_ = false;
+    influxBusy_ = false;
 }
 
 void Hub::ingest(const std::vector<Event>& events) {

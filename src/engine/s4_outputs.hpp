@@ -32,6 +32,7 @@
 #include "core/alert_rules.hpp"
 #include "core/decode_webhook.hpp"
 #include "core/mqtt_publisher.hpp"
+#include "core/power_log.hpp"
 
 namespace cascade::engine::s4 {
 
@@ -58,6 +59,13 @@ struct Config {
     bool hook = false;
     std::string hookUrl;
     bool hookAlerts = false;
+    // InfluxDB: the signal level of the selected radio, as line protocol, every `influxEveryS` seconds (UDP datagrams or an HTTP write; no TLS: the answer for a broker or database on another computer is the user's own proxy)
+    bool influx = false;
+    std::string influxHost = "127.0.0.1";
+    int influxPort = 8086;
+    bool influxHttp = true;
+    std::string influxOrg, influxBucket = "foxsdr", influxToken;
+    int influxEveryS = 10;
     // keyword alerts
     bool alerts = false;
     std::string keywords;           // one keyword or phrase per line
@@ -66,7 +74,8 @@ struct Config {
     bool operator==(const Config& o) const {
         return mqtt == o.mqtt && mqttHost == o.mqttHost && mqttPort == o.mqttPort && mqttTopic == o.mqttTopic && mqttUser == o.mqttUser && mqttPassword == o.mqttPassword &&
                mqttAlerts == o.mqttAlerts && hook == o.hook && hookUrl == o.hookUrl && hookAlerts == o.hookAlerts && alerts == o.alerts && keywords == o.keywords &&
-               alertGapS == o.alertGapS && alertNotify == o.alertNotify;
+               alertGapS == o.alertGapS && alertNotify == o.alertNotify && influx == o.influx && influxHost == o.influxHost && influxPort == o.influxPort && influxHttp == o.influxHttp &&
+               influxOrg == o.influxOrg && influxBucket == o.influxBucket && influxToken == o.influxToken && influxEveryS == o.influxEveryS;
     }
 };
 
@@ -77,8 +86,9 @@ struct Stats {
     std::uint64_t mqttOffered = 0, mqttRejected = 0;
     std::uint64_t hookQueued = 0, hookOk = 0, hookFailed = 0, hookDropped = 0;
     std::uint64_t alertsRaised = 0, notified = 0, notifyFailed = 0;
+    std::uint64_t influxOk = 0, influxFailed = 0;
     std::string mqttState;              // "", "off", "connecting", "connected"
-    std::string mqttProblem, hookProblem, alertProblem, notifyProblem;   // one sentence each, "" = none
+    std::string mqttProblem, hookProblem, alertProblem, notifyProblem, influxProblem;   // one sentence each, "" = none
 };
 
 // What a keyword list comes to: the keywords kept (trimmed, empty lines and repeats dropped, at most kMaxKeywords, each at most 120 bytes) and the problem found, if any.
@@ -96,6 +106,8 @@ std::string checkWebhookUrl(const std::string& url);
 std::string checkMqttHost(const std::string& host);
 // An MQTT topic name: valid UTF-8, no wildcard, 1 to 200 bytes; "" = fine.
 std::string checkMqttTopic(const std::string& topic);
+// An InfluxDB host: as an MQTT host. An organisation or bucket: 1 to 64 bytes, no control character or space ("" is allowed for the organisation: version 1 databases have none).
+std::string checkInfluxText(const std::string& text, bool mayBeEmpty);
 // True when `host` is this computer (127.x, ::1, localhost).
 bool isLoopbackHost(const std::string& host);
 // The sentence that says who can read what is sent: "this computer only" or the unencrypted warning.
@@ -118,6 +130,13 @@ public:
     void configure(const Config& c);
     // Hands over the new events (any number, in order). Cheap and allocation-light while every switch is off.
     void ingest(const std::vector<Event>& events);
+    // The level output: true when it is on and `everyS` seconds have passed since the last one (nowMs: any steady clock, in milliseconds). The engine's pass calls it, and only then reads a level.
+    bool levelsDue(std::int64_t nowMs) const;
+    // Hands the record to the sender (a worker); one at a time: a record offered while the last is still being sent is dropped and counted.
+    void offerLevel(const cascade::core::powerlog::Record& r, std::int64_t nowMs);
+    // A stand-in for the Influx sender (tests): empty = the real one (UDP or HTTP to the host named).
+    using InfluxSender = std::function<cascade::core::powerlog::SendResult(const cascade::core::powerlog::InfluxTarget&, const std::vector<std::string>&)>;
+    void setInfluxSender(InfluxSender f);
     // Whether any output or alert is switched on (the engine skips reading the ring while this is false).
     bool active() const;
     Stats stats() const;
@@ -143,6 +162,9 @@ private:
     std::vector<std::string> recent_;
     std::shared_ptr<cascade::core::alerts::NotificationSink> sink_;
     Poster poster_;
+    InfluxSender influxSender_;
+    std::int64_t lastInfluxMs_ = -1000000000;
+    bool influxBusy_ = false;
 
     std::mutex qm_;
     std::condition_variable qcv_;

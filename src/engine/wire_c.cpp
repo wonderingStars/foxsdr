@@ -72,6 +72,14 @@ constexpr Spec kSpecs[] = {
     {"out.webhook.enabled", Kind::Bool, 0, 0, "0", ""},         // post every decoded line (or only the alerts) to a web address: https, or http on this computer only
     {"out.webhook.url", Kind::Text, 0, 2048, "", ""},           // SECRET (protected store): the address may carry a token
     {"out.webhook.send", Kind::Choice, 0, 0, "decodes", "decodes|alerts"},
+    {"out.influx.enabled", Kind::Bool, 0, 0, "0", ""},          // write the selected radio's signal level to an InfluxDB (line protocol), every out.influx.every_s seconds
+    {"out.influx.host", Kind::Text, 0, 253, "127.0.0.1", ""},   // this computer unless the user types another host (no encryption on the way: the token crosses the network as it is)
+    {"out.influx.port", Kind::Int, 1, 65535, "8086", ""},
+    {"out.influx.mode", Kind::Choice, 0, 0, "http", "http|udp"},
+    {"out.influx.org", Kind::Text, 0, 64, "", ""},
+    {"out.influx.bucket", Kind::Text, 0, 64, "foxsdr", ""},
+    {"out.influx.token", Kind::Text, 0, 256, "", ""},           // SECRET (protected store)
+    {"out.influx.every_s", Kind::Int, 1, 3600, "10", ""},
     {"alerts.enabled", Kind::Bool, 0, 0, "0", ""},              // raise an alert when a decoded line holds one of the keywords
     {"alerts.keywords", Kind::Text, 0, 4000, "", ""},           // one keyword or phrase per line, at most 64
     {"alerts.gap_s", Kind::Int, 0, 3600, "30", ""},             // the same keyword again within this many seconds is not raised again
@@ -121,6 +129,10 @@ std::string extraRule(const std::string& key, const std::string& value) {
     }
     if (key == "out.mqtt.host" && !value.empty()) { return cascade::engine::s4::checkMqttHost(value); }
     if (key == "out.mqtt.topic") { return cascade::engine::s4::checkMqttTopic(value); }
+    if (key == "out.influx.host" && !value.empty()) { return cascade::engine::s4::checkMqttHost(value); }
+    if (key == "out.influx.bucket") { return cascade::engine::s4::checkInfluxText(value, false); }
+    if (key == "out.influx.org") { return cascade::engine::s4::checkInfluxText(value, true); }
+    if (key == "out.influx.token" && value.find_first_of("\r\n") != std::string::npos) { return "the token has a line break"; }
     if (key == "out.webhook.url") { return cascade::engine::s4::checkWebhookUrl(value); }
     if (key == "alerts.keywords") { return cascade::engine::s4::parseKeywords(value).problem; }
     if (key == "rds.log.folder" && !value.empty() && !std::filesystem::path(value).is_absolute()) { return "the folder must be a full path"; }
