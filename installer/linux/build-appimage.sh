@@ -75,10 +75,33 @@ cp "$REPO_ROOT/installer/THIRD-PARTY-LICENSES.txt" \
    "$APPDIR/usr/share/licenses/foxsdr/THIRD-PARTY-LICENSES.txt"
 cp "$REPO_ROOT/installer/POSTINSTALL.txt" "$APPDIR/usr/share/doc/foxsdr/POSTINSTALL.txt"
 
+# --- the NEW WINDOW, when the build has it (src/slint/foxsdr-slint, with the toolkit's library beside it by the build's own POST_BUILD copy): beside cascade, which stays as
+# Legacy, with the launcher that chooses between them (installer/linux/foxsdr; AppRun runs it) and the toolkit's licence texts. FOXSDR_SLINT_SDK names the toolkit's folder
+# (its licenses/ are shipped); without it the licence of the toolkit would not travel with its library, so the step refuses. ---
+SLINT_BIN="$BUILD_DIR/src/slint/foxsdr-slint"
+if [ -x "$SLINT_BIN" ]; then
+    if [ -z "${FOXSDR_SLINT_SDK:-}" ] || [ ! -f "$FOXSDR_SLINT_SDK/licenses/LICENSE.md" ]; then
+        echo "build-appimage.sh: $SLINT_BIN is built; set FOXSDR_SLINT_SDK to the Slint toolkit folder (its licenses/ travel with libslint_cpp.so)" >&2
+        exit 1
+    fi
+    cp "$SLINT_BIN" "$APPDIR/usr/bin/foxsdr-slint"
+    cp "$BUILD_DIR/src/slint/libslint_cpp.so" "$APPDIR/usr/bin/libslint_cpp.so"
+    strip --strip-unneeded "$APPDIR/usr/bin/libslint_cpp.so"
+    install -m 0755 "$SCRIPT_DIR/foxsdr" "$APPDIR/usr/bin/foxsdr"
+    mkdir -p "$APPDIR/usr/share/licenses/foxsdr/slint"
+    cp "$FOXSDR_SLINT_SDK/licenses/LICENSE.md" "$FOXSDR_SLINT_SDK/licenses/THIRDPARTY.md" "$APPDIR/usr/share/licenses/foxsdr/slint/"
+fi
+
 # --- the AppImage shell: desktop entry, icon and AppRun, all at AppDir root ---
 install -m 0644 "$SCRIPT_DIR/foxsdr.desktop" "$APPDIR/foxsdr.desktop"
 install -m 0644 "$REPO_ROOT/resources/icon/foxsdr-256.png" "$APPDIR/foxsdr.png"
 install -m 0755 "$SCRIPT_DIR/AppRun" "$APPDIR/AppRun"
+
+# FOXSDR_APPDIR_ONLY=1 stops here: the AppDir is staged and can be run as it is ($APPDIR/AppRun), which is what a machine that may not fetch appimagetool does to check the payload.
+if [ "${FOXSDR_APPDIR_ONLY:-}" = "1" ]; then
+    echo "build-appimage.sh: AppDir staged at $APPDIR (FOXSDR_APPDIR_ONLY=1: no appimagetool, no AppImage)"
+    exit 0
+fi
 
 # --- appimagetool, pinned by version and verified by sha256 before it is
 # trusted to run at all - this is code that packages a release, so a

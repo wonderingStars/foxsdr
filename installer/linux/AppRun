@@ -1,21 +1,20 @@
 #!/bin/sh
 # AppRun - the AppImage entry point.
 #
-# THIS SCRIPT DOES ONE THING: set the working directory to where cascade and
-# its resources/ directory live (usr/bin inside the mounted or extracted
-# AppDir), then exec the real binary. Nothing else - no LD_LIBRARY_PATH
-# rewriting, no bundled-library shimming - because this AppImage packages the
-# same payload the plain tarball build does (see .github/workflows/build.yml's
-# "Package" step and installer/linux/build-appimage.sh), not its runtime
-# library dependencies: SoapySDR, OpenSSL, ALSA and OpenGL are expected to
-# already be on the host, exactly as the tarball already requires.
+# THIS SCRIPT DOES ONE THING: set the working directory to where the programs and their resources/ directory live (usr/bin inside the mounted
+# or extracted AppDir), then hand over to the launcher `foxsdr` (installer/linux/foxsdr), which starts the NEW window (foxsdr-slint) by default and
+# Legacy (cascade) on --legacy, on FOXSDR_WINDOW=legacy, or when the new window cannot run, saying why on standard error. Nothing else - no
+# LD_LIBRARY_PATH rewriting, no bundled-library shimming: foxsdr-slint finds libslint_cpp.so beside itself (RUNPATH $ORIGIN) and this AppImage
+# packages the same payload the plain tarball build does (see .github/workflows/build.yml's "Package" step, tools/package-linux-tarball.sh and
+# installer/linux/build-appimage.sh), not its runtime library dependencies: SoapySDR, OpenSSL, ALSA, OpenGL and, for the new window under X11,
+# libxkbcommon-x11 are expected to already be on the host, exactly as the tarball already requires.
 #
-# core/band_plan.cpp's BandPlan::defaultDir() finds resources/bandplans/ next
-# to /proc/self/exe on Linux, which does not depend on the working directory
-# at all - so the cd below is not what makes band plans load. It exists
-# because a receiver that writes anything relative (a recording, a saved
-# screenshot) should not write it into whatever directory a file manager or
-# launcher happened to start it from.
+# core/band_plan.cpp's BandPlan::defaultDir() finds resources/bandplans/ next to /proc/self/exe on Linux, which does not depend on the working
+# directory at all - so the cd below is not what makes band plans load. It exists because a receiver that writes anything relative (a recording,
+# a saved screenshot) should not write it into whatever directory a file manager or launcher happened to start it from.
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 cd "$HERE/usr/bin" || exit 1
+if [ -x ./foxsdr ]; then
+    exec ./foxsdr "$@"
+fi
 exec ./cascade "$@"
