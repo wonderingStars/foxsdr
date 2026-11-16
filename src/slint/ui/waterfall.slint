@@ -29,7 +29,7 @@
 import { Theme, SrText } from "theme.slint";
 import { Chip, ChipTone } from "chips.slint";
 import { TooltipFace, ElidedHint } from "tooltip.slint";
-import { PluginMark, MarkTab, UserMarker } from "spectrum.slint";
+import { PluginMark, MarkTab, UserMarker, SpectrumEvents } from "spectrum.slint";
 
 // Lane B (S7): the strength key under the waterfall shows the colour map the host paints with: a 256 x 1 picture of it (custom = false: the skin's own five-stop gradient, the classic map).
 export global WaterfallLook {
@@ -486,6 +486,17 @@ export component WaterfallView inherits Rectangle {
         }
 
         // ---- input: one TouchArea over the whole picture ----
+        // S2, G2-27: a two-finger pinch over the waterfall zooms the picture about the point between the fingers, as it does over the spectrum plot (the host's SpectrumEvents.pinch zooms the radio's picture; the waterfall is the larger target a finger finds first)
+        property <float> pinch-last: 1.0;
+        pinch-h := ScaleRotateGestureHandler {
+            width: parent.width; height: parent.height;
+            enabled: root.enabled;
+            started => { parent.pinch-last = 1.0; }
+            updated => {
+                if (root.pic-w > 0px && parent.pinch-last > 0.0) { SpectrumEvents.pinch(root.sr-radio, self.scale / parent.pinch-last, root.xfrac(self.center.x)); }
+                parent.pinch-last = self.scale;
+            }
+        }
         area := TouchArea {
             width: parent.width; height: parent.height;
             enabled: root.enabled;

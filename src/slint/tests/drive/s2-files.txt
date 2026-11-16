@@ -1,0 +1,46 @@
+#! frames=2400 size=1600x7000 bank=4 sections=4:14 FOXSDR_S2_FOLDER_STANDIN=s2-files
+# s2-files (screen lane S2, docs/multi-radio-records/screen-s2.md; rows G2-09 and G2-16): the SYSTEM bank's Spectrum tools section. The waterfall's autosave writes a PNG into the folder the (stand-in) folder
+# chooser gave - a folder under the run's profile; a test never raises the system's dialog - and the power and SNR log writes a CSV there. Both are off at every start; each is read back from the files
+# themselves (their size on the disk, the lines in the log), not from a counter alone.
+10 state running == 1
++3 state s2.autosave.on == 0
+state s2.log.on == 0
+state s2.autosave.saved == 0
+state s2.log.lines == 0
+# switching on with no folder is refused and nothing is written
++1 click "Save the waterfall by itself"
++3 state s2.autosave.on == 0
+state s2.autosave.note contains "folder"
++1 click "Log the power and the SNR"
++3 state s2.log.on == 0
+state s2.log.note contains "folder"
+# a relative folder is not a folder
++1 type "Picture folder" "pictures"
++1 key enter
++2 state s2.autosave.note contains "full path"
+# the chooser (the stand-in) fills the folder
++1 click "Choose the picture folder..."
++3 state s2.autosave.folder contains "s2-files"
++1 click "Choose the log folder..."
++3 state s2.draft.l.folder contains "s2-files"
+# G2-09: on; the first picture is written at once, off the drawing thread, named by the recording file-name rule (waterfall_<date>_<time>.png)
++1 click "Save the waterfall by itself"
++3 state s2.autosave.on == 1
++60 state s2.autosave.saved >= 1
+state s2.autosave.last contains "waterfall_"
+state s2.autosave.last contains ".png"
+state s2.autosave.bytes > 1000
+# G2-16: on; the file is a CSV with its header and at least one line of numbers
++1 type "Log a line every (s)" "0.2"
++1 key enter
++1 click "Log the power and the SNR"
++3 state s2.log.on == 1
++60 state s2.log.lines >= 3
+state s2.log.path contains "foxsdr-power-"
+state s2.log.written >= 2
++1 shot "s2-files.png"
+# off again: nothing more is written
++1 click "Log the power and the SNR"
++3 state s2.log.on == 0
++1 click "Save the waterfall by itself"
++3 state s2.autosave.on == 0
