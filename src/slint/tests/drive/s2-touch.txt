@@ -11,6 +11,7 @@
 state tunedHz == 100300000
 +1 state lb.zoomcentre > 100000000
 +1 drag "Spectrum · 1024 bin · zoom" 200 0
-+10 state lb.zoomcentre < 100000000
++10 state lb.zoomcentre < 100740000
+state lb.zoomcentre > 100700000
 state tunedHz == 100300000
 +1 shot "s2-touch-after.png"
