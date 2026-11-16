@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/config.hpp"
+#include "core/health_events.hpp"
+#include "core/secret_vault.hpp"
 #include "core/wire_b_source_kinds.hpp"   // wire-b second pass (item 33)
 #include "dsp/tone_squelch.hpp"
 #include "core/smeter_cal.hpp"
@@ -447,6 +449,14 @@ bool ConfigStore::load(const std::string& path, AppConfig& out, std::string& err
             return false;
     }
 
+    // THE SECRETS (core/secret_vault.hpp, owner decision 16): the values the file holds empty are put back from the per-user protected
+    // store before the document is read, and a value an older build left in the file as text is moved there (and the file rewritten).
+    {
+        bool migrated = false;
+        std::string note;
+        text = vault::mergeAfterRead(path, text, migrated, note);
+        if (!note.empty()) { diagWarnf("settings: a saved secret could not be opened (%s): it reads as empty and has to be entered again", note.c_str()); }
+    }
     return parse(text, path, out, error);
 }
 
@@ -1213,6 +1223,15 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     }
     getString(j, "webUsername", out.webUsername);
     getString(j, "webPasswordRecord", out.webPasswordRecord);
+    getBool(j, "webTlsEnabled", out.webTlsEnabled);
+    getString(j, "webTlsCertThumbprint", out.webTlsCertThumbprint);
+    getBool(j, "webListenersEnabled", out.webListenersEnabled);
+    getString(j, "webListenerPasswordRecord", out.webListenerPasswordRecord);
+    getInt(j, "webMaxListeners", out.webMaxListeners);
+    getInt(j, "webListenerIdleSeconds", out.webListenerIdleSeconds);
+    getInt(j, "webListenerSessionSeconds", out.webListenerSessionSeconds);
+    getBool(j, "webListenersMayTune", out.webListenersMayTune);
+    getBool(j, "webChatEnabled", out.webChatEnabled);
     getBool(j, "updateCheckEnabled", out.updateCheckEnabled);
     getString(j, "updateChannel", out.updateChannel);
     if (out.updateChannel != "beta") { out.updateChannel = "stable"; }
@@ -1598,6 +1617,18 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     }
     if (out.webBindAddress.empty()) {
         out.webBindAddress = defaults.webBindAddress;
+    }
+    // THE LISTENER AND HTTPS FIELDS, REPAIRED (engine lane E1): a value out of its range returns to the default, never to an extreme; a thumbprint that is not 40 hex
+    // digits is dropped (the program's own certificate is used, which is the safe reading); a listener record is kept verbatim (PasswordRecord::parse is its one enforcement point).
+    if (out.webMaxListeners < 1 || out.webMaxListeners > 32) { out.webMaxListeners = defaults.webMaxListeners; }
+    if (out.webListenerIdleSeconds < 0 || out.webListenerIdleSeconds > 86400) { out.webListenerIdleSeconds = defaults.webListenerIdleSeconds; }
+    if (out.webListenerSessionSeconds < 0 || out.webListenerSessionSeconds > 43200) { out.webListenerSessionSeconds = defaults.webListenerSessionSeconds; }
+    {
+        std::string t;
+        for (const char c : out.webTlsCertThumbprint) { if (c != ' ' && c != ':') { t.push_back(c); } }
+        bool hex = t.size() == 40;
+        for (const char c : t) { hex = hex && ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')); }
+        out.webTlsCertThumbprint = hex ? t : std::string();
     }
     if (out.webUsername.empty()) {
         out.webUsername = defaults.webUsername;
@@ -2053,6 +2084,15 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     }
     j["webUsername"] = cfg.webUsername;
     j["webPasswordRecord"] = cfg.webPasswordRecord;
+    j["webTlsEnabled"] = cfg.webTlsEnabled;
+    j["webTlsCertThumbprint"] = cfg.webTlsCertThumbprint;
+    j["webListenersEnabled"] = cfg.webListenersEnabled;
+    j["webListenerPasswordRecord"] = cfg.webListenerPasswordRecord;
+    j["webMaxListeners"] = cfg.webMaxListeners;
+    j["webListenerIdleSeconds"] = cfg.webListenerIdleSeconds;
+    j["webListenerSessionSeconds"] = cfg.webListenerSessionSeconds;
+    j["webListenersMayTune"] = cfg.webListenersMayTune;
+    j["webChatEnabled"] = cfg.webChatEnabled;
     j["updateCheckEnabled"] = cfg.updateCheckEnabled;
     j["updateChannel"] = cfg.updateChannel;
     j["messagesSeen"] = cfg.messagesSeen;
@@ -2093,9 +2133,19 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     return j.dump(4, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
 }
 
-bool ConfigStore::writeFile(const std::string& path, const std::string& text,
+bool ConfigStore::writeFile(const std::string& path, const std::string& plainText,
                              std::string& error) {
     error.clear();
+    // THE SECRETS LEAVE THE TEXT (core/secret_vault.hpp): they go to the per-user protected store beside the file; when the store refuses, the
+    // value stays in the file (nothing is lost) and the refusal is reported.
+    std::string text;
+    {
+        std::string why;
+        bool kept = false;
+        text = vault::splitForWrite(path, plainText, why, kept);
+        if (kept) { diagWarnf("settings: the protected store could not take a secret (%s): it stays in the settings file", why.c_str());
+            health::noteRecovered(health::Recovered::CfgSave); }
+    }
     const fs::path target(path);
 
     std::error_code ec;

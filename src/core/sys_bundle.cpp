@@ -321,6 +321,9 @@ bool commitImport(const ImportResult& r, const fs::path& destDir, const std::str
         fs::rename(tmp, target, ec);
         if (ec) { error = "cannot put " + it->name + " in place: " + ec.message(); rollback(); return false; }
         if (it->action == ImportAction::New) { placedNew.push_back(target); }
+        // An imported settings file carries no secrets (export leaves them out): the protected copy of the file it replaced goes too, so the
+        // secrets of the old file are not read back into the new one.
+        if (it->name == "config.json") { fs::remove(fs::path(target.string() + ".secrets"), ec); }   // core/secret_vault.hpp sidecarPath(): "<settings file>.secrets" (not linked here: three test programs build this file alone)
     }
     return true;
 }

@@ -1401,6 +1401,22 @@ struct AppConfig {
     // password".
     std::string webPasswordRecord;
 
+    // --- HTTPS for the web page and the shared-receiver listeners (engine lane E1; owner decisions 17 and 18). All OFF / empty by default, all engine-owned.
+    // HTTPS uses Windows' own Schannel (net/web_tls.hpp): the certificate is the one the program makes for itself (webTlsCertThumbprint empty) or one the user
+    // names by the 40 hex digits of its thumbprint (found read-only in the Personal store, software key only).
+    bool webTlsEnabled = false;
+    std::string webTlsCertThumbprint;
+    // LISTENERS: everyone shares ONE tuned receiver and ONE person tunes. A listener signs in with a name of their own choosing and one shared password and may look and
+    // listen; the owner's account tunes. webListenerPasswordRecord is a PBKDF2 record like the owner's (never plaintext) and, like it, is kept in the per-user protected
+    // store (core/secret_vault.hpp). webListenersMayTune is the one switch that hands the tuning to the listeners as well.
+    bool webListenersEnabled = false;
+    std::string webListenerPasswordRecord;
+    int webMaxListeners = 4;               // 1 .. 32
+    int webListenerIdleSeconds = 900;      // 0 = no limit; at most one day
+    int webListenerSessionSeconds = 28800; // 0 = no limit; at most twelve hours
+    bool webListenersMayTune = false;
+    bool webChatEnabled = false;
+
     // --- Update check --------------------------------------------------------
     //
     // ON by default. It asks foxsdr.com once per launch whether a newer build

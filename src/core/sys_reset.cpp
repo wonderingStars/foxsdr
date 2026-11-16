@@ -66,7 +66,7 @@ fs::path baseOf(const ResetItem& it, const fs::path& settingsDir, const fs::path
 bool settingsFileNameIsOurs(const std::string& name) {
     for (const char* base : {"config.json", "bookmarks.json", "markers.json"}) {
         const std::string b = base;
-        if (name == b) { return true; }
+        if (name == b || name == b + ".secrets") { return true; }   // the protected copy of the secrets (core/secret_vault.hpp) goes with its file
         // "<base>.<YYYYMMDD-HHMMSS>.bak": the shape the program's own automatic backups have
         if (name.size() == b.size() + 1 + 15 + 4 && name.compare(0, b.size(), b) == 0 && name[b.size()] == '.' && name.compare(name.size() - 4, 4, ".bak") == 0 &&
             stampShape(name.substr(b.size() + 1, 15))) {

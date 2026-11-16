@@ -232,7 +232,7 @@ struct ConfigFieldInfo {
     X(udpAudioPacketFrames,    Engine,    false) \
     X(schedule,                Engine,    false) \
     X(webUsername,             Engine,    false) \
-    X(webPasswordRecord,       Engine,    false) \
+    X(webPasswordRecord,       Engine,    false)     X(webTlsEnabled,           Engine,    false)     X(webTlsCertThumbprint,    Engine,    false)     X(webListenersEnabled,     Engine,    false)     X(webListenerPasswordRecord, Engine,  false)     X(webMaxListeners,         Engine,    false)     X(webListenerIdleSeconds,  Engine,    false)     X(webListenerSessionSeconds, Engine,  false)     X(webListenersMayTune,     Engine,    false)     X(webChatEnabled,          Engine,    false) \
     X(updateCheckEnabled,      Interface, false) \
     X(updateChannel,           Interface, false) \
     X(messagesSeen,            Interface, false) \
