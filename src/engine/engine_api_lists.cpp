@@ -1426,6 +1426,8 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         fact(pre + "claimed", receivers_[n - 1u]->claimed_ ? "1" : "0");
         fact(pre + "mpx", receivers_[n - 1u]->mpxRecorder_.recording() ? "1" : "0");
         fact(pre + "ifrec", receivers_[n - 1u]->ifRecorder_.recording() ? "1" : "0");
+        // THE RTL-SDR'S DIRECT-SAMPLING CHOICE (0 automatic, 1 never, 2 the I branch, 3 the Q branch; screen lane S5): present only while the radio has the setting, so the screen can tell "none" from "automatic".
+        if (receivers_[n - 1u]->deviceDirectPresent_) { fact(pre + "directSampling", std::to_string(receivers_[n - 1u]->deviceDirectChoice_)); }
         {
             const cascade::core::ppmauto::Result pr = receivers_[n - 1u]->ppmAuto_.result(clockS());
             const char* word = pr.state == cascade::core::ppmauto::State::Measuring ? "measuring" : (pr.state == cascade::core::ppmauto::State::Done ? "done" : (pr.state == cascade::core::ppmauto::State::Failed ? "failed" : "idle"));

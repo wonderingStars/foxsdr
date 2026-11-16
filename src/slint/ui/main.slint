@@ -86,6 +86,8 @@ import { GridLabel, MapIcons } from "map.slint";
 export { MapJEvents, LayerRow, ReplayModel, FilterModel, MapJModel, PolarDot, SkyModel, AntennaModel, GridLabel }
 export { LaneL }   // screen lane L (docs/multi-radio-records/screen-l.md): the host (lanel_publish.cpp) sets the global and answers its act(id, text)
 export { LaneM }   // screen lane M (docs/multi-radio-records/screen-m.md): the host (lanem_publish.cpp) sets the global and answers its act(id, text)
+import { LaneS5 } from "s5_bank.slint";
+export { LaneS5 }   // screen lane S5 (docs/multi-radio-records/screen-s5-sources.md): the host (s5_publish.cpp) sets the global and answers its act(id, text)
 export { KRow, LaneK, KTile, LaneKMatrix }   // screen lane K (docs/multi-radio-records/screen-k.md): the host (lanek_publish.cpp) sets the globals and answers their act(id, text)
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
@@ -675,6 +677,7 @@ export component MainWindow inherits Window {
                                         // screen lane M (docs/multi-radio-records/screen-m.md): the controls of the wiring second passes, each appended to the section the person looks in (an empty list draws nothing)
                                         if root.bank-index == 0 && i == 0 && LaneM.rows-patch.length > 0 : KPanel { rows: LaneM.rows-patch; act(id, t) => { LaneM.act(id, t); } }
                                         if root.bank-index == 0 && i == 1 && LaneM.rows-source.length > 0 : KPanel { rows: LaneM.rows-source; act(id, t) => { LaneM.act(id, t); } }
+                                        if root.bank-index == 0 && i == 1 && LaneS5.rows-source.length > 0 : KPanel { rows: LaneS5.rows-source; act(id, t) => { LaneS5.act(id, t); } }
                                         if root.bank-index == 0 && i == 2 && LaneM.rows-radio.length > 0 : KPanel { rows: LaneM.rows-radio; act(id, t) => { LaneM.act(id, t); } }
                                         if root.bank-index == 0 && i == 3 && LaneM.rows-audio.length > 0 : KPanel { rows: LaneM.rows-audio; act(id, t) => { LaneM.act(id, t); } }
                                         if root.bank-index == 0 && i == 6 && LaneM.rows-record.length > 0 : KPanel { rows: LaneM.rows-record; act(id, t) => { LaneM.act(id, t); } }
