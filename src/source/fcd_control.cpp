@@ -5,7 +5,10 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "core/radio_events.hpp"
+
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace fc = fcd;
 
@@ -350,7 +353,7 @@ bool FuncubeSource::setCenterFrequencyHz(double hz) {
     std::lock_guard<std::mutex> lk(mu_);
     if (!open_ || !ctl_) { setError("setCenterFrequencyHz() called with no dongle open"); return false; }
     std::string e;
-    if (!ctl_->setFrequencyHz(hz, ppm_, e)) { setError(e); return false; }
+    if (!ctl_->setFrequencyHz(hz, ppm_, e)) { setError(rre::noteControlRefusedText(this, "funcube", rre::Control::Frequency, e)); return false; }
     freqHz_ = hz;
     audio_.setCenterFrequencyHz(hz);  // I/Q mode: records what the tuner is set to
     return true;
@@ -360,7 +363,7 @@ bool FuncubeSource::setFrequencyCorrectionPpm(double ppm) {
     std::lock_guard<std::mutex> lk(mu_);
     if (!open_ || !ctl_) { setError("setFrequencyCorrectionPpm() called with no dongle open"); return false; }
     std::string e;
-    if (!ctl_->setFrequencyHz(freqHz_, ppm, e)) { setError(e); return false; }
+    if (!ctl_->setFrequencyHz(freqHz_, ppm, e)) { setError(rre::noteControlRefusedText(this, "funcube", rre::Control::Ppm, e)); return false; }
     ppm_ = ppm;
     return true;
 }
@@ -398,7 +401,7 @@ bool FuncubeSource::setGainDb(const std::string& name, double db) {
     std::lock_guard<std::mutex> lk(mu_);
     if (!open_ || !ctl_) { setError("setGainDb() called with no dongle open"); return false; }
     std::string e;
-    if (!ctl_->setGainDb(name, db, e)) { setError(e); return false; }
+    if (!ctl_->setGainDb(name, db, e)) { setError(rre::noteControlRefusedText(this, "funcube", rre::Control::Gain, e)); return false; }
     double back = 0.0;
     if (ctl_->readGainDb(name, back, e)) {
         (name == "LNA" ? lna_ : name == "Mixer" ? mixer_ : if_) = back;
@@ -422,7 +425,7 @@ bool FuncubeSource::setAntenna(const std::string& name) {
     if (!open_ || !ctl_) { setError("setAntenna() called with no dongle open"); return false; }
     if (name != "Bias tee off" && name != "Bias tee on") { setError("the choices are \"Bias tee off\" and \"Bias tee on\""); return false; }
     std::string e;
-    if (!ctl_->setBiasTee(name == "Bias tee on", e)) { setError(e); return false; }
+    if (!ctl_->setBiasTee(name == "Bias tee on", e)) { setError(rre::noteControlRefusedText(this, "funcube", rre::Control::BiasTee, e)); return false; }
     bias_ = name == "Bias tee on";
     return true;
 }

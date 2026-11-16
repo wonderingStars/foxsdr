@@ -12,6 +12,7 @@
 #include <filesystem>
 
 #include "core/diag_log.hpp"
+#include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "core/i18n.hpp"
 #include "core/leak_on_purpose.hpp"
@@ -26,6 +27,7 @@
 #endif
 
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 using cascade::i18n::tr;
 
@@ -153,6 +155,7 @@ void AorSource::noteTransportFaultOn(ReaderLink& link, const char* what, const s
     }
     core::diagWarnf("aor: transfer failed while %s%s%s", what, detail.empty() ? "" : ": ",
                     detail.c_str());
+    rre::noteDeviceFault(link.owner, "aor", what, detail);
 }
 
 void AorSource::noteTransportFault(const char* what, const std::string& detail) {
@@ -668,6 +671,7 @@ void AorSource::noteRead(ReaderLink& link, bool completed, std::size_t samples, 
     const auto now = std::chrono::steady_clock::now();
     std::string line;
     bool warn = false;
+    rre::StreamTrouble trouble;
     {
         std::lock_guard<std::mutex> lk(link.healthMutex);
         StreamHealth& h = link.health;
@@ -695,6 +699,8 @@ void AorSource::noteRead(ReaderLink& link, bool completed, std::size_t samples, 
             h.timeouts == 0 && h.overflows == 0 && h.errors == 0 && h.longestGapMs < 250;
         const bool firstLine = !link.healthEverWritten;
         warn = h.errors > 0 || h.longestGapMs >= 1000;
+        trouble = {std::chrono::duration<double>(now - h.windowStart).count(), h.samples, h.errors, h.overflows, h.timeouts,
+                   static_cast<long long>(h.longestGapMs)};
         line = healthLineLocked(link);
         if (line.empty()) { return; }
         if (!(warn || firstLine || !nominal)) { return; }
@@ -702,6 +708,7 @@ void AorSource::noteRead(ReaderLink& link, bool completed, std::size_t samples, 
     }
     if (warn) {
         core::diagWarnf("%s", line.c_str());
+        rre::noteStreamTrouble(link.owner, "aor", trouble);
     } else {
         core::diagLogf("%s", line.c_str());
     }
@@ -788,6 +795,7 @@ bool AorSource::setCenterFrequencyHz(double hz) {
     aor::ControlSession session(*control_);
     std::string error;
     if (!session.tune(hz, error)) {
+        rre::noteControlRefused(this, "aor", rre::Control::Frequency, error);
         setError(error);
         return false;
     }

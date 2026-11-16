@@ -17,6 +17,7 @@
 #include <thread>
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
+#include "core/radio_events.hpp"
 #include "core/i18n.hpp"
 #include "core/thread_beats.hpp"
 #include "core/utf8_text.hpp"
@@ -337,6 +338,7 @@ void Engine::patchReconcile() {
                 // reason a recording would not open can carry it.
                 cascade::core::diagWarnf("patch: radio node %u: its I/Q recording would not open",
                                          static_cast<unsigned>(id));
+                cascade::core::health::noteRecovered(cascade::core::health::Recovered::IqFileGone);   // counted and filed as the start-up restore's recording is
             } else {
                 cascade::core::diagWarnf("patch: radio node %u would not open: %s",
                                          static_cast<unsigned>(id), patchRadioError_[id].c_str());
@@ -349,6 +351,11 @@ void Engine::patchReconcile() {
             if (pc::Node* mn = patchGraph_.mutableNode(id); mn != nullptr && std::fabs(mn->rateHz - r.src->sampleRateHz()) > 0.5) {
                 mn->rateHz = r.src->sampleRateHz();
             }
+        }
+        // the radio's drivers say what happens to it (a refused setting, a stalled stream) through this object: announce which radio it is
+        if (const std::string pk = pc::deviceDriver(n->device); pk != "file" && pk != "siggen") {
+            const std::string pa = pc::deviceArgs(n->device);
+            cascade::core::radioreport::registerSource(r.src.get(), cascade::core::radioreport::identify(pk, pa, pk == "soapy" ? std::string() : nativeLabelFor(pk, pa)));
         }
         auto radio = std::make_unique<pc::PatchRadio>(id, std::move(r.src), r.label);
         // THE SAME CONVERTER the receiver uses for this device (keyed alike:
@@ -366,6 +373,9 @@ void Engine::patchReconcile() {
             patchRadioFailedAs_[id] = as;
             cascade::core::diagWarnf("patch: radio node %u would not start: %s",
                                      static_cast<unsigned>(id), err.c_str());
+            // opened and then would not start: the same failure of a radio as one that would not open, filed the same way
+            reportFailedOpen(pc::deviceDriver(n->device), pc::deviceArgs(n->device), err, cascade::core::radioreport::Trigger::PatchRadio,
+                             /*superseded=*/false, radioRate(*n), -1);
             continue;
         }
         if (!r.error.empty()) { patchRadioError_[id] = r.error; } else { patchRadioError_.erase(id); }
@@ -426,6 +436,8 @@ void Engine::patchReconcile() {
                     static_cast<unsigned>(id));
             } else {
                 cascade::core::diagWarnf("patch: radio stopped: %s", it->second->fault().c_str());
+                // a patch radio that faulted ended like the receiver's: its driver's own report (when it made one) stands, else this is the ending
+                cascade::core::radioreport::noteDeviceFault(nullptr, n != nullptr ? pc::deviceDriver(n->device).c_str() : "", "the patch radio stopped", it->second->fault());
             }
         }
         it->second->stop();

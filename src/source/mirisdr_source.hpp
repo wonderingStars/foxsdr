@@ -345,6 +345,7 @@ private:
     // the MiriSdrSource that started it, and a thread reading freed members
     // would be a worse defect than the hang the bound exists to prevent.
     struct ReaderLink {
+        const void* owner = nullptr;   // the source object, for the radio reports (core/radio_events.hpp)
         explicit ReaderLink(std::size_t ringCapacity) : ring(ringCapacity) {}
 
         std::atomic<bool> run{false};
@@ -391,7 +392,7 @@ private:
     // NEVER REASSIGNED, hence const: an abandoned reader holds its own copy of
     // this pointer, so a source that swapped in a fresh link could have a new
     // device behind a thread still pumping the old one.
-    const std::shared_ptr<ReaderLink> link_ = std::make_shared<ReaderLink>(kRingCapacitySamples());
+    const std::shared_ptr<ReaderLink> link_ = [this] { auto l = std::make_shared<ReaderLink>(kRingCapacitySamples()); l->owner = this; return l; }();
 
     // The ring holds every transfer that can be in flight at the widest
     // packing, twice over: 8 transfers of 64 blocks of 504 pairs is 258048

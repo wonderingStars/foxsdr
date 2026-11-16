@@ -890,10 +890,14 @@ struct Reporter::Impl {
         if (ev.kind == "radio_stream") {
             // at most one per radio per minute (five after the day's 500th): a faster caller is coarsened, not sent
             const bool note = b.contains("note") && b["note"].is_string() && !b["note"].get<std::string>().empty();
+            // A DRIVER'S TROUBLE (transfer errors, a stall: radio_events.hpp noteStreamTrouble) is not coarsened into the routine minute: it passes, and the daily
+            // bound (first and last of a run of them, the rest counted in `dropped`) is what keeps a loop of them from flooding.
+            const bool trouble = (b.contains("usbErrors") && b["usbErrors"].is_number() && b["usbErrors"].get<long long>() > 0) ||
+                                 (b.contains("stalls") && b["stalls"].is_number() && b["stalls"].get<long long>() > 0);
             auto last = lastStreamAt.find(p.key);
             const int window = (streamToday[p.key] >= o.streamWidenAfter) ? 300 : 60;
-            if (!note && last != lastStreamAt.end() && t - last->second < window - 1) { return; }
-            lastStreamAt[p.key] = t;
+            if (!note && !trouble && last != lastStreamAt.end() && t - last->second < window - 1) { return; }
+            if (!trouble) { lastStreamAt[p.key] = t; }
             ++streamToday[p.key];
         }
         if (ev.kind == "radio_open" && ev.word == "start") {
@@ -1068,6 +1072,14 @@ void Reporter::fileFailure(const FailureInput& in, const std::vector<std::string
         return;
     }
     s.fileFailureLocked(in, logRing, s.now());
+}
+
+void Reporter::countDropped(const std::string& radioKey, long long n) {
+    if (radioKey.empty() || n <= 0) { return; }
+    std::lock_guard<std::mutex> lk(p_->mu);
+    if (!p_->on || p_->id.installId.empty()) { return; }
+    p_->dropped[radioKey] += n;
+    ++p_->st.boundDropped;
 }
 
 void Reporter::event(const Event& ev) {

@@ -1385,7 +1385,7 @@ endif()
 
 # THE RADIO REPORTS, APP SIDE (docs/multi-radio-records/radio-reports-app.md): these tests read the Worker's fixtures and, where node is found, hand
 # every message the app made to the Worker's own validator.
-foreach(_t IN ITEMS test_radio_report test_radio_reporter test_radio_reports_never_sent test_radio_reports_engine)
+foreach(_t IN ITEMS test_radio_report test_radio_reporter test_radio_reports_never_sent test_radio_reports_engine test_radio_events)
     if(TARGET ${_t})
         target_compile_definitions(${_t} PRIVATE CASCADE_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" CASCADE_NODE_PATH="${CASCADE_NODE}")
     endif()

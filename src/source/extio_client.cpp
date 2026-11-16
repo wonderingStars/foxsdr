@@ -30,7 +30,10 @@
 #include <windows.h>
 #endif
 
+#include "core/radio_events.hpp"
+
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace ex = extio;
 using Clock = std::chrono::steady_clock;
@@ -578,6 +581,7 @@ bool ExtioSource::setCenterFrequencyHz(double hz) {
     if (!client_.running()) { return true; }   // applied by start()
     const std::int32_t r = client_.setCenterHz(hz);
     if (r == 0) { return true; }
+    rre::noteControlRefused(this, "extio", rre::Control::Frequency, r == INT32_MIN ? std::string(client_.fact().text) : std::string("below the lowest frequency this radio can tune"), r != INT32_MIN);
     if (r == INT32_MIN) { lastError_ = client_.fact().text; }
     else if (r < 0) { lastError_ = "below the lowest frequency this radio can tune (" + std::to_string(-static_cast<std::int64_t>(r)) + " Hz)"; }
     else { lastError_ = "above the highest frequency this radio can tune (" + std::to_string(r) + " Hz)"; }

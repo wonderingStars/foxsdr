@@ -28,7 +28,10 @@
 #include <unistd.h>
 #endif
 
+#include "core/radio_events.hpp"
+
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace h2 = hpsdr2;
 namespace hp = hpsdr;
@@ -465,7 +468,7 @@ bool Hpsdr2Source::applyLocked() {
     // a rate change needs the DDC Specific packet (all DDC settings in one packet); every change then
     // re-sends the High Priority packet, which carries the frequency word and the attenuator
     if (!rx_->sendDdcLocked() || !rx_->sendHpLocked(true)) {
-        setError("could not send the new settings to the radio");
+        setError(rre::noteControlRefusedText(this, "hpsdr2", rre::Control::Other, "could not send the new settings to the radio"));
         return false;
     }
     return true;

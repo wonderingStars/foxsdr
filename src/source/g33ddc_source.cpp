@@ -19,7 +19,10 @@
 #include "source/vendor_apartment.hpp"
 #include "source/vendor_lib.hpp"
 
+#include "core/radio_events.hpp"
+
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace {
 
@@ -100,6 +103,7 @@ struct G33DdcSource::Impl {
     double centerHz = 0.0;
     bool preamp = false, hasPreamp = false;
     std::int64_t lastLinkCheckMs = 0;
+    const void* owner = nullptr;   // the source object, for the radio reports (core/radio_events.hpp)
 
     void setError(const std::string& e) {
         std::lock_guard<std::mutex> lk(m);
@@ -110,6 +114,7 @@ struct G33DdcSource::Impl {
         dead = true;
         deadWhile = during;
         error = why;
+        rre::noteDeviceFault(owner, "g33ddc", during, why);
     }
     bool call(const char* during, const std::function<void()>& fn) {
         if (!apt) {
@@ -137,7 +142,7 @@ struct G33DdcSource::Impl {
     }
 };
 
-G33DdcSource::G33DdcSource() : p_(std::make_unique<Impl>()) {}
+G33DdcSource::G33DdcSource() : p_(std::make_unique<Impl>()) { p_->owner = this; }
 G33DdcSource::~G33DdcSource() { closeDevice(); }
 
 const char* G33DdcSource::lastError() const {
@@ -429,6 +434,7 @@ void G33DdcSource::closeDevice() {
         Impl* leaked = p_.release();
         (void)leaked;
         p_ = std::make_unique<Impl>();
+        p_->owner = this;
         p_->dead = true;
         p_->deadWhile = "closing the receiver";
         p_->error = "the WiNRADiO library did not answer; FoxSDR must be restarted to use this receiver again";
@@ -576,6 +582,7 @@ bool G33DdcSource::setSampleRateHz(double hz) {
         return false;
     }
     if (!o->ok) {
+        rre::noteControlRefused(this, "g33ddc", rre::Control::Rate, o->e);
         I.setError(o->e);
         if (wasRunning) { start(); }
         return false;
@@ -612,6 +619,7 @@ bool G33DdcSource::setCenterFrequencyHz(double hz) {
         return false;
     }
     if (!o->ok) {
+        rre::noteControlRefused(this, "g33ddc", rre::Control::Frequency, o->e);
         I.setError(o->e);
         return false;
     }
@@ -641,6 +649,7 @@ bool G33DdcSource::setGainDb(const std::string& name, double db) {
     const g33ddc::Handle h = I.h;
     if (!I.call("setting the preamplifier", [o, api, h, on] { o->ok = api.SetPreamp(h, on ? 1 : 0) != 0; })) { return false; }
     if (!o->ok) {
+        rre::noteControlRefused(this, "g33ddc", rre::Control::Gain, "the receiver refused the preamplifier setting");
         I.setError(Impl::osErr("the receiver refused the preamplifier setting"));
         return false;
     }

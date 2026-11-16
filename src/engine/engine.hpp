@@ -2073,6 +2073,7 @@ private:
         bool open = false;                        // a physical radio is open in this slot, and its key is `key`
         bool okSent = false;                      // its radio_open ok was said by the call site that opened it
         bool faulted = false;                     // the pipeline latched a fault while it was open
+        bool faultDead = false;                   // and the driver said the device is dead (not merely faulted): the close's cause is `unplugged` or `fault`
         bool noSamplesDone = false;               // the "opened, no samples" look has been made
         bool streamNoteSent = false;
         cascade::core::radioreport::RadioIdentity rid;   // which physical radio (model, serial, key)
@@ -2106,6 +2107,7 @@ private:
     void journalOpenStart(const std::string& kind, const std::string& args, cascade::core::radioreport::Trigger trigger, double requestRateHz);
     void journalOpenOk(const std::string& kind, const std::string& args, cascade::core::radioreport::Trigger trigger, double requestRateHz, long long openMs);
     void journalSettingsAtOpen(const std::string& kind, const std::string& args);
+    void journalOpenSuperseded(const std::string& kind, const std::string& args, cascade::core::radioreport::Trigger trigger, double requestRateHz, long long openMs);
     void journalCloseEvent(const RadioJournalSlot& j, const char* cause, double now);   // one radio_close for the radio a slot held
     void journalStreamMinute(std::uint64_t samplesRead, std::uint64_t samplesDropped, std::size_t ringHighWaterSamples);
     void journalRecovery(const std::string& kind, const std::string& args, const char* phase, const std::string& what, const std::string& reason, long long ms);

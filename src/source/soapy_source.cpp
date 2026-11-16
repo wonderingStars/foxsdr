@@ -2,6 +2,7 @@
 #include "source/soapy_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "source/soapy_enum_proc.hpp"
 #include "source/soapy_log_bridge.hpp"
@@ -38,6 +39,7 @@
 #endif
 
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace {
 
@@ -843,6 +845,7 @@ std::vector<std::string> SoapySource::unloadModulesRegistering(
             job->cv.notify_all();
         });
     } catch (...) {
+        rre::noteVendorCallFault(nullptr, "soapy", "moduleunload", "no thread for unloading a driver module; it is left loaded", true);
         core::diagWarnf("soapy: no thread for unloading the %s module - left loaded",
                         drivers.front().c_str());
         return {};
@@ -854,6 +857,7 @@ std::vector<std::string> SoapySource::unloadModulesRegistering(
     }
     if (!done) {
         worker.detach();
+        rre::noteVendorCallFault(nullptr, "soapy", "moduleunload", "unloading a driver module did not finish in time; it is left to finish", true);
         core::diagWarnf("soapy: unloading the %s module did not finish within %lld ms - left to it",
                         drivers.front().c_str(), static_cast<long long>(wait.count()));
         return {};
@@ -865,6 +869,7 @@ std::vector<std::string> SoapySource::unloadModulesRegistering(
                         static_cast<unsigned>(vendorGuardLastFaultCode()));
     }
     for (const std::string& f : job->failed) {
+        rre::noteVendorCallFault(nullptr, "soapy", "moduleunload", "unloading a driver module failed", true);
         core::diagWarnf("soapy: unloading a module failed: %s", f.c_str());
     }
     for (const std::string& p : job->unloaded) {
@@ -1261,6 +1266,7 @@ bool SoapySource::open(const std::string& args) {
                 }
             } catch (...) {
                 // Left at the "no range" defaults.
+                rre::noteVendorCallFault(s, "soapy", "vendorcall", "the driver would not say its tuning range", true);
             }
 
             // THE PANEL'S OWN INTERROGATION, each part in its own try so one
@@ -1479,6 +1485,8 @@ void SoapySource::noteVendorFault(const char* what) noexcept {
         "soapy: %s faulted inside the device driver (code 0x%08X) - absorbed, "
         "the device is now abandoned and will not be called again",
         what, code);
+    rre::noteDeviceFault(this, "soapy", what, "the driver faulted inside the call and the fault was absorbed; the radio was released without further driver calls");
+    rre::noteVendorCallFault(this, "soapy", "vendorcall", std::string(what) + " faulted inside the device driver and was absorbed", false);
     std::lock_guard<std::mutex> lk(errorMutex_);
     // The LATCHES first, because they allocate nothing and they are what the
     // pipeline and every later call actually act on. A message we could not
@@ -2044,6 +2052,7 @@ bool SoapySource::activateLocked(const char* what, bool* pending) {
         // errToStr is a pure code->string lookup: no device handle, no
         // hardware, nothing a vendor module can reach. Deliberately outside
         // the guarded body, where allocating a message is safe.
+        rre::noteControlRefused(this, "soapy", rre::Control::Other, std::string("activateStream failed: ") + SoapySDR::errToStr(activation->ret));
         setError(std::string("activateStream failed: ") + SoapySDR::errToStr(activation->ret));
         return false;
     }
@@ -2091,6 +2100,7 @@ bool SoapySource::deactivateLocked(const char* what) {
         return false;
     }
     if (job->ret != 0) {
+        rre::noteControlRefused(this, "soapy", rre::Control::Other, std::string("deactivateStream failed: ") + SoapySDR::errToStr(job->ret));
         setError(std::string("deactivateStream failed: ") + SoapySDR::errToStr(job->ret));
         return false;
     }
@@ -2217,6 +2227,7 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
                 // it, and NOT counted toward the fault threshold. The device
                 // answered — a block of it was unusable, which is a reason to
                 // silence that block, not to stop the radio.
+                rre::noteVendorCallFault(this, "soapy", "nonfinite", "the device delivered non-finite samples; that block was replaced with silence", true);
                 lastError_ =
                     "device delivered non-finite samples; that block was "
                     "replaced with silence";
@@ -2238,6 +2249,7 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
                 consecutiveErrors_ = 0;
             } else if (++consecutiveErrors_ >= kMaxConsecutiveErrors) {
                 faulted_ = true;
+                rre::noteDeviceFault(this, "soapy", "reading samples", lastError_);
             }
         }
         return 0;
@@ -2251,11 +2263,13 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
         std::lock_guard<std::mutex> lk(errorMutex_);
         lastError_ = describe(e, "readStream failed");
         faulted_ = true;
+        rre::noteDeviceFault(this, "soapy", "reading samples", lastError_);
         return 0;
     } catch (...) {
         std::lock_guard<std::mutex> lk(errorMutex_);
         lastError_ = "readStream failed: non-standard exception";
         faulted_ = true;
+        rre::noteDeviceFault(this, "soapy", "reading samples", lastError_);
         return 0;
     }
 }
@@ -2299,10 +2313,13 @@ void SoapySource::noteRead(int ret, std::size_t got) {
                          health_.errors == 0 && health_.longestGapMs < 250;
     const bool first = !healthEverWritten_;
     const bool worrying = health_.errors > 0 || health_.longestGapMs >= 1000;
+    const rre::StreamTrouble trouble{std::chrono::duration<double>(now - health_.windowStart).count(), health_.samples, health_.errors, health_.overflows,
+                                     health_.timeouts, static_cast<long long>(health_.longestGapMs)};
     const std::string line = streamHealthLine();
     if (line.empty()) { return; }
     if (worrying) {
         core::diagWarnf("%s", line.c_str());
+        rre::noteStreamTrouble(this, "soapy", trouble);
         healthEverWritten_ = true;
     } else if (first || !nominal) {
         core::diagLogf("%s", line.c_str());
@@ -2339,6 +2356,7 @@ bool SoapySource::setSampleRateHz(double hz) {
     // Bounded, soft-failure - see start() above.
     std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
+        rre::noteControlRefused(this, "soapy", rre::Control::Rate, "the radio's driver is busy or not answering; try again");
         setError("the radio's driver is busy or not answering; try again");
         return false;
     }
@@ -2514,6 +2532,7 @@ bool SoapySource::setCenterFrequencyHz(double hz) {
     // Bounded, soft-failure - see start() above.
     std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
+        rre::noteControlRefused(this, "soapy", rre::Control::Frequency, "the radio's driver is busy or not answering; try again");
         setError("the radio's driver is busy or not answering; try again");
         return false;
     }
@@ -2604,6 +2623,7 @@ bool SoapySource::setFrequencyCorrectionPpm(double ppm) {
     // Bounded, soft-failure - see start() above.
     std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
+        rre::noteControlRefused(this, "soapy", rre::Control::Ppm, "the radio's driver is busy or not answering; try again");
         setError("the radio's driver is busy or not answering; try again");
         return false;
     }
@@ -2761,6 +2781,7 @@ bool SoapySource::setGainDb(const std::string& name, double db) {
     // Bounded, soft-failure - see start() above.
     std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
+        rre::noteControlRefused(this, "soapy", rre::Control::Gain, "the radio's driver is busy or not answering; try again");
         setError("the radio's driver is busy or not answering; try again");
         return false;
     }
@@ -2799,6 +2820,7 @@ bool SoapySource::setGainDb(const std::string& name, double db) {
             } catch (...) {
                 // Left at the request: an unanswerable readback must not fail
                 // a set the driver accepted.
+                rre::noteVendorCallFault(g.self, "soapy", "vendorcall", "the driver would not read the gain back", true);
             }
         } catch (const std::exception& e) {
             g.threw = true;
@@ -2831,6 +2853,7 @@ bool SoapySource::setAutoGain(bool on) {
     // Bounded, soft-failure - see start() above.
     std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
+        rre::noteControlRefused(this, "soapy", rre::Control::AutoGain, "the radio's driver is busy or not answering; try again");
         setError("the radio's driver is busy or not answering; try again");
         return false;
     }
@@ -2951,6 +2974,7 @@ bool SoapySource::setAntenna(const std::string& name) {
     // Bounded, soft-failure - see start() above.
     std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
+        rre::noteControlRefused(this, "soapy", rre::Control::Antenna, "the radio's driver is busy or not answering; try again");
         setError("the radio's driver is busy or not answering; try again");
         return false;
     }

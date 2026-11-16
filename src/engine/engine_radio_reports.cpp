@@ -15,6 +15,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
+#include "core/radio_events.hpp"
 #include "core/radio_report.hpp"
 #include "core/radio_reporter.hpp"
 #include "core/receiver_tables.hpp"
@@ -171,6 +172,7 @@ void Engine::journalOpenOk(const std::string& kind, const std::string& args, rr:
     j.lastMinuteS = j.openedAtS;
     j.readAtOpen = rx().pipeline_.sourceSamplesRead();
     radioOpenedThisSession_ = true;
+    rr::registerSource(rx().device_, rid);   // the drivers' own events (a refused setting, a radio that went away) find their radio through this
     rr::Event ev;
     ev.kind = "radio_open";
     ev.radio = rid;
@@ -180,15 +182,51 @@ void Engine::journalOpenOk(const std::string& kind, const std::string& args, rr:
     if (requestRateHz > 0.0) { ev.set("sampleRateSps", rateSps(requestRateHz)); }
     const double centre = rx().pipeline_.activeSource().centerFrequencyHz();
     if (centre > 0.0) { ev.set("band", rr::bandName(centre)); }
+    // the firmware the radio itself reported at open (the Airspy HF+ is the one driver that hands it over; nothing is probed for the others)
+    if (const auto* hf = dynamic_cast<const cascade::source::AirspyHfSource*>(rx().device_)) {
+        const std::string fw = rr::versionText(hf->firmwareVersion());
+        if (!fw.empty()) { ev.set("firmware", fw); }
+    }
     rr::global().event(ev);
 }
 
+// AN OPEN THAT SUCCEEDED AND WAS DROPPED because the user had moved on to something else (asyncOpenStillWanted): not a fault of the radio, so no failure
+// report; the journal says it opened and closed again, so the site's account of the radio has no hole where a hardware open happened.
+void Engine::journalOpenSuperseded(const std::string& kind, const std::string& args, rr::Trigger trigger, double requestRateHz, long long openMs) {
+    if (!physicalKind(kind)) { return; }
+    const rr::RadioIdentity rid = kind == "soundcard" ? rr::soundCardIdentity() : rr::identify(kind, args, kind == "soapy" ? std::string() : nativeLabelFor(kind, args));
+    rr::Event ok;
+    ok.kind = "radio_open";
+    ok.radio = rid;
+    ok.word = "ok";
+    ok.set("phase", "ok").set("trigger", rr::triggerWord(trigger));
+    if (openMs >= 0) { ok.set("openMs", openMs); }
+    if (requestRateHz > 0.0) { ok.set("sampleRateSps", rateSps(requestRateHz)); }
+    rr::global().event(ok);
+    rr::Event closed;
+    closed.kind = "radio_close";
+    closed.radio = rid;
+    closed.word = "switch-radio";
+    closed.set("cause", "switch-radio").set("openSec", 0);
+    rr::global().event(closed);
+}
+
 void Engine::journalCloseEvent(const RadioJournalSlot& j, const char* cause, double now) {
+    // a driver that saw the radio go away said so at the place it saw it (rr::noteDeviceFault): its event is this radio's ending, not a second one
+    const bool saidByDriver = rr::takeCloseReported(j.rid.key);
+    rr::forgetRadio(j.rid.key);
+    if (saidByDriver) { return; }
+    // the pipeline's latch ("died") says the radio ended; the sentence and the driver's own verdict say HOW: gone from the bus, given up on, or an error
+    std::string why = cause;
+    if (j.faulted && why == "died") {
+        const std::string refined = rr::closeCauseFor(j.faultDead, j.faultReason);
+        if (!refined.empty()) { why = refined; }
+    }
     rr::Event ev;
     ev.kind = "radio_close";
     ev.radio = j.rid;
-    ev.word = cause;
-    ev.set("cause", cause).set("openSec", static_cast<long long>(std::clamp<double>(now - j.openedAtS, 0.0, 2592000.0)));
+    ev.word = why;
+    ev.set("cause", why).set("openSec", static_cast<long long>(std::clamp<double>(now - j.openedAtS, 0.0, 2592000.0)));
     if (j.faulted && !j.faultReason.empty()) { ev.text("reason", j.faultReason, 400); }
     ev.urgent = j.faulted;
     rr::global().event(ev);
@@ -376,11 +414,13 @@ void Engine::radioReportsPass() {
             j.lastMinuteS = now;
             j.readAtOpen = rx().pipeline_.sourceSamplesRead();
             radioOpenedThisSession_ = true;
+            rr::registerSource(rx().device_, rid);
         }
         if (hw && j.open) {
             if (!j.faulted && rx().pipeline_.faulted()) {
                 j.faulted = true;
                 j.faultReason = rx().pipeline_.faultMessage();
+                j.faultDead = rx().device_ != nullptr && rx().device_->deviceDead();
             }
             // OPENED AND NO SAMPLES (L3, the survey's item 2): twenty seconds after the open and the source thread has read nothing
             if (!j.noSamplesDone && now - j.openedAtS >= 20.0) {

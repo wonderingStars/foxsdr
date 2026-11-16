@@ -7,7 +7,10 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "core/radio_events.hpp"
+
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace sr = soapyremote;
 
@@ -300,7 +303,7 @@ void SoapyRemoteSource::queryDeviceLocked() {
     // The rest is information for the screen: a server that answers an error to any of these
     // still opens (the stream is what matters).
     const auto soft = [this](auto&& fn) {
-        try { fn(); } catch (const std::exception&) {}
+        try { fn(); } catch (const std::exception&) { rre::noteVendorCallFault(this, "soapyremote", "vendorcall", "the server did not answer an optional query", true); }
     };
     soft([&] {
         sr::Packer p;
@@ -517,6 +520,7 @@ void SoapyRemoteSource::stop() {
             p.call(sr::C_DEACTIVATE_STREAM).i32(streamId_).i32(0).i64(0);
             callLocked(p).i32();
         } catch (const std::exception& e) {
+            rre::noteVendorCallFault(this, "soapyremote", "vendorcall", std::string("stopping the SoapyRemote stream failed: ") + e.what(), true);
             setError(std::string("stopping the SoapyRemote stream failed: ") + e.what());
         }
     }
@@ -544,7 +548,7 @@ bool SoapyRemoteSource::setSampleRateHz(double hz) {
         p.call(sr::C_SET_SAMPLE_RATE).chr(static_cast<char>(kDirRx)).i32(0).f64(use);
         callLocked(p);
     } catch (const std::exception& e) {
-        setError(std::string("setting the sample rate failed: ") + e.what());
+        setError(rre::noteControlRefusedText(this, "soapyremote", rre::Control::Rate, std::string("setting the sample rate failed: ") + e.what()));
         return false;
     }
     rateHz_ = use;
@@ -565,7 +569,7 @@ bool SoapyRemoteSource::setCenterFrequencyHz(double hz) {
         p.call(sr::C_SET_FREQUENCY).chr(static_cast<char>(kDirRx)).i32(0).f64(hz).kwargs({});
         callLocked(p);
     } catch (const std::exception& e) {
-        setError(std::string("tuning failed: ") + e.what());
+        setError(rre::noteControlRefusedText(this, "soapyremote", rre::Control::Frequency, std::string("tuning failed: ") + e.what()));
         return false;
     }
     centerHz_ = hz;
@@ -585,7 +589,7 @@ bool SoapyRemoteSource::setFrequencyCorrectionPpm(double ppm) {
         p.call(sr::C_SET_FREQUENCY_CORRECTION).chr(static_cast<char>(kDirRx)).i32(0).f64(ppm);
         callLocked(p);
     } catch (const std::exception& e) {
-        setError(std::string("setting the frequency correction failed: ") + e.what());
+        setError(rre::noteControlRefusedText(this, "soapyremote", rre::Control::Ppm, std::string("setting the frequency correction failed: ") + e.what()));
         return false;
     }
     return true;
@@ -611,7 +615,7 @@ bool SoapyRemoteSource::setGainDb(const std::string& name, double db) {
         p.call(sr::C_SET_GAIN_ELEMENT).chr(static_cast<char>(kDirRx)).i32(0).str(name).f64(use);
         callLocked(p);
     } catch (const std::exception& e) {
-        setError(std::string("setting the gain failed: ") + e.what());
+        setError(rre::noteControlRefusedText(this, "soapyremote", rre::Control::Gain, std::string("setting the gain failed: ") + e.what()));
         return false;
     }
     gainValues_[name] = use;
@@ -637,7 +641,7 @@ bool SoapyRemoteSource::setAutoGain(bool on) {
         p.call(sr::C_SET_GAIN_MODE).chr(static_cast<char>(kDirRx)).i32(0).boolean(on);
         callLocked(p);
     } catch (const std::exception& e) {
-        setError(std::string("setting the gain mode failed: ") + e.what());
+        setError(rre::noteControlRefusedText(this, "soapyremote", rre::Control::AutoGain, std::string("setting the gain mode failed: ") + e.what()));
         return false;
     }
     autoGain_ = on;
@@ -666,7 +670,7 @@ bool SoapyRemoteSource::setAntenna(const std::string& name) {
         p.call(sr::C_SET_ANTENNA).chr(static_cast<char>(kDirRx)).i32(0).str(name);
         callLocked(p);
     } catch (const std::exception& e) {
-        setError(std::string("choosing the antenna failed: ") + e.what());
+        setError(rre::noteControlRefusedText(this, "soapyremote", rre::Control::Antenna, std::string("choosing the antenna failed: ") + e.what()));
         return false;
     }
     antenna_ = name;

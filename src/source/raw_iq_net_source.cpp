@@ -11,7 +11,10 @@
 #include <cstring>
 #include <thread>
 
+#include "core/radio_events.hpp"
+
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace rawiq {
 
@@ -431,6 +434,7 @@ bool RawIqNetSource::setCenterFrequencyHz(double hz) {
             return true;
         }
     }
+    rre::noteControlRefused(this, "rawiq", rre::Control::Frequency, lastCentreMsg_);
     setError(lastCentreMsg_);
     return false;
 }

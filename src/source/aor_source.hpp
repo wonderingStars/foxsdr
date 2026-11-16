@@ -272,6 +272,7 @@ public:
 
 private:
     struct ReaderLink {
+        const void* owner = nullptr;   // the source object, for the radio reports (core/radio_events.hpp)
         explicit ReaderLink(std::size_t cap) : ring(cap) {}
         std::atomic<bool> run{false};
         cascade::usb::UsbDevice* dev = nullptr;  // NOT owned; see the file header
@@ -301,7 +302,7 @@ private:
 
     // 512 Ki complex samples: 466 ms at 1.125 MS/s.
     static constexpr std::size_t kRingCapacitySamples() { return 1u << 19; }
-    const std::shared_ptr<ReaderLink> link_ = std::make_shared<ReaderLink>(kRingCapacitySamples());
+    const std::shared_ptr<ReaderLink> link_ = [this] { auto l = std::make_shared<ReaderLink>(kRingCapacitySamples()); l->owner = this; return l; }();
 
     bool resolveDevice(const std::string& args, cascade::usb::UsbDeviceInfo& out,
                        std::string& error);

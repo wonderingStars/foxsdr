@@ -30,6 +30,7 @@
 #include "core/config.hpp"
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
+#include "core/radio_events.hpp"
 #include "core/radio_report.hpp"
 #include "core/radio_reporter.hpp"
 #include "engine/engine.hpp"
@@ -62,6 +63,8 @@ std::string g_failText;
 std::atomic<bool> g_hold{false};       // an open waits here until released
 std::atomic<bool> g_silent{false};     // the opened radio gives no samples at all
 std::atomic<int> g_opens{0};
+std::atomic<bool> g_unplug{false};     // the next read says the radio was unplugged, through the driver helper
+void* g_lastFake = nullptr;           // the radio the engine opened last
 
 class FakeRadio final : public cascade::source::DeviceSource {
 public:
@@ -75,6 +78,7 @@ public:
     bool setCenterFrequencyHz(double hz) override { centre_ = hz; return true; }
     std::size_t read(std::complex<float>* dst, std::size_t n) override {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        if (g_unplug.exchange(false)) { rr::noteDeviceFault(this, "rtlsdr", "reading samples", "the device was unplugged"); }
         if (abort_ || g_silent.load()) { return 0; }
         for (std::size_t i = 0; i < n; ++i) { dst[i] = {0.0f, 0.0f}; }
         return n;
@@ -91,6 +95,7 @@ public:
             return false;
         }
         open_ = true;
+        g_lastFake = this;
         return true;
     }
     void closeDevice() override { open_ = false; }
@@ -335,6 +340,7 @@ void resetFake() {
     g_hold = false;
     g_silent = false;
     g_opens = 0;
+    g_unplug = false;
     cascade::core::DiagLog::instance().resetForTest();
     setNative({{"rtlsdr", "Generic RTL2832U", kArgs}});
 }
@@ -593,7 +599,7 @@ int main() {
         const std::string engine = text("engine.cpp");
         CHECK(count(engine, "reportFailedOpen(") >= 3);   // finishDeviceOpen (twice: the open the user moved on from, and the failure) and the start-up restore
         CHECK(count(text("engine_radio_saved.cpp"), "reportFailedOpen(") == 1);
-        CHECK(count(text("engine_patch_radios.cpp"), "reportFailedOpen(") == 1);
+        CHECK(count(text("engine_patch_radios.cpp"), "reportFailedOpen(") == 2);   // would not open, and (part 2) opened and would not start
         CHECK(count(text("engine_soundcard.cpp"), "reportFailedOpen(\"soundcard\"") == 1);
         // ...and each sits beside the anonymous count it must never replace
         CHECK(count(engine, "noteRadioFail(") >= 2 && count(text("engine_soundcard.cpp"), "noteRadioFail(") == 1);
@@ -774,6 +780,51 @@ int main() {
             CHECK(g->counts().count("scan_none") == 0);
         }
         setNative({});
+    }
+
+    // --- WHAT HAPPENS AFTER A RADIO OPENED (part 2): a refused setting, an unplug said once, the saved radio kind that names no device ------------------------
+    {
+        std::printf("  a refused setting and an unplug are said by the driver at the place it sees them; the engine's own close of the same ending is not a second\n");
+        resetFake();
+        th::TestWindow app;
+        Rig rig("after-open");
+        rig.start();
+        Access::restore(app, savedRadio());
+        CHECK(Access::deviceOpen(app));
+        Access::startReceiver(app);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        rr::noteControlRefused(g_lastFake, "rtlsdr", rr::Control::Gain, "the tuner refused that gain");
+        g_unplug = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(400));
+        Access::pass(app);
+        Access::quit(app);
+        const std::vector<json> q = queued(rig.qdir());
+        const std::vector<json> refusals = ofKind(q, "radio_settings");
+        int gain = 0;
+        for (const json& m : refusals) { if (m["body"].value("refused", std::string()) == "gain") { ++gain; CHECK(m["radioKey"] == "generic-rtl2832u:00000001"); } }
+        CHECK(gain == 1);
+        const std::vector<json> closes = ofKind(q, "radio_close");
+        CHECK(closes.size() == 1);   // the driver's, once: the engine's close at quit is not a second one
+        if (!closes.empty()) { CHECK(closes[0]["body"]["cause"] == "unplugged"); }
+        keep(q);
+    }
+    {
+        std::printf("  a saved radio kind that names no device is an open that failed, not a silent generator\n");
+        resetFake();
+        th::TestWindow app;
+        Rig rig("nodevice");
+        rig.start();
+        cascade::core::AppConfig cfg = savedRadio();
+        cfg.nativeArgs.clear();
+        Access::restore(app, cfg);
+        CHECK(!Access::deviceOpen(app));
+        const std::vector<json> fails = ofKind(queued(rig.qdir()), "radio_fail");
+        CHECK(fails.size() == 1);
+        if (!fails.empty()) {
+            CHECK(fails[0]["body"]["trigger"] == "startup-restore");
+            CHECK(std::string(fails[0]["body"]["reason"]).find("not which one") != std::string::npos);
+        }
+        keep(fails);
     }
 
     // --- the Worker's own validator over every message the engine made ---------------------------------------------------------------------------------

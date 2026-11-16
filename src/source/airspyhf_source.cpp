@@ -7,6 +7,7 @@
 #include "source/airspyhf_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
 
@@ -18,6 +19,7 @@
 #include <utility>
 
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace {
 
@@ -166,6 +168,7 @@ void AirspyHfSource::noteTransportFaultOn(ReaderLink& link, const char* what,
     }
     core::diagWarnf("airspyhf: transfer failed while %s%s%s", what, detail.empty() ? "" : ": ",
                     detail.c_str());
+    rre::noteDeviceFault(link.owner, "airspyhf", what, detail);
 }
 
 void AirspyHfSource::noteTransportFault(const char* what, const std::string& detail) {
@@ -431,12 +434,14 @@ bool AirspyHfSource::readCalibrationLocked() {
     // the device dead.
     if (!optionalControlOut(dev_.get(), airspyhf::VendorRequest::SetVctcxoCalibration,
                             static_cast<std::uint16_t>(vctcxo & 0xFFFFu), 0)) {
+        rre::noteControlRefused(this, "airspyhf", rre::Control::Ppm, "the receiver refused to take back its stored crystal trim; carrying on without it", false, "open");
         core::diagWarnf("airspyhf: the receiver refused to take back its stored crystal trim; "
                         "carrying on without it");
     }
     if (!optionalControlOut(dev_.get(), airspyhf::VendorRequest::SetFrontendOptions,
                             static_cast<std::uint16_t>(frontend & 0xFFFFu),
                             static_cast<std::uint16_t>(frontend >> 16))) {
+        rre::noteControlRefused(this, "airspyhf", rre::Control::Other, "the receiver refused to take back its stored front-end options; carrying on without them", false, "open");
         core::diagWarnf("airspyhf: the receiver refused to take back its stored front-end "
                         "options; carrying on without them");
     }
@@ -1044,6 +1049,7 @@ void AirspyHfSource::noteRead(ReaderLink& link, int ret, std::size_t samples, bo
     const auto now = std::chrono::steady_clock::now();
     std::string line;
     bool warn = false;
+    rre::StreamTrouble trouble;
     {
         std::lock_guard<std::mutex> lk(link.healthMutex);
         StreamHealth& h = link.health;
@@ -1079,6 +1085,8 @@ void AirspyHfSource::noteRead(ReaderLink& link, int ret, std::size_t samples, bo
             h.timeouts == 0 && h.overflows == 0 && h.errors == 0 && h.longestGapMs < 250;
         const bool first = !link.healthEverWritten;
         warn = h.errors > 0 || h.longestGapMs >= 1000;
+        trouble = {std::chrono::duration<double>(now - h.windowStart).count(), h.samples, h.errors, h.overflows, h.timeouts,
+                   static_cast<long long>(h.longestGapMs)};
         line = healthLineLocked(link);
         if (line.empty()) { return; }
         if (!(warn || first || !nominal)) { return; }
@@ -1086,6 +1094,7 @@ void AirspyHfSource::noteRead(ReaderLink& link, int ret, std::size_t samples, bo
     }
     if (warn) {
         core::diagWarnf("%s", line.c_str());
+        rre::noteStreamTrouble(link.owner, "airspyhf", trouble);
     } else {
         core::diagLogf("%s", line.c_str());
     }
@@ -1238,6 +1247,7 @@ bool AirspyHfSource::setCenterFrequencyHz(double hz) {
                       "%.6f MHz is in neither band",
                       airspyhf::kHfLowHz / 1e3, airspyhf::kHfHighHz / 1e6,
                       airspyhf::kVhfLowHz / 1e6, airspyhf::kVhfHighHz / 1e6, hz / 1e6);
+        rre::noteControlRefused(this, "airspyhf", rre::Control::Frequency, "outside the range this radio can do", true);
         setError(buf);
         return false;
     }
@@ -1330,6 +1340,7 @@ bool AirspyHfSource::setBiasT(bool on) {
     }
     if (deviceDead()) { return false; }
     if (!biasTeeSupported()) {
+        rre::noteControlRefused(this, "airspyhf", rre::Control::BiasTee, "this radio did not report a bias tee");
         setError("this Airspy HF+ did not report a bias tee");
         return false;
     }

@@ -157,6 +157,7 @@ void Engine::pollIqOpen() {
         // red line on the screen.
         rx().sourceError_ = r.error;
         cc::diagWarnf("source: the I/Q file did not open: %s", cascade::core::iqOpenReasonForLog(r.error, r.path).c_str());
+        cascade::core::health::noteRecovered(cascade::core::health::Recovered::IqFileGone);   // a recording that would not open is counted and filed like the restore's
         return;
     }
     installOpenedIqFile(std::move(r.file), r.path);

@@ -7,6 +7,7 @@
 #include "source/airspy_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
 #include "source/hydrasdr_protocol.hpp"
@@ -20,6 +21,7 @@
 #include <utility>
 
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace {
 
@@ -148,7 +150,7 @@ std::vector<NativeDeviceInfo> enumerateAirspy() {
 
 AirspySource::AirspySource(const DeviceProfile& profile)
     : profile_(profile),
-      link_(std::make_shared<ReaderLink>(kRingCapacitySamples(), profile.driverKey)),
+      link_([this, &profile] { auto l = std::make_shared<ReaderLink>(kRingCapacitySamples(), profile.driverKey); l->owner = this; return l; }()),
       name_(profile.noDeviceName) {}
 
 AirspySource::~AirspySource() { closeDevice(); }
@@ -198,6 +200,7 @@ void AirspySource::noteTransportFaultOn(ReaderLink& link, const char* what,
     }
     core::diagWarnf("%s: transfer failed while %s%s%s", link.tag, what, detail.empty() ? "" : ": ",
                     detail.c_str());
+    rre::noteDeviceFault(link.owner, link.tag, what, detail);
 }
 
 void AirspySource::noteTransportFault(const char* what, const std::string& detail) {
@@ -552,6 +555,7 @@ bool AirspySource::programRfPortLocked(std::size_t index, const char* what) {
         return false;
     }
     if (moved != 1 || ack != 1) {
+        rre::noteControlRefused(this, driverKey(), rre::Control::Antenna, "the radio would not select that receive port");
         setError(std::string("the ") + profile_.productName + " would not select receive port " +
                  profile_.ports[index]);
         return false;
@@ -1163,6 +1167,7 @@ void AirspySource::noteRead(ReaderLink& link, int ret, std::size_t samples, bool
     const auto now = std::chrono::steady_clock::now();
     std::string line;
     bool warn = false;
+    rre::StreamTrouble trouble;
     {
         std::lock_guard<std::mutex> lk(link.healthMutex);
         StreamHealth& h = link.health;
@@ -1198,6 +1203,8 @@ void AirspySource::noteRead(ReaderLink& link, int ret, std::size_t samples, bool
                              h.longestGapMs < 250;
         const bool first = !link.healthEverWritten;
         warn = h.errors > 0 || h.longestGapMs >= 1000;
+        trouble = {std::chrono::duration<double>(now - h.windowStart).count(), h.samples, h.errors, h.overflows, h.timeouts,
+                   static_cast<long long>(h.longestGapMs)};
         line = healthLineLocked(link);
         if (line.empty()) { return; }
         if (!(warn || first || !nominal)) { return; }
@@ -1205,6 +1212,7 @@ void AirspySource::noteRead(ReaderLink& link, int ret, std::size_t samples, bool
     }
     if (warn) {
         core::diagWarnf("%s", line.c_str());
+        rre::noteStreamTrouble(link.owner, link.tag, trouble);
     } else {
         core::diagLogf("%s", line.c_str());
     }
@@ -1329,6 +1337,7 @@ bool AirspySource::setDecimation(unsigned factor) {
                       "the %s cannot decimate by %u here: it takes 1, 2, 4 ... up to %u, where "
                       "every sample rate it lists stays a whole number of hertz",
                       profile_.productName, factor, choices.empty() ? 1u : choices.back());
+        rre::noteControlRefused(this, driverKey(), rre::Control::Decimation, "outside the range this radio can do", true);
         setError(buf);
         return false;
     }
@@ -1509,6 +1518,7 @@ bool AirspySource::setCenterFrequencyHz(double hz) {
                       "the %s tunes %.0f MHz to %.0f MHz; %.6f MHz is outside that",
                       profile_.productName, profile_.minFrequencyHz / 1e6,
                       profile_.maxFrequencyHz / 1e6, hz / 1e6);
+        rre::noteControlRefused(this, driverKey(), rre::Control::Frequency, "outside the range this radio can do", true);
         setError(buf);
         return false;
     }

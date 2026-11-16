@@ -28,7 +28,10 @@
 #include <unistd.h>
 #endif
 
+#include "core/radio_events.hpp"
+
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace as = ascp;
 
@@ -333,6 +336,7 @@ bool AscpSource::transact(as::MsgType type, std::uint16_t item, const std::vecto
     }
     if (faulted()) { setError(faultedWhile().empty() ? "the radio connection failed" : faultedWhile()); return false; }
     (void)ok;
+    rre::noteControlRefused(this, "rfspace", rre::Control::Other, "the radio did not answer (receive timed out)");
     setError("the radio did not answer (receive timed out)");
     return false;
 }

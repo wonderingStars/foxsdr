@@ -39,7 +39,7 @@ namespace fs = std::filesystem;
 
 // THE PIN: how many sites are parked as PENDING in tests/errpath_allow.tsv. It may only go DOWN.
 // (tools/errpath_seed.py --write-pin keeps this line in step after a re-seed.)
-constexpr int kPendingPin = 1115;   // errpath-pin
+constexpr int kPendingPin = 927;   // errpath-pin
 
 namespace {
 
@@ -101,7 +101,8 @@ int main(int argc, char** argv) {
         // (radio reports: the engine's reportFailedOpen, which files ONE report per failed radio open, is declared in engine/engine.hpp, and the reporter it calls in
         // core/radio_reporter.hpp: a rename of either still fails here)
         const std::string h = errpath::readFile(root / "src" / "core" / "health_events.hpp") + errpath::readFile(root / "src" / "core" / "issue_report.hpp") +
-                              errpath::readFile(root / "src" / "core" / "radio_reporter.hpp") + errpath::readFile(root / "src" / "engine" / "engine.hpp");
+                              errpath::readFile(root / "src" / "core" / "radio_reporter.hpp") + errpath::readFile(root / "src" / "core" / "radio_events.hpp") +
+                              errpath::readFile(root / "src" / "engine" / "engine.hpp");
         expect(!opt.reporters.empty(), "tests/errpath_reporters.txt lists no reporter");
         for (const std::string& name : opt.reporters) {
             bool declared = false;
@@ -111,7 +112,7 @@ int main(int argc, char** argv) {
                 if ((p == 0 || !errpath::isIdentChar(h[p - 1])) && e < h.size() && (h[e] == '(' )) { declared = true; break; }
                 p = e;
             }
-            expect(declared, "reporter '" + name + "' in tests/errpath_reporters.txt is not declared in core/health_events.hpp, core/issue_report.hpp, core/radio_reporter.hpp or engine/engine.hpp (renamed? update the list)");
+            expect(declared, "reporter '" + name + "' in tests/errpath_reporters.txt is not declared in core/health_events.hpp, core/issue_report.hpp, core/radio_reporter.hpp, core/radio_events.hpp or engine/engine.hpp (renamed? update the list)");
         }
     }
     // 1. the plugins repository's copy of the scanner is the same file

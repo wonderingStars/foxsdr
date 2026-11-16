@@ -7,7 +7,10 @@
 #include <cstdlib>
 #include <map>
 
+#include "core/radio_events.hpp"
+
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace as = ascp;
 namespace sq = sdriq;
@@ -172,6 +175,7 @@ bool SdriqSource::transact(as::MsgType type, std::uint16_t item, const std::vect
     }
     std::string err;
     if (!c->sendBytes(as::encodeMessage(type, item, params), err)) {
+        rre::noteControlRefused(this, "sdriq", rre::Control::Other, "could not send to the radio");
         setError("could not send to the SDR-IQ" + (err.empty() ? std::string() : ": " + tame(err)));
         return false;
     }
@@ -187,6 +191,7 @@ bool SdriqSource::transact(as::MsgType type, std::uint16_t item, const std::vect
         return true;
     }
     if (faulted()) { setError(faultedWhile().empty() ? "the SDR-IQ connection failed" : faultedWhile()); return false; }
+    rre::noteControlRefused(this, "sdriq", rre::Control::Other, "the radio did not answer (receive timed out)");
     setError("the SDR-IQ did not answer (receive timed out)");
     return false;
 }
