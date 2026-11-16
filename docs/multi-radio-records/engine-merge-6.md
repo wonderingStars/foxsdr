@@ -91,7 +91,7 @@ The four older `main.cpp` stderr lines (#3 to #6) stay PENDING:unsure as seeded.
 
 ## 7. Open rows
 
-`docs/multi-radio-records/open-rows-2026-11-16.md`: every merged lane's table plus engine-fixes-8's (engine-fixes-7 has no table of its own; its rows are in engine-fixes-8's), grouped by the kind of lane: screen 20 open / 6 closed, engine 57 / 9, plugins 11 / 0, Worker/site 9 / 3, owner decision 13 / 0, mouse drive 22 / 0; 132 open, 18 closed with evidence, 150 in all. Row P1 (window gaps 4: Airband marks, gap break and range rail on no pane in a multi-radio layout) is marked NOTICEABLE at the top.
+`docs/multi-radio-records/open-rows-2026-11-16.md`: every merged lane's table plus engine-fixes-8's (engine-fixes-7 has no table of its own; its rows are in engine-fixes-8's), grouped by the kind of lane: screen 21 open / 6 closed, engine 57 / 9, plugins 11 / 0, Worker/site 9 / 3, owner decision 13 / 0, mouse drive 22 / 0; 133 open, 18 closed with evidence, 151 in all. Row P1 (window gaps 4: Airband marks, gap break and range rail on no pane in a multi-radio layout) is marked NOTICEABLE at the top.
 
 ## UNVERIFIED
 The machine translations of all new strings; every real-hardware, real-pointer and real-Store row in the open-rows file; whether the clip-probe build also passes `slint_drive_system-look` after the scale fix (only the probe-OFF folder was run); whether the full-screen clamp also happens on a physical desktop (the logic is unit-tested, the clamp seen only on the hidden desktop); the Worker and site, none deployed.
