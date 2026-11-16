@@ -46,10 +46,6 @@ wc::State& Engine::wireC() {
             data = std::filesystem::path(home) / ".local" / "share" / "foxsdr";
         }
         wireC_ = std::make_unique<wc::State>(folder, data);
-        {   // what the last start did with a staged import or reset (written by bootProcess step 2c)
-            std::string boot;
-            if (cascade::core::safeio::readCapped(folder / "wirec-last-boot.txt", 4096, boot) == cascade::core::safeio::ReadResult::Ok) { wireC_->sysLastBoot = boot; }
-        }
     }
     return *wireC_;
 }
@@ -73,73 +69,26 @@ std::int32_t Engine::applyWireC(const FoxCommand& c, const std::string& text, Fo
             }
             return FOXAPI_FAILED;
         }
-        case FOXAPP_OP_SYS_FIRSTRUN:
-        case FOXAPP_OP_SYS_EXPORT:
-        case FOXAPP_OP_SYS_IMPORT_PLAN:
-        case FOXAPP_OP_SYS_IMPORT_COMMIT:
-        case FOXAPP_OP_SYS_BACKUP:
-        case FOXAPP_OP_SYS_RESET_PLAN:
-        case FOXAPP_OP_SYS_RESET_COMMIT:
-        case FOXAPP_OP_SYS_PENDING_CANCEL: {
+        case FOXAPP_OP_SYS_FIRSTRUN: {
             wc::State& s = wireC();
             wc::SysOps& sys = s.sys();
             s.sysError.clear();
-            bool ok = false;
-            std::int32_t bad = FOXAPI_BAD_ARGUMENT;
-            switch (c.op) {
-                case FOXAPP_OP_SYS_FIRSTRUN: {
-                    ok = sys.wizardVerb(text, why);
-                    if (ok && sys.wizardFinished()) {
-                        const cascade::core::sys::WizardOutcome out = sys.wizardOutcome();
-                        if (out.applied) {
-                            if (!out.bookmarks.empty()) {
-                                freqMgr_.addMany(out.bookmarks);
-                                saveBookmarks();
-                            }
-                            if (sys.telemetryChosen()) { (void)applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_TELEMETRY_CONSENT, out.telemetryEnabled ? 1 : 0)); }
-                        }
-                        (void)sys.markDone();
+            const bool ok = sys.wizardVerb(text, why);
+            if (ok && sys.wizardFinished()) {
+                const cascade::core::sys::WizardOutcome out = sys.wizardOutcome();
+                if (out.applied) {
+                    if (!out.bookmarks.empty()) {
+                        freqMgr_.addMany(out.bookmarks);
+                        saveBookmarks();
                     }
-                    break;
+                    if (sys.telemetryChosen()) { (void)applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_TELEMETRY_CONSENT, out.telemetryEnabled ? 1 : 0)); }
                 }
-                case FOXAPP_OP_SYS_EXPORT: {
-                    std::size_t stripped = 0;
-                    ok = sys.exportTo(text, why, &stripped);
-                    if (ok) { s.sysExportLast = "exported to the file you chose (" + std::to_string(stripped) + " secret or identity item(s) left out)"; }
-                    break;
-                }
-                case FOXAPP_OP_SYS_IMPORT_PLAN:
-                    ok = sys.importPlan(text, s.sysImportPlan, s.sysImportToken, s.sysImportNotes, why);
-                    if (!ok) { s.sysImportPlan.clear(); s.sysImportToken.clear(); s.sysImportNotes.clear(); }
-                    break;
-                case FOXAPP_OP_SYS_IMPORT_COMMIT:
-                    ok = sys.importCommit(text, why);
-                    if (ok) { s.sysImportToken.clear(); }
-                    break;
-                case FOXAPP_OP_SYS_BACKUP: {
-                    std::string name;
-                    const std::size_t keep = c.ival[0] > 0 ? static_cast<std::size_t>(std::min<std::int64_t>(c.ival[0], 50)) : static_cast<std::size_t>(s.settings().getInt("sys.backup_keep"));
-                    ok = sys.backupNow(keep, name, why);
-                    if (ok) { s.sysBackupLast = name; }
-                    break;
-                }
-                case FOXAPP_OP_SYS_RESET_PLAN:
-                    ok = sys.resetPlan(c.ival[0] != 0, c.ival[1] != 0, s.sysResetPlan, s.sysResetToken, why);
-                    if (!ok) { s.sysResetPlan.clear(); s.sysResetToken.clear(); }
-                    break;
-                case FOXAPP_OP_SYS_RESET_COMMIT:
-                    ok = sys.resetStage(text, why);
-                    if (ok) { s.sysResetToken.clear(); }
-                    break;
-                default:   // SYS_PENDING_CANCEL
-                    ok = sys.cancelPending(why);
-                    bad = FOXAPI_NO_CHANGE;
-                    break;
+                (void)sys.markDone();
             }
             ++wireCVersion_;
             if (!ok) {
                 s.sysError = why;
-                return bad;
+                return FOXAPI_BAD_ARGUMENT;
             }
             return FOXAPI_OK;
         }
@@ -269,6 +218,9 @@ void Engine::wireCFacts(const std::function<void(const std::string&, const std::
         fact("plugin.open.last", s.openLast);
     }
     // CAT EMULATION (row L7)
+    fact("rds.log.lines", std::to_string(s.rdsLog.written()));       // counts and a sentence only: never a name, a text or a frequency
+    fact("rds.log.dropped", std::to_string(s.rdsLog.dropped()));
+    fact("rds.log.error", s.rdsLog.error());
     fact("cat.emulation.running", s.catEmu.running() ? "1" : "0");
     fact("cat.emulation.port", s.catEmu.running() ? std::to_string(s.catEmu.boundPort()) : std::string());
     fact("cat.emulation.clients", std::to_string(s.catEmu.clients()));
@@ -294,15 +246,6 @@ void Engine::wireCFacts(const std::function<void(const std::string&, const std::
     }
     // THE SYSTEM OPERATIONS (wire_c_sys.hpp): what they last said, and the first-run wizard's state
     fact("sys.error", s.sysError);
-    fact("sys.export.last", s.sysExportLast);
-    fact("sys.import.plan", s.sysImportPlan);
-    fact("sys.import.token", s.sysImportToken);
-    fact("sys.import.notes", s.sysImportNotes);
-    fact("sys.reset.plan", s.sysResetPlan);
-    fact("sys.reset.token", s.sysResetToken);
-    fact("sys.backup.last", s.sysBackupLast);
-    fact("sys.lastboot", s.sysLastBoot);
-    fact("sys.pending", s.sys().pendingKind());
     fact("sys.firstrun.needed", s.sys().firstRunNeeded() ? "1" : "0");
     fact("sys.firstrun.step", s.sys().wizardStepName());
     fact("sys.firstrun.done", s.sys().wizardFinished() ? "1" : "0");
@@ -452,6 +395,15 @@ std::vector<std::size_t> Engine::wireCStoreOrder() {
     return idx;
 }
 
+void Engine::setWebCertFolder(const std::string& folder) { servers_.setCertFolder(folder); }
+
+void Engine::observeRdsForLog(int radio, const cascade::core::RdsSnapshot& rds) {
+    wc::State& s = wireC();
+    if (s.rdsLogApplied.empty() || s.rdsLogApplied[0] != '1') { return; }   // the user's switch is off (the common case): nothing is read, locked or copied
+    const std::int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    s.rdsLog.observe(radio, rds.state, nowMs, currentAbsoluteHz());
+}
+
 void Engine::pumpWireC() {
     wireCPluginRecorder();
     cascade::core::companion::drain(*pluginApi_);   // engine fixes 7: the companion fault reports plugins made since the last pass (held back while the switch is off)
@@ -499,6 +451,31 @@ void Engine::pumpWireC() {
             ++wireCVersion_;
         }
         if (s.radioInfo.poll(static_cast<std::int64_t>(std::time(nullptr)))) { ++wireCVersion_; }
+    }
+    // THE RDS LOG (engine lane E1; core/rds_log.hpp): off by default; a change of the three settings reconfigures it, a refusal is said in fact rds.log.error
+    {
+        const bool on = s.settings().getBool("rds.log");
+        const std::string folder = s.settings().get("rds.log.folder");
+        const std::string name = s.settings().get("rds.log.name");
+        const std::string sig = std::string(on ? "1" : "0") + "|" + folder + "|" + name;
+        if (sig != s.rdsLogApplied) {
+            s.rdsLogApplied = sig;
+            cascade::core::rdslog::Options o;
+            o.enabled = on;
+            o.folder = folder;
+            o.nameTemplate = name;
+            std::string why;
+            (void)s.rdsLog.configure(o, why);   // a refusal is kept by the logger and published as fact rds.log.error
+            ++wireCVersion_;
+        }
+    }
+    // what the RDS log has done since the last pass (lines written or dropped, an error said or cleared) is published: the facts are re-made only when the lane's version moves
+    {
+        const std::uint64_t seen = s.rdsLog.written() * 1000003u + s.rdsLog.dropped() * 31u + static_cast<std::uint64_t>(s.rdsLog.error().size());
+        if (seen != s.rdsLogSeen) {
+            s.rdsLogSeen = seen;
+            ++wireCVersion_;
+        }
     }
     // CAT EMULATION (row L7; wire_c_cat.hpp): a TCP port that answers like a rig, receive only, off by default; a change of settings reopens it
     {

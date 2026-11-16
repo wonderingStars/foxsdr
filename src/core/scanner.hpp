@@ -231,6 +231,15 @@ public:
         return out;
     }
 
+    // THE OPERATOR'S LOCKOUTS WITH THEIR TIMES (engine lane E1, row D2): remainingMs 0 = until cleared, else how long the temporary lockout still has to run.
+    struct LockoutInfo { double hz; double remainingMs; };
+    std::vector<LockoutInfo> lockoutInfo() const {
+        std::vector<LockoutInfo> out;
+        for (const double hz : perm_) { out.push_back({hz, 0.0}); }
+        for (const TempLock& t : temp_) { if (t.untilMs > lastMs_) { out.push_back({t.hz, t.untilMs - lastMs_}); } }
+        return out;
+    }
+
     // C5.
     bool muted() const { return params_.muteWhileScanning && state_ == State::Scanning; }
 

@@ -215,6 +215,7 @@ EngineService::Restored EngineService::restore() {
         if (loaded) {
             // THE START-UP STATE, then the receiver's half from it (the window's applyConfig, in its order).
             const cascade::core::AppConfig startup = cascade::core::startupState(cfg);
+            engine_.setWebCertFolder(settingsDirOf(options_.configPath));   // engine lane E1: the web page's own HTTPS certificate is kept beside the settings
             engine_.applyConfig(startup);
             diagnosticsEnabled_ = cfg.diagnosticsEnabled;
             out.lastRunUnclean = !cfg.telemetryCleanExit;

@@ -117,7 +117,11 @@ struct ServerConfig {
     } udp;
     bool operator==(const ServerConfig& o) const {
         return web.enabled == o.web.enabled && web.bindAddress == o.web.bindAddress && web.port == o.web.port &&
-               web.username == o.web.username && web.passwordRecord == o.web.passwordRecord && cat == o.cat && tci == o.tci && udp == o.udp;
+               web.username == o.web.username && web.passwordRecord == o.web.passwordRecord && web.tlsEnabled == o.web.tlsEnabled &&
+               web.tlsCertThumbprint == o.web.tlsCertThumbprint && web.listenersEnabled == o.web.listenersEnabled &&
+               web.listenerPasswordRecord == o.web.listenerPasswordRecord && web.maxListeners == o.web.maxListeners &&
+               web.listenerIdleSeconds == o.web.listenerIdleSeconds && web.listenerSessionSeconds == o.web.listenerSessionSeconds &&
+               web.listenersMayTune == o.web.listenersMayTune && web.chatEnabled == o.web.chatEnabled && cat == o.cat && tci == o.tci && udp == o.udp;
     }
 };
 
@@ -140,6 +144,18 @@ struct ServerConfigRequest {
     std::optional<std::string> webPassword;        // plaintext: hashed on a worker, never stored, never published
     std::optional<std::string> webPasswordRecord;  // an already-serialised record
     bool webClearPassword = false;
+    // HTTPS and the shared-receiver listeners (engine lane E1; owner decisions 17 and 18). All optional: absent = leave alone.
+    std::optional<bool> webTls;
+    std::optional<std::string> webTlsThumbprint;          // 40 hex digits of a Windows certificate; "" = the program's own certificate
+    std::optional<bool> webListeners;
+    std::optional<std::string> webListenerPassword;       // plaintext: hashed on a worker of its own, never stored, never published
+    std::optional<std::string> webListenerPasswordRecord; // an already-serialised record
+    bool webListenerClearPassword = false;
+    std::optional<int> webMaxListeners;                   // 1 .. 32
+    std::optional<int> webListenerIdleSeconds;            // 0 .. 86400 (0 = none)
+    std::optional<int> webListenerSessionSeconds;         // 0 .. 43200 (0 = none)
+    std::optional<bool> webListenersMayTune;
+    std::optional<bool> webChat;
     std::optional<bool> catEnabled;
     std::optional<bool> catBindAll;
     std::optional<int> catPort;
@@ -264,6 +280,9 @@ public:
     // --- any thread -------------------------------------------------------------------------------------------------------------
     ServerConfig config() const;
     bool passwordPending() const { return passwordPending_.load(std::memory_order_relaxed); }
+    bool listenerPasswordPending() const { return listenerPending_.load(std::memory_order_relaxed); }
+    // The folder the web page's own certificate file ("web-tls.cer") is kept in: the settings folder. Set by the engine's start; "" until then (a certificate for this run only).
+    void setCertFolder(const std::string& folder) { std::lock_guard<std::mutex> lk(m_); certFolder_ = folder; }
     // What moves the lists: the configuration, a listener's report, a password job started or finished. Hashed by the pass every pass
     // (no allocation), and the block is rebuilt when it moves.
     std::uint64_t version() const { return version_.load(std::memory_order_relaxed); }
@@ -343,6 +362,13 @@ private:
 
     // The password job. Only the pumping thread touches these.
     std::future<Hashed> hashing_;
+    // THE LISTENERS' PASSWORD hashes on a worker of its own (a second future: the owner's hash is never made to wait for it, and the owner's tests see no change).
+    std::future<Hashed> listenerHashing_;
+    std::uint64_t listenerGeneration_ = 0;
+    std::optional<std::string> waitingListenerPlain_;
+    std::atomic<bool> listenerPending_{false};
+    std::string certFolder_;
+    void pollListener();
     std::uint64_t passwordGeneration_ = 0;  // moves with every request that decides the password: an older answer is dropped
     std::optional<std::string> waitingPlain_;  // the newest plaintext asked for while a hash was running
 };

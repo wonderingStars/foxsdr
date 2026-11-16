@@ -87,12 +87,18 @@ void WireA::adjustScannerParams(cascade::core::ScannerParams& p) {
     p.lockedHz = lockedHz_;
     p.muteWhileScanning = muteWhileScanning_;
     p.thresholdDb.clear();
-    if (!p.list.empty() && (!thresholds_.empty() || !fields_.empty())) {
+    if (!p.list.empty() && (!thresholds_.empty() || !memThresholds_.empty() || !fields_.empty())) {
         bool any = false;
         std::vector<double> th(p.list.size(), std::numeric_limits<double>::quiet_NaN());
         for (std::size_t i = 0; i < p.list.size(); ++i) {
             for (const auto& [hz, db] : thresholds_) {
                 if (std::fabs(hz - p.list[i]) <= 1.0) { th[i] = db; any = true; break; }
+            }
+            if (std::isnan(th[i])) {
+                // a threshold the window's memory for that frequency carries (SCANNER_EXTRAS 6)
+                for (const auto& [hz, db] : memThresholds_) {
+                    if (std::fabs(hz - p.list[i]) <= 1.0) { th[i] = db; any = true; break; }
+                }
             }
             if (std::isnan(th[i]) && !fields_.empty()) {
                 // a threshold a bookmark carries (the first bookmark at that frequency that has one)
@@ -153,6 +159,12 @@ void WireA::scanLoadOnce() {
         lockedHz_ = lk;
         priorityIntervalMs_ = x.contains("priorityIntervalMs") && x["priorityIntervalMs"].is_number() ? std::max(0.0, std::min(3.6e6, x["priorityIntervalMs"].get<double>())) : 0.0;
         muteWhileScanning_ = x.value("mute", false);
+        memThresholds_.clear();
+        if (x.contains("memThresholds") && x["memThresholds"].is_array()) {
+            for (const auto& v : x["memThresholds"]) {
+                if (v.is_array() && v.size() == 2 && v[0].is_number() && v[1].is_number() && memThresholds_.size() < kMaxThresholds) { memThresholds_.emplace_back(v[0].get<double>(), v[1].get<double>()); }
+            }
+        }
         thresholds_.clear();
         if (x.contains("thresholds") && x["thresholds"].is_array()) {
             for (const auto& v : x["thresholds"]) {
@@ -167,10 +179,12 @@ void WireA::scanSave() {
     if (!scanLoaded_ && dir().empty()) { return; }
     nlohmann::json th = nlohmann::json::array();
     for (const auto& [hz, db] : thresholds_) { th.push_back({hz, db}); }
+    nlohmann::json mth = nlohmann::json::array();
+    for (const auto& [hz, db] : memThresholds_) { mth.push_back({hz, db}); }
     const nlohmann::json j = {{"version", 1},
                               {"plan", plan_.ranges().empty() ? nlohmann::json::object() : plan_.toJson()},
                               {"triggerOn", triggerOn_},
-                              {"extras", {{"priorityHz", priorityHz_}, {"priorityIntervalMs", priorityIntervalMs_}, {"lockedHz", lockedHz_}, {"mute", muteWhileScanning_}, {"thresholds", th}}}};
+                              {"extras", {{"priorityHz", priorityHz_}, {"priorityIntervalMs", priorityIntervalMs_}, {"lockedHz", lockedHz_}, {"mute", muteWhileScanning_}, {"thresholds", th}, {"memThresholds", mth}}}};
     saveFile("scan-plan.json", j.dump(1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
 }
 
@@ -320,7 +334,8 @@ WireA::Result WireA::scanExtrasOp(const FoxCommand& c, const std::string& text, 
         case 3:
             muteWhileScanning_ = c.ival[1] != 0;
             break;
-        case 4: {
+        case 4:
+        case 6: {   // 6 (engine lane E1, row D1-mem): the window's per-memory thresholds, same lines; case 4's list wins on the same frequency
             std::vector<std::pair<double, double>> v;
             std::size_t pos = 0;
             while (pos < text.size()) {
@@ -340,7 +355,7 @@ WireA::Result WireA::scanExtrasOp(const FoxCommand& c, const std::string& text, 
                 }
                 v.emplace_back(hz, db);
             }
-            thresholds_ = std::move(v);
+            if (c.ival[0] == 6) { memThresholds_ = std::move(v); } else { thresholds_ = std::move(v); }
             break;
         }
         case 5: {
@@ -350,7 +365,7 @@ WireA::Result WireA::scanExtrasOp(const FoxCommand& c, const std::string& text, 
             break;
         }
         default:
-            return refused(res, FOXAPI_OUT_OF_RANGE, "ival[0] is 0 to 5");
+            return refused(res, FOXAPI_OUT_OF_RANGE, "ival[0] is 0 to 6");
     }
     if (reconfigure) {
         if (e_.scanner_.active()) { e_.configureScanner(); }
@@ -371,6 +386,26 @@ void WireA::scanFacts(const std::function<void(const std::string&, const std::st
     fact("scan.priority.interval", std::to_string(static_cast<long long>(priorityIntervalMs_)));
     fact("scan.locked", hzListText(lockedHz_));
     fact("scan.thresholds", std::to_string(thresholds_.size()));
+    fact("scan.memthresholds", std::to_string(memThresholds_.size()));
+    {
+        // THE OPERATOR'S LOCKOUTS NOW (SCANNER_EXTRAS 1): "<Hz>@<seconds left>" separated by semicolons, 0 = until cleared; the count; the seconds until the first one ends (0 = none ends).
+        // The configured list (SCANNER_EXTRAS 5) stays in scan.locked. Read on the engine's thread with the scanner's own clock, so a lockout that has run out is not listed.
+        std::string list;
+        double next = 0.0;
+        std::size_t count = 0;
+        char buf[64];
+        for (const cascade::core::Scanner::LockoutInfo& l : e_.scanner_.lockoutInfo()) {
+            const long long secs = l.remainingMs > 0.0 ? static_cast<long long>(std::ceil(l.remainingMs / 1000.0)) : 0;
+            std::snprintf(buf, sizeof buf, "%.3f@%lld", l.hz, secs);
+            if (!list.empty()) { list += ';'; }
+            list += buf;
+            ++count;
+            if (secs > 0 && (next <= 0.0 || static_cast<double>(secs) < next)) { next = static_cast<double>(secs); }
+        }
+        fact("scan.lockouts", list);
+        fact("scan.lockouts.count", std::to_string(count));
+        fact("scan.lockouts.next", std::to_string(static_cast<long long>(next)));
+    }
     fact("scan.mute", muteWhileScanning_ ? "1" : "0");
     fact("scan.error", scanError_);
 }

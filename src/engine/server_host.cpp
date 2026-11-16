@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <map>
 #include <set>
 
@@ -28,6 +29,32 @@ using nlohmann::json;
 constexpr std::size_t kMaxFieldChars = 256;  // an address, an account name: nothing here is longer
 constexpr std::size_t kMaxRecordChars = 512;
 constexpr std::size_t kMaxPasswordChars = 256;
+
+bool readRange(const json& j, const char* key, int lo, int hi, std::optional<int>& dst, std::string& error) {
+    const auto it = j.find(key);
+    if (it == j.end()) { return true; }
+    if (!it->is_number_integer()) {
+        error = std::string(key) + " must be a whole number";
+        return false;
+    }
+    const long long v = it->get<long long>();
+    if (v < lo || v > hi) {
+        error = std::string(key) + " must be between " + std::to_string(lo) + " and " + std::to_string(hi);
+        return false;
+    }
+    dst = static_cast<int>(v);
+    return true;
+}
+
+// 40 hexadecimal digits, or empty.
+bool thumbprintOk(const std::string& t) {
+    if (t.empty()) { return true; }
+    if (t.size() != 40) { return false; }
+    for (const char c : t) {
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) { return false; }
+    }
+    return true;
+}
 
 // Every key of `j` must be in `known`.
 bool onlyKnown(const json& j, const std::set<std::string>& known, const char* where, std::string& error) {
@@ -100,9 +127,51 @@ bool parseServerConfigRequest(const std::string& text, ServerConfigRequest& out,
             error = "web must be an object";
             return false;
         }
-        if (!onlyKnown(*w, {"enabled", "bindAddress", "port", "username", "password", "passwordRecord", "clearPassword"}, "web",
-                       error)) {
+        if (!onlyKnown(*w, {"enabled", "bindAddress", "port", "username", "password", "passwordRecord", "clearPassword", "tls", "tlsThumbprint", "listeners",
+                            "listenerPassword", "listenerPasswordRecord", "clearListenerPassword", "maxListeners", "listenerIdleSeconds", "listenerSessionSeconds",
+                            "listenersMayTune", "chat"},
+                       "web", error)) {
             return false;
+        }
+        if (!readBool(*w, "tls", out.webTls, error) || !readText(*w, "tlsThumbprint", kMaxFieldChars, out.webTlsThumbprint, error) ||
+            !readBool(*w, "listeners", out.webListeners, error) || !readText(*w, "listenerPassword", kMaxPasswordChars, out.webListenerPassword, error) ||
+            !readText(*w, "listenerPasswordRecord", kMaxRecordChars, out.webListenerPasswordRecord, error) ||
+            !readRange(*w, "maxListeners", 1, 32, out.webMaxListeners, error) || !readRange(*w, "listenerIdleSeconds", 0, 86400, out.webListenerIdleSeconds, error) ||
+            !readRange(*w, "listenerSessionSeconds", 0, 43200, out.webListenerSessionSeconds, error) ||
+            !readBool(*w, "listenersMayTune", out.webListenersMayTune, error) || !readBool(*w, "chat", out.webChat, error)) {
+            return false;
+        }
+        {
+            std::optional<bool> clearL;
+            if (!readBool(*w, "clearListenerPassword", clearL, error)) { return false; }
+            if (clearL.has_value() && !*clearL) {
+                error = "clearListenerPassword can only be true";
+                return false;
+            }
+            out.webListenerClearPassword = clearL.value_or(false);
+        }
+        if (out.webTlsThumbprint.has_value() && !thumbprintOk(*out.webTlsThumbprint)) {
+            error = "tlsThumbprint must be the 40 hexadecimal digits of a certificate's thumbprint, or empty for the program's own certificate";
+            return false;
+        }
+        {
+            const int lforms = (out.webListenerPassword.has_value() ? 1 : 0) + (out.webListenerPasswordRecord.has_value() ? 1 : 0) + (out.webListenerClearPassword ? 1 : 0);
+            if (lforms > 1) {
+                error = "give one of listenerPassword, listenerPasswordRecord and clearListenerPassword";
+                return false;
+            }
+            if (out.webListenerPassword.has_value() && out.webListenerPassword->size() < cascade::net::kMinPasswordLength) {
+                error = "the listener password must be at least " + std::to_string(cascade::net::kMinPasswordLength) + " characters";
+                return false;
+            }
+            if (out.webListenerPasswordRecord.has_value()) {
+                cascade::net::PasswordRecord rec;
+                std::string why;
+                if (!cascade::net::PasswordRecord::parse(*out.webListenerPasswordRecord, rec, why)) {
+                    error = "listenerPasswordRecord is not a password record (" + why + ")";
+                    return false;
+                }
+            }
         }
         if (!readBool(*w, "enabled", out.webEnabled, error) || !readPort(*w, "port", out.webPort, error) ||
             !readText(*w, "bindAddress", kMaxFieldChars, out.webBindAddress, error) ||
@@ -330,7 +399,10 @@ bool ServerHost::waitIdle(std::chrono::milliseconds timeout) {
 namespace {
 bool sameWeb(const cascade::net::WebServerConfig& a, const cascade::net::WebServerConfig& b) {
     return a.enabled == b.enabled && a.bindAddress == b.bindAddress && a.port == b.port && a.username == b.username &&
-           a.passwordRecord == b.passwordRecord;
+           a.passwordRecord == b.passwordRecord && a.tlsEnabled == b.tlsEnabled && a.tlsCertThumbprint == b.tlsCertThumbprint && a.tlsCertFile == b.tlsCertFile &&
+           a.listenersEnabled == b.listenersEnabled && a.listenerPasswordRecord == b.listenerPasswordRecord && a.maxListeners == b.maxListeners &&
+           a.listenerIdleSeconds == b.listenerIdleSeconds && a.listenerSessionSeconds == b.listenerSessionSeconds && a.listenersMayTune == b.listenersMayTune &&
+           a.chatEnabled == b.chatEnabled;
 }
 }  // namespace
 
@@ -338,7 +410,17 @@ bool sameWeb(const cascade::net::WebServerConfig& a, const cascade::net::WebServ
 // and drops every session: the binding, and possibly the password, may have just changed). A configuration that was already tried and refused
 // is not tried again unless asked (retry): a port something else holds is the operator's to fix, and a loop that hammered it would help no one.
 void ServerHost::reconcileWeb(bool retry) {
-    const cascade::net::WebServerConfig want = config().web;
+    cascade::net::WebServerConfig want = config().web;
+    if (want.tlsEnabled) {
+        // The program's own certificate is kept beside the settings (its key in the user's key store, not exportable), so the fingerprint a browser was told to trust
+        // is the same at the next start; with no folder known it is made for this run only.
+        std::string folder;
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            folder = certFolder_;
+        }
+        if (!folder.empty() && want.tlsCertFile.empty()) { want.tlsCertFile = (std::filesystem::path(folder) / "web-tls.cer").string(); }
+    }
     if (!want.enabled) {
         if (webServer_.running()) { webServer_.stop(); }  // (may block: the worker's business, not the pass's)
         webRunCfg_.reset();
@@ -352,7 +434,7 @@ void ServerHost::reconcileWeb(bool retry) {
     // A PASSWORD IS BEING HASHED (SERVER_CONFIG's "password", on its own worker): the restart waits for its record, so the server comes up with
     // the password the operator just set, once - not first without it (an off-machine bind would be refused for the want of one, and a
     // loopback one served openly for the length of a hash). poll() wakes this when the hash is done. Switching OFF is never held back.
-    if (passwordPending_.load(std::memory_order_relaxed)) { return; }
+    if (passwordPending_.load(std::memory_order_relaxed) || listenerPending_.load(std::memory_order_relaxed)) { return; }
     if (webServer_.running() && webRunCfg_.has_value() && sameWeb(*webRunCfg_, want)) { return; }
     if (!webServer_.running() && webAttempt_.has_value() && sameWeb(*webAttempt_, want) && !retry) { return; }
 
@@ -521,6 +603,7 @@ ServerHost::Outcome ServerHost::apply(const ServerConfigRequest& r) {
     out.status = FOXAPI_OK;
     bool changed = false;
     bool passwordAsked = false;
+    bool listenerPasswordAsked = false;
     {
         std::lock_guard<std::mutex> lk(m_);
         const auto set = [&](auto& dst, const auto& v) {
@@ -533,6 +616,30 @@ ServerHost::Outcome ServerHost::apply(const ServerConfigRequest& r) {
         if (r.webBindAddress) { set(cfg_.web.bindAddress, *r.webBindAddress); }
         if (r.webPort) { set(cfg_.web.port, *r.webPort); }
         if (r.webUsername) { set(cfg_.web.username, *r.webUsername); }
+        if (r.webTls) { set(cfg_.web.tlsEnabled, *r.webTls); }
+        if (r.webTlsThumbprint) { set(cfg_.web.tlsCertThumbprint, *r.webTlsThumbprint); }
+        if (r.webListeners) { set(cfg_.web.listenersEnabled, *r.webListeners); }
+        if (r.webMaxListeners) { set(cfg_.web.maxListeners, *r.webMaxListeners); }
+        if (r.webListenerIdleSeconds) { set(cfg_.web.listenerIdleSeconds, *r.webListenerIdleSeconds); }
+        if (r.webListenerSessionSeconds) { set(cfg_.web.listenerSessionSeconds, *r.webListenerSessionSeconds); }
+        if (r.webListenersMayTune) { set(cfg_.web.listenersMayTune, *r.webListenersMayTune); }
+        if (r.webChat) { set(cfg_.web.chatEnabled, *r.webChat); }
+        if (r.webListenerPasswordRecord) {
+            ++listenerGeneration_;
+            waitingListenerPlain_.reset();
+            set(cfg_.web.listenerPasswordRecord, *r.webListenerPasswordRecord);
+        }
+        if (r.webListenerClearPassword) {
+            ++listenerGeneration_;
+            waitingListenerPlain_.reset();
+            set(cfg_.web.listenerPasswordRecord, std::string());
+        }
+        if (r.webListenerPassword) {
+            ++listenerGeneration_;
+            listenerPasswordAsked = true;
+            listenerPending_.store(true, std::memory_order_relaxed);   // raised inside the same critical section as the configuration it guards (see the owner's password below)
+            if (listenerHashing_.valid()) { waitingListenerPlain_ = *r.webListenerPassword; }
+        }
         if (r.catEnabled) { set(cfg_.cat.enabled, *r.catEnabled); }
         if (r.catBindAll) { set(cfg_.cat.bindAll, *r.catBindAll); }
         if (r.catPort) { set(cfg_.cat.port, *r.catPort); }
@@ -576,6 +683,24 @@ ServerHost::Outcome ServerHost::apply(const ServerConfigRequest& r) {
         changed = true;
         out.message = "accepted; the password is being hashed and its record will follow";
     }
+    if (listenerPasswordAsked) {
+        if (!listenerHashing_.valid()) {
+            const std::uint64_t gen = listenerGeneration_;
+            listenerHashing_ = std::async(std::launch::async, [plain = *r.webListenerPassword, gen]() mutable {
+                cascade::core::beats::Registration beat(cascade::core::beats::kThreadPasswordHash);
+                beat.beat("hash");
+                Hashed h;
+                h.generation = gen;
+                cascade::net::PasswordRecord rec;
+                h.ok = cascade::net::hashPassword(plain, rec, h.error);
+                if (h.ok) { h.record = rec.serialize(); }
+                std::fill(plain.begin(), plain.end(), '\0');   // the plaintext does not outlive its hash
+                return h;
+            });
+        }
+        changed = true;
+        if (out.message.empty()) { out.message = "accepted; the listener password is being hashed and its record will follow"; }
+    }
     if (changed) {
         bump();
     } else {
@@ -604,7 +729,39 @@ void ServerHost::startHash(std::string plain, std::uint64_t generation) {
     });
 }
 
+void ServerHost::pollListener() {
+    if (!listenerHashing_.valid()) { return; }
+    if (listenerHashing_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) { return; }
+    Hashed h = listenerHashing_.get();
+    std::optional<std::string> next;
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        if (h.ok && h.generation == listenerGeneration_ && cfg_.web.listenerPasswordRecord != h.record) { cfg_.web.listenerPasswordRecord = h.record; }
+        next = std::move(waitingListenerPlain_);
+        waitingListenerPlain_.reset();
+    }
+    if (next.has_value()) {
+        const std::uint64_t gen = listenerGeneration_;
+        listenerHashing_ = std::async(std::launch::async, [plain = std::move(*next), gen]() mutable {
+            cascade::core::beats::Registration beat(cascade::core::beats::kThreadPasswordHash);
+            beat.beat("hash");
+            Hashed r;
+            r.generation = gen;
+            cascade::net::PasswordRecord rec;
+            r.ok = cascade::net::hashPassword(plain, rec, r.error);
+            if (r.ok) { r.record = rec.serialize(); }
+            std::fill(plain.begin(), plain.end(), '\0');
+            return r;
+        });
+        return;
+    }
+    listenerPending_.store(false, std::memory_order_relaxed);
+    bump();
+    kick(false);   // the web server restarts with the new listener password (a failed hash leaves the configuration as it stood)
+}
+
 void ServerHost::poll() {
+    pollListener();
     if (!hashing_.valid()) { return; }
     if (hashing_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) { return; }
     Hashed h = hashing_.get();
@@ -641,6 +798,15 @@ void ServerHost::load(const cascade::core::AppConfig& c) {
         cfg_.web.port = c.webPort;
         cfg_.web.username = c.webUsername;
         cfg_.web.passwordRecord = c.webPasswordRecord;
+        cfg_.web.tlsEnabled = c.webTlsEnabled;
+        cfg_.web.tlsCertThumbprint = c.webTlsCertThumbprint;
+        cfg_.web.listenersEnabled = c.webListenersEnabled;
+        cfg_.web.listenerPasswordRecord = c.webListenerPasswordRecord;
+        cfg_.web.maxListeners = c.webMaxListeners;
+        cfg_.web.listenerIdleSeconds = c.webListenerIdleSeconds;
+        cfg_.web.listenerSessionSeconds = c.webListenerSessionSeconds;
+        cfg_.web.listenersMayTune = c.webListenersMayTune;
+        cfg_.web.chatEnabled = c.webChatEnabled;
         cfg_.cat.enabled = c.catEnabled;
         cfg_.cat.bindAll = c.catBindAll;
         cfg_.cat.port = c.catPort;
@@ -669,6 +835,15 @@ void ServerHost::store(cascade::core::AppConfig& c) const {
     c.webPort = cfg_.web.port;
     c.webUsername = cfg_.web.username;
     c.webPasswordRecord = cfg_.web.passwordRecord;
+    c.webTlsEnabled = cfg_.web.tlsEnabled;
+    c.webTlsCertThumbprint = cfg_.web.tlsCertThumbprint;
+    c.webListenersEnabled = cfg_.web.listenersEnabled;
+    c.webListenerPasswordRecord = cfg_.web.listenerPasswordRecord;
+    c.webMaxListeners = cfg_.web.maxListeners;
+    c.webListenerIdleSeconds = cfg_.web.listenerIdleSeconds;
+    c.webListenerSessionSeconds = cfg_.web.listenerSessionSeconds;
+    c.webListenersMayTune = cfg_.web.listenersMayTune;
+    c.webChatEnabled = cfg_.web.chatEnabled;
     c.catEnabled = cfg_.cat.enabled;
     c.catBindAll = cfg_.cat.bindAll;
     c.catPort = cfg_.cat.port;

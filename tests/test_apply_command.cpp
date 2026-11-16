@@ -2678,16 +2678,8 @@ void macroOps(AppWindow& a) {
     CHECK(refused(A::apply(a, text(FOXAPP_OP_WIREC_SETTING, "nokey")), FOXAPI_BAD_ARGUMENT));
     CHECK(refused(A::apply(a, text(FOXAPP_OP_WIREC_SETTING, std::string("no.such.key") + '' + "1")), FOXAPI_NOT_FOUND));
     CHECK(refused(A::apply(a, text(FOXAPP_OP_WIREC_SETTING, std::string("sys.backup_keep") + '' + "0")), FOXAPI_OUT_OF_RANGE));
-    for (const std::uint32_t o : {FOXAPP_OP_SYS_FIRSTRUN, FOXAPP_OP_SYS_EXPORT, FOXAPP_OP_SYS_IMPORT_PLAN, FOXAPP_OP_SYS_IMPORT_COMMIT, FOXAPP_OP_SYS_BACKUP, FOXAPP_OP_SYS_RESET_PLAN,
-                                  FOXAPP_OP_SYS_RESET_COMMIT, FOXAPP_OP_SYS_PENDING_CANCEL}) {
-        covering(o);   // (each is answered here, with a refusal that changes nothing; the engine behaviour is tests/test_engine_api_wire_c_sys.cpp's)
-    }
+    covering(FOXAPP_OP_SYS_FIRSTRUN);   // (answered here, with a refusal that changes nothing; the engine behaviour is tests/test_engine_api_wire_c_sys.cpp's. The export, import, backup, reset and pending-cancel ops 0x8A03..0x8A09 are retired: owner decision 74.)
     CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_FIRSTRUN, "bogus-step")), FOXAPI_BAD_ARGUMENT));
-    CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_EXPORT, "")), FOXAPI_BAD_ARGUMENT));
-    CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_IMPORT_PLAN, "no-such-file.foxsdr-bundle")), FOXAPI_BAD_ARGUMENT));
-    CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_IMPORT_COMMIT, "IMPORT-00000000")), FOXAPI_BAD_ARGUMENT));
-    CHECK(refused(A::apply(a, text(FOXAPP_OP_SYS_RESET_COMMIT, "RESET-00000000")), FOXAPI_BAD_ARGUMENT));
-    CHECK(refused(A::apply(a, cmd::make(FOXAPP_OP_SYS_PENDING_CANCEL)), FOXAPI_NO_CHANGE));
     for (const std::uint32_t o : {FOXAPP_OP_QSO_ADD, FOXAPP_OP_QSO_REMOVE, FOXAPP_OP_QSO_CLEAR, FOXAPP_OP_CABRILLO_HEADER, FOXAPP_OP_CABRILLO_EXPORT, FOXAPP_OP_ADIF_EXPORT}) {
         covering(o);   // (the engine behaviour is tests/test_engine_api_wire_c_ham.cpp's)
     }

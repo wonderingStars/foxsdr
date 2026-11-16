@@ -3235,6 +3235,9 @@ private:
     void wireCFacts(const std::function<void(const std::string&, const std::string&)>& fact);
     std::uint64_t wireCVersion();
     void pumpWireC();
+    // The RDS log (engine lane E1, core/rds_log.hpp): called from the publish with the snapshot it already holds; a change of the station name, programme type or radio text
+    // of a radio becomes one queued line when the user's switch is on. Control thread only; does no file work.
+    void observeRdsForLog(int radio, const cascade::core::RdsSnapshot& rds);
     void wireCShutdown();
     // The recorder a plugin may ask for (plugin_abi.h recorder_start / recorder_stop): drained once a pass; one take per radio, remembered by radio slot -> plugin client.
     void wireCPluginRecorder();
@@ -3503,6 +3506,8 @@ public:
     // engine, engine/engine_service.cpp).
     // `configDir`: where config.json lives (the usage record's ledgers and send marker sit beside it); empty = memory only.
     void telemetryStartup(const cascade::core::AppConfig& cfg, const std::string& configDir = std::string());
+    // The folder the web page's own HTTPS certificate ("web-tls.cer") is kept in: the settings folder (engine lane E1; EngineService calls it before the configuration is applied).
+    void setWebCertFolder(const std::string& folder);
     void stopTransfers();
     void teardown();
 
