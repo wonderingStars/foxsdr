@@ -108,7 +108,7 @@ const char* kWsRequest = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websoc
 std::string httpGet(Rig& rig, int port, const std::string& extraHeaders, int* status = nullptr) {
     nettest::Client c;
     if (!c.connect(static_cast<std::uint16_t>(port))) { return "<no connection>"; }
-    const std::string req = "GET /status HTTP/1.1\r\nHost: x\r\n" + extraHeaders + "\r\n";
+    const std::string req = "GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\n" + extraHeaders + "\r\n";
     c.sendBytes(req.data(), req.size());
     const auto t0 = nettest::Clock::now();
     while (!c.eof && nettest::msSince(t0) < 5000) { rig.pass(1); c.pump(30); }

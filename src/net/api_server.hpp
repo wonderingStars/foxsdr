@@ -19,17 +19,23 @@
 //     message over maxMessageBytes closes the connection (1009); a malformed frame or text that is not UTF-8 closes it; a JSON message nested deeper than 16 levels is refused before it is parsed;
 //     a client that cannot keep up (clientQueueBytes unsent) or stops reading (stallMs) is dropped; ten tuning requests a second at most (the hub's token bucket).
 //
-// THREADS. One IO thread owns every socket. The hub is called from it (a mutex, copies only).
+// HOST. With no password in force (requireAuth false: this computer only) a request whose Host is not this computer's own name or address (localhost, 127.x, [::1], the bound address) is refused 403: a web page
+//   that made its own name point at this computer by DNS rebinding sends its own name in Host. A request that carries an Origin is refused as before. Beyond this computer every request signs in.
+// THREADS. One IO thread owns every socket. The hub is called from it (a mutex, copies only). The sign-in (a password check is a long derivation) is done by a second, AUTH WORKER thread, one at a time:
+//   the request waits (bounded: maxPendingAuth, then 429), the IO thread goes on serving everybody else. One address may hold at most maxPerAddressHead unfinished requests.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_NET_API_SERVER_HPP
 #define CASCADE_NET_API_SERVER_HPP
 
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -49,6 +55,9 @@ struct ApiConfig {
     bool allowAllInterfaces = false;
     std::uint16_t port = kApiDefaultPort;       // 0 = the OS picks (tests)
     bool requireAuth = false;                   // a request without an Authorization header is refused 401
+    bool checkHost = true;                      // without requireAuth (this computer only): a request whose Host is not this computer's own name or address is refused 403 (DNS rebinding)
+    int maxPendingAuth = 8;                     // sign-ins waiting for the worker; one more is answered 429
+    int maxPerAddressHead = 4;                  // connections from one address that have not finished their request; one more is closed at once
     int maxConnections = 16;
     std::size_t maxMessageBytes = 4096;         // a WebSocket message from a client
     int headMs = 5000;                          // the request head must be complete within this
@@ -66,7 +75,8 @@ struct ApiStats {
 
 class ApiServer {
 public:
-    // `authorization` is the value of the Authorization header ("" = none); `client` the peer's address text. Called on the IO thread: it must be quick or answer TooMany.
+    // `authorization` is the value of the Authorization header ("" = none); `client` the peer's address text. Called on the API's own AUTH WORKER thread, never on the IO thread (a password
+    // check takes a long derivation and the IO thread owns every socket): it may take its time, but it must not need a lock the thread that stops this server holds.
     using AuthFn = std::function<ApiAuth(const std::string& authorization, const std::string& client)>;
 
     ApiServer(const ApiConfig& cfg, ControlHub& hub, AuthFn auth) : cfg_(cfg), hub_(hub), auth_(std::move(auth)) {}
@@ -79,6 +89,8 @@ public:
     bool running() const { return running_.load(std::memory_order_acquire); }
     int port() const { return port_.load(std::memory_order_acquire); }
     ApiStats stats() const;
+    // Ends every open stream (WebSocket, SSE) at the next turn of the IO thread (the account the clients signed in with has changed): a client that comes back is judged afresh.
+    void closeAllClients() { dropAll_.store(true, std::memory_order_release); }
 
     // JSON helpers (pure; the tests use them)
     static std::string statusJson(const HubStatus& s);
@@ -97,6 +109,10 @@ private:
         std::int64_t born = 0, lastProgress = 0;
         bool closeAfterSend = false;
         bool wantDecodes = false;
+        std::uint64_t id = 0;
+        bool authPending = false;       // the sign-in is with the auth worker; the request waits (what the client sends meanwhile is kept, bounded)
+        std::string pendTarget, pendHead;
+        std::size_t pendEnd = 0;
         std::unique_ptr<ws::FrameDecoder> decoder;
         std::uint64_t cursor = 0;       // the newest decode this client has been sent
         std::size_t pending() const { return out.size() - off; }
@@ -105,6 +121,10 @@ private:
     void run();
     void acceptAll(std::int64_t now);
     void handleHead(Conn& c, std::int64_t now);
+    void finishRequest(Conn& c, ApiAuth verdict, const std::string& target, const std::string& head, std::size_t end, std::int64_t now);
+    void takeAuthResults(std::int64_t now);
+    void authLoop();
+    bool hostAllowed(const std::string& hostHeader) const;
     void handleWsData(Conn& c, const char* data, std::size_t n, std::int64_t now);
     void answerWs(Conn& c, const std::string& text);
     bool queue(Conn& c, const std::string& bytes);
@@ -124,6 +144,18 @@ private:
     sock::Handle listener_ = sock::kInvalid;
     std::uint32_t bindIp_ = 0;
     std::vector<Conn> conns_;   // IO thread only
+    std::uint64_t nextId_ = 1;  // IO thread only
+
+    // the auth worker: sign-ins are checked here, in order, one at a time; verdicts come back through done_
+    struct AuthJob { std::uint64_t id = 0; std::string authorization, peer; };
+    struct AuthDone { std::uint64_t id = 0; ApiAuth verdict = ApiAuth::Denied; };
+    std::thread authThread_;
+    std::mutex authM_;
+    std::condition_variable authCv_;
+    std::deque<AuthJob> jobs_;
+    std::vector<AuthDone> done_;
+    bool authStop_ = false;
+    std::atomic<bool> dropAll_{false};
 
     std::atomic<std::uint64_t> accepted_{0}, refusedFull_{0}, refusedRequests_{0}, wsOpened_{0}, sseOpened_{0}, messages_{0}, errors_{0}, droppedSlow_{0}, droppedStalled_{0}, droppedBad_{0}, authDenied_{0};
 };

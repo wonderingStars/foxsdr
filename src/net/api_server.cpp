@@ -139,6 +139,14 @@ bool ApiServer::start(std::string& error) {
     port_.store(sock::boundPort(listener_), std::memory_order_release);
     stopFlag_.store(false);
     running_.store(true, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lk(authM_);
+        authStop_ = false;
+        jobs_.clear();
+        done_.clear();
+    }
+    dropAll_.store(false);
+    if (auth_) { authThread_ = std::thread([this] { authLoop(); }); }
     thread_ = std::thread([this] { run(); });
     return true;
 }
@@ -147,7 +155,49 @@ void ApiServer::stop() {
     if (!thread_.joinable()) { return; }
     stopFlag_.store(true);
     thread_.join();
+    {
+        std::lock_guard<std::mutex> lk(authM_);
+        authStop_ = true;
+    }
+    authCv_.notify_all();
+    if (authThread_.joinable()) { authThread_.join(); }
     running_.store(false, std::memory_order_release);
+}
+
+// The auth worker: one sign-in at a time, off the IO thread (a password check is a long derivation, and the IO thread owns every socket).
+void ApiServer::authLoop() {
+    for (;;) {
+        AuthJob job;
+        {
+            std::unique_lock<std::mutex> lk(authM_);
+            authCv_.wait(lk, [this] { return authStop_ || !jobs_.empty(); });
+            if (authStop_) { return; }
+            job = std::move(jobs_.front());
+            jobs_.pop_front();
+        }
+        const ApiAuth verdict = auth_(job.authorization, job.peer);
+        std::lock_guard<std::mutex> lk(authM_);
+        done_.push_back({job.id, verdict});
+    }
+}
+
+bool ApiServer::hostAllowed(const std::string& hostHeader) const {
+    if (hostHeader.empty()) { return true; }   // no Host: not a browser (a browser always sends one)
+    std::string name = lower(hostHeader);
+    if (name.front() == '[') {
+        const std::size_t close = name.find(']');
+        return close != std::string::npos && name.substr(0, close + 1) == "[::1]" && (close + 1 == name.size() || name[close + 1] == ':');
+    }
+    const std::size_t colon = name.rfind(':');
+    if (colon != std::string::npos) {
+        if (colon + 1 == name.size()) { return false; }
+        for (std::size_t i = colon + 1; i < name.size(); ++i) { if (name[i] < '0' || name[i] > '9') { return false; } }
+        name.resize(colon);
+    }
+    if (name == "localhost") { return true; }
+    std::uint32_t ip = 0;
+    if (!sock::parseIpv4(name, ip)) { return false; }   // a name other than localhost is somebody else's (a rebound page names its own site)
+    return (ip >> 24) == 127 || ip == bindIp_;
 }
 
 ApiStats ApiServer::stats() const {
@@ -239,14 +289,40 @@ void ApiServer::handleHead(Conn& c, std::int64_t now) {
     }
     if (method != "GET") { respond(c, 405, "text/plain", "method not allowed", "Allow: GET\r\n"); return; }
     if (h.count("origin") != 0) { respond(c, 403, "text/plain", "a web page may not use this interface"); return; }
+    // DNS rebinding: a page that made its own name point at this computer is not this computer's own page. Beyond this computer (requireAuth) every request signs in, which a page cannot do.
+    if (cfg_.checkHost && !cfg_.requireAuth) {
+        const auto hostIt = h.find("host");
+        if (hostIt != h.end() && !hostAllowed(hostIt->second)) { respond(c, 403, "text/plain", "this interface answers to this computer's own address only"); return; }
+    }
     if (target != "/status" && target != "/events" && target != "/ws") { respond(c, 404, "text/plain", "not found"); return; }
     // authentication: the caller's (the web page's own account); with requireAuth a request with no credentials never gets as far as the caller
     const auto authIt = h.find("authorization");
     const std::string authorization = authIt == h.end() ? std::string() : authIt->second;
     if (authorization.size() > 1024) { respond(c, 400, "text/plain", "bad request"); return; }
-    ApiAuth verdict = ApiAuth::Allowed;
-    if (cfg_.requireAuth && authorization.empty()) { verdict = ApiAuth::Denied; }
-    else if (auth_) { verdict = auth_(authorization, c.peer); }
+    if (cfg_.requireAuth && authorization.empty()) { finishRequest(c, ApiAuth::Denied, target, head, end, now); return; }
+    if (!auth_) { finishRequest(c, ApiAuth::Allowed, target, head, end, now); return; }
+    // the sign-in is the worker's: the request waits, the IO thread goes on serving everybody else
+    {
+        std::lock_guard<std::mutex> lk(authM_);
+        if (static_cast<int>(jobs_.size()) >= cfg_.maxPendingAuth) {
+            authDenied_.fetch_add(1, std::memory_order_relaxed);
+            respond(c, 429, "text/plain", "too many sign-ins at once", "Retry-After: 1\r\n");
+            return;
+        }
+        jobs_.push_back({c.id, authorization, c.peer});
+    }
+    authCv_.notify_one();
+    c.authPending = true;
+    c.pendTarget = target;
+    c.pendHead = head;
+    c.pendEnd = end;
+}
+
+// Everything after the sign-in: the verdict, then the answer or the stream.
+void ApiServer::finishRequest(Conn& c, ApiAuth verdict, const std::string& target, const std::string& head, std::size_t end, std::int64_t now) {
+    c.authPending = false;
+    c.pendTarget.clear();
+    c.pendHead.clear();
     if (verdict == ApiAuth::TooMany) { authDenied_.fetch_add(1, std::memory_order_relaxed); respond(c, 429, "text/plain", "too many attempts", "Retry-After: 60\r\n"); return; }
     if (verdict != ApiAuth::Allowed) { authDenied_.fetch_add(1, std::memory_order_relaxed); respond(c, 401, "text/plain", "unauthorized", "WWW-Authenticate: Basic realm=\"FoxSDR\"\r\n"); return; }
 
@@ -273,6 +349,25 @@ void ApiServer::handleHead(Conn& c, std::int64_t now) {
     const std::string rest = c.in.substr(end + 4);
     c.in.clear();
     if (!rest.empty()) { handleWsData(c, rest.data(), rest.size(), now); }
+}
+
+void ApiServer::takeAuthResults(std::int64_t now) {
+    std::vector<AuthDone> got;
+    {
+        std::lock_guard<std::mutex> lk(authM_);
+        got.swap(done_);
+    }
+    for (const AuthDone& d : got) {
+        for (std::size_t i = 0; i < conns_.size(); ++i) {
+            if (conns_[i].id != d.id) { continue; }
+            Conn& c = conns_[i];
+            if (c.authPending && !c.closeAfterSend) {
+                const std::string target = c.pendTarget, head = c.pendHead;
+                finishRequest(c, d.verdict, target, head, c.pendEnd, now);
+            }
+            break;
+        }
+    }
 }
 
 void ApiServer::answerWs(Conn& c, const std::string& text) {
@@ -359,10 +454,21 @@ void ApiServer::acceptAll(std::int64_t now) {
             sock::closeHandle(h);
             continue;
         }
+        const std::string peer = sock::peerOf(h);
+        if (cfg_.maxPerAddressHead > 0) {
+            int same = 0;
+            for (const Conn& o : conns_) { if (o.kind == Kind::Head && o.peer == peer) { ++same; } }
+            if (same >= cfg_.maxPerAddressHead) {
+                refusedFull_.fetch_add(1, std::memory_order_relaxed);   // one address holding the slots with requests it never finishes
+                sock::closeHandle(h);
+                continue;
+            }
+        }
         sock::setNoDelay(h);
         Conn c;
         c.s = h;
-        c.peer = sock::peerOf(h);
+        c.id = nextId_++;
+        c.peer = peer;
         c.born = now;
         c.lastProgress = now;
         conns_.push_back(std::move(c));
@@ -376,6 +482,10 @@ void ApiServer::run() {
     std::int64_t lastStatus = nowMs();
     while (!stopFlag_.load(std::memory_order_acquire)) {
         std::int64_t now = nowMs();
+        takeAuthResults(now);
+        if (dropAll_.exchange(false, std::memory_order_acq_rel)) {   // the account changed: no stream that signed in under the old one stays (a request still waiting for its sign-in is judged under the new one)
+            for (std::size_t i = conns_.size(); i-- > 0;) { if (conns_[i].kind != Kind::Head) { dropConn(i, nullptr); } }
+        }
         // the periodic push: the status to every stream, and the new decodes to those that want them
         if (now - lastStatus >= cfg_.statusIntervalMs) {
             lastStatus = now;
@@ -441,7 +551,10 @@ void ApiServer::run() {
                     const long r = sock::recvSome(c.s, buf, std::min<std::size_t>(sizeof(buf), budget));
                     if (r > 0) {
                         budget -= static_cast<std::size_t>(r);
-                        if (c.kind == Kind::Head) {
+                        if (c.kind == Kind::Head && c.authPending) {
+                            c.in.append(buf, static_cast<std::size_t>(r));   // what a client sends while its sign-in is checked is kept (a WebSocket may send its first frame at once), bounded
+                            if (c.in.size() > ws::kMaxHandshakeBytes + 2 * cfg_.maxMessageBytes + 64) { droppedBad_.fetch_add(1, std::memory_order_relaxed); gone = true; }
+                        } else if (c.kind == Kind::Head) {
                             c.in.append(buf, static_cast<std::size_t>(r));
                             if (c.in.size() > ws::kMaxHandshakeBytes && c.in.find("\r\n\r\n") == std::string::npos) { respond(c, 431, "text/plain", "request too large"); break; }
                             handleHead(c, now);

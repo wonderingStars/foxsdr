@@ -76,6 +76,10 @@ std::int32_t ServerSet::rotatorOp(const std::string& text, std::string& why) {
 ServerSet::~ServerSet() { stop(); }
 
 void ServerSet::setHooks(Hooks h) {
+    {
+        std::lock_guard<std::mutex> lk(acctM_);
+        webAccountFn_ = h.webAccount;
+    }
     std::lock_guard<std::mutex> lk(m_);
     hooks_ = std::move(h);
 }
@@ -158,12 +162,19 @@ std::int64_t steadyMs() {
 // wrong attempts are counted per client and past five in five minutes the client is told to wait.
 cascade::net::ApiAuth ServerSet::checkApiAuth(const std::string& authorization, const std::string& client) {
     namespace na = cascade::net;
-    Hooks::WebAccount acct;
-    {
-        std::lock_guard<std::mutex> lk(m_);
-        if (hooks_.webAccount) { acct = hooks_.webAccount(); }
-    }
-    if (acct.record.empty()) { return na::ApiAuth::Allowed; }
+    const auto readAccount = [this]() {
+        Hooks::WebAccount a;
+        std::function<Hooks::WebAccount()> fn;
+        {
+            std::lock_guard<std::mutex> lk(acctM_);
+            fn = webAccountFn_;
+        }
+        if (fn) { a = fn(); }
+        return a;
+    };
+    const Hooks::WebAccount acct = readAccount();
+    // beyond this computer a missing password is not "open": nobody is let in (the password was removed while the interface was on)
+    if (acct.record.empty()) { return apiNeedsAccount_.load(std::memory_order_acquire) ? na::ApiAuth::Denied : na::ApiAuth::Allowed; }
     static const std::string kBasic = "Basic ";
     if (authorization.compare(0, kBasic.size(), kBasic) != 0 || authorization.size() > 600) { return na::ApiAuth::Denied; }
     const std::int64_t now = steadyMs();
@@ -172,6 +183,9 @@ cascade::net::ApiAuth ServerSet::checkApiAuth(const std::string& authorization, 
     if (!na::sha256(reinterpret_cast<const std::uint8_t*>(authorization.data()), authorization.size(), digest, derr)) { return na::ApiAuth::Denied; }
     const std::string key(digest.begin(), digest.end());
     std::lock_guard<std::mutex> lk(authM_);
+    // a changed user name or password ends every remembered login at once
+    const std::string who = acct.user + std::string(1, '\x1f') + acct.record;
+    if (who != verifiedFor_) { verified_.clear(); verifiedFor_ = who; }
     for (std::size_t i = 0; i < verified_.size();) {
         if (verified_[i].until <= now) { verified_.erase(verified_.begin() + static_cast<std::ptrdiff_t>(i)); continue; }
         if (verified_[i].digest == key) { return na::ApiAuth::Allowed; }
@@ -189,6 +203,10 @@ cascade::net::ApiAuth ServerSet::checkApiAuth(const std::string& authorization, 
     std::string verr;
     const bool good = na::verifyLogin(text.substr(0, colon), text.substr(colon + 1), acct.user, rec, verr);
     if (!good) { throttle_.recordFailure(client, nowS); return na::ApiAuth::Denied; }
+    {   // the password may have been changed while the derivation ran: a login judged against the old account is not a login
+        const Hooks::WebAccount after = readAccount();
+        if (after.user != acct.user || after.record != acct.record) { return na::ApiAuth::Denied; }
+    }
     throttle_.recordSuccess(client);
     if (verified_.size() >= 16) { verified_.erase(verified_.begin()); }
     verified_.push_back({key, now + 5 * 60 * 1000});
@@ -203,15 +221,23 @@ void ServerSet::applyApi(const Config& c) {
     {
         std::lock_guard<std::mutex> lk(authM_);
         verified_.clear();
+        verifiedFor_.clear();
     }
+    apiNeedsAccount_.store(false, std::memory_order_release);
     if (!c.api) { return; }
     // beyond this computer the web page's account must exist: without it nobody could be told from anybody
     if (c.apiAll) {
         const Hooks::WebAccount acct = hooks_.webAccount ? hooks_.webAccount() : Hooks::WebAccount{};
         if (acct.record.empty()) { apiProblem_ = "set a password for the web page first: this interface uses the same account, and it will not listen beyond this computer without one"; return; }
     }
+    apiNeedsAccount_.store(c.apiAll, std::memory_order_release);
+    {
+        const Hooks::WebAccount acct = hooks_.webAccount ? hooks_.webAccount() : Hooks::WebAccount{};
+        apiAccountPrint_ = acct.user + std::string(1, '\x1f') + acct.record;
+    }
+    lastAccountCheckMs_ = steadyMs();
     cascade::net::ApiConfig ac;
-    ac.bindAddress = c.apiAll ? "0.0.0.0" : "127.0.0.1";
+    ac.bindAddress = !c.apiBindForTest.empty() ? c.apiBindForTest : (c.apiAll ? "0.0.0.0" : "127.0.0.1");
     ac.allowAllInterfaces = c.apiAll;
     ac.port = static_cast<std::uint16_t>(c.apiPort);
     ac.requireAuth = c.apiAll;
@@ -245,6 +271,16 @@ void ServerSet::controlPass() {
         cascade::net::HubStatus st;
         if (hooks_.readStatus && hooks_.readStatus(radio, st)) { hub_.publishStatus(st); }
         else { hub_.publishStatus(cascade::net::HubStatus{}); }
+    }
+    if (api_ != nullptr && hooks_.webAccount && now - lastAccountCheckMs_ >= 500) {
+        // the web page's user name or password changed (or was set or removed): every client signed in under the old account is ended now, and the next login is judged afresh
+        lastAccountCheckMs_ = now;
+        const Hooks::WebAccount acct = hooks_.webAccount();
+        const std::string print = acct.user + std::string(1, '\x1f') + acct.record;
+        if (print != apiAccountPrint_) {
+            apiAccountPrint_ = print;   // (the remembered logins are judged against the account on every request: checkApiAuth drops those made under another)
+            api_->closeAllClients();
+        }
     }
     if (now - lastBookmarksMs_ >= 2000 && hooks_.readBookmarks) {
         lastBookmarksMs_ = now;
@@ -325,6 +361,10 @@ void ServerSet::stop() {
     if (api_ != nullptr) { api_->stop(); api_.reset(); }
     if (mcp_ != nullptr) { mcp_->stop(); mcp_.reset(); }
     rotator_.shutdown();
+    {
+        std::lock_guard<std::mutex> alk(acctM_);
+        webAccountFn_ = nullptr;
+    }
     hooks_ = Hooks{};   // stop() is the engine's teardown: the hooks hold the engine and must not be called after it
 }
 

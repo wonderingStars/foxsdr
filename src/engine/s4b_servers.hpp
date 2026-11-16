@@ -52,6 +52,7 @@ struct Config {
     bool api = false;
     bool apiAll = false;
     int apiPort = 8074;
+    std::string apiBindForTest;   // TESTS ONLY (never a setting): the address the API binds, so "every address" can be proved without a firewall prompt
     // the MCP server (net/mcp_server.hpp): this computer only; an optional bearer token (a secret, kept in the protected store)
     bool mcp = false;
     int mcpPort = 8075;
@@ -59,7 +60,7 @@ struct Config {
     // the antenna rotator (engine/s4b_rotator.hpp)
     RotatorConfig rotator;
     bool operator==(const Config& o) const {
-        return rotator == o.rotator && api == o.api && apiAll == o.apiAll && apiPort == o.apiPort && mcp == o.mcp && mcpPort == o.mcpPort && mcpToken == o.mcpToken && tcpAudio == o.tcpAudio && tcpAudioAll == o.tcpAudioAll && tcpAudioPort == o.tcpAudioPort && tcpAudioRadio == o.tcpAudioRadio && tcpAudioPacket == o.tcpAudioPacket &&
+        return rotator == o.rotator && api == o.api && apiAll == o.apiAll && apiPort == o.apiPort && apiBindForTest == o.apiBindForTest && mcp == o.mcp && mcpPort == o.mcpPort && mcpToken == o.mcpToken && tcpAudio == o.tcpAudio && tcpAudioAll == o.tcpAudioAll && tcpAudioPort == o.tcpAudioPort && tcpAudioRadio == o.tcpAudioRadio && tcpAudioPacket == o.tcpAudioPacket &&
                controlRadio == o.controlRadio && rtl == o.rtl && rtlAll == o.rtlAll && rtlPort == o.rtlPort;
     }
 };
@@ -160,7 +161,14 @@ private:
     struct Verified { std::string digest; std::int64_t until = 0; };
     std::mutex authM_;
     std::vector<Verified> verified_;
+    std::string verifiedFor_;                // the account (user and stored record) the remembered logins were made under
     cascade::net::LoginThrottle throttle_;
+    // The account hook is also read by the API's auth worker, which must never wait on m_ (stop() holds m_ while it joins that worker): its own lock.
+    mutable std::mutex acctM_;
+    std::function<Hooks::WebAccount()> webAccountFn_;
+    std::atomic<bool> apiNeedsAccount_{false};   // the API listens beyond this computer: no account means nobody is let in
+    std::string apiAccountPrint_;                // the account the running API was last seen with (pass thread)
+    std::int64_t lastAccountCheckMs_ = -1000000;
 };
 
 }  // namespace cascade::engine::s4b

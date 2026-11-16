@@ -188,28 +188,28 @@ void testHttp() {
     const std::uint16_t port = static_cast<std::uint16_t>(s.port());
     std::string head;
     // no credentials: 401 with the challenge; the right ones: the status
-    std::string r = httpGet(port, "GET /status HTTP/1.1\r\nHost: x\r\n\r\n", &head);
+    std::string r = httpGet(port, "GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", &head);
     CHECK(head.rfind("HTTP/1.1 401", 0) == 0 && head.find("WWW-Authenticate: Basic") != std::string::npos);
-    r = httpGet(port, "GET /status HTTP/1.1\r\nHost: x\r\nAuthorization: Basic Zm94OnNkcg==\r\n\r\n", &head);
+    r = httpGet(port, "GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Basic Zm94OnNkcg==\r\n\r\n", &head);
     CHECK(statusOf(head) == 200 && head.find("application/json") != std::string::npos);
     const json j = json::parse(r, nullptr, false);
     CHECK(j.is_object() && j.value("tuned_hz", 0.0) == 145.5e6 && j.value("mode", "") == "NFM" && j.value("running", false));
     // too many attempts: 429
-    httpGet(port, "GET /status HTTP/1.1\r\nHost: x\r\nAuthorization: Basic dG9v\r\n\r\n", &head);
+    httpGet(port, "GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Basic dG9v\r\n\r\n", &head);
     CHECK(statusOf(head) == 429 && head.find("Retry-After") != std::string::npos);
-    const std::string ok = "GET /status HTTP/1.1\r\nHost: x\r\nAuthorization: Basic Zm94OnNkcg==\r\n";
+    const std::string ok = "GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Basic Zm94OnNkcg==\r\n";
     // a browser (an Origin header) is refused, whatever the credentials
     httpGet(port, ok + "Origin: http://evil.example\r\n\r\n", &head);
     CHECK(statusOf(head) == 403);
     // method, path, version, header shapes
-    httpGet(port, "POST /status HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n", &head);
+    httpGet(port, "POST /status HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n", &head);
     CHECK(statusOf(head) == 405 && head.find("Allow: GET") != std::string::npos);
     httpGet(port, ok + "\r\n", &head);
-    httpGet(port, "GET /other HTTP/1.1\r\nHost: x\r\n\r\n", &head);
+    httpGet(port, "GET /other HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", &head);
     CHECK(statusOf(head) == 404);
-    httpGet(port, "GET /status?x=1 HTTP/1.1\r\nHost: x\r\n\r\n", &head);
+    httpGet(port, "GET /status?x=1 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", &head);
     CHECK(statusOf(head) == 404);
-    httpGet(port, "GET /status HTTP/2.0\r\nHost: x\r\n\r\n", &head);
+    httpGet(port, "GET /status HTTP/2.0\r\nHost: 127.0.0.1\r\n\r\n", &head);
     CHECK(statusOf(head) == 505);
     httpGet(port, "garbage\r\n\r\n", &head);
     CHECK(statusOf(head) == 400);
@@ -245,9 +245,9 @@ void testRequireAuthNeverAsksTheCaller() {
     ApiServer s(c, hub, [&](const std::string&, const std::string&) { ++calls; return ApiAuth::Allowed; });
     CHECK(s.start(err));
     std::string head;
-    httpGet(static_cast<std::uint16_t>(s.port()), "GET /status HTTP/1.1\r\nHost: x\r\n\r\n", &head);
+    httpGet(static_cast<std::uint16_t>(s.port()), "GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", &head);
     CHECK(statusOf(head) == 401 && calls.load() == 0);   // no credentials: refused before the caller is asked
-    httpGet(static_cast<std::uint16_t>(s.port()), "GET /status HTTP/1.1\r\nHost: x\r\nAuthorization: Basic QQ==\r\n\r\n", &head);
+    httpGet(static_cast<std::uint16_t>(s.port()), "GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Basic QQ==\r\n\r\n", &head);
     CHECK(statusOf(head) == 200 && calls.load() == 1);
     s.stop();
 }
@@ -385,9 +385,9 @@ void testWebSocketMalformed() {
     // a handshake with the wrong version or no key is refused with a status, not upgraded
     {
         std::string head;
-        httpGet(port, "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 8\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n", &head);
+        httpGet(port, "GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 8\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n", &head);
         CHECK(statusOf(head) >= 400 && statusOf(head) < 500);
-        httpGet(port, "GET /ws HTTP/1.1\r\nHost: x\r\n\r\n", &head);
+        httpGet(port, "GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", &head);
         CHECK(statusOf(head) >= 400 && statusOf(head) < 500);
     }
     CHECK(hub.takeTune() == std::nullopt && s.running());
@@ -405,7 +405,7 @@ void testSse() {
     const std::uint16_t port = static_cast<std::uint16_t>(s.port());
     Client c;
     CHECK(c.connect(port));
-    const std::string req = "GET /events HTTP/1.1\r\nHost: x\r\n\r\n";
+    const std::string req = "GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
     c.sendBytes(req.data(), req.size());
     CHECK(waitFor(c, "text/event-stream") && waitFor(c, "event: status\ndata: {"));
     hub.addDecode(5.0, 7.0e6, "navtex", "a line");
@@ -428,7 +428,7 @@ void testSse() {
         Client idle;
         CHECK(idle.connect(static_cast<std::uint16_t>(t.port())));
         cascade::net::sock::setBuffers(idle.s, 4096, 0);
-        const std::string r2 = "GET /events HTTP/1.1\r\nHost: x\r\n\r\n";
+        const std::string r2 = "GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
         idle.sendBytes(r2.data(), r2.size());
         const auto t0 = nettest::Clock::now();
         while (msSince(t0) < 20000 && t.stats().droppedSlow + t.stats().droppedStalled < 1) {
@@ -461,7 +461,7 @@ void testManyConnections() {
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     std::string head;
-    const std::string r = httpGet(port, "GET /status HTTP/1.1\r\nHost: x\r\n\r\n", &head);
+    const std::string r = httpGet(port, "GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", &head);
     CHECK(statusOf(head) == 200 && connected > 0);
     const auto t0 = nettest::Clock::now();
     s.stop();
