@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gaps_win.hpp"
 
+#include "desk_logic.hpp"
+
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -161,11 +163,12 @@ std::string clipboardText() {
     return out;
 }
 #else
-bool openUrl(const std::string&) { return false; }
+// Off Windows the same duties go to the desktop's own programs (desk_logic.cpp: xdg-open and the clipboard tools, started without a shell). The file drop is the window's own DropArea (main.slint), not a hook here.
+bool openUrl(const std::string& url) { return foxsdr::slintdesk::openAddress(url); }
 void* findMainWindow() { return nullptr; }
 bool installFileDrop(void*, std::function<void(const std::string&)>) { return false; }
-bool setClipboardText(const std::string&) { return false; }
-std::string clipboardText() { return std::string(); }
+bool setClipboardText(const std::string& utf8) { return foxsdr::slintdesk::copyText(utf8); }
+std::string clipboardText() { return foxsdr::slintdesk::pasteText(); }
 bool windowsHighContrast() { return false; }
 #endif
 

@@ -1684,6 +1684,9 @@ src/slint/kit_publish_mapj.cpp::KitPublisher::mapJAct::errassign::ismin j altmin
 src/slint/kit_publish_mapj.cpp::KitPublisher::mapJAct::errassign::not a number between # and #	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/kit_publish_mapj.cpp::KitPublisher::mapJAct::errassign::that is not a number this field accepts	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanek_audio.cpp::ToneOut::start::errassign::no sound output could be opened	ALLOW	UI result text: the failure is classified at the site that produced it	seed
+src/slint/lanek_audio.cpp::ToneOut::start::errassign::no sound output could be opened#2	ALLOW	UI result text (the ALSA open of the access lane's test tone): lastError() is what the Accessibility section shows the person, with ALSA's own reason	linux-slint-2
+src/slint/lanek_audio.cpp::ToneOut::start::errassign::the sound output refused # khz stereo	ALLOW	UI result text (the ALSA parameters of the access lane's test tone): lastError() is what the Accessibility section shows the person, with ALSA's own reason	linux-slint-2
+src/slint/lanek_audio.cpp::ToneOut::feed::errassign::the sound output failed	ALLOW	UI result text (a write error of the access lane's test tone): the tone stops itself and the Accessibility section shows lastError() as its warning row (lanek_publish.cpp tick); the tone is the person's own choice, not a radio	linux-slint-2
 src/slint/lanek_logic.cpp::SettingsKeeper::exportTo::errassign::	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanek_logic.cpp::SettingsKeeper::previewImport::errassign::	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanek_logic.cpp::SettingsKeeper::previewImport::errassign::the file cannot be read or it is too large	ALLOW	UI result text: the failure is classified at the site that produced it	seed

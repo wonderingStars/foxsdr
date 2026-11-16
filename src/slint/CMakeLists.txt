@@ -47,7 +47,7 @@ list(APPEND foxsdr_slint_sources layouts_prefs.cpp export_logic.cpp mark_layout.
 list(APPEND foxsdr_slint_sources spectrum_extras.cpp scope_analysis.cpp)
 list(APPEND foxsdr_slint_sources globe_scene.cpp solar_ephemeris.cpp globe_logic.cpp globe_draw.cpp globe_compositor.cpp globe_publish.cpp)
 # THE CLASSIC-WINDOW GAPS (docs/multi-radio-records/slint-gaps.md): the frequency lock, the digit grouping, the file drop, the help entry (gaps_logic: pure; gaps_win: Win32)
-list(APPEND foxsdr_slint_sources gaps_logic.cpp gaps_win.cpp diag_copy.cpp bandplan_palette.cpp sdrplaydiag_logic.cpp sdrplaydiag_child.cpp pointer_ledger.cpp)
+list(APPEND foxsdr_slint_sources desk_logic.cpp gaps_logic.cpp gaps_win.cpp diag_copy.cpp bandplan_palette.cpp sdrplaydiag_logic.cpp sdrplaydiag_child.cpp pointer_ledger.cpp)
 # SCREEN LANE C (docs/multi-radio-records/screen-c.md): the scanner block, the memories, the delta lock, the clock and the two sheets (lanec_logic: pure; lanec_publish: the LaneC global)
 list(APPEND foxsdr_slint_sources lanec_logic.cpp lanec_publish.cpp)
 # SCREEN LANE J (docs/multi-radio-records/screen-j.md): the map page's layers, replay, filter and units, the Sky and Antenna pages (mapj_logic: pure; kit_publish_mapj: KitPublisher members; ui/mapj.slint)
@@ -83,6 +83,11 @@ else()
     find_package(OpenGL QUIET)
     if(OpenGL_FOUND)
         target_link_libraries(foxsdr-slint PRIVATE OpenGL::GL)
+    endif()
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # the access lane's test tone goes out through ALSA (lanek_audio.cpp)
+        find_package(ALSA REQUIRED)
+        target_link_libraries(foxsdr-slint PRIVATE ALSA::ALSA)
     endif()
 endif()
 target_include_directories(foxsdr-slint PRIVATE
@@ -148,6 +153,30 @@ if(Python3_Interpreter_FOUND)
     add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/main.h" APPEND DEPENDS "${foxsdr_slint_po_stamp}")
 endif()
 foxsdr_slint_copy_dll(foxsdr-slint)
+if(UNIX AND NOT APPLE)
+    # LINUX: the toolkit's library sits BESIDE the program, in the build tree, the tarball and the AppImage alike, and the program finds it there: RUNPATH is $ORIGIN and nothing else (no
+    # SDK folder of the build machine is baked in, so an unpacked copy can never run against a different library by accident). The build-tree copy is what ctest's drive runs execute.
+    set_target_properties(foxsdr-slint PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "\$ORIGIN")
+    set(_slint_so "${Slint_DIR}/../../libslint_cpp.so")
+    if(EXISTS "${_slint_so}")
+        add_custom_command(TARGET foxsdr-slint POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_slint_so}" "$<TARGET_FILE_DIR:foxsdr-slint>/libslint_cpp.so"
+            COMMENT "foxsdr-slint: libslint_cpp.so beside the program")
+    else()
+        message(WARNING "foxsdr-slint: libslint_cpp.so not found at ${_slint_so}; the program will not start from the build tree")
+    endif()
+    # THE SYMBOLS, archived by the action that links the program, as cascade's and foxsdr-engine's are (root CMakeLists.txt): the DWARF goes to symbols/ keyed by the build id, and the binary that ships
+    # is stripped of it (1.16 GB with it, 65 MB without). Never fails the build; the assertion that the archive resolves a line is tools/check-symbol-archive-linux.sh foxsdr-slint main.cpp.
+    add_custom_command(TARGET foxsdr-slint POST_BUILD
+        COMMAND bash "${CMAKE_SOURCE_DIR}/tools/archive-symbols-linux.sh"
+                --binary "$<TARGET_FILE:foxsdr-slint>"
+                --archive-root "${CASCADE_SYMBOL_ARCHIVE}"
+                --version "${CASCADE_VERSION_STRING}"
+                --commit-header "${CASCADE_COMMIT_HEADER}"
+                --module "$<TARGET_FILE_BASE_NAME:foxsdr-slint>"
+                --config "$<CONFIG>"
+        VERBATIM)
+endif()
 
 # THE ENGINE'S BAND PLANS BESIDE THIS EXECUTABLE TOO (2026-11-09). BandPlan::defaultDir() is executable-relative and foxsdr-slint
 # is built into its own directory, so the root's cascade_stage_resources (beside cascade and foxsdr-engine) never reached it: a

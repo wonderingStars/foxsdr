@@ -2,6 +2,8 @@
 // window's gestures as the ImGui drawers' own commands. SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "signal_publish.hpp"
 
+#include "desk_logic.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -403,6 +405,9 @@ void SignalPublisher::openLink(const std::string& url) {
     cascade::core::diagLogf("radio setup: opening %s", url.c_str());
 #if defined(_WIN32)
     ::ShellExecuteW(nullptr, L"open", widen(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#else
+    std::string why;
+    if (!foxsdr::slintdesk::openAddress(url, &why)) { cascade::core::diagLogf("radio setup: %s", why.c_str()); }
 #endif
 }
 

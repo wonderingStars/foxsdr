@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "lanec_publish.hpp"
 
+#include "desk_logic.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -257,6 +259,13 @@ void LaneCPublisher::act(const std::string& id, const std::string& text) {
             std::filesystem::create_directories(p, ec);
             ::ShellExecuteW(nullptr, L"open", p.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         }
+#else
+        if (!env_.bounded && !dir.empty()) {
+            std::error_code ec;
+            std::filesystem::create_directories(std::filesystem::path{std::u8string(dir.begin(), dir.end())}, ec);
+            std::string why;
+            if (!foxsdr::slintdesk::openFolder(dir, &why)) { cascade::core::diagLogf("recordings folder: %s", why.c_str()); }
+        }
 #endif
     } else if (id == "rec-open") {
         const int i = std::atoi(text.c_str());
@@ -271,6 +280,11 @@ void LaneCPublisher::act(const std::string& id, const std::string& text) {
         else if (!env_.bounded) {
             const std::filesystem::path p{std::u8string(r.path.begin(), r.path.end())};
             ::ShellExecuteW(nullptr, L"open", p.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);   // the system's own player or viewer
+        }
+#else
+        else if (!env_.bounded) {
+            std::string why;
+            if (!foxsdr::slintdesk::openFile(r.path, &why)) { cascade::core::diagLogf("recording player: %s", why.c_str()); }   // the system's own player or viewer
         }
 #endif
     }
