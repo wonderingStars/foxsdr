@@ -3,6 +3,7 @@
 #include "s5b_logic.hpp"
 
 #include <cmath>
+#include <cmath>
 #include <cstdlib>
 
 #include "core/i18n.hpp"
@@ -140,4 +141,29 @@ bool soapyWriteCommand(const std::string& key, const std::string& value, std::st
 std::string soapySettingLabel(const SoapySettingView& s) { return s.units.empty() ? s.name : s.name + " (" + s.units + ")"; }
 
 std::string soapyRangeWords(const SoapySettingView& s) { return s.hasRange ? numberText(s.lo) + " to " + numberText(s.hi) : std::string(); }
+
+// ============================================================ CAT follow, OmniRig, virtual COM (G1-16, G3-18a, G3-18b) ============================================================
+std::vector<std::string> catModeWords() {
+    return {tr("Off"), tr("Follow a rig on a serial port"), tr("Answer a logging program on a virtual COM port"), tr("Follow OmniRig")};
+}
+const char* catModeKey(int index) {
+    static const char* const k[4] = {"off", "follow", "emulate", "omnirig"};
+    return k[index < 0 || index > 3 ? 0 : index];
+}
+int catModeIndex(const std::string& key) {
+    for (int i = 0; i < 4; ++i) { if (key == catModeKey(i)) { return i; } }
+    return 0;
+}
+std::string catStateWords(const std::string& state) {
+    if (state == "opening") { return tr("opening"); }
+    if (state == "following") { return tr("following the rig"); }
+    if (state == "emulating") { return tr("answering the logging program"); }
+    if (state == "error") { return tr("not working"); }
+    return tr("off");
+}
+std::string catRigWords(const std::string& hzText, const std::string& mode) {
+    if (hzText.empty() || hzText.find_first_not_of("0123456789") != std::string::npos) { return std::string(); }
+    const double hz = std::atof(hzText.c_str());
+    return numberText(std::round(hz / 1.0e3) / 1.0e3) + " MHz" + (mode.empty() ? std::string() : ", " + mode);
+}
 }  // namespace foxsdr::slints5b

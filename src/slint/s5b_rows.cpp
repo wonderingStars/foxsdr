@@ -17,6 +17,8 @@ using slk::Row;
 using slk::rHeading;
 using slk::rNote;
 using slk::rReadout;
+using slk::kErr;
+using slk::kWarn;
 
 // the screen's words: every literal below goes through the string tables (tools/i18n_keys.py finds the tr("...") calls)
 std::string tr(const char* s) { return cascade::i18n::tr(s); }
@@ -46,6 +48,8 @@ void S5Rows::buildS5b(std::vector<Row>& v) {
         }
     }
     buildSoapy(v);
+    buildCat(v);
+    buildSourceNotes(v);
 }
 
 
@@ -99,5 +103,65 @@ void S5Rows::buildSoapy(std::vector<Row>& v) {
             key(v, id + ".set", tr("Set") + " " + label, [this, id, write, s] { write(dv(id, s.value)); }, true, tip);
         }
     }
+}
+
+// ---------------------------------------------------------------- G1-16 / G3-18a / G3-18b CAT: follow a rig, follow OmniRig, answer a logging program on a virtual COM port
+// RECEIVE SIDE ONLY. The page says so in words, and what it sends is a setting (the engine's own cat.link.* keys); the link in the engine does the rest. The only messages FoxSDR ever sends to a rig are the reads FA; and MD;.
+void S5Rows::buildCat(std::vector<Row>& v) {
+    namespace b = foxsdr::slints5b;
+    const auto wc = [this](const std::string& k) { return fact("wirec." + k); };
+    const auto put = [this](const std::string& what, const std::string& k, const std::string& value) {
+        Cmd c; c.op = FOXAPP_OP_WIREC_SETTING; c.text = k + std::string(1, static_cast<char>(0x1F)) + value; send(what, c);
+    };
+    const std::string mode = wc("cat.link.mode").empty() ? "off" : wc("cat.link.mode");
+    v.push_back(rHeading(tr("CAT: follow a rig")));
+    v.push_back(rNote(tr("FoxSDR reads a transceiver's frequency and mode and moves its own centre and mode to match (a panadapter), or answers a logging program on a virtual COM port. It never sends a command that keys the transmitter: the only messages it sends to a rig are the two reads FA; and MD;.")));
+    choice(v, "b.cat.mode", tr("How"), b::catModeWords(), b::catModeIndex(mode), [this, put](int i) {
+        put(tr("CAT: follow a rig"), "cat.link.mode", foxsdr::slints5b::catModeKey(i));
+    }, tr("Off opens nothing. Nothing is opened until you choose a way and give what it needs."));
+    if (mode == "follow" || mode == "emulate") {
+        const std::string port = wc("cat.link.port");
+        field(v, "b.cat.port", tr("Serial port"), port, tr("COM1 to COM256. For a virtual COM pair, the end FoxSDR uses."));
+        key(v, "b.cat.port.set", tr("Use this port"), [this, put] {
+            std::string norm;
+            if (!foxsdr::slintlanel::validComPort(dv("b.cat.port"), norm)) { refuseHere(tr("Use this port"), tr("a serial port is COM1 to COM256")); return; }
+            put(tr("Use this port"), "cat.link.port", norm);
+        });
+        const std::string dia = wc("cat.link.dialect");
+        choice(v, "b.cat.dialect", tr("Rig's command set"), {tr("Kenwood"), tr("Yaesu")}, dia == "yaesu" ? 1 : 0, [put](int i) { put(tr("Rig's command set"), "cat.link.dialect", i == 1 ? "yaesu" : "kenwood"); },
+               tr("The rig's own menu says which. Kenwood text commands or Yaesu newcat."));
+        const std::string baud = wc("cat.link.baud");
+        field(v, "b.cat.baud", tr("Baud rate"), baud == "0" ? std::string() : baud, tr("The rate the rig is set to in its menu: nothing is assumed"));
+        key(v, "b.cat.baud.set", tr("Use this baud rate"), [this, put] {
+            long long n = 0; std::string e;
+            if (!foxsdr::slintlanel::parseInteger(dv("b.cat.baud"), 300, 4000000, n, e)) { refuseHere(tr("Use this baud rate"), e); return; }
+            put(tr("Use this baud rate"), "cat.link.baud", std::to_string(n));
+        });
+        choice(v, "b.cat.stop", tr("Stop bits"), {"1", "2"}, wc("cat.link.stopbits") == "2" ? 1 : 0, [put](int i) { put(tr("Stop bits"), "cat.link.stopbits", i == 1 ? "2" : "1"); });
+    }
+    if (mode == "omnirig") {
+        choice(v, "b.cat.rig", tr("OmniRig rig"), {tr("Rig 1"), tr("Rig 2")}, wc("cat.link.rig") == "2" ? 1 : 0, [put](int i) { put(tr("OmniRig rig"), "cat.link.rig", i == 1 ? "2" : "1"); },
+               tr("OmniRig has two rig slots; choose the one you set up there."));
+    }
+    if (mode == "follow" || mode == "omnirig") {
+        tick(v, "b.cat.ff", tr("Follow the rig's frequency"), wc("cat.link.follow_frequency") != "0", [put](bool on) { put(tr("Follow the rig's frequency"), "cat.link.follow_frequency", on ? "1" : "0"); });
+        tick(v, "b.cat.fm", tr("Follow the rig's mode"), wc("cat.link.follow_mode") != "0", [put](bool on) { put(tr("Follow the rig's mode"), "cat.link.follow_mode", on ? "1" : "0"); });
+    }
+    if (mode != "off") {
+        const std::string st = fact("cat.link.state");
+        v.push_back(rReadout(tr("CAT link"), foxsdr::slints5b::catStateWords(st)));
+        const std::string hz = fact("cat.link.rigHz");
+        if (!hz.empty()) { v.push_back(rReadout(tr("The rig"), foxsdr::slints5b::catRigWords(hz, fact("cat.link.rigMode")))); }
+        const std::string err = fact("cat.link.error");
+        if (!err.empty()) { v.push_back(rNote(err, kErr)); }
+        if (mode == "omnirig" && st == "error") { v.push_back(rNote(tr("OmniRig is other people's free program. FoxSDR does not download or install it. It must be installed and set up for your rig, then chosen here."), kWarn)); }
+    }
+}
+
+// ---------------------------------------------------------------- what works today for the radios and servers that have no control of their own (G1-07m AntSDR, G1-03a SDR++ Server)
+void S5Rows::buildSourceNotes(std::vector<Row>& v) {
+    v.push_back(rHeading(tr("Other radios and servers")));
+    v.push_back(rNote(tr("AntSDR: open it as an ADALM-Pluto. Give the Pluto source the AntSDR's own address and it is read like a Pluto.")));
+    v.push_back(rNote(tr("SDR++ Server: start it in its rtl_tcp-compatible mode and open it with the rtl_tcp source, giving that address and port.")));
 }
 }  // namespace foxsdr::slints5

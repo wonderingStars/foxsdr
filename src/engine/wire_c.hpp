@@ -25,6 +25,7 @@
 
 #include "engine/wire_c_power.hpp"
 #include "engine/wire_c_cat.hpp"
+#include "engine/cat_link.hpp"
 #include "engine/wire_c_ham.hpp"
 #include "engine/wire_c_net.hpp"
 #include "engine/wire_c_sys.hpp"
@@ -83,12 +84,17 @@ public:
     SysOps& sys() { return sys_; }
     QsoBook& qsos() { return qsoBook_; }
     CatEmulation catEmu;                  // CAT emulation for logging programs (row L7)
+    CatLink catLink;                      // FoxSDR follows a rig over CAT, or answers a logging program on a virtual COM port (screen lane S5b)
+    CatLinkSeams catLinkSeams;            // TESTS put stand-ins for the serial port and OmniRig here; empty in the program (the real ones)
+    std::string catLinkApplied = "off||kenwood|0|1|1|1|1";   // the settings it was last configured with (the defaults: nothing to do at the first pass)
+    std::uint64_t catLinkSeen = 0;        // the counters the last published fact block counted
     // the carrying-out of a confirmed open (plugin_abi.h request_open_url / _library_folder); empty = the system's own (wire_c_open.hpp). TESTS set it.
     std::function<bool(const std::string& what, bool isFolder, std::string& why)> openTarget;
     std::string openLast;   // the last confirmed open's outcome, a sentence
     std::string catEmuApplied = "0|kenwood-ts480|0|0";   // the settings it was last configured with (the defaults: nothing to do at the first pass)
     std::uint64_t catEmuSeen = 0;         // clients and commands the last published fact block counted
     void shutdown() {                     // the engine's teardown: every listener and session this lane holds is let go
+        catLink.stop();
         catEmu.stop();
         radioInfo.configure(false, "127.0.0.1", 0, false);
     }

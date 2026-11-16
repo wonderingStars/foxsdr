@@ -192,5 +192,61 @@ int main() {
         v = r.build();
         CHECK(r.find(v, "b.sp.0") == nullptr && r.find(v, "b.sp.bw.set") == nullptr);
     }
+    // ---------------------------------------------------------------- G1-16 / G3-18a / G3-18b: CAT follow, OmniRig, virtual COM
+    {
+        namespace bb = foxsdr::slints5b;
+        CHECK(bb::catModeWords().size() == 4 && std::string(bb::catModeKey(0)) == "off" && std::string(bb::catModeKey(3)) == "omnirig" && std::string(bb::catModeKey(9)) == "off");
+        CHECK(bb::catModeIndex("follow") == 1 && bb::catModeIndex("emulate") == 2 && bb::catModeIndex("omnirig") == 3 && bb::catModeIndex("x") == 0);
+        CHECK(bb::catRigWords("101100000", "USB") == "101.1 MHz, USB" && bb::catRigWords("", "USB").empty() && bb::catRigWords("x", "").empty());
+        Rig r; r.open();
+        std::vector<slk::Row> v = r.build();
+        CHECK(r.find(v, "b.cat.mode") != nullptr && r.find(v, "b.cat.mode")->pick == 0 && r.find(v, "b.cat.port") == nullptr);   // off: nothing but the choice
+        // the choice sends the engine's setting and nothing else
+        r.rows.act("b.cat.mode", "1");
+        CHECK(r.sent.size() == 1 && r.sent[0].op == FOXAPP_OP_WIREC_SETTING && r.sent[0].text == std::string("cat.link.mode") + char(0x1F) + "follow");
+        r.facts["fact.wirec.cat.link.mode"] = "follow";                                         // the engine's value, read back
+        v = r.build();
+        CHECK(r.find(v, "b.cat.mode")->pick == 1 && r.find(v, "b.cat.port") != nullptr && r.find(v, "b.cat.baud") != nullptr && r.find(v, "b.cat.dialect") != nullptr && r.find(v, "b.cat.ff") != nullptr);
+        // the port: COM1 to COM256 only, normalised; a path or a pipe is refused here and never sent
+        r.rows.act("b.cat.port", "com7");
+        r.rows.act("b.cat.port.set", "");
+        CHECK(r.sent.size() == 2 && r.sent[1].text == std::string("cat.link.port") + char(0x1F) + "COM7");
+        r.rows.act("b.cat.port", "LPT1");
+        r.rows.act("b.cat.port.set", "");
+        CHECK(r.sent.size() == 2);
+        // the baud rate: given by the person, 300 to 4000000
+        r.rows.act("b.cat.baud", "9600");
+        r.rows.act("b.cat.baud.set", "");
+        CHECK(r.sent.size() == 3 && r.sent[2].text == std::string("cat.link.baud") + char(0x1F) + "9600");
+        r.rows.act("b.cat.baud", "12");
+        r.rows.act("b.cat.baud.set", "");
+        CHECK(r.sent.size() == 3);
+        r.rows.act("b.cat.dialect", "1");
+        CHECK(r.sent.size() == 4 && r.sent[3].text == std::string("cat.link.dialect") + char(0x1F) + "yaesu");
+        r.rows.act("b.cat.ff", "0");
+        CHECK(r.sent.size() == 5 && r.sent[4].text == std::string("cat.link.follow_frequency") + char(0x1F) + "0");
+        // the link's own state is shown from the engine's facts
+        r.facts["fact.cat.link.state"] = "following"; r.facts["fact.cat.link.rigHz"] = "14200000"; r.facts["fact.cat.link.rigMode"] = "USB";
+        v = r.build();
+        CHECK(r.has(v, "following the rig") && r.has(v, "14.2 MHz, USB"));
+        r.facts["fact.cat.link.state"] = "error"; r.facts["fact.cat.link.error"] = "the port stopped answering: x";
+        v = r.build();
+        bool shown = false; for (const auto& x : v) { if (x.label.find("the port stopped answering") != std::string::npos) { shown = true; } }
+        CHECK(shown);
+        // OmniRig: a choice of rig, the needed-program words when it is absent, nothing downloaded
+        r.facts["fact.wirec.cat.link.mode"] = "omnirig";
+        v = r.build();
+        CHECK(r.find(v, "b.cat.rig") != nullptr && r.find(v, "b.cat.port") == nullptr);
+        bool needed = false; for (const auto& x : v) { if (x.label.find("does not download or install it") != std::string::npos) { needed = true; } }
+        CHECK(needed);
+        r.rows.act("b.cat.rig", "1");
+        CHECK(r.sent.back().text == std::string("cat.link.rig") + char(0x1F) + "2");
+        // the page names no setting but cat.link.* (every command it sends is a setting of that family)
+        for (const auto& s : r.sent) { CHECK(s.op == FOXAPP_OP_WIREC_SETTING && s.text.rfind("cat.link.", 0) == 0); }
+        // what works today, said in words
+        bool ant = false, sdrpp = false;
+        for (const auto& x : r.build()) { if (x.label.find("AntSDR: open it as an ADALM-Pluto") != std::string::npos) { ant = true; } if (x.label.find("SDR++ Server: start it in its rtl_tcp-compatible mode") != std::string::npos) { sdrpp = true; } }
+        CHECK(ant && sdrpp);
+    }
     return testSummary("test_slint_s5b_host");
 }

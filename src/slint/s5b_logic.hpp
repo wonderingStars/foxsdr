@@ -23,6 +23,21 @@ std::string ifBandwidthWords(const std::string& fact);
 
 }  // namespace foxsdr::slints5b
 
+
+namespace foxsdr::slints5b {
+
+// ============================================================ CAT follow, OmniRig, virtual COM (G1-16, G3-18a, G3-18b) ============================================================
+// The four ways, the engine's cat.link.mode keys in the same order: off, follow (a serial port to a rig), emulate (a virtual COM port to a logging program), omnirig.
+std::vector<std::string> catModeWords();
+const char* catModeKey(int index);       // "off" for an index outside 0..3
+int catModeIndex(const std::string& key);  // 0 for a key that is not one of the four
+// The engine's link state (off opening following emulating error) in words.
+std::string catStateWords(const std::string& state);
+// "101.1 MHz, USB": the rig's frequency fact (Hz, digits) and mode; "" for anything that is not a number.
+std::string catRigWords(const std::string& hzText, const std::string& mode);
+
+}  // namespace foxsdr::slints5b
+
 // ============================================================ SoapySDR driver bandwidth and settings (G1-15a, G1-15b) ============================================================
 // What the connected driver reported, read back from the engine's facts ("radio.N.soapy.*"); nothing here is a fixed list.
 namespace foxsdr::slints5b {
