@@ -49,6 +49,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/secret_vault.hpp"
 #include "engine_main_proc.hpp"
 #include "test_check.hpp"
 
@@ -410,7 +411,12 @@ void writeSettings(const fs::path& path, int webPort, int catPort) {
     std::ofstream(path, std::ios::binary | std::ios::trunc) << c.dump(2) << "\n";
 }
 
-json readSettings(const fs::path& path) { return json::parse(emt::readFile(path), nullptr, false); }
+// The tester tokens are secrets kept in the per-user protected store beside the file (core/secret_vault.hpp, engine lane E1): read back the way the program reads them.
+json readSettings(const fs::path& path) {
+    bool migrated = false;
+    std::string note;
+    return json::parse(cascade::core::vault::mergeAfterRead(path.string(), emt::readFile(path), migrated, note), nullptr, false);
+}
 
 fs::path g_home;
 

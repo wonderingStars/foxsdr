@@ -56,6 +56,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/secret_vault.hpp"
 #include "core/tester_link.hpp"
 #include "test_check.hpp"
 
@@ -289,7 +290,11 @@ Result once(const Run& r) {
         for (std::size_t i = 1; i + 4 < n; ++i) { name += " " + tok[i]; }
         out.rects[name] = rc;
     }
-    out.config = nlohmann::json::parse(readFile(cfg), nullptr, false);
+    {   // the tester tokens are secrets kept in the per-user protected store beside the file (core/secret_vault.hpp, engine lane E1): read back the way the program reads them
+        bool migrated = false;
+        std::string note;
+        out.config = nlohmann::json::parse(cascade::core::vault::mergeAfterRead(cfg.string(), readFile(cfg), migrated, note), nullptr, false);
+    }
     out.ok = true;
     return out;
 }
