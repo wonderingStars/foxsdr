@@ -298,6 +298,32 @@ struct S4bPublisher::Impl {
         if (!err.empty()) { v.push_back(rNote(err, kErr)); }
     }
 
+    // the public receiver listing (G3-30): the person's words, the exact document, and what it means
+    void listingRows(std::vector<Row>& v, Sec S) {
+        v.push_back(rHeading(tr("Public receiver listing")));
+        const bool on = fact("wirec.listing.enabled") == "1";
+        wircTick(v, S, "listing.on", tr("Let my web page describe this receiver to a directory"), "listing.enabled",
+                 tr("Off: nothing is published. On: your web page serves the text shown below at /status.json for a receiver directory to read."));
+        field(v, "listing.name", tr("Receiver name"), fact("wirec.listing.name"), [this, S](const std::string& t) { setting(S, tr("Receiver name"), "listing.name", trim(t)); }, tr("Up to 64 characters."));
+        field(v, "listing.location", tr("Receiver location"), fact("wirec.listing.location"), [this, S](const std::string& t) { setting(S, tr("Receiver location"), "listing.location", trim(t)); }, tr("A town and a region, up to 96 characters."));
+        field(v, "listing.lat", tr("Latitude"), fact("wirec.listing.lat"), [this, S](const std::string& t) { setting(S, tr("Latitude"), "listing.lat", trim(t)); }, tr("Degrees, optional. Give it with the longitude or leave both empty."));
+        field(v, "listing.lon", tr("Longitude"), fact("wirec.listing.lon"), [this, S](const std::string& t) { setting(S, tr("Longitude"), "listing.lon", trim(t)); }, tr("Degrees, optional."));
+        wholeField(v, S, "listing.max", tr("Listener limit"), "listing.max_clients", 1, 1000);
+        field(v, "listing.bands", tr("Bands to list"), fact("wirec.listing.bands"), [this, S](const std::string& t) { setting(S, tr("Bands to list"), "listing.bands", trim(t)); },
+              tr("A name, the centre in MHz and the sample rate in MHz, separated by semicolons; separate bands with |."));
+        if (on) {
+            const std::string problem = fact("listing.problem");
+            if (!problem.empty()) { v.push_back(rNote(problem, kErr)); }
+            const std::string preview = fact("listing.preview");
+            if (!preview.empty()) {
+                v.push_back(rReadout(tr("This is exactly what would be published"), std::string()));
+                v.push_back(rNote(preview.size() > 900 ? preview.substr(0, 900) : preview, kDim));
+                v.push_back(rReadout(tr("Served by your web page now"), factOn("listing.live") ? tr("yes") : tr("no: your web page is off")));
+            }
+        }
+        v.push_back(rNote(tr("FoxSDR sends this to no one. A directory reads it from your web page, and you register the page's address with the directory yourself. Anyone who can reach your web page can read it; today that is this computer only unless you changed the web page's address."), kDim));
+    }
+
     // the macro recorder's draft name
     std::string macroName;
     void macroRows(std::vector<Row>& v, Sec S) {
@@ -352,6 +378,7 @@ struct S4bPublisher::Impl {
     // ================================================================ SYSTEM > Outputs
     void buildOut(std::vector<Row>& v) {
         const Sec S = kOut;
+        listingRows(v, S);
         macroRows(v, S);
         swlRows(v, S);
         rotatorRows(v, S);

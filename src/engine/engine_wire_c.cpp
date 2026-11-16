@@ -17,7 +17,9 @@
 #include "core/companion_fault.hpp"
 #include "core/config.hpp"
 #include "core/demod_names.hpp"
+#include "engine/s4b_listing.hpp"
 #include "engine/s4b_macro_edit.hpp"
+#include "core/version.hpp"
 #include "core/diag_log.hpp"
 #include "engine/engine.hpp"
 #include "core/plugin_repo_helper.hpp"   // wire-c
@@ -265,6 +267,10 @@ void Engine::wireCFacts(const std::function<void(const std::string&, const std::
     fact("swl.count", std::to_string(s.swl().size()));      // the listening log: a COUNT and sentences only, never an entry
     fact("swl.error", s.swlError.empty() ? s.swl().error() : s.swlError);
     fact("swl.export.last", s.swlExportLast);
+    // the public receiver listing: the exact document the web page serves at /status.json (the person's own words, public by their choice), its problem, and whether the page is up to serve it
+    fact("listing.preview", s.listingPreview);
+    fact("listing.problem", s.listingProblem);
+    fact("listing.live", (!s.listingPreview.empty() && servers_.webServer().running()) ? "1" : "0");
     // THE DECODED-TEXT OUTPUTS AND ALERTS (screen lane S4): counts and one sentence each - never a decoded line, a user name, a password or an address. The last alerts are the program's own
     // read-out for the operator (LOCAL only, like every fact of this lane): the matched keyword and the text, cut.
     {
@@ -601,6 +607,38 @@ void Engine::pumpWireC() {
             ++wireCVersion_;
         }
         s.servers.pass();
+        if (s.listingVersion != s.settings().version()) {
+            // THE PUBLIC RECEIVER LISTING (G3-30): built from the person's own words; the web page serves it at /status.json only while it is on and valid
+            s.listingVersion = s.settings().version();
+            s4b::ListingText t;
+            t.enabled = s.settings().getBool("listing.enabled");
+            t.name = s.settings().get("listing.name");
+            t.location = s.settings().get("listing.location");
+            t.latitude = s.settings().get("listing.lat");
+            t.longitude = s.settings().get("listing.lon");
+            t.maxClients = s.settings().get("listing.max_clients");
+            t.bands = s.settings().get("listing.bands");
+            t.version = cascade::versionString();
+            cascade::net::ReceiverListing l;
+            std::string problem;
+            const bool ok = s4b::buildListing(t, l, problem);
+            std::string err;
+            if (!ok || !servers_.webServer().setReceiverListing(l, err)) {
+                // not valid (or refused by the page): the page serves nothing
+                cascade::net::ReceiverListing off;
+                (void)servers_.webServer().setReceiverListing(off, err);
+                s.listingPreview.clear();
+                s.listingProblem = ok ? err : problem;
+            } else {
+                s.listingPreview = cascade::net::listingJson(l);
+                s.listingProblem.clear();
+            }
+            ++wireCVersion_;
+        }
+        {
+            const bool live = !s.listingPreview.empty() && servers_.webServer().running();
+            if (live != s.listingLive) { s.listingLive = live; ++wireCVersion_; }
+        }
         const std::string sig = s.servers.signature();
         if (sig != s.serversSig) {
             s.serversSig = sig;

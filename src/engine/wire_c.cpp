@@ -111,6 +111,13 @@ constexpr Spec kSpecs[] = {
     {"rot.park_el", Kind::Real, 0, 180, "0", ""},
     {"swl.operator", Kind::Text, 0, 16, "", ""},                // the listener's identifier written into the listening log's ADIF export
     {"swl.grid", Kind::Text, 0, 8, "", ""},                     // the listener's Maidenhead square (2 to 8 characters), optional
+    {"listing.enabled", Kind::Bool, 0, 0, "0", ""},             // let the web page serve a public receiver listing (/status.json) for a directory to read; OFF: the page answers 404
+    {"listing.name", Kind::Text, 0, 64, "", ""},                // the receiver's public name
+    {"listing.location", Kind::Text, 0, 96, "", ""},            // a town and a region, as free text
+    {"listing.lat", Kind::Text, 0, 24, "", ""},                 // optional latitude in degrees (with the longitude)
+    {"listing.lon", Kind::Text, 0, 24, "", ""},
+    {"listing.max_clients", Kind::Int, 1, 1000, "1", ""},       // the listener limit the listing states
+    {"listing.bands", Kind::Text, 0, 2000, "", ""},             // "name;centre MHz;sample rate MHz", one per line or separated by |, at most 32
 };
 constexpr std::size_t kSpecCount = sizeof(kSpecs) / sizeof(kSpecs[0]);
 

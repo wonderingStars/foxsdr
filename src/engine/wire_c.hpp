@@ -93,6 +93,9 @@ public:
     QsoBook& qsos() { return qsoBook_; }
     cascade::engine::s4b::SwlBook& swl() { return swlBook_; }   // screen lane S4b: the listening (SWL) log
     std::string swlError, swlExportLast;
+    std::uint64_t listingVersion = 0;        // screen lane S4b: the settings version the public listing was last built from
+    bool listingLive = false;
+    std::string listingPreview, listingProblem;   // the exact document the web page serves (empty while off) and what is wrong with the words
     CatEmulation catEmu;                  // CAT emulation for logging programs (row L7)
     cascade::core::rdslog::Logger rdsLog; // the RDS log (engine lane E1): a worker of its own, started only while the user's switch is on
     std::uint64_t rdsLogSeen = 0;          // what the last published fact block counted of the log (lines, drops, the error)

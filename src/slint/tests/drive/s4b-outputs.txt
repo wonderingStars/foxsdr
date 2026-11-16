@@ -157,3 +157,21 @@
 +20 state s4b.fact.macro.running == ""
 +1 click "Delete macro: Squelch test"
 +15 state s4b.fact.macro.names == ""
+# the public receiver listing (G3-30): off at start, nothing published; words are checked by the engine, the preview is the engine's exact document
++1 state s4b.fact.wirec.listing.enabled == 0
++1 state s4b.fact.listing.preview == ""
++1 click "Let my web page describe this receiver to a directory"
++12 state s4b.fact.wirec.listing.enabled == 1
++10 state s4b.fact.listing.problem contains "name"
++1 type "Receiver name" "Drive test receiver"
++1 key enter
++12 state s4b.fact.wirec.listing.name == "Drive test receiver"
++12 state s4b.fact.listing.preview contains "Drive test receiver"
++1 type "Latitude" "51.5"
++1 key enter
++12 state s4b.fact.listing.problem contains "latitude"
++1 type "Longitude" "-0.12"
++1 key enter
++12 state s4b.fact.listing.problem == ""
++1 click "Let my web page describe this receiver to a directory"
++12 state s4b.fact.listing.preview == ""
