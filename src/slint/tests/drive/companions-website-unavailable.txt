@@ -1,0 +1,15 @@
+#! frames=560 size=1400x1800 bank=1 store=companion-hfdl FOXSDR_SLINT_STORE_LOCAL=fixtures/companions-index.json
+# companions-website-unavailable (companions-shelf lane, step 1): a companion whose catalogue row has no published program (status unpublished, empty address and hash). The page
+# says so in plain words, with no promise of when, and GET never answers - not even once the maker's notice is ticked - because there is nothing to fetch.
+10 state running == 1
++1 click "Plugin store"
++300 state store.companionKeys contains "PROGRAM"
+state store.companion contains "UPSTREAM PROJECT: dumphfdl"
+state store.companion contains "PROGRAM: hfdl.exe  -  The program for this companion is not available in this copy of FoxSDR."
+# no identifier line on this row (its description does not carry one)
+state store.companionKeys == "WHAT IT DECODES|UPSTREAM PROJECT|PROGRAM LICENCE|WHY IT IS A SEPARATE PROGRAM|SOURCE CODE|PROGRAM"
+state store.keyEnabled == 0
++1 click "I have read the maker's notice"
++10 state store.noticeTick == 1
+state store.keyEnabled == 0
++1 shot "companions-website-unavailable.png"

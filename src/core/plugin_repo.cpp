@@ -9,6 +9,7 @@
 
 #include "core/file_read.hpp"
 #include "core/i18n.hpp"
+#include "core/companion_programs.hpp"   // companion applications shelf
 #include "core/plugin_repo_helper.hpp"   // wire-c
 #include "core/utf8_text.hpp"
 
@@ -1497,6 +1498,7 @@ PluginRepo::SiteMergeResult PluginRepo::mergeSite(
         PluginCatalogEntry copy = e;
         copy.source = siteUrl;
         copy.regional = false;
+        copy.companion = CompanionInfo{};   // a companion application's program is OFFICIAL-CATALOGUE ONLY: a stranger's program is not fetched for the user
         result.merged.push_back(std::move(copy));
         ++result.added;
     }
@@ -1709,6 +1711,9 @@ bool PluginRepo::parseIndex(const std::string& text, std::vector<PluginCatalogEn
             return false;
         }
         // wire-c end
+
+        // companion applications shelf: the `companion` object (soft: it never refuses the catalogue; an unusable program block just reads as "not available")
+        companion::parseCompanionFields(pj, e);
 
         // The shop-window fields last: they cannot fail the entry, and `e.id`
         // is settled by now for the report to name.
@@ -3352,10 +3357,61 @@ bool PluginRepo::installImpl(const PluginCatalogEntry& e, const std::string& plu
     }
     // wire-c end
 
+    // companion applications shelf: the companion's PROGRAM, as one transaction with the bridge (core/companion_programs.hpp). The Store copy copies it out of its own
+    // package and asks no transport; the website copy downloads it. Staged and verified first (the bridge is verified already), moved into helpers/, recorded; any failure
+    // below puts everything back as it was.
+    companion::Txn companionTxn{fs::path(pluginsDir)};
+    companion::Record priorRecord;
+    bool hadPriorRecord = false;
+    if (e.companion.present && e.source.empty()) {
+        std::string stageError;
+        if (!companionTxn.stage(e, &progress_, &cancel_, stageError)) {
+            fs::remove(tmp, ignored);
+            helperTxn.rollback();
+            error = stageError;
+            failClass = stageError.find("integrity") != std::string::npos ? health::InstallClass::Hash
+                        : stageError.find("copied") != std::string::npos || stageError.find("staging") != std::string::npos ? health::InstallClass::Write
+                                                                                                                              : health::InstallClass::Net;
+            return false;
+        }
+        std::string commitError;
+        if (!companionTxn.commit(commitError)) {
+            fs::remove(tmp, ignored);
+            helperTxn.rollback();
+            error = commitError;
+            failClass = health::InstallClass::Write;
+            return false;
+        }
+        if (companionTxn.active()) {
+            hadPriorRecord = companion::readRecord(pluginsDir, safeName, priorRecord);
+            companion::Record rec;
+            rec.plugin = safeName;
+            rec.id = e.id;
+            rec.file = companionTxn.fileName();
+            rec.sha256 = companionTxn.sha256();
+            rec.size = companionTxn.size();
+            rec.via = companionTxn.via();
+            std::string recordError;
+            if (!companion::recordProgram(pluginsDir, rec, recordError)) {
+                fs::remove(tmp, ignored);
+                companionTxn.rollback();
+                helperTxn.rollback();
+                error = "\"" + e.name + "\": " + recordError;
+                failClass = health::InstallClass::Write;
+                return false;
+            }
+        }
+    }
+
     fs::rename(tmp, target, ec);
     if (ec) {
         // Most likely the DLL is currently loaded by this very process.
         fs::remove(tmp, ignored);
+        if (companionTxn.active()) {
+            companionTxn.rollback();   // companion applications shelf: the program goes back as it was, and so does its record
+            std::string recordError;
+            if (hadPriorRecord) { (void)companion::recordProgram(pluginsDir, priorRecord, recordError); } else { (void)companion::forgetRecord(pluginsDir, safeName); }
+        }
         helperTxn.rollback();   // wire-c: the helper's files go back as they were
         error = "cannot move the verified plugin into place at \"" + target.string() +
                 "\": " + ec.message();
@@ -3363,6 +3419,7 @@ bool PluginRepo::installImpl(const PluginCatalogEntry& e, const std::string& plu
         return false;
     }
     helperTxn.finish();   // wire-c: the backups of replaced companions are dropped now the plugin is in place
+    companionTxn.finish();   // companion applications shelf: the same for the program
 
     progress_.store(1.0f, std::memory_order_relaxed);
     installedPath = target.string();
@@ -3531,6 +3588,12 @@ bool PluginRepo::remove(const std::string& pluginsDir, const std::string& fileNa
         std::string helperError;
         if (!helperstore::removeCompanions(pluginsDir, safeName, helperError)) {
             error = "the plugin was deleted, but its helper program was not: " + helperError;
+            return false;
+        }
+        // companion applications shelf: a companion's program goes with its bridge (a program another bridge's record still names is kept)
+        std::string companionError;
+        if (!companion::removeProgram(pluginsDir, safeName, companionError)) {
+            error = "the plugin was deleted, but its companion program was not: " + companionError;
             return false;
         }
     }

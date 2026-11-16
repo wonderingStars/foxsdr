@@ -1,0 +1,12 @@
+#! frames=560 size=1400x1800 bank=1 store=companion-trunkfmt FOXSDR_FAKE_PACKAGE=FoxSDR.Test_1.0.0.0_x64__test FOXSDR_FAKE_PACKAGE_COMPANIONS=fixtures/companions-package FOXSDR_SLINT_STORE_LOCAL=fixtures/companions-index.json
+# companions-package-unavailable (companions-shelf lane, step 3): in the MICROSOFT STORE copy a companion the package does not hold cannot be fitted, however the catalogue
+# describes its program: the page says the program is not available in this copy (it does NOT say it will download), and GET stays greyed with the notice ticked.
+10 state running == 1
++1 click "Plugin store"
++300 state store.companionKeys contains "PROGRAM"
+state store.companion contains "PROGRAM: trunkfmt.exe  -  The program for this companion is not available in this copy of FoxSDR."
+state store.keyEnabled == 0
++1 click "I have read the maker's notice"
++10 state store.noticeTick == 1
+state store.keyEnabled == 0
++1 shot "companions-package-unavailable.png"

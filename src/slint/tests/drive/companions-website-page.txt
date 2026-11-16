@@ -1,0 +1,24 @@
+#! frames=560 size=1400x1800 bank=1 store=companion-multimon FOXSDR_SLINT_STORE_LOCAL=fixtures/companions-index.json
+# companions-website-page (companions-shelf lane, step 1): the page of one companion in the WEBSITE copy, from a LOCAL stand-in catalogue. Before anything is fetched it shows what
+# it decodes, the upstream project, the licence of the separate program as the row states it, the plain sentence saying why it is a separate program, the line saying it
+# cannot hide identifiers, the address of its source, and what fitting does about the program (it downloads and is checked). The lines are drawn controls: each is read back by
+# its accessible label, and the model's own lines are read back as well.
+10 state running == 1
++1 click "Plugin store"
++300 state store.companionKeys == "WHAT IT DECODES|UPSTREAM PROJECT|PROGRAM LICENCE|WHY IT IS A SEPARATE PROGRAM|IDENTIFIERS|SOURCE CODE|PROGRAM"
+state store.companion contains "UPSTREAM PROJECT: multimon-ng"
+state store.companion contains "PROGRAM LICENCE: GPL-2.0-or-later"
+state store.companion contains "WHY IT IS A SEPARATE PROGRAM: This is another person's open-source program"
+state store.companion contains "IDENTIFIERS: This program cannot hide identifiers"
+state store.companion contains "SOURCE CODE: https://github.com/wonderingStars/foxsdr-companions"
+state store.companion contains "PROGRAM: multimon-helper.exe  -  Fitting the plugin downloads the program and checks it against the checksum"
+# the same lines are DRAWN: the window's own controls carry them
+expect "UPSTREAM PROJECT: multimon-ng" label contains "multimon-ng"
+expect "PROGRAM LICENCE: GPL-2.0-or-later" label contains "GPL-2.0-or-later"
+# the source address is selectable text (a read-only field), labelled by its name; the value is read back through the model line above
+expect "SOURCE CODE" label contains "SOURCE CODE"
+# the maker's notice comes first: GET is greyed until it is ticked, then it answers (the transfer itself is withheld in a bounded run)
+state store.keyEnabled == 0
++1 click "I have read the maker's notice"
++10 state store.keyEnabled == 1
++1 shot "companions-website-page.png"

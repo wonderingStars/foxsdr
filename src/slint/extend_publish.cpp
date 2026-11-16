@@ -370,6 +370,18 @@ void ExtendPublisher::wantPictures(const StorePluginPage& page) {
     }
     b.reach = model(std::move(reach));
     b.reach_lead = ss(p.details_open ? p.reach_lead : std::string());
+    // COMPANION APPLICATION: its lines are always open (nothing to fold): they are what the shelf promises to show before anything is fetched
+    b.companion_heading = ss(p.companion_heading);
+    std::vector<::BodyFact> companion;
+    for (const PageFact& f : p.companion) {
+        ::BodyFact x{};
+        x.key = ss(f.key);
+        x.value = ss(f.value);
+        x.hatched = f.hatched;
+        x.copyable = f.copyable;
+        companion.push_back(std::move(x));
+    }
+    b.companion = model(std::move(companion));
     return b;
 }
 
@@ -419,6 +431,8 @@ static void sigPage(std::string& s, const StorePluginPage& p) {
     sigAdd(s, p.what_it_does); sigAdd(s, p.whats_new); sigAdd(s, p.details_open); sigAdd(s, p.details_label); sigAdd(s, p.no_pictures); sigAdd(s, p.catalogued); sigAdd(s, p.shown);
     for (const PageFact& f : p.facts) { sigAdd(s, f.key); sigAdd(s, f.value); sigAdd(s, f.hatched); }
     for (const ReachLine& r : p.reach) { sigAdd(s, r.key); sigAdd(s, r.detail); sigAdd(s, r.outward); }
+    sigAdd(s, p.companion_heading);
+    for (const PageFact& f : p.companion) { sigAdd(s, f.key); sigAdd(s, f.value); sigAdd(s, f.hatched); }
 }
 
 // Everything of the store model the window shows, as one string: the guard that keeps a model whose content did not move from being set again (a set list recreates every
@@ -433,6 +447,7 @@ static std::string storeSig(const StoreModel& m, int pictureIndex, std::uint64_t
     sigAdd(s, m.top_error); sigAdd(s, m.top_warning); sigAdd(s, m.empty_line);
     for (const StoreCategory& c : m.categories) {
         sigAdd(s, c.heading);
+        sigAdd(s, c.note);
         for (const StoreCard& k : c.cards) {
             sigAdd(s, k.id); sigAdd(s, k.glyph); sigAdd(s, k.name); sigAdd(s, k.summary); sigBadges(s, k.badges); sigAdd(s, k.key_label); sigAdd(s, k.key_kind);
             sigAdd(s, k.key_enabled); sigAdd(s, k.version_note); sigAdd(s, k.progress); sigAdd(s, static_cast<long long>(k.progress_norm * 1000.0f)); sigAdd(s, k.key_reason);
@@ -527,6 +542,7 @@ static std::string storeSig(const StoreModel& m, int pictureIndex, std::uint64_t
         }
         ::StoreCategory y{};
         y.heading = ss(c.heading);
+        y.note = ss(c.note);
         y.cards = model(std::move(cards));
         categories.push_back(std::move(y));
     }
@@ -811,6 +827,33 @@ bool ExtendPublisher::stateOf(const std::string& what, std::string& out) const {
     if (what == "frames") { std::size_t n = 0; for (const PictureFrame& f : p.screenshots) { n += f.sha256.empty() ? 0u : 1u; } out = std::to_string(n); return true; }
     if (what == "reach") { std::string j; for (const ReachLine& r : p.reach) { j += (j.empty() ? "" : "|") + r.key; } out = j; return true; }
     if (what == "facts") { out = std::to_string(p.facts.size()); return true; }
+    // the Companion applications block of the page, as "KEY: value" lines joined by " | " (read back by the drive scripts), and its state word
+    if (what == "companion") { std::string j; for (const PageFact& f : p.companion) { j += (j.empty() ? "" : " | ") + f.key + ": " + f.value; } out = j; return true; }
+    if (what == "companionKeys") { std::string j; for (const PageFact& f : p.companion) { j += (j.empty() ? "" : "|") + f.key; } out = j; return true; }
+    // one card of the Browse grid: "<shelf heading>|<badges, comma separated>|<key label>|<key enabled 0 or 1>|<why a greyed key is greyed>"
+    if (what.rfind("card.", 0) == 0) {
+        const std::string id = what.substr(5);
+        for (const StoreCategory& c : last_.store.categories) {
+            for (const StoreCard& k : c.cards) {
+                if (k.id != id) { continue; }
+                std::string b;
+                for (const StoreBadge& x : k.badges) { b += (b.empty() ? "" : ",") + x.text; }
+                out = c.heading + "|" + b + "|" + k.key_label + "|" + (k.key_enabled ? "1" : "0") + "|" + k.key_reason;
+                return true;
+            }
+        }
+        out = "-";
+        return true;
+    }
+    if (what.rfind("shelfNote.", 0) == 0) {
+        const std::string census = what.substr(10);
+        for (const StoreCategory& c : last_.store.categories) {
+            if (c.census == census) { out = c.note; return true; }
+        }
+        out = "-";
+        return true;
+    }
+    if (what == "shelves") { std::string j; for (const StoreCategory& c : last_.store.categories) { j += (j.empty() ? "" : "|") + c.heading; } out = j; return true; }
     if (what == "notice") { out = p.notice_shown ? p.notice : std::string(); return true; }
     if (what == "noticeTick") { out = p.notice_tick ? "1" : "0"; return true; }
     if (what == "keyEnabled") { out = p.key_enabled ? "1" : "0"; return true; }

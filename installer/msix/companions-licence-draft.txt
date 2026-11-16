@@ -1,0 +1,35 @@
+=====================================================================
+DRAFT - AWAITING THE OWNER'S APPROVAL.
+THIS SECTION IS NOT YET PART OF FOXSDR'S LICENCE TERMS.
+It is a draft for review. It is not legal advice.
+=====================================================================
+
+COMPANION APPLICATIONS
+
+This package also holds separate programs, the companion applications,
+listed in COMPANIONS.md in the package's root folder. Each companion
+application is a different project's open-source program under its own
+licence. The licence of each one is named next to it in COMPANIONS.md and
+its full text is in the program's own folder, under
+companions\<name>\legal.
+
+1. FoxSDR's licence (the text above this section) does not apply to a
+   companion application, and a companion application's licence does not
+   apply to FoxSDR.
+
+2. Nothing in FoxSDR's terms, and nothing in the terms under which the
+   Microsoft Store supplies FoxSDR, limits the rights that a companion
+   application's own licence gives you, including the right to receive its
+   source code, to change it, and to pass it on under that licence.
+
+3. The source code of each companion application, matching the program in
+   this package, is published at @SOURCE@ (commit @COMMIT@) and stays
+   available there for as long as this package is offered.
+
+4. FoxSDR starts a companion application as a separate program and
+   exchanges data with it through a pipe. A companion application is not
+   combined with FoxSDR into one program.
+
+=====================================================================
+END OF THE DRAFT SECTION.
+=====================================================================

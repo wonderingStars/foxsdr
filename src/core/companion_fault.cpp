@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 
+#include "core/companion_programs.hpp"
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
 #include "core/issue_report.hpp"
@@ -63,6 +64,7 @@ std::size_t file(const std::array<std::uint64_t, 4>& sums) {
 std::size_t drain(PluginApiCore& api) {
     std::array<std::uint64_t, 4> sums{};
     api.takeFaultReports(sums);
+    takeHostFaults(sums);   // companion applications shelf: a program the HOST refused to start (changed on disk, gone, no checksum) counts the same way (kind BREAK), never with a name
     return file(sums);
 }
 

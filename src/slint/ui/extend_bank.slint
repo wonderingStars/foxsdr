@@ -48,7 +48,7 @@ export struct StoreCard {
     key-tooltip: string,                               // ADDED: why a greyed key is greyed (the ImGui hover reason)
 }
 
-export struct StoreCategory { heading: string, cards: [StoreCard] }
+export struct StoreCategory { heading: string, note: string, cards: [StoreCard] }   // note: one sentence under the heading ("" none; the Companion applications shelf says what a companion is)
 
 export struct StoreSite {
     address: string, remove-label: string,
@@ -1413,6 +1413,7 @@ export component StorePage inherits Rectangle {
                     spacing: 6px;
                     alignment: start;
                     Caption { label: cat.heading; }
+                    if cat.note != "" : Note { wrap-w: root.iw; text: cat.note; }
                     CardGrid {
                         cards: cat.cards;
                         cols: root.cols;

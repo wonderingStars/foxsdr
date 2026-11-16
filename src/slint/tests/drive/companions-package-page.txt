@@ -1,0 +1,13 @@
+#! frames=560 size=1400x1800 bank=1 store=companion-multimon FOXSDR_FAKE_PACKAGE=FoxSDR.Test_1.0.0.0_x64__test FOXSDR_FAKE_PACKAGE_COMPANIONS=fixtures/companions-package FOXSDR_SLINT_STORE_LOCAL=fixtures/companions-index.json
+# companions-package-page (companions-shelf lane, step 3): the MICROSOFT STORE copy (FOXSDR_FAKE_PACKAGE; its package's companions folder is the fixture folder). The catalogue
+# gives this companion an address and a hash, yet the page says the program is INCLUDED in this copy and that nothing is downloaded: a packaged copy never downloads a program.
+10 state running == 1
++1 click "Plugin store"
++300 state store.companionKeys contains "PROGRAM"
+state store.companion contains "PROGRAM: multimon-helper.exe  -  The program is included in this copy of FoxSDR. Fitting the plugin puts it in place; nothing is downloaded."
+expect "PROGRAM: multimon-helper.exe  -  The program is included in this copy of FoxSDR. Fitting the plugin puts it in place; nothing is downloaded." label contains "nothing is downloaded"
+state store.companion contains "UPSTREAM PROJECT: multimon-ng"
+state store.keyEnabled == 0
++1 click "I have read the maker's notice"
++10 state store.keyEnabled == 1
++1 shot "companions-package-page.png"

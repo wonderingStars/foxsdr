@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "core/companion_programs.hpp"
 #include "core/diag_log.hpp"
 #include "core/plugin_calls.hpp"
 #include "core/plugin_marker.hpp"
@@ -277,6 +278,23 @@ void PluginRunner::buildPluginLocked(const LoadedPlugin& lp) {
     // A plugin that was switched off this session gets no instance, whoever asks (a rebuild, a wake): the engine's pass has already put
     // it down, and the module is only still mapped because nothing may unmap it.
     if (fault::isQuarantined(slot)) { return; }
+    // THE CHECK BEFORE A COMPANION RUNS (core/companion_programs.hpp): a catalogue companion's bridge starts its separate program from create(), so the program is checked
+    // against the checksum recorded at install BEFORE any instance is made. Changed on disk, gone, or recorded with no checksum: no instance, a plain sentence on the
+    // plugin's row, and the refusal counted on the companion fault path. A plugin with no companion record is not asked anything.
+    {
+        const companion::StartVerdict gate = companion::checkBeforeStart(lp.path);
+        if (!gate.allowed) {
+            DecoderStatus st;
+            st.plugin = lp.name;
+            st.reason = DecoderIdleReason::CreateFailed;
+            st.stream = (lp.iqDecoder != nullptr && lp.decoder == nullptr) ? DecoderStream::Iq : DecoderStream::Audio;
+            st.detail = "\"" + lp.name + "\" did not start. " + gate.sentence;
+            st.key = key;
+            status_.push_back(std::move(st));
+            statusGen_.fetch_add(1, std::memory_order_release);
+            return;
+        }
+    }
     const fault::Origin origin = faultOriginOf(lp.origin);
     // THE CRASH-LOOP MARKER (core/plugin_marker.hpp): this plugin is inside create() from here to the end of this function - a BRACKET, so that another thread
     // building or destroying instances of the same plugin at the same time (the window's plugin UI, the unload) cannot leave the phase stuck in `create` by

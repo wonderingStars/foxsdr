@@ -37,6 +37,8 @@ export struct PluginBodyModel {
     facts: [BodyFact],
     reach: [BodyReach],           // what the plugin declares it may do, in words (the store page only: the module page has its own list)
     reach-lead: string,           // the sentence under the open grid; "" none
+    companion-heading: string,    // COMPANION APPLICATION (the entry is a companion's bridge); "" = no block
+    companion: [BodyFact],        // what it decodes, upstream, licence, why it is a separate program, identifiers, source, program: always open, before anything is fetched
 }
 
 // The gestures of a fitted module's page body (the plugin store page has ExtendEvents): which plugin (the catalogue key) and what was asked.
@@ -253,6 +255,60 @@ component FactLine inherits Rectangle {
     }
 }
 
+// One line of the COMPANION APPLICATION block: the name above, the value under it, the full width for both. The block's names are long ("WHY IT IS A SEPARATE PROGRAM") and
+// translated ones longer, so they are not squeezed into FactLine's 150 px column; the controls carry the same accessible labels FactLine's do.
+component StackedLine inherits Rectangle {
+    in property <BodyFact> fact;
+    property <length> val-w: max(40px, root.width - 20px);
+    property <length> val-h: root.fact.copyable && !root.fact.hatched ? copy.preferred-height : plain.preferred-height;
+    height: 6px + 14px + 2px + max(14px, root.val-h) + 8px;
+    background: root.fact.hatched ? Theme.well-deep : Theme.well.with-alpha(0.7);
+    Rectangle {
+        x: 0px;
+        y: parent.height - Theme.hairline;
+        width: parent.width;
+        height: Theme.hairline;
+        background: Theme.line;
+    }
+    Caption {
+        x: 10px;
+        y: 6px;
+        width: root.val-w;
+        height: 14px;
+        label: root.fact.key;
+    }
+    plain := Text {
+        visible: !(root.fact.copyable && !root.fact.hatched);
+        x: 10px;
+        y: 22px;
+        width: root.val-w;
+        text: root.fact.value;
+        wrap: word-wrap;
+        color: root.fact.hatched ? Theme.faint : Theme.fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        font-italic: root.fact.hatched;
+        accessible-role: text;
+        accessible-label: root.fact.key + ": " + root.fact.value;
+    }
+    copy := TextInput {
+        visible: root.fact.copyable && !root.fact.hatched;
+        x: 10px;
+        y: 22px;
+        width: root.val-w;
+        text: root.fact.value;
+        read-only: true;
+        single-line: false;
+        wrap: word-wrap;
+        color: Theme.fg;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+        selection-background-color: Theme.accent;
+        selection-foreground-color: Theme.accent-ink;
+        accessible-label: root.fact.key;
+    }
+}
+
 export component PluginBody inherits VerticalLayout {
     in property <PluginBodyModel> body;
     callback picked(int);
@@ -282,6 +338,18 @@ export component PluginBody inherits VerticalLayout {
             Text { horizontal-stretch: 1; min-width: 0px; text: r.key; color: r.outward ? Theme.fg : Theme.fg-soft; font-family: Theme.font-ui; font-size: Theme.font-body; overflow: elide; }
         }
         Words { wrap-w: root.width - 16px; text: r.detail; }
+    }
+    if root.body.shown && root.body.companion.length > 0 : Caption { label: root.body.companion-heading; }
+    if root.body.shown && root.body.companion.length > 0 : Rectangle {
+        height: cgrid.preferred-height;
+        border-width: Theme.hairline;
+        border-color: Theme.line-strong;
+        cgrid := VerticalLayout {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            for fact in root.body.companion : StackedLine { fact: fact; }
+        }
     }
     @children
     if root.body.shown : Rectangle {

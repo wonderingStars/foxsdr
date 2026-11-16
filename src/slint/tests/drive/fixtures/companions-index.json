@@ -1,0 +1,111 @@
+{
+ "schemaVersion": 1,
+ "plugins": [
+  {
+   "id": "companion-multimon",
+   "name": "POCSAG, FLEX, DTMF and pager tones - multimon-ng companion",
+   "version": "0.1.2",
+   "author": "FoxSDR project",
+   "licence": "MIT",
+   "category": "companions",
+   "summary": "Runs multimon-ng as a companion program next to FoxSDR and shows what it decodes: POCSAG, FLEX, DTMF and pager tones.",
+   "description": "A companion plugin for multimon-ng. The decoder itself is a separate program; this small plugin starts it, feeds it the signal of the radio you give it, and shows what it decodes. This program cannot hide identifiers: whatever it decodes (callsigns, addresses, serial numbers, message text) is shown exactly as the program prints it. The program's source is published at https://github.com/wonderingStars/foxsdr-companions.",
+   "legalNotice": "The companion program is separate software under its own licence (GPL-2.0-or-later) and is not included. Nothing here decodes encrypted traffic or transmits. Check what you may receive where you live.",
+   "abiVersion": 3,
+   "capabilities": ["CASCADE_CAP_DECODER", "CASCADE_CAP_IQ_DECODER"],
+   "experimental": true,
+   "companion": {
+    "upstream": "multimon-ng",
+    "source": "https://github.com/wonderingStars/foxsdr-companions",
+    "licence": "GPL-2.0-or-later",
+    "whySeparate": "This is another person's open-source program, released under the GPL-2.0-or-later licence. That licence does not allow its code to be built into a closed-source program such as FoxSDR, so it stays an application of its own: FoxSDR starts it, hands it the signal and shows what it decodes.",
+    "program": {
+     "file": "multimon-helper.exe",
+     "url": "https://example.invalid/companions/multimon-helper.exe",
+     "sha256": "5656565656565656565656565656565656565656565656565656565656565656",
+     "status": "published"
+    }
+   },
+   "platforms": [
+    {
+     "os": "windows",
+     "arch": "x64",
+     "file": "companion-multimon-0.1.2-abi3-win-x64.dll",
+     "url": "https://example.invalid/dl/companion-multimon.dll",
+     "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+     "sizeBytes": 563200
+    }
+   ]
+  },
+  {
+   "id": "companion-trunkfmt",
+   "name": "Fleetsync II, MPT 1327, LTR and Tait signalling - sdrtrunk companion",
+   "version": "0.1.2",
+   "author": "FoxSDR project",
+   "licence": "MIT",
+   "category": "companions",
+   "summary": "Runs the sdrtrunk companion and shows Fleetsync II, MPT 1327, LTR and Tait signalling.",
+   "description": "A companion plugin for sdrtrunk. This program cannot hide identifiers: whatever it decodes is shown exactly as the program prints it.",
+   "legalNotice": "The companion program is separate software under its own licence (GPL-3.0-or-later) and is not included.",
+   "abiVersion": 3,
+   "capabilities": ["CASCADE_CAP_DECODER"],
+   "companion": {
+    "upstream": "sdrtrunk",
+    "source": "https://github.com/wonderingStars/foxsdr-companions",
+    "licence": "GPL-3.0-or-later",
+    "whySeparate": "This is another person's open-source program, released under the GPL-3.0-or-later licence, so it stays an application of its own.",
+    "program": {
+     "file": "trunkfmt.exe",
+     "url": "https://example.invalid/companions/trunkfmt.exe",
+     "sha256": "5757575757575757575757575757575757575757575757575757575757575757",
+     "status": "published"
+    }
+   },
+   "platforms": [
+    {
+     "os": "windows",
+     "arch": "x64",
+     "file": "companion-trunkfmt-0.1.2-abi3-win-x64.dll",
+     "url": "https://example.invalid/dl/companion-trunkfmt.dll",
+     "sha256": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+     "sizeBytes": 563200
+    }
+   ]
+  },
+  {
+   "id": "companion-hfdl",
+   "name": "HFDL aircraft data link - dumphfdl companion",
+   "version": "0.1.2",
+   "author": "FoxSDR project",
+   "licence": "MIT",
+   "category": "companions",
+   "summary": "Runs the dumphfdl companion and shows HFDL aircraft data link frames.",
+   "description": "A companion plugin for dumphfdl. The decoder is a separate program.",
+   "legalNotice": "The companion program is separate software under its own licence (GPL-3.0-or-later) and is not included.",
+   "abiVersion": 3,
+   "capabilities": ["CASCADE_CAP_IQ_DECODER"],
+   "companion": {
+    "upstream": "dumphfdl",
+    "source": "https://github.com/wonderingStars/foxsdr-companions",
+    "licence": "GPL-3.0-or-later",
+    "whySeparate": "This is another person's open-source program, released under the GPL-3.0-or-later licence, so it stays an application of its own.",
+    "program": {
+     "file": "hfdl.exe",
+     "url": "",
+     "sha256": "",
+     "status": "unpublished"
+    }
+   },
+   "platforms": [
+    {
+     "os": "windows",
+     "arch": "x64",
+     "file": "companion-hfdl-0.1.2-abi3-win-x64.dll",
+     "url": "https://example.invalid/dl/companion-hfdl.dll",
+     "sha256": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+     "sizeBytes": 563200
+    }
+   ]
+  }
+ ]
+}
