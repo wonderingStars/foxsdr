@@ -83,7 +83,7 @@ export { GlobeEvents, GlobeModel, GlobeControl, GlobeChipModel }
 export { LaneC, LCQuick, LCShortcut, LCRecording }   // screen lane C: the host (lanec_publish.cpp) sets the global and answers its act(id, text)
 import { MapJEvents, LayerRow, ReplayModel, FilterModel, MapJModel, PolarDot, SkyModel, AntennaModel } from "mapj.slint";   // screen lane J (docs/multi-radio-records/screen-j.md): the map's layers, replay and filter, the Sky and Antenna pages
 import { GridLabel, MapIcons } from "map.slint";
-import { LaneS3 } from "lanes3.slint";   // screen lane S3 (docs/multi-radio-records/screen-s3-recplay.md)
+import { LaneS3, S3Overview } from "lanes3.slint";   // screen lane S3 (docs/multi-radio-records/screen-s3-recplay.md)
 export { MapJEvents, LayerRow, ReplayModel, FilterModel, MapJModel, PolarDot, SkyModel, AntennaModel, GridLabel }
 export { LaneL }   // screen lane L (docs/multi-radio-records/screen-l.md): the host (lanel_publish.cpp) sets the global and answers its act(id, text)
 export { LaneS3 }   // screen lane S3: the host (lanes3_publish.cpp) sets the global and answers its act(id, text)
@@ -683,6 +683,7 @@ export component MainWindow inherits Window {
                                         if root.bank-index == 0 && i == 6 && LaneS3.rows-record.length > 0 : KPanel { rows: LaneS3.rows-record; act(id, t) => { LaneS3.act(id, t); } }   // screen lane S3
                                         if root.bank-index == 0 && i == 6 && LaneS3.rows-schedule.length > 0 : KPanel { rows: LaneS3.rows-schedule; act(id, t) => { LaneS3.act(id, t); } }
                                         if root.bank-index == 0 && i == 1 && LaneS3.rows-source.length > 0 : KPanel { rows: LaneS3.rows-source; act(id, t) => { LaneS3.act(id, t); } }
+                                        if root.bank-index == 0 && i == 1 && LaneS3.overview-visible : S3Overview { }
                                         if root.bank-index == 2 && i == 4 && LaneM.rows-airband.length > 0 : KPanel { rows: LaneM.rows-airband; act(id, t) => { LaneM.act(id, t); } }
                                         if root.bank-index == 2 && i == 5 && LaneM.rows-levels.length > 0 : KPanel { rows: LaneM.rows-levels; act(id, t) => { LaneM.act(id, t); } }
                                         if root.bank-index == 4 && i == 6 && LaneM.rows-diag.length > 0 : KPanel { rows: LaneM.rows-diag; act(id, t) => { LaneM.act(id, t); } }

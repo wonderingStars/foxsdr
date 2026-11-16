@@ -3223,3 +3223,12 @@ src/slint/lanes3_logic.cpp::overviewJson::errassign::rows	ALLOW	validation	2026-
 src/engine/engine.cpp::Engine::selectSourceById::errassign::that raw files format rate or path was not understood	ALLOW	ui-text: the id is built by the window's validated builder; a hand-made one is refused in words on the source panel, as every refused open is	2026-11-16
 src/engine/engine_recplay.cpp::Engine::recplayPump::errassign::the recording could not go on into a new file the folder is	ALLOW	RecordStart::poll counts this failed open (noteRecordFailed) where the answer is collected; this line is the sentence for the person	2026-11-16
 src/source/iq_file_source.cpp::IqFileSource::open::errassign::why	ALLOW	validation: restores the original refusal sentence after the readers declined the same file as well	2026-11-16
+src/core/overview_job.cpp::compute::errassign::the transform size must be # # # or #	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::rows must be # to #	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::unknown raw sample format	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::the file could not be opened	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::the file is shorter than one block of the transform	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::the file does not say its sample rate	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::cancelled	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::the file could not be read to its end it may have been cut s	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::Job::start::errassign::the picture could not be made	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16

@@ -15,6 +15,7 @@
 
 #include "core/app_commands.hpp"
 #include "core/i18n.hpp"
+#include "core/overview_job.hpp"
 #include "lanek_logic.hpp"
 #include "lanel_logic.hpp"
 #include "lanes3_logic.hpp"
@@ -94,6 +95,39 @@ struct LaneS3Publisher::Impl {
     bool dirty = true;
     long lastRebuildTick = -100;
     std::string armed;                            // the id of a destructive key pressed once ("press again")
+
+    cascade::core::overview::Job ovJob;       // G3-14b: the whole-file waterfall's job
+    std::string ovState = "idle";              // idle, running, done, failed, cancelled
+    int ovW = 0, ovH = 0;
+    std::string ovCaption;
+    bool ovVisible = false;
+    slint::Image ovImage;
+
+    void pollOverview() {
+        cascade::core::overview::Result r;
+        if (!ovJob.take(r)) { return; }
+        if (r.ok) {
+            slint::SharedPixelBuffer<slint::Rgba8Pixel> buf(static_cast<std::uint32_t>(r.image.width), static_cast<std::uint32_t>(r.image.height));
+            std::memcpy(reinterpret_cast<std::uint8_t*>(buf.begin()), r.image.rgba.data(), r.image.rgba.size());
+            ovImage = slint::Image(buf);
+            ovW = r.image.width; ovH = r.image.height;
+            ovCaption = tr("Time runs down, frequency across") + "  " + numberText(std::round(r.image.rateHz / 100.0) / 10.0) + " kS/s  " + numberText(std::round(r.image.durationS)) + " s  " + std::to_string(r.image.height) + " x " + std::to_string(r.image.width) + "  " + numberText(std::round(r.elapsedS * 10.0) / 10.0) + " s";
+            ovVisible = true;
+            ovState = "done";
+            setNote(kSource, tr("Whole-file waterfall") + ": " + tr("done"), kGood);
+            if (env.ui != nullptr) {
+                auto& l = env.ui->global<LaneS3>();
+                l.set_overview(ovImage);
+                l.set_overview_caption(ss(ovCaption));
+                l.set_overview_visible(true);
+            }
+        } else {
+            ovState = r.cancelled ? "cancelled" : "failed";
+            setNote(kSource, tr("Whole-file waterfall") + ": " + (r.cancelled ? tr("cancelled") : r.error), r.cancelled ? kDim : kErr);
+            if (!r.cancelled) { ++refused; }
+        }
+        dirty = true;
+    }
 
     explicit Impl(Env e) : env(std::move(e)), table(env.api, env.session) {}
 
@@ -411,6 +445,36 @@ struct LaneS3Publisher::Impl {
             if (!b.ok) { refuseHere(kSource, tr("Open raw file"), b.err); return; }
             send(kSource, tr("Open raw file"), cmd(FOXAPI_OP_SELECT_SOURCE, 0, b.text));
         });
+        // ---- the whole-file waterfall (G3-14b)
+        v.push_back(rHeading(tr("Whole-file waterfall")));
+        v.push_back(rNote(tr("One picture of a whole recording, made in the background: time down, frequency across. It takes a sample of each piece of time, so a signal shorter than a few seconds in a long file can be missed. A raw file (.cu8, .cs16, .cf32) uses the sample rate typed above.")));
+        field(v, "w.path", tr("Recording (full path)"), "", tr("A WAV, SigMF or raw file. Not the one that is playing: any file."));
+        field(v, "w.rows", tr("Rows (50 to 2000)"), "600");
+        choiceD(v, "w.fft", tr("Frequency detail (bins)"), overviewFftNames(), 1);
+        const bool ovRun = ovJob.running();
+        v.push_back(rReadout(tr("Picture"), ovState == "running" ? tr("being made") : ovState == "done" ? tr("ready") : ovState == "failed" ? tr("failed") : ovState == "cancelled" ? tr("cancelled") : tr("none yet")));
+        if (ovRun) { v.push_back(slk::rBar(tr("Progress"), static_cast<float>(ovJob.progress()), std::to_string(static_cast<int>(ovJob.progress() * 100.0)) + " %")); }
+        key(v, "w.make", tr("Make the waterfall"), [this] {
+            const sll::Built b = overviewJson(dv("w.rows", "600"), pv("w.fft", 1));
+            if (!b.ok) { refuseHere(kSource, tr("Make the waterfall"), b.err); return; }
+            const json j = json::parse(b.text);
+            cascade::core::overview::Request rq;
+            rq.path = trim(dv("w.path"));
+            if (rq.path.empty()) { refuseHere(kSource, tr("Make the waterfall"), tr("type the full path of the recording")); return; }
+            rq.rows = j.value("rows", 600);
+            rq.fft = j.value("fft", 1024);
+            std::string ext = rq.path.size() >= 5 ? rq.path.substr(rq.path.find_last_of('.') == std::string::npos ? 0 : rq.path.find_last_of('.')) : std::string();
+            for (char& ch : ext) { ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); }
+            if (ext == ".cu8" || ext == ".cs16" || ext == ".cf32") {
+                std::string e; double rate = 0.0;
+                if (!parseRate(dv("r.rate", "2048000"), rate, e)) { refuseHere(kSource, tr("Make the waterfall"), tr("Sample rate") + ": " + e); return; }
+                rq.rawFormat = ext.substr(1); rq.rawRateHz = rate;
+            }
+            if (!ovJob.start(rq)) { refuseHere(kSource, tr("Make the waterfall"), tr("a picture is being made already")); return; }
+            ovState = "running";
+            setNote(kSource, tr("Whole-file waterfall") + ": " + tr("started"), kDim);
+        }, !ovRun);
+        key(v, "w.cancel", tr("Cancel the waterfall"), [this] { ovJob.cancel(); setNote(kSource, tr("Whole-file waterfall") + ": " + tr("cancelling"), kDim); }, ovRun);
         endNote(v, kSource);
     }
 
@@ -468,6 +532,8 @@ void LaneS3Publisher::wire() {
 }
 
 void LaneS3Publisher::tick(long tickNo) {
+    p_->pollOverview();
+    if (p_->ovJob.running()) { p_->dirty = true; }   // the progress bar
     // about twice a second the rows are read again from the facts; at once after any action or answer
     if (p_->dirty || tickNo - p_->lastRebuildTick >= 15) {
         p_->lastRebuildTick = tickNo;
@@ -494,6 +560,9 @@ std::string LaneS3Publisher::readState(const std::string& what, std::string& out
     }
     if (what.rfind("draft.", 0) == 0) { out = p.dv(what.substr(6)); return std::string(); }
     if (what.rfind("fact.", 0) == 0) { out = p.fact(what.substr(5)); return std::string(); }
+    if (what == "ov.state") { out = p.ovState; return std::string(); }
+    if (what == "ov.w") { out = std::to_string(p.ovW); return std::string(); }
+    if (what == "ov.h") { out = std::to_string(p.ovH); return std::string(); }
     if (what == "play.pos") { out = numberText(p.ps().positionS); return std::string(); }
     if (what == "play.dur") { out = numberText(p.ps().durationS); return std::string(); }
     if (what == "play.loopa") { out = numberText(p.ps().loopStartS); return std::string(); }
