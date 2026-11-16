@@ -23,6 +23,10 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
+import {
+  MAX_FIRST_SESSION_BODY, MAX_RADIO_FAIL_BODY, validateRadioMessage,
+} from './radio-reports.js';
+
 const MAX_BODY = 4096;          // a report is a few hundred bytes
 const ID_RE = /^[0-9a-f]{32}$/; // exactly what newInstallId() produces
 
@@ -271,6 +275,196 @@ function healthSlowFrom(h, minTier) {
   return total;
 }
 
+// The data point of one usage record: everything the Worker knows how to read out of it, in the
+// columns documented in README.md. Shared by the usage record and by the first-session record
+// (radio-reports.js, docs/radio-reports-contract.md section 6), which use the SAME columns in
+// different datasets, so a change here is a change to both and the tests hold them together.
+function usageDataPoint(body, id) {
+  // The modes map is flattened to the single most-used mode plus its
+  // seconds. Storing the whole map would need a blob per mode, and the
+  // question it answers ("which demodulator do people actually use") is
+  // answered by the top one.
+  let topMode = '', topSec = 0;
+  if (body.modes && typeof body.modes === 'object') {
+    for (const [k, v] of Object.entries(body.modes)) {
+      const s = num(v, 86400 * 30);
+      if (s > topSec) { topSec = s; topMode = clamp(k, 8); }
+    }
+  }
+  const plugins = Array.isArray(body.plugins)
+    ? body.plugins.slice(0, 20).map((p) => clamp(p, 48)).join(',')
+    : '';
+  const panels = Array.isArray(body.panels)
+    ? body.panels.slice(0, 10).map((p) => clamp(p, 16)).join(',')
+    : '';
+  const stalls = stallCount(body.stalls);
+  const health = healthParse(body.health);
+  const exits = exitSplit(body);
+
+  return {
+    // index1 is the install id: the ONLY field that distinguishes one
+    // installation from another, and it identifies a copy of the software,
+    // not a person.
+    indexes: [id],
+    blobs: [
+      // 48, not 16: a nightly version is
+      // "0.57.0-nightly.20260819.b97092e" - 31 characters - and at 16 it
+      // arrived in the dataset as "0.56.0-nightly.2", which identifies
+      // neither the date nor the commit and collapses every nightly into one
+      // bucket. Found by reading the first real usage report.
+      clamp(body.v, 48),      // blob1  app version
+      clamp(body.os, 40),     // blob2  OS and build
+      clamp(body.arch, 8),    // blob3  architecture
+      clamp(scrubModel(body.sdr), 32), // blob4  SDR model: no serial, no address (scrubModel)
+      topMode,                // blob5  most-used demodulator
+      plugins,                // blob6  installed plugins
+      panels,                 // blob7  panels opened
+      // 0.99.47: where the copy came from and when it first reported.
+      // Empty from older clients; readers must treat '' as "not reported".
+      clamp(body.ch, 12),     // blob8  install channel (store/installer/appimage/tarball/android)
+      clamp(body.first, 10),  // blob9  first-run day, UTC, YYYY-MM-DD
+      clamp(body.fv, 48),     // blob10 version that created the install id
+      // Display stalls: blob11 says whether this client SENT a count at all,
+      // and double5 is the count. Both, because a row written before this
+      // existed, and a row from an old client, have no value in either column,
+      // and a count alone cannot tell "reported zero" from "never reported".
+      // (What an unwritten column reads back as is not something this file
+      // relies on - Cloudflare's documentation does not say - which is why
+      // the marker is a value that is only ever WRITTEN when the field was
+      // sent: a reader asks for blob11 = '1' and treats every other row as
+      // unmeasured.) Appended AFTER the existing columns: no earlier column
+      // changed meaning.
+      stalls === null ? '' : '1',  // blob11 '1' = the client reported a stall count
+      // 0.99.64: failures that are not crashes. blob12 is the marker, exactly as
+      // blob11 is for stalls ('1' only when the client SENT a usable `health`
+      // string, '' for an old client and for a malformed field - never
+      // "reported nothing"), and blob13 the canonical `token=count` text of
+      // what was legal in it ('' when nothing failed). Appended AFTER the
+      // existing columns: no earlier column changed meaning.
+      health === null ? '' : '1',        // blob12 '1' = the client reported failure counts
+      health === null ? '' : health.text,  // blob13 the tokens, vocabulary only
+      // 0.99.69: unclean exits by cause. blob14 is the marker, exactly as blob11 and
+      // blob12 are for stalls and failure counts: '1' only when the client SENT a
+      // usable split (exitSplit), '' for an application older than 0.99.69 and for
+      // a malformed one - so double13..double16 are meaningful only where
+      // blob14 = '1'. Appended AFTER the existing columns: nothing earlier changed.
+      exits === null ? '' : '1',  // blob14 '1' = the client reported unclean exits by cause
+      // field-early-warning: the update channel setting, `stable` or `beta`; '' for a client
+      // that does not send it (before 0.99.96) and for any other value. It lets the admin page
+      // split each version's crash, freeze and health rates by channel. Appended after the
+      // existing columns: nothing earlier changed meaning.
+      updateChannel(body.uch),    // blob15 update channel (stable/beta), '' = not reported
+    ],
+    doubles: [
+      num(body.launches, 1e6),    // double1  launches since install
+      num(body.crashes, 1e6),     // double2  unclean exits since install (lifetime, never reset)
+      num(body.sessionSec, 86400 * 30),  // double3  last session length
+      topSec,                     // double4  seconds in the top mode
+      // double5  display stalls this record carries: stalls the client has
+      // counted and the server has not yet been told (carried until a record
+      // is accepted, so a failed send does not lose them). Per ROW, so a
+      // window's total is sum(double5) - not a lifetime figure like double2.
+      // Meaningful only where blob11 = '1'.
+      stalls === null ? 0 : stalls,
+      // double6..double9 (0.99.64): the headline sums of the tokens in blob13,
+      // computed HERE from the validated tokens - never a number the client
+      // sent beside them, so they cannot disagree with the text. Per ROW, like
+      // double5. Meaningful only where blob12 = '1'.
+      healthSum(health, 'radio_fail'),  // double6  radio opens that failed, all drivers and reasons
+      healthSum(health, 'radio_open'),  // double7  radio opens that succeeded
+      healthSum(health, 'radio_data'),  // double8  opened radios whose samples arrived
+      healthSum(health, 'sound_ok'),    // double9  sessions in which the speakers played
+      // double10..double12 (0.99.65, slow frames and recoveries), the same way:
+      // sums of the validated tokens in blob13, never numbers the client sent.
+      // Per ROW, and MEASURED ONLY FROM 0.99.65: a 0.99.64 client sends `health`
+      // (so blob12 = '1') with the failure counts only and never measured either
+      // family, so its rows hold 0 here and that 0 means "not measured", not "none
+      // happened". This Worker cannot tell the two apart - blob12 and the doubles
+      // look the same - so a READER decides by the version in blob1
+      // (telemetry-worker/README.md, usage.ps1), and never by these zeros.
+      healthSum(health, 'slow'),        // double10 slow frames, 250 ms or more
+      healthSlowFrom(health, 1),        // double11 slow frames of a second or more
+      healthSum(health, 'recovered'),   // double12 recoveries
+      // double13..double16 (0.99.69): unclean exits by cause, LIFETIME counters like
+      // double2 (never reset, so a window is read as the difference between an
+      // install's first and last row, not as a sum), and meaningful only where
+      // blob14 = '1'. Their sum is the unclean exits counted since 0.99.69, so it is
+      // never more than double2 (exitSplit refuses a record in which it is).
+      exits === null ? 0 : exits[0],    // double13 unclean exits that were a fault (died)
+      exits === null ? 0 : exits[1],    // double14 ended from outside (killed)
+      exits === null ? 0 : exits[2],    // double15 ended by the operating system (ended)
+      exits === null ? 0 : exits[3],    // double16 no evidence (unknown)
+    ],
+  };
+}
+
+// THE RADIO REPORT FAMILY (docs/radio-reports-contract.md): messages with a `kind`. They are validated by
+// radio-reports.js against the contract and its shared fixtures, and answered `refused: <code>`.
+//
+//   radio_fail     -> forwarded to the owner's site (SITE_INTAKE_URL); one counter row in foxsdr_radiofail
+//   first_session  -> the usage record's own columns, in foxsdr_firstsession - NEVER foxsdr_usage, because one
+//                     usage row is one launch to every reader and a first-session record is not a launch.
+//
+// Nothing here looks at the Diagnostics switch: the Worker cannot see it, and the contract has the sender
+// ignore it for radio_fail. The one setting that matters is the install id, which exists only while usage
+// reporting is on; both messages carry it as `installId` (never `id`, so a Worker that predates this
+// contract answers 400 `bad id` and writes nothing).
+function refused(code, status) {
+  return new Response(`refused: ${code}`, { status: status || 400 });
+}
+
+function firstSessionDataPoint(m) {
+  const point = usageDataPoint({ ...m.body, id: m.installId }, m.installId);
+  point.blobs.push(clamp(m.body.trigger, 16), m.sessionId);  // blob16 trigger, blob17 session id
+  point.doubles.push(m.seq, m.t);                            // double17 seq, double18 seconds into the session
+  return point;
+}
+
+async function handleRadioFamily(text, body, env) {
+  const bytes = new TextEncoder().encode(text).length;
+  const limit = body.kind === 'first_session' ? MAX_FIRST_SESSION_BODY : MAX_RADIO_FAIL_BODY;
+  if (bytes > limit) { return refused('too-large', 413); }
+  const v = validateRadioMessage(body, { scrubModel });
+  if (!v.ok) { return refused(v.code, 400); }
+  const m = v.canonical;
+
+  if (m.kind === 'first_session') {
+    // 503, not 204: an unconfigured Worker must not tell the app its record was taken.
+    if (!env.FIRSTSESSION) { return new Response('first-session dataset not configured', { status: 503 }); }
+    env.FIRSTSESSION.writeDataPoint(firstSessionDataPoint(m));
+    return new Response(null, { status: 204 });
+  }
+
+  // radio_fail: forward the canonical message and nothing else about the request. The serial and the text
+  // go to the site only; the counter row below holds no serial, no model and no text.
+  if (!env.SITE_INTAKE_URL) { return new Response('no site intake configured', { status: 503 }); }
+  const headers = { 'content-type': 'application/json' };
+  if (env.RELAY_TOKEN) { headers['x-foxsdr-relay'] = env.RELAY_TOKEN; }
+  let res = null;
+  try {
+    res = await fetch(env.SITE_INTAKE_URL, { method: 'POST', headers, body: JSON.stringify(m), redirect: 'manual' });
+  } catch (e) {
+    res = null;
+  }
+  const taken = res !== null && res.status >= 200 && res.status < 300;
+  if (env.RADIOFAIL) {
+    env.RADIOFAIL.writeDataPoint({
+      indexes: [m.installId],
+      blobs: [m.body.driver, m.body.reasonClass, clamp(m.body.v, 48), taken ? 'ok' : 'fail'],
+      doubles: [1],
+    });
+  }
+  if (taken) { return new Response(null, { status: 204 }); }
+  if (res !== null && res.status === 429) {
+    const wait = Math.min(Math.max(num(res.headers.get('retry-after'), 86400), 60), 86400);
+    return new Response('too many reports', { status: 429, headers: { 'retry-after': String(wait) } });
+  }
+  if (res !== null && (res.status === 400 || res.status === 413)) {
+    return refused('site-refused', 400);  // the two validators disagree: a bug, and retrying cannot help
+  }
+  return new Response('the site could not be reached', { status: 502 });
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') {
@@ -281,14 +475,29 @@ export default {
     }
 
     let body;
+    let text;
     try {
-      const text = await request.text();
-      if (text.length > MAX_BODY) {
-        return new Response('too large', { status: 413 });
-      }
-      body = JSON.parse(text);
+      text = await request.text();
     } catch (e) {
       return new Response('bad json', { status: 400 });
+    }
+    // Nothing is ever parsed above the largest body any message may have (the radio-report family's).
+    if (text.length > MAX_RADIO_FAIL_BODY) {
+      // Said in the family's words as well as the old status, so a radio-report sender reads the same code everywhere.
+      return new Response('refused: too-large', { status: 413 });
+    }
+    try {
+      body = JSON.parse(text);
+    } catch (e) {
+      return new Response(text.length > MAX_BODY ? 'too large' : 'bad json',
+        { status: text.length > MAX_BODY ? 413 : 400 });
+    }
+    // A message with a `kind` belongs to the radio-report family; a usage record and a beat never have one.
+    if (body !== null && typeof body === 'object' && !Array.isArray(body) && 'kind' in body) {
+      return handleRadioFamily(text, body, env);
+    }
+    if (text.length > MAX_BODY) {
+      return new Response('too large', { status: 413 });
     }
 
     // A report with no valid install id is refused rather than counted under
@@ -318,122 +527,7 @@ export default {
       return new Response(null, { status: 204 });
     }
 
-    // The modes map is flattened to the single most-used mode plus its
-    // seconds. Storing the whole map would need a blob per mode, and the
-    // question it answers ("which demodulator do people actually use") is
-    // answered by the top one.
-    let topMode = '', topSec = 0;
-    if (body.modes && typeof body.modes === 'object') {
-      for (const [k, v] of Object.entries(body.modes)) {
-        const s = num(v, 86400 * 30);
-        if (s > topSec) { topSec = s; topMode = clamp(k, 8); }
-      }
-    }
-    const plugins = Array.isArray(body.plugins)
-      ? body.plugins.slice(0, 20).map((p) => clamp(p, 48)).join(',')
-      : '';
-    const panels = Array.isArray(body.panels)
-      ? body.panels.slice(0, 10).map((p) => clamp(p, 16)).join(',')
-      : '';
-    const stalls = stallCount(body.stalls);
-    const health = healthParse(body.health);
-    const exits = exitSplit(body);
-
-    env.USAGE.writeDataPoint({
-      // index1 is the install id: the ONLY field that distinguishes one
-      // installation from another, and it identifies a copy of the software,
-      // not a person.
-      indexes: [id],
-      blobs: [
-        // 48, not 16: a nightly version is
-        // "0.57.0-nightly.20260819.b97092e" - 31 characters - and at 16 it
-        // arrived in the dataset as "0.56.0-nightly.2", which identifies
-        // neither the date nor the commit and collapses every nightly into one
-        // bucket. Found by reading the first real usage report.
-        clamp(body.v, 48),      // blob1  app version
-        clamp(body.os, 40),     // blob2  OS and build
-        clamp(body.arch, 8),    // blob3  architecture
-        clamp(scrubModel(body.sdr), 32), // blob4  SDR model: no serial, no address (scrubModel)
-        topMode,                // blob5  most-used demodulator
-        plugins,                // blob6  installed plugins
-        panels,                 // blob7  panels opened
-        // 0.99.47: where the copy came from and when it first reported.
-        // Empty from older clients; readers must treat '' as "not reported".
-        clamp(body.ch, 12),     // blob8  install channel (store/installer/appimage/tarball/android)
-        clamp(body.first, 10),  // blob9  first-run day, UTC, YYYY-MM-DD
-        clamp(body.fv, 48),     // blob10 version that created the install id
-        // Display stalls: blob11 says whether this client SENT a count at all,
-        // and double5 is the count. Both, because a row written before this
-        // existed, and a row from an old client, have no value in either column,
-        // and a count alone cannot tell "reported zero" from "never reported".
-        // (What an unwritten column reads back as is not something this file
-        // relies on - Cloudflare's documentation does not say - which is why
-        // the marker is a value that is only ever WRITTEN when the field was
-        // sent: a reader asks for blob11 = '1' and treats every other row as
-        // unmeasured.) Appended AFTER the existing columns: no earlier column
-        // changed meaning.
-        stalls === null ? '' : '1',  // blob11 '1' = the client reported a stall count
-        // 0.99.64: failures that are not crashes. blob12 is the marker, exactly as
-        // blob11 is for stalls ('1' only when the client SENT a usable `health`
-        // string, '' for an old client and for a malformed field - never
-        // "reported nothing"), and blob13 the canonical `token=count` text of
-        // what was legal in it ('' when nothing failed). Appended AFTER the
-        // existing columns: no earlier column changed meaning.
-        health === null ? '' : '1',        // blob12 '1' = the client reported failure counts
-        health === null ? '' : health.text,  // blob13 the tokens, vocabulary only
-        // 0.99.69: unclean exits by cause. blob14 is the marker, exactly as blob11 and
-        // blob12 are for stalls and failure counts: '1' only when the client SENT a
-        // usable split (exitSplit), '' for an application older than 0.99.69 and for
-        // a malformed one - so double13..double16 are meaningful only where
-        // blob14 = '1'. Appended AFTER the existing columns: nothing earlier changed.
-        exits === null ? '' : '1',  // blob14 '1' = the client reported unclean exits by cause
-        // field-early-warning: the update channel setting, `stable` or `beta`; '' for a client
-        // that does not send it (before 0.99.96) and for any other value. It lets the admin page
-        // split each version's crash, freeze and health rates by channel. Appended after the
-        // existing columns: nothing earlier changed meaning.
-        updateChannel(body.uch),    // blob15 update channel (stable/beta), '' = not reported
-      ],
-      doubles: [
-        num(body.launches, 1e6),    // double1  launches since install
-        num(body.crashes, 1e6),     // double2  unclean exits since install (lifetime, never reset)
-        num(body.sessionSec, 86400 * 30),  // double3  last session length
-        topSec,                     // double4  seconds in the top mode
-        // double5  display stalls this record carries: stalls the client has
-        // counted and the server has not yet been told (carried until a record
-        // is accepted, so a failed send does not lose them). Per ROW, so a
-        // window's total is sum(double5) - not a lifetime figure like double2.
-        // Meaningful only where blob11 = '1'.
-        stalls === null ? 0 : stalls,
-        // double6..double9 (0.99.64): the headline sums of the tokens in blob13,
-        // computed HERE from the validated tokens - never a number the client
-        // sent beside them, so they cannot disagree with the text. Per ROW, like
-        // double5. Meaningful only where blob12 = '1'.
-        healthSum(health, 'radio_fail'),  // double6  radio opens that failed, all drivers and reasons
-        healthSum(health, 'radio_open'),  // double7  radio opens that succeeded
-        healthSum(health, 'radio_data'),  // double8  opened radios whose samples arrived
-        healthSum(health, 'sound_ok'),    // double9  sessions in which the speakers played
-        // double10..double12 (0.99.65, slow frames and recoveries), the same way:
-        // sums of the validated tokens in blob13, never numbers the client sent.
-        // Per ROW, and MEASURED ONLY FROM 0.99.65: a 0.99.64 client sends `health`
-        // (so blob12 = '1') with the failure counts only and never measured either
-        // family, so its rows hold 0 here and that 0 means "not measured", not "none
-        // happened". This Worker cannot tell the two apart - blob12 and the doubles
-        // look the same - so a READER decides by the version in blob1
-        // (telemetry-worker/README.md, usage.ps1), and never by these zeros.
-        healthSum(health, 'slow'),        // double10 slow frames, 250 ms or more
-        healthSlowFrom(health, 1),        // double11 slow frames of a second or more
-        healthSum(health, 'recovered'),   // double12 recoveries
-        // double13..double16 (0.99.69): unclean exits by cause, LIFETIME counters like
-        // double2 (never reset, so a window is read as the difference between an
-        // install's first and last row, not as a sum), and meaningful only where
-        // blob14 = '1'. Their sum is the unclean exits counted since 0.99.69, so it is
-        // never more than double2 (exitSplit refuses a record in which it is).
-        exits === null ? 0 : exits[0],    // double13 unclean exits that were a fault (died)
-        exits === null ? 0 : exits[1],    // double14 ended from outside (killed)
-        exits === null ? 0 : exits[2],    // double15 ended by the operating system (ended)
-        exits === null ? 0 : exits[3],    // double16 no evidence (unknown)
-      ],
-    });
+    env.USAGE.writeDataPoint(usageDataPoint(body, id));
 
     // 204: the client neither needs nor is given anything back. No cookie, no
     // identifier issued by the server, nothing to correlate against.

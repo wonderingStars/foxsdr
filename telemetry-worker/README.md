@@ -434,3 +434,22 @@ installs with at least one stall and the stalls in total. Two queries, because
     FROM foxsdr_usage
     WHERE timestamp > NOW() - INTERVAL '30' DAY AND blob11 = '1' AND double5 > 0
     GROUP BY blob1
+
+## The radio-report family (`radio_fail`, `first_session`)
+
+Specified in [../docs/radio-reports-contract.md](../docs/radio-reports-contract.md); validated by `radio-reports.js`;
+held to the shared fixture files in `test-fixtures/radio-reports/` by `radio-reports.test.mjs`. **Nothing is deployed
+by the change that adds them. Deploy this Worker before the application that sends them ships**: a Worker that does not
+know them answers 400 `bad id` (they carry `installId`, never `id`) and writes nothing, so the report is lost but no
+launch is ever counted.
+
+* `radio_fail` is validated and forwarded to `SITE_INTAKE_URL` (`wrangler.toml`), with `x-foxsdr-relay` when the secret
+  `RELAY_TOKEN` is set. One counter row goes to `foxsdr_radiofail`: `index1` install id; `blob1` driver, `blob2` reason
+  class, `blob3` version, `blob4` `ok` or `fail` (whether the site took it); `double1` 1. No serial, model or text.
+* `first_session` is written to `foxsdr_firstsession` with the SAME columns as `foxsdr_usage` (`blob1`..`blob15`,
+  `double1`..`double16`) plus `blob16` trigger, `blob17` session id, `double17` sequence number, `double18` seconds into
+  the session. It never touches `foxsdr_usage`: one usage row stays one launch. Read it per (install, session id) taking the
+  highest sequence number, and never add its health tokens to a usage row's: both describe the same session.
+* Nothing in the Worker knows about the Diagnostics switch. An install with Usage reporting off has no install id and
+  cannot send either message.
+

@@ -1342,7 +1342,8 @@ set_tests_properties(app_version PROPERTIES
 find_program(CASCADE_NODE node)
 if(CASCADE_NODE)
     add_test(NAME telemetry_worker
-             COMMAND ${CASCADE_NODE} --test "${CMAKE_SOURCE_DIR}/telemetry-worker/worker.test.mjs")
+             COMMAND ${CASCADE_NODE} --test "${CMAKE_SOURCE_DIR}/telemetry-worker/worker.test.mjs"
+                     "${CMAKE_SOURCE_DIR}/telemetry-worker/radio-reports.test.mjs")
     set_tests_properties(telemetry_worker PROPERTIES TIMEOUT 240)
 endif()
 
