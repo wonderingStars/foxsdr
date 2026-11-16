@@ -37,6 +37,7 @@
 
 #include "core/decode_json.hpp"
 #include "core/power_log.hpp"  // the loopback-capable socket helpers (detail::dial and friends); no Influx code is used
+#include "net/send_flags.hpp"
 
 namespace cascade::core::mqtt {
 
@@ -391,7 +392,7 @@ private:
     bool sendAll(detail_sock sock, const std::string& p) {
         std::size_t off = 0;
         while (off < p.size()) {
-            const int n = ::send(sock, p.data() + off, static_cast<int>(p.size() - off), 0);
+            const int n = ::send(sock, p.data() + off, static_cast<int>(p.size() - off), ::cascade::net::kSendFlags);
             if (n <= 0) { return false; }
             off += static_cast<std::size_t>(n);
         }

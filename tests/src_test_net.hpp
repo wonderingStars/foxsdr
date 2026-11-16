@@ -104,7 +104,14 @@ inline bool sendExact(Sock s, const void* src, std::size_t n) {
     const char* p = static_cast<const char*>(src);
     std::size_t sent = 0;
     while (sent < n) {
-        const int r = ::send(s, p + sent, static_cast<int>(n - sent), 0);
+        // A peer that has gone is a failed send, not a dead test: on POSIX a plain send() to a closed
+        // socket raises SIGPIPE and ends the process (the product's own sends pass MSG_NOSIGNAL).
+#if defined(MSG_NOSIGNAL)
+        const int sendFlags = MSG_NOSIGNAL;
+#else
+        const int sendFlags = 0;
+#endif
+        const int r = ::send(s, p + sent, static_cast<int>(n - sent), sendFlags);
         if (r <= 0) { return false; }
         sent += static_cast<std::size_t>(r);
     }

@@ -27,6 +27,8 @@
 #include <unistd.h>
 #endif
 
+#include "net/send_flags.hpp"
+
 namespace cascade::source {
 
 namespace aa = aaronia;
@@ -129,7 +131,7 @@ SockT connectTcp(const std::string& host, std::uint16_t port, int timeoutMs, std
 bool sendAllBytes(SockT s, const std::string& d) {
     std::size_t sent = 0;
     while (sent < d.size()) {
-        const int r = ::send(s, d.data() + sent, static_cast<int>(d.size() - sent), 0);
+        const int r = ::send(s, d.data() + sent, static_cast<int>(d.size() - sent), ::cascade::net::kSendFlags);
         if (r <= 0) { return false; }
         sent += static_cast<std::size_t>(r);
     }

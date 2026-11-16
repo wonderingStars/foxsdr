@@ -29,6 +29,7 @@
 #include <string_view>
 
 #include "core/power_log.hpp"  // the shared socket helpers (detail::dial and friends) for the rotctld TCP transport
+#include "net/send_flags.hpp"
 
 namespace cascade::core::rotator {
 
@@ -306,7 +307,7 @@ public:
         if (!open_) { return false; }
         std::size_t off = 0;
         while (off < b.size()) {
-            const int n = ::send(sock_, b.data() + off, static_cast<int>(b.size() - off), 0);
+            const int n = ::send(sock_, b.data() + off, static_cast<int>(b.size() - off), ::cascade::net::kSendFlags);
             if (n <= 0) { close(); return false; }
             off += static_cast<std::size_t>(n);
         }
