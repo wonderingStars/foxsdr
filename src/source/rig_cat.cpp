@@ -420,9 +420,11 @@ std::unique_ptr<ByteStream> connectTcpByteStream(const std::string& host, std::u
 }
 
 std::unique_ptr<ByteStream> openSerialByteStream(const std::string& port, const SerialSettings& s, std::string& error) {
-#if defined(_WIN32)
+    // The two refusals that do not depend on the platform come first, so a bad setting is named as such everywhere (off Windows it
+    // used to say only "not built on this platform", whatever was wrong).
     if (s.baud < 300 || s.baud > 4000000) { error = "the baud rate must be given (300 to 4000000)"; return nullptr; }
     if (s.stopBits != 1 && s.stopBits != 2) { error = "stop bits must be 1 or 2"; return nullptr; }
+#if defined(_WIN32)
     // "COM3" becomes the device name with the \\.\ prefix, which also reaches COM10 and above.
     std::string name = port;
     const char bs = static_cast<char>(92);
