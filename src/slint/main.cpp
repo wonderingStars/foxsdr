@@ -495,6 +495,7 @@ int main(int argc, char** argv) {
     double tuneStepHz = kDefaultTuneStepHz;   // Ctrl+Up/Down and the Tune step picker (10 kHz, as the key table's text says)
     bool showNudges = true;
     bool lastSwitches = true;   // the saved counterSwitches last applied to showNudges
+    int askedCounter = 1;       // the saved counterScale (1 or 2) as asked; Theme.counter-scale is what the strip can hold of it
     std::uint32_t lastRibbonRgba = 0;   // the colour of the first band of the last ribbon built (a drive script reads it: gaps.ribboncolour)
     bool haveRibbon = false;
     if (const char* e = std::getenv("FOXSDR_SLINT_TUNE_STEP"); e != nullptr && bounded.bounded()) { const double v = std::atof(e); if (v >= 1.0 && v <= 1.0e7) { tuneStepHz = v; } }   // a bounded run only: the Link scripts keep their 12.5 kHz arithmetic
@@ -2606,8 +2607,9 @@ int main(int argc, char** argv) {
         // THE SAVED COUNTER SCALE, READINGS SCALE AND TUNER SWITCHES (window-gaps-2, rows 35, 36, 40, 156, 158, 1394, 1396): the interface half's values drive the figures; a change is applied once.
         {
             const cascade::core::AppConfig& lh = duties.interfaceHalf();
-            const float wantCounter = lh.counterScale >= 2 ? 2.0f : 1.0f;
             const float wantReadings = std::clamp(lh.readingsScale, 1.0f, 3.0f);
+            askedCounter = lh.counterScale >= 2 ? 2 : 1;
+            const float wantCounter = foxsdr::slintlook::fitCounterScale(static_cast<float>(askedCounter), wantReadings, static_cast<float>(ui->get_win_w()));   // what the strip can hold (Bench Classic XL at 1600 px)
             if (ui->global<Theme>().get_counter_scale() != wantCounter) { ui->global<Theme>().set_counter_scale(wantCounter); }
             if (ui->global<Theme>().get_reading_scale() != wantReadings) { ui->global<Theme>().set_reading_scale(wantReadings); }
             if (lh.counterSwitches != lastSwitches) { lastSwitches = lh.counterSwitches; showNudges = lh.counterSwitches; }
@@ -3322,7 +3324,8 @@ int main(int argc, char** argv) {
             if (w == "proberunning") { out = systemBank.sdrPlayDiag().running() ? "1" : "0"; return std::string(); }
             if (w == "probereport") { out = systemBank.sdrPlayDiag().report(); return std::string(); }
             if (w == "skin") { out = skinNow; return std::string(); }
-            if (w == "counterscale") { out = std::to_string(static_cast<int>(ui->global<Theme>().get_counter_scale())); return std::string(); }
+            if (w == "counterscale") { out = std::to_string(askedCounter); return std::string(); }
+            if (w == "counterfit") { out = std::to_string(static_cast<int>(ui->global<Theme>().get_counter_scale() * 100.0f + 0.5f)); return std::string(); }   // the scale DRAWN, in per cent: the asked one less what the strip cannot hold
             if (w == "readingscale") { out = std::to_string(static_cast<int>(ui->global<Theme>().get_reading_scale() * 10.0f + 0.5f)); return std::string(); }
             if (w == "nudges") { out = showNudges ? "1" : "0"; return std::string(); }
             if (w == "clip") { out = fakeClip; return std::string(); }

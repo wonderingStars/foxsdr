@@ -25,6 +25,17 @@ int stepUiSizePercent(int nowPercent, int dir) {
     return 0;
 }
 
+float fitCounterScale(float requested, float readings, float windowWidth) {
+    if (!(requested > 1.0f)) { return 1.0f; }
+    constexpr float kPerScale = 379.0f;          // the counter's width grows by this for each whole step of scale
+    constexpr float kLanesNeed = 525.0f;         // three lanes whose headers (caption, reading, AUTO key) do not touch
+    constexpr float kLanesNeedPerReading = 150.0f;
+    const float lanesAtNormal = windowWidth >= 1760.0f ? windowWidth - 1307.0f : windowWidth - 1000.0f;
+    const float need = kLanesNeed + kLanesNeedPerReading * (std::max(readings, 1.0f) - 1.0f);
+    const float cap = 1.0f + (lanesAtNormal - need) / kPerScale;
+    return std::clamp(cap, 1.0f, requested);
+}
+
 SkinId skinOfTheme(const std::string& uiTheme) {
     if (uiTheme == "night") { return SkinId::NightWatch; }
     if (uiTheme == "glass") { return SkinId::GlassCockpit; }

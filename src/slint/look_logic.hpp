@@ -28,6 +28,13 @@ SkinId skinOfTheme(const std::string& uiTheme);
 // Ctrl+= and Ctrl+- (the classic's handleInterfaceScaleKeys): from `nowPercent` the next offered step above (dir > 0) or below (dir < 0) through 100 to 250 %; 0 when there is none (already at the end).
 int stepUiSizePercent(int nowPercent, int dir);
 const char* skinName(SkinId id);   // "workbench", "night"
+// THE COUNTER SCALE THE STRIP CAN HOLD (window-gaps-2, the Bench Classic XL squeeze). The doubled figures take 379 px more than the normal ones, and what the receiver strip has
+// over is the three lanes' (gain, squelch, volume): at 1600 px they hold 600 at normal size and the doubled counter left them 221, so the gain and squelch headers ran into each
+// other and the antenna key was pushed out of the window. The scale drawn is the one asked for, less whatever leaves the lanes under what their headers need (525 px, and 150 more
+// per whole step of the readings scale). Measured on the real strip (English; one radio): the lanes hold width - 1000 px below 1760 px and width - 1307 px from it (the eight mode keys).
+// `requested` is 1 or 2, `readings` is 1.0 .. 3.0, `windowWidth` the window's logical width; the answer is 1.0 .. requested.
+float fitCounterScale(float requested, float readings, float windowWidth);
+
 
 enum class CounterFace { Plain, Drum, Nixie };
 // The counter face a saved tuner style ("nixie", "neon", "plain"; anything else is Nixie, as the classic reads it) is drawn in.

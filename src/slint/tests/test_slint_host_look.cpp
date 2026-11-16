@@ -34,6 +34,24 @@ void steps() {
     CHECK(stepUiSizePercent(110, 1) == 125 && stepUiSizePercent(110, -1) == 100 && stepUiSizePercent(300, 1) == 0 && stepUiSizePercent(50, -1) == 0);
 }
 
+void counterFit() {
+    // Bench Classic XL at 1600 px (window-gaps-2): the doubled figures left the lanes 221 px of 600 and pushed the antenna key out of the window; the scale drawn is what the strip holds.
+    const float at1600 = fitCounterScale(2.0f, 1.4f, 1600.0f);
+    CHECK(at1600 >= 1.0f && at1600 < 1.2f);                                   // the asked doubling cannot be drawn: the lanes keep their 525 + 60 px
+    CHECK(fitCounterScale(1.0f, 1.0f, 1600.0f) == 1.0f && fitCounterScale(1.0f, 1.4f, 800.0f) == 1.0f);   // normal size is never touched, whatever the width
+    CHECK(fitCounterScale(2.0f, 1.0f, 640.0f) == 1.0f && fitCounterScale(2.0f, 1.0f, 0.0f) == 1.0f);   // a window far too narrow: never below normal
+    CHECK(fitCounterScale(2.0f, 1.0f, 1600.0f) > at1600);                       // the readings scale takes some of the room too
+    CHECK(fitCounterScale(2.0f, 1.0f, 1759.0f) > fitCounterScale(2.0f, 1.0f, 1600.0f));   // a wider window holds larger figures
+    CHECK(fitCounterScale(2.0f, 1.4f, 2400.0f) == 2.0f && fitCounterScale(2.0f, 1.0f, 2216.0f) == 2.0f);   // wide enough: the full doubling
+    // the lanes left at the answer never fall under what they need: 600 - 379 * (s - 1) at 1600 px
+    for (float w = 1000.0f; w <= 3000.0f; w += 7.0f) {
+        const float s = fitCounterScale(2.0f, 1.4f, w);
+        const float lanes = (w >= 1760.0f ? w - 1307.0f : w - 1000.0f) - 379.0f * (s - 1.0f);
+        CHECK(s >= 1.0f && s <= 2.0f);
+        CHECK(s == 1.0f || lanes >= 585.0f - 0.01f);
+    }
+}
+
 void faces() {
     CHECK(faceOfStyle("nixie") == CounterFace::Nixie);
     CHECK(faceOfStyle("neon") == CounterFace::Drum);
@@ -119,6 +137,7 @@ void follower() {
 int main() {
     skins();
     steps();
+    counterFit();
     faces();
     wanted();
     resizing();
