@@ -1,0 +1,8 @@
+# The calls that REPORT a failure to the owner, for the plugins repository (one name per line).
+# A site passes the gate when one of these is called in a brace block that encloses it.
+# FOXPLUGIN_REPORT(kind, code)    - a macro over the host's report call (to be added with the host call)
+# FOXPLUGIN_CATCH_ALL(id)         - the ABI-boundary catch: reports a plugin exception and returns the ABI's failure code
+# report_fault                    - the host call for companion programs (src/core/plugin_abi.h in the engine)
+FOXPLUGIN_REPORT
+FOXPLUGIN_CATCH_ALL
+report_fault
