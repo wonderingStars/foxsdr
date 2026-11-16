@@ -19,8 +19,9 @@ using foxsdr::slinthost::Rgba;
 using foxsdr::slinthost::Tick;
 
 // ---------------------------------------------------------------- S7: the waterfall's colour maps
-// 0 = the classic map (host_logic heat()), 1..5 = the OKLab maps of core/colour_maps.hpp (Deep sea, Ember, Slate, Spectrum, Blue-yellow safe).
-constexpr int kPaletteCount = 6;
+// 0 = the classic map (host_logic heat()), 1..5 = the OKLab maps of core/colour_maps.hpp (Deep sea, Ember, Slate, Spectrum, Blue-yellow safe),
+// 6..11 = the named published maps of core/colour_maps_named.hpp (Viridis, Magma, Plasma, Inferno, Cividis, Turbo; screen lane S2, G2-07).
+constexpr int kPaletteCount = 12;
 const char* paletteName(int index);                              // the English name; the host translates the label it shows
 const std::array<Rgba, 256>& paletteTable(int index);            // index clamped
 inline std::size_t paletteIndexOf(float t01) { return static_cast<std::size_t>(t01 <= 0.0f ? 0.0f : t01 >= 1.0f ? 255.0f : t01 * 255.0f + 0.5f); }

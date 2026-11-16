@@ -1,0 +1,62 @@
+#! frames=1800 size=1600x7000 bank=4 sections=4:14
+# s2-spectrum (screen lane S2, docs/multi-radio-records/screen-s2.md; rows G2-01, G2-02, G2-03, G2-12): the SYSTEM bank's Spectrum tools section. The FFT size, the window and the frame rate are
+# sent to the engine as SET_SPECTRUM and read back from the engine's own receiver state (s2.engine.*), not from what was typed here; the IF zoom is switched on, its fact read back, a picture drawn from the
+# engine's zoom frame, and switched off again. Every field is checked before anything is sent.
+10 state running == 1
+# the engine's own defaults show on start-up: 1024 points, Blackman-Harris (3), automatic rate (0)
++3 state s2.engine.fft == 1024
+state s2.engine.window == 3
+state s2.engine.fps == 0
+state s2.rows.spectrum > 3
+# G2-01: the FFT size (the first "4096" is the spectrum's; the second is the zoom's)
++1 click "4096"#1
++12 state s2.engine.fft == 4096
++1 click "131072"
++12 state s2.engine.fft == 131072
++1 click "1024"#1
++12 state s2.engine.fft == 1024
+# G2-02: the window
++1 click "Hann"
++12 state s2.engine.window == 1
++1 click "Flat top"
++12 state s2.engine.window == 4
++1 click "Rectangular"
++12 state s2.engine.window == 0
++1 click "Blackman-Harris"
++12 state s2.engine.window == 3
+# the window change did not disturb the size
+state s2.engine.fft == 1024
+# G2-03: the frame rate; an automatic value is 0; a rate outside 1..120 is refused here and the engine keeps its value
++1 type "Frame rate (per second)" "25"
++1 key enter
++12 state s2.engine.fps == 25
+state s2.engine.fft == 1024
++1 type "Frame rate (per second)" "121"
++1 key enter
++6 state s2.note.spectrum contains "Frame rate"
+state s2.engine.fps == 25
++1 type "Frame rate (per second)" "automatic"
++1 key enter
++12 state s2.engine.fps == 0
+# G2-12: the IF zoom is off at every start; points and width are sent together; the engine's fact is read back and a picture is drawn from its frame
+state s2.fact.radio.1.zoom == "off"
+state s2.zoom.pictures == 0
++1 type "Zoom width (Hz)" "6000"
++1 key enter
++2 click "4096"#2
++12 state s2.fact.radio.1.zoom contains "4096 bins"
+state s2.fact.radio.1.zoom contains "over 60"
++30 state s2.zoom.pictures > 0
++1 shot "s2-spectrum.png"
+# a new width on a running zoom is applied
++1 type "Zoom width (Hz)" "3000"
++1 key enter
++12 state s2.fact.radio.1.zoom contains "over 29"
+# (the engine rounds the width to what its decimation can give: 6000 Hz became 6061, 3000 Hz became 2985)
+# a width below 100 Hz is refused here
++1 type "Zoom width (Hz)" "50"
++1 key enter
++6 state s2.note.zoom contains "Zoom width"
+state s2.fact.radio.1.zoom contains "over 29"
++1 click "Off"
++12 state s2.fact.radio.1.zoom == "off"

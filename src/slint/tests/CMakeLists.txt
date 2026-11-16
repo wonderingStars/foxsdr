@@ -432,6 +432,10 @@ foreach(src ${_foxsdr_slint_test_sources})
         # SCREEN LANE S1, wave 8 (docs/multi-radio-records/screen-s1-signal.md): ../s1_logic.cpp (the meter's words, the passband presets, the tone squelch's lists, the equaliser and notch rules) over lane L's typed-field rules (../lanel_logic.cpp) and lane K's row builders.
         set(_lk "${CMAKE_CURRENT_SOURCE_DIR}/..")
         add_executable(${name} ${name}.cpp "${_lk}/s1_logic.cpp" "${_lk}/lanel_logic.cpp" "${_lk}/lanek_logic.cpp" "${FOXSDR_REPO_ROOT}/src/core/sys_bundle.cpp" "${FOXSDR_REPO_ROOT}/src/core/sys_profiles.cpp" "${FOXSDR_REPO_ROOT}/src/core/sys_reset.cpp" "${FOXSDR_REPO_ROOT}/src/core/sys_hash.cpp" "${FOXSDR_REPO_ROOT}/src/core/sys_manifest_sig.cpp" "${FOXSDR_REPO_ROOT}/src/core/sys_ed25519.cpp")
+    elseif(family STREQUAL "lanes2_host")
+        # SCREEN LANE S2 (docs/multi-radio-records/screen-s2.md): ../lanes2_logic.cpp (the spectrum, zoom, autosave, log, band and VFO rules) over lane L's typed-field rules (../lanel_logic.cpp) and lane K's row builders.
+        set(_lk "${CMAKE_CURRENT_SOURCE_DIR}/..")
+        add_executable(${name} ${name}.cpp "${_lk}/lanes2_logic.cpp" "${_lk}/lanel_logic.cpp" "${_lk}/lanek_logic.cpp" "${FOXSDR_REPO_ROOT}/src/core/sys_bundle.cpp" "${FOXSDR_REPO_ROOT}/src/core/sys_profiles.cpp" "${FOXSDR_REPO_ROOT}/src/core/sys_reset.cpp" "${FOXSDR_REPO_ROOT}/src/core/sys_hash.cpp" "${FOXSDR_REPO_ROOT}/src/core/sys_manifest_sig.cpp" "${FOXSDR_REPO_ROOT}/src/core/sys_ed25519.cpp")
         target_compile_features(${name} PRIVATE cxx_std_20)
         target_link_libraries(${name} PRIVATE slint_i18n)
         target_include_directories(${name} PRIVATE "${_lk}" "${FOXSDR_REPO_ROOT}/src" "${FOXSDR_REPO_ROOT}/tests" "${FOXSDR_REPO_ROOT}/third_party/foxsdr_api")

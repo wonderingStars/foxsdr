@@ -1,0 +1,14 @@
+#! frames=900 size=1600x7000 bank=4 sections=4:14 FOXSDR_SLINT_FRAME_LOG=1 FOXSDR_S2_FOLDER_STANDIN=s2-cost
+# s2-on (lane S2 frame cost): the same run with everything of lane S2 that works while the window runs: the IF zoom on at 4096 points (a picture drawn every third tick from the engine's zoom frame), the power
+# and SNR log writing a line every 0.1 s, and the waterfall autosave on (a picture at once, then one a minute).
+10 state running == 1
++1 type "Zoom width (Hz)" "6000"
++1 key enter
++2 click "4096"#2
++4 click "Choose the picture folder..."
++1 click "Choose the log folder..."
++1 type "Log a line every (s)" "0.1"
++1 key enter
++1 click "Log the power and the SNR"
++1 click "Save the waterfall by itself"
++40 state s2.autosave.saved >= 1

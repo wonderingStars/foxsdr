@@ -1,0 +1,22 @@
+#! frames=500 bank=4 sections=4:0
+# s2-colour-maps (screen lane S2, docs/multi-radio-records/screen-s2.md; row G2-07): the waterfall's colour map box now offers the six named maps after the six that were there. The host paints the newest line
+# through the chosen map (read back as the colour of the carrier column of that line): viridis a green (2DB27D), turbo a yellow (F1CB3A), inferno an orange (E8602D): each is an exact entry of that map's published table. The first six still mean what they meant.
+10 state running == 1
++30 state wf.toppx > 5
++1 scroll "Theme" 350
++20 choose "Colour map" "Viridis"
++3 state wf.palette == 6
+state wf.keycustom == 1
++12 state wf.hipx == "2DB27D"
++1 shot "s2-colour-viridis.png"
++1 choose "Colour map" "Turbo"
++3 state wf.palette == 11
++12 state wf.hipx == "F1CB3A"
++1 choose "Colour map" "Inferno"
++3 state wf.palette == 9
++12 state wf.hipx == "E8602D"
++1 choose "Colour map" "Ember"
++3 state wf.palette == 2
++12 state wf.hipx == "DD7A00"
++1 choose "Colour map" "Classic"
++3 state wf.palette == 0

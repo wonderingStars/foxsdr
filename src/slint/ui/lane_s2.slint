@@ -1,0 +1,45 @@
+// SCREEN LANE S2 (docs/multi-radio-records/screen-s2.md): the spectrum and tuning controls a person could not reach before - the spectrum's FFT size, window and frame rate, the IF zoom with its picture,
+// the waterfall's autosave, the power and SNR log, centre tuning, VFO A / B, band stacking, and the several VFOs of one radio. The host (lanes2_publish.cpp) builds the rows from the engine's facts and
+// answers `act(id, text)`; an empty list draws nothing. The rows are KPanel's (system_bank.slint); this file adds the one picture (the zoom's) and the two panels main.slint mounts.
+import { Theme } from "theme.slint";
+import { KRow, KPanel } from "system_bank.slint";
+
+export global LaneS2 {
+    in property <[KRow]> rows-spectrum;     // SYSTEM, Spectrum tools: the FFT size, window and frame rate
+    in property <[KRow]> rows-zoom;         // SYSTEM, Spectrum tools: the IF zoom's controls
+    in property <[KRow]> rows-log;          // SYSTEM, Spectrum tools: the waterfall autosave and the power and SNR log
+    in property <[KRow]> rows-tuning;       // SYSTEM, Tuning and memories: centre tuning, VFO A / B, band stacking
+    in property <[KRow]> rows-vfos;         // SYSTEM, Tuning and memories: the several VFOs of the selected radio
+    in property <image> zoom-picture;       // the zoom spectrum of the selected radio's IF passband
+    in property <int> zoom-w;               // its width in pixels; 0 = no picture (the zoom is off)
+    in property <int> zoom-h;
+    in property <string> zoom-caption;      // what the picture shows, for a screen reader
+    callback act(string, string);
+}
+
+export component S2SpectrumPanel inherits VerticalLayout {
+    spacing: 8px;
+    alignment: start;
+    if LaneS2.rows-spectrum.length > 0 : KPanel { rows: LaneS2.rows-spectrum; act(id, t) => { LaneS2.act(id, t); } }
+    if LaneS2.rows-zoom.length > 0 : KPanel { rows: LaneS2.rows-zoom; act(id, t) => { LaneS2.act(id, t); } }
+    if LaneS2.zoom-w > 0 : Rectangle {
+        height: 96px;
+        background: Theme.field;
+        border-radius: 2px;
+        Image {
+            width: parent.width; height: parent.height;
+            source: LaneS2.zoom-picture;
+            image-fit: fill;
+            accessible-role: image;
+            accessible-label: LaneS2.zoom-caption;
+        }
+    }
+    if LaneS2.rows-log.length > 0 : KPanel { rows: LaneS2.rows-log; act(id, t) => { LaneS2.act(id, t); } }
+}
+
+export component S2TuningPanel inherits VerticalLayout {
+    spacing: 8px;
+    alignment: start;
+    if LaneS2.rows-tuning.length > 0 : KPanel { rows: LaneS2.rows-tuning; act(id, t) => { LaneS2.act(id, t); } }
+    if LaneS2.rows-vfos.length > 0 : KPanel { rows: LaneS2.rows-vfos; act(id, t) => { LaneS2.act(id, t); } }
+}

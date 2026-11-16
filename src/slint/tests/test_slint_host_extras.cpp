@@ -3,6 +3,7 @@
 // Pure: made-up spectra with noise, a frequency offset and a different bin width, the way the other host tests make theirs.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include "core/colour_maps.hpp"
 #include "spectrum_extras.hpp"
 #include "test_check.hpp"
 
@@ -38,8 +39,8 @@ std::vector<float> spectrum(std::size_t n, double spanHz, const std::vector<std:
 }
 
 void palettes() {
-    CHECK(kPaletteCount == 6);
-    CHECK(std::string(paletteName(0)) == "Classic" && std::string(paletteName(2)) == "Ember" && std::string(paletteName(99)) == "Blue-yellow safe");
+    CHECK(kPaletteCount == 12);   // S2: was 6; the six named maps (Viridis, Magma, Plasma, Inferno, Cividis, Turbo) follow the five OKLab maps
+    CHECK(std::string(paletteName(0)) == "Classic" && std::string(paletteName(2)) == "Ember" && std::string(paletteName(6)) == "Viridis" && std::string(paletteName(99)) == "Turbo");   // S2: the last entry is now Turbo (was Blue-yellow safe)
     // the classic map IS heat(): the table's entries are heat() of their step
     const auto& classic = paletteTable(0);
     for (const std::size_t i : {std::size_t{0}, std::size_t{64}, std::size_t{128}, std::size_t{255}}) {
@@ -54,6 +55,27 @@ void palettes() {
             CHECK(differ > 200);
         }
         for (std::size_t i = 0; i < 256; ++i) { CHECK(paletteTable(a)[i].a == 255); }
+    }
+    // S2: a saved palette setting is an index, so the first six indices must still mean the same maps and the same colours as before the named maps were added
+    {
+        static const char* const kFirstSix[6] = {"Classic", "Deep sea", "Ember", "Slate", "Spectrum", "Blue-yellow safe"};
+        for (int i = 0; i < 6; ++i) { CHECK(std::string(paletteName(i)) == kFirstSix[i]); }
+        CHECK(paletteTable(1)[0].r == cascade::core::colour::colourMap(cascade::core::colour::MapId::DeepSea)[0].r && paletteTable(5)[255].b == cascade::core::colour::colourMap(cascade::core::colour::MapId::SafeBlueYellow)[255].b);
+    }
+    // S2 G2-07: the named maps are the published tables: viridis runs from (68,1,84) to (253,231,37), turbo from (48,18,59), magma from near black, cividis ends light yellow
+    CHECK(paletteTable(6)[0].r == 68 && paletteTable(6)[0].g == 1 && paletteTable(6)[0].b == 84 && paletteTable(6)[255].r == 253 && paletteTable(6)[255].g == 231 && paletteTable(6)[255].b == 37);
+    CHECK(paletteTable(11)[0].r == 48 && paletteTable(11)[0].g == 18 && paletteTable(11)[0].b == 59);
+    CHECK(paletteTable(7)[0].r < 4 && paletteTable(7)[0].g < 4 && paletteTable(7)[0].b < 8);
+    CHECK(paletteTable(10)[255].r > 240 && paletteTable(10)[255].b < 100);
+    {   // each named map's brightness rises (viridis, magma, plasma, inferno, cividis are monotone in lightness; turbo is not and is left out)
+        for (int m = 6; m <= 10; ++m) {
+            int falls = 0;
+            for (std::size_t i = 1; i < 256; ++i) {
+                const int a = paletteTable(m)[i - 1].r * 30 + paletteTable(m)[i - 1].g * 59 + paletteTable(m)[i - 1].b * 11, b = paletteTable(m)[i].r * 30 + paletteTable(m)[i].g * 59 + paletteTable(m)[i].b * 11;
+                if (b + 60 < a) { ++falls; }
+            }
+            CHECK(falls == 0);
+        }
     }
     CHECK(&paletteTable(3) == &paletteTable(3) && &paletteTable(-5) == &paletteTable(0) && &paletteTable(77) == &paletteTable(kPaletteCount - 1));
     CHECK(paletteIndexOf(-1.0f) == 0 && paletteIndexOf(0.0f) == 0 && paletteIndexOf(1.0f) == 255 && paletteIndexOf(7.0f) == 255 && paletteIndexOf(0.5f) == 128);

@@ -9,6 +9,7 @@
 #include <limits>
 
 #include "core/colour_maps.hpp"
+#include "core/colour_maps_named.hpp"
 #include "core/utf8_text.hpp"
 #include "export_logic.hpp"
 
@@ -21,7 +22,7 @@ std::string fmt(const char* f, double a) { std::string s; cascade::core::formatU
 
 // ---------------------------------------------------------------- S7
 const char* paletteName(int index) {
-    static const char* const k[kPaletteCount] = {"Classic", "Deep sea", "Ember", "Slate", "Spectrum", "Blue-yellow safe"};
+    static const char* const k[kPaletteCount] = {"Classic", "Deep sea", "Ember", "Slate", "Spectrum", "Blue-yellow safe", "Viridis", "Magma", "Plasma", "Inferno", "Cividis", "Turbo"};
     return k[std::clamp(index, 0, kPaletteCount - 1)];
 }
 
@@ -32,6 +33,13 @@ const std::array<Rgba, 256>& paletteTable(int index) {
         for (int m = 0; m < cascade::core::colour::kMapCount; ++m) {
             const auto& t = cascade::core::colour::colourMap(static_cast<cascade::core::colour::MapId>(m));
             for (std::size_t i = 0; i < 256; ++i) { a[static_cast<std::size_t>(m + 1)][i] = Rgba{t[i].r, t[i].g, t[i].b, 255}; }
+        }
+        // the named published maps (G2-07): tables read from the CC0 / Apache-2.0 files named in core/colour_maps_named.hpp
+        for (int m = 0; m < cascade::core::colour::named::kNamedCount; ++m) {
+            for (std::size_t i = 0; i < 256; ++i) {
+                const auto* e = cascade::core::colour::named::kTables[m][i];
+                a[static_cast<std::size_t>(cascade::core::colour::kMapCount + 1 + m)][i] = Rgba{e[0], e[1], e[2], 255};
+            }
         }
         return a;
     }();

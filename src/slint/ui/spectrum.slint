@@ -64,6 +64,8 @@ export global SpectrumEvents {
     callback bookmark-clicked(int, int);
     in property <bool> select-mode;   // lane K: a drag over the plot chooses a span to zoom to (the host sets it from the Display body)
     callback zoom-selected(int, float, float);   // lane K (DEPTH-GAPS A2 Display): a dragged selection of the plot, as two fractions of the plot width (left < right), with the radio (0 = selected); the host zooms to it
+    in property <bool> touch-test;   // S2 TEST ONLY: the host sets it in a bounded run so a mouse drag is taken for a finger (a script cannot make a touch id)
+    callback panned(int, float);     // S2, G2-27: one finger dragged over the plot off the passband pans the picture: the radio (0 = selected), the step as a fraction of the plot width (positive = the finger moved right)
     callback pinch(int, float, float);   // S27: a two-finger pinch over the plot: the radio (0 = selected), the factor since the last report (> 1 = fingers apart), where it is centred (0..1 of the plot width)
 }
 
@@ -272,7 +274,7 @@ export component SpectrumView inherits Rectangle {
                 y: 0px;
                 width: Math.max(0px, root.band-r - root.band-l);
                 height: parent.height;
-                background: (root.band-dragging || root.press-zone != 0) ? Theme.vfo.with-alpha(0.27) : Theme.vfo-fill;
+                background: (root.band-dragging || (root.press-zone != 0 && root.press-zone != 5)) ? Theme.vfo.with-alpha(0.27) : Theme.vfo-fill;
             }
             Rectangle { x: root.band-l; y: 0px; width: 1px; height: parent.height; background: Theme.vfo; }
             Rectangle { x: root.band-r; y: 0px; width: 1px; height: parent.height; background: Theme.vfo; }
@@ -594,6 +596,7 @@ export component SpectrumView inherits Rectangle {
                 root.sel-moved = false;
                 root.sel-swallow = false;
                 if (root.press-zone == 0 && (root.select-mode || e.modifiers.control)) { root.press-zone = 4; }   // lane K: the rubber band
+                else if (root.press-zone == 0 && (e.touch-finger-id != 0 || SpectrumEvents.touch-test)) { root.press-zone = 5; }   // S2, G2-27: a finger on the empty plot pans (a tap, without travel, still tunes)
             } else if (e.kind == PointerEventKind.up) {
                 if (e.button == PointerEventButton.right) {
                     if (root.press-zone == 0 && self.mouse-x >= 0px && self.mouse-x < self.width && self.mouse-y >= 0px && self.mouse-y < self.height && root.plot-w > 0px) {
@@ -601,7 +604,7 @@ export component SpectrumView inherits Rectangle {
                     }
                 } else if (e.button == PointerEventButton.left) {
                     if (root.press-zone == 4 && root.sel-moved && root.plot-w > 0px) { SpectrumEvents.zoom-selected(root.radio-id, root.sel-from, root.sel-to); }
-                    root.sel-swallow = root.press-zone == 4 && root.sel-moved;
+                    root.sel-swallow = (root.press-zone == 4 || root.press-zone == 5) && root.sel-moved;
                     root.press-zone = 0;
                     root.sel-moved = false;
                 }
@@ -617,7 +620,11 @@ export component SpectrumView inherits Rectangle {
             } else if (root.press-zone == 4) {
                 root.last-x = self.mouse-x;
                 if (Math.abs(self.mouse-x - root.press-x) > 4px) { root.sel-moved = true; }
-            } else if (root.press-zone >= 2) {
+            } else if (root.press-zone == 5) {
+                if (!root.sel-moved && Math.abs(self.mouse-x - root.press-x) > 4px) { root.sel-moved = true; root.sel-swallow = true; }   // the release of a pan is not a click, whichever of the release and the click comes first
+                if (root.sel-moved) { SpectrumEvents.panned(root.radio-id, (self.mouse-x - root.last-x) / root.plot-w); }
+                root.last-x = self.mouse-x;
+            } else if (root.press-zone >= 2 && root.press-zone <= 3) {
                 root.edge-dragged(Math.max(0, root.press-half + (root.press-zone == 3 ? 1 : -1) * (self.mouse-x - root.press-x) / root.plot-w));
             }
         }
