@@ -6,8 +6,10 @@
 // the drivers, so each driver makes ONE call to one of the helpers below at the place it already notices the fault; nothing here is a hand-written message per site.
 //
 // WHICH RADIO. A driver does not know its radio's model and serial (that is the engine's knowledge, read from the device arguments). The engine REGISTERS the
-// source object it opened (registerSource) and a driver passes `this`; a call from a source nobody registered falls back to the one open radio of that driver, and
-// then to the driver's plain family name (never a made-up serial).
+// source object it opened (registerSource) and a driver passes `this`; a call from a source nobody registered falls back to the one open radio of that driver. A call
+// that finds no open radio is dropped and counted (unattributedCount): the failure of an OPEN is a radio_fail, and a made-up radio would be a phantom on the site.
+// FOLDING: a refusal repeated within five seconds, or a vendor fault within ten, is counted in the radio's own `dropped` (the field every sent event of the radio
+// carries) and not sent again.
 //
 // NEVER SENT. Every text goes through the reporter's own scrub (serial, paths, addresses and frequencies out); a refused CONTROL is named from a fixed word list and
 // its value is never carried, a tuned frequency is only ever a BAND name. Calls are cheap when nothing is configured (a hermetic or bounded run) and may be made from
@@ -44,6 +46,9 @@ std::string closeCauseFor(bool deviceDead, const std::string& text);
 enum class Control { Frequency, Rate, Bandwidth, Gain, AutoGain, Ppm, BiasTee, Antenna, DirectSampling, Decimation, Other };
 const char* controlWord(Control c);        // "frequency" "rate" "bandwidth" "gain" "gain" "ppm" "bias" "antenna" "direct" "decimation" "other"
 const char* controlRefusedWord(Control c); // the contract's `refused` word, or "" when the contract has none for it
+// The control a driver's own description names ("retune", "IF gain change", "AGC set point change", "bias tee change"): for the drivers that apply many controls through
+// one function and say which in a sentence.
+Control controlFromText(const std::string& what);
 
 // WHY a setting is being applied, for the event's `why` ("open", "user", "auto", "restore"): a scope the engine sets around the code that applies a setting. The default
 // on a thread with no scope is "user" (the control path of a person's command).
@@ -59,10 +64,10 @@ private:
 
 // The radio refused a setting. `reason` is the driver's own sentence (scrubbed here). `userRange` is true when the refusal is the radio saying the VALUE the user
 // asked for is outside what it can do (a typed value out of range): it is still reported, with its own class so it can be told from a fault of the radio.
-void noteControlRefused(const void* source, const char* driverKey, Control control, const std::string& reason, bool userRange = false);
+void noteControlRefused(const void* source, const char* driverKey, Control control, const std::string& reason, bool userRange = false, const char* why = nullptr);
 // The same, handing the text back: a driver's `setError(text)` becomes `setError(noteControlRefusedText(this, "rtlsdr", Control::Gain, text))`, one wrap at the place
 // it already says the refusal. Safe to nest in any expression; it never throws.
-std::string noteControlRefusedText(const void* source, const char* driverKey, Control control, std::string text, bool userRange = false);
+std::string noteControlRefusedText(const void* source, const char* driverKey, Control control, std::string text, bool userRange = false, const char* why = nullptr);
 
 // ---------------------------------------------------------------------------
 // A radio that failed after it opened (G1)
@@ -95,6 +100,11 @@ void noteVendorCallFault(const void* source, const char* driverKey, const char* 
 
 // A service the radios depend on (the SDRplay API service): not tied to one source object; the open radio of that driver, when there is one.
 void noteServiceFault(const char* driverKey, const char* what, const std::string& reason, bool absorbed);
+
+// How many driver events had no open radio to be about (dropped: an open that fails is a radio_fail, a service state with no radio open is information), and how many
+// calls threw inside the helper (counted and swallowed: a report must never take a driver's fault path down). For the tests and the record.
+std::uint64_t unattributedCount();
+std::uint64_t lostCount();
 
 }  // namespace cascade::core::radioreport
 

@@ -26,9 +26,11 @@
 #include <thread>
 
 #include "core/diag_log.hpp"
+#include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 // --- settings, args, device list ------------------------------------------------
 
@@ -991,6 +993,7 @@ bool SoundCardSource::setSampleRateHz(double hz) {
     if (openLocked(before, list)) {
         if (wasRunning) { start(); }
         std::snprintf(buf, sizeof(buf), "; it is still running at %.0f Hz", settings_.cardRateHz);
+        rre::noteControlRefused(this, "soundcard", rre::Control::Rate, "the sound card refused that rate");
         error_ = refused + buf;
         return false;
     }
@@ -998,6 +1001,7 @@ bool SoundCardSource::setSampleRateHz(double hz) {
     // is false and start() refuses with both reasons.
     std::snprintf(buf, sizeof(buf), "; it could not be reopened at %.0f Hz either: ", before.cardRateHz);
     closedBecause_ = refused + buf + error_;
+    rre::noteControlRefused(this, "soundcard", rre::Control::Rate, "the sound card refused that rate and could not be reopened at the old one");
     error_ = closedBecause_;
     return false;
 }
@@ -1016,6 +1020,7 @@ bool SoundCardSource::setCenterFrequencyHz(double hz) {
     std::snprintf(buf, sizeof(buf),
                   "a sound card in real mode receives 0 - %.1f kHz and has no tuner to move",
                   settings_.cardRateHz / 2000.0);
+    rre::noteControlRefused(this, "soundcard", rre::Control::Frequency, "a sound card in real mode has no tuner to move", true);
     error_ = buf;
     return false;
 }

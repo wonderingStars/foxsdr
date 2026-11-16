@@ -6,6 +6,7 @@
 #include "source/hackrf_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
 
@@ -17,6 +18,7 @@
 #include <utility>
 
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace {
 
@@ -158,6 +160,7 @@ void HackRfSource::noteTransportFaultOn(ReaderLink& link, const char* what,
     }
     core::diagWarnf("hackrf: transfer failed while %s%s%s", what, detail.empty() ? "" : ": ",
                     detail.c_str());
+    rre::noteDeviceFault(link.owner, "hackrf", what, detail);
 }
 
 void HackRfSource::noteTransportFault(const char* what, const std::string& detail) {
@@ -289,6 +292,7 @@ bool HackRfSource::programLnaLocked(double db) {
         return false;
     }
     if (reply == 0) {
+        rre::noteControlRefused(this, "hackrf", rre::Control::Gain, "the radio refused that LNA gain");
         setError("the radio refused that LNA gain");
         return false;
     }
@@ -305,6 +309,7 @@ bool HackRfSource::programVgaLocked(double db) {
         return false;
     }
     if (reply == 0) {
+        rre::noteControlRefused(this, "hackrf", rre::Control::Gain, "the radio refused that VGA gain");
         setError("the radio refused that VGA gain");
         return false;
     }
@@ -747,6 +752,7 @@ void HackRfSource::noteRead(ReaderLink& link, int ret, std::size_t samples, bool
     const auto now = std::chrono::steady_clock::now();
     std::string line;
     bool warn = false;
+    rre::StreamTrouble trouble;
     {
         std::lock_guard<std::mutex> lk(link.healthMutex);
         StreamHealth& h = link.health;
@@ -782,6 +788,8 @@ void HackRfSource::noteRead(ReaderLink& link, int ret, std::size_t samples, bool
                              h.longestGapMs < 250;
         const bool first = !link.healthEverWritten;
         warn = h.errors > 0 || h.longestGapMs >= 1000;
+        trouble = {std::chrono::duration<double>(now - h.windowStart).count(), h.samples, h.errors, h.overflows, h.timeouts,
+                   static_cast<long long>(h.longestGapMs)};
         line = healthLineLocked(link);
         if (line.empty()) { return; }
         if (!(warn || first || !nominal)) { return; }
@@ -789,6 +797,7 @@ void HackRfSource::noteRead(ReaderLink& link, int ret, std::size_t samples, bool
     }
     if (warn) {
         core::diagWarnf("%s", line.c_str());
+        rre::noteStreamTrouble(link.owner, "hackrf", trouble);
     } else {
         core::diagLogf("%s", line.c_str());
     }
@@ -894,6 +903,7 @@ bool HackRfSource::setSampleRateHz(double hz) {
         std::snprintf(buf, sizeof(buf),
                       "the HackRF's lowest sample rate is %.0f MS/s; %.3f MS/s was refused",
                       hackrf::kMinSampleRateHz / 1e6, hz / 1e6);
+        rre::noteControlRefused(this, "hackrf", rre::Control::Rate, "outside the range this radio can do", true);
         setError(buf);
         return false;
     }
@@ -940,6 +950,7 @@ bool HackRfSource::setCenterFrequencyHz(double hz) {
         std::snprintf(buf, sizeof(buf),
                       "the HackRF tunes %.0f MHz to %.0f MHz; %.6f MHz is outside that",
                       hackrf::kMinFrequencyHz / 1e6, hackrf::kMaxFrequencyHz / 1e6, hz / 1e6);
+        rre::noteControlRefused(this, "hackrf", rre::Control::Frequency, "outside the range this radio can do", true);
         setError(buf);
         return false;
     }

@@ -318,6 +318,7 @@ public:
 
 private:
     struct ReaderLink {
+        const void* owner = nullptr;   // the source object, for the radio reports (core/radio_events.hpp)
         explicit ReaderLink(std::size_t ringCapacity) : ring(ringCapacity) {}
 
         // The reader's own loop flag: true from open() to closeDevice().
@@ -367,7 +368,7 @@ private:
     };
 
     // NEVER REASSIGNED: an abandoned reader holds its own copy.
-    const std::shared_ptr<ReaderLink> link_ = std::make_shared<ReaderLink>(kRingCapacitySamples());
+    const std::shared_ptr<ReaderLink> link_ = [this] { auto l = std::make_shared<ReaderLink>(kRingCapacitySamples()); l->owner = this; return l; }();
 
     // 2^19 samples: 164 ms at the top rate (3.2 MS/s), 4 MiB - generous
     // because a network hands samples over in bursts a USB bulk pipe does not.

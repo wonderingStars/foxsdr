@@ -8,7 +8,10 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "core/radio_events.hpp"
+
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace hp = hpsdr;
 namespace h1 = hpsdr1;
@@ -337,7 +340,7 @@ bool Hpsdr1Source::setSampleRateHz(double hz) {
         std::lock_guard<std::mutex> cl(rx_->cmdMutex);
         rx_->cmd.speedCode = code;
     }
-    if (active_ && !rx_->sendRefresh()) { setError("could not send the new rate to the radio"); return false; }
+    if (active_ && !rx_->sendRefresh()) { setError(rre::noteControlRefusedText(this, "hpsdr1", rre::Control::Rate, "could not send the new rate to the radio")); return false; }
     return true;
 }
 
@@ -364,7 +367,7 @@ bool Hpsdr1Source::setCenterFrequencyHz(double hz) {
         rx_->cmd.rxHz[0] = static_cast<std::uint32_t>(std::llround(hz));
     }
     freqHz_ = static_cast<double>(static_cast<std::uint32_t>(std::llround(hz)));
-    if (active_ && !rx_->sendRefresh()) { setError("could not send the new frequency to the radio"); return false; }
+    if (active_ && !rx_->sendRefresh()) { setError(rre::noteControlRefusedText(this, "hpsdr1", rre::Control::Frequency, "could not send the new frequency to the radio")); return false; }
     return true;
 }
 
@@ -416,7 +419,7 @@ bool Hpsdr1Source::setGainDb(const std::string& name, double db) {
             rx_->cmd.lnaDirect = true;
             rx_->cmd.lnaCode = static_cast<std::uint8_t>(static_cast<int>(db) - hl2::kLnaMinDb);
         }
-        if (active_ && !rx_->sendRefresh()) { setError("could not send the new LNA gain to the radio"); return false; }
+        if (active_ && !rx_->sendRefresh()) { setError(rre::noteControlRefusedText(this, "hpsdr1", rre::Control::Gain, "could not send the new LNA gain to the radio")); return false; }
         return true;
     }
     if (profile_ != Hpsdr1Profile::Generic || name != "Attenuator") {
@@ -429,7 +432,7 @@ bool Hpsdr1Source::setGainDb(const std::string& name, double db) {
         rx_->cmd.attenDb = static_cast<std::uint8_t>(db);
         rx_->cmd.attenEnable = true;
     }
-    if (active_ && !rx_->sendRefresh()) { setError("could not send the new attenuation to the radio"); return false; }
+    if (active_ && !rx_->sendRefresh()) { setError(rre::noteControlRefusedText(this, "hpsdr1", rre::Control::Gain, "could not send the new attenuation to the radio")); return false; }
     return true;
 }
 

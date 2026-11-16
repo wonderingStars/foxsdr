@@ -592,6 +592,7 @@ private:
     // the AirspySource that started it, and a thread reading freed members
     // would be a worse defect than the hang the bound exists to prevent.
     struct ReaderLink {
+        const void* owner = nullptr;   // the source object, for the radio reports (core/radio_events.hpp)
         ReaderLink(std::size_t ringCapacity, const char* driverTag)
             : ring(ringCapacity), tag(driverTag) {}
 

@@ -1012,7 +1012,8 @@ bool RtlSdrSource::setCenterFrequencyHz(double hz) {
         std::snprintf(buf, sizeof(buf),
                       "this radio tunes %.3f - %.3f MHz; %.3f MHz is outside that", lo / 1e6,
                       hi / 1e6, hz / 1e6);
-        setError(rre::noteControlRefusedText(this, "rtlsdr", rre::Control::Frequency, buf, /*userRange=*/true));
+        rre::noteControlRefused(this, "rtlsdr", rre::Control::Frequency, "outside the range this radio can tune", /*userRange=*/true);
+        setError(buf);
         return false;
     }
     if (!retuneLocked(hz)) {

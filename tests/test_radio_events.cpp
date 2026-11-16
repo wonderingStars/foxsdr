@@ -11,6 +11,8 @@
 #include <iterator>
 #include <mutex>
 #include <string>
+#include <thread>
+#include <chrono>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -123,6 +125,7 @@ const RadioIdentity kHf = identify("airspyhf", "serial=HF0001A2");
 const RadioIdentity kRtl = identify("rtlsdr", "serial=00000001");
 int g_source1 = 0;
 int g_source2 = 0;
+int g_source3 = 0;
 
 }  // namespace
 
@@ -259,21 +262,55 @@ int main() {
         }
         for (const json& m : msgs) { everything.push_back(m); }
         forgetRadio(kRtl.key);
+        // no radio of that driver open: a service state is information, not a radio's fault (and no phantom radio is made up)
+        noteServiceFault("rtlsdr", "servicestate", "the service is not running", false);
+        CHECK(ofKind(t.flush(), "radio_recovery").size() == 0);
     }
 
-    // ---- a source nobody registered: the driver's plain family name, never a made-up serial --------------------------------------------------------
+    // ---- a radio that is still OPENING: what its driver says is held and said about the right radio once the engine announces it ------------------------
     {
         Rig t("unknown");
         t.start();
-        noteControlRefused(&g_source2, "hackrf", Control::Rate, "no such rate");
+        noteControlRefused(&g_source2, "airspyhf", Control::Ppm, "the receiver refused to take back its stored crystal trim", false, "open");
+        CHECK(ofKind(t.flush(), "radio_settings").empty());   // not yet: no radio is known to be this one
+        registerSource(&g_source2, kHf);                       // the open succeeded: the engine says which radio it was
         const std::vector<json> msgs = ofKind(t.flush(), "radio_settings");
         CHECK(msgs.size() == 1);
         if (msgs.size() == 1) {
-            CHECK(msgs[0]["body"]["serial"] == "");
-            CHECK(msgs[0]["body"]["driver"] == "hackrf");
-            CHECK(msgs[0]["body"]["refused"] == "rate");
+            CHECK(msgs[0]["radioKey"] == kHf.key);
+            CHECK(msgs[0]["body"]["why"] == "open");
+            CHECK(msgs[0]["body"]["refused"] == "ppm");
         }
         for (const json& m : msgs) { everything.push_back(m); }
+        // an open that never succeeds says nothing more: the failure of an open is the radio_fail
+        noteControlRefused(&g_source3, "airspyhf", Control::Rate, "x");
+        // a caller with no source object at all (a service) means the one open radio of that driver, and nobody when none is open
+        const std::uint64_t before = unattributedCount();
+        noteVendorCallFault(nullptr, "airspyhf", "vendorcall", "a vendor call threw", true);
+        CHECK(ofKind(t.flush(), "radio_recovery").size() == 1);
+        forgetRadio(kHf.key);
+        noteVendorCallFault(nullptr, "airspyhf", "vendorcall", "a vendor call threw", true);
+        CHECK(ofKind(t.flush(), "radio_recovery").empty());
+        CHECK(unattributedCount() == before + 1);
+    }
+
+    // ---- folding: a slider dragged against a refusal is one event and a count, never silence and never a flood ----------------------------------------------
+    {
+        Rig t("fold");
+        t.start();
+        registerSource(&g_source1, kRtl);
+        for (int i = 0; i < 6; ++i) { noteControlRefused(&g_source1, "rtlsdr", Control::Gain, "the tuner refused that gain"); }
+        const std::vector<json> msgs = ofKind(t.flush(), "radio_settings");
+        CHECK(msgs.size() == 1);   // the first went; five were folded
+        // after the window the next one that goes out says how many were folded
+        std::this_thread::sleep_for(std::chrono::milliseconds(5100));
+        noteControlRefused(&g_source1, "rtlsdr", Control::Gain, "the tuner refused that gain");
+        const std::vector<json> later = ofKind(t.flush(), "radio_settings");
+        CHECK(later.size() == 1);
+        if (later.size() == 1) { CHECK(later[0]["body"].value("dropped", 0) == 5); }   // the five folded ones are said, as the radio's own dropped count
+        for (const json& m : later) { everything.push_back(m); }
+        CHECK(lostCount() == 0);
+        forgetRadio(kRtl.key);
     }
 
     // ---- Usage reporting off: a journal event has no anonymous form, so nothing is queued or sent ----------------------------------------------------

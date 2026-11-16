@@ -6,6 +6,7 @@
 #include "source/pluto_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
 
@@ -16,6 +17,7 @@
 #include <utility>
 
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace {
 
@@ -216,6 +218,7 @@ void PlutoSource::noteFaultOn(ReaderLink& link, const char* what, const std::str
     }
     core::diagWarnf("pluto: failed while %s%s%s", what, detail.empty() ? "" : ": ",
                     detail.c_str());
+    rre::noteDeviceFault(link.owner, "pluto", what, detail);
 }
 
 void PlutoSource::noteFault(const char* what, const std::string& detail) {
@@ -884,6 +887,7 @@ void PlutoSource::noteRead(ReaderLink& link, bool ok, std::size_t samples, bool 
     const auto now = std::chrono::steady_clock::now();
     std::string line;
     bool warn = false;
+    rre::StreamTrouble trouble;
     {
         std::lock_guard<std::mutex> lk(link.healthMutex);
         StreamHealth& h = link.health;
@@ -917,6 +921,8 @@ void PlutoSource::noteRead(ReaderLink& link, bool ok, std::size_t samples, bool 
                              h.longestGapMs < 250;
         const bool first = !link.healthEverWritten;
         warn = h.errors > 0 || h.longestGapMs >= 1000;
+        trouble = {std::chrono::duration<double>(now - h.windowStart).count(), h.samples, h.errors, h.overflows, h.timeouts,
+                   static_cast<long long>(h.longestGapMs)};
         line = healthLineLocked(link);
         if (line.empty()) { return; }
         if (!(warn || first || !nominal)) { return; }
@@ -924,6 +930,7 @@ void PlutoSource::noteRead(ReaderLink& link, bool ok, std::size_t samples, bool 
     }
     if (warn) {
         core::diagWarnf("%s", line.c_str());
+        rre::noteStreamTrouble(link.owner, "pluto", trouble);
     } else {
         core::diagLogf("%s", line.c_str());
     }
@@ -1044,6 +1051,7 @@ bool PlutoSource::setSampleRateHz(double hz) {
                           "(going lower needs a FIR filter written to the AD9361's "
                           "filter_fir_config, which FoxSDR does not do)",
                           rateRange_.min / 1e6, hz / 1e6);
+            rre::noteControlRefused(this, "pluto", rre::Control::Rate, "outside the range this radio can do", true);
             setError(buf);
             return false;
         }
@@ -1087,6 +1095,7 @@ bool PlutoSource::setCenterFrequencyHz(double hz) {
         std::snprintf(buf, sizeof(buf),
                       "this Pluto tunes %.3f MHz to %.3f MHz; %.6f MHz is outside that",
                       loRange_.min / 1e6, loRange_.max / 1e6, hz / 1e6);
+        rre::noteControlRefused(this, "pluto", rre::Control::Frequency, "outside the range this radio can do", true);
         setError(buf);
         return false;
     }

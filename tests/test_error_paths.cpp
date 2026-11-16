@@ -39,7 +39,7 @@ namespace fs = std::filesystem;
 
 // THE PIN: how many sites are parked as PENDING in tests/errpath_allow.tsv. It may only go DOWN.
 // (tools/errpath_seed.py --write-pin keeps this line in step after a re-seed.)
-constexpr int kPendingPin = 1103;   // errpath-pin
+constexpr int kPendingPin = 928;   // errpath-pin
 
 namespace {
 

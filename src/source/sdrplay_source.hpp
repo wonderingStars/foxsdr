@@ -871,6 +871,7 @@ private:
     // address is the cbContext. See the file header for why it can outlive
     // the SdrPlaySource.
     struct Link {
+        const void* owner = nullptr;   // the source object, for the radio reports (core/radio_events.hpp)
         explicit Link(std::size_t ringCapacity) : ring(ringCapacity) {}
 
         cascade::dsp::SpscRing<std::complex<float>> ring;
@@ -1080,7 +1081,7 @@ private:
     // NEVER REASSIGNED, hence const: a stranded callback holds this address,
     // so a source that swapped in a fresh link could have a new device behind
     // a service thread still filling the old one.
-    const std::shared_ptr<Link> link_ = std::make_shared<Link>(kRingCapacitySamples());
+    const std::shared_ptr<Link> link_ = [this] { auto l = std::make_shared<Link>(kRingCapacitySamples()); l->owner = this; return l; }();
 
     // A quarter of a second of signal at 10 MS/s, which is the fastest this
     // driver offers, against a pipeline that asks in 10 ms chunks.

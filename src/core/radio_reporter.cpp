@@ -1074,6 +1074,14 @@ void Reporter::fileFailure(const FailureInput& in, const std::vector<std::string
     s.fileFailureLocked(in, logRing, s.now());
 }
 
+void Reporter::countDropped(const std::string& radioKey, long long n) {
+    if (radioKey.empty() || n <= 0) { return; }
+    std::lock_guard<std::mutex> lk(p_->mu);
+    if (!p_->on || p_->id.installId.empty()) { return; }
+    p_->dropped[radioKey] += n;
+    ++p_->st.boundDropped;
+}
+
 void Reporter::event(const Event& ev) {
     std::lock_guard<std::mutex> lk(p_->mu);
     Impl& s = *p_;

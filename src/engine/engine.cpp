@@ -1631,6 +1631,12 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
                              r.recovery ? cascade::core::radioreport::Trigger::AutoReopen
                                         : (r.savedRadioRetry ? cascade::core::radioreport::Trigger::SavedRetry : cascade::core::radioreport::Trigger::UserPick),
                              /*superseded=*/true, r.requestRateHz, r.openMs);
+        } else {
+            // an open that SUCCEEDED and was dropped because the user had moved on is not a fault of the radio: the journal says it opened and closed again
+            journalOpenSuperseded(r.kind, r.args,
+                                  r.recovery ? cascade::core::radioreport::Trigger::AutoReopen
+                                             : (r.savedRadioRetry ? cascade::core::radioreport::Trigger::SavedRetry : cascade::core::radioreport::Trigger::UserPick),
+                                  r.requestRateHz, r.openMs);
         }
         return;
     }
@@ -6450,6 +6456,9 @@ bool Engine::selectSourceById(const std::string& id) {
         }
     }
     rx().sourceError_ = "no scanned device matches those arguments; rescan and try again";
+    // THE RADIO IS GONE SINCE THE LAST SCAN (unplugged, or never listed): an open that did not happen, filed like one that failed
+    reportFailedOpen(kind, args, "the radio is not listed by the last scan: it may have been unplugged since", cascade::core::radioreport::Trigger::UserPick, /*superseded=*/false,
+                     0.0, -1);
     return false;
 }
 
@@ -10283,6 +10292,15 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
             // never shown as though the user had picked it.
             sourceSel_ = -1;
         }
+    } else if (cfg.sourceKind == "soapy" || isNativeSourceKind(cfg.sourceKind)) {
+        // A SAVED RADIO KIND WITH NO DEVICE NAMED (found on real hardware 2026-11-13 and again 2026-11-16): every branch above wants arguments, so a
+        // config that says "rtlsdr" and names no dongle fell through all of them and the signal generator ran with no error at all. It is an open that
+        // failed, said in a plain sentence on the screen and filed like every other failed open.
+        const std::string noneWhy = "the saved settings name this kind of radio but not which one";
+        rx().sourceError_ = cascade::gui::radioNotOpenedSentence(cfg.sourceKind, noneWhy);
+        cascade::core::diagWarnf("source: the saved %s source names no device - the generator runs instead", cfg.sourceKind.c_str());
+        reportFailedOpen(cfg.sourceKind, std::string(), noneWhy, cascade::core::radioreport::Trigger::StartupRestore, /*superseded=*/false, cfg.sampleRateHz, -1);
+        sourceSel_ = -1;
     }
     if (rx().sourceKind_ == "siggen") {
         // Generator kept (or fallen back to): carry the saved center so the

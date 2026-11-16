@@ -5,6 +5,7 @@
 #include "source/rtl_tcp_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "core/ppm_correction.hpp"
 #include "source/rtl2832u.hpp"
@@ -19,6 +20,7 @@
 #include <utility>
 
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace {
 
@@ -215,6 +217,7 @@ void RtlTcpSource::noteFaultOn(ReaderLink& link, const char* what, const std::st
     } else {
         core::diagWarnf("rtltcp: failed while %s", what);
     }
+    rre::noteDeviceFault(link.owner, "rtltcp", what, detail);
 }
 
 void RtlTcpSource::noteFault(const char* what, const std::string& detail) {
@@ -679,6 +682,7 @@ void RtlTcpSource::noteRead(ReaderLink& link, bool ok, std::size_t samples, bool
     const auto now = std::chrono::steady_clock::now();
     std::string line;
     bool warn = false;
+    rre::StreamTrouble trouble;
     {
         std::lock_guard<std::mutex> lk(link.healthMutex);
         StreamHealth& h = link.health;
@@ -708,6 +712,8 @@ void RtlTcpSource::noteRead(ReaderLink& link, bool ok, std::size_t samples, bool
                              h.longestGapMs < 250;
         const bool first = !link.healthEverWritten;
         warn = h.errors > 0 || h.longestGapMs >= 1000;
+        trouble = {std::chrono::duration<double>(now - h.windowStart).count(), h.samples, h.errors, h.overflows, h.timeouts,
+                   static_cast<long long>(h.longestGapMs)};
         line = healthLineLocked(link);
         if (line.empty()) { return; }
         if (!(warn || first || !nominal)) { return; }
@@ -715,6 +721,7 @@ void RtlTcpSource::noteRead(ReaderLink& link, bool ok, std::size_t samples, bool
     }
     if (warn) {
         core::diagWarnf("%s", line.c_str());
+        rre::noteStreamTrouble(link.owner, "rtltcp", trouble);
     } else {
         core::diagLogf("%s", line.c_str());
     }

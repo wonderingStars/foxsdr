@@ -172,6 +172,10 @@ public:
     // and with Usage reporting on or off (without an install id the message is the anonymous form of contract 1.2).
     void fileFailure(const FailureInput& in, const std::vector<std::string>& logRing);
 
+    // Events of this radio that a caller folded into an earlier one (a refusal repeated within seconds): counted into the radio's `dropped`, which the next event
+    // of this radio that is sent carries, so the number is said and never lost.
+    void countDropped(const std::string& radioKey, long long n);
+
     // One journal event. Ignored without an install id (Usage reporting off: there is no anonymous journal).
     void event(const Event& ev);
 

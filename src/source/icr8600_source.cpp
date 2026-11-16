@@ -7,7 +7,10 @@
 #include <fstream>
 #include <thread>
 
+#include "core/radio_events.hpp"
+
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace ic = icr8600;
 
@@ -121,6 +124,7 @@ bool Icr8600Source::civ(const std::vector<std::uint8_t>& frame, const char* what
     std::lock_guard<std::mutex> lk(civMutex_);
     const int w = c->dev->writeBulk(ic::kEpCommand, frame.data(), frame.size(), static_cast<unsigned>(ackMs_));
     if (w < 0 || static_cast<std::size_t>(w) != frame.size()) {
+        rre::noteControlRefused(this, "icr8600", rre::Control::Other, std::string("could not send the command for ") + what);
         setError(std::string("could not send the command for ") + what + " to the IC-R8600");
         return false;
     }
@@ -131,6 +135,7 @@ bool Icr8600Source::civ(const std::vector<std::uint8_t>& frame, const char* what
         return false;
     }
     if (r == 0) {
+        rre::noteControlRefused(this, "icr8600", rre::Control::Other, std::string("the radio did not answer the command for ") + what);
         setError(std::string("the IC-R8600 did not answer the command for ") + what);
         return false;
     }
@@ -141,6 +146,7 @@ bool Icr8600Source::civ(const std::vector<std::uint8_t>& frame, const char* what
             ++refusedOptional_;
             return true;
         }
+        rre::noteControlRefused(this, "icr8600", rre::Control::Other, std::string("the radio refused the command for ") + what);
         setError(std::string("the IC-R8600 refused the command for ") + what);
         return false;
     }

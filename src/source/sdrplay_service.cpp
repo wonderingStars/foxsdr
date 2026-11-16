@@ -4,6 +4,7 @@
 #include "source/sdrplay_service.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/radio_events.hpp"
 #include "core/i18n.hpp"
 
 #include <cctype>
@@ -27,6 +28,7 @@
 #endif
 
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace {
 
@@ -435,6 +437,8 @@ bool noteSdrPlayServiceStatus(const SdrPlayServiceStatus& s) {
         core::diagLogf("source: SDRplay API Service - %s", summary.c_str());
     } else {
         core::diagWarnf("source: SDRplay API Service - %s", summary.c_str());
+        // a service that is not running (stopped, starting, stopping, missing) is a fault of the radio's driver stack; the status is a fixed sentence
+        rre::noteServiceFault("sdrplay", "servicestate", summary, false);
     }
     return true;
 }

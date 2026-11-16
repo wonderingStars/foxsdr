@@ -26,7 +26,10 @@
 #include <unistd.h>
 #endif
 
+#include "core/radio_events.hpp"
+
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace hp = hpsdr;
 
@@ -419,18 +422,19 @@ bool HpsdrSource::applySettingsLocked(const hp::ControlSettings& next) {
     std::string why;
     if (!rx_) {  // not open: validate and keep for open()
         why = hp::validateSettings(next);
-        if (!why.empty()) { setError(why); return false; }
+        if (!why.empty()) { setError(rre::noteControlRefusedText(this, "hpsdr", rre::Control::Other, why)); return false; }
         settings_ = next;
         return true;
     }
     std::lock_guard<std::mutex> sl(rx_->sendMutex);
-    if (!rx_->sender.set(next, why)) { setError(why); return false; }
+    if (!rx_->sender.set(next, why)) { setError(rre::noteControlRefusedText(this, "hpsdr", rre::Control::Other, why)); return false; }
     settings_ = next;
     {
         std::lock_guard<std::mutex> pl(rx_->p1Mutex);
         rx_->p1.configure(1, 1, next.rateHz);
     }
     if (active_ && !decoder_ && rx_->sending && !rx_->sendCycleLocked()) {
+        rre::noteControlRefused(this, "hpsdr", rre::Control::Other, std::string("could not send the control frames: ") + udp_->lastError());
         setError(std::string("could not send the control frames: ") + udp_->lastError());
         return false;
     }

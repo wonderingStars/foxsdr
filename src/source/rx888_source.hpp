@@ -396,6 +396,7 @@ private:
     // Everything the reader thread touches, in one object behind a shared_ptr
     // it captures BY VALUE - see the file header.
     struct ReaderLink {
+        const void* owner = nullptr;   // the source object, for the radio reports (core/radio_events.hpp)
         explicit ReaderLink(std::size_t ringCapacity) : ring(ringCapacity) {}
 
         std::atomic<bool> run{false};
@@ -432,7 +433,7 @@ private:
 
     // NEVER REASSIGNED, hence const: an abandoned reader holds its own copy of
     // this pointer.
-    const std::shared_ptr<ReaderLink> link_ = std::make_shared<ReaderLink>(kRingCapacitySamples());
+    const std::shared_ptr<ReaderLink> link_ = [this] { auto l = std::make_shared<ReaderLink>(kRingCapacitySamples()); l->owner = this; return l; }();
 
     // 1 Mi complex samples - 8 MB - which is 33 ms at the widest rate this
     // driver offers and 500 ms at the narrowest. Deeper than the HackRF's

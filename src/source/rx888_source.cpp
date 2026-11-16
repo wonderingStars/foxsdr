@@ -8,6 +8,7 @@
 #include "source/rx888_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
 #include "source/rx888_firmware.hpp"
@@ -21,6 +22,7 @@
 #include <utility>
 
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace {
 
@@ -133,6 +135,7 @@ void Rx888Source::noteTransportFaultOn(ReaderLink& link, const char* what,
     }
     core::diagWarnf("rx888: transfer failed while %s%s%s", what, detail.empty() ? "" : ": ",
                     detail.c_str());
+    rre::noteDeviceFault(link.owner, "rx888", what, detail);
 }
 
 void Rx888Source::noteTransportFault(const char* what, const std::string& detail) {
@@ -887,6 +890,7 @@ void Rx888Source::noteRead(ReaderLink& link, int ret, std::size_t samples, bool 
     const auto now = std::chrono::steady_clock::now();
     std::string line;
     bool warn = false;
+    rre::StreamTrouble trouble;
     {
         std::lock_guard<std::mutex> lk(link.healthMutex);
         StreamHealth& h = link.health;
@@ -918,6 +922,8 @@ void Rx888Source::noteRead(ReaderLink& link, int ret, std::size_t samples, bool 
             h.timeouts == 0 && h.overflows == 0 && h.errors == 0 && h.longestGapMs < 250;
         const bool first = !link.healthEverWritten;
         warn = h.errors > 0 || h.longestGapMs >= 1000;
+        trouble = {std::chrono::duration<double>(now - h.windowStart).count(), h.samples, h.errors, h.overflows, h.timeouts,
+                   static_cast<long long>(h.longestGapMs)};
         line = healthLineLocked(link);
         if (line.empty()) { return; }
         if (!(warn || first || !nominal)) { return; }
@@ -925,6 +931,7 @@ void Rx888Source::noteRead(ReaderLink& link, int ret, std::size_t samples, bool 
     }
     if (warn) {
         core::diagWarnf("%s", line.c_str());
+        rre::noteStreamTrouble(link.owner, "rx888", trouble);
     } else {
         core::diagLogf("%s", line.c_str());
     }
@@ -1075,6 +1082,7 @@ bool Rx888Source::setCenterFrequencyHz(double hz) {
         std::snprintf(buf, sizeof(buf),
                       "the RX888 tunes %.3f MHz to %.0f MHz; %.6f MHz is outside that",
                       rx888::kMinFrequencyHz / 1e6, rx888::kMaxFrequencyHz / 1e6, hz / 1e6);
+        rre::noteControlRefused(this, "rx888", rre::Control::Frequency, "outside the range this radio can do", true);
         setError(buf);
         return false;
     }
@@ -1099,6 +1107,7 @@ bool Rx888Source::setCenterFrequencyHz(double hz) {
                           "and %.3f MHz",
                           rate / 1e6, hz / 1e6, rx888::kHfCeilingHz(adc) / 1e6, half / 1e6,
                           (rx888::kHfCeilingHz(adc) - half) / 1e6);
+            rre::noteControlRefused(this, "rx888", rre::Control::Frequency, "outside the range this radio can do", true);
             setError(buf);
             return false;
         }
@@ -1258,6 +1267,7 @@ bool Rx888Source::setAntenna(const std::string& antennaName) {
                   "centre frequency rather than the other way round",
                   rx888::kHfCeilingHz(adcRateHz_.load(std::memory_order_relaxed)) / 1e6,
                   antennaName.c_str());
+    rre::noteControlRefused(this, "rx888", rre::Control::Antenna, "no such antenna on this radio", true);
     setError(buf);
     return false;
 }

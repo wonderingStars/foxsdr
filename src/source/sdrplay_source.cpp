@@ -4,6 +4,7 @@
 #include "source/sdrplay_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "core/i18n.hpp"
 #include "core/leak_on_purpose.hpp"
@@ -35,6 +36,7 @@
 #endif
 
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 namespace abi = sdrplay_abi;
 
 namespace {
@@ -1208,6 +1210,7 @@ void SdrPlaySource::noteFaultOn(Link& link, const char* what, const std::string&
         // lower the latch, so a removal after a failure stays a removal.
         link.faultEndsWithStream = endsWithStream;
     }
+    rre::noteDeviceFault(link.owner, "sdrplay", what, detail);
     // Wake a read() that is parked: a dead device must not cost the pipeline
     // a whole kReadWait before it hears about it.
     {
@@ -1275,7 +1278,7 @@ bool SdrPlaySource::refuseIfVendorUnreachableLocked(const char* what) {
                           : kServiceStoppedAnsweringSentence;
     // Only the message: faulted()/deviceDead() were raised by whatever made
     // the DLL unreachable, and nothing here is new information about the radio.
-    setError(std::string(what) + " refused: " + why);
+    setError(rre::noteControlRefusedText(this, "sdrplay", rre::controlFromText(what), std::string(what) + " refused: " + why));
     return true;
 }
 
@@ -1549,12 +1552,14 @@ void SdrPlaySource::drainEventLogs(Link& link) {
     }
     if ((bits & kEventLogRemoved) != 0) {
         core::diagWarnf("source: SDRplay device removed - stopping");
+        rre::noteDeviceFault(link.owner, "sdrplay", "the service reported the device removed", "");
     }
     if ((bits & kEventLogFailure) != 0) {
         core::diagWarnf("source: SDRplay device failure - stopping");
     }
     if ((bits & kEventLogMasterLost) != 0) {
         core::diagWarnf("source: SDRplay RSPduo master disappeared - stopping");
+        rre::noteDeviceFault(link.owner, "sdrplay", "the RSPduo master tuner went away", "");
     }
 }
 
@@ -1925,7 +1930,7 @@ bool SdrPlaySource::getParamsLocked() {
     deviceParams_ = nullptr;
     const abi::ErrT err = a.GetDeviceParams(device_.dev, &deviceParams_);
     if (err != abi::Success || deviceParams_ == nullptr) {
-        setError("SDRplay GetDeviceParams failed: " + errText(a, err));
+        setError(rre::noteControlRefusedText(this, "sdrplay", rre::Control::Other, "GetDeviceParams failed: " + errText(a, err)));
         return false;
     }
     if (chParamsLocked() == nullptr) {
@@ -2096,11 +2101,13 @@ void SdrPlaySource::closeDevice() {
             core::diagWarnf(
                 "source: SDRplay closed without ReleaseDevice - the radio stays selected in the "
                 "service until it is restarted");
+            rre::noteVendorCallFault(this, "sdrplay", "release", "closed without ReleaseDevice: the radio stays selected in the service until it is restarted", false);
         } else if (a.ReleaseDevice != nullptr) {
             const abi::ErrT err = a.ReleaseDevice(&device_);
             if (err != abi::Success) {
                 core::diagWarnf("source: SDRplay ReleaseDevice failed - %s",
                                 errText(a, err).c_str());
+                rre::noteVendorCallFault(this, "sdrplay", "release", "ReleaseDevice failed: " + errText(a, err), false);
             }
         }
         selected_ = false;
@@ -2297,6 +2304,7 @@ void SdrPlaySource::stopStreamingLocked() {
                 ? "the stream stopped delivering samples"
             : serviceGone_ ? "the service stopped answering"
                            : "the SDRplay session was lost by another radio");
+        rre::noteVendorCallFault(this, "sdrplay", "uninit", "stopped without Uninit: this process cannot use the radio again", false);
         strandLink(link_);
         std::string line;
         std::string gapLine;
@@ -2360,6 +2368,7 @@ void SdrPlaySource::stopStreamingLocked() {
     const abi::ErrT err = stopDone.get();
     if (err != abi::Success && err != abi::NotInitialised) {
         core::diagWarnf("source: SDRplay Uninit failed - %s", errText(a, err).c_str());
+        rre::noteVendorCallFault(this, "sdrplay", "uninit", "Uninit failed: " + errText(a, err), false);
         // THE SAME RULE updateLocked ALREADY FOLLOWS FOR ITS OWN FAILURES
         // (0.96.1), applied to this call too (0.97.1's hang report).
         // sdrplay_api_ServiceNotResponding means the thing holding the USB
@@ -2638,6 +2647,7 @@ void SdrPlaySource::giveUpLateControlLocked(const char* why) {
     core::diagLogf(
         "source: SDRplay controls are refused for this device from here - a worker is still "
         "inside sdrplay_api_Update");
+    rre::noteControlRefused(this, "sdrplay", rre::Control::Other, "controls are refused for this device from here: a worker is still inside the vendor update call");
 }
 
 void SdrPlaySource::reapLateControlLocked() {
@@ -2827,8 +2837,8 @@ bool SdrPlaySource::updateLocked(abi::ReasonForUpdateT reason, abi::ReasonForUpd
     // vendor DLL with no way to recall it, and a panel whose sliders keep
     // working would park one per click.
     if (controlAbandoned_) {
-        setError(std::string(what) + " refused: " +
-                 (lateControl_ ? sdrPlayControlPendingSentence() : sdrPlayControlHungSentence()));
+        setError(rre::noteControlRefusedText(this, "sdrplay", rre::controlFromText(what), std::string(what) + " refused: " +
+                 (lateControl_ ? sdrPlayControlPendingSentence() : sdrPlayControlHungSentence())));
         return false;
     }
     // ...AND NEITHER DOES A STREAM THAT HAS BEEN DECLARED STALLED (0.99.36):
@@ -2836,7 +2846,7 @@ bool SdrPlaySource::updateLocked(abi::ReasonForUpdateT reason, abi::ReasonForUpd
     // service a control would now walk into for kControlWait and abandon a
     // worker inside.
     if (streamStalled_.load(std::memory_order_acquire)) {
-        setError(std::string(what) + " refused: " + sdrPlayStreamStalledSentence());
+        setError(rre::noteControlRefusedText(this, "sdrplay", rre::controlFromText(what), std::string(what) + " refused: " + sdrPlayStreamStalledSentence()));
         return false;
     }
 
@@ -2899,7 +2909,7 @@ bool SdrPlaySource::updateLocked(abi::ReasonForUpdateT reason, abi::ReasonForUpd
     worker.join();
     const abi::ErrT err = done.get().err;
     if (err != abi::Success) {
-        setError(std::string(what) + " failed: " + errText(a, err));
+        setError(rre::noteControlRefusedText(this, "sdrplay", rre::controlFromText(what), std::string(what) + " failed: " + errText(a, err)));
         core::diagWarnf("source: SDRplay %s failed - %s", what, errText(a, err).c_str());
         // ONE REFUSAL IS A REFUSAL; ServiceNotResponding IS A DEAD RECEIVER.
         // Every live control the panel offers - retune, LNA state, IF gain,
@@ -2929,6 +2939,7 @@ bool SdrPlaySource::updateLocked(abi::ReasonForUpdateT reason, abi::ReasonForUpd
     }
     core::diagWarnf("source: SDRplay %s - no acknowledgement within %lld ms", what,
                     static_cast<long long>(kUpdateWait.count()));
+    rre::noteControlRefused(this, "sdrplay", rre::controlFromText(what), "the service did not acknowledge it in time");
     return true;
 }
 
@@ -2988,6 +2999,7 @@ void SdrPlaySource::ackOverloadLocked(abi::TunerSelectT tuner) {
     if (err != abi::Success) {
         core::diagWarnf("source: SDRplay overload acknowledgement failed - %s",
                         errText(a, err).c_str());
+        rre::noteControlRefused(this, "sdrplay", rre::Control::Other, "the overload acknowledgement failed: " + errText(a, err));
         noteIfServiceDead(err, "overload acknowledgement");
     }
 }
@@ -3046,6 +3058,7 @@ bool SdrPlaySource::setCenterFrequencyHz(double hz) {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "%.0f Hz is outside the RSP's %.0f Hz to %.0f Hz range", hz,
                       lo, hi);
+        rre::noteControlRefused(this, "sdrplay", rre::Control::Frequency, "outside the range this radio can tune", /*userRange=*/true);
         setError(buf);
         return false;
     }
@@ -3342,6 +3355,7 @@ bool SdrPlaySource::reselectTunerLocked(abi::TunerSelectT tuner) {
     selected_ = false;
     deviceParams_ = nullptr;
     if (rerr != abi::Success) {
+        rre::noteVendorCallFault(this, "sdrplay", "release", "ReleaseDevice failed: " + errText(a, rerr), false);
         setError("SDRplay ReleaseDevice failed: " + errText(a, rerr));
         return false;
     }
@@ -3455,7 +3469,7 @@ bool SdrPlaySource::setAntenna(const std::string& name) {
                 const abi::ErrT err = a.SwapRspDuoActiveTuner(
                     device_.dev, &device_.tuner, ch->rspDuoTunerParams.tuner1AmPortSel);
                 if (err != abi::Success) {
-                    setError("SDRplay SwapRspDuoActiveTuner failed: " + errText(a, err));
+                    setError(rre::noteControlRefusedText(this, "sdrplay", rre::Control::Antenna, "SwapRspDuoActiveTuner failed: " + errText(a, err)));
                     return false;
                 }
                 device_.tuner = want;
@@ -3719,6 +3733,7 @@ bool SdrPlaySource::setHdrMode(bool on) {
             "source: SDRplay HDR bandwidth left at the API default - it moved in the parameter "
             "block after 3.11 and this service reports %.2f",
             static_cast<double>(ver));
+        rre::noteControlRefused(this, "sdrplay", rre::Control::Bandwidth, "the HDR bandwidth could not be set: this service's parameter block has no field for it");
     } else if (on) {
         abi::RxChannelParamsT* ch = chParamsLocked();
         if (ch != nullptr) {
@@ -3822,6 +3837,7 @@ void SdrPlaySource::checkForStallFromRead() {
     core::diagWarnf("source: SDRplay stream stalled - no callback for %lld ms; the service is "
                     "treated as gone and the radio is released",
                     static_cast<long long>((now - since) / 1000000));
+    rre::noteStreamTrouble(this, "sdrplay", {static_cast<double>((now - since) / 1000000000), 0, 0, 0, 0, static_cast<long long>((now - since) / 1000000)});
 }
 
 std::uint64_t SdrPlaySource::droppedSamples() const {

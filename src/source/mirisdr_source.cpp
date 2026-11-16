@@ -6,6 +6,7 @@
 #include "source/mirisdr_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
 #include "source/rsp_rows.hpp"
@@ -19,6 +20,7 @@
 #include <utility>
 
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace {
 
@@ -139,6 +141,7 @@ void MiriSdrSource::noteTransportFaultOn(ReaderLink& link, const char* what,
     }
     core::diagWarnf("mirisdr: transfer failed while %s%s%s", what, detail.empty() ? "" : ": ",
                     detail.c_str());
+    rre::noteDeviceFault(link.owner, "mirisdr", what, detail);
 }
 
 void MiriSdrSource::noteTransportFault(const char* what, const std::string& detail) {
@@ -687,6 +690,7 @@ void MiriSdrSource::noteRead(ReaderLink& link, int ret, std::size_t samples, boo
     const auto now = std::chrono::steady_clock::now();
     std::string line;
     bool warn = false;
+    rre::StreamTrouble trouble;
     {
         std::lock_guard<std::mutex> lk(link.healthMutex);
         StreamHealth& h = link.health;
@@ -719,6 +723,8 @@ void MiriSdrSource::noteRead(ReaderLink& link, int ret, std::size_t samples, boo
             h.timeouts == 0 && h.overflows == 0 && h.errors == 0 && h.longestGapMs < 250;
         const bool first = !link.healthEverWritten;
         warn = h.errors > 0 || h.longestGapMs >= 1000;
+        trouble = {std::chrono::duration<double>(now - h.windowStart).count(), h.samples, h.errors, h.overflows, h.timeouts,
+                   static_cast<long long>(h.longestGapMs)};
         line = healthLineLocked(link);
         if (line.empty()) { return; }
         if (!(warn || first || !nominal)) { return; }
@@ -726,6 +732,7 @@ void MiriSdrSource::noteRead(ReaderLink& link, int ret, std::size_t samples, boo
     }
     if (warn) {
         core::diagWarnf("%s", line.c_str());
+        rre::noteStreamTrouble(link.owner, "mirisdr", trouble);
     } else {
         core::diagLogf("%s", line.c_str());
     }
@@ -824,6 +831,7 @@ bool MiriSdrSource::setSampleRateHz(double hz) {
         std::snprintf(buf, sizeof(buf),
                       "the Mirics tuner's lowest sample rate is %.1f MS/s; %.3f MS/s was refused",
                       msi2500::kMinSampleRateHz / 1e6, hz / 1e6);
+        rre::noteControlRefused(this, "mirisdr", rre::Control::Rate, "outside the range this radio can do", true);
         setError(buf);
         return false;
     }
@@ -885,6 +893,7 @@ bool MiriSdrSource::setCenterFrequencyHz(double hz) {
         std::snprintf(buf, sizeof(buf),
                       "the Mirics tuner covers %.3f MHz to %.0f MHz; %.6f MHz is outside that",
                       msi001::kMinFrequencyHz / 1e6, msi001::kMaxFrequencyHz / 1e6, hz / 1e6);
+        rre::noteControlRefused(this, "mirisdr", rre::Control::Frequency, "outside the range this radio can do", true);
         setError(buf);
         return false;
     }

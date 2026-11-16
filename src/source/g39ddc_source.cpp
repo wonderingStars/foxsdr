@@ -18,7 +18,10 @@
 #include "source/vendor_apartment.hpp"
 #include "source/vendor_lib.hpp"
 
+#include "core/radio_events.hpp"
+
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace {
 
@@ -155,6 +158,7 @@ struct G39DdcSource::Impl {
     bool preamp = false, hasPreamp = false;
     std::int64_t startedMs = 0;
     std::int64_t lastLinkCheckMs = 0;
+    const void* owner = nullptr;   // the source object, for the radio reports (core/radio_events.hpp)
 
     void setError(const std::string& e) {
         std::lock_guard<std::mutex> lk(m);
@@ -165,6 +169,7 @@ struct G39DdcSource::Impl {
         dead = true;
         deadWhile = during;
         error = why;
+        rre::noteDeviceFault(owner, "g39ddc", during, why);
     }
     // One library call (or a short run of them) on the apartment. False with the error set when it did not complete.
     bool call(const char* during, const std::function<void()>& fn) {
@@ -194,7 +199,7 @@ struct G39DdcSource::Impl {
     }
 };
 
-G39DdcSource::G39DdcSource() : p_(std::make_unique<Impl>()) {}
+G39DdcSource::G39DdcSource() : p_(std::make_unique<Impl>()) { p_->owner = this; }
 G39DdcSource::~G39DdcSource() { closeDevice(); }
 
 const char* G39DdcSource::lastError() const {
@@ -497,6 +502,7 @@ void G39DdcSource::closeDevice() {
         Impl* leaked = p_.release();
         (void)leaked;
         p_ = std::make_unique<Impl>();
+        p_->owner = this;
         p_->dead = true;
         p_->deadWhile = "closing the receiver";
         p_->error = "the WiNRADiO library did not answer; FoxSDR must be restarted to use this receiver again";
@@ -656,6 +662,7 @@ bool G39DdcSource::setSampleRateHz(double hz) {
         return false;
     }
     if (!o->ok) {
+        rre::noteControlRefused(this, "g39ddc", rre::Control::Rate, o->e);
         I.setError(o->e);
         if (wasRunning) { start(); }
         return false;
@@ -685,6 +692,7 @@ bool G39DdcSource::setCenterFrequencyHz(double hz) {
         bw = I.types.empty() ? 0 : I.types[I.typeAt].bandwidth;
     }
     if (!g39PlanTune(hz, I.info.frontEndMinFrequency, I.info.frontEndMaxFrequency, I.info.frontEndFrequencyStep, I.info.frontEndWindowWidth, bw, t, why)) {
+        rre::noteControlRefused(this, "g39ddc", rre::Control::Frequency, why, true);
         I.setError(why);
         return false;
     }
@@ -707,6 +715,7 @@ bool G39DdcSource::setCenterFrequencyHz(double hz) {
         return false;
     }
     if (!o->ok) {
+        rre::noteControlRefused(this, "g39ddc", rre::Control::Frequency, o->e);
         I.setError(o->e);
         return false;
     }
@@ -737,6 +746,7 @@ bool G39DdcSource::setGainDb(const std::string& name, double db) {
     const g39ddc::Handle h = I.h;
     if (!I.call("setting the preamplifier", [o, api, h, on] { o->ok = api.SetPreamplifier(h, on ? 1 : 0) != 0; })) { return false; }
     if (!o->ok) {
+        rre::noteControlRefused(this, "g39ddc", rre::Control::Gain, "the receiver refused the preamplifier setting");
         I.setError(I.osErr("the receiver refused the preamplifier setting"));
         return false;
     }

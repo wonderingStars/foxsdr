@@ -185,6 +185,27 @@ void Engine::journalOpenOk(const std::string& kind, const std::string& args, rr:
     rr::global().event(ev);
 }
 
+// AN OPEN THAT SUCCEEDED AND WAS DROPPED because the user had moved on to something else (asyncOpenStillWanted): not a fault of the radio, so no failure
+// report; the journal says it opened and closed again, so the site's account of the radio has no hole where a hardware open happened.
+void Engine::journalOpenSuperseded(const std::string& kind, const std::string& args, rr::Trigger trigger, double requestRateHz, long long openMs) {
+    if (!physicalKind(kind)) { return; }
+    const rr::RadioIdentity rid = kind == "soundcard" ? rr::soundCardIdentity() : rr::identify(kind, args, kind == "soapy" ? std::string() : nativeLabelFor(kind, args));
+    rr::Event ok;
+    ok.kind = "radio_open";
+    ok.radio = rid;
+    ok.word = "ok";
+    ok.set("phase", "ok").set("trigger", rr::triggerWord(trigger));
+    if (openMs >= 0) { ok.set("openMs", openMs); }
+    if (requestRateHz > 0.0) { ok.set("sampleRateSps", rateSps(requestRateHz)); }
+    rr::global().event(ok);
+    rr::Event closed;
+    closed.kind = "radio_close";
+    closed.radio = rid;
+    closed.word = "switch-radio";
+    closed.set("cause", "switch-radio").set("openSec", 0);
+    rr::global().event(closed);
+}
+
 void Engine::journalCloseEvent(const RadioJournalSlot& j, const char* cause, double now) {
     // a driver that saw the radio go away said so at the place it saw it (rr::noteDeviceFault): its event is this radio's ending, not a second one
     const bool saidByDriver = rr::takeCloseReported(j.rid.key);

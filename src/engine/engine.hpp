@@ -2107,6 +2107,7 @@ private:
     void journalOpenStart(const std::string& kind, const std::string& args, cascade::core::radioreport::Trigger trigger, double requestRateHz);
     void journalOpenOk(const std::string& kind, const std::string& args, cascade::core::radioreport::Trigger trigger, double requestRateHz, long long openMs);
     void journalSettingsAtOpen(const std::string& kind, const std::string& args);
+    void journalOpenSuperseded(const std::string& kind, const std::string& args, cascade::core::radioreport::Trigger trigger, double requestRateHz, long long openMs);
     void journalCloseEvent(const RadioJournalSlot& j, const char* cause, double now);   // one radio_close for the radio a slot held
     void journalStreamMinute(std::uint64_t samplesRead, std::uint64_t samplesDropped, std::size_t ringHighWaterSamples);
     void journalRecovery(const std::string& kind, const std::string& args, const char* phase, const std::string& what, const std::string& reason, long long ms);
