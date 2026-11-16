@@ -1,5 +1,6 @@
 // SCREEN LANE S5 (wave 8; docs/multi-radio-records/screen-s5-sources.md): the controls for radios and sources a user could not reach or could not set, drawn with lane K's row panel (KPanel).
 // The host (s5_publish.cpp) builds the rows and answers `act(id, text)`; an empty list draws nothing.
+import { Theme } from "theme.slint";   // (the house rule: every .slint file imports the Theme; this one draws nothing of its own)
 import { KRow } from "system_bank.slint";
 
 export global LaneS5 {
