@@ -987,7 +987,10 @@ void Reporter::configure(const Options& options) {
     std::error_code ec;
     fs::create_directories(s.dir, ec);
     if (ec) { s.on = false; s.preFails.clear(); s.preEvents.clear(); return; }
+    const bool hadState = fs::exists(s.statePath(), ec);
     s.loadState();
+    const std::string dayLoaded = s.day;
+    const bool heldLoaded = !s.held.empty();
     // what an earlier day held is released at THIS start; the day's counts of today start from what the file says
     s.rollover();
     if (!s.held.empty() && s.day == dayOf(s.now())) {
@@ -995,7 +998,9 @@ void Reporter::configure(const Options& options) {
         s.releaseHeld();
     }
     s.sweepBounds();
-    s.saveState();
+    // the state file is written when there is something new to say (a new day, a released message, no file yet): the start-up is on the frame path's side
+    // of the first window, and a forced write to disk for nothing is a stall a loaded machine feels
+    if (!hadState || dayLoaded != s.day || heldLoaded) { s.saveState(); }
     // WHAT HAPPENED BEFORE THE QUEUE COULD BE OPENED (the start-up restore runs before Usage reporting is read): filed now, with the time it happened
     {
         std::vector<Impl::PreFail> pf;

@@ -239,5 +239,33 @@ int main() {
         for (long long pct : e.displayScalePct) { CHECK(pct >= 25 && pct <= 1000); }
     }
 
+    // --- THE START-UP COST: the queue is opened on the start-up path, before the first window ------------------------------------------------------------
+    {
+        namespace rr = radioreport;
+        namespace fs = std::filesystem;
+        const fs::path dir = fs::temp_directory_path() / ("rrc-" + rr::randomHex(8));
+        fs::create_directories(dir);
+        rr::Reporter first;
+        rr::Reporter::Options o;
+        o.dir = (dir / "radio-reports").string();
+        o.endpoint = "http://127.0.0.1:9/";
+        o.identity.installId = id;
+        o.identity.version = "0.99.109";
+        const auto t0 = std::chrono::steady_clock::now();
+        first.configure(o);   // the first start: the folder and the state file are made
+        const double firstMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        first.shutdown();
+        rr::Reporter again;
+        const auto t1 = std::chrono::steady_clock::now();
+        again.configure(o);   // every start after: nothing to say, nothing written
+        const double againMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
+        std::printf("radio reports: opening the queue took %.1f ms the first time and %.1f ms after\n", firstMs, againMs);
+        CHECK(firstMs < 250.0);
+        CHECK(againMs < 250.0);
+        again.shutdown();
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+
     return testSummary("test_radio_reports_fields");
 }
