@@ -868,7 +868,7 @@ int main() {
                 t_counting = false;
                 std::printf("F3: %-44s moved the fingerprint; the rebuild: %ld heap allocations, then %d settled passes: %ld\n",
                             what, rebuild, kPublishes, t_news);
-                CHECK(rebuild > 0 && rebuild < 2000);  // counted, and bounded: some strings and vectors, not a flood
+                CHECK(rebuild > 0 && rebuild < 2200);  // counted, and bounded: some strings and vectors, not a flood (2000 before engine lane E1, which took it to 2004 and set 2200; screen lane S4's 25 outputs and alerts facts took one rebuild to 2158)
                 CHECK(t_news == 0);
             };
             movedBy("another text at the same level", [&] {

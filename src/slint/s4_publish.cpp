@@ -140,11 +140,11 @@ struct S4Publisher::Impl {
             if (r.status == FOXAPI_OK) { ++bookmarksSaved; bookmarkReason.clear(); }
             else if (kind == kBookmark && msg.find("no scan plan") != std::string::npos && !factOn("scanner.listMode")) {
                 // a range scan has no plan to take the mode from: the radio is on the signal, so the bookmark is made from what it is tuned to
-                char name[96];
-                std::snprintf(name, sizeof(name), "%s %.4f MHz", tr("Scan hit").c_str(), hz / 1e6);
+                char mhz[48];
+                std::snprintf(mhz, sizeof(mhz), " %.4f MHz", hz / 1e6);   // (the number alone goes into the fixed buffer; the translated words are joined as text)
                 Cmd c;
                 c.op = FOXAPI_OP_BOOKMARK_ADD;
-                c.text = name;
+                c.text = tr("Scan hit") + mhz;
                 send(kScan, tr("Save the signal as a bookmark"), c, kBookmarkAdd, 0.0, hz);
             } else { ++bookmarksSkipped; bookmarkReason = msg; }   // the engine says why (a bookmark already); the row shows its sentence
             dirty = true;
