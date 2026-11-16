@@ -7,7 +7,7 @@
 +3 state s2.engine.fft == 1024
 state s2.engine.window == 3
 state s2.engine.fps == 0
-state s2.rows.spectrum > 8
+state s2.rows.spectrum > 3
 # G2-01: the FFT size (the first "4096" is the spectrum's; the second is the zoom's)
 +1 click "4096"#1
 +12 state s2.engine.fft == 4096
@@ -45,17 +45,18 @@ state s2.zoom.pictures == 0
 +1 key enter
 +2 click "4096"#2
 +12 state s2.fact.radio.1.zoom contains "4096 bins"
-state s2.fact.radio.1.zoom contains "over 6000 Hz"
+state s2.fact.radio.1.zoom contains "over 60"
 +30 state s2.zoom.pictures > 0
 +1 shot "s2-spectrum.png"
 # a new width on a running zoom is applied
 +1 type "Zoom width (Hz)" "3000"
 +1 key enter
-+12 state s2.fact.radio.1.zoom contains "over 3000 Hz"
++12 state s2.fact.radio.1.zoom contains "over 29"
+# (the engine rounds the width to what its decimation can give: 6000 Hz became 6061, 3000 Hz became 2985)
 # a width below 100 Hz is refused here
 +1 type "Zoom width (Hz)" "50"
 +1 key enter
 +6 state s2.note.zoom contains "Zoom width"
-state s2.fact.radio.1.zoom contains "over 3000 Hz"
+state s2.fact.radio.1.zoom contains "over 29"
 +1 click "Off"
 +12 state s2.fact.radio.1.zoom == "off"

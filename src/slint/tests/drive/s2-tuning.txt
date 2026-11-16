@@ -1,0 +1,48 @@
+#! frames=1800 size=1600x7000 bank=4 sections=4:15
+# s2-tuning (screen lane S2, docs/multi-radio-records/screen-s2.md; rows G2-31, G2-33, G2-32): the SYSTEM bank's Tuning and memories section. Centre tuning, VFO A / B and band stacking are sent to the engine
+# and read back from the engine's own receiver state (s2.engine.*), not from what the keys last did.
+10 state running == 1
+# G2-31: centre tuning is off at every start, switched on and off, read back from the engine's state
++3 state s2.engine.ctun == 0
++1 click "Centre tuning"
++12 state s2.engine.ctun == 1
++1 click "Centre tuning"
++12 state s2.engine.ctun == 0
+# G2-33: VFO A in use at the start; the other VFO is not set, so a swap is refused by the key being dimmed
+state s2.engine.vfo == 0
+state s2.engine.vfoother == 0
+# copy this tune (the generator's, WFM) into B
++1 click "Copy this tune to the other VFO"
++12 state s2.engine.vfoother > 1000
+# go to the 40 m band: that tunes and sets the mode; then VFO B is the copy, so switching to B returns to the first tune
++1 click "Show the band keys"
++2 click "40 m"
++15 state s2.engine.tuned == 7100000
++1 state s2.engine.mode == LSB
++1 click "Use VFO B"
++12 state s2.engine.vfo == 1
++1 state s2.engine.tuned > 50000000
++1 state s2.engine.mode == WFM
++1 click "Swap the two VFOs"
++12 state s2.engine.tuned == 7100000
++1 click "Use VFO A"
++12 state s2.engine.vfo == 0
+# G2-32: band stacking. 20 m recalls the band's first place (14.2 MHz USB); 40 m again recalls where we were (7.1 MHz); pressing the band we are in goes to its next place
++2 click "20 m"
++15 state s2.engine.tuned == 14200000
+state s2.engine.mode == USB
++2 click "40 m"
++15 state s2.engine.tuned == 7100000
++2 click "20 m"
++15 state s2.engine.tuned == 14200000
++2 click "20 m"
++15 state s2.engine.tuned == 14087000
++1 state s2.band.register == 1
++1 state s2.band == "20 m"
+# a tune remembered as place 3 comes back when the cycle reaches it
++1 click "Remember this tune as place 3"
++2 click "40 m"
++15 state s2.engine.tuned == 7100000
++2 click "20 m"
++15 state s2.engine.tuned == 14087000
++1 shot "s2-tuning.png"
