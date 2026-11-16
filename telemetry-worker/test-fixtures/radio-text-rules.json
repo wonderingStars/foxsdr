@@ -1,0 +1,2790 @@
+{
+ "about": "text-rule parity table: the Worker's textCode(text, serial) verdict for each string. The first 58 are handwritten and reviewed; the rest are random joins of a token pool, the JS reference's own answer. The Go port must give the same code.",
+ "cases": [
+  {
+   "text": "",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "the radio did not open",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "C:\\Users\\alice\\x",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "c:/x",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "tcp://host:1",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "xc:\\y",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "\\\\NAS\\share\\f",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "\\\\<host>\\share",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "/home/bob/.cfg",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "/home/<user>/.cfg",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "/Users/<user>/Library",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "\\Users\\Bob\\",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "/HOME/BOB/",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "<path>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "192.168.0.1",
+   "serial": "",
+   "code": "address-in-text"
+  },
+  {
+   "text": "at 10.0.0.255 port 1",
+   "serial": "",
+   "code": "address-in-text"
+  },
+  {
+   "text": "256.1.1.1",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "1.2.3",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "version 1.2.3.4",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "Firmware: 1.2.3.4",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "build=1.2.3.4",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "x1.2.3.4",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "1.2.3.4x",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "1.2.3.4.5",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "1.2.3.4.",
+   "serial": "",
+   "code": "address-in-text"
+  },
+  {
+   "text": "127.0.0.1",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "0.0.0.0",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "10.0.0.1:80",
+   "serial": "",
+   "code": "address-in-text"
+  },
+  {
+   "text": "serial: ABC",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "serial <stripped>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "serial=<stripped>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "Serial Number: 123",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "serial number <stripped>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "serial_number=ZZ9",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "S/N 7",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "sn:1",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "airspyhf_sn:AB",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "serial port COM#",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "serial bus busy",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "serialized",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "snap",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "the SN is hidden",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "serial",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "serial.",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "no serial, sorry",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "unit HF0001A2 failed",
+   "serial": "HF0001A2",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "unit hf0001a2 failed",
+   "serial": "HF0001A2",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "abc",
+   "serial": "abc",
+   "code": ""
+  },
+  {
+   "text": "100 Hz",
+   "serial": "",
+   "code": "frequency-in-text"
+  },
+  {
+   "text": "7.074MHz",
+   "serial": "",
+   "code": "frequency-in-text"
+  },
+  {
+   "text": "1,5 kHz",
+   "serial": "",
+   "code": "frequency-in-text"
+  },
+  {
+   "text": "# MHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "2.4 MS/s",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "5 hz",
+   "serial": "",
+   "code": "frequency-in-text"
+  },
+  {
+   "text": "5 Hzx",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "R820T 28 dB",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "error 31 (0x1f)",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "errorkHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ")",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "sn",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "/Users/D:/bobkHzno.no.build",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "127.0.0.1NAS:port;127.0.0.1",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "=D:/\\\\==MHzno.",
+   "serial": "ABC123",
+   "code": "path-in-text"
+  },
+  {
+   "text": "error256Hz127.0.0.1.",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ". \"MHzversion",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "<stripped>255errorHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "C:\\<stripped>",
+   "serial": "ABC123",
+   "code": "path-in-text"
+  },
+  {
+   "text": "number /Users/port'",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "GHz;\\share",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "COM#1.2.3.4'ABC123256COM#",
+   "serial": "",
+   "code": "address-in-text"
+  },
+  {
+   "text": "S/N.",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "1/home/numberbuild1.2.3.4127.0.0.1",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "ABC123433.927,074D:/256/home/10.0.0.1",
+   "serial": "ABC123",
+   "code": "path-in-text"
+  },
+  {
+   "text": "\\\\port\"",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "7,074Hz",
+   "serial": "ABC123",
+   "code": "frequency-in-text"
+  },
+  {
+   "text": ",<user>)snportC:\\",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "ABC123.),did not openCOM#serial_number",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "the radio22",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "GHz<user>version<stripped>serial_numberserial",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "_sn127.0.0.1\\sharedid not open<stripped>bob",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "/Users/sn433.92",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "<stripped>portportC:\\",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "_snHz )versionGHz\\\\",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "433.92.serial",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "kHznumber/Users/.",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "#serial_number1.2.3.4/home/sn/home/x",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "serialdid not open22C:\\R820T255 ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "1.2.3.4",
+   "serial": "ABC123",
+   "code": "address-in-text"
+  },
+  {
+   "text": "<stripped>433.92errorC:\\",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "D:/serial/home/port.firmware<user>",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "MHz=serialABC123R820THz,",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "  MHz1snxbob",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ";<user>serialbuild;xno.",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "serialthe radio22/Users/\"buildGHz",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "NAS255255versionfirmwaretcp://",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "=hostbuild",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " 'number\\\\build10.0.0.1",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "D:/227,074",
+   "serial": "ABC123",
+   "code": "path-in-text"
+  },
+  {
+   "text": "the radiotcp://serial_numberkHz\"<stripped>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "127.0.0.1 #",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "build",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ";.tcp://_sn",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "kHz<stripped>22D:/",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ".C:\\<stripped>255433.92))",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": " 7,074tcp://127.0.0.1ABC123hostR820T",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "22buildS/N1.2.3.4",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "serial_number.no.NASfirmwarekHzno.",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "host/home/serial_number R820T",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "build",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ";serial_number255.COM#255",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "S/NMHzGHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "firmwareABC123D:/serial_number\"\"NAS",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "COM#\"",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "host10.0.0.1NAS<user>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "2217,074error<stripped>433.92NAS",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": ";10.0.0.1ABC123serial_number",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " MHzerror<stripped>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "255build<user>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " ABC123versiontcp:// ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "=\\shareC:\\tcp://",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "127.0.0.11.2.3.4433.92433.92",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "_sn C:\\snsn=",
+   "serial": "ABC123",
+   "code": "path-in-text"
+  },
+  {
+   "text": "port255HzR820TABC123<stripped>GHz",
+   "serial": "ABC123",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "R820T",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "did not open",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ",.433.92kHz433.92;did not open",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "build=S/N errorx",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "x<user>build=",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ",",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "R820TCOM#/home/build\\shareport:",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "\"<stripped>tcp://",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "_sn MHzdid not open",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "buildfirmwarekHz \\\\",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "ABC123",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "host22",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "serial/Users/_snxno.",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "bob,the radio",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ":port7,074host./home/",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "x",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "256C:\\)/Users/serial",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "<user>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "GHzR820T sn\" C:\\",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "GHzportserial_number/Users/127.0.0.1 MHz",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "port:=)",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "<user>22",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "x",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " '\\\\=",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ";",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " GHzdid not openboberrorx\\\\",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "bobversion22_sn 433.92)",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "firmware",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": ":.",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "GHzthe radio",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "COM#serialtcp://",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "GHz1.2.3.4D:/",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "256the radioNAS<stripped>errorthe radio",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "<user><stripped>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ":MHzversion;=ABC123no.",
+   "serial": "ABC123",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "22 GHz MHz =\\share",
+   "serial": "",
+   "code": "frequency-in-text"
+  },
+  {
+   "text": "127.0.0.1",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ":22S/NABC123255",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ")_snABC123MHzS/N",
+   "serial": "ABC123",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "sn",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "<user>S/NCOM#",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "bob. GHz<stripped>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "255\\share.\\sharetcp://S/N#",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "version",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "/home/7,074:7,074",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "bob 7,074COM#ABC123versionhost",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "port ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "\\\\D:/",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "\\\\;\\shareS/NMHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "=no. ",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": " Hzsnno.22",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " D:/255versionHzMHzD:/",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "version.7,074",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "Hzerrorx",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ";version\\\\",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "serial_numbersnD:/",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "22MHz1.2.3.4,kHz",
+   "serial": "",
+   "code": "frequency-in-text"
+  },
+  {
+   "text": "'serial_numbernumberhost",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ")1.2.3.4\\\\port",
+   "serial": "",
+   "code": "address-in-text"
+  },
+  {
+   "text": "serial_number",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "hosttcp://'COM#\"error",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "number",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "'433.92R820T/Users/ MHz1.2.3.4ABC123",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "#no.bobserialHzfirmwaresn",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "433.92, MHz256did not open",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "GHzsn",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "7,074serial",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "number,.",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "kHz127.0.0.1 ._sn",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "errorserial_numberCOM#",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "port",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " the radio:'version",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "host)Hzhost",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "C:\\256no./home/",
+   "serial": "ABC123",
+   "code": "path-in-text"
+  },
+  {
+   "text": "10.0.0.1serialdid not open433.92build",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " =127.0.0.1#",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "kHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "versionbob7,074",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "'1port7,074<stripped>build ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ".10.0.0.1#NAS) ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " MHzversion",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "serialserial",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "D:/.",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "127.0.0.1port",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "\\\\255ABC123",
+   "serial": "ABC123",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "COM#",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "<stripped>\\sharefirmware",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "22",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "./home/#10.0.0.1<stripped>sn",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "x",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "10.0.0.1MHzdid not open kHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "did not openhost ",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": ";256",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "firmwareD:/kHzhost",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "/home/MHzMHz;\\\\_snHz",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "Hz10.0.0.1error22_sn256",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": ")did not open.",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "._sn",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "version<user>'<user>number1127.0.0.1",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "serial_number.",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ",256,\\share,hostversion",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "D:/MHz,7,074",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": " ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "\\\\/home/<user>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "kHzbuild",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "MHzbuildHzportABC123numberS/N",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "255hostsn firmware /Users/",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "1.2.3.4<stripped>serial_number",
+   "serial": "",
+   "code": "address-in-text"
+  },
+  {
+   "text": "<user><user>serial_number.S/NCOM##",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": ".COM#22",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "no.NAS",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "22.GHz",
+   "serial": "",
+   "code": "frequency-in-text"
+  },
+  {
+   "text": ":",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "1221",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "NAS.\\\\<stripped>/Users/.",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "tcp://",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "error MHzsn MHzx:bob",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "snportdid not open/Users/433.92256NAS",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "numbersn/home/22/home/port",
+   "serial": "ABC123",
+   "code": "path-in-text"
+  },
+  {
+   "text": "22the radioABC123snD:/",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "kHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "<stripped>",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "22",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "COM#S/NNAS",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "version7,074serialserial_numberMHzHztcp://",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "bob.22error.",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "the radiotcp://hostkHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "433.92firmwareport",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "the radiofirmwareR820T255HzD:/1.2.3.4",
+   "serial": "",
+   "code": "address-in-text"
+  },
+  {
+   "text": " MHz)\\share firmwareHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "versionport)1.2.3.4\"\\\\",
+   "serial": "",
+   "code": "address-in-text"
+  },
+  {
+   "text": "256R820T.). ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "the radio:433.92<stripped>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "<user>. MHz\"127.0.0.1",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "serial_number10.0.0.1\\share/Users/_sn",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "10.0.0.1/Users/GHzbob",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "Hz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "firmwarefirmwareHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "/home/serial_number<stripped>",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "MHz MHz'",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "did not open",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "error",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "1.2.3.4",
+   "serial": "",
+   "code": "address-in-text"
+  },
+  {
+   "text": "\\share<stripped>\"Hzbob ",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "the radio",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "Hzversion_snno.serial_number C:\\",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "'the radio",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "22build,hostMHz<stripped>",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "D:/D:/.433.92S/N",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "\\share);",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "x.versionC:\\",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "= /home/",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "256\\share\"",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "COM#x",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "\"bobthe radio256no.;;",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "bob",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "COM## =",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "S/N.ABC123",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "ABC123=Hz255255",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "'hostportNAS<user>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "S/Nerror22.)bob",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "number433.92 serial MHz1",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "Hz22255 MHzS/NHz ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "_snNAS",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "firmware",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "#number1.2.3.4kHz ",
+   "serial": "ABC123",
+   "code": "frequency-in-text"
+  },
+  {
+   "text": "port_snCOM#portfirmware1.2.3.4NAS",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "versionGHz\"port ",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": ":",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": ";did not open.256ABC123no.",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "tcp://tcp://.",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "/home/22",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "firmware127.0.0.1ABC123\\\\",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "serialABC123'",
+   "serial": "ABC123",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "/Users/:127.0.0.1)tcp://",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": " MHzbob.port<user>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "NASsnhost",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ":256#",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "#1NAS",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "bobHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "tcp://GHz .R820T",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "\"serial S/N",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "..",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "127.0.0.1/home/_sn)'\\sharetcp://",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "buildkHz<stripped>433.92build",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "127.0.0.1==",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "Hz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "GHz256<user>",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": ":bob,/Users/number.",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "no.\". COM#)",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "_sn.D:/NASversion)",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "xC:\\/Users/=Hzxversion",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "sn",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "version/home/1;xC:\\7,074",
+   "serial": "ABC123",
+   "code": "path-in-text"
+  },
+  {
+   "text": "ABC123;tcp://",
+   "serial": "ABC123",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "R820T433.92COM#\\share",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "22/home/NAStcp://",
+   "serial": "ABC123",
+   "code": "path-in-text"
+  },
+  {
+   "text": "#127.0.0.1",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "GHz1.2.3.4\\share",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "C:\\",
+   "serial": "ABC123",
+   "code": "path-in-text"
+  },
+  {
+   "text": " MHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ":)numberABC123 ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "did not openR820TABC123number",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "22,/home/NASno.sn",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "#kHz_sn127.0.0.1COM#<stripped>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "did not open10.0.0.1",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " MHz serial7,074",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "C:\\xABC1237,074build",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "x ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "#build",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "GHz,serial_number",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "buildkHznumber",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "_sn10.0.0.1firmwareMHz/Users/",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "7,074kHzport.D:/did not open",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "ABC123:tcp://kHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " version",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "error ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "255D:/",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": ".ABC123256the radio",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "kHz",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "256\\\\NASdid not open",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "'=R820T22serial1.2.3.4R820T",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "/home/bobCOM#",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "serial.#433.92",
+   "serial": "ABC123",
+   "code": "serial-in-text"
+  },
+  {
+   "text": ",:;serial255",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "MHz10.0.0.1number",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "buildxserial_number",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "host 256",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "\\\\",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "='host",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "snNASerrorhostfirmware",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "no.the radiono.255 MHz",
+   "serial": "",
+   "code": "frequency-in-text"
+  },
+  {
+   "text": "build)10.0.0.1bob ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "D:/ MHz",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "ABC123",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "serial_number_snversion'firmware",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "S/NABC123GHzABC123",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "<user>#",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ") 7,0741.2.3.4);",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ";firmware",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ")serial_numberHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " kHzHzportthe radio MHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "did not openC:\\.1.2.3.4COM#\\\\",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "COM#C:\\22,127.0.0.1255",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "'",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": " 255serial_number\"",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ")number\\\\=hostkHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "256",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "127.0.0.11portserial_number/home/1",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "255did not openxGHz",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": " 10.0.0.1kHz)#GHz'",
+   "serial": "",
+   "code": "frequency-in-text"
+  },
+  {
+   "text": "\\share",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "\\share\"",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "\"<user>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " )version22",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "versionhostfirmware D:/R820T\\share",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "S/N ;build=",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " hostS/N<user>1.2.3.4C:\\ ",
+   "serial": "ABC123",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "serial7,074host1.2.3.4S/N/home/error",
+   "serial": "ABC123",
+   "code": "path-in-text"
+  },
+  {
+   "text": "errorR820T",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "_sn",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ") the radio/home/,serial",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "MHzserial_number",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ",COM# hostdid not open7,074",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "host255/Users/ ",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "127.0.0.17,074serial_numbernumber<stripped>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "\"127.0.0.17,074D:/build",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "xfirmwareport",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ":1.2.3.4error",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "\\sharesn",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "kHz_sn",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "C:\\ MHz\\\\\"127.0.0.1",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": ")Hz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "buildkHz/Users/10.0.0.1",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": ".R820T,\\\\;bobCOM#",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": " 127.0.0.1/Users/tcp://errorNAS",
+   "serial": "ABC123",
+   "code": "path-in-text"
+  },
+  {
+   "text": "serial_numbersn",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "256xHzfirmware",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "tcp://;D:/",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "\\\\,256ABC123:build",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ".D:/host",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "error",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "C:\\host7,0741.2.3.4",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "S/ND:/,port 255serial_number",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "'256255portR820T",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "did not open ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "\\shareerror",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ",C:\\number\\sharethe radio1 ",
+   "serial": "ABC123",
+   "code": "path-in-text"
+  },
+  {
+   "text": "10.0.0.1\\\\ NAS10.0.0.1433.92",
+   "serial": "ABC123",
+   "code": "address-in-text"
+  },
+  {
+   "text": "433.92errorNASS/N",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "versionGHzserialCOM#/Users/",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "COM#firmware_snR820T10.0.0.1S/NNAS",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "\\share127.0.0.1",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "256did not openMHz)",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "x\\shareR820TNAS",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "portthe radio<user>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "C:\\'",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "/Users/",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "did not open",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "S/N255",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "HzNAS",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "C:\\_sn1.2.3.4number22serialbob",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": " 22",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "R820THztcp://GHz10.0.0.1Hz",
+   "serial": "",
+   "code": "frequency-in-text"
+  },
+  {
+   "text": "serial\"bobABC123MHzGHz\\\\",
+   "serial": "ABC123",
+   "code": "serial-in-text"
+  },
+  {
+   "text": " serial_number \\\\host)",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "error",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ")_snR820T.\\sharehost",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "host<user>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "no.",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "bobABC123 ",
+   "serial": "ABC123",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "host\\\\ NAS_sn1 ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "/Users/10.0.0.1kHz255 MHz ",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "MHzABC123number22",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "D:/serial_numberD:/D:/1.2.3.4",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "_sn/home/",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "C:\\)",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "COM#10.0.0.122",
+   "serial": "",
+   "code": "address-in-text"
+  },
+  {
+   "text": "serial_number",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "host1.2.3.4R820Thost",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "port",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "firmware",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "_sn:Hz/Users/S/N",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "1.2.3.422C:\\hostMHz=:",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ")",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "number433.92/home/",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": " .",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "C:\\",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "_sn1.2.3.4host'COM#MHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "hostS/N256\\\\D:/tcp://",
+   "serial": "ABC123",
+   "code": "path-in-text"
+  },
+  {
+   "text": "no.",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ".;port ,",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "port",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " ABC123433.92",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "C:\\1.2.3.4did not open1.2.3.4255NAS",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "<stripped>error1.",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "version'",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "433.92GHzserial_number\"",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "build<stripped>no.1.2.3.4",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ";",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ";Hz/home/ R820T;",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "'.,GHz127.0.0.1portABC123",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "7,074R820TbuildkHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "=NAS22255",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "bobC:\\\\sharebob",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "),kHz\\share",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "the radio<user>tcp://R820Tserial_number)serial",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " 1MHz 255bob",
+   "serial": "",
+   "code": "frequency-in-text"
+  },
+  {
+   "text": "tcp://.S/Nsnsnerror",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "\\share2222",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "\\\\",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "255 /home//Users/",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "22=MHzerrorS/Nport22",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "build'firmware.S/N",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "7,074kHz\\share\"",
+   "serial": "",
+   "code": "frequency-in-text"
+  },
+  {
+   "text": "_sn)S/N_sn",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " MHz#127.0.0.1/Users/433.92bobkHz",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "bobR820Tbuild256",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "tcp://<stripped>127.0.0.1",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "numberGHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "GHzthe radioserial_numberserial_number=\"",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "R820T",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "Hzx.",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " MHzthe radio1.2.3.4ABC123MHz",
+   "serial": "",
+   "code": "frequency-in-text"
+  },
+  {
+   "text": "NAS",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "serial_numberfirmwarekHz.portD:/",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "no._snthe radio",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "R820T7,074255ABC123serial_numberdid not open",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "kHzno. R820T255x",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "_snbobABC123Hz",
+   "serial": "ABC123",
+   "code": "serial-in-text"
+  },
+  {
+   "text": " MHzx",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "kHzno.",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "1.2.3.4 .firmware",
+   "serial": "ABC123",
+   "code": "address-in-text"
+  },
+  {
+   "text": "C:\\portGHz\\\\:\\share",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "error",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "no.;",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "7,074<user>",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": " sn",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "/home/R820TversionS/Nbob",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "433.92",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": " =serial_number.did not open)",
+   "serial": "",
+   "code": "serial-in-text"
+  },
+  {
+   "text": "no.\"<stripped>MHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "NASxno.",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "no.bobABC123256'GHz ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "S/NkHz_sn'ABC123",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "C:\\ MHzABC123",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": ".number127.0.0.1snversionNAS",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "'serial_number1",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "ABC123#1=",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "256did not open1.2.3.4S/Nversion ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "GHz=",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "NASD:/",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "256ABC123NAS/Users/host7,0741",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "/Users/255",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "portno.did not openMHzHzNASGHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "tcp://)tcp://,; MHzversion",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "10.0.0.1GHz  MHz",
+   "serial": "",
+   "code": "frequency-in-text"
+  },
+  {
+   "text": ":bob433.92errorport",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "tcp://",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "#255,kHzfirmware",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ". ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "433.92#serial_number",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "NAStcp:// C:\\",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": " numberhost",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "tcp://7,07422.",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "/home/host:256255NAS.",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "bob.433.92",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "x. ; MHzportx",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "/home/",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "<stripped>Hz.)",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "did not openserial",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "number\"kHz256",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ". ",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "\\share,error/home/",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "C:\\ bob10.0.0.1\\share",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": ".<user>.7,074ABC123buildserial",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "<user>versionHz<stripped>\"",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "x",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": ")serial",
+   "serial": "ABC123",
+   "code": ""
+  },
+  {
+   "text": "1",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "GHz\\\\serial/Users/22",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "7,074",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "no.port7,074/Users/version\"",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "error22",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "256",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "GHz",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "serial,,no.S/N'\"",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "10.0.0.1S/N256/home/,433.92",
+   "serial": "",
+   "code": "path-in-text"
+  },
+  {
+   "text": "error#.bobABC123",
+   "serial": "",
+   "code": ""
+  },
+  {
+   "text": "did not open=D:/ 'GHz",
+   "serial": "",
+   "code": "path-in-text"
+  }
+ ]
+}

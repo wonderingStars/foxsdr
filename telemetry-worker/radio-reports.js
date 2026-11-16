@@ -89,7 +89,7 @@ export function serialInText(s, ownSerial) {
   }
   const re = /(serial(?:_number)?|s\/n|_sn|\bsn)\b(?:\s*(?:number|no\.?|#))?\s*[:=]?\s*([^\s,;)"']*)/gi;
   for (const m of s.matchAll(re)) {
-    const value = m[2];
+    const value = m[2].replace(/[.!?:]+$/, '');  // "... has no serial." ends a sentence; it does not start a value
     if (value === '' || value === '<stripped>') { continue; }
     if (SERIAL_BENIGN.has(value.toLowerCase())) { continue; }
     return true;

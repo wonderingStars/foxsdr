@@ -283,6 +283,14 @@ test('the text rules refuse what they should and let the scrub\'s own output thr
   assert.equal(rr.textCode('abc failed', 'abc'), '', 'a serial shorter than four characters is not searched for');
 });
 
+test('the text rules give the verdicts of the shared parity table (the Go port on the site is held to the same file)', () => {
+  const table = JSON.parse(readFileSync(join(FIX, '..', 'radio-text-rules.json'), 'utf8'));
+  assert.ok(table.cases.length >= 500);
+  for (const c of table.cases) { assert.equal(rr.textCode(c.text, c.serial), c.code, JSON.stringify(c.text)); }
+  assert.ok(table.cases.some((c) => c.code === 'path-in-text') && table.cases.some((c) => c.code === 'address-in-text')
+    && table.cases.some((c) => c.code === 'serial-in-text') && table.cases.some((c) => c.code === 'frequency-in-text'));
+});
+
 test('the radio key is the slug of the model and the upper-cased serial, a dash when there is none', () => {
   assert.equal(rr.radioKey('uhd b200', 'edr04zdb2'), 'uhd-b200:EDR04ZDB2');
   assert.equal(rr.radioKey('RTL-SDR', ''), 'rtl-sdr:-');
