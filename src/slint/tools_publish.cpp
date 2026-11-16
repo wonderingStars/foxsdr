@@ -257,6 +257,7 @@ void ToolsPublisher::openFolder(const std::string& path) {
 }
 
 void ToolsPublisher::setClipboard(const std::string& text) {
+    if (hooks_.clipboard) { hooks_.clipboard(text); return; }   // the host's clipboard, or the bounded run's stand-in
     if (bounded_) {
         cc::diagLogf("tools: bounded run - not writing the clipboard (%zu bytes)", text.size());
         std::fprintf(stderr, "foxsdr-slint: tools: markers not copied (bounded run), %zu bytes\n", text.size());

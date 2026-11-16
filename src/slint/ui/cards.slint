@@ -79,7 +79,7 @@ export component Card inherits Rectangle {
             hint := Text {
                 x: parent.width - self.width;
                 y: 0px;
-                width: min(self.preferred-width, parent.width / 2);
+                width: min(self.preferred-width, parent.width * 0.56);
                 text: root.subtitle;
                 color: Theme.dim;
                 font-family: Theme.font-ui;

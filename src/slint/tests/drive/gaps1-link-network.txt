@@ -1,0 +1,7 @@
+#! frames=240 rootfile=link-request:gaps1-link-request.txt FOXSDR_FAKE_LINK_NAME=!network
+# gaps1-link-network (window gaps lane 1, row 118): the site could not be asked, so nothing was verified: "could not check that link - try again", and nothing is stored.
+60 state gaps1.link == error
++1 state gaps1.linkerr == "could not check that link - try again"
++1 state gaps1.stored == 0
++1 click "Close"#2
++4 state gaps1.link == none

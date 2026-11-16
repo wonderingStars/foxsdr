@@ -47,6 +47,7 @@
 #include "core/crash_upload.hpp"
 #include "core/feature_request.hpp"
 #include "core/problem_report.hpp"
+#include "core/store_update.hpp"
 #include "core/updater.hpp"
 
 namespace foxsdr::slinthost {
@@ -120,8 +121,10 @@ std::string aboutText(const AboutFacts& facts);
 // a Microsoft Store copy asks the Store and never foxsdr.com (core::updateCheckDisposition); the Store's own flow is a later phase, so
 // nobody is asked. Hermetic: a bounded run reaches no network, except for the canned answer of FOXSDR_FAKE_UPDATE_MANIFEST, which is
 // a file (core/updater.hpp) - the ImGui window's own rule (app_window.cpp ~1405).
-enum class UpdatePlan { Run, OffByChoice, StoreDeferred, Hermetic };
-UpdatePlan updatePlanFor(bool bounded, bool manifestSeam, bool packaged, bool userEnabled);
+// StoreAsk (window gaps, lane 1): a Microsoft Store copy asks the STORE (core/store_update.hpp), never foxsdr.com; in a bounded run only with the canned Store answer
+// (FOXSDR_FAKE_STORE_UPDATE: `storeSeam`), which is a file-free environment value and reaches nothing. StoreDeferred is the bounded Store copy with no seam: nobody is asked.
+enum class UpdatePlan { Run, OffByChoice, StoreDeferred, Hermetic, StoreAsk };
+UpdatePlan updatePlanFor(bool bounded, bool manifestSeam, bool packaged, bool userEnabled, bool storeSeam = false);
 const char* updatePlanLine(UpdatePlan plan);
 
 // OFF MEANS OFF for uploading too (core/crash_upload.hpp): the sweep is armed only when the user's Diagnostics switch is on AND this
@@ -146,6 +149,13 @@ struct UpdateView {
     UpdateStage stage = UpdateStage::Idle;
     float progress = 0.f;            // 0..1 while Downloading
     std::string error;               // a download or installer failure (a failed CHECK is never shown, as in ImGui)
+    // A MICROSOFT STORE COPY'S OWN BANNER (drawStoreUpdateBanner): shown only once the Store has said "there is one" (storeOffered), or while an install request is with
+    // Windows (storeInstallPending), or has an outcome to report (storeInstallDone / storeOutcome). NO VERSION NUMBER: the Store does not say which version it offers.
+    bool storeOffered = false;
+    bool storeMandatory = false;
+    bool storeInstallPending = false;
+    bool storeInstallDone = false;
+    cascade::core::StoreInstallOutcome storeOutcome;
 };
 
 struct UpdateCardModel {
@@ -162,6 +172,25 @@ struct UpdateCardModel {
 };
 UpdateCardModel updateCardFor(const UpdateView& view);
 
+// THE TEAM MESSAGE CARD (drawTeamMessages, 0.99.79): the first message the Seen list does not cover, as plain data for ui/main.slint's Card. NOT shown when the Updates tick
+// is off (nobody was asked, so there is nothing to show) nor for a Microsoft Store copy (it asks the Store and never hears one). `more` counts the unseen messages behind
+// this one: pressing Seen brings the next. Independent of the update card: "Not now" there hides no message, and Seen here dismisses no update.
+struct TeamMessageModel {
+    bool shown = false;
+    std::string id;
+    std::string date;
+    std::vector<std::string> lines;
+    bool important = false;
+    int more = 0;
+    bool operator==(const TeamMessageModel&) const = default;
+};
+TeamMessageModel teamMessageFor(bool enabled, bool packaged, const std::vector<cascade::core::TeamMessage>& messages, const std::vector<std::string>& seen);
+// The Seen list after a SUCCESSFUL check: only the ids the answer still names stay, so the list cannot grow for ever and a message the owner withdraws and sends again is
+// shown again (a failed check leaves the list alone: not hearing from the service is not the service withdrawing anything).
+std::vector<std::string> seenAfterCheck(const std::vector<std::string>& seen, const std::vector<cascade::core::TeamMessage>& messages);
+// The Seen list with one more id, oldest first, bounded the way the settings load it (AppConfig::kMaxMessagesSeen, dropping the oldest).
+std::vector<std::string> seenWith(std::vector<std::string> seen, const std::string& id);
+
 // What the Updates section of the SYSTEM bank says that the card does not (app_window_updates.cpp drawUpdatesSection): whether the check has been asked and is
 // still out, the offered version, the check's failure ("last check did not complete: ..."; the card never shows one), the dismissed banner, and the team messages the
 // Seen list has not covered. system_logic.hpp's UpdatesFacts is its copy (the logic does not include this header); the Store flow's facts are the duties' deferred ones.
@@ -177,6 +206,9 @@ struct UpdateStatus {
     std::string newVersion;     // the version offered, when newer (never a withdrawn one: `newer` is false for it)
     std::string error;          // a check's or a download's failure
     int unseenMessages = 0;
+    bool storeOffered = false;      // a Store copy: the Store has an update for it (the Updates section's chip and sentence)
+    bool storeMandatory = false;    // ...marked mandatory in Partner Center
+    bool storeInstalling = false;   // ...and an install request is with Windows
 };
 
 // ---- the seam ---------------------------------------------------------------------------------------------------------------
@@ -214,6 +246,15 @@ public:
     virtual void downloadCancel() = 0;
     virtual void installerStart(const std::string& path) = 0;
     virtual bool installerPoll(bool& started) = 0;             // true once, when the launch has answered
+
+    // The Microsoft Store (core/store_update.hpp), asked only by a packaged copy. Defaults: the Store is not there (a world that never was a Store copy, which is every
+    // test world made before the Store flow). storeSeam: FOXSDR_FAKE_STORE_UPDATE is set (a canned answer; a bounded run may then ask). The two calls block inside Windows'
+    // own dialogs, so they are on workers and polled.
+    virtual bool storeSeam() { return false; }
+    virtual void storeCheckStart() {}
+    virtual bool storeCheckPoll(cascade::core::StoreUpdateCheck& out) { (void)out; return false; }
+    virtual void storeInstallStart() {}
+    virtual bool storeInstallPoll(cascade::core::StoreInstallOutcome& out) { (void)out; return false; }
 
     // The feature-request and problem-report senders (core/feature_request.hpp, core/problem_report.hpp).
     virtual void sendersPoll(std::uint64_t nowEpoch) = 0;
@@ -278,6 +319,11 @@ public:
     // The card's two keys.
     void updatePrimaryClicked();
     void updateDismissed();
+    // THE TEAM MESSAGE CARD: true once after it changed; the host then applies teamMessage() to the window's team-message properties. Seen remembers the shown id (saved at
+    // once through the interface half, so "it doesn't show up again" survives a quit) and brings the next unseen message, if any.
+    bool takeTeamChange();
+    const TeamMessageModel& teamMessage() const { return team_; }
+    void teamMessageSeen();
 
     // Call when the event loop has returned, before the host stops the service.
     void finish();
@@ -314,6 +360,9 @@ public:
 
 private:
     void startUpdateCheck();
+    void startStoreCheck();
+    void startStoreInstall();
+    void pollStore();
     void trySweepStart();
     void pollUpdate();
     void startDownload();
@@ -348,6 +397,12 @@ private:
     std::string updateError_;
     UpdateCardModel card_;
     bool cardChanged_ = false;
+    TeamMessageModel team_;
+    bool teamChanged_ = false;
+    cascade::core::StoreUpdateCheck store_;               // the Store's last answer (ok, updates, mandatory)
+    bool storeInstallPending_ = false;
+    bool storeInstallDone_ = false;
+    cascade::core::StoreInstallOutcome storeOutcome_;
 
     int ticks_ = 0;
     bool closeAsked_ = false;
@@ -371,6 +426,8 @@ public:
     // own, because the real one would start an installer.
     using InstallerLauncher = std::function<bool(const std::string& path)>;
     void setInstallerLauncher(InstallerLauncher launcher) { launcher_ = std::move(launcher); }
+    // The main window's handle (an HWND as a pointer), which Windows' Store dialogs need as their owner (core/store_update.hpp). The host sets it; without one the Store is asked ownerless.
+    void setOwnerWindowProvider(std::function<void*()> provider) { ownerWindow_ = std::move(provider); }
 
     bool fact(const char* key, std::string& value) override;
     bool submitInterfaceHalf(const std::string& document) override;
@@ -389,6 +446,11 @@ public:
     void downloadCancel() override;
     void installerStart(const std::string& path) override;
     bool installerPoll(bool& started) override;
+    bool storeSeam() override;
+    void storeCheckStart() override;
+    bool storeCheckPoll(cascade::core::StoreUpdateCheck& out) override;
+    void storeInstallStart() override;
+    bool storeInstallPoll(cascade::core::StoreInstallOutcome& out) override;
     void sendersPoll(std::uint64_t nowEpoch) override;
     void sendersCancel() override;
     void phase(cascade::core::breadcrumb::Phase phase) override;
@@ -411,7 +473,10 @@ private:
     std::string resultPath_;
     std::string resultError_;
     std::future<bool> installer_;
+    cascade::core::AbandonableTask<cascade::core::StoreUpdateCheck> storeCheck_;
+    cascade::core::AbandonableTask<cascade::core::StoreInstallOutcome> storeInstall_;
     InstallerLauncher launcher_;
+    std::function<void*()> ownerWindow_;
     cascade::core::FeatureRequestSender feature_;
     cascade::core::ProblemReportSendFlow problem_;
 };

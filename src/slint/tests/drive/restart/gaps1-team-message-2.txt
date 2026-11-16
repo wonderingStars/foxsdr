@@ -1,0 +1,5 @@
+#! frames=200
+# gaps1-team-message, the second start on the same scratch profile: both messages were marked Seen, the saved settings carry their ids, and the same answer shows no card ("it doesn't show up again").
+100 state team.shown == 0
++1 state team.seen contains "msgAAAA1"
++1 state team.seen contains "msgBBBB2"

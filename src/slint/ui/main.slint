@@ -38,6 +38,7 @@ import { ExtendEvents, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory,
 import { Checkbox } from "fields.slint";
 import { LaneC, LCQuick, LCShortcut, LCRecording } from "tools_bank.slint";   // screen lane C (docs/multi-radio-records/screen-c.md): its one global and the row structs
 import { Card, Banner, CardTone } from "cards.slint";
+import { Gaps1, FaultCards, FaultCard } from "gaps1.slint";
 import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode, SpectrumView, SpectrumEvents } from "spectrum.slint";
 import { LayoutRow, LayoutsModel, LayoutsBody } from "layouts_ui.slint";
 import { ExportModel, ExportBody } from "export_ui.slint";
@@ -68,6 +69,7 @@ export { Theme, Skin, Workbench, NightWatch, GlassCockpit, DaylightLab, FieldRad
          InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents,
          ScopeEvents, DemodModel, MpxMarkItem, RadarTargetItem, RadarLabelItem, RadarLineItem, RadarContactItem, RadarOptionItem, RadarScopeModel }
 export { TxChoice, TransmitPageModel, TransmitEvents }
+export { Gaps1, FaultCard }   // window gaps lane 1: the start-up questions and fault cards (gaps1_publish)
 export { View3D, Scene3DLabel, SurveyRankRow, SondeLegendRow }   // the 3D views' state and their labels (docs 6.64): the host's view3d_publish sets the global and answers its callbacks
 import { GlobeEvents, GlobeModel, GlobeControl, GlobeChipModel } from "globe_views.slint";
 import { WorkspaceModel, WorkspaceCell, WorkspaceBar, RadioWorkspace, AddRadioCard, StripRadio, MasterLamp, MixRow, AddChoice } from "workspace.slint";
@@ -92,6 +94,7 @@ export struct StatusCard { key: string, value: string, detail: string, tone: Chi
 component Sheet inherits Rectangle {
     in property <string> title;
     in property <length> sheet-w: 460px;
+    in property <bool> closable: false;   // a close box in the title corner (the classic's window X: the diagnostics offer, the tester link prompt)
     callback dismissed;
     background: Theme.backdrop;
     TouchArea { clicked => { root.dismissed(); } }
@@ -114,6 +117,8 @@ component Sheet inherits Rectangle {
             Text { text: root.title; font-size: 13px; font-weight: Theme.weight-semibold; color: Theme.fg; font-family: Theme.font-ui; }
             @children
         }
+        if root.closable : Key { x: parent.width - 38px; y: 8px; width: 28px; height: 24px; icon-only: true; flat: true; icon: @image-url("icons/close.svg"); icon-size: 12px;
+            tooltip: @tr("Close"); accessible-label: @tr("Close"); clicked => { root.dismissed(); } }
     }
 }
 
@@ -590,12 +595,13 @@ export component MainWindow inherits Window {
                     }
                     Flickable { vertical-stretch: 1; viewport-height: list.preferred-height;
                         list := VerticalLayout { spacing: 0px; alignment: start;
+                            FaultCards { }   // window gaps lane 1: a plugin the last run's unclean end left out, above everything else the rail has to say
                             if root.team-message-shown : Rectangle { height: team.preferred-height + 10px;
                                 team := Card { x: 10px; y: 10px; width: parent.width - 20px; title: @tr("Message from the FoxSDR team"); subtitle: root.team-message-date; critical: root.team-message-important; lines: root.team-message-lines; primary-label: @tr("Seen"); primary-clicked => { root.team-message-seen(); } }
                             }
                             if root.update-shown : Rectangle { height: upd.preferred-height + 10px;
                                 upd := Card { x: 10px; y: 10px; width: parent.width - 20px; title: root.update-headline; subtitle: @tr("you are running {}", root.version); critical: root.update-critical; tone: root.update-withdrawn ? CardTone.warn : CardTone.neutral; lines: root.update-notes;
-                                    primary-label: root.update-primary; secondary-label: @tr("Not now"); progress: root.update-progress; note: root.update-note; error: root.update-error;
+                                    primary-label: root.update-primary; primary-tooltip: root.update-primary; secondary-label: @tr("Not now"); progress: root.update-progress; note: root.update-note; error: root.update-error;
                                     primary-clicked => { root.update-primary-clicked(); } secondary-clicked => { root.update-dismissed(); } }
                             }
                             // the DECODE bank is the plugin kit's (pages.slint): its rows, drawers and keys come from the host's kit models
@@ -890,6 +896,24 @@ export component MainWindow inherits Window {
         HorizontalLayout { spacing: 8px; alignment: end;
             if Handover.go-label != "" : Key { label: Handover.go-label; clicked => { Handover.go(); } }
             Key { label: Handover.stay-label; on: true; clicked => { Handover.stay(); } }
+        }
+    }
+    // WINDOW GAPS LANE 1: "FoxSDR did not close normally last time" (the offer a start after an unclean end makes) and "Link this FoxSDR?" (a tester's own link)
+    if Gaps1.diag-open : Sheet { title: @tr("FoxSDR did not close normally last time"); sheet-w: 520px; closable: true; dismissed => { Gaps1.diag-not-now(); }
+        Text { text: Gaps1.diag-text; wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; }
+        HorizontalLayout { spacing: 8px; alignment: end;
+            Key { label: @tr("Copy diagnostics"); clicked => { Gaps1.diag-copy(); } }
+            Key { label: @tr("Open reports folder"); clicked => { Gaps1.diag-reports(); } }
+            Key { label: @tr("Not now"); on: true; clicked => { Gaps1.diag-not-now(); } }
+        }
+        if Gaps1.diag-status != "" : Text { text: Gaps1.diag-status; wrap: word-wrap; color: Theme.dim; font-size: Theme.font-small; }
+    }
+    if Gaps1.link-open : Sheet { title: @tr("Link this FoxSDR?"); sheet-w: 460px; closable: true; dismissed => { Gaps1.link-no(); }
+        if Gaps1.link-error == "" : Text { text: Gaps1.link-text; wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; }
+        if Gaps1.link-error != "" : Text { text: Gaps1.link-error; wrap: word-wrap; color: Theme.chip-err-fg; font-size: Theme.font-small; }
+        HorizontalLayout { spacing: 8px; alignment: end;
+            if Gaps1.link-error == "" : Key { label: @tr("Link"); clicked => { Gaps1.link-yes(); } }
+            Key { label: @tr("Not now"); on: true; clicked => { Gaps1.link-no(); } }
         }
     }
     // LANE S1: the layouts sheet (the list of layouts, Apply / Rename / Delete, the save form)

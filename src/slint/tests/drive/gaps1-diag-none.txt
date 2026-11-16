@@ -1,0 +1,5 @@
+#! frames=120 config=gaps1-clean.json
+# gaps1-diag-none (window gaps lane 1): the last run ended normally, so there is no offer; and a run whose last end was unclean but diagnostics were off makes none either (the offer is
+# about a report, and with the switch off no report was written).
+10 state gaps1.diag == 0
++1 state gaps1.faults == 0

@@ -1,0 +1,11 @@
+#! frames=300 rootfile=link-request:gaps1-link-request.txt FOXSDR_FAKE_LINK_NAME=Ada
+# gaps1-link (window gaps lane 1, ledger rows 115, 116, 118, 119, 1493 to 1495): the tester portal's link left its one-shot link-request file beside the settings; the window claims it, puts the
+# token to the site (a bounded run's stand-in answers with the tester's name: nothing goes to the network), and asks "Link this FoxSDR to tester Ada?". Nothing is stored until Link. Not now
+# stores nothing. The link is stored through the settings half (state gaps1.stored); the token is never said.
+60 state gaps1.link == pending
++1 state gaps1.linkname == Ada
++1 state gaps1.stored == 0
++1 expect "Not now" enabled equals "true"
++1 click "Not now"
++4 state gaps1.link == none
++1 state gaps1.stored == 0

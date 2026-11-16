@@ -1586,6 +1586,7 @@
   "Link": "연결",
   "Link Radio %d": "라디오 %d 연결",
   "Link this FoxSDR to beta tester %s?": "이 FoxSDR을 베타 테스터 %s에 연결하시겠습니까?",
+  "Link this FoxSDR to tester %s?": "이 FoxSDR을 테스터 %s에 연결하시겠습니까?",
   "Link this FoxSDR?": "이 FoxSDR을 연결하시겠습니까?",
   "Link tuning": "연결 튜닝",
   "Linked": "연결됨",

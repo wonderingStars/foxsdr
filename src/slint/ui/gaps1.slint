@@ -1,0 +1,57 @@
+// FoxSDR Slint front end - WINDOW GAPS, LANE 1 (docs/multi-radio-records/window-gaps-1.md): what the classic window asks or says at start-up and the new window did not.
+//
+//   the diagnostics offer   "FoxSDR did not close normally last time": the explanation, Copy diagnostics, Open reports folder, Not now (a sheet, mounted by main.slint)
+//   the tester link prompt  "Link this FoxSDR?": the question put by a tester's own link, Link / Not now, or the error line and Not now (a sheet)
+//   the fault cards         "Started without a plugin": one card per plugin the last run's unclean end left out, RE-ENABLE and Seen (cards in the sections panel)
+//
+// The sheets are main.slint's own `Sheet` (it is not exported): this file holds the global the host fills and the card list, and main.slint mounts the sheets over it.
+// Every word goes through @tr; the classic's own sentences are used so the catalogue entries apply.
+import { Theme } from "theme.slint";
+import { Card, CardTone } from "cards.slint";
+
+export struct FaultCard {
+    id: string,                 // the plugin's id: what RE-ENABLE and Seen name
+    text: string,               // the sentence: left out of this start, or off until re-enabled
+    permanent: bool,            // strike two: the title is red
+}
+
+export global Gaps1 {
+    // the diagnostics offer
+    in-out property <bool> diag-open;
+    in property <string> diag-text;
+    in property <string> diag-status;                 // the line under the keys ("Copied to the clipboard.")
+    callback diag-copy();
+    callback diag-reports();
+    callback diag-not-now();
+    // the tester link prompt
+    in-out property <bool> link-open;
+    in property <string> link-text;                   // the question (a replacement adds a second paragraph)
+    in property <string> link-error;                  // when set, the error line replaces the question
+    callback link-yes();
+    callback link-no();
+    // the fault cards
+    in property <[FaultCard]> faults;
+    callback fault-reenable(string);
+    callback fault-seen(string);
+}
+
+// One card per plugin left out of this start, above everything else the rail has to say (a plugin that is missing from a window with no word of why is the whole of the problem).
+export component FaultCards inherits VerticalLayout {
+    spacing: 0px;
+    for f in Gaps1.faults : Rectangle {
+        height: card.preferred-height + 10px;
+        card := Card {
+            x: 10px;
+            y: 10px;
+            width: parent.width - 20px;
+            title: @tr("Started without a plugin");
+            critical: f.permanent;
+            tone: f.permanent ? CardTone.err : CardTone.warn;
+            note: f.text;
+            primary-label: @tr("RE-ENABLE");
+            primary-clicked => { Gaps1.fault-reenable(f.id); }
+            secondary-label: @tr("Seen");
+            secondary-clicked => { Gaps1.fault-seen(f.id); }
+        }
+    }
+}

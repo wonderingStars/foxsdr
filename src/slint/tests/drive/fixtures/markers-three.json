@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "next": 4,
+  "markers": [
+    { "n": 1, "freqHz": 7074000.0, "noted": 1700000000, "note": "FT8 calling" },
+    { "n": 2, "freqHz": 14230000.0, "noted": 1700003600, "note": "" },
+    { "n": 3, "freqHz": 118100000.0, "noted": 1700007200, "note": "tower" }
+  ]
+}

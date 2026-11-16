@@ -1586,6 +1586,7 @@
   "Link": "關聯",
   "Link Radio %d": "關聯無線電 %d",
   "Link this FoxSDR to beta tester %s?": "要將此 FoxSDR 關聯到測試員 %s 嗎?",
+  "Link this FoxSDR to tester %s?": "要將此 FoxSDR 關聯到測試員 %s 嗎?",
   "Link this FoxSDR?": "關聯此 FoxSDR?",
   "Link tuning": "關聯調諧",
   "Linked": "已連結",

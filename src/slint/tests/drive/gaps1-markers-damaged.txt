@@ -1,0 +1,12 @@
+#! frames=140 appfile=markers.json:markers-damaged.json
+# gaps1-markers-damaged (window gaps lane 1, ledger rows 240 and 241): a damaged markers file is kept aside and reported IN THE MARKERS WINDOW (never on stdout): the error line says the file is
+# not a JSON object, and with no markers the table gives way to the empty sentence.
+10 state count.freqMarkers == 0
++1 click "Markers"
++8 state markers.shown == 1
++1 state markers.rows == 0
++1 state markers.error contains "is not a JSON object"
++1 state markers.empty contains "No markers yet."
++1 expect "Copy markers to clipboard" enabled equals "false"
++1 click "Close"#2
++4 state markers.shown == 0

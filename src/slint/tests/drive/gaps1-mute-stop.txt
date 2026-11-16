@@ -1,0 +1,10 @@
+#! frames=140 FOXSDR_SLINT_MUTE_QUESTION=APRS-Decoder;aprs-key.dll
+# gaps1-mute-stop (window gaps lane 1, ledger rows 104 to 106): the "Sound is muted" question the classic asks once when the receiver tunes off a muting plugin's preset. A bounded run asks it of a made-up
+# plugin (FOXSDR_SLINT_MUTE_QUESTION): the message names the plugin, the first key stops EXACTLY the plugins the message named and resumes the sound (state mute.action), the question goes.
+10 state mute.open == 1
++1 state mute.text == "APRS-Decoder is still running and is muting the audio. Stop it so sound resumes?"
++1 state mute.stop == "Stop APRS-Decoder and resume sound"
++1 expect "Keep it running" enabled equals "true"
++1 click "Stop APRS-Decoder and resume sound"
++4 state mute.action == "stop:aprs-key.dll"
++1 state mute.open == 0

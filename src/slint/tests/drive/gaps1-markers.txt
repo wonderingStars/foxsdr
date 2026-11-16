@@ -1,0 +1,44 @@
+#! frames=300 bank=1 sections=1:0 appfile=markers.json:markers-three.json
+# gaps1-markers: the Markers window with real markers (window gaps lane 1, ledger rows 227 to 250). The profile is seeded with three markers (M1 7.074 MHz "FT8 calling", M2 14.230 MHz with no note,
+# M3 118.1 MHz "tower"); the toolbar's Markers key opens the window; its table lists them (number, frequency, noted time, the note field), Copy puts the list on the clipboard (the bounded run's
+# stand-in: `state gaps.clip`), a note is typed and read back from the engine's list, Tune retunes the receiver, Bookmark adds a bookmark, the x removes one marker, and Clear all asks twice.
+# The sheet's Close is the second "Close" (the title bar's is the first).
+10 state count.freqMarkers == 3
++1 click "Markers"
++8 state markers.shown == 1
++1 state markers.rows == 3
++1 state markers.row.1 contains "M1 7.074"
++1 state markers.row.1 contains "| FT8 calling"
++1 state markers.row.2 contains "M2 14.230"
++1 state markers.row.3 contains "M3 118.100"
++1 state markers.row.3 contains "| tower"
++1 expect "Copy markers to clipboard" enabled equals "true"
++1 expect "Clear all markers" enabled equals "true"
++1 expect "Tune"#3 enabled equals "true"
++1 expect "Bookmark"#3 enabled equals "true"
++1 expect "Remove this marker"#3 enabled equals "true"
++1 click "Copy markers to clipboard"
++3 state gaps.clip contains "FoxSDR markers (3)"
++1 state gaps.clip contains "FT8 calling"
++1 state gaps.clip contains "118.100000 MHz"
++1 type "Note"#2 "net on 14"
++10 state markers.row.2 contains "| net on 14"
++1 state list.freqMarkers.names contains "net on 14"
++1 click "Tune"#2
++6 state tunedHz == 14230000
++1 click "Bookmark"#3
++6 state count.bookmarks == 1
++1 state list.bookmarks.names contains "tower"
++1 click "Remove this marker"#2
++6 state count.freqMarkers == 2
++1 state markers.rows == 2
++1 state markers.row.2 contains "M3"
++1 click "Clear all markers"
++3 state count.freqMarkers == 2
++1 expect "Yes, remove all 2" enabled equals "true"
++1 click "Yes, remove all 2"
++6 state count.freqMarkers == 0
++1 state markers.rows == 0
++1 expect "Copy markers to clipboard" enabled equals "false"
++1 click "Close"#2
++4 state markers.shown == 0

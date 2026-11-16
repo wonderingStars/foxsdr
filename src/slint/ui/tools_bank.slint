@@ -2097,7 +2097,7 @@ component SheetFrame inherits Rectangle {
 global MarkerCols {
     out property <length> num-w: 44px;
     out property <length> freq-w: 124px;
-    out property <length> dropped-w: 76px;
+    out property <length> dropped-w: 150px;   // the noted time is "2026-11-14 22:13:20" (19 digits and signs, about 126 px at the readout size); it was 76 px and the sweep found it elided
     out property <length> keys-w: 148px;
 }
 
@@ -2173,7 +2173,7 @@ export component MarkersSheet inherits Rectangle {
     markers-closed() => { ToolsEvents.markers-closed(); }
 
     property <bool> armed;                              // Clear all markers has been pressed once
-    property <length> sheet-inner-w: min(620px, root.width - 24px) - 2 * Theme.hairline - 24px;   // the sheet's content width (SheetFrame: 12 px of padding each side)
+    property <length> sheet-inner-w: min(700px, root.width - 24px) - 2 * Theme.hairline - 24px;   // the sheet's content width (SheetFrame: 12 px of padding each side)
     changed model => { root.armed = false; }
 
     if root.model.shown : SheetFrame {
@@ -2182,7 +2182,7 @@ export component MarkersSheet inherits Rectangle {
         width: root.width;
         height: root.height;
         title: @tr("Markers");
-        sheet-w: 620px;
+        sheet-w: 700px;
         sheet-h: 340px;
         dismissed => { root.markers-closed(); }
         if root.model.error != "" : Note { wrap-w: root.sheet-inner-w; text: root.model.error; tone: ChipTone.err; }

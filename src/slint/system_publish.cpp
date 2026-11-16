@@ -448,13 +448,16 @@ void SystemPublisher::applyLocal(const Effect& e) {
         case Local::ReportPreview: inputsOf(e.number).preview_open = e.flag; break;
         case Local::ReportProbe: opts_.bug.attach_probe = e.flag; break;
         case Local::TesterResolve:
-            // The confirm-by-name question of the link flow is not in this window (the duties leave the link poll out): nothing is stored, the draft stays.
-            say("a 40-hex tester link needs the confirm-by-name flow, which this window does not have yet; nothing was stored");
+            // THE CONFIRM-BY-NAME FLOW (window gaps, lane 1: gaps1_publish): the site names the token's owner, the question "Link this FoxSDR?" is asked, and only Link stores it.
+            if (e.flag) { opts_.tester_draft.clear(); }
+            if (hooks_.testerLink) { hooks_.testerLink(e.text); }
             break;
         case Local::TesterError: opts_.tester_error = e.text; break;
         case Local::OpenAbout: ui_.set_about_open(true); break;
         case Local::OpenTeamMessages:
-            say("the team message cards are the duties' and have no home in this bank yet; nothing opened");
+            // The classic prints this line as plain text (drawUpdatesSection); here it is a key, and the card it speaks of is already at the top of the sections panel on every bank (main.slint,
+            // HostDuties::teamMessage), so there is nothing further to open: the press is said, not silent.
+            say("the team message card is at the top of the sections panel");
             break;
     }
 }
@@ -743,6 +746,9 @@ ReadOptions SystemPublisher::buildOptions() {
     f.error = u.error;
     f.build_version = cascade::versionString();
     f.unseen_messages = u.unseenMessages;
+    f.store_offered = u.storeOffered;
+    f.store_mandatory = u.storeMandatory;
+    f.store_installing = u.storeInstalling;
     opts_.updates = f;
 
     const std::uint64_t now = nowEpoch();

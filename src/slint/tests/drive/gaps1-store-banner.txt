@@ -1,0 +1,16 @@
+#! frames=300 updatecheck=on FOXSDR_FAKE_PACKAGE=FoxSDR.Test_1.0.0.0_x64__test FOXSDR_FAKE_STORE_UPDATE=available FOXSDR_FAKE_STORE_INSTALL=cancelled
+# gaps1-store-banner (window gaps lane 1, ledger rows 100 to 102, 1436, 1437): a Microsoft Store copy (FOXSDR_FAKE_PACKAGE) asks the Store, never foxsdr.com, and the Store's canned
+# answer (FOXSDR_FAKE_STORE_UPDATE=available) says an update is waiting: the banner says so in the amber words, with no version number, and offers "Install from the Microsoft Store".
+# The fake install request (FOXSDR_FAKE_STORE_INSTALL=cancelled) answers as if the person declined Windows' dialog: the banner says nothing was changed and offers the key again. Nothing
+# is installed and no Windows dialog is raised: the Store's calls are the canned ones (core/store_update.hpp). The real Store is UNVERIFIED until a Store copy runs it.
+80 state update.shown == 1
++1 state update.headline == "FoxSDR update available from the Microsoft Store"
++1 state update.critical == 0
++1 state update.primary == "Install from the Microsoft Store"
++1 state update.note contains "Windows will ask you to confirm"
++1 expect "Install from the Microsoft Store" enabled equals "true"
++1 click "Install from the Microsoft Store"
++30 state update.note contains "You cancelled the update, so nothing was changed."
++1 state update.primary == "Install from the Microsoft Store"
++1 click "Not now"
++6 state update.shown == 0

@@ -1,0 +1,8 @@
+#! frames=300 rootfile=link-request:gaps1-link-request.txt FOXSDR_FAKE_LINK_NAME=Ada restart=gaps1-link-yes-2.txt
+# gaps1-link-yes (window gaps lane 1, ledger row 116): Link stores the confirmed link: the name the site gave is kept, the prompt goes, and the second start of this profile still holds it.
+60 state gaps1.link == pending
++1 click "Link"#1
++6 state gaps1.stored == 1
++1 state gaps1.storedname == Ada
++1 state gaps1.link == none
++30 state running == 1
