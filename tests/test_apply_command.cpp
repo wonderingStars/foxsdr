@@ -1381,6 +1381,11 @@ void receiverOps(AppWindow& a) {
         CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_AM_DETECTOR, 2))));
         CHECK(A::amDetRx(a) == 2 && A::amDetPipe(a) == 2);
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_AM_DETECTOR, 2)), FOXAPI_NO_CHANGE));
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_AM_DETECTOR, 3))));
+        CHECK(A::amDetRx(a) == 3 && A::amDetPipe(a) == 3);                       // the receiver's choice and the pipeline's agree on every kind
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_AM_DETECTOR, 1))));
+        CHECK(A::amDetRx(a) == 1 && A::amDetPipe(a) == 1);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_AM_DETECTOR, 2))));
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_AM_DETECTOR, 4)), FOXAPI_OUT_OF_RANGE));
         CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_AM_DETECTOR, -1)), FOXAPI_OUT_OF_RANGE));
         CHECK(A::amDetRx(a) == 2 && A::amDetPipe(a) == 2);                       // a refusal changes nothing

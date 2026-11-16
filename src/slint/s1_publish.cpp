@@ -86,6 +86,8 @@ std::string hzText(double hz) { char b[48]; std::snprintf(b, sizeof(b), "%.0f Hz
 std::string dbText(double db) { char b[48]; std::snprintf(b, sizeof(b), "%+.1f dB", db); return b; }
 std::string dbPlain(double db) { char b[48]; std::snprintf(b, sizeof(b), "%.0f dB", db); return b; }
 std::string msText(double ms) { char b[48]; std::snprintf(b, sizeof(b), "%.0f ms", ms); return b; }
+std::string signedHz(double hz) { char b[48]; std::snprintf(b, sizeof(b), "%+.0f Hz", hz); return b; }
+std::string dbOne(double db) { char b[48]; std::snprintf(b, sizeof(b), "%.1f dB", db); return b; }
 std::string ratioText(double v) { char b[48]; std::snprintf(b, sizeof(b), "%.2f", v); return b; }
 }  // namespace
 
@@ -321,9 +323,7 @@ struct S1Publisher::Impl {
         if (st.demodMode != FOXAPI_DEMOD_AM) { v.push_back(rNote(tr("The detector acts in AM mode only."))); }
         choice(v, "d.kind", tr("Detection"), amDetectorNames(), kind, [this](int i) { send(kRadio, tr("Detection"), cmd(FOXAPP_OP_SET_AM_DETECTOR, i)); },
                tr("Synchronous detection follows the carrier, so a fading carrier or a neighbour on one side does not distort the sound; on one sideband it rejects the other. It falls back to the envelope detector by itself while there is no carrier."));
-        char b[96];
-        std::snprintf(b, sizeof(b), "%s, %+.0f Hz", tr("locked").c_str(), af.offsetHz);
-        v.push_back(rReadout(tr("Carrier lock"), kind == 0 ? tr("not in use") : (af.locked ? std::string(b) : tr("searching"))));
+        v.push_back(rReadout(tr("Carrier lock"), kind == 0 ? tr("not in use") : (af.locked ? tr("locked") + ", " + signedHz(af.offsetHz) : tr("searching"))));
     }
 
     void sendTone(unsigned kind, double hz, int code, int pol, const std::string& what, const std::vector<std::string>& drops) {
@@ -341,9 +341,7 @@ struct S1Publisher::Impl {
                tr("-90 to 0 dB re full scale: the gate opens when the noise falls below this."));
         slider(v, "q.tail", tr("Noise tail"), kNoiseSqTail, 50.0, tail, msText, [this, nOn, thr](double t) { send(kRadio, tr("Noise tail"), cmd(FOXAPI_OP_SET_NOISE_SQUELCH, nOn ? 1 : 0, 1, thr, t)); },
                tr("0 to 2000 ms: how long the noise must stay up before the gate closes."));
-        char b[96];
-        std::snprintf(b, sizeof(b), "%.1f dB, %s", st.noiseSquelchLevelDb, st.noiseSquelchOpen != 0u ? tr("open").c_str() : tr("shut").c_str());
-        v.push_back(rReadout(tr("Noise level now"), st.noiseSquelchLevelDb <= -199.0 ? tr("none") : std::string(b)));
+        v.push_back(rReadout(tr("Noise level now"), st.noiseSquelchLevelDb <= -199.0 ? tr("none") : dbOne(st.noiseSquelchLevelDb) + ", " + (st.noiseSquelchOpen != 0u ? tr("open") : tr("shut"))));
 
         const unsigned kind = st.toneKind;
         const double hz = st.toneHz;
@@ -387,9 +385,7 @@ struct S1Publisher::Impl {
             if (!sll::parseNumber(t, kAfcPullIn.lo, kAfcPullIn.hi, h, e)) { refuseHere(kRadio, tr("AFC pull-in range (Hz)"), e); return; }
             send(kRadio, tr("AFC pull-in range (Hz)"), cmd(FOXAPI_OP_SET_AFC, on ? 1 : 0, 1, h), {"a.pull"});
         }, tr("50 to 20000 Hz: how far from the dial a carrier may be and still be caught."));
-        char b[64];
-        std::snprintf(b, sizeof(b), "%+.0f Hz, %s", st.afcCorrectionHz, st.afcLocked != 0u ? tr("locked").c_str() : tr("not locked").c_str());
-        v.push_back(rReadout(tr("AFC following"), on ? std::string(b) : tr("off")));
+        v.push_back(rReadout(tr("AFC following"), on ? signedHz(st.afcCorrectionHz) + ", " + (st.afcLocked != 0u ? tr("locked") : tr("not locked")) : tr("off")));
         const bool wfm = st.demodMode == FOXAPI_DEMOD_WFM;
         const bool rec = fact("radio." + rn() + ".mpx") == "1";
         tickRow(v, "a.mpx", tr("Record the FM multiplex"), rec, [this](bool o) { send(kRadio, tr("Record the FM multiplex"), cmd(FOXAPP_OP_MPX_RECORD, o ? 1 : 0)); }, wfm || rec,

@@ -23,7 +23,9 @@ using foxsdr::slintlanel::trim;
 // the screen's words: every literal below goes through the string tables (tools/i18n_keys.py finds the tr("...") calls)
 std::string tr(const char* s) { return cascade::i18n::tr(s); }
 
-std::string fmt1(const char* f, double v) { char b[64]; std::snprintf(b, sizeof(b), f, v); return b; }
+// a figure to a number of decimals (a literal format: nothing translated goes into it)
+std::string fmtN(int decimals, double v) { char b[64]; std::snprintf(b, sizeof(b), "%.*f", decimals, v); return b; }
+std::string fmtSigned0(double v) { char b[64]; std::snprintf(b, sizeof(b), "%+.0f", v); return b; }
 }  // namespace
 
 // ============================================================ ranges ============================================================
@@ -63,12 +65,12 @@ std::vector<double> widthPresets(unsigned m) {
 
 std::string widthText(double hz) {
     if (hz >= 1000.0) {
-        std::string s = fmt1("%.3f", hz / 1000.0);
+        std::string s = fmtN(3, hz / 1000.0);
         while (!s.empty() && s.back() == '0') { s.pop_back(); }
         if (!s.empty() && s.back() == '.') { s.pop_back(); }
         return s + " kHz";
     }
-    return fmt1("%.0f", hz) + " Hz";
+    return fmtN(0, hz) + " Hz";
 }
 
 int presetIndexOf(const std::vector<double>& p, double bw) {
@@ -127,7 +129,7 @@ int nextDcs(int digits, int direction) {
 }
 
 std::string dcsText(int digits) { char b[16]; std::snprintf(b, sizeof(b), "%03d", digits); return b; }
-std::string ctcssText(double hz) { return fmt1("%.1f", hz); }
+std::string ctcssText(double hz) { return fmtN(1, hz); }
 
 std::vector<std::string> toneKindNames() { return {tr("Tone squelch off"), tr("CTCSS tone squelch"), tr("DCS code squelch")}; }
 std::vector<std::string> polarityNames() { return {tr("Any polarity"), tr("Normal polarity"), tr("Inverted polarity")}; }
@@ -159,9 +161,9 @@ Range placementRange(int mode) {
 double placementDefault(int mode) { return mode == 2 ? 0.5 : 0.0; }
 std::string placementText(int mode, double v) {
     switch (mode) {
-        case 1: return v < -0.005 ? fmt1("%.0f", -v * 100.0) + "% " + tr("left") : v > 0.005 ? fmt1("%.0f", v * 100.0) + "% " + tr("right") : tr("centre");
-        case 2: return fmt1("%.0f", v * 100.0) + "%";
-        case 3: return fmt1("%+.0f", v) + " " + tr("degrees");
+        case 1: return v < -0.005 ? fmtN(0, -v * 100.0) + "% " + tr("left") : v > 0.005 ? fmtN(0, v * 100.0) + "% " + tr("right") : tr("centre");
+        case 2: return fmtN(0, v * 100.0) + "%";
+        case 3: return fmtSigned0(v) + " " + tr("degrees");
         default: return std::string();
     }
 }
@@ -192,7 +194,7 @@ std::string notchSummary(unsigned mask, const double* hz, const double* width) {
 // ============================================================ I/Q correction ============================================================
 std::string imageRejectionText(double db) {
     if (!std::isfinite(db) || db >= 199.0) { return std::string(); }
-    return fmt1("%.1f", db) + " dB";
+    return fmtN(1, db) + " dB";
 }
 
 // ============================================================ the passband's edges and the AM detector ============================================================
