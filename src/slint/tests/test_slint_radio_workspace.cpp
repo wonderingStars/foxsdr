@@ -91,6 +91,9 @@ RadioPaneData makePane(int radio, const char* decoder) {
     d.bookmarks = std::make_shared<slint::VectorModel<BookmarkMark>>(std::vector<BookmarkMark>{});
     d.marks = std::make_shared<slint::VectorModel<PluginMark>>(std::vector<PluginMark>{});
     d.wf_marks = std::make_shared<slint::VectorModel<PluginMark>>(std::vector<PluginMark>{});
+    d.airband_channels = std::make_shared<slint::VectorModel<AirbandChannel>>(std::vector<AirbandChannel>{});   // lane X, P1: the pane's Airband marks, the gap break and the range rail (none)
+    d.wf_gap_pos = -1;
+    d.wf_rail_pos = -1;
     d.markers = std::make_shared<slint::VectorModel<UserMarker>>(std::vector<UserMarker>{});
     d.vfo_pos = 0.5f; d.vfo_half = 0.01f; d.show_vfo = true;
     d.foot_left = ss("24 lines/s"); d.foot_tuned = d.frequency; d.foot_rest = ss(" . NFM");

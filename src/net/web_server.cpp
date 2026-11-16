@@ -449,8 +449,19 @@ label.inline input[type=range] { width:8rem; }
         overflow-y:auto; overflow-x:hidden; position:relative; }
 /* The control column's own width handle, on its right edge. */
 #sideGrip { position:sticky; top:0; float:right; width:7px; height:100vh;
-            margin-bottom:-100vh; cursor:ew-resize; z-index:5; }
+            margin-bottom:-100vh; cursor:ew-resize; z-index:5; touch-action:none; }
 #sideGrip:hover, #sideGrip.active { background:var(--accent); }
+/* A FINGER IS NOT A MOUSE: where the primary pointer is coarse, every key, field and divider gets a target of at least 44 px (Apple's and Material's own minimum is 44 and 48), the dividers
+   a wider grab area with the same pill in the middle, and a double tap on a key is not a zoom. The mouse's layout above is untouched. */
+@media (pointer: coarse) {
+  button, select, input[type=text], input[type=password], input[type=number], input:not([type]) { min-height:44px; }
+  button { min-width:44px; touch-action:manipulation; }
+  #side summary { min-height:44px; display:flex; align-items:center; }
+  .hsplit { flex-basis:24px; }
+  .hsplit::after { top:10px; bottom:10px; left:38%; right:38%; }
+  #sideGrip { width:18px; }
+  #freqDigits span.d { min-width:1.2em; text-align:center; padding:.2em 0; }
+}
 
 /* Open-in-its-own-window buttons. Small and quiet: they decorate headers, and
    the header is not about them. */
@@ -510,7 +521,7 @@ body[data-view="decoded"] #decoded { flex:1 1 auto; max-height:none; }
           flex-direction:column; gap:.5rem; }
 /* Drag handles between the stacked regions, the desktop's splitters. The
    handle is 7px of grab area with a short visible pill in the middle. */
-.hsplit { flex:0 0 7px; cursor:ns-resize; position:relative; user-select:none; }
+.hsplit { flex:0 0 7px; cursor:ns-resize; position:relative; user-select:none; touch-action:none; }
 .hsplit::after { content:''; position:absolute; left:44%; right:44%; top:2px;
                  bottom:2px; border-radius:2px; background:var(--edge); }
 .hsplit:hover::after, .hsplit.active::after { background:var(--accent); }
@@ -572,6 +583,7 @@ label.check { flex-direction:row; align-items:center; gap:.4rem; color:var(--fg)
               font-size:1.5rem; font-weight:600; letter-spacing:.01em;
               cursor:ns-resize; user-select:none; color:var(--read); }
 #freqDigits span { padding:0 .04em; border-radius:2px; }
+#freqDigits span.d { touch-action:none; }
 #freqDigits span.d:hover { background:var(--accent); }
 #freqDigits span.lead { color:var(--read-dim); }
 /* THE THREE FACES (GitHub issue #1), chosen at the desk and carried here in
@@ -1504,6 +1516,36 @@ function renderFreqDigits(hz) {
         const step = Math.pow(10, parseInt(d.dataset.decade, 10));
         control({ centerHz: Math.max(0, Math.round(freqShownHz + (e.deltaY < 0 ? step : -step))) });
       }, { passive: false });
+      // TOUCH: a wheel does not exist under a finger, so a digit that could only be scrolled could not be tuned on a phone. A tap on the upper half of a digit steps it up, a tap on the
+      // lower half steps it down, and a vertical swipe on it steps once per 14 px (up = up). A mouse keeps the wheel and is not changed by a click.
+      let touchY = null;
+      d.addEventListener('pointerdown', (e) => {
+        if (e.pointerType === 'mouse') return;
+        touchY = { y: e.clientY, id: e.pointerId, steps: 0 };
+        try { d.setPointerCapture(e.pointerId); } catch (_) {}
+      });
+      d.addEventListener('pointermove', (e) => {
+        if (!touchY || e.pointerId !== touchY.id) return;
+        const steps = Math.trunc((touchY.y - e.clientY) / 14);
+        if (steps !== touchY.steps) {
+          const n = steps - touchY.steps;
+          touchY.steps = steps;
+          const step = Math.pow(10, parseInt(d.dataset.decade, 10));
+          control({ centerHz: Math.max(0, Math.round(freqShownHz + n * step)) });
+        }
+      });
+      const touchEnd = (e) => {
+        if (!touchY || e.pointerId !== touchY.id) return;
+        const t = touchY;
+        touchY = null;
+        if (e.type === 'pointerup' && t.steps === 0 && Math.abs(e.clientY - t.y) < 8) {
+          const r = d.getBoundingClientRect();
+          const step = Math.pow(10, parseInt(d.dataset.decade, 10));
+          control({ centerHz: Math.max(0, Math.round(freqShownHz + (e.clientY < r.top + r.height / 2 ? step : -step))) });
+        }
+      };
+      d.addEventListener('pointerup', touchEnd);
+      d.addEventListener('pointercancel', touchEnd);
       box.appendChild(d);
       // Thousands separators, so the readout groups like the desktop's.
       if (decade === 9 || decade === 6 || decade === 3) {
@@ -2003,19 +2045,24 @@ $('map').addEventListener('dblclick', () => {
 // map the height the waterfall loses). Sizes are a per-device display
 // preference, so they live in localStorage, not in the radio's config.
 function dragSplit(handle, getStart, onMove) {
+  // POINTER events, not mouse events: a finger drag fires no mousemove, so a divider bound to the mouse alone could not be moved on a phone (the same reason the map
+  // uses pointer events). One path covers mouse, finger and pen; the capture keeps the drag while the finger leaves the thin handle.
   let st = null;
-  handle.addEventListener('mousedown', (ev) => {
-    if (ev.button !== 0) return;
+  handle.addEventListener('pointerdown', (ev) => {
+    if (ev.pointerType === 'mouse' && ev.button !== 0) return;
     ev.preventDefault();
-    st = { y: ev.clientY, v: getStart() };
+    st = { y: ev.clientY, v: getStart(), id: ev.pointerId };
     handle.classList.add('active');
+    try { handle.setPointerCapture(ev.pointerId); } catch (_) {}
   });
-  window.addEventListener('mousemove', (ev) => {
-    if (!st) return;
+  window.addEventListener('pointermove', (ev) => {
+    if (!st || ev.pointerId !== st.id) return;
     onMove(ev.clientY - st.y, st.v);
   });
-  window.addEventListener('mouseup', () => {
-    if (st) { st = null; handle.classList.remove('active'); }
+  ['pointerup', 'pointercancel'].forEach((t) => {
+    window.addEventListener(t, (ev) => {
+      if (st && ev.pointerId === st.id) { st = null; handle.classList.remove('active'); }
+    });
   });
 }
 (function setupSplitters() {
@@ -2091,20 +2138,23 @@ document.querySelectorAll('button.pop').forEach((b) => {
   const grip = $('sideGrip');
   if (!grip) return;
   let st = null;
-  grip.addEventListener('mousedown', (ev) => {
-    if (ev.button !== 0) return;
+  grip.addEventListener('pointerdown', (ev) => {
+    if (ev.pointerType === 'mouse' && ev.button !== 0) return;
     ev.preventDefault();
-    st = { x: ev.clientX, w: document.getElementById('side').getBoundingClientRect().width };
+    st = { x: ev.clientX, w: document.getElementById('side').getBoundingClientRect().width, id: ev.pointerId };
     grip.classList.add('active');
+    try { grip.setPointerCapture(ev.pointerId); } catch (_) {}
   });
-  window.addEventListener('mousemove', (ev) => {
-    if (!st) return;
+  window.addEventListener('pointermove', (ev) => {
+    if (!st || ev.pointerId !== st.id) return;
     const w = Math.round(Math.max(220, Math.min(window.innerWidth * 0.6, st.w + (ev.clientX - st.x))));
     document.documentElement.style.setProperty('--side', w + 'px');
     localStorage.setItem('foxsdr.sideW', w + 'px');
   });
-  window.addEventListener('mouseup', () => {
-    if (st) { st = null; grip.classList.remove('active'); }
+  ['pointerup', 'pointercancel'].forEach((t) => {
+    window.addEventListener(t, (ev) => {
+      if (st && ev.pointerId === st.id) { st = null; grip.classList.remove('active'); }
+    });
   });
 })();
 

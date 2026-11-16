@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <memory>
 #include <string>
@@ -44,6 +45,8 @@ public:
 
     // How many rows were set (not skipped as unchanged) since the last call: the tests of the host read it to see that a quiet pane costs nothing.
     int takeRowsSet() { const int n = rowsSet_; rowsSet_ = 0; return n; }
+    // The row as last handed to the window (lane X, P1: a drive script reads what a pane was PUBLISHED with, not what the host computed for it).
+    const WorkspaceCell& publishedRow(int slot) const { return rows_[static_cast<std::size_t>(std::clamp(slot, 0, foxsdr::slinthost::kMaxRadios - 1))]; }
 
 private:
     void setRow(int slot, bool occupied);

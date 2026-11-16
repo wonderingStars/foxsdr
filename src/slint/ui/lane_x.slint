@@ -1,0 +1,46 @@
+// lane_x.slint - LANE X (docs/multi-radio-records/lane-x.md): the help that opens inside the window (G5-14) and the rows of the DSP speed test (G5-19).
+//
+// One global, filled by the host (lanex_publish.cpp), which also answers its act(id, text). The help sheet is drawn here and mounted by one line of main.slint; the speed test's rows are a KPanel
+// that main.slint appends to the SYSTEM bank's Performance section. Nothing here decides what a topic says or when the test runs.
+import { Theme } from "theme.slint";
+import { Key } from "keys.slint";
+import { KRow, KPanel } from "system_bank.slint";
+
+export global LaneX {
+    in property <[KRow]> rows-bench;               // the speed test: a heading, the key, the progress and the results
+    in property <[KRow]> rows-knobs;               // knobs and controllers (SYSTEM > Accessibility)
+    in-out property <bool> help-open;              // the help sheet
+    in property <string> help-title;
+    in property <[KRow]> help-rows;                // the search field, the topics or the open topic
+    callback act(string, string);
+}
+
+export component XHelpSheet inherits Rectangle {
+    background: Theme.backdrop;
+    TouchArea { clicked => { LaneX.act("help-close", ""); } }   // not-translated: the host's action id
+    panel := Rectangle {
+        width: min(660px, root.width - 32px);
+        height: min(560px, root.height - 32px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.panel;
+        border-width: Theme.hairline;
+        border-color: Theme.knob-ring;
+        border-radius: Theme.radius-panel;
+        drop-shadow-blur: Theme.shadows ? 28px : 0px;
+        drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
+        drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+        TouchArea { }   // swallows the click so the backdrop does not dismiss
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+            Text { text: LaneX.help-title; font-size: 13px; font-weight: Theme.weight-semibold; color: Theme.fg; font-family: Theme.font-ui; accessible-role: text; }
+            Flickable {
+                vertical-stretch: 1;
+                viewport-height: help-list.preferred-height;
+                help-list := KPanel { rows: LaneX.help-rows; act(id, t) => { LaneX.act(id, t); } }
+            }
+            HorizontalLayout { alignment: end; Key { label: @tr("Close"); on: true; clicked => { LaneX.act("help-close", ""); } } }   // not-translated: the host's action id
+        }
+    }
+}

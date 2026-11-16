@@ -126,6 +126,21 @@ std::string sourceRowText(const std::string& receiverSource, const std::vector<s
     return cc::formatText(tr("%s - the patch has %s"), receiverSource.c_str(), names.c_str());
 }
 
+bool savedRadioHeldByPatch(const std::string& savedLabel, const std::vector<std::string>& patchRadios) {
+    // LANE X, PF-1: the saved radio's name against the names of the radios a running patch holds. The labels are written by two places (the engine's closed label, the patch's node names), so the
+    // match is by NAME: equal, or one inside the other, ignoring case; a name of fewer than three letters never matches by being inside another.
+    const auto lower = [](std::string t) { for (char& c : t) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); } return t; };
+    const std::string a = lower(savedLabel);
+    if (a.empty()) { return false; }
+    for (const std::string& h : patchRadios) {
+        const std::string b = lower(h);
+        if (b.empty()) { continue; }
+        if (a == b) { return true; }
+        if (a.size() >= 3 && b.size() >= 3 && (a.find(b) != std::string::npos || b.find(a) != std::string::npos)) { return true; }
+    }
+    return false;
+}
+
 bool radioNotOpenLamp(const std::string& keepKind, bool deviceOpen, bool generatorInUse, bool cardOpening) {
     return !keepKind.empty() && keepKind != "file" && !deviceOpen && generatorInUse && !cardOpening;
 }
@@ -569,6 +584,7 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
     const std::string restoreKeepLabel = factOf(t, "fact.status.restoreKeepLabel");
 
     const bool keepPreview = !keepKind.empty() && !deviceOpen && generatorActive && !restoreKeepLabel.empty() && (src & FOXAPI_SRC_CARD_OPENING) == 0u;
+    const bool keepHeldByPatch = keepPreview && keepKind != "file" && keepKind != "soundcard" && patchRunning && savedRadioHeldByPatch(restoreKeepLabel, o.patch_held);   // PF-1: the patch opened that very radio
     const auto rowLabel = [&](int idx) -> std::string {
         if (idx == 0) { return tr("Signal generator"); }
         if (idx == 1) { return tr("IQ file"); }
@@ -591,7 +607,9 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
         }
         m.devices.push_back(std::move(s));
     }
-    if (keepPreview) {
+    if (keepHeldByPatch) {
+        m.device_label = cc::formatText(tr("%s (held by the patch)"), restoreKeepLabel.c_str());
+    } else if (keepPreview) {
         m.device_label = cc::formatText(tr("%s (saved, not open)"), restoreKeepLabel.c_str());
     } else if (o.patch_held.empty()) {
         m.device_label = rowLabel(row);
@@ -949,7 +967,9 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
                                "dongle shows as \"Bulk-In, Interface\" with a yellow warning."));
             paras.push_back({joinLines(block), true});
         }
-        if (keepPreview) {
+        if (keepHeldByPatch) {
+            paras.push_back({cc::formatText(tr("%s is the saved radio, and the running patch holds it. The receiver is on the signal generator until the patch is stopped."), restoreKeepLabel.c_str()), false});
+        } else if (keepPreview) {
             const bool keepFile = keepKind == "file";
             const bool keepCard = keepKind == "soundcard";
             paras.push_back({cc::formatText(keepFile ? tr("%s is still the saved I/Q file. The signal generator is running in its "
@@ -964,7 +984,7 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
                                             restoreKeepLabel.c_str()),
                              true});
         }
-        if (patchRunning && !o.patch_held.empty()) {
+        if (patchRunning && !o.patch_held.empty() && !keepHeldByPatch) {   // (PF-1: when the saved radio itself is the one held, its own sentence above says so)
             // The patch has borrowed the radio: say why the receiver sits on the signal generator.
             paras.push_back({tr("The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped."), false});
         }

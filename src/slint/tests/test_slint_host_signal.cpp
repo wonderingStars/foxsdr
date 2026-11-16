@@ -272,6 +272,38 @@ int main() {
         CHECK(has(mp.advisory, "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped."));
         CHECK(!has(readSource(kept.t, kept.s, kept.o).advisory, "The running patch is using the radio"));   // no patch, no sentence
         CHECK(!at(mp.devices, 3).enabled && !at(mp.devices, 6).enabled && has(at(mp.devices, 3).tooltip, "The patch is running and has the radios"));
+        // LANE X, PF-1: the saved radio is the very radio the running patch holds: "held by the patch", not "saved, not open" and not the restore advisory
+        {
+            Rig held = generator();
+            held.t.facts["fact.source.keep"] = "rtlsdr";
+            held.t.facts["fact.status.restoreKeepLabel"] = "NESDR SMArt v5";
+            held.s.flags |= FOXAPI_RX_PATCH_RUNNING;
+            held.o.patch_held = {"NESDR SMArt v5"};
+            const SourceModel mh = readSource(held.t, held.s, held.o);
+            CHECK(mh.device_label == "NESDR SMArt v5 (held by the patch)");
+            CHECK(has(mh.advisory, "NESDR SMArt v5 is the saved radio, and the running patch holds it. The receiver is on the signal generator until the patch is stopped."));
+            CHECK(!has(mh.advisory, "is still the saved radio") && !has(mh.advisory, "FoxSDR will try the radio again"));
+            CHECK(!has(mh.advisory, "The running patch is using the radio"));   // one sentence, not two
+            // a different radio is held: the restore advisory stays, with its own label
+            Rig other = generator();
+            other.t.facts["fact.source.keep"] = "rtlsdr";
+            other.t.facts["fact.status.restoreKeepLabel"] = "NESDR SMArt v5";
+            other.s.flags |= FOXAPI_RX_PATCH_RUNNING;
+            other.o.patch_held = {"HackRF One"};
+            const SourceModel mo = readSource(other.t, other.s, other.o);
+            CHECK(mo.device_label == "NESDR SMArt v5 (saved, not open)");
+            CHECK(has(mo.advisory, "NESDR SMArt v5 is still the saved radio."));
+            // a saved I/Q file is never "held by the patch"
+            held.t.facts["fact.source.keep"] = "file";
+            CHECK(!has(readSource(held.t, held.s, held.o).advisory, "the running patch holds it"));
+            // the name rule
+            CHECK(foxsdr::slintsignal::savedRadioHeldByPatch("NESDR SMArt v5", {"nesdr smart v5"}));
+            CHECK(foxsdr::slintsignal::savedRadioHeldByPatch("RTL-SDR #0", {"RTL-SDR #0 (native)"}));
+            CHECK(!foxsdr::slintsignal::savedRadioHeldByPatch("RTL-SDR #0", {"HackRF One"}));
+            CHECK(!foxsdr::slintsignal::savedRadioHeldByPatch("", {"HackRF One"}));
+            CHECK(!foxsdr::slintsignal::savedRadioHeldByPatch("HackRF One", {}));
+            CHECK(!foxsdr::slintsignal::savedRadioHeldByPatch("ab", {"abc"}));   // two letters inside another name is no match
+        }
     }
 
     // ---- an I/Q file, the Pluto and rtl_tcp: the variant by the combo's row, and the boxes ----

@@ -44,6 +44,7 @@ std::int32_t readListFor(const FoxEngineApi* api, FoxSession* session, std::uint
 // LANE K (access): the number format the readouts use: nullptr = today's text, a dot and no grouping, byte for byte (the default; every test sees it). Set from the Accessibility section
 // ("Follow the Windows regional settings"); fmtMHz, fmtKHz, spanText and cursorText then write the decimal sign the symbols name (core/access_number_format.hpp formatNumber).
 void setNumberLocale(const cascade::core::access::NumberSymbols* symbols, cascade::core::access::DigitPolicy policy = cascade::core::access::DigitPolicy::Latin);
+std::string fmtNumber(double v, int decimals);                // lane X: a figure in the readouts' own number format (the Windows decimal sign when the person asked for it), `decimals` places
 std::string fmtMHz(double hz);                             // "145.500000 MHz"
 std::string fmtRate(double hz);                            // "2.400 MS/s", "--" when there is no rate
 std::string fmtKHz(double hz);                             // "12.5 kHz"

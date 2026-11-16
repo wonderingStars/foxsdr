@@ -100,6 +100,8 @@
 #include "lanel_publish.hpp"   // screen lane L (docs/multi-radio-records/screen-l.md)
 #include "lanem_logic.hpp"     // screen lane M (docs/multi-radio-records/screen-m.md): a mark's credit line
 #include "lanem_publish.hpp"   // screen lane M: the controls of the wiring second passes
+#include "tester_host.hpp"    // lane X, WG2-1492: the tester usage recorder
+#include "lanex_publish.hpp"   // lane X (docs/multi-radio-records/lane-x.md): the in-window help and the speed test
 #include "sysmenu_win.hpp"   // window gaps lane 1: the title rail's own system menu (ledger row 14)
 #include "sysmenu_win.hpp"   // window gaps lane 1: the title rail's own system menu (ledger row 14)
 #include "gaps1_publish.hpp"   // window gaps lane 1: the start-up questions (did not close normally, Link this FoxSDR?) and the plugin fault cards
@@ -584,7 +586,12 @@ int main(int argc, char** argv) {
     systemHooks.updateCardChanged = [&] { applyUpdateCard(); };
     systemHooks.rangeManual = [&] { rangeManual = true; ui->set_range_manual(true); };
     systemHooks.testerLink = [&](const std::string& appToken) { if (gaps1) { gaps1->linkRequested(appToken); } };   // a pasted tester link: "Link this FoxSDR?"
+    // LANE X, WG2-1492: the tester usage recorder (tester_host.hpp). It records only while a tester code is set; nothing is sent from here.
+    foxsdr::slinttester::TesterDuty testerDuty;
+    std::uint64_t testerWebSeen = 0, testerCatSeen = 0;
+    const auto monoSeconds = [] { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
     foxsdr::slintsystem::SystemPublisher systemBank(*ui, kit, duties, world, api, session, bounded.bounded(), systemHooks);
+    systemBank.setTesterPreviewSource([&]() -> std::pair<std::string, int> { return {testerDuty.previewJson(monoSeconds(), std::time(nullptr)), 0}; });
     systemBank.setLastRunUnclean(restored.lastRunUnclean);
     systemBank.wire();
     for (const int row : openSections[4]) { systemBank.sectionOpened(row); }   // a section that starts open asks for what it shows (the Serial ports scan)
@@ -734,6 +741,8 @@ int main(int argc, char** argv) {
     std::unique_ptr<foxsdr::slintlanek::LaneKPublisher> laneKp;
     std::unique_ptr<foxsdr::slintlanel::LaneLPublisher> laneLp;   // screen lane L
     std::unique_ptr<foxsdr::slintlanem::LaneMPublisher> laneMp;   // screen lane M
+    std::unique_ptr<foxsdr::slintlanex::LaneXPublisher> laneXp;   // lane X: the help sheet, the speed test
+    std::array<int, 5> helpLastRow{-1, -1, -1, -1, -1};            // lane X: the section last clicked in each bank (the help opens at its topic)
     std::function<std::string(const std::string&, std::string&)> sysMenuState;   // window gaps lane 1: `state sysmenu.<asks|items>`
     double lastFilePositionSec = 0.0;   // screen lane M: the selected radio's position in the file it plays (set once a tick)
     double lastZoomSelected = 0.0;   // the span the last dragged selection zoomed to (state lk.zoomspan)
@@ -1114,6 +1123,7 @@ int main(int argc, char** argv) {
                 e.push_back(entry(MenuItemKind::Item, 601, "About FoxSDR..."));
                 e.push_back(entry(MenuItemKind::Item, 602, "Key bindings", "F7"));
                 e.push_back(entry(MenuItemKind::Item, 603, "Save a screenshot", "Ctrl W"));
+                e.push_back(entry(MenuItemKind::Item, 610, cascade::i18n::tr("Help topics"), "Ctrl F1"));   // lane X: the help that opens in this window, with no network
                 e.push_back(entry(MenuItemKind::Item, 605, "Help: the manual"));
                 e.push_back(entry(MenuItemKind::Item, 606, "Keyboard shortcuts", "Shift F1"));
                 e.push_back(entry(MenuItemKind::Item, 607, "Recordings..."));
@@ -1450,6 +1460,7 @@ int main(int argc, char** argv) {
             case 109: laneC.toggleBwMemory(); break;                                   // F7
             case 606: laneC.openShortcuts(foxsdr::slintsystem::keyTableFromConfig(duties.interfaceHalf().keyBindings)); break;   // U10
             case 607: laneC.openRecordings(); break;                                   // P11
+            case 610: if (laneXp) { laneXp->openHelp(); } break;                       // lane X, G5-14
             case 650: publisher.openSkyPage(); break;                                  // screen lane J, M8
             case 651: publisher.openAntennaPage(); break;                              // screen lane J, Q7a
             case 608: if (laneKp) { laneKp->openCommunity(false); } break;             // lane K: the forum
@@ -1786,6 +1797,22 @@ int main(int argc, char** argv) {
         laneMp = std::make_unique<foxsdr::slintlanem::LaneMPublisher>(std::move(e));
         laneMp->wire();
     }
+    // ---- LANE X (docs/multi-radio-records/lane-x.md): the in-window help (G5-14) and the DSP speed test (G5-19) ----
+    {
+        foxsdr::slintlanex::LaneXPublisher::Env e;
+        e.ui = &*ui;
+        e.numbers = [](double v, int decimals) { return foxsdr::slinthost::fmtNumber(v, decimals); };
+        e.where = [&]() -> std::pair<int, int> {
+            // the section the person is in: the one last clicked in this bank if it is open and has a topic, else the first open section that has one
+            const auto hasTopic = [&](int row) { return foxsdr::slintlanex::topicForSection(bankIndex, row) >= 0 && openSections[bankIndex].count(row) > 0; };
+            const int last = helpLastRow[static_cast<std::size_t>(bankIndex)];
+            if (last >= 0 && hasTopic(last)) { return {bankIndex, last}; }
+            for (const int row : openSections[bankIndex]) { if (hasTopic(row)) { return {bankIndex, row}; } }
+            return {bankIndex, -1};
+        };
+        laneXp = std::make_unique<foxsdr::slintlanex::LaneXPublisher>(std::move(e));
+        laneXp->wire();
+    }
     // ---- WINDOW GAPS LANE 1 (docs/multi-radio-records/window-gaps-1.md): what the classic window asks or says at start-up ----
     {
         foxsdr::slintgaps1::Publisher::Env e;
@@ -1855,6 +1882,7 @@ int main(int argc, char** argv) {
         auto& open = openSections[bankIndex];
         if (open.count(row)) { open.erase(row); } else {
             open.insert(row);
+            helpLastRow[static_cast<std::size_t>(std::clamp(bankIndex, 0, 4))] = row;   // lane X: the help opens at the section last opened
             if (bankIndex == 4) { systemBank.sectionOpened(row); }
             if (bankIndex == 2 && row == 1) { systemBank.sectionOpened(4); }   // the Radar fold's GPS row reads the Serial ports scan
         }
@@ -2206,6 +2234,7 @@ int main(int argc, char** argv) {
         else if (id == "tuneStepUp") { stepTune(1, tuneStepHz); } else if (id == "tuneStepDown") { stepTune(-1, tuneStepHz); }
         else if (id == "tuneSpanUp") { stepTune(1, currentView().spanHz); } else if (id == "tuneSpanDown") { stepTune(-1, currentView().spanHz); }
         else if (id == "quickTune") { ui->invoke_edit_requested(); }
+        else if (id == foxsdr::slintsystem::kShortcutHelp) { if (laneXp) { laneXp->openHelp(); } }   // lane X, G5-14: Ctrl+F1
         else if (id == foxsdr::slintsystem::kShortcutOverlay) { laneC.openShortcuts(foxsdr::slintsystem::keyTableFromConfig(duties.interfaceHalf().keyBindings)); }   // U10
         else if (id == "zoomIn") { zoomView(kZoomPerNotch, 0.5); } else if (id == "zoomOut") { zoomView(1.0 / kZoomPerNotch, 0.5); } else if (id == "zoomReset") { selected().resetView(); }
         else if (id == "record") { FoxCommand c = op(FOXAPI_OP_RECORD_AUDIO); c.ival[0] = (state.flags & FOXAPI_RX_RECORDING_AUDIO) ? 0 : 1; submit(c); }
@@ -2234,7 +2263,7 @@ int main(int argc, char** argv) {
             switch (foxsdr::slintsystem::escapeStep(open)) {
                 case foxsdr::slintsystem::EscapeStep::ImportDialog: ui->global<SignalEvents>().invoke_import_closed(); break;
                 case foxsdr::slintsystem::EscapeStep::StorePluginPage: ui->global<ExtendEvents>().invoke_store_plugin_back(); break;
-                case foxsdr::slintsystem::EscapeStep::Overlays: ui->set_editing(false); ui->set_about_open(false); ui->set_bias_question_open(false); laneC.closeOverlays(); if (laneKp) { laneKp->closeOverlays(); } break;
+                case foxsdr::slintsystem::EscapeStep::Overlays: ui->set_editing(false); ui->set_about_open(false); ui->set_bias_question_open(false); laneC.closeOverlays(); if (laneKp) { laneKp->closeOverlays(); } if (laneXp) { laneXp->closeHelp(); } break;
             }
         }
         else if (id == "uiSizeAuto") { systemBank.setInterfaceSize(0); }   // Ctrl+0: back to Auto (saved; the look takes it on the next tick)
@@ -2728,6 +2757,12 @@ int main(int argc, char** argv) {
             if (laneLp && !laneKOff) { laneLp->tick(static_cast<long>(tickNo)); }   // screen lane L (the same switch leaves it out)
             lastFilePositionSec = state.filePositionSec;   // screen lane M: the selected radio's position in the file it plays
             if (laneMp && !laneKOff) { laneMp->tick(static_cast<long>(tickNo)); }   // screen lane M (the same switch leaves it out)
+            if (laneXp) { laneXp->tick(static_cast<long>(tickNo)); }   // lane X: the speed test's progress
+            {   // lane X, WG2-1492: the tester usage recorder looks at the engine twice a second while a code is set
+                const cascade::core::AppConfig& half = duties.interfaceHalf();
+                testerDuty.setToken(!half.testerAppToken.empty() ? half.testerAppToken : half.testerToken, std::time(nullptr), monoSeconds());
+                if (testerDuty.armed() && tickNo % 15 == 0) { testerDuty.note(foxsdr::slinttester::collectFacts(api, session, state.flags, testerWebSeen, testerCatSeen), monoSeconds()); }
+            }
             if (gaps1) { gaps1->tick(static_cast<long>(tickNo)); }   // window gaps lane 1
             if (!laneCOff) { laneC.tick(state, static_cast<long>(tickNo)); }   // screen lane C: scanner block, memories, clock, sheets (FOXSDR_SLINT_LANEC_OFF=1, a bounded run only, leaves it out: the frame-cost comparison)
             if (!lists.converter && !(noteTick > 0 && tickNo - noteTick < 90)) {   // T9: the airband channel's name where the counter says "via ..." (a note or a converter keeps the place)
@@ -3270,6 +3305,28 @@ int main(int argc, char** argv) {
             else { return "export.<note|working|rows|segments|path|length|format|lastpath|fileinfo|peakoffset>, not " + name; }
             return std::string();
         }
+        // pane.r<n>.<what> (lane X, row P1): what radio n's pane was last PUBLISHED with, read back from the row the window holds
+        if (name.rfind("pane.", 0) == 0) {
+            std::string what = name.substr(5);
+            int slot = radios.selected;
+            if (what.size() > 2 && what[0] == 'r' && std::isdigit(static_cast<unsigned char>(what[1])) != 0 && what.find('.') != std::string::npos) {
+                slot = std::clamp(std::atoi(what.c_str() + 1) - 1, 0, kMaxRadios - 1);
+                what = what.substr(what.find('.') + 1);
+            }
+            const auto& d = workspacePublisher.publishedRow(slot).pane;
+            if (what == "airmarks") { out = std::to_string(d.airband_channels ? d.airband_channels->row_count() : 0u); }
+            else if (what == "airblock") { out = d.airband_block.empty() ? std::string("-") : std::string(d.airband_block.data(), d.airband_block.size()); }
+            else if (what == "airhearing") { out = d.airband_hearing.empty() ? std::string("-") : std::string(d.airband_hearing.data(), d.airband_hearing.size()); }
+            else if (what == "showvfo") { out = d.show_vfo ? "1" : "0"; }
+            else if (what == "peak") { out = d.peak.empty() ? std::string("-") : std::string(d.peak.data(), d.peak.size()); }
+            else if (what == "gap") { out = fmt("%.3f", static_cast<double>(d.wf_gap_pos)); }
+            else if (what == "gapabove") { out = d.wf_gap_above.empty() ? std::string("-") : std::string(d.wf_gap_above.data(), d.wf_gap_above.size()); }
+            else if (what == "gapbelow") { out = d.wf_gap_below.empty() ? std::string("-") : std::string(d.wf_gap_below.data(), d.wf_gap_below.size()); }
+            else if (what == "rail") { out = fmt("%.3f", static_cast<double>(d.wf_rail_pos)); }
+            else if (what == "raillabel") { out = d.wf_rail_label.empty() ? std::string("-") : std::string(d.wf_rail_label.data(), d.wf_rail_label.size()); }
+            else { return "pane.[r<n>.]<airmarks|airblock|airhearing|showvfo|peak|gap|gapabove|gapbelow|rail|raillabel>, not " + name; }
+            return std::string();
+        }
         if (name.rfind("marks.", 0) == 0) {
             std::string what = name.substr(6);
             int slot = radios.selected;
@@ -3547,6 +3604,7 @@ int main(int argc, char** argv) {
         if (name.rfind("mute.", 0) == 0) { return publisher.muteState(name.substr(5), out); }
         if (name.rfind("sysmenu.", 0) == 0) { return sysMenuState ? sysMenuState(name.substr(8), out) : std::string("no system menu"); }
         if (name.rfind("gaps1.", 0) == 0) { return gaps1 ? gaps1->readState(name.substr(6), out) : std::string("no window gaps 1"); }
+        if (name.rfind("lx.", 0) == 0) { return laneXp ? laneXp->readState(name.substr(3), out) : std::string("no lane X"); }
         if (name.rfind("lm.", 0) == 0) { return laneMp ? laneMp->readState(name.substr(3), out) : std::string("no lane M"); }
         if (name.rfind("lk.", 0) == 0) { return laneKp ? laneKp->readState(name.substr(3), out) : std::string("no lane K"); }
         // gaps.<what>: the classic-window gaps (docs/multi-radio-records/slint-gaps.md)

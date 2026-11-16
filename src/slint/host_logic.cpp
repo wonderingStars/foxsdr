@@ -121,6 +121,7 @@ void setNumberLocale(const cascade::core::access::NumberSymbols* symbols, cascad
     if (symbols != nullptr) { g_numSymbols = *symbols; }
     g_numPolicy = policy;
 }
+std::string fmtNumber(double v, int decimals) { return locNum(v, decimals, decimals <= 0 ? "%.0f" : decimals == 1 ? "%.1f" : decimals == 2 ? "%.2f" : decimals == 3 ? "%.3f" : "%.6f"); }
 std::string fmtMHz(double hz) { return locNum(hz / 1e6, 6, "%.6f") + " MHz"; }
 std::string fmtRate(double hz) { return hz > 0.0 ? fmt("%.3f MS/s", hz / 1e6) : std::string("--"); }
 std::string fmtKHz(double hz) { return locNum(hz / 1e3, 1, "%.1f") + " kHz"; }
