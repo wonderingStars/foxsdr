@@ -163,7 +163,9 @@ std::string labelOf(std::string item) {
 const std::vector<std::string>& secretKeys() {
     static const std::vector<std::string> k = {"testerToken", "testerAppToken", "webPasswordRecord", "webListenerPasswordRecord",
                                                       // screen lane S4 (engine/wire_c.cpp, wirec.json): the MQTT password and the webhook address (it may carry a token)
-                                                      "out.mqtt.password", "out.webhook.url", "out.influx.token"};
+                                                      "out.mqtt.password", "out.webhook.url", "out.influx.token",
+                                                      // screen lane S4b: the MCP server's bearer token
+                                                      "srv.mcp.token"};
     return k;
 }
 

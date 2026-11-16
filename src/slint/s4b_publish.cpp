@@ -226,6 +226,38 @@ struct S4bPublisher::Impl {
             v.push_back(rReadout(tr("Commands not used"), fact("srv.rtltcp.ignored")));
         }
         if (fact("wirec.srv.rtltcp.all") == "1") { v.push_back(rNote(tr("The rtl_tcp server has no password. Anyone on your network can connect, listen and retune the radio."), kWarn)); }
+
+        // ---- the program interface: WebSocket and event stream (G3-31)
+        v.push_back(rHeading(tr("Program interface")));
+        const bool apiOn = fact("wirec.srv.api.enabled") == "1";
+        wircTick(v, S, "api.on", tr("Serve the program interface"), "srv.api.enabled",
+                 tr("Other programs can read the receiver's status, bookmarks and decoded lines, and retune it, over a WebSocket or an event stream."));
+        wircTick(v, S, "api.all", tr("Let other computers connect to the program interface"), "srv.api.all",
+                 tr("Off: only programs on this computer can connect. On: they must sign in with the web page's user name and password, which needs a password set for the web page."));
+        wholeField(v, S, "api.port", tr("Program interface port"), "srv.api.port", 1024, 65535);
+        serverReadouts(v, tr("Program interface"), "srv.api", apiOn);
+        if (apiOn && factOn("srv.api.running")) {
+            v.push_back(rReadout(tr("WebSockets opened"), fact("srv.api.websockets")));
+            v.push_back(rReadout(tr("Event streams opened"), fact("srv.api.streams")));
+            v.push_back(rReadout(tr("Retunes from programs"), fact("srv.api.tunes")));
+        }
+        v.push_back(rNote(tr("A program can read the status, bookmarks and decoded lines and retune the receiver. It cannot transmit, read or write files, change settings or run anything."), kDim));
+        if (fact("wirec.srv.api.all") == "1") { v.push_back(rNote(tr("The web page's user name and password are sent without encryption on this connection."), kWarn)); }
+
+        // ---- the MCP server (G3-32)
+        v.push_back(rHeading(tr("MCP server")));
+        const bool mcpOn = fact("wirec.srv.mcp.enabled") == "1";
+        wircTick(v, S, "mcp.on", tr("Serve MCP to programs on this computer"), "srv.mcp.enabled",
+                 tr("An assistant program on this computer can read the receiver's status, bookmarks and decoded lines and retune it. It listens on this computer only."));
+        wholeField(v, S, "mcp.port", tr("MCP port"), "srv.mcp.port", 1024, 65535);
+        masked(v, "mcp.token", tr("MCP token"), [this, S](const std::string& t) { setting(S, tr("MCP token"), "srv.mcp.token", t); },
+               tr("Optional. Type it and press Enter. When set, every request must carry it. It is kept in the Windows protected store and not shown again."));
+        if (fact("wirec.srv.mcp.token") == "set") {
+            v.push_back(rReadout(tr("MCP token"), tr("stored")));
+            key(v, "mcp.token.clear", tr("Forget the MCP token"), [this, S] { setting(S, tr("MCP token"), "srv.mcp.token", ""); });
+        }
+        serverReadouts(v, tr("MCP"), "srv.mcp", mcpOn);
+        v.push_back(rNote(tr("MCP offers five tools: status, bookmarks, recent decoded lines, tune and set mode. Nothing else can be done through it."), kDim));
         endNote(v, S);
     }
 

@@ -16,6 +16,7 @@
 #include "core/app_commands.hpp"
 #include "core/companion_fault.hpp"
 #include "core/config.hpp"
+#include "core/demod_names.hpp"
 #include "core/diag_log.hpp"
 #include "engine/engine.hpp"
 #include "core/plugin_repo_helper.hpp"   // wire-c
@@ -500,6 +501,50 @@ void Engine::pumpWireC() {
                 if (sink != nullptr && wireB_ != nullptr && slot < wireB_->iqOut.size() && wireB_->iqOut[slot].out != nullptr) { return "that radio sends network I/Q already: stop that first"; }
                 receivers_[slot]->pipeline_.setIqSink(sink);
                 return std::string();
+            };
+            h.setMode = [this](int radio, const std::string& mode) -> std::string {
+                std::uint32_t idx = 0;
+                for (std::uint32_t i = 1; i <= 8; ++i) { if (mode == cascade::core::kDemodNames[i]) { idx = i; } }
+                if (idx == 0) { return "that is not a mode"; }
+                FoxCommand cmd = cascade::core::cmd::makeInt(FOXAPI_OP_SET_MODE, static_cast<std::int64_t>(idx));   // the ordinary mode command: its checks apply
+                cmd.target = static_cast<std::uint32_t>(radio);
+                const FoxCommandResult r = applyCommand(cmd);
+                return (r.status == FOXAPI_OK || r.status == FOXAPI_NO_CHANGE) ? std::string() : std::string(r.message);
+            };
+            h.readStatus = [this](int radio, cascade::net::HubStatus& out) -> bool {
+                const std::size_t slot = static_cast<std::size_t>(radio - 1);
+                if (radio < 1 || slot >= receivers_.size() || !receivers_[slot] || receivers_[slot]->receiverSnapshot_ == nullptr) { return false; }
+                cascade::core::PublishedState ps;
+                if (!receivers_[slot]->receiverSnapshot_->read(ps)) { return false; }
+                out.running = (ps.rx.flags & FOXAPI_RX_RUNNING) != 0u;
+                out.tunedHz = ps.rx.tunedHz;
+                out.centreHz = ps.rx.centreHz;
+                out.sampleRateHz = ps.rx.sampleRateHz;
+                out.bandwidthHz = ps.rx.bandwidthHz;
+                out.signalDb = ps.rx.signalDb;
+                out.mode = ps.rx.demodMode <= 8u ? cascade::core::kDemodNames[ps.rx.demodMode] : "";
+                out.source = std::string(ps.rx.deviceName, strnlen(ps.rx.deviceName, sizeof(ps.rx.deviceName)));
+                return true;
+            };
+            h.readBookmarks = [this]() {
+                std::vector<cascade::net::HubBookmark> v;
+                for (const cascade::core::Bookmark& b : freqMgr_.list()) {
+                    if (v.size() >= cascade::net::kHubMaxBookmarks) { break; }
+                    v.push_back({b.name, b.mode, b.group, b.freqHz});
+                }
+                return v;
+            };
+            h.readDecodes = [this](std::uint64_t& seq, const std::function<void(double, double, const std::string&, const std::string&)>& sink) {
+                if (!sink) { seq = pluginApi_->eventsSeq(); return; }
+                for (const CascadeEvent& ev : pluginApi_->hostEvents(seq, 256)) {
+                    seq = std::max<std::uint64_t>(seq, ev.seq);
+                    if ((ev.flags & CASCADE_EVENT_FLAG_PRIVATE) != 0u || std::string(ev.kind) != "text") { continue; }   // a private plugin's line is never shown
+                    sink(static_cast<double>(ev.unixMs) / 1000.0, ev.frequencyHz, ev.plugin, ev.text);
+                }
+            };
+            h.webAccount = [this]() {
+                const ServerConfig sc = servers_.config();
+                return cascade::engine::s4b::Hooks::WebAccount{sc.web.username, sc.web.passwordRecord};
             };
             h.tune = [this](int radio, double hz) -> std::string {
                 FoxCommand cmd = cascade::core::cmd::makeNum(FOXAPI_OP_SET_FREQUENCY, hz);   // the ordinary tuning command: every check the window's own tuning meets applies

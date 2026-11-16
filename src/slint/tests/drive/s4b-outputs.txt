@@ -49,3 +49,34 @@
 +1 state s4b.fact.srv.rtltcp.scope == "this computer only"
 +1 click "Serve the radio's samples like rtl_tcp"
 +15 state s4b.fact.srv.rtltcp.running == 0
+# the program interface (G3-31): off at start, this computer only; "every address" is read and left off
++1 state s4b.fact.srv.api.running == 0
++1 state s4b.fact.wirec.srv.api.enabled == 0
++1 state s4b.fact.wirec.srv.api.all == 0
++1 type "Program interface port" "47074"
++1 key enter
++12 state s4b.fact.wirec.srv.api.port == 47074
++1 type "Program interface port" "80"
++1 key enter
++8 state s4b.fact.wirec.srv.api.port == 47074
++1 click "Serve the program interface"
++15 state s4b.fact.srv.api.running == 1
++1 state s4b.fact.srv.api.scope == "this computer only"
++1 click "Serve the program interface"
++15 state s4b.fact.srv.api.running == 0
+# the MCP server (G3-32): off at start; a token is stored and never shown
++1 state s4b.fact.srv.mcp.running == 0
++1 state s4b.fact.wirec.srv.mcp.token == ""
++1 type "MCP port" "47075"
++1 key enter
++12 state s4b.fact.wirec.srv.mcp.port == 47075
++1 type "MCP token" "drive-token-s4b"
++1 key enter
++12 state s4b.fact.wirec.srv.mcp.token == "set"
++1 click "Serve MCP to programs on this computer"
++15 state s4b.fact.srv.mcp.running == 1
++1 state s4b.fact.srv.mcp.scope == "this computer only"
++1 click "Serve MCP to programs on this computer"
++15 state s4b.fact.srv.mcp.running == 0
++1 click "Forget the MCP token"
++12 state s4b.fact.wirec.srv.mcp.token == ""

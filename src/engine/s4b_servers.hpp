@@ -18,9 +18,14 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "core/pipeline.hpp"
+#include "net/api_server.hpp"
+#include "net/control_hub.hpp"
+#include "engine/s4b_mcp.hpp"
 #include "net/rtl_tcp_server.hpp"
+#include "net/web_auth.hpp"
 #include "net/tcp_audio.hpp"
 
 namespace cascade::engine::wirec {
@@ -42,8 +47,16 @@ struct Config {
     bool rtl = false;
     bool rtlAll = false;
     int rtlPort = 1234;
+    // the WebSocket / SSE API (net/api_server.hpp): other programs read what the receiver does and retune it; the web page's own account guards it
+    bool api = false;
+    bool apiAll = false;
+    int apiPort = 8074;
+    // the MCP server (net/mcp_server.hpp): this computer only; an optional bearer token (a secret, kept in the protected store)
+    bool mcp = false;
+    int mcpPort = 8075;
+    std::string mcpToken;
     bool operator==(const Config& o) const {
-        return tcpAudio == o.tcpAudio && tcpAudioAll == o.tcpAudioAll && tcpAudioPort == o.tcpAudioPort && tcpAudioRadio == o.tcpAudioRadio && tcpAudioPacket == o.tcpAudioPacket &&
+        return api == o.api && apiAll == o.apiAll && apiPort == o.apiPort && mcp == o.mcp && mcpPort == o.mcpPort && mcpToken == o.mcpToken && tcpAudio == o.tcpAudio && tcpAudioAll == o.tcpAudioAll && tcpAudioPort == o.tcpAudioPort && tcpAudioRadio == o.tcpAudioRadio && tcpAudioPacket == o.tcpAudioPacket &&
                controlRadio == o.controlRadio && rtl == o.rtl && rtlAll == o.rtlAll && rtlPort == o.rtlPort;
     }
 };
@@ -60,6 +73,17 @@ struct Hooks {
     std::function<std::uintptr_t(int radio)> radioIdentity;
     // Retunes a radio through the engine's own tuning command (every check it makes applies). "" = done, else the engine's sentence.
     std::function<std::string(int radio, double hz)> tune;
+    // Sets a radio's demodulator mode through the engine's own mode command (name: one of the eight). "" = done, else the engine's sentence.
+    std::function<std::string(int radio, const std::string& mode)> setMode;
+    // The radio's state as the engine publishes it; false when the radio is not open.
+    std::function<bool(int radio, cascade::net::HubStatus& out)> readStatus;
+    // The saved bookmarks.
+    std::function<std::vector<cascade::net::HubBookmark>()> readBookmarks;
+    // The decoded lines newer than `seq` (which is moved up), never those of a private plugin: each is handed to `sink(unixSeconds, frequencyHz, decoder, text)`.
+    std::function<void(std::uint64_t& seq, const std::function<void(double, double, const std::string&, const std::string&)>& sink)> readDecodes;
+    // The web page's account (user name and the password's stored record: never the password). Empty record = no password is set.
+    struct WebAccount { std::string user, record; };
+    std::function<WebAccount()> webAccount;
 };
 
 // The sentence that says who can reach a server: "this computer only" or the warning for every address.
@@ -91,6 +115,10 @@ public:
 private:
     void applyTcpAudio(const Config& c);
     void applyRtl(const Config& c);
+    void applyApi(const Config& c);
+    void applyMcp(const Config& c);
+    cascade::net::ApiAuth checkApiAuth(const std::string& authorization, const std::string& client);
+    void controlPass();
     void releaseRtl();    // the tap off the radio, then the server stopped (m_ held)
     struct RtlTap final : cascade::core::Pipeline::IqSink {
         cascade::net::RtlTcpServer* target = nullptr;
@@ -110,6 +138,21 @@ private:
     std::string rtlProblem_;
     std::atomic<std::uint64_t> rtlTuneWord_{0};   // a pending retune: bit 63 set, the Hz below (written by the server's IO thread, taken by the pass)
     std::atomic<std::uint64_t> rtlTunes_{0}, rtlTuneRefused_{0}, rtlIgnored_{0};
+
+    // the control hub (the API and the MCP server read and ask through it), the two servers, and what the pass keeps for them
+    cascade::net::ControlHub hub_;
+    std::unique_ptr<cascade::net::ApiServer> api_;
+    std::string apiProblem_;
+    std::unique_ptr<McpEndpoint> mcp_;
+    std::string mcpProblem_;
+    std::uint64_t decodeSeq_ = 0;
+    bool feedLive_ = false;
+    std::int64_t lastStatusMs_ = -1000000, lastBookmarksMs_ = -1000000;
+    std::atomic<std::uint64_t> controlTunes_{0}, controlTuneRefused_{0}, controlModes_{0};
+    struct Verified { std::string digest; std::int64_t until = 0; };
+    std::mutex authM_;
+    std::vector<Verified> verified_;
+    cascade::net::LoginThrottle throttle_;
 };
 
 }  // namespace cascade::engine::s4b

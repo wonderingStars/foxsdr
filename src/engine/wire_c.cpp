@@ -94,6 +94,12 @@ constexpr Spec kSpecs[] = {
     {"srv.rtltcp.enabled", Kind::Bool, 0, 0, "0", ""},          // serve that radio's I/Q to programs that read an RTL-SDR over the network (rtl_tcp); only retuning is accepted from them
     {"srv.rtltcp.all", Kind::Bool, 0, 0, "0", ""},              // listen on every address instead of this computer only (no password)
     {"srv.rtltcp.port", Kind::Int, 1024, 65535, "1234", ""},
+    {"srv.api.enabled", Kind::Bool, 0, 0, "0", ""},             // the WebSocket and SSE interface: other programs read the receiver's status, bookmarks and decoded lines and retune it
+    {"srv.api.all", Kind::Bool, 0, 0, "0", ""},                 // listen on every address (programs must then sign in with the web page's account; refused while the web page has no password)
+    {"srv.api.port", Kind::Int, 1024, 65535, "8074", ""},
+    {"srv.mcp.enabled", Kind::Bool, 0, 0, "0", ""},             // the MCP server (five tools: status, bookmarks, recent decodes, tune, set mode); this computer only
+    {"srv.mcp.port", Kind::Int, 1024, 65535, "8075", ""},
+    {"srv.mcp.token", Kind::Text, 0, 128, "", ""},              // SECRET (protected store): when set, a client must send it as a bearer token
 };
 constexpr std::size_t kSpecCount = sizeof(kSpecs) / sizeof(kSpecs[0]);
 
@@ -144,6 +150,7 @@ std::string extraRule(const std::string& key, const std::string& value) {
     if (key == "out.influx.org") { return cascade::engine::s4::checkInfluxText(value, true); }
     if (key == "out.influx.token" && value.find_first_of("\r\n") != std::string::npos) { return "the token has a line break"; }
     if (key == "out.webhook.url") { return cascade::engine::s4::checkWebhookUrl(value); }
+    if (key == "srv.mcp.token" && value.find_first_of("\r\n\t ") != std::string::npos) { return "the token has a space or a line break"; }
     if (key == "alerts.keywords") { return cascade::engine::s4::parseKeywords(value).problem; }
     if (key == "rds.log.folder" && !value.empty() && !std::filesystem::path(value).is_absolute()) { return "the folder must be a full path"; }
     return std::string();

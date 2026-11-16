@@ -170,6 +170,13 @@ std::uint16_t boundPort(Handle s) {
     return ntohs(a.sin_port);
 }
 
+std::string peerOf(Handle s) {
+    sockaddr_in a{};
+    SockLen len = sizeof(a);
+    if (::getpeername(S(s), reinterpret_cast<sockaddr*>(&a), &len) != 0 || a.sin_family != AF_INET) { return std::string(); }
+    return formatIpv4(ntohl(a.sin_addr.s_addr));
+}
+
 Handle acceptOne(Handle listener) {
     const Handle h = H(::accept(S(listener), nullptr, nullptr));
     if (h == kInvalid) { return kInvalid; }

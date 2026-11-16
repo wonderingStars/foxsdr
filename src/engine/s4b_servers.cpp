@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "engine/s4b_servers.hpp"
 
+#include <chrono>
+
 #include "engine/wire_c.hpp"
+#include "net/ws_frame.hpp"
 
 namespace cascade::engine::s4b {
 
@@ -21,6 +24,12 @@ Config configFrom(const cascade::engine::wirec::Settings& s) {
     c.rtl = s.getBool("srv.rtltcp.enabled");
     c.rtlAll = s.getBool("srv.rtltcp.all");
     c.rtlPort = static_cast<int>(s.getInt("srv.rtltcp.port"));
+    c.api = s.getBool("srv.api.enabled");
+    c.apiAll = s.getBool("srv.api.all");
+    c.apiPort = static_cast<int>(s.getInt("srv.api.port"));
+    c.mcp = s.getBool("srv.mcp.enabled");
+    c.mcpPort = static_cast<int>(s.getInt("srv.mcp.port"));
+    c.mcpToken = s.get("srv.mcp.token");
     return c;
 }
 
@@ -98,8 +107,132 @@ void ServerSet::applyRtl(const Config& c) {
     rtlRadio_ = 0;   // the pass puts the tap on the radio (and again when the radio is opened anew)
 }
 
+namespace {
+std::int64_t steadyMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+}  // namespace
+
+// The API's login: the web page's own account (the same user name and password). No password set on the web page: this computer's own programs only (the server refuses to listen
+// beyond this computer then). A good login is remembered for five minutes by a digest of the header, so a program that keeps connecting does not pay the password check each time;
+// wrong attempts are counted per client and past five in five minutes the client is told to wait.
+cascade::net::ApiAuth ServerSet::checkApiAuth(const std::string& authorization, const std::string& client) {
+    namespace na = cascade::net;
+    Hooks::WebAccount acct;
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        if (hooks_.webAccount) { acct = hooks_.webAccount(); }
+    }
+    if (acct.record.empty()) { return na::ApiAuth::Allowed; }
+    static const std::string kBasic = "Basic ";
+    if (authorization.compare(0, kBasic.size(), kBasic) != 0 || authorization.size() > 600) { return na::ApiAuth::Denied; }
+    const std::int64_t now = steadyMs();
+    std::vector<std::uint8_t> digest;
+    std::string derr;
+    if (!na::sha256(reinterpret_cast<const std::uint8_t*>(authorization.data()), authorization.size(), digest, derr)) { return na::ApiAuth::Denied; }
+    const std::string key(digest.begin(), digest.end());
+    std::lock_guard<std::mutex> lk(authM_);
+    for (std::size_t i = 0; i < verified_.size();) {
+        if (verified_[i].until <= now) { verified_.erase(verified_.begin() + static_cast<std::ptrdiff_t>(i)); continue; }
+        if (verified_[i].digest == key) { return na::ApiAuth::Allowed; }
+        ++i;
+    }
+    const std::int64_t nowS = now / 1000;
+    if (!throttle_.allow(client, nowS)) { return na::ApiAuth::TooMany; }
+    std::string text;
+    if (!na::ws::base64Decode(authorization.substr(kBasic.size()), text) || text.size() > 400) { throttle_.recordFailure(client, nowS); return na::ApiAuth::Denied; }
+    const std::size_t colon = text.find(':');
+    if (colon == std::string::npos) { throttle_.recordFailure(client, nowS); return na::ApiAuth::Denied; }
+    na::PasswordRecord rec;
+    std::string perr;
+    if (!na::PasswordRecord::parse(acct.record, rec, perr)) { return na::ApiAuth::Denied; }
+    std::string verr;
+    const bool good = na::verifyLogin(text.substr(0, colon), text.substr(colon + 1), acct.user, rec, verr);
+    if (!good) { throttle_.recordFailure(client, nowS); return na::ApiAuth::Denied; }
+    throttle_.recordSuccess(client);
+    if (verified_.size() >= 16) { verified_.erase(verified_.begin()); }
+    verified_.push_back({key, now + 5 * 60 * 1000});
+    return na::ApiAuth::Allowed;
+}
+
+void ServerSet::applyApi(const Config& c) {
+    const bool changed = !configured_ || c.api != cfg_.api || c.apiAll != cfg_.apiAll || c.apiPort != cfg_.apiPort;
+    if (!changed) { return; }
+    if (api_ != nullptr) { api_->stop(); api_.reset(); }
+    apiProblem_.clear();
+    {
+        std::lock_guard<std::mutex> lk(authM_);
+        verified_.clear();
+    }
+    if (!c.api) { return; }
+    // beyond this computer the web page's account must exist: without it nobody could be told from anybody
+    if (c.apiAll) {
+        const Hooks::WebAccount acct = hooks_.webAccount ? hooks_.webAccount() : Hooks::WebAccount{};
+        if (acct.record.empty()) { apiProblem_ = "set a password for the web page first: this interface uses the same account, and it will not listen beyond this computer without one"; return; }
+    }
+    cascade::net::ApiConfig ac;
+    ac.bindAddress = c.apiAll ? "0.0.0.0" : "127.0.0.1";
+    ac.allowAllInterfaces = c.apiAll;
+    ac.port = static_cast<std::uint16_t>(c.apiPort);
+    ac.requireAuth = c.apiAll;
+    auto server = std::make_unique<cascade::net::ApiServer>(ac, hub_, [this](const std::string& a, const std::string& peer) { return checkApiAuth(a, peer); });
+    std::string why;
+    if (!server->start(why)) { apiProblem_ = why.empty() ? std::string("the interface could not start") : why; return; }
+    api_ = std::move(server);
+}
+
+void ServerSet::applyMcp(const Config& c) {
+    const bool changed = !configured_ || c.mcp != cfg_.mcp || c.mcpPort != cfg_.mcpPort || c.mcpToken != cfg_.mcpToken;
+    if (!changed) { return; }
+    if (mcp_ != nullptr) { mcp_->stop(); mcp_.reset(); }
+    mcpProblem_.clear();
+    if (!c.mcp) { return; }
+    auto ep = std::make_unique<McpEndpoint>();
+    std::string why;
+    if (!ep->start(hub_, c.mcpPort, c.mcpToken, why)) { mcpProblem_ = why.empty() ? std::string("the MCP server could not start") : why; return; }
+    mcp_ = std::move(ep);
+}
+
+// Once a pass while the API or the MCP server is on: what the hub shows is brought up to date (the status four times a second, the bookmarks every two seconds, every new decoded line of a
+// plugin that is not private), and the latest tuning or mode request a client made is applied through the engine's own commands.
+void ServerSet::controlPass() {
+    const bool on = api_ != nullptr || mcp_ != nullptr;
+    if (!on) { feedLive_ = false; return; }
+    const std::int64_t now = steadyMs();
+    const int radio = cfg_.controlRadio;
+    if (now - lastStatusMs_ >= 250) {
+        lastStatusMs_ = now;
+        cascade::net::HubStatus st;
+        if (hooks_.readStatus && hooks_.readStatus(radio, st)) { hub_.publishStatus(st); }
+        else { hub_.publishStatus(cascade::net::HubStatus{}); }
+    }
+    if (now - lastBookmarksMs_ >= 2000 && hooks_.readBookmarks) {
+        lastBookmarksMs_ = now;
+        hub_.publishBookmarks(hooks_.readBookmarks());
+    }
+    if (hooks_.readDecodes) {
+        if (!feedLive_) {
+            feedLive_ = true;
+            std::uint64_t seq = 0;
+            hooks_.readDecodes(seq, nullptr);   // (a null sink: only moves the cursor to the present: what was decoded before the interface was turned on is not shown)
+            decodeSeq_ = seq;
+        } else {
+            hooks_.readDecodes(decodeSeq_, [this](double t, double f, const std::string& d, const std::string& x) { hub_.addDecode(t, f, d, x); });
+        }
+    }
+    if (const std::optional<double> hz = hub_.takeTune()) {
+        const std::string why = hooks_.tune ? hooks_.tune(radio, *hz) : std::string("the engine gave no way to tune");
+        if (why.empty()) { controlTunes_.fetch_add(1, std::memory_order_relaxed); } else { controlTuneRefused_.fetch_add(1, std::memory_order_relaxed); }
+    }
+    if (const std::optional<std::string> mode = hub_.takeMode()) {
+        const std::string why = hooks_.setMode ? hooks_.setMode(radio, *mode) : std::string("the engine gave no way to set the mode");
+        if (why.empty()) { controlModes_.fetch_add(1, std::memory_order_relaxed); } else { controlTuneRefused_.fetch_add(1, std::memory_order_relaxed); }
+    }
+}
+
 void ServerSet::pass() {
     std::lock_guard<std::mutex> lk(m_);
+    controlPass();
     if (rtl_ == nullptr) { return; }
     const int radio = cfg_.controlRadio;
     const std::uintptr_t id = hooks_.radioIdentity ? hooks_.radioIdentity(radio) : 0;
@@ -130,13 +263,15 @@ void ServerSet::configure(const Config& c) {
     std::lock_guard<std::mutex> lk(m_);
     applyTcpAudio(c);
     applyRtl(c);
+    applyApi(c);
+    applyMcp(c);
     cfg_ = c;
     configured_ = true;
 }
 
 bool ServerSet::active() const {
     std::lock_guard<std::mutex> lk(m_);
-    return tcpAudio_ != nullptr || rtl_ != nullptr;
+    return tcpAudio_ != nullptr || rtl_ != nullptr || api_ != nullptr || mcp_ != nullptr;
 }
 
 void ServerSet::stop() {
@@ -146,6 +281,8 @@ void ServerSet::stop() {
         tcpAudio_->stop();
         tcpAudio_.reset();
     }
+    if (api_ != nullptr) { api_->stop(); api_.reset(); }
+    if (mcp_ != nullptr) { mcp_->stop(); mcp_.reset(); }
     hooks_ = Hooks{};   // stop() is the engine's teardown: the hooks hold the engine and must not be called after it
 }
 
@@ -173,6 +310,23 @@ void ServerSet::facts(const std::function<void(const std::string&, const std::st
     fact("srv.rtltcp.ignored", std::to_string(rtlIgnored_.load() + rs.unknownCommands));
     fact("srv.rtltcp.problem", rtlProblem_);
     fact("srv.rtltcp.scope", cfg_.rtl ? scopeOf(cfg_.rtlAll) : std::string());
+    const bool apiOn = api_ != nullptr && api_->running();
+    const cascade::net::ApiStats as = apiOn ? api_->stats() : cascade::net::ApiStats{};
+    fact("srv.api.running", apiOn ? "1" : "0");
+    fact("srv.api.port", apiOn ? std::to_string(api_->port()) : std::string());
+    fact("srv.api.clients", std::to_string(as.connections));
+    fact("srv.api.websockets", std::to_string(as.wsOpened));
+    fact("srv.api.streams", std::to_string(as.sseOpened));
+    fact("srv.api.messages", std::to_string(as.messages));
+    fact("srv.api.refused", std::to_string(as.refusedRequests + as.refusedFull + as.authDenied + as.errors));
+    fact("srv.api.tunes", std::to_string(controlTunes_.load()));
+    fact("srv.api.problem", apiProblem_);
+    fact("srv.api.scope", cfg_.api ? (cfg_.apiAll ? std::string("reachable from other computers on your network; each program must sign in with the web page's account, which is sent without encryption") : scopeOf(false)) : std::string());
+    const bool mcpOn = mcp_ != nullptr && mcp_->running();
+    fact("srv.mcp.running", mcpOn ? "1" : "0");
+    fact("srv.mcp.port", mcpOn ? std::to_string(mcp_->port()) : std::string());
+    fact("srv.mcp.problem", mcpProblem_);
+    fact("srv.mcp.scope", cfg_.mcp ? std::string("this computer only") : std::string());
 }
 
 std::string ServerSet::signature() const {
@@ -188,6 +342,11 @@ std::string ServerSet::signature() const {
         s += "r" + std::to_string(rs.clients) + "," + std::to_string(rs.accepted) + "," + std::to_string(rs.commands) + "," + std::to_string(rtlTunes_.load()) + "," + std::to_string(rtlTuneRefused_.load()) + "," + std::to_string(rs.samplesDropped >> 14) + "," + std::to_string(rtl_->port());
     }
     s += "|" + rtlProblem_;
+    if (api_ != nullptr) {
+        const cascade::net::ApiStats as = api_->stats();
+        s += "p" + std::to_string(as.connections) + "," + std::to_string(as.wsOpened) + "," + std::to_string(as.sseOpened) + "," + std::to_string(as.messages >> 3) + "," + std::to_string(controlTunes_.load()) + "," + std::to_string(as.refusedRequests + as.authDenied);
+    }
+    s += "|" + apiProblem_ + "|" + mcpProblem_ + (mcp_ != nullptr ? "m" : "");
     return s;
 }
 
