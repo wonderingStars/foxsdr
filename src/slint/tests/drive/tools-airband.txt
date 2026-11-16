@@ -59,7 +59,9 @@ state list.bookmarks.names contains Guard
 +5 expect "Group" value contains "Every"
 # THE SCROLL: the body's lower part comes into the window (one dump per state: this one is the scrolled state)
 +1 scroll "Airport code" 700
-+3 dump
+# the scroll is eased over time, not frames: 3 frames later the Squelch slider was still 58 px above where it comes to rest (dump read y=641, rest y=583) and the slider action below
+# missed it, so fact.airband.squelchDb stayed -55.0 in 2 of 3 alone-runs (engine merge 6). Half a second of frames lets it settle.
++30 dump
 # the monitor's own controls (sent to the engine; read back as facts)
 +1 slider "Squelch"#2 0.2
 +20 state fact.airband.squelchDb < -55
