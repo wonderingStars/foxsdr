@@ -135,6 +135,17 @@ void WebWireC::installBookmarkRoutes(httplib::Server& svr) {
         return false;
     };
 
+    // R1: a change (add, edit, remove, import) is refused while the server has no password. A plain cross-site post never gets here: the
+    // server's pre-routing guard (net/web_guard.hpp) has already turned it away.
+    auto gateChange = [this, gate](const httplib::Request& req, httplib::Response& res) {
+        if (!gate(req, res)) { return false; }
+        if (hooks_.mayChange && !hooks_.mayChange()) {
+            if (hooks_.deny) { hooks_.deny(res, "This page is read-only because no web password is set. Set a password in the program's web settings to change bookmarks from here.", 403); } else { res.status = 403; }
+            return false;
+        }
+        return true;
+    };
+
     svr.Get("/api/mybookmarks", [this, gate](const httplib::Request& req, httplib::Response& res) {
         if (!gate(req, res)) { return; }
         const std::string who = viewerOf(req);
@@ -155,8 +166,8 @@ void WebWireC::installBookmarkRoutes(httplib::Server& svr) {
         res.set_content(dumpJson(j), "application/json");
     });
 
-    svr.Post("/api/mybookmarks", [this, gate](const httplib::Request& req, httplib::Response& res) {
-        if (!gate(req, res)) { return; }
+    svr.Post("/api/mybookmarks", [this, gateChange](const httplib::Request& req, httplib::Response& res) {
+        if (!gateChange(req, res)) { return; }
         WebBookmark bm;
         std::string why;
         if (!parseBookmarkBody(req.body, bm, why)) {
@@ -173,8 +184,8 @@ void WebWireC::installBookmarkRoutes(httplib::Server& svr) {
         answerResult(res, r, id);
     });
 
-    svr.Put(R"(/api/mybookmarks/(\d+))", [this, gate](const httplib::Request& req, httplib::Response& res) {
-        if (!gate(req, res)) { return; }
+    svr.Put(R"(/api/mybookmarks/(\d+))", [this, gateChange](const httplib::Request& req, httplib::Response& res) {
+        if (!gateChange(req, res)) { return; }
         WebBookmark bm;
         std::string why;
         if (!parseBookmarkBody(req.body, bm, why)) {
@@ -185,8 +196,8 @@ void WebWireC::installBookmarkRoutes(httplib::Server& svr) {
         answerResult(res, bookmarks_.update(viewerOf(req), id, bm), id);
     });
 
-    svr.Delete(R"(/api/mybookmarks/(\d+))", [this, gate](const httplib::Request& req, httplib::Response& res) {
-        if (!gate(req, res)) { return; }
+    svr.Delete(R"(/api/mybookmarks/(\d+))", [this, gateChange](const httplib::Request& req, httplib::Response& res) {
+        if (!gateChange(req, res)) { return; }
         const std::uint64_t id = idOf(req);
         answerResult(res, bookmarks_.remove(viewerOf(req), id), id);
     });
@@ -197,8 +208,8 @@ void WebWireC::installBookmarkRoutes(httplib::Server& svr) {
         res.set_content(bookmarks_.exportJson(viewerOf(req)), "application/json");
     });
 
-    svr.Post("/api/mybookmarks/import", [this, gate](const httplib::Request& req, httplib::Response& res) {
-        if (!gate(req, res)) { return; }
+    svr.Post("/api/mybookmarks/import", [this, gateChange](const httplib::Request& req, httplib::Response& res) {
+        if (!gateChange(req, res)) { return; }
         const bool replace = req.get_param_value("replace") == "1";
         const std::string who = viewerOf(req);
         BookmarkImportResult r = bookmarks_.importJson(who, req.body, replace);

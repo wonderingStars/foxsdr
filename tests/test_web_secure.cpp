@@ -290,6 +290,41 @@ void testSignIn() {
     CHECK(server.listenerCount() == 0);
 }
 
+// R3 (security review 2): a listener's successful sign-in must not clear the OWNER door's failure count, and the two doors count apart.
+void testListenerSuccessDoesNotResetTheOwnerThrottle() {
+    WebServer server;
+    server.setStatusProvider([] { return sensitiveStatus(); });
+    CHECK(server.setSessionOpener(opener(std::make_shared<StubState>())));
+    std::string error;
+    const int port = startOnFreePort(server, roomConfig(4), error);
+    CHECK(port > 0);
+    if (port <= 0) { return; }
+    // an attacker who holds the shared listener password alternates owner guesses with one valid listener sign-in, all from one address
+    Browser guesser(port), guest(port);
+    for (int i = 0; i < 4; ++i) { CHECK(guesser.login("admin", "wrong-wrong-wrong").status == 401); }
+    CHECK(guest.login("Gina", kListenerPassword).status == 200);              // the reset that used to happen here
+    CHECK(guesser.login("admin", "wrong-wrong-wrong").status == 401);         // the fifth owner failure
+    CHECK(guesser.login("admin", kOwnerPassword).status == 429);              // so the sixth is refused, even with the right password
+    CHECK(!guesser.login("admin", kOwnerPassword).retryAfter.empty());
+    // the same address may still listen: the owner door's lock is not the listener door's
+    Browser other(port);
+    CHECK(other.login("Hank", kListenerPassword).status == 200);
+    server.stop();
+
+    // and the other way: listener failures lock the listener door only
+    WebServer server2;
+    server2.setStatusProvider([] { return sensitiveStatus(); });
+    CHECK(server2.setSessionOpener(opener(std::make_shared<StubState>())));
+    const int port2 = startOnFreePort(server2, roomConfig(4), error);
+    CHECK(port2 > 0);
+    if (port2 <= 0) { return; }
+    Browser y(port2);
+    for (int i = 0; i < 5; ++i) { CHECK(y.login("Ivy", "wrong-wrong-wrong").status == 401); }
+    CHECK(y.login("Ivy", kListenerPassword).status == 429);
+    CHECK(y.login("admin", kOwnerPassword).status == 200);                    // the owner is never locked out by listener guesses
+    server2.stop();
+}
+
 void testListenersOffByDefault() {
     WebServer server;
     server.setStatusProvider([] { return sensitiveStatus(); });
@@ -1175,6 +1210,7 @@ int main(int argc, char** argv) {
 #define RUN(t) \
     if (only.empty() || std::string(#t).find(only) != std::string::npos) { t(); }
     RUN(testSignIn);
+    RUN(testListenerSuccessDoesNotResetTheOwnerThrottle);
     RUN(testListenersOffByDefault);
     RUN(testConcurrentJoinsAtTheCap);
     RUN(testTheOpListIsComplete);

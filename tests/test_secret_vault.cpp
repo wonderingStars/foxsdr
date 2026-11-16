@@ -97,6 +97,20 @@ void testWriteKeepsSecretsOutOfTheFile() {
 }
 
 // RULE: a second save (the dated copy of the first is kept beside the file) leaves no plain copy anywhere in the folder.
+// L10 (security review 1): on Linux the protected copy is created readable by its owner only, from its first byte (no 0644 window before a chmod), and no temporary copy is left.
+// A Linux-only check: it is not compiled on Windows, and was NOT RUN there (UNVERIFIED until the Linux build runs it).
+#ifndef _WIN32
+void testSidecarIsOwnerOnlyFromCreation() {
+    const fs::path d = freshDir("perm");
+    const std::string path = (d / "config.json").string();
+    std::string err;
+    CHECK(ConfigStore::save(path, configWithSecrets(), err));
+    const fs::perms p = fs::status(vault::sidecarPath(path)).permissions();
+    CHECK((p & (fs::perms::group_all | fs::perms::others_all)) == fs::perms::none);
+    CHECK(!fs::exists(vault::sidecarPath(path) + ".vtmp"));
+}
+#endif
+
 void testNoPlainCopyAfterManySaves() {
     const fs::path d = freshDir("many");
     const std::string path = (d / "config.json").string();
@@ -125,6 +139,12 @@ void testMigration() {
     spit(path, old.dump(4) + "\n");
     spit(path + ".20261101-120000.bak", old.dump(4) + "\n");   // an older dated copy that also holds them
     spit(path + ".20261102-120000.bak", "not json at all " + std::string(kTesterToken));   // damaged: left alone (not parseable)
+    // L11 (security review 1): EVERY copy of the settings file in the folder is scrubbed, whatever it is called - an import's kept copy, a reset's, a hand-made one
+    spit(path + ".before-import-20261110-101010", old.dump(4) + "\n");
+    spit(path + ".before-reset-20261110-101011", old.dump(4) + "\n");
+    spit(path + ".mine-old", old.dump(4) + "\n");
+    spit((d / "other.json.20261101-120000.bak").string(), old.dump(4) + "\n");               // another program's file: not a copy of THIS settings file, left alone
+    spit((d / "config.jsonX").string(), old.dump(4) + "\n");                                   // a longer name that is not "<name>." + something: left alone
     CHECK(has(everythingIn(d), kTesterToken));
     AppConfig c;
     std::string err;
@@ -139,6 +159,15 @@ void testMigration() {
     CHECK(!has(file, "SALTSALTSALT"));
     CHECK(!has(slurp(path + ".20261101-120000.bak"), kTesterToken));   // scrubbed
     CHECK(!has(slurp(path + ".20261101-120000.bak"), kAppToken));
+    for (const char* copy : {".before-import-20261110-101010", ".before-reset-20261110-101011", ".mine-old"}) {
+        CHECK(!has(slurp(path + copy), kTesterToken));
+        CHECK(!has(slurp(path + copy), kAppToken));
+        CHECK(!has(slurp(path + copy), "SALTSALTSALT"));
+        CHECK(has(slurp(path + copy), "4321"));   // only the secrets were taken out: the rest of the copy is as it was
+    }
+    CHECK(has(slurp(d / "other.json.20261101-120000.bak"), kTesterToken));   // not ours
+    CHECK(has(slurp(d / "config.jsonX"), kTesterToken));
+    CHECK(has(slurp(path + ".20261102-120000.bak"), kTesterToken));         // not a JSON object: nothing to take out
     CHECK(fs::exists(vault::sidecarPath(path)));
     // loading again changes nothing and still reads them
     const std::string before = slurp(path);
@@ -236,6 +265,89 @@ void testRefusals() {
     CHECK(vault::splitForWrite(path, "not json", why, kept) == "not json");
     CHECK(!kept);
     CHECK(vault::splitForWrite(path, "{}", why, kept) == "{}");
+}
+
+// M3 (security review 1): a secret the protected store cannot OPEN reads as empty, and the next ordinary save must NOT erase the stored item.
+// The stand-in for "Windows cannot decrypt it" is a blob that is well formed but is not one this user's store produced; it fails to open on every
+// platform. A second Windows user and a profile copied to another PC are UNVERIFIED (no second account is made).
+void testUnreadableSecretIsNeverErased() {
+    const fs::path d = freshDir("unreadable");
+    const std::string path = (d / "config.json").string();
+    std::string err;
+    CHECK(ConfigStore::save(path, configWithSecrets(), err));
+    // the good sidecar, kept to put back
+    const std::string good = slurp(vault::sidecarPath(path));
+    json side = json::parse(good);
+    const std::string goodBlob = side["items"]["webPasswordRecord"].get<std::string>();
+    side["items"]["webPasswordRecord"] = "dpapi:00ff00ff00ff00ff00ff";   // stored, but this user's store cannot open it
+    spit(vault::sidecarPath(path), side.dump(2));
+
+    AppConfig back;
+    CHECK(ConfigStore::load(path, back, err));
+    CHECK(back.webPasswordRecord.empty());                      // reads as empty ...
+    CHECK(back.testerToken == kTesterToken);                    // ... and the others still open
+    CHECK(vault::wasUnreadableAt(path, "webPasswordRecord"));           // ... and the program is told
+    CHECK(vault::wasUnreadable("webPasswordRecord"));
+    CHECK(!vault::wasUnreadableAt(path, "testerToken"));
+
+    // two ordinary saves of the settings as the program holds them (the web password still empty)
+    CHECK(ConfigStore::save(path, back, err));
+    CHECK(ConfigStore::save(path, back, err));
+    json after = json::parse(slurp(vault::sidecarPath(path)));
+    CHECK(after["items"].contains("webPasswordRecord"));        // THE ITEM IS STILL THERE
+    CHECK(after["items"]["webPasswordRecord"] == "dpapi:00ff00ff00ff00ff00ff");
+    CHECK(after["items"].contains("testerToken"));
+    CHECK(vault::wasUnreadableAt(path, "webPasswordRecord"));           // saving does not make it readable
+
+    // the Windows side is later fixed (the good blob is back): the password is there again, nothing was lost
+    side["items"]["webPasswordRecord"] = goodBlob;
+    spit(vault::sidecarPath(path), side.dump(2));
+    AppConfig fixed;
+    CHECK(ConfigStore::load(path, fixed, err));
+    CHECK(fixed.webPasswordRecord == kRecord);
+    CHECK(!vault::wasUnreadableAt(path, "webPasswordRecord"));
+
+    // a NEW value for an unreadable item replaces it and clears the mark
+    side["items"]["webPasswordRecord"] = "dpapi:00ff00ff00ff00ff00ff";
+    spit(vault::sidecarPath(path), side.dump(2));
+    AppConfig again;
+    CHECK(ConfigStore::load(path, again, err));
+    CHECK(vault::wasUnreadableAt(path, "webPasswordRecord"));
+    again.webPasswordRecord = "pbkdf2-sha256$600000$NEWSALTNEWSALT$NEWHASHNEWHASHNEW";
+    CHECK(ConfigStore::save(path, again, err));
+    AppConfig third;
+    CHECK(ConfigStore::load(path, third, err));
+    CHECK(third.webPasswordRecord == again.webPasswordRecord);
+    CHECK(!vault::wasUnreadableAt(path, "webPasswordRecord"));
+
+    // a person who really clears a READABLE secret still clears it
+    third.webPasswordRecord.clear();
+    CHECK(ConfigStore::save(path, third, err));
+    json cleared = json::parse(slurp(vault::sidecarPath(path)));
+    CHECK(!cleared["items"].contains("webPasswordRecord"));
+}
+
+// M3: a damaged sidecar may have held any secret, so every secret the settings file keeps empty is unreadable (the web password fails closed).
+void testDamagedSidecarMarksTheSecretsUnreadable() {
+    const fs::path d = freshDir("damaged");
+    const std::string path = (d / "config.json").string();
+    std::string err;
+    CHECK(ConfigStore::save(path, configWithSecrets(), err));
+    spit(vault::sidecarPath(path), "{ this is not json");
+    AppConfig back;
+    CHECK(ConfigStore::load(path, back, err));
+    CHECK(back.webPasswordRecord.empty());
+    CHECK(vault::wasUnreadableAt(path, "webPasswordRecord"));
+    // a sidecar that is simply absent (a program that never had a secret) is not a loss
+    const fs::path d2 = freshDir("absent");
+    const std::string path2 = (d2 / "config.json").string();
+    AppConfig plain;
+    CHECK(ConfigStore::save(path2, plain, err));
+    AppConfig plainBack;
+    CHECK(ConfigStore::load(path2, plainBack, err));
+    CHECK(!vault::wasUnreadableAt(path2, "webPasswordRecord"));
+    vault::forget(path);
+    CHECK(!vault::wasUnreadableAt(path, "webPasswordRecord"));
 }
 
 // RULE: when the store refuses a value, it stays in the file (nothing is lost) and the writer says so. (Windows only: the refusal is forced with a
@@ -343,11 +455,16 @@ int main() {
     fs::remove_all(g_base, ec);
     fs::create_directories(g_base);
     testWriteKeepsSecretsOutOfTheFile();
+#ifndef _WIN32
+    testSidecarIsOwnerOnlyFromCreation();
+#endif
     testNoPlainCopyAfterManySaves();
     testMigration();
     testClear();
     testExportHasNone();
     testRefusals();
+    testUnreadableSecretIsNeverErased();
+    testDamagedSidecarMarksTheSecretsUnreadable();
     testStoreRefusalKeepsValue();
     testResetAndImportForget();
     testConcurrentWrites();

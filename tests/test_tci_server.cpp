@@ -378,6 +378,23 @@ void testHostile() {
         while (Clock::now() < end && c.buf.find("\r\n\r\n") == std::string::npos) { if (!c.fill()) { break; } }
         CHECK(c.buf.rfind("HTTP/1.1 426", 0) == 0);
     }
+    // R2 (security review 2): a handshake from a web page (any Origin header, a well-formed one included) is refused 403 and no session is made; one with no Origin is the client
+    // every other test here uses
+    {
+        const std::string good = "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n";
+        for (const char* origin : {"Origin: https://evil.example\r\n", "Origin: http://127.0.0.1:8073\r\n", "Origin: null\r\n", "origin: https://evil.example\r\n", "ORIGIN:\r\n"}) {
+            RawClient c;
+            CHECK(c.open(r.port));
+            sendAll(c.s, good + origin + "\r\n");
+            const auto end = Clock::now() + std::chrono::seconds(3);
+            while (Clock::now() < end && c.buf.find("\r\n\r\n") == std::string::npos) { if (!c.fill()) { break; } }
+            if (c.buf.rfind("HTTP/1.1 403", 0) != 0) { std::printf("Origin not refused: [%s] -> [%s]\n", origin, c.buf.substr(0, 40).c_str()); }
+            CHECK(c.buf.rfind("HTTP/1.1 403", 0) == 0);
+            CHECK(c.buf.find("101") == std::string::npos);
+        }
+        RawClient ok;
+        CHECK(ok.open(r.port) && ok.handshake());   // no Origin: as before
+    }
     CHECK(waitUntil(3000, [&] { return r.srv.clientCount() == 0; }));
     CHECK(r.srv.protocolDropped() >= 4);
     CHECK(r.w.backends.load() == 0);   // every one of those sessions was closed with its connection

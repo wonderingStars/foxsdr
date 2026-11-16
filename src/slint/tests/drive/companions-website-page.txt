@@ -11,14 +11,17 @@ state store.companion contains "PROGRAM LICENCE: GPL-2.0-or-later"
 state store.companion contains "WHY IT IS A SEPARATE PROGRAM: This is another person's open-source program"
 state store.companion contains "IDENTIFIERS: This program cannot hide identifiers"
 state store.companion contains "SOURCE CODE: https://github.com/wonderingStars/foxsdr-companions"
-state store.companion contains "PROGRAM: multimon-helper.exe  -  Fitting the plugin downloads the program and checks it against the checksum"
+# (security review 1, M1: with no owner key the website copy downloads no program, so the page says what the Store copy says for a program it does not hold. Before: "Fitting
+# the plugin downloads the program and checks it against the checksum". NOT RUN: the GUI gate was not run in the security-fixes-1 lane.)
+state store.companion contains "PROGRAM: multimon-helper.exe  -  The program for this companion is not available in this copy of FoxSDR."
 # the same lines are DRAWN: the window's own controls carry them
 expect "UPSTREAM PROJECT: multimon-ng" label contains "multimon-ng"
 expect "PROGRAM LICENCE: GPL-2.0-or-later" label contains "GPL-2.0-or-later"
 # the source address is selectable text (a read-only field), labelled by its name; the value is read back through the model line above
 expect "SOURCE CODE" label contains "SOURCE CODE"
-# the maker's notice comes first: GET is greyed until it is ticked, then it answers (the transfer itself is withheld in a bounded run)
+# the maker's notice comes first; with no program to fetch GET stays greyed even with the notice ticked
 state store.keyEnabled == 0
 +1 click "I have read the maker's notice"
-+10 state store.keyEnabled == 1
++10 state store.noticeTick == 1
+state store.keyEnabled == 0
 +1 shot "companions-website-page.png"

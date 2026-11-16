@@ -33,6 +33,7 @@
 #include "core/issue_report.hpp"
 #include "core/linux_update.hpp"
 #include "core/linux_update_host.hpp"
+#include "core/package_identity.hpp"
 #include "core/relaunch_marker.hpp"
 #include "core/window_handover.hpp"
 #include "core/sentinel.hpp"
@@ -917,6 +918,8 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
         }
     }
 
+    // L3 (security review 1): the fake-package environment seams are for bounded runs (`--frames`, `--seconds`) only; a product run ignores them.
+    if (frames < 0 && seconds < 0.0) { cascade::core::lockFakePackageSeams(); }
     boot.frames = frames;
     boot.seconds = seconds;
     boot.safePlugins = safeFlag || (host && safeKeyHeldAtLaunch(frames >= 0));

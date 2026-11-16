@@ -1066,10 +1066,20 @@ private:
         Bytes plain;
         auto last = SteadyClock::now();
         bool peerClosed = false;
+        // R4 (security review 2): THE FIRST REQUEST'S HEAD HAS A TOTAL TIME, not only an idle time. `last` is refreshed by any byte, so a client that sent one byte every
+        // few seconds kept its slot (and a worker of the plain server behind it) for ever, before any sign-in. From the end of the handshake the head must be complete
+        // within headMs; after that the idle rule is the only one, as before.
+        const auto born = SteadyClock::now();
+        bool headDone = false;
+        std::string headSeen;
         const auto pump = [&]() -> bool {   // false: end the connection
             plain.clear();
             const int r = decrypt(tls, cipher, plain);
             if (r < 0) { return false; }
+            if (!headDone && !plain.empty()) {
+                headSeen.append(reinterpret_cast<const char*>(plain.data()), plain.size());
+                if (headSeen.find("\r\n\r\n") != std::string::npos || headSeen.size() > 16384) { headDone = true; headSeen.clear(); }
+            }
             if (!plain.empty() && !sendAll(be, plain.data(), plain.size(), timeouts_.writeMs, false)) { return false; }
             if (r == 2) { peerClosed = true; return false; }
             return true;
@@ -1082,6 +1092,10 @@ private:
                 return;
             }
             beat.beat("relay");
+            if (!headDone && SteadyClock::now() - born > std::chrono::milliseconds(timeouts_.headMs)) {
+                ++dropHs_;   // counted with the handshake timeouts: it is the same phase (connection to first request)
+                return;
+            }
             fd_set rs;
             FD_ZERO(&rs);
             FD_SET(client, &rs);

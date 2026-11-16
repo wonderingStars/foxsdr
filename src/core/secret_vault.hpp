@@ -22,7 +22,10 @@
 // Service or a kernel keyring) is an open row of the E1 lane's record.
 //
 // A SECRET THAT CANNOT BE OPENED (another Windows user, another machine, a damaged sidecar) reads as EMPTY and is reported in `note`: the person
-// signs in or pastes it again. Nothing is ever deleted because it could not be read.
+// signs in or pastes it again. Nothing is ever deleted because it could not be read: the reader remembers which items it could not open
+// (wasUnreadable), and the writer then KEEPS the stored item when the document holds that item empty (the empty value is the reader's
+// stand-in, not the person's act). Only a new non-empty value for the item replaces it. A guard that depends on such an item (the web
+// password) fails CLOSED: the web server refuses to start without a password rather than start open (see ServerHost::reconcileWeb).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
@@ -64,6 +67,12 @@ std::string splitForWrite(const std::string& settingsPath, const std::string& te
 // text is MIGRATED (stored, the file rewritten without it, the ".bak" copies scrubbed): `migrated` is set. `note` says what could not be opened.
 // The returned text is what the settings parser should read.
 std::string mergeAfterRead(const std::string& settingsPath, const std::string& text, bool& migrated, std::string& note);
+
+// True when the latest read of any settings file found `item` (a secretKeys() name or a "pluginSettings/<plugin>/<key>" item) stored but could not
+// open it, and no new value for it has been saved since.
+bool wasUnreadable(const std::string& item);
+// The same for one settings file.
+bool wasUnreadableAt(const std::string& settingsPath, const std::string& item);
 
 // Removes the sidecar (a settings file that was replaced wholesale, a reset).
 void forget(const std::string& settingsPath);

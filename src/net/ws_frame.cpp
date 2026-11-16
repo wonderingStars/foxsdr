@@ -171,6 +171,7 @@ Handshake parseHandshake(std::string_view head) {
         else if (name == "connection") { connection = connection || listsToken(value, "upgrade"); }
         else if (name == "sec-websocket-version") { versionOk = versionOk || listsToken(value, "13"); }
         else if (name == "sec-websocket-key") { ++keys; h.key = std::string(value); }
+        else if (name == "origin") { h.hasOrigin = true; }
     }
     if (!upgrade || !connection) { return refuse(400, "this port speaks WebSocket only (no Upgrade request)"); }
     if (!versionOk) { return refuse(426, "only WebSocket version 13 is spoken"); }

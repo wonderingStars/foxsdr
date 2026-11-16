@@ -20,6 +20,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/crash_upload.hpp"
+#include "core/diag_log.hpp"
 #include "core/health_events.hpp"
 #include "core/telemetry.hpp"
 
@@ -303,7 +304,25 @@ struct Reporter::Impl {
         if (!writeAtomic(statePath(), dumpJson(j))) { ++st.guardRefused; }
     }
 
+    // R10 (security review 2): a field of the saved state with the wrong type (a hand edit, a file from another version) used to throw out of start-up from json::value(). The file is
+    // now a damaged file: a plain sentence in the log, and the state a fresh run has (nothing a person set lives here: counters, today's date and what was held back to send).
     void loadState() {
+        try {
+            loadStateChecked();
+        } catch (const json::exception&) {
+            day.clear();
+            failAdmitted = 0;
+            journalAdmitted = 0;
+            refusedTotal = 0;
+            firstSeen.clear();
+            dropped.clear();
+            streamToday.clear();
+            held.clear();
+            diagLogf("radio reports: the saved state file could not be read (a field has the wrong type), so it starts fresh");
+        }
+    }
+
+    void loadStateChecked() {
         const std::string text = readAll(statePath());
         if (text.empty()) { return; }
         const json j = json::parse(text, nullptr, /*allow_exceptions=*/false);
@@ -379,7 +398,10 @@ struct Reporter::Impl {
             const std::string text = readAll(s.path);
             const std::size_t nl = text.find('\n');
             const json hdr = json::parse(text.substr(0, nl), nullptr, false);
-            if (hdr.is_object()) { s.ss = hdr.value("ss", 0LL); }
+            if (hdr.is_object()) {
+                const auto ssIt = hdr.find("ss");   // (R10: a header whose "ss" is not a number is a header with none)
+                if (ssIt != hdr.end() && ssIt->is_number_integer()) { s.ss = ssIt->get<long long>(); }
+            }
             // journal-<sid>.<n>.jsonl
             const std::string stem = name.substr(0, name.size() - 6);
             const std::size_t dot = stem.rfind('.');

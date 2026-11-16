@@ -141,6 +141,7 @@ int osFreePort() {
 }
 
 int startOnFreePort(WebServer& server, WebServerConfig cfg, std::string& error) {
+    server.allowOpenControlForTests(true);   // R1: a server with no password is read-only; this test is about the key, not the sign-in
     for (int attempt = 0; attempt < 50; ++attempt) {
         const int port = osFreePort();
         if (port < 1024) { continue; }

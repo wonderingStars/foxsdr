@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "net/web_server.hpp"
 #include "net/web_wire_c.hpp"   // wire-c
+#include "net/web_guard.hpp"     // R1: the Host and Origin check
 
 #include "core/health_events.hpp"
 #include "core/thread_beats.hpp"
@@ -52,6 +53,8 @@ namespace {
 // to run on the page. Secure is added exactly when HTTPS is on (cookieAttributes): on plain HTTP a
 // Secure cookie would never come back.
 constexpr char kCookieName[] = "foxsdr_session";
+// R1: the sentence a refused change carries and the page shows while the server has no password.
+constexpr char kReadOnlyText[] = "This page is read-only because no web password is set. Set a password in the program's web settings to control the receiver from here.";
 
 // Bodies this API accepts are small JSON objects. A cap this low means a
 // hostile client cannot make the server buffer anything worth mentioning.
@@ -212,6 +215,7 @@ constexpr char kIndexHtml[] = R"HTML(<!doctype html>
     <span class="spacer"></span>
     <span id="mutedBy" class="badge warn hidden"></span>
     <span id="remote" class="badge hidden">remote access</span>
+    <span id="readonly" class="badge warn hidden"></span>
     <span id="roleBadge" class="badge hidden"></span>
     <span id="link" class="badge warn hidden">disconnected</span>
     <button id="logout" class="hidden">Sign out</button>
@@ -1024,10 +1028,15 @@ function fmtHz(hz) {
   return hz.toFixed(0) + ' Hz';
 }
 
+// R5 (security review 2): text that came from the air (RDS names and radio text), from a radio driver (gain stage and device names), from a decoder (a track's id and
+// label) or from the catalogue (a plugin's name, version and licence) is HTML-escaped before it goes into markup. (Fields set with textContent need none.)
+function esc(x) {
+  return String(x === null || x === undefined ? '' : x)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function cell(k, v) {
-  return '<div class="cell"><span class="k"></span><span class="v"></span></div>'
-    .replace('<span class="k"></span>', '<span class="k">' + k + '</span>')
-    .replace('<span class="v"></span>', '<span class="v">' + v + '</span>');
+  return '<div class="cell"><span class="k">' + esc(k) + '</span><span class="v">' + esc(v) + '</span></div>';
 }
 
 )JS";
@@ -1194,7 +1203,7 @@ function reflectSource(s) {
     row.innerHTML = '';
     s.gains.forEach((g) => {
       const label = document.createElement('label');
-      label.innerHTML = g.name + ' <span class="gv"></span>';
+      label.innerHTML = esc(g.name) + ' <span class="gv"></span>';
       const inp = document.createElement('input');
       inp.type = 'range'; inp.min = '0'; inp.max = '76'; inp.step = '1';
       inp.dataset.gain = g.name;
@@ -1407,8 +1416,8 @@ function reflectTracks(s) {
     const alt = (t.altM === null || !isFinite(t.altM)) ? '-' : Math.round(t.altM) + ' m';
     const spd = (t.speedMps === null || !isFinite(t.speedMps)) ? '-'
                                                               : Math.round(t.speedMps) + ' m/s';
-    row.innerHTML = '<span class="id">' + t.id + '</span>' +
-                    '<span>' + (t.label || '') + '</span>' +
+    row.innerHTML = '<span class="id">' + esc(t.id) + '</span>' +
+                    '<span>' + esc(t.label || '') + '</span>' +
                     '<span class="pos">' + t.latDeg.toFixed(4) + ', ' +
                     t.lonDeg.toFixed(4) + '  ' + alt + '  ' + spd + '</span>';
     // Who it is, when the track-info plugin has answered. textContent, never
@@ -1557,8 +1566,8 @@ function reflectCatalogue(s) {
     d.className = 'cat';
     const hd = document.createElement('div');
     hd.className = 'hd';
-    hd.innerHTML = '<span class="nm">' + e.name + '</span>' +
-                   '<span class="meta">' + e.version + '  ' + (e.licence || '') + '</span>';
+    hd.innerHTML = '<span class="nm">' + esc(e.name) + '</span>' +
+                   '<span class="meta">' + esc(e.version) + '  ' + esc(e.licence || '') + '</span>';
     d.appendChild(hd);
     if (e.summary) {
       const sm = document.createElement('div');
@@ -2429,7 +2438,7 @@ function reflect(s) {
     const bits = [];
     bits.push('<div><span class="dim">Pilot</span> ' + (s.pilotLocked ? 'locked' : '-') + '</div>');
     bits.push('<div><span class="dim">Stereo</span> ' + (s.stereoActive ? 'yes' : 'no') + '</div>');
-    bits.push('<div><span class="dim">PS</span> ' + (s.rdsPsValid ? s.rdsPs : '-') + '</div>');
+    bits.push('<div><span class="dim">PS</span> ' + esc(s.rdsPsValid ? s.rdsPs : '-') + '</div>');
     bits.push('<div><span class="dim">PI</span> ' +
       (s.rdsPiValid ? '0x' + s.rdsPi.toString(16).toUpperCase() : '-') + '</div>');
     // The raw programme-type CODE, not a name: the code-to-name table differs
@@ -2438,7 +2447,7 @@ function reflect(s) {
     bits.push('<div><span class="dim">Groups</span> ' + s.rdsGroups +
       ' <span class="dim">err</span> ' + s.rdsErrors + '</div>');
     if (s.rdsRadioText) {
-      bits.push('<div class="rt"><span class="dim">RT</span> ' + s.rdsRadioText + '</div>');
+      bits.push('<div class="rt"><span class="dim">RT</span> ' + esc(s.rdsRadioText) + '</div>');
     }
     $('rds').innerHTML = bits.join('');
   }
@@ -2961,6 +2970,8 @@ async function refreshSession() {
   const s = await getJson('/api/session');
   if (!s) return;
   $('remote').classList.toggle('hidden', !s.reachableOffMachine);
+  $('readonly').textContent = s.readOnly ? 'This page is read-only because no web password is set. Set a password in the program\'s web settings to control the receiver from here.' : '';
+  $('readonly').classList.toggle('hidden', !s.readOnly);
   const needsLogin = s.authRequired && !s.authenticated;
   $('login').classList.toggle('hidden', !needsLogin);
   $('app').classList.toggle('hidden', needsLogin);
@@ -3382,7 +3393,16 @@ std::string statusJson(const RadioStatus& s,
 
 class WebServer::Impl {
 public:
-    Impl() : clock_([]() { return static_cast<std::int64_t>(std::time(nullptr)); }) {}
+    Impl() : clock_([]() { return static_cast<std::int64_t>(std::time(nullptr)); }) {
+        // R1: the names a Host header may carry besides literals and "localhost": this computer's own name.
+        char name[256] = {};
+        if (::gethostname(name, sizeof(name) - 1) == 0 && name[0] != '\0') {
+            std::string n;
+            for (const char* c = name; *c != '\0'; ++c) { n.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(*c)))); }
+            guard_.machineNames.push_back(n);
+            guard_.machineNames.push_back(n + ".local");
+        }
+    }
 
     ~Impl() { stop(); }
 
@@ -3487,7 +3507,13 @@ public:
 
     // The public listing (net/receiver_listing.hpp): the document is built once, when the listing is set, and served as it is; a disabled
     // listing is an empty document and the route answers 404.
-    bool wireCSetCors(const std::vector<std::string>& origins, std::string& error) { return wireC_.setCors(origins, error); }   // wire-c
+    void setOpenControlForTests(bool on) { openControlForTests_.store(on); }
+    bool wireCSetCors(const std::vector<std::string>& origins, std::string& error) {   // wire-c
+        if (!wireC_.setCors(origins, error)) { return false; }
+        std::lock_guard<std::mutex> lock(mutex_);
+        guardSetOrigins(guard_, origins);   // R1: the owner's list is also the list of other origins and host names the guard lets through
+        return true;
+    }
     void wireCSetMetrics(bool on) { wireC_.setMetricsEnabled(on); }   // wire-c
     void wireCPublishMetrics(const metrics::EngineSnapshot& s) {   // wire-c: the connected-browsers figure is the server's own
         metrics::EngineSnapshot x = s;
@@ -3564,6 +3590,7 @@ private:
     // is the owner, as the page has always worked.
     Identity identify(const httplib::Request& req, bool touch) const;
     Identity identifyToken(const std::string& token, bool authRequired, bool touch) const;
+    bool mayChange() const;   // R1: false while the server has no password (read-only)
 
     // THE TRUE CLIENT ADDRESS: with HTTPS on, the terminator's record of who connected (req.remote_addr is then always the loopback relay);
     // otherwise the socket's own peer. Never read from a header.
@@ -3598,7 +3625,8 @@ private:
     bool hasListenerRecord_ = false;
 
     mutable WebRoom room_;
-    mutable LoginThrottle throttle_;
+    mutable LoginThrottle throttle_;           // the OWNER's door: failures and successes of owner sign-ins only
+    mutable LoginThrottle listenerThrottle_;   // the LISTENER door: kept apart so a listener's success can never clear the owner's count (R3)
 
     // HTTPS: the terminator in front of the plain server (null when off), the plain server's private loopback port, and the limits a test sets.
     std::unique_ptr<TlsTerminator> tls_;
@@ -3614,6 +3642,9 @@ private:
     // The public receiver listing's document ("" = off).
     mutable std::mutex listingMutex_;
     std::string listingDoc_;
+
+    // R1: what the Host and Origin check lets through (guarded by mutex_)
+    HostOriginPolicy guard_;
 
     // wire-c begin: wiring lane C's web features (net/web_wire_c.hpp): the cross-origin allow-list, and what later rows add
     WebWireC wireC_;
@@ -3680,6 +3711,7 @@ private:
     std::unique_ptr<httplib::Server> svr_;
     std::thread thread_;
     std::atomic<bool> running_{false};
+    std::atomic<bool> openControlForTests_{false};   // R1: see WebServer::allowOpenControlForTests
 
     // THE IDLE TICK (stage 5d): while the server runs, the engine session's results are collected every kSessionIdleTick even if no browser
     // asks for anything, so a session is never left holding results nobody reads (the table answers BUSY past 256 outstanding commands, and
@@ -3714,6 +3746,12 @@ void WebServer::Impl::deny(httplib::Response& res, const std::string& message,
     j["error"] = message;
     res.status = status;
     res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
+}
+
+bool WebServer::Impl::mayChange() const {
+    if (openControlForTests_.load()) { return true; }
+    std::lock_guard<std::mutex> lock(mutex_);
+    return decision_.authRequired;
 }
 
 bool WebServer::Impl::authorised(const httplib::Request& req) const {
@@ -3768,6 +3806,26 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
     // cache entry and a cached /api/status is a stale readout.
     // wire-c begin: an allowed cross-origin PREFLIGHT is answered before routing (204 + the model's headers); nothing else is stopped here
     svr.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
+        // R1: the Host and Origin of EVERY request are checked before any route runs (DNS rebinding and cross-site posts).
+        {
+            GuardRequest g;
+            g.method = req.method;
+            for (auto r = req.headers.equal_range("Host"); r.first != r.second; ++r.first) { g.hostValues.push_back(r.first->second); }
+            for (auto r = req.headers.equal_range("Origin"); r.first != r.second; ++r.first) { g.originValues.push_back(r.first->second); }
+            GuardVerdict v;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                v = checkHostOrigin(guard_, g);
+            }
+            if (v == GuardVerdict::ForeignHost) {
+                deny(res, "this address is not one this page is served on", 421);
+                return httplib::Server::HandlerResponse::Handled;
+            }
+            if (v == GuardVerdict::ForeignOrigin) {
+                deny(res, "requests from another web site are refused", 403);
+                return httplib::Server::HandlerResponse::Handled;
+            }
+        }
         return wireC_.preRouting(req, res) ? httplib::Server::HandlerResponse::Handled : httplib::Server::HandlerResponse::Unhandled;
     });
     // wire-c end
@@ -3777,6 +3835,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         hooks.signedIn = [this](const httplib::Request& req) { return authorised(req); };
         hooks.viewerToken = [](const httplib::Request& req) { return cookieValue(req.get_header_value("Cookie"), kCookieName); };
         hooks.tokenStillValid = [this](const std::string& token) { return identifyToken(token, true, false).role != Role::None; };
+        hooks.mayChange = [this]() { return mayChange(); };
         hooks.deny = [](httplib::Response& res, const std::string& message, int status) { deny(res, message, status); };
         wireC_.installRoutes(svr, std::move(hooks));
     }
@@ -3872,6 +3931,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
         const Identity who = identify(req, true);
         nlohmann::json j;
         j["authRequired"] = d.authRequired;
+        j["readOnly"] = !d.authRequired;   // R1: with no password the page can look and listen but not change anything
         j["authenticated"] = who.role != Role::None;
         j["reachableOffMachine"] = d.reachableOffMachine;
         j["role"] = who.role == Role::Owner ? "owner" : (who.role == Role::Listener ? "listener" : "none");
@@ -3897,12 +3957,6 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
 
         const std::string client = clientAddress(req);
         const std::int64_t t = now();
-        if (!throttle_.allow(client, t)) {
-            res.set_header("Retry-After",
-                           std::to_string(throttle_.retryAfterSeconds(client, t)));
-            deny(res, "too many failed sign-in attempts; try again later", 429);
-            return;
-        }
 
         std::string user;
         std::string password;
@@ -3935,6 +3989,15 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
 
         std::string verifyError;
         const bool listenerAttempt = listenersOn && user != expectedUser;
+        // THE TWO DOORS HAVE TWO COUNTERS (R3). The door is known only now, so the limit is looked at here, before any password work. A
+        // listener's success clears the LISTENER counter only: the owner's failures from the same address stay, so a holder of the shared
+        // listener password cannot keep resetting the owner-password limit between guesses.
+        LoginThrottle& door = listenerAttempt ? listenerThrottle_ : throttle_;
+        if (!door.allow(client, t)) {
+            res.set_header("Retry-After", std::to_string(door.retryAfterSeconds(client, t)));
+            deny(res, "too many failed sign-in attempts; try again later", 429);
+            return;
+        }
         if (listenerAttempt) {
             // A BANNED ADDRESS never gets as far as a password: the ban is on the address the connection really came from. (It applies to
             // listener sign-ins only: a ban can never lock the owner out of their own receiver; the throttle covers the owner's door.)
@@ -3944,7 +4007,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                 return;
             }
             if (!verifyPassword(password, listenerRecord, verifyError)) {
-                throttle_.recordFailure(client, t);
+                listenerThrottle_.recordFailure(client, t);
                 deny(res, "wrong user name or password", 401);
                 return;
             }
@@ -3978,7 +4041,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
                     deny(res, "could not create a session (" + issueError + ")", 500);
                     return;
             }
-            throttle_.recordSuccess(client);
+            listenerThrottle_.recordSuccess(client);
             res.set_header("Set-Cookie", std::string(kCookieName) + "=" + token + cookieAttributes(secure));
             nlohmann::json j;
             j["ok"] = true;
@@ -4283,6 +4346,12 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
     svr.Post("/api/control", [this](const httplib::Request& req, httplib::Response& res) {
         if (!authorised(req)) {
             deny(res, "sign in first");
+            return;
+        }
+        // R1: a server with NO password is read-only. Anything this route does (tune, start, stop, record, install or remove a plugin,
+        // bookmarks, the transmit key) is refused until the owner sets a password, so a page that reaches the server by any trick cannot move it.
+        if (!mayChange()) {
+            deny(res, kReadOnlyText, 403);
             return;
         }
         // Same CSRF reasoning as /api/login, and it matters more here: this is
@@ -4663,6 +4732,7 @@ bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {
         room_.configure(rc);   // (empties the room: sessions, bans, chat, note and audit never survive a restart)
     }
     throttle_.clear();
+    listenerThrottle_.clear();
 
     // HTTPS: the certificate is made or found BEFORE anything is bound, so a certificate that cannot be had fails the start cleanly.
     std::unique_ptr<TlsTerminator> tls;
@@ -4859,6 +4929,7 @@ bool WebServer::start(const WebServerConfig& cfg, std::string& error) {
     return impl_->start(cfg, error);
 }
 void WebServer::stop() { impl_->stop(); }
+void WebServer::allowOpenControlForTests(bool on) { impl_->setOpenControlForTests(on); }
 bool WebServer::running() const { return impl_->running(); }
 int WebServer::boundPort() const { return impl_->boundPort(); }
 BindDecision WebServer::decision() const { return impl_->decision(); }

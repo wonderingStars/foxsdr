@@ -109,6 +109,13 @@ bool runningInPackage();
 // load anything, or send anything of ours anywhere. Contrast CASCADE_CONFIG_TEST,
 // which is honoured only under --frames precisely because redirecting a real
 // session's config file would be a hazard.
+// THE ENVIRONMENT SEAMS ARE FOR BOUNDED RUNS (security review 1, L3). FOXSDR_FAKE_PACKAGE (and FOXSDR_FAKE_PACKAGE_COMPANIONS, core/companion_programs.cpp) make a
+// run believe it is a Store package and take its companion programs from a folder named by the environment. A PRODUCT run (no `--frames`, no `--seconds`) must not
+// be steerable by a variable a person or a program left in the environment, so the process start calls this for it: from then on both variables are ignored.
+// The seams stay in the binary because the drive scripts and the application tests run the real program with them, always as bounded runs.
+void lockFakePackageSeams();
+bool fakePackageSeamsOpen();
+
 void setPackageIdentityForTest(const PackageIdentity& id);
 void clearPackageIdentityForTest();
 

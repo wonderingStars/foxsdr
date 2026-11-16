@@ -229,6 +229,11 @@ static std::vector<sys::Ed25519PublicKey> trustedKeysNow() {
     return sys::ownerTrustedKeys();
 }
 
+// THE WEBSITE COPY DOWNLOADS ONLY WHAT THE OWNER SIGNED (security review 1, M1). The catalogue gives the program's address AND its hash, so a hash alone proves only that the
+// download is what the catalogue named. While no owner key is set (ownerTrustedKeys() empty: the signature is not enforced) the website copy therefore does not download or
+// run a companion program at all; the Store copy, which finds its programs inside its own signed package, is unaffected.
+static bool downloadsAvailable() { return !trustedKeysNow().empty(); }
+
 // ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 // the places
 
@@ -262,7 +267,7 @@ Places placesFor(const std::string& pluginsDir) {
         // while a fake package is in force, so a real package can never be pointed at another folder by the environment.
         const char* fake = std::getenv("FOXSDR_FAKE_PACKAGE");
         const char* dir = std::getenv("FOXSDR_FAKE_PACKAGE_COMPANIONS");
-        if (fake != nullptr && *fake != '\0' && dir != nullptr && *dir != '\0') { p.packageDir = dir; }
+        if (fake != nullptr && *fake != '\0' && dir != nullptr && *dir != '\0' && cascade::core::fakePackageSeamsOpen()) { p.packageDir = dir; }   // (L3: not in a product run)
     }
     return p;
 }
@@ -304,14 +309,24 @@ namespace {
 
 fs::path recordPath(const std::string& pluginsDir) { return fs::path(pluginsDir) / "companions.json"; }
 
-std::vector<Record> loadRecords(const std::string& pluginsDir) {
-    std::vector<Record> out;
+// What the record file held, and how far it could be trusted (L1, security review 1): a file that is THERE but cannot be read or parsed is `damaged`, and an entry that
+// names a plugin but has no usable program name is listed in `unusable`. The old reading dropped both silently, and a plugin whose record was lost then started with no check.
+struct RecordFile {
+    std::vector<Record> records;
+    bool damaged = false;
+    std::vector<std::string> unusable;   // plugin file names whose entry could not be used
+};
+
+RecordFile loadRecordFile(const std::string& pluginsDir) {
+    RecordFile out;
     std::string text;
-    if (safeio::readCapped(recordPath(pluginsDir), 1024u * 1024u, text) != safeio::ReadResult::Ok) { return out; }
+    const safeio::ReadResult rr = safeio::readCapped(recordPath(pluginsDir), 1024u * 1024u, text);
+    if (rr == safeio::ReadResult::Missing) { return out; }
+    if (rr != safeio::ReadResult::Ok) { out.damaged = true; return out; }
     const json j = json::parse(text, nullptr, false);
-    if (!j.is_object() || !j.contains("programs") || !j["programs"].is_array()) { return out; }
+    if (!j.is_object() || !j.contains("programs") || !j["programs"].is_array()) { out.damaged = true; return out; }
     for (const json& p : j["programs"]) {
-        if (!p.is_object()) { continue; }
+        if (!p.is_object()) { out.damaged = true; continue; }
         Record r;
         r.plugin = str(p, "plugin", 200);
         r.id = str(p, "id", 80);
@@ -320,10 +335,23 @@ std::vector<Record> loadRecords(const std::string& pluginsDir) {
         r.via = str(p, "via", 20);
         const auto sz = p.find("size");
         if (sz != p.end() && sz->is_number_unsigned()) { r.size = sz->get<std::uint64_t>(); }
-        if (r.plugin.empty() || !validProgramName(r.file).empty()) { continue; }
-        out.push_back(std::move(r));
+        if (r.plugin.empty()) { out.damaged = true; continue; }
+        if (!validProgramName(r.file).empty()) { out.unusable.push_back(r.plugin); continue; }
+        out.records.push_back(std::move(r));
     }
     return out;
+}
+
+std::vector<Record> loadRecords(const std::string& pluginsDir) { return loadRecordFile(pluginsDir).records; }
+
+bool helpersHoldsAFile(const std::string& pluginsDir) {
+    std::error_code ec;
+    const fs::path folder = programFolder(fs::path(pluginsDir));
+    for (fs::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code e2;
+        if (it->is_regular_file(e2)) { return true; }
+    }
+    return false;
 }
 
 bool saveRecords(const std::string& pluginsDir, const std::vector<Record>& rs, std::string& error) {
@@ -431,7 +459,7 @@ State stateOf(const PluginCatalogEntry& e, const Places& places, const std::vect
         }
         return State::NotAvailable;
     }
-    return e.companion.program.usable ? State::Download : State::NotAvailable;
+    return (e.companion.program.usable && downloadsAvailable()) ? State::Download : State::NotAvailable;
 }
 
 std::string bridgeFileOf(const PluginCatalogEntry& e) {
@@ -552,7 +580,8 @@ bool Txn::stage(const PluginCatalogEntry& e, std::atomic<float>* progress, std::
         via_ = "package";
     } else {
         const ProgramInfo& pr = e.companion.program;
-        if (!pr.usable) {
+        if (!pr.usable || !downloadsAvailable()) {
+            // (M1: with no owner key a program is never fetched; nothing is requested)
             error = q + "the program for this companion is not available";
             return false;
         }
@@ -674,7 +703,23 @@ StartVerdict checkBeforeStart(const std::string& pluginPath) {
         const std::string dir = p.parent_path().string();
         const std::string file = p.filename().string();
         Record rec;
-        if (!readRecord(dir, file, rec)) { return v; }   // not a catalogue companion: a program the user chose is the user's
+        const RecordFile rf = loadRecordFile(dir);
+        bool have = false;
+        for (const Record& r : rf.records) {
+            if (r.plugin == file) { rec = r; have = true; break; }
+        }
+        if (!have) {
+            // L1: a record that is THERE but cannot be used is not "not a companion". This plugin's own entry unusable, or the whole file damaged while a program sits
+            // in the helpers folder: refuse, with the way out. (No record file at all is a copy that never installed a companion: a program the user chose is the user's.)
+            const bool mine = std::find(rf.unusable.begin(), rf.unusable.end(), file) != rf.unusable.end();
+            if (mine || (rf.damaged && helpersHoldsAFile(dir))) {
+                v.allowed = false;
+                v.sentence = "The list of companion programs beside the plugins is damaged, so this plugin was not started. Remove the plugin and fit it again to repair the list.";
+                noteHostFault(CASCADE_FAULT_BREAK);
+                diagLogf("plugins: a companion program was refused before it started (its record is damaged)");
+            }
+            return v;
+        }
         const Places places = placesFor(dir);
         const fs::path program = programFolder(fs::path(dir)) / rec.file;
         std::string expected = rec.sha256;

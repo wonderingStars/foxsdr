@@ -41,6 +41,7 @@ struct Handshake {
     int status = 400;         // the HTTP status to refuse with when !ok
     std::string key;          // Sec-WebSocket-Key
     std::string path;         // the request target
+    bool hasOrigin = false;   // an Origin header was sent: only a web page's browser sends one (a native program does not)
     std::string error;        // why it was refused, in words (never echoes a header value)
 };
 // `head` is everything up to and including the blank line. Requires a GET, HTTP/1.1, "Upgrade: websocket", a Connection header that lists

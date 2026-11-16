@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <random>
 #include <regex>
+#include <cstring>
 #include <set>
 
 #include "core/diag_log.hpp"
@@ -283,11 +284,45 @@ std::string clipUtf8(const std::string& s, std::size_t maxChars) {
     return s;
 }
 
+namespace {
+
+// A Linux or macOS path root that holds a person's files, devices or temporary files (R9, security review 2): /media/<user>/..., /run/media/<user>/..., /mnt/..., /root/...,
+// /dev/bus/usb/..., /tmp, /var, /etc, /opt, /srv, /proc, /sys, /Volumes. It counts at `i` when the slash does not belong to a longer word ("and/or", "https://host/media").
+bool unixRootAt(const std::string& s, std::size_t i) {
+    if (s[i] != '/') { return false; }
+    if (i > 0 && (isWordChar(s[i - 1]) || s[i - 1] == '/' || s[i - 1] == '.' || s[i - 1] == '-')) { return false; }
+    static const char* const kRoots[] = {"media", "run", "mnt", "root", "dev", "tmp", "var", "etc", "opt", "srv", "proc", "sys", "volumes", "snap"};
+    for (const char* r : kRoots) {
+        if (!startsWithNoCase(s, i + 1, r)) { continue; }
+        const std::size_t after = i + 1 + std::strlen(r);
+        // "/dev/x" and "/mnt" at the end of a clause are paths; "/devices" and "/mntx" are other words
+        if (after >= s.size() || isSlash(s[after]) || pathStop(s[after])) { return true; }
+    }
+    return false;
+}
+
+// A Windows device path or USB instance path: \\?\usb#vid_...#serial#{guid}, \\.\..., USB\VID_xxxx&PID_xxxx\<serial>, usb#vid_xxxx&pid_xxxx#<serial>.
+bool devicePathAt(const std::string& s, std::size_t i) {
+    if (i + 3 < s.size() && s[i] == '\\' && s[i + 1] == '\\' && (s[i + 2] == '?' || s[i + 2] == '.') && s[i + 3] == '\\') { return true; }
+    if (i > 0 && isWordChar(s[i - 1])) { return false; }
+    return startsWithNoCase(s, i, "usb\\vid_") || startsWithNoCase(s, i, "usb#vid_") || startsWithNoCase(s, i, "usb/vid_");
+}
+
+}  // namespace
+
 std::string pathsToToken(const std::string& s) {
     std::string out;
     std::size_t i = 0;
     while (i < s.size()) {
         bool path = false;
+        if (devicePathAt(s, i) || unixRootAt(s, i)) {
+            std::size_t j = i + 1;
+            if (s[i] == '\\') { j = i + 4; }   // past the \\?\ prefix: its question mark is not the end of the path
+            while (j < s.size() && !(pathStop(s[j]) && !(s[j] == '?'))) { ++j; }
+            out += "<path>";
+            i = j;
+            continue;
+        }
         if (i + 2 < s.size() && isAlpha(s[i]) && s[i + 1] == ':' && isSlash(s[i + 2]) && (i == 0 || !isWordChar(s[i - 1]))) { path = true; }
         // a network path, including one the upload scrub has already half-masked (two backslashes, <host>, then the share and the file): what follows the
         // masked host name is the user's
@@ -361,7 +396,15 @@ static std::string maskBareFrequencies(const std::string& s) {
         while (u < s.size() && (isAlpha(s[u]) || s[u] == '/' || s[u] == '%') && unit.size() < 8) { unit.push_back(lower(s[u])); ++u; }
         bool safe = false;
         for (const char* k : kSafeUnits) { if (unit == k) { safe = true; } }
-        const bool looksLikeFrequency = intDigits >= 6 || (decimals >= 3 && intDigits >= 1 && !(intDigits == 1 && s[i] == '0'));
+        // (R9) a number near a word about tuning, with four digits or a decimal point and no unit, is a frequency in kHz or MHz written without its unit: "tuned to 14200", "freq 145.5"
+        bool nearTuningWord = false;
+        {
+            const std::size_t from = i > 40 ? i - 40 : 0;
+            const std::string window = lowerCopy(s.substr(from, i - from));
+            for (const char* w : {"freq", "tun", "centre", "center", "vfo", "lo ", "channel"}) { if (window.find(w) != std::string::npos) { nearTuningWord = true; } }
+        }
+        const bool looksLikeFrequency = intDigits >= 6 || (decimals >= 3 && intDigits >= 1 && !(intDigits == 1 && s[i] == '0')) ||
+                                        (nearTuningWord && (intDigits >= 4 || decimals >= 1) && !(intDigits == 1 && s[i] == '0' && decimals == 0));
         if (looksLikeFrequency && !safe) {
             out.push_back('#');
         } else {
@@ -372,11 +415,161 @@ static std::string maskBareFrequencies(const std::string& s) {
     return out;
 }
 
-std::string scrubText(const std::string& raw, const std::string& serial, std::size_t maxChars) {
-    std::string t = maskBareFrequencies(scrubUploadLine(raw));
+// ---------------------------------------------------------------------------
+// WHAT THE SCRUB USED TO LET THROUGH (security reviews 1 and 2, L8 and R9): a MAC address, a host name in prose, a bare file name, another device's serial number and a
+// frequency that carries no unit. Each is masked with a word in angle brackets, which no rule reads as data. Plain loops: no regular expression sees driver text.
+// ---------------------------------------------------------------------------
+namespace {
+
+bool isHex(char c) { return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
+bool nameChar(char c) { return (isWordChar(c)) || c == '.' || c == '-'; }   // a file or host name token (underscore included: isWordChar)
+
+// aa:bb:cc:dd:ee:ff and aa-bb-cc-dd-ee-ff
+std::string maskMacs(const std::string& s) {
+    std::string out;
+    std::size_t i = 0;
+    while (i < s.size()) {
+        bool mac = false;
+        if (i + 17 <= s.size() && (i == 0 || !isWordChar(s[i - 1])) && (i + 17 == s.size() || !isWordChar(s[i + 17]))) {
+            const char sep = s[i + 2];
+            if (sep == ':' || sep == '-') {
+                mac = true;
+                for (std::size_t k = 0; k < 17 && mac; ++k) {
+                    mac = (k % 3 == 2) ? s[i + k] == sep : isHex(s[i + k]);
+                }
+            }
+        }
+        if (mac) { out += "<mac>"; i += 17; } else { out.push_back(s[i]); ++i; }
+    }
+    return out;
+}
+
+bool fileExtension(const std::string& ext) {
+    static const std::set<std::string> kExt = {"iq", "wav", "cu8", "cs8", "cs16", "cf32", "cfile", "raw", "bin", "dat", "sigmf", "json", "cfg", "conf", "ini", "log", "txt", "csv",
+                                               "xml", "exe", "dll", "so", "sys", "inf", "zip", "png", "jpg", "bmp", "mp3", "flac", "ogg", "gz", "tar", "bak", "tmp", "db",
+                                               "sqlite", "pcap", "kml", "pdf", "lib", "dylib", "cat", "rtf", "html", "htm", "js", "py", "bat", "cmd", "ps1", "sh"};
+    return kExt.count(lowerCopy(ext)) != 0;
+}
+
+bool hasLetter(const std::string& t) { for (char c : t) { if (isAlpha(c)) { return true; } } return false; }
+
+// "name.ext" with a known extension -> <file>; "a.b.c" with a letters-only last label -> <host>
+std::string maskNameTokens(const std::string& s) {
+    std::string out;
+    std::size_t i = 0;
+    while (i < s.size()) {
+        if (!nameChar(s[i]) || (i > 0 && s[i - 1] == '<')) { out.push_back(s[i]); ++i; continue; }
+        std::size_t j = i;
+        while (j < s.size() && nameChar(s[j])) { ++j; }
+        std::string tok = s.substr(i, j - i);
+        // a sentence's full stop is not part of the name
+        std::string tail;
+        while (!tok.empty() && (tok.back() == '.' || tok.back() == '-')) { tail.insert(tail.begin(), tok.back()); tok.pop_back(); }
+        const std::size_t dot = tok.rfind('.');
+        std::string repl;
+        if (dot != std::string::npos && dot > 0 && dot + 1 < tok.size()) {
+            const std::string last = tok.substr(dot + 1);
+            bool lettersOnly = true;
+            for (char c : last) { if (!isAlpha(c)) { lettersOnly = false; } }
+            if (fileExtension(last)) {
+                repl = "<file>";
+            } else if (lettersOnly && last.size() >= 2 && last.size() <= 24 && hasLetter(tok.substr(0, dot))) {
+                // every label is letters, digits and hyphens, none empty
+                bool labels = true;
+                std::size_t from = 0;
+                for (;;) {
+                    const std::size_t d = tok.find('.', from);
+                    const std::string label = tok.substr(from, d == std::string::npos ? std::string::npos : d - from);
+                    if (label.empty()) { labels = false; }
+                    for (char c : label) { if (!(isAlpha(c) || isDigit(c) || c == '-')) { labels = false; } }
+                    if (d == std::string::npos) { break; }
+                    from = d + 1;
+                }
+                if (labels) { repl = "<host>"; }
+            }
+        }
+        if (repl.empty()) { out.append(s, i, j - i); } else { out += repl; out += tail; }
+        i = j;
+    }
+    return out;
+}
+
+// "the host NAME", "host=NAME", "hostname: NAME": the word after the word host, whatever it looks like; and "on|to|at|from|via NAME:PORT"
+std::string maskHostWords(const std::string& s) {
+    static const std::set<std::string> kNotAName = {"the", "a", "an", "name", "is", "was", "not", "could", "cannot", "can", "at", "on", "for", "to", "address", "unknown", "unreachable",
+                                                    "down", "failed", "refused", "did", "does", "no", "or", "and", "in", "of", "found", "resolve", "lookup", "<host>", "<mac>"};
+    std::string out;
+    std::size_t i = 0;
+    while (i < s.size()) {
+        const bool wordStart = !isWordChar(s[i]) ? false : (i == 0 || !isWordChar(s[i - 1]));
+        if (!wordStart) { out.push_back(s[i]); ++i; continue; }
+        std::size_t w = i;
+        while (w < s.size() && isWordChar(s[w])) { ++w; }
+        const std::string word = lowerCopy(s.substr(i, w - i));
+        out.append(s, i, w - i);
+        i = w;
+        const bool hostWord = word == "host" || word == "hostname";
+        const bool joinWord = word == "on" || word == "to" || word == "at" || word == "from" || word == "via";
+        if (!hostWord && !joinWord) { continue; }
+        // skip the glue between the word and the name: spaces, a colon or equals sign, a quote
+        std::size_t k = i;
+        std::size_t glueEnd = k;
+        while (glueEnd < s.size() && (s[glueEnd] == ' ' || s[glueEnd] == ':' || s[glueEnd] == '=' || s[glueEnd] == '"' || s[glueEnd] == '\'')) { ++glueEnd; }
+        if (glueEnd == k) { continue; }
+        std::size_t n = glueEnd;
+        while (n < s.size() && nameChar(s[n])) { ++n; }
+        if (n == glueEnd) { continue; }
+        std::string name = s.substr(glueEnd, n - glueEnd);
+        while (!name.empty() && (name.back() == '.' || name.back() == '-')) { name.pop_back(); }
+        if (name.empty() || kNotAName.count(lowerCopy(name)) != 0 || !hasLetter(name)) { continue; }
+        if (joinWord) {
+            // only NAME:PORT counts after a join word (otherwise "on startup" would be a host)
+            const std::size_t after = glueEnd + name.size();
+            std::size_t p = after;
+            if (p >= s.size() || s[p] != ':') { continue; }
+            ++p;
+            std::size_t digits = 0;
+            while (p < s.size() && isDigit(s[p])) { ++p; ++digits; }
+            if (digits == 0 || digits > 5) { continue; }
+        }
+        out.append(s, k, glueEnd - k);
+        out += "<host>";
+        i = glueEnd + name.size();
+    }
+    return out;
+}
+
+// A run of eight or more letters and digits that mixes both: another device's serial number, an instance id. (Words and plain numbers are not.)
+std::string maskIdTokens(const std::string& s) {
+    std::string out;
+    std::size_t i = 0;
+    while (i < s.size()) {
+        if (!(isAlpha(s[i]) || isDigit(s[i])) || (i > 0 && (s[i - 1] == '<' || s[i - 1] == '#' || s[i - 1] == '_'))) { out.push_back(s[i]); ++i; continue; }
+        std::size_t j = i;
+        std::size_t letters = 0, digits = 0;
+        while (j < s.size() && (isAlpha(s[j]) || isDigit(s[j]))) { (isAlpha(s[j]) ? letters : digits)++; ++j; }
+        const bool hex0x = j - i >= 2 && s[i] == '0' && (s[i + 1] == 'x' || s[i + 1] == 'X');
+        const bool beforeUnderscore = j < s.size() && s[j] == '_';
+        if (j - i >= 8 && letters >= 1 && digits >= 2 && !hex0x && !beforeUnderscore) { out += "<id>"; } else { out.append(s, i, j - i); }
+        i = j;
+    }
+    return out;
+}
+
+std::string maskNames(const std::string& s) {
+    return maskIdTokens(maskNameTokens(maskHostWords(maskMacs(s))));
+}
+
+}  // namespace
+
+std::string scrubText(const std::string& rawIn, const std::string& serial, std::size_t maxChars) {
+    // THE LENGTH IS BOUNDED BEFORE ANY RULE RUNS (L8): a driver's sentence is a few hundred characters; the regular expressions below must never see a megabyte
+    const std::string raw = clipUtf8(rawIn.size() > 2000 ? rawIn.substr(0, 2000) : rawIn, 2000);
+    std::string t = maskBareFrequencies(maskMacs(scrubUploadLine(raw)));   // (a MAC first: its digit pairs are not frequencies)
     for (int pass = 0; pass < 4; ++pass) {
         t = stripSerial(t, serial);
         t = pathsToToken(t);
+        t = maskNames(t);
         const std::string code = textCode(t, serial);
         if (code.empty()) { break; }
         if (code == "frequency-in-text") {

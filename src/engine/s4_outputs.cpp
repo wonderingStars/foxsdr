@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "core/decode_json.hpp"
+#include "core/server_ports.hpp"
 
 namespace cascade::engine::s4 {
 
@@ -112,9 +113,12 @@ std::string checkInfluxText(const std::string& text, bool mayBeEmpty) {
     return std::string();
 }
 
+// "This computer only" is decided from the ADDRESS, never from how a name begins (L4, security review 1): a host that merely STARTS with "127." ("127.evil.example") used to
+// be labelled "this computer only" while a password went out in clear text to another machine. Only the name `localhost`, `::1` and a parsed dotted-quad inside 127.0.0.0/8
+// count. (Any other name is "another computer", even one that would resolve to this machine: the label is made without a lookup, which has no time bound.)
 bool isLoopbackHost(const std::string& host) {
     const std::string h = lowerOf(host);
-    return h == "localhost" || h == "::1" || h == "[::1]" || h.rfind("127.", 0) == 0;
+    return h == "[::1]" || cascade::net::isLoopbackAddress(h);
 }
 
 std::string mqttScope(const std::string& host, bool hasPassword) {

@@ -1453,7 +1453,7 @@ set(CASCADE_FENCE_DENIED_PROBES
     net/web_control.hpp net/web_policy.hpp net/web_server.hpp net/web_session.hpp
     net/ws_frame.hpp net/tci_protocol.hpp net/tci_server.hpp net/udp_audio.hpp net/web_users.hpp net/web_tls.hpp
     # feat/webmodels: the standalone web models (viewport, bookmarks, clip, profiles, arbiter, CORS, UPnP IGD client)
-    net/web_viewport.hpp net/web_bookmarks.hpp net/web_clip.hpp net/web_profiles.hpp net/web_arbiter.hpp net/web_cors.hpp net/upnp_igd.hpp)
+    net/web_viewport.hpp net/web_bookmarks.hpp net/web_clip.hpp net/web_profiles.hpp net/web_arbiter.hpp net/web_cors.hpp net/upnp_igd.hpp net/web_guard.hpp)
 function(_cascade_fence_probe_source out_var id body)
     set(_src "${CASCADE_FENCE_PROBE_DIR}/${id}.cpp")
     set(_old "")

@@ -112,6 +112,82 @@ const char* bundleErrorName(BundleError e) {
 
 bool allowedBundleFileName(const std::string& name) { return name == "config.json" || name == "bookmarks.json" || name == "markers.json"; }
 
+const std::vector<std::string>& importLeftOutKeys() {
+    static const std::vector<std::string> k = {"pluginCatalogueUrl", "pluginSites", "webBindAddress", "catBindAll", "tciBindAll", "udpAudioHost",
+                                               "plutoUri", "rtlTcpAddr", "iqFilePath"};
+    return k;
+}
+
+const std::vector<std::string>& importFilteredKeys() {
+    static const std::vector<std::string> k = {"sourceKind", "soapyArgs", "nativeArgs", "radios"};
+    return k;
+}
+
+namespace {
+
+bool plainValue(const std::string& v) {
+    if (v.empty() || v.size() > 64) { return false; }
+    for (const char c : v) {
+        const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == ':';
+        if (!ok) { return false; }
+    }
+    return true;
+}
+
+bool localDriverName(const std::string& d) {
+    static const std::set<std::string> kLocal = {"rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "miri", "bladerf", "lime", "limesdr", "uhd", "hydrasdr", "rx888", "aor"};
+    return kLocal.count(lowerOf(d)) != 0;
+}
+
+}  // namespace
+
+bool localSourceKind(const std::string& kind) {
+    static const std::set<std::string> kLocal = {"siggen", "soapy", "rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "aor", "hydrasdr", "soundcard"};
+    return kLocal.count(kind) != 0;
+}
+
+bool classifyDeviceArgs(const std::string& args, std::string& cleaned, bool& dropped) {
+    cleaned.clear();
+    dropped = false;
+    if (args.empty()) { return true; }
+    if (args.size() > 512) { return false; }
+    std::size_t pos = 0;
+    int fields = 0;
+    for (;;) {
+        std::size_t end = args.find(',', pos);
+        if (end == std::string::npos) { end = args.size(); }
+        std::string field = args.substr(pos, end - pos);
+        while (!field.empty() && field.front() == ' ') { field.erase(field.begin()); }
+        while (!field.empty() && field.back() == ' ') { field.pop_back(); }
+        const std::size_t eq = field.find('=');
+        if (eq == std::string::npos || eq == 0 || ++fields > 16) { return false; }   // not key=value: cannot be classified
+        const std::string key = lowerOf(field.substr(0, eq));
+        const std::string val = field.substr(eq + 1);
+        const bool keyOk = key == "driver" || key == "serial" || key == "index" || key == "channel" || key == "deviceid" || key == "device_id";
+        bool valOk = keyOk && plainValue(val);
+        if (valOk && key == "driver") { if (!localDriverName(val)) { return false; } }   // a remote driver: the whole string is another computer's
+        if (valOk && (key == "index" || key == "channel")) { for (const char c : val) { if (c < '0' || c > '9') { valOk = false; } } }
+        if (valOk && key == "serial" && val.find(':') != std::string::npos) { valOk = false; }
+        if (valOk) { cleaned += (cleaned.empty() ? "" : ",") + key + "=" + val; } else { dropped = true; }
+        if (end == args.size()) { break; }
+        pos = end + 1;
+    }
+    return true;
+}
+
+// A saved radio object of config.json's `radios`: true when it names a local device and carries no address, path or remote driver.
+static bool localSavedRadio(const json& radio) {
+    if (!radio.is_object()) { return false; }
+    const auto k = radio.find("sourceKind");
+    if (k == radio.end() || !k->is_string() || !localSourceKind(k->get<std::string>())) { return false; }
+    const auto a = radio.find("args");
+    if (a == radio.end()) { return true; }
+    if (!a->is_string()) { return false; }
+    std::string cleaned;
+    bool dropped = false;
+    return classifyDeviceArgs(a->get<std::string>(), cleaned, dropped) && !dropped;
+}
+
 bool secretKeyName(const std::string& key) {
     const std::string k = lowerOf(key);
     for (const char* frag : {"password", "passwd", "passphrase", "secret", "token", "apikey", "api_key", "privatekey", "private_key", "credential"}) {
@@ -224,6 +300,51 @@ ImportResult parseBundle(const std::string& text) {
         stripKeys(c, /*identity=*/true, "", removed);
         if (!removed.empty()) { r.notes.push_back(dl.name + ": " + std::to_string(removed.size()) + " secret or identity value(s) in the bundle were NOT imported"); }
         if (dl.name == "config.json") {
+            std::string left;
+            for (const std::string& k : importLeftOutKeys()) {
+                const auto it = c.find(k);
+                if (it == c.end()) { continue; }
+                c.erase(it);
+                left += (left.empty() ? "" : ", ") + k;
+            }
+            if (!left.empty()) {
+                r.notes.push_back("config.json: these settings decide where plugins come from, what this program listens on, or make it connect to another computer or open a file at start, so they were NOT imported (this computer keeps its own): " + left);
+            }
+            // THE SOURCE CHOICE AND THE SAVED RADIOS: what names a local device comes back; what names another computer or a file, or cannot be classified, does not.
+            {
+                int radiosOut = 0, argsOut = 0;
+                bool kindOut = false;
+                const auto sk = c.find("sourceKind");
+                if (sk != c.end() && !(sk->is_string() && localSourceKind(sk->get<std::string>()))) { c.erase(sk); kindOut = true; }
+                for (const char* key : {"soapyArgs", "nativeArgs"}) {
+                    const auto it = c.find(key);
+                    if (it == c.end()) { continue; }
+                    std::string cleaned;
+                    bool dropped = false;
+                    if (kindOut || !it->is_string() || !classifyDeviceArgs(it->get<std::string>(), cleaned, dropped)) { c.erase(it); ++argsOut; continue; }
+                    if (dropped) { ++argsOut; }
+                    *it = cleaned;
+                }
+                const auto rd = c.find("radios");
+                if (rd != c.end()) {
+                    if (!rd->is_array()) { c.erase(rd); ++radiosOut; }
+                    else {
+                        json keep = json::array();
+                        for (const json& one : *rd) { if (localSavedRadio(one)) { keep.push_back(one); } else { ++radiosOut; } }
+                        *rd = keep;
+                    }
+                }
+                if (kindOut) { r.notes.push_back("config.json: the source this backup was using connects to another computer or opens a file, so it was NOT imported (this computer keeps its own choice)"); }
+                if (argsOut > 0) { r.notes.push_back("config.json: some device arguments carried a host, an address, a path or a remote driver, or could not be checked, so they were NOT imported"); }
+                if (radiosOut > 0) { r.notes.push_back("config.json: " + std::to_string(radiosOut) + " saved radio(s) connect to another computer or open a file, or could not be checked, so they were NOT imported (this computer keeps its own)"); }
+            }
+            // REPORTING: an import may only make it more private (commitImport keeps a switch that is off here off).
+            for (const char* sw : {"telemetryEnabled", "diagnosticsEnabled"}) {
+                const auto it = c.find(sw);
+                if (it == c.end()) { continue; }
+                if (!it->is_boolean()) { c.erase(it); continue; }
+                if (it->get<bool>()) { r.notes.push_back(std::string("config.json: ") + sw + " is on in this backup; an import can switch reporting off but never on, so a switch that is off here stays off"); }
+            }
             for (const char* sw : {"webEnabled", "catEnabled", "tciEnabled", "udpAudioEnabled"}) {
                 const auto it = c.find(sw);
                 if (it != c.end() && it->is_boolean() && it->get<bool>()) {
@@ -312,7 +433,58 @@ bool commitImport(const ImportResult& r, const fs::path& destDir, const std::str
         }
         const fs::path tmp = destDir / (it->name + ".import-tmp");
         temps.push_back(tmp);
-        if (!writeAll(tmp, bytesOf(it->name))) { error = "cannot write " + it->name; rollback(); return false; }
+        std::string bytes = bytesOf(it->name);
+        if (it->name == "config.json" && it->action == ImportAction::Replace) {
+            // This computer's own values of the settings a bundle may never change (importLeftOutKeys) stay as they are.
+            std::string own;
+            if (readAll(target, kBundleMaxFileBytes * 2, own)) {
+                json mine = json::parse(own, nullptr, /*allow_exceptions=*/false);
+                json theirs = json::parse(bytes, nullptr, /*allow_exceptions=*/false);
+                if (mine.is_object() && theirs.is_object()) {
+                    for (const std::string& k : importLeftOutKeys()) {
+                        const auto m = mine.find(k);
+                        if (m != mine.end()) { theirs[k] = *m; }
+                    }
+                    // the source choice: the backup's local choice wins; with none in the backup this computer's own trio stays
+                    if (theirs.find("sourceKind") == theirs.end()) {
+                        for (const char* k : {"sourceKind", "soapyArgs", "nativeArgs"}) {
+                            const auto m = mine.find(k);
+                            if (m != mine.end()) { theirs[k] = *m; }
+                        }
+                    }
+                    // the saved radios: the backup's local radios, plus this computer's own entries that are not local ones (a network radio) unless the number is taken
+                    {
+                        json merged = json::array();
+                        std::set<long long> used;
+                        const auto tr = theirs.find("radios");
+                        if (tr != theirs.end() && tr->is_array()) {
+                            for (const json& one : *tr) {
+                                merged.push_back(one);
+                                const auto n = one.find("number");
+                                if (n != one.end() && n->is_number_integer()) { used.insert(n->get<long long>()); }
+                            }
+                        }
+                        const auto mr = mine.find("radios");
+                        if (mr != mine.end() && mr->is_array()) {
+                            for (const json& one : *mr) {
+                                if (localSavedRadio(one)) { continue; }
+                                const auto n = one.find("number");
+                                if (n != one.end() && n->is_number_integer() && used.count(n->get<long long>()) != 0) { continue; }
+                                merged.push_back(one);
+                            }
+                        }
+                        if (!merged.empty()) { theirs["radios"] = merged; } else { theirs.erase("radios"); }
+                    }
+                    // reporting: only ever MORE private (a switch that is off here stays off)
+                    for (const char* sw : {"telemetryEnabled", "diagnosticsEnabled"}) {
+                        const auto m = mine.find(sw);
+                        if (m != mine.end() && m->is_boolean() && !m->get<bool>()) { theirs[sw] = false; }
+                    }
+                    bytes = dumpJson(theirs);
+                }
+            }
+        }
+        if (!writeAll(tmp, bytes)) { error = "cannot write " + it->name; rollback(); return false; }
     }
     // 3. rename into place.
     for (const auto* it : todo) {

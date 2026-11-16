@@ -71,6 +71,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/recorder.hpp"
 #include "core/unique_file.hpp"
+#include "net/web_auth.hpp"
 #include "test_check.hpp"
 
 #include <httplib.h>
@@ -172,6 +173,8 @@ int freeLoopbackPort() {
 }
 
 // --- The child application ------------------------------------------------------
+
+constexpr char kTestPassword[] = "a-test-only-password-for-the-child";
 
 class Child {
 public:
@@ -537,6 +540,12 @@ public:
         if (port <= 0) { return false; }
         port_ = port;
 
+        // R1 (security review 2): a web server with no password is read-only, so the child runs WITH a password and this test signs in.
+        cascade::net::PasswordRecord rec;
+        std::string hashErr;
+        CHECK(cascade::net::hashPassword(kTestPassword, rec, hashErr));
+        const std::string recordText = rec.serialize();
+
         const fs::path cfgPath = dir_ / "config.json";
         {
             std::ofstream cfg(cfgPath, std::ios::binary | std::ios::trunc);
@@ -546,6 +555,10 @@ public:
                    "  \"webPort\": "
                 << port
                 << ",\n"
+                   "  \"webUsername\": \"admin\",\n"
+                   "  \"webPasswordRecord\": \""
+                << recordText
+                << "\",\n"
                    "  \"telemetryEnabled\": false,\n"
                    "  \"updateCheckEnabled\": false\n"
                    "}\n";
@@ -577,6 +590,22 @@ public:
         cli_ = std::make_unique<httplib::Client>("127.0.0.1", port);
         cli_->set_connection_timeout(2, 0);
         cli_->set_read_timeout(5, 0);
+        // sign in as soon as the page answers; every request of this test carries the session cookie
+        {
+            const auto signInBy = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+            while (std::chrono::steady_clock::now() < signInBy && child_.alive() && cookie_.empty()) {
+                const auto res = cli_->Post("/api/login", std::string("{\"username\":\"admin\",\"password\":\"") + kTestPassword + "\"}", "application/json");
+                if (res && res->status == 200) {
+                    const std::string sc = res->get_header_value("Set-Cookie");
+                    const std::size_t end = sc.find(';');
+                    cookie_ = sc.substr(0, end);
+                } else {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                }
+            }
+            CHECK(!cookie_.empty());
+            cli_->set_default_headers({{"Cookie", cookie_}});
+        }
 
         nlohmann::json s;
         bool up = false;
@@ -663,6 +692,7 @@ public:
     ~Session() { close(); }
 
     httplib::Client& cli() { return *cli_; }
+    const std::string& cookie() const { return cookie_; }
     int port() const { return port_; }
     const fs::path& dir() const { return dir_; }
     const fs::path& recDir() const { return recDir_; }
@@ -673,6 +703,7 @@ private:
     int port_ = 0;
     Child child_;
     std::unique_ptr<httplib::Client> cli_;
+    std::string cookie_;
     int failedAtStart_ = 0;
     bool closed_ = false;
 };
@@ -872,6 +903,7 @@ void aListeningBrowserDoesNotStallTheWindowUnderAHeldAudioLock() {
         httplib::Client c("127.0.0.1", port);
         c.set_connection_timeout(5, 0);
         c.set_read_timeout(30, 0);
+        c.set_default_headers({{"Cookie", ss.cookie()}});
         (void)c.Get("/api/audio", [&](const char*, std::size_t len) {
             audioBytes += len;
             return !stop.load();
@@ -881,6 +913,7 @@ void aListeningBrowserDoesNotStallTheWindowUnderAHeldAudioLock() {
         httplib::Client c("127.0.0.1", port);
         c.set_connection_timeout(5, 0);
         c.set_read_timeout(10, 0);
+        c.set_default_headers({{"Cookie", ss.cookie()}});
         std::uint64_t cursor = 0;
         while (!stop.load()) {
             const auto r = c.Get(("/api/spectrum?since=" + std::to_string(cursor)).c_str());

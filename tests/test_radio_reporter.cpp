@@ -230,6 +230,35 @@ int main(int argc, char** argv) {
     std::vector<json> everything;   // every message made, for the Worker's own validator at the end
     auto keep = [&everything](const std::vector<json>& m) { everything.insert(everything.end(), m.begin(), m.end()); };
 
+    // --- R10 (security review 2): a state file or a journal header with a field of the WRONG TYPE is a damaged file, never an exception at start-up ---------------------------
+    {
+        const std::vector<std::string> hostile = {
+            "{\"day\":5}",                                                  // a number where the date text belongs
+            "{\"failAdmitted\":\"many\",\"journalAdmitted\":[1]}",              // text and an array where counts belong
+            "{\"refused\":{},\"firstSeen\":[\"a\",1,null]}",
+            "{\"held\":{\"k\":{\"body\":{},\"kind\":7,\"key\":[],\"t\":\"x\",\"at\":null,\"cls\":3,\"fail\":\"yes\"}}}",
+            "{\"day\":\"2026-11-16\",\"failAdmitted\":\"x\"}",               // good fields before a bad one: all of it is dropped, not half of it
+        };
+        for (const std::string& text : hostile) {
+            Rig r("wrongtype");
+            const fs::path dir = r.tmp.p / "radio-reports";
+            fs::create_directories(dir);
+            { std::ofstream f(dir / "state.json", std::ios::binary); f << text; }
+            // a journal segment whose header's "ss" is not a number
+            { std::ofstream f(dir / "journal-abc.1.jsonl", std::ios::binary); f << "{\"ss\":\"soon\",\"v\":1}\n{\"kind\":\"x\"}\n"; }
+            bool threw = false;
+            try {
+                r.start();
+                r.rep.fileFailure(failure("airspyhf", "serial=HF0001A2", kD3, "control"), ringWith("source: the saved radio did not reopen (control)"));
+            } catch (...) { threw = true; }
+            CHECK(!threw);
+            CHECK(filesIn(r.rep.dir(), "fail-").size() == 1);   // and it works: the failure was filed
+            // the damaged file was replaced by a fresh one, which now loads
+            const std::string after = [&] { std::ifstream f(dir / "state.json", std::ios::binary); return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()); }();
+            CHECK(json::parse(after, nullptr, false).is_object());
+        }
+    }
+
     // --- ONE REPORT PER FAILURE, scrubbed, never folded (D4 test 1) ----------------------------------------------------------------------------
     {
         Rig r("two");

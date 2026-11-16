@@ -87,7 +87,10 @@ std::string realRecord() {
 // Finds a port this machine will actually let us have. Fixed ports collide with
 // whatever the developer already has listening and with a second copy of this
 // suite; scanning avoids both without needing the policy to accept port 0.
-int startOnFreePort(WebServer& server, WebServerConfig cfg, std::string& error) {
+int startOnFreePort(WebServer& server, WebServerConfig cfg, std::string& error, bool openControl = true) {
+    // R1: a server with no password is read-only. The tests below that are about what a control DOES run an open server on purpose; the R1
+    // tests at the end of this file pass openControl = false and prove the read-only rule itself.
+    server.allowOpenControlForTests(openControl);
     for (int port = 18073; port < 18173; ++port) {
         cfg.port = port;
         if (server.start(cfg, error)) {
@@ -3585,6 +3588,245 @@ void measureEventCpu() {
     server.stop();
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// R1 (security review 2): the Host and Origin of every request are checked, and a server with no password is read-only.
+
+// R5 (security review 2): text from the air (RDS), from a driver (gain stage names), from a decoder (track id and label) and from the catalogue is escaped before it is put
+// into markup. Held three ways: the served script has no raw interpolation left at those sites, the escaper is run in node on hostile text, and the status cells go
+// through it.
+void testPageEscapesWhatCameFromTheAir() {
+    const std::string js = fetchAppJs();
+    CHECK(js.find("function esc(") != std::string::npos);
+    for (const char* site : {"esc(s.rdsRadioText)", "esc(s.rdsPsValid ? s.rdsPs : '-')", "esc(g.name)", "esc(t.id)", "esc(t.label || '')", "esc(e.name)", "esc(e.version)",
+                             "esc(e.licence || '')"}) {
+        if (js.find(site) == std::string::npos) { std::printf("missing escape at: %s\n", site); }
+        CHECK(js.find(site) != std::string::npos);
+    }
+    // and the raw forms are gone
+    for (const char* raw : {"' + s.rdsRadioText + '", "' + (s.rdsPsValid ? s.rdsPs : '-') + '", "g.name + ' <span", "'<span class=\"id\">' + t.id +", "'<span class=\"nm\">' + e.name +"}) {
+        if (js.find(raw) != std::string::npos) { std::printf("raw interpolation still there: %s\n", raw); }
+        CHECK(js.find(raw) == std::string::npos);
+    }
+    const fs::path dir = scratchDir();
+    if (!haveNode(dir)) {
+        std::printf("SKIP the node half of testPageEscapesWhatCameFromTheAir: node is not on PATH\n");
+        return;
+    }
+    const fs::path jsPath = dir / "app_escape.js";
+    CHECK(writeFile(jsPath, js));
+    const char* kDriver = R"NODE(
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+function block(name) {
+  const i = src.indexOf('function ' + name + '(');
+  if (i < 0) throw new Error('missing function ' + name);
+  let depth = 0, opened = false;
+  for (let j = i; j < src.length; j++) {
+    if (src[j] === '{') { depth++; opened = true; }
+    else if (src[j] === '}') { depth--; if (opened && depth === 0) return src.slice(i, j + 1); }
+  }
+  throw new Error('unterminated function ' + name);
+}
+const run = new Function(block('esc') + '\n' + block('cell') + `
+const hostile = '<img src=x onerror=alert(1)>"\\'&<a href="http://evil.example">click</a>';
+const e = esc(hostile);
+const c = cell('<b>k</b>', hostile);
+return [
+  'escLt=' + (e.indexOf('<') < 0 ? 1 : 0),
+  'escGt=' + (e.indexOf('>') < 0 ? 1 : 0),
+  'escQuote=' + (e.indexOf('"') < 0 ? 1 : 0),
+  'escRound=' + (e === '&lt;img src=x onerror=alert(1)&gt;&quot;\\&#39;&amp;&lt;a href=&quot;http://evil.example&quot;&gt;click&lt;/a&gt;' ? 1 : 0),
+  'cellTags=' + ((c.match(/</g) || []).length),
+  'nullOk=' + (esc(null) === '' && esc(undefined) === '' && esc(5) === '5' ? 1 : 0),
+  'dollar=' + (cell('k', '$& $1 $$').indexOf('$&amp; $1 $$') >= 0 ? 1 : 0),
+].join('\\n');
+`);
+try { console.log(run()); } catch (e) { console.error(e); process.exit(2); }
+)NODE";
+    const fs::path driver = dir / "escape_driver.js";
+    CHECK(writeFile(driver, kDriver));
+    std::string output;
+    const int rc = runCaptured("node \"" + driver.string() + "\" \"" + jsPath.string() + "\"", dir / "escape.txt", output);
+    std::printf("escape in node:\n%s", output.c_str());
+    CHECK(rc == 0);
+    CHECK(output.find("escLt=1") != std::string::npos && output.find("escGt=1") != std::string::npos && output.find("escQuote=1") != std::string::npos);
+    CHECK(output.find("escRound=1") != std::string::npos);
+    CHECK(output.find("cellTags=6") != std::string::npos);   // the cell's own six tag brackets, none from the text
+    CHECK(output.find("nullOk=1") != std::string::npos);
+    CHECK(output.find("dollar=1") != std::string::npos);
+}
+
+// The sentence a refused change carries (the page shows the same one).
+bool saysReadOnly(const std::string& body) { return body.find("read-only") != std::string::npos && body.find("web password") != std::string::npos; }
+
+void testR1ForeignHostIsRefusedOnEveryRoute() {
+    WebServer server;
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error, false);
+    CHECK(port > 0);
+    if (port <= 0) { return; }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    const httplib::Headers rebound = {{"Host", "rebind.evil.example:" + std::to_string(port)}};
+    // the honest address works
+    auto page = cli.Get("/");
+    CHECK(static_cast<bool>(page) && page->status == 200);
+    auto honestLocalhost = cli.Get("/api/session", httplib::Headers{{"Host", "localhost:" + std::to_string(port)}});
+    CHECK(static_cast<bool>(honestLocalhost) && honestLocalhost->status == 200);
+    // a DNS-rebound name is turned away on the page, the data and the audio alike, and on a POST
+    for (const char* path : {"/", "/app.js", "/app.css", "/api/session", "/api/status", "/api/events", "/api/audio", "/api/room", "/status.json", "/api/mybookmarks"}) {
+        auto r = cli.Get(path, rebound);
+        CHECK(static_cast<bool>(r));
+        if (r) { CHECK(r->status == 421); }
+    }
+    auto post = cli.Post("/api/control", rebound, "{\"centerHz\":144800000}", "application/json");
+    CHECK(static_cast<bool>(post) && post->status == 421);
+    CHECK(log->batchCount() == 0);
+    // the body of a refusal is the one JSON shape and carries no page content
+    auto one = cli.Get("/api/status", rebound);
+    CHECK(static_cast<bool>(one) && one->body.find("\"error\"") != std::string::npos && one->body.find("centerHz") == std::string::npos);
+}
+
+void testR1ForeignOriginIsRefusedAndNoOriginStillWorks() {
+    WebServer server;
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
+    WebServerConfig cfg = loopbackConfig();
+    cfg.passwordRecord = realRecord();
+    std::string error;
+    const int port = startOnFreePort(server, cfg, error, false);
+    CHECK(port > 0);
+    if (port <= 0) { return; }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    const std::string own = "http://127.0.0.1:" + std::to_string(port);
+    // a sign-in made by the server's own page (same origin) works
+    auto login = cli.Post("/api/login", httplib::Headers{{"Origin", own}}, loginBody("admin", kPassword), "application/json");
+    CHECK(static_cast<bool>(login) && login->status == 200);
+    std::string token;
+    if (login) { token = tokenFromSetCookie(login->get_header_value("Set-Cookie")); }
+    CHECK(!token.empty());
+    // a sign-in from another site is refused, even with the right password
+    auto foreign = cli.Post("/api/login", httplib::Headers{{"Origin", "https://evil.example"}}, loginBody("admin", kPassword), "application/json");
+    CHECK(static_cast<bool>(foreign) && foreign->status == 403);
+    auto nullOrigin = cli.Post("/api/login", httplib::Headers{{"Origin", "null"}}, loginBody("admin", kPassword), "application/json");
+    CHECK(static_cast<bool>(nullOrigin) && nullOrigin->status == 403);
+    // a signed-in browser whose cookie rides a request from another site (the cookie is SameSite=Strict, but the server does not rely on it)
+    auto driven = cli.Post("/api/control", httplib::Headers{{"Cookie", "foxsdr_session=" + token}, {"Origin", "https://evil.example"}}, "{\"centerHz\":144800000}", "application/json");
+    CHECK(static_cast<bool>(driven) && driven->status == 403);
+    CHECK(log->batchCount() == 0);
+    // a read from another site is refused too (it is not on the owner's list)
+    auto read = cli.Get("/api/status", httplib::Headers{{"Cookie", "foxsdr_session=" + token}, {"Origin", "https://evil.example"}});
+    CHECK(static_cast<bool>(read) && read->status == 403);
+    // a tool with NO Origin header (curl, a script) is unchanged: signed in it controls, as before
+    auto tool = cli.Post("/api/control", httplib::Headers{{"Cookie", "foxsdr_session=" + token}}, "{\"centerHz\":144800000}", "application/json");
+    CHECK(static_cast<bool>(tool) && tool->status == 202);
+    CHECK(log->batchCount() == 1);
+    // the owner's own origin on a signed-in POST works (the page itself)
+    auto page = cli.Post("/api/control", httplib::Headers{{"Cookie", "foxsdr_session=" + token}, {"Origin", own}}, "{\"volume\":0.5}", "application/json");
+    CHECK(static_cast<bool>(page) && page->status == 202);
+}
+
+void testR1ListedOriginMayReadButNeverChange() {
+    WebServer server;
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error, false);
+    CHECK(port > 0);
+    if (port <= 0) { return; }
+    CHECK(server.setCors({"https://dash.example"}, error));
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    auto read = cli.Get("/api/session", httplib::Headers{{"Origin", "https://dash.example"}});
+    CHECK(static_cast<bool>(read) && read->status == 200);
+    if (read) { CHECK(read->get_header_value("Access-Control-Allow-Origin") == "https://dash.example"); }
+    auto other = cli.Get("/api/session", httplib::Headers{{"Origin", "https://other.example"}});
+    CHECK(static_cast<bool>(other) && other->status == 403);
+    auto change = cli.Post("/api/control", httplib::Headers{{"Origin", "https://dash.example"}}, "{\"centerHz\":144800000}", "application/json");
+    CHECK(static_cast<bool>(change) && change->status == 403);
+    // the listed name is also a name the page may be reached by
+    auto byName = cli.Get("/api/session", httplib::Headers{{"Host", "dash.example:" + std::to_string(port)}});
+    CHECK(static_cast<bool>(byName) && byName->status == 200);
+    CHECK(log->batchCount() == 0);
+}
+
+void testR1NoPasswordMeansReadOnly() {
+    WebServer server;
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
+    std::string error;
+    const int port = startOnFreePort(server, loopbackConfig(), error, false);   // no password, loopback: allowed to run, read-only
+    CHECK(port > 0);
+    if (port <= 0) { return; }
+    CHECK(!server.decision().authRequired);
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    // it may show the page, the status and the session
+    auto page = cli.Get("/");
+    CHECK(static_cast<bool>(page) && page->status == 200);
+    auto status = cli.Get("/api/status");
+    CHECK(static_cast<bool>(status) && status->status == 200);
+    auto session = cli.Get("/api/session");
+    CHECK(static_cast<bool>(session) && session->status == 200);
+    if (session) { CHECK(session->body.find("\"readOnly\":true") != std::string::npos); }
+    // and the page carries the sentence that says why
+    if (page) { CHECK(page->body.find("id=\"readonly\"") != std::string::npos); }
+    auto js = cli.Get("/app.js");
+    CHECK(static_cast<bool>(js) && js->body.find("read-only because no web password is set") != std::string::npos);
+    // every route that changes anything is refused with the sentence, with and without an Origin of its own
+    const std::string own = "http://127.0.0.1:" + std::to_string(port);
+    for (const char* body : {"{\"centerHz\":144800000}", "{\"running\":false}", "{\"running\":true}", "{\"recordIq\":true}", "{\"recordAudio\":true}",
+                             "{\"transmitPtt\":true}", "{\"pluginInstall\":\"x\"}", "{\"scannerActive\":true}", "{\"muted\":true}"}) {
+        auto r = cli.Post("/api/control", body, "application/json");
+        CHECK(static_cast<bool>(r));
+        if (r) { CHECK(r->status == 403); CHECK(saysReadOnly(r->body)); }
+        auto r2 = cli.Post("/api/control", httplib::Headers{{"Origin", own}}, body, "application/json");
+        CHECK(static_cast<bool>(r2) && r2->status == 403);
+    }
+    CHECK(log->batchCount() == 0);
+    auto add = cli.Post("/api/mybookmarks", "{\"name\":\"x\",\"freqHz\":7100000}", "application/json");
+    CHECK(static_cast<bool>(add) && add->status == 403);
+    if (add) { CHECK(saysReadOnly(add->body)); }
+    auto edit = cli.Put("/api/mybookmarks/1", "{\"name\":\"x\",\"freqHz\":7100000}", "application/json");
+    CHECK(static_cast<bool>(edit) && edit->status == 403);
+    auto del = cli.Delete("/api/mybookmarks/1");
+    CHECK(static_cast<bool>(del) && del->status == 403);
+    auto imp = cli.Post("/api/mybookmarks/import?replace=1", "{\"bookmarks\":[]}", "application/json");
+    CHECK(static_cast<bool>(imp) && imp->status == 403);
+    // the cross-site form post that used to wipe the bookmark set is turned away before the route (no Origin of ours)
+    auto cross = cli.Post("/api/mybookmarks/import?replace=1", httplib::Headers{{"Origin", "https://evil.example"}}, "{\"bookmarks\":[]}", "text/plain");
+    CHECK(static_cast<bool>(cross) && cross->status == 403);
+    // reading the set still works
+    auto list = cli.Get("/api/mybookmarks");
+    CHECK(static_cast<bool>(list) && list->status == 200);
+}
+
+void testR1AWebServerWithAPasswordIsNotReadOnly() {
+    WebServer server;
+    auto log = std::make_shared<SessionLog>();
+    CHECK(server.setSessionOpener(stubOpener(log)));
+    WebServerConfig cfg = loopbackConfig();
+    cfg.passwordRecord = realRecord();
+    std::string error;
+    const int port = startOnFreePort(server, cfg, error, false);
+    CHECK(port > 0);
+    if (port <= 0) { return; }
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(5, 0);
+    auto session = cli.Get("/api/session");
+    CHECK(static_cast<bool>(session));
+    if (session) { CHECK(session->body.find("\"readOnly\":false") != std::string::npos); }
+    auto login = cli.Post("/api/login", loginBody("admin", kPassword), "application/json");
+    std::string token;
+    if (login) { token = tokenFromSetCookie(login->get_header_value("Set-Cookie")); }
+    auto add = cli.Post("/api/mybookmarks", httplib::Headers{{"Cookie", "foxsdr_session=" + token}}, "{\"name\":\"x\",\"freqHz\":7100000}", "application/json");
+    CHECK(static_cast<bool>(add));
+    if (add) { CHECK(add->status != 403); CHECK(add->status < 300); }
+}
+
 int main() {
     testLoopbackWithoutPasswordServesOpenly();
     testPasswordGateOnLoopback();
@@ -3636,5 +3878,11 @@ int main() {
     testPageFallsBackToPollingWhenTheStreamDrops();
     testPageUsesTheStreamAndFallsBackInNode();
     measureEventCpu();
+    testR1ForeignHostIsRefusedOnEveryRoute();
+    testR1ForeignOriginIsRefusedAndNoOriginStillWorks();
+    testR1ListedOriginMayReadButNeverChange();
+    testR1NoPasswordMeansReadOnly();
+    testR1AWebServerWithAPasswordIsNotReadOnly();
+    testPageEscapesWhatCameFromTheAir();
     return testSummary("test_web_server");
 }

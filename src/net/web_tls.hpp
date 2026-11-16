@@ -49,6 +49,7 @@ struct TlsOptions {
 struct TlsTimeouts {
     int handshakeMs = 10000;   // the whole handshake
     int idleMs = 30000;        // no byte either way
+    int headMs = 15000;        // from the end of the handshake to the end of the FIRST request's head: one byte every few seconds does not keep a slot (R4)
     int writeMs = 10000;       // the client will not take what is sent
 };
 

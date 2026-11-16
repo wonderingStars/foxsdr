@@ -578,6 +578,10 @@ public:
     // wire-c begin (wiring lane C, row W7a; net/web_wire_c.hpp): the cross-origin allow-list. An empty list is off (the default: no header is ever added). Callable at any time, from any
     // thread. False with `error` when an origin is not acceptable; the previous list then stays. Credentials are never allowed.
     bool setCors(const std::vector<std::string>& origins, std::string& error);
+    // R1 (security review 2): a server with NO password is READ-ONLY - the page, the status and the audio are served, and every route that changes
+    // anything (control, bookmarks) is refused with a sentence. THIS SWITCH IS FOR TESTS ONLY: it lifts that rule so a test of what a control
+    // does need not sign in first. The program never calls it; nothing in the settings can reach it.
+    void allowOpenControlForTests(bool on);
     // The metrics page (row L3): off by default; the engine publishes a snapshot about once a second while it is on. Signed-in browsers only.
     void setMetricsEnabled(bool on);
     void publishMetrics(const cascade::net::metrics::EngineSnapshot& snapshot);

@@ -721,6 +721,36 @@ void testStalledAndHalfOpenClients() {
         for (int i = 0; i < 100 && f.streamsOpen.load() != 0; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); }
         CHECK(f.streamsOpen.load() == 0);
     }
+    // (f) R4 (security review 2): finishes the handshake, then sends the first request's head one byte at a time, often enough that the idle limit never fires: the TOTAL
+    // time for the head ends it (headMs). A request that completes within it is served as before.
+    {
+        TlsTimeouts slow = to;
+        slow.idleMs = 20000;
+        slow.headMs = 1800;
+        Fixture g;
+        CHECK(g.start(slow));
+        SchannelClient c;
+        std::string e;
+        CHECK(tlsConnect(c, g.port, 0, e));
+        const auto t0 = Clock::now();
+        const std::string head = "GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Slow: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";   // never finished
+        bool dropped = false;
+        for (std::size_t i = 0; i < head.size() && msSince(t0) < 9000; ++i) {
+            if (!c.send(head.substr(i, 1))) { dropped = true; break; }
+            if (c.peerClosedWithin(150)) { dropped = true; break; }
+        }
+        const long long ms = msSince(t0);
+        std::printf("a head sent a byte at a time was dropped after %lld ms (limit %d, idle limit %d)\n", ms, slow.headMs, slow.idleMs);
+        CHECK(dropped);
+        CHECK(ms >= 1200 && ms < 8000);
+        CHECK(g.tls.stats().droppedHandshakeTimeout >= 1);
+        // a client that sends its head promptly is served, and keeps its connection idle for longer than headMs afterwards (the rule ends with the first head)
+        SchannelClient ok;
+        CHECK(tlsConnect(ok, g.port, 0, e));
+        CHECK(ok.request("GET", "/hello").body == "hello");
+        std::this_thread::sleep_for(std::chrono::milliseconds(2600));
+        CHECK(ok.request("GET", "/hello").body == "hello");
+    }
     // (e) hundreds of idle half-open connections do not exhaust the server: the per-address cap holds and the rest are refused at once.
     CHECK(f.tls.connections() == 0 || true);
 }

@@ -179,6 +179,17 @@ void testPureRules() {
     CHECK(!s4::checkMqttTopic(std::string(201, 't')).empty() && s4::checkMqttTopic(std::string(200, 't')).empty());
     // who can read what is sent
     CHECK(s4::isLoopbackHost("127.0.0.1") && s4::isLoopbackHost("localhost") && s4::isLoopbackHost("::1") && !s4::isLoopbackHost("192.168.1.5") && !s4::isLoopbackHost("example.org"));
+    // L4 (security review 1): a name that merely starts with 127. is another computer
+    for (const char* lie : {"127.evil.example", "127.0.0.1.evil.example", "127.example.com", "127.0.0.1x", "127.0.0", "127.0.0.256", "1270.0.0.1", "localhost.evil.example", "127.0.0.1.", "[::1]x", "::2"}) {
+        if (s4::isLoopbackHost(lie)) { std::printf("taken for this computer: %s\n", lie); }
+        CHECK(!s4::isLoopbackHost(lie));
+    }
+    CHECK(s4::isLoopbackHost("127.255.255.254") && s4::isLoopbackHost("LOCALHOST") && s4::isLoopbackHost("[::1]") && !s4::isLoopbackHost("128.0.0.1") && !s4::isLoopbackHost("126.0.0.1"));
+    CHECK(s4::mqttScope("127.evil.example", true).find("without encryption") != std::string::npos);
+    CHECK(s4::mqttScope("127.evil.example", false).find("not encrypted") != std::string::npos);
+    CHECK(s4::hookScope("http://127.evil.example/x").find("refused") != std::string::npos);
+    CHECK(s4::hookScope("http://127.evil.example:8080/x").find("refused") != std::string::npos);
+    CHECK(s4::hookScope("http://localhost:8080/x") == "this computer only");
     CHECK(s4::mqttScope("127.0.0.1", true) == "this computer only");
     CHECK(s4::mqttScope("192.168.1.5", true).find("without encryption") != std::string::npos);
     CHECK(s4::hookScope("http://127.0.0.1:1/x") == "this computer only");

@@ -370,7 +370,28 @@ void testListenerPolicy() {
 
 }  // namespace
 
+// M3 (security review 1): a password that WAS saved but could not be opened must never mean "no password, serve openly".
+void testUnreadableSavedPasswordFailsClosed() {
+    WebServerConfig cfg = baseConfig();
+    cfg.passwordUnreadable = true;
+    BindDecision d = evaluateBind(cfg);                         // loopback, which would otherwise be allowed with no password
+    CHECK(d.verdict == BindVerdict::RefusedPasswordUnusable);
+    CHECK(!d.allowed());
+    CHECK(d.reason.find("could not be opened") != std::string::npos);
+    cfg.bindAddress = "0.0.0.0";                                // and off the machine
+    CHECK(evaluateBind(cfg).verdict == BindVerdict::RefusedPasswordUnusable);
+    // once the owner sets a new password the flag no longer applies
+    cfg = baseConfig();
+    cfg.passwordUnreadable = true;
+    cfg.passwordRecord = realRecord();
+    CHECK(evaluateBind(cfg).allowed());
+    // and the flag off is the old behaviour: loopback with no password is allowed
+    cfg = baseConfig();
+    CHECK(evaluateBind(cfg).allowed());
+}
+
 int main() {
+    testUnreadableSavedPasswordFailsClosed();
     testLoopbackClassification();
     testWildcardClassification();
     testAddressAcceptance();

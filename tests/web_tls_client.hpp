@@ -235,7 +235,7 @@ public:
     HttpReply request(const std::string& method, const std::string& path, const std::string& extra = std::string(), const std::string& body = std::string(),
                       int timeoutMs = 20000) {
         HttpReply r;
-        std::string req = method + " " + path + " HTTP/1.1\r\nHost: test\r\n" + extra;
+        std::string req = method + " " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\n" + extra;
         if (!body.empty() || method == "POST") { req += "Content-Length: " + std::to_string(body.size()) + "\r\n"; }
         req += "\r\n";
         if (!send(req) || (!body.empty() && !send(body))) { return r; }
@@ -284,7 +284,7 @@ public:
     // Reads the de-chunked payload of a streaming reply until `bytes` have arrived (or the time runs out). Call after sending the request
     // and reading the head with request-like logic: here it does both, returning the payload gathered.
     std::string stream(const std::string& path, std::size_t bytes, const std::string& extra, int timeoutMs, std::string* headOut = nullptr) {
-        std::string req = "GET " + path + " HTTP/1.1\r\nHost: test\r\n" + extra + "\r\n";
+        std::string req = "GET " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\n" + extra + "\r\n";
         if (!send(req)) { return std::string(); }
         std::string raw;
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
