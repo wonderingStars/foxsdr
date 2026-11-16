@@ -66,8 +66,8 @@ KRow toK(const Row& r) {
     return k;
 }
 
-enum Sec { kRecord = 0, kSchedule, kSource, kSecCount };
-const char* const kSecName[kSecCount] = {"record", "schedule", "source"};
+enum Sec { kRecord = 0, kSchedule, kSource, kPlay, kSecCount };
+const char* const kSecName[kSecCount] = {"record", "schedule", "source", "play"};
 
 struct Cmd {
     std::uint32_t op = 0;
@@ -94,6 +94,7 @@ struct LaneS3Publisher::Impl {
     long sent = 0, refused = 0, answered = 0;
     bool dirty = true;
     long lastRebuildTick = -100;
+    long lastPlayTick = -100;
     std::string armed;                            // the id of a destructive key pressed once ("press again")
 
     cascade::core::overview::Job ovJob;       // G3-14b: the whole-file waterfall's job
@@ -397,18 +398,24 @@ struct LaneS3Publisher::Impl {
         endNote(v, kSchedule);
     }
 
+    // The position and the seek slider move with every tick, so they are a list of their own: the typed fields below keep their model (and their focus) while a file plays.
+    void buildPlay(std::vector<Row>& v) {
+        const PlayState p = ps();
+        if (!(p.filePlays && p.durationS > 0.0)) { return; }
+        v.push_back(rReadout(tr("Now at"), positionText(p.positionS) + " / " + positionText(p.durationS)));
+        v.push_back(rSlider("s.seek", tr("Seek"), static_cast<float>(std::clamp(p.positionS / p.durationS, 0.0, 1.0)), positionText(p.positionS), true, tr("Drag to play from another place in the recording.")));
+        handlers["s.seek"] = [this](const std::string& t) {
+            const double f = std::clamp(std::atof(t.c_str()), 0.0, 1.0);
+            Cmd c = cmd(FOXAPP_OP_FILE_SEEK, 1); c.n0 = f;
+            send(kSource, tr("Seek"), c);
+        };
+    }
+
     // ================================================================ SIGNAL > Source: playback position, loop, raw files (G3-13, G3-14a, G3-15)
     void buildSource(std::vector<Row>& v) {
         const PlayState p = ps();
         if (p.filePlays && p.durationS > 0.0) {
             v.push_back(rHeading(tr("Where in the recording")));
-            v.push_back(rReadout(tr("Now at"), positionText(p.positionS) + " / " + positionText(p.durationS)));
-            v.push_back(rSlider("s.seek", tr("Seek"), static_cast<float>(std::clamp(p.positionS / p.durationS, 0.0, 1.0)), positionText(p.positionS), true, tr("Drag to play from another place in the recording.")));
-            handlers["s.seek"] = [this](const std::string& t) {
-                const double f = std::clamp(std::atof(t.c_str()), 0.0, 1.0);
-                Cmd c = cmd(FOXAPP_OP_FILE_SEEK, 1); c.n0 = f;
-                send(kSource, tr("Seek"), c);
-            };
             field(v, "s.goto", tr("Go to (seconds or minutes:seconds)"), "");
             key(v, "s.go", tr("Play from here"), [this] {
                 const PlayState q = ps();
@@ -496,6 +503,7 @@ struct LaneS3Publisher::Impl {
             case kRecord: l.set_rows_record(models[s]); break;
             case kSchedule: l.set_rows_schedule(models[s]); break;
             case kSource: l.set_rows_source(models[s]); break;
+            case kPlay: l.set_rows_play(models[s]); break;
             default: break;
         }
     }
@@ -503,7 +511,7 @@ struct LaneS3Publisher::Impl {
     void rebuildAll() {
         dirty = false;
         using Builder = void (Impl::*)(std::vector<Row>&);
-        static const Builder builders[kSecCount] = {&Impl::buildRecord, &Impl::buildSchedule, &Impl::buildSource};
+        static const Builder builders[kSecCount] = {&Impl::buildRecord, &Impl::buildSchedule, &Impl::buildSource, &Impl::buildPlay};
         handlers.clear();
         for (int s = 0; s < kSecCount; ++s) {
             std::vector<Row> rows;
@@ -534,6 +542,7 @@ void LaneS3Publisher::wire() {
 void LaneS3Publisher::tick(long tickNo) {
     p_->pollOverview();
     if (p_->ovJob.running()) { p_->dirty = true; }   // the progress bar
+    if (tickNo - p_->lastPlayTick >= 6 && p_->ps().filePlays) { p_->lastPlayTick = tickNo; p_->dirty = true; }   // the position
     // about twice a second the rows are read again from the facts; at once after any action or answer
     if (p_->dirty || tickNo - p_->lastRebuildTick >= 15) {
         p_->lastRebuildTick = tickNo;

@@ -682,6 +682,7 @@ export component MainWindow inherits Window {
                                         if root.bank-index == 0 && i == 6 && LaneM.rows-record.length > 0 : KPanel { rows: LaneM.rows-record; act(id, t) => { LaneM.act(id, t); } }
                                         if root.bank-index == 0 && i == 6 && LaneS3.rows-record.length > 0 : KPanel { rows: LaneS3.rows-record; act(id, t) => { LaneS3.act(id, t); } }   // screen lane S3
                                         if root.bank-index == 0 && i == 6 && LaneS3.rows-schedule.length > 0 : KPanel { rows: LaneS3.rows-schedule; act(id, t) => { LaneS3.act(id, t); } }
+                                        if root.bank-index == 0 && i == 1 && LaneS3.rows-play.length > 0 : KPanel { rows: LaneS3.rows-play; act(id, t) => { LaneS3.act(id, t); } }
                                         if root.bank-index == 0 && i == 1 && LaneS3.rows-source.length > 0 : KPanel { rows: LaneS3.rows-source; act(id, t) => { LaneS3.act(id, t); } }
                                         if root.bank-index == 0 && i == 1 && LaneS3.overview-visible : S3Overview { }
                                         if root.bank-index == 2 && i == 4 && LaneM.rows-airband.length > 0 : KPanel { rows: LaneM.rows-airband; act(id, t) => { LaneM.act(id, t); } }

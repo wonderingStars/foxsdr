@@ -298,7 +298,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         {"CatalogueBad", "src/engine/engine_store.cpp", 2},
         {"CatStop", "src/net/cat_server.cpp", 1},
         {"FileKept", "src/engine/engine.cpp", 2}, {"FileKept", "src/engine/engine_service.cpp", 1},
-        {"TakeHeader", "src/engine/engine.cpp", 1},
+        {"TakeHeader", "src/engine/engine.cpp", 1}, {"TakeHeader", "src/engine/engine_recplay.cpp", 1},
         // ENGINE FIXES 7: a plugin's companion program failed (plugin_abi.h report_fault); the one site is the switch-guarded mapping of a kind to its word.
         {"CompanionCrash", "src/core/companion_fault.cpp", 1}, {"CompanionStall", "src/core/companion_fault.cpp", 1},
         {"CompanionBreak", "src/core/companion_fault.cpp", 1}, {"CompanionGaveUp", "src/core/companion_fault.cpp", 1},

@@ -6,6 +6,7 @@ import { Theme } from "theme.slint";
 export global LaneS3 {
     in property <[KRow]> rows-record;      // SIGNAL, Recorder: file names, sample formats, the passband take, rollover, triggered clips, the replay buffer
     in property <[KRow]> rows-schedule;    // SIGNAL, Recorder: the timed recordings
+    in property <[KRow]> rows-play;        // SIGNAL, Source: the position and the seek slider (a list of their own: they change every tick)
     in property <[KRow]> rows-source;      // SIGNAL, Source: where in the recording, the loop, a raw file's stated format, the whole-file waterfall
     in property <image> overview;           // SIGNAL, Source: the whole-file waterfall
     in property <bool> overview-visible: false;

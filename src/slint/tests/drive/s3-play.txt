@@ -2,11 +2,16 @@
 # s3-play (screen lane S3, docs/multi-radio-records/screen-s3-recplay.md; G3-14a, G3-15): the seek position and the A-B loop of a playing I/Q file, read back from the radio's own state.
 10 state running == 1
 +15 state s3.play.dur > 1
-# play from a typed place
-+1 type "Go to (seconds or minutes:seconds)" "0:01"
+# play from a typed place: paused, so only the seek can move the position
++1 click "Pause"
++10 state s3.fact.playback.1.paused == 1
++1 type "Go to (seconds or minutes:seconds)" "0:08"
 +1 key enter
 +2 click "Play from here"
-+10 state s3.play.pos > 0.9
++15 state s3.play.pos > 7.99
++1 state s3.play.pos < 8.5
++1 click "Resume"
++10 state s3.fact.playback.1.paused == 0
 # a place past the end is refused with the engine's range
 +1 type "Go to (seconds or minutes:seconds)" "99:00"
 +1 key enter
