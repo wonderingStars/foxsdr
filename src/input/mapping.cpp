@@ -169,7 +169,7 @@ Settings settingsFromText(const std::string& text, LoadReport* rep) {
     return settingsFromJson(j, rep);
 }
 
-std::string settingsToText(const Settings& s) { return settingsToJson(s).dump(2); }
+std::string settingsToText(const Settings& s) { return settingsToJson(s).dump(2, ' ', false, nlohmann::json::error_handler_t::replace); }   // lane X: the json dump policy (a bad byte in a name costs one replacement character, never a throw)
 
 namespace {
 Binding mkBinding(const std::string& dev, std::uint16_t ctl, const char* action, json params = json::object()) {

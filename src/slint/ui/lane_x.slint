@@ -38,7 +38,7 @@ export component XHelpSheet inherits Rectangle {
             changed gen => { self.focus(); }
             init => { self.focus(); }
             key-pressed(e) => {
-                if (e.text == Key.Escape) { LaneX.act("help-close", ""); return accept; }
+                if (e.text == Key.Escape) { LaneX.act("help-close", ""); return accept; }   // not-translated: the host's action id
                 return reject;
             }
         VerticalLayout {

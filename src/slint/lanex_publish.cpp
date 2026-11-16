@@ -198,7 +198,7 @@ struct LaneXPublisher::Impl {
         std::filesystem::create_directories(knobFile().parent_path(), ec);
         std::ofstream f(knobFile(), std::ios::binary | std::ios::trunc);
         if (!f) { knobNote = tr("The choice could not be kept in the settings folder."); return; }
-        f << j.dump(1);
+        f << j.dump(1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     std::vector<Row> knobRows() {

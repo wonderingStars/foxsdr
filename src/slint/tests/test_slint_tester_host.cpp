@@ -113,7 +113,7 @@ void preview() {
     const json j = json::parse(p);
     CHECK(has(j["features"], "siggen") && j["platform"] == "windows" && !j["version"].get<std::string>().empty());
     // what is never in it: no frequency, position, file name or decoded text field exists in the report's shape
-    const std::string compact = j.dump();
+    const std::string compact = j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     for (const char* bad : {"freq", "lat", "lon", "path", "file", "text", "call"}) { CHECK(compact.find(std::string("\"") + bad) == std::string::npos); }
     // taking the code away empties it, and the next code starts a fresh record
     d.setToken("", kNow, 40.0);
