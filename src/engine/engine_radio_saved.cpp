@@ -182,7 +182,10 @@ void Engine::restoreExtraRadioDevice(const std::string& kind, const std::string&
     // file is written by a build that knows the native drivers.
     if (kind != "soapy") { scanNative(); }
     rx().deviceAntenna_ = antenna;
+    journalOpenStart(kind, args, cascade::core::radioreport::Trigger::StartupRestore, rateHz);   // on disk BEFORE the driver is called
+    const auto restoreBegan = std::chrono::steady_clock::now();
     auto dev = openDeviceSync(kind, args, rateHz);
+    const long long restoreOpenMs = static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - restoreBegan).count());
     if (dev) {
         const double radioHz = radioHzForSource(kind, args, centerHz);
         if (radioHz > 0.0 || !cascade::core::converterActive(converterForKey(cascade::core::converterRadioKey(kind, args)))) {
@@ -206,10 +209,14 @@ void Engine::restoreExtraRadioDevice(const std::string& kind, const std::string&
         followInputRate();
         cascade::core::diagLogf("radio: radio %u restored on %s (%s) at %.0f S/s", static_cast<unsigned>(scopedSlot() + 1u), rx().deviceModel_.c_str(), kind.c_str(),
                                 rx().pipeline_.activeSource().sampleRateHz());
+        journalOpenOk(kind, args, cascade::core::radioreport::Trigger::StartupRestore, rateHz, restoreOpenMs);
+        journalSettingsAtOpen(kind, args);
         return;
     }
     // THE SAVED RADIO WOULD NOT OPEN. Counted anonymously, as the first radio's is; the radio stays, on the generator, and the file goes on naming the device.
     cascade::core::health::noteRadioFail(kind, rx().sourceError_);
+    // ...and as its own report (radio reports, D4), radios 2 to 8 like the first
+    reportFailedOpen(kind, args, rx().sourceError_, cascade::core::radioreport::Trigger::StartupRestore, /*superseded=*/false, rateHz, restoreOpenMs);
     const std::string whyClass = cascade::core::health::radioFailWhy(kind, rx().sourceError_);
     const bool failedBusy = cascade::core::health::classifyRadioOpen(kind, rx().sourceError_) == cascade::core::health::RadioReason::Busy;
     std::string label = (kind == "soapy") ? cascade::core::sanitiseDevice(args) : modelFromNativeLabel(nativeLabelFor(kind, args));

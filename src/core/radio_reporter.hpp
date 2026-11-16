@@ -160,6 +160,13 @@ public:
     // identified failures anonymously; nothing of the old identity stays on disk.
     void setIdentity(const Identity& id);
     Identity identity() const;
+    // The Diagnostics switch as it is now: it changes nothing that is sent, it is a field of every failure report (`diagOn`).
+    void setDiagOn(bool on);
+    // Arms the live send (an interactive run does it once the window is up; a bounded or hermetic run never does). Never turns on what
+    // kRadioReportsLiveSend leaves off.
+    void setLiveSend(bool on);
+    // The clock used for what is kept before configure() (default: the system clock). For the tests.
+    void setNowSource(std::function<std::int64_t()> now);
 
     // ONE report for one radio that did not open, EVERY time (never folded, never skipped for a cap). Sent with the Diagnostics switch on or off
     // and with Usage reporting on or off (without an install id the message is the anonymous form of contract 1.2).
@@ -200,6 +207,14 @@ private:
     struct Impl;
     std::shared_ptr<Impl> p_;   // shared so that a sender thread still in flight at exit owns what it uses
 };
+
+// CALL SITES THAT HAVE NO ENGINE (a worker thread, the window): each builds its event and hands it to global(); they take no lock of their own and may be
+// called from any thread. `binding` and `source` are the contract's words (3.2); `usbId` is "vvvv:pppp" or empty.
+void noteFound(const std::string& driverKind, const std::string& args, const std::string& label, const std::string& binding, const std::string& source,
+               const std::string& usbId = std::string());
+// A recovery of a radio (contract 3.6): `phase` is "start", "ok" or "gave-up"; `what` is the application's own word ("reopen", "routefallback", ...).
+void noteRecovery(const std::string& driverKind, const std::string& args, const char* phase, const std::string& what, const std::string& reason = std::string(),
+                  long long ms = -1);
 
 // THE PROCESS-WIDE REPORTER the engine's call sites use. Unconfigured until the engine configures it at start-up; an unconfigured reporter
 // ignores every call (a hermetic or bounded run queues and sends nothing).

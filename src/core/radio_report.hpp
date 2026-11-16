@@ -99,6 +99,12 @@ std::string versionText(const std::string& s);
 // The CPU's brand string without its "@ 3.70GHz" part: a hertz number is refused by the text rules.
 std::string cpuWithoutClock(const std::string& brand);
 
+// THE BAND NAME a centre frequency falls in, for the journal's `band` field (contract 3.3): a NAME from the contract's list and never the frequency.
+// lf below 300 kHz, mf to 3 MHz, hf to 30 MHz, vhf-low to 87.5 MHz, fm-broadcast to 108 MHz, air-band to 137 MHz, vhf-high to 300 MHz, uhf to 1 GHz,
+// l-band to 2 GHz, shf above; "other" for a frequency that is not positive. The edges are the application's own table, written here so the owner can read
+// them; the site shows the name and nothing finer.
+std::string bandName(double hz);
+
 }  // namespace cascade::core::radioreport
 
 #endif  // CASCADE_CORE_RADIO_REPORT_HPP

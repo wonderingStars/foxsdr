@@ -5,6 +5,20 @@ and uploads **nothing**. Phase 2 (a Cloudflare Worker that receives a minimal
 report) is deliberately not built yet — publishing noise from a capture nobody
 has trusted yet would only make the numbers harder to believe later.
 
+> **0.99.109, DRAFT, awaiting the owner's approval.** The Diagnostics switch governs
+> crash, freeze and issue reports, the log file and the diagnostics bundle, as
+> described below, and **nothing else changed in that**. One report is not governed
+> by it: **a radio that does not open is reported every time it happens, with
+> Diagnostics on or off** (and with Usage reporting on or off), as its own message
+> to the usage service, written to the `radio-reports` folder beside `config.json`
+> before it is sent. It carries the radio's driver, model and serial number, the
+> driver's reason with serial numbers, names, addresses, frequencies and paths
+> taken out, up to 40 scrubbed radio lines of the log ring, and a flag saying
+> whether Diagnostics was on. See `PRIVACY.md`, **Radio failure reports and the
+> radio journal**, and `docs/radio-reports-contract.md` for the exact fields. The
+> sentence "uploads nothing" below describes phase 1 of the crash capture, which
+> is unchanged.
+
 ## Why a crash handler was not enough on its own
 
 Every fault this product has actually shipped was a **hang**, not a crash:

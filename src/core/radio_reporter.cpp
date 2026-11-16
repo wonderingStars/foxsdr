@@ -20,6 +20,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/crash_upload.hpp"
+#include "core/health_events.hpp"
 #include "core/telemetry.hpp"
 
 #if defined(_WIN32)
@@ -266,6 +267,10 @@ struct Reporter::Impl {
     int failStreak = 0;
     bool urgent = false;
     bool configuredOnce = false;
+    struct PreFail { FailureInput in; std::vector<std::string> ring; std::int64_t at; };
+    struct PreEvent { Event ev; std::int64_t at; };
+    std::vector<PreFail> preFails;
+    std::vector<PreEvent> preEvents;
 
     std::int64_t now() const { return o.nowEpoch ? o.nowEpoch() : systemNow(); }
 
@@ -795,6 +800,134 @@ struct Reporter::Impl {
         return accepted;
     }
 
+    void fileFailureLocked(const FailureInput& in, const std::vector<std::string>& logRing, std::int64_t t) {
+    if (!on) { return; }
+        const RadioIdentity rid = in.soundCard ? soundCardIdentity() : identify(in.driverKind, in.args, in.nativeLabel);
+            Impl::Pending p;
+        p.kind = "radio_fail";
+        p.key = rid.key;
+        p.isFail = true;
+        p.atEpoch = t;
+        p.t = t - sessionStart;
+        p.cls = in.reasonClass.empty() ? std::string("other") : in.reasonClass;
+        json b;
+        b["driver"] = rid.driver;
+        b["model"] = rid.model;
+        b["serial"] = rid.serial;
+        b["reason"] = scrubReason(in.reason, rid.serial, 400);
+        b["reasonClass"] = p.cls;
+        b["trigger"] = triggerWord(in.trigger);
+        b["attempt"] = static_cast<long long>(std::clamp<long long>(++failAttempt[rid.key], 1, 10000));
+        if (in.openMs >= 0) { b["openMs"] = std::min<long long>(in.openMs, 3600000); }
+        if (in.sampleRateSps >= 0) { b["sampleRateSps"] = std::min<long long>(in.sampleRateSps, 1000000000); }
+        b["superseded"] = in.superseded;
+        b["diagOn"] = id.diagOn;
+        b["logLines"] = radioLines(logRing, rid.serial, 40);
+        b["v"] = clipUtf8(id.version.empty() ? std::string("unknown") : id.version, 48);
+        if (!id.channel.empty()) { b["ch"] = id.channel; }
+        if (id.updateChannel == "stable" || id.updateChannel == "beta") { b["uch"] = id.updateChannel; }
+        b["os"] = clipUtf8(id.os.empty() ? std::string("unknown") : id.os, 40);
+        b["arch"] = clipUtf8(id.arch.empty() ? std::string("unknown") : id.arch, 8);
+        p.body = std::move(b);
+        if (hasForbiddenKey(p.body) || anyStringForbidden(p.body)) { ++st.guardRefused; return; }
+        urgent = true;
+        boundedAdmit(std::move(p), rid.key + "|" + (in.reasonClass.empty() ? std::string("other") : in.reasonClass), /*isFail=*/true);
+        nextBatchAt = 0;   // a failure is sent at once
+    }
+
+    void eventLocked(const Event& ev, std::int64_t t) {
+    if (!on || id.installId.empty()) { return; }
+        if (!inList(kindsOfJournal(), ev.kind)) { ++st.guardRefused; return; }
+        const bool radioKind = ev.kind != "session_env" && ev.kind != "session_end";
+        if (ev.kind == "session_env") {
+            if (envSent) { return; }
+            envSent = true;
+        }
+            Impl::Pending p;
+        p.kind = ev.kind;
+        p.key = radioKind ? ev.radio.key : std::string();
+        p.atEpoch = t;
+        p.t = ev.atSec >= 0 ? ev.atSec : t - sessionStart;
+        json b = json::object();
+        if (radioKind) {
+            b["driver"] = ev.radio.driver;
+            b["model"] = ev.radio.model;
+            b["serial"] = ev.radio.serial;
+        }
+        b["v"] = clipUtf8(id.version.empty() ? std::string("unknown") : id.version, 48);
+        if (ev.kind == "session_env") {
+            b["os"] = clipUtf8(id.os.empty() ? std::string("unknown") : id.os, 40);
+            b["arch"] = clipUtf8(id.arch.empty() ? std::string("unknown") : id.arch, 8);
+            if (!id.channel.empty()) { b["ch"] = id.channel; }
+            if (id.updateChannel == "stable" || id.updateChannel == "beta") { b["uch"] = id.updateChannel; }
+            if (id.window == "new" || id.window == "legacy") { b["window"] = id.window; }
+            b["launches"] = static_cast<long long>(std::clamp<std::uint64_t>(id.launches, 1, 1000000));
+            b["diagOn"] = id.diagOn;
+        }
+        std::string word = ev.word;
+        for (const auto& f : ev.fields) {
+            const std::string& name = f.first;
+            if (forbiddenKey(name)) { ++st.guardRefused; return; }
+            json v;
+            if (const auto* x = std::get_if<std::string>(&f.second)) { v = *x; if (name == "note") { word = *x; } }
+            else if (const auto* l = std::get_if<long long>(&f.second)) { v = *l; }
+            else if (const auto* d = std::get_if<double>(&f.second)) { v = *d; }
+            else if (const auto* bo = std::get_if<bool>(&f.second)) { v = *bo; }
+            else if (const auto* vs = std::get_if<std::vector<std::string>>(&f.second)) { v = *vs; }
+            else if (const auto* vl = std::get_if<std::vector<long long>>(&f.second)) { v = *vl; }
+            // a text field is scrubbed whatever the caller did, and a value that still fails is left out
+            if (textFieldNames().count(name) != 0 && name != "model") {
+                if (v.is_string()) {
+                    v = scrubText(v.get<std::string>(), ev.radio.serial, 400);
+                } else if (v.is_array()) {
+                    json kept = json::array();
+                    for (const json& x : v) { if (x.is_string()) { kept.push_back(scrubText(x.get<std::string>(), ev.radio.serial, 64)); } }
+                    v = std::move(kept);
+                }
+            }
+            b[name] = std::move(v);
+        }
+        if (ev.kind == "radio_stream") {
+            // at most one per radio per minute (five after the day's 500th): a faster caller is coarsened, not sent
+            const bool note = b.contains("note") && b["note"].is_string() && !b["note"].get<std::string>().empty();
+            auto last = lastStreamAt.find(p.key);
+            const int window = (streamToday[p.key] >= o.streamWidenAfter) ? 300 : 60;
+            if (!note && last != lastStreamAt.end() && t - last->second < window - 1) { return; }
+            lastStreamAt[p.key] = t;
+            ++streamToday[p.key];
+        }
+        if (ev.kind == "radio_open" && ev.word == "start") {
+            b["attempt"] = static_cast<long long>(std::clamp<long long>(++openAttempt[p.key], 1, 10000));
+        } else if (ev.kind == "radio_open") {
+            b["attempt"] = static_cast<long long>(std::clamp<long long>(openAttempt[p.key], 1, 10000));
+        }
+        if (ev.kind == "radio_recovery" && ev.word == "start") {
+            b["attempt"] = static_cast<long long>(std::clamp<long long>(++recoveryAttempt[p.key], 1, 10000));
+        } else if (ev.kind == "radio_recovery") {
+            b["attempt"] = static_cast<long long>(std::clamp<long long>(recoveryAttempt[p.key], 1, 10000));
+        }
+        // `band` is a NAME from the contract's list, never a number: a value that is not one of them is a frequency in disguise and refuses the event
+        if (b.contains("band")) {
+            static const std::vector<std::string> kBands = {"lf", "mf", "hf", "vhf-low", "fm-broadcast", "air-band", "vhf-high", "uhf", "l-band", "shf", "other"};
+            if (!b["band"].is_string() || !inList(kBands, b["band"].get<std::string>())) { ++st.guardRefused; return; }
+        }
+        p.body = std::move(b);
+        if (hasForbiddenKey(p.body) || anyStringForbidden(p.body)) { ++st.guardRefused; return; }
+        for (const std::string& name : textFieldNames()) {
+            if (!p.body.contains(name) || !p.body[name].is_string()) { continue; }
+            if (!textCode(p.body[name].get<std::string>(), ev.radio.serial).empty()) { ++st.guardRefused; return; }
+        }
+        if (ev.urgent) { urgent = true; nextBatchAt = 0; }
+        if (ev.kind == "session_env") {
+            // once a session and never bounded
+            rollover();
+            admit(std::move(p), false);
+            saveState();
+            return;
+        }
+        boundedAdmit(std::move(p), fieldKey(ev.radio.key, ev.kind, word), /*isFail=*/false);
+    }
+
     void reapWorker() {
         if (worker.joinable() && !running.load()) { worker.join(); }
     }
@@ -826,6 +959,9 @@ void Reporter::configure(const Options& options) {
     s.cancel = std::make_shared<UploadCancel>();
     s.sessionId = options.sessionId.empty() ? randomHex(16) : options.sessionId;
     s.sessionStart = options.sessionStartEpoch > 0 ? options.sessionStartEpoch : s.now();
+    for (const Impl::PreFail& f : s.preFails) { s.sessionStart = std::min(s.sessionStart, f.at); }
+    for (const Impl::PreEvent& e : s.preEvents) { s.sessionStart = std::min(s.sessionStart, e.at); }
+    s.configuredOnce = true;
     s.seq = 0;
     s.held.clear();
     s.firstSeen.clear();
@@ -847,10 +983,10 @@ void Reporter::configure(const Options& options) {
     s.day.clear();
     s.failAdmitted = 0;
     s.journalAdmitted = 0;
-    if (!s.on) { return; }
+    if (!s.on) { s.preFails.clear(); s.preEvents.clear(); return; }
     std::error_code ec;
     fs::create_directories(s.dir, ec);
-    if (ec) { s.on = false; return; }
+    if (ec) { s.on = false; s.preFails.clear(); s.preEvents.clear(); return; }
     s.loadState();
     // what an earlier day held is released at THIS start; the day's counts of today start from what the file says
     s.rollover();
@@ -860,6 +996,15 @@ void Reporter::configure(const Options& options) {
     }
     s.sweepBounds();
     s.saveState();
+    // WHAT HAPPENED BEFORE THE QUEUE COULD BE OPENED (the start-up restore runs before Usage reporting is read): filed now, with the time it happened
+    {
+        std::vector<Impl::PreFail> pf;
+        pf.swap(s.preFails);
+        std::vector<Impl::PreEvent> pe;
+        pe.swap(s.preEvents);
+        for (const Impl::PreFail& f : pf) { s.fileFailureLocked(f.in, f.ring, f.at); }
+        for (const Impl::PreEvent& e : pe) { s.eventLocked(e.ev, e.at); }
+    }
 }
 
 bool Reporter::active() const { std::lock_guard<std::mutex> lk(p_->mu); return p_->on; }
@@ -893,135 +1038,41 @@ void Reporter::setIdentity(const Identity& idn) {
     if (!hadId && !idn.installId.empty()) { s.envSent = false; }
 }
 
+void Reporter::setLiveSend(bool on) {
+    std::lock_guard<std::mutex> lk(p_->mu);
+    p_->o.liveSend = on && kRadioReportsLiveSend;
+}
+
+void Reporter::setNowSource(std::function<std::int64_t()> now) {
+    std::lock_guard<std::mutex> lk(p_->mu);
+    p_->o.nowEpoch = std::move(now);
+}
+
+void Reporter::setDiagOn(bool on) {
+    std::lock_guard<std::mutex> lk(p_->mu);
+    p_->id.diagOn = on;
+}
+
 Identity Reporter::identity() const { std::lock_guard<std::mutex> lk(p_->mu); return p_->id; }
 
 void Reporter::fileFailure(const FailureInput& in, const std::vector<std::string>& logRing) {
     std::lock_guard<std::mutex> lk(p_->mu);
     Impl& s = *p_;
-    if (!s.on) { return; }
-    const RadioIdentity rid = in.soundCard ? soundCardIdentity() : identify(in.driverKind, in.args, in.nativeLabel);
-    const std::int64_t t = s.now();
-    Impl::Pending p;
-    p.kind = "radio_fail";
-    p.key = rid.key;
-    p.isFail = true;
-    p.atEpoch = t;
-    p.t = t - s.sessionStart;
-    p.cls = in.reasonClass.empty() ? std::string("other") : in.reasonClass;
-    json b;
-    b["driver"] = rid.driver;
-    b["model"] = rid.model;
-    b["serial"] = rid.serial;
-    b["reason"] = scrubReason(in.reason, rid.serial, 400);
-    b["reasonClass"] = p.cls;
-    b["trigger"] = triggerWord(in.trigger);
-    b["attempt"] = static_cast<long long>(std::clamp<long long>(++s.failAttempt[rid.key], 1, 10000));
-    if (in.openMs >= 0) { b["openMs"] = std::min<long long>(in.openMs, 3600000); }
-    if (in.sampleRateSps >= 0) { b["sampleRateSps"] = std::min<long long>(in.sampleRateSps, 1000000000); }
-    b["superseded"] = in.superseded;
-    b["diagOn"] = s.id.diagOn;
-    b["logLines"] = radioLines(logRing, rid.serial, 40);
-    b["v"] = clipUtf8(s.id.version.empty() ? std::string("unknown") : s.id.version, 48);
-    if (!s.id.channel.empty()) { b["ch"] = s.id.channel; }
-    if (s.id.updateChannel == "stable" || s.id.updateChannel == "beta") { b["uch"] = s.id.updateChannel; }
-    b["os"] = clipUtf8(s.id.os.empty() ? std::string("unknown") : s.id.os, 40);
-    b["arch"] = clipUtf8(s.id.arch.empty() ? std::string("unknown") : s.id.arch, 8);
-    p.body = std::move(b);
-    if (hasForbiddenKey(p.body) || anyStringForbidden(p.body)) { ++s.st.guardRefused; return; }
-    s.urgent = true;
-    s.boundedAdmit(std::move(p), rid.key + "|" + (in.reasonClass.empty() ? std::string("other") : in.reasonClass), /*isFail=*/true);
-    s.nextBatchAt = 0;   // a failure is sent at once
+    if (!s.configuredOnce) {   // before the queue is opened (the start-up restore runs first): kept in memory and filed at configure
+        if (s.preFails.size() < 32) { s.preFails.push_back(Impl::PreFail{in, logRing, s.now()}); }
+        return;
+    }
+    s.fileFailureLocked(in, logRing, s.now());
 }
 
 void Reporter::event(const Event& ev) {
     std::lock_guard<std::mutex> lk(p_->mu);
     Impl& s = *p_;
-    if (!s.on || s.id.installId.empty()) { return; }
-    if (!inList(kindsOfJournal(), ev.kind)) { ++s.st.guardRefused; return; }
-    const bool radioKind = ev.kind != "session_env" && ev.kind != "session_end";
-    if (ev.kind == "session_env") {
-        if (s.envSent) { return; }
-        s.envSent = true;
-    }
-    const std::int64_t t = s.now();
-    Impl::Pending p;
-    p.kind = ev.kind;
-    p.key = radioKind ? ev.radio.key : std::string();
-    p.atEpoch = t;
-    p.t = ev.atSec >= 0 ? ev.atSec : t - s.sessionStart;
-    json b = json::object();
-    if (radioKind) {
-        b["driver"] = ev.radio.driver;
-        b["model"] = ev.radio.model;
-        b["serial"] = ev.radio.serial;
-    }
-    b["v"] = clipUtf8(s.id.version.empty() ? std::string("unknown") : s.id.version, 48);
-    if (ev.kind == "session_env") {
-        b["os"] = clipUtf8(s.id.os.empty() ? std::string("unknown") : s.id.os, 40);
-        b["arch"] = clipUtf8(s.id.arch.empty() ? std::string("unknown") : s.id.arch, 8);
-        if (!s.id.channel.empty()) { b["ch"] = s.id.channel; }
-        if (s.id.updateChannel == "stable" || s.id.updateChannel == "beta") { b["uch"] = s.id.updateChannel; }
-        if (s.id.window == "new" || s.id.window == "legacy") { b["window"] = s.id.window; }
-        b["launches"] = static_cast<long long>(std::clamp<std::uint64_t>(s.id.launches, 1, 1000000));
-        b["diagOn"] = s.id.diagOn;
-    }
-    std::string word = ev.word;
-    for (const auto& f : ev.fields) {
-        const std::string& name = f.first;
-        if (forbiddenKey(name)) { ++s.st.guardRefused; return; }
-        json v;
-        if (const auto* x = std::get_if<std::string>(&f.second)) { v = *x; if (name == "note") { word = *x; } }
-        else if (const auto* l = std::get_if<long long>(&f.second)) { v = *l; }
-        else if (const auto* d = std::get_if<double>(&f.second)) { v = *d; }
-        else if (const auto* bo = std::get_if<bool>(&f.second)) { v = *bo; }
-        else if (const auto* vs = std::get_if<std::vector<std::string>>(&f.second)) { v = *vs; }
-        else if (const auto* vl = std::get_if<std::vector<long long>>(&f.second)) { v = *vl; }
-        // a text field is scrubbed whatever the caller did, and a value that still fails is left out
-        if (textFieldNames().count(name) != 0 && name != "model") {
-            if (v.is_string()) {
-                v = scrubText(v.get<std::string>(), ev.radio.serial, 400);
-            } else if (v.is_array()) {
-                json kept = json::array();
-                for (const json& x : v) { if (x.is_string()) { kept.push_back(scrubText(x.get<std::string>(), ev.radio.serial, 64)); } }
-                v = std::move(kept);
-            }
-        }
-        b[name] = std::move(v);
-    }
-    if (ev.kind == "radio_stream") {
-        // at most one per radio per minute (five after the day's 500th): a faster caller is coarsened, not sent
-        const bool note = b.contains("note") && b["note"].is_string() && !b["note"].get<std::string>().empty();
-        auto last = s.lastStreamAt.find(p.key);
-        const int window = (s.streamToday[p.key] >= s.o.streamWidenAfter) ? 300 : 60;
-        if (!note && last != s.lastStreamAt.end() && t - last->second < window - 1) { return; }
-        s.lastStreamAt[p.key] = t;
-        ++s.streamToday[p.key];
-    }
-    if (ev.kind == "radio_open" && ev.word == "start") {
-        b["attempt"] = static_cast<long long>(std::clamp<long long>(++s.openAttempt[p.key], 1, 10000));
-    } else if (ev.kind == "radio_open") {
-        b["attempt"] = static_cast<long long>(std::clamp<long long>(s.openAttempt[p.key], 1, 10000));
-    }
-    if (ev.kind == "radio_recovery" && ev.word == "start") {
-        b["attempt"] = static_cast<long long>(std::clamp<long long>(++s.recoveryAttempt[p.key], 1, 10000));
-    } else if (ev.kind == "radio_recovery") {
-        b["attempt"] = static_cast<long long>(std::clamp<long long>(s.recoveryAttempt[p.key], 1, 10000));
-    }
-    p.body = std::move(b);
-    if (hasForbiddenKey(p.body) || anyStringForbidden(p.body)) { ++s.st.guardRefused; return; }
-    for (const std::string& name : textFieldNames()) {
-        if (!p.body.contains(name) || !p.body[name].is_string()) { continue; }
-        if (!textCode(p.body[name].get<std::string>(), ev.radio.serial).empty()) { ++s.st.guardRefused; return; }
-    }
-    if (ev.urgent) { s.urgent = true; s.nextBatchAt = 0; }
-    if (ev.kind == "session_env") {
-        // once a session and never bounded
-        s.rollover();
-        s.admit(std::move(p), false);
-        s.saveState();
+    if (!s.configuredOnce) {
+        if (s.preEvents.size() < 64) { s.preEvents.push_back(Impl::PreEvent{ev, s.now()}); }
         return;
     }
-    s.boundedAdmit(std::move(p), fieldKey(ev.radio.key, ev.kind, word), /*isFail=*/false);
+    s.eventLocked(ev, s.now());
 }
 
 void Reporter::firstSession(const std::string& usageJson, const std::string& trigger) {
@@ -1138,6 +1189,33 @@ std::size_t Reporter::heldCount() const { std::lock_guard<std::mutex> lk(p_->mu)
 Reporter& global() {
     static Reporter r;
     return r;
+}
+
+void noteFound(const std::string& driverKind, const std::string& args, const std::string& label, const std::string& binding, const std::string& source,
+               const std::string& usbId) {
+    Event ev;
+    ev.kind = "radio_found";
+    ev.radio = identify(driverKind, args, label);
+    ev.word = binding;
+    ev.set("binding", binding).set("source", source);
+    if (!usbId.empty()) { ev.set("usbId", usbId); }
+    global().event(ev);
+}
+
+void noteRecovery(const std::string& driverKind, const std::string& args, const char* phase, const std::string& what, const std::string& reason, long long ms) {
+    Event ev;
+    ev.kind = "radio_recovery";
+    ev.radio = driverKind == "soundcard" ? soundCardIdentity() : identify(driverKind, args);
+    const std::string ph = phase != nullptr ? phase : "start";
+    ev.word = ph;
+    ev.set("phase", ph).set("what", what);
+    if (!reason.empty()) {
+        ev.set("reasonClass", health::radioReasonWord(health::classifyRadioOpen(driverKind, reason)));
+        ev.text("reason", reason, 400);
+    }
+    if (ms >= 0) { ev.set("ms", ms); }
+    ev.urgent = ph == "gave-up";
+    global().event(ev);
 }
 
 std::vector<std::string> readQueueFiles(const std::string& dir) {

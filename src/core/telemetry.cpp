@@ -3,11 +3,13 @@
 #include "core/telemetry.hpp"
 
 #include "core/package_identity.hpp"
+#include "core/radio_report.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -261,6 +263,14 @@ std::string archDescription() {
 #endif
 }
 
+bool syntheticRun() {
+    auto set = [](const char* name) {
+        const char* v = std::getenv(name);
+        return v != nullptr && *v != '\0' && std::string(v) != "0";
+    };
+    return set("FOXSDR_SYNTHETIC") || set("CI") || set("GITHUB_ACTIONS");
+}
+
 std::string TelemetryReport::toJson() const {
     nlohmann::json j;
     j["id"] = installId;
@@ -281,6 +291,9 @@ std::string TelemetryReport::toJson() const {
     // The update channel setting, `stable` or `beta` and nothing else: any other value leaves
     // as "" (not reported), so the member cannot carry text from the machine.
     j["uch"] = (updateChannel == "stable" || updateChannel == "beta") ? updateChannel : std::string();
+    // The window the session used: `new` or `legacy` and nothing else; left out when the application cannot say.
+    if (window == "new" || window == "legacy") { j["window"] = window; }
+    if (synthetic) { j["synthetic"] = 1; }
     j["first"] = firstRun;
     j["fv"] = firstVersion;
     j["sessionSec"] = session.seconds;
@@ -511,6 +524,28 @@ std::string HeartbeatSender::beatJson(const std::string& id, const std::string& 
     return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
+std::string HeartbeatSender::beatJson(const std::string& id, const std::string& v, const std::vector<std::string>& radios, bool synthetic) {
+    nlohmann::json j;
+    j["id"] = id;
+    j["v"] = v;
+    j["beat"] = 1;
+    if (!radios.empty()) {
+        nlohmann::json keys = nlohmann::json::array();
+        for (const std::string& k : radios) {
+            if (keys.size() >= 8) { break; }
+            keys.push_back(k);
+        }
+        j["radios"] = std::move(keys);
+    }
+    if (synthetic) { j["synthetic"] = 1; }
+    return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+}
+
+void HeartbeatSender::setRadios(const std::vector<std::string>& keys) {
+    radios_ = keys;
+    if (radios_.size() > 8) { radios_.resize(8); }
+}
+
 bool HeartbeatSender::due(double now) const {
     if (!configured_) { return false; }
     if (!firstSent_) { return true; }
@@ -535,7 +570,7 @@ void HeartbeatSender::poll(double now) {
 #if defined(_WIN32)
     done_.store(false);
     const std::string url = url_;
-    const std::string json = beatJson(id_, v_);
+    const std::string json = beatJson(id_, v_, radioreport::kRadioReportsLiveSend ? radios_ : std::vector<std::string>(), syntheticRun());
     std::atomic<bool>* done = &done_;
     thread_ = std::thread([url, json, done]() {
         try {
@@ -548,7 +583,7 @@ void HeartbeatSender::poll(double now) {
 #else
     done_.store(false);
     const std::string url = url_;
-    const std::string json = beatJson(id_, v_);
+    const std::string json = beatJson(id_, v_, radioreport::kRadioReportsLiveSend ? radios_ : std::vector<std::string>(), syntheticRun());
     std::atomic<bool>* done = &done_;
     thread_ = std::thread([url, json, done]() {
         try {

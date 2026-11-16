@@ -970,6 +970,41 @@ int main(int argc, char** argv) {
         CHECK(none.runBatchNow() == 0 && !none.active());
     }
 
+    // --- what happens BEFORE the queue can be opened (the start-up restore runs first) is kept and filed at configure, with its own time ---------------
+    {
+        Rig r("prestart");
+        r.rep.setNowSource([&r]() { return r.clock.load(); });
+        r.rep.fileFailure(failure("airspyhf", "serial=HF0001A2", kD3, "control"), ringWith("source: the saved radio did not reopen"));
+        r.advance(4);
+        r.rep.event(openStart(hf));
+        r.advance(3);
+        Reporter::Options o = r.options();
+        o.liveSend = false;
+        r.start(o);
+        const std::vector<json> q = queued(r.rep.dir());
+        CHECK(q.size() == 2);
+        if (q.size() == 2) {
+            const json& fail = q[0]["kind"] == "radio_fail" ? q[0] : q[1];
+            const json& open = q[0]["kind"] == "radio_open" ? q[0] : q[1];
+            CHECK(fail["t"] == 0 && open["t"] == 4);                    // the time each happened, not the time the queue opened
+            CHECK(fail["installId"] == kInstallId);                      // the identity is known by now
+            CHECK(!fail["body"]["logLines"].empty());
+        }
+        // a run that never opens a queue (hermetic) drops them quietly
+        Reporter h;
+        h.fileFailure(failure("rtlsdr", "index=0", "x", "busy"), {});
+        Reporter::Options none;
+        h.configure(none);
+        CHECK(!h.active());
+        CHECK(h.stats().failuresQueued == 0);
+        // the Diagnostics switch changes only a field
+        r.rep.setDiagOn(true);
+        r.rep.fileFailure(failure("rtlsdr", "index=0", "x", "busy"), {});
+        bool sawOn = false;
+        for (const json& m : queued(r.rep.dir())) { if (m["kind"] == "radio_fail" && m["body"]["reasonClass"] == "busy") { sawOn = m["body"]["diagOn"] == true; } }
+        CHECK(sawOn);
+    }
+
     // --- the Worker's own validator over everything the app made -------------------------------------------------------------------------------------
     {
         std::vector<std::string> verdicts;

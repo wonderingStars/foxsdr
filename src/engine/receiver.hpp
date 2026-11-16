@@ -76,6 +76,8 @@ struct DeviceOpenResult {
     std::string error;
     int row = -1;
     double requestRateHz = 0.0;
+    // How long the worker's open took, in milliseconds (set by the worker as it answers; -1 until then): the radio failure report's `openMs` and the journal's.
+    long long openMs = -1;
 // The frequency the user was listening to when they changed device.
 //
 // A newly opened radio sits wherever its driver defaults to - an RTL-SDR

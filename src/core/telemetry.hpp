@@ -121,6 +121,12 @@ struct TelemetryReport {
     // cannot carry text. It lets the server read each version's crash and health rates per
     // channel, which is how a beta can be told from a stable release before stable is moved.
     std::string updateChannel;
+    // WHICH WINDOW THE SESSION USED (wave 8, contract 3.11): "new" (the Slint window) or "legacy" (the old window), sent as `window`; any other value
+    // is not sent (toJson leaves the member out), so the field cannot carry text. Site lane 2's switch-over view reads it.
+    std::string window;
+    // A RUN THAT IS NOT A PERSON (wave 8, L11b): when set, the record carries `synthetic: 1` so a Worker that knows the marker drops it and the
+    // owner's own test and CI installs stop inflating every user figure. Set from syntheticRun() below; never set for a real user.
+    bool synthetic = false;
     std::string firstRun;      // "2026-09-29", UTC day only
     std::string firstVersion;  // "0.99.47"
     TelemetrySession session;
@@ -205,6 +211,11 @@ std::string archDescription();
 // FOXSDR_TELEMETRY_URL overrides it, which is how the tests point at a local
 // stub without a network.
 std::string telemetryEndpoint();
+
+// TRUE WHEN THIS RUN IS A TEST, A CI JOB OR THE OWNER'S OWN MACHINE (wave 8, L11b): the environment names it - FOXSDR_SYNTHETIC set to anything but
+// "" or "0", or the CI / GITHUB_ACTIONS variables that every CI runner sets. The usage record and the beat then carry `synthetic: 1`. It reads only
+// the environment: a user's machine has none of those, and nothing on it can switch it on by itself.
+bool syntheticRun();
 
 // THE PRIVACY POLICY, AS A PAGE THE USER CAN OPEN FROM INSIDE THE APPLICATION.
 // The Usage reporting panel already lists both payloads field by field, but a
@@ -510,12 +521,18 @@ public:
     // Exactly what goes on the wire, exposed so the payload test can hold
     // the privacy promise to it.
     static std::string beatJson(const std::string& id, const std::string& v);
+    // THE BEAT WITH THE RADIOS OPEN RIGHT NOW (wave 8, contract 3.10): `radios` is the radio keys (model slug and serial) of at most eight radios, left out
+    // when none is open or when the list is empty. `synthetic` adds the test marker. The two-argument form above is this with neither.
+    static std::string beatJson(const std::string& id, const std::string& v, const std::vector<std::string>& radios, bool synthetic = false);
+    // The keys the next beat names. Sent only while radioreport::kRadioReportsLiveSend is true: the Worker that reads the field is not deployed.
+    void setRadios(const std::vector<std::string>& keys);
 
 private:
     std::string url_;
     std::string id_;
     std::string v_;
     std::uint64_t interval_ = 300;
+    std::vector<std::string> radios_;
     bool configured_ = false;
     bool firstSent_ = false;
     double nextAt_ = 0.0;

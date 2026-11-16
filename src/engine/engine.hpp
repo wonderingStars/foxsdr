@@ -92,6 +92,8 @@
 #include "core/exit_cause.hpp"
 #include "core/health_events.hpp"
 #include "core/telemetry.hpp"
+#include "core/radio_reporter.hpp"
+#include "core/session_env.hpp"
 #include "core/transmitter.hpp"
 #include "core/audio_open.hpp"
 #include "core/bias_tee.hpp"
@@ -2061,6 +2063,52 @@ private:
     void healthPoll();
     // Starts the samples watch for the radio just installed (kind: its driver key).
     void healthWatchSamples(const std::string& kind);
+    // --- THE RADIO REPORTS (wave 8; core/radio_reporter.hpp, docs/multi-radio-records/radio-reports-app.md) ---------------------------------------
+    // Every radio that does not open is its own report; everything that happens to every radio is a journal event; the machine around them is
+    // `session_env`; a first session is seen from inside it. All of it goes through core::radioreport::global(), which queues to disk and sends only
+    // when radioreport::kRadioReportsLiveSend says so. The engine's part is naming WHICH radio (the requested device, never the receiver's current
+    // one), WHEN (the points below) and never handing over a frequency, a path or a name: the reporter's scrub and its guard are the last line.
+    std::string telemetryWindow_;                 // "new", "legacy" or "" (noteWindowKind)
+    struct RadioJournalSlot {
+        bool open = false;                        // a physical radio is open in this slot, and its key is `key`
+        bool okSent = false;                      // its radio_open ok was said by the call site that opened it
+        bool faulted = false;                     // the pipeline latched a fault while it was open
+        bool noSamplesDone = false;               // the "opened, no samples" look has been made
+        bool streamNoteSent = false;
+        cascade::core::radioreport::RadioIdentity rid;   // which physical radio (model, serial, key)
+        std::string kind, args, faultReason;
+        double openedAtS = 0.0;
+        std::uint64_t readAtOpen = 0;
+        // the minute's figures, summed until the stream event's window has passed
+        std::uint64_t accRead = 0, accDropped = 0;
+        double accSec = 0.0, lastMinuteS = 0.0;
+        std::size_t accHigh = 0;
+    };
+    std::array<RadioJournalSlot, kMaxReceivers> radioJournal_;
+    bool radioEnvSent_ = false;
+    std::future<cascade::core::SessionEnv> radioEnvFuture_;   // the machine is read on a worker, once
+    bool radioEnvPending_ = false;
+    bool radioQuitting_ = false;
+    bool radioFirstSessionSent_ = false;
+    bool radioOpenedThisSession_ = false;
+    bool radioSessionEndSent_ = false;
+    std::uint64_t radioScans_ = 0;                // scans that landed this session
+    std::uint64_t radioOpenFailures_ = 0;         // opens that failed this session
+    std::vector<std::string> radioScanModels_;    // what the last scan listed: models only (never a serial, an address or a label that names a person)
+    cascade::core::radioreport::Identity radioReportIdentity() const;
+    void radioReportsStart(const cascade::core::AppConfig& cfg, const std::string& configDir);
+    void radioReportsRefreshIdentity();
+    void radioReportsPass();                      // once a pass, first radio's housekeeping: session_env, the first session, the beat's radios, every slot's state
+    void radioReportsQuit();                      // the first step of the teardown: closes, the session's end, the last bounded send
+    void radioReportsScanLanded(bool native, bool soapy);   // a scan landed: radio_found for each radio the scan listed, and what it listed
+    void reportFailedOpen(const std::string& kind, const std::string& args, const std::string& reason, cascade::core::radioreport::Trigger trigger,
+                          bool superseded, double requestRateHz, long long openMs);
+    void journalOpenStart(const std::string& kind, const std::string& args, cascade::core::radioreport::Trigger trigger, double requestRateHz);
+    void journalOpenOk(const std::string& kind, const std::string& args, cascade::core::radioreport::Trigger trigger, double requestRateHz, long long openMs);
+    void journalSettingsAtOpen(const std::string& kind, const std::string& args);
+    void journalStreamMinute(std::uint64_t samplesRead, std::uint64_t samplesDropped, std::size_t ringHighWaterSamples);
+    void journalRecovery(const std::string& kind, const std::string& args, const char* phase, const std::string& what, const std::string& reason, long long ms);
+    cascade::core::TelemetryReport telemetrySnapshot();
     bool telemetryCleanExit_ = false;   // true only on the normal shutdown path
     double telemetrySessionStart_ = 0.0;                  // glfwGetTime at start
     // Time in the current mode. A plain "since" mark cannot be used here: the
@@ -3665,6 +3713,9 @@ public:
     // receiver starts; configure() refuses an empty id, so a run that opted out arms nothing. heartbeatConfigured: whether it armed.
     void configureHeartbeat();
     bool heartbeatConfigured() const { return telemetryHeartbeat_.configured(); }
+    // WHICH WINDOW IS RUNNING (wave 8): the host says "new" (the Slint window) or "legacy" (the old window) once, as it starts. The usage record
+    // and the journal's session_env say it as `window`; any other word is not sent.
+    void noteWindowKind(const std::string& window);
     // A BOUNDED RUN'S PLUGIN STATUS REPORT (CASCADE_PLUGIN_STATUS), asked for by a host that has no interface to hand over a plugin half: the report is
     // printed once, at the end of the first teardown phase, with an empty plugin half. A host whose interface DID hand one over (the window: its last
     // setFrontEnd) is left alone.

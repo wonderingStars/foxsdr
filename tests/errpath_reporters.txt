@@ -14,3 +14,5 @@ notePluginInstallFailed
 notePluginLoadRefused
 noteRecordFailed
 fileIssueReport
+reportFailedOpen
+noteRecovery

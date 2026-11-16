@@ -328,6 +328,10 @@ void Engine::patchReconcile() {
                 kind != "file" && kind != "siggen") {
                 cascade::core::health::noteRadioFail(kind, patchRadioError_[id]);
             }
+            // ...and as its own report (radio reports, D4): the driver key and arguments of the node's device key, the reason as the open gave it. (A
+            // recording or the generator is not a physical radio: reportFailedOpen files nothing for them.)
+            reportFailedOpen(pc::deviceDriver(n->device), pc::deviceArgs(n->device), patchRadioError_[id], cascade::core::radioreport::Trigger::PatchRadio,
+                             /*superseded=*/false, radioRate(*n), -1);
             if (pc::isIqFileKey(n->device)) {
                 // The NODE, never the file's name: a path is the user's data, and the
                 // reason a recording would not open can carry it.

@@ -289,7 +289,9 @@ std::string pathsToToken(const std::string& s) {
     while (i < s.size()) {
         bool path = false;
         if (i + 2 < s.size() && isAlpha(s[i]) && s[i + 1] == ':' && isSlash(s[i + 2]) && (i == 0 || !isWordChar(s[i - 1]))) { path = true; }
-        else if (i + 2 < s.size() && s[i] == '\\' && s[i + 1] == '\\' && (isWordChar(s[i + 2]) || s[i + 2] == '.' || s[i + 2] == '$')) { path = true; }
+        // a network path, including one the upload scrub has already half-masked (two backslashes, <host>, then the share and the file): what follows the
+        // masked host name is the user's
+        else if (i + 2 < s.size() && s[i] == '\\' && s[i + 1] == '\\' && (isWordChar(s[i + 2]) || s[i + 2] == '.' || s[i + 2] == '$' || s[i + 2] == '<')) { path = true; }
         else if (isSlash(s[i]) && ((startsWithNoCase(s, i + 1, "users") && i + 6 < s.size() && isSlash(s[i + 6])) ||
                                    (startsWithNoCase(s, i + 1, "home") && i + 5 < s.size() && isSlash(s[i + 5])))) { path = true; }
         if (!path) { out.push_back(s[i]); ++i; continue; }
@@ -326,8 +328,52 @@ std::string stripFrequencies(const std::string& s) {
 
 }  // namespace
 
+// A NUMBER THAT LOOKS LIKE A FREQUENCY WITHOUT SAYING SO: a run of six or more digits, or a decimal with three or more decimals, that no unit explains.
+// scrubUploadLine masks the numbers of a line that mentions hertz, tuning or a centre; a driver's "open at 433920000" says none of those. A sample rate
+// ("2400000 S/s"), a time, a size or a count carries its unit and stays; a version ("0.99.109") has two dots and stays.
+static std::string maskBareFrequencies(const std::string& s) {
+    static const char* const kSafeUnits[] = {"s/s", "sps", "msps", "ms", "us", "ns", "s", "b", "kb", "mb", "gb", "bytes", "samples", "sample", "blocks", "db", "%", "x"};
+    std::string out;
+    std::size_t i = 0;
+    while (i < s.size()) {
+        if (!isDigit(s[i]) || (i > 0 && (isWordChar(s[i - 1]) || s[i - 1] == '.'))) { out.push_back(s[i]); ++i; continue; }
+        std::size_t j = i;
+        while (j < s.size() && isDigit(s[j])) { ++j; }
+        const std::size_t intDigits = j - i;
+        std::size_t decimals = 0;
+        std::size_t end = j;
+        if (j + 1 < s.size() && s[j] == '.' && isDigit(s[j + 1])) {
+            std::size_t k = j + 1;
+            while (k < s.size() && isDigit(s[k])) { ++k; }
+            // a second dot makes it a version or an address, which the other rules judge
+            if (k < s.size() && s[k] == '.' && k + 1 < s.size() && isDigit(s[k + 1])) {
+                out.append(s, i, k - i);
+                i = k;
+                continue;
+            }
+            decimals = k - (j + 1);
+            end = k;
+        }
+        // the unit that follows, if any
+        std::size_t u = end;
+        while (u < s.size() && s[u] == ' ') { ++u; }
+        std::string unit;
+        while (u < s.size() && (isAlpha(s[u]) || s[u] == '/' || s[u] == '%') && unit.size() < 8) { unit.push_back(lower(s[u])); ++u; }
+        bool safe = false;
+        for (const char* k : kSafeUnits) { if (unit == k) { safe = true; } }
+        const bool looksLikeFrequency = intDigits >= 6 || (decimals >= 3 && intDigits >= 1 && !(intDigits == 1 && s[i] == '0'));
+        if (looksLikeFrequency && !safe) {
+            out.push_back('#');
+        } else {
+            out.append(s, i, end - i);
+        }
+        i = end;
+    }
+    return out;
+}
+
 std::string scrubText(const std::string& raw, const std::string& serial, std::size_t maxChars) {
-    std::string t = scrubUploadLine(raw);
+    std::string t = maskBareFrequencies(scrubUploadLine(raw));
     for (int pass = 0; pass < 4; ++pass) {
         t = stripSerial(t, serial);
         t = pathsToToken(t);
@@ -391,8 +437,9 @@ std::vector<std::string> radioLines(const std::vector<std::string>& ring, const 
         bool radio = false;
         for (const char* p : kRadioPrefixes) { if (word == p) { radio = true; } }
         if (!radio) { continue; }
-        const std::string shaped = stamp.empty() ? rest : stamp + " " + rest;
-        std::string t = scrubText(shaped, serial, 240);
+        // the time stamp is kept as the ring wrote it; the rest of the line is scrubbed on its own (its digits are not a frequency)
+        std::string t = scrubText(rest, serial, stamp.empty() ? 240 : 227);
+        if (!stamp.empty()) { t = stamp + " " + t; }
         if (t.empty() || !textCode(t, serial).empty()) { continue; }
         // the scrub may have withheld the whole line: that is no longer a radio line
         std::string again = t;
@@ -435,6 +482,20 @@ std::string versionText(const std::string& s) {
     }
     if (out.size() > 48) { out.resize(48); }
     return out;
+}
+
+std::string bandName(double hz) {
+    if (!(hz > 0.0)) { return "other"; }
+    if (hz < 300e3) { return "lf"; }
+    if (hz < 3e6) { return "mf"; }
+    if (hz < 30e6) { return "hf"; }
+    if (hz < 87.5e6) { return "vhf-low"; }
+    if (hz < 108e6) { return "fm-broadcast"; }
+    if (hz < 137e6) { return "air-band"; }
+    if (hz < 300e6) { return "vhf-high"; }
+    if (hz < 1e9) { return "uhf"; }
+    if (hz < 2e9) { return "l-band"; }
+    return "shf";
 }
 
 std::string cpuWithoutClock(const std::string& brand) {

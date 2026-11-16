@@ -111,6 +111,9 @@ struct ServiceOptions {
     // start() arms the usage heartbeat, right after the receiver is started and before anything else, as the window's run() does for an
     // interactive run. False: a service on the desktop's install id would double-count one machine, and every bounded run stays hermetic.
     bool heartbeat = false;
+    // WHICH WINDOW THIS RUN IS (wave 8, contract 3.11): "new" (the Slint window) or "legacy" (the old window), said by the host that builds the options. The usage
+    // record and the radio journal carry it as `window`; empty (a headless engine, a test) says nothing.
+    std::string windowKind;
     // The settings are kept by a thread of the service's own (keep() every ~100 ms, a look at the snapshot a few times a second), started at the
     // end of start() and joined at the HEAD of stop(), instead of by the caller's wait loop. True for a host with no loop of its own to call keep()
     // from (the window: its frame loop has gone to the engine's side). False: the caller calls keep() as foxsdr-engine's wait loop does.

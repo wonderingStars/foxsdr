@@ -969,7 +969,6 @@ src/engine/engine.cpp::Engine::applyCommand::errassign::text	PENDING:reports-not
 src/engine/engine.cpp::Engine::applyCommand::errassign::the box that says what a plugin site is was not ticked	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::applyCommand::errassign::why	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::applyCommand::warn::patch %	PENDING:unsure	UNSURE: what text the patch command carries; read engine.cpp:8082	seed
-src/engine/engine.cpp::Engine::applyConfig::warn::source the native % driver refused the saved radio % opening	PENDING:G6-route-fallback	recovery (native driver refused the radio, SoapySDR opened it instead: the route that explains RTL/SDRplay "other")	seed
 src/engine/engine.cpp::Engine::applyPluginPreset::errassign::set sourceerror	PENDING:reports-not-in-function	survey: REPORTS (sourceError_ at the open result (noteRadioFail count; D4 upgrade)) but no reporting call encloses the site	seed
 src/engine/engine.cpp::Engine::applyRetuneNow::errassign::moved sourceerror	PENDING:reports-not-in-function	survey: REPORTS (sourceError_ at the open result (noteRadioFail count; D4 upgrade)) but no reporting call encloses the site	seed
 src/engine/engine.cpp::Engine::closeDspMinute::log::dsp % samples dropped between the source and the dsp in the	PENDING:reports-not-in-function	survey: REPORTS (via fileIssueReport in the same function) but no reporting call encloses the site	seed
@@ -990,14 +989,8 @@ src/engine/engine.cpp::Engine::fillStatusLists::errassign::rx recorderror_	ALLOW
 src/engine/engine.cpp::Engine::fillStatusLists::errassign::rx sourceerror_	PENDING:reports-not-in-function	survey: REPORTS (sourceError_ at the open result (noteRadioFail count; D4 upgrade)) but no reporting call encloses the site	seed
 src/engine/engine.cpp::Engine::finishBookmarkImport::warn::bookmarks an import % failed %	ALLOW	the user's own import; the failure is shown in the dialog	seed
 src/engine/engine.cpp::Engine::finishDeviceOpen::errassign::buf	PENDING:reports-not-in-function	survey: REPORTS (sourceError_ at the open result (noteRadioFail count; D4 upgrade)) but no reporting call encloses the site	seed
-src/engine/engine.cpp::Engine::finishDeviceOpen::errassign::cascade gui radionotopenedsentence wanted why	PENDING:reports-not-in-function	survey: REPORTS (sourceError_ at the open result (noteRadioFail count; D4 upgrade)) but no reporting call encloses the site	seed
 src/engine/engine.cpp::Engine::finishDeviceOpen::errassign::r error	PENDING:reports-not-in-function	survey: REPORTS (sourceError_ at the open result (noteRadioFail count; D4 upgrade)) but no reporting call encloses the site	seed
-src/engine/engine.cpp::Engine::finishDeviceOpen::errassign::the radio could not be reopened after its driver faulted	PENDING:reports-not-in-function	survey: REPORTS (sourceError_ at the open result (noteRadioFail count; D4 upgrade)) but no reporting call encloses the site	seed
-src/engine/engine.cpp::Engine::finishDeviceOpen::errassign::why	PENDING:reports-not-in-function	survey: REPORTS (sourceError_ at the open result (noteRadioFail count; D4 upgrade)) but no reporting call encloses the site	seed
 src/engine/engine.cpp::Engine::finishDeviceOpen::log::source reopened % at % ss after the driver fault%	PENDING:reports-not-in-function	survey: REPORTS (noteRecovered(Reopen) at reopenAfterDriverFault) but no reporting call encloses the site	seed
-src/engine/engine.cpp::Engine::finishDeviceOpen::warn::source % % did not open % the receiver is on the signal gene	PENDING:reports-not-in-function	survey: REPORTS (noteRadioFail at the same open result (count only; D4 turns it into an own report)) but no reporting call encloses the site	seed
-src/engine/engine.cpp::Engine::finishDeviceOpen::warn::source the reopen of % failed % restart foxsdr to use this r	PENDING:reports-not-in-function	survey: REPORTS (noteRadioFail at the same open result (count only; D4 turns it into an own report)) but no reporting call encloses the site	seed
-src/engine/engine.cpp::Engine::finishDeviceOpen::warn::source the saved radio is still in use by another program af	PENDING:reports-not-in-function	survey: REPORTS (noteRadioFail at the same open result (count only; D4 turns it into an own report)) but no reporting call encloses the site	seed
 src/engine/engine.cpp::Engine::finishRecordStart::errassign::err	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::finishRecordStart::errassign::r error	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::finishRecordStart::log::recorder the iq take was dropped the input rate changed whil	PENDING:R-record	output failure (a recording take dropped or its file would not open in time)	seed
@@ -1009,7 +1002,6 @@ src/engine/engine.cpp::Engine::holdAudioLockForTest::log::test the audio lock co
 src/engine/engine.cpp::Engine::launchDeviceOpen::errassign::	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::launchDeviceOpen::errassign::cascade gui applysourcerate dev r requestratehz r error sour	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::launchDeviceOpen::errassign::dev lasterror	ALLOW	result text of an engine operation shown to the user	seed
-src/engine/engine.cpp::Engine::launchDeviceOpen::warn::source the native % driver refused this radio % opening it t	PENDING:G6-route-fallback	recovery (native driver refused the radio, SoapySDR opened it instead: the route that explains RTL/SDRplay "other")	seed
 src/engine/engine.cpp::Engine::loadBandPlan::errassign::err	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::loadBookmarks::errassign::bmerr	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::loadBookmarks::errassign::mkerr	ALLOW	result text of an engine operation shown to the user	seed
@@ -1089,9 +1081,7 @@ src/engine/engine_patch_radios.cpp::Engine::patchReconcile::errassign::the devic
 src/engine/engine_patch_radios.cpp::Engine::patchReconcile::errassign::the radio refused	ALLOW	engine result text shown to the user	seed
 src/engine/engine_patch_radios.cpp::Engine::patchReconcile::errassign::the radio refused the frequency correction	ALLOW	engine result text shown to the user	seed
 src/engine/engine_patch_radios.cpp::Engine::patchReconcile::errassign::the radio refused the frequency correction#2	ALLOW	engine result text shown to the user	seed
-src/engine/engine_patch_radios.cpp::Engine::patchReconcile::warn::patch radio node % its iq recording would not open	PENDING:reports-not-in-function	survey: REPORTS (via noteRadioFail in the same function) but no reporting call encloses the site	seed
 src/engine/engine_patch_radios.cpp::Engine::patchReconcile::warn::patch radio node % stopped its iq recording could not be rea	PENDING:G7-patch-radio	device dead / radio open failure on a patch-page radio (the receiver path reports; this path counts nothing)	seed
-src/engine/engine_patch_radios.cpp::Engine::patchReconcile::warn::patch radio node % would not open %	PENDING:reports-not-in-function	survey: REPORTS (via noteRadioFail in the same function) but no reporting call encloses the site	seed
 src/engine/engine_patch_radios.cpp::Engine::patchReconcile::warn::patch radio node % would not start %	PENDING:G7-patch-radio	device dead / radio open failure on a patch-page radio (the receiver path reports; this path counts nothing)	seed
 src/engine/engine_patch_radios.cpp::Engine::patchReconcile::warn::patch radio stopped %	PENDING:G7-patch-radio	device dead / radio open failure on a patch-page radio (the receiver path reports; this path counts nothing)	seed
 src/engine/engine_patch_radios.cpp::Engine::patchStopAll::errassign::buf	ALLOW	engine result text shown to the user	seed
