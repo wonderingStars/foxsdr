@@ -1756,6 +1756,14 @@ if(CASCADE_TEST_PYTHON)
 else()
     message(STATUS "no python: packaging_openapi_routes and the drive WAV fixtures are not registered")
 endif()
+# These four read files of the source tree and find it by walking UP from the working directory. ctest runs a test in the build folder
+# (<build>/tests), which is inside the source tree only when the build folder is: with the build beside or away from the tree (CI on
+# Linux, D:/foxsdr-build, WSL) the walk found nothing and all four failed, on Windows too. Running them from the source root is the fix.
+foreach(_t IN ITEMS test_airband_data test_converter_call_sites test_page_resize_id test_png_decode)
+    if(TEST ${_t})
+        set_tests_properties(${_t} PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+    endif()
+endforeach()
 
 # wire-c begin: wiring lane C's test settings in ONE block (each item appends its own lines inside it)
 foreach(_t IN ITEMS test_wire_c_portable test_wire_c_updater)
