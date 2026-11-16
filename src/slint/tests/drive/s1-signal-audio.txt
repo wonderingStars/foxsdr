@@ -1,0 +1,110 @@
+#! frames=2200 size=1600x7000 bank=0 sections=0:3
+# s1-signal-audio (screen lane S1, wave 8; docs/multi-radio-records/screen-s1-signal.md; rows G1-33, G1-39, G1-42, G1-41, G1-23, G1-50 pan): the Audio filters section of the SIGNAL bank. Each control is operated by its label and
+# its effect is read back FROM THE ENGINE (`state s1.state.*`). The groups are folded at the start.
+10 state running == 1
+state s1.rows.audio < 9
+# --- G1-33: the noise-reduction method (standard at the start)
++1 click "Noise-reduction method"
++4 state s1.state.nrMethod == 0
++1 click "Spectral noise reduction"
++10 state s1.state.nrMethod == 1
++1 click "Line enhancer"
++10 state s1.state.nrMethod == 2
++1 click "Standard noise reduction"
++10 state s1.state.nrMethod == 0
++1 click "Noise-reduction method"
+# --- G1-39: the notch bank. None on at the start; slot 1 gets 1500 Hz and 40 Hz, slot 3 gets 440 Hz and 20 Hz; each is read back from the engine's bank
++1 click "Notch bank"
++4 state s1.state.notchBankMask == 0
++1 type "Notch frequency (Hz)" "1500"
++1 key enter
++1 type "Notch width (Hz)" "40"
++1 key enter
++1 click "Set this notch"
++10 state s1.state.notchBankMask == 1
++1 state s1.state.notchBankHz.0 == 1500
++1 state s1.state.notchBankWidthHz.0 == 40
++1 type "Notch slot (1 to 10)" "3"
++1 key enter
++4 expect "Notch in this slot" checked equals "false"
++1 type "Notch frequency (Hz)" "440"
++1 key enter
++1 type "Notch width (Hz)" "20"
++1 key enter
++1 click "Set this notch"
++10 state s1.state.notchBankMask == 5
++1 state s1.state.notchBankHz.2 == 440
++1 state s1.state.notchBankWidthHz.2 == 20
++1 state s1.state.notchBankHz.0 == 1500
+# a frequency outside 20 to 21600 Hz is refused on the screen, before it is sent
++1 type "Notch frequency (Hz)" "5"
++1 key enter
++1 click "Set this notch"
++6 state s1.note.audio contains "Notch frequency (Hz):"
++1 state s1.state.notchBankHz.2 == 440
+# the slot switched off and on again keeps its figures
++1 click "Notch in this slot"
++10 state s1.state.notchBankMask == 1
++1 state s1.state.notchBankHz.2 == 440
++1 click "Notch in this slot"
++10 state s1.state.notchBankMask == 5
+# a slot that is not 1 to 10 leaves the slot's keys dead
++1 type "Notch slot (1 to 10)" "11"
++1 key enter
++4 expect "Set this notch" enabled equals "false"
++1 type "Notch slot (1 to 10)" "1"
++1 key enter
++4 expect "Set this notch" enabled equals "true"
++1 click "Clear every notch"
++10 state s1.state.notchBankMask == 0
++1 click "Notch bank"
+# --- G1-42: the audio high-pass and low-pass; one is changed and the other keeps its value
++1 click "Audio high-pass and low-pass"
++4 state s1.state.audioHighPassHz == 0
++1 state s1.state.audioLowPassHz == 0
++1 click "High-pass 100 Hz"
++10 state s1.state.audioHighPassHz == 100
++1 click "Low-pass 3 kHz"
++10 state s1.state.audioLowPassHz == 3000
++1 state s1.state.audioHighPassHz == 100
++1 click "High-pass 300 Hz"
++10 state s1.state.audioHighPassHz == 300
++1 state s1.state.audioLowPassHz == 3000
++1 click "Low-pass 2.4 kHz"
++10 state s1.state.audioLowPassHz == 2400
++1 click "High-pass off"
++10 state s1.state.audioHighPassHz == 0
++1 click "Low-pass off"
++10 state s1.state.audioLowPassHz == 0
++1 click "Audio high-pass and low-pass"
+# --- G1-41: the equaliser, flat at the start; a band is moved up, another down, and one key flattens them
++1 click "Audio equaliser"
++4 state s1.state.eqDb.0 == 0
++1 slider "EQ Bass" 0.9
++10 state s1.state.eqDb.0 > 7
++1 slider "EQ 1 kHz" 0.1
++10 state s1.state.eqDb.5 < -7
++1 state s1.state.eqDb.1 == 0
++1 click "Flatten the equaliser"
++15 state s1.state.eqDb.0 == 0
++1 state s1.state.eqDb.5 == 0
++1 click "Audio equaliser"
+# --- G1-23, G1-50: the stereo placement: off at the start; pan, pseudo-stereo and binaural, each with its own range
++1 click "Stereo placement"
++4 state s1.state.stereoPlaceMode == 0
++1 click "Pan"
++10 state s1.state.stereoPlaceMode == 1
++1 slider "Placement" 0.9
++10 state s1.state.stereoPlaceValue > 0.5
++1 slider "Placement" 0.1
++10 state s1.state.stereoPlaceValue < -0.5
++1 click "Pseudo-stereo"
++10 state s1.state.stereoPlaceMode == 2
++1 state s1.state.stereoPlaceValue == 0.5
++1 click "Binaural"
++10 state s1.state.stereoPlaceMode == 3
++1 slider "Placement" 0.9
++10 state s1.state.stereoPlaceValue > 40
++1 click "Placement off"
++10 state s1.state.stereoPlaceMode == 0
++1 shot "s1-signal-audio.png"

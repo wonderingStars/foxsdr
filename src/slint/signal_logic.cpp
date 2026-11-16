@@ -20,6 +20,7 @@
 #include "core/utf8_text.hpp"
 #include "gui/section_reads.hpp"
 #include "gui/tuning_reads.hpp"
+#include "s1_meter.hpp"   // screen lane S1: the signal strength in the unit the radio chose (dB, S units, dBm)
 
 namespace foxsdr::slintsignal {
 
@@ -1071,7 +1072,7 @@ RadioExtrasModel readRadioExtras(const FoxReceiverState& st) {
     m.signal_has = (st.flags & FOXAPI_RX_RUNNING) != 0u && std::isfinite(st.signalDb) && st.signalDb > -199.0;
     if (m.signal_has) {
         m.signal_frac = static_cast<float>(std::clamp((st.signalDb + 120.0) / 120.0, 0.0, 1.0));
-        m.signal_text = cc::formatText("%.1f dB", st.signalDb);
+        m.signal_text = foxsdr::slints1::meterReading(st.meterUnits, st.signalDb, st.signalDbm, st.sUnits, st.calibrated != 0u);   // the radio's own unit (SET_METER_UNITS); dB of full scale until it is changed
     }
     if (!m.wfm) { return m; }
     m.stereo = (st.flags & FOXAPI_RX_STEREO_ENABLED) != 0u;
