@@ -2073,6 +2073,7 @@ private:
         bool open = false;                        // a physical radio is open in this slot, and its key is `key`
         bool okSent = false;                      // its radio_open ok was said by the call site that opened it
         bool faulted = false;                     // the pipeline latched a fault while it was open
+        bool faultDead = false;                   // and the driver said the device is dead (not merely faulted): the close's cause is `unplugged` or `fault`
         bool noSamplesDone = false;               // the "opened, no samples" look has been made
         bool streamNoteSent = false;
         cascade::core::radioreport::RadioIdentity rid;   // which physical radio (model, serial, key)

@@ -216,6 +216,7 @@ public:
     // Public only because the reader thread's body is a free function in the
     // .cpp; nothing outside this class has any business touching one.
     struct Link {
+        const void* owner = nullptr;   // the source object, for the radio reports (core/radio_events.hpp)
         struct Health {
             std::uint64_t reads = 0;
             std::uint64_t withSamples = 0;

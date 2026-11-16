@@ -11,11 +11,13 @@
 #include <utility>
 
 #include "core/diag_log.hpp"
+#include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
 #include "core/ppm_correction.hpp"
 
 namespace cascade::source {
+namespace rre = ::cascade::core::radioreport;
 
 namespace {
 
@@ -177,6 +179,7 @@ void noteRead(RtlSdrSource::Link& link, int ret, std::size_t samples) {
     bool worrying = false;
     bool first = false;
     bool nominal = false;
+    rre::StreamTrouble trouble;
     std::string line;
     {
         std::lock_guard<std::mutex> lk(link.healthMutex);
@@ -204,6 +207,8 @@ void noteRead(RtlSdrSource::Link& link, int ret, std::size_t samples) {
                   link.health.errors == 0 && link.health.longestGapMs < 250;
         first = !link.healthEverWritten;
         worrying = link.health.errors > 0 || link.health.longestGapMs >= 1000;
+        trouble = {std::chrono::duration<double>(now - link.health.windowStart).count(), link.health.samples, link.health.errors, link.health.overflows,
+                   link.health.timeouts, static_cast<long long>(link.health.longestGapMs)};
         line = healthLineLocked(link);
         if (line.empty()) { return; }
         if (worrying || first || !nominal) { link.healthEverWritten = true; }
@@ -213,20 +218,24 @@ void noteRead(RtlSdrSource::Link& link, int ret, std::size_t samples) {
     // and after that only a window with something to say.
     if (worrying) {
         core::diagWarnf("%s", line.c_str());
+        rre::noteStreamTrouble(link.owner, "rtlsdr", trouble);
     } else if (first || !nominal) {
         core::diagLogf("%s", line.c_str());
     }
 }
 
 void noteFault(RtlSdrSource::Link& link, std::string msg, const char* what) {
+    std::string said;
     {
         std::lock_guard<std::mutex> lk(link.errorMutex);
+        said = msg;
         link.lastError = std::move(msg);
         link.faulted = true;
         link.deviceDead = true;
         link.faultedWhile = what;
     }
     core::diagWarnf("source: the RTL-SDR failed while %s", what);
+    rre::noteDeviceFault(link.owner, "rtlsdr", what, said);
 }
 
 // A CONTROL CALL'S TURN AT THE DEVICE: the lock every entry point but the
@@ -462,6 +471,7 @@ bool RtlSdrSource::open(const std::string& args) {
 
 bool RtlSdrSource::openWithTransport(std::unique_ptr<usb::UsbDevice> transport,
                                      const std::string& label) {
+    link_->owner = this;
     if (!transport) {
         setError("openWithTransport() needs a transport");
         return false;
@@ -645,6 +655,7 @@ void RtlSdrSource::teardownLocked() noexcept {
         core::diagWarnf(
             "source: the tuner's PLL failed to lock on %d tune%s while this radio was open",
             unlocked, unlocked == 1 ? "" : "s");
+        rre::noteVendorCallFault(this, "rtlsdr", "pllunlocked", "the tuner's PLL failed to lock on " + std::to_string(unlocked) + " tunes while this radio was open", false);
     }
     if (link_->rtl && link_->tuner) {
         // Power the analogue blocks down on the way out, so a dongle left
@@ -887,7 +898,7 @@ bool RtlSdrSource::setSampleRateHz(double hz) {
         link_->rtl->setIfFreqHz(link_->tuner->ifFreqHz());
         retuneLocked(centerFrequencyHz_.load(std::memory_order_relaxed));
     } else {
-        setError("the radio refused that sample rate: " + link_->rtl->lastError());
+        setError(rre::noteControlRefusedText(this, "rtlsdr", rre::Control::Rate, "the radio refused that sample rate: " + link_->rtl->lastError()));
     }
     if (wasStreaming && !startStreamLocked()) {
         // A STREAM THAT WILL NOT COME BACK IS A FAULT, not merely a failed
@@ -972,6 +983,7 @@ bool RtlSdrSource::retuneLocked(double hz) {
                 core::diagWarnf("source: if no frequency locks, close the radio and reopen it - "
                                 "a PLL reference that does not match the board fails at every "
                                 "frequency. Send this log if it persists.");
+                rre::noteVendorCallFault(this, "rtlsdr", "pllunlocked", std::string("the tuner's PLL did not lock at the requested frequency; ") + tuner.name() + " is deaf there", false);
             }
         }
     }
@@ -1000,12 +1012,12 @@ bool RtlSdrSource::setCenterFrequencyHz(double hz) {
         std::snprintf(buf, sizeof(buf),
                       "this radio tunes %.3f - %.3f MHz; %.3f MHz is outside that", lo / 1e6,
                       hi / 1e6, hz / 1e6);
-        setError(buf);
+        setError(rre::noteControlRefusedText(this, "rtlsdr", rre::Control::Frequency, buf, /*userRange=*/true));
         return false;
     }
     if (!retuneLocked(hz)) {
-        setError("the radio would not tune there: " + link_->tuner->lastError() + " [" +
-                 link_->rtl->lastError() + "]");
+        setError(rre::noteControlRefusedText(this, "rtlsdr", rre::Control::Frequency, "the radio would not tune there: " + link_->tuner->lastError() + " [" +
+                 link_->rtl->lastError() + "]"));
         return false;
     }
     return true;
@@ -1042,7 +1054,7 @@ bool RtlSdrSource::setDirectSamplingChoice(int choice) {
     if (hz > 0.0) {
         double lo = 0.0, hi = 0.0;
         if (rangeLocked(lo, hi) && (hz < lo || hz > hi)) { return true; }   // outside what the new choice accepts: it takes effect at the next tune
-        if (!retuneLocked(hz)) { setError("the radio would not retune after the direct-sampling change"); return false; }
+        if (!retuneLocked(hz)) { setError(rre::noteControlRefusedText(this, "rtlsdr", rre::Control::DirectSampling, "the radio would not retune after the direct-sampling change")); return false; }
     }
     return true;
 }
@@ -1123,7 +1135,7 @@ bool RtlSdrSource::setGainDb(const std::string& name, double db) {
         return false;
     }
     link_->rtl->setI2cRepeater(false);
-    if (!ok) { setError("the tuner refused that gain: " + link_->tuner->lastError()); }
+    if (!ok) { setError(rre::noteControlRefusedText(this, "rtlsdr", rre::Control::Gain, "the tuner refused that gain: " + link_->tuner->lastError())); }
     return ok;
 }
 
@@ -1170,7 +1182,7 @@ bool RtlSdrSource::setAutoGain(bool on) {
     // The demodulator's own digital AGC follows the tuner's, so the two
     // cannot end up fighting each other over the same signal.
     link_->rtl->setDemodAgc(on);
-    if (!ok) { setError("the tuner refused the gain mode: " + link_->tuner->lastError()); }
+    if (!ok) { setError(rre::noteControlRefusedText(this, "rtlsdr", rre::Control::AutoGain, "the tuner refused the gain mode: " + link_->tuner->lastError())); }
     return ok;
 }
 
@@ -1221,7 +1233,7 @@ bool RtlSdrSource::setBiasT(bool on) {
         return false;
     }
     if (!link_->rtl->setBiasTee(on)) {
-        setError("the radio would not switch its bias tee");
+        setError(rre::noteControlRefusedText(this, "rtlsdr", rre::Control::BiasTee, "the radio would not switch its bias tee"));
         return false;
     }
     biasTee_.store(on, std::memory_order_relaxed);
@@ -1235,7 +1247,7 @@ bool RtlSdrSource::setFreqCorrectionPpm(int ppm) {
         return false;
     }
     if (!link_->rtl->setFreqCorrectionPpm(ppm)) {
-        setError("the radio would not accept a crystal correction");
+        setError(rre::noteControlRefusedText(this, "rtlsdr", rre::Control::Ppm, "the radio would not accept a crystal correction"));
         return false;
     }
     ppm_.store(ppm, std::memory_order_relaxed);

@@ -16,3 +16,9 @@ noteRecordFailed
 fileIssueReport
 reportFailedOpen
 noteRecovery
+noteControlRefused
+noteControlRefusedText
+noteDeviceFault
+noteStreamTrouble
+noteVendorCallFault
+noteServiceFault
