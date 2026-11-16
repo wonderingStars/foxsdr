@@ -976,11 +976,20 @@ void bookmarkEffects() {
     CHECK(e.local == Local::OpenImportDialog && !e.flag && e.commands.empty());
     m.import_path = " \r\n";
     CHECK(applyBookmarkImport(m).local == Local::OpenImportDialog);
+    // (the same shapes on every platform: a drive-letter path has a root only on Windows, so elsewhere the rooted path is "/lists/...")
+#ifdef _WIN32
     m.import_path = "\"C:/lists/marine.csv\"\r\n";
     e = applyBookmarkImport(m);
     CHECK(e.commands.size() == 1 && fcOf(e, 0).op == FOXAPP_OP_BOOKMARK_IMPORT_FILE && commandText(cmdOf(e, 0)) == "C:/lists/marine.csv" && e.local == Local::None && cmdOf(e, 0).grant == FOXAPI_GRANT_SETTINGS);
     m.import_path = "file:///C:/x/y%20z.csv";
     CHECK(commandText(cmdOf(applyBookmarkImport(m), 0)) == "C:/x/y z.csv");
+#else
+    m.import_path = "\"/lists/marine.csv\"\r\n";
+    e = applyBookmarkImport(m);
+    CHECK(e.commands.size() == 1 && fcOf(e, 0).op == FOXAPP_OP_BOOKMARK_IMPORT_FILE && commandText(cmdOf(e, 0)) == "/lists/marine.csv" && e.local == Local::None && cmdOf(e, 0).grant == FOXAPI_GRANT_SETTINGS);
+    m.import_path = "file:///x/y%20z.csv";
+    CHECK(commandText(cmdOf(applyBookmarkImport(m), 0)) == "/x/y z.csv");
+#endif
     m.import_path = "//server/share/y.csv";
     CHECK(applyBookmarkImport(m).commands.size() == 1);
     m.import_path = "frequencies.xml";

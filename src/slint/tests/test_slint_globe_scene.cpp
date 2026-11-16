@@ -274,21 +274,21 @@ void sectionTerminator() {
     CHECK(solarElevationDeg(LatLon{90.0, 0.0}, sol) > 23.0);
     CHECK(solarElevationDeg(LatLon{-90.0, 0.0}, sol) < -23.0);
     // the daylight ramp: 1 above the band, 0 below, 0.5 at the terminator, monotonic, and a hard edge for a zero band
-    CHECK_NEAR(daylight(std::sin(10.0 * kDegToRad), 6.0), 1.0, 1e-12);
-    CHECK_NEAR(daylight(std::sin(-10.0 * kDegToRad), 6.0), 0.0, 1e-12);
-    CHECK_NEAR(daylight(0.0, 6.0), 0.5, 1e-12);
-    CHECK_NEAR(daylight(std::sin(3.0 * kDegToRad), 6.0), 0.84375, 1e-3);   // the smoothstep, not a straight ramp (0.75)
+    CHECK_NEAR(foxsdr::globe::daylight(std::sin(10.0 * kDegToRad), 6.0), 1.0, 1e-12);
+    CHECK_NEAR(foxsdr::globe::daylight(std::sin(-10.0 * kDegToRad), 6.0), 0.0, 1e-12);
+    CHECK_NEAR(foxsdr::globe::daylight(0.0, 6.0), 0.5, 1e-12);
+    CHECK_NEAR(foxsdr::globe::daylight(std::sin(3.0 * kDegToRad), 6.0), 0.84375, 1e-3);   // the smoothstep, not a straight ramp (0.75)
     double prev = -1.0;
     bool mono = true;
     for (int e = -8; e <= 8; ++e) {
-        const double d = daylight(std::sin(e * kDegToRad), 6.0);
+        const double d = foxsdr::globe::daylight(std::sin(e * kDegToRad), 6.0);
         if (d < prev - 1e-12) { mono = false; }
         prev = d;
     }
     CHECK(mono);
-    CHECK(daylight(0.001, 0.0) == 1.0);
-    CHECK(daylight(-0.001, 0.0) == 0.0);
-    CHECK(daylight(std::nan(""), 6.0) == 0.0);
+    CHECK(foxsdr::globe::daylight(0.001, 0.0) == 1.0);
+    CHECK(foxsdr::globe::daylight(-0.001, 0.0) == 0.0);
+    CHECK(foxsdr::globe::daylight(std::nan(""), 6.0) == 0.0);
 }
 
 // ------------------------------------------------------------------------------------------------------------------------

@@ -26,7 +26,7 @@
 #include <vector>
 
 using namespace foxsdr::slintmapj;
-namespace access = cascade::core::access;
+namespace accessns = cascade::core::access;   // not `access`: POSIX <unistd.h> declares ::access()
 namespace slm = foxsdr::slintmap;
 
 namespace {
@@ -551,7 +551,7 @@ void sectionFilter() {
 }
 
 void sectionUnits() {
-    using access::UnitSystem;
+    using accessns::UnitSystem;
     // Automatic is what the map has always printed: an aircraft's altitude in feet, a vessel's speed in knots
     CHECK(altitudeText(UnitSystem::Automatic, kKindAircraft, 10668.0).find("ft") != std::string::npos);
     CHECK(altitudeText(UnitSystem::Metric, kKindAircraft, 10668.0).find(" m") != std::string::npos);
@@ -560,12 +560,12 @@ void sectionUnits() {
     CHECK(speedTextOf(UnitSystem::Aviation, kKindVessel, 10.0).find("kt") != std::string::npos);
     CHECK(distanceText(UnitSystem::Nautical, kKindVessel, 1852.0) == "1.0 nmi" || distanceText(UnitSystem::Nautical, kKindVessel, 1852.0).find("nmi") != std::string::npos);
     CHECK(altitudeText(UnitSystem::Metric, kKindAircraft, std::nan("")).empty());
-    CHECK(objectKindOf(kKindSatellite) == access::ObjectKind::Satellite && objectKindOf(kKindStation) == access::ObjectKind::Other && objectKindOf(99) == access::ObjectKind::Other);
+    CHECK(objectKindOf(kKindSatellite) == accessns::ObjectKind::Satellite && objectKindOf(kKindStation) == accessns::ObjectKind::Other && objectKindOf(99) == accessns::ObjectKind::Other);
     // the choice cycles through every system once
     UnitSystem s = UnitSystem::Automatic;
     int steps = 0;
     do { s = nextUnitSystem(s); ++steps; } while (s != UnitSystem::Automatic && steps < 20);
-    CHECK(steps == access::kUnitSystemCount);
+    CHECK(steps == accessns::kUnitSystemCount);
     CHECK(unitChoiceName(UnitSystem::Automatic) == "Automatic" && unitChoiceName(UnitSystem::Nautical) == "Nautical");
     // scale bar: 1000 px wide, 100 m a pixel: 0.3 of the width is 30 km
     ScaleBar b = scaleBar(UnitSystem::Metric, 100.0, 1000.0);

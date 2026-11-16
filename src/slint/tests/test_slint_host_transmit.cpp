@@ -64,6 +64,7 @@ std::string show(double d) { char b[48]; std::snprintf(b, sizeof(b), "%.9g", d);
 std::string show(float d) { return show(static_cast<double>(d)); }
 std::string show(int d) { return std::to_string(d); }
 std::string show(unsigned d) { return std::to_string(d); }
+std::string show(long d) { return std::to_string(d); }   // int64_t is `long` on Linux: neither int nor long long matches it exactly
 std::string show(long long d) { return std::to_string(d); }
 std::string show(std::size_t d) { return std::to_string(d); }
 std::string show(bool b) { return b ? "true" : "false"; }

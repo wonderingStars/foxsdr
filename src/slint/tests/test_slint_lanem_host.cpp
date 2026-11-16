@@ -16,6 +16,13 @@
 using namespace foxsdr::slintlanem;
 using nlohmann::json;
 
+// A full path is absolute only in the host's own way: "C:/x" has a root on Windows and none elsewhere ("/x" is the POSIX form of the same test path).
+#ifdef _WIN32
+#define FOXTEST_ROOT "C:"
+#else
+#define FOXTEST_ROOT ""
+#endif
+
 int main() {
     double d = 0, d2 = 0; long long n = 0; std::string e;
 
@@ -86,23 +93,23 @@ int main() {
 
     // ---------------------------------------------------------------- the sweep history (rows 13 and 14)
     {
-        const Built s = sweepHistoryJson("save", "C:/foxsdr/h.csv", 0);
+        const Built s = sweepHistoryJson("save", "" FOXTEST_ROOT "/foxsdr/h.csv", 0);
         CHECK(s.ok);
         json j = json::parse(s.text);
-        CHECK(j["action"] == "save" && j["path"] == "C:/foxsdr/h.csv" && j["format"] == "csv");
-        CHECK(json::parse(sweepHistoryJson("save", "C:/foxsdr/h.json", 1).text)["format"] == "json");
-        CHECK(json::parse(sweepHistoryJson("save", "C:/foxsdr/h.xml", 2).text)["format"] == "xml");
-        const Built l = sweepHistoryJson("load", "  C:/foxsdr/h.csv  ", 2);
+        CHECK(j["action"] == "save" && j["path"] == "" FOXTEST_ROOT "/foxsdr/h.csv" && j["format"] == "csv");
+        CHECK(json::parse(sweepHistoryJson("save", "" FOXTEST_ROOT "/foxsdr/h.json", 1).text)["format"] == "json");
+        CHECK(json::parse(sweepHistoryJson("save", "" FOXTEST_ROOT "/foxsdr/h.xml", 2).text)["format"] == "xml");
+        const Built l = sweepHistoryJson("load", "  " FOXTEST_ROOT "/foxsdr/h.csv  ", 2);
         CHECK(l.ok);
         j = json::parse(l.text);
-        CHECK(j["action"] == "load" && j["path"] == "C:/foxsdr/h.csv" && !j.contains("format"));   // a load finds the format itself
+        CHECK(j["action"] == "load" && j["path"] == "" FOXTEST_ROOT "/foxsdr/h.csv" && !j.contains("format"));   // a load finds the format itself
         const Built c = sweepHistoryJson("clear", "", 0);
         CHECK(c.ok && json::parse(c.text) == json({{"action", "clear"}}));
         CHECK(sweepHistoryJson("clear", "anything", 0).ok);                // clear takes no path
         CHECK(!sweepHistoryJson("save", "", 0).ok && !sweepHistoryJson("load", "   ", 0).ok);
         CHECK(!sweepHistoryJson("save", "relative/h.csv", 0).ok && !sweepHistoryJson("load", "h.csv", 0).ok);   // a FULL path only
-        CHECK(!sweepHistoryJson("save", "C:/foxsdr/h\n.csv", 0).ok);
-        CHECK(!sweepHistoryJson("delete", "C:/foxsdr/h.csv", 0).ok);
+        CHECK(!sweepHistoryJson("save", "" FOXTEST_ROOT "/foxsdr/h\n.csv", 0).ok);
+        CHECK(!sweepHistoryJson("delete", "" FOXTEST_ROOT "/foxsdr/h.csv", 0).ok);
         CHECK(historyReadout("{\"lines\":12,\"points\":3600,\"keep_points\":300000}") == "12 sweeps, 3600 points of 300000");
         CHECK(historyReadout("{\"lines\":0,\"points\":0,\"keep_points\":300000}") == "0 sweeps, 0 points of 300000");
         CHECK(historyReadout("").empty() && historyReadout("not json").empty() && historyReadout("[1]").empty());
