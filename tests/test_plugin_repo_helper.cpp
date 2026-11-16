@@ -35,6 +35,14 @@
 #include "core/plugin_repo_helper.hpp"
 #include "test_check.hpp"
 
+// A plugin file must end in the HOST platform's module extension (core/plugin_repo.cpp kModuleExtension): the stand-in
+// bridge is named for the platform the test runs on, so the same install paths are exercised on both.
+#if defined(_WIN32)
+#define TEST_MODULE_EXT ".dll"
+#else
+#define TEST_MODULE_EXT ".so"
+#endif
+
 namespace fs = std::filesystem;
 using cascade::core::PluginCatalogEntry;
 using cascade::core::PluginRepo;
@@ -134,7 +142,7 @@ std::string manifestFor(const std::string& exe) { return "{\"protocol\":1,\"name
 std::string helperIndex(World& w, const Version& v, const std::string& extraHelper = "", const std::string& source = "") {
     const std::string base = "https://dl.example.invalid/" + v.version + "/";
     const std::string stem = v.programName.substr(0, v.programName.rfind('.'));
-    const std::string dllName = "helper-bridge-" + v.version + "-abi3.dll";
+    const std::string dllName = "helper-bridge-" + v.version + "-abi3" TEST_MODULE_EXT;
     w.files[base + dllName] = v.dll;
     w.files[base + v.programName] = v.program;
     w.files[base + stem + ".helper.json"] = v.manifest;
@@ -299,17 +307,17 @@ void testInstall() {
     std::string err, path;
     CHECK(installOne(w, helperIndex(w, v), dir, err, path));
     if (!err.empty()) { std::printf("      %s\n", err.c_str()); }
-    CHECK(fs::exists(dir / "helper-bridge-1.0.0-abi3.dll"));
+    CHECK(fs::exists(dir / "helper-bridge-1.0.0-abi3" TEST_MODULE_EXT));
     CHECK(slurp(dir / "multimon-ng.exe") == v.program);
     CHECK(slurp(dir / "multimon-ng.helper.json") == v.manifest);
     CHECK(slurp(dir / "multimon-ng.LICENSE.txt") == v.licence);
-    CHECK(tree(dir) == (std::vector<std::string>{"helper-bridge-1.0.0-abi3.dll", "multimon-ng.LICENSE.txt", "multimon-ng.exe", "multimon-ng.helper.json"}));   // no .part, no staging
+    CHECK(tree(dir) == (std::vector<std::string>{"helper-bridge-1.0.0-abi3" TEST_MODULE_EXT, "multimon-ng.LICENSE.txt", "multimon-ng.exe", "multimon-ng.helper.json"}));   // no .part, no staging
     // recorded (what the manifest step does) and listed beside installed.json
     std::vector<PluginCatalogEntry> es;
     std::string perr;
     CHECK(parse(helperIndex(w, v), es, perr));
     CHECK(PluginRepo::recordInstall(dir.string(), es[0], err));
-    CHECK(hs::companionsOf(dir.string(), "helper-bridge-1.0.0-abi3.dll") == (std::vector<std::string>{"multimon-ng.exe", "multimon-ng.helper.json", "multimon-ng.LICENSE.txt"}));
+    CHECK(hs::companionsOf(dir.string(), "helper-bridge-1.0.0-abi3" TEST_MODULE_EXT) == (std::vector<std::string>{"multimon-ng.exe", "multimon-ng.helper.json", "multimon-ng.LICENSE.txt"}));
     fs::remove_all(dir);
 }
 
@@ -363,8 +371,8 @@ void testAllOrNothing() {
         std::string err, path;
         CHECK(installOne(w, helperIndex(w, old), dir, err, path));
         // the new version's bridge cannot replace a directory of that name
-        fs::remove(dir / "helper-bridge-1.1.0-abi3.dll");
-        fs::create_directories(dir / "helper-bridge-1.1.0-abi3.dll");
+        fs::remove(dir / "helper-bridge-1.1.0-abi3" TEST_MODULE_EXT);
+        fs::create_directories(dir / "helper-bridge-1.1.0-abi3" TEST_MODULE_EXT);
         Version nv = goodVersion("1.1.0");
         nv.program = myProgram() + std::string(16, '\1');
         CHECK(!installOne(w, helperIndex(w, nv), dir, err, path));
@@ -397,7 +405,7 @@ void testUpdateAndRemove() {
     v2.program = myProgram() + std::string(32, '\2');
     CHECK(installOne(w, helperIndex(w, v2), dir, err, path));
     CHECK(slurp(dir / "multimon-ng.exe") == v2.program);
-    CHECK(slurp(dir / "helper-bridge-1.1.0-abi3.dll") == v2.dll);
+    CHECK(slurp(dir / "helper-bridge-1.1.0-abi3" TEST_MODULE_EXT) == v2.dll);
     {
         bool leftovers = false;
         for (const auto& e : fs::directory_iterator(dir)) {
@@ -413,17 +421,17 @@ void testUpdateAndRemove() {
     w.files["https://dl.example.invalid/1.2.0/multimon-ng.LICENSE.txt"] += "tampered";
     CHECK(!installOne(w, idx3, dir, err, path));
     CHECK(slurp(dir / "multimon-ng.exe") == v2.program);
-    CHECK(!fs::exists(dir / "helper-bridge-1.2.0-abi3.dll"));
+    CHECK(!fs::exists(dir / "helper-bridge-1.2.0-abi3" TEST_MODULE_EXT));
     // remove: the plugin file and the three companions go, helpers.json forgets it
     CHECK(parse(helperIndex(w, v2), es, perr) && PluginRepo::recordInstall(dir.string(), es[0], err));
-    CHECK(hs::companionsOf(dir.string(), "helper-bridge-1.1.0-abi3.dll").size() == 3u);
+    CHECK(hs::companionsOf(dir.string(), "helper-bridge-1.1.0-abi3" TEST_MODULE_EXT).size() == 3u);
     PluginRepo repo;
-    CHECK(repo.remove(dir.string(), "helper-bridge-1.1.0-abi3.dll", err));
+    CHECK(repo.remove(dir.string(), "helper-bridge-1.1.0-abi3" TEST_MODULE_EXT, err));
     CHECK(!fs::exists(dir / "multimon-ng.exe") && !fs::exists(dir / "multimon-ng.helper.json") && !fs::exists(dir / "multimon-ng.LICENSE.txt"));
-    CHECK(hs::companionsOf(dir.string(), "helper-bridge-1.1.0-abi3.dll").empty());
-    CHECK(hs::companionsOf(dir.string(), "helper-bridge-1.0.0-abi3.dll").size() == 3u);   // the first install's entry is another plugin file's: untouched
+    CHECK(hs::companionsOf(dir.string(), "helper-bridge-1.1.0-abi3" TEST_MODULE_EXT).empty());
+    CHECK(hs::companionsOf(dir.string(), "helper-bridge-1.0.0-abi3" TEST_MODULE_EXT).size() == 3u);   // the first install's entry is another plugin file's: untouched
     // the bridge of 1.0.0 is still there from the first install (an update does not remove the old file: that is the manifest's business): not touched by removing 1.1.0
-    CHECK(fs::exists(dir / "helper-bridge-1.0.0-abi3.dll"));
+    CHECK(fs::exists(dir / "helper-bridge-1.0.0-abi3" TEST_MODULE_EXT));
     fs::remove_all(dir);
 }
 

@@ -13,6 +13,7 @@
 #include <process.h>
 #define TEST_GETPID _getpid
 #else
+#include <sys/wait.h>
 #include <unistd.h>
 #define TEST_GETPID getpid
 #endif
@@ -42,7 +43,13 @@ int run(const std::string& args, const fs::path& stdoutFile = {}) {
 #ifndef _WIN32
     cmd = "\"" + g_tool.string() + "\" " + args + (stdoutFile.empty() ? "" : " > \"" + stdoutFile.string() + "\"") + " 2>/dev/null";
 #endif
+#ifdef _WIN32
     return std::system(cmd.c_str());
+#else
+    // POSIX std::system() returns the wait status (exit code 2 is 512): the tool's own exit code is what the cases compare.
+    const int status = std::system(cmd.c_str());
+    return (status != -1 && WIFEXITED(status)) ? WEXITSTATUS(status) : -1;
+#endif
 }
 
 }  // namespace
