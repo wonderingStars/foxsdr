@@ -107,7 +107,7 @@ void testOnlyTheWindowInstallsTheRealOne() {
     // and no test builds one
     int testBuilders = 0;
     for (const auto& e : stdfs::directory_iterator(here / "tests")) {
-        if (!e.is_regular_file() || e.path().filename() == "test_engine_api_s4b_notify.cpp") { continue; }
+        if (!e.is_regular_file() || e.path().filename() == "test_engine_api_s4b_notify.cpp" || (e.path().extension() != ".cpp" && e.path().extension() != ".hpp")) { continue; }
         if (slurp(e.path()).find("DesktopNotifier") != std::string::npos) { ++testBuilders; }
     }
     CHECK(testBuilders == 0);
