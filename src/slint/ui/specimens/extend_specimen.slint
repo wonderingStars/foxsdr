@@ -1,4 +1,4 @@
-// The EXTEND bank specimen sheet (1240 x 3230): the two bodies of ui/extend_bank.slint inside the REAL Section they are shown under (296 wide: the body is 254 px,
+// The EXTEND bank specimen sheet (1240 x 3430): the two bodies of ui/extend_bank.slint inside the REAL Section they are shown under (296 wide: the body is 254 px,
 // the Section's own padding 30 / 12) and the Plugin store page in four states, on the sample models below, so tests/test_slint_extend.cpp can probe the pixels
 // against the Banks artboard (artboards/Workbench-Banks.dc.html: the EXTEND column A4) and the Pages artboard (Workbench-Pages.dc.html: the PLUGIN STORE tab) and
 // press the controls with real pointer and key events.
@@ -17,7 +17,7 @@
 //   10    1070   1000 x 700 (st-browse)    StorePage Browse in three columns: the error and warning lines, two categories, five cards in every key kind, the foot
 //   10    1790   1000 x 700 (st-updates)   StorePage Updates: heading, UPDATE ALL, two rows, the footnotes, CLEAN UP OLD VERSIONS (2) with its lines, and the
 //                             clean-up confirm in the lower right corner
-//   10    2510   1000 x 700 (st-plugin)    StorePage, the plugin page replacing the grid: < BROWSE, header, the page key, report, screenshots, the notice, details
+//   10    2510   1000 x 900 (st-plugin)    StorePage, the plugin page replacing the grid: < BROWSE, header, the page key, report, screenshots, the notice, details
 //   probes: p1..p4 (254-wide layout cells below the window's last row) hold the bare bodies with the longest words and report the cell's width (rule 11)
 //
 // What the test reads: `Rec` counts and names every callback of the components with an override, the sections' y and heights and the pages' measurements are
@@ -89,7 +89,7 @@ component SpecStore inherits StorePage {
 
 export component ExtendSpecimen inherits Window {
     width: 1240px;
-    height: 3230px;
+    height: 3430px;
     background: Theme.bg;
 
     // ---- the geometry the test reads ----
@@ -256,12 +256,16 @@ export component ExtendSpecimen inherits Window {
             shown: true, back-label: "< BROWSE", glyph: "A", name: "ADS-B Aircraft Decoder", version: "1.9.2", badges: root.b-net-1090,
             origin: "FOX & SCHIRMYVER - from the FoxSDR catalogue", key-label: "UPDATE", key-kind: 1, key-enabled: true,
             report: "Fitted 1.9.1 - install report: ok", report-tone: ChipTone.good,
-            screenshots: [@image-url("../icons/search.svg"), @image-url("../icons/check.svg")], picture-index: 0, pictures-note: "Map with trails",
-            what-it-does: "Decodes aircraft position reports and plots them on the Map tab.", whats-new: "Faster decode; fixes ship names.",
+            body: {
+                shown: true, catalogued: true, key: "adsb",
+                frames: [{ image: @image-url("../icons/search.svg"), caption: "Map with trails", word: "" }, { image: @image-url("../icons/check.svg"), caption: "The settings page", word: "" }, { image: @image-url("../icons/search.svg"), caption: "Third", word: "" }, { image: @image-url("../icons/check.svg"), caption: "Fourth", word: "" }], picture-index: 0,
+                what-it-does: "Decodes aircraft position reports and plots them on the Map tab.", whats-new: "Faster decode; fixes ship names.",
+                details-open: true, details-label: "HIDE DETAILS",
+                facts: [{ key: "HOMEPAGE", value: "foxsdr.example/adsb", copyable: true }, { key: "SHA-256", value: "9f2c0000e41a", copyable: true }, { key: "LICENCE", value: "none declared", hatched: true }],
+                reach: [{ key: "Audio decoder", detail: "Fed the demodulated audio the speakers get.", outward: false }, { key: "Can ask to move the receiver", detail: "Refused unless you grant it, per module.", outward: true }],
+                reach-lead: "Declared by the maker, not enforced: it reaches the network.",
+            },
             notice: "The maker states: this plugin sends positions to adsb.example.", notice-ticked: true,
-            details-open: true, details-label: "HIDE DETAILS",
-            details: "HOMEPAGE  foxsdr.example/adsb\nSHA-256  9f2c0000e41a",
-            reach-lead: "Declared by the maker, not enforced: it reaches the network.",
         },
     };
     in-out property <StoreModel> m-store-narrow: {
@@ -320,7 +324,7 @@ export component ExtendSpecimen inherits Window {
     st-short := SpecStore { x: 622px; y: 730px; width: 500px; height: 300px; model: root.m-store-short; }
     st-browse := SpecStore { x: 10px; y: 1070px; width: 1000px; height: 700px; model: root.m-store-browse; }
     st-updates := SpecStore { x: 10px; y: 1790px; width: 1000px; height: 700px; model: root.m-store-updates; }
-    st-plugin := SpecStore { x: 10px; y: 2510px; width: 1000px; height: 700px; model: root.m-store-plugin; }
+    st-plugin := SpecStore { x: 10px; y: 2510px; width: 1000px; height: 900px; model: root.m-store-plugin; }
 
     // the rule-11 probes: a bare body in a 254 px cell asks for no more than 254 px
     HorizontalLayout { x: 10px; y: root.probe-y; width: 254px; height: 20px; p1 := Rectangle { WebBody { model: root.m-web-long; } } }

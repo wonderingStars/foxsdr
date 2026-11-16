@@ -25,7 +25,8 @@ import { LineTone, LogLine, LogView, PicturePane, DetailLine, TargetDetails } fr
 import { FittedRowModel, FittedModules, ReachRowModel, ModulePage } from "fitted.slint";
 import { InstrumentState, InstrumentFace } from "instruments.slint";
 import { MapTarget, LegendRow, MapPane } from "map.slint";
-import { StoreModel, StorePage } from "extend_bank.slint";
+import { StoreModel, StorePage, ExtendEvents } from "extend_bank.slint";
+import { PluginBodyModel, ModuleBodyEvents } from "plugin_body.slint";
 import { PatchPresetsModel, PatchPresetsPage } from "patch_page.slint";
 import { TransmitPageModel, TransmitPage } from "transmit_page.slint";
 import { SurveyPanelPage, SondeViewBar, SondeWell, View3D } from "scene3d_views.slint";   // the 3D views of two plugin pages (docs 6.64)
@@ -216,6 +217,11 @@ export struct FittedModel {
     error: string,
     empty-text: string,
     cleanup-label: string,
+    cleanup-note: string,          // the first three old copies, a line each, beside the key
+    cleanup-report: string,        // what the last clean-up did
+    cleanup-open: bool,            // the question is up
+    cleanup-lines: [string],       // every old copy, for the question
+    cleanup-yes: string,
 }
 
 export struct ModuleModel {
@@ -246,7 +252,7 @@ export struct ModuleModel {
     file-path: string,
     abi-text: string,
     fitted-text: string,
-    catalogue-note: string,
+    body: PluginBodyModel,         // the catalogue body of the module (window gaps 3); shown = false for a module the catalogue does not list
 }
 
 export struct DetailsModel {
@@ -299,6 +305,8 @@ export struct PageTab {
     inst-title: string,
     inst: InstrumentState,
     obs-course: int,
+    paper-newest: string,          // the teleprinter's paper: the newest and the one before it, the last cell of the last two memory rows (the old face's rule)
+    paper-previous: string,
     // 5 .. 8
     map: MapModel,
     fitted: FittedModel,
@@ -534,9 +542,18 @@ export component PageBody inherits Rectangle {
             row-pressed(r) => { root.row-pressed(root.index, r); } clicked(r) => { root.row-clicked(root.index, r); } column-resized(c, w) => { root.column-resized(root.index, c, w); } }
         // 4 instrument: the face, then its memory beneath when the plugin feeds rows
         if root.page.kind == 4 : VerticalLayout { spacing: 0px; vertical-stretch: 1;
-            InstrumentFace { kind: root.page.inst-kind; title: root.page.inst-title; state: root.page.inst; obs-course: root.page.obs-course;
+            InstrumentFace { kind: root.page.inst-kind; title: root.page.inst-title; state: root.page.inst; obs-course: root.page.obs-course; paper-newest: root.page.paper-newest; paper-previous: root.page.paper-previous;
                 obs-changed(v) => { root.obs-changed(root.index, v); } }
-            if root.page.columns.length > 0 : Table { vertical-stretch: 1; columns: root.page.columns; rows: root.page.rows; column-widths: root.page.widths; empty-text: root.page.empty-text;
+            // a fax with a chart to show: the picture on the left and the memory keys beside it, so the keys sit next to the picture they correct (the old window's layout); a press on the
+            // picture is the plugin's own, as on its picture page
+            if root.page.inst-kind == 5 && root.page.have : HorizontalLayout { spacing: 6px; vertical-stretch: 1;
+                PicturePane { horizontal-stretch: 3; min-width: 120px; picture: root.page.picture; have: root.page.have; status: root.page.status; interactive: root.page.interactive;
+                    pic-w: root.page.pic-w; pic-h: root.page.pic-h; save-enabled: root.page.save-enabled; save-note: root.page.save-note;
+                    pressed(x, y) => { root.picture-pressed(root.index, x, y); } save-clicked => { root.picture-save(root.index); } }
+                if root.page.columns.length > 0 : Table { horizontal-stretch: 2; min-width: 240px; columns: root.page.columns; rows: root.page.rows; column-widths: root.page.widths; empty-text: root.page.empty-text;
+                    row-pressed(r) => { root.row-pressed(root.index, r); } clicked(r) => { root.row-clicked(root.index, r); } }
+            }
+            if root.page.columns.length > 0 && !(root.page.inst-kind == 5 && root.page.have) : Table { vertical-stretch: 1; columns: root.page.columns; rows: root.page.rows; column-widths: root.page.widths; empty-text: root.page.empty-text;
                 row-pressed(r) => { root.row-pressed(root.index, r); } clicked(r) => { root.row-clicked(root.index, r); } }
         }
         // 5 map: the toolbar, then the list at the left and the pane at the right
@@ -568,10 +585,11 @@ export component PageBody inherits Rectangle {
         }
         // 6 Fitted modules
         if root.page.kind == 6 : FittedModules { vertical-stretch: 1; rows: root.page.fitted.rows; chips: root.page.fitted.chips; search: root.page.fitted.search; verdict: root.page.fitted.verdict;
-            directory: root.page.fitted.directory; report: root.page.fitted.report; error: root.page.fitted.error; empty-text: root.page.fitted.empty-text; cleanup-label: root.page.fitted.cleanup-label;
+            directory: root.page.fitted.directory; report: root.page.fitted.report; error: root.page.fitted.error; empty-text: root.page.fitted.empty-text; cleanup-label: root.page.fitted.cleanup-label; cleanup-note: root.page.fitted.cleanup-note; cleanup-report: root.page.fitted.cleanup-report;
+            cleanup-open: root.page.fitted.cleanup-open; cleanup-lines: root.page.fitted.cleanup-lines; cleanup-yes: root.page.fitted.cleanup-yes;
             row-clicked(i) => { root.fitted-row-clicked(root.index, i); } row-double-clicked(i) => { root.fitted-row-double-clicked(root.index, i); } run-clicked(i) => { root.fitted-run(root.index, i); }
             remove-clicked(i) => { root.fitted-remove(root.index, i); } chip-toggled(i) => { root.fitted-chip(root.index, i); } search-changed(t) => { root.fitted-search(root.index, t); }
-            scan-clicked => { root.fitted-scan(root.index); } reset-windows-clicked => { root.fitted-reset-windows(root.index); } cleanup-clicked => { root.fitted-cleanup(root.index); } }
+            scan-clicked => { root.fitted-scan(root.index); } reset-windows-clicked => { root.fitted-reset-windows(root.index); } cleanup-clicked => { root.fitted-cleanup(root.index); ExtendEvents.store-cleanup(); } cleanup-answered(yes) => { ExtendEvents.store-cleanup-confirm(yes); } }
         // 7 a module's page
         if root.page.kind == 7 : ModulePage { vertical-stretch: 1; name: root.page.module.name; maker-line: root.page.module.maker-line; state-word: root.page.module.state-word;
             state-lamp: root.page.module.lamp; offers-start: root.page.module.offers-start; run-shown: root.page.module.can-run; tx-hot: root.page.module.tx-hot;
@@ -580,7 +598,8 @@ export component PageBody inherits Rectangle {
             tx-state: root.page.module.tx-state; commands: root.page.module.commands; reach-lead: root.page.module.reach-lead; reach: root.page.module.reach; reach-note: root.page.module.reach-note;
             sentence: root.page.module.sentence; refused: root.page.module.refused; fault: root.page.module.fault; keep-shown: root.page.module.keep-shown; keep-running: root.page.module.keep-running;
             orphan: root.page.module.orphan; integrity: root.page.module.integrity; origin: root.page.module.origin; notice: root.page.module.notice; notice-err: root.page.module.notice-err;
-            file-path: root.page.module.file-path; abi-text: root.page.module.abi-text; fitted-text: root.page.module.fitted-text; catalogue-note: root.page.module.catalogue-note;
+            file-path: root.page.module.file-path; abi-text: root.page.module.abi-text; fitted-text: root.page.module.fitted-text; body: root.page.module.body;
+            body-picked(k, i) => { ModuleBodyEvents.picked(k, i); } body-details(k, on) => { ModuleBodyEvents.details(k, on); }
             back-clicked => { root.module-back(root.index); } run-clicked => { root.module-run(root.index); } tune-toggled(v) => { root.module-grant(root.index, 1, v); }
             settings-toggled(v) => { root.module-grant(root.index, 2, v); } transmit-toggled(v) => { root.module-grant(root.index, 3, v); } command-pressed(i) => { root.module-command(root.index, i); }
             reenable-clicked => { root.module-reenable(root.index); } keep-toggled(v) => { root.module-keep(root.index, v); } }

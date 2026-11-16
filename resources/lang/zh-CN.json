@@ -733,7 +733,6 @@
   "Carrier error": "载波误差",
   "Cassiopeia A": "仙后座 A",
   "Catalogue": "目录",
-  "Catalogue entry: %s (the store's pictures and description come with a later beta)": "目录条目：%s（商店的图片和说明将随后续测试版提供）",
   "Catalogue from %s; could not refresh: %s": "目录（读取时间: %s），刷新失败: %s",
   "Catalogue order": "目录顺序",
   "Catalogue read %s": "目录读取时间: %s",

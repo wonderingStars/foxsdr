@@ -102,6 +102,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -283,6 +284,10 @@ struct PageFact {
     bool copyable = false;
     Tone tone = Tone::Neutral;
 };
+struct ReachLine {                         // what the plugin may do, in words: the capability, the sentence under it, whether it reaches outward
+    std::string key, detail;
+    bool outward = false;
+};
 struct StorePluginPage {
     bool shown = false;
     std::string back_label;                // "< BROWSE"
@@ -314,6 +319,9 @@ struct StorePluginPage {
     bool notice_tick = false;
     std::string notice_tick_label;         // "I have read the notice above and accept responsibility"
     std::vector<PageFact> facts;
+    std::vector<ReachLine> reach;          // the old window's reach rows (window gaps 3, audit U6): what it may do, said before it is fitted
+    std::string no_pictures;               // "No pictures published yet" when the entry lists none (drawn as a sentence, no frame)
+    bool catalogued = true;                // false: not in the catalogue (a module page then has no body)
     std::string reach_lead;                // "Declared by the maker, not enforced..." under the open grid
     std::string screenshots_heading, what_heading, new_heading, details_heading;   // SCREENSHOTS, WHAT IT DOES, WHAT'S NEW, DETAILS
 };
@@ -354,6 +362,7 @@ struct StoreModel {
     bool cleanup_open = false;
     std::string cleanup_title, cleanup_text, cleanup_yes, cleanup_no;
     StorePluginPage plugin;
+    std::vector<StorePluginPage> module_pages;   // the catalogue bodies of the fitted modules' pages that are open (ReadOptions::module_keys), `id` the catalogue key
     // ---- host extras ----
     bool busy = false;                     // a catalogue read or a download is in flight
     std::string busy_label;                // "fetching the catalogue" / "downloading <name>"
@@ -418,6 +427,8 @@ struct ReadOptions {
     CatDraft cat;
     StoreDraft store;
     int server_asks_pending = 0;           // serverAsksPending_: SERVER_CONFIGs sent and not yet answered (the mirrors are not taken from the facts meanwhile)
+    std::vector<std::string> module_keys;  // the catalogue keys of the fitted modules' pages that are shown (their bodies are built from the catalogue)
+    std::set<std::string> module_details;  // the keys whose DETAILS are open
     bool read_store = true;                // false: the Web and CAT bodies only (the store page is not open): the store model holds its draft and nothing else
     std::int64_t now_unix = 0;             // the clock the catalogue line is read against (std::time(nullptr))
 };

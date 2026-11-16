@@ -1,0 +1,52 @@
+#! frames=560 size=1400x1500 bank=1 store=radar-sweep FOXSDR_SLINT_STORE_LOCAL=fixtures/wg3-index.json
+# wg3-store-page (window gaps 3, rows 406 1845 1846 1853 631 and audit U6): the plugin store's page for a plugin from a LOCAL stand-in catalogue
+# (fixtures/wg3-index.json: nothing is fetched; its four pictures are https addresses that cannot be reached, so each frame shows its own words).
+# Radar Sweep has a legal notice, four pictures, and three capabilities that reach outward. The page must show: the pictures as a strip of frames
+# with working arrows, what it does, what it may do in words, the maker's notice before anything is fitted (GET greyed until it is ticked),
+# and the facts as a grid behind SHOW DETAILS. The DECODE row's chip says the catalogue has been read (rows 279, 280).
+10 state running == 1
+# no plugin is fitted, so the page is opened from the DECODE bank's row (the capture seam then selects the plugin once the local catalogue lists it)
++1 click "Plugin store"
++200 state store.frames == 4
+state store.whatItDoes contains "radar sweep does"
+# what it may do, in the old window's words (audit U6)
+state store.reach == "I/Q decoder|Can transmit through FoxSDR|Can ask to move the receiver"
+# the legal notice is on the page and GET is greyed until it is ticked (row 631)
+state store.notice contains "offence in some countries"
+state store.keyEnabled == 0
+state store.noticeTick == 0
++1 click "I have read the maker's notice"
++10 state store.noticeTick == 1
+state store.keyEnabled == 1
++1 click "I have read the maker's notice"
++10 state store.noticeTick == 0
+state store.keyEnabled == 0
+# the strip: the first frame, the arrows (rows 1845, 1846). Four frames do not fit the 640 px column, so the arrows are drawn.
+state store.pictureIndex == 0
+# the first frame is in view before any slide: its own caption (row 1845; merge 6 restored this read, the later one reads frame 2)
+expect "Picture number 1 of the page" label contains "Picture number 1"
+expect "Previous picture" enabled equals "false"
+expect "Next picture" enabled equals "true"
++1 click "Next picture"
++8 state store.pictureIndex == 1
+expect "Previous picture" enabled equals "true"
++1 click "Next picture"
++8 state store.pictureIndex == 2
+# the strip cannot go past its last reachable frame: the right arrow is greyed there
+expect "Next picture" enabled equals "false"
++1 click "Previous picture"
++8 state store.pictureIndex == 1
+# a frame has its own caption (row 1845); the strip is at frame 1 here, so frame 0 has slid out of view: the second caption is read
+expect "Picture number 2 of the page" label contains "Picture number 2"
+# DETAILS (row 1853): the capture seam opens them; fold them, then open them again, and the grid's rows are controls with their own labels
+expect "HIDE DETAILS" enabled equals "true"
+state store.facts >= 10
+expect "MAKER: Example Author" label contains "Example Author"
++1 click "HIDE DETAILS"
++10 expect "SHOW DETAILS" enabled equals "true"
++1 click "SHOW DETAILS"
++10 expect "HIDE DETAILS" enabled equals "true"
+# the DECODE row's chip (rows 279 and 280): the catalogue has been read this session and nothing is waiting, so the word is OK
+state store.chip == OK
+expect "Plugin store"#1 label contains "Plugin store"
++1 shot "wg3-store-page.png"

@@ -216,4 +216,15 @@ std::string imageTitle(const std::string& plugin);          // "<plugin> image"
 std::string mapTitle(const std::string& plugin);            // "<plugin> map"
 std::string countText(std::size_t shown, std::size_t total, std::size_t unplaced);   // "14 targets, 2 heard without a position"
 
+// ---- an instrument page's NEW lamp and the teleprinter's paper (window gaps 3; the old window's kInstrumentNewHoldSec and printedLine) ----
+// The NEW lamp lights when the page first sees a new event and holds for four seconds, then goes out; a later event lights it again. `have` false (no reading) never lights it.
+struct NewHold {
+    std::int64_t seq = -1;
+    std::int64_t atMs = 0;
+    static constexpr std::int64_t kHoldMs = 4000;
+    bool step(bool have, std::int64_t eventSeq, std::int64_t nowMs);
+};
+// The cell of a memory row the teleprinter prints: the LAST column the plugin named (headings.size(), at most `maxColumns`; none named = the last column there is).
+std::size_t paperColumn(std::size_t headings, std::size_t maxColumns);
+
 }  // namespace foxsdr::slintkit

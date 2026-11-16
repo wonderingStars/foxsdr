@@ -45,6 +45,8 @@ export component FittedSpecimen inherits Window {
     in-out property <int> scans;
     in-out property <int> resets;
     in-out property <int> cleanups;
+    in-out property <bool> fm1-cleanup-open;     // the question before CLEAN UP OLD VERSIONS removes anything (window gaps 3)
+    in-out property <int> cleanup-answer;         // 0 none, 1 remove them, 2 keep them
     in-out property <string> last-source;
     in-out property <int> page-events;
     in-out property <string> last-page-event;
@@ -135,6 +137,10 @@ export component FittedSpecimen inherits Window {
         error: root.fm1-error;
         cleanup-report: root.fm1-cleanup-report;
         cleanup-label: "CLEAN UP OLD VERSIONS (3)";
+        cleanup-open: root.fm1-cleanup-open;
+        cleanup-lines: ["adsb-decoder 1.3.9 - adsb-decoder-1.3.9.dll (1.4.1 stays)", "noaa-apt 1.9.0 - noaa-apt-1.9.0.dll (2.0.3 stays)", "frame-log 1.1.0 - frame-log-1.1.0.dll (1.2.0 stays)"];
+        cleanup-yes: "Remove 3 files";
+        cleanup-answered(yes) => { root.cleanup-answer = yes ? 1 : 2; root.fm1-cleanup-open = false; }
         cleanup-note: "adsb-decoder 1.3.9 - adsb-decoder-1.3.9.dll (1.4.1 stays)\nnoaa-apt 1.9.0 - noaa-apt-1.9.0.dll (2.0.3 stays)\nframe-log 1.1.0 - frame-log-1.1.0.dll (1.2.0 stays)";
         row-clicked(i) => { root.row-clicks += 1; root.last-row = i; root.last-source = "FM1"; }
         row-double-clicked(i) => { root.row-doubles += 1; root.last-double = i; root.last-source = "FM1"; }
@@ -144,7 +150,7 @@ export component FittedSpecimen inherits Window {
         search-changed(t) => { root.search-edits += 1; root.last-search = t; root.last-source = "FM1"; }
         scan-clicked => { root.scans += 1; root.last-source = "FM1"; }
         reset-windows-clicked => { root.resets += 1; root.last-source = "FM1"; }
-        cleanup-clicked => { root.cleanups += 1; root.last-source = "FM1"; }
+        cleanup-clicked => { root.cleanups += 1; root.last-source = "FM1"; root.fm1-cleanup-open = true; }
     }
 
     // ---- FM2 ----
@@ -219,7 +225,7 @@ export component FittedSpecimen inherits Window {
         file-path: "C:\\Users\\steve\\AppData\\Local\\FoxSDR\\plugins\\aprs-decoder-1.0.2.dll";
         abi-text: "5, matches this build";
         fitted-text: "Fitted on 12 October 2026 at 14:32.";
-        catalogue-note: "The catalogue entry for this module - its description, pictures and reviews - arrives with the plugin store.";
+        body: { shown: false };   // the catalogue body has its own test (test_slint_plugin_body)
         back-clicked => { root.page-event("MP1", "back", false); }
         run-clicked => { root.page-event("MP1", "run", false); }
         tune-toggled(v) => { root.mp1-tune-on = v; root.page-event("MP1", "tune", v); }

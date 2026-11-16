@@ -464,8 +464,8 @@ Every row of the five plugin tabs of `inventory/` (`decode-bank-plugin-host.txt`
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
 | 278 | Plugin store switch row | key (latched toggle) | PRESENT | the Plugin store row in DecodeBank, drawn as a chip LATER; it opens nothing until the store (a later beta) |
-| 279 | Store chip + lamp | readout / lamp | DEFERRED | the store's BUSY / IDLE / n UPD chip: the store is a later beta (scope locked 2026-11-02) |
-| 280 | Row tooltip | tooltip | DEFERRED | the store row's tooltip sentence: the row is a chip until the store |
+| 279 | Store chip + lamp | readout / lamp | PRESENT | the DECODE bank's Plugin store row chip and lamp: kit_publish.cpp publishDecodeBank, words from extend_logic readStoreChip (BUSY / IDLE / n UPD / OK); the '--' in main.cpp:897 is the generic fallback the DECODE bank does not draw; test railChip (BUSY) + drive wg3-store-chip (the DRAWN chip and lamp: IDLE, then 1 UPD, lamp green with the page up and yellow closed) + wg3-store-page (OK); the bank HEADER chip, which did read '--', now says n RUNNING / IDLE on DECODE (main.cpp bank_chip) |
+| 280 | Row tooltip | tooltip | PRESENT | the row's tooltip is the old window's sentence (kit_publish.cpp publishDecodeBank, the store row) |
 | 281 | Catalogue index.json URL | text field | PRESENT | a Field in DecodeBank, committed on Enter or focus lost (FOXAPP_OP_SET_CATALOGUE_URL) |
 | 282 | Enforcement error | readout | PRESENT | the enforcement error line under the field, in the error tone |
 
@@ -594,8 +594,8 @@ Every row of the five plugin tabs of `inventory/` (`decode-bank-plugin-host.txt`
 | 351 | Preset bar, Plugin settings fold | key set / tree node | PRESENT | PresetBar and the settings fold on the instrument page |
 | 352 | Face | readout | PRESENT | InstrumentFace draws the face of the kind (nine faces) |
 | 353 | Memory table | table | PRESENT | the memory table beneath the face (Table; pressable rows allowed) |
-| 354 | Fax chart panel | readout (clickable) | DEFERRED | the chart is drawn in the FaxFace paper slot, not beside the memory table; the full-size picture is the picture page |
-| 355 | NEW hold | lamp | DEFERRED | the NEW lamp follows the unread seq and clears when the page draws; the 4 s hold is not kept |
+| 354 | Fax chart panel | readout (clickable) | PRESENT | a fax page with a chart shows the picture (PicturePane: status, press = the plugin's own image press) on the left and the memory keys beside it (pages.slint kind 4); UNVERIFIED end to end (needs a fax plugin run) |
+| 355 | NEW hold | lamp | PRESENT | kit_logic.hpp NewHold: lit for 4 s from the first sight of an event, out after, lit again by a new one; test_slint_host_kit |
 
 ## DECODE bank and plugin host — Map page (generic, non-satellite) - brief, map agent owns the detail
 
@@ -646,7 +646,7 @@ Every row of the five plugin tabs of `inventory/` (`decode-bank-plugin-host.txt`
 | 388 | STOP / START | button | PRESENT | STOP / START on the row |
 | 389 | REMOVE | button | PRESENT | REMOVE / REMOVE FILE on the row, first step of the two-step delete |
 | 390 | CONFIRM | button | PRESENT | CONFIRM within 5 s |
-| 391 | Cleanup foot | button + dialog | DEFERRED | CLEAN UP OLD VERSIONS (n) and its dialog: the store is a later beta (the foot is in FittedModules; the host feeds it no label) |
+| 391 | Cleanup foot | button + dialog | PRESENT | the Fitted modules page's foot: label CLEAN UP OLD VERSIONS (n), the first three old copies and the report (kit_publish.cpp fillFitted from the store's facts, read with the store page closed); the key asks first and only 'Remove n files' sends FOXAPP_OP_STORE_CLEAN_OLD; tests windowGaps3 and test_slint_fitted |
 | 392 | Empty-list text | readout | PRESENT | the empty-list sentences |
 
 ## DECODE bank and plugin host — Module page (click a name)
@@ -666,7 +666,7 @@ Every row of the five plugin tabs of `inventory/` (`decode-bank-plugin-host.txt`
 | 403 | Keep running | checkbox | PRESENT | the Keep running checkbox |
 | 404 | Notes | readout | PRESENT | the orphan / integrity / origin / notice lines |
 | 405 | FILE / PLUGIN ABI / fitted date | readout | PRESENT | FILE, PLUGIN ABI and the fitted date (FactRow) |
-| 406 | Catalogue body | readout/key | DEFERRED | the catalogue body (SCREENSHOTS, WHAT IT DOES, WHAT'S NEW, DETAILS): the store is a later beta |
+| 406 | Catalogue body | readout/key | PRESENT | PluginBody (ui/plugin_body.slint) mounted by the fitted module page: SCREENSHOTS strip, WHAT IT DOES, WHAT'S NEW, DETAILS from the catalogue entry its install record names (window gaps 3, docs/multi-radio-records/window-gaps-3.md); a module the catalogue does not list gets no body |
 
 ## DECODE bank and plugin host — Preset bar (window-side preset keys)
 
@@ -711,7 +711,7 @@ Every row of the five plugin tabs of `inventory/` (`decode-bank-plugin-host.txt`
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 426 | Paper strip | readout | DEFERRED | PaperStrip prints the plugin's text slots; the older lines of the roll are not fed by the host yet |
+| 426 | Paper strip | readout | PRESENT | the teleprinter's paper is fed the last two printed lines from the memory rows (kit_publish.cpp fillInstrument, paperColumn); InstrumentFace draws them in PaperStrip; UNVERIFIED end to end (needs a teleprinter plugin run) |
 | 427 | STATUS group | lamp/indicator | PRESENT | the STATUS lamps PAPER, READY, NEW, ALERT (ALERT blinks) |
 | 428 | MESSAGES | readout | PRESENT | the MESSAGES drums |
 | 429 | Controls | - | PRESENT | no scroll or tear key, by the house rule |
@@ -1006,7 +1006,7 @@ Every row of the five plugin tabs of `inventory/` (`decode-bank-plugin-host.txt`
 | 628 | Burst log col 2 | column | PRESENT | a column of the memory table beneath the face (Table) |
 | 629 | Burst log col 3 | column | PRESENT | a column of the memory table beneath the face (Table) |
 | 630 | Burst log col 4 | column | PRESENT | a column of the memory table beneath the face (Table) |
-| 631 | Safety wording | description text | DEFERRED | the store's catalogue body is a later beta (the plugin's red banner line is in the Decoder output page) |
+| 631 | Safety wording | description text | PRESENT | the legal notice is on the plugin page before install (BEFORE YOU FIT IT, GET greyed until ticked), from the catalogue's legalNotice (fact.store.<id>.legal); drive wg3-store-page on a stand-in catalogue |
 
 ## Plugins: aircraft and marine — NAVTEX & DSC (marine) (navtex-dsc-decoder 1.0.0)
 
@@ -2654,8 +2654,8 @@ The departures the family's header states, as they bear on the rows: UPDATE ALL 
 |---|---|---|---|---|
 | 1802 | Rail catalogue URL | text field | RELOCATED | the DECODE bank's catalogue URL Field (phase 2 row 281, FOXAPP_OP_SET_CATALOGUE_URL); the store page does not repeat it |
 | 1803 | Rail "Disabled" rows | list | RELOCATED | the DECODE bank's Disabled cards (phase 2 rows 283 to 288), ticked again in the retired-modules block below |
-| 1804 | Too-narrow message | readout | DEFERRED | the narrow top bar and its message: not found in extend_bank.slint; StorePage lays out at any width (cards 1, 2 or 3 to a row by the inner width, the search box never under 80 px) and the tab group and the three keys keep their places; no message is drawn |
-| 1805 | Too-small message | readout | DEFERRED | not found in extend_bank.slint: no message for a face under 40 px |
+| 1804 | Too-narrow message | readout | PRESENT | StorePage shows 'This window is too narrow to lay out the catalogue. Widen it and the plugins come back.' under 320 px wide or 200 px high (the old window's 900 px minimum was for its card grid) |
+| 1805 | Too-small message | readout | PRESENT | StorePage under 40 px: 'Too small - drag the window larger.' |
 | 1806 | Search | text field (with loupe) | PRESENT | SearchBox (loupe, placeholder 'Search the catalogue') -> store-search on each edit -> applyStoreSearch: [local] draft search, a plugin page closed |
 | 1807 | BROWSE tab | key (latched) | PRESENT | SegKey in the SegGroup, lit while tab is 0 -> store-tab(0) -> applyStoreTab: [local] tab, page closed |
 | 1808 | UPDATES (n) tab | key (latched) | PRESENT | SegKey 'UPDATES (n)' (n from the model's updates), lit while tab is 1 -> store-tab(1) -> applyStoreTab |
@@ -2705,22 +2705,22 @@ The departures the family's header states, as they bear on the rows: UPDATE ALL 
 | 1842 | Header | readout | PRESENT | GlyphTile, the name, the meta line (maker, version, size, platforms, host) joined to the origin note with a middle dot, and the BadgeFlow badges |
 | 1843 | Page key | button | PRESENT | StoreKey at the top right -> store-plugin-key -> applyStorePluginKey: as the card's key with the page's own tick (GET greyed until the notice tick); no amber version-note and no progress line beside it (StorePluginPage has no field for either) |
 | 1844 | Install report/error | readout | PRESENT | Note report in report-tone (green, or the error tone) for this plugin only |
-| 1845 | SCREENSHOTS | readout + strip | DEFERRED | the framed strip with a caption per frame is not drawn: the page shows ONE picture at a time (Image, contain) in a 132 px frame with one caption line (pictures-note) under it; no horizontal strip, no wheel scroll, no per-frame placeholder with its loading or failure words (PictureFrame.state and word have no Slint field) |
-| 1846 | Strip arrows | button | DEFERRED | drawn (a Key either side, greyed at the ends) and given no effect: store-picture(i) -> applyStorePicture returns an empty Effect and the draft holds no picture index, so picture-index (a field the host must set) does not move unless the publisher keeps one; they are drawn always, not only on overflow |
+| 1845 | SCREENSHOTS | readout + strip | PRESENT | PictureStrip in plugin_body.slint: 16:10 frames with a caption under each, the frame's own words when it has no picture; a page with no picture shows 'No pictures published yet' and no empty frame; drive wg3-store-page |
+| 1846 | Strip arrows | button | PRESENT | the arrows are drawn only when the frames overflow, grey at the ends, move one frame (ExtendEvents.store-picture -> the publisher's index) and the wheel over the strip moves it while it can; drive wg3-store-page reads store.pictureIndex 0 -> 1 -> 2 -> 1 |
 | 1847 | WHAT IT DOES | readout | PRESENT | Caption and Note what-it-does; the 'none' fallback wording is the host's |
 | 1848 | WHAT'S NEW | readout | PRESENT | Caption and Note whats-new |
 | 1849 | BEFORE YOU FIT IT | readout (amber box) | PRESENT | the amber box (caption and the maker's notice, verbatim), drawn while notice is not empty (the host leaves it empty once the plugin is fitted) |
 | 1850 | Notice tick | checkbox | PRESENT | SentenceTick in the box -> store-plugin-notice(bool) (ADDED, the contract has no callback for it) -> applyStoreNoticeTick: [local] notice_tick, which enables GET |
 | 1851 | DETAILS | readout | PRESENT | the DETAILS caption row |
 | 1852 | SHOW DETAILS / HIDE DETAILS | button | PRESENT | Key xs -> store-plugin-details(!open) -> applyStorePluginDetails: [local] details_open |
-| 1853 | Facts grid | table | DEFERRED | the facts are drawn as ONE mono Note of 'KEY: value' lines (details) while open, not as a table: the hatched unknown values with their reasons and the read-only selectable HOMEPAGE and SHA-256 fields are not drawn (PageFact.hatched and copyable have no Slint field) |
+| 1853 | Facts grid | table | PRESENT | FactLine rows in plugin_body.slint: name column + value; a fact with no source is dim, slanted, darker ground with its reason (the ruled hatch is replaced by that look); a URL or digest is read-only selectable text; drive wg3-store-page |
 | 1854 | Reach lead | readout | PRESENT | Note reach-lead under the details, drawn while it is not empty |
 
 ## Fitted modules — window (rail key Plugins): top bar and list
 
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
-| 1855 | Too-narrow message | readout | DEFERRED | not found in fitted.slint: the kit's Fitted modules page is a docked tab or a torn window that scrolls, with no too-narrow message (its state chips drop to a second line instead) |
+| 1855 | Too-narrow message | readout | PRESENT | FittedModules under 240 x 160 px: 'Too narrow to draw. Widen the window.'; under 40 px: 'Too small - drag the window larger.' |
 | 1856 | Search | text field | RELOCATED | the kit's fitted page (phase 2 row 379): the Search fitted modules box |
 | 1857 | State chips (6) | toggle | RELOCATED | the kit's fitted page (phase 2 row 380): StateChips with counts and lamps, each toggles the filter |
 | 1858 | RESET WINDOW SIZES | button | RELOCATED | the kit's fitted page (phase 2 row 382): every page back to its default rectangle |
@@ -2733,7 +2733,7 @@ The departures the family's header states, as they bear on the rows: UPDATE ALL 
 | 1865 | Row STOP / START | button | RELOCATED | the kit's fitted page (phase 2 row 388) |
 | 1866 | Row REMOVE | button | RELOCATED | the kit's fitted page (phase 2 row 389): the first step of the two-step delete |
 | 1867 | Row CONFIRM | button | RELOCATED | the kit's fitted page (phase 2 row 390): CONFIRM within 5 s |
-| 1868 | CLEAN UP OLD VERSIONS | button + modal | DEFERRED | phase 2 row 391 is DEFERRED and still true: FittedModules has the foot key (cleanup-label) but kit_publish.cpp feeds it an empty label and the page-fitted-cleanup handler is empty; the store's confirm panel (row 1832) is not reachable from the Fitted page |
+| 1868 | CLEAN UP OLD VERSIONS | button + modal | PRESENT | the same foot and question on the Fitted modules page (FittedModules cleanup-open / cleanup-answered -> ExtendEvents.store-cleanup-confirm); test_slint_fitted draws the question, KEEP THEM sends nothing, Remove n files answers yes; the engine removal is the store's existing FOXAPP_OP_STORE_CLEAN_OLD (UNVERIFIED against real files: no scratch plugins folder was needed) |
 
 ## Fitted modules — Module page (click a row)
 
@@ -2750,7 +2750,7 @@ The departures the family's header states, as they bear on the rows: UPDATE ALL 
 | 1877 | Keep running | checkbox | RELOCATED | the kit's module page (phase 2 row 403) |
 | 1878 | Notes | readout | RELOCATED | the kit's module page (phase 2 rows 402 and 404): the state sentence and the orphan, integrity, origin and notice lines |
 | 1879 | FILE / PLUGIN ABI / fitted date | readout | RELOCATED | the kit's module page (phase 2 row 405): FactRow lines |
-| 1880 | Shared page body | readout | DEFERRED | phase 2 row 406 is DEFERRED: the module page shows only a one-line catalogue note in place of SCREENSHOTS, WHAT IT DOES, WHAT'S NEW and DETAILS; the store's plugin page (rows 1845 to 1854) draws them for the store only |
+| 1880 | Shared page body | readout | PRESENT | the module page mounts the same PluginBody as the store page (one renderer, as the old window's drawModulePageBody); built from the catalogue by extend_logic fillBody and handed over by ExtendPublisher::handModuleBodies -> KitPublisher::setModuleBodies |
 
 ## Fitted modules — Retired modules ("Disabled" rows on the rail, under the store row)
 

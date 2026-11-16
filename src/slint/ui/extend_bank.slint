@@ -27,6 +27,7 @@ import { Checkbox } from "fields.slint";
 import { SelectKey } from "sections.slint";
 import { TipTimer, ElidedHint } from "tooltip.slint";
 import { SelectItem } from "signal_bank.slint";
+import { PluginBody, PluginBodyModel } from "plugin_body.slint";
 
 // ---- Web access and CAT control ----
 export struct WebModel {
@@ -59,12 +60,9 @@ export struct UpdateRow { id: string, glyph: string, name: string, version-note:
 
 export struct StorePluginPage {
     shown: bool, back-label: string, glyph: string, name: string, version: string, badges: [StoreBadge], origin: string,
-    key-label: string, key-kind: int, key-enabled: bool, report: string, report-tone: ChipTone, screenshots: [image], what-it-does: string,
-    whats-new: string, details: string, details-open: bool, details-label: string,
-    picture-index: int,                                // ADDED: which of `screenshots` the strip shows (the arrows ask for index - 1 / + 1 through store-picture)
-    pictures-note: string,                             // ADDED: the caption under the strip, or "No pictures published yet" / "loading..." when there is none
+    key-label: string, key-kind: int, key-enabled: bool, report: string, report-tone: ChipTone,
+    body: PluginBodyModel,                             // CHANGED (window gaps 3): the catalogue body - the strip of pictures with a caption each, what it does, what's new, what it may do, DETAILS as a grid
     notice: string, notice-ticked: bool,               // ADDED: the maker's legal notice (the amber BEFORE YOU FIT IT box, "" none) and its tick; GET stays greyed until it is ticked
-    reach-lead: string,                                // ADDED: the sentence under the facts (what the plugin reaches); "" none
 }
 
 export struct StoreModel {
@@ -1244,6 +1242,9 @@ export component StorePage inherits Rectangle {
     out property <length> scrolled: body.scrolled;
 
     property <length> pad: 12px;
+    property <length> pw: min(root.iw, 640px);      // the plugin page's readable measure
+    property <bool> too-small: root.width < 40px || root.height < 40px;
+    property <bool> too-narrow: !root.too-small && (root.width < 320px || root.height < 200px);
     property <length> iw: max(0px, root.width - 2 * root.pad);
     property <length> grid-gap: 6px;
     property <int> cols: root.iw >= 612px ? 3 : root.iw >= 400px ? 2 : 1;
@@ -1501,148 +1502,75 @@ export component StorePage inherits Rectangle {
                 }
             }
 
-            // THE PLUGIN PAGE: replaces the grid
-            if root.model.plugin.shown : VerticalLayout {
-                spacing: 8px;
+            // THE PLUGIN PAGE: replaces the grid, in a column of a readable width
+            if root.model.plugin.shown : HorizontalLayout {
                 alignment: start;
-                Rectangle {
-                    height: Theme.key-sm-h;
-                    Key {
-                        x: 0px;
-                        y: 0px;
-                        width: self.preferred-width;
-                        small: true;
-                        label: root.model.plugin.back-label != "" ? root.model.plugin.back-label : @tr("< BROWSE");
-                        clicked => { root.store-plugin-back(); }
-                    }
-                    StoreKey {
-                        x: root.iw - self.width;
-                        y: 0px;
-                        width: self.preferred-width;
-                        kind: root.model.plugin.key-kind;
-                        allowed: root.model.plugin.key-enabled;
-                        label: root.model.plugin.key-label;
-                        clicked => { root.store-plugin-key(); }
-                    }
-                }
-                Rectangle {
-                    height: max(30px, head-name.height + 2px + head-origin.height);
-                    GlyphTile { x: 0px; y: 0px; glyph: root.model.plugin.glyph; }
-                    head-name := Note { x: 38px; y: 0px; width: root.iw - 38px; wrap-w: root.iw - 38px; text: root.model.plugin.name; ink: Theme.fg; size: 13px; weight: Theme.weight-semibold; }
-                    head-origin := Note {
-                        x: 38px;
-                        y: head-name.height + 2px;
-                        width: root.iw - 38px;
-                        wrap-w: root.iw - 38px;
-                        text: root.model.plugin.version != "" && root.model.plugin.origin != "" ? root.model.plugin.version + "  \u{b7}  " + root.model.plugin.origin : root.model.plugin.version + root.model.plugin.origin;
-                    }
-                }
-                if root.model.plugin.badges.length > 0 : BadgeFlow { badges: root.model.plugin.badges; }
-                if root.model.plugin.report != "" : Note { wrap-w: root.iw; text: root.model.plugin.report; tone: root.model.plugin.report-tone; }
-
-                Caption { label: @tr("Screenshots"); }
-                Rectangle {
-                    height: 132px;
-                    clip: true;
-                    prev-key := Key {
-                        x: 0px;
-                        y: (parent.height - self.height) / 2;
-                        width: 22px;
-                        xs: true;
-                        min-w: 0px;
-                        label: "\u{2039}";
-                        enabled: root.model.plugin.picture-index > 0;
-                        accessible-label: @tr("Previous picture");
-                        clicked => { root.store-picture(root.model.plugin.picture-index - 1); }
-                    }
-                    strip := Rectangle {
-                        x: 26px;
-                        y: 0px;
-                        width: max(0px, root.iw - 52px);
-                        height: parent.height;
-                        border-radius: 4px;
-                        border-width: Theme.hairline;
-                        border-color: Theme.line-strong;
-                        background: Theme.well;
-                        clip: true;
-                        if root.model.plugin.screenshots.length > 0 : Image {
-                            x: 2px;
-                            y: 2px;
-                            width: parent.width - 4px;
-                            height: parent.height - 4px;
-                            source: root.model.plugin.screenshots[max(0, min(root.model.plugin.screenshots.length - 1, root.model.plugin.picture-index))];
-                            image-fit: contain;
-                            accessible-role: image;
-                            accessible-label: root.model.plugin.pictures-note;
-                        }
-                        if root.model.plugin.screenshots.length == 0 : Text {
-                            x: 8px;
+                VerticalLayout {
+                    width: root.pw;
+                    spacing: 8px;
+                    alignment: start;
+                    Rectangle {
+                        height: Theme.key-sm-h;
+                        Key {
+                            x: 0px;
                             y: 0px;
-                            width: parent.width - 16px;
-                            height: parent.height;
-                            text: root.model.plugin.pictures-note;
-                            color: Theme.dim;
-                            font-family: Theme.font-ui;
-                            font-size: Theme.font-small;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                            wrap: word-wrap;
+                            width: self.preferred-width;
+                            small: true;
+                            label: root.model.plugin.back-label != "" ? root.model.plugin.back-label : @tr("< BROWSE");
+                            clicked => { root.store-plugin-back(); }
+                        }
+                        StoreKey {
+                            x: root.pw - self.width;
+                            y: 0px;
+                            width: self.preferred-width;
+                            kind: root.model.plugin.key-kind;
+                            allowed: root.model.plugin.key-enabled;
+                            label: root.model.plugin.key-label;
+                            clicked => { root.store-plugin-key(); }
                         }
                     }
-                    next-key := Key {
-                        x: parent.width - self.width;
-                        y: (parent.height - self.height) / 2;
-                        width: 22px;
-                        xs: true;
-                        min-w: 0px;
-                        label: "\u{203a}";
-                        enabled: root.model.plugin.picture-index < root.model.plugin.screenshots.length - 1;
-                        accessible-label: @tr("Next picture");
-                        clicked => { root.store-picture(root.model.plugin.picture-index + 1); }
+                    Rectangle {
+                        height: max(30px, head-name.height + 2px + head-origin.height);
+                        GlyphTile { x: 0px; y: 0px; glyph: root.model.plugin.glyph; }
+                        head-name := Note { x: 38px; y: 0px; width: root.pw - 38px; wrap-w: root.pw - 38px; text: root.model.plugin.name; ink: Theme.fg; size: 13px; weight: Theme.weight-semibold; }
+                        head-origin := Note {
+                            x: 38px;
+                            y: head-name.height + 2px;
+                            width: root.pw - 38px;
+                            wrap-w: root.pw - 38px;
+                            text: root.model.plugin.version != "" && root.model.plugin.origin != "" ? root.model.plugin.version + "  \u{b7}  " + root.model.plugin.origin : root.model.plugin.version + root.model.plugin.origin;
+                        }
                     }
-                }
-                if root.model.plugin.screenshots.length > 0 : Note { wrap-w: root.iw; text: root.model.plugin.pictures-note; }
-
-                Caption { label: @tr("What it does"); }
-                if root.model.plugin.what-it-does != "" : Note { wrap-w: root.iw; text: root.model.plugin.what-it-does; ink: Theme.fg; }
-                Caption { label: @tr("What's new"); }
-                if root.model.plugin.whats-new != "" : Note { wrap-w: root.iw; text: root.model.plugin.whats-new; ink: Theme.fg; }
-                if root.model.plugin.notice != "" : Rectangle {
-                    height: notice-col.preferred-height + 16px;
-                    border-radius: Theme.radius-panel;
-                    border-width: Theme.hairline;
-                    border-color: Theme.card-warn-line;
-                    background: Theme.card-warn;
-                    notice-col := VerticalLayout {
-                        x: 8px;
-                        y: 8px;
-                        width: parent.width - 16px;
-                        spacing: 4px;
-                        alignment: start;
-                        Caption { label: @tr("Before you fit it"); color: Theme.chip-warn-fg; }
-                        Note { wrap-w: root.iw - 16px; text: root.model.plugin.notice; tone: ChipTone.warn; }
-                        SentenceTick {
-                            wrap-w: root.iw - 16px;
-                            sentence: @tr("I have read the maker's notice");
-                            on: root.model.plugin.notice-ticked;
-                            toggled(v) => { root.store-plugin-notice(v); }
+                    if root.model.plugin.badges.length > 0 : BadgeFlow { badges: root.model.plugin.badges; }
+                    if root.model.plugin.report != "" : Note { wrap-w: root.pw; text: root.model.plugin.report; tone: root.model.plugin.report-tone; }
+                    PluginBody {
+                        body: root.model.plugin.body;
+                        picked(i) => { root.store-picture(i); }
+                        details-toggled(on) => { root.store-plugin-details(on); }
+                        if root.model.plugin.notice != "" : Rectangle {
+                            height: notice-col.preferred-height + 16px;
+                            border-radius: Theme.radius-panel;
+                            border-width: Theme.hairline;
+                            border-color: Theme.card-warn-line;
+                            background: Theme.card-warn;
+                            notice-col := VerticalLayout {
+                                x: 8px;
+                                y: 8px;
+                                width: parent.width - 16px;
+                                spacing: 4px;
+                                alignment: start;
+                                Caption { label: @tr("Before you fit it"); color: Theme.chip-warn-fg; }
+                                Note { wrap-w: root.pw - 16px; text: root.model.plugin.notice; tone: ChipTone.warn; }
+                                SentenceTick {
+                                    wrap-w: root.pw - 16px;
+                                    sentence: @tr("I have read the maker's notice");
+                                    on: root.model.plugin.notice-ticked;
+                                    toggled(v) => { root.store-plugin-notice(v); }
+                                }
+                            }
                         }
                     }
                 }
-                Rectangle {
-                    height: Theme.key-xs-h + 4px;
-                    Text { x: 0px; y: 0px; width: details-key.x - 8px; height: parent.height; text: @tr("DETAILS"); color: Theme.muted; font-family: Theme.font-ui; font-size: Theme.font-cap; font-weight: Theme.weight-semibold; letter-spacing: Theme.cap-spacing; vertical-alignment: center; }
-                    details-key := Key {
-                        x: root.iw - self.width;
-                        y: 2px;
-                        width: self.preferred-width;
-                        xs: true;
-                        label: root.model.plugin.details-label != "" ? root.model.plugin.details-label : (root.model.plugin.details-open ? @tr("HIDE DETAILS") : @tr("SHOW DETAILS"));
-                        clicked => { root.store-plugin-details(!root.model.plugin.details-open); }
-                    }
-                }
-                if root.model.plugin.details-open : Note { wrap-w: root.iw; text: root.model.plugin.details; mono: true; ink: Theme.fg-soft; }
-                if root.model.plugin.reach-lead != "" : Note { wrap-w: root.iw; text: root.model.plugin.reach-lead; }
             }
         }
     }
@@ -1678,6 +1606,28 @@ export component StorePage inherits Rectangle {
                 Key { small: true; on: true; label: root.model.cleanup-yes; clicked => { root.store-cleanup-confirm(true); } }
                 Key { small: true; label: root.model.cleanup-no != "" ? root.model.cleanup-no : @tr("Keep them"); clicked => { root.store-cleanup-confirm(false); } }
             }
+        }
+    }
+
+    // ---- too narrow or too small to lay the page out: it says so (the old window's words) instead of drawing a squashed bar ----
+    if root.too-narrow || root.too-small : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: Theme.panel;
+        TouchArea { }
+        Text {
+            x: 8px;
+            y: 8px;
+            width: max(1px, root.width - 16px);
+            height: max(1px, root.height - 16px);
+            text: root.too-small ? @tr("Too small - drag the window larger.") : @tr("This window is too narrow to lay out the catalogue. Widen it and the plugins come back.");
+            color: Theme.chip-warn-fg;
+            font-family: Theme.font-ui;
+            font-size: Theme.font-small;
+            wrap: word-wrap;
+            overflow: clip;
         }
     }
 }

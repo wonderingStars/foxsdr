@@ -315,17 +315,17 @@ void ExtendPublisher::wantPictures(const StorePluginPage& page) {
     }
 }
 
-// The screenshots of the open page as images: one a frame the catalogue lists, blank while a frame has no picture (loading, failed, undecodable). While NO frame has one the
-// list is empty and the words are the first frame's (the well shows them): "No pictures published yet", "loading...", the failure's reason. With some, the note is the current
-// frame's caption, and its words too when it has no picture.
-std::shared_ptr<slint::Model<slint::Image>> ExtendPublisher::mapScreenshots(const StorePluginPage& page, std::string& note) {
-    std::vector<slint::Image> images;
-    std::vector<std::string> words;
-    std::vector<std::string> captions;
-    bool any = false;
-    for (const PictureFrame& f : page.screenshots) {
+// The catalogue body of a page as the window shows it: one frame a picture the entry lists (the image blank while it loads, failed or did not decode, and the frame's
+// words then), the caption of each, the sentences, the facts and what the plugin may do. A page that lists no picture has none to show: its sentence only.
+::PluginBodyModel ExtendPublisher::mapBody(const StorePluginPage& p, int pictureIndex) {
+    ::PluginBodyModel b{};
+    b.key = ss(p.id);
+    b.shown = p.shown;
+    b.catalogued = p.catalogued;
+    std::vector<::BodyFrame> frames;
+    for (const PictureFrame& f : p.screenshots) {
         if (f.sha256.empty()) { continue; }
-        slint::Image image;
+        ::BodyFrame fr{};
         std::string word = f.word;
         if (f.state == kPicReady) {
             const auto it = pictures_->done.find(f.sha256);
@@ -334,28 +334,43 @@ std::shared_ptr<slint::Model<slint::Image>> ExtendPublisher::mapScreenshots(cons
             } else if (!it->second.error.empty()) {
                 word = cascade::gui::trStoredReason(it->second.error);
             } else {
-                image = it->second.image;
+                fr.image = it->second.image;
                 word.clear();
-                any = true;
             }
         }
-        images.push_back(std::move(image));
-        words.push_back(std::move(word));
-        captions.push_back(f.caption);
+        fr.caption = ss(f.caption);
+        fr.word = ss(word);
+        frames.push_back(std::move(fr));
     }
-    if (images.empty()) {
-        // no frame carries a sha: the lone "No pictures published yet" frame (or none at all)
-        note = page.screenshots.empty() ? std::string() : page.screenshots.front().word;
-        return model(std::vector<slint::Image>{});
+    const int n = static_cast<int>(frames.size());
+    b.frames = model(std::move(frames));
+    b.picture_index = std::max(0, std::min(pictureIndex, n - 1));
+    b.no_pictures = ss(n == 0 ? p.no_pictures : std::string());
+    b.what_it_does = ss(p.what_it_does);
+    b.whats_new = ss(p.whats_new);
+    b.details_open = p.details_open;
+    b.details_label = ss(p.details_label);
+    std::vector<::BodyFact> facts;
+    for (const PageFact& f : p.facts) {
+        ::BodyFact x{};
+        x.key = ss(f.key);
+        x.value = ss(f.value);
+        x.hatched = f.hatched;
+        x.copyable = f.copyable;
+        facts.push_back(std::move(x));
     }
-    if (!any) {
-        note = words.front();
-        return model(std::vector<slint::Image>{});
+    b.facts = model(std::move(facts));
+    std::vector<::BodyReach> reach;
+    for (const ReachLine& r : p.reach) {
+        ::BodyReach x{};
+        x.key = ss(r.key);
+        x.detail = ss(r.detail);
+        x.outward = r.outward;
+        reach.push_back(std::move(x));
     }
-    const std::size_t at = static_cast<std::size_t>(std::clamp(pictureIndex_, 0, static_cast<int>(images.size()) - 1));
-    note = captions[at];
-    if (!words[at].empty()) { note += (note.empty() ? "" : "  ") + words[at]; }
-    return model(std::move(images));
+    b.reach = model(std::move(reach));
+    b.reach_lead = ss(p.details_open ? p.reach_lead : std::string());
+    return b;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -398,6 +413,14 @@ std::shared_ptr<slint::Model<slint::Image>> ExtendPublisher::mapScreenshots(cons
     return o;
 }
 
+// The content of a page's catalogue body, as one string.
+static void sigPage(std::string& s, const StorePluginPage& p) {
+    for (const PictureFrame& f : p.screenshots) { sigAdd(s, f.sha256); sigAdd(s, f.caption); sigAdd(s, f.state); sigAdd(s, f.word); sigAdd(s, f.path); }
+    sigAdd(s, p.what_it_does); sigAdd(s, p.whats_new); sigAdd(s, p.details_open); sigAdd(s, p.details_label); sigAdd(s, p.no_pictures); sigAdd(s, p.catalogued); sigAdd(s, p.shown);
+    for (const PageFact& f : p.facts) { sigAdd(s, f.key); sigAdd(s, f.value); sigAdd(s, f.hatched); }
+    for (const ReachLine& r : p.reach) { sigAdd(s, r.key); sigAdd(s, r.detail); sigAdd(s, r.outward); }
+}
+
 // Everything of the store model the window shows, as one string: the guard that keeps a model whose content did not move from being set again (a set list recreates every
 // repeater item behind it, and the page's cards are three lists deep).
 static std::string storeSig(const StoreModel& m, int pictureIndex, std::uint64_t pictureRevision) {
@@ -430,9 +453,8 @@ static std::string storeSig(const StoreModel& m, int pictureIndex, std::uint64_t
     const StorePluginPage& p = m.plugin;
     sigAdd(s, p.shown); sigAdd(s, p.back_label); sigAdd(s, p.glyph); sigAdd(s, p.name); sigAdd(s, p.version); sigBadges(s, p.badges); sigAdd(s, p.origin);
     sigAdd(s, p.key_label); sigAdd(s, p.key_kind); sigAdd(s, p.key_enabled); sigAdd(s, p.report); sigAdd(s, static_cast<int>(p.report_tone));
-    for (const PictureFrame& f : p.screenshots) { sigAdd(s, f.sha256); sigAdd(s, f.caption); sigAdd(s, f.state); sigAdd(s, f.word); sigAdd(s, f.path); }
-    sigAdd(s, p.what_it_does); sigAdd(s, p.whats_new); sigAdd(s, p.details); sigAdd(s, p.details_open); sigAdd(s, p.details_label);
-    sigAdd(s, p.notice_shown ? p.notice : std::string()); sigAdd(s, p.notice_tick); sigAdd(s, p.reach_lead);
+    sigPage(s, p);
+    sigAdd(s, p.notice_shown ? p.notice : std::string()); sigAdd(s, p.notice_tick);
     sigAdd(s, pictureIndex);
     sigAdd(s, static_cast<long long>(pictureRevision));
     return s;
@@ -568,18 +590,9 @@ static std::string storeSig(const StoreModel& m, int pictureIndex, std::uint64_t
     g.key_enabled = p.key_enabled;
     g.report = ss(p.report);
     g.report_tone = tone(p.report_tone);
-    std::string note;
-    g.screenshots = p.shown ? mapScreenshots(p, note) : model(std::vector<slint::Image>{});
-    g.pictures_note = ss(note);
-    g.picture_index = std::max(0, std::min(pictureIndex_, static_cast<int>(g.screenshots->row_count()) - 1));
-    g.what_it_does = ss(p.what_it_does);
-    g.whats_new = ss(p.whats_new);
-    g.details = ss(p.details);
-    g.details_open = p.details_open;
-    g.details_label = ss(p.details_label);
+    g.body = mapBody(p, pictureIndex_);
     g.notice = ss(p.notice_shown ? p.notice : std::string());
     g.notice_ticked = p.notice_tick;
-    g.reach_lead = ss(p.details_open ? p.reach_lead : std::string());
     o.plugin = std::move(g);
     return o;
 }
@@ -590,6 +603,8 @@ ReadOptions ExtendPublisher::buildOptions(const FoxReceiverState& state, bool re
     ReadOptions o = opts_;
     o.read_store = readStore;
     o.now_unix = nowUnix_;
+    o.module_keys = moduleKeys_;
+    o.module_details = moduleDetails_;
     return o;
 }
 
@@ -627,7 +642,12 @@ void ExtendPublisher::publish(const FoxReceiverState& state) {
     pageWasUp_ = up;
     shownWas_ = shown;
 
-    const bool readStore = shown && storeReadDue(state, nowMs);
+    {
+        std::vector<std::string> keys = pages_.moduleCatalogueKeys();
+        if (keys != moduleKeys_) { storeForce_ = true; }
+        moduleKeys_ = std::move(keys);
+    }
+    const bool readStore = (shown || !moduleKeys_.empty()) && storeReadDue(state, nowMs);
     // The lists and facts are read at 10 Hz (and at once after a gesture): the ImGui window reads them every frame, this one does not need a thirtieth of a second.
     if (!forceRead_ && !readStore && haveModels_ && nowMs - lastReadMs_ < 100) { return; }
     forceRead_ = false;
@@ -639,6 +659,17 @@ void ExtendPublisher::publish(const FoxReceiverState& state) {
     last_.cat = m.cat;
     last_.chips = m.chips;
     haveModels_ = true;
+    // CLEAN UP OLD VERSIONS is read whether or not the store page is open: the Fitted modules page has the same foot and the same question
+    if (!readStore) {
+        last_.store.cleanup_label = m.store.cleanup_label;
+        last_.store.cleanup_enabled = m.store.cleanup_enabled;
+        last_.store.cleanup_lines = m.store.cleanup_lines;
+        last_.store.cleanup_all = m.store.cleanup_all;
+        last_.store.cleanup_report = m.store.cleanup_report;
+        last_.store.cleanup_yes = m.store.cleanup_yes;
+        last_.store.cleanup_open = m.store.cleanup_open;
+        if (m.store.draft_changed) { opts_.store = m.store.draft; }
+    }
     if (readStore) {
         last_.store = std::move(m.store);
         haveStore_ = true;
@@ -718,6 +749,18 @@ void ExtendPublisher::publish(const FoxReceiverState& state) {
         pages_.setStoreRail(c.word, t, c.lit);
     }
 
+    handModuleBodies();
+    {
+        foxsdr::slintkit::KitPublisher::CleanupFoot foot;
+        foot.label = last_.store.cleanup_label;
+        for (const std::string& l : last_.store.cleanup_lines) { foot.note += (foot.note.empty() ? "" : "\n") + l; }
+        foot.report = last_.store.cleanup_report;
+        foot.yes = last_.store.cleanup_yes;
+        foot.lines = last_.store.cleanup_all;
+        foot.open = last_.store.cleanup_open;
+        pages_.setCleanupFoot(foot);
+    }
+
     const auto setIf = [](auto& slot, auto&& value, auto&& setter) {
         if (!slot.has_value() || !(*slot == value)) {
             slot = value;
@@ -726,6 +769,76 @@ void ExtendPublisher::publish(const FoxReceiverState& state) {
     };
     setIf(lastSet_->web, mapWeb(last_.web), [&](const ::WebModel& v) { ui_.set_web_model(v); });
     setIf(lastSet_->cat, mapCat(last_.cat), [&](const ::CatModel& v) { ui_.set_cat_model(v); });
+}
+
+// The catalogue bodies of the fitted modules' pages that are showing: built from the catalogue (extend_logic fillBody), handed to the kit when their content moved, their
+// pictures asked for (the engine fetches one at a time; a failed one is asked again only when the list moves) and decoded as the store page's are.
+void ExtendPublisher::handModuleBodies() {
+    std::map<std::string, ::PluginBodyModel> bodies;
+    std::string sig;
+    for (const StorePluginPage& p : last_.store.module_pages) {
+        const auto at = modulePicture_.find(p.id);
+        const int idx = at == modulePicture_.end() ? 0 : at->second;
+        bodies[p.id] = mapBody(p, idx);
+        sigAdd(sig, p.id);
+        sigPage(sig, p);
+        sigAdd(sig, idx);
+    }
+    sigAdd(sig, static_cast<long long>(pictures_->revision));
+    if (sig != moduleSig_) {
+        moduleSig_ = sig;
+        pages_.setModuleBodies(bodies, sig);
+    }
+    if (moduleKeys_.empty()) { return; }
+    for (const StorePluginPage& p : last_.store.module_pages) { wantPictures(p); }
+    if (moduleAskedSeq_ != listSeq_) {
+        bool asked = false;
+        for (const StorePluginPage& p : last_.store.module_pages) {
+            for (const PictureFrame& f : p.screenshots) {
+                if (f.sha256.empty() || f.state != kPicNone) { continue; }
+                kit_.submit(cc::cmd::makeText(FOXAPP_OP_STORE_PICTURES_WANT, p.id, 1));
+                asked = true;
+                break;
+            }
+        }
+        if (asked) { moduleAskedSeq_ = listSeq_; }
+    }
+}
+
+bool ExtendPublisher::stateOf(const std::string& what, std::string& out) const {
+    const StorePluginPage& p = last_.store.plugin;
+    if (what == "pictureIndex") { out = std::to_string(pictureIndex_); return true; }
+    if (what == "frames") { std::size_t n = 0; for (const PictureFrame& f : p.screenshots) { n += f.sha256.empty() ? 0u : 1u; } out = std::to_string(n); return true; }
+    if (what == "reach") { std::string j; for (const ReachLine& r : p.reach) { j += (j.empty() ? "" : "|") + r.key; } out = j; return true; }
+    if (what == "facts") { out = std::to_string(p.facts.size()); return true; }
+    if (what == "notice") { out = p.notice_shown ? p.notice : std::string(); return true; }
+    if (what == "noticeTick") { out = p.notice_tick ? "1" : "0"; return true; }
+    if (what == "keyEnabled") { out = p.key_enabled ? "1" : "0"; return true; }
+    if (what == "whatItDoes") { out = p.what_it_does; return true; }
+    if (what == "chip") { out = pages_.storeChipWord(); return true; }
+    if (what == "chipLit") { out = pages_.storeChipLit() ? "1" : "0"; return true; }
+    if (what == "cleanupLabel") { out = last_.store.cleanup_label; return true; }
+    if (what == "cleanupOpen") { out = last_.store.cleanup_open ? "1" : "0"; return true; }
+    if (what == "cleanupReport") { out = last_.store.cleanup_report; return true; }
+    if (what.rfind("module.", 0) == 0) {
+        // module.<catalogue key>.<frames|index|details|whatItDoes|facts>
+        const std::string rest = what.substr(7);
+        const std::size_t dot = rest.rfind('.');
+        if (dot == std::string::npos) { return false; }
+        const std::string key = rest.substr(0, dot), field = rest.substr(dot + 1);
+        for (const StorePluginPage& m : last_.store.module_pages) {
+            if (m.id != key) { continue; }
+            if (field == "frames") { std::size_t n = 0; for (const PictureFrame& f : m.screenshots) { n += f.sha256.empty() ? 0u : 1u; } out = std::to_string(n); return true; }
+            if (field == "index") { const auto at = modulePicture_.find(key); out = std::to_string(at == modulePicture_.end() ? 0 : at->second); return true; }
+            if (field == "details") { out = m.details_open ? "1" : "0"; return true; }
+            if (field == "whatItDoes") { out = m.what_it_does; return true; }
+            if (field == "facts") { out = std::to_string(m.facts.size()); return true; }
+            if (field == "catalogued") { out = m.catalogued ? "1" : "0"; return true; }
+        }
+        out = "-";
+        return true;
+    }
+    return false;
 }
 
 ExtendPublisher::RowFace ExtendPublisher::face(int row) const {
@@ -758,15 +871,14 @@ void ExtendPublisher::runPictureProbe() {
     std::string line = "picture probe:";
     for (std::size_t i = 0; i < page.screenshots.size(); ++i) {
         pictureIndex_ = static_cast<int>(i);
-        std::string note;
-        const auto images = mapScreenshots(page, note);
+        const ::PluginBodyModel body = mapBody(page, static_cast<int>(i));
         const auto& entry = pictures_->done[page.screenshots[i].sha256];
         std::string size = "no image";
         if (entry.error.empty()) {
             const auto s = entry.image.size();
             size = std::to_string(s.width) + "x" + std::to_string(s.height);
         }
-        line += " [" + std::to_string(i) + "] " + size + " (strip " + std::to_string(images->row_count()) + " frames, note \"" + note + "\")";
+        line += " [" + std::to_string(i) + "] " + size + " (strip " + std::to_string(body.frames->row_count()) + " frames, caption \"" + std::string(body.frames->row_data(i)->caption) + "\")";
     }
     pictureIndex_ = saved;
     probeLine_ = line;
@@ -873,6 +985,20 @@ void ExtendPublisher::wire() {
         pictureIndex_ = std::max(0, std::min(i, std::max(0, count - 1)));
         storeForce_ = true;
     });
+    // A fitted module's page: its strip and DETAILS are this object's own state, by catalogue key (the page's body is built from the catalogue, so nothing is asked of the engine)
+    {
+        auto&& me = ui_.global<::ModuleBodyEvents>();
+        me.on_picked([this](slint::SharedString key, int i) {
+            modulePicture_[std::string(key)] = std::max(0, i);
+            forceRead_ = true;
+            moduleSig_.clear();
+        });
+        me.on_details([this](slint::SharedString key, bool on) {
+            if (on) { moduleDetails_.insert(std::string(key)); } else { moduleDetails_.erase(std::string(key)); }
+            storeForce_ = true;
+            forceRead_ = true;
+        });
+    }
     // The two the UI family added (the contract has no callback for them): CANCEL, and the maker's notice tick.
     ev.on_store_cancel([this] { exec(applyStoreCancel(last_.store), "store-cancel"); });
     ev.on_store_plugin_notice([this](bool on) { exec(applyStoreNoticeTick(last_.store, on), "store-plugin-notice"); });
