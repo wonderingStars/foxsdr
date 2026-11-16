@@ -193,7 +193,7 @@ The `slint`-named headless tests: only that one other test matched, and it passe
 `slint_drive_system-look` (`state look.width == 1600 -> FAILED: it is 800`: recorded as intermittent by window gaps 2, `window-gaps-2.md`, which saw it pass 3 of 7 alone-runs with one binary; RED alone here; not mine for the same reason).
 
 **Error-path gate:** `test_error_paths` 24 checks, 0 failed; `errpath_gate_selftest` 42 checks, 0 failed; pin 1126 to 1116.
-**Lane tests (all green at the last run):** `test_radio_report` 129 checks, `test_radio_reporter` 199, `test_radio_reports_fields` 38 + the session reader, `test_radio_reports_never_sent` 7,
+**Lane tests (all green at the last run):** `test_radio_report` 129 checks, `test_radio_reporter` 199, `test_radio_reports_fields` 48 (the beat, `window`, the marker, the real transport against loopback, the machine's description, the cost of opening the queue), `test_radio_reports_never_sent` 7,
 `test_radio_reports_engine` 120, each of the engine tests also in its `_free` and `_stepped` variants; `test_telemetry` 292, `test_health_events` 114874, `test_stall_count`, `test_exit_cause_app`.
 
 ## EXPECTATIONS CHANGED
@@ -208,4 +208,9 @@ The `slint`-named headless tests: only that one other test matched, and it passe
 
 ## STAMP TESTS, CONFIG HASH
 
-(see the end of this file)
+After a rebuild at the lane's last CODE commit `08576454` (`cascade_engine`, `cascade`, `foxsdr-engine`, `foxsdr-slint` and the tests below), `ctest` through the launcher:
+`slint_drive_look-stamps`, `test_diagnostics`, `test_diagnostics_free` PASSED (the binary names `08576454d50e` and the tree is clean), with `test_thread_inventory`, `test_error_paths`,
+`errpath_gate_selftest`, `test_i18n`, `test_telemetry`, `test_health_events` and the five lane tests (and the engine test's `_stepped` variant): `100% tests passed out of 16`. This record is
+committed after that run, so HEAD is one documentation-only commit past the stamped code; the stamp tests were run again after a rebuild at HEAD (final report).
+The real `%APPDATA%/foxsdr/config.json` sha256 at the end: `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (unchanged). Nothing pushed, no outside request, no
+download, `FOXSDR_ALLOW_*` never set, no foxsdr-slint window outside the hidden desktop, no radio opened.
