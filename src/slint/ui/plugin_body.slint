@@ -37,6 +37,8 @@ export struct PluginBodyModel {
     facts: [BodyFact],
     reach: [BodyReach],           // what the plugin declares it may do, in words (the store page only: the module page has its own list)
     reach-lead: string,           // the sentence under the open grid; "" none
+    companion-heading: string,    // COMPANION APPLICATION (the entry is a companion's bridge); "" = no block
+    companion: [BodyFact],        // what it decodes, upstream, licence, why it is a separate program, identifiers, source, program: always open, before anything is fetched
 }
 
 // The gestures of a fitted module's page body (the plugin store page has ExtendEvents): which plugin (the catalogue key) and what was asked.
@@ -282,6 +284,18 @@ export component PluginBody inherits VerticalLayout {
             Text { horizontal-stretch: 1; min-width: 0px; text: r.key; color: r.outward ? Theme.fg : Theme.fg-soft; font-family: Theme.font-ui; font-size: Theme.font-body; overflow: elide; }
         }
         Words { wrap-w: root.width - 16px; text: r.detail; }
+    }
+    if root.body.shown && root.body.companion.length > 0 : Caption { label: root.body.companion-heading; }
+    if root.body.shown && root.body.companion.length > 0 : Rectangle {
+        height: cgrid.preferred-height;
+        border-width: Theme.hairline;
+        border-color: Theme.line-strong;
+        cgrid := VerticalLayout {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            for fact in root.body.companion : FactLine { fact: fact; }
+        }
     }
     @children
     if root.body.shown : Rectangle {

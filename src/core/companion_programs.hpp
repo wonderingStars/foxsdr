@@ -115,6 +115,11 @@ enum class State {
     Changed,        // a program is recorded but the file is gone or is not the size recorded
 };
 State stateOf(const PluginCatalogEntry& e, const Places& places, const std::vector<PackageProgram>& packageList, const std::string& pluginFile);
+// The state of one catalogue entry in THIS copy, from the places (placesFor), the package list (read only when packaged) and the install record. NotAvailable for an entry
+// with no companion object and for one from a plugin site.
+State stateForEntry(const PluginCatalogEntry& e, const std::string& pluginsDir);
+// The bridge's file name this machine's build installs under ("" with no build for this machine or a name the store refuses): the key of its record.
+std::string bridgeFileOf(const PluginCatalogEntry& e);
 const char* stateWord(State s);          // "unavailable" | "package" | "download" | "installed" | "changed"
 // One English sentence for the state (the window translates it where it draws).
 std::string stateSentence(State s);

@@ -1,0 +1,12 @@
+{
+ "version": 1,
+ "programs": [
+  {
+   "id": "companion-multimon",
+   "file": "multimon-helper.exe",
+   "path": "multimon/multimon-helper.stand-in",
+   "sha256": "5656565656565656565656565656565656565656565656565656565656565656",
+   "size": 60
+  }
+ ]
+}

@@ -251,11 +251,28 @@ void everySentenceIsADrawers() {
     const std::string drawers = joinedSource("gui/app_window.cpp") + joinedSource("gui/plugin_store_view.cpp") + joinedSource("gui/app_window_store.cpp") +
                                 joinedSource("core/plugin_store_reasons.cpp") + joinedSource("core/add_all_plan.hpp");
     static const std::regex literal(R"re(\b(?:tr|T)\(\s*("(?:[^"\\]|\\.)*")\s*\))re");
+    // THE SENTENCES OF THE COMPANION APPLICATIONS SHELF (companions-shelf lane, 2026-11-16) have no Legacy drawer: the shelf exists only in the new window, so there is no
+    // old sentence to mirror. They are listed here, whole, so the rule still holds for every other sentence (a new sentence outside this list still fails the test).
+    static const char* const kNewInTheNewWindow[] = {
+        "COMPANION APPLICATION", "COMPANION APPLICATIONS", "WHAT IT DECODES", "UPSTREAM PROJECT", "PROGRAM LICENCE", "WHY IT IS A SEPARATE PROGRAM", "IDENTIFIERS", "SOURCE CODE", "PROGRAM",
+        "INCLUDED IN THIS COPY", "DOWNLOADS WHEN FITTED", "PROGRAM INSTALLED", "PROGRAM CHANGED", "NOT AVAILABLE",
+        "Separate open-source programs that FoxSDR starts and shows the output of. Each one is under its own licence, not FoxSDR's. Open an entry to read why it is a separate program, where its source is and what it cannot hide.",
+        "The program is included in this copy of FoxSDR. Fitting the plugin puts it in place; nothing is downloaded.",
+        "Fitting the plugin downloads the program and checks it against the checksum the catalogue gives before it can run.",
+        "The program is installed and is checked again every time before it starts.",
+        "The installed program is missing or is not the file that was installed. It will not start; remove the plugin and fit it again.",
+        "The program for this companion is not available in this copy of FoxSDR.",
+    };
     int seen = 0, missing = 0;
     for (std::sregex_iterator it(mine.begin(), mine.end(), literal), end; it != end; ++it) {
         const std::string quoted = unescapeHex((*it)[1]);   // the literal as the source spells it, quotes included (this file spells the UTF-8 dash as \xNN; the drawers' own is raw)
         const std::string body = quoted.substr(0, quoted.size() - 1);
         ++seen;
+        bool isNew = false;
+        for (const char* n : kNewInTheNewWindow) {
+            if (quoted == std::string("\"") + n + "\"") { isNew = true; }
+        }
+        if (isNew) { continue; }
         if (drawers.find(quoted) == std::string::npos && drawers.find(body + "##") == std::string::npos) {
             std::printf("  a sentence of extend_logic.cpp that no drawer says: %s\n", quoted.c_str());
             ++missing;
@@ -1622,6 +1639,153 @@ void windowGaps3() {
     CHECK(c.cleanup_label.empty() && !c.cleanup_open && c.draft_changed);
 }
 
+// ---- THE COMPANION APPLICATIONS SHELF (companions-shelf lane) ----
+// A companion row as the engine's facts give it: the program's file, what the shelf says, and the state word the engine worked out for THIS copy.
+void setCompanion(StubTable& t, const char* key, const char* name, const char* state, bool withHide, const char* source = "https://github.com/wonderingStars/foxsdr-companions") {
+    setEntry(t, key, name, kCompatible | kBuild, "0.1.2", "companions", "Pager tones: POCSAG and FLEX.");
+    const std::string p = std::string("fact.store.") + key + ".";
+    t.facts[p + "legal"] = "The companion program is separate software under its own licence (GPL-2.0-or-later) and is not included.";
+    t.facts[p + "companion"] = "1";
+    t.facts[p + "companion.upstream"] = "multimon-ng";
+    t.facts[p + "companion.licence"] = "GPL-2.0-or-later";
+    t.facts[p + "companion.why"] = "This is another person's open-source program and stays an application of its own.";
+    t.facts[p + "companion.source"] = source;
+    t.facts[p + "companion.hide"] = withHide ? "This program cannot hide identifiers: whatever it decodes is shown exactly as the program prints it." : "";
+    t.facts[p + "companion.program"] = "multimon-helper.exe";
+    t.facts[p + "companion.state"] = state;
+    if (std::string(state) == "unavailable") { t.facts[p + "blocked"] = "the program for this companion is not available in this copy of FoxSDR"; }
+    if (std::string(state) == "installed") { t.facts[p + "blocked"] = "already installed"; t.facts[p + "installState"] = "installed"; t.facts[p + "installedVersion"] = "0.1.2"; }
+}
+
+bool noPromise(const std::string& text) {
+    for (const char* w : {"soon", "later", "coming", "not yet", "beta", "phase", "will be", "when it"}) {
+        if (has(text, w)) { return false; }
+    }
+    return true;
+}
+
+void companionShelf() {
+    StubTable t = storeTable();
+    setCompanion(t, "companion-unavail", "Unavailable companion", "unavailable", true);
+    setCompanion(t, "companion-download", "Downloading companion", "download", true);
+    setCompanion(t, "companion-package", "Packaged companion", "package", false);
+    setCompanion(t, "companion-installed", "Installed companion", "installed", true);
+    setCompanion(t, "companion-changed", "Changed companion", "changed", true);
+    // an entry that says "companions" but carries no companion object sits under OTHER, never on the shelf
+    setEntry(t, "stray", "Stray", kCompatible | kBuild, "1.0.0", "companions", "A stray row");
+    ReadOptions o;
+    StoreModel m = storeModel(t, o);
+
+    // THE SHELF: one heading, after MAPS AND TOOLS and before OTHER; the five companion rows are on it and the stray row is not
+    const Names heads = headings(m);
+    CHECK(std::count(heads.begin(), heads.end(), std::string("COMPANION APPLICATIONS")) == 1);
+    std::size_t at = 0, maps = 0, other = 0;
+    for (std::size_t i = 0; i < m.categories.size(); ++i) {
+        if (m.categories[i].heading == "COMPANION APPLICATIONS") { at = i; }
+        if (m.categories[i].heading == "MAPS AND TOOLS") { maps = i; }
+        if (m.categories[i].heading == "OTHER") { other = i; }
+    }
+    CHECK(maps < at && at < other);
+    const StoreCategory shelf = at < m.categories.size() ? m.categories[at] : StoreCategory{};
+    CHECK(shelf.census == "companions" && shelf.cards.size() == 5u);
+    CHECK(!shelf.note.empty() && shelf.note.rfind("Separate open-source programs", 0) == 0 && noPromise(shelf.note));
+    bool strayOnOther = false;
+    for (const StoreCard& k : at < m.categories.size() && other < m.categories.size() ? m.categories[other].cards : std::vector<StoreCard>{}) { if (k.id == "stray") { strayOnOther = true; } }
+    CHECK(strayOnOther);
+    CHECK(m.categories[0].note.empty());   // only the shelf has a note
+
+    // EVERY STATE ON ITS CARD: the program's licence as the row states it, then what this copy can do about the program
+    CHECK(badgeTexts(card(m, "companion-unavail").badges) == (Names{"GPL-2.0-or-later", "NOT AVAILABLE"}));
+    CHECK(badgeTexts(card(m, "companion-download").badges) == (Names{"GPL-2.0-or-later", "DOWNLOADS WHEN FITTED"}));
+    CHECK(badgeTexts(card(m, "companion-package").badges) == (Names{"GPL-2.0-or-later", "INCLUDED IN THIS COPY"}));
+    CHECK(badgeTexts(card(m, "companion-installed").badges) == (Names{"GPL-2.0-or-later", "PROGRAM INSTALLED"}));
+    CHECK(badgeTexts(card(m, "companion-changed").badges) == (Names{"GPL-2.0-or-later", "PROGRAM CHANGED"}));
+    // a program that is not available cannot be fitted: the key is greyed and says so, in plain words with no promise
+    const StoreCard& un = card(m, "companion-unavail");
+    CHECK(!un.key_enabled && un.key_reason == "the program for this companion is not available in this copy of FoxSDR" && noPromise(un.key_reason));
+    CHECK(card(m, "companion-download").key_enabled || card(m, "companion-download").opens_page);   // GET (or its page, for the notice) answers
+    CHECK(card(m, "companion-package").key_enabled || card(m, "companion-package").opens_page);
+    // the stray row has no companion badges
+    CHECK(card(m, "stray").badges.empty());
+
+    // THE PAGE says everything before anything is fetched
+    struct PageCase { const char* id; const char* state; bool hide; };
+    const PageCase pages[] = {{"companion-unavail", "unavailable", true}, {"companion-download", "download", true}, {"companion-package", "package", false},
+                              {"companion-installed", "installed", true}, {"companion-changed", "changed", true}};
+    for (const PageCase& pg : pages) {
+        ReadOptions po;
+        po.store.page_id = pg.id;
+        const StoreModel pm = storeModel(t, po);
+        const StorePluginPage& p = pm.plugin;
+        CHECK(p.shown && p.companion_heading == "COMPANION APPLICATION");
+        Names keys;
+        for (const PageFact& f : p.companion) { keys.push_back(f.key); }
+        Names want = {"WHAT IT DECODES", "UPSTREAM PROJECT", "PROGRAM LICENCE", "WHY IT IS A SEPARATE PROGRAM"};
+        if (pg.hide) { want.push_back("IDENTIFIERS"); }
+        want.push_back("SOURCE CODE");
+        want.push_back("PROGRAM");
+        CHECK(keys == want);
+        std::map<std::string, std::string> v;
+        for (const PageFact& f : p.companion) { v[f.key] = f.value; }
+        CHECK(v["WHAT IT DECODES"] == "Pager tones: POCSAG and FLEX.");
+        CHECK(v["UPSTREAM PROJECT"] == "multimon-ng" && v["PROGRAM LICENCE"] == "GPL-2.0-or-later");
+        CHECK(has(v["WHY IT IS A SEPARATE PROGRAM"], "another person's open-source program"));
+        CHECK(pg.hide ? has(v["IDENTIFIERS"], "cannot hide identifiers") : v.count("IDENTIFIERS") == 0u);
+        CHECK(v["SOURCE CODE"] == "https://github.com/wonderingStars/foxsdr-companions");
+        bool sourceCopyable = false;
+        for (const PageFact& f : p.companion) { if (f.key == "SOURCE CODE") { sourceCopyable = f.copyable && !f.hatched; } }
+        CHECK(sourceCopyable);
+        CHECK(has(v["PROGRAM"], "multimon-helper.exe") && noPromise(v["PROGRAM"]));
+        if (std::string(pg.state) == "unavailable") { CHECK(has(v["PROGRAM"], "not available in this copy of FoxSDR")); }
+        if (std::string(pg.state) == "download") { CHECK(has(v["PROGRAM"], "downloads the program and checks it against the checksum")); }
+        if (std::string(pg.state) == "package") { CHECK(has(v["PROGRAM"], "included in this copy of FoxSDR") && has(v["PROGRAM"], "nothing is downloaded")); }
+        if (std::string(pg.state) == "installed") { CHECK(has(v["PROGRAM"], "checked again every time before it starts")); }
+        if (std::string(pg.state) == "changed") { CHECK(has(v["PROGRAM"], "will not start")); }
+    }
+    // a row with no source address shows the line as "not stated", never an empty link
+    {
+        StubTable n = storeTable();
+        setCompanion(n, "companion-nosrc", "No source", "download", true, "");
+        ReadOptions po;
+        po.store.page_id = "companion-nosrc";
+        const StoreModel nm = storeModel(n, po);
+        bool found = false;
+        for (const PageFact& f : nm.plugin.companion) { if (f.key == "SOURCE CODE") { found = f.hatched && f.value == "not stated"; } }
+        CHECK(found);
+    }
+    // an ordinary plugin's page has no companion block at all
+    {
+        ReadOptions po;
+        po.store.page_id = "adsb";
+        const StoreModel am = storeModel(t, po);
+        CHECK(am.plugin.companion.empty() && am.plugin.companion_heading.empty());
+    }
+    // GET on a downloadable companion: the notice first (the maker's text is the row's legal notice), then the key answers
+    {
+        ReadOptions po;
+        po.store.page_id = "companion-download";
+        StoreModel pm = storeModel(t, po);
+        CHECK(pm.plugin.notice_shown && !pm.plugin.key_enabled);
+        po.store.notice_tick = true;
+        CHECK(storeModel(t, po).plugin.key_enabled);
+        // and an unavailable one never answers, ticked or not
+        ReadOptions pu;
+        pu.store.page_id = "companion-unavail";
+        pu.store.notice_tick = true;
+        const StoreModel um = storeModel(t, pu);
+        CHECK(!um.plugin.key_enabled && !um.plugin.key_reason.empty());
+    }
+    // the catalogue hash moves when only the state of a companion's program changes (a fresh read is then published)
+    {
+        StubTable a = storeTable();
+        setCompanion(a, "companion-x", "X", "download", true);
+        const StoreModel ma = storeModel(a, o);
+        a.facts["fact.store.companion-x.companion.state"] = "installed";
+        const StoreModel mb = storeModel(a, o);
+        CHECK(ma.catalogue_hash != mb.catalogue_hash);
+    }
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);   // a crash must not eat the lines before it
     sourcesStateWhatWeSend();
@@ -1638,6 +1802,7 @@ int main() {
     storeSitesAndCleanup();
     storePluginPage();
     windowGaps3();
+    companionShelf();
     storeNotices();
     railChip();
     storeEffects();

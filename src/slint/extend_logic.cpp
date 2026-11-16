@@ -335,6 +335,7 @@ Category categoryFor(const std::string& id) {
     if (id == "meters-paging") { return Category::MetersPaging; }
     if (id == "broadcast") { return Category::VoiceData; }
     if (id == "maps-tools") { return Category::MapsTools; }
+    if (id == "companions") { return Category::Companions; }
     return Category::Other;
 }
 
@@ -346,6 +347,7 @@ std::string categoryHeading(Category c) {
         case Category::MetersPaging: return T("METERS AND PAGING");
         case Category::VoiceData: return T("VOICE AND DATA");
         case Category::MapsTools: return T("MAPS AND TOOLS");
+        case Category::Companions: return tr("COMPANION APPLICATIONS");
         case Category::Other: return T("OTHER");
     }
     return T("OTHER");
@@ -359,6 +361,7 @@ const char* categoryCensusName(Category c) {
         case Category::MetersPaging: return "meters";
         case Category::VoiceData: return "voice";
         case Category::MapsTools: return "maps";
+        case Category::Companions: return "companions";
         case Category::Other: return "other";
     }
     return "other";
@@ -861,6 +864,8 @@ struct CatRow {
     bool installed = false, compatible = false, buildHere = false;
     std::string version, author, licence, description, summary, homepage, legal, floor, platforms, file, blocked, updateReason;
     std::string category, whatsNew, published, sha256, site, installState, installedVersion, installedFile;
+    bool companion = false;
+    std::string companionUpstream, companionLicence, companionWhy, companionSource, companionHide, companionProgram, companionState;
     bool experimental = false, regional = false, haveCapabilities = false;
     std::uint32_t capabilities = 0;
     std::vector<PictureFrame> pictures;
@@ -892,6 +897,7 @@ std::uint64_t foldRow(std::uint64_t h, const CatRow& r) {
     h = foldText(h, r.legal);
     h = foldText(h, r.floor);
     h = foldText(h, r.platforms);
+    h = foldText(h, r.companionState);
     h = foldBytes(h, &r.abi, sizeof(r.abi));
     h = foldBytes(h, &r.sizeBytes, sizeof(r.sizeBytes));
     return h;
@@ -926,6 +932,14 @@ StoreEntry entryOf(const CatRow& r) {
         e.origin_note = cc::formatText(tr("From a site you added: %s"), cc::pluginSiteDisplay(r.site, 90).c_str());
     }
     e.category = r.category;
+    e.companion = r.companion;
+    e.companion_upstream = r.companionUpstream;
+    e.companion_licence = r.companionLicence;
+    e.companion_why = r.companionWhy;
+    e.companion_source = r.companionSource;
+    e.companion_hide = r.companionHide;
+    e.companion_program = r.companionProgram;
+    e.companion_state = r.companionState;
     e.experimental = r.experimental;
     e.whats_new = r.whatsNew;
     e.published = r.published;
@@ -1036,6 +1050,22 @@ std::vector<StoreBadge> badgesOf(const StoreEntry& e) {
     std::vector<StoreBadge> out;
     if (e.third_party) { out.push_back(badge(T("THIRD PARTY"), Tone::Warn)); }
     if (e.experimental) { out.push_back(badge(T("EXPERIMENTAL"), Tone::Warn)); }
+    // A COMPANION APPLICATION says what its separate program is under, and what this copy can do about it, on the card and on the page (nothing is fetched to say so).
+    if (e.companion) {
+        if (!e.companion_licence.empty()) { out.push_back(badge(e.companion_licence, Tone::Neutral)); }
+        const std::string& st = e.companion_state;
+        if (st == "package") {
+            out.push_back(badge(tr("INCLUDED IN THIS COPY"), Tone::Good));
+        } else if (st == "download") {
+            out.push_back(badge(tr("DOWNLOADS WHEN FITTED"), Tone::Neutral));
+        } else if (st == "installed") {
+            out.push_back(badge(tr("PROGRAM INSTALLED"), Tone::Good));
+        } else if (st == "changed") {
+            out.push_back(badge(tr("PROGRAM CHANGED"), Tone::Err));
+        } else {
+            out.push_back(badge(tr("NOT AVAILABLE"), Tone::Warn));
+        }
+    }
     // A BUILD badge (WINDOWS ONLY or LINUX ONLY) appears only when this host has NO build for the entry and the entry's builds are all one operating system.
     if (!e.have_build_here) {
         if (e.builds_windows && !e.builds_linux) { out.push_back(badge(T("WINDOWS ONLY"), Tone::Neutral)); }
@@ -1046,6 +1076,35 @@ std::vector<StoreBadge> badgesOf(const StoreEntry& e) {
 
 int pictureStateOf(double v) { return v == 1.0 ? kPicPending : v == 2.0 ? kPicReady : v == 3.0 ? kPicFailed : kPicNone; }
 
+
+// The sentence the shelf says about this copy and a companion's program (translated where it is drawn).
+std::string companionStateSentence(const std::string& st) {
+    if (st == "package") { return tr("The program is included in this copy of FoxSDR. Fitting the plugin puts it in place; nothing is downloaded."); }
+    if (st == "download") { return tr("Fitting the plugin downloads the program and checks it against the checksum the catalogue gives before it can run."); }
+    if (st == "installed") { return tr("The program is installed and is checked again every time before it starts."); }
+    if (st == "changed") { return tr("The installed program is missing or is not the file that was installed. It will not start; remove the plugin and fit it again."); }
+    return tr("The program for this companion is not available in this copy of FoxSDR.");
+}
+
+// COMPANION APPLICATION: everything the shelf promises to show before anything is fetched. The words of the catalogue (why, upstream, licence) are verbatim.
+void fillCompanion(StorePluginPage& p, const StoreEntry& e) {
+    p.companion.clear();
+    p.companion_heading.clear();
+    if (!e.companion) { return; }
+    p.companion_heading = tr("COMPANION APPLICATION");
+    const std::string& decodes = e.summary.empty() ? e.blurb : e.summary;
+    p.companion.push_back(decodes.empty() ? hatch(tr("WHAT IT DECODES"), T("not stated")) : fact(tr("WHAT IT DECODES"), decodes));
+    p.companion.push_back(e.companion_upstream.empty() ? hatch(tr("UPSTREAM PROJECT"), T("not stated")) : fact(tr("UPSTREAM PROJECT"), e.companion_upstream));
+    p.companion.push_back(e.companion_licence.empty() ? hatch(tr("PROGRAM LICENCE"), T("not stated")) : fact(tr("PROGRAM LICENCE"), e.companion_licence));
+    p.companion.push_back(e.companion_why.empty() ? hatch(tr("WHY IT IS A SEPARATE PROGRAM"), T("not stated")) : fact(tr("WHY IT IS A SEPARATE PROGRAM"), e.companion_why));
+    if (!e.companion_hide.empty()) { p.companion.push_back(fact(tr("IDENTIFIERS"), e.companion_hide, false, Tone::Warn)); }
+    p.companion.push_back(e.companion_source.empty() ? hatch(tr("SOURCE CODE"), T("not stated")) : fact(tr("SOURCE CODE"), e.companion_source, true));
+    {
+        PageFact x = fact(tr("PROGRAM"), (e.companion_program.empty() ? std::string() : e.companion_program + "  -  ") + companionStateSentence(e.companion_state));
+        if (e.companion_state == "unavailable" || e.companion_state == "changed" || e.companion_state.empty()) { x.tone = Tone::Warn; }
+        p.companion.push_back(std::move(x));
+    }
+}
 
 // The catalogue body of a plugin's page - the pictures with a caption each, what it does, what's new, the facts and what it may do - shared by the store's page and a
 // fitted module's page (the old window's one renderer, drawModulePageBody).
@@ -1080,6 +1139,7 @@ void fillBody(StorePluginPage& p, const StoreEntry& e, bool detailsOpen, bool wi
     p.details_label = detailsOpen ? T("HIDE DETAILS") : T("SHOW DETAILS");
     p.reach.clear();
     if (withReach) { p.reach = reachLines(e); }
+    fillCompanion(p, e);
 }
 
 // CLEAN UP OLD VERSIONS: the key's label, the first three old copies beside it, every copy for the question, what the last clean-up did. Read for the store's UPDATES tab AND for the
@@ -1271,6 +1331,16 @@ StoreModel readStore(TableReader& t, const ReadOptions& o) {
         r.installedFile = rowFact("installedFile");
         r.experimental = rowFact("experimental") == "1";
         r.regional = rowFact("regional") == "1";
+        r.companion = rowFact("companion") == "1";
+        if (r.companion) {
+            r.companionUpstream = rowFact("companion.upstream");
+            r.companionLicence = rowFact("companion.licence");
+            r.companionWhy = rowFact("companion.why");
+            r.companionSource = rowFact("companion.source");
+            r.companionHide = rowFact("companion.hide");
+            r.companionProgram = rowFact("companion.program");
+            r.companionState = rowFact("companion.state");
+        }
         const std::string caps = rowFact("capabilities");
         r.haveCapabilities = !caps.empty();
         r.capabilities = r.haveCapabilities ? static_cast<std::uint32_t>(std::strtoul(caps.c_str(), nullptr, 10)) : 0u;
@@ -1489,7 +1559,9 @@ StoreModel readStore(TableReader& t, const ReadOptions& o) {
         for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
             const StoreEntry& e = entries[static_cast<std::size_t>(i)];
             if (!matchesQuery(e, query)) { continue; }
-            by[static_cast<std::size_t>(categoryFor(e.category))].push_back(i);
+            // the shelf is for the entries that carry a companion object; a site's entry that merely says "companions" sits under OTHER like any unknown word
+            const Category cat = categoryFor(e.category);
+            by[static_cast<std::size_t>(cat == Category::Companions && !e.companion ? Category::Other : cat)].push_back(i);
         }
         for (int c = 0; c < kCategoryCount; ++c) {
             std::vector<int>& v = by[static_cast<std::size_t>(c)];
@@ -1504,6 +1576,9 @@ StoreModel readStore(TableReader& t, const ReadOptions& o) {
             StoreCategory sec;
             sec.heading = categoryHeading(static_cast<Category>(c));
             sec.census = categoryCensusName(static_cast<Category>(c));
+            if (static_cast<Category>(c) == Category::Companions) {
+                sec.note = tr("Separate open-source programs that FoxSDR starts and shows the output of. Each one is under its own licence, not FoxSDR's. Open an entry to read why it is a separate program, where its source is and what it cannot hide.");
+            }
             for (const int i : v) {
                 const StoreEntry& e = entries[static_cast<std::size_t>(i)];
                 const EntryKey key = keyFor(e, kin);

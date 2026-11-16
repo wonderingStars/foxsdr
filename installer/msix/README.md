@@ -823,3 +823,38 @@ No change to `CMakeLists.txt` was needed for 0.96 (0.99.53 added the
 `tests/test_*.cpp` are globbed with `CONFIGURE_DEPENDS`. (A file added after a
 configure is registered but not built in the same pass with the Visual Studio
 generator, so re-run the configure, or build twice.)
+
+---
+
+## 12. The companion applications inside the package (companions-shelf lane, 2026-11-16)
+
+The companion plugins start separate open-source programs (the companion applications, source at
+`https://github.com/wonderingStars/foxsdr-companions`). The website copy downloads them from the store's Companion
+applications shelf; **the Microsoft Store copy never downloads a program** (Store policy 10.2.2 and 10.2.3, see
+`D:/foxsdr-build/prep/store-bundle-licences.md`), so the package carries them.
+
+Build it in two steps (neither step signs, submits or publishes anything):
+
+    powershell -ExecutionPolicy Bypass -File installer\msix\collect-companions.ps1 `
+        -SourceDir <public copy of foxsdr-companions> -BuildDir <its Release build folder> -OutDir <empty folder>
+    powershell -ExecutionPolicy Bypass -File installer\msix\build-msix.ps1 -Force -CompanionsDir <that folder>
+
+`collect-companions.ps1` copies each built program and the legal text files of its folder (selected by file name and
+extension only; no source file is opened or copied; `hfserial` and `dvframes` are never collected).
+`build-msix.ps1 -CompanionsDir` then puts into the package:
+
+| In the package | What |
+|---|---|
+| `companions\<folder>\<program>.exe` | the built program |
+| `companions\<folder>\legal\...` | its licence text, notices, additional terms and `UPSTREAM.md` (the project it is built from, the commit and the changes made) |
+| `companions\companions.json` | the list the host reads: id, file, path, SHA-256, size of every program |
+| `COMPANIONS.md` | each program, its licence, its upstream and the address of its source |
+| `LICENSE.txt` | FoxSDR's licence text with a DRAFT section appended, marked as awaiting the owner's approval (`companions-licence-draft.txt`): the companions are under their own licences, not FoxSDR's |
+
+The host (`src/core/companion_programs.hpp`) looks for a program inside `<package root>\companions\` first, checks it
+against `companions.json`, copies it to `<plugins folder>\helpers\` where the bridge plugins look, and checks it again
+before every start. A package build refuses a folder with a missing licence text, a missing `UPSTREAM.md`, a missing
+OnAir additional-terms file (`hfmodes`, `weakmodes2`), a missing QSSTV `COPYING` (`hamdrm`), or a program named
+`hfserial` or `dvframes`.
+
+The source of the EXACT bundled builds must be public before a submission (GPL 3 section 6(d)); the owner's step.

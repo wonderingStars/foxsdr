@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <system_error>
 
@@ -255,7 +256,14 @@ Places placesFor(const std::string& pluginsDir) {
         return p;
     }
     p.packaged = cascade::core::runningInPackage();
-    if (p.packaged) { p.packageDir = sys::currentExeDir() / "companions"; }
+    if (p.packaged) {
+        p.packageDir = sys::currentExeDir() / "companions";
+        // THE TEST SEAM of a fake package (FOXSDR_FAKE_PACKAGE, core/package_identity.cpp): its companions folder is named by FOXSDR_FAKE_PACKAGE_COMPANIONS. Honoured ONLY
+        // while a fake package is in force, so a real package can never be pointed at another folder by the environment.
+        const char* fake = std::getenv("FOXSDR_FAKE_PACKAGE");
+        const char* dir = std::getenv("FOXSDR_FAKE_PACKAGE_COMPANIONS");
+        if (fake != nullptr && *fake != '\0' && dir != nullptr && *dir != '\0') { p.packageDir = dir; }
+    }
     return p;
 }
 
@@ -424,6 +432,24 @@ State stateOf(const PluginCatalogEntry& e, const Places& places, const std::vect
         return State::NotAvailable;
     }
     return e.companion.program.usable ? State::Download : State::NotAvailable;
+}
+
+std::string bridgeFileOf(const PluginCatalogEntry& e) {
+    const PluginPlatform* p = e.thisPlatform();
+    if (p == nullptr) { return std::string(); }
+    std::string want, err;
+    return PluginRepo::sanitiseFileName(p->file, want, err) ? want : std::string();
+}
+
+State stateForEntry(const PluginCatalogEntry& e, const std::string& pluginsDir) {
+    if (!e.companion.present || !e.source.empty()) { return State::NotAvailable; }
+    const Places places = placesFor(pluginsDir);
+    std::vector<PackageProgram> list;
+    if (places.packaged) {
+        std::string ignored;
+        (void)readPackageList(places.packageDir, list, ignored);   // no list: nothing is "in the package", the state says not available
+    }
+    return stateOf(e, places, list, bridgeFileOf(e));
 }
 
 const char* stateWord(State s) {

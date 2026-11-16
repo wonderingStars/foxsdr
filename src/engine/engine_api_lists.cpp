@@ -28,6 +28,7 @@
 #include "core/serial_port.hpp"
 #include "core/device_scan_plan.hpp"
 #include "engine/engine.hpp"
+#include "core/companion_programs.hpp"   // companion applications shelf
 #include "core/plugin_repo_helper.hpp"   // wire-c
 #include "engine/fox_engine_api.hpp"
 #include "core/receiver_tables.hpp"
@@ -1070,6 +1071,18 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             for (const std::string& l : cascade::core::helperstore::detailLines(e)) { lines += (lines.empty() ? "" : "\n") + l; }
             fact(k + "helper.detail", lines);
             fact(k + "helper.consent", e.helper.present ? (wireCHelperConsent_.count(key) != 0 ? "1" : "0") : "");
+        }
+        // companion applications shelf (core/companion_programs.hpp): what the shelf shows before anything is fetched, and what this copy can do about the program. Only a
+        // companion row has these; the window reads a missing one as "".
+        if (e.companion.present && e.source.empty()) {
+            fact(k + "companion", "1");
+            fact(k + "companion.upstream", e.companion.upstream);
+            fact(k + "companion.licence", e.companion.licence);
+            fact(k + "companion.why", e.companion.whySeparate);
+            fact(k + "companion.source", e.companion.source);
+            fact(k + "companion.hide", e.companion.identifierLine);
+            fact(k + "companion.program", e.companion.program.file);
+            fact(k + "companion.state", cascade::core::companion::stateWord(cascade::core::companion::stateForEntry(e, pluginDir_)));
         }
         fact(k + "summary", e.summary);
         fact(k + "description", e.description);

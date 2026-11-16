@@ -240,6 +240,7 @@ struct StoreCategory {
     std::string heading;
     std::vector<StoreCard> cards;
     std::string census;                    // "aircraft", ... "other"
+    std::string note;                      // one sentence under the heading ("" none): the Companion applications shelf says what a companion is
 };
 struct StoreSite {
     std::string address;                   // the display line (host + path, cut to 90)
@@ -324,6 +325,8 @@ struct StorePluginPage {
     bool catalogued = true;                // false: not in the catalogue (a module page then has no body)
     std::string reach_lead;                // "Declared by the maker, not enforced..." under the open grid
     std::string screenshots_heading, what_heading, new_heading, details_heading;   // SCREENSHOTS, WHAT IT DOES, WHAT'S NEW, DETAILS
+    std::string companion_heading;         // "COMPANION APPLICATION" while the entry is a companion's bridge ("" none)
+    std::vector<PageFact> companion;       // what it decodes, upstream, licence, why it is separate, identifiers, source, program: shown before anything is fetched
 };
 
 struct StoreModel {
@@ -441,8 +444,8 @@ ExtendModels readExtend(TableReader& table, const FoxReceiverState& state, const
 StoreRailChip readStoreChip(TableReader& table);
 
 // ---- the store's pure rules, mirrored from gui/plugin_store_view.cpp (the names carry over) ----
-enum class Category { Aircraft, Marine, SatellitesWeather, MetersPaging, VoiceData, MapsTools, Other };
-constexpr int kCategoryCount = 7;
+enum class Category { Aircraft, Marine, SatellitesWeather, MetersPaging, VoiceData, MapsTools, Companions, Other };
+constexpr int kCategoryCount = 8;
 Category categoryFor(const std::string& catalogueId);
 std::string categoryHeading(Category c);
 const char* categoryCensusName(Category c);
@@ -451,6 +454,9 @@ enum class InstallKind { NotInstalled, Installed, UpdateAvailable, NewerInstalle
 struct StoreEntry {                         // PluginStoreModel's StoreModule + ModulePlate, the parts the page uses
     std::string id, name, version, maker, licence, blurb, summary, homepage, legal_notice, origin_note, file_name;
     std::string category, whats_new, published, sha256, platforms, floor_version;
+    // COMPANION APPLICATIONS SHELF (core/companion_programs.hpp): what the engine's facts say about a companion row; `companion` is false for every other entry
+    bool companion = false;
+    std::string companion_upstream, companion_licence, companion_why, companion_source, companion_hide, companion_program, companion_state;   // state: unavailable | package | download | installed | changed
     bool experimental = false, fitted = false, loaded = false, running = false;
     bool have_capabilities = false, have_tune_grant = false, tune_granted = false;
     std::uint32_t capabilities = 0;

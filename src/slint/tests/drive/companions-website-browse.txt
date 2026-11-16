@@ -1,0 +1,18 @@
+#! frames=500 size=1400x2200 bank=1 FOXSDR_SLINT_STORE_LOCAL=fixtures/companions-index.json
+# companions-website-browse (companions-shelf lane, step 1): the WEBSITE copy's store. The Browse grid has a "COMPANION APPLICATIONS" shelf from the catalogue's companions
+# category (a LOCAL stand-in catalogue: nothing is fetched). The shelf has its one-sentence note, every card says what its separate program is under (the licence as the row
+# states it) and what this copy can do about the program, read from the window's own card model. A row whose program is not published says so in plain words and its key is
+# greyed; a published one says it downloads when fitted (the download itself is withheld in a bounded run and is proved by test_companion_programs).
+10 state running == 1
++1 click "Plugin store"
++300 state store.shelves contains "COMPANION APPLICATIONS"
+state store.shelfNote.companions contains "Separate open-source programs that FoxSDR starts"
+state store.shelfNote.companions contains "its own licence, not FoxSDR's"
+# the downloadable one: licence badge then the download badge, the shelf heading first
+state store.card.companion-multimon contains "COMPANION APPLICATIONS|GPL-2.0-or-later,"
+state store.card.companion-multimon contains "DOWNLOADS WHEN FITTED"
+state store.card.companion-trunkfmt contains "GPL-3.0-or-later,DOWNLOADS WHEN FITTED"
+# the one whose program is not published: not available, the key is greyed and says why, and nothing promises when
+state store.card.companion-hfdl contains "GPL-3.0-or-later,NOT AVAILABLE"
+state store.card.companion-hfdl contains "|0|the program for this companion is not available in this copy of FoxSDR"
++1 shot "companions-website-browse.png"

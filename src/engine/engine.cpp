@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "engine/engine.hpp"
 #include "engine/wire_a.hpp"   // wire-a
+#include "core/companion_programs.hpp"   // companion applications shelf
 #include "core/plugin_repo_helper.hpp"   // wire-c
 
 #include "core/band_mode.hpp"
@@ -3940,6 +3941,12 @@ std::string Engine::pluginInstallBlockedReason(int idx, bool acknowledged) const
     // cannot have "seen the licence" if there is not one.
     if (e.licence.empty()) { return FOX_TR_NOOP("the catalogue entry declares no licence"); }
     if (catalogEntryInstalled(e)) { return FOX_TR_NOOP("already installed"); }
+    // companion applications shelf: a companion whose program this copy cannot obtain has nothing to fit (the website copy: the catalogue publishes no program; the Store
+    // copy: the package holds none). Said before the notice gate, so nobody ticks a notice for something that cannot be fitted. No promise of when.
+    if (e.companion.present && e.source.empty() &&
+        cascade::core::companion::stateForEntry(e, pluginDir_) == cascade::core::companion::State::NotAvailable) {
+        return FOX_TR_NOOP("the program for this companion is not available in this copy of FoxSDR");
+    }
     // THE ACKNOWLEDGEMENT GATE, last so it is the final thing standing between
     // a compatible, licensed, not-yet-installed plugin and the download.
     //

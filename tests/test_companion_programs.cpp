@@ -734,6 +734,17 @@ void testRecord() {
     CHECK(!fs::exists(dir / "helpers") && !fs::exists(dir / "companions.json"));
     // removing what was never recorded is fine
     CHECK(cp::removeProgram(dir.string(), "nothing.dll", err));
+    // THE STORE'S OWN REMOVE (PluginRepo::remove) takes the program and its record with the bridge
+    {
+        fs::remove_all(dir);
+        fs::create_directories(dir);
+        CHECK(installOne(w, indexOf(w, s), dir, err));
+        CHECK(fs::exists(dir / "helpers" / "multimon-helper.exe") && fs::exists(dir / "companions.json"));
+        PluginRepo repoForRemove;
+        CHECK(repoForRemove.remove(dir.string(), bridgeFile(), err));
+        if (!err.empty()) { std::printf("      %s\n", err.c_str()); }
+        CHECK(tree(dir).empty());   // the bridge, the program, the record and the helpers folder: all gone
+    }
 
     // an UPDATE replaces the program; a failed update (hash) leaves the old one and its record
     fs::remove_all(dir);
