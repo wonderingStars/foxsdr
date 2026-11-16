@@ -1742,8 +1742,8 @@ if(CASCADE_TEST_PYTHON)
     # The drive fixtures' WAV files are git-ignored and made by their make_<name>.py (src/slint/tests/drive/fixtures/.gitignore): a fresh
     # checkout has none, so the two tests that play them as radios stopped at "the fixture scope.wav is not in ..." (exit 2) or, for the
     # others, at a radio that never opened, on a clean Linux build. Standard library only; each script writes its WAV beside itself, where the
-    # tests read it. test_engine_api_source_kinds plays scope.wav, cw-decoder.wav and twotone-decoder.wav; test_engine_api_decode_radio plays scope.wav.
-    foreach(_n IN ITEMS scope cw-decoder twotone-decoder)
+    # tests read it. test_engine_api_source_kinds plays scope.wav, cw-decoder.wav and twotone-decoder.wav; test_engine_api_decode_radio plays those four of the cw, pocsag, rtty and twotone decoders and scope.wav.
+    foreach(_n IN ITEMS scope cw-decoder twotone-decoder pocsag-decoder rtty-decoder)
         add_test(NAME fixture_${_n}_wav
             COMMAND ${CASCADE_TEST_PYTHON} -I ${CMAKE_SOURCE_DIR}/src/slint/tests/drive/fixtures/make_${_n}.py)
         set_tests_properties(fixture_${_n}_wav PROPERTIES FIXTURES_SETUP drive_wavs TIMEOUT 120)
