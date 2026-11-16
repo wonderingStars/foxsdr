@@ -45,6 +45,23 @@ sites was not read.
   origins" (the page's own origin).
 * A request that carries another web site's `Origin` is refused (403), unless the site is on the "Allowed web origins" list, which may then READ
   (GET, OPTIONS) but never change anything.
+* The web page's sign-in: guessing the owner's password can no longer be helped along by a listener sign-in from the same address (separate counters).
+* A saved web password (or other secret) that Windows cannot open on this PC is never erased by a save; the web server then refuses to start until a new
+  password is set, with the sentence "the saved web password could not be opened on this PC ... set the password again before turning web access on".
+* Importing a settings bundle no longer changes: the plugin catalogue address and extra plugin sites, the web, CAT and TCI bind choices and the UDP audio
+  host, the radio or file the program opens at start (source kind, SoapySDR and native arguments, Pluto address, rtl_tcp address, I/Q file, saved radios)
+  and the telemetry and diagnostics switches. This computer keeps its own; the import notes say which were left out. (The old "telemetry switch is kept
+  from the bundle" behaviour is gone.)
+* The website copy does not download companion programs until the owner's signing key is in the build: their cards read NOT AVAILABLE. The Store copy
+  (programs inside the package) is unchanged. A damaged `plugins/companions.json` stops the plugins it names with a sentence that says how to repair it.
+* Radio failure reports (still switched off) carry less of a driver's sentence: host names, MAC addresses, Linux and device paths, file names, other
+  devices' serial numbers and unit-less tuning numbers are replaced by `<host>`, `<mac>`, `<path>`, `<file>`, `<id>` and `#`.
+* The RDS log CSV writes `'=...` for a station text that starts with = + - or @ (the usual spreadsheet guard). The web page shows RDS and catalogue text
+  as plain text.
+* A web page cannot open the TCI port (a TCI program is unaffected). The HTTPS page drops a client that has not finished its first request head within 15 s.
+* The Outputs page no longer calls a host name that merely starts with `127.` "this computer only".
+* Release note to add (L11): copies of an old plain-text settings file made OUTSIDE the settings folder (OneDrive or File History versions, hand-made copies)
+  cannot be cleaned by the program.
 
 ## Expectations changed
 
@@ -74,10 +91,53 @@ sends `Host: 127.0.0.1` instead of `Host: test`.
 * `src/engine/process_boot.cpp`: one `lockFakePackageSeams()` call and its include (L3).
 * `src/net/web_server.cpp/.hpp`, `web_wire_c.hpp`, `web_wire_c_bookmarks.cpp`: the guard, the read-only rule, the hook `mayChange`.
 
+## Every finding was read in the code first
+
+All 21 findings of the lane list (R1, R2, R3, R4, R5, R6, R9, R10, M1, M2, M3, R13, L1, L3, L4, L8, L10, L11 and the pairs named with them) were checked against the
+code before they were fixed; none was wrong. Adjustments found while reading: review 1's L8 regex worry is mostly not reachable (review 2 says so: `scrubUploadLine`
+has no regular expression and the three in `radio_report.cpp` have no nested repetition), so the length clip is a hardening step and not a repair; review 1's M2
+list was extended by R13 and the set in the code is the union (updateChannel left out on purpose, see M2); R10's third loader is not in this base.
+
+## Tests run, and NOT RUN
+
+Run, at the final commit `1ad5ae67` (Release, `D:/foxsdr-build/en-sysmodels`, `ctest -j2`): 27 suites covering the web server, guard, TLS, secure room, policy, users, control,
+bookmarks, CORS, server host, remote key release, engine web API, secret vault, bundle, setup, config, companions (three suites), package identity, the five radio-report suites and
+the RDS log: `100% tests passed, 0 tests failed out of 27` (76.7 s). Also green, run by name: test_tci_server (282), test_tci_engine (285), test_tci_protocol, test_ws_frame,
+test_s4_outputs (119), test_engine_api_s4_outputs, test_patch_outputs, test_error_paths (30 checks, PENDING pin 459 unchanged), test_i18n, test_diagnostics_free (stamp:
+"git HEAD now: 1ad5ae677248, binary says: 1ad5ae677248"), test_plugin_repo (1359), test_plugin_repo_helper (199), test_engine_api_wire_c_sys, test_engine_api_wire_c_store,
+test_state_snapshot_golden, test_transmit_dead_man. On the hidden desktop `FoxSDRSec1` (the launcher, no visible window): `test_stop_ends_recordings` (207 checks: the real
+`cascade.exe` child now runs with a web password and signs in) and `gui_desktop_guard` plus `test_diagnostics` (the stamp test for the GUI label; 283 checks).
+
+NOT RUN: the full headless gate, the full GUI gate, the Slint drive scripts (two were edited, see Expectations), the stamp tests of the Slint build, any Linux build (the POSIX half of
+L10 and `process_boot` on Linux were not compiled), the product's start-up as a process for L3 (`bootProcess` without `--frames`), the real mouse drive. The machine was kept
+quiet on purpose (the merge's gates were running in another worktree).
+
+## OWNER-VISIBLE CHOICES MADE (one line each, to confirm or reverse)
+
+* Host rule: any IP literal, `localhost`, this computer's name and `name.local`, and the host of every "Allowed web origins" entry. A dynamic-DNS name needs an entry there.
+* A foreign Origin with no list is now 403 even on a GET (it was answered 200 without CORS headers).
+* The word "read-only" page text is one English sentence in the page script (the web page has no catalogue); the shelf and window sentences reuse existing translated strings, so no catalogue changed.
+* Config hash: the real `%APPDATA%/foxsdr/config.json` still has sha256 `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3`, checked after the hidden-desktop runs.
+
+## New strings
+
+None in the 33 catalogues (no `tr()` call was added). English sentences added: the web page's read-only sentence (also the 403 body of a refused change and of a refused bookmark
+change), the host and origin refusals (`this address is not one this page is served on`, `requests from another web site are refused`), the unreadable-password refusal, the damaged-list
+sentence of `checkBeforeStart`, the TCI refusal, the log sentence of the report state. `lang_assets.hpp` was not regenerated.
+
 ## OPEN ROWS FOR THE NEXT LANE
 
 | Row | Kind of lane |
 |---|---|
-| R7, R8 (rtl_tcp, TCP audio and API servers of `feat/screen-s4b`; also R8's missing Host check on the API server) | a lane cut after `feat/screen-s4b` is merged |
-| R11, R12, L2, L9, L12 | hardening lane (not tonight) |
+| R7, R8 (rtl_tcp server, TCP audio server and the API server of `feat/screen-s4b`: no password for "every address"; no Host check on the API server; password work on the IO thread; the credential cache) | a lane cut after `feat/screen-s4b` is merged (also takes R10's `SwlBook::load` in `src/engine/s4b_swl.cpp`) |
+| R11 (`NetSampleSource::lastError()` returns a pointer into a string after the lock is released), R12 (host-name lookups with no time bound), L2 (the bridge's search order), L9 (Linux helper launch: relative PATH entries, pipe I/O without a timeout), L12 (installer report: the DNS timeout) | hardening lane |
+| L5 (TCI "reachable from other computers" has no password), L6 and L7 (raw I/Q over UDP and TCP: bind address, unauthenticated sender, counter inflation) | an owner decision on L5 (TCI clients send no password); L6 and L7 are in `feat/screen-s5`, not in the lane list |
 | L13 | withdrawn by review 2 (not a finding) |
+| M1 follow-up: a dedicated shelf sentence "companion programs cannot be downloaded in this build" | a translation lane (33 catalogues) |
+| M1: the owner's public key into `kOwnerKeyHex` (until then the website copy downloads no companion program) | the owner, before the release |
+| R4: the plain (non-HTTPS) server's slow-client exposure; the second and later requests of a kept-alive HTTPS connection | a lane that can replace or wrap cpp-httplib's accept path |
+| L1: no record file at all still reads as "nothing installed" | the bridge starting from the verified handle (L2) |
+| L4: clear-text MQTT password and InfluxDB token to another computer (refuse, or an "I accept clear text" tick) | an owner decision |
+| R9: a bare dotless host name with no cue word in front; positions (decimal latitude and longitude) have no rule | scrubber lane, if a driver string is ever found that carries them |
+| The two edited drive scripts (`companions-website-browse.txt`, `companions-website-page.txt`) and a GUI pass over the read-only badge on the web page and the Allowed-web-origins text | the next lane that runs the GUI gate and the mouse drive |
+| The Linux build of L10 and L3 | the Linux lane |
