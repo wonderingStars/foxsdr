@@ -362,10 +362,13 @@ inline Counts withoutStages(Counts c) {
 // THE REAL BINARY'S LEDGER ALSO HOLDS THE FIRST-RUN RADIO CHECK'S FINDINGS (`setup.<kind>.<family>`, 0.99.107), which say what THIS machine has on its
 // USB bus (a run on a computer with a UHD radio counts setup.usable.usrp). The tests of the real application's failure counts set them aside as well;
 // the findings are held by the synthetic-machine tests (radioSetupJudged), which control the machine.
+// `scan_none` IS ANOTHER FACT ABOUT THIS MACHINE (radio reports, L1): the real binary run here, on a computer with nothing listed, now counts that its scan found no
+// radio - it could not before, because the two address rows every scan appends kept the list from ever being empty (engine.cpp, foundNativeRows). It is set aside
+// with the setup findings; tests/test_radio_reports_engine.cpp holds it where the machine is controlled.
 inline Counts withoutStagesOrMachine(Counts c) {
     c = withoutStages(std::move(c));
     for (auto it = c.begin(); it != c.end();) {
-        it = it->first.rfind("setup.", 0) == 0 ? c.erase(it) : std::next(it);
+        it = (it->first.rfind("setup.", 0) == 0 || it->first == "scan_none") ? c.erase(it) : std::next(it);
     }
     return c;
 }

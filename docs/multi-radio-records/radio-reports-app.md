@@ -158,7 +158,56 @@ of every other report as before. Nothing is sent by THIS build: the live switch 
 | Store privacy answers, release notes, the Android build's events (C5) | the owner, release lane | release lane |
 | The mouse drive over the Diagnostics and Usage pages, a real HF+ failing, the `radio-reports` folder's size after a week | the mouse drive and the owner | drive |
 | The measurement of bytes per session and requests per session on real traffic (decision 13, R5) | real traffic | site lane |
+| `telemetry-worker/radio-reports.test.mjs:105` splits the manifest on `
+` and fails on a CRLF checkout (`telemetry_worker` RED here): `.split(/?
+/)` | the Worker's owner | Worker lane |
+| `slint_drive_layout-section-overlap-1600` and `-624` (`Read the pitch now` bottom reads 2058, the script says 2028): the layout above CW surround's last key has grown since engine fixes 6; re-measure and move the number, or find the section that grew | the screen lane | screen lane |
+| `slint_drive_system-look`: `look.width` stays at 800 after "Interface size: Auto" (intermittent since window gaps 2, red alone here) | the screen lane | screen lane |
+| `radioreport::global()` is shared by every engine in a process: a test that builds a second engine in the same process reconfigures it (the engine test says so and re-points it per scenario) | none | note |
+| Two copies of FoxSDR running at once share one `radio-reports` folder: the second sends the first's active segment as a leftover (the site de-duplicates by session and `seq`); a lock per session would stop it | engine lane | engine lane |
 
-## GATE TOTALS
+## GATE TOTALS (Release, `D:/foxsdr-build/en-tuning`, hidden desktop `FoxSDRTestsRRA`, a machine at 50 to 100 percent CPU from other lanes)
 
-(filled in below at the end of the lane)
+The tree was built whole once (`cmake --build . --config Release --parallel 4`, exit 0, no compiler or linker error) and the targets this lane changed were rebuilt after each
+later edit. The base was built before any change as far as the engine library and 325 test targets (no error); I did not build the whole base tree to compare against.
+
+**Headless slice** (`ctest -L headless -E "slint|telemetry_worker" -j2 --timeout 300`, 1070 tests): `99% tests passed, 14 tests failed out of 1070`, `Total Test time (real) = 4213.15 sec`.
+The 14, each re-run alone:
+
+| Test | Verdict |
+|---|---|
+| `test_thread_inventory` | MINE, FIXED: two new rows in `tests/thread_inventory_rows.inc` (the sender thread and the machine reader's `std::async`); passes (43.7 s) |
+| `test_radio_reports_engine`, `_stepped` | MINE, FIXED: the first-session scenario needed the engine's launch count to be 1 (a hermetic engine holds 0); then the stepped variant's stream figure assumed a 60 s window exactly (a slow run made it 61): the figure is now held to the window it states. 120 checks, 0 failed |
+| `test_engine_api_transmit`, `test_engine_api_wire_a_display`, `test_gui_file_jobs`, `test_plugin_unload_handshake`, `test_sentinel_beat_source`, `test_snr_tap`, `test_window_threaded_look` | LOAD (frame counts, gaps and file waits judged by wall time): each passed alone (123 s, 9.8 s, 108 s, 4.3 s, 8.4 s, 0.11 s, 5.4 s) |
+| `test_engine_api_merge` | LOAD: "a run outlasted the 900 ms the rules judge time by" on dozens of cases (runs of 3 to 6 s); failed alone once at 200.8 s and PASSED alone later at 35.5 s |
+| `test_pass_control`, `test_health_app_stepped` (and `test_health_app`) | the known load flakes: red alone too under this load (a pass cadence of 16.7 ms; `slow.startup.250ms=1` left in the ledger the test compares). `test_health_app` passed 252 of 252 on a quieter run earlier in the lane |
+| `test_diagnostics_free` | the stamp: the binary named an earlier commit than HEAD; passes after the rebuild at the final commit (below) |
+
+**Not in that slice:** `telemetry_worker` (the Worker's own node test, which I did not change) is RED on this checkout: `telemetry-worker/radio-reports.test.mjs:105` splits
+`MANIFEST.sha256` on `\n`, and this machine checks out with `core.autocrlf=true`, so every file name carries a `\r` and the first read fails with ENOENT
+(`refuse-address-in-reason.json`). The committed manifest is LF (`git ls-files --eol`: `i/lf w/crlf`). It is the Worker's test and not editable here: `.split(/\r?\n/)` fixes it.
+The `slint`-named headless tests: only that one other test matched, and it passed.
+
+**GUI gate** (`ctest -L gui -j3 --timeout 300`, `FOXSDR_FRAME_CAP_HZ=60`, 384 tests): `98% tests passed, 6 tests failed out of 384`, `Total Test time (real) = 3469.98 sec`. The 6, re-run alone:
+`slint_drive_fixture-weather-decoder` (state `count.decoderLines == 4`, read 2: timing; PASSED alone), `slint_drive_tools-airband` (PASSED alone), `test_diagnostics` (the stamp, below),
+`slint_drive_layout-section-overlap-1600` and `-624` (`expect "Read the pitch now" bottom <= "2028"`: it reads 2058; RED alone, and NOT MINE: this lane changed no `.slint` file and no layout
+(`git diff d4f855c5 -- src/slint/ui` is empty), the two scripts date from engine fixes 6, and the layout above that key has grown since; an OPEN ROW for a screen lane), and
+`slint_drive_system-look` (`state look.width == 1600 -> FAILED: it is 800`: recorded as intermittent by window gaps 2, `window-gaps-2.md`, which saw it pass 3 of 7 alone-runs with one binary; RED alone here; not mine for the same reason).
+
+**Error-path gate:** `test_error_paths` 24 checks, 0 failed; `errpath_gate_selftest` 42 checks, 0 failed; pin 1126 to 1116.
+**Lane tests (all green at the last run):** `test_radio_report` 129 checks, `test_radio_reporter` 199, `test_radio_reports_fields` 38 + the session reader, `test_radio_reports_never_sent` 7,
+`test_radio_reports_engine` 120, each of the engine tests also in its `_free` and `_stepped` variants; `test_telemetry` 292, `test_health_events` 114874, `test_stall_count`, `test_exit_cause_app`.
+
+## EXPECTATIONS CHANGED
+
+* `tests/test_health_app.cpp`, the helper `withoutStagesOrMachine`: it set aside `reached.*` and `setup.*` (facts about THIS machine) before comparing the real binary's failure counts.
+  It now also sets aside `scan_none`. Before: a run on a computer with nothing listed left only the failure counts; after the L1 repair the same run also counts `scan_none`, which is a
+  machine fact of the same kind. On this PC (a usable RTL-SDR and a USRP are listed) the token never appears, so the helper's change is not exercised here: it is for a machine
+  with no radio, and is UNVERIFIED there.
+* `tests/test_error_paths.cpp`: `kPendingPin` 1126 to 1116 and the reporter-declaration check now also reads `core/radio_reporter.hpp` and `engine/engine.hpp` (a rename of either still fails it).
+  `tests/errpath_allow.tsv`: 10 PENDING lines removed.
+* `tests/thread_inventory_rows.inc`: two rows added.
+
+## STAMP TESTS, CONFIG HASH
+
+(see the end of this file)
