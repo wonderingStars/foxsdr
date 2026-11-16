@@ -32,6 +32,7 @@ bool TcpAudioServer::start(const TcpAudioConfig& cfg, UdpAudioSender::Reader rea
     fc.allowAllInterfaces = cfg.allowAllInterfaces;
     fc.port = static_cast<std::uint16_t>(cfg.port);
     fc.maxClients = cfg.maxClients;
+    fc.allowedPeers = cfg.allowedPeers;
     fc.clientQueueBytes = 64 * 1024;   // about 0.7 s of this audio: a client that falls further behind is dropped
     fc.ringBytes = 256 * 1024;
     fc.stallMs = 5000;

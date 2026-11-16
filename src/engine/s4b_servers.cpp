@@ -18,16 +18,22 @@ std::string scopeOf(bool allAddresses) {
     return allAddresses ? "reachable from other computers on your network, without a password" : "this computer only";
 }
 
+std::string scopeOfListed(bool allAddresses, const std::string& allow) {
+    return allAddresses ? "reachable only from the computers you listed (" + allow + "), without a password" : "this computer only";
+}
+
 Config configFrom(const cascade::engine::wirec::Settings& s) {
     Config c;
     c.tcpAudio = s.getBool("srv.tcpaudio.enabled");
     c.tcpAudioAll = s.getBool("srv.tcpaudio.all");
+    c.tcpAudioAllow = s.get("srv.tcpaudio.allow");
     c.tcpAudioPort = static_cast<int>(s.getInt("srv.tcpaudio.port"));
     c.tcpAudioRadio = static_cast<int>(s.getInt("srv.tcpaudio.radio"));
     c.tcpAudioPacket = s.get("srv.tcpaudio.packet") == "960" ? 960 : 480;
     c.controlRadio = static_cast<int>(s.getInt("srv.control.radio"));
     c.rtl = s.getBool("srv.rtltcp.enabled");
     c.rtlAll = s.getBool("srv.rtltcp.all");
+    c.rtlAllow = s.get("srv.rtltcp.allow");
     c.rtlPort = static_cast<int>(s.getInt("srv.rtltcp.port"));
     c.api = s.getBool("srv.api.enabled");
     c.apiAll = s.getBool("srv.api.all");
@@ -85,7 +91,7 @@ void ServerSet::setHooks(Hooks h) {
 }
 
 void ServerSet::applyTcpAudio(const Config& c) {
-    const bool changed = !configured_ || c.tcpAudio != cfg_.tcpAudio || c.tcpAudioAll != cfg_.tcpAudioAll || c.tcpAudioPort != cfg_.tcpAudioPort ||
+    const bool changed = !configured_ || c.tcpAudio != cfg_.tcpAudio || c.tcpAudioAll != cfg_.tcpAudioAll || c.tcpAudioAllow != cfg_.tcpAudioAllow || c.tcpAudioPort != cfg_.tcpAudioPort ||
                          c.tcpAudioRadio != cfg_.tcpAudioRadio || c.tcpAudioPacket != cfg_.tcpAudioPacket;
     if (!changed) { return; }
     if (tcpAudio_ != nullptr) {
@@ -94,10 +100,15 @@ void ServerSet::applyTcpAudio(const Config& c) {
     }
     tcpAudioProblem_.clear();
     if (!c.tcpAudio) { return; }
+    // beyond this computer the audio has no password, so only the computers the person typed may connect; with no usable list it does not start (checked first: before any radio is touched)
+    cascade::net::TcpAudioConfig tc;
+    if (c.tcpAudioAll) {
+        std::string listWhy;
+        if (!cascade::net::PeerAllow::parse(c.tcpAudioAllow, tc.allowedPeers, listWhy)) { tcpAudioProblem_ = "to let other computers connect, list the computers that may: " + listWhy; return; }
+    }
     if (!hooks_.audioReader) { tcpAudioProblem_ = "the engine gave this server no audio to read"; return; }
     cascade::net::UdpAudioSender::Reader reader = hooks_.audioReader(c.tcpAudioRadio);
     if (!reader) { tcpAudioProblem_ = "the engine would not open that radio's audio"; return; }
-    cascade::net::TcpAudioConfig tc;
     tc.bindAddress = c.tcpAudioAll ? "0.0.0.0" : "127.0.0.1";
     tc.allowAllInterfaces = c.tcpAudioAll;
     tc.port = c.tcpAudioPort;
@@ -123,14 +134,19 @@ void ServerSet::releaseRtl() {
 }
 
 void ServerSet::applyRtl(const Config& c) {
-    const bool changed = !configured_ || c.rtl != cfg_.rtl || c.rtlAll != cfg_.rtlAll || c.rtlPort != cfg_.rtlPort || c.controlRadio != cfg_.controlRadio;
+    const bool changed = !configured_ || c.rtl != cfg_.rtl || c.rtlAll != cfg_.rtlAll || c.rtlAllow != cfg_.rtlAllow || c.rtlPort != cfg_.rtlPort || c.controlRadio != cfg_.controlRadio;
     if (!changed) { return; }
     releaseRtl();
     rtlProblem_.clear();
     rtlTuneWord_.store(0, std::memory_order_relaxed);
     if (!c.rtl) { return; }
-    if (!hooks_.attachIq || !hooks_.radioIdentity) { rtlProblem_ = "the engine gave this server no radio samples to send"; return; }
+    // rtl_tcp has no password and hands out the radio's samples and accepts a retune: beyond this computer only the computers the person typed may connect (checked first: before any radio is touched)
     cascade::net::RtlTcpConfig rc;
+    if (c.rtlAll) {
+        std::string listWhy;
+        if (!cascade::net::PeerAllow::parse(c.rtlAllow, rc.allowedPeers, listWhy)) { rtlProblem_ = "to let other computers connect, list the computers that may: " + listWhy; return; }
+    }
+    if (!hooks_.attachIq || !hooks_.radioIdentity) { rtlProblem_ = "the engine gave this server no radio samples to send"; return; }
     rc.bindAddress = c.rtlAll ? "0.0.0.0" : "127.0.0.1";
     rc.allowAllInterfaces = c.rtlAll;
     rc.port = static_cast<std::uint16_t>(c.rtlPort);
@@ -377,7 +393,8 @@ void ServerSet::facts(const std::function<void(const std::string&, const std::st
     fact("srv.tcpaudio.accepted", tcpOn ? std::to_string(tcpAudio_->stats().accepted) : std::string("0"));
     fact("srv.tcpaudio.dropped", tcpOn ? std::to_string(tcpAudio_->stats().droppedSlow + tcpAudio_->stats().droppedStalled + tcpAudio_->stats().refusedFull) : std::string("0"));
     fact("srv.tcpaudio.problem", tcpAudioProblem_);
-    fact("srv.tcpaudio.scope", cfg_.tcpAudio ? scopeOf(cfg_.tcpAudioAll) : std::string());
+    fact("srv.tcpaudio.scope", cfg_.tcpAudio ? scopeOfListed(cfg_.tcpAudioAll, cfg_.tcpAudioAllow) : std::string());
+    fact("srv.tcpaudio.refused_peer", tcpOn ? std::to_string(tcpAudio_->stats().refusedPeer) : std::string("0"));
     const bool rtlOn = rtl_ != nullptr && rtl_->running();
     const cascade::net::RtlTcpStats rs = rtlOn ? rtl_->stats() : cascade::net::RtlTcpStats{};
     fact("srv.rtltcp.running", rtlOn ? "1" : "0");
@@ -391,7 +408,8 @@ void ServerSet::facts(const std::function<void(const std::string&, const std::st
     fact("srv.rtltcp.tunes_refused", std::to_string(rtlTuneRefused_.load()));
     fact("srv.rtltcp.ignored", std::to_string(rtlIgnored_.load() + rs.unknownCommands));
     fact("srv.rtltcp.problem", rtlProblem_);
-    fact("srv.rtltcp.scope", cfg_.rtl ? scopeOf(cfg_.rtlAll) : std::string());
+    fact("srv.rtltcp.scope", cfg_.rtl ? scopeOfListed(cfg_.rtlAll, cfg_.rtlAllow) : std::string());
+    fact("srv.rtltcp.refused_peer", std::to_string(rs.refusedPeer + rs.refusedProtocol));
     const bool apiOn = api_ != nullptr && api_->running();
     const cascade::net::ApiStats as = apiOn ? api_->stats() : cascade::net::ApiStats{};
     fact("srv.api.running", apiOn ? "1" : "0");

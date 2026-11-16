@@ -16,6 +16,7 @@
 #include "core/safe_file_io.hpp"
 #include "core/secret_vault.hpp"
 #include "engine/s4_outputs.hpp"
+#include "net/peer_allow.hpp"
 #include "net/web_cors.hpp"
 
 namespace cascade::engine::wirec {
@@ -87,12 +88,14 @@ constexpr Spec kSpecs[] = {
     // --- screen lane S4b: the servers other programs connect to (engine/s4b_servers.hpp). Every one is OFF; every one listens on this computer only unless its own "all" key is turned on. ---
     {"srv.tcpaudio.enabled", Kind::Bool, 0, 0, "0", ""},        // serve one radio's audio over TCP (raw 16-bit mono, 48000 a second: the format of the UDP audio)
     {"srv.tcpaudio.all", Kind::Bool, 0, 0, "0", ""},            // listen on every address instead of this computer only (no password: anyone on the network can listen)
+    {"srv.tcpaudio.allow", Kind::Text, 0, 400, "", ""},         // with "all": the addresses (192.168.1.20) or networks (192.168.1.0/24) that may connect; none listed = the server does not start beyond this computer
     {"srv.tcpaudio.port", Kind::Int, 1024, 65535, "7356", ""},
     {"srv.tcpaudio.radio", Kind::Int, 1, 8, "1", ""},
     {"srv.tcpaudio.packet", Kind::Choice, 0, 0, "480", "480|960"},   // samples per write: 10 ms or 20 ms
     {"srv.control.radio", Kind::Int, 1, 8, "1", ""},            // the radio the network streams and controls below act on
     {"srv.rtltcp.enabled", Kind::Bool, 0, 0, "0", ""},          // serve that radio's I/Q to programs that read an RTL-SDR over the network (rtl_tcp); only retuning is accepted from them
     {"srv.rtltcp.all", Kind::Bool, 0, 0, "0", ""},              // listen on every address instead of this computer only (no password)
+    {"srv.rtltcp.allow", Kind::Text, 0, 400, "", ""},           // the same for rtl_tcp (its protocol has no password)
     {"srv.rtltcp.port", Kind::Int, 1024, 65535, "1234", ""},
     {"srv.api.enabled", Kind::Bool, 0, 0, "0", ""},             // the WebSocket and SSE interface: other programs read the receiver's status, bookmarks and decoded lines and retune it
     {"srv.api.all", Kind::Bool, 0, 0, "0", ""},                 // listen on every address (programs must then sign in with the web page's account; refused while the web page has no password)
@@ -168,6 +171,11 @@ std::string extraRule(const std::string& key, const std::string& value) {
     if (key == "out.influx.org") { return cascade::engine::s4::checkInfluxText(value, true); }
     if (key == "out.influx.token" && value.find_first_of("\r\n") != std::string::npos) { return "the token has a line break"; }
     if (key == "out.webhook.url") { return cascade::engine::s4::checkWebhookUrl(value); }
+    if ((key == "srv.tcpaudio.allow" || key == "srv.rtltcp.allow") && !value.empty()) {
+        cascade::net::PeerAllow list;
+        std::string why;
+        if (!cascade::net::PeerAllow::parse(value, list, why)) { return why; }
+    }
     if (key == "srv.mcp.token" && value.find_first_of("\r\n\t ") != std::string::npos) { return "the token has a space or a line break"; }
     if (key == "rot.host" && !value.empty()) { return cascade::engine::s4::checkMqttHost(value); }
     if (key == "rot.serial" && !value.empty()) {

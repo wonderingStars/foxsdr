@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "net/net_sock.hpp"
+#include "net/peer_allow.hpp"
 #include "net/spsc_ring.hpp"
 
 namespace cascade::net {
@@ -51,11 +52,14 @@ struct RtlTcpConfig {
     int pollMs = 2;
     std::uint32_t tunerType = 0;
     std::uint32_t gainCount = 0;
+    PeerAllow allowedPeers;                  // when not empty: only these client addresses are served; any other is closed before it can take the one place (net/peer_allow.hpp)
 };
 
 struct RtlTcpStats {
     std::uint64_t accepted = 0;
     std::uint64_t refusedBusy = 0;        // a second client, closed at once
+    std::uint64_t refusedPeer = 0;        // an address that is not on the allow-list, closed at once
+    std::uint64_t refusedProtocol = 0;    // a client whose first command was not an rtl_tcp command (a web page or another protocol talking to this port): dropped
     std::uint64_t closedByPeer = 0;
     std::uint64_t droppedStalled = 0;
     std::uint64_t bytesSent = 0;
@@ -105,7 +109,7 @@ private:
     sock::Handle listener_ = sock::kInvalid;
     std::uint32_t bindIp_ = 0;
 
-    std::atomic<std::uint64_t> accepted_{0}, refusedBusy_{0}, closedByPeer_{0}, droppedStalled_{0}, bytesSent_{0}, bytesRead_{0}, samplesIn_{0}, samplesDropped_{0}, commands_{0}, unknownCommands_{0};
+    std::atomic<std::uint64_t> accepted_{0}, refusedPeer_{0}, refusedProtocol_{0}, refusedBusy_{0}, closedByPeer_{0}, droppedStalled_{0}, bytesSent_{0}, bytesRead_{0}, samplesIn_{0}, samplesDropped_{0}, commands_{0}, unknownCommands_{0};
 };
 
 }  // namespace cascade::net

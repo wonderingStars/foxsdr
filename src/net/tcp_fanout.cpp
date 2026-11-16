@@ -88,6 +88,7 @@ FanoutStats TcpFanout::stats() const {
     FanoutStats s;
     s.accepted = accepted_.load();
     s.refusedFull = refusedFull_.load();
+    s.refusedPeer = refusedPeer_.load();
     s.droppedSlow = droppedSlow_.load();
     s.droppedStalled = droppedStalled_.load();
     s.closedByPeer = closedByPeer_.load();
@@ -156,6 +157,11 @@ void TcpFanout::acceptAll(std::int64_t now) {
     for (;;) {
         const sock::Handle h = sock::acceptOne(listener_);
         if (h == sock::kInvalid) { return; }
+        if (!cfg_.allowedPeers.empty() && !cfg_.allowedPeers.allowsText(sock::peerOf(h))) {
+            refusedPeer_.fetch_add(1, std::memory_order_relaxed);   // not a computer the person listed: gone before it is sent or read anything
+            sock::closeHandle(h);
+            continue;
+        }
         if (static_cast<int>(clients_.size()) >= cfg_.maxClients) {
             refusedFull_.fetch_add(1, std::memory_order_relaxed);
             sock::closeHandle(h);

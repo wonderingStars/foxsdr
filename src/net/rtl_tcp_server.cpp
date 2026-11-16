@@ -109,6 +109,8 @@ RtlTcpStats RtlTcpServer::stats() const {
     RtlTcpStats s;
     s.accepted = accepted_.load();
     s.refusedBusy = refusedBusy_.load();
+    s.refusedPeer = refusedPeer_.load();
+    s.refusedProtocol = refusedProtocol_.load();
     s.closedByPeer = closedByPeer_.load();
     s.droppedStalled = droppedStalled_.load();
     s.bytesSent = bytesSent_.load();
@@ -129,6 +131,7 @@ void RtlTcpServer::run() {
     std::int64_t lastProgress = 0;
     std::uint8_t cmd[kRtlTcpCommandBytes];
     std::size_t cmdFill = 0;
+    bool anyCommand = false;   // a command has been read on this connection
     std::uint8_t trash[4096];
 
     const auto dropClient = [&](std::atomic<std::uint64_t>& why) {
@@ -138,6 +141,7 @@ void RtlTcpServer::run() {
         out.clear();
         off = 0;
         cmdFill = 0;
+        anyCommand = false;
         clients_.store(0, std::memory_order_release);
     };
     const auto flush = [&](std::int64_t now) {   // false: the client is gone
@@ -194,6 +198,11 @@ void RtlTcpServer::run() {
             for (;;) {
                 const sock::Handle h = sock::acceptOne(listener_);
                 if (h == sock::kInvalid) { break; }
+                if (!cfg_.allowedPeers.empty() && !cfg_.allowedPeers.allowsText(sock::peerOf(h))) {
+                    refusedPeer_.fetch_add(1, std::memory_order_relaxed);   // not a computer the person listed: it never gets the place, nor a byte
+                    sock::closeHandle(h);
+                    continue;
+                }
                 if (client != sock::kInvalid) {
                     refusedBusy_.fetch_add(1, std::memory_order_relaxed);
                     sock::closeHandle(h);
@@ -205,6 +214,7 @@ void RtlTcpServer::run() {
                 header(cfg_.tunerType, cfg_.gainCount, out.data());
                 off = 0;
                 cmdFill = 0;
+                anyCommand = false;
                 lastProgress = now;
                 accepted_.fetch_add(1, std::memory_order_relaxed);
                 clients_.store(1, std::memory_order_release);
@@ -226,6 +236,14 @@ void RtlTcpServer::run() {
                             if (cmdFill == kRtlTcpCommandBytes) {
                                 cmdFill = 0;
                                 commands_.fetch_add(1, std::memory_order_relaxed);
+                                if (!anyCommand && !(cmd[0] >= 0x01 && cmd[0] <= kRtlCmdLast)) {
+                                    // A program that speaks rtl_tcp starts with an rtl_tcp command. What starts with anything else is another protocol aimed at this port (a web page's request to
+                                    // http://127.0.0.1:1234, which the browser lets through, begins with a letter): it is dropped before it can line up a later 5-byte block as a retune.
+                                    refusedProtocol_.fetch_add(1, std::memory_order_relaxed);
+                                    gone = true;
+                                    break;
+                                }
+                                anyCommand = true;
                                 if (cmd[0] >= 0x01 && cmd[0] <= kRtlCmdLast) {
                                     if (onCommand_) { onCommand_(cmd[0], get32(cmd + 1)); }
                                 } else {
@@ -233,6 +251,7 @@ void RtlTcpServer::run() {
                                 }
                             }
                         }
+                        if (gone) { break; }
                         continue;
                     }
                     if (r < 0 && sock::wouldBlock()) { break; }

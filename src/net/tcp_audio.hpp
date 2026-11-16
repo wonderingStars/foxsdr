@@ -32,6 +32,7 @@ struct TcpAudioConfig {
     int port = kDefaultTcpAudioPort;         // 1..65535 (0 = the OS picks, for the tests)
     int packetFrames = kUdpPacketFramesShort;   // 480 or 960 samples a write
     int maxClients = 4;                      // 1..kFanoutMaxClientsCap
+    PeerAllow allowedPeers;                  // when not empty: only these client addresses are served (net/peer_allow.hpp)
 };
 
 class TcpAudioServer {

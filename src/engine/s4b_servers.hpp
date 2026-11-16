@@ -39,6 +39,7 @@ struct Config {
     // audio over TCP
     bool tcpAudio = false;
     bool tcpAudioAll = false;
+    std::string tcpAudioAllow;     // beyond this computer: the client addresses that may connect (net/peer_allow.hpp); without them the server does not start
     int tcpAudioPort = 7356;
     int tcpAudioRadio = 1;
     int tcpAudioPacket = 480;
@@ -47,6 +48,7 @@ struct Config {
     // rtl_tcp: the radio's I/Q for programs that read an RTL-SDR over the network, and tuning from them
     bool rtl = false;
     bool rtlAll = false;
+    std::string rtlAllow;          // the same for rtl_tcp, whose protocol has no place for a password
     int rtlPort = 1234;
     // the WebSocket / SSE API (net/api_server.hpp): other programs read what the receiver does and retune it; the web page's own account guards it
     bool api = false;
@@ -60,7 +62,7 @@ struct Config {
     // the antenna rotator (engine/s4b_rotator.hpp)
     RotatorConfig rotator;
     bool operator==(const Config& o) const {
-        return rotator == o.rotator && api == o.api && apiAll == o.apiAll && apiPort == o.apiPort && apiBindForTest == o.apiBindForTest && mcp == o.mcp && mcpPort == o.mcpPort && mcpToken == o.mcpToken && tcpAudio == o.tcpAudio && tcpAudioAll == o.tcpAudioAll && tcpAudioPort == o.tcpAudioPort && tcpAudioRadio == o.tcpAudioRadio && tcpAudioPacket == o.tcpAudioPacket &&
+        return rotator == o.rotator && api == o.api && apiAll == o.apiAll && apiPort == o.apiPort && apiBindForTest == o.apiBindForTest && mcp == o.mcp && mcpPort == o.mcpPort && mcpToken == o.mcpToken && tcpAudio == o.tcpAudio && tcpAudioAll == o.tcpAudioAll && tcpAudioAllow == o.tcpAudioAllow && rtlAllow == o.rtlAllow && tcpAudioPort == o.tcpAudioPort && tcpAudioRadio == o.tcpAudioRadio && tcpAudioPacket == o.tcpAudioPacket &&
                controlRadio == o.controlRadio && rtl == o.rtl && rtlAll == o.rtlAll && rtlPort == o.rtlPort;
     }
 };
@@ -92,6 +94,8 @@ struct Hooks {
 
 // The sentence that says who can reach a server: "this computer only" or the warning for every address.
 std::string scopeOf(bool allAddresses);
+// The same for the two servers that are widened only to a list of client addresses.
+std::string scopeOfListed(bool allAddresses, const std::string& allow);
 
 class ServerSet {
 public:
