@@ -97,6 +97,20 @@ void testWriteKeepsSecretsOutOfTheFile() {
 }
 
 // RULE: a second save (the dated copy of the first is kept beside the file) leaves no plain copy anywhere in the folder.
+// L10 (security review 1): on Linux the protected copy is created readable by its owner only, from its first byte (no 0644 window before a chmod), and no temporary copy is left.
+// A Linux-only check: it is not compiled on Windows, and was NOT RUN there (UNVERIFIED until the Linux build runs it).
+#ifndef _WIN32
+void testSidecarIsOwnerOnlyFromCreation() {
+    const fs::path d = freshDir("perm");
+    const std::string path = (d / "config.json").string();
+    std::string err;
+    CHECK(ConfigStore::save(path, configWithSecrets(), err));
+    const fs::perms p = fs::status(vault::sidecarPath(path)).permissions();
+    CHECK((p & (fs::perms::group_all | fs::perms::others_all)) == fs::perms::none);
+    CHECK(!fs::exists(vault::sidecarPath(path) + ".vtmp"));
+}
+#endif
+
 void testNoPlainCopyAfterManySaves() {
     const fs::path d = freshDir("many");
     const std::string path = (d / "config.json").string();
@@ -125,6 +139,12 @@ void testMigration() {
     spit(path, old.dump(4) + "\n");
     spit(path + ".20261101-120000.bak", old.dump(4) + "\n");   // an older dated copy that also holds them
     spit(path + ".20261102-120000.bak", "not json at all " + std::string(kTesterToken));   // damaged: left alone (not parseable)
+    // L11 (security review 1): EVERY copy of the settings file in the folder is scrubbed, whatever it is called - an import's kept copy, a reset's, a hand-made one
+    spit(path + ".before-import-20261110-101010", old.dump(4) + "\n");
+    spit(path + ".before-reset-20261110-101011", old.dump(4) + "\n");
+    spit(path + ".mine-old", old.dump(4) + "\n");
+    spit((d / "other.json.20261101-120000.bak").string(), old.dump(4) + "\n");               // another program's file: not a copy of THIS settings file, left alone
+    spit((d / "config.jsonX").string(), old.dump(4) + "\n");                                   // a longer name that is not "<name>." + something: left alone
     CHECK(has(everythingIn(d), kTesterToken));
     AppConfig c;
     std::string err;
@@ -139,6 +159,15 @@ void testMigration() {
     CHECK(!has(file, "SALTSALTSALT"));
     CHECK(!has(slurp(path + ".20261101-120000.bak"), kTesterToken));   // scrubbed
     CHECK(!has(slurp(path + ".20261101-120000.bak"), kAppToken));
+    for (const char* copy : {".before-import-20261110-101010", ".before-reset-20261110-101011", ".mine-old"}) {
+        CHECK(!has(slurp(path + copy), kTesterToken));
+        CHECK(!has(slurp(path + copy), kAppToken));
+        CHECK(!has(slurp(path + copy), "SALTSALTSALT"));
+        CHECK(has(slurp(path + copy), "4321"));   // only the secrets were taken out: the rest of the copy is as it was
+    }
+    CHECK(has(slurp(d / "other.json.20261101-120000.bak"), kTesterToken));   // not ours
+    CHECK(has(slurp(d / "config.jsonX"), kTesterToken));
+    CHECK(has(slurp(path + ".20261102-120000.bak"), kTesterToken));         // not a JSON object: nothing to take out
     CHECK(fs::exists(vault::sidecarPath(path)));
     // loading again changes nothing and still reads them
     const std::string before = slurp(path);
@@ -426,6 +455,9 @@ int main() {
     fs::remove_all(g_base, ec);
     fs::create_directories(g_base);
     testWriteKeepsSecretsOutOfTheFile();
+#ifndef _WIN32
+    testSidecarIsOwnerOnlyFromCreation();
+#endif
     testNoPlainCopyAfterManySaves();
     testMigration();
     testClear();

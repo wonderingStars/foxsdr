@@ -14,6 +14,12 @@
 #include <set>
 #include <system_error>
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 #include <nlohmann/json.hpp>
 
 #ifdef _WIN32
@@ -67,10 +73,29 @@ std::string slurp(const fs::path& p) {
     return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
 }
 
-// Temp file in the same folder, then a rename over the target (the way the settings writer does it).
-bool writeAtomic(const fs::path& target, const std::string& text) {
+// Temp file in the same folder, then a rename over the target (the way the settings writer does it). `priv`: the file is CREATED readable by its owner only (L10, security
+// review 1): on Linux the default mode left the temporary copy readable by other users until the rename and the permission call after it. (Windows files take the folder's access
+// rights and the value inside is DPAPI-protected; there is no mode to set.)
+bool writeAtomic(const fs::path& target, const std::string& text, bool priv = false) {
     fs::path tmp = target;
     tmp += ".vtmp";
+#ifndef _WIN32
+    if (priv) {
+        const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd < 0) { return false; }
+        ::fchmod(fd, 0600);   // (an older temporary file kept its old mode: the open above only sets it for a file it creates)
+        std::size_t done = 0;
+        bool ok = true;
+        while (ok && done < text.size()) {
+            const ssize_t n = ::write(fd, text.data() + done, text.size() - done);
+            if (n <= 0) { ok = false; } else { done += static_cast<std::size_t>(n); }
+        }
+        if (::close(fd) != 0) { ok = false; }
+        if (!ok) { std::error_code rm; fs::remove(tmp, rm); return false; }
+    } else
+#else
+    (void)priv;
+#endif
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
         if (!f) { return false; }
@@ -112,7 +137,7 @@ bool writeSidecar(const std::string& settingsPath, const json& items) {
     j["format"] = "foxsdr-secrets";
     j["version"] = 1;
     j["items"] = items;
-    const bool ok = writeAtomic(p, j.dump(2, ' ', false, json::error_handler_t::replace) + "\n");
+    const bool ok = writeAtomic(p, j.dump(2, ' ', false, json::error_handler_t::replace) + "\n", /*priv=*/true);
     if (ok) { tightenPermissions(p); }
     return ok;
 }
@@ -268,11 +293,18 @@ int scrubBackups(const std::string& settingsPath) {
     int scrubbed = 0;
     const fs::path target(settingsPath);
     const std::string stem = target.filename().string() + ".";
+    const std::string sidecar = fs::path(sidecarPath(settingsPath)).filename().string();
     const fs::path dir = target.parent_path().empty() ? fs::path(".") : target.parent_path();
     std::error_code ec;
     for (const auto& e : fs::directory_iterator(dir, ec)) {
+        // EVERY copy of the settings file in its folder (L11, security review 1): the dated ".bak" the writer makes, the "<name>.before-import-<stamp>" an import keeps, the "<name>.before-reset-..."
+        // a reset keeps, a hand-made "<name>.old". Anything that is not a JSON object holding a secret is left alone, and so is the protected copy itself.
         const std::string name = e.path().filename().string();
-        if (name.size() != stem.size() + 15 + 4 || name.rfind(stem, 0) != 0 || name.compare(name.size() - 4, 4, ".bak") != 0) { continue; }
+        if (name.rfind(stem, 0) != 0 || name == sidecar || name.size() == stem.size()) { continue; }
+        std::error_code isFile;
+        if (!e.is_regular_file(isFile)) { continue; }
+        if (fs::file_size(e.path(), isFile) > 8u * 1024u * 1024u) { continue; }   // (a settings copy is a few kilobytes)
+        if (name.size() >= 5 && name.compare(name.size() - 5, 5, ".vtmp") == 0) { continue; }
         const std::string text = slurp(e.path());
         json j = json::parse(text, nullptr, false);
         if (j.is_discarded() || !j.is_object()) { continue; }
