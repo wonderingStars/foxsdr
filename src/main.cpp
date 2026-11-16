@@ -88,7 +88,8 @@ int main(int argc, char** argv) {
         serviceRun.measuring = measure != nullptr;
         serviceRun.safePlugins = boot.safePlugins;
         if (boot.safePlugins) { std::fprintf(stderr, "cascade: safe mode - no plugin will be loaded in this session\n"); }
-        const cascade::engine::ServiceOptions options = cascade::engine::windowServiceOptions(serviceRun);
+        cascade::engine::ServiceOptions options = cascade::engine::windowServiceOptions(serviceRun);
+        options.windowKind = "legacy";   // WHICH WINDOW (radio reports, contract 3.11): the old one, named Legacy
         cascade::engine::EngineService service(options);
 
         // THE SETTINGS FILE'S LOCK (stage 7c, core/config_lock.hpp), for a real session only: the headless engine shares this one file by design

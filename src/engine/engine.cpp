@@ -17,6 +17,7 @@
 #include "core/patch_levels.hpp"
 #include "core/patch_plan.hpp"
 #include "engine/radio_scope.hpp"
+#include "core/radio_reporter.hpp"
 #include <algorithm>
 #include <charconv>
 #include <cctype>
@@ -266,6 +267,17 @@ Engine::~Engine() {
 }
 
 namespace {
+
+// THE NATIVE ROWS THAT ARE RADIOS FOUND, not choices offered: scanNative() ALWAYS appends two address rows (an ADALM-Pluto's and an rtl_tcp server's, which
+// a scan cannot find), so `nativeDevices_.empty()` was never true after a scan and `scan_none` and the "a radio was listed" milestone could only fire in the
+// moments before the native scan first ran (radio reports, L1: 34 installs ever sent scan_none).
+std::size_t foundNativeRows(const std::vector<cascade::source::NativeDeviceInfo>& rows) {
+    std::size_t n = 0;
+    for (const cascade::source::NativeDeviceInfo& d : rows) {
+        if (d.driver != kPlutoDriverKey && d.driver != kRtlTcpDriverKey) { ++n; }
+    }
+    return n;
+}
 
 // Recording destination: %USERPROFILE%/Documents/SDR-recordings per spec.
 // Computed once at construction; the directory itself is created by
@@ -947,6 +959,8 @@ void Engine::closeDspMinute() {
     rx().dspRingHighWaterSession_ = std::max(rx().dspRingHighWaterSession_, highWater);
     rx().dspBlockLongestNsSession_ = std::max(rx().dspBlockLongestNsSession_, blockNs);
     publishRingFigures();
+    // THE JOURNAL'S STREAM EVENT for this radio's minute (radio reports): the figures just taken, before the quiet-unless-lost return below.
+    journalStreamMinute(read, dropped, highWater);
     // QUIET UNLESS SOMETHING WAS LOST, like the audio digest beside it. 94
     // characters at the widest a uint64 can make it - inside the log's line
     // (DiagLog::kLineBytes), which a cut line would be masked whole by the scrub.
@@ -1450,9 +1464,11 @@ void Engine::pollSourceAsync() {
         // A SCAN THAT FOUND NO RADIO AT ALL, counted anonymously (0.99.64, core/health_events.hpp): the whole-bus scan, not one that left some
         // drivers out beside an open radio, and with the native list empty too. The ledger keeps one a session, so a Refresh that finds
         // nothing again is not a second.
-        if (!soapyScanPartial_ && soapyDevices_.empty() && nativeDevices_.empty()) {
+        if (!soapyScanPartial_ && soapyDevices_.empty() && foundNativeRows(nativeDevices_) == 0) {
             cascade::core::health::noteScanNone();
         }
+        // WHAT THE SOAPY SCAN LISTED is the journal's radio_found (radio reports), once per radio per scan.
+        radioReportsScanLanded(/*native=*/false, /*soapy=*/true);
         if (sourceSel_ >= kNativeRowBase || sourceSel_ < 0) {
             // Re-find the open device by its args (labels can repeat); if it
             // vanished from the scan the device stays open and selected, and
@@ -1607,7 +1623,17 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
     // error string is dropped with it on purpose — it describes a device the
     // user is no longer asking about, and showing it under the source they DID
     // choose would read as a fault in that source.
-    if (!asyncOpenStillWanted(rx().deviceOpenReqGen_, rx().sourceGen_)) { return; }
+    if (!asyncOpenStillWanted(rx().deviceOpenReqGen_, rx().sourceGen_)) {
+        // A FAILED OPEN THE USER HAD MOVED ON FROM IS STILL A FAILED OPEN (radio reports, D4): the radio did not open and the owner is told, with
+        // `superseded` set so the report says nothing was shown to the person.
+        if (!r.dev) {
+            reportFailedOpen(r.kind, r.args, r.error.empty() ? std::string("device open failed") : r.error,
+                             r.recovery ? cascade::core::radioreport::Trigger::AutoReopen
+                                        : (r.savedRadioRetry ? cascade::core::radioreport::Trigger::SavedRetry : cascade::core::radioreport::Trigger::UserPick),
+                             /*superseded=*/true, r.requestRateHz, r.openMs);
+        }
+        return;
+    }
 
     // Failure: the reason lands in red under the control. The combo settles
     // on what is actually installed — since the close-first ordering in
@@ -1639,6 +1665,13 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
         // classes read off what the driver said - and nothing of what it said.
         // Not for a result the user had already moved on from (returned above).
         if (!retryBusyAgain) { cascade::core::health::noteRadioFail(r.kind, why); }
+        // THE RADIO THAT WOULD NOT OPEN, AS ITS OWN REPORT (radio reports, D4): every time, a busy-again retry included (the anonymous count above skips
+        // it, the report does not), whatever the Diagnostics switch says.
+        reportFailedOpen(r.kind, r.args, why,
+                         r.recovery ? cascade::core::radioreport::Trigger::AutoReopen
+                                    : (r.savedRadioRetry ? cascade::core::radioreport::Trigger::SavedRetry : cascade::core::radioreport::Trigger::UserPick),
+                         /*superseded=*/false, r.requestRateHz, r.openMs);
+        if (r.recovery) { journalRecovery(r.kind, r.args, "gave-up", "reopen", why, r.openMs); }
         if (r.recovery) {
             // THE ONE AUTOMATIC REOPEN DID NOT TAKE. The dead radio was
             // closed before the attempt, the generator is what is installed,
@@ -1837,6 +1870,16 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
 
     followInputRate();  // DSP chain follows the device's actual readback
 
+    // THE JOURNAL: this radio is open (and how it was asked for), what was applied to it, and - when it was the automatic reopen - that the recovery worked.
+    if (r.kind != "siggen" && r.kind != "file") {
+        journalOpenOk(r.kind, r.args,
+                      r.recovery ? cascade::core::radioreport::Trigger::AutoReopen
+                                 : (r.savedRadioRetry ? cascade::core::radioreport::Trigger::SavedRetry : cascade::core::radioreport::Trigger::UserPick),
+                      r.requestRateHz, r.openMs);
+        journalSettingsAtOpen(r.kind, r.args);
+        if (r.recovery) { journalRecovery(r.kind, r.args, "ok", "reopen", "", r.openMs); }
+    }
+
     if (r.recovery) {
         // THE RECEIVER GOES BACK TO WHAT IT WAS DOING. It was running when the
         // driver faulted (or the pipeline noticed the fault, which only its
@@ -1854,6 +1897,13 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
 }
 
 void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) {
+    // THE OPEN BEGINS (the journal): written to disk BEFORE the driver is called, so an open that hangs or takes the process down leaves a start and no
+    // result. An automatic reopen after a driver fault is a recovery that starts, not a new open.
+    if (r.recovery) {
+        journalRecovery(r.kind, r.args, "start", "reopen", "", -1);
+    } else {
+        journalOpenStart(r.kind, r.args, r.savedRadioRetry ? cascade::core::radioreport::Trigger::SavedRetry : cascade::core::radioreport::Trigger::UserPick, r.requestRateHz);
+    }
     rx().deviceBusyLabel_ = busyLabel;
     rx().deviceOpenPending_ = true;
     // Stamp the request with the selection it belongs to. Nothing is installed
@@ -1890,6 +1940,9 @@ void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) 
     // into the worker and comes back as the answer, with the device (or the
     // reason) filled in.
     rx().deviceOpenFuture_ = std::async(std::launch::async, [r = std::move(r)]() mutable {
+        // HOW LONG THE OPEN TOOK, for the report of a failure and the journal's `openMs`: the worker's own clock, from here to the answer.
+        const auto openBegan = std::chrono::steady_clock::now();
+        auto openBody = [&r]() -> DeviceOpenResult {
         // THE HEARTBEAT (6.27): the open is the thread's life, and "opening radio" for ever is what a wedged driver looks like.
         cascade::core::beats::Registration beat(cascade::core::beats::kThreadDeviceOpen);
         beat.beat("open");
@@ -1914,6 +1967,7 @@ void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) 
                     "source: the native %s driver refused this radio (%s); opening it "
                     "through SoapySDR instead",
                     r.kind.c_str(), r.error.c_str());
+                cascade::core::radioreport::noteRecovery(r.kind, r.args, "start", "routefallback", r.error);   // (global(): safe from this worker)
                 // Through makeDeviceSource like every other construction, so
                 // "soapy" means one thing everywhere (and the test seam's
                 // fake stands in here too).
@@ -1922,6 +1976,7 @@ void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) 
                     // The radio the user chose, under its native key, so its
                     // converter follows it onto the Soapy one.
                     r.fellBackFromKey = cascade::core::converterRadioKey(r.kind, r.args);
+                    cascade::core::radioreport::noteRecovery("soapy", r.fallbackSoapyArgs, "ok", "routefallback");
                     r.kind = "soapy";
                     r.args = r.fallbackSoapyArgs;
                     r.error.clear();
@@ -1967,6 +2022,10 @@ void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) 
         }
         r.dev = std::move(dev);
         return std::move(r);
+        };
+        DeviceOpenResult done = openBody();
+        done.openMs = static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - openBegan).count());
+        return done;
     });
 }
 
@@ -2530,6 +2589,7 @@ void Engine::scanNative() {
         sdrPlayApiDetail_ = std::move(walk.sdrPlayApiDetail);
         sdrPlayRowsFound_ = walk.sdrPlayRowsFound;
         followSourceRowAfterRescan(rowsBefore);
+        radioReportsScanLanded(/*native=*/true, /*soapy=*/false);
         return;
     }
     if (testHooks_.nativeScan != nullptr) {
@@ -2548,6 +2608,7 @@ void Engine::scanNative() {
         nativeUnbound_.clear();
         dropRefusedMiricsSoapyRows();
         followSourceRowAfterRescan(rowsBefore);
+        radioReportsScanLanded(/*native=*/true, /*soapy=*/false);
         return;
     }
     nativeDevices_ = cascade::source::enumerateRtlSdr();
@@ -2788,6 +2849,7 @@ void Engine::scanNative() {
     // is followed by what it is, below, so a row that goes does not move it.
     dropRefusedMiricsSoapyRows();
     followSourceRowAfterRescan(rowsBefore);
+    radioReportsScanLanded(/*native=*/true, /*soapy=*/false);   // radio_found for each native radio, and each one present but unreachable
 }
 
 void Engine::dropRefusedMiricsSoapyRows() {
@@ -9157,6 +9219,9 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // new id - exactly as the window's click handler always did.
             telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(), telemetryInstallId_,
                                           cascade::versionString());
+            // THE RADIO REPORTS FOLLOW THE SWITCH: off deletes what carries the install id (a queued failure is kept, anonymously), on starts the
+            // journal under the new id.
+            radioReportsRefreshIdentity();
             return res;
         case FOXAPI_OP_SERVER_CONFIG: {
             // Stage 5a (docs/api-0.3-additions.md 8.16): the local operator's configuration of the web server and the CAT listener.
@@ -9501,6 +9566,9 @@ void Engine::telemetryStartup(const cascade::core::AppConfig& cfg, const std::st
                                               std::move(carriedHealth)));
         }
     }
+    // THE RADIO REPORTS' QUEUE is opened here, beside config.json, with what the radio opens above (which ran first) filed in it. A run with no
+    // config directory (a bounded or hermetic one) opens none and queues nothing.
+    radioReportsStart(cfg, configDir);
     // Heartbeats are NOT armed here: this runs for bounded --frames runs too,
     // and arming them for those put ctest's throwaway install ids on the live
     // endpoint. run() arms them, interactive runs only, beside the update
@@ -9527,43 +9595,7 @@ void Engine::telemetryJournal(cascade::core::AppConfig& cfg) {
     }
     telemetryAccrueMode();
 
-    cascade::core::TelemetryReport r;
-    r.installId = telemetryInstallId_;
-    r.appVersion = cascade::versionString();
-    r.os = cascade::core::osDescription();
-    r.arch = cascade::core::archDescription();
-    r.channel = cascade::core::installChannel();
-    {
-        std::lock_guard<std::mutex> halfLock(interfaceHalfMutex_);
-        r.updateChannel = interfaceCfg_.updateChannel;   // "stable" or "beta"; toJson sends anything else empty
-    }
-    r.firstRun = telemetryFirstRun_;
-    r.firstVersion = telemetryFirstVersion_;
-    r.launches = telemetryLaunches_;
-    r.crashes = telemetryCrashes_;
-    r.exits = telemetryExits_;
-    // One atomic read - the frame path never touches the ledger's file. This is
-    // the figure as of THIS save; what is actually sent is the ledger's own at
-    // the next start-up (see telemetryStartup), which also holds a stall that
-    // happened after the last save.
-    r.stalls = stallLedger_->count();
-    // The health counts as of THIS save, for the same reason: what is actually
-    // sent is the ledger's at the next start-up (telemetryStartup).
-    r.health = healthLedger_->encoded();
-    const double now = host_->wallTimeS();
-    r.session.seconds = static_cast<std::uint64_t>(
-        now > telemetrySessionStart_ ? now - telemetrySessionStart_ : 0.0);
-    r.session.modeSeconds = telemetryModeSeconds_;
-    r.session.panels = telemetryPanels_;
-    // MODEL ONLY - sanitiseDevice strips the serial, which the raw args carry
-    // twice (once alone, once inside the label).
-    r.session.sdrModel = rx().deviceModel_;
-    r.session.radiosMax = telemetryRadiosMax_;   // the highest number of receivers running at once this session (engine stage 5)
-    for (const cascade::core::LoadedPlugin& p : pluginHost_.plugins()) {
-        if (p.loaded && r.session.plugins.size() < 20) {
-            r.session.plugins.push_back(p.name + " " + p.version);
-        }
-    }
+    cascade::core::TelemetryReport r = telemetrySnapshot();
     cfg.telemetryPending = r.toJson();
 }
 
@@ -9606,7 +9638,7 @@ void Engine::healthPoll() {
     // server. Each check below is one relaxed atomic load until it has fired.
     namespace health = cascade::core::health;
     if (!health::reached(health::Milestone::Window)) { health::noteReached(health::Milestone::Window); }
-    if (!health::reached(health::Milestone::Enumerated) && (!soapyDevices_.empty() || !nativeDevices_.empty())) {
+    if (!health::reached(health::Milestone::Enumerated) && (!soapyDevices_.empty() || foundNativeRows(nativeDevices_) != 0)) {
         health::noteReached(health::Milestone::Enumerated);
     }
     if (!health::reached(health::Milestone::Working)) {
@@ -10087,7 +10119,12 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
         // bringing the device up - the port has to be right from the first
         // sample, not corrected afterwards.
         rx().deviceAntenna_ = cfg.soapyAntenna;
+        // THE SAVED RADIO'S OPEN BEGINS (the journal): on disk before the driver is called.
+        journalOpenStart(kind, args, cascade::core::radioreport::Trigger::StartupRestore, cfg.sampleRateHz);
+        const auto restoreBegan = std::chrono::steady_clock::now();
         auto dev = openDeviceSync(kind, args, cfg.sampleRateHz);
+        const long long restoreOpenMs =
+            static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - restoreBegan).count());
         if (!dev && !fallbackSoapyArgs.empty() &&
             cascade::gui::nativeOpenShouldFallBack(rx().sourceError_)) {
             // The dongle is one whose tuner the native driver does not
@@ -10097,6 +10134,8 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
                 "source: the native %s driver refused the saved radio (%s); opening it "
                 "through SoapySDR instead",
                 kind.c_str(), rx().sourceError_.c_str());
+            // THE ROUTE THAT WAS TAKEN, in the journal (radio reports, G6): the native driver refused and SoapySDR is tried.
+            cascade::core::radioreport::noteRecovery(kind, args, "start", "routefallback", rx().sourceError_);
             const std::string nativeKey = cascade::core::converterRadioKey(kind, args);
             kind = "soapy";
             args = fallbackSoapyArgs;
@@ -10104,6 +10143,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
             // The radio the user chose, reached another way: its converter
             // comes with it (before the saved frequency is converted below).
             if (dev) { noteConverterFallback(nativeKey, cascade::core::converterRadioKey(kind, args)); }
+            cascade::core::radioreport::noteRecovery(kind, args, dev ? "ok" : "gave-up", "routefallback");
         }
         if (dev) {
             // The saved AIR frequency, told to the radio through the
@@ -10164,12 +10204,16 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
             cascade::core::diagLogf("source: restored %s (%s) at %.0f S/s",
                                     rx().deviceModel_.c_str(), kind.c_str(),
                                     rx().pipeline_.activeSource().sampleRateHz());
+            journalOpenOk(kind, args, cascade::core::radioreport::Trigger::StartupRestore, cfg.sampleRateHz, restoreOpenMs);
+            journalSettingsAtOpen(kind, args);
         } else {
             // THE SAVED RADIO WOULD NOT OPEN, counted anonymously (0.99.64,
             // core/health_events.hpp): the driver kind and a reason class,
             // nothing of the message - which quotes the device arguments back.
             // The most common failure there is, and the first thing this run does.
             cascade::core::health::noteRadioFail(kind, rx().sourceError_);
+            // ...AND AS ITS OWN REPORT (radio reports, D4): the reason is the driver's sentence before it is wrapped in the radio's name below.
+            reportFailedOpen(kind, args, rx().sourceError_, cascade::core::radioreport::Trigger::StartupRestore, /*superseded=*/false, cfg.sampleRateHz, restoreOpenMs);
             // WHY, AS ONE WORD (0.99.92): the same reason class the count above files it under, and the only part of the driver's message that
             // may go in the log - the message itself quotes the device arguments back (below). Taken HERE, before the sentence at the end of this
             // branch wraps sourceError_ in the radio's name. The 0.99.91 field report had to be read off the anonymous counts to learn that the
@@ -10947,6 +10991,10 @@ void Engine::shutdownQuiesce() {
     // with no control thread (the window, today).
     stopControlThread();
 
+    // THE RADIO REPORTS' LAST WORD (radio reports, C2), now that nothing runs beside this thread: every open radio closes for `quit`, a session that never
+    // opened a radio says so, and the queue gets one bounded send (abortable; quit is not held up by it).
+    radioReportsQuit();
+
     // THE LAST HEARD SECONDS of the Airband monitor go into the frequency list now, with the pass stopped, for the forced save that follows
     // (shutdownStop) to carry them (stub campaign B6).
     airbandShutdown();
@@ -11117,6 +11165,8 @@ void Engine::pumpAudio() {
     // "Still running" beat, five-minute cadence. A no-op when reporting is
     // off, and never blocks - see HeartbeatSender::poll.
     telemetryHeartbeat_.poll(clockS());
+    // THE RADIO REPORTS' per-pass look (radio_close, "opened and no samples", the machine, the first session, the beat's radios, the queue's send).
+    radioReportsPass();
     // THE CONFIG'S RECEIVER HALF, handed to the window once a frame (OPEN 2):
     // last, so it carries everything this frame's phases changed.
     publishConfig();
@@ -11704,6 +11754,9 @@ ConfigReadback Engine::configReadback() {
 
 void Engine::configureHeartbeat() {
     telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(), telemetryInstallId_, cascade::versionString());
+    // AN INTERACTIVE RUN ARMS THE RADIO REPORTS' SEND beside the heartbeat (a bounded run never does). Whether anything is actually posted is
+    // radioreport::kRadioReportsLiveSend, which is false in this build.
+    cascade::core::radioreport::global().setLiveSend(true);
 }
 
 void Engine::requestPluginStatusReport() {

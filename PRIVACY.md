@@ -1,7 +1,14 @@
 # Privacy
 
-FoxSDR collects nothing about you unless you switch it on, and this document
-lists exactly what it sends when you do.
+FoxSDR sends usage counts unless you switch them off, and sends one kind of
+report - a radio that did not open - whatever you have switched on or off. This
+document lists exactly what it sends.
+
+> **DRAFT, awaiting the owner's approval (not legal advice).** The section
+> **Radio failure reports and the radio journal** below, the two changes to
+> **What is never sent** and **Data protection**, and the changed opening of this
+> page describe behaviour that ships in 0.99.109. They are written for the owner
+> to read and approve before the release; nothing in them is final until he has.
 
 ## The update check
 
@@ -235,6 +242,97 @@ listen to is collected by it either. What it does and does not send:
   first start**: the engine then sends nothing and writes no identifier (tested on
   Windows). Started with no settings file (no `--config`) it reads nothing,
   writes nothing and sends nothing.
+
+## Radio failure reports and the radio journal (since 0.99.109)
+
+> **DRAFT, awaiting the owner's approval.** Written from `docs/radio-reports-contract.md`
+> (its section 10 lists what a switched-off install sends). Not legal advice.
+
+**When a radio does not open, FoxSDR sends ONE report about that failure, every
+time it happens - whether or not Diagnostics is on, and whether or not Usage
+reporting is on.** It is the one report that the Diagnostics switch does not
+govern: a radio that will not open is the commonest way FoxSDR does not work,
+and nobody can fix what they are not told about. It does not wait for the
+next start; it is written to your computer first, so a crash cannot lose it,
+and sent as soon as it can be.
+
+**What such a report contains:** the radio's driver and model; **its serial
+number** (see below); the radio's firmware and library version where FoxSDR
+knows them; the reason the driver gave, with serial numbers, account names,
+computer names, addresses and frequencies taken out and every file path replaced
+by `<path>`; a class word for the reason (`busy`, `bind`, `absent`, `timeout`,
+...); which part of FoxSDR tried to open it (the start-up restore, a radio you
+picked, a retry of the saved radio, a patch-page radio, the automatic reopen
+after a driver fault); how many times that radio has failed in this run; how
+long the open took and the sample rate asked for; whether you had already moved
+on to another source; how many reports for this radio were not sent because of
+the daily limit; whether Diagnostics was on; up to 40 radio-related lines of the
+log, scrubbed the same way; the FoxSDR version, install channel and update
+channel; the operating system and build and the processor architecture; and the
+seconds since FoxSDR started.
+
+**With Usage reporting off** the report carries **no install identifier, no
+session identifier and no sequence number**, only a random number made for that
+one message, so two such reports cannot be tied to each other except by the
+radio's own model and serial number. (The combination of FoxSDR version,
+operating-system build, architecture and channel can identify a machine in
+practice; nothing uses it to link reports, and the server does not group by it.)
+As with every report, the network necessarily shows your address to the server;
+the server does not read, log or store it.
+
+**With Usage reporting on** (the default) FoxSDR also keeps a **radio journal**:
+every event in the life of every radio - a radio FoxSDR saw (including one it
+cannot open because no usable driver is bound to it), each open and what it
+asked for, the settings applied (sample rate, bandwidth, gain mode and value,
+frequency correction in ppm, bias tee, antenna port name, direct sampling,
+decimation, and **the band the radio was in by name, such as "fm-broadcast" -
+never the frequency**), once a minute how the radio's stream is doing (samples
+per second achieved, samples dropped, buffer fill, USB errors), each recovery,
+and how and why the radio closed - and, once a session, a description of the
+machine around it: processor model (without its clock speed), thread count,
+memory, graphics adapter and driver version, the USB host controllers' product
+names, the audio system in use, how many displays and each one's scaling. The
+journal and that description carry your install identifier. The first launch
+of an install also sends a **first-session record** (the same anonymous counts
+as the usage report, about a minute in and again when something fails) so that
+people who run FoxSDR once are counted.
+
+Turning **Usage reporting** off stops the journal, the machine description, the
+first-session record, the still-running beat and the usage report, deletes the
+install identifier, and deletes any queued journal that carried it. It does
+**not** stop the radio failure report.
+
+**Never in any of it:** a tuned or centre frequency, a bookmark, the name of a
+file or recording, anything decoded, a position, an IP address or host name, a
+user or computer name, a file path. The server refuses a message that holds one,
+and tests search every queued message for each of them.
+
+**The serial number is collected.** A failure report carries the radio's serial
+number, as its own field. It lets two reports, from two computers or two days,
+be recognised as the same physical radio, so a faulty unit can be told from a
+fault in FoxSDR or in a driver, and a radio can be found again when somebody
+quotes its serial. It identifies a radio, not you; but with Usage reporting on
+it is held with your install identifier, so it should be treated as personal
+data. Serial numbers are still removed from everything else FoxSDR sends (the
+usage report, the crash and freeze reports, the diagnostics bundle).
+
+**How long it is kept:** radio failure reports and the radio journal are **kept
+indefinitely** (crash reports are kept 90 days). **To have them deleted:** write
+to the contact address on the website quoting your install identifier (Settings
+shows it while Usage reporting is on) - every message from that install, and the
+radios only that install reported, are erased. A failure report made with Usage
+reporting off has no install identifier, so it cannot be found by one; it is
+erased by quoting the radio's serial number.
+
+**If a daily limit stops a report,** the server is told: at most 100 failure
+reports and 3,000 journal events are sent per install per day, the first of each
+kind of failure of each radio is always sent, the newest later one is kept and
+sent at the day's end, and the number not sent is stated in it.
+
+**Where the data goes:** `https://telemetry.foxsdr.com` (the Worker in
+`telemetry-worker/`), which forwards these messages to the FoxSDR site. Until
+that service is live this build only keeps the messages on your computer, in the
+`radio-reports` folder beside `config.json`, and sends none of them.
 
 ## What is sent when usage reporting is enabled
 
@@ -1313,8 +1411,12 @@ These are design constraints, not current policy:
   necessarily reaches the server from an address, because that is how the
   internet works; nothing records or stores it, the receiving endpoint reads no
   connection information, and it writes no request logs.
-- **Hardware serial numbers.** The SDR model is useful; the serial identifies
-  your individual radio, and is removed.
+- **Hardware serial numbers - except in a radio failure report and the radio
+  journal.** The SDR model is useful; the serial identifies your individual
+  radio, and is removed from the usage report, the crash and freeze reports and
+  the diagnostics bundle. (DRAFT, awaiting the owner's approval: since 0.99.109 a
+  radio that does not open is reported with its serial number, and the radio
+  journal carries it - see **Radio failure reports and the radio journal**.)
 - Your name, your machine's name, your user account, or any file path.
 - **Patch presets.** The patch page's named presets and its "(previous
   patch)" slot — their names and the patches in them — are stored only in
@@ -1410,6 +1512,11 @@ hand the token to an already-running FoxSDR (`link-request`, beside
 read.
 
 ## Data protection
+
+(DRAFT, awaiting the owner's approval: radio failure reports and the radio
+journal are different - they carry a radio's serial number and, while Usage
+reporting is on, your install identifier, are kept indefinitely, and can be
+erased on request; see **Radio failure reports and the radio journal**.)
 
 The usage and crash reports contain no personal data, so there is nothing to
 request access to, correct or erase — there is no record anywhere that can be

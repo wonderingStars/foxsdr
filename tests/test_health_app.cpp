@@ -366,10 +366,13 @@ inline Counts withoutStages(Counts c) {
 // start does take that long, so the count says how loaded the PC was, not what the failure counts are about. It is set aside here (engine merge 6: it failed this test and
 // test_health_app_stepped alone on a loaded build PC with only that key extra, `the real application left ...,slow.startup.250ms=1`); the stopwatch itself is held by test_health_events and test_health_paths,
 // which set the thresholds and the clock.
+// `scan_none` IS ANOTHER FACT ABOUT THIS MACHINE (radio reports, L1): the real binary run here, on a computer with nothing listed, now counts that its scan found no
+// radio - it could not before, because the two address rows every scan appends kept the list from ever being empty (engine.cpp, foundNativeRows). It is set aside
+// with the setup findings; tests/test_radio_reports_engine.cpp holds it where the machine is controlled.
 inline Counts withoutStagesOrMachine(Counts c) {
     c = withoutStages(std::move(c));
     for (auto it = c.begin(); it != c.end();) {
-        it = (it->first.rfind("setup.", 0) == 0 || it->first.rfind("slow.startup.", 0) == 0) ? c.erase(it) : std::next(it);
+        it = (it->first.rfind("setup.", 0) == 0 || it->first.rfind("slow.startup.", 0) == 0 || it->first == "scan_none") ? c.erase(it) : std::next(it);
     }
     return c;
 }

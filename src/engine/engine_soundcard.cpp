@@ -199,6 +199,10 @@ void Engine::pollSoundCard() {
             r.devices, r.wanted.device, r.wanted.hostApi, r.wanted.pickedFromList);
         const bool gone = !r.wanted.device.empty() && where.at < 0 && where.candidates.empty();
         cascade::core::health::noteRadioFail("soundcard", gone ? "the card is not connected" : r.error);
+        // ...and as its own report (radio reports, D4): "sound card", never the card's name; restoring at start-up, else a choice the person made.
+        reportFailedOpen("soundcard", std::string(), gone ? std::string("the card is not connected") : r.error,
+                         r.restore ? cascade::core::radioreport::Trigger::StartupRestore : cascade::core::radioreport::Trigger::UserPick,
+                         /*superseded=*/false, 0.0, -1);
     }
     if (!r.src && r.released) {
         // NEITHER THE NEW SETTINGS NOR THE OLD ONES OPENED. The card was

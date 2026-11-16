@@ -335,6 +335,8 @@ bool EngineService::provision(const ProvisionRequest& request, const Secret* pas
 //                  pass made here so the first read is a real state                            [:1439-1458]
 // ---------------------------------------------------------------------------------------------------
 bool EngineService::start(std::string& why) {
+    // WHICH WINDOW IS RUNNING, before anything is reported (the usage record and the radio journal say it as `window`).
+    if (!options_.windowKind.empty()) { engine_.noteWindowKind(options_.windowKind); }
     // The test seam of FOXSDR_HOLD_AUDIO_LOCK (ServiceOptions::holdAudioLockMs), FIRST: before the receiver starts and before any pass, as the window's submit was
     // applied by the first pass it made before it started the thread.
     if (options_.holdAudioLockMs > 0) { (void)engine_.applyCommand(cmd::makeInt(FOXAPP_OP_TEST_HOLD_AUDIO_LOCK, options_.holdAudioLockMs)); }

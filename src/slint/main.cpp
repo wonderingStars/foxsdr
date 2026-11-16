@@ -215,6 +215,7 @@ int main(int argc, char** argv) {
     run.safePlugins = boot.safePlugins;
     if (boot.safePlugins) { std::fprintf(stderr, "foxsdr-slint: safe mode - no plugin will be loaded in this session\n"); }
     ServiceOptions options = windowServiceOptions(run);
+    options.windowKind = "new";   // WHICH WINDOW (radio reports, contract 3.11)
     // A BOUNDED RUN'S PASS FREE-RUNS HERE. windowServiceOptions steps a bounded run's pass by the window's frames (the ImGui window runs each
     // part of the pass itself, through the host's hooks); this window has none of that and only reads what the engine publishes, so its N ticks
     // are N heartbeats of a pass that runs on its own thread - what FOXSDR_PASS=free asks of the ImGui window, and what a real session has.
