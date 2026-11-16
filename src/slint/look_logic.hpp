@@ -61,10 +61,20 @@ public:
     // The number the caller just dispatched to the window.
     void applied(float scale) { applied_ = scale; }
     float os() const { return os_; }
+    // The size to ask the window for when the scale goes from `from` to `to` and the window is not maximised (`w` x `h`: its size now, in physical pixels). The logical size stays,
+    // so a window grows with the scale: 1600 x 900 at 100 % asks for 3200 x 1800 at 200 %. A window that fills the screen is held at the screen's size by the system, so the grow is
+    // CLAMPED, and asking for "the logical size stays" on the way back (800 x 450 at 100 %) would shrink it to half its first size for good (slint_drive_system-look read width 800
+    // after Interface size 200 % then Auto, 4 runs of 5). So the size before the first grow is remembered; a window still no bigger than the grow asked for, going back down, is
+    // asked for that remembered size scaled to the new number. Nothing is remembered once the window is back at the scale it left.
+    std::pair<std::uint32_t, std::uint32_t> sizeAfter(std::uint32_t w, std::uint32_t h, float from, float to);
 
 private:
     float os_ = 0.0f;        // the OS's scale; 0 until the first plan
     float applied_ = 0.0f;   // the last number dispatched; 0 = none yet
+    bool grown_ = false;     // a grow is remembered
+    float growFrom_ = 0.0f;  // the scale the window had before the first grow
+    std::uint32_t growW_ = 0, growH_ = 0;     // its physical size then
+    std::uint32_t askedW_ = 0, askedH_ = 0;   // the size the last grow asked for
 };
 
 }  // namespace foxsdr::slintlook

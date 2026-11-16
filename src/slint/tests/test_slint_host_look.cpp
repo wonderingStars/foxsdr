@@ -100,6 +100,50 @@ void resizing() {
     CHECK(s.first == 800 && s.second == 600);
 }
 
+// A window that fills the screen cannot grow: the system clamps the grow request, so the way back must not be "the logical size stays" from the clamped size
+// (slint_drive_system-look: 200 % then Auto read width 800 instead of 1600). Engine merge 6.
+void clampedGrowRoundTrip() {
+    {   // the system honours the grow: the old behaviour, unchanged
+        ScaleFollower f;
+        auto s = f.sizeAfter(1000, 700, 1.0f, 2.0f);
+        CHECK(s.first == 2000 && s.second == 1400);
+        s = f.sizeAfter(2000, 1400, 2.0f, 1.0f);
+        CHECK(s.first == 1000 && s.second == 700);
+    }
+    {   // the grow is clamped to the screen (1600 x 900): back at 100 % the window is asked for what it was, not for half of it
+        ScaleFollower f;
+        auto s = f.sizeAfter(1600, 900, 1.0f, 2.0f);
+        CHECK(s.first == 3200 && s.second == 1800);
+        s = f.sizeAfter(1600, 900, 2.0f, 1.0f);   // the window still reports the clamped 1600 x 900
+        CHECK(s.first == 1600 && s.second == 900);
+        // and nothing is remembered once it is back: the next grow starts from here
+        s = f.sizeAfter(1600, 900, 1.0f, 1.5f);
+        CHECK(s.first == 2400 && s.second == 1350);
+        s = f.sizeAfter(1600, 900, 1.5f, 1.0f);
+        CHECK(s.first == 1600 && s.second == 900);
+    }
+    {   // a chain of grows (100 -> 150 -> 200) and the way back in two steps
+        ScaleFollower f;
+        (void)f.sizeAfter(1600, 900, 1.0f, 1.5f);
+        (void)f.sizeAfter(1600, 900, 1.5f, 2.0f);
+        auto s = f.sizeAfter(1600, 900, 2.0f, 1.5f);
+        CHECK(s.first == 2400 && s.second == 1350);   // 1600 x 900 at 100 % is 2400 x 1350 at 150 %: what the system will clamp again
+        s = f.sizeAfter(1600, 900, 1.5f, 1.0f);
+        CHECK(s.first == 1600 && s.second == 900);
+    }
+    {   // the person made the window bigger than the grow asked for: their size is theirs, the logical size stays as before
+        ScaleFollower f;
+        (void)f.sizeAfter(1000, 700, 1.0f, 2.0f);   // asked 2000 x 1400
+        const auto s = f.sizeAfter(2400, 1500, 2.0f, 1.0f);
+        CHECK(s.first == 1200 && s.second == 750);
+    }
+    {   // a shrink with nothing remembered is the plain rule
+        ScaleFollower f;
+        const auto s = f.sizeAfter(2000, 1400, 2.0f, 1.0f);
+        CHECK(s.first == 1000 && s.second == 700);
+    }
+}
+
 void follower() {
     ScaleFollower f;
     // first look on a 125% monitor, saved size auto: nothing to do
@@ -141,6 +185,7 @@ int main() {
     faces();
     wanted();
     resizing();
+    clampedGrowRoundTrip();
     follower();
     return testSummary("test_slint_host_look");
 }

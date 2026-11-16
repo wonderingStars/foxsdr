@@ -75,6 +75,24 @@ std::pair<std::uint32_t, std::uint32_t> sizeForScale(std::uint32_t width, std::u
     return {scaled(width), scaled(height)};
 }
 
+std::pair<std::uint32_t, std::uint32_t> ScaleFollower::sizeAfter(std::uint32_t w, std::uint32_t h, float from, float to) {
+    if (grown_ && to < from && w <= askedW_ && h <= askedH_) {   // going back down: from what the window was before the grow, not from what the system left of it
+        const auto back = sizeForScale(growW_, growH_, growFrom_, to);
+        if (std::fabs(to - growFrom_) <= kSame) { grown_ = false; }
+        return back;
+    }
+    const auto ns = sizeForScale(w, h, from, to);
+    if (to > from) {
+        if (!grown_ || w > askedW_ || h > askedH_) {   // a first grow, or the window was resized by hand since the last: remember this size
+            grown_ = true; growFrom_ = from; growW_ = w; growH_ = h;
+        }
+        askedW_ = ns.first; askedH_ = ns.second;
+    } else {
+        grown_ = false;
+    }
+    return ns;
+}
+
 ScalePlan ScaleFollower::plan(const std::string& choice, float current) {
     // The first look, or a window that reports a number this follower did not dispatch: the operating system set it.
     if (applied_ <= 0.0f || std::fabs(current - applied_) > kSame) { os_ = current; }

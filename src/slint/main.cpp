@@ -1178,11 +1178,11 @@ int main(int argc, char** argv) {
             const auto sz = ui->window().size();
             ui->window().dispatch_scale_factor_change_event(plan.want);
             if (!ui->window().is_maximized()) {   // the logical size stays: the window grows with the scale
-                const auto ns = foxsdr::slintlook::sizeForScale(sz.width, sz.height, cur, plan.want);
+                const auto ns = scaleFollower.sizeAfter(sz.width, sz.height, cur, plan.want);
                 ui->window().set_size(slint::PhysicalSize({ns.first, ns.second}));
             }
             scaleFollower.applied(plan.want);
-            std::fprintf(stderr, "foxsdr-slint: look: interface size '%s' = scale %.2f (the system's %.2f)\n", half.interfaceScale.c_str(), static_cast<double>(plan.want), static_cast<double>(plan.os));
+            std::fprintf(stderr, "foxsdr-slint: look: interface size '%s' = scale %.2f (the system's %.2f); window was %ux%u px at %.2f, maximised %d, now %ux%u\n", half.interfaceScale.c_str(), static_cast<double>(plan.want), static_cast<double>(plan.os), sz.width, sz.height, static_cast<double>(cur), ui->window().is_maximized() ? 1 : 0, ui->window().size().width, ui->window().size().height);
         } else {
             scaleFollower.applied(cur);
         }
