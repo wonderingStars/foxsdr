@@ -110,12 +110,25 @@ std::string backupFileName(const std::string& stamp);                           
 bool isBackupFileName(const std::string& name);                                                      // exactly that shape (stamp = 8 digits, '-', 6 digits)
 std::vector<std::string> pruneBackups(const std::filesystem::path& dir, std::size_t keepNewest);     // deletes only our own backup files beyond the newest N; returns their names
 
-// THE SETTINGS A BUNDLE MAY NEVER CHANGE (security reviews 1 and 2, M2 and R13). A bundle is a file from someone else (a forum post, an e-mail): these
-// top-level settings of config.json decide where plugins come from (pluginCatalogueUrl, pluginSites), what the program listens on
-// (webBindAddress, catBindAll, tciBindAll, udpAudioHost), which radio or file it opens at the next start (sourceKind, soapyArgs, nativeArgs, plutoUri,
-// rtlTcpAddr, iqFilePath, radios) and whether it reports (telemetryEnabled, diagnosticsEnabled). parseBundle drops them from the imported
-// config.json and says which were left out; commitImport puts this computer's own values back into the file it writes.
+// WHAT A BUNDLE MAY NOT DO (security reviews 1 and 2, M2 and R13; refined 2026-11-16 so that a person restoring their OWN backup on a new PC gets it all back).
+// A bundle is a file from someone else, so an import may not change where plugins come from, what this program listens on, or make it connect to another computer or open
+// a file at start. In config.json:
+//   * importLeftOutKeys(): never imported, this computer keeps its own: pluginCatalogueUrl, pluginSites, webBindAddress, catBindAll, tciBindAll, udpAudioHost (where
+//     plugins come from and what it listens on) and rtlTcpAddr, plutoUri, iqFilePath (an address or a file to open at start).
+//   * importFilteredKeys(): sourceKind, soapyArgs, nativeArgs and radios are imported for what names a LOCAL device (a USB radio by driver and serial, a sound card, the
+//     signal generator) and left out for what names another computer or a file: a source kind of rtltcp, pluto or file; a saved radio, or a device-argument key, that
+//     carries a host name, an address, a URI, a path or a remote driver; and anything that cannot be classified (only that entry or key is left out).
+//   * telemetryEnabled and diagnosticsEnabled: an import may only make them MORE private. Off in the bundle: off here. On in the bundle while this computer has them off:
+//     they stay off (commitImport). Never the other way.
+// parseBundle applies the first two and notes what was left out in words (never an address or path); commitImport puts this computer's own values back.
 const std::vector<std::string>& importLeftOutKeys();
+const std::vector<std::string>& importFilteredKeys();
+
+// The classifiers, exposed for tests. A kwargs string ("driver=rtlsdr,serial=00000001") of a LOCAL device: only the keys driver, serial, index, channel, deviceid; a driver
+// from the local list; values of plain letters, digits, '-', '_' and ':' (a serial has no dot, so no host name). `cleaned` receives the string without the keys that
+// failed; `dropped` says any did; false (a foreign driver, or a field that is not key=value) means the whole string names something that cannot be classified or is remote.
+bool classifyDeviceArgs(const std::string& args, std::string& cleaned, bool& dropped);
+bool localSourceKind(const std::string& kind);
 
 // The key-name rule, exposed for tests and for the UI's "what was left out" text.
 bool secretKeyName(const std::string& key);

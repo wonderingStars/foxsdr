@@ -114,9 +114,10 @@ void testExportStripsSecrets() {
     std::string err;
     CHECK(cascade::core::ConfigStore::load(out.string(), back, err));
     CHECK(back.webPort == 4321 && back.webPasswordRecord.empty() && back.testerToken.empty() && back.telemetryInstallId.empty());
-    // telemetryEnabled and diagnosticsEnabled are NOT imported any more (security review 2, R13): a bundle from someone else must not switch a
-    // person's reporting on. (Was: kept, "a preference, not an identity".)
-    CHECK(!json::parse(cfgBytes).contains("telemetryEnabled") && !json::parse(cfgBytes).contains("diagnosticsEnabled"));
+    // telemetryEnabled and diagnosticsEnabled come with the bundle (the final rule, 2026-11-16): an import may only make reporting MORE private, which commitImport
+    // enforces against this computer's own value (testReportingOnlyGetsMorePrivate). History of this expectation: kept ("a preference, not an identity") -> dropped
+    // (R13, first version) -> kept again, with the one-way rule.
+    CHECK(json::parse(cfgBytes).contains("telemetryEnabled") && json::parse(cfgBytes).contains("diagnosticsEnabled"));
     // stripIdentity off keeps the identity but still drops every secret.
     ExportOptions keep;
     keep.stripIdentity = false;
@@ -249,21 +250,21 @@ void testHostileBundleLeavesTheGuardedSettingsAlone() {
     hostile["rtlTcpAddr"] = "203.0.113.9:1234";
     hostile["iqFilePath"] = "//203.0.113.9/share/x.iq";
     hostile["radios"] = json::array({json{{"number", 1}, {"sourceKind", "rtltcp"}, {"args", "203.0.113.9:1234"}}});
-    hostile["telemetryEnabled"] = true;
-    hostile["diagnosticsEnabled"] = true;
     hostile["webPort"] = 8080;          // an ordinary setting: still imported
     hostile["centerHz"] = 7100000.0;
     const ImportResult r = parseBundle(rawBundle({{"config.json", dumpS(hostile)}}));
     CHECK(r.error == BundleError::None);
     const json c = json::parse(r.files[0].bytes);
     for (const std::string& k : importLeftOutKeys()) { CHECK(!c.contains(k)); }
+    CHECK(importLeftOutKeys().size() == 9);
+    CHECK(!c.contains("sourceKind") && !c.contains("soapyArgs") && !c.contains("nativeArgs"));   // a network source and what hangs on it
+    CHECK(c.contains("radios") && c["radios"].is_array() && c["radios"].empty());
     CHECK(c["webPort"] == 8080 && c["centerHz"] == 7100000.0);
-    CHECK(importLeftOutKeys().size() == 15);
-    // the person is told which were left out
     std::string told;
     for (const std::string& n : r.notes) { told += n + "\n"; }
     for (const std::string& k : importLeftOutKeys()) { CHECK(told.find(k) != std::string::npos); }
-    CHECK(told.find("203.0.113.9") == std::string::npos && told.find("evil.example") == std::string::npos);   // the notes carry names, never the bundle's values
+    CHECK(told.find("saved radio") != std::string::npos && told.find("another computer") != std::string::npos);
+    CHECK(told.find("203.0.113.9") == std::string::npos && told.find("evil.example") == std::string::npos);   // the notes carry words, never a bundle's value
 
     // committed over this computer's own settings: its own values stay
     const fs::path dest = g_base / "hostile";
@@ -273,21 +274,21 @@ void testHostileBundleLeavesTheGuardedSettingsAlone() {
     mine["pluginCatalogueUrl"] = "https://mine.example/catalogue.json";
     mine["rtlTcpAddr"] = "192.168.1.5:1234";
     mine["sourceKind"] = "rtlsdr";
-    mine["telemetryEnabled"] = false;
-    mine["diagnosticsEnabled"] = false;
+    mine["nativeArgs"] = "serial=00000001";
     mine["webBindAddress"] = "127.0.0.1";
     mine["webPort"] = 9999;
+    mine["radios"] = json::array({json{{"number", 2}, {"sourceKind", "rtltcp"}, {"args", "192.168.1.7:1234"}}});   // this computer's own network radio
     spit(dest / "config.json", dumpS(mine));
     std::string err;
     const ImportPlan plan = planImport(r, dest);
     CHECK(commitImport(r, dest, plan.confirmToken, "20261111-221530", err));
     const json after = json::parse(slurp(dest / "config.json"));
     CHECK(after["pluginCatalogueUrl"] == "https://mine.example/catalogue.json");
-    CHECK(after["rtlTcpAddr"] == "192.168.1.5:1234" && after["sourceKind"] == "rtlsdr");
-    CHECK(after["telemetryEnabled"] == false && after["diagnosticsEnabled"] == false);
+    CHECK(after["rtlTcpAddr"] == "192.168.1.5:1234" && after["sourceKind"] == "rtlsdr" && after["nativeArgs"] == "serial=00000001");
     CHECK(after["webBindAddress"] == "127.0.0.1");
+    CHECK(after["radios"].size() == 1 && after["radios"][0]["args"] == "192.168.1.7:1234");   // its own network radio was not lost
     CHECK(after["webPort"] == 8080 && after["centerHz"] == 7100000.0);      // the rest of the bundle was imported
-    CHECK(!after.contains("pluginSites") && !after.contains("udpAudioHost") && !after.contains("radios"));   // this computer had none
+    CHECK(!after.contains("pluginSites") && !after.contains("udpAudioHost"));   // this computer had none
 
     // into a computer with no settings yet: the keys are simply absent (the program's defaults)
     const fs::path fresh = g_base / "hostile-fresh";
@@ -296,6 +297,157 @@ void testHostileBundleLeavesTheGuardedSettingsAlone() {
     CHECK(commitImport(r, fresh, pf.confirmToken, "20261111-221530", err));
     const json freshCfg = json::parse(slurp(fresh / "config.json"));
     for (const std::string& k : importLeftOutKeys()) { CHECK(!freshCfg.contains(k)); }
+    CHECK(!freshCfg.contains("sourceKind"));
+}
+
+// An import may only make reporting MORE private (owner decision 74, 2026-11-16): the four cases for each of the two switches, and a computer that has none yet.
+void testReportingOnlyGetsMorePrivate() {
+    struct Case { bool bundle, here; bool want; };
+    const Case cases[] = {{false, true, false}, {false, false, false}, {true, false, false}, {true, true, true}};
+    for (const char* sw : {"telemetryEnabled", "diagnosticsEnabled"}) {
+        for (const Case& k : cases) {
+            json b;
+            b[sw] = k.bundle;
+            b["webPort"] = 8080;
+            const ImportResult r = parseBundle(rawBundle({{"config.json", dumpS(b)}}));
+            const fs::path dest = g_base / "privacy";
+            fs::remove_all(dest);
+            fs::create_directories(dest);
+            json mine;
+            mine[sw] = k.here;
+            mine["webPort"] = 1;
+            spit(dest / "config.json", dumpS(mine));
+            std::string err;
+            CHECK(commitImport(r, dest, planImport(r, dest).confirmToken, "20261111-221530", err));
+            const json after = json::parse(slurp(dest / "config.json"));
+            if (after[sw] != k.want) { std::printf("privacy: %s bundle=%d here=%d -> %s\n", sw, k.bundle, k.here, after[sw].dump().c_str()); }
+            CHECK(after[sw] == k.want);
+            CHECK(after["webPort"] == 8080);
+        }
+        // this computer's file says nothing: its default is on, so the bundle's choice is the more private or the same
+        json b;
+        b[sw] = false;
+        const ImportResult off = parseBundle(rawBundle({{"config.json", dumpS(b)}}));
+        const fs::path d2 = g_base / "privacy2";
+        fs::remove_all(d2);
+        fs::create_directories(d2);
+        spit(d2 / "config.json", "{\"webPort\":1}");
+        std::string err;
+        CHECK(commitImport(off, d2, planImport(off, d2).confirmToken, "20261111-221530", err));
+        CHECK(json::parse(slurp(d2 / "config.json"))[sw] == false);
+        // a fresh computer takes the bundle's off
+        const fs::path d3 = g_base / "privacy3";
+        fs::remove_all(d3);
+        CHECK(commitImport(off, d3, planImport(off, d3).confirmToken, "20261111-221530", err));
+        CHECK(json::parse(slurp(d3 / "config.json"))[sw] == false);
+        // a value that is not a boolean is dropped
+        json bad;
+        bad[sw] = "no";
+        CHECK(!json::parse(parseBundle(rawBundle({{"config.json", dumpS(bad)}})).files[0].bytes).contains(sw));
+    }
+}
+
+// What a LOCAL device is, by the parser and not by a guess: two USB radios, an rtl_tcp radio and an I/Q file -> the two USB radios come back.
+void testLocalRadiosComeBack() {
+    json b;
+    b["sourceKind"] = "rtlsdr";
+    b["nativeArgs"] = "serial=00000001,index=0";
+    b["soapyArgs"] = "driver=airspyhf,serial=ABCD1234";
+    b["radios"] = json::array({json{{"number", 2}, {"sourceKind", "rtlsdr"}, {"args", "serial=00000042"}, {"centerHz", 98000000.0}},
+                               json{{"number", 3}, {"sourceKind", "soapy"}, {"args", "driver=sdrplay,serial=1234567890"}},
+                               json{{"number", 4}, {"sourceKind", "rtltcp"}, {"args", "203.0.113.9:1234"}},
+                               json{{"number", 5}, {"sourceKind", "file"}, {"args", "C:/x/y.iq"}},
+                               json{{"number", 6}, {"sourceKind", "siggen"}, {"args", ""}}});
+    const ImportResult r = parseBundle(rawBundle({{"config.json", dumpS(b)}}));
+    const json c = json::parse(r.files[0].bytes);
+    CHECK(c["sourceKind"] == "rtlsdr" && c["nativeArgs"] == "serial=00000001,index=0" && c["soapyArgs"] == "driver=airspyhf,serial=ABCD1234");
+    CHECK(c["radios"].size() == 3);
+    CHECK(c["radios"][0]["number"] == 2 && c["radios"][0]["centerHz"] == 98000000.0 && c["radios"][1]["number"] == 3 && c["radios"][2]["number"] == 6);
+    std::string told;
+    for (const std::string& n : r.notes) { told += n + "\n"; }
+    CHECK(told.find("2 saved radio(s)") != std::string::npos);
+    CHECK(told.find("203.0.113.9") == std::string::npos && told.find("y.iq") == std::string::npos);
+}
+
+// A local-looking entry that hides an address, a remote driver or a path is left out, one case at a time.
+void testHiddenAddressesAreLeftOut() {
+    const char* const bad[] = {"driver=rtlsdr,host=203.0.113.9", "driver=rtlsdr,remote=nas7", "serial=1,remote:driver=rtlsdr", "driver=remote,remote=203.0.113.9",
+                               "tcp://203.0.113.9:1234", "driver=rtlsdr,serial=\\\\nas7\\share", "serial=a/b", "serial=203.0.113.9", "serial=nas7.lan",
+                               "driver=rtlsdr,uri=http://x", "driver=plutosdr", "driver=SoapyRemote", "rtl_tcp=203.0.113.9", "noequals", "driver=rtlsdr,,serial=1",
+                               "driver=rtlsdr,serial=1,serial=2,a=b,c=d,e=f,g=h,i=j,k=k,l=l,m=m,n=n,o=o,p=p,q=q,r=r"};
+    for (const char* args : bad) {
+        json b;
+        b["radios"] = json::array({json{{"number", 2}, {"sourceKind", "soapy"}, {"args", args}}, json{{"number", 3}, {"sourceKind", "rtlsdr"}, {"args", args}}});
+        b["sourceKind"] = "soapy";
+        b["soapyArgs"] = args;
+        b["nativeArgs"] = args;
+        const ImportResult r = parseBundle(rawBundle({{"config.json", dumpS(b)}}));
+        const json c = json::parse(r.files[0].bytes);
+        if (!c["radios"].empty()) { std::printf("saved radio kept: [%s]\n", args); }
+        CHECK(c["radios"].empty());   // no entry with anything but a plain local key survives
+        // the whole output carries no address, host or path
+        const std::string out = r.files[0].bytes;
+        for (const char* leak : {"203.0.113.9", "nas7", "tcp://", "http://", "remote"}) {
+            if (out.find(leak) != std::string::npos) { std::printf("leak [%s] from [%s]\n", leak, args); }
+            CHECK(out.find(leak) == std::string::npos);
+        }
+    }
+    // a key among local ones is dropped alone and the rest stay
+    json b;
+    b["sourceKind"] = "soapy";
+    b["soapyArgs"] = "driver=rtlsdr,serial=00000001,host=203.0.113.9";
+    const json c = json::parse(parseBundle(rawBundle({{"config.json", dumpS(b)}})).files[0].bytes);
+    CHECK(c["soapyArgs"] == "driver=rtlsdr,serial=00000001");
+    // source kinds that connect elsewhere or open a file are left out with their arguments
+    for (const char* kind : {"rtltcp", "pluto", "file", "weird", ""}) {
+        json k;
+        k["sourceKind"] = kind;
+        k["soapyArgs"] = "driver=rtlsdr,serial=1";
+        k["nativeArgs"] = "serial=1";
+        const json kc = json::parse(parseBundle(rawBundle({{"config.json", dumpS(k)}})).files[0].bytes);
+        CHECK(!kc.contains("sourceKind") && !kc.contains("soapyArgs") && !kc.contains("nativeArgs"));
+    }
+    json notString;
+    notString["radios"] = "nothing";
+    CHECK(!json::parse(parseBundle(rawBundle({{"config.json", dumpS(notString)}})).files[0].bytes).contains("radios"));
+}
+
+// THE FEATURE'S PROMISE: export a profile that has two local radios, Usage reporting off and ordinary settings; import it into a FRESH profile; they are all there.
+void testBackupRestoresTheProfileOnANewComputer() {
+    cascade::core::AppConfig cfg;
+    cfg.webPort = 4321;
+    cfg.centerHz = 7100000.0;
+    cfg.volume = 0.25;
+    cfg.telemetryEnabled = false;
+    cfg.diagnosticsEnabled = false;
+    cfg.sourceKind = "rtlsdr";
+    cfg.nativeArgs = "serial=00000001";
+    cascade::core::SavedRadio a, b;
+    a.number = 2; a.sourceKind = "airspyhf"; a.args = "serial=ABCD1234"; a.centerHz = 14200000.0;
+    b.number = 3; b.sourceKind = "soapy"; b.args = "driver=sdrplay,serial=1234567890";
+    cfg.radios = {a, b};
+    const fs::path src = g_base / "promise-src.json";
+    std::string err;
+    CHECK(cascade::core::ConfigStore::save(src.string(), cfg, err));
+    ExportReport rep;
+    const std::string text = exportBundle({{"config.json", slurp(src)}, {"bookmarks.json", kBookmarks}, {"markers.json", kMarkers}}, ExportOptions{}, rep);
+    CHECK(rep.error == BundleError::None);
+    const ImportResult r = parseBundle(text);
+    CHECK(r.error == BundleError::None);
+    const fs::path fresh = g_base / "promise-fresh";
+    fs::remove_all(fresh);
+    CHECK(commitImport(r, fresh, planImport(r, fresh).confirmToken, "20261111-221530", err));
+    cascade::core::AppConfig back;
+    CHECK(cascade::core::ConfigStore::load((fresh / "config.json").string(), back, err));
+    CHECK(back.telemetryEnabled == false && back.diagnosticsEnabled == false);
+    CHECK(back.webPort == 4321 && back.centerHz == 7100000.0 && back.volume == 0.25);
+    CHECK(back.sourceKind == "rtlsdr" && back.nativeArgs == "serial=00000001");
+    CHECK(back.radios.size() == 2);
+    if (back.radios.size() == 2) {
+        CHECK(back.radios[0].number == 2 && back.radios[0].sourceKind == "airspyhf" && back.radios[0].args == "serial=ABCD1234" && back.radios[0].centerHz == 14200000.0);
+        CHECK(back.radios[1].number == 3 && back.radios[1].sourceKind == "soapy" && back.radios[1].args == "driver=sdrplay,serial=1234567890");
+    }
+    CHECK(slurp(fresh / "bookmarks.json").find("BBC R4") != std::string::npos);
 }
 
 void testPlanAndCommit() {
@@ -495,6 +647,10 @@ int main() {
     testParseRefusals();
     testListenersImportedOff();
     testHostileBundleLeavesTheGuardedSettingsAlone();
+    testReportingOnlyGetsMorePrivate();
+    testLocalRadiosComeBack();
+    testHiddenAddressesAreLeftOut();
+    testBackupRestoresTheProfileOnANewComputer();
     testPlanAndCommit();
     testRollback();
     testBackups();
