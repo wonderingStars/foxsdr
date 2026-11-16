@@ -111,7 +111,7 @@ bool writeSidecar(const std::string& settingsPath, const json& items) {
     j["format"] = "foxsdr-secrets";
     j["version"] = 1;
     j["items"] = items;
-    const bool ok = writeAtomic(p, j.dump(2) + "\n");
+    const bool ok = writeAtomic(p, j.dump(2, ' ', false, json::error_handler_t::replace) + "\n");
     if (ok) { tightenPermissions(p); }
     return ok;
 }

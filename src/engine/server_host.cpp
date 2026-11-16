@@ -449,6 +449,13 @@ void ServerHost::reconcileWeb(bool retry) {
         // The addresses a phone would type, for the panel's "reachable at" line: only when the binding can be reached from elsewhere (the
         // adapter walk is a syscall nobody needs for a loopback server).
         if (webServer_.decision().reachableOffMachine) { l.addresses = cascade::net::localInterfaceAddresses(); }
+        {
+            const cascade::net::WebServer::TlsInfo ti = webServer_.tlsInfo();
+            l.tls = ti.active;
+            l.tlsSelfSigned = ti.active && ti.selfSigned;
+            l.tlsFingerprint = ti.active ? ti.fingerprintSha256 : std::string();
+            l.tlsNotAfter = ti.active ? static_cast<long long>(ti.notAfter) : 0;
+        }
         // The PORT and the SCOPE, never the password record and never the bind address's provenance: this line goes in a file the user may send us.
         cascade::core::diagLogf("web: serving on port %d", l.boundPort);
     } else {

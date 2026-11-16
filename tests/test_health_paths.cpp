@@ -264,6 +264,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         {"Audio", "src/engine/engine.cpp", 1},      {"Reopen", "src/engine/engine.cpp", 1},
         {"PatchLoad", "src/gui/app_window.cpp", 1},
         {"CfgSave", "src/engine/engine_service.cpp", 1},
+        {"CfgSave", "src/core/config.cpp", 1},   // engine lane E1: the protected store refused a secret, which then stays in the settings file (core/secret_vault.hpp)
         {"SdrEnum", "src/engine/engine.cpp", 1},     {"SdrLost", "src/engine/engine.cpp", 1},
         {"AudioLead", "src/engine/engine.cpp", 1},
         // 0.99.100: the driver's refusal of a second OpenGL context, counted twice in the window: mid-session and at the start-up probe.

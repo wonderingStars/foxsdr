@@ -183,8 +183,14 @@ public:
         int boundPort = 0;
         std::string refusal;
         std::vector<std::string> addresses;
+        // HTTPS (engine lane E1): whether the running web server speaks TLS and the certificate's public figures, so a change of any of them moves the lists block and the facts follow
+        bool tls = false;
+        bool tlsSelfSigned = false;
+        std::string tlsFingerprint;
+        long long tlsNotAfter = 0;
         bool operator==(const Listener& o) const {
-            return running == o.running && boundPort == o.boundPort && refusal == o.refusal && addresses == o.addresses;
+            return running == o.running && boundPort == o.boundPort && refusal == o.refusal && addresses == o.addresses && tls == o.tls && tlsSelfSigned == o.tlsSelfSigned &&
+                   tlsFingerprint == o.tlsFingerprint && tlsNotAfter == o.tlsNotAfter;
         }
     };
     // The live figures a panel shows, read at the call (as a recording's bytes are): they move with traffic and must not rebuild the

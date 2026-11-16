@@ -1619,11 +1619,10 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         fact("web.tls", sc.web.tlsEnabled ? "1" : "0", true);
         fact("web.tls.thumbprintSet", sc.web.tlsCertThumbprint.empty() ? "0" : "1", true);
         {
-            const cascade::net::WebServer::TlsInfo ti = servers_.webServer().tlsInfo();
-            fact("web.tls.active", ti.active ? "1" : "0", true);
-            fact("web.tls.fingerprint", ti.active ? ti.fingerprintSha256 : std::string(), true);
-            fact("web.tls.selfSigned", ti.active && ti.selfSigned ? "1" : "0", true);
-            fact("web.tls.notAfter", ti.active ? std::to_string(static_cast<long long>(ti.notAfter)) : std::string(), true);
+            fact("web.tls.active", wl.tls ? "1" : "0", true);
+            fact("web.tls.fingerprint", wl.tlsFingerprint, true);
+            fact("web.tls.selfSigned", wl.tlsSelfSigned ? "1" : "0", true);
+            fact("web.tls.notAfter", wl.tls ? std::to_string(wl.tlsNotAfter) : std::string(), true);
         }
         fact("web.listeners", sc.web.listenersEnabled ? "1" : "0", true);
         fact("web.hasListenerPassword", sc.web.listenerPasswordRecord.empty() ? "0" : "1", true);

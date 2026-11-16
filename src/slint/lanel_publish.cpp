@@ -927,7 +927,7 @@ struct LaneLPublisher::Impl {
             const std::string pw = dv("b.lpw");
             if (pw.size() < 8) { refuseHere(kWeb, tr("Listener password"), tr("The password must be at least eight characters.")); return; }
             nlohmann::json j; j["web"]["listenerPassword"] = pw;
-            webConfig(tr("Listener password"), j.dump(), "b.lpw");
+            webConfig(tr("Listener password"), j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "b.lpw");
         }, dv("b.lpw").size() >= 8);
         key(v, "b.lpw-clear", tr("Clear the listener password"), [this] { webConfig(tr("Listener password"), "{\"web\":{\"clearListenerPassword\":true}}", "b.lpw"); }, hasLp);
         if (fact("web.listenerPasswordPending") == "1") { v.push_back(rNote(tr("The password is being prepared."))); }
@@ -942,7 +942,7 @@ struct LaneLPublisher::Impl {
             j["web"]["maxListeners"] = static_cast<int>(mx);
             j["web"]["listenerIdleSeconds"] = static_cast<int>(idle * 60.0);
             j["web"]["listenerSessionSeconds"] = static_cast<int>(sess * 3600.0);
-            webConfig(tr("Listener limits"), j.dump());
+            webConfig(tr("Listener limits"), j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
         });
         tick(v, "b.ltune", tr("Listeners may tune too"), fact("web.listenersMayTune") == "1",
              [this](bool on) { webConfig(tr("Listeners may tune too"), std::string("{\"web\":{\"listenersMayTune\":") + (on ? "true" : "false") + "}}"); },
