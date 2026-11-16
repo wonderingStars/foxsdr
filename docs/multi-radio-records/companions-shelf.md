@@ -151,7 +151,18 @@ apply (`store-bundle-licences.md` section 4). That is the owner's step, with the
 
 ## Gate
 
-See "Gate totals" (filled in at the end of the lane).
+Build folder `D:/foxsdr-build/en-sigmeas`, Release, hidden desktop `FoxSDRShelf`, `FOXSDR_FRAME_CAP_HZ=60`, a shared and slow machine. Final tree = commit `e53f5737` plus this record. Whole-tree build: exit 0.
+
+* This lane's own tests, all Passed: `test_companion_programs` (481 checks with `FOXSDR_COMPANIONS_COLLECTED` set to the 18 real programs; without it C11 says SKIPPED), `test_companion_runner` (23), `test_engine_api_companions` (51), `test_slint_host_extend` (480 + the shelf), the six `slint_drive_companions-*`, `test_error_paths` (pin unchanged), `test_i18n` (3878 keys, 33 catalogues), `test_slint_house_rules`, `slint_drive_ledger --check` (2379 rows, 0 unclassified).
+* `ctest -L "headless|slint" -j3 --timeout 300` (1169 tests, 2 skipped: test_plugin_abi3_compat, test_rtlsdr_live: no hardware): `99% tests passed, 10 tests failed out of 1169`, 2587 s. Re-run alone, with `-j1`: test_slint_fitted, test_engine_api_zoom, test_kiwisdr_client, test_transmit_key_race, test_web_server PASSED (load flakes). The five that stayed red:
+  * `test_slint_tools` (7 checks, the Markers sheet's pinned geometry): a BASE red, not this lane's. The unchanged build `D:/foxsdr-build/mr-dsp` (merge 6's) passes it (371 checks, 0 failed) and merge 6's commit `01a132b5` ("test_slint_tools: the Markers sheet's pinned geometry follows window gaps 1's widening") is not in `d4f855c5`; this lane touches no TOOLS file.
+  * `test_health_app_stepped`: a BASE red (the same `bindOrAbsentCount` failure window gaps 3 recorded in the unchanged build); merge 6's `55adafe9` fixes it.
+  * `test_pass_control`: timing assertions (`longest <= 24.0`, passes per second 50 to 70) fail alone on this loaded machine; this lane touches no pass code. UNCLASSIFIED beyond "load": not re-proved on an idle machine.
+  * `telemetry_worker`: the fixture manifest hashes (`telemetry-worker/radio-reports.test.mjs`, "fixture directory matches its manifest"); this lane touches nothing under `telemetry-worker`. NOT proved to fail on the base (not run there).
+  * `test_diagnostics_free`: the build-stamp test (the binary's commit is not the tree's), the known stale-stamp family: see the stamp line below.
+* `ctest -L gui -j3 --timeout 600` (390 tests): `97% tests passed, 10 tests failed out of 390`, 3592 s. Re-run alone: slint_drive_lanel-scan, slint_drive_signal-recorder, slint_drive_system-look, slint_drive_wg3-store-page, test_health_app, test_slow_frames_app, test_tx_audio_plate_app PASSED (load). Still red alone: `slint_drive_layout-section-overlap-1600` and `-624` (BASE rereds: merge 6's `55adafe9` "the section-overlap drives follow the Signal strength bar" is not in this base) and `test_diagnostics` (the stamp, below).
+* Stamp tests after a rebuild at the final commit: see the line added after the final commit.
+* No red is this lane's.
 
 ## UNVERIFIED
 
