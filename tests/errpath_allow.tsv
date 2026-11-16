@@ -3044,3 +3044,8 @@ src/slint/s1_logic.cpp::parseDcs::errassign::that is not one of the # standard d
 src/slint/s1_logic.cpp::parseNotchSlot::errassign::a notch slot is a whole number from # to #	ALLOW	UI result text: the failure is classified at the site that produced it	s1
 src/slint/s1_logic.cpp::checkCuts::errassign::the high cut has to be above the low cut	ALLOW	UI result text: the failure is classified at the site that produced it	s1
 src/slint/lanes2_logic.cpp::parseFrameRate::errassign::the frame rate is # automatic or # to # a second	ALLOW	validation: a typed frame rate outside 0 or 1 to 120 is refused beside the field the person typed it into, before anything is sent; nothing failed	2026-11-16 S2
+src/slint/s5_logic.cpp::bad::errassign::why	ALLOW	validation	2026-11-16
+src/slint/s5_logic.cpp::validHost::errassign::type the address of the streams computer	ALLOW	validation	2026-11-16
+src/slint/s5_logic.cpp::validHost::errassign::that address is too long	ALLOW	validation	2026-11-16
+src/slint/s5_logic.cpp::validHost::errassign::an address has letters digits dots dashes and colons only	ALLOW	validation	2026-11-16
+src/slint/s5_logic.cpp::parsePpmSeconds::errassign::allowed	ALLOW	validation	2026-11-16

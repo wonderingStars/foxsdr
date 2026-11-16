@@ -1447,6 +1447,8 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             std::snprintf(am, sizeof(am), "%d;%d;%.1f;%.3f", pr.amDetector_, pr.pipeline_.amDetectorLocked() ? 1 : 0, pr.pipeline_.amDetectorOffsetHz(), pr.pipeline_.amDetectorPresence());
             fact(pre + "amdet", am);   // G1-19: the AM detector in force, and the loop's lock, carrier offset and carrier presence
         }
+        // THE RTL-SDR'S DIRECT-SAMPLING CHOICE (0 automatic, 1 never, 2 the I branch, 3 the Q branch; screen lane S5): present only while the radio has the setting, so the screen can tell "none" from "automatic".
+        if (receivers_[n - 1u]->deviceDirectPresent_) { fact(pre + "directSampling", std::to_string(receivers_[n - 1u]->deviceDirectChoice_)); }
         {
             const cascade::core::ppmauto::Result pr = receivers_[n - 1u]->ppmAuto_.result(clockS());
             const char* word = pr.state == cascade::core::ppmauto::State::Measuring ? "measuring" : (pr.state == cascade::core::ppmauto::State::Done ? "done" : (pr.state == cascade::core::ppmauto::State::Failed ? "failed" : "idle"));

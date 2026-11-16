@@ -64,6 +64,8 @@ list(APPEND foxsdr_slint_sources s1_logic.cpp s1_publish.cpp)
 list(APPEND foxsdr_slint_sources lanes2_logic.cpp lanes2_publish.cpp lanes2_folder.cpp)
 # SCREEN LANE S4 (docs/multi-radio-records/screen-s4-wave8.md): the scanner's saved hits, the TCI / UDP audio / MQTT / web address / keyword alert controls (s4_logic: pure; s4_publish: the LaneS4 global; ui/s4_bank.slint)
 list(APPEND foxsdr_slint_sources s4_logic.cpp s4_publish.cpp)
+# SCREEN LANE S5 (docs/multi-radio-records/screen-s5-sources.md): radios and sources a user could not reach or set (s5_logic: pure; s5_rows: the rows over injected facts and commands; s5_publish: the LaneS5 global; ui/s5_bank.slint)
+list(APPEND foxsdr_slint_sources s5_logic.cpp s5_rows.cpp s5_publish.cpp)
 # WINDOW GAPS LANE 1 (docs/multi-radio-records/window-gaps-1.md): the start-up questions and fault cards (gaps1_logic: pure; gaps1_publish: the Gaps1 global; ui/gaps1.slint)
 list(APPEND foxsdr_slint_sources gaps1_logic.cpp gaps1_publish.cpp sysmenu_win.cpp)
 # WINDOW GAPS LANE 4 (docs/multi-radio-records/window-gaps-4.md): the waterfall's row log (gap break, key coverage, range rail) and the Airband monitor's marks on the spectrum
