@@ -20,6 +20,7 @@
 #include "core/i18n.hpp"
 #include "core/operating_aids.hpp"
 #include "core/power_log.hpp"
+#include "core/utf8_text.hpp"
 #include "host_logic.hpp"
 #include "lanek_logic.hpp"
 #include "lanel_logic.hpp"
@@ -86,7 +87,7 @@ std::uint32_t demodOfName(const std::string& name) {
     for (std::uint32_t d = 1; d <= 8; ++d) { if (name == foxsdr::slinthost::modeName(d)) { return d; } }
     return 0;
 }
-std::string fmtHz(double v, const char* f) { char b[64]; std::snprintf(b, sizeof b, f, v); return b; }
+std::string fmtHz(double v, const char* f) { std::string s; cascade::core::formatUtf8(s, f, v); return s; }
 }  // namespace
 
 struct LaneS2Publisher::Impl {
@@ -450,7 +451,7 @@ struct LaneS2Publisher::Impl {
         std::error_code ec;
         std::filesystem::create_directories(std::filesystem::path(stackFile).parent_path(), ec);
         std::ofstream f(stackFile, std::ios::binary | std::ios::trunc);
-        if (f) { f << stack.toJson().dump(1); }
+        if (f) { f << stack.toJson().dump(1, ' ', false, nlohmann::json::error_handler_t::replace); }
         if (!f) { stackNote = tr("The band places could not be saved, so they are lost when the window closes."); stackNoteTone = kErr; } else { stackNote.clear(); }
     }
     // the live tune is what the current band's active register remembers

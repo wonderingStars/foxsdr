@@ -13,6 +13,7 @@
 
 #include "core/i18n.hpp"
 #include "core/rec_naming.hpp"
+#include "core/utf8_text.hpp"
 
 namespace foxsdr::slints2 {
 
@@ -20,7 +21,7 @@ namespace sll = foxsdr::slintlanel;
 
 namespace {
 std::string lower(std::string s) { for (char& c : s) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); } return s; }
-std::string fmt(const char* f, double a) { char b[96]; std::snprintf(b, sizeof b, f, a); return b; }
+std::string fmt(const char* f, double a) { std::string s; cascade::core::formatUtf8(s, f, a); return s; }
 }  // namespace
 
 // ============================================================ FFT size, window, frame rate
