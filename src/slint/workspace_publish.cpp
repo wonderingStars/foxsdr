@@ -206,6 +206,7 @@ void WorkspacePublisher::publishPane(RadioView& rv, const PaneContext& ctx) {
         if (sg.changed("pane.airmarks", sig)) {
             std::vector<AirbandChannel> chs;
             for (const auto& m : fig.airMarks) { chs.push_back({m.from, m.to, m.open}); }
+            maxAirMarks_[static_cast<std::size_t>(slot)] = std::max(maxAirMarks_[static_cast<std::size_t>(slot)], chs.size());
             d.airband_channels = std::make_shared<slint::VectorModel<AirbandChannel>>(std::move(chs));
             dirty = true;
         }

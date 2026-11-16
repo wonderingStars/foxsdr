@@ -59,7 +59,7 @@ list(APPEND foxsdr_slint_sources lanel_logic.cpp lanel_publish.cpp)
 # SCREEN LANE M (docs/multi-radio-records/screen-m.md): the controls of the wiring second passes, each in the section the person looks in (lanem_logic: pure; lanem_publish: the LaneM global)
 list(APPEND foxsdr_slint_sources lanem_logic.cpp lanem_publish.cpp)
 # LANE X (docs/multi-radio-records/lane-x.md): the in-window help (lanex_help: the topics and the search, pure), the DSP speed test (lanex_bench: the job, pure), lanex_publish: the LaneX global; ui/lane_x.slint
-list(APPEND foxsdr_slint_sources lanex_help.cpp lanex_bench.cpp lanex_publish.cpp tester_host.cpp)
+list(APPEND foxsdr_slint_sources lanex_help.cpp lanex_bench.cpp lanex_publish.cpp tester_host.cpp knob_host.cpp knob_host_win.cpp)
 # WINDOW GAPS LANE 1 (docs/multi-radio-records/window-gaps-1.md): the start-up questions and fault cards (gaps1_logic: pure; gaps1_publish: the Gaps1 global; ui/gaps1.slint)
 list(APPEND foxsdr_slint_sources gaps1_logic.cpp gaps1_publish.cpp sysmenu_win.cpp)
 # WINDOW GAPS LANE 4 (docs/multi-radio-records/window-gaps-4.md): the waterfall's row log (gap break, key coverage, range rail) and the Airband monitor's marks on the spectrum
@@ -76,7 +76,7 @@ endif()
 target_compile_features(foxsdr-slint PRIVATE cxx_std_20)
 # The engine (EngineService, the C API table) is the same library the ImGui window and foxsdr-engine use; the
 # window itself only ever talks to the table.
-target_link_libraries(foxsdr-slint PRIVATE Slint::Slint cascade_engine)
+target_link_libraries(foxsdr-slint PRIVATE Slint::Slint cascade_engine cascade_input)   # lane X, G5-16: the knob layer (src/input)
 # TrackInfoCache owns a TrackPhotoCache (the target photos, 0.99.98), whose default texture hooks are OpenGL calls: this window never asks the
 # plugin for a photo, so none runs, but the class links them.
 if(WIN32)

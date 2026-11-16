@@ -1,0 +1,38 @@
+#! frames=1200 size=1600x900 bank=2 sections=2:4
+# lanex-panes-airband (lane X, docs/multi-radio-records/lane-x.md, row P1): in a multi-radio layout the Airband monitor's marks, its block sentence, the hidden tuned band and the passband peak, the waterfall's
+# reception-gap break and the range rail are carried by the PANES. Read back from the row each pane was last PUBLISHED with (pane.r<n>.*), not from what the host computed: the monitor listens on the selected
+# radio (radio 1), so its pane carries the marks and has no tuned band; the other pane keeps its tuned band and has no marks.
+10 state running == 1
++1 radio add 2 60000
++40 state workspace.radios == 2
++1 click "Side by side"
++30 state workspace.layout == 1
+state pane.r1.showvfo == 1
+state pane.r1.airmarks == 0
+state pane.r1.airblock == "-"
+state pane.r2.showvfo == 1
++1 type "Airport code" "egll"
++1 key enter
++2 click "Look up"
++30 state count.bookmarks > 0
++1 scroll "Airport code" 700
++3 click "LISTEN"
++30 state fact.airband.listening == 1
++60 state wf.airlistening == 1
+# the selected radio's pane: no tuned band, no peak, the block sentence, marks
+state pane.r1.showvfo == 0
+state pane.r1.peak == "-"
+state pane.r1.airblock != "-"
++100 state pane.r1.airmarksmax > 0
+# the other radio's pane is untouched by a monitor that is not listening on it
+state pane.r2.showvfo == 1
+state pane.r2.airmarksmax == 0
+state pane.r2.airblock == "-"
++1 shot "lanex-panes-airband.png"
+# stopping gives every pane back its tuned band
++1 scroll "Above the noise" 300
++3 click "STOP"
++30 state fact.airband.listening == 0
++10 state pane.r1.showvfo == 1
+state pane.r1.airmarks == 0
+state pane.r1.airblock == "-"

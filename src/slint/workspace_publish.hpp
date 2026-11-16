@@ -46,6 +46,8 @@ public:
     // How many rows were set (not skipped as unchanged) since the last call: the tests of the host read it to see that a quiet pane costs nothing.
     int takeRowsSet() { const int n = rowsSet_; rowsSet_ = 0; return n; }
     // The row as last handed to the window (lane X, P1: a drive script reads what a pane was PUBLISHED with, not what the host computed for it).
+    // The most Airband marks any picture of this pane has been published with (a block lands and moves, so one tick may have none: a drive reads the most).
+    std::size_t maxAirMarks(int slot) const { return maxAirMarks_[static_cast<std::size_t>(std::clamp(slot, 0, foxsdr::slinthost::kMaxRadios - 1))]; }
     const WorkspaceCell& publishedRow(int slot) const { return rows_[static_cast<std::size_t>(std::clamp(slot, 0, foxsdr::slinthost::kMaxRadios - 1))]; }
 
 private:
@@ -55,6 +57,7 @@ private:
     std::shared_ptr<slint::VectorModel<WorkspaceCell>> cells_;
     std::array<WorkspaceCell, foxsdr::slinthost::kMaxRadios> rows_;
     std::array<bool, foxsdr::slinthost::kMaxRadios> published_{};
+    std::array<std::size_t, foxsdr::slinthost::kMaxRadios> maxAirMarks_{};
     // the last layout values sent
     int shown_ = -1, layout_ = -1, page_ = -1, count_ = -1, selected_ = -1, ribbon_ = -1;
     std::string notice_, pagesSig_;

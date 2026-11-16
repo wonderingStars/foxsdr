@@ -76,7 +76,7 @@ try {
   out.digitDecade = digit.decade;
   await tap(digit.x, digit.top + digit.h * 0.2);
   await tap(digit.x, digit.top + digit.h * 0.8);
-  await swipe(digit.x, digit.top + digit.h * 0.5 + 35, digit.top + digit.h * 0.5);   // 35 px up = two steps
+  await swipe(digit.x, digit.top + digit.h * 0.5, digit.top + digit.h * 0.5 - 35);   // 35 px up = two steps
   out.digitControls = await ev(`window.__ctl.filter((c) => 'centerHz' in c).map((c) => c.centerHz)`);
 
   // THE DIVIDER between the spectrum and the waterfall: a finger drag moves it
@@ -86,7 +86,16 @@ try {
   out.specBefore = split.spec;
   out.specAfter = await ev(`document.getElementById('spectrum').getBoundingClientRect().height`);
 
-  // THE COLUMN'S GRIP: a finger drag changes the column's width variable
+  // TAPPING THE SPECTRUM: a tap makes the click the page's click-to-tune listens for (it needs a spectrum frame to act on it, which this stand-in server has none of)
+  await ev(`window.__clicks = 0; document.getElementById('spectrum').addEventListener('click', () => { window.__clicks += 1; }); true`);
+  const sp = await ev(`(() => { const c = document.getElementById('spectrum'); c.scrollIntoView({ block: 'center' }); const r = c.getBoundingClientRect(); return { x: r.left + r.width * 0.75, y: r.top + r.height / 2 }; })()`);
+  await tap(sp.x, sp.y);
+  out.spectrumTapClicks = await ev(`window.__clicks`);
+
+  // THE COLUMN'S GRIP exists in the wide layout only (below 820 px the column is stacked under the picture), so it is tried on a tablet-sized touch screen
+  await send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 800, deviceScaleFactor: 1, mobile: true });
+  await send('Page.navigate', { url: `http://127.0.0.1:${port}/` });
+  await sleep(1500);
   const grip = await ev(`(() => { const g = document.getElementById('sideGrip'); if (!g) return null; const r = g.getBoundingClientRect(); return { x: r.left + r.width / 2, y: Math.max(10, r.top + 30), w: r.width, var: getComputedStyle(document.documentElement).getPropertyValue('--side') }; })()`);
   if (grip) {
     out.gripW = grip.w;
@@ -97,12 +106,6 @@ try {
     out.gripVarBefore = grip.var;
     out.gripVarAfter = await ev(`getComputedStyle(document.documentElement).getPropertyValue('--side')`);
   }
-
-  // TAPPING THE SPECTRUM tunes (a tap synthesises the click the page already listens for)
-  const before = await ev(`window.__ctl.length`);
-  const sp = await ev(`(() => { const c = document.getElementById('spectrum'); c.scrollIntoView({ block: 'center' }); const r = c.getBoundingClientRect(); return { x: r.left + r.width * 0.75, y: r.top + r.height / 2 }; })()`);
-  await tap(sp.x, sp.y);
-  out.spectrumTapControls = await ev(`window.__ctl.slice(${before}).filter((c) => 'vfoOffsetHz' in c).length`);
   out.ok = true;
 } catch (e) {
   out.error = String(e && e.message ? e.message : e);

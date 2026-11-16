@@ -100,7 +100,9 @@
 #include "lanel_publish.hpp"   // screen lane L (docs/multi-radio-records/screen-l.md)
 #include "lanem_logic.hpp"     // screen lane M (docs/multi-radio-records/screen-m.md): a mark's credit line
 #include "lanem_publish.hpp"   // screen lane M: the controls of the wiring second passes
+#include "knob_host.hpp"       // lane X, G5-16: the controllers
 #include "tester_host.hpp"    // lane X, WG2-1492: the tester usage recorder
+#include "lanex_help.hpp"
 #include "lanex_publish.hpp"   // lane X (docs/multi-radio-records/lane-x.md): the in-window help and the speed test
 #include "sysmenu_win.hpp"   // window gaps lane 1: the title rail's own system menu (ledger row 14)
 #include "sysmenu_win.hpp"   // window gaps lane 1: the title rail's own system menu (ledger row 14)
@@ -741,6 +743,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<foxsdr::slintlanek::LaneKPublisher> laneKp;
     std::unique_ptr<foxsdr::slintlanel::LaneLPublisher> laneLp;   // screen lane L
     std::unique_ptr<foxsdr::slintlanem::LaneMPublisher> laneMp;   // screen lane M
+    std::unique_ptr<foxsdr::slintknobs::KnobHost> knobHost;       // lane X, G5-16: the controllers (declared before the publisher that points at it)
     std::unique_ptr<foxsdr::slintlanex::LaneXPublisher> laneXp;   // lane X: the help sheet, the speed test
     std::array<int, 5> helpLastRow{-1, -1, -1, -1, -1};            // lane X: the section last clicked in each bank (the help opens at its topic)
     std::function<std::string(const std::string&, std::string&)> sysMenuState;   // window gaps lane 1: `state sysmenu.<asks|items>`
@@ -1810,8 +1813,40 @@ int main(int argc, char** argv) {
             for (const int row : openSections[bankIndex]) { if (hasTopic(row)) { return {bankIndex, row}; } }
             return {bankIndex, -1};
         };
+        // LANE X, G5-16: the controllers. A bounded run (a test or a drive) never touches a real device: it gets two made-up ones, which open at once and are fed by `state lx.knobs.feed.<control>.<detents>`.
+        const bool knobStandIn = bounded.bounded() && !(std::getenv("FOXSDR_SLINT_KNOBS") != nullptr && std::string(std::getenv("FOXSDR_SLINT_KNOBS")) == "real");
+        foxsdr::slintknobs::KnobHost::Env ke = knobStandIn ? foxsdr::slintknobs::KnobHost::Env{} : foxsdr::slintknobs::realEnv();
+        if (knobStandIn) {
+            ke.list = [] {
+                std::vector<foxsdr::slintknobs::FoundDevice> v;
+                v.push_back({"hid:0b33:0020", "ShuttleXpress", 0, 0});
+                v.push_back({"hid:077d:0410", "PowerMate", 1, 1});
+                return v;
+            };
+            ke.open = [](const foxsdr::slintknobs::FoundDevice&, cascade::input::EventQueue&, std::string&) { return std::shared_ptr<void>(std::make_shared<int>(0)); };
+        }
+        ke.act.tune = [&](int n) { const int dir = n > 0 ? 1 : -1; for (int i = 0; i < std::min(std::abs(n), 20); ++i) { stepTune(dir, tuneStepHz); } };
+        ke.act.tuneFine = [&](int n, int divisor) { const int dir = n > 0 ? 1 : -1; for (int i = 0; i < std::min(std::abs(n), 20); ++i) { stepTune(dir, tuneStepHz / std::max(1, divisor)); } };
+        ke.act.volume = [&](double amount) { setVolume(state.volume + amount * 0.02); };
+        ke.act.squelch = [&](double amount) { setSquelch(std::clamp((squelchAuto(state.squelchDb) ? -120.0 : state.squelchDb) + amount * 2.0, -120.0, 0.0)); };
+        ke.act.zoom = [&](double factor) { zoomView(factor, 0.5); };
+        ke.act.stepSize = [&](int dir) {
+            std::size_t at = 0;
+            double best = 1e300;
+            for (std::size_t i = 0; i < kTuneSteps.size(); ++i) { const double d = std::fabs(kTuneSteps[i].second - tuneStepHz); if (d < best) { best = d; at = i; } }
+            const long next = static_cast<long>(at) + dir;
+            if (next >= 0 && next < static_cast<long>(kTuneSteps.size())) { tuneStepHz = kTuneSteps[static_cast<std::size_t>(next)].second; }
+        };
+        ke.act.mode = [&](int dir) { setMode(demodOfIndex((modeIndex(state.demodMode) + dir + 8) % 8)); };
+        ke.act.radioSelect = [&](int radio) { selectRadio(radio); };
+        ke.act.command = [&](const std::string& id) { ui->invoke_shortcut(ss(id)); };
+        knobHost = std::make_unique<foxsdr::slintknobs::KnobHost>(std::move(ke));
+        e.knobs = knobHost.get();
+        e.settingsDir = duties.about().configPath.empty() ? std::string() : std::filesystem::path(duties.about().configPath).parent_path().string();
+        e.standIn = knobStandIn;
         laneXp = std::make_unique<foxsdr::slintlanex::LaneXPublisher>(std::move(e));
         laneXp->wire();
+        laneXp->loadKnobs();
     }
     // ---- WINDOW GAPS LANE 1 (docs/multi-radio-records/window-gaps-1.md): what the classic window asks or says at start-up ----
     {
@@ -3315,6 +3350,7 @@ int main(int argc, char** argv) {
             }
             const auto& d = workspacePublisher.publishedRow(slot).pane;
             if (what == "airmarks") { out = std::to_string(d.airband_channels ? d.airband_channels->row_count() : 0u); }
+            else if (what == "airmarksmax") { out = std::to_string(workspacePublisher.maxAirMarks(slot)); }
             else if (what == "airblock") { out = d.airband_block.empty() ? std::string("-") : std::string(d.airband_block.data(), d.airband_block.size()); }
             else if (what == "airhearing") { out = d.airband_hearing.empty() ? std::string("-") : std::string(d.airband_hearing.data(), d.airband_hearing.size()); }
             else if (what == "showvfo") { out = d.show_vfo ? "1" : "0"; }
@@ -3324,7 +3360,7 @@ int main(int argc, char** argv) {
             else if (what == "gapbelow") { out = d.wf_gap_below.empty() ? std::string("-") : std::string(d.wf_gap_below.data(), d.wf_gap_below.size()); }
             else if (what == "rail") { out = fmt("%.3f", static_cast<double>(d.wf_rail_pos)); }
             else if (what == "raillabel") { out = d.wf_rail_label.empty() ? std::string("-") : std::string(d.wf_rail_label.data(), d.wf_rail_label.size()); }
-            else { return "pane.[r<n>.]<airmarks|airblock|airhearing|showvfo|peak|gap|gapabove|gapbelow|rail|raillabel>, not " + name; }
+            else { return "pane.[r<n>.]<airmarks|airmarksmax|airblock|airhearing|showvfo|peak|gap|gapabove|gapbelow|rail|raillabel>, not " + name; }
             return std::string();
         }
         if (name.rfind("marks.", 0) == 0) {

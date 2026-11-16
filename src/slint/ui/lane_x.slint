@@ -3,7 +3,7 @@
 // One global, filled by the host (lanex_publish.cpp), which also answers its act(id, text). The help sheet is drawn here and mounted by one line of main.slint; the speed test's rows are a KPanel
 // that main.slint appends to the SYSTEM bank's Performance section. Nothing here decides what a topic says or when the test runs.
 import { Theme } from "theme.slint";
-import { Key } from "keys.slint";
+import { Key as KeyButton } from "keys.slint";   // (the component; the name Key is left to the built-in key table, Key.Escape)
 import { KRow, KPanel } from "system_bank.slint";
 
 export global LaneX {
@@ -31,6 +31,13 @@ export component XHelpSheet inherits Rectangle {
         drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
         drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
         TouchArea { }   // swallows the click so the backdrop does not dismiss
+        // Esc shuts the sheet even while the search field has the focus: a key the field does not take comes up to this scope
+        FocusScope {
+            init => { self.focus(); }
+            key-pressed(e) => {
+                if (e.text == Key.Escape) { LaneX.act("help-close", ""); return accept; }
+                return reject;
+            }
         VerticalLayout {
             padding: 16px;
             spacing: 12px;
@@ -40,7 +47,8 @@ export component XHelpSheet inherits Rectangle {
                 viewport-height: help-list.preferred-height;
                 help-list := KPanel { rows: LaneX.help-rows; act(id, t) => { LaneX.act(id, t); } }
             }
-            HorizontalLayout { alignment: end; Key { label: @tr("Close"); on: true; clicked => { LaneX.act("help-close", ""); } } }   // not-translated: the host's action id
+            HorizontalLayout { alignment: end; KeyButton { label: @tr("Close"); on: true; clicked => { LaneX.act("help-close", ""); } } }   // not-translated: the host's action id
+        }
         }
     }
 }

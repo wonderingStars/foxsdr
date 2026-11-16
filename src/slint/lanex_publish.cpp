@@ -4,7 +4,11 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <utility>
+
+#include <nlohmann/json.hpp>
 
 #include "core/dsp_benchmark.hpp"
 #include "core/i18n.hpp"
@@ -163,7 +167,7 @@ struct LaneXPublisher::Impl {
         for (const BenchItem& it : items) { rows.push_back(slk::rReadout(it.group + " " + it.name, itemText(it, num))); }
         if (!running && ranOnce) {
             if (job->state() == BenchState::Cancelled) {
-                rows.push_back(slk::rNote(cascade::core::formatText(tr("Cancelled after %d of %d items. The results so far are shown."), static_cast<int>(job->done()), static_cast<int>(job->total())), slk::kWarn));
+                rows.push_back(slk::rNote(cascade::core::formatText(tr("Cancelled after %d of %d items. The results so far are shown.").c_str(), static_cast<int>(job->done()), static_cast<int>(job->total())), slk::kWarn));
             }
             const std::string s = summaryText(items, num);
             if (!s.empty()) { rows.push_back(slk::rNote(s, slk::kGood)); }
@@ -180,6 +184,56 @@ struct LaneXPublisher::Impl {
         env.ui->global<LaneX>().set_rows_bench(modelOf(rows));
     }
 
+    // ---------------------------------------------------------------- the controllers (G5-16)
+    std::string knobNote;
+    std::string knobSig;
+    std::filesystem::path knobFile() const { return env.settingsDir.empty() ? std::filesystem::path() : std::filesystem::path(env.settingsDir) / "lanex.json"; }
+
+    void saveKnobs() {
+        if (!env.knobs || knobFile().empty()) { return; }
+        nlohmann::json j;
+        j["knobs"] = {{"enabled", env.knobs->enabled()}, {"use", env.knobs->usedIds()}};
+        std::error_code ec;
+        std::filesystem::create_directories(knobFile().parent_path(), ec);
+        std::ofstream f(knobFile(), std::ios::binary | std::ios::trunc);
+        if (!f) { knobNote = tr("The choice could not be kept in the settings folder."); return; }
+        f << j.dump(1);
+    }
+
+    std::vector<Row> knobRows() {
+        std::vector<Row> rows;
+        if (!env.knobs) { return rows; }
+        rows.push_back(slk::rHeading(tr("Controllers")));
+        rows.push_back(slk::rNote(tr("A ShuttleXpress or a PowerMate can tune the radio and press a few of the window's keys. Nothing is opened until you turn this on and choose the device.")));
+        rows.push_back(slk::rTick("knobs-enable", tr("Use controllers"), env.knobs->enabled()));
+        rows.push_back(slk::rKey("knobs-scan", tr("Look for controllers")));
+        const std::vector<foxsdr::slintknobs::Status> st = env.knobs->status();
+        if (st.empty()) { rows.push_back(slk::rNote(tr("No controller was found."))); }
+        for (const auto& d : st) {
+            rows.push_back(slk::rTick("knobs-use:" + d.id, cascade::core::formatText(tr("Use %s").c_str(), d.name.c_str()), d.use, env.knobs->enabled()));
+            std::string line;
+            if (!env.knobs->enabled()) { line = tr("Off"); }
+            else if (d.open) { line = cascade::core::formatText(tr("In use, %d reports read").c_str(), static_cast<int>(d.reports)); }
+            else if (!d.error.empty()) { line = d.error; }
+            else { line = tr("Not in use"); }
+            rows.push_back(slk::rReadout(d.name, line));
+            const bool pm = d.id.rfind("hid:077d", 0) == 0;
+            rows.push_back(slk::rNote(pm ? tr("Turning it tunes; pressing it mutes.")
+                                         : tr("The jog tunes, the ring scans faster the further it is turned, and the five buttons in order are: smaller step, larger step, next mode, mute, record.")));
+        }
+        if (!knobNote.empty()) { rows.push_back(slk::rNote(knobNote, slk::kWarn)); }
+        return rows;
+    }
+
+    void publishKnobs(bool force) {
+        if (env.ui == nullptr || !env.knobs) { return; }
+        std::vector<Row> rows = knobRows();
+        const std::string sig = slk::signatureOf(rows);
+        if (!force && sig == knobSig) { return; }
+        knobSig = sig;
+        env.ui->global<LaneX>().set_rows_knobs(modelOf(rows));
+    }
+
     void act(const std::string& id, const std::string& text) {
         if (id == "help-close") { close(); return; }
         if (id == "help-search") { query = text; topic.clear(); publishHelp(); return; }
@@ -189,6 +243,9 @@ struct LaneXPublisher::Impl {
             if (topicIndex(t) >= 0) { topic = t; publishHelp(); }
             return;
         }
+        if (id == "knobs-enable") { if (env.knobs) { knobNote.clear(); env.knobs->setEnabled(text == "1"); saveKnobs(); publishKnobs(true); } return; }
+        if (id == "knobs-scan") { if (env.knobs) { env.knobs->scan(); publishKnobs(true); } return; }
+        if (id.rfind("knobs-use:", 0) == 0) { if (env.knobs) { env.knobs->setUse(id.substr(10), text == "1"); saveKnobs(); publishKnobs(true); } return; }
         if (id == "bench-run") { if (job->start()) { ranOnce = true; } publishBench(true); return; }
         if (id == "bench-cancel") { job->cancel(); publishBench(true); return; }
     }
@@ -201,6 +258,26 @@ void LaneXPublisher::wire() {
     if (p_->env.ui == nullptr) { return; }
     p_->env.ui->global<LaneX>().on_act([this](slint::SharedString id, slint::SharedString text) { p_->act(std::string(id.data(), id.size()), std::string(text.data(), text.size())); });
     p_->publishBench(true);
+    p_->publishKnobs(true);
+}
+
+void LaneXPublisher::loadKnobs() {
+    if (!p_->env.knobs) { return; }
+    // the saved choice (a missing or unreadable file is no choice: off, nothing marked)
+    if (!p_->knobFile().empty()) {
+        std::ifstream f(p_->knobFile(), std::ios::binary);
+        if (f) {
+            const nlohmann::json j = nlohmann::json::parse(f, nullptr, false);
+            if (j.is_object() && j.contains("knobs") && j["knobs"].is_object()) {
+                std::vector<std::string> use;
+                if (j["knobs"].contains("use") && j["knobs"]["use"].is_array()) { for (const auto& u : j["knobs"]["use"]) { if (u.is_string()) { use.push_back(u.get<std::string>()); } } }
+                p_->env.knobs->setUsedIds(use);
+                p_->env.knobs->scan();   // a listing; it opens a marked device only when the switch below is on
+                p_->env.knobs->setEnabled(j["knobs"].value("enabled", false));
+            }
+        }
+    }
+    p_->publishKnobs(true);
 }
 
 void LaneXPublisher::tick(long tickNo) {
@@ -212,6 +289,10 @@ void LaneXPublisher::tick(long tickNo) {
         p_->lastDone = done;
         p_->lastTick = tickNo;
         p_->publishBench(false);
+    }
+    if (p_->env.knobs) {
+        p_->env.knobs->tick();   // the controllers' events become the window's own actions
+        if (tickNo % 15 == 0) { p_->publishKnobs(false); }
     }
 }
 
@@ -230,6 +311,30 @@ std::string LaneXPublisher::readState(const std::string& what, std::string& out)
     if (what == "help.query") { out = p.query; return std::string(); }
     if (what == "help.shown") { out = std::to_string(p.shown); return std::string(); }
     if (what == "help.topics") { out = std::to_string(helpTopics().size()); return std::string(); }
+    if (what.rfind("knobs.", 0) == 0 && p.env.knobs) {
+        const std::string k = what.substr(6);
+        if (k == "enabled") { out = p.env.knobs->enabled() ? "1" : "0"; return std::string(); }
+        if (k == "found") { out = std::to_string(p.env.knobs->status().size()); return std::string(); }
+        if (k == "open") { int n = 0; for (const auto& d : p.env.knobs->status()) { n += d.open ? 1 : 0; } out = std::to_string(n); return std::string(); }
+        if (k == "events") { out = std::to_string(p.env.knobs->eventsSeen()); return std::string(); }
+        if (k == "used") { out = std::to_string(p.env.knobs->usedIds().size()); return std::string(); }
+        // knobs.feed.<control>.<detents>: a made-up controller's event, in a bounded run with the stand-in controllers only (a real device is never fed this way)
+        if (k.rfind("feed.", 0) == 0 && p.env.standIn) {
+            const std::string r = k.substr(5);
+            const std::size_t dot = r.find('.');
+            if (dot == std::string::npos) { return "knobs.feed.<control>.<detents>"; }
+            cascade::input::InputEvent e;
+            e.device = cascade::input::deviceIdFor("hid:0b33:0020");
+            e.control = static_cast<std::uint16_t>(std::strtol(r.c_str(), nullptr, 0));
+            e.kind = e.control >= 0x10 ? cascade::input::EventKind::ButtonDown : cascade::input::EventKind::Relative;
+            e.raw = static_cast<std::int32_t>(std::strtol(r.c_str() + dot + 1, nullptr, 10));
+            e.timeUs = cascade::input::nowMicros();
+            p.env.knobs->queue().push(e);
+            out = "pushed";
+            return std::string();
+        }
+        return "lx.knobs.<enabled|found|open|events|used|feed.<control>.<detents>>, not " + what;
+    }
     if (what == "bench.state") {
         switch (p.job->state()) {
             case BenchState::Idle: out = "idle"; break;

@@ -15,6 +15,7 @@
 
 #include <slint.h>
 
+#include "knob_host.hpp"
 #include "lanex_bench.hpp"
 #include "main.h"
 
@@ -30,6 +31,10 @@ public:
         NumberWriter numbers;                  // the program's number format; empty = the plain point
         // The section the person is in: the bank and the logical row, (-1, -1) when none. Asked when the help opens.
         std::function<std::pair<int, int>()> where;
+        // The controllers (knob_host.hpp; null = no such rows). The folder the choice is kept in ("" = not kept); `standIn` = the made-up controllers of a bounded run (never a real device).
+        foxsdr::slintknobs::KnobHost* knobs = nullptr;
+        std::string settingsDir;
+        bool standIn = false;
     };
     explicit LaneXPublisher(Env env);
     ~LaneXPublisher();
@@ -42,6 +47,8 @@ public:
     void openHelpAt(int bank, int row);
     void closeHelp();
     bool helpOpen() const;
+    // The saved choice is applied at start (after the window and the knob host exist).
+    void loadKnobs();
     // `state lx.<what>` for the drive scripts
     std::string readState(const std::string& what, std::string& out) const;
 

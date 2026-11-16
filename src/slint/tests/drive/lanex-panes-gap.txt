@@ -1,0 +1,21 @@
+#! frames=1300 size=1600x900 bank=0 sections=0:2
+# lanex-panes-gap (lane X, row P1): the waterfall's reception-gap break in a radio PANE. Two radios side by side; radio 2 is stopped for nine seconds and started again: ITS pane carries the break with the ages
+# either side of it, radio 1's pane (which never stopped) carries none. Read back from the row each pane was last published with (pane.r<n>.gap*).
+10 state running == 1
++1 radio add 2 60000
++40 state workspace.radios == 2
++1 click "Side by side"
++30 state workspace.layout == 1
++30 state pane.r2.gap == -1.000
+state pane.r1.gap == -1.000
+state pane.r2.rail == -1.000
++1 click "Stop Radio 2"
++10 state workspace.r.2.running == 0
++270 state workspace.r.2.running == 0
++1 click "Start Radio 2"
++20 state workspace.r.2.running == 1
++80 state pane.r2.gapabove != "-"
+state pane.r2.gapbelow != "-"
+state pane.r2.gap > 0
+state pane.r1.gap == -1.000
++1 shot "lanex-panes-gap.png"

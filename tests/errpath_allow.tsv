@@ -3184,3 +3184,17 @@ src/usb/winusb_device.cpp::openWinUsb::errassign::opening the radio	ALLOW	USB tr
 src/usb/winusb_device.cpp::openWinUsb::errassign::openwinusb needs a device interface path	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
 src/usb/winusb_device.cpp::openWinUsb::errassign::the radio is no longer present	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
 src/usb/winusb_device.cpp::openWinUsb::errassign::winusbinitialize is the device bound to winusb	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
+src/core/dsp_benchmark.hpp::runBenchItem::errassign::no such item	ALLOW	validation: an item number outside the list answers a failed item that the speed test shows on its own row	2026-11-16
+src/input/hid_win.cpp::workerMain::errassign::getlasterror	ALLOW	teardown: the knob layer returns the text to its caller (the controller row in SYSTEM shows it); a controller is not a radio	2026-11-16
+src/input/hid_win.cpp::HidInputDevice::open::errassign::cannot open	ALLOW	teardown: the knob layer returns the text to its caller (the controller row in SYSTEM shows it); a controller is not a radio	2026-11-16
+src/input/hid_win.cpp::HidInputDevice::open::errassign::this interface of	ALLOW	teardown: the knob layer returns the text to its caller (the controller row in SYSTEM shows it); a controller is not a radio	2026-11-16
+src/input/hid_win.cpp::HidInputDevice::open::errassign::could not start the reader	ALLOW	teardown: the knob layer returns the text to its caller (the controller row in SYSTEM shows it); a controller is not a radio	2026-11-16
+src/input/midi_win.cpp::MidiInputPort::open::errassign::cannot open midi input	ALLOW	teardown: the knob layer returns the text to its caller (the controller row shows it); a controller is not a radio	2026-11-16
+src/input/midi_win.cpp::MidiInputPort::open::errassign::cannot start midi input	ALLOW	teardown: the knob layer returns the text to its caller (the controller row shows it); a controller is not a radio	2026-11-16
+src/slint/knob_host.cpp::KnobHost::Impl::tryOpen::errassign::could not be opened	ALLOW	ui-text: the reason a controller is not open is shown on its row in SYSTEM, where the person chose it	2026-11-16
+src/slint/knob_host.cpp::KnobHost::status::errassign::it second error	ALLOW	ui-text: the reason a controller is not open is shown on its row in SYSTEM, where the person chose it	2026-11-16
+src/slint/knob_host.cpp::KnobHost::tick::errassign::the device was unplugged	ALLOW	ui-text: the reason a controller is not open is shown on its row in SYSTEM, where the person chose it	2026-11-16
+src/slint/knob_host_win.cpp::realEnv::errassign::the device is no longer listed	ALLOW	ui-text: the reason a controller is not open is shown on its row in SYSTEM, where the person chose it	2026-11-16
+src/slint/lanex_bench.cpp::BenchJob::work::errassign::e what	ALLOW	ui-text: a failed speed-test item is shown on its own row with its reason	2026-11-16
+src/slint/lanex_bench.cpp::BenchJob::work::errassign::unknown error	ALLOW	ui-text: a failed speed-test item is shown on its own row with its reason	2026-11-16
+src/slint/lanex_publish.cpp::realItem::errassign::r error	ALLOW	ui-text: copied to the speed-test row that shows it	2026-11-16

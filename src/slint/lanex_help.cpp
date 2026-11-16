@@ -132,6 +132,11 @@ const std::vector<HelpTopic> kTopics = {
     {"sys-usage", FOX_TR_NOOP("Usage reporting"), {
         FOX_TR_NOOP("The Send anonymous usage reports switch turns the usage reports on or off. Show what is sent shows what a report holds."),   // C: system_bank.slint "Send anonymous usage reports", "Show what is sent"
     }, 4, 7, "usage reporting privacy anonymous reports send"},
+    {"controllers", FOX_TR_NOOP("Controllers"), {
+        FOX_TR_NOOP("A ShuttleXpress or a PowerMate can tune the radio and press a few of the window's keys. Nothing is opened until you turn this on and choose the device."),   // C: knob_host.hpp, lanex_publish.cpp knobRows
+        FOX_TR_NOOP("The jog tunes, the ring scans faster the further it is turned, and the five buttons in order are: smaller step, larger step, next mode, mute, record."),   // C: input/mapping.cpp shuttleXpressPreset
+        FOX_TR_NOOP("Turning it tunes; pressing it mutes."),   // C: input/mapping.cpp powerMatePreset
+    }, -1, -1, "controllers knob shuttlexpress powermate jog dial midi"},
     {"sys-bench", FOX_TR_NOOP("Speed test"), {
         FOX_TR_NOOP("The Performance section holds a speed test of the signal processing on this computer. It times the spectrum transform, the channel filter, every demodulator and the resamplers, one after another, and shows how many times faster than real time each one runs."),   // C: core/dsp_benchmark.hpp
         FOX_TR_NOOP("The test uses one processor core for about ten seconds, can be cancelled at any time, and changes no setting."),   // C: lanex_bench.cpp (one worker thread, an item at a time, no setting is written)

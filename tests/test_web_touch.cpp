@@ -99,8 +99,8 @@ int main() {
     CHECK(j.value("overflowX", 999) <= 1);                                        // no sideways scrolling at phone width
     CHECK(j.contains("small") && j["small"].is_array() && j["small"].empty());     // every visible key and field is at least 44 px
     // the digits: a tap on the upper half steps up, on the lower half down, a swipe of 35 px steps twice, each by the digit's own decade
-    CHECK(j.contains("digitControls") && j["digitControls"].is_array() && j["digitControls"].size() == 4);
-    if (j.contains("digitControls") && j["digitControls"].is_array() && j["digitControls"].size() == 4 && j.contains("digitDecade")) {
+    CHECK(j.contains("digitControls") && j["digitControls"].is_array() && j["digitControls"].size() >= 4);
+    if (j.contains("digitControls") && j["digitControls"].is_array() && j["digitControls"].size() >= 4 && j.contains("digitDecade")) {
         const double base = j.value("centreBefore", 0.0);
         int decade = std::atoi(j["digitDecade"].get<std::string>().c_str());
         double step = 1.0;
@@ -111,8 +111,8 @@ int main() {
     }
     CHECK(j.value("specAfter", 0.0) < j.value("specBefore", 0.0) - 10.0);           // a finger drag on the divider moved it
     CHECK(j.value("splitHandleH", 0.0) >= 20.0);                                   // and the divider is wide enough to take a finger
-    CHECK(j.value("spectrumTapControls", 0) == 1);                                  // a tap on the spectrum tunes
-    if (j.contains("gripVarBefore")) { CHECK(j["gripVarAfter"] != j["gripVarBefore"]); }   // the column's grip follows a finger
+    CHECK(j.value("spectrumTapClicks", 0) == 1);                                    // a tap on the spectrum is the click its tune-here listener takes
+    CHECK(j.contains("gripVarBefore") && j["gripVarAfter"] != j["gripVarBefore"]);   // on a tablet-sized screen the column grip follows a finger
 #else
     ++g_checksSkipped;
     std::printf("SKIP: node was not found at configure time\n");

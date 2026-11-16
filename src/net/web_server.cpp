@@ -451,17 +451,6 @@ label.inline input[type=range] { width:8rem; }
 #sideGrip { position:sticky; top:0; float:right; width:7px; height:100vh;
             margin-bottom:-100vh; cursor:ew-resize; z-index:5; touch-action:none; }
 #sideGrip:hover, #sideGrip.active { background:var(--accent); }
-/* A FINGER IS NOT A MOUSE: where the primary pointer is coarse, every key, field and divider gets a target of at least 44 px (Apple's and Material's own minimum is 44 and 48), the dividers
-   a wider grab area with the same pill in the middle, and a double tap on a key is not a zoom. The mouse's layout above is untouched. */
-@media (pointer: coarse) {
-  button, select, input[type=text], input[type=password], input[type=number], input:not([type]) { min-height:44px; }
-  button { min-width:44px; touch-action:manipulation; }
-  #side summary { min-height:44px; display:flex; align-items:center; }
-  .hsplit { flex-basis:24px; }
-  .hsplit::after { top:10px; bottom:10px; left:38%; right:38%; }
-  #sideGrip { width:18px; }
-  #freqDigits span.d { min-width:1.2em; text-align:center; padding:.2em 0; }
-}
 
 /* Open-in-its-own-window buttons. Small and quiet: they decorate headers, and
    the header is not about them. */
@@ -956,6 +945,17 @@ body.listener.notune #freqDigits, body.listener.notune #spectrum, body.listener.
 #listenerList { width:100%; border-collapse:collapse; font-size:.85rem; }
 #listenerList td { padding:.1rem .35rem; border-top:1px solid var(--edge); }
 #listenerList button, #banList button { padding:0 .4rem; }
+/* A FINGER IS NOT A MOUSE: where the primary pointer is coarse, every key, field and divider gets a target of at least 44 px (Apple's and Material's own minimum is 44 and 48), the dividers
+   a wider grab area with the same pill in the middle, and a double tap on a key is not a zoom. The mouse's layout above is untouched. */
+@media (pointer: coarse) {
+  button, select, input[type=text], input[type=password], input[type=number], input:not([type]) { min-height:44px; }
+  button { min-width:44px; touch-action:manipulation; }
+  #side summary { min-height:44px; display:flex; align-items:center; }
+  .hsplit { flex-basis:24px; }
+  .hsplit::after { top:10px; bottom:10px; left:38%; right:38%; }
+  #sideGrip { width:18px; }
+  #freqDigits span.d { min-width:1.2em; text-align:center; padding:.2em 0; }
+}
 )CSS";
 
 // The joined style sheet, built once on first use - the pieces are
@@ -1516,36 +1516,7 @@ function renderFreqDigits(hz) {
         const step = Math.pow(10, parseInt(d.dataset.decade, 10));
         control({ centerHz: Math.max(0, Math.round(freqShownHz + (e.deltaY < 0 ? step : -step))) });
       }, { passive: false });
-      // TOUCH: a wheel does not exist under a finger, so a digit that could only be scrolled could not be tuned on a phone. A tap on the upper half of a digit steps it up, a tap on the
-      // lower half steps it down, and a vertical swipe on it steps once per 14 px (up = up). A mouse keeps the wheel and is not changed by a click.
-      let touchY = null;
-      d.addEventListener('pointerdown', (e) => {
-        if (e.pointerType === 'mouse') return;
-        touchY = { y: e.clientY, id: e.pointerId, steps: 0 };
-        try { d.setPointerCapture(e.pointerId); } catch (_) {}
-      });
-      d.addEventListener('pointermove', (e) => {
-        if (!touchY || e.pointerId !== touchY.id) return;
-        const steps = Math.trunc((touchY.y - e.clientY) / 14);
-        if (steps !== touchY.steps) {
-          const n = steps - touchY.steps;
-          touchY.steps = steps;
-          const step = Math.pow(10, parseInt(d.dataset.decade, 10));
-          control({ centerHz: Math.max(0, Math.round(freqShownHz + n * step)) });
-        }
-      });
-      const touchEnd = (e) => {
-        if (!touchY || e.pointerId !== touchY.id) return;
-        const t = touchY;
-        touchY = null;
-        if (e.type === 'pointerup' && t.steps === 0 && Math.abs(e.clientY - t.y) < 8) {
-          const r = d.getBoundingClientRect();
-          const step = Math.pow(10, parseInt(d.dataset.decade, 10));
-          control({ centerHz: Math.max(0, Math.round(freqShownHz + (e.clientY < r.top + r.height / 2 ? step : -step))) });
-        }
-      };
-      d.addEventListener('pointerup', touchEnd);
-      d.addEventListener('pointercancel', touchEnd);
+      attachDigitTouch(d);
       box.appendChild(d);
       // Thousands separators, so the readout groups like the desktop's.
       if (decade === 9 || decade === 6 || decade === 3) {
@@ -1635,6 +1606,42 @@ function reflectCatalogue(s) {
   });
 }
 
+)JS";
+
+// kAppJs2t was at the string-literal limit: the digits' touch handling lives here, a piece of its own (joined in the same order below).
+constexpr char kAppJs2x[] = R"JS(
+function attachDigitTouch(d) {
+  // TOUCH: a wheel does not exist under a finger, so a digit that could only be scrolled could not be tuned on a phone. A tap on the upper half of a digit steps it up, a tap on the
+  // lower half steps it down, and a vertical swipe on it steps once per 14 px (up = up). A mouse keeps the wheel and is not changed by a click.
+  let touchY = null;
+  d.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse') return;
+    touchY = { y: e.clientY, id: e.pointerId, steps: 0 };
+    try { d.setPointerCapture(e.pointerId); } catch (_) {}
+  });
+  d.addEventListener('pointermove', (e) => {
+    if (!touchY || e.pointerId !== touchY.id) return;
+    const steps = Math.trunc((touchY.y - e.clientY) / 14);
+    if (steps !== touchY.steps) {
+      const n = steps - touchY.steps;
+      touchY.steps = steps;
+      const step = Math.pow(10, parseInt(d.dataset.decade, 10));
+      control({ centerHz: Math.max(0, Math.round(freqShownHz + n * step)) });
+    }
+  });
+  const touchEnd = (e) => {
+    if (!touchY || e.pointerId !== touchY.id) return;
+    const t = touchY;
+    touchY = null;
+    if (e.type === 'pointerup' && t.steps === 0 && Math.abs(e.clientY - t.y) < 8) {
+      const r = d.getBoundingClientRect();
+      const step = Math.pow(10, parseInt(d.dataset.decade, 10));
+      control({ centerHz: Math.max(0, Math.round(freqShownHz + (e.clientY < r.top + r.height / 2 ? step : -step))) });
+    }
+  };
+  d.addEventListener('pointerup', touchEnd);
+  d.addEventListener('pointercancel', touchEnd);
+}
 )JS";
 
 constexpr char kAppJs2c[] = R"JS(
@@ -3105,7 +3112,7 @@ $('chatForm').addEventListener('submit', async (e) => {
 // -time constants, so there is nothing to invalidate.
 const std::string& appJs() {
     static const std::string joined =
-        std::string(kAppJs1) + kAppJs2 + kAppJs2t + kAppJs2b + kAppJs2c + kAppJs2d +
+        std::string(kAppJs1) + kAppJs2 + kAppJs2t + kAppJs2x + kAppJs2b + kAppJs2c + kAppJs2d +
         kAppJs2e + kAppJs2p + kAppJs3 + kAppJs3b + kAppJs4;
     return joined;
 }
