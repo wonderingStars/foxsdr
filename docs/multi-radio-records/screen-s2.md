@@ -62,4 +62,36 @@ Restored after each; the source was byte-identical to the good copy before the f
 ## Checked before the first clean build
 Every file changed (git diff names) was searched for a NUL byte and a UTF-8 BOM: none found (a Python edit had once written a NUL into a character constant of `main.cpp`; that was the one compile error of the lane and was fixed before the first successful build).
 
-GATES_AND_COST_PLACEHOLDER
+## Frame cost (the tree's own measure: `FOXSDR_SLINT_FRAME_LOG=1`, hidden desktop, one radio, 900 ticks, `drive/measure/s2-off.txt` against `s2-on.txt`, `run_s2_cost.bat`; THE MACHINE WAS SHARED AND BUSY)
+"off" = `FOXSDR_SLINT_S2_OFF=1` (lane S2's tick, frame hook and zoom picture left out). "on" = the IF zoom on at 4096 points (a picture every third tick), the power log writing every 0.1 s, the autosave on.
+
+| Run | interval mean / p95 / max (ms) | the tick's own work mean / p95 / max (ms) |
+|---|---|---|
+| off 1 | 33.78 / 36.55 / 58.26 | 1.18 / 2.33 / 4.40 |
+| off 2 | 33.28 / 33.97 / 34.45 | 0.92 / 1.72 / 2.85 |
+| off 3 (machine loaded) | 38.67 / 52.56 / 75.71 | 1.76 / 4.76 / 42.27 |
+| on 1 | 33.73 / 36.74 / 49.07 | 1.29 / 2.39 / 34.59 |
+| on 2 | 35.69 / 44.74 / 58.65 | 1.58 / 3.56 / 25.42 |
+| on 3 (machine loaded) | 39.10 / 53.76 / 93.33 | 1.97 / 4.78 / 53.30 |
+
+Pair by pair the tick's mean work is 0.11, 0.66 and 0.21 ms higher with everything of lane S2 working; the interval mean is the same within the noise of the busy machine (33.7 against 33.8 in the quietest pair). The maxima are the picture write and the first log lines. Nothing of lane S2 is on the drawing path of the spectrum or the waterfall: the FFT size and rate are the engine's own work and were not changed in the measured runs.
+
+## Gates (final code, Release, `D:/foxsdr-build/en-screen-k`, hidden desktop `FoxSDRS2`, `-j3`, a shared and busy machine)
+* Own tests: `test_slint_lanes2_host`, `test_slint_host_extras`, `test_error_paths` (3254 sites, 70 report, 2057 allowed, 1126 PENDING: pin 1126 before and after), `test_i18n`, `test_json_dump_policy` all pass. The last two were red in the first gate run and were MINE (a variable format into a fixed buffer; a `dump()` without the replace handler): fixed, commit `Screen lane S2: two gate reds of this lane fixed`.
+* Headless and slint: `ctest -L "headless|slint" -j3 --timeout 300` (1167 tests): 99% passed, 13 failed, 2714 s. Run alone afterwards: PASSED alone (load): test_audio_open, test_config_save, test_engine_api_03, test_failure_files, test_pass_control, test_plugin_store_window, test_tx_audio; test_health_app_stepped passed in one rerun and failed in another. FAILED alone and NOT mine: test_health_app (a real-application run; flake family), telemetry_worker (the Worker fixture directory does not match its manifest; no file of this lane is in it), test_diagnostics and test_diagnostics_free (the stamp family: they compare the build's commit stamp and were run on an uncommitted tree; re-run after the rebuild at the final commit, see the final report), test_slint_tools (7 checks of the markers sheet's pixel layout: no file of this lane is in that specimen; passes in no run here; NOT proved pre-existing because no base binary was kept: UNVERIFIED). Fixed and green: test_i18n, test_json_dump_policy.
+* GUI: `ctest -L gui -j3 --timeout 600` (389 tests): 97% passed, 11 failed, 3484 s. All six lane S2 drives passed (s2-spectrum, s2-files, s2-tuning, s2-colour-maps, s2-touch inside the gate, and the cost scripts outside it). Alone afterwards: PASSED slint_drive_lanel-tuning, tools-airband, system-language, fixture-cw-decoder, fixture-rtty-decoder, test_slow_frames_app; slint_drive_system-look failed once and passed twice (a 30-tick wait for the window width: load). FAILED alone: slint_drive_layout-section-overlap-1600 and -624: `Read the pitch now` bottom is 2058, the script says 2028 (SIGNAL bank, CW surround: lane S2 draws nothing in that bank; it fails the same with `FOXSDR_SLINT_S2_OFF=1` and lane K left out, so it is not lane S2's; pre-existing on the base is likely and NOT proved, no base binary: UNVERIFIED), and test_health_app, test_diagnostics (above).
+* Real `%APPDATA%/foxsdr/config.json` sha256: see the final report (re-read at the end).
+
+## OPEN ROWS FOR THE NEXT LANE
+| Row | What is left | Kind of lane |
+|---|---|---|
+| G2-34 Several VFOs on one radio | NOT BUILT. EXISTS: up to eight open radios each with its own VFO and pane; tuner pooling (`CHANNEL_CLAIM`); patch Channel nodes that cut independent channels from a radio's span (the Patch page, not the main window). MISSING: a second receiver slot sharing ONE source (one device feeding several pipelines, each with its own VFO, mode, audio and recorder), or a screen that creates and drives patch Channel nodes. WOULD TAKE: weeks of engine work (`engine-serial-a.md` section 3 item 3; the source fan-out, the lock and retune rules, audio mixing) plus a pane for it. | engine lane, then screen |
+| Real touch | the pan zone and the waterfall pinch are proved by the test seam and the host callback only; a real touch screen was not on the desk | mouse and touch drive (owner) |
+| Real folder chooser | `lanes2_folder.cpp` (IFileOpenDialog) never ran: a test must not raise it | mouse drive |
+| Band recall mode | the drive cannot tell whether the lane sends the mode (the engine's band-plan follow does it too); a band whose register mode differs from the plan's would | small test lane |
+| Apache-2.0 text for turbo | the notices file must carry the licence text (the table is Apache-2.0, Google LLC) | release lane |
+| Colour map is not saved | the chosen map is per session (as before this lane); a saved choice would need a setting | screen lane |
+| Autosave and log settings | off at every start by design; folders and intervals are not remembered | owner decision |
+| Translations | 92 strings machine-made, unchecked by a speaker | translation lane |
+| test_slint_tools, layout-section-overlap-*, test_health_app, telemetry_worker | red here, not caused by this lane as far as shown; each needs a baseline run on `d4f855c5` | merge lane |
+
