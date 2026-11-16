@@ -28,6 +28,7 @@
 
 #include "core/radio_report.hpp"
 #include "core/radio_reporter.hpp"
+#include "core/session_env.hpp"
 #include "core/telemetry.hpp"
 #include "test_check.hpp"
 
@@ -217,6 +218,25 @@ int main() {
         th.join();
         std::error_code ec;
         fs::remove_all(dir, ec);
+    }
+
+    // --- THE MACHINE, read once a session (core/session_env): what this computer says, held to the contract's text rules ---------------------------------
+    {
+        const SessionEnv e = readSessionEnv();
+        std::printf("session_env: cpu %zu chars, %d threads, %llu MB, gpu %zu chars, driver %zu chars, %zu usb host(s), %d display(s), %zu scale(s)\n", e.cpu.size(), e.cpuThreads,
+                    static_cast<unsigned long long>(e.ramMb), e.gpu.size(), e.gpuDriver.size(), e.usbHosts.size(), e.displayCount, e.displayScalePct.size());
+        CHECK(e.cpuThreads > 0);
+        CHECK(e.usbHosts.size() <= 8 && e.displayScalePct.size() <= 8);
+#if defined(_WIN32)
+        CHECK(!e.cpu.empty() && e.ramMb > 0);
+#endif
+        // whatever the machine said, as the application sends it: scrubbed text passes the Worker's rules, and a processor's clock speed never rides in
+        CHECK(e.cpu.find('@') == std::string::npos);
+        for (const std::string& t : {radioreport::scrubText(e.cpu, std::string(), 64), radioreport::scrubText(e.gpu, std::string(), 64)}) {
+            CHECK(radioreport::textCode(t, std::string()).empty());
+        }
+        for (const std::string& h : e.usbHosts) { CHECK(radioreport::textCode(radioreport::scrubText(h, std::string(), 64), std::string()).empty()); }
+        for (long long pct : e.displayScalePct) { CHECK(pct >= 25 && pct <= 1000); }
     }
 
     return testSummary("test_radio_reports_fields");

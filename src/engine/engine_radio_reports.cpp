@@ -158,6 +158,9 @@ void Engine::journalOpenOk(const std::string& kind, const std::string& args, rr:
     const std::size_t slot = scopedSlot();
     RadioJournalSlot& j = radioJournal_[slot];
     rr::RadioIdentity rid = kind == "soundcard" ? rr::soundCardIdentity() : rr::identify(kind, args, kind == "soapy" ? std::string() : nativeLabelFor(kind, args));
+    // A RADIO STILL HELD BY THIS SLOT was replaced before the pass noticed (the open is close-first and can finish inside one pass): it closed for `switch-radio`
+    // (or `died`, when its fault was seen).
+    if (j.open) { journalCloseEvent(j, j.faulted ? "died" : "switch-radio", clockS()); }
     j = RadioJournalSlot{};
     j.open = true;
     j.okSent = true;
@@ -177,6 +180,17 @@ void Engine::journalOpenOk(const std::string& kind, const std::string& args, rr:
     if (requestRateHz > 0.0) { ev.set("sampleRateSps", rateSps(requestRateHz)); }
     const double centre = rx().pipeline_.activeSource().centerFrequencyHz();
     if (centre > 0.0) { ev.set("band", rr::bandName(centre)); }
+    rr::global().event(ev);
+}
+
+void Engine::journalCloseEvent(const RadioJournalSlot& j, const char* cause, double now) {
+    rr::Event ev;
+    ev.kind = "radio_close";
+    ev.radio = j.rid;
+    ev.word = cause;
+    ev.set("cause", cause).set("openSec", static_cast<long long>(std::clamp<double>(now - j.openedAtS, 0.0, 2592000.0)));
+    if (j.faulted && !j.faultReason.empty()) { ev.text("reason", j.faultReason, 400); }
+    ev.urgent = j.faulted;
     rr::global().event(ev);
 }
 
@@ -340,17 +354,16 @@ void Engine::radioReportsPass() {
         const std::string kind = rx().sourceKind_;
         const bool hw = rx().device_ != nullptr && physicalKind(kind);
         rr::RadioIdentity rid;
-        if (hw) { rid = kind == "soundcard" ? rr::soundCardIdentity() : rr::identify(kind, rx().deviceArgs_, kind == "soapy" ? std::string() : nativeLabelFor(kind, rx().deviceArgs_)); }
+        if (hw) {
+            // the same radio as last pass: its identity is not worked out again sixty times a second
+            if (j.open && j.kind == kind && j.args == rx().deviceArgs_) {
+                rid = j.rid;
+            } else {
+                rid = kind == "soundcard" ? rr::soundCardIdentity() : rr::identify(kind, rx().deviceArgs_, kind == "soapy" ? std::string() : nativeLabelFor(kind, rx().deviceArgs_));
+            }
+        }
         if (j.open && (!hw || rid.key != j.rid.key)) {
-            rr::Event ev;
-            ev.kind = "radio_close";
-            ev.radio = j.rid;
-            const char* cause = j.faulted ? "died" : (radioQuitting_ ? "quit" : (hw ? "switch-radio" : "user"));
-            ev.word = cause;
-            ev.set("cause", cause).set("openSec", static_cast<long long>(std::clamp<double>(now - j.openedAtS, 0.0, 2592000.0)));
-            if (j.faulted && !j.faultReason.empty()) { ev.text("reason", j.faultReason, 400); }
-            ev.urgent = j.faulted;
-            g.event(ev);
+            journalCloseEvent(j, j.faulted ? "died" : (radioQuitting_ ? "quit" : (hw ? "switch-radio" : "user")), now);
             j = RadioJournalSlot{};
         }
         if (hw && !j.open) {
@@ -402,14 +415,7 @@ void Engine::radioReportsQuit() {
     for (std::size_t s = 0; s < kMaxReceivers; ++s) {
         RadioJournalSlot& j = radioJournal_[s];
         if (!j.open) { continue; }
-        rr::Event ev;
-        ev.kind = "radio_close";
-        ev.radio = j.rid;
-        const char* cause = j.faulted ? "died" : "quit";
-        ev.word = cause;
-        ev.set("cause", cause).set("openSec", static_cast<long long>(std::clamp<double>(now - j.openedAtS, 0.0, 2592000.0)));
-        if (j.faulted && !j.faultReason.empty()) { ev.text("reason", j.faultReason, 400); }
-        g.event(ev);
+        journalCloseEvent(j, j.faulted ? "died" : "quit", now);
         j.open = false;
     }
     if (!radioOpenedThisSession_ && !radioSessionEndSent_) {

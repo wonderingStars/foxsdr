@@ -198,6 +198,11 @@ struct AppWindowTestAccess {
         return true;
     }
     static void pass(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).radioReportsPass(); }); }
+    // The engine's clock moved on, as if the session were this many seconds old (the first-session record is due a minute in).
+    static void ageSession(AppWindow& a, int seconds) { passseam::on(th::engine(a), [&] { th::engine(a).clockOrigin_ -= std::chrono::seconds(seconds); }); }
+    // This engine's launch count (a hermetic engine never ran the usage journal's start-up, so it holds 0): the first session is launch 1.
+    static void setLaunches(AppWindow& a, std::uint64_t n) { passseam::on(th::engine(a), [&] { th::engine(a).telemetryLaunches_ = n; }); }
+    static void restoreExtra(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).restoreExtraRadioDevice("rtlsdr", kArgs, 2.4e6, std::string(), 100.0e6); }); }
     static void quit(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).radioReportsQuit(); }); }
     static std::string usageRecord(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).telemetrySnapshot().toJson(); }); }
     static void noteWindow(AppWindow& a, const std::string& w) { passseam::on(th::engine(a), [&] { th::engine(a).noteWindowKind(w); }); }
@@ -474,6 +479,124 @@ int main() {
             CHECK(fails[0]["body"]["reasonClass"] == "busy");
         }
         keep(fails);
+    }
+
+    // --- A REAL SESSION IN THE REAL ENGINE leaves nothing of the machine or of what was tuned in what it queued ----------------------------------------------
+    {
+        std::printf("  a session tuned to 433.920 MHz, opened and failed again: no frequency, path or account name in the queue\n");
+        resetFake();
+        th::TestWindow app;
+        Rig rig("secrets");
+        rig.start();
+        cascade::core::AppConfig cfg = savedRadio();
+        cfg.centerHz = 433.920e6;
+        Access::restore(app, cfg);                 // opens, tuned to 433.920 MHz (the real engine writes its real log lines)
+        CHECK(Access::deviceOpen(app));
+        Access::pass(app);
+        Access::selectGenerator(app);
+        g_failures = 1;
+        g_failText = "could not open " + std::string(kArgs) + " (the account is at " + cascade::core::DiagLog::instance().filePath() + ") tuned to 433.920 MHz";
+        Access::restore(app, cfg);                 // fails, with the log ring holding the real session
+        Access::pass(app);
+        const std::string all = wholeQueue(rig.qdir());
+        CHECK(!all.empty());
+        std::string low = all;
+        for (char& c : low) { if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); } }
+        CHECK(low.find("433.9") == std::string::npos);
+        CHECK(low.find("433,9") == std::string::npos);
+        CHECK(low.find("433920000") == std::string::npos);
+        CHECK(low.find("foxsdr_radio_reports_engine_") == std::string::npos);   // the scratch folder this run isolated itself in
+        const char* const user = std::getenv("USERNAME");
+        if (user != nullptr && std::string(user).size() >= 4) {
+            std::string u = user;
+            for (char& c : u) { if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); } }
+            // (the account name is the machine's, so it is looked for in what the real engine queued, not assumed)
+            CHECK(low.find("\\users\\" + u) == std::string::npos && low.find("/users/" + u) == std::string::npos);
+        }
+        keep(queued(rig.qdir()));
+    }
+
+    // --- THE FIRST SESSION (L7): sent about a minute in, never a launch, and it takes nothing off the ledgers the usage record carries ------------------------
+    {
+        std::printf("  the first-session record: a minute in, the health counts so far, and the ledgers untouched\n");
+        resetFake();
+        auto ledger = cascade::core::health::globalLedger();
+        ledger->reset();
+        ledger->arm("", cascade::core::newInstallId(), false);
+        cascade::core::health::noteRadioOpen("rtlsdr");
+        th::TestWindow app;
+        Rig rig("first");
+        {
+            rr::Reporter::Options o;
+            o.dir = (rig.dir / "radio-reports").string();
+            o.endpoint = "http://127.0.0.1:9/";
+            o.liveSend = false;
+            o.identity.installId = kInstallId;
+            o.identity.version = "0.99.109";
+            o.identity.os = "Windows 10.0.22631";
+            o.identity.arch = "x64";
+            o.identity.launches = 1;   // the install's first session
+            rr::global().configure(o);
+        }
+        Access::setLaunches(app, 1);
+        const std::string ledgerBefore = ledger->encoded();
+        Access::pass(app);
+        CHECK(ofKind(queued(rig.qdir()), "first_session").empty());   // not yet: it is about a minute in
+        Access::ageSession(app, 70);
+        Access::pass(app);
+        Access::pass(app);   // (once: the engine does not say it twice)
+        const std::vector<json> firsts = ofKind(queued(rig.qdir()), "first_session");
+        std::printf("    first-session look: %zu queued, guard refused %llu, journal queued %llu\n", firsts.size(), static_cast<unsigned long long>(rr::global().stats().guardRefused),
+                    static_cast<unsigned long long>(rr::global().stats().journalQueued));
+        CHECK(firsts.size() == 1);
+        if (!firsts.empty()) {
+            const json& b = firsts[0]["body"];
+            CHECK(b["launches"] == 1 && b["trigger"] == "after-minute");
+            CHECK(b["health"].get<std::string>().find("radio_open.rtlsdr=1") != std::string::npos);   // the health tokens counted so far
+            CHECK(!b.contains("id") && !b.contains("window"));   // `window` is not a first-session column
+        }
+        CHECK(ledger->encoded() == ledgerBefore);   // nothing was settled: the usage record at the next start still carries every token
+        keep(firsts);
+    }
+
+    // --- RADIOS 2 TO 8 (the same function restores each of them) --------------------------------------------------------------------------------------
+    {
+        std::printf("  the restore of an added radio that fails is its own report\n");
+        resetFake();
+        g_failures = 1;
+        g_failText = "no RTL-SDR with serial 00000001 is present";
+        th::TestWindow app;
+        Rig rig("extra");
+        rig.start();
+        Access::restoreExtra(app);
+        const std::vector<json> fails = ofKind(queued(rig.qdir()), "radio_fail");
+        CHECK(fails.size() == 1);
+        if (!fails.empty()) {
+            CHECK(fails[0]["body"]["trigger"] == "startup-restore" && fails[0]["body"]["reasonClass"] == "absent");
+            CHECK(fails[0]["radioKey"] == "generic-rtl2832u:00000001");
+        }
+        keep(fails);
+    }
+
+    // --- THE CALL SITES THAT ARE NOT DRIVEN HERE are held structurally: each file that opens a radio files its failure --------------------------------
+    {
+        std::printf("  every place a radio open fails calls reportFailedOpen (a source scan, not a drive)\n");
+        auto text = [](const char* rel) {
+            std::ifstream in(std::string(CASCADE_SOURCE_ROOT) + "/src/engine/" + rel, std::ios::binary);
+            return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        };
+        auto count = [](const std::string& hay, const std::string& needle) {
+            int n = 0;
+            for (std::size_t p = hay.find(needle); p != std::string::npos; p = hay.find(needle, p + 1)) { ++n; }
+            return n;
+        };
+        const std::string engine = text("engine.cpp");
+        CHECK(count(engine, "reportFailedOpen(") >= 3);   // finishDeviceOpen (twice: the open the user moved on from, and the failure) and the start-up restore
+        CHECK(count(text("engine_radio_saved.cpp"), "reportFailedOpen(") == 1);
+        CHECK(count(text("engine_patch_radios.cpp"), "reportFailedOpen(") == 1);
+        CHECK(count(text("engine_soundcard.cpp"), "reportFailedOpen(\"soundcard\"") == 1);
+        // ...and each sits beside the anonymous count it must never replace
+        CHECK(count(engine, "noteRadioFail(") >= 2 && count(text("engine_soundcard.cpp"), "noteRadioFail(") == 1);
     }
 
     // --- THE JOURNAL OF A RADIO THAT OPENS: found, open, settings, stream, close ---------------------------------------------------------------------
