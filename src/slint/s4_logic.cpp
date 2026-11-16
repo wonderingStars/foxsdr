@@ -41,7 +41,7 @@ std::string oneMember(const char* section, const char* member, nlohmann::json va
     inner[member] = std::move(value);
     nlohmann::json j = nlohmann::json::object();
     j[section] = std::move(inner);
-    return j.dump();
+    return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);   // never throws on text that is not valid UTF-8 (the dump-policy rule)
 }
 }  // namespace
 
