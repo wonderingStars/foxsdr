@@ -621,7 +621,7 @@ export component SpectrumView inherits Rectangle {
                 root.last-x = self.mouse-x;
                 if (Math.abs(self.mouse-x - root.press-x) > 4px) { root.sel-moved = true; }
             } else if (root.press-zone == 5) {
-                if (!root.sel-moved && Math.abs(self.mouse-x - root.press-x) > 4px) { root.sel-moved = true; }
+                if (!root.sel-moved && Math.abs(self.mouse-x - root.press-x) > 4px) { root.sel-moved = true; root.sel-swallow = true; }   // the release of a pan is not a click, whichever of the release and the click comes first
                 if (root.sel-moved) { SpectrumEvents.panned(root.radio-id, (self.mouse-x - root.last-x) / root.plot-w); }
                 root.last-x = self.mouse-x;
             } else if (root.press-zone >= 2 && root.press-zone <= 3) {
