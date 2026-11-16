@@ -1,0 +1,16 @@
+# The calls that REPORT a failure to the owner (one name per line). A site passes the gate when one of these is
+# called in a brace block that encloses it. test_error_paths checks every name below is declared in
+# core/health_events.hpp or core/issue_report.hpp, so renaming a reporter cannot quietly empty this list.
+noteRecovered
+raiseRecovered
+noteRadioFail
+noteSoundFail
+noteUpdateCheckFailed
+noteUpdateDownloadFailed
+noteUpdateVerifyFailed
+noteUpdateRunFailed
+notePluginCatalogueFailed
+notePluginInstallFailed
+notePluginLoadRefused
+noteRecordFailed
+fileIssueReport

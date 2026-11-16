@@ -3,6 +3,8 @@
 # exception is a test that needs a command-line argument, handled below by
 # name for test_json_dump_policy.
 file(GLOB CASCADE_TESTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test_*.cpp")
+# THE ERROR-PATH GATE reads source text and links nothing: it is registered by hand further down (so it builds without the engine).
+list(FILTER CASCADE_TESTS EXCLUDE REGEX "/test_error_paths\\.cpp$")
 
 # A REAL plugin module for test_plugin_settings_ui (CASCADE_CAP_SETTINGS_UI):
 # built as a MODULE exactly as a third-party plugin is - plugin_abi.h only,
@@ -1771,6 +1773,24 @@ if(TARGET test_hardware_guard AND TARGET test_rtlsdr_live AND TARGET test_usb_wi
         TESTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_dependencies(test_hardware_guard test_rtlsdr_live test_usb_winusb test_soapy_source)
 endif()
+
+# THE ERROR-PATH GATE (docs/multi-radio-records/errpath-gate.md): test_error_paths scans src/ as TEXT and fails when an error path is
+# neither reported (tests/errpath_reporters.txt), allowed with a reason, nor PENDING (tests/errpath_allow.tsv, pinned count); the self-test
+# runs the same scanner over tests/errpath_fixtures/ to prove it bites. Neither links the engine (header-only scanner, standard library
+# only), so `cmake --build <dir> --target test_error_paths errpath_gate_selftest` takes seconds.
+foreach(_ep IN ITEMS test_error_paths errpath_gate_selftest)
+    add_executable(${_ep} "${CMAKE_CURRENT_SOURCE_DIR}/${_ep}.cpp")
+    target_compile_features(${_ep} PRIVATE cxx_std_20)
+    target_include_directories(${_ep} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME ${_ep} COMMAND ${_ep} "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(${_ep} PROPERTIES TIMEOUT 120)
+    list(APPEND CASCADE_ALL_TEST_NAMES ${_ep})
+endforeach()
+# The stand-alone form of the same gate, vendored into the plugins repository (tools/errpath-for-plugins/README.md). Built here so the
+# copy is compiled by the project's compiler; the test above checks its scanner is byte for byte the engine's.
+add_executable(errpath_check "${CMAKE_SOURCE_DIR}/tools/errpath-for-plugins/errpath_check.cpp")
+target_compile_features(errpath_check PRIVATE cxx_std_20)
+target_include_directories(errpath_check PRIVATE "${CMAKE_SOURCE_DIR}/tools/errpath-for-plugins")
 
 # Label APPENDED, not set: the sanitizer and TSan passes above put their own
 # labels on some tests (sanitize-excluded, tsan, fuzz on the corpus replays)
