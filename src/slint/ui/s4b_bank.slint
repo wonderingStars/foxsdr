@@ -1,0 +1,9 @@
+// SCREEN LANE S4b (docs/multi-radio-records/screen-s4b.md): the scanner's locked-out frequencies and the outputs other programs connect to, drawn with lane K's row panel (KPanel in system_bank.slint). The host (s4b_publish.cpp) builds the rows and answers `act(id, text)`; an empty list draws nothing.
+import { Theme } from "theme.slint";   // (the house rule: every file of the window imports the Theme; this one draws nothing and uses none of it)
+import { KRow } from "system_bank.slint";
+
+export global LaneS4b {
+    in property <[KRow]> rows-scan;       // TOOLS, Scanner: the locked-out frequencies
+    in property <[KRow]> rows-outputs;    // SYSTEM, Outputs: servers other programs connect to, and the helpers
+    callback act(string, string);
+}

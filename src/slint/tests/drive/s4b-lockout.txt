@@ -1,0 +1,43 @@
+#! frames=700 size=1600x900 bank=2 sections=2:3
+# s4b-lockout (screen lane S4b, row G2-43 / SCANNER_EXTRAS 5): under the Scanner body the locked-out frequencies are LISTED (what the engine holds now: fact.scan.lockouts), and "Always skip these
+# frequencies" sends the configured locked list to the engine (SCANNER_EXTRAS 5): typed in MHz, read back FROM THE ENGINE as Hz in fact.scan.locked. A bad entry is refused on the screen and the engine keeps its list.
+10 state running == 1
++1 state s4b.fact.scan.locked == ""
++1 state s4b.fact.scan.lockouts.count == 0
++1 type "Always skip these frequencies (MHz, separated by commas)" "145.5, 118.1"
++1 key enter
++10 state s4b.fact.scan.locked == "145500000.000;118100000.000"
++1 state s4b.note.scan == ""
+# a bad entry is refused here and the engine keeps what it has
++1 type "Always skip these frequencies (MHz, separated by commas)" "abc"
++1 key enter
++5 state s4b.note.scan contains "number in MHz"
++1 state s4b.fact.scan.locked == "145500000.000;118100000.000"
+# a range scan on the generator with the squelch shut (so it only steps): the lockout the person makes shows in the list
++1 slider "Squelch" 1.0
++5 state squelchDb > -10
++1 type "Start MHz" "100.2"
++1 key enter
++1 type "Stop MHz" "100.4"
++1 key enter
++1 type "Step kHz" "100"
++1 key enter
++1 type "Dwell ms" "300"
++1 key enter
++1 click "Start scan"
++30 state scanner == 1
++10 expect "Lock out for good" enabled equals "true"
++1 click "Lock out for good"
++20 state fact.scan.lockouts.count == 1
++20 state s4b.rows.scan >= 4
++1 click "Lock out 10 min"
++20 state fact.scan.lockouts.count == 2
++20 state s4b.rows.scan >= 5
++1 click "Clear lockouts"
++20 state fact.scan.lockouts.count == 0
++1 click "Stop scan"
++30 state scanner == 0
+# the configured list is emptied again
++1 type "Always skip these frequencies (MHz, separated by commas)" " "
++1 key enter
++10 state s4b.fact.scan.locked == ""
