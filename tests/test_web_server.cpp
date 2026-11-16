@@ -3591,6 +3591,71 @@ void measureEventCpu() {
 // ---------------------------------------------------------------------------------------------------------------------------------------------
 // R1 (security review 2): the Host and Origin of every request are checked, and a server with no password is read-only.
 
+// R5 (security review 2): text from the air (RDS), from a driver (gain stage names), from a decoder (track id and label) and from the catalogue is escaped before it is put
+// into markup. Held three ways: the served script has no raw interpolation left at those sites, the escaper is run in node on hostile text, and the status cells go
+// through it.
+void testPageEscapesWhatCameFromTheAir() {
+    const std::string js = fetchAppJs();
+    CHECK(js.find("function esc(") != std::string::npos);
+    for (const char* site : {"esc(s.rdsRadioText)", "esc(s.rdsPsValid ? s.rdsPs : '-')", "esc(g.name)", "esc(t.id)", "esc(t.label || '')", "esc(e.name)", "esc(e.version)",
+                             "esc(e.licence || '')"}) {
+        if (js.find(site) == std::string::npos) { std::printf("missing escape at: %s\n", site); }
+        CHECK(js.find(site) != std::string::npos);
+    }
+    // and the raw forms are gone
+    for (const char* raw : {"' + s.rdsRadioText + '", "' + (s.rdsPsValid ? s.rdsPs : '-') + '", "g.name + ' <span", "'<span class=\"id\">' + t.id +", "'<span class=\"nm\">' + e.name +"}) {
+        if (js.find(raw) != std::string::npos) { std::printf("raw interpolation still there: %s\n", raw); }
+        CHECK(js.find(raw) == std::string::npos);
+    }
+    const fs::path dir = scratchDir();
+    if (!haveNode(dir)) {
+        std::printf("SKIP the node half of testPageEscapesWhatCameFromTheAir: node is not on PATH\n");
+        return;
+    }
+    const fs::path jsPath = dir / "app_escape.js";
+    CHECK(writeFile(jsPath, js));
+    const char* kDriver = R"NODE(
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+function block(name) {
+  const i = src.indexOf('function ' + name + '(');
+  if (i < 0) throw new Error('missing function ' + name);
+  let depth = 0, opened = false;
+  for (let j = i; j < src.length; j++) {
+    if (src[j] === '{') { depth++; opened = true; }
+    else if (src[j] === '}') { depth--; if (opened && depth === 0) return src.slice(i, j + 1); }
+  }
+  throw new Error('unterminated function ' + name);
+}
+const run = new Function(block('esc') + '\n' + block('cell') + `
+const hostile = '<img src=x onerror=alert(1)>"\\'&<a href="http://evil.example">click</a>';
+const e = esc(hostile);
+const c = cell('<b>k</b>', hostile);
+return [
+  'escLt=' + (e.indexOf('<') < 0 ? 1 : 0),
+  'escGt=' + (e.indexOf('>') < 0 ? 1 : 0),
+  'escQuote=' + (e.indexOf('"') < 0 ? 1 : 0),
+  'escRound=' + (e === '&lt;img src=x onerror=alert(1)&gt;&quot;\\&#39;&amp;&lt;a href=&quot;http://evil.example&quot;&gt;click&lt;/a&gt;' ? 1 : 0),
+  'cellTags=' + ((c.match(/</g) || []).length),
+  'nullOk=' + (esc(null) === '' && esc(undefined) === '' && esc(5) === '5' ? 1 : 0),
+  'dollar=' + (cell('k', '$& $1 $$').indexOf('$&amp; $1 $$') >= 0 ? 1 : 0),
+].join('\\n');
+`);
+try { console.log(run()); } catch (e) { console.error(e); process.exit(2); }
+)NODE";
+    const fs::path driver = dir / "escape_driver.js";
+    CHECK(writeFile(driver, kDriver));
+    std::string output;
+    const int rc = runCaptured("node \"" + driver.string() + "\" \"" + jsPath.string() + "\"", dir / "escape.txt", output);
+    std::printf("escape in node:\n%s", output.c_str());
+    CHECK(rc == 0);
+    CHECK(output.find("escLt=1") != std::string::npos && output.find("escGt=1") != std::string::npos && output.find("escQuote=1") != std::string::npos);
+    CHECK(output.find("escRound=1") != std::string::npos);
+    CHECK(output.find("cellTags=6") != std::string::npos);   // the cell's own six tag brackets, none from the text
+    CHECK(output.find("nullOk=1") != std::string::npos);
+    CHECK(output.find("dollar=1") != std::string::npos);
+}
+
 // The sentence a refused change carries (the page shows the same one).
 bool saysReadOnly(const std::string& body) { return body.find("read-only") != std::string::npos && body.find("web password") != std::string::npos; }
 
@@ -3818,5 +3883,6 @@ int main() {
     testR1ListedOriginMayReadButNeverChange();
     testR1NoPasswordMeansReadOnly();
     testR1AWebServerWithAPasswordIsNotReadOnly();
+    testPageEscapesWhatCameFromTheAir();
     return testSummary("test_web_server");
 }

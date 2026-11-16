@@ -31,6 +31,9 @@ std::string csvField(const std::string& text) {
         if (clean.size() >= kMaxTextBytes) { break; }
         clean.push_back(c < 0x20 || c == 0x7F || c >= 0x80 ? '?' : static_cast<char>(c));
     }
+    // R6 (security review 2): a spreadsheet runs a cell that starts with = + - or @ as a formula. The text is the station's, so it gets the same guard the tuning exports have
+    // (core/csv_text.hpp): a leading apostrophe. (Tab and carriage return are already '?'.)
+    if (!clean.empty() && (clean[0] == '=' || clean[0] == '+' || clean[0] == '-' || clean[0] == '@')) { clean.insert(clean.begin(), '\''); }
     bool quote = false;
     for (const char c : clean) { quote = quote || c == ',' || c == '"'; }
     if (!quote) { return clean; }
