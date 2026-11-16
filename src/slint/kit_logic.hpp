@@ -209,6 +209,12 @@ struct MapPage {
 };
 void syncMapPages(std::vector<MapPage>& pages, const std::vector<std::string>& trackPluginNames, const std::vector<PluginRow>& rows);
 MapPage* findMapPage(std::vector<MapPage>& pages, const std::string& plugin);
+// A drag on the map (window gaps lane 4, rows 372, 1719 to 1721): true when it moves the map; false when a target is followed - the map stays on it and the page asks "Stop following?" (the classic's rule).
+bool mapDragPans(MapPage& pg);
+// The question is on screen: asked, and the target is still followed.
+bool mapFollowAskShown(const MapPage& pg);
+// The answer: Stop following (stop = true) lets go of the target, Keep following leaves it; either way the question is gone.
+void mapFollowAnswer(MapPage& pg, bool stop);
 // The view that holds every placed track (the Fit key): false when none has a position.
 bool fitView(const std::vector<cascade::core::HostTrack>& tracks, double& centreLat, double& centreLon, double& spanDeg, double aspect);
 

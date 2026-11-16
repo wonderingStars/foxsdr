@@ -712,7 +712,7 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
         m.key_lines = model(std::move(keys));
     }
     m.following = ss(pg != nullptr && !pg->followedId.empty() ? cascade::core::formatText(cascade::i18n::tr("following %s"), pg->followedId.c_str()) : std::string());
-    m.follow_ask = pg != nullptr && pg->followAsk && !pg->followedId.empty();
+    m.follow_ask = pg != nullptr && mapFollowAskShown(*pg);
     m.follow_ask_text = ss(m.follow_ask ? cascade::core::formatText(cascade::i18n::tr("The map is following %s."), pg->followedId.c_str()) : std::string());
     m.list_footnote = ss(home ? std::string() : std::string(cascade::i18n::tr("Distance and bearing need the RX position above.")));
     m.coverage_on = s.coverageOn;
@@ -1697,7 +1697,7 @@ void KitPublisher::wire() {
     ui_.global<::KitEvents>().on_page_map_panned([surface, mapPage](int i, float dx, float dy) {
         MapSurface* s = surface(i); MapPage* pg = mapPage(i);
         if (s == nullptr || pg == nullptr) { return; }
-        if (!pg->followedId.empty()) { pg->followAsk = true; return; }   // a drag while following does not pan: it asks "Stop following?" (the classic's rule; the page's bar draws the question)
+        if (!mapDragPans(*pg)) { return; }   // a drag while following does not pan: it asks "Stop following?" (the classic's rule; the page's bar draws the question)
         double lat0, lon0, lat1, lon1;
         s->comp.unproject(0.5, 0.5, lat0, lon0);
         s->comp.unproject(0.5 - dx, 0.5 - dy, lat1, lon1);
@@ -1768,8 +1768,8 @@ void KitPublisher::wire() {
     ui_.global<::KitEvents>().on_page_map_trails([surface](int i, bool on) { if (MapSurface* s = surface(i)) { s->trailsOn = on; } });
     ui_.global<::KitEvents>().on_page_map_alt_colours([surface](int i, bool on) { if (MapSurface* s = surface(i)) { s->altColours = on; } });
     ui_.global<::KitEvents>().on_page_map_reset_coverage([this](int) { kit_.coverage().reset(); });
-    ui_.global<::KitEvents>().on_page_map_stop_following([mapPage](int i) { if (MapPage* pg = mapPage(i)) { pg->followedId.clear(); pg->followAsk = false; } });
-    ui_.global<::KitEvents>().on_page_map_keep_following([mapPage](int i) { if (MapPage* pg = mapPage(i)) { pg->followAsk = false; } });
+    ui_.global<::KitEvents>().on_page_map_stop_following([mapPage](int i) { if (MapPage* pg = mapPage(i)) { mapFollowAnswer(*pg, true); } });
+    ui_.global<::KitEvents>().on_page_map_keep_following([mapPage](int i) { if (MapPage* pg = mapPage(i)) { mapFollowAnswer(*pg, false); } });
     ui_.global<::KitEvents>().on_page_map_sort_clicked([surface](int i) { if (MapSurface* s = surface(i)) { s->sortKey = (s->sortKey + 1) % cascade::gui::kTrackSortKeyCount; } });
     ui_.global<::KitEvents>().on_page_map_sort_dir([surface](int i) { if (MapSurface* s = surface(i)) { s->sortAscending = !s->sortAscending; } });
     // SCREEN LANE J: the map's layers, replay, filter and unit key, and the Antenna page's fields: one callback (ui/mapj.slint, MapJEvents.act)

@@ -359,6 +359,24 @@ int main() {
         CHECK(countText(14, 14, 0) == "14 targets" && countText(1, 1, 0) == "1 target" && countText(3, 14, 2) == "3 of 14 targets, 2 heard without a position");
     }
 
+    // ---- "Stop following?" (window gaps lane 4, rows 372, 1719 to 1721): a drag while following asks and does not pan ----
+    {
+        MapPage pg;
+        pg.plugin = "ADS-B";
+        CHECK(mapDragPans(pg) && !pg.followAsk && !mapFollowAskShown(pg));       // nothing followed: the drag pans, nothing is asked
+        pg.followedId = "4CA7B4";
+        CHECK(!mapDragPans(pg));                                                  // a followed target: the drag does not pan ...
+        CHECK(pg.followAsk && mapFollowAskShown(pg));                            // ... it asks
+        mapFollowAnswer(pg, false);                                               // Keep following: the question goes, the target stays
+        CHECK(!pg.followAsk && !mapFollowAskShown(pg) && pg.followedId == "4CA7B4");
+        CHECK(!mapDragPans(pg) && mapFollowAskShown(pg));                        // the next drag asks again
+        mapFollowAnswer(pg, true);                                                // Stop following: the target is let go
+        CHECK(!pg.followAsk && pg.followedId.empty() && !mapFollowAskShown(pg));
+        CHECK(mapDragPans(pg));                                                   // and the map moves freely again
+        pg.followAsk = true;                                                      // a question left over after the target went away is not shown
+        CHECK(!mapFollowAskShown(pg));
+    }
+
 
     // ---- SCREEN STAGE S6: where each decoder runs, and the Runs-on picker's model ----
     {
