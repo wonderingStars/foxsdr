@@ -66,6 +66,20 @@ RADIO_BODIES = {
     'decode': ('bank=1 plugins=pocsag-decoder,adsb-decoder FOXSDR_SLINT_DECODE_DRAWER=1', ['+1 radio add 2 60000', '+1 radio add 3 90000', '+60 state workspace.radios == 3']),
     'card': ('bank=0 FOXSDR_SLINT_ADD_SHEET=1', ['+1 radio add 2 60000', '+1 radio add 3 90000', '+60 state workspace.radios == 3']),
 }
+# WINDOW GAPS LANE 1 (docs/multi-radio-records/window-gaps-1.md): the sheets and cards the window did not have, each raised by the same seed its drive script uses (the header names its own frames=,
+# which overrides the sweep's, because a worker polls about once a second). A view with body lines is its header plus the lines (the Markers key pressed before the end of the run).
+GAPS1_VIEWS = {
+    'g1-diag-offer': ('frames=200 config=gaps1-unclean.json', []),
+    'g1-link': ('frames=300 rootfile=link-request:gaps1-link-request.txt FOXSDR_FAKE_LINK_NAME=Ada', []),
+    'g1-store': ('frames=300 updatecheck=on FOXSDR_FAKE_PACKAGE=FoxSDR.Test_1.0.0.0_x64__test FOXSDR_FAKE_STORE_UPDATE=available', []),
+    'g1-store-mandatory': ('frames=240 updatecheck=on FOXSDR_FAKE_PACKAGE=FoxSDR.Test_1.0.0.0_x64__test FOXSDR_FAKE_STORE_UPDATE=mandatory', []),
+    'g1-team': ('frames=300 updatecheck=on manifest=gaps1-team.json', []),
+    'g1-faults': ('frames=260 FOXSDR_FAKE_FAULT_NOTICES=aprs-decoder;1.0.2;1;0;process|adsb;2.0;2;1;process', []),
+    'g1-mute': ('frames=140 FOXSDR_SLINT_MUTE_QUESTION=APRS-Decoder;aprs-key.dll', []),
+    'g1-markers': ('frames=300 bank=1 sections=1:0 appfile=markers.json:markers-three.json', ['+1 click "Markers"', '+8 state markers.shown == 1']),
+}
+VIEWS.update({_k: _v[0] for _k, _v in GAPS1_VIEWS.items()})
+
 for _kind in RADIO_BODIES:
     for _skin in SEEDS:
         for _size in SIZES:
@@ -86,6 +100,8 @@ def view_script(view: str, language: str, frames: int, shot: str = '') -> str:
         if shot:
             lines.append('+5 shot "%s"' % shot)
         return head + '\n# clip sweep: %s in %s\n' % (view, language) + '\n'.join(lines) + '\n'
+    if view in GAPS1_VIEWS:
+        return ('#! frames=%d %s FOXSDR_LANGUAGE=%s\n# clip sweep: %s in %s\n10 state ui.language == %s\n%s\n') % (frames, VIEWS[view], language, view, language, language, '\n'.join(GAPS1_VIEWS[view][1]))
     return ('#! frames=%d %s FOXSDR_LANGUAGE=%s\n# clip sweep: %s in %s\n%d state ui.language == %s\n') % (frames, VIEWS[view], language, view, language, frames // 2, language)
 
 
