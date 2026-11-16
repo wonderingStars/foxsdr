@@ -1,0 +1,23 @@
+#! frames=2400 size=1600x6000 bank=4 sections=4:11
+# lanex-bench (lane X, docs/multi-radio-records/lane-x.md, row G5-19): the DSP speed test as a control under SYSTEM > Performance. It runs on a worker thread (the window keeps drawing: the run's progress
+# is read while it goes), shows plain numbers for every item, can be cancelled between items, and sends no engine command and changes no setting (the publisher has no way to submit).
+10 state running == 1
+state lx.bench.state == "idle"
+state lx.bench.total == 21
++1 click "Run the speed test"
++3 state lx.bench.state == "running"
+# the first run to its end: 21 items, none failed
++300 state lx.bench.state == "done"
+state lx.bench.done == 21
+state lx.bench.failed == 0
++1 shot "lanex-bench-done.png"
+# a second run, cancelled at once: it ends Cancelled with fewer items than the whole
++1 click "Run the speed test"
++3 state lx.bench.state == "running"
++1 click "Cancel the speed test"
++60 state lx.bench.state == "cancelled"
+state lx.bench.done < 21
+# and a third, left to finish, still works after a cancel
++1 click "Run the speed test"
++300 state lx.bench.state == "done"
+state lx.bench.done == 21

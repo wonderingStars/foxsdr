@@ -167,6 +167,8 @@ void fixedChords() {
     // F12 and Escape with no modifier are answered whatever the table says: the Key bindings footer promises both
     KeyTable t = keyTableFromConfig({"bankView=F12", "mute=Escape"});
     CHECK(shortcutForPress(press("F12"), t) == "screenshot" && shortcutForPress(press("Escape"), t) == "escape");
+    // lane X (G5-14): Ctrl+F1 opens the help topics whatever the table says, and Ctrl+Shift+F1 and Alt+Ctrl+F1 do not
+    CHECK(shortcutForPress(press("F1", true), def) == "helpTopics" && shortcutForPress(press("F1", true, true), def) != "helpTopics" && shortcutForPress(press("F1", true, false, true), def) != "helpTopics");
     // the screenshot key may be moved or cleared; F12 still shoots
     t = keyTableFromConfig({"screenshot=None"});
     CHECK(shortcutForPress(press("F12"), t) == "screenshot" && shortcutForPress(press("W", true), t).empty());

@@ -53,6 +53,7 @@ import { FaceLine, PartKey, DecoderKey, ProblemLine, InfoModel, PatchModel, Port
          InspectorDecoder, InspectorMapSource, InspectorSink, InspectorModel, PresetRow, PatchPresetsModel, PatchEvents, PatchPage } from "patch_page.slint";
 import { TxChoice, TransmitPageModel, TransmitEvents } from "transmit_page.slint";   // the Transmit page (kit page kind 11; docs 6.58): its model and gestures reach C++ through main.h
 import { AboutSlint } from "std-widgets.slint";
+import { LaneX, XHelpSheet } from "lane_x.slint";   // lane X (docs/multi-radio-records/lane-x.md): the help sheet and the speed test's rows
 
 export { SdrPlayDialogState, SdrPlayDialogModel, PointerLedger } from "diag_overlays.slint";
 export { MeterPanel } from "meters_panel.slint";
@@ -92,6 +93,8 @@ export { LaneS2 }   // screen lane S2 (docs/multi-radio-records/screen-s2.md): t
 export { LaneS4 }   // screen lane S4: the host (s4_publish.cpp) sets the global and answers its act(id, text)
 import { LaneS3, S3Overview } from "lanes3.slint";   // screen lane S3 (docs/multi-radio-records/screen-s3-recplay.md)
 export { LaneS3 }   // screen lane S3: the host (lanes3_publish.cpp) sets the global and answers its act(id, text)
+export { KeyFocus }   // lane X: the host gives the shortcuts' focus scope back its focus when the help sheet is shut by the host (Esc through the window)
+export { LaneX }   // lane X: the host (lanex_publish.cpp) sets the global and answers its act(id, text)
 export { LaneM }   // screen lane M (docs/multi-radio-records/screen-m.md): the host (lanem_publish.cpp) sets the global and answers its act(id, text)
 export { LaneS1 }   // screen lane S1: the host (s1_publish.cpp) sets the global and answers its act(id, text)
 import { LaneS5 } from "s5_bank.slint";
@@ -658,7 +661,9 @@ export component MainWindow inherits Window {
                                         // screen lane K: the sections after About, placed from `system-extra-base`: Settings and backup, Performance, Accessibility, Community, Spectrum tools
                                         if root.bank-index == 4 && i == root.system-extra-base + 0 : KPanel { rows: LaneK.rows-backup; act(id, t) => { LaneK.act(id, t); } }
                                         if root.bank-index == 4 && i == root.system-extra-base + 1 : KPanel { rows: LaneK.rows-perf; act(id, t) => { LaneK.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 1 && LaneX.rows-bench.length > 0 : KPanel { rows: LaneX.rows-bench; act(id, t) => { LaneX.act(id, t); } }   // lane X: the speed test
                                         if root.bank-index == 4 && i == root.system-extra-base + 2 : KPanel { rows: LaneK.rows-access; act(id, t) => { LaneK.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 2 && LaneX.rows-knobs.length > 0 : KPanel { rows: LaneX.rows-knobs; act(id, t) => { LaneX.act(id, t); } }   // lane X: knobs and controllers
                                         if root.bank-index == 4 && i == root.system-extra-base + 3 : KPanel { rows: LaneK.rows-community; act(id, t) => { LaneK.act(id, t); } }
                                         if root.bank-index == 4 && i == root.system-extra-base + 4 : KPanel { rows: LaneK.rows-spectrum; act(id, t) => { LaneK.act(id, t); } }
                                         // screen lane L: eleven more sections after lane K's, the controls of what the wiring lanes built (lanel_publish.cpp): Tuning and memories, Scanning, Recording and files, Measurement, Sweep, Network radios, Outputs and tracks, Needed libraries, System, Web, Ham tools
@@ -1085,6 +1090,8 @@ export component MainWindow inherits Window {
         can-drop(event) => { root.file-drop-can(event) }
         dropped(event) => { root.file-dropped(event); DragAction.copy }
     }
+    // LANE X: the in-window help (the App menu's Help topics, Ctrl+F1)
+    if LaneX.help-open : XHelpSheet { }
     // THE POINTER LEDGER (window-gaps-2, row 1457): one line across the top of the window while its tick is on; it takes no clicks
     PointerLedgerStrip { x: 0px; y: 0px; width: root.width; }
     // ===================== the tip layer: LAST, so a tooltip draws over the pages, the torn-off windows and the sheets =====================

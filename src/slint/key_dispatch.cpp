@@ -49,6 +49,7 @@ std::string shortcutForPress(const KeyPress& press, const KeyTable& table) {
     if (press.key == "F12") { return keyAction(keyActionIndexOf("screenshot")).id; }
     if (press.key == "Escape") { return kShortcutEscape; }
     if (press.shift && !press.ctrl && !press.alt && press.key == "F1") { return kShortcutOverlay; }   // not in the table (F1 itself is "Bank: SIGNAL PATH"): Shift+F1 asks for the overlay unless the table gave it to an action above
+    if (press.ctrl && !press.shift && !press.alt && press.key == "F1") { return kShortcutHelp; }   // lane X, G5-14: Ctrl+F1 opens the help topics (not in the table either)
     return {};
 }
 

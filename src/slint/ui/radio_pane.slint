@@ -23,7 +23,7 @@ import { Lamp } from "lamps.slint";
 import { Key } from "keys.slint";
 import { Splitter } from "tabs.slint";
 import { ElidedHint } from "tooltip.slint";
-import { SpectrumView, AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode } from "spectrum.slint";
+import { SpectrumView, AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode, AirbandChannel } from "spectrum.slint";
 import { WaterfallView, AgeTick } from "waterfall.slint";
 
 export struct RadioPaneData {
@@ -78,6 +78,15 @@ export struct RadioPaneData {
     vfo-pos: float,
     vfo-half: float,
     show-vfo: bool,
+    // LANE X, row P1: what the single layout's picture already carries, for THIS radio's pane (the Airband monitor listens on the selected radio, so only that pane has marks; the reception-gap break and the range rail are every radio's own)
+    airband-channels: [AirbandChannel],   // the monitor's channel marks on the spectrum
+    airband-block: string,                // the engine's block sentence over the spectrum ("" when none)
+    airband-hearing: string,              // "Hearing: names"
+    wf-gap-pos: float,                    // the reception-gap break on the waterfall, -1 for none
+    wf-gap-above: string,
+    wf-gap-below: string,
+    wf-rail-pos: float,                   // the range-changed rail, -1 for none
+    wf-rail-label: string,
     cursor-visible: bool,
     cursor-pos: float,
     cursor-text: string,
@@ -363,6 +372,9 @@ export component RadioPane inherits Rectangle {
         vfo-pos: root.data.vfo-pos;
         vfo-half: root.data.vfo-half;
         show-vfo: root.data.show-vfo;
+        airband-channels: root.data.airband-channels;
+        airband-block: root.data.airband-block;
+        airband-hearing: root.data.airband-hearing;
         bands: root.data.bands;
         ribbon-size: root.ribbon-size;
         bookmarks: root.data.bookmarks;
@@ -423,6 +435,11 @@ export component RadioPane inherits Rectangle {
         foot-rest: root.data.foot-rest;
         vfo-pos: root.data.vfo-pos;
         show-vfo: root.data.show-vfo;
+        rail-pos: root.data.wf-rail-pos;
+        rail-label: root.data.wf-rail-label;
+        gap-pos: root.data.wf-gap-pos;
+        gap-label-above: root.data.wf-gap-above;
+        gap-label-below: root.data.wf-gap-below;
         plugin-marks: root.data.wf-marks;
         mark-tabs: root.data.wf-mark-tabs;
         mark-tab-clicked(i, x, y) => { root.mark-tab-clicked(root.data.radio, i, true, x, y); }

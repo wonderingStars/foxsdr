@@ -151,6 +151,7 @@ src/core/disk_job.hpp::DiskJob::noteStuck::warn::% has not finished for % s it i
 src/core/dsp_benchmark.hpp::demodItem::errassign::e what	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/dsp_benchmark.hpp::fftItem::errassign::e what	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/dsp_benchmark.hpp::resampleItem::errassign::e what	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
+src/core/dsp_benchmark.hpp::runBenchItem::errassign::no such item	ALLOW	validation: an item number outside the list answers a failed item that the speed test shows on its own row	2026-11-16
 src/core/dsp_benchmark.hpp::timeIt::errassign::no usable timing	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/dsp_benchmark.hpp::vfoItem::errassign::e what	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/engine_measure.cpp::EngineMeasure::finish::stderr::cascade measurement result % could not be written	ALLOW	stderr line in a non-shipping or developer path	seed
@@ -1431,6 +1432,12 @@ src/gui/software_gl.cpp::tellUserRelaunchFailed::log::window error dialog shown	
 src/gui/software_gl.cpp::tellUserRelaunchFailed::log::window error dialog suppressed for a flagged run	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/gui/software_gl.cpp::tellUserRelaunchFailed::stderr::cascade the software renderer could not be started %	PENDING:unsure	UNSURE: stderr line in a start-up path: read it	seed
 src/gui/software_gl.cpp::tellUserRelaunchFailed::warn::window the second foxsdr process could not be started window	PENDING:S2-window	window start failure (the relaunch for the software renderer failed)	seed
+src/input/hid_win.cpp::HidInputDevice::open::errassign::cannot open	ALLOW	teardown: the knob layer returns the text to its caller (the controller row in SYSTEM shows it); a controller is not a radio	2026-11-16
+src/input/hid_win.cpp::HidInputDevice::open::errassign::could not start the reader	ALLOW	teardown: the knob layer returns the text to its caller (the controller row in SYSTEM shows it); a controller is not a radio	2026-11-16
+src/input/hid_win.cpp::HidInputDevice::open::errassign::this interface of	ALLOW	teardown: the knob layer returns the text to its caller (the controller row in SYSTEM shows it); a controller is not a radio	2026-11-16
+src/input/hid_win.cpp::workerMain::errassign::getlasterror	ALLOW	teardown: the knob layer returns the text to its caller (the controller row in SYSTEM shows it); a controller is not a radio	2026-11-16
+src/input/midi_win.cpp::MidiInputPort::open::errassign::cannot open midi input	ALLOW	teardown: the knob layer returns the text to its caller (the controller row shows it); a controller is not a radio	2026-11-16
+src/input/midi_win.cpp::MidiInputPort::open::errassign::cannot start midi input	ALLOW	teardown: the knob layer returns the text to its caller (the controller row shows it); a controller is not a radio	2026-11-16
 src/input_hid/hid_descriptor.hpp::parseDescriptor::errassign::msg	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/main.cpp::main::stderr::cascade %	PENDING:unsure	UNSURE: stderr line in a start-up path: read it	seed
 src/main.cpp::main::stderr::cascade safe mode no plugin will be loaded in this session	ALLOW	command-line / developer output (a console nobody runs the app from; the user chose the flag)	seed
@@ -1711,6 +1718,10 @@ src/slint/kit_publish_mapj.cpp::KitPublisher::fillAntenna::errassign::ss mj_ ant
 src/slint/kit_publish_mapj.cpp::KitPublisher::mapJAct::errassign::ismin j altminerror j altmaxerror	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/kit_publish_mapj.cpp::KitPublisher::mapJAct::errassign::not a number between # and #	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/kit_publish_mapj.cpp::KitPublisher::mapJAct::errassign::that is not a number this field accepts	ALLOW	UI result text: the failure is classified at the site that produced it	seed
+src/slint/knob_host.cpp::KnobHost::Impl::tryOpen::errassign::could not be opened	ALLOW	ui-text: the reason a controller is not open is shown on its row in SYSTEM, where the person chose it	2026-11-16
+src/slint/knob_host.cpp::KnobHost::status::errassign::it second error	ALLOW	ui-text: the reason a controller is not open is shown on its row in SYSTEM, where the person chose it	2026-11-16
+src/slint/knob_host.cpp::KnobHost::tick::errassign::the device was unplugged	ALLOW	ui-text: the reason a controller is not open is shown on its row in SYSTEM, where the person chose it	2026-11-16
+src/slint/knob_host_win.cpp::realEnv::errassign::the device is no longer listed	ALLOW	ui-text: the reason a controller is not open is shown on its row in SYSTEM, where the person chose it	2026-11-16
 src/slint/lanek_audio.cpp::ToneOut::feed::errassign::the sound output failed	ALLOW	UI result text (a write error of the access lane's test tone): the tone stops itself and the Accessibility section shows lastError() as its warning row (lanek_publish.cpp tick); the tone is the person's own choice, not a radio	linux-slint-2
 src/slint/lanek_audio.cpp::ToneOut::start::errassign::no sound output could be opened	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanek_audio.cpp::ToneOut::start::errassign::no sound output could be opened#2	ALLOW	UI result text (the ALSA open of the access lane's test tone): lastError() is what the Accessibility section shows the person, with ALSA's own reason	linux-slint-2
@@ -1793,6 +1804,9 @@ src/slint/lanes3_logic.cpp::scheduleJson::errassign::length minutes	ALLOW	valida
 src/slint/lanes3_logic.cpp::scheduleJson::errassign::length minutes#2	ALLOW	validation	2026-11-16
 src/slint/lanes3_logic.cpp::scheduleJson::errassign::name at most # characters	ALLOW	validation	2026-11-16
 src/slint/lanes3_logic.cpp::scheduleJson::errassign::tick audio iq or both	ALLOW	validation	2026-11-16
+src/slint/lanex_bench.cpp::BenchJob::work::errassign::e what	ALLOW	ui-text: a failed speed-test item is shown on its own row with its reason	2026-11-16
+src/slint/lanex_bench.cpp::BenchJob::work::errassign::unknown error	ALLOW	ui-text: a failed speed-test item is shown on its own row with its reason	2026-11-16
+src/slint/lanex_publish.cpp::realItem::errassign::r error	ALLOW	ui-text: copied to the speed-test row that shows it	2026-11-16
 src/slint/main.cpp::main::errassign::ui window set_rendering_notifier framemeter slint renderings	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/main.cpp::main::log::scanner the engine did not take the memories thresholds	ALLOW	ui-text: a window command the engine would not take is logged; the engine fact scan.memthresholds says what it holds and the push is repeated on the next change	e1
 src/slint/main.cpp::main::stderr::%	ALLOW	command-line / developer output (a console nobody runs the app from; the user chose the flag)	seed

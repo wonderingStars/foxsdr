@@ -174,20 +174,39 @@ inline BenchResult resampleItem(unsigned interp, unsigned decim, double inHz, co
 
 }  // namespace detail
 
+// The benchmark's items, one at a time (lane X, G5-19: a window runs them off its drawing thread with a progress count and a cancel between items).
+// The list is the same as runDspBenchmark's: 7 FFT sizes, 3 channel filters, 8 demodulators, 3 resamplers.
+inline std::size_t benchItemCount() { return 21; }
+
+inline BenchResult runBenchItem(std::size_t index, const BenchOptions& o = BenchOptions{}) {
+    static const std::size_t ffts[] = {1024u, 4096u, 16384u, 65536u, 262144u, 3072u, 15360u};
+    if (index < 7) { return detail::fftItem(ffts[index], o); }
+    switch (index) {
+        case 7: return detail::vfoItem(2.4e6, 50, 12500.0, "2.4 MS/s -> 48 kHz", o);
+        case 8: return detail::vfoItem(10.0e6, 200, 25000.0, "10 MS/s -> 50 kHz", o);
+        case 9: return detail::vfoItem(20.0e6, 100, 150000.0, "20 MS/s -> 200 kHz", o);
+        default: break;
+    }
+    struct M { dsp::DemodMode m; const char* n; double rate; };
+    static const M modes[] = {M{dsp::DemodMode::NFM, "NFM", 48000.0}, M{dsp::DemodMode::WFM, "WFM", 250000.0}, M{dsp::DemodMode::AM, "AM", 48000.0}, M{dsp::DemodMode::DSB, "DSB", 48000.0},
+                              M{dsp::DemodMode::USB, "USB", 48000.0}, M{dsp::DemodMode::LSB, "LSB", 48000.0}, M{dsp::DemodMode::CW, "CW", 48000.0}, M{dsp::DemodMode::RAW, "RAW", 48000.0}};
+    if (index >= 10 && index < 18) { const M& m = modes[index - 10]; return detail::demodItem(m.m, m.n, m.rate, o); }
+    switch (index) {
+        case 18: return detail::resampleItem(147, 160, 48000.0, "48000 -> 44100 (147/160)", o);
+        case 19: return detail::resampleItem(24, 125, 250000.0, "250000 -> 48000 (24/125)", o);
+        case 20: return detail::resampleItem(6, 25, 200000.0, "200000 -> 48000 (6/25)", o);
+        default: break;
+    }
+    BenchResult r;
+    r.group = "?";
+    r.name = "no such item";
+    r.error = "no such item";
+    return r;
+}
+
 inline std::vector<BenchResult> runDspBenchmark(const BenchOptions& o = BenchOptions{}) {
     std::vector<BenchResult> all;
-    for (std::size_t n : {1024u, 4096u, 16384u, 65536u, 262144u, 3072u, 15360u}) { all.push_back(detail::fftItem(n, o)); }
-    all.push_back(detail::vfoItem(2.4e6, 50, 12500.0, "2.4 MS/s -> 48 kHz", o));
-    all.push_back(detail::vfoItem(10.0e6, 200, 25000.0, "10 MS/s -> 50 kHz", o));
-    all.push_back(detail::vfoItem(20.0e6, 100, 150000.0, "20 MS/s -> 200 kHz", o));
-    struct M { dsp::DemodMode m; const char* n; double rate; };
-    for (const M& m : {M{dsp::DemodMode::NFM, "NFM", 48000.0}, M{dsp::DemodMode::WFM, "WFM", 250000.0}, M{dsp::DemodMode::AM, "AM", 48000.0}, M{dsp::DemodMode::DSB, "DSB", 48000.0},
-                       M{dsp::DemodMode::USB, "USB", 48000.0}, M{dsp::DemodMode::LSB, "LSB", 48000.0}, M{dsp::DemodMode::CW, "CW", 48000.0}, M{dsp::DemodMode::RAW, "RAW", 48000.0}}) {
-        all.push_back(detail::demodItem(m.m, m.n, m.rate, o));
-    }
-    all.push_back(detail::resampleItem(147, 160, 48000.0, "48000 -> 44100 (147/160)", o));
-    all.push_back(detail::resampleItem(24, 125, 250000.0, "250000 -> 48000 (24/125)", o));
-    all.push_back(detail::resampleItem(6, 25, 200000.0, "200000 -> 48000 (6/25)", o));
+    for (std::size_t i = 0; i < benchItemCount(); ++i) { all.push_back(runBenchItem(i, o)); }
     return all;
 }
 

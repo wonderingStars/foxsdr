@@ -1406,6 +1406,13 @@ foreach(_t IN ITEMS test_radio_report test_radio_reporter test_radio_reports_nev
         target_compile_definitions(${_t} PRIVATE CASCADE_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" CASCADE_NODE_PATH="${CASCADE_NODE}")
     endif()
 endforeach()
+# LANE X, G5-17: the browser page under touch input in a HEADLESS browser (tests/web_touch_drive.mjs through the DevTools protocol); a GUI-labelled test: it runs through the hidden-desktop launcher.
+if(TARGET test_web_touch)
+    if(CASCADE_NODE)
+        target_compile_definitions(test_web_touch PRIVATE FOXSDR_TEST_NODE="${CASCADE_NODE}" FOXSDR_TEST_TOUCH_JS="${CMAKE_SOURCE_DIR}/tests/web_touch_drive.mjs")
+    endif()
+    set_tests_properties(test_web_touch PROPERTIES TIMEOUT 240)
+endif()
 
 # CLI error contract: each malformed invocation must exit nonzero.
 add_test(NAME app_cli_bad_value COMMAND cascade --frames abc)
@@ -1828,6 +1835,7 @@ target_compile_features(gui_desktop_guard PRIVATE cxx_std_20)
 add_test(NAME gui_desktop_guard COMMAND gui_desktop_guard)
 set_tests_properties(gui_desktop_guard PROPERTIES FIXTURES_SETUP gui_desktop TIMEOUT 30)
 list(APPEND CASCADE_GUI_TESTS gui_desktop_guard)
+list(APPEND CASCADE_GUI_TESTS test_web_touch)   # lane X, G5-17: a headless browser, run through the launcher like the window tests
 if(TARGET test_gui_desktop_guard)
     target_compile_definitions(test_gui_desktop_guard PRIVATE GUI_GUARD_EXE="$<TARGET_FILE:gui_desktop_guard>")
     add_dependencies(test_gui_desktop_guard gui_desktop_guard)

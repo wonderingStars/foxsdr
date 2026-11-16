@@ -1,0 +1,37 @@
+#! frames=900 size=1600x900 bank=2 sections=2:3 FOXSDR_SLINT_MENU=60:610
+# lanex-help (lane X, docs/multi-radio-records/lane-x.md, row G5-14): the help that opens INSIDE the window. The App menu's "Help topics" entry (a bounded-run seam presses it at tick 60) opens it at
+# the topic of the section the person is in (TOOLS, Scanner is open); Ctrl+F1 opens it too; the list, the search field and a topic are read back through the host (lx.help.*); Esc and Close shut it.
+10 state running == 1
+state lx.help.open == 0
+state lx.help.topics > 20
++55 state lx.help.open == 1
+state lx.help.topic == "tools-scanner"
++1 shot "lanex-help-topic.png"
+# the topic's sentences are on the screen, and a way back to the list
++1 click "All topics"
++3 state lx.help.topic == ""
+state lx.help.shown > 20
+# search: a word in a title, a word only in a sentence, a word nowhere, then clear
++1 type "Search help" "airport"
++1 key enter
++3 state lx.help.query == "airport"
+state lx.help.shown == 1
++1 type "Search help" "pilot tone"
++1 key enter
++3 state lx.help.shown == 1
++1 type "Search help" "zzzzqqq"
++1 key enter
++3 state lx.help.shown == 0
++1 type "Search help" "ppm"
++1 key enter
++3 state lx.help.shown == 1
++1 press "Frequency correction"
++3 state lx.help.topic == "sig-ppm"
++1 shot "lanex-help-search.png"
+# Esc shuts it, Ctrl+F1 opens it again (at the list: the section row last asked was ppm's), Close shuts it
++1 key escape
++3 state lx.help.open == 0
++1 key ctrl+f1
++3 state lx.help.open == 1
++1 click "Close"#2
++3 state lx.help.open == 0

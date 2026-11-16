@@ -172,4 +172,10 @@ const Row kRows[] = {
      "wire-b second pass: the spectrum block's GPU stage builds its Direct3D engine (GpuSpectrumEngine) in one one-shot async task, the same way core/pipeline_gpufft.cpp does for the legacy path, so the DSP thread never waits for a device to be made; the DSP thread polls the future each frame and waits for it only to switch the stage off or change the size (a build is short) - NOT COVERED by this batch: it holds no loop, it ends by itself"},
     {"src/slint/host_duties.cpp", 0, 2, 0, 0, "",
      "the Slint window's update download (core::downloadUpdate over WinHTTP, its own timeouts, a cancel flag the future's destructor sets) and the one-shot launch of the downloaded installer; the same gap as app_window.cpp's - NOT COVERED by this batch (a known gap)"},
+    {"src/input/hid_win.cpp", 1, 0, 0, 0, "",
+     "lane X (the merged knob layer): the overlapped reader's worker, one per open controller and only while the person has switched controllers on and chosen the device; it ends on the controller's unplug or on close (bounded, 2 s). It reads a device that sends a report only when the knob moves, so a heartbeat would only ever say 'idle'; NOT COVERED by this batch."},
+    {"src/input/midi_win.cpp", 1, 0, 0, 0, "",
+     "lane X (the merged knob layer): the helper that makes a MIDI port's close bounded; no window opens a MIDI port (MIDI is an OPEN ROW of lane X), so nothing runs it in the product; NOT COVERED by this batch."},
+    {"src/slint/lanex_bench.cpp", 1, 0, 0, 0, "",
+     "lane X (the speed test): one worker that times the DSP blocks one item at a time, only after the person presses Run, ended by the last item, by Cancel (between items) or by the window closing (the destructor cancels and joins); it is a finite job of about ten seconds, not a loop that can stall."},
 };

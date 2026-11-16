@@ -783,6 +783,10 @@ void SystemPublisher::publish(const FoxReceiverState& state) {
     pollReports();
     pollTelemetry();
     publishMeters();
+    if (testerPreview_ && opts_.tester_sent_open) {   // lane X, WG2-1492: the open preview follows the recorder (its minutes move once a minute)
+        const std::pair<std::string, int> p = testerPreview_();
+        if (p.first != opts_.tester_preview_json || p.second != opts_.tester_queued) { opts_.tester_preview_json = p.first; opts_.tester_queued = p.second; forceRead_ = true; }
+    }
     // the SDRplay diagnostic's child is looked at once a tick (a non-blocking look), and its dialog and the pointer ledger's line follow what they say now
     {
         const bool wasRunning = sdrDiag_->running();
