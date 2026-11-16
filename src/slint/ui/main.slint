@@ -311,6 +311,10 @@ export component MainWindow inherits Window {
     in-out property <bool> about-open;               // About FoxSDR, from the brand menu: holds the AboutSlint widget the Royalty-free licence requires
     in property <string> about-text;
 
+    // A FILE DROPPED ON THE WINDOW from the desktop, off Windows (Linux: the toolkit's own drop target; Windows has its own, installed by the host). The host reads the paths from the event.
+    callback file-drop-can(DropEvent) -> DragAction;
+    callback file-dropped(DropEvent);
+
     // ===================== what the operator does =====================
     callback stop-clicked;
     callback nudge(int, int);                        // digit 0..9, +1 / -1 (and the wheel)
@@ -1048,6 +1052,12 @@ export component MainWindow inherits Window {
             }
         }
         HorizontalLayout { alignment: end; Key { label: @tr("Close"); clicked => { LaneKMatrix.open = false; LaneKMatrix.act("leave", "0"); } } }   // not-translated: the host's action id
+    }
+    // A FILE DROPPED FROM THE DESKTOP: the whole window is the target (the host accepts a drag only when it carries file paths); it takes no clicks, only drags
+    DropArea {
+        x: 0px; y: 0px; width: root.width; height: root.height;
+        can-drop(event) => { root.file-drop-can(event) }
+        dropped(event) => { root.file-dropped(event); DragAction.copy }
     }
     // THE POINTER LEDGER (window-gaps-2, row 1457): one line across the top of the window while its tick is on; it takes no clicks
     PointerLedgerStrip { x: 0px; y: 0px; width: root.width; }

@@ -13,11 +13,13 @@
 // hidden desktop under the gui label (it opens a window).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -94,6 +96,7 @@ struct Header {
     std::string mode;      // the demodulation mode at start (NFM WFM AM DSB USB CW LSB RAW), with iqfile
     std::string bandwidth; // the passband in Hz at start, with iqfile
     std::string config;    // a JSON file used as the run's settings seed instead of the generator profile (docs 6.51: a real radio's profile); relative = under tests/drive/fixtures
+    bool windowsOnly = false;   // platform=windows (see parseHeader)
     bool fixturePlugins = false;   // pluginsdir=fixture: the plugins come from FOXSDR_DRIVE_FIXTURE_PLUGINS_DIR (built by the tests' CMake), never the user's folder
     bool userRadios = false;  // radios=user: the user's own SoapySDR vendor modules stay reachable (docs 6.51) - a hardware run on a real radio
     bool updateCheck = false; // updatecheck=on: the generator profile's "Check for updates at startup" tick is ON (it is off otherwise: a bounded run asks nobody)
@@ -126,6 +129,7 @@ Header parseHeader(const std::string& script) {
             else if (key == "store") { h.env["FOXSDR_SLINT_STORE_PAGE"] = value; }
             else if (key == "testradios") { h.env["FOXSDR_SLINT_TEST_RADIOS"] = value; }   // 2..8 made-up radios for the radio workspace (docs/multi-radio-records/screen-s3.md); a test-only seam of a bounded run
             else if (key == "size") { h.env["FOXSDR_SLINT_SIZE"] = value; }   // <w>x<h>: a taller window for a tall section body
+            else if (key == "platform") { h.windowsOnly = (value == "windows"); }   // platform=windows: a script about a Windows-only feature (the SDRplay service restart behind a UAC prompt): off Windows it is a SKIP that says so
             else if (key == "pluginsdir") { h.fixturePlugins = (value == "fixture"); }   // window gaps 3: the plugins come from the folder the build made beside the tests
             else if (key == "plugins") { h.plugins = value; }                 // all | <id>,<id>...: the plugins fitted for this run (docs 6.49)
             else if (key == "iqfile") { h.iqfile = value; }                   // the I/Q WAV source (docs 6.50)
@@ -203,7 +207,50 @@ int main(int argc, char** argv) {
         const std::string token = "{fixtures}";
         for (std::size_t at = script.find(token); at != std::string::npos; at = script.find(token, at + dirText.size())) { script.replace(at, token.size(), dirText); }
     }
+#if !defined(_WIN32)
+    // THE PLUGIN MODULES OFF WINDOWS (docs/multi-radio-records/linux-local.md section 11). The scripts were written against the Windows modules, "<id>-<version>-abi3-win-x64.dll", in the user's own plugin folder. A
+    // Linux build has "<id>-<version>-abi3-linux-<arch>.so", at the version its own plugin build made, in a folder FOXSDR_DRIVE_PLUGINS_DIR names. Each Windows module name of the script, header and steps alike, is
+    // replaced by the module of that id in the folder (the expectation is unchanged: the same plugin is fitted, opened and read back). A script that drives plugin modules with no such folder is a SKIP that says so,
+    // never a red for a file no checkout holds (the plugin binaries are built from a separate repository); the scripts that take their plugins from the build's own fixture folder are not touched.
+    if (script.find("-abi3-win-x64.dll") != std::string::npos && script.find("pluginsdir=fixture") == std::string::npos) {
+        const char* pd = std::getenv("FOXSDR_DRIVE_PLUGINS_DIR");
+        if (pd == nullptr || *pd == '\0' || !fs::is_directory(pd)) {
+            ++g_checksSkipped;
+            std::printf("SKIP (linux): %s drives plugin modules; set FOXSDR_DRIVE_PLUGINS_DIR to a folder of this platform's plugin modules (<id>-<version>-abi3-linux-<arch>.so)\n", tag.c_str());
+            return testSummary("test_slint_drive_run");
+        }
+#if defined(__aarch64__)
+        const std::string suffix = "-abi3-linux-arm64.so";
+#else
+        const std::string suffix = "-abi3-linux-x64.so";
+#endif
+        const std::regex winName("([A-Za-z0-9][A-Za-z0-9_-]*?)-[0-9]+\\.[0-9]+\\.[0-9]+-abi3-win-x64\\.dll");
+        std::string mapped;
+        std::sregex_iterator it(script.begin(), script.end(), winName), end;
+        std::size_t last = 0;
+        for (; it != end; ++it) {
+            const std::string id = (*it)[1].str();
+            std::string found;
+            for (const auto& e : fs::directory_iterator(pd)) {
+                const std::string n = e.path().filename().string();
+                if (n.size() > id.size() + 1 + suffix.size() && n.compare(0, id.size() + 1, id + "-") == 0 && std::isdigit(static_cast<unsigned char>(n[id.size() + 1])) != 0 && n.compare(n.size() - suffix.size(), suffix.size(), suffix) == 0) { found = n; break; }
+            }
+            mapped.append(script, last, static_cast<std::size_t>(it->position()) - last);
+            mapped += found.empty() ? it->str() : found;   // none in the folder: the name stays, and the script's own step reports the module missing
+            last = static_cast<std::size_t>(it->position() + it->length());
+        }
+        mapped.append(script, last, std::string::npos);
+        script = mapped;
+    }
+#endif
     const Header h = parseHeader(script);
+#if !defined(_WIN32)
+    if (h.windowsOnly) {
+        ++g_checksSkipped;
+        std::printf("SKIP (linux): %s is about a Windows-only feature (platform=windows in its header)\n", tag.c_str());
+        return testSummary("test_slint_drive_run");
+    }
+#endif
     // {FIXTURES} in a script is the fixtures folder, forward slashes (a file the script types into a path box: docs 6.61's airband-import.csv).
     {
         const char* fx = std::getenv("FOXSDR_DRIVE_FIXTURES_DIR");
@@ -239,7 +286,11 @@ int main(int argc, char** argv) {
         }
         for (const auto& e : fs::directory_iterator(from, ec)) {
             const std::string name = e.path().filename().string();
+#if defined(_WIN32)
             const bool dll = name.size() > 4 && name.compare(name.size() - 4, 4, ".dll") == 0;
+#else
+            const bool dll = name.size() > 3 && name.compare(name.size() - 3, 3, ".so") == 0;   // this platform's plugin module (the same name check as the .dll above)
+#endif
             const bool meta = name == "catalogue.json" || name == "installed.json";
             if (!dll && !meta) { continue; }
             if (dll && !wanted.empty()) {

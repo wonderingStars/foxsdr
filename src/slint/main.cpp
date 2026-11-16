@@ -464,7 +464,7 @@ int main(int argc, char** argv) {
     std::array<LinkRange, kMaxRadios> testRanges{};
     long wsSaveSince = -1;
     std::string noteText, dropNote, helpUrlOverride;   // the transient note under the counter; the last drop's verdict; a bounded run's help address
-    int dropsTaken = 0, dropsRefused = 0, helpOpened = 0;
+    int dropsTaken = 0, dropsRefused = 0, helpOpened = 0, dropEventsRefused = 0;
     std::function<void(const std::string&)> handleDrop;
     bool dropInstalled = false;
     struct DropStep { int tick = 0; std::string path; bool done = false; };
@@ -1346,19 +1346,21 @@ int main(int argc, char** argv) {
         ui->global<View3D>().set_survey_export_note(ss(o.ok ? cascade::core::formatText(cascade::i18n::tr("Saved %s"), o.path.c_str()) : cascade::core::formatText(cascade::i18n::tr("The file could not be written: %s"), o.error.c_str())));
     });
     const auto utcNowMs = [] { return static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()); };
+    // (declared here, outside the block below: the handlers registered in the block call it long after the block's scope has ended, and a local lambda object that is gone by then is
+    // read through a dangling reference - undefined behaviour that MSVC's fixed stack slots hid and GCC's reused ones turned into a crash on Linux)
+    const auto precheck = [&](const std::string& path) -> bool {
+        exportNoteBad = true;
+        if (exportJob.pending()) { return false; }   // one file at a time: the key is dimmed while one is written
+        const RadioView& rv = selected();
+        if (rv.frame.empty() || !(rv.lastInfo.spanHz > 0)) { exportNote = cascade::i18n::tr("This radio has shown no spectrum yet, so there is nothing to save"); return false; }
+        if (path.find_first_not_of(" \t") == std::string::npos) { exportNote = cascade::i18n::tr("Type where to save first"); return false; }
+        return true;
+    };
     {
         auto& em = ui->global<ExportModel>();
         em.set_path(ss((std::filesystem::path(exportBase()) / "foxsdr-waterfall").string()));
         em.on_length_selected([&](int i) { exportLengthIdx = std::clamp(i, 0, 3); });
         em.on_format_selected([&](int i) { exportFormatIdx = std::clamp(i, 0, 1); });
-        const auto precheck = [&](const std::string& path) -> bool {
-            exportNoteBad = true;
-            if (exportJob.pending()) { return false; }   // one file at a time: the key is dimmed while one is written
-            const RadioView& rv = selected();
-            if (rv.frame.empty() || !(rv.lastInfo.spanHz > 0)) { exportNote = cascade::i18n::tr("This radio has shown no spectrum yet, so there is nothing to save"); return false; }
-            if (path.find_first_not_of(" \t") == std::string::npos) { exportNote = cascade::i18n::tr("Type where to save first"); return false; }
-            return true;
-        };
         em.on_picture_clicked([&](slint::SharedString typed) {
             const std::string path(typed);
             if (!precheck(path)) { return; }
@@ -1669,6 +1671,22 @@ int main(int argc, char** argv) {
             default: ++dropsRefused; dropNote = cascade::i18n::tr("That file is neither a recording nor a frequency list."); noteText = dropNote; noteTick = tickNo; break;
         }
     };
+    // THE TOOLKIT'S OWN DROP TARGET (main.slint's DropArea): the route off Windows, where gaps_win installs none. A drag is accepted only when it carries file paths, and the first path is handled
+    // exactly as the Windows drop target's is. A drag that carries no file (a piece of text, a picture) is refused, so the pointer shows it will not drop.
+    ui->on_file_drop_can([&](const slint::language::DropEvent& e) {
+        if (e.data.has_file_paths()) { return slint::language::DragAction::Copy; }
+        ++dropEventsRefused;
+        return slint::language::DragAction::None;
+    });
+    ui->on_file_dropped([&](const slint::language::DropEvent& e) {
+        const auto paths = e.data.file_paths();
+        if (!paths || paths->empty() || !handleDrop) { return; }
+        const std::u8string u = paths->front().u8string();
+        handleDrop(std::string(u.begin(), u.end()));
+    });
+#if !defined(_WIN32)
+    dropInstalled = true;   // the toolkit's target is what takes a drop here
+#endif
     ui->on_counter_menu_requested([&](float x, float y) { openMenu(MenuKind::Counter, x, y); });
     ui->on_mode_selected([&](int i) { setMode(demodOfIndex(i)); });
     ui->on_mode_picker_requested([&](float x, float y) { openMenu(MenuKind::Modes, x, y); });
@@ -1934,10 +1952,10 @@ int main(int argc, char** argv) {
     // THE PANES' GESTURES (ui/workspace.slint WorkspaceModel): each is aimed at its pane's radio (FoxCommand.target = the radio's number, radio_view.hpp aimAt) and does NOT move the selection;
     // the header, the tag and the readout row select, and so does a right-click (its menu is the selected radio's, as every menu of this window is). Click-to-tune, the drag of the band, the edge
     // drag, the wheel and the waterfall's pan are the receiver view's gestures over THAT radio's picture (its own zoom, its own state).
+    const auto viewOf = [&](int radio) -> RadioView& { return radios.at(radio - 1); };   // outside the block: the handlers below outlive it (see precheck above)
     {
         auto& wm = ui->global<WorkspaceModel>();
-        const auto viewOf = [&](int radio) -> RadioView& { return radios.at(radio - 1); };
-        paneGestures = std::make_unique<PaneGestures>(radios, [&](const FoxCommand& c, std::uint32_t radio) { submit(c, radio); });
+        paneGestures =std::make_unique<PaneGestures>(radios, [&](const FoxCommand& c, std::uint32_t radio) { submit(c, radio); });
         wm.on_layout_selected([&](int l) { workspace.setLayout(l); });
         wm.on_page_selected([&](int p) { workspace.setPage(p); if (wsMemory.userPage(workspace.page())) { wsSaveSince = static_cast<long>(tickNo); } });
         wm.on_select_requested([&](int r) { selectRadio(r); });
@@ -1967,23 +1985,42 @@ int main(int argc, char** argv) {
         });
     }
     // ---- STAGE S4: the strip, the audio mix, the card and the status chips ----
+    // The four helpers below are declared OUTSIDE the block that registers the handlers: the handlers call them long after the block's scope has ended, and a local lambda object that is gone by then is
+    // read through a dangling reference - undefined behaviour that MSVC's fixed stack slots hid and GCC's reused ones turned into a crash on Linux (free(): invalid pointer, found by the drive suite).
+    const auto stateOf = [&](int radio) -> const FoxReceiverState& { return deckStates[static_cast<std::size_t>(std::clamp(radio - 1, 0, kMaxRadios - 1))]; };
+    const auto anyRunning = [&] {
+        for (int s = 0; s < kMaxRadios; ++s) { if (workspace.occupied(s) && (deckStates[static_cast<std::size_t>(s)].flags & FOXAPI_RX_RUNNING) != 0u) { return true; } }
+        return false;
+    };
+    const auto readDeviceRows = [&] {
+        deviceRows.clear();
+        const std::int32_t n = api->read_list(session, FOXAPI_LIST_DEVICES, 0, nullptr);
+        for (std::int32_t i = 0; i < n && i < 64; ++i) {
+            FoxListItem it{}; it.structSize = sizeof(it);
+            if (api->read_list(session, FOXAPI_LIST_DEVICES, static_cast<std::uint32_t>(i), &it) <= i) { break; }
+            DeviceRow row; row.index = i; row.name = it.name; row.detail = it.detail;
+            deviceRows.push_back(std::move(row));
+        }
+    };
+    const auto addFromCard = [&](int slot, int choice, const std::string& typed) {
+        // The devices on offer are those not already held (radio_mix_logic addChoices); the engine's ledger has the last word and its refusal is shown as it worded it.
+        std::vector<std::string> held;
+        for (int s = 0; s < kMaxRadios; ++s) { if (workspace.occupied(s) && !radioFacts[static_cast<std::size_t>(s)].device.empty()) { held.push_back(radioFacts[static_cast<std::size_t>(s)].device); } }
+        const std::vector<DeviceChoice> choices = addAllChoices(deviceRows, held);
+        if (choice < 0 || choice >= static_cast<int>(choices.size())) { return; }
+        const std::string id = addIdFor(choices[static_cast<std::size_t>(choice)], typed);   // "" = a source that needs text and none was typed
+        if (id.empty()) { return; }
+        FoxCommand c = op(FOXAPI_OP_RADIO_ADD);
+        c.ival[0] = slot;
+        c.ival[1] = 1;   // a radio added from the card starts running, as the first radio does
+        std::snprintf(c.text, sizeof(c.text), "%s", id.c_str());
+        addTicket = 0;
+        submit(c);
+        addTicket = lastTicket;
+        addSwitchLayout = workspace.radioCount() == 1 && workspace.layout() == kLayoutOne;   // the first radio added shows beside the first (Side by side)
+    };
     {
         auto& wm = ui->global<WorkspaceModel>();
-        const auto stateOf = [&](int radio) -> const FoxReceiverState& { return deckStates[static_cast<std::size_t>(std::clamp(radio - 1, 0, kMaxRadios - 1))]; };
-        const auto anyRunning = [&] {
-            for (int s = 0; s < kMaxRadios; ++s) { if (workspace.occupied(s) && (deckStates[static_cast<std::size_t>(s)].flags & FOXAPI_RX_RUNNING) != 0u) { return true; } }
-            return false;
-        };
-        const auto readDeviceRows = [&] {
-            deviceRows.clear();
-            const std::int32_t n = api->read_list(session, FOXAPI_LIST_DEVICES, 0, nullptr);
-            for (std::int32_t i = 0; i < n && i < 64; ++i) {
-                FoxListItem it{}; it.structSize = sizeof(it);
-                if (api->read_list(session, FOXAPI_LIST_DEVICES, static_cast<std::uint32_t>(i), &it) <= i) { break; }
-                DeviceRow row; row.index = i; row.name = it.name; row.detail = it.detail;
-                deviceRows.push_back(std::move(row));
-            }
-        };
         readDeviceRows();
         wm.on_master_clicked([&](int r) { selectRadio(r); });
         wm.on_selector_clicked([&](int r) { selectRadio(r); });
@@ -2014,23 +2051,6 @@ int main(int argc, char** argv) {
         }
         wm.on_add_dismissed([&] { addOpen = false; addNote.clear(); });
         wm.on_add_rescan_clicked([&] { submit(op(FOXAPI_OP_SCAN_DEVICES)); addNote.clear(); readDeviceRows(); });
-        const auto addFromCard = [&](int slot, int choice, const std::string& typed) {
-            // The devices on offer are those not already held (radio_mix_logic addChoices); the engine's ledger has the last word and its refusal is shown as it worded it.
-            std::vector<std::string> held;
-            for (int s = 0; s < kMaxRadios; ++s) { if (workspace.occupied(s) && !radioFacts[static_cast<std::size_t>(s)].device.empty()) { held.push_back(radioFacts[static_cast<std::size_t>(s)].device); } }
-            const std::vector<DeviceChoice> choices = addAllChoices(deviceRows, held);
-            if (choice < 0 || choice >= static_cast<int>(choices.size())) { return; }
-            const std::string id = addIdFor(choices[static_cast<std::size_t>(choice)], typed);   // "" = a source that needs text and none was typed
-            if (id.empty()) { return; }
-            FoxCommand c = op(FOXAPI_OP_RADIO_ADD);
-            c.ival[0] = slot;
-            c.ival[1] = 1;   // a radio added from the card starts running, as the first radio does
-            std::snprintf(c.text, sizeof(c.text), "%s", id.c_str());
-            addTicket = 0;
-            submit(c);
-            addTicket = lastTicket;
-            addSwitchLayout = workspace.radioCount() == 1 && workspace.layout() == kLayoutOne;   // the first radio added shows beside the first (Side by side)
-        };
         wm.on_add_chosen([&](int slot, int choice) { addFromCard(slot, choice, std::string()); });
         wm.on_add_entered([&](int slot, int choice, slint::SharedString text) { addFromCard(slot, choice, std::string(text)); });
         wm.on_remove_requested([&](int r) {
@@ -2741,7 +2761,18 @@ int main(int argc, char** argv) {
             }
             if (helpAtTick > 0 && tickNo == helpAtTick) { ui->invoke_menu_activated(605); }
             for (const auto& ms : menuSeam) { if (tickNo == ms.first) { ui->invoke_menu_activated(ms.second); } }
-            for (DropStep& ds : dropSeam) { if (!ds.done && tickNo >= ds.tick && handleDrop) { ds.done = true; handleDrop(ds.path); } }
+            for (DropStep& ds : dropSeam) {
+                if (ds.done || tickNo < ds.tick || !handleDrop) { continue; }
+                ds.done = true;
+                if (ds.path.rfind("event:", 0) == 0 || ds.path.rfind("textevent:", 0) == 0) {   // the toolkit's drop route, end to end: a DropEvent carrying a file path (event:) or only text (textevent:) goes to the window's own callbacks
+                    slint::language::DropEvent ev;
+                    if (ds.path[0] == 'e') { const std::string p = ds.path.substr(6); ev.data.set_file_paths(std::vector<std::filesystem::path>{std::filesystem::path(std::u8string(p.begin(), p.end()))}); }
+                    else { ev.data.set_plain_text(slint::SharedString(ds.path.substr(10))); }
+                    if (ui->invoke_file_drop_can(ev) == slint::language::DragAction::Copy) { ui->invoke_file_dropped(ev); }
+                    continue;
+                }
+                handleDrop(ds.path);
+            }
         }
         ui->set_mode_index(modeIndex(state.demodMode));
         ui->set_mode_hint(ss(modeHint(state)));
@@ -3598,7 +3629,8 @@ int main(int argc, char** argv) {
             if (w == "savenote") { out = publisher.lastSaveNote(); return std::string(); }
             if (w == "helpurl") { out = helpUrlOverride; return std::string(); }
             if (w == "dropinstalled") { out = dropInstalled ? "1" : "0"; return std::string(); }
-            return "gaps.locked|locked.<n>|lockmask|lockrefusals|savedlock|dots|editor|lockedlabel|dropnote|drops|refuseddrops|sdrplay|sdrplaycalls|help, not " + name;
+            if (w == "droprefusedatdrag") { out = std::to_string(dropEventsRefused); return std::string(); }
+            return "gaps.locked|locked.<n>|lockmask|lockrefusals|savedlock|dots|editor|lockedlabel|dropnote|drops|refuseddrops|droprefusedatdrag|sdrplay|sdrplaycalls|help, not " + name;
         }
         // workspace.<what>: the radio workspace's own state (docs/multi-radio-records/screen-s3.md): layout (chosen), shown, page, pages, selected (1-based), radios, cells (the shown cells' radio numbers, 0 = empty),
         // ticks.<n> (how many ticks radio n's pictures were read), tuned.<n> / running.<n> (the host's last read of radio n), pic.<n> (its trace picture, WxH), cell (one pane's size, WxH), fell (1 = the small-window notice)
