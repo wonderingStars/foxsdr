@@ -134,6 +134,7 @@ struct LaneXPublisher::Impl {
         auto& l = env.ui->global<LaneX>();
         l.set_help_title(ss(tr("Help")));
         l.set_help_rows(modelOf(helpRows()));
+        l.set_help_gen(l.get_help_gen() + 1);
     }
 
     void open(int bank, int row) {

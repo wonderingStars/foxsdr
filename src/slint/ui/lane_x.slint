@@ -11,6 +11,7 @@ export global LaneX {
     in property <[KRow]> rows-knobs;               // knobs and controllers (SYSTEM > Accessibility)
     in-out property <bool> help-open;              // the help sheet
     in property <string> help-title;
+    in property <int> help-gen;                    // counts every publish of the rows: the sheet takes the focus back (the field that had it is rebuilt)
     in property <[KRow]> help-rows;                // the search field, the topics or the open topic
     callback act(string, string);
 }
@@ -32,7 +33,9 @@ export component XHelpSheet inherits Rectangle {
         drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
         TouchArea { }   // swallows the click so the backdrop does not dismiss
         // Esc shuts the sheet even while the search field has the focus: a key the field does not take comes up to this scope
-        FocusScope {
+        scope := FocusScope {
+            property <int> gen: LaneX.help-gen;
+            changed gen => { self.focus(); }
             init => { self.focus(); }
             key-pressed(e) => {
                 if (e.text == Key.Escape) { LaneX.act("help-close", ""); return accept; }
