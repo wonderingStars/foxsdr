@@ -2199,7 +2199,7 @@ int main() {
                 std::printf("F12: %-44s %s the fingerprint; the rebuild: %ld heap allocations, then %d settled passes: %ld\n", what,
                             moves ? "moved" : "left", rebuild, kPublishes, t_news);
                 CHECK(t_news == 0);
-                if (moves) { CHECK(rebuild > 0 && rebuild < 2000); }
+                if (moves) { CHECK(rebuild > 0 && rebuild < 2010); }   // security lane S4b-sec: 1992 before, 2004 to 2005 after its two settings (srv.tcpaudio.allow, srv.rtltcp.allow: each one is published as a fact); 2010 is the bound set once
             };
             movedBy("the web port", [&] {
                 cascade::engine::ServerConfigRequest r2;

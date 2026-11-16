@@ -391,17 +391,16 @@ void ServerSet::facts(const std::function<void(const std::string&, const std::st
     fact("srv.tcpaudio.port", tcpOn ? std::to_string(tcpAudio_->port()) : std::string());
     fact("srv.tcpaudio.clients", tcpOn ? std::to_string(tcpAudio_->stats().clients) : std::string("0"));
     fact("srv.tcpaudio.accepted", tcpOn ? std::to_string(tcpAudio_->stats().accepted) : std::string("0"));
-    fact("srv.tcpaudio.dropped", tcpOn ? std::to_string(tcpAudio_->stats().droppedSlow + tcpAudio_->stats().droppedStalled + tcpAudio_->stats().refusedFull) : std::string("0"));
+    fact("srv.tcpaudio.dropped", tcpOn ? std::to_string(tcpAudio_->stats().droppedSlow + tcpAudio_->stats().droppedStalled + tcpAudio_->stats().refusedFull + tcpAudio_->stats().refusedPeer) : std::string("0"));
     fact("srv.tcpaudio.problem", tcpAudioProblem_);
     fact("srv.tcpaudio.scope", cfg_.tcpAudio ? scopeOfListed(cfg_.tcpAudioAll, cfg_.tcpAudioAllow) : std::string());
-    fact("srv.tcpaudio.refused_peer", tcpOn ? std::to_string(tcpAudio_->stats().refusedPeer) : std::string("0"));
     const bool rtlOn = rtl_ != nullptr && rtl_->running();
     const cascade::net::RtlTcpStats rs = rtlOn ? rtl_->stats() : cascade::net::RtlTcpStats{};
     fact("srv.rtltcp.running", rtlOn ? "1" : "0");
     fact("srv.rtltcp.port", rtlOn ? std::to_string(rtl_->port()) : std::string());
     fact("srv.rtltcp.clients", std::to_string(rs.clients));
     fact("srv.rtltcp.accepted", std::to_string(rs.accepted));
-    fact("srv.rtltcp.refused_busy", std::to_string(rs.refusedBusy));
+    fact("srv.rtltcp.refused_busy", std::to_string(rs.refusedBusy + rs.refusedPeer + rs.refusedProtocol));   // (a second client, an address not on the list, a connection that did not speak rtl_tcp)
     fact("srv.rtltcp.samples_dropped", std::to_string(rs.samplesDropped));
     fact("srv.rtltcp.commands", std::to_string(rs.commands));
     fact("srv.rtltcp.tunes", std::to_string(rtlTunes_.load()));
@@ -409,7 +408,6 @@ void ServerSet::facts(const std::function<void(const std::string&, const std::st
     fact("srv.rtltcp.ignored", std::to_string(rtlIgnored_.load() + rs.unknownCommands));
     fact("srv.rtltcp.problem", rtlProblem_);
     fact("srv.rtltcp.scope", cfg_.rtl ? scopeOfListed(cfg_.rtlAll, cfg_.rtlAllow) : std::string());
-    fact("srv.rtltcp.refused_peer", std::to_string(rs.refusedPeer + rs.refusedProtocol));
     const bool apiOn = api_ != nullptr && api_->running();
     const cascade::net::ApiStats as = apiOn ? api_->stats() : cascade::net::ApiStats{};
     fact("srv.api.running", apiOn ? "1" : "0");
