@@ -3335,6 +3335,9 @@ private:
     void scheduleBegin(std::uint32_t id, std::int64_t occurrence, std::int64_t nowMs);
     void scheduleStopRun(std::uint32_t id, const std::string& why, bool early);
     void scheduleFacts(const std::function<void(const std::string&, const std::string&)>& put) const;
+    // SCREEN LANE S3 (engine_recplay.cpp): the facts the recording and playback controls read.
+    void recplayFacts(const std::function<void(const std::string&, const std::string&)>& put) const;
+    void recplayRadioFacts(std::uint32_t n, const std::function<void(const std::string&, const std::string&)>& put) const;
     // Starts the monitor on the preset in airbandGroup_: 0 it did not start (airbandNote_ says why), 1 listening, 2 waiting for the patch.
     int airbandStart();
     void airbandStop(const std::string& why);

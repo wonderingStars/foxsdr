@@ -1387,6 +1387,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     // stopped, faulted, lent), the device it holds ("" on the generator or a file: the key a patch Radio node would name), its label, its audio route
     // (both, left, right, none: only "both" until slots 1 and up carry audio) and the decoder plugins running on it, their module files separated by commas.
     scheduleFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // (LOCAL: a recording plan is the operator's)
+    recplayFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // screen lane S3 (LOCAL)
     macroFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // (LOCAL: a macro is the operator's)
     WireA::of(*this).facts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // wire-a (LOCAL)
     wireBFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // wire-b (LOCAL: a measurement of the signal is the operator's)
@@ -1426,6 +1427,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         fact(pre + "claimed", receivers_[n - 1u]->claimed_ ? "1" : "0");
         fact(pre + "mpx", receivers_[n - 1u]->mpxRecorder_.recording() ? "1" : "0");
         fact(pre + "ifrec", receivers_[n - 1u]->ifRecorder_.recording() ? "1" : "0");
+        recplayRadioFacts(n, [&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // screen lane S3 (LOCAL)
         {
             const cascade::core::ppmauto::Result pr = receivers_[n - 1u]->ppmAuto_.result(clockS());
             const char* word = pr.state == cascade::core::ppmauto::State::Measuring ? "measuring" : (pr.state == cascade::core::ppmauto::State::Done ? "done" : (pr.state == cascade::core::ppmauto::State::Failed ? "failed" : "idle"));

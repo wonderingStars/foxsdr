@@ -1,0 +1,28 @@
+#! frames=1500 size=1600x6000 bank=0 sections=0:1 iqfile=s3-play.wav
+# s3-play (screen lane S3, docs/multi-radio-records/screen-s3-recplay.md; G3-14a, G3-15): the seek position and the A-B loop of a playing I/Q file, read back from the radio's own state.
+10 state running == 1
++15 state s3.play.dur > 1
+# play from a typed place
++1 type "Go to (seconds or minutes:seconds)" "0:01"
++1 key enter
++2 click "Play from here"
++10 state s3.play.pos > 0.9
+# a place past the end is refused with the engine's range
++1 type "Go to (seconds or minutes:seconds)" "99:00"
++1 key enter
++2 click "Play from here"
++4 state s3.note.source contains "allowed"
+# the loop: a start after its end is refused; a good one is read back
++1 type "Loop start" "2"
++1 key enter
++1 type "Loop end" "1"
++1 key enter
++2 click "Loop between these"
++4 state s3.note.source contains "start before"
++1 type "Loop end" "3"
++1 key enter
++2 click "Loop between these"
++15 state s3.play.loopb == 3
++1 state s3.play.loopa == 2
++1 click "Clear the loop"
++15 state s3.play.loopb == 0

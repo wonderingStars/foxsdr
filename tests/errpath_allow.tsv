@@ -3184,3 +3184,39 @@ src/usb/winusb_device.cpp::openWinUsb::errassign::opening the radio	ALLOW	USB tr
 src/usb/winusb_device.cpp::openWinUsb::errassign::openwinusb needs a device interface path	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
 src/usb/winusb_device.cpp::openWinUsb::errassign::the radio is no longer present	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
 src/usb/winusb_device.cpp::openWinUsb::errassign::winusbinitialize is the device bound to winusb	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
+src/slint/lanes3_logic.cpp::checkNameTemplate::errassign::e error	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseRolloverMB::errassign::allowed # no limit or # #	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseRolloverMinutes::errassign::allowed # no limit or # #	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::rolloverJson::errassign::a file on the clock needs a time limit	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::clipsJson::errassign::time before the transmission	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::clipsJson::errassign::time after it ends	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::clipsJson::errassign::shortest clip kept	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::clipsJson::errassign::longest clip	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseDate::errassign::type the date as #	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseDate::errassign::that date does not exist	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseDate::errassign::that date does not exist#2	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseClock::errassign::type the time as #	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseClock::errassign::that time does not exist	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::localToUnix::errassign::that time does not exist here the clocks skip it that day	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::length minutes	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::length minutes#2	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::tick audio iq or both	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::name at most # characters	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::frequency mhz	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::bandwidth khz	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parsePosition::errassign::type a place in the recording	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parsePosition::errassign::type seconds or minutesseconds	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parsePosition::errassign::type seconds or minutesseconds#2	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parsePosition::errassign::allowed	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseLoop::errassign::loop start	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseLoop::errassign::loop end	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseLoop::errassign::the loop must start before it ends	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseWithUnit::errassign::type a number	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseWithUnit::errassign::e	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseWithUnit::errassign::allowed	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseCentre::errassign::e	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::rawFileId::errassign::type the full path of the file	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::rawFileId::errassign::choose the sample format	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::rawFileId::errassign::sample rate	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::rawFileId::errassign::centre frequency	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::overviewJson::errassign::rows	ALLOW	validation	2026-11-16

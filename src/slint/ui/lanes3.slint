@@ -1,0 +1,10 @@
+// lanes3.slint - SCREEN LANE S3 (docs/multi-radio-records/screen-s3-recplay.md): the recording and playback controls, drawn with lane K's row panel (KPanel). The host (lanes3_publish.cpp) builds
+// the rows from the engine's facts and answers `act(id, text)`; an empty list draws nothing.
+import { KRow } from "system_bank.slint";
+
+export global LaneS3 {
+    in property <[KRow]> rows-record;      // SIGNAL, Recorder: file names, sample formats, the passband take, rollover, triggered clips, the replay buffer
+    in property <[KRow]> rows-schedule;    // SIGNAL, Recorder: the timed recordings
+    in property <[KRow]> rows-source;      // SIGNAL, Source: where in the recording, the loop, a raw file's stated format, the whole-file waterfall
+    callback act(string, string);
+}

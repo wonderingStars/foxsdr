@@ -1,0 +1,33 @@
+#! frames=1500 size=1600x6000 bank=0 sections=0:1,6
+# s3-record (screen lane S3, docs/multi-radio-records/screen-s3-recplay.md; G3-08, G3-07, G3-04): the SIGNAL bank's Recorder section. The file-name template, the sample formats and the passband take, each read back from the engine.
+10 state running == 1
+# nothing is set at the start: the default names, 32-bit float I/Q, 16-bit audio
+state s3.fact.record.nameTemplate == ""
+state s3.format.iq == 0
+state s3.format.audio == 0
+state s3.rows.record > 10
+# a template that Windows would refuse is refused on the screen and cannot be sent
++1 type "Name template" "a:b"
++1 key enter
++3 expect "Use this template" enabled equals "false"
+# a good one is sent, and the engine says it is in force
++1 type "Name template" "{freq_mhz}/{mode}_{datetime}"
++1 key enter
++3 expect "Use this template" enabled equals "true"
++1 click "Use this template"
++15 state s3.fact.record.nameTemplate == {freq_mhz}/{mode}_{datetime}
++1 click "Back to the default names"
++15 state s3.fact.record.nameTemplate == ""
+# sample formats: I/Q 16-bit integer, audio 24-bit and 32-bit float, then back
++1 click "16-bit integer"#1
++15 state s3.format.iq == 1
++1 click "24-bit integer"
++15 state s3.format.audio == 1
++1 click "32-bit float"#2
++15 state s3.format.audio == 2
++1 click "32-bit float"#1
++15 state s3.format.iq == 0
++1 click "16-bit integer"#2
++15 state s3.format.audio == 0
+# the passband take cannot be stopped when it is not running
++1 expect "Stop the passband take" enabled equals "false"

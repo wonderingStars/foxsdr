@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""s3-play.wav - a 12 s, 48 kS/s I/Q PCM16 stereo recording of one steady carrier at +5 kHz, for the recording-and-playback drive scripts (screen lane S3).
+
+    python -I make_s3-play.py      writes s3-play.wav beside this script
+
+Standard library only. Deterministic."""
+import array
+import math
+import wave
+from pathlib import Path
+
+RATE = 48000
+SECONDS = 12
+CARRIER_HZ = 5000.0
+AMP = 0.4
+
+
+def main() -> None:
+    out = Path(__file__).with_name("s3-play.wav")
+    n = RATE * SECONDS
+    buf = array.array("h")
+    for i in range(n):
+        ph = 2.0 * math.pi * CARRIER_HZ * i / RATE
+        buf.append(int(AMP * 32767 * math.cos(ph)))
+        buf.append(int(AMP * 32767 * math.sin(ph)))
+    with wave.open(str(out), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes(buf.tobytes())
+
+
+if __name__ == "__main__":
+    main()
