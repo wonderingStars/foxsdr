@@ -71,7 +71,8 @@ One commit of its own (af0d375f). Returned to PENDING in their original groups: 
 
 ## 6. Stamp tests, config hash
 
-See the last section, written after the rebuild at the commit that carries this record.
+After a full rebuild at `67a70428` (the commit that carries the record above; exit 0) the stamp and neighbour tests were run through the launcher: `test_diagnostics` Passed (2.62 s), `test_diagnostics_free` Passed (3.47 s), `test_issue_report`, `slint_drive_look-stamps`, `slint_drive_system-diagnostics`, `slint_drive_wg2-diagnostics` Passed, `test_error_paths`, `errpath_gate_selftest`, `test_engine_publish_alloc`, `test_json_dump_policy`, `test_health_paths` and `test_thread_inventory` Passed. `test_engine_api_03` in that same 14-test batch failed ONCE at a different line (`:7213`, `passesUntil(... "fact.patch.runnable" == "0", 60000)` and the three checks after it, 94.7 s: a 60 s wait under the load of four other lanes), and Passed alone at `-j1` right after (`100% tests passed out of 1`). The listSeq fault of section 3 is a different line (`:2647`) and stays fixed. The commit that adds this paragraph is documentation only: a stamp test run on a build made before it reads the older commit.
+The real `%APPDATA%/foxsdr/config.json` sha256 at the end: `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (unchanged, checked after the last test run).
 
 ## 7. Open rows
 
