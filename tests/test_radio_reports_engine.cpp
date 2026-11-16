@@ -626,9 +626,13 @@ int main() {
         const std::vector<json> streams = ofKind(q, "radio_stream");
         CHECK(streams.size() == 1);
         if (!streams.empty()) {
-            CHECK(streams[0]["body"]["samplesPerSec"] == 2400000);
+            // 144 million samples over the minute's window (the window is the aged 60 s plus however long this run took, whole seconds):
+            // samples a second times the window is the figure that was handed in, to the rounding of one second
+            const long long perSec = streams[0]["body"]["samplesPerSec"].get<long long>();
+            const long long window = streams[0]["body"]["windowSec"].get<long long>();
+            CHECK(window >= 60 && window <= 120);
+            CHECK(perSec * window >= 143000000LL && perSec * window <= 145000000LL);
             CHECK(streams[0]["body"]["drops"] == 0);
-            CHECK(streams[0]["body"]["windowSec"].get<long long>() >= 1);
         }
         const std::vector<json> closes = ofKind(q, "radio_close");
         CHECK(closes.size() == 1);
