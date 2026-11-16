@@ -541,6 +541,10 @@ std::string HeartbeatSender::beatJson(const std::string& id, const std::string& 
     return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
+std::string HeartbeatSender::nextBeatJson() const {
+    return beatJson(id_, v_, radioreport::kRadioReportsLiveSend ? radios_ : std::vector<std::string>(), syntheticRun());
+}
+
 void HeartbeatSender::setRadios(const std::vector<std::string>& keys) {
     radios_ = keys;
     if (radios_.size() > 8) { radios_.resize(8); }
@@ -570,7 +574,7 @@ void HeartbeatSender::poll(double now) {
 #if defined(_WIN32)
     done_.store(false);
     const std::string url = url_;
-    const std::string json = beatJson(id_, v_, radioreport::kRadioReportsLiveSend ? radios_ : std::vector<std::string>(), syntheticRun());
+    const std::string json = nextBeatJson();
     std::atomic<bool>* done = &done_;
     thread_ = std::thread([url, json, done]() {
         try {
@@ -583,7 +587,7 @@ void HeartbeatSender::poll(double now) {
 #else
     done_.store(false);
     const std::string url = url_;
-    const std::string json = beatJson(id_, v_, radioreport::kRadioReportsLiveSend ? radios_ : std::vector<std::string>(), syntheticRun());
+    const std::string json = nextBeatJson();
     std::atomic<bool>* done = &done_;
     thread_ = std::thread([url, json, done]() {
         try {

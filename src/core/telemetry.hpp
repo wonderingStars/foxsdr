@@ -526,6 +526,9 @@ public:
     static std::string beatJson(const std::string& id, const std::string& v, const std::vector<std::string>& radios, bool synthetic = false);
     // The keys the next beat names. Sent only while radioreport::kRadioReportsLiveSend is true: the Worker that reads the field is not deployed.
     void setRadios(const std::vector<std::string>& keys);
+    // What the NEXT beat will carry, exactly: the beat with the radios only while radioreport::kRadioReportsLiveSend is true, and the test marker when this is a
+    // test run. poll() posts this and nothing else.
+    std::string nextBeatJson() const;
 
 private:
     std::string url_;
