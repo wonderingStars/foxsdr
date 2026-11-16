@@ -67,7 +67,6 @@ int main() {
 
     // ---------------------------------------------------------------- G1-05 raw I/Q: the address text
     {
-        std::puts("block 1");
         RawIqFields f; f.port = "5555"; f.rateHz = "2000000";
         Built b = rawIqOpenText(f);
         CHECK(b.ok && b.text == "tcp://127.0.0.1:5555?fmt=f32&rate=2000000&freq=0&timeout=3000");
@@ -108,7 +107,6 @@ int main() {
 
     // ---------------------------------------------------------------- G1-17 automatic ppm: the numbers
     {
-        std::puts("block 2");
         CHECK(parsePpmSeconds("", d, e) && d == 0.0);
         CHECK(parsePpmSeconds("0", d, e) && d == 0.0);
         CHECK(parsePpmSeconds("10", d, e) && d == 10.0);
@@ -126,7 +124,6 @@ int main() {
 
     // ---------------------------------------------------------------- G1-18 tuner pooling: the numbers
     {
-        std::puts("block 3");
         CHECK(parseClaimMHz("145.5", d, e) && std::fabs(d - 145.5e6) < 1.0);
         CHECK(!parseClaimMHz("0", d, e) && !parseClaimMHz("-1", d, e) && !parseClaimMHz("", d, e) && !parseClaimMHz("x", d, e) && !parseClaimMHz("1e9", d, e));
         CHECK(parseClaimKHz("", d, e) && d == 0.0);
@@ -139,14 +136,12 @@ int main() {
 
     // ---------------------------------------------------------------- G1-11 direct sampling: the words
     {
-        std::puts("block 4");
         CHECK(directSamplingWords().size() == 4);
         CHECK(directSamplingIndex("0") == 0 && directSamplingIndex("3") == 3 && directSamplingIndex("4") == -1 && directSamplingIndex("") == -1 && directSamplingIndex("12") == -1);
     }
 
     // ---------------------------------------------------------------- the rows: folded, then open
     {
-        std::puts("block 5");
         Rig r;
         std::vector<slk::Row> v = r.build();
         CHECK(v.size() == 1 && v[0].id == "s.more");                   // nothing but the one key until asked for
@@ -161,7 +156,6 @@ int main() {
 
     // ---------------------------------------------------------------- the rows: raw I/Q reaches the engine as the text built
     {
-        std::puts("block 6");
         Rig r; r.open();
         r.rows.act("r.port", "5555");
         r.rows.act("r.rate", "2400000");
@@ -195,7 +189,6 @@ int main() {
 
     // ---------------------------------------------------------------- the rows: automatic ppm
     {
-        std::puts("block 7");
         Rig r; r.open();
         r.selected = 2;
         std::vector<slk::Row> v = r.build();
@@ -249,7 +242,6 @@ int main() {
 
     // ---------------------------------------------------------------- the rows: tuner pooling
     {
-        std::puts("block 8");
         Rig r; r.open();
         r.rows.act("t.claim", "");                                                  // no frequency typed
         CHECK(r.sent.empty() && r.rows.refused() == 1);
@@ -281,7 +273,6 @@ int main() {
 
     // ---------------------------------------------------------------- the rows: direct sampling
     {
-        std::puts("block 9");
         Rig r; r.open();
         std::vector<slk::Row> v = r.build();
         CHECK(r.find(v, "d.mode") == nullptr);                                      // a radio with no such setting shows no control, only the reason

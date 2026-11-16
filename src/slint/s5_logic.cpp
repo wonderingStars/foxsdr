@@ -93,9 +93,10 @@ std::string ppmStateWords(const std::string& state) {
 
 std::string ppmReading(double ppm, double unc, int readings) {
     if (readings <= 0) { return std::string(); }
-    char b[96];
-    std::snprintf(b, sizeof(b), "%+.2f ppm, %s %.2f (%d %s)", ppm, tr("plus or minus").c_str(), unc, readings, tr("readings").c_str());
-    return b;
+    char a[32], u[32];
+    std::snprintf(a, sizeof(a), "%+.2f", ppm);
+    std::snprintf(u, sizeof(u), "%.2f", unc);
+    return std::string(a) + " ppm, " + tr("plus or minus") + " " + u + " (" + std::to_string(readings) + " " + tr("readings") + ")";
 }
 
 bool replacesTypedPpm(const PpmInForce& now, double measured) {
@@ -128,11 +129,8 @@ bool parseClaimKHz(const std::string& text, double& hz, std::string& err) {
 }
 
 std::string claimAnswerText(double radio, double how) {
-    char b[160];
-    const int n = static_cast<int>(radio + 0.5);
-    if (how > 1.5) { std::snprintf(b, sizeof(b), "%s %d: %s", tr("Radio").c_str(), n, tr("its centre moved to cover it").c_str()); }
-    else { std::snprintf(b, sizeof(b), "%s %d: %s", tr("Radio").c_str(), n, tr("it already covered that frequency, so only its tuning moved").c_str()); }
-    return b;
+    const std::string head = tr("Radio") + " " + std::to_string(static_cast<int>(radio + 0.5)) + ": ";
+    return head + (how > 1.5 ? tr("its centre moved to cover it") : tr("it already covered that frequency, so only its tuning moved"));
 }
 
 // ============================================================ direct sampling ============================================================
