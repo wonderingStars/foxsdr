@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "engine/engine.hpp"
 #include "engine/wire_a.hpp"   // wire-a
+#include "core/raw_file_id.hpp"
 #include "core/plugin_repo_helper.hpp"   // wire-c
 
 #include "core/band_mode.hpp"
@@ -6346,6 +6347,15 @@ bool Engine::selectSourceById(const std::string& id) {
     const std::string args = id.substr(colon + 1);
     if (kind == "file") {
         openIqFile(args);
+        return true;
+    }
+    if (kind == "file-raw") {   // screen lane S3: a file with no header; the person says its sample format and rate
+        cascade::core::RawFileId rawId;
+        if (!cascade::core::parseRawFileId(args, rawId)) {
+            rx().sourceError_ = "that raw file's format, rate or path was not understood";
+            return false;
+        }
+        openIqFile(rawId.path, args);
         return true;
     }
     if (kind == "open-pluto") {

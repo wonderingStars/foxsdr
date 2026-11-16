@@ -1,0 +1,23 @@
+#! frames=1500 size=1600x6000 bank=0 sections=0:1 iqfile=s3-play.wav
+# s3-raw (screen lane S3, docs/multi-radio-records/screen-s3-recplay.md; G3-13): a raw cu8 file has no header, so the person states the format and rate and the radio plays it. The rate and length are read back from the radio's own state; a wrong path is refused in the engine's words.
+10 state running == 1
+state s3.play.rate == 48000
+# a rate that is not a number is refused on the screen
++1 type "Raw file (full path)" "{fixtures}/s3-raw.cu8"
++1 key enter
++1 type "Sample rate (samples a second)" "fast"
++1 key enter
++2 click "Open raw file"
++4 state s3.note.source contains "Sample rate"
+# the right statement plays the file at that rate
++1 type "Sample rate (samples a second)" "256k"
++1 key enter
++2 click "Open raw file"
++40 state s3.play.rate == 256000
++10 state s3.play.dur > 5.9
++1 state s3.fact.radio.1.file.header == 0
+# a file that is not there is refused by the engine and the old file keeps playing
++1 type "Raw file (full path)" "{fixtures}/nothing-here.cu8"
++1 key enter
++2 click "Open raw file"
++20 state s3.play.rate == 256000

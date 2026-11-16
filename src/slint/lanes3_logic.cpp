@@ -12,6 +12,7 @@
 
 #include "core/civil_time.hpp"
 #include "core/i18n.hpp"
+#include "core/raw_file_id.hpp"
 #include "core/rec_naming.hpp"
 #include "core/schedule.hpp"
 
@@ -452,20 +453,9 @@ Built rawFileId(const std::string& path, int formatIndex, const std::string& rat
 }
 
 bool parseRawFileId(const std::string& args, RawId& out) {
-    const std::size_t bar = args.find('|');
-    if (bar == std::string::npos || bar + 1 >= args.size()) { return false; }
-    char fmt[16] = {};
-    double rate = 0.0, centre = 0.0;
-    const std::string head = args.substr(0, bar);
-    if (std::sscanf(head.c_str(), "%15[a-z0-9],%lf,%lf", fmt, &rate, &centre) != 3) { return false; }
-    const std::string f = fmt;
-    if (f != "cu8" && f != "cs16" && f != "cf32") { return false; }
-    if (!(rate >= 1000.0 && rate <= 1e9) || !(centre >= 0.0 && centre <= 1e13) || !std::isfinite(rate) || !std::isfinite(centre)) { return false; }
-    out.format = f;
-    out.rateHz = rate;
-    out.centreHz = centre;
-    out.hasCentre = centre > 0.0;
-    out.path = args.substr(bar + 1);
+    cascade::core::RawFileId r;
+    if (!cascade::core::parseRawFileId(args, r)) { return false; }
+    out.format = r.format; out.path = r.path; out.rateHz = r.rateHz; out.centreHz = r.centreHz; out.hasCentre = r.hasCentre;
     return true;
 }
 

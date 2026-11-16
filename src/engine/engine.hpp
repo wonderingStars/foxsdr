@@ -743,7 +743,7 @@ private:
     bool startIqRecording();
     // THE I/Q FILE'S OPEN IS A WORKER'S (stub campaign B19; engine_disk_work.cpp): openIqFile asks, pollIqOpen (once a pass, pollDiskJobs) installs
     // what the worker opened - installOpenedIqFile is the body the synchronous open ran after its header was read.
-    void openIqFile(const std::string& path);
+    void openIqFile(const std::string& path, const std::string& rawArgs = std::string());   // rawArgs: the "file-raw:" id of a header-less file (core/raw_file_id.hpp; screen lane S3)
     void pollIqOpen();
     // For a radio added on a worker-opened source: when the open has ended without a device, the reason becomes the radio's refusal (engine_radios.cpp).
     void noteAsyncOpenEnded();

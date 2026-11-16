@@ -150,6 +150,11 @@ constexpr std::size_t kMaxHeaderChunks = 256;
 class IqFileReader {
 public:
     const IqInfo& info() const { return info_; }
+    // screen lane S3 (IqFileSource plays every kind of file through these): where the samples start in the file `dataPath()` names, how they are stored, and the decoder for a block of them.
+    std::uint64_t dataOffset() const { return dataOffset_; }
+    const std::string& dataPath() const { return path_; }
+    const Layout& layout() const { return layout_; }
+    void decodeFrames(const unsigned char* p, std::complex<float>* dst, std::size_t frames) const { decode(p, dst, frames); }
     std::uint64_t position() const { return pos_; }
 
     // Moves to complex sample `sample` (0 .. totalSamples; the end is allowed). False if past the end.
@@ -186,6 +191,7 @@ public:
     // ---- construction (use the open* functions) ----
     bool init(const std::string& path, std::uint64_t dataOffset, std::uint64_t frames, Layout layout, std::string* err) {
         layout_ = layout;
+        path_ = path;
         frameBytes_ = 2 * layout.bytesPerComponent();
         dataOffset_ = dataOffset;
         info_.totalSamples = frames;
@@ -256,6 +262,7 @@ private:
     Layout layout_;
     std::size_t frameBytes_ = 8;
     std::uint64_t dataOffset_ = 0;
+    std::string path_;
     std::uint64_t pos_ = 0;
     std::ifstream file_;
     std::vector<unsigned char> buf_;

@@ -30,12 +30,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "source/iq_source.hpp"
 
 namespace cascade::source {
+
+namespace iqfile { class IqFileReader; }   // source/iq_readers.hpp (screen lane S3)
 
 class IqFileSource : public IqSource {
 public:
@@ -45,6 +48,18 @@ public:
     // playback. False on any failure, with the reason in lastError().
     // Reopening replaces the previous file and stops playback first.
     bool open(const std::string& wavPath);
+
+    // SCREEN LANE S3 (docs/multi-radio-records/screen-s3-recplay.md): every other kind of file. open() itself now also plays a SigMF recording (the .sigmf-meta or its
+    // .sigmf-data) and a WAV whose samples are 24-bit, 32-bit integer or in a WAVE_FORMAT_EXTENSIBLE header, through the readers of source/iq_readers.hpp. A raw file has no header
+    // at all, so the person states how its samples are stored and the rate they were recorded at: openRaw(). A wrong statement plays as noise and never harms anything; a file with
+    // no complete frame is refused with a sentence; a trailing partial frame is ignored; a file cut short plays what is there.
+    struct RawSpec {
+        std::string format;        // "cu8", "cs16" or "cf32" (little-endian)
+        double rateHz = 0.0;
+        double centreHz = 0.0;
+        bool hasCentre = false;
+    };
+    bool openRaw(const std::string& path, const RawSpec& spec);
 
     // start() rewinds to the first frame, so every start() is a
     // deterministic replay from the top (pause/resume is the caller's job:
@@ -195,7 +210,10 @@ protected:
     virtual std::size_t readHeaderRaw(unsigned char* dst, std::size_t bytes);
 
 private:
-    enum class SampleFormat { none, pcm16, float32 };
+    enum class SampleFormat { none, pcm16, float32, reader };
+    bool openRiff(const std::string& wavPath);   // the original open(): 16-bit PCM and 32-bit float WAV and RF64
+    bool openWithReader(const std::string& path, const RawSpec* raw);   // screen lane S3
+    std::shared_ptr<iqfile::IqFileReader> reader_;   // the layout and decoder of a file opened through the readers
 
     // Central failure path so every parse error both records its reason and
     // leaves the source in a consistent not-opened state.
