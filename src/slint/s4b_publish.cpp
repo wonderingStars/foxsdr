@@ -212,6 +212,20 @@ struct S4bPublisher::Impl {
                [this, S](int i) { setting(S, tr("TCP audio packet length"), "srv.tcpaudio.packet", i == 1 ? "960" : "480"); });
         serverReadouts(v, tr("TCP audio"), "srv.tcpaudio", tcpOn);
         if (fact("wirec.srv.tcpaudio.all") == "1") { v.push_back(rNote(tr("The audio has no password. Anyone on your network can connect and listen."), kWarn)); }
+        // ---- rtl_tcp server (G3-24)
+        v.push_back(rHeading(tr("rtl_tcp server")));
+        const bool rtlOn = fact("wirec.srv.rtltcp.enabled") == "1";
+        wircTick(v, S, "rtl.on", tr("Serve the radio's samples like rtl_tcp"), "srv.rtltcp.enabled",
+                 tr("Programs that read an RTL-SDR over the network can connect and receive this radio's samples. They can retune the radio; nothing else they send is used."));
+        wircTick(v, S, "rtl.all", tr("Let other computers connect for rtl_tcp"), "srv.rtltcp.all", tr("Off: only programs on this computer can connect."));
+        wholeField(v, S, "rtl.port", tr("rtl_tcp port"), "srv.rtltcp.port", 1024, 65535);
+        wholeField(v, S, "rtl.radio", tr("Radio for network streams and control"), "srv.control.radio", 1, 8);
+        serverReadouts(v, tr("rtl_tcp"), "srv.rtltcp", rtlOn);
+        if (rtlOn && factOn("srv.rtltcp.running")) {
+            v.push_back(rReadout(tr("Retunes from the client"), fact("srv.rtltcp.tunes")));
+            v.push_back(rReadout(tr("Commands not used"), fact("srv.rtltcp.ignored")));
+        }
+        if (fact("wirec.srv.rtltcp.all") == "1") { v.push_back(rNote(tr("The rtl_tcp server has no password. Anyone on your network can connect, listen and retune the radio."), kWarn)); }
         endNote(v, S);
     }
 

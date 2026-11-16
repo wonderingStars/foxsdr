@@ -29,3 +29,23 @@
 +1 click "Serve the audio over TCP"
 +15 state s4b.fact.srv.tcpaudio.running == 0
 +1 expect "Serve the audio over TCP" checked equals "false"
+# rtl_tcp server (G3-24): off at start, on this computer only
++1 state s4b.fact.srv.rtltcp.running == 0
++1 state s4b.fact.wirec.srv.rtltcp.enabled == 0
++1 state s4b.fact.wirec.srv.rtltcp.all == 0
++1 type "rtl_tcp port" "47234"
++1 key enter
++12 state s4b.fact.wirec.srv.rtltcp.port == 47234
++1 type "rtl_tcp port" "80"
++1 key enter
++8 state s4b.fact.wirec.srv.rtltcp.port == 47234
++1 state s4b.note.outputs contains "1024"
++1 type "Radio for network streams and control" "9"
++1 key enter
++8 state s4b.fact.wirec.srv.control.radio == 1
++1 click "Serve the radio's samples like rtl_tcp"
++15 state s4b.fact.srv.rtltcp.running == 1
++1 state s4b.fact.srv.rtltcp.port == 47234
++1 state s4b.fact.srv.rtltcp.scope == "this computer only"
++1 click "Serve the radio's samples like rtl_tcp"
++15 state s4b.fact.srv.rtltcp.running == 0

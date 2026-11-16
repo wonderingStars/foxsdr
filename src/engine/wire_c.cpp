@@ -90,6 +90,10 @@ constexpr Spec kSpecs[] = {
     {"srv.tcpaudio.port", Kind::Int, 1024, 65535, "7356", ""},
     {"srv.tcpaudio.radio", Kind::Int, 1, 8, "1", ""},
     {"srv.tcpaudio.packet", Kind::Choice, 0, 0, "480", "480|960"},   // samples per write: 10 ms or 20 ms
+    {"srv.control.radio", Kind::Int, 1, 8, "1", ""},            // the radio the network streams and controls below act on
+    {"srv.rtltcp.enabled", Kind::Bool, 0, 0, "0", ""},          // serve that radio's I/Q to programs that read an RTL-SDR over the network (rtl_tcp); only retuning is accepted from them
+    {"srv.rtltcp.all", Kind::Bool, 0, 0, "0", ""},              // listen on every address instead of this computer only (no password)
+    {"srv.rtltcp.port", Kind::Int, 1024, 65535, "1234", ""},
 };
 constexpr std::size_t kSpecCount = sizeof(kSpecs) / sizeof(kSpecs[0]);
 

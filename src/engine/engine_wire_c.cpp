@@ -21,6 +21,7 @@
 #include "core/plugin_repo_helper.hpp"   // wire-c
 #include "core/safe_file_io.hpp"
 #include "core/store_sort.hpp"
+#include "engine/engine_wire_b.hpp"   // screen lane S4b: whether a radio sends network I/Q (the pipeline has one raw-band tap)
 #include "engine/wire_c.hpp"
 #include "engine/wire_c_open.hpp"
 
@@ -489,6 +490,23 @@ void Engine::pumpWireC() {
             s.serversHooked = true;
             s4b::Hooks h;
             h.audioReader = [this](int radio) { return openUdpAudioReader(*api_, radio, "tcpaudio:" + std::to_string(radio)); };
+            h.radioIdentity = [this](int radio) -> std::uintptr_t {
+                const std::size_t slot = static_cast<std::size_t>(radio - 1);
+                return (radio >= 1 && slot < receivers_.size() && receivers_[slot]) ? reinterpret_cast<std::uintptr_t>(receivers_[slot].get()) : 0;
+            };
+            h.attachIq = [this](int radio, cascade::core::Pipeline::IqSink* sink) -> std::string {
+                const std::size_t slot = static_cast<std::size_t>(radio - 1);
+                if (radio < 1 || slot >= receivers_.size() || !receivers_[slot]) { return sink == nullptr ? std::string() : std::string("that radio is not open"); }
+                if (sink != nullptr && wireB_ != nullptr && slot < wireB_->iqOut.size() && wireB_->iqOut[slot].out != nullptr) { return "that radio sends network I/Q already: stop that first"; }
+                receivers_[slot]->pipeline_.setIqSink(sink);
+                return std::string();
+            };
+            h.tune = [this](int radio, double hz) -> std::string {
+                FoxCommand cmd = cascade::core::cmd::makeNum(FOXAPI_OP_SET_FREQUENCY, hz);   // the ordinary tuning command: every check the window's own tuning meets applies
+                cmd.target = static_cast<std::uint32_t>(radio);
+                const FoxCommandResult r = applyCommand(cmd);
+                return (r.status == FOXAPI_OK || r.status == FOXAPI_NO_CHANGE) ? std::string() : std::string(r.message);
+            };
             s.servers.setHooks(std::move(h));
         }
         if (s.serversSettingsVersion != s.settings().version()) {
@@ -496,6 +514,7 @@ void Engine::pumpWireC() {
             s.servers.configure(s4b::configFrom(s.settings()));
             ++wireCVersion_;
         }
+        s.servers.pass();
         const std::string sig = s.servers.signature();
         if (sig != s.serversSig) {
             s.serversSig = sig;
