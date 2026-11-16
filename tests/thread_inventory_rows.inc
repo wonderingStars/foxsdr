@@ -168,4 +168,6 @@ const Row kRows[] = {
      "wire-b second pass: the spectrum block's GPU stage builds its Direct3D engine (GpuSpectrumEngine) in one one-shot async task, the same way core/pipeline_gpufft.cpp does for the legacy path, so the DSP thread never waits for a device to be made; the DSP thread polls the future each frame and waits for it only to switch the stage off or change the size (a build is short) - NOT COVERED by this batch: it holds no loop, it ends by itself"},
     {"src/slint/host_duties.cpp", 0, 2, 0, 0, "",
      "the Slint window's update download (core::downloadUpdate over WinHTTP, its own timeouts, a cancel flag the future's destructor sets) and the one-shot launch of the downloaded installer; the same gap as app_window.cpp's - NOT COVERED by this batch (a known gap)"},
+    {"src/slint/desk_logic.cpp", 2, 0, 0, 0, "",
+     "off Windows only (the thread text sits inside the POSIX half of the file, which the Windows build does not compile, but the table counts the text): the Slint window's open-an-address, open-a-folder and clipboard helpers start a child process and a detached helper that only waitpid()s it so it does not stay a zombie; the helper runs no work of its own, has no loop and nothing waits for it, so a heartbeat would be wrong (Linux lane, linux-slint-2, engine merge 7)"},
 };
