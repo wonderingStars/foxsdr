@@ -106,6 +106,7 @@ struct LaneS3Publisher::Impl {
     OffsetAt offs() const { return env.offsetAt ? OffsetAt(env.offsetAt) : OffsetAt([](std::int64_t) { return 0; }); }
     std::string dv(const std::string& id, const std::string& def = std::string()) const { const auto it = draft.find(id); return it == draft.end() ? def : it->second; }
     int pv(const std::string& id, int def) const { const auto it = draft.find(id); return it == draft.end() ? def : std::atoi(it->second.c_str()); }
+    static double numOf(const std::string& s, double def = 0.0) { return s.empty() ? def : std::atof(s.c_str()); }
     bool bv(const std::string& id, bool def) const { const auto it = draft.find(id); return it == draft.end() ? def : it->second == "1"; }
 
     // ---------------------------------------------------------------- the one place a command leaves
@@ -180,6 +181,9 @@ struct LaneS3Publisher::Impl {
     void tickD(std::vector<Row>& v, const std::string& id, const std::string& label, bool def, const std::string& tip = std::string()) {
         tick(v, id, label, bv(id, def), [this, id](bool on) { draft[id] = on ? "1" : "0"; }, tip);
     }
+    void setting(Sec s, const std::string& what, const std::string& k, const std::string& value, const std::vector<std::string>& drops = {}) {
+        send(s, what, cmd(FOXAPP_OP_WIREC_SETTING, 0, k + "" + value), drops);
+    }
     void endNote(std::vector<Row>& v, Sec s) { if (!noteText[s].empty()) { v.push_back(rNote(noteText[s], noteTone[s])); } }
     bool confirmTwice(Sec s, const std::string& id, const std::string& what) {
         if (armed != id) { armed = id; setNote(s, what + ": " + tr("press the key again to confirm. This cannot be undone."), kWarn); return false; }
@@ -227,6 +231,56 @@ struct LaneS3Publisher::Impl {
         key(v, "i.start", tr("Record the passband"), [this] { send(kRecord, tr("Record the passband"), cmd(FOXAPP_OP_IF_RECORD, 1)); }, !ifOn,
             tr("Records the channel after the tuner and filter, before the demodulator: the same in every mode. It ends with the radio."));
         key(v, "i.stop", tr("Stop the passband take"), [this] { send(kRecord, tr("Stop the passband take"), cmd(FOXAPP_OP_IF_RECORD, 0)); }, ifOn);
+
+        // ---- long recordings (G3-10): the next file, no sample lost
+        const std::string mbNow = fact("wirec.rec.roll_mb"), minNow = fact("wirec.rec.roll_min");
+        v.push_back(rHeading(tr("Long recordings")));
+        { std::string nowText; if (numOf(mbNow) > 0.0) { nowText += numberText(numOf(mbNow)) + " MB"; } if (numOf(minNow) > 0.0) { nowText += (nowText.empty() ? "" : " " + tr("or") + " ") + numberText(numOf(minNow)) + " " + tr("minutes") + (fact("wirec.rec.roll_align") == "1" ? ", " + tr("on the clock (UTC)") : std::string()); }
+          v.push_back(rReadout(tr("A recording goes on into a new file after"), nowText.empty() ? tr("no limit") : nowText)); }
+        field(v, "o.mb", tr("File size limit (MB, 0 = none)"), mbNow.empty() ? "0" : mbNow, tr("1 to 100000. A file ends at the first block of samples after the limit; the next one starts with the next sample."));
+        field(v, "o.min", tr("File length limit (minutes, 0 = none)"), minNow.empty() ? "0" : minNow, tr("0.1 to 1440."));
+        tickD(v, "o.align", tr("New file on the clock (UTC)"), fact("wirec.rec.roll_align") == "1", tr("With a length limit: a file ends at every whole multiple of it, for example at :00 and :30 for 30 minutes."));
+        key(v, "o.apply", tr("Use these limits"), [this] {
+            const sll::Built b = rolloverJson(dv("o.mb", fact("wirec.rec.roll_mb")), dv("o.min", fact("wirec.rec.roll_min")), bv("o.align", fact("wirec.rec.roll_align") == "1"));
+            if (!b.ok) { refuseHere(kRecord, tr("Use these limits"), b.err); return; }
+            const json j = json::parse(b.text);
+            setting(kRecord, tr("Use these limits"), "rec.roll_mb", numberText(j.value("maxMB", 0.0)));
+            setting(kRecord, tr("Use these limits"), "rec.roll_min", numberText(std::round(j.value("maxSeconds", 0.0) / 60.0 * 1000.0) / 1000.0));
+            setting(kRecord, tr("Use these limits"), "rec.roll_align", j.value("align", false) ? "1" : "0", {"o.mb", "o.min", "o.align"});
+        }, true, tr("Applies to the recordings that start after this, and to one that is running."));
+
+        // ---- one file per transmission (G3-03, G3-09) and the replay buffer (G3-02)
+        const bool clipOn = fact("wirec.rec.clip_on") == "1";
+        v.push_back(rHeading(tr("One file per transmission")));
+        tick(v, "c.on", tr("Record while the squelch is open"), clipOn, [this](bool on) { setting(kRecord, tr("Record while the squelch is open"), "rec.clip_on", on ? "1" : "0"); },
+             tr("Each transmission is its own file in the clips folder of the recordings folder. Set the squelch first: with it always open there is one long clip after another."));
+        { const std::string cs = fact("radio." + rn() + ".record.clips"); if (!cs.empty()) { v.push_back(rReadout(tr("Clips"), cs)); } }
+        const auto cf = [this](const char* key, const char* def) { const std::string f = fact(std::string("wirec.rec.") + key); return f.empty() ? std::string(def) : f; };
+        field(v, "c.pre", tr("Time before the transmission (s)"), cf("clip_pre", "2"), tr("0 to 10. Needs the replay buffer, which this raises for itself."));
+        field(v, "c.tail", tr("Time after it ends (s)"), cf("clip_tail", "3"), tr("0 to 30. A transmission that resumes inside this goes on in the same file."));
+        field(v, "c.min", tr("Shortest clip kept (s)"), cf("clip_min", "1"), tr("0 to 60. A shorter transmission is not kept."));
+        field(v, "c.max", tr("Longest clip (s)"), cf("clip_max", "600"), tr("10 to 3600. A longer transmission goes on in a new file."));
+        key(v, "c.apply", tr("Use these times"), [this, cf] {
+            ClipFields f; f.enabled = fact("wirec.rec.clip_on") == "1";
+            f.preRollS = dv("c.pre", cf("clip_pre", "2")); f.tailS = dv("c.tail", cf("clip_tail", "3")); f.minS = dv("c.min", cf("clip_min", "1")); f.maxClipS = dv("c.max", cf("clip_max", "600"));
+            const sll::Built b = clipsJson(f);
+            if (!b.ok) { refuseHere(kRecord, tr("Use these times"), b.err); return; }
+            const json j = json::parse(b.text);
+            setting(kRecord, tr("Use these times"), "rec.clip_pre", numberText(j.value("preRollS", 2.0)));
+            setting(kRecord, tr("Use these times"), "rec.clip_tail", numberText(j.value("tailS", 3.0)));
+            setting(kRecord, tr("Use these times"), "rec.clip_min", numberText(j.value("minS", 1.0)));
+            setting(kRecord, tr("Use these times"), "rec.clip_max", numberText(j.value("maxClipS", 600.0)), {"c.pre", "c.tail", "c.min", "c.max"});
+        });
+        const std::string rpNow = cf("replay_s", "0");
+        v.push_back(rHeading(tr("Replay buffer")));
+        field(v, "p.replay", tr("Audio kept in memory (seconds, 0 = none)"), rpNow, tr("0 to 120. 96 kB a second for each radio. An audio recording that starts begins with this much of what was just heard."));
+        v.push_back(rReadout(tr("It costs"), replayCost(numOf(dv("p.replay", rpNow)), 48000.0)));
+        { const std::string rp = fact("radio." + rn() + ".record.replay"); if (!rp.empty()) { v.push_back(rReadout(tr("Held now"), rp)); } }
+        key(v, "p.apply", tr("Keep this much audio"), [this] {
+            double sec = 0; std::string e;
+            if (!parseReplaySeconds(dv("p.replay", fact("wirec.rec.replay_s")), 120.0, sec, e)) { refuseHere(kRecord, tr("Keep this much audio"), e); return; }
+            setting(kRecord, tr("Keep this much audio"), "rec.replay_s", numberText(sec), {"p.replay"});
+        });
         endNote(v, kRecord);
     }
 

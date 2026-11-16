@@ -188,6 +188,7 @@ class Registration;  // core/thread_beats.hpp: the source thread's heartbeat is 
 // Forward declaration (core/recorder.hpp): the pipeline stores only
 // non-owning pointers, so the full type is needed in pipeline.cpp alone.
 class Recorder;
+class ReplayRing;   // screen lane S3
 
 // (SpectrumFrame moved to core/spectrum_frame.hpp with the fence: the window holds the frame it drew.)
 
@@ -1001,6 +1002,9 @@ public:
     GpuFftReport gpuFftReport() const;
     // wire-b end
     void setAudioRecorder(Recorder* r);
+    // SCREEN LANE S3 (G3-02, G3-03, G3-09): the replay buffer. The radio's finished 48 kHz audio (post-squelch, the same samples the audio recorder gets) and the squelch gate are written into it
+    // on the DSP thread; the caller keeps it alive until setReplayRing(nullptr) has returned (it takes audioMutex_, which the DSP thread holds while it writes).
+    void setReplayRing(ReplayRing* r);
 
 private:
     // *Main are catch-all wrappers; *Body holds the real loop. See the
@@ -1509,6 +1513,7 @@ private:
     Recorder* iqRecorder_ = nullptr;
     IqSink* iqSink_ = nullptr;   // wire-b: guarded by audioMutex_ (see setIqSink)
     Recorder* audioRecorder_ = nullptr;
+    ReplayRing* replayRing_ = nullptr;   // screen lane S3
 
     // Control operations (start/stop/setSource/setInputRateHz/dtor) serialize
     // against each other under controlMutex_; the threads themselves only

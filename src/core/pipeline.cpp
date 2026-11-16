@@ -33,6 +33,7 @@
 #include <cmath>
 
 #include "core/recorder.hpp"
+#include "core/replay_ring.hpp"   // screen lane S3
 
 namespace cascade::core {
 
@@ -2079,6 +2080,11 @@ void Pipeline::setAudioRecorder(Recorder* r) {
     audioRecorder_ = r;
 }
 
+void Pipeline::setReplayRing(ReplayRing* r) {
+    std::lock_guard<std::mutex> lk(audioMutex_);
+    replayRing_ = r;
+}
+
 std::size_t Pipeline::audioTap(float* dst, std::size_t n) const {
     // tapMutex_ alone, never audioMutex_: see the declaration for why and for
     // the lock order. The DSP thread holds this only while it writes a block's
@@ -3083,6 +3089,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // is independent of the output device and its volume.
     dspBeat("sink");
     if (audioRecorder_ != nullptr) { audioRecorder_->writeAudio(monoOut_.data(), k); }
+    if (replayRing_ != nullptr) { replayRing_->write(monoOut_.data(), k, squelchOpen_.load(std::memory_order_relaxed)); }   // screen lane S3: the replay buffer, with the carrier gate
     // THE SOUND CARD RUNS ON ITS OWN CLOCK. Everything above is in the
     // radio's time; the sink's ring is drained in the sound card's. The
     // DriftMatcher steers the ring's lead back to its target by resampling

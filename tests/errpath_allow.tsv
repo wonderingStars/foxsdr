@@ -3220,3 +3220,6 @@ src/slint/lanes3_logic.cpp::rawFileId::errassign::choose the sample format	ALLOW
 src/slint/lanes3_logic.cpp::rawFileId::errassign::sample rate	ALLOW	validation	2026-11-16
 src/slint/lanes3_logic.cpp::rawFileId::errassign::centre frequency	ALLOW	validation	2026-11-16
 src/slint/lanes3_logic.cpp::overviewJson::errassign::rows	ALLOW	validation	2026-11-16
+src/engine/engine.cpp::Engine::selectSourceById::errassign::that raw files format rate or path was not understood	ALLOW	ui-text: the id is built by the window's validated builder; a hand-made one is refused in words on the source panel, as every refused open is	2026-11-16
+src/engine/engine_recplay.cpp::Engine::recplayPump::errassign::the recording could not go on into a new file the folder is	ALLOW	RecordStart::poll counts this failed open (noteRecordFailed) where the answer is collected; this line is the sentence for the person	2026-11-16
+src/source/iq_file_source.cpp::IqFileSource::open::errassign::why	ALLOW	validation: restores the original refusal sentence after the readers declined the same file as well	2026-11-16

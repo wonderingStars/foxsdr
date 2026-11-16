@@ -3336,6 +3336,8 @@ private:
     void scheduleStopRun(std::uint32_t id, const std::string& why, bool early);
     void scheduleFacts(const std::function<void(const std::string&, const std::string&)>& put) const;
     // SCREEN LANE S3 (engine_recplay.cpp): the facts the recording and playback controls read.
+    void recplayPump();   // once a pass, every radio (G3-10 rollover, G3-03 / G3-09 clips, G3-02 replay buffer)
+    void recplayPreRoll(cascade::core::Recorder& rec);   // the replay buffer's audio, written ahead of an audio take that has just begun
     void recplayFacts(const std::function<void(const std::string&, const std::string&)>& put) const;
     void recplayRadioFacts(std::uint32_t n, const std::function<void(const std::string&, const std::string&)>& put) const;
     // Starts the monitor on the preset in airbandGroup_: 0 it did not start (airbandNote_ says why), 1 listening, 2 waiting for the patch.

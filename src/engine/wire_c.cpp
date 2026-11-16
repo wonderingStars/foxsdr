@@ -53,6 +53,16 @@ constexpr Spec kSpecs[] = {
     {"web.metrics", Kind::Bool, 0, 0, "0", ""},               // the /metrics page for a signed-in browser (Prometheus text format); off = as if it did not exist
     {"sig.symbol_rate", Kind::Real, 0, 1000000, "0", ""},         // the symbol rate in baud the user sets for plugins that can use it (0 = none); plugins read it with the host call symbol_rate
     {"web.cors_credentials", Kind::Choice, 0, 0, "off", "off"},   // credentialed cross-origin requests: never (the session cookie is SameSite=Strict; an owner decision with HTTPS)
+    // --- recording (screen lane S3, docs/multi-radio-records/screen-s3-recplay.md) ---
+    {"rec.roll_mb", Kind::Real, 0, 100000, "0", ""},         // a recording goes on into a new file after this many MB of samples (0 = no size limit)
+    {"rec.roll_min", Kind::Real, 0, 1440, "0", ""},          // ... or after this many minutes (0 = no time limit)
+    {"rec.roll_align", Kind::Bool, 0, 0, "0", ""},           // the time limit counts from the clock (a new file at every whole multiple of it, UTC), not from the start of the take
+    {"rec.clip_on", Kind::Bool, 0, 0, "0", ""},              // squelch-triggered recording: one file per transmission
+    {"rec.clip_pre", Kind::Real, 0, 10, "2", ""},            // seconds kept from before the squelch opened
+    {"rec.clip_tail", Kind::Real, 0, 30, "3", ""},           // seconds kept after it closed (a transmission that resumes inside this goes on in the same file)
+    {"rec.clip_min", Kind::Real, 0, 60, "1", ""},            // a transmission shorter than this is not kept
+    {"rec.clip_max", Kind::Real, 10, 3600, "600", ""},       // a transmission longer than this goes on in a new file
+    {"rec.replay_s", Kind::Real, 0, 120, "0", ""},           // seconds of the radio's audio kept in memory so that a take or a clip can begin before the key was pressed (0 = none)
 };
 constexpr std::size_t kSpecCount = sizeof(kSpecs) / sizeof(kSpecs[0]);
 

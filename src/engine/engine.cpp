@@ -6039,6 +6039,7 @@ void Engine::finishRecordStart(bool iq, cascade::gui::RecordStart::Result& r, do
         rx().iqRecordStartS_ = nowS;
         rx().pipeline_.setIqRecorder(&rx().iqRecorder_);
     } else {
+        recplayPreRoll(rec);   // screen lane S3: the replay buffer's audio goes first, when it is on
         rx().audioRecordStartS_ = nowS;
         rx().pipeline_.setAudioRecorder(&rx().audioRecorder_);
     }
@@ -11400,6 +11401,7 @@ void Engine::runPassPart(PassPart part) {
             pumpExtraReceivers();
             pumpSchedule();   // (timed recordings: engine_schedule.cpp)
             pumpMacros();     // (a macro being played: engine_macros.cpp)
+            forEachReceiver([this] { recplayPump(); });   // screen lane S3: rollover, clips and the replay buffer (engine_recplay.cpp)
             pumpWireB();      // (wire-b: the limit mask of every open radio: engine_wire_b.cpp)
             pumpWireC();      // wire-c (engine_wire_c.cpp)
             pollSmeterCal();  // (a calibration being measured: engine_smeter.cpp)
