@@ -541,7 +541,7 @@ NOT DRIVABLE by reason: readout 865, other 247, needs a signal (no fixture) 120,
 | 199 | Tooltip over band centre | tooltip | NOT DRIVABLE | - | a readout, not a control |
 | 200 | Tooltip over band edge | tooltip | NOT DRIVABLE | - | a readout, not a control |
 | 201 | Tooltip off the band | tooltip | NOT DRIVABLE | - | a readout, not a control |
-| 202 | Rest tip (4 s) | tooltip | NOT DRIVABLE | - | a four-second hover tip: the scripted input has no hover |
+| 202 | Rest tip (4 s) | tooltip | NOT DRIVABLE | - | a four-second hover tip: the scripted input has no hover; held by test_slint_spectrum (row 202) and test_slint_waterfall (row 213): the tip is not shown at 1.5 s, shown at 4.5 s, replaces the gesture tip, restarts on a move |
 | 203 | Zoom the spectrum in | key (shortcut) | DRIVEN+ASSERTED | main-spectrum-keys.txt | click "+" twice; expect the SPAN chip's words 1.538 then 1.183 MHz (no engine state) |
 | 204 | Zoom the spectrum out | key (shortcut) | DRIVEN+ASSERTED | main-spectrum-keys.txt | click the minus key; expect the SPAN chip back at 1.538 MHz |
 | 205 | Zoom back to the full span | key (shortcut) | DRIVEN+ASSERTED | main-spectrum-keys.txt | click Full span; expect the SPAN chip at 2.000 MHz |
@@ -557,7 +557,7 @@ NOT DRIVABLE by reason: readout 865, other 247, needs a signal (no fixture) 120,
 | 210 | Wheel / Shift+wheel | drag/gesture | NOT DRIVABLE | - | the scripted input has no wheel verb |
 | 211 | Tooltip (normal) | tooltip | NOT DRIVABLE | - | a readout, not a control |
 | 212 | Tooltip (Airband listening) | tooltip | DRIVEN | airband-spectrum | the tip is a hover; the monitor listening is driven and the plots read back |
-| 213 | Rest tip (4 s) | tooltip | NOT DRIVABLE | - | a four-second hover tip: the scripted input has no hover |
+| 213 | Rest tip (4 s) | tooltip | NOT DRIVABLE | - | a four-second hover tip: the scripted input has no hover; held by test_slint_spectrum (row 202) and test_slint_waterfall (row 213): the tip is not shown at 1.5 s, shown at 4.5 s, replaces the gesture tip, restarts on a move |
 | 214 | Marker tooltip | tooltip | NOT DRIVABLE | - | a readout, not a control |
 
 ### Spectrum and waterfall — Trace-mode menu (right-click on the spectrum)
@@ -821,7 +821,7 @@ NOT DRIVABLE by reason: readout 865, other 247, needs a signal (no fixture) 120,
 | 369 | Target list | table | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 370 | Details button | button (small) | NOT DRIVABLE | - | relocated: a click on a list row selects the target for the Target details drawer; there is no Details key |
 | 371 | Stop following | button (small) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
-| 372 | Stop following? dialog | dialog | NOT DRIVABLE | - | needs a dragged map with a followed target; the follow flag and the question are MapPage state |
+| 372 | Stop following? dialog | dialog | NOT DRIVABLE | - | needs a dragged map with a followed target; held by test_slint_host_kit (mapDragPans / mapFollowAnswer: a drag while following asks and does not pan, Keep following and Stop following answer it) |
 
 ### DECODE bank and plugin host — Target details (window)
 
@@ -3124,7 +3124,7 @@ NOT DRIVABLE by reason: readout 865, other 247, needs a signal (no fixture) 120,
 | 3039 | Unknown altitude | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 3040 | Empty state | readout | NOT DRIVABLE | - | a readout, not a control |
 | 3041 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | radar-3d.txt | state cfg.view3d contains radar:on=1 and radar:on=0 after the way back |
-| 3042 | Click an aircraft on the airspace to select it | gesture | NOT DRIVABLE | - | a click aimed at a projected marker: the scripted input cannot aim at one; test_slint_host_radar3d testPick holds the pick |
+| 3042 | Click an aircraft on the airspace to select it | gesture | NOT DRIVABLE | - | a click aimed at a projected marker: the scripted input cannot aim at one; test_slint_host_radar3d testPick holds the pick and test_slint_scene3d_well holds the well's pick callback (a press that did not drag, with its fractions) |
 | 3043 | VIEW VECTOR | key (segment) | DRIVEN+ASSERTED | tunnel-3d.txt | click "VECTOR"#2 (the toggle's own key); state view3d.tunnel.on 1 -> 0, cfg.view3d contains tunnel:on=0 |
 | 3044 | VIEW 3D TUNNEL | key (segment) | DRIVEN+ASSERTED | tunnel-3d.txt | click "3D TUNNEL"; state view3d.tunnel.on 0 -> 1, cfg.view3d contains tunnel:on=1 |
 | 3045 | The tunnel | picture | DRIVEN+ASSERTED | tunnel-3d.txt | state view3d.tunnel.renders, points, pixels, labels, w, h (what the renderer drew from the scope's I/Q) |
