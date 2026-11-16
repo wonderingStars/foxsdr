@@ -3115,6 +3115,7 @@
   "The restart did not finish within 45 seconds.": "Η επανεκκίνηση δεν ολοκληρώθηκε μέσα σε 45 δευτερόλεπτα.",
   "The restart ended with exit code %lu.": "Η επανεκκίνηση τελείωσε με κωδικό εξόδου %lu.",
   "The rows will join the preset \"%s\".": "Οι γραμμές θα προστεθούν στην προεπιλογή «%s».",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "Το patch που εκτελείται χρησιμοποιεί το ραδιόφωνο, γι' αυτό ο δέκτης είναι στη γεννήτρια σήματος μέχρι να σταματήσει το patch.",
   "The same data on a 3D view you can turn": "Τα ίδια δεδομένα σε μια προβολή 3D που μπορείτε να γυρίσετε",
   "The scope needs the receiver's position first.": "Η οθόνη ραντάρ χρειάζεται πρώτα τη θέση του δέκτη.",
   "The scope needs the receiver's position.": "Η οθόνη ραντάρ χρειάζεται τη θέση του δέκτη.",

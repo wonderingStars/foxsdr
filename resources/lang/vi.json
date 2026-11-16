@@ -3115,6 +3115,7 @@
   "The restart did not finish within 45 seconds.": "Việc khởi động lại không xong trong vòng 45 giây.",
   "The restart ended with exit code %lu.": "Việc khởi động lại kết thúc với mã thoát %lu.",
   "The rows will join the preset \"%s\".": "Các dòng sẽ được thêm vào mục cài sẵn \"%s\".",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "Patch đang chạy đang dùng radio, nên máy thu dùng bộ tạo tín hiệu cho đến khi patch được dừng.",
   "The same data on a 3D view you can turn": "Cùng dữ liệu trên chế độ xem 3D bạn có thể xoay",
   "The scope needs the receiver's position first.": "Màn hình radar cần vị trí máy thu trước.",
   "The scope needs the receiver's position.": "Màn hình radar cần vị trí máy thu.",

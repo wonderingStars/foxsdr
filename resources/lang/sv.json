@@ -3115,6 +3115,7 @@
   "The restart did not finish within 45 seconds.": "Omstarten blev inte klar inom 45 sekunder.",
   "The restart ended with exit code %lu.": "Omstarten avslutades med slutkod %lu.",
   "The rows will join the preset \"%s\".": "Raderna läggs till i förvalet ”%s”.",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "Den körande patchen använder radion, så mottagaren står på signalgeneratorn tills patchen stoppas.",
   "The same data on a 3D view you can turn": "Samma data i en 3D-vy som du kan vrida",
   "The scope needs the receiver's position first.": "Radarskärmen behöver mottagarens position först.",
   "The scope needs the receiver's position.": "Radarskärmen behöver mottagarens position.",

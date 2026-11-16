@@ -3115,6 +3115,7 @@
   "The restart did not finish within 45 seconds.": "Mulai ulang tidak selesai dalam 45 detik.",
   "The restart ended with exit code %lu.": "Mulai ulang berakhir dengan kode keluar %lu.",
   "The rows will join the preset \"%s\".": "Baris akan ditambahkan ke preset \"%s\".",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "Patch yang berjalan sedang memakai radio, sehingga penerima memakai generator sinyal sampai patch dihentikan.",
   "The same data on a 3D view you can turn": "Data yang sama pada tampilan 3D yang dapat diputar",
   "The scope needs the receiver's position first.": "Scope memerlukan posisi penerima terlebih dahulu.",
   "The scope needs the receiver's position.": "Scope memerlukan posisi penerima.",

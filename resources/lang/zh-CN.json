@@ -3115,6 +3115,7 @@
   "The restart did not finish within 45 seconds.": "重启未在 45 秒内完成。",
   "The restart ended with exit code %lu.": "重启已结束，退出代码 %lu。",
   "The rows will join the preset \"%s\".": "这些行将加入预设 \"%s\"。",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "正在运行的补丁占用了这台电台，因此在补丁停止之前，接收机使用信号发生器。",
   "The same data on a 3D view you can turn": "同样的数据，显示在可旋转的 3D 视图上",
   "The scope needs the receiver's position first.": "雷达显示器需要先设置接收机位置。",
   "The scope needs the receiver's position.": "雷达显示器需要接收机位置。",

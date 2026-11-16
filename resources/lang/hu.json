@@ -3115,6 +3115,7 @@
   "The restart did not finish within 45 seconds.": "Az újraindítás nem fejeződött be 45 másodpercen belül.",
   "The restart ended with exit code %lu.": "Az újraindítás %lu kilépési kóddal ért véget.",
   "The rows will join the preset \"%s\".": "A sorok a(z) „%s” presethez kerülnek.",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "A futó patch használja a rádiót, ezért a vevő a jelgenerátoron van, amíg a patch le nem áll.",
   "The same data on a 3D view you can turn": "Ugyanezek az adatok forgatható 3D nézeten",
   "The scope needs the receiver's position first.": "A radarernyőhöz előbb a vevő helye kell.",
   "The scope needs the receiver's position.": "A radarernyőhöz a vevő helye kell.",

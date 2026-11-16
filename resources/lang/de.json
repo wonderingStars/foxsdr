@@ -3115,6 +3115,7 @@
   "The restart did not finish within 45 seconds.": "Der Neustart wurde nicht innerhalb von 45 Sekunden abgeschlossen.",
   "The restart ended with exit code %lu.": "Der Neustart endete mit dem Exitcode %lu.",
   "The rows will join the preset \"%s\".": "Die Zeilen werden dem Preset „%s“ hinzugefügt.",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "Der laufende Patch benutzt das Radio, deshalb hängt der Empfänger am Signalgenerator, bis der Patch gestoppt wird.",
   "The same data on a 3D view you can turn": "Dieselben Daten in einer drehbaren 3D-Ansicht",
   "The scope needs the receiver's position first.": "Der Radarschirm braucht zuerst den Empfängerstandort.",
   "The scope needs the receiver's position.": "Der Radarschirm braucht den Empfängerstandort.",

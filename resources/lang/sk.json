@@ -3115,6 +3115,7 @@
   "The restart did not finish within 45 seconds.": "Reštart sa neskončil do 45 sekúnd.",
   "The restart ended with exit code %lu.": "Reštart skončil s návratovým kódom %lu.",
   "The rows will join the preset \"%s\".": "Riadky sa pridajú do predvoľby „%s“.",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "Bežiaci patch používa rádio, preto je prijímač na generátore signálu, kým sa patch nezastaví.",
   "The same data on a 3D view you can turn": "Tie isté údaje v 3D pohľade, ktorý môžete otáčať",
   "The scope needs the receiver's position first.": "Radar najprv potrebuje polohu prijímača.",
   "The scope needs the receiver's position.": "Radar potrebuje polohu prijímača.",

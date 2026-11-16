@@ -3115,6 +3115,7 @@
   "The restart did not finish within 45 seconds.": "再起動が 45 秒以内に完了しませんでした。",
   "The restart ended with exit code %lu.": "再起動は終了コード %lu で終わりました。",
   "The rows will join the preset \"%s\".": "行はプリセット「%s」に追加されます。",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "実行中のパッチが無線機を使用しているため、パッチを停止するまで受信機は信号ジェネレーターを使います。",
   "The same data on a 3D view you can turn": "同じデータを回転できる 3D ビューで",
   "The scope needs the receiver's position first.": "スコープには先に受信機の位置が必要です。",
   "The scope needs the receiver's position.": "スコープには受信機の位置が必要です。",

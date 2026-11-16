@@ -3115,6 +3115,7 @@
   "The restart did not finish within 45 seconds.": "Yeniden başlatma 45 saniye içinde tamamlanmadı.",
   "The restart ended with exit code %lu.": "Yeniden başlatma %lu çıkış koduyla sona erdi.",
   "The rows will join the preset \"%s\".": "Satırlar \"%s\" ön ayarına eklenecek.",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "Çalışan patch radyoyu kullanıyor; bu yüzden patch durdurulana kadar alıcı sinyal üreteci üzerinde çalışır.",
   "The same data on a 3D view you can turn": "Aynı veriler, çevirebileceğiniz 3B bir görünümde",
   "The scope needs the receiver's position first.": "Radar ekranı önce alıcının konumuna ihtiyaç duyar.",
   "The scope needs the receiver's position.": "Radar ekranı alıcının konumuna ihtiyaç duyar.",
