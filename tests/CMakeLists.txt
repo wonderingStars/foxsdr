@@ -764,6 +764,13 @@ if(NOT CASCADE_SANITIZE_ENABLED)
         if(TARGET ${_t})
             add_test(NAME ${_t}_free COMMAND ${_t})
             set_tests_properties(${_t}_free PROPERTIES ENVIRONMENT "FOXSDR_PASS=free" TIMEOUT 300)
+            # The stepped test and its _free twin are the same program in the same working directory: files they make there by name
+            # (test_diag_hang's cascade-hang-suppressed-0 was deleted under the other one: "filesystem error: cannot check if file is empty",
+            # std::terminate, in a parallel ctest run) collide when both run at once, so a pair never runs together.
+            if(TEST ${_t})
+                set_property(TEST ${_t} APPEND PROPERTY RESOURCE_LOCK ${_t}_and_free)
+                set_property(TEST ${_t}_free APPEND PROPERTY RESOURCE_LOCK ${_t}_and_free)
+            endif()
         endif()
     endforeach()
 endif()
