@@ -147,6 +147,10 @@ public:
 
     void stop() {
         if (!running_.exchange(false)) return;
+#if !defined(_WIN32)
+        // close() of a listening socket does not wake a thread blocked in accept() on Linux (closesocket() does on Windows): shutdown() does.
+        ::shutdown(listen_, SHUT_RDWR);
+#endif
         closeSocket(listen_);
         if (thread_.joinable()) thread_.join();
         std::lock_guard<std::mutex> lk(m_);
@@ -182,6 +186,11 @@ private:
 #if defined(_WIN32)
             DWORD tv = 1000;
             ::setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&tv), sizeof tv);
+#else
+            // The same one-second bound off Windows (the option was set on Windows only, so a client that sent less than a full request
+            // left this thread in recv() for ever, and stop() waited for it).
+            timeval tv{1, 0};
+            ::setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
 #endif
             std::string got;
             char buf[2048];
@@ -192,7 +201,11 @@ private:
             }
             if (mode == Mode::GarbageThenClose) {
                 const char* junk = "NOT-HTTP \x01\x02 garbage\r\n\r\n";
+#if defined(MSG_NOSIGNAL)
+                ::send(c, junk, static_cast<int>(std::strlen(junk)), MSG_NOSIGNAL);
+#else
                 ::send(c, junk, static_cast<int>(std::strlen(junk)), 0);
+#endif
             }
             closeSocket(c);
         }

@@ -20,6 +20,9 @@
 #include <random>
 #include <sstream>
 #include <thread>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -537,6 +540,13 @@ void testRealFiles() {
         CHECK(la == pl::csvHeader() && lb == pl::csvHeader() && l2.rfind("2009-02-13T00:00:05.000Z,0,", 0) == 0);
     }
     // the disk refuses: the target is a read-only file -> counted, never an exception, and the logger stays usable
+#if !defined(_WIN32)
+    if (::geteuid() == 0) {
+        // File permissions do not bind root: the "read-only" file is written, so there is no refusal to count. The same refusal is still
+        // proved below for a path that is a directory where a file is wanted, which fails for root as well.
+        std::printf("SKIP (root): the read-only file case needs a user whom file permissions bind\n");
+    } else
+#endif
     {
         pl::CsvOptions ro = o;
         ro.directory = (dir / "ro").string();
@@ -595,6 +605,10 @@ public:
 #if defined(_WIN32)
         DWORD ms = 300;
         ::setsockopt(s_, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&ms), sizeof ms);
+#else
+        // The same 300 ms bound off Windows: without it drain() blocked in recv() for ever once the datagrams were read (the 120 s timeout).
+        timeval tv{0, 300000};
+        ::setsockopt(s_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
 #endif
     }
     ~UdpStub() { net::closeSock(s_); }
@@ -635,6 +649,11 @@ public:
     }
     ~TcpStub() {
         stop_ = true;
+#if !defined(_WIN32)
+        // close() of a listening socket does not wake a thread blocked in accept() on Linux (Windows' closesocket() does), so the join
+        // below waited for ever (the 120 s timeout); shutdown() makes that accept() return.
+        ::shutdown(l_, SHUT_RDWR);
+#endif
         net::closeSock(l_);
         if (th_.joinable()) { th_.join(); }
     }
