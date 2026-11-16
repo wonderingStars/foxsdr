@@ -79,7 +79,7 @@
 +1 key enter
 +1 click "Use this name"
 +12 state ll.note.system contains "RDS log file name: Refused"
-+1 type "File name" "rds_{date}"
++1 type "File name" "rds_{date}_{radio}"
 +1 key enter
 +1 click "Use this name"
 +12 state ll.note.system contains "RDS log file name: done"
