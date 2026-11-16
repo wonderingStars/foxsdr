@@ -106,6 +106,7 @@
 #include <ctime>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -372,6 +373,18 @@ public:
     bool recording() const;
     RecordKind kind() const;
 
+    // SCREEN LANE S3, G3-10 (docs/multi-radio-records/screen-s3-recplay.md): ROLLOVER. A take that is long can go on into a NEXT FILE with no sample lost: the engine's pass opens the next file on a
+    // worker a little before the limit (rolloverWanted() says when) and hands it over with queueNext(); the writing thread then swaps files between two blocks - pointer moves only, no disk
+    // work, no wait - and the file it leaves goes to takeRolled() for the finishing worker. A file ends at the first block boundary at or after its limit (a block is at most 16 384 frames); a
+    // next file that is not ready in time is not waited for: the take simply goes on in its file (up to the WAV ceiling, which still ends it). Limits: data bytes (0 = none) and frames (0 = none).
+    void setRollover(std::uint64_t maxDataBytes, std::uint64_t maxFrames);
+    bool rolloverWanted() const;
+    void queueNext(OpenedFile&& next);
+    bool takeRolled(FinishRequest& out);
+    // The next file that was handed over but never used (the take ended first): closed, and its name returned so the empty file can be removed. False when none waits.
+    bool takeNextUnused(std::string& path);
+    std::uint64_t rolloverCount() const { return rollCount_.load(std::memory_order_relaxed); }
+
     // Sample frames / data-chunk payload bytes accepted so far. bytesWritten
     // excludes the 44-byte header: it is the amount of signal captured, which
     // is the number a recording UI wants.
@@ -457,6 +470,13 @@ private:
     std::atomic<std::uint64_t> dataBytes_{0};
     // Atomic because the DSP thread latches it and the GUI thread reads it
     // through writeFailed() to say so on the RECORDER card.
+    std::atomic<std::uint64_t> rollBytes_{0}, rollFrames_{0}, rollCount_{0};   // screen lane S3
+    std::atomic<bool> nextReady_{false};
+    std::mutex rollMu_;
+    OpenedFile nextFile_;
+    std::vector<FinishRequest> rolled_;
+    bool rollDue() const;
+    void rotate();   // the writing thread: swap to nextFile_ when one is ready
     std::atomic<bool> writeFailed_{false};
     // Same reason, and the discriminator between the two ways a take stops
     // taking — see writeFailed()/sizeLimitReached().

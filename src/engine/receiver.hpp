@@ -156,6 +156,7 @@ struct Receiver {
     // the waterfall's GL texture, whose deletion needs the creating GL context
     // current - run() tears the view down explicitly before destroying the
     // context, because AppWindow itself outlives it (destroyed in main()).
+    std::shared_ptr<void> recplayRt_;   // screen lane S3 (engine_recplay.cpp): the radio's clip recorder and replay buffer; declared BEFORE pipeline_ so it is destroyed after the DSP thread
     cascade::core::Pipeline pipeline_;
     // ---- device, open, fault and retry ----
     bool faultSeen_ = false;  // endTakesOnFault's edge: the latch as last frame saw it
@@ -283,6 +284,10 @@ struct Receiver {
     bool tuneLocked_ = false;   // the frequency lock (FOXAPP_OP_RADIO_LOCK, engine wiring W2): every way a retune reaches this radio is refused or a no-op
     bool deviceDirectPresent_ = false;        // the native RTL-SDR driver on a tuner that is not a Blog V4 (R11): the "direct_sampling" choice
     int deviceDirectChoice_ = 0;              // 0 automatic / 1 never / 2 I branch / 3 Q branch
+    bool deviceSoapyPresent_ = false;         // a SoapySDR driver that reports a bandwidth range or settings (G1-15, screen lane S5b): "soapy_bandwidth" and "soapy:<key>=<value>"
+    std::vector<std::pair<std::string, std::string>> deviceSoapyFacts_;   // what the driver reported, as (suffix after "radio.N.soapy.", value), refreshed at open and after every write
+    bool deviceIfBwPresent_ = false;          // the native RTL-SDR driver (G1-14, screen lane S5b): the "if_bandwidth" option, Hz, 0 = automatic
+    int deviceIfBw_ = 0;
     bool deviceOffsetTuningPresent_ = false;  // an rtl_tcp server's E4000 (R12), where its header names one
     bool deviceOffsetTuning_ = false;
     // The ACTIVE source's kind as the config store spells it. Tracked at each

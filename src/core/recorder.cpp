@@ -285,6 +285,7 @@ void Recorder::writeIq(const std::complex<float>* s, std::size_t n) {
         s == nullptr || n == 0 || writeFailed_.load(std::memory_order_acquire)) {
         return;
     }
+    if (rollDue()) { rotate(); }   // screen lane S3
     if (backend_) {
         // wire-a second pass: a take in RF64 or SigMF. No 4 GiB ceiling, no staging here: the writer encodes. A retune since the last block is logged first, so the new capture segment
         // starts at this block's first sample.
@@ -366,6 +367,7 @@ void Recorder::writeAudio(const float* s, std::size_t n) {
         s == nullptr || n == 0 || writeFailed_.load(std::memory_order_acquire)) {
         return;
     }
+    if (rollDue()) { rotate(); }   // screen lane S3
     std::size_t done = 0;
     while (done < n && !writeFailed_.load(std::memory_order_relaxed)) {
         // The ceiling ends the take here too — see writeIq. An audio take is
@@ -528,6 +530,66 @@ bool Recorder::finishFile(FinishRequest&& req) {
     std::FILE* raw = owned.file.release();
     if (std::fclose(raw) != 0) { ok = false; }
     return ok;
+}
+
+// ---- screen lane S3, G3-10: rollover --------------------------------------------------------------------------------------------------------------------------
+void Recorder::setRollover(std::uint64_t maxDataBytes, std::uint64_t maxFrames) {
+    rollBytes_.store(maxDataBytes, std::memory_order_relaxed);
+    rollFrames_.store(maxFrames, std::memory_order_relaxed);
+}
+
+bool Recorder::rollDue() const {
+    const std::uint64_t b = rollBytes_.load(std::memory_order_relaxed), f = rollFrames_.load(std::memory_order_relaxed);
+    if (b == 0 && f == 0) { return false; }
+    return (b != 0 && dataBytes_.load(std::memory_order_relaxed) >= b) || (f != 0 && frames_.load(std::memory_order_relaxed) >= f);
+}
+
+bool Recorder::rolloverWanted() const {
+    if (!recording_.load(std::memory_order_acquire) || nextReady_.load(std::memory_order_acquire)) { return false; }
+    const std::uint64_t b = rollBytes_.load(std::memory_order_relaxed), f = rollFrames_.load(std::memory_order_relaxed);
+    if (b == 0 && f == 0) { return false; }
+    // asked for at four fifths of the limit (and at once for a limit so small that the file is full before the pass looks)
+    return (b != 0 && dataBytes_.load(std::memory_order_relaxed) * 5 >= b * 4) || (f != 0 && frames_.load(std::memory_order_relaxed) * 5 >= f * 4);
+}
+
+void Recorder::queueNext(OpenedFile&& next) {
+    std::lock_guard<std::mutex> lk(rollMu_);
+    nextFile_ = std::move(next);   // (an unused one that was waiting closes here)
+    nextReady_.store(nextFile_.file || nextFile_.backend, std::memory_order_release);
+}
+
+bool Recorder::takeRolled(FinishRequest& out) {
+    std::lock_guard<std::mutex> lk(rollMu_);
+    if (rolled_.empty()) { return false; }
+    out = std::move(rolled_.front());
+    rolled_.erase(rolled_.begin());
+    return true;
+}
+
+bool Recorder::takeNextUnused(std::string& path) {
+    std::lock_guard<std::mutex> lk(rollMu_);
+    if (!nextReady_.load(std::memory_order_acquire)) { return false; }
+    path = nextFile_.path;
+    nextFile_ = OpenedFile{};
+    nextReady_.store(false, std::memory_order_release);
+    return true;
+}
+
+void Recorder::rotate() {
+    std::unique_lock<std::mutex> lk(rollMu_, std::try_to_lock);   // never waits: the control thread holds it for a pointer move only
+    if (!lk.owns_lock() || !nextReady_.load(std::memory_order_acquire)) { return; }
+    FinishRequest old;
+    if (!detachFile(old)) { return; }
+    rolled_.push_back(std::move(old));
+    fileBuf_ = std::move(nextFile_.buffer);
+    file_ = nextFile_.file.release();
+    backend_ = std::move(nextFile_.backend);
+    path_ = nextFile_.path;
+    frames_.store(0, std::memory_order_relaxed);
+    dataBytes_.store(0, std::memory_order_relaxed);
+    endedNs_.store(0, std::memory_order_relaxed);   // detachFile stamped an end; the take goes on
+    nextReady_.store(false, std::memory_order_release);
+    rollCount_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void Recorder::finalizeFile() {

@@ -151,6 +151,7 @@ src/core/disk_job.hpp::DiskJob::noteStuck::warn::% has not finished for % s it i
 src/core/dsp_benchmark.hpp::demodItem::errassign::e what	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/dsp_benchmark.hpp::fftItem::errassign::e what	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/dsp_benchmark.hpp::resampleItem::errassign::e what	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
+src/core/dsp_benchmark.hpp::runBenchItem::errassign::no such item	ALLOW	validation: an item number outside the list answers a failed item that the speed test shows on its own row	2026-11-16
 src/core/dsp_benchmark.hpp::timeIt::errassign::no usable timing	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/dsp_benchmark.hpp::vfoItem::errassign::e what	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/engine_measure.cpp::EngineMeasure::finish::stderr::cascade measurement result % could not be written	ALLOW	stderr line in a non-shipping or developer path	seed
@@ -379,6 +380,15 @@ src/core/omnirig_client.hpp::OmniRigClient::setMode::errassign::the rig is trans
 src/core/operating_aids.hpp::BandStacking::setBands::errassign::bad band	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/operating_aids.hpp::BandStacking::setBands::errassign::bad default in band	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/os_crash_record.cpp::findOsCrashRecord::swallow::catch	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
+src/core/overview_job.cpp::Job::start::errassign::the picture could not be made	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::cancelled	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::rows must be # to #	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::the file could not be opened	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::the file could not be read to its end it may have been cut s	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::the file does not say its sample rate	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::the file is shorter than one block of the transform	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::the transform size must be # # # or #	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::unknown raw sample format	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
 src/core/patch_audio.cpp::DeviceDest::open::errassign::no default sound output was found	PENDING:R-record	output failure (patch speaker WAV writer failed)	seed
 src/core/patch_audio.cpp::DeviceDest::open::errassign::the sound output	PENDING:R-record	output failure (patch speaker WAV writer failed)	seed
 src/core/patch_audio.cpp::Mp3Dest::work::errassign::cannot create the recordings folder	PENDING:R-record	output failure (patch speaker WAV writer failed)	seed
@@ -974,14 +984,23 @@ src/dsp/rds.cpp::RdsDecoder::processBaseband::errassign::ph # ph # ph	ALLOW	deco
 src/dsp/rds.cpp::RdsDecoder::processBaseband::errassign::std clamp # vr vi power_ # #	ALLOW	decoder / DSP parse state, no device or output	seed
 src/dsp/sam.hpp::SyncAm::process::errassign::std clamp mi den # #	ALLOW	decoder / DSP parse state, no device or output	seed
 src/dsp/stereo_fm.cpp::StereoFm::process::errassign::wrappi std atan2 dq di	ALLOW	decoder / DSP parse state, no device or output	seed
+src/engine/cat_link.cpp::CatLink::Run::setState::errassign::error	ALLOW	user-action: the person chose this CAT link; its failure is its own state, shown on the page as cat.link.error with the sentence, and the link never retries behind their back	2026-11-16
+src/engine/cat_link.cpp::CatLink::configure::errassign::give the baud rate the rig is set to # to #	ALLOW	user-action: the person chose this CAT link; its failure is its own state, shown on the page as cat.link.error with the sentence, and the link never retries behind their back	2026-11-16
+src/engine/cat_link.cpp::CatLink::configure::errassign::give the serial port for example com#	ALLOW	user-action: the person chose this CAT link; its failure is its own state, shown on the page as cat.link.error with the sentence, and the link never retries behind their back	2026-11-16
+src/engine/cat_link.cpp::CatLink::configure::errassign::no such cat mode	ALLOW	user-action: the person chose this CAT link; its failure is its own state, shown on the page as cat.link.error with the sentence, and the link never retries behind their back	2026-11-16
+src/engine/cat_link.cpp::CatLink::configure::errassign::omnirig has rig # and rig #	ALLOW	user-action: the person chose this CAT link; its failure is its own state, shown on the page as cat.link.error with the sentence, and the link never retries behind their back	2026-11-16
+src/engine/cat_link.cpp::runOmniRig::errassign::omnistatuswords s status	ALLOW	user-action: the person chose this CAT link; its failure is its own state, shown on the page as cat.link.error with the sentence, and the link never retries behind their back	2026-11-16
 src/engine/engine.cpp::Engine::applyCommand::errassign::blocked	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::applyCommand::errassign::d lasterror	PENDING:G3-control-refused	control refused (a radio setting failed: sourceError_ is the red line on screen; nothing is counted)	seed
+src/engine/engine.cpp::Engine::applyCommand::errassign::d lasterror#10	ALLOW	the refusal is the command's own answer to the person in the same call (refuse FOXAPI_FAILED with sourceError_); the radio-reports lane's hook at the shared refusal path covers it after the merge	2026-11-16
 src/engine/engine.cpp::Engine::applyCommand::errassign::d lasterror#2	PENDING:G3-control-refused	control refused (a radio setting failed: sourceError_ is the red line on screen; nothing is counted)	seed
 src/engine/engine.cpp::Engine::applyCommand::errassign::d lasterror#3	PENDING:G3-control-refused	control refused (a radio setting failed: sourceError_ is the red line on screen; nothing is counted)	seed
 src/engine/engine.cpp::Engine::applyCommand::errassign::d lasterror#4	PENDING:G3-control-refused	control refused (a radio setting failed: sourceError_ is the red line on screen; nothing is counted)	seed
 src/engine/engine.cpp::Engine::applyCommand::errassign::d lasterror#5	PENDING:G3-control-refused	control refused (a radio setting failed: sourceError_ is the red line on screen; nothing is counted)	seed
 src/engine/engine.cpp::Engine::applyCommand::errassign::d lasterror#6	PENDING:G3-control-refused	control refused (a radio setting failed: sourceError_ is the red line on screen; nothing is counted)	seed
 src/engine/engine.cpp::Engine::applyCommand::errassign::d lasterror#7	PENDING:G3-control-refused	control refused (a radio setting failed: sourceError_ is the red line on screen; nothing is counted)	seed
+src/engine/engine.cpp::Engine::applyCommand::errassign::d lasterror#8	ALLOW	the refusal is the command's own answer to the person in the same call (refuse(FOXAPI_FAILED, sourceError_)); the radio-reports lane's hook at the shared refusal path covers it after the merge	2026-11-16
+src/engine/engine.cpp::Engine::applyCommand::errassign::d lasterror#9	ALLOW	the refusal is the command's own answer to the person in the same call (refuse FOXAPI_FAILED with sourceError_); the radio-reports lane's hook at the shared refusal path covers it after the merge	2026-11-16
 src/engine/engine.cpp::Engine::applyCommand::errassign::kaudiobusynote	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::applyCommand::errassign::ksiteplugindesktoponly	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::applyCommand::errassign::no catalogue entry with that id fetch the catalogue and try	ALLOW	result text of an engine operation shown to the user	seed
@@ -990,6 +1009,7 @@ src/engine/engine.cpp::Engine::applyCommand::errassign::rx device_ lasterror	PEN
 src/engine/engine.cpp::Engine::applyCommand::errassign::rx device_ lasterror#2	PENDING:G3-control-refused	control refused (a radio setting failed: sourceError_ is the red line on screen; nothing is counted)	seed
 src/engine/engine.cpp::Engine::applyCommand::errassign::rx device_ lasterror#3	PENDING:G3-control-refused	control refused (a radio setting failed: sourceError_ is the red line on screen; nothing is counted)	seed
 src/engine/engine.cpp::Engine::applyCommand::errassign::set sourceerror	PENDING:reports-not-in-function	survey: REPORTS (sourceError_ at the open result (noteRadioFail count; D4 upgrade)) but no reporting call encloses the site	seed
+src/engine/engine.cpp::Engine::applyCommand::errassign::sp lasterror	ALLOW	the refusal is the command's own answer to the person in the same call (refuse FOXAPI_FAILED with sourceError_); the radio-reports lane's hook at the shared refusal path covers it after the merge	2026-11-16
 src/engine/engine.cpp::Engine::applyCommand::errassign::text	ALLOW	ui-text: the window's own validation message (a typed frequency it could not parse)	sweep-a
 src/engine/engine.cpp::Engine::applyCommand::errassign::the box that says what a plugin site is was not ticked	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::applyCommand::errassign::why	ALLOW	result text of an engine operation shown to the user	seed
@@ -1061,6 +1081,7 @@ src/engine/engine.cpp::Engine::rescanPlugins::warn::plugin not loaded % %	ALLOW	
 src/engine/engine.cpp::Engine::restoreQuarantinedPlugins::errassign::cannot delete the superseded	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::restoreQuarantinedPlugins::errassign::cannot reenable	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::scanNative::log::source % native sdrplay rows hidden the sdrplay api is insta	ALLOW	engine result text shown to the user	seed
+src/engine/engine.cpp::Engine::selectSourceById::errassign::that raw files format rate or path was not understood	ALLOW	ui-text: the id is built by the window's validated builder; a hand-made one is refused in words on the source panel, as every refused open is	2026-11-16
 src/engine/engine.cpp::Engine::startAddAll::errassign::plan blockedreason	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::startAudioRecording::errassign::err	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::startControlThread::warn::engine pass no highresolution timer here falling back to a %	ALLOW	environment note; frame-timing already counts slow frames	seed
@@ -1116,6 +1137,7 @@ src/engine/engine_radios.cpp::Engine::publishExtraReceivers::errassign::rx sourc
 src/engine/engine_rawiq.cpp::Engine::openRawIqAt::errassign::why	ALLOW	engine result text shown to the user	seed
 src/engine/engine_recname.cpp::Engine::applyRecordName::warn::record the filename template could not be used for this take	ALLOW	the user's own naming template or daily-folder setting refused (the take keeps its default)	seed
 src/engine/engine_recname.cpp::Engine::loadRecordName::warn::record the filename template in recordnametxt was refused %	ALLOW	the user's own naming template or daily-folder setting refused (the take keeps its default)	seed
+src/engine/engine_recplay.cpp::Engine::recplayPump::errassign::the recording could not go on into a new file the folder is	ALLOW	RecordStart::poll counts this failed open (noteRecordFailed) where the answer is collected; this line is the sentence for the person	2026-11-16
 src/engine/engine_schedule.cpp::Engine::pumpSchedule::warn::schedule timed recording % missed % starts	PENDING:R-record	output failure (a scheduled recording did not start or missed starts)	seed
 src/engine/engine_schedule.cpp::Engine::pumpSchedule::warn::schedule timed recording % refused %	PENDING:R-record	output failure (a scheduled recording did not start or missed starts)	seed
 src/engine/engine_schedule.cpp::Engine::scheduleBegin::warn::schedule timed recording % was not started %	PENDING:R-record	output failure (a scheduled recording did not start or missed starts)	seed
@@ -1164,6 +1186,10 @@ src/engine/fox_engine_api.cpp::ApiHostImpl::applyTestHook::errassign::t#3	ALLOW	
 src/engine/fox_engine_api.cpp::ApiHostImpl::txPass::errassign::tx lasterror	ALLOW	API reply text returned to the caller (the caller shows it)	seed
 src/engine/fox_engine_api.cpp::apiCloseSession::swallow::catch	ALLOW	teardown-time catch-all of a future/thread	seed
 src/engine/fox_engine_api.cpp::apiDestroy::swallow::catch	ALLOW	teardown-time catch-all of a future/thread	seed
+src/engine/omnirig_com.cpp::openOmniRigCom::errassign::catlink omnirigneededsentence	ALLOW	user-action: the person chose this CAT link; its failure is its own state, shown on the page as cat.link.error with the sentence, and the link never retries behind their back	2026-11-16
+src/engine/omnirig_com.cpp::openOmniRigCom::errassign::omnirig did not give a rig object for that slot	ALLOW	user-action: the person chose this CAT link; its failure is its own state, shown on the page as cat.link.error with the sentence, and the link never retries behind their back	2026-11-16
+src/engine/omnirig_com.cpp::openOmniRigCom::errassign::omnirig is installed but would not start start omnirig yours	ALLOW	user-action: the person chose this CAT link; its failure is its own state, shown on the page as cat.link.error with the sentence, and the link never retries behind their back	2026-11-16
+src/engine/omnirig_com.cpp::openOmniRigCom::errassign::omnirig runs on windows only	ALLOW	user-action: the person chose this CAT link; its failure is its own state, shown on the page as cat.link.error with the sentence, and the link never retries behind their back	2026-11-16
 src/engine/plugin_ui_port.cpp::PluginUiPortImpl::~PluginUiPortImpl::warn::plugin ui the port was destroyed while still connected its o	ALLOW	programming-contract note (tests cover the order); no user effect	seed
 src/engine/process_boot.cpp::armStopSignals::stderr::foxsdrengine could not install the stop signal handlers only	PENDING:unsure	UNSURE: stderr line in a start-up path: read it	seed
 src/engine/process_boot.cpp::parseFlags::stderr::cascade diagstall requires a duration in ms	ALLOW	command-line / developer output (a console nobody runs the app from; the user chose the flag)	seed
@@ -1420,6 +1446,12 @@ src/gui/software_gl.cpp::tellUserRelaunchFailed::log::window error dialog shown	
 src/gui/software_gl.cpp::tellUserRelaunchFailed::log::window error dialog suppressed for a flagged run	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/gui/software_gl.cpp::tellUserRelaunchFailed::stderr::cascade the software renderer could not be started %	PENDING:unsure	UNSURE: stderr line in a start-up path: read it	seed
 src/gui/software_gl.cpp::tellUserRelaunchFailed::warn::window the second foxsdr process could not be started window	PENDING:S2-window	window start failure (the relaunch for the software renderer failed)	seed
+src/input/hid_win.cpp::HidInputDevice::open::errassign::cannot open	ALLOW	teardown: the knob layer returns the text to its caller (the controller row in SYSTEM shows it); a controller is not a radio	2026-11-16
+src/input/hid_win.cpp::HidInputDevice::open::errassign::could not start the reader	ALLOW	teardown: the knob layer returns the text to its caller (the controller row in SYSTEM shows it); a controller is not a radio	2026-11-16
+src/input/hid_win.cpp::HidInputDevice::open::errassign::this interface of	ALLOW	teardown: the knob layer returns the text to its caller (the controller row in SYSTEM shows it); a controller is not a radio	2026-11-16
+src/input/hid_win.cpp::workerMain::errassign::getlasterror	ALLOW	teardown: the knob layer returns the text to its caller (the controller row in SYSTEM shows it); a controller is not a radio	2026-11-16
+src/input/midi_win.cpp::MidiInputPort::open::errassign::cannot open midi input	ALLOW	teardown: the knob layer returns the text to its caller (the controller row shows it); a controller is not a radio	2026-11-16
+src/input/midi_win.cpp::MidiInputPort::open::errassign::cannot start midi input	ALLOW	teardown: the knob layer returns the text to its caller (the controller row shows it); a controller is not a radio	2026-11-16
 src/input_hid/hid_descriptor.hpp::parseDescriptor::errassign::msg	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/main.cpp::main::stderr::cascade %	PENDING:unsure	UNSURE: stderr line in a start-up path: read it	seed
 src/main.cpp::main::stderr::cascade safe mode no plugin will be loaded in this session	ALLOW	command-line / developer output (a console nobody runs the app from; the user chose the flag)	seed
@@ -1700,6 +1732,10 @@ src/slint/kit_publish_mapj.cpp::KitPublisher::fillAntenna::errassign::ss mj_ ant
 src/slint/kit_publish_mapj.cpp::KitPublisher::mapJAct::errassign::ismin j altminerror j altmaxerror	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/kit_publish_mapj.cpp::KitPublisher::mapJAct::errassign::not a number between # and #	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/kit_publish_mapj.cpp::KitPublisher::mapJAct::errassign::that is not a number this field accepts	ALLOW	UI result text: the failure is classified at the site that produced it	seed
+src/slint/knob_host.cpp::KnobHost::Impl::tryOpen::errassign::could not be opened	ALLOW	ui-text: the reason a controller is not open is shown on its row in SYSTEM, where the person chose it	2026-11-16
+src/slint/knob_host.cpp::KnobHost::status::errassign::it second error	ALLOW	ui-text: the reason a controller is not open is shown on its row in SYSTEM, where the person chose it	2026-11-16
+src/slint/knob_host.cpp::KnobHost::tick::errassign::the device was unplugged	ALLOW	ui-text: the reason a controller is not open is shown on its row in SYSTEM, where the person chose it	2026-11-16
+src/slint/knob_host_win.cpp::realEnv::errassign::the device is no longer listed	ALLOW	ui-text: the reason a controller is not open is shown on its row in SYSTEM, where the person chose it	2026-11-16
 src/slint/lanek_audio.cpp::ToneOut::feed::errassign::the sound output failed	ALLOW	UI result text (a write error of the access lane's test tone): the tone stops itself and the Accessibility section shows lastError() as its warning row (lanek_publish.cpp tick); the tone is the person's own choice, not a radio	linux-slint-2
 src/slint/lanek_audio.cpp::ToneOut::start::errassign::no sound output could be opened	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanek_audio.cpp::ToneOut::start::errassign::no sound output could be opened#2	ALLOW	UI result text (the ALSA open of the access lane's test tone): lastError() is what the Accessibility section shows the person, with ALSA's own reason	linux-slint-2
@@ -1746,6 +1782,45 @@ src/slint/lanem_logic.cpp::parseRitLimits::errassign::clear on a retune of	ALLOW
 src/slint/lanem_logic.cpp::parseRitLimits::errassign::largest offset	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanem_logic.cpp::parseStepBlocks::errassign::a step is at least one block forward or back	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanes2_logic.cpp::parseFrameRate::errassign::the frame rate is # automatic or # to # a second	ALLOW	validation: a typed frame rate outside 0 or 1 to 120 is refused beside the field the person typed it into, before anything is sent; nothing failed	2026-11-16 S2
+src/slint/lanes3_logic.cpp::checkNameTemplate::errassign::e error	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::clipsJson::errassign::longest clip	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::clipsJson::errassign::shortest clip kept	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::clipsJson::errassign::time after it ends	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::clipsJson::errassign::time before the transmission	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::localToUnix::errassign::that time does not exist here the clocks skip it that day	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::overviewJson::errassign::rows	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseCentre::errassign::e	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseClock::errassign::that time does not exist	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseClock::errassign::type the time as #	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseDate::errassign::that date does not exist	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseDate::errassign::that date does not exist#2	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseDate::errassign::type the date as #	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseLoop::errassign::loop end	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseLoop::errassign::loop start	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseLoop::errassign::the loop must start before it ends	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parsePosition::errassign::allowed	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parsePosition::errassign::type a place in the recording	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parsePosition::errassign::type seconds or minutesseconds	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parsePosition::errassign::type seconds or minutesseconds#2	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseRolloverMB::errassign::allowed # no limit or # #	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseRolloverMinutes::errassign::allowed # no limit or # #	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseWithUnit::errassign::allowed	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseWithUnit::errassign::e	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseWithUnit::errassign::type a number	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::rawFileId::errassign::centre frequency	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::rawFileId::errassign::choose the sample format	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::rawFileId::errassign::sample rate	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::rawFileId::errassign::type the full path of the file	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::rolloverJson::errassign::a file on the clock needs a time limit	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::bandwidth khz	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::frequency mhz	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::length minutes	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::length minutes#2	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::name at most # characters	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::tick audio iq or both	ALLOW	validation	2026-11-16
+src/slint/lanex_bench.cpp::BenchJob::work::errassign::e what	ALLOW	ui-text: a failed speed-test item is shown on its own row with its reason	2026-11-16
+src/slint/lanex_bench.cpp::BenchJob::work::errassign::unknown error	ALLOW	ui-text: a failed speed-test item is shown on its own row with its reason	2026-11-16
+src/slint/lanex_publish.cpp::realItem::errassign::r error	ALLOW	ui-text: copied to the speed-test row that shows it	2026-11-16
 src/slint/main.cpp::main::errassign::ui window set_rendering_notifier framemeter slint renderings	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/main.cpp::main::log::scanner the engine did not take the memories thresholds	ALLOW	ui-text: a window command the engine would not take is logged; the engine fact scan.memthresholds says what it holds and the push is repeated on the next change	e1
 src/slint/main.cpp::main::stderr::%	ALLOW	command-line / developer output (a console nobody runs the app from; the user chose the flag)	seed
@@ -1826,6 +1901,18 @@ src/slint/s5_logic.cpp::parsePpmSeconds::errassign::allowed	ALLOW	validation	202
 src/slint/s5_logic.cpp::validHost::errassign::an address has letters digits dots dashes and colons only	ALLOW	validation	2026-11-16
 src/slint/s5_logic.cpp::validHost::errassign::that address is too long	ALLOW	validation	2026-11-16
 src/slint/s5_logic.cpp::validHost::errassign::type the address of the streams computer	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::parseIfBandwidthKHz::errassign::allowed	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::parseSoapyBandwidthKHz::errassign::allowed	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyValueText::errassign::allowed	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyValueText::errassign::no control characters	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyValueText::errassign::that is not one of the choices the driver lists	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyValueText::errassign::that is too long	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyValueText::errassign::this setting is on or off	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyValueText::errassign::type a number	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyValueText::errassign::type a whole number	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyWriteCommand::errassign::that is too long	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyWriteCommand::errassign::this settings name cannot be written from here	ALLOW	validation	2026-11-16
+src/slint/s5b_rows.cpp::S5Rows::buildCat::errassign::catlinkerror	ALLOW	ui-text	2026-11-16
 src/slint/sdrplaydiag_logic.cpp::SdrPlayDiag::poll::warn::sdrplay diagnostic wrote no file exit %	ALLOW	user-action: the SDRplay diagnostic the person started; its failure is shown in the dialog they opened and logged, and the probe is not a radio open (window gaps 2)	merge 6
 src/slint/sdrplaydiag_logic.cpp::SdrPlayDiag::run::warn::sdrplay diagnostic could not start %	ALLOW	user-action: the SDRplay diagnostic the person started; its failure is shown in the dialog they opened and logged, and the probe is not a radio open (window gaps 2)	merge 6
 src/slint/signal_logic.cpp::readImportDialog::errassign::o import_reason	ALLOW	UI result text: the failure is classified at the site that produced it	seed
@@ -2101,6 +2188,25 @@ src/source/fcd_hid_win.cpp::openFcdHid::errassign::that is not a funcube dongle 
 src/source/fcd_hid_win.cpp::openFcdHid::errassign::the funcube dongle control link is built for windows only	ALLOW	open-path reason: set while the source's open() runs and read back as the open's failure. Every caller of open() for a radio: engine.cpp:1901 (worker, r.error = lastError(), counted at :1641 noteRadioFail unless the same busy incident repeats or the person already chose another source, :1625 asyncOpenStillWanted); engine.cpp:3121 (saved radio, counted at :10171 and engine_radio_saved.cpp:212); engine_patch_radios.cpp:593 (counted at :329, files excluded); engine_soundcard.cpp:201 (sound card); the developer command-line tools tool_modes.cpp:241, :433 and rtlsdr_check.cpp:74 print the failure to their console, which is their whole output	sweep-a
 src/source/fcd_hid_win.cpp::openFcdHid::errassign::the funcube dongles control interface could not be opened is	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/fcd_hid_win.cpp::openFcdHid::errassign::the funcube dongles control interface did not describe its r	ALLOW	open-path reason: set while the source's open() runs and read back as the open's failure. Every caller of open() for a radio: engine.cpp:1901 (worker, r.error = lastError(), counted at :1641 noteRadioFail unless the same busy incident repeats or the person already chose another source, :1625 asyncOpenStillWanted); engine.cpp:3121 (saved radio, counted at :10171 and engine_radio_saved.cpp:212); engine_patch_radios.cpp:593 (counted at :329, files excluded); engine_soundcard.cpp:201 (sound card); the developer command-line tools tool_modes.cpp:241, :433 and rtlsdr_check.cpp:74 print the failure to their console, which is their whole output	sweep-a
+src/source/fobos_source.cpp::FobosSource::Impl::call::seterr::the fobos sdr has stopped answering foxsdr must be restarted	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	s5c
+src/source/fobos_source.cpp::FobosSource::Impl::call::seterr::the fobos sdr is not open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	s5c
+src/source/fobos_source.cpp::FobosSource::Impl::markDead::errassign::why	ALLOW	device dead latch: the reason text of a radio the bridge condemns; the pipeline's fault latch reports it	s5c
+src/source/fobos_source.cpp::FobosSource::Impl::setError::errassign::e	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	s5c
+src/source/fobos_source.cpp::FobosSource::closeDevice::errassign::i error keptwhile i deadwhile	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	s5c
+src/source/fobos_source.cpp::FobosSource::closeDevice::errassign::the fobos library did not answer foxsdr must be restarted to	ALLOW	the abandoned radio's own reason text; the radio is already latched dead, which is reported	s5c
+src/source/fobos_source.cpp::FobosSource::open::errassign::c sentence	ALLOW	reports: the reason travels in lastError() to the open result, which the engine's open-failure path reports (a radio the person chose that did not open)	s5c
+src/source/fobos_source.cpp::FobosSource::open::errassign::e	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	s5c
+src/source/fobos_source.cpp::FobosSource::open::errassign::the fobos sdr library was not found looked for	ALLOW	reports: the reason travels in lastError() to the open result, which the engine's open-failure path reports (a radio the person chose that did not open)	s5c
+src/source/fobos_source.cpp::FobosSource::open::errassign::this library does not offer what foxsdr needs for a fobos sd	ALLOW	reports: the reason travels in lastError() to the open result, which the engine's open-failure path reports (a radio the person chose that did not open)	s5c
+src/source/fobos_source.cpp::FobosSource::open::seterr::	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	s5c
+src/source/fobos_source.cpp::FobosSource::open::seterr::the fobos settings are not valid rate index timeout and sile	ALLOW	reports: the reason travels in lastError() to the open result, which the engine's open-failure path reports (a radio the person chose that did not open)	s5c
+src/source/fobos_source.cpp::FobosSource::setCenterFrequencyHz::seterr::that is not a frequency the radio can use	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	s5c
+src/source/fobos_source.cpp::FobosSource::setGainDb::seterr::that is not a gain setting	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	s5c
+src/source/fobos_source.cpp::FobosSource::setGainDb::seterr::this radio has no gain called	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	s5c
+src/source/fobos_source.cpp::FobosSource::setSampleRateHz::seterr::setsampleratehz requires a positive rate	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	s5c
+src/source/fobos_source.cpp::FobosSource::start::seterr::the fobos sdr is not open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	s5c
+src/source/fobos_source.cpp::FobosSource::start::seterr::the radio would not start streaming	ALLOW	stream start refused: the reason (the library's own words) travels in lastError() to the start result, which the engine reports	s5c
+src/source/fobos_source.cpp::trampoline::swallow::catch	ALLOW	an exception thrown inside the vendor library's streaming call is contained here; the stream then goes silent and the silence watchdog marks the radio dead, which the radio-failure path reports	s5c
 src/source/fx2_loader.cpp::fail::errassign::line # std string head std string what	ALLOW	open-path reason: set while the source's open() runs and read back as the open's failure. Every caller of open() for a radio: engine.cpp:1901 (worker, r.error = lastError(), counted at :1641 noteRadioFail unless the same busy incident repeats or the person already chose another source, :1625 asyncOpenStillWanted); engine.cpp:3121 (saved radio, counted at :10171 and engine_radio_saved.cpp:212); engine_patch_radios.cpp:593 (counted at :329, files excluded); engine_soundcard.cpp:201 (sound card); the developer command-line tools tool_modes.cpp:241, :433 and rtlsdr_check.cpp:74 print the failure to their console, which is their whole output	sweep-a
 src/source/fx2_loader.cpp::loadImage::errassign::msg	ALLOW	open-path reason: set while the source's open() runs and read back as the open's failure. Every caller of open() for a radio: engine.cpp:1901 (worker, r.error = lastError(), counted at :1641 noteRadioFail unless the same busy incident repeats or the person already chose another source, :1625 asyncOpenStillWanted); engine.cpp:3121 (saved radio, counted at :10171 and engine_radio_saved.cpp:212); engine_patch_radios.cpp:593 (counted at :329, files excluded); engine_soundcard.cpp:201 (sound card); the developer command-line tools tool_modes.cpp:241, :433 and rtlsdr_check.cpp:74 print the failure to their console, which is their whole output	sweep-a
 src/source/fx2_loader.cpp::loadImage::errassign::the firmware image is not valid	ALLOW	open-path reason: set while the source's open() runs and read back as the open's failure. Every caller of open() for a radio: engine.cpp:1901 (worker, r.error = lastError(), counted at :1641 noteRadioFail unless the same busy incident repeats or the person already chose another source, :1625 asyncOpenStillWanted); engine.cpp:3121 (saved radio, counted at :10171 and engine_radio_saved.cpp:212); engine_patch_radios.cpp:593 (counted at :329, files excluded); engine_soundcard.cpp:201 (sound card); the developer command-line tools tool_modes.cpp:241, :433 and rtlsdr_check.cpp:74 print the failure to their console, which is their whole output	sweep-a
@@ -2335,6 +2441,7 @@ src/source/iiod_client.cpp::parseContext::errassign::the context xml has an unte
 src/source/iiod_client.cpp::parseContext::errassign::the iio context has no devices in it	PENDING:reports-not-in-function	survey: REPORTS (the reason travels in lastError() to the open result: engine noteRadioFail (count only; D4 upgrade)) but no reporting call encloses the site	seed
 src/source/iiod_client.cpp::parseContext::errassign::what answered is not an iio context no context element	PENDING:reports-not-in-function	survey: REPORTS (the reason travels in lastError() to the open result: engine noteRadioFail (count only; D4 upgrade)) but no reporting call encloses the site	seed
 src/source/iq_file_source.cpp::IqFileSource::fail::errassign::std move msg	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	seed
+src/source/iq_file_source.cpp::IqFileSource::open::errassign::why	ALLOW	validation: restores the original refusal sentence after the readers declined the same file as well	2026-11-16
 src/source/iq_file_source.cpp::IqFileSource::readNormal::errassign::io error while reading	PENDING:G3-control-refused	control refused (the radio would not take a setting; reported by the engine control hook)	seed
 src/source/iq_file_source.cpp::IqFileSource::start::errassign::start before a successful open	ALLOW	caller contract: start() before a successful open() is a misuse the caller is told about	sweep-a
 src/source/iq_playback.hpp::PlaybackModel::open::errassign::no source	ALLOW	parse / validation text in a protocol or file helper; carried upward by the owning source, classified there	seed
@@ -2561,6 +2668,9 @@ src/source/rtlsdr_source.cpp::RtlSdrSource::setGainDb::seterr::setgaindb with no
 src/source/rtlsdr_source.cpp::RtlSdrSource::setGainDb::seterr::the radio is busy try again	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/rtlsdr_source.cpp::RtlSdrSource::setGainDb::seterr::this radio has faulted reopen it	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/rtlsdr_source.cpp::RtlSdrSource::setGainDb::seterr::this radio has no gain called	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
+src/source/rtlsdr_source.cpp::RtlSdrSource::setIfBandwidthHz::seterr::setifbandwidthhz with no radio open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/rtlsdr_source.cpp::RtlSdrSource::setIfBandwidthHz::seterr::the radio is busy try again	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/rtlsdr_source.cpp::RtlSdrSource::setIfBandwidthHz::seterr::this radio has faulted reopen it	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
 src/source/rtlsdr_source.cpp::RtlSdrSource::setSampleRateHz::seterr::setsampleratehz requires a positive rate	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/rtlsdr_source.cpp::RtlSdrSource::setSampleRateHz::seterr::setsampleratehz with no radio open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/rtlsdr_source.cpp::RtlSdrSource::setSampleRateHz::seterr::the radio is busy try again	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
@@ -2701,6 +2811,7 @@ src/source/sdrplay_source.cpp::SdrPlaySource::drainEventLogs::warn::source sdrpl
 src/source/sdrplay_source.cpp::SdrPlaySource::drainEventLogs::warn::source sdrplay device failure stopping	PENDING:reports-not-in-function	survey: REPORTS (SdrLost / SdrEnum / DevLatch / LinkStranded / LateCall / VendorCall counters) but no reporting call encloses the site	seed
 src/source/sdrplay_source.cpp::SdrPlaySource::getParamsLocked::errassign::a getdeviceparams device_ dev deviceparams_	DETAIL-OF:src/source/sdrplay_source.cpp::SdrPlaySource::getParamsLocked::seterr::sdrplay	reported one level up by the driver site named in the verdict	rra2
 src/source/sdrplay_source.cpp::SdrPlaySource::getParamsLocked::seterr::the sdrplay api returned no channel parameters for the selec	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
+src/source/sdrplay_source.cpp::SdrPlaySource::lowIfFallBack::warn::source sdrplay lowif fell back to zeroif %	ALLOW	user-action: the person switched low-IF on; a refusal or the first-stream fallback is shown on the page as the radio.N.sdrplay.lowIfNote fact and logged; OPEN ROW: send the fallback as an issue report	2026-11-16
 src/source/sdrplay_source.cpp::SdrPlaySource::maybeWriteHealth::warn::%	PENDING:unsure	UNSURE: driver warning not matched by a rule; read it	seed
 src/source/sdrplay_source.cpp::SdrPlaySource::noteIfServiceDead::warn::source sdrplay % the service stopped answering the radio is	PENDING:unsure	UNSURE: driver warning not matched by a rule; read it	seed
 src/source/sdrplay_source.cpp::SdrPlaySource::open::seterr::	ALLOW	open-path reason: set while the source's open() runs and read back as the open's failure. Every caller of open() for a radio: engine.cpp:1901 (worker, r.error = lastError(), counted at :1641 noteRadioFail unless the same busy incident repeats or the person already chose another source, :1625 asyncOpenStillWanted); engine.cpp:3121 (saved radio, counted at :10171 and engine_radio_saved.cpp:212); engine_patch_radios.cpp:593 (counted at :329, files excluded); engine_soundcard.cpp:201 (sound card); the developer command-line tools tool_modes.cpp:241, :433 and rtlsdr_check.cpp:74 print the failure to their console, which is their whole output	sweep-a
@@ -2737,6 +2848,7 @@ src/source/sdrplay_source.cpp::SdrPlaySource::setGainDb::seterr::the if gain is 
 src/source/sdrplay_source.cpp::SdrPlaySource::setGainDb::seterr::the rsp has no gain called	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/sdrplay_source.cpp::SdrPlaySource::setHdrMode::seterr::hdr mode is an rspdx feature	ALLOW	range / capability / validation text for the user's own request (no failure wording)	seed
 src/source/sdrplay_source.cpp::SdrPlaySource::setHdrMode::seterr::no sdrplay device is open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
+src/source/sdrplay_source.cpp::SdrPlaySource::setLowIf::seterr::no sdrplay device is open	ALLOW	user-action: the person switched low-IF on; a refusal or the first-stream fallback is shown on the page as the radio.N.sdrplay.lowIfNote fact and logged; OPEN ROW: send the fallback as an issue report	2026-11-16
 src/source/sdrplay_source.cpp::SdrPlaySource::setRfNotch::seterr::no sdrplay device is open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/sdrplay_source.cpp::SdrPlaySource::setRfNotch::seterr::no sdrplay device parameters	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/sdrplay_source.cpp::SdrPlaySource::setRfNotch::seterr::no sdrplay device parameters#2	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
@@ -2834,6 +2946,8 @@ src/source/soapy_source.cpp::SoapySource::activateLocked::seterr::was not attemp
 src/source/soapy_source.cpp::SoapySource::activateLocked::warn::soapy % not answered within % ms waiting up to % ms in all f	PENDING:reports-not-in-function	survey: REPORTS (raiseRecovered(LateCall) / VendorCall) but no reporting call encloses the site	seed
 src/source/soapy_source.cpp::SoapySource::antennaReadback::seterr::std move w message	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	seed
 src/source/soapy_source.cpp::SoapySource::antennaReadback::seterr::the radios driver is busy or not answering try again	ALLOW	a READ that found the driver busy: nothing was refused and the panel asks again; a wedged driver is reported by noteVendorFault and the abandonment paths	rra2
+src/source/soapy_source.cpp::SoapySource::bandwidthInfo::seterr::std move j message	ALLOW	a user-initiated driver call that threw: returned false to the engine command, which answers the person with the sentence (refuse FOXAPI_FAILED); MERGE NOTE: the radio-reports hook at that refusal path picks it up	2026-11-16
+src/source/soapy_source.cpp::SoapySource::bandwidthInfo::seterr::the radios driver is busy or not answering try again	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
 src/source/soapy_source.cpp::SoapySource::closeDevice::errassign::kabandonedmessage	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
 src/source/soapy_source.cpp::SoapySource::closeDevice::swallow::catch	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
 src/source/soapy_source.cpp::SoapySource::closeDevice::warn::soapy the device driver did not answer within % ms of a clos	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
@@ -2847,6 +2961,8 @@ src/source/soapy_source.cpp::SoapySource::giveUpLateCallLocked::warn::soapy % wa
 src/source/soapy_source.cpp::SoapySource::listAntennas::seterr::std move p message	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	seed
 src/source/soapy_source.cpp::SoapySource::listAntennas::seterr::the radios driver is busy or not answering try again	ALLOW	a READ that found the driver busy: nothing was refused and the panel asks again; a wedged driver is reported by noteVendorFault and the abandonment paths	rra2
 src/source/soapy_source.cpp::SoapySource::listGainNames::seterr::the radios driver is busy or not answering try again	ALLOW	a READ that found the driver busy: nothing was refused and the panel asks again; a wedged driver is reported by noteVendorFault and the abandonment paths	rra2
+src/source/soapy_source.cpp::SoapySource::listSettings::seterr::std move j message	ALLOW	a user-initiated driver call that threw: returned false to the engine command, which answers the person with the sentence (refuse FOXAPI_FAILED); MERGE NOTE: the radio-reports hook at that refusal path picks it up	2026-11-16
+src/source/soapy_source.cpp::SoapySource::listSettings::seterr::the radios driver is busy or not answering try again	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
 src/source/soapy_source.cpp::SoapySource::loadedModules::warn::soapy listmodules faulted code #x%	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
 src/source/soapy_source.cpp::SoapySource::moduleSearchPaths::warn::soapy listsearchpaths faulted code #x%	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
 src/source/soapy_source.cpp::SoapySource::noteVendorFault::swallow::catch	ALLOW	this catch only guards building the message text after the device was latched dead; the fault itself is reported by noteDeviceFault and noteVendorCallFault earlier in the same function	rra2
@@ -2875,6 +2991,8 @@ src/source/soapy_source.cpp::SoapySource::setAntenna::seterr::std move p message
 src/source/soapy_source.cpp::SoapySource::setAutoGain::seterr::device has no automatic gain mode	ALLOW	range / capability / validation text for the user's own request (no failure wording)	seed
 src/source/soapy_source.cpp::SoapySource::setAutoGain::seterr::setautogain called with no device open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/soapy_source.cpp::SoapySource::setAutoGain::seterr::std move a message	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	seed
+src/source/soapy_source.cpp::SoapySource::setBandwidthHz::seterr::setbandwidthhz called with no device open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/soapy_source.cpp::SoapySource::setBandwidthHz::seterr::the radios driver is busy or not answering try again	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
 src/source/soapy_source.cpp::SoapySource::setCenterFrequencyHz::seterr::setcenterfrequencyhz called with no device open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/soapy_source.cpp::SoapySource::setCenterFrequencyHz::seterr::std move job message	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	seed
 src/source/soapy_source.cpp::SoapySource::setCenterFrequencyHz::seterr::the retune was not attempted no thread could be started for	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
@@ -2906,6 +3024,8 @@ src/source/soapy_source.cpp::SoapySource::unloadModulesRegistering::errassign::s
 src/source/soapy_source.cpp::SoapySource::unloadModulesRegistering::swallow::catch	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
 src/source/soapy_source.cpp::SoapySource::unloadModulesRegistering::warn::soapy unloading the % module faulted code #x% contained	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
 src/source/soapy_source.cpp::SoapySource::vendorInstalls::warn::soapy vendor install scan faulted code #x%	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
+src/source/soapy_source.cpp::SoapySource::writeSetting::seterr::the radios driver is busy or not answering try again	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/soapy_source.cpp::SoapySource::writeSetting::seterr::writesetting called with no device open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
 src/source/soundcard_source.cpp::NoSoundCardBackend::open::errassign::sound card input is not available in this build	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/soundcard_source.cpp::PortAudioSoundCardBackend::open::errassign::the audio system portaudio did not start	PENDING:reports-not-in-function	survey: REPORTS (the reason travels in lastError() to the open result: engine noteRadioFail (count only; D4 upgrade)) but no reporting call encloses the site	seed
 src/source/soundcard_source.cpp::PortAudioSoundCardBackend::open::errassign::the card is no longer in the list of inputs	PENDING:reports-not-in-function	survey: REPORTS (the reason travels in lastError() to the open result: engine noteRadioFail (count only; D4 upgrade)) but no reporting call encloses the site	seed

@@ -1,0 +1,24 @@
+#! frames=2400 size=1600x6000 bank=0 sections=0:6
+# s3-rollover (screen lane S3, docs/multi-radio-records/screen-s3-recplay.md; G3-10): an audio take goes on into a new file at the time limit. The limit is read back from the engine's setting, the file count from the radio's fact radio.1.record.rolled.
+10 state running == 1
+state s3.fact.wirec.rec.roll_min == 0
+# a limit that is too short or not a number is refused on the screen and sends nothing
++1 type "File length limit (minutes, 0 = none)" "0.01"
++1 key enter
++2 click "Use these limits"
++4 state s3.note.record contains "allowed"
++1 type "File length limit (minutes, 0 = none)" "0.1"
++1 key enter
++2 click "Use these limits"
++15 state s3.fact.wirec.rec.roll_min == 0.1
++1 click "Record audio"
++30 state recordingAudio == 1
++1 state s3.fact.radio.1.record.rolled == 0
++1000 state s3.fact.radio.1.record.rolled >= 1
++5 click "Stop audio"
++30 state recordingAudio == 0
+# no limit: the setting goes back to 0
++1 type "File length limit (minutes, 0 = none)" "0"
++1 key enter
++2 click "Use these limits"
++15 state s3.fact.wirec.rec.roll_min == 0

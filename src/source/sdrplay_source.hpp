@@ -809,6 +809,16 @@ public:
     bool setHdrMode(bool on);
     bool hdrMode() const { return hdrMode_.load(std::memory_order_relaxed); }
 
+    // THE LOW-IF CHOICE (screen lane S5b, row G1-13). OFF by default and NOT saved: every start of FoxSDR begins at zero-IF, the plan every release since 0.99.44 uses. Low-IF was retired in 0.99.44 after two real RSP2 logs
+    // showed the ADC rate arriving where the plan expected the output rate, and it is UNPROVEN on a real radio (the desk has none). With it on, the rates offered are sdrPlaySupportedRatesForMode(LowIf), a rate writes
+    // the listed (fs, bandwidth, IF) combination, and the FIRST STREAM IS CHECKED: about a second after the radio starts to deliver, the measured rate is held to the plan, and on a mismatch the radio falls back to zero-IF
+    // (the same output rate where zero-IF has it, else the nearest) and lowIfNote() says why. Nothing here is reached while the choice is off: a source nobody touched makes exactly the calls it always made.
+    bool setLowIf(bool on);                    // false (nothing changed) with no open radio or a radio that refuses the plan; the choice is then off again
+    bool lowIfChosen() const { return lowIfWanted_.load(std::memory_order_relaxed); }
+    std::string lowIfNote() const;             // "" or the sentence of the last fallback / refusal
+    static constexpr double kLowIfCheckSeconds = 1.0;   // the first stream is judged after this much delivery
+    void setLowIfCheckSecondsForTest(double s) { lowIfCheckS_ = s; }
+
     // --- what open() learned ---------------------------------------------
     unsigned char hardwareVersion() const { return hwVer_.load(std::memory_order_relaxed); }
     std::string serialNo() const;
@@ -1341,6 +1351,18 @@ private:
     std::atomic<bool> rfNotch_{false};
     std::atomic<bool> dabNotch_{false};
     std::atomic<bool> hdrMode_{false};
+    // The low-IF choice (see setLowIf). lowIfCheckPending_ is the only thing read() looks at while the choice is off: one relaxed load.
+    std::atomic<bool> lowIfWanted_{false};
+    std::atomic<bool> lowIfCheckPending_{false};
+    mutable std::mutex lowIfMutex_;
+    std::string lowIfNote_;
+    SdrPlayRatePlan lowIfPlan_;
+    double lowIfOutputRateHz_ = 0.0;
+    double lowIfCheckS_ = kLowIfCheckSeconds;
+    std::int64_t lowIfStartNs_ = 0;      // read() thread only
+    std::uint64_t lowIfSamples_ = 0;     // read() thread only
+    void lowIfObserve(std::size_t got);
+    void lowIfFallBack(const std::string& why);
     std::atomic<unsigned char> hwVer_{0};
     std::atomic<float> apiVersion_{0.0f};
 

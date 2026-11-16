@@ -114,13 +114,13 @@ int main() {
     {
         const json all = json::parse(rawFact(r, "needed.libs"), nullptr, false);
         CHECK(all.is_array());
-        CHECK_EQ(all.size(), static_cast<std::size_t>(9));
+        CHECK_EQ(all.size(), static_cast<std::size_t>(10));   // lane S5c: the Fobos row is the tenth
         CHECK_EQ(all[8].value("library_id", std::string()), std::string("ftdi-d2xx"));   // wire-b's eight, then the SDR-IQ bridge's row
         CHECK_EQ(all[8].value("source_kind", std::string()), std::string("sdriq"));
         CHECK_EQ(all[8].value("kind", std::string()), std::string("library-file"));
         CHECK_EQ(all[8].value("page_status", std::string()), std::string("verified"));
         CHECK_EQ(all[8].value("official_page", std::string()), std::string("https://www.ftdichip.com"));
-        const std::string kinds[] = {"library-file", "library-file", "soapy-module", "soapy-module", "running-program", "remote-software", "running-program", "user-file", "library-file"};
+        const std::string kinds[] = {"library-file", "library-file", "soapy-module", "soapy-module", "running-program", "remote-software", "running-program", "user-file", "library-file", "library-file"};
         for (std::size_t i = 0; i < all.size() && i < 9; ++i) { CHECK_EQ(all[i].value("kind", std::string()), kinds[i]); }
         const json g = row(r, "winradio-g39ddc");
         CHECK(g.is_object());

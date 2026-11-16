@@ -809,10 +809,10 @@ int main() {
         // 8-bit PCM
         expectOpenFails(wavBytes(1, 2, 48000, 8, {10, 20, 30, 40}),
                         "pcm8", "bit depth 8");
-        // 24-bit PCM
-        expectOpenFails(wavBytes(1, 2, 48000, 24,
+        // 24-bit PCM: stereo 24-bit plays since screen lane S3 (tests/test_iq_file_s3.cpp proves its samples); a MONO one is still refused, by its channel count
+        expectOpenFails(wavBytes(1, 1, 48000, 24,
                                  {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}),
-                        "pcm24", "bit depth 24");
+                        "pcm24", "2 channels");
         // 64-bit float
         expectOpenFails(wavBytes(3, 2, 48000, 64,
                                  std::vector<unsigned char>(32, 0)),

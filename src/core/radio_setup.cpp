@@ -889,6 +889,11 @@ const DriverGuidance* guidanceForDriver(const std::string& driverKey) {
         "pluto", "ADALM-Pluto", "SoapyPlutoSDR",
         "FoxSDR talks to the Pluto directly over its network address; no driver is needed. To use SoapySDR instead, install the SoapyPlutoSDR "
         "module."};
+    // ELAD (screen lane S5b, G1-07c): reached through the separate SoapyELAD module the person installs; FoxSDR has no bridge of its own and includes, downloads and reads nothing of it.
+    static const DriverGuidance kElad{
+        "elad", "ELAD", "SoapyELAD",
+        "ELAD radios are used through a SoapySDR module for them (SoapyELAD). It is separate software under the GPL that FoxSDR does not include and does not download. Install the SoapySDR module for it, "
+        "for example through PothosSDR or radioconda (that those carry it: unverified), then unplug the radio and plug it back in; FoxSDR lists it by the name the module gives it."};
     static const DriverGuidance kAntSdr{
         "antsdr", "AntSDR", "",
         "Give FoxSDR the AntSDR's network address (the factory address is 192.168.1.10) in the ADALM-Pluto source."};
@@ -896,6 +901,7 @@ const DriverGuidance* guidanceForDriver(const std::string& driverKey) {
     if (k == "bladerf") { return &kBladeRf; }
     if (k == "pluto" || k == "plutosdr" || k == "adalm-pluto") { return &kPluto; }
     if (k == "antsdr") { return &kAntSdr; }
+    if (k == "elad") { return &kElad; }
     return nullptr;
 }
 // wire-b end

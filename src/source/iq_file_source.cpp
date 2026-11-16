@@ -2,9 +2,12 @@
 #include "source/iq_file_source.hpp"
 #include "source/file_start_time.hpp"
 #include "source/wav_meta.hpp"   // wire-a
+#include "source/iq_readers.hpp"   // screen lane S3
 
 #include <algorithm>   // wire-a
 #include <bit>
+#include <cctype>
+#include <filesystem>
 #include <cmath>
 #include <cstring>
 
@@ -63,7 +66,98 @@ bool IqFileSource::fail(std::string msg) {
     return false;
 }
 
-bool IqFileSource::open(const std::string& wavPath) {
+namespace {
+std::string lowerExt(const std::string& path) {
+    const std::size_t dot = path.find_last_of('.');
+    std::string e = dot == std::string::npos ? std::string() : path.substr(dot);
+    for (char& c : e) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+    return e;
+}
+}  // namespace
+
+bool IqFileSource::open(const std::string& path) {
+    const std::string ext = lowerExt(path);
+    if (ext == ".sigmf-meta" || ext == ".sigmf-data") { return openWithReader(path, nullptr); }
+    if (ext == ".cu8" || ext == ".cs16" || ext == ".cf32") {
+        stop();
+        opened_ = false;
+        return fail("a raw I/Q file has no header: say how its samples are stored and the rate they were recorded at (Open a raw I/Q file)");
+    }
+    if (openRiff(path)) { return true; }
+    // The WAV kinds the original reader refuses by name (24-bit and 32-bit integer samples, WAVE_FORMAT_EXTENSIBLE) are the readers' to play; every other refusal stands as it was.
+    const std::string why = lastError_;
+    if (why.rfind("unsupported format tag", 0) == 0 || why.rfind("unsupported PCM bit depth", 0) == 0) {
+        if (openWithReader(path, nullptr)) { return true; }
+        lastError_ = why;
+    }
+    return false;
+}
+
+bool IqFileSource::openRaw(const std::string& path, const RawSpec& spec) { return openWithReader(path, &spec); }
+
+bool IqFileSource::openWithReader(const std::string& path, const RawSpec* raw) {
+    stop();
+    opened_ = false;
+    format_ = SampleFormat::none;
+    lastError_.clear();
+    faulted_.store(false, std::memory_order_release);
+    name_ = "IQ file";
+    reader_.reset();
+    centerFromHeader_ = false;
+    if (file_.is_open()) { file_.close(); }
+    file_.clear();
+    iqfile::RawParams params;
+    std::string err;
+    std::unique_ptr<iqfile::IqFileReader> r;
+    if (raw != nullptr) {
+        iqfile::Layout layout;
+        if (raw->format == "cu8") { layout.kind = iqfile::Kind::U8; }
+        else if (raw->format == "cs16") { layout.kind = iqfile::Kind::S16; }
+        else if (raw->format == "cf32") { layout.kind = iqfile::Kind::F32; }
+        else { return fail("unknown raw sample format '" + raw->format + "' (cu8, cs16 or cf32)"); }
+        params.sampleRateHz = raw->rateHz;
+        params.centerFrequencyHz = raw->centreHz;
+        params.hasCenter = raw->hasCentre;
+        r = iqfile::openRaw(path, layout, params, &err);
+    } else {
+        r = iqfile::openAuto(path, params, &err);
+    }
+    if (!r) { return fail(err.empty() ? "cannot open file: " + path : err); }
+    const iqfile::IqInfo& info = r->info();
+    if (info.totalSamples == 0) { return fail("the file holds no complete sample frames: " + path); }
+    if (!(info.sampleRateHz > 0.0)) { return fail("the file does not say its sample rate"); }
+    file_.open(std::filesystem::path(r->dataPath()), std::ios::binary);
+    if (!file_) { return fail("cannot open file: " + r->dataPath()); }
+    format_ = SampleFormat::reader;
+    sampleRateHz_ = info.sampleRateHz;
+    dataOffset_ = r->dataOffset();
+    frameCount_ = info.totalSamples;
+    nextFrame_ = 0;
+    position_.store(0, std::memory_order_release);
+    seekRequest_.store(-1, std::memory_order_release);
+    loopOn_.store(false, std::memory_order_release);
+    loopA_.store(0, std::memory_order_release);
+    loopB_.store(0, std::memory_order_release);
+    bytesPerFrame_ = 2 * r->layout().bytesPerComponent();
+    ioBuf_.assign(kIoFrames * bytesPerFrame_, 0);
+    {
+        const auto when = cascade::source::recordingStart(path, static_cast<double>(frameCount_) / sampleRateHz_);
+        startUnixMs_ = when.first;
+        startSource_ = when.second;
+    }
+    if (info.centerKnown && info.centerFrequencyHz > 0.0 && !info.guessedFromName) {
+        centerFrequencyHz_ = info.centerFrequencyHz;
+        centerFromHeader_ = true;   // the file (or the person's statement of it) names the centre
+    }
+    const std::size_t sep = path.find_last_of("/\\");
+    name_ = "IQ file: " + (sep == std::string::npos ? path : path.substr(sep + 1));
+    reader_ = std::move(r);
+    opened_ = true;
+    return true;
+}
+
+bool IqFileSource::openRiff(const std::string& wavPath) {
+    reader_.reset();   // screen lane S3
     // Replacing the file mid-playback would tear the source thread's view;
     // stop first (the caller must already have parked read(), per the
     // threading contract — this just makes the state transition explicit).
@@ -312,6 +406,7 @@ bool IqFileSource::setCenterFrequencyHz(double hz) {
 
 void IqFileSource::convertFrames(const unsigned char* raw,
                                  std::complex<float>* dst, std::size_t frames) {
+    if (format_ == SampleFormat::reader && reader_) { reader_->decodeFrames(raw, dst, frames); return; }   // screen lane S3
     if (format_ == SampleFormat::pcm16) {
         // 1/32768 (not 1/32767): a power-of-two divisor makes every int16
         // exactly representable after scaling, and maps the full code range

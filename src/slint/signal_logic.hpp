@@ -394,6 +394,8 @@ std::string sourceChipText(const std::string& deviceName);
 std::string sourceChip(const std::string& deviceName, const std::vector<std::string>& patchHeld);
 // The combo's closed text while the patch has radios: "Signal generator - the patch has NESDR SMArt v5".
 std::string sourceRowText(const std::string& receiverSource, const std::vector<std::string>& patchRadios);
+// LANE X, PF-1: does a running patch hold the radio the receiver has saved (its name, against the names of the radios the patch holds)? Then the Source section says "held by the patch", not "saved, not open".
+bool savedRadioHeldByPatch(const std::string& savedLabel, const std::vector<std::string>& patchRadios);
 // The lamp's "the saved radio did not open" rule (core/source_fallback.hpp radioNotOpenLampFromSession).
 bool radioNotOpenLamp(const std::string& keepKind, bool deviceOpen, bool generatorInUse, bool cardOpening);
 // "No radio hardware found" (gui/source_row_status.hpp): a complete scan landed and neither list holds a radio.

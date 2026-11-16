@@ -43,6 +43,9 @@ WorkspaceCell blankCell() {
     c.pane.wf_marks = emptyModel<PluginMark>();
     c.pane.markers = emptyModel<UserMarker>();
     c.pane.show_vfo = true;
+    c.pane.airband_channels = emptyModel<AirbandChannel>();   // lane X, P1
+    c.pane.wf_gap_pos = -1;
+    c.pane.wf_rail_pos = -1;
     c.pane.cursor_pos = -1;
     return c;
 }
@@ -163,7 +166,7 @@ void WorkspacePublisher::publishPane(RadioView& rv, const PaneContext& ctx) {
         d.picture = rv.wells.waterfallImage();
         rv.wells.flip();
         d.span = ss(fig.spanText);
-        d.peak = ss(fig.showPeak ? fig.peakText : std::string());
+        d.peak = ss(fig.showPeak && !fig.airListening ? fig.peakText : std::string());   // lane X, P1: no passband peak while the Airband monitor listens (the band is not drawn)
         d.foot_left = ss(fig.footLeft);
         if (sg.changed("pane.age", [&] { std::string s; for (const auto& tk : fig.ageTicks) { s += f5(tk.frac) + tk.label + ";"; } return s; }())) {
             std::vector<AgeTick> ticks;
@@ -195,6 +198,31 @@ void WorkspacePublisher::publishPane(RadioView& rv, const PaneContext& ctx) {
         }
     }
     if (d.vfo_pos != fig.vfoPos || d.vfo_half != fig.vfoHalf) { d.vfo_pos = fig.vfoPos; d.vfo_half = fig.vfoHalf; dirty = true; }
+    {   // LANE X, row P1: what the single layout's picture carries, for this radio's pane: the tuned band hidden while the Airband monitor listens on this radio, the monitor's channel marks and
+        // sentences, the waterfall's reception-gap break and the range-changed rail. `fig` is this radio's own (the monitor's fields are filled only for the radio it listens on).
+        if (d.show_vfo == fig.airListening) { d.show_vfo = !fig.airListening; dirty = true; }
+        std::string sig;
+        for (const auto& m : fig.airMarks) { sig += f5(m.from) + f5(m.to) + (m.open ? "o" : "s") + ";"; }
+        if (sg.changed("pane.airmarks", sig)) {
+            std::vector<AirbandChannel> chs;
+            for (const auto& m : fig.airMarks) { chs.push_back({m.from, m.to, m.open}); }
+            maxAirMarks_[static_cast<std::size_t>(slot)] = std::max(maxAirMarks_[static_cast<std::size_t>(slot)], chs.size());
+            d.airband_channels = std::make_shared<slint::VectorModel<AirbandChannel>>(std::move(chs));
+            dirty = true;
+        }
+        const auto& wc = fig.wfChrome;
+        const std::string railLabel = wc.railPos >= 0 ? std::string(cascade::i18n::tr("RANGE CHANGED")) : std::string();
+        if (sg.changed("pane.airchrome", fig.airBlock + "|" + fig.airHearing + "|" + f5(wc.gapPos) + wc.gapAbove + "|" + wc.gapBelow + "|" + f5(wc.railPos) + railLabel)) {
+            d.airband_block = ss(fig.airBlock);
+            d.airband_hearing = ss(fig.airHearing);
+            d.wf_gap_pos = wc.gapPos;
+            d.wf_gap_above = ss(wc.gapAbove);
+            d.wf_gap_below = ss(wc.gapBelow);
+            d.wf_rail_pos = wc.railPos;
+            d.wf_rail_label = ss(railLabel);
+            dirty = true;
+        }
+    }
     {
         std::string sig;
         for (const auto& b : fig.ribbon) { sig += f5(b.from) + f5(b.to) + b.label + std::to_string(b.rgba) + ";"; }

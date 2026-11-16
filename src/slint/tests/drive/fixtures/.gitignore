@@ -3,3 +3,4 @@
 survey-engine-profile/survey.csv
 survey-engine-profile/survey-labels.txt
 __pycache__/
+*.cu8

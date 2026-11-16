@@ -41,6 +41,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/raw_file_id.hpp"
 #include "core/diag_log.hpp"
 #include "core/freq_import.hpp"
 #include "core/i18n.hpp"
@@ -85,7 +86,7 @@ std::function<void()> Engine::diskHook() const {
 
 // --- THE I/Q FILE'S OPEN ---------------------------------------------------------------------------------------------------------------------
 
-void Engine::openIqFile(const std::string& path) {
+void Engine::openIqFile(const std::string& path, const std::string& rawArgs) {
     EngineDiskWork& d = disk();
     // ONE OPEN AT A TIME: a second press while the header is still being read (the key is disabled, but a browser and a key binding are not the
     // key) changes nothing.
@@ -103,7 +104,7 @@ void Engine::openIqFile(const std::string& path) {
     const std::size_t slot = scopedSlot();
     const auto factory = iqFileFactory_;
     const auto hook = diskHook();
-    job.request([path, gen, row, slot, factory, hook]() -> IqOpenResult {
+    job.request([path, gen, row, slot, factory, hook, rawArgs]() -> IqOpenResult {
         IqOpenResult r;
         r.path = path;
         r.gen = gen;
@@ -112,7 +113,11 @@ void Engine::openIqFile(const std::string& path) {
         try {
             if (hook) { hook(); }
             auto file = factory ? factory() : std::make_unique<cascade::source::IqFileSource>();
-            if (file->open(path)) {
+            cascade::core::RawFileId rawId;
+            const bool raw = !rawArgs.empty() && cascade::core::parseRawFileId(rawArgs, rawId);
+            cascade::source::IqFileSource::RawSpec spec;
+            if (raw) { spec.format = rawId.format; spec.rateHz = rawId.rateHz; spec.centreHz = rawId.centreHz; spec.hasCentre = rawId.hasCentre; }
+            if (raw ? file->openRaw(path, spec) : file->open(path)) {
                 r.file = std::move(file);
             } else {
                 r.error = file->lastError();

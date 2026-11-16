@@ -51,6 +51,15 @@ constexpr Spec kSpecs[] = {
     {"cat.emulation.dialect", Kind::Choice, 0, 0, "kenwood-ts480", "kenwood-ts480|yaesu-ft891"},
     {"cat.emulation.port", Kind::Int, 0, 65535, "0", ""},       // the port the logging program connects to (0 = not configured; 4532 is the rigctl server's)
     {"cat.emulation.bind_all", Kind::Bool, 0, 0, "0", ""},      // listen on every address instead of this computer only
+    // --- CAT link: FoxSDR follows a rig, or answers a logging program on a virtual COM port (screen lane S5b; engine/cat_link.hpp). RECEIVE SIDE ONLY: the only messages sent to a rig are "FA;" and "MD;"/"MD0;" (reads).
+    {"cat.link.mode", Kind::Choice, 0, 0, "off", "off|follow|emulate|omnirig"},   // OFF: no port is opened and nothing is started until the person chooses a way and gives a port
+    {"cat.link.port", Kind::Text, 0, 12, "", ""},                // "COM3" (follow, emulate)
+    {"cat.link.dialect", Kind::Choice, 0, 0, "kenwood", "kenwood|yaesu"},
+    {"cat.link.baud", Kind::Int, 0, 4000000, "0", ""},           // the rig's own setting; 0 = not given (nothing is opened: no rate is assumed)
+    {"cat.link.stopbits", Kind::Choice, 0, 0, "1", "1|2"},
+    {"cat.link.rig", Kind::Int, 1, 2, "1", ""},                  // OmniRig's rig 1 or rig 2
+    {"cat.link.follow_frequency", Kind::Bool, 0, 0, "1", ""},    // move FoxSDR's centre when the rig's frequency changes
+    {"cat.link.follow_mode", Kind::Bool, 0, 0, "1", ""},         // change FoxSDR's mode when the rig's mode changes
     // --- web (webmodels) ---
     {"web.cors_origins", Kind::Text, 0, 2000, "", ""},        // allowed origins, one per line (empty = no cross-origin page may read)
     {"web.metrics", Kind::Bool, 0, 0, "0", ""},               // the /metrics page for a signed-in browser (Prometheus text format); off = as if it did not exist
@@ -84,6 +93,16 @@ constexpr Spec kSpecs[] = {
     {"alerts.keywords", Kind::Text, 0, 4000, "", ""},           // one keyword or phrase per line, at most 64
     {"alerts.gap_s", Kind::Int, 0, 3600, "30", ""},             // the same keyword again within this many seconds is not raised again
     {"alerts.notify", Kind::Bool, 0, 0, "1", ""},               // hand a raised alert to the desktop notification (shown only where the system can)
+    // --- recording (screen lane S3, docs/multi-radio-records/screen-s3-recplay.md) ---
+    {"rec.roll_mb", Kind::Real, 0, 100000, "0", ""},         // a recording goes on into a new file after this many MB of samples (0 = no size limit)
+    {"rec.roll_min", Kind::Real, 0, 1440, "0", ""},          // ... or after this many minutes (0 = no time limit)
+    {"rec.roll_align", Kind::Bool, 0, 0, "0", ""},           // the time limit counts from the clock (a new file at every whole multiple of it, UTC), not from the start of the take
+    {"rec.clip_on", Kind::Bool, 0, 0, "0", ""},              // squelch-triggered recording: one file per transmission
+    {"rec.clip_pre", Kind::Real, 0, 10, "2", ""},            // seconds kept from before the squelch opened
+    {"rec.clip_tail", Kind::Real, 0, 30, "3", ""},           // seconds kept after it closed (a transmission that resumes inside this goes on in the same file)
+    {"rec.clip_min", Kind::Real, 0, 60, "1", ""},            // a transmission shorter than this is not kept
+    {"rec.clip_max", Kind::Real, 10, 3600, "600", ""},       // a transmission longer than this goes on in a new file
+    {"rec.replay_s", Kind::Real, 0, 120, "0", ""},           // seconds of the radio's audio kept in memory so that a take or a clip can begin before the key was pressed (0 = none)
 };
 constexpr std::size_t kSpecCount = sizeof(kSpecs) / sizeof(kSpecs[0]);
 
@@ -103,6 +122,16 @@ std::string numberText(double v) {
 
 // Rules a key has beyond its kind (empty = fine). Called with the normalised value.
 std::string extraRule(const std::string& key, const std::string& value) {
+    if (key == "cat.link.port") {   // a serial port name and nothing else: COM1 to COM256, upper case (no path, no device of another kind)
+        if (value.empty()) { return std::string(); }
+        bool ok = value.size() >= 4 && value.size() <= 6 && value.compare(0, 3, "COM") == 0;
+        long n = 0;
+        for (std::size_t i = 3; ok && i < value.size(); ++i) {
+            if (value[i] < '0' || value[i] > '9') { ok = false; } else { n = n * 10 + (value[i] - '0'); }
+        }
+        if (!ok || n < 1 || n > 256) { return "a serial port is COM1 to COM256"; }
+        return std::string();
+    }
     if (key == "web.cors_origins") {
         std::size_t count = 0, from = 0;
         while (from <= value.size()) {

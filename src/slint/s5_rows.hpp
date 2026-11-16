@@ -50,7 +50,7 @@ public:
 
 private:
     struct Cmd { std::uint32_t op = 0; long long i0 = 0, i1 = 0; double n0 = 0, n1 = 0; std::string text; };
-    enum Kind { kPlain = 0, kClaim };
+    enum Kind { kPlain = 0, kClaim, kSoapy };
     struct Pending { std::string what; int kind = kPlain; };
 
     std::string fact(const std::string& name) const;
@@ -74,6 +74,11 @@ private:
     void buildPpm(std::vector<foxsdr::slintlanek::Row>& v);
     void buildPool(std::vector<foxsdr::slintlanek::Row>& v);
     void buildDirect(std::vector<foxsdr::slintlanek::Row>& v);
+    void buildS5b(std::vector<foxsdr::slintlanek::Row>& v);   // lane S5b's rows (s5b_rows.cpp): analogue IF bandwidth and the rows after it
+    void buildSoapy(std::vector<foxsdr::slintlanek::Row>& v);   // G1-15a/b (s5b_rows.cpp)
+    void buildCat(std::vector<foxsdr::slintlanek::Row>& v);   // G1-16, G3-18a/b (s5b_rows.cpp)
+    void buildLowIf(std::vector<foxsdr::slintlanek::Row>& v);   // G1-13 (s5b_rows.cpp)
+    void buildSourceNotes(std::vector<foxsdr::slintlanek::Row>& v);   // what works today for AntSDR and SDR++ Server (s5b_rows.cpp)
 
     Env env_;
     std::map<std::string, std::function<void(const std::string&)>> handlers_;

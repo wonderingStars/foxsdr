@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "source/sdrplay_source.hpp"
+#include "source/sdrplay_if_mode.hpp"   // the low-IF choice (screen lane S5b, G1-13)
 
 #include "core/diag_log.hpp"
 #include "core/radio_events.hpp"
@@ -2240,6 +2241,12 @@ bool SdrPlaySource::startStreamingLocked() {
     link_->rateChangedInWindow.store(false, std::memory_order_relaxed);
     link_->setRateHz.store(sampleRateHz_.load(std::memory_order_relaxed),
                            std::memory_order_relaxed);
+    if (lowIfWanted_.load(std::memory_order_relaxed)) {   // a restart is a new stream: held to the plan again (S5b, G1-13)
+        std::lock_guard<std::mutex> ll(lowIfMutex_);
+        lowIfStartNs_ = 0;
+        lowIfSamples_ = 0;
+        lowIfCheckPending_.store(true, std::memory_order_relaxed);
+    }
     initialised_ = true;
     running_.store(true, std::memory_order_relaxed);
     if (supersededFault) {
@@ -2527,6 +2534,7 @@ std::size_t SdrPlaySource::read(std::complex<float>* dst, std::size_t n) {
     std::size_t got = link_->ring.read(dst, n);
     if (got > 0) {
         link_->emptySinceNs.store(0, std::memory_order_relaxed);  // the empty run is over
+        if (lowIfCheckPending_.load(std::memory_order_relaxed)) { lowIfObserve(got); }   // low-IF only (S5b, G1-13)
         return got;
     }
     if (faulted()) { return 0; }
@@ -2547,6 +2555,7 @@ std::size_t SdrPlaySource::read(std::complex<float>* dst, std::size_t n) {
         checkForStallFromRead();
     } else {
         link_->emptySinceNs.store(0, std::memory_order_relaxed);
+        if (lowIfCheckPending_.load(std::memory_order_relaxed)) { lowIfObserve(got); }   // low-IF only (S5b, G1-13)
     }
     return got;
 }
@@ -3112,7 +3121,9 @@ bool SdrPlaySource::setSampleRateHz(double hz) {
 
     // Coerced to the nearest supported rate, as the Soapy path does, so a
     // config that asked for something plausible still opens.
-    const std::vector<double> rates = sdrPlaySupportedRatesHz();
+    // (The low-IF choice, screen lane S5b: OFF unless the person switched it on; with it off these two lines are the ones that were here.)
+    const bool lowIf = lowIfWanted_.load(std::memory_order_relaxed);
+    const std::vector<double> rates = lowIf ? sdrPlaySupportedRatesForMode(SdrPlayIfMode::LowIf) : sdrPlaySupportedRatesHz();
     double best = rates.front();
     double bestErr = std::numeric_limits<double>::max();
     for (double r : rates) {
@@ -3124,7 +3135,7 @@ bool SdrPlaySource::setSampleRateHz(double hz) {
     }
 
     SdrPlayRatePlan plan;
-    if (!sdrPlayRatePlan(best, plan)) {
+    if (!(lowIf ? sdrPlayRatePlanForMode(best, SdrPlayIfMode::LowIf, plan) : sdrPlayRatePlan(best, plan))) {
         setError("no SDRplay front-end plan for that rate");
         return false;
     }
@@ -3173,7 +3184,88 @@ bool SdrPlaySource::setSampleRateHz(double hz) {
         // baseline (see Link::cbSampleNumExpected).
         link_->cbSampleNumExpected.store(0, std::memory_order_relaxed);
     }
+    if (lowIf) {
+        // The first-stream check is armed for the plan just written (G1-13): the next stream is held to it.
+        std::lock_guard<std::mutex> ll(lowIfMutex_);
+        lowIfPlan_ = plan;
+        lowIfOutputRateHz_ = best;
+        lowIfStartNs_ = 0;
+        lowIfSamples_ = 0;
+        lowIfCheckPending_.store(true, std::memory_order_relaxed);
+    } else if (lowIfCheckPending_.load(std::memory_order_relaxed)) {
+        lowIfCheckPending_.store(false, std::memory_order_relaxed);
+    }
     return true;
+}
+
+// --- the low-IF choice (screen lane S5b, row G1-13) ------------------------
+
+std::string SdrPlaySource::lowIfNote() const {
+    std::lock_guard<std::mutex> lk(lowIfMutex_);
+    return lowIfNote_;
+}
+
+bool SdrPlaySource::setLowIf(bool on) {
+    const bool was = lowIfWanted_.load(std::memory_order_relaxed);
+    if (on == was) { return true; }
+    if (!openMirror_.load(std::memory_order_relaxed)) {
+        setError("no SDRplay device is open");
+        return false;
+    }
+    const double rate = sampleRateHz_.load(std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lk(lowIfMutex_);
+        lowIfNote_.clear();
+    }
+    lowIfWanted_.store(on, std::memory_order_relaxed);
+    // The same output rate under the other plan (the nearest the mode has): ONE Update, refused or not like any rate change.
+    if (!setSampleRateHz(rate)) {
+        const std::string why = lastError();
+        lowIfWanted_.store(was, std::memory_order_relaxed);
+        lowIfCheckPending_.store(false, std::memory_order_relaxed);
+        setSampleRateHz(rate);   // the radio was left where it was by the refused Update; this puts the plan of the old mode back in the driver's own state
+        std::lock_guard<std::mutex> lk(lowIfMutex_);
+        lowIfNote_ = why;
+        return false;
+    }
+    return true;
+}
+
+void SdrPlaySource::lowIfObserve(std::size_t got) {
+    if (got == 0) { return; }
+    std::unique_lock<std::mutex> lk(lowIfMutex_);
+    if (!lowIfCheckPending_.load(std::memory_order_relaxed)) { return; }
+    const std::int64_t now = steadyNowNs();
+    if (lowIfStartNs_ == 0) {   // the first block opens the window; its own samples are not counted
+        lowIfStartNs_ = now;
+        lowIfSamples_ = 0;
+        return;
+    }
+    lowIfSamples_ += got;
+    const double spanS = static_cast<double>(now - lowIfStartNs_) / 1e9;
+    if (spanS < lowIfCheckS_) { return; }
+    const double measured = static_cast<double>(lowIfSamples_) / spanS;
+    const SdrPlayRatePlan plan = lowIfPlan_;
+    lowIfCheckPending_.store(false, std::memory_order_relaxed);
+    lk.unlock();
+    const LowIfRateVerdict v = sdrPlayLowIfRateVerdict(plan, measured);
+    if (v == LowIfRateVerdict::AsPlanned) { return; }   // the radio delivers what the plan says: low-IF stays
+    char buf[320];
+    std::snprintf(buf, sizeof(buf), "%s (measured %.0f S/s over %.1f s, planned %.0f S/s). Low-IF is switched off and the radio is back on zero-IF.",
+                  sdrPlayLowIfRateVerdictSentence(v), measured, spanS, plan.fsHz / static_cast<double>(plan.decM));
+    lowIfFallBack(buf);
+}
+
+void SdrPlaySource::lowIfFallBack(const std::string& why) {
+    double rate = 0.0;
+    {
+        std::lock_guard<std::mutex> lk(lowIfMutex_);
+        lowIfNote_ = why;
+        rate = lowIfOutputRateHz_;
+    }
+    core::diagWarnf("source: SDRplay low-IF fell back to zero-IF: %s", why.c_str());
+    lowIfWanted_.store(false, std::memory_order_relaxed);
+    setSampleRateHz(rate);   // the zero-IF plan, written to the radio (the output rate where zero-IF has it, else the nearest)
 }
 
 // --- gains ----------------------------------------------------------------

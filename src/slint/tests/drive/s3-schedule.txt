@@ -1,0 +1,34 @@
+#! frames=1500 size=1600x6000 bank=0 sections=0:1,6
+# s3-schedule (screen lane S3, docs/multi-radio-records/screen-s3-recplay.md; G3-01): timed recordings in the SIGNAL bank's Recorder section. Add, switch off and on, skip, remove (two presses), each read back from fact.schedule.*.
+10 state running == 1
+state s3.fact.schedule.count == 0
+# a date that does not exist, and a time that does not, are refused on the screen
++1 type "Date (year-month-day)" "2026-02-30"
++1 key enter
++2 click "Add timed recording"
++4 state s3.note.schedule contains "does not exist"
++1 type "Date (year-month-day)" "2030-01-02"
++1 key enter
++1 type "Time (24 hours)" "10:00"
++1 key enter
+# neither audio nor I/Q ticked is refused
++1 click "Record the audio"
++2 click "Add timed recording"
++4 state s3.note.schedule contains "Tick audio"
++1 click "Record the audio"
+# the form's own defaults (five minutes from now, ten minutes long) make a good entry
++1 type "Name" "drive test"
++1 key enter
++2 click "Add timed recording"
++15 state s3.fact.schedule.count == 1
++1 state s3.fact.record.schedule.ids == 1
++1 expect "Switch off 1" enabled equals "true"
++1 click "Switch off 1"
++15 state s3.fact.schedule.entry.1 contains enabled":false
++1 click "Switch on 1"
++15 state s3.fact.schedule.entry.1 contains enabled":true
+# removing asks twice
++1 click "Remove timed recording 1"
++6 state s3.fact.schedule.count == 1
++1 click "Remove timed recording 1"
++15 state s3.fact.schedule.count == 0

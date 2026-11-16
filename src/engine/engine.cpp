@@ -7,6 +7,7 @@
 #include "engine/engine.hpp"
 #include "engine/wire_a.hpp"   // wire-a
 #include "core/companion_programs.hpp"   // companion applications shelf
+#include "core/raw_file_id.hpp"
 #include "core/plugin_repo_helper.hpp"   // wire-c
 
 #include "core/band_mode.hpp"
@@ -348,6 +349,69 @@ bool withDirectSampling(cascade::source::DeviceSource* dev, Fn&& fn) {
     return fn(*rt);
 }
 
+// THE ANALOGUE IF BANDWIDTH (G1-14, screen lane S5b): the native RTL-SDR driver; 0 is automatic (the sample rate), else Hz.
+template <typename Fn>
+bool withIfBandwidth(cascade::source::DeviceSource* dev, Fn&& fn) {
+    auto* rt = dynamic_cast<cascade::source::RtlSdrSource*>(dev);
+    if (rt == nullptr) { return false; }
+    return fn(*rt);
+}
+
+// THE SOAPY DRIVER'S OWN BANDWIDTH AND SETTINGS (G1-15a/b, screen lane S5b): any radio opened through a SoapySDR module. What the driver reports is turned into facts (radio.N.soapy.*) at open and after every write;
+// nothing is assumed about a driver, and a driver with neither a bandwidth range nor a setting publishes nothing.
+template <typename Fn>
+bool withSoapyDriver(cascade::source::DeviceSource* dev, Fn&& fn) {
+    auto* sp = dynamic_cast<cascade::source::SoapySource*>(dev);
+    if (sp == nullptr) { return false; }
+    return fn(*sp);
+}
+
+std::string soapyJoin(const std::vector<std::string>& v) {
+    std::string out;
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        if (i > 0) { out += '|'; }
+        for (const char ch : v[i]) { out += ch == '|' ? '/' : ch; }
+    }
+    return out;
+}
+
+// (suffix, value) pairs, the suffix after "radio.N.soapy."; empty when the driver has neither a bandwidth range nor a setting.
+void soapyFacts(cascade::source::SoapySource& d, std::vector<std::pair<std::string, std::string>>& out) {
+    out.clear();
+    const cascade::source::SoapySource::BandwidthInfo bw = d.bandwidthInfo();
+    const std::vector<cascade::source::SoapySource::SettingInfo> list = d.listSettings();
+    if (!bw.supported && list.empty()) { return; }
+    const auto num = [](double v) {
+        char buf[48];
+        std::snprintf(buf, sizeof(buf), "%.10g", v);
+        return std::string(buf);
+    };
+    if (bw.supported) {
+        out.emplace_back("bandwidth", num(bw.currentHz));
+        out.emplace_back("bandwidthLo", num(bw.loHz));
+        out.emplace_back("bandwidthHi", num(bw.hiHz));
+    }
+    out.emplace_back("count", std::to_string(list.size()));
+    for (std::size_t i = 0; i < list.size(); ++i) {
+        const auto& s = list[i];
+        const std::string p = std::to_string(i) + ".";
+        out.emplace_back(p + "key", s.key);
+        out.emplace_back(p + "name", s.name);
+        if (!s.description.empty()) { out.emplace_back(p + "description", s.description); }
+        out.emplace_back(p + "type", s.type == cascade::source::SoapySource::SettingType::Bool ? "bool" : s.type == cascade::source::SoapySource::SettingType::Int ? "int" : s.type == cascade::source::SoapySource::SettingType::Float ? "float" : "string");
+        out.emplace_back(p + "value", s.value);
+        out.emplace_back(p + "default", s.defaultValue);
+        if (!s.units.empty()) { out.emplace_back(p + "units", s.units); }
+        if (s.hasRange) {
+            out.emplace_back(p + "min", num(s.lo));
+            out.emplace_back(p + "max", num(s.hi));
+        }
+        if (!s.options.empty()) {
+            out.emplace_back(p + "options", soapyJoin(s.options));
+            out.emplace_back(p + "optionNames", soapyJoin(s.optionNames));
+        }
+    }
+}
 template <typename Fn>
 bool withHdrMode(cascade::source::DeviceSource* dev, Fn&& fn) {
     auto* sp = dynamic_cast<cascade::source::SdrPlaySource*>(dev);
@@ -3154,6 +3218,15 @@ void Engine::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::s
     rx().deviceDirectPresent_ = withDirectSampling(&dev, [this](auto& d) {
         rx().deviceDirectChoice_ = d.directSamplingChoice();
         return true;
+    });
+    rx().deviceIfBwPresent_ = withIfBandwidth(&dev, [this](auto& d) {
+        rx().deviceIfBw_ = d.ifBandwidthHz();
+        return true;
+    });
+    rx().deviceSoapyFacts_.clear();
+    rx().deviceSoapyPresent_ = withSoapyDriver(&dev, [this](auto& d) {
+        soapyFacts(d, rx().deviceSoapyFacts_);
+        return !rx().deviceSoapyFacts_.empty();
     });
     rx().deviceOffsetTuningPresent_ = withOffsetTuning(&dev, [this](auto& d) {
         rx().deviceOffsetTuning_ = d.offsetTuning();
@@ -6113,6 +6186,7 @@ void Engine::finishRecordStart(bool iq, cascade::gui::RecordStart::Result& r, do
         rx().iqRecordStartS_ = nowS;
         rx().pipeline_.setIqRecorder(&rx().iqRecorder_);
     } else {
+        recplayPreRoll(rec);   // screen lane S3: the replay buffer's audio goes first, when it is on
         rx().audioRecordStartS_ = nowS;
         rx().pipeline_.setAudioRecorder(&rx().audioRecorder_);
     }
@@ -6421,6 +6495,15 @@ bool Engine::selectSourceById(const std::string& id) {
     const std::string args = id.substr(colon + 1);
     if (kind == "file") {
         openIqFile(args);
+        return true;
+    }
+    if (kind == "file-raw") {   // screen lane S3: a file with no header; the person says its sample format and rate
+        cascade::core::RawFileId rawId;
+        if (!cascade::core::parseRawFileId(args, rawId)) {
+            rx().sourceError_ = "that raw file's format, rate or path was not understood";
+            return false;
+        }
+        openIqFile(rawId.path, args);
         return true;
     }
     if (kind == "open-pluto") {
@@ -8433,6 +8516,18 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 });
                 if (!took) { return refuse(FOXAPI_FAILED, rx().sourceError_.c_str()); }
                 res.applied[0] = static_cast<double>(rx().deviceDirectChoice_);
+            } else if (text == "if_bandwidth" && rx().deviceIfBwPresent_) {
+                // ival[0] is the bandwidth in Hz, 0 = automatic (the sample rate); the driver's own range (300 kHz to 8 MHz) judges it (G1-14)
+                if (c.ival[0] < 0 || c.ival[0] > 100000000) { return refuse(FOXAPI_OUT_OF_RANGE, "the analogue IF bandwidth is 0 (automatic) or 300 kHz to 8 MHz"); }
+                bool took = false;
+                withIfBandwidth(rx().device_, [this, &c, &took](auto& d) {
+                    took = d.setIfBandwidthHz(static_cast<int>(c.ival[0]));
+                    if (!took) { rx().sourceError_ = d.lastError(); }
+                    rx().deviceIfBw_ = d.ifBandwidthHz();
+                    return true;
+                });
+                if (!took) { return refuse(FOXAPI_FAILED, rx().sourceError_.c_str()); }
+                res.applied[0] = static_cast<double>(rx().deviceIfBw_);
             } else if (text == "offset_tuning" && rx().deviceOffsetTuningPresent_) {
                 rx().deviceOffsetTuning_ = on;
                 withOffsetTuning(rx().device_, [this](auto& d) {
@@ -8454,6 +8549,39 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                     rx().deviceDither_ = d.dither();
                     return true;
                 });
+            } else if (text == "sdrplay_lowif" && dynamic_cast<cascade::source::SdrPlaySource*>(rx().device_) != nullptr) {
+                // The SDRplay's low-IF choice (G1-13, screen lane S5b): ival[0] 1 on, 0 off. OFF by default and never saved; unproven on a real radio. The first stream is checked and falls back to zero-IF (fact radio.N.sdrplay.lowIfNote).
+                auto* sp = dynamic_cast<cascade::source::SdrPlaySource*>(rx().device_);
+                if (!sp->setLowIf(c.ival[0] != 0)) { rx().sourceError_ = sp->lastError(); return refuse(FOXAPI_FAILED, rx().sourceError_.c_str()); }
+                res.applied[0] = sp->lowIfChosen() ? 1.0 : 0.0;
+            } else if (text == "soapy_bandwidth" && rx().deviceSoapyPresent_) {
+                // The driver's own bandwidth in Hz (num[0]); the driver's range judges it and its readback is what comes back (G1-15a)
+                if (!(c.num[0] > 0.0)) { return refuse(FOXAPI_OUT_OF_RANGE, "the bandwidth must be a positive number of Hz"); }
+                bool took = false;
+                double applied = 0.0;
+                withSoapyDriver(rx().device_, [this, &c, &took, &applied](auto& d) {
+                    took = d.setBandwidthHz(c.num[0], &applied);
+                    if (!took) { rx().sourceError_ = d.lastError(); }
+                    soapyFacts(d, rx().deviceSoapyFacts_);
+                    return true;
+                });
+                if (!took) { return refuse(FOXAPI_FAILED, rx().sourceError_.c_str()); }
+                res.applied[0] = applied;
+            } else if (text.rfind("soapy:", 0) == 0 && rx().deviceSoapyPresent_) {
+                // "soapy:<key>=<value>": one setting of the driver's own list (G1-15b). The driver's type, range and options judge it; its readSetting comes back in the answer's message.
+                const std::string body = text.substr(6);
+                const std::size_t eq = body.find('=');
+                if (eq == std::string::npos || eq == 0) { return refuse(FOXAPI_BAD_ARGUMENT, "a driver setting is written as soapy:<name>=<value>"); }
+                bool took = false;
+                std::string readback;
+                withSoapyDriver(rx().device_, [this, &body, eq, &took, &readback](auto& d) {
+                    took = d.writeSetting(body.substr(0, eq), body.substr(eq + 1), &readback);
+                    if (!took) { rx().sourceError_ = d.lastError(); }
+                    soapyFacts(d, rx().deviceSoapyFacts_);
+                    return true;
+                });
+                if (!took) { return refuse(FOXAPI_FAILED, rx().sourceError_.c_str()); }
+                std::snprintf(res.message, sizeof(res.message), "%s", readback.c_str());
             } else if (text == "randomiser" && rx().deviceAdcSwitchesPresent_) {
                 rx().deviceRandomiser_ = on;
                 withAdcSwitches(rx().device_, [this](auto& d) {
@@ -11493,6 +11621,7 @@ void Engine::runPassPart(PassPart part) {
             pumpExtraReceivers();
             pumpSchedule();   // (timed recordings: engine_schedule.cpp)
             pumpMacros();     // (a macro being played: engine_macros.cpp)
+            forEachReceiver([this] { recplayPump(); });   // screen lane S3: rollover, clips and the replay buffer (engine_recplay.cpp)
             pumpWireB();      // (wire-b: the limit mask of every open radio: engine_wire_b.cpp)
             pumpWireC();      // wire-c (engine_wire_c.cpp)
             pollSmeterCal();  // (a calibration being measured: engine_smeter.cpp)

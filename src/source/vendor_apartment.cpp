@@ -156,4 +156,29 @@ void StreamLink::deliver(const void* buffer, std::uint32_t n, std::uint32_t bits
     cv.notify_one();
 }
 
+void StreamLink::deliverFloats(const float* buffer, std::uint32_t floatCount) {
+    callbacks.fetch_add(1, std::memory_order_relaxed);
+    if (buffer == nullptr || floatCount == 0 || (floatCount & 1u) != 0 || floatCount > (1u << 21)) {
+        bad.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    if (!gate.load(std::memory_order_acquire)) { return; }
+    const std::uint32_t n = floatCount / 2;
+    std::complex<float> tmp[1024];
+    std::uint32_t done = 0;
+    while (done < n) {
+        const std::uint32_t k = std::min<std::uint32_t>(n - done, 1024);
+        for (std::uint32_t i = 0; i < k; ++i) {
+            const std::size_t at = (static_cast<std::size_t>(done) + i) * 2;
+            tmp[i] = {buffer[at], buffer[at + 1]};
+        }
+        const std::size_t w = ring.write(tmp, k);
+        pairs.fetch_add(w, std::memory_order_relaxed);
+        if (w < k) { dropped.fetch_add(k - w, std::memory_order_relaxed); }
+        done += k;
+    }
+    lastDataMs.store(nowMs(), std::memory_order_release);
+    cv.notify_one();
+}
+
 }  // namespace cascade::source::vendorapt

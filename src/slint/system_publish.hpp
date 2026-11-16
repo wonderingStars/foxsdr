@@ -20,6 +20,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <slint.h>
@@ -43,6 +44,8 @@ public:
     int diagCopies() const { return diagCopies_; }                 // the drive scripts' read-back of Copy diagnostics
     const std::string& bundleStatus() const { return bundleStatus_; }
     void setDigitGroupingSource(std::function<int()> f) { digitGrouping_ = std::move(f); }
+    // LANE X, WG2-1492: the tester usage recorder's report as "Show what is sent" shows it (the masked JSON, and how many reports wait to retry). Asked only while the preview is open.
+    void setTesterPreviewSource(std::function<std::pair<std::string, int>()> f) { testerPreview_ = std::move(f); }
     void setHighContrastSource(std::function<bool()> f) { highContrast_ = std::move(f); }
     struct Hooks {
         std::function<void()> updateCardChanged;   // the duties changed the update card's state (a re-tick, "Show it again"): the host applies it
@@ -131,6 +134,7 @@ private:
     // ---- the models ----
     ::DisplayModel mapDisplay(const DisplayModel& m);
     std::function<bool()> highContrast_;
+    std::function<std::pair<std::string, int>()> testerPreview_;   // lane X (see setTesterPreviewSource)
     std::function<int()> digitGrouping_;   // slint-gaps.md item 2: the saved grouping (0 | 1), which the host keeps in the workspace entry of the window half
     ::LanguageModel mapLanguage(const LanguageModel& m);
     ::UpdatesModel mapUpdates(const UpdatesModel& m);

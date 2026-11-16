@@ -12,6 +12,7 @@
 #include "source/ascp_source.hpp"
 #include "source/device_source.hpp"
 #include "source/fcd_control.hpp"
+#include "source/fobos_source.hpp"
 #include "source/g33ddc_source.hpp"
 #include "source/g39ddc_source.hpp"
 #include "source/hpsdr1_source.hpp"
@@ -48,6 +49,7 @@ const SourceKind kTable[] = {
     {"g39ddc", "WiNRADiO G39DDC (vendor library)", false, 192000.0, &makeOne<src::G39DdcSource>, "timeout=5000"},
     {"g33ddc", "WiNRADiO G33DDC (vendor library)", false, 192000.0, &makeOne<src::G33DdcSource>, "timeout=5000"},
     {"sdriq", "RFspace SDR-IQ (USB; needs FTDI's D2XX driver)", false, 196078.0, &makeOne<src::SdriqSource>, "timeout=3000"},   // radio-bridges (engine merge 3)
+    {"fobos", "Fobos SDR (vendor library)", false, 2000000.0, &makeOne<src::FobosSource>, "timeout=5000"},   // lane S5c: the maker's own library, which the user installs
 };
 
 bool hasControlChar(const std::string& s) {

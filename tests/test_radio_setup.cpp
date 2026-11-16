@@ -555,6 +555,13 @@ void testFamilyForDriver() {
         const rs::DriverGuidance* a = rs::guidanceForDriver("ANTSDR");
         CHECK(a != nullptr);
         if (a != nullptr) { CHECK(std::string(a->text).find("192.168.1.10") != std::string::npos && std::string(a->text).find("ADALM-Pluto source") != std::string::npos); }
+        // ELAD (screen lane S5b, G1-07c): through the user-installed SoapyELAD module; nothing included or downloaded
+        const rs::DriverGuidance* e = rs::guidanceForDriver("ELAD");
+        CHECK(e != nullptr);
+        if (e != nullptr) {
+            const std::string t = e->text;
+            CHECK(std::string(e->module) == "SoapyELAD" && t.find("SoapyELAD") != std::string::npos && t.find("does not include and does not download") != std::string::npos && t.find("GPL") != std::string::npos);
+        }
         CHECK(rs::guidanceForDriver("rtlsdr") == nullptr);
         CHECK(rs::guidanceForDriver("") == nullptr);
     }

@@ -374,6 +374,31 @@ public:
     // vendor call and must not be made from a draw.
     std::string antennaReadback();
 
+    // THE DRIVER'S OWN BANDWIDTH AND SETTINGS (screen lane S5b, rows G1-15a and G1-15b). Everything is asked of the driver, never assumed: a driver with no
+    // bandwidth control reports supported == false, and the settings list is whatever the driver's getSettingInfo returns (none for many). All of it runs under
+    // the device lock, bounded and guarded like the antenna calls, and fails soft: false (or an empty list) with lastError() worded for the person.
+    struct BandwidthInfo {
+        bool supported = false;   // the driver lists at least one RX bandwidth range
+        double currentHz = 0.0;   // the driver's own getBandwidth readback
+        double loHz = 0.0;        // the smallest and the largest bandwidth any range of the driver allows
+        double hiHz = 0.0;
+    };
+    enum class SettingType { Bool, Int, Float, String };
+    struct SettingInfo {
+        std::string key, name, description, units, value, defaultValue;
+        SettingType type = SettingType::String;
+        bool hasRange = false;
+        double lo = 0.0, hi = 0.0;
+        std::vector<std::string> options, optionNames;   // when the driver lists the values it accepts
+    };
+    BandwidthInfo bandwidthInfo();
+    // Sets the RX bandwidth (hz > 0, finite, inside a range the driver lists) and reads it back; `appliedHz` (if given) gets what the driver says it now has.
+    bool setBandwidthHz(double hz, double* appliedHz = nullptr);
+    std::vector<SettingInfo> listSettings();
+    // Writes one driver setting. The key must be one the driver lists and the value must fit the driver's own type, range and options (judged here, before the driver is called, so a refusal is worded);
+    // the driver's own refusal (an exception) is returned as lastError(). `readback` (if given) gets the driver's readSetting after the write.
+    bool writeSetting(const std::string& key, const std::string& value, std::string* readback = nullptr);
+
     // The rates the panel offers. listSampleRates from the driver, ascending,
     // interrogated at open; when the driver answers none (it advertises a
     // continuous range instead, as UHD does) this falls back to the 1/2/4/8

@@ -1,0 +1,28 @@
+#! frames=1500 size=1600x6000 bank=0 sections=0:1 iqfile=s3-play.wav
+# s3-overview (screen lane S3, docs/multi-radio-records/screen-s3-recplay.md; G3-14b): the whole-file waterfall is made on its own thread from a file the person names, with a picture of the size asked for; a missing file and a row count out of range are refused in words.
+10 state running == 1
+state s3.ov.state == idle
++1 click "Raw files and the whole-file waterfall"
+# rows out of range: refused on the screen, nothing started
++1 type "Recording (full path)" "{fixtures}/s3-play.wav"
++1 key enter
++1 type "Rows (50 to 2000)" "10"
++1 key enter
++2 click "Make the waterfall"
++4 state s3.note.source contains "allowed"
++1 state s3.ov.state == idle
+# a file that is not there: refused by the reader, said in words
++1 type "Rows (50 to 2000)" "200"
++1 key enter
++1 type "Recording (full path)" "{fixtures}/nothing-here.wav"
++1 key enter
++2 click "Make the waterfall"
++60 state s3.ov.state == failed
+# the recording: a picture of 200 rows and 1024 columns
++1 type "Recording (full path)" "{fixtures}/s3-play.wav"
++1 key enter
++2 click "Make the waterfall"
++120 state s3.ov.state == done
++1 state s3.ov.h == 200
++1 state s3.ov.w == 1024
++1 expect "Make the waterfall" enabled equals "true"
