@@ -227,6 +227,16 @@ struct S4bPublisher::Impl {
         }
         if (fact("wirec.srv.rtltcp.all") == "1") { v.push_back(rNote(tr("The rtl_tcp server has no password. Anyone on your network can connect, listen and retune the radio."), kWarn)); }
 
+        // ---- desktop notifications for keyword alerts (G3-37b)
+        v.push_back(rHeading(tr("Desktop notifications")));
+        wircTick(v, S, "notify.on", tr("Show each alert as a desktop notification"), "alerts.notify",
+                 tr("When a keyword alert is raised a notice appears in the notification area of Windows. Alerts are off until you turn them on above."));
+        if (fact("wirec.alerts.enabled") == "1") {
+            v.push_back(rReadout(tr("Notifications handed to Windows"), fact("alerts.notified")));
+            const std::string np = fact("alerts.notify_problem");
+            if (!np.empty()) { v.push_back(rNote(np, kErr)); }
+        }
+
         // ---- the program interface: WebSocket and event stream (G3-31)
         v.push_back(rHeading(tr("Program interface")));
         const bool apiOn = fact("wirec.srv.api.enabled") == "1";

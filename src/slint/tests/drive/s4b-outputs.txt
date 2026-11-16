@@ -80,3 +80,9 @@
 +15 state s4b.fact.srv.mcp.running == 0
 +1 click "Forget the MCP token"
 +12 state s4b.fact.wirec.srv.mcp.token == ""
+# desktop notifications (G3-37b): the setting is on screen; nothing is shown in a scripted run (the real notifier is installed by a real run only)
++1 state s4b.fact.wirec.alerts.notify == 1
++1 click "Show each alert as a desktop notification"
++12 state s4b.fact.wirec.alerts.notify == 0
++1 click "Show each alert as a desktop notification"
++12 state s4b.fact.wirec.alerts.notify == 1

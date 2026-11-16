@@ -201,6 +201,8 @@ std::int32_t Engine::applyWireC(const FoxCommand& c, const std::string& text, Fo
     return FOXAPI_UNSUPPORTED;
 }
 
+void Engine::setDesktopNotifier(std::shared_ptr<cascade::core::alerts::NotificationSink> sink) { wireC().outputs.setNotifier(std::move(sink)); }
+
 void Engine::wireCFacts(const std::function<void(const std::string&, const std::string&)>& fact) {
     wc::State& s = wireC();
     s.settings().each([&fact](const std::string& key, const std::string& value) { fact("wirec." + key, value); });

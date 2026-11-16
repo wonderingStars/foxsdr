@@ -3026,6 +3026,8 @@ private:
     // The store's tables (engine_store.cpp): the facts and the pictures list, built with the lists block.
     void buildApiListsStore(ApiListBlock& b);
 public:
+    // Where a raised keyword alert is shown on the desktop (screen lane S4b: foxsdr-slint gives its real run the Windows notification, never a bounded run or a test; none by default).
+    void setDesktopNotifier(std::shared_ptr<cascade::core::alerts::NotificationSink> sink);
     // THE ONE PUBLISH (engine stage 2, docs/engine-stage2.md): fills a
     // PublishedState - FoxReceiverState and the app's extension - and the
     // /api/status text and lists from this window's members and the
