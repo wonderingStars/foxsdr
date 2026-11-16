@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -33,6 +34,7 @@ using slk::kErr;
 using slk::kGood;
 using slk::kWarn;
 using slk::rField;
+using slk::rMasked;
 using slk::rHeading;
 using slk::rKey;
 using slk::rNote;
@@ -213,6 +215,25 @@ struct LaneLPublisher::Impl {
         tick(v, id, label, on, [this, s, label, k](bool o) { setting(s, label, k, o ? "1" : "0"); }, tip);
     }
     static std::string mhz(double hz) { return numberText(std::round(hz / 1e3) / 1e3) + " MHz"; }
+    // ENGINE LANE E1: the web page's HTTPS and listener settings go to the engine as one SERVER_CONFIG member each (the engine's own sentence answers a refusal).
+    void webConfig(const std::string& what, const std::string& json, const std::string& draftToDrop = std::string()) { send(kWeb, what, cmd(FOXAPI_OP_SERVER_CONFIG, 0, json), 0, draftToDrop); }
+    static bool thumbprintShape(const std::string& t) {
+        if (t.size() != 40) { return false; }
+        for (const char c : t) { if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) { return false; } }
+        return true;
+    }
+    static std::string dateOf(long long unixSeconds) {
+        const std::time_t t = static_cast<std::time_t>(unixSeconds);
+        std::tm tmv{};
+#ifdef _WIN32
+        gmtime_s(&tmv, &t);
+#else
+        gmtime_r(&t, &tmv);
+#endif
+        char b[24];
+        std::strftime(b, sizeof b, "%Y-%m-%d", &tmv);
+        return b;
+    }
 
     // ================================================================ A. TUNING AND MEMORIES
     void buildTuning(std::vector<Row>& v) {
@@ -837,13 +858,21 @@ struct LaneLPublisher::Impl {
         settingTick(v, kSystem, "y.resume", tr("Look for radios again after the PC wakes"), "sys.resume_reopen", true);
         const std::string rc = fact("sys.resume.count");
         if (!rc.empty()) { v.push_back(rReadout(tr("Times the radios were looked for again"), rc)); }
+        v.push_back(rHeading(tr("RDS log")));
+        settingTick(v, kSystem, "y.rdslog", tr("Write what an FM station sends about itself to a file"), "rds.log", false,
+                    tr("The station name, programme type and radio text, with the time, one line each time they change. Text only: no frequency is written. Off until you switch it on."));
+        field(v, "y.rds-folder", tr("Folder for the RDS log"), wirec("rds.log.folder"), tr("A full path. Nothing is written until you choose one."));
+        key(v, "y.rds-folder-set", tr("Use this folder"), [this] { setting(kSystem, tr("RDS log folder"), "rds.log.folder", trim(dv("y.rds-folder")), "y.rds-folder"); }, true);
+        field(v, "y.rds-name", tr("File name"), wirec("rds.log.name").empty() ? std::string("rds_{date}") : wirec("rds.log.name"), tr("{date}, {time}, {radio} and {freq_mhz} can be used; .csv is added"));
+        key(v, "y.rds-name-set", tr("Use this name"), [this] { setting(kSystem, tr("RDS log file name"), "rds.log.name", trim(dv("y.rds-name")), "y.rds-name"); }, true);
+        const std::string rl = fact("rds.log.lines");
+        if (!rl.empty() && rl != "0") { v.push_back(rReadout(tr("Lines written"), rl)); }
+        const std::string re = fact("rds.log.error");
+        if (!re.empty()) { v.push_back(rNote(re, kErr)); }
         v.push_back(rHeading(tr("Plugin store")));
         const std::string so = wirec("store.sort");
         choice(v, "y.store-sort", tr("Order of the plugin store"), {tr("Catalogue order"), tr("By name"), tr("By last update")}, so == "name" ? 1 : so == "updated" ? 2 : 0, [this](int i) { static const char* const w[3] = {"catalogue", "name", "updated"}; setting(kSystem, tr("Order of the plugin store"), "store.sort", w[std::clamp(i, 0, 2)]); },
                tr("Popular and best rated need a server's figures, which do not exist yet."));
-        v.push_back(rHeading(tr("About")));
-        const std::string lb = fact("sys.lastboot");
-        v.push_back(lb.empty() ? rNote(tr("No record of the last start has been published.")) : rNote(lb));
         endNote(v, kSystem);
     }
 
@@ -865,7 +894,66 @@ struct LaneLPublisher::Impl {
             draft["b.origins"] = t;
             setting(kWeb, tr("Allowed web origins"), "web.cors_origins", out, "b.origins");
         };
-        v.push_back(rNote(tr("Cross-origin sign-in stays off: it needs HTTPS, which is the owner's decision.")));
+        v.push_back(rNote(tr("Cross-origin sign-in stays off.")));
+
+        // ---- HTTPS (engine lane E1, owner decision 17): Windows' own secure layer, nothing added to the program
+        v.push_back(rHeading(tr("Secure connection (HTTPS)")));
+        const bool tlsOn = fact("web.tls") == "1";
+        tick(v, "b.tls", tr("Use HTTPS for the web page"), tlsOn, [this](bool on) { webConfig(tr("Use HTTPS"), std::string("{\"web\":{\"tls\":") + (on ? "true" : "false") + "}}"); },
+             tr("Uses Windows' own secure layer. While it is on, the plain page is never offered to the network. The first visit shows a certificate warning until you compare the fingerprint below."));
+        const bool ownCert = fact("web.tls.thumbprintSet") != "1";
+        v.push_back(rReadout(tr("Certificate"), ownCert ? tr("FoxSDR makes its own") : tr("One from Windows")));
+        key(v, "b.cert-own", tr("Use FoxSDR's own certificate"), [this] { webConfig(tr("Certificate"), "{\"web\":{\"tlsThumbprint\":\"\"}}"); }, !ownCert,
+            tr("Your own certificate must be in your Personal certificate store with its key, and the key must be in a Microsoft software provider (never a card or a token)."));
+        field(v, "b.thumb", tr("Certificate thumbprint"), "", tr("The 40 hexadecimal digits Windows shows for the certificate"));
+        key(v, "b.thumb-use", tr("Use this certificate"), [this] { const std::string t = trim(dv("b.thumb")); if (thumbprintShape(t)) { webConfig(tr("Certificate"), "{\"web\":{\"tlsThumbprint\":\"" + t + "\"}}", "b.thumb"); } else { refuseHere(kWeb, tr("Certificate"), tr("A thumbprint is 40 hexadecimal digits.")); } },
+            thumbprintShape(trim(dv("b.thumb"))));
+        if (fact("web.tls.active") == "1") {
+            v.push_back(rReadout(tr("Fingerprint (SHA-256)"), fact("web.tls.fingerprint")));
+            const long long na = std::atoll(fact("web.tls.notAfter").c_str());
+            if (na > 0) { v.push_back(rReadout(tr("Valid until"), dateOf(na))); }
+        }
+
+        // ---- Listeners (engine lane E1, owner decision 18): everyone shares ONE tuned receiver and ONE person tunes
+        v.push_back(rHeading(tr("Share this receiver")));
+        v.push_back(rNote(tr("Everyone who signs in hears the same tuned receiver. You tune; they listen.")));
+        tick(v, "b.listeners", tr("Let listeners sign in"), fact("web.listeners") == "1",
+             [this](bool on) { webConfig(tr("Let listeners sign in"), std::string("{\"web\":{\"listeners\":") + (on ? "true" : "false") + "}}"); },
+             tr("Needs your own web password first and a listener password below. A listener picks a name and can look and listen only."));
+        const bool hasLp = fact("web.hasListenerPassword") == "1";
+        v.push_back(rMasked("b.lpw", tr("Listener password"), dv("b.lpw"), hasLp ? tr("A listener password is set. Type a new one to replace it.") : tr("At least eight characters. Everyone who listens uses this one password.")));
+        handlers["b.lpw"] = [this](const std::string& t) { draft["b.lpw"] = t; dirty = true; };
+        key(v, "b.lpw-set", tr("Set the listener password"), [this] {
+            const std::string pw = dv("b.lpw");
+            if (pw.size() < 8) { refuseHere(kWeb, tr("Listener password"), tr("The password must be at least eight characters.")); return; }
+            nlohmann::json j; j["web"]["listenerPassword"] = pw;
+            webConfig(tr("Listener password"), j.dump(), "b.lpw");
+        }, dv("b.lpw").size() >= 8);
+        key(v, "b.lpw-clear", tr("Clear the listener password"), [this] { webConfig(tr("Listener password"), "{\"web\":{\"clearListenerPassword\":true}}", "b.lpw"); }, hasLp);
+        if (fact("web.listenerPasswordPending") == "1") { v.push_back(rNote(tr("The password is being prepared."))); }
+        field(v, "b.lmax", tr("Most listeners at once"), fact("web.maxListeners").empty() ? "4" : fact("web.maxListeners"), tr("1 to 32"));
+        field(v, "b.lidle", tr("Sign a listener out after (minutes without activity)"), std::to_string(std::atoi(fact("web.listenerIdleSeconds").empty() ? "900" : fact("web.listenerIdleSeconds").c_str()) / 60), tr("0 to 1440; 0 = never"));
+        field(v, "b.lsess", tr("Sign a listener out after (hours in all)"), std::to_string(std::atoi(fact("web.listenerSessionSeconds").empty() ? "28800" : fact("web.listenerSessionSeconds").c_str()) / 3600), tr("0 to 12; 0 = no limit"));
+        key(v, "b.lset", tr("Apply the limits"), [this] {
+            double mx = 0, idle = 0, sess = 0;
+            std::string e;
+            if (!parseNumber(dv("b.lmax", "4"), 1.0, 32.0, mx, e) || !parseNumber(dv("b.lidle", "15"), 0.0, 1440.0, idle, e) || !parseNumber(dv("b.lsess", "8"), 0.0, 12.0, sess, e)) { refuseHere(kWeb, tr("Listener limits"), e); return; }
+            nlohmann::json j;
+            j["web"]["maxListeners"] = static_cast<int>(mx);
+            j["web"]["listenerIdleSeconds"] = static_cast<int>(idle * 60.0);
+            j["web"]["listenerSessionSeconds"] = static_cast<int>(sess * 3600.0);
+            webConfig(tr("Listener limits"), j.dump());
+        });
+        tick(v, "b.ltune", tr("Listeners may tune too"), fact("web.listenersMayTune") == "1",
+             [this](bool on) { webConfig(tr("Listeners may tune too"), std::string("{\"web\":{\"listenersMayTune\":") + (on ? "true" : "false") + "}}"); },
+             tr("Off: only you tune. On: a listener's tuning moves the one receiver everyone hears."));
+        tick(v, "b.chat", tr("Chat between listeners"), fact("web.chat") == "1",
+             [this](bool on) { webConfig(tr("Chat between listeners"), std::string("{\"web\":{\"chat\":") + (on ? "true" : "false") + "}}"); },
+             tr("Off by default. Messages are never stored."));
+        const std::string ln = fact("web.listeners.now");
+        if (!ln.empty()) { v.push_back(rReadout(tr("Listeners now"), ln)); }
+        const std::string pol = fact("web.policy");
+        if (!pol.empty() && (fact("web.listeners") == "1" || tlsOn)) { v.push_back(rNote(pol, kWarn)); }
         endNote(v, kWeb);
     }
 

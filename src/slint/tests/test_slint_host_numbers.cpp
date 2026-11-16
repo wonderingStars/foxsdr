@@ -53,11 +53,49 @@ void commaLocale() {
     CHECK(fmtMHz(7074000.0) == "7.074000 MHz");
 }
 
+// ENGINE LANE E1 (owner decision 73): the other readouts follow the same setting. With nothing set they are today's text; with a comma locale they write the comma.
+void otherReadouts() {
+    setNumberLocale(nullptr);
+    CHECK(fmtNum(1.5, 1) == "1.5");
+    CHECK(fmtNum(-1.5, 1) == "-1.5");
+    CHECK(fmtNum(2.5, 1, true) == "+2.5");
+    CHECK(fmtNum(-2.5, 1, true) == "-2.5");
+    CHECK(fmtNum(0.0, 2, true) == "+0.00");
+    CHECK(fmtNum(7.0, 0) == "7");
+    CHECK(fmtNum(145.5, 6) == "145.500000");
+    CHECK(fmtRate(2.4e6) == "2.400 MS/s");
+    CHECK(fmtRate(0.0) == "--");
+    CHECK(levelText(-38.4, true) == "-38.4 dB");
+    CHECK(localizeNumber("output lines, 2.5 s mean", 2.5, 1) == "output lines, 2.5 s mean");   // no locale: unchanged
+    acc::NumberSymbols de;
+    de.name = "de-DE";
+    de.decimal = ",";
+    de.group = ".";
+    setNumberLocale(&de);
+    CHECK(fmtNum(1.5, 1) == "1,5");
+    CHECK(fmtNum(-1.5, 1) == "-1,5");
+    CHECK(fmtNum(2.5, 1, true) == "+2,5");
+    CHECK(fmtNum(7.0, 0) == "7");
+    CHECK(fmtNum(0.75, 2) == "0,75");
+    CHECK(fmtNum(145.5, 6) == "145,500000");
+    CHECK(fmtRate(2.4e6) == "2,400 MS/s");
+    CHECK(fmtRate(0.0) == "--");
+    CHECK(levelText(-38.4, true) == "-38,4 dB");
+    CHECK(levelText(-80.0, true) == "-60 dB");                                                  // the floor stays as it was
+    CHECK(localizeNumber("output lines, 2.5 s mean", 2.5, 1) == "output lines, 2,5 s mean");
+    CHECK(localizeNumber("nothing of it here", 2.5, 1) == "nothing of it here");
+    // a language whose translated sentence puts the number elsewhere is still localised (the number is found, not the position)
+    CHECK(localizeNumber("Ausgabezeilen, Mittel 2.5 s", 2.5, 1) == "Ausgabezeilen, Mittel 2,5 s");
+    setNumberLocale(nullptr);
+    CHECK(fmtNum(0.75, 2) == "0.75");
+}
+
 }  // namespace
 
 int main() {
     defaultsAreToday();
     commaLocale();
+    otherReadouts();
     setNumberLocale(nullptr);
     return testSummary("test_slint_host_numbers");
 }

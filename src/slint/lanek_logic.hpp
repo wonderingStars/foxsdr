@@ -30,7 +30,7 @@ namespace fs = std::filesystem;
 // ============================================================ rows ============================================================
 const std::vector<const char*>& wizardStrings();   // the setup's radio and preset words, for the string tables
 
-enum RowKind { kHeading = 0, kNote = 1, kKey = 2, kTick = 3, kChoice = 4, kField = 5, kReadout = 6, kSlider = 7, kBar = 8 };
+enum RowKind { kHeading = 0, kNote = 1, kKey = 2, kTick = 3, kChoice = 4, kField = 5, kReadout = 6, kSlider = 7, kBar = 8, kMasked = 9 };
 enum RowTone { kDim = 0, kWarn = 1, kErr = 2, kGood = 3 };
 
 struct Row {
@@ -49,6 +49,8 @@ Row rKey(const std::string& id, const std::string& label, bool enabled = true, c
 Row rTick(const std::string& id, const std::string& label, bool on, bool enabled = true, const std::string& tip = "");
 Row rChoice(const std::string& id, const std::string& label, const std::vector<std::string>& options, int pick, bool enabled = true, const std::string& tip = "");
 Row rField(const std::string& id, const std::string& label, const std::string& value, const std::string& tip = "", bool enabled = true);
+// A one-line field whose text is hidden on the screen (a password): kind 9. The text is the person's draft; it is sent once and dropped.
+Row rMasked(const std::string& id, const std::string& label, const std::string& value, const std::string& tip = "", bool enabled = true);
 Row rReadout(const std::string& label, const std::string& value);
 Row rSlider(const std::string& id, const std::string& label, float level, const std::string& readout, bool enabled = true, const std::string& tip = "");
 Row rBar(const std::string& label, float level, const std::string& value);

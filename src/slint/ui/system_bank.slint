@@ -913,6 +913,11 @@ export component KPanel inherits VerticalLayout {
             Line { RowLabel { text: r.label; } }
             LineInput { value: r.value; enabled: r.enabled; name: r.label; tooltip: r.note; mono: true; committed(t) => { root.act(r.id, t); } }
         }
+        if r.kind == 9 : VerticalLayout {
+            spacing: 2px;
+            Line { RowLabel { text: r.label; } }
+            LineInput { value: r.value; hidden: true; enabled: r.enabled; name: r.label; tooltip: r.note; mono: true; committed(t) => { root.act(r.id, t); } }
+        }
         if r.kind == 6 : Line {
             RowLabel { text: r.label; width: 120px; }
             Readout { horizontal-stretch: 1; text: r.value; horizontal-alignment: right; accessible-role: text; accessible-label: r.label; accessible-description: r.value; }

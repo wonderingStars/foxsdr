@@ -17,6 +17,8 @@ state lanec.memenabled == 0
 +1 type "Scan threshold dB" "-60"
 +1 key enter
 +5 state lanec.memthreshold == -60
+# engine lane E1, row D1-mem: the memory threshold reaches the ENGINE (SCANNER_EXTRAS 6), read back from the engine; it was stored and never sent before
++15 state fact.scan.memthresholds == 1
 +1 type "Offset kHz" "-600"
 +1 key enter
 +5 state lanec.memoffset == -600

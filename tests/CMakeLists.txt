@@ -370,7 +370,7 @@ foreach(src ${CASCADE_TESTS})
         # The helper process and the stand-in drivers, built first; the test is handed the helper and the stand-ins' directory.
         add_dependencies(${name} ${CASCADE_EXTIO_HELPER_TARGET} ${CASCADE_EXTIO_STANDINS})
         add_test(NAME ${name} COMMAND ${name} "$<TARGET_FILE:${CASCADE_EXTIO_HELPER_TARGET}>" "${CMAKE_CURRENT_BINARY_DIR}/fixture_extio/$<CONFIG>")
-    elseif(name STREQUAL "test_font_assets" OR name STREQUAL "test_web_users" OR name STREQUAL "test_web_tls" OR name STREQUAL "test_web_secure")
+    elseif(name STREQUAL "test_font_assets" OR name STREQUAL "test_web_users" OR name STREQUAL "test_web_tls" OR name STREQUAL "test_web_secure" OR name STREQUAL "test_installer_report" OR name STREQUAL "test_typed_number")
         # Compares something compiled INTO the binary against the files it was
         # generated from - the typefaces against third_party/fonts - so it
         # needs the repository root on its command line.

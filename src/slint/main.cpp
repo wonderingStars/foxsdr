@@ -722,6 +722,14 @@ int main(int argc, char** argv) {
     laneCEnv.scanLogPath = laneCDir.empty() ? std::string() : (std::filesystem::path(laneCDir) / "scan-log.csv").string();
     laneCEnv.bounded = bounded.bounded();
     laneCEnv.submit = [&](const FoxCommand& c, std::uint32_t radio) { submit(c, radio); };
+    laneCEnv.submitLong = [&](const FoxCommand& cin, std::uint32_t radio, const std::string& longText) {   // engine lane E1: a text longer than the command slot
+        FoxCommand c = cin;
+        c.structSize = sizeof(c);
+        aimAt(c, radio);
+        FoxSubmitResult r{};
+        r.structSize = sizeof(r);
+        if (!FOXAPI_HAS(api, submit_text) || api->submit_text(session, &c, longText.data(), static_cast<uint32_t>(longText.size()), &r) < 0) { cascade::core::diagLogf("scanner: the engine did not take the memories' thresholds"); }
+    };
     laneCEnv.nowMs = [] { return static_cast<double>(nowMs()); };
     laneCEnv.unixNow = [] { return static_cast<std::int64_t>(std::time(nullptr)); };
     laneCEnv.openIq = [&](const std::string& path) { signalBank.openDroppedRecording(path); };
@@ -1016,8 +1024,8 @@ int main(int argc, char** argv) {
     };
     const auto abBlock = [&](std::vector<MenuEntry>& e) {   // lane B (S21): the A and B measurement markers, set where the menu was opened
         e.push_back(entry(MenuItemKind::Separator, 0, ""));
-        e.push_back(entry(MenuItemKind::Item, 411, std::string(cascade::i18n::tr("Set marker A here")).c_str(), fmt("%.4f MHz", menuHz / 1e6).c_str(), false, menuHz > 0));
-        e.push_back(entry(MenuItemKind::Item, 412, std::string(cascade::i18n::tr("Set marker B here")).c_str(), fmt("%.4f MHz", menuHz / 1e6).c_str(), false, menuHz > 0));
+        e.push_back(entry(MenuItemKind::Item, 411, std::string(cascade::i18n::tr("Set marker A here")).c_str(), (fmtNum(menuHz / 1e6, 4) + " MHz").c_str(), false, menuHz > 0));
+        e.push_back(entry(MenuItemKind::Item, 412, std::string(cascade::i18n::tr("Set marker B here")).c_str(), (fmtNum(menuHz / 1e6, 4) + " MHz").c_str(), false, menuHz > 0));
         e.push_back(entry(MenuItemKind::Item, 413, std::string(cascade::i18n::tr("Clear markers A and B")).c_str(), "", false, selected().ab.aSet || selected().ab.bSet));
     };
     const auto openMenu = [&](MenuKind kind, float x, float y) {
@@ -2361,10 +2369,10 @@ int main(int argc, char** argv) {
                 } else if (peakIdx == 0) { rv.peaks.clear(); }
                 rv.abRead = foxsdr::slintextras::abReading(rv.ab, frame.data(), frame.size(), info.centreHz, info.spanHz);
                 const auto up = [](std::string x) { for (char& c : x) { c = static_cast<char>(std::toupper(static_cast<unsigned char>(c))); } return x; };
-                if (lookSnr && rv.snr.valid) { boxLines.push_back(fmt("SNR %.1f DB", rv.snr.snrDb)); boxLines.push_back(cascade::core::formatText("PEAK %.1f  FLOOR %.1f DBFS", rv.snr.peakDb, rv.snr.floorDb)); }
-                if (lookPower) { boxLines.push_back(std::string(rv.ab.aSet && rv.ab.bSet ? "CH PWR A-B " : "CH PWR ") + fmt("%.1f DBFS", rv.channelPowerDb)); }
+                if (lookSnr && rv.snr.valid) { boxLines.push_back("SNR " + fmtNum(rv.snr.snrDb, 1) + " DB"); boxLines.push_back("PEAK " + fmtNum(rv.snr.peakDb, 1) + "  FLOOR " + fmtNum(rv.snr.floorDb, 1) + " DBFS"); }
+                if (lookPower) { boxLines.push_back(std::string(rv.ab.aSet && rv.ab.bSet ? "CH PWR A-B " : "CH PWR ") + fmtNum(rv.channelPowerDb, 1) + " DBFS"); }
                 if (lookTrack) {
-                    if (rv.track.valid) { boxLines.push_back(up(fmt("TRK %.6f MHZ", rv.track.hz / 1e6))); boxLines.push_back(up(cascade::core::formatText("%+.1f HZ  DRIFT %+.2f HZ/S", rv.track.offsetHz, rv.track.driftHzPerS))); }
+                    if (rv.track.valid) { boxLines.push_back(up("TRK " + fmtNum(rv.track.hz / 1e6, 6) + " MHZ")); boxLines.push_back(up("" + fmtNum(rv.track.offsetHz, 1, true) + " HZ  DRIFT " + fmtNum(rv.track.driftHzPerS, 2, true) + " HZ/S")); }
                     else { boxLines.push_back("TRK NO SIGNAL"); }
                 }
             }
@@ -2420,12 +2428,12 @@ int main(int argc, char** argv) {
             float peak = -300.f;
             for (std::size_t i = p0; i < p1 && i < frame.size(); ++i) { peak = std::max(peak, frame[i]); }
             fig.showPeak = peak > -299.f;
-            fig.peakText = fmt("%.1f dBFS", peak);
+            fig.peakText = fmtNum(peak, 1) + " dBFS";
             fig.peakAge = "now";
             fig.peakAgeSet = true;
         } else if (rv.lastFrameMs > 0) {
             const double age = static_cast<double>(nowMs() - rv.lastFrameMs) / 1000.0;
-            fig.peakAge = age < 0.25 ? "now" : fmt("%.1f s ago", age);
+            fig.peakAge = age < 0.25 ? "now" : fmtNum(age, 1) + " s ago";
             fig.peakAgeSet = true;
         }
         // the axes and overlays follow the view every tick (a zoom or pan changes them without a new frame)
@@ -2491,7 +2499,7 @@ int main(int argc, char** argv) {
                 fig.marks.push_back(fm);
                 fig.wfMarks.push_back(fm);
             };
-            for (const auto& p : rv.peaks) { lbMark(p.hz, fmt("%.4f", p.hz / 1e6) + " " + fmt("%.0f dB", static_cast<double>(p.db)), 0xff, 0xc0, 0x4a, 0xc0); }
+            for (const auto& p : rv.peaks) { lbMark(p.hz, fmtNum(p.hz / 1e6, 4) + " " + fmt("%.0f dB", static_cast<double>(p.db)), 0xff, 0xc0, 0x4a, 0xc0); }
             if (rv.ab.aSet || rv.ab.bSet) {
                 const float* fr = rv.frame.empty() ? nullptr : rv.frame.data();
                 if (rv.ab.aSet) { lbMark(rv.ab.aHz, foxsdr::slintextras::abLabelA(rv.ab, foxsdr::slintextras::levelAtHz(fr, rv.frame.size(), rv.lastInfo.centreHz, rv.lastInfo.spanHz, rv.ab.aHz)), 0x5a, 0xe0, 0x9a, 0xf0); }
@@ -2529,7 +2537,7 @@ int main(int argc, char** argv) {
         for (const auto& m : lists.markers) {
             const double f = fracOf(m.hz, v.centreHz, v.spanHz);
             if (f < 0 || f > 1) { continue; }
-            fig.markers.push_back({static_cast<float>(f), "M" + std::to_string(m.id) + " " + fmt("%.3f MHz", m.hz / 1e6)});
+            fig.markers.push_back({static_cast<float>(f), "M" + std::to_string(m.id) + " " + fmtNum(m.hz / 1e6, 3) + " MHz"});
         }
         fig.markerCount = static_cast<int>(lists.markers.size());
         fig.keyFoot = "FLOOR " + fmt("%.0f dB", st.dbMin) + " \xC2\xB7 CEILING " + fmt("%.0f dB", st.dbMax) + (rangeManual ? " \xC2\xB7 manual" : " \xC2\xB7 auto");
@@ -2782,7 +2790,7 @@ int main(int argc, char** argv) {
         }
         ui->set_squelch_auto_tooltip(ss(sqAuto ? "Automatic squelch - sits 8 dB above the measured noise floor" : "Automatic squelch - follows the noise floor so weak carriers open it and noise does not"));
         ui->set_volume_norm(static_cast<float>(state.volume));
-        ui->set_volume_text(ss(fmt("%.2f", state.volume)));
+        ui->set_volume_text(ss(fmtNum(state.volume, 2)));
         const bool haveAudio = running && (state.flags & FOXAPI_RX_SINK_OPEN);
         ui->set_level_norm(static_cast<float>(haveAudio ? levelNorm(state.audioLevelDb) : 0.0));
         ui->set_level_text(ss(levelText(state.audioLevelDb, haveAudio)));
@@ -3059,7 +3067,7 @@ int main(int argc, char** argv) {
             wf3d.spanHz = v.spanHz;
             wf3d.tunedHz = state.tunedHz;
             wf3d.nowMs = nowMs();
-            if (wf3d.visible) { for (const auto& m : lists.markers) { wf3d.markers.push_back({m.hz, "M" + std::to_string(m.id) + " " + fmt("%.3f MHz", m.hz / 1e6)}); } }
+            if (wf3d.visible) { for (const auto& m : lists.markers) { wf3d.markers.push_back({m.hz, "M" + std::to_string(m.id) + " " + fmtNum(m.hz / 1e6, 3) + " MHz"}); } }
             view3dBank.publish(wf3d);
             view3dBank.publishRadar(scopeBank.radar3dFeed(), wf3d.nowMs);   // the radar scope's 3D airspace: its feed is empty unless the SCOPE tab is up with a position
             view3dBank.publishTunnel(scopeBank.tunnel3dFeed(), wf3d.nowMs); // the demod scope's 3D tunnel: its feed is empty unless the window is open on a baseband input
