@@ -335,6 +335,42 @@ int main() {
         forgetRadio(kRtl.key);
     }
 
+    // ---- NEVER SENT: every helper handed hostile text (a frequency in four forms, a path, the radio's serial, an account, a host, an address) -------------------
+    {
+        Rig t("never");
+        t.start();
+        const RadioIdentity hf = identify("airspyhf", "serial=SN9900AA", "Airspy HF+ (serial SN9900AA)");
+        registerSource(&g_source1, hf);
+        const char* const hostile = "failed at 433.920 MHz / 433920000 Hz / 433,920 kHz for serial SN9900AA in C:\\Users\\alice\\SecretFolder\\zz_secret_capture.iq via 192.168.7.77 (mynas.lan)";   // (a computer name or a callsign in free text cannot be told from a word: no driver is ever handed one)
+        noteControlRefused(&g_source1, "airspyhf", Control::Frequency, hostile, true);
+        noteControlRefused(&g_source1, "airspyhf", Control::Gain, hostile);
+        noteDeviceFault(&g_source1, "airspyhf", hostile, hostile);
+        noteVendorCallFault(&g_source1, "airspyhf", "vendorcall", hostile, false);
+        noteStreamTrouble(&g_source1, "airspyhf", StreamTrouble{60.0, 1000, 2, 0, 0, 1500});
+        const std::vector<json> msgs = t.flush();
+        CHECK(msgs.size() >= 5);
+        std::string all;
+        for (const json& m : msgs) { all += m.dump(); }
+        std::string lowered = all;
+        for (char& c : lowered) { if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); } }
+        for (const char* needle : {"433.920", "433920000", "433,920", "secretfolder", "zz_secret_capture", "alice", "192.168.7.77", "mynas.lan", "g4zzz", "c:\\users"}) {
+            const bool leaked = lowered.find(needle) != std::string::npos;
+            if (leaked) { std::printf("LEAK: %s\n", needle); }
+            CHECK(!leaked);
+        }
+        // the serial is allowed in its own field and the radio key, nowhere else
+        for (const json& m : msgs) {
+            std::string text = m.dump();
+            for (const char* pat : {"\"serial\":\"SN9900AA\"", ":SN9900AA\""}) {
+                std::size_t at;
+                while ((at = text.find(pat)) != std::string::npos) { text.erase(at, std::string(pat).size()); }
+            }
+            CHECK(text.find("SN9900AA") == std::string::npos);
+        }
+        for (const json& m : msgs) { everything.push_back(m); }
+        forgetRadio(hf.key);
+    }
+
     // ---- the Worker's own validator over every message made above ---------------------------------------------------------------------------------------
     {
         const int refused = validateWithWorker(everything);

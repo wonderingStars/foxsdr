@@ -182,6 +182,11 @@ void Engine::journalOpenOk(const std::string& kind, const std::string& args, rr:
     if (requestRateHz > 0.0) { ev.set("sampleRateSps", rateSps(requestRateHz)); }
     const double centre = rx().pipeline_.activeSource().centerFrequencyHz();
     if (centre > 0.0) { ev.set("band", rr::bandName(centre)); }
+    // the firmware the radio itself reported at open (the Airspy HF+ is the one driver that hands it over; nothing is probed for the others)
+    if (const auto* hf = dynamic_cast<const cascade::source::AirspyHfSource*>(rx().device_)) {
+        const std::string fw = rr::versionText(hf->firmwareVersion());
+        if (!fw.empty()) { ev.set("firmware", fw); }
+    }
     rr::global().event(ev);
 }
 
