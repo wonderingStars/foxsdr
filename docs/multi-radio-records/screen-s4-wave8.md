@@ -114,7 +114,7 @@ Headless gate `-L "headless|slint"` (1176 tests, four slices of 300): first pass
 | test_diagnostics_free | the stale commit stamp: see below |
 
 GUI gate `-L gui` (388 tests, three slices): reds `slint_drive_e1-web-secure` (E1's script: its later commit fd5f15b7 renames the file name it sets; base), `slint_drive_layout-section-overlap-624` and `-1600` ("Read the pitch now" bottom 2058, wanted 2028: fails identically in E1's build folder, so base; this lane mounts nothing in the SIGNAL bank), `test_tester_host_only` and `test_tester_usage_app` (testerToken read from config.json; E1's 279eacce), `test_clean_exit_marker` (load: passed alone). Both S4 drives pass: `slint_drive_s4-outputs` (39 s), `slint_drive_s4-scan` (31 s).
-Stamp tests after the rebuild at the final commit: see the last line of this section.
+Stamp tests after the rebuild at the final commit: `test_diagnostics_free` passed (it had failed on the stale stamp); `test_diagnostics` passed on the hidden desktop (both measured at the commit before this record edit; the stamp is stale again after any later commit).
 
 Counts: headless 1176 tests, GUI 388 (the two sets overlap by none). Final per-set totals are the sums of the slices: 305 / 300 / 300 / 276 headless and 131 / 130 / 128 GUI tests ran.
 
