@@ -49,19 +49,56 @@ None: every sentence reuses a key the old window already had (reach sentences, "
 * A fitted module whose install record names no catalogue key, or whose entry the catalogue does not list, gets no body (the page keeps its own FILE / PLUGIN ABI lines); the old window also drew a DETAILS grid built from the host record for such a module. Not built: it would repeat the lines the page already has.
 * Companion applications shelf: see above.
 
-## WHERE I STOPPED (usage limit, 2026-11-14) AND WHAT IS NEXT
+## FINISHING PASS (2026-11-16, second agent)
 
-All 16 rows of the lane are built or re-proved and committed (tip: see `git log`; nothing pushed). Proof so far, all real runs on this build folder:
-* `test_slint_host_extend` and `test_slint_host_kit`: passed (409 and 139 checks) after the work; break-it: removing the move-the-receiver reach row, the 4 s hold, the closed-page clean-up read and the module bodies each turned them RED (`iq && tx && move`, `!h.step(true, 5, 5000)`, `module_pages.size() == 2`), restored, green.
-* `test_slint_extend` and `test_slint_fitted` (hidden desktop `FoxSDRGaps3`): passed, including the new strip, facts grid and the clean-up question; break-it (KEEP THEM answering yes) RED at test_slint_fitted.cpp:642, restored.
-* drive `wg3-store-page`: 35 of 36 steps passed on the hidden desktop (strip index 0->1->2->1, arrows grey at the ends, notice tick and GET, reach list, facts, chip OK); the 36th (the caption read by label) was fixed afterwards by making the caption an accessible text and NOT re-run. `wg3-store-plain`: passed after the size/open fixes (last run before that fix had one failing step, now removed from the script).
+The first agent stopped at the usage limit with the full build, the headless gate and the GUI gate never run. This pass built at the tip, ran all three, fixed what the gates showed to be this lane's, and closed the three open points. Commits: `1f01b2be` (fitted-module proof inside the gate, the DECODE header chip, the chip drive), `83434178` (two gate reds that were this lane's), and the record.
 
-NOT YET DONE, in order:
-1. Finish the full build in `D:/foxsdr-build/en-sigmeas` (`cmake --build . --config Release --parallel 3`; it was in the long main.slint compile of `test_slint_main_screen` when stopped, 1060 targets done, no compile error so far), then re-run `wg3-store-page` and `wg3-store-plain` (ctest -R slint_drive_wg3 via `D:/foxsdr-build/wg3-scratch/run-drive.bat` on the hidden desktop `FoxSDRGaps3`).
-2. Run `tests/drive/wg3-manual/wg3-module-page.txt` BY HAND (it is outside the ctest glob because it fits a plugin): set `FOXSDR_DRIVE_PLUGINS_DIR=D:oxsdr-build\wg3-scratch\plugins` (holds a built `aprs-decoder-1.0.3` DLL from `D:/foxsdr-build/plug-real/out/Release` and an `installed.json` with id `aprs-decoder`), then `test_slint_drive_run.exe <script>` through the hidden-desktop launcher. This is the only end-to-end proof of a fitted module's page body; until it runs it is UNVERIFIED (the logic is unit tested and the component is rendered in the store page).
-3. The full gate: `ctest -L "headless|slint" -j4 --timeout 300`, the GUI gate `-L gui -j3` with `FOXSDR_FRAME_CAP_HZ=60` on the hidden desktop, `tools/i18n_keys.py` (clean: 3828 keys, 0 stale, 0 missing in 33 catalogues), `slint_drive_ledger` (regenerated: 0 unclassified). Stamp tests after the rebuild at the final commit; name every red and classify it (known false failures: test_airband_data, test_band_plan, test_converter_call_sites, test_page_resize_id, test_png_decode).
-4. Confirm the real `%APPDATA%/foxsdr/config.json` sha256 is still `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (no test of this lane touched it; not re-hashed yet).
+### The rail chip question (audit: "always reads --")
+Driven on the hidden desktop against a stand-in catalogue that offers a newer version (1.0.4) of the fitted fixture plugin (1.0.3): `slint_drive_wg3-store-chip` reads what the DECODE bank's "Plugin store" ROW is drawn with, from the window's own row model (new state reads `store.railChip`, `store.railLamp`, `store.railOpen`). Real lines from the run:
+* idle, nothing read yet: chip `IDLE`, lamp 0 (out); `store.bankChip == IDLE`.
+* after the row is pressed and the local catalogue is read: chip `1 UPD`, lamp 1 (green) with the page up, lamp 4 (yellow) once the page is closed; the screenshot of the closed state shows the amber pill "1 UPD" and the yellow lamp beside "Plugin store".
+* `OK` (read, nothing waiting): driven by `slint_drive_wg3-store-page` (`store.chip == OK`).
+* `BUSY`: NOT drivable. A bounded (drive) run withholds every store operation that would start a transfer (log line: `extend: bounded run - op 0x841e not sent`), so a transfer cannot be held open on purpose. BUSY stays covered by the `railChip` case of `test_slint_host_extend` (a synthesized transfer list).
+
+So the row's chip never read "--". The "--" the audit saw is a different chip: the DECODE bank's HEADER chip (top right of the bank, `main.cpp` `set_bank_chip`) read "--" on every bank but SIGNAL. FIXED for DECODE: it now says "n RUNNING" (decoders running, the Decoders row's count) or "IDLE". TOOLS, EXTEND and SYSTEM still read "--" there: they are other lanes' banks, listed in OPEN ROWS.
+
+### Fitted module page, now inside the gate
+`wg3-module-page` moved from `tests/drive/wg3-manual/` into `tests/drive/` (the ctest glob). `tests/CMakeLists.txt` target `wg3_plugins` builds `tests/wg3_plugins/` from the settings fixture plugin (copied as `aprs-decoder-1.0.3-abi3-win-x64.dll`) plus the committed `fixtures/wg3-plugins/installed.json`; the script says `pluginsdir=fixture`, which `test_slint_drive_run` resolves to that build-made folder (`FOXSDR_DRIVE_FIXTURE_PLUGINS_DIR`): never the user's plugins folder, no environment variable to set. Real result: `slint_drive_wg3-module-page` Passed (22 s): catalogued == 1, four frames, WHAT IT DOES text, strip arrows, SHOW and HIDE DETAILS, 10 or more facts. Break-it: with `installed.json` removed from the fixture folder it is RED (`store.module.aprs-decoder.catalogued == 1 -> FAILED: it is -`); restored, green.
+
+### Other fixes
+* `wg3-store-page` step 38 read the caption of frame 0 after the strip had slid it out of view; it reads the second caption now (36 of 36 steps pass).
+* `plugin_body.slint` drew the reach markers as the glyphs U+25CF and U+25CB: `test_slint_house_rules` (untranslated literals) was RED; they are now an 8 px Rectangle.
+* `src/core/lang_assets.hpp` re-embedded (`tools/embed-lang.py`): the first agent dropped a key from the 33 catalogues without re-embedding, so `test_i18n` was RED ("lang_assets.hpp is stale").
+* Test expectations changed: none.
+
+## GATES (build folder D:/foxsdr-build/en-sigmeas, Release, hidden desktop, `FOXSDR_FRAME_CAP_HZ=60`, a shared and slow machine)
+Full build at `83434178`: exit 0 (1060 targets, no compile or link error).
+* `ctest -L "headless|slint" -j3 --timeout 300` (1148 tests), run at `1f01b2be`: `99% tests passed, 13 tests failed out of 1148`, 2 skipped (test_plugin_abi3_compat, test_rtlsdr_live: no hardware). Reds and their classes:
+  * the five known false failures: test_airband_data, test_band_plan, test_converter_call_sites, test_page_resize_id, test_png_decode.
+  * MINE, fixed at `83434178`, re-run: test_slint_house_rules Passed, test_i18n Passed.
+  * test_diagnostics_free (stale-stamp family): Passed on re-run at `83434178`. test_rtl_tcp_source and test_sentinel_proc: load flakes, Passed alone.
+  * test_engine_api_decode_radio (Timeout) and test_engine_api_source_kinds: need the I/Q fixture WAVs (scope.wav and others) that the GUI gate's drive scripts generate into `tests/drive/fixtures`; both Passed on re-run after the GUI gate.
+  * test_health_app_stepped: FAILS alone (`bindOrAbsentCount`, test_health_app.cpp:1167). NOT this lane's: it touches no health or engine file, and the same family fails in the unchanged build `D:/foxsdr-build/mr-dsp` run directly (test_health_app.cpp:1623, 1635, 1641). Environment (the saved RTL-SDR's open result on this PC today). Open row.
+* `ctest -L gui -j3 --timeout 600` (348 tests), run at `83434178`: `99% tests passed, 5 tests failed out of 348`. All four `slint_drive_wg3-*` passed. Reds: slint_drive_add-kinds, slint_drive_fixture-weather-decoder, test_deck_knobs_app: Passed alone (load). `slint_drive_system-look` FAILS alone (`state look.width == 1600 -> FAILED: it is 800`, line 50); NOT this lane's: the same step fails the same way with the unchanged build's binaries (`D:/foxsdr-build/mr-dsp`, run directly on the hidden desktop); open row. `test_health_app` FAILS alone, as above.
+* i18n: `tools/i18n_keys.py` 3828 keys, 0 missing; `slint_drive_ledger --check`: 2379 rows, 0 unclassified.
+* Stamp tests: test_diagnostics_free Passed at `83434178` (clean tree).
+* Real `%APPDATA%/foxsdr/config.json` sha256 at the end: `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (unchanged; every drive redirects the profile).
 
 ## UNVERIFIED
-* The fitted module page end to end (step 2 above), the fax chart beside the memory keys (354) and the teleprinter paper feed (426) in a real plugin run, the engine's removal of real old copies through the clean-up question (the command is checked as an effect; no old copies were made), the strip's wheel scroll, a real pointer, the gate totals. The "n UPD" and BUSY chip words are checked by the existing `railChip` unit test, not driven.
-* All strings reuse existing keys, so there are no new translations to check.
+* The fax chart beside the memory keys (354) and the teleprinter paper feed (426) in a real plugin run; the engine's removal of real old copies through the clean-up question (the command is checked as an effect, no old copies were made); the strip's wheel scroll and a real pointer; BUSY drawn (unit-tested only); the real APRS plugin's page (the drive fits the settings fixture under the APRS file name, so only the catalogue-driven body is proved, not that plugin's own panel).
+* All strings reuse existing keys: no new translations.
+
+## OPEN ROWS FOR THE NEXT LANE
+| Id | What is missing | Lane kind |
+|---|---|---|
+| Companion applications shelf | not built, as briefed; mounts in `PluginBody`'s `@children` slot on the store page (between WHAT THIS MODULE REACHES and DETAILS) or under the Browse grid's foot in `StorePage`; waits on catalogue fields | screen (after Worker/site defines the fields) |
+| Module page with no catalogue entry | no DETAILS grid from the host record for a fitted module the catalogue does not list (the old window drew one) | screen |
+| 354 fax chart, 426 paper strip | proved by logic only; needs a fax and a teleprinter plugin run | mouse drive |
+| 391 / 1868 real clean-up | removal of real old copies through the question never run | mouse drive |
+| BUSY chip | drawn word proved by unit test only; a drive run withholds transfers | mouse drive |
+| Header chip "--" on TOOLS, EXTEND, SYSTEM | those banks' header chips still read "--" | screen |
+| `host_duties.cpp` updates text says "a later phase" | a promise sentence in another lane's file, not edited | screen |
+| test_health_app, test_health_app_stepped | fail on this PC today, also in the unchanged mr-dsp build (`bindOrAbsentCount`) | engine |
+| slint_drive_system-look | `look.width` stays 800 after the interface size returns to Auto; fails in the unchanged build too | screen |
+| test_engine_api_decode_radio, test_engine_api_source_kinds | depend on drive-generated fixture WAVs; fail in a fresh tree until a drive run makes them | engine (test setup) |
+| wg3 fixture plugin is not the real APRS plugin | only the catalogue-driven body is proved | mouse drive |
