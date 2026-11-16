@@ -1,0 +1,13 @@
+{
+  "name": "refuse-beat-radios-not-a-list",
+  "about": "a beat whose radios is not a list",
+  "expect": "refuse",
+  "code": "bad-field",
+  "status": 400,
+  "request": {
+    "id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "v": "0.99.109",
+    "beat": 1,
+    "radios": "airspy-hf:HF0001A2"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "name": "refuse-key-mismatch",
+  "about": "a radio key that does not match the model and serial",
+  "expect": "refuse",
+  "code": "key-mismatch",
+  "status": 400,
+  "request": {
+    "schema": 2,
+    "kind": "radio_fail",
+    "installId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "sessionId": "0123456789abcdef",
+    "seq": 3,
+    "t": 412,
+    "radioKey": "airspy-hf:SOMEONEELSE",
+    "body": {
+      "driver": "airspyhf",
+      "model": "Airspy HF+",
+      "serial": "HF0001A2",
+      "firmware": "3.1.0",
+      "library": "libairspyhf 1.6.8",
+      "reason": "the radio stopped answering while restoring the crystal trim: a control transfer failed (Windows error 31, serial <stripped>)",
+      "reasonClass": "other",
+      "trigger": "startup-restore",
+      "attempt": 1,
+      "openMs": 5230,
+      "sampleRateSps": 768000,
+      "superseded": false,
+      "dropped": 0,
+      "diagOn": false,
+      "logLines": [
+        "12:01:07.120 soapy: airspyhf open failed: control transfer failed (Windows error 31)",
+        "12:01:07.331 source: the saved radio (Airspy HF+, airspyhf) did not reopen (other) - the receiver is on the signal generator and the radio stays saved"
+      ],
+      "v": "0.99.109",
+      "ch": "installer",
+      "uch": "stable",
+      "os": "Windows 10.0.22631",
+      "arch": "x64"
+    }
+  }
+}

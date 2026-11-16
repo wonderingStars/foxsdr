@@ -1,0 +1,41 @@
+{
+  "name": "valid-session-env-full",
+  "about": "the once-a-session environment record (the D5 list)",
+  "expect": "accept",
+  "status": 204,
+  "request": {
+    "schema": 2,
+    "kind": "session_env",
+    "installId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "sessionId": "0123456789abcdef",
+    "seq": 2,
+    "t": 1,
+    "radioKey": "",
+    "body": {
+      "v": "0.99.109",
+      "os": "Windows 10.0.22631",
+      "arch": "x64",
+      "ch": "installer",
+      "uch": "stable",
+      "window": "new",
+      "launches": 7,
+      "cpu": "Intel Core i7-8700K",
+      "cpuThreads": 12,
+      "ramMb": 32768,
+      "gpu": "NVIDIA GeForce GTX 1060",
+      "gpuDriver": "552.44",
+      "usbHosts": [
+        "Intel USB 3.1 eXtensible Host Controller",
+        "ASMedia USB 3.1 Host Controller"
+      ],
+      "audioApi": "wasapi",
+      "audioClass": "speakers",
+      "displayCount": 2,
+      "displayScalePct": [
+        100,
+        150
+      ],
+      "diagOn": true
+    }
+  }
+}

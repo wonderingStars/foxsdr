@@ -1,0 +1,27 @@
+{
+  "name": "refuse-journal-without-install-id",
+  "about": "a journal event with no install id (only a radio failure may be sent without one)",
+  "expect": "refuse",
+  "code": "missing-field",
+  "status": 400,
+  "request": {
+    "schema": 2,
+    "kind": "radio_open",
+    "sessionId": "0123456789abcdef",
+    "seq": 7,
+    "t": 6,
+    "radioKey": "airspy-hf:HF0001A2",
+    "body": {
+      "driver": "airspyhf",
+      "model": "Airspy HF+",
+      "serial": "HF0001A2",
+      "firmware": "3.1.0",
+      "library": "libairspyhf 1.6.8",
+      "v": "0.99.109",
+      "phase": "ok",
+      "trigger": "startup-restore",
+      "attempt": 1,
+      "openMs": 910
+    }
+  }
+}

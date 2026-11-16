@@ -19,6 +19,27 @@ dataset = "foxsdr_usage"
 binding = "HEARTBEAT"
 dataset = "foxsdr_heartbeat"
 
+# The radio-report family (docs/radio-reports-contract.md). NOTHING IS DEPLOYED by the change that adds these.
+#
+# first_session records are the usage record's own columns written to a dataset of their own: one usage row is
+# one launch to every reader, and a record sent from inside a session is not a launch.
+[[analytics_engine_datasets]]
+binding = "FIRSTSESSION"
+dataset = "foxsdr_firstsession"
+
+# One counter row per radio failure received (driver, reason class, version, whether the site took it): no serial,
+# no model, no text. It exists so a count survives the site being down, and the site's stored total can be
+# compared against it.
+[[analytics_engine_datasets]]
+binding = "RADIOFAIL"
+dataset = "foxsdr_radiofail"
+
+# Where radio failure reports are forwarded. The relay secret that lets the site skip its per-address limiter for
+# this Worker's requests is NOT here: set it with `wrangler secret put RELAY_TOKEN` (and the same value in the
+# site's FOXSDR_RELAY_TOKEN).
+[vars]
+SITE_INTAKE_URL = "https://foxsdr.com/api/radiofail"
+
 # Deliberately NOT set: no KV, no D1, no R2, no logpush. There is nowhere
 # for this Worker to persist a request even if a future edit tried to.
 

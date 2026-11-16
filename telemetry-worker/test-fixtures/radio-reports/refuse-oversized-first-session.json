@@ -1,0 +1,49 @@
+{
+  "name": "refuse-oversized-first-session",
+  "about": "a first-session body over 8,192 bytes",
+  "expect": "refuse",
+  "code": "too-large",
+  "status": 413,
+  "expand": {
+    "path": "body.sdr",
+    "length": 9000
+  },
+  "request": {
+    "schema": 2,
+    "kind": "first_session",
+    "installId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "sessionId": "0123456789abcdef",
+    "seq": 2,
+    "t": 61,
+    "radioKey": "",
+    "body": {
+      "v": "0.99.109",
+      "os": "Windows 10.0.22631",
+      "arch": "x64",
+      "launches": 1,
+      "crashes": 0,
+      "sessionSec": 61,
+      "sdr": "Airspy HF+",
+      "modes": {
+        "WFM": 40
+      },
+      "panels": [
+        "map"
+      ],
+      "plugins": [
+        "ADS-B 1.0.0"
+      ],
+      "ch": "installer",
+      "first": "2026-11-16",
+      "fv": "0.99.109",
+      "uch": "stable",
+      "stalls": 0,
+      "health": "radio_fail.airspyhf.other=1,radio_open.rtlsdr=1",
+      "exits_died": 0,
+      "exits_killed": 0,
+      "exits_ended": 0,
+      "exits_unknown": 0,
+      "trigger": "on-failure"
+    }
+  }
+}
