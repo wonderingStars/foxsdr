@@ -1435,6 +1435,11 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         // THE RTL-SDR'S DIRECT-SAMPLING CHOICE (0 automatic, 1 never, 2 the I branch, 3 the Q branch; screen lane S5): present only while the radio has the setting, so the screen can tell "none" from "automatic".
         // THE RTL-SDR'S ANALOGUE IF BANDWIDTH in Hz (0 automatic; screen lane S5b, G1-14): present only on the native RTL-SDR driver.
         if (receivers_[n - 1u]->deviceIfBwPresent_) { fact(pre + "ifBandwidth", std::to_string(receivers_[n - 1u]->deviceIfBw_)); }
+        // THE SDRPLAY'S LOW-IF CHOICE (G1-13, screen lane S5b): read from the source itself; present only on an SDRplay radio. The note is the sentence of a fallback or a refusal.
+        if (auto* sp = dynamic_cast<cascade::source::SdrPlaySource*>(receivers_[n - 1u]->device_)) {
+            fact(pre + "sdrplay.lowIf", sp->lowIfChosen() ? "1" : "0");
+            fact(pre + "sdrplay.lowIfNote", sp->lowIfNote());
+        }
         // THE SOAPY DRIVER'S OWN BANDWIDTH AND SETTINGS (screen lane S5b, G1-15): what the driver reported (LOCAL: a setting's value can carry a serial number or an address), absent when it reported nothing.
         for (const auto& kv : receivers_[n - 1u]->deviceSoapyFacts_) { fact(pre + "soapy." + kv.first, kv.second, true); }
         if (receivers_[n - 1u]->deviceDirectPresent_) { fact(pre + "directSampling", std::to_string(receivers_[n - 1u]->deviceDirectChoice_)); }

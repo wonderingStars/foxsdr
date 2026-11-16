@@ -48,6 +48,7 @@ void S5Rows::buildS5b(std::vector<Row>& v) {
         }
     }
     buildSoapy(v);
+    buildLowIf(v);
     buildCat(v);
     buildSourceNotes(v);
 }
@@ -163,5 +164,18 @@ void S5Rows::buildSourceNotes(std::vector<Row>& v) {
     v.push_back(rHeading(tr("Other radios and servers")));
     v.push_back(rNote(tr("AntSDR: open it as an ADALM-Pluto. Give the Pluto source the AntSDR's own address and it is read like a Pluto.")));
     v.push_back(rNote(tr("SDR++ Server: start it in its rtl_tcp-compatible mode and open it with the rtl_tcp source, giving that address and port.")));
+}
+
+// ---------------------------------------------------------------- G1-13 SDRplay low-IF (OFF by default, not saved, unproven on a real radio)
+void S5Rows::buildLowIf(std::vector<Row>& v) {
+    const std::string cur = fact("radio." + rn() + ".sdrplay.lowIf");
+    if (cur.empty()) { return; }   // not an SDRplay radio: nothing to show
+    v.push_back(rHeading(tr("SDRplay low-IF")));
+    v.push_back(rNote(tr("A different way the RSP can be set up. It was switched off in an earlier release after two radios sent a different rate from the one asked for, and it has not been proved on a real radio since. It is off every time FoxSDR starts. When you turn it on, FoxSDR checks the first second of the stream and goes back to the usual setting by itself if the rate is wrong, saying so here."), kWarn));
+    tick(v, "b.lowif", tr("Use low-IF"), cur == "1", [this](bool on) {
+        Cmd c; c.op = FOXAPI_OP_SET_DEVICE_OPTION; c.i0 = on ? 1 : 0; c.text = "sdrplay_lowif"; send(tr("Use low-IF"), c);
+    }, tr("Read back from the radio after each change."));
+    const std::string note = fact("radio." + rn() + ".sdrplay.lowIfNote");
+    if (!note.empty()) { v.push_back(rNote(note, kErr)); }
 }
 }  // namespace foxsdr::slints5

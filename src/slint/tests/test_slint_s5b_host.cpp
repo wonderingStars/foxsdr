@@ -248,5 +248,24 @@ int main() {
         for (const auto& x : r.build()) { if (x.label.find("AntSDR: open it as an ADALM-Pluto") != std::string::npos) { ant = true; } if (x.label.find("SDR++ Server: start it in its rtl_tcp-compatible mode") != std::string::npos) { sdrpp = true; } }
         CHECK(ant && sdrpp);
     }
+    // ---------------------------------------------------------------- G1-13: SDRplay low-IF (off by default; only on an SDRplay radio)
+    {
+        Rig r; r.open();
+        std::vector<slk::Row> v = r.build();
+        CHECK(r.find(v, "b.lowif") == nullptr);                                      // no SDRplay: nothing drawn
+        r.facts["fact.radio.1.sdrplay.lowIf"] = "0";
+        v = r.build();
+        CHECK(r.find(v, "b.lowif") != nullptr && !r.find(v, "b.lowif")->on);         // the radio's own value at start-up: off
+        r.rows.act("b.lowif", "1");
+        CHECK(r.sent.size() == 1 && r.sent[0].op == FOXAPI_OP_SET_DEVICE_OPTION && r.sent[0].text == "sdrplay_lowif" && r.sent[0].i0 == 1);
+        r.facts["fact.radio.1.sdrplay.lowIf"] = "0"; r.facts["fact.radio.1.sdrplay.lowIfNote"] = "The service delivers the ADC rate. Low-IF is switched off and the radio is back on zero-IF.";
+        v = r.build();
+        bool said = false; for (const auto& x : v) { if (x.label.find("Low-IF is switched off") != std::string::npos) { said = true; } }
+        CHECK(said && !r.find(v, "b.lowif")->on);                                    // the fallback is shown and the tick follows the radio
+        r.facts["fact.radio.1.sdrplay.lowIf"] = "1";
+        CHECK(r.find(r.build(), "b.lowif")->on);
+        r.rows.act("b.lowif", "0");
+        CHECK(r.sent.size() == 2 && r.sent[1].i0 == 0);
+    }
     return testSummary("test_slint_s5b_host");
 }

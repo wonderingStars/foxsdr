@@ -176,6 +176,40 @@ void testB() {
     CHECK_EQ(soapystandin::g_log.count("writeSetting"), writes);
 }
 
+// ELAD (G1-07c): a radio served by an installed SoapySDR module appears in the source list and opens like any other Soapy device, with no code of its own. The stand-in module's driver key is "elad" (the
+// in-process SoapySDR::Registry takes any key); the engine's soapyScan hook lists what the real scan would list from the module (label, "driver=elad").
+std::vector<cascade::source::SoapyDeviceInfo> eladScan() {
+    cascade::source::SoapyDeviceInfo d;
+    d.label = "ELAD stand-in";
+    d.args = "driver=elad";
+    return {d};
+}
+SoapySDR::KwargsList findElad(const SoapySDR::Kwargs& a) {
+    const auto d = a.find("driver");
+    if (d != a.end() && d->second != "elad") { return {}; }
+    SoapySDR::Kwargs k;
+    k["driver"] = "elad";
+    k["label"] = "ELAD stand-in";
+    return SoapySDR::KwargsList{k};
+}
+SoapySDR::Device* makeElad(const SoapySDR::Kwargs&) { return new soapystandin::BareDevice(); }
+
+void testC() {
+    std::printf("C: an ELAD radio served by an installed SoapySDR module is listed and opens with no code of its own\n");
+    SoapySDR::Registry regElad("elad", &findElad, &makeElad, SOAPY_SDR_ABI_VERSION);
+    Rig r;
+    r.pump(10);
+    Access::setSoapyScan(&eladScan);
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SCAN_DEVICES)).status(), FOXAPI_OK);
+    r.until([&] { return false; }, 1500);
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, "soapy:driver=elad")).status(), FOXAPI_OK);
+    CHECK(r.until([&] { return r.fact("radio.1.source") == "soapy" && (r.radio(1).flags & FOXAPI_RX_DEVICE_OPEN) != 0u; }, 30000));
+    CHECK_EQ(r.fact("radio.1.source"), std::string("soapy"));
+    CHECK((r.radio(1).flags & FOXAPI_RX_DEVICE_OPEN) != 0u);
+    // the page's note for it is the guidance text, and the stand-in's driver has no settings of its own
+    CHECK_EQ(r.fact("radio.1.soapy.count"), std::string("<absent>"));
+}
+
 }  // namespace
 
 int main() {
@@ -186,5 +220,6 @@ int main() {
     SoapySDR::Registry regRich("standinrich", &soapystandin::findRich, &soapystandin::makeRich, SOAPY_SDR_ABI_VERSION);
     testA();
     testB();
+    testC();
     return check::finish("test_engine_api_s5b");
 }

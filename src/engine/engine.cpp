@@ -8432,6 +8432,11 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                     rx().deviceDither_ = d.dither();
                     return true;
                 });
+            } else if (text == "sdrplay_lowif" && dynamic_cast<cascade::source::SdrPlaySource*>(rx().device_) != nullptr) {
+                // The SDRplay's low-IF choice (G1-13, screen lane S5b): ival[0] 1 on, 0 off. OFF by default and never saved; unproven on a real radio. The first stream is checked and falls back to zero-IF (fact radio.N.sdrplay.lowIfNote).
+                auto* sp = dynamic_cast<cascade::source::SdrPlaySource*>(rx().device_);
+                if (!sp->setLowIf(c.ival[0] != 0)) { rx().sourceError_ = sp->lastError(); return refuse(FOXAPI_FAILED, rx().sourceError_.c_str()); }
+                res.applied[0] = sp->lowIfChosen() ? 1.0 : 0.0;
             } else if (text == "soapy_bandwidth" && rx().deviceSoapyPresent_) {
                 // The driver's own bandwidth in Hz (num[0]); the driver's range judges it and its readback is what comes back (G1-15a)
                 if (!(c.num[0] > 0.0)) { return refuse(FOXAPI_OUT_OF_RANGE, "the bandwidth must be a positive number of Hz"); }

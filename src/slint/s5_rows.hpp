@@ -77,6 +77,7 @@ private:
     void buildS5b(std::vector<foxsdr::slintlanek::Row>& v);   // lane S5b's rows (s5b_rows.cpp): analogue IF bandwidth and the rows after it
     void buildSoapy(std::vector<foxsdr::slintlanek::Row>& v);   // G1-15a/b (s5b_rows.cpp)
     void buildCat(std::vector<foxsdr::slintlanek::Row>& v);   // G1-16, G3-18a/b (s5b_rows.cpp)
+    void buildLowIf(std::vector<foxsdr::slintlanek::Row>& v);   // G1-13 (s5b_rows.cpp)
     void buildSourceNotes(std::vector<foxsdr::slintlanek::Row>& v);   // what works today for AntSDR and SDR++ Server (s5b_rows.cpp)
 
     Env env_;
