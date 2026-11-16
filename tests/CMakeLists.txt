@@ -1383,6 +1383,14 @@ if(CASCADE_NODE)
     set_tests_properties(telemetry_worker PROPERTIES TIMEOUT 240)
 endif()
 
+# THE RADIO REPORTS, APP SIDE (docs/multi-radio-records/radio-reports-app.md): these tests read the Worker's fixtures and, where node is found, hand
+# every message the app made to the Worker's own validator.
+foreach(_t IN ITEMS test_radio_report test_radio_reporter test_radio_reports_never_sent test_radio_reports_engine)
+    if(TARGET ${_t})
+        target_compile_definitions(${_t} PRIVATE CASCADE_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" CASCADE_NODE_PATH="${CASCADE_NODE}")
+    endif()
+endforeach()
+
 # CLI error contract: each malformed invocation must exit nonzero.
 add_test(NAME app_cli_bad_value COMMAND cascade --frames abc)
 add_test(NAME app_cli_negative COMMAND cascade --frames -1)
