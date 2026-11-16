@@ -1614,6 +1614,25 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         fact("web.username", sc.web.username, true);
         fact("web.hasPassword", sc.web.passwordRecord.empty() ? "0" : "1", true);
         fact("web.passwordPending", servers_.passwordPending() ? "1" : "0", true);
+        // HTTPS and the shared-receiver listeners (engine lane E1): what was configured, and what the running server says of itself. Nothing here names a listener, an address
+        // or a password: counts, switches and the certificate's own public figures (the fingerprint is what a person compares with the browser's warning).
+        fact("web.tls", sc.web.tlsEnabled ? "1" : "0", true);
+        fact("web.tls.thumbprintSet", sc.web.tlsCertThumbprint.empty() ? "0" : "1", true);
+        {
+            fact("web.tls.active", wl.tls ? "1" : "0", true);
+            fact("web.tls.fingerprint", wl.tlsFingerprint, true);
+            fact("web.tls.selfSigned", wl.tlsSelfSigned ? "1" : "0", true);
+            fact("web.tls.notAfter", wl.tls ? std::to_string(wl.tlsNotAfter) : std::string(), true);
+        }
+        fact("web.listeners", sc.web.listenersEnabled ? "1" : "0", true);
+        fact("web.hasListenerPassword", sc.web.listenerPasswordRecord.empty() ? "0" : "1", true);
+        fact("web.listenerPasswordPending", servers_.listenerPasswordPending() ? "1" : "0", true);
+        fact("web.maxListeners", std::to_string(sc.web.maxListeners), true);
+        fact("web.listenerIdleSeconds", std::to_string(sc.web.listenerIdleSeconds), true);
+        fact("web.listenerSessionSeconds", std::to_string(sc.web.listenerSessionSeconds), true);
+        fact("web.listenersMayTune", sc.web.listenersMayTune ? "1" : "0", true);
+        fact("web.chat", sc.web.chatEnabled ? "1" : "0", true);
+        fact("web.listeners.now", std::to_string(servers_.webServer().listenerCount()), true);
         fact("web.reachable", decision.allowed() && decision.reachableOffMachine ? "1" : "0", true);
         fact("web.authRequired", decision.allowed() && decision.authRequired ? "1" : "0", true);
         fact("web.policy", decision.allowed() ? std::string() : decision.reason, true);

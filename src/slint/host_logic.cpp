@@ -122,7 +122,21 @@ void setNumberLocale(const cascade::core::access::NumberSymbols* symbols, cascad
     g_numPolicy = policy;
 }
 std::string fmtMHz(double hz) { return locNum(hz / 1e6, 6, "%.6f") + " MHz"; }
-std::string fmtRate(double hz) { return hz > 0.0 ? fmt("%.3f MS/s", hz / 1e6) : std::string("--"); }
+std::string fmtRate(double hz) { return hz > 0.0 ? locNum(hz / 1e6, 3, "%.3f") + " MS/s" : std::string("--"); }
+std::string fmtNum(double v, int decimals, bool plus) {
+    std::string s = locNum(v, decimals, decimals == 0 ? "%.0f" : decimals == 1 ? "%.1f" : decimals == 2 ? "%.2f" : decimals == 3 ? "%.3f" : decimals == 4 ? "%.4f" : "%.6f");
+    if (plus && v >= 0.0) { s = "+" + s; }
+    return s;
+}
+std::string localizeNumber(const std::string& text, double v, int decimals) {
+    if (!g_numLocal) { return text; }
+    const std::string dotted = fmtNum(v, decimals, false);   // (with no locale set this is the dot form: nothing to replace)
+    char b[64];
+    std::snprintf(b, sizeof(b), "%.*f", decimals, v);
+    const std::size_t at = text.find(b);
+    if (at == std::string::npos) { return text; }
+    return text.substr(0, at) + dotted + text.substr(at + std::strlen(b));
+}
 std::string fmtKHz(double hz) { return locNum(hz / 1e3, 1, "%.1f") + " kHz"; }
 std::string spanText(double hz) {
     if (hz >= 1e9) { return cascade::core::formatText(cascade::i18n::tr("SPAN %s"), (locNum(hz / 1e9, 3, "%.3f") + " GHz").c_str()); }
@@ -191,7 +205,7 @@ double levelNorm(double db) { return std::clamp((db + 60.0) / 60.0, 0.0, 1.0); }
 std::string levelText(double db, bool haveAudio) {
     if (!haveAudio) { return "--"; }
     if (db <= -60.0) { return "-60 dB"; }
-    return fmt("%.1f dB", db);
+    return locNum(db, 1, "%.1f") + " dB";
 }
 std::string gainText(bool haveStage, bool agcOn, double value, const std::string& unit) {
     if (!haveStage) { return "N/A"; }
@@ -437,7 +451,7 @@ std::vector<StatusCardModel> statusCards(const FoxReceiverState& s, const HostEx
         else { c.value = cascade::i18n::tr("STOPPED"); }
         const std::string ant = x.antenna.empty() ? std::string() : cascade::core::formatText(cascade::i18n::tr("ANT %s"), x.antenna.c_str());
         const std::string gain = x.gainText.empty() ? std::string() : cascade::core::formatText(cascade::i18n::tr("GAIN %s"), x.gainText.c_str());
-        const std::string ppm = x.havePpm ? fmt("PPM %.1f", x.ppm) : std::string();
+        const std::string ppm = x.havePpm ? "PPM " + locNum(x.ppm, 1, "%.1f") : std::string();
         c.detail = joinDot({s.deviceName, ant, gain, ppm, fmtRate(s.sampleRateHz)});
         c.lines = {s.deviceName};
         if (!x.antenna.empty()) { c.lines.push_back(cascade::core::formatText(cascade::i18n::tr("ANTENNA %s"), x.antenna.c_str())); }
@@ -472,7 +486,7 @@ std::vector<StatusCardModel> statusCards(const FoxReceiverState& s, const HostEx
         if (!running) { c.value = "--"; c.detail = cascade::i18n::tr("the receiver is stopped"); }
         else if (s.decodersRunning == 0) { c.value = "--"; c.detail = cascade::i18n::tr("no decoder is running"); }
         else if (!x.outputMeasured) { c.value = "--"; c.detail = cascade::i18n::tr("measuring"); }
-        else { c.value = fmt("%.1f /s", x.outputRate); c.detail = cascade::core::formatText(cascade::i18n::tr("output lines, %.1f s mean"), x.outputMeanS); c.tone = CardTone::Warn; }
+        else { c.value = locNum(x.outputRate, 1, "%.1f") + " /s"; c.detail = localizeNumber(cascade::core::formatText(cascade::i18n::tr("output lines, %.1f s mean"), x.outputMeanS), x.outputMeanS, 1); c.tone = CardTone::Warn; }
         c.lines = {c.detail};
         cards.push_back(c);
     }

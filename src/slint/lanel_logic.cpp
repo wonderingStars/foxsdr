@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/i18n.hpp"
+#include "core/typed_number.hpp"
 #include "foxsdr_api.h"
 
 namespace foxsdr::slintlanel {
@@ -57,14 +58,14 @@ std::string trim(const std::string& s) {
 }
 
 bool parseNumber(const std::string& text, double lo, double hi, double& out, std::string& err) {
-    const std::string t = trim(text);
+    const std::string t = cascade::core::typedNumberText(trim(text));   // a decimal comma is read as a decimal point (owner decision 73)
     if (t.empty()) { err = tr("type a number"); return false; }
     double v = 0.0;
     const char* first = t.data();
     const char* last = t.data() + t.size();
     if (*first == '+') { ++first; }
     const auto r = std::from_chars(first, last, v);
-    if (r.ec != std::errc() || r.ptr != last || !std::isfinite(v)) { err = tr("that is not a number (use a dot for decimals)"); return false; }
+    if (r.ec != std::errc() || r.ptr != last || !std::isfinite(v)) { err = tr("that is not a number"); return false; }
     if (v < lo || v > hi) {
         err = std::string(tr("allowed:")) + " " + numberText(lo) + " - " + numberText(hi);
         return false;

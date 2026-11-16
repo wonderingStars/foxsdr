@@ -90,6 +90,7 @@ constexpr SockT INVALID_SOCKET = -1;
 #include "foxsdr_api.h"
 #include "net/status_compose.hpp"
 #include "net/web_server.hpp"
+#include "web_tls_client.hpp"
 
 // (test_check.hpp has CHECK only: a comparison that prints what it saw)
 template <class T>
@@ -352,6 +353,124 @@ std::string webConfig(int port, const char* bind = "127.0.0.1") {
     return std::string("{\"web\":{\"enabled\":true,\"bindAddress\":\"") + bind + "\",\"port\":" + std::to_string(port) + "}}";
 }
 std::string catConfig(int port) { return "{\"cat\":{\"enabled\":true,\"bindAll\":false,\"port\":" + std::to_string(port) + "}}"; }
+
+// H17 (engine lane E1, owner decisions 17 and 18): HTTPS AND THE SHARED-RECEIVER LISTENERS THROUGH SERVER_CONFIG. The strict parse (every new key typed and ranged), the facts, the
+// configuration the engine writes and reads back, and the listener password hashed on its own worker so that the owner's is never made to wait for it.
+void testHttpsAndListenersThroughServerConfig() {
+    cascade::engine::ServerConfigRequest q;
+    std::string why;
+    // the parse: strict, typed, ranged
+    CHECK(cascade::engine::parseServerConfigRequest(R"({"web":{"tls":true,"tlsThumbprint":"","listeners":false,"maxListeners":32,"listenerIdleSeconds":0,"listenerSessionSeconds":43200,"listenersMayTune":true,"chat":false}})", q, why));
+    CHECK(q.webTls.has_value() && *q.webTls && q.webMaxListeners.value_or(0) == 32 && q.webListenerSessionSeconds.value_or(-1) == 43200 && q.webListenersMayTune.value_or(false));
+    CHECK(!cascade::engine::parseServerConfigRequest(R"({"web":{"tls":"yes"}})", q, why));
+    CHECK(!cascade::engine::parseServerConfigRequest(R"({"web":{"maxListeners":0}})", q, why));
+    CHECK(!cascade::engine::parseServerConfigRequest(R"({"web":{"maxListeners":33}})", q, why));
+    CHECK(!cascade::engine::parseServerConfigRequest(R"({"web":{"listenerIdleSeconds":86401}})", q, why));
+    CHECK(!cascade::engine::parseServerConfigRequest(R"({"web":{"listenerSessionSeconds":43201}})", q, why));
+    CHECK(!cascade::engine::parseServerConfigRequest(R"({"web":{"listenerSessionSeconds":-1}})", q, why));
+    CHECK(!cascade::engine::parseServerConfigRequest(R"({"web":{"tlsThumbprint":"abc"}})", q, why));
+    CHECK(why.find("40 hexadecimal digits") != std::string::npos);
+    CHECK(!cascade::engine::parseServerConfigRequest(R"({"web":{"tlsThumbprint":"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"}})", q, why));
+    CHECK(cascade::engine::parseServerConfigRequest(R"({"web":{"tlsThumbprint":"0123456789abcdef0123456789ABCDEF01234567"}})", q, why));
+    CHECK(!cascade::engine::parseServerConfigRequest(R"({"web":{"listenerPassword":"short"}})", q, why));
+    CHECK(!cascade::engine::parseServerConfigRequest(R"({"web":{"listenerPassword":"long enough password","clearListenerPassword":true}})", q, why));
+    CHECK(!cascade::engine::parseServerConfigRequest(R"({"web":{"clearListenerPassword":false}})", q, why));
+    CHECK(!cascade::engine::parseServerConfigRequest(R"({"web":{"listenerPasswordRecord":"not a record"}})", q, why));
+    CHECK(!cascade::engine::parseServerConfigRequest(R"({"web":{"nonsense":1}})", q, why));
+
+    Rig r("testHooks=1;servers=1");
+    CHECK(r.fact("fact.web.tls") == "0");
+    CHECK(r.fact("fact.web.listeners") == "0");
+    CHECK(r.fact("fact.web.hasListenerPassword") == "0");
+    CHECK(r.fact("fact.web.maxListeners") == "4");
+    CHECK(r.fact("fact.web.listenerIdleSeconds") == "900");
+    CHECK(r.fact("fact.web.listenerSessionSeconds") == "28800");
+    CHECK(r.fact("fact.web.listenersMayTune") == "0");
+    CHECK(r.fact("fact.web.chat") == "0");
+    CHECK(r.fact("fact.web.tls.active") == "0");
+    // a hermetic engine hosts nothing: the configuration is recorded and published, no socket opens
+    CHECK(r.config(R"({"web":{"tls":true,"listeners":true,"maxListeners":7,"listenerIdleSeconds":120,"listenerSessionSeconds":3600,"listenersMayTune":true,"chat":true}})").status == FOXAPI_OK);
+    CHECK(r.fact("fact.web.tls") == "1");
+    CHECK(r.fact("fact.web.listeners") == "1");
+    CHECK(r.fact("fact.web.maxListeners") == "7");
+    CHECK(r.fact("fact.web.listenerIdleSeconds") == "120");
+    CHECK(r.fact("fact.web.listenerSessionSeconds") == "3600");
+    CHECK(r.fact("fact.web.listenersMayTune") == "1");
+    CHECK(r.fact("fact.web.chat") == "1");
+    CHECK(r.config(R"({"web":{"maxListeners":7}})").status == FOXAPI_NO_CHANGE);   // nothing moved
+    // the file the engine writes carries them, and a new engine reads them back
+    cascade::core::AppConfig cfg;
+    r.e.servers().store(cfg);
+    CHECK(cfg.webTlsEnabled && cfg.webListenersEnabled && cfg.webMaxListeners == 7 && cfg.webListenerIdleSeconds == 120 && cfg.webListenerSessionSeconds == 3600 && cfg.webListenersMayTune && cfg.webChatEnabled);
+    cascade::core::AppConfig back;
+    std::string err;
+    CHECK(cascade::core::ConfigStore::parse(cascade::core::ConfigStore::serialize(cfg), "h17", back, err));
+    CHECK(back.webTlsEnabled && back.webListenersEnabled && back.webMaxListeners == 7 && back.webListenerIdleSeconds == 120 && back.webListenerSessionSeconds == 3600 && back.webListenersMayTune && back.webChatEnabled);
+    // a file with values out of range is repaired to the defaults, never to an extreme
+    {
+        cascade::core::AppConfig bad = cfg;
+        bad.webMaxListeners = 500;
+        bad.webListenerIdleSeconds = -4;
+        bad.webListenerSessionSeconds = 99999999;
+        bad.webTlsCertThumbprint = "not a thumbprint";
+        cascade::core::AppConfig fixed;
+        CHECK(cascade::core::ConfigStore::parse(cascade::core::ConfigStore::serialize(bad), "h17-bad", fixed, err));
+        CHECK(fixed.webMaxListeners == 4 && fixed.webListenerIdleSeconds == 900 && fixed.webListenerSessionSeconds == 28800 && fixed.webTlsCertThumbprint.empty());
+    }
+    // the listener password is hashed on its own worker; the record lands; the plaintext is nowhere
+    const std::string secret = "a listener password of ours";
+    CHECK(r.config("{\"web\":{\"listenerPassword\":\"" + secret + "\"}}", /*settle=*/false).status == FOXAPI_OK);
+    CHECK(waitUntil(60000, [&] {
+        r.pump(1);
+        return r.fact("fact.web.hasListenerPassword") == "1" && r.fact("fact.web.listenerPasswordPending") == "0";
+    }));
+    CHECK(r.fact("fact.web.hasPassword") == "0");   // the owner's password is a different thing
+    r.e.servers().store(cfg);
+    CHECK(!cfg.webListenerPasswordRecord.empty() && cfg.webListenerPasswordRecord.find(secret) == std::string::npos);
+    CHECK(r.config(R"({"web":{"clearListenerPassword":true}})").status == FOXAPI_OK);
+    CHECK(r.fact("fact.web.hasListenerPassword") == "0");
+    std::printf("H17: HTTPS and listener settings parsed strictly, published as facts, written and read back; the listener password hashed on its own worker\n");
+}
+
+#if defined(_WIN32)
+// H17b: the engine's own web server over HTTPS, with a real Schannel client. The certificate is the program's own for this run (no folder known: the key lives in memory), nothing
+// is added to a Windows store; the fingerprint the client reads is the one the engine publishes; switched off, plain HTTP answers again.
+void testHttpsServedByTheEngine() {
+    Rig r("testHooks=1;servers=1");
+    const int port = freePort();
+    CHECK(r.config(webConfig(port)).status == FOXAPI_OK);
+    CHECK(active(r.server(0)));
+    CHECK(r.fact("fact.web.tls.active") == "0");
+    CHECK(r.config(R"({"web":{"tls":true}})").status == FOXAPI_OK);
+    CHECK(waitUntil(30000, [&] { r.pump(1); return r.fact("fact.web.tls.active") == "1"; }));
+    const std::string fp = r.fact("fact.web.tls.fingerprint");
+    CHECK(fp.size() == 64);
+    CHECK(r.fact("fact.web.tls.selfSigned") == "1");
+    CHECK(std::atoll(r.fact("fact.web.tls.notAfter").c_str()) > 1700000000LL);
+    web_test::SchannelClient c;
+    CHECK(c.connectTcp("127.0.0.1", port));
+    std::string herr;
+    CHECK(c.handshake("localhost", 0, herr));
+    if (c.secure()) {
+        const web_test::HttpReply rep = c.request("GET", "/api/status", "");
+        CHECK(rep.ok);
+        CHECK(rep.status == 200);
+        std::string a = c.peerFingerprint(), b = fp;
+        for (char& ch : a) { ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); }
+        for (char& ch : b) { ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); }
+        CHECK(a == b);
+    }
+    // switched off again: plain HTTP answers on the port, HTTPS is gone
+    CHECK(r.config(R"({"web":{"tls":false}})").status == FOXAPI_OK);
+    CHECK(waitUntil(30000, [&] { r.pump(1); return r.fact("fact.web.tls.active") == "0"; }));
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(2, 0);
+    cli.set_read_timeout(5, 0);
+    const auto plain = cli.Get("/api/status");
+    CHECK(plain && plain->status == 200);
+    std::printf("H17b: HTTPS on the engine's own server, a Schannel client saw the published fingerprint; off again, plain HTTP\n");
+}
+#endif
 
 // ===================================================================================================================================
 
@@ -1115,5 +1234,9 @@ int main(int argc, char** argv) {
     if (want("H14")) { testThePassWithAListenerAndTheAudioLockHeld(); }
     if (want("H15")) { testNoWindowNoTiles(); }
     if (want("H16")) { testListenersUseAsFacts(); }
+    if (want("H17")) { testHttpsAndListenersThroughServerConfig(); }
+#if defined(_WIN32)
+    if (want("H17")) { testHttpsServedByTheEngine(); }
+#endif
     return testSummary("test_server_host");
 }

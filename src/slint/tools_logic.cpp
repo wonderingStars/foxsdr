@@ -17,6 +17,7 @@
 #include "core/demod_names.hpp"
 #include "core/freq_import.hpp"
 #include "core/i18n.hpp"
+#include "core/typed_number.hpp"
 #include "core/receiver_position.hpp"
 #include "core/tune_control.hpp"
 #include "core/utf8_text.hpp"
@@ -78,7 +79,7 @@ int readNumber(const std::string& text, double& out) {
     while (lo < hi && std::isspace(static_cast<unsigned char>(text[lo])) != 0) { ++lo; }
     while (hi > lo && std::isspace(static_cast<unsigned char>(text[hi - 1])) != 0) { --hi; }
     if (lo == hi) { return 1; }
-    const std::string t = text.substr(lo, hi - lo);
+    const std::string t = cascade::core::typedNumberText(text.substr(lo, hi - lo));   // a decimal comma is read as a decimal point (owner decision 73)
     char* end = nullptr;
     const double v = std::strtod(t.c_str(), &end);
     if (end == t.c_str() || *end != '\0' || !std::isfinite(v)) { return 2; }

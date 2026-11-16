@@ -244,13 +244,94 @@ void testExtras() {
     CHECK_EQ(r.send(pri, &badHz).status(), FOXAPI_BAD_ARGUMENT);
     CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_SCANNER_EXTRAS, 0.0, 4), &badTh).status(), FOXAPI_BAD_ARGUMENT);
     CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_SCANNER_EXTRAS, 0.0, 4), &badTh2).status(), FOXAPI_BAD_ARGUMENT);
-    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_SCANNER_EXTRAS, 0.0, 9)).status(), FOXAPI_OUT_OF_RANGE);
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_SCANNER_EXTRAS, 0.0, 9)).status(), FOXAPI_OUT_OF_RANGE);   // (6 is the memory thresholds since engine lane E1)
     FoxCommand badInterval = testing::cmd(FOXAPP_OP_SCANNER_EXTRAS, -5.0, 0);
     CHECK_EQ(r.send(badInterval, &priText).status(), FOXAPI_OUT_OF_RANGE);
     CHECK_EQ(r.fact("scan.priority.interval"), std::string("500"));   // refusals changed nothing
     CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SCANNER_RUN, 0, 0)).status(), FOXAPI_OK);
     // locking out the frequency the scan is on needs a running scan
     CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_SCANNER_EXTRAS, 0.0, 1)).status(), FOXAPI_NO_CHANGE);
+}
+
+void testLockoutsInARangeScan() {
+    std::printf("E1 D2: lockouts of a range scan, read back with their times; per-memory thresholds\n");
+    const fs::path user = g_dir / "user-e1";
+    {
+        Rig r(user);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_RUN, 0, 1)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_SQUELCH, 20.0)).status(), FOXAPI_OK);
+        CHECK_EQ(r.send(scanCfg(40.0)).status(), FOXAPI_OK);
+        const std::string fwd = plan("forward");
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_SCAN_PLAN, 0.0, 0), &fwd).status(), FOXAPI_OK);
+        // nothing locked yet
+        CHECK_EQ(r.fact("scan.lockouts"), std::string());
+        CHECK_EQ(r.fact("scan.lockouts.count"), std::string("0"));
+        CHECK_EQ(r.fact("scan.lockouts.next"), std::string("0"));
+        startPlan(r);
+        // a lockout until cleared: listed with 0 seconds, and the scan never visits it again
+        FoxCommand perm = testing::cmd(FOXAPP_OP_SCANNER_EXTRAS, 144.0125e6, 1);
+        perm.num[1] = 0.0;
+        CHECK_EQ(r.send(perm).status(), FOXAPI_OK);
+        CHECK_EQ(r.fact("scan.lockouts"), std::string("144012500.000@0"));
+        CHECK_EQ(r.fact("scan.lockouts.count"), std::string("1"));
+        CHECK_EQ(r.fact("scan.lockouts.next"), std::string("0"));
+        std::vector<double> v = visited(r, 1500);
+        CHECK(v.size() >= 5u);
+        for (const double hz : v) { CHECK(!nearHz(hz, 144.0125e6)); }
+        // a timed lockout: the time left is told
+        FoxCommand timed = testing::cmd(FOXAPP_OP_SCANNER_EXTRAS, 100.05e6, 1);
+        timed.num[1] = 600000.0;
+        CHECK_EQ(r.send(timed).status(), FOXAPI_OK);
+        CHECK_EQ(r.fact("scan.lockouts.count"), std::string("2"));
+        const std::string both = r.fact("scan.lockouts");
+        CHECK(both.find("144012500.000@0") != std::string::npos);
+        CHECK(both.find("100050000.000@") != std::string::npos);
+        const long long next = std::strtoll(r.fact("scan.lockouts.next").c_str(), nullptr, 10);
+        CHECK(next > 0 && next <= 600);
+        v = visited(r, 1500);
+        for (std::size_t i = 1; i < v.size(); ++i) { CHECK(!nearHz(v[i], 100.05e6)); CHECK(!nearHz(v[i], 144.0125e6)); }   // (the first place is where the radio was when the lockout was set)
+        // a lockout with a bad time is refused and changes nothing
+        FoxCommand bad = testing::cmd(FOXAPP_OP_SCANNER_EXTRAS, 100.05e6, 1);
+        bad.num[1] = -1.0;
+        CHECK_EQ(r.send(bad).status(), FOXAPI_OUT_OF_RANGE);
+        CHECK_EQ(r.fact("scan.lockouts.count"), std::string("2"));
+        // cleared
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_SCANNER_EXTRAS, 0.0, 2)).status(), FOXAPI_OK);
+        CHECK_EQ(r.fact("scan.lockouts"), std::string());
+        CHECK_EQ(r.fact("scan.lockouts.count"), std::string("0"));
+        v = visited(r, 1500);
+        bool sawBack = false;
+        for (const double hz : v) { sawBack = sawBack || nearHz(hz, 144.0125e6); }
+        CHECK(sawBack);
+        // PER-MEMORY THRESHOLDS (SCANNER_EXTRAS 6): the entry at 144.0 MHz counts as present at -200 dB, so the scan holds there only
+        const std::string mth = "144000000\t-200\n";
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_SCANNER_EXTRAS, 0.0, 6), &mth).status(), FOXAPI_OK);
+        CHECK_EQ(r.fact("scan.memthresholds"), std::string("1"));
+        CHECK_EQ(r.fact("scan.thresholds"), std::string("0"));   // the Tools window's list (4) is not the same list
+        v = visited(r, 1500);
+        CHECK(!v.empty() && nearHz(v.back(), 144.0e6));
+        // the same frequency in list 4 wins over list 6: list 4 says 40 dB for 144.0 (never reached), so the scan moves on
+        const std::string never = "144000000\t40\n";
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_SCANNER_EXTRAS, 0.0, 4), &never).status(), FOXAPI_OK);
+        v = visited(r, 1500);
+        CHECK(v.size() >= 3u);
+        // bad lines are refused and change nothing
+        const std::string bad6 = "144000000 -80\n";
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_SCANNER_EXTRAS, 0.0, 6), &bad6).status(), FOXAPI_BAD_ARGUMENT);
+        CHECK_EQ(r.fact("scan.memthresholds"), std::string("1"));
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_SCANNER_EXTRAS, 0.0, 7)).status(), FOXAPI_OUT_OF_RANGE);
+        // emptied, then set again so the file holds one
+        const std::string none;
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_SCANNER_EXTRAS, 0.0, 6), &none).status(), FOXAPI_OK);
+        CHECK_EQ(r.fact("scan.memthresholds"), std::string("0"));
+        CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_SCANNER_EXTRAS, 0.0, 6), &mth).status(), FOXAPI_OK);
+        r.settle(900);
+    }
+    {
+        Rig r(user);
+        r.settle(200);
+        CHECK_EQ(r.fact("scan.memthresholds"), std::string("1"));   // a new engine reads the memory thresholds back
+    }
 }
 
 void testSaveHit() {
@@ -297,6 +378,7 @@ int main() {
     testPlan();
     testTrigger();
     testExtras();
+    testLockoutsInARangeScan();
     testSaveHit();
     fs::remove_all(g_dir, ec);
     return check::finish("test_engine_api_wire_a_scan");

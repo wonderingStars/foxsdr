@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "engine/wire_c_power.hpp"
+#include "core/rds_log.hpp"
 #include "engine/wire_c_cat.hpp"
 #include "engine/wire_c_ham.hpp"
 #include "engine/wire_c_net.hpp"
@@ -83,6 +84,9 @@ public:
     SysOps& sys() { return sys_; }
     QsoBook& qsos() { return qsoBook_; }
     CatEmulation catEmu;                  // CAT emulation for logging programs (row L7)
+    cascade::core::rdslog::Logger rdsLog; // the RDS log (engine lane E1): a worker of its own, started only while the user's switch is on
+    std::uint64_t rdsLogSeen = 0;          // what the last published fact block counted of the log (lines, drops, the error)
+    std::string rdsLogApplied = "0||rds_{date}";   // the settings it was last configured with (the defaults: nothing to do at the first pass)
     // the carrying-out of a confirmed open (plugin_abi.h request_open_url / _library_folder); empty = the system's own (wire_c_open.hpp). TESTS set it.
     std::function<bool(const std::string& what, bool isFolder, std::string& why)> openTarget;
     std::string openLast;   // the last confirmed open's outcome, a sentence
@@ -90,13 +94,14 @@ public:
     std::uint64_t catEmuSeen = 0;         // clients and commands the last published fact block counted
     void shutdown() {                     // the engine's teardown: every listener and session this lane holds is let go
         catEmu.stop();
+        rdsLog.stop();
         radioInfo.configure(false, "127.0.0.1", 0, false);
     }
     RadioInfoFollow radioInfo;            // the radio information followed (row H6)
     std::string radioInfoApplied = "0|127.0.0.1|0|0";   // the settings it was last configured with (the defaults: nothing to apply at the first pass, so no counter moves)
     std::string hamError, hamExportLast, hamCabrilloProblems;
     // What the system operations last said (facts fact.sys.*): strings the ops fill and the engine publishes.
-    std::string sysError, sysExportLast, sysImportPlan, sysImportToken, sysImportNotes, sysResetPlan, sysResetToken, sysBackupLast, sysLastBoot;
+    std::string sysError;
     Settings& settings() { return settings_; }
     const Settings& settings() const { return settings_; }
 

@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/diag_log.hpp"
+#include "core/rec_naming.hpp"
 #include "core/safe_file_io.hpp"
 #include "net/web_cors.hpp"
 
@@ -51,6 +52,10 @@ constexpr Spec kSpecs[] = {
     // --- web (webmodels) ---
     {"web.cors_origins", Kind::Text, 0, 2000, "", ""},        // allowed origins, one per line (empty = no cross-origin page may read)
     {"web.metrics", Kind::Bool, 0, 0, "0", ""},               // the /metrics page for a signed-in browser (Prometheus text format); off = as if it did not exist
+    // --- the RDS log (engine lane E1, FEATURE-GAPS G4-53; core/rds_log.hpp): text only, written beside nothing but the folder the user chose, OFF ---
+    {"rds.log", Kind::Bool, 0, 0, "0", ""},                   // write the station name, programme type and radio text of an FM radio's RDS to a file when they change
+    {"rds.log.folder", Kind::Text, 0, 260, "", ""},           // the folder (a full path) the log is written in; nothing is written without one
+    {"rds.log.name", Kind::Text, 0, 120, "rds_{date}", ""},   // the file name, by the recorder's template rules ({date} {time} {freq_mhz} {radio} ...); ".csv" is added
     {"sig.symbol_rate", Kind::Real, 0, 1000000, "0", ""},         // the symbol rate in baud the user sets for plugins that can use it (0 = none); plugins read it with the host call symbol_rate
     {"web.cors_credentials", Kind::Choice, 0, 0, "off", "off"},   // credentialed cross-origin requests: never (the session cookie is SameSite=Strict; an owner decision with HTTPS)
 };
@@ -87,6 +92,16 @@ std::string extraRule(const std::string& key, const std::string& value) {
             from = to + 1;
         }
     }
+    if (key == "rds.log.name") {
+        // the recorder's own file-name rules (core/rec_naming.hpp): a template they refuse is refused here, with their words
+        cascade::core::recname::Fields f;
+        f.unixMs = 1'790'000'000'000LL;
+        f.frequencyHz = 100.0e6;
+        f.radio = "1";
+        const cascade::core::recname::Expanded e = cascade::core::recname::expand(value.empty() ? std::string("rds_{date}") : value, f);
+        if (!e.ok) { return e.error; }
+    }
+    if (key == "rds.log.folder" && !value.empty() && !std::filesystem::path(value).is_absolute()) { return "the folder must be a full path"; }
     return std::string();
 }
 

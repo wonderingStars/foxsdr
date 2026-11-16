@@ -45,6 +45,11 @@ std::int32_t readListFor(const FoxEngineApi* api, FoxSession* session, std::uint
 // ("Follow the Windows regional settings"); fmtMHz, fmtKHz, spanText and cursorText then write the decimal sign the symbols name (core/access_number_format.hpp formatNumber).
 void setNumberLocale(const cascade::core::access::NumberSymbols* symbols, cascade::core::access::DigitPolicy policy = cascade::core::access::DigitPolicy::Latin);
 std::string fmtMHz(double hz);                             // "145.500000 MHz"
+// A number as the person's Windows writes it (owner decision 73): the decimal sign the symbols name when the setting follows Windows, a dot otherwise. For what is DISPLAYED only: a file,
+// a log, an export and anything a machine reads keeps the dot. `plus` writes a leading + on a value that is not negative.
+std::string fmtNum(double v, int decimals, bool plus = false);
+// `text` was made with the number `v` written "%.<decimals>f" (a dot): the same text with that number written the Windows way. Text that does not hold it is returned unchanged.
+std::string localizeNumber(const std::string& text, double v, int decimals);
 std::string fmtRate(double hz);                            // "2.400 MS/s", "--" when there is no rate
 std::string fmtKHz(double hz);                             // "12.5 kHz"
 std::string spanText(double hz);                           // "SPAN 2.400 MHz" (GHz / MHz / kHz / Hz by size)

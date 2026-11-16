@@ -15,6 +15,8 @@
 #include <nlohmann/json.hpp>
 
 #include "core/app_commands.hpp"
+#include "core/i18n.hpp"
+#include "core/typed_number.hpp"
 
 namespace foxsdr::slintlanec {
 
@@ -30,7 +32,7 @@ std::string trim(const std::string& s) {
 }
 
 std::optional<double> toNumber(const std::string& text) {
-    const std::string t = trim(text);
+    const std::string t = cascade::core::typedNumberText(trim(text));   // a decimal comma is read as a decimal point (owner decision 73)
     if (t.empty()) { return std::nullopt; }
     char* end = nullptr;
     const double v = std::strtod(t.c_str(), &end);
@@ -170,6 +172,39 @@ std::string priorityWireText(const std::vector<double>& hz) {
         if (!s.empty()) { s += ';'; }
         s += fmt("%.0f", v);
     }
+    return s;
+}
+
+std::string memoryThresholdWireText(const std::map<std::string, Memory>& memories) {
+    std::vector<std::pair<double, double>> rows;
+    for (const auto& [key, m] : memories) {
+        if (std::isnan(m.thresholdDb)) { continue; }
+        const std::size_t bar = key.rfind('|');
+        if (bar == std::string::npos) { continue; }
+        char* end = nullptr;
+        const double hz = std::strtod(key.c_str() + bar + 1, &end);
+        if (end == key.c_str() + bar + 1 || !std::isfinite(hz) || hz <= 0.0 || hz > 1e13) { continue; }
+        rows.emplace_back(hz, std::clamp(m.thresholdDb, -200.0, 50.0));
+    }
+    std::sort(rows.begin(), rows.end());
+    if (rows.size() > 1000) { rows.resize(1000); }
+    std::string out;
+    for (const auto& [hz, db] : rows) { out += fmt("%.0f", hz) + "\t" + fmt("%g", db) + "\n"; }
+    return out;
+}
+
+std::optional<std::string> MemThresholdPush::update(const std::map<std::string, Memory>& memories) {
+    const std::string text = memoryThresholdWireText(memories);
+    if (text == sent_ && (sentOnce_ || text.empty())) { return std::nullopt; }
+    sent_ = text;
+    sentOnce_ = true;
+    return text;
+}
+
+std::string lockoutStatusText(int count, int nextEndsInSeconds) {
+    if (count <= 0) { return std::string(); }
+    std::string s = cascade::core::formatText(cascade::i18n::tr("%d locked out"), count);
+    if (nextEndsInSeconds > 0) { s += "; " + cascade::core::formatText(cascade::i18n::tr("the first ends in %d s"), nextEndsInSeconds); }
     return s;
 }
 

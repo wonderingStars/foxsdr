@@ -226,7 +226,12 @@ bool waitErr(const fs::path& errFile, const std::string& needle, int ms) {
 
 json readConfig(const fs::path& p) {
     json j = json::parse(emt::readFile(p), nullptr, false);
-    return j.is_object() ? j : json();
+    if (!j.is_object()) { return json(); }
+    // The password record is a SECRET: it lives in the per-user protected store beside the file (core/secret_vault.hpp, engine lane E1), not in the file text, so it is read back the way the program reads it.
+    cascade::core::AppConfig loaded;
+    std::string lerr;
+    if (cascade::core::ConfigStore::load(p.string(), loaded, lerr) && !loaded.webPasswordRecord.empty()) { j["webPasswordRecord"] = loaded.webPasswordRecord; }
+    return j;
 }
 
 // The sentence the bind policy gives a wildcard bind with no password, from the policy itself.
@@ -368,6 +373,7 @@ int main() {
             CHECK(cascade::net::PasswordRecord::parse(recordAfterFirst, rec, perr));
             CHECK(recordAfterFirst.rfind("pbkdf2-sha256$", 0) == 0);
             CHECK(rec.iterations == cascade::net::kDefaultIterations);
+            CHECK(!emt::contains(emt::readFile(cfg), recordAfterFirst));   // the record is not in the settings file as text (engine lane E1)
             std::string verr;
             CHECK(cascade::net::verifyPassword(password, rec, verr) && verr.empty());
             // ...and the file holds NOT the password.

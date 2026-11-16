@@ -48,6 +48,10 @@
   #include "generated-version.iss"
 #endif
 #define AppPublisher "Steven Fox"
+; THE INSTALL-OUTCOME REPORT (owner decision 15; installer/install-report.iss) IS OFF. Remove the semicolon in front of the next line only when the Worker accepts
+; the kind "install_outcome" (docs/multi-radio-records/engine-e1.md, CONTRACT ISSUES). With it off, nothing of that file is compiled into the setup program.
+;#define ReportInstallOutcome
+#define ReportInstallUrl "https://telemetry.foxsdr.com/"
 ; SlintIsApp: WHICH WINDOW IS THE APPLICATION (docs/engine-stage4.md 6.36-6.38; the port session's decision of
 ; 2026-11-03). DEFAULT ON: the Slint window foxsdr-slint.exe (built by CASCADE_BUILD_SLINT into
 ; build\src\slint\Release, with its runtime slint_cpp.dll beside it) is what the Start-menu entry, the desktop
@@ -307,6 +311,10 @@ Type: files; Name: "{group}\{#AppName} (classic window).lnk"
 ; question - not from here, because [UninstallDelete] cannot ask.
 
 [Code]
+#ifdef ReportInstallOutcome
+#include "install-report.iss"
+#endif
+
 // ONE FoxSDR PER MACHINE, WHICHEVER SCOPE IT WAS INSTALLED IN.
 //
 // Inno keys an upgrade on AppId within ONE registry hive: a machine-wide
@@ -447,6 +455,9 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
+#ifdef ReportInstallOutcome
+  ReportNoteStep(CurStep);
+#endif
   // BEFORE the files go down, so the program never runs once against a
   // half-cleared profile. /CLEANINSTALL does the same thing unattended, for a
   // scripted reinstall.

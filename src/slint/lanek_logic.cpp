@@ -40,6 +40,7 @@ Row rChoice(const std::string& id, const std::string& label, const std::vector<s
     Row r; r.kind = kChoice; r.id = id; r.label = label; r.options = options; r.pick = pick; r.enabled = enabled; r.note = tip; return r;
 }
 Row rField(const std::string& id, const std::string& label, const std::string& value, const std::string& tip, bool enabled) { Row r; r.kind = kField; r.id = id; r.label = label; r.value = value; r.note = tip; r.enabled = enabled; return r; }
+Row rMasked(const std::string& id, const std::string& label, const std::string& value, const std::string& tip, bool enabled) { Row r = rField(id, label, value, tip, enabled); r.kind = kMasked; return r; }
 Row rReadout(const std::string& label, const std::string& value) { Row r; r.kind = kReadout; r.label = label; r.value = value; return r; }
 Row rSlider(const std::string& id, const std::string& label, float level, const std::string& readout, bool enabled, const std::string& tip) {
     Row r; r.kind = kSlider; r.id = id; r.label = label; r.level = std::clamp(level, 0.0f, 1.0f); r.value = readout; r.enabled = enabled; r.note = tip; return r;

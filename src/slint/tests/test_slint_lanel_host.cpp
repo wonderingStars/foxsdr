@@ -41,7 +41,10 @@ int main() {
     CHECK(parseNumber("  12.5 ", 0, 100, d, e) && d == 12.5);
     CHECK(parseNumber("+3", 0, 100, d, e) && d == 3.0);
     CHECK(!parseNumber("", 0, 100, d, e) && !e.empty());
-    CHECK(!parseNumber("12,5", 0, 100, d, e));                  // a comma is not a decimal point here
+    CHECK(parseNumber("12,5", 0, 100, d, e) && d == 12.5);       // owner decision 73: what is typed is accepted in both forms (a comma is a decimal point here; was refused)
+    CHECK(parseNumber("-0,5", -1, 100, d, e) && d == -0.5);
+    CHECK(!parseNumber("1,234,5", 0, 1000, d, e));              // two commas are never a decimal sign
+    CHECK(!parseNumber("1,234.5", 0, 1000, d, e));              // a comma beside a dot is not guessed at
     CHECK(!parseNumber("12abc", 0, 100, d, e));
     CHECK(!parseNumber("nan", 0, 100, d, e));
     CHECK(!parseNumber("inf", 0, 1e300, d, e));

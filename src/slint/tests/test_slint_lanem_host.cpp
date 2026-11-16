@@ -153,7 +153,7 @@ int main() {
         g = AirbandFields{}; g.freqMHz = "0.05"; CHECK(!airbandChannelText(g).ok);    // below 100 kHz
         g.freqMHz = "6001"; CHECK(!airbandChannelText(g).ok);
         g.freqMHz = ""; CHECK(!airbandChannelText(g).ok);
-        g.freqMHz = "118,1"; CHECK(!airbandChannelText(g).ok);
+        g.freqMHz = "118,1"; CHECK(airbandChannelText(g).ok);   // owner decision 73 (engine lane E1): a typed decimal comma is accepted (was refused)
         g = AirbandFields{}; g.freqMHz = "118.1"; g.levelDb = "1"; CHECK(!airbandChannelText(g).ok);
         g.levelDb = "-121"; CHECK(!airbandChannelText(g).ok);
         g = AirbandFields{}; g.freqMHz = "118.1"; g.maxFileMb = "0"; CHECK(!airbandChannelText(g).ok);

@@ -59,6 +59,8 @@ const Row kRows[] = {
      "the IF (channel I/Q) recorder's worker (AsyncIfRecorder: drains the wait-free queue, checkpoints the header every 2 s, stop() joins it) - NOT COVERED by this batch (a known gap): nothing starts it from the engine yet; the wiring that does gives it a ThreadSpec heartbeat"},
     {"src/core/radio_setup.cpp", 1, 0, 0, 0, "",
      "the radio-setup inventory's one-shot SetupAPI probe, detached and polled, bounded by the window's own timeout state - NOT COVERED by this batch (a known gap)"},
+    {"src/core/rds_log.cpp", 1, 0, 0, 0, "",
+     "the RDS log's file writer (engine lane E1): it waits for lines the control thread queues and writes them; a stalled or full disk stalls only the log (the queue drops the newest lines and counts them), never a pass, the audio or a radio - NOT COVERED by this batch"},
     {"src/core/rec_browser.hpp", 1, 0, 0, 0, "",
      "the recordings browser's scan worker (walks the folder once per request, stop() joins it); bounded by the folder size - NOT COVERED by this batch (a known gap): nothing starts it from the engine yet; the wiring that does gives it a ThreadSpec heartbeat"},
     {"src/core/record_finish.cpp", 1, 0, 1, 1, "kThreadDiskJob", ""},
@@ -90,7 +92,7 @@ const Row kRows[] = {
      "the plugin store's jobs (catalogue read, a picture, an install, a clean-up): downloads over WinHTTP with their own timeouts, collected by pumpWorkers; an install is minutes by design - NOT COVERED by this batch (a known gap)"},
     {"src/engine/image_feed.cpp", 1, 0, 1, 1, "kThreadImageFeed", ""},
     {"src/engine/record_start.hpp", 1, 1, 1, 1, "kThreadRecordOpen", R_REAP},
-    {"src/engine/server_host.cpp", 1, 1, 2, 2, "kThreadPasswordHash,kThreadServerHost", ""},
+    {"src/engine/server_host.cpp", 1, 3, 4, 4, "kThreadPasswordHash,kThreadServerHost", ""},   // (engine lane E1: the listener password hashes on a worker of its own, two more asyncs and registrations)
     {"src/engine/shutdown_guard.cpp", 1, 0, 0, 0, "",
      "the headless stop's budget guard: the watcher of the stop, which ends the process when the budget is spent; a watcher is not a worker"},
     {"src/gui/app_window.cpp", 0, 1, 0, 0, "",

@@ -415,6 +415,53 @@ void channels() {
     CHECK(checked > 2000);
 }
 
+// ENGINE LANE E1, rows D1-mem and D2: the per-memory thresholds reach the engine as SCANNER_EXTRAS 6, the lockout status text counts the lists of both kinds of scan.
+void e1MemoryThresholdsAndLockoutText() {
+    std::map<std::string, Memory> m;
+    CHECK(memoryThresholdWireText(m).empty());
+    Memory a;
+    a.thresholdDb = -60.0;
+    m[memoryKey("NFM", 145500000.0)] = a;
+    Memory b;
+    b.squelchDb = -70.0;                       // a memory with no threshold counts for nothing
+    m[memoryKey("NFM", 100300000.0)] = b;
+    Memory c;
+    c.thresholdDb = -72.5;
+    m[memoryKey("AM", 121500000.0)] = c;
+    CHECK(memoryThresholdWireText(m) == "121500000\t-72.5\n145500000\t-60\n");   // by frequency; the engine's lines
+    Memory big;
+    big.thresholdDb = 400.0;                   // clamped to the engine's range
+    m[memoryKey("AM", 7000000.0)] = big;
+    CHECK(memoryThresholdWireText(m).rfind("7000000\t50\n", 0) == 0);
+    m.erase(memoryKey("AM", 7000000.0));
+    // a key that is not "<name>|<hertz>" is skipped, never sent
+    m["broken"] = a;
+    m["name|nothz"] = a;
+    CHECK(memoryThresholdWireText(m) == "121500000\t-72.5\n145500000\t-60\n");
+
+    // what keeps the engine equal to the memories: nothing saved sends nothing; a saved list is sent once; an edit is sent; clearing sends the empty list
+    MemThresholdPush push;
+    std::map<std::string, Memory> none;
+    CHECK(!push.update(none).has_value());
+    CHECK(!push.update(none).has_value());
+    const auto first = push.update(m);
+    CHECK(first.has_value() && *first == "121500000\t-72.5\n145500000\t-60\n");
+    CHECK(!push.update(m).has_value());
+    m[memoryKey("NFM", 145500000.0)].thresholdDb = -55.0;
+    const auto edit = push.update(m);
+    CHECK(edit.has_value() && *edit == "121500000\t-72.5\n145500000\t-55\n");
+    const auto cleared = push.update(none);
+    CHECK(cleared.has_value() && cleared->empty());
+    CHECK(!push.update(none).has_value());
+
+    // the lockout status text
+    CHECK(lockoutStatusText(0, 0).empty());
+    CHECK(lockoutStatusText(0, 30).empty());
+    CHECK(lockoutStatusText(1, 0) == "1 locked out");
+    CHECK(lockoutStatusText(3, 0) == "3 locked out");
+    CHECK(lockoutStatusText(2, 600) == "2 locked out; the first ends in 600 s");
+}
+
 }  // namespace
 
 int main() {
@@ -430,5 +477,6 @@ int main() {
     shortcuts();
     recordings();
     channels();
+    e1MemoryThresholdsAndLockoutText();
     return testSummary("test_slint_lanec_host");
 }

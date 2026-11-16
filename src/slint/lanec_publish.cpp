@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 
@@ -177,7 +178,16 @@ void LaneCPublisher::act(const std::string& id, const std::string& text) {
         if (scanState_ == FOXAPI_SCANNER_IDLE || hz <= 0.0) { return; }
         refreshBookmarks();
         const Bookmark* b = factOf("fact.scanner.listMode") == "1" ? bookmarkAt(hz) : nullptr;
-        if (b != nullptr) {
+        if (b == nullptr) {
+            // A RANGE OR PLAN SCAN has no row to untick: the engine's scanner holds the lockout itself (SCANNER_EXTRAS 1: the frequency the scan is on, for the time or until cleared),
+            // and tells what is locked and when it ends (fact.scan.lockouts*; engine lane E1, row D2)
+            FoxCommand c{};
+            c.op = FOXAPP_OP_SCANNER_EXTRAS;
+            c.ival[0] = 1;
+            c.num[0] = 0.0;
+            c.num[1] = forMs;
+            send(c);
+        } else {
             lockouts_.add(b->id, hz, now, forMs);
             FoxCommand c{};
             c.op = FOXAPP_OP_BOOKMARK_TICK;
@@ -185,8 +195,14 @@ void LaneCPublisher::act(const std::string& id, const std::string& text) {
             c.ival[1] = 0;
             send(c);
             bookmarksVersion_.clear();
-        }   // a range scan has no row to untick: the engine's scanner takes a lockout with Params::lockedHz (the hand-off), so the keys are not offered there
+        }
     } else if (id == "lock-clear") {
+        {   // the engine's own lockouts (a range or plan scan; harmless when it holds none)
+            FoxCommand c{};
+            c.op = FOXAPP_OP_SCANNER_EXTRAS;
+            c.ival[0] = 2;
+            send(c);
+        }
         for (const int bid : lockouts_.clear()) {
             FoxCommand c{};
             c.op = FOXAPP_OP_BOOKMARK_TICK;
@@ -323,6 +339,19 @@ void LaneCPublisher::tick(const FoxReceiverState& state, long tickNo) {
     }
     enginePriority_ = factOf("fact.scan.priority");
 
+    // D1-mem (engine lane E1): the memories' scan thresholds, sent at start-up and whenever one is set, changed or cleared
+    if (const std::optional<std::string> t = memThresholdPush_.update(store_.memories)) {
+        FoxCommand c{};
+        c.op = FOXAPP_OP_SCANNER_EXTRAS;
+        c.ival[0] = 6;
+        if (t->size() < sizeof(c.text)) {
+            std::memcpy(c.text, t->data(), t->size());
+            send(c);
+        } else {
+            sendLong(c, *t);
+        }
+    }
+
     // C4
     if (state.scannerState != FOXAPI_SCANNER_IDLE && lastScanState_ == FOXAPI_SCANNER_IDLE) { watcher_.reset(); }
     const std::string line = watcher_.observe(now, state.scannerState, state.scanCurrentHz, unixNow);
@@ -360,10 +389,10 @@ void LaneCPublisher::tick(const FoxReceiverState& state, long tickNo) {
 
     // the scanner block
     {
-        const bool enabled = state.scannerState != FOXAPI_SCANNER_IDLE && factOf("fact.scanner.listMode") == "1";   // only a scan of the ticked rows has a row to untick
+        const bool enabled = state.scannerState != FOXAPI_SCANNER_IDLE;   // a scan of the ticked rows unticks the row; a range or plan scan asks the engine (engine lane E1, row D2)
         if (sh.first || sh.lockEnabled != enabled) { sh.lockEnabled = enabled; lc.set_lock_enabled(enabled); }
-        const std::size_t locks = lockouts_.size();
-        const std::string lt = locks == 0 ? std::string() : cascade::core::formatText(cascade::i18n::tr("%d locked out"), static_cast<int>(locks));
+        const int engineLocks = std::atoi(factOf("fact.scan.lockouts.count").c_str());
+        const std::string lt = lockoutStatusText(static_cast<int>(lockouts_.size()) + std::max(0, engineLocks), std::atoi(factOf("fact.scan.lockouts.next").c_str()));
         if (sh.first || sh.lockText != lt) { sh.lockText = lt; lc.set_lock_text(ss(lt)); }
         const std::string pr = priorityText(store_.priorityHz);
         const std::string pe = fmt("%.0f", store_.priorityEveryS);

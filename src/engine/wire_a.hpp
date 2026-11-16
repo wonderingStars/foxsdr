@@ -390,6 +390,7 @@ private:
     double priorityIntervalMs_ = 0.0;
     bool muteWhileScanning_ = false;
     std::vector<std::pair<double, double>> thresholds_;   // (Hz, dB)
+    std::vector<std::pair<double, double>> memThresholds_;   // (Hz, dB) the window's per-memory thresholds (SCANNER_EXTRAS 6); thresholds_ wins on the same frequency
     std::string scanError_;
 
 public:

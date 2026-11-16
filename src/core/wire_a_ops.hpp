@@ -66,7 +66,10 @@
 //   a floor that is kept for each scan point, hysteresis, floor rise). BAD_ARGUMENT for a bad config. fact.scan.trigger (the JSON), fact.scan.trigger.on.
 //   SCANNER_EXTRAS: ival[0] 0 = the priority list (text: Hz values separated by ';', at most 64; num[0] = the interval in ms between visits, 0 = never), 1 = lock a frequency out (num[0] Hz, 0 = the one the scan is on;
 //   num[1] ms, 0 = until cleared), 2 = clear the lockouts of 1, 3 = mute while scanning (ival[1] 0/1), 4 = per-entry thresholds (text: lines "<Hz><TAB><dB>", at most 1000; they apply to the entries of a list or plan scan),
-//   5 = the locked-out frequencies kept with the configuration (text: Hz values separated by ';', at most 1000). OUT_OF_RANGE / BAD_ARGUMENT for values that are not frequencies, levels or times. fact.scanner.extras is "1"
+//   5 = the locked-out frequencies kept with the configuration (text: Hz values separated by ';', at most 1000),
+//   6 = the window's per-memory thresholds (the same lines as 4; kept apart so a list the Tools window sends with 4 is not replaced; 4 wins on the same frequency; fact.scan.memthresholds is the count).
+//   The operator's lockouts of 1 are read back as fact.scan.lockouts ("<Hz>@<seconds left>;..." 0 = until cleared), .lockouts.count and .lockouts.next (seconds until the first temporary one ends, 0 = none ends).
+//   OUT_OF_RANGE / BAD_ARGUMENT for values that are not frequencies, levels or times. fact.scanner.extras is "1"
 //   (the window shows its "not used yet" note only while it is absent), fact.scan.priority, .priority.interval, .locked, .thresholds, .mute.
 #define FOXAPP_OP_SCAN_PLAN              0x880Bu /* ival[0]: 0 set / 1 start / 2 clear; text: the plan JSON. Addresses one radio (target) */
 #define FOXAPP_OP_SCAN_BACK              0x880Cu

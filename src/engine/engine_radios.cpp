@@ -369,6 +369,7 @@ void Engine::publishExtraReceivers() {
         RadioWork w(*this, slot);
         const std::string faultMessage = rx().pipeline_.faultMessage();
         const cascade::core::RdsSnapshot rds = rx().pipeline_.rdsSnapshot();
+        observeRdsForLog(static_cast<int>(slot) + 1, rds);   // engine lane E1: the RDS log
         cascade::core::PublishedState ps{};
         fillPublishedState(ps, faultMessage, rds);
         rx().apiFaultText_ = faultMessage;

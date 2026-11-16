@@ -52,6 +52,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/config.hpp"
+#include "core/secret_vault.hpp"
 #include "core/patch_io.hpp"
 #include "engine_main_proc.hpp"
 #include "test_check.hpp"
@@ -72,6 +73,7 @@ const std::set<std::string>& engineWritten() {
     static const std::set<std::string> keys = {
         // ServerHost::store
         "webEnabled", "webBindAddress", "webPort", "webUsername", "webPasswordRecord", "catEnabled", "catBindAll",
+        "webTlsEnabled", "webTlsCertThumbprint", "webListenersEnabled", "webListenerPasswordRecord", "webMaxListeners", "webListenerIdleSeconds", "webListenerSessionSeconds", "webListenersMayTune", "webChatEnabled",   // engine lane E1
         "catPort", "tciEnabled", "tciBindAll", "tciPort", "udpAudioEnabled", "udpAudioHost", "udpAudioPort", "udpAudioRadio", "udpAudioPacketFrames",
         // Engine::fillConfig
         "sourceKind", "soapyAntenna", "soapyArgs", "nativeArgs", "lookForNetworkUsrps", "biasTee", "converters",
@@ -293,7 +295,11 @@ std::string normalised(const AppConfig& c) {
 }
 
 json parseFile(const fs::path& p) {
-    const std::string text = emt::readFile(p);
+    std::string text = emt::readFile(p);
+    // the secrets (the tester tokens, the web password record) are kept in the per-user protected store beside the file (core/secret_vault.hpp, engine lane E1): read back the way the program reads them
+    bool migrated = false;
+    std::string note;
+    text = cascade::core::vault::mergeAfterRead(p.string(), text, migrated, note);
     json j = json::parse(text, nullptr, false);
     return j;
 }

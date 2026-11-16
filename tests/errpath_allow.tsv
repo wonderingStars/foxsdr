@@ -1285,8 +1285,6 @@ src/engine/wire_c_cat.cpp::CatEmulation::configure::errassign::the engine would 
 src/engine/wire_c_cat.cpp::CatEmulation::configure::errassign::the port could not be opened	ALLOW	API reply text returned to the caller (the caller shows it)	seed
 src/engine/wire_c_ham.cpp::QsoBook::load::errassign::the qso log file cannot be read it was left as it is	ALLOW	API reply text returned to the caller (the caller shows it)	seed
 src/engine/wire_c_net.cpp::RadioInfoFollow::configure::errassign::give the port the logger sends its radio information to	ALLOW	API reply text returned to the caller (the caller shows it)	seed
-src/engine/wire_c_portable.cpp::applyPendingSystemActionsToProcess::stderr::%	ALLOW	stderr line in a non-shipping or developer path	seed
-src/engine/wire_c_portable.cpp::applyPendingSystemActionsToProcess::swallow::catch	PENDING:unsure	UNSURE: swallowed exception, class not decided	seed
 src/engine/wire_c_portable.cpp::applyPortableModeToProcess::stderr::%	ALLOW	stderr line in a non-shipping or developer path	seed
 src/engine/wire_c_power.cpp::Power::keepAwakePass::log::power could not keep the pc awake while recording	PENDING:R-record	recovery (power management: the PC may sleep during a recording / the wake notice is missing)	seed
 src/engine/wire_c_power.cpp::Power::startResumeWatch::log::power the wakefromsleep notice could not be registered	PENDING:R-record	recovery (power management: the PC may sleep during a recording / the wake notice is missing)	seed
@@ -1700,7 +1698,7 @@ src/slint/lanel_logic.cpp::parseInteger::errassign::allowed	ALLOW	UI result text
 src/slint/lanel_logic.cpp::parseInteger::errassign::that is not a whole number	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanel_logic.cpp::parseInteger::errassign::type a whole number	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanel_logic.cpp::parseNumber::errassign::allowed	ALLOW	UI result text: the failure is classified at the site that produced it	seed
-src/slint/lanel_logic.cpp::parseNumber::errassign::that is not a number use a dot for decimals	ALLOW	UI result text: the failure is classified at the site that produced it	seed
+src/slint/lanel_logic.cpp::parseNumber::errassign::that is not a number	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanel_logic.cpp::parseNumber::errassign::type a number	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanel_publish.cpp::readWholeFile::errassign::that file cannot be read	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanel_publish.cpp::readWholeFile::errassign::that file cannot be read#2	ALLOW	UI result text: the failure is classified at the site that produced it	seed
@@ -3184,3 +3182,14 @@ src/usb/winusb_device.cpp::openWinUsb::errassign::opening the radio	ALLOW	USB tr
 src/usb/winusb_device.cpp::openWinUsb::errassign::openwinusb needs a device interface path	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
 src/usb/winusb_device.cpp::openWinUsb::errassign::the radio is no longer present	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
 src/usb/winusb_device.cpp::openWinUsb::errassign::winusbinitialize is the device bound to winusb	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
+src/core/config.cpp::ConfigStore::load::warn::settings a saved secret could not be opened % it reads as em	ALLOW	user-action: a secret the per-user protected store cannot open (another Windows user, another PC) reads as empty and the person types it again; the line is in the log the person may send	e1
+src/core/rds_log.cpp::Logger::configure::errassign::why	ALLOW	ui-text: the refusal is the sentence the System page shows under the RDS log rows (fact rds.log.error)	e1
+src/core/rds_log.cpp::Logger::workerMain::errassign::why	ALLOW	ui-text: a failed write is the sentence the System page shows under the RDS log rows (fact rds.log.error); the next good write clears it	e1
+src/engine/server_host.cpp::readRange::errassign::must be a whole number	ALLOW	validation: a refused SERVER_CONFIG request is answered to the operator with this sentence	e1
+src/engine/server_host.cpp::readRange::errassign::must be between	ALLOW	validation: a refused SERVER_CONFIG request is answered to the operator with this sentence	e1
+src/engine/server_host.cpp::parseServerConfigRequest::errassign::clearlistenerpassword can only be true	ALLOW	validation: a refused SERVER_CONFIG request is answered to the operator with this sentence	e1
+src/engine/server_host.cpp::parseServerConfigRequest::errassign::tlsthumbprint must be the # hexadecimal digits of a certific	ALLOW	validation: a refused SERVER_CONFIG request is answered to the operator with this sentence	e1
+src/engine/server_host.cpp::parseServerConfigRequest::errassign::give one of listenerpassword listenerpasswordrecord and clea	ALLOW	validation: a refused SERVER_CONFIG request is answered to the operator with this sentence	e1
+src/engine/server_host.cpp::parseServerConfigRequest::errassign::the listener password must be at least	ALLOW	validation: a refused SERVER_CONFIG request is answered to the operator with this sentence	e1
+src/engine/server_host.cpp::parseServerConfigRequest::errassign::listenerpasswordrecord is not a password record	ALLOW	validation: a refused SERVER_CONFIG request is answered to the operator with this sentence	e1
+src/slint/main.cpp::main::log::scanner the engine did not take the memories thresholds	ALLOW	ui-text: a window command the engine would not take is logged; the engine fact scan.memthresholds says what it holds and the push is repeated on the next change	e1

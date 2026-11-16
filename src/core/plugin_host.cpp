@@ -4,6 +4,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_host.hpp"
+#include "core/secret_vault.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -450,7 +451,12 @@ LoadedPlugin loadOne(const fs::path& p, const PluginHost::LoadGate& gate) {
         rec.settingChoices = (desc->capabilities & CASCADE_CAP_SETTING_CHOICES) != 0u
                                  ? static_cast<const CascadeSettingChoicesApi*>(findCapabilityTable(desc, CASCADE_CAP_SETTING_CHOICES))
                                  : nullptr;
-        if (rec.settingsUi != nullptr) { (void)settingFieldsFrom(rec.settingsUi, rec.settingChoices); }
+        if (rec.settingsUi != nullptr) {
+            for (const SettingField& sf : settingFieldsFrom(rec.settingsUi, rec.settingChoices)) {
+                // A PASSWORD field's value is kept in the per-user protected store, not in the settings file (core/secret_vault.hpp, owner decision 16).
+                if (sf.kind == CASCADE_SETTING_PASSWORD) { vault::declarePluginSecret(rec.name, sf.key); }
+            }
+        }
         // wire-c end
         rec.basemap = (desc->capabilities & CASCADE_CAP_BASEMAP) != 0u
                           ? static_cast<const CascadeBasemapApi*>(

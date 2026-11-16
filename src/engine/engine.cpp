@@ -6953,6 +6953,7 @@ double Engine::publishReceiverState() {
     const std::string faultMessage = rx().pipeline_.faultMessage();
     // (test.rds stands in for the decoder's snapshot in a hermetic engine.)
     const cascade::core::RdsSnapshot rds = testRdsOn_ ? testRds_ : rx().pipeline_.rdsSnapshot();
+    observeRdsForLog(1, rds);   // engine lane E1: the RDS log (core/rds_log.hpp), off unless the user switched it on
     cascade::core::PublishedState ps{};
     fillPublishedState(ps, faultMessage, rds);
     // The fault sentence the list block carries whole (API 0.3 8.10): the one the state's faultMessage cut. Assigned

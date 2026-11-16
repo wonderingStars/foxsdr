@@ -37,6 +37,7 @@ public:
         std::string scanLogPath;                                 // scan-log.csv; "" = no log
         bool bounded = false;
         std::function<void(const FoxCommand&, std::uint32_t radio)> submit;   // the window's submit (radio 0 = the selected one)
+        std::function<void(const FoxCommand&, std::uint32_t radio, const std::string& longText)> submitLong;   // the same with a text longer than the command's slot (engine lane E1: the memories' thresholds)
         std::function<double()> nowMs;                           // a steady clock
         std::function<std::int64_t()> unixNow;
         std::function<void(const std::string& path)> openIq;     // a recording to play as the I/Q file
@@ -83,6 +84,7 @@ private:
     void save();
     void markDirty() { dirty_ = true; dirtySince_ = tickNo_; }
     void send(FoxCommand c, std::uint32_t radio = 0) const { if (env_.submit) { c.structSize = sizeof(c); env_.submit(c, radio); } }
+    void sendLong(FoxCommand c, const std::string& text, std::uint32_t radio = 0) const { if (env_.submitLong) { c.structSize = sizeof(c); env_.submitLong(c, radio, text); } }
     std::string factOf(const char* key);
 
     Env env_;
@@ -109,6 +111,7 @@ private:
     ScanMuteFollower mute_;
     BandwidthMemory bandwidth_;
     PriorityPush priorityPush_;        // C2: what keeps the engine's priority list equal to the field
+    MemThresholdPush memThresholdPush_;   // D1-mem (engine lane E1): what keeps the engine's per-memory thresholds equal to the memories'
     std::string enginePriority_;       // fact.scan.priority as last read
     std::uint32_t lastScanState_ = 0;
     int mutedRadio_ = 1;               // the radio the mute follower silenced

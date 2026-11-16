@@ -943,7 +943,8 @@ void positionEffects() {
     CHECK(applyPositionSet("nan", "10").empty() && applyPositionSet("inf", "10").empty());
     double v = 0.0;
     CHECK(parseCoordinate(" 12.5 ", v) && v == 12.5);
-    CHECK(!parseCoordinate("", v) && !parseCoordinate("1,5", v) && !parseCoordinate("12.5.1", v) && v == 12.5);
+    CHECK(!parseCoordinate("", v) && !parseCoordinate("12.5.1", v) && v == 12.5);
+    CHECK(parseCoordinate("1,5", v) && v == 1.5);   // owner decision 73 (engine lane E1): a typed decimal comma is accepted (was refused)
 }
 
 void bookmarkEffects() {

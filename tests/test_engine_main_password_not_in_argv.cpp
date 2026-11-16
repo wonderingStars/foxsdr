@@ -231,7 +231,14 @@ int main() {
         CHECK(inHome.empty() && inDiag.empty() && inOut.empty());
         // not vacuous: the diagnostics log is there, the settings file holds the record
         CHECK(countFiles(diagDir) > 0);
-        CHECK(emt::contains(emt::readFile(cfg), "pbkdf2-sha256$"));
+        {
+            // the record is a secret kept in the per-user protected store, not in the file text (core/secret_vault.hpp, engine lane E1): read back the way the program reads it
+            cascade::core::AppConfig loaded;
+            std::string lerr;
+            CHECK(cascade::core::ConfigStore::load(cfg.string(), loaded, lerr));
+            CHECK(loaded.webPasswordRecord.rfind("pbkdf2-sha256$", 0) == 0);
+            CHECK(!emt::contains(emt::readFile(cfg), "pbkdf2-sha256$"));
+        }
     }
     emt::unsetEnv("FOXSDR_DIAG_DIR");
     std::printf("  L: the diagnostics directory held %zu file(s), all scanned\n", countFiles(diagDir));

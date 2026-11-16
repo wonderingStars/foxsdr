@@ -96,6 +96,22 @@ private:
     double sentMs_ = 30000.0;   // the window's default interval (30 s) is what the engine is assumed to hold at the start
     bool sent_ = false;
 };
+// ENGINE LANE E1 (row D1-mem): the per-memory scan thresholds of the window's memories go to the engine as SCANNER_EXTRAS 6 (lines "<Hz><TAB><dB>", at most 1000, by frequency). Only a
+// memory with a threshold counts; a memory is keyed "<name>|<whole hertz>".
+std::string memoryThresholdWireText(const std::map<std::string, Memory>& memories);
+// Keeps the engine's list equal to the window's: fed once a tick, returns the text to send when it differs from what was last sent. The engine is assumed to hold NO memory
+// thresholds at the start, so an empty list sends nothing at start-up (the engine keeps its own persisted list) while a saved one is sent on the first tick; clearing the last
+// threshold afterwards sends the empty list.
+class MemThresholdPush {
+public:
+    std::optional<std::string> update(const std::map<std::string, Memory>& memories);
+private:
+    std::string sent_;
+    bool sentOnce_ = false;
+};
+// The status text of the lockouts (ENGINE LANE E1, row D2): how many frequencies are locked out right now (those of a scan of the ticked rows, which the window unticked, and
+// those the engine's scanner holds for a range or plan scan) and, when a timed one is running, when the first ends. "" for none.
+std::string lockoutStatusText(int count, int nextEndsInSeconds);
 // a number of dB typed in a memory field ("-70", "off"/"" = unset), clamped to -200..20 for a squelch; nullopt = unreadable
 std::optional<double> parseDbField(const std::string& text, bool& unset);
 std::string dbFieldText(double v);   // "" for NaN

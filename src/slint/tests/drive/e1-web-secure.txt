@@ -1,0 +1,85 @@
+#! frames=1000 size=1600x8000 bank=4 sections=4:23,24,25
+# e1-web-secure (engine lane E1, owner decisions 17, 18 and the RDS log of FEATURE-GAPS G4-53): the Web and System sections against the real engine. HTTPS is OFF; its switch, the certificate a person
+# names (a thumbprint is refused unless it is 40 hexadecimal digits), the listener switch, the listener password (hidden on the screen, at least eight characters, hashed by the engine and never shown again),
+# the limits and the two listener switches are read back FROM THE ENGINE's facts. The RDS log is OFF, writes nothing until a folder is chosen, and its switch and folder read back from the engine's settings.
+# (A window of a hermetic engine hosts no listener, so nothing opens a port here: the engine's own tests hold the running server and the certificate a real client sees, test_server_host H17.)
+10 state running == 1
++3 state ll.rows.web > 5
+# HTTPS
++1 state ll.fact.web.tls == 0
++1 click "Use HTTPS for the web page"
++12 state ll.fact.web.tls == 1
++1 click "Use HTTPS for the web page"
++12 state ll.fact.web.tls == 0
++1 expect "Use this certificate" enabled equals "false"
++1 type "Certificate thumbprint" "abc"
++1 key enter
++2 expect "Use this certificate" enabled equals "false"
++1 type "Certificate thumbprint" "0123456789abcdef0123456789abcdef01234567"
++1 key enter
++2 expect "Use this certificate" enabled equals "true"
++1 click "Use this certificate"
++12 state ll.fact.web.tls.thumbprintSet == 1
++1 expect "Use FoxSDR's own certificate" enabled equals "true"
++1 click "Use FoxSDR's own certificate"
++12 state ll.fact.web.tls.thumbprintSet == 0
+# the listeners: everyone shares one tuned receiver and one person tunes
++1 state ll.fact.web.listeners == 0
++1 state ll.fact.web.hasListenerPassword == 0
++1 state ll.fact.web.listenersMayTune == 0
++1 click "Let listeners sign in"
++12 state ll.fact.web.listeners == 1
++1 expect "Set the listener password" enabled equals "false"
++1 type "Listener password" "short"
++1 key enter
++2 expect "Set the listener password" enabled equals "false"
++1 type "Listener password" "a listener password of ours"
++1 key enter
++2 expect "Set the listener password" enabled equals "true"
++1 click "Set the listener password"
++60 state ll.fact.web.hasListenerPassword == 1
++1 state ll.fact.web.listenerPasswordPending == 0
++1 expect "Clear the listener password" enabled equals "true"
++1 type "Most listeners at once" "7"
++1 key enter
++1 type "Sign a listener out after (minutes without activity)" "2"
++1 key enter
++1 type "Sign a listener out after (hours in all)" "1"
++1 key enter
++1 click "Apply the limits"
++12 state ll.fact.web.maxListeners == 7
++1 state ll.fact.web.listenerIdleSeconds == 120
++1 state ll.fact.web.listenerSessionSeconds == 3600
++1 type "Most listeners at once" "99"
++1 key enter
++1 click "Apply the limits"
++6 state ll.fact.web.maxListeners == 7
++1 state ll.note.web contains "allowed"
++1 click "Listeners may tune too"
++12 state ll.fact.web.listenersMayTune == 1
++1 click "Chat between listeners"
++12 state ll.fact.web.chat == 1
++1 click "Clear the listener password"
++12 state ll.fact.web.hasListenerPassword == 0
++1 click "Let listeners sign in"
++12 state ll.fact.web.listeners == 0
++1 click "Listeners may tune too"
++12 state ll.fact.web.listenersMayTune == 0
++1 click "Chat between listeners"
++12 state ll.fact.web.chat == 0
++1 shot "e1-web-secure.png"
+# the RDS log
++1 state ll.fact.wirec.rds.log != 1
++1 click "Write what an FM station sends about itself to a file"
++12 state ll.fact.wirec.rds.log == 1
++1 state ll.fact.rds.log.lines == 0
++1 click "Write what an FM station sends about itself to a file"
++12 state ll.fact.wirec.rds.log == 0
++1 type "File name" "../escape"
++1 key enter
++1 click "Use this name"
++12 state ll.note.system contains "RDS log file name: Refused"
++1 type "File name" "rds_{date}_{radio}"
++1 key enter
++1 click "Use this name"
++12 state ll.note.system contains "RDS log file name: done"
