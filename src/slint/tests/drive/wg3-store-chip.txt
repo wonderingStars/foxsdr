@@ -1,0 +1,25 @@
+#! frames=700 size=1400x1500 bank=1 plugins=aprs-decoder pluginsdir=fixture FOXSDR_SLINT_STORE_LOCAL=fixtures/wg3-index-update.json
+# wg3-store-chip (window gaps 3, rows 279 280): what the DECODE bank's "Plugin store" row is DRAWN with in each state, read from the window's own row model
+# (store.railChip, store.railLamp), not from the logic. The fitted plugin is the fixture aprs-decoder 1.0.3; the local stand-in catalogue offers 1.0.4.
+10 state running == 1
+state store.railChip == "IDLE"
+state store.railLamp == 0
+# IDLE: nothing has been read this session; the lamp is out
+state store.railOpen == 0
+# the bank's own header chip (top right of DECODE) used to read "--" on every bank but SIGNAL: on DECODE it now says whether a decoder runs (none is fitted here)
+state store.bankChip == "IDLE"
+# the row opens the page; the catalogue (the local stand-in) is read; one fitted plugin has a newer version in it: "1 UPD", the lamp amber/yellow while updates wait
++1 click "Plugin store"
++300 state store.railChip == "1 UPD"
+state store.railLamp == 1
+state store.railOpen == 1
++1 shot "wg3-store-chip-open.png"
+# the row pressed again closes the page: the lamp is yellow (4) while an update waits, the chip still says 1 UPD
++1 click "Plugin store"#1
++20 state store.railOpen == 0
+state store.railChip == "1 UPD"
+state store.railLamp == 4
++1 shot "wg3-store-chip-closed.png"
+# BUSY is NOT driven here: a bounded (drive) run withholds every store operation that would start a transfer ("extend: bounded run - op 0x841e not sent"), so no
+# transfer can be held open on purpose. The word BUSY, and OK, are read from the engine's own lists by the railChip case of test_slint_host_extend; OK is also
+# driven by wg3-store-page (store.chip == OK after a read with nothing waiting).

@@ -34,8 +34,8 @@ expect "Previous picture" enabled equals "true"
 expect "Next picture" enabled equals "false"
 +1 click "Previous picture"
 +8 state store.pictureIndex == 1
-# a frame has its own caption (row 1845)
-expect "Picture number 1 of the page" label contains "Picture number 1"
+# a frame has its own caption (row 1845); the strip is at frame 1 here, so frame 0 has slid out of view: the second caption is read
+expect "Picture number 2 of the page" label contains "Picture number 2"
 # DETAILS (row 1853): the capture seam opens them; fold them, then open them again, and the grid's rows are controls with their own labels
 expect "HIDE DETAILS" enabled equals "true"
 state store.facts >= 10

@@ -94,6 +94,7 @@ struct Header {
     std::string mode;      // the demodulation mode at start (NFM WFM AM DSB USB CW LSB RAW), with iqfile
     std::string bandwidth; // the passband in Hz at start, with iqfile
     std::string config;    // a JSON file used as the run's settings seed instead of the generator profile (docs 6.51: a real radio's profile); relative = under tests/drive/fixtures
+    bool fixturePlugins = false;   // pluginsdir=fixture: the plugins come from FOXSDR_DRIVE_FIXTURE_PLUGINS_DIR (built by the tests' CMake), never the user's folder
     bool userRadios = false;  // radios=user: the user's own SoapySDR vendor modules stay reachable (docs 6.51) - a hardware run on a real radio
     bool updateCheck = false; // updatecheck=on: the generator profile's "Check for updates at startup" tick is ON (it is off otherwise: a bounded run asks nobody)
     std::vector<std::string> logContains;   // logcontains=<text, underscores for spaces>: the run's diagnostic log must hold the text afterwards (docs 6.63: "a refused open reaches the log")
@@ -122,6 +123,7 @@ Header parseHeader(const std::string& script) {
             else if (key == "store") { h.env["FOXSDR_SLINT_STORE_PAGE"] = value; }
             else if (key == "testradios") { h.env["FOXSDR_SLINT_TEST_RADIOS"] = value; }   // 2..8 made-up radios for the radio workspace (docs/multi-radio-records/screen-s3.md); a test-only seam of a bounded run
             else if (key == "size") { h.env["FOXSDR_SLINT_SIZE"] = value; }   // <w>x<h>: a taller window for a tall section body
+            else if (key == "pluginsdir") { h.fixturePlugins = (value == "fixture"); }   // window gaps 3: the plugins come from the folder the build made beside the tests
             else if (key == "plugins") { h.plugins = value; }                 // all | <id>,<id>...: the plugins fitted for this run (docs 6.49)
             else if (key == "iqfile") { h.iqfile = value; }                   // the I/Q WAV source (docs 6.50)
             else if (key == "centre") { h.centre = value; }
@@ -214,7 +216,12 @@ int main(int argc, char** argv) {
     int pluginsCopied = 0;
     if (!h.plugins.empty()) {
         fs::path from;
-        if (const char* o = std::getenv("FOXSDR_DRIVE_PLUGINS_DIR"); o != nullptr && *o != '\0') { from = o; }
+        const char* o = std::getenv("FOXSDR_DRIVE_PLUGINS_DIR");
+#ifdef FOXSDR_DRIVE_FIXTURE_PLUGINS_DIR
+        if (h.fixturePlugins) { from = FOXSDR_DRIVE_FIXTURE_PLUGINS_DIR; }   // pluginsdir=fixture: the folder the build made (tests/CMakeLists.txt wg3_plugins), never the user's
+        else
+#endif
+        if (o != nullptr && *o != '\0') { from = o; }
         else if (const char* la = std::getenv("LOCALAPPDATA"); la != nullptr && *la != '\0') { from = fs::path(la) / "FoxSDR" / "plugins"; }
         const fs::path to = dir / "local" / "foxsdr" / "plugins";
         fs::create_directories(to, ec);

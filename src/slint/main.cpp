@@ -2585,8 +2585,11 @@ int main(int argc, char** argv) {
             for (const auto& r : rows) { sig += std::string(r.name) + "|" + std::string(r.chip) + "|" + std::to_string(static_cast<int>(r.tone)) + "|" + (r.open ? "1" : "0") + ";"; }
             if (sigs.changed("sections", sig)) { ui->set_sections(std::make_shared<slint::VectorModel<SectionRow>>(std::move(rows))); }
         }
-        ui->set_bank_chip(ss(bankIndex == 0 ? (running ? "RECEIVING" : "STOPPED") : "--"));
-        ui->set_bank_chip_tone(bankIndex == 0 && running ? ChipTone::Good : ChipTone::Neutral);
+        // the bank header's chip: SIGNAL says whether the receiver runs; DECODE says whether a decoder runs (the same count the Decoders row carries; window gaps 3: it read "--"
+        // beside a store row whose own chip read fine); the other banks have no summary of their own and keep the dash
+        const bool decodersUp = bankIndex == 1 && state.decodersRunning > 0;
+        ui->set_bank_chip(ss(bankIndex == 0 ? (running ? "RECEIVING" : "STOPPED") : bankIndex == 1 ? (decodersUp ? std::to_string(state.decodersRunning) + " RUNNING" : std::string("IDLE")) : "--"));
+        ui->set_bank_chip_tone(((bankIndex == 0 && running) || decodersUp) ? ChipTone::Good : ChipTone::Neutral);
         const double lo = 3000.0, hi = std::max(lo + 1.0, 0.9 * state.channelRateHz);
         ui->set_passband_norm(static_cast<float>(std::clamp((state.bandwidthHz - lo) / (hi - lo), 0.0, 1.0)));
         ui->set_passband_text(ss(fmtKHz(state.bandwidthHz)));
@@ -3154,6 +3157,23 @@ int main(int argc, char** argv) {
         // look.<what>: what the window is DRAWN with (docs 6.61), read from the window itself, not from the settings: scale (Window::scale_factor), width / height (the
         // logical size the screen lays out in), bg (the ground colour in force, "#rrggbb"), accent, face (nixie / neon / plain)
         // shown.<what>: whether a dialog or page is up (docs 6.61): import (the import dialog), storePlugin (the Plugin store's plugin page), about
+        // store.railChip / store.railLamp / store.railOpen: what the DECODE bank's "Plugin store" row is DRAWN with (the window's own decode-rows model, row id "store"),
+        // not what the logic computed: the chip word the user reads, the lamp (the LampState order: 0 off, 1 green, 2 amber, 3 red, 4 yellow) and whether the page is up.
+        if (name == "store.bankChip") { out = std::string(ui->get_bank_chip()); return std::string(); }   // the bank header's own chip (top right of the bank)
+        if (name == "store.railChip" || name == "store.railLamp" || name == "store.railOpen") {
+            const auto rows = ui->get_decode_rows();
+            if (rows) {
+                for (std::size_t i = 0; i < rows->row_count(); ++i) {
+                    const DecodeRow r = *rows->row_data(i);
+                    if (std::string(r.id) != "store") { continue; }
+                    if (name == "store.railChip") { out = std::string(r.chip); }
+                    else if (name == "store.railLamp") { out = std::to_string(static_cast<int>(r.dot)); }
+                    else { out = r.open ? "1" : "0"; }
+                    return std::string();
+                }
+            }
+            return "no Plugin store row in the DECODE bank";
+        }
         if (name.rfind("store.", 0) == 0) {   // window gaps 3: the store page's strip, facts and notice, a fitted module's body, the DECODE row's chip, the clean-up foot
             if (!extendBank.stateOf(name.substr(6), out)) { return "store.<pictureIndex|frames|reach|facts|notice|noticeTick|keyEnabled|whatItDoes|chip|chipLit|cleanupLabel|cleanupOpen|cleanupReport|module.<key>.<frames|index|details|whatItDoes|facts|catalogued>>, not " + name; }
             return std::string();

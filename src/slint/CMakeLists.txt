@@ -211,6 +211,12 @@ else()
     target_compile_definitions(test_slint_drive_run PRIVATE FOXSDR_DRIVE_PYTHON="python3")
 endif()
 add_dependencies(test_slint_drive_run foxsdr-slint)
+# A fixture plugins folder for scripts that say pluginsdir=fixture (window gaps 3, wg3-module-page): tests/CMakeLists.txt builds it from the settings
+# fixture plugin, so a fitted module's page is proved inside the gate and never from the user's own folder.
+target_compile_definitions(test_slint_drive_run PRIVATE FOXSDR_DRIVE_FIXTURE_PLUGINS_DIR="${CMAKE_BINARY_DIR}/tests/wg3_plugins")
+if(NOT CMAKE_VERSION VERSION_LESS 3.0)
+    add_dependencies(test_slint_drive_run wg3_plugins)
+endif()
 # Every gui test here requires the fixture gui_desktop (tests/CMakeLists.txt, "THE DESKTOP GUARD"): none starts on the visible desktop.
 add_test(NAME test_slint_drive_run COMMAND test_slint_drive_run)
 set_tests_properties(test_slint_drive_run PROPERTIES LABELS "gui;drive" FIXTURES_REQUIRED gui_desktop TIMEOUT 300)

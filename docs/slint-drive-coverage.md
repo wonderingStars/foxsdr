@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2379 | 721 | 117 | 1541 | 0 |
+| 2379 | 723 | 117 | 1539 | 0 |
 
-Of the 1503 rows that are controls (the 876 readout-like rows left out): 721 asserted, 117 driven without a read-back, 665 not drivable.
+Of the 1503 rows that are controls (the 876 readout-like rows left out): 723 asserted, 117 driven without a read-back, 663 not drivable.
 
-NOT DRIVABLE by reason: readout 876, other 236, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 71, deferred 68, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 2.
+NOT DRIVABLE by reason: readout 876, other 234, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 71, deferred 68, needs hardware 33, no label in the element tree 25, not installed 21, needs a file 3, no plugin fitted 2.
 
 ## Per section
 
@@ -71,7 +71,7 @@ NOT DRIVABLE by reason: readout 876, other 236, needs a signal (no fixture) 120,
 | DECODE bank and plugin host — Map page (generic, non-satellite) - brief, map agent owns the detail | 17 | 1 | 0 | 16 | 3 | 0 |
 | DECODE bank and plugin host — Target details (window) | 5 | 0 | 0 | 5 | 2 | 0 |
 | DECODE bank and plugin host — Fitted modules (window; rail key "Plugins"): top bar and list | 15 | 2 | 2 | 11 | 6 | 0 |
-| DECODE bank and plugin host — Module page (click a name) | 14 | 0 | 0 | 14 | 6 | 0 |
+| DECODE bank and plugin host — Module page (click a name) | 14 | 1 | 0 | 13 | 6 | 0 |
 | DECODE bank and plugin host — Preset bar (window-side preset keys) | 4 | 0 | 0 | 4 | 1 | 0 |
 | DECODE bank and plugin host — Sound muted dialog and banner (generic plugin mute behaviour) | 2 | 0 | 0 | 2 | 2 | 0 |
 | DECODE bank and plugin host — Instrument faces: generic face (kind 0 or unknown) | 6 | 0 | 0 | 6 | 6 | 0 |
@@ -188,7 +188,7 @@ NOT DRIVABLE by reason: readout 876, other 236, needs a signal (no fixture) 120,
 | Plugin store — SITES panel (under the top bar when SITES is on) | 6 | 2 | 0 | 4 | 2 | 0 |
 | Plugin store — Plugin page (opened from a card or an update row) | 14 | 3 | 0 | 11 | 7 | 0 |
 | Fitted modules — window (rail key Plugins): top bar and list | 14 | 2 | 2 | 10 | 4 | 0 |
-| Fitted modules — Module page (click a row) | 12 | 0 | 0 | 12 | 4 | 0 |
+| Fitted modules — Module page (click a row) | 12 | 1 | 0 | 11 | 4 | 0 |
 | Fitted modules — Retired modules ("Disabled" rows on the rail, under the store row) | 5 | 0 | 0 | 5 | 2 | 0 |
 | Patch — rail entries (the main window's other face) | 2 | 0 | 0 | 2 | 0 | 0 |
 | Patch — top band: transport, parts bin, decoder row, blueprints | 9 | 3 | 2 | 4 | 3 | 0 |
@@ -668,7 +668,7 @@ NOT DRIVABLE by reason: readout 876, other 236, needs a signal (no fixture) 120,
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 278 | Plugin store switch row | key (latched toggle) | DRIVEN+ASSERTED | decode-store.txt | click "Plugin store"; state pages contains "PLUGIN STORE" |
-| 279 | Store chip + lamp | readout / lamp | DRIVEN+ASSERTED | wg3-store-page | store.chip == OK after the catalogue was read; BUSY / IDLE / n UPD in test railChip |
+| 279 | Store chip + lamp | readout / lamp | DRIVEN+ASSERTED | wg3-store-chip | the row's DRAWN chip and lamp read from the window's row model: IDLE, then 1 UPD (lamp green with the page up, yellow closed); OK in wg3-store-page; BUSY only in test railChip (a drive run withholds transfers) |
 | 280 | Row tooltip | tooltip | NOT DRIVABLE | - | a tooltip |
 | 281 | Catalogue index.json URL | text field | DRIVEN+ASSERTED | decode-store-catalogue.txt | type Catalogue, key enter; state fact.store.url == the typed URL; expect value |
 | 282 | Enforcement error | readout | NOT DRIVABLE | - | a readout, not a control |
@@ -870,7 +870,7 @@ NOT DRIVABLE by reason: readout 876, other 236, needs a signal (no fixture) 120,
 | 403 | Keep running | checkbox | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 404 | Notes | readout | NOT DRIVABLE | - | a readout, not a control |
 | 405 | FILE / PLUGIN ABI / fitted date | readout | NOT DRIVABLE | - | a readout, not a control |
-| 406 | Catalogue body | readout/key | NOT DRIVABLE | - | the module page body needs a fitted catalogued plugin; logic tested in test_slint_host_extend windowGaps3 |
+| 406 | Catalogue body | readout/key | DRIVEN+ASSERTED | wg3-module-page | a fitted module's page: catalogued, four frames, strip arrows, WHAT IT DOES, DETAILS grid (fixture plugin built by the tests' CMake) |
 
 ### DECODE bank and plugin host — Preset bar (window-side preset keys)
 
@@ -2934,7 +2934,7 @@ NOT DRIVABLE by reason: readout 876, other 236, needs a signal (no fixture) 120,
 | 1877 | Keep running | checkbox | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 1878 | Notes | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1879 | FILE / PLUGIN ABI / fitted date | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1880 | Shared page body | readout | NOT DRIVABLE | - | needs a fitted catalogued plugin; logic tested in windowGaps3 |
+| 1880 | Shared page body | readout | DRIVEN+ASSERTED | wg3-module-page | the same fitted-module drive (store.module.aprs-decoder.*) |
 
 ### Fitted modules — Retired modules ("Disabled" rows on the rail, under the store row)
 

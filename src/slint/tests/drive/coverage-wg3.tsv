@@ -1,10 +1,10 @@
-406	NOT_DRIVABLE	-	the module page body needs a fitted catalogued plugin; logic tested in test_slint_host_extend windowGaps3
-1880	NOT_DRIVABLE	-	needs a fitted catalogued plugin; logic tested in windowGaps3
+406	ASSERTED	wg3-module-page	a fitted module's page: catalogued, four frames, strip arrows, WHAT IT DOES, DETAILS grid (fixture plugin built by the tests' CMake)
+1880	ASSERTED	wg3-module-page	the same fitted-module drive (store.module.aprs-decoder.*)
 1845	ASSERTED	wg3-store-page	frames and captions read back (store.frames, the caption label)
 1846	ASSERTED	wg3-store-page	store.pictureIndex 0 -> 1 -> 2 -> 1; the arrow greys at the end
 1853	ASSERTED	wg3-store-page	store.facts and the MAKER row label
 631	ASSERTED	wg3-store-page	store.notice, store.keyEnabled before and after the tick
-279	ASSERTED	wg3-store-page	store.chip == OK after the catalogue was read; BUSY / IDLE / n UPD in test railChip
+279	ASSERTED	wg3-store-chip	the row's DRAWN chip and lamp read from the window's row model: IDLE, then 1 UPD (lamp green with the page up, yellow closed); OK in wg3-store-page; BUSY only in test railChip (a drive run withholds transfers)
 280	NOT_DRIVABLE	-	a tooltip
 391	NOT_DRIVABLE	-	needs old copies in the engine; label, question and command tested in windowGaps3 and test_slint_fitted
 1868	NOT_DRIVABLE	-	needs old copies in the engine; question drawn and answered in test_slint_fitted
