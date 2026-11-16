@@ -312,6 +312,17 @@ void LaneCPublisher::tick(const FoxReceiverState& state, long tickNo) {
         else { send(c, static_cast<std::uint32_t>(mutedRadio_)); }   // the radio we silenced, whichever is selected now
     }
 
+    // C2 (engine fixes 8, D1): the priority list and its interval go to the engine at start-up and whenever either changes
+    if (const std::optional<PriorityPush::Push> p = priorityPush_.update(store_.priorityHz, store_.priorityEveryS)) {
+        FoxCommand c{};
+        c.op = FOXAPP_OP_SCANNER_EXTRAS;
+        c.ival[0] = 0;
+        c.num[0] = p->intervalMs;
+        std::snprintf(c.text, sizeof(c.text), "%s", p->text.c_str());
+        send(c);
+    }
+    enginePriority_ = factOf("fact.scan.priority");
+
     // C4
     if (state.scannerState != FOXAPI_SCANNER_IDLE && lastScanState_ == FOXAPI_SCANNER_IDLE) { watcher_.reset(); }
     const std::string line = watcher_.observe(now, state.scannerState, state.scanCurrentHz, unixNow);
@@ -373,7 +384,21 @@ void LaneCPublisher::tick(const FoxReceiverState& state, long tickNo) {
         if (sh.first || sh.scanStats != stats) { sh.scanStats = stats; lc.set_scan_stats(ss(stats)); }
         bool anyThreshold = false;
         for (const auto& [k, m] : store_.memories) { if (!std::isnan(m.thresholdDb)) { anyThreshold = true; } }
-        const bool note = (!store_.priorityHz.empty() || anyThreshold) && factOf("fact.scanner.extras") != "1";
+        // the note is true only while the engine does NOT hold what the window holds: the thresholds (never sent from here) while the engine has no extras, the priority list while the engine's own list differs
+        bool priorityHeld = true;
+        if (!store_.priorityHz.empty()) {
+            std::vector<double> held;
+            std::size_t pos = 0;
+            while (pos <= enginePriority_.size()) {
+                std::size_t end = enginePriority_.find(';', pos);
+                if (end == std::string::npos) { end = enginePriority_.size(); }
+                if (end > pos) { held.push_back(std::strtod(enginePriority_.substr(pos, end - pos).c_str(), nullptr)); }
+                pos = end + 1;
+            }
+            priorityHeld = held.size() == store_.priorityHz.size();
+            for (std::size_t i = 0; priorityHeld && i < held.size(); ++i) { priorityHeld = std::fabs(held[i] - store_.priorityHz[i]) < 1.0; }
+        }
+        const bool note = !priorityHeld || (anyThreshold && factOf("fact.scanner.extras") != "1");
         if (sh.first || sh.engineNote != note) { sh.engineNote = note; lc.set_scan_engine_note(note); }
     }
 
@@ -480,6 +505,7 @@ std::string LaneCPublisher::readState(const std::string& w, std::string& out) co
     else if (w == "bwmemory") { out = store_.bwMemory ? "1" : "0"; }
     else if (w.rfind("bw.", 0) == 0) { const auto it = store_.bwByMode.find(static_cast<std::uint32_t>(std::atoi(w.c_str() + 3))); out = it == store_.bwByMode.end() ? "0" : fmt("%.0f", it->second); }
     else if (w == "priority") { out = priorityText(store_.priorityHz); }
+    else if (w == "enginepriority") { out = enginePriority_; }   // what the ENGINE holds (fact.scan.priority: Hz separated by ';')
     else if (w == "priorityevery") { out = fmt("%.0f", store_.priorityEveryS); }
     else if (w == "mutescan") { out = store_.muteScan ? "1" : "0"; }
     else if (w == "mutedbyus") { out = mute_.weMuted() ? "1" : "0"; }
@@ -510,7 +536,7 @@ std::string LaneCPublisher::readState(const std::string& w, std::string& out) co
     else if (w == "recordingsopen") { out = env_.ui->global<::LaneC>().get_recordings_open() ? "1" : "0"; }
     else if (w == "opened") { out = lastOpened_; }
     else if (w == "saved") { out = dirty_ ? "0" : "1"; }
-    else { return "lanec.steplock|deltamask|deltarefusals|deltaconversions|bwmemory|bw.<mode>|priority|priorityevery|mutescan|mutedbyus|logscan|loglines|clockmode|clock|quick.<n>|quickstore|memenabled|memtitle|memsquelch|memthreshold|memoffset|memtone|memtx|memories|lockouts|scanstate|scanhz|locktext|scanfound|scanstats|enginenote|shortcuts|shortcutsopen|recordings|recordingsopen|opened|saved, not " + w; }
+    else { return "lanec.steplock|deltamask|deltarefusals|deltaconversions|bwmemory|bw.<mode>|priority|enginepriority|priorityevery|mutescan|mutedbyus|logscan|loglines|clockmode|clock|quick.<n>|quickstore|memenabled|memtitle|memsquelch|memthreshold|memoffset|memtone|memtx|memories|lockouts|scanstate|scanhz|locktext|scanfound|scanstats|enginenote|shortcuts|shortcutsopen|recordings|recordingsopen|opened|saved, not " + w; }
     return std::string();
 }
 

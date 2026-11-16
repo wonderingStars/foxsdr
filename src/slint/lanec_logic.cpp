@@ -164,6 +164,25 @@ std::string priorityText(const std::vector<double>& hz) {
     return s;
 }
 
+std::string priorityWireText(const std::vector<double>& hz) {
+    std::string s;
+    for (const double v : hz) {
+        if (!s.empty()) { s += ';'; }
+        s += fmt("%.0f", v);
+    }
+    return s;
+}
+
+std::optional<PriorityPush::Push> PriorityPush::update(const std::vector<double>& hz, double everyS) {
+    const std::string text = priorityWireText(hz);
+    const double ms = std::clamp(everyS, 5.0, 600.0) * 1000.0;
+    if (text == sentText_ && (ms == sentMs_ || (text.empty() && !sent_))) { return std::nullopt; }
+    sentText_ = text;
+    sentMs_ = ms;
+    sent_ = true;
+    return Push{text, ms};
+}
+
 std::optional<double> parsePriorityEvery(const std::string& text) {
     const auto v = toNumber(text);
     if (!v) { return std::nullopt; }

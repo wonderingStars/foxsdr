@@ -108,6 +108,8 @@ private:
     ScanWatcher watcher_;
     ScanMuteFollower mute_;
     BandwidthMemory bandwidth_;
+    PriorityPush priorityPush_;        // C2: what keeps the engine's priority list equal to the field
+    std::string enginePriority_;       // fact.scan.priority as last read
     std::uint32_t lastScanState_ = 0;
     int mutedRadio_ = 1;               // the radio the mute follower silenced
     bool quickStore_ = false;

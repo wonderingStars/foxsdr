@@ -81,6 +81,21 @@ std::vector<double> parsePriorityList(const std::string& text);
 std::string priorityText(const std::vector<double>& hz);
 // "30" -> 30 s, clamped to 5..600; nullopt for text that is no number
 std::optional<double> parsePriorityEvery(const std::string& text);
+// The wire text of the list for FOXAPP_OP_SCANNER_EXTRAS 0: Hz values separated by ';' ("162550000;121500000"; empty for an empty list).
+std::string priorityWireText(const std::vector<double>& hz);
+// What keeps the engine's priority list equal to the window's (engine fixes 8, D1: the field was saved and never sent). Fed once a tick with the
+// saved list and interval; returns the SCANNER_EXTRAS 0 command to send when they differ from what was last sent. The engine is assumed to hold an
+// EMPTY list at the start, so an empty saved list sends nothing at start-up (the engine keeps its own persisted list) while a saved one is sent
+// on the first tick; clearing the field afterwards sends the empty list.
+class PriorityPush {
+public:
+    struct Push { std::string text; double intervalMs = 0.0; };
+    std::optional<Push> update(const std::vector<double>& hz, double everyS);
+private:
+    std::string sentText_;
+    double sentMs_ = 30000.0;   // the window's default interval (30 s) is what the engine is assumed to hold at the start
+    bool sent_ = false;
+};
 // a number of dB typed in a memory field ("-70", "off"/"" = unset), clamped to -200..20 for a squelch; nullopt = unreadable
 std::optional<double> parseDbField(const std::string& text, bool& unset);
 std::string dbFieldText(double v);   // "" for NaN

@@ -78,6 +78,26 @@ void fields() {
     CHECK(parsePriorityList(many).size() == 16);                         // capped
     CHECK(priorityText({162.55e6, 121.5e6, 7.074e6}) == "162.55, 121.5, 7.074");
     CHECK(priorityText({}) == "");
+    // engine fixes 8, D1: the wire text the engine's SCANNER_EXTRAS 0 reads (Hz separated by ';') and what keeps the engine equal to the field
+    CHECK(priorityWireText({162.55e6, 121.5e6}) == "162550000;121500000");
+    CHECK(priorityWireText({}) == "");
+    {
+        PriorityPush pp;
+        CHECK(!pp.update({}, 30.0).has_value());                          // nothing saved: the engine keeps its own list
+        CHECK(!pp.update({}, 45.0).has_value());                          // an interval alone is not sent
+        const auto first = pp.update({162.55e6, 121.5e6}, 45.0);          // start-up with a saved list
+        CHECK(first.has_value() && first->text == "162550000;121500000" && first->intervalMs == 45000.0);
+        CHECK(!pp.update({162.55e6, 121.5e6}, 45.0).has_value());         // unchanged: sent once
+        const auto edit = pp.update({7.074e6}, 45.0);
+        CHECK(edit.has_value() && edit->text == "7074000");
+        const auto every = pp.update({7.074e6}, 90.0);
+        CHECK(every.has_value() && every->intervalMs == 90000.0);
+        const auto cleared = pp.update({}, 90.0);                         // emptying the field empties the engine's list
+        CHECK(cleared.has_value() && cleared->text.empty());
+        CHECK(!pp.update({}, 90.0).has_value());
+        const auto clamp = pp.update({1e6}, 9999.0);
+        CHECK(clamp.has_value() && clamp->intervalMs == 600000.0);
+    }
     CHECK(parsePriorityEvery("30").value_or(-12345) == 30.0);
     CHECK(parsePriorityEvery("1").value_or(-12345) == 5.0);
     CHECK(parsePriorityEvery("9999").value_or(-12345) == 600.0);

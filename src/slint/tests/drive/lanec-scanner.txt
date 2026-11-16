@@ -10,6 +10,14 @@
 +1 type "Priority MHz" "162.55, 121.5, nope"
 +1 key enter
 +5 state lanec.priority == "162.55, 121.5"
+# engine fixes 8, D1: the list reaches the ENGINE (fact.scan.priority, Hz), not only the saved file; it was saved and never sent before
++10 state lanec.enginepriority == "162550000.000;121500000.000"
++1 type "Priority MHz" "7.074"
++1 key enter
++10 state lanec.enginepriority == "7074000.000"
++1 type "Priority MHz" "162.55, 121.5"
++1 key enter
++10 state lanec.enginepriority == "162550000.000;121500000.000"
 # engine merge 3: wire-a now reads the priority list and the thresholds (engine fact scanner.extras = 1, src/engine/wire_a_scan.cpp), so the "this scanner does not use them yet" note is no longer shown: 1 before the merge, 0 now
 +1 state lanec.enginenote == 0
 +1 type "Every s" "45"
