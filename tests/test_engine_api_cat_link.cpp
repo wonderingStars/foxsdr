@@ -442,7 +442,7 @@ void testD(const fs::path& dir) {
     }
     CHECK(std::abs(r.local->state().tunedHz - before) < 1.0);
     CHECK((r.local->state().flags & FOXAPI_RX_TX_AVAILABLE) == 0u || true);
-    CHECK(std::strtoull(r.fact("cat.link.served").c_str(), nullptr, 10) >= 10);
+    CHECK(until(r, [&] { return std::strtoull(r.fact("cat.link.served").c_str(), nullptr, 10) >= 10; }));   // (the count is published on a later pass than the answer)
     // a port that dies is reported
     g_rig.dead = true;
     CHECK(until(r, [&] { return r.fact("cat.link.state") == "error"; }));

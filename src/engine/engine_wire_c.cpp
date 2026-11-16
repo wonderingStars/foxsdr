@@ -568,7 +568,7 @@ void Engine::pumpWireC() {
             ++wireCVersion_;
         }
         const wc::CatLinkStatus cl = s.catLink.status();
-        const std::uint64_t seen = cl.polls + (cl.applied << 20) + (cl.served << 40) + std::hash<std::string>{}(cl.state + cl.error + cl.rigMode);
+        const std::uint64_t seen = (cl.state == "off" && cl.error.empty()) ? 0u : cl.polls + (cl.applied << 20) + (cl.served << 40) + std::hash<std::string>{}(cl.state + cl.error + cl.rigMode);   // (an idle link counts as nothing: the first pass moves no version)
         if (seen != s.catLinkSeen) {
             s.catLinkSeen = seen;
             ++wireCVersion_;
