@@ -208,13 +208,26 @@ int main(int argc, char** argv) {
         for (std::size_t at = script.find(token); at != std::string::npos; at = script.find(token, at + dirText.size())) { script.replace(at, token.size(), dirText); }
     }
 #if !defined(_WIN32)
+    // A "C:/..." path of a script (the lane L and M scripts type paths that do not exist, to see the engine refuse or fail them in its own words) is not a full path off Windows, and the engine rightly
+    // refuses it as one ("give the full path of a file"): the drive letter becomes a folder under the temp folder, so the path is full and still names nothing. The expectation is unchanged.
+    {
+        const std::string driveRoot = (fs::temp_directory_path() / "foxsdr-drive-c").generic_string() + "/";
+        for (std::size_t at = script.find("C:/"); at != std::string::npos; at = script.find("C:/", at + driveRoot.size())) { script.replace(at, 3, driveRoot); }
+    }
     // THE PLUGIN MODULES OFF WINDOWS (docs/multi-radio-records/linux-local.md section 11). The scripts were written against the Windows modules, "<id>-<version>-abi3-win-x64.dll", in the user's own plugin folder. A
     // Linux build has "<id>-<version>-abi3-linux-<arch>.so", at the version its own plugin build made, in a folder FOXSDR_DRIVE_PLUGINS_DIR names. Each Windows module name of the script, header and steps alike, is
     // replaced by the module of that id in the folder (the expectation is unchanged: the same plugin is fitted, opened and read back). A script that drives plugin modules with no such folder is a SKIP that says so,
-    // never a red for a file no checkout holds (the plugin binaries are built from a separate repository); the scripts that take their plugins from the build's own fixture folder are not touched.
-    if (script.find("-abi3-win-x64.dll") != std::string::npos && script.find("pluginsdir=fixture") == std::string::npos) {
-        const char* pd = std::getenv("FOXSDR_DRIVE_PLUGINS_DIR");
-        if (pd == nullptr || *pd == '\0' || !fs::is_directory(pd)) {
+    // never a red for a file no checkout holds (the plugin binaries are built from a separate repository). The scripts that say pluginsdir=fixture take their module from the folder the build itself made
+    // (tests/CMakeLists.txt wg3_plugins, named for this platform there), and are mapped to it the same way.
+    if (script.find("-abi3-win-x64.dll") != std::string::npos) {
+        const bool fixtureScript = script.find("pluginsdir=fixture") != std::string::npos;
+        std::string pdText;
+#ifdef FOXSDR_DRIVE_FIXTURE_PLUGINS_DIR
+        if (fixtureScript) { pdText = FOXSDR_DRIVE_FIXTURE_PLUGINS_DIR; }
+#endif
+        if (!fixtureScript) { const char* env = std::getenv("FOXSDR_DRIVE_PLUGINS_DIR"); if (env != nullptr) { pdText = env; } }
+        const char* pd = pdText.c_str();
+        if (pdText.empty() || !fs::is_directory(pdText)) {
             ++g_checksSkipped;
             std::printf("SKIP (linux): %s drives plugin modules; set FOXSDR_DRIVE_PLUGINS_DIR to a folder of this platform's plugin modules (<id>-<version>-abi3-linux-<arch>.so)\n", tag.c_str());
             return testSummary("test_slint_drive_run");

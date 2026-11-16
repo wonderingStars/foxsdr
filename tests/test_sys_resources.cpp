@@ -287,8 +287,33 @@ void testRealSources() {
                 second.logicalCpus.value, static_cast<double>(second.workingSetBytes.value) / 1048576.0, second.systemMemoryPercent.value,
                 static_cast<double>(second.systemMemoryTotalBytes.value) / 1073741824.0, second.processCpuPercent.value, gpuSeen ? "" : "UNAVAILABLE here\n");
     if (gpuSeen) { std::printf("%.1f%% (process %s)\n", second.gpuPercent.value, second.gpuProcessPercent.available ? "available" : "unavailable"); }
+#elif defined(__linux__)
+    // Linux reads /proc (sys_resource_meter.cpp): the process's CPU time and resident set, the machine's memory; there are no GPU engine counters, so the GPU figures stay unavailable.
+    ResourceMeter m(realResourceSources());
+    auto first = m.sample();
+    CHECK(first.logicalCpus.available && first.logicalCpus.value >= 1);
+    CHECK(first.workingSetBytes.available && first.workingSetBytes.value > (1u << 20) && first.workingSetBytes.value < (1ull << 40));
+    CHECK(first.systemMemoryTotalBytes.available && first.systemMemoryTotalBytes.value >= (64ull << 20));
+    CHECK(first.systemMemoryAvailableBytes.available && first.systemMemoryAvailableBytes.value <= first.systemMemoryTotalBytes.value);
+    CHECK(first.systemMemoryPercent.available && first.systemMemoryPercent.value >= 0 && first.systemMemoryPercent.value <= 100);
+    CHECK(!first.processCpuPercent.available);   // the first sample has no rate
+    volatile double sink = 0;
+    const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(400);
+    while (std::chrono::steady_clock::now() < end) { for (int i = 0; i < 1000; ++i) { sink = sink + std::sqrt(static_cast<double>(i)); } }
+    auto second = m.sample();
+    CHECK(second.processCpuPercent.available && second.processCpuPercent.value > 0.0 && second.processCpuPercent.value <= 100.0);
+    CHECK(!second.gpuPercent.available && !second.gpuProcessPercent.available);   // never a guessed 0
+    // the working set follows what the process holds: 64 MB touched shows in the next reading
+    std::vector<char> held(64u << 20, 1);
+    volatile char keep = held[held.size() / 2];
+    (void)keep;
+    const auto third = m.sample();
+    CHECK(third.workingSetBytes.available && third.workingSetBytes.value >= second.workingSetBytes.value + (48ull << 20));
+    std::printf("real sources (linux): cpus %u, working set %.0f MB, memory %.0f%% of %.1f GB, process cpu %.1f%%\n",
+                second.logicalCpus.value, static_cast<double>(third.workingSetBytes.value) / 1048576.0, second.systemMemoryPercent.value,
+                static_cast<double>(second.systemMemoryTotalBytes.value) / 1073741824.0, second.processCpuPercent.value);
 #else
-    SKIP_LINUX("the real sources are Windows calls");
+    SKIP_LINUX("the real sources have no implementation on this platform");
 #endif
 }
 

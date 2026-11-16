@@ -37,10 +37,21 @@ set_target_properties(settings_ui_fixture PROPERTIES
 # A FITTED MODULE for the new window's drive scripts (window gaps 3): the settings fixture copied under the file name of a catalogued plugin
 # (aprs-decoder-1.0.3) beside an installed.json naming it, in a folder of its own, so a script that says pluginsdir=fixture fits it and the user's real
 # plugins folder is never read. Nothing is built from the plugins repository and nothing is fetched.
+# The module is named for the platform the host runs on (<id>-<version>-abi3-<os>-<arch>.<ext>): the drive runner maps the scripts' Windows name to it off Windows.
+if(WIN32)
+    set(_wg3_module "aprs-decoder-1.0.3-abi3-win-x64.dll")
+    set(_wg3_installed "installed.json")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    set(_wg3_module "aprs-decoder-1.0.3-abi3-linux-arm64.so")
+    set(_wg3_installed "installed-linux-arm64.json")
+else()
+    set(_wg3_module "aprs-decoder-1.0.3-abi3-linux-x64.so")
+    set(_wg3_installed "installed-linux-x64.json")
+endif()
 add_custom_target(wg3_plugins ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/wg3_plugins"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:settings_ui_fixture>" "${CMAKE_CURRENT_BINARY_DIR}/wg3_plugins/aprs-decoder-1.0.3-abi3-win-x64.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/src/slint/tests/drive/fixtures/wg3-plugins/installed.json" "${CMAKE_CURRENT_BINARY_DIR}/wg3_plugins/installed.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:settings_ui_fixture>" "${CMAKE_CURRENT_BINARY_DIR}/wg3_plugins/${_wg3_module}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/src/slint/tests/drive/fixtures/wg3-plugins/${_wg3_installed}" "${CMAKE_CURRENT_BINARY_DIR}/wg3_plugins/installed.json"
     DEPENDS settings_ui_fixture
     COMMENT "wg3_plugins: the fixture plugins folder for the module-page drive")
 
