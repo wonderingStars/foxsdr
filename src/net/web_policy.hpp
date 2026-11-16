@@ -78,6 +78,9 @@ struct WebServerConfig {
     // password has been set. A plaintext password is never stored here or
     // anywhere else.
     std::string passwordRecord;
+    // M3 (security review 1): true when a password WAS saved but the Windows protected store could not open it (another user, another PC, a
+    // damaged file), so passwordRecord reads empty. The server then refuses to start, on every bind, rather than serve with no password.
+    bool passwordUnreadable = false;
 
     // --- HTTPS (net/web_tls.hpp). OFF by default. ----------------------------------------------------------------------------------------
     // With it on the public port speaks TLS (Windows' own Schannel, TLS 1.2 at least) and the plain server listens on 127.0.0.1 only, on a

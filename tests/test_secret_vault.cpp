@@ -238,6 +238,89 @@ void testRefusals() {
     CHECK(vault::splitForWrite(path, "{}", why, kept) == "{}");
 }
 
+// M3 (security review 1): a secret the protected store cannot OPEN reads as empty, and the next ordinary save must NOT erase the stored item.
+// The stand-in for "Windows cannot decrypt it" is a blob that is well formed but is not one this user's store produced; it fails to open on every
+// platform. A second Windows user and a profile copied to another PC are UNVERIFIED (no second account is made).
+void testUnreadableSecretIsNeverErased() {
+    const fs::path d = freshDir("unreadable");
+    const std::string path = (d / "config.json").string();
+    std::string err;
+    CHECK(ConfigStore::save(path, configWithSecrets(), err));
+    // the good sidecar, kept to put back
+    const std::string good = slurp(vault::sidecarPath(path));
+    json side = json::parse(good);
+    const std::string goodBlob = side["items"]["webPasswordRecord"].get<std::string>();
+    side["items"]["webPasswordRecord"] = "dpapi:00ff00ff00ff00ff00ff";   // stored, but this user's store cannot open it
+    spit(vault::sidecarPath(path), side.dump(2));
+
+    AppConfig back;
+    CHECK(ConfigStore::load(path, back, err));
+    CHECK(back.webPasswordRecord.empty());                      // reads as empty ...
+    CHECK(back.testerToken == kTesterToken);                    // ... and the others still open
+    CHECK(vault::wasUnreadableAt(path, "webPasswordRecord"));           // ... and the program is told
+    CHECK(vault::wasUnreadable("webPasswordRecord"));
+    CHECK(!vault::wasUnreadableAt(path, "testerToken"));
+
+    // two ordinary saves of the settings as the program holds them (the web password still empty)
+    CHECK(ConfigStore::save(path, back, err));
+    CHECK(ConfigStore::save(path, back, err));
+    json after = json::parse(slurp(vault::sidecarPath(path)));
+    CHECK(after["items"].contains("webPasswordRecord"));        // THE ITEM IS STILL THERE
+    CHECK(after["items"]["webPasswordRecord"] == "dpapi:00ff00ff00ff00ff00ff");
+    CHECK(after["items"].contains("testerToken"));
+    CHECK(vault::wasUnreadableAt(path, "webPasswordRecord"));           // saving does not make it readable
+
+    // the Windows side is later fixed (the good blob is back): the password is there again, nothing was lost
+    side["items"]["webPasswordRecord"] = goodBlob;
+    spit(vault::sidecarPath(path), side.dump(2));
+    AppConfig fixed;
+    CHECK(ConfigStore::load(path, fixed, err));
+    CHECK(fixed.webPasswordRecord == kRecord);
+    CHECK(!vault::wasUnreadableAt(path, "webPasswordRecord"));
+
+    // a NEW value for an unreadable item replaces it and clears the mark
+    side["items"]["webPasswordRecord"] = "dpapi:00ff00ff00ff00ff00ff";
+    spit(vault::sidecarPath(path), side.dump(2));
+    AppConfig again;
+    CHECK(ConfigStore::load(path, again, err));
+    CHECK(vault::wasUnreadableAt(path, "webPasswordRecord"));
+    again.webPasswordRecord = "pbkdf2-sha256$600000$NEWSALTNEWSALT$NEWHASHNEWHASHNEW";
+    CHECK(ConfigStore::save(path, again, err));
+    AppConfig third;
+    CHECK(ConfigStore::load(path, third, err));
+    CHECK(third.webPasswordRecord == again.webPasswordRecord);
+    CHECK(!vault::wasUnreadableAt(path, "webPasswordRecord"));
+
+    // a person who really clears a READABLE secret still clears it
+    third.webPasswordRecord.clear();
+    CHECK(ConfigStore::save(path, third, err));
+    json cleared = json::parse(slurp(vault::sidecarPath(path)));
+    CHECK(!cleared["items"].contains("webPasswordRecord"));
+}
+
+// M3: a damaged sidecar may have held any secret, so every secret the settings file keeps empty is unreadable (the web password fails closed).
+void testDamagedSidecarMarksTheSecretsUnreadable() {
+    const fs::path d = freshDir("damaged");
+    const std::string path = (d / "config.json").string();
+    std::string err;
+    CHECK(ConfigStore::save(path, configWithSecrets(), err));
+    spit(vault::sidecarPath(path), "{ this is not json");
+    AppConfig back;
+    CHECK(ConfigStore::load(path, back, err));
+    CHECK(back.webPasswordRecord.empty());
+    CHECK(vault::wasUnreadableAt(path, "webPasswordRecord"));
+    // a sidecar that is simply absent (a program that never had a secret) is not a loss
+    const fs::path d2 = freshDir("absent");
+    const std::string path2 = (d2 / "config.json").string();
+    AppConfig plain;
+    CHECK(ConfigStore::save(path2, plain, err));
+    AppConfig plainBack;
+    CHECK(ConfigStore::load(path2, plainBack, err));
+    CHECK(!vault::wasUnreadableAt(path2, "webPasswordRecord"));
+    vault::forget(path);
+    CHECK(!vault::wasUnreadableAt(path, "webPasswordRecord"));
+}
+
 // RULE: when the store refuses a value, it stays in the file (nothing is lost) and the writer says so. (Windows only: the refusal is forced with a
 // sidecar path that cannot be written.)
 void testStoreRefusalKeepsValue() {
@@ -348,6 +431,8 @@ int main() {
     testClear();
     testExportHasNone();
     testRefusals();
+    testUnreadableSecretIsNeverErased();
+    testDamagedSidecarMarksTheSecretsUnreadable();
     testStoreRefusalKeepsValue();
     testResetAndImportForget();
     testConcurrentWrites();

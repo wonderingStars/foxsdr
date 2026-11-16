@@ -83,6 +83,9 @@ constexpr SockT INVALID_SOCKET = -1;
 #include "test_check.hpp"
 #include "core/app_commands.hpp"
 #include "core/config.hpp"
+#include "core/secret_vault.hpp"
+#include <filesystem>
+#include <fstream>
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "engine/server_host.hpp"
@@ -605,6 +608,39 @@ void testChangeRestartsStopStops() {
     CHECK(r.config("{\"cat\":{\"enabled\":false}}").status == FOXAPI_OK);
     CHECK(refuses(c1));
     std::printf("H5: a port change restarts (:%d -> :%d), the same configuration restarts nothing, a disable closes the socket; CAT likewise\n", p1, p2);
+}
+
+// M3 (security review 1): a saved web password that Windows could not open reads as empty; the server must NOT start open because of it.
+// The stand-in for "cannot decrypt" is a stored item that is not one this user's store produced. Real second-user and moved-profile cases: UNVERIFIED.
+void testUnreadablePasswordKeepsTheServerClosed() {
+    namespace fs = std::filesystem;
+    Rig r("testHooks=1;servers=1");
+    const int port = freePort();
+    const fs::path dir = fs::temp_directory_path() / ("foxsdr-test-m3-" + std::to_string(port));
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    const std::string path = (dir / "config.json").string();
+    { std::ofstream f(path, std::ios::binary); f << "{\"webPasswordRecord\":\"\"}"; }
+    { std::ofstream f(path + ".secrets", std::ios::binary); f << "{\"format\":\"foxsdr-secrets\",\"version\":1,\"items\":{\"webPasswordRecord\":\"dpapi:00ff00ff\"}}"; }
+    bool migrated = false;
+    std::string note;
+    (void)cascade::core::vault::mergeAfterRead(path, "{\"webPasswordRecord\":\"\"}", migrated, note);   // what loading the settings does
+    CHECK(cascade::core::vault::wasUnreadable("webPasswordRecord"));
+    CHECK(r.config(webConfig(port)).status == FOXAPI_OK);                 // loopback, no password in the configuration: would be served open
+    CHECK(!r.e.servers().webServer().running());
+    CHECK(!r.e.servers().webListening());
+    CHECK(refuses(port));
+    const FoxListItem w = r.server(0);
+    CHECK(fault(w) && !active(w));
+    CHECK(std::string(w.detail).find("could not be opened") != std::string::npos);
+    // setting a password makes it startable again
+    cascade::core::vault::forget(path);                                   // (what a new saved password does to the mark)
+    const int port2 = freePort();
+    CHECK(r.config(webConfig(port2)).status == FOXAPI_OK);
+    CHECK(r.e.servers().webServer().running());
+    fs::remove_all(dir, ec);
+    std::printf("H6b: an unreadable saved web password keeps the loopback server closed: '%s'\n", w.detail);
 }
 
 void testRefusalAndRetry() {
@@ -1225,6 +1261,7 @@ int main(int argc, char** argv) {
     if (want("H4")) { testCatServer(); }
     if (want("H5")) { testChangeRestartsStopStops(); }
     if (want("H6")) { testRefusalAndRetry(); }
+    if (want("H6")) { testUnreadablePasswordKeepsTheServerClosed(); }
     if (want("H7")) { testPasswordRestartsAndGatesTheLogin(); }
     if (want("H8")) { testConfigRestoreStartsWhatTheFileSaid(); }
     if (want("H9")) { testTeardownStopsFirst(); }

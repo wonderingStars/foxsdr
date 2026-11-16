@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <mutex>
 #include <set>
 #include <system_error>
@@ -153,6 +154,23 @@ std::vector<Slot> slotsOf(json& j) {
     return out;
 }
 
+// ITEMS THE READER COULD NOT OPEN, per settings file (M3): the writer must not take them for items the person cleared.
+std::mutex& unreadableMutex() { static std::mutex m; return m; }
+std::map<std::string, std::set<std::string>>& unreadableMap() { static std::map<std::string, std::set<std::string>> m; return m; }
+void setUnreadable(const std::string& path, const std::string& item, bool on) {
+    std::lock_guard<std::mutex> lk(unreadableMutex());
+    if (on) { unreadableMap()[path].insert(item); } else { unreadableMap()[path].erase(item); }
+}
+bool isUnreadableAt(const std::string& path, const std::string& item) {
+    std::lock_guard<std::mutex> lk(unreadableMutex());
+    const auto it = unreadableMap().find(path);
+    return it != unreadableMap().end() && it->second.count(item) != 0;
+}
+void clearUnreadableAt(const std::string& path) {
+    std::lock_guard<std::mutex> lk(unreadableMutex());
+    unreadableMap().erase(path);
+}
+
 std::string labelOf(std::string item) {
     for (char& c : item) { if (c == '\x1f') { c = '/'; } }
     return item;
@@ -282,7 +300,9 @@ std::string splitForWrite(const std::string& settingsPath, const std::string& te
         present.insert(sl.item);
         const std::string value = sl.value->get<std::string>();
         if (value.empty()) {
-            items.erase(sl.item);   // present and empty: the person cleared it
+            // present and empty: the person cleared it - UNLESS the reader could not open the stored item (then the empty value is only its
+            // stand-in, and erasing the item would destroy a secret that a later fix of the Windows side could have opened).
+            if (!isUnreadableAt(settingsPath, sl.item)) { items.erase(sl.item); }
             continue;
         }
         std::string blob;
@@ -293,6 +313,7 @@ std::string splitForWrite(const std::string& settingsPath, const std::string& te
             continue;
         }
         items[sl.item] = blob;
+        setUnreadable(settingsPath, sl.item, false);   // a new value replaces the one that could not be opened
         *sl.value = "";
         changedDoc = true;
     }
@@ -315,6 +336,7 @@ std::string mergeAfterRead(const std::string& settingsPath, const std::string& t
     if (j.is_discarded() || !j.is_object()) { return text; }
     json items = readSidecar(settingsPath);
     std::vector<Slot> slots = slotsOf(j);
+    clearUnreadableAt(settingsPath);   // this read decides afresh which items cannot be opened
     if (slots.empty() && items.empty()) { return text; }
 
     bool fileHadPlain = false;
@@ -323,6 +345,20 @@ std::string mergeAfterRead(const std::string& settingsPath, const std::string& t
     auto addNote = [&](const std::string& item, const std::string& w) {
         note += (note.empty() ? "" : "; ") + labelOf(item) + ": " + w;   // names the field, never a value
     };
+    // A sidecar that EXISTS but cannot be parsed may have held any of the secrets: every secret the document keeps (empty) is then unreadable too,
+    // so a guard that depends on one (the web password) fails closed instead of starting with nothing.
+    {
+        const std::string raw = slurp(sidecarPath(settingsPath));
+        if (!raw.empty()) {
+            const json probe = json::parse(raw, nullptr, false);
+            if (probe.is_discarded() || !probe.is_object() || !probe.contains("items") || !probe["items"].is_object()) {
+                for (Slot& sl : slots) {
+                    if (sl.value->get<std::string>().empty()) { setUnreadable(settingsPath, sl.item, true); }
+                }
+                addNote("the protected copy", "the file beside the settings is damaged");
+            }
+        }
+    }
     for (Slot& sl : slots) {
         const std::string inFile = sl.value->get<std::string>();
         if (!inFile.empty()) {
@@ -337,7 +373,7 @@ std::string mergeAfterRead(const std::string& settingsPath, const std::string& t
             std::string plain;
             std::string w;
             if (unprotectValue(sl.item, items[sl.item].get<std::string>(), plain, w)) { *sl.value = plain; }
-            else { addNote(sl.item, w); }
+            else { addNote(sl.item, w); setUnreadable(settingsPath, sl.item, true); }
         }
     }
     if (fileHadPlain) {
@@ -356,7 +392,18 @@ std::string mergeAfterRead(const std::string& settingsPath, const std::string& t
     return dumpDoc(j);
 }
 
+bool wasUnreadableAt(const std::string& settingsPath, const std::string& item) { return isUnreadableAt(settingsPath, item); }
+
+bool wasUnreadable(const std::string& item) {
+    std::lock_guard<std::mutex> lk(unreadableMutex());
+    for (const auto& kv : unreadableMap()) {
+        if (kv.second.count(item) != 0) { return true; }
+    }
+    return false;
+}
+
 void forget(const std::string& settingsPath) {
+    clearUnreadableAt(settingsPath);
     std::error_code ec;
     fs::remove(sidecarPath(settingsPath), ec);
 }

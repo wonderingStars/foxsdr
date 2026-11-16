@@ -80,6 +80,13 @@ BindDecision evaluateBind(const WebServerConfig& cfg) {
         return d;
     }
 
+    // M3: a saved password that could not be OPENED is refused on every binding too: starting open would drop a protection the owner set.
+    if (cfg.passwordUnreadable && !hasRecordText) {
+        d.verdict = BindVerdict::RefusedPasswordUnusable;
+        d.reason = "the saved web password could not be opened on this PC (Windows would not unlock it for this user); set the password again before turning web access on";
+        return d;
+    }
+
     // An unreadable record is refused on EVERY binding, loopback included. The
     // user's intent was "this is protected"; starting anyway with the
     // protection quietly dropped is a downgrade they never asked for and would

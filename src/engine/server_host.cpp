@@ -14,6 +14,7 @@
 
 #include "core/config.hpp"
 #include "core/diag_log.hpp"
+#include "core/secret_vault.hpp"
 #include "core/thread_beats.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "foxsdr_api.h"
@@ -402,7 +403,7 @@ bool sameWeb(const cascade::net::WebServerConfig& a, const cascade::net::WebServ
            a.passwordRecord == b.passwordRecord && a.tlsEnabled == b.tlsEnabled && a.tlsCertThumbprint == b.tlsCertThumbprint && a.tlsCertFile == b.tlsCertFile &&
            a.listenersEnabled == b.listenersEnabled && a.listenerPasswordRecord == b.listenerPasswordRecord && a.maxListeners == b.maxListeners &&
            a.listenerIdleSeconds == b.listenerIdleSeconds && a.listenerSessionSeconds == b.listenerSessionSeconds && a.listenersMayTune == b.listenersMayTune &&
-           a.chatEnabled == b.chatEnabled;
+           a.chatEnabled == b.chatEnabled && a.passwordUnreadable == b.passwordUnreadable;
 }
 }  // namespace
 
@@ -411,6 +412,8 @@ bool sameWeb(const cascade::net::WebServerConfig& a, const cascade::net::WebServ
 // is not tried again unless asked (retry): a port something else holds is the operator's to fix, and a loop that hammered it would help no one.
 void ServerHost::reconcileWeb(bool retry) {
     cascade::net::WebServerConfig want = config().web;
+    // M3: a password that was saved but could not be opened reads as empty; the server must not come up open because of that.
+    want.passwordUnreadable = want.passwordRecord.empty() && cascade::core::vault::wasUnreadable("webPasswordRecord");
     if (want.tlsEnabled) {
         // The program's own certificate is kept beside the settings (its key in the user's key store, not exportable), so the fingerprint a browser was told to trust
         // is the same at the next start; with no folder known it is made for this run only.
