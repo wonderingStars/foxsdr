@@ -257,7 +257,12 @@ public:
                          {
                              std::lock_guard<std::mutex> lk(mu_);
                              bodies_.push_back(req.body);
-                             requests_.push_back(req.get_header_value("Content-Type"));
+                             // The request head as the server saw it, in the shape the Windows variant records (request line, then
+                             // the headers), so a test can look for "POST /hook" and for a header by name on either platform.
+                             std::string head = req.method + " " + req.path + " HTTP/1.1\r\n";
+                             for (const auto& h : req.headers) { head += h.first + ": " + h.second + "\r\n"; }
+                             head += "\r\n";
+                             requests_.push_back(head);
                          }
                          connections_.fetch_add(1);
                          if (mode_ == Mode::Hang) {
@@ -313,9 +318,10 @@ public:
         std::lock_guard<std::mutex> lk(mu_);
         return bodies_;
     }
-    // On POSIX this holds the captured Content-Type, not the raw header
-    // block WinHTTP's variant does - both call sites below only ever check
-    // for "application/json" as a substring, which is true either way.
+    // On POSIX this holds the request line and the headers httplib parsed
+    // (rebuilt, not the raw bytes), the shape the WinHTTP variant keeps:
+    // a test that checks for "application/json" as a substring or for
+    // "POST /path" at the start gets the same answer on both.
     std::vector<std::string> requests() {
         std::lock_guard<std::mutex> lk(mu_);
         return requests_;

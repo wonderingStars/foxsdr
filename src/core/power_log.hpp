@@ -69,6 +69,8 @@
 #include <unistd.h>
 #endif
 
+#include "net/send_flags.hpp"
+
 namespace cascade::core::powerlog {
 
 // One logged observation. Trivially copyable so it can cross the ring buffer without allocation.
@@ -655,7 +657,7 @@ inline SendResult sendHttp(const InfluxTarget& t, const std::vector<std::string>
     const std::string req = buildHttpPost(t, body);
     std::size_t sent = 0;
     while (sent < req.size()) {
-        const int n = ::send(s, req.data() + sent, static_cast<int>(req.size() - sent), 0);
+        const int n = ::send(s, req.data() + sent, static_cast<int>(req.size() - sent), ::cascade::net::kSendFlags);
         if (n <= 0) { r.error = "send failed"; detail::closeSock(s); return r; }
         sent += static_cast<std::size_t>(n);
     }

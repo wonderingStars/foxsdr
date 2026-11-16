@@ -185,6 +185,10 @@ void testBootStep() {
     fs::create_directories(dir, ec);
     engine_api_test::setEnv("APPDATA", appdata.string());
     engine_api_test::setEnv("LOCALAPPDATA", (root / "local").string());
+#if !defined(_WIN32)
+    // the settings folder off Windows is $XDG_CONFIG_HOME/foxsdr (core/config.cpp), where Windows reads %APPDATA%/foxsdr
+    engine_api_test::setEnv("XDG_CONFIG_HOME", appdata.string());
+#endif
     writeText(dir / "config.json", "{\"volume\":0.9}");
     const std::string stagedBundle = "{\"volume\":0.1}";
     writeText(dir / "wirec-pending" / "config.json", stagedBundle);

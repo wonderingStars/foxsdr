@@ -22,6 +22,10 @@
 #define APR_PID getpid()
 #endif
 
+#if !defined(_WIN32)
+#include <openssl/evp.h>
+#endif
+
 #include "core/analyser_project.hpp"
 #include "test_check.hpp"
 
@@ -43,8 +47,14 @@ std::string cngSha256(const std::string& data) {
     for (unsigned char b : digest) { out += hex[b >> 4]; out += hex[b & 15]; }
     return out;
 #else
-    (void)data;
-    return std::string();
+    // The independent reference off Windows is OpenSSL's SHA-256 (the header's own Sha256 is hand written).
+    unsigned char digest[EVP_MAX_MD_SIZE] = {};
+    unsigned int len = 0;
+    if (EVP_Digest(data.data(), data.size(), digest, &len, EVP_sha256(), nullptr) != 1 || len != 32) { return "openssl-failed"; }
+    static const char* hex = "0123456789abcdef";
+    std::string out;
+    for (unsigned int i = 0; i < len; ++i) { out += hex[digest[i] >> 4]; out += hex[digest[i] & 15]; }
+    return out;
 #endif
 }
 
@@ -99,10 +109,8 @@ void testSha() {
         std::size_t pos = 0;
         while (pos < n) { const std::size_t k = std::min<std::size_t>(n - pos, 1 + g() % 70); s.update(d.data() + pos, k); pos += k; }
         ok = ok && s.finishHex() == mine;
-#if defined(_WIN32)
         ok = ok && mine == cngSha256(d);
         ++cmp;
-#endif
     }
     for (int i = 0; i < 40; ++i) {
         std::string d(1 + g() % 200000, '\0');
@@ -110,7 +118,7 @@ void testSha() {
         ok = ok && sha256Hex(d.data(), d.size()) == cngSha256(d);
         ++cmp;
     }
-    std::printf("sha256: compared with the Windows CNG on %d buffers\n", cmp);
+    std::printf("sha256: compared with the platform reference (Windows CNG, OpenSSL elsewhere) on %d buffers\n", cmp);
     CHECK(ok);
     // the hasher is reusable after finishHex
     Sha256 s; s.update("abc", 3); s.finishHex(); s.update("abc", 3);

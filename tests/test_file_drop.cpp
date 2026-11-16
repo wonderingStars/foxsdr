@@ -58,6 +58,27 @@ std::vector<unsigned char> block(const std::vector<std::string>& utf8, bool wide
                 b.push_back(static_cast<unsigned char>(c & 0xFF));
                 b.push_back(static_cast<unsigned char>((c >> 8) & 0xFF));
             }
+#else
+            // No MultiByteToWideChar off Windows: UTF-8 to UTF-16LE by hand (the tests' strings are valid UTF-8),
+            // a surrogate pair for a code point above U+FFFF.
+            for (std::size_t i = 0; i < s.size();) {
+                const unsigned char c0 = static_cast<unsigned char>(s[i]);
+                const std::size_t len = c0 < 0x80 ? 1 : (c0 < 0xE0 ? 2 : (c0 < 0xF0 ? 3 : 4));
+                std::uint32_t cp = len == 1 ? c0 : (c0 & (0xFFu >> (len + 1)));
+                for (std::size_t k = 1; k < len && i + k < s.size(); ++k) { cp = (cp << 6) | (static_cast<unsigned char>(s[i + k]) & 0x3Fu); }
+                i += len;
+                auto put16 = [&b](std::uint32_t u) {
+                    b.push_back(static_cast<unsigned char>(u & 0xFF));
+                    b.push_back(static_cast<unsigned char>((u >> 8) & 0xFF));
+                };
+                if (cp >= 0x10000) {
+                    cp -= 0x10000;
+                    put16(0xD800 + (cp >> 10));
+                    put16(0xDC00 + (cp & 0x3FF));
+                } else {
+                    put16(cp);
+                }
+            }
 #endif
             b.push_back(0);
             b.push_back(0);

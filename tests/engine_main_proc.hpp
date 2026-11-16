@@ -122,6 +122,12 @@ inline void isolate(const fs::path& home) {
     // No vendor driver is loaded from the real machine by a child that lists them.
     setEnv("SOAPY_SDR_PLUGIN_PATH", (home / "no-soapy-modules").string());
     setEnv("FOXSDR_TELEMETRY_URL", "http://127.0.0.1:9");
+#if !defined(_WIN32)
+    // The engine initialises PortAudio, whose ALSA backend loads the PulseAudio plug-in (libasound2-plugins, which CI installs) when it
+    // enumerates devices, and libpulse then writes its authentication cookie to $XDG_CONFIG_HOME/pulse/cookie: the audio system's file, not
+    // the program's. Pointed beside the profile (never inside it), so "nothing was written under the profile" still means the program.
+    setEnv("PULSE_COOKIE", (home.parent_path() / (home.filename().string() + "-pulse-cookie")).string());
+#endif
 }
 
 // "cascade" or "foxsdr-engine", in the directory the application binary is in.

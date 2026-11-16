@@ -32,6 +32,8 @@
 #include <unistd.h>
 #endif
 
+#include "net/send_flags.hpp"
+
 namespace cascade::net::lo {
 
 using Sock = std::intptr_t;
@@ -238,7 +240,7 @@ inline int tcpSend(Sock s, const void* data, std::size_t len) {
 #if defined(_WIN32)
     const int n = ::send(static_cast<SOCKET>(s), static_cast<const char*>(data), static_cast<int>(len), 0);
 #else
-    const int n = static_cast<int>(::send(static_cast<int>(s), data, len, 0));
+    const int n = static_cast<int>(::send(static_cast<int>(s), data, len, ::cascade::net::kSendFlags));
 #endif
     if (n < 0) { return wouldBlock() ? 0 : -1; }
     return n;

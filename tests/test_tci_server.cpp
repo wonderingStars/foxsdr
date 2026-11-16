@@ -54,7 +54,9 @@ using SockT = SOCKET;
 #include <sys/socket.h>
 #include <unistd.h>
 using SockT = int;
+#ifndef INVALID_SOCKET   // httplib.h defines it as a macro on POSIX
 constexpr SockT INVALID_SOCKET = -1;
+#endif
 #endif
 
 #include "net/tci_server.hpp"

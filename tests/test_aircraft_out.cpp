@@ -352,7 +352,11 @@ void testSbsFieldRules() {
     CHECK(sbsEncode(m, buf, sizeof(buf)) == 0);
     std::strcpy(m.hexIdent, "4840D");
     CHECK(sbsEncode(m, buf, sizeof(buf)) == 0);
-    std::strcpy(m.hexIdent, "4840D6X");
+    // hexIdent is char[7]: six digits and the NUL. A seventh character instead of the NUL is copied with
+    // memcpy of exactly seven bytes; strcpy of "4840D6X" writes eight and overruns the field (glibc
+    // aborts "buffer overflow detected"; the Windows build did not stop it).
+    static_assert(sizeof(m.hexIdent) == 7, "this case needs the seven-byte field");
+    std::memcpy(m.hexIdent, "4840D6X", sizeof(m.hexIdent));
     CHECK(sbsEncode(m, buf, sizeof(buf)) == 0);
     std::strcpy(m.hexIdent, "4840G6");
     CHECK(sbsEncode(m, buf, sizeof(buf)) == 0);

@@ -21,6 +21,10 @@
 
 #include <fstream>
 #include <iterator>
+#ifndef _WIN32
+#include <unistd.h>
+#define _getpid getpid
+#endif
 #include "wire_a_rig.hpp"
 
 using namespace wire_a_rig;

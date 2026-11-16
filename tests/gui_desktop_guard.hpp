@@ -30,6 +30,21 @@ inline bool isVisibleDesktopName(const std::string& name) {
     return true;
 }
 
+// OFF WINDOWS there are no named desktops, so the name is derived from the display the process would open its windows on. Only one display is PROVEN virtual: the one `xvfb-run` makes
+// (it runs Xvfb for the command and points XAUTHORITY at <tmp>/xvfb-run.XXXXXX/Xauthority, a path nothing else creates). Everything else is a display somebody may be sitting at:
+//   * WAYLAND_DISPLAY set: a Wayland-capable client may reach the person's compositor whatever DISPLAY says, so the name is "Default" (refused);
+//   * DISPLAY set but not an xvfb-run one (a real X session, or an Xvfb nobody here started): "Default" (refused; name the virtual desktop with FOXSDR_GUARD_DESKTOP_NAME instead);
+//   * neither set: "" (could not be read: refused).
+// Arguments are the three environment values, nullptr when unset.
+inline std::string linuxDesktopName(const char* display, const char* waylandDisplay, const char* xauthority) {
+    if (waylandDisplay != nullptr && *waylandDisplay != '\0') { return "Default"; }
+    if (display == nullptr || *display == '\0') { return std::string(); }
+    const std::string xa = xauthority != nullptr ? std::string(xauthority) : std::string();
+    const std::size_t at = xa.rfind("/xvfb-run.");
+    const bool xvfbRun = at != std::string::npos && xa.size() > at + 21 && xa.compare(xa.size() - 11, 11, "/Xauthority") == 0 && xa.find('/', at + 1) == xa.size() - 11;
+    return xvfbRun ? "xvfb-run" + std::string(display) : std::string("Default");
+}
+
 // `desktopName`: the name of the desktop this process runs on, "" when it could not be read. `overrideValue`: the value of FOXSDR_ALLOW_VISIBLE_GUI_TESTS, nullptr when unset.
 inline Verdict judge(const std::string& desktopName, const char* overrideValue) {
     Verdict v;

@@ -130,6 +130,14 @@ const Allowed kAllowed[] = {
     {"app_window_radio_saved.cpp", "ppmPreTellHz(kind, args, dev->hasFrequencyCorrection(), radioHz)",
      "restore of an added radio (multi-radio stage 5, restoreExtraRadioDevice): the startup restore's own line for the radio this thread has selected - radioHz is "
      "radioHzForSource(...), then the crystal correction for a radio corrected by retuning (tests/test_engine_api_saved_radios.cpp restores a device radio)"},
+    // The I/Q FILE's transport (seek, loop, speed, position): rawSource() is downcast to the recorded-file source to move or read its play position. No frequency is
+    // read or told to the radio at these four sites (found by test_converter_call_sites once the Linux lane let it find the tree; checked by reading each).
+    {"app_window.cpp", "dynamic_cast<const cascade::source::IqFileSource*>(&const_cast<cascade::core::Pipeline&>(rxa.pipeline_).rawSource()",
+     "the file's play position and loop marks for the status record (fileSource, filePositionSec, fileDurationSec...): no frequency"},
+    {"app_window.cpp", "dynamic_cast<cascade::source::IqFileSource*>(&rx().pipeline_.rawSource())",
+     "FILE_SEEK / FILE_LOOP: moves the recorded file's play position or loop marks: no frequency"},
+    {"wire_a_transport.cpp", "dynamic_cast<cascade::source::IqFileSource*>(&r.pipeline_.rawSource())",
+     "FILE_TRANSPORT (speed, pause, step) of a playing I/Q file: no frequency"},
     {"app_window.cpp", "dev->setCenterFrequencyHz(*r.preTuneRadioHz)",
      "RSP pre-Init tune on the open worker: preTuneRadioHz is radioFromAir(...) of keepCenterHz, "
      "converted on the GUI thread in launchDeviceOpen (test_converter_app_paths "
@@ -258,6 +266,15 @@ int main(int argc, char** argv) {
                         verdict = "RADIO FIGURE (the crystal correction's own file: the radio's own "
                                   "correction, the pre-install tune check)";
                         ++allowed;
+                    }
+                    if (verdict == nullptr) {  // the listed sites (the recorded file's transport)
+                        for (const Allowed& a : kAllowed) {
+                            if (originOf(name) == a.file && stmt.find(a.snippet) != std::string::npos) {
+                                verdict = a.why;
+                                ++allowed;
+                                break;
+                            }
+                        }
                     }
                 } else if (std::string(needle) == "rawSource(") {
                     continue;  // unreachable: a rawSource( hit has rawSource() in it

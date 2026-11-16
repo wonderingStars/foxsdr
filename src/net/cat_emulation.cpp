@@ -21,7 +21,17 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
+#else
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
 #endif
+#include "net/send_flags.hpp"
 
 namespace cascade::net {
 
@@ -542,17 +552,121 @@ void CatTcpService::stop() {
     running_ = false;
 }
 
-#else  // not Windows: the TCP service is not built in this lane
+#else  // POSIX: the same service over BSD sockets (the Windows branch above is unchanged)
 
-struct CatTcpService::ClientRec {};
-CatTcpService::CatTcpService(CatDialect d, RigBackend b) : dialect_(d), backend_(std::move(b)), vfos_(std::make_shared<RigVfos>()) {}
-CatTcpService::~CatTcpService() = default;
-bool CatTcpService::start(std::uint16_t, bool, CatEmuFact& fact) {
-    fact = CatEmuFact{"cat-tcp-refused", "the TCP CAT service is built for Windows only so far"};
-    return false;
+namespace {
+class SocketStream final : public CatStream {
+public:
+    explicit SocketStream(int s) : s_(s) {}
+    int read(char* buf, std::size_t cap) override {
+        const ssize_t n = ::recv(s_, buf, cap, 0);
+        if (n > 0) { return static_cast<int>(n); }
+        if (n == 0) { return -1; }   // the peer closed
+        return (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) ? 0 : -1;   // the 100 ms receive timeout is a 0, as on Windows
+    }
+    int write(const char* d, std::size_t n) override {
+        // MSG_NOSIGNAL: a logging program that closes mid-answer is a failed write, not SIGPIPE ending the application
+        const ssize_t w = ::send(s_, d, n, kSendFlags);
+        return w > 0 ? static_cast<int>(w) : -1;
+    }
+
+private:
+    int s_;
+};
+}  // namespace
+
+struct CatTcpService::ClientRec {
+    std::thread t;
+    std::atomic<bool> done{false};
+    int s = -1;
+};
+
+CatTcpService::CatTcpService(CatDialect dialect, RigBackend backend) : dialect_(dialect), backend_(std::move(backend)), vfos_(std::make_shared<RigVfos>()) {}
+CatTcpService::~CatTcpService() { stop(); }
+
+bool CatTcpService::start(std::uint16_t port, bool bindAll, CatEmuFact& fact) {
+    if (running_.load()) { fact = CatEmuFact{"cat-already-running", "the TCP CAT service is already running"}; return false; }
+    const int s = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0) { fact = CatEmuFact{"cat-tcp-refused", "a socket could not be created"}; return false; }
+    // SO_REUSEADDR lets the port be taken again at once after a stop (connections still in TIME_WAIT); on Linux it does NOT let a
+    // second listener share a port that is still listening, which is the Windows branch's SO_EXCLUSIVEADDRUSE guarantee.
+    int reuse = 1;
+    ::setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof reuse);
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_port = htons(port);
+    a.sin_addr.s_addr = htonl(bindAll ? INADDR_ANY : INADDR_LOOPBACK);
+    if (::bind(s, reinterpret_cast<sockaddr*>(&a), sizeof a) != 0 || ::listen(s, 4) != 0) {
+        ::close(s);
+        fact = CatEmuFact{"cat-tcp-refused", "the TCP port could not be opened (is another program using it?)"};
+        return false;
+    }
+    socklen_t len = sizeof a;
+    ::getsockname(s, reinterpret_cast<sockaddr*>(&a), &len);
+    port_ = ntohs(a.sin_port);
+    listener_ = static_cast<std::intptr_t>(s);
+    stop_ = false;
+    running_ = true;
+    acceptor_ = std::thread([this] { acceptLoop(); });
+    return true;
 }
-void CatTcpService::acceptLoop() {}
-void CatTcpService::stop() {}
+
+void CatTcpService::acceptLoop() {
+    const int ls = static_cast<int>(listener_);
+    while (!stop_.load()) {
+        fd_set rd;
+        FD_ZERO(&rd);
+        FD_SET(ls, &rd);
+        timeval tv{0, 100000};
+        if (::select(ls + 1, &rd, nullptr, nullptr, &tv) <= 0) {
+            std::lock_guard<std::mutex> lock(mu_);   // prune finished clients
+            for (auto it = recs_.begin(); it != recs_.end();) {
+                if ((*it)->done.load()) { if ((*it)->t.joinable()) { (*it)->t.join(); } it = recs_.erase(it); } else { ++it; }
+            }
+            continue;
+        }
+        const int c = ::accept(ls, nullptr, nullptr);
+        if (c < 0) { continue; }
+        if (clients_.load() >= kMaxClients) { ::close(c); continue; }
+        timeval to{0, 100000};
+        ::setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof to);
+        int nodelay = 1;
+        ::setsockopt(c, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof nodelay);
+        auto rec = std::make_unique<ClientRec>();
+        rec->s = c;
+        ClientRec* r = rec.get();
+        ++clients_;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            recs_.push_back(std::move(rec));
+        }
+        r->t = std::thread([this, r, c] {
+            CatEmulator emu(dialect_, backend_, vfos_);
+            SocketStream stream(c);
+            const std::uint64_t n = serveCatStream(stream, emu, stop_);
+            commands_ += n;
+            ::close(c);
+            --clients_;
+            r->done = true;
+        });
+    }
+}
+
+void CatTcpService::stop() {
+    stop_ = true;
+    if (acceptor_.joinable()) { acceptor_.join(); }
+    std::vector<std::unique_ptr<ClientRec>> recs;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        recs.swap(recs_);
+    }
+    for (auto& r : recs) {
+        if (r->t.joinable()) { r->t.join(); }   // each client thread sees stop_ within its 100 ms receive timeout
+    }
+    if (listener_ != -1) { ::close(static_cast<int>(listener_)); listener_ = -1; }
+    port_ = 0;
+    running_ = false;
+}
 
 #endif
 

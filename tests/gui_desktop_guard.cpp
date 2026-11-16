@@ -40,7 +40,7 @@ std::string envValue(const char* name, bool& set) {
 #endif
 }
 
-// The name of the desktop this thread is on, "" when it cannot be read.
+// The name of the desktop this thread is on, "" when it cannot be read. Off Windows: derived from the display (gui_desktop_guard.hpp, linuxDesktopName).
 std::string threadDesktopName() {
 #ifdef _WIN32
     HDESK d = ::GetThreadDesktop(::GetCurrentThreadId());
@@ -50,7 +50,7 @@ std::string threadDesktopName() {
     if (!::GetUserObjectInformationA(d, UOI_NAME, buf, sizeof buf, &needed)) { return std::string(); }
     return std::string(buf);
 #else
-    return std::string();
+    return cascade::testguard::linuxDesktopName(std::getenv("DISPLAY"), std::getenv("WAYLAND_DISPLAY"), std::getenv("XAUTHORITY"));
 #endif
 }
 

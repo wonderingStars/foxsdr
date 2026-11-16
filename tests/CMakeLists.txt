@@ -4,6 +4,24 @@
 # name for test_json_dump_policy.
 file(GLOB CASCADE_TESTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test_*.cpp")
 
+# Tests whose subject is a Windows facility (an ExtIO DLL host, the Win32 desktop guard, DLL loading, the Windows process API) stay Windows-only:
+# they are not built or registered elsewhere. Nothing is removed on Windows.
+if(NOT WIN32)
+    set(CASCADE_WINDOWS_ONLY_TESTS
+        test_extio                   # the ExtIO helper process and its stand-in DLLs
+        test_gui_desktop_guard       # the Win32 desktop guard
+        test_vendor_lib test_g33ddc_source test_g39ddc_source test_sdriq_d2xx    # stand-in vendor DLLs loaded by path (tests/eol_fixture.hpp)
+        test_engine_api_wireb_ftdi test_engine_api_wireb_winradio test_engine_api_wireb_neededlibs
+        test_hardware_guard
+        # Hot-plug detection (core/sys_device_watch.cpp) is a hidden window that receives WM_DEVICECHANGE; off Windows DeviceArrivalWatcher::start()
+        # and inject() return false, so there is no watcher to test (a Linux one would listen to udev/netlink uevents: an open row in
+        # docs/multi-radio-records/linux-local.md, section "The 30 reds").
+        test_engine_api_hotplug)
+    foreach(_t ${CASCADE_WINDOWS_ONLY_TESTS})
+        list(REMOVE_ITEM CASCADE_TESTS "${CMAKE_CURRENT_SOURCE_DIR}/${_t}.cpp")
+    endforeach()
+endif()
+
 # A REAL plugin module for test_plugin_settings_ui (CASCADE_CAP_SETTINGS_UI):
 # built as a MODULE exactly as a third-party plugin is - plugin_abi.h only,
 # never linked against cascade_lib - into a directory of its own, so the test
@@ -755,6 +773,13 @@ if(NOT CASCADE_SANITIZE_ENABLED)
         if(TARGET ${_t})
             add_test(NAME ${_t}_free COMMAND ${_t})
             set_tests_properties(${_t}_free PROPERTIES ENVIRONMENT "FOXSDR_PASS=free" TIMEOUT 300)
+            # The stepped test and its _free twin are the same program in the same working directory: files they make there by name
+            # (test_diag_hang's cascade-hang-suppressed-0 was deleted under the other one: "filesystem error: cannot check if file is empty",
+            # std::terminate, in a parallel ctest run) collide when both run at once, so a pair never runs together.
+            if(TEST ${_t})
+                set_property(TEST ${_t} APPEND PROPERTY RESOURCE_LOCK ${_t}_and_free)
+                set_property(TEST ${_t}_free APPEND PROPERTY RESOURCE_LOCK ${_t}_and_free)
+            endif()
         endif()
     endforeach()
 endif()
@@ -1731,9 +1756,31 @@ if(CASCADE_TEST_PYTHON)
     add_test(NAME packaging_openapi_routes
         COMMAND ${CASCADE_TEST_PYTHON} -I ${CMAKE_SOURCE_DIR}/tests/packaging/test_openapi_routes.py)
     set_tests_properties(packaging_openapi_routes PROPERTIES TIMEOUT 120)
+    # The drive fixtures' WAV files are git-ignored and made by their make_<name>.py (src/slint/tests/drive/fixtures/.gitignore): a fresh
+    # checkout has none, so the two tests that play them as radios stopped at "the fixture scope.wav is not in ..." (exit 2) or, for the
+    # others, at a radio that never opened, on a clean Linux build. Standard library only; each script writes its WAV beside itself, where the
+    # tests read it. test_engine_api_source_kinds plays scope.wav, cw-decoder.wav and twotone-decoder.wav; test_engine_api_decode_radio plays those four of the cw, pocsag, rtty and twotone decoders and scope.wav.
+    foreach(_n IN ITEMS scope cw-decoder twotone-decoder pocsag-decoder rtty-decoder)
+        add_test(NAME fixture_${_n}_wav
+            COMMAND ${CASCADE_TEST_PYTHON} -I ${CMAKE_SOURCE_DIR}/src/slint/tests/drive/fixtures/make_${_n}.py)
+        set_tests_properties(fixture_${_n}_wav PROPERTIES FIXTURES_SETUP drive_wavs TIMEOUT 120)
+    endforeach()
+    foreach(_t IN ITEMS test_engine_api_source_kinds test_engine_api_decode_radio)
+        if(TEST ${_t})
+            set_property(TEST ${_t} APPEND PROPERTY FIXTURES_REQUIRED drive_wavs)
+        endif()
+    endforeach()
 else()
-    message(STATUS "no python: packaging_openapi_routes is not registered")
+    message(STATUS "no python: packaging_openapi_routes and the drive WAV fixtures are not registered")
 endif()
+# These five read files of the source tree and find it by walking UP from the working directory. ctest runs a test in the build folder
+# (<build>/tests), which is inside the source tree only when the build folder is: with the build beside or away from the tree (CI on
+# Linux, D:/foxsdr-build, WSL) the walk found nothing and all four failed, on Windows too. Running them from the source root is the fix.
+foreach(_t IN ITEMS test_airband_data test_band_plan test_converter_call_sites test_page_resize_id test_png_decode)
+    if(TEST ${_t})
+        set_tests_properties(${_t} PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+    endif()
+endforeach()
 
 # wire-c begin: wiring lane C's test settings in ONE block (each item appends its own lines inside it)
 foreach(_t IN ITEMS test_wire_c_portable test_wire_c_updater)
@@ -1894,10 +1941,8 @@ if(WIN32)
         endif()
     endforeach()
 endif()
-if(WIN32)
-    if(TARGET test_rfexplorer_source)
-        target_compile_definitions(test_rfexplorer_source PRIVATE RB_SRC_DIR="${CMAKE_SOURCE_DIR}")
-    endif()
+if(TARGET test_rfexplorer_source)
+    target_compile_definitions(test_rfexplorer_source PRIVATE RB_SRC_DIR="${CMAKE_SOURCE_DIR}")
 endif()
 # radio-bridges end -----------------------------------------------------------------------------------------------------------------------------
 # wire-b second pass begin ----------------------------------------------------------------------------------------------------------------------

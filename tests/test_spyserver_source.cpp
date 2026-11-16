@@ -482,9 +482,17 @@ void testOpenAndStream(int which) {
     // tune, gain, rate before start
     CHECK(s.setCenterFrequencyHz(145500000.0) && s.centerFrequencyHz() == 145500000.0);
     CHECK(s.gains().size() == 1 && s.gains()[0].maxDb == 21.0 && s.gains()[0].unit == cascade::source::GainUnit::Steps);
-    CHECK(s.setGainDb("Gain", 12.4) && s.gainDb("Gain") == 12.0);
-    CHECK(s.setGainDb("Gain", 99.0) && s.gainDb("Gain") == 21.0);   // clamped
-    CHECK(s.setGainDb("Gain", -4.0) && s.gainDb("Gain") == 0.0);
+    // gainDb() reports the gain the SERVER last said (its sync message); a sync sent before the set can arrive just after it and show
+    // the old value for a moment, until the sync that carries the new one. So the read-back is waited for, bounded, not read once
+    // (one run in twelve failed here with the machine loaded).
+    auto gainSetsTo = [&s](double ask, double want) {
+        if (!s.setGainDb("Gain", ask)) { return false; }
+        for (int i = 0; i < 400 && s.gainDb("Gain") != want; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+        return s.gainDb("Gain") == want;
+    };
+    CHECK(gainSetsTo(12.4, 12.0));
+    CHECK(gainSetsTo(99.0, 21.0));   // clamped
+    CHECK(gainSetsTo(-4.0, 0.0));
     CHECK(!s.setGainDb("LNA", 3.0) && std::string(s.lastError()).find("no gain called") != std::string::npos);
     CHECK(s.setSampleRateHz(260000.0) && s.sampleRateHz() == 250000.0);     // nearest stage (1 MS/s / 4)
     CHECK(s.start());
@@ -503,6 +511,13 @@ void testOpenAndStream(int which) {
     CHECK(s.sampleRateHz() == 500000.0);
     s.stop();
     s.closeDevice();
+    // The stand-in reads the client's last commands on its own thread, after closeDevice() has returned: stopping it at once drops
+    // whatever it has not read yet (a race that Windows' timing hides). Wait for the last command, the one that switches streaming off.
+    for (int i = 0; i < 400; ++i) {
+        const auto seen = srv.sets();
+        if (!seen.empty() && seen.back().setting == sp::kSetStreamingEnabled && seen.back().value == 0) { break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
     srv.stop();
     // What the server was told, in order.
     const auto sets = srv.sets();

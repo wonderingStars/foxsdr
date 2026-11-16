@@ -293,6 +293,11 @@ target_include_directories(cascade_httplib SYSTEM INTERFACE
     "${CASCADE_TP}/cpp_httplib/include")
 if(WIN32)
     target_link_libraries(cascade_httplib INTERFACE ws2_32)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # httplib sends with flags 0 and relies on httplib::Server's constructor having set SIGPIPE to
+    # ignored process-wide. A client-only process (or a test) that never builds a Server then dies
+    # of SIGPIPE when a peer closes mid-send (the WebSocket close frame to a gone KiwiSDR server).
+    target_compile_definitions(cascade_httplib INTERFACE CPPHTTPLIB_SEND_FLAGS=MSG_NOSIGNAL)
 endif()
 
 # ---------------------------------------------------------------------------

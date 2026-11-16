@@ -243,7 +243,10 @@ public:
         bool utcNames = false;          // names in UTC (tests) rather than local time (as the manual takes)
     };
 
-    explicit ClipWriter(Config c = {}) : cfg_(std::move(c)) {}
+    // Two constructors, not one with a defaulted Config: GCC rejects `Config c = {}` as a default argument while Config (a nested struct
+    // with default member initialisers) is still incomplete inside this class.
+    explicit ClipWriter(Config c) : cfg_(std::move(c)) {}
+    explicit ClipWriter() : ClipWriter(Config{}) {}
     ~ClipWriter() { closeNow(); }
     ClipWriter(const ClipWriter&) = delete;
     ClipWriter& operator=(const ClipWriter&) = delete;

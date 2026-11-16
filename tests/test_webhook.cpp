@@ -381,7 +381,7 @@ int main() {
         for (int i = 0; i < 1000; ++i) {
             const auto a = Clock::now();
             sender.enqueueJson("{\"i\":" + std::to_string(i) + "}");
-            worst = std::max(worst, std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - a).count());
+            worst = std::max<long long>(worst, std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - a).count());
         }
         const long long all = msSince(tq);
         std::printf("INFO 1000 enqueues while the worker waited on a slow receiver: %lld ms in total, worst single call %lld us\n", all, worst);

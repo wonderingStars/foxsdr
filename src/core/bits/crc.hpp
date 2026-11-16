@@ -437,8 +437,8 @@ inline std::vector<CrcHit> findCrc(const std::vector<std::vector<uint8_t>>& fram
                                 };
                                 uint64_t init = 0, xr = 0;
                                 bool chosen = false;
-                                for (uint64_t i0 : {0ull, ones})
-                                    for (uint64_t x0 : {0ull, ones})
+                                for (uint64_t i0 : {uint64_t{0}, ones})
+                                    for (uint64_t x0 : {uint64_t{0}, ones})
                                         if (!chosen && consistent(i0, x0)) { init = i0; xr = x0; chosen = true; }
                                 if (!chosen) {
                                     init = sl & ones;

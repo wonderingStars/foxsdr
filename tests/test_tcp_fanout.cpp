@@ -338,7 +338,10 @@ void testSlowClientDroppedNotProducer() {
         const bool ok = f.publish(r.data(), r.size());
         worst = std::max(worst, msSince(a));
         if (ok) { sent += r.size(); } else { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
-        if ((seq & 63) == 0) { std::this_thread::sleep_for(std::chrono::microseconds(200)); }
+        // A pause after every 64 records (64 KB). The 200 us it asked for lasts a whole timer tick (about 15 ms) on Windows, which held the
+        // producer to a few MB/s that the good client's reader keeps up with; on Linux it is 200 us, the producer ran far faster, the good
+        // client's 64 KB queue overflowed as well and "exactly the lazy one" was dropped together with it. 5 ms keeps the intended pace on both.
+        if ((seq & 63) == 0) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
     }
     CHECK(f.stats().droppedSlow == 1);  // exactly the lazy one
     CHECK(f.stats().clients == 1);
@@ -440,6 +443,9 @@ void testConnectDropStorm() {
     CHECK(s.clients == 0);
     CHECK(s.accepted + s.refusedFull >= static_cast<std::uint64_t>(connected.load()));
     CHECK(s.accepted == s.closedByPeer + s.droppedSlow + s.droppedStalled);  // every accepted client is accounted for
+    // The producer has stopped, but the IO thread may still be taking its last records out of the ring (a loaded machine delays it by a
+    // good fraction of a second); a client that connects before it has finished is handed them, and "exactly record 777" cannot hold.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     Client fresh;
     CHECK(fresh.connect(f.port()));
     for (int spins = 0; f.stats().clients < 1 && spins < 200; ++spins) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); }

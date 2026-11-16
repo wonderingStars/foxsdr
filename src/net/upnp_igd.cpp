@@ -25,6 +25,8 @@
 #include <unistd.h>
 #endif
 
+#include "net/send_flags.hpp"
+
 namespace cascade::net {
 namespace {
 
@@ -366,7 +368,7 @@ public:
         std::size_t sent = 0;
         while (sent < wire.size()) {
             if (!waitFor(s, true, deadline)) { return false; }
-            const int n = static_cast<int>(::send(raw(s), wire.data() + sent, static_cast<int>(wire.size() - sent), 0));
+            const int n = static_cast<int>(::send(raw(s), wire.data() + sent, static_cast<int>(wire.size() - sent), ::cascade::net::kSendFlags));
             if (n <= 0) {
                 if (n < 0 && wouldBlock()) { continue; }
                 return false;
