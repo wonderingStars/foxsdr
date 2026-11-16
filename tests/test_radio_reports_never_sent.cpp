@@ -56,6 +56,16 @@ const Secret kSecrets[] = {
     {"a hostname", "mynas.lan"},
     {"a password", "hunter2"},
     {"the radio's serial in a sentence", "SN9900AA"},
+    // R9 and L8 (security reviews 1 and 2): what the scrub used to let through
+    {"a host name in prose", "studio-nas7"},
+    {"a MAC address", "00:1A:2B:3C:4D:5E"},
+    {"a Linux user's media path", "alice2"},
+    {"a file name on that path", "zz_secret_capture2"},
+    {"a mount point", "nas-secret"},
+    {"another device's serial in a device path", "0000AB12CD"},
+    {"another device's serial with no word in front", "7F3A9C21B0"},
+    {"a frequency in kHz with no unit", "14200"},
+    {"a bare file name", "alice_notes_77"},
 };
 
 std::string lower(std::string s) {
@@ -84,6 +94,14 @@ void scriptTheSession() {
     diagLogf("plugin: remote login as alice with password hunter2");   // not a radio line
     diagLogf("plugin: pager decoder printed: meet at the old mill, G4ZZZ calling");   // decoded text lives in a plugin line, never a radio line
     diagLogf("window: the plugin window for alice's profile opened");   // not a radio line: must not be sent at all
+    diagLogf("source: could not find the host studio-nas7");
+    diagLogf("vendor: adapter 00:1A:2B:3C:4D:5E refused the link");
+    diagLogf("source: cannot read /media/alice2/SDR/zz_secret_capture2.iq");
+    diagLogf("source: mount /mnt/nas-secret/rf failed");
+    diagLogf("vendor: open failed on USB\\VID_0BDA&PID_2838\\0000AB12CD");
+    diagLogf("source: the second dongle 7F3A9C21B0 did not answer");
+    diagLogf("source: tuned to 14200 failed");
+    diagLogf("source: could not read alice_notes_77.txt");
     diagWarnf("source: the saved radio (Airspy HF+, airspyhf) did not reopen (control) - the receiver is on the signal generator and the radio stays saved");
 }
 
@@ -154,7 +172,7 @@ int main() {
     f.sampleRateSps = 768000;
     rep.fileFailure(f, ring);
     // ...a second one whose sentence hides a frequency without a unit
-    f.reason = "the stream at 433920000 stopped";
+    f.reason = "the stream at 433920000 stopped after host studio-nas7 (00:1A:2B:3C:4D:5E) lost /media/alice2/SDR/zz_secret_capture2.iq, dongle 7F3A9C21B0, tuned to 14200";
     f.trigger = rr::Trigger::UserPick;
     rep.fileFailure(f, ring);
 

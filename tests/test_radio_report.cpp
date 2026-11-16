@@ -141,6 +141,67 @@ int main() {
         CHECK(clipUtf8("a\xC3\xA9" "b", 2) == "a\xC3\xA9");
     }
 
+    // --- R9 and L8 (security reviews 1 and 2): every kind of thing the scrub used to let through, by input. The secret goes IN to scrubReason; the scrubbed text is
+    // searched for it. (textCode, the Worker's parity rules, is unchanged: this is the first line, the Worker's check the second.)
+    {
+        struct Leak { const char* input; const char* secret; };
+        const Leak leaks[] = {
+            // a host name in prose, not introduced by ip: host= uri= or addr=
+            {"could not find the host mynas-pi", "mynas-pi"},
+            {"the SoapyRemote stream could not be set up: could not find the host radio-shack", "radio-shack"},
+            {"cannot listen for I/Q on raspberrypi:1234", "raspberrypi"},
+            {"connect to studio.example.org failed", "studio.example.org"},
+            {"gave up on mynas.lan after 3 tries", "mynas.lan"},
+            // a MAC address
+            {"adapter 00:1A:2B:3C:4D:5E refused the link", "00:1A:2B:3C:4D:5E"},
+            {"adapter 00-1a-2b-3c-4d-5e refused the link", "00-1a-2b-3c-4d-5e"},
+            // Linux and macOS paths
+            {"cannot read /media/alice2/SDR/capture.iq", "alice2"},
+            {"cannot read /run/media/alice2/SDR", "alice2"},
+            {"mount /mnt/nas-secret/rf failed", "nas-secret"},
+            {"cannot open /root/.config/secretdir", "secretdir"},
+            {"libusb: no access to /dev/bus/usb/001/087", "/dev/bus"},
+            {"wrote /tmp/secretdir/x", "secretdir"},
+            {"opened /Volumes/AliceDisk/x", "AliceDisk"},
+            // a Windows device interface path and a USB instance path (another device's serial rides in them)
+            {"open failed on \\\\?\\usb#vid_0bda&pid_2838#0000AB12CD#{a5dcbf10-6530-11d2-901f-00c04fb951ed}", "0000AB12CD"},
+            {"open failed on USB\\VID_0BDA&PID_2838\\0000AB12CD", "0000AB12CD"},
+            {"open failed on \\\\.\\USB#VID_0BDA&PID_2838#0000AB12CD", "0000AB12CD"},
+            // a bare file name
+            {"could not read my_private_capture_88.iq", "my_private_capture_88"},
+            {"profile alice-radio.cfg is damaged", "alice-radio"},
+            {"cannot load D3ADBEEF-notes.txt", "D3ADBEEF-notes"},
+            // another device's serial, with no word like serial in front of it
+            {"the second dongle 0000AB12CD did not answer", "0000AB12CD"},
+            {"device EDR99ZZ77 went away", "EDR99ZZ77"},
+            // a frequency written without its unit
+            {"tuned to 14200 failed", "14200"},
+            {"freq 145.5 refused", "145.5"},
+            {"the tuner could not centre on 7100.25", "7100.25"},
+        };
+        for (const Leak& l : leaks) {
+            const std::string o = scrubReason(l.input, "SN0000AA");
+            if (o.find(l.secret) != std::string::npos) { std::printf("LEAK: [%s] -> [%s] still holds [%s]\n", l.input, o.c_str(), l.secret); }
+            CHECK(o.find(l.secret) == std::string::npos);
+            CHECK(!o.empty());
+        }
+        // what must SURVIVE (the scrub is not a shredder): the sentence, a version, a rate, an error number, a port, a time
+        CHECK(scrubReason("stream stalled for 250 ms at 2400000 S/s (Windows error 31)", "").find("stalled for 250 ms") != std::string::npos);
+        CHECK(scrubReason("FoxSDR 0.99.109 build 1234 on port 8073", "").find("0.99.109") != std::string::npos);
+        CHECK(scrubReason("FoxSDR 0.99.109 build 1234 on port 8073", "").find("8073") != std::string::npos);
+        CHECK(scrubReason("the tuner PLL did not lock, e.g. after a retry", "").find("did not lock, e.g. after a retry") != std::string::npos);
+        CHECK(scrubReason("could not open the device", "").find("could not open the device") != std::string::npos);
+        // an input that is a megabyte of digits and dots is cut before any rule runs, and the answer is bounded
+        const std::string huge = std::string(1000000, '1') + ".5 Hz";
+        const std::string hugeOut = scrubReason(huge, "");
+        CHECK(utf8Length(hugeOut) <= 400);
+        const std::string hugeDots = [] { std::string t; for (int i = 0; i < 200000; ++i) { t += "1."; } return t + "x"; }();
+        CHECK(utf8Length(scrubReason(hugeDots, "")) <= 400);
+        // idempotent: scrubbing the scrubbed text again changes nothing
+        const std::string once = scrubReason("could not find the host mynas-pi at /media/alice2/x.iq from 00:1A:2B:3C:4D:5E, tuned to 14200", "");
+        CHECK(scrubReason(once, "") == once);
+    }
+
     // --- the radio lines of the log ring ------------------------------------------------------------------------------------------------------
     {
         std::vector<std::string> ring;
