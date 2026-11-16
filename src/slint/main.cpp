@@ -3078,6 +3078,8 @@ int main(int argc, char** argv) {
             else { return "marks.[r<n>.]<named|tabs|total|wfnamed|wftabs|tabitems0>, not " + name; }
             return std::string();
         }
+        // patchface.<s|m><k>.<what> (docs/multi-radio-records/patch-faces.md): the PATCH page's Spectrum and Map faces, measured from what they were painted from
+        if (name.rfind("patchface.", 0) == 0) { return patchBank.faceState(name.substr(10), out); }
         // wf.<what> (lane B): the waterfall's and the readouts' read-backs
         if (name.rfind("wf.", 0) == 0) {
             const std::string what = name.substr(3);

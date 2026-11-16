@@ -3131,6 +3131,7 @@
   "The restart did not finish within 45 seconds.": "Uudelleenkäynnistys ei valmistunut 45 sekunnissa.",
   "The restart ended with exit code %lu.": "Uudelleenkäynnistys päättyi paluukoodiin %lu.",
   "The rows will join the preset \"%s\".": "Rivit lisätään esiasetukseen \"%s\".",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "Käynnissä oleva patch käyttää radiota, joten vastaanotin on signaaligeneraattorissa, kunnes patch pysäytetään.",
   "The same data on a 3D view you can turn": "Samat tiedot käännettävässä 3D-näkymässä",
   "The scope needs the receiver's position first.": "Tutkanäyttö tarvitsee ensin vastaanottimen sijainnin.",
   "The scope needs the receiver's position.": "Tutkanäyttö tarvitsee vastaanottimen sijainnin.",

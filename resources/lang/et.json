@@ -3131,6 +3131,7 @@
   "The restart did not finish within 45 seconds.": "Taaskäivitus ei lõppenud 45 sekundi jooksul.",
   "The restart ended with exit code %lu.": "Taaskäivitus lõppes väljumiskoodiga %lu.",
   "The rows will join the preset \"%s\".": "Read lisatakse eelsättele \"%s\".",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "Töötav patch kasutab raadiot, seepärast on vastuvõtja signaaligeneraatoril, kuni patch peatatakse.",
   "The same data on a 3D view you can turn": "Samad andmed pööratavas 3D-vaates",
   "The scope needs the receiver's position first.": "Radariekraan vajab esmalt vastuvõtja asukohta.",
   "The scope needs the receiver's position.": "Radariekraan vajab vastuvõtja asukohta.",

@@ -22,6 +22,7 @@
 #include "core/receiver_tables.hpp"
 #include "core/tune_control.hpp"
 #include "core/utf8_text.hpp"
+#include "gui/patch_scope_math.hpp"
 
 namespace foxsdr::slintpatch {
 
@@ -1301,6 +1302,53 @@ void PatchPage::readingOf(const pc::Node& n, std::string& reading, int& tone, st
     }
 }
 
+SpectrumSlice spectrumSliceOf(const pc::Graph& g, pc::NodeId display, const PatchLists& lists) {
+    SpectrumSlice s;
+    const pc::Node* feeder = nullptr;
+    for (const pc::Wire& w : g.wires()) {
+        if (w.to == display) {
+            feeder = g.find(w.from);
+            break;
+        }
+    }
+    // OFF ITS OWN RADIO (0.99.17): the radio this part hangs off, not the receiver's.
+    s.radio = pc::radioOf(g, display);
+    const auto rrun = lists.radios.find(s.radio);
+    s.radio_open = rrun != lists.radios.end() && rrun->second.open;
+    s.rate_hz = s.radio_open ? rrun->second.rate_hz : 0.0;
+    if (feeder != nullptr && feeder->kind == pc::NodeKind::Radio && s.rate_hz > 0.0) {
+        s.wired = true;
+        s.lo_hz = -0.5 * s.rate_hz;
+        s.hi_hz = 0.5 * s.rate_hz;
+    } else if (feeder != nullptr && feeder->kind == pc::NodeKind::Channel) {
+        if (const pc::ChannelPlan* cp = pc::findChannel(lists.plan, feeder->id)) {
+            s.wired = true;
+            s.channel = true;
+            s.lo_hz = cp->offsetHz - 0.5 * cp->outRateHz;
+            s.hi_hz = cp->offsetHz + 0.5 * cp->outRateHz;
+        }
+    }
+    return s;
+}
+
+std::vector<SpectrumMarker> spectrumMarkersOf(const pc::Graph& g, pc::NodeId display, const PatchLists& lists, const SpectrumSlice& slice) {
+    std::vector<SpectrumMarker> out;
+    if (!slice.wired) { return out; }
+    if (slice.channel) {
+        out.push_back(SpectrumMarker{0.5f, std::string()});
+        return out;
+    }
+    (void)display;
+    for (const pc::ChannelPlan& cp : lists.plan.channels) {
+        if (cp.radio != slice.radio) { continue; }   // another radio's band
+        const float x = cascade::gui::patch::markerX(cp.offsetHz, slice.lo_hz, slice.hi_hz, 1.0f);
+        if (x < 0.0f) { continue; }
+        const pc::Node* ch = g.find(cp.node);
+        out.push_back(SpectrumMarker{x, ch != nullptr ? ch->name : std::string()});
+    }
+    return out;
+}
+
 FaceModel PatchPage::faceOf(const pc::Node& n) const {
     FaceModel f;
     const pc::Graph& g = draft_.graph();
@@ -1375,28 +1423,11 @@ FaceModel PatchPage::faceOf(const pc::Node& n) const {
             break;
         }
         case pc::NodeKind::Display: {
-            // The deferred face: its two sentences when they apply, and the plate otherwise.
-            const pc::Node* feeder = nullptr;
-            for (const pc::Wire& w : g.wires()) {
-                if (w.to == n.id) {
-                    feeder = g.find(w.from);
-                    break;
-                }
-            }
-            // OFF ITS OWN RADIO (0.99.17): the radio this part hangs off, not the receiver's.
-            const pc::NodeId radioId = pc::radioOf(g, n.id);
-            const auto rrun = lists_.radios.find(radioId);
-            const bool radioOpen = rrun != lists_.radios.end() && rrun->second.open;
-            const double rate = radioOpen ? rrun->second.rate_hz : 0.0;
-            bool ok = false;
-            if (feeder != nullptr && feeder->kind == pc::NodeKind::Radio && rate > 0.0) {
-                ok = true;
-            } else if (feeder != nullptr && feeder->kind == pc::NodeKind::Channel && pc::findChannel(lists_.plan, feeder->id) != nullptr) {
-                ok = true;
-            }
-            if (!ok) {
+            // THE SPECTRUM FACE: the window's two sentences when they apply, and the live trace and waterfall (drawn from the publisher's images) once the radio's frame is there.
+            const SpectrumSlice s = spectrumSliceOf(g, n.id, lists_);
+            if (!s.wired) {
                 f.lines.push_back(fl(tr("Wire the radio or a channel here to see its spectrum."), kToneMuted));
-            } else if (!radioOpen) {
+            } else if (!s.radio_open || !spectrumHave(s.radio)) {
                 f.lines.push_back(fl(tr("No spectrum yet - its radio is not running."), kToneMuted));
             }
             break;

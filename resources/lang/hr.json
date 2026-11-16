@@ -3131,6 +3131,7 @@
   "The restart did not finish within 45 seconds.": "Ponovno pokretanje nije završilo unutar 45 sekundi.",
   "The restart ended with exit code %lu.": "Ponovno pokretanje završilo je s izlaznim kodom %lu.",
   "The rows will join the preset \"%s\".": "Reci će se pridružiti predlošku „%s“.",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "Pokrenuti patch koristi radio, pa je prijemnik na generatoru signala dok se patch ne zaustavi.",
   "The same data on a 3D view you can turn": "Isti podaci u 3D prikazu koji možete okretati",
   "The scope needs the receiver's position first.": "Radarski zaslon najprije treba položaj prijamnika.",
   "The scope needs the receiver's position.": "Radarski zaslon treba položaj prijamnika.",

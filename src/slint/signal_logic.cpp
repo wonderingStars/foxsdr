@@ -962,6 +962,10 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
                                             restoreKeepLabel.c_str()),
                              true});
         }
+        if (patchRunning && !o.patch_held.empty()) {
+            // The patch has borrowed the radio: say why the receiver sits on the signal generator.
+            paras.push_back({tr("The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped."), false});
+        }
         std::vector<std::string> texts;
         bool anyWarn = false;
         for (const Para& p : paras) {

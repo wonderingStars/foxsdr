@@ -3131,6 +3131,7 @@
   "The restart did not finish within 45 seconds.": "다시 시작이 45초 안에 끝나지 않았습니다.",
   "The restart ended with exit code %lu.": "다시 시작이 종료 코드 %lu(으)로 끝났습니다.",
   "The rows will join the preset \"%s\".": "행이 프리셋 \"%s\"에 추가됩니다.",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "실행 중인 패치가 라디오를 사용하고 있으므로 패치를 중지할 때까지 수신기는 신호 발생기를 사용합니다.",
   "The same data on a 3D view you can turn": "돌려볼 수 있는 3D 보기로 보는 같은 데이터",
   "The scope needs the receiver's position first.": "스코프를 쓰려면 먼저 수신기 위치가 필요합니다.",
   "The scope needs the receiver's position.": "스코프를 쓰려면 수신기 위치가 필요합니다.",

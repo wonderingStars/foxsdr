@@ -3131,6 +3131,7 @@
   "The restart did not finish within 45 seconds.": "Restartēšana netika pabeigta 45 sekunžu laikā.",
   "The restart ended with exit code %lu.": "Restartēšana beidzās ar izejas kodu %lu.",
   "The rows will join the preset \"%s\".": "Rindas tiks pievienotas priekšiestatījumam „%s”.",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "Darbojošais patch izmanto radio, tāpēc uztvērējs darbojas ar signāla ģeneratoru, līdz patch tiek apturēts.",
   "The same data on a 3D view you can turn": "Tie paši dati 3D skatā, ko var pagriezt",
   "The scope needs the receiver's position first.": "Radara ekrānam vispirms vajadzīga uztvērēja pozīcija.",
   "The scope needs the receiver's position.": "Radara ekrānam vajadzīga uztvērēja pozīcija.",

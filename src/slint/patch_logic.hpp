@@ -26,8 +26,8 @@
 //  3. RESTORE runs at the first tick after the first valid look whether or not the page is showing (the engine must hold the document before START); the SEED runs only while the
 //     page is showing, as the window's drawPatchView does. A restore the session would not take is tried again next tick; a text that does not parse is given up (seeded stays false).
 //  4. PRESETS: nothing about a preset is logged. A load outside the engine's reach (the STOP the session would not take) is "not a patch" in the note, as the window words it.
-//  5. THE DISPLAY FACE (deferred) says "No spectrum yet - its radio is not running." when its feeder is a planned Channel or a running Radio and the node's radio row is not open
-//     (the contract's rule); the window says it when no spectrum frame has arrived.
+//  5. THE DISPLAY FACE says "No spectrum yet - its radio is not running." when its feeder is a planned Channel or a running Radio and no spectrum frame of the node's radio has arrived
+//     (the window's rule: the publisher says which radios have one, setSpectrumHave); the face is live (patch_faces.hpp, docs/multi-radio-records/patch-faces.md) once one has.
 //  6. THE REFUSAL CLOCK is the tick counter (kRefusalTicks = 76 at the 33 ms tick = 2.5 s); the host's `now` is the number of tick() calls.
 //  7. The seam to the settings file is PatchConfig (patch(), presets(), previous(), savePatch(), savePresets()): the publisher implements it over HostDuties::interfaceHalf() /
 //     saveInterfaceHalf() (half.patch, half.patchPresets, half.patchPresetPrevious - all Interface-half fields, core/config_halves.hpp).
@@ -44,6 +44,7 @@
 #include <deque>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -337,6 +338,27 @@ struct LiveRow {
     std::string name, detail;
 };
 std::vector<LiveRow> readLive(TableReader& table);                                            // every tick; it moves no listSeq
+
+// ---- the Spectrum face (docs/multi-radio-records/patch-faces.md; ledger row 1924) ----
+// WHAT A DISPLAY PART SHOWS, from the graph and the lists (drawPatchFaces' NodeKind::Display case): fed from a RADIO, the whole capture (every planned channel of that radio marked and
+// named); fed from a CHANNEL, that channel's slice (offset +- half its output rate), its centre marked. It is the spectrum of the radio the part hangs off (pc::radioOf), not the
+// receiver's: `radio` names that node, and the offsets are from ITS centre. `wired` is the window's `ok`: a Radio feeder whose radio is open at a rate, or a Channel feeder the plan holds.
+struct SpectrumSlice {
+    bool wired = false;
+    bool channel = false;                  // fed from a Channel: a slice, not the whole capture
+    pc::NodeId radio = pc::kNoNode;        // the radio whose frame it reads
+    bool radio_open = false;
+    double rate_hz = 0.0;                  // that radio's capture rate (0 while it is not open)
+    double lo_hz = 0.0, hi_hz = 0.0;       // the slice, offsets from the radio's centre
+};
+SpectrumSlice spectrumSliceOf(const pc::Graph& g, pc::NodeId display, const PatchLists& lists);
+// The marks over the picture: a position 0..1 across the face and a name. From a radio, one per planned channel of that radio that falls inside the slice (the node's name); from a
+// channel, its centre (no name).
+struct SpectrumMarker {
+    float pos = 0.0f;
+    std::string label;
+};
+std::vector<SpectrumMarker> spectrumMarkersOf(const pc::Graph& g, pc::NodeId display, const PatchLists& lists, const SpectrumSlice& slice);
 const LiveRow* liveRow(const std::vector<LiveRow>& rows, int kind, pc::NodeId node);
 
 struct PatchLook {
@@ -595,6 +617,9 @@ public:
     std::vector<PictureWant> picturesToRead() const { return picturesWanted(draft_.graph(), live_, pictures_); }
     void pictureTaken(pc::NodeId node, std::uint64_t imageId) { pictures_[node] = imageId; }
     const std::string& blueprintNote() const { return blueprint_note_; }
+    // THE RADIOS WHOSE SPECTRUM FRAME THE PUBLISHER HAS (read_node_spectrum answered OK): a Spectrum part whose radio is not among them says "No spectrum yet - its radio is not running."
+    void setSpectrumHave(std::set<pc::NodeId> radios) { spectrum_have_ = std::move(radios); }
+    bool spectrumHave(pc::NodeId radio) const { return spectrum_have_.count(radio) != 0u; }
     std::int64_t now() const { return now_; }
 
 private:
@@ -628,6 +653,7 @@ private:
     double centre_hz_ = 0.0, rx_lat_ = 0.0, rx_lon_ = 0.0;
 
     std::map<pc::NodeId, std::string> centre_notes_;
+    std::set<pc::NodeId> spectrum_have_;
     std::map<pc::NodeId, std::uint64_t> pictures_;
     std::string blueprint_note_;
     std::vector<pc::Blueprint> blueprints_;

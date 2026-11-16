@@ -3131,6 +3131,7 @@
   "The restart did not finish within 45 seconds.": "Перезапуск не завершился за 45 секунд.",
   "The restart ended with exit code %lu.": "Перезапуск завершился с кодом выхода %lu.",
   "The rows will join the preset \"%s\".": "Строки будут добавлены в пресет «%s».",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "Работающий патч использует радио, поэтому приёмник работает от генератора сигнала, пока патч не остановлен.",
   "The same data on a 3D view you can turn": "Те же данные в 3D-виде, который можно вращать",
   "The scope needs the receiver's position first.": "Экрану радара сначала нужно местоположение приёмника.",
   "The scope needs the receiver's position.": "Экрану радара нужно местоположение приёмника.",

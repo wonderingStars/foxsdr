@@ -3131,6 +3131,7 @@
   "The restart did not finish within 45 seconds.": "Repornirea nu s-a încheiat în 45 de secunde.",
   "The restart ended with exit code %lu.": "Repornirea s-a încheiat cu codul de ieșire %lu.",
   "The rows will join the preset \"%s\".": "Rândurile se vor alătura presetării „%s”.",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "Patch-ul în execuție folosește radioul, așa că receptorul este pe generatorul de semnal până când patch-ul este oprit.",
   "The same data on a 3D view you can turn": "Aceleași date într-o vedere 3D pe care o poți roti",
   "The scope needs the receiver's position first.": "Ecranul radar are nevoie mai întâi de poziția receptorului.",
   "The scope needs the receiver's position.": "Ecranul radar are nevoie de poziția receptorului.",

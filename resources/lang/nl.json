@@ -3131,6 +3131,7 @@
   "The restart did not finish within 45 seconds.": "De herstart was niet binnen 45 seconden klaar.",
   "The restart ended with exit code %lu.": "De herstart eindigde met afsluitcode %lu.",
   "The rows will join the preset \"%s\".": "De rijen worden toegevoegd aan de preset \"%s\".",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "De draaiende patch gebruikt de radio, dus de ontvanger staat op de signaalgenerator tot de patch wordt gestopt.",
   "The same data on a 3D view you can turn": "Dezelfde gegevens in een 3D-weergave die je kunt draaien",
   "The scope needs the receiver's position first.": "Het radarscherm heeft eerst de positie van de ontvanger nodig.",
   "The scope needs the receiver's position.": "Het radarscherm heeft de positie van de ontvanger nodig.",

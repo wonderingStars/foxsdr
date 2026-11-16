@@ -3131,6 +3131,7 @@
   "The restart did not finish within 45 seconds.": "Рестартирането не завърши в рамките на 45 секунди.",
   "The restart ended with exit code %lu.": "Рестартирането завърши с код за изход %lu.",
   "The rows will join the preset \"%s\".": "Редовете ще се присъединят към пресета „%s“.",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "Работещият патч използва радиото, затова приемникът е на генератора на сигнал, докато патчът не бъде спрян.",
   "The same data on a 3D view you can turn": "Същите данни в 3D изглед, който можете да въртите",
   "The scope needs the receiver's position first.": "Радарният екран първо се нуждае от позицията на приемника.",
   "The scope needs the receiver's position.": "Радарният екран се нуждае от позицията на приемника.",

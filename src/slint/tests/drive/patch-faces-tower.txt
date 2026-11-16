@@ -1,0 +1,20 @@
+#! frames=1000 view=patch size=1500x900 patchdoc=patch-faces-tower.patch FOXSDR_SLINT_PATCH_RUN=1
+# patch-faces-tower (docs/multi-radio-records/patch-faces.md): the shape the "Listen to the tower" Blueprint places (placeListen: a Radio, a Spectrum under it, and per channel a Channel, an AM
+# Demod with the squelch on and a Speaker), with the signal generator as its radio, run. The Blueprint's list rows are a popup that a script cannot click by label, so the document is the
+# Blueprint's own graph written out (same kinds, same wires, same defaults); its Spectrum part must draw, as the plain Spectrum parts of patch-faces do.
+10 state count.patchNodes == 8
++1 click "Fit"
++3 state patchface.s0.live == 0
++1 click "START"
++60 state patchRunning == 1
++60 state patchface.s0.live == 1
+state patchface.s0.sentence == ""
+state patchface.s0.frames > 5
+state patchface.s0.span == 2000000
+state patchface.s0.abovefloor > 20
+state patchface.s0.markers == 2
+state patchface.s0.framesdelta > 0
++1 shot "pf-tower-1.png"
++30 shot "pf-tower-2.png"
++3 state patchface.s0.framesdelta > 5
+state patchface.s0.moved == 1

@@ -269,6 +269,8 @@ int main() {
         const SourceModel mp = readSource(patch.t, patch.s, patch.o);
         CHECK(mp.chip == "ON PATCH" && mp.device_label == "Signal generator - the patch has NESDR SMArt v5");
         CHECK(at(mp.devices, 0).enabled && at(mp.devices, 1).enabled && at(mp.devices, 2).enabled);
+        CHECK(has(mp.advisory, "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped."));
+        CHECK(!has(readSource(kept.t, kept.s, kept.o).advisory, "The running patch is using the radio"));   // no patch, no sentence
         CHECK(!at(mp.devices, 3).enabled && !at(mp.devices, 6).enabled && has(at(mp.devices, 3).tooltip, "The patch is running and has the radios"));
     }
 

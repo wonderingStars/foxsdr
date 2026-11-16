@@ -1,0 +1,11 @@
+foxsdr-patch 6
+view 0 0 1
+node 1 0 0 40 40 232 128 100000000 0 - siggen 2000000 0 0 1 Radio
+node 2 4 0 40 190 300 188 0 0 - - 0 0 0 1 Radio spectrum
+node 3 1 0 380 40 232 104 100300000 0 - - 0 0 0 1 Channel
+node 4 4 0 380 190 300 188 0 0 - - 0 0 0 1 Channel spectrum
+node 5 4 0 40 400 300 188 0 0 - - 0 0 0 1 Unwired spectrum
+node 6 6 4 700 40 420 320 0 0 - - 0 0 0 1 Unwired map
+wire 1 0 2 0
+wire 1 0 3 0
+wire 3 0 4 0

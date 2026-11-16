@@ -3131,6 +3131,7 @@
   "The restart did not finish within 45 seconds.": "Paleidimas iš naujo nesibaigė per 45 sekundes.",
   "The restart ended with exit code %lu.": "Paleidimas iš naujo baigėsi išėjimo kodu %lu.",
   "The rows will join the preset \"%s\".": "Eilutės bus pridėtos prie šablono „%s“.",
+  "The running patch is using the radio, so the receiver is on the signal generator until the patch is stopped.": "Veikiantis patch naudoja radiją, todėl imtuvas veikia su signalų generatoriumi, kol patch bus sustabdytas.",
   "The same data on a 3D view you can turn": "Tie patys duomenys 3D rodinyje, kurį galite sukti",
   "The scope needs the receiver's position first.": "Radaro ekranui pirmiausia reikia imtuvo padėties.",
   "The scope needs the receiver's position.": "Radaro ekranui reikia imtuvo padėties.",
