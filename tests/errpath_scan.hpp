@@ -79,6 +79,7 @@ struct Options {
     std::string profile = "engine";            // "engine" or "plugins"
     std::vector<std::string> reporters;        // names of the reporting calls
     int pin = -1;                              // the pinned PENDING count (-1: do not enforce)
+    std::string allowName = "tests/errpath_allow.tsv";   // how the messages name the allow list
 };
 
 struct AllowEntry {
@@ -831,7 +832,7 @@ struct Scanner {
                         int d = 0;
                         for (std::size_t q = b; q < n; ++q) { if (c[q] == '{') { ++d; } else if (c[q] == '}') { if (--d == 0) { close = q; break; } } }
                         if (close != std::string::npos && emptyHandler(c.substr(b + 1, close - b - 1))) {
-                            add(rel, "swallow", i, i, "catch " + skeletonOf(c.substr(k + 1, e - k - 1)));
+                            add(rel, "swallow", i, i, trim("catch " + skeletonOf(c.substr(k + 1, e - k - 1))));
                         }
                     }
                 } else if (call) {
@@ -1168,6 +1169,12 @@ inline bool validReason(const std::string& r) {
     return kCodes.count(r) != 0 || trim(r).size() >= 12;
 }
 
+inline std::string reporterHint(const Options& opt) {
+    std::string h;
+    for (std::size_t i = 0; i < opt.reporters.size() && i < 4; ++i) { h += (i ? " / " : "") + opt.reporters[i]; }
+    return h.empty() ? "see the reporters file" : h + " ...";
+}
+
 inline Result check(const std::vector<Site>& sites, const std::vector<AllowEntry>& allow, const Options& opt) {
     Result r;
     std::map<std::string, const AllowEntry*> byKey;
@@ -1198,8 +1205,8 @@ inline Result check(const std::vector<Site>& sites, const std::vector<AllowEntry
         if (s.reported) { ++r.reported; continue; }
         if (it == byKey.end()) {
             std::string msg = "UNREPORTED ERROR PATH: " + s.file + ", function " + s.function + ", kind " + s.kind + ": " + s.snippet +
-                              "\n    The author must either report it (call noteRecovered / raiseRecovered / noteRadioFail / noteSoundFail or another reporter from tests/errpath_reporters.txt in this function) or"
-                              " add this line to tests/errpath_allow.tsv with the reason it need not be reported:\n    " + s.key + "\tALLOW\t<reason, at least 12 characters>";
+                              "\n    The author must either report it (call one of the reporters, " + reporterHint(opt) + ", in a block that encloses it) or"
+                              " add this line to " + opt.allowName + " with the reason it need not be reported:\n    " + s.key + "\tALLOW\t<reason, at least 12 characters>";
             const auto st = staleTail.find(tail(s.key));
             if (st != staleTail.end()) {
                 msg += "\n    HINT: the allow list has an entry for the same function, kind and text under a different file (" + st->second.substr(0, st->second.find("::")) +

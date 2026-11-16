@@ -110,7 +110,7 @@ src/core/contest_macros.hpp::ContestSession::expand::errassign::the expansion is
 src/core/contest_macros.hpp::ContestSession::expand::errassign::the expansion is too long#2	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/contest_macros.hpp::ContestSession::expand::errassign::the template is too long	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/contest_macros.hpp::ContestSession::expand::errassign::unknown macro token	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
-src/core/crash_upload.cpp::CrashUploader::start::swallow::catch 	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
+src/core/crash_upload.cpp::CrashUploader::start::swallow::catch	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
 src/core/csv_overlay.hpp::StationOverlay::load::errassign::no column named	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/csv_overlay.hpp::StationOverlay::load::errassign::no column named#2	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/csv_overlay.hpp::StationOverlay::load::errassign::the file is empty	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
@@ -127,7 +127,7 @@ src/core/decode_webhook.hpp::send::errassign::no answer	ALLOW	configuration / re
 src/core/decode_webhook.hpp::send::errassign::nothing to send	ALLOW	configuration / request validation text (no failure of a device or output)	seed
 src/core/decode_webhook.hpp::send::errassign::refused plain http is only allowed to this machine use https	PENDING:O-outputs	output failure (a configured output - MQTT, webhook, UDP, rotator, OmniRig, log file - could not send or write: output kind and error class only)	seed
 src/core/decode_webhook.hpp::send::errassign::the url must start with http or https	ALLOW	configuration / request validation text (no failure of a device or output)	seed
-src/core/diag_history.cpp::DiagHistoryCache::refresh::swallow::catch 	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
+src/core/diag_history.cpp::DiagHistoryCache::refresh::swallow::catch	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
 src/core/disk_job.hpp::DiskJob::noteStuck::warn::% has not finished for % s it is waiting on a worker thread	PENDING:F-files	file failure (a save or open is stuck behind a worker: slow or wedged disk; class and seconds bucket only)	seed
 src/core/dsp_benchmark.hpp::demodItem::errassign::e what	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/dsp_benchmark.hpp::fftItem::errassign::e what	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
@@ -174,7 +174,7 @@ src/core/flac_writer.hpp::AsyncRecorder::stop::errassign::lasterror_ empty e las
 src/core/flac_writer.hpp::Writer::fail::errassign::m	ALLOW	detail of a recording take that fails; reported once at the take-ended hook (engine.cpp "recorder: %s ended because %s", group R-record)	seed
 src/core/flac_writer.hpp::Writer::finish::errassign::write failed	ALLOW	detail of a recording take that fails; reported once at the take-ended hook (engine.cpp "recorder: %s ended because %s", group R-record)	seed
 src/core/flac_writer.hpp::Writer::flushBlock::errassign::write failed disk full or file removed	ALLOW	detail of a recording take that fails; reported once at the take-ended hook (engine.cpp "recorder: %s ended because %s", group R-record)	seed
-src/core/foreign_modules.cpp::registerOwnModuleFolder::swallow::catch 	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
+src/core/foreign_modules.cpp::registerOwnModuleFolder::swallow::catch	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
 src/core/frame_timing.cpp::FrameTimer::emit::warn::%	PENDING:reports-not-in-function	survey: REPORTS (noteSlowFrame / frame-timing counts (a measurement line)) but no reporting call encloses the site	seed
 src/core/freq_history.hpp::FreqHistory::fromJson::errassign::m	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/freq_import.cpp::fromForeign::errassign::std move f error	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
@@ -245,7 +245,7 @@ src/core/gps_reader.cpp::GpsReader::run::warn::gps % could not be opened %	PENDI
 src/core/gps_reader.cpp::GpsReader::start::errassign::could not be opened	PENDING:D-gps-serial	device failure (GPS: class only)	seed
 src/core/gps_reader.cpp::GpsReader::start::warn::gps % could not be opened %	PENDING:D-gps-serial	device failure (GPS: class only)	seed
 src/core/gps_reader.cpp::GpsReader::stop::warn::gps % is still being opened by its driver after % ms the rea	PENDING:D-gps-serial	device failure (GPS receiver could not be opened or stopped talking: class only, never the port name)	seed
-src/core/hang_watchdog.cpp::HangWatchdog::recordFreezeKind::swallow::catch 	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
+src/core/hang_watchdog.cpp::HangWatchdog::recordFreezeKind::swallow::catch	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
 src/core/i18n.cpp::addCatalogueImpl::errassign::why	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/i18n.cpp::loadEmbedded::stderr::i#n % %	ALLOW	stderr line in a non-shipping or developer path	seed
 src/core/i18n.cpp::loadEmbedded::stderr::i#n % and % more entries left in english	ALLOW	stderr line in a non-shipping or developer path	seed
@@ -359,7 +359,7 @@ src/core/omnirig_client.hpp::OmniRigClient::setMode::errassign::the rig is not o
 src/core/omnirig_client.hpp::OmniRigClient::setMode::errassign::the rig is transmitting	ALLOW	configuration / request validation text (no failure of a device or output)	seed
 src/core/operating_aids.hpp::BandStacking::setBands::errassign::bad band	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/operating_aids.hpp::BandStacking::setBands::errassign::bad default in band	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
-src/core/os_crash_record.cpp::findOsCrashRecord::swallow::catch 	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
+src/core/os_crash_record.cpp::findOsCrashRecord::swallow::catch	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
 src/core/patch_audio.cpp::DeviceDest::open::errassign::no default sound output was found	PENDING:R-record	output failure (patch speaker WAV writer failed)	seed
 src/core/patch_audio.cpp::DeviceDest::open::errassign::the sound output	PENDING:R-record	output failure (patch speaker WAV writer failed)	seed
 src/core/patch_audio.cpp::Mp3Dest::work::errassign::cannot create the recordings folder	PENDING:R-record	output failure (patch speaker WAV writer failed)	seed
@@ -383,7 +383,7 @@ src/core/patch_presets.cpp::sanitisePatchPresets::log::config patch preset % dro
 src/core/patch_presets.cpp::sanitisePatchPresets::log::config patch preset % dropped its text is not a patch	ALLOW	the user's own saved patch presets sanitised on load; the user is told in the patch page	seed
 src/core/patch_radio.cpp::PatchRadio::start::errassign::no source	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/patch_radio.cpp::PatchRadio::start::errassign::the device would not start streaming	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
-src/core/patch_recordings.cpp::listIqRecordings::swallow::catch 	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
+src/core/patch_recordings.cpp::listIqRecordings::swallow::catch	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
 src/core/patch_recordings.cpp::openIqRecording::errassign::not a recording	ALLOW	detail of a recording take that fails; reported once at the take-ended hook (engine.cpp "recorder: %s ended because %s", group R-record)	seed
 src/core/patch_recordings.cpp::openIqRecording::errassign::the recording would not open	ALLOW	detail of a recording take that fails; reported once at the take-ended hook (engine.cpp "recorder: %s ended because %s", group R-record)	seed
 src/core/phase_clock.hpp::PhaseClock::log::warn::%	PENDING:reports-not-in-function	survey: REPORTS (noteSlowFrame / frame-timing counts (a measurement line)) but no reporting call encloses the site	seed
@@ -414,22 +414,22 @@ src/core/plugin_host.cpp::resolveDuplicatePlugins::errassign::not loaded it decl
 src/core/plugin_host.cpp::resolveDuplicatePlugins::errassign::not loaded its file name is the official plugin	PENDING:reports-not-in-function	survey: REPORTS (notePluginLoadRefused at the refusal) but no reporting call encloses the site	seed
 src/core/plugin_host.cpp::safeQuery::errassign::raised a structured exception code	PENDING:reports-not-in-function	survey: REPORTS (notePluginLoadRefused at the refusal) but no reporting call encloses the site	seed
 src/core/plugin_host.cpp::safeQuery::errassign::threw an exception the plugin is faulty and was not loaded	PENDING:reports-not-in-function	survey: REPORTS (notePluginLoadRefused at the refusal) but no reporting call encloses the site	seed
-src/core/plugin_marker.cpp::CallPhase::CallPhase::swallow::catch 	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
+src/core/plugin_marker.cpp::CallPhase::CallPhase::swallow::catch	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
 src/core/plugin_marker.cpp::Containment::begin::warn::plugins %	PENDING:unsure	UNSURE: unknown text; read plugin_marker.cpp:804/887	seed
 src/core/plugin_marker.cpp::Containment::begin::warn::plugins % % strike % of # %	PENDING:P-plugin	plugin fault (a plugin is suspected of ending the previous run uncleanly; strike recorded, plugin may be switched off: carry plugin id and version only)	seed
 src/core/plugin_marker.cpp::Containment::begin::warn::plugins the last run did not end in order with % in play	PENDING:P-plugin	plugin fault (a plugin is suspected of ending the previous run uncleanly; strike recorded, plugin may be switched off: carry plugin id and version only)	seed
 src/core/plugin_marker.cpp::Containment::persist::warn::plugins %	PENDING:unsure	UNSURE: unknown text; read plugin_marker.cpp:804/887	seed
-src/core/plugin_marker.cpp::clear::swallow::catch 	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
-src/core/plugin_marker.cpp::leaveCall::swallow::catch 	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
+src/core/plugin_marker.cpp::clear::swallow::catch	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
+src/core/plugin_marker.cpp::leaveCall::swallow::catch	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
 src/core/plugin_marker.cpp::loadStore::errassign::the plugin fault record is not readable and was ignored	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
-src/core/plugin_marker.cpp::noteRan::swallow::catch 	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
+src/core/plugin_marker.cpp::noteRan::swallow::catch	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
 src/core/plugin_marker.cpp::open::warn::plugins the crashloop marker could not be kept on disk this	PENDING:P-plugin	plugin fault (the plugin crash-loop guard is not protecting this run)	seed
 src/core/plugin_marker.cpp::open::warn::plugins the crashloop marker could not be pinned in memory i	PENDING:P-plugin	plugin fault (the plugin crash-loop guard is not protecting this run)	seed
-src/core/plugin_marker.cpp::promoteFirstPass::swallow::catch 	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
+src/core/plugin_marker.cpp::promoteFirstPass::swallow::catch	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
 src/core/plugin_marker.cpp::saveStore::errassign::the plugin fault record could not be replaced	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/plugin_marker.cpp::saveStore::errassign::the plugin fault record could not be written	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/plugin_marker.cpp::saveStore::errassign::the plugin fault record could not be written#2	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
-src/core/plugin_marker.cpp::set::swallow::catch 	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
+src/core/plugin_marker.cpp::set::swallow::catch	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
 src/core/plugin_repo.cpp::PluginRepo::applyUpdate::errassign::	PENDING:reports-not-in-function	survey: REPORTS (result text of a catalogue fetch or install; ends in notePluginCatalogueFailed / notePluginInstallFailed (core/plugin_repo.cpp fetchIndex / install)) but no reporting call encloses the site	seed
 src/core/plugin_repo.cpp::PluginRepo::applyUpdate::errassign::update plan for	PENDING:reports-not-in-function	survey: REPORTS (result text of a catalogue fetch or install; ends in notePluginCatalogueFailed / notePluginInstallFailed (core/plugin_repo.cpp fetchIndex / install)) but no reporting call encloses the site	seed
 src/core/plugin_repo.cpp::PluginRepo::fetchIndex::errassign::refusing a nonhttps catalogue url	PENDING:reports-not-in-function	survey: REPORTS (result text of a catalogue fetch or install; ends in notePluginCatalogueFailed / notePluginInstallFailed (core/plugin_repo.cpp fetchIndex / install)) but no reporting call encloses the site	seed
@@ -762,7 +762,7 @@ src/core/scan_aids.hpp::PriorityScanner::setChannels::errassign::a priority freq
 src/core/scan_aids.hpp::PriorityScanner::setChannels::errassign::more than # priority channels	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/scan_plan.hpp::ScanPlan::fail::errassign::m	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/scan_trigger.hpp::ScanTrigger::configFromJson::errassign::m	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
-src/core/sentinel.cpp::armSentinelExitDeadline::swallow::catch 	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
+src/core/sentinel.cpp::armSentinelExitDeadline::swallow::catch	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
 src/core/sentinel_host_win.cpp::startProcess::errassign::getlasterror	PENDING:reports-not-in-function	survey: REPORTS (noteRecovered(SentinelGone)) but no reporting call encloses the site	seed
 src/core/sentinel_host_win.cpp::startProcess::errassign::getlasterror#2	PENDING:reports-not-in-function	survey: REPORTS (noteRecovered(SentinelGone)) but no reporting call encloses the site	seed
 src/core/serial_port.cpp::SerialPort::open::errassign::	ALLOW	configuration / request validation text (no failure of a device or output)	seed
@@ -849,15 +849,15 @@ src/core/sys_reset.cpp::undoReset::errassign::nothing was set aside under that s
 src/core/sys_reset.cpp::undoReset::errassign::the reset folder holds something that is not ours	ALLOW	the user's own settings / bundle / reset action; shown in the dialog	seed
 src/core/sys_reset.cpp::undoReset::errassign::the settings folder is not a folder named foxsdr refusing	ALLOW	the user's own settings / bundle / reset action; shown in the dialog	seed
 src/core/sys_reset.cpp::undoReset::errassign::the stamp is not a plain stamp	ALLOW	the user's own settings / bundle / reset action; shown in the dialog	seed
-src/core/telemetry.cpp::HeartbeatSender::poll::swallow::catch 	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
-src/core/telemetry.cpp::HeartbeatSender::poll::swallow::catch #2	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
-src/core/telemetry.cpp::TelemetryReporter::sendVia::swallow::catch 	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
-src/core/telemetry.cpp::TelemetryReporter::sendVia::swallow::catch #2	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
+src/core/telemetry.cpp::HeartbeatSender::poll::swallow::catch	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
+src/core/telemetry.cpp::HeartbeatSender::poll::swallow::catch#2	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
+src/core/telemetry.cpp::TelemetryReporter::sendVia::swallow::catch	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
+src/core/telemetry.cpp::TelemetryReporter::sendVia::swallow::catch#2	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
 src/core/telemetry.cpp::claimReportSend::errassign::getlasterror	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
-src/core/tester_link_net.cpp::BetaLinkNameSender::send::swallow::catch 	ALLOW	tester programme plumbing, not a user-facing radio path	seed
-src/core/tester_link_net.cpp::BetaMigrationSender::send::swallow::catch 	ALLOW	tester programme plumbing, not a user-facing radio path	seed
-src/core/tester_usage_session.cpp::TesterUsageSender::send::swallow::catch 	ALLOW	tester programme plumbing, not a user-facing radio path	seed
-src/core/tile_cache.hpp::TileCache::scanLocked::swallow::catch 	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
+src/core/tester_link_net.cpp::BetaLinkNameSender::send::swallow::catch	ALLOW	tester programme plumbing, not a user-facing radio path	seed
+src/core/tester_link_net.cpp::BetaMigrationSender::send::swallow::catch	ALLOW	tester programme plumbing, not a user-facing radio path	seed
+src/core/tester_usage_session.cpp::TesterUsageSender::send::swallow::catch	ALLOW	tester programme plumbing, not a user-facing radio path	seed
+src/core/tile_cache.hpp::TileCache::scanLocked::swallow::catch	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
 src/core/transmitter.cpp::Transmitter::keyDownLocked::seterr::sink_ lasterror	PENDING:T-tx	output failure (transmit state machine error text)	seed
 src/core/transmitter.cpp::Transmitter::keyDownLocked::seterr::sink_ lasterror#2	PENDING:T-tx	output failure (transmit state machine error text)	seed
 src/core/transmitter.cpp::Transmitter::keyDownLocked::seterr::there is no transmitter open	PENDING:T-tx	output failure (transmit state machine error text)	seed
@@ -886,7 +886,7 @@ src/core/updater.cpp::parseUpdateManifest::errassign::the update service named n
 src/core/updater.cpp::parseUpdateManifest::errassign::the update service returned something that is not json	PENDING:reports-not-in-function	survey: REPORTS (updater result text; failures end in noteUpdate*Failed) but no reporting call encloses the site	seed
 src/core/updater.cpp::unwrapSignedManifest::errassign::the update information is not signed by foxsdr	PENDING:reports-not-in-function	survey: REPORTS (updater result text; failures end in noteUpdate*Failed) but no reporting call encloses the site	seed
 src/core/updater.cpp::unwrapSignedManifest::warn::update the manifest signature check refused the answer %	PENDING:reports-not-in-function	survey: REPORTS (noteUpdateCheckFailed / noteUpdateVerifyFailed at the check result) but no reporting call encloses the site	seed
-src/core/updater.hpp::AbandonableTask::reap::swallow::catch 	PENDING:unsure	UNSURE: swallowed exception, class not decided	seed
+src/core/updater.hpp::AbandonableTask::reap::swallow::catch	PENDING:unsure	UNSURE: swallowed exception, class not decided	seed
 src/core/websdr_link.cpp::buildLink::errassign::an address with a user name or password is not accepted	ALLOW	configuration / request validation text (no failure of a device or output)	seed
 src/core/websdr_link.cpp::buildLink::errassign::frequency must be above # and at most # khz	ALLOW	configuration / request validation text (no failure of a device or output)	seed
 src/core/websdr_link.cpp::buildLink::errassign::only http and https addresses are accepted	ALLOW	configuration / request validation text (no failure of a device or output)	seed
@@ -1050,8 +1050,8 @@ src/engine/engine.cpp::Engine::startAudioRecording::errassign::err	ALLOW	result 
 src/engine/engine.cpp::Engine::startControlThread::warn::engine pass no highresolution timer here falling back to a %	ALLOW	environment note; frame-timing already counts slow frames	seed
 src/engine/engine.cpp::Engine::startIqRecording::errassign::err	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::stopControlThread::warn::engine the control thread did not come back within % ms wait	PENDING:unsure	UNSURE: exit-time wait; is the thread-beat watchdog (ThreadWedge) armed at stop? read engine.cpp:11340	seed
-src/engine/engine.cpp::drainDeviceOpen::swallow::catch 	ALLOW	teardown-time catch-all of a future/thread	seed
-src/engine/engine.cpp::drainSoapyScan::swallow::catch 	ALLOW	teardown-time catch-all of a future/thread	seed
+src/engine/engine.cpp::drainDeviceOpen::swallow::catch	ALLOW	teardown-time catch-all of a future/thread	seed
+src/engine/engine.cpp::drainSoapyScan::swallow::catch	ALLOW	teardown-time catch-all of a future/thread	seed
 src/engine/engine_airspy.cpp::Engine::changeAutoGain::errassign::rx device_ lasterror	ALLOW	engine result text shown to the user	seed
 src/engine/engine_airspy.cpp::Engine::chooseAirspyAgc::errassign::a lasterror	ALLOW	engine result text shown to the user	seed
 src/engine/engine_airspy.cpp::Engine::chooseAirspyDecimation::errassign::a lasterror	ALLOW	engine result text shown to the user	seed
@@ -1150,8 +1150,8 @@ src/engine/fox_engine_api.cpp::ApiHostImpl::applyTestHook::errassign::t	ALLOW	AP
 src/engine/fox_engine_api.cpp::ApiHostImpl::applyTestHook::errassign::t#2	ALLOW	API reply text returned to the caller (the caller shows it)	seed
 src/engine/fox_engine_api.cpp::ApiHostImpl::applyTestHook::errassign::t#3	ALLOW	API reply text returned to the caller (the caller shows it)	seed
 src/engine/fox_engine_api.cpp::ApiHostImpl::txPass::errassign::tx lasterror	ALLOW	API reply text returned to the caller (the caller shows it)	seed
-src/engine/fox_engine_api.cpp::apiCloseSession::swallow::catch 	ALLOW	teardown-time catch-all of a future/thread	seed
-src/engine/fox_engine_api.cpp::apiDestroy::swallow::catch 	ALLOW	teardown-time catch-all of a future/thread	seed
+src/engine/fox_engine_api.cpp::apiCloseSession::swallow::catch	ALLOW	teardown-time catch-all of a future/thread	seed
+src/engine/fox_engine_api.cpp::apiDestroy::swallow::catch	ALLOW	teardown-time catch-all of a future/thread	seed
 src/engine/plugin_ui_port.cpp::PluginUiPortImpl::~PluginUiPortImpl::warn::plugin ui the port was destroyed while still connected its o	ALLOW	programming-contract note (tests cover the order); no user effect	seed
 src/engine/process_boot.cpp::armStopSignals::stderr::foxsdrengine could not install the stop signal handlers only	PENDING:unsure	UNSURE: stderr line in a start-up path: read it	seed
 src/engine/process_boot.cpp::parseFlags::stderr::cascade diagstall requires a duration in ms	ALLOW	command-line / developer output (a console nobody runs the app from; the user chose the flag)	seed
@@ -1286,7 +1286,7 @@ src/engine/wire_c_cat.cpp::CatEmulation::configure::errassign::the port could no
 src/engine/wire_c_ham.cpp::QsoBook::load::errassign::the qso log file cannot be read it was left as it is	ALLOW	API reply text returned to the caller (the caller shows it)	seed
 src/engine/wire_c_net.cpp::RadioInfoFollow::configure::errassign::give the port the logger sends its radio information to	ALLOW	API reply text returned to the caller (the caller shows it)	seed
 src/engine/wire_c_portable.cpp::applyPendingSystemActionsToProcess::stderr::%	ALLOW	stderr line in a non-shipping or developer path	seed
-src/engine/wire_c_portable.cpp::applyPendingSystemActionsToProcess::swallow::catch 	PENDING:unsure	UNSURE: swallowed exception, class not decided	seed
+src/engine/wire_c_portable.cpp::applyPendingSystemActionsToProcess::swallow::catch	PENDING:unsure	UNSURE: swallowed exception, class not decided	seed
 src/engine/wire_c_portable.cpp::applyPortableModeToProcess::stderr::%	ALLOW	stderr line in a non-shipping or developer path	seed
 src/engine/wire_c_power.cpp::Power::keepAwakePass::log::power could not keep the pc awake while recording	PENDING:R-record	recovery (power management: the PC may sleep during a recording / the wake notice is missing)	seed
 src/engine/wire_c_power.cpp::Power::startResumeWatch::log::power the wakefromsleep notice could not be registered	PENDING:R-record	recovery (power management: the PC may sleep during a recording / the wake notice is missing)	seed
@@ -1574,7 +1574,7 @@ src/net/web_server.cpp::WebServer::Impl::start::errassign::d reason	ALLOW	reques
 src/net/web_server.cpp::WebServer::Impl::start::errassign::https	ALLOW	configuration / request validation text (no failure of a device or output)	seed
 src/net/web_server.cpp::WebServer::Impl::start::errassign::the engine has no session to give the web page its session l	ALLOW	configuration / request validation text (no failure of a device or output)	seed
 src/net/web_server.cpp::WebServer::Impl::start::errassign::tlserror	ALLOW	request validation / helper result text returned to the caller; no radio or user output fails here	seed
-src/net/web_server.cpp::WebServer::Impl::start::swallow::catch 	ALLOW	a malformed request or JSON value from the client; the route answers 4xx (WebRoute counts a thrown handler)	seed
+src/net/web_server.cpp::WebServer::Impl::start::swallow::catch	ALLOW	a malformed request or JSON value from the client; the route answers 4xx (WebRoute counts a thrown handler)	seed
 src/net/web_server.cpp::redactForListener::errassign::kowneronly	ALLOW	request validation / helper result text returned to the caller; no radio or user output fails here	seed
 src/net/web_server.cpp::redactForListener::errassign::kowneronly#2	ALLOW	request validation / helper result text returned to the caller; no radio or user output fails here	seed
 src/net/web_server.cpp::redactForListener::errassign::kowneronly#3	ALLOW	request validation / helper result text returned to the caller; no radio or user output fails here	seed
@@ -2352,7 +2352,7 @@ src/source/iq_playback.hpp::WavAudioSource::open::errassign::h error	ALLOW	parse
 src/source/iq_playback.hpp::WavAudioSource::open::errassign::unsupported sample format	ALLOW	parse / validation text in a protocol or file helper; carried upward by the owning source, classified there	seed
 src/source/iq_readers.hpp::IqFileReader::init::errassign::cannot open	ALLOW	parse / validation text in a protocol or file helper; carried upward by the owning source, classified there	seed
 src/source/iq_readers.hpp::fail::errassign::msg	ALLOW	parse / validation text in a protocol or file helper; carried upward by the owning source, classified there	seed
-src/source/iq_readers.hpp::guessFromFileName::swallow::catch 	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
+src/source/iq_readers.hpp::guessFromFileName::swallow::catch	PENDING:unmatched	not in the survey (new code or a text the join could not pair): classify it	seed
 src/source/kiwisdr_source.cpp::KiwiSdrSource::open::seterr::could not connect to the kiwisdr receiver	PENDING:reports-not-in-function	survey: REPORTS (the reason travels in lastError() to the open result: engine noteRadioFail (count only; D4 upgrade)) but no reporting call encloses the site	seed
 src/source/kiwisdr_source.cpp::KiwiSdrSource::open::seterr::sentence	PENDING:reports-not-in-function	survey: REPORTS (the reason travels in lastError() to the open result: engine noteRadioFail (count only; D4 upgrade)) but no reporting call encloses the site	seed
 src/source/kiwisdr_source.cpp::KiwiSdrSource::open::seterr::the kiwisdr receiver connection closed before it could be tu	PENDING:reports-not-in-function	survey: REPORTS (the reason travels in lastError() to the open result: engine noteRadioFail (count only; D4 upgrade)) but no reporting call encloses the site	seed
@@ -2904,7 +2904,7 @@ src/source/soapy_remote_source.cpp::SoapyRemoteSource::start::seterr::the soapyr
 src/source/soapy_remote_source.cpp::SoapyRemoteSource::stop::seterr::stopping the soapyremote stream failed	PENDING:G3-control-refused	control refused (the radio would not take a setting; reported by the engine control hook)	seed
 src/source/soapy_remote_source.cpp::SoapyRemoteSource::teardownLocked::swallow::catch const std exception	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
 src/source/soapy_source.cpp::SoapySource::abandonWedgedDriverLocked::errassign::kabandonedmessage	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
-src/source/soapy_source.cpp::SoapySource::abandonWedgedDriverLocked::swallow::catch 	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
+src/source/soapy_source.cpp::SoapySource::abandonWedgedDriverLocked::swallow::catch	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
 src/source/soapy_source.cpp::SoapySource::abandonWedgedDriverLocked::warn::soapy % did not return within % ms abandoning it rather than	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
 src/source/soapy_source.cpp::SoapySource::activateLocked::seterr::activatestream failed	PENDING:G3-control-refused	control refused (the radio would not take a setting; reported by the engine control hook)	seed
 src/source/soapy_source.cpp::SoapySource::activateLocked::seterr::std move activation message	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	seed
@@ -2914,7 +2914,7 @@ src/source/soapy_source.cpp::SoapySource::activateLocked::warn::soapy % not answ
 src/source/soapy_source.cpp::SoapySource::antennaReadback::seterr::std move w message	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	seed
 src/source/soapy_source.cpp::SoapySource::antennaReadback::seterr::the radios driver is busy or not answering try again	PENDING:G3-control-refused	control refused (the radio would not take a setting; reported by the engine control hook)	seed
 src/source/soapy_source.cpp::SoapySource::closeDevice::errassign::kabandonedmessage	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
-src/source/soapy_source.cpp::SoapySource::closeDevice::swallow::catch 	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
+src/source/soapy_source.cpp::SoapySource::closeDevice::swallow::catch	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
 src/source/soapy_source.cpp::SoapySource::closeDevice::warn::soapy the device driver did not answer within % ms of a clos	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
 src/source/soapy_source.cpp::SoapySource::deactivateLocked::seterr::deactivatestream failed	PENDING:G3-control-refused	control refused (the radio would not take a setting; reported by the engine control hook)	seed
 src/source/soapy_source.cpp::SoapySource::deactivateLocked::seterr::std move job message	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	seed
@@ -2931,7 +2931,7 @@ src/source/soapy_source.cpp::SoapySource::loadedModules::warn::soapy listmodules
 src/source/soapy_source.cpp::SoapySource::moduleSearchPaths::warn::soapy listsearchpaths faulted code #x%	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
 src/source/soapy_source.cpp::SoapySource::noteRead::warn::%	PENDING:G2-stream-health	stream stall (a 60 s health window with read errors, or a gap of 1 s or more; the warning is only logged)	seed
 src/source/soapy_source.cpp::SoapySource::noteVendorFault::errassign::buf	PENDING:unsure	UNSURE: driver error whose class the rule could not tell; read the function	seed
-src/source/soapy_source.cpp::SoapySource::noteVendorFault::swallow::catch 	PENDING:G9-vendor-fault	recovery (a driver exception caught and dropped with no count)	seed
+src/source/soapy_source.cpp::SoapySource::noteVendorFault::swallow::catch	PENDING:G9-vendor-fault	recovery (a driver exception caught and dropped with no count)	seed
 src/source/soapy_source.cpp::SoapySource::noteVendorFault::warn::soapy % faulted inside the device driver code #x% absorbed t	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
 src/source/soapy_source.cpp::SoapySource::open::seterr::args	PENDING:reports-not-in-function	survey: REPORTS (the reason travels in lastError() to the open result: engine noteRadioFail (count only; D4 upgrade)) but no reporting call encloses the site	seed
 src/source/soapy_source.cpp::SoapySource::open::seterr::device has no rx channels args	PENDING:reports-not-in-function	survey: REPORTS (the reason travels in lastError() to the open result: engine noteRadioFail (count only; D4 upgrade)) but no reporting call encloses the site	seed
@@ -2944,17 +2944,17 @@ src/source/soapy_source.cpp::SoapySource::open::seterr::soapysdrdevicemake retur
 src/source/soapy_source.cpp::SoapySource::open::seterr::soapysdrs audio driver lists sound cards not radios and is n	PENDING:reports-not-in-function	survey: REPORTS (the reason travels in lastError() to the open result: engine noteRadioFail (count only; D4 upgrade)) but no reporting call encloses the site	seed
 src/source/soapy_source.cpp::SoapySource::open::seterr::the device was closed while it was still opening pick the so	PENDING:reports-not-in-function	survey: REPORTS (the reason travels in lastError() to the open result: engine noteRadioFail (count only; D4 upgrade)) but no reporting call encloses the site	seed
 src/source/soapy_source.cpp::SoapySource::open::seterr::the previous devices driver is busy or not answering try aga	PENDING:reports-not-in-function	survey: REPORTS (the reason travels in lastError() to the open result: engine noteRadioFail (count only; D4 upgrade)) but no reporting call encloses the site	seed
-src/source/soapy_source.cpp::SoapySource::open::swallow::catch 	PENDING:G9-vendor-fault	recovery (a driver exception caught and dropped with no count)	seed
+src/source/soapy_source.cpp::SoapySource::open::swallow::catch	PENDING:G9-vendor-fault	recovery (a driver exception caught and dropped with no count)	seed
 src/source/soapy_source.cpp::SoapySource::read::errassign::device delivered nonfinite samples that block was replaced w	PENDING:G2-stream-health	stream stall / device dead (reader-side failure)	seed
 src/source/soapy_source.cpp::SoapySource::read::errassign::readstream failed	PENDING:G2-stream-health	stream stall / device dead (reader-side failure)	seed
 src/source/soapy_source.cpp::SoapySource::read::errassign::readstream failed nonstandard exception	PENDING:G2-stream-health	stream stall / device dead (reader-side failure)	seed
 src/source/soapy_source.cpp::SoapySource::read::errassign::readstream failed#2	PENDING:G2-stream-health	stream stall / device dead (reader-side failure)	seed
 src/source/soapy_source.cpp::SoapySource::read::errassign::the radios driver returned more samples than it was asked fo	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/soapy_source.cpp::SoapySource::read::warn::soapy readstream returned % samples for a request of % the m	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
-src/source/soapy_source.cpp::SoapySource::reapLateCallLocked::swallow::catch 	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
+src/source/soapy_source.cpp::SoapySource::reapLateCallLocked::swallow::catch	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
 src/source/soapy_source.cpp::SoapySource::refuseForLateCallLocked::seterr::latesentence late_ what lategrace_	PENDING:unsure	UNSURE: driver error whose class the rule could not tell; read the function	seed
-src/source/soapy_source.cpp::SoapySource::runtimeAvailable::swallow::catch 	PENDING:G9-vendor-fault	recovery (a driver exception caught and dropped with no count)	seed
-src/source/soapy_source.cpp::SoapySource::runtimeAvailable::swallow::catch #2	PENDING:G9-vendor-fault	recovery (a driver exception caught and dropped with no count)	seed
+src/source/soapy_source.cpp::SoapySource::runtimeAvailable::swallow::catch	PENDING:G9-vendor-fault	recovery (a driver exception caught and dropped with no count)	seed
+src/source/soapy_source.cpp::SoapySource::runtimeAvailable::swallow::catch#2	PENDING:G9-vendor-fault	recovery (a driver exception caught and dropped with no count)	seed
 src/source/soapy_source.cpp::SoapySource::runtimeAvailable::warn::soapy fixing the vendor module search path faulted code #x%	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
 src/source/soapy_source.cpp::SoapySource::setAntenna::seterr::device has no rx antenna called	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/soapy_source.cpp::SoapySource::setAntenna::seterr::setantenna called with no device open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
@@ -2978,7 +2978,7 @@ src/source/soapy_source.cpp::SoapySource::setFrequencyCorrectionPpm::seterr::thi
 src/source/soapy_source.cpp::SoapySource::setGainDb::seterr::setgaindb called with no device open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/soapy_source.cpp::SoapySource::setGainDb::seterr::std move g message	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	seed
 src/source/soapy_source.cpp::SoapySource::setGainDb::seterr::the radios driver is busy or not answering try again	PENDING:G3-control-refused	control refused (the radio would not take a setting; reported by the engine control hook)	seed
-src/source/soapy_source.cpp::SoapySource::setGainDb::swallow::catch 	PENDING:G9-vendor-fault	recovery (a driver exception caught and dropped with no count)	seed
+src/source/soapy_source.cpp::SoapySource::setGainDb::swallow::catch	PENDING:G9-vendor-fault	recovery (a driver exception caught and dropped with no count)	seed
 src/source/soapy_source.cpp::SoapySource::setSampleRateHz::seterr::and the stream could not be restarted	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/soapy_source.cpp::SoapySource::setSampleRateHz::seterr::sample rate changed to	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/soapy_source.cpp::SoapySource::setSampleRateHz::seterr::sample rate not changed	ALLOW	range / capability / validation text for the user's own request (no failure wording)	seed
@@ -2989,15 +2989,15 @@ src/source/soapy_source.cpp::SoapySource::setSampleRateHz::seterr::the radios dr
 src/source/soapy_source.cpp::SoapySource::setSampleRateHz::seterr::the stream is still running at	ALLOW	range / capability / validation text for the user's own request (no failure wording)	seed
 src/source/soapy_source.cpp::SoapySource::start::seterr::start called with no device open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/soapy_source.cpp::SoapySource::start::seterr::the radios driver is busy or not answering try again	PENDING:reports-not-in-function	survey: REPORTS (the reason travels in lastError() to the open result: engine noteRadioFail (count only; D4 upgrade)) but no reporting call encloses the site	seed
-src/source/soapy_source.cpp::SoapySource::start::swallow::catch 	PENDING:G9-vendor-fault	recovery (a driver exception caught and dropped with no count)	seed
+src/source/soapy_source.cpp::SoapySource::start::swallow::catch	PENDING:G9-vendor-fault	recovery (a driver exception caught and dropped with no count)	seed
 src/source/soapy_source.cpp::SoapySource::stop::errassign::kabandonedmessage	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
-src/source/soapy_source.cpp::SoapySource::stop::swallow::catch 	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
+src/source/soapy_source.cpp::SoapySource::stop::swallow::catch	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
 src/source/soapy_source.cpp::SoapySource::stop::warn::soapy the device driver did not answer within % ms of a stop	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
-src/source/soapy_source.cpp::SoapySource::teardownLocked::swallow::catch 	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
-src/source/soapy_source.cpp::SoapySource::teardownLocked::swallow::catch #2	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
+src/source/soapy_source.cpp::SoapySource::teardownLocked::swallow::catch	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
+src/source/soapy_source.cpp::SoapySource::teardownLocked::swallow::catch#2	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
 src/source/soapy_source.cpp::SoapySource::teardownLocked::warn::soapy releasing a device whose driver already faulted the ha	PENDING:reports-not-in-function	survey: REPORTS (vendor fault / abandoned call: counted as recovered.vendorcall / srcthread (RecoveryWatch) -- except the module-search/enumerate "faulted" lines (see next rule)) but no reporting call encloses the site	seed
 src/source/soapy_source.cpp::SoapySource::unloadModulesRegistering::errassign::soapysdr unloadmodule path	PENDING:unsure	UNSURE: driver error whose class the rule could not tell; read the function	seed
-src/source/soapy_source.cpp::SoapySource::unloadModulesRegistering::swallow::catch 	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
+src/source/soapy_source.cpp::SoapySource::unloadModulesRegistering::swallow::catch	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
 src/source/soapy_source.cpp::SoapySource::unloadModulesRegistering::warn::soapy no thread for unloading the % module left loaded	PENDING:G9-vendor-fault	recovery (a SoapySDR module could not be unloaded: stays loaded)	seed
 src/source/soapy_source.cpp::SoapySource::unloadModulesRegistering::warn::soapy unloading a module failed %	PENDING:G9-vendor-fault	recovery (a SoapySDR module could not be unloaded: stays loaded)	seed
 src/source/soapy_source.cpp::SoapySource::unloadModulesRegistering::warn::soapy unloading the % module did not finish within % ms left	PENDING:G9-vendor-fault	recovery (a SoapySDR module could not be unloaded: stays loaded)	seed
@@ -3051,12 +3051,12 @@ src/source/tuner_r82xx.cpp::TunerR82xx::setPll::errassign::the tuners pll did no
 src/source/tuner_r82xx.cpp::TunerR82xx::setTvStandard::errassign::the tuners pll would not lock for its filter calibration	PENDING:G3-control-refused	control refused (the radio would not take a setting; reported by the engine control hook)	seed
 src/source/tuner_r82xx.cpp::TunerR82xx::write::errassign::the tuner stopped answering on the i#c bus	PENDING:G3-control-refused	control refused (the radio would not take a setting; reported by the engine control hook)	seed
 src/source/tuner_r82xx.cpp::TunerR82xx::writeMask::errassign::a tuner register outside the shadow was masked	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
-src/source/vendor_apartment.cpp::trampoline::swallow::catch 	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
+src/source/vendor_apartment.cpp::trampoline::swallow::catch	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
 src/source/vendor_lib.cpp::Library::open::errassign::getlasterror	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	seed
 src/source/wav_meta.hpp::readWavMeta::errassign::cannot open the file	ALLOW	parse / validation text in a protocol or file helper; carried upward by the owning source, classified there	seed
 src/source/wav_meta.hpp::readWavMeta::errassign::msg	ALLOW	parse / validation text in a protocol or file helper; carried upward by the owning source, classified there	seed
 src/source/websocket_client.hpp::FrameParser::fail::errassign::why	PENDING:unsure	UNSURE: driver error whose class the rule could not tell; read the function	seed
-src/usb/bounded_walk.hpp::walkWorker::swallow::catch 	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
+src/usb/bounded_walk.hpp::walkWorker::swallow::catch	ALLOW	teardown-time catch-all: a vendor exception while closing; the close paths are counted by CloseLeak/ReaderLeak/VendorCall	seed
 src/usb/usb_fake.hpp::FakeUsbDevice::beginBulkStream::errassign::fake illegal bulk ring	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
 src/usb/usb_fake.hpp::FakeUsbDevice::beginBulkStream::errassign::fake the bulk pipe would not start	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
 src/usb/usb_fake.hpp::FakeUsbDevice::beginIsoStream::errassign::fake endpoint is not an isochronous in endpoint	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
