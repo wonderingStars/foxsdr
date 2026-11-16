@@ -1,0 +1,1 @@
+{"schemaVersion": 1, "plugins": [{"id": "aprs-decoder", "name": "APRS / AX.25 Packet Decoder", "version": "1.0.3", "file": "aprs-decoder-1.0.3-abi3-linux-x64.so", "sha256": "4581ee8b10c8664f44b180638e7a8957b792a03d8accbd085747811722c60091", "abiVersion": 3, "installedAt": 1762128000}], "policies": []}

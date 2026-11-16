@@ -1,0 +1,63 @@
+#!/bin/sh
+# foxsdr - the launcher of the Linux tarball and the AppImage: the NEW window by default, Legacy (the old window, the `cascade` program) on request or when the new one cannot run.
+# The mirror of the Windows installer's choice (installer/cascade.iss, SlintIsApp): the new window is the product, `cascade` stays beside it as Legacy.
+#
+#   foxsdr [arguments]            the new window (foxsdr-slint), every argument passed through
+#   foxsdr --legacy [arguments]   Legacy; the word is removed, every other argument passed through
+#   FOXSDR_WINDOW=legacy foxsdr   the same, for a launcher entry that cannot take an argument
+#
+# Legacy is also started, with the reason on standard error, when
+#   - there is neither DISPLAY nor WAYLAND_DISPLAY (the new window would have nowhere to open; --version, --help and --selftest need no display and stay with the new window),
+#   - foxsdr-slint is not in this folder or its --version does not run (a missing library: the loader's own message is the reason),
+#   - the session is X11 and the library libxkbcommon-x11, which the new window's toolkit loads when it opens a window, is not installed.
+# Nothing else is decided here: no library path is changed, and a window that starts and then fails is the program's own error, not hidden by a second program.
+#
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+HERE="$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)"
+
+# legacy REASON [arguments]: say why on standard error, then become Legacy
+legacy() {
+    reason="$1"
+    shift
+    if [ ! -x "$HERE/cascade" ]; then
+        echo "foxsdr: $reason, and Legacy (cascade) is not in $HERE either" >&2
+        exit 1
+    fi
+    echo "foxsdr: starting Legacy: $reason" >&2
+    exec "$HERE/cascade" "$@"
+}
+
+case "${FOXSDR_WINDOW:-}" in
+    legacy | Legacy | LEGACY) legacy "asked for (FOXSDR_WINDOW=legacy)" "$@" ;;
+esac
+if [ "${1:-}" = "--legacy" ]; then
+    shift
+    legacy "asked for (--legacy)" "$@"
+fi
+
+# a tool mode needs no display and no window library: it stays with the new window
+tool_mode=0
+case "${1:-}" in
+    --version | --help | -h | --selftest) tool_mode=1 ;;
+esac
+
+if [ "$tool_mode" = 0 ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    legacy "no display (neither DISPLAY nor WAYLAND_DISPLAY is set)" "$@"
+fi
+if [ ! -x "$HERE/foxsdr-slint" ]; then
+    legacy "the new window (foxsdr-slint) is not in $HERE" "$@"
+fi
+if ! probe="$("$HERE/foxsdr-slint" --version 2>&1)"; then
+    legacy "the new window does not start ($(printf '%s' "$probe" | head -n 1))" "$@"
+fi
+# an X11 session: the toolkit opens libxkbcommon-x11 only when it makes its window, so --version cannot show that it is missing
+if [ "$tool_mode" = 0 ] && [ -z "${WAYLAND_DISPLAY:-}" ] && [ -n "${DISPLAY:-}" ]; then
+    ldc=""
+    for c in ldconfig /sbin/ldconfig /usr/sbin/ldconfig; do
+        if command -v "$c" >/dev/null 2>&1; then ldc="$c"; break; fi
+    done
+    if [ -n "$ldc" ] && ! "$ldc" -p 2>/dev/null | grep -q 'libxkbcommon-x11\.so'; then
+        legacy "the new window needs libxkbcommon-x11 under X11 and it is not installed (Ubuntu and Debian: libxkbcommon-x11-0)" "$@"
+    fi
+fi
+exec "$HERE/foxsdr-slint" "$@"

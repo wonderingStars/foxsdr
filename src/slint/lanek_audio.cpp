@@ -3,8 +3,14 @@
 #include "lanek_audio.hpp"
 
 #include <array>
+#include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
+
+#if defined(__linux__)
+#include <alsa/asoundlib.h>
+#endif
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -133,6 +139,80 @@ std::unique_ptr<acc::Speaker> makeDeviceSpeaker() {
     if (!s->ok()) { return nullptr; }
     return s;
 }
+#elif defined(__linux__)
+// ALSA, as the engine's own sound output reaches it: the PCM named by FOXSDR_ALSA_DEVICE (a test names a file-writing one), else "default" (PulseAudio, PipeWire and dmix all answer to it).
+// Non-blocking, no thread of its own, as the Windows path: each tick writes the blocks the device has room for.
+struct ToneOut::Impl {
+    static constexpr unsigned kRate = 22050;
+    static constexpr snd_pcm_uframes_t kBlockFrames = kRate / 20;   // 50 ms
+    static constexpr int kBlocks = 4;
+    snd_pcm_t* pcm = nullptr;
+    acc::ToneRenderer renderer{static_cast<float>(kRate)};
+    std::vector<float> scratch;
+    std::vector<short> pcmOut;
+    std::string error;
+    bool open = false;
+};
+
+ToneOut::ToneOut() : p_(std::make_unique<Impl>()) {}
+ToneOut::~ToneOut() { stop(); }
+
+bool ToneOut::start() {
+    Impl& I = *p_;
+    if (I.open) { return true; }
+    const char* env = std::getenv("FOXSDR_ALSA_DEVICE");
+    const std::string device = (env != nullptr && env[0] != '\0') ? env : "default";
+    int rc = snd_pcm_open(&I.pcm, device.c_str(), SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
+    if (rc < 0) { I.error = std::string("no sound output could be opened: ") + snd_strerror(rc); I.pcm = nullptr; return false; }
+    rc = snd_pcm_set_params(I.pcm, SND_PCM_FORMAT_S16_LE, SND_PCM_ACCESS_RW_INTERLEAVED, 2, Impl::kRate, 1 /* let ALSA resample */, 200000 /* us of buffer */);
+    if (rc < 0) {
+        I.error = std::string("the sound output refused 22.05 kHz stereo: ") + snd_strerror(rc);
+        snd_pcm_close(I.pcm);
+        I.pcm = nullptr;
+        return false;
+    }
+    I.scratch.assign(static_cast<std::size_t>(Impl::kBlockFrames) * 2, 0.0f);
+    I.pcmOut.assign(static_cast<std::size_t>(Impl::kBlockFrames) * 2, 0);
+    I.open = true;
+    return true;
+}
+
+void ToneOut::stop() {
+    Impl& I = *p_;
+    if (!I.open) { return; }
+    snd_pcm_drop(I.pcm);
+    snd_pcm_close(I.pcm);
+    I.pcm = nullptr;
+    I.open = false;
+}
+
+bool ToneOut::running() const { return p_->open; }
+const std::string& ToneOut::lastError() const { return p_->error; }
+
+void ToneOut::feed(const acc::ToneParams& params) {
+    Impl& I = *p_;
+    if (!I.open) { return; }
+    for (int block = 0; block < Impl::kBlocks; ++block) {
+        const snd_pcm_sframes_t room = snd_pcm_avail_update(I.pcm);
+        if (room == -EPIPE) { snd_pcm_prepare(I.pcm); continue; }   // an underrun: the tick was late; start the stream again
+        if (room < static_cast<snd_pcm_sframes_t>(Impl::kBlockFrames)) { return; }   // the device is full (or the call failed): the next tick
+        I.renderer.render(params, static_cast<std::size_t>(Impl::kBlockFrames), I.scratch.data());
+        for (std::size_t i = 0; i < I.scratch.size(); ++i) {
+            float v = I.scratch[i];
+            v = v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
+            I.pcmOut[i] = static_cast<short>(v * 32000.0f);
+        }
+        const snd_pcm_sframes_t wrote = snd_pcm_writei(I.pcm, I.pcmOut.data(), Impl::kBlockFrames);
+        if (wrote == -EPIPE || wrote == -ESTRPIPE) { snd_pcm_prepare(I.pcm); }
+        else if (wrote < 0) {
+            I.error = std::string("the sound output failed: ") + snd_strerror(static_cast<int>(wrote));
+            stop();   // the device is closed, so running() is false and the window tells the person (lanek_publish.cpp tick)
+            return;
+        }
+    }
+}
+
+std::unique_ptr<acc::Speaker> makeDeviceSpeaker() { return nullptr; }   // no speech engine is part of this build; the tone above is the sound path
 #else
 struct ToneOut::Impl { std::string error = "no sound output on this platform"; };
 ToneOut::ToneOut() : p_(std::make_unique<Impl>()) {}

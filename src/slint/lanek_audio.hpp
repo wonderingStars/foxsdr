@@ -1,6 +1,7 @@
 // lanek_audio.hpp - SCREEN LANE K's TWO SOUND PATHS (docs/multi-radio-records/screen-k.md): the sonification tone and the spoken readout, each on the Windows default output and nowhere else.
 //
-//   ToneOut        a waveOut device fed 50 ms blocks of the access lane's ToneRenderer from the window's tick (no thread of its own: the tick refills the blocks the device has finished).
+//   ToneOut        a waveOut device (Windows) or an ALSA PCM (Linux: FOXSDR_ALSA_DEVICE, else "default"; test_slint_host_toneout measures what it writes to a file-writing PCM) fed 50 ms blocks
+//                  of the access lane's ToneRenderer from the window's tick (no thread of its own: the tick refills the blocks the device has finished). Nobody has listened to the Linux one either.
 //   makeSpeaker    SAPI 5 on the default voice and the default output, asynchronous (the call returns at once; a new utterance may purge the one still speaking).
 //
 // Neither is ever opened in a bounded run or a test (the publisher's `bounded`), and neither is a radio: a screen reader or a tone is the user's own choice, off until switched on.

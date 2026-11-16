@@ -46,6 +46,22 @@
      "url": "https://example.invalid/dl/radar-sweep.dll",
      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
      "sizeBytes": 123456
+    },
+    {
+     "os": "linux",
+     "arch": "x64",
+     "file": "radar-sweep-1.0.0-abi3-linux-x64.so",
+     "url": "https://example.invalid/dl/radar-sweep-linux-x64.so",
+     "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+     "sizeBytes": 123456
+    },
+    {
+     "os": "linux",
+     "arch": "arm64",
+     "file": "radar-sweep-1.0.0-abi3-linux-arm64.so",
+     "url": "https://example.invalid/dl/radar-sweep-linux-arm64.so",
+     "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+     "sizeBytes": 123456
     }
    ],
    "whatsNew": "First release of the sweep."
@@ -69,6 +85,22 @@
      "arch": "x64",
      "file": "plain-decoder-1.0.0-abi3-win-x64.dll",
      "url": "https://example.invalid/dl/plain-decoder.dll",
+     "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+     "sizeBytes": 123456
+    },
+    {
+     "os": "linux",
+     "arch": "x64",
+     "file": "plain-decoder-1.0.0-abi3-linux-x64.so",
+     "url": "https://example.invalid/dl/plain-decoder-linux-x64.so",
+     "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+     "sizeBytes": 123456
+    },
+    {
+     "os": "linux",
+     "arch": "arm64",
+     "file": "plain-decoder-1.0.0-abi3-linux-arm64.so",
+     "url": "https://example.invalid/dl/plain-decoder-linux-arm64.so",
      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
      "sizeBytes": 123456
     }
@@ -115,6 +147,22 @@
      "arch": "x64",
      "file": "aprs-decoder-1.0.3-abi3-win-x64.dll",
      "url": "https://example.invalid/dl/aprs-decoder.dll",
+     "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+     "sizeBytes": 123456
+    },
+    {
+     "os": "linux",
+     "arch": "x64",
+     "file": "aprs-decoder-1.0.3-abi3-linux-x64.so",
+     "url": "https://example.invalid/dl/aprs-decoder-linux-x64.so",
+     "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+     "sizeBytes": 123456
+    },
+    {
+     "os": "linux",
+     "arch": "arm64",
+     "file": "aprs-decoder-1.0.3-abi3-linux-arm64.so",
+     "url": "https://example.invalid/dl/aprs-decoder-linux-arm64.so",
      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
      "sizeBytes": 123456
     }

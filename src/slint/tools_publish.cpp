@@ -3,6 +3,8 @@
 // waits for, the paced Tick all). SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "tools_publish.hpp"
 
+#include "desk_logic.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -253,6 +255,10 @@ void ToolsPublisher::openFolder(const std::string& path) {
     std::filesystem::create_directories(dir, ec);
 #if defined(_WIN32)
     ::ShellExecuteW(nullptr, L"open", dir.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#else
+    std::string why;
+    const std::u8string dirU8 = dir.u8string();
+    if (!foxsdr::slintdesk::openFolder(std::string(dirU8.begin(), dirU8.end()), &why)) { cc::diagLogf("tools: %s", why.c_str()); say(why.c_str()); }
 #endif
 }
 
@@ -286,8 +292,8 @@ void ToolsPublisher::setClipboard(const std::string& text) {
     }
     ::CloseClipboard();
 #else
-    (void)text;
-    say("the clipboard is Windows-only here; nothing copied");
+    std::string why;
+    if (!foxsdr::slintdesk::copyText(text, &why)) { cc::diagLogf("tools: %s", why.c_str()); say(why.c_str()); }
 #endif
 }
 

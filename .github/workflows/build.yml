@@ -30,8 +30,11 @@ on:
   workflow_dispatch:
 
 jobs:
+  # ubuntu-22.04 and not ubuntu-latest: a Linux binary needs the glibc of the system it was BUILT on (the loader refuses "version `GLIBC_2.38' not found"
+  # on an older one), so the x64 release is built on the oldest system we mean to support, 22.04 (glibc 2.35). tools/check-glibc-ceiling.sh, run by the
+  # "Check the tarball" step, holds that line. NOT YET RUN ON A RUNNER (docs/multi-radio-records/linux-local.md section 11).
   linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -61,10 +64,31 @@ jobs:
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
             libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev \
             libasound2-dev libasound2-plugins \
-            xvfb libgl1-mesa-dri
+            xvfb libgl1-mesa-dri \
+            curl libinput10 libxkbcommon-x11-0 libudev1 libgbm1 libfontconfig1 libfreetype6 libdrm2
+
+      # THE NEW WINDOW'S TOOLKIT (docs/multi-radio-records/linux-local.md sections 10 and 11). The prebuilt Slint C++ package for Linux x64, from the project's release page,
+      # pinned by version and by sha256 exactly as the Windows job pins its installer, and refused when the digest differs. Its libslint_cpp.so imports glibc 2.35 at most (measured),
+      # so it meets the ceiling the 22.04 runner sets. libinput10 (above) is a link-time need of that library (its DT_NEEDED) and a run-time need of any machine that runs the window;
+      # libxkbcommon-x11-0 is what the toolkit loads when it opens a window under X11, so the drive tests below need it here. The Royalty-free licence text and the third-party
+      # notices that come with the toolkit travel in the tarball (licenses/slint/).
+      - name: The Slint C++ SDK
+        env:
+          SLINT_SDK_URL: https://github.com/slint-ui/slint/releases/download/v1.18.1/Slint-cpp-1.18.1-Linux-x86_64.tar.gz
+          SLINT_SDK_SHA256: f0b24ea601b80afe241677d1179bf5215dceae529f2b275b678a0af9a144b255
+        run: |
+          set -eu
+          curl -fL -o "$RUNNER_TEMP/slint-sdk.tar.gz" "$SLINT_SDK_URL"
+          echo "$SLINT_SDK_SHA256  $RUNNER_TEMP/slint-sdk.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/slint-sdk"
+          tar -xzf "$RUNNER_TEMP/slint-sdk.tar.gz" -C "$RUNNER_TEMP/slint-sdk"
+          sdk="$(dirname "$(find "$RUNNER_TEMP/slint-sdk" -name SlintConfig.cmake -path '*/lib/cmake/Slint/*' | head -n 1)")"
+          sdk="$(CDPATH= cd -- "$sdk/../../.." && pwd)"
+          test -f "$sdk/lib/libslint_cpp.so"
+          echo "SLINT_SDK=$sdk" >> "$GITHUB_ENV"
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCASCADE_BUILD_SLINT=ON "-DCMAKE_PREFIX_PATH=$SLINT_SDK"
 
       - name: Build
         run: cmake --build build -j"$(nproc)"
@@ -82,7 +106,9 @@ jobs:
       # bare runner has no display at all — GLFW reports "failed to detect any
       # supported platform" and the smoke test cannot start. Xvfb plus Mesa's
       # software renderer means that path is actually exercised here rather
-      # than excluded, which is the whole point of having it.
+      # than excluded, which is the whole point of having it. The same run
+      # carries the new window's tests (ctest -L slint) and its scripted drive
+      # runs (ctest -L drive), which open foxsdr-slint on the virtual display.
       - name: Test
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -97,20 +123,16 @@ jobs:
       - name: Selftest
         run: ./build/cascade --selftest
 
-      # THE TARBALL HOLDS TWO PROGRAMS: cascade (the window application) and foxsdr-engine (the
-      # receiver with no window, for a service or a Raspberry Pi with no desktop - docs/headless-
-      # service.md). Both read resources/bandplans and resources/firmware from BESIDE themselves
-      # (BandPlan::defaultDir and aorFirmwarePath are executable-relative), so the tarball carries
-      # them, laid out the way the AppImage and the Windows installer lay them out. The AppImage
-      # below is untouched: it stays a launcher for the window application.
+      # THE TARBALL HOLDS THE NEW WINDOW AND THREE MORE: foxsdr-slint (the new window, the product) with its toolkit library beside it, `foxsdr` (the launcher: the new
+      # window by default, Legacy on --legacy / FOXSDR_WINDOW=legacy / when the new one cannot run), cascade (Legacy, the old window) and foxsdr-engine (the receiver with no
+      # window, for a service or a Raspberry Pi with no desktop - docs/headless-service.md). All read resources/bandplans and resources/firmware from BESIDE themselves
+      # (BandPlan::defaultDir and aorFirmwarePath are executable-relative), so the tarball carries them, laid out the way the AppImage and the Windows installer lay them out.
+      # The body is tools/package-linux-tarball.sh, so a local run and this step make the same archive.
       - name: Package
         run: |
           version=$(sed -n 's/^project(cascade VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-          mkdir -p "dist/foxsdr-$version-linux-x64/resources/bandplans"
-          cp build/cascade build/foxsdr-engine README.md LICENSE PRIVACY.md "dist/foxsdr-$version-linux-x64/"
-          cp resources/bandplans/*.json "dist/foxsdr-$version-linux-x64/resources/bandplans/"
-          cp -r resources/firmware "dist/foxsdr-$version-linux-x64/resources/"
-          tar -C dist -czf "foxsdr-$version-linux-x64.tar.gz" "foxsdr-$version-linux-x64"
+          bash tools/package-linux-tarball.sh build "$version" x64 dist --slint-sdk "$SLINT_SDK"
+          mv "dist/foxsdr-$version-linux-x64.tar.gz" .
           echo "version=$version" >> "$GITHUB_ENV"
 
       # The tarball is READ BACK before it is uploaded: both binaries and the resources are in it,
@@ -122,7 +144,8 @@ jobs:
       - name: Check the tarball
         run: |
           version=$(sed -n 's/^project(cascade VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-          bash tools/check-linux-tarball.sh "foxsdr-$version-linux-x64.tar.gz" "foxsdr-$version-linux-x64" "$version"
+          bash tools/check-glibc-ceiling.sh --self-test
+          bash tools/check-linux-tarball.sh "foxsdr-$version-linux-x64.tar.gz" "foxsdr-$version-linux-x64" "$version" --glibc-max 2.35
 
       - uses: actions/upload-artifact@v4
         with:
@@ -146,7 +169,7 @@ jobs:
       - name: Build AppImage
         run: |
           sudo apt-get install -y --no-install-recommends squashfs-tools
-          installer/linux/build-appimage.sh build
+          FOXSDR_SLINT_SDK="$SLINT_SDK" installer/linux/build-appimage.sh build
 
       # The AppImage runtime itself needs FUSE to mount, which this runner
       # does not have configured; extract-and-run is the same fallback used
@@ -162,7 +185,9 @@ jobs:
           version=$(sed -n 's/^project(cascade VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
           appimage="dist/FoxSDR-$version-x86_64.AppImage"
           "$appimage" --version
+          # the new window (the launcher's default), then Legacy through the same entry point
           xvfb-run -a "$appimage" --frames 60
+          xvfb-run -a "$appimage" --legacy --frames 60
 
       - uses: actions/upload-artifact@v4
         with:
@@ -209,6 +234,7 @@ jobs:
           set -eu
           bash tools/check-symbol-archive-linux.sh cascade main.cpp
           bash tools/check-symbol-archive-linux.sh foxsdr-engine engine_main.cpp
+          bash tools/check-symbol-archive-linux.sh foxsdr-slint main.cpp build/src/slint
 
   # Same job as "linux" above, on GitHub's hosted Arm64 runner, for the
   # Raspberry Pi (64-bit Raspberry Pi OS is aarch64) and other Arm64 Linux
@@ -270,7 +296,7 @@ jobs:
       - name: Check the tarball
         run: |
           version=$(sed -n 's/^project(cascade VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-          bash tools/check-linux-tarball.sh "foxsdr-$version-linux-arm64.tar.gz" "foxsdr-$version-linux-arm64" "$version"
+          bash tools/check-linux-tarball.sh "foxsdr-$version-linux-arm64.tar.gz" "foxsdr-$version-linux-arm64" "$version" --no-slint
 
       - uses: actions/upload-artifact@v4
         with:

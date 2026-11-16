@@ -7,6 +7,15 @@
 #include <map>
 #include <mutex>
 
+#if defined(__linux__)
+#include <unistd.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+#endif
+
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -206,6 +215,55 @@ ResourceSources realResourceSources() {
     auto gpu = std::make_shared<GpuCounter>();
     s.gpuInstances = [gpu](std::vector<GpuInstance>& out) { return gpu->read(out); };
     s.processId = [] { return static_cast<std::uint32_t>(::GetCurrentProcessId()); };
+#elif defined(__linux__)
+    // LINUX, from /proc (docs/multi-radio-records/linux-local.md section 11): the process's CPU time and resident set, the machine's memory. No GPU engine counters exist here, so the GPU figures stay "not available".
+    s.processCpu = [](std::uint64_t& t, unsigned& cpus) {
+        std::ifstream f("/proc/self/stat");
+        std::string line;
+        if (!std::getline(f, line)) { return false; }
+        const std::size_t rp = line.rfind(')');   // the program's name is field 2, in brackets, and may hold blanks
+        if (rp == std::string::npos || rp + 2 >= line.size()) { return false; }
+        std::istringstream in(line.substr(rp + 2));
+        std::string tok;
+        unsigned long long utime = 0, stime = 0;
+        for (int field = 3; field <= 15; ++field) {   // field 3 is the state; 14 and 15 are the user and system time in clock ticks
+            if (!(in >> tok)) { return false; }
+            if (field == 14) { utime = std::strtoull(tok.c_str(), nullptr, 10); }
+            if (field == 15) { stime = std::strtoull(tok.c_str(), nullptr, 10); }
+        }
+        const long hz = ::sysconf(_SC_CLK_TCK);
+        const long n = ::sysconf(_SC_NPROCESSORS_ONLN);
+        if (hz <= 0 || n <= 0) { return false; }
+        t = (utime + stime) * 10000000ull / static_cast<unsigned long long>(hz);   // 100 ns units
+        cpus = static_cast<unsigned>(n);
+        return true;
+    };
+    s.workingSet = [](std::uint64_t& bytes) {
+        std::ifstream f("/proc/self/statm");
+        unsigned long long size = 0, resident = 0;
+        if (!(f >> size >> resident)) { return false; }
+        const long page = ::sysconf(_SC_PAGESIZE);
+        if (page <= 0) { return false; }
+        bytes = resident * static_cast<unsigned long long>(page);
+        return true;
+    };
+    s.systemMemory = [](SystemMemory& m) {
+        std::ifstream f("/proc/meminfo");
+        std::string line;
+        unsigned long long total = 0, available = 0;
+        bool haveTotal = false, haveAvailable = false;
+        while (std::getline(f, line)) {   // "MemTotal:       32717996 kB"; other lines have no unit, so the file is read by line
+            unsigned long long v = 0;
+            if (std::sscanf(line.c_str(), "MemTotal: %llu", &v) == 1) { total = v; haveTotal = true; }
+            else if (std::sscanf(line.c_str(), "MemAvailable: %llu", &v) == 1) { available = v; haveAvailable = true; }
+        }
+        if (!haveTotal || !haveAvailable || total == 0 || available > total) { return false; }
+        m.totalBytes = total * 1024ull;
+        m.availableBytes = available * 1024ull;
+        m.loadPercent = 100.0 * static_cast<double>(total - available) / static_cast<double>(total);
+        return true;
+    };
+    s.processId = [] { return static_cast<std::uint32_t>(::getpid()); };
 #endif
     s.nowMs = [] {
         return static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());

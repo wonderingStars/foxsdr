@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "lanek_publish.hpp"
 
+#include "core/diag_log.hpp"
+#include "desk_logic.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -96,7 +99,8 @@ void openUrlNow(const std::string& url) {
     const std::wstring w = std::filesystem::path(std::u8string(url.begin(), url.end())).wstring();
     ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #else
-    (void)url;
+    std::string why;
+    if (!foxsdr::slintdesk::openAddress(url, &why)) { cc::diagLogf("community link: %s", why.c_str()); }
 #endif
 }
 
@@ -1244,7 +1248,10 @@ void LaneKPublisher::tick(const FoxReceiverState& state, long tickNo) {
         const double half = std::max(1.0, state.sampleRateHz / 2.0);
         const float offset = static_cast<float>(std::clamp((state.tunedHz - state.centreHz) / half, -1.0, 1.0));
         I.toneParams = I.sonifier.update(static_cast<float>(state.signalDb), (state.flags & FOXAPI_RX_SQUELCH_OPEN) != 0 || state.squelchDb < -190.0, offset, static_cast<float>(dt));
-        if (!I.env.bounded) { I.tone.feed(I.toneParams); }
+        if (!I.env.bounded) {
+            I.tone.feed(I.toneParams);
+            if (!I.tone.running()) { I.toneNote = I.tone.lastError(); I.toneOn = false; I.sonifier.reset(); }   // the sound output failed while the tone played (ALSA): the person is told in the section, the tone is off
+        }
     }
     if (tickNo % 15 == 7) { I.publishSr(); }
     if (I.rec.dirty() && tickNo - I.lastSaveTick > 30) { I.lastSaveTick = tickNo; I.save(); }

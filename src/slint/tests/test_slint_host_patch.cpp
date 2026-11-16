@@ -3252,7 +3252,11 @@ void theRadioInspectorRatesAndLines() {
     EQ(lineTexts(f.page.inspectorModel().radio.lines), "[4:the device would not open][1:" + tail + "]");
 
     // A RECORDING sets its own rate: shown, not offered
+#ifdef _WIN32
     nm(f.g(), r).device = "iqfile|path=C:\\rec\\a.cu8";
+#else
+    nm(f.g(), r).device = "iqfile|path=/rec/a.cu8";   // a backslash is not a separator off Windows: the file name is what follows the last '/'
+#endif
     nm(f.g(), r).rateHz = 2.4e6;
     m = f.page.inspectorModel().radio;
     CHECK(m.rate_fixed);

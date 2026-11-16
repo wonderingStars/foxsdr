@@ -14,6 +14,7 @@
 #include "cjk_register.hpp"
 #include <fstream>
 #include "gaps_win.hpp"
+#include "desk_logic.hpp"
 #include "diag_copy.hpp"
 #include "pointer_ledger.hpp"
 #include "core/engine_vocab.hpp"
@@ -219,6 +220,9 @@ void SystemPublisher::openUrl(const std::string& url) {
     }
 #if defined(_WIN32)
     ::ShellExecuteW(nullptr, L"open", widen(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#else
+    std::string why;
+    if (!foxsdr::slintdesk::openAddress(url, &why)) { cc::diagLogf("system: %s", why.c_str()); }
 #endif
 }
 
@@ -235,6 +239,10 @@ void SystemPublisher::openFolder(const std::string& path, bool isFile) {
     std::filesystem::create_directories(dir, ec);
 #if defined(_WIN32)
     ::ShellExecuteW(nullptr, L"open", dir.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#else
+    std::string why;
+    const std::u8string dirU8 = dir.u8string();
+    if (!foxsdr::slintdesk::openFolder(std::string(dirU8.begin(), dirU8.end()), &why)) { cc::diagLogf("system: %s", why.c_str()); }
 #endif
 }
 

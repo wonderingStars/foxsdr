@@ -1,4 +1,4 @@
-#! frames=80
+#! frames=80 platform=windows
 # gaps1-sysmenu (window gaps lane 1, ledger row 14): the title rail's right-click asks Windows' own system menu of the main window. The first phase said the native handle was not reachable; gaps_win findMainWindow reaches it now.
 # A bounded run shows no menu, so what is proved here is that the handle is reached and the window HAS a system menu (the entry count is read with GetMenuItemCount, nothing is shown). Whether the real
 # menu looks right on this frameless window, and the right-click itself, are UNVERIFIED until the mouse drive.

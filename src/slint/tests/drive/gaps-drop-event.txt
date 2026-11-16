@@ -1,0 +1,22 @@
+#! frames=420 bank=0 sections=0:1 size=1600x900 FOXSDR_SLINT_DROP=40:event:C:\gaps\notes.txt;100:event:C:\gaps\missing-recording.wav;160:textevent:only-text-dragged-from-another-program;220:event:C:\gaps\frequencies.xml
+# gaps-drop-event (docs/multi-radio-records/linux-local.md section 11): the toolkit's own drop target, the route a file dropped from the desktop takes off Windows. A real drag from another program cannot be
+# scripted, so each drop here is a DropEvent built the way the toolkit builds one (a DataTransfer carrying a file path, or only text) and given to the window's own DropArea callbacks (file-drop-can, then file-dropped):
+# a .txt is refused with a note under the counter, a .wav is opened as the I/Q file, a drag that carries only text is refused before it can drop (nothing reaches the handler), a .xml frequency list goes to the import.
+# What the pointer does while a real drag is over the window, and a drag from a real file manager, are UNVERIFIED (open row of the Linux record).
+10 state running == 1
+state gaps.drops == 0
+state gaps.refuseddrops == 0
+state gaps.droprefusedatdrag == 0
+50 state gaps.refuseddrops == 1
+state gaps.dropnote contains "neither a recording nor a frequency list"
+110 state gaps.drops == 1
+state gaps.dropnote == "recording"
+state fact.source.row == 1
+170 state gaps.droprefusedatdrag == 1
+state gaps.drops == 1
+state gaps.refuseddrops == 1
+230 state gaps.drops == 2
+state gaps.dropnote == "list"
+state gaps.refuseddrops == 1
+state gaps.droprefusedatdrag == 1
+state gaps.dropinstalled == 1

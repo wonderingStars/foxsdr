@@ -3,8 +3,13 @@ Type=Application
 Name=FoxSDR
 GenericName=Software-Defined Radio Receiver
 Comment=Multi-band SDR receiver with waterfall, decoders and plugins
-Exec=cascade
+Exec=foxsdr
 Icon=foxsdr
 Categories=AudioVideo;Audio;HamRadio;
 Terminal=false
 StartupNotify=true
+Actions=Legacy;
+
+[Desktop Action Legacy]
+Name=FoxSDR (Legacy)
+Exec=foxsdr --legacy
