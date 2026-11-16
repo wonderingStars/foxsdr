@@ -3,7 +3,7 @@
 // One global, filled by the host (lanex_publish.cpp), which also answers its act(id, text). The help sheet is drawn here and mounted by one line of main.slint; the speed test's rows are a KPanel
 // that main.slint appends to the SYSTEM bank's Performance section. Nothing here decides what a topic says or when the test runs.
 import { Theme } from "theme.slint";
-import { Key as KeyButton } from "keys.slint";   // (the component; the name Key is left to the built-in key table, Key.Escape)
+import { Key as KeyButton, KeyFocus } from "keys.slint";   // (the component; the name Key is left to the built-in key table, Key.Escape)
 import { KRow, KPanel } from "system_bank.slint";
 
 export global LaneX {
@@ -18,7 +18,7 @@ export global LaneX {
 
 export component XHelpSheet inherits Rectangle {
     background: Theme.backdrop;
-    TouchArea { clicked => { LaneX.act("help-close", ""); } }   // not-translated: the host's action id
+    TouchArea { clicked => { LaneX.act("help-close", ""); KeyFocus.released += 1; } }   // not-translated: the host's action id
     panel := Rectangle {
         width: min(660px, root.width - 32px);
         height: min(560px, root.height - 32px);
@@ -38,7 +38,7 @@ export component XHelpSheet inherits Rectangle {
             changed gen => { self.focus(); }
             init => { self.focus(); }
             key-pressed(e) => {
-                if (e.text == Key.Escape) { LaneX.act("help-close", ""); return accept; }   // not-translated: the host's action id
+                if (e.text == Key.Escape) { LaneX.act("help-close", ""); KeyFocus.released += 1; return accept; }   // not-translated: the host's action id
                 return reject;
             }
         VerticalLayout {
@@ -50,7 +50,7 @@ export component XHelpSheet inherits Rectangle {
                 viewport-height: help-list.preferred-height;
                 help-list := KPanel { rows: LaneX.help-rows; act(id, t) => { LaneX.act(id, t); } }
             }
-            HorizontalLayout { alignment: end; KeyButton { label: @tr("Close"); on: true; clicked => { LaneX.act("help-close", ""); } } }   // not-translated: the host's action id
+            HorizontalLayout { alignment: end; KeyButton { label: @tr("Close"); on: true; clicked => { LaneX.act("help-close", ""); KeyFocus.released += 1; } } }   // not-translated: the host's action id
         }
         }
     }

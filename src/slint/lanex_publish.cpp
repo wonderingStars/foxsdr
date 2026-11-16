@@ -150,7 +150,11 @@ struct LaneXPublisher::Impl {
 
     void close() {
         helpOpen = false;
-        if (env.ui != nullptr) { env.ui->global<LaneX>().set_help_open(false); }
+        if (env.ui != nullptr) {
+            env.ui->global<LaneX>().set_help_open(false);
+            auto& kf = env.ui->global<KeyFocus>();
+            kf.set_released(kf.get_released() + 1);   // the focus scope that held the keys was destroyed with the sheet: the shortcuts' scope takes it back
+        }
     }
 
     // ---------------------------------------------------------------- the speed test
