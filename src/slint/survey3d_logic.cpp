@@ -182,16 +182,16 @@ std::string surveyCsv(const std::vector<SurveyChannel>& ch) {
         for (const char c : s) { if (c == (char)34) { o += std::string(2, (char)34); } else { o += c; } }
         return o + (char)34;
     };
-    const auto num = [](bool have, double v, const char* f) {
+    const auto num = [](bool have, double v, int decimals) {
         if (!have) { return std::string(); }
         char b[48];
-        std::snprintf(b, sizeof(b), f, v);
+        std::snprintf(b, sizeof(b), "%.*f", decimals, v);
         return std::string(b);
     };
     std::string out = "Frequency (Hz),Width (Hz),Peak (dB),Over floor (dB),Seen (%),Guess,Band\r\n";
     for (const SurveyChannel& c : ch) {
-        out += num(true, c.freqHz, "%.0f") + "," + num(c.haveWidth, c.widthHz, "%.0f") + "," + num(c.havePeak, c.peakDb, "%.1f") + "," + num(c.haveOver, c.overDb, "%.1f") + "," +
-               num(c.haveSeen, c.seenPct, "%.1f") + "," + quote(c.guess) + "," + quote(c.band) + "\r\n";
+        out += num(true, c.freqHz, 0) + "," + num(c.haveWidth, c.widthHz, 0) + "," + num(c.havePeak, c.peakDb, 1) + "," + num(c.haveOver, c.overDb, 1) + "," +
+               num(c.haveSeen, c.seenPct, 1) + "," + quote(c.guess) + "," + quote(c.band) + "\r\n";
     }
     return out;
 }
