@@ -106,6 +106,8 @@
 #include "lanes2_publish.hpp"   // screen lane S2: the spectrum and tuning controls
 #include "s4_publish.hpp"      // screen lane S4: the scanner's saved hits, the outputs and the alerts
 #include "s5_publish.hpp"      // screen lane S5: radios and sources a user could not reach or set
+#include "lanes3_publish.hpp"   // screen lane S3: recording and playback controls
+#include "core/status_clock.hpp"
 #include "sysmenu_win.hpp"   // window gaps lane 1: the title rail's own system menu (ledger row 14)
 #include "sysmenu_win.hpp"   // window gaps lane 1: the title rail's own system menu (ledger row 14)
 #include "gaps1_publish.hpp"   // window gaps lane 1: the start-up questions (did not close normally, Link this FoxSDR?) and the plugin fault cards
@@ -756,6 +758,8 @@ int main(int argc, char** argv) {
     std::unique_ptr<foxsdr::slints5::S5Publisher> s5p;            // screen lane S5
     std::function<std::string(const std::string&, std::string&)> sysMenuState;   // window gaps lane 1: `state sysmenu.<asks|items>`
     std::pair<std::uint32_t, double> lastScannerState{0u, 0.0};   // screen lane S4: the selected radio's scanner state and the frequency it is on (set once a tick)
+    std::unique_ptr<foxsdr::slintlanes3::LaneS3Publisher> laneS3p;   // screen lane S3
+    foxsdr::slintlanes3::PlayState lastPlayState;   // screen lane S3: the selected radio's file and recorder state (set once a tick)
     double lastFilePositionSec = 0.0;   // screen lane M: the selected radio's position in the file it plays (set once a tick)
     double lastZoomSelected = 0.0;   // the span the last dragged selection zoomed to (state lk.zoomspan)
     const bool laneKOff = bounded.bounded() && std::getenv("FOXSDR_SLINT_LANEK_OFF") != nullptr;
@@ -1979,6 +1983,34 @@ int main(int argc, char** argv) {
         s5p = std::make_unique<foxsdr::slints5::S5Publisher>(std::move(e));
         s5p->wire();
     }
+    // ---- SCREEN LANE S3 (docs/multi-radio-records/screen-s3-recplay.md): recording and playback controls ----
+    {
+        foxsdr::slintlanes3::LaneS3Publisher::Env e;
+        e.ui = &*ui;
+        e.api = api;
+        e.session = session;
+        e.bounded = bounded.bounded();
+        e.submit = [&](const FoxCommand& cin, std::uint32_t radio, const std::string* longText) {
+            foxsdr::slintlanes3::SubmitOutcome out;
+            FoxCommand c = cin;
+            c.structSize = sizeof(c);
+            aimAt(c, radio);
+            FoxSubmitResult r{}; r.structSize = sizeof(r);
+            const bool useLong = longText != nullptr && FOXAPI_HAS(api, submit_text);
+            const int32_t rc = useLong ? api->submit_text(session, &c, longText->data(), static_cast<uint32_t>(longText->size()), &r) : api->submit(session, &c, 1, &r);
+            if (rc < 0) { out.status = rc; out.message = cascade::i18n::tr("The engine would not take that command."); return out; }
+            out.status = r.status;
+            out.ticket = r.ticket;
+            if (r.status == FOXAPI_BUSY) { out.message = cascade::i18n::tr("The engine is busy: try again in a moment."); }
+            return out;
+        };
+        e.selectedRadio = [&] { return workspace.selectedRadio(); };
+        e.playState = [&] { return lastPlayState; };
+        e.nowUnix = [] { return static_cast<std::int64_t>(std::time(nullptr)); };
+        e.offsetAt = [](std::int64_t ms) { return cascade::core::statusclock::systemUtcOffsetMinutes(ms); };
+        laneS3p = std::make_unique<foxsdr::slintlanes3::LaneS3Publisher>(std::move(e));
+        laneS3p->wire();
+    }
     // ---- WINDOW GAPS LANE 1 (docs/multi-radio-records/window-gaps-1.md): what the classic window asks or says at start-up ----
     {
         foxsdr::slintgaps1::Publisher::Env e;
@@ -2928,6 +2960,8 @@ int main(int argc, char** argv) {
             }   // screen lane K (FOXSDR_SLINT_LANEK_OFF=1, a bounded run only, leaves it out)
             if (laneLp && !laneKOff) { laneLp->tick(static_cast<long>(tickNo)); }   // screen lane L (the same switch leaves it out)
             lastScannerState = {state.scannerState, state.scanCurrentHz};   // screen lane S4
+            lastPlayState.filePlays = state.fileSource != 0; lastPlayState.positionS = state.filePositionSec; lastPlayState.durationS = state.fileDurationSec; lastPlayState.loopStartS = state.fileLoopStartSec; lastPlayState.loopEndS = state.fileLoopEndSec; lastPlayState.startUnixMs = state.fileStartUnixMs; lastPlayState.sampleRateHz = state.sampleRateHz; lastPlayState.recIq = static_cast<int>(state.recordIqFormat); lastPlayState.recAudio = static_cast<int>(state.recordAudioFormat);   // screen lane S3
+            if (laneS3p && !laneKOff) { laneS3p->tick(static_cast<long>(tickNo)); }   // screen lane S3 (the same switch leaves it out)
             lastFilePositionSec = state.filePositionSec;   // screen lane M: the selected radio's position in the file it plays
             if (s4p && !laneKOff) { s4p->tick(static_cast<long>(tickNo)); }   // screen lane S4 (the same switch leaves it out)
             if (laneMp && !laneKOff) { laneMp->tick(static_cast<long>(tickNo)); }   // screen lane M (the same switch leaves it out)
@@ -3251,6 +3285,7 @@ int main(int argc, char** argv) {
             if (laneS2p) { laneS2p->onAnswer(r[i]); }   // screen lane S2: the same
             if (s4p) { s4p->onAnswer(r[i]); }         // screen lane S4: the same
             if (s5p) { s5p->onAnswer(r[i]); }   // screen lane S5: the same
+            if (laneS3p) { laneS3p->onAnswer(r[i]); }   // screen lane S3: the same
             if (r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) { std::fprintf(stderr, "foxsdr-slint: op 0x%04x answered %d: %s\n", r[i].op, r[i].status, r[i].message); }
         }
 
@@ -3258,7 +3293,7 @@ int main(int argc, char** argv) {
         // the browser's tiles, the track-info lines, the plugin-use table, the events and the tickets - then its pages (kit_publish.cpp).
         kit.tick(state, listMoved, face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain");
         extendBank.publish(state);   // before the kit's pages: the store page of kind 9 is built from the model this hands over
-        for (const FoxCommandResult& r2 : kit.takeUnclaimedResults()) { patchBank.onAnswer(r2); transmitBank.onAnswer(r2); deckOnAnswer(r2); if (laneLp) { laneLp->onAnswer(r2); } if (laneMp) { laneMp->onAnswer(r2); } if (laneS1p) { laneS1p->onAnswer(r2); } if (laneS2p) { laneS2p->onAnswer(r2); } if (s4p) { s4p->onAnswer(r2); } if (s5p) { s5p->onAnswer(r2); } }   // an answer the kit's own poll took first: the draft waits for it
+        for (const FoxCommandResult& r2 : kit.takeUnclaimedResults()) { patchBank.onAnswer(r2); transmitBank.onAnswer(r2); deckOnAnswer(r2); if (laneLp) { laneLp->onAnswer(r2); } if (laneMp) { laneMp->onAnswer(r2); } if (laneS1p) { laneS1p->onAnswer(r2); } if (laneS2p) { laneS2p->onAnswer(r2); } if (s4p) { s4p->onAnswer(r2); } if (s5p) { s5p->onAnswer(r2); } if (laneS3p) { laneS3p->onAnswer(r2); } }   // an answer the kit's own poll took first: the draft waits for it
         patchBank.publish(state);    // before the kit's pages too: the Patch presets page of kind 10 is built from the model this hands over
         transmitBank.publish(state); // ... and the Transmit page of kind 11 (and the key's batch for this tick)
         // THE MAP'S LOOK, from the interface half each tick (SYSTEM > Display saves it there): the aircraft icon size, the trail width and the trail style, bounded
@@ -3770,6 +3805,7 @@ int main(int argc, char** argv) {
         if (name.rfind("gaps1.", 0) == 0) { return gaps1 ? gaps1->readState(name.substr(6), out) : std::string("no window gaps 1"); }
         if (name.rfind("s2.", 0) == 0) { return laneS2p ? laneS2p->readState(name.substr(3), out) : std::string("no lane S2"); }
         if (name.rfind("s4.", 0) == 0) { return s4p ? s4p->readState(name.substr(3), out) : std::string("no lane S4"); }
+        if (name.rfind("s3.", 0) == 0) { return laneS3p ? laneS3p->readState(name.substr(3), out) : std::string("no lane S3"); }
         if (name.rfind("lm.", 0) == 0) { return laneMp ? laneMp->readState(name.substr(3), out) : std::string("no lane M"); }
         if (name.rfind("s1.", 0) == 0) { return laneS1p ? laneS1p->readState(name.substr(3), out) : std::string("no lane S1"); }
         if (name.rfind("s5.", 0) == 0) { return s5p ? s5p->readState(name.substr(3), out) : std::string("no lane S5"); }

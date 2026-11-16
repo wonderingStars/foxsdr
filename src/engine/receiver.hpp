@@ -156,6 +156,7 @@ struct Receiver {
     // the waterfall's GL texture, whose deletion needs the creating GL context
     // current - run() tears the view down explicitly before destroying the
     // context, because AppWindow itself outlives it (destroyed in main()).
+    std::shared_ptr<void> recplayRt_;   // screen lane S3 (engine_recplay.cpp): the radio's clip recorder and replay buffer; declared BEFORE pipeline_ so it is destroyed after the DSP thread
     cascade::core::Pipeline pipeline_;
     // ---- device, open, fault and retry ----
     bool faultSeen_ = false;  // endTakesOnFault's edge: the latch as last frame saw it

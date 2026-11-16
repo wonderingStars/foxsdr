@@ -379,6 +379,15 @@ src/core/omnirig_client.hpp::OmniRigClient::setMode::errassign::the rig is trans
 src/core/operating_aids.hpp::BandStacking::setBands::errassign::bad band	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/operating_aids.hpp::BandStacking::setBands::errassign::bad default in band	ALLOW	user-initiated file parse, import, export or validation result; shown to the user, no radio / plugin / update / output involved	seed
 src/core/os_crash_record.cpp::findOsCrashRecord::swallow::catch	ALLOW	the reporting machinery cannot report its own failure (best effort by design); a missing row is what L7 measures	seed
+src/core/overview_job.cpp::Job::start::errassign::the picture could not be made	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::cancelled	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::rows must be # to #	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::the file could not be opened	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::the file could not be read to its end it may have been cut s	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::the file does not say its sample rate	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::the file is shorter than one block of the transform	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::the transform size must be # # # or #	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
+src/core/overview_job.cpp::compute::errassign::unknown raw sample format	ALLOW	validation: the sentence is shown on the Source panel and the job is reported as failed	2026-11-16
 src/core/patch_audio.cpp::DeviceDest::open::errassign::no default sound output was found	PENDING:R-record	output failure (patch speaker WAV writer failed)	seed
 src/core/patch_audio.cpp::DeviceDest::open::errassign::the sound output	PENDING:R-record	output failure (patch speaker WAV writer failed)	seed
 src/core/patch_audio.cpp::Mp3Dest::work::errassign::cannot create the recordings folder	PENDING:R-record	output failure (patch speaker WAV writer failed)	seed
@@ -1061,6 +1070,7 @@ src/engine/engine.cpp::Engine::rescanPlugins::warn::plugin not loaded % %	ALLOW	
 src/engine/engine.cpp::Engine::restoreQuarantinedPlugins::errassign::cannot delete the superseded	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::restoreQuarantinedPlugins::errassign::cannot reenable	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::scanNative::log::source % native sdrplay rows hidden the sdrplay api is insta	ALLOW	engine result text shown to the user	seed
+src/engine/engine.cpp::Engine::selectSourceById::errassign::that raw files format rate or path was not understood	ALLOW	ui-text: the id is built by the window's validated builder; a hand-made one is refused in words on the source panel, as every refused open is	2026-11-16
 src/engine/engine.cpp::Engine::startAddAll::errassign::plan blockedreason	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::startAudioRecording::errassign::err	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::startControlThread::warn::engine pass no highresolution timer here falling back to a %	ALLOW	environment note; frame-timing already counts slow frames	seed
@@ -1116,6 +1126,7 @@ src/engine/engine_radios.cpp::Engine::publishExtraReceivers::errassign::rx sourc
 src/engine/engine_rawiq.cpp::Engine::openRawIqAt::errassign::why	ALLOW	engine result text shown to the user	seed
 src/engine/engine_recname.cpp::Engine::applyRecordName::warn::record the filename template could not be used for this take	ALLOW	the user's own naming template or daily-folder setting refused (the take keeps its default)	seed
 src/engine/engine_recname.cpp::Engine::loadRecordName::warn::record the filename template in recordnametxt was refused %	ALLOW	the user's own naming template or daily-folder setting refused (the take keeps its default)	seed
+src/engine/engine_recplay.cpp::Engine::recplayPump::errassign::the recording could not go on into a new file the folder is	ALLOW	RecordStart::poll counts this failed open (noteRecordFailed) where the answer is collected; this line is the sentence for the person	2026-11-16
 src/engine/engine_schedule.cpp::Engine::pumpSchedule::warn::schedule timed recording % missed % starts	PENDING:R-record	output failure (a scheduled recording did not start or missed starts)	seed
 src/engine/engine_schedule.cpp::Engine::pumpSchedule::warn::schedule timed recording % refused %	PENDING:R-record	output failure (a scheduled recording did not start or missed starts)	seed
 src/engine/engine_schedule.cpp::Engine::scheduleBegin::warn::schedule timed recording % was not started %	PENDING:R-record	output failure (a scheduled recording did not start or missed starts)	seed
@@ -1746,6 +1757,42 @@ src/slint/lanem_logic.cpp::parseRitLimits::errassign::clear on a retune of	ALLOW
 src/slint/lanem_logic.cpp::parseRitLimits::errassign::largest offset	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanem_logic.cpp::parseStepBlocks::errassign::a step is at least one block forward or back	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanes2_logic.cpp::parseFrameRate::errassign::the frame rate is # automatic or # to # a second	ALLOW	validation: a typed frame rate outside 0 or 1 to 120 is refused beside the field the person typed it into, before anything is sent; nothing failed	2026-11-16 S2
+src/slint/lanes3_logic.cpp::checkNameTemplate::errassign::e error	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::clipsJson::errassign::longest clip	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::clipsJson::errassign::shortest clip kept	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::clipsJson::errassign::time after it ends	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::clipsJson::errassign::time before the transmission	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::localToUnix::errassign::that time does not exist here the clocks skip it that day	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::overviewJson::errassign::rows	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseCentre::errassign::e	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseClock::errassign::that time does not exist	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseClock::errassign::type the time as #	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseDate::errassign::that date does not exist	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseDate::errassign::that date does not exist#2	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseDate::errassign::type the date as #	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseLoop::errassign::loop end	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseLoop::errassign::loop start	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseLoop::errassign::the loop must start before it ends	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parsePosition::errassign::allowed	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parsePosition::errassign::type a place in the recording	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parsePosition::errassign::type seconds or minutesseconds	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parsePosition::errassign::type seconds or minutesseconds#2	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseRolloverMB::errassign::allowed # no limit or # #	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseRolloverMinutes::errassign::allowed # no limit or # #	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseWithUnit::errassign::allowed	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseWithUnit::errassign::e	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::parseWithUnit::errassign::type a number	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::rawFileId::errassign::centre frequency	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::rawFileId::errassign::choose the sample format	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::rawFileId::errassign::sample rate	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::rawFileId::errassign::type the full path of the file	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::rolloverJson::errassign::a file on the clock needs a time limit	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::bandwidth khz	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::frequency mhz	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::length minutes	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::length minutes#2	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::name at most # characters	ALLOW	validation	2026-11-16
+src/slint/lanes3_logic.cpp::scheduleJson::errassign::tick audio iq or both	ALLOW	validation	2026-11-16
 src/slint/main.cpp::main::errassign::ui window set_rendering_notifier framemeter slint renderings	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/main.cpp::main::log::scanner the engine did not take the memories thresholds	ALLOW	ui-text: a window command the engine would not take is logged; the engine fact scan.memthresholds says what it holds and the push is repeated on the next change	e1
 src/slint/main.cpp::main::stderr::%	ALLOW	command-line / developer output (a console nobody runs the app from; the user chose the flag)	seed
@@ -2335,6 +2382,7 @@ src/source/iiod_client.cpp::parseContext::errassign::the context xml has an unte
 src/source/iiod_client.cpp::parseContext::errassign::the iio context has no devices in it	PENDING:reports-not-in-function	survey: REPORTS (the reason travels in lastError() to the open result: engine noteRadioFail (count only; D4 upgrade)) but no reporting call encloses the site	seed
 src/source/iiod_client.cpp::parseContext::errassign::what answered is not an iio context no context element	PENDING:reports-not-in-function	survey: REPORTS (the reason travels in lastError() to the open result: engine noteRadioFail (count only; D4 upgrade)) but no reporting call encloses the site	seed
 src/source/iq_file_source.cpp::IqFileSource::fail::errassign::std move msg	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	seed
+src/source/iq_file_source.cpp::IqFileSource::open::errassign::why	ALLOW	validation: restores the original refusal sentence after the readers declined the same file as well	2026-11-16
 src/source/iq_file_source.cpp::IqFileSource::readNormal::errassign::io error while reading	PENDING:G3-control-refused	control refused (the radio would not take a setting; reported by the engine control hook)	seed
 src/source/iq_file_source.cpp::IqFileSource::start::errassign::start before a successful open	ALLOW	caller contract: start() before a successful open() is a misuse the caller is told about	sweep-a
 src/source/iq_playback.hpp::PlaybackModel::open::errassign::no source	ALLOW	parse / validation text in a protocol or file helper; carried upward by the owning source, classified there	seed

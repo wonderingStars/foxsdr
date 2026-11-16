@@ -7,6 +7,7 @@
 #include "engine/engine.hpp"
 #include "engine/wire_a.hpp"   // wire-a
 #include "core/companion_programs.hpp"   // companion applications shelf
+#include "core/raw_file_id.hpp"
 #include "core/plugin_repo_helper.hpp"   // wire-c
 
 #include "core/band_mode.hpp"
@@ -6113,6 +6114,7 @@ void Engine::finishRecordStart(bool iq, cascade::gui::RecordStart::Result& r, do
         rx().iqRecordStartS_ = nowS;
         rx().pipeline_.setIqRecorder(&rx().iqRecorder_);
     } else {
+        recplayPreRoll(rec);   // screen lane S3: the replay buffer's audio goes first, when it is on
         rx().audioRecordStartS_ = nowS;
         rx().pipeline_.setAudioRecorder(&rx().audioRecorder_);
     }
@@ -6421,6 +6423,15 @@ bool Engine::selectSourceById(const std::string& id) {
     const std::string args = id.substr(colon + 1);
     if (kind == "file") {
         openIqFile(args);
+        return true;
+    }
+    if (kind == "file-raw") {   // screen lane S3: a file with no header; the person says its sample format and rate
+        cascade::core::RawFileId rawId;
+        if (!cascade::core::parseRawFileId(args, rawId)) {
+            rx().sourceError_ = "that raw file's format, rate or path was not understood";
+            return false;
+        }
+        openIqFile(rawId.path, args);
         return true;
     }
     if (kind == "open-pluto") {
@@ -11493,6 +11504,7 @@ void Engine::runPassPart(PassPart part) {
             pumpExtraReceivers();
             pumpSchedule();   // (timed recordings: engine_schedule.cpp)
             pumpMacros();     // (a macro being played: engine_macros.cpp)
+            forEachReceiver([this] { recplayPump(); });   // screen lane S3: rollover, clips and the replay buffer (engine_recplay.cpp)
             pumpWireB();      // (wire-b: the limit mask of every open radio: engine_wire_b.cpp)
             pumpWireC();      // wire-c (engine_wire_c.cpp)
             pollSmeterCal();  // (a calibration being measured: engine_smeter.cpp)

@@ -1,0 +1,38 @@
+#! frames=2400 size=1600x6000 bank=0 sections=0:6
+# s3-clips (screen lane S3, docs/multi-radio-records/screen-s3-recplay.md; G3-03, G3-09, G3-02): one file per transmission with the replay buffer under it. The switch, the times and the buffer are read back from the engine's settings; the clip count and the buffer's size from the radio's facts.
+10 state running == 1
+state s3.fact.wirec.rec.clip_on == 0
+state s3.fact.wirec.rec.replay_s == 0
+# a buffer that is too long is refused
++1 type "Audio kept in memory (seconds, 0 = none)" "500"
++1 key enter
++2 click "Keep this much audio"
++4 state s3.note.record contains "allowed"
++1 type "Audio kept in memory (seconds, 0 = none)" "5"
++1 key enter
++2 click "Keep this much audio"
++15 state s3.fact.wirec.rec.replay_s == 5
++45 state s3.fact.radio.1.record.replay contains seconds=5;
+# times outside the model's ranges are refused
++1 type "Time before the transmission (s)" "11"
++1 key enter
++2 click "Use these times"
++4 state s3.note.record contains "allowed"
++1 type "Time before the transmission (s)" "1"
++1 key enter
++1 type "Shortest clip kept (s)" "0"
++1 key enter
++1 type "Longest clip (s)" "10"
++1 key enter
++2 click "Use these times"
++15 state s3.fact.wirec.rec.clip_max == 10
+# the switch: the buffer is raised to hold the time before plus ten seconds
++1 click "Record while the squelch is open"
++15 state s3.fact.wirec.rec.clip_on == 1
++45 state s3.fact.radio.1.record.replay contains seconds=11;
+# the generator's signal keeps the squelch open, so a clip closes at its longest and the next goes on: a clip is open, and the splits at the longest clip are saved without a failure
++200 state s3.fact.radio.1.record.clips contains open=1
++1000 state s3.fact.radio.1.record.clips contains dropped=0;failed=0
++1 click "Record while the squelch is open"
++15 state s3.fact.wirec.rec.clip_on == 0
++45 state s3.fact.radio.1.record.replay contains seconds=5;
