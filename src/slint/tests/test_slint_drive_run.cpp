@@ -219,7 +219,7 @@ int main(int argc, char** argv) {
     // replaced by the module of that id in the folder (the expectation is unchanged: the same plugin is fitted, opened and read back). A script that drives plugin modules with no such folder is a SKIP that says so,
     // never a red for a file no checkout holds (the plugin binaries are built from a separate repository). The scripts that say pluginsdir=fixture take their module from the folder the build itself made
     // (tests/CMakeLists.txt wg3_plugins, named for this platform there), and are mapped to it the same way.
-    if (script.find("-abi3-win-x64.dll") != std::string::npos) {
+    if (script.find("-abi3-win-x64.dll") != std::string::npos || script.find("plugins=all") != std::string::npos) {
         const bool fixtureScript = script.find("pluginsdir=fixture") != std::string::npos;
         std::string pdText;
 #ifdef FOXSDR_DRIVE_FIXTURE_PLUGINS_DIR
@@ -254,6 +254,17 @@ int main(int argc, char** argv) {
         }
         mapped.append(script, last, std::string::npos);
         script = mapped;
+        // plugins=all fits EVERY module of the folder, and the scripts count them ("state kit.plugins == 43": the 43 modules of the owner's Windows folder); a Linux folder holds as many as its own
+        // plugin build made, so the count is the folder's (the expectation is the same: every module that was fitted is loaded)
+        if (script.find("plugins=all") != std::string::npos && script.find("kit.plugins == 43") != std::string::npos) {
+            int modules = 0;
+            for (const auto& e : fs::directory_iterator(pd)) {
+                const std::string n = e.path().filename().string();
+                if (n.size() > 3 && n.compare(n.size() - 3, 3, ".so") == 0) { ++modules; }   // what the copy takes: every module file of the folder
+            }
+            const std::string was = "kit.plugins == 43", now = "kit.plugins == " + std::to_string(modules);
+            for (std::size_t at = script.find(was); at != std::string::npos; at = script.find(was, at + now.size())) { script.replace(at, was.size(), now); }
+        }
     }
 #endif
     const Header h = parseHeader(script);
