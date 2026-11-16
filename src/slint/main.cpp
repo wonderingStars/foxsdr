@@ -2257,7 +2257,12 @@ int main(int argc, char** argv) {
             // S8: the ticks down the waterfall are ages, or clock times (UTC or local) that scroll with the picture
             {
                 double offsetS = 0.0;
+#ifdef _WIN32
                 if (stampMode == 2) { long tz = 0; int dst = 0; long bias = 0; _get_timezone(&tz); _get_dstbias(&bias); std::time_t tt = std::time(nullptr); std::tm lt{}; localtime_s(&lt, &tt); dst = lt.tm_isdst > 0 ? 1 : 0; offsetS = static_cast<double>(-tz - (dst ? bias : 0)); }
+#else
+                // POSIX: localtime_r fills tm_gmtoff, the seconds EAST of UTC with the daylight-saving shift already in it (the Windows branch builds the same number from _get_timezone and _get_dstbias)
+                if (stampMode == 2) { std::time_t tt = std::time(nullptr); std::tm lt{}; localtime_r(&tt, &lt); offsetS = static_cast<double>(lt.tm_gmtoff); }
+#endif
                 fig.ageTicks = stampMode == 0 || rv.lastRowUtcS <= 0.0 ? ageTicks(history, px.wfH) : foxsdr::slintextras::clockTicks(rv.lastRowUtcS, rv.secondsPerRow, px.wfH, 48.0, stampMode, offsetS);
             }
             // the peak inside the passband
