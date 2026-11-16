@@ -3196,3 +3196,30 @@ src/source/rtlsdr_source.cpp::RtlSdrSource::setIfBandwidthHz::seterr::the radio 
 src/source/rtlsdr_source.cpp::RtlSdrSource::setIfBandwidthHz::seterr::setifbandwidthhz with no radio open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
 src/source/rtlsdr_source.cpp::RtlSdrSource::setIfBandwidthHz::seterr::this radio has faulted reopen it	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
 src/source/rtlsdr_source.cpp::RtlSdrSource::setIfBandwidthHz::seterr::the tuner would not accept that if bandwidth	ALLOW	user pick refused by the tuner: returned false to the engine command, which answers the person with the sentence (refuse FOXAPI_FAILED); MERGE NOTE: the radio-reports hook at that refusal path picks it up	2026-11-16
+src/engine/engine.cpp::Engine::applyCommand::errassign::d lasterror#9	ALLOW	the refusal is the command's own answer to the person in the same call (refuse FOXAPI_FAILED with sourceError_); the radio-reports lane's hook at the shared refusal path covers it after the merge	2026-11-16
+src/engine/engine.cpp::Engine::applyCommand::errassign::d lasterror#10	ALLOW	the refusal is the command's own answer to the person in the same call (refuse FOXAPI_FAILED with sourceError_); the radio-reports lane's hook at the shared refusal path covers it after the merge	2026-11-16
+src/slint/s5b_logic.cpp::parseSoapyBandwidthKHz::errassign::allowed	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyValueText::errassign::that is not one of the choices the driver lists	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyValueText::errassign::this setting is on or off	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyValueText::errassign::type a number	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyValueText::errassign::type a whole number	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyValueText::errassign::allowed	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyValueText::errassign::that is too long	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyValueText::errassign::no control characters	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyWriteCommand::errassign::this settings name cannot be written from here	ALLOW	validation	2026-11-16
+src/slint/s5b_logic.cpp::soapyWriteCommand::errassign::that is too long	ALLOW	validation	2026-11-16
+src/source/soapy_source.cpp::SoapySource::bandwidthInfo::seterr::the radios driver is busy or not answering try again	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/soapy_source.cpp::SoapySource::bandwidthInfo::seterr::std move j message	ALLOW	a user-initiated driver call that threw: returned false to the engine command, which answers the person with the sentence (refuse FOXAPI_FAILED); MERGE NOTE: the radio-reports hook at that refusal path picks it up	2026-11-16
+src/source/soapy_source.cpp::SoapySource::setBandwidthHz::seterr::the bandwidth must be a positive number of hz	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/soapy_source.cpp::SoapySource::setBandwidthHz::seterr::the radios driver is busy or not answering try again	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/soapy_source.cpp::SoapySource::setBandwidthHz::seterr::setbandwidthhz called with no device open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/soapy_source.cpp::SoapySource::setBandwidthHz::seterr::std move j message	ALLOW	a user-initiated driver call that threw: returned false to the engine command, which answers the person with the sentence (refuse FOXAPI_FAILED); MERGE NOTE: the radio-reports hook at that refusal path picks it up	2026-11-16
+src/source/soapy_source.cpp::SoapySource::setBandwidthHz::seterr::this driver has no bandwidth setting	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/soapy_source.cpp::SoapySource::setBandwidthHz::seterr::buf	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/soapy_source.cpp::SoapySource::listSettings::seterr::the radios driver is busy or not answering try again	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/soapy_source.cpp::SoapySource::listSettings::seterr::std move j message	ALLOW	a user-initiated driver call that threw: returned false to the engine command, which answers the person with the sentence (refuse FOXAPI_FAILED); MERGE NOTE: the radio-reports hook at that refusal path picks it up	2026-11-16
+src/source/soapy_source.cpp::SoapySource::writeSetting::seterr::the radios driver is busy or not answering try again	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/soapy_source.cpp::SoapySource::writeSetting::seterr::writesetting called with no device open	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/soapy_source.cpp::SoapySource::writeSetting::seterr::std move j message	ALLOW	a user-initiated driver call that threw: returned false to the engine command, which answers the person with the sentence (refuse FOXAPI_FAILED); MERGE NOTE: the radio-reports hook at that refusal path picks it up	2026-11-16
+src/source/soapy_source.cpp::SoapySource::writeSetting::seterr::the driver has no setting called	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16
+src/source/soapy_source.cpp::SoapySource::writeSetting::seterr::j refusal	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	2026-11-16

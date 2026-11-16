@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -19,5 +20,33 @@ namespace foxsdr::slints5b {
 bool parseIfBandwidthKHz(const std::string& text, long long& hz, std::string& err);
 // The engine's fact ("radio.N.ifBandwidth", Hz) in words: "Automatic (from the sample rate)" or "400 kHz"; "" for anything that is not a number.
 std::string ifBandwidthWords(const std::string& fact);
+
+}  // namespace foxsdr::slints5b
+
+// ============================================================ SoapySDR driver bandwidth and settings (G1-15a, G1-15b) ============================================================
+// What the connected driver reported, read back from the engine's facts ("radio.N.soapy.*"); nothing here is a fixed list.
+namespace foxsdr::slints5b {
+
+struct SoapySettingView {
+    std::string key, name, description, units, type /*bool int float string*/, value, def;
+    bool hasRange = false;
+    double lo = 0.0, hi = 0.0;
+    std::vector<std::string> options, optionNames;
+};
+// The settings the driver listed for radio `radio` (`fact` answers "radio.N.soapy.<what>" without the "fact." prefix, empty when the engine has none). At most 64, in the driver's order; a row with no key is skipped.
+std::vector<SoapySettingView> readSoapySettings(const std::function<std::string(const std::string&)>& fact, int radio);
+// The driver's bandwidth in kHz as words, "" when the driver has none; `lo`/`hi` are the driver's own range in Hz (0 when absent).
+bool readSoapyBandwidth(const std::function<std::string(const std::string&)>& fact, int radio, double& currentHz, double& loHz, double& hiHz);
+std::string soapyBandwidthWords(double hz);
+// A bandwidth typed in kHz within the driver's range (the driver judges again).
+bool parseSoapyBandwidthKHz(const std::string& text, double loHz, double hiHz, double& hz, std::string& err);
+// The value the person typed or picked, checked against the type, range and options the driver reported, as the text to write ("true"/"false" for a tick); the driver judges again.
+bool soapyValueText(const SoapySettingView& s, const std::string& typed, std::string& out, std::string& err);
+// The command text: "soapy:<key>=<value>" (at most 255 bytes: a longer one is refused here with a sentence).
+bool soapyWriteCommand(const std::string& key, const std::string& value, std::string& out, std::string& err);
+// "Crystal trim (ppm)": the driver's own name with its units.
+std::string soapySettingLabel(const SoapySettingView& s);
+// "-50 to 50" or "" when the driver gave no range.
+std::string soapyRangeWords(const SoapySettingView& s);
 
 }  // namespace foxsdr::slints5b

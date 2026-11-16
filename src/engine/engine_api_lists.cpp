@@ -428,6 +428,8 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(rx().deviceDirectChoice_);
     f.value(rx().deviceIfBwPresent_);
     f.value(rx().deviceIfBw_);
+    f.value(rx().deviceSoapyPresent_);
+    for (const auto& kv : rx().deviceSoapyFacts_) { f.value(kv.first); f.value(kv.second); }
     f.value(rx().deviceOffsetTuningPresent_);
     f.value(rx().deviceOffsetTuning_);
     f.value(biasTeePanel_.present);
@@ -1226,6 +1228,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         }
         if (rx().deviceOffsetTuningPresent_) { b.deviceOptions.emplace_back("offset_tuning", rx().deviceOffsetTuning_); }
         if (rx().deviceIfBwPresent_) { b.deviceOptions.emplace_back("if_bandwidth", rx().deviceIfBw_ != 0); }   // (value: chosen; the Hz itself is fact.radio.n.ifBandwidth)
+        if (rx().deviceSoapyPresent_) { b.deviceOptions.emplace_back("soapy_bandwidth", true); }   // (the driver's own bandwidth and settings: fact.radio.n.soapy.*)
         if (rx().deviceDirectPresent_) { b.deviceOptions.emplace_back("direct_sampling", rx().deviceDirectChoice_ != 0); }   // (value: forced; the choice itself is fact.radio.n.directSampling)
     }
     b.serialPorts = serialPorts_;
@@ -1432,6 +1435,8 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         // THE RTL-SDR'S DIRECT-SAMPLING CHOICE (0 automatic, 1 never, 2 the I branch, 3 the Q branch; screen lane S5): present only while the radio has the setting, so the screen can tell "none" from "automatic".
         // THE RTL-SDR'S ANALOGUE IF BANDWIDTH in Hz (0 automatic; screen lane S5b, G1-14): present only on the native RTL-SDR driver.
         if (receivers_[n - 1u]->deviceIfBwPresent_) { fact(pre + "ifBandwidth", std::to_string(receivers_[n - 1u]->deviceIfBw_)); }
+        // THE SOAPY DRIVER'S OWN BANDWIDTH AND SETTINGS (screen lane S5b, G1-15): what the driver reported (LOCAL: a setting's value can carry a serial number or an address), absent when it reported nothing.
+        for (const auto& kv : receivers_[n - 1u]->deviceSoapyFacts_) { fact(pre + "soapy." + kv.first, kv.second, true); }
         if (receivers_[n - 1u]->deviceDirectPresent_) { fact(pre + "directSampling", std::to_string(receivers_[n - 1u]->deviceDirectChoice_)); }
         {
             const cascade::core::ppmauto::Result pr = receivers_[n - 1u]->ppmAuto_.result(clockS());

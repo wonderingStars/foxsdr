@@ -115,5 +115,82 @@ int main() {
         CHECK(r.sent.size() == 3 && r.sent[2].i0 == 0);                              // empty = automatic
     }
 
+    // ---------------------------------------------------------------- G1-15a/b: the SoapySDR driver's bandwidth and settings, built from what the driver reported
+    {
+        namespace bb = foxsdr::slints5b;
+        // pure rules
+        std::map<std::string, std::string> f;
+        const auto fact = [&f](const std::string& n) { const auto it = f.find(n); return it == f.end() ? std::string() : it->second; };
+        CHECK(bb::readSoapySettings(fact, 1).empty());
+        double cur = 0, lo = 0, hi = 0;
+        CHECK(!bb::readSoapyBandwidth(fact, 1, cur, lo, hi));
+        f["radio.1.soapy.bandwidth"] = "1000000"; f["radio.1.soapy.bandwidthLo"] = "200000"; f["radio.1.soapy.bandwidthHi"] = "8000000";
+        CHECK(bb::readSoapyBandwidth(fact, 1, cur, lo, hi) && cur == 1e6 && lo == 200000 && hi == 8e6);
+        double hz = 0; std::string e;
+        CHECK(bb::parseSoapyBandwidthKHz("500", lo, hi, hz, e) && hz == 500000);
+        CHECK(!bb::parseSoapyBandwidthKHz("100", lo, hi, hz, e) && !e.empty());
+        CHECK(!bb::parseSoapyBandwidthKHz("9000", lo, hi, hz, e) && !bb::parseSoapyBandwidthKHz("wide", lo, hi, hz, e) && !bb::parseSoapyBandwidthKHz("", lo, hi, hz, e));
+        bb::SoapySettingView s; s.type = "int"; s.hasRange = true; s.lo = -100; s.hi = 100;
+        std::string out;
+        CHECK(bb::soapyValueText(s, " 40 ", out, e) && out == "40");
+        CHECK(!bb::soapyValueText(s, "500", out, e) && !bb::soapyValueText(s, "1.5", out, e) && !bb::soapyValueText(s, "x", out, e));
+        s.type = "bool"; CHECK(bb::soapyValueText(s, "1", out, e) && out == "true" && bb::soapyValueText(s, "false", out, e) && out == "false" && !bb::soapyValueText(s, "maybe", out, e));
+        s.type = "string"; s.options = {"a", "b"}; CHECK(bb::soapyValueText(s, "b", out, e) && !bb::soapyValueText(s, "c", out, e));
+        std::string cmd;
+        CHECK(bb::soapyWriteCommand("trim", "1.5", cmd, e) && cmd == "soapy:trim=1.5");
+        CHECK(!bb::soapyWriteCommand("a=b", "1", cmd, e) && !bb::soapyWriteCommand("", "1", cmd, e) && !bb::soapyWriteCommand("k", std::string(300, 'x'), cmd, e));
+
+        // the rows
+        Rig r; r.open();
+        std::vector<slk::Row> v = r.build();
+        bool said = false; for (const auto& x : v) { if (x.label.find("names no bandwidth control") != std::string::npos) { said = true; } }
+        CHECK(said && r.find(v, "b.sp.bw.set") == nullptr && r.find(v, "b.sp.0") == nullptr);   // a radio whose driver reported nothing shows no control, only the reason
+        r.facts["fact.radio.1.soapy.bandwidth"] = "1000000"; r.facts["fact.radio.1.soapy.bandwidthLo"] = "200000"; r.facts["fact.radio.1.soapy.bandwidthHi"] = "8000000";
+        r.facts["fact.radio.1.soapy.count"] = "4";
+        const auto set = [&r](int i, const char* what, const char* val) { r.facts["fact.radio.1.soapy." + std::to_string(i) + "." + what] = val; };
+        set(0, "key", "biastee"); set(0, "name", "Bias tee"); set(0, "type", "bool"); set(0, "value", "false");
+        set(1, "key", "offset"); set(1, "name", "Tuner offset"); set(1, "type", "int"); set(1, "value", "5"); set(1, "units", "kHz"); set(1, "min", "-100"); set(1, "max", "100");
+        set(2, "key", "clock"); set(2, "name", "Clock source"); set(2, "type", "string"); set(2, "value", "external"); set(2, "options", "internal|external|gpsdo"); set(2, "optionNames", "Internal|External 10 MHz|GPS");
+        set(3, "key", "label"); set(3, "name", "Free text"); set(3, "type", "string"); set(3, "value", "hello");
+        v = r.build();
+        CHECK(r.has(v, "1000 kHz"));                                                           // the driver's bandwidth now
+        CHECK(r.find(v, "b.sp.0") != nullptr && r.find(v, "b.sp.0")->on == false);           // a tick showing the driver's value
+        CHECK(r.find(v, "b.sp.2") != nullptr && r.find(v, "b.sp.2")->pick == 1 && r.find(v, "b.sp.2")->options.size() == 3 && r.find(v, "b.sp.2")->options[1] == "External 10 MHz");
+        CHECK(r.find(v, "b.sp.1") != nullptr && r.find(v, "b.sp.1")->value == "5");           // a field showing the driver's value
+        CHECK(r.find(v, "b.sp.4") == nullptr && r.find(v, "b.sp.3.set") != nullptr);          // exactly the driver's four settings
+        // bandwidth
+        r.rows.act("b.sp.bw", "2500");
+        r.rows.act("b.sp.bw.set", "");
+        CHECK(r.sent.size() == 1 && r.sent[0].text == "soapy_bandwidth" && r.sent[0].n0 == 2500000.0 && r.sent[0].op == FOXAPI_OP_SET_DEVICE_OPTION);
+        r.answer(101, FOXAPI_OK, "", 2400000.0);                                               // the driver rounded it: that is what the note says
+        CHECK(r.rows.note().find("the driver now has") != std::string::npos && r.rows.note().find("2400 kHz") != std::string::npos);
+        r.rows.act("b.sp.bw", "50");                                                           // outside the driver's range: never sent
+        r.rows.act("b.sp.bw.set", "");
+        CHECK(r.sent.size() == 1 && r.rows.note().find("200 - 8000 kHz") != std::string::npos);
+        // each type sends the text the driver's own type wants
+        r.rows.act("b.sp.0", "1");
+        CHECK(r.sent.size() == 2 && r.sent[1].text == "soapy:biastee=true");
+        r.rows.act("b.sp.2", "2");
+        CHECK(r.sent.size() == 3 && r.sent[2].text == "soapy:clock=gpsdo");
+        r.rows.act("b.sp.1", "-40");
+        r.rows.act("b.sp.1.set", "");
+        CHECK(r.sent.size() == 4 && r.sent[3].text == "soapy:offset=-40");
+        r.rows.act("b.sp.1", "500");                                                           // outside the range the driver reported: refused here
+        r.rows.act("b.sp.1.set", "");
+        CHECK(r.sent.size() == 4 && r.rows.note().find("-100 to 100") != std::string::npos);
+        r.rows.act("b.sp.3", "my note");
+        r.rows.act("b.sp.3.set", "");
+        CHECK(r.sent.size() == 5 && r.sent[4].text == "soapy:label=my note");
+        // the engine's word: the driver refused
+        r.answer(105, FOXAPI_FAILED, "writeSetting failed: the driver will not change that while a stream is running");
+        CHECK(r.rows.note().find("will not change that while a stream is running") != std::string::npos);
+        // the value after the write (the driver clamped it)
+        r.answer(104, FOXAPI_OK, "10");
+        CHECK(r.rows.note().find("the driver now has 10") != std::string::npos);
+        // another radio's driver: the facts of the selected radio decide
+        r.selected = 2;
+        v = r.build();
+        CHECK(r.find(v, "b.sp.0") == nullptr && r.find(v, "b.sp.bw.set") == nullptr);
+    }
     return testSummary("test_slint_s5b_host");
 }

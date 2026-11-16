@@ -319,7 +319,7 @@ foreach(src ${CASCADE_TESTS})
     endif()
     target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     # SCREEN LANE S5 (docs/multi-radio-records/screen-s5-sources.md): this test drives the Source section's rows (src/slint/s5_rows.cpp, pure: no Slint) against the real engine.
-    if(name STREQUAL "test_engine_api_s5")
+    if(name STREQUAL "test_engine_api_s5" OR name STREQUAL "test_engine_api_s5b")
         target_sources(${name} PRIVATE "${CMAKE_SOURCE_DIR}/src/slint/s5_logic.cpp" "${CMAKE_SOURCE_DIR}/src/slint/s5_rows.cpp" "${CMAKE_SOURCE_DIR}/src/slint/s5b_logic.cpp" "${CMAKE_SOURCE_DIR}/src/slint/s5b_rows.cpp" "${CMAKE_SOURCE_DIR}/src/slint/lanel_logic.cpp" "${CMAKE_SOURCE_DIR}/src/slint/lanek_logic.cpp")
         target_include_directories(${name} PRIVATE "${CMAKE_SOURCE_DIR}/src/slint")
     endif()
