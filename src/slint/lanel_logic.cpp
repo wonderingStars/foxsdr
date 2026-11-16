@@ -404,12 +404,12 @@ const std::vector<std::string>& channelPlanIds() {
     return v;
 }
 const std::vector<std::string>& sourceKinds() {
-    static const std::vector<std::string> v = {"rfspace", "hpsdr1", "hpsdr2", "aaronia", "spyserver", "soapyremote", "sdrconnect", "icr8600", "funcube", "g39ddc", "g33ddc", "sdriq"};
+    static const std::vector<std::string> v = {"rfspace", "hpsdr1", "hpsdr2", "aaronia", "spyserver", "soapyremote", "sdrconnect", "icr8600", "funcube", "g39ddc", "g33ddc", "sdriq", "fobos"};
     return v;
 }
 const std::vector<std::string>& sourceKindNames() {
     static const std::vector<std::string> v = {"RFspace NetSDR / SDR-IP / Afedri", "HPSDR protocol 1 (including Hermes-Lite 2)", "HPSDR protocol 2", "Aaronia RTSA", "SpyServer", "SoapyRemote", "SDRconnect",
-                                               "Icom IC-R8600", "FUNcube Dongle Pro / Pro+", "WiNRADiO G39DDC", "WiNRADiO G33DDC", "RFspace SDR-IQ (USB; needs FTDI's D2XX driver)"};
+                                               "Icom IC-R8600", "FUNcube Dongle Pro / Pro+", "WiNRADiO G39DDC", "WiNRADiO G33DDC", "RFspace SDR-IQ (USB; needs FTDI's D2XX driver)", "Fobos SDR (needs the maker's library)"};
     return v;
 }
 

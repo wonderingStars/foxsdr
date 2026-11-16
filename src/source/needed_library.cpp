@@ -139,6 +139,22 @@ Check checkLibraryHeaders(const Info& row, const std::string& where, const Env&)
     return answer(State::NotALibrary, ck.sentence, lookedIn, "headers", folderOf(path), fileOf(path));
 }
 
+// The same, for a library whose file name is not known for certain: each name of the row is tried in turn, and the first file found is the one judged.
+Check checkLibraryHeadersAny(const Info& row, const std::string& where, const Env& env) {
+    const std::string lookedIn = where.empty() ? std::string("the folders on the PATH") : where;
+    std::string names;
+    for (const std::string& n : row.fileNames) { names += (names.empty() ? "" : " or ") + n; }
+    for (const std::string& n : row.fileNames) {
+        std::string why;
+        const std::string path = vendorlib::findLibrary(where, n, why);
+        if (path.empty()) { continue; }
+        Info one = row;
+        one.fileNames = {n};
+        return checkLibraryHeaders(one, where, env);
+    }
+    return answer(State::NotFound, "Not found: neither " + names + " is in " + lookedIn + ".", lookedIn, "headers");
+}
+
 // A SoapySDR module: a file with a fragment in its name in the module folder of a PothosSDR or radioconda install. Lists folders and file names only.
 Check checkSoapyModule(const Info& row, const std::string& where, const Env& env) {
     if (!where.empty()) { return answer(State::CannotCheck, "A SoapySDR module is found in the module folder of an install, not by a file you choose.", "", ""); }
@@ -301,6 +317,24 @@ std::vector<Info> buildTable() {
     }
     {
         Info r = ftd2xxNeededInfo();   // the SDR-IQ bridge's own row (kind, source key, page status and check are set there)
+        t.push_back(r);
+    }
+    {
+        Info r;
+        r.libraryId = "libfobos";
+        r.sourceKind = "fobos";
+        r.name = "Fobos SDR library (libfobos, from RigExpert)";
+        r.fileNames = {"fobos.dll", "libfobos.dll"};
+        r.why = "Lets FoxSDR open a Fobos SDR through the maker's own library. Receive only: FoxSDR never writes firmware to the radio.";
+        r.publisher = "RigExpert";
+        r.installKind = "copy-in";
+        r.folderNote = "Any folder you choose (give it to FoxSDR as lib=<folder or file>), or a folder on the PATH. The file names FoxSDR tries are a guess: the maker's header names no file, so give the file yourself if yours is called something else.";
+        r.steps = {"Get the maker's own library, libfobos, from RigExpert and install it yourself (where from: see the link registry; FoxSDR does not include it and does not download it). It is published under the LGPL-2.1 licence.",
+                   "Put the 64-bit library file in a folder of your own, or in a folder that is on the PATH.",
+                   "If you chose a folder of your own, or your file has another name, give it to FoxSDR as lib=<that folder or file> when you open the radio.",
+                   "Press Check again: FoxSDR looks for the file and reads its headers (it does not run it)."};
+        r.licence = "LGPL-2.1 (the licence of the maker's repository, as read by the lane that built the bridge); FoxSDR loads the library you installed and ships none of it.";
+        r.check = &checkLibraryHeadersAny;
         t.push_back(r);
     }
     return t;

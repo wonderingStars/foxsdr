@@ -720,22 +720,38 @@ struct LaneLPublisher::Impl {
     // ================================================================ B. NETWORK AND VENDOR RADIOS
     void buildSources(std::vector<Row>& v) {
         v.push_back(rNote(tr("Network and vendor radios that are not in the radio list. Nothing connects until you press one of the keys below. The address and arguments are described in the radio's own section of the manual.")));
+        // A radio that needs the maker's own library is in the list only once that library has been found (the row of Needed libraries says so after "Check again").
+        const std::vector<std::string>& allKinds = sourceKinds();
+        const std::vector<NeededRow> need = parseNeeded(fact("needed.libs"));
+        std::vector<int> shown;
+        for (std::size_t i = 0; i < allKinds.size(); ++i) {
+            if (allKinds[i] == "fobos") {
+                bool found = false;
+                for (const auto& r : need) { found = found || (r.sourceKind == "fobos" && r.checked && r.state == "working"); }
+                if (!found) { continue; }
+            }
+            shown.push_back(static_cast<int>(i));
+        }
         std::vector<std::string> names;
-        for (const auto& n : sourceKindNames()) { names.push_back(tr(n.c_str())); }
+        for (const int i : shown) { names.push_back(tr(sourceKindNames()[static_cast<std::size_t>(i)].c_str())); }
+        const auto realKind = [shown](int picked) { return shown.empty() ? 0 : shown[static_cast<std::size_t>(std::clamp(picked, 0, static_cast<int>(shown.size()) - 1))]; };
         choiceD(v, "n.kind", tr("Source"), names, 0);
         field(v, "n.args", tr("Address and arguments"), "", tr("For a network radio the address comes first, for example 192.168.1.20 or host:port; the maker's own words are in the manual"));
-        const Built b = openRadioId(pv("n.kind", 0), dv("n.args"));
-        key(v, "n.add", tr("Add this as another radio"), [this] {
-            const Built bb = openRadioId(pv("n.kind", 0), dv("n.args"));
+        const Built b = openRadioId(realKind(pv("n.kind", 0)), dv("n.args"));
+        key(v, "n.add", tr("Add this as another radio"), [this, realKind] {
+            const Built bb = openRadioId(realKind(pv("n.kind", 0)), dv("n.args"));
             if (!bb.ok) { refuseHere(kSources, tr("Add this as another radio"), bb.err); return; }
             Cmd c = cmd(FOXAPI_OP_RADIO_ADD, 0, bb.text); c.i1 = 0; send(kSources, tr("Add this as another radio"), c);
         }, b.ok, tr("Opens a new radio on that source: it connects to the address you typed."));
-        key(v, "n.use", tr("Use for the selected radio"), [this] {
-            const Built bb = openRadioId(pv("n.kind", 0), dv("n.args"));
+        key(v, "n.use", tr("Use for the selected radio"), [this, realKind] {
+            const Built bb = openRadioId(realKind(pv("n.kind", 0)), dv("n.args"));
             if (!bb.ok) { refuseHere(kSources, tr("Use for the selected radio"), bb.err); return; }
             send(kSources, tr("Use for the selected radio"), cmd(FOXAPI_OP_SELECT_SOURCE, 0, bb.text));
         }, b.ok, tr("Switches the selected radio to that source: it connects to the address you typed."));
-        if (pv("n.kind", 0) == 11) {
+        if (realKind(pv("n.kind", 0)) == 12) {
+            v.push_back(rNote(tr("The Fobos SDR is opened through the maker's own library, which you install yourself: FoxSDR does not include it and does not download it. It is in the list because that library was found. FoxSDR only receives with it: it never writes firmware to the radio, resets it or changes its output pins. In the arguments, lib= names the library file or its folder, serial= or index= picks a board, rate= asks for a sample rate, and count=pairs is for a library whose stream length counts complex samples. This radio's code has been tried only against a stand-in library, never on a real Fobos SDR.")));
+        }
+        if (realKind(pv("n.kind", 0)) == 11) {
             v.push_back(rNote(tr("The SDR-IQ needs FTDI's D2XX driver (ftd2xx.dll). Install it from FTDI's web site, ftdichip.com (FoxSDR does not include it and does not download it), plug the SDR-IQ in, then choose it. The arguments are sdriq=<serial> (empty = the first one) and timeout=<ms>.")));
         }
         v.push_back(rNote(tr("Whether a radio's driver or program is installed is shown under Needed libraries.")));
