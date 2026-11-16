@@ -874,13 +874,16 @@ int main() {
     // 6. The Markers sheets
     // =========================================================================================================
     const int sy = yOf(ui->get_sheets_y());
-    const int panelX = 10 + (660 - 620) / 2, panelY = sy + (380 - 340) / 2;
+    // The sheet is min(700, stage width - 24) wide (window gaps 1 widened it from 620 for the noted time, 2352c473): 636 in this 660 px stage; the Noted column grew
+    // from 76 to 150 px (MarkerCols.dropped-w). Both pins recomputed at engine merge 6.
+    const int sheetW = 636, notedExtra = 150 - 76;
+    const int panelX = 10 + (660 - sheetW) / 2, panelY = sy + (380 - 340) / 2;
     const int cx = panelX + 1 + 12;
     {
         const Frame f = shot();
         crop(f, "crop-markers.png", 10, sy, 660, 380);
         f.savePng(shotDir() + "tools-specimen-markers.png");
-        CHECKV(f.near(panelX + 100, panelY + 150, panel, 0) && f.near(panelX + 300, panelY, knobRing, 0) && f.near(panelX, panelY + 150, knobRing, 0) && f.near(panelX + 619, panelY + 150, knobRing, 0), "the sheet: the panel ground in a knob-ring border, 620 wide");
+        CHECKV(f.near(panelX + 100, panelY + 150, panel, 0) && f.near(panelX + 300, panelY, knobRing, 0) && f.near(panelX, panelY + 150, knobRing, 0) && f.near(panelX + sheetW - 1, panelY + 150, knobRing, 0), "the sheet: the panel ground in a knob-ring border, 636 wide (the stage less 24)");
         CHECKV(panelY + 340 >= 0 && f.near(panelX + 300, panelY + 339, knobRing, 0) && !f.near(panelX + 300, panelY + 341, knobRing, 0), "the sheet is 340 high");
         CHECKV(f.near(panelX + 100, panelY + 15, menu, 0) && f.near(panelX + 100, panelY + 30, tok(wb.line_strong), 0), "the title strip: the menu ground with a rule under it, 30 high");
         CHECKV(f.countNear(panelX + 12, panelY + 8, panelX + 120, panelY + 24, fg, 60) >= 40, "the title (MARKERS) in fg");
@@ -896,11 +899,11 @@ int main() {
             CHECKV(f.countNear(cx + 8, ry + 6, cx + 40, ry + 22, accentSoft, 40) >= 5, "marker %d: its tag in accent-soft (%d)", i + 1, f.countNear(cx + 8, ry + 6, cx + 40, ry + 22, accentSoft, 40));
             CHECKV(f.countNear(cx + 52, ry + 6, cx + 160, ry + 22, fg, 60) >= 40, "marker %d: its frequency", i + 1);
             CHECKV(f.countNear(cx + 176, ry + 6, cx + 240, ry + 22, dim, 40) >= 25, "marker %d: when it was dropped (dim)", i + 1);
-            CHECKV(f.near(cx + 262, ry + 2, lineStrong, 0) && f.near(cx + 262, ry + 25, lineStrong, 0), "marker %d: the note is a 24 px field", i + 1);
-            CHECKV(f.near(cx + 452, ry + 4, keyLine, 0) && f.near(cx + 452, ry + 23, keyLine, 0) && f.near(cx + 452, ry + 3, panel, 0), "marker %d: Tune, an xs key (20 high)", i + 1);
+            CHECKV(f.near(cx + 262 + notedExtra, ry + 2, lineStrong, 0) && f.near(cx + 262 + notedExtra, ry + 25, lineStrong, 0), "marker %d: the note is a 24 px field", i + 1);
+            CHECKV(f.near(cx + 452 + (sheetW - 620), ry + 4, keyLine, 0) && f.near(cx + 452 + (sheetW - 620), ry + 23, keyLine, 0) && f.near(cx + 452 + (sheetW - 620), ry + 3, panel, 0), "marker %d: Tune, an xs key (20 high)", i + 1);
         }
-        CHECKV(f.countNear(cx + 262 + 6, hy + 22 + 28 + 6, cx + 400, hy + 22 + 28 + 22, tok(wb.disabled), 40) >= 15, "marker 2: an empty note shows 'add a note'");
-        CHECKV(f.countNear(cx + 262 + 6, hy + 22 + 6, cx + 400, hy + 22 + 22, fg, 60) >= 30, "marker 1: its note");
+        CHECKV(f.countNear(cx + 262 + notedExtra + 6, hy + 22 + 28 + 6, cx + 400, hy + 22 + 28 + 22, tok(wb.disabled), 40) >= 15, "marker 2: an empty note shows 'add a note'");
+        CHECKV(f.countNear(cx + 262 + notedExtra + 6, hy + 22 + 6, cx + 400, hy + 22 + 22, fg, 60) >= 30, "marker 1: its note");
         // the foot: two small keys at the left, 12 px above the sheet's edge
         const int fy = panelY + 340 - 1 - 12 - 24;
         CHECKV(f.near(cx + 12, fy, keyLine, 0) && f.near(cx + 12, fy + 23, keyLine, 0), "Copy markers to clipboard: a small key at the left, at the foot");
@@ -914,11 +917,11 @@ int main() {
         tap(u8"h"); tap(u8"i");
         shot();
         CHECKV(!evs.empty() && evs.back().name == "markers-note" && evs.back().args == "2 hi", "a note is saved as it is typed: %s", names(evs).c_str());
-        Ev e = hit(cx + 452 + 10, r1 + 14);
+        Ev e = hit(cx + 452 + (sheetW - 620) + 10, r1 + 14);
         CHECKV(e.name == "markers-tune" && e.args == "1", "Tune: '%s' '%s'", e.name.c_str(), e.args.c_str());
-        e = hit(cx + 452 + 60, r3 + 14);
+        e = hit(cx + 452 + (sheetW - 620) + 60, r3 + 14);
         CHECKV(e.name == "markers-bookmark" && e.args == "3", "Bookmark: '%s' '%s'", e.name.c_str(), e.args.c_str());
-        e = hit(cx + 594 - 8 - 10, r2 + 14);
+        e = hit(cx + (sheetW - 26) - 8 - 10, r2 + 14);
         CHECKV(e.name == "markers-remove" && e.args == "2", "the remove key: '%s' '%s'", e.name.c_str(), e.args.c_str());
         e = hit(cx + 60, fy + 12);
         CHECKV(e.name == "markers-copy", "Copy markers to clipboard: '%s'", e.name.c_str());
@@ -929,7 +932,7 @@ int main() {
         CHECKV(armed.near(cx + 170 + 6, fy, dangerLine, 0) || armed.countNear(cx + 160, fy + 2, cx + 340, fy + 22, dangerBg, 0) >= 300, "Yes, remove all 3: the key turns to danger (%d)", armed.countNear(cx + 160, fy + 2, cx + 340, fy + 22, dangerBg, 0));
         e = hit(cx + 220, fy + 12);
         CHECKV(e.name == "markers-clear", "the second press clears: '%s'", e.name.c_str());
-        e = hit(panelX + 620 - 4 - 13, panelY + 15);
+        e = hit(panelX + sheetW - 4 - 13, panelY + 15);
         CHECKV(e.name == "markers-closed", "the close key: '%s'", e.name.c_str());
         e = hit(14, sy + 6);
         CHECKV(e.name == "markers-closed", "a click on the backdrop dismisses: '%s'", e.name.c_str());
