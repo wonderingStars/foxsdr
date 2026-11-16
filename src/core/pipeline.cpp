@@ -486,6 +486,13 @@ void Pipeline::rebuildChannelBlocks(double chanRate) {
     afc_->setHoldHz(2.0 * afcPullHz_);
     afc_->setEnabled(afcOn_);
     afcAppliedHz_ = 0.0;
+    passbandFilter_ = std::make_unique<cascade::dsp::IfFilter>(chanRate);   // (the passband's band-pass runs at the channel rate: rebuilt with it; the next block sets its edges again)
+    sam_ = std::make_unique<cascade::dsp::SyncAm>(chanRate);   // (the synchronous AM detector runs at the channel rate: rebuilt with it, its sideband put back)
+    sam_->setSideband(samKind_ == 2 ? cascade::dsp::SyncAm::Sideband::Upper : (samKind_ == 3 ? cascade::dsp::SyncAm::Sideband::Lower : cascade::dsp::SyncAm::Sideband::Both));
+    pbRateHz_ = chanRate;
+    pbApplied_[0] = -1.0;
+    pbActive_ = false;
+    mirrorPbActive_.store(false, std::memory_order_relaxed);
     toneHpL_.configure(kAudioRateHz);
     toneHpR_.configure(kAudioRateHz);
     stereo_ = std::make_unique<cascade::dsp::StereoFm>(chanRate);
@@ -1449,6 +1456,82 @@ bool Pipeline::setAfc(bool on, double pullInHz) {
     return true;
 }
 bool Pipeline::afcOn() const { return mirrorAfcOn_.load(std::memory_order_relaxed); }
+
+// --- THE PASSBAND (screen lane S1, G1-35 and G1-34) -----------------------------------------------------------------------------------------------------
+bool Pipeline::setPassband(bool on, double lowCutHz, double highCutHz, double shiftHz) {
+    if (!std::isfinite(lowCutHz) || !std::isfinite(highCutHz) || !std::isfinite(shiftHz)) { return false; }
+    if (lowCutHz < 0.0 || lowCutHz > 24000.0 || highCutHz < 0.0 || highCutHz > 24000.0 || shiftHz < -6000.0 || shiftHz > 6000.0) { return false; }
+    post([this, on, lowCutHz, highCutHz, shiftHz] {
+             pbOn_ = on;
+             pbLowHz_ = lowCutHz;
+             pbHighHz_ = highCutHz;
+             pbShiftHz_ = shiftHz;
+         },
+         [this, on, lowCutHz, highCutHz, shiftHz] {
+             mirrorPbOn_.store(on, std::memory_order_relaxed);
+             mirrorPbLow_.store(lowCutHz, std::memory_order_relaxed);
+             mirrorPbHigh_.store(highCutHz, std::memory_order_relaxed);
+             mirrorPbShift_.store(shiftHz, std::memory_order_relaxed);
+         });
+    return true;
+}
+// --- THE AM DETECTOR (screen lane S1, G1-19) ------------------------------------------------------------------------------------------------------------
+bool Pipeline::setAmDetector(int kind) {
+    if (kind < 0 || kind > 3) { return false; }
+    post([this, kind] {
+             if (kind == samKind_) { return; }
+             samKind_ = kind;
+             if (sam_) {
+                 sam_->setSideband(kind == 2 ? cascade::dsp::SyncAm::Sideband::Upper : (kind == 3 ? cascade::dsp::SyncAm::Sideband::Lower : cascade::dsp::SyncAm::Sideband::Both));
+                 sam_->reset();   // a detector chosen now starts from nothing: no stale loop from the last time it ran
+             }
+             mirrorSamLocked_.store(false, std::memory_order_relaxed);
+         },
+         [this, kind] { mirrorSamKind_.store(kind, std::memory_order_relaxed); });
+    return true;
+}
+int Pipeline::amDetector() const { return mirrorSamKind_.load(std::memory_order_relaxed); }
+bool Pipeline::amDetectorLocked() const { return mirrorSamLocked_.load(std::memory_order_relaxed); }
+double Pipeline::amDetectorOffsetHz() const { return mirrorSamOffsetHz_.load(std::memory_order_relaxed); }
+double Pipeline::amDetectorPresence() const { return mirrorSamPresence_.load(std::memory_order_relaxed); }
+
+bool Pipeline::passbandOn() const { return mirrorPbOn_.load(std::memory_order_relaxed); }
+double Pipeline::passbandLowCutHz() const { return mirrorPbLow_.load(std::memory_order_relaxed); }
+double Pipeline::passbandHighCutHz() const { return mirrorPbHigh_.load(std::memory_order_relaxed); }
+double Pipeline::passbandShiftHz() const { return mirrorPbShift_.load(std::memory_order_relaxed); }
+bool Pipeline::passbandActive() const { return mirrorPbActive_.load(std::memory_order_relaxed); }
+
+// The band-pass follows the settings, the mode, the CW pitch and the channel rate: looked at once a block, applied only when something moved.
+void Pipeline::updatePassbandLocked() {
+    const cascade::dsp::DemodMode md = demod_.mode();
+    cascade::dsp::PassbandSpec spec;
+    bool hasPassband = true;
+    switch (md) {
+        case cascade::dsp::DemodMode::USB: spec.mode = cascade::dsp::PassbandMode::Usb; break;
+        case cascade::dsp::DemodMode::LSB: spec.mode = cascade::dsp::PassbandMode::Lsb; break;
+        case cascade::dsp::DemodMode::CW: spec.mode = cascade::dsp::PassbandMode::Cw; break;
+        case cascade::dsp::DemodMode::AM: spec.mode = cascade::dsp::PassbandMode::Am; break;
+        default: hasPassband = false; break;
+    }
+    const bool want = pbOn_ && hasPassband;
+    const double pitch = demod_.cwPitchHz();
+    const std::array<double, 7> now{{static_cast<double>(static_cast<int>(md)), want ? 1.0 : 0.0, pbLowHz_, pbHighHz_, pbShiftHz_, pitch, pbRateHz_}};
+    if (now == pbApplied_) { return; }
+    pbApplied_ = now;
+    if (!want) {
+        passbandFilter_->setBandEnabled(false);
+        pbActive_ = false;
+    } else {
+        spec.lowCutHz = pbLowHz_;
+        spec.highCutHz = pbHighHz_;
+        spec.shiftHz = pbShiftHz_;
+        spec.cwPitchHz = pitch;
+        const cascade::dsp::PassbandEdges e = cascade::dsp::passbandEdges(spec, pbRateHz_);
+        passbandFilter_->setBand(e.loHz, e.hiHz, true);
+        pbActive_ = true;
+    }
+    mirrorPbActive_.store(pbActive_, std::memory_order_relaxed);
+}
 double Pipeline::afcPullInHz() const { return mirrorAfcPullHz_.load(std::memory_order_relaxed); }
 double Pipeline::afcCorrectionHz() const { return mirrorAfcCorrHz_.load(std::memory_order_relaxed); }
 bool Pipeline::afcLocked() const { return mirrorAfcLocked_.load(std::memory_order_relaxed); }
@@ -2542,6 +2625,13 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         mirrorAfcLocked_.store(afcAppliedHz_ != 0.0 && afc_->locked(), std::memory_order_relaxed);
     }
 
+    // THE PASSBAND (screen lane S1): the band-pass whose edges and shift the person set, after the AFC has put the carrier where it belongs and before the meter and the demodulator hear the channel. Off, the
+    // filter is not touched (a settled filter with its band off returns at once, samples bit-exact).
+    if (passbandFilter_) {
+        updatePassbandLocked();
+        passbandFilter_->process(chanBuf_.data(), m);
+    }
+
     // S-meter: channel power (post-filter, pre-demod), snapshotted for the GUI.
     meter_.process(chanBuf_.data(), m);
     signalDb_.store(meter_.powerDb(), std::memory_order_relaxed);
@@ -2570,7 +2660,17 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // wants the flat discriminator is asking for the third entry of the
     // De-emph control, "Off", which is a setting that now reaches this far.
     audioBuf_.resize(m);
-    demod_.process(chanBuf_.data(), m, audioBuf_.data());
+    // THE AM DETECTOR (screen lane S1, G1-19): in AM with a synchronous detector chosen (setAmDetector), the carrier-tracking product detector (dsp/sam.hpp) takes the place of the envelope detector. It keeps its
+    // own fall-back to the envelope when the carrier fades; any other mode, and AM with the envelope chosen, are the demodulator as they always were.
+    if (samKind_ != 0 && sam_ && demod_.mode() == cascade::dsp::DemodMode::AM) {
+        sam_->process(chanBuf_.data(), m, audioBuf_.data());
+        mirrorSamLocked_.store(sam_->locked(), std::memory_order_relaxed);
+        mirrorSamOffsetHz_.store(sam_->carrierOffsetHz(), std::memory_order_relaxed);
+        mirrorSamPresence_.store(sam_->carrierPresence(), std::memory_order_relaxed);
+    } else {
+        demod_.process(chanBuf_.data(), m, audioBuf_.data());
+        if (mirrorSamLocked_.load(std::memory_order_relaxed)) { mirrorSamLocked_.store(false, std::memory_order_relaxed); }
+    }
 
     const cascade::dsp::DemodMode mode = demod_.mode();
     const bool wfm = (mode == cascade::dsp::DemodMode::WFM);

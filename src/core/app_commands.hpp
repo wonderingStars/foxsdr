@@ -201,6 +201,18 @@
 //   Not saved with the radio: it is a view, set again by the screen that wants it. OUT_OF_RANGE for a size or width that is not allowed, NO_CHANGE when it is so already.
 #define FOXAPP_OP_SET_IF_ZOOM            0x8625u /* ival[0]: FFT size or 0 off; num[0]: span Hz. Addresses one radio (target) */
 #define FOXAPP_OP_SET_STEREO_SYSTEM      0x8619u /* ival[0]: 0 automatic / 1 pilot tone / 2 OIRT. Addresses one radio (target) */
+//   SET_PASSBAND (SETTINGS; screen lane S1, wave 8, rows G1-35 and G1-34): the edges of the channel filter set apart and the whole band shifted (IF shift) on the selected radio (target), in USB, LSB, CW and AM (dsp/passband.hpp's
+//   maths over dsp/if_filter.hpp's band-pass; Pipeline::setPassband). ival[0] 1 puts the band-pass in the chain, 0 takes it out (the mode's own filter again); ival[1] = 1: the figures follow - num[0] the low cut, num[1] the high cut,
+//   num[2] the shift, all Hz. USB and LSB: the audio frequencies the band keeps (300 to 2700 is the usual voice window), moved by the shift (a positive shift moves the band toward the higher audio frequencies in both); CW: the same,
+//   around the CW pitch (the 700 Hz default pitch with 450 to 950 is a 500 Hz filter); AM: how far below (low cut) and above (high cut) the carrier the band reaches. It is IN ADDITION to the channel width (SET_BANDWIDTH): the narrower of
+//   the two wins. Other modes keep the figures and ignore them. applied[0] is the low cut, applied[1] the high cut in force (the shift is in the fact). OUT_OF_RANGE for a cut outside 0 to 24000 Hz or a shift outside -6000 to
+//   +6000 Hz, NO_CHANGE when the radio is so already. fact.radio.<n>.passband reads "<on>;<low>;<high>;<shift>;<active>" (active 1 while the filter is really in the chain). Not saved: it is off at every start (like the clarifier).
+#define FOXAPP_OP_SET_PASSBAND           0x8630u /* ival[0]: 1 on / 0 off; ival[1]=1: num[0] low cut, num[1] high cut, num[2] shift, Hz. Addresses one radio (target) */
+//   SET_AM_DETECTOR (SETTINGS; screen lane S1, wave 8, row G1-19): how the selected radio (target) detects an AM signal: ival[0] 0 the envelope detector AM mode has always had (the default), 1 synchronous on both sidebands, 2 synchronous
+//   on the upper sideband only, 3 on the lower sideband only (dsp/sam.hpp SyncAm: a carrier-tracking loop, a product detector and a sideband filter; Pipeline::setAmDetector). It acts in AM mode only; the choice is kept in any other
+//   mode and takes effect when AM is chosen. While the loop has no carrier it falls back to the envelope detector by itself. applied[0] is the kind in force. OUT_OF_RANGE for a kind outside 0 to 3, NO_CHANGE when it is so
+//   already. fact.radio.<n>.amdet reads "<kind>;<locked>;<offset Hz>;<carrier presence>" (locked 1 while the loop is in phase lock; the offset and the presence are measurements). Not saved: it is the envelope at every start.
+#define FOXAPP_OP_SET_AM_DETECTOR        0x8631u /* ival[0]: 0 envelope / 1 synchronous both / 2 upper / 3 lower. Addresses one radio (target) */
 // wire-c begin (wiring lane C, operation block 0x8A00-0x8AFF; docs/multi-radio-records/wire-c.md, src/engine/wire_c.hpp)
 //   WIREC_SETTING (SETTINGS; LOCAL sessions only like every app op): text: "<key>\x1F<value>". One key of wiring lane C's own settings file (wirec.json in the per-user
 //   folder; config.json is untouched). OK: changed and saved; NO_CHANGE: already so; NOT_FOUND: no such key; BAD_ARGUMENT: the value is not of the key's kind;

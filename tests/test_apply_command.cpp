@@ -466,6 +466,11 @@ struct AppWindowTestAccess {
     static bool afcPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.afcOn(); }); }
     static bool cwPeakRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->cwPeakOn_; }); }
     static bool cwPeakPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.cwPeakOn(); }); }
+    static bool passbandRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->passbandOn_; }); }   // screen lane S1
+    static bool passbandPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.passbandOn(); }); }
+    static double passbandHighRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->passbandHighHz_; }); }
+    static int amDetRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->amDetector_; }); }
+    static int amDetPipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.amDetector(); }); }
     static int placeRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->stereoPlaceMode_; }); }
     static int placePipe(AppWindow& a) { return rd(a, [&] { return th::engine(a).pipeline_.stereoPlaceMode(); }); }
     static int vfoActiveRx(AppWindow& a) { return rd(a, [&] { return th::engine(a).receivers_[0]->vfoActive_; }); }
@@ -1347,6 +1352,40 @@ void receiverOps(AppWindow& a) {
         CHECK(A::cwPeakRx(a) && A::cwPeakPipe(a));
         CHECK(ok(A::apply(a, ints(FOXAPI_OP_SET_CW_PEAK, 0, 0))));
         CHECK(!A::cwPeakRx(a) && !A::cwPeakPipe(a));
+    }
+    covering(FOXAPP_OP_SET_PASSBAND);   // screen lane S1 (G1-35, G1-34)
+    {
+        CHECK(!A::passbandRx(a) && !A::passbandPipe(a));
+        FoxCommand pb = ints(FOXAPP_OP_SET_PASSBAND, 1, 1);
+        pb.num[0] = 400.0;
+        pb.num[1] = 2500.0;
+        pb.num[2] = 100.0;
+        CHECK(ok(A::apply(a, pb)));
+        CHECK(A::passbandRx(a) && A::passbandPipe(a) && A::passbandHighRx(a) == 2500.0);
+        CHECK(refused(A::apply(a, pb), FOXAPI_NO_CHANGE));                       // the same figures again
+        pb.num[1] = 30000.0;
+        CHECK(refused(A::apply(a, pb), FOXAPI_OUT_OF_RANGE));                    // a high cut past 24000 Hz
+        pb.num[1] = 2500.0;
+        pb.num[2] = 7000.0;
+        CHECK(refused(A::apply(a, pb), FOXAPI_OUT_OF_RANGE));                    // a shift past 6000 Hz
+        pb.num[2] = -100.0;
+        pb.num[0] = -1.0;
+        CHECK(refused(A::apply(a, pb), FOXAPI_OUT_OF_RANGE));                    // a negative low cut
+        CHECK(A::passbandRx(a) && A::passbandPipe(a) && A::passbandHighRx(a) == 2500.0);   // a refusal changes nothing
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_PASSBAND, 0, 0))));              // off keeps the figures and takes the band-pass out
+        CHECK(!A::passbandRx(a) && !A::passbandPipe(a) && A::passbandHighRx(a) == 2500.0);
+    }
+    covering(FOXAPP_OP_SET_AM_DETECTOR);   // screen lane S1 (G1-19)
+    {
+        CHECK(A::amDetRx(a) == 0 && A::amDetPipe(a) == 0);
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_AM_DETECTOR, 2))));
+        CHECK(A::amDetRx(a) == 2 && A::amDetPipe(a) == 2);
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_AM_DETECTOR, 2)), FOXAPI_NO_CHANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_AM_DETECTOR, 4)), FOXAPI_OUT_OF_RANGE));
+        CHECK(refused(A::apply(a, ints(FOXAPP_OP_SET_AM_DETECTOR, -1)), FOXAPI_OUT_OF_RANGE));
+        CHECK(A::amDetRx(a) == 2 && A::amDetPipe(a) == 2);                       // a refusal changes nothing
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_SET_AM_DETECTOR, 0))));
+        CHECK(A::amDetRx(a) == 0 && A::amDetPipe(a) == 0);
     }
     covering(FOXAPI_OP_SET_STEREO_PLACE);
     {

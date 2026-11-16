@@ -91,6 +91,22 @@ std::string notchSummary(unsigned mask, const double* hz, const double* width);
 inline constexpr unsigned kIqDc = 1u, kIqBalance = 2u, kIqSwap = 4u;
 std::string imageRejectionText(double db);      // "34.2 dB", "" while nothing is measured (the engine says 200)
 
+// ============================================================ the passband's edges and the AM detector (the engine's facts) ============================================================
+inline constexpr Range kCutHz{0.0, 24000.0};            // FOXAPP_OP_SET_PASSBAND: a low cut or a high cut
+inline constexpr Range kShiftHz{-6000.0, 6000.0};       // and the shift
+// fact.radio.<n>.passband: "<on>;<low>;<high>;<shift>;<active>"
+struct PassbandFact { bool ok = false, on = false, active = false; double low = 300.0, high = 2700.0, shift = 0.0; };
+PassbandFact parsePassbandFact(const std::string& text);
+// The edges a mode starts from when the person has not set any: voice window in SSB, the pitch plus and minus 250 Hz in CW, 4.5 kHz each side of the carrier in AM.
+void defaultEdges(unsigned demodMode, double cwPitchHz, double& low, double& high);
+bool hasPassband(unsigned demodMode);                   // USB, LSB, CW and AM
+// What the two cuts mean in the mode (SSB and CW: audio edges, the high above the low; AM: how far each side of the carrier). False with the sentence when they cannot be.
+bool checkCuts(unsigned demodMode, double low, double high, std::string& err);
+// fact.radio.<n>.amdet: "<kind>;<locked>;<offset Hz>;<carrier presence>"
+struct AmDetFact { bool ok = false, locked = false; int kind = 0; double offsetHz = 0.0, presence = 0.0; };
+AmDetFact parseAmDetFact(const std::string& text);
+std::vector<std::string> amDetectorNames();             // "Envelope detector", "Synchronous detector, both sidebands", "... upper sideband", "... lower sideband" (translated)
+
 // ============================================================ the engine's state by name (for the drive scripts' read-back) ============================================================
 // "cwPitchHz", "eqDb.3", "notchBankHz.2" ...; false for a name that is none of them.
 bool stateValue(const FoxReceiverState& s, const std::string& name, double& out);

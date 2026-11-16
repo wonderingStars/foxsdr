@@ -195,6 +195,71 @@ std::string imageRejectionText(double db) {
     return fmt1("%.1f", db) + " dB";
 }
 
+// ============================================================ the passband's edges and the AM detector ============================================================
+namespace {
+std::vector<std::string> splitSemi(const std::string& t) {
+    std::vector<std::string> v;
+    std::size_t at = 0;
+    for (;;) {
+        const std::size_t e = t.find(';', at);
+        v.push_back(t.substr(at, e == std::string::npos ? std::string::npos : e - at));
+        if (e == std::string::npos) { break; }
+        at = e + 1;
+    }
+    return v;
+}
+}  // namespace
+
+PassbandFact parsePassbandFact(const std::string& text) {
+    PassbandFact f;
+    const auto v = splitSemi(text);
+    if (v.size() != 5) { return f; }
+    f.on = v[0] == "1";
+    f.low = std::atof(v[1].c_str());
+    f.high = std::atof(v[2].c_str());
+    f.shift = std::atof(v[3].c_str());
+    f.active = v[4] == "1";
+    f.ok = true;
+    return f;
+}
+
+bool hasPassband(unsigned m) { return m == FOXAPI_DEMOD_USB || m == FOXAPI_DEMOD_LSB || m == FOXAPI_DEMOD_CW || m == FOXAPI_DEMOD_AM; }
+
+void defaultEdges(unsigned m, double pitch, double& low, double& high) {
+    if (m == FOXAPI_DEMOD_CW) {
+        const double p = std::isfinite(pitch) ? pitch : 700.0;
+        low = std::max(0.0, p - 250.0);
+        high = p + 250.0;
+    } else if (m == FOXAPI_DEMOD_AM) {
+        low = 4500.0;
+        high = 4500.0;
+    } else {
+        low = 300.0;
+        high = 2700.0;
+    }
+}
+
+bool checkCuts(unsigned m, double low, double high, std::string& err) {
+    if (m != FOXAPI_DEMOD_AM && !(high > low)) { err = tr("the high cut has to be above the low cut"); return false; }
+    return true;
+}
+
+AmDetFact parseAmDetFact(const std::string& text) {
+    AmDetFact f;
+    const auto v = splitSemi(text);
+    if (v.size() != 4) { return f; }
+    f.kind = std::atoi(v[0].c_str());
+    f.locked = v[1] == "1";
+    f.offsetHz = std::atof(v[2].c_str());
+    f.presence = std::atof(v[3].c_str());
+    f.ok = f.kind >= 0 && f.kind <= 3;
+    return f;
+}
+
+std::vector<std::string> amDetectorNames() {
+    return {tr("Envelope detector"), tr("Synchronous detector, both sidebands"), tr("Synchronous detector, upper sideband"), tr("Synchronous detector, lower sideband")};
+}
+
 // ============================================================ the engine's state by name ============================================================
 bool stateValue(const FoxReceiverState& s, const std::string& n, double& out) {
     const auto indexed = [&](const char* prefix, int count, const double* arr) {

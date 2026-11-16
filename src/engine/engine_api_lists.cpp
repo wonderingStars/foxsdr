@@ -215,6 +215,18 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(poolVersion_);   // which radios a pool claim holds (engine_pool.cpp)
     f.value(ppmAutoVersion_);   // the pilot ppm measurements (engine_mpx.cpp)
     f.value(mpxVersion_);   // which radios record their multiplex (engine_mpx.cpp)
+    for (std::uint32_t n = 1; n <= kMaxReceivers; ++n) {   // screen lane S1: each radio's passband (G1-35, G1-34) and AM detector (G1-19): the settings, whether the band-pass is in the chain, the loop's lock and its carrier to 10 Hz
+        if (!receiverLive(n)) { continue; }
+        const Receiver& pr = *receivers_[n - 1u];
+        f.value(pr.passbandOn_);
+        f.value(pr.passbandLowHz_);
+        f.value(pr.passbandHighHz_);
+        f.value(pr.passbandShiftHz_);
+        f.value(pr.pipeline_.passbandActive());
+        f.value(pr.amDetector_);
+        f.value(pr.pipeline_.amDetectorLocked());
+        f.value(static_cast<long long>(std::lround(pr.pipeline_.amDetectorOffsetHz() / 10.0)));
+    }
     f.value(hotplugVersion_);   // the hot-plug counts (engine_hotplug.cpp)
     f.value(wireCVersion());   // wire-c: the settings of wiring lane C (engine_wire_c.cpp)
     f.text(markerError_);
@@ -1426,6 +1438,15 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         fact(pre + "claimed", receivers_[n - 1u]->claimed_ ? "1" : "0");
         fact(pre + "mpx", receivers_[n - 1u]->mpxRecorder_.recording() ? "1" : "0");
         fact(pre + "ifrec", receivers_[n - 1u]->ifRecorder_.recording() ? "1" : "0");
+        {   // screen lane S1 (G1-35, G1-34): the passband's edges and shift, whether it is on and whether it is really in the chain ("<on>;<low>;<high>;<shift>;<active>", Hz)
+            const Receiver& pr = *receivers_[n - 1u];
+            char pb[96];
+            std::snprintf(pb, sizeof(pb), "%d;%.6g;%.6g;%.6g;%d", pr.passbandOn_ ? 1 : 0, pr.passbandLowHz_, pr.passbandHighHz_, pr.passbandShiftHz_, pr.pipeline_.passbandActive() ? 1 : 0);
+            fact(pre + "passband", pb);
+            char am[96];
+            std::snprintf(am, sizeof(am), "%d;%d;%.1f;%.3f", pr.amDetector_, pr.pipeline_.amDetectorLocked() ? 1 : 0, pr.pipeline_.amDetectorOffsetHz(), pr.pipeline_.amDetectorPresence());
+            fact(pre + "amdet", am);   // G1-19: the AM detector in force, and the loop's lock, carrier offset and carrier presence
+        }
         {
             const cascade::core::ppmauto::Result pr = receivers_[n - 1u]->ppmAuto_.result(clockS());
             const char* word = pr.state == cascade::core::ppmauto::State::Measuring ? "measuring" : (pr.state == cascade::core::ppmauto::State::Done ? "done" : (pr.state == cascade::core::ppmauto::State::Failed ? "failed" : "idle"));

@@ -94,6 +94,7 @@ void testTheList() {
         FOXAPP_OP_SCANNER_RANGE,
     };
     for (const std::uint32_t op : scoped) { CHECK(isRadioScopedOp(op)); }
+    CHECK(isRadioScopedOp(FOXAPP_OP_SET_PASSBAND) && isRadioScopedOp(FOXAPP_OP_SET_AM_DETECTOR));   // screen lane S1: one radio's passband and AM detector
     CHECK_EQ(sizeof(scoped) / sizeof(scoped[0]), static_cast<std::size_t>(80));
     const std::uint32_t global[] = {
         FOXAPI_OP_SET_BAND_FOLLOW, FOXAPI_OP_SET_BAND_PLAN, FOXAPI_OP_SCAN_DEVICES, FOXAPI_OP_BOOKMARK_ADD, FOXAPI_OP_BOOKMARK_REMOVE,

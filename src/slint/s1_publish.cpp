@@ -274,6 +274,58 @@ struct S1Publisher::Impl {
         if (st.filterShape != 0u && st.filterShapeActive == 0u) { v.push_back(rNote(tr("This shape is not in the filter at this width: it needs a narrow channel stage."))); }
     }
 
+    // ---- the passband's own edges and the IF shift (G1-35, G1-34)
+    void sendPass(bool on, double low, double high, double shift, const std::string& what, const std::vector<std::string>& drops) {
+        send(kRadio, what, cmd(FOXAPP_OP_SET_PASSBAND, on ? 1 : 0, 1, low, high, shift), drops);
+    }
+    void buildEdges(std::vector<Row>& v) {
+        if (!fold(v, "edges", tr("Passband edges and shift"), tr("The two edges of the filter you hear through set apart, and the whole band moved up or down (IF shift). They work in USB, LSB, CW and AM and are in addition to the width above."))) { return; }
+        const unsigned mode = st.demodMode;
+        const bool has = hasPassband(mode);
+        const PassbandFact pf = parsePassbandFact(fact("radio." + rn() + ".passband"));
+        const bool on = pf.ok && pf.on;
+        double low = 300.0, high = 2700.0;
+        defaultEdges(mode, st.cwPitchHz, low, high);
+        if (on) { low = pf.low; high = pf.high; }
+        const double shift = pf.ok ? pf.shift : 0.0;
+        if (!has) { v.push_back(rNote(tr("The edges work in USB, LSB, CW and AM."))); }
+        tickRow(v, "e.on", tr("Passband edges on"), on, [this, low, high, shift](bool o) { sendPass(o, low, high, shift, tr("Passband edges on"), {"e.low", "e.high", "e.shift"}); }, has,
+                tr("Off, the mode's own filter is all there is. On, the low cut, the high cut and the shift below are in force."));
+        const std::string lowTip = tr("USB, LSB and CW: the lowest audio frequency kept, in Hz. AM: how far below the carrier the band reaches.");
+        const std::string highTip = tr("USB, LSB and CW: the highest audio frequency kept, above the low cut. AM: how far above the carrier the band reaches.");
+        field(v, "e.low", tr("Low cut (Hz)"), numberText(low), [this, mode, high, shift](const std::string& t) {
+            double h = 0; std::string e;
+            if (!sll::parseNumber(t, kCutHz.lo, kCutHz.hi, h, e) || !checkCuts(mode, h, high, e)) { refuseHere(kRadio, tr("Low cut (Hz)"), e); return; }
+            sendPass(true, h, high, shift, tr("Low cut (Hz)"), {"e.low", "e.high", "e.shift"});
+        }, lowTip);
+        field(v, "e.high", tr("High cut (Hz)"), numberText(high), [this, mode, low, shift](const std::string& t) {
+            double h = 0; std::string e;
+            if (!sll::parseNumber(t, kCutHz.lo, kCutHz.hi, h, e) || !checkCuts(mode, low, h, e)) { refuseHere(kRadio, tr("High cut (Hz)"), e); return; }
+            sendPass(true, low, h, shift, tr("High cut (Hz)"), {"e.low", "e.high", "e.shift"});
+        }, highTip);
+        field(v, "e.shift", tr("IF shift (Hz)"), numberText(shift), [this, low, high](const std::string& t) {
+            double h = 0; std::string e;
+            if (!sll::parseNumber(t, kShiftHz.lo, kShiftHz.hi, h, e)) { refuseHere(kRadio, tr("IF shift (Hz)"), e); return; }
+            sendPass(true, low, high, h, tr("IF shift (Hz)"), {"e.low", "e.high", "e.shift"});
+        }, tr("-6000 to +6000 Hz. A positive shift moves the band to higher audio frequencies, in USB and LSB alike."));
+        key(v, "e.down", tr("Shift down 100 Hz"), [this, low, high, shift] { sendPass(true, low, high, std::max(kShiftHz.lo, shift - 100.0), tr("Shift down 100 Hz"), {"e.low", "e.high", "e.shift"}); }, has);
+        key(v, "e.up", tr("Shift up 100 Hz"), [this, low, high, shift] { sendPass(true, low, high, std::min(kShiftHz.hi, shift + 100.0), tr("Shift up 100 Hz"), {"e.low", "e.high", "e.shift"}); }, has);
+        v.push_back(rReadout(tr("Edges in the filter"), pf.ok && pf.active ? tr("yes") : tr("no")));
+    }
+
+    // ---- the AM detector (G1-19)
+    void buildAmDetector(std::vector<Row>& v) {
+        if (!fold(v, "am", tr("AM detector"), tr("How an AM signal is detected: by its envelope, as always, or by a loop that locks on the carrier."))) { return; }
+        const AmDetFact af = parseAmDetFact(fact("radio." + rn() + ".amdet"));
+        const int kind = af.ok ? af.kind : 0;
+        if (st.demodMode != FOXAPI_DEMOD_AM) { v.push_back(rNote(tr("The detector acts in AM mode only."))); }
+        choice(v, "d.kind", tr("Detection"), amDetectorNames(), kind, [this](int i) { send(kRadio, tr("Detection"), cmd(FOXAPP_OP_SET_AM_DETECTOR, i)); },
+               tr("Synchronous detection follows the carrier, so a fading carrier or a neighbour on one side does not distort the sound; on one sideband it rejects the other. It falls back to the envelope detector by itself while there is no carrier."));
+        char b[96];
+        std::snprintf(b, sizeof(b), "%s, %+.0f Hz", tr("locked").c_str(), af.offsetHz);
+        v.push_back(rReadout(tr("Carrier lock"), kind == 0 ? tr("not in use") : (af.locked ? std::string(b) : tr("searching"))));
+    }
+
     void sendTone(unsigned kind, double hz, int code, int pol, const std::string& what, const std::vector<std::string>& drops) {
         send(kRadio, what, cmd(FOXAPI_OP_SET_TONE_SQUELCH, kind, 1, hz, code, pol), drops);
     }
@@ -349,6 +401,8 @@ struct S1Publisher::Impl {
         buildMeter(v);
         buildCw(v);
         buildPassband(v);
+        buildEdges(v);
+        buildAmDetector(v);
         buildSquelch(v);
         buildTracking(v);
         endNote(v, kRadio);

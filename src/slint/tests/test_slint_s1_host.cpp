@@ -126,6 +126,36 @@ int main() {
     CHECK(imageRejectionText(200.0).empty() && imageRejectionText(std::nan("")).empty());      // the engine says 200 while nothing is measured
     CHECK(imageRejectionText(34.25) == "34.2 dB" || imageRejectionText(34.25) == "34.3 dB");
 
+    // ---------------------------------------------------------------- the passband's edges and the AM detector (the engine's facts)
+    {
+        const PassbandFact a = parsePassbandFact("1;500;2000;200;1");
+        CHECK(a.ok && a.on && a.active && a.low == 500.0 && a.high == 2000.0 && a.shift == 200.0);
+        const PassbandFact b = parsePassbandFact("0;300;2700;-100.5;0");
+        CHECK(b.ok && !b.on && !b.active && b.shift == -100.5);
+        CHECK(!parsePassbandFact("").ok && !parsePassbandFact("1;2;3").ok && !parsePassbandFact("1;2;3;4;5;6").ok);
+        double lo = 0, hi = 0;
+        defaultEdges(FOXAPI_DEMOD_USB, 700.0, lo, hi);
+        CHECK(lo == 300.0 && hi == 2700.0);
+        defaultEdges(FOXAPI_DEMOD_LSB, 700.0, lo, hi);
+        CHECK(lo == 300.0 && hi == 2700.0);
+        defaultEdges(FOXAPI_DEMOD_CW, 700.0, lo, hi);
+        CHECK(lo == 450.0 && hi == 950.0);                                                        // the pitch plus and minus 250 Hz
+        defaultEdges(FOXAPI_DEMOD_CW, 300.0, lo, hi);
+        CHECK(lo == 50.0 && hi == 550.0);
+        defaultEdges(FOXAPI_DEMOD_AM, 700.0, lo, hi);
+        CHECK(lo == 4500.0 && hi == 4500.0);
+        CHECK(hasPassband(FOXAPI_DEMOD_USB) && hasPassband(FOXAPI_DEMOD_LSB) && hasPassband(FOXAPI_DEMOD_CW) && hasPassband(FOXAPI_DEMOD_AM));
+        CHECK(!hasPassband(FOXAPI_DEMOD_NFM) && !hasPassband(FOXAPI_DEMOD_WFM) && !hasPassband(FOXAPI_DEMOD_DSB) && !hasPassband(FOXAPI_DEMOD_RAW));
+        CHECK(checkCuts(FOXAPI_DEMOD_USB, 300.0, 2700.0, e));
+        CHECK(!checkCuts(FOXAPI_DEMOD_USB, 2700.0, 300.0, e) && !e.empty());                        // the high cut above the low
+        CHECK(!checkCuts(FOXAPI_DEMOD_CW, 500.0, 500.0, e));
+        CHECK(checkCuts(FOXAPI_DEMOD_AM, 6000.0, 3000.0, e));                                       // in AM the two are the extents each side of the carrier, in any order
+        const AmDetFact d = parseAmDetFact("2;1;57.5;0.42");
+        CHECK(d.ok && d.kind == 2 && d.locked && d.offsetHz == 57.5 && std::fabs(d.presence - 0.42) < 1e-9);
+        CHECK(!parseAmDetFact("").ok && !parseAmDetFact("4;0;0;0").ok && !parseAmDetFact("0;0;0").ok);
+        CHECK(amDetectorNames().size() == 4);
+    }
+
     // ---------------------------------------------------------------- the engine's state by name
     {
         FoxReceiverState s{};

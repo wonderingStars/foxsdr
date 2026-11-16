@@ -378,6 +378,11 @@ struct Receiver {
     bool cwPeakOn_ = false;        // the CW peak filter (engine serial lane A, F8)
     double cwPeakWidthHz_ = 100.0;
     double cwPeakBoostDb_ = 12.0;
+    bool passbandOn_ = false;      // the passband's edges and shift (screen lane S1, G1-35 and G1-34): never saved, off at every start
+    double passbandLowHz_ = 300.0;
+    double passbandHighHz_ = 2700.0;
+    double passbandShiftHz_ = 0.0;
+    int amDetector_ = 0;           // how AM is detected (screen lane S1, G1-19): 0 envelope, 1 synchronous both sidebands, 2 upper, 3 lower; never saved
     int stereoPlaceMode_ = 0;      // stereo placement of a mono receiver (engine serial lane A, F20/D5)
     double stereoPlaceValue_ = 0.0;
     // VFO A / B (engine serial lane A, T6): which letter the radio's own tune belongs to, and the register of the other one (vfoExchange).

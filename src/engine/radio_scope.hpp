@@ -68,6 +68,8 @@ inline bool isRadioScopedOp(std::uint32_t op) {
         case FOXAPI_OP_SET_RECORD_FORMAT:
         case FOXAPI_OP_SET_CTUN:
         case FOXAPP_OP_SET_FM_WIDTH:
+        case FOXAPP_OP_SET_PASSBAND:   // screen lane S1
+        case FOXAPP_OP_SET_AM_DETECTOR:
         case FOXAPI_OP_SET_FILTER_SHAPE:
         case FOXAPP_OP_MPX_RECORD:
         case FOXAPP_OP_IF_RECORD:
