@@ -5,6 +5,7 @@
 10 state running == 1
 +3 expect "Stop bypassing the selection" bottom <= "828"
 +1 expect "Source"#1 top >= "868"
-+1 expect "Read the pitch now" bottom <= "2028"
-+1 expect "Sinks"#1 top >= "2028"
+# the Radio section above grew by the Signal strength bar (24 px + 6 px spacing, window gaps 2), so everything below it moved down 30 px: 2028 became 2058 (recomputed at engine merge 6)
++1 expect "Read the pitch now" bottom <= "2058"
++1 expect "Sinks"#1 top >= "2058"
 +1 shot "layout-section-overlap-624.png"

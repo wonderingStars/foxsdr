@@ -362,10 +362,14 @@ inline Counts withoutStages(Counts c) {
 // THE REAL BINARY'S LEDGER ALSO HOLDS THE FIRST-RUN RADIO CHECK'S FINDINGS (`setup.<kind>.<family>`, 0.99.107), which say what THIS machine has on its
 // USB bus (a run on a computer with a UHD radio counts setup.usable.usrp). The tests of the real application's failure counts set them aside as well;
 // the findings are held by the synthetic-machine tests (radioSetupJudged), which control the machine.
+// A START that took more than 250 ms is counted too (`slow.startup.250ms`, the application's own stopwatch): on a machine that is busy with other work the real binary's
+// start does take that long, so the count says how loaded the PC was, not what the failure counts are about. It is set aside here (engine merge 6: it failed this test and
+// test_health_app_stepped alone on a loaded build PC with only that key extra, `the real application left ...,slow.startup.250ms=1`); the stopwatch itself is held by test_health_events and test_health_paths,
+// which set the thresholds and the clock.
 inline Counts withoutStagesOrMachine(Counts c) {
     c = withoutStages(std::move(c));
     for (auto it = c.begin(); it != c.end();) {
-        it = it->first.rfind("setup.", 0) == 0 ? c.erase(it) : std::next(it);
+        it = (it->first.rfind("setup.", 0) == 0 || it->first.rfind("slow.startup.", 0) == 0) ? c.erase(it) : std::next(it);
     }
     return c;
 }
