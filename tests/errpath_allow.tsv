@@ -3226,3 +3226,4 @@ src/engine/s4b_swl.cpp::SwlBook::load::errassign::the listening log could not be
 src/engine/s4b_swl.cpp::SwlBook::load::errassign::the listening log is damaged and was not used	ALLOW	validation: a refused entry, removal or export of the listening log is answered to the person who asked, in this sentence (the op's message and fact.swl.error)	s4b
 src/engine/engine_wire_c.cpp::Engine::applyWireC::errassign::why#3	ALLOW	ui-text: the engine's own sentence for a refused request, kept in a fact and shown to the person who asked (the op's message and the Outputs row)	s4b
 src/slint/s4b_publish.cpp::S4bPublisher::Impl::swlRows::errassign::swlerror	ALLOW	ui-text: the engine's own sentence for a refused request, kept in a fact and shown to the person who asked (the op's message and the Outputs row)	s4b
+src/slint/s4b_publish.cpp::S4bPublisher::Impl::macroRows::errassign::macroerror	ALLOW	ui-text: a refusal the window shows beside the macro rows	s4b

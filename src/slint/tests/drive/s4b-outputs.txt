@@ -134,3 +134,26 @@
 +3 state s4b.fact.swl.count == 2
 +1 click "Press again to clear the whole listening log"
 +12 state s4b.fact.swl.count == 0
+# the macro recorder (G3-34): records only the receiver's own settings, saves them as a macro the ENGINE keeps, and the macro plays them back
++1 state s4b.macro.active == 0
++1 state s4b.macro.steps == 0
++1 expect "Save the recording as a macro" enabled equals "false"
++1 click "Start recording"
++3 state s4b.macro.active == 1
++1 slider "Squelch" 0.3
++1 slider "Squelch" 0.7
++5 state s4b.macro.steps >= 1
++1 click "Stop recording"
++3 state s4b.macro.active == 0
++1 type "Macro name" "Squelch test"
++1 key enter
++1 click "Save the recording as a macro"
++15 state s4b.fact.macro.names contains "Squelch test"
++1 state s4b.macro.steps == 0
++1 slider "Squelch" 0.0
++5 state squelchDb < -100
++1 click "Play macro: Squelch test"
++60 state squelchDb > -100
++20 state s4b.fact.macro.running == ""
++1 click "Delete macro: Squelch test"
++15 state s4b.fact.macro.names == ""

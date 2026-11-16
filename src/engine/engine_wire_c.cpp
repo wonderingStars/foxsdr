@@ -17,6 +17,7 @@
 #include "core/companion_fault.hpp"
 #include "core/config.hpp"
 #include "core/demod_names.hpp"
+#include "engine/s4b_macro_edit.hpp"
 #include "core/diag_log.hpp"
 #include "engine/engine.hpp"
 #include "core/plugin_repo_helper.hpp"   // wire-c
@@ -72,6 +73,16 @@ std::int32_t Engine::applyWireC(const FoxCommand& c, const std::string& text, Fo
             return FOXAPI_FAILED;
         }
         case FOXAPP_OP_ROTATOR: return wireC().servers.rotatorOp(text, why);
+        case FOXAPP_OP_MACRO_EDIT: {
+            if (macroPlayer_.running()) { why = "a macro is running; stop it first"; return FOXAPI_BUSY; }
+            const std::int32_t st = cascade::engine::s4b::macroEdit(macrosFilePath(), text, why);
+            if (st == FOXAPI_OK) {
+                std::string again;
+                (void)applyMacroOp(cascade::core::cmd::make(FOXAPP_OP_MACRO_RELOAD), std::string(), again);   // the engine reads the file it was just given
+                ++wireCVersion_;
+            }
+            return st;
+        }
         case FOXAPP_OP_SWL: {
             wc::State& s = wireC();
             namespace s4b = cascade::engine::s4b;

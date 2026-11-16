@@ -35,6 +35,8 @@ struct AppWindowTestAccess {
     static void useFolder(Engine& e, const std::string& path) { e.wireCFolderForTest_ = path; }
     static cascade::engine::wirec::State& wirec(Engine& e) { return e.wireC(); }
     // screen lane S4b: what the window does to switch the selected radio to another source (install it, then follow its rate)
+    static void useMacros(Engine& e, const std::string& path) { e.macrosPathForTest_ = path; }   // screen lane S4b: a scratch macro file
+    static void macroClock(Engine& e, std::int64_t ms) { e.macroClockMs_.store(ms, std::memory_order_relaxed); }
     static void useSource(Engine& e, std::unique_ptr<cascade::source::IqSource> src) {
         e.installSource(std::move(src));
         e.followInputRate();

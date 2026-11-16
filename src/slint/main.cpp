@@ -101,6 +101,7 @@
 #include "lanem_logic.hpp"     // screen lane M (docs/multi-radio-records/screen-m.md): a mark's credit line
 #include "lanem_publish.hpp"   // screen lane M: the controls of the wiring second passes
 #include "engine/s4b_notify_win.hpp"   // screen lane S4b: the real desktop notification (a real run only)
+#include "s4b_macro_rec.hpp"
 #include "s4b_publish.hpp"     // screen lane S4b: the locked-out frequencies and the servers other programs connect to
 #include "s4_publish.hpp"      // screen lane S4: the scanner's saved hits, the outputs and the alerts
 #include "sysmenu_win.hpp"   // window gaps lane 1: the title rail's own system menu (ledger row 14)
@@ -245,6 +246,7 @@ int main(int argc, char** argv) {
     // THE FREQUENCY LOCK (slint-gaps.md item 3): every publisher is handed this copy of the table, whose submit and submit_text refuse the tuning commands of a locked radio (gaps_logic.hpp)
     const FoxEngineApi* const rawApi = engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
     const FoxEngineApi* api = foxsdr::slintlanec::deltaLockApi(foxsdr::slintgaps::lockedApi(rawApi), &foxsdr::slintlanec::deltaMaskNow, &foxsdr::slintlanec::deltaRadioOf);   // screen lane C, T8: the delta lock sits over the frequency lock
+    api = foxsdr::slints4b::recordingApi(api);   // screen lane S4b: the macro recorder's tap (it does nothing until the person turns recording on)
     FoxEngine* handle = service.engine().apiHandle();
     if (!bounded.bounded()) { service.engine().setDesktopNotifier(std::make_shared<cascade::engine::s4b::DesktopNotifier>()); }   // screen lane S4b: a real run shows a raised alert on the desktop; a bounded (scripted) run and every test show none
     if (api == nullptr || handle == nullptr) { std::fprintf(stderr, "foxsdr-slint: no API table\n"); return 1; }

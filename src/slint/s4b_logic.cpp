@@ -6,7 +6,12 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include <algorithm>
+
+#include <nlohmann/json.hpp>
+
 #include "core/i18n.hpp"
+#include "foxsdr_api.h"
 #include "core/utf8_text.hpp"
 
 namespace foxsdr::slints4b {
@@ -138,5 +143,59 @@ std::string rotatorTurnJson(double az, double el) {
 }
 
 std::string rotatorActionJson(const char* action) { return std::string("{\"action\":\"") + action + "\"}"; }
+
+std::string recordableName(std::uint32_t op) {
+    switch (op) {
+        case FOXAPI_OP_SET_FREQUENCY: return "SET_FREQUENCY";
+        case FOXAPI_OP_SET_CENTRE: return "SET_CENTRE";
+        case FOXAPI_OP_SET_MODE: return "SET_MODE";
+        case FOXAPI_OP_SET_BANDWIDTH: return "SET_BANDWIDTH";
+        case FOXAPI_OP_SET_SQUELCH: return "SET_SQUELCH";
+        case FOXAPI_OP_SET_VOLUME: return "SET_VOLUME";
+        case FOXAPI_OP_SET_MUTED: return "SET_MUTED";
+        default: return std::string();
+    }
+}
+
+void MacroRecorder::start() { steps_.clear(); otherRadio_ = 0; active_ = true; }
+void MacroRecorder::stop() { active_ = false; }
+void MacroRecorder::clear() { steps_.clear(); otherRadio_ = 0; active_ = false; }
+
+bool MacroRecorder::note(std::uint32_t op, std::uint32_t target, const double num[4], const long long ival[2], double nowMs) {
+    if (!active_) { return false; }
+    const std::string name = recordableName(op);
+    if (name.empty()) { return false; }
+    if (target > 1u) { ++otherRadio_; return false; }
+    if (steps_.size() >= kMaxSteps) { return false; }
+    RecordedStep s;
+    s.command = name;
+    for (int i = 0; i < 4; ++i) { s.num[i] = std::isfinite(num[i]) ? num[i] : 0.0; }
+    for (int i = 0; i < 2; ++i) { s.ival[i] = ival[i]; }
+    s.atMs = nowMs;
+    steps_.push_back(std::move(s));
+    return true;
+}
+
+std::string MacroRecorder::saveJson(const std::string& name) const {
+    if (steps_.empty()) { return std::string(); }
+    nlohmann::json steps = nlohmann::json::array();
+    for (std::size_t i = 0; i < steps_.size(); ++i) {
+        const RecordedStep& s = steps_[i];
+        // the numbers and whole numbers each op uses: the frequency ops one number, the others one number or one whole number
+        nlohmann::json st = {{"cmd", s.command}};
+        const bool wholes = s.command == "SET_MODE" || s.command == "SET_MUTED";
+        if (wholes) { st["ival"] = nlohmann::json::array({s.ival[0]}); } else { st["num"] = nlohmann::json::array({s.num[0]}); }
+        double delay = 0.0;
+        if (i + 1 < steps_.size()) { delay = std::max(0.0, std::min(60000.0, steps_[i + 1].atMs - s.atMs)); }
+        st["delayMs"] = static_cast<long long>(std::llround(delay));
+        steps.push_back(std::move(st));
+    }
+    return nlohmann::json({{"action", "save"}, {"name", name}, {"steps", std::move(steps)}}).dump();
+}
+
+MacroRecorder& macroRecorder() {
+    static MacroRecorder r;
+    return r;
+}
 
 }  // namespace foxsdr::slints4b

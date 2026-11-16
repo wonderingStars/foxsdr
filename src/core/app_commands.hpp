@@ -252,6 +252,12 @@
 //   entries as ADIF 3.1.8 listening-report records (the wirec keys swl.operator and swl.grid name the listener; BAD_ARGUMENT for a relative path, another extension or nothing to write).
 //   Facts: fact.swl.count, fact.swl.error, fact.swl.export.last (a sentence of counts). The log is never sent anywhere and never appears in a report; nothing is logged automatically.
 #define FOXAPP_OP_SWL                    0x8A21u /* text JSON: add / remove / clear / export */
+//   MACRO_EDIT (screen lane S4b, G3-34; engine/s4b_macro_edit.hpp; SETTINGS; LOCAL sessions only): saves or deletes a macro of macros.json, the file the macro player (MACRO_RUN) plays. text JSON
+//   {"action":"save","name":"...","description":"...","steps":[{"cmd":"SET_FREQUENCY","num":[Hz],"ival":[...],"delayMs":N}]} replaces the macro of that name (at most 200 macros of 500 steps), or
+//   {"action":"delete","name":"..."} (NOT_FOUND). The file is read, changed and checked whole by the macro model (an unknown or denied command, a bad number, a bad name: BAD_ARGUMENT with the model's
+//   sentence, nothing written; LIMIT for too many) and written through a temporary file and a rename, then read again by the engine (fact.macro.names). BUSY while a macro runs. A macro
+//   never runs because it was saved. A macro cannot name this op (the prefix APP_MACRO_ is denied by the model), nor the rotator, the listening log or a setting.
+#define FOXAPP_OP_MACRO_EDIT             0x8A22u /* text JSON: save / delete */
 #define FOXAPP_OP_PLUGIN_OPEN_CONFIRM    0x8A10u /* text: "<module file>\x1F<url|folder>" */
 // wire-c end
 // Plugins and the store.

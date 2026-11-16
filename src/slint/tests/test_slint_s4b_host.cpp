@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <string>
 
+#include <nlohmann/json.hpp>
+
+#include "foxsdr_api.h"
 #include "s4b_logic.hpp"
 #include "test_check.hpp"
 
@@ -53,5 +56,35 @@ int main() {
     CHECK(!parseDegrees("450.1", 0, 450) && !parseDegrees("-1", 0, 450) && !parseDegrees("", 0, 450) && !parseDegrees("abc", 0, 450) && !parseDegrees("1e2", 0, 450) && !parseDegrees("1.2.3", 0, 450) && !parseDegrees(".", 0, 450));
     CHECK(!parseDegrees("nan", 0, 450) && !parseDegrees("inf", 0, 450) && !parseDegrees("12345678901234", 0, 450) && !parseDegrees("1 2", 0, 450));
     CHECK(rotatorTurnJson(123.456, 7) == "{\"action\":\"turn\",\"az\":123.46,\"el\":7.00}" && rotatorActionJson("stop") == "{\"action\":\"stop\"}");
+    // the macro recorder
+    {
+        CHECK(recordableName(FOXAPI_OP_SET_FREQUENCY) == "SET_FREQUENCY" && recordableName(FOXAPI_OP_SET_MODE) == "SET_MODE" && recordableName(FOXAPI_OP_SET_SQUELCH) == "SET_SQUELCH");
+        CHECK(recordableName(FOXAPI_OP_SET_VOLUME) == "SET_VOLUME" && recordableName(FOXAPI_OP_SET_MUTED) == "SET_MUTED" && recordableName(FOXAPI_OP_SET_BANDWIDTH) == "SET_BANDWIDTH" && recordableName(FOXAPI_OP_SET_CENTRE) == "SET_CENTRE");
+        CHECK(recordableName(0x8A20u).empty() && recordableName(0x8A00u).empty() && recordableName(FOXAPI_OP_RUN).empty() && recordableName(0).empty());
+        MacroRecorder r;
+        const double n1[4] = {7.1e6, 0, 0, 0}, nn[4] = {0, 0, 0, 0};
+        const long long i0[2] = {0, 0}, i7[2] = {7, 0};
+        CHECK(!r.note(FOXAPI_OP_SET_FREQUENCY, 0, n1, i0, 0.0) && r.size() == 0);                  // off: nothing is kept
+        r.start();
+        CHECK(r.active() && r.note(FOXAPI_OP_SET_FREQUENCY, 0, n1, i0, 1000.0) && r.note(FOXAPI_OP_SET_MODE, 1, nn, i7, 1500.0) && r.size() == 2);
+        CHECK(!r.note(0x8A20u, 0, n1, i0, 1600.0) && !r.note(FOXAPI_OP_RUN, 0, n1, i0, 1600.0) && r.size() == 2);   // not a recordable op
+        CHECK(!r.note(FOXAPI_OP_SET_FREQUENCY, 2, n1, i0, 1700.0) && r.skippedOtherRadio() == 1 && r.size() == 2);   // another radio
+        CHECK(r.note(FOXAPI_OP_SET_VOLUME, 0, n1, i0, 200000.0) && r.size() == 3);
+        r.stop();
+        CHECK(!r.active() && !r.note(FOXAPI_OP_SET_VOLUME, 0, n1, i0, 300000.0) && r.size() == 3);
+        const nlohmann::json j = nlohmann::json::parse(r.saveJson("Test"));
+        CHECK(j["action"] == "save" && j["name"] == "Test" && j["steps"].size() == 3);
+        CHECK(j["steps"][0]["cmd"] == "SET_FREQUENCY" && j["steps"][0]["num"][0] == 7.1e6 && j["steps"][0]["delayMs"] == 500);
+        CHECK(j["steps"][1]["cmd"] == "SET_MODE" && j["steps"][1]["ival"][0] == 7 && j["steps"][1]["delayMs"] == 60000);   // a long pause is cut to a minute
+        CHECK(j["steps"][2]["delayMs"] == 0);
+        CHECK(MacroRecorder().saveJson("x").empty());
+        // bounded
+        MacroRecorder b;
+        b.start();
+        for (int k = 0; k < 800; ++k) { b.note(FOXAPI_OP_SET_VOLUME, 0, n1, i0, 10.0 * k); }
+        CHECK(b.size() == MacroRecorder::kMaxSteps);
+        r.clear();
+        CHECK(!r.active() && r.size() == 0);
+    }
     return testSummary("test_slint_s4b_host");
 }

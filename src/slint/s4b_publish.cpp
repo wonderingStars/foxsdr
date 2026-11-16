@@ -18,6 +18,7 @@
 #include "lanel_logic.hpp"
 #include "plugin_kit.hpp"
 #include "s4_logic.hpp"
+#include "s4b_macro_rec.hpp"
 #include "s4b_logic.hpp"
 
 namespace foxsdr::slints4b {
@@ -76,7 +77,7 @@ struct S4bPublisher::Impl {
     foxsdr::slintkit::LiveTable table;
     using Handler = std::function<void(const std::string&)>;
     std::map<std::string, Handler> handlers;
-    struct Pending { int sec = 0; std::string what; };
+    struct Pending { int sec = 0; std::string what; int kind = 0; };   // kind 1: the macro save (the recording is let go when the engine accepts it)
     std::map<std::uint64_t, Pending> pending;
     std::array<std::string, kSecCount> noteText;
     std::array<int, kSecCount> noteTone{};
@@ -94,7 +95,7 @@ struct S4bPublisher::Impl {
     void setNote(Sec s, const std::string& t, int tone) { noteText[s] = t; noteTone[s] = tone; dirty = true; }
 
     // THE ONE PLACE A COMMAND LEAVES
-    void send(Sec s, const std::string& what, const Cmd& k) {
+    void send(Sec s, const std::string& what, const Cmd& k, int kind = 0) {
         if (!env.submit) { return; }
         FoxCommand c{};
         c.structSize = sizeof(c);
@@ -108,7 +109,7 @@ struct S4bPublisher::Impl {
             ++refused;
             setNote(s, what + ": " + sll::refusalText(o.status, o.message), kErr);
         } else {
-            pending[o.ticket] = {static_cast<int>(s), what};
+            pending[o.ticket] = {static_cast<int>(s), what, kind};
         }
     }
     void setting(Sec s, const std::string& what, const std::string& key, const std::string& value) {
@@ -124,8 +125,10 @@ struct S4bPublisher::Impl {
         if (it == pending.end()) { return; }
         const Sec s = static_cast<Sec>(it->second.sec);
         const std::string what = it->second.what;
+        const int kind = it->second.kind;
         pending.erase(it);
         ++answered;
+        if (kind == 1 && (r.status == FOXAPI_OK)) { recorderClear(); macroName.clear(); }
         const std::string msg = trim(r.message);
         if (r.status == FOXAPI_OK || r.status == FOXAPI_NO_CHANGE) { if (!noteText[s].empty() && noteTone[s] == kErr) { noteText[s].clear(); } }
         else { ++refused; setNote(s, what + ": " + sll::refusalText(r.status, msg), kErr); }
@@ -295,9 +298,61 @@ struct S4bPublisher::Impl {
         if (!err.empty()) { v.push_back(rNote(err, kErr)); }
     }
 
+    // the macro recorder's draft name
+    std::string macroName;
+    void macroRows(std::vector<Row>& v, Sec S) {
+        v.push_back(rHeading(tr("Macros")));
+        v.push_back(rNote(tr("Record the frequency, mode, bandwidth, squelch, volume and mute you set, save them as a macro, and play it back later. Nothing else is recorded."), kDim));
+        const bool rec = recorderActive();
+        if (!rec) { key(v, "macro.rec", tr("Start recording"), [this] { recorderStart(); dirty = true; }); }
+        else { key(v, "macro.stop", tr("Stop recording"), [this] { recorderStop(); dirty = true; }); }
+        v.push_back(rReadout(tr("Steps recorded"), std::to_string(recorderSteps())));
+        if (recorderSkipped() > 0) { v.push_back(rNote(tr("Settings of other radios than the first are not recorded: a macro acts on the first radio."), kDim)); }
+        field(v, "macro.name", tr("Macro name"), macroName, [this](const std::string& t) { macroName = trim(t); dirty = true; }, tr("Up to 64 characters."));
+        key(v, "macro.save", tr("Save the recording as a macro"), [this, S] {
+            if (macroName.empty()) { refuseHere(S, tr("Save the recording as a macro"), tr("Type a name for the macro first.")); return; }
+            recorderStop();
+            const std::string json = recorderSaveJson(macroName);
+            if (json.empty()) { refuseHere(S, tr("Save the recording as a macro"), tr("Nothing has been recorded.")); return; }
+            Cmd c;
+            c.op = FOXAPP_OP_MACRO_EDIT;
+            c.text = json;
+            send(S, tr("Save the recording as a macro"), c, 1);
+        }, recorderSteps() > 0);
+        // the saved macros: play, delete
+        const std::string names = fact("macro.names");
+        const std::string running = fact("macro.running");
+        std::size_t from = 0;
+        int n = 0;
+        while (from <= names.size() && !names.empty() && n < 20) {
+            std::size_t to = names.find('\n', from);
+            if (to == std::string::npos) { to = names.size(); }
+            const std::string name = names.substr(from, to - from);
+            from = to + 1;
+            if (name.empty()) { continue; }
+            const std::string id = std::to_string(n++);
+            key(v, "macro.play." + id, tr("Play macro") + ": " + name, [this, S, name] { Cmd c; c.op = FOXAPP_OP_MACRO_RUN; c.text = name; send(S, tr("Play macro"), c); }, running.empty());
+            key(v, "macro.del." + id, tr("Delete macro") + ": " + name, [this, S, name] {
+                Cmd c;
+                c.op = FOXAPP_OP_MACRO_EDIT;
+                c.text = nlohmann::json({{"action", "delete"}, {"name", name}}).dump();
+                send(S, tr("Delete macro"), c);
+            }, running.empty());
+        }
+        if (!running.empty()) {
+            v.push_back(rReadout(tr("Playing"), running));
+            key(v, "macro.halt", tr("Stop the macro"), [this, S] { Cmd c; c.op = FOXAPP_OP_MACRO_STOP; send(S, tr("Stop the macro"), c); });
+        }
+        const std::string last = fact("macro.last");
+        if (!last.empty() && running.empty()) { v.push_back(rReadout(tr("Last macro"), last)); }
+        const std::string err = fact("macro.error");
+        if (!err.empty()) { v.push_back(rNote(err, kErr)); }
+    }
+
     // ================================================================ SYSTEM > Outputs
     void buildOut(std::vector<Row>& v) {
         const Sec S = kOut;
+        macroRows(v, S);
         swlRows(v, S);
         rotatorRows(v, S);
         // ---- audio over TCP (G3-22)
@@ -439,6 +494,8 @@ std::string S4bPublisher::readState(const std::string& what, std::string& out) c
     if (what == "sent") { out = std::to_string(p.sent); return std::string(); }
     if (what == "refused") { out = std::to_string(p.refused); return std::string(); }
     if (what == "answered") { out = std::to_string(p.answered); return std::string(); }
+    if (what == "macro.steps") { out = std::to_string(recorderSteps()); return std::string(); }
+    if (what == "macro.active") { out = recorderActive() ? "1" : "0"; return std::string(); }
     if (what.rfind("note.", 0) == 0) {
         const std::string sec = what.substr(5);
         for (int s = 0; s < kSecCount; ++s) { if (sec == kSecName[s]) { out = p.noteText[s]; return std::string(); } }
