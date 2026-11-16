@@ -312,6 +312,15 @@ void TciServer::serveClient(Sock sock, TciBackend& backend) {
         return;
     }
 
+    // R2 (security review 2): a WEB PAGE may not open this port. A browser always sends an Origin header on a WebSocket handshake and is not bound by the same-origin
+    // policy for WebSockets, so any page the owner visits could otherwise stop, retune and listen through the radios. TCI clients are programs and send none; the program's own
+    // page does not use TCI. Refused 403, no session made.
+    if (hs.hasOrigin) {
+        protocolDropped_.fetch_add(1, std::memory_order_relaxed);
+        sendRefusal(sock, ws::handshakeRefusal(403, "a web page may not open this port"));
+        return;
+    }
+
     // ---- the connection ----
     std::string out;                 // bytes waiting to go (bounded)
     std::size_t sentOff = 0;         // out[0, sentOff) has gone
