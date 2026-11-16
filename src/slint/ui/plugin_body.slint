@@ -255,6 +255,60 @@ component FactLine inherits Rectangle {
     }
 }
 
+// One line of the COMPANION APPLICATION block: the name above, the value under it, the full width for both. The block's names are long ("WHY IT IS A SEPARATE PROGRAM") and
+// translated ones longer, so they are not squeezed into FactLine's 150 px column; the controls carry the same accessible labels FactLine's do.
+component StackedLine inherits Rectangle {
+    in property <BodyFact> fact;
+    property <length> val-w: max(40px, root.width - 20px);
+    property <length> val-h: root.fact.copyable && !root.fact.hatched ? copy.preferred-height : plain.preferred-height;
+    height: 6px + 14px + 2px + max(14px, root.val-h) + 8px;
+    background: root.fact.hatched ? Theme.well-deep : Theme.well.with-alpha(0.7);
+    Rectangle {
+        x: 0px;
+        y: parent.height - Theme.hairline;
+        width: parent.width;
+        height: Theme.hairline;
+        background: Theme.line;
+    }
+    Caption {
+        x: 10px;
+        y: 6px;
+        width: root.val-w;
+        height: 14px;
+        label: root.fact.key;
+    }
+    plain := Text {
+        visible: !(root.fact.copyable && !root.fact.hatched);
+        x: 10px;
+        y: 22px;
+        width: root.val-w;
+        text: root.fact.value;
+        wrap: word-wrap;
+        color: root.fact.hatched ? Theme.faint : Theme.fg;
+        font-family: Theme.font-ui;
+        font-size: Theme.font-small;
+        font-italic: root.fact.hatched;
+        accessible-role: text;
+        accessible-label: root.fact.key + ": " + root.fact.value;
+    }
+    copy := TextInput {
+        visible: root.fact.copyable && !root.fact.hatched;
+        x: 10px;
+        y: 22px;
+        width: root.val-w;
+        text: root.fact.value;
+        read-only: true;
+        single-line: false;
+        wrap: word-wrap;
+        color: Theme.fg;
+        font-family: Theme.font-mono;
+        font-size: Theme.font-small;
+        selection-background-color: Theme.accent;
+        selection-foreground-color: Theme.accent-ink;
+        accessible-label: root.fact.key;
+    }
+}
+
 export component PluginBody inherits VerticalLayout {
     in property <PluginBodyModel> body;
     callback picked(int);
@@ -294,7 +348,7 @@ export component PluginBody inherits VerticalLayout {
             x: 0px;
             y: 0px;
             width: parent.width;
-            for fact in root.body.companion : FactLine { fact: fact; }
+            for fact in root.body.companion : StackedLine { fact: fact; }
         }
     }
     @children
