@@ -19,7 +19,9 @@ key t
 +10 state cfg.country == AT
 expect "Country" value equals "Austria"
 +2 click "Country"
-+1 click "Not set"
+# the popup field serves its focus grab on the next loop turn (a 1 ms timer, system_bank.slint LineInput): a second click one frame after the open closed the popup with that timer
+# pending and slint_cpp.dll 1.18.1 faulted in the timer (access violation, signature BE59150DB2C51A2B, 1 run in 3 alone, found at engine merge 6). Wait for the grab, as the first open does.
++6 click "Not set"
 +10 state cfg.country != AT
 expect "Country" value equals "Not set"
 
