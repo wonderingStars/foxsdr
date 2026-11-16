@@ -443,6 +443,9 @@ void testConnectDropStorm() {
     CHECK(s.clients == 0);
     CHECK(s.accepted + s.refusedFull >= static_cast<std::uint64_t>(connected.load()));
     CHECK(s.accepted == s.closedByPeer + s.droppedSlow + s.droppedStalled);  // every accepted client is accounted for
+    // The producer has stopped, but the IO thread may still be taking its last records out of the ring (a loaded machine delays it by a
+    // good fraction of a second); a client that connects before it has finished is handed them, and "exactly record 777" cannot hold.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     Client fresh;
     CHECK(fresh.connect(f.port()));
     for (int spins = 0; f.stats().clients < 1 && spins < 200; ++spins) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
