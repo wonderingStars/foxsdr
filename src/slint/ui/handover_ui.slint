@@ -2,7 +2,9 @@
 //
 // One sheet, filled by the host: the question asked before leaving while a recording or a patch is running ("Switch" / "Stay here"), and the sentence a window shows when the other one could
 // not be opened ("OK"). Nothing here decides anything: the host writes the words (through the translation call) and answers the two callbacks. The sheet itself is drawn in main.slint,
-// where the other sheets are.
+// where the other sheets are. (It states no colour or typeface of its own; the import keeps the house rule that every sheet names the Theme.)
+import { Theme } from "theme.slint";
+
 export global Handover {
     in-out property <bool> open;
     in property <string> title;
