@@ -158,9 +158,7 @@ of every other report as before. Nothing is sent by THIS build: the live switch 
 | Store privacy answers, release notes, the Android build's events (C5) | the owner, release lane | release lane |
 | The mouse drive over the Diagnostics and Usage pages, a real HF+ failing, the `radio-reports` folder's size after a week | the mouse drive and the owner | drive |
 | The measurement of bytes per session and requests per session on real traffic (decision 13, R5) | real traffic | site lane |
-| `telemetry-worker/radio-reports.test.mjs:105` splits the manifest on `
-` and fails on a CRLF checkout (`telemetry_worker` RED here): `.split(/?
-/)` | the Worker's owner | Worker lane |
+| `telemetry-worker/radio-reports.test.mjs:105` splits the manifest on the LF character only and fails on a CRLF checkout (`telemetry_worker` RED here): split on an optional CR then LF instead | the Worker's owner | Worker lane |
 | `slint_drive_layout-section-overlap-1600` and `-624` (`Read the pitch now` bottom reads 2058, the script says 2028): the layout above CW surround's last key has grown since engine fixes 6; re-measure and move the number, or find the section that grew | the screen lane | screen lane |
 | `slint_drive_system-look`: `look.width` stays at 800 after "Interface size: Auto" (intermittent since window gaps 2, red alone here) | the screen lane | screen lane |
 | `radioreport::global()` is shared by every engine in a process: a test that builds a second engine in the same process reconfigures it (the engine test says so and re-points it per scenario) | none | note |
