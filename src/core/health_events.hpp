@@ -73,7 +73,7 @@ namespace cascade::core::health {
 // The vocabulary
 // ---------------------------------------------------------------------------
 
-enum class RadioReason : std::uint8_t { Busy, Driver, Bind, Absent, Timeout, Vendor, Rate, Other };
+enum class RadioReason : std::uint8_t { Busy, Driver, Bind, Absent, Timeout, Vendor, Rate, Control, Other };
 enum class SoundReason : std::uint8_t { NoDevice, Busy, Format, Host, Other };
 enum class InstallClass : std::uint8_t { Net, Hash, Write, Other };
 enum class LoadClass : std::uint8_t { Abi, Retired, Load };

@@ -459,6 +459,7 @@ dropped. Anything not recognised is `other`.
 | `timeout` | it did not answer |
 | `vendor` | the vendor's driver reported an error of its own |
 | `rate` | it would not run at the sample rate asked |
+| `control` | the radio refused or never completed a USB control transfer while being set up |
 | `other` | none of the above |
 
 **Audio host APIs.** The sound system's kind - never the name of the output

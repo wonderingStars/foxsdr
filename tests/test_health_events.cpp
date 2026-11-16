@@ -136,7 +136,8 @@ void testEveryTokenIsLegalAndNothingElseIs() {
     // stages a session reaches (field-early-warning: launched ... working). 0.99.107 adds the setup finding,
     // 6 kinds x 8 families = 48 more failure tokens.
     // engine fixes 7: four more recovered words (companioncrash, companionstall, companionbreak, companiongaveup: a plugin's companion program failed) = 44.
-    CHECK(all.size() == 7 + 220 + 48 + 54 + 44);
+    // engine fixes 8: the radio-open reason "control" adds one fail token per driver word (14) = 234.
+    CHECK(all.size() == 7 + 234 + 48 + 54 + 44);
     std::set<std::string> unique(all.begin(), all.end());
     CHECK(unique.size() == all.size());
     for (const std::string& t : all) {
@@ -1319,6 +1320,14 @@ void testReasonsFromTheDriversOwnSentences() {
          RadioReason::Timeout},
         {"soapy", "SoapySDR::Device::make() no match for args: driver=uhd", RadioReason::Absent},
         {"soundcard", "the card is not connected", RadioReason::Absent},
+        // a control transfer the radio refused while being set up (the Airspy HF+ report)
+        {"airspyhf",
+         "the radio stopped answering while restoring the crystal trim: a control transfer "
+         "failed (Windows error 31); unplug it and plug it back in",
+         RadioReason::Control},
+        {"hackrf", "the radio stopped answering while starting the receiver: a control "
+                   "transfer failed; unplug it and plug it back in",
+         RadioReason::Control},
         // a vendor stack's own words
         {"sdrplay", "SDRplay SelectDevice failed: sdrplay_api_Fail", RadioReason::Vendor},
         {"soapy", "SoapySDR threw: something unforeseen (args: driver=lime)", RadioReason::Vendor},

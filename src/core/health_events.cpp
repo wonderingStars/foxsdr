@@ -149,7 +149,7 @@ const Words& driverWords() {
     return w;
 }
 const Words& radioReasonWords() {
-    static const Words w = {"busy", "driver", "bind", "absent", "timeout", "vendor", "rate", "other"};
+    static const Words w = {"busy", "driver", "bind", "absent", "timeout", "vendor", "rate", "control", "other"};
     return w;
 }
 const Words& apiWords() {
@@ -376,6 +376,7 @@ const char* radioReasonWord(RadioReason r) {
         case RadioReason::Timeout: return "timeout";
         case RadioReason::Vendor: return "vendor";
         case RadioReason::Rate: return "rate";
+        case RadioReason::Control: return "control";
         case RadioReason::Other: break;
     }
     return "other";
@@ -456,6 +457,13 @@ RadioReason classifyRadioOpen(std::string_view driverKind, std::string_view erro
         return RadioReason::Bind;
     }
     if (has("sample rate") || has("samplerate")) { return RadioReason::Rate; }
+    // A USB control transfer the radio refused or never completed while it was
+    // being set up: the transports' "stopped answering while <step>: a control
+    // transfer failed (Windows error N)" sentence (the Airspy HF+ report of
+    // 2026-11-15 was counted as "other").
+    if (has("control transfer") || has("stopped answering while")) {
+        return RadioReason::Control;
+    }
     // Not there (any more): unplugged since the scan, the serial is not on the
     // bus, nothing at the Pluto's address.
     if (has("not connected") || has("not present") || has("no longer present") ||
