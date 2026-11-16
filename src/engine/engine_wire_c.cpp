@@ -509,8 +509,9 @@ void Engine::pumpWireC() {
             c.keywords = s.settings().get("alerts.keywords");
             c.alertGapS = static_cast<int>(s.settings().getInt("alerts.gap_s"));
             c.alertNotify = s.settings().getBool("alerts.notify");
+            const bool firstConfigure = (s.outputsStatSig.empty());   // the very first configure of this engine says nothing new: what it publishes is built from the same settings
             s.outputs.configure(c);
-            ++wireCVersion_;
+            if (!firstConfigure) { ++wireCVersion_; }
         }
         if (s.outputs.active()) {
             if (!s.outputsLive) {
@@ -554,8 +555,9 @@ void Engine::pumpWireC() {
                                     std::to_string(o.hookFailed) + "|" + std::to_string(o.hookDropped) + "|" + o.hookProblem + "|" + std::to_string(o.alertsRaised) + "|" +
                                     std::to_string(o.notified) + "|" + std::to_string(o.notifyFailed) + "|" + o.alertProblem + "|" + o.notifyProblem + "|" + std::to_string(o.influxOk) + "|" + std::to_string(o.influxFailed) + "|" + o.influxProblem;
             if (sig != s.outputsStatSig) {
+                const bool firstSignature = s.outputsStatSig.empty();   // the first reading is not a change
                 s.outputsStatSig = sig;
-                ++wireCVersion_;
+                if (!firstSignature) { ++wireCVersion_; }
             }
         }
     }
