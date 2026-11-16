@@ -1070,6 +1070,14 @@ private:
                      std::string& installedPath, std::string& error,
                      health::InstallClass& failClass);
 
+    // fetchScreenshot() as it was before the error-path sweep (wave 8): fetchScreenshot() is now this plus the
+    // anonymous count of a picture that could not be had (a cancel is not counted), as install() is installImpl().
+    bool fetchScreenshotImpl(const std::string& pluginsDir, const CatalogScreenshot& s,
+                             std::string& localPath, std::string& error);
+    // recordInstall() as it was, for the same reason: recordInstall() counts a record that could not be written.
+    static bool recordInstallImpl(const std::string& pluginsDir, const PluginCatalogEntry& e,
+                                  std::string& error);
+
     std::vector<PluginCatalogEntry> entries_;
     std::string lastIndexText_;                // see lastIndexText()
     std::vector<std::string> lastParseReport_;  // see lastParseReport()
