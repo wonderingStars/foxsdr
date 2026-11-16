@@ -1240,6 +1240,48 @@ void testCjkTemplateJoins() {
     CHECK(faults == 0);
 }
 
+// --- half 5: Korean is set with spaces between words ------------------------
+//
+// Half 4's rule (no space between two CJK characters) belongs to Chinese and
+// Japanese only. Korean is written with a space between words, and a lane that
+// stripped its Korean strings to satisfy half 4 left sentences such as
+// "양의시프트는 USB와 LSB 모두에서대역을더높은오디오주파수로옮깁니다". No Korean
+// value may hold a run of 12 or more Hangul syllables without a space (the
+// whole catalogue passes this; a long compound noun stays under it).
+void testKoreanWordSpacing() {
+    std::printf("  ko: no run of 12 or more Hangul syllables without a space\n");
+    int faults = 0;
+    for (const fs::path& path : catalogueFiles()) {
+        if (path.stem().string() != "ko") { continue; }
+        std::string bytes;
+        CHECK(readExact(path, bytes));
+        const nlohmann::json j = nlohmann::json::parse(bytes, nullptr, false);
+        if (j.is_discarded() || !j.contains("strings")) {
+            CHECK(false);
+            continue;
+        }
+        const auto& strings = j["strings"];
+        for (auto it = strings.begin(); it != strings.end(); ++it) {
+            if (!it->is_string()) { continue; }
+            const std::string v = it->get<std::string>();
+            int run = 0;
+            for (std::size_t i = 0; i < v.size();) {
+                const unsigned int c = cpAtByte(v, i);
+                run = (c >= 0xAC00 && c <= 0xD7AF) ? run + 1 : 0;
+                if (run >= 12) {
+                    std::printf("      ko: \"%s\" -> \"%s\": 12 or more Hangul syllables with no space\n",
+                                it.key().c_str(), v.c_str());
+                    ++faults;
+                    break;
+                }
+                const unsigned char b = static_cast<unsigned char>(v[i]);
+                i += b < 0x80 ? 1 : (b >> 5) == 0x6 ? 2 : (b >> 4) == 0xE ? 3 : 4;
+            }
+        }
+    }
+    CHECK(faults == 0);
+}
+
 // THE THEMES' WORDS SAY DIFFERENT THINGS IN EVERY LANGUAGE. "Enlarge figures"
 // (the counter menu's switch) and "Enlarged figures" (the Display row's size,
 // beside "Normal size") sit a menu apart and mean different things - and the
@@ -1311,6 +1353,7 @@ int main(int argc, char** argv) {
     testShippedCatalogues();
     testEmbeddedMatchesFiles();
     testCjkTemplateJoins();
+    testKoreanWordSpacing();
     testThemeWordsDistinct();
     return testSummary("test_i18n");
 }
