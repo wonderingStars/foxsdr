@@ -111,6 +111,8 @@ const Row kRows[] = {
     {"src/net/discord_presence.cpp", 1, 0, 0, 0, "",
      "the Discord presence worker: a tick loop over a local pipe, started only when a client ID is set, nothing waits on it - NOT COVERED by this batch (a known gap; nothing wires it to the engine yet)"},
     {"src/net/tci_server.cpp", 2, 0, 2, 2, "kThreadTciAccept,kThreadTciClient", ""},
+    {"src/net/tcp_audio.cpp", 1, 0, 0, 0, "",
+     "the audio-over-TCP worker (screen lane S4b): it reads the engine audio every 5 ms and hands it to the fan-out, stop() joins it - NOT COVERED by this batch (a known gap, as the fan-out under it); a worker that stops only silences the stream"},
     {"src/net/tcp_fanout.cpp", 1, 0, 0, 0, "",
      "the fan-out's IO thread (accept, send, discard); it wakes every poll interval (2 ms) and stop() joins it - NOT COVERED by this batch (a known gap): nothing starts it yet (the network output parts are stand-alone); the wiring lane gives it a ThreadSpec heartbeat, as cat_server.cpp does, when it starts it from the engine"},
     {"src/net/udp_audio.cpp", 1, 0, 1, 1, "kThreadUdpAudio", ""},

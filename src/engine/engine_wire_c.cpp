@@ -221,6 +221,7 @@ void Engine::wireCFacts(const std::function<void(const std::string&, const std::
     fact("rds.log.lines", std::to_string(s.rdsLog.written()));       // counts and a sentence only: never a name, a text or a frequency
     fact("rds.log.dropped", std::to_string(s.rdsLog.dropped()));
     fact("rds.log.error", s.rdsLog.error());
+    s.servers.facts(fact);   // screen lane S4b: the servers other programs connect to (counts and sentences only)
     // THE DECODED-TEXT OUTPUTS AND ALERTS (screen lane S4): counts and one sentence each - never a decoded line, a user name, a password or an address. The last alerts are the program's own
     // read-out for the operator (LOCAL only, like every fact of this lane): the matched keyword and the text, cut.
     {
@@ -480,6 +481,26 @@ void Engine::pumpWireC() {
             ++wireCVersion_;
         }
         if (s.radioInfo.poll(static_cast<std::int64_t>(std::time(nullptr)))) { ++wireCVersion_; }
+    }
+    // THE SERVERS OTHER PROGRAMS CONNECT TO (screen lane S4b; engine/s4b_servers.hpp): every one is off by default, on this computer only unless its own key says otherwise.
+    {
+        namespace s4b = cascade::engine::s4b;
+        if (!s.serversHooked) {
+            s.serversHooked = true;
+            s4b::Hooks h;
+            h.audioReader = [this](int radio) { return openUdpAudioReader(*api_, radio, "tcpaudio:" + std::to_string(radio)); };
+            s.servers.setHooks(std::move(h));
+        }
+        if (s.serversSettingsVersion != s.settings().version()) {
+            s.serversSettingsVersion = s.settings().version();
+            s.servers.configure(s4b::configFrom(s.settings()));
+            ++wireCVersion_;
+        }
+        const std::string sig = s.servers.signature();
+        if (sig != s.serversSig) {
+            s.serversSig = sig;
+            ++wireCVersion_;
+        }
     }
     // THE DECODED-TEXT OUTPUTS AND KEYWORD ALERTS (screen lane S4; engine/s4_outputs.hpp): every switch is off by default. Nothing is read from the ring, no socket or thread exists, while all are off.
     {

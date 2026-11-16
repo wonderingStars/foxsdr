@@ -15,6 +15,7 @@
 #include "lanek_logic.hpp"
 #include "lanel_logic.hpp"
 #include "plugin_kit.hpp"
+#include "s4_logic.hpp"
 #include "s4b_logic.hpp"
 
 namespace foxsdr::slints4b {
@@ -177,9 +178,41 @@ struct S4bPublisher::Impl {
         endNote(v, S);
     }
 
+    // a switch of the wirec registry: shows the engine's value, sends the person's
+    void wircTick(std::vector<Row>& v, Sec s, const std::string& id, const std::string& label, const std::string& key, const std::string& tip = std::string()) {
+        tick(v, id, label, fact("wirec." + key) == "1", [this, s, label, key](bool on) { setting(s, label, key, on ? "1" : "0"); }, tip);
+    }
+    void wholeField(std::vector<Row>& v, Sec s, const std::string& id, const std::string& label, const std::string& key, int lo, int hi) {
+        field(v, id, label, fact("wirec." + key), [this, s, label, key, lo, hi](const std::string& t) {
+            const auto p = foxsdr::slints4::parseWhole(t, lo, hi);
+            if (!p) { refuseHere(s, label, cascade::core::formatText(cascade::i18n::tr("A whole number from %d to %d."), lo, hi)); return; }
+            setting(s, label, key, std::to_string(*p));
+        }, cascade::core::formatText(cascade::i18n::tr("%d to %d"), lo, hi));
+    }
+    // The state of one server: its own sentence when it could not start, else "listening", with its scope and clients.
+    void serverReadouts(std::vector<Row>& v, const std::string& name, const std::string& fx, bool on) {
+        if (!on) { return; }
+        const std::string problem = fact(fx + ".problem");
+        const bool running = factOn(fx + ".running");
+        v.push_back(rReadout(name, !problem.empty() ? problem : (running ? tr("listening") + ", " + fact(fx + ".scope") : tr("starting"))));
+        if (running) { v.push_back(rReadout(tr("Connected now"), fact(fx + ".clients"))); }
+    }
+
     // ================================================================ SYSTEM > Outputs
     void buildOut(std::vector<Row>& v) {
-        (void)v;
+        const Sec S = kOut;
+        // ---- audio over TCP (G3-22)
+        v.push_back(rHeading(tr("Audio over TCP")));
+        const bool tcpOn = fact("wirec.srv.tcpaudio.enabled") == "1";
+        wircTick(v, S, "tcpa.on", tr("Serve the audio over TCP"), "srv.tcpaudio.enabled", tr("A program that connects receives one radio's audio as raw 16-bit samples, 48000 per second, mono: the same as the UDP audio."));
+        wircTick(v, S, "tcpa.all", tr("Let other computers connect for the audio"), "srv.tcpaudio.all", tr("Off: only programs on this computer can connect."));
+        wholeField(v, S, "tcpa.port", tr("TCP audio port"), "srv.tcpaudio.port", 1024, 65535);
+        wholeField(v, S, "tcpa.radio", tr("TCP audio radio"), "srv.tcpaudio.radio", 1, 8);
+        choice(v, "tcpa.packet", tr("TCP audio packet length"), {tr("10 ms a write"), tr("20 ms a write")}, fact("wirec.srv.tcpaudio.packet") == "960" ? 1 : 0,
+               [this, S](int i) { setting(S, tr("TCP audio packet length"), "srv.tcpaudio.packet", i == 1 ? "960" : "480"); });
+        serverReadouts(v, tr("TCP audio"), "srv.tcpaudio", tcpOn);
+        if (fact("wirec.srv.tcpaudio.all") == "1") { v.push_back(rNote(tr("The audio has no password. Anyone on your network can connect and listen."), kWarn)); }
+        endNote(v, S);
     }
 
     // ================================================================ the models

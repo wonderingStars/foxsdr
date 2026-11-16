@@ -84,6 +84,12 @@ constexpr Spec kSpecs[] = {
     {"alerts.keywords", Kind::Text, 0, 4000, "", ""},           // one keyword or phrase per line, at most 64
     {"alerts.gap_s", Kind::Int, 0, 3600, "30", ""},             // the same keyword again within this many seconds is not raised again
     {"alerts.notify", Kind::Bool, 0, 0, "1", ""},               // hand a raised alert to the desktop notification (shown only where the system can)
+    // --- screen lane S4b: the servers other programs connect to (engine/s4b_servers.hpp). Every one is OFF; every one listens on this computer only unless its own "all" key is turned on. ---
+    {"srv.tcpaudio.enabled", Kind::Bool, 0, 0, "0", ""},        // serve one radio's audio over TCP (raw 16-bit mono, 48000 a second: the format of the UDP audio)
+    {"srv.tcpaudio.all", Kind::Bool, 0, 0, "0", ""},            // listen on every address instead of this computer only (no password: anyone on the network can listen)
+    {"srv.tcpaudio.port", Kind::Int, 1024, 65535, "7356", ""},
+    {"srv.tcpaudio.radio", Kind::Int, 1, 8, "1", ""},
+    {"srv.tcpaudio.packet", Kind::Choice, 0, 0, "480", "480|960"},   // samples per write: 10 ms or 20 ms
 };
 constexpr std::size_t kSpecCount = sizeof(kSpecs) / sizeof(kSpecs[0]);
 

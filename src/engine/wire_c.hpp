@@ -30,6 +30,7 @@
 #include "engine/wire_c_net.hpp"
 #include "engine/wire_c_sys.hpp"
 #include "engine/s4_outputs.hpp"
+#include "engine/s4b_servers.hpp"
 
 namespace cascade::engine::wirec {
 
@@ -102,8 +103,13 @@ public:
         catEmu.stop();
         rdsLog.stop();
         outputs.stop();
+        servers.stop();
         radioInfo.configure(false, "127.0.0.1", 0, false);
     }
+    cascade::engine::s4b::ServerSet servers;   // screen lane S4b: the servers other programs connect to (audio over TCP ...), each off until the user turns it on
+    std::uint64_t serversSettingsVersion = 0;  // the settings version the servers were last configured from
+    std::string serversSig;                    // what the last published servers facts counted
+    bool serversHooked = false;                // the engine's hooks were given to the servers
     cascade::engine::s4::Hub outputs;     // screen lane S4: the decoded-text feed sent to MQTT / a webhook, and the keyword alerts (off until the user turns one on)
     std::uint64_t outputsSeq = 0;         // the host event ring's sequence the outputs have read up to
     std::uint64_t outputsSettingsVersion = 0;   // the settings version the outputs were last configured from
