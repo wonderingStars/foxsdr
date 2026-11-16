@@ -868,7 +868,7 @@ int main() {
                 t_counting = false;
                 std::printf("F3: %-44s moved the fingerprint; the rebuild: %ld heap allocations, then %d settled passes: %ld\n",
                             what, rebuild, kPublishes, t_news);
-                CHECK(rebuild > 0 && rebuild < 2200);  // counted, and bounded: some strings and vectors, not a flood (2000 before engine lane E1; its 22 new web and scan facts took one rebuild to 2004, so the bound is 2200)
+                CHECK(rebuild > 0 && rebuild < 2400);  // counted, and bounded: some strings and vectors, not a flood. 2000 before engine lane E1 (2004 after its 22 web and scan facts); 2200 in E1 and in screen lane S4 (2158 with its 25 outputs and alerts facts); MEASURED on the merged tree of engine merge 7 (E1, S1 to S5, the companions shelf): 2162 to 2165 for these rebuilds, so the bound is 2400 (about ten percent above)
                 CHECK(t_news == 0);
             };
             movedBy("another text at the same level", [&] {
