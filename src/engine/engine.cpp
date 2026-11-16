@@ -7817,6 +7817,33 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             res.applied[1] = boost;
             return res;
         }
+        case FOXAPP_OP_SET_PASSBAND: {   // screen lane S1, G1-35 and G1-34: the edges of the channel filter set apart, and the band shifted
+            Receiver& rxs = rx();
+            double lo = rxs.passbandLowHz_, hi = rxs.passbandHighHz_, shift = rxs.passbandShiftHz_;
+            if (c.ival[1] == 1) {
+                lo = c.num[0];
+                hi = c.num[1];
+                shift = c.num[2];
+            }
+            if (on == rxs.passbandOn_ && lo == rxs.passbandLowHz_ && hi == rxs.passbandHighHz_ && shift == rxs.passbandShiftHz_) { return refuse(FOXAPI_NO_CHANGE, "the passband is so already"); }
+            if (!rxs.pipeline_.setPassband(on, lo, hi, shift)) { return refuse(FOXAPI_OUT_OF_RANGE, "the passband's cuts are 0 to 24000 Hz and its shift -6000 to +6000 Hz"); }
+            rxs.passbandOn_ = on;
+            rxs.passbandLowHz_ = lo;
+            rxs.passbandHighHz_ = hi;
+            rxs.passbandShiftHz_ = shift;
+            res.applied[0] = lo;
+            res.applied[1] = hi;
+            return res;
+        }
+        case FOXAPP_OP_SET_AM_DETECTOR: {   // screen lane S1, G1-19: the envelope detector, or a synchronous one on both sidebands, the upper or the lower
+            Receiver& rxs = rx();
+            if (c.ival[0] < 0 || c.ival[0] > 3) { return refuse(FOXAPI_OUT_OF_RANGE, "the AM detector is 0 envelope, 1 synchronous (both sidebands), 2 synchronous upper sideband or 3 synchronous lower sideband"); }
+            if (static_cast<int>(c.ival[0]) == rxs.amDetector_) { return refuse(FOXAPI_NO_CHANGE, "the AM detector is so already"); }
+            if (!rxs.pipeline_.setAmDetector(static_cast<int>(c.ival[0]))) { return refuse(FOXAPI_OUT_OF_RANGE, "that AM detector is not one the receiver has"); }
+            rxs.amDetector_ = static_cast<int>(c.ival[0]);
+            res.applied[0] = static_cast<double>(rxs.amDetector_);
+            return res;
+        }
         case FOXAPI_OP_SET_STEREO_PLACE: {
             Receiver& rxs = rx();
             if (!rxs.pipeline_.setStereoPlace(static_cast<int>(c.ival[0]), c.num[0])) {

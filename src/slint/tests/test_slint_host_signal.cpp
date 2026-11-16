@@ -617,6 +617,16 @@ int main() {
         CHECK(readRadioExtras(s).signal_frac == 1.0f && readRadioExtras(s).signal_text == "6.0 dB");   // over full scale clamps the bar, not the figure
         s.signalDb = -200.0;
         CHECK(!readRadioExtras(s).signal_has);                       // the engine's "nothing yet"
+        // screen lane S1 (G2-13): the figure is lettered in the unit the radio chose; the bar keeps its own scale
+        s.signalDb = -60.0; s.signalDbm = -87.4; s.sUnits = 6.0; s.calibrated = 1u;
+        s.meterUnits = FOXAPI_METER_S;
+        CHECK(readRadioExtras(s).signal_text == "S6" && std::fabs(readRadioExtras(s).signal_frac - 0.5f) < 1e-4f);
+        s.meterUnits = FOXAPI_METER_DBM;
+        CHECK(readRadioExtras(s).signal_text == "-87 dBm");
+        s.calibrated = 0u;
+        CHECK(readRadioExtras(s).signal_text == "~-87 dBm");         // an estimate says so
+        s.meterUnits = FOXAPI_METER_DBFS;
+        CHECK(readRadioExtras(s).signal_text == "-60.0 dB");
     }
 
     // ---- the Radio row's WFM extras ----

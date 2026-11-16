@@ -83,9 +83,11 @@ export { GlobeEvents, GlobeModel, GlobeControl, GlobeChipModel }
 export { LaneC, LCQuick, LCShortcut, LCRecording }   // screen lane C: the host (lanec_publish.cpp) sets the global and answers its act(id, text)
 import { MapJEvents, LayerRow, ReplayModel, FilterModel, MapJModel, PolarDot, SkyModel, AntennaModel } from "mapj.slint";   // screen lane J (docs/multi-radio-records/screen-j.md): the map's layers, replay and filter, the Sky and Antenna pages
 import { GridLabel, MapIcons } from "map.slint";
+import { LaneS1 } from "s1_signal.slint";   // screen lane S1 (wave 8, docs/multi-radio-records/screen-s1-signal.md): the receive controls the engine had commands for
 export { MapJEvents, LayerRow, ReplayModel, FilterModel, MapJModel, PolarDot, SkyModel, AntennaModel, GridLabel }
 export { LaneL }   // screen lane L (docs/multi-radio-records/screen-l.md): the host (lanel_publish.cpp) sets the global and answers its act(id, text)
 export { LaneM }   // screen lane M (docs/multi-radio-records/screen-m.md): the host (lanem_publish.cpp) sets the global and answers its act(id, text)
+export { LaneS1 }   // screen lane S1: the host (s1_publish.cpp) sets the global and answers its act(id, text)
 export { KRow, LaneK, KTile, LaneKMatrix }   // screen lane K (docs/multi-radio-records/screen-k.md): the host (lanek_publish.cpp) sets the globals and answers their act(id, text)
 
 export struct SectionRow { name: string, chip: string, tone: ChipTone, open: bool, dot: LampState, show-dot: bool }
@@ -677,6 +679,10 @@ export component MainWindow inherits Window {
                                         if root.bank-index == 0 && i == 1 && LaneM.rows-source.length > 0 : KPanel { rows: LaneM.rows-source; act(id, t) => { LaneM.act(id, t); } }
                                         if root.bank-index == 0 && i == 2 && LaneM.rows-radio.length > 0 : KPanel { rows: LaneM.rows-radio; act(id, t) => { LaneM.act(id, t); } }
                                         if root.bank-index == 0 && i == 3 && LaneM.rows-audio.length > 0 : KPanel { rows: LaneM.rows-audio; act(id, t) => { LaneM.act(id, t); } }
+                                        // screen lane S1 (wave 8, docs/multi-radio-records/screen-s1-signal.md): the receive controls the engine had commands for, in the section the person looks in (an empty list draws nothing)
+                                        if root.bank-index == 0 && i == 1 && LaneS1.rows-source.length > 0 : KPanel { rows: LaneS1.rows-source; act(id, t) => { LaneS1.act(id, t); } }
+                                        if root.bank-index == 0 && i == 2 && LaneS1.rows-radio.length > 0 : KPanel { rows: LaneS1.rows-radio; act(id, t) => { LaneS1.act(id, t); } }
+                                        if root.bank-index == 0 && i == 3 && LaneS1.rows-audio.length > 0 : KPanel { rows: LaneS1.rows-audio; act(id, t) => { LaneS1.act(id, t); } }
                                         if root.bank-index == 0 && i == 6 && LaneM.rows-record.length > 0 : KPanel { rows: LaneM.rows-record; act(id, t) => { LaneM.act(id, t); } }
                                         if root.bank-index == 2 && i == 4 && LaneM.rows-airband.length > 0 : KPanel { rows: LaneM.rows-airband; act(id, t) => { LaneM.act(id, t); } }
                                         if root.bank-index == 2 && i == 5 && LaneM.rows-levels.length > 0 : KPanel { rows: LaneM.rows-levels; act(id, t) => { LaneM.act(id, t); } }

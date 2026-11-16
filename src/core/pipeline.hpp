@@ -159,6 +159,9 @@
 #include "dsp/spectrum_block.hpp"
 #include "dsp/iq_correct.hpp"
 #include "dsp/afc.hpp"
+#include "dsp/if_filter.hpp"   // screen lane S1: the passband's edges and shift (setPassband)
+#include "dsp/passband.hpp"
+#include "dsp/sam.hpp"   // screen lane S1: the synchronous AM detector (setAmDetector)
 #include "dsp/zoom_fft.hpp"
 #include "dsp/cw_filter.hpp"
 #include "dsp/cw_surround.hpp"   // wire-a second pass
@@ -639,6 +642,26 @@ public:
     double afcPullInHz() const;
     double afcCorrectionHz() const;   // what is added to the VFO now (0 while off, unlocked or in a mode without a carrier)
     bool afcLocked() const;
+    // THE PASSBAND, EDGE BY EDGE (screen lane S1, G1-35 and G1-34; dsp/passband.hpp's maths over dsp/if_filter.hpp's band-pass): a low cut and a high cut set apart, and the whole band shifted (IF shift), on the channel
+    // in USB, LSB, CW and AM. USB and LSB: the audio frequencies the band keeps (low cut to high cut, 300 to 2700 Hz is the usual voice window), moved by `shiftHz`; CW: the same, around the CW pitch; AM: how far
+    // below and above the carrier the band reaches. It is IN ADDITION to the channel width (setVfoBandwidthHz): the narrower of the two wins, so a band wider than the channel needs the width raised. Off (the
+    // default), or in any other mode, it is a bit-exact no-op. The edges are the filter's -3 dB points (a fourth-order Butterworth each side: 24 dB an octave). False (nothing changed) for a cut outside 0 to
+    // 24000 Hz or a shift outside -6000 to +6000 Hz (a band narrower than 50 Hz is widened about its middle). Any thread.
+    bool setPassband(bool on, double lowCutHz, double highCutHz, double shiftHz);
+    bool passbandOn() const;
+    double passbandLowCutHz() const;
+    double passbandHighCutHz() const;
+    double passbandShiftHz() const;
+    bool passbandActive() const;   // true while the band-pass is really in the chain: on, and in a mode that has a passband
+    // THE AM DETECTOR (screen lane S1, G1-19; dsp/sam.hpp SyncAm): 0 the envelope detector AM mode has always had (the default); 1 a synchronous detector (a carrier-tracking loop and a product detector) on both
+    // sidebands, 2 on the upper sideband only, 3 on the lower sideband only (exalted-carrier SSB reception of an AM signal: the other sideband and its interference are rejected). It acts in AM mode only; any other
+    // mode, and AM with 0, are the demodulator as they were. While the loop has no carrier it falls back to the envelope detector by itself, and takes the carrier up again when it is back. False (nothing
+    // changed) for a kind outside 0 to 3. Any thread.
+    bool setAmDetector(int kind);
+    int amDetector() const;
+    bool amDetectorLocked() const;        // the loop is in phase lock on the carrier (measured; false while the envelope detector runs)
+    double amDetectorOffsetHz() const;    // where the loop has found the carrier, Hz from the tuned frequency (measured)
+    double amDetectorPresence() const;    // the carrier's share of the channel, 0 to about 1 (measured)
     // THE CW PEAK FILTER (engine serial lane A, row F8; dsp/cw_filter.hpp CwPeakFilter): an audio peaking filter centred on the CW pitch (it follows setCwPitchHz), width 30 to 500 Hz, boost 0 to
     // 24 dB, on the finished audio of CW mode only (after the equaliser; the decoder tap is far upstream and never sees it). Off, or in any other mode, it is a bit-exact no-op. False (nothing
     // changed) for a width or boost outside those. Any thread.
@@ -1276,6 +1299,24 @@ private:
 #endif
     void rebuildZoom(double chanRate);
     std::unique_ptr<cascade::dsp::AfcTracker> afc_;
+    // THE PASSBAND (setPassband): the DSP thread's copies, the band-pass (rebuilt with the channel blocks) and what the control thread reads.
+    std::unique_ptr<cascade::dsp::IfFilter> passbandFilter_;
+    bool pbOn_ = false;
+    double pbLowHz_ = 300.0, pbHighHz_ = 2700.0, pbShiftHz_ = 0.0;
+    std::array<double, 7> pbApplied_{{-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};   // what the band-pass was last set to: mode, on, low, high, shift, pitch, rate (a change is applied on the next block)
+    bool pbActive_ = false;
+    double pbRateHz_ = 0.0;   // the channel rate the band-pass was built for
+    std::atomic<bool> mirrorPbOn_{false};
+    std::atomic<double> mirrorPbLow_{300.0}, mirrorPbHigh_{2700.0}, mirrorPbShift_{0.0};
+    std::atomic<bool> mirrorPbActive_{false};
+    void updatePassbandLocked();
+    // THE AM DETECTOR (setAmDetector): the DSP thread's choice, the detector (rebuilt with the channel blocks) and what the control thread reads.
+    std::unique_ptr<cascade::dsp::SyncAm> sam_;
+    int samKind_ = 0;
+    std::atomic<int> mirrorSamKind_{0};
+    std::atomic<bool> mirrorSamLocked_{false};
+    std::atomic<double> mirrorSamOffsetHz_{0.0};
+    std::atomic<double> mirrorSamPresence_{0.0};
     bool afcOn_ = false;
     double afcPullHz_ = 2500.0;
     double ritHz_ = 0.0;             // wire-a: the receive clarifier (DSP-thread state); the oscillator runs at userOffsetHz_ + ritHz_ + afcAppliedHz_

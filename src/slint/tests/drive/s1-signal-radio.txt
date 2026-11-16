@@ -1,0 +1,212 @@
+#! frames=3400 size=1600x7000 bank=0 sections=0:2
+# s1-signal-radio (screen lane S1, wave 8; docs/multi-radio-records/screen-s1-signal.md; rows G2-13, G1-24, G1-25, G1-36, G1-37, G1-38, G1-43a, G1-43b, G1-45, G1-44a, G1-44b, G1-22): the Radio section of the SIGNAL bank. Every control is
+# operated by its label and its effect is read back FROM THE ENGINE (`state s1.state.*` is the selected radio's published state, `state mode` / `bandwidthHz` the receiver's own). The groups are folded at the start.
+10 state running == 1
+state mode == WFM
+state s1.rows.radio < 9
+# --- G2-13: the meter's unit. dB of full scale at the start; each unit is read back from the engine, and the Signal strength figure follows it
+state s1.state.meterUnits == 0
++1 click "Signal meter units"
++4 state s1.rows.radio > 7
++1 expect "Signal strength" value contains "dB"
++1 click "S units"
++10 state s1.state.meterUnits == 1
++1 expect "Signal strength" value contains "S"
++1 click "Level in dBm"
++10 state s1.state.meterUnits == 2
++1 expect "Signal strength" value contains "dBm"
++1 click "Level in dB"
++10 state s1.state.meterUnits == 0
++1 click "Signal meter units"
+# --- G1-24, G1-38: CW pitch is 700 Hz at the start; a slider press at 0.5 of the track is about 750 Hz, at 0.9 about 1110 Hz; the peak filter, its width and its boost
++1 click "CW pitch and peak filter"
++4 state s1.state.cwPitchHz == 700
++1 slider "CW pitch" 0.5
++10 state s1.state.cwPitchHz > 690
++1 state s1.state.cwPitchHz < 810
++1 slider "CW pitch" 0.9
++10 state s1.state.cwPitchHz > 1000
++1 state s1.state.cwPitchHz <= 1200
++1 slider "CW pitch" 0.0
++10 state s1.state.cwPitchHz < 340
+state s1.state.cwPeakOn == 0
++1 click "CW peak filter"
++10 state s1.state.cwPeakOn == 1
++1 slider "Peak width" 0.9
++10 state s1.state.cwPeakWidthHz > 350
++1 slider "Peak boost" 0.9
++10 state s1.state.cwPeakBoostDb > 17
++1 click "CW peak filter"
++10 state s1.state.cwPeakOn == 0
++1 click "CW pitch and peak filter"
+# --- G1-36: the filter shape (default at the start)
++1 click "Filter width and shape"
++4 state s1.state.filterShape == 0
++1 click "Sharp filter"
++10 state s1.state.filterShape == 1
++1 click "Soft filter"
++10 state s1.state.filterShape == 3
++1 click "Default filter"
++10 state s1.state.filterShape == 0
+# --- G1-25, G1-37: widths. NFM offers the engine's five FM widths, AM its own list
++1 choose "WFM" "NFM"
++15 state mode == NFM
++4 expect "Medium 30 kHz" enabled equals "true"
++1 click "Medium 30 kHz"
++10 state bandwidthHz == 30000
++1 expect "Medium 30 kHz" checked equals "true"
++1 click "Narrow 12.5 kHz"
++10 state bandwidthHz == 12500
++1 expect "Medium 30 kHz" checked equals "false"
++1 choose "NFM" "AM"
++15 state mode == AM
++4 click "Width 6 kHz"
++10 state bandwidthHz == 6000
++1 expect "Width 6 kHz" checked equals "true"
++1 click "Width 10 kHz"
++10 state bandwidthHz == 10000
+# --- G1-19: the AM detector (the envelope at the start); each kind is read back from the engine's fact
++1 click "AM detector"
++4 state s1.fact.radio.1.amdet contains "0;"
++1 click "Synchronous detector, both sidebands"
++12 state s1.fact.radio.1.amdet contains "1;"
++1 click "Synchronous detector, upper sideband"
++12 state s1.fact.radio.1.amdet contains "2;"
++1 click "Synchronous detector, lower sideband"
++12 state s1.fact.radio.1.amdet contains "3;"
++1 click "Envelope detector"
++12 state s1.fact.radio.1.amdet contains "0;"
++1 click "AM detector"
++1 choose "AM" "USB"
++15 state mode == USB
++4 click "Width 4 kHz"
++10 state bandwidthHz == 4000
++1 click "Width 3 kHz"
++10 state bandwidthHz == 3000
++1 click "Filter width and shape"
+# --- G1-35, G1-34: the passband's own edges and the IF shift (USB: audio edges). Off at the start with the voice window shown; each figure is read back from the engine's fact
++1 click "Passband edges and shift"
++4 state s1.fact.radio.1.passband == "0;300;2700;0;0"
++1 expect "Low cut (Hz)" value equals "300"
++1 expect "High cut (Hz)" value equals "2700"
++1 type "Low cut (Hz)" "500"
++1 key enter
++12 state s1.fact.radio.1.passband == "1;500;2700;0;1"
++1 type "High cut (Hz)" "2000"
++1 key enter
++12 state s1.fact.radio.1.passband == "1;500;2000;0;1"
++1 type "IF shift (Hz)" "200"
++1 key enter
++12 state s1.fact.radio.1.passband == "1;500;2000;200;1"
++1 click "Shift up 100 Hz"
++12 state s1.fact.radio.1.passband == "1;500;2000;300;1"
++1 click "Shift down 100 Hz"
++12 state s1.fact.radio.1.passband == "1;500;2000;200;1"
+# a high cut that is not above the low cut is refused on the screen, before it is sent
++1 type "High cut (Hz)" "400"
++1 key enter
++6 state s1.note.radio contains "High cut (Hz):"
++1 state s1.note.radio contains "above"
++1 state s1.fact.radio.1.passband == "1;500;2000;200;1"
+# a shift past 6000 Hz is refused too
++1 type "IF shift (Hz)" "7000"
++1 key enter
++6 state s1.note.radio contains "IF shift (Hz):"
++1 state s1.fact.radio.1.passband == "1;500;2000;200;1"
++1 click "Passband edges on"
++12 state s1.fact.radio.1.passband == "0;500;2000;200;0"
+# CW starts from the pitch plus and minus 250 Hz (the pitch was moved to 300 Hz above)
++1 choose "USB" "CW"
++15 state mode == CW
++4 expect "Low cut (Hz)" value equals "50"
++1 expect "High cut (Hz)" value equals "550"
++1 choose "CW" "USB"
++15 state mode == USB
+# a mode with no passband leaves the key dead
++1 choose "USB" "NFM"
++15 state mode == NFM
++4 expect "Passband edges on" enabled equals "false"
++1 choose "NFM" "USB"
++15 state mode == USB
++1 click "Passband edges and shift"
+# --- G1-45, G1-44a, G1-44b: the squelches (NFM)
++1 choose "USB" "NFM"
++15 state mode == NFM
++1 click "Noise and tone squelch"
++4 state s1.state.noiseSquelchOn == 0
++1 click "Noise squelch"
++10 state s1.state.noiseSquelchOn == 1
++1 slider "Noise threshold" 0.5
++10 state s1.state.noiseSquelchThresholdDb > -60
++1 state s1.state.noiseSquelchThresholdDb < -30
++1 slider "Noise tail" 0.5
++10 state s1.state.noiseSquelchTailMs > 800
++1 state s1.state.noiseSquelchTailMs < 1200
++1 click "Noise squelch"
++10 state s1.state.noiseSquelchOn == 0
+state s1.state.toneKind == 0
++1 click "CTCSS tone squelch"
++10 state s1.state.toneKind == 1
++1 type "CTCSS tone (Hz)" "88.5"
++1 key enter
++10 state s1.state.toneHz == 88.5
++1 click "Next CTCSS tone"
++10 state s1.state.toneHz == 91.5
++1 click "Previous CTCSS tone"
++10 state s1.state.toneHz == 88.5
+# a figure that is not one of the 50 is refused on the screen, before it is sent
++1 type "CTCSS tone (Hz)" "99"
++1 key enter
++6 state s1.note.radio contains "CTCSS tone (Hz):"
++1 state s1.note.radio contains "50"
++1 state s1.state.toneHz == 88.5
++1 click "DCS code squelch"
++10 state s1.state.toneKind == 2
++1 type "DCS code" "023"
++1 key enter
++10 state s1.state.toneCode == 23
++1 click "Next DCS code"
++10 state s1.state.toneCode == 25
++1 click "Inverted polarity"
++10 state s1.state.tonePolarity == 2
++1 type "DCS code" "024"
++1 key enter
++6 state s1.note.radio contains "DCS code:"
++1 state s1.state.toneCode == 25
++1 click "Remove the tone from the audio"
++10 state s1.state.toneRemove == 1
++1 click "Remove the tone from the audio"
++10 state s1.state.toneRemove == 0
++1 click "Tone squelch off"
++10 state s1.state.toneKind == 0
++1 click "Noise and tone squelch"
+# --- G1-43a, G1-43b: AFC (and the same switch as CW auto-tune), the pull-in range
++1 click "Frequency tracking and multiplex"
++4 state s1.state.afcOn == 0
++1 click "Automatic frequency control (AFC)"
++10 state s1.state.afcOn == 1
++1 type "AFC pull-in range (Hz)" "4000"
++1 key enter
++10 state s1.state.afcPullInHz == 4000
++1 type "AFC pull-in range (Hz)" "40"
++1 key enter
++6 state s1.note.radio contains "AFC pull-in range (Hz):"
++1 state s1.state.afcPullInHz == 4000
++1 choose "NFM" "CW"
++15 state mode == CW
++4 expect "CW auto-tune" checked equals "true"
++1 click "CW auto-tune"
++10 state s1.state.afcOn == 0
++1 choose "CW" "WFM"
++15 state mode == WFM
+# --- G1-22: the multiplex record (WFM only); it writes into the run's own recordings folder and is stopped again
++4 expect "Record the FM multiplex" enabled equals "true"
+state s1.fact.radio.1.mpx != 1
++1 click "Record the FM multiplex"
++15 state s1.fact.radio.1.mpx == 1
++1 click "Record the FM multiplex"
++15 state s1.fact.radio.1.mpx != 1
++1 choose "WFM" "NFM"
++15 state mode == NFM
++4 expect "Record the FM multiplex" enabled equals "false"
++1 shot "s1-signal-radio.png"

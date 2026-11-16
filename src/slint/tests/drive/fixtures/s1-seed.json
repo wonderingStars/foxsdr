@@ -1,0 +1,8 @@
+{ "telemetryEnabled": false, "updateCheckEnabled": false, "mainView": "receiver", "bandPlanOverlay": false, "sourceKind": "siggen",
+  "meterUnits": 2, "cwPitchHz": 640, "nrMethod": 1, "toneSquelchKind": 1, "toneSquelchHz": 100.0, "toneSquelchCode": 23, "toneSquelchPolarity": 2, "toneRemove": true,
+  "stereoPlaceMode": 1, "stereoPlaceValue": 0.5, "audioHighPassHz": 300, "audioLowPassHz": 3000, "filterShape": 2,
+  "afcOn": true, "afcPullInHz": 4000, "iqCorrect": 3,
+  "noiseSquelchOn": true, "noiseSquelchThresholdDb": -40, "noiseSquelchTailMs": 300,
+  "cwPeakOn": true, "cwPeakWidthHz": 200, "cwPeakBoostDb": 8,
+  "eqDb": [3.5, 0, -2, 0, 0, 5, 0, 0],
+  "notchBank": [ { "slot": 2, "hz": 440, "widthHz": 20, "on": true } ] }

@@ -100,6 +100,7 @@
 #include "lanel_publish.hpp"   // screen lane L (docs/multi-radio-records/screen-l.md)
 #include "lanem_logic.hpp"     // screen lane M (docs/multi-radio-records/screen-m.md): a mark's credit line
 #include "lanem_publish.hpp"   // screen lane M: the controls of the wiring second passes
+#include "s1_publish.hpp"     // screen lane S1 (wave 8): the receive controls the engine had commands for
 #include "sysmenu_win.hpp"   // window gaps lane 1: the title rail's own system menu (ledger row 14)
 #include "sysmenu_win.hpp"   // window gaps lane 1: the title rail's own system menu (ledger row 14)
 #include "gaps1_publish.hpp"   // window gaps lane 1: the start-up questions (did not close normally, Link this FoxSDR?) and the plugin fault cards
@@ -743,6 +744,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<foxsdr::slintlanek::LaneKPublisher> laneKp;
     std::unique_ptr<foxsdr::slintlanel::LaneLPublisher> laneLp;   // screen lane L
     std::unique_ptr<foxsdr::slintlanem::LaneMPublisher> laneMp;   // screen lane M
+    std::unique_ptr<foxsdr::slints1::S1Publisher> laneS1p;        // screen lane S1 (wave 8)
     std::function<std::string(const std::string&, std::string&)> sysMenuState;   // window gaps lane 1: `state sysmenu.<asks|items>`
     double lastFilePositionSec = 0.0;   // screen lane M: the selected radio's position in the file it plays (set once a tick)
     double lastZoomSelected = 0.0;   // the span the last dragged selection zoomed to (state lk.zoomspan)
@@ -1795,6 +1797,31 @@ int main(int argc, char** argv) {
         laneMp = std::make_unique<foxsdr::slintlanem::LaneMPublisher>(std::move(e));
         laneMp->wire();
     }
+    // ---- SCREEN LANE S1 (wave 8, docs/multi-radio-records/screen-s1-signal.md): the receive controls the engine had commands for, in the SIGNAL sections the person looks in ----
+    {
+        foxsdr::slints1::S1Publisher::Env e;
+        e.ui = &*ui;
+        e.api = api;
+        e.session = session;
+        e.bounded = bounded.bounded();
+        e.submit = [&](const FoxCommand& cin, std::uint32_t radio, const std::string* longText) {
+            foxsdr::slints1::SubmitOutcome out;
+            FoxCommand c = cin;
+            c.structSize = sizeof(c);
+            aimAt(c, radio);
+            FoxSubmitResult r{}; r.structSize = sizeof(r);
+            const bool useLong = longText != nullptr && FOXAPI_HAS(api, submit_text);
+            const int32_t rc = useLong ? api->submit_text(session, &c, longText->data(), static_cast<uint32_t>(longText->size()), &r) : api->submit(session, &c, 1, &r);
+            if (rc < 0) { out.status = rc; out.message = cascade::i18n::tr("The engine would not take that command."); return out; }
+            out.status = r.status;
+            out.ticket = r.ticket;
+            if (r.status == FOXAPI_BUSY) { out.message = cascade::i18n::tr("The engine is busy: try again in a moment."); }
+            return out;
+        };
+        e.selectedRadio = [&] { return workspace.selectedRadio(); };
+        laneS1p = std::make_unique<foxsdr::slints1::S1Publisher>(std::move(e));
+        laneS1p->wire();
+    }
     // ---- WINDOW GAPS LANE 1 (docs/multi-radio-records/window-gaps-1.md): what the classic window asks or says at start-up ----
     {
         foxsdr::slintgaps1::Publisher::Env e;
@@ -2737,6 +2764,7 @@ int main(int argc, char** argv) {
             if (laneLp && !laneKOff) { laneLp->tick(static_cast<long>(tickNo)); }   // screen lane L (the same switch leaves it out)
             lastFilePositionSec = state.filePositionSec;   // screen lane M: the selected radio's position in the file it plays
             if (laneMp && !laneKOff) { laneMp->tick(static_cast<long>(tickNo)); }   // screen lane M (the same switch leaves it out)
+            if (laneS1p && !laneKOff) { laneS1p->tick(state, static_cast<long>(tickNo)); }   // screen lane S1 (the same switch leaves it out)
             if (gaps1) { gaps1->tick(static_cast<long>(tickNo)); }   // window gaps lane 1
             if (!laneCOff) { laneC.tick(state, static_cast<long>(tickNo)); }   // screen lane C: scanner block, memories, clock, sheets (FOXSDR_SLINT_LANEC_OFF=1, a bounded run only, leaves it out: the frame-cost comparison)
             if (!lists.converter && !(noteTick > 0 && tickNo - noteTick < 90)) {   // T9: the airband channel's name where the counter says "via ..." (a note or a converter keeps the place)
@@ -3039,6 +3067,7 @@ int main(int argc, char** argv) {
             deckOnAnswer(r[i]);
             if (laneLp) { laneLp->onAnswer(r[i]); }   // screen lane L: the refusal of an op it sent
             if (laneMp) { laneMp->onAnswer(r[i]); }   // screen lane M: the same
+            if (laneS1p) { laneS1p->onAnswer(r[i]); }   // screen lane S1: the same
             if (r[i].status != FOXAPI_OK && r[i].status != FOXAPI_NO_CHANGE) { std::fprintf(stderr, "foxsdr-slint: op 0x%04x answered %d: %s\n", r[i].op, r[i].status, r[i].message); }
         }
 
@@ -3046,7 +3075,7 @@ int main(int argc, char** argv) {
         // the browser's tiles, the track-info lines, the plugin-use table, the events and the tickets - then its pages (kit_publish.cpp).
         kit.tick(state, listMoved, face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain");
         extendBank.publish(state);   // before the kit's pages: the store page of kind 9 is built from the model this hands over
-        for (const FoxCommandResult& r2 : kit.takeUnclaimedResults()) { patchBank.onAnswer(r2); transmitBank.onAnswer(r2); deckOnAnswer(r2); if (laneLp) { laneLp->onAnswer(r2); } if (laneMp) { laneMp->onAnswer(r2); } }   // an answer the kit's own poll took first: the draft waits for it
+        for (const FoxCommandResult& r2 : kit.takeUnclaimedResults()) { patchBank.onAnswer(r2); transmitBank.onAnswer(r2); deckOnAnswer(r2); if (laneLp) { laneLp->onAnswer(r2); } if (laneMp) { laneMp->onAnswer(r2); } if (laneS1p) { laneS1p->onAnswer(r2); } }   // an answer the kit's own poll took first: the draft waits for it
         patchBank.publish(state);    // before the kit's pages too: the Patch presets page of kind 10 is built from the model this hands over
         transmitBank.publish(state); // ... and the Transmit page of kind 11 (and the key's batch for this tick)
         // THE MAP'S LOOK, from the interface half each tick (SYSTEM > Display saves it there): the aircraft icon size, the trail width and the trail style, bounded
@@ -3557,6 +3586,7 @@ int main(int argc, char** argv) {
         if (name.rfind("sysmenu.", 0) == 0) { return sysMenuState ? sysMenuState(name.substr(8), out) : std::string("no system menu"); }
         if (name.rfind("gaps1.", 0) == 0) { return gaps1 ? gaps1->readState(name.substr(6), out) : std::string("no window gaps 1"); }
         if (name.rfind("lm.", 0) == 0) { return laneMp ? laneMp->readState(name.substr(3), out) : std::string("no lane M"); }
+        if (name.rfind("s1.", 0) == 0) { return laneS1p ? laneS1p->readState(name.substr(3), out) : std::string("no lane S1"); }
         if (name.rfind("lk.", 0) == 0) { return laneKp ? laneKp->readState(name.substr(3), out) : std::string("no lane K"); }
         // gaps.<what>: the classic-window gaps (docs/multi-radio-records/slint-gaps.md)
         if (name.rfind("gaps.", 0) == 0) {

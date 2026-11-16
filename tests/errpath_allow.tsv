@@ -3036,3 +3036,10 @@ src/usb/winusb_device.cpp::openWinUsb::errassign::opening the radio	ALLOW	USB tr
 src/usb/winusb_device.cpp::openWinUsb::errassign::openwinusb needs a device interface path	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
 src/usb/winusb_device.cpp::openWinUsb::errassign::the radio is no longer present	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
 src/usb/winusb_device.cpp::openWinUsb::errassign::winusbinitialize is the device bound to winusb	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
+src/slint/s1_logic.cpp::parseCtcss::errassign::e	ALLOW	UI result text: the failure is classified at the site that produced it	s1
+src/slint/s1_logic.cpp::parseCtcss::errassign::that is not one of the # ctcss tones	ALLOW	UI result text: the failure is classified at the site that produced it	s1
+src/slint/s1_logic.cpp::parseDcs::errassign::that is not one of the # standard dcs codes	ALLOW	UI result text: the failure is classified at the site that produced it	s1
+src/slint/s1_logic.cpp::parseDcs::errassign::a dcs code is written in the digits # to # like #	ALLOW	UI result text: the failure is classified at the site that produced it	s1
+src/slint/s1_logic.cpp::parseDcs::errassign::that is not one of the # standard dcs codes#2	ALLOW	UI result text: the failure is classified at the site that produced it	s1
+src/slint/s1_logic.cpp::parseNotchSlot::errassign::a notch slot is a whole number from # to #	ALLOW	UI result text: the failure is classified at the site that produced it	s1
+src/slint/s1_logic.cpp::checkCuts::errassign::the high cut has to be above the low cut	ALLOW	UI result text: the failure is classified at the site that produced it	s1

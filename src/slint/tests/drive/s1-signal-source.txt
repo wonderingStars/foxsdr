@@ -1,0 +1,18 @@
+#! frames=500 size=1600x7000 bank=0 sections=0:1
+# s1-signal-source (screen lane S1, wave 8; docs/multi-radio-records/screen-s1-signal.md; rows G1-46a, G1-46b, G1-46c): the I/Q correction under Source. Untouched samples at the start; each bit is read back from the engine's mask.
+10 state running == 1
++1 click "I/Q correction"
++4 state s1.state.iqCorrectMask == 0
++1 click "Remove the DC offset"
++10 state s1.state.iqCorrectMask == 1
++1 click "Balance gain and phase"
++10 state s1.state.iqCorrectMask == 3
++1 click "Swap I and Q (any source)"
++10 state s1.state.iqCorrectMask == 7
++1 click "Remove the DC offset"
++10 state s1.state.iqCorrectMask == 6
++1 click "Swap I and Q (any source)"
++10 state s1.state.iqCorrectMask == 2
++1 click "Balance gain and phase"
++10 state s1.state.iqCorrectMask == 0
++1 shot "s1-signal-source.png"

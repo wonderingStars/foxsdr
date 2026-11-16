@@ -1,0 +1,64 @@
+#! frames=900 size=1600x7000 bank=0 sections=0:1,2,3 config=s1-seed.json
+# s1-signal-start (screen lane S1, wave 8; docs/multi-radio-records/screen-s1-signal.md): every control the lane drew shows the engine's value AT START-UP, not what was last typed here. The seed
+# settings file holds a figure for each setting (a bookmark, the old window or the web page would have put them there); nothing is touched by the script, every figure is read from the screen's own control
+# and from the engine. The groups are folded at the start (the sections keep their height) and are opened one by one.
+10 state running == 1
+state s1.rows.radio < 9
+state s1.rows.audio < 9
+state s1.rows.source < 4
+# --- the I/Q correction: DC removal and balance on, swap off (iqCorrect 3)
++1 click "I/Q correction"
++4 expect "Remove the DC offset" checked equals "true"
++1 expect "Balance gain and phase" checked equals "true"
++1 expect "Swap I and Q (any source)" checked equals "false"
++1 state s1.state.iqCorrectMask == 3
+# --- the meter's unit (2 = dBm), CW pitch 640, the CW peak filter on at 200 Hz and 8 dB
++1 click "Signal meter units"
++4 expect "Level in dBm" checked equals "true"
++1 expect "Level in dB" checked equals "false"
++1 expect "Signal strength" value contains "dBm"
++1 click "CW pitch and peak filter"
++4 expect "CW pitch" value equals "38 %"
++1 expect "CW peak filter" checked equals "true"
++1 expect "Peak width" value equals "36 %"
++1 expect "Peak boost" value equals "33 %"
+# --- the filter shape (2 = medium)
++1 click "Filter width and shape"
++4 expect "Medium filter" checked equals "true"
++1 expect "Default filter" checked equals "false"
+# --- the squelches: noise squelch on, -40 dB, 300 ms; CTCSS 100.0 Hz chosen; DCS 023 inverted; the tone removed from the audio
++1 click "Noise and tone squelch"
++4 expect "Noise squelch" checked equals "true"
++1 expect "Noise threshold" value equals "56 %"
++1 expect "Noise tail" value equals "15 %"
++1 expect "CTCSS tone squelch" checked equals "true"
++1 expect "CTCSS tone (Hz)" value equals "100.0"
++1 expect "DCS code" value equals "023"
++1 expect "Inverted polarity" checked equals "true"
++1 expect "Remove the tone from the audio" checked equals "true"
+# --- AFC on with a 4000 Hz pull-in (the mode is WFM, where it works)
++1 click "Frequency tracking and multiplex"
++4 expect "Automatic frequency control (AFC)" checked equals "true"
++1 expect "AFC pull-in range (Hz)" value equals "4000"
+# --- the Audio filters: the noise-reduction method (1 = spectral), the notch bank (slot 3: 440 Hz, 20 Hz wide), the high-pass 300, the low-pass 3000, the equaliser, the stereo pan
++1 click "Noise-reduction method"
++4 expect "Spectral noise reduction" checked equals "true"
++1 click "Notch bank"
++4 expect "Notch frequency (Hz)" value equals "1000"
++1 type "Notch slot (1 to 10)" "3"
++1 key enter
++4 expect "Notch in this slot" checked equals "true"
++1 expect "Notch frequency (Hz)" value equals "440"
++1 expect "Notch width (Hz)" value equals "20"
++1 click "Audio high-pass and low-pass"
++4 expect "High-pass 300 Hz" checked equals "true"
++1 expect "Low-pass 3 kHz" checked equals "true"
++1 click "Audio equaliser"
++4 expect "EQ Bass" value equals "65 %"
++1 expect "EQ Treble" value equals "42 %"
++1 expect "EQ 1 kHz" value equals "71 %"
++1 expect "EQ Middle" value equals "50 %"
++1 click "Stereo placement"
++4 expect "Pan" checked equals "true"
++1 expect "Placement" value equals "75 %"
++1 shot "s1-signal-start.png"
