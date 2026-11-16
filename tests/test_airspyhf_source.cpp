@@ -1371,6 +1371,44 @@ int main() {
         src.closeDevice();
     }
 
+    // =====================================================================
+    // 16b. THE TWO OPTIONAL WRITES AT OPEN (engine fixes 8, D3).
+    // =====================================================================
+    //
+    // A user's receiver would not open on Windows: "the radio stopped answering
+    // while restoring the crystal trim: a control transfer failed (Windows error
+    // 31)". The firmware refused SET_VCTCXO_CALIBRATION (17) and the open marked
+    // the device dead. libairspyhf ignores the result of both of these writes
+    // (SET_VCTCXO_CALIBRATION 17 and SET_FRONTEND_OPTIONS 18) at open, so a
+    // refusal of either must not stop the open.
+    for (const std::uint8_t refused : {std::uint8_t(17), std::uint8_t(18)}) {
+        AirspyHfSource src;
+        FakeAirspyHfUsb* fake = attachFake(src);
+        fake->failingRequests = {refused};
+        const bool opened = src.open("");
+        if (!opened) {
+            std::printf("     open() with request %u refused said: %s\n",
+                        static_cast<unsigned>(refused), src.lastError());
+        }
+        CHECK(opened);
+        CHECK(src.isOpen());
+        CHECK(!src.faulted());
+        CHECK(!src.deviceDead());
+        // The calibration the flash holds is still applied to the tune: only
+        // the push of it into the running firmware was refused.
+        CHECK(src.calibrationPpb() == -1200);
+        src.closeDevice();
+    }
+    // A request the radio cannot work without still fails the open.
+    {
+        AirspyHfSource src;
+        FakeAirspyHfUsb* fake = attachFake(src);
+        fake->failingRequests = {4};  // SET_SAMPLERATE
+        CHECK(!src.open(""));
+        CHECK(src.faulted());
+        src.closeDevice();
+    }
+
     // A firmware that will not list its rates at all still streams, on the
     // reference's assumed default (airspyhf.c:1016-1026). This is not the
     // same as the request failing - the device answers a count of zero.

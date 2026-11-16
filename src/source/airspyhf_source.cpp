@@ -295,6 +295,19 @@ OptionalRead optionalControlIn(cascade::usb::UsbDevice* dev, airspyhf::VendorReq
     return out;
 }
 
+// The OUT twin of optionalControlIn, for the two writes libairspyhf makes at
+// open and ignores the result of (airspyhf.c:1079-1082, SET_VCTCXO_CALIBRATION
+// and SET_FRONTEND_OPTIONS). Some Windows setups answer them with a failed
+// control transfer (Windows error 31) and the receiver works without them, so
+// a refusal must not condemn the device. Returns whether the radio accepted it.
+bool optionalControlOut(cascade::usb::UsbDevice* dev, airspyhf::VendorRequest r,
+                        std::uint16_t value, std::uint16_t index) {
+    if (dev == nullptr) { return false; }
+    const int ret = dev->controlOut(cascade::usb::kRequestTypeVendorOut, airspyhf::requestByte(r),
+                                    value, index, nullptr, 0, airspyhf::kControlTimeoutMs);
+    return ret >= 0;
+}
+
 }  // namespace
 
 bool AirspyHfSource::setReceiverModeLocked(airspyhf::ReceiverMode mode, const char* what) {
@@ -412,13 +425,21 @@ bool AirspyHfSource::readCalibrationLocked() {
     // The reference PUSHES the stored VCTCXO trim and frontend options back
     // into the device at open (airspyhf.c:1079-1082): the flash holds them,
     // the running firmware does not apply them by itself.
-    controlOutLocked(airspyhf::VendorRequest::SetVctcxoCalibration,
-                     static_cast<std::uint16_t>(vctcxo & 0xFFFFu), 0, nullptr, 0,
-                     "restoring the crystal trim");
-    controlOutLocked(airspyhf::VendorRequest::SetFrontendOptions,
-                     static_cast<std::uint16_t>(frontend & 0xFFFFu),
-                     static_cast<std::uint16_t>(frontend >> 16), nullptr, 0,
-                     "restoring the frontend options");
+    // BOTH ARE OPTIONAL: the reference ignores the result of each, and a
+    // receiver that refuses them (Windows error 31 on one user's machine) works
+    // without. A refusal is logged and the open carries on; it must not mark
+    // the device dead.
+    if (!optionalControlOut(dev_.get(), airspyhf::VendorRequest::SetVctcxoCalibration,
+                            static_cast<std::uint16_t>(vctcxo & 0xFFFFu), 0)) {
+        core::diagWarnf("airspyhf: the receiver refused to take back its stored crystal trim; "
+                        "carrying on without it");
+    }
+    if (!optionalControlOut(dev_.get(), airspyhf::VendorRequest::SetFrontendOptions,
+                            static_cast<std::uint16_t>(frontend & 0xFFFFu),
+                            static_cast<std::uint16_t>(frontend >> 16))) {
+        core::diagWarnf("airspyhf: the receiver refused to take back its stored front-end "
+                        "options; carrying on without them");
+    }
     core::diagLogf("airspyhf: calibration from the receiver's own flash - %d ppb, vctcxo %u",
                    static_cast<int>(ppb), static_cast<unsigned>(vctcxo));
     return true;
