@@ -49,7 +49,7 @@ Screen group (19 mutations in one build, drive scripts audio, radio, source): me
 * The FULL gate was started (`ctest -R .`, 1558 tests, `-j3`) and STOPPED by exact PID after 13 tests in 7 minutes: at that speed it needed about a day. NOT RUN: the rest of the headless and GUI gates. UNVERIFIED for everything outside the slice below.
 * The full tree builds: `cmake --build` of every target, `rc=0` (1100 programs).
 * The SLICE that covers the changed code (148 tests: `test_error_paths`, `test_i18n*`, every `test_slint_*host`, forms/fields/cards/constraints/house_rules/main_screen/elided/theme, every `test_pipeline_*`, `test_apply_command` (+ stepped and free), `test_radio_scope`, `test_engine_api_passband|fmwidth|mpx`, `test_passband*`, `test_sam`, `test_if_filter`, `test_config*`, and the drive scripts `s1-*`, `lanem-*`, `lanec-lockout`, `transmit-page`, `signal-*`, `tools-airband`, `main-*`, `gaps-deemph`): `99% tests passed, 2 tests failed out of 148`, `Total Test time (real) = 1119.76 sec`. The two reds were MINE and are fixed: `test_slint_house_rules` (`s1_signal.slint` did not import the Theme: import added, green) and `slint_drive_transmit-page` (the SIGNAL list is taller: the Audio filters header starts below the window; see the changed expectation below; green after). The s1 drive scripts and `test_slint_house_rules` were re-run after the fix: all green. The stamp tests were not re-run after the last rebuild.
-* Error-path gate: PENDING 1126 before and after (the pin is not raised); eight allow lines for typed-text refusals.
+* Error-path gate: PENDING 1126 before and after (the pin is not raised); seven allow lines for typed-text refusals.
 
 ## Changed expectations (the one existing script touched)
 `src/slint/tests/drive/transmit-page.txt`: the step `scroll "Audio filters" 400` found the header while it was inside the window; the Radio and Audio filters sections now hold folded groups, so the header starts lower and is outside the window (a control outside the window is not in the element tree). The script now wheels the list from "Signal strength" by 300 first and waits 6 ticks, and the closing click wheels from "Audio filters" again. No assertion changed; the Transmit row is still reached by the list's scroll (owner answer 76: it is not forced into view).
@@ -63,3 +63,5 @@ Screen group (19 mutations in one build, drive scripts audio, radio, source): me
 | Real pointer, real radio | the new rows are driven by label, never by a real pointer; the clip sweep was not run | mouse drive |
 | Translations | machine-made, unchecked | owner |
 | Edge sharpness | 24 dB an octave per edge (fourth-order Butterworth); the demodulator's own filter still shapes SSB | engine lane if steeper wanted |
+
+Config hash re-proved at the end: c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3 (unchanged).
