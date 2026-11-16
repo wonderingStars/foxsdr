@@ -277,7 +277,8 @@ export component PluginBody inherits VerticalLayout {
         spacing: 1px;
         HorizontalLayout {
             spacing: 6px;
-            Text { text: r.outward ? "\u{25cf}" : "\u{25cb}"; color: r.outward ? Theme.accent-soft : Theme.faint; font-size: Theme.font-small; vertical-alignment: center; }
+            // a dot: filled when the capability reaches outward, an outline when it does not (drawn, not a glyph, so no text is left untranslated)
+            VerticalLayout { alignment: center; Rectangle { width: 8px; height: 8px; border-radius: 4px; border-width: 1px; border-color: r.outward ? Theme.accent-soft : Theme.faint; background: r.outward ? Theme.accent-soft : transparent; } }
             Text { horizontal-stretch: 1; min-width: 0px; text: r.key; color: r.outward ? Theme.fg : Theme.fg-soft; font-family: Theme.font-ui; font-size: Theme.font-body; overflow: elide; }
         }
         Words { wrap-w: root.width - 16px; text: r.detail; }

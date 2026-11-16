@@ -464,7 +464,7 @@ Every row of the five plugin tabs of `inventory/` (`decode-bank-plugin-host.txt`
 | # | Control | Type | Status | Note |
 |---|---|---|---|---|
 | 278 | Plugin store switch row | key (latched toggle) | PRESENT | the Plugin store row in DecodeBank, drawn as a chip LATER; it opens nothing until the store (a later beta) |
-| 279 | Store chip + lamp | readout / lamp | PRESENT | the DECODE bank's Plugin store row chip and lamp: kit_publish.cpp publishDecodeBank, words from extend_logic readStoreChip (BUSY / IDLE / n UPD / OK); the '--' in main.cpp:897 is the generic fallback the DECODE bank does not draw; test railChip + drive wg3-store-page (store.chip == OK) |
+| 279 | Store chip + lamp | readout / lamp | PRESENT | the DECODE bank's Plugin store row chip and lamp: kit_publish.cpp publishDecodeBank, words from extend_logic readStoreChip (BUSY / IDLE / n UPD / OK); the '--' in main.cpp:897 is the generic fallback the DECODE bank does not draw; test railChip (BUSY) + drive wg3-store-chip (the DRAWN chip and lamp: IDLE, then 1 UPD, lamp green with the page up and yellow closed) + wg3-store-page (OK); the bank HEADER chip, which did read '--', now says n RUNNING / IDLE on DECODE (main.cpp bank_chip) |
 | 280 | Row tooltip | tooltip | PRESENT | the row's tooltip is the old window's sentence (kit_publish.cpp publishDecodeBank, the store row) |
 | 281 | Catalogue index.json URL | text field | PRESENT | a Field in DecodeBank, committed on Enter or focus lost (FOXAPP_OP_SET_CATALOGUE_URL) |
 | 282 | Enforcement error | readout | PRESENT | the enforcement error line under the field, in the error tone |
