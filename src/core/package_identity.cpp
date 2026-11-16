@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/package_identity.hpp"
 
+#include <atomic>
 #include <cstdlib>
 #include <mutex>
 #include <optional>
@@ -82,7 +83,12 @@ PackageIdentity queryWindows() { return {}; }
 
 // The environment seam, read once with the rest of the answer. "none" is the
 // explicit unpackaged forcing; any other non-empty value is a fake full name.
+std::atomic<bool> g_seamsLocked{false};
+PackageIdentity g_cached;
+bool g_haveCached = false;
+
 std::optional<PackageIdentity> fakeFromEnvironment() {
+    if (g_seamsLocked.load()) { return std::nullopt; }
     const char* v = std::getenv("FOXSDR_FAKE_PACKAGE");
     if (v == nullptr || *v == '\0') { return std::nullopt; }
     const std::string value(v);
@@ -126,32 +132,39 @@ const PackageIdentity& packageIdentity() {
     // Deliberately NOT a function-local static computed once and for all: the
     // test seam has to be able to change the answer. The cache below is
     // therefore invalidated whenever an override is set or cleared.
-    static PackageIdentity cached;
-    static bool haveCached = false;
-
     std::lock_guard<std::mutex> lock(stateMutex());
     if (testOverride().has_value()) { return *testOverride(); }
-    if (!haveCached) {
+    if (!g_haveCached) {
         if (const std::optional<PackageIdentity> fake = fakeFromEnvironment(); fake.has_value()) {
-            cached = *fake;
+            g_cached = *fake;
         } else {
-            cached = queryWindows();
+            g_cached = queryWindows();
         }
-        haveCached = true;
+        g_haveCached = true;
     }
-    return cached;
+    return g_cached;
 }
+
+void lockFakePackageSeams() {
+    std::lock_guard<std::mutex> lock(stateMutex());
+    g_seamsLocked.store(true);
+    g_haveCached = false;   // an answer already given from the environment is asked again
+}
+
+bool fakePackageSeamsOpen() { return !g_seamsLocked.load(); }
 
 bool runningInPackage() { return packageIdentity().packaged; }
 
 void setPackageIdentityForTest(const PackageIdentity& id) {
     std::lock_guard<std::mutex> lock(stateMutex());
     testOverride() = id;
+    g_haveCached = false;
 }
 
 void clearPackageIdentityForTest() {
     std::lock_guard<std::mutex> lock(stateMutex());
     testOverride().reset();
+    g_haveCached = false;   // (the header's promise: setting or clearing the override invalidates the cached answer)
 }
 
 UpdateCheckDisposition updateCheckDisposition(bool packaged, bool userEnabled) {

@@ -169,6 +169,11 @@ struct World {
 };
 
 
+// M1 (security review 1): the website copy downloads only what the owner signed. Every row of this file is signed with a key of its own unless a test says
+// otherwise (g_autoSign), and main() sets that key as the trusted one.
+cascade::core::sys::Ed25519Seed g_seed{};
+bool g_autoSign = true;
+
 struct Spec {
     std::string progFile = "multimon-helper.exe";
     std::string progUrl = kProgUrl;
@@ -187,10 +192,13 @@ std::string indexOf(World& w, const Spec& s) {
     w.files[dllUrl] = s.dll;
     if (s.progUrl == kProgUrl) { w.files[s.progUrl] = s.progBytes; }
     const std::string psha = s.progSha.empty() ? sha(s.progBytes) : s.progSha;
+    const std::string autoSig = (g_autoSign && s.signature.empty())
+                                    ? cascade::core::sys::makeEnvelope(g_seed, cp::signedStatement("companion-multimon", s.progFile, psha))
+                                    : s.signature;
     std::string companion = std::string("\"companion\":{\"upstream\":\"multimon-ng\",\"source\":\"") + kSource +
                             "\",\"licence\":\"GPL-2.0-or-later\",\"whySeparate\":\"This is another person's open-source program and stays an application of its own.\"," +
                             "\"program\":{\"file\":\"" + s.progFile + "\",\"url\":\"" + s.progUrl + "\",\"sha256\":\"" + psha + "\",\"status\":\"" + s.status + "\"" +
-                            (s.signature.empty() ? std::string() : ",\"signature\":" + nlohmann::json(s.signature).dump()) + "}}";
+                            (autoSig.empty() ? std::string() : ",\"signature\":" + nlohmann::json(autoSig).dump()) + "}}";
     if (s.omitProgram) { companion = std::string("\"companion\":{\"upstream\":\"multimon-ng\",\"source\":\"") + kSource + "\",\"licence\":\"GPL-2.0-or-later\",\"whySeparate\":\"x\"}"; }
     return std::string("{\"schemaVersion\":1,\"plugins\":[{\"id\":\"companion-multimon\",\"name\":\"Pager tones - multimon-ng companion\",\"version\":\"0.1.2\",\"author\":\"FoxSDR project\",") +
            "\"licence\":\"MIT\",\"abiVersion\":" + std::to_string(CASCADE_PLUGIN_ABI_VERSION) + ",\"category\":\"companions\",\"summary\":\"Runs multimon-ng.\",\"description\":\"A companion plugin." +
@@ -538,6 +546,8 @@ void writePackage(const fs::path& pkg, const std::string& bytes, const std::stri
 
 void testPackaged() {
     std::printf("[C6] the Store copy carries the programs inside its package\n");
+    // M1: the Store copy needs no owner key and never fetches: its programs come out of the package, checked against the package's own list
+    cp::setSignatureKeysForTest(true, {});
     const fs::path pkg = g_dir / "c6-package";
     const fs::path dir = g_dir / "c6";
     fs::remove_all(pkg);
@@ -668,9 +678,10 @@ void testSignature() {
 
     struct Case { const char* name; std::string sig; bool keyed; bool installs; int hitsForProgram; };
     const std::vector<Case> cases = {
-        {"no key, no signature: not enforced", "", false, true, 1},
-        {"no key, a signature present: not enforced", good, false, true, 1},
-        {"no key, a garbage signature: not enforced", "garbage", false, true, 1},
+        // (M1, security review 1: with no owner key a program is NEVER downloaded; was: installs true, hits 1 for each of these three)
+        {"no key, no signature: no download", "", false, false, 0},
+        {"no key, a signature present: no download", good, false, false, 0},
+        {"no key, a garbage signature: no download", "garbage", false, false, 0},
         {"key, the right signature", good, true, true, 1},
         {"key, no signature", "", true, false, 0},
         {"key, signed by another key", wrongKey, true, false, 0},
@@ -682,6 +693,7 @@ void testSignature() {
         fs::remove_all(dir);
         fs::create_directories(dir);
         cp::setSignatureKeysForTest(true, c.keyed ? std::vector<cascade::core::sys::Ed25519PublicKey>{pub} : std::vector<cascade::core::sys::Ed25519PublicKey>{});
+        g_autoSign = false;   // each case says exactly what the row carries
         World w;
         Spec s = base;
         s.signature = c.sig;
@@ -692,11 +704,29 @@ void testSignature() {
         if (!c.installs) {
             CHECK(tree(dir).empty());
             CHECK(w.programHits == 0);   // the program was never asked for
-            CHECK(err.find("signature") != std::string::npos);
+            CHECK(err.find(c.keyed ? "signature" : "not available") != std::string::npos);
         }
     }
-    cp::setSignatureKeysForTest(false, {});
-    // the product's own list is EMPTY until the owner fills in his key: the check is built and inert
+    g_autoSign = true;
+    cp::setSignatureKeysForTest(true, {cascade::core::sys::ed25519PublicKey(g_seed)});
+    // the shelf says so too: with no owner key a published program reads "not available", with one it reads "download"
+    {
+        Spec sp;
+        sp.progBytes = program("c7-state");
+        World ws;
+        PluginCatalogEntry ent;
+        std::string perr;
+        CHECK(parseOne(indexOf(ws, sp), ent, perr));
+        const fs::path sdir = g_dir / "c7-state";
+        fs::create_directories(sdir);
+        const cp::Places places = cp::placesFor(sdir.string());
+        CHECK(cp::stateOf(ent, places, {}, bridgeFile()) == cp::State::Download);
+        cp::setSignatureKeysForTest(true, {});
+        CHECK(cp::stateOf(ent, places, {}, bridgeFile()) == cp::State::NotAvailable);
+        cp::setSignatureKeysForTest(true, {cascade::core::sys::ed25519PublicKey(g_seed)});
+    }
+    cp::setSignatureKeysForTest(true, {cascade::core::sys::ed25519PublicKey(g_seed)});
+    // the product's own list is EMPTY until the owner fills in his key: the check is built, and until then the website copy downloads nothing
     CHECK(cascade::core::sys::ownerTrustedKeys().empty());
     PluginCatalogEntry e;
     std::string err;
@@ -847,9 +877,35 @@ void testHostile() {
     put(dir / "companions.json", "{\"version\":1,\"programs\":[{\"plugin\":\"p.dll\",\"id\":\"x\",\"file\":\"../evil.exe\",\"sha256\":\"" + good + "\",\"size\":1,\"via\":\"download\"}]}");
     cp::Record rec;
     CHECK(!cp::readRecord(dir.string(), "p.dll", rec));
-    CHECK(cp::checkBeforeStart((dir / "p.dll").string()).allowed);   // no usable record: not a catalogue companion
+    // L1 (security review 1): an entry that names the plugin but has no usable program name is NOT "not a catalogue companion": the plugin is refused, with the way out.
+    // (Was: allowed, the check skipped.) A plugin the list does not name is still left alone.
+    {
+        const cp::StartVerdict broken = cp::checkBeforeStart((dir / "p.dll").string());
+        CHECK(!broken.allowed);
+        CHECK(broken.sentence.find("damaged") != std::string::npos && broken.sentence.find("fit it again") != std::string::npos);
+        CHECK(cp::checkBeforeStart((dir / "other-plugin.dll").string()).allowed);
+    }
     put(dir / "companions.json", "garbage");
     CHECK(!cp::readRecord(dir.string(), "p.dll", rec));
+    // a record FILE that is there but unreadable, with a program in the helpers folder: every plugin is refused until the list is repaired (the host cannot tell which
+    // plugin the program belongs to); with nothing in the helpers folder there is nothing to run, and with no record file at all nothing was ever installed
+    CHECK(cp::checkBeforeStart((dir / "p.dll").string()).allowed);                      // helpers folder empty or absent
+    put(dir / "helpers" / "stray.exe", "MZ stand-in program");
+    {
+        const cp::StartVerdict v1 = cp::checkBeforeStart((dir / "p.dll").string());
+        CHECK(!v1.allowed && v1.sentence.find("damaged") != std::string::npos);
+        const cp::StartVerdict v2 = cp::checkBeforeStart((dir / "anything-else.dll").string());
+        CHECK(!v2.allowed);
+        std::array<std::uint64_t, 4> sums{};
+        cp::takeHostFaults(sums);
+        CHECK(sums[2] >= 2);   // counted on the companion fault path (kind BREAK)
+    }
+    fs::remove(dir / "companions.json");
+    CHECK(cp::checkBeforeStart((dir / "p.dll").string()).allowed);                      // no record file: nothing was installed, a program the user chose is the user's
+    put(dir / "companions.json", "{\"version\":1,\"programs\":5}");                     // the wrong shape counts as damaged too
+    CHECK(!cp::checkBeforeStart((dir / "p.dll").string()).allowed);
+    fs::remove(dir / "companions.json");
+    fs::remove_all(dir / "helpers");
     // a fuzz of the row parser: random JSON of every type under the companion key never throws and never makes a usable program of nothing
     unsigned seed = 12345u;
     auto next = [&seed]() { seed = seed * 1664525u + 1013904223u; return seed >> 8; };
@@ -956,6 +1012,8 @@ int main() {
     std::error_code ec;
     fs::remove_all(g_dir, ec);
     fs::create_directories(g_dir, ec);
+    for (std::size_t i = 0; i < g_seed.size(); ++i) { g_seed[i] = static_cast<std::uint8_t>(i + 3); }
+    cp::setSignatureKeysForTest(true, {cascade::core::sys::ed25519PublicKey(g_seed)});
     testParse();
     testCheck();
     testWebsiteInstall();

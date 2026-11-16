@@ -37,6 +37,7 @@
 #include "check.hpp"
 #include "core/app_commands.hpp"
 #include "core/companion_programs.hpp"
+#include "core/sys_manifest_sig.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_repo.hpp"
 #include "engine/engine.hpp"
@@ -215,6 +216,13 @@ void put(const fs::path& p, const std::string& bytes) {
     f.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 }
 
+// M1 (security review 1): the website copy downloads a companion program only when the owner's key is set and the row carries the owner's signature. This test
+// stands in for both: a key of its own (set in main) and a signature made with it for every published row.
+cascade::core::sys::Ed25519Seed g_seed{};
+std::string rowSignature(const std::string& which, const std::string& progFile, const std::string& progSha) {
+    return cascade::core::sys::makeEnvelope(g_seed, cp::signedStatement("companion-" + which, progFile, progSha));
+}
+
 std::string entry(const std::string& which, const std::string& progFile, const std::string& status, const std::string& progUrl, const std::string& progSha, const std::string& bridgeBytes, std::shared_ptr<Net>& net) {
     const std::string dllUrl = "https://dl.example.invalid/plugins/" + bridgeName(which);
     net->bodies[dllUrl] = bridgeBytes;
@@ -222,7 +230,7 @@ std::string entry(const std::string& which, const std::string& progFile, const s
            ".\",\"description\":\"A companion plugin. This program cannot hide identifiers: whatever it decodes is shown as printed.\",\"legalNotice\":\"Separate software under its own licence.\"," +
            "\"abiVersion\":" + std::to_string(static_cast<unsigned>(CASCADE_PLUGIN_ABI_VERSION)) + ",\"companion\":{\"upstream\":\"" + which + "-ng\",\"source\":\"https://github.com/wonderingStars/foxsdr-companions\"," +
            "\"licence\":\"GPL-2.0-or-later\",\"whySeparate\":\"Another person's open-source program.\",\"program\":{\"file\":\"" + progFile + "\",\"url\":\"" + progUrl + "\",\"sha256\":\"" + progSha +
-           "\",\"status\":\"" + status + "\"}},\"platforms\":[{\"os\":\"" + PluginRepo::hostOs() + "\",\"arch\":\"" + PluginRepo::hostArch() + "\",\"file\":\"" + bridgeName(which) + "\",\"url\":\"" + dllUrl +
+           "\",\"status\":\"" + status + "\"" + (progSha.empty() ? std::string() : ",\"signature\":" + nlohmann::json(rowSignature(which, progFile, progSha)).dump()) + "}},\"platforms\":[{\"os\":\"" + PluginRepo::hostOs() + "\",\"arch\":\"" + PluginRepo::hostArch() + "\",\"file\":\"" + bridgeName(which) + "\",\"url\":\"" + dllUrl +
            "\",\"sha256\":\"" + sha(bridgeBytes) + "\"}]}";
 }
 
@@ -232,6 +240,8 @@ int main() {
     std::printf("test_engine_api_companions\n");
     isolate();
     cp::setPackagedForTest(0);
+    for (std::size_t i = 0; i < g_seed.size(); ++i) { g_seed[i] = static_cast<std::uint8_t>(i + 7); }
+    cp::setSignatureKeysForTest(true, {cascade::core::sys::ed25519PublicKey(g_seed)});
 
     const std::string progA = program("alpha");
     auto net = std::make_shared<Net>();

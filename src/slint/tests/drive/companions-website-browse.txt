@@ -11,8 +11,10 @@ state store.shelfNote.companions contains "its own licence, not FoxSDR's"
 # the downloadable one: licence badge then the download badge, the shelf heading first
 state store.card.companion-multimon contains "COMPANION APPLICATIONS|"
 # (this fixture row is marked experimental, so that badge comes first)
-state store.card.companion-multimon contains "GPL-2.0-or-later,DOWNLOADS WHEN FITTED"
-state store.card.companion-trunkfmt contains "GPL-3.0-or-later,DOWNLOADS WHEN FITTED"
+# (security review 1, M1: while no owner key is set the website copy downloads no program, so a published row reads NOT AVAILABLE as well; the DOWNLOADS WHEN FITTED
+# badge returns with the owner's key. These two lines were `DOWNLOADS WHEN FITTED` before. NOT RUN: the GUI gate was not run in the security-fixes-1 lane.)
+state store.card.companion-multimon contains "GPL-2.0-or-later,NOT AVAILABLE"
+state store.card.companion-trunkfmt contains "GPL-3.0-or-later,NOT AVAILABLE"
 # the one whose program is not published: not available, the key is greyed and says why, and nothing promises when
 state store.card.companion-hfdl contains "GPL-3.0-or-later,NOT AVAILABLE"
 state store.card.companion-hfdl contains "|0|the program for this companion is not available in this copy of FoxSDR"

@@ -223,6 +223,27 @@ void testDefaultPluginDirUnderFakedPackage() {
     CHECK(PluginHost::defaultPluginDir() == unpackagedAnswer);
 }
 
+// L3 (security review 1): the FOXSDR_FAKE_PACKAGE environment seam is for bounded runs. A product run locks it at process start
+// (engine/process_boot.cpp: no --frames, no --seconds), and from then on the variable is ignored. Runs LAST in this process (a lock is for good).
+void testEnvironmentSeamIsLockedInAProductRun() {
+#if defined(_WIN32)
+    _putenv_s("FOXSDR_FAKE_PACKAGE", "FoxSDR.Hostile_1.0.0.0_x64__test");
+#else
+    setenv("FOXSDR_FAKE_PACKAGE", "FoxSDR.Hostile_1.0.0.0_x64__test", 1);
+#endif
+    cascade::core::clearPackageIdentityForTest();
+    CHECK(cascade::core::fakePackageSeamsOpen());
+    CHECK(cascade::core::runningInPackage());                       // a bounded run (the tests, the drive scripts): honoured, as always
+    CHECK(cascade::core::packageIdentity().fullName == "FoxSDR.Hostile_1.0.0.0_x64__test");
+    cascade::core::lockFakePackageSeams();                          // what a product run's start does
+    CHECK(!cascade::core::fakePackageSeamsOpen());
+    CHECK(!cascade::core::runningInPackage());                      // the answer already given from the environment is asked again and is now the real one
+    CHECK(cascade::core::packageIdentity().fullName.empty());
+    cascade::core::setPackageIdentityForTest({true, "FoxSDR_test"});   // the in-process test seam is not the environment's and still works
+    CHECK(cascade::core::runningInPackage());
+    cascade::core::clearPackageIdentityForTest();
+}
+
 }  // namespace
 
 int main() {
@@ -232,5 +253,6 @@ int main() {
     testSeam();
     testPluginDirChoiceUnderPackage();
     testDefaultPluginDirUnderFakedPackage();
+    testEnvironmentSeamIsLockedInAProductRun();
     return testSummary("test_package_identity");
 }
