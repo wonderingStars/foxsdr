@@ -364,7 +364,10 @@ void testAsync() {
             const auto t0 = std::chrono::steady_clock::now();
             { AllocProbe probe; rec.push(src.data() + at, n); news += probe.news(); }
             maxPushUs = std::max(maxPushUs, std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count());
-            if ((at / 480) % 8 == 0) { std::this_thread::sleep_for(std::chrono::milliseconds(3)); }
+            // 37 pauses: the producer must run for about 0.4 s of wall time so that a 100 ms checkpoint interval is crossed three times. A 3 ms
+            // sleep lasts about 15 ms on Windows (the timer tick) but 3 ms on Linux, which gave 0.1 s and one checkpoint: 12 ms is the
+            // same 0.4 s or more on both.
+            if ((at / 480) % 8 == 0) { std::this_thread::sleep_for(std::chrono::milliseconds(12)); }
             if (at == 48000) {   // a snapshot of the file while it is being recorded
                 std::error_code ec; fs::copy_file(p, g_dir / "recm-if-async-snap.wav", fs::copy_options::overwrite_existing, ec);
                 seenAtSnap.store(rec.acceptedFrames());

@@ -362,6 +362,10 @@ void testDSavedAndRestored() {
         CHECK_EQ(x.send(x.aimed(FOXAPI_OP_SET_MODE, 2, 0.0, 5)).status(), FOXAPI_OK);   // USB
         CHECK_EQ(x.send(x.aimed(FOXAPI_OP_SET_VOLUME, 2, 0.37)).status(), FOXAPI_OK);
         x.pump(20);
+        // A hardware tune is paced (Engine::retuneSourceHz: one device call per interval, the latest value), so the 5 MHz is applied a
+        // little after the command; pump(20) was 20 passes of 2 ms, which on Windows (a 2 ms sleep lasts a timer tick, 15 ms) was long
+        // enough and on Linux (40 ms in all) was not. Wait for the radio to say it has the centre instead of for a count of passes.
+        CHECK(x.until([&] { return x.radio(2).centreHz == 5000000.0; }, 5000));
         file = throughTheFile(x.eng);
         CHECK_EQ(file.radios.size(), static_cast<std::size_t>(2));
         CHECK_EQ(file.radios[0].number, 2);

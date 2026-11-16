@@ -503,6 +503,13 @@ void testOpenAndStream(int which) {
     CHECK(s.sampleRateHz() == 500000.0);
     s.stop();
     s.closeDevice();
+    // The stand-in reads the client's last commands on its own thread, after closeDevice() has returned: stopping it at once drops
+    // whatever it has not read yet (a race that Windows' timing hides). Wait for the last command, the one that switches streaming off.
+    for (int i = 0; i < 400; ++i) {
+        const auto seen = srv.sets();
+        if (!seen.empty() && seen.back().setting == sp::kSetStreamingEnabled && seen.back().value == 0) { break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
     srv.stop();
     // What the server was told, in order.
     const auto sets = srv.sets();

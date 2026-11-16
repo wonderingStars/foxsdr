@@ -424,7 +424,8 @@ void testHappyPath() {
     p.stop();
     const mq::Stats s = p.stats();
     CHECK(s.sentQos0 == 1 && s.sentQos1 == 2 && s.acked == 2 && s.resent == 0 && s.connects == 1 && s.protocolErrors == 0);
-    // clean disconnect: the last packet the broker saw is DISCONNECT, E0 00
+    // clean disconnect: the last packet the broker saw is DISCONNECT, E0 00 (the stand-in parses on its own thread: wait for it to have seen it)
+    CHECK(waitFor([&] { return b.countType(14) >= 1; }, 3000));
     const std::vector<Packet> all = b.packets();
     CHECK(!all.empty() && all.back().type == 14);
     CHECK(!p.connected());
@@ -633,7 +634,7 @@ void testKeepAlive() {
         mq::Publisher p(o);
         CHECK(p.start());
         CHECK(waitFor([&] { return p.stats().reconnects >= 1; }, 6000));  // no PINGRESP within the keep-alive: the connection is dropped and re-made
-        CHECK(p.stats().connects >= 2);
+        CHECK(waitFor([&] { return p.stats().connects >= 2; }, 6000));   // (the count of connects follows the drop by the time the new CONNACK takes)
         p.stop();
     }
     {
@@ -666,6 +667,9 @@ void testDropOldestWhileAway() {
     FakeBroker b;
     CHECK(b.start(port));
     CHECK(waitFor([&] { return p.stats().sentQos0 == 64; }, 5000));
+    // "sent" is the publisher's count; the stand-in broker parses what arrives on a thread of its own, so wait for it to have all 64 before
+    // reading its list (reading at once lost the race about one run in three on Linux).
+    CHECK(waitFor([&] { std::size_t n = 0; for (const Packet& k : b.packets()) { if (k.type == 3) { ++n; } } return n >= 64; }, 5000));
     p.stop();
     std::vector<int> got;
     for (const Packet& k : b.packets()) { if (k.type == 3) { got.push_back(std::atoi(k.payload.c_str())); } }
@@ -707,7 +711,11 @@ void testStress() {
         for (int i = 0; i < N; ++i) {
             const std::string s = std::to_string(i);
             p.publish("t/s", s + ":" + s + ":" + s, 0);
-            if ((i % 256) == 0) { std::this_thread::sleep_for(std::chrono::microseconds(200)); }
+            // A pause after every 256 records. 200 us asked for a pause, but a Windows sleep lasts a whole timer tick (about 15 ms), so the
+            // producer ran for seconds and the sender kept up with thousands; on Linux 200 us is 200 us, the producer ran far faster and only
+            // ~450 of 30000 got through (nothing was lost silently: the accounting below held). 2 ms is the same shape on both: a sleep
+            // that is not shorter than the sender's turn on either.
+            if ((i % 256) == 0) { std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
         }
     });
     prod.join();

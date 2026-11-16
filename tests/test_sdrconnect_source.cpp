@@ -470,6 +470,8 @@ void testHappyPath() {
     CHECK(!src.running());
     src.closeDevice();
     CHECK(!src.isOpen());
+    // The stand-in counts the close frame on its own thread, after closeDevice() has returned: give it a moment to read it.
+    for (int i = 0; i < 400 && fake.closes() < 1; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
     CHECK(fake.closes() == 1);
 }
 

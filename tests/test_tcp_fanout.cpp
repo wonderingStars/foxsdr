@@ -338,7 +338,10 @@ void testSlowClientDroppedNotProducer() {
         const bool ok = f.publish(r.data(), r.size());
         worst = std::max(worst, msSince(a));
         if (ok) { sent += r.size(); } else { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
-        if ((seq & 63) == 0) { std::this_thread::sleep_for(std::chrono::microseconds(200)); }
+        // A pause after every 64 records (64 KB). The 200 us it asked for lasts a whole timer tick (about 15 ms) on Windows, which held the
+        // producer to a few MB/s that the good client's reader keeps up with; on Linux it is 200 us, the producer ran far faster, the good
+        // client's 64 KB queue overflowed as well and "exactly the lazy one" was dropped together with it. 5 ms keeps the intended pace on both.
+        if ((seq & 63) == 0) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
     }
     CHECK(f.stats().droppedSlow == 1);  // exactly the lazy one
     CHECK(f.stats().clients == 1);

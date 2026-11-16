@@ -122,11 +122,16 @@ void b2Udp() {
     CHECK(b.start(udpCfg(port), err));
     CHECK(b.running());
     const int N = 500;
+    // The receiver reads WHILE the datagrams are sent. Reading only afterwards depended on the OS holding 500 queued datagrams: Windows'
+    // default receive buffer does, Linux's (212992 bytes, and each small datagram is charged several times its size) holds fewer than 500, and
+    // the rest were dropped by the kernel before the application could be blamed.
+    std::vector<std::string> got;
+    std::thread reader([&] { got = collectUdp(rx, static_cast<std::size_t>(N)); });
     for (int i = 0; i < N; ++i) {
         CHECK(b.publish(rec(i)));
         if (i % 50 == 49) { std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
     }
-    const auto got = collectUdp(rx, static_cast<std::size_t>(N));
+    reader.join();
     CHECK(got.size() == static_cast<std::size_t>(N));
     for (std::size_t i = 0; i < got.size() && i < static_cast<std::size_t>(N); ++i) { CHECK(got[i] == rec(static_cast<int>(i))); }
     CHECK(b.udpSent() == static_cast<std::uint64_t>(N));
