@@ -1,0 +1,23 @@
+{
+  "name": "refuse-beat-with-nine-radios",
+  "about": "a beat naming nine radios (the most is eight)",
+  "expect": "refuse",
+  "code": "bad-field",
+  "status": 400,
+  "request": {
+    "id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "v": "0.99.109",
+    "beat": 1,
+    "radios": [
+      "radio-0:SN0",
+      "radio-1:SN1",
+      "radio-2:SN2",
+      "radio-3:SN3",
+      "radio-4:SN4",
+      "radio-5:SN5",
+      "radio-6:SN6",
+      "radio-7:SN7",
+      "radio-8:SN8"
+    ]
+  }
+}

@@ -5,7 +5,7 @@
   "code": "bad-install-id",
   "status": 400,
   "request": {
-    "schema": 1,
+    "schema": 2,
     "kind": "radio_fail",
     "installId": "not-an-id",
     "sessionId": "0123456789abcdef",

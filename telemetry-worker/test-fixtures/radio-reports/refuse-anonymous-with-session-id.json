@@ -1,0 +1,29 @@
+{
+  "name": "refuse-anonymous-with-session-id",
+  "about": "a failure with no install id that still carries a session id: that would link its reports",
+  "expect": "refuse",
+  "code": "bad-field",
+  "status": 400,
+  "request": {
+    "schema": 2,
+    "kind": "radio_fail",
+    "messageId": "f00dfacecafe0125",
+    "sessionId": "0123456789abcdef",
+    "t": 4,
+    "radioKey": "rtl-sdr:-",
+    "body": {
+      "driver": "rtlsdr",
+      "model": "RTL-SDR",
+      "serial": "",
+      "reason": "the radio is in use by another program",
+      "reasonClass": "busy",
+      "trigger": "user-pick",
+      "attempt": 1,
+      "diagOn": true,
+      "logLines": [],
+      "v": "0.99.109",
+      "os": "Windows 10.0.22631",
+      "arch": "x64"
+    }
+  }
+}

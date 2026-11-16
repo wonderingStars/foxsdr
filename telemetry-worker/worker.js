@@ -24,7 +24,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 import {
-  MAX_FIRST_SESSION_BODY, MAX_RADIO_FAIL_BODY, validateRadioMessage,
+  MAX_FIRST_SESSION_BODY, MAX_JOURNAL_BODY, MAX_RADIO_FAIL_BODY, validateBeat, validateRadioMessage,
 } from './radio-reports.js';
 
 const MAX_BODY = 4096;          // a report is a few hundred bytes
@@ -60,6 +60,10 @@ function scrubModel(v) {
 // written. Kept apart from `ch` (blob8), which is where the copy came from (store, installer...).
 function updateChannel(v) {
   return v === 'stable' || v === 'beta' ? v : '';
+}
+
+function windowWord(v) {
+  return v === 'new' || v === 'legacy' ? v : '';
 }
 
 function num(v, max) {
@@ -277,7 +281,7 @@ function healthSlowFrom(h, minTier) {
 
 // The data point of one usage record: everything the Worker knows how to read out of it, in the
 // columns documented in README.md. Shared by the usage record and by the first-session record
-// (radio-reports.js, docs/radio-reports-contract.md section 6), which use the SAME columns in
+// (radio-reports.js, docs/radio-reports-contract.md section 7), which use the SAME columns in
 // different datasets, so a change here is a change to both and the tests hold them together.
 function usageDataPoint(body, id) {
   // The modes map is flattened to the single most-used mode plus its
@@ -354,6 +358,10 @@ function usageDataPoint(body, id) {
       // split each version's crash, freeze and health rates by channel. Appended after the
       // existing columns: nothing earlier changed meaning.
       updateChannel(body.uch),    // blob15 update channel (stable/beta), '' = not reported
+      // blob16 (site lane 2's view (f), contract section 3.11): which window the session used, `new` or `legacy`. Pushed ONLY
+      // when the client said one, so a record without it keeps its 15 blobs and an older reader sees no change; a reader asks
+      // for blob16 = 'new' or 'legacy' and treats every other row as "did not say", never as Legacy.
+      ...(windowWord(body.window) ? [windowWord(body.window)] : []),
     ],
     doubles: [
       num(body.launches, 1e6),    // double1  launches since install
@@ -422,7 +430,8 @@ function firstSessionDataPoint(m) {
 
 async function handleRadioFamily(text, body, env) {
   const bytes = new TextEncoder().encode(text).length;
-  const limit = body.kind === 'first_session' ? MAX_FIRST_SESSION_BODY : MAX_RADIO_FAIL_BODY;
+  const limit = body.kind === 'first_session' ? MAX_FIRST_SESSION_BODY
+    : body.kind === 'radio_fail' ? MAX_RADIO_FAIL_BODY : MAX_JOURNAL_BODY;
   if (bytes > limit) { return refused('too-large', 413); }
   const v = validateRadioMessage(body, { scrubModel });
   if (!v.ok) { return refused(v.code, 400); }
@@ -435,21 +444,17 @@ async function handleRadioFamily(text, body, env) {
     return new Response(null, { status: 204 });
   }
 
-  // radio_fail: forward the canonical message and nothing else about the request. The serial and the text
-  // go to the site only; the counter row below holds no serial, no model and no text.
+  // Everything else (a radio failure, a journal event, the session record, a beat that names radios) goes to the site and
+  // nowhere else: the serial and the text are for the site only. The one counter row below (radio failures only) holds no
+  // serial, no model and no text.
   if (!env.SITE_INTAKE_URL) { return new Response('no site intake configured', { status: 503 }); }
-  const headers = { 'content-type': 'application/json' };
-  if (env.RELAY_TOKEN) { headers['x-foxsdr-relay'] = env.RELAY_TOKEN; }
-  let res = null;
-  try {
-    res = await fetch(env.SITE_INTAKE_URL, { method: 'POST', headers, body: JSON.stringify(m), redirect: 'manual' });
-  } catch (e) {
-    res = null;
-  }
+  const res = await forwardToSite(m, env);
   const taken = res !== null && res.status >= 200 && res.status < 300;
-  if (env.RADIOFAIL) {
+  if (m.kind === 'radio_fail' && env.RADIOFAIL) {
     env.RADIOFAIL.writeDataPoint({
-      indexes: [m.installId],
+      // An install with Usage reporting off has no install id: its counter rows share the one index "anonymous", which a
+      // reader of this dataset must leave out of a count of installs.
+      indexes: [m.installId || 'anonymous'],
       blobs: [m.body.driver, m.body.reasonClass, clamp(m.body.v, 48), taken ? 'ok' : 'fail'],
       doubles: [1],
     });
@@ -463,6 +468,18 @@ async function handleRadioFamily(text, body, env) {
     return refused('site-refused', 400);  // the two validators disagree: a bug, and retrying cannot help
   }
   return new Response('the site could not be reached', { status: 502 });
+}
+
+// Forwards one canonical message to the site (null when the site could not be reached). The Worker adds nothing about the
+// sender: a content type, and the relay secret when one is set.
+async function forwardToSite(m, env) {
+  const headers = { 'content-type': 'application/json' };
+  if (env.RELAY_TOKEN) { headers['x-foxsdr-relay'] = env.RELAY_TOKEN; }
+  try {
+    return await fetch(env.SITE_INTAKE_URL, { method: 'POST', headers, body: JSON.stringify(m), redirect: 'manual' });
+  } catch (e) {
+    return null;
+  }
 }
 
 export default {
@@ -518,12 +535,24 @@ export default {
     //   SELECT count(DISTINCT index1) FROM foxsdr_heartbeat
     //   WHERE timestamp > NOW() - INTERVAL '10' MINUTE
     if (body.beat === 1) {
+      // THE RADIOS EXTENSION (contract section 3.10): a beat may also name the radios open right now, as up to eight radio keys
+      // (model slug and serial, nothing else). They are checked here, written NOWHERE in Analytics Engine (the beat row is
+      // still the install id and the version) and passed to the site, which is the only place that can say "active now". A
+      // beat with a malformed list is refused whole, so an application bug is seen; a beat without one is as it always was.
+      let named = null;
+      if (body.radios !== undefined) {
+        const b = validateBeat({ schema: 2, kind: 'radio_beat', installId: id, v: clamp(body.v, 48), radios: body.radios });
+        if (!b.ok) { return refused(b.code, 400); }
+        named = b.canonical;
+      }
       if (env.HEARTBEAT) {
         env.HEARTBEAT.writeDataPoint({
           indexes: [id],
           blobs: [clamp(body.v, 48)],
         });
       }
+      // Best effort: a beat is repeated in five minutes, so a site that cannot be reached costs nothing worth a retry.
+      if (named !== null && env.SITE_INTAKE_URL) { await forwardToSite(named, env); }
       return new Response(null, { status: 204 });
     }
 

@@ -7,18 +7,24 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
+import { BEAT_KEY_RE, BEAT_MAX_RADIOS, KIND_SPECS, LISTS } from './radio-journal-spec.js';
+
+export const SCHEMA = 2;
 export const MAX_RADIO_FAIL_BODY = 16384;
 export const MAX_FIRST_SESSION_BODY = 8192;
+export const MAX_JOURNAL_BODY = 4096;
+export const MAX_BEAT_BODY = 1024;
 
-export const DRIVERS = ['rtlsdr', 'hackrf', 'airspy', 'airspyhf', 'sdrplay', 'mirisdr', 'rx888', 'pluto', 'aor',
-  'hydrasdr', 'rtltcp', 'soapy', 'soundcard', 'other'];
-export const REASON_CLASSES = ['busy', 'driver', 'bind', 'absent', 'timeout', 'vendor', 'rate', 'other'];
-export const TRIGGERS = ['startup-restore', 'user-pick', 'saved-retry', 'patch-radio', 'auto-reopen', 'other'];
-export const CHANNELS = ['store', 'installer', 'appimage', 'tarball', 'android', ''];
-export const UPDATE_CHANNELS = ['stable', 'beta', ''];
+export const DRIVERS = LISTS.drivers;
+export const REASON_CLASSES = LISTS.reasonClasses;
+export const TRIGGERS = LISTS.triggers;
+export const CHANNELS = LISTS.channels;
+export const UPDATE_CHANNELS = LISTS.updateChannels;
 export const FIRST_SESSION_TRIGGERS = ['after-minute', 'on-failure'];
-export const RESERVED_KINDS = ['radio_found', 'radio_open', 'radio_settings', 'radio_stream', 'radio_recovery', 'radio_close'];
-export const KINDS = ['radio_fail', 'first_session'];
+// Named for a later schema (a batched envelope, contract section 3.9) and refused until it is defined.
+export const RESERVED_KINDS = ['radio_batch'];
+export const JOURNAL_KINDS = Object.keys(KIND_SPECS);
+export const KINDS = ['radio_fail', 'first_session', 'radio_beat', ...JOURNAL_KINDS];
 
 // The radio lines of the log ring: the first word (after an optional time stamp) of a line.
 const RADIO_LINE_RE = /^(?:[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} )?(?:source|soapy|vendor|radio|rtltcp|aor|rx888|pluto|mirisdr|hackrf|airspy|airspyhf|rtlsdr|sdrplay|hydrasdr|usb|patch): /;
@@ -28,7 +34,7 @@ const SESSION_RE = /^[0-9a-f]{16}$/;
 const SERIAL_RE = /^[A-Za-z0-9._-]{1,40}$/;
 const VERSION_RE = /^[A-Za-z0-9._+ -]{1,48}$/;
 
-// Section 3 of the contract, verbatim.
+// Section 4 of the contract, verbatim.
 export const FORBIDDEN_KEY_RE = /freq|hertz|hz$|centre|center|tuned|bookmark|position|latitude|longitude|gps|ipaddr|hostname|username|filename|folder|decoded|callsign|password|secret|^(lat|lon|lng|ip|user|path|file|token)$/;
 
 export function hasForbiddenKey(value) {
@@ -42,7 +48,7 @@ export function hasForbiddenKey(value) {
 }
 
 // ---------------------------------------------------------------------------
-// The text rules (contract section 4). Each returns true when the text is NOT acceptable.
+// The text rules (contract section 5). Each returns true when the text is NOT acceptable.
 // ---------------------------------------------------------------------------
 
 const isWord = (c) => c !== undefined && /[A-Za-z0-9_]/.test(c);
@@ -121,13 +127,46 @@ export function radioKey(model, serial) {
   return `${modelSlug(model)}:${serial === '' ? '-' : serial.toUpperCase()}`;
 }
 
+
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
 
 const isInt = (v, lo, hi) => typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi;
+const isNum = (v, lo, hi) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
 const isStr = (v, lo, hi) => typeof v === 'string' && v.length >= lo && v.length <= hi;
 const refuse = (code) => ({ ok: false, code });
+
+const reCache = new Map();
+function re(pattern) {
+  let r = reCache.get(pattern);
+  if (!r) { r = new RegExp(pattern); reCache.set(pattern, r); }
+  return r;
+}
+const BEAT_KEY = re(BEAT_KEY_RE);
+
+// One value against one field (or array item) of radio-journal-spec.js. `ctx.texts` collects the free text the text rules are
+// applied to afterwards; `ctx.scrubModel` is worker.js's scrubModel.
+function valueOk(f, v, ctx) {
+  switch (f.type) {
+    case 'enum': return typeof v === 'string' && (f.values || LISTS[f.list]).includes(v);
+    case 'int': return isInt(v, f.lo, f.hi);
+    case 'num': return isNum(v, f.lo, f.hi);
+    case 'bool': return typeof v === 'boolean';
+    case 'str': return isStr(v, f.lo, f.hi) && (!f.re || re(f.re).test(v));
+    case 'text':
+      if (!isStr(v, f.lo, f.hi)) { return false; }
+      ctx.texts.push(v);
+      return true;
+    case 'model':
+      if (!isStr(v, 1, 32) || ctx.scrubModel(v) !== v) { return false; }
+      ctx.texts.push(v);
+      return true;
+    case 'serial': return typeof v === 'string' && (v === '' || SERIAL_RE.test(v));
+    case 'arr': return Array.isArray(v) && v.length <= f.max && v.every((x) => valueOk(f.item, x, ctx));
+    default: return false;
+  }
+}
 
 // `msg` is the parsed JSON. `opts.scrubModel` is worker.js's scrubModel. Returns { ok: true, kind, canonical }
 // or { ok: false, code }. The caller has already enforced the size limit and parsed the JSON.
@@ -136,26 +175,57 @@ export function validateRadioMessage(msg, opts) {
   if (typeof msg.kind !== 'string') { return refuse('unknown-kind'); }
   if (RESERVED_KINDS.includes(msg.kind)) { return refuse('reserved-kind'); }
   if (!KINDS.includes(msg.kind)) { return refuse('unknown-kind'); }
-  if (msg.schema !== 1) { return refuse('bad-schema'); }
+  if (msg.schema !== SCHEMA) { return refuse('bad-schema'); }
   if (hasForbiddenKey(msg)) { return refuse('forbidden-field'); }
-  if (msg.installId === undefined) { return refuse('missing-field'); }
-  if (typeof msg.installId !== 'string' || !ID_RE.test(msg.installId)) { return refuse('bad-install-id'); }
-  for (const f of ['sessionId', 'seq', 't', 'body']) {
+  if (msg.kind === 'radio_beat') { return validateBeat(msg); }
+
+  // THE INSTALL ID. Every kind carries one except a radio_fail from an install with Usage reporting off: that one has
+  // no install id, no session id and no sequence number (nothing that links two of its reports), and a random
+  // per-message id so a retry whose answer was lost can be told from a new failure (contract section 1.2).
+  const anonymous = msg.kind === 'radio_fail' && msg.installId === undefined;
+  if (!anonymous) {
+    if (msg.installId === undefined) { return refuse('missing-field'); }
+    if (typeof msg.installId !== 'string' || !ID_RE.test(msg.installId)) { return refuse('bad-install-id'); }
+  }
+  const need = anonymous ? ['messageId', 't', 'body'] : ['sessionId', 'seq', 't', 'body'];
+  for (const f of need) {
     if (msg[f] === undefined) { return refuse('missing-field'); }
   }
-  if (typeof msg.sessionId !== 'string' || !SESSION_RE.test(msg.sessionId)) { return refuse('bad-field'); }
-  if (!isInt(msg.seq, 0, 1000000) || !isInt(msg.t, 0, 2592000)) { return refuse('bad-field'); }
+  if (anonymous) {
+    if (typeof msg.messageId !== 'string' || !SESSION_RE.test(msg.messageId)) { return refuse('bad-field'); }
+    if (msg.sessionId !== undefined || msg.seq !== undefined) { return refuse('bad-field'); }
+  } else {
+    if (typeof msg.sessionId !== 'string' || !SESSION_RE.test(msg.sessionId)) { return refuse('bad-field'); }
+    if (!isInt(msg.seq, 0, 1000000)) { return refuse('bad-field'); }
+    if (msg.messageId !== undefined) { return refuse('bad-field'); }
+  }
+  if (!isInt(msg.t, 0, 2592000)) { return refuse('bad-field'); }
+  if (msg.age !== undefined && !isInt(msg.age, 0, 2592000)) { return refuse('bad-field'); }
   const body = msg.body;
   if (body === null || typeof body !== 'object' || Array.isArray(body)) { return refuse('bad-field'); }
-  return msg.kind === 'radio_fail' ? validateRadioFail(msg, body, opts) : validateFirstSession(msg, body);
+  if (msg.kind === 'radio_fail') { return validateRadioFail(msg, body, opts, anonymous); }
+  if (msg.kind === 'first_session') { return validateFirstSession(msg, body); }
+  return validateJournal(msg, body, opts);
 }
 
-function validateRadioFail(msg, body, opts) {
+// The envelope of a canonical message: only the fields the contract defines, in a fixed order.
+function envelopeOf(msg, anonymous, radioKeyValue) {
+  const out = { schema: SCHEMA, kind: msg.kind };
+  if (anonymous) { out.messageId = msg.messageId; } else {
+    out.installId = msg.installId; out.sessionId = msg.sessionId; out.seq = msg.seq;
+  }
+  out.t = msg.t;
+  if (msg.age !== undefined) { out.age = msg.age; }
+  out.radioKey = radioKeyValue;
+  return out;
+}
+
+function validateRadioFail(msg, body, opts, anonymous) {
   for (const f of ['driver', 'model', 'serial', 'reason', 'reasonClass', 'trigger', 'attempt', 'diagOn', 'logLines', 'v', 'os', 'arch']) {
     if (body[f] === undefined) { return refuse('missing-field'); }
   }
   if (msg.radioKey === undefined) { return refuse('missing-field'); }
-  if (!DRIVERS.includes(body.driver)) { return refuse('bad-field'); }
+  if (!LISTS.drivers.includes(body.driver)) { return refuse('bad-field'); }
   if (!isStr(body.model, 1, 32) || opts.scrubModel(body.model) !== body.model) { return refuse('bad-field'); }
   if (typeof body.serial !== 'string' || (body.serial !== '' && !SERIAL_RE.test(body.serial))) { return refuse('bad-field'); }
   for (const f of ['firmware', 'library']) {
@@ -164,7 +234,7 @@ function validateRadioFail(msg, body, opts) {
     }
   }
   if (!isStr(body.reason, 1, 400)) { return refuse('bad-field'); }
-  if (!REASON_CLASSES.includes(body.reasonClass) || !TRIGGERS.includes(body.trigger)) { return refuse('bad-field'); }
+  if (!LISTS.reasonClasses.includes(body.reasonClass) || !LISTS.triggers.includes(body.trigger)) { return refuse('bad-field'); }
   if (!isInt(body.attempt, 1, 10000)) { return refuse('bad-field'); }
   if (body.openMs !== undefined && !isInt(body.openMs, 0, 3600000)) { return refuse('bad-field'); }
   if (body.sampleRateSps !== undefined && !isInt(body.sampleRateSps, 0, 1000000000)) { return refuse('bad-field'); }
@@ -177,8 +247,8 @@ function validateRadioFail(msg, body, opts) {
     if (!isStr(line, 1, 240) || !RADIO_LINE_RE.test(line)) { return refuse('bad-field'); }
   }
   if (!isStr(body.v, 1, 48) || !isStr(body.os, 1, 40) || !isStr(body.arch, 1, 8)) { return refuse('bad-field'); }
-  if (body.ch !== undefined && !CHANNELS.includes(body.ch)) { return refuse('bad-field'); }
-  if (body.uch !== undefined && !UPDATE_CHANNELS.includes(body.uch)) { return refuse('bad-field'); }
+  if (body.ch !== undefined && !LISTS.channels.includes(body.ch)) { return refuse('bad-field'); }
+  if (body.uch !== undefined && !LISTS.updateChannels.includes(body.uch)) { return refuse('bad-field'); }
   if (msg.radioKey !== radioKey(body.model, body.serial)) { return refuse('key-mismatch'); }
   for (const text of [body.model, body.reason, ...body.logLines, body.firmware || '', body.library || '']) {
     const code = textCode(text, body.serial);
@@ -196,12 +266,51 @@ function validateRadioFail(msg, body, opts) {
     diagOn: body.diagOn, logLines: body.logLines.slice(), v: body.v, ch: body.ch || '', uch: body.uch || '',
     os: body.os, arch: body.arch,
   });
+  return { ok: true, kind: 'radio_fail', anonymous, canonical: { ...envelopeOf(msg, anonymous, msg.radioKey), body: out } };
+}
+
+// The six journal kinds and session_env: every field is read from the table in radio-journal-spec.js.
+function validateJournal(msg, body, opts) {
+  const spec = KIND_SPECS[msg.kind];
+  if (spec.radio) {
+    if (msg.radioKey === undefined) { return refuse('missing-field'); }
+  } else if (msg.radioKey !== undefined && msg.radioKey !== '') {
+    return refuse('bad-field');
+  }
+  for (const f of spec.fields) {
+    if (f.req && body[f.name] === undefined) { return refuse('missing-field'); }
+  }
+  const ctx = { texts: [], scrubModel: opts.scrubModel };
+  for (const f of spec.fields) {
+    if (body[f.name] !== undefined && !valueOk(f, body[f.name], ctx)) { return refuse('bad-field'); }
+  }
+  if (spec.radio && msg.radioKey !== radioKey(body.model, body.serial)) { return refuse('key-mismatch'); }
+  const own = typeof body.serial === 'string' ? body.serial : '';
+  for (const text of ctx.texts) {
+    const code = textCode(text, own);
+    if (code) { return refuse(code); }
+  }
+  const out = {};
+  for (const f of spec.fields) {
+    if (body[f.name] !== undefined) { out[f.name] = body[f.name]; }
+  }
+  return { ok: true, kind: msg.kind, anonymous: false, canonical: { ...envelopeOf(msg, false, spec.radio ? msg.radioKey : ''), body: out } };
+}
+
+// The running-now beat's extension (contract section 3.10): the keys of the radios open right now. The Worker builds this
+// message from a legacy beat that carries `radios`; the site takes the same message.
+export function validateBeat(msg) {
+  if (msg.installId === undefined) { return refuse('missing-field'); }
+  if (typeof msg.installId !== 'string' || !ID_RE.test(msg.installId)) { return refuse('bad-install-id'); }
+  if (msg.v === undefined || msg.radios === undefined) { return refuse('missing-field'); }
+  if (!isStr(msg.v, 1, 48)) { return refuse('bad-field'); }
+  if (!Array.isArray(msg.radios) || msg.radios.length < 1 || msg.radios.length > BEAT_MAX_RADIOS) { return refuse('bad-field'); }
+  for (const k of msg.radios) {
+    if (typeof k !== 'string' || !BEAT_KEY.test(k)) { return refuse('bad-field'); }
+  }
   return {
-    ok: true, kind: 'radio_fail',
-    canonical: {
-      schema: 1, kind: 'radio_fail', installId: msg.installId, sessionId: msg.sessionId, seq: msg.seq, t: msg.t,
-      radioKey: msg.radioKey, body: out,
-    },
+    ok: true, kind: 'radio_beat', anonymous: false,
+    canonical: { schema: SCHEMA, kind: 'radio_beat', installId: msg.installId, v: msg.v, radios: [...new Set(msg.radios)] },
   };
 }
 
@@ -228,11 +337,5 @@ function validateFirstSession(msg, body) {
   for (const f of FIRST_SESSION_FIELDS) {
     if (body[f] !== undefined) { out[f] = body[f]; }
   }
-  return {
-    ok: true, kind: 'first_session',
-    canonical: {
-      schema: 1, kind: 'first_session', installId: msg.installId, sessionId: msg.sessionId, seq: msg.seq, t: msg.t,
-      radioKey: '', body: out,
-    },
-  };
+  return { ok: true, kind: 'first_session', anonymous: false, canonical: { ...envelopeOf(msg, false, ''), body: out } };
 }

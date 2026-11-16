@@ -1,0 +1,52 @@
+{
+  "name": "valid-radio-fail-anonymous",
+  "about": "a radio failure from an install with Usage reporting off: no install id, no session id, no sequence number, a random per-message id",
+  "expect": "accept",
+  "status": 204,
+  "request": {
+    "schema": 2,
+    "kind": "radio_fail",
+    "messageId": "f00dfacecafe0123",
+    "t": 412,
+    "radioKey": "rtl-sdr:-",
+    "body": {
+      "driver": "rtlsdr",
+      "model": "RTL-SDR",
+      "serial": "",
+      "reason": "the radio is in use by another program",
+      "reasonClass": "busy",
+      "trigger": "user-pick",
+      "attempt": 1,
+      "diagOn": false,
+      "logLines": [],
+      "v": "0.99.109",
+      "os": "Windows 10.0.22631",
+      "arch": "x64"
+    }
+  },
+  "canonical": {
+    "schema": 2,
+    "kind": "radio_fail",
+    "messageId": "f00dfacecafe0123",
+    "t": 412,
+    "radioKey": "rtl-sdr:-",
+    "body": {
+      "driver": "rtlsdr",
+      "model": "RTL-SDR",
+      "serial": "",
+      "firmware": "",
+      "library": "",
+      "reason": "the radio is in use by another program",
+      "reasonClass": "busy",
+      "trigger": "user-pick",
+      "attempt": 1,
+      "diagOn": false,
+      "logLines": [],
+      "v": "0.99.109",
+      "ch": "",
+      "uch": "",
+      "os": "Windows 10.0.22631",
+      "arch": "x64"
+    }
+  }
+}

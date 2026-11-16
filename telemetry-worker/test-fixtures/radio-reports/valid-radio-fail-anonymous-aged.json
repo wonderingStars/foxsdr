@@ -1,0 +1,56 @@
+{
+  "name": "valid-radio-fail-anonymous-aged",
+  "about": "the same, sent from the queue two hours after it happened (age), with the dropped count",
+  "expect": "accept",
+  "status": 204,
+  "request": {
+    "schema": 2,
+    "kind": "radio_fail",
+    "messageId": "f00dfacecafe0124",
+    "t": 12,
+    "age": 7200,
+    "radioKey": "rtl-sdr:-",
+    "body": {
+      "driver": "rtlsdr",
+      "model": "RTL-SDR",
+      "serial": "",
+      "reason": "the radio is in use by another program",
+      "reasonClass": "busy",
+      "trigger": "user-pick",
+      "attempt": 4,
+      "diagOn": true,
+      "logLines": [],
+      "v": "0.99.109",
+      "os": "Windows 10.0.22631",
+      "arch": "x64",
+      "dropped": 3
+    }
+  },
+  "canonical": {
+    "schema": 2,
+    "kind": "radio_fail",
+    "messageId": "f00dfacecafe0124",
+    "t": 12,
+    "age": 7200,
+    "radioKey": "rtl-sdr:-",
+    "body": {
+      "driver": "rtlsdr",
+      "model": "RTL-SDR",
+      "serial": "",
+      "firmware": "",
+      "library": "",
+      "reason": "the radio is in use by another program",
+      "reasonClass": "busy",
+      "trigger": "user-pick",
+      "attempt": 4,
+      "diagOn": true,
+      "logLines": [],
+      "v": "0.99.109",
+      "ch": "",
+      "uch": "",
+      "os": "Windows 10.0.22631",
+      "arch": "x64",
+      "dropped": 3
+    }
+  }
+}

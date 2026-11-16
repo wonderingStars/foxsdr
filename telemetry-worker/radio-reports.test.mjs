@@ -81,7 +81,12 @@ async function fixtureFailures(mod) {
       continue;
     }
     if (r.usage.length) { bad.push(`${where}: an accepted radio-report message wrote a usage row`); }
-    if (fx.request.kind === 'radio_fail') {
+    if (fx.request.beat === 1) {
+      // the extended beat: the legacy beat row as ever, and the site is sent only the canonical radio_beat
+      if (r.beats.length !== 1 || JSON.stringify(r.beats[0].blobs) !== JSON.stringify([fx.request.v])) { bad.push(`${where}: the beat row changed`); }
+      if (r.forwarded.length !== 1) { bad.push(`${where}: forwarded ${r.forwarded.length} times`); continue; }
+      try { assert.deepEqual(JSON.parse(r.forwarded[0].init.body), fx.canonical); } catch (e) { bad.push(`${where}: forwarded form differs from the canonical form`); }
+    } else if (fx.request.kind !== 'first_session') {
       if (r.forwarded.length !== 1) { bad.push(`${where}: forwarded ${r.forwarded.length} times`); continue; }
       let sent;
       try { sent = JSON.parse(r.forwarded[0].init.body); } catch (e) { sent = null; }
@@ -105,7 +110,7 @@ test('the fixture directory matches its manifest, so the site\'s copy can be che
     // the hash is of the file with CRLF turned into LF, so a Windows checkout (autocrlf) and a Linux one agree
     assert.equal(createHash('sha256').update(readFileSync(join(FIX, name), 'utf8').replace(/\r\n/g, '\n')).digest('hex'), sum, name);
   }
-  assert.ok(names.length >= 40, `${names.length} fixtures`);
+  assert.ok(names.length >= 80, `${names.length} fixtures`);
 });
 
 test('every fixture is accepted or refused exactly as it says, with the code it names', async () => {
@@ -116,7 +121,7 @@ test('the refusal fixtures cover every refusal code of the contract, and the val
   const fx = loadFixtures();
   const used = new Set(fx.filter((f) => f.expect === 'refuse').map((f) => f.code));
   const contract = readFileSync(join(here, '..', 'docs', 'radio-reports-contract.md'), 'utf8');
-  const listed = contract.slice(contract.indexOf('## 5. Refusal codes')).match(/`([a-z-]+)`/g).map((s) => s.slice(1, -1));
+  const listed = contract.slice(contract.search(/## \d+\. Refusal codes/)).match(/`([a-z-]+)`/g).map((s) => s.slice(1, -1));
   for (const code of ['too-large', 'unknown-kind', 'reserved-kind', 'bad-schema', 'forbidden-field', 'bad-install-id',
     'missing-field', 'bad-field', 'key-mismatch', 'path-in-text', 'address-in-text', 'serial-in-text', 'frequency-in-text',
     'not-first-session']) {
@@ -187,14 +192,14 @@ test('a first-session row has the usage columns in the same places, plus trigger
 test('the Worker that predates the contract (0.99.95) answers every valid message 400 "bad id" and writes nothing', async () => {
   const old = await import(pathToFileURL(join(FIX, '..', 'worker-0.99.95.js')).href);
   let n = 0;
-  for (const fx of loadFixtures().filter((f) => f.expect === 'accept')) {
+  for (const fx of loadFixtures().filter((f) => f.expect === 'accept' && f.request.beat !== 1)) {
     const r = await send(old.default, requestText(fx));
     assert.equal(r.status, 400, fx.file);
     assert.equal(r.text, 'bad id', fx.file);
     assert.equal(r.usage.length + r.beats.length, 0, `${fx.file} counted as a launch or a beat on the old Worker`);
     n += 1;
   }
-  assert.ok(n >= 10);
+  assert.ok(n >= 25);
 });
 
 // ---- the radio_fail path ------------------------------------------------------------------------------------------------
@@ -303,7 +308,7 @@ test('the radio key is the slug of the model and the upper-cased serial, a dash 
 test('fuzz: 4,000 random mutations of the valid fixtures never throw and always give a verdict', () => {
   let seed = 20261116;
   const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
-  const pick = (a) => a[Math.floor(rnd() * a.length)];
+  const pick = (a) => { const v = a[Math.floor(rnd() * a.length)]; return v !== null && typeof v === 'object' ? structuredClone(v) : v; };
   const junk = [null, undefined, -1, 0, 1.5, 1e300, '', 'x', 'a'.repeat(500), [], {}, [1, 2], { a: 1 }, true, false, '<stripped>', 'C:\\x', '10.0.0.1'];
   const valid = loadFixtures().filter((f) => f.expect === 'accept').map((f) => f.request);
   const walk = (o, out = []) => {
@@ -338,6 +343,7 @@ async function brokenCopy(edit) {
     ({ w, r } = edit(w, r));
     writeFileSync(join(dir, 'worker.js'), w);
     writeFileSync(join(dir, 'radio-reports.js'), r);
+    writeFileSync(join(dir, 'radio-journal-spec.js'), readFileSync(join(here, 'radio-journal-spec.js'), 'utf8'));
     return (await import(pathToFileURL(join(dir, 'worker.js')).href)).default;
   } finally {
     // the module is loaded; the files can go
@@ -381,4 +387,222 @@ test('a message that uses the usage record field `id` instead of `installId` is 
   assert.equal(r.status, 400);
   assert.equal(r.text, 'refused: missing-field');
   assert.equal(r.usage.length + r.first.length + r.forwarded.length, 0);
+});
+
+// ============================================================================================================================
+// SCHEMA 2: the journal kinds, the install with Usage reporting off, the beat's radios, the window word
+// ============================================================================================================================
+
+const fixtureOf = (kind) => loadFixtures().find((f) => f.expect === 'accept' && f.request.kind === kind);
+const JOURNAL = ['radio_found', 'radio_open', 'radio_settings', 'radio_stream', 'radio_recovery', 'radio_close', 'session_env'];
+
+test('the JSON copy of the journal\'s field tables is the table the Worker reads (the site embeds the copy)', async () => {
+  const { SPEC } = await import('./radio-journal-spec.js');
+  assert.deepEqual(JSON.parse(readFileSync(join(FIX, '..', 'radio-journal-spec.json'), 'utf8')), JSON.parse(JSON.stringify(SPEC)));
+});
+
+test('the contract names every kind and every field of the tables, so the document cannot drift from what the Worker reads', async () => {
+  const { KIND_SPECS } = await import('./radio-journal-spec.js');
+  const contract = readFileSync(join(here, '..', 'docs', 'radio-reports-contract.md'), 'utf8');
+  for (const [kind, spec] of Object.entries(KIND_SPECS)) {
+    assert.ok(contract.includes(`\`${kind}\``), `${kind} is in the contract`);
+    for (const f of spec.fields) { assert.ok(contract.includes(`\`${f.name}\``), `${kind}.${f.name} is in the contract`); }
+  }
+});
+
+test('every journal kind is accepted from its valid fixture, forwarded once to the site, and writes no usage row, no first-session row and no failure counter', async () => {
+  for (const kind of JOURNAL) {
+    const fx = fixtureOf(kind);
+    assert.ok(fx, `a valid fixture of ${kind}`);
+    const r = await send(worker, requestText(fx));
+    assert.equal(r.status, 204, kind);
+    assert.equal(r.forwarded.length, 1, kind);
+    assert.equal(r.usage.length + r.first.length + r.counts.length + r.beats.length, 0, kind);
+    assert.equal(JSON.parse(r.forwarded[0].init.body).kind, kind);
+  }
+});
+
+test('every journal kind refuses every forbidden field name, at the top and inside the body (and the Worker sends nothing on)', async () => {
+  const one = JSON.parse(requestText(fixtureOf('radio_open')));
+  one.body.fileName = 'x';
+  const through = await send(worker, JSON.stringify(one));
+  assert.equal(through.text, 'refused: forbidden-field');
+  assert.equal(through.forwarded.length, 0);
+  const names = ['freq', 'centreFreq', 'tunedMhz', 'bookmark', 'latitude', 'gps', 'ipAddr', 'hostName', 'userName', 'fileName', 'folder',
+    'decodedText', 'callsign', 'password', 'secret', 'lat', 'lon', 'ip', 'user', 'path', 'file', 'token', 'bandHz'];
+  for (const kind of JOURNAL) {
+    for (const name of names) {
+      for (const where of ['top', 'body']) {
+        const req = JSON.parse(requestText(fixtureOf(kind)));
+        (where === 'top' ? req : req.body)[name] = 'x';
+        const v = rr.validateRadioMessage(req, { scrubModel: (m) => m });
+        assert.deepEqual([v.ok, v.code], [false, 'forbidden-field'], `${kind} ${where} ${name}`);
+      }
+    }
+  }
+});
+
+test('every free-text field of every journal kind refuses a path, an address, its own serial and a hertz number', async () => {
+  const { KIND_SPECS } = await import('./radio-journal-spec.js');
+  const bad = [['C:\\Users\\bob\\x.wav', 'path-in-text'], ['/home/bob/x', 'path-in-text'], ['seen at 10.20.30.40', 'address-in-text'],
+    ['tuned to 7074 kHz', 'frequency-in-text'], ['at 3.7GHz', 'frequency-in-text']];
+  let checked = 0;
+  for (const [kind, spec] of Object.entries(KIND_SPECS)) {
+    for (const f of spec.fields.filter((x) => x.type === 'text' || (x.type === 'arr' && x.item.type === 'text'))) {
+      for (const [text, code] of bad) {
+        const req = JSON.parse(requestText(fixtureOf(kind)));
+        req.body[f.name] = f.type === 'arr' ? [text] : text;
+        const r = await send(worker, JSON.stringify(req));
+        assert.equal(r.text, `refused: ${code}`, `${kind}.${f.name} ${text}`);
+        checked += 1;
+      }
+    }
+    if (spec.radio) {
+      const f = spec.fields.find((x) => x.type === 'text');
+      if (f) {
+        const req = JSON.parse(requestText(fixtureOf(kind)));
+        req.body[f.name] = req.body.serial;
+        assert.equal((await send(worker, JSON.stringify(req))).text, 'refused: serial-in-text', `${kind}.${f.name} own serial`);
+        checked += 1;
+      }
+    }
+  }
+  assert.ok(checked >= 40, `${checked} text checks`);
+});
+
+test('a journal event over 4,096 bytes is refused as too large, whatever it is padded with', async () => {
+  const req = JSON.parse(requestText(fixtureOf('radio_stream')));
+  req.pad = 'x'.repeat(4200);
+  const r = await send(worker, JSON.stringify(req));
+  assert.equal(r.status, 413);
+  assert.equal(r.text, 'refused: too-large');
+});
+
+test('a radio failure from an install with Usage reporting off carries no install id, no session id and no sequence number, and is counted under "anonymous"', async () => {
+  const anon = loadFixtures().find((f) => f.file === 'valid-radio-fail-anonymous.json');
+  const r = await send(worker, requestText(anon));
+  assert.equal(r.status, 204);
+  const sent = JSON.parse(r.forwarded[0].init.body);
+  for (const linking of ['installId', 'sessionId', 'seq', 'id']) { assert.ok(!(linking in sent), `${linking} is not forwarded`); }
+  assert.equal(sent.messageId, 'f00dfacecafe0123');
+  assert.deepEqual(r.counts, [{ indexes: ['anonymous'], blobs: ['rtlsdr', 'busy', '0.99.109', 'ok'], doubles: [1] }]);
+  // and no kind but radio_fail may do without an install id
+  for (const kind of JOURNAL) {
+    const req = JSON.parse(requestText(fixtureOf(kind)));
+    delete req.installId;
+    assert.equal((await send(worker, JSON.stringify(req))).text, 'refused: missing-field', kind);
+  }
+});
+
+test('two anonymous failures of one radio share nothing but the radio: the second message differs only in its random id, time and attempt', async () => {
+  const a = JSON.parse(requestText(loadFixtures().find((f) => f.file === 'valid-radio-fail-anonymous.json')));
+  const b = JSON.parse(JSON.stringify(a));
+  b.messageId = 'f00dfacecafe0999';
+  b.body.attempt = 2;
+  const ra = JSON.parse((await send(worker, JSON.stringify(a))).forwarded[0].init.body);
+  const rb = JSON.parse((await send(worker, JSON.stringify(b))).forwarded[0].init.body);
+  const common = Object.keys(ra).filter((k) => JSON.stringify(ra[k]) === JSON.stringify(rb[k]));
+  assert.deepEqual(common.sort(), ['kind', 'radioKey', 'schema', 't'].sort());
+  assert.deepEqual(Object.keys(ra.body).filter((k) => JSON.stringify(ra.body[k]) !== JSON.stringify(rb.body[k])), ['attempt']);
+});
+
+test('the running-now beat: unchanged without radios; with radios the beat row is still the id and the version, and the site is sent the keys', async () => {
+  const plain = await send(worker, JSON.stringify({ id: 'a'.repeat(32), v: '0.99.109', beat: 1 }));
+  assert.equal(plain.status, 204);
+  assert.equal(plain.forwarded.length, 0);
+  assert.deepEqual(plain.beats, [{ indexes: ['a'.repeat(32)], blobs: ['0.99.109'] }]);
+  const named = await send(worker, JSON.stringify({ id: 'a'.repeat(32), v: '0.99.109', beat: 1, radios: ['airspy-hf:HF0001A2'] }));
+  assert.equal(named.status, 204);
+  assert.deepEqual(named.beats, plain.beats, 'the beat row holds no radio');
+  assert.deepEqual(JSON.parse(named.forwarded[0].init.body), { schema: 2, kind: 'radio_beat', installId: 'a'.repeat(32), v: '0.99.109', radios: ['airspy-hf:HF0001A2'] });
+  const down = await send(worker, JSON.stringify({ id: 'a'.repeat(32), v: '0.99.109', beat: 1, radios: ['airspy-hf:HF0001A2'] }), { site: 'throw' });
+  assert.equal(down.status, 204, 'a site that cannot be reached does not cost the running-now count');
+  assert.equal(down.beats.length, 1);
+  const noSite = await send(worker, JSON.stringify({ id: 'a'.repeat(32), v: '0.99.109', beat: 1, radios: ['airspy-hf:HF0001A2'] }), { siteUrl: '' });
+  assert.equal(noSite.status, 204);
+  assert.equal(noSite.forwarded.length, 0);
+});
+
+test('a beat names radios only as keys of the right shape, at most eight, and carries nothing else of a report', async () => {
+  const id = 'a'.repeat(32);
+  for (const radios of [[], 'airspy-hf:HF0001A2', ['98600000'], ['a b:c'], [5], ['x:y/z'], Array.from({ length: 9 }, (_, i) => `r${i}:S${i}`)]) {
+    const r = await send(worker, JSON.stringify({ id, v: '1', beat: 1, radios }));
+    assert.equal(r.status, 400, JSON.stringify(radios));
+    assert.equal(r.text, 'refused: bad-field');
+    assert.equal(r.beats.length + r.forwarded.length, 0, 'a refused beat writes and forwards nothing');
+  }
+  const r = await send(worker, JSON.stringify({ id, v: '1', beat: 1, radios: ['a:B'], health: 'radio_fail.rtlsdr.busy=1', crashes: 3 }));
+  assert.deepEqual(r.beats, [{ indexes: [id], blobs: ['1'] }]);
+  assert.equal(r.usage.length, 0);
+  assert.deepEqual(JSON.parse(r.forwarded[0].init.body), { schema: 2, kind: 'radio_beat', installId: id, v: '1', radios: ['a:B'] });
+});
+
+test('the Worker deployed today (0.99.95) answers a beat that names radios 204 and writes only the id and the version', async () => {
+  const old = await import(pathToFileURL(join(FIX, '..', 'worker-0.99.95.js')).href);
+  const r = await send(old.default, JSON.stringify({ id: 'a'.repeat(32), v: '0.99.109', beat: 1, radios: ['airspy-hf:HF0001A2'] }));
+  assert.equal(r.status, 204);
+  assert.deepEqual(r.beats, [{ indexes: ['a'.repeat(32)], blobs: ['0.99.109'] }]);
+  assert.equal(r.forwarded.length, 0);
+});
+
+test('every kind of the family, sent to the Worker deployed today, is answered 400 "bad id" and writes nothing (so the Worker goes live first)', async () => {
+  const old = await import(pathToFileURL(join(FIX, '..', 'worker-0.99.95.js')).href);
+  const seen = new Set();
+  for (const fx of loadFixtures().filter((f) => f.expect === 'accept' && f.request.beat !== 1)) {
+    const r = await send(old.default, requestText(fx));
+    assert.equal(r.status, 400, fx.file);
+    assert.equal(r.text, 'bad id');
+    assert.equal(r.usage.length + r.beats.length, 0);
+    seen.add(fx.request.kind);
+  }
+  assert.deepEqual([...seen].sort(), ['first_session', 'radio_close', 'radio_fail', 'radio_found', 'radio_open', 'radio_recovery', 'radio_settings', 'radio_stream', 'session_env']);
+});
+
+test('the window word (site lane 2, view f): `new` or `legacy` becomes blob16 of a usage record; anything else, or nothing, leaves the 15 blobs as they were', async () => {
+  const base = { id: 'a'.repeat(32), v: '0.99.109', os: 'w', arch: 'x64', launches: 1, sessionSec: 5 };
+  const blobs = async (extra) => (await send(worker, JSON.stringify({ ...base, ...extra }))).usage[0].blobs;
+  assert.equal((await blobs({ window: 'new' }))[15], 'new');
+  assert.equal((await blobs({ window: 'legacy' }))[15], 'legacy');
+  assert.equal((await blobs({})).length, 15);
+  for (const w of ['NEW', 'both', '', 5, null, ['new'], { a: 1 }]) { assert.equal((await blobs({ window: w })).length, 15, JSON.stringify(w)); }
+  const beat = await send(worker, JSON.stringify({ id: base.id, v: '1', beat: 1, window: 'new' }));
+  assert.deepEqual(beat.beats, [{ indexes: [base.id], blobs: ['1'] }]);
+  const fs = JSON.parse(requestText(fixtureOf('first_session')));
+  fs.body.window = 'new';
+  const r = await send(worker, JSON.stringify(fs));
+  assert.equal(r.first[0].blobs.length, 17, 'a first-session record never carries the window word: its columns are as the contract says');
+});
+
+test('BREAK-IT: if the anonymous failure may carry a session id, the linking fixtures go red', async () => {
+  const broken = await brokenCopy((w, r) => ({ w, r: mustChange(r, "if (msg.sessionId !== undefined || msg.seq !== undefined) { return refuse('bad-field'); }", '') }));
+  const bad = await fixtureFailures(broken);
+  assert.ok(bad.some((b) => b.startsWith('refuse-anonymous-with-session-id.json')), bad.join('\n'));
+  assert.ok(bad.some((b) => b.startsWith('refuse-anonymous-with-seq.json')), bad.join('\n'));
+});
+
+test('BREAK-IT: if the text rules are not applied to the journal kinds, the journal text fixtures go red', async () => {
+  const broken = await brokenCopy((w, r) => ({ w, r: mustChange(r, 'for (const text of ctx.texts) {', 'for (const text of []) {') }));
+  const bad = await fixtureFailures(broken);
+  for (const name of ['refuse-journal-path-in-reason', 'refuse-journal-address-in-gpu', 'refuse-journal-serial-in-recovery-reason', 'refuse-journal-hertz-in-cpu']) {
+    assert.ok(bad.some((b) => b.startsWith(`${name}.json`)), `${name}: ${bad.join('\n')}`);
+  }
+});
+
+test('BREAK-IT: if the beat\'s radio keys are not checked, the beat fixtures go red', async () => {
+  const broken = await brokenCopy((w, r) => ({ w, r: mustChange(r, "if (typeof k !== 'string' || !BEAT_KEY.test(k)) { return refuse('bad-field'); }", '') }));
+  const bad = await fixtureFailures(broken);
+  assert.ok(bad.some((b) => b.startsWith('refuse-beat-with-a-frequency.json')), bad.join('\n'));
+});
+
+test('BREAK-IT: if the window word is written without being checked, the window test goes red', async () => {
+  const broken = await brokenCopy((w, r) => ({ w: mustChange(w, "return v === 'new' || v === 'legacy' ? v : '';", "return typeof v === 'string' ? v : '';"), r }));
+  const base = { id: 'a'.repeat(32), v: '0.99.109', os: 'w', arch: 'x64', launches: 1, sessionSec: 5, window: 'both' };
+  const p = (await send(broken, JSON.stringify(base))).usage[0];
+  assert.equal(p.blobs.length, 16, 'the broken copy stores a word that is not one of the two');
+});
+
+test('BREAK-IT: if the journal kinds are not size-limited, the oversized fixture goes red', async () => {
+  const broken = await brokenCopy((w, r) => ({ w: mustChange(w, ": body.kind === 'radio_fail' ? MAX_RADIO_FAIL_BODY : MAX_JOURNAL_BODY;", ': MAX_RADIO_FAIL_BODY;'), r }));
+  const bad = await fixtureFailures(broken);
+  assert.ok(bad.some((b) => b.startsWith('refuse-journal-oversized.json')), bad.join('\n'));
 });

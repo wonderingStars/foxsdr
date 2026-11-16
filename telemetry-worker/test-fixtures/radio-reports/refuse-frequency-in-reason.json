@@ -5,7 +5,7 @@
   "code": "frequency-in-text",
   "status": 400,
   "request": {
-    "schema": 1,
+    "schema": 2,
     "kind": "radio_fail",
     "installId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
     "sessionId": "0123456789abcdef",

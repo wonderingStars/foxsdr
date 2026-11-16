@@ -1,0 +1,24 @@
+{
+  "name": "valid-radio-found-wrong-driver",
+  "about": "the first-run check: a known radio is present and no usable driver binds it (C3), serial unknown",
+  "expect": "accept",
+  "status": 204,
+  "request": {
+    "schema": 2,
+    "kind": "radio_found",
+    "installId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "sessionId": "0123456789abcdef",
+    "seq": 5,
+    "t": 3,
+    "radioKey": "rtl-sdr:-",
+    "body": {
+      "driver": "rtlsdr",
+      "model": "RTL-SDR",
+      "serial": "",
+      "v": "0.99.109",
+      "binding": "wrong-driver",
+      "source": "first-run-check",
+      "usbId": "0bda:2838"
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "refuse-anonymous-with-seq",
+  "about": "a failure with no install id that still carries a sequence number",
+  "expect": "refuse",
+  "code": "bad-field",
+  "status": 400,
+  "request": {
+    "schema": 2,
+    "kind": "radio_fail",
+    "messageId": "f00dfacecafe0125",
+    "seq": 4,
+    "t": 4,
+    "radioKey": "rtl-sdr:-",
+    "body": {
+      "driver": "rtlsdr",
+      "model": "RTL-SDR",
+      "serial": "",
+      "reason": "the radio is in use by another program",
+      "reasonClass": "busy",
+      "trigger": "user-pick",
+      "attempt": 1,
+      "diagOn": true,
+      "logLines": [],
+      "v": "0.99.109",
+      "os": "Windows 10.0.22631",
+      "arch": "x64"
+    }
+  }
+}

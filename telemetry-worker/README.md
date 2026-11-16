@@ -110,7 +110,7 @@ corrupts every row written before.
 | `double16` | unclean exits with no evidence of how they ended - **unknown** (lifetime) - only where `blob14 = '1'` |
 
 Column budget: Analytics Engine allows 20 blobs and 20 doubles a row. `blob1`..`blob15`
-and `double1`..`double16` are used: 5 blobs and 4 doubles are free. Slow frames and
+and `double1`..`double16` are used (`blob16` holds the `window` word when a client sent one): 4 blobs and 4 doubles are free. Slow frames and
 recoveries took no blob (they ride in `blob13`) and three doubles; the unclean-exit split
 took one blob (its marker) and four doubles. (The 16 KB limit on a row's blobs is
 nowhere near: `blob13` is never more than 832 characters.)
@@ -435,7 +435,7 @@ installs with at least one stall and the stalls in total. Two queries, because
     WHERE timestamp > NOW() - INTERVAL '30' DAY AND blob11 = '1' AND double5 > 0
     GROUP BY blob1
 
-## The radio-report family (`radio_fail`, `first_session`)
+## The radio-report family (schema 2: `radio_fail`, the journal kinds, `session_env`, `first_session`, the beat's radios)
 
 Specified in [../docs/radio-reports-contract.md](../docs/radio-reports-contract.md); validated by `radio-reports.js`;
 held to the shared fixture files in `test-fixtures/radio-reports/` by `radio-reports.test.mjs`. **Nothing is deployed
@@ -450,6 +450,13 @@ launch is ever counted.
   `double1`..`double16`) plus `blob16` trigger, `blob17` session id, `double17` sequence number, `double18` seconds into
   the session. It never touches `foxsdr_usage`: one usage row stays one launch. Read it per (install, session id) taking the
   highest sequence number, and never add its health tokens to a usage row's: both describe the same session.
-* Nothing in the Worker knows about the Diagnostics switch. An install with Usage reporting off has no install id and
-  cannot send either message.
+* Schema 2 adds: the six journal kinds (`radio_found`, `radio_open`, `radio_settings`, `radio_stream`, `radio_recovery`,
+  `radio_close`) and `session_env`, defined by the field tables in `radio-journal-spec.js` (the site reads the JSON copy of the
+  same tables); they are validated, forwarded to the site and written NOWHERE in Analytics Engine. A `radio_fail` may come WITHOUT an
+  install id (decision 12: an install with Usage reporting off still reports a failing radio): it carries a random `messageId`
+  instead of install, session and sequence, and its counter row is indexed `anonymous`, which a reader counting installs must
+  leave out. The beat may carry `radios` (up to eight radio keys): the beat row is unchanged, the keys go to the site only. The usage
+  record may carry `window` (`new` or `legacy`), stored as `blob16` only when it is one of those words.
+* Nothing in the Worker knows about the Diagnostics switch.
+* Regenerate the shared fixtures with `node make-radio-fixtures.mjs` (it also rewrites the manifest and `radio-journal-spec.json`).
 

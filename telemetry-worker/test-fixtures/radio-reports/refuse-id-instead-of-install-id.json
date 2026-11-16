@@ -5,7 +5,7 @@
   "code": "missing-field",
   "status": 400,
   "request": {
-    "schema": 1,
+    "schema": 2,
     "kind": "radio_fail",
     "sessionId": "0123456789abcdef",
     "seq": 3,
