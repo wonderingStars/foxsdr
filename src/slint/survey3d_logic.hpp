@@ -58,6 +58,8 @@ void spanOf(const std::vector<SurveyChannel>& ch, double& loHz, double& hiHz);
 void ridgeGrid(const std::vector<SurveyChannel>& ch, double loHz, double hiHz, double floorDbV, int rows, int cols, std::vector<float>& out);
 // The level range of the vertical axis: the floor to the strongest peak + 3 dB, rounded out to 10 dB, never narrower than 30 dB.
 void levelRange(const std::vector<SurveyChannel>& ch, double floorDbV, double& loDb, double& hiDb);
+// The channel table as a CSV (window gaps lane 4, row 3075): one line per channel in the panel's order, a header first. A number the panel did not give is left empty, never filled in; a text cell is quoted when it holds a comma, a quote or a line break.
+std::string surveyCsv(const std::vector<SurveyChannel>& ch);
 // "145.500" style, as many decimals as the span needs.
 std::string formatSurveyMHz(double hz, double spanHz);
 

@@ -1,0 +1,20 @@
+#! frames=700 bank=1 plugins=adsb-decoder open=module:adsb-decoder-1.9.1-abi3-win-x64.dll iqfile=adsb-decoder.wav centre=1090000000 mode=RAW bandwidth=2400000 size=1600x1600
+# map-bar (window gaps lane 4, rows 368, 1714, 1731 and the audit's U2 to U4): what the map page's bar carries that the classic's has: the GPS receiver row (the same row the Radar section draws), the trail
+# width slider (the same setting as SYSTEM > Display's Trail width, read back as the saved setting) and the "Distance and bearing need the RX position above." footnote under the list while no position is set.
+120 state kit.plugins == 1
++1 click "START"
++60 state decodersRunning >= 1
++300 state kit.mapPages >= 1
++1 click "ADS-B map"
++10 expect "GPS serial port" enabled equals "true"
++1 expect "Baud rate" enabled equals "true"
++1 state cfg.mapTrailWidthPx == 4
++1 slider "Trail width" 1.0
++20 state cfg.mapTrailWidthPx > 4
++1 slider "Trail width" 0.0
++20 state cfg.mapTrailWidthPx == 1
+# the keys the bar had already: the satellites window's WHOLE WORLD is not on an aircraft map
++1 expect "Fit" enabled equals "true"
++1 expect "Zoom in" enabled equals "true"
++1 click "Zoom out"
++10 expect "Zoom in" enabled equals "true"

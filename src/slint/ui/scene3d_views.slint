@@ -55,6 +55,7 @@ export global View3D {
     callback radar-view-selected(bool);
     callback radar-scale-selected(int);
     callback radar-reset-view();
+    callback radar-picked(float, float);                  // a click (no drag) on the airspace, as fractions of the picture: the host picks the aircraft nearest it (row 3042)
 
     // ---- the demod scope's 3D TUNNEL (the DEMOD SCOPE window on a baseband input, VIEW VECTOR / 3D TUNNEL) ----
     in-out property <bool> tunnel-on: false;              // the tunnel is chosen (it shows while the input is I/Q or VECTOR; the vector figure is the default)
@@ -85,6 +86,8 @@ export global View3D {
     in-out property <int> survey-w;
     in-out property <int> survey-h;
     callback survey-view-selected(bool);
+    in property <string> survey-export-note;              // what the last EXPORT CSV did (the file it wrote, or why not)
+    callback survey-export-csv();
     callback survey-reset-view();
 
     // ---- the Radiosondes map page's 3D TRACK (the plugin's map page, VIEW MAP / 3D TRACK) ----
@@ -281,6 +284,7 @@ export component Radar3DWell inherits Rectangle {
         zoom <=> View3D.radar-zoom;
         min-elevation: 5; max-elevation: 85;
         reset-view => { View3D.radar-reset-view(); }
+        picked(fx, fy) => { View3D.radar-picked(fx, fy); }
     }
     Text { x: 8px; y: 6px; text: root.plotted-text; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.digit; }
     if root.range-corner != "" : Text { x: parent.width - self.preferred-width - 8px; y: 6px; text: root.range-corner; font-size: Theme.font-tiny; font-family: Theme.font-mono; color: Theme.digit; }
@@ -357,6 +361,8 @@ export component SurveyPanelPage inherits Rectangle {
         if !View3D.survey-on : HorizontalLayout { height: 36px; padding-left: 10px; alignment: start;
             VerticalLayout { alignment: center;
                 Scene3DViewToggleInline { three-d: false; label-2d: @tr("TABLE"); label-3d: @tr("3D SURFACE"); selected(on) => { View3D.survey-view-selected(on); } } }
+            VerticalLayout { alignment: center; KeyButton { label: @tr("EXPORT CSV"); small: true; min-w: 0px; tooltip: @tr("Save the channel table as a CSV file"); clicked => { View3D.survey-export-csv(); } } }
+            if View3D.survey-export-note != "" : Text { text: View3D.survey-export-note; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; overflow: elide; }
         }
         if View3D.survey-on : Scene3DCameraBar {
             elevation <=> View3D.survey-elevation;
@@ -364,6 +370,7 @@ export component SurveyPanelPage inherits Rectangle {
             reset-clicked => { View3D.survey-azimuth = -52; View3D.survey-elevation = 36; View3D.survey-zoom = 1; View3D.survey-reset-view(); }
             VerticalLayout { alignment: center;
                 Scene3DViewToggleInline { three-d: true; label-2d: @tr("TABLE"); label-3d: @tr("3D SURFACE"); selected(on) => { View3D.survey-view-selected(on); } } }
+            VerticalLayout { alignment: center; KeyButton { label: @tr("EXPORT CSV"); small: true; min-w: 0px; tooltip: @tr("Save the channel table as a CSV file"); clicked => { View3D.survey-export-csv(); } } }
         }
         if !View3D.survey-on : Table { vertical-stretch: 1; columns: root.columns; rows: root.rows; column-widths: root.widths; empty-text: root.empty-text;
             row-pressed(r) => { root.row-pressed(r); } clicked(r) => { root.clicked(r); } column-resized(c, w) => { root.column-resized(c, w); } }

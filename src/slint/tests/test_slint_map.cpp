@@ -608,6 +608,39 @@ int main() {
     click(win, 497, 338);
     CHECK(ui->get_zoom_keys() == 2);
     ui->set_zoom_out_enabled(true);
+    {   // THE ZOOM KEYS' TIPS (window gaps lane 4, audit item U3): "Zoom in - or turn the mouse wheel over the map" while the key works, "Zoomed in as far as the map goes" at the limit
+        // (and the same for the minus key). The two sentences differ in length, so the tip face's width tells them apart; a disabled key must still say why it is disabled.
+        const auto tipWidthNear = [&](int keyY) {
+            moveTo(win, 250, 130);                                                 // away from every key first
+            settle(milliseconds(520));
+            moveTo(win, 497, static_cast<float>(keyY));
+            settle(milliseconds(900));                                             // the 0.6 s rest
+            const Frame fr = render(ui, kW, kH);
+            moveTo(win, 250, 130);                                                 // the same picture with no tip: what differs left of the keys is the tip
+            settle(milliseconds(100));
+            const Frame none = render(ui, kW, kH);
+            int x0 = 1 << 20, x1 = -1, n = 0;
+            for (int y = 250; y < kH; ++y) {                                       // below the targets (their halos blink)
+                for (int x = 0; x < 484; ++x) {
+                    const Rgb a = fr.at(x, y), c = none.at(x, y);
+                    if (std::abs(int(a.r) - int(c.r)) > 6 || std::abs(int(a.g) - int(c.g)) > 6 || std::abs(int(a.b) - int(c.b)) > 6) { x0 = std::min(x0, x); x1 = std::max(x1, x); ++n; }
+                }
+            }
+            return n > 300 ? x1 - x0 + 1 : 0;                                      // the tip's width
+        };
+        const int plusOn = tipWidthNear(308), minusOn = tipWidthNear(338);
+        CHECK(plusOn > 150 && minusOn > 150);                                      // both say their long sentence
+        ui->set_zoom_in_enabled(false);
+        const int plusOff = tipWidthNear(308);
+        CHECK(plusOff > 100 && plusOff + 25 < plusOn);                             // at the limit: the shorter "as far as the map goes" sentence, still said
+        ui->set_zoom_in_enabled(true);
+        ui->set_zoom_out_enabled(false);
+        const int minusOff = tipWidthNear(338);
+        std::printf("  zoom tips: plus %d / %d, minus %d / %d\n", plusOn, plusOff, minusOn, minusOff);
+        CHECK(minusOff > 100 && minusOff + 25 < minusOn);
+        ui->set_zoom_out_enabled(true);
+        moveTo(win, 250, 130);
+    }
     {   // a key is not a drag handle: a press on it and a drag off it pans nothing
         const int p0 = ui->get_pans(), c0 = ui->get_clicks();
         press(win, 497, 308);

@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2379 | 797 | 116 | 1466 | 0 |
+| 2379 | 806 | 118 | 1455 | 0 |
 
-Of the 1529 rows that are controls (the 850 readout-like rows left out): 797 asserted, 116 driven without a read-back, 616 not drivable.
+Of the 1552 rows that are controls (the 827 readout-like rows left out): 806 asserted, 118 driven without a read-back, 628 not drivable.
 
-NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 69, needs hardware 32, no label in the element tree 25, not installed 21, deferred 19, needs a file 3, no plugin fitted 2.
+NOT DRIVABLE by reason: readout 827, other 261, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 69, needs hardware 32, no label in the element tree 25, not installed 21, deferred 9, needs a file 3, no plugin fitted 2.
 
 ## Per section
 
@@ -45,15 +45,15 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | Main window frame — Themes and sizes | 6 | 6 | 0 | 0 | 0 | 0 |
 | Main window frame — Themes and sizes: the Display section's settings | 11 | 11 | 0 | 0 | 0 | 0 |
 | Spectrum and waterfall — Spectrum panel (top of the centre of the Receiver view) | 16 | 1 | 0 | 15 | 15 | 0 |
-| Spectrum and waterfall — Waterfall panel (bottom of the centre of the Receiver view) | 12 | 0 | 0 | 12 | 11 | 0 |
-| Spectrum and waterfall — Mouse and keyboard gestures on the spectrum | 14 | 4 | 0 | 10 | 4 | 0 |
-| Spectrum and waterfall — Mouse gestures on the waterfall | 9 | 1 | 0 | 8 | 4 | 0 |
+| Spectrum and waterfall — Waterfall panel (bottom of the centre of the Receiver view) | 12 | 1 | 0 | 11 | 8 | 0 |
+| Spectrum and waterfall — Mouse and keyboard gestures on the spectrum | 14 | 4 | 0 | 10 | 3 | 0 |
+| Spectrum and waterfall — Mouse gestures on the waterfall | 9 | 1 | 1 | 7 | 2 | 0 |
 | Spectrum and waterfall — Trace-mode menu (right-click on the spectrum) | 9 | 3 | 0 | 6 | 0 | 0 |
 | Spectrum and waterfall — Marker menu (right-click on the waterfall) | 8 | 2 | 0 | 6 | 0 | 0 |
 | Spectrum and waterfall — Display block (end of both right-click menus) | 7 | 2 | 0 | 5 | 2 | 0 |
 | Spectrum and waterfall — Markers window (List markers...) | 14 | 12 | 0 | 2 | 0 | 0 |
 | Spectrum and waterfall — Waterfall markers drawn on the plots | 4 | 0 | 0 | 4 | 4 | 0 |
-| Spectrum and waterfall — Overlays on the spectrum from other features | 11 | 1 | 0 | 10 | 10 | 0 |
+| Spectrum and waterfall — Overlays on the spectrum from other features | 11 | 4 | 1 | 6 | 6 | 0 |
 | Spectrum and waterfall — Settings that change what the centre draws (live elsewhere) | 8 | 4 | 1 | 3 | 1 | 0 |
 | DECODE bank and plugin host — DECODE group caption | 2 | 1 | 0 | 1 | 1 | 0 |
 | DECODE bank and plugin host — Plugin store (rail row) | 5 | 3 | 0 | 2 | 1 | 0 |
@@ -68,7 +68,7 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | DECODE bank and plugin host — Picture window ("<PLUGIN> IMAGE") | 8 | 0 | 0 | 8 | 4 | 0 |
 | DECODE bank and plugin host — Panel window (plugin's own table) | 5 | 0 | 0 | 5 | 2 | 0 |
 | DECODE bank and plugin host — Instrument window | 6 | 0 | 0 | 6 | 2 | 0 |
-| DECODE bank and plugin host — Map page (generic, non-satellite) - brief, map agent owns the detail | 17 | 1 | 0 | 16 | 3 | 0 |
+| DECODE bank and plugin host — Map page (generic, non-satellite) - brief, map agent owns the detail | 17 | 2 | 0 | 15 | 2 | 0 |
 | DECODE bank and plugin host — Target details (window) | 5 | 0 | 0 | 5 | 2 | 0 |
 | DECODE bank and plugin host — Fitted modules (window; rail key "Plugins"): top bar and list | 15 | 2 | 2 | 11 | 6 | 0 |
 | DECODE bank and plugin host — Module page (click a name) | 14 | 1 | 0 | 13 | 6 | 0 |
@@ -167,20 +167,20 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | SYSTEM bank — Full-page screens: Request a feature (page) | 9 | 0 | 0 | 9 | 5 | 0 |
 | SYSTEM bank — Full-page screens: Report a bug or dislike (page) | 19 | 0 | 0 | 19 | 9 | 0 |
 | TOOLS bank — TOOLS (left-rail bank key and its group caption) | 2 | 0 | 0 | 2 | 1 | 0 |
-| TOOLS bank — Demod scope (rail row) | 4 | 1 | 0 | 3 | 3 | 0 |
+| TOOLS bank — Demod scope (rail row) | 4 | 1 | 0 | 3 | 2 | 0 |
 | TOOLS bank — DEMOD SCOPE (window) | 24 | 14 | 0 | 10 | 9 | 0 |
 | TOOLS bank — Radar (rail section) | 7 | 1 | 0 | 6 | 3 | 0 |
 | TOOLS bank — Receiver position controls (shared: Radar fold, radar-scope empty state, map pages) | 15 | 3 | 0 | 12 | 5 | 0 |
-| TOOLS bank — Radar scope (full-window mode) | 31 | 9 | 0 | 22 | 17 | 0 |
+| TOOLS bank — Radar scope (full-window mode) | 31 | 9 | 0 | 22 | 14 | 0 |
 | TOOLS bank — Radar data panel (LCD) - three tabs | 15 | 9 | 0 | 6 | 6 | 0 |
 | TOOLS bank — Bookmarks (rail section) | 31 | 15 | 2 | 14 | 6 | 0 |
 | TOOLS bank — Import a frequency list (dialog) | 8 | 4 | 0 | 4 | 2 | 0 |
 | TOOLS bank — Scanner (rail section) | 14 | 10 | 1 | 3 | 1 | 0 |
-| TOOLS bank — Airband (rail section) | 35 | 17 | 4 | 14 | 9 | 0 |
-| TOOLS bank — Map page (window per track-source plugin) | 17 | 0 | 0 | 17 | 5 | 0 |
-| TOOLS bank — Track list (left of the map page) | 11 | 0 | 0 | 11 | 7 | 0 |
+| TOOLS bank — Airband (rail section) | 35 | 17 | 4 | 14 | 8 | 0 |
+| TOOLS bank — Map page (window per track-source plugin) | 17 | 2 | 0 | 15 | 4 | 0 |
+| TOOLS bank — Track list (left of the map page) | 11 | 0 | 0 | 11 | 6 | 0 |
 | TOOLS bank — Map canvas (all map pages) | 10 | 0 | 0 | 10 | 4 | 0 |
-| TOOLS bank — Satellites map window (SATELLITES MAP) | 25 | 0 | 0 | 25 | 11 | 0 |
+| TOOLS bank — Satellites map window (SATELLITES MAP) | 25 | 0 | 0 | 25 | 7 | 0 |
 | TOOLS bank — Map rows and Target details (reached from here; live in the DECODE bank) | 8 | 0 | 0 | 8 | 2 | 0 |
 | EXTEND bank — Web access (EXTEND rail row, F4 bank) | 19 | 7 | 0 | 12 | 10 | 0 |
 | EXTEND bank — CAT control (rigctld) | 7 | 1 | 0 | 6 | 4 | 0 |
@@ -199,8 +199,8 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | Patch — Patch presets (page, 440 x 460; opened with PRESETS, only while the patch view is showing) | 13 | 7 | 3 | 3 | 1 | 0 |
 | SIGNAL bank — Source: the I/Q file row's file dialog, paste and log (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 5 | 0 | 0 | 0 | 0 |
 | SYSTEM bank — Updates: the kill switch's withdrawn notice (rows added after the 0.99.104 inventory; docs 6.63) | 5 | 3 | 0 | 2 | 2 | 0 |
-| 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 96 | 48 | 0 | 48 | 35 | 0 |
-| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 107 | 70 | 9 | 28 | 19 | 0 |
+| 3D views (lane A, docs 6.64) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md and THREED2.md (rows 3001 and up are this lane's; the 3D views of the other lane take another range) | 96 | 49 | 0 | 47 | 35 | 0 |
+| 3D globe views (lane B, docs 6.65) - rows added after the 0.99.104 inventory, from the design package's specs/THREED.md section 3, THREED2.md sections 2, 3 and 5 and SATVIEW.md (rows 4001 and up are this lane's; the box views of the other lane are 3001 and up) | 107 | 71 | 9 | 27 | 18 | 0 |
 | SIGNAL bank - Audio filters: the AGC choice and the noise blanker (multi-radio lane C; rows 4400 and up are this lane's, docs/multi-radio-records/agc-nb-wiring.md) | 22 | 19 | 3 | 0 | 0 | 0 |
 | Lane S1 (docs/multi-radio-records/screen-s1.md; rows 4500 and up are this lane's) | 23 | 20 | 0 | 3 | 0 | 0 |
 | Screen lane C - tuning, scanning, memories and controls (rows 4800 and up are this lane's; docs/multi-radio-records/screen-c.md) | 23 | 20 | 2 | 1 | 0 | 0 |
@@ -516,12 +516,12 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 |---|---|---|---|---|---|
 | 180 | Waterfall picture | readout | NOT DRIVABLE | - | a readout, not a control |
 | 181 | Elapsed-time strip (gutter) | readout | NOT DRIVABLE | - | a readout, not a control |
-| 182 | Reception-gap break | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 182 | Reception-gap break | overlay/marker | DRIVEN+ASSERTED | wf-gap | stop the receiver nine seconds, start it: state wf.gap > 0 with both ages named; a steady picture reads wf.gap == -1 |
 | 183 | Strength key plate | readout | NOT DRIVABLE | - | a readout, not a control |
 | 184 | Key: manual flag | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
 | 185 | Key: floor/ceiling | readout | NOT DRIVABLE | - | a readout, not a control |
-| 186 | Key: coverage | readout | NOT DRIVABLE | - | a readout, not a control |
-| 187 | Range-changed rail | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 186 | Key: coverage | readout | NOT DRIVABLE | - | needs a change of the display range (a menu slider the scripted input cannot reach); test_slint_host_wfrows holds the run of rows |
+| 187 | Range-changed rail | overlay/marker | NOT DRIVABLE | - | needs a change of the display range (a menu slider the scripted input cannot reach); test_slint_host_wfrows holds the rail position |
 | 188 | Foot line 1: scroll | readout | NOT DRIVABLE | - | a readout, not a control |
 | 189 | Foot line 2: decode/receive status | readout | NOT DRIVABLE | - | a readout, not a control |
 | 190 | VFO line (tuned frequency) | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
@@ -541,7 +541,7 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | 199 | Tooltip over band centre | tooltip | NOT DRIVABLE | - | a readout, not a control |
 | 200 | Tooltip over band edge | tooltip | NOT DRIVABLE | - | a readout, not a control |
 | 201 | Tooltip off the band | tooltip | NOT DRIVABLE | - | a readout, not a control |
-| 202 | Rest tip (4 s) | tooltip | NOT DRIVABLE | - | a readout, not a control |
+| 202 | Rest tip (4 s) | tooltip | NOT DRIVABLE | - | a four-second hover tip: the scripted input has no hover; held by test_slint_spectrum (row 202) and test_slint_waterfall (row 213): the tip is not shown at 1.5 s, shown at 4.5 s, replaces the gesture tip, restarts on a move |
 | 203 | Zoom the spectrum in | key (shortcut) | DRIVEN+ASSERTED | main-spectrum-keys.txt | click "+" twice; expect the SPAN chip's words 1.538 then 1.183 MHz (no engine state) |
 | 204 | Zoom the spectrum out | key (shortcut) | DRIVEN+ASSERTED | main-spectrum-keys.txt | click the minus key; expect the SPAN chip back at 1.538 MHz |
 | 205 | Zoom back to the full span | key (shortcut) | DRIVEN+ASSERTED | main-spectrum-keys.txt | click Full span; expect the SPAN chip at 2.000 MHz |
@@ -556,8 +556,8 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | 209 | Right-click | drag/gesture | NOT DRIVABLE | - | a right-click: no right-click verb |
 | 210 | Wheel / Shift+wheel | drag/gesture | NOT DRIVABLE | - | the scripted input has no wheel verb |
 | 211 | Tooltip (normal) | tooltip | NOT DRIVABLE | - | a readout, not a control |
-| 212 | Tooltip (Airband listening) | tooltip | NOT DRIVABLE | - | a readout, not a control |
-| 213 | Rest tip (4 s) | tooltip | NOT DRIVABLE | - | a readout, not a control |
+| 212 | Tooltip (Airband listening) | tooltip | DRIVEN | airband-spectrum | the tip is a hover; the monitor listening is driven and the plots read back |
+| 213 | Rest tip (4 s) | tooltip | NOT DRIVABLE | - | a four-second hover tip: the scripted input has no hover; held by test_slint_spectrum (row 202) and test_slint_waterfall (row 213): the tip is not shown at 1.5 s, shown at 4.5 s, replaces the gesture tip, restarts on a move |
 | 214 | Marker tooltip | tooltip | NOT DRIVABLE | - | a readout, not a control |
 
 ### Spectrum and waterfall — Trace-mode menu (right-click on the spectrum)
@@ -638,10 +638,10 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | 261 | Plugin mark: point | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 262 | Plugin mark: span | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 263 | Plugin marks on waterfall | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
-| 264 | Airband channel marks | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
-| 265 | Airband caption: block | readout | NOT DRIVABLE | - | a readout, not a control |
-| 266 | Airband caption: hearing | readout | NOT DRIVABLE | - | a readout, not a control |
-| 267 | Airband monitor effect on plots | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
+| 264 | Airband channel marks | overlay/marker | DRIVEN+ASSERTED | airband-spectrum | state wf.airmarksmax > 0 while listening (a block lands and moves, so one tick may have none), wf.airmarks == 0 after STOP |
+| 265 | Airband caption: block | readout | DRIVEN+ASSERTED | airband-spectrum | state wf.airblock is the engine's block sentence while listening |
+| 266 | Airband caption: hearing | readout | DRIVEN | airband-spectrum | the names appear only while a squelch is open, which the generator source does not guarantee; test_slint_host_tools holds the sentence |
+| 267 | Airband monitor effect on plots | lamp/indicator | DRIVEN+ASSERTED | airband-spectrum | state wf.showvfo == 0 and wf.showpeak == 0 while listening, 1 after STOP |
 
 ### Spectrum and waterfall — Settings that change what the centre draws (live elsewhere)
 
@@ -817,11 +817,11 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | 365 | Trail width | slider | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 366 | Reset coverage | button (small) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 367 | Coverage status | readout | NOT DRIVABLE | - | a readout, not a control |
-| 368 | GPS position | text field, combo, buttons | NOT DRIVABLE | - | deferred: the GPS position row: the serial-port page is a System bank page (later) |
+| 368 | GPS position | text field, combo, buttons | DRIVEN+ASSERTED | map-bar | the GPS port and baud boxes are on the map page (expect enabled) |
 | 369 | Target list | table | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
 | 370 | Details button | button (small) | NOT DRIVABLE | - | relocated: a click on a list row selects the target for the Target details drawer; there is no Details key |
 | 371 | Stop following | button (small) | NOT DRIVABLE | - | not reached by a plugin script (the plugins are fitted in the 6.49 runs; this page, face or row needs a signal or a page no script opened) |
-| 372 | Stop following? dialog | dialog | NOT DRIVABLE | - | a readout, not a control |
+| 372 | Stop following? dialog | dialog | NOT DRIVABLE | - | needs a dragged map with a followed target; held by test_slint_host_kit (mapDragPans / mapFollowAnswer: a drag while following asks and does not pan, Keep following and Stop following answer it) |
 
 ### DECODE bank and plugin host — Target details (window)
 
@@ -1022,7 +1022,7 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | 490 | Replay | env var (not UI) | NOT DRIVABLE | - | env var / config file, not a window control |
 | 491 | Beast feed | env var (not UI) | NOT DRIVABLE | - | env var / config file, not a window control |
 | 492 | Aircraft target | map track | DRIVEN+ASSERTED | fixture-adsb-decoder.txt | fixture: the same run; state kit.tracks >= 1 and state kit.mapPages >= 1 (the track the map draws; the icon itself is not pixel-checked); needs a signal: the fixture run (6.49 phase B) |
-| 493 | Aircraft silhouette | map track (flag bits) | NOT DRIVABLE | - | deferred: the category silhouettes are not ported (MapPane draws one icon per kind) |
+| 493 | Aircraft silhouette | map track (flag bits) | NOT DRIVABLE | - | the silhouette is a picture (MapIcons, window gaps lane 4); the category-to-picture rule is pinned by test_slint_host_mapicons |
 | 494 | Emergency flag | map track flag | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
 | 495 | Heard without a position | target list / detail | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
 | 496 | Estimated position | map track flag | NOT DRIVABLE | - | needs a signal: the fixture run (6.49 phase B) |
@@ -2473,7 +2473,7 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | 1526 | Scope switch row | key (switch row, opens window) | DRIVEN+ASSERTED | scope-demod-open.txt | click "Demod scope"; state scope.demodOpen 0 -> 1 -> 0 -> 1 -> 0 |
 | 1527 | Input chip | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1528 | Lamp | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
-| 1529 | Tooltip | tooltip | NOT DRIVABLE | - | a readout, not a control |
+| 1529 | Tooltip | tooltip | NOT DRIVABLE | - | a tooltip |
 
 ### TOOLS bank — DEMOD SCOPE (window)
 
@@ -2554,7 +2554,7 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | 1585 | Range drums | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1586 | Track drums | readout | DRIVEN+ASSERTED | scope-radar-targets.txt | state scope.drumTracks == "001" with one aircraft heard |
 | 1587 | GAIN knob | dial/knob | NOT DRIVABLE | - | the fixtures have no gain stage, so the knob is dead (state scope.knobDead == 1 is asserted); the detents, the clamps, the local hold and the NaN for a dead knob are unit-tested in test_slint_host_radar; the knob's wheel and drag are in test_slint_scope_modes |
-| 1588 | Knob scale ticks | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1588 | Knob scale ticks | readout | NOT DRIVABLE | - | the knob figures are a readout |
 | 1589 | Knob stage note | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1590 | POWER button | button (round, lit ring) | DRIVEN+ASSERTED | scope-radar-open.txt | click "POWER"; state running 1 -> 0 -> 1 |
 | 1591 | Power state text | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
@@ -2569,8 +2569,8 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | 1600 | Aircraft icons and trails | overlay/marker | DRIVEN+ASSERTED | scope-radar-targets.txt | state scope.targets >= 1 and scope.trailPoints >= 1 with the decoded aircraft; shot scope-radar-target.png |
 | 1601 | Antenna mark | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 1966 | Tube optics: ground, coastline, phosphor, sweep | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
-| 1967 | Basemap tiles under the tube and the attribution line | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
-| 1968 | Cabinet case: gradient, screws, layout rules | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 1967 | Basemap tiles under the tube and the attribution line | overlay/marker | NOT DRIVABLE | - | a picture under the glass; needs a basemap plugin |
+| 1968 | Cabinet case: gradient, screws, layout rules | overlay/marker | NOT DRIVABLE | - | replaced on purpose: old look only |
 
 ### TOOLS bank — Radar data panel (LCD) - three tabs
 
@@ -2692,7 +2692,7 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | 1695 | Row tick | checkbox | NOT DRIVABLE | - | the row's tick checkbox has no label in the element tree (the first run's dump lists only the row and its dash text) |
 | 1696 | Row lamp | lamp/indicator | NOT DRIVABLE | - | a readout, not a control |
 | 1697 | Row | list (selectable) | DRIVEN+ASSERTED | tools-airband.txt | click "113.7500  ATIS Heathrow"; state tunedHz == 113750000 (before the scroll) |
-| 1698 | Row level tooltip | tooltip | NOT DRIVABLE | - | a readout, not a control |
+| 1698 | Row level tooltip | tooltip | NOT DRIVABLE | - | a tooltip |
 | 1699 | Squelch | slider | DRIVEN+ASSERTED | tools-airband.txt | slider "Squelch"#2 0.2; state fact.airband.squelchDb < -55 (after `scroll "Tick all" 500`) |
 | 1700 | Above the noise | button (small) | DRIVEN | tools-airband.txt | click "Above the noise" while listening; state fact.airband.listening == 1 only: the rule needs channel levels |
 | 1701 | Hold | number field | DRIVEN+ASSERTED | tools-airband.txt | type "Hold" "4"; key enter; state fact.airband.holdS == 4 (after `scroll "Tick all" 500`) |
@@ -2712,15 +2712,15 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | 1710 | Coverage | checkbox | NOT DRIVABLE | - | relocated: kit map page (6.38) row 361: the Coverage checkbox |
 | 1711 | Trails | checkbox | NOT DRIVABLE | - | relocated: kit map page (6.38) row 362: the Trails checkbox |
 | 1712 | Altitude colours | checkbox | NOT DRIVABLE | - | relocated: kit map page (6.38) row 363: the Altitude colours checkbox, disabled without Trails |
-| 1713 | Trail style | dropdown/combo | NOT DRIVABLE | - | deferred: the saved style is applied by the map (kit map page row 364), but no trail-style dropdown is drawn on the page or in the Display body; not found in pages.slint |
-| 1714 | Trail width | slider | NOT DRIVABLE | - | deferred: the saved width is applied by the map (kit map page row 365); no trail width slider is drawn on the page; the same setting is the SYSTEM Display body's Trail width (row 1398) |
+| 1713 | Trail style | dropdown/combo | DRIVEN+ASSERTED | gaps-map-trail | Line and Ribbon read back as cfg.mapTrailStyle |
+| 1714 | Trail width | slider | DRIVEN+ASSERTED | map-bar | the Width slider read back as cfg.mapTrailWidthPx |
 | 1715 | Reset coverage | button (small) | NOT DRIVABLE | - | relocated: kit map page (6.38) row 366: the Reset coverage key |
 | 1716 | Coverage readout | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1717 | GPS row | (shared GPS block) | NOT DRIVABLE | - | relocated: the kit map page draws no GPS row (6.38 row 368); the row lives in the SYSTEM bank's Serial ports (row 1442) and in the Radar fold (rows 1566 to 1572) |
 | 1718 | Attribution credit | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1719 | Stop following? | dialog | NOT DRIVABLE | - | a readout, not a control |
-| 1720 | Stop following (dialog) | button | NOT DRIVABLE | - | deferred: no dialog, so no key (row 372); the toolbar's Stop following key is row 371 |
-| 1721 | Keep following | button | NOT DRIVABLE | - | deferred: no dialog, so no Keep following key (row 372); the drag is refused instead |
+| 1719 | Stop following? | dialog | NOT DRIVABLE | - | the question is asked by a dragged map with a followed target (see 372) |
+| 1720 | Stop following (dialog) | button | NOT DRIVABLE | - | see 372 |
+| 1721 | Keep following | button | NOT DRIVABLE | - | see 372 |
 
 ### TOOLS bank — Track list (left of the map page)
 
@@ -2735,7 +2735,7 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | 1728 | Row (callsign cell) | list (selectable, spans row) | NOT DRIVABLE | - | relocated: kit map page (6.38) row 369: a click selects and centres the map on it (zoom unchanged), a double-click follows; list rows are not dimmed by staleness (only the map target's alpha follows it), and an estimated position carries the 'estimated' note in the Note column |
 | 1729 | Details | button (small) | NOT DRIVABLE | - | relocated: kit map page (6.38) row 370: there is no Details key; a click on a row selects it for the Target details drawer |
 | 1730 | Heard-without-position rows | list | NOT DRIVABLE | - | a readout, not a control |
-| 1731 | Distance footnote | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1731 | Distance footnote | readout | NOT DRIVABLE | - | a readout under the list |
 | 1732 | Hover block | tooltip | NOT DRIVABLE | - | a readout, not a control |
 
 ### TOOLS bank — Map canvas (all map pages)
@@ -2759,18 +2759,18 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 |---|---|---|---|---|---|
 | 1743 | Plate title | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1744 | FIT | key | NOT DRIVABLE | - | relocated: kit map page (6.38) row 357: the Fit key; it is never dead and has no 'nothing is plotted' tooltip |
-| 1745 | WHOLE WORLD | key | NOT DRIVABLE | - | deferred: kit map page row 357: the satellites page's own deck, WHOLE WORLD included, is deferred; the - key backs out a step at a time |
+| 1745 | WHOLE WORLD | key | NOT DRIVABLE | - | the key is drawn once the page has satellite tracks (a satellite page is known by its tracks); the drive's satellites plugin publishes none offline |
 | 1746 | STOP FOLLOWING | key | NOT DRIVABLE | - | relocated: kit map page (6.38) row 371: the Stop following key, drawn while following |
 | 1747 | Strip text | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1748 | Latitude cell | text field (click to edit) | NOT DRIVABLE | - | relocated: the typed latitude is the Radar fold's field (row 1562); the kit map page shows an RX readout, not a click-to-edit cell (6.38 row 358) |
 | 1749 | Longitude cell | text field (click to edit) | NOT DRIVABLE | - | relocated: the typed longitude is the Radar fold's field (row 1563); the kit map page shows an RX readout, not a click-to-edit cell (6.38 row 358) |
-| 1750 | Caption labels | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1750 | Caption labels | readout | NOT DRIVABLE | - | captions |
 | 1751 | SET FROM MAP CLICK | key (latched while armed) | NOT DRIVABLE | - | relocated: kit map page (6.38) row 358: the Set RX here key, lit and reading 'Click the map...' while armed (not a two-line SET FROM / MAP CLICK plate) |
-| 1752 | Position note | readout | NOT DRIVABLE | - | a readout, not a control |
+| 1752 | Position note | readout | NOT DRIVABLE | - | a note |
 | 1753 | COVERAGE rocker | toggle | NOT DRIVABLE | - | relocated: kit map page (6.38) row 361: the Coverage checkbox (not a rocker with a sub-line; it is not disabled with no receiver position) |
 | 1754 | GROUND TRACKS rocker | toggle | NOT DRIVABLE | - | relocated: kit map page (6.38) row 362: the Trails checkbox draws the lines plugins publish, ground tracks included |
 | 1755 | ALTITUDE COLOURS rocker | toggle | NOT DRIVABLE | - | relocated: kit map page (6.38) row 363: the Altitude colours checkbox |
-| 1756 | TRAIL STYLE segments | radio (3 segments) | NOT DRIVABLE | - | deferred: kit map page row 364 stays deferred: no LINE / RIBBON / OFF choice (the satellites deck is deferred) |
+| 1756 | TRAIL STYLE segments | radio (3 segments) | NOT DRIVABLE | - | the Off key throws the Trails flag (driven by the Trails tick in gaps-map-trail); not driven on the satellites page |
 | 1757 | COVERAGE RESET | button | NOT DRIVABLE | - | relocated: kit map page (6.38) row 366: the Reset coverage key |
 | 1758 | Coverage note | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1759 | TARGETS header | readout | NOT DRIVABLE | - | a readout, not a control |
@@ -2779,8 +2779,8 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | 1762 | Register rows | list | NOT DRIVABLE | - | a readout, not a control |
 | 1763 | Empty text | readout | NOT DRIVABLE | - | a readout, not a control |
 | 1764 | Selected-target card | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1765 | Notes | readout | NOT DRIVABLE | - | a readout, not a control |
-| 1766 | Map key | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
+| 1765 | Notes | readout | NOT DRIVABLE | - | notes |
+| 1766 | Map key | overlay/marker | NOT DRIVABLE | - | a key to the marks, drawn on the picture |
 | 1767 | Map | (shares the Map canvas gestures above) | NOT DRIVABLE | - | relocated: kit map page (6.38): MapPane, with the gestures of rows 1733 to 1739 |
 
 ### TOOLS bank — Map rows and Target details (reached from here; live in the DECODE bank)
@@ -3124,7 +3124,7 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | 3039 | Unknown altitude | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 3040 | Empty state | readout | NOT DRIVABLE | - | a readout, not a control |
 | 3041 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | radar-3d.txt | state cfg.view3d contains radar:on=1 and radar:on=0 after the way back |
-| 3042 | Click an aircraft on the airspace to select it | gesture | NOT DRIVABLE | - | deferred: needs picking (the nearest projected marker); the HOME list still selects, and the selection is drawn |
+| 3042 | Click an aircraft on the airspace to select it | gesture | NOT DRIVABLE | - | a click aimed at a projected marker: the scripted input cannot aim at one; test_slint_host_radar3d testPick holds the pick and test_slint_scene3d_well holds the well's pick callback (a press that did not drag, with its fractions) |
 | 3043 | VIEW VECTOR | key (segment) | DRIVEN+ASSERTED | tunnel-3d.txt | click "VECTOR"#2 (the toggle's own key); state view3d.tunnel.on 1 -> 0, cfg.view3d contains tunnel:on=0 |
 | 3044 | VIEW 3D TUNNEL | key (segment) | DRIVEN+ASSERTED | tunnel-3d.txt | click "3D TUNNEL"; state view3d.tunnel.on 0 -> 1, cfg.view3d contains tunnel:on=1 |
 | 3045 | The tunnel | picture | DRIVEN+ASSERTED | tunnel-3d.txt | state view3d.tunnel.renders, points, pixels, labels, w, h (what the renderer drew from the scope's I/Q) |
@@ -3157,7 +3157,7 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | 3072 | PERCENTILE FLOOR | slider | NOT DRIVABLE | - | deferred: needs the survey's per-bin samples to re-derive a noise floor; the host only has each channel's peak and its level over the plugin's own floor |
 | 3073 | MERGE WIDTH | readout | NOT DRIVABLE | - | a readout, not a control |
 | 3074 | SWEEP BAND | readout | NOT DRIVABLE | - | a readout, not a control |
-| 3075 | EXPORT CSV | key | NOT DRIVABLE | - | deferred: the plugin already writes survey.csv beside survey.cfg; a host-side export of the table needs a save dialog |
+| 3075 | EXPORT CSV | key | DRIVEN+ASSERTED | survey-3d | EXPORT CSV clicked twice, state view3d.survey.exportnote names the file and then "(2)" |
 | 3076 | Hour (UTC) axis | overlay/marker | NOT DRIVABLE | - | a readout, not a control |
 | 3077 | The view and the camera are remembered | setting | DRIVEN+ASSERTED | survey-3d.txt | state cfg.view3d contains survey:on=1 and survey:on=0 after the way back |
 | 3078 | VIEW MAP | key (segment) | DRIVEN+ASSERTED | sonde-3d.txt | click "MAP"; state view3d.sonde.on 1 -> 0, cfg.view3d contains sonde:on=0 |
@@ -3233,11 +3233,11 @@ NOT DRIVABLE by reason: readout 850, other 239, needs a signal (no fixture) 120,
 | 4084 | Satellites: satellite chips | chip (key) | NOT DRIVABLE | - | needs a tracked satellite: the plugin publishes tracks only from fetched TLEs, none in a scripted run |
 | 4085 | Satellites: the selected satellite's readouts | readout | NOT DRIVABLE | - | a readout, not a control |
 | 4086 | Satellites: DRAG TO ROTATE, RESET VIEW | gesture | DRIVEN+ASSERTED | globe-satellites.txt | press the well, key left / down, scroll, key 0: state globe.satellites lon / lat / zoom |
-| 4087 | Satellites: NIGHT SIDE layer toggle | checkbox | NOT DRIVABLE | - | deferred: the night side is always shaded; the switch was not built in this pass |
+| 4087 | Satellites: NIGHT SIDE layer toggle | checkbox | DRIVEN+ASSERTED | globe-satellites | NIGHT SIDE toggled, state globe.satellites night=0 / 1 |
 | 4088 | Satellites: 3D ORBIT PATH | picture | NOT DRIVABLE | - | a readout, not a control |
 | 4089 | Satellites: time scrubber (-30 min to +90 min, NOW, PLAY) | slider | NOT DRIVABLE | - | deferred: needs data: positions at other times - the plugin publishes the present position and one ground track. What would do it: a plugin API addition publishing predicted positions with times, or the elements to propagate them |
 | 4090 | Satellites: pass timeline (24 h) | picture | NOT DRIVABLE | - | a readout, not a control |
-| 4091 | Satellites: the satellites deck (position well, layers, targets register, next passes, Doppler, GRANT RECEIVER CONTROL) | page | NOT DRIVABLE | - | a readout, not a control |
+| 4091 | Satellites: the satellites deck (position well, layers, targets register, next passes, Doppler, GRANT RECEIVER CONTROL) | page | NOT DRIVABLE | - | deferred: Doppler and GRANT RECEIVER CONTROL are not built |
 | 4100 | 3D globes: the chosen view, camera and options are remembered | behaviour | DRIVEN+ASSERTED | globe-solar-system.txt | state fact.config.interface contains "solar:" (the same line ends each globe-*.txt script) |
 | 4101 | 3D globes: the honest empty states | readout | NOT DRIVABLE | - | a readout, not a control |
 | 4200 | Radio pane: R-tag (Select Radio n) | key | DRIVEN+ASSERTED | workspace-select | click "Select Radio 3" then "Select Radio 2"; state workspace.selected == 3 then == 2 and state tunedHz follows the selected radio (the strip shows it); click "Select Radio 6" on page two of eight LIVE radios: state workspace.selected == 6 (RADIO_FOCUS to the real engine); live-two: "Select Radio 2" and the strip follows (state tunedHz differs from radio 1's) |

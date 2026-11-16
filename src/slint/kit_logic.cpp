@@ -655,6 +655,17 @@ MapPage* findMapPage(std::vector<MapPage>& pages, const std::string& plugin) {
     return nullptr;
 }
 
+bool mapDragPans(MapPage& pg) {
+    if (pg.followedId.empty()) { return true; }   // nothing followed: the drag moves the map
+    pg.followAsk = true;                          // a followed target: the map stays on it and the page asks
+    return false;
+}
+bool mapFollowAskShown(const MapPage& pg) { return pg.followAsk && !pg.followedId.empty(); }
+void mapFollowAnswer(MapPage& pg, bool stop) {
+    if (stop) { pg.followedId.clear(); }
+    pg.followAsk = false;
+}
+
 bool fitView(const std::vector<cascade::core::HostTrack>& tracks, double& centreLat, double& centreLon, double& spanDeg, double aspect) {
     double latMin = 90, latMax = -90, lonMin = 180, lonMax = -180;
     bool any = false;

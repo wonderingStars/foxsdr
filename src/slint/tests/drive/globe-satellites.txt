@@ -29,6 +29,16 @@
 +5 expect "GROUND TRACKS" checked equals "false"
 +1 click "GROUND TRACKS"
 +5 expect "GROUND TRACKS" checked equals "true"
+# NIGHT SIDE (window gaps lane 4, row 4087): on by default, off lights the whole globe, on shades it again
++1 expect "NIGHT SIDE" checked equals "true"
++1 state globe.satellites contains "night=1"
++1 click "NIGHT SIDE"
++5 expect "NIGHT SIDE" checked equals "false"
++1 state globe.satellites contains "night=0"
++1 state globe.satellites contains "composed=1"
++1 click "NIGHT SIDE"
++5 expect "NIGHT SIDE" checked equals "true"
++1 state globe.satellites contains "night=1"
 # the camera
 +1 press "3D GLOBE view"
 +3 key left

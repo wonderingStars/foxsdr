@@ -31,6 +31,8 @@ import { PatchPresetsModel, PatchPresetsPage } from "patch_page.slint";
 import { TransmitPageModel, TransmitPage } from "transmit_page.slint";
 import { SurveyPanelPage, SondeViewBar, SondeWell, View3D } from "scene3d_views.slint";   // the 3D views of two plugin pages (docs 6.64)
 import { GlobeModel, GlobeViewBar, GlobeBody } from "globe_views.slint";
+import { GpsRow, GpsRowView, SystemEvents } from "system_bank.slint";   // window gaps lane 4: the GPS row on the map pages
+import { Slider } from "sliders.slint";
 import { MapJModel, MapJBar, SkyModel, SkyPage, AntennaModel, AntennaPage } from "mapj.slint";   // screen lane J: the map's layers, replay and filter, the Sky and Antenna pages
 
 export { PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
@@ -100,6 +102,7 @@ export global KitEvents {
     callback page-map-list-clicked(int, int);
     callback page-map-list-double-clicked(int, int);
     callback page-map-fit(int);
+    callback page-map-world(int);
     callback page-map-set-rx(int);
     callback page-map-on-screen(int, bool);
     callback page-map-coverage(int, bool);
@@ -108,6 +111,7 @@ export global KitEvents {
     callback page-map-trail-style(int, int);      // page, 0 = Line, 1 = Ribbon (the classic map page's trail style combo; slint-gaps.md item 5)
     callback page-map-reset-coverage(int);
     callback page-map-stop-following(int);
+    callback page-map-keep-following(int);
     callback page-map-sort-clicked(int);
     callback page-map-sort-dir(int);
     callback page-fitted-row-clicked(int, int);
@@ -177,6 +181,8 @@ export struct PluginEntry {
 
 export struct DecoderBar { name: string, file: string, presets: [PresetKeyModel] }
 
+export struct SatNote { title: string, text: string }
+
 export struct MapModel {
     base: image,
     targets: [MapTarget],
@@ -204,6 +210,13 @@ export struct MapModel {
     sort-ascending: bool,
     rx-text: string,       // "RX 51.4812 -0.4521", or the hint when none is set
     rx-known: bool,
+    satellite: bool,       // the satellites window: its deck's keys and notes (window gaps lane 4)
+    sat-notes: [SatNote],
+    chart-lines: [string], // what the picture is ("EQUIRECTANGULAR - WGS 84"), lettered on it
+    key-lines: [string],   // the marks the legend cannot explain ("RINGED MARK - SELECTED", "DASHED LINE - PREDICTED TRACK")
+    follow-ask: bool,      // a drag was tried while following: "Stop following?" is asked (the classic's modal, here a card under the bar)
+    follow-ask-text: string,
+    list-footnote: string, // "Distance and bearing need the RX position above." while no position is set
     j: MapJModel,          // screen lane J (mapj.slint)
 }
 
@@ -345,12 +358,23 @@ component PagePrelude inherits VerticalLayout {
         browse-clicked(id) => { root.browse-clicked(root.index, id); } }
 }
 
+// WINDOW GAPS LANE 4: what the map pages' bar shows that other publishers own: the GPS receiver row (the TOOLS publisher's, the Radar fold's own) and the trail width (the SYSTEM publisher's Display body's).
+export global MapExtras {
+    in property <bool> gps-shown;
+    in property <string> gps-hint;
+    in property <GpsRow> gps;
+    in property <float> trail-px;              // 0..1 of the slider's track
+    in property <string> trail-text;           // "48 px"
+    in property <string> trail-tooltip;
+}
+
 // A map page's toolbar: the rows of the ImGui window's top bar (Fit, the RX position, the count, On screen only, Coverage, Trails,
 // Altitude colours, Reset coverage, the coverage status, Stop following) as keys and checkboxes in two lines.
 component MapToolbar inherits VerticalLayout {
     in property <MapModel> map;
     in property <int> index;
     callback fit(int);
+    callback world(int);
     callback set-rx(int);
     callback on-screen(int, bool);
     callback coverage(int, bool);
@@ -359,13 +383,15 @@ component MapToolbar inherits VerticalLayout {
     callback trail-style(int, int);
     callback reset-coverage(int);
     callback stop-following(int);
+    callback keep-following(int);
     callback sort-clicked(int);
     callback sort-dir(int);
     spacing: 4px;
     padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 6px;
     HorizontalLayout { spacing: 8px; alignment: start;
         Key { label: @tr("Fit"); small: true; min-w: 0px; tooltip: @tr("Centre and zoom on every target"); clicked => { root.fit(root.index); } }
-        Key { label: root.map.pick-armed ? @tr("Click the map...") : @tr("Set RX here"); small: true; min-w: 0px; on: root.map.pick-armed; tooltip: @tr("The next click on the map sets the receiver position"); clicked => { root.set-rx(root.index); } }
+        if root.map.satellite : Key { label: @tr("WHOLE WORLD"); small: true; min-w: 0px; tooltip: @tr("Back out until the whole planet is in the window."); clicked => { root.world(root.index); } }
+        Key { label: root.map.pick-armed ? @tr("CLICK THE") + " " + @tr("MAP NOW") : @tr("Set RX here"); small: true; min-w: 0px; on: root.map.pick-armed; tooltip: @tr("The next click on the map sets the receiver position"); clicked => { root.set-rx(root.index); } }
         Text { text: root.map.rx-text; font-size: Theme.font-small; color: root.map.rx-known ? Theme.fg-soft : Theme.dim; vertical-alignment: center; overflow: elide; }
         Rectangle { horizontal-stretch: 1; }
         Text { text: root.map.count-text; font-size: Theme.font-small; color: Theme.muted; vertical-alignment: center; }
@@ -377,15 +403,37 @@ component MapToolbar inherits VerticalLayout {
         Checkbox { label: @tr("Altitude colours"); checked: root.map.alt-colours; enabled: root.map.trails-on; tooltip: root.map.trails-on ? @tr("Colour each part of a trail by the altitude observed there.") : @tr("Turn Trails on to colour them by altitude."); toggled(v) => { root.alt-colours(root.index, v); } }
         SegGroup { small: true;   // the classic's Line / Ribbon combo, as two keys; greyed with the trails, as there
             HorizontalLayout { spacing: 2px;
-                SegKey { small: true; label: @tr("Line"); on: root.map.trail-style != 1; enabled: root.map.trails-on; tooltip: @tr("Line draws a solid trail. Ribbon draws a translucent\nband, easier to follow over a detailed map, at the cost of\ncovering more of what is underneath."); clicked => { root.trail-style(root.index, 0); } }
-                SegKey { small: true; label: @tr("Ribbon"); on: root.map.trail-style == 1; enabled: root.map.trails-on; tooltip: @tr("Line draws a solid trail. Ribbon draws a translucent\nband, easier to follow over a detailed map, at the cost of\ncovering more of what is underneath."); clicked => { root.trail-style(root.index, 1); } }
+                SegKey { small: true; label: @tr("Line"); on: root.map.trail-style != 1 && (!root.map.satellite || root.map.trails-on); enabled: root.map.trails-on || root.map.satellite; tooltip: @tr("Line draws a solid trail. Ribbon draws a translucent\nband, easier to follow over a detailed map, at the cost of\ncovering more of what is underneath."); clicked => { if (root.map.satellite && !root.map.trails-on) { root.trails(root.index, true); } root.trail-style(root.index, 0); } }
+                SegKey { small: true; label: @tr("Ribbon"); on: root.map.trail-style == 1 && (!root.map.satellite || root.map.trails-on); enabled: root.map.trails-on || root.map.satellite; tooltip: @tr("Line draws a solid trail. Ribbon draws a translucent\nband, easier to follow over a detailed map, at the cost of\ncovering more of what is underneath."); clicked => { if (root.map.satellite && !root.map.trails-on) { root.trails(root.index, true); } root.trail-style(root.index, 1); } }
+                if root.map.satellite : SegKey { small: true; label: @tr("Off"); on: !root.map.trails-on; tooltip: @tr("Draw targets only: no trails, ground tracks or footprints."); clicked => { root.trails(root.index, false); } }   // the deck's third trail style, the same flag the Trails tick throws
             }
         }
+        Text { text: @tr("Width"); font-size: Theme.font-small; color: Theme.muted; vertical-alignment: center; }
+        Slider { width: 90px; accessible-label: @tr("Trail width"); value: MapExtras.trail-px; enabled: root.map.trails-on; tooltip: MapExtras.trail-tooltip; changed(v) => { SystemEvents.display-trail-px(v); } }   // the same setting as the Display body's Trail width
+        Text { text: MapExtras.trail-text; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; }
         Key { label: @tr("Reset coverage"); small: true; min-w: 0px; enabled: !root.map.coverage-empty; clicked => { root.reset-coverage(root.index); } }
         Text { text: root.map.coverage-status; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; overflow: elide; }
         Rectangle { horizontal-stretch: 1; }
         if root.map.following != "" : Text { text: root.map.following; font-size: Theme.font-small; color: Theme.accent-soft; vertical-alignment: center; }
         if root.map.following != "" : Key { label: @tr("Stop following"); small: true; min-w: 0px; clicked => { root.stop-following(root.index); } }
+    }
+    // THE FOLLOW-INTERRUPT ASK (the classic's "Stop following?"): a drag on the map while a target is followed does not pan; it asks, and the answer changes what the next drag does
+    if root.map.follow-ask : HorizontalLayout { spacing: 8px; alignment: start;
+        Text { text: root.map.follow-ask-text + "  " + @tr("Stop following it so the map can be moved freely?"); font-size: Theme.font-small; color: Theme.accent-soft; vertical-alignment: center; overflow: elide; }
+        Key { label: @tr("Stop following"); small: true; min-w: 0px; clicked => { root.stop-following(root.index); } }
+        Key { label: @tr("Keep following"); small: true; min-w: 0px; clicked => { root.keep-following(root.index); } }
+    }
+    // THE SATELLITES DECK'S NOTES (the classic's position note, coverage note and the pass notes, each a whole sentence that says what is blocked and why)
+    if root.map.sat-notes.length > 0 : VerticalLayout { spacing: 3px;
+        for n in root.map.sat-notes : VerticalLayout { spacing: 1px;
+            if n.title != "" : Text { text: n.title; font-size: Theme.font-hint; font-weight: Theme.weight-semibold; color: Theme.fg-soft; }
+            Text { text: n.text; font-size: Theme.font-hint; color: Theme.dim; wrap: word-wrap; }
+        }
+    }
+    // THE GPS ROW, under the typed entry it is the alternative to (the classic's third row): the same row the Radar section draws
+    if MapExtras.gps-shown : VerticalLayout { spacing: 4px;
+        if MapExtras.gps-hint != "" : Text { text: MapExtras.gps-hint; font-size: Theme.font-hint; color: Theme.dim; wrap: word-wrap; }
+        GpsRowView { gps: MapExtras.gps; }
     }
 }
 
@@ -468,8 +516,12 @@ export component PageBody inherits Rectangle {
     map-trail-style(a, b) => { KitEvents.page-map-trail-style(a, b); }
     callback map-reset-coverage(int);
     map-reset-coverage(a) => { KitEvents.page-map-reset-coverage(a); }
+    callback map-world(int);
+    map-world(a) => { KitEvents.page-map-world(a); }
     callback map-stop-following(int);
     map-stop-following(a) => { KitEvents.page-map-stop-following(a); }
+    callback map-keep-following(int);
+    map-keep-following(a) => { KitEvents.page-map-keep-following(a); }
     callback map-sort-clicked(int);
     map-sort-clicked(a) => { KitEvents.page-map-sort-clicked(a); }
     callback map-sort-dir(int);
@@ -560,9 +612,9 @@ export component PageBody inherits Rectangle {
         if root.page.kind == 5 && !root.page.globe.active : VerticalLayout { spacing: 0px; vertical-stretch: 1;
             if root.page.view3d == 2 : SondeViewBar { }
             MapToolbar { map: root.page.map; index: root.index;
-                fit(p) => { root.map-fit(p); } set-rx(p) => { root.map-set-rx(p); } on-screen(p, v) => { root.map-on-screen(p, v); } coverage(p, v) => { root.map-coverage(p, v); }
+                fit(p) => { root.map-fit(p); } world(p) => { root.map-world(p); } set-rx(p) => { root.map-set-rx(p); } on-screen(p, v) => { root.map-on-screen(p, v); } coverage(p, v) => { root.map-coverage(p, v); }
                 trails(p, v) => { root.map-trails(p, v); } alt-colours(p, v) => { root.map-alt-colours(p, v); } trail-style(p, v) => { root.map-trail-style(p, v); } reset-coverage(p) => { root.map-reset-coverage(p); }
-                stop-following(p) => { root.map-stop-following(p); } sort-clicked(p) => { root.map-sort-clicked(p); } sort-dir(p) => { root.map-sort-dir(p); } }
+                stop-following(p) => { root.map-stop-following(p); } keep-following(p) => { root.map-keep-following(p); } sort-clicked(p) => { root.map-sort-clicked(p); } sort-dir(p) => { root.map-sort-dir(p); } }
             MapJBar { m: root.page.map.j; index: root.index; }
             if root.page.view3d == 2 && View3D.sonde-on : SondeWell { vertical-stretch: 1; }
             if !(root.page.view3d == 2 && View3D.sonde-on) : HorizontalLayout { spacing: 0px; vertical-stretch: 1;
@@ -574,8 +626,9 @@ export component PageBody inherits Rectangle {
                     }
                     Table { vertical-stretch: 1; columns: root.page.map.list-columns; rows: root.page.map.list-rows; column-widths: root.page.map.list-widths; empty-text: @tr("No targets. Decoded aircraft, ships and stations appear here.");
                         clicked(r) => { root.map-list-clicked(root.index, r); } row-pressed(r) => { root.map-list-double-clicked(root.index, r); } }
+                    if root.page.map.list-footnote != "" : Text { text: root.page.map.list-footnote; font-size: Theme.font-hint; color: Theme.dim; wrap: word-wrap; horizontal-stretch: 1; }
                 }
-                MapPane { horizontal-stretch: 1; base: root.page.map.base; targets: root.page.map.targets; legend: root.page.map.legend; grid-labels: root.page.map.j.grid-labels; scale-text: root.page.map.scale-text;
+                MapPane { horizontal-stretch: 1; base: root.page.map.base; targets: root.page.map.targets; legend: root.page.map.legend; chart-lines: root.page.map.chart-lines; key-lines: root.page.map.key-lines; grid-labels: root.page.map.j.grid-labels; scale-text: root.page.map.scale-text;
                     scale-frac: root.page.map.scale-frac; attribution: root.page.map.attribution; zoom-in-enabled: root.page.map.zoom-in; zoom-out-enabled: root.page.map.zoom-out;
                     pick-armed: root.page.map.pick-armed; hover-text: root.page.map.hover-text;
                     target-clicked(i) => { root.map-target-clicked(root.index, i); } target-double-clicked(i) => { root.map-target-double-clicked(root.index, i); }

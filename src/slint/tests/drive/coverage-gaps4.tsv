@@ -1,0 +1,33 @@
+182	ASSERTED	wf-gap	stop the receiver nine seconds, start it: state wf.gap > 0 with both ages named; a steady picture reads wf.gap == -1
+186	NOT_DRIVABLE	-	needs a change of the display range (a menu slider the scripted input cannot reach); test_slint_host_wfrows holds the run of rows
+187	NOT_DRIVABLE	-	needs a change of the display range (a menu slider the scripted input cannot reach); test_slint_host_wfrows holds the rail position
+212	DRIVEN	airband-spectrum	the tip is a hover; the monitor listening is driven and the plots read back
+264	ASSERTED	airband-spectrum	state wf.airmarksmax > 0 while listening (a block lands and moves, so one tick may have none), wf.airmarks == 0 after STOP
+265	ASSERTED	airband-spectrum	state wf.airblock is the engine's block sentence while listening
+266	DRIVEN	airband-spectrum	the names appear only while a squelch is open, which the generator source does not guarantee; test_slint_host_tools holds the sentence
+267	ASSERTED	airband-spectrum	state wf.showvfo == 0 and wf.showpeak == 0 while listening, 1 after STOP
+1698	NOT_DRIVABLE	-	a tooltip
+202	NOT_DRIVABLE	-	a four-second hover tip: the scripted input has no hover; held by test_slint_spectrum (row 202) and test_slint_waterfall (row 213): the tip is not shown at 1.5 s, shown at 4.5 s, replaces the gesture tip, restarts on a move
+213	NOT_DRIVABLE	-	a four-second hover tip: the scripted input has no hover; held by test_slint_spectrum (row 202) and test_slint_waterfall (row 213): the tip is not shown at 1.5 s, shown at 4.5 s, replaces the gesture tip, restarts on a move
+1529	NOT_DRIVABLE	-	a tooltip
+368	ASSERTED	map-bar	the GPS port and baud boxes are on the map page (expect enabled)
+372	NOT_DRIVABLE	-	needs a dragged map with a followed target; held by test_slint_host_kit (mapDragPans / mapFollowAnswer: a drag while following asks and does not pan, Keep following and Stop following answer it)
+1719	NOT_DRIVABLE	-	the question is asked by a dragged map with a followed target (see 372)
+1720	NOT_DRIVABLE	-	see 372
+1721	NOT_DRIVABLE	-	see 372
+1713	ASSERTED	gaps-map-trail	Line and Ribbon read back as cfg.mapTrailStyle
+1714	ASSERTED	map-bar	the Width slider read back as cfg.mapTrailWidthPx
+1731	NOT_DRIVABLE	-	a readout under the list
+1745	NOT_DRIVABLE	-	the key is drawn once the page has satellite tracks (a satellite page is known by its tracks); the drive's satellites plugin publishes none offline
+1750	NOT_DRIVABLE	-	captions
+1752	NOT_DRIVABLE	-	a note
+1756	NOT_DRIVABLE	-	the Off key throws the Trails flag (driven by the Trails tick in gaps-map-trail); not driven on the satellites page
+1765	NOT_DRIVABLE	-	notes
+1766	NOT_DRIVABLE	-	a key to the marks, drawn on the picture
+1588	NOT_DRIVABLE	-	the knob figures are a readout
+1967	NOT_DRIVABLE	-	a picture under the glass; needs a basemap plugin
+1968	NOT_DRIVABLE	-	replaced on purpose: old look only
+4087	ASSERTED	globe-satellites	NIGHT SIDE toggled, state globe.satellites night=0 / 1
+3075	ASSERTED	survey-3d	EXPORT CSV clicked twice, state view3d.survey.exportnote names the file and then "(2)"
+4091	NOT_DRIVABLE	-	deferred: Doppler and GRANT RECEIVER CONTROL are not built
+3042	NOT_DRIVABLE	-	a click aimed at a projected marker: the scripted input cannot aim at one; test_slint_host_radar3d testPick holds the pick and test_slint_scene3d_well holds the well's pick callback (a press that did not drag, with its fractions)

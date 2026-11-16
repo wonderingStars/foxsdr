@@ -54,9 +54,9 @@ std::uint32_t ramp(double t, int alphaLow, int alphaHigh) {
 
 constexpr LayerInfo kLayers[kLayerCount] = {
     {FOX_TR_NOOP("Airspaces"), FOX_TR_NOOP("Closed outlines a plugin publishes: airspaces, footprints and boundaries."), "", false},
-    {FOX_TR_NOOP("Weather radar"), FOX_TR_NOOP("Rain radar over the map."), "", true},
-    {FOX_TR_NOOP("Receiver map"), FOX_TR_NOOP("Other people's receivers on the map."), "", true},
-    {FOX_TR_NOOP("Repeaters"), FOX_TR_NOOP("Repeater stations on the map."), "", true},
+    {FOX_TR_NOOP("Weather radar"), FOX_TR_NOOP("Rain radar over the map. What is missing: a rain-radar picture or tile source; none is fitted."), "", true},
+    {FOX_TR_NOOP("Receiver map"), FOX_TR_NOOP("Other people's receivers on the map. What is missing: a directory of other people's receivers with their positions; none is fitted."), "", true},
+    {FOX_TR_NOOP("Repeaters"), FOX_TR_NOOP("Repeater stations on the map. What is missing: a repeater directory with positions and frequencies; none is fitted."), "", true},
     {FOX_TR_NOOP("Heat map"), FOX_TR_NOOP("Where aircraft were heard from your receiver position, hottest where most often, fading over days."), FOX_TR_NOOP("Heat map: your own receiver's aircraft"), false},
     {FOX_TR_NOOP("24 h range"), FOX_TR_NOOP("The furthest each bearing has been heard in the last 24 hours, as an outline."), FOX_TR_NOOP("Range outline: your own receiver, last 24 hours"), false},
     {FOX_TR_NOOP("APRS paths"), FOX_TR_NOOP("Thin faint lines for the digipeaters a packet went through. The APRS plugin draws them only while its digipaths setting is on."), "", false},

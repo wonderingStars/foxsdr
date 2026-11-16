@@ -28,9 +28,11 @@
 #include <slint.h>
 
 #include "foxsdr_api.h"
+#include "airmarks_logic.hpp"
 #include "host_logic.hpp"
 #include "signatures.hpp"
 #include "spectrum_extras.hpp"
+#include "wfrows_logic.hpp"
 
 namespace foxsdr::slinthost {
 
@@ -116,6 +118,11 @@ struct PaneFigures {
     int markerCount = 0;
     std::string keyFoot, footTuned, footRest;
     std::vector<std::string> keyLabels;
+    // WINDOW GAPS LANE 4: the waterfall's gap break, key coverage and range rail (wfrows_logic.hpp), and what the Airband monitor puts on the plots while it listens
+    WfChromeFig wfChrome;
+    bool airListening = false;                  // the monitor listens: no tuned band, no passband peak, no band grabs
+    std::string airBlock, airHearing;           // the engine's block sentence and "Hearing: names" ("" when nothing is open)
+    std::vector<AirMarkFig> airMarks;
 };
 
 struct RadioView {
@@ -153,10 +160,12 @@ struct RadioView {
     foxsdr::slintextras::TrackReading track;                   // Q3
     foxsdr::slintextras::AbReading abRead;                     // S21
     double lastMeasureS = 0;
+    WfRowLog wfRows;                                           // window gaps lane 4 (rows 182, 186, 187): when each waterfall row arrived and the range it was mapped through
 
     explicit RadioView(int slotIndex = 0, PictureSize pictures = {}) : slot(slotIndex), wells(pictures) {
         state.structSize = sizeof(state);
         lastInfo.structSize = sizeof(lastInfo);
+        wfRows.reset(static_cast<int>(wells.size.wfH));
     }
 
     // ---- the view window and its fractions ----
@@ -188,6 +197,7 @@ struct RadioView {
     // and the next frame painted at once. The window shows the old images until the next publish.
     void resizePictures(PictureSize s) {
         wells = WellBuffers(s);
+        wfRows.reset(static_cast<int>(s.wfH));
         resetTrace(traceState);
         sinceSeq = 0;
     }

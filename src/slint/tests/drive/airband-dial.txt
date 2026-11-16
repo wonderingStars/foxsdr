@@ -1,0 +1,26 @@
+#! frames=700 bank=2 sections=2:4
+# airband-dial (window gaps lane 4, audit item U5): while the Airband monitor listens, the receiver strip's SQUELCH dial is the monitor's squelch (the classic deck's rule): turning it sets
+# fact.airband.squelchDb over -110..0 and leaves the receiver's own squelch (state squelchDb) where it was; once the monitor stops the dial is the receiver's again. The Airband body's own
+# slider is the SECOND "Squelch" (tools-airband.txt), so the strip's dial is the first.
+10 state running == 1
+state squelchDb == -120
++1 type "Airport code" "egll"
++1 key enter
++2 click "Look up"
++30 state count.bookmarks > 0
++1 scroll "Airport code" 700
++3 click "LISTEN"
++30 state fact.airband.listening == 1
+# listening: the dial sets the monitor's squelch (0.8 of -110..0 is -22 dB; the monitor's own default is the middle, so 0.5 would change nothing) and not the receiver's
++5 slider "Squelch"#1 0.8
++30 state fact.airband.squelchDb > -26
+state fact.airband.squelchDb < -18
+state squelchDb == -120
++1 click "STOP"
++30 state fact.airband.listening == 0
+# stopped: the same dial is the receiver's squelch again, and the monitor's keeps what it was given
++5 slider "Squelch"#1 0.5
++20 state squelchDb > -80
+state squelchDb < -40
+state fact.airband.squelchDb > -26
+state fact.airband.squelchDb < -18

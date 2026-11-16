@@ -308,12 +308,12 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 |---|---|---|---|---|
 | 180 | Waterfall picture | readout | PRESENT | host-scrolled picture (scrollWaterfallRow), newest row at the top |
 | 181 | Elapsed-time strip (gutter) | readout | PRESENT | 'Age' cap and ticks from the measured publish rate |
-| 182 | Reception-gap break | overlay/marker | DEFERRED | the component takes gap-pos; the host's gap detection from frame stamps is phase 2 |
+| 182 | Reception-gap break | overlay/marker | PRESENT | window gaps lane 4: wfrows_logic.cpp WfRowLog / wfChrome (the classic's widest-jump rule) fed from main.cpp paneTick (rv.wfRows.push on every scrolled row), set at main.cpp publishPicture (set_wf_gap_pos / _above / _below), drawn by waterfall.slint:526; proven by test_slint_host_wfrows and the drive wf-gap |
 | 183 | Strength key plate | readout | PRESENT | the plate with title, ramp, labels and floor/ceiling line |
 | 184 | Key: manual flag | lamp/indicator | PRESENT | warn chip MANUAL while Range: Manual |
 | 185 | Key: floor/ceiling | readout | PRESENT | 'FLOOR x dB · CEILING y dB · auto/manual' |
-| 186 | Key: coverage | readout | DEFERRED | the component takes key-coverage; the host does not yet track which rows a range change left behind (phase 2) |
-| 187 | Range-changed rail | overlay/marker | DEFERRED | the component takes rail-pos; host tracking of the change row is phase 2 |
+| 186 | Key: coverage | readout | PRESENT | window gaps lane 4: the key's "APPLIES TO TOP n LINES" line: WfRowLog::rangeRows (rows sharing the newest floor / ceiling pair) -> main.cpp set_key_coverage -> waterfall.slint:464; test_slint_host_wfrows |
+| 187 | Range-changed rail | overlay/marker | PRESENT | window gaps lane 4: the range-changed rail: WfChromeFig::railPos -> set_wf_rail_pos / set_wf_rail_label ("RANGE CHANGED") -> waterfall.slint:385; test_slint_host_wfrows |
 | 188 | Foot line 1: scroll | readout | PRESENT | 'n lines/s · n s of history' from the measured rate |
 | 189 | Foot line 2: decode/receive status | readout | PRESENT | tuned frequency in accent-soft · mode · decoding: <fed decoder> / receiving / STOPPED |
 | 190 | VFO line (tuned frequency) | overlay/marker | PRESENT | 1 px line at the tuned frequency |
@@ -333,7 +333,7 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | 199 | Tooltip over band centre | tooltip | PRESENT | the view's tooltip strings by where the pointer rests |
 | 200 | Tooltip over band edge | tooltip | PRESENT | the view's tooltip strings by where the pointer rests |
 | 201 | Tooltip off the band | tooltip | PRESENT | the view's tooltip strings by where the pointer rests |
-| 202 | Rest tip (4 s) | tooltip | DEFERRED | the 4 s rest tip is phase-2 polish |
+| 202 | Rest tip (4 s) | tooltip | PRESENT | window gaps lane 4: the 4 s rest tip "Right-click to change the range and display": spectrum.slint / waterfall.slint rest-tip + rest-tip-shown (a second timer, replaces the gesture tip, a move or a press restarts it), passed in main.slint |
 | 203 | Zoom the spectrum in | key (shortcut) | PRESENT | Ctrl++ / Ctrl+- / Ctrl+Delete and the toolbar's zoom keys |
 | 204 | Zoom the spectrum out | key (shortcut) | PRESENT | Ctrl++ / Ctrl+- / Ctrl+Delete and the toolbar's zoom keys |
 | 205 | Zoom back to the full span | key (shortcut) | PRESENT | Ctrl++ / Ctrl+- / Ctrl+Delete and the toolbar's zoom keys |
@@ -348,8 +348,8 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | 209 | Right-click | drag/gesture | PRESENT | the marker menu (Menu) at the pointer |
 | 210 | Wheel / Shift+wheel | drag/gesture | PRESENT | as the spectrum |
 | 211 | Tooltip (normal) | tooltip | PRESENT | the waterfall tooltip |
-| 212 | Tooltip (Airband listening) | tooltip | DEFERRED | the Airband monitor is a phase-3 plugin-kit feature |
-| 213 | Rest tip (4 s) | tooltip | DEFERRED | the 4 s rest tip is phase-2 polish |
+| 212 | Tooltip (Airband listening) | tooltip | PRESENT | window gaps lane 4: while the Airband monitor listens the waterfall tip drops the Shift + wheel line (main.slint, show-vfo) and Shift + wheel stays the zoom (main.cpp wheel); drive airband-spectrum |
+| 213 | Rest tip (4 s) | tooltip | PRESENT | window gaps lane 4: the 4 s rest tip "Right-click to change the range and display": spectrum.slint / waterfall.slint rest-tip + rest-tip-shown (a second timer, replaces the gesture tip, a move or a press restarts it), passed in main.slint |
 | 214 | Marker tooltip | tooltip | PRESENT | marker-hovered within 4 px of a line or over its tab shows M<n> + note |
 
 ## Spectrum and waterfall — Trace-mode menu (right-click on the spectrum)
@@ -430,10 +430,10 @@ Every row of `inventory/main-window-frame.txt` and `inventory/spectrum-waterfall
 | 261 | Plugin mark: point | overlay/marker | PRESENT | FOXAPI_LIST_MARKERS lines in the mark's colour, dashed when flagged |
 | 262 | Plugin mark: span | overlay/marker | PRESENT | tinted band with edges |
 | 263 | Plugin marks on waterfall | overlay/marker | PRESENT | the same lines down the picture unless SPECTRUM_ONLY |
-| 264 | Airband channel marks | overlay/marker | DEFERRED | the Airband monitor is a phase-3 plugin-kit feature |
-| 265 | Airband caption: block | readout | DEFERRED | the Airband monitor is a phase-3 plugin-kit feature |
-| 266 | Airband caption: hearing | readout | DEFERRED | the Airband monitor is a phase-3 plugin-kit feature |
-| 267 | Airband monitor effect on plots | lamp/indicator | DEFERRED | the Airband monitor is a phase-3 plugin-kit feature |
+| 264 | Airband channel marks | overlay/marker | PRESENT | window gaps lane 4: one mark per channel of the block on the air (tools_logic AirbandModel::marks from the live list, airmarks_logic airbandMarks: 3 px at least, centre in view) -> main.cpp publishPicture set_airband_channels -> spectrum.slint:250; test_slint_host_airmarks, drive airband-spectrum |
+| 265 | Airband caption: block | readout | PRESENT | window gaps lane 4: the engine's block sentence under the spectrum header: fig.airBlock = AirbandModel::block -> set_airband_block -> spectrum.slint:469 |
+| 266 | Airband caption: hearing | readout | PRESENT | window gaps lane 4: "Hearing: <names>" (amber) = AirbandModel::hearing_line while a squelch is open -> set_airband_hearing -> spectrum.slint:478 |
+| 267 | Airband monitor effect on plots | lamp/indicator | PRESENT | window gaps lane 4: while listening: no tuned band and no band grabs (set_show_vfo false), no passband peak (set_show_peak false), no follow-the-retune of the view (paneTick); main.cpp publishPicture; drive airband-spectrum |
 
 ## Spectrum and waterfall — Settings that change what the centre draws (live elsewhere)
 
@@ -613,11 +613,11 @@ Every row of the five plugin tabs of `inventory/` (`decode-bank-plugin-host.txt`
 | 365 | Trail width | slider | PRESENT | the saved width (mapTrailWidthPx) is applied by TileCompositor::setTrailLook in map_compositor.cpp (main.cpp -> KitPublisher::setMapLook -> kit_publish.cpp fillMap), half-width = width / 2, bounded 1 .. the wingspan of the icon in force (clampTrailWidthPx); the slider itself is the SYSTEM Display body's (row 1398) |
 | 366 | Reset coverage | button (small) | PRESENT | the Reset coverage key |
 | 367 | Coverage status | readout | PRESENT | the coverage status sentence |
-| 368 | GPS position | text field, combo, buttons | DEFERRED | the GPS position row: the serial-port page is a System bank page (later) |
+| 368 | GPS position | text field, combo, buttons | PRESENT | window gaps lane 4: the GPS row on the Maps page: MapToolbar draws the same GpsRowView as the Radar fold (pages.slint MapExtras global, set by ToolsPublisher::publish from the radar model's gps row) |
 | 369 | Target list | table | PRESENT | the target list (Callsign / ID / Note) with the Sort key and the Up / Down key; click selects and centres, double-click follows; the hover tip shows callsign, altitude and speed only |
 | 370 | Details button | button (small) | RELOCATED | a click on a list row selects the target for the Target details drawer; there is no Details key |
 | 371 | Stop following | button (small) | PRESENT | the following note and the Stop following key |
-| 372 | Stop following? dialog | dialog | DEFERRED | a drag while following is refused instead of asked; Stop following is the key |
+| 372 | Stop following? dialog | dialog | PRESENT | window gaps lane 4: a drag while following asks "Stop following?": MapPage::followAsk, MapModel.follow-ask, a card under the bar (pages.slint MapToolbar) with Stop following / Keep following (KitEvents.page-map-keep-following); test_slint_host_kit, drive map-follow-ask |
 
 ## DECODE bank and plugin host — Target details (window)
 
@@ -818,7 +818,7 @@ Every row of the five plugin tabs of `inventory/` (`decode-bank-plugin-host.txt`
 | 490 | Replay | env var (not UI) | PRESENT | a config file / env var: not a window control (the inventory lists it for completeness) |
 | 491 | Beast feed | env var (not UI) | PRESENT | a config file / env var: not a window control (the inventory lists it for completeness) |
 | 492 | Aircraft target | map track | PRESENT | a target on the map page (MapPane: an aircraft icon, labelled, with a row in the target list) |
-| 493 | Aircraft silhouette | map track (flag bits) | DEFERRED | MapPane draws one icon per kind (an aircraft icon); the category silhouettes are not ported |
+| 493 | Aircraft silhouette | map track (flag bits) | PRESENT | window gaps lane 4: the classic's eleven silhouettes (gui/aircraft_icon_pixels.hpp) as MapIcons.aircraft, chosen by mapicons_logic aircraftIconIndex from the track's category, over an altitude halo (map.slint, kit_publish.cpp); the registry's type code (light helicopter) is not asked on the map; test_slint_host_mapicons |
 | 494 | Emergency flag | map track flag | PRESENT | the emergency ring: a red halo that blinks (MapPane) |
 | 495 | Heard without a position | target list / detail | PRESENT | the unplaced note and the 'heard without a position' count in the target list |
 | 496 | Estimated position | map track flag | PRESENT | the estimated ring: dashed (MapPane) |
@@ -2281,7 +2281,7 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 | 1526 | Scope switch row | key (switch row, opens window) | PRESENT | the Section row 'Demod scope' (bank 2 row 0): a press -> ToolsEvents.scope-clicked -> applyScopeClicked (a [local] Deferred 'demod-scope') -> ToolsPublisher::Hooks::demodScopeClicked -> ScopePublisher::toggleDemod: the window opens and the second press shuts it (scope-demod-open.txt: state scope.demodOpen) |
 | 1527 | Input chip | readout | PRESENT | ScopePublisher hands the input, the open flag and the tap's liveness to ToolsPublisher::setScopeFacts, so readScopeChip words the chip AUDIO / SPEC / I/Q / VECTOR / MPX and tones it Good while the window is open and the tap advances |
 | 1528 | Lamp | lamp/indicator | RELOCATED | the lamp is the chip's tone (Good while the window is open and the tap advances): the Section row draws no dot (show-dot false in sectionsFor) |
-| 1529 | Tooltip | tooltip | DEFERRED | the row's sentence is not found in tools_bank.slint or main.slint: main.slint passes no tooltip to the Section row |
+| 1529 | Tooltip | tooltip | PRESENT | window gaps lane 4: the Demod scope row's tooltip: Section tooltip passed for bank 2 row 0 (main.slint), the classic's four lines |
 
 ## TOOLS bank — DEMOD SCOPE (window)
 
@@ -2362,7 +2362,7 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 | 1585 | Range drums | readout | PRESENT | Drum (a bay with its caption and four digits): 'TGT RANGE NM' with the selected aircraft's range, else 'SET RANGE NM' with the scope's (RadarFrame::drumCaption / drumRange); digits in a bay, not rolling cells |
 | 1586 | Track drums | readout | PRESENT | Drum TRACKS: three digits, every aircraft heard, ungated (RadarFrame::drumTracks); scope-radar-targets.txt reads state scope.drumTracks |
 | 1587 | GAIN knob | dial/knob | PRESENT | GainKnob: a drag of 12 px or a wheel notch is one detent -> radar-knob -> RadarScope::knobDetent (2 units a detent, clamped to the stage's travel, kept 0.5 s locally through ScopeGainLocal) -> FOXAPP_OP_SET_GAIN_NO_READBACK with the stage and the dB; dead without a radio or with its AGC on (state scope.knobDead). The strip's Gain lane stays a gain control too |
-| 1588 | Knob scale ticks | readout | DEFERRED | the five tick numbers around the knob are in the model (RadarFrame::knobTicks, knobLit) but the view does not draw them: the pointer, the figure under the knob and the stage note are |
+| 1588 | Knob scale ticks | readout | PRESENT | window gaps lane 4: the five scale numbers round the GAIN knob on the pointer's arc, the one nearest the setting lit (scope_modes.slint GainKnob, RadarScopeModel.knob-ticks / knob-lit) |
 | 1589 | Knob stage note | readout | PRESENT | Text under the knob: the stage's name, 'no device' or 'auto gain is on' (RadarFrame::knobNote); the figure above it ('30 dB', 'N/A', 'AUTO') |
 | 1590 | POWER button | button (round, lit ring) | PRESENT | Key (accessible 'POWER'), lit while the receiver runs -> radar-power -> FOXAPI_OP_RUN with ival[0] = 0 or 1; scope-radar-open.txt stops and starts the receiver and reads state running. A lit key, not the classic's round ring |
 | 1591 | Power state text | lamp/indicator | PRESENT | the key's own word: ON LINE / STANDBY (RadarFrame::powerText; state scope.powerText) |
@@ -2377,8 +2377,8 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 | 1600 | Aircraft icons and trails | overlay/marker | PRESENT | targets as items over the ground: the Slint map's aircraft glyph (icons/map-aircraft.svg) turned to its course in its altitude band's colour (grey-blue when unknown, red for an emergency, faded by age), a ring when selected or in emergency, its label beside it; trails stroked into the ground (off / line / ribbon, 256 points, a point when it moved 50 m). DEPARTURE: one glyph, not the classic's silhouettes by category and registry type |
 | 1601 | Antenna mark | overlay/marker | PRESENT | the view centre's pink dot, and while the view is panned a green cross and 'RX' at the antenna's place (RadarFrame::rxMarkX / rxMarkY) |
 | 1966 | Tube optics: ground, coastline, phosphor, sweep | overlay/marker | PRESENT | paintRadarGround (radar_compositor.cpp): the dark ground, the PHOSPHOR green wash with the compiled-in coastline under it (azimuthal-equidistant projection, in range only), the crosshair, the scan lines; the sweep is one fan picture (paintSweepFan) turned about the view centre by the host's angle, 4.2 s a turn. With PHOSPHOR off the ground is plain and the coast is not drawn (the classic still draws it) |
-| 1967 | Basemap tiles under the tube and the attribution line | overlay/marker | DEFERRED | the classic reprojects a basemap plugin's tiles under the glass (scopeGroundPoint / scopeTileWindow) and prints its attribution under the instrument; the Slint tube draws the coastline only. The kit's BasemapClient is in the host; a ScopeGroundCompositor over it is the work |
-| 1968 | Cabinet case: gradient, screws, layout rules | overlay/marker | DEFERRED | the classic's brass case, its four screws and its scale rule (822 px slab, 0.42-2.2) are not drawn: the cabinet is Workbench panels sized from the centre column (the tube is the largest square the height and width allow; the LCD is dropped under 900 px of width) |
+| 1967 | Basemap tiles under the tube and the attribution line | overlay/marker | PRESENT | window gaps lane 4: a basemap plugin's tiles under the glass: radar_compositor.cpp paintTiles / radarTileZoom (range and bearing -> destinationPoint -> web-mercator pixel), fed from scope_publish.cpp with the kit's BasemapClient; the credit line under the glass is RadarScopeModel.attribution (never dropped while tiles are drawn); test_slint_host_radar tileGround. UNVERIFIED with a real basemap plugin |
+| 1968 | Cabinet case: gradient, screws, layout rules | overlay/marker | RELOCATED | REPLACED ON PURPOSE (window gaps lane 4): the brass case, its screws and gradient are old look only; the scale the user reads (range rings, bearing ticks, the five knob figures) is on the tube and knob in the Workbench panels |
 
 ## TOOLS bank — Radar data panel (LCD) - three tabs
 
@@ -2500,7 +2500,7 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 | 1695 | Row tick | checkbox | PRESENT | Tick (14 px) with the tooltip on each channel row -> airband-tick(id, on) -> FOXAPP_OP_BOOKMARK_TICK |
 | 1696 | Row lamp | lamp/indicator | PRESENT | LampDot green on AirbandRow.heard, off otherwise |
 | 1697 | Row | list (selectable) | PRESENT | AirbandRowView's selectable '118.1000  name' (dim while listening and off the air) with the amber heard time -> airband-tune(id) -> FOXAPP_OP_AIRBAND action 6: the monitor stops and the receiver tunes there alone. The level tooltip is the next row |
-| 1698 | Row level tooltip | tooltip | DEFERRED | the tooltip half of the inventory's one Row line 1318, ticked apart so the click is not marked missing: AirbandRowView draws no tooltip and AirbandRow has no tooltip field (readAirband makes the 'Level -42 dB (squelch -55 dB)' text as a host extra, AirbandRow.tooltip); the family did not build it |
+| 1698 | Row level tooltip | tooltip | PRESENT | window gaps lane 4: AirbandRow.tooltip (tools_bank.slint) filled from AirbandRow::tooltip in tools_publish.cpp mapAirband and drawn by a TipTimer on the row (AirbandRowView): "Level -42 dB (squelch -55 dB)" |
 | 1699 | Squelch | slider | PRESENT | SliderRow (squelch-text readout, tooltip) -> airband-squelch(norm) -> applyAirbandSquelch: FOXAPP_OP_AIRBAND action 4 with -110 + norm * 110 dB. The ImGui control sends on release; the Slint Slider calls changed on every drag step and has no release callback, so a drag sends one op per step unless the publisher (no tools publisher is in the tree) holds them back (unverified) |
 | 1700 | Above the noise | button (small) | PRESENT | Key, disabled unless listening -> airband-above-noise -> FOXAPP_OP_AIRBAND action 3 (the engine's rule); no tooltip is drawn |
 | 1701 | Hold | number field | PRESENT | LineInput (64 px, mono, right-aligned) 'hold 2.0 s' with the tooltip and a 's' unit label -> airband-hold on commit -> applyAirbandHold: FOXAPP_OP_AIRBAND action 5 with seconds clamped 0..60 (the first number in the text) |
@@ -2520,15 +2520,15 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 | 1710 | Coverage | checkbox | RELOCATED | kit map page (6.38) row 361: the Coverage checkbox |
 | 1711 | Trails | checkbox | RELOCATED | kit map page (6.38) row 362: the Trails checkbox |
 | 1712 | Altitude colours | checkbox | RELOCATED | kit map page (6.38) row 363: the Altitude colours checkbox, disabled without Trails |
-| 1713 | Trail style | dropdown/combo | DEFERRED | the saved style is applied by the map (kit map page row 364), but no trail-style dropdown is drawn on the page or in the Display body; not found in pages.slint |
-| 1714 | Trail width | slider | DEFERRED | the saved width is applied by the map (kit map page row 365); no trail width slider is drawn on the page; the same setting is the SYSTEM Display body's Trail width (row 1398) |
+| 1713 | Trail style | dropdown/combo | PRESENT | ALREADY BUILT (found by window gaps lane 4): Line / Ribbon keys pages.slint:372-373 -> KitEvents.page-map-trail-style -> kit_publish.cpp on_page_map_trail_style (also SYSTEM > Display) |
+| 1714 | Trail width | slider | PRESENT | window gaps lane 4: a Width slider on the map page's bar (pages.slint MapToolbar) over the same setting as the Display body's Trail width (SystemEvents.display-trail-px; MapExtras.trail-px set by SystemPublisher::mapDisplay) |
 | 1715 | Reset coverage | button (small) | RELOCATED | kit map page (6.38) row 366: the Reset coverage key |
 | 1716 | Coverage readout | readout | RELOCATED | kit map page (6.38) row 367: the coverage status sentence |
 | 1717 | GPS row | (shared GPS block) | RELOCATED | the kit map page draws no GPS row (6.38 row 368); the row lives in the SYSTEM bank's Serial ports (row 1442) and in the Radar fold (rows 1566 to 1572) |
 | 1718 | Attribution credit | readout | RELOCATED | kit map page (6.38): MapPane's attribution line (the basemap's text, or 'Coastline: Natural Earth (public domain)' on the coastline map); row 1133 is the basemap plugin's own row |
-| 1719 | Stop following? | dialog | DEFERRED | kit map page row 372 stays deferred: pages.slint has no Stop following? dialog and page-map-panned silently refuses a drag while following; Stop following is the key |
-| 1720 | Stop following (dialog) | button | DEFERRED | no dialog, so no key (row 372); the toolbar's Stop following key is row 371 |
-| 1721 | Keep following | button | DEFERRED | no dialog, so no Keep following key (row 372); the drag is refused instead |
+| 1719 | Stop following? | dialog | PRESENT | window gaps lane 4: see row 372: the question is asked on the first drag, in the classic's words |
+| 1720 | Stop following (dialog) | button | PRESENT | window gaps lane 4: Stop following (the question's key): pages.slint MapToolbar -> page-map-stop-following clears the follow and the question |
+| 1721 | Keep following | button | PRESENT | window gaps lane 4: Keep following: page-map-keep-following clears only the question |
 
 ## TOOLS bank — Track list (left of the map page)
 
@@ -2543,7 +2543,7 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 | 1728 | Row (callsign cell) | list (selectable, spans row) | RELOCATED | kit map page (6.38) row 369: a click selects and centres the map on it (zoom unchanged), a double-click follows; list rows are not dimmed by staleness (only the map target's alpha follows it), and an estimated position carries the 'estimated' note in the Note column |
 | 1729 | Details | button (small) | RELOCATED | kit map page (6.38) row 370: there is no Details key; a click on a row selects it for the Target details drawer |
 | 1730 | Heard-without-position rows | list | RELOCATED | kit map page (6.38): muted, non-pressable rows with the target's id and its unplaced note, always listed (On screen only does not hide them) and with no Details key |
-| 1731 | Distance footnote | readout | DEFERRED | not found in pages.slint or kit_publish.cpp: no footnote under the list; the RX readout says 'no receiver position: Set RX here, then click the map' instead |
+| 1731 | Distance footnote | readout | PRESENT | window gaps lane 4: MapModel.list-footnote "Distance and bearing need the RX position above." under the list while no position is set (kit_publish.cpp, pages.slint) |
 | 1732 | Hover block | tooltip | RELOCATED | kit map page (6.38) row 369: the hover tip over a map target shows callsign, altitude (ft) and speed (kt) only, not the full detail block |
 
 ## TOOLS bank — Map canvas (all map pages)
@@ -2567,18 +2567,18 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 |---|---|---|---|---|
 | 1743 | Plate title | readout | RELOCATED | kit map page (6.38): a satellite plugin opens the generic map page titled '<plugin> map' (rows 1005 and 1006); the SATELLITES MAP plate and its deck of wells are deferred (row 357) |
 | 1744 | FIT | key | RELOCATED | kit map page (6.38) row 357: the Fit key; it is never dead and has no 'nothing is plotted' tooltip |
-| 1745 | WHOLE WORLD | key | DEFERRED | kit map page row 357: the satellites page's own deck, WHOLE WORLD included, is deferred; the - key backs out a step at a time |
+| 1745 | WHOLE WORLD | key | PRESENT | window gaps lane 4: WHOLE WORLD key on the satellites window's bar (pages.slint, KitEvents.page-map-world -> kit_publish.cpp: the whole planet in the window, follow cleared) |
 | 1746 | STOP FOLLOWING | key | RELOCATED | kit map page (6.38) row 371: the Stop following key, drawn while following |
 | 1747 | Strip text | readout | RELOCATED | kit map page (6.38) row 371: the 'following <id>' text in the toolbar; the idle sentence 'The map moves on its own only while a target is followed.' is not found in pages.slint |
 | 1748 | Latitude cell | text field (click to edit) | RELOCATED | the typed latitude is the Radar fold's field (row 1562); the kit map page shows an RX readout, not a click-to-edit cell (6.38 row 358) |
 | 1749 | Longitude cell | text field (click to edit) | RELOCATED | the typed longitude is the Radar fold's field (row 1563); the kit map page shows an RX readout, not a click-to-edit cell (6.38 row 358) |
-| 1750 | Caption labels | readout | DEFERRED | not found in pages.slint: the RECEIVER POSITION / LATITUDE / LONGITUDE captions belong to the satellites deck, which is deferred (row 357) |
+| 1750 | Caption labels | readout | PRESENT | window gaps lane 4: RECEIVER POSITION / LATITUDE / LONGITUDE captions on the satellites page's position line (kit_publish.cpp rx_text for a satellite page) |
 | 1751 | SET FROM MAP CLICK | key (latched while armed) | RELOCATED | kit map page (6.38) row 358: the Set RX here key, lit and reading 'Click the map...' while armed (not a two-line SET FROM / MAP CLICK plate) |
-| 1752 | Position note | readout | DEFERRED | not found in pages.slint or kit_publish.cpp: the 'Position set. This window measures...' sentence is not drawn; the RX readout is the only position text |
+| 1752 | Position note | readout | PRESENT | window gaps lane 4: the position note ("Position set. This window measures ..." / "No position set. ...") as the first of MapModel.sat-notes |
 | 1753 | COVERAGE rocker | toggle | RELOCATED | kit map page (6.38) row 361: the Coverage checkbox (not a rocker with a sub-line; it is not disabled with no receiver position) |
 | 1754 | GROUND TRACKS rocker | toggle | RELOCATED | kit map page (6.38) row 362: the Trails checkbox draws the lines plugins publish, ground tracks included |
 | 1755 | ALTITUDE COLOURS rocker | toggle | RELOCATED | kit map page (6.38) row 363: the Altitude colours checkbox |
-| 1756 | TRAIL STYLE segments | radio (3 segments) | DEFERRED | kit map page row 364 stays deferred: no LINE / RIBBON / OFF choice (the satellites deck is deferred) |
+| 1756 | TRAIL STYLE segments | radio (3 segments) | PRESENT | window gaps lane 4: the third trail style: Line / Ribbon / Off keys on the satellites page (Off is the same flag the Trails tick throws), pages.slint MapToolbar |
 | 1757 | COVERAGE RESET | button | RELOCATED | kit map page (6.38) row 366: the Reset coverage key |
 | 1758 | Coverage note | readout | RELOCATED | kit map page (6.38) row 367: the coverage status sentence ('n of m bearings, best k km') |
 | 1759 | TARGETS header | readout | RELOCATED | kit map page (6.38) row 359: the target count in the toolbar; there is no TARGETS caption |
@@ -2587,8 +2587,8 @@ Every control of `inventory/tools-bank-map.txt` (FoxSDR 0.99.104; the file calls
 | 1762 | Register rows | list | RELOCATED | kit map page (6.38) row 369: the Table (Callsign, ID, Note); a click selects and centres, a double-click follows (the satellites window centres without following); the ALT and AGE columns are not drawn |
 | 1763 | Empty text | readout | RELOCATED | kit map page (6.38) row 369: the generic empty text; the satellites sentence 'Decoded and propagated tracks appear here' is not found |
 | 1764 | Selected-target card | readout | RELOCATED | the Target details body (rows 315 and 374) in the drawer or as a page, fed by the selected target; the card's cells and the hatched 'cannot be computed' values are not found in pages.slint or output.slint |
-| 1765 | Notes | readout | DEFERRED | not found in pages.slint or output.slint: no NEXT PASSES, hatched-value or inclination / period notes; the satellites deck is deferred (row 357) |
-| 1766 | Map key | overlay/marker | DEFERRED | not found in map.slint, pages.slint or kit_publish.cpp: the EQUIRECTANGULAR / NATURAL EARTH / RINGED MARK / DASHED LINE key is not drawn; the nearest thing is the attribution line and the altitude legend |
+| 1765 | Notes | readout | PRESENT | window gaps lane 4: the notes: coverage note, NEXT PASSES - THIS TARGET with the "cannot be computed here" sentence, the not-reported sentence, the hatched-values sentence (MapModel.sat-notes, kit_publish.cpp); every sentence is the classic's own |
+| 1766 | Map key | overlay/marker | PRESENT | window gaps lane 4: the map key: EQUIRECTANGULAR - WGS 84 / NATURAL EARTH 1:110m COASTLINE on the picture, RINGED MARK - SELECTED, DASHED LINE - PREDICTED TRACK / LINE - GROUND TRACK (map.slint chart-lines / key-lines) |
 | 1767 | Map | (shares the Map canvas gestures above) | RELOCATED | kit map page (6.38): MapPane, with the gestures of rows 1733 to 1739 |
 
 ## TOOLS bank — Map rows and Target details (reached from here; live in the DECODE bank)
@@ -2955,7 +2955,7 @@ The 3D view is an ADDED view toggle everywhere; the 2D screen keeps everything i
 | 3039 | Unknown altitude | overlay/marker | PRESENT | an aircraft with no altitude stands ON THE GROUND as a grey diamond labelled "NO ALT" - never at an invented height |
 | 3040 | Empty state | readout | PRESENT | with nothing plotted the HOME list's own empty title ("NOTHING BEING HEARD" / "NOTHING CURRENT") over the empty box |
 | 3041 | The view and the camera are remembered | setting | PRESENT | view3d, name radar: on, azimuth, elevation, zoom, ALTITUDE SCALE |
-| 3042 | Click an aircraft on the airspace to select it | gesture | DEFERRED | needs picking (the nearest projected marker); the HOME list still selects, and the selection is drawn |
+| 3042 | Click an aircraft on the airspace to select it | gesture | PRESENT | window gaps lane 4: a click on the 3D airspace selects the aircraft whose marker is nearest it (within 16 px): Radar3dResult::picks (each marker projected by the scene), pickRadar3d, Scene3DWell.picked (a press that did not drag) -> View3D.radar-picked -> ScopePublisher::selectContact, as a HOME row does; test_slint_host_radar3d testPick. The click itself was not driven (the scripted input cannot aim at a marker): UNVERIFIED live |
 
 ### The demod scope's 3D TUNNEL (THREED.md section 4, DEMOD SCOPE with input I/Q, VIEW VECTOR / 3D TUNNEL)
 
@@ -3000,7 +3000,7 @@ The plugin publishes one row per channel (frequency, width, guess, peak, over fl
 | 3072 | PERCENTILE FLOOR | slider | DEFERRED | needs the survey's per-bin samples to re-derive a noise floor; the host only has each channel's peak and its level over the plugin's own floor |
 | 3073 | MERGE WIDTH | readout | DEFERRED | the plugin's merge radius is a key of its survey.cfg, which the host does not read; no panel row carries it |
 | 3074 | SWEEP BAND | readout | DEFERRED | the configured sweep band is in survey.cfg too; the status lines that say it do not reach the host's decoder output in a bounded run (docs 6.50) |
-| 3075 | EXPORT CSV | key | DEFERRED | the plugin already writes survey.csv beside survey.cfg; a host-side export of the table needs a save dialog |
+| 3075 | EXPORT CSV | key | PRESENT | window gaps lane 4: EXPORT CSV on the Survey Engine view (scene3d_views.slint, View3D.survey-export-csv -> main.cpp saveText beside the other exports; survey3d_logic surveyCsv, never over a file that is there, no system dialog); test_slint_host_survey3d |
 | 3076 | Hour (UTC) axis | overlay/marker | DEFERRED | needs the occupancy by hour of day; the surface's depth is the Seen share instead |
 | 3077 | The view and the camera are remembered | setting | PRESENT | view3d, name survey: on, azimuth, elevation, zoom |
 
@@ -3103,11 +3103,11 @@ Phase 3, the EXTEND bank, the Plugin store, the Fitted modules window and the pa
 | 4084 | Satellites: satellite chips | chip (key) | PRESENT | one chip per tracked satellite in its orbit-class colour; a click selects it (the map page's own selection) |
 | 4085 | Satellites: the selected satellite's readouts | readout | PRESENT | SELECTED (label, altitude), SUB-POINT, FROM THE RECEIVER (slant range, elevation, azimuth) - or why it cannot be computed |
 | 4086 | Satellites: DRAG TO ROTATE, RESET VIEW | gesture | PRESENT | the arrow keys, the wheel and 0 are driven; the camera starts on the receiver |
-| 4087 | Satellites: NIGHT SIDE layer toggle | checkbox | DEFERRED | the night side is always shaded; the switch was not built in this pass |
+| 4087 | Satellites: NIGHT SIDE layer toggle | checkbox | PRESENT | window gaps lane 4: NIGHT SIDE switch on the satellites globe (globe_publish.cpp kNight, ViewState::nightSide saved in the 3D views' setting, the earth baked lit when off) |
 | 4088 | Satellites: 3D ORBIT PATH | picture | DEFERRED | needs data: the plugin publishes ground tracks (Earth-fixed), not the inertial orbit; lifting a ground track to the altitude would draw something that is not the orbit. What would do it: the plugin publishing orbital elements or an ECI path |
 | 4089 | Satellites: time scrubber (-30 min to +90 min, NOW, PLAY) | slider | DEFERRED | needs data: positions at other times - the plugin publishes the present position and one ground track. What would do it: a plugin API addition publishing predicted positions with times, or the elements to propagate them |
 | 4090 | Satellites: pass timeline (24 h) | picture | DEFERRED | needs data: the pass predictions exist only as text rows of the plugin's panel. What would do it: the passes (AOS, LOS, maximum elevation per satellite) as typed panel fields or a feed |
-| 4091 | Satellites: the satellites deck (position well, layers, targets register, next passes, Doppler, GRANT RECEIVER CONTROL) | page | DEFERRED | the deck stays deferred as before (tick rows 1743-1765): the 3D globe is an added view of the map page, not the deck |
+| 4091 | Satellites: the satellites deck (position well, layers, targets register, next passes, Doppler, GRANT RECEIVER CONTROL) | page | DEFERRED | the satellites deck, as far as the host has the data: WHOLE WORLD, captions, notes, three-way trail style and the map key are built (rows 1745-1766, window gaps lane 4); NOT built: the Doppler read-out and GRANT RECEIVER CONTROL (needs the plugin's own pass elements and a control grant surface); the pass list needs the orbit (see the record's HAND-OFF) |
 | 4100 | 3D globes: the chosen view, camera and options are remembered | behaviour | PRESENT | one entry each in the framework's view3d setting (propagation, ft8, goes, solar, satellites): the view, the camera and four small choices, written 0.4 s after the last change and read when a view is first used; the 2D view is the default |
 | 4101 | 3D globes: the honest empty states | readout | PRESENT | no home / no receiver position, no station heard, no picture, no satellite tracked, no beacon on air: the well says so in the page's own wording and draws what it can; no sample numbers |
 | 4200 | Radio pane: R-tag (Select Radio n) | key | PRESENT | placed by the radio workspace (docs/multi-radio-records/screen-s3.md, S3): the pane is in the Slint window in a multi-pane layout; drive scripts reach it only with the bounded run's test seam (testradios=N in the script header: radio 1 the engine's, 2 to N made up), because the live multi-radio engine (stage 4) is not in this tree |

@@ -665,6 +665,24 @@ int main() {
     moveTo(win, 20, 200);                                  // leaving the plot closes it
     CHECK(!ui->get_tip_shown());
 
+    {   // THE 4 s REST TIP (window gaps lane 4, row 202): once the hand has rested four seconds a second tip says its words in place of the gesture tip
+        ui->set_rest_tip("Right-click to change the range and display");
+        const auto began = std::chrono::steady_clock::now();
+        moveTo(win, 700, 300);
+        CHECK(waitUntil([&] { return ui->get_tip_shown(); }, 8000));                      // the 0.6 s gesture tip first ...
+        CHECK(!ui->get_rest_tip_shown());
+        CHECK(waitUntil([&] { return ui->get_rest_tip_shown(); }, 12000));                // ... and the rest tip at four seconds
+        const auto restMs4 = std::chrono::duration_cast<milliseconds>(std::chrono::steady_clock::now() - began).count();
+        CHECK(restMs4 >= 3800);
+        Frame rested = render(ui, kW, kH);
+        CHECK(rested.countInk(700, 322, 960, 347, rgb(0x262a32), 24) > 80);              // the longer words are drawn on the tip face
+        moveTo(win, 740, 300);                                                            // a move of more than 6 px restarts the wait
+        CHECK(!ui->get_rest_tip_shown());
+        moveTo(win, 20, 200);                                                             // leaving the plot closes it
+        CHECK(!ui->get_rest_tip_shown() && !ui->get_tip_shown());
+        ui->set_rest_tip("");
+    }
+
     // near the foot of the well the tip opens above the pointer, so it stays inside
     moveTo(win, 700, 395);
     CHECK(waitUntil([&] { return ui->get_tip_shown(); }, 8000));

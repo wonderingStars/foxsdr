@@ -65,7 +65,7 @@ export struct ScannerModel {
 }
 
 // ---- Airband ----
-export struct AirbandRow { id: int, ticked: bool, heard: bool, text: string, heard-time: string, on-air: bool }
+export struct AirbandRow { id: int, ticked: bool, heard: bool, text: string, heard-time: string, on-air: bool, tooltip: string }   // tooltip: the level while the channel is on the live list (row 1698)
 export struct AirportRow { code: string, name: string, distance: string, note: string }
 export struct AirbandModel {
     code-draft: string, lookup-label: string, nearest-label: string, hide-label: string, airports: [AirportRow], ambiguous: [AirportRow],
@@ -1661,6 +1661,7 @@ component AirbandRowView inherits Rectangle {
                 mouse-cursor: MouseCursor.pointer;
                 clicked => { root.tuned(); }
             }
+            TipTimer { x: 0px; y: 0px; hovered: pick.has-hover; text: root.entry.tooltip; anchor-h: root.height; }
         }
         Text {
             horizontal-stretch: 0;

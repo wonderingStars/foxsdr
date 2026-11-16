@@ -1,6 +1,8 @@
 // kit_publish.cpp - the plugin kit's publisher (kit_publish.hpp): the kit's state as the window's models, the window's gestures as the
 // kit's commands. SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "kit_publish.hpp"
+#include "tools_logic.hpp"
+#include "gui/module_census.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -17,6 +19,8 @@
 #include "core/utf8_text.hpp"
 #include "gui/track_metrics.hpp"
 #include "mapj_logic.hpp"
+#include "mapicons_logic.hpp"
+#include "gui/aircraft_icon_pixels.hpp"   // the silhouettes' pictures: included from this one unit (the header says so)
 
 namespace foxsdr::slintkit {
 
@@ -135,6 +139,16 @@ std::vector<TableRow> tableRows(const std::vector<CascadePanelRow>& rows, std::s
 KitPublisher::KitPublisher(MainWindow& ui, PluginKit& kit) : ui_(ui), kit_(kit), pagesModel_(std::make_shared<slint::VectorModel<PageTab>>()), storeModel_(blankStore()), patchPresetsModel_(blankPatchPresets()), transmitModel_(blankTransmit()) {
     globe_ = std::make_unique<GlobePublisher>(kit_);
     ui_.set_pages(pagesModel_);
+    {   // THE AIRCRAFT SILHOUETTES (window gaps lane 4, row 493): the classic's eleven pictures, straight RGBA, set once
+        namespace px = cascade::gui::aircraft_pixels;
+        std::vector<slint::Image> icons;
+        for (int i = 0; i < px::kCount; ++i) {
+            slint::SharedPixelBuffer<slint::Rgba8Pixel> buf(px::kSide, px::kSide);
+            std::memcpy(buf.begin(), px::kRgba[i], static_cast<std::size_t>(px::kSide) * px::kSide * 4u);
+            icons.emplace_back(buf);
+        }
+        ui_.global<::MapIcons>().set_aircraft(std::make_shared<slint::VectorModel<slint::Image>>(std::move(icons)));
+    }
 }
 KitPublisher::~KitPublisher() = default;
 
@@ -544,6 +558,7 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
     std::vector<cascade::gui::TrackRow> rows;
     s.targetIds.clear();
     std::size_t placed = 0;
+    bool anyAltBanded = false, anyOrbitBanded = false, anyNoAltitude = false;
     for (std::size_t i = 0; i < mine.size(); ++i) {
         const cascade::core::HostTrack& tr = *mine[i];
         const cascade::core::TrackPresentation pres = cascade::core::trackPresentation(tr.t);
@@ -567,10 +582,21 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
                 mt.followed = pg != nullptr && pg->followedId == tr.t.id;
                 mt.estimated = cascade::core::trackIsEstimated(tr.t);
                 mt.emergency = (tr.t.flags & CASCADE_TRACK_FLAG_EMERGENCY) != 0u;
+                mt.category = tr.t.kind == CASCADE_TRACK_AIRCRAFT ? foxsdr::slinthost::aircraftIconIndex(CASCADE_TRACK_CATEGORY(tr.t.flags), nullptr) : -1;   // the classic's silhouettes (row 493); the registry's type code is not asked here
+                mt.alt_known = std::isfinite(tr.t.altM);
                 mt.size = static_cast<float>(slintmap::targetIconPx(static_cast<int>(tr.t.kind), look_));   // the Display setting's icon size: an aircraft's only
                 if (s.altColours && tr.t.kind == CASCADE_TRACK_AIRCRAFT && std::isfinite(tr.t.altM)) {
                     const auto& band = cascade::gui::altBandStyle(cascade::gui::altitudeBandIndex(tr.t.altM));
                     mt.color = slint::Color::from_argb_uint8(255, band.r, band.g, band.b);
+                    anyAltBanded = true;
+                } else if (s.altColours && tr.t.kind == CASCADE_TRACK_AIRCRAFT) {
+                    const auto& g = cascade::gui::noAltitudeStyle();
+                    mt.color = slint::Color::from_argb_uint8(255, g.r, g.g, g.b);   // "no altitude" is a grey of its own, not "below 1,000 ft"
+                    anyNoAltitude = true;
+                } else if (tr.t.kind == CASCADE_TRACK_SATELLITE && std::isfinite(tr.t.altM) && tr.t.altM > 0.0) {   // a satellite's marker takes its orbital altitude band (the classic's orbit ladder)
+                    const auto& band = cascade::gui::orbitBandStyle(cascade::gui::orbitBandIndex(tr.t.altM));
+                    mt.color = slint::Color::from_argb_uint8(255, band.r, band.g, band.b);
+                    anyOrbitBanded = true;
                 } else { mt.color = kindColour(tr.t.kind); }
                 sig += std::string(tr.t.id) + fmt("%.3f", fx) + fmt("%.3f", fy) + (mt.selected ? "s" : "") + (mt.followed ? "f" : "") + ";";
                 s.targetIds.emplace_back(tr.t.id);
@@ -634,8 +660,16 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
     m.list_widths = model(std::vector<float>{90.f, 80.f, 0.f});
     m.count_text = ss(countText(rows.size(), placed, unplaced));
     std::vector<LegendRow> legend;
-    if (s.altColours) {
-        for (int b = 0; b < cascade::gui::kAltBandCount; ++b) { const auto& st = cascade::gui::altBandStyle(b); legend.push_back({ss(st.label), slint::Color::from_argb_uint8(255, st.r, st.g, st.b)}); }
+    // THE KEY LADDERS (window gaps lane 4, audit U4; the classic's drawLadder): ORBITAL ALTITUDE for the satellites on the map, ALTITUDE for the aircraft coloured by it, the highest band at the top;
+    // the grey "no altitude" row rides on the aircraft ladder and only when it is up
+    if (anyOrbitBanded) {
+        legend.push_back({ss(cascade::i18n::tr("ORBITAL ALTITUDE - km")), slint::Color::from_argb_uint8(0, 0, 0, 0), true});
+        for (int b = cascade::gui::kOrbitBandCount - 1; b >= 0; --b) { const auto& st = cascade::gui::orbitBandStyle(b); legend.push_back({ss(st.label), slint::Color::from_argb_uint8(255, st.r, st.g, st.b), false}); }
+    }
+    if (s.altColours && anyAltBanded) {
+        legend.push_back({ss(cascade::i18n::tr("ALTITUDE - kft")), slint::Color::from_argb_uint8(0, 0, 0, 0), true});
+        for (int b = cascade::gui::kAltBandCount - 1; b >= 0; --b) { const auto& st = cascade::gui::altBandStyle(b); legend.push_back({ss(st.label), slint::Color::from_argb_uint8(255, st.r, st.g, st.b), false}); }
+        if (anyNoAltitude) { const auto& g = cascade::gui::noAltitudeStyle(); legend.push_back({ss(cascade::i18n::tr("no altitude")), slint::Color::from_argb_uint8(255, g.r, g.g, g.b), false}); }
     }
     m.legend = model(std::move(legend));
     const double mpp = s.comp.metresPerPixel();
@@ -656,7 +690,46 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
     m.zoom_out = pg != nullptr && pg->spanDeg < slintmap::TileCompositor::kMaxSpanDeg;
     m.pick_armed = s.pickArmed;
     m.hover_text = ss(s.hoverText);
+    {   // THE SATELLITES WINDOW'S DECK (window gaps lane 4, rows 1745 to 1766): its captions, notes and the key to what the map draws; every sentence is the classic's own
+        m.satellite = pg != nullptr && pg->satellite;
+        std::vector<::SatNote> notes;
+        std::vector<slint::SharedString> chart, keys;
+        if (m.satellite) {
+            const auto T = [](const char* s) { return std::string(cascade::i18n::tr(s)); };
+            std::string cap = T("RECEIVER POSITION") + "  ";
+            cap += home ? T("LATITUDE") + " " + fmt("%.4f", state.rxLatDeg) + "  " + T("LONGITUDE") + " " + fmt("%.4f", state.rxLonDeg) : T("no receiver position: Set RX here, then click the map");
+            m.rx_text = ss(cap);
+            notes.push_back({ss(""), ss(home ? T("Position set. This window measures every DISTANCE, BEARING and the COVERAGE ring from it. A plugin that predicts passes keeps its own observer position in its own configuration - its panel names the file.")
+                                             : T("No position set. DISTANCE, BEARING and the coverage overlay on this window stay blank until one is - none of them can be computed without it. A plugin that predicts passes keeps its observer position separately, in its own configuration."))});
+            notes.push_back({ss(""), ss(!home ? T("Coverage measures distances from the receiver, so it needs a position first. Set one with Set RX here.")
+                                       : kit_.coverage().empty() ? T("Nothing plotted yet. The ring records how far out a target has been PLOTTED on each of 72 bearings - from every plugin, and from computed positions as well as received ones.")
+                                       : cascade::core::formatText(cascade::i18n::tr("%d of %d bearings reached, furthest %.0f km. Plotted positions, computed or received. RESET clears the ring and starts again."),
+                                                                   static_cast<int>(kit_.coverage().filledBuckets()), static_cast<int>(cascade::gui::CoverageMap::kBuckets), kit_.coverage().peakKm()))});
+            if (!pg->selectedId.empty()) {   // a target is picked: what the deck cannot say about it, and why
+                notes.push_back({ss(T("NEXT PASSES - THIS TARGET")), ss(T("A pass prediction needs the orbit itself. A track source reports a position, not the elements it came from, so these cannot be computed here - a receiver position alone would not be enough."))});
+                notes.push_back({ss(""), ss(T("INCLINATION, ORBITAL PERIOD and the age of the element set are not part of what a track source reports, so nothing here can show them - and no receiver position will change that."))});
+                if (!home) { notes.push_back({ss(""), ss(T("DISTANCE and BEARING are hatched because no receiver position is set. Set one on the deck above and both fill in."))}); }
+                keys.push_back(ss(T("RINGED MARK - SELECTED")));
+            }
+            bool anyPath = false, anyDashed = false;
+            for (const cascade::core::HostPath& path : kit_.paths()) {
+                if (path.plugin != p.plugin) { continue; }
+                anyPath = true;
+                if ((path.flags & CASCADE_PATH_FLAG_DASHED) != 0u) { anyDashed = true; }
+            }
+            if (s.trailsOn && anyPath) { keys.push_back(ss(anyDashed ? T("DASHED LINE - PREDICTED TRACK") : T("LINE - GROUND TRACK"))); }
+            chart.push_back(ss(T("EQUIRECTANGULAR - WGS 84")));   // a satellites window draws the compiled-in coastline, never tiles (the compositor choice above)
+            chart.push_back(ss(T("NATURAL EARTH 1:110m COASTLINE")));
+            sig += "SAT" + std::to_string(notes.size()) + std::to_string(keys.size()) + std::string(m.rx_text);
+        }
+        m.sat_notes = model(std::move(notes));
+        m.chart_lines = model(std::move(chart));
+        m.key_lines = model(std::move(keys));
+    }
     m.following = ss(pg != nullptr && !pg->followedId.empty() ? cascade::core::formatText(cascade::i18n::tr("following %s"), pg->followedId.c_str()) : std::string());
+    m.follow_ask = pg != nullptr && mapFollowAskShown(*pg);
+    m.follow_ask_text = ss(m.follow_ask ? cascade::core::formatText(cascade::i18n::tr("The map is following %s."), pg->followedId.c_str()) : std::string());
+    m.list_footnote = ss(home ? std::string() : std::string(cascade::i18n::tr("Distance and bearing need the RX position above.")));
     m.coverage_on = s.coverageOn;
     m.trails_on = s.trailsOn;
     m.alt_colours = s.altColours;
@@ -668,8 +741,9 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
     m.sort_label = ss(cascade::gui::trackSortKeyName(cascade::gui::trackSortKeyForMenuIndex(s.sortKey)));
     m.sort_ascending = s.sortAscending;
     m.rx_known = home;
-    m.rx_text = ss(home ? "RX " + fmt("%.4f", state.rxLatDeg) + " " + fmt("%.4f", state.rxLonDeg) : std::string(cascade::i18n::tr("no receiver position: Set RX here, then click the map")));
+    if (!m.satellite) m.rx_text = ss(home ? "RX " + fmt("%.4f", state.rxLatDeg) + " " + fmt("%.4f", state.rxLonDeg) : std::string(cascade::i18n::tr("no receiver position: Set RX here, then click the map")));
     sig += std::string(m.count_text) + std::string(m.following) + std::string(m.coverage_status) + (s.pickArmed ? "P" : "") + s.hoverText + std::string(m.scale_text) + std::string(m.attribution);
+    sig += std::string(m.follow_ask_text) + std::string(m.list_footnote);
     sig += std::to_string(s.coverageOn) + std::to_string(s.trailsOn) + std::to_string(s.altColours) + std::to_string(s.onScreenOnly) + std::to_string(s.sortKey) + std::to_string(s.sortAscending);
     sig += "L" + std::to_string(look_.iconPx) + "." + std::to_string(look_.trailWidthPx) + "." + std::to_string(static_cast<int>(look_.trailStyle));   // the icon size is in the targets: a change of look is a change of page
     fillMapJModel(s, pg, mapJStatus, mapJLabels, std::string(), m, sig);   // lane J: the switches, the legend rows and credit of the layers, the replay and filter bars
@@ -1156,9 +1230,10 @@ void KitPublisher::publishDecodeBank(const FoxReceiverState& state) {
     }
     if (!anyMap) {
         add(6, "", cascade::i18n::tr("Target maps"), cascade::i18n::tr("NONE"), ChipTone::Neutral, LampState::Off, true, false, false, "");
-        bool anyTracker = false;
-        for (const PluginRow& r : k.rows) { if (r.loaded && (r.caps & CASCADE_CAP_TRACK_SOURCE) != 0u) { anyTracker = true; } }
-        add(10, "mapnote", "", "", ChipTone::Neutral, LampState::Off, false, false, true, "", anyTracker ? cascade::i18n::tr("A tracker is fitted and stopped or asleep: start it, or open its map from a preset.") : cascade::i18n::tr("A tracker plugin reports the positions a map draws - install one from the plugin store."), ChipTone::Neutral);
+        // WHY THERE IS NO MAP (window gaps lane 4, audit item U2): the classic's census sentence, which says which kind of nothing it is (stopped by you, refused, did not start, or no tracker fitted at all)
+        const std::string why = cascade::gui::trackSourceAbsenceNote(foxsdr::slinttools::trackCensus(k.rows), cascade::i18n::tr("target positions"),
+                                                                       cascade::i18n::tr("A tracker plugin reports the positions a map draws - install one from the plugin store above."));
+        add(10, "mapnote", "", "", ChipTone::Neutral, LampState::Off, false, false, true, "", why, ChipTone::Neutral);
     }
     const char* kRowTip = cascade::i18n::tr("Opens this plugin's window. Nothing opens it for you; close it from its key and it stays closed - opening it also tunes and starts the decoder, just like its preset.");
     for (const PluginRow& r : k.rows) {
@@ -1692,7 +1767,7 @@ void KitPublisher::wire() {
     ui_.global<::KitEvents>().on_page_map_panned([surface, mapPage](int i, float dx, float dy) {
         MapSurface* s = surface(i); MapPage* pg = mapPage(i);
         if (s == nullptr || pg == nullptr) { return; }
-        if (!pg->followedId.empty()) { return; }   // a drag while following is refused (the ImGui window asks; this window keeps following until Stop following)
+        if (!mapDragPans(*pg)) { return; }   // a drag while following does not pan: it asks "Stop following?" (the classic's rule; the page's bar draws the question)
         double lat0, lon0, lat1, lon1;
         s->comp.unproject(0.5, 0.5, lat0, lon0);
         s->comp.unproject(0.5 - dx, 0.5 - dy, lat1, lon1);
@@ -1754,13 +1829,17 @@ void KitPublisher::wire() {
         for (const cascade::core::HostTrack& tr : kit_.tracks()) { if (tr.plugin == pg->plugin && cascade::core::trackPresentation(tr.t).visible) { mine.push_back(tr); } }
         if (fitView(mine, pg->centreLat, pg->centreLon, pg->spanDeg, s->h > 0 ? static_cast<double>(s->w) / s->h : 1.6)) { pg->viewFitted = true; pg->followedId.clear(); }
     });
+    ui_.global<::KitEvents>().on_page_map_world([mapPage](int i) {   // WHOLE WORLD: back out until the whole planet is in the window
+        if (MapPage* pg = mapPage(i)) { pg->spanDeg = slintmap::TileCompositor::kMaxSpanDeg; pg->centreLat = 20.0; pg->centreLon = 0.0; pg->viewFitted = true; pg->followedId.clear(); pg->followAsk = false; }
+    });
     ui_.global<::KitEvents>().on_page_map_set_rx([surface](int i) { if (MapSurface* s = surface(i)) { s->pickArmed = !s->pickArmed; } });
     ui_.global<::KitEvents>().on_page_map_on_screen([surface](int i, bool on) { if (MapSurface* s = surface(i)) { s->onScreenOnly = on; } });
     ui_.global<::KitEvents>().on_page_map_coverage([surface](int i, bool on) { if (MapSurface* s = surface(i)) { s->coverageOn = on; } });
     ui_.global<::KitEvents>().on_page_map_trails([surface](int i, bool on) { if (MapSurface* s = surface(i)) { s->trailsOn = on; } });
     ui_.global<::KitEvents>().on_page_map_alt_colours([surface](int i, bool on) { if (MapSurface* s = surface(i)) { s->altColours = on; } });
     ui_.global<::KitEvents>().on_page_map_reset_coverage([this](int) { kit_.coverage().reset(); });
-    ui_.global<::KitEvents>().on_page_map_stop_following([mapPage](int i) { if (MapPage* pg = mapPage(i)) { pg->followedId.clear(); } });
+    ui_.global<::KitEvents>().on_page_map_stop_following([mapPage](int i) { if (MapPage* pg = mapPage(i)) { mapFollowAnswer(*pg, true); } });
+    ui_.global<::KitEvents>().on_page_map_keep_following([mapPage](int i) { if (MapPage* pg = mapPage(i)) { mapFollowAnswer(*pg, false); } });
     ui_.global<::KitEvents>().on_page_map_sort_clicked([surface](int i) { if (MapSurface* s = surface(i)) { s->sortKey = (s->sortKey + 1) % cascade::gui::kTrackSortKeyCount; } });
     ui_.global<::KitEvents>().on_page_map_sort_dir([surface](int i) { if (MapSurface* s = surface(i)) { s->sortAscending = !s->sortAscending; } });
     // SCREEN LANE J: the map's layers, replay, filter and unit key, and the Antenna page's fields: one callback (ui/mapj.slint, MapJEvents.act)

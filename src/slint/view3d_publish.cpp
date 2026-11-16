@@ -127,6 +127,8 @@ struct View3DPublisher::Impl {
     std::size_t radarRenders = 0, radarAircraft = 0, radarOnGround = 0, radarTrailSegs = 0, radarPixels = 0, radarLabels = 0, radarTags = 0;
     double radarLastMs = 0.0, radarWorstMs = 0.0;
     int radarW = 0, radarH = 0;
+    std::vector<Radar3dPick> radarPicks;                 // where each plotted aircraft's marker was drawn last (row 3042)
+    std::function<void(const std::string&)> radarPickHook;
     bool radarRampSet = false;
 
     // ---- the demod scope's 3D tunnel ----
@@ -585,6 +587,7 @@ struct View3DPublisher::Impl {
         radarTrailSegs = res.trailSegments;
         radarPixels = radarScene.pixelsWritten();
         radarLabels = res.labels.size();
+        radarPicks = res.picks;
         radarTags = 0;
         for (const scene3d::Label3D& l : res.labels) { radarTags += l.kind == 2 ? 1 : 0; }
         std::vector<Scene3DLabel> labels;
@@ -726,6 +729,11 @@ void View3DPublisher::wire() {
         i.surveySig.clear();
         i.save();
     });
+    g.on_radar_picked([this](float fx, float fy) {
+        Impl& i = *impl_;
+        const std::string id = pickRadar3d(i.radarPicks, fx, fy, i.radarW, i.radarH);
+        if (!id.empty() && i.radarPickHook) { i.radarPickHook(id); }
+    });
     g.on_survey_reset_view([this] {
         Impl& i = *impl_;
         const ViewState d = surveyDefaults();
@@ -807,12 +815,18 @@ void View3DPublisher::pushWaterfallFrame(std::int64_t tMs, const float* bins, st
 }
 
 void View3DPublisher::publish(const Wf3dContext& wf) { impl_->waterfall(wf); }
+void View3DPublisher::setRadarPickHook(std::function<void(const std::string& id)> hook) { impl_->radarPickHook = std::move(hook); }
 void View3DPublisher::publishRadar(const Radar3dFeed& feed, std::int64_t nowMs) { impl_->radarPublish(feed, nowMs); }
 void View3DPublisher::publishTunnel(const TunnelFeed& feed, std::int64_t nowMs) { impl_->tunnelPublish(feed, nowMs); }
 void View3DPublisher::publishSurvey(std::int64_t nowMs) { impl_->surveyPublish(nowMs); }
 void View3DPublisher::publishSonde(const SondeContext& ctx) { impl_->sondePublish(ctx); }
 
 int View3DPublisher::detaches() const { return impl_->surface.detaches() + impl_->radarSurface.detaches() + impl_->tunnelSurface.detaches() + impl_->surveySurface.detaches() + impl_->sondeSurface.detaches(); }
+
+std::string View3DPublisher::surveyCsv() const {
+    const SurveyFeed feed = impl_->surveyFeedNow();
+    return feed.shown ? foxsdr::slintview3d::surveyCsv(feed.channels) : std::string();
+}
 
 std::string View3DPublisher::readState(const std::string& what, std::string& out) const {
     const Impl& m = *impl_;
@@ -849,6 +863,7 @@ std::string View3DPublisher::readState(const std::string& what, std::string& out
     if (what == "sonde.id") { out = m.sondeId; return std::string(); }
     if (what == "sonde.w") { out = std::to_string(m.sondeW); return std::string(); }
     if (what == "sonde.h") { out = std::to_string(m.sondeH); return std::string(); }
+    if (what == "survey.exportnote") { out = std::string(ui_.global<View3D>().get_survey_export_note()); if (out.empty()) { out = "-"; } return std::string(); }
     if (what == "survey.on") { out = m.survey.on ? "1" : "0"; return std::string(); }
     if (what == "survey.azimuth") { return num(m.survey.azimuth); }
     if (what == "survey.elevation") { return num(m.survey.elevation); }
@@ -887,6 +902,7 @@ std::string View3DPublisher::readState(const std::string& what, std::string& out
     if (what == "radar.pixels") { out = std::to_string(m.radarPixels); return std::string(); }
     if (what == "radar.tags") { out = std::to_string(m.radarTags); return std::string(); }
     if (what == "radar.labels") { out = std::to_string(m.radarLabels); return std::string(); }
+    if (what == "radar.picks") { out = std::to_string(m.radarPicks.size()); return std::string(); }
     if (what == "radar.w") { out = std::to_string(m.radarW); return std::string(); }
     if (what == "radar.h") { out = std::to_string(m.radarH); return std::string(); }
     return "view3d.wf.on|azimuth|elevation|zoom|depth|shading|renders|triangles|pixels|labels|span|realrows|rows|data|w|h, or view3d.radar.on|azimuth|tilt|zoom|scale|renders|aircraft|onground|trails|pixels|labels|tags|w|h, or view3d.tunnel.on|azimuth|elevation|zoom|depth|depthms|colour|renders|points|pixels|labels|w|h, or view3d.survey.on|azimuth|elevation|zoom|renders|channels|triangles|pixels|ranked|labels|first|w|h, or view3d.sonde.on|azimuth|elevation|zoom|renders|balloons|samples|ascent|descent|burst|pixels|labels|id|w|h, not view3d." + what;

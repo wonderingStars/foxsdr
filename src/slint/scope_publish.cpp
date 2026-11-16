@@ -88,6 +88,8 @@ struct ScopePublisher::Impl {
     int tubeW = 0, tubeH = 0;
     int lastView = 0, prevView = 0;
     bool radarWasOn = false, groundDirty = true;
+    bool tilesOn = false;               // the last ground paint had a basemap's tiles under it (window gaps lane 4, row 1967)
+    std::string tileCredit;             // that basemap's attribution line: a licence condition, shown under the tube whenever the tiles are
     double lastGroundS = -1.0, lastGroundMs = 0.0;
     int groundSkip = 0;
     std::size_t groundPaints = 0, groundSegments = 0, panelNotes = 0;
@@ -303,6 +305,18 @@ void ScopePublisher::radarPublish(const FoxReceiverState& state, double nowS) {
     // THE GROUND: repainted when the picture changed and not oftener than 20 Hz, a heavy paint every other tick
     const bool sizeOk = d.tubeW >= 40 && d.tubeH >= 40;
     if (d.groundSkip > 0) { --d.groundSkip; }
+    // THE BASEMAP'S TILES UNDER THE GLASS (row 1967): a plugin that supplies tiles gives the tube a ground of them; a tile not ready yet is asked again on the next tick
+    foxsdr::slintkit::BasemapClient& bm = d.kit.basemap();
+    foxsdr::slintscope::RadarTileSource tileSrc;
+    const bool haveTiles = bm.active();
+    if (haveTiles) {
+        tileSrc.tile = [&bm](std::uint32_t z, std::uint32_t x, std::uint32_t y, std::vector<std::uint8_t>& rgb) { return static_cast<int>(bm.rawTile(z, x, y, rgb)); };
+        tileSrc.tileSize = bm.tileSize();
+        tileSrc.minZoom = bm.minZoom();
+        tileSrc.maxZoom = bm.maxZoom();
+    }
+    if (haveTiles != d.tilesOn || (haveTiles && bm.attribution() != d.tileCredit)) { d.groundDirty = true; }
+    if (d.rscratch.tilesPending) { d.groundDirty = true; }
     const bool due = d.groundDirty || d.radar.dirty();
     if (sizeOk && due && d.groundSkip == 0 && (nowS - d.lastGroundS >= 0.05 || d.groundDirty)) {
         auto& buf = d.ground[static_cast<std::size_t>(d.groundWhich)];
@@ -310,7 +324,9 @@ void ScopePublisher::radarPublish(const FoxReceiverState& state, double nowS) {
             buf = slint::SharedPixelBuffer<slint::Rgba8Pixel>(static_cast<std::uint32_t>(d.tubeW), static_cast<std::uint32_t>(d.tubeH));
         }
         const auto t0 = std::chrono::steady_clock::now();
-        d.groundSegments = paintRadarGround(reinterpret_cast<foxsdr::slinthost::Rgba*>(buf.begin()), d.tubeW, d.tubeH, d.radar, d.rscratch);
+        d.groundSegments = paintRadarGround(reinterpret_cast<foxsdr::slinthost::Rgba*>(buf.begin()), d.tubeW, d.tubeH, d.radar, d.rscratch, haveTiles ? &tileSrc : nullptr);
+        d.tilesOn = haveTiles;
+        d.tileCredit = haveTiles ? bm.attribution() : std::string();
         d.lastGroundMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         d.groundSkip = d.lastGroundMs > 12.0 ? (d.lastGroundMs > 24.0 ? 2 : 1) : 0;
         ++d.groundPaints;
@@ -328,6 +344,7 @@ void ScopePublisher::radarPublish(const FoxReceiverState& state, double nowS) {
     ::RadarScopeModel m;
     m.shown = true;
     m.has_rx = f.hasRx;
+    m.attribution = ss(d.tilesOn && d.rscratch.tilesDrawn > 0 ? d.tileCredit : std::string());   // under the tube whenever its ground is a basemap's: the credit is a licence condition
     m.warning = ss(cascade::i18n::tr("The scope needs the receiver's position."));
     m.intro = ss(cascade::i18n::tr("Everything on a radar scope is a range and a bearing measured from the antenna, so there is nothing to draw until this receiver knows where it is. "
                                    "It is the same position the map uses, and setting it here sets it there. Either key below puts the receiver at a place the application already knows; "
@@ -413,6 +430,8 @@ void ScopePublisher::radarPublish(const FoxReceiverState& state, double nowS) {
     m.sys_help = ss(f.sysHelp);
     ui_.set_radar_scope_model(m);
 }
+
+void ScopePublisher::selectContact(const std::string& id) { impl_->radar.selectContact(id); }
 
 void ScopePublisher::toggleRadar() {
     if (ui_.get_view_index() == 2) { leaveRadar(); } else { ui_.set_view_index(2); }

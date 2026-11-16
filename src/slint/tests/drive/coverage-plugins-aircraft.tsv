@@ -3,7 +3,7 @@
 490	NOT_DRIVABLE	-	env var / config file, not a window control
 491	NOT_DRIVABLE	-	env var / config file, not a window control
 492	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B)
-493	NOT_DRIVABLE	-	deferred: the category silhouettes are not ported (MapPane draws one icon per kind)
+493	NOT_DRIVABLE	-	the silhouette is a picture (MapIcons, window gaps lane 4); the category-to-picture rule is pinned by test_slint_host_mapicons
 494	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B)
 495	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B)
 496	NOT_DRIVABLE	-	needs a signal: the fixture run (6.49 phase B)

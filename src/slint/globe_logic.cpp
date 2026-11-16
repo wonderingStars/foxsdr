@@ -166,7 +166,7 @@ slintview3d::ViewState toPrefs(const ViewState& v, ViewKind k) {
         case ViewKind::Ft8: p.opt[0] = std::clamp(v.bandId, 0, 12); p.opt[1] = v.windowMinutes <= 15 ? 0 : (v.windowMinutes <= 60 ? 1 : 2); break;
         case ViewKind::Goes: p.opt[0] = std::clamp(v.goesSatellite, 0, 1); break;
         case ViewKind::SolarSystem: p.opt[0] = v.logScale ? 1 : 0; p.opt[1] = v.showMoon ? 1 : 0; break;
-        case ViewKind::Satellites: p.opt[0] = v.footprints ? 1 : 0; p.opt[1] = v.groundTracks ? 1 : 0; break;
+        case ViewKind::Satellites: p.opt[0] = v.footprints ? 1 : 0; p.opt[1] = v.groundTracks ? 1 : 0; p.opt[2] = v.nightSide ? 0 : 1; break;
         default: break;
     }
     p.opt[3] = v.cameraSet ? 1 : 0;
@@ -196,7 +196,7 @@ void fromPrefs(ViewState& v, ViewKind k, const slintview3d::ViewState& p) {
         }
         case ViewKind::Goes: v.goesSatellite = std::clamp(p.opt[0], 0, 1); break;
         case ViewKind::SolarSystem: v.logScale = p.opt[0] != 0; v.showMoon = p.opt[1] != 0; break;
-        case ViewKind::Satellites: v.footprints = p.opt[0] != 0; v.groundTracks = p.opt[1] != 0; break;
+        case ViewKind::Satellites: v.footprints = p.opt[0] != 0; v.groundTracks = p.opt[1] != 0; v.nightSide = p.opt[2] == 0; break;
         default: break;
     }
 }

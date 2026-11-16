@@ -55,6 +55,7 @@ export component SpectrumSpecimen inherits Window {
     in-out property <string> airband-block;
     in-out property <string> airband-hearing;
     in-out property <[AirbandChannel]> airband-channels;
+    in-out property <string> rest-tip;     // the 4 s tip (rows 202, 213): empty = none
 
     // what the interactions leave behind
     in-out property <float> hover-x: -2;
@@ -80,6 +81,7 @@ export component SpectrumSpecimen inherits Window {
     out property <int> zone: view.pointer-zone;
     out property <string> tip: view.active-tooltip;
     out property <bool> tip-shown: view.tip-shown;
+    out property <bool> rest-tip-shown: view.rest-tip-shown;
     out property <int> shape: view.pointer-shape == MouseCursor.move ? 1 : view.pointer-shape == MouseCursor.ew-resize ? 2 : 0;
 
     view := SpectrumView {
@@ -119,6 +121,7 @@ export component SpectrumSpecimen inherits Window {
         ];
         user-markers: [{ pos: 0.30612, label: "M1" }];
         airband-channels: root.airband-channels;
+        rest-tip: root.rest-tip;
         airband-block: root.airband-block;
         airband-hearing: root.airband-hearing;
         show-vfo: root.show-vfo;

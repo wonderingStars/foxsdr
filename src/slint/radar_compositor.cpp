@@ -12,8 +12,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 #include "gui/coastline_data.hpp"
+#include "gui/track_metrics.hpp"
 
 namespace foxsdr::slintscope {
 
@@ -92,7 +94,65 @@ void maskDisc(Rgba* px, int w, int h, float cx, float cy, float r) {
 
 }  // namespace
 
-std::size_t paintRadarGround(Rgba* px, int w, int h, const RadarScope& scope, RadarPaintScratch& scratch) {
+int radarTileZoom(double fullScaleNm, double radiusPx, double latDeg, std::uint32_t tileSize, std::uint32_t minZoom, std::uint32_t maxZoom) {
+    if (!(fullScaleNm > 0.0) || !(radiusPx > 0.0) || tileSize == 0) { return static_cast<int>(minZoom); }
+    const double mpp = fullScaleNm * 1852.0 / radiusPx;                                   // metres of the ground across one pixel of the tube
+    const double lat = std::clamp(latDeg, -85.0, 85.0) * 3.14159265358979323846 / 180.0;
+    const double z = std::log2(40075016.686 * std::cos(lat) / (static_cast<double>(tileSize) * mpp));
+    return std::clamp(static_cast<int>(std::lround(z)), static_cast<int>(minZoom), static_cast<int>(maxZoom));
+}
+
+namespace {
+
+// THE TILES UNDER THE GLASS: every pixel of the disc is a range and a bearing from the middle of the view; the point the pair names (destinationPoint, the inverse of what places a target) is a
+// web-mercator place, and that place's pixel in its tile is the colour, read through the phosphor: luminance only, green, so a tile can never outshine a contact.
+void paintTiles(Rgba* px, int w, int h, float cx, float cy, float radius, double full, double viewLat, double viewLon, const RadarTileSource& src, RadarPaintScratch& scratch) {
+    scratch.tilesPending = false;
+    scratch.tilesDrawn = 0;
+    const int z = radarTileZoom(full, radius, viewLat, src.tileSize, src.minZoom, src.maxZoom);
+    const double n = std::ldexp(1.0, z);
+    const std::uint32_t ts = src.tileSize;
+    struct Entry { int state = -1; std::vector<std::uint8_t> rgb; };
+    std::unordered_map<std::uint64_t, Entry> cache;
+    const auto fetch = [&](std::uint32_t tx, std::uint32_t ty) -> const Entry& {
+        const std::uint64_t key = (static_cast<std::uint64_t>(tx) << 32) | ty;
+        auto it = cache.find(key);
+        if (it != cache.end()) { return it->second; }
+        Entry e;
+        e.state = src.tile(static_cast<std::uint32_t>(z), tx, ty, e.rgb);
+        if (e.state == 0) { scratch.tilesPending = true; }
+        if (e.state != 1 || e.rgb.size() < static_cast<std::size_t>(ts) * ts * 3u) { e.state = e.state == 0 ? 0 : -1; e.rgb.clear(); }
+        return cache.emplace(key, std::move(e)).first->second;
+    };
+    const double r2 = static_cast<double>(radius) * radius;
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const double dx = static_cast<double>(x) + 0.5 - cx, dy = static_cast<double>(y) + 0.5 - cy;
+            if (dx * dx + dy * dy > r2) { continue; }
+            const double rangeNm = std::sqrt(dx * dx + dy * dy) / radius * full;
+            const double bearing = std::atan2(dx, -dy) * 180.0 / 3.14159265358979323846;
+            const gui::LatLon p = gui::destinationPoint(viewLat, viewLon, bearing, rangeNm * gui::kKmPerNm);
+            double lon = p.lonDeg;
+            while (lon < -180.0) { lon += 360.0; }
+            while (lon >= 180.0) { lon -= 360.0; }
+            const double wx = (lon + 180.0) / 360.0 * n, wy = gui::scopeMercY(p.latDeg) * n;
+            if (!(wy >= 0.0 && wy < n)) { continue; }
+            const std::uint32_t tx = static_cast<std::uint32_t>(wx), ty = static_cast<std::uint32_t>(wy);
+            const Entry& e = fetch(tx, ty);
+            if (e.state != 1) { continue; }
+            const std::uint32_t ix = std::min(ts - 1u, static_cast<std::uint32_t>((wx - tx) * ts)), iy = std::min(ts - 1u, static_cast<std::uint32_t>((wy - ty) * ts));
+            const std::uint8_t* c = e.rgb.data() + (static_cast<std::size_t>(iy) * ts + ix) * 3u;
+            const double lum = (0.30 * c[0] + 0.59 * c[1] + 0.11 * c[2]) / 255.0;
+            Rgba& o = px[static_cast<std::size_t>(y) * w + x];
+            o = Rgba{static_cast<std::uint8_t>(10.0 + lum * 40.0), static_cast<std::uint8_t>(28.0 + lum * 120.0), static_cast<std::uint8_t>(13.0 + lum * 36.0), 255};
+            ++scratch.tilesDrawn;
+        }
+    }
+}
+
+}  // namespace
+
+std::size_t paintRadarGround(Rgba* px, int w, int h, const RadarScope& scope, RadarPaintScratch& scratch, const RadarTileSource* tiles) {
     if (px == nullptr || w <= 0 || h <= 0) { return 0; }
     Canvas cv(px, w, h);
     const int side = std::min(w, h);
@@ -108,8 +168,13 @@ std::size_t paintRadarGround(Rgba* px, int w, int h, const RadarScope& scope, Ra
         return 0;
     }
 
-    // ---- the ground: the wash, then the coastline from the middle of the view ----
-    if (scope.optPhosphor()) {
+    // ---- the ground: a basemap's tiles when a plugin supplies them (the classic's rule: the tiles go under the glass and the coastline stays out of it), else the wash and the coastline ----
+    scratch.tilesPending = false;
+    scratch.tilesDrawn = 0;
+    if (tiles != nullptr && tiles->tile && tiles->tileSize > 0) {
+        paintTiles(px, w, h, cx, cy, radius, static_cast<double>(fr.rangeNm), scope.viewLatDeg(), scope.viewLonDeg(), *tiles, scratch);
+    }
+    if (scratch.tilesDrawn == 0 && scope.optPhosphor()) {
         cv.rect(0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h), kWash);
         const double full = static_cast<double>(fr.rangeNm);
         const double coverNm = full * 1.45;   // the circle through the square's corners, and a little over

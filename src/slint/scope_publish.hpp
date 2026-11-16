@@ -38,6 +38,8 @@ public:
 
     // THE RADAR SCOPE is the SCOPE tab (view-index 2): the Radar section's key puts the window there and remembers the view it came from; EXIT SCOPE, the key again and Esc go back.
     void toggleRadar();
+    // A click on an aircraft in the 3D airspace selects that contact, as a row of the HOME list does (window gaps lane 4, row 3042).
+    void selectContact(const std::string& id);
     void leaveRadar();
     bool radarOn() const;
 

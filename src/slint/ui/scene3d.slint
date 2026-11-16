@@ -54,6 +54,7 @@ export component Scene3DWell inherits Rectangle {
     out property <bool> has-focus: fs.has-focus;
     out property <bool> dragging: area.pressed;
     callback reset-view();                                  // after the camera went back to its defaults (the host persists it)
+    callback picked(float, float);                          // a press and release that did not drag: where, as fractions of the picture (a view that picks things listens)
     callback camera-moved();                                // after any change of the camera by the pointer or a key
 
     background: Theme.well-deep;
@@ -134,16 +135,25 @@ export component Scene3DWell inherits Rectangle {
     area := TouchArea {
         property <length> last-x;
         property <length> last-y;
+        property <length> down-x;
+        property <length> down-y;
+        property <bool> travelled;
         enabled: root.enabled;
         mouse-cursor: self.pressed ? MouseCursor.grabbing : MouseCursor.grab;
         pointer-event(e) => {
             if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
                 self.last-x = self.mouse-x;
                 self.last-y = self.mouse-y;
+                self.down-x = self.mouse-x;
+                self.down-y = self.mouse-y;
+                self.travelled = false;
                 fs.focus();
+            } else if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up && !self.travelled && self.width > 0px && self.height > 0px) {
+                root.picked(self.mouse-x / self.width, self.mouse-y / self.height);
             }
         }
         moved => {
+            if (self.pressed && (abs(self.mouse-x - self.down-x) > 4px || abs(self.mouse-y - self.down-y) > 4px)) { self.travelled = true; }
             if (self.pressed) {
                 root.turn(-(self.mouse-x - self.last-x) / 1px * root.deg-per-pixel, (self.mouse-y - self.last-y) / 1px * root.deg-per-pixel);
                 self.last-x = self.mouse-x;

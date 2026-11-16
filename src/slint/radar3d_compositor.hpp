@@ -25,7 +25,14 @@ struct Radar3dInput {
     std::size_t maxLabels = 8;
 };
 
+// WHERE EACH PLOTTED AIRCRAFT'S MARKER LANDED, as fractions of the picture (window gaps lane 4, row 3042): what a click on the airspace is held against.
+struct Radar3dPick {
+    std::string id;
+    float x = 0.0f, y = 0.0f;
+};
+
 struct Radar3dResult {
+    std::vector<Radar3dPick> picks;                 // one per aircraft whose marker is in front of the eye
     std::size_t aircraft = 0;                       // drawn
     std::size_t onGround = 0;                       // of them, without an altitude
     std::size_t trailSegments = 0;
@@ -34,6 +41,9 @@ struct Radar3dResult {
 
 // Paints into px (w x h) on a transparent background (the well's own ground shows through). Reuses `scene` between frames.
 Radar3dResult paintRadar3d(scene3d::Scene& scene, scene3d::Rgba* px, int w, int h, const Radar3dInput& in);
+
+// The aircraft a click at (fx, fy) (fractions of the w x h picture) names: the nearest marker within `maxPx` pixels, "" when none is that close (the first of two equally near wins).
+std::string pickRadar3d(const std::vector<Radar3dPick>& picks, float fx, float fy, int w, int h, float maxPx = 16.0f);
 
 scene3d::Camera radar3dDefaultCamera();             // TILT 26 degrees, as the design's
 const scene3d::Ramp& radar3dRamp();                 // the altitude key's ramp: FL0 indigo to FL400 amber

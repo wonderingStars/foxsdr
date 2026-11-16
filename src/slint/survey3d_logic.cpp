@@ -175,6 +175,27 @@ void levelRange(const std::vector<SurveyChannel>& ch, double floorDbV, double& l
     if (hiDb - loDb < 30.0) { hiDb = loDb + 30.0; }
 }
 
+std::string surveyCsv(const std::vector<SurveyChannel>& ch) {
+    const auto quote = [](const std::string& s) {
+        if (s.find_first_of(std::string(",") + (char)34 + (char)13 + (char)10) == std::string::npos) { return s; }
+        std::string o(1, (char)34);
+        for (const char c : s) { if (c == (char)34) { o += std::string(2, (char)34); } else { o += c; } }
+        return o + (char)34;
+    };
+    const auto num = [](bool have, double v, int decimals) {
+        if (!have) { return std::string(); }
+        char b[48];
+        std::snprintf(b, sizeof(b), "%.*f", decimals, v);
+        return std::string(b);
+    };
+    std::string out = "Frequency (Hz),Width (Hz),Peak (dB),Over floor (dB),Seen (%),Guess,Band\r\n";
+    for (const SurveyChannel& c : ch) {
+        out += num(true, c.freqHz, 0) + "," + num(c.haveWidth, c.widthHz, 0) + "," + num(c.havePeak, c.peakDb, 1) + "," + num(c.haveOver, c.overDb, 1) + "," +
+               num(c.haveSeen, c.seenPct, 1) + "," + quote(c.guess) + "," + quote(c.band) + "\r\n";
+    }
+    return out;
+}
+
 std::string formatSurveyMHz(double hz, double spanHz) {
     const double step = spanHz / 4.0;
     int decimals = 3;

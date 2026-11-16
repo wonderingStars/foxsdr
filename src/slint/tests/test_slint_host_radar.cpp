@@ -1486,6 +1486,53 @@ void cost() {
 
 }  // namespace
 
+// WINDOW GAPS LANE 4, row 1967: a basemap's tiles under the glass (a stand-in tile source: nothing is fetched)
+void tileGround() {
+    RadarInputs kansas = inputs();
+    kansas.rxLatDeg = 38.5;
+    kansas.rxLonDeg = -98.0;
+    RadarScope s;
+    s.setTubeSize(400, 400);
+    s.setRangeNm(10);
+    s.update({}, kansas, nullptr);
+    const int W2 = 400;
+    int asked = 0;
+    RadarTileSource src;
+    src.tileSize = 16;
+    src.minZoom = 0;
+    src.maxZoom = 12;
+    src.tile = [&](std::uint32_t, std::uint32_t, std::uint32_t, std::vector<std::uint8_t>& rgb) { ++asked; rgb.assign(16u * 16u * 3u, 255); return 1; };
+    std::vector<Rgba> plainPx(static_cast<std::size_t>(W2) * W2), tiledPx(plainPx.size()), pendPx(plainPx.size()), missPx(plainPx.size());
+    RadarPaintScratch sc0, sc1, sc2, sc3;
+    paintRadarGround(plainPx.data(), W2, W2, s, sc0, nullptr);
+    paintRadarGround(tiledPx.data(), W2, W2, s, sc1, &src);
+    CHECK(asked > 0);
+    CHECK(sc1.tilesDrawn > 50000 && !sc1.tilesPending);                         // the disc is the tiles', every pixel inside it
+    CHECK(pxAt(tiledPx, W2, 150, 150).g > 120 && pxAt(plainPx, W2, 150, 150).g < 100);   // a white tile reads as bright phosphor, far above the dark ground
+    CHECK(pxAt(tiledPx, W2, 2, 2).a == 0);                                      // the corners of the square stay clear glass
+    CHECK(!same(plainPx, tiledPx));
+    // a tile that is PENDING is asked again, the picture falls back to the plain ground until it comes
+    src.tile = [&](std::uint32_t, std::uint32_t, std::uint32_t, std::vector<std::uint8_t>& rgb) { rgb.clear(); return 0; };
+    paintRadarGround(pendPx.data(), W2, W2, s, sc2, &src);
+    CHECK(sc2.tilesPending && sc2.tilesDrawn == 0);
+    CHECK(same(plainPx, pendPx));
+    // a tile that is MISSING is not waited for
+    src.tile = [&](std::uint32_t, std::uint32_t, std::uint32_t, std::vector<std::uint8_t>& rgb) { rgb.clear(); return -1; };
+    paintRadarGround(missPx.data(), W2, W2, s, sc3, &src);
+    CHECK(!sc3.tilesPending && sc3.tilesDrawn == 0 && same(plainPx, missPx));
+    // a source that returns too few bytes is a missing tile, never a read past them
+    src.tile = [&](std::uint32_t, std::uint32_t, std::uint32_t, std::vector<std::uint8_t>& rgb) { rgb.assign(10, 255); return 1; };
+    RadarPaintScratch sc4;
+    paintRadarGround(missPx.data(), W2, W2, s, sc4, &src);
+    CHECK(sc4.tilesDrawn == 0);
+    // the zoom: a tile pixel about as big as a tube pixel, held to the source's zooms
+    CHECK(radarTileZoom(10.0, 198.0, 39.0, 256, 0, 19) == 10);
+    CHECK(radarTileZoom(0.01, 198.0, 39.0, 256, 0, 12) == 12);
+    CHECK(radarTileZoom(1600.0, 198.0, 39.0, 256, 3, 19) == 3 || radarTileZoom(1600.0, 198.0, 39.0, 256, 3, 19) > 3);
+    CHECK(radarTileZoom(0.0, 198.0, 39.0, 256, 2, 19) == 2);
+    CHECK(radarTileZoom(10.0, 198.0, 39.0, 0, 2, 19) == 2);
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);   // a crash must not eat the lines before it
     ladderAndWheel();
@@ -1503,5 +1550,6 @@ int main() {
     painterTrails();
     sweepFan();
     cost();
+    tileGround();
     return testSummary("test_slint_host_radar");
 }

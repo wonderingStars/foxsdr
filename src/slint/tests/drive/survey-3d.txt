@@ -58,3 +58,9 @@ shot "survey-3d-keys.png"
 +8 state view3d.survey.on == 0
 state cfg.view3d contains "survey:on=0"
 shot "survey-3d-back.png"
+# EXPORT CSV (window gaps lane 4, row 3075): the channel table written beside the other exports, never over a file that is there; the note says where
++1 state view3d.survey.exportnote == "-"
++1 click "EXPORT CSV"
++10 state view3d.survey.exportnote contains "foxsdr-survey-channels"
++1 click "EXPORT CSV"
++10 state view3d.survey.exportnote contains "(2)"

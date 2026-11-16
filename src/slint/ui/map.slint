@@ -49,11 +49,19 @@ export struct MapTarget {
     emergency: bool,
     color: color,
     size: float,
+    category: int,      // an aircraft's silhouette (MapIcons.aircraft index, gui/aircraft_icons.hpp's order); -1 = the plain glyph of its kind (window gaps lane 4, row 493)
+    alt-known: bool,    // the halo under a silhouette is filled while the altitude is known, a ring only when it is not
+}
+
+// The classic's aircraft silhouettes, one picture per category (11 of them), set once by the host from gui/aircraft_icon_pixels.hpp.
+export global MapIcons {
+    in property <[image]> aircraft;
 }
 
 export struct LegendRow {
     label: string,
     color: color,
+    heading: bool,         // a ladder's title ("ALTITUDE - kft"): lettered with no swatch (window gaps lane 4)
 }
 
 // SCREEN LANE J: the caption of a Maidenhead grid cell, placed by the host: x, y are fractions of the pane (the cell's centre).
@@ -111,6 +119,8 @@ export component MapPane inherits Rectangle {
     in property <string> scale-text;                 // "10 km"
     in property <float> scale-frac;                  // the bar's length as a fraction of the pane's width; 0 draws no bar
     in property <string> attribution;
+    in property <[string]> chart-lines;              // what the picture is, lettered top left (the satellites window: "EQUIRECTANGULAR - WGS 84")
+    in property <[string]> key-lines;                // the marks the legend cannot explain, bottom right above the zoom keys
     in property <bool> zoom-in-enabled: true;
     in property <bool> zoom-out-enabled: true;
     in property <bool> pick-armed;                   // the next click is a position: the crosshair
@@ -360,8 +370,23 @@ export component MapPane inherits Rectangle {
             stroke-width: 1.6px;
             commands: "M 14.00 1.00 A 13 13 0 0 1 17.36 1.44 M 20.50 2.74 A 13 13 0 0 1 23.19 4.81 M 25.26 7.50 A 13 13 0 0 1 26.56 10.64 M 27.00 14.00 A 13 13 0 0 1 26.56 17.36 M 25.26 20.50 A 13 13 0 0 1 23.19 23.19 M 20.50 25.26 A 13 13 0 0 1 17.36 26.56 M 14.00 27.00 A 13 13 0 0 1 10.64 26.56 M 7.50 25.26 A 13 13 0 0 1 4.81 23.19 M 2.74 20.50 A 13 13 0 0 1 1.44 17.36 M 1.00 14.00 A 13 13 0 0 1 1.44 10.64 M 2.74 7.50 A 13 13 0 0 1 4.81 4.81 M 7.50 2.74 A 13 13 0 0 1 10.64 1.44";
         }
+        // an aircraft's silhouette: the picture of its category, in its own colours, over a halo in the altitude colour (filled when the altitude is known, a ring when not)
+        if t.kind == 1 && t.category >= 0 && t.category < MapIcons.aircraft.length : Rectangle {
+            x: 1px; y: 1px; width: parent.icon; height: parent.icon;
+            border-radius: self.width / 2;
+            background: t.alt-known ? t.color.with-alpha(0.30) : transparent;
+            border-width: 1.5px;
+            border-color: t.color.with-alpha(0.75);
+        }
+        if t.kind == 1 && t.category >= 0 && t.category < MapIcons.aircraft.length : Image {
+            x: 1px; y: 1px; width: parent.icon; height: parent.icon;
+            source: MapIcons.aircraft[t.category];
+            image-fit: contain;
+            transform-rotation: root.icon-turn(t.heading);
+            accessible-role: none;
+        }
         // the icon of its kind, turned to its heading
-        Image {
+        if !(t.kind == 1 && t.category >= 0 && t.category < MapIcons.aircraft.length) : Image {
             x: 1px;
             y: 1px;
             width: parent.icon;
@@ -435,7 +460,16 @@ export component MapPane inherits Rectangle {
             spacing: 4px;
             for row in root.legend : HorizontalLayout {
                 spacing: 6px;
-                VerticalLayout {
+                if row.heading : Text {
+                    text: row.label;
+                    color: Theme.fg-soft;
+                    font-family: Theme.font-ui;
+                    font-size: Theme.font-cap;
+                    font-weight: Theme.weight-semibold;
+                    letter-spacing: 0.4px;
+                    vertical-alignment: center;
+                }
+                if !row.heading : VerticalLayout {
                     alignment: center;
                     Rectangle {
                         width: 10px;
@@ -454,6 +488,22 @@ export component MapPane inherits Rectangle {
                     vertical-alignment: center;
                 }
             }
+        }
+    }
+
+    // ================= the chart's name, top left, and the key to the marks, bottom right (the satellites window) =================
+    if root.chart-lines.length > 0 : Rectangle {
+        x: 10px; y: 10px; width: chart-col.preferred-width; height: chart-col.preferred-height;
+        background: Theme.wf-key-bg; border-width: Theme.hairline; border-color: Theme.line; border-radius: Theme.radius-panel;
+        chart-col := VerticalLayout { padding: 7px; spacing: 3px;
+            for l in root.chart-lines : Text { text: l; color: Theme.muted; font-family: Theme.font-ui; font-size: Theme.font-tiny; font-weight: Theme.weight-semibold; letter-spacing: 0.4px; }
+        }
+    }
+    if root.key-lines.length > 0 : Rectangle {
+        x: root.width - self.width - 10px; y: root.height - self.height - 78px; width: key-col.preferred-width; height: key-col.preferred-height;
+        background: Theme.wf-key-bg; border-width: Theme.hairline; border-color: Theme.line; border-radius: Theme.radius-panel;
+        key-col := VerticalLayout { padding: 7px; spacing: 3px;
+            for l in root.key-lines : Text { text: l; color: Theme.muted; font-family: Theme.font-ui; font-size: Theme.font-tiny; font-weight: Theme.weight-semibold; letter-spacing: 0.4px; }
         }
     }
 
@@ -529,6 +579,7 @@ export component MapPane inherits Rectangle {
         icon-size: 16px;
         enabled: root.zoom-in-enabled && root.enabled;
         accessible-label: root.zoom-in-label;
+        tooltip: root.zoom-in-enabled ? @tr("Zoom in - or turn the mouse wheel over the map") : @tr("Zoomed in as far as the map goes");
         clicked => { root.zoom-key(1); }
     }
     Key {
@@ -541,6 +592,7 @@ export component MapPane inherits Rectangle {
         icon-size: 16px;
         enabled: root.zoom-out-enabled && root.enabled;
         accessible-label: root.zoom-out-label;
+        tooltip: root.zoom-out-enabled ? @tr("Zoom out - or turn the mouse wheel over the map") : @tr("Zoomed out as far as the map goes");
         clicked => { root.zoom-key(-1); }
     }
 

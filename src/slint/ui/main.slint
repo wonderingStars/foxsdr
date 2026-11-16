@@ -21,7 +21,7 @@ import { SdrPlayDialog, SdrPlayDialogState, SdrPlayDialogModel, PointerLedger, P
 import { Slider, LevelBar, SliderGroup } from "sliders.slint";
 import { Section, BodyRow, SelectKey } from "sections.slint";
 import { Tab, TornWindow, Splitter } from "tabs.slint";
-import { KitEvents, DecodeRow, PluginEntry, RunsOnKey, DecoderBar, PageTab, MapModel, FittedModel, ModuleModel, DetailsModel, PageBody, DecodeBank,
+import { KitEvents, DecodeRow, PluginEntry, RunsOnKey, DecoderBar, PageTab, MapModel, FittedModel, ModuleModel, DetailsModel, PageBody, DecodeBank, MapExtras,
          PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
          InstrumentState, MapTarget, LegendRow, RowKind, RowTone, TableRow } from "pages.slint";
 import { MenuItemKind, MenuEntry, Menu } from "menus.slint";
@@ -40,7 +40,7 @@ import { Checkbox } from "fields.slint";
 import { LaneC, LCQuick, LCShortcut, LCRecording } from "tools_bank.slint";   // screen lane C (docs/multi-radio-records/screen-c.md): its one global and the row structs
 import { Card, Banner, CardTone } from "cards.slint";
 import { Gaps1, FaultCards, FaultCard } from "gaps1.slint";
-import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode, SpectrumView, SpectrumEvents } from "spectrum.slint";
+import { AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, AirbandChannel, TraceMode, SpectrumView, SpectrumEvents } from "spectrum.slint";
 import { LayoutRow, LayoutsModel, LayoutsBody } from "layouts_ui.slint";
 import { ExportModel, ExportBody } from "export_ui.slint";
 import { Handover } from "handover_ui.slint";   // engine fixes 7: the switch to the Legacy window
@@ -56,7 +56,7 @@ import { AboutSlint } from "std-widgets.slint";
 export { SdrPlayDialogState, SdrPlayDialogModel, PointerLedger } from "diag_overlays.slint";
 export { MeterPanel } from "meters_panel.slint";
 export { Theme, Skin, Workbench, NightWatch, GlassCockpit, DaylightLab, FieldRadio, HighContrast, DigitFace, MeterStyle, SrText, ChipTone, LampState, MenuItemKind, MenuEntry, CardTone,
-         AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, TraceMode, SpectrumEvents, WaterfallLook, AgeTick, PaletteResult, LayoutRow, LayoutsModel, ExportModel, Handover,
+         AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, AirbandChannel, MapExtras, MapIcons, TraceMode, SpectrumEvents, WaterfallLook, AgeTick, PaletteResult, LayoutRow, LayoutsModel, ExportModel, Handover,
          KitEvents, DecodeRow, PluginEntry, RunsOnKey, DecoderBar, PageTab, MapModel, FittedModel, ModuleModel, DetailsModel,
          PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
          InstrumentState, MapTarget, LegendRow, RowKind, RowTone, TableRow,
@@ -82,7 +82,7 @@ export { WorkspaceModel, WorkspaceCell, RadioPaneData }   // the radio workspace
 export { GlobeEvents, GlobeModel, GlobeControl, GlobeChipModel }
 export { LaneC, LCQuick, LCShortcut, LCRecording }   // screen lane C: the host (lanec_publish.cpp) sets the global and answers its act(id, text)
 import { MapJEvents, LayerRow, ReplayModel, FilterModel, MapJModel, PolarDot, SkyModel, AntennaModel } from "mapj.slint";   // screen lane J (docs/multi-radio-records/screen-j.md): the map's layers, replay and filter, the Sky and Antenna pages
-import { GridLabel } from "map.slint";
+import { GridLabel, MapIcons } from "map.slint";
 export { MapJEvents, LayerRow, ReplayModel, FilterModel, MapJModel, PolarDot, SkyModel, AntennaModel, GridLabel }
 export { LaneL }   // screen lane L (docs/multi-radio-records/screen-l.md): the host (lanel_publish.cpp) sets the global and answers its act(id, text)
 export { LaneM }   // screen lane M (docs/multi-radio-records/screen-m.md): the host (lanem_publish.cpp) sets the global and answers its act(id, text)
@@ -170,7 +170,7 @@ export component MainWindow inherits Window {
     in property <string> mode-hint: "Passband 12.5 kHz · step 12.5 kHz · more in Signal › Radio";   // not-translated: sample data the host replaces
     in property <float> gain-norm; in property <string> gain-text: "N/A"; in property <bool> gain-auto; in property <bool> gain-enabled; in property <bool> gain-auto-enabled;
     in property <string> gain-hint: @tr("no gain stage"); in property <string> gain-tooltip; in property <string> gain-auto-tooltip;
-    in property <float> squelch-norm; in property <string> squelch-text: @tr("open"); in property <bool> squelch-auto: true; in property <string> squelch-hint; in property <string> squelch-auto-tooltip;
+    in property <float> squelch-norm; in property <string> squelch-text: @tr("open"); in property <bool> squelch-auto: true; in property <string> squelch-hint; in property <bool> airband-on; in property <string> squelch-auto-tooltip;
     in property <float> volume-norm; in property <string> volume-text: "0.00";
     in property <float> level-norm; in property <string> level-text: "--";
     in property <bool> bias-tee-present; in property <bool> bias-tee-on; in property <string> bias-hint: @tr("No bias tee on this radio");
@@ -292,6 +292,13 @@ export component MainWindow inherits Window {
     in property <string> key-coverage;
     in property <bool> show-strength-key: true;
     in property <float> wf-rail-pos: -1;
+    in property <string> wf-rail-label;
+    in property <float> wf-gap-pos: -1;                // the reception-gap break (window gaps lane 4)
+    in property <string> wf-gap-above;
+    in property <string> wf-gap-below;
+    in property <[AirbandChannel]> airband-channels: [];   // the Airband monitor's marks and captions on the spectrum
+    in property <string> airband-block;
+    in property <string> airband-hearing;
     in property <string> marker-tooltip;
     in property <string> waterfall-tooltip: @tr("Click to tune here · drag to pan · wheel to zoom · right-click for the marker menu");
     // status bar
@@ -523,7 +530,7 @@ export component MainWindow inherits Window {
                         }
                         VerticalLayout { alignment: center; horizontal-stretch: 1;
                             SliderGroup { caption: @tr("Squelch"); readout: root.squelch-text; hint: root.squelch-hint; value: root.squelch-norm;
-                                has-auto: true; auto-on: root.squelch-auto; auto-enabled: true; auto-tooltip: root.squelch-auto-tooltip; tooltip: @tr("Squelch - drag the slider, or scroll over it");
+                                has-auto: true; auto-on: root.squelch-auto; auto-enabled: true; auto-tooltip: root.squelch-auto-tooltip; tooltip: @tr("Squelch - drag the slider, or scroll over it") + (root.airband-on ? "\n" + @tr("Airband is listening: this sets the Airband squelch") : "");
                                 changed(v) => { root.squelch-changed(v); } auto-clicked => { root.squelch-auto-clicked(); } }
                         }
                         VerticalLayout { alignment: center; horizontal-stretch: 1; spacing: 7px;
@@ -611,7 +618,7 @@ export component MainWindow inherits Window {
                                 lines-text: root.lines-text; tail-note: root.tail-note; cost-note: root.cost-note; stop-all-label: root.stop-all-label; empty-entries-text: root.empty-entries-text;
                                 refusal: root.refusal; stale: root.stale; details: root.details; url: root.catalogue-url; }
                             if root.bank-index != 1 : VerticalLayout { spacing: 0px;
-                                for s[i] in root.sections : Section { name: s.name; chip: s.chip; tone: s.tone; open: s.open; first: i == 0; show-dot: s.show-dot; dot: s.dot; clicked => { root.section-clicked(i); }
+                                for s[i] in root.sections : Section { name: s.name; chip: s.chip; tone: s.tone; open: s.open; first: i == 0; show-dot: s.show-dot; dot: s.dot; tooltip: root.bank-index == 2 && i == 0 ? @tr("Opens the bench oscilloscope: the demodulated audio on a\nten-by-eight graticule, its spectrum, and the channel I/Q as\ntwo traces and as a vector display. The time base, the\nattenuator and the input selector are on the page itself.") : ""; clicked => { root.section-clicked(i); }
                                     // the Radio section's open body (the sheet's); the other bodies are the banks of phase 3
                                     VerticalLayout { spacing: ((root.bank-index == 0 && i != 0 && i != 5) || (root.bank-index == 4 && i != 9) || (root.bank-index == 2 && i != 0) || root.bank-index == 3) ? 10px : 0px;
                                         // the EXTEND bank's bodies (extend_bank.slint): 0 Web access, 1 CAT
@@ -760,10 +767,12 @@ export component MainWindow inherits Window {
                             mark-tab-clicked(i, x, y) => { root.mark-tab-clicked(i, false, x, y); }
                             peak-text: root.peak-text; peak-age: root.peak-age; show-peak: root.show-peak; span-text: root.span-text;
                             vfo-pos: root.vfo-pos; vfo-half: root.vfo-half; show-vfo: root.show-vfo;
+                            airband-channels: root.airband-channels; airband-block: root.airband-block; airband-hearing: root.airband-hearing;
                             bands: root.ribbon; ribbon-size: root.band-plan-on ? root.ribbon-size : 0;
                             bookmarks: root.bookmarks; plugin-marks: root.marks; user-markers: root.markers;
                             cursor-text: root.cursor-text; cursor-visible: root.cursor-visible; cursor-pos: root.cursor-pos;
                             band-tooltip: root.band-tooltip; edge-tooltip: root.edge-tooltip; off-band-tooltip: root.off-band-tooltip;
+                            rest-tip: @tr("Right-click to change the range and display");
                             hover(x, y) => { root.spectrum-hover(x, y); }
                             clicked(x, shift) => { root.spectrum-clicked(x, shift); }
                             double-clicked(x) => { root.spectrum-double-clicked(x); }
@@ -777,14 +786,15 @@ export component MainWindow inherits Window {
                             x: 0; y: spectrum.height + Theme.splitter-h; width: parent.width; height: max(0px, parent.height - spectrum.height - Theme.splitter-h);
                             picture: root.waterfall-image; age-ticks: root.age-ticks;
                             show-key: root.show-strength-key; key-labels: root.key-labels; key-foot: root.key-foot; key-manual: root.range-manual; key-coverage: root.key-coverage;
-                            rail-pos: root.wf-rail-pos;
+                            rail-pos: root.wf-rail-pos; rail-label: root.wf-rail-label;
+                            gap-pos: root.wf-gap-pos; gap-label-above: root.wf-gap-above; gap-label-below: root.wf-gap-below;
                             foot-left: root.waterfall-foot-left; foot-tuned: root.waterfall-foot-tuned; foot-rest: root.waterfall-foot-rest;
                             vfo-pos: root.vfo-pos; show-vfo: root.show-vfo;
                             plugin-marks: root.wf-marks; user-markers: root.markers;
                             mark-tabs: root.wf-mark-tabs;
                             mark-tab-clicked(i, x, y) => { root.mark-tab-clicked(i, true, x, y); }
                             cursor-text: root.cursor-text; cursor-visible: root.cursor-visible; cursor-pos: root.cursor-pos;
-                            marker-tooltip: root.marker-tooltip; tooltip: root.waterfall-tooltip;
+                            rest-tip: @tr("Right-click to change the range and display"); marker-tooltip: root.marker-tooltip; tooltip: root.waterfall-tooltip + (root.show-vfo ? "\n" + @tr("Shift + wheel: slide the tuned band") : "");   // while the Airband monitor listens there is no tuned band to slide (row 212)
                             hover(x, y) => { root.waterfall-hover(x, y); }
                             clicked(x, shift) => { root.waterfall-clicked(x, shift); }
                             panned(dx) => { root.waterfall-panned(dx); }

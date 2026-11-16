@@ -60,6 +60,8 @@ list(APPEND foxsdr_slint_sources lanel_logic.cpp lanel_publish.cpp)
 list(APPEND foxsdr_slint_sources lanem_logic.cpp lanem_publish.cpp)
 # WINDOW GAPS LANE 1 (docs/multi-radio-records/window-gaps-1.md): the start-up questions and fault cards (gaps1_logic: pure; gaps1_publish: the Gaps1 global; ui/gaps1.slint)
 list(APPEND foxsdr_slint_sources gaps1_logic.cpp gaps1_publish.cpp sysmenu_win.cpp)
+# WINDOW GAPS LANE 4 (docs/multi-radio-records/window-gaps-4.md): the waterfall's row log (gap break, key coverage, range rail) and the Airband monitor's marks on the spectrum
+list(APPEND foxsdr_slint_sources wfrows_logic.cpp airmarks_logic.cpp mapicons_logic.cpp)
 if(WIN32)
     enable_language(RC)
     add_executable(foxsdr-slint WIN32 ${foxsdr_slint_sources} "${CMAKE_SOURCE_DIR}/resources/icon/foxsdr.rc")

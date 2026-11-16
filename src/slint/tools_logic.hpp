@@ -279,6 +279,13 @@ struct AirbandRow {
     double hz = 0.0;
 };
 
+// A channel of the block on the air, for the marks on the spectrum (window-gaps lane 4): its frequency, width and whether its squelch is open now.
+struct AirbandMark {
+    double hz = 0.0;
+    double bw_hz = 0.0;
+    bool open = false;
+};
+
 struct AirportRow {
     std::string code;                      // the ident
     std::string name;
@@ -315,6 +322,7 @@ struct AirbandModel {
     std::string untick_all_label;
     bool busiest_first = false;
     std::string hearing;                   // the two status lines joined by a newline: the block on the air and "Hearing: ..." ("Hearing: -" when quiet); the pending sentence while waiting
+    std::vector<AirbandMark> marks;        // the channels of the block on the air (the live list's on-air rows): the spectrum's marks
     std::vector<AirbandRow> rows;
     float squelch_norm = 0.5f;             // (dB + 110) / 110
     std::string squelch_text;              // "squelch -55 dB"
