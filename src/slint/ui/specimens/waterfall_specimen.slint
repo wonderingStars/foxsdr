@@ -62,6 +62,8 @@ export component WaterfallSpecimen inherits Window {
     in-out property <int> wheel-notches;
     in-out property <int> pans;
     in-out property <int> marker-hover: -1;
+    in-out property <string> rest-tip;     // the 4 s tip (rows 202, 213): empty = none
+    out property <bool> rest-tip-shown: wf.rest-tip-shown;
 
     wf := WaterfallView {
         x: 0px;
@@ -99,6 +101,7 @@ export component WaterfallSpecimen inherits Window {
         user-markers: root.markers;
         marker-tooltip: "M1 145.212 MHz · right-click for the marker menu";
         tooltip: "Click to tune | wheel: zoom";
+        rest-tip: root.rest-tip;
         cursor-visible: root.cursor-visible;
         cursor-pos: root.cursor-pos;
         cursor-text: "145.212 MHz · -78.4 dB";

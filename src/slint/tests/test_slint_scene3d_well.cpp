@@ -90,6 +90,29 @@ int main() {
     moveTo(win, cx + 150.0f, cy + 50.0f);
     CHECK_NEAR(ui->get_azimuth(), az1, 1e-4);
 
+    // ---- a click that did not drag is a pick (window gaps lane 4, row 3042: a click on an aircraft in the 3D airspace selects it) ----
+    CHECK(ui->get_picks() == 0);                      // the drag above travelled: it was not a pick
+    press(win, cx, cy);
+    release(win, cx, cy);
+    CHECK(ui->get_picks() == 1);
+    CHECK_NEAR(ui->get_pick_x(), 0.5, 0.01);           // where, as fractions of the picture
+    CHECK_NEAR(ui->get_pick_y(), 0.5, 0.01);
+    press(win, cx - 150.0f, cy - 95.0f);
+    release(win, cx - 150.0f, cy - 95.0f);
+    CHECK(ui->get_picks() == 2);
+    CHECK_NEAR(ui->get_pick_x(), 0.25, 0.01);
+    CHECK_NEAR(ui->get_pick_y(), 0.25, 0.01);
+    press(win, cx, cy);                                // a press that travels more than 4 px is a turn, never a pick
+    moveTo(win, cx + 12.0f, cy);
+    release(win, cx + 12.0f, cy);
+    CHECK(ui->get_picks() == 2);
+    press(win, cx, cy);                                // a travel of 3 px is still a click
+    moveTo(win, cx + 3.0f, cy);
+    release(win, cx + 3.0f, cy);
+    CHECK(ui->get_picks() == 3);
+    ui->set_azimuth(-58.0f);
+    ui->set_elevation(32.0f);
+
     // ---- elevation stays in range under a huge drag; azimuth wraps ----
     press(win, cx, cy);
     moveTo(win, cx, cy + 600.0f);   // far past the well: still pressed, still turning

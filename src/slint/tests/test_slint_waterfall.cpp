@@ -682,6 +682,22 @@ int main() {
     CHECK(render(ui, kW, kH).countNear(600, 122, 760, 144, kMenu, 4) > 400);             // the wheel does not hide it...
     moveTo(win, 20, 100);                                                                 // ...the pointer leaving the picture does
     CHECK(render(ui, kW, kH).countNear(600, 122, 760, 144, kMenu, 4) == 0);
+    {   // THE 4 s REST TIP (window gaps lane 4, row 213): a second tip that says its words once the hand has rested four seconds, in place of the gesture help
+        ui->set_rest_tip("Right-click to change the range and display");
+        moveTo(win, 600, 100);
+        settle(milliseconds(1500));
+        CHECK(!ui->get_rest_tip_shown());                                                 // 1.5 s: only the 0.6 s gesture tip so far
+        CHECK(render(ui, kW, kH).countNear(600, 122, 760, 144, kMenu, 4) > 400);
+        settle(milliseconds(3000));
+        CHECK(ui->get_rest_tip_shown());                                                  // 4.5 s of rest: the rest tip has replaced it
+        Frame restTip = render(ui, kW, kH);
+        CHECK(restTip.countNear(600, 122, 760, 144, kMenu, 4) > 400);
+        CHECK(tipWidth(restTip, 596, 125) > gestureTipW + 20);                            // the longer words: a wider face than "Click to tune | wheel: zoom"
+        moveTo(win, 640, 100);                                                            // a move of more than 6 px restarts the wait
+        CHECK(!ui->get_rest_tip_shown());
+        moveTo(win, 20, 100);                                                             // leaving the picture ends it
+        ui->set_rest_tip("");
+    }
     // onto a marker: its own words (longer than the gesture help, so a wider face), 600 ms after the pointer came onto it
     moveTo(win, 345, 100);
     CHECK(ui->get_marker_hover() == 0);

@@ -22,6 +22,9 @@ export component Scene3DWellSpecimen inherits Window {
     in-out property <float> zoom: 1;
     in-out property <int> resets;
     in-out property <int> moves;
+    in-out property <int> picks;          // a press and release that did not drag (window gaps lane 4, row 3042)
+    in-out property <float> pick-x: -1;
+    in-out property <float> pick-y: -1;
     out property <int> well-w: well.pixel-w;
     out property <int> well-h: well.pixel-h;
     out property <bool> well-focus: well.has-focus;
@@ -36,6 +39,7 @@ export component Scene3DWellSpecimen inherits Window {
         zoom <=> root.zoom;
         reset-view => { root.resets += 1; }
         camera-moved => { root.moves += 1; }
+        picked(fx, fy) => { root.picks += 1; root.pick-x = fx; root.pick-y = fy; }
     }
     Scene3DCameraBar {
         x: 20px; y: 410px; width: 600px;
