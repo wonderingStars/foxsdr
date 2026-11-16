@@ -37,6 +37,7 @@ import { ExtendEvents, WebModel, CatModel, StoreBadge, StoreCard, StoreCategory,
          WebBody, CatBody } from "extend_bank.slint";
 import { PluginBodyModel, BodyFrame, BodyFact, BodyReach, ModuleBodyEvents } from "plugin_body.slint";   // window gaps 3: the catalogue body of a plugin's page
 import { Checkbox } from "fields.slint";
+import { LaneS4 } from "s4_bank.slint";   // screen lane S4 (docs/multi-radio-records/screen-s4-wave8.md): the scanner's saved hits, the outputs and the alerts
 import { LaneC, LCQuick, LCShortcut, LCRecording } from "tools_bank.slint";   // screen lane C (docs/multi-radio-records/screen-c.md): its one global and the row structs
 import { Card, Banner, CardTone } from "cards.slint";
 import { Gaps1, FaultCards, FaultCard } from "gaps1.slint";
@@ -88,6 +89,7 @@ import { LaneS2, S2SpectrumPanel, S2TuningPanel } from "lane_s2.slint";   // scr
 export { MapJEvents, LayerRow, ReplayModel, FilterModel, MapJModel, PolarDot, SkyModel, AntennaModel, GridLabel }
 export { LaneL }   // screen lane L (docs/multi-radio-records/screen-l.md): the host (lanel_publish.cpp) sets the global and answers its act(id, text)
 export { LaneS2 }   // screen lane S2 (docs/multi-radio-records/screen-s2.md): the host (lanes2_publish.cpp) sets the global and answers its act(id, text)
+export { LaneS4 }   // screen lane S4: the host (s4_publish.cpp) sets the global and answers its act(id, text)
 export { LaneM }   // screen lane M (docs/multi-radio-records/screen-m.md): the host (lanem_publish.cpp) sets the global and answers its act(id, text)
 export { LaneS1 }   // screen lane S1: the host (s1_publish.cpp) sets the global and answers its act(id, text)
 export { KRow, LaneK, KTile, LaneKMatrix }   // screen lane K (docs/multi-radio-records/screen-k.md): the host (lanek_publish.cpp) sets the globals and answers their act(id, text)
@@ -694,6 +696,9 @@ export component MainWindow inherits Window {
                                         // screen lane S2 (docs/multi-radio-records/screen-s2.md): the spectrum tools (Spectrum tools) and the tuning controls (Tuning and memories)
                                         if root.bank-index == 4 && i == root.system-extra-base + 4 : S2SpectrumPanel { }
                                         if root.bank-index == 4 && i == root.system-extra-base + 5 : S2TuningPanel { }
+                                        // screen lane S4: the scanner's saved hits (TOOLS, Scanner) and the outputs and alerts (SYSTEM, Outputs)
+                                        if root.bank-index == 2 && i == 3 && LaneS4.rows-scan.length > 0 : KPanel { rows: LaneS4.rows-scan; act(id, t) => { LaneS4.act(id, t); } }
+                                        if root.bank-index == 4 && i == root.system-extra-base + 11 && LaneS4.rows-outputs.length > 0 : KPanel { rows: LaneS4.rows-outputs; act(id, t) => { LaneS4.act(id, t); } }
                                     }
                                 }
                             }

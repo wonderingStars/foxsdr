@@ -96,6 +96,8 @@ const Row kRows[] = {
      "the plugin store's jobs (catalogue read, a picture, an install, a clean-up): downloads over WinHTTP with their own timeouts, collected by pumpWorkers; an install is minutes by design - NOT COVERED by this batch (a known gap)"},
     {"src/engine/image_feed.cpp", 1, 0, 1, 1, "kThreadImageFeed", ""},
     {"src/engine/record_start.hpp", 1, 1, 1, 1, "kThreadRecordOpen", R_REAP},
+    {"src/engine/s4_outputs.cpp", 1, 0, 0, 0, "",
+     "screen lane S4: the decoded-text outputs' one worker (a webhook post, an InfluxDB write or a desktop notification; each send is bounded by its client's own timeout and a cancel flag, the queue holds at most 200 jobs, stop() cancels and joins it): started only when an output is switched on (all are off by default) - NOT COVERED by a heartbeat (a known gap: the pass thread only queues, so a stalled send cannot stall the pass)"},
     {"src/engine/server_host.cpp", 1, 3, 4, 4, "kThreadPasswordHash,kThreadServerHost", ""},   // (engine lane E1: the listener password hashes on a worker of its own, two more asyncs and registrations)
     {"src/engine/shutdown_guard.cpp", 1, 0, 0, 0, "",
      "the headless stop's budget guard: the watcher of the stop, which ends the process when the budget is spent; a watcher is not a worker"},

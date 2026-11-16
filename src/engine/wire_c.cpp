@@ -14,6 +14,8 @@
 #include "core/diag_log.hpp"
 #include "core/rec_naming.hpp"
 #include "core/safe_file_io.hpp"
+#include "core/secret_vault.hpp"
+#include "engine/s4_outputs.hpp"
 #include "net/web_cors.hpp"
 
 namespace cascade::engine::wirec {
@@ -58,6 +60,30 @@ constexpr Spec kSpecs[] = {
     {"rds.log.name", Kind::Text, 0, 120, "rds_{date}", ""},   // the file name, by the recorder's template rules ({date} {time} {freq_mhz} {radio} ...); ".csv" is added
     {"sig.symbol_rate", Kind::Real, 0, 1000000, "0", ""},         // the symbol rate in baud the user sets for plugins that can use it (0 = none); plugins read it with the host call symbol_rate
     {"web.cors_credentials", Kind::Choice, 0, 0, "off", "off"},   // credentialed cross-origin requests: never (the session cookie is SameSite=Strict; an owner decision with HTTPS)
+    // --- screen lane S4: where the decoded-text feed is SENT, and keyword alerts (engine/s4_outputs.hpp). Every switch is OFF; every address defaults to this computer. The keys named in secretKeys()
+    // (the webhook address, which may carry a token, and the MQTT password) live in the Windows per-user protected store, never in wirec.json, and are never published as a fact. ---
+    {"out.mqtt.enabled", Kind::Bool, 0, 0, "0", ""},            // publish every decoded line (or only the alerts) to an MQTT broker; the broker's address is below
+    {"out.mqtt.host", Kind::Text, 0, 253, "127.0.0.1", ""},     // the broker: this computer unless the user types another host
+    {"out.mqtt.port", Kind::Int, 1, 65535, "1883", ""},
+    {"out.mqtt.topic", Kind::Text, 0, 200, "foxsdr/decodes", ""},
+    {"out.mqtt.user", Kind::Text, 0, 128, "", ""},
+    {"out.mqtt.password", Kind::Text, 0, 128, "", ""},          // SECRET (protected store)
+    {"out.mqtt.send", Kind::Choice, 0, 0, "decodes", "decodes|alerts"},
+    {"out.webhook.enabled", Kind::Bool, 0, 0, "0", ""},         // post every decoded line (or only the alerts) to a web address: https, or http on this computer only
+    {"out.webhook.url", Kind::Text, 0, 2048, "", ""},           // SECRET (protected store): the address may carry a token
+    {"out.webhook.send", Kind::Choice, 0, 0, "decodes", "decodes|alerts"},
+    {"out.influx.enabled", Kind::Bool, 0, 0, "0", ""},          // write the selected radio's signal level to an InfluxDB (line protocol), every out.influx.every_s seconds
+    {"out.influx.host", Kind::Text, 0, 253, "127.0.0.1", ""},   // this computer unless the user types another host (no encryption on the way: the token crosses the network as it is)
+    {"out.influx.port", Kind::Int, 1, 65535, "8086", ""},
+    {"out.influx.mode", Kind::Choice, 0, 0, "http", "http|udp"},
+    {"out.influx.org", Kind::Text, 0, 64, "", ""},
+    {"out.influx.bucket", Kind::Text, 0, 64, "foxsdr", ""},
+    {"out.influx.token", Kind::Text, 0, 256, "", ""},           // SECRET (protected store)
+    {"out.influx.every_s", Kind::Int, 1, 3600, "10", ""},
+    {"alerts.enabled", Kind::Bool, 0, 0, "0", ""},              // raise an alert when a decoded line holds one of the keywords
+    {"alerts.keywords", Kind::Text, 0, 4000, "", ""},           // one keyword or phrase per line, at most 64
+    {"alerts.gap_s", Kind::Int, 0, 3600, "30", ""},             // the same keyword again within this many seconds is not raised again
+    {"alerts.notify", Kind::Bool, 0, 0, "1", ""},               // hand a raised alert to the desktop notification (shown only where the system can)
 };
 constexpr std::size_t kSpecCount = sizeof(kSpecs) / sizeof(kSpecs[0]);
 
@@ -101,11 +127,26 @@ std::string extraRule(const std::string& key, const std::string& value) {
         const cascade::core::recname::Expanded e = cascade::core::recname::expand(value.empty() ? std::string("rds_{date}") : value, f);
         if (!e.ok) { return e.error; }
     }
+    if (key == "out.mqtt.host" && !value.empty()) { return cascade::engine::s4::checkMqttHost(value); }
+    if (key == "out.mqtt.topic") { return cascade::engine::s4::checkMqttTopic(value); }
+    if (key == "out.influx.host" && !value.empty()) { return cascade::engine::s4::checkMqttHost(value); }
+    if (key == "out.influx.bucket") { return cascade::engine::s4::checkInfluxText(value, false); }
+    if (key == "out.influx.org") { return cascade::engine::s4::checkInfluxText(value, true); }
+    if (key == "out.influx.token" && value.find_first_of("\r\n") != std::string::npos) { return "the token has a line break"; }
+    if (key == "out.webhook.url") { return cascade::engine::s4::checkWebhookUrl(value); }
+    if (key == "alerts.keywords") { return cascade::engine::s4::parseKeywords(value).problem; }
     if (key == "rds.log.folder" && !value.empty() && !std::filesystem::path(value).is_absolute()) { return "the folder must be a full path"; }
     return std::string();
 }
 
 }  // namespace
+
+bool isSecretKey(const std::string& key) {
+    for (const std::string& k : cascade::core::vault::secretKeys()) {
+        if (k == key) { return true; }
+    }
+    return false;
+}
 
 const Spec* specs(std::size_t& count) {
     count = kSpecCount;
@@ -176,6 +217,13 @@ void Settings::reload() {
         ++version_;
         return;
     }
+    {
+        // the secrets come back from the protected store (and a value an older build left in the file is moved there)
+        bool migrated = false;
+        std::string note;
+        text = cascade::core::vault::mergeAfterRead(path_.string(), text, migrated, note);
+        if (!note.empty()) { secretNote_ = note; }
+    }
     const json j = json::parse(text, nullptr, false);
     if (j.is_discarded() || !j.is_object()) {
         error_ = "the wirec settings file is damaged; the defaults are in force";
@@ -236,15 +284,29 @@ bool Settings::save() {
     if (values_.empty()) {
         std::error_code ec;
         std::filesystem::remove(path_, ec);
+        cascade::core::vault::forget(path_.string());
         return !ec;
     }
     json j = json::object();
     for (const auto& [k, v] : values_) { j[k] = v; }
-    return cascade::core::safeio::writeAtomic(path_, j.dump(1, ' ', false, json::error_handler_t::replace) + "\n");
+    // a secret key leaves the text for the protected store (a cleared one is removed from it)
+    for (const std::string& k : cascade::core::vault::secretKeys()) {
+        if (findSpec(k) != nullptr && values_.find(k) == values_.end()) { j[k] = ""; }
+    }
+    std::string out = j.dump(1, ' ', false, json::error_handler_t::replace) + "\n";
+    std::string why;
+    bool kept = false;
+    out = cascade::core::vault::splitForWrite(path_.string(), out, why, kept);
+    if (kept) { return false; }   // the protected store would not take the value: nothing is written with it in the clear
+    return cascade::core::safeio::writeAtomic(path_, out);
 }
 
 void Settings::each(const std::function<void(const std::string&, const std::string&)>& fn) const {
-    for (const Spec& s : kSpecs) { fn(s.key, get(s.key)); }
+    for (const Spec& s : kSpecs) {
+        std::string v = get(s.key);
+        if (isSecretKey(s.key)) { v = v.empty() ? std::string() : std::string("set"); }   // a secret is never published: only whether there is one
+        fn(s.key, v);
+    }
 }
 
 }  // namespace cascade::engine::wirec

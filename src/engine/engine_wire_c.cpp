@@ -221,6 +221,35 @@ void Engine::wireCFacts(const std::function<void(const std::string&, const std::
     fact("rds.log.lines", std::to_string(s.rdsLog.written()));       // counts and a sentence only: never a name, a text or a frequency
     fact("rds.log.dropped", std::to_string(s.rdsLog.dropped()));
     fact("rds.log.error", s.rdsLog.error());
+    // THE DECODED-TEXT OUTPUTS AND ALERTS (screen lane S4): counts and one sentence each - never a decoded line, a user name, a password or an address. The last alerts are the program's own
+    // read-out for the operator (LOCAL only, like every fact of this lane): the matched keyword and the text, cut.
+    {
+        const cascade::engine::s4::Stats o = s.outputs.stats();
+        fact("out.seen", std::to_string(o.seen));
+        fact("out.held_private", std::to_string(o.heldPrivate));
+        fact("out.mqtt.state", o.mqttState);
+        fact("out.mqtt.offered", std::to_string(o.mqttOffered));
+        fact("out.mqtt.problem", o.mqttProblem);
+        fact("out.mqtt.scope", s.settings().getBool("out.mqtt.enabled") ? cascade::engine::s4::mqttScope(s.settings().get("out.mqtt.host"), !s.settings().get("out.mqtt.password").empty()) : std::string());
+        fact("out.webhook.queued", std::to_string(o.hookQueued));
+        fact("out.webhook.ok", std::to_string(o.hookOk));
+        fact("out.webhook.failed", std::to_string(o.hookFailed));
+        fact("out.webhook.dropped", std::to_string(o.hookDropped));
+        fact("out.webhook.problem", o.hookProblem);
+        fact("out.webhook.scope", s.settings().getBool("out.webhook.enabled") ? cascade::engine::s4::hookScope(s.settings().get("out.webhook.url")) : std::string());
+        fact("out.influx.ok", std::to_string(o.influxOk));
+        fact("out.influx.failed", std::to_string(o.influxFailed));
+        fact("out.influx.problem", o.influxProblem);
+        fact("out.influx.scope", s.settings().getBool("out.influx.enabled") ? cascade::engine::s4::mqttScope(s.settings().get("out.influx.host"), !s.settings().get("out.influx.token").empty()) : std::string());
+        fact("alerts.raised", std::to_string(o.alertsRaised));
+        fact("alerts.notified", std::to_string(o.notified));
+        fact("alerts.notify_failed", std::to_string(o.notifyFailed));
+        fact("alerts.problem", o.alertProblem);
+        fact("alerts.notify_problem", o.notifyProblem);
+        std::string recent;
+        for (const std::string& r : s.outputs.recentAlerts()) { recent += (recent.empty() ? "" : "\n") + r; }
+        fact("alerts.recent", recent);
+    }
     fact("cat.emulation.running", s.catEmu.running() ? "1" : "0");
     fact("cat.emulation.port", s.catEmu.running() ? std::to_string(s.catEmu.boundPort()) : std::string());
     fact("cat.emulation.clients", std::to_string(s.catEmu.clients()));
@@ -451,6 +480,84 @@ void Engine::pumpWireC() {
             ++wireCVersion_;
         }
         if (s.radioInfo.poll(static_cast<std::int64_t>(std::time(nullptr)))) { ++wireCVersion_; }
+    }
+    // THE DECODED-TEXT OUTPUTS AND KEYWORD ALERTS (screen lane S4; engine/s4_outputs.hpp): every switch is off by default. Nothing is read from the ring, no socket or thread exists, while all are off.
+    {
+        namespace s4 = cascade::engine::s4;
+        if (s.outputsSettingsVersion != s.settings().version()) {
+            s.outputsSettingsVersion = s.settings().version();
+            s4::Config c;
+            c.mqtt = s.settings().getBool("out.mqtt.enabled");
+            c.mqttHost = s.settings().get("out.mqtt.host");
+            c.mqttPort = static_cast<int>(s.settings().getInt("out.mqtt.port"));
+            c.mqttTopic = s.settings().get("out.mqtt.topic");
+            c.mqttUser = s.settings().get("out.mqtt.user");
+            c.mqttPassword = s.settings().get("out.mqtt.password");
+            c.mqttAlerts = s.settings().get("out.mqtt.send") == "alerts";
+            c.hook = s.settings().getBool("out.webhook.enabled");
+            c.hookUrl = s.settings().get("out.webhook.url");
+            c.hookAlerts = s.settings().get("out.webhook.send") == "alerts";
+            c.influx = s.settings().getBool("out.influx.enabled");
+            c.influxHost = s.settings().get("out.influx.host");
+            c.influxPort = static_cast<int>(s.settings().getInt("out.influx.port"));
+            c.influxHttp = s.settings().get("out.influx.mode") != "udp";
+            c.influxOrg = s.settings().get("out.influx.org");
+            c.influxBucket = s.settings().get("out.influx.bucket");
+            c.influxToken = s.settings().get("out.influx.token");
+            c.influxEveryS = static_cast<int>(s.settings().getInt("out.influx.every_s"));
+            c.alerts = s.settings().getBool("alerts.enabled");
+            c.keywords = s.settings().get("alerts.keywords");
+            c.alertGapS = static_cast<int>(s.settings().getInt("alerts.gap_s"));
+            c.alertNotify = s.settings().getBool("alerts.notify");
+            s.outputs.configure(c);
+            ++wireCVersion_;
+        }
+        if (s.outputs.active()) {
+            if (!s.outputsLive) {
+                s.outputsLive = true;
+                s.outputsSeq = pluginApi_->eventsSeq();   // from now on only: what was decoded before the switch was turned on is not sent
+            }
+            std::vector<s4::Event> batch;
+            for (const CascadeEvent& ev : pluginApi_->hostEvents(s.outputsSeq, 256)) {
+                s.outputsSeq = std::max<std::uint64_t>(s.outputsSeq, ev.seq);
+                s4::Event e;
+                e.seq = ev.seq;
+                e.unixMs = ev.unixMs;
+                e.frequencyHz = ev.frequencyHz;
+                e.plugin = ev.plugin;
+                e.kind = ev.kind;
+                e.text = ev.text;
+                e.priv = (ev.flags & CASCADE_EVENT_FLAG_PRIVATE) != 0u;
+                batch.push_back(std::move(e));
+            }
+            s.outputs.ingest(batch);
+        } else {
+            s.outputsLive = false;
+        }
+        {
+            // the level output: the selected radio's channel power, read only when one is due
+            const std::int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (s.outputs.levelsDue(nowMs)) {
+                cascade::core::powerlog::Record rec;
+                rec.unixNs = static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+                rec.radio = static_cast<int>(tlsScopeEngine_ == this ? tlsScopeSlot_ : 0u) + 1;
+                rec.frequencyHz = currentAbsoluteHz();
+                const double level = static_cast<double>(rx().pipeline_.signalPowerDb());
+                if (std::isfinite(level) && level > -199.0) { rec.signalDbfs = level; }
+                s.outputs.offerLevel(rec, nowMs);
+            }
+        }
+        {
+            // the facts above move with counts: a changed figure moves the fingerprint (as the RDS log's does)
+            const s4::Stats o = s.outputs.stats();
+            const std::string sig = std::to_string(o.seen) + "|" + std::to_string(o.mqttOffered) + "|" + o.mqttState + "|" + o.mqttProblem + "|" + std::to_string(o.hookOk) + "|" +
+                                    std::to_string(o.hookFailed) + "|" + std::to_string(o.hookDropped) + "|" + o.hookProblem + "|" + std::to_string(o.alertsRaised) + "|" +
+                                    std::to_string(o.notified) + "|" + std::to_string(o.notifyFailed) + "|" + o.alertProblem + "|" + o.notifyProblem + "|" + std::to_string(o.influxOk) + "|" + std::to_string(o.influxFailed) + "|" + o.influxProblem;
+            if (sig != s.outputsStatSig) {
+                s.outputsStatSig = sig;
+                ++wireCVersion_;
+            }
+        }
     }
     // THE RDS LOG (engine lane E1; core/rds_log.hpp): off by default; a change of the three settings reconfigures it, a refusal is said in fact rds.log.error
     {

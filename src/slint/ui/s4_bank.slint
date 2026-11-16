@@ -1,0 +1,9 @@
+// SCREEN LANE S4 (docs/multi-radio-records/screen-s4-wave8.md): the scanner's saved hits, and the outputs and alerts of the SYSTEM bank, drawn with lane K's row panel (KPanel in system_bank.slint). The host (s4_publish.cpp) builds the rows and answers `act(id, text)`; an empty list draws nothing.
+import { Theme } from "theme.slint";   // (the house rule: every file of the window imports the Theme; this one draws nothing and uses none of it)
+import { KRow } from "system_bank.slint";
+
+export global LaneS4 {
+    in property <[KRow]> rows-scan;       // TOOLS, Scanner: save each signal the scan stops on as a bookmark
+    in property <[KRow]> rows-outputs;    // SYSTEM, Outputs: the TCI and UDP-audio switches, MQTT, the web address, the keyword alerts
+    callback act(string, string);
+}
