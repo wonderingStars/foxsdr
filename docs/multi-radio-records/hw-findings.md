@@ -70,3 +70,21 @@ What a sound method needs: a reference that is not a broadcast station - a frequ
 tolerance is known to be a fraction of a ppm), or an average over many stations with a stated rejection of outliers and a result that
 carries the SPREAD between stations rather than only the PLL's scatter; the test must include two stations with different pilot errors.
 EXPECTATION CHANGED (listed in the final report): `src/slint/tests/test_slint_s5_host.cpp` line 151 `r.find(v, "m.start") != nullptr` is now `== nullptr` (the panel is not drawn).
+
+## Item 3: a saved sample rate the radio cannot do - FIXED
+
+Cause: `RtlSdrSource::setSampleRateHz` coerces to the nearest rate it has and returns true. The engine already built the panel's line
+"Sample rate coerced: the radio runs at 3.2 MS/s, not the 5 MS/s asked" (visible in the window as a Note: confirmed in a hidden-desktop
+run on the real dongle, so the line was NOT absent) but it did not say WHY, and nothing queued the refused-setting event.
+Fix (src/core/rate_follow_status.hpp, `applySourceRate`): the line is now "Sample rate coerced: this radio cannot run at 5 MS/s, so it runs at
+3.2 MS/s" (which rate and why, one sentence), and a rate that landed elsewhere queues the same `radio_settings` refusal a typed out-of-range
+value does (control `rate`, `refusedClass` `range`, reason "the radio cannot run at the sample rate asked; it runs at the nearest rate it can",
+no number), unless the driver already reported one on this thread (the RefusalWatch rule). New optional argument `why` ("open" at the
+worker open and the patch radios, "restore" at the startup restore; a user's pick keeps the thread default "user").
+Test (no hardware): `tests/test_rtlsdr_rate_report.cpp`, a driver on `usb::FakeUsbDevice`: 18 checks, 0 failed (the line, one event, class,
+why restore / open, no digit in the reason, a rate it can do queues nothing and clears an old coercion line, a repeat is folded).
+Break-it: the event emission switched off -> 13 checks, 2 failed; restored. `test_rate_coercion` (the older contract of the line) 45 checks, 0 failed.
+Real dongle (scratch engine, saved 5 MS/s, usage reporting on in the scratch config, all URLs dead): status `sampleRateHz 3200000`, `sourceError`
+"Sample rate coerced: this radio cannot run at 5 MS/s, so it runs at 3.2 MS/s"; queue: one `radio_settings` refused `rate`, `refusedClass` `range`,
+`why` `restore`, no band, no frequency, no path. Before the fix: no such event (the check's result).
+NOTE (not changed): `ControlWhyScope` is never set by the engine; `why` was always "user" for a refusal raised at open. Only this path passes it.

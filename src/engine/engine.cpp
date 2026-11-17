@@ -2109,7 +2109,7 @@ void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) 
         // A rate refusal is not fatal (the panel shows the actual readback
         // either way) but is surfaced - and so is a rate the driver coerced
         // on a call that succeeded.
-        r.error = cascade::gui::applySourceRate(*dev, r.requestRateHz, r.error).sourceError;
+        r.error = cascade::gui::applySourceRate(*dev, r.requestRateHz, r.error, /*explicitRequest=*/false, "open").sourceError;
         // AN RSP IS TUNED BEFORE ITS STREAM STARTS (0.99.36). The carry-across
         // tune below in finishDeviceOpen runs after setSource has started the
         // radio, so on an RSP it was a live sdrplay_api_Update milliseconds
@@ -3308,7 +3308,7 @@ std::unique_ptr<cascade::source::DeviceSource> Engine::openDeviceSync(
     // A rate refusal is not fatal (the panel shows the actual readback
     // either way) but is surfaced - and so is a rate the driver coerced on a
     // call that succeeded.
-    rx().sourceError_ = cascade::gui::applySourceRate(*dev, requestRateHz, rx().sourceError_).sourceError;
+    rx().sourceError_ = cascade::gui::applySourceRate(*dev, requestRateHz, rx().sourceError_, /*explicitRequest=*/false, "restore").sourceError;
     adoptDeviceMirrors(*dev, kind, args, requestRateHz);
     return dev;
 }
