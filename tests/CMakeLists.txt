@@ -897,6 +897,12 @@ endif()
 if(MSVC AND TARGET test_config)
     target_link_options(test_config PRIVATE /STACK:8388608)
 endif()
+# THE STACK OF test_audio_lead_app (engine merge 11): its th::applyConfig helper keeps AppConfig scenarios in one frame - 0xF42E0 = 1,000,160 bytes (dumpbin /disasm of the object: the __chkstk size) against the 1 MB
+# default stack on MSVC. Security lane 2 added two std::string members to AppConfig (tciAllow, catAllow) and the frame went over the edge: the test died with 0xC00000FD before its first line, alone, in both
+# variants. Nothing about the product moved; same remedy as test_config above, the headroom is the test host's to give.
+if(MSVC AND TARGET test_audio_lead_app)
+    target_link_options(test_audio_lead_app PRIVATE /STACK:8388608)
+endif()
 # THE GROUP-8 FIXTURE (window port group 8, API 0.3 section 8.7): a second real module - an I/Q
 # decoder (mute-while-running defaults ON), a DEVICE-CENTRE preset, a preset the host drops, a
 # preset with no label, and two marks on the spectrum - loaded beside the stage-1 fixture by the

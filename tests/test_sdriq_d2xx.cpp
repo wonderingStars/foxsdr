@@ -510,7 +510,7 @@ void testNeededLibrary() {
     CHECK((info.fileNames == std::vector<std::string>{"ftd2xx.dll", "ftd2xx64.dll"}) && info.needs64Bit && info.minVersion.empty());
     CHECK(info.installKind == "installer" && info.copyInFolder.empty() && info.steps.size() == 4 && !info.fetchAllowed);
     CHECK(info.officialAddress == "https://www.ftdichip.com");  // the one address read in FTDI's own guide
-    CHECK(contains(info.licence, "unverified") && contains(info.notSuppliedLine, "does not include or supply") && !info.why.empty());
+    CHECK(contains(info.licence, "FTDI's own licence") && contains(info.notSuppliedLine, "does not include or supply") && !info.why.empty());
     for (const std::string& st : info.steps) { CHECK(!st.empty()); }
     CHECK(std::string(needed::stateWord(needed::State::Working)) == "working" && std::string(needed::stateWord(needed::State::TooOld)) == "too-old" &&
           std::string(needed::stateWord(needed::State::Wrong32Bit)) == "wrong-32-bit" && std::string(needed::stateWord(needed::State::WouldNotLoad)) == "would-not-load" &&

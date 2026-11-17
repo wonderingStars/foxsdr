@@ -1098,7 +1098,7 @@ void testPluginSites() {
         // Never read, and a kept copy that has not been refreshed: said as what they are.
         s.state = StoreSite::State::NotRead;
         lines = cascade::gui::storeSiteLines(s);
-        if (!lines.empty()) { CHECK(lines[0].text == "hobbyist.example: not read yet"); }
+        if (!lines.empty()) { CHECK(lines[0].text == "hobbyist.example: not read"); }
         s.state = StoreSite::State::Kept;
         s.plugins = 3;
         lines = cascade::gui::storeSiteLines(s);
