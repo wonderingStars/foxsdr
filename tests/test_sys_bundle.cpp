@@ -385,6 +385,29 @@ void testFobosRadioComesBack() {
     CHECK(r.files[0].bytes.find("vendor") == std::string::npos && r.files[0].bytes.find("fobos.dll") == std::string::npos);
 }
 
+// Engine merge 9 (screen lane S4b and its security fixes): every switch of the servers other programs connect to (the audio and rtl_tcp servers and their client lists, the
+// program interface, the MCP server and its token, the rotator, the public listing) lives in wirec.json, and the listening log and the macros in files of their own. A bundle
+// carries config.json, bookmarks.json and markers.json ONLY, so none of those can arrive through an import: each file is refused as a name, on export and on import, and the
+// settings keys written into a config.json go nowhere (they are not keys of the program's own settings file).
+void testServerSettingsNeverArrive() {
+    for (const char* name : {"wirec.json", "swl-log.json", "swl-log.json.damaged", "macros.json", "macros.txt", "rotator.json", "listing.json"}) {
+        CHECK(!allowedBundleFileName(name));
+        CHECK(parseBundle(rawBundle({{name, "{\"srv.api.all\":\"1\"}"}})).error == BundleError::BadName);
+        ExportReport rep;
+        CHECK(exportBundle({{name, "{}"}}, ExportOptions{}, rep).empty() && rep.error == BundleError::BadName);
+    }
+    // the server keys inside a config.json that is allowed: the file is imported, the keys are not the program's own and the loader of the real settings file ignores them; they
+    // must not turn up in the guarded left-out list as an alias either (the list names only config.json keys)
+    json b;
+    for (const char* key : {"srv.api.enabled", "srv.api.all", "srv.tcpaudio.all", "srv.tcpaudio.allow", "srv.rtltcp.all", "srv.rtltcp.allow", "srv.mcp.enabled", "rot.enabled",
+                            "listing.enabled"}) {
+        b[key] = "1";
+    }
+    const ImportResult r = parseBundle(rawBundle({{"config.json", dumpS(b)}}));
+    CHECK(r.error == BundleError::None);
+    for (const std::string& k : importLeftOutKeys()) { CHECK(k.rfind("srv.", 0) != 0 && k.rfind("rot.", 0) != 0 && k.rfind("listing.", 0) != 0); }
+}
+
 // A local-looking entry that hides an address, a remote driver or a path is left out, one case at a time.
 void testHiddenAddressesAreLeftOut() {
     const char* const bad[] = {"driver=rtlsdr,host=203.0.113.9", "driver=rtlsdr,remote=nas7", "serial=1,remote:driver=rtlsdr", "driver=remote,remote=203.0.113.9",
@@ -666,6 +689,7 @@ int main() {
     testReportingOnlyGetsMorePrivate();
     testLocalRadiosComeBack();
     testFobosRadioComesBack();
+    testServerSettingsNeverArrive();
     testHiddenAddressesAreLeftOut();
     testBackupRestoresTheProfileOnANewComputer();
     testPlanAndCommit();
