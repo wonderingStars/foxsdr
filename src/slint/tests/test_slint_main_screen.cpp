@@ -377,6 +377,32 @@ int main() {
     CHECK(g.near(100, 300, well) && g.near(200, 300, well));   // the spectrum well now starts right after the rail
     g.savePng(shotDir() + "main-screen-folded.png");
 
+    // ---- a submenu row of the one menu opens its panel, and the panel's row is a pick (drive fixes 1, L229: the waterfall menu's "Clear all markers" would not open) ----
+    {
+        int subAsked = -1, picked = -1;
+        float subX = -1.f, subY = -1.f;
+        ui->on_menu_submenu_requested([&](int id, float x, float y) { subAsked = id; subX = x; subY = y; });
+        ui->on_menu_activated([&](int id) { picked = id; });
+        MenuEntry drop{}, clear{}, yes{};
+        drop.kind = MenuItemKind::Item;    drop.id = 401;  drop.label = "Drop marker here";   drop.enabled = true;
+        clear.kind = MenuItemKind::Submenu; clear.id = 405; clear.label = "Clear all markers"; clear.enabled = true;
+        yes.kind = MenuItemKind::Item;     yes.id = 406;   yes.label = "Yes, remove all 3";   yes.enabled = true;
+        ui->set_menu_entries(std::make_shared<slint::VectorModel<MenuEntry>>(std::vector<MenuEntry>{drop, clear}));
+        ui->invoke_open_menu(300.f, 200.f);
+        renderAt(W, H);
+        click(ui->window(), 340.f, 200.f + 5.f + 26.f + 13.f);   // the submenu row: the panel's top inset 5, one 26 px row above it, the middle of this one
+        CHECK(subAsked == 405);                                  // the window forwards the row's request to the host (it used to drop it)
+        CHECK(subX >= 300.f + 170.f && subX <= 300.f + 400.f && subY >= 200.f && subY <= 240.f);   // the panel opens at the menu's right edge, level with the row
+        ui->set_sub_entries(std::make_shared<slint::VectorModel<MenuEntry>>(std::vector<MenuEntry>{yes}));
+        ui->set_menu_open_sub(405);
+        ui->invoke_open_submenu(subX, subY);
+        renderAt(W, H);
+        click(ui->window(), subX + 40.f, subY + 5.f + 13.f);     // its one row
+        CHECK(picked == 406);
+        ui->set_menu_open_sub(-1);
+        renderAt(W, H);
+    }
+
     // ---- a status chip expands to its detail lines (a popup: it takes the clicks after it, so it is tested last) ----
     click(ui->window(), 20, 886);                       // the RECEIVER status chip
     CHECK(statusClicks == 0);

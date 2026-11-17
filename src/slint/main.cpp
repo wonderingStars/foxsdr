@@ -1481,6 +1481,17 @@ int main(int argc, char** argv) {
         em.set_format_index(exportFormatIdx);
     };
 
+    // THE SUBMENU OF A RIGHT-CLICK MENU (drive fixes 1, L229): the waterfall menu's "Clear all markers" row asks for its panel on a click or a hover (ui/menus.slint submenu-requested); the one row in it is the
+    // second press ("Yes, remove all N"), as the Markers sheet asks it. The row used to ask and nobody answered, so the submenu never opened.
+    ui->on_menu_submenu_requested([&](int id, float x, float y) {
+        if (id != 405 || lists.markers.empty()) { return; }
+        std::vector<MenuEntry> e;
+        e.push_back(entry(MenuItemKind::Item, 406, cascade::core::formatText(cascade::i18n::tr("Yes, remove all %zu"), lists.markers.size()).c_str()));
+        ui->set_sub_entries(std::make_shared<slint::VectorModel<MenuEntry>>(std::move(e)));
+        ui->set_menu_open_sub(id);
+        ui->invoke_open_submenu(x, y);
+    });
+    ui->on_menu_item_hovered([&](int) { ui->set_menu_open_sub(-1); });
     ui->on_menu_activated([&](int id) {
         switch (id) {
             case 101: case 102: case 104: {   // the same three settings the Display body saves (counterScale, readingsScale); this window does not draw the figures larger yet (the record, item 6)

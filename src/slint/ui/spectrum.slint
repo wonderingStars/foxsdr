@@ -175,6 +175,7 @@ export component SpectrumView inherits Rectangle {
     property <length> band-r: root.snap(root.plot-w * (root.vfo-pos + root.vfo-half));
     property <int> press-zone;                                          // set at a left press: 0 off the band, 1 band, 2 left edge, 3 right edge
     property <bool> press-off-band;
+    property <bool> prev-off-band;                  // the press before this one was on the empty plot (a double-click's second press lands on the band the first one tuned)
     property <bool> press-shift;
     property <bool> sel-moved;
     property <bool> sel-swallow;                                         // the release of a dragged selection is not a click
@@ -592,6 +593,7 @@ export component SpectrumView inherits Rectangle {
                 root.last-x = self.pressed-x;
                 root.press-half = root.vfo-half;
                 root.press-zone = root.zone-at(self.pressed-x);
+                root.prev-off-band = root.press-off-band;   // the first press of a double-click tuned, and the band is under the pointer now: the second press is on it
                 root.press-off-band = root.press-zone == 0;
                 root.sel-moved = false;
                 root.sel-swallow = false;
@@ -632,15 +634,17 @@ export component SpectrumView inherits Rectangle {
             if (root.press-off-band && !root.sel-swallow && root.plot-w > 0px) { root.clicked(self.pressed-x / root.plot-w, root.press-shift); }   // lane K: a dragged selection is not a click
         }
         double-clicked => {
-            if (root.press-off-band && root.plot-w > 0px) { root.double-clicked(self.pressed-x / root.plot-w); }
+            if ((root.press-off-band || root.prev-off-band) && root.plot-w > 0px) { root.double-clicked(self.pressed-x / root.plot-w); }
         }
         changed pressed => {
             root.tip-shown = false; root.rest-tip-shown = false;                 // a button going down or up hides the tip and restarts the wait
             root.rest-ticks = 0;
         }
         scroll-event(e) => {
-            if (e.delta-y == 0px || root.plot-w <= 0px) { return reject; }
-            root.wheel(self.mouse-x / root.plot-w, root.notches-of(e.delta-y), e.modifiers.shift || root.shift-held);
+            // Shift + wheel: some mouse drivers send it as a SIDEWAYS wheel (delta-x), and the slide of the band is Shift + wheel, so a sideways wheel with Shift held counts, turned the way the vertical one is
+            let sideways = (e.modifiers.shift || root.shift-held) && e.delta-y == 0px && e.delta-x != 0px;
+            if ((e.delta-y == 0px && !sideways) || root.plot-w <= 0px) { return reject; }
+            root.wheel(self.mouse-x / root.plot-w, root.notches-of(sideways ? -e.delta-x : e.delta-y), e.modifiers.shift || root.shift-held);
             return accept;
         }
     }

@@ -78,6 +78,7 @@ export component SpectrumSpecimen inherits Window {
     in-out property <float> wheel-x: -2;
     in-out property <int> wheel-notches;
     in-out property <bool> wheel-shift;
+    in-out property <float> vfo-pos: 0.456122;   // the tuned band's place: a test moves it as the host does after a click that tunes
     out property <int> zone: view.pointer-zone;
     out property <string> tip: view.active-tooltip;
     out property <bool> tip-shown: view.tip-shown;
@@ -125,7 +126,7 @@ export component SpectrumSpecimen inherits Window {
         airband-block: root.airband-block;
         airband-hearing: root.airband-hearing;
         show-vfo: root.show-vfo;
-        vfo-pos: 0.456122;
+        vfo-pos: root.vfo-pos;
         vfo-half: 0.015306;
         band-dragging: root.band-dragging;
         cursor-visible: root.cursor-visible;

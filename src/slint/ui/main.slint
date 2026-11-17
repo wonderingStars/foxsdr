@@ -380,6 +380,10 @@ export component MainWindow inherits Window {
     callback feature-request-clicked;
     callback bug-report-clicked;
     callback menu-activated(int);
+    callback menu-submenu-requested(int, length, length);   // drive fixes 1 (L229): a submenu row (Clear all markers) was clicked or hovered: where its panel opens
+    callback menu-item-hovered(int);                         // the pointer came onto another row of the menu: its submenu closes
+    in property <[MenuEntry]> sub-entries: [];               // the rows of the submenu the host opens
+    in-out property <int> menu-open-sub: -1;                 // the id whose submenu is open (that row stays lit)
     callback menu-slider-changed(int, float);
     callback palette-query-changed(string);
     callback palette-activated(int);
@@ -400,6 +404,7 @@ export component MainWindow inherits Window {
 
     // the one menu (counter, trace, marker, meter): the host sets menu-entries and opens it here
     public function open-menu(x: length, y: length) { menu.at-x = x; menu.at-y = y; menu.show(); }
+    public function open-submenu(x: length, y: length) { sub-menu.at-x = x; sub-menu.at-y = y; sub-menu.show(); }
     public function open-palette() { palette.show(); }
 
     // ===================== keyboard: the SAVED bindings, answered by the host (docs 6.56) =====================
@@ -970,7 +975,9 @@ export component MainWindow inherits Window {
     }
 
     // ===================== overlays =====================
-    menu := Menu { x: 0; y: 0; entries: root.menu-entries; activated(id) => { root.menu-activated(id); } slider-changed(id, v) => { root.menu-slider-changed(id, v); } }
+    menu := Menu { x: 0; y: 0; entries: root.menu-entries; open-submenu: root.menu-open-sub; activated(id) => { root.menu-activated(id); } slider-changed(id, v) => { root.menu-slider-changed(id, v); }
+        submenu-requested(id, x, y) => { root.menu-submenu-requested(id, x, y); } item-hovered(id) => { root.menu-open-sub = -1; sub-menu.close(); root.menu-item-hovered(id); } }
+    sub-menu := Menu { x: 0; y: 0; entries: root.sub-entries; activated(id) => { root.menu-open-sub = -1; root.menu-activated(id); menu.close(); } }   // the submenu of a row of the one menu (Clear all markers: its "Yes, remove all N")
     palette := CommandPalette { at-x: (root.width - 640px) / 2; at-y: 48px; query <=> root.palette-query; results: root.palette-results;
         query-changed(q) => { root.palette-query-changed(q); } activated(id) => { root.palette-activated(id); } }
 

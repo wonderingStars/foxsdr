@@ -509,6 +509,22 @@ int main() {
     moveTo(win, 700, 300);
     scroll(win, 700, 300, 0, 120);
     CHECK_CLOSE(ui->get_wheel_x(), (700.0 - kPlotX) / kPlotW, 0.002);
+    {   // SHIFT + A SIDEWAYS WHEEL (drive fixes 1, L198): some mouse drivers send Shift + wheel as a sideways wheel; with Shift held it is the wheel, turned the way the vertical one is (up = +1)
+        const int w0 = ui->get_wheels();
+        keyDown(win, slint::platform::key_codes::Shift);
+        scroll(win, 700, 300, -60, 0);
+        keyUp(win, slint::platform::key_codes::Shift);
+        CHECK_EQ(ui->get_wheels(), w0 + 1);
+        CHECK_EQ(ui->get_wheel_notches(), 1);
+        CHECK(ui->get_wheel_shift());
+        keyDown(win, slint::platform::key_codes::Shift);
+        scroll(win, 700, 300, 60, 0);
+        keyUp(win, slint::platform::key_codes::Shift);
+        CHECK_EQ(ui->get_wheels(), w0 + 2);
+        CHECK_EQ(ui->get_wheel_notches(), -1);
+        scroll(win, 700, 300, 60, 0);                      // without Shift a sideways wheel is still not a zoom
+        CHECK_EQ(ui->get_wheels(), w0 + 2);
+    }
 
     // ZONES: move over the band, ew-resize within 6 px of an edge (inside or outside it), default elsewhere
     struct Zone { float x; int zone; };
@@ -587,6 +603,18 @@ int main() {
     moveTo(win, 700, 220);
     CHECK_EQ(ui->get_band_dx(), dxAfter);
 
+    // A DOUBLE CLICK ON EMPTY SPECTRUM WHOSE FIRST CLICK TUNES (drive fixes 1, L195): the host retunes on the first click, so the band is under the pointer for the second press. It is still a
+    // double-click on empty spectrum (the span resets, as the tip says); before, the second press found the band under it and the double-click was dropped.
+    wait(600);
+    {
+        const int d0 = ui->get_dclicks();
+        click(win, 900, 300);
+        ui->set_vfo_pos(static_cast<float>((900.0 - kPlotX) / kPlotW));
+        click(win, 900, 300);
+        CHECK_EQ(ui->get_dclicks(), d0 + 1);
+        clicksBase += 1;                                   // the first click was a click (the second, on the band, was not)
+        ui->set_vfo_pos(0.456122f);
+    }
     // A DOUBLE CLICK ON THE BAND: not a click, not a double click (it unzooms only empty spectrum)
     wait(600);
     {

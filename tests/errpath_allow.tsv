@@ -1763,6 +1763,7 @@ src/slint/kit_publish_mapj.cpp::KitPublisher::fillAntenna::errassign::ss mj_ ant
 src/slint/kit_publish_mapj.cpp::KitPublisher::mapJAct::errassign::ismin j altminerror j altmaxerror	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/kit_publish_mapj.cpp::KitPublisher::mapJAct::errassign::not a number between # and #	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/kit_publish_mapj.cpp::KitPublisher::mapJAct::errassign::that is not a number this field accepts	ALLOW	UI result text: the failure is classified at the site that produced it	seed
+src/slint/kit_publish_mapj.cpp::KitPublisher::mapJAct::errassign::e	ALLOW	UI result text: the Antenna page shows the first wrong field's own sentence; nothing fails here	drive-fixes-1
 src/slint/knob_host.cpp::KnobHost::Impl::tryOpen::errassign::could not be opened	ALLOW	ui-text: the reason a controller is not open is shown on its row in SYSTEM, where the person chose it	2026-11-16
 src/slint/knob_host.cpp::KnobHost::status::errassign::it second error	ALLOW	ui-text: the reason a controller is not open is shown on its row in SYSTEM, where the person chose it	2026-11-16
 src/slint/knob_host.cpp::KnobHost::tick::errassign::the device was unplugged	ALLOW	ui-text: the reason a controller is not open is shown on its row in SYSTEM, where the person chose it	2026-11-16

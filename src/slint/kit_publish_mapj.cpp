@@ -390,14 +390,24 @@ void KitPublisher::fillMapJModel(MapSurface& s, MapPage* pg, const std::string& 
 void KitPublisher::mapJAct(int pageIndex, const std::string& op, const std::string& arg) {
     // the Antenna page's fields (page kind 13): the field's text, kept as typed
     if (op.rfind("ant-", 0) == 0) {
-        struct Spec { const char* op; std::size_t slot; double lo, hi; };
-        static const Spec specs[] = {{"ant-freq", 0, 0.01, 300000.0}, {"ant-distance", 1, 1e-9, 1e9}, {"ant-coax", 2, 1e-9, 100.0}, {"ant-vf", 3, 1e-9, 1.0}, {"ant-yagi", 4, 2.0, 20.0}};
+        // Each field's own rule (the sentences mj::antennaError says): a text that is not a number gets the generic sentence, a number outside the field's range says the range (drive fixes 1, S9: Yagi elements = 1 said
+        // "That is not a number this field accepts." and the table of the old value stayed under it).
+        struct Spec { const char* op; std::size_t slot; double lo, hi; const char* rule; };
+        static const Spec specs[] = {{"ant-freq", 0, 0.01, 300000.0, FOX_TR_NOOP("The frequency must be between 0.01 and 300000 MHz.")},
+                                     {"ant-distance", 1, 1e-9, 1e9, FOX_TR_NOOP("The distance must be above 0 km.")},
+                                     {"ant-coax", 2, 1e-9, 100.0, FOX_TR_NOOP("The coax length must be above 0 and at most 100 wavelengths.")},
+                                     {"ant-vf", 3, 1e-9, 1.0, FOX_TR_NOOP("The velocity factor must be above 0 and at most 1.")},
+                                     {"ant-yagi", 4, 2.0, 20.0, FOX_TR_NOOP("A Yagi has 2 to 20 elements.")}};
         for (const Spec& sp : specs) {
             if (op != sp.op) { continue; }
             mj_.antennaText[sp.slot] = arg;
-            double v = 0.0;
-            if (!mj::parseNumber(arg, sp.lo, sp.hi, v)) { mj_.antennaError = FOX_TR_NOOP("That is not a number this field accepts."); return; }
+            double v = 0.0, anyNumber = 0.0;
+            const bool good = mj::parseNumber(arg, sp.lo, sp.hi, v);
+            if (!good) { mj_.antennaSlotError[sp.slot] = mj::parseNumber(arg, -1e300, 1e300, anyNumber) ? sp.rule : FOX_TR_NOOP("That is not a number this field accepts."); }
+            else { mj_.antennaSlotError[sp.slot].clear(); }
             mj_.antennaError.clear();
+            for (const std::string& e : mj_.antennaSlotError) { if (!e.empty()) { mj_.antennaError = e; break; } }   // the first field that is wrong speaks; the table waits for all to be right
+            if (!good) { return; }
             if (sp.slot == 0) { mj_.antenna.fMHz = v; }
             else if (sp.slot == 1) { mj_.antenna.distanceKm = v; }
             else if (sp.slot == 2) { mj_.antenna.coaxFraction = v; }
@@ -548,7 +558,9 @@ void KitPublisher::fillAntenna(PageTab& t, std::string& sig) {
     m.columns = model(std::vector<slint::SharedString>{ss(tr("Item")), ss(tr("Metres")), ss(tr("Feet")), ss(tr("Note"))});
     m.widths = model(std::vector<float>{220.f, 110.f, 110.f, 0.f});
     std::vector<TableRow> rows;
-    for (const mj::AntennaRow& r : mj::antennaRows(mj_.antenna)) {
+    std::vector<mj::AntennaRow> antennaTable;
+    if (mj_.antennaError.empty()) { antennaTable = mj::antennaRows(mj_.antenna); }   // no table of an old value under a field that is wrong
+    for (const mj::AntennaRow& r : antennaTable) {
         std::string item = tr(r.item);
         if (r.item.rfind("Yagi director ", 0) == 0) { item = tr("Yagi director") + r.item.substr(std::string("Yagi director").size()); }
         TableRow rw{};
