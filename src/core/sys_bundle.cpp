@@ -113,7 +113,7 @@ const char* bundleErrorName(BundleError e) {
 bool allowedBundleFileName(const std::string& name) { return name == "config.json" || name == "bookmarks.json" || name == "markers.json"; }
 
 const std::vector<std::string>& importLeftOutKeys() {
-    static const std::vector<std::string> k = {"pluginCatalogueUrl", "pluginSites", "webBindAddress", "catBindAll", "tciBindAll", "tciAllow", "udpAudioHost",
+    static const std::vector<std::string> k = {"pluginCatalogueUrl", "pluginSites", "webBindAddress", "catBindAll", "catAllow", "tciBindAll", "tciAllow", "udpAudioHost",
                                                "plutoUri", "rtlTcpAddr", "iqFilePath"};
     return k;
 }

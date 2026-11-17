@@ -656,6 +656,35 @@ void testBeyondThisComputer() {
     CHECK(r.is("fact.udp.sending", "1") && r.is("fact.udp.refusal", ""));
 }
 
+// S4bS-cat: the CAT server beyond this computer needs the same list. With no usable list the engine does not make a socket at all (nothing here binds a wide address).
+void testCatBeyondThisComputer() {
+    Rig r;
+    const int port = freePort();
+    const FoxCommandResult a = r.config("{\"cat\":{\"enabled\":true,\"bindAll\":true,\"port\":" + std::to_string(port) + "}}");
+    CHECK(a.status == FOXAPI_OK);
+    (void)r.e.servers().waitIdle(std::chrono::seconds(10));
+    CHECK(!r.e.servers().catServer().running());
+    CHECK(r.e.servers().cat().refusal.find("list the computers that may") != std::string::npos);
+    for (const char* bad : {"not-an-address", "0.0.0.0/0", "224.0.0.5", "255.255.255.255", "10.0.0.0/4", "1.2.3.4/99"}) {
+        const FoxCommandResult x = r.config(std::string("{\"cat\":{\"allow\":\"") + bad + "\"}}");
+        CHECK(x.status < 0);
+        CHECK(std::string(x.message).find("allow:") != std::string::npos);
+    }
+    CHECK(r.fact("fact.cat.allow").empty());
+    CHECK(r.config("{\"cat\":{\"allow\":\"192.168.1.20, 192.168.1.0/24\"}}").status == FOXAPI_OK);
+    CHECK(r.is("fact.cat.allow", "192.168.1.20, 192.168.1.0/24"));
+    cascade::core::AppConfig c;
+    c.catBindAll = true;
+    c.catAllow = "192.168.1.20";
+    cascade::core::AppConfig back;
+    std::string why;
+    CHECK(cascade::core::ConfigStore::parse(cascade::core::ConfigStore::serialize(c), "test", back, why));
+    CHECK(back.catAllow == "192.168.1.20" && back.catBindAll);
+    cascade::core::AppConfig longList;
+    CHECK(cascade::core::ConfigStore::parse("{\"catBindAll\":true,\"catAllow\":\"" + std::string(500, '1') + "\"}", "test", longList, why));
+    CHECK(longList.catAllow.empty());
+}
+
 void testSettingsFile() {
     // the file round trip, and what a hostile file is made into
     cascade::core::AppConfig c;
@@ -727,6 +756,7 @@ int main() {
     testUdp();
     testConfiguration();
     testBeyondThisComputer();
+    testCatBeyondThisComputer();
     testSettingsFile();
     testTeardown();
     return testSummary("test_tci_engine");

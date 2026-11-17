@@ -296,9 +296,15 @@ void ApiServer::handleHead(Conn& c, std::int64_t now) {
         pos = e + 2;
         const std::size_t colon = hl.find(':');
         if (colon == std::string::npos || colon == 0) { respond(c, 400, "text/plain", "bad header"); return; }
-        h[lower(hl.substr(0, colon))] = trimmed(hl.substr(colon + 1));
+        const std::string key = lower(hl.substr(0, colon));
+        // SF2-api-multi-host: a header that decides who may come in or who the request is for is said ONCE. The map below keeps the last of a repeated name, a proxy or a library may read the first,
+        // and a request that two readers understand differently is how a Host rule is walked around: refused.
+        if ((key == "host" || key == "authorization" || key == "origin") && h.count(key) != 0) { respond(c, 400, "text/plain", "a header was sent twice"); return; }
+        h[key] = trimmed(hl.substr(colon + 1));
     }
     if (method != "GET") { respond(c, 405, "text/plain", "method not allowed", "Allow: GET\r\n"); return; }
+    // The interface serves the origin form ("GET /status"). An absolute target ("GET http://name/status", what a proxy is sent) names a host of its own that could disagree with the Host header the rule reads: refused.
+    if (!target.empty() && target[0] != '/') { respond(c, 400, "text/plain", "bad request target"); return; }
     if (h.count("origin") != 0) { respond(c, 403, "text/plain", "a web page may not use this interface"); return; }
     // DNS rebinding: a page that made its own name point at this computer is not this computer's own page. Beyond this computer (requireAuth) every request signs in, which a page cannot do.
     if (cfg_.checkHost && !cfg_.requireAuth) {

@@ -145,3 +145,47 @@ the stamp tests; a real browser against the page; a Linux or macOS build.
 | SF2-translations | speaker review | the two new sentences x 33 catalogues |
 | SF2-tls-relay-total | engine | a test with a real TLS handshake, dripped, to see the relay and the plain side end together |
 | SF2-api-multi-host | engine | the page refuses a request with two Host headers; `ApiServer::handleHead` looks the header up in a map, so what it does with two was NOT checked here. Read it and make the interface refuse two as well |
+
+## Addendum (coordinator's second request): CAT, and the API's repeated headers
+
+**What the CAT server could do before, and now.** Before: `catBindAll` (the Legacy checkbox "Reachable from other machines", the same tick on the Slint CAT page, the headless
+`--cat-bind-all`) bound 0.0.0.0 with no password and no list; any computer that could reach the port could read the tuned frequency and mode and retune the receiver, and four
+of them could hold every place. Now (the TCI rule, `peer_allow.hpp`): beyond this computer the server needs `catAllow`, a typed list of client addresses; with none it refuses to
+start ("to let other computers connect to the CAT interface, list the computers that may: ...") and makes no socket; a connection from an unlisted address is closed before a byte is
+read (`refusedPeer`); loopback is unchanged. The list is a SERVER_CONFIG `cat.allow` member (validated when typed), the `catAllow` settings key (a bundle never imports it), `fact.cat.allow`,
+and the headless flag `--cat-allow` (`--cat-bind-all` without it, or `--cat-allow` without `--cat-bind-all`, is refused at parse). Decision 19 ("the CAT emulation (this PC only) stays as
+limited as it is") was read as: the widening that exists today is not extended and gets the same guard, rather than removed. WHAT THE WINDOWS OFFER: both still draw the "Reachable from other
+machines" tick; ticking it now shows the server's refusal (the list sentence) because neither CAT page has a field to type the list in. That is an honest control (it says why it cannot
+work) but not a hidden one; hiding the tick needs a `.slint` edit and the layout tests of `test_slint_extend` (a 26-minute rebuild here) and was NOT done: row `SF2-cat-ui`. A saved
+`catBindAll: true` from an older file starts nothing beyond this computer (no list = no start).
+
+**The command list** (`tests/test_cat_surface.cpp`, header comment): `f`, `F`, `m`, `M`, `v`, `V`, `s`, `S`, `t`, `T`, `q`/`Q` and the long forms `\get_freq \set_freq \get_mode \set_mode
+\get_vfo \set_vfo \get_split_vfo \set_split_vfo \get_ptt \set_ptt \get_powerstat \dump_state \chk_vfo \quit`; every other word is "not implemented". PROOF: 26 words x 26 argument shapes
+(paths, shell text, huge numbers, NaN, `1e9`) x two line endings, and 300,000 random, mutated and spliced lines: a line can only produce a ControlRequest with centre, offset, mode and
+bandwidth (every other member by name is empty), whose translation by the server's own function is SET_CENTRE, SET_VFO_OFFSET, SET_MODE, SET_BANDWIDTH only, no command carries text (no path or
+program name can ride on one), and the values lie in the program's own tuning and passband ranges; `T` and `S` with any argument but 0 are refused and hand nothing to the engine; 28 other rigctld
+words (`\send_cmd`, `\set_conf`, `\send_morse`, `\set_func` ...) are refused; the two source files hold none of the words for keying, file or process calls. BREAK-IT: `T 1` made to answer
+yes gave 7 failures; restored. (The Kenwood and Yaesu serial/TCP dialect emulation, `cat_emulation.cpp`, is a different surface with its own fuzz in `test_cat_emulation`; unchanged.)
+
+**Bounds** (`test_cat_server`): garbage (40 connections of 1 to 600 random bytes, no set command among them) never reaches the engine and the server answers the next client; a client that asks
+for the long `\dump_state` answer for ever and never reads is dropped by the 5 s send timeout and its place is free again; 300 connect-and-leave cycles never exceed the cap of 4 clients and every
+session opened is closed; the list tests above (no list = no start; list not used on loopback; unlisted address closed with no byte and no session, listed one served, through the test-only
+`setBindAddressForTest` so no wide bind is made). BREAK-IT: the accept-time list check removed gave 3 failures; restored. What is NOT bounded: an idle connection that never sends a byte holds one of
+the four places for ever (CAT clients are idle almost all the time; a test pins that an idle connection survives), so a listed computer can use all four places.
+
+**SF2-api-multi-host, settled.** `ApiServer::handleHead` kept the LAST of a repeated header in a map, so `Host: evil` then `Host: 127.0.0.1` read as the allowed one while another reader of the
+same bytes would take the first. Now a second `Host`, `Authorization` or `Origin` header is refused 400, and so is any request target that is not origin-form (`GET http://name/status`,
+`*`), with and without a password. `test_s4b_sec_api` `testRepeatedHeadersAndAbsoluteTargets` (both orders, same value twice, mixed case, three transports, absolute targets that agree and
+that disagree with Host; with a password two Authorization headers never reach the sign-in: one call in all). BREAK-IT: both checks removed gave 17 failures; restored.
+
+Expectations changed: `importLeftOutKeys().size()` 10 became 11 (`catAllow`), the hostile bundle carries `catAllow`. Error-path pin 410 before and after; six more validation refusals carry allow lines.
+New tests run (all `Passed`): `test_cat_surface`, `test_cat_server`, `test_cat_protocol`, `test_cat_engine`, `test_cat_emulation`, `test_s4b_sec_api`, `test_api_server`, `test_tci_engine`
+(`testCatBeyondThisComputer`), `test_sys_bundle`, `test_engine_main_config_roundtrip`, `test_server_host`, `test_engine_api_05a`, `test_engine_main_args` (three new refusals), `test_engine_provision`,
+`test_engine_publish_alloc`, `test_error_paths`, `test_i18n`. Not run: the `.slint`/GUI gates (no `.slint` file changed in this addendum); `--cat-allow` was not run against a real engine process.
+
+Behaviour changes for the release notes: CAT "Reachable from other machines" needs a typed list of computers (the page shows why it will not start until one exists; the list can be set through the
+interface's SERVER_CONFIG or, headless, `--cat-allow`); `foxsdr-engine --cat-bind-all` needs `--cat-allow`; the program interface answers 400 to a request with two Host, Authorization or Origin headers
+or a non-origin-form target.
+
+Open rows added: `SF2-cat-ui` (a field for the CAT list on both pages, or hide the tick; needs `.slint`, layout tests, 33 catalogues and the "Anything that can reach the port..." warning reworded to say
+only the listed computers), `SF2-api-multi-host` CLOSED.

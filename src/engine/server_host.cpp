@@ -226,10 +226,15 @@ bool parseServerConfigRequest(const std::string& text, ServerConfigRequest& out,
             error = "cat must be an object";
             return false;
         }
-        if (!onlyKnown(*c, {"enabled", "bindAll", "port"}, "cat", error)) { return false; }
+        if (!onlyKnown(*c, {"enabled", "bindAll", "port", "allow"}, "cat", error)) { return false; }
         if (!readBool(*c, "enabled", out.catEnabled, error) || !readBool(*c, "bindAll", out.catBindAll, error) ||
-            !readPort(*c, "port", out.catPort, error)) {
+            !readPort(*c, "port", out.catPort, error) || !readText(*c, "allow", cascade::net::kPeerAllowMaxChars, out.catAllow, error)) {
             return false;
+        }
+        if (out.catAllow.has_value() && !out.catAllow->empty()) {
+            cascade::net::PeerAllow probe;
+            std::string why;
+            if (!cascade::net::PeerAllow::parse(*out.catAllow, probe, why)) { error = "allow: " + why; return false; }
         }
         said = said || !c->empty();
     }
@@ -495,7 +500,14 @@ void ServerHost::reconcileCat(bool retry) {
     if (!catServer_.running() && catAttempt_.has_value() && *catAttempt_ == want && !retry) { return; }
     if (catServer_.running()) { catServer_.stop(); }  // a port or scope change needs a fresh listener
     std::string error;
-    const bool ok = catServer_.start(static_cast<std::uint16_t>(want.port), want.bindAll, error);
+    // BEYOND THIS COMPUTER ONLY TO LISTED COMPUTERS (the CAT protocol has no password): the list is read first; a missing or unusable one is the refusal, and no socket is made.
+    cascade::net::PeerAllow peers;
+    bool ok = false;
+    if (want.bindAll && !cascade::net::PeerAllow::parse(want.allow, peers, error)) {
+        error = "to let other computers connect to the CAT interface, list the computers that may: " + error;
+    } else {
+        ok = catServer_.start(static_cast<std::uint16_t>(want.port), want.bindAll, error, peers);
+    }
     catAttempt_ = want;
     Listener l;
     if (ok) {
@@ -504,7 +516,7 @@ void ServerHost::reconcileCat(bool retry) {
         l.boundPort = static_cast<int>(catServer_.boundPort());
         // The 120 s freeze that started this whole feature was a CAT client being shut down. Whether one was connected at all is the first
         // question a hang report from that path has to answer.
-        cascade::core::diagLogf("cat: listening on port %d (%s)", want.port, want.bindAll ? "all interfaces" : "loopback");
+        cascade::core::diagLogf("cat: listening on port %d (%s)", want.port, want.bindAll ? "the listed computers" : "loopback");
     } else {
         // Left enabled in the config on purpose: the usual cause is a port held by something else (a real rigctld), which the user fixes
         // and retries. Silently turning the setting off would hide that.
@@ -667,6 +679,7 @@ ServerHost::Outcome ServerHost::apply(const ServerConfigRequest& r) {
         if (r.catEnabled) { set(cfg_.cat.enabled, *r.catEnabled); }
         if (r.catBindAll) { set(cfg_.cat.bindAll, *r.catBindAll); }
         if (r.catPort) { set(cfg_.cat.port, *r.catPort); }
+        if (r.catAllow) { set(cfg_.cat.allow, *r.catAllow); }
         if (r.tciEnabled) { set(cfg_.tci.enabled, *r.tciEnabled); }
         if (r.tciBindAll) { set(cfg_.tci.bindAll, *r.tciBindAll); }
         if (r.tciPort) { set(cfg_.tci.port, *r.tciPort); }
@@ -835,6 +848,7 @@ void ServerHost::load(const cascade::core::AppConfig& c) {
         cfg_.cat.enabled = c.catEnabled;
         cfg_.cat.bindAll = c.catBindAll;
         cfg_.cat.port = c.catPort;
+        cfg_.cat.allow = c.catAllow;
         cfg_.tci.enabled = c.tciEnabled;
         cfg_.tci.bindAll = c.tciBindAll;
         cfg_.tci.port = c.tciPort;
@@ -873,6 +887,7 @@ void ServerHost::store(cascade::core::AppConfig& c) const {
     c.catEnabled = cfg_.cat.enabled;
     c.catBindAll = cfg_.cat.bindAll;
     c.catPort = cfg_.cat.port;
+    c.catAllow = cfg_.cat.allow;
     c.tciEnabled = cfg_.tci.enabled;
     c.tciBindAll = cfg_.tci.bindAll;
     c.tciPort = cfg_.tci.port;

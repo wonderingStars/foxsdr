@@ -1371,6 +1371,7 @@ struct AppConfig {
     bool catBindAll = false;
     // 4532 is the port rigctld uses, so clients need no configuring.
     int catPort = 4532;
+    std::string catAllow;   // catBindAll only: the client addresses that may connect (net/peer_allow.hpp); a bind beyond this computer without a list does not start
 
     // --- TCI server (net/tci_server.hpp) and audio over the network (net/udp_audio.hpp) ---------------------------------
     // Both OFF by default. The TCI server listens on the loopback interface unless tciBindAll says otherwise (the protocol has no authentication,

@@ -69,6 +69,12 @@ int main() {
         {{"--web-password-file", "-"}, "--web-password-file needs --web-enable"},
         {{"--cat-bind-all"}, "--cat-bind-all needs --cat-enable"},
         {{"--cat-bind-all", "--web-enable"}, "--cat-bind-all needs --cat-enable"},
+        // The CAT protocol has no password: beyond this computer only to computers the person lists (S4bS-cat).
+        {{"--cat-enable", "--cat-bind-all"}, "--cat-bind-all needs --cat-allow"},
+        {{"--cat-enable", "--cat-allow", "192.168.1.20"}, "--cat-allow needs --cat-bind-all"},
+        {{"--cat-enable", "--cat-bind-all", "--cat-allow", "0.0.0.0/0"}, "invalid --cat-allow value"},
+        {{"--cat-enable", "--cat-bind-all", "--cat-allow", "junk"}, "invalid --cat-allow value"},
+        {{"--cat-enable", "--cat-bind-all", "--cat-allow"}, "--cat-allow requires"},
         // ...a value that is missing, or is another flag (a forgotten value is not a file called "--cat-enable"), or is wrong.
         {{"--web-enable", "--web-bind"}, "--web-bind requires an address"},
         {{"--web-enable", "--web-bind", "--web-port", "9000"}, "--web-bind requires an address"},

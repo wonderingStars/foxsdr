@@ -13,6 +13,7 @@
 // parsed). tests/test_process_boot_order.cpp holds the order from this file's text.
 #include "engine/process_boot.hpp"
 #include "engine/wire_c_portable.hpp"   // wire-c
+#include "net/peer_allow.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -818,6 +819,16 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
             prov.catEnable = true;
         } else if (!host && std::strcmp(argv[i], "--cat-bind-all") == 0) {
             prov.catBindAll = true;
+        } else if (!host && std::strcmp(argv[i], "--cat-allow") == 0) {
+            const char* v = provisionValue(argc, argv, i, "--cat-allow", "the addresses of the computers that may connect, such as 192.168.1.20,192.168.1.0/24");
+            if (v == nullptr) { return 1; }
+            cascade::net::PeerAllow probe;
+            std::string why;
+            if (!cascade::net::PeerAllow::parse(v, probe, why)) {
+                std::fprintf(stderr, "foxsdr-engine: invalid --cat-allow value: %s\n", why.c_str());
+                return 1;
+            }
+            prov.catAllow = v;
         } else if (!host && std::strcmp(argv[i], "--web-bind") == 0) {
             const char* v = provisionValue(argc, argv, i, "--web-bind", "an address (an IPv4 address, ::1, :: or localhost)");
             if (v == nullptr) { return 1; }
@@ -914,6 +925,14 @@ Step parseFlags(ProcessKind kind, int argc, char** argv, BootResult& boot) {
         }
         if (prov.catBindAll && !prov.catEnable) {
             std::fprintf(stderr, "foxsdr-engine: --cat-bind-all needs --cat-enable\n");
+            return 1;
+        }
+        if (!prov.catAllow.empty() && !prov.catBindAll) {
+            std::fprintf(stderr, "foxsdr-engine: --cat-allow needs --cat-bind-all\n");
+            return 1;
+        }
+        if (prov.catBindAll && prov.catAllow.empty()) {
+            std::fprintf(stderr, "foxsdr-engine: --cat-bind-all needs --cat-allow, the computers that may connect (the CAT protocol has no password)\n");
             return 1;
         }
     }

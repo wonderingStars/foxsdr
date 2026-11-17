@@ -1695,6 +1695,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         fact("cat.enabled", sc.cat.enabled ? "1" : "0", true);
         fact("cat.bindAll", sc.cat.bindAll ? "1" : "0", true);
         fact("cat.port", std::to_string(sc.cat.port), true);
+        fact("cat.allow", sc.cat.allow, true);
         const auto add = [&b](const char* name, const ServerHost::Listener& l, bool enabled, int configuredPort,
                               const ServerHost::Counters& live) {
             ApiListBlock::Server s;

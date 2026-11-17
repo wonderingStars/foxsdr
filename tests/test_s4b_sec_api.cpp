@@ -138,6 +138,47 @@ void testHostNamesOfThePage() {
     s.stop();
 }
 
+// SF2-api-multi-host: a request with two Host headers (in either order), two Authorization or two Origin headers, or with an absolute request target ("GET http://name/status", which names a host of its
+// own that could disagree with the Host header), is refused 400 whatever the values are - with no password (Host rule on) and with one (requireAuth) - and one Host, in origin form, still works.
+void testRepeatedHeadersAndAbsoluteTargets() {
+    ControlHub hub;
+    std::string err;
+    ApiServer s(cfg0(), hub, nullptr);
+    CHECK(s.start(err));
+    const std::uint16_t port = static_cast<std::uint16_t>(s.port());
+    const std::string crlf = std::string(1, char(13)) + std::string(1, char(10));
+    const auto raw = [&](const std::string& target, const std::string& headers) { return "GET " + target + " HTTP/1.1" + crlf + headers + crlf; };
+    CHECK(statusOf(ask(port, raw("/status", "Host: 127.0.0.1" + crlf))) == 200);
+    // two Hosts: both orders, the same value twice, an allowed one with a foreign one
+    for (const std::string& hs : {std::string("Host: 127.0.0.1" + crlf + "Host: evil.example" + crlf), std::string("Host: evil.example" + crlf + "Host: 127.0.0.1" + crlf),
+                                  std::string("Host: 127.0.0.1" + crlf + "Host: 127.0.0.1" + crlf), std::string("Host: localhost" + crlf + "host: 127.0.0.1" + crlf)}) {
+        const int st = statusOf(ask(port, raw("/status", hs)));
+        if (st != 400) { std::printf("      two Hosts answered %d\n", st); }
+        CHECK(st == 400);
+        CHECK(statusOf(ask(port, raw("/events", hs))) == 400 && statusOf(ask(port, raw("/ws", hs + kWsKey))) == 400);
+    }
+    // an absolute target, whether it agrees with Host or not (origin form is the only form served)
+    for (const std::string& t : {std::string("http://127.0.0.1/status"), std::string("http://evil.example/status"), std::string("https://localhost/status"), std::string("*"), std::string("evil.example:80")}) {
+        const int st = statusOf(ask(port, raw(t, "Host: 127.0.0.1" + crlf)));
+        if (st != 400) { std::printf("      target %s answered %d\n", t.c_str(), st); }
+        CHECK(st == 400);
+    }
+    s.stop();
+    // beyond this computer (requireAuth): two Authorization headers are refused before the sign-in sees either
+    ApiConfig wide = cfg0();
+    wide.requireAuth = true;
+    int calls = 0;
+    ApiServer w(wide, hub, [&](const std::string& a, const std::string&) { ++calls; return a == "Basic QQ==" ? ApiAuth::Allowed : ApiAuth::Denied; });
+    CHECK(w.start(err));
+    const std::uint16_t wp = static_cast<std::uint16_t>(w.port());
+    CHECK(statusOf(ask(wp, raw("/status", "Host: x" + crlf + "Authorization: Basic QQ==" + crlf))) == 200);
+    CHECK(statusOf(ask(wp, raw("/status", "Host: x" + crlf + "Authorization: Basic QQ==" + crlf + "Authorization: Basic Qg==" + crlf))) == 400);
+    CHECK(statusOf(ask(wp, raw("/status", "Host: x" + crlf + "Authorization: Basic Qg==" + crlf + "Authorization: Basic QQ==" + crlf))) == 400);
+    CHECK(statusOf(ask(wp, raw("/status", "Host: x" + crlf + "Host: y" + crlf + "Authorization: Basic QQ==" + crlf))) == 400);
+    CHECK(calls == 1);   // only the one honest request reached the sign-in
+    w.stop();
+}
+
 // A sign-in callback that is slow for the credential "slow" and can be held shut by a test.
 struct SlowAuth {
     std::atomic<int> calls{0};
@@ -293,6 +334,7 @@ void testCloseAllClients() {
 int main() {
     testHost();
     testHostNamesOfThePage();
+    testRepeatedHeadersAndAbsoluteTargets();
     testAuthIsOffTheIoThread();
     testAuthFloodAndStop();
     testPerAddressHeadCap();

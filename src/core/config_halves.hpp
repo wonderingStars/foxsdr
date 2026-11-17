@@ -222,6 +222,7 @@ struct ConfigFieldInfo {
     X(catEnabled,              Engine,    false) \
     X(catBindAll,              Engine,    false) \
     X(catPort,                 Engine,    false) \
+    X(catAllow,                Engine,    false) \
     X(tciEnabled,              Engine,    false) \
     X(tciBindAll,              Engine,    false)     X(tciAllow,                Engine,    false) \
     X(tciPort,                 Engine,    false) \

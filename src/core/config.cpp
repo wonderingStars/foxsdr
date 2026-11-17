@@ -1174,6 +1174,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     getBool(j, "catEnabled", out.catEnabled);
     getBool(j, "catBindAll", out.catBindAll);
     getInt(j, "catPort", out.catPort);
+    getString(j, "catAllow", out.catAllow);
     getBool(j, "tciEnabled", out.tciEnabled);
     getBool(j, "tciBindAll", out.tciBindAll);
     getInt(j, "tciPort", out.tciPort);
@@ -1603,6 +1604,7 @@ bool ConfigStore::parse(const std::string& text, const std::string& label, AppCo
     // The list of computers that may reach the TCI interface beyond this computer: too long for the list's own limit (400) = damaged, so it is dropped and the
     // server, which does not start beyond this computer without a list, says so.
     if (out.tciAllow.size() > 400) { out.tciAllow.clear(); }
+    if (out.catAllow.size() > 400) { out.catAllow.clear(); }
     // The audio destination: an emptied or hostile host resets to the loopback default (never to a wider one); a port or a radio out of range, or a
     // packet size that is neither of the two, resets to the default.
     if (out.udpAudioHost.empty() || out.udpAudioHost.size() > 253) { out.udpAudioHost = defaults.udpAudioHost; }
@@ -2051,6 +2053,7 @@ std::string ConfigStore::serialize(const AppConfig& cfg) {
     j["catEnabled"] = cfg.catEnabled;
     j["catBindAll"] = cfg.catBindAll;
     j["catPort"] = cfg.catPort;
+    j["catAllow"] = cfg.catAllow;
     j["tciEnabled"] = cfg.tciEnabled;
     j["tciBindAll"] = cfg.tciBindAll;
     j["tciAllow"] = cfg.tciAllow;

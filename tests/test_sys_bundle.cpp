@@ -242,6 +242,7 @@ void testHostileBundleLeavesTheGuardedSettingsAlone() {
     hostile["webBindAddress"] = "0.0.0.0";
     hostile["catBindAll"] = true;
     hostile["tciBindAll"] = true;
+    hostile["catAllow"] = "203.0.113.9";   // and the CAT list likewise
     hostile["tciAllow"] = "203.0.113.9";   // the list of computers that may reach TCI beyond this one: a bundle may not widen it either
     hostile["udpAudioHost"] = "203.0.113.9";
     hostile["sourceKind"] = "rtltcp";
@@ -257,7 +258,7 @@ void testHostileBundleLeavesTheGuardedSettingsAlone() {
     CHECK(r.error == BundleError::None);
     const json c = json::parse(r.files[0].bytes);
     for (const std::string& k : importLeftOutKeys()) { CHECK(!c.contains(k)); }
-    CHECK(importLeftOutKeys().size() == 10);
+    CHECK(importLeftOutKeys().size() == 11);
     CHECK(!c.contains("sourceKind") && !c.contains("soapyArgs") && !c.contains("nativeArgs"));   // a network source and what hangs on it
     CHECK(c.contains("radios") && c["radios"].is_array() && c["radios"].empty());
     CHECK(c["webPort"] == 8080 && c["centerHz"] == 7100000.0);
