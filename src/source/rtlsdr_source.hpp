@@ -210,6 +210,10 @@ public:
     bool setIfBandwidthHz(int hz);
     int ifBandwidthHz() const { return ifBandwidthHz_.load(std::memory_order_relaxed); }
     bool directSamplingSupported() const;     // a radio with a tuner that is not a Blog V4
+    // WHAT AN rtl_tcp CLIENT IS TOLD ABOUT THIS RADIO (the rtl_tcp server's header, hw-findings item 7): the rtl_tcp tuner code (5 = R820T, 6 = R828D; 0 = unknown when no radio is open) and
+    // the number of gain steps of that tuner (the aggregate ladder this driver itself steps; 0 when unknown). Both are 0 while the radio is busy answering another call.
+    std::uint32_t rtlTcpTunerCode() const;
+    std::uint32_t tunerGainSteps() const;
     int directSamplingMode() const;           // what the demodulator is doing now: 0 off, 1 the I branch, 2 the Q branch
 
     // STREAM HEALTH, in the same words SoapySource writes, so one log reads

@@ -105,5 +105,20 @@ int main() {
         rr::forgetRadio(id.key);
     }
 
+    // E (hw-findings item 7, kept in this file because it needs the same fake dongle): what an rtl_tcp client is told about the radio being served. An R820T is tuner code 5 and its gain steps are
+    // the ladder the driver itself steps; a radio that is not open says 0 and 0 ("unknown"), which is what the rtl_tcp server's header then carries.
+    {
+        RtlSdrSource src;
+        CHECK(src.rtlTcpTunerCode() == 0 && src.tunerGainSteps() == 0);   // never opened
+        auto fk = std::make_unique<FakeUsbDevice>();
+        dressAsR820T(*fk);
+        CHECK(src.openWithTransport(std::move(fk), "fake R820T dongle"));
+        CHECK(src.rtlTcpTunerCode() == 5);
+        CHECK(src.tunerGainSteps() == 29);   // what an rtl_tcp server reports for an R820T (rtl_test -t on the real one lists 29 gain values)
+        std::printf("  tuner code %u, gain steps %u\n", static_cast<unsigned>(src.rtlTcpTunerCode()), static_cast<unsigned>(src.tunerGainSteps()));
+        src.closeDevice();
+        CHECK(src.rtlTcpTunerCode() == 0 && src.tunerGainSteps() == 0);
+    }
+
     return testSummary("test_rtlsdr_rate_report");
 }

@@ -28,6 +28,8 @@
 #include "engine/engine_wire_b.hpp"   // screen lane S4b: whether a radio sends network I/Q (the pipeline has one raw-band tap)
 #include "engine/wire_c.hpp"
 #include "engine/wire_c_open.hpp"
+#include "source/rtl_tcp_source.hpp"
+#include "source/rtlsdr_source.hpp"
 
 namespace cascade::engine {
 
@@ -566,6 +568,15 @@ void Engine::pumpWireC() {
                 if (sink != nullptr && wireB_ != nullptr && slot < wireB_->iqOut.size() && wireB_->iqOut[slot].out != nullptr) { return "that radio sends network I/Q already: stop that first"; }
                 receivers_[slot]->pipeline_.setIqSink(sink);
                 return std::string();
+            };
+            h.tunerInfo = [this](int radio, std::uint32_t& type, std::uint32_t& gains) -> bool {
+                // the radio's own tuner where the engine knows it: the native RTL-SDR driver's, or what an rtl_tcp server it listens to told it; anything else is "unknown"
+                const std::size_t slot = static_cast<std::size_t>(radio - 1);
+                if (radio < 1 || slot >= receivers_.size() || !receivers_[slot]) { return false; }
+                cascade::source::DeviceSource* d = receivers_[slot]->device_;
+                if (const auto* r = dynamic_cast<const cascade::source::RtlSdrSource*>(d)) { type = r->rtlTcpTunerCode(); gains = r->tunerGainSteps(); return type != 0; }
+                if (const auto* t = dynamic_cast<const cascade::source::RtlTcpSource*>(d)) { type = t->tunerType(); gains = t->tunerGainCount(); return type != 0; }
+                return false;
             };
             h.setMode = [this](int radio, const std::string& mode) -> std::string {
                 std::uint32_t idx = 0;

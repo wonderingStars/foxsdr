@@ -132,3 +132,20 @@ Real B200 (scratch engine, usage reporting on, URLs dead): with the owner-style 
 `B200`, serial `EDR04ZDB2`, key `b200:EDR04ZDB2`, `library` "SoapySDR uhd" (4 events), no frequency, path or address. With the check's hand-written minimal row the first
 radio_open (before the open could say) is still `uhd:EDR04ZDB2` and the rest `b200:EDR04ZDB2`: a residual for hand-written rows only (OPEN ROWS).
 Other SoapySDR-opened kinds: checked with the stand-in forms of their modules (above), not with hardware. The RTL-SDR opened natively keeps its model from its bus label.
+
+## Item 7: the rtl_tcp server's greeting - FIXED (for the native RTL-SDR and for a radio that itself listens to an rtl_tcp server; "unknown" for the rest)
+
+Cause: `RtlTcpServer` took its tuner type and gain count from `RtlTcpConfig` at start (0 and 0) and the engine never set them, so every client was told
+"unknown tuner, no gain list" (the hardware check read `RTL0`, 0, 0 from a served real dongle).
+Fix: `RtlTcpServer::setTunerInfo(type, gains)` (atomics read when a client is accepted; the next client gets the new numbers); `Hooks::tunerInfo` and
+`ServerSet::pass` refresh it at most twice a second while no client is connected; the engine's hook (`engine_wire_c.cpp`) answers from the served radio:
+`RtlSdrSource::rtlTcpTunerCode()` (5 R820T, 6 R828D, 0 when not open) and `tunerGainSteps()` (29), or, for a radio that is itself an rtl_tcp client, what its
+server told it; anything else (Soapy, a generator, a file) is the documented "unknown", 0 and 0. The header layout is unchanged: "RTL0", then two big-endian
+32-bit numbers, the layout `RtlTcpSource` (this tree's client) reads (`src/source/rtl_tcp_source.cpp`, bytes 4 to 7 the tuner type and 8 to 11 the gain count).
+The gain count is 29, not the driver's own aggregate ladder (30 rungs, it counts its own starting point): `rtl_test -t` on the real R820T lists 29 gain values, which is
+what a client that sizes its gain list from this number expects (and FoxSDR's server ignores every gain command anyway).
+Tests: `test_rtl_tcp_server` (67 checks, 0 failed: unknown stays 0/0, a byte-by-byte stand-in client reads 5 and 29, and the tree's own `RtlTcpSource` reads
+tuner R828D and 29 from the same server and 0/0 when never told); `test_rtlsdr_rate_report` (23, 0 failed: the fake R820T is code 5 and 29 steps, 0/0 closed);
+`test_engine_api_s4b_rtltcp` (40, 0 failed). Break-it: the accept path using the config's numbers again -> 2 failed; restored.
+Real dongle (the window on the hidden desktop serving the real RTL-SDR at 127.0.0.1:18461, a python client): header `RTL0`, tuner 5, gain count 29, then 16.4 MB in 4 s
+(2.05 MS/s of 8-bit I/Q). Before the fix: 0 and 0 (the check). Both devices on the bus afterwards.

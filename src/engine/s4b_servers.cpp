@@ -337,6 +337,16 @@ void ServerSet::pass() {
         if (why.empty()) { rtlRadio_ = radio; rtlIdentity_ = id; rtlProblem_.clear(); }
         else { rtlProblem_ = why; rtlRadio_ = 0; rtlIdentity_ = 0; }
     }
+    // THE HEADER'S TWO NUMBERS follow the radio being served, for the next client (hw-findings item 7): refreshed at most twice a second and never while a client is connected
+    if (rtlRadio_ > 0 && !rtl_->clientConnected()) {
+        const std::int64_t now = steadyMs();
+        if (now - rtlInfoMs_ >= 500) {
+            rtlInfoMs_ = now;
+            std::uint32_t type = 0, gains = 0;
+            if (!(hooks_.tunerInfo && hooks_.tunerInfo(radio, type, gains))) { type = 0; gains = 0; }   // not known: the documented "unknown"
+            rtl_->setTunerInfo(type, gains);
+        }
+    }
     const std::uint64_t w = rtlTuneWord_.exchange(0, std::memory_order_acquire);
     if ((w >> 63) != 0 && rtlRadio_ > 0 && hooks_.tune) {
         const double hz = static_cast<double>(w & 0xFFFFFFFFull);

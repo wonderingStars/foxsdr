@@ -211,7 +211,7 @@ void RtlTcpServer::run() {
                 sock::setNoDelay(h);
                 client = h;
                 out.assign(kRtlTcpHeaderBytes, 0);
-                header(cfg_.tunerType, cfg_.gainCount, out.data());
+                header(tunerType_.load(std::memory_order_relaxed), gainCount_.load(std::memory_order_relaxed), out.data());
                 off = 0;
                 cmdFill = 0;
                 anyCommand = false;
