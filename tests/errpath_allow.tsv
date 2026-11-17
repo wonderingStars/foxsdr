@@ -1036,12 +1036,12 @@ src/engine/engine.cpp::Engine::followInputRate::errassign::cascade gui sourceerr
 src/engine/engine.cpp::Engine::followTransmitFrequency::errassign::transmitter_ lasterror	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::holdAudioLockForTest::log::test the audio lock could not be taken	ALLOW	engine result text shown to the user	seed
 src/engine/engine.cpp::Engine::launchDeviceOpen::errassign::	ALLOW	result text of an engine operation shown to the user	seed
-src/engine/engine.cpp::Engine::launchDeviceOpen::errassign::cascade gui applysourcerate dev r requestratehz r error sour	ALLOW	result text of an engine operation shown to the user	seed
+src/engine/engine.cpp::Engine::launchDeviceOpen::errassign::open	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::launchDeviceOpen::errassign::dev lasterror	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::loadBandPlan::errassign::err	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::loadBookmarks::errassign::bmerr	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::loadBookmarks::errassign::mkerr	ALLOW	result text of an engine operation shown to the user	seed
-src/engine/engine.cpp::Engine::openDeviceSync::errassign::cascade gui applysourcerate dev requestratehz rx sourceerror	PENDING:reports-not-in-function	survey: REPORTS (sourceError_ at the open result (noteRadioFail count; D4 upgrade)) but no reporting call encloses the site	seed
+src/engine/engine.cpp::Engine::openDeviceSync::errassign::restore	PENDING:reports-not-in-function	survey: REPORTS (sourceError_ at the open result (noteRadioFail count; D4 upgrade)) but no reporting call encloses the site	seed
 src/engine/engine.cpp::Engine::openDeviceSync::errassign::dev lasterror	ALLOW	open-path reason: openDeviceSync returns nullptr and its callers (the restore branch of Engine::applyConfig, engine_radio_saved.cpp) file the radio_fail through reportFailedOpen with this sourceError_ text	mustfix-b
 src/engine/engine.cpp::Engine::openDeviceSync::errassign::saved source kind	ALLOW	saved-radio restore refusals: the caller counts noteRadioFail(kind, sourceError_) at engine.cpp:10171 (and engine_radio_saved.cpp:212 for radios 2-8)	sweep-a
 src/engine/engine.cpp::Engine::openDeviceSync::errassign::saved source was a sound card driveraudio not a radio ignore	ALLOW	saved-radio restore refusals: the caller counts noteRadioFail(kind, sourceError_) at engine.cpp:10171 (and engine_radio_saved.cpp:212 for radios 2-8)	sweep-a
