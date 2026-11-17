@@ -15,6 +15,7 @@
 
 #include "core/app_commands.hpp"
 #include "core/config.hpp"
+#include "core/health_events.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
 #include "patch_faces.hpp"
@@ -305,6 +306,11 @@ struct PatchPublisher::Impl {
             cc::AppConfig half = d_.interfaceHalf();
             half.patch = text;
             (void)d_.saveInterfaceHalf(half);
+        }
+        // A SAVED PATCH THAT LOST CONNECTIONS on the way back in, and the page went on with the rest: counted, anonymously, as the classic window counts it (the ledger holds it until
+        // reporting is decided).
+        void patchLostConnections(int dropped) override {
+            if (dropped > 0) { cc::health::noteRecovered(cc::health::Recovered::PatchLoad); }
         }
         void savePresets(const std::vector<cc::PatchPreset>& list, const std::string& previous) override {
             cc::AppConfig half = d_.interfaceHalf();

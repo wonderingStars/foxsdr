@@ -300,6 +300,9 @@ public:
     virtual std::string previous() const = 0;
     virtual void savePatch(const std::string& text) = 0;
     virtual void savePresets(const std::vector<cascade::core::PatchPreset>& list, const std::string& previous) = 0;
+    // The saved patch came back with `dropped` connections it could not honour and the page went on with the rest. The window's own config counts it (health word patchload, the same
+    // word the classic window counts); the default says nothing, which is what a stand-in wants.
+    virtual void patchLostConnections(int dropped) { (void)dropped; }
 };
 
 // ---- the reads (a port of patchLists, patchLook and readPatchLive) ----

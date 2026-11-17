@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <string>
 
+#include "core/radio_events.hpp"
 #include "source/iq_source.hpp"
 
 namespace cascade::gui {
@@ -110,9 +111,14 @@ inline RateSetOutcome applySourceRate(cascade::source::IqSource& src, double req
                                       bool explicitRequest = false) {
     const std::string errBefore = src.lastError();
     RateSetOutcome out;
+    // A RATE THE RADIO REFUSES IS A REPORT, whoever asked and whenever (open, saved radio, plugin preset, the API, a patch page's radio): the driver says it itself at the
+    // place it notices where it is wired, and this watch says it here, once, where it did not (core/radio_events.hpp RefusalWatch). A rate the driver coerced on a call that
+    // succeeded is not a refusal and is not said.
+    cascade::core::radioreport::RefusalWatch watch;
     out.ok = explicitRequest ? src.setSampleRateHzExplicit(requestedHz)
                              : src.setSampleRateHz(requestedHz);
     const std::string errAfter = src.lastError();
+    if (!out.ok) { watch.noteRefusalIfSilent(&src, nullptr, cascade::core::radioreport::Control::Rate, errAfter); }
     out.landedHz = src.sampleRateHz();
     out.sourceError = out.ok ? sourceErrorAfterRateSet(currentError, requestedHz, out.landedHz,
                                                        errBefore, errAfter)

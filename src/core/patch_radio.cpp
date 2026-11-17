@@ -10,6 +10,7 @@
 #include "core/diag_log.hpp"
 #include "core/plugin_api.hpp"
 #include "core/health_events.hpp"
+#include "core/radio_events.hpp"
 #include "core/thread_beats.hpp"
 #include "dsp/spectrum.hpp"
 
@@ -67,7 +68,13 @@ bool PatchRadio::radioCorrects() const {
 }
 
 bool PatchRadio::setRadioPpm(double ppm) {
-    if (!sh_->src || !sh_->src->setFrequencyCorrectionPpm(ppm)) { return false; }
+    if (!sh_->src) { return false; }
+    // A REFUSAL THE DRIVER DID NOT SAY ITSELF is said here, once (radioreport::RefusalWatch): the radio is registered under its source object (engine_patch_radios.cpp).
+    radioreport::RefusalWatch watch;
+    if (!sh_->src->setFrequencyCorrectionPpm(ppm)) {
+        watch.noteRefusalIfSilent(sh_->src.get(), nullptr, radioreport::Control::Ppm, sh_->src->lastError());
+        return false;
+    }
     radioPpm_ = ppm;
     return true;
 }
@@ -157,7 +164,11 @@ double PatchRadio::rateHz() const { return sh_->src ? sh_->src->sampleRateHz() :
 double PatchRadio::centreHz() const { return sh_->src ? view_.centerFrequencyHz() : 0.0; }
 
 bool PatchRadio::setCentreHz(double hz) {
-    return sh_->src ? view_.setCenterFrequencyHz(hz) : false;
+    if (!sh_->src) { return false; }
+    radioreport::RefusalWatch watch;   // as setRadioPpm: said here only when the driver did not say it
+    const bool took = view_.setCenterFrequencyHz(hz);
+    if (!took) { watch.noteRefusalIfSilent(sh_->src.get(), nullptr, radioreport::Control::Frequency, sh_->src->lastError()); }
+    return took;
 }
 
 Runner& PatchRadio::runner() { return sh_->runner; }
