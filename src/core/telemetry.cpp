@@ -546,7 +546,7 @@ std::string HeartbeatSender::beatJson(const std::string& id, const std::string& 
 }
 
 std::string HeartbeatSender::nextBeatJson() const {
-    return beatJson(id_, v_, radioreport::kRadioReportsLiveSend ? radios_ : std::vector<std::string>(), syntheticRun());
+    return beatJson(id_, v_, radioreport::kRadioReportsLiveSend && radioreport::kBeatCarriesRadios ? radios_ : std::vector<std::string>(), syntheticRun());
 }
 
 void HeartbeatSender::setRadios(const std::vector<std::string>& keys) {

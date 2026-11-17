@@ -26,6 +26,12 @@ namespace cascade::core::radioreport {
 // then sent. False would queue and send nothing. See docs/multi-radio-records/send-on.md.
 inline constexpr bool kRadioReportsLiveSend = true;
 
+// THE BEAT'S `radios` FIELD STAYS OFF (send-on lane, 2026-11-17). The approved PRIVACY.md says the "still running" beat is the install identifier, the version
+// and nothing else, and that serial numbers are removed from everything but the radio reports themselves; a beat naming the open radios by model and serial would
+// contradict both. The program is held to the text, so the field is not sent. Turning it on needs the owner to approve a sentence first; the plumbing
+// (HeartbeatSender::setRadios, the contract's 3.10 and the Worker's reader) is kept and tested.
+inline constexpr bool kBeatCarriesRadios = false;
+
 inline constexpr int kSchema = 2;
 
 // ---------------------------------------------------------------------------

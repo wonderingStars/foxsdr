@@ -72,7 +72,7 @@ int main() {
         }
     }
 
-    // --- THE LIVE SEND IS ON: the beat the real sender posts carries the `radios` open right now -------------------------------------------------------------
+    // --- THE BEAT STAYS id + version even with the live send ON: the approved PRIVACY.md says "the install identifier, the version, and nothing else" -------------------------------------------------------------
     {
         // (The sender posts over https only, so what it would post is read through nextBeatJson(), which poll() uses and nothing else.)
         HeartbeatSender h;
@@ -81,9 +81,10 @@ int main() {
         h.setRadios({"airspy-hf:HF0001A2", "rtl-sdr:-"});
         const json beat = json::parse(h.nextBeatJson());
         CHECK(beat["id"] == id && beat["beat"] == 1 && beat["v"] == "0.99.109");
-        // THE ONE SWITCH: with kRadioReportsLiveSend TRUE (0.99.109) the beat names the radios open (was: false, the beat named none and had 3 members)
-        CHECK(radioreport::kRadioReportsLiveSend);
-        CHECK(beat.contains("radios") && beat["radios"].size() == 2);
+        // THE SWITCH IS ON (0.99.109) AND THE BEAT STILL NAMES NO RADIO (kBeatCarriesRadios false): three members, as before the switch (the first draft of this lane
+        // pinned radios present, size 2, and was changed when the beat was found to contradict the privacy text)
+        CHECK(radioreport::kRadioReportsLiveSend && !radioreport::kBeatCarriesRadios);
+        CHECK(!beat.contains("radios") && beat.size() == (beat.contains("synthetic") ? 4u : 3u));
         // the same sender with the switch on would say them, in the contract's shape: the explicit form is what poll() uses when it is
         const json would = json::parse(HeartbeatSender::beatJson(id, "0.99.109", {"airspy-hf:HF0001A2", "rtl-sdr:-"}));
         CHECK(would["radios"].size() == 2);

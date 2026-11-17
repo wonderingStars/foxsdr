@@ -541,8 +541,16 @@ position, an IP address or host name, a user or computer name, a path. Such a re
 
 ## 11. Deploy order, and what the Worker deployed today answers
 
-NOTHING here is deployed. The order is: the Worker (`wrangler deploy`, after `wrangler secret put RELAY_TOKEN`), then the site, then the app
-that sends these. The Worker deployed today (test-fixtures `worker-0.99.95.js` stands for it; the real one is not read) answers:
+NOTHING here is deployed as of 2026-11-17. **0.99.109 SENDS** (owner decision of 2026-11-17: `kRadioReportsLiveSend` is `true` in the app). The order is: the
+Worker (`wrangler deploy`, after `wrangler secret put RELAY_TOKEN`), then the site, then the app that sends these: **the Worker and the site's intake are deployed
+and proved with real messages BEFORE any build with sending on is given to anyone, the tester pre-release included.** A test, a drive or a CI run never sends
+anything off its own computer (`src/core/report_send_guard.hpp`: a destination other than 127.0.0.1, localhost or ::1 is refused unless the run is a real
+user's, so `ctest` and the drives cannot reach the Worker). The app tolerates the Worker of today and a site that is not up, from tests over a loopback stand-in
+(`tests/test_radio_reports_send_on.cpp`): `400 bad id` is kept and retried with the back-off of 2.2 (one attempt, then 1 minute, 5 minutes, 1 hour, then every
+6 hours), never dropped and never retried in a loop; 502 and 503 are the same; a message not delivered in 14 days is dropped and counted; quit is held for at
+most the 1.5 seconds the engine gives the last send. **The beat's `radios` field (3.10) is NOT sent by 0.99.109** (`radioreport::kBeatCarriesRadios` is false): the approved privacy text says the beat is the install
+identifier and the version and nothing else, and that serial numbers are removed from everything but the radio reports; a beat naming radios by model and serial would
+contradict it. The Worker's reader and `HeartbeatSender::setRadios` are kept; sending it needs the owner to approve a sentence first. The Worker deployed today (test-fixtures `worker-0.99.95.js` stands for it; the real one is not read) answers:
 
 | Message | Answer today | Writes |
 |---|---|---|
