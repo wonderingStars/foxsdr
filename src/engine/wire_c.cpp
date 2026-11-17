@@ -16,6 +16,7 @@
 #include "core/safe_file_io.hpp"
 #include "core/secret_vault.hpp"
 #include "engine/s4_outputs.hpp"
+#include "net/peer_allow.hpp"
 #include "net/web_cors.hpp"
 
 namespace cascade::engine::wirec {
@@ -103,6 +104,42 @@ constexpr Spec kSpecs[] = {
     {"rec.clip_min", Kind::Real, 0, 60, "1", ""},            // a transmission shorter than this is not kept
     {"rec.clip_max", Kind::Real, 10, 3600, "600", ""},       // a transmission longer than this goes on in a new file
     {"rec.replay_s", Kind::Real, 0, 120, "0", ""},           // seconds of the radio's audio kept in memory so that a take or a clip can begin before the key was pressed (0 = none)
+    // --- screen lane S4b: the servers other programs connect to (engine/s4b_servers.hpp). Every one is OFF; every one listens on this computer only unless its own "all" key is turned on. ---
+    {"srv.tcpaudio.enabled", Kind::Bool, 0, 0, "0", ""},        // serve one radio's audio over TCP (raw 16-bit mono, 48000 a second: the format of the UDP audio)
+    {"srv.tcpaudio.all", Kind::Bool, 0, 0, "0", ""},            // listen on every address instead of this computer only (no password: anyone on the network can listen)
+    {"srv.tcpaudio.allow", Kind::Text, 0, 400, "", ""},         // with "all": the addresses (192.168.1.20) or networks (192.168.1.0/24) that may connect; none listed = the server does not start beyond this computer
+    {"srv.tcpaudio.port", Kind::Int, 1024, 65535, "7356", ""},
+    {"srv.tcpaudio.radio", Kind::Int, 1, 8, "1", ""},
+    {"srv.tcpaudio.packet", Kind::Choice, 0, 0, "480", "480|960"},   // samples per write: 10 ms or 20 ms
+    {"srv.control.radio", Kind::Int, 1, 8, "1", ""},            // the radio the network streams and controls below act on
+    {"srv.rtltcp.enabled", Kind::Bool, 0, 0, "0", ""},          // serve that radio's I/Q to programs that read an RTL-SDR over the network (rtl_tcp); only retuning is accepted from them
+    {"srv.rtltcp.all", Kind::Bool, 0, 0, "0", ""},              // listen on every address instead of this computer only (no password)
+    {"srv.rtltcp.allow", Kind::Text, 0, 400, "", ""},           // the same for rtl_tcp (its protocol has no password)
+    {"srv.rtltcp.port", Kind::Int, 1024, 65535, "1234", ""},
+    {"srv.api.enabled", Kind::Bool, 0, 0, "0", ""},             // the WebSocket and SSE interface: other programs read the receiver's status, bookmarks and decoded lines and retune it
+    {"srv.api.all", Kind::Bool, 0, 0, "0", ""},                 // listen on every address (programs must then sign in with the web page's account; refused while the web page has no password)
+    {"srv.api.port", Kind::Int, 1024, 65535, "8074", ""},
+    {"srv.mcp.enabled", Kind::Bool, 0, 0, "0", ""},             // the MCP server (five tools: status, bookmarks, recent decodes, tune, set mode); this computer only
+    {"srv.mcp.port", Kind::Int, 1024, 65535, "8075", ""},
+    {"srv.mcp.token", Kind::Text, 0, 128, "", ""},              // SECRET (protected store): when set, a client must send it as a bearer token
+    {"rot.enabled", Kind::Bool, 0, 0, "0", ""},                 // keep a link to an antenna rotator (turned only on the person's request; never at start-up)
+    {"rot.kind", Kind::Choice, 0, 0, "rotctld", "rotctld|gs232"},   // rotctld over TCP, or a Yaesu GS-232 controller on a serial port
+    {"rot.host", Kind::Text, 1, 253, "127.0.0.1", ""},          // rotctld: this computer unless the person types another host (no password, no encryption)
+    {"rot.port", Kind::Int, 1, 65535, "4533", ""},
+    {"rot.serial", Kind::Text, 0, 12, "", ""},                  // GS-232: a COM port name like COM3
+    {"rot.baud", Kind::Choice, 0, 0, "9600", "1200|2400|4800|9600|19200"},
+    {"rot.az_max", Kind::Choice, 0, 0, "450", "360|450"},       // the controller's azimuth range
+    {"rot.park_az", Kind::Real, 0, 450, "0", ""},
+    {"rot.park_el", Kind::Real, 0, 180, "0", ""},
+    {"swl.operator", Kind::Text, 0, 16, "", ""},                // the listener's identifier written into the listening log's ADIF export
+    {"swl.grid", Kind::Text, 0, 8, "", ""},                     // the listener's Maidenhead square (2 to 8 characters), optional
+    {"listing.enabled", Kind::Bool, 0, 0, "0", ""},             // let the web page serve a public receiver listing (/status.json) for a directory to read; OFF: the page answers 404
+    {"listing.name", Kind::Text, 0, 64, "", ""},                // the receiver's public name
+    {"listing.location", Kind::Text, 0, 96, "", ""},            // a town and a region, as free text
+    {"listing.lat", Kind::Text, 0, 24, "", ""},                 // optional latitude in degrees (with the longitude)
+    {"listing.lon", Kind::Text, 0, 24, "", ""},
+    {"listing.max_clients", Kind::Int, 1, 1000, "1", ""},       // the listener limit the listing states
+    {"listing.bands", Kind::Text, 0, 2000, "", ""},             // "name;centre MHz;sample rate MHz", one per line or separated by |, at most 32
 };
 constexpr std::size_t kSpecCount = sizeof(kSpecs) / sizeof(kSpecs[0]);
 
@@ -163,6 +200,29 @@ std::string extraRule(const std::string& key, const std::string& value) {
     if (key == "out.influx.org") { return cascade::engine::s4::checkInfluxText(value, true); }
     if (key == "out.influx.token" && value.find_first_of("\r\n") != std::string::npos) { return "the token has a line break"; }
     if (key == "out.webhook.url") { return cascade::engine::s4::checkWebhookUrl(value); }
+    if ((key == "srv.tcpaudio.allow" || key == "srv.rtltcp.allow") && !value.empty()) {
+        cascade::net::PeerAllow list;
+        std::string why;
+        if (!cascade::net::PeerAllow::parse(value, list, why)) { return why; }
+    }
+    if (key == "srv.mcp.token" && value.find_first_of("\r\n\t ") != std::string::npos) { return "the token has a space or a line break"; }
+    if (key == "rot.host" && !value.empty()) { return cascade::engine::s4::checkMqttHost(value); }
+    if (key == "rot.serial" && !value.empty()) {
+        bool com = value.size() >= 4 && value.size() <= 6 && (value.compare(0, 3, "COM") == 0);
+        for (std::size_t i = 3; com && i < value.size(); ++i) { com = value[i] >= '0' && value[i] <= '9'; }
+        if (!com) { return "the serial port is a name like COM3"; }
+    }
+    if (key == "swl.operator" && value.find_first_of("\r\n\t") != std::string::npos) { return "the identifier has a control character"; }
+    if (key == "swl.grid" && !value.empty()) {
+        bool ok = value.size() == 2 || value.size() == 4 || value.size() == 6 || value.size() == 8;
+        for (std::size_t i = 0; ok && i < value.size(); ++i) {
+            const char ch = value[i];
+            const bool letter = (ch >= 'A' && ch <= 'R') || (ch >= 'a' && ch <= 'r') || (i >= 4 && ((ch >= 'A' && ch <= 'X') || (ch >= 'a' && ch <= 'x')));
+            const bool digit = ch >= '0' && ch <= '9';
+            ok = (i % 4 < 2) ? (i % 2 == 0 ? letter : letter) : digit;
+        }
+        if (!ok) { return "the square is 2, 4, 6 or 8 characters like IO91 or IO91wm"; }
+    }
     if (key == "alerts.keywords") { return cascade::engine::s4::parseKeywords(value).problem; }
     if (key == "rds.log.folder" && !value.empty() && !std::filesystem::path(value).is_absolute()) { return "the folder must be a full path"; }
     return std::string();

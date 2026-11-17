@@ -31,6 +31,8 @@
 #include "engine/wire_c_net.hpp"
 #include "engine/wire_c_sys.hpp"
 #include "engine/s4_outputs.hpp"
+#include "engine/s4b_servers.hpp"
+#include "engine/s4b_swl.hpp"
 
 namespace cascade::engine::wirec {
 
@@ -90,6 +92,11 @@ public:
     const std::filesystem::path& folder() const { return folder_; }
     SysOps& sys() { return sys_; }
     QsoBook& qsos() { return qsoBook_; }
+    cascade::engine::s4b::SwlBook& swl() { return swlBook_; }   // screen lane S4b: the listening (SWL) log
+    std::string swlError, swlExportLast;
+    std::uint64_t listingVersion = 0;        // screen lane S4b: the settings version the public listing was last built from
+    bool listingLive = false;
+    std::string listingPreview, listingProblem;   // the exact document the web page serves (empty while off) and what is wrong with the words
     CatEmulation catEmu;                  // CAT emulation for logging programs (row L7)
     cascade::core::rdslog::Logger rdsLog; // the RDS log (engine lane E1): a worker of its own, started only while the user's switch is on
     std::uint64_t rdsLogSeen = 0;          // what the last published fact block counted of the log (lines, drops, the error)
@@ -108,8 +115,13 @@ public:
         catEmu.stop();
         rdsLog.stop();
         outputs.stop();
+        servers.stop();
         radioInfo.configure(false, "127.0.0.1", 0, false);
     }
+    cascade::engine::s4b::ServerSet servers;   // screen lane S4b: the servers other programs connect to (audio over TCP ...), each off until the user turns it on
+    std::uint64_t serversSettingsVersion = 0;  // the settings version the servers were last configured from
+    std::string serversSig;                    // what the last published servers facts counted
+    bool serversHooked = false;                // the engine's hooks were given to the servers
     cascade::engine::s4::Hub outputs;     // screen lane S4: the decoded-text feed sent to MQTT / a webhook, and the keyword alerts (off until the user turns one on)
     std::uint64_t outputsSeq = 0;         // the host event ring's sequence the outputs have read up to
     std::uint64_t outputsSettingsVersion = 0;   // the settings version the outputs were last configured from
@@ -150,6 +162,7 @@ private:
     Settings settings_;
     SysOps sys_;
     QsoBook qsoBook_{folder_ / "qso-log.json"};
+    cascade::engine::s4b::SwlBook swlBook_{folder_ / "swl-log.json"};
     mutable std::mutex powerMu_;
     std::unique_ptr<Power> power_;
 };

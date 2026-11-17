@@ -38,6 +38,7 @@
 #include <vector>
 
 #include "net/net_sock.hpp"
+#include "net/peer_allow.hpp"
 #include "net/spsc_ring.hpp"
 
 namespace cascade::net {
@@ -56,11 +57,13 @@ struct FanoutConfig {
     int pollMs = kDefaultPollMs;            // IO thread wake interval
     int socketSendBuffer = 0;               // SO_SNDBUF asked of each accepted socket (0 = the OS default)
     std::vector<std::uint8_t> greeting;     // sent first to every new client (may be empty)
+    PeerAllow allowedPeers;                 // when not empty: only these client addresses are served; any other is closed before a byte is read or sent (refusedPeer)
 };
 
 struct FanoutStats {
     std::uint64_t accepted = 0;
     std::uint64_t refusedFull = 0;        // closed at once: the client cap was reached
+    std::uint64_t refusedPeer = 0;        // closed at once: the address is not on the allow-list
     std::uint64_t droppedSlow = 0;        // disconnected: its queue could not take a record
     std::uint64_t droppedStalled = 0;     // disconnected: pending bytes, no progress for stallMs
     std::uint64_t closedByPeer = 0;       // the client went away (or its connection failed)
@@ -120,7 +123,7 @@ private:
     std::atomic<std::uint16_t> port_{0};
     std::vector<Client> clients_;  // IO thread only
 
-    std::atomic<std::uint64_t> accepted_{0}, refusedFull_{0}, droppedSlow_{0}, droppedStalled_{0}, closedByPeer_{0}, published_{0},
+    std::atomic<std::uint64_t> accepted_{0}, refusedPeer_{0}, refusedFull_{0}, droppedSlow_{0}, droppedStalled_{0}, closedByPeer_{0}, published_{0},
         bytesSent_{0}, bytesIgnored_{0}, oversize_{0};
     std::atomic<int> clientCount_{0};
 };

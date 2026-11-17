@@ -16,11 +16,16 @@
 #include "core/app_commands.hpp"
 #include "core/companion_fault.hpp"
 #include "core/config.hpp"
+#include "core/demod_names.hpp"
+#include "engine/s4b_listing.hpp"
+#include "engine/s4b_macro_edit.hpp"
+#include "core/version.hpp"
 #include "core/diag_log.hpp"
 #include "engine/engine.hpp"
 #include "core/plugin_repo_helper.hpp"   // wire-c
 #include "core/safe_file_io.hpp"
 #include "core/store_sort.hpp"
+#include "engine/engine_wire_b.hpp"   // screen lane S4b: whether a radio sends network I/Q (the pipeline has one raw-band tap)
 #include "engine/wire_c.hpp"
 #include "engine/wire_c_open.hpp"
 
@@ -68,6 +73,41 @@ std::int32_t Engine::applyWireC(const FoxCommand& c, const std::string& text, Fo
                 case wc::SetResult::SaveFailed: return FOXAPI_FAILED;
             }
             return FOXAPI_FAILED;
+        }
+        case FOXAPP_OP_ROTATOR: return wireC().servers.rotatorOp(text, why);
+        case FOXAPP_OP_MACRO_EDIT: {
+            if (macroPlayer_.running()) { why = "a macro is running; stop it first"; return FOXAPI_BUSY; }
+            const std::int32_t st = cascade::engine::s4b::macroEdit(macrosFilePath(), text, why);
+            if (st == FOXAPI_OK) {
+                std::string again;
+                (void)applyMacroOp(cascade::core::cmd::make(FOXAPP_OP_MACRO_RELOAD), std::string(), again);   // the engine reads the file it was just given
+                ++wireCVersion_;
+            }
+            return st;
+        }
+        case FOXAPP_OP_SWL: {
+            wc::State& s = wireC();
+            namespace s4b = cascade::engine::s4b;
+            s4b::RadioFigures rf;
+            {
+                const int radio = static_cast<int>(s.settings().getInt("srv.control.radio"));
+                const std::size_t slot = static_cast<std::size_t>(radio - 1);
+                cascade::core::PublishedState ps;
+                if (radio >= 1 && slot < receivers_.size() && receivers_[slot] && receivers_[slot]->receiverSnapshot_ != nullptr && receivers_[slot]->receiverSnapshot_->read(ps) && ps.rx.tunedHz > 0.0) {
+                    rf.valid = true;
+                    rf.hz = ps.rx.tunedHz;
+                    rf.mode = ps.rx.demodMode <= 8u ? cascade::core::kDemodNames[ps.rx.demodMode] : "";
+                    rf.peakDbfs = ps.rx.signalDb > -199.0 ? ps.rx.signalDb : std::nan("");
+                    rf.radio = radio;
+                }
+            }
+            std::string exported;
+            s.swlError.clear();
+            const std::int32_t st = s4b::swlOp(s.swl(), text, rf, static_cast<std::int64_t>(std::time(nullptr)), s.settings().get("swl.operator"), s.settings().get("swl.grid"), why, exported);
+            ++wireCVersion_;
+            if (st != FOXAPI_OK) { s.swlError = why; return st; }
+            if (!exported.empty()) { s.swlExportLast = exported; }
+            return FOXAPI_OK;
         }
         case FOXAPP_OP_SYS_FIRSTRUN: {
             wc::State& s = wireC();
@@ -199,6 +239,8 @@ std::int32_t Engine::applyWireC(const FoxCommand& c, const std::string& text, Fo
     return FOXAPI_UNSUPPORTED;
 }
 
+void Engine::setDesktopNotifier(std::shared_ptr<cascade::core::alerts::NotificationSink> sink) { wireC().outputs.setNotifier(std::move(sink)); }
+
 void Engine::wireCFacts(const std::function<void(const std::string&, const std::string&)>& fact) {
     wc::State& s = wireC();
     s.settings().each([&fact](const std::string& key, const std::string& value) { fact("wirec." + key, value); });
@@ -221,6 +263,14 @@ void Engine::wireCFacts(const std::function<void(const std::string&, const std::
     fact("rds.log.lines", std::to_string(s.rdsLog.written()));       // counts and a sentence only: never a name, a text or a frequency
     fact("rds.log.dropped", std::to_string(s.rdsLog.dropped()));
     fact("rds.log.error", s.rdsLog.error());
+    s.servers.facts(fact);   // screen lane S4b: the servers other programs connect to (counts and sentences only)
+    fact("swl.count", std::to_string(s.swl().size()));      // the listening log: a COUNT and sentences only, never an entry
+    fact("swl.error", s.swlError.empty() ? s.swl().error() : s.swlError);
+    fact("swl.export.last", s.swlExportLast);
+    // the public receiver listing: the exact document the web page serves at /status.json (the person's own words, public by their choice), its problem, and whether the page is up to serve it
+    fact("listing.preview", s.listingPreview);
+    fact("listing.problem", s.listingProblem);
+    fact("listing.live", (!s.listingPreview.empty() && servers_.webServer().running()) ? "1" : "0");
     // THE DECODED-TEXT OUTPUTS AND ALERTS (screen lane S4): counts and one sentence each - never a decoded line, a user name, a password or an address. The last alerts are the program's own
     // read-out for the operator (LOCAL only, like every fact of this lane): the matched keyword and the text, cut.
     {
@@ -497,6 +547,120 @@ void Engine::pumpWireC() {
             ++wireCVersion_;
         }
         if (s.radioInfo.poll(static_cast<std::int64_t>(std::time(nullptr)))) { ++wireCVersion_; }
+    }
+    // THE SERVERS OTHER PROGRAMS CONNECT TO (screen lane S4b; engine/s4b_servers.hpp): every one is off by default, on this computer only unless its own key says otherwise.
+    {
+        namespace s4b = cascade::engine::s4b;
+        if (!s.serversHooked) {
+            s.serversHooked = true;
+            s4b::Hooks h;
+            h.audioReader = [this](int radio) { return openUdpAudioReader(*api_, radio, "tcpaudio:" + std::to_string(radio)); };
+            h.radioIdentity = [this](int radio) -> std::uintptr_t {
+                const std::size_t slot = static_cast<std::size_t>(radio - 1);
+                return (radio >= 1 && slot < receivers_.size() && receivers_[slot]) ? reinterpret_cast<std::uintptr_t>(receivers_[slot].get()) : 0;
+            };
+            h.attachIq = [this](int radio, cascade::core::Pipeline::IqSink* sink) -> std::string {
+                const std::size_t slot = static_cast<std::size_t>(radio - 1);
+                if (radio < 1 || slot >= receivers_.size() || !receivers_[slot]) { return sink == nullptr ? std::string() : std::string("that radio is not open"); }
+                if (sink != nullptr && wireB_ != nullptr && slot < wireB_->iqOut.size() && wireB_->iqOut[slot].out != nullptr) { return "that radio sends network I/Q already: stop that first"; }
+                receivers_[slot]->pipeline_.setIqSink(sink);
+                return std::string();
+            };
+            h.setMode = [this](int radio, const std::string& mode) -> std::string {
+                std::uint32_t idx = 0;
+                for (std::uint32_t i = 1; i <= 8; ++i) { if (mode == cascade::core::kDemodNames[i]) { idx = i; } }
+                if (idx == 0) { return "that is not a mode"; }
+                FoxCommand cmd = cascade::core::cmd::makeInt(FOXAPI_OP_SET_MODE, static_cast<std::int64_t>(idx));   // the ordinary mode command: its checks apply
+                cmd.target = static_cast<std::uint32_t>(radio);
+                const FoxCommandResult r = applyCommand(cmd);
+                return (r.status == FOXAPI_OK || r.status == FOXAPI_NO_CHANGE) ? std::string() : std::string(r.message);
+            };
+            h.readStatus = [this](int radio, cascade::net::HubStatus& out) -> bool {
+                const std::size_t slot = static_cast<std::size_t>(radio - 1);
+                if (radio < 1 || slot >= receivers_.size() || !receivers_[slot] || receivers_[slot]->receiverSnapshot_ == nullptr) { return false; }
+                cascade::core::PublishedState ps;
+                if (!receivers_[slot]->receiverSnapshot_->read(ps)) { return false; }
+                out.running = (ps.rx.flags & FOXAPI_RX_RUNNING) != 0u;
+                out.tunedHz = ps.rx.tunedHz;
+                out.centreHz = ps.rx.centreHz;
+                out.sampleRateHz = ps.rx.sampleRateHz;
+                out.bandwidthHz = ps.rx.bandwidthHz;
+                out.signalDb = ps.rx.signalDb;
+                out.mode = ps.rx.demodMode <= 8u ? cascade::core::kDemodNames[ps.rx.demodMode] : "";
+                out.source = std::string(ps.rx.deviceName, strnlen(ps.rx.deviceName, sizeof(ps.rx.deviceName)));
+                return true;
+            };
+            h.readBookmarks = [this]() {
+                std::vector<cascade::net::HubBookmark> v;
+                for (const cascade::core::Bookmark& b : freqMgr_.list()) {
+                    if (v.size() >= cascade::net::kHubMaxBookmarks) { break; }
+                    v.push_back({b.name, b.mode, b.group, b.freqHz});
+                }
+                return v;
+            };
+            h.readDecodes = [this](std::uint64_t& seq, const std::function<void(double, double, const std::string&, const std::string&)>& sink) {
+                if (!sink) { seq = pluginApi_->eventsSeq(); return; }
+                for (const CascadeEvent& ev : pluginApi_->hostEvents(seq, 256)) {
+                    seq = std::max<std::uint64_t>(seq, ev.seq);
+                    if ((ev.flags & CASCADE_EVENT_FLAG_PRIVATE) != 0u || std::string(ev.kind) != "text") { continue; }   // a private plugin's line is never shown
+                    sink(static_cast<double>(ev.unixMs) / 1000.0, ev.frequencyHz, ev.plugin, ev.text);
+                }
+            };
+            h.webAccount = [this]() {
+                const ServerConfig sc = servers_.config();
+                return cascade::engine::s4b::Hooks::WebAccount{sc.web.username, sc.web.passwordRecord};
+            };
+            h.tune = [this](int radio, double hz) -> std::string {
+                FoxCommand cmd = cascade::core::cmd::makeNum(FOXAPI_OP_SET_FREQUENCY, hz);   // the ordinary tuning command: every check the window's own tuning meets applies
+                cmd.target = static_cast<std::uint32_t>(radio);
+                const FoxCommandResult r = applyCommand(cmd);
+                return (r.status == FOXAPI_OK || r.status == FOXAPI_NO_CHANGE) ? std::string() : std::string(r.message);
+            };
+            s.servers.setHooks(std::move(h));
+        }
+        if (s.serversSettingsVersion != s.settings().version()) {
+            s.serversSettingsVersion = s.settings().version();
+            s.servers.configure(s4b::configFrom(s.settings()));
+            ++wireCVersion_;
+        }
+        s.servers.pass();
+        if (s.listingVersion != s.settings().version()) {
+            // THE PUBLIC RECEIVER LISTING (G3-30): built from the person's own words; the web page serves it at /status.json only while it is on and valid
+            s.listingVersion = s.settings().version();
+            s4b::ListingText t;
+            t.enabled = s.settings().getBool("listing.enabled");
+            t.name = s.settings().get("listing.name");
+            t.location = s.settings().get("listing.location");
+            t.latitude = s.settings().get("listing.lat");
+            t.longitude = s.settings().get("listing.lon");
+            t.maxClients = s.settings().get("listing.max_clients");
+            t.bands = s.settings().get("listing.bands");
+            t.version = cascade::versionString();
+            cascade::net::ReceiverListing l;
+            std::string problem;
+            const bool ok = s4b::buildListing(t, l, problem);
+            std::string err;
+            if (!ok || !servers_.webServer().setReceiverListing(l, err)) {
+                // not valid (or refused by the page): the page serves nothing
+                cascade::net::ReceiverListing off;
+                (void)servers_.webServer().setReceiverListing(off, err);
+                s.listingPreview.clear();
+                s.listingProblem = ok ? err : problem;
+            } else {
+                s.listingPreview = cascade::net::listingJson(l);
+                s.listingProblem.clear();
+            }
+            ++wireCVersion_;
+        }
+        {
+            const bool live = !s.listingPreview.empty() && servers_.webServer().running();
+            if (live != s.listingLive) { s.listingLive = live; ++wireCVersion_; }
+        }
+        const std::string sig = s.servers.signature();
+        if (sig != s.serversSig) {
+            s.serversSig = sig;
+            ++wireCVersion_;
+        }
     }
     // THE DECODED-TEXT OUTPUTS AND KEYWORD ALERTS (screen lane S4; engine/s4_outputs.hpp): every switch is off by default. Nothing is read from the ring, no socket or thread exists, while all are off.
     {

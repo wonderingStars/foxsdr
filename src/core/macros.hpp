@@ -93,7 +93,8 @@ struct MacroPolicy {
     std::vector<std::string> deniedPrefixes = {"TX_", "APP_TX_", "STORE_", "APP_STORE_", "PLUGIN_GRANT", "APP_PLUGIN_TX_GRANT", "PLUGIN_RESCAN", "SERVER_CONFIG",
                                                "APP_INTERFACE_CONFIG", "TELEMETRY_", "APP_TELEMETRY_", "APP_TEST_", "APP_SET_CATALOGUE_URL", "APP_USER_PRESET_FORGET",
                                                "BOOKMARK_REMOVE_GROUP", "APP_PLUGIN_REENABLE", "APP_SET_RTLTCP_ADDR", "APP_SET_PLUTO_URI",
-                                               "APP_MACRO_"};   // (a macro starts another only through RUN_MACRO, which carries the loop protection)
+                                               "APP_MACRO_",
+                                               "APP_ROTATOR", "APP_SWL", "APP_WIREC_SETTING"};   // (screen lane S4b: a file of steps never turns an antenna, writes a log or opens a server)   // (a macro starts another only through RUN_MACRO, which carries the loop protection)
 };
 
 namespace detail {

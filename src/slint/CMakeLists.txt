@@ -70,6 +70,8 @@ list(APPEND foxsdr_slint_sources s5_logic.cpp s5_rows.cpp s5_publish.cpp s5b_log
 list(APPEND foxsdr_slint_sources lanes3_logic.cpp lanes3_publish.cpp)
 # LANE X (docs/multi-radio-records/lane-x.md): the in-window help (lanex_help: the topics and the search, pure), the DSP speed test (lanex_bench: the job, pure), lanex_publish: the LaneX global; ui/lane_x.slint
 list(APPEND foxsdr_slint_sources lanex_help.cpp lanex_bench.cpp lanex_publish.cpp tester_host.cpp knob_host.cpp knob_host_win.cpp)
+# SCREEN LANE S4b (docs/multi-radio-records/screen-s4b.md): the locked-out frequencies and the servers other programs connect to (s4b_logic: pure; s4b_publish: the LaneS4b global; ui/s4b_bank.slint)
+list(APPEND foxsdr_slint_sources s4b_logic.cpp s4b_publish.cpp s4b_macro_rec.cpp)
 # WINDOW GAPS LANE 1 (docs/multi-radio-records/window-gaps-1.md): the start-up questions and fault cards (gaps1_logic: pure; gaps1_publish: the Gaps1 global; ui/gaps1.slint)
 list(APPEND foxsdr_slint_sources gaps1_logic.cpp gaps1_publish.cpp sysmenu_win.cpp)
 # WINDOW GAPS LANE 4 (docs/multi-radio-records/window-gaps-4.md): the waterfall's row log (gap break, key coverage, range rail) and the Airband monitor's marks on the spectrum

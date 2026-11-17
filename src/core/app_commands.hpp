@@ -251,6 +251,25 @@
 //   drew for a plugin's request (fact.plugin.open.<n> lists them). Text: "<module file>\x1F<url|folder>". The engine takes that plugin's held request and opens it: an https address in the
 //   browser, or the plugin's own library folder (created if need be) in the file manager. NOT_FOUND: the plugin has no such request; BAD_ARGUMENT: the second part is neither; FAILED: the system
 //   would not open it (fact.plugin.open.last says why). The request is used up either way: the plugin asks again if it still needs to. Nothing else ever opens a page for a plugin.
+//   THE ANTENNA ROTATOR (screen lane S4b, G3-20; engine/s4b_rotator.hpp; SETTINGS; LOCAL sessions only): text JSON {"action":"turn","az":N,"el":N} turns the antenna to a bearing (azimuth 0..360, or 0..450 when
+//   the controller type says so; elevation 0..180), {"action":"stop"} stops it, {"action":"park"} sends it to the park bearing. The rotator must be turned on first (wirec keys rot.*, OFF by default): FAILED
+//   with the sentence "the rotator is off" otherwise. BAD_ARGUMENT for bad JSON, an unknown action or key or a missing number, OUT_OF_RANGE for a bearing the controller does not take. OK means the request was
+//   accepted for the rotator's worker, not that the antenna has arrived: the position the controller reports is fact.rot.az / fact.rot.el, the state fact.rot.connected / .problem and the counts
+//   fact.rot.turns / .stops / .parks / .failures. NOTHING moves the antenna but this op, and nothing here reaches a transmitter.
+#define FOXAPP_OP_ROTATOR                0x8A20u /* text JSON: turn / stop / park */
+//   THE LISTENING (SWL) LOG (screen lane S4b, G3-49; engine/s4b_swl.hpp; SETTINGS; LOCAL sessions only): the person's own log of what they heard, in swl-log.json beside the settings. text JSON:
+//   {"action":"add","call":"","station":"","notes":""} logs what the control radio (wirec srv.control.radio) is tuned to NOW: the engine adds the time, the frequency, the mode and the signal level, the
+//   person's three texts are cleaned and cut to 200 bytes (FAILED when the radio is not open, LIMIT at 20000 entries, BAD_ARGUMENT for an unknown key or a text that is not a text);
+//   {"action":"remove","index":N} (NOT_FOUND for no such entry, numbered from 1); {"action":"clear"} (NO_CHANGE when empty); {"action":"export","path":"<a full path ending .adi or .adif>"} writes the
+//   entries as ADIF 3.1.8 listening-report records (the wirec keys swl.operator and swl.grid name the listener; BAD_ARGUMENT for a relative path, another extension or nothing to write).
+//   Facts: fact.swl.count, fact.swl.error, fact.swl.export.last (a sentence of counts). The log is never sent anywhere and never appears in a report; nothing is logged automatically.
+#define FOXAPP_OP_SWL                    0x8A21u /* text JSON: add / remove / clear / export */
+//   MACRO_EDIT (screen lane S4b, G3-34; engine/s4b_macro_edit.hpp; SETTINGS; LOCAL sessions only): saves or deletes a macro of macros.json, the file the macro player (MACRO_RUN) plays. text JSON
+//   {"action":"save","name":"...","description":"...","steps":[{"cmd":"SET_FREQUENCY","num":[Hz],"ival":[...],"delayMs":N}]} replaces the macro of that name (at most 200 macros of 500 steps), or
+//   {"action":"delete","name":"..."} (NOT_FOUND). The file is read, changed and checked whole by the macro model (an unknown or denied command, a bad number, a bad name: BAD_ARGUMENT with the model's
+//   sentence, nothing written; LIMIT for too many) and written through a temporary file and a rename, then read again by the engine (fact.macro.names). BUSY while a macro runs. A macro
+//   never runs because it was saved. A macro cannot name this op (the prefix APP_MACRO_ is denied by the model), nor the rotator, the listening log or a setting.
+#define FOXAPP_OP_MACRO_EDIT             0x8A22u /* text JSON: save / delete */
 #define FOXAPP_OP_PLUGIN_OPEN_CONFIRM    0x8A10u /* text: "<module file>\x1F<url|folder>" */
 // wire-c end
 // Plugins and the store.

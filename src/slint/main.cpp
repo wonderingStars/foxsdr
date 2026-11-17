@@ -104,6 +104,9 @@
 #include "core/health_events.hpp"   // screen lane S2: a picture or a log line that could not be written is counted
 #include "lanes2_folder.hpp"   // screen lane S2: the folder chooser (the real dialog; a test stands in)
 #include "lanes2_publish.hpp"   // screen lane S2: the spectrum and tuning controls
+#include "engine/s4b_notify_win.hpp"   // screen lane S4b: the real desktop notification (a real run only)
+#include "s4b_macro_rec.hpp"
+#include "s4b_publish.hpp"     // screen lane S4b: the locked-out frequencies and the servers other programs connect to
 #include "s4_publish.hpp"      // screen lane S4: the scanner's saved hits, the outputs and the alerts
 #include "s5_publish.hpp"      // screen lane S5: radios and sources a user could not reach or set
 #include "lanes3_publish.hpp"   // screen lane S3: recording and playback controls
@@ -255,7 +258,9 @@ int main(int argc, char** argv) {
     // THE FREQUENCY LOCK (slint-gaps.md item 3): every publisher is handed this copy of the table, whose submit and submit_text refuse the tuning commands of a locked radio (gaps_logic.hpp)
     const FoxEngineApi* const rawApi = engineApi(FOXAPI_VERSION_MAJOR, FOXAPI_VERSION_MINOR);
     const FoxEngineApi* api = foxsdr::slintlanec::deltaLockApi(foxsdr::slintgaps::lockedApi(rawApi), &foxsdr::slintlanec::deltaMaskNow, &foxsdr::slintlanec::deltaRadioOf);   // screen lane C, T8: the delta lock sits over the frequency lock
+    api = foxsdr::slints4b::recordingApi(api);   // screen lane S4b: the macro recorder's tap (it does nothing until the person turns recording on)
     FoxEngine* handle = service.engine().apiHandle();
+    if (!bounded.bounded()) { service.engine().setDesktopNotifier(std::make_shared<cascade::engine::s4b::DesktopNotifier>()); }   // screen lane S4b: a real run shows a raised alert on the desktop; a bounded (scripted) run and every test show none
     if (api == nullptr || handle == nullptr) { std::fprintf(stderr, "foxsdr-slint: no API table\n"); return 1; }
 
     FoxSessionParams p{};
@@ -763,6 +768,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<foxsdr::slints1::S1Publisher> laneS1p;        // screen lane S1 (wave 8)
     std::unique_ptr<foxsdr::slints2::LaneS2Publisher> laneS2p;    // screen lane S2
     cascade::core::DiskJob<foxsdr::slintexport::Outcome> autosaveJob{"Waterfall autosave"};   // screen lane S2: the picture the autosave writes (the export key keeps its own job)
+    std::unique_ptr<foxsdr::slints4b::S4bPublisher> s4bp;           // screen lane S4b
     std::unique_ptr<foxsdr::slints4::S4Publisher> s4p;            // screen lane S4
     std::unique_ptr<foxsdr::slints5::S5Publisher> s5p;            // screen lane S5
     std::unique_ptr<foxsdr::slintknobs::KnobHost> knobHost;       // lane X, G5-16: the controllers (declared before the publisher that points at it)
@@ -2073,6 +2079,30 @@ int main(int argc, char** argv) {
         laneXp->wire();
         laneXp->loadKnobs();
     }
+    // ---- SCREEN LANE S4b (docs/multi-radio-records/screen-s4b.md): the locked-out frequencies and the servers other programs connect to ----
+    {
+        foxsdr::slints4b::S4bPublisher::Env e;
+        e.ui = &*ui;
+        e.api = api;
+        e.session = session;
+        e.bounded = bounded.bounded();
+        e.submit = [&](const FoxCommand& cin, std::uint32_t radio, const std::string* longText) {
+            foxsdr::slints4b::SubmitOutcome out;
+            FoxCommand c = cin;
+            c.structSize = sizeof(c);
+            aimAt(c, radio);
+            FoxSubmitResult r{}; r.structSize = sizeof(r);
+            const bool useLong = longText != nullptr && FOXAPI_HAS(api, submit_text);
+            const int32_t rc = useLong ? api->submit_text(session, &c, longText->data(), static_cast<uint32_t>(longText->size()), &r) : api->submit(session, &c, 1, &r);
+            if (rc < 0) { out.status = rc; out.message = cascade::i18n::tr("The engine would not take that command."); return out; }
+            out.status = r.status;
+            out.ticket = r.ticket;
+            if (r.status == FOXAPI_BUSY) { out.message = cascade::i18n::tr("The engine is busy: try again in a moment."); }
+            return out;
+        };
+        s4bp = std::make_unique<foxsdr::slints4b::S4bPublisher>(std::move(e));
+        s4bp->wire();
+    }
     // ---- WINDOW GAPS LANE 1 (docs/multi-radio-records/window-gaps-1.md): what the classic window asks or says at start-up ----
     {
         foxsdr::slintgaps1::Publisher::Env e;
@@ -3027,6 +3057,7 @@ int main(int argc, char** argv) {
             lastPlayState.filePlays = state.fileSource != 0; lastPlayState.positionS = state.filePositionSec; lastPlayState.durationS = state.fileDurationSec; lastPlayState.loopStartS = state.fileLoopStartSec; lastPlayState.loopEndS = state.fileLoopEndSec; lastPlayState.startUnixMs = state.fileStartUnixMs; lastPlayState.sampleRateHz = state.sampleRateHz; lastPlayState.recIq = static_cast<int>(state.recordIqFormat); lastPlayState.recAudio = static_cast<int>(state.recordAudioFormat);   // screen lane S3
             if (laneS3p && !laneKOff) { laneS3p->tick(static_cast<long>(tickNo)); }   // screen lane S3 (the same switch leaves it out)
             lastFilePositionSec = state.filePositionSec;   // screen lane M: the selected radio's position in the file it plays
+            if (s4bp && !laneKOff) { s4bp->tick(static_cast<long>(tickNo)); }   // screen lane S4b
             if (s4p && !laneKOff) { s4p->tick(static_cast<long>(tickNo)); }   // screen lane S4 (the same switch leaves it out)
             if (laneMp && !laneKOff) { laneMp->tick(static_cast<long>(tickNo)); }   // screen lane M (the same switch leaves it out)
             if (laneS1p && !laneKOff) { laneS1p->tick(state, static_cast<long>(tickNo)); }   // screen lane S1 (the same switch leaves it out)
@@ -3353,6 +3384,7 @@ int main(int argc, char** argv) {
             if (laneMp) { laneMp->onAnswer(r[i]); }   // screen lane M: the same
             if (laneS1p) { laneS1p->onAnswer(r[i]); }   // screen lane S1: the same
             if (laneS2p) { laneS2p->onAnswer(r[i]); }   // screen lane S2: the same
+            if (s4bp) { s4bp->onAnswer(r[i]); }       // screen lane S4b: the same
             if (s4p) { s4p->onAnswer(r[i]); }         // screen lane S4: the same
             if (s5p) { s5p->onAnswer(r[i]); }   // screen lane S5: the same
             if (laneS3p) { laneS3p->onAnswer(r[i]); }   // screen lane S3: the same
@@ -3897,6 +3929,7 @@ int main(int argc, char** argv) {
         if (name.rfind("sysmenu.", 0) == 0) { return sysMenuState ? sysMenuState(name.substr(8), out) : std::string("no system menu"); }
         if (name.rfind("gaps1.", 0) == 0) { return gaps1 ? gaps1->readState(name.substr(6), out) : std::string("no window gaps 1"); }
         if (name.rfind("s2.", 0) == 0) { return laneS2p ? laneS2p->readState(name.substr(3), out) : std::string("no lane S2"); }
+        if (name.rfind("s4b.", 0) == 0) { return s4bp ? s4bp->readState(name.substr(4), out) : std::string("no lane S4b"); }
         if (name.rfind("s4.", 0) == 0) { return s4p ? s4p->readState(name.substr(3), out) : std::string("no lane S4"); }
         if (name.rfind("s3.", 0) == 0) { return laneS3p ? laneS3p->readState(name.substr(3), out) : std::string("no lane S3"); }
         if (name.rfind("lx.", 0) == 0) { return laneXp ? laneXp->readState(name.substr(3), out) : std::string("no lane X"); }

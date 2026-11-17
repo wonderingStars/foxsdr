@@ -34,6 +34,22 @@ struct AppWindowTestAccess {
     using Engine = cascade::engine::Engine;
     static void useFolder(Engine& e, const std::string& path) { e.wireCFolderForTest_ = path; }
     static cascade::engine::wirec::State& wirec(Engine& e) { return e.wireC(); }
+    // screen lane S4b: what the window does to switch the selected radio to another source (install it, then follow its rate)
+    // screen lane S4b: a hermetic test engine binds nothing (ServerHost hosting is off), so the listing test brings up the engine's OWN web server on this computer's loopback address by hand
+    static bool startWeb(Engine& e, int port, std::string& error) {
+        cascade::net::WebServerConfig c;
+        c.enabled = true;
+        c.bindAddress = "127.0.0.1";
+        c.port = port;
+        return e.servers_.webServer().start(c, error);
+    }
+    static void stopWeb(Engine& e) { e.servers_.webServer().stop(); }
+    static void useMacros(Engine& e, const std::string& path) { e.macrosPathForTest_ = path; }   // screen lane S4b: a scratch macro file
+    static void macroClock(Engine& e, std::int64_t ms) { e.macroClockMs_.store(ms, std::memory_order_relaxed); }
+    static void useSource(Engine& e, std::unique_ptr<cascade::source::IqSource> src) {
+        e.installSource(std::move(src));
+        e.followInputRate();
+    }
 };
 }  // namespace cascade::gui
 

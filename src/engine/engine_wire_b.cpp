@@ -695,6 +695,7 @@ FoxCommandResult Engine::iqOutOp(const FoxCommand& c, const std::string& text, F
         return res;
     }
     if (o.out != nullptr) { return refusal(res, FOXAPI_BUSY, "this radio sends I/Q already"); }
+    if (wireC().servers.holdsIq(static_cast<int>(slot) + 1)) { return refusal(res, FOXAPI_BUSY, "the rtl_tcp server holds this radio's I/Q: turn it off first"); }   // (screen lane S4b: the pipeline has one tap)
     wireb::Json p = wireb::Json::object();
     if (!text.empty()) {
         p = wireb::Json::parse(text, nullptr, false);
