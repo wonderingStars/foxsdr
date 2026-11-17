@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <string>
 
+#include "core/display_number.hpp"
 #include "foxsdr_api.h"
 
 namespace foxsdr::slints1 {
@@ -33,7 +34,7 @@ inline std::string meterReading(unsigned units, double signalDb, double signalDb
         return (calibrated ? std::string() : std::string("~")) + b;
     }
     std::snprintf(b, sizeof(b), "%.1f dB", signalDb);
-    return b;
+    return cascade::core::localizeDisplayNumber(b, signalDb, 1);   // the shown number format (owner decision 73)
 }
 
 }  // namespace foxsdr::slints1

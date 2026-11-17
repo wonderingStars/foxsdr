@@ -1,6 +1,6 @@
 4900	ASSERTED	mapj-layers	click Layers; the nine switches are read back as state mapj.layers
 4901	ASSERTED	mapj-layers	Heat map, 24 h range, Signal level, Locator grid clicked on and off; state mapj.layers, mapj.cells, mapj.grid, mapj.labels follow
-4902	ASSERTED	mapj-layers	expect "Weather radar" / "Receiver map" / "Repeaters" enabled equals false
+4902	ASSERTED	mapj-layers	the three switches with no approved source are NOT drawn: state mapj.layerRows == 6
 4903	NOT_DRIVABLE	-	a readout
 4904	ASSERTED	mapj-replay-filter	Replay, Play, the speed key and Now: state mapj.replay and mapj.replaySpeed
 4905	NOT_DRIVABLE	-	a slider with no accessible label in the bounded run; the scrub arithmetic is test_slint_host_mapj

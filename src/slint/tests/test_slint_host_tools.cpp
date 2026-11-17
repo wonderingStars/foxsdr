@@ -226,6 +226,7 @@ void everySentenceIsADrawers() {
         const std::string quoted = (*it)[1];   // the literal as the source spells it, quotes included
         const std::string body = quoted.substr(0, quoted.size() - 1);
         ++seen;
+        if (quoted.rfind("\"A comma followed by three digits", 0) == 0) { continue; }   // must-fix lane A (owner decision 73): the Slint window's own refusal of "51,477" on a dot locale; the Legacy drawers have none
         if (drawers.find(quoted) == std::string::npos && drawers.find(body + "##") == std::string::npos) {
             std::printf("  a sentence of tools_logic.cpp that no drawer says: %s\n", quoted.c_str());
             ++missing;

@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "core/countries.hpp"
+#include "core/patch_devices.hpp"
 #include "core/i18n.hpp"
 #include "core/pasted_report.hpp"
 #include "core/serial_port.hpp"
@@ -130,6 +131,33 @@ int themeIndexOf(const std::string& key) {
     return 0;
 }
 
+// THE LOOKS A PERSON CAN PICK (must-fix lane A, owner answer 2 of 2026-11-16): Bench Classic XL is not offered - at the default window size the doubled figures cannot be held by the receiver strip (docs 6.62
+// window gaps 2) - until a second strip row allows them. Its preset stays in kThemes so a saved "classic-xl" still reads: the window draws it in Today's bench palette and the Theme list shows Today's bench.
+bool themeOffered(int index) { return index >= 0 && index < kThemeCount && std::string(kThemes[index].key) != "classic-xl"; }
+int shownThemeCount() {
+    int n = 0;
+    for (int i = 0; i < kThemeCount; ++i) { if (themeOffered(i)) { ++n; } }
+    return n;
+}
+int themeOfShown(int shown) {
+    int n = 0;
+    for (int i = 0; i < kThemeCount; ++i) {
+        if (!themeOffered(i)) { continue; }
+        if (n == shown) { return i; }
+        ++n;
+    }
+    return -1;
+}
+int shownThemeIndexOf(const std::string& key) {
+    int n = 0;
+    for (int i = 0; i < kThemeCount; ++i) {
+        if (!themeOffered(i)) { continue; }
+        if (key == kThemes[i].key) { return n; }
+        ++n;
+    }
+    return 0;   // an unknown, empty or hidden key reads as Today's bench
+}
+
 std::string dbText(float db) { return cc::formatText("%.0f", static_cast<double>(db)); }
 int clampIconPx(int px) { return std::clamp(px, kAircraftIconMinPx, kAircraftIconMaxPx); }
 int wingspanPx(int iconPx) {
@@ -207,12 +235,13 @@ DisplayModel readDisplay(TableReader& t, const cc::AppConfig& iface, const FoxRe
     }
     m.scale_index = scaleIndexOf(iface.interfaceScale);
     for (int i = 0; i < kThemeCount; ++i) {
+        if (!themeOffered(i)) { continue; }   // Bench Classic XL is not offered (owner answer 2, 2026-11-16): the list holds only the looks a person can pick
         SelectItem s;
         s.label = T(kThemes[i].label);
         s.id = kThemes[i].key;
         m.themes.push_back(std::move(s));
     }
-    m.theme_index = themeIndexOf(iface.uiTheme);
+    m.theme_index = shownThemeIndexOf(iface.uiTheme);
     m.db_min = static_cast<float>(st.dbMin);
     m.db_max = static_cast<float>(st.dbMax);
     m.db_min_text = dbText(m.db_min);
@@ -919,6 +948,18 @@ DiagnosticsModel readDiagnostics(const cc::AppConfig& iface, const ReadOptions& 
     return m;
 }
 
+// A radio's hardware serial number from its device key ("driver|serial=00000001,..."): the value of "serial" when it is shaped like one (1 to 40 of letters, digits, '.', '_', '-'), else "" - never an address or a
+// device argument string (the same shape the radio report holds, core/radio_report.hpp serialFromArgs).
+std::string serialOfDeviceKey(const std::string& key) {
+    const std::string value = cc::patch::argField(cc::patch::deviceArgs(key), "serial");
+    if (value.empty() || value.size() > 40) { return std::string(); }
+    for (const char ch : value) {
+        const bool ok = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '.' || ch == '_' || ch == '-';
+        if (!ok) { return std::string(); }
+    }
+    return value;
+}
+
 UsageModel readUsage(TableReader& t, const ReadOptions& o) {
     UsageModel m;
     const bool enabled = factOf(t, "fact.telemetry.enabled") == "1";
@@ -943,7 +984,22 @@ UsageModel readUsage(TableReader& t, const ReadOptions& o) {
                          "FoxSDR is open, a \"still running\" beat every five minutes. This switch "
                          "stops both."));
     } else {
-        m.state_line = std::string(tr("Off. Nothing is transmitted."));
+        // THE APPROVED WORDING (owner, 2026-11-16, PRIVACY-DRAFT part 1; must-fix lane A): "Off. Nothing is transmitted." was untrue - a radio that does not open is still reported
+        m.state_line = std::string(tr("With Usage reporting switched off, FoxSDR sends no usage report, no still-running beat, no journal, no machine description and no first-session record. It still sends one report whenever a radio does not open, whether Diagnostics is on or off."));
+    }
+    // D5.11: the install identifier (above, while Usage reporting is on) and each radio's serial number, so a person can quote them when asking for their records to be erased.
+    {
+        for (int n = 1; n <= 8; ++n) {
+            const std::string key = factOf(t, "fact.radio." + std::to_string(n) + ".device");
+            if (key.empty()) { continue; }
+            const std::string serial = serialOfDeviceKey(key);
+            if (serial.empty()) { continue; }
+            if (!m.radios_line.empty()) { m.radios_line += "\n"; }
+            m.radios_line += cc::formatText(tr("Radio %d serial number: %s"), n, serial.c_str());
+        }
+        if (!m.radios_line.empty() || !m.install_id_line.empty()) {
+            m.erase_line = std::string(tr("To have your records erased, quote the install id or a serial number shown here."));
+        }
     }
     m.payload.push_back(std::string(tr("Each launch: id (random), version, os, arch, launches, crashes, "
                           "display stalls, failure counts, session seconds, sdr model, modes "

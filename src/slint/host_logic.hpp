@@ -59,6 +59,10 @@ std::string axisUnit(double spanHz);                       // the frequency axis
 // The typed editor's entry: "145.5", "145.5 MHz", "145500 kHz", "145500000", "7,074" -> Hz. A bare number under
 // 100 000 is MHz, else Hz. False for anything that is not a frequency.
 bool parseFrequencyHz(const std::string& text, double& hz);
+// The same; `ambiguousComma` is set (and the text refused) when the text has ONE comma and exactly three digits after it on a computer whose decimal sign is a dot ("14,200").
+bool parseFrequencyHz(const std::string& text, double& hz, bool* ambiguousComma);
+// The plain sentence that says why such a text was refused (translated).
+std::string typedCommaSentence();
 // The click-to-tune snap: the nearest multiple of the mode's step (no snap when shift is held or step <= 0).
 double snapToStep(double hz, double stepHz, bool shift);
 // The zoom window: a new span about a fixed point (the pointer's fraction), kept inside the full span.

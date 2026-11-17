@@ -5,7 +5,7 @@ and uploads **nothing**. Phase 2 (a Cloudflare Worker that receives a minimal
 report) is deliberately not built yet — publishing noise from a capture nobody
 has trusted yet would only make the numbers harder to believe later.
 
-> **0.99.109, DRAFT, awaiting the owner's approval.** The Diagnostics switch governs
+> **0.99.109.** The Diagnostics switch governs
 > crash, freeze and issue reports, the log file and the diagnostics bundle, as
 > described below, and **nothing else changed in that**. One report is not governed
 > by it: **a radio that does not open is reported every time it happens, with

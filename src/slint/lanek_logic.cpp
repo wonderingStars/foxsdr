@@ -34,6 +34,7 @@ const std::vector<const char*>& wizardStrings() {
 // ============================================================ rows ============================================================
 Row rHeading(const std::string& label) { Row r; r.kind = kHeading; r.label = label; return r; }
 Row rNote(const std::string& text, int tone) { Row r; r.kind = kNote; r.label = text; r.tone = tone; return r; }
+Row rUnproven() { return rNote(cascade::i18n::tr("Not yet proved on a real radio."), kWarn); }
 Row rKey(const std::string& id, const std::string& label, bool enabled, const std::string& tip, bool on) { Row r; r.kind = kKey; r.id = id; r.label = label; r.enabled = enabled; r.note = tip; r.on = on; return r; }
 Row rTick(const std::string& id, const std::string& label, bool on, bool enabled, const std::string& tip) { Row r; r.kind = kTick; r.id = id; r.label = label; r.on = on; r.enabled = enabled; r.note = tip; return r; }
 Row rChoice(const std::string& id, const std::string& label, const std::vector<std::string>& options, int pick, bool enabled, const std::string& tip) {

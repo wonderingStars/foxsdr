@@ -1164,8 +1164,6 @@ int main(int argc, char** argv) {
                 e.push_back(entry(MenuItemKind::Item, 607, "Recordings..."));
                 e.push_back(entry(MenuItemKind::Item, 650, "Sky positions..."));          // screen lane J
                 e.push_back(entry(MenuItemKind::Item, 651, "Antenna calculator..."));     // screen lane J
-                if (laneKp && !laneKp->forumUrl().empty()) { e.push_back(entry(MenuItemKind::Item, 608, cascade::i18n::tr("Forum"))); }          // lane K: an empty setting hides the entry
-                if (laneKp && !laneKp->discordUrl().empty()) { e.push_back(entry(MenuItemKind::Item, 609, cascade::i18n::tr("Discord"))); }
                 e.push_back(entry(MenuItemKind::Separator, 0, ""));
                 e.push_back(entry(MenuItemKind::Item, 604, "Quit"));
                 break;
@@ -1500,8 +1498,6 @@ int main(int argc, char** argv) {
             case 610: if (laneXp) { laneXp->openHelp(); } break;                       // lane X, G5-14
             case 650: publisher.openSkyPage(); break;                                  // screen lane J, M8
             case 651: publisher.openAntennaPage(); break;                              // screen lane J, Q7a
-            case 608: if (laneKp) { laneKp->openCommunity(false); } break;             // lane K: the forum
-            case 609: if (laneKp) { laneKp->openCommunity(true); } break;              // lane K: Discord
             case 111: face = Face::Nixie; applyFace(); break;
             case 112: face = Face::Drum; applyFace(); break;
             case 113: face = Face::Plain; applyFace(); break;
@@ -1694,7 +1690,9 @@ int main(int argc, char** argv) {
     ui->on_edit_requested([&] { ui->set_editor_text(ss(wsMemory.saved().dotStyle == 1 ? foxsdr::slintgaps::dottedFrequencyText(state.tunedHz, 1) : fmt("%.6f", state.tunedHz / 1e6))); ui->set_editing(true); });
     ui->on_typed([&](slint::SharedString text) {
         double hz = 0;
-        if (foxsdr::slintgaps::parseTypedFrequencyHz(std::string(text), hz)) { setFrequency(hz); }
+        bool ambiguousComma = false;
+        if (foxsdr::slintgaps::parseTypedFrequencyHz(std::string(text), hz, &ambiguousComma)) { setFrequency(hz); }
+        else if (ambiguousComma) { noteText = foxsdr::slinthost::typedCommaSentence(); noteTick = tickNo; }   // "14,200" on a dot locale: refused, with the plain sentence under the counter (owner decision 73)
         else { std::fprintf(stderr, "foxsdr-slint: could not read frequency \"%s\"\n", text.data()); }
         ui->set_editing(false);
     });
@@ -3173,7 +3171,7 @@ int main(int argc, char** argv) {
         // the bank header's chip: SIGNAL says whether the receiver runs; DECODE says whether a decoder runs (the same count the Decoders row carries; window gaps 3: it read "--"
         // beside a store row whose own chip read fine); the other banks have no summary of their own and keep the dash
         const bool decodersUp = bankIndex == 1 && state.decodersRunning > 0;
-        ui->set_bank_chip(ss(bankIndex == 0 ? (running ? "RECEIVING" : "STOPPED") : bankIndex == 1 ? (decodersUp ? std::to_string(state.decodersRunning) + " RUNNING" : std::string("IDLE")) : "--"));
+        ui->set_bank_chip(ss(bankIndex == 0 ? (running ? "RECEIVING" : "STOPPED") : bankIndex == 1 ? (decodersUp ? std::to_string(state.decodersRunning) + " RUNNING" : std::string("IDLE")) : ""));   // TOOLS, EXTEND and SYSTEM have no state to show: no chip (must-fix lane A, WG3-chips)
         ui->set_bank_chip_tone(((bankIndex == 0 && running) || decodersUp) ? ChipTone::Good : ChipTone::Neutral);
         const double lo = 3000.0, hi = std::max(lo + 1.0, 0.9 * state.channelRateHz);
         ui->set_passband_norm(static_cast<float>(std::clamp((state.bandwidthHz - lo) / (hi - lo), 0.0, 1.0)));

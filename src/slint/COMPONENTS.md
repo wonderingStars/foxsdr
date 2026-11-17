@@ -27,7 +27,6 @@ This is the API every family is built to and `main.slint` composes against. Name
 | `ui/workspace.slint` | `WorkspaceCell`, `WorkspaceModel` (global), `WorkspaceBar`, `RadioWorkspace` (the layout keys, the page keys and the grid of panes, docs/multi-radio-records/screen-s3.md) | multi-radio screen lane (S3) |
 | `ui/radio_strip.slint` | `RadioStripBlock`, `AudioMixBlock`, `RadioTag` (the strip's radio block, the Audio mix and the sections panel's tag, docs/multi-radio-records/screen-s4.md); `AddRadioCard` is in `ui/workspace.slint` | multi-radio screen lane (S4) |
 | `ui/palette.slint` | `PaletteResult`, `CommandField`, `CommandPalette` | waterfall agent |
-| `ui/stubs.slint` | `InstrumentFace`, `MapView`, `GlobeView`, `ScopeTube` (contracts only; `PatchCanvas` is gone, `ui/patch_page.slint` replaced it) | waterfall agent |
 | `ui/components.slint` | the umbrella re-export | integrator |
 | `ui/main.slint`, `main.cpp`, `host_logic.*` | the main screen and the host | integrator |
 
@@ -165,13 +164,6 @@ Measurements are the Workbench sheets' CSS. `cap` = 10 px / 600 / 0.8 px letter-
 - `CommandField` — the title-bar field: 520 × 26, `panel` ground, `line` border, `radius`, `icons/search.svg` 14 px `dim`, placeholder 12 px `dim` ("Find a setting, plugin, frequency or bookmark…"), the shortcut badge at the right (10 px mono `fg` in a 1 px `line-strong` box, radius 4): `placeholder`, `shortcut` ("Ctrl K"), `clicked`.
 - `CommandPalette` — the sheet that opens over the window, held in a `PopupWindow` inside the component with `public function show()` / `close()` (a PopupWindow cannot be a component's root): a 640 px wide panel (`panel`, `knob-ring` border, `radius-panel`, shadow) with a `TextInput` row (26 px, `field` ground) and result rows 32 px (a `Chip` with the kind, title 12 px `fg`, detail 11 px `dim`, the highlighted row on `menu-hot`); `in-out query: string`, `results: [PaletteResult]`, `in-out highlighted: int`; Up/Down move, Enter activates, Esc dismisses; callbacks `query-changed(string)`, `activated(int id)`, `dismissed`.
 
-### stubs.slint (contracts only, phase 3 draws them)
-Each is a `well`-coloured panel with a cap naming it ("INSTRUMENT · <kind>", "MAP", "GLOBE", "SCOPE") and the words "phase 3" in `dim`; properties exist so the host and pages can be written against them:
-- `InstrumentFace` — `kind: string`, `caption`, `value: float`, `min: float`, `max: float`, `unit: string`, `needle: float`.
-- `MapView` — `lat: float`, `lon: float`, `zoom: float`, `tracks: [TrackPoint]` (`struct TrackPoint { id: int, lat: float, lon: float, heading: float, label: string }`), `followed: int`; callbacks `target-clicked(int)`, `panned(float, float)`, `zoomed(int)`.
-- `GlobeView` — `lat`, `lon`, `tracks: [TrackPoint]`, `terminator: bool`.
-- `ScopeTube` — `trace: image`, `caption`, `persistence: float`.
-
 ## Reporting back
 In the final message: the components and variants built, the test's check count and its last summary line (verbatim), the PNG path, every place the component deviates from the artboard and why, anything you could not verify, and nothing about budget.
 
@@ -198,7 +190,7 @@ The fourteen blocks of docs/engine-stage4.md 6.37 as components. The rules above
 | `ui/extend_bank.slint` | the EXTEND models, `ExtendEvents`, `WebBody`, `CatBody`, `StorePage` (the EXTEND bank, the section below) | extend-bank agent |
 | `ui/patch_page.slint` | the PATCH structs, `PatchEvents`, `PatchPage`, `PatchPresetsPage` (the Patch page, the last section below) | patch-page agent |
 
-`ui/stubs.slint` keeps `GlobeView`, `ScopeTube` (its `PatchCanvas`, `PatchNode` and `PatchWire` were deleted when the Patch page landed); its `InstrumentFace` and `MapView` are REMOVED by the integrator once the real ones land (`components.slint` re-exports the new names). A family agent adds icons it needs under `ui/icons/` with the family's prefix (`map-aircraft.svg`), white strokes, 18 px grid.
+`ui/stubs.slint` (the phase-1 placeholder components) was deleted in must-fix lane A: nothing drew them and their "phase 3" word could never be seen. A family agent adds icons it needs under `ui/icons/` with the family's prefix (`map-aircraft.svg`), white strokes, 18 px grid.
 
 Specimens: `ui/specimens/<family>_specimen.slint` and `tests/test_slint_<family>.cpp` for `presets`, `forms`, `output`, `table` (the existing test grows), `fitted`, `instruments`, `map`. Logic tests: `tests/test_slint_host_map.cpp` compiles `../map_compositor.cpp` (registered by name: `test_slint_host_<x>.cpp` compiles `../host_logic.cpp` plus `../<x>_compositor.cpp` or `../<x>_logic.cpp` when one exists), include roots `src/slint`, `src` (for `gui/coastline_data.hpp`, `core/plugin_abi.h`), `tests`, `third_party/foxsdr_api`.
 

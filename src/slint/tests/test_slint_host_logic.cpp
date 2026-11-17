@@ -2,6 +2,7 @@
 // C API table's state by these functions, and every key the operator presses becomes a submit() through them.
 // No Slint, no engine: FoxReceiverState is filled by hand.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include "core/typed_number.hpp"
 #include "host_logic.hpp"
 #include "test_check.hpp"
 
@@ -119,7 +120,12 @@ int main() {
         CHECK(parseFrequencyHz("145.500 MHz", hz) && hz == 145.5e6);
         CHECK(parseFrequencyHz("145500 kHz", hz) && hz == 145.5e6);
         CHECK(parseFrequencyHz("145500000", hz) && hz == 145.5e6);          // ...unless it is too big to be MHz
-        CHECK(parseFrequencyHz("7,074", hz) && hz == 7.074e6);               // a decimal comma
+        // must-fix lane A (owner decision 73): BEFORE "7,074" was 7.074 MHz on every computer; AFTER it is ambiguous and refused on a dot locale, a decimal comma on a comma locale
+        CHECK(!parseFrequencyHz("7,074", hz));
+        CHECK(parseFrequencyHz("7,07", hz) && hz == 7.07e6);                  // a decimal comma (two digits after it)
+        cascade::core::setTypedDecimalComma(true);
+        CHECK(parseFrequencyHz("7,074", hz) && hz == 7.074e6);
+        cascade::core::setTypedDecimalComma(false);
         CHECK(parseFrequencyHz("1.2 GHz", hz) && hz == 1.2e9);
         CHECK(parseFrequencyHz(" 14 313 Hz ", hz) && hz == 14313.0);
         CHECK(!parseFrequencyHz("", hz));

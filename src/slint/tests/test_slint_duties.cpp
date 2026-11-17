@@ -480,7 +480,7 @@ int main() {
         linuxView.installerHere = false;
         const UpdateCardModel l = updateCardFor(linuxView);
         CHECK(l.primary == "Open foxsdr.com");
-        CHECK(l.note == "There is no in-app updater for Linux yet - download it from foxsdr.com.");
+        CHECK(l.note == "Download the update from foxsdr.com.");   // must-fix lane A: BEFORE "There is no in-app updater for Linux yet - download it from foxsdr.com." (said what is not there)
 
         CHECK(updateCardFor(v) == updateCardFor(v));
         CHECK(!(updateCardFor(v) == updateCardFor(plain)));

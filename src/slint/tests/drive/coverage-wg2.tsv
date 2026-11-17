@@ -1,12 +1,12 @@
-35	ASSERTED	system-look	Bench Classic XL picked in Theme: state gaps.counterscale == 2 (the counter figures are drawn at twice the size), back to Today: 1
+35	ASSERTED	system-look	Enlarged figures chosen in Counter figures (what Bench Classic XL brought; that look is not offered): state gaps.counterscale == 2 (drawn at twice the size), Normal size: 1
 36	ASSERTED	system-look	Today's bench picked after XL: state gaps.counterscale == 1
-40	ASSERTED	system-look	Bench Classic XL: state gaps.readingscale == 14 (every reading 1.4 times), Today: 10
+40	ASSERTED	system-look	Enlarge every reading ticked (what Bench Classic XL brought): state gaps.readingscale == 14 (every reading 1.4 times), unticked: 10
 156	ASSERTED	system-look	the Counter figures setting the XL theme saves is drawn: gaps.counterscale; gaps-counter-menu saves it by the menu
 158	ASSERTED	system-look	Enlarge every reading: state gaps.readingscale == 14
 1394	ASSERTED	system-look	counter figures drawn at the saved scale: state gaps.counterscale
 1396	ASSERTED	system-look	every reading drawn at the saved scale: state gaps.readingscale
 145	ASSERTED	wg2-size-keys	key ctrl+= and ctrl+- step cfg.interfaceScale 100 > 125 > 150 > 125 > 100 and the window follows (look.scale); ctrl+0 back to auto
-148	ASSERTED	system-look	Bench Classic XL: the Workbench palette (look.bg) with gaps.counterscale == 2, gaps.readingscale == 14, gaps.nudges == 0
+148	NOT_DRIVABLE	-	Bench Classic XL is not offered (owner answer 2): the Theme list has no such item (test_slint_host_system)
 150	ASSERTED	system-look	Glass Cockpit: state look.bg == #070b0f and look.accent == #7df3ff
 151	ASSERTED	system-look	Daylight Lab: state look.bg == #cfd5dc and look.accent == #1d4ed8
 152	ASSERTED	system-look	Field Radio: state look.bg == #23271a and look.accent == #d6bf5e

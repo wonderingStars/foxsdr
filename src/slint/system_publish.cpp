@@ -666,6 +666,8 @@ void SystemPublisher::execute(const Effect& e, const char* what) {
     o.disclosure = ss(m.disclosure);
     o.send = m.send;
     o.install_id_line = ss(m.install_id_line);
+    o.radios_line = ss(m.radios_line);
+    o.erase_line = ss(m.erase_line);
     o.what_label = ss(m.what_label);
     o.privacy_label = ss(m.privacy_label);
     o.payload = lists_->usagePayload.set(strings(m.payload));
@@ -906,7 +908,7 @@ void SystemPublisher::wire() {
 
     // ---- Display ----
     ev.on_display_scale([this, cur](int i) { execute(applyDisplayScale(cur(), i), "display-scale"); });
-    ev.on_display_theme([this, cur](int i) { execute(applyDisplayTheme(cur(), i), "display-theme"); });
+    ev.on_display_theme([this, cur](int i) { execute(applyDisplayTheme(cur(), themeOfShown(i)), "display-theme"); });   // the list's position -> the preset (Bench Classic XL is not in the list)
     ev.on_display_db_min([this, cur](float v) {
         const DisplayModel& d = last_.display;
         execute(applyDisplayDbMin(cur(), state_, std::round(fromNorm(v, d.db_min_lo, d.db_min_hi))), "display-db-min");

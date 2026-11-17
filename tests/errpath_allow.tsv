@@ -1774,6 +1774,7 @@ src/slint/lanel_logic.cpp::num::errassign::	ALLOW	UI result text: the failure is
 src/slint/lanel_logic.cpp::parseInteger::errassign::allowed	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanel_logic.cpp::parseInteger::errassign::that is not a whole number	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanel_logic.cpp::parseInteger::errassign::type a whole number	ALLOW	UI result text: the failure is classified at the site that produced it	seed
+src/slint/lanel_logic.cpp::parseNumber::errassign::a comma followed by three digits could be a decimal point or	ALLOW	validation: the sentence shown beside a typed number that is ambiguous (14,200 on a dot locale); nothing failed, the person is asked to retype	2026-11-17
 src/slint/lanel_logic.cpp::parseNumber::errassign::allowed	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanel_logic.cpp::parseNumber::errassign::that is not a number	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanel_logic.cpp::parseNumber::errassign::type a number	ALLOW	UI result text: the failure is classified at the site that produced it	seed

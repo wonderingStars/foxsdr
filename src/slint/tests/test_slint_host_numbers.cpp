@@ -1,9 +1,12 @@
 // The number format of the readouts (src/slint/host_logic.cpp setNumberLocale; screen lane K, docs/multi-radio-records/screen-k.md): with no locale set the four readouts (fmtMHz, fmtKHz, spanText, cursorText)
 // are today's text byte for byte; with the symbols of a comma locale they write the comma, with the sign and the digits the symbols say.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include "core/display_number.hpp"
+#include "core/typed_number.hpp"
 #include "host_logic.hpp"
 #include "test_check.hpp"
 
+#include <cmath>
 #include <string>
 
 using namespace foxsdr::slinthost;
@@ -90,12 +93,54 @@ void otherReadouts() {
     CHECK(fmtNum(0.75, 2) == "0.75");
 }
 
+// must-fix lane A (owner decision 73): what a typed comma means. On a computer whose decimal sign is a dot, ONE comma followed by exactly three digits ("14,200") is ambiguous and refused with
+// a sentence; on a comma locale the comma is the decimal sign. The other shapes are read either way.
+void typedComma() {
+    double hz = 0.0;
+    bool amb = false;
+    setNumberLocale(nullptr);   // a dot locale (the default)
+    CHECK(!cascade::core::typedDecimalComma());
+    CHECK(!parseFrequencyHz("14,200", hz, &amb) && amb);
+    amb = false;
+    CHECK(!parseFrequencyHz("14,200 kHz", hz, &amb) && amb);
+    amb = false;
+    CHECK(parseFrequencyHz("14,2", hz, &amb) && !amb && std::fabs(hz - 14.2e6) < 1.0);
+    CHECK(parseFrequencyHz("14,2000", hz, &amb) && !amb && std::fabs(hz - 14.2e6) < 1.0);
+    CHECK(parseFrequencyHz("14.200", hz, &amb) && !amb && std::fabs(hz - 14.2e6) < 1.0);
+    CHECK(parseFrequencyHz("145,5 MHz", hz, &amb) && !amb && std::fabs(hz - 145.5e6) < 1.0);
+    CHECK(parseFrequencyHz("7074", hz, &amb) && !amb && std::fabs(hz - 7074.0e6) < 1.0);
+    CHECK(!parseFrequencyHz("14,200", hz));   // the two-argument form refuses it too
+    CHECK(cascade::core::typedCommaAmbiguous("14,200") && cascade::core::typedCommaAmbiguous("-3,000 kHz") && cascade::core::typedCommaAmbiguous(" 1,500"));
+    CHECK(!cascade::core::typedCommaAmbiguous("14,20") && !cascade::core::typedCommaAmbiguous("14,2000") && !cascade::core::typedCommaAmbiguous(",200") && !cascade::core::typedCommaAmbiguous("1,234,567") &&
+          !cascade::core::typedCommaAmbiguous("1,234.5") && !cascade::core::typedCommaAmbiguous("14.200") && !cascade::core::typedCommaAmbiguous("14200") && !cascade::core::typedCommaAmbiguous(""));
+    CHECK(!typedCommaSentence().empty());
+    // a comma locale: the comma is the decimal sign and nothing is ambiguous
+    acc::NumberSymbols de;
+    de.name = "de-DE";
+    de.decimal = ",";
+    de.group = ".";
+    setNumberLocale(&de);
+    CHECK(cascade::core::typedDecimalComma());
+    amb = false;
+    CHECK(parseFrequencyHz("14,200", hz, &amb) && !amb && std::fabs(hz - 14.2e6) < 1.0);
+    CHECK(parseFrequencyHz("14,200 MHz", hz, &amb) && !amb && std::fabs(hz - 14.2e6) < 1.0);
+    CHECK(!cascade::core::typedCommaAmbiguous("14,200"));
+    // the format the SIGNAL page's readouts follow is the same one (core/display_number.hpp)
+    CHECK(cascade::core::localizeDisplayNumber("on 2.5 s", 2.5, 1) == "on 2,5 s" && cascade::core::displayNumber(0.75, 2) == "0,75");
+    setNumberLocale(nullptr);
+    CHECK(!cascade::core::typedDecimalComma());
+    CHECK(cascade::core::localizeDisplayNumber("on 2.5 s", 2.5, 1) == "on 2.5 s" && cascade::core::displayNumber(0.75, 2) == "0.75");
+    // an Accessibility "always a dot" choice is a dot locale even on a comma computer: no symbols set
+    CHECK(!cascade::core::typedDecimalComma());
+}
+
 }  // namespace
 
 int main() {
     defaultsAreToday();
     commaLocale();
     otherReadouts();
+    typedComma();
     setNumberLocale(nullptr);
     return testSummary("test_slint_host_numbers");
 }

@@ -173,6 +173,7 @@ export component Table inherits Rectangle {
     out property <bool> resize-cursor: root.enabled && head-cells.hot-grip >= 0;
 
     out property <length> head-h: 22px;
+    in property <bool> hover-needs-press;           // a kit page's table: a row lights under the pointer only if pressing it does something (the plugin registered its command), so a row that does nothing does not look as if it does (NB-D10)
     property <int> hot-row: -1;
     property <bool> hot-pressable;
     property <length> scrolled: body.content-y;
@@ -233,7 +234,7 @@ export component Table inherits Rectangle {
             property <bool> label: row.kind == RowKind.heading;
             property <bool> group: row.kind == RowKind.cells && row.cells.length == 1 && root.columns.length > 1;
             property <bool> live: row.kind == RowKind.cells;
-            property <bool> key: rowbox.live && (row.tone == RowTone.key || r == root.selected || (root.enabled && touch.has-hover));
+            property <bool> key: rowbox.live && (row.tone == RowTone.key || r == root.selected || (root.enabled && touch.has-hover && (!root.hover-needs-press || row.pressable)));
             property <color> ink: rowbox.label ? Theme.dim
                 : key ? Theme.accent-soft
                 : row.tone == RowTone.warn ? Theme.chip-warn-fg

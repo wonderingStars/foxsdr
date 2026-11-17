@@ -2,6 +2,7 @@
 // that enforces it (item 3), what a dropped file is (item 8) and the manual's address (item 10). No Slint, no engine: the table under the lock is a fake that records what reaches it.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/app_commands.hpp"
+#include "core/typed_number.hpp"
 #include "gaps_logic.hpp"
 #include "host_logic.hpp"
 #include "test_check.hpp"
@@ -40,7 +41,15 @@ void parse() {
     CHECK(parseTypedFrequencyHz("7.074", hz) && std::fabs(hz - 7074000.0) < 1e-6);
     CHECK(parseTypedFrequencyHz("145.5 MHz", hz) && hz == 145500000.0);
     CHECK(parseTypedFrequencyHz("145500000", hz) && hz == 145500000.0);
-    CHECK(parseTypedFrequencyHz("7,074", hz) && std::fabs(hz - 7074000.0) < 1e-6);
+    // must-fix lane A (owner decision 73): BEFORE "7,074" was 7.074 MHz on every computer; AFTER it is ambiguous (7.074 or 7074) and refused on a dot locale, read as 7.074 MHz on a comma locale
+    {
+        bool amb = false;
+        CHECK(!parseTypedFrequencyHz("7,074", hz, &amb) && amb);
+        CHECK(parseTypedFrequencyHz("7,07", hz) && std::fabs(hz - 7070000.0) < 1e-6);
+        cascade::core::setTypedDecimalComma(true);
+        CHECK(parseTypedFrequencyHz("7,074", hz) && std::fabs(hz - 7074000.0) < 1e-6);
+        cascade::core::setTypedDecimalComma(false);
+    }
     CHECK(!parseTypedFrequencyHz("", hz));
     CHECK(!parseTypedFrequencyHz("1.2.x", hz));
     CHECK(!parseTypedFrequencyHz("1.0.0.0.0.0.0.0.0.0.0.0.0.0", hz));          // more digits than a frequency has

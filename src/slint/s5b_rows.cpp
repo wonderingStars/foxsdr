@@ -33,6 +33,7 @@ void S5Rows::buildS5b(std::vector<Row>& v) {
         if (words.empty()) {
             v.push_back(rNote(tr("This radio has no adjustable analogue filter. Only an RTL-SDR opened by FoxSDR's own driver has one.")));
         } else {
+            v.push_back(slk::rUnproven());   // decision 61
             v.push_back(rNote(tr("The RTL-SDR tuner's own filter in front of its converter. Automatic follows the sample rate; a narrower filter keeps a strong neighbour out, a wider one lets more of the band through.")));
             v.push_back(rReadout(tr("Now"), words));
             field(v, "b.ifbw", tr("Bandwidth (kHz)"), "", tr("300 to 8000; empty or 0 = automatic"));
@@ -68,6 +69,7 @@ void S5Rows::buildSoapy(std::vector<Row>& v) {
         v.push_back(rNote(tr("This radio's driver names no bandwidth control and no settings of its own. Only a radio opened through a SoapySDR driver can have them.")));
         return;
     }
+    v.push_back(slk::rUnproven());   // decision 61: the driver rows were proved against a stand-in driver only
     if (hasBw) {
         v.push_back(rNote(tr("The filter bandwidth the radio's driver offers, within the range the driver reports.")));
         v.push_back(rReadout(tr("Bandwidth now"), b::soapyBandwidthWords(cur)));
@@ -120,6 +122,7 @@ void S5Rows::buildCat(std::vector<Row>& v) {
     choice(v, "b.cat.mode", tr("How"), b::catModeWords(), b::catModeIndex(mode), [this, put](int i) {
         put(tr("CAT: follow a rig"), "cat.link.mode", foxsdr::slints5b::catModeKey(i));
     }, tr("Off opens nothing. Nothing is opened until you choose a way and give what it needs."));
+    if (mode != "off") { v.push_back(slk::rUnproven()); }   // decision 61: following a rig, OmniRig and the virtual COM port were proved against stand-ins only
     if (mode == "follow" || mode == "emulate") {
         const std::string port = wc("cat.link.port");
         field(v, "b.cat.port", tr("Serial port"), port, tr("COM1 to COM256. For a virtual COM pair, the end FoxSDR uses."));
@@ -171,6 +174,7 @@ void S5Rows::buildLowIf(std::vector<Row>& v) {
     const std::string cur = fact("radio." + rn() + ".sdrplay.lowIf");
     if (cur.empty()) { return; }   // not an SDRplay radio: nothing to show
     v.push_back(rHeading(tr("SDRplay low-IF")));
+    v.push_back(slk::rUnproven());   // decision 61
     v.push_back(rNote(tr("A different way the RSP can be set up. It was switched off in an earlier release after two radios sent a different rate from the one asked for, and it has not been proved on a real radio since. It is off every time FoxSDR starts. When you turn it on, FoxSDR checks the first second of the stream and goes back to the usual setting by itself if the rate is wrong, saying so here."), kWarn));
     tick(v, "b.lowif", tr("Use low-IF"), cur == "1", [this](bool on) {
         Cmd c; c.op = FOXAPI_OP_SET_DEVICE_OPTION; c.i0 = on ? 1 : 0; c.text = "sdrplay_lowif"; send(tr("Use low-IF"), c);

@@ -49,6 +49,11 @@ struct LayerInfo {
     bool needsSource;           // a data source whose terms (and often a key) nobody has read: the switch cannot be turned on
 };
 const LayerInfo& layerInfo(Layer l);
+// THE LAYER SWITCHES THE PAGE OFFERS (must-fix lane A, owner answer 4 of 2026-11-16): a layer whose data source is not approved (needsSource: Weather radar, Receiver map, Repeaters) has no switch at all until one
+// is. `offeredLayer(row)` is the layer the page's row-th switch stands for (-1 when there is none); `offeredLayerCount()` is how many switches there are.
+bool layerOffered(Layer l);
+int offeredLayerCount();
+int offeredLayer(int row);
 // The sentence for a blocked layer (needsSource): why it is off.
 const char* blockedNote();
 

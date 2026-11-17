@@ -11,11 +11,11 @@ is unclassified.
 
 | rows | DRIVEN+ASSERTED | DRIVEN | NOT DRIVABLE | UNCLASSIFIED |
 |---|---|---|---|---|
-| 2379 | 806 | 118 | 1455 | 0 |
+| 2379 | 804 | 118 | 1457 | 0 |
 
-Of the 1552 rows that are controls (the 827 readout-like rows left out): 806 asserted, 118 driven without a read-back, 628 not drivable.
+Of the 1552 rows that are controls (the 827 readout-like rows left out): 804 asserted, 118 driven without a read-back, 630 not drivable.
 
-NOT DRIVABLE by reason: readout 827, other 261, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 69, needs hardware 32, no label in the element tree 25, not installed 21, deferred 9, needs a file 3, no plugin fitted 2.
+NOT DRIVABLE by reason: readout 827, other 263, needs a signal (no fixture) 120, relocated 86, withheld in a bounded run 69, needs hardware 32, no label in the element tree 25, not installed 21, deferred 9, needs a file 3, no plugin fitted 2.
 
 ## Per section
 
@@ -42,7 +42,7 @@ NOT DRIVABLE by reason: readout 827, other 261, needs a signal (no fixture) 120,
 | Main window frame — FoxSDR did not close normally last time (diagnostics offer) | 5 | 4 | 0 | 1 | 0 | 0 |
 | Main window frame — Link this FoxSDR? (beta tester link prompt) | 5 | 4 | 0 | 1 | 0 | 0 |
 | Main window frame — Shortcuts | 27 | 10 | 1 | 16 | 0 | 0 |
-| Main window frame — Themes and sizes | 6 | 6 | 0 | 0 | 0 | 0 |
+| Main window frame — Themes and sizes | 6 | 5 | 0 | 1 | 0 | 0 |
 | Main window frame — Themes and sizes: the Display section's settings | 11 | 11 | 0 | 0 | 0 | 0 |
 | Spectrum and waterfall — Spectrum panel (top of the centre of the Receiver view) | 16 | 1 | 0 | 15 | 15 | 0 |
 | Spectrum and waterfall — Waterfall panel (bottom of the centre of the Receiver view) | 12 | 1 | 0 | 11 | 8 | 0 |
@@ -206,7 +206,7 @@ NOT DRIVABLE by reason: readout 827, other 261, needs a signal (no fixture) 120,
 | Screen lane C - tuning, scanning, memories and controls (rows 4800 and up are this lane's; docs/multi-radio-records/screen-c.md) | 23 | 20 | 2 | 1 | 0 | 0 |
 | Lane B (docs/multi-radio-records/screen-b.md; rows 4700 and up are this lane's) | 20 | 20 | 0 | 0 | 0 | 0 |
 | Screen lane J - the map rows (rows 4900 and up are this lane's; docs/multi-radio-records/screen-j.md) | 15 | 12 | 0 | 3 | 0 | 0 |
-| Screen lane K - the remaining rows (rows 5200 and up are this lane's; docs/multi-radio-records/screen-k.md) | 37 | 26 | 11 | 0 | 0 | 0 |
+| Screen lane K - the remaining rows (rows 5200 and up are this lane's; docs/multi-radio-records/screen-k.md) | 37 | 25 | 11 | 1 | 0 | 0 |
 | Screen lane L - the controls of what the wiring lanes built (rows 5300 and up are this lane's; docs/multi-radio-records/screen-l.md) | 58 | 43 | 10 | 5 | 1 | 0 |
 
 ## Every row
@@ -279,12 +279,12 @@ NOT DRIVABLE by reason: readout 827, other 261, needs a signal (no fixture) 120,
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 34 | Menu title | readout | NOT DRIVABLE | - | a readout, not a control |
-| 35 | Enlarge figures | menu item (checked when on) | DRIVEN+ASSERTED | system-look | Bench Classic XL picked in Theme: state gaps.counterscale == 2 (the counter figures are drawn at twice the size), back to Today: 1 |
+| 35 | Enlarge figures | menu item (checked when on) | DRIVEN+ASSERTED | system-look | Enlarged figures chosen in Counter figures (what Bench Classic XL brought; that look is not offered): state gaps.counterscale == 2 (drawn at twice the size), Normal size: 1 |
 | 36 | Normal size | menu item (checked when on) | DRIVEN+ASSERTED | system-look | Today's bench picked after XL: state gaps.counterscale == 1 |
 | 37 | Show tuner switches | menu item (checkmark) | NOT DRIVABLE | - | a counter right-click menu row: no right-click verb |
 | 38 | Counter face | menu item (submenu) | NOT DRIVABLE | - | a counter right-click submenu row: no right-click verb |
 | 39 | Nixie tubes / Neon / Plain | menu item (radio-style check) | NOT DRIVABLE | - | a counter right-click menu row (Nixie / Neon / Plain): no right-click verb |
-| 40 | Enlarge every reading | menu item (checkmark) | DRIVEN+ASSERTED | system-look | Bench Classic XL: state gaps.readingscale == 14 (every reading 1.4 times), Today: 10 |
+| 40 | Enlarge every reading | menu item (checkmark) | DRIVEN+ASSERTED | system-look | Enlarge every reading ticked (what Bench Classic XL brought): state gaps.readingscale == 14 (every reading 1.4 times), unticked: 10 |
 
 ### Main window frame — GAIN / SQUELCH / VOLUME dials
 
@@ -467,7 +467,7 @@ NOT DRIVABLE by reason: readout 827, other 261, needs a signal (no fixture) 120,
 | # | control | type | class | script | detail |
 |---|---|---|---|---|---|
 | 147 | Today's bench () | The default brass-and-enamel bench; serif ("bench-serif") fonts, Nixie counter | DRIVEN+ASSERTED | system-look.txt | choose "Theme" "Today's bench"; state cfg.uiTheme == today; look.bg == "#15171b", look.face == nixie after Today's bench (system-look.txt) |
-| 148 | Bench Classic XL () | Today's palette, counter figures doubled, switches put away, every reading 1.4x | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Bench Classic XL"; state cfg.uiTheme == classic-xl (the look is saved, not applied: the row is DEFERRED, the setting is real); Bench Classic XL: the Workbench palette (look.bg) with gaps.counterscale == 2, gaps.readingscale == 14, gaps.nudges == 0 |
+| 148 | Bench Classic XL () | Today's palette, counter figures doubled, switches put away, every reading 1.4x | NOT DRIVABLE | - | Bench Classic XL is not offered (owner answer 2 of 2026-11-16, must-fix lane A): test_slint_host_system holds that the Theme list has no such item; Bench Classic XL is not offered (owner answer 2): the Theme list has no such item (test_slint_host_system) |
 | 149 | Night Watch () | Dark red-black palette with red sheen/highlights (preserves night vision); mono fonts, flat keys | DRIVEN+ASSERTED | system-look.txt | choose "Theme" "Night Watch"; state cfg.uiTheme == night; look.bg == "#070303", look.accent == "#ff6a4c", look.face == neon after Night Watch (system-look.txt) |
 | 150 | Glass Cockpit () | Dark blue-grey; sans UI font, condensed captions, chrome knobs, radius 8 | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Glass Cockpit"; state cfg.uiTheme == glass (the look is saved, not applied: the row is DEFERRED, the setting is real); Glass Cockpit: state look.bg == #070b0f and look.accent == #7df3ff |
 | 151 | Daylight Lab () | Light grey/white; sans fonts, chrome knobs, radius 6 | DRIVEN+ASSERTED | system-display.txt | choose "Theme" "Daylight Lab"; state cfg.uiTheme == daylight (the look is saved, not applied: the row is DEFERRED, the setting is real); Daylight Lab: state look.bg == #cfd5dc and look.accent == #1d4ed8 |
@@ -3406,7 +3406,7 @@ NOT DRIVABLE by reason: readout 827, other 261, needs a signal (no fixture) 120,
 |---|---|---|---|---|---|
 | 4900 | Map page: Layers key (opens the switches of the nine layers) | key | DRIVEN+ASSERTED | mapj-layers | click Layers; the nine switches are read back as state mapj.layers |
 | 4901 | Map page: Airspaces, APRS paths, Heat map, 24 h range, Locator grid, Signal level switches | checkbox | DRIVEN+ASSERTED | mapj-layers | Heat map, 24 h range, Signal level, Locator grid clicked on and off; state mapj.layers, mapj.cells, mapj.grid, mapj.labels follow |
-| 4902 | Map page: Weather radar, Receiver map, Repeaters switches | checkbox | DRIVEN+ASSERTED | mapj-layers | expect "Weather radar" / "Receiver map" / "Repeaters" enabled equals false |
+| 4902 | Map page: Weather radar, Receiver map, Repeaters switches | checkbox | DRIVEN+ASSERTED | mapj-layers | the three switches with no approved source are NOT drawn: state mapj.layerRows == 6 |
 | 4903 | Map page: legend rows and credit line of the layers that are on | legend | NOT DRIVABLE | - | a readout |
 | 4904 | Map page: Replay key and the transport (Play / Pause, speed 1x 4x 16x 64x, Now) | key | DRIVEN+ASSERTED | mapj-replay-filter | Replay, Play, the speed key and Now: state mapj.replay and mapj.replaySpeed |
 | 4905 | Map page: Replay slider (move through the recorded time) | slider | NOT DRIVABLE | - | a slider with no accessible label in the bounded run; the scrub arithmetic is test_slint_host_mapj |
@@ -3450,7 +3450,7 @@ NOT DRIVABLE by reason: readout 827, other 261, needs a signal (no fixture) 120,
 | 5223 | Accessibility: Signal level as, waits, smallest change, level step (spoken readout) | slider | DRIVEN | lanek-access | saved choices feeding the announcer policy |
 | 5224 | Accessibility: Play a tone that follows the signal (and its pitch, levels, volume, squelch) | checkbox | DRIVEN+ASSERTED | lanek-access | state lk.toneon, lk.tonehz (the parameters are computed; no device is opened in a bounded run) |
 | 5225 | Accessibility: screen reader sentences for the spectrum, the waterfall and the frequency | behaviour | DRIVEN+ASSERTED | lanek-access | state lk.sr.spectrum, lk.sr.waterfall, lk.sr.counter (the text the accessible description carries) |
-| 5226 | Community: Forum and Discord links (App menu and the Community section; empty setting = hidden) | key | DRIVEN+ASSERTED | lanek-community | state lk.forumurl == empty, lk.discordurl == empty: no address is set in this copy |
+| 5226 | Community: Forum and Discord links (App menu and the Community section; empty setting = hidden) | key | NOT DRIVABLE | - | no forum and no Discord exist (owner decision 75): no control, setting, menu entry or string names either; test_slint_host_mustfixa scans the window and the catalogues for it |
 | 5227 | Display body: Averaging (Off, Linear, RMS, Log, Exponential), Frames, Time constant | dropdown | DRIVEN+ASSERTED | lanek-spectrum | state lk.avgmode; the averaging closed forms by test_trace_average |
 | 5228 | Display body: Zoom to a dragged selection (and Ctrl+drag) | checkbox | DRIVEN+ASSERTED | lanek-spectrum | state lk.zoomselect, then radio zoomsel (the plot's own call) narrows the span: state lk.zoomspan |
 | 5229 | Spectrum: a dragged selection (rubber band) zooms the view | behaviour | DRIVEN | lanek-spectrum | the scripted drag starts on a control, not on the plot: the real pointer drag is the final real-mouse drive's |

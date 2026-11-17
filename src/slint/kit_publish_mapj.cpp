@@ -53,11 +53,6 @@ bool envOn(const char* name) {
     const char* v = std::getenv(name);
     return v != nullptr && v[0] != '\0' && v[0] != '0';
 }
-std::string joinNames(const std::vector<std::string>& v) {
-    std::string out;
-    for (const std::string& s : v) { out += out.empty() ? s : ", " + s; }
-    return out;
-}
 
 // the body names: keys of the string tables (the sky model's own names are English)
 [[maybe_unused]] const char* const kBodyKeys[] = {FOX_TR_NOOP("Sun"), FOX_TR_NOOP("Moon"), FOX_TR_NOOP("Cassiopeia A"), FOX_TR_NOOP("Cygnus A"), FOX_TR_NOOP("Taurus A (Crab)"),
@@ -313,21 +308,21 @@ void KitPublisher::fillMapJModel(MapSurface& s, MapPage* pg, const std::string& 
     ::MapJModel jm{};
     jm.layers_open = j.layersOpen;
     std::vector<::LayerRow> rows;
-    std::vector<std::string> blocked;
     for (int i = 0; i < mj::kLayerCount; ++i) {
         const mj::Layer l = static_cast<mj::Layer>(i);
+        if (!mj::layerOffered(l)) { continue; }   // no switch for a layer with no approved data source (owner answer 4): Weather radar, Receiver map, Repeaters
         const mj::LayerInfo& info = mj::layerInfo(l);
         ::LayerRow r{};
         r.label = ss(tr(info.label));
         r.on = j.layers.get(l);
-        r.enabled = !info.needsSource;
-        r.tip = ss(info.needsSource ? tr(info.tip) + " " + tr(mj::blockedNote()) : tr(info.tip));
-        if (info.needsSource) { blocked.push_back(tr(info.label)); }
+        r.enabled = true;
+        r.tip = ss(tr(info.tip));
         sig += std::string(r.on ? "1" : "0");
         rows.push_back(std::move(r));
     }
+    mj_.layerRows = static_cast<int>(rows.size());
     jm.layers = model(std::move(rows));
-    jm.blocked_line = ss(blocked.empty() ? std::string() : tr(mj::blockedNote()) + " " + joinNames(blocked) + ".");
+    jm.blocked_line = ss(std::string());
     jm.units = ss(tr("Units") + ": " + tr(mj::unitChoiceName(j.units)));
     // the tile cache's line, read every five seconds and never made if there is no folder
     if (now - mj_.cacheReadSec > 5.0) {
@@ -371,7 +366,7 @@ void KitPublisher::fillMapJModel(MapSurface& s, MapPage* pg, const std::string& 
     fm.operator_text = ss(j.filter.operatorText);
     fm.plugin_fields = static_cast<bool>(mj_.filterDetail);
     fm.summary = ss(mj::filterSummary(j.filter, trFn()) + (j.hiddenByFilter > 0 ? "  |  " + cascade::core::formatText(tr("%d hidden").c_str(), j.hiddenByFilter) : std::string()));
-    fm.note = ss(mj_.filterDetail ? std::string() : tr("Type, operator and military need the ADS-B plugin to say what each aircraft is: those three do not filter yet."));
+    fm.note = ss(mj_.filterDetail ? std::string() : tr("Type, operator and military need the ADS-B plugin to say what each aircraft is."));
     fm.alt_min_error = ss(j.altMinError);
     fm.alt_max_error = ss(j.altMaxError);
     jm.filter = fm;
@@ -420,7 +415,7 @@ void KitPublisher::mapJAct(int pageIndex, const std::string& op, const std::stri
     else if (op == "layer") {
         const std::size_t colon = arg.find(':');
         if (colon == std::string::npos) { return; }
-        const int idx = std::atoi(arg.substr(0, colon).c_str());
+        const int idx = mj::offeredLayer(std::atoi(arg.substr(0, colon).c_str()));   // the page's row -> the layer it stands for
         if (idx < 0 || idx >= mj::kLayerCount) { return; }
         j.layers.set(static_cast<mj::Layer>(idx), arg.substr(colon + 1) == "1");
     }
@@ -481,7 +476,7 @@ void KitPublisher::fillSky(PageTab& t, const FoxReceiverState& state, std::strin
     const double now = nowUnix();
     m.position_text = ss(home ? "RX " + fmt("%.4f", state.rxLatDeg) + " " + fmt("%.4f", state.rxLonDeg) + "  |  " + mj::clockText(now) : tr("No receiver position: set it on a map page (Set RX here)."));
     m.note = ss(tr("Elevation is geometric: no refraction. A body under the horizon is greyed."));
-    m.stellarium_note = ss(tr("Stellarium link: not built (it needs Stellarium installed)."));
+    m.stellarium_note = ss(std::string());   // the sentence "Stellarium link: not built" is gone (must-fix lane A, NB-W2): the page says nothing about a link it does not have
     m.columns = model(std::vector<slint::SharedString>{ss(tr("Body")), ss(tr("Azimuth")), ss(tr("Elevation")), ss(tr("Note"))});
     m.widths = model(std::vector<float>{150.f, 80.f, 80.f, 0.f});
     std::vector<TableRow> rows;
@@ -514,7 +509,7 @@ void KitPublisher::fillSky(PageTab& t, const FoxReceiverState& state, std::strin
     m.rows = model(std::move(rows));
     // the pass (the satellites plugin's az/el, hand-off): the provider's samples as a path in a 0..200 box
     std::string commands;
-    m.pass_text = ss(tr("No pass to show: the satellites plugin does not hand its azimuth and elevation to the window yet."));
+    m.pass_text = ss(tr("The next pass shows here when the satellites plugin supplies its azimuth and elevation."));
     if (mj_.passProvider) {
         const std::vector<mj::PassSample> pass = mj_.passProvider();
         const mj::PassSummary ps = mj::summarisePass(pass);
@@ -582,6 +577,7 @@ std::string KitPublisher::mapJState(const std::string& what) const {
     if (what == "sunEl") { return mj_.sunEl; }
     if (what == "passMax") { if (!mj_.passProvider) { return "-1"; } const mj::PassSummary ps = mj::summarisePass(mj_.passProvider()); return ps.valid ? fmt("%.0f", ps.maxElDeg) : std::string("-1"); }
     if (what == "skyRows") { return std::to_string(mj_.skyRows); }
+    if (what == "layerRows") { return std::to_string(mj_.layerRows); }
     if (first == nullptr) { return std::string(); }
     const mj::MapJSurface& j = first->j;
     if (what == "layers") { std::string s; for (int i = 0; i < mj::kLayerCount; ++i) { s += j.layers.get(static_cast<mj::Layer>(i)) ? '1' : '0'; } return s; }

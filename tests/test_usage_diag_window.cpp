@@ -220,6 +220,9 @@ void passes(AppWindow& a, int n) {
 }
 bool has(const std::string& hay, const std::string& needle) { return hay.find(needle) != std::string::npos; }
 
+// must-fix lane A: the line under the Usage tick while it is off. BEFORE "Off. Nothing is transmitted." (untrue: a radio that does not open is still reported); AFTER the approved wording (owner, 2026-11-16).
+const std::string kOffLine = "With Usage reporting switched off, FoxSDR sends no usage report, no still-running beat, no journal, no machine description and no first-session record. It still sends one report whenever a radio does not open, whether Diagnostics is on or off.";
+
 struct Tap {
     AppWindow& a;
     Access::Sent log;
@@ -306,7 +309,7 @@ void testUsageRow() {
 
     frame(a, draw, true);
     CHECK(has(g_text, "Send anonymous usage reports"));
-    CHECK(has(g_text, "Off. Nothing is transmitted."));
+    CHECK(has(g_text, kOffLine));
     CHECK(!has(g_text, "Install id"));
     CHECK(!checkboxTicked(g_text));
     CHECK(!Access::engineOn(a));
@@ -330,7 +333,7 @@ void testUsageRow() {
     CHECK(checkboxTicked(g_text));
     CHECK(Access::pending(a).valid);
     CHECK(!has(g_text, "Install id"));
-    CHECK(has(g_text, "Off. Nothing is transmitted."));  // (the label follows the fact, a pass later)
+    CHECK(has(g_text, kOffLine));  // (the label follows the fact, a pass later)
     std::printf("      the click: CONSENT 1 sent; the checkbox ticked ahead of the fact, no id yet\n");
 
     // The pass: the engine mints the id; the next frame reads the fact - the id line, the notice, the pending value released.
@@ -344,7 +347,7 @@ void testUsageRow() {
     CHECK_EQ(Access::fact(a, "fact.telemetry.installId"), id);
     CHECK(has(g_text, "Install id: " + id));
     CHECK(has(g_text, "One report at start-up"));
-    CHECK(!has(g_text, "Off. Nothing is transmitted."));
+    CHECK(!has(g_text, kOffLine));
     std::printf("      a pass later: the fact says on, the id line reads %zu characters, the pending value is released\n", id.size());
 
     // OFF: the id goes (it does not exist while reporting is off) and the row says nothing is transmitted.
@@ -363,7 +366,7 @@ void testUsageRow() {
     CHECK(!Access::engineOn(a));
     CHECK(Access::engineId(a).empty());
     CHECK(!has(g_text, "Install id"));
-    CHECK(has(g_text, "Off. Nothing is transmitted."));
+    CHECK(has(g_text, kOffLine));
     CHECK(!checkboxTicked(g_text));
 
     // A CLICK THE ENGINE NEVER ANSWERS (a command that was refused, or lost): the checkbox gives the value back after half a

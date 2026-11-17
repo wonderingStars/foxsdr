@@ -313,7 +313,7 @@ struct LaneLPublisher::Impl {
         key(v, "t.fav-save", tr("Save view as favourite"), [this] { sendBuilt(kTuning, tr("Save favourite"), favouriteSaveJson(dv("t.fav-name")), FOXAPP_OP_FAVOURITE_SAVE); }, !trim(dv("t.fav-name")).empty(),
             tr("Keeps the radio's frequency, mode, bandwidth and noise settings under that name."));
         key(v, "t.fav-recall", tr("Recall"), [this] { send(kTuning, tr("Recall"), cmd(FOXAPP_OP_FAVOURITE_RECALL, 0, trim(dv("t.fav-name")))); }, !trim(dv("t.fav-name")).empty(),
-            tr("Retunes the radio and sets the mode, bandwidth and noise settings. The picture's own numbers (centre, span, levels) are not applied by this window yet."));
+            tr("Retunes the radio and sets the mode, bandwidth and noise settings."));
         field(v, "t.fav-new", tr("New name"), "");
         key(v, "t.fav-rename", tr("Rename"), [this] { send(kTuning, tr("Rename"), cmd(FOXAPP_OP_FAVOURITE_EDIT, 1, trim(dv("t.fav-name")) + "\t" + trim(dv("t.fav-new")))); }, !trim(dv("t.fav-name")).empty() && !trim(dv("t.fav-new")).empty());
         key(v, "t.fav-remove", tr("Remove"), [this] { send(kTuning, tr("Remove favourite"), cmd(FOXAPP_OP_FAVOURITE_EDIT, 0, trim(dv("t.fav-name")))); }, !trim(dv("t.fav-name")).empty());
@@ -343,7 +343,6 @@ struct LaneLPublisher::Impl {
         key(v, "t.band-clear", tr("Forget every band"), [this] { send(kTuning, tr("Forget every band"), cmd(FOXAPP_OP_BAND_MEMORY, 0, "{\"clear\":true}")); });
         const std::string bands = fact("bandmem.bands");
         if (!bands.empty()) { v.push_back(rReadout(tr("Bands remembered"), bands)); }
-        v.push_back(rNote(tr("The spectrum's limits and zoom, the attenuator and the antenna are not remembered by this window yet.")));
 
         v.push_back(rHeading(tr("Keys")));
         static const char* const acts[6] = {"bandwidth_up", "bandwidth_down", "cycle_mode", "centre_signal", "next_bookmark", "previous_bookmark"};
@@ -770,6 +769,7 @@ struct LaneLPublisher::Impl {
             send(kSources, tr("Use for the selected radio"), cmd(FOXAPI_OP_SELECT_SOURCE, 0, bb.text));
         }, b.ok, tr("Switches the selected radio to that source: it connects to the address you typed."));
         if (realKind(pv("n.kind", 0)) == 12) {
+            v.push_back(slk::rUnproven());   // decision 61: the Fobos SDR was proved against a stand-in library only
             v.push_back(rNote(tr("The Fobos SDR is opened through the maker's own library, which you install yourself: FoxSDR does not include it and does not download it. It is in the list because that library was found. FoxSDR only receives with it: it never writes firmware to the radio, resets it or changes its output pins. In the arguments, lib= names the library file or its folder, serial= or index= picks a board, rate= asks for a sample rate, and count=pairs is for a library whose stream length counts complex samples. This radio's code has been tried only against a stand-in library, never on a real Fobos SDR.")));
         }
         if (realKind(pv("n.kind", 0)) == 11) {
@@ -888,7 +888,7 @@ struct LaneLPublisher::Impl {
         v.push_back(rHeading(tr("Plugin store")));
         const std::string so = wirec("store.sort");
         choice(v, "y.store-sort", tr("Order of the plugin store"), {tr("Catalogue order"), tr("By name"), tr("By last update")}, so == "name" ? 1 : so == "updated" ? 2 : 0, [this](int i) { static const char* const w[3] = {"catalogue", "name", "updated"}; setting(kSystem, tr("Order of the plugin store"), "store.sort", w[std::clamp(i, 0, 2)]); },
-               tr("Popular and best rated need a server's figures, which do not exist yet."));
+               tr("The order the plugin store lists its modules in."));
         endNote(v, kSystem);
     }
 

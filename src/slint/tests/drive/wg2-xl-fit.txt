@@ -1,5 +1,5 @@
 #! frames=300 bank=4 sections=4:0 size=1600x900
-# wg2-xl-fit (window-gaps-2, rows 35 and 148): Bench Classic XL asks for the counter's figures doubled, and at the default 1600 px the receiver strip cannot hold them.
+# wg2-xl-fit (window-gaps-2, rows 35 and 148): the counter's figures at twice the size (what Bench Classic XL brought; that look is not offered, owner answer 2) and, at the default 1600 px, the receiver strip cannot hold them.
 # Drawn at twice the size they took the three lanes down from 600 px to 221: the gain and squelch headers ran into each other and the antenna power key was pushed out of the
 # window. The scale DRAWN is the one the lanes allow (look_logic fitCounterScale: gaps.counterfit, in per cent); the asked one stays 2 (gaps.counterscale).
 10 state running == 1
@@ -8,7 +8,9 @@ state look.width == 1600
 +12 state gaps.counterfit == 100
 expect "Bias tee off - asks before switching on" right <= "1584"
 expect "Gain" left >= "800"
-+2 choose "Theme" "Bench Classic XL"
++2 choose "Counter figures" "Enlarged figures"   # Bench Classic XL is not offered (owner answer 2): its three effects are three controls
++2 click "Enlarge every reading"
++2 click "Tuner switches"
 +12 state gaps.counterscale == 2
 +12 state gaps.counterfit > 100
 state gaps.counterfit < 140
@@ -17,5 +19,7 @@ expect "Bias tee off - asks before switching on" right <= "1584"
 expect "Gain" width >= "140"
 expect "Squelch" width >= "140"
 expect "Squelch" left >= "1000"
-+2 choose "Theme" "Today's bench"
++2 choose "Counter figures" "Normal size"
++2 click "Enlarge every reading"
++2 click "Tuner switches"
 +12 state gaps.counterfit == 100

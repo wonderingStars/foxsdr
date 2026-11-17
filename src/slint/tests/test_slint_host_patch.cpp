@@ -348,8 +348,7 @@ void everySentenceIsADrawers() {
                                 joinedSource("gui/app_window_patch_blueprints.cpp") + joinedSource("gui/app_window_patch_presets.cpp") + joinedSource("gui/patch_view.cpp") + joinedSource("gui/scope_view.cpp");   // (START and STOP are the dome's own word)
     static const std::regex literal(R"re(\btr\(\s*("(?:[^"\\]|\\.)*")\s*\))re");
     // screen lane M (row 6) adds six: the captions of the four parts the wiring second pass added, the refusal of a test source feeding a transmitting sink and the two parts' "not run yet" tooltip
-    const std::set<std::string> newKeys = {"\"%zu line\"", "\"%zu lines\"", "\"MIXER\"", "\"IF FILTER\"", "\"GENERATOR\"", "\"SCOPE\"", "\"a test source cannot feed anything that transmits\"",
-                                           "\"Saved with the patch, but this build does not run this part yet.\""};
+    const std::set<std::string> newKeys = {"\"%zu line\"", "\"%zu lines\"", "\"MIXER\"", "\"IF FILTER\"", "\"GENERATOR\"", "\"SCOPE\"", "\"a test source cannot feed anything that transmits\""};
     int seen = 0, missing = 0, news = 0;
     std::set<std::string> distinct;
     for (std::sregex_iterator it(mine.begin(), mine.end(), literal), end; it != end; ++it) {
@@ -2058,16 +2057,20 @@ void theTabChip() {
 void thePartKeys() {
     Fx f(chain().g);
     const PatchModel m = f.page.bandModel();
-    EQ(m.parts.size(), std::size_t{11});   // screen lane M: the seven fixed parts and the four the wiring second pass added
-    const char* labels[11] = {"Radio", "Channel", "Demod", "Spectrum", "Speaker", "Text out", "Map", "Mixer", "IF filter", "Generator", "Scope"};
-    for (std::size_t i = 0; i < 11; ++i) {
+    // must-fix lane A (NB-D13): the bin offers the seven fixed parts and the two the wiring second pass added that a patch RUNS (Mixer, IF filter); the Generator and the Scope are saved with a patch and
+    // drawn on its canvas but this build does not run them, so no key is offered for them (BEFORE: eleven keys, the last two with a tooltip that admitted it; AFTER: nine, no such tooltip)
+    EQ(m.parts.size(), std::size_t{9});
+    const char* labels[9] = {"Radio", "Channel", "Demod", "Spectrum", "Speaker", "Text out", "Map", "Mixer", "IF filter"};
+    for (std::size_t i = 0; i < 9; ++i) {
         EQ(at(m.parts, i).label, std::string(labels[i]));
         EQ(at(m.parts, i).kind, static_cast<int>(i));
         CHECK(at(m.parts, i).enabled);
-        // the two parts that are saved and not run say so on their key; the others have no tooltip
-        if (i == 9 || i == 10) { EQ(at(m.parts, i).tooltip, std::string("Saved with the patch, but this build does not run this part yet.")); }
-        else { CHECK(at(m.parts, i).tooltip.empty()); }
+        CHECK(at(m.parts, i).tooltip.empty());
     }
+    for (const PartKey& k : m.parts) { CHECK(k.label != "Generator" && k.label != "Scope" && k.kind != 9 && k.kind != 10); }
+    // the rule is a function of the kind
+    for (int kind = 0; kind < 9; ++kind) { CHECK(partOffered(kind)); }
+    CHECK(!partOffered(9) && !partOffered(10) && !partOffered(-1) && !partOffered(11));
     // AT MOST FIVE RADIOS: the Radio key goes dim at five and still says why
     pc::Graph g = chain().g;
     for (int i = 0; i < 3; ++i) { g.addNode(NodeKind::Radio, "More", PortType::Iq, 0, 0); }

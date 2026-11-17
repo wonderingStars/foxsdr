@@ -675,7 +675,7 @@ component LaneCScanBlock inherits VerticalLayout {
         }
     }
     if LaneC.scan-stats != "" : Note { wrap-w: root.width; text: LaneC.scan-stats; }
-    if LaneC.scan-engine-note : Note { wrap-w: root.width; text: @tr("The priority list and the scan thresholds are saved; this scanner does not use them yet."); tone: ChipTone.warn; }
+    if LaneC.scan-engine-note : Note { wrap-w: root.width; text: @tr("The priority list and the scan thresholds are saved; the scanner is not using them."); tone: ChipTone.warn; }
 }
 
 component LaneCMemoryBlock inherits VerticalLayout {
