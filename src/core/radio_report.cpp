@@ -9,6 +9,8 @@
 #include <random>
 #include <regex>
 #include <cstring>
+#include <map>
+#include <mutex>
 #include <set>
 
 #include "core/diag_log.hpp"
@@ -230,12 +232,81 @@ std::string serialFromArgs(const std::string& driverKind, const std::string& arg
     return serialShaped(v) ? v : std::string();
 }
 
+namespace {
+
+std::mutex g_soapyModelMutex;
+std::map<std::string, std::string>& soapyModels() {
+    static std::map<std::string, std::string> m;
+    return m;
+}
+// "<driver>|<SERIAL>" for arguments that name both, else "": a model is only remembered for a radio that can be told from another of its driver.
+std::string soapyModelKey(const std::string& args) {
+    const std::string driver = lowerCopy(kwarg(args, "driver"));
+    const std::string serial = serialFromArgs("soapy", args);
+    if (driver.empty() || serial.empty()) { return std::string(); }
+    std::string s = serial;
+    for (char& c : s) { c = static_cast<char>(std::toupper(static_cast<unsigned char>(c))); }
+    return driver + "|" + s;
+}
+
+}  // namespace
+
+std::string soapyDeviceModel(const std::string& args) {
+    const std::string product = kwarg(args, "product");
+    if (!product.empty()) { return product; }
+    // the label without its serial, "#n" index, "::" separator and anything from a bracket or a parenthesis on ("B200 EDR04ZDB2" -> "B200")
+    const std::string label = kwarg(args, "label");
+    const std::string serial = lowerCopy(kwarg(args, "serial"));
+    std::string out, tok;
+    bool stop = false;
+    const auto flush = [&]() {
+        if (tok.empty()) { return; }
+        const std::string lt = lowerCopy(tok);
+        // a serial-shaped token (eight or more hex digits with a digit among them) is an identifier, not a model, whatever the module put in its label
+        bool hex = tok.size() >= 8, digit = false;
+        for (const char ch : tok) { if (!std::isxdigit(static_cast<unsigned char>(ch))) { hex = false; } if (ch >= '0' && ch <= '9') { digit = true; } }
+        if (tok.find_first_of("[(") != std::string::npos) { stop = true; }
+        else if (lt == serial || tok == "::" || tok[0] == '#' || (hex && digit)) { /* dropped */ }
+        else { if (!out.empty()) { out += ' '; } out += tok; }
+        tok.clear();
+    };
+    for (const char c : label) {
+        if (stop) { break; }
+        if (c == ' ' || c == '\t') { flush(); } else { tok += c; }
+    }
+    if (!stop) { flush(); }
+    return out;
+}
+
+void rememberSoapyModel(const std::string& args, const std::string& model) {
+    const std::string key = soapyModelKey(args);
+    if (key.empty() || model.empty()) { return; }
+    std::lock_guard<std::mutex> lk(g_soapyModelMutex);
+    std::map<std::string, std::string>& m = soapyModels();
+    if (m.size() >= 64 && m.find(key) == m.end()) { return; }
+    m[key] = model;
+}
+
 RadioIdentity identify(const std::string& driverKind, const std::string& args, const std::string& nativeLabel) {
     RadioIdentity id;
     id.driver = health::driverWord(driverKind);
     std::string model;
     if (lowerCopy(driverKind) == "soapy") {
-        model = sanitiseDevice(args);
+        model = soapyDeviceModel(args);
+        if (model.empty()) {
+            const std::string key = soapyModelKey(args);
+            if (!key.empty()) {
+                std::lock_guard<std::mutex> lk(g_soapyModelMutex);
+                const auto it = soapyModels().find(key);
+                if (it != soapyModels().end()) { model = it->second; }
+            }
+        }
+        if (model.empty()) { model = sanitiseDevice(args); }
+        // the vendor driver key, in its own field
+        const std::string drv = kwarg(args, "driver");
+        bool shaped = !drv.empty() && drv.size() <= 32;
+        for (const char c : drv) { if (!(isWordChar(c) && c != '_') && c != '.' && c != '+' && c != '-') { shaped = false; } }
+        if (shaped) { id.library = "SoapySDR " + drv; }
     } else if (!nativeLabel.empty()) {
         // the bus-reported label is "<model> (serial <serial>)": the model is what comes before the serial
         const std::size_t at = nativeLabel.find(" (serial ");

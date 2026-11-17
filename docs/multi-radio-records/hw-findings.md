@@ -110,3 +110,25 @@ Real window (hidden desktop, scratch config, `sourceKind rtlsdr` with empty argu
 the accessible chip is "RECEIVER GENERATOR, rtlsdr did not open: the saved settings name this kind of radio but not which one. The receiver is
 running on the signal generator."; the screenshot shows the FAIL lamp red and the chip with a red lamp; the queued `radio_fail` has
 `reasonClass` `absent` (it was `other`). NOT break-it checked: the chip row (the unchanged-without-stand-in check is the guard).
+
+## Item 5: the B200 reported as model "uhd" - FIXED
+
+What the device says (python SoapySDR on the real B200, enumeration plus one open, receive-only): the enumerated row is `driver=uhd, label=B200
+EDR04ZDB2, name=, product=B200, serial=EDR04ZDB2, type=b200`; `getHardwareKey()` "B200"; `getHardwareInfo()` `mboard_id` "B200", `mboard_serial`
+"EDR04ZDB2"; `getDriverKey()` "b200". The app names its open source "SoapySDR: B200" (the hardware key).
+Cause: `identify("soapy", args)` used the usage record's `sanitiseDevice(args)`, which is only as good as the arguments: a saved row that carries
+`product=` gave "uhd b200" (the driver key and the type, lower case); a hand-written `driver=uhd,serial=...` (the check's seed) gave "uhd". The owner's own saved
+row has `product=` and `label=` (checked by key presence only), so his real events were "uhd b200", not "uhd".
+Fix (`core/radio_report.{hpp,cpp}`): the model of a SoapySDR radio is the row's `product` ("B200"; the RTL module's product string), else a model learned
+for that (driver, serial) by `rememberSoapyModel` (the engine remembers the opened device's hardware key in `adoptDeviceMirrors` and every scanned row's own
+model), else the old text. A label-only row ("Generic RTL2832U OEM :: 00000001", "HackRF One #0 <serial>", "LimeSDR Mini [USB 3.0] <serial>") gives its label without
+serial, `#n`, `::`, bracketed parts and serial-shaped hex tokens. The vendor driver key is in its own field, `library` ("SoapySDR uhd": the contract's optional
+field, regex `^[A-Za-z0-9._+ -]{1,48}$`), carried on every radio_fail and every journal event of a SoapySDR radio; the serial is untouched; the key is now
+`b200:EDR04ZDB2`. The contract is not changed (the model field and `library` already exist).
+Tests: `test_radio_report` (215 checks, 0 failed: B200, the minimal row before and after learning, a row with no serial remembers nothing, the RTL, HackRF, Lime and
+Pluto forms, no address or serial in model or library); new `tests/test_soapy_model_report.cpp` (11 checks, 0 failed, the queued radio_fail and radio_settings bodies, a native
+radio has no `library`). Break-it: identify using the old text again -> 5 failed; restored. `test_radio_reports_fields` 48, `_never_sent` 7 (0 leaks), `_engine` 147: 0 failed.
+Real B200 (scratch engine, usage reporting on, URLs dead): with the owner-style full row the queue has radio_open (twice), radio_settings and radio_close all with model
+`B200`, serial `EDR04ZDB2`, key `b200:EDR04ZDB2`, `library` "SoapySDR uhd" (4 events), no frequency, path or address. With the check's hand-written minimal row the first
+radio_open (before the open could say) is still `uhd:EDR04ZDB2` and the rest `b200:EDR04ZDB2`: a residual for hand-written rows only (OPEN ROWS).
+Other SoapySDR-opened kinds: checked with the stand-in forms of their modules (above), not with hardware. The RTL-SDR opened natively keeps its model from its bus label.

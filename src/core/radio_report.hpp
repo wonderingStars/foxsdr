@@ -52,6 +52,7 @@ struct RadioIdentity {
     std::string model;    // 1 to 32 characters, unchanged by scrubModel
     std::string serial;   // "" or ^[A-Za-z0-9._-]{1,40}$
     std::string key;      // radioKey(model, serial)
+    std::string library;  // "" or `^[A-Za-z0-9._+ -]{1,48}$`: for a radio opened through SoapySDR, "SoapySDR <driver key>" (the vendor driver key, kept out of `model`)
 };
 
 // The radio's hardware serial from its device arguments: SoapySDR's "driver=uhd, serial=EDR04ZDB2, ..." or a native radio's "serial=00000001".
@@ -62,7 +63,16 @@ std::string serialFromArgs(const std::string& driverKind, const std::string& arg
 // The radio a (driver key, device arguments) pair names. `nativeLabel` is the scanned row's label when the caller has one (the bus-reported
 // description, "RTL-SDR (serial 00000001)"); empty gives the family's plain name. The model is what the usage report sends (sanitiseDevice for a
 // SoapySDR kwargs string, the label without its serial otherwise) and always passes scrubModel, so it never carries an address or a unit name.
+//
+// A RADIO OPENED THROUGH SOAPYSDR IS NAMED BY ITS OWN MODEL, NOT BY THE DRIVER KEY (hardware check 2026-11-17: a B200 was "uhd"): the device's `product` in the arguments
+// (UHD: "B200"; the RTL module: the dongle's product string), else the model learned for this (driver, serial) from a scan row or an open (rememberSoapyModel), else the
+// older usage-record text (sanitiseDevice). The vendor driver key goes in `library` ("SoapySDR uhd"). Nothing is probed here.
 RadioIdentity identify(const std::string& driverKind, const std::string& args, const std::string& nativeLabel = std::string());
+// Tell identify() what a SoapySDR radio is, for the arguments that carry no `product` (a hand-written "driver=uhd,serial=...", an older saved row). `model` is the
+// hardware key the opened device reported ("B200") or a scanned row's own model; ignored when the arguments name no serial (two radios of a driver would share it).
+void rememberSoapyModel(const std::string& args, const std::string& model);
+// The model a scanned row's own arguments say ("product", else the "label" without its serial and bracketed parts); "" when they say none. Pure.
+std::string soapyDeviceModel(const std::string& args);
 // The sound card: model "sound card" (never the card's name, which is often a person's), no serial.
 RadioIdentity soundCardIdentity();
 

@@ -3110,6 +3110,12 @@ void Engine::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::s
     // the radio by now: both open paths put it there straight after open()
     // and before the rate, because it decides which rates the request is
     // matched against. See DeviceOpenResult::airspyAtOpen.)
+    // THE MODEL OF A RADIO OPENED THROUGH SOAPYSDR IS THE DEVICE'S OWN HARDWARE KEY ("B200"), remembered for the radio reports (hw-findings item 5): name() is "SoapySDR: <hardware key>".
+    if (kind == "soapy") {
+        const std::string nm = dev.name();
+        const std::string pre = "SoapySDR: ";
+        if (nm.rfind(pre, 0) == 0) { cascade::core::radioreport::rememberSoapyModel(args, nm.substr(pre.size())); }
+    }
     rx().deviceRatesHz_ = dev.supportedSampleRatesHz();
     rx().deviceRateLabels_.clear();
     const bool airspyRates = cascade::gui::asAirspy(&dev) != nullptr;
