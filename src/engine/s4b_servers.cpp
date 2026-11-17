@@ -261,6 +261,7 @@ void ServerSet::applyApi(const Config& c) {
     std::string why;
     if (!server->start(why)) { apiProblem_ = why.empty() ? std::string("the interface could not start") : why; return; }
     api_ = std::move(server);
+    if (hooks_.hostNames) { api_->setHostNames(hooks_.hostNames()); }
 }
 
 void ServerSet::applyMcp(const Config& c) {
@@ -287,6 +288,10 @@ void ServerSet::controlPass() {
         cascade::net::HubStatus st;
         if (hooks_.readStatus && hooks_.readStatus(radio, st)) { hub_.publishStatus(st); }
         else { hub_.publishStatus(cascade::net::HubStatus{}); }
+    }
+    if (api_ != nullptr && hooks_.hostNames && now - lastHostNamesMs_ >= 1000) {
+        lastHostNamesMs_ = now;   // the owner's "Allowed web origins" list may change while the interface runs
+        api_->setHostNames(hooks_.hostNames());
     }
     if (api_ != nullptr && hooks_.webAccount && now - lastAccountCheckMs_ >= 500) {
         // the web page's user name or password changed (or was set or removed): every client signed in under the old account is ended now, and the next login is judged afresh
@@ -351,8 +356,15 @@ bool ServerSet::holdsIq(int radio) const {
     return rtl_ != nullptr && cfg_.controlRadio == radio;
 }
 
-void ServerSet::configure(const Config& c) {
+void ServerSet::setApiBindForTest(const std::string& address) {
     std::lock_guard<std::mutex> lk(m_);
+    apiBindForTest_ = address;
+}
+
+void ServerSet::configure(const Config& requested) {
+    std::lock_guard<std::mutex> lk(m_);
+    Config c = requested;
+    if (!apiBindForTest_.empty()) { c.apiBindForTest = apiBindForTest_; }   // TESTS ONLY: the engine builds its Config from the settings, which never carry this
     applyTcpAudio(c);
     applyRtl(c);
     applyApi(c);

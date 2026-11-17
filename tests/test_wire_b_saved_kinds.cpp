@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "core/config.hpp"
+#include "core/sys_bundle.hpp"
 #include "core/tune_control.hpp"
 #include "core/wire_b_source_kinds.hpp"
 #include "engine/wire_b_sources.hpp"
@@ -161,6 +162,28 @@ int main() {
         const cascade::engine::wireb::SourceKind* row = cascade::engine::wireb::findSourceByKey("rfspace");
         std::string args, why;
         CHECK(!cascade::engine::wireb::normaliseSourceArgs(*row, "", args, why));
+    }
+    // K7 (M8-import-usb-kinds): the settings-import guard's list of LOCAL source kinds follows the table's own `needsAddress` column in both directions: a row with no address (a USB or
+    // vendor-library radio) comes back from a backup, a row that connects to a host does not, and what an empty open of a local row saves (its default arguments) is not itself dropped.
+    std::printf("K7: the import guard's local kinds are the table's rows with no address\n");
+    {
+        std::size_t n = 0;
+        const cascade::engine::wireb::SourceKind* rows = cascade::engine::wireb::sourceKinds(n);
+        int local = 0, network = 0;
+        for (std::size_t i = 0; i < n; ++i) {
+            const bool guardSaysLocal = cascade::core::sys::localSourceKind(rows[i].key);
+            if (guardSaysLocal == rows[i].needsAddress) { std::printf("  %s: needsAddress=%d but localSourceKind=%d\n", rows[i].key, rows[i].needsAddress ? 1 : 0, guardSaysLocal ? 1 : 0); }
+            CHECK(guardSaysLocal == !rows[i].needsAddress);
+            if (rows[i].needsAddress) { ++network; continue; }
+            ++local;
+            CHECK(rows[i].defaultArgs != nullptr);
+            std::string cleaned;
+            bool dropped = true;
+            CHECK(cascade::core::sys::classifyDeviceArgs(rows[i].defaultArgs, cleaned, dropped));
+            if (dropped) { std::printf("  %s: its default arguments \"%s\" are dropped by the guard\n", rows[i].key, rows[i].defaultArgs); }
+            CHECK(!dropped && cleaned == rows[i].defaultArgs);
+        }
+        CHECK(local == 6 && network == 7);
     }
     return testSummary("test_wire_b_saved_kinds");
 }

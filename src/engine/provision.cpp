@@ -219,6 +219,7 @@ std::string serverConfigText(const ProvisionRequest& r, const Secret* password) 
     if (r.catEnable) {
         cat = "\"enabled\":true";
         if (r.catBindAll) { cat += ",\"bindAll\":true"; }
+        if (!r.catAllow.empty()) { cat += ",\"allow\":" + jsonQuote(r.catAllow); }
     }
     std::string text;
     text.reserve(room + 128u);
@@ -354,7 +355,7 @@ ProvisionOutcome provisionServers(Engine& engine, const ProvisionRequest& reques
         }
         summary += std::string(summary.empty() ? "" : ", ") + "CAT on " +
                    (request.catBindAll ? "all interfaces" : "127.0.0.1") + ":" + std::to_string(k.port) +
-                   (request.catBindAll ? " (CAT has no password: anything on the network can retune this receiver)" : "");
+                   (request.catBindAll ? " (CAT has no password: only the computers listed with the cat allow list can reach it)" : "");
     }
     out.ok = true;
     out.summary = summary;

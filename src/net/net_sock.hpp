@@ -40,6 +40,8 @@ Handle listenTcp(std::uint32_t ip, std::uint16_t port, int backlog, std::string&
 std::uint16_t boundPort(Handle s);
 // The address of the program at the other end of a connected socket, as dotted-quad text ("" when it cannot be read). Screen lane S4b: the login throttle needs a client identity.
 std::string peerOf(Handle s);
+// This computer's host name, lower-case ("" when it cannot be read).
+std::string computerName();
 // Accepts one pending connection (non-blocking listener): kInvalid when none is waiting. The accepted socket is non-blocking.
 Handle acceptOne(Handle listener);
 // A non-blocking connect, finished with waitConnect.

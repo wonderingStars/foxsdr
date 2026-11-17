@@ -95,14 +95,16 @@ struct ServerConfig {
         bool enabled = false;
         bool bindAll = false;  // false: loopback only
         int port = 4532;
-        bool operator==(const Cat& o) const { return enabled == o.enabled && bindAll == o.bindAll && port == o.port; }
+        std::string allow;     // bindAll only: the client addresses that may connect (net/peer_allow.hpp); empty with bindAll = the server does not start
+        bool operator==(const Cat& o) const { return enabled == o.enabled && bindAll == o.bindAll && port == o.port && allow == o.allow; }
     } cat;
     // THE TCI SERVER (net/tci_server.hpp): OFF by default, loopback by default, receive-only always.
     struct Tci {
         bool enabled = false;
         bool bindAll = false;   // false: loopback only
         int port = 50001;
-        bool operator==(const Tci& o) const { return enabled == o.enabled && bindAll == o.bindAll && port == o.port; }
+        std::string allow;      // bindAll only: the client addresses that may connect (net/peer_allow.hpp); empty with bindAll = the server does not start
+        bool operator==(const Tci& o) const { return enabled == o.enabled && bindAll == o.bindAll && port == o.port && allow == o.allow; }
     } tci;
     // AUDIO OVER THE NETWORK (net/udp_audio.hpp): OFF by default; one radio's audio to one UDP address, 127.0.0.1:7355 unless told otherwise.
     struct Udp {
@@ -128,8 +130,8 @@ struct ServerConfig {
 // ONE FOXAPI_OP_SERVER_CONFIG, parsed. The text is a JSON object:
 //   {"web": {"enabled": bool, "bindAddress": "127.0.0.1", "port": 8073, "username": "admin",
 //            "password": "...", "passwordRecord": "pbkdf2-sha256$...", "clearPassword": true},
-//    "cat": {"enabled": bool, "bindAll": bool, "port": 4532},
-//    "tci": {"enabled": bool, "bindAll": bool, "port": 50001},
+//    "cat": {"enabled": bool, "bindAll": bool, "port": 4532, "allow": "192.168.1.20, 192.168.1.0/24"},
+//    "tci": {"enabled": bool, "bindAll": bool, "port": 50001, "allow": "192.168.1.20, 192.168.1.0/24"},
 //    "udp": {"enabled": bool, "host": "127.0.0.1", "port": 7355, "radio": 1, "packetFrames": 480}}
 // Every member is optional and means "leave this alone" when absent; an UNKNOWN key at either level is an error (a control request is
 // a live instruction, not a file that must survive a newer writer), so is a wrong type, a port outside 1024..65535, a bind address
@@ -159,9 +161,11 @@ struct ServerConfigRequest {
     std::optional<bool> catEnabled;
     std::optional<bool> catBindAll;
     std::optional<int> catPort;
+    std::optional<std::string> catAllow;
     std::optional<bool> tciEnabled;
     std::optional<bool> tciBindAll;
     std::optional<int> tciPort;
+    std::optional<std::string> tciAllow;
     std::optional<bool> udpEnabled;
     std::optional<std::string> udpHost;
     std::optional<int> udpPort;

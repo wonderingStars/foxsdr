@@ -27,6 +27,8 @@
 #include "core/store_sort.hpp"
 #include "engine/engine_wire_b.hpp"   // screen lane S4b: whether a radio sends network I/Q (the pipeline has one raw-band tap)
 #include "engine/wire_c.hpp"
+#include "net/net_sock.hpp"
+#include "net/web_guard.hpp"
 #include "engine/wire_c_open.hpp"
 
 namespace cascade::engine {
@@ -606,6 +608,21 @@ void Engine::pumpWireC() {
                     if ((ev.flags & CASCADE_EVENT_FLAG_PRIVATE) != 0u || std::string(ev.kind) != "text") { continue; }   // a private plugin's line is never shown
                     sink(static_cast<double>(ev.unixMs) / 1000.0, ev.frequencyHz, ev.plugin, ev.text);
                 }
+            };
+            h.hostNames = [this]() {
+                // the web page's own Host rule: the same names, from the same two places (the computer's name and the owner's "Allowed web origins" list)
+                std::vector<std::string> lines;
+                const std::string origins = wireC().settings().get("web.cors_origins");
+                std::size_t from = 0;
+                while (from <= origins.size()) {
+                    std::size_t to = origins.find(std::string(1, char(10)), from);
+                    if (to == std::string::npos) { to = origins.size(); }
+                    std::string line = origins.substr(from, to - from);
+                    if (!line.empty() && line.back() == char(13)) { line.pop_back(); }
+                    if (!line.empty()) { lines.push_back(line); }
+                    from = to + 1;
+                }
+                return cascade::net::guardHostNames(cascade::net::sock::computerName(), lines);
             };
             h.webAccount = [this]() {
                 const ServerConfig sc = servers_.config();

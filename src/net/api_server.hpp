@@ -91,6 +91,10 @@ public:
     ApiStats stats() const;
     // Ends every open stream (WebSocket, SSE) at the next turn of the IO thread (the account the clients signed in with has changed): a client that comes back is judged afresh.
     void closeAllClients() { dropAll_.store(true, std::memory_order_release); }
+    // DNS NAMES THAT ARE THIS COMPUTER'S (M9-api-host-rule): the names the web page's own Host rule accepts besides literals (net/web_guard.hpp guardHostNames: this computer's name and name.local, and the
+    // hosts of the owner's "Allowed web origins" list). A request whose Host is one of them is answered; every other name is refused as before. IP literals are NOT widened: the interface still takes 127.x,
+    // [::1] and its own bound address only (the page's rule also takes any literal). Safe to call from any thread.
+    void setHostNames(std::vector<std::string> names);
 
     // JSON helpers (pure; the tests use them)
     static std::string statusJson(const HubStatus& s);
@@ -143,6 +147,8 @@ private:
     std::atomic<int> connections_{0};
     sock::Handle listener_ = sock::kInvalid;
     std::uint32_t bindIp_ = 0;
+    mutable std::mutex hostM_;
+    std::vector<std::string> hostNames_;   // lower-case
     std::vector<Conn> conns_;   // IO thread only
     std::uint64_t nextId_ = 1;  // IO thread only
 

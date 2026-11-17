@@ -42,6 +42,7 @@
 #include "core/server_ports.hpp"
 #include "foxsdr_api.h"
 #include "net/cat_protocol.hpp"
+#include "net/peer_allow.hpp"
 
 namespace cascade::net {
 
@@ -110,7 +111,15 @@ public:
     // the common case of the port already being held by a real rigctld.
     //
     // Port 0 asks the OS for a free port; boundPort() reports which one.
-    bool start(std::uint16_t port, bool bindAll, std::string& error);
+    //
+    // BEYOND THIS COMPUTER (bindAll) THE SERVER NEEDS A LIST. The CAT protocol has no place for a credential, so a bind to every interface is accepted only with a non-empty
+    // `allow` (net/peer_allow.hpp): a connection from any other address is closed before a byte is read or sent. bindAll with an empty list is refused here. With bindAll off
+    // (loopback) `allow` is not used.
+    bool start(std::uint16_t port, bool bindAll, std::string& error, const PeerAllow& allow = PeerAllow());
+    // Connections closed at once because the client's address is not on the list (bindAll only).
+    // TESTS ONLY (never a setting): with bindAll, bind this address (host order) instead of every interface, so the list can be proved on 127.0.0.1 without a firewall prompt.
+    void setBindAddressForTest(std::uint32_t hostOrder) { testBind_ = hostOrder; }
+    std::uint64_t refusedPeer() const { return refusedPeer_.load(std::memory_order_relaxed); }
 
     // stop() is a HARD stop: when it returns, no thread belonging to this
     // server is still running and every client connection has been closed.
@@ -137,6 +146,10 @@ private:
 
     CatSessionOpener opener_;
     std::function<void()> usageCallback_;
+    std::atomic<std::uint64_t> refusedPeer_{0};
+    PeerAllow allow_;
+    std::uint32_t testBind_ = 0;
+    bool listed_ = false;
     std::atomic<std::uint64_t> connections_{0};  // the number in a session's label
     std::thread acceptor_;
     std::atomic<bool> running_{false};

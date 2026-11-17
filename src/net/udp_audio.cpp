@@ -106,6 +106,19 @@ bool UdpAudioSender::start(const std::string& host, int port, int packetFrames, 
         error = "cannot find the audio destination '" + host + "' (not an IPv4 address or a name this machine can look up)";
         return false;
     }
+    // ONE COMPUTER, NEVER A GROUP: the audio goes to the single address the person typed. A broadcast address (255.255.255.255), a multicast address (224.0.0.0 and up: every
+    // computer that joins the group would hear it) and 0.x.x.x (not an address of any computer) are refused, whether typed as a number or reached through a name. (A subnet
+    // broadcast such as 192.168.1.255 cannot be recognised without the network's mask; the socket never sets SO_BROADCAST, so the system refuses to send to one and the
+    // failed sends are counted.)
+    if (res->ai_family == AF_INET && res->ai_addrlen >= static_cast<int>(sizeof(sockaddr_in))) {
+        const auto* sin = reinterpret_cast<const sockaddr_in*>(res->ai_addr);
+        const std::uint32_t ip = ::ntohl(sin->sin_addr.s_addr);
+        if ((ip >> 24) == 0 || ip == 0xFFFFFFFFu || (ip >> 24) >= 224) {
+            ::freeaddrinfo(res);
+            error = "the audio goes to one computer: type that computer's address, not a broadcast or multicast address";
+            return false;
+        }
+    }
     std::memcpy(addr_, res->ai_addr, std::min<std::size_t>(res->ai_addrlen, sizeof(addr_)));
     addrLen_ = static_cast<int>(res->ai_addrlen);
     ::freeaddrinfo(res);

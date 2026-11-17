@@ -46,7 +46,7 @@ bool slurp(const fs::path& p, std::size_t cap, std::string& out) {
 // The keys that describe THIS machine rather than a way of working: secrets, identity, the usage-reporting consent, and everything that decides what listens on the network.
 bool machineLocalKey(const std::string& k) {
     if (secretKeyName(k) || identityKeyName(k)) { return true; }
-    for (const char* n : {"telemetryEnabled", "webEnabled", "webBindAddress", "webPort", "catEnabled", "catBindAll", "catPort", "tciEnabled", "tciBindAll", "tciPort", "udpAudioEnabled", "udpAudioHost", "udpAudioPort"}) {
+    for (const char* n : {"telemetryEnabled", "webEnabled", "webBindAddress", "webPort", "catEnabled", "catBindAll", "catAllow", "catPort", "tciEnabled", "tciBindAll", "tciAllow", "tciPort", "udpAudioEnabled", "udpAudioHost", "udpAudioPort"}) {
         if (k == n) { return true; }
     }
     return false;

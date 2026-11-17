@@ -45,6 +45,12 @@ bool splitHostHeader(const std::string& value, std::string& host, std::string& p
 // True for a dotted IPv4 literal or a bracketed IPv6 literal.
 bool isIpLiteralHost(const std::string& host);
 
+// The names a Host header may carry besides literals and `localhost`: this computer's own name and `name.local` (lower-case; "" gives none).
+std::vector<std::string> guardMachineNames(const std::string& computerName);
+// Every DNS name the web page's Host rule accepts: this computer's names and the hosts of the owner's "Allowed web origins" list (entries that do not parse, and IP literals, give none).
+// The program interface (net/api_server.hpp) takes the same names, so that a request the page answers by one of them is not refused there.
+std::vector<std::string> guardHostNames(const std::string& computerName, const std::vector<std::string>& listedOrigins);
+
 GuardVerdict checkHostOrigin(const HostOriginPolicy& policy, const GuardRequest& req);
 
 // Builds the policy's origin lists from the owner's list (as given to the CORS model). Entries that do not parse are skipped; the CORS model

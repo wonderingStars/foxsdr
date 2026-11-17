@@ -111,6 +111,23 @@ void guardSetOrigins(HostOriginPolicy& policy, const std::vector<std::string>& l
     }
 }
 
+std::vector<std::string> guardMachineNames(const std::string& computerName) {
+    std::vector<std::string> out;
+    if (computerName.empty()) { return out; }
+    std::string n = lowerAscii(computerName);
+    out.push_back(n);
+    out.push_back(n + ".local");
+    return out;
+}
+
+std::vector<std::string> guardHostNames(const std::string& computerName, const std::vector<std::string>& listedOrigins) {
+    std::vector<std::string> out = guardMachineNames(computerName);
+    HostOriginPolicy p;
+    guardSetOrigins(p, listedOrigins);
+    for (const std::string& h : p.hostNames) { out.push_back(h); }
+    return out;
+}
+
 GuardVerdict checkHostOrigin(const HostOriginPolicy& policy, const GuardRequest& req) {
     // HOST.
     std::string host, hostPort;

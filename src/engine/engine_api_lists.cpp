@@ -1695,6 +1695,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         fact("cat.enabled", sc.cat.enabled ? "1" : "0", true);
         fact("cat.bindAll", sc.cat.bindAll ? "1" : "0", true);
         fact("cat.port", std::to_string(sc.cat.port), true);
+        fact("cat.allow", sc.cat.allow, true);
         const auto add = [&b](const char* name, const ServerHost::Listener& l, bool enabled, int configuredPort,
                               const ServerHost::Counters& live) {
             ApiListBlock::Server s;
@@ -1719,7 +1720,8 @@ void Engine::buildApiLists03(ApiListBlock& b) {
         fact("tci.listening", tl.running ? "1" : "0", true);
         fact("tci.boundPort", std::to_string(tl.running ? tl.boundPort : 0), true);
         fact("tci.refusal", tl.refusal, true);
-        fact("tci.scope", sc.tci.bindAll ? "all interfaces" : "this computer only", true);
+        fact("tci.allow", sc.tci.allow, true);
+        fact("tci.scope", sc.tci.bindAll ? "reachable only from the computers you listed (" + sc.tci.allow + "), without a password" : "this computer only", true);
         fact("udp.enabled", sc.udp.enabled ? "1" : "0", true);
         fact("udp.host", sc.udp.host, true);
         fact("udp.port", std::to_string(sc.udp.port), true);

@@ -74,7 +74,7 @@ const std::set<std::string>& engineWritten() {
         // ServerHost::store
         "webEnabled", "webBindAddress", "webPort", "webUsername", "webPasswordRecord", "catEnabled", "catBindAll",
         "webTlsEnabled", "webTlsCertThumbprint", "webListenersEnabled", "webListenerPasswordRecord", "webMaxListeners", "webListenerIdleSeconds", "webListenerSessionSeconds", "webListenersMayTune", "webChatEnabled",   // engine lane E1
-        "catPort", "tciEnabled", "tciBindAll", "tciPort", "udpAudioEnabled", "udpAudioHost", "udpAudioPort", "udpAudioRadio", "udpAudioPacketFrames",
+        "catPort", "catAllow", "tciEnabled", "tciBindAll", "tciAllow", "tciPort", "udpAudioEnabled", "udpAudioHost", "udpAudioPort", "udpAudioRadio", "udpAudioPacketFrames",
         // Engine::fillConfig
         "sourceKind", "soapyAntenna", "soapyArgs", "nativeArgs", "lookForNetworkUsrps", "biasTee", "converters",
         "airspy", "audioBufferMs", "audioBufferAutoMs", "ppmCorrection", "ppm", "autoGainByRadio",

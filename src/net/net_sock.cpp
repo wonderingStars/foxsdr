@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "net/net_sock.hpp"
 
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -305,6 +306,15 @@ Handle openUdp(bool allowBroadcast, std::string& error) {
         return kInvalid;
     }
     return h;
+}
+
+std::string computerName() {
+    if (!ensureStarted()) { return std::string(); }
+    char name[256] = {};
+    if (::gethostname(name, sizeof(name) - 1) != 0 || name[0] == '\0') { return std::string(); }
+    std::string n;
+    for (const char* c = name; *c != '\0'; ++c) { n.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(*c)))); }
+    return n;
 }
 
 Handle bindUdp(std::uint32_t ip, std::uint16_t port, std::string& error) {

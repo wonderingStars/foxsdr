@@ -214,6 +214,11 @@ struct S4Publisher::Impl {
              tr("Receive only. A logging or digital-mode program on this computer can read the frequency and mode and follow the receiver."));
         tick(v, "tci.all", tr("Reachable from other computers"), tciAll, [this, S](bool on) { serverConfig(S, tr("TCI interface"), tciBool("bindAll", on)); },
              tr("Off: only programs on this computer can connect."));
+        if (tciAll) {
+            // The protocol has no password: beyond this computer only the computers the person lists can connect.
+            field(v, "tci.allow", tr("Computers allowed to connect for TCI"), fact("tci.allow"),
+                  [this, S](const std::string& t) { serverConfig(S, tr("Computers allowed to connect for TCI"), tciText("allow", trim(t))); }, tr("Addresses such as 192.168.1.20, separated by commas"));
+        }
         field(v, "tci.port", tr("TCI port"), fact("tci.port"), [this, S](const std::string& t) {
             const auto p = parseWhole(t, 1024, 65535);
             if (!p) { refuseHere(S, tr("TCI port"), tr("The port is a whole number from 1024 to 65535.")); return; }
@@ -225,7 +230,7 @@ struct S4Publisher::Impl {
             v.push_back(rReadout(tr("TCI"), !refusal.empty() ? refusal : (listening ? tr("listening") + ", " + fact("tci.scope") : tr("starting"))));
             if (listening) { v.push_back(rReadout(tr("TCI clients"), fact("tci.clients"))); }
         }
-        if (tciAll) { v.push_back(rNote(tr("The TCI interface has no password. Anyone on your network can connect and read what you receive."), kWarn)); }
+        if (tciAll) { v.push_back(rNote(tr("Only the computers you list can connect. The TCI interface has no password: anyone using one of those addresses can listen and retune the radio."), kWarn)); }
 
         // ---- UDP audio
         v.push_back(rHeading(tr("Audio over UDP")));

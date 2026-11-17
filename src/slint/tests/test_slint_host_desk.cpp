@@ -89,6 +89,18 @@ void pathSearch() {
     touchExecutable(cwd / "foxsdr-desk-probe-tool");
     CHECK(findOnPath("foxsdr-desk-probe-tool", std::string(kSepStr) + b.string()).empty());
     fs::remove(cwd / "foxsdr-desk-probe-tool");
+    // L9: a RELATIVE entry is the working directory in disguise: never searched, whatever it is spelled ("." , a plain name, "./name", "../name"), while an absolute entry after it still is
+    const fs::path relDir = cwd / "foxsdr-desk-probe-rel";
+    fs::create_directories(relDir);
+    touchExecutable(relDir / "foxsdr-desk-probe-tool");
+    for (const char* rel : {".", "foxsdr-desk-probe-rel", "./foxsdr-desk-probe-rel", "../foxsdr-desk-probe-rel/.", "foxsdr-desk-probe-rel/../foxsdr-desk-probe-rel"}) {
+        const bool found = !findOnPath("foxsdr-desk-probe-tool", rel).empty();
+        if (found) { std::printf("      relative entry \"%s\" was searched\n", rel); }
+        CHECK(!found);
+        CHECK(findOnPath("foxsdr-desk-probe-tool", std::string(rel) + kSepStr + relDir.string()) == (relDir / "foxsdr-desk-probe-tool").string());   // the absolute one after it is found
+    }
+    CHECK(chooseClipboardTool("", "x11", ".", nullptr) == ClipboardTool::None);   // and the clipboard lookup uses the same rule
+    fs::remove_all(relDir);
 #if !defined(_WIN32)
     // a file that is not executable is not found
     std::ofstream((a / "plain-file").string()) << "x";

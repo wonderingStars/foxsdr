@@ -113,7 +113,7 @@ std::vector<std::string> pruneBackups(const std::filesystem::path& dir, std::siz
 // WHAT A BUNDLE MAY NOT DO (security reviews 1 and 2, M2 and R13; refined 2026-11-16 so that a person restoring their OWN backup on a new PC gets it all back).
 // A bundle is a file from someone else, so an import may not change where plugins come from, what this program listens on, or make it connect to another computer or open
 // a file at start. In config.json:
-//   * importLeftOutKeys(): never imported, this computer keeps its own: pluginCatalogueUrl, pluginSites, webBindAddress, catBindAll, tciBindAll, udpAudioHost (where
+//   * importLeftOutKeys(): never imported, this computer keeps its own: pluginCatalogueUrl, pluginSites, webBindAddress, catBindAll, catAllow, tciBindAll, tciAllow, udpAudioHost (where
 //     plugins come from and what it listens on) and rtlTcpAddr, plutoUri, iqFilePath (an address or a file to open at start).
 //   * importFilteredKeys(): sourceKind, soapyArgs, nativeArgs and radios are imported for what names a LOCAL device (a USB radio by driver and serial, a sound card, the
 //     signal generator) and left out for what names another computer or a file: a source kind of rtltcp, pluto or file; a saved radio, or a device-argument key, that

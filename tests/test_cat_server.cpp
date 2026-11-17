@@ -30,6 +30,7 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <random>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -923,7 +924,162 @@ void testStopIsIdempotentAndSafeWithNoClients() {
 
 }  // namespace
 
+// S4bS-cat: beyond this computer (bindAll) the CAT server needs a list of client addresses; without one it does not start, and a connection from an address that is not listed is
+// closed before a byte is read or sent. The wide bind is replaced by 127.0.0.1 through the test-only seam, so no firewall prompt can appear.
+void testBeyondThisComputerNeedsAList() {
+    resetStatus();
+    {   // no list = no start, no socket
+        CatServer server;
+        server.setSessionOpener(opener());
+        std::string error;
+        CHECK(!server.start(0, true, error));
+        CHECK(error.find("list the computers") != std::string::npos);
+        CHECK(!server.running() && server.boundPort() == 0);
+    }
+    {   // a list is not applied on loopback
+        CatServer server;
+        server.setSessionOpener(opener());
+        cascade::net::PeerAllow allow;
+        std::string why, error;
+        CHECK(cascade::net::PeerAllow::parse("10.9.8.7", allow, why));
+        CHECK(server.start(0, false, error, allow));
+        SockT c = connectTo(static_cast<int>(server.boundPort()));
+        CHECK(c != INVALID_SOCKET);
+        CHECK(sendRaw(c, "f\n"));
+        CHECK(readLines(c, 1) == "145000000\n");
+        closeClient(c);
+        server.stop();
+    }
+    {   // a list that does not name the client: closed at once, no byte, no session; a list that does: served
+        CatServer server;
+        server.setSessionOpener(opener());
+        server.setBindAddressForTest(0x7F000001u);
+        cascade::net::PeerAllow allow;
+        std::string why, error;
+        resetStatus();
+        CHECK(cascade::net::PeerAllow::parse("10.9.8.7, 192.168.1.0/24", allow, why));
+        CHECK(server.start(0, true, error, allow));
+        const int port = static_cast<int>(server.boundPort());
+        SockT bad = connectTo(port);
+        CHECK(bad != INVALID_SOCKET);
+        CHECK(sendRaw(bad, "f\n"));
+        CHECK(readLines(bad, 1, 1500).empty());
+        CHECK(waitFor(2000, [&] { return server.refusedPeer() >= 1; }));
+        CHECK(g_ledger.opened == 0);
+        closeClient(bad);
+        server.stop();
+        CHECK(cascade::net::PeerAllow::parse("127.0.0.0/8", allow, why));
+        CatServer ok;
+        ok.setSessionOpener(opener());
+        ok.setBindAddressForTest(0x7F000001u);
+        CHECK(ok.start(0, true, error, allow));
+        SockT good = connectTo(static_cast<int>(ok.boundPort()));
+        CHECK(good != INVALID_SOCKET);
+        CHECK(sendRaw(good, "f\n"));
+        CHECK(readLines(good, 1) == "145000000\n");
+        CHECK(ok.refusedPeer() == 0);
+        closeClient(good);
+        ok.stop();
+    }
+}
+
+// Item 3: a client that sends garbage, never reads, or reconnects for ever is bounded.
+void testGarbageIsAnsweredOrIgnoredAndNeverApplied() {
+    resetStatus();
+    CatServer server;
+    server.setSessionOpener(opener());
+    std::string error;
+    const int port = startOnFreePort(server, error);
+    if (port < 0) { std::printf("SKIP: no free port\n"); return; }
+    std::mt19937 rng(97531);
+    for (int round = 0; round < 40; ++round) {
+        SockT s = connectTo(port);
+        CHECK(s != INVALID_SOCKET);
+        if (s == INVALID_SOCKET) { break; }
+        std::string junk;
+        const std::size_t n = 1 + rng() % 600;
+        for (std::size_t i = 0; i < n; ++i) {
+            char ch = static_cast<char>(rng());
+            if (ch == 'T' || ch == 'S' || ch == 'F' || ch == 'M' || ch == 'V') { ch = 'x'; }   // random bytes that are NOT a set command: none may reach the engine
+            if (ch == 10 && rng() % 4 != 0) { ch = 'y'; }
+            junk.push_back(ch);
+        }
+        (void)sendRaw(s, junk + std::string(1, char(10)));
+        closeClient(s);
+    }
+    CHECK(server.running());
+    CHECK(waitFor(3000, [] { return closedNow() >= 40 - 4; }));
+    CHECK(takeSubmitted().empty());   // not one command reached the engine from garbage
+    SockT good = connectTo(port);
+    CHECK(good != INVALID_SOCKET);
+    CHECK(sendRaw(good, "f\n"));
+    CHECK(readLines(good, 1) == "145000000\n");   // and the server still answers
+    closeClient(good);
+    server.stop();
+}
+
+void testAClientThatNeverReadsIsDropped() {
+    resetStatus();
+    CatServer server;
+    server.setSessionOpener(opener());
+    std::string error;
+    const int port = startOnFreePort(server, error);
+    if (port < 0) { std::printf("SKIP: no free port\n"); return; }
+    SockT hog = connectTo(port);
+    CHECK(hog != INVALID_SOCKET);
+    // asks for the long answer over and over and never reads one byte
+    std::string many;
+    for (int i = 0; i < 400; ++i) { many += "\\dump_state\n"; }
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int i = 0; i < 400; ++i) { if (!sendRaw(hog, many)) { break; } }   // (stops when the server stops reading, i.e. when its own send is stuck)
+    CHECK(waitFor(20000, [&] { return server.clientCount() == 0; }));   // the send timeout (5 s) ends the connection
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("a client that never read was dropped after %lld ms\n", static_cast<long long>(ms));
+    CHECK(ms < 20000);
+    closeClient(hog);
+    SockT good = connectTo(port);   // its place is free again and the server serves the next one
+    CHECK(good != INVALID_SOCKET);
+    CHECK(sendRaw(good, "f\n"));
+    CHECK(readLines(good, 1) == "145000000\n");
+    closeClient(good);
+    server.stop();
+}
+
+void testReconnectingForEverIsBounded() {
+    resetStatus();
+    CatServer server;
+    server.setSessionOpener(opener());
+    std::string error;
+    const int port = startOnFreePort(server, error);
+    if (port < 0) { std::printf("SKIP: no free port\n"); return; }
+    // 300 connect-and-leave cycles, some holding a place for a moment: never more than the cap at once, and every session is closed again
+    std::vector<SockT> held;
+    int maxSeen = 0;
+    for (int i = 0; i < 300; ++i) {
+        SockT s = connectTo(port);
+        if (s == INVALID_SOCKET) { continue; }
+        if (i % 3 == 0) { (void)sendRaw(s, "f\n"); }
+        maxSeen = std::max(maxSeen, server.clientCount());
+        if (i % 7 == 0) { held.push_back(s); } else { closeClient(s); }
+        if (held.size() > 10) { closeClient(held.front()); held.erase(held.begin()); }
+    }
+    CHECK(maxSeen <= cascade::net::kMaxCatClients);
+    for (SockT s : held) { closeClient(s); }
+    CHECK(waitFor(8000, [&] { return server.clientCount() == 0; }));
+    CHECK(waitFor(3000, [] { std::lock_guard<std::mutex> lk(g_ledger.m); return g_ledger.opened == g_ledger.closed; }));   // every session that was opened was closed
+    SockT good = connectTo(port);
+    CHECK(good != INVALID_SOCKET);
+    CHECK(sendRaw(good, "f\n"));
+    CHECK(readLines(good, 1) == "145000000\n");
+    closeClient(good);
+    server.stop();
+}
+
 int main() {
+    testBeyondThisComputerNeedsAList();
+    testGarbageIsAnsweredOrIgnoredAndNeverApplied();
+    testAClientThatNeverReadsIsDropped();
+    testReconnectingForEverIsBounded();
     testRefusesToStartWithoutAProvider();
     testRoundTripOverARealSocket();
     testCommandSplitAcrossSegmentsIsReassembled();

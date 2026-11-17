@@ -18,6 +18,7 @@ std::optional<int> parseWhole(const std::string& text, int lo, int hi);
 // {"tci":{"<member>":<value>}} and {"udp":{...}}: the one-member JSON texts the server-configuration operation takes (the engine leaves every other member alone).
 std::string tciBool(const char* member, bool value);
 std::string tciPort(int port);
+std::string tciText(const char* member, const std::string& value);
 std::string udpBool(const char* member, bool value);
 std::string udpInt(const char* member, int value);
 std::string udpText(const char* member, const std::string& value);

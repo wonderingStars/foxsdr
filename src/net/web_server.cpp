@@ -42,6 +42,8 @@
 #endif
 #include <httplib.h>
 #include "core/font_blobs.hpp"
+#include "net/net_sock.hpp"
+#include "net/web_conn_guard.hpp"
 
 namespace cascade::net {
 namespace {
@@ -3395,13 +3397,8 @@ class WebServer::Impl {
 public:
     Impl() : clock_([]() { return static_cast<std::int64_t>(std::time(nullptr)); }) {
         // R1: the names a Host header may carry besides literals and "localhost": this computer's own name.
-        char name[256] = {};
-        if (::gethostname(name, sizeof(name) - 1) == 0 && name[0] != '\0') {
-            std::string n;
-            for (const char* c = name; *c != '\0'; ++c) { n.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(*c)))); }
-            guard_.machineNames.push_back(n);
-            guard_.machineNames.push_back(n + ".local");
-        }
+        // (the same names the program interface accepts: net/web_guard.hpp guardHostNames)
+        guard_.machineNames = guardMachineNames(sock::computerName());
     }
 
     ~Impl() { stop(); }
@@ -3806,6 +3803,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
     // cache entry and a cached /api/status is a stale readout.
     // wire-c begin: an allowed cross-origin PREFLIGHT is answered before routing (204 + the model's headers); nothing else is stopped here
     svr.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
+        GuardedServer::headComplete();   // R4: the head of this request is complete: the connection is no longer counted as pending
         // R1: the Host and Origin of EVERY request are checked before any route runs (DNS rebinding and cross-site posts).
         {
             GuardRequest g;
@@ -4750,7 +4748,8 @@ bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {
         }
     }
 
-    svr_ = std::make_unique<httplib::Server>();
+    // R4 (security review 2): a plain httplib::Server with a total time for reading one request and a per-address cap on connections that have shown no request head (net/web_conn_guard.hpp).
+    svr_ = std::make_unique<GuardedServer>();
     if (cfg.listenersEnabled) {
         // Every listener may hold an audio stream and a live-update stream, each parking a worker: size the pool for them.
         const std::size_t cap = static_cast<std::size_t>(std::max(cfg.maxListeners, 1));

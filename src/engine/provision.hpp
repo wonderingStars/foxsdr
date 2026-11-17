@@ -57,6 +57,7 @@ struct ProvisionRequest {
     std::string passwordFile;  // the NAME of the file ("-": standard input); empty: no password asked for
     bool catEnable = false;
     bool catBindAll = false;
+    std::string catAllow;      // the client addresses that may connect when catBindAll (net/peer_allow.hpp); without them the listener does not start
     bool any() const { return webEnable || catEnable; }
 };
 

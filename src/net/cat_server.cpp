@@ -137,8 +137,13 @@ void CatServer::setSessionOpener(CatSessionOpener fn) { opener_ = std::move(fn);
 
 void CatServer::setUsageCallback(std::function<void()> fn) { usageCallback_ = std::move(fn); }
 
-bool CatServer::start(std::uint16_t port, bool bindAll, std::string& error) {
+bool CatServer::start(std::uint16_t port, bool bindAll, std::string& error, const PeerAllow& allow) {
     error.clear();
+    if (bindAll && allow.empty()) {
+        // The protocol has no password: beyond this computer only to computers the person listed, never to every address.
+        error = "to let other computers connect to the CAT interface, list the computers that may: type the address of each one";
+        return false;
+    }
     if (running_.load(std::memory_order_relaxed)) {
         error = "the CAT server is already running";
         return false;
@@ -206,7 +211,7 @@ bool CatServer::start(std::uint16_t port, bool bindAll, std::string& error) {
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = ::htons(port);
-    addr.sin_addr.s_addr = bindAll ? ::htonl(INADDR_ANY) : ::htonl(INADDR_LOOPBACK);
+    addr.sin_addr.s_addr = bindAll ? (testBind_ != 0 ? ::htonl(testBind_) : ::htonl(INADDR_ANY)) : ::htonl(INADDR_LOOPBACK);
 
     if (::bind(
 #if defined(_WIN32)
@@ -255,6 +260,8 @@ bool CatServer::start(std::uint16_t port, bool bindAll, std::string& error) {
     }
 
     listener_ = s;
+    allow_ = bindAll ? allow : PeerAllow();
+    listed_ = bindAll;
     boundPort_.store(actualPort, std::memory_order_relaxed);
     stopping_.store(false, std::memory_order_relaxed);
     running_.store(true, std::memory_order_relaxed);
@@ -337,6 +344,12 @@ void CatServer::acceptLoop() {
         beat.beat("accepted");
         if (c == kInvalidSock) {
             if (stopping_.load(std::memory_order_relaxed)) break;
+            continue;
+        }
+        if (listed_ && !allow_.allows(::ntohl(peer.sin_addr.s_addr))) {
+            // Not a listed computer: closed before a byte is read or sent.
+            refusedPeer_.fetch_add(1, std::memory_order_relaxed);
+            closeSock(c);
             continue;
         }
         if (clients_.load(std::memory_order_relaxed) >= kMaxCatClients) {
