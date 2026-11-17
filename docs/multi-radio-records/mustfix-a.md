@@ -74,3 +74,12 @@ The "Full span" key in vi / ru / et / el (no probe build); the installer's Start
 | Start-menu rule, real installer | Inno not compilable here | mouse drive / release |
 | The erase sentence on the Usage page | new wording, not in the approved text | owner |
 | ELAD, RSPduo dual tuner | no row drawn | window lane after the engine rows |
+
+## RESULTS (final build at the commit before this line, Release, hidden desktop `FoxSDRMFA`, `-j2`)
+
+* Crash guard: base build `repro.bat 30` (early-close drive): 1 fault (run 3, exit -1073741819); fixed build `repro.bat 60` alone: 60 of 60 `exit=0`.
+* `ctest -L slint -j2`: `100% tests passed out of 112` (first run on the pre-final build had 2 reds, both mine and fixed: `slint_drive_ledger` stale generated doc, regenerated; `test_slint_clip_probe` two line numbers in `tools/slint-clip-explained.tsv` moved by edits).
+* Headless slice (`test_error_paths`, `errpath_gate_selftest`, `test_i18n`, `test_typed_number`, `test_usage_diag_window`, `test_window_handover`, `test_diagnostics*`, `test_slint_drive_run`): `100% tests passed out of 13`. The stamp tests ran after the rebuild at this commit. Error-path gate: `3438 sites ... 459 PENDING` (pin 459, unchanged).
+* Drive slice (`slint_drive_(system|mapj|wg2-xl|wg3|s5|lanek|patch)`): `100% tests passed out of 40`; on the pre-final build the wider slice (system, mapj, wg2, s5, lanel, lanek, patch, map-, wg3, gaps, signal) was 96 of 97, the one red `slint_drive_wg2-xl-fit` being this lane's script (fixed to drive the three controls; passes alone).
+* NOT RUN: the full headless gate and the full GUI gate (by the brief, the merge agent has the machine), the clip sweep, the other 240 drive scripts, any real-pointer pass.
+* Real config.json sha256 `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` before and after. Nothing left running; nothing pushed.
