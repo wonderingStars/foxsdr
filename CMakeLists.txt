@@ -1209,9 +1209,10 @@ if(WIN32)
     # winmm: midiIn*. setupapi + hid: HID enumeration and capabilities. (All three ship with Windows and its SDK.)
     target_sources(cascade_input PRIVATE src/input/midi_win.cpp src/input/hid_win.cpp)
     target_link_libraries(cascade_input PUBLIC winmm setupapi hid)
+    # The probe lists Windows devices through midi_win.hpp / hid_win.hpp (both compile to nothing off Windows): it is built on Windows only.
+    add_executable(cascade_input_probe src/input/input_probe.cpp)
+    target_link_libraries(cascade_input_probe PRIVATE cascade_input cascade_flags)
 endif()
-add_executable(cascade_input_probe src/input/input_probe.cpp)
-target_link_libraries(cascade_input_probe PRIVATE cascade_input cascade_flags)
 
 enable_testing()
 file(GLOB CASCADE_INPUT_TESTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/input/test_*.cpp")
