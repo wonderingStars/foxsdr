@@ -2733,6 +2733,12 @@ void macroOps(AppWindow& a) {
     CHECK(refused(A::apply(a, text(FOXAPP_OP_CABRILLO_HEADER, "not json")), FOXAPI_BAD_ARGUMENT));
     CHECK(refused(A::apply(a, text(FOXAPP_OP_CABRILLO_EXPORT, "")), FOXAPI_BAD_ARGUMENT));
     CHECK(refused(A::apply(a, text(FOXAPP_OP_ADIF_EXPORT, "")), FOXAPI_BAD_ARGUMENT));
+    // the antenna rotator, the listening (SWL) log and the macro editor (screen lane S4b; engine/s4b_servers.cpp, s4b_swl.cpp, s4b_macro_edit.cpp; the behaviour is tests/test_engine_api_s4b_rotator.cpp's,
+    // _swl.cpp's and _macros.cpp's): added at engine merge 9 because the lane's own gate never ran this test. Each answers a text that is not JSON with a refusal that changes nothing.
+    for (const std::uint32_t o : {FOXAPP_OP_ROTATOR, FOXAPP_OP_SWL, FOXAPP_OP_MACRO_EDIT}) {
+        covering(o);
+        CHECK(refused(A::apply(a, text(o, "not json")), FOXAPI_BAD_ARGUMENT));
+    }
     covering(FOXAPP_OP_PLUGIN_OPEN_CONFIRM);   // (the held request, the stand-in opener and the facts are tests/test_engine_api_wire_c_open.cpp's)
     CHECK(refused(A::apply(a, text(FOXAPP_OP_PLUGIN_OPEN_CONFIRM, "no-separator")), FOXAPI_BAD_ARGUMENT));
     covering(FOXAPP_OP_STORE_HELPER_CONSENT);   // (the install gate and the facts are tests/test_engine_api_wire_c_store.cpp's)
