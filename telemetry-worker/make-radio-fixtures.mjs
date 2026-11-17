@@ -222,8 +222,8 @@ refuse('refuse-recovery-phase-unknown', 'a recovery phase that is not one of the
 // ---- the installer's report (contract section 13) ----------------------------------------------------------------------------
 const inst = (body, over = {}) => ({ schema: 2, kind: 'install_outcome', messageId: '0123456789abcdef', t: 0, body: { outcome: 'failed', appVersion: '0.99.109', windows: '10.0.22631', ...body }, ...over });
 valid('valid-install-outcome-failed', 'the installer began copying and did not finish: no install id (the program never ran), a random message id, three words', inst({}));
-valid('valid-install-outcome-cancelled', 'the person cancelled Setup', inst({ outcome: 'cancelled' }));
-valid('valid-install-outcome-blocked', 'Setup stopped before copying anything', inst({ outcome: 'blocked', windows: '6.1.7601' }));
+valid('valid-install-outcome-cancelled', 'the person cancelled Setup', inst({ outcome: 'cancelled' }, { messageId: '0123456789abcde1' }));
+valid('valid-install-outcome-blocked', 'Setup stopped before copying anything', inst({ outcome: 'blocked', windows: '6.1.7601' }, { messageId: '0123456789abcde2' }));
 refuse('refuse-install-outcome-succeeded', 'a successful install is never reported (the first run\'s usage report is its trace)', 'bad-field', inst({ outcome: 'succeeded' }));
 refuse('refuse-install-outcome-with-install-id', 'the installer has no install id; a message that carries one is refused', 'bad-field', inst({}, { installId: INSTALL }));
 refuse('refuse-install-outcome-with-session-id', 'nor a session id', 'bad-field', inst({}, { sessionId: SESSION }));

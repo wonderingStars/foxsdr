@@ -6,7 +6,7 @@
   "request": {
     "schema": 2,
     "kind": "install_outcome",
-    "messageId": "0123456789abcdef",
+    "messageId": "0123456789abcde1",
     "t": 0,
     "body": {
       "outcome": "cancelled",

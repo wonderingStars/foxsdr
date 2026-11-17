@@ -169,6 +169,12 @@ Event openStart(const RadioIdentity& r) {
 
 // Asks the Worker's own validator (node) about every message in `msgs`. Returns the number refused; -1 when node is not available.
 int validateWithWorker(const std::vector<json>& msgs, std::vector<std::string>* verdicts = nullptr) {
+    // FOXSDR_DUMP_APP_MESSAGES=<file>: every message handed to the Worker's validator is also appended to that file, one JSON message a line. The website's
+    // repository keeps the result as testdata/app-messages.jsonl and holds its own validators to it (must-fix lane E: what the application sends is what the site takes).
+    if (const char* dump = std::getenv("FOXSDR_DUMP_APP_MESSAGES"); dump != nullptr && *dump != '\0') {
+        std::ofstream df(dump, std::ios::binary | std::ios::app);
+        for (const json& m : msgs) { df << m.dump(-1, ' ', false, json::error_handler_t::replace) << "\n"; }
+    }
     const std::string node = CASCADE_NODE_PATH;
     if (node.empty()) { return -1; }
     Temp t("validate");
