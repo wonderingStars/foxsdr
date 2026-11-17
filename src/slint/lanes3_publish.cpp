@@ -310,7 +310,7 @@ struct LaneS3Publisher::Impl {
         v.push_back(rHeading(tr("Replay buffer")));
         field(v, "p.replay", tr("Audio kept in memory (seconds, 0 = none)"), rpNow, tr("0 to 120. 96 kB a second for each radio. An audio recording that starts begins with this much of what was just heard."));
         v.push_back(rReadout(tr("It costs"), replayCost(numOf(dv("p.replay", rpNow)), 48000.0)));
-        { const std::string rp = fact("radio." + rn() + ".record.replay"); if (!rp.empty()) { v.push_back(rReadout(tr("Held now"), rp)); } }
+        { const std::string rp = fact("radio." + rn() + ".record.replay"); const std::string held = replayHeldText(rp); if (!held.empty()) { v.push_back(rReadout(tr("Held now"), held)); } }
         key(v, "p.apply", tr("Keep this much audio"), [this] {
             double sec = 0; std::string e;
             if (!parseReplaySeconds(dv("p.replay", fact("wirec.rec.replay_s")), 120.0, sec, e)) { refuseHere(kRecord, tr("Keep this much audio"), e); return; }

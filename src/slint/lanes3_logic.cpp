@@ -185,6 +185,29 @@ std::string replayCost(double seconds, double audioRateHz) {
     return b;
 }
 
+std::string replayHeldText(const std::string& fact) {
+    // The engine's fact is "seconds=5;bytes=480000;max=11520000"; a person reads "5 s of audio held (0.5 MB)".
+    double seconds = -1.0, bytes = -1.0;
+    std::size_t at = 0;
+    while (at < fact.size()) {
+        std::size_t end = fact.find(';', at);
+        if (end == std::string::npos) { end = fact.size(); }
+        const std::string part = fact.substr(at, end - at);
+        const std::size_t eq = part.find('=');
+        if (eq != std::string::npos) {
+            const std::string k = part.substr(0, eq);
+            const double v = std::atof(part.c_str() + eq + 1);
+            if (k == "seconds") { seconds = v; } else if (k == "bytes") { bytes = v; }
+        }
+        at = end + 1;
+    }
+    if (seconds < 0.0 || bytes < 0.0) { return std::string(); }
+    if (!(seconds > 0.0)) { return tr("nothing held"); }
+    char b[160];
+    std::snprintf(b, sizeof(b), tr("%s s of audio held (%.1f MB)").c_str(), numberText(seconds).c_str(), bytes / 1e6);
+    return b;
+}
+
 Built replayJson(const std::string& secondsText, double maxSeconds) {
     Built b;
     double s = 0.0;
