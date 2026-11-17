@@ -146,7 +146,7 @@ export component MainWindow inherits Window {
     // whatever preferred-height said (docs 6.36); an explicit size opens as asked, so the size is a pair of properties:
     // the host mirrors the real window size into them every tick (so maximise, restore and the drag-resize edges
     // re-lay the screen) and the render tests set them per frame. 1600 x 900 opens: the sheet is 1440 wide, but its
-    // strip does not fit 1440 by its own numbers. The inventory minimum of 624 x 400 is held on the drag-resize edges.
+    // strip does not fit 1440 by its own numbers. The smallest size the drag-resize edges allow is 1480 x 560 (host_logic.hpp kMinWindowW / kMinWindowH: where the strip, the spectrum toolbar and the rail all fit).
     in-out property <length> win-w: 1600px;
     in-out property <length> win-h: 900px;
     width: win-w;
@@ -637,7 +637,7 @@ export component MainWindow inherits Window {
                                 lines-text: root.lines-text; tail-note: root.tail-note; cost-note: root.cost-note; stop-all-label: root.stop-all-label; empty-entries-text: root.empty-entries-text;
                                 refusal: root.refusal; stale: root.stale; details: root.details; url: root.catalogue-url; }
                             if root.bank-index != 1 : VerticalLayout { spacing: 0px;
-                                for s[i] in root.sections : Section { name: s.name; chip: s.chip; tone: s.tone; open: s.open; first: i == 0; show-dot: s.show-dot; dot: s.dot; tooltip: root.bank-index == 2 && i == 0 ? @tr("Opens the bench oscilloscope: the demodulated audio on a\nten-by-eight graticule, its spectrum, and the channel I/Q as\ntwo traces and as a vector display. The time base, the\nattenuator and the input selector are on the page itself.") : ""; clicked => { root.section-clicked(i); }
+                                for s[i] in root.sections : Section { hidden: s.name == ""; name: s.name; chip: s.chip; tone: s.tone; open: s.open; first: i == 0; show-dot: s.show-dot; dot: s.dot; tooltip: root.bank-index == 2 && i == 0 ? @tr("Opens the bench oscilloscope: the demodulated audio on a\nten-by-eight graticule, its spectrum, and the channel I/Q as\ntwo traces and as a vector display. The time base, the\nattenuator and the input selector are on the page itself.") : ""; clicked => { root.section-clicked(i); }
                                     // the Radio section's open body (the sheet's); the other bodies are the banks of phase 3
                                     VerticalLayout { spacing: ((root.bank-index == 0 && i != 0 && i != 5) || (root.bank-index == 4 && i != 9) || (root.bank-index == 2 && i != 0) || root.bank-index == 3) ? 10px : 0px;
                                         // the EXTEND bank's bodies (extend_bank.slint): 0 Web access, 1 CAT

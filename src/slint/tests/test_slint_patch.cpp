@@ -422,7 +422,7 @@ int main() {
         auto m = ui->get_m_patch();
         auto info = m.info;
         info.runnable = false;
-        info.verdict = "This patch cannot run yet.";
+        info.verdict = "This patch cannot run.";
         info.level_line = "";
         info.plan_line = "";
         m.info = info;
@@ -1225,7 +1225,7 @@ int main() {
         // SINK (text), DISPLAY: the help sentence, dim, wrapped
         f = setKind(5, [](InspectorModel& m) { m.audio_sink = false; m.help = "Shows the lines from every decoder wired to it, and sends them to the Decoder output window."; });
         CHECK(f.countNear(IX + 8, by, IX + 182, by + 60, dim, 40) > 60);
-        f = setKind(4, [](InspectorModel& m) { m.kind_caption = "DISPLAY"; m.help = "This node has nothing to set yet."; });
+        f = setKind(4, [](InspectorModel& m) { m.kind_caption = "DISPLAY"; m.help = "This node has nothing to set."; });
         CHECK(f.countNear(IX + 8, by, IX + 182, by + 40, dim, 40) > 30);
         f = setKind(0, [](InspectorModel& m) { m.kind_caption = "RADIO"; m.name = "Radio"; m.audio_sink = true; });
     }

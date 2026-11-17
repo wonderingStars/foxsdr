@@ -24,7 +24,7 @@ using nlohmann::json;
 // The first-run setup's choice labels and starter titles come from core/sys_first_run.cpp as plain text; this list is how the string tables learn them (tools/i18n_keys.py reads FOX_TR_NOOP).
 const std::vector<const char*>& wizardStrings() {
     static const std::vector<const char*> v = {
-        FOX_TR_NOOP("I have no radio yet (try the built-in test signal)"), FOX_TR_NOOP("RTL-SDR dongle"), FOX_TR_NOOP("Airspy R2 / Mini"), FOX_TR_NOOP("Airspy HF+"), FOX_TR_NOOP("SDRplay RSP"),
+        FOX_TR_NOOP("I have no radio (try the built-in test signal)"), FOX_TR_NOOP("RTL-SDR dongle"), FOX_TR_NOOP("Airspy R2 / Mini"), FOX_TR_NOOP("Airspy HF+"), FOX_TR_NOOP("SDRplay RSP"),
         FOX_TR_NOOP("HackRF"), FOX_TR_NOOP("RX888 mk2"), FOX_TR_NOOP("Mirics MSi2500"), FOX_TR_NOOP("ADALM-Pluto"), FOX_TR_NOOP("A recorded I/Q file"), FOX_TR_NOOP("A sound card input"),
         FOX_TR_NOOP("FM broadcast band"), FOX_TR_NOOP("Airband emergency channel"), FOX_TR_NOOP("Marine VHF channel 16"), FOX_TR_NOOP("PMR446 channel 1"), FOX_TR_NOOP("2 m amateur FM"),
         FOX_TR_NOOP("Time signals (WWV)"), FOX_TR_NOOP("Shortwave broadcast, 49 m"), FOX_TR_NOOP("Amateur HF")};
@@ -36,6 +36,8 @@ Row rHeading(const std::string& label) { Row r; r.kind = kHeading; r.label = lab
 Row rNote(const std::string& text, int tone) { Row r; r.kind = kNote; r.label = text; r.tone = tone; return r; }
 Row rUnproven() { return rNote(cascade::i18n::tr("Not yet proved on a real radio."), kWarn); }
 Row rKey(const std::string& id, const std::string& label, bool enabled, const std::string& tip, bool on) { Row r; r.kind = kKey; r.id = id; r.label = label; r.enabled = enabled; r.note = tip; r.on = on; return r; }
+Row rKeyWhy(const std::string& id, const std::string& label, bool enabled, const std::string& why, const std::string& tip, bool on) { Row r = rKey(id, label, enabled, tip, on); if (!enabled) { r.value = why; } return r; }
+Row rTickWhy(const std::string& id, const std::string& label, bool on, bool enabled, const std::string& why, const std::string& tip) { Row r = rTick(id, label, on, enabled, tip); if (!enabled) { r.value = why; } return r; }
 Row rTick(const std::string& id, const std::string& label, bool on, bool enabled, const std::string& tip) { Row r; r.kind = kTick; r.id = id; r.label = label; r.on = on; r.enabled = enabled; r.note = tip; return r; }
 Row rChoice(const std::string& id, const std::string& label, const std::vector<std::string>& options, int pick, bool enabled, const std::string& tip) {
     Row r; r.kind = kChoice; r.id = id; r.label = label; r.options = options; r.pick = pick; r.enabled = enabled; r.note = tip; return r;
@@ -208,7 +210,7 @@ bool SettingsKeeper::readCurrent(std::vector<sys::BundleFile>& out, std::string&
         if (!slurpFile(d_.settings / name, sys::kBundleMaxFileBytes, bytes)) { continue; }
         out.push_back({name, std::move(bytes)});
     }
-    if (out.empty()) { err = "there is no settings file yet"; return false; }
+    if (out.empty()) { err = "there is no settings file"; return false; }
     return true;
 }
 

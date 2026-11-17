@@ -80,6 +80,8 @@ struct Store {
 std::vector<double> parsePriorityList(const std::string& text);
 std::string priorityText(const std::vector<double>& hz);
 // "30" -> 30 s, clamped to 5..600; nullopt for text that is no number
+// The sentence for a typed number refused because a comma followed by exactly three digits could be a decimal point or a thousands mark (owner decision 73); "" for any other text.
+std::string commaSentence(const std::string& text);
 std::optional<double> parsePriorityEvery(const std::string& text);
 // The wire text of the list for FOXAPP_OP_SCANNER_EXTRAS 0: Hz values separated by ';' ("162550000;121500000"; empty for an empty list).
 std::string priorityWireText(const std::vector<double>& hz);

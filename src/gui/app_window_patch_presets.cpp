@@ -240,7 +240,7 @@ void AppWindow::drawPatchPresetsBody() {
     }
     if (list.empty() && !hasPrevious) {
         ImGui::PushStyleColor(ImGuiCol_Text, th::vec(th::kInkMuted));
-        ImGui::TextWrapped("%s", tr("No presets yet. SAVE AS... keeps the patch on the canvas under a name."));
+        ImGui::TextWrapped("%s", tr("No presets. SAVE AS... keeps the patch on the canvas under a name."));
         ImGui::PopStyleColor();
     }
     ImGui::EndChild();

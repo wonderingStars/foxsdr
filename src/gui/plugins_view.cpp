@@ -274,7 +274,7 @@ std::string fittedVerdictLine(bool receiverRunning, const std::string& directory
     // WHERE THE SCAN LOOKED, never truncated to nothing: "my plugin does not appear" is
     // sometimes answered by the module having been dropped into the other one of the two
     // directories PluginHost chooses between.
-    out += directory.empty() ? std::string(tr("No directory has been scanned yet."))
+    out += directory.empty() ? std::string(tr("No directory has been scanned."))
                              : cascade::core::formatText(tr("read from %s"), directory.c_str());
     return out;
 }

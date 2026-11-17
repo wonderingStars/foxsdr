@@ -95,7 +95,7 @@ inline const char* problemText(Problem p) {
             return FOX_TR_NOOP("another radio in this patch already uses that device - one device, one radio");
         case Problem::RadioFailed: return FOX_TR_NOOP("the device would not open");
         case Problem::NoTracks: return FOX_TR_NOOP("this decoder puts nothing on a map");
-        case Problem::NodeNotRun: return FOX_TR_NOOP("this part is saved with the patch but this build does not run it yet");
+        case Problem::NodeNotRun: return FOX_TR_NOOP("this part is saved with the patch but this build does not run it");
     }
     return FOX_TR_NOOP("this cannot run");
 }

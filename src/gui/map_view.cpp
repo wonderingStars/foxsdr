@@ -2688,7 +2688,7 @@ void MapView::drawSatellitePanel(SatelliteDeck& deck,
                "first. Set one on the left.");
     } else if (coverage == nullptr || coverage->empty()) {
         covNote =
-            tr("Nothing plotted yet. The ring records how far out a target has been PLOTTED "
+            tr("Nothing plotted. The ring records how far out a target has been PLOTTED "
                "on each of 72 bearings - from every plugin, and from computed positions as "
                "well as received ones.");
     } else {

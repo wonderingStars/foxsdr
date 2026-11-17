@@ -77,6 +77,10 @@ std::vector<std::pair<std::string, std::string>> flattenJson(const std::string& 
 std::string jsonString(const std::string& text, const char* key);
 double jsonNumber(const std::string& text, const char* key, double def);
 bool jsonBool(const std::string& text, const char* key, bool def);
+// A flattened result line made readable (review M1): the engine's own key ("retention_s", "too_old", "max_range_km") becomes a plain label with its unit
+// ("Kept for (seconds)", "Refused as too old", "Furthest range (km)"); a key this table does not know is humanised (underscores to spaces, a unit suffix in
+// brackets), never shown raw; a true / false value becomes Yes / No. An empty key (a text that is not JSON) is left as it is.
+std::pair<std::string, std::string> plainFactLine(const std::string& key, const std::string& value);
 // The word of an engine status for a refusal line: "Refused", "Nothing changed", "Not found", ... plus the engine's own sentence when there is one.
 std::string refusalText(int status, const std::string& engineMessage);
 bool statusIsRefusal(int status);   // not OK and not NO_CHANGE

@@ -230,6 +230,30 @@ int main() {
         CHECK(sawBw && sawList && sawDeep && sawBig && sawValid);
         CHECK(flattenJson(R"({"a":1,"b":2,"c":3})", 2).size() == 2);        // capped
         CHECK(flattenJson("", 5).empty());
+        // LOOK REVIEW M1: the engine's own keys are never shown. Every key of the Track store and the Coverage grid gets a plain label with its unit; true / false read Yes / No.
+        {
+            const auto p = [](const char* k, const char* v) { return plainFactLine(k, v); };
+            CHECK(p("retention_s", "21600") == std::make_pair(std::string("Kept for (seconds)"), std::string("21600")));
+            CHECK(p("max_range_km", "0") == std::make_pair(std::string("Furthest range (km)"), std::string("0")));
+            CHECK(p("too_old", "0").first == "Refused as too old" && p("evicted", "0").first == "Dropped to make room" && p("bad_input", "0").first == "Refused as invalid");
+            CHECK(p("enabled", "false") == std::make_pair(std::string("Switched on"), std::string("No")) && p("enabled", "true").second == "Yes");
+            CHECK(p("samples_in", "5").first == "Samples received" && p("clients_accepted", "1").first == "Programs connected");
+            CHECK(p("something_new_ms", "3").first == "Something new (ms)");            // an unknown key is humanised, never shown raw
+            CHECK(p("range_s", "1").first == "Range (seconds)" && p("a_b_km", "1").first == "A b (km)");
+            CHECK(p("tracks[1].alt_m", "9").first.find('_') == std::string::npos);     // a nested key too
+            CHECK(p("", "plain text") == std::make_pair(std::string(), std::string("plain text")));   // text that is not JSON is left alone
+            for (const char* k : {"added", "enabled", "evicted", "refused", "replaced", "retention_s", "too_old", "tracks", "bad_input", "cells", "future", "max_range_km", "stale", "too_far"}) {
+                CHECK(p(k, "1").first != k && p(k, "1").first.find('_') == std::string::npos);
+            }
+        }
+        // LOOK REVIEW M4: a dimmed key says why; an enabled one says nothing.
+        {
+            const Row off = foxsdr::slintlanek::rKeyWhy("x", "Go", false, "Type it first.");
+            const Row on = foxsdr::slintlanek::rKeyWhy("x", "Go", true, "Type it first.");
+            CHECK(off.value == "Type it first." && !off.enabled && on.value.empty() && on.enabled);
+            const Row tk = foxsdr::slintlanek::rTickWhy("t", "Show", false, false, "Load a mask first.");
+            CHECK(tk.value == "Load a mask first.");
+        }
         const auto t = flattenJson("plain words", 5);
         CHECK(t.size() == 1 && t[0].second == "plain words");
         CHECK(flattenJson(std::string(1000, 'x'), 5)[0].second.size() == 300);   // a long non-JSON text is cut
@@ -256,7 +280,7 @@ int main() {
         CHECK(neededStateWords(rows[0]).find("working") == std::string::npos && neededStateWords(rows[0]).find("Working") == std::string::npos);
         CHECK(neededStateWords(rows[1]) == "Found and working");                     // only the loaded FTDI check may say so
         CHECK(neededStateWords(rows[2]) == "Cannot be checked from here");
-        CHECK(!rows[3].checked && neededStateWords(rows[3]) == "Not checked yet");   // check: null
+        CHECK(!rows[3].checked && neededStateWords(rows[3]) == "Not checked");   // check: null
         CHECK(neededStateTone(rows[0]) == foxsdr::slintlanek::kDim);                 // not drawn in the good colour
         CHECK(neededStateTone(rows[1]) == foxsdr::slintlanek::kGood);
         CHECK(neededStateTone(rows[2]) == foxsdr::slintlanek::kDim && neededStateTone(rows[3]) == foxsdr::slintlanek::kDim);
@@ -267,7 +291,7 @@ int main() {
         for (const char* s : states) { r.state = s; r.depth = ""; words.push_back(neededStateWords(r)); }
         for (std::size_t i = 0; i < words.size(); ++i) { CHECK(!words[i].empty()); for (std::size_t k = i + 1; k < words.size(); ++k) { CHECK(words[i] != words[k]); } }   // seven different words
         r.state = "not-found"; CHECK(neededStateTone(r) == foxsdr::slintlanek::kWarn);
-        r.state = "something-new"; CHECK(neededStateWords(r) == "Not checked yet");   // an unknown word is never read as good
+        r.state = "something-new"; CHECK(neededStateWords(r) == "Not checked");   // an unknown word is never read as good
 
         CHECK(neededTakesFile(rows[0]) && !neededTakesFile(rows[1]) && !neededTakesFile(rows[2]));   // the FTDI installer takes no file; a running program none
 
@@ -275,7 +299,7 @@ int main() {
         neededRows(rows[0], "C:/dl/G39DDCAPI.dll", out);
         CHECK(hasRow(out, foxsdr::slintlanek::kKey, "Check again: WiNRADiO G39DDC driver") && hasRow(out, foxsdr::slintlanek::kKey, "Check this file: WiNRADiO G39DDC driver") && hasRow(out, foxsdr::slintlanek::kField, "Path of the file you downloaded: WiNRADiO G39DDC driver"));
         CHECK(valueOf(out, "State") == "Found (not test-loaded)");
-        CHECK(valueOf(out, "Where to get it") == "from its maker (no address is known here)" || valueOf(out, "Where to get it") == "WiNRADiO");   // no address invented
+        CHECK(valueOf(out, "Where to get it") == "from its maker" || valueOf(out, "Where to get it") == "WiNRADiO");   // no address invented
         std::vector<Row> o1;
         neededRows(rows[1], "", o1);
         CHECK(!hasRow(o1, foxsdr::slintlanek::kKey, "Check this file: FTDI D2XX driver") && hasRow(o1, foxsdr::slintlanek::kKey, "Check again: FTDI D2XX driver"));                 // an installer: no file to choose
@@ -283,7 +307,7 @@ int main() {
         CHECK(valueOf(o1, "Where to get it") == "https://ftdichip.com");                 // a verified address, as text
         std::vector<Row> o2;
         neededRows(rows[2], "", o2);
-        CHECK(valueOf(o2, "Where to get it") == "https://example.invalid/sdrconnect (unverified)");   // an unverified address is marked
+        CHECK(valueOf(o2, "Where to get it") == "SDRplay");   // an address nobody read in the maker's own documentation is not shown: the maker is named instead
         CHECK(valueOf(o2, "State") == "Cannot be checked from here");
         for (const auto* set : {&out, &o1, &o2}) {
             bool supplied = false, anyLink = false;

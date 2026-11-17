@@ -692,7 +692,7 @@ int main() {
             CHECKV(yOf(ui->get_b6_body_h()) < hRecall - 20, "b6: no keys, a shorter body (%d -> %d)", hRecall, yOf(ui->get_b6_body_h()));
             mr.site_label = "Open foxsdr.com";
             mr.dismiss_label = "Not now";
-            mr.withdrawn_advice = "A fixed version is not ready yet. foxsdr.com will have it as soon as it is.";
+            mr.withdrawn_advice = "A fixed version is not ready. foxsdr.com has it when it is.";
             ui->set_m_upd_recall(mr);
             shot();
             CHECK(yOf(ui->get_b6_body_h()) == hRecall);

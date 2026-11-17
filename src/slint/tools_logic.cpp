@@ -375,7 +375,7 @@ PositionOffers readPositionOffers(const FoxReceiverState& state, const ReadOptio
     } else if (o.traffic_heard > 0) {
         p.heard_label = cc::formatText(tr("Use the middle of the traffic  (%d heard, need %d)"), o.traffic_heard, kTrafficCentreMinAircraft);
     } else {
-        p.heard_label = T("Use the middle of the traffic  (none heard yet)");
+        p.heard_label = T("Use the middle of the traffic  (none heard)");
     }
     p.heard_enabled = trafficReady;
     p.heard_tooltip = T("The mean position of the aircraft with a reported position.\n"
@@ -544,7 +544,7 @@ MarkersModel readMarkersFrom(TableReader& t, MarkerStore& store, const ReadOptio
         m.rows.push_back(std::move(r));
     }
     if (m.rows.empty()) {
-        m.empty_line = T("No markers yet. Right-click the waterfall and choose Drop marker here.");
+        m.empty_line = T("No markers. Right-click the waterfall and choose Drop marker here.");
     } else {
         m.clear_label = T("Clear all markers");
         m.clear_confirm = cc::formatText(tr("Yes, remove all %zu"), m.rows.size());
@@ -568,6 +568,7 @@ MarkersModel readMarkers(TableReader& t, const ReadOptions& o) {
 
 ScannerModel readScanner(TableReader& t, const FoxReceiverState& state, const ReadOptions& o) {
     ScannerModel m;
+    m.comma_note = o.scan_comma_note;
     const bool running = (state.flags & FOXAPI_RX_SCANNER_ACTIVE) != 0u;
     m.scanning = running;
     m.ticked_mode = factOf(t, "fact.scanner.listMode") == "1";
@@ -1013,6 +1014,8 @@ Effect applyScannerTicked(bool on) { return commandEffect(make(cmd::makeInt(FOXA
 Effect applyScannerField(const ScannerModel& m, const FoxReceiverState& state, int field, const std::string& text) {
     if (field < 0 || field >= kScannerFieldCount) { return {}; }
     double value = 0.0;
+    const auto trimmed = [&] { std::size_t a = 0, b = text.size(); while (a < b && std::isspace(static_cast<unsigned char>(text[a])) != 0) { ++a; } while (b > a && std::isspace(static_cast<unsigned char>(text[b - 1])) != 0) { --b; } return text.substr(a, b - a); }();
+    if (cascade::core::typedCommaAmbiguous(trimmed)) { return localEffect(Local::ScannerCommaNote, T("A comma followed by three digits could be a decimal point or a thousands mark. Type a dot for a decimal point, and leave thousands marks out."), false, field); }
     if (readNumber(text, value) != 0) { return {}; }   // an empty box, or text that is no number, changes nothing (InputDouble)
     double draft[kScannerFieldCount];
     gui::scannerFormValues(state, draft);   // the draft follows the engine for every field that is not being typed in

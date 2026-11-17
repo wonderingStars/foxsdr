@@ -197,7 +197,9 @@ struct CatModel {
     std::string intro;
     bool accept = false;
     std::string port;
-    bool reachable = false;                // "Reachable from other machines" (bindAll)
+    bool reachable = false;                // the saved bindAll value (an older version may have saved true); never offered as a tick (core/cat_scope.hpp)
+    bool reachable_offered = false;        // whether the window draws the "Reachable from other machines" tick: never (owner decision 19)
+    std::string scope_note;                // "CAT is available on this computer only."
     std::string warning;                   // "This protocol has no password..." while reachable is ticked
     std::string status;                    // the refusal / "Listening on 127.0.0.1:4532 (em dash) 1 client(s), 12 command(s)" / "Not listening."
     Tone status_tone = Tone::Neutral;      // Err for the refusal
@@ -277,7 +279,7 @@ struct PictureFrame {
     std::string caption;
     int state = kPicNone;
     std::string path;                      // Ready: the cached file the publisher loads
-    std::string word;                      // the frame's own words when there is no image: "loading...", the failure reason, "No pictures published yet"
+    std::string word;                      // the frame's own words when there is no image: "loading...", the failure reason, "No pictures published"
 };
 struct PageFact {
     std::string key, value;
@@ -321,7 +323,7 @@ struct StorePluginPage {
     std::string notice_tick_label;         // "I have read the notice above and accept responsibility"
     std::vector<PageFact> facts;
     std::vector<ReachLine> reach;          // the old window's reach rows (window gaps 3, audit U6): what it may do, said before it is fitted
-    std::string no_pictures;               // "No pictures published yet" when the entry lists none (drawn as a sentence, no frame)
+    std::string no_pictures;               // "No pictures published" when the entry lists none (drawn as a sentence, no frame)
     bool catalogued = true;                // false: not in the catalogue (a module page then has no body)
     std::string reach_lead;                // "Declared by the maker, not enforced..." under the open grid
     std::string screenshots_heading, what_heading, new_heading, details_heading;   // SCREENSHOTS, WHAT IT DOES, WHAT'S NEW, DETAILS

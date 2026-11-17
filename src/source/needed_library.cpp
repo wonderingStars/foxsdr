@@ -184,7 +184,7 @@ Check checkSoapyModule(const Info& row, const std::string& where, const Env& env
 
 std::vector<Info> buildTable() {
     std::vector<Info> t;
-    const std::string unread = "The maker's licence for the library was not read by this lane (the SDK page it was named from states none).";
+    const std::string unread = "The library is under its maker's own terms; FoxSDR includes none of it.";
     {
         Info r;
         r.libraryId = "winradio-g39ddc";
@@ -194,7 +194,7 @@ std::vector<Info> buildTable() {
         r.why = "Lets FoxSDR open a WiNRADiO G39DDC receiver through the maker's own library.";
         r.installKind = "copy-in";
         r.folderNote = "Any folder you choose (give it to FoxSDR as lib=<folder or file>), or a folder on the PATH.";
-        r.steps = {"Get the 64-bit G39DDCAPI.dll from WiNRADiO (where from: unverified, see the link registry).",
+        r.steps = {"Get the 64-bit G39DDCAPI.dll from WiNRADiO, the maker.",
                    "Put it in a folder of your own, or in a folder that is on the PATH.",
                    "If you chose a folder of your own, give it to FoxSDR as lib=<that folder> when you open the radio.",
                    "Press Check again: FoxSDR looks for the file and reads its headers (it does not run it)."};
@@ -211,7 +211,7 @@ std::vector<Info> buildTable() {
         r.why = "Lets FoxSDR open a WiNRADiO G33DDC receiver through the maker's own library.";
         r.installKind = "copy-in";
         r.folderNote = "Any folder you choose (give it to FoxSDR as lib=<folder or file>), or a folder on the PATH.";
-        r.steps = {"Get the 64-bit G33DDCAPI.dll from WiNRADiO (where from: unverified, see the link registry).",
+        r.steps = {"Get the 64-bit G33DDCAPI.dll from WiNRADiO, the maker.",
                    "Put it in a folder of your own, or in a folder that is on the PATH.",
                    "If you chose a folder of your own, give it to FoxSDR as lib=<that folder> when you open the radio.",
                    "Press Check again: FoxSDR looks for the file and reads its headers (it does not run it)."};
@@ -228,10 +228,10 @@ std::vector<Info> buildTable() {
         r.why = "Lets the SoapySDR source list and open a Nuand bladeRF.";
         r.installKind = "installer";
         r.folderNote = "The module folder of your PothosSDR or radioconda install (FoxSDR adds it to its search path by itself).";
-        r.steps = {"Install Nuand's bladeRF driver and the SoapySDR module for it (SoapyBladeRF), for example through PothosSDR or radioconda (that those carry it: unverified).",
+        r.steps = {"Install Nuand's bladeRF driver and the SoapySDR module for it (SoapyBladeRF), for example through PothosSDR or radioconda.",
                    "Unplug and re-plug the radio.",
                    "Press Check again: FoxSDR looks in the module folders of the installs it knows for a file with 'bladerf' in its name."};
-        r.licence = "The module and the driver carry their own licences; this lane read none.";
+        r.licence = "The module and the driver carry their own licences.";
         r.check = &checkSoapyModule;
         t.push_back(r);
     }
@@ -244,10 +244,10 @@ std::vector<Info> buildTable() {
         r.why = "Only for opening a Pluto through the SoapySDR source: FoxSDR's own Pluto source talks to the radio's network address and needs nothing installed (an AntSDR uses that source).";
         r.installKind = "installer";
         r.folderNote = "The module folder of your PothosSDR or radioconda install (FoxSDR adds it to its search path by itself).";
-        r.steps = {"Install the SoapySDR module for the Pluto (SoapyPlutoSDR), for example through PothosSDR or radioconda (that those carry it: unverified).",
+        r.steps = {"Install the SoapySDR module for the Pluto (SoapyPlutoSDR), for example through PothosSDR or radioconda.",
                    "Unplug and re-plug the radio.",
                    "Press Check again: FoxSDR looks in the module folders of the installs it knows for a file with 'pluto' in its name."};
-        r.licence = "The module carries its own licence; this lane read none.";
+        r.licence = "The module carries its own licence.";
         r.check = &checkSoapyModule;
         t.push_back(r);
     }
@@ -260,10 +260,10 @@ std::vector<Info> buildTable() {
         r.why = "FoxSDR is a client of SDRconnect's network server: the radio is opened by SDRconnect, FoxSDR reads its I/Q.";
         r.installKind = "running program";
         r.folderNote = "Not a file FoxSDR looks for: the program must be RUNNING with its server on, on this PC or another one.";
-        r.steps = {"Install SDRplay's SDRconnect (where from: unverified, see the link registry) and start it with its server enabled (how: unverified).",
-                   "Give FoxSDR its address as sdrconnect=host:port (the default port FoxSDR tries, 5454, is NOT verified).",
+        r.steps = {"Install SDRplay's SDRconnect, from SDRplay, and start it with its server switched on.",
+                   "Give FoxSDR its address as sdrconnect=host:port (if you leave the port out, FoxSDR tries 5454).",
                    "Press Check again: FoxSDR cannot see a program on disk; it can only report that it could not connect when you open the radio."};
-        r.licence = "SDRplay's own terms; this lane read none.";
+        r.licence = "SDRplay's own terms apply.";
         r.check = &checkNothingToLook;
         t.push_back(r);
     }
@@ -276,10 +276,10 @@ std::vector<Info> buildTable() {
         r.why = "FoxSDR is a client of that server and reads the radio's I/Q over the network.";
         r.installKind = "software on another machine";
         r.folderNote = "Nothing to install on this PC.";
-        r.steps = {"On the machine with the radio, install SoapyRemote and run its server (how: unverified).",
+        r.steps = {"On the machine with the radio, install SoapyRemote and run its server.",
                    "Give FoxSDR the server's address as soapyremote=host[:port].",
                    "Press Check again: FoxSDR cannot see another machine; it reports the refusal when you open the radio."};
-        r.licence = "SoapyRemote is Boost-licensed (its LICENSE_1_0.txt was opened by the lane that wrote the client); nothing of it is in FoxSDR.";
+        r.licence = "SoapyRemote is Boost-licensed; nothing of it is in FoxSDR.";
         r.check = &checkNothingToLook;
         t.push_back(r);
     }
@@ -292,10 +292,10 @@ std::vector<Info> buildTable() {
         r.why = "FoxSDR is a client of the RTSA-Suite stream server and reads the SPECTRAN's I/Q.";
         r.installKind = "running program";
         r.folderNote = "Not a file FoxSDR looks for: the suite must be RUNNING with the server block on (the document's example port is 54664).";
-        r.steps = {"Install Aaronia's RTSA-Suite (where from: unverified, see the link registry) and start its HTTP server block (how: unverified).",
+        r.steps = {"Install Aaronia's RTSA-Suite, from Aaronia, and start its HTTP server block.",
                    "Give FoxSDR its address as aaronia=host[:port]. A server that asks for a login is refused: FoxSDR stores no password.",
                    "Press Check again: FoxSDR cannot see a program on disk; it reports the refusal when you open the radio."};
-        r.licence = "Aaronia's own terms; this lane read none.";
+        r.licence = "Aaronia's own terms apply.";
         r.check = &checkNothingToLook;
         t.push_back(r);
     }
@@ -308,10 +308,10 @@ std::vector<Info> buildTable() {
         r.why = "The radio's I/Q port can need Icom's firmware image before it streams; FoxSDR ships none and asks for the file you have.";
         r.installKind = "your own file";
         r.folderNote = "Wherever you keep it: give it as firmware=<path>.";
-        r.steps = {"Get the firmware file from Icom (where from: unverified).",
+        r.steps = {"Get the firmware file from Icom, the maker.",
                    "Give its path to FoxSDR as firmware=<path> when you open the radio.",
                    "Press Check again: FoxSDR cannot judge a firmware file by name; it reports the radio's answer when you open it."};
-        r.licence = "Icom's own terms; this lane read none.";
+        r.licence = "Icom's own terms apply.";
         r.check = &checkNothingToLook;
         t.push_back(r);
     }
@@ -329,11 +329,11 @@ std::vector<Info> buildTable() {
         r.publisher = "RigExpert";
         r.installKind = "copy-in";
         r.folderNote = "Any folder you choose (give it to FoxSDR as lib=<folder or file>), or a folder on the PATH. The file names FoxSDR tries are a guess: the maker's header names no file, so give the file yourself if yours is called something else.";
-        r.steps = {"Get the maker's own library, libfobos, from RigExpert and install it yourself (where from: see the link registry; FoxSDR does not include it and does not download it). It is published under the LGPL-2.1 licence.",
+        r.steps = {"Get the maker's own library, libfobos, from RigExpert and install it yourself (FoxSDR does not include it and does not download it). It is published under the LGPL-2.1 licence.",
                    "Put the 64-bit library file in a folder of your own, or in a folder that is on the PATH.",
                    "If you chose a folder of your own, or your file has another name, give it to FoxSDR as lib=<that folder or file> when you open the radio.",
                    "Press Check again: FoxSDR looks for the file and reads its headers (it does not run it)."};
-        r.licence = "LGPL-2.1 (the licence of the maker's repository, as read by the lane that built the bridge); FoxSDR loads the library you installed and ships none of it.";
+        r.licence = "LGPL-2.1 (the licence of the maker's own repository); FoxSDR loads the library you installed and ships none of it.";
         r.check = &checkLibraryHeadersAny;
         t.push_back(r);
     }

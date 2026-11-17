@@ -685,7 +685,9 @@ void ToolsPublisher::applyLocal(const Effect& e) {
             break;
         case Local::ImportLookup: startBookmarkLookup(e.text); break;
         case Local::PresetImportLookup: startPresetImport(e.text, e.text2); break;
+        case Local::ScannerCommaNote: opts_.scan_comma_note = e.text; break;
         case Local::ScannerDraft: {
+            opts_.scan_comma_note.clear();
             const std::size_t f = static_cast<std::size_t>(std::clamp(e.number, 0, kScannerFieldCount - 1));
             opts_.scan_draft[f] = e.text;
             opts_.scan_draft_bits |= 1u << f;
@@ -866,6 +868,7 @@ void ToolsPublisher::exec(const Effect& e, const char* what) {
     o.status = ss(m.status);
     o.status_tone = tone(m.status_tone);
     o.start_disabled = m.start_disabled;
+    o.comma_note = ss(m.comma_note);
     return o;
 }
 

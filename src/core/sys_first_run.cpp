@@ -36,7 +36,7 @@ std::vector<RadioChoiceInfo> makeChoices() {
     namespace rx = cascade::source::rx888;
     namespace ms = cascade::source::msi001;
     return {
-        {RadioFamily::NoneYet, "siggen", "I have no radio yet (try the built-in test signal)", {}, true},
+        {RadioFamily::NoneYet, "siggen", "I have no radio (try the built-in test signal)", {}, true},
         {RadioFamily::RtlSdr, "rtlsdr", "RTL-SDR dongle", {{kConsLo, kConsHi}}, false},
         {RadioFamily::Airspy, "airspy", "Airspy R2 / Mini", {{as::kMinFrequencyHz, as::kMaxFrequencyHz}}, true},
         {RadioFamily::AirspyHf, "airspyhf", "Airspy HF+", {{hf::kHfLowHz, hf::kHfHighHz}, {hf::kVhfLowHz, hf::kVhfHighHz}}, true},

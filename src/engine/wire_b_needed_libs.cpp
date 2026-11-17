@@ -28,11 +28,11 @@ Json neededToJson(const nl::Info& row, const Json& lastCheck) {
     j["kind"] = nl::kindWord(row.kind);
     j["file_names"] = row.fileNames;
     j["min_version"] = row.minVersion;
-    j["min_version_note"] = row.minVersion.empty() ? "no document read by this lane states one" : "";
+    j["min_version_note"] = row.minVersion.empty() ? "no minimum version is needed" : "";
     j["bits64"] = row.needs64Bit;
     j["why"] = row.why;
     j["publisher"] = row.publisher;
-    j["official_page"] = row.pageStatus == "verified" ? row.officialAddress : std::string();   // an unverified address is shown to nobody
+    j["official_page"] = row.pageStatus == "verified" ? row.officialAddress : std::string();   // an address nobody read in the maker's own documentation is shown to nobody
     j["page_status"] = row.pageStatus;
     j["install_kind"] = row.installKind;
     j["folder_note"] = row.folderNote;

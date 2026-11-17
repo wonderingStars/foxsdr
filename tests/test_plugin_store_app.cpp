@@ -615,7 +615,7 @@ int main(int argc, char** argv) {
             // GET on a card with a notice did NOT fit it: the page is open, and nothing is being fetched.
             CHECK(r.has("store:page:store-b"));
             CHECK(!r.has("store:key:store-b:fitting"));
-            // The catalogue names no pictures for store-b: the frame in the theme, "No pictures published yet".
+            // The catalogue names no pictures for store-b: the frame in the theme, "No pictures published".
             CHECK(r.has("store:pictures:store-b:0"));
             CHECK(sectionsInOrder(r, "store", {"screenshots", "whatitdoes", "whatsnew", "beforeyoufitit", "details"}));
             // GREYED BEFORE THE TICK, and never GET on this page.

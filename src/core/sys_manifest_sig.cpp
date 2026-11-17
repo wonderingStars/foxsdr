@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/sys_manifest_sig.hpp"
 
+#include <cstddef>
+#include <stdexcept>
+#include <string>
+
 #include <nlohmann/json.hpp>
 
 #include "core/sys_hash.hpp"
@@ -9,7 +13,21 @@
 namespace cascade::core::sys {
 
 // The owner's public key (64 hex characters), supplied later. Empty = no key: verifyEnvelope then answers NoTrustedKey.
-const char* const kOwnerKeyHex = "";
+constexpr char kOwnerKeyLiteral[] = "";
+const char* const kOwnerKeyHex = kOwnerKeyLiteral;
+
+// THE BUILD REFUSES A MALFORMED KEY: empty (no key) or exactly 64 hexadecimal characters, nothing else (a short or long or non-hex string used to read as "no key" and
+// silently turned update-signing off).
+constexpr bool ownerKeyLiteralOk(const char* s) {
+    std::size_t n = 0;
+    while (s[n] != '\0') {
+        const char c = s[n];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) { return false; }
+        ++n;
+    }
+    return n == 0 || n == 64;
+}
+static_assert(ownerKeyLiteralOk(kOwnerKeyLiteral), "kOwnerKeyHex must be empty (no key) or exactly 64 hexadecimal characters: a key of any other length or with other characters is a mistake, not 'no key'");
 
 const char* sigResultName(SigResult r) {
     switch (r) {
@@ -145,16 +163,31 @@ std::string makeEnvelope(const Ed25519Seed& seed, const std::string& payload) {
     return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
-std::vector<Ed25519PublicKey> ownerTrustedKeys() {
-    std::vector<Ed25519PublicKey> out;
-    const std::string hex = kOwnerKeyHex;
-    std::string bytes;
-    if (hex.size() == 64 && fromHex(hex, bytes) && bytes.size() == 32) {
-        Ed25519PublicKey k{};
-        for (int i = 0; i < 32; ++i) { k[i] = static_cast<std::uint8_t>(bytes[i]); }
-        out.push_back(k);
+std::string ownerKeyProblem(const std::string& hex) {
+    if (hex.empty()) { return std::string(); }
+    if (hex.size() != 64) {
+        return "The update-signing key is " + std::to_string(hex.size()) + " characters long; it must be empty (no key) or exactly 64 hexadecimal characters.";
     }
+    std::string bytes;
+    if (!fromHex(hex, bytes) || bytes.size() != 32) {
+        return "The update-signing key has characters that are not hexadecimal (0 to 9, a to f); it must be empty (no key) or exactly 64 hexadecimal characters.";
+    }
+    return std::string();
+}
+
+std::vector<Ed25519PublicKey> trustedKeysFromHex(const std::string& hex) {
+    std::vector<Ed25519PublicKey> out;
+    const std::string problem = ownerKeyProblem(hex);
+    if (!problem.empty()) { throw std::logic_error(problem); }
+    if (hex.empty()) { return out; }
+    std::string bytes;
+    fromHex(hex, bytes);
+    Ed25519PublicKey k{};
+    for (int i = 0; i < 32; ++i) { k[i] = static_cast<std::uint8_t>(bytes[i]); }
+    out.push_back(k);
     return out;
 }
+
+std::vector<Ed25519PublicKey> ownerTrustedKeys() { return trustedKeysFromHex(kOwnerKeyHex); }
 
 }  // namespace cascade::core::sys

@@ -26,7 +26,7 @@
 //  3. RESTORE runs at the first tick after the first valid look whether or not the page is showing (the engine must hold the document before START); the SEED runs only while the
 //     page is showing, as the window's drawPatchView does. A restore the session would not take is tried again next tick; a text that does not parse is given up (seeded stays false).
 //  4. PRESETS: nothing about a preset is logged. A load outside the engine's reach (the STOP the session would not take) is "not a patch" in the note, as the window words it.
-//  5. THE DISPLAY FACE says "No spectrum yet - its radio is not running." when its feeder is a planned Channel or a running Radio and no spectrum frame of the node's radio has arrived
+//  5. THE DISPLAY FACE says "No spectrum: its radio is not running." when its feeder is a planned Channel or a running Radio and no spectrum frame of the node's radio has arrived
 //     (the window's rule: the publisher says which radios have one, setSpectrumHave); the face is live (patch_faces.hpp, docs/multi-radio-records/patch-faces.md) once one has.
 //  6. THE REFUSAL CLOCK is the tick counter (kRefusalTicks = 76 at the 33 ms tick = 2.5 s); the host's `now` is the number of tick() calls.
 //  7. The seam to the settings file is PatchConfig (patch(), presets(), previous(), savePatch(), savePresets()): the publisher implements it over HostDuties::interfaceHalf() /
@@ -618,7 +618,7 @@ public:
     std::vector<PictureWant> picturesToRead() const { return picturesWanted(draft_.graph(), live_, pictures_); }
     void pictureTaken(pc::NodeId node, std::uint64_t imageId) { pictures_[node] = imageId; }
     const std::string& blueprintNote() const { return blueprint_note_; }
-    // THE RADIOS WHOSE SPECTRUM FRAME THE PUBLISHER HAS (read_node_spectrum answered OK): a Spectrum part whose radio is not among them says "No spectrum yet - its radio is not running."
+    // THE RADIOS WHOSE SPECTRUM FRAME THE PUBLISHER HAS (read_node_spectrum answered OK): a Spectrum part whose radio is not among them says "No spectrum: its radio is not running."
     void setSpectrumHave(std::set<pc::NodeId> radios) { spectrum_have_ = std::move(radios); }
     bool spectrumHave(pc::NodeId radio) const { return spectrum_have_.count(radio) != 0u; }
     std::int64_t now() const { return now_; }

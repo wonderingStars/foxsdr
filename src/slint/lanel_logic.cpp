@@ -471,6 +471,65 @@ std::vector<std::pair<std::string, std::string>> flattenJson(const std::string& 
     return out;
 }
 
+namespace {
+std::string humaniseKey(std::string k) {
+    static const struct { const char* suffix; const char* unit; } units[] = {{"_s", "seconds"}, {"_km", "km"}, {"_hz", "Hz"}, {"_m", "m"}, {"_deg", "degrees"}, {"_db", "dB"}, {"_dbfs", "dBFS"}, {"_ms", "ms"}};
+    std::string unit;
+    for (const auto& u : units) {
+        const std::size_t n = std::strlen(u.suffix);
+        if (k.size() > n && k.compare(k.size() - n, n, u.suffix) == 0) { k.erase(k.size() - n); unit = u.unit; break; }
+    }
+    for (char& c : k) { if (c == '_') { c = ' '; } }
+    if (!k.empty()) { k[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(k[0]))); }
+    return unit.empty() ? k : k + " (" + unit + ")";
+}
+// The label of one last segment of a key, or "" when the table does not know it.
+std::string knownLabel(const std::string& k) {
+    if (k == "enabled") { return tr("Switched on"); }
+    if (k == "running") { return tr("Running"); }
+    if (k == "added") { return tr("Positions added"); }
+    if (k == "replaced") { return tr("Positions replaced"); }
+    if (k == "refused") { return tr("Positions refused"); }
+    if (k == "too_old") { return tr("Refused as too old"); }
+    if (k == "evicted") { return tr("Dropped to make room"); }
+    if (k == "tracks") { return tr("Tracks held"); }
+    if (k == "retention_s") { return tr("Kept for (seconds)"); }
+    if (k == "cells") { return tr("Cells in use"); }
+    if (k == "bad_input") { return tr("Refused as invalid"); }
+    if (k == "too_far") { return tr("Refused as too far away"); }
+    if (k == "stale") { return tr("Refused as out of date"); }
+    if (k == "future") { return tr("Refused as in the future"); }
+    if (k == "max_range_km") { return tr("Furthest range (km)"); }
+    if (k == "lines_sent") { return tr("Lines sent"); }
+    if (k == "tracks_seen") { return tr("Aircraft seen"); }
+    if (k == "clients_accepted") { return tr("Programs connected"); }
+    if (k == "udp") { return tr("Sent by UDP"); }
+    if (k == "format") { return tr("Sample format"); }
+    if (k == "header") { return tr("Header before the samples"); }
+    if (k == "rate_hz") { return tr("Sample rate (Hz)"); }
+    if (k == "samples_in") { return tr("Samples received"); }
+    if (k == "samples_dropped") { return tr("Samples dropped"); }
+    if (k == "port") { return tr("Port"); }
+    return std::string();
+}
+}  // namespace
+
+std::pair<std::string, std::string> plainFactLine(const std::string& key, const std::string& value) {
+    if (key.empty()) { return {key, value}; }
+    const std::size_t dot = key.rfind('.');
+    const std::string last = dot == std::string::npos ? key : key.substr(dot + 1);
+    std::string label = knownLabel(last);
+    if (label.empty()) { label = humaniseKey(last); }
+    if (dot != std::string::npos) {
+        std::string head = humaniseKey(key.substr(0, dot));
+        for (char& c : head) { if (c == '.') { c = ' '; } }
+        label = head + " " + label;
+    }
+    std::string v = value;
+    if (value == "true") { v = tr("Yes"); } else if (value == "false") { v = tr("No"); }
+    return {label, v};
+}
+
 std::string jsonString(const std::string& text, const char* key) {
     const json j = json::parse(text, nullptr, false);
     if (j.is_discarded() || !j.is_object() || !j.contains(key) || !j[key].is_string()) { return std::string(); }
@@ -552,7 +611,7 @@ std::vector<NeededRow> parseNeeded(const std::string& text) {
 }
 
 std::string neededStateWords(const NeededRow& r) {
-    if (!r.checked || r.state.empty()) { return tr("Not checked yet"); }
+    if (!r.checked || r.state.empty()) { return tr("Not checked"); }
     if (r.state == "working") { return r.depth == "loaded" ? tr("Found and working") : tr("Found (not test-loaded)"); }
     if (r.state == "not-found") { return tr("Not found"); }
     if (r.state == "too-old") { return tr("Found, but too old"); }
@@ -560,7 +619,7 @@ std::string neededStateWords(const NeededRow& r) {
     if (r.state == "would-not-load") { return tr("Found, but it would not load"); }
     if (r.state == "not-a-library") { return tr("Found, but it is not a library"); }
     if (r.state == "cannot-check") { return tr("Cannot be checked from here"); }
-    return tr("Not checked yet");
+    return tr("Not checked");
 }
 
 int neededStateTone(const NeededRow& r) {
@@ -584,9 +643,9 @@ void neededRows(const NeededRow& r, const std::string& draftPath, std::vector<Ro
     if (r.checked && !r.sentence.empty()) { out.push_back(rNote(r.sentence, neededStateTone(r))); }
     if (r.checked && !r.version.empty()) { out.push_back(rReadout(tr("Version"), r.version)); }
     if (!r.officialPage.empty()) {   // shown as TEXT, never a link; an address nobody read in the publisher's own documentation says so
-        out.push_back(rReadout(tr("Where to get it"), r.pageStatus == "verified" ? r.officialPage : r.officialPage + " " + tr("(unverified)")));
+        out.push_back(rReadout(tr("Where to get it"), r.pageStatus == "verified" ? r.officialPage : (r.publisher.empty() ? tr("from its maker") : r.publisher)));
     } else {
-        out.push_back(rReadout(tr("Where to get it"), r.publisher.empty() ? tr("from its maker (no address is known here)") : r.publisher));
+        out.push_back(rReadout(tr("Where to get it"), r.publisher.empty() ? tr("from its maker") : r.publisher));
     }
     for (std::size_t i = 0; i < r.steps.size(); ++i) { out.push_back(rNote(std::to_string(i + 1) + ". " + r.steps[i])); }
     if (!r.licence.empty()) { out.push_back(rNote(r.licence)); }

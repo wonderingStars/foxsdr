@@ -300,7 +300,7 @@ UpdateCardModel updateCardFor(const UpdateView& v) {
     std::string advice;
     if (recall) {
         advice = offered ? cascade::core::formatText("We recommend updating to FoxSDR %s.", v.info.version.c_str())
-                         : std::string("A fixed version is not ready yet. foxsdr.com will have it as soon as it is.");
+                         : std::string("A fixed version is not ready. foxsdr.com has it when it is.");
         c.headline = cascade::core::formatText("FoxSDR %s has been withdrawn: the FoxSDR team found a problem with it.", v.runningVersion.c_str());
         if (!offered) {
             // Nothing to download: the sentence and "Not now" (the card's own key), no primary. The Updates section carries Open foxsdr.com.

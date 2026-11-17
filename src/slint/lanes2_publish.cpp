@@ -555,7 +555,7 @@ struct LaneS2Publisher::Impl {
         if (path.empty()) { autoNote = tr("The picture folder is not a usable folder"); autoNoteTone = kErr; autoOn = false; dirty = true; return; }
         const PictureStart r = env.startPicture(path);
         if (r == PictureStart::Started) { autoWaiting = true; autoLastMs = now > 0.0 ? now : 1.0; }
-        else if (r == PictureStart::NoSpectrum) { autoNote = tr("This radio has shown no spectrum yet, so there is nothing to save"); autoNoteTone = kWarn; dirty = true; }
+        else if (r == PictureStart::NoSpectrum) { autoNote = tr("This radio has shown no spectrum, so there is nothing to save"); autoNoteTone = kWarn; dirty = true; }
         // Busy: the host's writer is on another file; the next tick asks again
     }
 };

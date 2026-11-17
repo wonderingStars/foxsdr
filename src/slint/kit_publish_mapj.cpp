@@ -349,7 +349,7 @@ void KitPublisher::fillMapJModel(MapSurface& s, MapPage* pg, const std::string& 
     rm.playing = j.replay.playing;
     rm.pos = static_cast<float>(j.replay.active ? j.replay.fraction() : 1.0);
     rm.clock = ss(mj::clockText(j.replay.active ? j.replay.t : now));
-    rm.behind = ss(!have ? tr("nothing recorded yet") : mj::behindText(j.replay.active ? j.replay.t1 : last, j.replay.active ? j.replay.t : last, trFn()));
+    rm.behind = ss(!have ? tr("nothing recorded") : mj::behindText(j.replay.active ? j.replay.t1 : last, j.replay.active ? j.replay.t : last, trFn()));
     rm.speed = ss(mj::speedText(j.replay.speedIndex));
     jm.replay = rm;
     sig += "R" + std::to_string(j.replayBar) + std::to_string(rm.active) + std::to_string(rm.playing) + fmt("%.3f", rm.pos) + std::string(rm.clock) + std::string(rm.behind) + std::string(rm.speed) + std::to_string(rm.empty);

@@ -329,7 +329,7 @@ void GlobePublisher::fillPropagation(Surface& s, const FoxReceiverState& st, ::G
     if (s.earth.empty() || s.earth.key != bake) { bakeEarth(s.earth, land(), &sun, s.view.greyline); }
     s.initial = initialCamera(ViewKind::Propagation, scene.homeKnown, scene.home);
     GlobeDrawList list = drawPropagation(scene, s.view, s.earth);
-    if (scene.homeKnown && scene.paths.empty()) { list.emptyNote = FOX_TR_NOOP("The plugin's panel shows no target locator and no beacon on air in this band yet: no path to draw."); }
+    if (scene.homeKnown && scene.paths.empty()) { list.emptyNote = FOX_TR_NOOP("The plugin's panel shows no target locator and no beacon on air in this band: no path to draw."); }
     std::string key = "P" + std::to_string(bake) + "b" + std::to_string(bandSel) + "g" + (s.view.greyline ? "1" : "0");
     for (const GlobePath& p : scene.paths) { key += p.label + std::to_string(p.hops); }
     key += scene.homeKnown ? latLonText(scene.home) : "-";
@@ -392,7 +392,7 @@ void GlobePublisher::fillFt8(Surface& s, const FoxReceiverState& st, ::GlobeMode
     for (const ::GlobeControl& r : segsRows(kFt8Band, tr("BAND"), bandOpts, bandSel, tr("Shows the stations heard on this band only"))) { c.push_back(r); }
     c.push_back(segs(kFt8Window, tr("TIME WINDOW"), {tr("15 min"), tr("1 h"), tr("24 h")}, winSel, tr("How far back the stations heard are drawn")));
     c.push_back(readout(tr("HEARD"), F(tr("Stations: %d  Bands: %d"), sum.stations, sum.bands)));
-    c.push_back(readout(tr("FURTHEST HEARD"), sum.hasFurthest ? sum.furthest.call + "  " + kmText(sum.furthest.km) + "  " + bearingText(sum.furthest.bearingDeg) : tr("none yet")));
+    c.push_back(readout(tr("FURTHEST HEARD"), sum.hasFurthest ? sum.furthest.call + "  " + kmText(sum.furthest.km) + "  " + bearingText(sum.furthest.bearingDeg) : tr("none")));
     c.push_back(readout(tr("RECEIVER"), rxKnown ? latLonText(rx) : tr("not set")));
     m.controls = model(std::move(c));
     std::vector<::GlobeChipModel> chips;

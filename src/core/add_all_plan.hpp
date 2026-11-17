@@ -143,7 +143,7 @@ inline AddAllRule planAddAllRows(const std::vector<AddAllRow>& rows, const AddAl
                    "of the list");
         } else {
             plan.blockedReason =
-                tr("no catalogue has been read yet - press CHECK NOW and this application "
+                tr("no catalogue has been read - press CHECK NOW and this application "
                    "asks the source once");
         }
     } else if (cat.busy) {

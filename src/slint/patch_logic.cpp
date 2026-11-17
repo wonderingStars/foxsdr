@@ -1073,7 +1073,7 @@ InfoModel PatchPage::infoModel() const {
     InfoModel m;
     m.runnable = lists_.plan.runnable;
     // WHAT THE PATCH AS A WHOLE IS DOING, first, because it is the question someone opening this page is actually asking.
-    m.verdict = m.runnable ? tr("This patch can run.") : tr("This patch cannot run yet.");
+    m.verdict = m.runnable ? tr("This patch can run.") : tr("This patch cannot run.");
     const pc::Node* sel = selectedNode();
     // The selected channel's own level, spelled out: only for a node the plan holds as a channel and whose level the engine reports. (The window's own loop tests only the node id and
     // prints "0.0 dB on this channel" for a running decoder: not ported.)
@@ -1369,7 +1369,7 @@ FaceModel PatchPage::faceOf(const pc::Node& n) const {
             f.radio_switch_tooltip = n.on ? tr("This radio is switched on. Press to close it alone - the rest\nof the patch keeps running.")
                                           : tr("This radio is switched off. Press to switch it on; it opens\nwhile the patch is running.");
             f.device_label = pc::deviceLabelFor(lists_.devices, n.device);
-            f.centre_text = megaText(n.freqHz);
+            f.centre_text = pc::radioCentreSet(n) ? megaText(n.freqHz) : std::string();   // a centre nobody chose is an empty box, never "0.000000 MHz" (look review M5)
             f.centre_tooltip = tr("The radio's centre. Type a frequency and press Enter.");
             const auto note = centre_notes_.find(n.id);
             if (note != centre_notes_.end()) { f.centre_note = note->second; }
@@ -1435,7 +1435,7 @@ FaceModel PatchPage::faceOf(const pc::Node& n) const {
             if (!s.wired) {
                 f.lines.push_back(fl(tr("Wire the radio or a channel here to see its spectrum."), kToneMuted));
             } else if (!s.radio_open || !spectrumHave(s.radio)) {
-                f.lines.push_back(fl(tr("No spectrum yet - its radio is not running."), kToneMuted));
+                f.lines.push_back(fl(tr("No spectrum: its radio is not running."), kToneMuted));
             }
             break;
         }
@@ -1458,7 +1458,7 @@ FaceModel PatchPage::faceOf(const pc::Node& n) const {
                 }
             }
             if (total == 0) {
-                f.lines.push_back(fl(tr("no targets yet"), kToneAmber));
+                f.lines.push_back(fl(tr("no targets"), kToneAmber));
             } else {
                 f.lines.push_back(fl(cc::formatText(tr("%zu aircraft  %zu vessels  %zu stations%s"), air, sea, fixed, other > 0 ? "  +" : ""), kToneAmber));
             }
@@ -1563,7 +1563,7 @@ InspectorModel PatchPage::inspectorModel() const {
             r.device_label = pc::deviceLabelFor(lists_.devices, n.device);
             r.looking = (source_flags_ & FOXAPI_SRC_SCAN_PENDING) != 0u;
             r.look_enabled = !r.looking;
-            r.centre_text = megaText(n.freqHz);
+            r.centre_text = pc::radioCentreSet(n) ? megaText(n.freqHz) : std::string();   // see the face above
             const auto note = centre_notes_.find(n.id);
             if (note != centre_notes_.end()) { r.centre_note = note->second; }
             for (int i = 0; i < kRateCount; ++i) {
@@ -1720,7 +1720,7 @@ InspectorModel PatchPage::inspectorModel() const {
             break;
         }
         case pc::NodeKind::Display:
-            m.help = tr("This node has nothing to set yet.");
+            m.help = tr("This node has nothing to set.");
             break;
     }
     return m;
@@ -2288,7 +2288,7 @@ PatchPresetsModel PatchPage::presetsModel() const {
     if (hasPrevious) { m.rows.push_back({tr("(previous patch)"), true, selPrevious}); }
     for (const cc::PatchPreset& p : store_.list()) { m.rows.push_back({p.name, false, !selPrevious && cc::patchPresetNamesMatch(p.name, sel)}); }
     m.empty_shown = store_.list().empty() && !hasPrevious;
-    m.empty_text = tr("No presets yet. SAVE AS... keeps the patch on the canvas under a name.");
+    m.empty_text = tr("No presets. SAVE AS... keeps the patch on the canvas under a name.");
     const bool anySelected = selPrevious || !sel.empty();
     const bool namedSelected = !selPrevious && !sel.empty();
     m.load_enabled = anySelected;

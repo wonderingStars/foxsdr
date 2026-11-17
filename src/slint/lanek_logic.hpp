@@ -48,6 +48,9 @@ Row rNote(const std::string& text, int tone = kDim);
 // DECISION 61 (must-fix lane A, owner decision 61): the ONE label on every radio family and setting that was proved only against stand-ins, never on a real radio. One component, one sentence.
 Row rUnproven();
 Row rKey(const std::string& id, const std::string& label, bool enabled = true, const std::string& tip = "", bool on = false);
+// A key or tick that is dimmed says why in one line (look review M4): the reason is shown under it only while it is dimmed.
+Row rKeyWhy(const std::string& id, const std::string& label, bool enabled, const std::string& why, const std::string& tip = "", bool on = false);
+Row rTickWhy(const std::string& id, const std::string& label, bool on, bool enabled, const std::string& why, const std::string& tip = "");
 Row rTick(const std::string& id, const std::string& label, bool on, bool enabled = true, const std::string& tip = "");
 Row rChoice(const std::string& id, const std::string& label, const std::vector<std::string>& options, int pick, bool enabled = true, const std::string& tip = "");
 Row rField(const std::string& id, const std::string& label, const std::string& value, const std::string& tip = "", bool enabled = true);

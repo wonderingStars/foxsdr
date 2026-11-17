@@ -399,7 +399,7 @@ std::string fittedVerdictLine(bool receiverRunning, const std::string& directory
     std::string s = receiverRunning ? cascade::i18n::tr("The receiver is running, so a module with a matched decoder is being fed.")
                                     : cascade::i18n::tr("The receiver is stopped, so NOTHING is being fed to any module however it is set.");
     s += ' ';
-    s += directory.empty() ? std::string(cascade::i18n::tr("No directory has been scanned yet.")) : cascade::core::formatText(cascade::i18n::tr("Read from %s."), directory.c_str());
+    s += directory.empty() ? std::string(cascade::i18n::tr("No directory has been scanned.")) : cascade::core::formatText(cascade::i18n::tr("Read from %s."), directory.c_str());
     return s;
 }
 

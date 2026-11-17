@@ -183,8 +183,9 @@ struct LaneLPublisher::Impl {
         v.push_back(rField(id, label, dv(id, def), tip));
         handlers[id] = [this, id](const std::string& t) { draft[id] = t; dirty = true; };
     }
-    void key(std::vector<Row>& v, const std::string& id, const std::string& label, std::function<void()> fn, bool enabled = true, const std::string& tip = std::string()) {
-        v.push_back(rKey(id, label, enabled, tip));
+    // A dimmed key says why in one line under it (look review M4): by default that a box above it is empty; a key dimmed for another reason passes its own sentence.
+    void key(std::vector<Row>& v, const std::string& id, const std::string& label, std::function<void()> fn, bool enabled = true, const std::string& tip = std::string(), const std::string& why = std::string()) {
+        v.push_back(slk::rKeyWhy(id, label, enabled, why.empty() ? std::string(tr("Fill in the box above first.")) : why, tip));
         handlers[id] = [fn](const std::string&) { fn(); };
     }
     void tick(std::vector<Row>& v, const std::string& id, const std::string& label, bool on, std::function<void(bool)> fn, const std::string& tip = std::string()) {
@@ -203,7 +204,7 @@ struct LaneLPublisher::Impl {
         tick(v, id, label, bv(id, def), [this, id](bool on) { draft[id] = on ? "1" : "0"; }, tip);
     }
     void factLines(std::vector<Row>& v, const std::string& factText, std::size_t maxLines) {
-        for (const auto& kv : flattenJson(factText, maxLines)) { v.push_back(rReadout(kv.first, kv.second)); }
+        for (const auto& kv : flattenJson(factText, maxLines)) { const auto p = plainFactLine(kv.first, kv.second); v.push_back(rReadout(p.first, p.second)); }
     }
     void endNote(std::vector<Row>& v, Sec s) { if (!noteText[s].empty()) { v.push_back(rNote(noteText[s], noteTone[s])); } }
     // wire-c's settings: key "<key>\x1F<value>", read back as fact.wirec.<key>
@@ -479,7 +480,7 @@ struct LaneLPublisher::Impl {
         const std::string jm = fact("job.message");
         if (!jm.empty()) { v.push_back(rNote(jm, js == "failed" ? kErr : kDim)); }
         factLines(v, fact("job.result"), 10);
-        key(v, "r.job-cancel", tr("Cancel"), [this] { send(kRecord, tr("Cancel the job"), cmd(FOXAPP_OP_JOB_CANCEL)); }, js == "running", tr("Asks the running job to stop at its next block."));
+        key(v, "r.job-cancel", tr("Cancel"), [this] { send(kRecord, tr("Cancel the job"), cmd(FOXAPP_OP_JOB_CANCEL)); }, js == "running", tr("Asks the running job to stop at its next block."), tr("No job is running."));
         field(v, "r.in", tr("Recording"), "", tr("The full path of the recording to work on"));
         field(v, "r.out", tr("New file"), "", tr("The full path of the file to write; an existing file is never overwritten"));
         field(v, "r.t0", tr("From (s)"), "0");
@@ -863,7 +864,7 @@ struct LaneLPublisher::Impl {
             handlers["l.path-" + id] = [this, id](const std::string& t) { draft["l.path-" + id] = t; dirty = true; };
             handlers["l.checkfile-" + id] = [this, id](const std::string&) { sendBuilt(kLibs, tr("Check this file"), neededCheckJson(id, dv("l.path-" + id)), FOXAPP_OP_NEEDED_LIB_CHECK); };
         }
-        if (libs.empty()) { v.push_back(rNote(tr("The engine has not published the list yet."), kWarn)); }
+        if (libs.empty()) { v.push_back(rNote(tr("The engine has not published the list."), kWarn)); }
         endNote(v, kLibs);
     }
 
@@ -945,7 +946,7 @@ struct LaneLPublisher::Impl {
             nlohmann::json j; j["web"]["listenerPassword"] = pw;
             webConfig(tr("Listener password"), j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "b.lpw");
         }, dv("b.lpw").size() >= 8);
-        key(v, "b.lpw-clear", tr("Clear the listener password"), [this] { webConfig(tr("Listener password"), "{\"web\":{\"clearListenerPassword\":true}}", "b.lpw"); }, hasLp);
+        key(v, "b.lpw-clear", tr("Clear the listener password"), [this] { webConfig(tr("Listener password"), "{\"web\":{\"clearListenerPassword\":true}}", "b.lpw"); }, hasLp, std::string(), tr("No listener password is set."));
         if (fact("web.listenerPasswordPending") == "1") { v.push_back(rNote(tr("The password is being prepared."))); }
         field(v, "b.lmax", tr("Most listeners at once"), fact("web.maxListeners").empty() ? "4" : fact("web.maxListeners"), tr("1 to 32"));
         field(v, "b.lidle", tr("Sign a listener out after (minutes without activity)"), std::to_string(std::atoi(fact("web.listenerIdleSeconds").empty() ? "900" : fact("web.listenerIdleSeconds").c_str()) / 60), tr("0 to 1440; 0 = never"));

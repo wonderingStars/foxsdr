@@ -5,7 +5,7 @@
 80 state update.shown == 1
 state update.withdrawn == 1
 state update.headline contains "has been withdrawn: the FoxSDR team found a problem with it."
-state update.note == "A fixed version is not ready yet. foxsdr.com will have it as soon as it is."
+state update.note == "A fixed version is not ready. foxsdr.com has it when it is."
 state update.primary == ""
 expect "Open foxsdr.com" enabled equals "true"
 +2 click "Open foxsdr.com"

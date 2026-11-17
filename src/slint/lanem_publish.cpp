@@ -172,8 +172,8 @@ struct LaneMPublisher::Impl {
         v.push_back(rField(id, label, dv(id, def), tip));
         handlers[id] = [this, id](const std::string& t) { draft[id] = t; dirty = true; };
     }
-    void key(std::vector<Row>& v, const std::string& id, const std::string& label, std::function<void()> fn, bool enabled = true, const std::string& tip = std::string()) {
-        v.push_back(rKey(id, label, enabled, tip));
+    void key(std::vector<Row>& v, const std::string& id, const std::string& label, std::function<void()> fn, bool enabled = true, const std::string& tip = std::string(), const std::string& why = std::string()) {
+        v.push_back(slk::rKeyWhy(id, label, enabled, why, tip));   // a dimmed key says why in one line when it has a reason to give (look review M4)
         handlers[id] = [fn](const std::string&) { fn(); };
     }
     void tick(std::vector<Row>& v, const std::string& id, const std::string& label, bool on, std::function<void(bool)> fn, const std::string& tip = std::string()) {
@@ -219,8 +219,8 @@ struct LaneMPublisher::Impl {
             Cmd c = cmd(FOXAPP_OP_FILE_TRANSPORT, 0); c.n0 = sp; send(kSource, tr("Set the speed"), c);
         }, true, tr("Varispeed multiplies every frequency in the recording by the speed, like a tape. Block skip keeps the frequencies and chops the time. At speed 1 the two are the same. Not remembered: a file opened again plays at speed 1."));
         choice(v, "p.policy", tr("Speed policy"), {tr("Varispeed"), tr("Block skip")}, policy == "blockskip" ? 1 : 0, [this](int i) { Cmd c = cmd(FOXAPP_OP_FILE_TRANSPORT, 1); c.i1 = i == 1 ? 1 : 0; send(kSource, tr("Speed policy"), c); });
-        key(v, "p.pause", tr("Pause"), [this] { send(kSource, tr("Pause"), cmd(FOXAPP_OP_FILE_TRANSPORT, 2)); }, !paused);
-        key(v, "p.resume", tr("Resume"), [this] { send(kSource, tr("Resume"), cmd(FOXAPP_OP_FILE_TRANSPORT, 3)); }, paused);
+        key(v, "p.pause", tr("Pause"), [this] { send(kSource, tr("Pause"), cmd(FOXAPP_OP_FILE_TRANSPORT, 2)); }, !paused, std::string(), tr("It is paused already."));
+        key(v, "p.resume", tr("Resume"), [this] { send(kSource, tr("Resume"), cmd(FOXAPP_OP_FILE_TRANSPORT, 3)); }, paused, std::string(), tr("It is playing: only a paused file can resume."));
         field(v, "p.step", tr("Blocks to step"), "1", tr("1 to 4096; a block is 4096 frames"));
         const auto step = [this](int sign) {
             long long b = 0; std::string e;
@@ -228,8 +228,8 @@ struct LaneMPublisher::Impl {
             b = std::llabs(b) * sign;
             Cmd c = cmd(FOXAPP_OP_FILE_TRANSPORT, 4); c.i1 = b; send(kSource, sign < 0 ? tr("Step back") : tr("Step forward"), c);
         };
-        key(v, "p.step-back", tr("Step back"), [step] { step(-1); }, paused, tr("Only while paused. Goes back that many blocks and plays one block from there."));
-        key(v, "p.step-fwd", tr("Step forward"), [step] { step(1); }, paused, tr("Only while paused."));
+        key(v, "p.step-back", tr("Step back"), [step] { step(-1); }, paused, tr("Only while paused. Goes back that many blocks and plays one block from there."), tr("It is playing: pause it to step."));
+        key(v, "p.step-fwd", tr("Step forward"), [step] { step(1); }, paused, tr("Only while paused."), tr("It is playing: pause it to step."));
         endNote(v, kSource);
     }
 
@@ -481,7 +481,7 @@ struct LaneMPublisher::Impl {
         v.push_back(rHeading(tr("Sweep history")));
         const std::string hist = fact("sweep.history");
         const std::string ro = historyReadout(hist);
-        v.push_back(rReadout(tr("History kept"), ro.empty() ? tr("nothing yet") : ro));
+        v.push_back(rReadout(tr("History kept"), ro.empty() ? tr("nothing") : ro));
         std::string hnote = sll::jsonString(hist, "note");
         if (hnote.empty()) { hnote = fact("sweep.history.note"); }
         if (!hnote.empty()) { v.push_back(rNote(hnote)); }

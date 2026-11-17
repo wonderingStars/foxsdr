@@ -130,7 +130,8 @@ export component Key inherits Rectangle {
                                : Theme.lamp-off;
 
     height: root.xs ? Theme.key-xs-h : root.small ? Theme.key-sm-h : Theme.key-h;
-    min-width: root.hug-w;
+    in property <bool> shrinkable;                     // a key that may give way (its word elides, the tooltip and the accessible label carry it whole) so it never runs off a narrow panel
+    min-width: root.shrinkable ? min(root.hug-w, 44px) : root.hug-w;
     preferred-width: root.hug-w;
     max-width: root.wide ? 16777215px : root.hug-w;
     horizontal-stretch: root.wide ? 1 : 0;

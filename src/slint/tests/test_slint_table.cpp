@@ -464,7 +464,7 @@ int main() {
         CHECK(f0.near(kTbx + 2, kTby + 2, strip, 0));
         CHECK(f0.rowNear(kTby + kHeadH - 1, kTbx, kTbx + kTbw, lineStrong, 0));
         CHECK(f0.near(kTbx + 2, kTby + kHeadH, panel, 0));
-        CHECK(f0.countNear(kTbx + 12, kTby + kHeadH + 6, kTbx + 200, kTby + kHeadH + 22, dim, 6) >= 10);   // "Nothing to show yet."
+        CHECK(f0.countNear(kTbx + 12, kTby + kHeadH + 6, kTbx + 200, kTby + kHeadH + 22, dim, 6) >= 10);   // "Nothing to show."
         CHECK(f0.countNear(kTbx + 12, kTby + kHeadH + 6, kTbx + 200, kTby + kHeadH + 22, fg, 6) == 0);     // ...in Theme.dim, not Theme.fg
         CHECK(f0.countInk(kTbx + 12, kTby + kHeadH + 6, kTbx + 200, kTby + kHeadH + 22, panel) > 40);
         CHECK(f0.countInk(kTbx + 12, kTby + kHeadH + 6, kTbx + 200, kTby + kHeadH + 22, panel) < 700);     // a line of text, not a block

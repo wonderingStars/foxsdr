@@ -8,7 +8,7 @@
 # `box.checked = root.on` puts the box back to the engine fact and a click changes nothing visible. The Port field is the one
 # UI check: a typed value is kept in the field (the commit sends nothing in this run). Listening itself is NOT COVERED.
 10 expect "Accept CAT connections" checked equals "false"
-expect "Reachable from other machines" checked equals "false"
+# (the "Reachable from other machines" tick is not offered by the window any more - core/cat_scope.hpp, owner decision 19; the sentence under the port says CAT is for this computer only)
 expect "Port" value equals "4532"
 
 +2 type "Port" "5000"

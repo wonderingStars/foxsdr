@@ -112,6 +112,7 @@ private:
     BandwidthMemory bandwidth_;
     PriorityPush priorityPush_;        // C2: what keeps the engine's priority list equal to the field
     MemThresholdPush memThresholdPush_;   // D1-mem (engine lane E1): what keeps the engine's per-memory thresholds equal to the memories'
+    std::string commaNote_;            // the sentence for a typed number refused for an ambiguous comma (owner decision 73): set by the priority-every and memory fields, shown under them
     std::string enginePriority_;       // fact.scan.priority as last read
     std::uint32_t lastScanState_ = 0;
     int mutedRadio_ = 1;               // the radio the mute follower silenced

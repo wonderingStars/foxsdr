@@ -707,7 +707,7 @@ void testVerdictAndRows() {
     CHECK(has(stopped, "The receiver is stopped, so NOTHING is being fed to any module"));
     CHECK(has(stopped, "  \xc2\xb7  read from /home/x/plugins"));
     // A scan that has not happened says so rather than naming an empty folder.
-    CHECK(has(fittedVerdictLine(true, ""), "No directory has been scanned yet."));
+    CHECK(has(fittedVerdictLine(true, ""), "No directory has been scanned."));
     CHECK(!has(fittedVerdictLine(true, ""), "read from"));
 
     // THE ROWS: sorted by name (the file name for a module nobody read), filtered by the five chips and the search.

@@ -423,7 +423,7 @@ void KitPublisher::fillPanel(const Page& p, PageTab& t, std::string& sig) {
     t.rows = model(std::move(rows));
     std::vector<float> widths(p.widths.begin(), p.widths.end());
     t.widths = model(std::move(widths));
-    t.empty_text = ss(panel == nullptr ? (r != nullptr && r->asleep ? cascade::i18n::tr("Idle: nothing is using this plugin yet.") : cascade::i18n::tr("Nothing to show yet.")) : cascade::i18n::tr("Nothing to show yet."));
+    t.empty_text = ss(panel == nullptr ? (r != nullptr && r->asleep ? cascade::i18n::tr("Idle: nothing is using this plugin.") : cascade::i18n::tr("Nothing to show.")) : cascade::i18n::tr("Nothing to show."));
 }
 
 void KitPublisher::fillInstrument(const Page& p, PageTab& t, std::string& sig) {
@@ -485,7 +485,7 @@ void KitPublisher::fillInstrument(const Page& p, PageTab& t, std::string& sig) {
     t.inst = s;
     std::vector<float> widths(p.widths.begin(), p.widths.end());
     t.widths = model(std::move(widths));
-    t.empty_text = ss(cascade::i18n::tr("Nothing to show yet."));
+    t.empty_text = ss(cascade::i18n::tr("Nothing to show."));
 }
 
 void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& state, std::string& sig) {
@@ -702,7 +702,7 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
             notes.push_back({ss(""), ss(home ? T("Position set. This window measures every DISTANCE, BEARING and the COVERAGE ring from it. A plugin that predicts passes keeps its own observer position in its own configuration - its panel names the file.")
                                              : T("No position set. DISTANCE, BEARING and the coverage overlay on this window stay blank until one is - none of them can be computed without it. A plugin that predicts passes keeps its observer position separately, in its own configuration."))});
             notes.push_back({ss(""), ss(!home ? T("Coverage measures distances from the receiver, so it needs a position first. Set one with Set RX here.")
-                                       : kit_.coverage().empty() ? T("Nothing plotted yet. The ring records how far out a target has been PLOTTED on each of 72 bearings - from every plugin, and from computed positions as well as received ones.")
+                                       : kit_.coverage().empty() ? T("Nothing plotted. The ring records how far out a target has been PLOTTED on each of 72 bearings - from every plugin, and from computed positions as well as received ones.")
                                        : cascade::core::formatText(cascade::i18n::tr("%d of %d bearings reached, furthest %.0f km. Plotted positions, computed or received. RESET clears the ring and starts again."),
                                                                    static_cast<int>(kit_.coverage().filledBuckets()), static_cast<int>(cascade::gui::CoverageMap::kBuckets), kit_.coverage().peakKm()))});
             if (!pg->selectedId.empty()) {   // a target is picked: what the deck cannot say about it, and why
@@ -736,7 +736,7 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
     m.trail_style = look_.trailStyle == slintmap::TrailStyle::Ribbon ? 1 : 0;   // item 5: the keys show the saved style (the interface half's mapTrailStyle, handed in as the look)
     m.on_screen_only = s.onScreenOnly;
     m.coverage_empty = kit_.coverage().empty();
-    m.coverage_status = ss(!home ? std::string(cascade::i18n::tr("set the RX position to measure coverage")) : kit_.coverage().empty() ? std::string(cascade::i18n::tr("nothing heard yet"))
+    m.coverage_status = ss(!home ? std::string(cascade::i18n::tr("set the RX position to measure coverage")) : kit_.coverage().empty() ? std::string(cascade::i18n::tr("nothing heard"))
                            : cascade::core::formatText(cascade::i18n::tr("%d of %d bearings, best %.0f km"), static_cast<int>(kit_.coverage().filledBuckets()), static_cast<int>(cascade::gui::CoverageMap::kBuckets), kit_.coverage().peakKm()));
     m.sort_label = ss(cascade::gui::trackSortKeyName(cascade::gui::trackSortKeyForMenuIndex(s.sortKey)));
     m.sort_ascending = s.sortAscending;
@@ -813,7 +813,7 @@ void KitPublisher::fillFitted(PageTab& t, const FoxReceiverState& state, std::st
     f.search = ss(fittedSearch_);
     // the verdict sentence and, beside it, the folder (the component joins them with a middle dot: no folder twice)
     f.verdict = ss(running ? cascade::i18n::tr("The receiver is running, so a module with a matched decoder is being fed.") : cascade::i18n::tr("The receiver is stopped, so NOTHING is being fed to any module however it is set."));
-    f.directory = ss(kit_.lists().pluginDir.empty() ? std::string(cascade::i18n::tr("No directory has been scanned yet.")) : cascade::core::formatText(cascade::i18n::tr("read from %s"), kit_.lists().pluginDir.c_str()));
+    f.directory = ss(kit_.lists().pluginDir.empty() ? std::string(cascade::i18n::tr("No directory has been scanned.")) : cascade::core::formatText(cascade::i18n::tr("read from %s"), kit_.lists().pluginDir.c_str()));
     f.report = ss(kit_.lists().installReport);
     f.error = ss(kit_.lists().installError);
     f.empty_text = ss(kit_.lists().rows.empty() ? cascade::i18n::tr("No module the host can load was found in the folder above, so nothing is fitted. The plugin store is where one is fitted from.")

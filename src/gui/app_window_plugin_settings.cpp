@@ -335,7 +335,7 @@ std::uint32_t drawRowTable(const std::vector<std::string>& headings, const std::
         }
         ImGui::EndTable();
     }
-    if (rows.empty()) { ImGui::TextDisabled("%s", tr("Nothing to show yet.")); }
+    if (rows.empty()) { ImGui::TextDisabled("%s", tr("Nothing to show.")); }
     return pressed;
 }
 

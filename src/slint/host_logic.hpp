@@ -53,6 +53,19 @@ std::string fmtNum(double v, int decimals, bool plus = false);
 std::string localizeNumber(const std::string& text, double v, int decimals);
 std::string fmtRate(double hz);                            // "2.400 MS/s", "--" when there is no rate
 std::string fmtKHz(double hz);                             // "12.5 kHz"
+// THE SMALLEST WINDOW a person can drag the window to (look review B1, measured): below 1480 x 560 the receiver strip (frequency, mode, gain, squelch, volume,
+// antenna power), the spectrum toolbar (down to Full span) and the rail (down to FOLD) no longer all fit, and the window has no compact form for them. The
+// bounded drive runs may still ask for smaller sizes: they exist to look at narrow layouts.
+constexpr float kMinWindowW = 1480.0f;
+constexpr float kMinWindowH = 560.0f;
+// LOOK REVIEW B2: the window toolkit can fault while painting a PICTURE of a window taller than any screen (an access violation inside its item-tree walk: 4 of 8 runs of the review's
+// clips script at 4400 to 8000 px tall, none in 8 runs at 2200 px or less; docs/multi-radio-records/window-followups.md). A bounded run that takes a picture of a window taller than
+// kMaxShotWindowH (an 8K screen is 4320 px) is told so in one plain sentence. It is a WARNING, not a refusal: about twenty committed drive scripts take their pictures of 4400 to 8000 px
+// windows and pass; refusing them would fail the gates, so the open row is to shorten those windows. `sizeEnv` is FOXSDR_SLINT_SIZE ("<w>x<h>", may be null or empty); "" = nothing to say.
+constexpr unsigned kMaxShotWindowH = 4320;
+std::string tallShotWarning(const char* sizeEnv, bool scriptHasShot);
+std::string wholeDbText(double db);                       // "-85 dB"; a value that rounds to zero reads "0 dB", never "-0 dB"
+std::string spanValueText(double hz);                     // "2.400 MHz": the span with its unit and without the word SPAN (for a sentence that has its own word)
 std::string spanText(double hz);                           // "SPAN 2.400 MHz" (GHz / MHz / kHz / Hz by size)
 std::string cursorText(double hz, double db);              // "145.212 MHz · -78.4 dB"
 std::string axisUnit(double spanHz);                       // the frequency axis's unit word

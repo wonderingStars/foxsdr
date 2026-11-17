@@ -665,7 +665,7 @@ struct View3DPublisher::Impl {
         for (const scene3d::Label3D& l : res.labels) { labels.push_back({l.x, l.y, ss(l.text), colourOf(l.rgba), l.align, l.kind}); }
         g.set_wf_labels(std::make_shared<slint::VectorModel<Scene3DLabel>>(std::move(labels)));
         // the honest empty state: no row of the history is on the grid. A running receiver is about to have one; a stopped one is said so, in the page's own words.
-        g.set_wf_empty(ss(!res.hasData && !ctx.running ? std::string(cascade::i18n::tr("No spectrum yet - its radio is not running.")) : std::string()));
+        g.set_wf_empty(ss(!res.hasData && !ctx.running ? std::string(cascade::i18n::tr("No spectrum: its radio is not running.")) : std::string()));
     }
 };
 

@@ -169,13 +169,13 @@ export component ExtendSpecimen inherits Window {
     };
     in-out property <CatModel> m-cat-ok: {
         intro: "Lets logging and digital-mode software drive this receiver over the protocol Hamlib's rigctld speaks. Point the client at this machine's address on the port below.",
-        accept: true, port: "4532", reachable: true,
+        accept: true, port: "4532", reachable: true, reachable-offered: true,
         warning: "This protocol has no password. Anything that can reach the port can retune the receiver.",
         status: "Listening on 0.0.0.0:4532 - 1 client, 12 commands", status-tone: ChipTone.good,
     };
     in-out property <CatModel> m-cat-failed: {
         intro: "Lets logging and digital-mode software drive this receiver.",
-        accept: true, port: "4532", reachable: false, warning: "",
+        accept: true, port: "4532", reachable: false, reachable-offered: true, warning: "",
         status: "The CAT listener could not start: port 4532 is already in use", status-tone: ChipTone.err,
     };
     // the rule-11 probes' models: the longest words a translation can bring
@@ -200,7 +200,7 @@ export component ExtendSpecimen inherits Window {
     };
     in-out property <CatModel> m-cat-long: {
         intro: "Laesst Logbuch- und Digitalmodus-Software dieses Empfaengergeraet ueber das Protokoll steuern, das Hamlibs rigctld spricht.",
-        accept: true, port: "65535", reachable: true,
+        accept: true, port: "65535", reachable: true, reachable-offered: true,
         warning: "Dieses Protokoll hat kein Passwort. Alles, was den Port erreichen kann, kann den Empfaenger umstellen.",
         status: "Hoert auf 0.0.0.0:4532 - 4 Clients verbunden, 1234567 Befehle", status-tone: ChipTone.good,
     };

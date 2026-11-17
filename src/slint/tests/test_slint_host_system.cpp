@@ -566,7 +566,7 @@ void updatesWithdrawn() {
     CHECK(c.updateCheckEnabled);
     CHECK(m.status_line == "FoxSDR 0.99.105 has been withdrawn: the FoxSDR team found a problem with it.");
     CHECK(m.status_tone == Tone::Warn);                            // the warning colour and not the error one
-    CHECK(m.withdrawn_advice == "A fixed version is not ready yet. foxsdr.com will have it as soon as it is.");
+    CHECK(m.withdrawn_advice == "A fixed version is not ready. foxsdr.com has it when it is.");
     CHECK(m.site_label == "Open foxsdr.com" && m.dismiss_label == "Not now");
     CHECK(updatesChip(true, o.updates).word == "RECALL" && updatesChip(true, o.updates).tone == Tone::Warn && updatesChip(true, o.updates).lit);
     StubTable noTable;
@@ -632,7 +632,7 @@ void serialReads() {
     CHECK(m.ports.empty() && m.empty_line.empty());
     o.gps_ports_waiting = false;
     m = readSerialPorts(t, c, o);
-    CHECK(m.empty_line == "No serial ports found. If a device is plugged in, check Device Manager under \"Ports (COM & LPT)\" - if it is not listed there either, this application cannot see it yet.");
+    CHECK(m.empty_line == "No serial ports found. If a device is plugged in, check Device Manager under \"Ports (COM & LPT)\" - if it is not listed there either, this application cannot see it.");
     CHECK(m.intro == "Every serial port this machine has right now - the same ports the GPS row below offers, gathered in one place rather than left findable only from the rail's Radar section.");
     CHECK(m.gps_note == "Sets the receiver's position - what every range and bearing on the map and the radar scope is measured from. The same control also appears on the rail's Radar section (while there is no position), the scope's empty state, and every map page's bar.");
     CHECK(m.refresh_label == "Refresh" && m.column_label == "Port" && m.gps_heading == "GPS receiver" && m.gps_hint == "or read it from a GPS receiver on a serial port:");

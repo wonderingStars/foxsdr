@@ -36,7 +36,7 @@ export struct WebModel {
     error: string, serving-note: string, network-warning: string, addresses: [string], http-note: string, sessions: string, listeners: string,
 }
 
-export struct CatModel { intro: string, accept: bool, port: string, reachable: bool, warning: string, status: string, status-tone: ChipTone }
+export struct CatModel { intro: string, accept: bool, port: string, reachable: bool, reachable-offered: bool, scope-note: string, warning: string, status: string, status-tone: ChipTone }
 
 // ---- the Plugin store ----
 export struct StoreBadge { text: string, tone: ChipTone }
@@ -856,11 +856,12 @@ export component CatBody inherits VerticalLayout {
             committed(t) => { root.cat-port(t); }
         }
     }
-    Tick {
+    if root.model.reachable-offered : Tick {   // never offered by the window (core/cat_scope.hpp, owner decision 19); kept only so the component's own test can press it
         label: @tr("Reachable from other machines");
         on: root.model.reachable;
         toggled(v) => { root.cat-reachable(v); }
     }
+    if root.model.scope-note != "" : Note { wrap-w: root.width; text: root.model.scope-note; }
     if root.model.warning != "" : Note { wrap-w: root.width; text: root.model.warning; tone: ChipTone.warn; }
     if root.model.status != "" : Note { wrap-w: root.width; text: root.model.status; tone: root.model.status-tone; }
 }

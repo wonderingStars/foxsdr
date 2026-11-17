@@ -169,7 +169,7 @@ constexpr std::size_t kPresetFieldBytes = 128;         // airband_.presetName's 
 struct PositionOffers {
     bool known = false;
     std::string known_text;                // "51.50000N 0.12000W" once a position is set
-    std::string heard_label;               // "Use the middle of the 4 aircraft heard  (51.50N 0.12W)" / "... (2 heard, need 3)" / "... (none heard yet)"
+    std::string heard_label;               // "Use the middle of the 4 aircraft heard  (51.50N 0.12W)" / "... (2 heard, need 3)" / "... (none heard)"
     bool heard_enabled = false;
     std::string map_label;                 // "Use the ADS-B map's centre  (51.50N 0.12W)"; "" when no map page offers an acceptable centre
     bool map_enabled = false;
@@ -256,6 +256,7 @@ struct ScannerModel {
     std::string start_label;               // "Start scan"
     std::string stop_label;                // "Stop scan"
     std::string skip_label;                // "Skip"
+    std::string comma_note;                // the ambiguous-comma sentence, "" while none applies
     std::string status;                    // "Scanning | 145.5000 MHz"
     Tone status_tone = Tone::Neutral;      // Idle neutral, Scanning and Paused good (the scanner is working), Holding warn (waiting for the signal to come back)
     // ---- host extras ----
@@ -367,7 +368,7 @@ struct MarkersModel {
     std::vector<MarkerRow> rows;           // in frequency order (the sheet is for working through the band)
     std::string error;                     // fact.markers.error
     std::string clear_label;               // "Clear all markers" ("" for an empty list)
-    std::string empty_line;                // "No markers yet. Right-click the waterfall and choose Drop marker here." while the list is empty
+    std::string empty_line;                // "No markers. Right-click the waterfall and choose Drop marker here." while the list is empty
     // ---- host extras ----
     std::string clear_confirm;             // "Yes, remove all 3"
     std::string clear_yes_label;           // (the same sentence, by the UI name)
@@ -444,6 +445,7 @@ struct ReadOptions {
     double import_elapsed_s = 0.0;         // how long the read has been out
     // Scanner
     std::array<std::string, kScannerFieldCount> scan_draft;
+    std::string scan_comma_note;           // the sentence under the scanner fields while the last typed number was refused for an ambiguous comma
     unsigned scan_draft_bits = 0;          // bit i: field i shows its draft (typed, or an edit waiting for a running scan)
     // Airband
     std::string air_code, air_preset = "Manual", air_freq, air_name, air_import_path, air_group, air_note, air_preset_note;
@@ -526,6 +528,7 @@ enum class Local {
     ImportLookup,                          // text = the cleaned path of a bookmark import to look for on a worker
     PresetImportLookup,                    // text = the cleaned path, text2 = the preset
     ScannerDraft,                          // number = the field, text = what was typed
+    ScannerCommaNote,                      // text = the sentence for a number refused for an ambiguous comma (owner decision 73); cleared by the next accepted ScannerDraft
     AirbandCode, AirbandPresetName, AirbandFreq, AirbandName, AirbandImportPath,   // text
     AirbandMode,                           // number
     AirbandGroup,                          // text = the group on show; flag = the preset field takes text2

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gui/app_window.hpp"
+#include "core/cat_scope.hpp"
 #include "core/config_halves.hpp"
 #include "core/file_read.hpp"
 #include "core/patch_draft.hpp"
@@ -4245,7 +4246,7 @@ void AppWindow::drawStatusColumn() {
     // ring level moves every callback and a starving sink's count climbs by
     // the frame, and both were unreadable printed at the frame rate. The
     // colour and the wording follow the SAME held figures, so the card never
-    // says "no callback has starved yet" beside a non-zero count.
+    // says "no callback has starved" beside a non-zero count.
     AudioReadout liveAudio;
     liveAudio.underruns = static_cast<unsigned long long>(uiState_.audioUnderruns);
     {
@@ -4265,7 +4266,7 @@ void AppWindow::drawStatusColumn() {
         const double capMs = shownAudio.capMs;
         cascade::core::formatUtf8(l1, tr("ring %.0f of %.0f ms"), ringMs, capMs);
         StatusLine lines[4] = {
-            {under == 0 ? tr("no callback has starved yet") : tr("starved callbacks, since start"),
+            {under == 0 ? tr("no callback has starved") : tr("starved callbacks, since start"),
              under == 0 ? kFaint : cascade::gui::theme::kAlarm},
             {l1.c_str(), kFaint},
             {nullptr, kFaint},
@@ -11045,7 +11046,7 @@ void AppWindow::drawReceiverPositionOffers() {
         cascade::core::formatUtf8(label, tr("Use the middle of the traffic  (%d heard, need %d)"),
                       heard, cascade::gui::kScopeTrafficCentreMinAircraft);
     } else {
-        label = tr("Use the middle of the traffic  (none heard yet)");
+        label = tr("Use the middle of the traffic  (none heard)");
     }
     ImGui::BeginDisabled(!trafficReady);
     // The caption is a whole sentence with figures in it; a translation that
@@ -11923,7 +11924,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                 }
                 if (rspec == nullptr || rspec->db.empty()) {
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
-                    ImGui::TextWrapped("%s", tr("No spectrum yet - its radio is not running."));
+                    ImGui::TextWrapped("%s", tr("No spectrum: its radio is not running."));
                     ImGui::PopStyleColor();
                     break;
                 }
@@ -12108,7 +12109,7 @@ void AppWindow::drawPatchFaces(float originX, float originY, float width, float 
                     // The sentence above already says why there is nothing on it.
                 } else if (patchMapTracks_.empty()) {
                     ImGui::PushStyleColor(ImGuiCol_Text, muted);
-                    ImGui::TextUnformatted(tr("no targets yet"));
+                    ImGui::TextUnformatted(tr("no targets"));
                     ImGui::PopStyleColor();
                 } else {
                     ImGui::Text(tr("%zu aircraft  %zu vessels  %zu stations%s"), air, sea, fixed,
@@ -13360,7 +13361,7 @@ void AppWindow::drawPatchView() {
                         ImGui::Spacing();
                         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(
                                                                  cascade::gui::theme::kInkMuted));
-                        ImGui::TextWrapped("%s", tr("This node has nothing to set yet."));
+                        ImGui::TextWrapped("%s", tr("This node has nothing to set."));
                         ImGui::PopStyleColor();
                         break;
                 }
@@ -14892,7 +14893,7 @@ void AppWindow::drawPluginWindows() {
                     ImGui::TextDisabled("%s", tr("set the RX position to measure coverage"));
                     cascade::gui::census::note("map:coverage:", "unset");
                 } else if (coverage_.empty()) {
-                    ImGui::TextDisabled("%s", tr("nothing heard yet"));
+                    ImGui::TextDisabled("%s", tr("nothing heard"));
                     cascade::gui::census::note("map:coverage:", "0/0");
                 } else {
                     ImGui::TextDisabled(tr("%d of %d bearings, best %.0f km"),
@@ -15504,7 +15505,7 @@ void AppWindow::drawSatelliteMapBody(MapPage& page) {
         ImGui::PopStyleColor();
         // THE ACCUMULATOR IS PASSED WHETHER OR NOT THE OVERLAY IS ON. The
         // deck's own note reports what has been heard from this position even
-        // while the ring is hidden, because "nothing heard yet" and "hidden"
+        // while the ring is hidden, because "nothing heard" and "hidden"
         // are different facts and the window says which.
         page.view->drawSatellitePanel(page.deck, pageTracks_, pagePaths_, &coverage_,
                                       &trackInfo_);
@@ -20570,9 +20571,12 @@ void AppWindow::drawCatSection() {
         (void)sendServerConfig("{\"cat\":{\"port\":" + std::to_string(catPortMirror_) + "}}");
     }
 
-    if (ImGui::Checkbox(trId("Reachable from other machines"), &catBindAll_)) {
-        (void)sendServerConfig(std::string("{\"cat\":{\"bindAll\":") + (catBindAll_ ? "true" : "false") + "}}");
+    if (cascade::core::kCatReachableOffered) {   // never offered (core/cat_scope.hpp, owner decision 19): the engine refuses a CAT server beyond this computer without an allowed-address list
+        if (ImGui::Checkbox(trId("Reachable from other machines"), &catBindAll_)) {
+            (void)sendServerConfig(std::string("{\"cat\":{\"bindAll\":") + (catBindAll_ ? "true" : "false") + "}}");
+        }
     }
+    ImGui::TextDisabled("%s", tr("CAT is available on this computer only."));
     if (catBindAll_) {
         // Said plainly, because it is a blunter exposure than the web server's:
         // there is no password to add.
@@ -20926,7 +20930,7 @@ void AppWindow::drawSerialPortsSection() {
             "%s",
             tr("No serial ports found. If a device is plugged in, check Device "
                "Manager under \"Ports (COM & LPT)\" - if it is not listed there "
-               "either, this application cannot see it yet."));
+               "either, this application cannot see it."));
         ImGui::PopStyleColor();
     } else if (ImGui::BeginTable("##serialportslist", 1,
                                  ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg,

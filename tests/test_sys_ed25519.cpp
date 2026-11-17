@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cstdint>
 #include <cstdio>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -232,6 +233,23 @@ void testEnvelope() {
     CHECK(verifyEnvelope(env, {}, payload) == SigResult::NoTrustedKey && payload.empty());
     CHECK(ownerTrustedKeys().empty());   // the placeholder: the owner has supplied no key
     CHECK(std::string(kOwnerKeyHex).empty());
+    // The owner key's LENGTH (must-fix, 2026-11-17): empty is "no key"; exactly 64 hexadecimal characters is a key; anything else is a FAULT with a plain sentence, never "no key".
+    {
+        const std::string good(64, 'a');
+        CHECK(ownerKeyProblem("").empty() && trustedKeysFromHex("").empty());                                        // empty: no key
+        CHECK(ownerKeyProblem(good).empty() && trustedKeysFromHex(good).size() == 1);                                // right length: one key
+        CHECK(trustedKeysFromHex(std::string(32, 'A') + std::string(32, '0')).size() == 1);                          // upper case is hexadecimal too
+        const auto throws = [](const std::string& hex, const char* word) {
+            try { trustedKeysFromHex(hex); } catch (const std::logic_error& e) { return std::string(e.what()).find(word) != std::string::npos; }
+            return false;
+        };
+        CHECK(!ownerKeyProblem(std::string(63, 'a')).empty() && throws(std::string(63, 'a'), "63 characters"));      // one short
+        CHECK(!ownerKeyProblem(std::string(10, 'a')).empty() && throws(std::string(10, 'a'), "10 characters"));      // much shorter
+        CHECK(!ownerKeyProblem(std::string(65, 'a')).empty() && throws(std::string(65, 'a'), "65 characters"));      // one long
+        CHECK(!ownerKeyProblem(std::string(128, 'a')).empty() && throws(std::string(128, 'a'), "exactly 64"));       // twice as long
+        CHECK(!ownerKeyProblem(std::string(63, 'a') + "g").empty() && throws(std::string(63, 'a') + "g", "not hexadecimal"));   // right length, one non-hex character
+        CHECK(!ownerKeyProblem(std::string(64, ' ')).empty());                                                      // blanks are not a key
+    }
     // The payload is bound: swap it for another manifest under the same signature, or touch any other field.
     using nlohmann::json;
     auto reenc = [&](const char* key, const json& v) {

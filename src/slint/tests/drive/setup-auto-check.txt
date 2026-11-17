@@ -1,0 +1,7 @@
+#! frames=200 FOXSDR_SETUP_AUTO=1 FOXSDR_FAKE_RADIO_SETUP=rtl-nodriver
+# setup-auto-check (window follow-ups, item 8a): the first-run radio check starts by itself at the first tick of the window - on its own worker, never raising the Radio setup page - so the
+# setup.* count and the radio_found event come from every install, as in the Legacy window. FOXSDR_SETUP_AUTO=1 stands in for "a real window" (a bounded run does not probe by default) and
+# FOXSDR_FAKE_RADIO_SETUP names a synthetic machine, so the bus is not read.
+10 state running == 1
++20 state setup.autoChecked == 1
++1 state shown.about == 0

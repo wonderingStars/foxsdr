@@ -27,6 +27,7 @@ export component Section inherits Rectangle {
     in property <bool> show-dot;
     in property <LampState> dot: LampState.off;
     in property <bool> enabled: true;
+    in property <bool> hidden;                       // a row with nothing to show is not drawn and takes no height (it keeps its place in the list, so the rows after it keep their numbers)
     in property <string> tooltip;
     callback clicked();
 
@@ -36,7 +37,8 @@ export component Section inherits Rectangle {
 
     // The whole component: a VerticalLayout reads this as the row's fixed size, so the open body pushes the rows
     // below it down.
-    height: root.row-height + root.body-height;
+    height: root.hidden ? 0px : root.row-height + root.body-height;
+    visible: !root.hidden;
 
     row := Rectangle {
         x: 0px;

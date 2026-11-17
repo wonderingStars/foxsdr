@@ -755,7 +755,7 @@ std::vector<StoreSiteLine> storeSiteLines(const StoreSite& s) {
     };
     switch (s.state) {
         case StoreSite::State::NotRead:
-            add(cascade::core::formatText(tr("%s: not read yet"), who.c_str()), StoreLineTone::Muted,
+            add(cascade::core::formatText(tr("%s: not read"), who.c_str()), StoreLineTone::Muted,
                 who + ":notread");
             break;
         case StoreSite::State::Kept:
@@ -2055,7 +2055,7 @@ float drawPictureStrip(const ModulePageIn& in, ModulePageState& state, PagePictu
             drawCategoryGlyph(dl, ImVec2(mid.x - gb * 0.5f, mid.y - gb * 0.5f - 18.0f * k), gb,
                               in.glyphCategory != nullptr ? in.glyphCategory : "",
                               theme::withAlpha(theme::kPhosphor, 0.28f), 1.15f * gb / 56.0f);
-            const char* msg = tr("No pictures published yet");
+            const char* msg = tr("No pictures published");
             dl->AddText(uf, px, ImVec2(mid.x - textW(uf, px, msg) * 0.5f, mid.y + gb * 0.5f - 6.0f * k),
                         theme::kInkMuted, msg);
         } else {
@@ -2863,7 +2863,7 @@ void PluginStoreView::draw(float width, float height, const PluginStoreModel& mo
             ImU32 col = theme::kInkMuted;
             switch (cs) {
                 case CatalogueState::NeverAsked:
-                    why = tr("No catalogue has been read yet. Press CHECK NOW above and this "
+                    why = tr("No catalogue has been read. Press CHECK NOW above and this "
                              "application asks the source once.");
                     break;
                 case CatalogueState::Failed:
