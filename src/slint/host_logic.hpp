@@ -53,11 +53,12 @@ std::string fmtNum(double v, int decimals, bool plus = false);
 std::string localizeNumber(const std::string& text, double v, int decimals);
 std::string fmtRate(double hz);                            // "2.400 MS/s", "--" when there is no rate
 std::string fmtKHz(double hz);                             // "12.5 kHz"
-// THE SMALLEST WINDOW a person can drag the window to (look review B1, measured): below 1480 x 560 the receiver strip (frequency, mode, gain, squelch, volume,
-// antenna power), the spectrum toolbar (down to Full span) and the rail (down to FOLD) no longer all fit, and the window has no compact form for them. The
-// bounded drive runs may still ask for smaller sizes: they exist to look at narrow layouts.
-constexpr float kMinWindowW = 1480.0f;
-constexpr float kMinWindowH = 560.0f;
+// THE SMALLEST WINDOW a person can drag the window to (window strip lane, measured): 1024 x 640. The receiver strip folds to a second row (the STOP key with its lamps and the
+// antenna-power key drop under the frequency, mode, gain, squelch and volume) and the spectrum toolbar folds under the tabs, so every control is in the window from 1024 px wide;
+// 640 is the height at which the folded strip (104 + 81 px), the tab rows (32 + 32), the spectrum and the rail down to FOLD all fit (the window layout needs 626). The bounded drive
+// runs may still ask for smaller sizes: they exist to look at narrow layouts. (The first value, 1480 x 560, cut the strip off below it and kept a 1366 x 768 laptop from a window it fits.)
+constexpr float kMinWindowW = 1024.0f;
+constexpr float kMinWindowH = 640.0f;
 // LOOK REVIEW B2: the window toolkit can fault while painting a PICTURE of a window taller than any screen (an access violation inside its item-tree walk: 4 of 8 runs of the review's
 // clips script at 4400 to 8000 px tall, none in 8 runs at 2200 px or less; docs/multi-radio-records/window-followups.md). A bounded run that takes a picture of a window taller than
 // kMaxShotWindowH (an 8K screen is 4320 px) is told so in one plain sentence. It is a WARNING, not a refusal: about twenty committed drive scripts take their pictures of 4400 to 8000 px

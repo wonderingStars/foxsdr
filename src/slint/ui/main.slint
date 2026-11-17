@@ -146,7 +146,7 @@ export component MainWindow inherits Window {
     // whatever preferred-height said (docs 6.36); an explicit size opens as asked, so the size is a pair of properties:
     // the host mirrors the real window size into them every tick (so maximise, restore and the drag-resize edges
     // re-lay the screen) and the render tests set them per frame. 1600 x 900 opens: the sheet is 1440 wide, but its
-    // strip does not fit 1440 by its own numbers. The smallest size the drag-resize edges allow is 1480 x 560 (host_logic.hpp kMinWindowW / kMinWindowH: where the strip, the spectrum toolbar and the rail all fit).
+    // strip does not fit 1440 by its own numbers. The smallest size the drag-resize edges allow is 1024 x 640 (host_logic.hpp kMinWindowW / kMinWindowH): the receiver strip and the spectrum toolbar fold to a second row instead of being cut off.
     in-out property <length> win-w: 1600px;
     in-out property <length> win-h: 900px;
     width: win-w;
@@ -473,31 +473,50 @@ export component MainWindow inherits Window {
 
         // ===================== RECEIVER STRIP (104) =====================
         Rectangle {
-            height: Theme.strip-h; background: Theme.strip;
+            height: Theme.strip-h + sb.row2-h; background: Theme.strip;
             Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
             // THE ROW HOLDS ITS WIDTH (6.38.3): a layout's minimum width travels up through every parent that has no width of its own,
             // and the receiver strip asks for more than the window when the catalogue's words are longer than the English ones (French, German).
             // A Rectangle with a width of its own stops that climb (tests/test_slint_constraints.cpp), and clips what still does not fit.
-            Rectangle { x: 0; y: 0; width: parent.width; height: parent.height; clip: true;
-                HorizontalLayout {   // stretch (the default): the lanes take the strip's slack, the other blocks keep their width
-                    padding-left: 16px; padding-right: 16px; spacing: 14px;   // the sheet says 20; 14 lets the three lanes keep their captions at 1440
+            sb := Rectangle { x: 0; y: 0; width: parent.width; height: Theme.strip-h + self.row2-h; clip: true;
+                // WINDOW STRIP LANE: the strip FOLDS to a second row instead of being cut off. Row one is what the user reaches for first - the tuned
+                // frequency, the mode, then gain / squelch / volume (the lanes); row two holds the STOP key with its lamps and the antenna-power key. When
+                // the one row of blocks (each at its own width, the lanes at 396 px) is wider than the window, the STOP block and the BIAS TEE block drop to
+                // row two. Nothing is hidden: every control is in the window at every width from 1024 px. The blocks are placed here by hand (a layout
+                // cannot wrap); the x of a block is the sum of the widths before it, as the layout's was.
+                property <length> gap: 29px;   // 14 + the 1 px line + 14, between blocks
+                property <bool> radio-on: WorkspaceModel.radio-count > 1 && !root.compact-strip;   // STAGE S4: the radios' own block, only from 1760 px (then the strip is one row)
+                property <length> radio-w: self.radio-on ? 262px + self.gap : 0px;
+                property <length> need-one: 32px + 4 * self.gap + stopb.preferred-width + freqb.preferred-width + modeb.preferred-width + 396px + 120px;   // 120: the antenna-power block's own width (its hint elides)
+                out property <bool> two-rows: self.width < self.need-one;
+                out property <length> row2-h: self.two-rows ? max(stopb.preferred-height, biasb.preferred-height) + 8px : 0px;
+                property <length> x-stop: 16px + self.radio-w;
+                property <length> x-freq: self.two-rows ? 16px : self.x-stop + stopb.preferred-width + self.gap;
+                property <length> x-mode: self.x-freq + freqb.preferred-width + self.gap;
+                property <length> x-lanes: self.x-mode + modeb.preferred-width + self.gap;
+                property <length> x-bias: self.two-rows ? 16px + stopb.preferred-width + self.gap : self.width - 16px - 120px;
+                property <length> lanes-w: self.two-rows ? self.width - 16px - self.x-lanes : self.x-bias - self.gap - self.x-lanes;
+                property <length> y2: Theme.strip-h;   // the top of row two
+                property <length> row2-pad: 8px;
 
                     // STAGE S4: with more than one radio open the strip starts with the radios' own block (docs/multi-radio-records/screen-s4.md); with one radio it is not there and the strip is as it was
-                    if WorkspaceModel.radio-count > 1 && !root.compact-strip : RadioStripBlock { horizontal-stretch: 0; }
-                    if WorkspaceModel.radio-count > 1 && !root.compact-strip : VLine { y: (parent.height - 72px) / 2; }
+                    if self.radio-on : RadioStripBlock { x: 16px; y: 0px; height: Theme.strip-h; }
+                    if self.radio-on : VLine { x: 16px + 262px + 14px; y: (Theme.strip-h - 72px) / 2; }
 
-                    HorizontalLayout { // STOP + the four MASTER lamps
-                        spacing: 14px; alignment: center; horizontal-stretch: 0;
+                    stopb := HorizontalLayout { // STOP + the four MASTER lamps
+                        x: sb.x-stop; y: sb.two-rows ? sb.y2 : 0px; width: self.preferred-width; height: sb.two-rows ? sb.row2-h : Theme.strip-h;
+                        spacing: 14px; alignment: center;
                         VerticalLayout { alignment: center; StopKey { running: root.running; tooltip: root.running ? @tr("Stop the receiver") : @tr("Start the receiver"); clicked => { root.stop-clicked(); } } }
                         GridLayout { spacing-horizontal: 14px; spacing-vertical: 6px; y: (parent.height - self.height) / 2;
                             Row { Lamp { caption: @tr("RUN");  state: root.running  ? LampState.green : LampState.off; } Lamp { caption: @tr("DEC");  state: root.decoding ? LampState.green : LampState.off; } }
                             Row { Lamp { caption: @tr("MUTE"); state: root.muted    ? LampState.amber : LampState.off; } Lamp { caption: @tr("FAIL"); state: root.failed   ? LampState.red   : LampState.off; } }
                         }
                     }
-                    VLine { y: (parent.height - 72px) / 2; }
+                    if !sb.two-rows : VLine { x: sb.x-freq - 15px; y: (Theme.strip-h - 72px) / 2; }
 
-                    VerticalLayout { // the tuned frequency
-                        spacing: 2px; alignment: center; horizontal-stretch: 0;
+                    freqb := VerticalLayout { // the tuned frequency
+                        x: sb.x-freq; y: 0px; width: self.preferred-width; height: Theme.strip-h;
+                        spacing: 2px; alignment: center;
                         HorizontalLayout { alignment: space-between;
                             Caption { label: @tr("Tuned frequency"); }
                             HorizontalLayout { spacing: 10px;
@@ -522,10 +541,11 @@ export component MainWindow inherits Window {
                             menu-requested(x, y) => { root.counter-menu-requested(x, y); }
                         }
                     }
-                    VLine { y: (parent.height - 72px) / 2; }
+                    VLine { x: sb.x-mode - 15px; y: (Theme.strip-h - 72px) / 2; }
 
-                    VerticalLayout { // mode: the eight keys as a segment, or one picker when the strip is compact
-                        spacing: 6px; alignment: center; horizontal-stretch: 0;
+                    modeb := VerticalLayout { // mode: the eight keys as a segment, or one picker when the strip is compact
+                        x: sb.x-mode; y: 0px; width: self.preferred-width; height: Theme.strip-h;
+                        spacing: 6px; alignment: center;
                         Caption { label: @tr("Mode"); }
                         HorizontalLayout { alignment: start;
                             if !root.compact-strip : SegGroup {   // the eight mode keys, a radio group (accessible as eight buttons)
@@ -538,10 +558,11 @@ export component MainWindow inherits Window {
                         }
                         ElidedHint { text: root.mode-hint; max-width: root.compact-strip ? 130px : 440px; }
                     }
-                    VLine { y: (parent.height - 72px) / 2; }
+                    VLine { x: sb.x-lanes - 15px; y: (Theme.strip-h - 72px) / 2; }
 
                     HorizontalLayout { // gain / squelch / volume lanes: the strip's slack is theirs
-                        spacing: 18px; horizontal-stretch: 1; alignment: stretch; min-width: 396px;   // three lanes of 120 at least; from about 1500 px the captions no longer elide
+                        x: sb.x-lanes; y: 0px; width: sb.lanes-w; height: Theme.strip-h;
+                        spacing: 18px; alignment: stretch;   // three lanes of 120 at least (the strip folds before they get less); from about 1500 px the captions no longer elide
                         VerticalLayout { alignment: center; horizontal-stretch: 1;
                             SliderGroup { caption: @tr("Gain"); readout: root.gain-text; hint: root.gain-hint; value: root.gain-norm; enabled: root.gain-enabled;
                                 has-auto: true; auto-on: root.gain-auto; auto-enabled: root.gain-auto-enabled; auto-tooltip: root.gain-auto-tooltip; tooltip: root.gain-tooltip;
@@ -562,10 +583,11 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    VLine { y: (parent.height - 72px) / 2; }
+                    VLine { x: sb.x-bias - 15px; y: sb.two-rows ? sb.y2 + (sb.row2-h - 72px) / 2 : (Theme.strip-h - 72px) / 2; }
 
-                    VerticalLayout { // antenna power: the BIAS TEE hazard key, as wide as the key
-                        spacing: 6px; alignment: center; horizontal-stretch: 0; width: 120px;
+                    biasb := VerticalLayout { // antenna power: the BIAS TEE hazard key, as wide as the key
+                        x: sb.x-bias; y: sb.two-rows ? sb.y2 : 0px; height: sb.two-rows ? sb.row2-h : Theme.strip-h;
+                        spacing: 6px; alignment: center; width: 120px;
                         Rectangle {   // the caption elides in the 120 px lane (ALIMENTATION DE L'ANTENNE): its tip says it (docs 6.62)
                             height: antenna-caption.preferred-height;
                             antenna-caption := Caption { x: 0px; y: 0px; width: parent.width; label: @tr("Antenna power"); }
@@ -580,7 +602,6 @@ export component MainWindow inherits Window {
                         }
                         ElidedHint { text: root.bias-hint; }
                     }
-                }
             }
         }
 
@@ -741,15 +762,34 @@ export component MainWindow inherits Window {
 
             centre := VerticalLayout { // CENTRE
                 spacing: 0px; horizontal-stretch: 1;
-                Rectangle { // tab row + spectrum toolbar (32)
-                    height: Theme.tab-h;
+                Rectangle { // tab row + spectrum toolbar (32; 64 when the toolbar drops to a second row)
+                    height: Theme.tab-h + tbr.row2-h;
                     Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
+                    if tbr.two-rows : Rectangle { y: Theme.tab-h - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
                     // THE ROW HOLDS ITS WIDTH (6.38.3): a layout's minimum width travels up through every parent that has no width of its own,
                     // and the tab row and the spectrum toolbar asks for more than the window when the catalogue's words are longer than the English ones (French, German).
                     // A Rectangle with a width of its own stops that climb (tests/test_slint_constraints.cpp), and clips what still does not fit.
-                    Rectangle { x: 0; y: 0; width: parent.width; height: parent.height; clip: true;
-                        HorizontalLayout { padding-left: 8px; padding-right: 8px; alignment: space-between;
-                            HorizontalLayout { spacing: 0px;
+                    // WINDOW STRIP LANE: the toolbar FOLDS to a second row under the tabs when the tabs and the toolbar do not fit one row (the centre is 664 px
+                    // wide in a 1024 px window with the panel open): every key of the toolbar is in the window at every width, none cut off.
+                    tbr := Rectangle { x: 0; y: 0; width: parent.width; height: Theme.tab-h + self.row2-h; clip: true;
+                        // The toolbar is five groups (g1 Trace, g2 Range, g3 Markers, g4 Band plan, g5 zoom), right-aligned. Row one keeps the tabs and as many of the LAST groups as fit
+                        // beside them (the zoom and the band plan are the ones a person reaches for); the groups before them go to row two, right-aligned, and only then is there a row two.
+                        // `gx(j)` / `gy(j)` are the left edge and the row of group j. 6 px between groups; q(j) is the width of groups j..5, each with its 6 px.
+                        property <length> q1: g1b.preferred-width + g2b.preferred-width + g3b.preferred-width + g4b.preferred-width + g5b.preferred-width + 30px;
+                        property <length> q2: self.q1 - g1b.preferred-width - 6px;
+                        property <length> q3: self.q2 - g2b.preferred-width - 6px;
+                        property <length> q4: self.q3 - g3b.preferred-width - 6px;
+                        property <length> q5: self.q4 - g4b.preferred-width - 6px;
+                        property <length> cap1: self.width - 8px - tabsb.preferred-width - 12px - 8px;   // room beside the tabs for the groups that stay on row one
+                        // k1: the first group that is on row one (1 = all of them; 6 = none)
+                        property <int> k1: self.q1 - 6px <= self.cap1 ? 1 : self.q2 - 6px <= self.cap1 ? 2 : self.q3 - 6px <= self.cap1 ? 3 : self.q4 - 6px <= self.cap1 ? 4 : self.q5 - 6px <= self.cap1 ? 5 : 6;
+                        property <length> qk1: self.k1 == 1 ? self.q1 : self.k1 == 2 ? self.q2 : self.k1 == 3 ? self.q3 : self.k1 == 4 ? self.q4 : self.k1 == 5 ? self.q5 : 0px;
+                        out property <bool> two-rows: self.k1 > 1;
+                        out property <length> row2-h: self.two-rows ? Theme.tab-h : 0px;
+                        pure function gq(j: int) -> length { return j == 1 ? self.q1 : j == 2 ? self.q2 : j == 3 ? self.q3 : j == 4 ? self.q4 : self.q5; }
+                        pure function gx(j: int) -> length { return j >= self.k1 ? self.width - 8px - self.gq(j) + 6px : self.width - 8px - (self.gq(j) - self.qk1) + 6px; }
+                        pure function gy(j: int) -> length { return j >= self.k1 ? 0px : Theme.tab-h; }
+                            tabsb := HorizontalLayout { x: 8px; y: 0px; width: self.preferred-width; height: Theme.tab-h; spacing: 0px;
                                 Tab { label: @tr("RECEIVER"); on: root.view-index == 0; tooltip: @tr("Shows the receiver: the spectrum, the waterfall and its status. Leaving the patch view stops a running patch and gives the receiver its radio back."); clicked => { root.view-selected(0); } }
                                 Tab { label: @tr("PATCH");    on: root.view-index == 1; tooltip: @tr("Opens the patch canvas: radios, channels, decoders and displays wired together by hand. Drag from a port to wire it. A connection that cannot carry what the port produces is refused, and says why."); clicked => { root.view-selected(1); } }
                                 Tab { label: @tr("SCOPE");    on: root.view-index == 2; tooltip: @tr("The scope: an instrument fills the centre."); clicked => { root.view-selected(2); } }
@@ -757,27 +797,28 @@ export component MainWindow inherits Window {
                                     clicked => { KitEvents.page-tab-selected(i); } close-clicked => { KitEvents.page-tab-closed(i); } drag-out(dx, dy) => { KitEvents.page-tab-torn(i, dx, dy); } }
                                 Tab { label: @tr("+ Window"); tooltip: @tr("Open a decoder window as a tab"); clicked => { root.add-window-clicked(); } }
                             }
-                            HorizontalLayout { spacing: 6px; alignment: end;
+                                g1b := HorizontalLayout { x: tbr.gx(1); y: tbr.gy(1); width: self.preferred-width; height: Theme.tab-h; spacing: 6px;
                                 VerticalLayout { alignment: center; Caption { label: @tr("Trace"); font-size: Theme.font-tiny; visible: self.width + 0.5px >= self.preferred-width; }   /* squeezed below its words it is left out, not drawn as a sliver (docs 6.62) */ }
                                 VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
                                     SegKey { label: @tr("Normal"); small: true; min-w: 0px; on: root.trace-mode == 0; clicked => { root.trace-mode-selected(0); } }
                                     SegKey { label: @tr("Peak hold"); small: true; min-w: 0px; on: root.trace-mode == 1; clicked => { root.trace-mode-selected(1); } }
                                     SegKey { label: @tr("Average"); small: true; min-w: 0px; on: root.trace-mode == 2; clicked => { root.trace-mode-selected(2); } }
                                     SegKey { label: @tr("Persistence"); small: true; min-w: 0px; on: root.trace-mode == 3; clicked => { root.trace-mode-selected(3); } } } } }
+                                }
+                                g2b := HorizontalLayout { x: tbr.gx(2); y: tbr.gy(2); width: self.preferred-width; height: Theme.tab-h; spacing: 6px;
                                 VerticalLayout { alignment: center; Caption { label: @tr("Range"); font-size: Theme.font-tiny; visible: self.width + 0.5px >= self.preferred-width; } }
                                 VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
                                     SegKey { label: @tr("Auto"); small: true; min-w: 0px; on: !root.range-manual; tooltip: @tr("Automatic: the standard window, -110 to 0 dB on the receiver"); clicked => { root.range-manual-selected(false); } }
                                     SegKey { label: @tr("Manual"); small: true; min-w: 0px; on: root.range-manual; tooltip: @tr("Manual: the Floor and Ceiling of the Display block"); clicked => { root.range-manual-selected(true); } } } } }
-                                VerticalLayout { alignment: center; HorizontalLayout { spacing: 0px;
+                                }
+                                g3b := VerticalLayout { x: tbr.gx(3); y: tbr.gy(3); width: self.preferred-width; height: Theme.tab-h; alignment: center; HorizontalLayout { spacing: 0px;
                                     Key { label: @tr("Markers"); ghost: true; small: true; min-w: 0px; tooltip: @tr("List the markers dropped on the waterfall"); clicked => { root.markers-clicked(); } }
                                     VerticalLayout { alignment: center; Chip { label: root.marker-count; small: true; } } } }
-                                VerticalLayout { alignment: center; Key { label: @tr("Band plan"); ghost: !root.band-plan-on; on: root.band-plan-on; small: true; min-w: 0px; tooltip: @tr("Show the band-plan ribbon on the spectrum"); clicked => { root.band-plan-toggled(); } } }
-                                VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
+                                g4b := VerticalLayout { x: tbr.gx(4); y: tbr.gy(4); width: self.preferred-width; height: Theme.tab-h; alignment: center; Key { label: @tr("Band plan"); ghost: !root.band-plan-on; on: root.band-plan-on; small: true; min-w: 0px; tooltip: @tr("Show the band-plan ribbon on the spectrum"); clicked => { root.band-plan-toggled(); } } }
+                                g5b := VerticalLayout { x: tbr.gx(5); y: tbr.gy(5); width: self.preferred-width; height: Theme.tab-h; alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
                                     SegKey { label: "−"; small: true; min-w: 26px; tooltip: @tr("Zoom out (Ctrl -)"); clicked => { root.zoom(-1); } }
                                     SegKey { label: "+"; small: true; min-w: 26px; tooltip: @tr("Zoom in (Ctrl +)"); clicked => { root.zoom(1); } }
                                     SegKey { label: @tr("Full span"); small: true; min-w: 0px; shrinkable: true; tooltip: @tr("Back to the full span (Ctrl Delete)"); clicked => { root.zoom(0); } } } } }
-                            }
-                        }
                     }
                 }
                 Rectangle { // the view: RECEIVER (spectrum + splitter + waterfall), PATCH, SCOPE

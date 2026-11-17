@@ -185,7 +185,7 @@ int main() {
     CHECK(f.colNear(359, 450, 520, line));              // its right hairline at x 64 + 296 - 1
     CHECK(f.rowNear(171, 1300, 1360, line));            // tab row bottom hairline: 140 + 32 - 1
     CHECK(f.near(700, 300, well));                      // the spectrum well
-    const int splitterTop = 140 + 32 + 424;             // 596: the spectrum takes 424 of the 694 px
+    const int splitterTop = 140 + 64 + 404;             // 610: the toolbar folds to a second 32 px row at 1440 (window strip lane), so the spectrum takes 406 of the 668 px (was 140 + 32 + 424 = 596, 424 of 694)
     CHECK(f.rowNear(splitterTop, 700, 760, line));      // splitter hairlines
     CHECK(f.near(700, splitterTop + 3, panel));
     CHECK(f.rowNear(splitterTop + 5, 700, 760, line));
@@ -200,8 +200,8 @@ int main() {
     CHECK(f.countNear(180, 50, 560, 125, rgb(0xffb84d), 40) > 20);
     // the first status chip carries the green lamp
     CHECK(f.countNear(4, 874, 40, 898, rgb(0x3ddc84), 30) > 3);
-    // the ribbon along the top of the spectrum well
-    CHECK(f.countNear(700, 172, 1400, 180, rgb(0x2a3b5a), 10) > 300);
+    // the ribbon along the top of the spectrum well (y 204: 172 before the toolbar's second row)
+    CHECK(f.countNear(700, 204, 1400, 212, rgb(0x2a3b5a), 10) > 300);
 
     // ---- keys and gestures reach their callbacks ----
     click(ui->window(), 60, 90);                        // STOP
@@ -331,7 +331,7 @@ int main() {
         {
             Frame n = renderAt(1100, 800);
             n.savePng(shotDir() + "main-screen-fitted-page-1100.png");
-            const int keyInk = n.countNear(1100 - 230, 176, 1100, 212, rgb(0x262a32), 8);
+            const int keyInk = n.countNear(1100 - 230, 288, 1100, 326, rgb(0x262a32), 8);
             std::printf("  narrow 1100: key ground in the page bar's right 230 px: %d px\n", keyInk);
             CHECKV(keyInk > 1500, "the page's keys are not inside the frame (%d px of key ground): the page ran past the window", keyInk);
             CHECK(n.width == 1100 && n.height == 800);
