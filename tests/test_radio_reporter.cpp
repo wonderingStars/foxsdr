@@ -5,6 +5,9 @@
 // single destructor, and the parent finds them on disk and sends them (C2).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#if !defined(_WIN32)
+#include <sys/wait.h>
+#endif
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -167,6 +170,16 @@ Event openStart(const RadioIdentity& r) {
     return e;
 }
 
+// cmd.exe (std::system on Windows) strips ONE outer pair of quotes from a line that starts with a quote; sh reads that pair as a single word and finds no
+// such program. So the outer pair is Windows's alone.
+static std::string systemLine(const std::string& inner) {
+#if defined(_WIN32)
+    return "\"" + inner + "\"";
+#else
+    return inner;
+#endif
+}
+
 // Asks the Worker's own validator (node) about every message in `msgs`. Returns the number refused; -1 when node is not available.
 int validateWithWorker(const std::vector<json>& msgs, std::vector<std::string>* verdicts = nullptr) {
     // FOXSDR_DUMP_APP_MESSAGES=<file>: every message handed to the Worker's validator is also appended to that file, one JSON message a line. The website's
@@ -185,7 +198,7 @@ int validateWithWorker(const std::vector<json>& msgs, std::vector<std::string>* 
         for (const json& m : msgs) { f << m.dump(-1, ' ', false, json::error_handler_t::replace) << "\n"; }
     }
     const std::string script = std::string(CASCADE_SOURCE_ROOT) + "/tests/radio_reports_validate.mjs";
-    const std::string cmd = "\"\"" + node + "\" \"" + script + "\" \"" + in.string() + "\" > \"" + out.string() + "\"\"";
+    const std::string cmd = systemLine("\"" + node + "\" \"" + script + "\" \"" + in.string() + "\" > \"" + out.string() + "\"");
     const int rc = std::system(cmd.c_str());
     std::ifstream r(out);
     std::string line;
@@ -674,7 +687,7 @@ int main(int argc, char** argv) {
             CHECK(q[1]["kind"] == "radio_open" && q[1]["seq"] == 1 && q[1]["t"] == 3 && q[1]["body"]["phase"] == "start" && q[1]["body"]["attempt"] == 1);
             CHECK(q[2]["body"]["phase"] == "ok" && q[2]["body"]["attempt"] == 1);
             CHECK(q[3]["kind"] == "radio_stream" && q[3]["t"] == 65 && q[3]["body"]["samplesPerSec"] == 767940);
-            CHECK(q[0]["body"]["cpu"] == "Intel Core i7-8700K" && q[0]["body"]["launches"] == 7 && q[0]["body"]["window"].is_null());
+            CHECK(q[0]["body"]["cpu"] == "Intel Core i7-8700K" && q[0]["body"]["launches"] == 7 && q[0]["body"].value("window", json()).is_null());   // absent or null: operator[] on a const json with a missing key is undefined, and GCC's is not a null
         }
         keep(q);
         // the segment has a header and the cursor moves only after a 2xx
@@ -908,9 +921,13 @@ int main(int argc, char** argv) {
     {
         Rig r("kill");
         const std::string dir = (r.tmp.p / "radio-reports").string();
-        const std::string cmd = std::string("\"\"") + argv[0] + "\" --child-write \"" + dir + "\"\"";
+        const std::string cmd = systemLine(std::string("\"") + argv[0] + "\" --child-write \"" + dir + "\"");
         const int rc = std::system(cmd.c_str());
+#if defined(_WIN32)
         CHECK(rc == 7);                                                       // it ended without running one destructor
+#else
+        CHECK(WIFEXITED(rc) && WEXITSTATUS(rc) == 7);                          // it ended without running one destructor (std::system hands back the wait status here, not the exit code)
+#endif
         CHECK(filesIn(dir, "fail-").size() == 1);
         CHECK(filesIn(dir, "journal-").size() == 1);
         Reporter::Options o = r.options();

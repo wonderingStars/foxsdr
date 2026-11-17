@@ -154,9 +154,9 @@ void testSentences() {
     CHECK(h::noteSentence(m, h::Window::New).empty());   // no note
     m.note = "missing";
     const std::string a = h::noteSentence(m, h::Window::New);     // the person is in the new window, the Legacy one did not open
-    CHECK(a.find("Legacy window could not be opened") != std::string::npos && a.find("cascade.exe") != std::string::npos && a.find("still in the new window") != std::string::npos);
+    CHECK(a.find("Legacy window could not be opened") != std::string::npos && a.find(h::programName(h::Window::Legacy)) != std::string::npos && a.find("still in the new window") != std::string::npos);
     const std::string b = h::noteSentence(m, h::Window::Legacy);
-    CHECK(b.find("new window could not be opened") != std::string::npos && b.find("foxsdr-slint.exe") != std::string::npos && b.find("still in the Legacy window") != std::string::npos);
+    CHECK(b.find("new window could not be opened") != std::string::npos && b.find(h::programName(h::Window::New)) != std::string::npos && b.find("still in the Legacy window") != std::string::npos);
     m.note = "failed:193";
     const std::string c = h::noteSentence(m, h::Window::New);
     CHECK(c.find("Legacy window could not be started (Windows error 193)") != std::string::npos && c.find("back in the new window") != std::string::npos);
@@ -337,7 +337,7 @@ void testRecord() {
     CHECK(o.started && o.recorded && !o.returned);
     CHECK(g_calls.empty());   // nothing was started
     const std::string text = readFile(rec);
-    CHECK(text.find("launch target=legacy program=cascade.exe from=new lock=free parent=") != std::string::npos);
+    CHECK(text.find(std::string("launch target=legacy program=") + h::programName(h::Window::Legacy) + " from=new lock=free parent=") != std::string::npos);   // cascade.exe on Windows, cascade elsewhere
     CHECK(text.find("settings=" + cfg) != std::string::npos);
     CHECK(std::count(text.begin(), text.end(), '\n') == 1);
     CHECK(h::readChoice(cfg) == h::Window::Legacy);   // the saved choice

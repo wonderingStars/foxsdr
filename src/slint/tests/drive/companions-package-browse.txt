@@ -1,4 +1,4 @@
-#! frames=500 size=1400x2200 bank=1 FOXSDR_FAKE_PACKAGE=FoxSDR.Test_1.0.0.0_x64__test FOXSDR_FAKE_PACKAGE_COMPANIONS=fixtures/companions-package FOXSDR_SLINT_STORE_LOCAL=fixtures/companions-index.json
+#! frames=500 size=1400x2200 bank=1 FOXSDR_FAKE_PACKAGE=FoxSDR.Test_1.0.0.0_x64__test FOXSDR_FAKE_PACKAGE_COMPANIONS=fixtures/companions-package FOXSDR_SLINT_STORE_LOCAL=fixtures/companions-index.json platform=windows
 # companions-package-browse (companions-shelf lane, step 3): the shelf of the MICROSOFT STORE copy. The package holds only multimon's program, so that card says INCLUDED IN THIS
 # COPY. trunkfmt has a published address in the catalogue, but a packaged copy never downloads, so it is NOT AVAILABLE here and its key is greyed; hfdl has no program at all.
 10 state running == 1

@@ -67,10 +67,18 @@ bool bytesOf(const std::string& hex, std::string& out) {
     return true;
 }
 
+// A name that is not a regular file reads as empty. (libstdc++ opens a folder happily and THROWS std::ios_base::failure from the first read: a person's folder squatting on
+// "config.json.secrets" ended the program on Linux, where MSVC's stream just fails to open it.)
 std::string slurp(const fs::path& p) {
+    std::error_code ec;
+    if (!fs::is_regular_file(p, ec)) { return std::string(); }
     std::ifstream f(p, std::ios::binary);
     if (!f) { return std::string(); }
-    return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    try {
+        return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    } catch (const std::ios_base::failure&) {
+        return std::string();   // unreadable half way: the same as no copy
+    }
 }
 
 // Temp file in the same folder, then a rename over the target (the way the settings writer does it). `priv`: the file is CREATED readable by its owner only (L10, security

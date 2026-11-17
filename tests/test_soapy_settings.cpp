@@ -150,7 +150,10 @@ int main() {
         const rr::RadioIdentity id2 = rr::identify("soapy", "driver=standinrich2");   // the reporter folds a repeat of one control on one radio for seconds: the second case is another radio
         {
             rrrig::Rig t;
-            SoapySource src;
+            // The source is on the HEAP on purpose: the reporter holds what a driver says while its radio is still opening by the source's ADDRESS and says it when a source is registered at that
+            // address. The earlier blocks of this test left such held events for sources that never registered; a stack object here can take a dead one's address (GCC reuses the slot, MSVC did not).
+            const auto srcHeap = std::make_unique<SoapySource>();
+            SoapySource& src = *srcHeap;
             CHECK(src.open("driver=standinrich"));
             rr::registerSource(&src, id);
             CHECK(!src.setBandwidthHz(100e3));
@@ -168,7 +171,8 @@ int main() {
         }
         {
             rrrig::Rig t;
-            SoapySource src;
+            const auto srcHeap = std::make_unique<SoapySource>();
+            SoapySource& src = *srcHeap;
             CHECK(src.open("driver=standinrich"));
             rr::registerSource(&src, id2);
             std::string rb;

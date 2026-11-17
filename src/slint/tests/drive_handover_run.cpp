@@ -183,7 +183,7 @@ int main() {
         const std::string rec = record("d1");
         std::printf("    d1: exit %d in %lld ms; record: %s", rc, elapsedMs(t0), rec.c_str());
         CHECK(rc == 0);   // the window closed cleanly
-        CHECK(count(rec, "launch ") == 1 && rec.find("launch target=legacy program=cascade.exe from=new lock=free") != std::string::npos);
+        CHECK(count(rec, "launch ") == 1 && rec.find(std::string("launch target=legacy program=") + h::programName(h::Window::Legacy) + " from=new lock=free") != std::string::npos);
         CHECK(rec.find("settings=" + g_cfg.string()) != std::string::npos);
         CHECK(out.find("600 frames") == std::string::npos);   // it did not run its 600 ticks: the choice ended it
         CHECK(h::readChoice(g_cfg.string()) == h::Window::Legacy);   // remembered
@@ -250,7 +250,7 @@ int main() {
         const std::string rec = record("d5");
         std::printf("    d5: exit %d in %lld ms; record: %s", rc, elapsedMs(t0), rec.c_str());
         CHECK(rc == 0);
-        CHECK(count(rec, "launch ") == 1 && rec.find("launch target=new program=foxsdr-slint.exe from=legacy") != std::string::npos);
+        CHECK(count(rec, "launch ") == 1 && rec.find(std::string("launch target=new program=") + h::programName(h::Window::New) + " from=legacy") != std::string::npos);
         CHECK(h::readChoice(g_cfg.string()) == h::Window::New);   // the way back is remembered
         (void)out;
     }

@@ -183,7 +183,10 @@ bool pickFile(const FilePickRequest& request, std::string& path) {
 
 namespace {
 
-// The full path of an executable file named `tool` on PATH, or "".
+// The full path of an executable file named `tool` on PATH, or "". Only ABSOLUTE
+// PATH entries are looked in: an empty entry or a relative one ("." , "bin") means
+// "the current folder" to a shell, and a helper found there would be whatever a
+// downloaded folder holds (security review 1, L9).
 std::string findOnPath(const char* tool) {
     const char* env = std::getenv("PATH");
     if (env == nullptr) { return std::string(); }
@@ -192,7 +195,7 @@ std::string findOnPath(const char* tool) {
     while (start <= path.size()) {
         std::size_t end = path.find(':', start);
         if (end == std::string::npos) { end = path.size(); }
-        if (end > start) {
+        if (end > start && path[start] == '/') {
             const std::string full = path.substr(start, end - start) + "/" + tool;
             struct stat st {};
             if (::stat(full.c_str(), &st) == 0 && S_ISREG(st.st_mode) &&
@@ -213,7 +216,7 @@ std::string pickerTool() {
     return std::string();
 }
 
-// Runs `args` (argv[0] looked up on PATH) with no shell, its standard input and
+// Runs `args` (argv[0] the helper's FULL path, never looked up again) with no shell, its standard input and
 // error on /dev/null, and collects what it writes to standard output. True when
 // it ran and exited 0. Blocks until the helper exits - which is when the person
 // closes the dialog.
@@ -249,7 +252,7 @@ bool runCapture(const std::vector<std::string>& args, std::string& out) {
             if (devNull > STDERR_FILENO) { ::close(devNull); }
         }
         ::dup2(fds[1], STDOUT_FILENO);  // the copy on fd 1 is not close-on-exec
-        ::execvp(argv[0], argv.data());
+        ::execv(argv[0], argv.data());  // the full path found by findOnPath: no second PATH search
         _exit(127);
     }
     ::close(fds[1]);
@@ -282,10 +285,13 @@ bool pickFile(const FilePickRequest& request, std::string& path) {
     path.clear();
     const std::string tool = pickerTool();
     if (tool.empty()) { return false; }
-    const std::vector<std::string> argv =
+    std::vector<std::string> argv =
         pickerCommand(tool, request.title, pickStartFolder(request.startFrom));
+    if (argv.empty()) { return false; }
+    argv[0] = findOnPath(tool.c_str());  // run the file that was found, not whatever PATH says at exec time
+    if (argv[0].empty()) { return false; }
     std::string out;
-    if (argv.empty() || !runCapture(argv, out)) { return false; }
+    if (!runCapture(argv, out)) { return false; }
     // The helpers print the path and a newline; a path may hold anything else.
     const std::size_t eol = out.find('\n');
     path = out.substr(0, eol);
