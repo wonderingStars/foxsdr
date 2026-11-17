@@ -209,7 +209,7 @@ std::string findOnPath(const std::string& name, const std::string& pathList) {
         if (end == std::string::npos) { end = pathList.size(); }
         const std::string dir = pathList.substr(at, end - at);
         at = end + 1;
-        if (dir.empty()) { continue; }   // an empty entry means "here" in a shell; never run from the working directory
+        if (dir.empty() || !fs::path(dir).is_absolute()) { continue; }   // an empty or relative entry means "here" in a shell; never run from the working directory (security review 1, L9)
         const fs::path p = fs::path(dir) / name;
         if (isExecutableFile(p)) { return p.string(); }
     }

@@ -89,6 +89,12 @@ void pathSearch() {
     touchExecutable(cwd / "foxsdr-desk-probe-tool");
     CHECK(findOnPath("foxsdr-desk-probe-tool", std::string(kSepStr) + b.string()).empty());
     fs::remove(cwd / "foxsdr-desk-probe-tool");
+    // a RELATIVE entry is skipped too: "." and a subfolder name are the current folder's, however they are spelled
+    touchExecutable(cwd / "foxsdr-desk-probe-tool");
+    CHECK(findOnPath("foxsdr-desk-probe-tool", ".").empty());
+    CHECK(findOnPath("foxsdr-desk-probe-tool", "./." + std::string(kSepStr) + b.string()).empty());
+    CHECK(findOnPath("foxsdr-desk-probe-tool", cwd.string()) == (cwd / "foxsdr-desk-probe-tool").string());   // the same folder written absolutely is found
+    fs::remove(cwd / "foxsdr-desk-probe-tool");
 #if !defined(_WIN32)
     // a file that is not executable is not found
     std::ofstream((a / "plain-file").string()) << "x";
