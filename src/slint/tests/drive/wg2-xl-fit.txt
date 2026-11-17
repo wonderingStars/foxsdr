@@ -8,7 +8,9 @@ state look.width == 1600
 +12 state gaps.counterfit == 100
 expect "Bias tee off - asks before switching on" right <= "1584"
 expect "Gain" left >= "800"
-+2 choose "Counter figures" "Enlarged figures"   # Bench Classic XL is not offered (owner answer 2): the doubled figures are the Counter figures choice
++2 choose "Counter figures" "Enlarged figures"   # Bench Classic XL is not offered (owner answer 2): its three effects are three controls
++2 click "Enlarge every reading"
++2 click "Tuner switches"
 +12 state gaps.counterscale == 2
 +12 state gaps.counterfit > 100
 state gaps.counterfit < 140
@@ -18,4 +20,6 @@ expect "Gain" width >= "140"
 expect "Squelch" width >= "140"
 expect "Squelch" left >= "1000"
 +2 choose "Counter figures" "Normal size"
++2 click "Enlarge every reading"
++2 click "Tuner switches"
 +12 state gaps.counterfit == 100
