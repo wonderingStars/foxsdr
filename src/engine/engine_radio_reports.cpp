@@ -60,7 +60,7 @@ void Engine::radioReportsStart(const cascade::core::AppConfig& cfg, const std::s
     // No folder, no queue: a hermetic or bounded run (no config directory) queues and sends nothing.
     if (!configDir.empty()) { o.dir = configDir + "/radio-reports"; }
     o.endpoint = cascade::core::telemetryEndpoint();
-    o.liveSend = false;   // armed by configureHeartbeat() for an interactive run, and then only if rr::kRadioReportsLiveSend is true
+    o.liveSend = false;   // armed by configureHeartbeat() for an interactive run, and only if rr::kRadioReportsLiveSend is true (it is, from 0.99.109)
     o.identity = radioReportIdentity();
     rr::global().configure(o);
 }

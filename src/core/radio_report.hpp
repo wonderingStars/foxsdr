@@ -6,9 +6,11 @@
 // device-argument readers that find a radio's model and serial, and a C++ port of the contract's text rules that every message is held to
 // before it is queued. The queue and the sender are radio_report_queue.hpp; the process-wide reporter the engine calls is radio_reporter.hpp.
 //
-// THE ONE SWITCH. The Worker that accepts the new message kinds is not deployed, and it must be live BEFORE any app sends them
-// (contract section 11). So the live send of every new kind sits behind kRadioReportsLiveSend, which is false in this build: everything is
-// queued, nothing leaves the machine. The release lane changes that ONE line when the Worker is confirmed.
+// THE ONE SWITCH. The Worker that accepts the new message kinds must be live BEFORE any build with sending on is given to anyone (contract
+// section 11: the Worker is deployed first). The live send of every new kind sits behind kRadioReportsLiveSend, which is TRUE from 0.99.109 (the
+// owner's decision of 2026-11-17: this version sends). Each message is written to the queue first and then sent; one that cannot be sent (the Worker
+// of before the deploy answers `bad id`, or the service or the site behind it is down) is kept and tried again for up to 14 days. A test, a drive or a
+// CI run never sends anything off this computer: core/report_send_guard.hpp.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_CORE_RADIO_REPORT_HPP
@@ -20,9 +22,9 @@
 
 namespace cascade::core::radioreport {
 
-// THE ONE LINE THE RELEASE LANE CHANGES. False: every new message kind (radio_fail, the six journal kinds, session_env, first_session, and the
-// beat's `radios` field) is queued on disk and NONE is sent. See the record "radio-reports-app.md".
-inline constexpr bool kRadioReportsLiveSend = false;
+// True: every new message kind (radio_fail, the six journal kinds, session_env, first_session, and the beat's `radios` field) is queued on disk and
+// then sent. False would queue and send nothing. See docs/multi-radio-records/send-on.md.
+inline constexpr bool kRadioReportsLiveSend = true;
 
 inline constexpr int kSchema = 2;
 

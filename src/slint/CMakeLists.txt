@@ -338,3 +338,6 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME test_slint_clip_probe COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/test_slint_clip_probe.py")
     set_tests_properties(test_slint_clip_probe PROPERTIES LABELS "slint" TIMEOUT 60)
 endif()
+
+# NO TEST SENDS A REPORT OFF THIS COMPUTER (send-on lane): see cmake/NoOutsideReports.cmake.
+cascade_forbid_outside_reports()

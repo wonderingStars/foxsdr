@@ -72,7 +72,7 @@ int main() {
         }
     }
 
-    // --- THE LIVE SEND IS OFF: the beat the real sender would post carries no `radios` -------------------------------------------------------------
+    // --- THE LIVE SEND IS ON: the beat the real sender posts carries the `radios` open right now -------------------------------------------------------------
     {
         // (The sender posts over https only, so what it would post is read through nextBeatJson(), which poll() uses and nothing else.)
         HeartbeatSender h;
@@ -81,9 +81,9 @@ int main() {
         h.setRadios({"airspy-hf:HF0001A2", "rtl-sdr:-"});
         const json beat = json::parse(h.nextBeatJson());
         CHECK(beat["id"] == id && beat["beat"] == 1 && beat["v"] == "0.99.109");
-        // THE ONE SWITCH: with kRadioReportsLiveSend false the beat names no radio (the Worker that reads the field is not deployed)
-        CHECK(radioreport::kRadioReportsLiveSend == beat.contains("radios"));
-        CHECK(!radioreport::kRadioReportsLiveSend ? beat.size() == 3 : beat["radios"].size() == 2);
+        // THE ONE SWITCH: with kRadioReportsLiveSend TRUE (0.99.109) the beat names the radios open (was: false, the beat named none and had 3 members)
+        CHECK(radioreport::kRadioReportsLiveSend);
+        CHECK(beat.contains("radios") && beat["radios"].size() == 2);
         // the same sender with the switch on would say them, in the contract's shape: the explicit form is what poll() uses when it is
         const json would = json::parse(HeartbeatSender::beatJson(id, "0.99.109", {"airspy-hf:HF0001A2", "rtl-sdr:-"}));
         CHECK(would["radios"].size() == 2);

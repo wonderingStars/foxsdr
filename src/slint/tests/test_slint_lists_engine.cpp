@@ -81,6 +81,7 @@ void isolate() {
     fs::remove_all(scratch, ec);
     fs::create_directories(scratch, ec);
     for (const char* v : {"LOCALAPPDATA", "APPDATA", "USERPROFILE", "HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"}) { setEnv(v, scratch.string()); }
+    setEnv("FOXSDR_NO_OUTSIDE_REPORTS", "1");   // no report leaves this computer from a test or a drive (core/report_send_guard.hpp)
     setEnv("FOXSDR_TELEMETRY_URL", "http://127.0.0.1:9");
 }
 

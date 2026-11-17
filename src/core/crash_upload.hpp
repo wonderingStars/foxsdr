@@ -87,6 +87,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <atomic>
@@ -393,6 +394,13 @@ struct RawPostResult {
 
 RawPostResult postBounded(const std::string& url, const std::string& json,
                           const std::shared_ptr<UploadCancel>& cancel, bool captureBody);
+
+// THE TEST SEAM THAT PROVES NOTHING LEAVES (send-on lane, core/report_send_guard.hpp): called with the URL at the top of postBounded, before any socket or
+// handle exists. If it returns true the post is vetoed (nothing attempted, `attempted` false). A test sets it to count the destinations a code path asks
+// for and to veto every one, so it can prove "no connection to a non-loopback address" without making one. Empty in a shipped run.
+void setPostObserverForTest(std::function<bool(const std::string& url)> observer);
+// True when the observer vetoes this post (the usage heartbeat's transport asks it too: it does not go through postBounded).
+bool postObserverVetoes(const std::string& url);
 
 // ---------------------------------------------------------------------------
 // Authenticated request, WITH a response body (2026-09-28, tester-link)

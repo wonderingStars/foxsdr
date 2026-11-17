@@ -611,3 +611,6 @@ if(MSVC)
     target_compile_options(measure_radio_workspace PRIVATE /utf-8)
     target_compile_definitions(measure_radio_workspace PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 endif()
+
+# NO TEST SENDS A REPORT OFF THIS COMPUTER (send-on lane): see cmake/NoOutsideReports.cmake.
+cascade_forbid_outside_reports()

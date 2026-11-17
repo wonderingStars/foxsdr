@@ -71,6 +71,7 @@ inline void isolate(const char* tag) {
                           "XDG_CACHE_HOME"}) {
         setEnv(v, g_scratch.string());
     }
+    setEnv("FOXSDR_NO_OUTSIDE_REPORTS", "1");   // no report leaves this computer from a test or a drive (core/report_send_guard.hpp)
     setEnv("FOXSDR_TELEMETRY_URL", "http://127.0.0.1:9");
 }
 
