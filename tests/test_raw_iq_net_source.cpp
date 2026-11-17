@@ -324,7 +324,7 @@ void testE() {
         }
         CHECK(s.faulted());
         std::printf("  silence: %s\n", s.faultedWhile().c_str());
-        CHECK(s.faultedWhile().find("I/Q stream") != std::string::npos);
+        CHECK(s.faultedWhile().find("No samples arrived for") != std::string::npos);   // reworded by the look-fixes lane: was "the I/Q stream stopped" (the word "I/Q stream" moved to the detail)
         s.closeDevice();
     }
     {
