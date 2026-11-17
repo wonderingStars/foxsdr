@@ -20,10 +20,8 @@
 +30 state kit.mapPages >= 1
 +1 click "Layers"
 +5 state mapj.layers == "100000100"
-# the three sources that need their terms and a key stay off: the switch is dimmed and a press does nothing
-+1 expect "Weather radar" enabled equals "false"
-+1 expect "Receiver map" enabled equals "false"
-+1 expect "Repeaters" enabled equals "false"
+# the three sources that need their terms and a key have NO switch (must-fix lane A, owner answer 4): the page draws six, and the three are not among the controls
++1 state mapj.layerRows == 6
 +1 expect "Airspaces" checked equals "true"
 +1 expect "APRS paths" checked equals "true"
 +1 click "Heat map"

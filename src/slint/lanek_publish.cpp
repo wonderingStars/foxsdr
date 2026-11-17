@@ -94,17 +94,6 @@ std::string trimmed(const std::string& s) {
     return s.substr(a, b - a);
 }
 
-void openUrlNow(const std::string& url) {
-#if defined(_WIN32)
-    const std::wstring w = std::filesystem::path(std::u8string(url.begin(), url.end())).wstring();
-    ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-#else
-    std::string why;
-    if (!foxsdr::slintdesk::openAddress(url, &why)) { cc::diagLogf("community link: %s", why.c_str()); }
-#endif
-}
-
-bool urlOk(const std::string& u) { return u.rfind("https://", 0) == 0 && u.size() > 8 && u.size() < 512 && u.find_first_of(" \t\r\n\"<>") == std::string::npos; }
 }  // namespace
 
 struct LaneKPublisher::Impl {
@@ -357,7 +346,6 @@ struct LaneKPublisher::Impl {
         v.push_back(rHeading(tr("Numbers")));
         v.push_back(rChoice("numfmt", tr("Number format"), {tr("Follow the Windows regional settings"), tr("Always use a dot")}, numFormat));
         v.push_back(rChoice("digits", tr("Digits"), {tr("Latin (0-9)"), tr("The language's own digits"), tr("As the language prefers")}, digitsPolicy, numFormat == 0));
-        v.push_back(rNote(tr("Units (feet or metres, knots or km/h) are chosen where an altitude or a speed is shown; this window has none yet.")));
         v.push_back(rHeading(tr("Spoken readout")));
         v.push_back(rKey("speak-now", tr("Speak the frequency, mode and level now"), true, tr("Uses the Windows voice on the default sound output")));
         v.push_back(rTick("speech-onchange", tr("Speak changes automatically"), rec.getBool("speech.onchange", false)));
@@ -383,16 +371,13 @@ struct LaneKPublisher::Impl {
         v.push_back(rTick("tone-mutesq", tr("Silent while the squelch is closed"), rec.getBool("sonify.mutesq", true)));
         v.push_back(rHeading(tr("For a screen reader")));
         v.push_back(rNote(tr("The spectrum, the waterfall and the frequency are described to a screen reader: the strongest signal in the span, how many seconds the waterfall holds, the tuned frequency. The description changes at most twice a second.")));
-        v.push_back(rNote(tr("Right-to-left languages: the window can draw Arabic and Hebrew text, but no such language is installed yet and the layout is not mirrored."), kWarn));
         return v;
     }
 
     std::vector<Row> communityRows() {
         std::vector<Row> v;
-        const std::string forum = forumUrl(), discord = discordUrl();
-        if (forum.empty() && discord.empty()) { v.push_back(rNote(tr("No community links are set up in this copy of FoxSDR."))); }
-        if (!forum.empty()) { v.push_back(rKey("community-forum", tr("Forum"), true, forum)); }
-        if (!discord.empty()) { v.push_back(rKey("community-discord", tr("Discord"), true, discord)); }
+        // No forum and no chat server exist (owner answer, decision 75, 2026-11-16): nothing here names either, and there is no setting to switch one on (must-fix lane A, OA-75)
+        v.push_back(rNote(tr("No community links are set up in this copy of FoxSDR.")));
         return v;
     }
 
@@ -539,8 +524,6 @@ struct LaneKPublisher::Impl {
         if (!cursorNote.empty()) { v.push_back(rNote(cursorNote)); }
     }
 
-    std::string forumUrl() const { const std::string u = rec.getStr("community.forum", ""); return urlOk(u) ? u : std::string(); }
-    std::string discordUrl() const { const std::string u = rec.getStr("community.discord", ""); return urlOk(u) ? u : std::string(); }
 
     // ---------------------------------------------------------------- the sheet
     std::vector<Row> sheetRows(std::string& title, int& width) {
@@ -988,12 +971,6 @@ void LaneKPublisher::Impl::act(const std::string& id, const std::string& text) {
         cursorsShown = text == "1";
     } else if (id.rfind("cur-", 0) == 0) {
         cursorAct(id, text);
-    } else if (id == "community-forum") {
-        if (!env.bounded) { openUrlNow(forumUrl()); }
-        lastAction = "community-forum";
-    } else if (id == "community-discord") {
-        if (!env.bounded) { openUrlNow(discordUrl()); }
-        lastAction = "community-discord";
     }
 }
 
@@ -1259,16 +1236,6 @@ void LaneKPublisher::tick(const FoxReceiverState& state, long tickNo) {
 
 void LaneKPublisher::flush() { if (p_->rec.dirty()) { p_->save(); } }
 
-std::string LaneKPublisher::forumUrl() const { return p_->forumUrl(); }
-std::string LaneKPublisher::discordUrl() const { return p_->discordUrl(); }
-
-void LaneKPublisher::openCommunity(bool discord) {
-    Impl& I = *p_;
-    const std::string u = discord ? I.discordUrl() : I.forumUrl();
-    I.lastAction = discord ? "community-discord" : "community-forum";
-    if (!u.empty() && !I.env.bounded) { openUrlNow(u); }
-}
-
 LaneKPublisher::TraceSource LaneKPublisher::traceSource(int slot, const float* full, std::size_t fullN, std::size_t b0, std::size_t subN, double nowS, std::uint64_t key, std::size_t columns) {
     Impl& I = *p_;
     TraceSource t;
@@ -1381,8 +1348,6 @@ std::string LaneKPublisher::readState(const std::string& w, std::string& out) co
     else if (w == "tonehz") { out = num("%.1f", I.toneParams.freqHz); }
     else if (w == "toneaudible") { out = I.toneParams.audible ? "1" : "0"; }
     else if (w == "numfmt") { out = std::to_string(I.numFormat); }
-    else if (w == "forumurl") { out = I.forumUrl(); }
-    else if (w == "discordurl") { out = I.discordUrl(); }
     else if (w == "sr.spectrum") { out = I.srSpectrum; }
     else if (w == "sr.waterfall") { out = I.srWaterfall; }
     else if (w == "sr.counter") { out = I.srCounter; }

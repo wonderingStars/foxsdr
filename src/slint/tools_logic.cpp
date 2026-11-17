@@ -79,6 +79,7 @@ int readNumber(const std::string& text, double& out) {
     while (lo < hi && std::isspace(static_cast<unsigned char>(text[lo])) != 0) { ++lo; }
     while (hi > lo && std::isspace(static_cast<unsigned char>(text[hi - 1])) != 0) { --hi; }
     if (lo == hi) { return 1; }
+    if (cascade::core::typedCommaAmbiguous(text.substr(lo, hi - lo))) { return 2; }   // "14,200" on a dot locale is refused (owner decision 73); the position's own sentence says so
     const std::string t = cascade::core::typedNumberText(text.substr(lo, hi - lo));   // a decimal comma is read as a decimal point (owner decision 73)
     char* end = nullptr;
     const double v = std::strtod(t.c_str(), &end);
@@ -198,6 +199,9 @@ std::string positionError(const std::string& latText, const std::string& lonText
         if (lat == 0.0 && lon == 0.0) {
             return T("Type the receiver's position first: 0,0 is a point in the\nGulf of Guinea, not a receiver.");
         }
+    }
+    if (cc::typedCommaAmbiguous(latText) || cc::typedCommaAmbiguous(lonText)) {   // "51,477" on a dot locale: a decimal point or a thousands mark? (owner decision 73)
+        return T("A comma followed by three digits could be a decimal point or a thousands mark. Type a dot for a decimal point, and leave thousands marks out.");
     }
     return T("Latitude must be -90..90 and longitude -180..180");
 }

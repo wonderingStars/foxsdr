@@ -179,7 +179,7 @@ export component SkyPage inherits VerticalLayout {
     }
     Text { text: root.model.pass-text; font-size: Theme.font-small; color: Theme.muted; overflow: elide; }
     Text { text: root.model.note; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
-    Text { text: root.model.stellarium-note; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
+    if root.model.stellarium-note != "" : Text { text: root.model.stellarium-note; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
 }
 
 // ----------------------------------------------------------------------------------------------------------------------------

@@ -4,12 +4,6 @@ FoxSDR sends usage counts unless you switch them off, and sends one kind of
 report - a radio that did not open - whatever you have switched on or off. This
 document lists exactly what it sends.
 
-> **DRAFT, awaiting the owner's approval (not legal advice).** The section
-> **Radio failure reports and the radio journal** below, the two changes to
-> **What is never sent** and **Data protection**, and the changed opening of this
-> page describe behaviour that ships in 0.99.109. They are written for the owner
-> to read and approve before the release; nothing in them is final until he has.
-
 ## The update check
 
 Once per launch, FoxSDR asks `https://foxsdr.com/api/update` whether a newer
@@ -245,7 +239,7 @@ listen to is collected by it either. What it does and does not send:
 
 ## Radio failure reports and the radio journal (since 0.99.109)
 
-> **DRAFT, awaiting the owner's approval.** Written from `docs/radio-reports-contract.md`
+> Written from `docs/radio-reports-contract.md`
 > (its section 10 lists what a switched-off install sends). Not legal advice.
 
 **When a radio does not open, FoxSDR sends ONE report about that failure, every
@@ -1414,7 +1408,7 @@ These are design constraints, not current policy:
 - **Hardware serial numbers - except in a radio failure report and the radio
   journal.** The SDR model is useful; the serial identifies your individual
   radio, and is removed from the usage report, the crash and freeze reports and
-  the diagnostics bundle. (DRAFT, awaiting the owner's approval: since 0.99.109 a
+  the diagnostics bundle. (since 0.99.109 a
   radio that does not open is reported with its serial number, and the radio
   journal carries it - see **Radio failure reports and the radio journal**.)
 - Your name, your machine's name, your user account, or any file path.
@@ -1513,7 +1507,7 @@ read.
 
 ## Data protection
 
-(DRAFT, awaiting the owner's approval: radio failure reports and the radio
+(radio failure reports and the radio
 journal are different - they carry a radio's serial number and, while Usage
 reporting is on, your install identifier, are kept indefinitely, and can be
 erased on request; see **Radio failure reports and the radio journal**.)

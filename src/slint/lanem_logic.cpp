@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/airband_channel.hpp"
+#include "core/display_number.hpp"
 #include "core/i18n.hpp"
 
 namespace foxsdr::slintlanem {
@@ -243,7 +244,7 @@ bool parseCapMiB(const std::string& text, double& out, std::string& err) { retur
 std::string bytesText(double bytes) {
     char b[48];
     std::snprintf(b, sizeof(b), "%.1f MB", bytes / 1e6);
-    return b;
+    return cascade::core::localizeDisplayNumber(b, bytes / 1e6, 1);   // the shown number format (owner decision 73)
 }
 
 // ============================================================ the spectrum's GPU counters ============================================================

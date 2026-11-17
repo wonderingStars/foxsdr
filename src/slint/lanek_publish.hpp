@@ -84,10 +84,6 @@ public:
     bool takeGradientChanged();                              // true once after the gradient or its switch changed (the host clears the waterfall)
     bool placeCursorAt(double hz);                           // the spectrum's click while "place the next cursor" is on: true = the click was used
 
-    // The community entries of the App menu: "" = hidden.
-    std::string forumUrl() const;
-    std::string discordUrl() const;
-    void openCommunity(bool discord);
     bool overlayOpen() const;
     void closeOverlays();
 

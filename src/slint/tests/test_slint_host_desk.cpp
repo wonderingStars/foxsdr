@@ -260,7 +260,7 @@ void realRunner() {
 // Every place the window used to do these things only on Windows now asks the module off Windows.
 void callSites() {
     const fs::path src = fs::path(__FILE__).parent_path().parent_path();
-    const char* const files[] = {"system_publish.cpp", "signal_publish.cpp", "tools_publish.cpp", "lanek_publish.cpp", "lanec_publish.cpp", "gaps_win.cpp"};
+    const char* const files[] = {"system_publish.cpp", "signal_publish.cpp", "tools_publish.cpp", "lanec_publish.cpp", "gaps_win.cpp"};
     for (const char* f : files) {
         const std::string text = readAll(src / f);
         CHECK(!text.empty());

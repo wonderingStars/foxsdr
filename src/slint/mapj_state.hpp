@@ -47,6 +47,7 @@ struct MapJShared {
     bool cacheHas = false;
     double cacheReadSec = -100.0;
     int skyRows = 0, antennaRows = 0;
+    int layerRows = 0;   // how many layer switches the page drew on its last publish (the hidden layers have none)
     std::string sunEl;                                               // the Sun elevation as the Sky page last showed it (the drive scripts read it)
 };
 

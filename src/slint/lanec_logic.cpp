@@ -32,6 +32,7 @@ std::string trim(const std::string& s) {
 }
 
 std::optional<double> toNumber(const std::string& text) {
+    if (cascade::core::typedCommaAmbiguous(trim(text))) { return std::nullopt; }   // "14,200" on a dot locale is refused (owner decision 73); these fields have no sentence of their own, they keep the old value
     const std::string t = cascade::core::typedNumberText(trim(text));   // a decimal comma is read as a decimal point (owner decision 73)
     if (t.empty()) { return std::nullopt; }
     char* end = nullptr;

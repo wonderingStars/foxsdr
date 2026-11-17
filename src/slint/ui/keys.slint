@@ -253,6 +253,7 @@ export component SegKey inherits Rectangle {
     in property <bool> enabled: true;
     in property <string> tooltip;
     in property <length> min-w: root.small ? 0px : Theme.seg-key-min-w;
+    in property <bool> shrinkable;                      // the toolbar's last key: it may give way (its word elides, the tooltip and the accessible label carry it whole) so it never runs off the window (GG1-12)
     callback clicked();
     out property <bool> has-focus: fs.has-focus;
 
@@ -261,7 +262,7 @@ export component SegKey inherits Rectangle {
     property <length> hug-w: max(root.min-w, body.preferred-width);
 
     height: root.small ? Theme.seg-sm-h : Theme.seg-h;
-    min-width: root.hug-w;
+    min-width: root.shrinkable ? min(root.hug-w, 44px) : root.hug-w;
     preferred-width: root.hug-w;
     max-width: root.hug-w;
     border-radius: Theme.radius-seg-key;

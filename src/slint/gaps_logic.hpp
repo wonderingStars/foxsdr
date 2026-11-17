@@ -25,6 +25,8 @@ std::string dottedFrequencyText(double hz, int style);
 // Two or more dots: they are grouping marks, the digits are a whole number of the unit (Hz when there is none: "1090.000.000" = 1 090 000 000 Hz; "7.074 MHz" has one dot and stays a decimal).
 // Anything else is host_logic's parseFrequencyHz, unchanged. Either style is accepted whatever the option says.
 bool parseTypedFrequencyHz(const std::string& text, double& hz);
+// The same; `ambiguousComma` is set when the text was refused as "14,200" (one comma, three digits after it) on a computer whose decimal sign is a dot.
+bool parseTypedFrequencyHz(const std::string& text, double& hz, bool* ambiguousComma);
 
 // ---- item 3: the lock ----
 // True for the commands that move a radio's frequency: SET_CENTRE, SET_FREQUENCY, SET_VFO_OFFSET, STEP_TUNE, BOOKMARK_TUNE, PLUGIN_PRESET and a SCANNER_RUN that starts (ival[0] != 0). Everything else

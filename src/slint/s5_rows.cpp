@@ -181,6 +181,7 @@ void S5Rows::buildRawIq(std::vector<Row>& v) {
 void S5Rows::buildPpm(std::vector<Row>& v) {
     const std::string p = "radio." + rn() + ".ppmauto.";
     v.push_back(rHeading(tr("Automatic ppm")));
+    v.push_back(slk::rUnproven());   // decision 61 (G1-17): the measurement's "done" path has not run against a real broadcast pilot
     v.push_back(rNote(ppmReference()));
     const std::string state = fact(p + "state");
     const bool measuring = state == "measuring";

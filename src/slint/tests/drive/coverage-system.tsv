@@ -1,5 +1,5 @@
 147	ASSERTED	system-look.txt	choose "Theme" "Today's bench"; state cfg.uiTheme == today; look.bg == "#15171b", look.face == nixie after Today's bench (system-look.txt)
-148	ASSERTED	system-display.txt	choose "Theme" "Bench Classic XL"; state cfg.uiTheme == classic-xl (the look is saved, not applied: the row is DEFERRED, the setting is real)
+148	NOT_DRIVABLE	-	Bench Classic XL is not offered (owner answer 2 of 2026-11-16, must-fix lane A): test_slint_host_system holds that the Theme list has no such item
 149	ASSERTED	system-look.txt	choose "Theme" "Night Watch"; state cfg.uiTheme == night; look.bg == "#070303", look.accent == "#ff6a4c", look.face == neon after Night Watch (system-look.txt)
 150	ASSERTED	system-display.txt	choose "Theme" "Glass Cockpit"; state cfg.uiTheme == glass (the look is saved, not applied: the row is DEFERRED, the setting is real)
 151	ASSERTED	system-display.txt	choose "Theme" "Daylight Lab"; state cfg.uiTheme == daylight (the look is saved, not applied: the row is DEFERRED, the setting is real)

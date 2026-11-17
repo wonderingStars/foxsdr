@@ -587,7 +587,7 @@ export component PageBody inherits Rectangle {
             pic-w: root.page.pic-w; pic-h: root.page.pic-h; save-enabled: root.page.save-enabled; save-note: root.page.save-note;
             pressed(x, y) => { root.picture-pressed(root.index, x, y); } save-clicked => { root.picture-save(root.index); } }
         // 3 panel
-        if root.page.kind == 3 && !root.page.globe.active && root.page.view3d != 1 : Table { vertical-stretch: 1; columns: root.page.columns; rows: root.page.rows; column-widths: root.page.widths; empty-text: root.page.empty-text;
+        if root.page.kind == 3 && !root.page.globe.active && root.page.view3d != 1 : Table { hover-needs-press: true; vertical-stretch: 1; columns: root.page.columns; rows: root.page.rows; column-widths: root.page.widths; empty-text: root.page.empty-text;
             row-pressed(r) => { root.row-pressed(root.index, r); } clicked(r) => { root.row-clicked(root.index, r); } column-resized(c, w) => { root.column-resized(root.index, c, w); } }
         // 3 panel, the Survey Engine's: the same table behind a VIEW toggle, or the occupancy surface (scene3d_views.slint)
         if root.page.kind == 3 && root.page.view3d == 1 : SurveyPanelPage { vertical-stretch: 1; columns: root.page.columns; rows: root.page.rows; widths: root.page.widths; empty-text: root.page.empty-text;
@@ -602,10 +602,10 @@ export component PageBody inherits Rectangle {
                 PicturePane { horizontal-stretch: 3; min-width: 120px; picture: root.page.picture; have: root.page.have; status: root.page.status; interactive: root.page.interactive;
                     pic-w: root.page.pic-w; pic-h: root.page.pic-h; save-enabled: root.page.save-enabled; save-note: root.page.save-note;
                     pressed(x, y) => { root.picture-pressed(root.index, x, y); } save-clicked => { root.picture-save(root.index); } }
-                if root.page.columns.length > 0 : Table { horizontal-stretch: 2; min-width: 240px; columns: root.page.columns; rows: root.page.rows; column-widths: root.page.widths; empty-text: root.page.empty-text;
+                if root.page.columns.length > 0 : Table { hover-needs-press: true; horizontal-stretch: 2; min-width: 240px; columns: root.page.columns; rows: root.page.rows; column-widths: root.page.widths; empty-text: root.page.empty-text;
                     row-pressed(r) => { root.row-pressed(root.index, r); } clicked(r) => { root.row-clicked(root.index, r); } }
             }
-            if root.page.columns.length > 0 && !(root.page.inst-kind == 5 && root.page.have) : Table { vertical-stretch: 1; columns: root.page.columns; rows: root.page.rows; column-widths: root.page.widths; empty-text: root.page.empty-text;
+            if root.page.columns.length > 0 && !(root.page.inst-kind == 5 && root.page.have) : Table { hover-needs-press: true; vertical-stretch: 1; columns: root.page.columns; rows: root.page.rows; column-widths: root.page.widths; empty-text: root.page.empty-text;
                 row-pressed(r) => { root.row-pressed(root.index, r); } clicked(r) => { root.row-clicked(root.index, r); } }
         }
         // 5 map: the toolbar, then the list at the left and the pane at the right

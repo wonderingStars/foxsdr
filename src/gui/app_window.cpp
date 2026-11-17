@@ -20801,7 +20801,7 @@ void AppWindow::drawUsageReportingSection() {
                "stops both."));
         ImGui::PopStyleColor();
     } else {
-        ImGui::TextDisabled("%s", tr("Off. Nothing is transmitted."));
+        ImGui::TextDisabled("%s", tr("With Usage reporting switched off, FoxSDR sends no usage report, no still-running beat, no journal, no machine description and no first-session record. It still sends one report whenever a radio does not open, whether Diagnostics is on or off."));   // the approved wording (owner, 2026-11-16): a radio that does not open is still reported
     }
     if (ImGui::SmallButton(trId("What exactly is sent?"))) {
         privacyNoticeOpen_ = !privacyNoticeOpen_;

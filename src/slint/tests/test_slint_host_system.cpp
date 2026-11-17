@@ -249,9 +249,28 @@ void displayReads() {
     const DisplayModel m = readDisplay(t, c, stateWith(-120.0, -10.0), o);
     CHECK(m.scales.size() == 7 && at(m.scales, 0).label == "Auto (follows Windows, 125% here)" && at(m.scales, 1).label == "100%" && at(m.scales, 6).label == "250%");
     CHECK(m.scale_index == 3 && at(m.scales, 3).label == "150%" && at(m.scales, 3).id == "150" && at(m.scales, 0).id == "auto");
-    CHECK(m.themes.size() == 6 && at(m.themes, 0).label == "Today's bench" && at(m.themes, 1).label == "Bench Classic XL" && at(m.themes, 2).label == "Night Watch");
-    CHECK(at(m.themes, 3).label == "Glass Cockpit" && at(m.themes, 4).label == "Daylight Lab" && at(m.themes, 5).label == "Field Radio");
-    CHECK(m.theme_index == 2 && at(m.themes, 2).id == "night" && at(m.themes, 1).id == "classic-xl");
+    // must-fix lane A (owner answer 2): Bench Classic XL is not offered. BEFORE: six looks, Night Watch at position 2 (theme_index 2); AFTER: five, Night Watch at position 1
+    CHECK(m.themes.size() == 5 && at(m.themes, 0).label == "Today's bench" && at(m.themes, 1).label == "Night Watch");
+    CHECK(at(m.themes, 2).label == "Glass Cockpit" && at(m.themes, 3).label == "Daylight Lab" && at(m.themes, 4).label == "Field Radio");
+    CHECK(m.theme_index == 1 && at(m.themes, 1).id == "night");
+    for (const SelectItem& th : m.themes) { CHECK(th.id != "classic-xl" && th.label != "Bench Classic XL"); }
+    // a saved setting that names the hidden look falls back cleanly: the list shows Today's bench, the skin is the workbench, the saved key is not rewritten by reading
+    {
+        core::AppConfig hidden = c;
+        hidden.uiTheme = "classic-xl";
+        const DisplayModel mh = readDisplay(t, hidden, stateWith(-120.0, -10.0), o);
+        CHECK(mh.theme_index == 0 && at(mh.themes, 0).id == "today" && mh.themes.size() == 5);
+        CHECK(foxsdr::slintlook::skinOfTheme("classic-xl") == foxsdr::slintlook::SkinId::Workbench);
+        CHECK(hidden.uiTheme == "classic-xl");
+        // picking Today's bench from there is a pick (it saves, and clears the hidden key)
+        const Effect back = applyDisplayTheme(hidden, themeOfShown(0));
+        CHECK(back.save && back.half.uiTheme == "today");
+    }
+    // the shown positions map to the presets (the hidden one is skipped); an out-of-range position is no pick
+    CHECK(shownThemeCount() == 5 && themeOfShown(0) == 0 && themeOfShown(1) == 2 && themeOfShown(4) == 5 && themeOfShown(5) == -1 && themeOfShown(-1) == -1);
+    CHECK(!themeOffered(1) && themeOffered(0) && themeOffered(2) && !themeOffered(6) && !themeOffered(-1));
+    CHECK(shownThemeIndexOf("night") == 1 && shownThemeIndexOf("field") == 4 && shownThemeIndexOf("classic-xl") == 0 && shownThemeIndexOf("bogus") == 0 && shownThemeIndexOf("") == 0);
+    CHECK(applyDisplayTheme(c, themeOfShown(5)).empty());
     CHECK(m.db_min == -120.f && m.db_min_text == "-120" && m.db_max == -10.f && m.db_max_text == "-10" && m.range_manual);
     CHECK(m.freq_displays.size() == 3 && at(m.freq_displays, 0).label == "Nixie tubes" && at(m.freq_displays, 1).label == "Neon" && at(m.freq_displays, 2).label == "Plain");
     CHECK(m.freq_display_index == 1 && at(m.freq_displays, 1).id == "neon");
@@ -758,7 +777,7 @@ void diagnosticsUsageTesterReads() {
     StubTable t;
     ReadOptions ou;
     UsageModel u = readUsage(t, ou);
-    CHECK(!u.send && u.install_id_line.empty() && u.state_line == "Off. Nothing is transmitted.");
+    CHECK(!u.send && u.install_id_line.empty() && u.state_line == "With Usage reporting switched off, FoxSDR sends no usage report, no still-running beat, no journal, no machine description and no first-session record. It still sends one report whenever a radio does not open, whether Diagnostics is on or off.");   // must-fix lane A: BEFORE "Off. Nothing is transmitted." (untrue: a radio that does not open is still reported); AFTER the approved wording
     CHECK(has(u.disclosure, "Anonymous counts only: version, operating system, how long sessions run,") && has(u.disclosure, "no IP address is recorded."));
     CHECK(u.send_label == "Send anonymous usage reports" && u.what_label == "What exactly is sent?" && u.privacy_label == "Privacy policy (foxsdr.com)" && u.privacy_url == core::kPrivacyPolicyUrl);
     t.facts["fact.telemetry.enabled"] = "1";

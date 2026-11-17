@@ -332,6 +332,13 @@ const PartSpec kParts[11] = {
 
 std::string partLabelEnglish(int kind) { return kind >= 0 && kind < 11 ? std::string(kParts[kind].label) : std::string(); }
 
+// THE PARTS BIN OFFERS ONLY WHAT A PATCH RUNS (must-fix lane A, NB-D13): the Generator and the Scope are saved with a patch and drawn on its canvas, but this build does not run them, so the bin does not offer
+// them (a key whose tooltip admitted it did nothing useful). A patch saved with one keeps it. The rule is a function of the part's kind, held by test_slint_host_patch.
+bool partOffered(int kind) {
+    if (kind < 0 || kind >= 11) { return false; }
+    return kParts[kind].kind != pc::NodeKind::Generator && kParts[kind].kind != pc::NodeKind::Scope;
+}
+
 std::string converterNameText(const cc::ConverterSetting& s) {
     const std::string lo = cc::converterHzText(s.loHz);
     std::string out;
@@ -994,13 +1001,13 @@ PatchModel PatchPage::bandModel() const {
 
     // THE SEVEN FIXED PARTS. AT MOST FIVE RADIOS: the key goes grey at five and says why.
     for (int i = 0; i < 11; ++i) {
+        if (!partOffered(i)) { continue; }   // the Generator and the Scope are not run by this build: not offered (their kind numbers stay 9 and 10 in a saved patch)
         PartKey k;
         k.label = tr(kParts[i].label);
         k.kind = i;
         const bool full = kParts[i].kind == pc::NodeKind::Radio && draft_.graph().count(pc::NodeKind::Radio) >= pc::kMaxRadios;
         k.enabled = !full;
         if (full) { cc::formatUtf8(k.tooltip, tr("A patch has at most %zu radios."), pc::kMaxRadios); }
-        if (kParts[i].kind == pc::NodeKind::Generator || kParts[i].kind == pc::NodeKind::Scope) { k.tooltip = tr("Saved with the patch, but this build does not run this part yet."); }   // screen lane M, row 6
         m.parts.push_back(std::move(k));
     }
 

@@ -69,14 +69,16 @@ state look.scale == 1.00
 state look.scale == 1.00
 state look.bg == "#070303"
 
-# Bench Classic XL: today's palette, the counter's figures doubled and every reading 1.4 times (the counter scale and the readings scale are drawn, not only saved)
-+2 choose "Theme" "Bench Classic XL"
-+12 state cfg.uiTheme == classic-xl
-state look.bg == "#15171b"
-state gaps.counterscale == 2
-state gaps.readingscale == 14
-state gaps.nudges == 0
+# Bench Classic XL is NOT offered (must-fix lane A, owner answer 2). What it brought - the counter's figures doubled and every reading 1.4 times - is still two controls, and is still DRAWN, not only saved
 +2 choose "Theme" "Today's bench"
++12 state cfg.uiTheme == today
+state look.bg == "#15171b"
++2 choose "Counter figures" "Enlarged figures"
++2 click "Enlarge every reading"
++12 state gaps.counterscale == 2
+state gaps.readingscale == 14
++2 choose "Counter figures" "Normal size"
++2 click "Enlarge every reading"
 +12 state gaps.counterscale == 1
 state gaps.readingscale == 10
 state gaps.nudges == 1

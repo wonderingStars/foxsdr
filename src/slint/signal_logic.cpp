@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "core/device_scan_plan.hpp"
+#include "core/display_number.hpp"
 #include "core/engine_vocab.hpp"
 #include "core/freq_converter.hpp"
 #include "core/i18n.hpp"
@@ -178,7 +179,7 @@ double gainFromNorm(double lo, double hi, float norm, bool steps) {
     return steps ? std::round(v) : v;
 }
 
-std::string gainText(double value, bool steps) { return steps ? cc::formatText("%.0f", value) : cc::formatText("%.1f dB", value); }
+std::string gainText(double value, bool steps) { return steps ? cc::formatText("%.0f", value) : cc::localizeDisplayNumber(cc::formatText("%.1f dB", value), value, 1); }
 
 // The buttons are in the reference application's order, Sensitive, Linear, Free; the engine's code is AirspySource::GainMode { Linearity, Sensitivity, Free }.
 int airspyGainModeCode(int buttonIndex) {
@@ -224,9 +225,9 @@ std::string airspyHardwareLine(double hardwareRateHz, unsigned decimation) {
 
 // "192 kHz", "44.1 kHz", "7.0500 MHz": the Source section's frequency words (core/receiver_tables.hpp soundCardHzText).
 std::string soundCardHzText(double hz) {
-    if (std::fabs(hz) >= 1.0e6) { return cc::formatText("%.4f MHz", hz / 1.0e6); }
+    if (std::fabs(hz) >= 1.0e6) { return cc::localizeDisplayNumber(cc::formatText("%.4f MHz", hz / 1.0e6), hz / 1.0e6, 4); }   // the shown number format (owner decision 73)
     if (std::fabs(std::fmod(hz, 1000.0)) < 0.5) { return cc::formatText("%.0f kHz", hz / 1000.0); }
-    return cc::formatText("%.1f kHz", hz / 1000.0);
+    return cc::localizeDisplayNumber(cc::formatText("%.1f kHz", hz / 1000.0), hz / 1000.0, 1);
 }
 std::string soundCardRateLabel(double hz, bool exclusive) {
     const std::string text = soundCardHzText(hz);
@@ -446,8 +447,10 @@ std::string recorderLabel(Take take, int start, bool recording, bool finishing) 
 
 std::string takeProgress(Take take, double seconds, double bytes) {
     const unsigned long long samples = static_cast<unsigned long long>(cascade::gui::takeSamples(bytes, take == Take::Iq ? cascade::gui::kIqFrameBytes : cascade::gui::kAudioFrameBytes));
-    if (take == Take::Iq) { return cc::formatText(tr("IQ %.1f s | %llu samples | %.1f MB"), seconds, samples, bytes / 1.0e6); }
-    return cc::formatText(tr("Audio %.1f s | %llu samples | %.1f MB"), seconds, samples, bytes / 1.0e6);
+    // the shown number format (owner decision 73): the seconds first, then the megabytes
+    const auto shown = [&](const std::string& dotted) { return cc::localizeDisplayNumber(cc::localizeDisplayNumber(dotted, seconds, 1), bytes / 1.0e6, 1); };
+    if (take == Take::Iq) { return shown(cc::formatText(tr("IQ %.1f s | %llu samples | %.1f MB"), seconds, samples, bytes / 1.0e6)); }
+    return shown(cc::formatText(tr("Audio %.1f s | %llu samples | %.1f MB"), seconds, samples, bytes / 1.0e6));
 }
 
 std::string diskWaitLine(double waitedS) {
@@ -653,7 +656,7 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
         std::vector<double> rateHz;
         eachItem(t, FOXAPI_LIST_SAMPLE_RATES, [&](int, const FoxListItem& it) {
             SelectItem s;
-            s.label = it.detail[0] != '\0' ? std::string(it.detail) : cc::formatText("%.3f MS/s", it.value[0] / 1.0e6);
+            s.label = it.detail[0] != '\0' ? std::string(it.detail) : cc::localizeDisplayNumber(cc::formatText("%.3f MS/s", it.value[0] / 1.0e6), it.value[0] / 1.0e6, 3);
             s.id = hzId(it.value[0]);
             const double delta = std::fabs(it.value[0] - st.sampleRateHz);
             if (rateIndex < 0 || delta < bestDelta) {
@@ -1111,7 +1114,7 @@ RadioExtrasModel readRadioExtras(const FoxReceiverState& st) {
         m.stereo_word = tr("MONO");
         m.stereo_tone = Tone::Neutral;
     }
-    if (locked) { m.pilot_text = cc::formatText(tr("pilot %.2f"), st.pilotLevel); }
+    if (locked) { m.pilot_text = cc::localizeDisplayNumber(cc::formatText(tr("pilot %.2f"), st.pilotLevel), st.pilotLevel, 2); }
     m.rds_shown = true;
     const std::uint32_t rds = st.rdsFlags;
     if ((rds & (FOXAPI_RDS_PI_VALID | FOXAPI_RDS_PS_VALID | FOXAPI_RDS_RT_VALID)) == 0u) {
@@ -1139,7 +1142,7 @@ AudioFiltersModel readAudioFilters(const FoxReceiverState& st) {
     m.chain_note = tr("chain: notch -> auto-notch -> noise reduction");
     m.nr_on = nr;
     m.nr_strength = static_cast<float>(std::clamp(st.nrStrength, 0.0, 1.0));
-    m.nr_text = cc::formatText("%.2f", st.nrStrength);
+    m.nr_text = cc::localizeDisplayNumber(cc::formatText("%.2f", st.nrStrength), st.nrStrength, 2);
     m.notch_on = notch;
     m.notch_freq = notchNormFromHz(st.notchHz);
     m.notch_freq_text = cc::formatText("%.0f Hz", st.notchHz);

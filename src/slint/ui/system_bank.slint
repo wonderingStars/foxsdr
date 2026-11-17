@@ -104,7 +104,8 @@ export struct DiagnosticsModel {
 
 export struct UsageModel {
     disclosure: string, send: bool, install-id-line: string, what-label: string, privacy-label: string, payload: [string], what-open: bool, what-text: string,
-    state-line: string, send-label: string,            // ADDED: the sentence under the tick ("Off. Nothing is transmitted.") and the tick's own words
+    state-line: string, send-label: string,            // ADDED: the sentence under the tick (what a switched-off install still sends) and the tick's own words
+    radios-line: string, erase-line: string,           // the radios' serial numbers, one line each, and the sentence that says what to quote to have records erased (D5.11)
 }
 
 export struct TesterModel {
@@ -376,23 +377,18 @@ component LineInput inherits Rectangle {
     border-color: root.enabled ? (root.error ? Theme.lamp-red : Theme.line-strong) : Theme.line-strong.with-alpha(0.5);
     background: root.enabled ? Theme.field : Theme.key-disabled-bg;
 
-    property <bool> grabbed;                            // `grab-focus` has been served
+    // THE FOCUS GRAB HAS NO TIMER (must-fix lane A, MG6-popup-timer). A field that appears in a popup has no window to take the keyboard from at its init, so it used to ask once on the
+    // next turn of the event loop through a 1 ms Timer; slint_cpp.dll 1.18.1 faulted (access violation, crash signature BE59150DB2C51A2B) when the popup was closed one loop turn after
+    // it opened and the field, with that timer pending, was torn down (found at engine merge 6; 1 run in 30 alone on this tree). The product no longer owns a timer here: the drop-down
+    // that shows the popup bumps `grab-token` AFTER the popup exists, and the field takes the keyboard when it sees the token change. A change handler dies with its element; nothing is left
+    // pending on a popup that is gone, and a field whose token never changes (the Country filter's host closed it) never acts.
+    in property <int> grab-token;
     init => {
         input.text = root.value;
         if (root.grab-focus) { input.focus(); }
     }
-    // a field that appears in a popup has no window to take the keyboard from at its init: it asks once, on the next turn of the
-    // event loop. ONE MILLISECOND, NOT THIRTY (docs 6.47): a 30 ms timer still pending while the popup was closed by a second click
-    // within a slow frame was torn down with the field during that event and slint_cpp.dll 1.18.1 faulted in Timer::stop
-    // (crash-20261109-024408, reproduced by closing the popup one tick after opening it); due on the next loop turn, the timer has
-    // fired before any second input can arrive. Focus at init alone does not take in a popup (checked: the typed filter did nothing).
-    Timer {
-        interval: 1ms;
-        running: root.grab-focus && !root.grabbed;
-        triggered => {
-            input.focus();
-            root.grabbed = true;
-        }
+    changed grab-token => {
+        if (root.grab-focus) { input.focus(); }
     }
     changed value => {
         input.text = root.value;
@@ -605,6 +601,7 @@ component DropKey inherits Rectangle {
     callback picked(int);
     callback filter-edited(string);
 
+    property <int> grab-n;                              // bumped on each open: the popup's filter field takes the keyboard when it sees the change
     property <length> pad: 4px + Theme.hairline;
     property <length> head-h: root.filter ? Theme.field-h + 6px : 0px;
     property <length> popup-w: max(root.width, root.popup-min-w);
@@ -623,7 +620,7 @@ component DropKey inherits Rectangle {
         label: root.label;
         enabled: root.enabled;
         tooltip: root.tooltip;
-        clicked => { if (root.items.length > 0 || root.filter) { popup.show(); } }
+        clicked => { if (root.items.length > 0 || root.filter) { popup.show(); root.grab-n += 1; } }   // the token is bumped AFTER the popup exists: its filter field takes the keyboard on the change (no timer, MG6-popup-timer)
     }
     popup := PopupWindow {
         x: 0px;
@@ -647,6 +644,7 @@ component DropKey inherits Rectangle {
                 placeholder: root.filter-placeholder;
                 name: root.filter-placeholder;
                 grab-focus: true;
+                grab-token: root.grab-n;
                 edited(t) => { root.filter-edited(t); }
             }
             // a short list is plain rows (a Flickable holds a press back for a moment: the click of a quick pick would be late), a long one scrolls
@@ -1738,6 +1736,8 @@ export component UsageBody inherits VerticalLayout {
     Line { Tick { horizontal-stretch: 1; label: root.model.send-label != "" ? root.model.send-label : @tr("Send anonymous usage reports"); on: root.model.send; toggled(v) => { root.usage-send(v); } } }
     if root.model.state-line != "" : Note { text: root.model.state-line; }
     if root.model.install-id-line != "" : MonoNote { text: root.model.install-id-line; }
+    if root.model.radios-line != "" : MonoNote { text: root.model.radios-line; }
+    if root.model.erase-line != "" : Note { text: root.model.erase-line; }
     Line {
         Mid { Key { label: root.model.what-label; xs: true; clicked => { root.usage-what(!root.model.what-open); } } }
         Rectangle { horizontal-stretch: 1; }

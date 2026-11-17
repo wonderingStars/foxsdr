@@ -38,6 +38,24 @@ void testTypedForms() {
     CHECK(std::strtod(typedNumberText("2,75").c_str(), nullptr) == std::strtod("2.75", nullptr));
 }
 
+// must-fix lane A (owner decision 73): ONE comma and exactly three digits after it is ambiguous on a dot locale (14,200 = 14.2 or 14200) and is refused there; on a comma locale it is the decimal sign.
+void testAmbiguousComma() {
+    using cascade::core::typedCommaAmbiguous;
+    CHECK(typedCommaAmbiguous("14,200", false) && typedCommaAmbiguous("-3,000", false) && typedCommaAmbiguous("1,500 kHz", false) && typedCommaAmbiguous(" 14,200 ", false));
+    CHECK(!typedCommaAmbiguous("14,200", true) && !typedCommaAmbiguous("1,500 kHz", true));                                      // a comma locale: nothing is ambiguous
+    CHECK(!typedCommaAmbiguous("14,20", false) && !typedCommaAmbiguous("14,2", false) && !typedCommaAmbiguous("14,2000", false));  // two, one and four digits after the comma
+    CHECK(!typedCommaAmbiguous(",200", false) && !typedCommaAmbiguous("1,234,567", false) && !typedCommaAmbiguous("1,234.5", false) && !typedCommaAmbiguous("1.234,567", false));
+    CHECK(!typedCommaAmbiguous("14.200", false) && !typedCommaAmbiguous("14200", false) && !typedCommaAmbiguous("", false) && !typedCommaAmbiguous("abc", false));
+    // the two-argument reader leaves an ambiguous text alone (the caller refuses it first) and reads every other comma as before
+    CHECK(typedNumberText("14,200", false) == "14,200" && typedNumberText("14,200", true) == "14.200" && typedNumberText("14,2", false) == "14.2");
+    // the process-wide sign: the default is a dot, and it is what the one-argument check asks
+    cascade::core::setTypedDecimalComma(false);
+    CHECK(!cascade::core::typedDecimalComma() && typedCommaAmbiguous("14,200"));
+    cascade::core::setTypedDecimalComma(true);
+    CHECK(cascade::core::typedDecimalComma() && !typedCommaAmbiguous("14,200"));
+    cascade::core::setTypedDecimalComma(false);
+}
+
 void testDisplayedSymbols() {
     // the comma locale writes a comma; the dot setting a dot; the same value
     cascade::core::access::NumberSymbols de;
@@ -80,7 +98,7 @@ void testNoMachineWriterUsesTheDisplayFormatter(const fs::path& root) {
         if (!e.is_regular_file()) { continue; }
         const std::string ext = e.path().extension().string();
         if (ext != ".cpp" && ext != ".hpp") { continue; }
-        CHECK(!has(slurp(e.path()), "formatNumber(") || name == "typed_number.hpp");
+        CHECK(!has(slurp(e.path()), "formatNumber(") || name == "typed_number.hpp" || name == "display_number.hpp");   // (must-fix lane A: the one place the window's readout units ask for the shown format, host_logic's own formatter's twin)
     }
 }
 
@@ -117,6 +135,7 @@ void testLanguagesFollowWindows() {
 
 int main(int argc, char** argv) {
     testTypedForms();
+    testAmbiguousComma();
     testDisplayedSymbols();
     testSettingsFileKeepsTheDot();
     testLanguagesFollowWindows();

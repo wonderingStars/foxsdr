@@ -73,6 +73,24 @@ const LayerInfo& layerInfo(Layer l) {
     const int i = static_cast<int>(l);
     return kLayers[(i >= 0 && i < kLayerCount) ? i : 0];
 }
+bool layerOffered(Layer l) {
+    const int i = static_cast<int>(l);
+    return i >= 0 && i < kLayerCount && !kLayers[i].needsSource;
+}
+int offeredLayerCount() {
+    int n = 0;
+    for (int i = 0; i < kLayerCount; ++i) { if (!kLayers[i].needsSource) { ++n; } }
+    return n;
+}
+int offeredLayer(int row) {
+    int n = 0;
+    for (int i = 0; i < kLayerCount; ++i) {
+        if (kLayers[i].needsSource) { continue; }
+        if (n == row) { return i; }
+        ++n;
+    }
+    return -1;
+}
 
 const char* blockedNote() { return FOX_TR_NOOP("Off: this data source needs its terms and a key read first."); }
 

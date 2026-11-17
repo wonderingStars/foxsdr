@@ -58,6 +58,10 @@ std::string trim(const std::string& s) {
 }
 
 bool parseNumber(const std::string& text, double lo, double hi, double& out, std::string& err) {
+    if (cascade::core::typedCommaAmbiguous(trim(text))) {   // "14,200" on a dot locale: refused, with the reason (owner decision 73)
+        err = tr("A comma followed by three digits could be a decimal point or a thousands mark. Type a dot for a decimal point, and leave thousands marks out.");
+        return false;
+    }
     const std::string t = cascade::core::typedNumberText(trim(text));   // a decimal comma is read as a decimal point (owner decision 73)
     if (t.empty()) { err = tr("type a number"); return false; }
     double v = 0.0;

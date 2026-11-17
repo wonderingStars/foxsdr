@@ -13,6 +13,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/app_commands.hpp"
+#include "core/display_number.hpp"
 #include "core/i18n.hpp"
 #include "lanek_logic.hpp"
 #include "lanel_logic.hpp"
@@ -210,7 +211,7 @@ struct LaneMPublisher::Impl {
         v.push_back(rHeading(tr("I/Q file playback")));
         v.push_back(rReadout(tr("Speed"), speedText(numOf(speedFact, 1.0)) + "  " + policyWords(policy)));
         v.push_back(rReadout(tr("Playback"), paused ? tr("paused") : tr("playing")));
-        if (env.filePositionSec) { char b[48]; std::snprintf(b, sizeof(b), "%.1f s", env.filePositionSec()); v.push_back(rReadout(tr("Position"), b)); }
+        if (env.filePositionSec) { char b[48]; const double sec = env.filePositionSec(); std::snprintf(b, sizeof(b), "%.1f s", sec); v.push_back(rReadout(tr("Position"), cascade::core::localizeDisplayNumber(b, sec, 1))); }
         field(v, "p.speed", tr("Playback speed"), speedFact, tr("0.25 to 8; 1 is the speed it was recorded at"));
         key(v, "p.speed-set", tr("Set the speed"), [this] {
             double sp = 0; std::string e;
@@ -343,7 +344,7 @@ struct LaneMPublisher::Impl {
         }, true, tr("The pasted parts get new numbers and become the selection."));
         key(v, "q.bypass", tr("Bypass the selection"), [this] { Cmd c = cmd(FOXAPP_OP_PATCH_BYPASS, 1); send(kPatch, tr("Bypass the selection"), c); }, true, tr("A bypassed part is skipped by what runs and stays in the patch. A part whose first input and output carry different things cannot be bypassed."));
         key(v, "q.unbypass", tr("Stop bypassing the selection"), [this] { Cmd c = cmd(FOXAPP_OP_PATCH_BYPASS, 0); send(kPatch, tr("Stop bypassing the selection"), c); });
-        v.push_back(rNote(tr("These work on the engine's copy of the patch. Pick parts by number here: a click on the canvas does not select in the engine yet.")));
+        v.push_back(rNote(tr("These work on the engine's copy of the patch. Pick parts by number here.")));
         endNote(v, kPatch);
     }
 

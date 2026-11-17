@@ -488,6 +488,7 @@ private:
 const char* kindCaption(pc::NodeKind k);                  // translated: RADIO CHANNEL DEMOD DECODER DISPLAY SINK MAP, "NODE"
 const char* refusalText(pc::Connect why);                 // translated
 int portTone(pc::PortType t);                             // 0 I/Q, 1 audio, 2 text, 3 control, 4 track
+bool partOffered(int kind);                               // false for the Generator and the Scope (9, 10): saved and drawn, not run by this build, so the parts bin does not offer them
 std::string partLabelEnglish(int kind);                   // "Radio" "Channel" "Demod" "Spectrum" "Speaker" "Text out" "Map" (stored in the patch as data)
 std::string converterNameText(const cascade::core::ConverterSetting& s);
 // A text typed in a MHz box: the number, false for a text that is not one (an InputDouble would not take it).

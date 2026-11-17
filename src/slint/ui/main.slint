@@ -615,7 +615,7 @@ export component MainWindow inherits Window {
                             Caption { label: root.bank-titles[root.bank-index]; color: Theme.fg; }
                             HorizontalLayout { spacing: 6px;
                                 if WorkspaceModel.radio-count > 1 : VerticalLayout { alignment: center; RadioTag { } }   // stage S4: the radio the panel and the banks show
-                                VerticalLayout { alignment: center; Chip { label: root.bank-chip; tone: root.bank-chip-tone; } }
+                                if root.bank-chip != "" : VerticalLayout { alignment: center; Chip { label: root.bank-chip; tone: root.bank-chip-tone; } }   // no "--" chip on a bank with no state (WG3-chips)
                             }
                         }
                     }
@@ -771,7 +771,7 @@ export component MainWindow inherits Window {
                                 VerticalLayout { alignment: center; SegGroup { small: true; HorizontalLayout { padding: 2px; spacing: 2px;
                                     SegKey { label: "−"; small: true; min-w: 26px; tooltip: @tr("Zoom out (Ctrl -)"); clicked => { root.zoom(-1); } }
                                     SegKey { label: "+"; small: true; min-w: 26px; tooltip: @tr("Zoom in (Ctrl +)"); clicked => { root.zoom(1); } }
-                                    SegKey { label: @tr("Full span"); small: true; min-w: 0px; tooltip: @tr("Back to the full span (Ctrl Delete)"); clicked => { root.zoom(0); } } } } }
+                                    SegKey { label: @tr("Full span"); small: true; min-w: 0px; shrinkable: true; tooltip: @tr("Back to the full span (Ctrl Delete)"); clicked => { root.zoom(0); } } } } }
                             }
                         }
                     }

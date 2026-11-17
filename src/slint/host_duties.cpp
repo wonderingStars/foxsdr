@@ -318,7 +318,7 @@ UpdateCardModel updateCardFor(const UpdateView& v) {
         for (const std::string& line : n.notes) { c.notes.push_back(line); }
     }
     if (!v.installerHere) {
-        c.note = cascade::i18n::tr("There is no in-app updater for Linux yet - download it from foxsdr.com.");
+        c.note = cascade::i18n::tr("Download the update from foxsdr.com.");
         c.primary = cascade::i18n::tr("Open foxsdr.com");
     } else {
         switch (v.stage) {

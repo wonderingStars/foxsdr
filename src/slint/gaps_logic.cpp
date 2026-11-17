@@ -30,9 +30,11 @@ std::string dottedFrequencyText(double hz, int style) {
     return std::to_string(mhz / 1000ull) + g + tail;
 }
 
-bool parseTypedFrequencyHz(const std::string& text, double& hz) {
+bool parseTypedFrequencyHz(const std::string& text, double& hz) { return parseTypedFrequencyHz(text, hz, nullptr); }
+
+bool parseTypedFrequencyHz(const std::string& text, double& hz, bool* ambiguousComma) {
     const auto dots = std::count(text.begin(), text.end(), '.');
-    if (dots < 2) { return foxsdr::slinthost::parseFrequencyHz(text, hz); }
+    if (dots < 2) { return foxsdr::slinthost::parseFrequencyHz(text, hz, ambiguousComma); }
     std::string digits, unit;
     for (const char ch : text) {
         if (ch >= '0' && ch <= '9') { digits += ch; }

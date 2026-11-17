@@ -17,17 +17,10 @@ state cfg.counterScale == 1
 expect "Theme" value equals "Night Watch"
 expect "Frequency display" value equals "Neon"
 
-# Bench Classic XL: counter figures doubled, switches put away, readings 1.4
-+2 choose "Theme" "Bench Classic XL"
-+10 state cfg.uiTheme == classic-xl
-state cfg.counterScale == 2
-state cfg.counterSwitches == false
-state cfg.readingsScale > 1.39
-state cfg.readingsScale < 1.41
-state cfg.tunerDisplayStyle == nixie
-expect "Counter figures" value equals "Enlarged figures"
-expect "Tuner switches" checked equals "false"
-expect "Enlarge every reading" checked equals "true"
+# Bench Classic XL is NOT offered (must-fix lane A, owner answer 2): the Theme list holds the other five looks; the figures and readings it brought are the Counter figures and Enlarge every reading controls, driven below
+state cfg.uiTheme == night
++1 choose "Theme" "Today's bench"
++10 state cfg.uiTheme == today
 
 # Glass Cockpit, Daylight Lab, Field Radio: plain face, everything back to 1 / on
 +2 choose "Theme" "Glass Cockpit"

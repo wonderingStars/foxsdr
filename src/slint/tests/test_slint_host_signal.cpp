@@ -2,6 +2,7 @@
 // an RTL-SDR that is open, the generator, a sound card, an Airspy, a converter in force, the filters, the sinks, the recorder, unbound radios of two
 // families and a stopped device - and the exact commands each control sends, which are the ImGui window's own. No Slint, no engine.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include "host_logic.hpp"
 #include "signal_logic.hpp"
 #include "test_check.hpp"
 
@@ -899,6 +900,19 @@ int main() {
         CHECK(recorderLabel(Take::Iq, 0, false) == "Record IQ" && recorderLabel(Take::Iq, 0, true) == "Stop IQ" && recorderLabel(Take::Iq, 1, false) == "Starting IQ - click to cancel" && recorderLabel(Take::Iq, 2, false) == "Cancelling IQ start...");
         CHECK(recorderLabel(Take::Audio, 0, false) == "Record audio" && recorderLabel(Take::Audio, 0, true) == "Stop audio" && recorderLabel(Take::Audio, 1, false) == "Starting audio - click to cancel" && recorderLabel(Take::Audio, 2, false) == "Cancelling audio start...");
         CHECK(takeProgress(Take::Iq, 3.04, 8.0e6) == "IQ 3.0 s | 1000000 samples | 8.0 MB" && takeProgress(Take::Audio, 0, 0) == "Audio 0.0 s | 0 samples | 0.0 MB");
+        // must-fix lane A (owner decision 73): the SIGNAL page's readouts follow the Windows number format - a comma locale writes the comma; with none set they are the dotted text above, byte for byte
+        {
+            cascade::core::access::NumberSymbols de;
+            de.name = "de-DE";
+            de.decimal = ",";
+            de.group = ".";
+            foxsdr::slinthost::setNumberLocale(&de);
+            CHECK(takeProgress(Take::Iq, 3.04, 8.0e6) == "IQ 3,0 s | 1000000 samples | 8,0 MB" && takeProgress(Take::Audio, 0, 0) == "Audio 0,0 s | 0 samples | 0,0 MB");
+            CHECK(gainText(12.5, false) == "12,5 dB" && gainText(12.0, true) == "12");
+            CHECK(soundCardHzText(44100) == "44,1 kHz" && soundCardHzText(7.05e6) == "7,0500 MHz" && soundCardHzText(192000) == "192 kHz");
+            foxsdr::slinthost::setNumberLocale(nullptr);
+            CHECK(gainText(12.5, false) == "12.5 dB" && soundCardHzText(44100) == "44.1 kHz");
+        }
         CHECK(diskWaitLine(0.99).empty() && diskWaitLine(1.0) == "Waiting for the disk to open the file: 1 s" && diskWaitLine(12.4) == "Waiting for the disk to open the file: 12 s");
         CHECK(recorderStartOf("10", Take::Iq) == 1 && recorderStartOf("10", Take::Audio) == 0 && recorderStartOf("02", Take::Audio) == 2 && recorderStartOf("", Take::Iq) == 0 && recorderStartOf("1", Take::Audio) == 0);
     }

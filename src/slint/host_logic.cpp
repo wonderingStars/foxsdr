@@ -3,6 +3,8 @@
 #include "host_logic.hpp"
 
 #include "core/i18n.hpp"
+#include "core/display_number.hpp"
+#include "core/typed_number.hpp"
 #include "core/utf8_text.hpp"
 
 #include <algorithm>
@@ -118,6 +120,8 @@ std::string locNum(double v, int decimals, const char* plain) { return g_numLoca
 }  // namespace
 void setNumberLocale(const cascade::core::access::NumberSymbols* symbols, cascade::core::access::DigitPolicy policy) {
     g_numLocal = symbols != nullptr;
+    cascade::core::setDisplayNumberFormat(symbols, policy);   // the units that format a readout without host_logic (signal_logic, s1_meter, lanem) read the same format
+    cascade::core::setTypedDecimalComma(symbols != nullptr && symbols->decimal == ",");   // what a typed "14,200" means (core/typed_number.hpp): the same sign the readouts use
     if (symbols != nullptr) { g_numSymbols = *symbols; }
     g_numPolicy = policy;
 }
@@ -148,7 +152,18 @@ std::string spanText(double hz) {
 std::string cursorText(double hz, double db) { return locNum(hz / 1e6, 3, "%.3f") + " MHz" + kDot + locNum(db, 1, "%.1f") + " dB"; }
 std::string axisUnit(double) { return "MHz"; }
 
-bool parseFrequencyHz(const std::string& text, double& hz) {
+std::string typedCommaSentence() {
+    return cascade::i18n::tr("A comma followed by three digits could be a decimal point or a thousands mark. Type a dot for a decimal point, and leave thousands marks out.");
+}
+
+bool parseFrequencyHz(const std::string& text, double& hz) { return parseFrequencyHz(text, hz, nullptr); }
+
+bool parseFrequencyHz(const std::string& text, double& hz, bool* ambiguousComma) {
+    // "14,200" on a computer whose decimal sign is a dot could be 14.2 or 14200: refused, and the caller says why (owner decision 73, must-fix lane A)
+    if (cascade::core::typedCommaAmbiguous(text)) {
+        if (ambiguousComma != nullptr) { *ambiguousComma = true; }
+        return false;
+    }
     std::string digits;
     std::string unit;
     bool seenDot = false;

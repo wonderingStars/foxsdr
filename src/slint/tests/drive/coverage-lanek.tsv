@@ -24,7 +24,7 @@
 5223	DRIVEN	lanek-access	saved choices feeding the announcer policy
 5224	ASSERTED	lanek-access	state lk.toneon, lk.tonehz (the parameters are computed; no device is opened in a bounded run)
 5225	ASSERTED	lanek-access	state lk.sr.spectrum, lk.sr.waterfall, lk.sr.counter (the text the accessible description carries)
-5226	ASSERTED	lanek-community	state lk.forumurl == empty, lk.discordurl == empty: no address is set in this copy
+5226	NOT_DRIVABLE	-	no forum and no Discord exist (owner decision 75): no control, setting, menu entry or string names either; test_slint_host_mustfixa scans the window and the catalogues for it
 5227	ASSERTED	lanek-spectrum	state lk.avgmode; the averaging closed forms by test_trace_average
 5228	ASSERTED	lanek-spectrum	state lk.zoomselect, then radio zoomsel (the plot's own call) narrows the span: state lk.zoomspan
 5229	DRIVEN	lanek-spectrum	the scripted drag starts on a control, not on the plot: the real pointer drag is the final real-mouse drive's

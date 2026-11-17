@@ -292,17 +292,22 @@ struct DiagnosticsModel {
     std::string dump_note;                 // "A memory dump can contain file names..."
 };
 
+// The hardware serial a device key carries ("driver|serial=...,"), "" when it has none or the value is not shaped like a serial.
+std::string serialOfDeviceKey(const std::string& key);
+
 struct UsageModel {
     std::string disclosure;
     bool send = false;
     std::string install_id_line;           // "Install id: <id>" while on, "" off
+    std::string radios_line;               // one line per radio that has a hardware serial: "Radio 2 serial number: <serial>" (D5.11: a person can quote it when asking for their records to be erased), "" when none
+    std::string erase_line;                // the one sentence that says what to quote, shown when the id or a serial is
     std::string what_label;                // "What exactly is sent?"
     std::string privacy_label;             // "Privacy policy (foxsdr.com)"
     std::vector<std::string> payload;      // the four paragraphs of what is sent
     bool what_open = false;
     std::string what_text;                 // the same paragraphs joined by a newline
     // ---- host extras ----
-    std::string state_line;                // the two-messages sentence while on, "Off. Nothing is transmitted." while off
+    std::string state_line;                // the two-messages sentence while on, what a switched-off install still sends while off
     std::string send_label;                // "Send anonymous usage reports"
     std::string privacy_url;               // core::kPrivacyPolicyUrl (the button's tooltip)
 };
@@ -447,6 +452,11 @@ std::string scaleLabel(int index, int monitorPercent);      // "Auto (follows Wi
 struct ThemePreset { const char* key; const char* label; const char* face; float counterScale; bool switches; float readings; };
 const ThemePreset& themePreset(int index);
 int themeIndexOf(const std::string& key);                   // an unknown or empty key is Today's bench (0)
+// The looks the Theme list OFFERS: every preset but Bench Classic XL. A shown position -> the preset's index (-1 out of range); a saved key -> its shown position (an unknown, empty or hidden key is Today's bench, 0).
+bool themeOffered(int index);
+int shownThemeCount();
+int themeOfShown(int shown);
+int shownThemeIndexOf(const std::string& key);
 constexpr int kThemeCount = 6;
 // The dB window: core::clampManualRange (core/display_range.hpp) is what a drag leaves - the end the hand moved is kept, the other gives way.
 std::string dbText(float db);                               // "%.0f"

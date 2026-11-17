@@ -93,6 +93,14 @@ void sectionLayers() {
     for (int i = 0; i < kLayerCount; ++i) { if (!layerInfo(static_cast<Layer>(i)).needsSource) { ++open; } }
     CHECK(open == 6);
     CHECK(std::string(blockedNote()).find("terms") != std::string::npos);
+    // must-fix lane A (owner answer 4): the page has NO switch for a layer whose source is not approved - the rule is needsSource, so a layer comes back by itself when its source is approved
+    CHECK(offeredLayerCount() == 6);
+    for (int i = 0; i < kLayerCount; ++i) { CHECK(layerOffered(static_cast<Layer>(i)) == !layerInfo(static_cast<Layer>(i)).needsSource); }
+    CHECK(!layerOffered(Layer::WeatherRadar) && !layerOffered(Layer::ReceiverMaps) && !layerOffered(Layer::Repeaters) && layerOffered(Layer::Airspaces) && !layerOffered(static_cast<Layer>(99)));
+    // the row -> layer map skips the hidden three, in order: Airspaces, Heat map, 24 h range, APRS paths, Locator grid, Signal level
+    CHECK(offeredLayer(0) == static_cast<int>(Layer::Airspaces) && offeredLayer(1) == static_cast<int>(Layer::AdsbHeat) && offeredLayer(2) == static_cast<int>(Layer::AdsbRange));
+    CHECK(offeredLayer(3) == static_cast<int>(Layer::AprsPaths) && offeredLayer(4) == static_cast<int>(Layer::Locators) && offeredLayer(5) == static_cast<int>(Layer::RfLevel));
+    CHECK(offeredLayer(6) == -1 && offeredLayer(-1) == -1);
     // legend: heat adds two rows, range one, the shading rows only when there is a worked / heard set
     LayerSet none;
     CHECK(layerLegend(none, true).empty());
