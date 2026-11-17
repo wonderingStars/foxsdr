@@ -113,12 +113,11 @@ sentence (`TciServer::start`, `ServerHost::reconcileTci`, which also logs it wit
 `test_tci_server`, `test_tci_engine`, `test_web_conn_guard`, `test_web_server`, `test_web_secure`, `test_web_tls`, `test_server_host`, `test_api_server`, `test_s4b_sec_api`,
 `test_s4b_sec_servers`, `test_engine_api_s4b_sec`, `test_engine_api_s4b_control`, `test_engine_api_s4b_listing`, `test_engine_api_s4b_account` (new), `test_web_guard`,
 `test_sys_bundle`, `test_wire_b_saved_kinds`, `test_slint_host_desk`, `test_engine_main_config_roundtrip`, `test_i18n`, `test_error_paths`; `foxsdr-slint` built (compiles
-`s4_publish.cpp`).
+`s4_publish.cpp`; 26 minutes on a busy machine) and `slint_drive_s4-outputs` run through the hidden-desktop launcher on desktop `FoxSDRSec2`: `Passed` (39.64 s). That drive ticks "Reachable from other computers" with the TCI switch off, so the new field was on the page; it does not type into it (row `SF2-tci-ui-drive`).
 
 ## NOT RUN
 
-The full headless gate; the full GUI gate; every GUI drive (`slint_drive_s4-outputs` shows the new field only while "Reachable from other computers" is on, which that drive
-sets while the TCI switch is off; not run); `test_web_touch` and `gui_desktop_guard` (they need the hidden-desktop launcher; `gui_desktop_guard` is red without it, by design);
+The full headless gate; the full GUI gate; every GUI drive except `slint_drive_s4-outputs`; `test_web_touch` and `gui_desktop_guard` (they need the hidden-desktop launcher; `gui_desktop_guard` is red without it, by design);
 the stamp tests; a real browser against the page; a Linux or macOS build.
 
 ## UNVERIFIED
