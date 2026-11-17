@@ -15,6 +15,12 @@ using nlohmann::json;
 
 namespace {
 
+#if defined(_WIN32)
+constexpr const char* kPlatformHere = "windows";
+#else
+constexpr const char* kPlatformHere = "linux";   // testerUsagePlatform() on this platform
+#endif
+
 const std::string kToken = "0123456789abcdef0123456789abcdef";
 const std::time_t kNow = 1790000000;   // 2026-09-21
 
@@ -111,7 +117,7 @@ void preview() {
     CHECK(!p.empty() && p.find(kToken) == std::string::npos);        // the preview is MASKED: the whole code is never on the screen
     CHECK(p.find("0123...cdef") != std::string::npos);
     const json j = json::parse(p);
-    CHECK(has(j["features"], "siggen") && j["platform"] == "windows" && !j["version"].get<std::string>().empty());
+    CHECK(has(j["features"], "siggen") && j["platform"] == kPlatformHere && !j["version"].get<std::string>().empty());
     // what is never in it: no frequency, position, file name or decoded text field exists in the report's shape
     const std::string compact = j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     for (const char* bad : {"freq", "lat", "lon", "path", "file", "text", "call"}) { CHECK(compact.find(std::string("\"") + bad) == std::string::npos); }
