@@ -211,11 +211,12 @@ int main() {
         CHECKV(f0.countNear(x0a, hintY, Ra, hintY + 27, dim, 30) >= 100, "the hint is dim");
         // the typed position: two fields (124 + 6 + 124), mono, right-aligned
         const int fy = hintY + 27 + 6;
-        CHECKV(box24(f0, x0a, fy, 124) && box24(f0, x0a + 130, fy, 124), "latitude and longitude: two 24 px fields of 124, 6 px apart");
-        CHECKV(f0.countNear(x0a + 60, fy + 4, x0a + 118, fy + 20, fg, 60) >= 25 && f0.countNear(x0a + 190, fy + 4, x0a + 248, fy + 20, fg, 60) >= 25, "the figures are drawn");
-        CHECKV(f0.near(x0a + 4, fy + 12, field, 0), "a field is the field ground");
+        // ENGINE MERGE 11 (look-fixes, "Latitude" and "Longitude" labelled): one field per row, a 64 px label then 6 px then the field to the right edge, the two rows one key pitch apart
+        CHECKV(box24(f0, x0a + 70, fy, kBodyW - 70) && box24(f0, x0a + 70, fy + kPitch, kBodyW - 70), "latitude and longitude: two 24 px fields, one per row, each after a 64 px label and 6 px");
+        CHECKV(f0.countNear(Ra - 66, fy + 4, Ra - 8, fy + 20, fg, 60) >= 25 && f0.countNear(Ra - 66, fy + kPitch + 4, Ra - 8, fy + kPitch + 20, fg, 60) >= 25, "the figures are drawn");
+        CHECKV(f0.near(x0a + 74, fy + 12, field, 0), "a field is the field ground");
         // Set RX here: a small key at the left, 24 high
-        const int sy = fy + kPitch;
+        const int sy = fy + 2 * kPitch;
         CHECKV(f0.near(x0a + 12, sy, keyLine) && f0.near(x0a + 12, sy + 23, keyLine) && f0.near(x0a, sy + 12, keyLine) && f0.near(x0a + 12, sy - 1, panel, 0), "Set RX here is a 24 px key at the left");
         CHECKV(f0.countNear(x0a + 6, sy + 6, x0a + 70, sy + 18, keyFg, 60) >= 25, "Set RX here: its words");
         // the refusal of the typed pair, red
@@ -261,11 +262,11 @@ int main() {
         }
         // a typed latitude and Enter
         evs.clear();
-        typeInto(x0a + 60, fy + 12, "52.25", true);
+        typeInto(x0a + 100, fy + 12, "52.25", true);
         CHECKV(!evs.empty() && evs.back().name == "position-lat" && evs.back().args == "52.25", "Enter commits the latitude: '%s'", names(evs).c_str());
         // a typed longitude and no Enter: Set RX here commits it first, then asks
         evs.clear();
-        typeInto(x0a + 190, fy + 12, "-1.5", false);
+        typeInto(x0a + 100, fy + kPitch + 12, "-1.5", false);
         const auto both = pressAll(x0a + 20, sy + 12);
         CHECKV(both.size() == 2 && both[0].name == "position-lon" && both[0].args == "-1.5" && both[1].name == "position-set", "Set RX here commits the typed longitude, then sets: %s", names(both).c_str());
         e = hit(x0a + 100, gk + 12);
@@ -294,18 +295,18 @@ int main() {
     {
         const Frame f = shot();
         CHECKV(f.countNear(x0a, T4, Ra, T4 + 14, goodFg, 40) >= 80, "the known-position line is green");
-        CHECKV(box24(f, x0a, T4 + 20, 124) && box24(f, x0a + 130, T4 + 20, 124), "known: the typed fields stay");
-        CHECKV(f.near(x0a + 12, T4 + 50, dis, 6) && f.near(x0a + 12, T4 + 62, panel, 0), "Set RX here is greyed: the panel ground in a half-alpha border");
-        CHECKV(f.countNear(x0a + 2, T4 + 82, Ra - 2, T4 + 102, accent, 0) >= 800, "the scope key is lit (Leave radar scope): %d", f.countNear(x0a + 2, T4 + 82, Ra - 2, T4 + 102, accent, 0));
-        CHECKV(f.countNear(x0a + 60, T4 + 86, Ra - 60, T4 + 98, accentInk, 60) >= 40, "Leave radar scope: its words in accent-ink");
+        CHECKV(box24(f, x0a + 70, T4 + 20, kBodyW - 70) && box24(f, x0a + 70, T4 + 20 + kPitch, kBodyW - 70), "known: the typed fields stay");
+        CHECKV(f.near(x0a + 12, T4 + 50 + kPitch, dis, 6) && f.near(x0a + 12, T4 + 62 + kPitch, panel, 0), "Set RX here is greyed: the panel ground in a half-alpha border");
+        CHECKV(f.countNear(x0a + 2, T4 + 82 + kPitch, Ra - 2, T4 + 102 + kPitch, accent, 0) >= 800, "the scope key is lit (Leave radar scope): %d", f.countNear(x0a + 2, T4 + 82 + kPitch, Ra - 2, T4 + 102 + kPitch, accent, 0));
+        CHECKV(f.countNear(x0a + 60, T4 + 86 + kPitch, Ra - 60, T4 + 98 + kPitch, accentInk, 60) >= 40, "Leave radar scope: its words in accent-ink");
         // no offer keys while the position is known: the first thing under the line is the field
-        CHECKV(!f.near(x0a + 12, T4 + 14, keyLine, 0) && f.near(x0a + 12, T4 + 20, keyLine, 0), "known: no offer keys");
+        CHECKV(!f.near(x0a + 12, T4 + 14, keyLine, 0) && f.near(x0a + 82, T4 + 20, keyLine, 0), "known: no offer keys");
         fwd.clear();
-        clk(x0a + 100, T4 + 92);
+        clk(x0a + 100, T4 + 92 + kPitch);
         shot();
         CHECKV(fwd.size() == 1 && fwd[0].name == "radar-scope-clicked", "Leave radar scope forwards to ToolsEvents (%zu)", fwd.size());
         fwd.clear();
-        clk(x0a + 20, T4 + 62);
+        clk(x0a + 20, T4 + 62 + kPitch);
         shot();
         CHECKV(fwd.empty(), "a greyed Set RX here does not answer");
         park();
