@@ -20,7 +20,7 @@ anything that keys a radio were not touched. No `.slint` file was touched. The r
 | 6a | OA-28 native Lime, USRP, BladeRF source kinds | ALREADY BUILT (none exists) | `tune_control.hpp:1754` (`isNativeSourceKind`) and `wire_b_source_kinds.hpp:20` name no such kind; there is no source file for them; the Source list reaches those radios only through SoapySDR rows. `bladerf` appears only as a needed-library hint (`needed_library.cpp:227`) and as setup guidance text (`guidanceForDriver`). Nothing to hide. |
 | 6b | D5.12 the `telemetryEnabled` note | BUILT (comment only) | `src/core/config.hpp` above `telemetryEnabled`: with Usage reporting off a failed radio is still reported, what off does stop is named. The approved user wording was not touched. |
 | 6c | L1.1 the funnel and the first-run check in a release built from this tree | PARTLY: the funnel is in; the first-run check is Classic-automatic and new-window-on-demand | `reached.*`: `engine.cpp` (`noteReached` Launched, Window, Enumerated, Working; Streaming and Audio in `health_events.cpp`; WebSpectrum in `web_server.cpp`), engine code shared by both windows; tests `test_health_app`, `test_health_events`. `setup.*`: counted by `radiosetup::noteFindings` (`radio_setup.cpp`). FINDING: the Classic window starts the probe on every launch (`radioSetupFrame`), but the NEW window starts it only when the person opens the Radio setup page (`signal_publish.cpp` `on_source_setup`), and before this lane it never counted `setup.*` at all. It counts now, when the page is opened. Making the new window run the check at launch is a screen-lane change (OPEN ROWS). |
-| 7 | LX-9 `test_engine_api_multi_radio` abort and timeout | see LX-9 below | |
+| 7 | LX-9 `test_engine_api_multi_radio` abort and timeout | RUN 50 TIMES, no abort and no timeout; ONE check failure, cause not proven | 50 runs alone on the hidden desktop (`D:/foxsdr-build/mfb-scratch/lx9.bat`): 49 exit 0, run 41 exit 1: `test_engine_api_multi_radio.cpp:869 fs::file_size(dir / f) > 44u` (a recording file of the two-radio take still holding only its 44-byte header when checked; 368 checks passed, 1 failed). That is a timing race between the recorder's asynchronous writer and the test's fixed 200 ms wait, or a recording that really ended empty: the failing file's name was not printed, so which one is unknown. No fix was made on a guess. |
 
 ### The pin, by group (before to after)
 
@@ -64,5 +64,42 @@ None translated: no user-visible string was added. The report reasons are Englis
 16. **No class for "the tuner/demodulator inside an RTL-SDR would not initialise"** (PLL did not lock, I2C repeater, register write). Sent as `control` plus the sentence; a `tuner` word would separate a faulty dongle from a refused USB transfer.
 17. **A radio that stopped under the HackRF sweeper has no `radio_open`** before its `radio_close` (the sweeper is not the receiver and journals no open). The app sends the `radio_close` (cause from the sentence, `openSec` 0). The site must show a close without an open rather than refuse or hide it; or a `radio_open` for sweeps would balance it.
 
-## NOT RUN / UNVERIFIED
-See the end of this record.
+## TESTS RUN (Release, `D:/foxsdr-build/en-tuning`, all green unless said)
+`test_mustfix_b` 112 checks; `test_radio_reports_engine` 145 (hidden desktop `FoxSDRMFB`; the Worker's validator saw 56 messages, 0 refused); `test_radio_reports_never_sent` 7
+checks 0 leaks over the new events (a planted-secret search of the queue and the wire; the helpers' own text scrub bypassed on purpose was still caught by the reporter's guard, so
+the test stayed green: defence in depth, not a gap); `test_radio_events` 90; `test_health_events` 114874; `test_health_paths`, `test_apply_command`, `test_radio_setup` 688,
+`test_radio_setup_inventory` 31, `test_radio_setup_exit`, `test_radio_setup_app` (hidden desktop, 60 s), `test_winusb_install`, `test_diagnostics` (hidden desktop), `test_radio_report`
+187, `test_radio_reporter` 214, `test_errpath_sweep_a`, `errpath_gate_selftest`, `test_error_paths` 35 (pin 410), `test_i18n` 458737, `test_rtl_tcp_source` 518, `test_hydrasdr_source`
+413, `test_airspy_source` 802, `test_airspyhf_source` 421, `test_saved_radio_retry` 39, `test_upload_scrub` 316. `cascade` and `foxsdr-slint` both build (the two windows). Break-its on the
+real tree: the engine watch made inert, RED in `test_mustfix_b` (3 checks); the "stopped answering on" clause removed, RED (1 check); both restored.
+
+## NOT RUN
+The full headless gate and the full GUI gate (a merge agent was running the gates in another worktree; the brief said not to start them), the stamp tests after a rebuild at the final
+commit, and the whole-tree rebuild (the tree was NOT rebuilt after the last `config.hpp` comment edit, which is a comment only). Linux and macOS were not built.
+
+## CONFIG HASH
+The real `%APPDATA%/foxsdr/config.json` sha256 read at the end: `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (unchanged).
+
+## UNVERIFIED
+* No radio was opened: the driver call sites, the sweeper and the installer were driven by stand-ins and fake radios, never against a real device. A real HackRF sweep failure and a real
+  failed WinUSB install were not made to happen.
+* The site's handling of a `radio_close` with no `radio_open` before it (the sweeper) is not known (CONTRACT ISSUE 17).
+* The stock-serial and the HF+ two-route serial questions (row 5) need hardware.
+* The in-range tune refusal is deliberately not filed by the engine (a busy driver, not a fact about the radio); a driver that refuses in range must say so itself.
+* The sound card is not a registered source (`registerSource(rx().device_)` ignores a null), so its own refusals are held and then dropped; not changed here.
+* The Slint window's first-run check only runs when the Radio setup page is opened; the new count and report are made then.
+
+## OPEN ROWS FOR THE NEXT LANE
+
+| Row | Waits for | Kind of lane |
+|---|---|---|
+| `pluto_tx.cpp`: G1 2 (`noteFaultOn`: `tx fault` log and the "stopped answering" error) and G3 3 (`setCenterFrequencyHz`, `setSampleRateHz`, `silenceOn`); each needs `noteDeviceFault(this,"pluto",...)` and `noteControlRefusedText(this,"pluto",...)` as `pluto_source.cpp` does | the transmit owner | transmit lane |
+| Make the new window run the first-run radio check at launch, as Classic does, so `setup.*` and the first-run `radio_found` come from every install | a screen-lane change (not built: a new behaviour) | screen lane |
+| RX888, FUNcube, Fobos, G33/G39 DDC, SDR-IQ, Pluto, Perseus in the first-run check | the RX888 ids are Cypress FX3's own (cannot be claimed by id); the others have no USB match table in their drivers | hardware / owner decision |
+| Is a CAT rig link a radio for the owner's reports? (judged accessory, shown on `cat.link.error`) | the owner | owner decision |
+| A decoder plugin that refuses to start on a patch radio | the plugin-health lane | plugin lane |
+| Who reports the SDRplay API service being down when no RSP is open (contract issue 12) | the contract | Worker / contract lane |
+| The `test_engine_api_multi_radio` line 869 file-size check: print the name, find whether the writer or the recording is short | none | test lane |
+| Serial questions of row 5 | hardware | hardware lane |
+| CONTRACT ISSUES 15 to 17 | the contract, the Worker and the site | Worker lane |
+| Turn `kRadioReportsLiveSend` to true | the Worker and site deployed, CONTRACT ISSUES 1 to 3 and 9 to 17 settled | release lane |

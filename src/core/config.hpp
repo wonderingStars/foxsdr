@@ -1467,6 +1467,14 @@ struct AppConfig {
     // knowingly. If that position ever changes, this is the single line to
     // flip, and PRIVACY.md, README.md and the website all describe the
     // default in words that would need to change with it.
+    //
+    // WHAT OFF DOES NOT SWITCH OFF (owner answers 2026-11-15 and 2026-11-16, decision 12;
+    // docs/radio-reports-contract.md section 10): with Usage reporting OFF a radio that fails
+    // is STILL reported. Each failure to open a radio is sent as its own anonymous report
+    // (the model, the radio's serial as its own field, the failure's reason, no install id),
+    // with the Diagnostics switch on or off. What off DOES stop is the usage record, the
+    // radio journal and the first-session record. The wording a person reads for this is
+    // the owner's approved text in PRIVACY.md and the in-app Usage text; it is not changed here.
     bool telemetryEnabled = true;
 
     // Random 32-hex-character install id, created when reporting is switched
