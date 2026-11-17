@@ -4,7 +4,7 @@
 # note as one line. The next header must start at or below the last control above it.
 10 state running == 1
 +3 expect "Stop bypassing the selection" bottom <= "828"
-+1 expect "Source"#1 top >= "868"
++1 expect "Source"#1 top >= "867"   # was 868: 1 px, measured 867.00 after the lane panels' labels became wrapping Text (look review U1); the invariant (the header below the last control above it, bottom <= 828) is unchanged
 # MEASURED at engine merge 7 (all of today's lanes merged), "Read the pitch now" bottom 2292: 2028 (engine fixes 6) + 30 (the Signal strength bar, 24 px + 6 px spacing, window gaps 2) + 234 (screen lane S1's rows in the SIGNAL bank: lanes S2 and S4 mount in the TOOLS and SYSTEM banks and add nothing here). Screen lane S5's "More source controls" row (30 px) is drawn only for the sources it fits and is NOT drawn for this script's signal generator: 2292 before and after S5 was merged, so S5 adds 0 here (its own record's 2028 to 2058 was the signal bar, which its base already had). The window is 3200 high so the Sinks header (below 2292) is inside it.
 +1 expect "Read the pitch now" bottom <= "2292"
 +1 expect "Sinks"#1 top >= "2292"

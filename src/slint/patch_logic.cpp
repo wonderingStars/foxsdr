@@ -1369,7 +1369,7 @@ FaceModel PatchPage::faceOf(const pc::Node& n) const {
             f.radio_switch_tooltip = n.on ? tr("This radio is switched on. Press to close it alone - the rest\nof the patch keeps running.")
                                           : tr("This radio is switched off. Press to switch it on; it opens\nwhile the patch is running.");
             f.device_label = pc::deviceLabelFor(lists_.devices, n.device);
-            f.centre_text = megaText(n.freqHz);
+            f.centre_text = pc::radioCentreSet(n) ? megaText(n.freqHz) : std::string();   // a centre nobody chose is an empty box, never "0.000000 MHz" (look review M5)
             f.centre_tooltip = tr("The radio's centre. Type a frequency and press Enter.");
             const auto note = centre_notes_.find(n.id);
             if (note != centre_notes_.end()) { f.centre_note = note->second; }
@@ -1563,7 +1563,7 @@ InspectorModel PatchPage::inspectorModel() const {
             r.device_label = pc::deviceLabelFor(lists_.devices, n.device);
             r.looking = (source_flags_ & FOXAPI_SRC_SCAN_PENDING) != 0u;
             r.look_enabled = !r.looking;
-            r.centre_text = megaText(n.freqHz);
+            r.centre_text = pc::radioCentreSet(n) ? megaText(n.freqHz) : std::string();   // see the face above
             const auto note = centre_notes_.find(n.id);
             if (note != centre_notes_.end()) { r.centre_note = note->second; }
             for (int i = 0; i < kRateCount; ++i) {

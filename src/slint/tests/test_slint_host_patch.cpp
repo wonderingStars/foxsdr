@@ -2699,6 +2699,17 @@ void theRadioFace() {
     EQ(fm.device_label, std::string("No device chosen"));
     EQ(lineTexts(fm.lines), std::string("[1:Choose a device on the right.]"));
     nm(f.g(), r).device = "rtlsdr|serial=1";
+    // LOOK REVIEW M5: a centre nobody chose is an empty box, never "0.000000" (a radio is not tuned to 0 MHz); a chosen 0 Hz centre still reads 0.000000
+    nm(f.g(), r).centreChosen = false;
+    nm(f.g(), r).freqHz = 0.0;
+    f.tickBump();
+    fm = nodeOf(f.page.canvasModel(), r).face;
+    EQ(fm.centre_text, std::string());
+    nm(f.g(), r).centreChosen = true;
+    f.tickBump();
+    fm = nodeOf(f.page.canvasModel(), r).face;
+    EQ(fm.centre_text, std::string("0.000000"));
+    nm(f.g(), r).freqHz = 100.0e6;
     // switched off
     nm(f.g(), r).on = false;
     EQ(lineTexts(nodeOf(f.page.canvasModel(), r).face.lines), std::string("[1:Switched off.]"));
