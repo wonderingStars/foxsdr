@@ -1,0 +1,4 @@
+#! frames=120
+# setup-auto-check-bounded-default (window follow-ups, item 8a): a bounded run does NOT probe the USB bus by itself (hermetic: nothing of the machine is read) unless FOXSDR_SETUP_AUTO=1 says so.
+10 state running == 1
++20 state setup.autoChecked == 0

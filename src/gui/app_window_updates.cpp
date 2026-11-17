@@ -362,7 +362,7 @@ void AppWindow::drawUpdateBanner() {
             ImGui::TextWrapped("We recommend updating to FoxSDR %s.", update_.version.c_str());
         } else {
             cascade::gui::census::note("update:withdrawn-no-replacement");
-            ImGui::TextWrapped("A fixed version is not ready yet. foxsdr.com will have it as soon as it is.");
+            ImGui::TextWrapped("A fixed version is not ready. foxsdr.com has it when it is.");
             if (ImGui::SmallButton(trId("Open foxsdr.com"))) { shellOpen(cascade::core::kHomepageUrl); }
             if (ImGui::SmallButton(trId("Not now"))) { updateDismissed_ = true; }
         }

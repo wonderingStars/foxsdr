@@ -2526,7 +2526,7 @@ void theVerdictAndThePlan() {
     Fx f(c.g);
     InfoModel m = f.page.infoModel();
     CHECK(!m.runnable);
-    EQ(m.verdict, std::string("This patch cannot run yet."));
+    EQ(m.verdict, std::string("This patch cannot run."));
     EQ(m.plan_line, std::string(""));
     EQ(m.level_line, std::string(""));
     f.t.facts["fact.patch.runnable"] = "1";
@@ -2983,14 +2983,14 @@ void theDisplayAndMapFaces() {
     // the radio is not running: a Radio feeder with no running rate is not a spectrum yet
     EQ(lineTexts(nodeOf(f.page.canvasModel(), disp).face.lines), std::string("[1:Wire the radio or a channel here to see its spectrum.]"));
     // a planned channel, its radio not open
-    EQ(lineTexts(nodeOf(f.page.canvasModel(), disp2).face.lines), std::string("[1:No spectrum yet - its radio is not running.]"));
+    EQ(lineTexts(nodeOf(f.page.canvasModel(), disp2).face.lines), std::string("[1:No spectrum: its radio is not running.]"));
     // nothing wired
     EQ(lineTexts(nodeOf(f.page.canvasModel(), disp3).face.lines), std::string("[1:Wire the radio or a channel here to see its spectrum.]"));
     // the radio is open but no spectrum frame of it has arrived (the publisher's read_node_spectrum has not answered): the window's own words, "No spectrum yet"
     f.t.add(FOXAPI_LIST_PATCH_RADIOS, c.radio, "siggen", "", kActive, 2.0e6, 100.0e6, 0);
     f.tickBump();
-    EQ(lineTexts(nodeOf(f.page.canvasModel(), disp).face.lines), std::string("[1:No spectrum yet - its radio is not running.]"));
-    EQ(lineTexts(nodeOf(f.page.canvasModel(), disp2).face.lines), std::string("[1:No spectrum yet - its radio is not running.]"));
+    EQ(lineTexts(nodeOf(f.page.canvasModel(), disp).face.lines), std::string("[1:No spectrum: its radio is not running.]"));
+    EQ(lineTexts(nodeOf(f.page.canvasModel(), disp2).face.lines), std::string("[1:No spectrum: its radio is not running.]"));
     EQ(lineTexts(nodeOf(f.page.canvasModel(), disp3).face.lines), std::string("[1:Wire the radio or a channel here to see its spectrum.]"));
     // the frame arrives: the sentences go, the face is the live picture the publisher draws (patch_faces.hpp)
     f.page.setSpectrumHave({c.radio});
@@ -2999,14 +2999,14 @@ void theDisplayAndMapFaces() {
     EQ(lineTexts(nodeOf(f.page.canvasModel(), disp3).face.lines), std::string("[1:Wire the radio or a channel here to see its spectrum.]"));
     // a frame of ANOTHER radio is not this part's: it hangs off its own radio
     f.page.setSpectrumHave({c.radio + 100});
-    EQ(lineTexts(nodeOf(f.page.canvasModel(), disp).face.lines), std::string("[1:No spectrum yet - its radio is not running.]"));
+    EQ(lineTexts(nodeOf(f.page.canvasModel(), disp).face.lines), std::string("[1:No spectrum: its radio is not running.]"));
     f.page.setSpectrumHave({c.radio});
     // an unplanned channel is not a spectrum source
     f.t.lists[FOXAPI_LIST_PATCH_PLAN].clear();
     f.tickBump();
     EQ(lineTexts(nodeOf(f.page.canvasModel(), disp2).face.lines), std::string("[1:Wire the radio or a channel here to see its spectrum.]"));
 
-    // THE MAP: the sentence while nothing is wired; "no targets yet" once something is; the counts of its own sources' targets
+    // THE MAP: the sentence while nothing is wired; "no targets" once something is; the counts of its own sources' targets
     EQ(lineTexts(nodeOf(f.page.canvasModel(), mapn).face.lines), std::string("[1:Wire a decoder's map output here - ADS-B, AIS, APRS - up to 5.]"));
     pc::Graph g2 = g;
     const pc::NodeId adsb = g2.addNode(NodeKind::Decoder, "ADS-B", PortType::Iq, 400, 300);
@@ -3016,7 +3016,7 @@ void theDisplayAndMapFaces() {
     f.publish(g2);
     f.t.add(FOXAPI_LIST_PATCH_PARTS, 2, "ADS-B", "adsb.dll", 0, 0, 0, 1);
     f.tickBump();
-    EQ(lineTexts(nodeOf(f.page.canvasModel(), mapn).face.lines), std::string("[2:no targets yet]"));
+    EQ(lineTexts(nodeOf(f.page.canvasModel(), mapn).face.lines), std::string("[2:no targets]"));
     f.page.setTracks({{"ADS-B", CASCADE_TRACK_AIRCRAFT}, {"ADS-B", CASCADE_TRACK_AIRCRAFT}, {"ADS-B", CASCADE_TRACK_VESSEL}, {"Other", CASCADE_TRACK_AIRCRAFT}});
     EQ(lineTexts(nodeOf(f.page.canvasModel(), mapn).face.lines), std::string("[2:2 aircraft  1 vessels  0 stations]"));
     f.page.setTracks({{"ADS-B", CASCADE_TRACK_STATION}, {"ADS-B", 99u}});
@@ -3095,7 +3095,7 @@ void theSpectrumSliceAndItsMarks() {
     f.page.setSpectrumHave({c.radio});
     EQ(lineTexts(nodeOf(f.page.canvasModel(), fromRadio).face.lines), std::string(""));
     EQ(lineTexts(nodeOf(f.page.canvasModel(), fromChannel).face.lines), std::string(""));
-    EQ(lineTexts(nodeOf(f.page.canvasModel(), fromRadio2).face.lines), std::string("[1:No spectrum yet - its radio is not running.]"));
+    EQ(lineTexts(nodeOf(f.page.canvasModel(), fromRadio2).face.lines), std::string("[1:No spectrum: its radio is not running.]"));
     EQ(lineTexts(nodeOf(f.page.canvasModel(), unwired).face.lines), std::string("[1:Wire the radio or a channel here to see its spectrum.]"));
     CHECK(f.page.spectrumHave(c.radio) && !f.page.spectrumHave(radio2));
 }
@@ -3372,7 +3372,7 @@ void theChannelDemodSinkAndMapInspectors() {
     // DISPLAY, and anything else
     f.select(disp);
     m = f.page.inspectorModel();
-    EQ(m.help, std::string("This node has nothing to set yet."));
+    EQ(m.help, std::string("This node has nothing to set."));
     EQ(m.kind_caption, std::string("DISPLAY"));
     // RADIO has no help of that kind
     f.select(c.radio);
@@ -3775,7 +3775,7 @@ void thePresetsPageStartsEmpty() {
     Fx f(chain().g);
     PatchPresetsModel m = f.page.presetsModel();
     CHECK(m.rows.empty() && m.empty_shown);
-    EQ(m.empty_text, std::string("No presets yet. SAVE AS... keeps the patch on the canvas under a name."));
+    EQ(m.empty_text, std::string("No presets. SAVE AS... keeps the patch on the canvas under a name."));
     CHECK(!m.load_enabled && !m.rename_enabled && !m.delete_enabled);
     EQ(m.edit, 0);
     CHECK(m.name_draft.empty() && m.note.empty() && !m.note_good && !m.ask_replace && !m.ask_delete);

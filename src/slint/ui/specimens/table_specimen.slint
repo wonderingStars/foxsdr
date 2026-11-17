@@ -15,7 +15,7 @@
 //                        row 8  normal
 //                      the right edge of every heading cell is a 6 px resize zone (Time: x 82..88, Source: x 152..158, ...)
 //   10   180  300  80  the panel ground behind the empty table
-//   10   180  300  80  Table B with no rows: heading, then "Nothing to show yet." in Theme.dim
+//   10   180  300  80  Table B with no rows: heading, then "Nothing to show." in Theme.dim
 //   10   270  420  151 the panel ground behind the panel-rows table
 //   10   270  420  151 Table C, a plugin's own panel (columns Item 120 | Value rest): heading 22 high at y 270..292, then
 //                        row 0  y 292  24  heading kind  "PROGRAMMES (UP TO FOUR PER ENSEMBLE)" - the dim cap across the columns
@@ -82,7 +82,7 @@ export component TableSpecimen inherits Window {
         columns: ["Time", "Source", "Message", "Level"];
         column-widths <=> root.widths;
         mono-columns: [true, false, false, false];
-        empty-text: "Nothing to show yet.";
+        empty-text: "Nothing to show.";
         selected: root.selected;
         enabled: root.table-enabled;
         tooltip: "Click a row to select it, right-click for its menu";
@@ -111,7 +111,7 @@ export component TableSpecimen inherits Window {
         column-widths: [78px, 70px, 0px, 56px];
         mono-columns: [true, false, false, false];
         rows: [];
-        empty-text: "Nothing to show yet.";
+        empty-text: "Nothing to show.";
     }
 
     Rectangle { x: 10px; y: 270px; width: 420px; height: 151px; background: Theme.panel; }

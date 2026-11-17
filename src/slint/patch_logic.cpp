@@ -1073,7 +1073,7 @@ InfoModel PatchPage::infoModel() const {
     InfoModel m;
     m.runnable = lists_.plan.runnable;
     // WHAT THE PATCH AS A WHOLE IS DOING, first, because it is the question someone opening this page is actually asking.
-    m.verdict = m.runnable ? tr("This patch can run.") : tr("This patch cannot run yet.");
+    m.verdict = m.runnable ? tr("This patch can run.") : tr("This patch cannot run.");
     const pc::Node* sel = selectedNode();
     // The selected channel's own level, spelled out: only for a node the plan holds as a channel and whose level the engine reports. (The window's own loop tests only the node id and
     // prints "0.0 dB on this channel" for a running decoder: not ported.)
@@ -1435,7 +1435,7 @@ FaceModel PatchPage::faceOf(const pc::Node& n) const {
             if (!s.wired) {
                 f.lines.push_back(fl(tr("Wire the radio or a channel here to see its spectrum."), kToneMuted));
             } else if (!s.radio_open || !spectrumHave(s.radio)) {
-                f.lines.push_back(fl(tr("No spectrum yet - its radio is not running."), kToneMuted));
+                f.lines.push_back(fl(tr("No spectrum: its radio is not running."), kToneMuted));
             }
             break;
         }
@@ -1458,7 +1458,7 @@ FaceModel PatchPage::faceOf(const pc::Node& n) const {
                 }
             }
             if (total == 0) {
-                f.lines.push_back(fl(tr("no targets yet"), kToneAmber));
+                f.lines.push_back(fl(tr("no targets"), kToneAmber));
             } else {
                 f.lines.push_back(fl(cc::formatText(tr("%zu aircraft  %zu vessels  %zu stations%s"), air, sea, fixed, other > 0 ? "  +" : ""), kToneAmber));
             }
@@ -1720,7 +1720,7 @@ InspectorModel PatchPage::inspectorModel() const {
             break;
         }
         case pc::NodeKind::Display:
-            m.help = tr("This node has nothing to set yet.");
+            m.help = tr("This node has nothing to set.");
             break;
     }
     return m;
@@ -2288,7 +2288,7 @@ PatchPresetsModel PatchPage::presetsModel() const {
     if (hasPrevious) { m.rows.push_back({tr("(previous patch)"), true, selPrevious}); }
     for (const cc::PatchPreset& p : store_.list()) { m.rows.push_back({p.name, false, !selPrevious && cc::patchPresetNamesMatch(p.name, sel)}); }
     m.empty_shown = store_.list().empty() && !hasPrevious;
-    m.empty_text = tr("No presets yet. SAVE AS... keeps the patch on the canvas under a name.");
+    m.empty_text = tr("No presets. SAVE AS... keeps the patch on the canvas under a name.");
     const bool anySelected = selPrevious || !sel.empty();
     const bool namedSelected = !selPrevious && !sel.empty();
     m.load_enabled = anySelected;

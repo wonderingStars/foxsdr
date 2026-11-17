@@ -155,6 +155,7 @@ struct SignalPublisher::Models {
 struct SignalPublisher::SetupState {
     rs::Probe probe;
     bool started = false;
+    bool autoWanted = true, autoStarted = false, autoRun = false;   // the automatic first-run check: wanted (a real window), started once, and its answer still to be counted
     std::string fake;   // FOXSDR_FAKE_RADIO_SETUP: a synthetic machine (bounded runs)
     struct Install {
         std::atomic<bool> done{false};
@@ -237,6 +238,11 @@ void SignalPublisher::startProbe() {
 
 void SignalPublisher::pollSetup() {
     SetupState& s = *setup_;
+    if (s.autoWanted && !s.autoStarted) {   // once, off the drawing thread (the probe is a worker with a time budget); no page is raised by it
+        s.autoStarted = true;
+        s.autoRun = true;
+        startProbe();
+    }
     // a finished one-click install is read once: said on the page and followed by CHECK AGAIN so the radio appears
     if (s.install && s.install->done.load() && !s.install->consumed) {
         s.install->consumed = true;
@@ -258,7 +264,7 @@ void SignalPublisher::pollSetup() {
     opts_.setup_install_status = s.installStatus;
     opts_.findings.clear();
     opts_.setup_show_page = false;
-    if (!opts_.setup_shown || !opts_.setup_have_answer) { return; }
+    if ((!opts_.setup_shown && !s.autoRun) || !opts_.setup_have_answer) { return; }
     // what the probe saw, plus what the application's own lists hold now (app_window_radio_setup.cpp radioSetupInventory)
     rs::Inventory inv = s.probe.inventory();
     if (s.fake.empty() && inv.probed && inv.usbListed) {
@@ -292,6 +298,8 @@ void SignalPublisher::pollSetup() {
     }
     const rs::Findings f = rs::assess(inv);
     if (s.fake.empty()) { rs::noteFindings(f); }   // the setup.* count and the radio_found event for a radio present with no usable driver (once a session each; a synthetic machine says nothing)
+    s.autoRun = false;
+    if (!opts_.setup_shown) { return; }   // the automatic check only counts and reports; the page stays closed until the person opens it
     opts_.setup_show_page = f.showPage;
     for (const rs::Finding& x : f.items) {
         SetupFinding o;
@@ -505,9 +513,12 @@ void SignalPublisher::importBrowse() {
     if (cascade::core::pickFile(rq, chosen) && !chosen.empty()) { importPath(chosen); }
 }
 
+bool SignalPublisher::autoSetupStarted() const { return setup_->autoStarted; }
+
 void SignalPublisher::setBounded(bool bounded) {
     bounded_ = bounded;
     if (!bounded) { return; }
+    { const char* a = std::getenv("FOXSDR_SETUP_AUTO"); setup_->autoWanted = a != nullptr && a[0] == '1'; }
     if (const char* pick = std::getenv("FOXSDR_FILE_PICK"); pick != nullptr) { filePickSeam_ = std::string(pick); }
     if (const char* clip = std::getenv("FOXSDR_FILE_CLIPBOARD"); clip != nullptr) { fileClipboardSeam_ = std::string(clip); }
 }

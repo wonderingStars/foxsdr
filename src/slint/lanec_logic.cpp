@@ -219,6 +219,11 @@ std::optional<PriorityPush::Push> PriorityPush::update(const std::vector<double>
     return Push{text, ms};
 }
 
+std::string commaSentence(const std::string& text) {
+    if (!cascade::core::typedCommaAmbiguous(trim(text))) { return std::string(); }
+    return cascade::i18n::tr("A comma followed by three digits could be a decimal point or a thousands mark. Type a dot for a decimal point, and leave thousands marks out.");
+}
+
 std::optional<double> parsePriorityEvery(const std::string& text) {
     const auto v = toNumber(text);
     if (!v) { return std::nullopt; }

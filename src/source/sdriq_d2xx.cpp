@@ -361,7 +361,7 @@ const needed::Info& ftd2xxNeededInfo() {
             "Unplug the SDR-IQ and plug it in again.",
             "Come back here and press \"Check again\"; FoxSDR does not need to be restarted.",
         };
-        i.licence = "(unverified: FTDI's driver licence was not read)";
+        i.licence = "FTDI's driver is under FTDI's own licence.";
         i.notSuppliedLine = "FoxSDR does not include or supply this driver.";
         i.fetchAllowed = false;
         return i;

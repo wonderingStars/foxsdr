@@ -513,7 +513,7 @@ int main() {
         c = updateCardFor(none);
         CHECK(c.shown && c.withdrawn && !c.critical);
         CHECK(c.headline == "FoxSDR 0.99.105 has been withdrawn: the FoxSDR team found a problem with it.");
-        CHECK(c.note == "A fixed version is not ready yet. foxsdr.com will have it as soon as it is.");
+        CHECK(c.note == "A fixed version is not ready. foxsdr.com has it when it is.");
         CHECK(c.primary.empty() && c.progress < 0.f && c.notes.empty());
 
         // ...and the person can put it away, as the classic's Not now does; a Store copy and a switched-off check never see it
@@ -537,7 +537,7 @@ int main() {
         bad.info.runningWithdrawn = true;
         bad.runningVersion = "0.99.105";
         c = updateCardFor(bad);
-        CHECK(c.shown && c.primary.empty() && c.note == "A fixed version is not ready yet. foxsdr.com will have it as soon as it is.");
+        CHECK(c.shown && c.primary.empty() && c.note == "A fixed version is not ready. foxsdr.com has it when it is.");
 
         // the ordinary card is unchanged
         UpdateView plain;

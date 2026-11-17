@@ -557,7 +557,7 @@ UpdatesModel readUpdates(const cc::AppConfig& iface, const ReadOptions& o) {
         // What to do about it: the update when a good build is offered; when none is yet, the sentence, foxsdr.com's key and "Not now" (the classic's three).
         const bool fix = !f.packaged && f.newer && !f.offer_withdrawn;
         m.withdrawn_advice = fix ? cc::formatText("We recommend updating to FoxSDR %s.", f.new_version.c_str())
-                                 : std::string("A fixed version is not ready yet. foxsdr.com will have it as soon as it is.");
+                                 : std::string("A fixed version is not ready. foxsdr.com has it when it is.");
         if (!fix) {
             m.site_label = std::string(tr("Open foxsdr.com"));
             if (!f.dismissed) { m.dismiss_label = std::string(tr("Not now")); }
@@ -593,7 +593,7 @@ SerialPortsModel readSerialPorts(TableReader& t, const cc::AppConfig& iface, con
     if (m.ports.empty() && !o.gps_ports_waiting) {
         m.empty_line = std::string(tr("No serial ports found. If a device is plugged in, check Device "
                          "Manager under \"Ports (COM & LPT)\" - if it is not listed there "
-                         "either, this application cannot see it yet."));
+                         "either, this application cannot see it."));
     }
     m.gps_note = std::string(tr("Sets the receiver's position - what every range and bearing on the "
                    "map and the radar scope is measured from. The same control also "

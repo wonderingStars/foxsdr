@@ -255,6 +255,26 @@ component RowLabel inherits ElidedHint {
     font-weight: Theme.weight-medium;
 }
 
+// A row's label in a panel of lane rows: it WRAPS to a second line instead of eliding, so a long name is read whole (look review U1).
+component WrapLabel inherits Text {
+    min-width: 0px;
+    wrap: word-wrap;
+    color: Theme.fg-soft;
+    font-family: Theme.font-ui;
+    font-size: Theme.font-small;
+    font-weight: Theme.weight-medium;
+}
+
+// A figure of a lane panel's row: the mono 11 px readout, WRAPPED (a long value is read whole, look review U1).
+component WrapValue inherits Text {
+    min-width: 0px;
+    wrap: word-wrap;
+    horizontal-alignment: right;
+    color: Theme.fg;
+    font-family: Theme.font-mono;
+    font-size: Theme.font-small;
+}
+
 // A figure of a row: the mono 11 px readout.
 component Readout inherits Text {
     min-width: 0px;
@@ -897,9 +917,10 @@ export component KPanel inherits VerticalLayout {
         if r.kind == 0 : Text { text: r.label; font-family: Theme.font-ui; font-size: Theme.font-small; font-weight: Theme.weight-semibold; color: Theme.fg; wrap: word-wrap; accessible-role: text; }
         if r.kind == 1 : Note { height: self.preferred-height; text: r.label; tone: r.tone == 1 ? ChipTone.warn : r.tone == 2 ? ChipTone.err : r.tone == 3 ? ChipTone.good : ChipTone.neutral; }
         if r.kind == 2 : Line {
-            Mid { Key { label: r.label; enabled: r.enabled; on: r.on; tooltip: r.note; xs: true; clicked => { root.act(r.id, ""); } } }
+            Mid { Key { label: r.label; enabled: r.enabled; on: r.on; tooltip: r.note; xs: true; shrinkable: true; clicked => { root.act(r.id, ""); } } }
             Rectangle { horizontal-stretch: 1; }
         }
+        if (r.kind == 2 || r.kind == 3) && !r.enabled && r.value != "" : Note { height: self.preferred-height; text: r.value; }   // the one-line reason a dimmed key or tick gives (look review M4)
         if r.kind == 3 : Line { Tick { horizontal-stretch: 1; label: r.label; on: r.on; enabled: r.enabled; tooltip: r.note; toggled(v) => { root.act(r.id, v ? "1" : "0"); } } }
         if r.kind == 4 : VerticalLayout {
             spacing: 2px;
@@ -908,17 +929,17 @@ export component KPanel inherits VerticalLayout {
         }
         if r.kind == 5 : VerticalLayout {
             spacing: 2px;
-            Line { RowLabel { text: r.label; } }
+            Line { WrapLabel { text: r.label; } }
             LineInput { value: r.value; enabled: r.enabled; name: r.label; tooltip: r.note; mono: true; committed(t) => { root.act(r.id, t); } }
         }
         if r.kind == 9 : VerticalLayout {
             spacing: 2px;
-            Line { RowLabel { text: r.label; } }
+            Line { WrapLabel { text: r.label; } }
             LineInput { value: r.value; hidden: true; enabled: r.enabled; name: r.label; tooltip: r.note; mono: true; committed(t) => { root.act(r.id, t); } }
         }
         if r.kind == 6 : Line {
-            RowLabel { text: r.label; width: 120px; }
-            Readout { horizontal-stretch: 1; text: r.value; horizontal-alignment: right; accessible-role: text; accessible-label: r.label; accessible-description: r.value; }
+            WrapLabel { text: r.label; width: 120px; }
+            WrapValue { horizontal-stretch: 1; text: r.value; accessible-role: text; accessible-label: r.label; accessible-description: r.value; }
         }
         if r.kind == 7 : SliderRow { label: r.label; readout: r.value; value: r.level; enabled: r.enabled; tooltip: r.note; changed(v) => { root.act(r.id, "\{v}"); } }
         if r.kind == 8 : Line {
@@ -1342,7 +1363,7 @@ export component GpsRowView inherits VerticalLayout {
     Line {
         DropKey {
             horizontal-stretch: 1;
-            value: Pick.label(root.gps.ports, root.gps.port-index);
+            value: root.gps.port-index < 0 ? @tr("Choose the GPS port") : Pick.label(root.gps.ports, root.gps.port-index);
             items: root.gps.ports;
             selected: root.gps.port-index;
             label: @tr("GPS serial port");
@@ -1351,7 +1372,7 @@ export component GpsRowView inherits VerticalLayout {
         }
         DropKey {
             width: 84px;
-            value: Pick.label(root.gps.bauds, root.gps.baud-index);
+            value: root.gps.baud-index < 0 ? @tr("Baud rate") : Pick.label(root.gps.bauds, root.gps.baud-index);
             items: root.gps.bauds;
             selected: root.gps.baud-index;
             label: @tr("Baud rate");
@@ -1373,6 +1394,7 @@ export component GpsRowView inherits VerticalLayout {
             clicked => { root.gps-toggle(); }
         }
     }
+    if !root.gps.key-enabled : Note { text: @tr("Name the port the GPS receiver is on first."); }   // why the key is dimmed (review M4)
     if root.gps.status != "" : Note { text: root.gps.status; tone: root.gps.status-tone; }
     if root.gps.satellites != "" : Note { text: root.gps.satellites; }
     if root.gps.refusal != "" : Note { text: root.gps.refusal; tone: ChipTone.warn; }

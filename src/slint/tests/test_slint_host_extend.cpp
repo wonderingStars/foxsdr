@@ -448,6 +448,12 @@ void catReads() {
     m = catModel(t);
     CHECK(m.accept && m.reachable && m.port == "4600" && m.warning == "This protocol has no password. Anything that can reach the port can retune the receiver.");
     CHECK(m.status == "Listening on 0.0.0.0:4600 \xe2\x80\x94 1 client(s), 12 command(s)");
+    // OWNER DECISION 19: the tick is never offered, and a saved true value shows the one sentence (the value itself is the engine's and the security lane's to enforce)
+    CHECK(!m.reachable_offered && m.scope_note == "CAT is available on this computer only.");
+    t.facts["fact.cat.bindAll"] = "0";
+    m = catModel(t);
+    CHECK(!m.reachable_offered && m.scope_note == "CAT is available on this computer only.");   // the same sentence with nothing saved
+    t.facts["fact.cat.bindAll"] = "1";
     // FAILED: the refusal is the line, the lamp is rust
     fillServers(t, kFault, 8073, 0, 0, 0, kFault, 0, 0, "", "the port 4600 is already in use");
     m = catModel(t);
@@ -882,7 +888,7 @@ void storeStates() {
     t.facts["fact.store.url"] = "https://foxsdr.com/plugins/index.json";
     StoreModel m = storeModel(t, o);
     CHECK(!m.have_catalogue && m.catalogue_line == "CATALOGUE NOT READ" && m.check_label == "CHECK NOW" && m.check_enabled);
-    CHECK(m.empty_line == "No catalogue has been read yet. Press CHECK NOW above and this application asks the source once." && m.empty_tone == Tone::Neutral && m.get_all_label.empty());
+    CHECK(m.empty_line == "No catalogue has been read. Press CHECK NOW above and this application asks the source once." && m.empty_tone == Tone::Neutral && m.get_all_label.empty());
     t.facts["fact.status.catalogError"] = "could not resolve the host";
     m = storeModel(t, o);
     CHECK(m.empty_line == "The catalogue could not be read: could not resolve the host" && m.empty_tone == Tone::Err && m.check_label == "CHECK AGAIN" && m.top_warning.empty());
@@ -977,7 +983,7 @@ void storeUpdatesRead() {
     // no catalogue at all: the reason it is empty
     StubTable empty;
     m = storeModel(empty, o);
-    CHECK(m.updates_heading == "NO UPDATES" && m.empty_line == "No catalogue has been read yet. Press CHECK NOW above and this application asks the source once.");
+    CHECK(m.updates_heading == "NO UPDATES" && m.empty_line == "No catalogue has been read. Press CHECK NOW above and this application asks the source once.");
     // an update for a site's plugin: the badge, the left-out note under the key
     StubTable site = storeTable();
     site.facts["fact.store.maps@example.com.installState"] = "update";
@@ -1031,7 +1037,7 @@ void storeSitesAndCleanup() {
     for (const StoreLine& l : m.site_lines) { texts.push_back(l.text); }
     CHECK(texts == Names({"example.com: 1 plugin", "broken.example.org: could not be read: HTTP 404", "broken.example.org: 2 hidden: same id as a plugin already listed",
                           "broken.example.org: 1 hidden: files not on the site's own host", "kept.example.net: 4 plugins (kept copy from an earlier session)",
-                          "new.example.net: not read yet"}));
+                          "new.example.net: not read"}));
     CHECK(at(m.site_lines, 0).tone == Tone::Neutral && at(m.site_lines, 1).tone == Tone::Warn && at(m.site_lines, 2).tone == Tone::Warn && at(m.site_lines, 3).tone == Tone::Warn && at(m.site_lines, 4).tone == Tone::Neutral);
     CHECK(m.site_urls.size() == 4);
     // ADD's reason, in the order the user can cure it
@@ -1114,7 +1120,7 @@ void storePluginPage() {
     // no picture published: one frame that says so
     t.facts["fact.store.adsb.pictures"] = "";
     m = storeModel(t, o);
-    CHECK(m.plugin.screenshots.empty() && m.plugin.no_pictures == "No pictures published yet");   // no frame: the sentence only (window gaps 3)
+    CHECK(m.plugin.screenshots.empty() && m.plugin.no_pictures == "No pictures published");   // no frame: the sentence only (window gaps 3)
     // THE DETAILS: the facts grid, in order, each with a source or the hatched reason
     const std::vector<PageFact>& f = m.plugin.facts;
     Names keys;

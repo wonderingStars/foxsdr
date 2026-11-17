@@ -42,7 +42,19 @@ const StatusCardModel& card(const std::vector<StatusCardModel>& cards, const cha
 
 }  // namespace
 
+// LOOK REVIEW B2: a picture of a window taller than any screen is flagged in plain words; anything else says nothing.
+void tallShotWarningRule() {
+    CHECK(tallShotWarning("1600x8000", true).find("8000 px tall") != std::string::npos);
+    CHECK(tallShotWarning("1600x4400", true).find("taller than any screen") != std::string::npos);
+    CHECK(tallShotWarning("1600x4320", true).empty() && tallShotWarning("1600x2200", true).empty());   // up to an 8K screen's height: nothing to say
+    CHECK(tallShotWarning("1600x8000", false).empty());                                                  // no picture asked for
+    CHECK(tallShotWarning(nullptr, true).empty() && tallShotWarning("", true).empty() && tallShotWarning("wide", true).empty());
+    CHECK(wholeDbText(-0.3) == "0 dB" && wholeDbText(-0.0) == "0 dB" && wholeDbText(-85.4) == "-85 dB" && wholeDbText(-0.6) == "-1 dB");   // never "-0 dB"
+    CHECK(spanValueText(2.0e6) == "2.000 MHz" && spanValueText(500.0) == "500 Hz" && spanText(2.0e6) == "SPAN 2.000 MHz");               // the sentence adds its own word
+}
+
 int main() {
+    tallShotWarningRule();
     // ---- the counter's ten figures: GHz, MHz x3, kHz x3, Hz x3 ----
     {
         const auto d = digitsOf(145'500'000.0);
@@ -327,7 +339,7 @@ int main() {
         CHECK(card(cards, "SINK").value == "STOPPED" && card(cards, "SINK").tone == CardTone::Neutral);
         CHECK(card(cards, "RECORDER").value == "off" && card(cards, "RECORDER").detail == "no file open");
         CHECK(card(cards, "WEB").value == "off" && card(cards, "WEB").detail == "not listening");
-        CHECK(card(cards, "UNDERRUNS").value == "0" && card(cards, "UNDERRUNS").detail == "no callback has starved yet" && card(cards, "UNDERRUNS").tone == CardTone::Neutral);
+        CHECK(card(cards, "UNDERRUNS").value == "0" && card(cards, "UNDERRUNS").detail == "no callback has starved" && card(cards, "UNDERRUNS").tone == CardTone::Neutral);
 
         // running, decoders fed, sink open, web up, output measured
         s.flags = FOXAPI_RX_RUNNING | FOXAPI_RX_SINK_OPEN | FOXAPI_RX_WEB_LISTENING | FOXAPI_RX_DECODER_ACTIVE;

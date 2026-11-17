@@ -396,7 +396,7 @@ Pairing pairControlPort(const std::vector<std::string>& candidates, const std::s
         std::string names;
         for (const auto& a : aors) { names += (names.empty() ? "" : ", ") + a.first; }
         p.error = cascade::core::formatText(
-            tr("More than one AOR receiver answered (%s). FoxSDR cannot yet tell which control "
+            tr("More than one AOR receiver answered (%s). FoxSDR cannot tell which control "
                "port belongs to which I/Q interface - connect one AOR receiver at a time."),
             names.c_str());
         return p;

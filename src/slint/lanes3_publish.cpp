@@ -462,7 +462,7 @@ struct LaneS3Publisher::Impl {
         field(v, "w.rows", tr("Rows (50 to 2000)"), "600");
         choiceD(v, "w.fft", tr("Frequency detail (bins)"), overviewFftNames(), 1);
         const bool ovRun = ovJob.running();
-        v.push_back(rReadout(tr("Picture"), ovState == "running" ? tr("being made") : ovState == "done" ? tr("ready") : ovState == "failed" ? tr("failed") : ovState == "cancelled" ? tr("cancelled") : tr("none yet")));
+        v.push_back(rReadout(tr("Picture"), ovState == "running" ? tr("being made") : ovState == "done" ? tr("ready") : ovState == "failed" ? tr("failed") : ovState == "cancelled" ? tr("cancelled") : tr("none")));
         if (ovRun) { v.push_back(slk::rBar(tr("Progress"), static_cast<float>(ovJob.progress()), std::to_string(static_cast<int>(ovJob.progress() * 100.0)) + " %")); }
         key(v, "w.make", tr("Make the waterfall"), [this] {
             const sll::Built b = overviewJson(dv("w.rows", "600"), pv("w.fft", 1));

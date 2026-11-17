@@ -222,7 +222,7 @@ struct UpdatesModel {
     std::string show_again_label;
     std::string stable_label, beta_label;  // "Stable releases", "Every release (beta)"
     // ---- the kill switch (docs 6.63): the version RUNNING was withdrawn by the service. The status line above says so (warning tone); these are the rest ----
-    std::string withdrawn_advice;          // "We recommend updating to FoxSDR 0.99.109." / "A fixed version is not ready yet. foxsdr.com will have it as soon as it is." ("" when not withdrawn)
+    std::string withdrawn_advice;          // "We recommend updating to FoxSDR 0.99.109." / "A fixed version is not ready. foxsdr.com has it when it is." ("" when not withdrawn)
     std::string site_label;                // "Open foxsdr.com" - only while no good build is offered yet ("" otherwise)
     std::string dismiss_label;             // "Not now" - same condition, and only while the notice has not been put away
 };

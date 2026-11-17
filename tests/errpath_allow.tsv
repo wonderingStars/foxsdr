@@ -1763,7 +1763,7 @@ src/slint/lanek_audio.cpp::ToneOut::start::errassign::the sound output refused #
 src/slint/lanek_logic.cpp::SettingsKeeper::exportTo::errassign::	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanek_logic.cpp::SettingsKeeper::previewImport::errassign::	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanek_logic.cpp::SettingsKeeper::previewImport::errassign::the file cannot be read or it is too large	ALLOW	UI result text: the failure is classified at the site that produced it	seed
-src/slint/lanek_logic.cpp::SettingsKeeper::readCurrent::errassign::there is no settings file yet	ALLOW	UI result text: the failure is classified at the site that produced it	seed
+src/slint/lanek_logic.cpp::SettingsKeeper::readCurrent::errassign::there is no settings file	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanek_logic.cpp::SettingsKeeper::sync::errassign::the shared folder is not there	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanek_logic.cpp::writeAtomic::errassign::cannot make the folder	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/lanek_logic.cpp::writeAtomic::errassign::cannot put the file in place	ALLOW	UI result text: the failure is classified at the site that produced it	seed
@@ -1846,6 +1846,7 @@ src/slint/main.cpp::main::errassign::ui window set_rendering_notifier framemeter
 src/slint/main.cpp::main::log::scanner the engine did not take the memories thresholds	ALLOW	ui-text: a window command the engine would not take is logged; the engine fact scan.memthresholds says what it holds and the push is repeated on the next change	e1
 src/slint/main.cpp::main::stderr::%	ALLOW	command-line / developer output (a console nobody runs the app from; the user chose the flag)	seed
 src/slint/main.cpp::main::stderr::%#2	ALLOW	command-line / developer output (a console nobody runs the app from; the user chose the flag)	seed
+src/slint/main.cpp::main::stderr::foxsdrslint input script %#2	ALLOW	bounded drive run only (a developer script): the warning about a picture of a window taller than any screen is console output for the person running the script
 src/slint/main.cpp::main::stderr::clipprobelog begin	ALLOW	command-line / developer output (a console nobody runs the app from; the user chose the flag)	seed
 src/slint/main.cpp::main::stderr::clipprobelog end	ALLOW	command-line / developer output (a console nobody runs the app from; the user chose the flag)	seed
 src/slint/main.cpp::main::stderr::clipprobewindow % %	ALLOW	command-line / developer output (a console nobody runs the app from; the user chose the flag)	seed
@@ -2084,7 +2085,7 @@ src/source/aor_control.cpp::ControlSession::tune::errassign::% mhz cannot be sen
 src/source/aor_control.cpp::pairControlPort::errassign::% did not answer vr it is not an aor receiver or the receive	ALLOW	the open's own failure: this sentence becomes the failed open's reason and is filed as a radio_fail by Engine::reportFailedOpen	rra2
 src/source/aor_control.cpp::pairControlPort::errassign::error	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	seed
 src/source/aor_control.cpp::pairControlPort::errassign::error#2	ALLOW	plumbing: stores, clears or forwards an error value; the failing call is its own site	seed
-src/source/aor_control.cpp::pairControlPort::errassign::more than one aor receiver answered % foxsdr cannot yet tell	PENDING:reports-not-in-function	survey: REPORTS (open-path reason (noteRadioFail count)) but no reporting call encloses the site	seed
+src/source/aor_control.cpp::pairControlPort::errassign::more than one aor receiver answered % foxsdr cannot tell whi	PENDING:reports-not-in-function	survey: REPORTS (open-path reason (noteRadioFail count)) but no reporting call encloses the site	seed
 src/source/aor_control.cpp::pairControlPort::errassign::no ftdi serial port was found for the aor receivers control	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/aor_control.cpp::pairControlPort::errassign::no serial port answered as an aor receiver % ftdi ports aske	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed
 src/source/aor_source.cpp::AorSource::loadFirmwareLocked::errassign::aors fx# firmware file % could not be used % the receiver wa	ALLOW	capability / caller-contract message (the user's own pick, or a fault already latched)	seed

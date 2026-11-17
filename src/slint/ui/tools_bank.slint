@@ -61,6 +61,7 @@ export struct ScannerModel {
     ticked-mode: bool, ticked-label: string, start-mhz: string, stop-mhz: string, step-khz: string, dwell-ms: string, hold-ms: string,
     resume-ms: string, listen-ms: string, range-enabled: bool, scanning: bool, start-label: string, stop-label: string, skip-label: string,
     status: string, status-tone: ChipTone,
+    comma-note: string,                                // the sentence for a number refused for an ambiguous comma (owner decision 73)
     start-disabled: bool,                              // ADDED: Start scan is disabled in ticked mode with nothing ticked (aw 30577)
 }
 
@@ -587,6 +588,7 @@ export global LaneC {
     // the Bookmarks block: the memory of the frequency the receiver is on (C12, C1, T10) and the quick memories (T5)
     in property <bool> mem-enabled;                     // the tuned frequency is a bookmark
     in property <string> mem-title;                     // "145.6000 MHz  GB3XX", or the sentence that says why not
+    in property <string> comma-note;                    // the sentence for a number refused for an ambiguous comma (owner decision 73), under the field it was typed in
     in property <string> mem-squelch;
     in property <string> mem-threshold;
     in property <string> mem-offset;
@@ -675,6 +677,7 @@ component LaneCScanBlock inherits VerticalLayout {
         }
     }
     if LaneC.scan-stats != "" : Note { wrap-w: root.width; text: LaneC.scan-stats; }
+    if LaneC.comma-note != "" : Note { wrap-w: root.width; text: LaneC.comma-note; tone: ChipTone.warn; }
     if LaneC.scan-engine-note : Note { wrap-w: root.width; text: @tr("The priority list and the scan thresholds are saved; the scanner is not using them."); tone: ChipTone.warn; }
 }
 
@@ -700,6 +703,7 @@ component LaneCMemoryBlock inherits VerticalLayout {
         LabelledField { horizontal-stretch: 1; label: @tr("Tone Hz"); value: LaneC.mem-tone; enabled: LaneC.mem-enabled; committed(t) => { LaneC.act("mem-tone", t); } }   // not-translated: the host's action id
     }
     if LaneC.mem-tx != "" : Note { wrap-w: root.width; text: LaneC.mem-tx; }
+    if LaneC.comma-note != "" : Note { wrap-w: root.width; text: LaneC.comma-note; tone: ChipTone.warn; }
     Rectangle { height: Theme.hairline; background: Theme.line; }
     Line {
         Tick {
@@ -1568,6 +1572,7 @@ export component ScannerBody inherits VerticalLayout {
             committed(t) => { root.scanner-listen(t); }
         }
     }
+    if root.model.comma-note != "" : Note { text: root.model.comma-note; tone: ChipTone.warn; }
     // Start scan fills the row; while scanning Stop scan and Skip share it (aw 30577-30600)
     Rectangle {
         height: Theme.key-sm-h;
@@ -2194,7 +2199,7 @@ export component MarkersSheet inherits Rectangle {
                 y: 0px;
                 width: parent.width;
                 wrap-w: root.sheet-inner-w;
-                text: root.model.empty-line != "" ? root.model.empty-line : @tr("No markers yet. Right-click the waterfall and choose Drop marker here.");
+                text: root.model.empty-line != "" ? root.model.empty-line : @tr("No markers. Right-click the waterfall and choose Drop marker here.");
             }
         }
         if root.model.rows.length > 0 : VerticalLayout {

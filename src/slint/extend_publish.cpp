@@ -419,6 +419,8 @@ void ExtendPublisher::wantPictures(const StorePluginPage& page) {
     o.accept = m.accept;
     o.port = ss(m.port);
     o.reachable = m.reachable;
+    o.reachable_offered = m.reachable_offered;
+    o.scope_note = ss(m.scope_note);
     o.warning = ss(m.warning);
     o.status = ss(m.status);
     o.status_tone = tone(m.status_tone);

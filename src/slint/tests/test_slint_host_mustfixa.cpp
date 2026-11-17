@@ -123,12 +123,68 @@ void theWindowSaysNothingOfWhatIsNotThere() {
             CHECK(false);
         }
     }
+    // LOOK REVIEW M2/M3 (window follow-ups): no developer words and no "yet" in anything the window shows; the one "yet" is the owner's label of decision 61
+    for (const auto& [rel, w] : words) {
+        const std::string l = lower(w);
+        for (const char* dev : {"unverified", "link registry", "this lane", "by the lane", "todo", "stub"}) {
+            if (has(l, dev)) { std::printf("  developer word \"%s\" in %s: %s\n", dev, rel.c_str(), w.c_str()); CHECK(false); }
+        }
+        std::size_t y = l.find("yet");
+        while (y != std::string::npos) {
+            const bool word = (y == 0 || !std::isalnum(static_cast<unsigned char>(l[y - 1]))) && (y + 3 >= l.size() || !std::isalnum(static_cast<unsigned char>(l[y + 3])));
+            if (word && l != "not yet proved on a real radio.") { std::printf("  \"yet\" in %s: %s\n", rel.c_str(), w.c_str()); CHECK(false); }
+            y = l.find("yet", y + 1);
+        }
+    }
     // the placeholder components of phase 1 are gone: nothing draws a "phase 3" plate
     CHECK(!fs::exists(repoRoot() / "src" / "slint" / "ui" / "stubs.slint"));
     // the one place that may say "yet" about a radio is the decision 61 label, once
     int proved = 0;
     for (const auto& [rel, w] : words) { if (lower(w) == "not yet proved on a real radio.") { ++proved; } }
     CHECK(proved == 1);
+}
+
+// LOOK REVIEW M2: the Needed libraries rows are sentences a person can act on. The tables that hold them name no lane, registry or verification state.
+void theNeededLibrariesTextIsForPeople() {
+    int files = 0;
+    for (const char* rel : {"src/source/needed_library.cpp", "src/source/sdriq_d2xx.cpp", "src/engine/wire_b_needed_libs.cpp"}) {
+        const std::string t = slurp(repoRoot() / rel);
+        CHECK(!t.empty());
+        ++files;
+        // only the text between double quotes on lines that are not comments: the sentences the rows carry
+        std::istringstream in(t);
+        std::string line;
+        while (std::getline(in, line)) {
+            const std::size_t c = line.find("//");
+            const std::size_t q = line.find('"');
+            if (q == std::string::npos || (c != std::string::npos && c < q)) { continue; }
+            const std::string l = lower(line.substr(q));
+            for (const char* dev : {"this lane", "the lane", "link registry", "unverified", "(how:", "where from:", "not read by"}) {
+                if (has(l, dev)) { std::printf("  developer words \"%s\" in %s: %s\n", dev, rel, line.c_str()); CHECK(false); }
+            }
+        }
+    }
+    CHECK(files == 3);
+}
+
+// LOOK REVIEW B1: the smallest window the drag edges allow is the one where the strip, the spectrum toolbar and the rail all fit (measured: 1480 x 560).
+void theSmallestWindowIsTheMeasuredOne() {
+    const std::string h = slurp(repoRoot() / "src" / "slint" / "host_logic.hpp");
+    CHECK(has(h, "constexpr float kMinWindowW = 1480.0f;") && has(h, "constexpr float kMinWindowH = 560.0f;"));
+    const std::string m = slurp(repoRoot() / "src" / "slint" / "main.cpp");
+    CHECK(has(m, "std::max(kMinWindowW * scale()") && has(m, "std::max(kMinWindowH * scale()"));
+    CHECK(!has(m, "std::max(624.0f * scale()"));
+}
+
+// OA-75 follow-up: the Community row of the SYSTEM list is not drawn (it keeps its logical place so the rows after it keep their numbers).
+void theEmptyCommunityRowIsNotDrawn() {
+    const std::string m = slurp(repoRoot() / "src" / "slint" / "main.cpp");
+    CHECK(has(m, "cascade::i18n::tr(\"Accessibility\"), \"\", cascade::i18n::tr(\"Spectrum tools\")"));
+    const std::string s = slurp(repoRoot() / "src" / "slint" / "ui" / "sections.slint");
+    CHECK(has(s, "height: root.hidden ? 0px") && has(s, "visible: !root.hidden;"));
+    const std::string mw = slurp(repoRoot() / "src" / "slint" / "ui" / "main.slint");
+    CHECK(has(mw, "hidden: s.name == \"\";"));
+    for (const Src& x : windowSources()) { CHECK(!has(x.text, "No community links")); }
 }
 
 void noForumAndNoDiscordAnywhere() {
@@ -174,7 +230,28 @@ void everyUnprovenRadioRowCarriesTheOneLabel() {
 
 }  // namespace
 
+// OWNER DECISION 19 (window follow-ups, item 11): the CAT "Reachable from other machines" tick is offered by neither window. The constant is false, and each window draws the
+// tick only under it.
+void theCatReachableTickIsNotOffered() {
+    const std::string h = slurp(repoRoot() / "src" / "core" / "cat_scope.hpp");
+    CHECK(has(h, "kCatReachableOffered = false;"));
+    const std::string legacy = slurp(repoRoot() / "src" / "gui" / "app_window.cpp");
+    const std::size_t box = legacy.find("ImGui::Checkbox(trId(" + std::string(1, 34) + "Reachable from other machines" + std::string(1, 34) + ")");
+    CHECK(box != std::string::npos);
+    const std::size_t guard = box == std::string::npos ? std::string::npos : legacy.rfind("if (cascade::core::kCatReachableOffered)", box);
+    CHECK(guard != std::string::npos && box - guard < 400);
+    const std::string ext = slurp(repoRoot() / "src" / "slint" / "extend_logic.cpp");
+    CHECK(has(ext, "m.reachable_offered = cc::kCatReachableOffered;"));
+    const std::string sl = slurp(repoRoot() / "src" / "slint" / "ui" / "extend_bank.slint");
+    const std::size_t tick = sl.find("label: @tr(" + std::string(1, 34) + "Reachable from other machines" + std::string(1, 34) + ")");
+    CHECK(tick != std::string::npos && sl.rfind("if root.model.reachable-offered", tick) != std::string::npos);
+}
+
 int main() {
+    theCatReachableTickIsNotOffered();
+    theNeededLibrariesTextIsForPeople();
+    theSmallestWindowIsTheMeasuredOne();
+    theEmptyCommunityRowIsNotDrawn();
     theDropDownGrabsFocusWithoutATimer();
     theWindowSaysNothingOfWhatIsNotThere();
     noForumAndNoDiscordAnywhere();

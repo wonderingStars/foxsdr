@@ -13,6 +13,7 @@
 #include <string_view>
 
 #include "core/add_all_plan.hpp"
+#include "core/cat_scope.hpp"
 #include "core/i18n.hpp"
 #include "core/plugin_abi.h"
 #include "core/plugin_repo_data.hpp"
@@ -287,6 +288,8 @@ CatModel readCat(TableReader& t, const ReadOptions& o) {
     m.accept = d.enabled;
     m.port = d.port_text;
     m.reachable = d.bind_all;
+    m.reachable_offered = cc::kCatReachableOffered;
+    m.scope_note = T("CAT is available on this computer only.");
     if (d.bind_all) {
         // Said plainly, because it is a blunter exposure than the web server's: there is no password to add.
         m.warning = T("This protocol has no password. Anything that can reach the port can retune the receiver.");
@@ -813,7 +816,7 @@ std::vector<StoreLine> siteLines(const SiteRow& s) {
             out.push_back({cc::formatText(tr("%s: could not be read: %s"), who.c_str(), s.error.c_str()), Tone::Warn});
             break;
         default:
-            out.push_back({cc::formatText(tr("%s: not read yet"), who.c_str()), Tone::Neutral});
+            out.push_back({cc::formatText(tr("%s: not read"), who.c_str()), Tone::Neutral});
             break;
     }
     if (s.hiddenSameId > 0) {
@@ -1113,7 +1116,7 @@ void fillBody(StorePluginPage& p, const StoreEntry& e, bool detailsOpen, bool wi
     p.screenshots.clear();
     p.no_pictures.clear();
     if (e.pictures.empty()) {
-        p.no_pictures = T("No pictures published yet");
+        p.no_pictures = T("No pictures published");
     } else {
         for (PictureFrame f : e.pictures) {
             if (f.state == kPicReady) {
@@ -1468,7 +1471,7 @@ StoreModel readStore(TableReader& t, const ReadOptions& o) {
             m.empty_line = T("The catalogue could not be read:") + " " + sourceError;
             m.empty_tone = Tone::Err;
         } else {
-            m.empty_line = T("No catalogue has been read yet. Press CHECK NOW above and this application asks the source once.");
+            m.empty_line = T("No catalogue has been read. Press CHECK NOW above and this application asks the source once.");
         }
     };
 

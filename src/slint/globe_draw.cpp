@@ -220,7 +220,7 @@ GlobeDrawList drawFt8(const std::vector<Ft8Spot>& spots, bool rxKnown, const Lat
         d.label = "RX";
         l.markers.push_back(std::move(d));
     }
-    if (spots.empty() && rxKnown) { l.emptyNote = FOX_TR_NOOP("No stations heard yet in this time window."); }
+    if (spots.empty() && rxKnown) { l.emptyNote = FOX_TR_NOOP("No stations heard in this time window."); }
     return l;
 }
 
@@ -323,7 +323,7 @@ GlobeDrawList drawSatellites(const SatSceneIn& in, const ViewState& view, const 
     l.texture = earth;
     l.camera = view.cameraSet ? view.camera : initialCamera(ViewKind::Satellites, in.rxKnown, in.rx);
     addGraticule(l, 30.0, 1.002);
-    if (in.sats.empty() && in.paths.empty()) { l.emptyNote = FOX_TR_NOOP("No satellites are being tracked yet."); }
+    if (in.sats.empty() && in.paths.empty()) { l.emptyNote = FOX_TR_NOOP("No satellites are being tracked."); }
     if (in.groundTracks) {
         for (const SatPathIn& p : in.paths) {
             Polyline pl;

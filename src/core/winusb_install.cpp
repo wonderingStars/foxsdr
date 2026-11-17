@@ -212,7 +212,7 @@ std::string resultSentence(const Result& r) {
     case Outcome::Installed:
         return r.reboot ? tr("The driver is installed. Windows wants a restart before the radio "
                              "can be used; then press CHECK AGAIN.")
-                        : tr("The driver is installed. If the radio is not listed yet, unplug it, "
+                        : tr("The driver is installed. If the radio is not listed, unplug it, "
                              "plug it back in and press CHECK AGAIN.");
     case Outcome::AlreadyWinUsb:
         return tr("This radio already has the right driver. Press CHECK AGAIN.");

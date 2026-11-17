@@ -9,7 +9,7 @@
 +3 state patchface.s0.live == 0
 state patchface.s0.sentence contains "Wire the radio or a channel here to see its spectrum."
 state patchface.s1.live == 0
-state patchface.s1.sentence contains "No spectrum yet - its radio is not running."
+state patchface.s1.sentence contains "No spectrum: its radio is not running."
 state patchface.s2.live == 0
 state patchface.s2.sentence contains "Wire the radio or a channel here to see its spectrum."
 state patchface.s0.frames == 0
@@ -48,7 +48,7 @@ state patchface.s1.moved == 1
 +30 shot "pf-green-2.png"
 # THE INSPECTOR OF A SPECTRUM PART: the window offers no setting for one, so the sentence stays (row 1945 is left alone)
 +1 press "Radio spectrum"
-+5 expect "This node has nothing to set yet." label equals "This node has nothing to set yet."
++5 expect "This node has nothing to set." label equals "This node has nothing to set."
 # A PART FOLLOWS ITS NODE'S RESIZE: Larger makes the node, its pictures and the slice's columns bigger, and the picture starts again
 +1 state patchface.s0.width > 200
 +1 click "Larger"

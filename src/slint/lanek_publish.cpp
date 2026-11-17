@@ -299,17 +299,17 @@ struct LaneKPublisher::Impl {
             v.push_back(rChoice("imp-pick", tr("Files in the exports folder"), names, cur));
         }
         v.push_back(rField("imp-path", tr("File to import"), importPath, tr("The full path of a .foxsdr-bundle file")));
-        v.push_back(rKey("import", tr("Import settings..."), !importPath.empty()));
+        v.push_back(rKeyWhy("import", tr("Import settings..."), !importPath.empty(), tr("Type the file to import first.")));
         v.push_back(rNote(tr("An import, a profile switch and a reset take effect when FoxSDR closes: it closes for you, and you start it again.")));
         v.push_back(rHeading(tr("Profiles")));
         const auto names = keeper ? keeper->profileNames() : std::vector<std::string>();
         if (!names.empty()) { v.push_back(rChoice("prof-pick", tr("Profile"), names, profilePick)); }
-        v.push_back(rKey("prof-use", tr("Use this profile"), profilePick >= 0 && profilePick < static_cast<int>(names.size())));
-        v.push_back(rKey("prof-delete", tr("Delete profile"), profilePick >= 0 && profilePick < static_cast<int>(names.size())));
+        v.push_back(rKeyWhy("prof-use", tr("Use this profile"), profilePick >= 0 && profilePick < static_cast<int>(names.size()), tr("Choose a profile first.")));
+        v.push_back(rKeyWhy("prof-delete", tr("Delete profile"), profilePick >= 0 && profilePick < static_cast<int>(names.size()), tr("Choose a profile first.")));
         v.push_back(rField("prof-name", tr("Name for a new profile"), profileName, tr("1 to 40 letters, digits, spaces, dots, dashes or underscores")));
-        v.push_back(rKey("prof-save", tr("Save as profile..."), !profileName.empty()));
+        v.push_back(rKeyWhy("prof-save", tr("Save as profile..."), !profileName.empty(), tr("Type a name for the profile first.")));
         v.push_back(rField("sync-folder", tr("Shared folder for syncing profiles"), syncFolder, tr("A folder both computers can see; empty = off")));
-        v.push_back(rKey("sync", tr("Sync profiles now"), !syncFolder.empty()));
+        v.push_back(rKeyWhy("sync", tr("Sync profiles now"), !syncFolder.empty(), tr("Type the shared folder first.")));
         v.push_back(rHeading(tr("Start again")));
         v.push_back(rKey("wizard", tr("Run the first-time setup again")));
         v.push_back(rKey("reset", tr("Reset everything to defaults...")));
@@ -376,8 +376,9 @@ struct LaneKPublisher::Impl {
 
     std::vector<Row> communityRows() {
         std::vector<Row> v;
-        // No forum and no chat server exist (owner answer, decision 75, 2026-11-16): nothing here names either, and there is no setting to switch one on (must-fix lane A, OA-75)
-        v.push_back(rNote(tr("No community links are set up in this copy of FoxSDR.")));
+        // No forum and no chat server exist (owner answer, decision 75, 2026-11-16): nothing here names either, and there is no setting to switch one on (must-fix lane A, OA-75).
+        // The section has nothing to show, so the SYSTEM list does not draw its row (main.cpp sectionsFor: an empty name is a hidden row; the row KEEPS its logical place, so the
+        // sections after it, the saved open-section sets and the drive scripts keep their numbers).
         return v;
     }
 
@@ -460,8 +461,8 @@ struct LaneKPublisher::Impl {
         v.push_back(rHeading(tr("Limit mask")));
         v.push_back(rField("mask-path", tr("Mask file"), maskPath, tr("A text file whose first line is: foxmask 1, then lines like: upper 88e6 -30 108e6 -30")));
         v.push_back(rKey("mask-example", tr("Write an example mask file"), !env.exportsDir.empty(), tr("Writes a small mask file into the exports folder and fills in its path")));
-        v.push_back(rKey("mask-load", tr("Load the mask"), !maskPath.empty()));
-        v.push_back(rTick("mask-show", tr("Show the limit lines"), maskShown, maskLoaded));
+        v.push_back(rKeyWhy("mask-load", tr("Load the mask"), !maskPath.empty(), tr("Type the mask file first.")));
+        v.push_back(rTickWhy("mask-show", tr("Show the limit lines"), maskShown, maskLoaded, tr("Load a mask first.")));
         if (maskHaveResult) {
             v.push_back(rReadout(tr("Worst margin"), maskPass ? num("%.1f dB", maskMargin) : num("%.1f dB (breach)", maskMargin)));
             v.push_back(rReadout(tr("Frames in breach"), std::to_string(maskBreachFrames)));
@@ -1008,7 +1009,7 @@ void LaneKPublisher::Impl::cursorAct(const std::string& id, const std::string& t
     else if (id == "cur-ref") { cursorRef = std::clamp(std::atoi(text.c_str()), 0, 7); cursors.setReference(static_cast<std::size_t>(cursorRef)); }
     else if (id == "cur-pick") { cursorPick = text == "1"; cursorNext = 0; }
     else if (id == "cur-tuned") { cursors.setCursor(0, lastState.tunedHz); cursorsShown = true; }
-    else if (id == "cur-snap") { cursorNote = snapCursors() ? std::string(tr("Snapped.")) : std::string(tr("Nothing to snap to yet.")); }
+    else if (id == "cur-snap") { cursorNote = snapCursors() ? std::string(tr("Snapped.")) : std::string(tr("Nothing to snap to.")); }
     else if (id.rfind("cur-f-", 0) == 0) { cursors.setCursor(static_cast<std::size_t>(std::atoi(id.c_str() + 6)), v * 1e6); cursorsShown = true; }
 }
 

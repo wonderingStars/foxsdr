@@ -522,7 +522,7 @@ int main(int argc, char** argv) {
     const int helpAtTick = helpTest != nullptr ? std::atoi(helpTest) : 0;   // a bounded run does not open a browser: the address is kept for the script
     long lockSeen = 0;          // slint-gaps.md item 3: the lock's refusal count last seen, and the tick of the last refusal (the note under the counter)
     int noteTick = -1000;
-    std::string togetherNote = "no start together yet";
+    std::string togetherNote = "no start together";
     // TEST ONLY (workspace_testseam.hpp): a BOUNDED run's FOXSDR_SLINT_TEST_RADIOS=<2..8> makes radios 2 to N from made-up answers, so the drive harness can show, drive and shoot the panes before stage 4
     // has live radios. Never in a session: the gate is the bounded run, and no control reaches it.
     std::unique_ptr<SeamRadios> seam;
@@ -975,45 +975,45 @@ int main(int argc, char** argv) {
                 const auto face = extendBank.face(i);
                 if (face.valid) { chip = face.chip; tone = face.tone; }
             }
-            rows.push_back({ss(name), ss(chip), tone, openSections[bank].count(i) > 0, LampState::Off, false});
+            rows.push_back({ss(cascade::i18n::tr(name)), ss(chip), tone, openSections[bank].count(i) > 0, LampState::Off, false});
         };
         const bool running = (state.flags & FOXAPI_RX_RUNNING) != 0;
         switch (bank) {
             case 0:
-                add(0, "Patch", (state.flags & FOXAPI_RX_PATCH_RUNNING) ? "PATCH RUNNING" : "RECEIVER VIEW", (state.flags & FOXAPI_RX_PATCH_RUNNING) ? ChipTone::Warn : ChipTone::Neutral);
-                add(1, "Source", (state.flags & FOXAPI_RX_DEVICE_OPEN) ? lower(state.deviceName).find("rtl") != std::string::npos ? "RTL-SDR" : "OPEN" : "GENERATOR", (state.flags & FOXAPI_RX_DEVICE_OPEN) ? ChipTone::Good : ChipTone::Neutral);
-                add(2, "Radio", modeName(state.demodMode), ChipTone::Warn);
-                add(3, "Audio filters", (state.flags & (FOXAPI_RX_NR | FOXAPI_RX_NOTCH | FOXAPI_RX_AUTO_NOTCH)) ? "ON" : "OFF", (state.flags & (FOXAPI_RX_NR | FOXAPI_RX_NOTCH | FOXAPI_RX_AUTO_NOTCH)) ? ChipTone::Good : ChipTone::Neutral);
-                add(4, "Sinks", (state.flags & FOXAPI_RX_SINK_OPEN) ? "OPEN" : "CLOSED", (state.flags & FOXAPI_RX_SINK_OPEN) ? ChipTone::Good : ChipTone::Neutral);
-                add(5, "Transmit", (state.flags & FOXAPI_RX_TX_AVAILABLE) ? ((state.flags & FOXAPI_RX_TX_KEYED) ? "ON AIR" : "READY") : "NO TX", (state.flags & FOXAPI_RX_TX_KEYED) ? ChipTone::Err : (state.flags & FOXAPI_RX_TX_AVAILABLE) ? ChipTone::Good : ChipTone::Neutral);
-                add(6, "Recorder", lists.recording ? "REC" : "OFF", lists.recording ? ChipTone::Err : ChipTone::Neutral);
-                add(7, "Frequency correction", "--", ChipTone::Neutral);   // the chip is the signal publisher's (the ppm model's: OFF, ON or PPM +1.5)
+                add(0, FOX_TR_NOOP("Patch"), (state.flags & FOXAPI_RX_PATCH_RUNNING) ? "PATCH RUNNING" : "RECEIVER VIEW", (state.flags & FOXAPI_RX_PATCH_RUNNING) ? ChipTone::Warn : ChipTone::Neutral);
+                add(1, FOX_TR_NOOP("Source"), (state.flags & FOXAPI_RX_DEVICE_OPEN) ? lower(state.deviceName).find("rtl") != std::string::npos ? "RTL-SDR" : "OPEN" : "GENERATOR", (state.flags & FOXAPI_RX_DEVICE_OPEN) ? ChipTone::Good : ChipTone::Neutral);
+                add(2, FOX_TR_NOOP("Radio"), modeName(state.demodMode), ChipTone::Warn);
+                add(3, FOX_TR_NOOP("Audio filters"), (state.flags & (FOXAPI_RX_NR | FOXAPI_RX_NOTCH | FOXAPI_RX_AUTO_NOTCH)) ? "ON" : "OFF", (state.flags & (FOXAPI_RX_NR | FOXAPI_RX_NOTCH | FOXAPI_RX_AUTO_NOTCH)) ? ChipTone::Good : ChipTone::Neutral);
+                add(4, FOX_TR_NOOP("Sinks"), (state.flags & FOXAPI_RX_SINK_OPEN) ? "OPEN" : "CLOSED", (state.flags & FOXAPI_RX_SINK_OPEN) ? ChipTone::Good : ChipTone::Neutral);
+                add(5, FOX_TR_NOOP("Transmit"), (state.flags & FOXAPI_RX_TX_AVAILABLE) ? ((state.flags & FOXAPI_RX_TX_KEYED) ? "ON AIR" : "READY") : "NO TX", (state.flags & FOXAPI_RX_TX_KEYED) ? ChipTone::Err : (state.flags & FOXAPI_RX_TX_AVAILABLE) ? ChipTone::Good : ChipTone::Neutral);
+                add(6, FOX_TR_NOOP("Recorder"), lists.recording ? "REC" : "OFF", lists.recording ? ChipTone::Err : ChipTone::Neutral);
+                add(7, FOX_TR_NOOP("Frequency correction"), "--", ChipTone::Neutral);   // the chip is the signal publisher's (the ppm model's: OFF, ON or PPM +1.5)
                 break;
             case 1:
-                add(0, "Plugin store", "--", ChipTone::Neutral);
-                add(1, "Fitted modules", std::to_string(lists.fittedPlugins) + " FITTED", lists.fittedPlugins > 0 ? ChipTone::Good : ChipTone::Neutral);
-                add(2, "Decoders", state.decodersRunning > 0 ? std::to_string(state.decodersRunning) + " RUNNING" : "IDLE", state.decodersRunning > 0 ? ChipTone::Good : ChipTone::Neutral);
-                add(3, "Target details", "--", ChipTone::Neutral);
-                add(4, "Maps", "--", ChipTone::Neutral);
-                add(5, "Decoder output", std::to_string(state.decoderLinesTotal) + " LINES", ChipTone::Neutral);
+                add(0, FOX_TR_NOOP("Plugin store"), "--", ChipTone::Neutral);
+                add(1, FOX_TR_NOOP("Fitted modules"), std::to_string(lists.fittedPlugins) + " FITTED", lists.fittedPlugins > 0 ? ChipTone::Good : ChipTone::Neutral);
+                add(2, FOX_TR_NOOP("Decoders"), state.decodersRunning > 0 ? std::to_string(state.decodersRunning) + " RUNNING" : "IDLE", state.decodersRunning > 0 ? ChipTone::Good : ChipTone::Neutral);
+                add(3, FOX_TR_NOOP("Target details"), "--", ChipTone::Neutral);
+                add(4, FOX_TR_NOOP("Maps"), "--", ChipTone::Neutral);
+                add(5, FOX_TR_NOOP("Decoder output"), std::to_string(state.decoderLinesTotal) + " LINES", ChipTone::Neutral);
                 break;
             case 2:
-                add(0, "Demod scope", "--", ChipTone::Neutral);
-                add(1, "Radar", "--", ChipTone::Neutral);
-                add(2, "Bookmarks", std::to_string(lists.bookmarks.size()), ChipTone::Neutral);
-                add(3, "Scanner", (state.flags & FOXAPI_RX_SCANNER_ACTIVE) ? "SCANNING" : "OFF", (state.flags & FOXAPI_RX_SCANNER_ACTIVE) ? ChipTone::Good : ChipTone::Neutral);
-                add(4, "Airband", "--", ChipTone::Neutral);
+                add(0, FOX_TR_NOOP("Demod scope"), "--", ChipTone::Neutral);
+                add(1, FOX_TR_NOOP("Radar"), "--", ChipTone::Neutral);
+                add(2, FOX_TR_NOOP("Bookmarks"), std::to_string(lists.bookmarks.size()), ChipTone::Neutral);
+                add(3, FOX_TR_NOOP("Scanner"), (state.flags & FOXAPI_RX_SCANNER_ACTIVE) ? "SCANNING" : "OFF", (state.flags & FOXAPI_RX_SCANNER_ACTIVE) ? ChipTone::Good : ChipTone::Neutral);
+                add(4, FOX_TR_NOOP("Airband"), "--", ChipTone::Neutral);
                 add(5, cascade::i18n::tr("Export"), "--", ChipTone::Neutral);   // lane S1: the waterfall as a file
                 break;
             case 3:
-                add(0, "Web access", lists.webListening ? "PORT " + std::to_string(lists.webPort) : "OFF", lists.webListening ? ChipTone::Good : ChipTone::Neutral);
-                add(1, "CAT", lists.catListening ? "PORT " + std::to_string(lists.catPort) : "OFF", lists.catListening ? ChipTone::Good : ChipTone::Neutral);
+                add(0, FOX_TR_NOOP("Web access"), lists.webListening ? "PORT " + std::to_string(lists.webPort) : "OFF", lists.webListening ? ChipTone::Good : ChipTone::Neutral);
+                add(1, FOX_TR_NOOP("CAT"), lists.catListening ? "PORT " + std::to_string(lists.catPort) : "OFF", lists.catListening ? ChipTone::Good : ChipTone::Neutral);
                 break;
             default: {
                 // THE SYSTEM BANK, in the contract's order (main.slint places the bodies by these indices): 0 Display, 1 Language & country, 2 Frequency correction,
                 // 3 Updates, 4 Serial ports, 5 Key bindings, 6 Diagnostics, 7 Usage reporting, 8 Beta tester (only while the tester feature is on), 9 About.
                 // The chips are the host's (system_logic: the models' own words); row 2's is the SIGNAL family's ppm chip.
-                static const char* const names[10] = {"Display", "Language & country", "Frequency correction", "Updates", "Serial ports", "Key bindings", "Diagnostics", "Usage reporting", "Beta tester", "About"};
+                static const char* const names[10] = {FOX_TR_NOOP("Display"), FOX_TR_NOOP("Language & country"), FOX_TR_NOOP("Frequency correction"), FOX_TR_NOOP("Updates"), FOX_TR_NOOP("Serial ports"), FOX_TR_NOOP("Key bindings"), FOX_TR_NOOP("Diagnostics"), FOX_TR_NOOP("Usage reporting"), FOX_TR_NOOP("Beta tester"), FOX_TR_NOOP("About")};
                 for (int logical = 0; logical < 10; ++logical) {
                     if (logical == 8 && !systemBank.testerShown()) { continue; }
                     std::string chip = logical == 9 ? "" : "--";
@@ -1029,7 +1029,7 @@ int main(int argc, char** argv) {
                 }
                 // SCREEN LANE K: five sections after About (logical rows 10 to 14; the window's system-extra-base says where they start)
                 {
-                    const char* const kNames[5] = {cascade::i18n::tr("Settings and backup"), cascade::i18n::tr("Performance"), cascade::i18n::tr("Accessibility"), cascade::i18n::tr("Community"), cascade::i18n::tr("Spectrum tools")};
+                    const char* const kNames[5] = {cascade::i18n::tr("Settings and backup"), cascade::i18n::tr("Performance"), cascade::i18n::tr("Accessibility"), "", cascade::i18n::tr("Spectrum tools")};   // "": the Community row has nothing to show, so it is not drawn (it keeps its logical place)
                     for (int k = 0; k < 5; ++k) { rows.push_back({ss(kNames[k]), ss(""), ChipTone::Neutral, openSections[4].count(10 + k) > 0, LampState::Off, false}); }
                 }
                 // SCREEN LANE L: eleven more sections after lane K's (logical rows 15 to 25)
@@ -1395,7 +1395,7 @@ int main(int argc, char** argv) {
         exportNoteBad = true;
         if (exportJob.pending()) { return false; }   // one file at a time: the key is dimmed while one is written
         const RadioView& rv = selected();
-        if (rv.frame.empty() || !(rv.lastInfo.spanHz > 0)) { exportNote = cascade::i18n::tr("This radio has shown no spectrum yet, so there is nothing to save"); return false; }
+        if (rv.frame.empty() || !(rv.lastInfo.spanHz > 0)) { exportNote = cascade::i18n::tr("This radio has shown no spectrum, so there is nothing to save"); return false; }
         if (path.find_first_not_of(" \t") == std::string::npos) { exportNote = cascade::i18n::tr("Type where to save first"); return false; }
         return true;
     };
@@ -1436,7 +1436,7 @@ int main(int argc, char** argv) {
             const RadioView& rv = selected();
             static const int kMinutes[4] = {1, 5, 15, 60};
             foxsdr::slintexport::Snapshot snap = spectrumStores[static_cast<std::size_t>(rv.slot)].snapshot(kMinutes[exportLengthIdx], utcNowMs());
-            if (snap.empty()) { exportNote = cascade::i18n::tr("This radio has shown no spectrum yet, so there is nothing to save"); return; }
+            if (snap.empty()) { exportNote = cascade::i18n::tr("This radio has shown no spectrum, so there is nothing to save"); return; }
             foxsdr::slintexport::FileFacts facts;
             facts.radio = rv.slot + 1;
             facts.note = std::string("FoxSDR ") + cascade::versionString();
@@ -1456,13 +1456,13 @@ int main(int argc, char** argv) {
             exportNoteBad = !r.ok;
             if (r.ok) { exportNote = cascade::core::formatText(cascade::i18n::tr("Saved %s"), r.path.c_str()); exportLastPath = r.path; }
             else if (r.why == 1) { exportNote = cascade::i18n::tr("Type where to save first"); }
-            else if (r.why == 2) { exportNote = cascade::i18n::tr("This radio has shown no spectrum yet, so there is nothing to save"); }
+            else if (r.why == 2) { exportNote = cascade::i18n::tr("This radio has shown no spectrum, so there is nothing to save"); }
             else { exportNote = cascade::core::formatText(cascade::i18n::tr("The file could not be written to %s"), exportTypedPath.c_str()); }
         }
         const RadioView& rv = selected();
         const foxsdr::slintexport::SpectrumStore& store = spectrumStores[static_cast<std::size_t>(rv.slot)];
         const ViewWindow cur = rv.currentView();
-        const std::string context = cascade::core::formatText(cascade::i18n::tr("Radio %d at %s, span %s: %d min stored, %.1f MB"), rv.slot + 1, fmtMHz(cur.centreHz).c_str(), spanText(cur.spanHz).c_str(),
+        const std::string context = cascade::core::formatText(cascade::i18n::tr("Radio %d at %s, span %s: %d min stored, %.1f MB"), rv.slot + 1, fmtMHz(cur.centreHz).c_str(), spanValueText(cur.spanHz).c_str(),
                                                               static_cast<int>(store.rows() * foxsdr::slintexport::kRowGapMs / 60000), static_cast<double>(store.bytes()) / 1e6);
         const std::string sig = context + "|" + exportNote + (exportNoteBad ? "1" : "0") + (exportJob.pending() ? "w" : "i") + std::to_string(exportLengthIdx) + std::to_string(exportFormatIdx);
         if (sig == exportContextSig) { return; }
@@ -1642,7 +1642,7 @@ int main(int argc, char** argv) {
         g.on_history_toggled([&](bool v) { lookHistory = v; publishLook(); });
         g.on_reference_save([&] {
             RadioView& rv = selected();
-            if (rv.frame.empty() || !(rv.lastInfo.spanHz > 0)) { lookStatus = cascade::i18n::tr("There is no spectrum to save yet."); }
+            if (rv.frame.empty() || !(rv.lastInfo.spanHz > 0)) { lookStatus = cascade::i18n::tr("There is no spectrum to save."); }
             else { rv.reference.save(rv.frame.data(), rv.frame.size(), rv.lastInfo.centreHz, rv.lastInfo.spanHz); lookRefShown = true; lookStatus = cascade::i18n::tr("The trace is saved as the reference."); }
             publishLook();
         });
@@ -1650,7 +1650,7 @@ int main(int argc, char** argv) {
         g.on_reference_clear([&] { selected().reference.clear(); lookStatus.clear(); publishLook(); });
         g.on_history_save([&] {
             RadioView& rv = selected();
-            if (rv.history.samples().empty()) { lookStatus = cascade::i18n::tr("There is no signal history yet: switch on a readout or the graph first."); publishLook(); return; }
+            if (rv.history.samples().empty()) { lookStatus = cascade::i18n::tr("There is no signal history: switch on a readout or the graph first."); publishLook(); return; }
             const foxsdr::slintexport::Outcome o = foxsdr::slintexport::saveText((std::filesystem::path(exportBase()) / "foxsdr-signal-history").string(), exportBase(), rv.history.csv(cascade::core::formatText("radio %d", rv.slot + 1)), "csv");
             lookStatus = o.ok ? cascade::core::formatText(cascade::i18n::tr("Saved %s"), o.path.c_str()) : cascade::core::formatText(cascade::i18n::tr("The file could not be written: %s"), o.error.c_str());
             lookHistoryPath = o.ok ? o.path : std::string();
@@ -2588,8 +2588,8 @@ int main(int argc, char** argv) {
     ui->on_close_clicked([&] { slint::quit_event_loop(); });
     ui->on_resize_drag([&](int edge, float dx, float dy) {
         const auto sz = ui->window().size();
-        const auto w = static_cast<std::uint32_t>(std::max(624.0f * scale(), sz.width + (edge != 2 ? dx * scale() : 0.f)));
-        const auto h = static_cast<std::uint32_t>(std::max(400.0f * scale(), sz.height + (edge != 1 ? dy * scale() : 0.f)));
+        const auto w = static_cast<std::uint32_t>(std::max(kMinWindowW * scale(), sz.width + (edge != 2 ? dx * scale() : 0.f)));
+        const auto h = static_cast<std::uint32_t>(std::max(kMinWindowH * scale(), sz.height + (edge != 1 ? dy * scale() : 0.f)));
         ui->window().set_size(slint::PhysicalSize({w, h}));
         ui->set_win_w(static_cast<float>(w) / scale());
         ui->set_win_h(static_cast<float>(h) / scale());
@@ -3123,11 +3123,11 @@ int main(int argc, char** argv) {
             ui->set_airband_on(air.listening);
             if (air.listening) {   // THE MONITOR'S SQUELCH (over -110..0): the dial reads and sets that one, the receiver's is left where it was
                 ui->set_squelch_norm(air.squelch_norm);
-                ui->set_squelch_text(ss(fmt("%.0f dB", air.squelch_db)));
+                ui->set_squelch_text(ss(wholeDbText(air.squelch_db)));
                 ui->set_squelch_hint(ss(""));
             } else {
                 ui->set_squelch_norm(static_cast<float>(squelchNorm(state.squelchDb)));
-                ui->set_squelch_text(ss(sqAuto ? std::string("open") : fmt("%.0f dB", state.squelchDb)));
+                ui->set_squelch_text(ss(sqAuto ? std::string("open") : wholeDbText(state.squelchDb)));
                 ui->set_squelch_hint(ss(sqAuto ? "Automatic: follows the noise floor" : "Manual threshold"));
             }
         }
@@ -3849,6 +3849,7 @@ int main(int argc, char** argv) {
         if (name == "sampleRateHz") { out = fmt("%.6f", state.sampleRateHz); return std::string(); }
         if (name == "channelRateHz") { out = fmt("%.6f", state.channelRateHz); return std::string(); }
         if (name == "bandwidthHz") { out = fmt("%.6f", state.bandwidthHz); return std::string(); }
+        if (name == "setup.autoChecked") { out = signalBank.autoSetupStarted() ? "1" : "0"; return std::string(); }
         if (name == "squelchDb") { out = fmt("%.6f", state.squelchDb); return std::string(); }
         if (name == "volume") { out = fmt("%.6f", state.volume); return std::string(); }
         if (name == "dbMin") { out = fmt("%.6f", state.dbMin); return std::string(); }
@@ -4179,6 +4180,8 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "foxsdr-slint: input script refused: %zu bad line(s) in %s\n", script.errors.size(), scriptPath);
                 scriptRefused = true;
             } else {
+                const bool hasShot = std::any_of(script.steps.begin(), script.steps.end(), [](const foxsdr::slintdrive::Step& s) { return s.verb == foxsdr::slintdrive::Verb::Shot; });
+                if (const std::string warn = tallShotWarning(std::getenv("FOXSDR_SLINT_SIZE"), hasShot); !warn.empty()) { std::fprintf(stderr, "foxsdr-slint: input script: %s\n", warn.c_str()); }
                 std::fprintf(stderr, "foxsdr-slint: input script: %zu steps from %s\n", script.steps.size(), scriptPath);
                 driveTarget = std::make_unique<foxsdr::slintdrive::SlintDriveTarget<MainWindow>>(ui, readState, screenshotTo, radioHook, radioSourceHook);
                 drive = std::make_unique<foxsdr::slintdrive::Driver>(std::move(script), *driveTarget);

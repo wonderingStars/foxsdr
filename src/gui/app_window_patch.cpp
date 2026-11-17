@@ -58,7 +58,7 @@ void AppWindow::drawPatchInfoPane(float x, float y, float w, float h) {
             ImGui::TextWrapped("%s", tr("This patch can run."));
         } else {
             ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::bad());
-            ImGui::TextWrapped("%s", tr("This patch cannot run yet."));
+            ImGui::TextWrapped("%s", tr("This patch cannot run."));
         }
         ImGui::PopStyleColor();
         // The selected channel's own level, spelled out. The node face has room for a number; this has room to say what it is a number OF.

@@ -239,12 +239,12 @@ export component PatchSpecimen inherits Window {
               hot-close: false, hot-grip: false, inputs: [{ x: 540px, y: 240px, tone: 0 }], outputs: [], reading: "", reading-tone: 0, reading2: "",
               face: { radio-switch: 0, radio-switch-label: "", device-label: "", centre-text: "", centre-note: "", freq-text: "",
                       mode-index: 0, squelch-on: false, squelch-norm: 0, squelch-text: "", gate-shown: false, gate-text: "", gate-word: "", gate-lit: false,
-                      level-shown: false, level-norm: 0, have-picture: false, lines: [{ text: "No spectrum yet - its radio is not running.", tone: 1 }], lines-after: [] } },
+                      level-shown: false, level-norm: 0, have-picture: false, lines: [{ text: "No spectrum: its radio is not running.", tone: 1 }], lines-after: [] } },
             { id: 8, kind: 6, kind-caption: "MAP", name: "Map", x: 730px, y: 190px, w: 140px, h: 100px, selected: false, blocked: false, fault: true, active: false,
               hot-close: false, hot-grip: false, inputs: [{ x: 730px, y: 240px, tone: 4 }], outputs: [], reading: "", reading-tone: 0, reading2: "",
               face: { radio-switch: 0, radio-switch-label: "", device-label: "", centre-text: "", centre-note: "", freq-text: "",
                       mode-index: 0, squelch-on: false, squelch-norm: 0, squelch-text: "", gate-shown: false, gate-text: "", gate-word: "", gate-lit: false,
-                      level-shown: false, level-norm: 0, have-picture: false, lines: [{ text: "no targets yet", tone: 2 }], lines-after: [] } },
+                      level-shown: false, level-norm: 0, have-picture: false, lines: [{ text: "no targets", tone: 2 }], lines-after: [] } },
         ],
     };
     in-out property <InspectorModel> m-inspector: {
@@ -276,7 +276,7 @@ export component PatchSpecimen inherits Window {
             items: [{ label: "A WAV file", id: "wav", enabled: true, note: "" }, { label: "An MP3 file (needs Windows)", id: "mp3", enabled: false, note: "" }, { label: "The speakers", id: "speakers", enabled: true, note: "" }],
             index: 2, label: "The speakers", lines: [{ text: "Speakers (Realtek)", tone: 2 }, { text: "1.2 s", tone: 2 }], files-note: "Files go in C:\\Recordings, one per speaker, named after it.",
         },
-        audio-sink: true, help: "This node has nothing to set yet.",
+        audio-sink: true, help: "This node has nothing to set.",
     };
 
     // the narrow page: the Radio key greyed (five radios), a long run line
@@ -301,7 +301,7 @@ export component PatchSpecimen inherits Window {
         no-decoders: "", blueprints-shown: true, blueprints: [{ label: "ADS-B Aircraft Decoder", id: "0", enabled: true, note: "1090.0000 MHz" }],
         blueprint-note: "Placed \"ADS-B\". It has no preset frequency - type one in before pressing START.",
         info: {
-            runnable: false, verdict: "This patch cannot run yet.", level-line: "", plan-line: "", none-selected: true,
+            runnable: false, verdict: "This patch cannot run.", level-line: "", plan-line: "", none-selected: true,
             help: ["Nothing selected.", "Click a node to set what it does. Drag from one port to another to wire them; drag a node by its title bar to move it. Delete removes whatever is selected.",
                    "Drag empty canvas or scroll to move round the patch. Ctrl+scroll or the + and - keys zoom; Fit shows every node."],
             selection: "", folded-note: "", problems: [],

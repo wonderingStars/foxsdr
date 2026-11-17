@@ -62,8 +62,17 @@ SigResult verifyEnvelope(const std::string& envelopeText, const std::vector<Ed25
 // Builds an envelope (the signing tool and the tests; the application never signs).
 std::string makeEnvelope(const Ed25519Seed& seed, const std::string& payload);
 
-// The keys this program trusts. EMPTY until the owner supplies one: see kOwnerKeyHex below.
+// The keys this program trusts. EMPTY until the owner supplies one: see kOwnerKeyHex below. A key string that is neither empty nor exactly 64 hexadecimal
+// characters is a FAULT, never "no key": the program does not compile with one (a static_assert on kOwnerKeyHex in sys_manifest_sig.cpp), and if one ever
+// reached run time this call throws std::logic_error with ownerKeyProblem's sentence.
 std::vector<Ed25519PublicKey> ownerTrustedKeys();
+
+// What is wrong with an owner key string, in plain words; "" when it is empty (no key) or exactly 64 hexadecimal characters (a key).
+std::string ownerKeyProblem(const std::string& hex);
+
+// The trusted keys a given key string makes: empty for "" (no key); throws std::logic_error with ownerKeyProblem's sentence for a string that is neither empty nor a
+// well-formed 64-character hexadecimal key. ownerTrustedKeys() is this over kOwnerKeyHex; the tests call it with a string of each kind.
+std::vector<Ed25519PublicKey> trustedKeysFromHex(const std::string& hex);
 
 // The owner's public key as 64 hex characters, or "" while none is supplied. THE ONE LINE THE OWNER EDITS (in sys_manifest_sig.cpp).
 extern const char* const kOwnerKeyHex;

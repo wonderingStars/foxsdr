@@ -1,0 +1,9 @@
+#! frames=200 size=1480x560
+# window-min-strip (look review B1): at the smallest window the drag edges allow (1480 x 560, host_logic.hpp kMinWindowW / kMinWindowH) every control of the receiver strip and the end of the
+# spectrum toolbar is inside the window - nothing is cut off. The right edge of each is read from the window's own layout.
+10 state running == 1
++10 expect "Report a bug / dislike" right <= "1480"
++1 expect "BIAS TEE" right <= "1480"
++1 expect "Full span" right <= "1480"
++1 expect "STOP" right <= "1480"
++1 expect "STOP" bottom <= "560"

@@ -343,7 +343,7 @@ void AppWindow::drawMarkerWindow() {
         }
         const float footerH = ImGui::GetFrameHeightWithSpacing();
         if (list.rows.empty()) {
-            ImGui::TextWrapped("%s", tr("No markers yet. Right-click the waterfall and choose "
+            ImGui::TextWrapped("%s", tr("No markers. Right-click the waterfall and choose "
                                         "Drop marker here."));
         } else {
             // In frequency order: the list is for working through the band.

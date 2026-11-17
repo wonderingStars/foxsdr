@@ -201,7 +201,7 @@ int main() {
         PluginRow notFed = aprs; notFed.fed = false; notFed.idle = "the receiver is at 2.4 MS/s and it wants 48 kS/s";
         CHECK(fittedStateSentence(notFed, true) == notFed.idle);
         CHECK(fittedVerdictLine(true, "C:\\plugins").find("Read from C:\\plugins.") != std::string::npos);
-        CHECK(fittedVerdictLine(false, "").find("No directory has been scanned yet.") != std::string::npos);
+        CHECK(fittedVerdictLine(false, "").find("No directory has been scanned.") != std::string::npos);
         CHECK(abiText(0, 4) == "not recorded" && abiText(4, 4) == "4, matches this build" && abiText(5, 4) == "5, this build needs 4");
         CHECK(fittedDateText(0).empty() && fittedDateText(1762128000).compare(0, 7, "fitted ") == 0);
         const auto reach = reachRows(aprs.caps);

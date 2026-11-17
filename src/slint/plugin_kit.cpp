@@ -459,7 +459,7 @@ void PluginKit::editSetting(const std::string& file, const SettingSpec& f, const
 
 std::function<std::string()> PluginKit::prepareSavePicture(const std::string& plugin, std::string& refusal) {
     const cascade::core::HostImage* img = imageOf(plugin);
-    if (img == nullptr || img->width == 0u) { refusal = cascade::i18n::tr("Nothing to save yet."); return {}; }
+    if (img == nullptr || img->width == 0u) { refusal = cascade::i18n::tr("Nothing to save."); return {}; }
     const std::filesystem::path dir = std::filesystem::path(env_.configPath).parent_path() / "pictures";
     std::string name = plugin;
     for (char& ch : name) { if (!std::isalnum(static_cast<unsigned char>(ch))) { ch = '_'; } }
@@ -481,7 +481,7 @@ std::function<std::string()> PluginKit::prepareSavePicture(const std::string& pl
 
 std::string PluginKit::savePicture(const std::string& plugin) {
     const cascade::core::HostImage* img = imageOf(plugin);
-    if (img == nullptr || img->width == 0u) { return cascade::i18n::tr("Nothing to save yet."); }
+    if (img == nullptr || img->width == 0u) { return cascade::i18n::tr("Nothing to save."); }
     std::filesystem::path dir = std::filesystem::path(env_.configPath).parent_path() / "pictures";
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);

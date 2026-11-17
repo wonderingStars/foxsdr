@@ -49,7 +49,7 @@ int deltaRadioOf(const FoxCommand& c) { return foxsdr::slintgaps::FrequencyLock:
 // What each property last showed, so a tick sets only what moved.
 struct LaneCPublisher::Shown {
     bool lockEnabled = false, muteScan = false, logScan = false, engineNote = false, memEnabled = false, quickStore = false, shortcutsOpen = false, recordingsOpen = false;
-    std::string lockText, priority, priorityEvery, scanStats, memTitle, memSquelch, memThreshold, memOffset, memTone, memTx, clock, recordingsNote;
+    std::string commaNote, lockText, priority, priorityEvery, scanStats, memTitle, memSquelch, memThreshold, memOffset, memTone, memTx, clock, recordingsNote;
     std::string quickSig;
     int fieldsEpoch = 0, scanEpoch = 0;
     bool first = true;
@@ -218,6 +218,7 @@ void LaneCPublisher::act(const std::string& id, const std::string& text) {
         ++fieldsEpoch_;
         markDirty();
     } else if (id == "priority-every") {
+        commaNote_ = commaSentence(text);
         if (const auto v = parsePriorityEvery(text)) { store_.priorityEveryS = *v; markDirty(); }
         ++fieldsEpoch_;
     } else if (id == "mute-scan") {
@@ -252,6 +253,7 @@ void LaneCPublisher::act(const std::string& id, const std::string& text) {
         if (const auto it = store_.memories.find(key); it != store_.memories.end()) { m = it->second; }
         bool unset = false;
         bool ok = true;
+        commaNote_ = commaSentence(text);
         if (id == "mem-squelch") { if (const auto v = parseDbField(text, unset)) { m.squelchDb = *v; } else { ok = false; } }
         else if (id == "mem-threshold") { if (const auto v = parseDbField(text, unset)) { m.thresholdDb = *v; } else { ok = false; } }
         else if (id == "mem-offset") { if (const auto v = parseKhzField(text)) { m.offsetKhz = *v; } else { ok = false; } }
@@ -524,6 +526,7 @@ void LaneCPublisher::publishMemory(const FoxReceiverState& state) {
     field(sh.memOffset, off, [&](const slint::SharedString& v) { lc.set_mem_offset(v); });
     field(sh.memTone, tone, [&](const slint::SharedString& v) { lc.set_mem_tone(v); });
     if (sh.first || sh.memTx != tx) { sh.memTx = tx; lc.set_mem_tx(ss(tx)); }
+    if (sh.first || sh.commaNote != commaNote_) { sh.commaNote = commaNote_; lc.set_comma_note(ss(commaNote_)); }
 }
 
 void LaneCPublisher::publishQuick() {

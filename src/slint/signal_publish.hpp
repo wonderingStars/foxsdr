@@ -61,6 +61,11 @@ public:
     // never the test's. Read only when the run is bounded, so a release can never be steered by them; call once, after construction and before wire().
     void setBounded(bool bounded);
 
+    // THE FIRST-RUN RADIO CHECK, AUTOMATIC (mustfix-b item 6 finding): the USB probe starts once, on its own worker, at the first tick of a real window - not only when the Radio
+    // setup page is opened - so the setup.* count and the radio_found events come from every install, as in the Legacy window. It never raises the page. A bounded run does it only
+    // with FOXSDR_SETUP_AUTO=1 (the drives; with FOXSDR_FAKE_RADIO_SETUP the bus is not read). autoSetupStarted() is what the drive state "setup.autoChecked" reads.
+    bool autoSetupStarted() const;
+
     // A bounded run's self-capture (FOXSDR_SLINT_SETUP=1, FOXSDR_SLINT_IMPORT=1): raises the Radio-setup page / the import dialog. Never set in a release.
     void raiseSetupForCapture();
     void raiseImportForCapture();

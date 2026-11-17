@@ -143,6 +143,23 @@ std::string localizeNumber(const std::string& text, double v, int decimals) {
     return text.substr(0, at) + dotted + text.substr(at + std::strlen(b));
 }
 std::string fmtKHz(double hz) { return locNum(hz / 1e3, 1, "%.1f") + " kHz"; }
+std::string tallShotWarning(const char* sizeEnv, bool scriptHasShot) {
+    if (!scriptHasShot || sizeEnv == nullptr) { return std::string(); }
+    unsigned w = 0, h = 0;
+    if (std::sscanf(sizeEnv, "%ux%u", &w, &h) != 2 || h <= kMaxShotWindowH) { return std::string(); }
+    return "warning: a screenshot step in a window " + std::to_string(h) + " px tall is taller than any screen (" + std::to_string(kMaxShotWindowH) + " px): the window toolkit can fault while painting a picture of it. A shorter window is safe.";
+}
+
+std::string wholeDbText(double db) {
+    const double r = std::round(db);
+    return fmt("%.0f dB", r == 0.0 ? 0.0 : r);
+}
+std::string spanValueText(double hz) {
+    if (hz >= 1e9) { return locNum(hz / 1e9, 3, "%.3f") + " GHz"; }
+    if (hz >= 1e6) { return locNum(hz / 1e6, 3, "%.3f") + " MHz"; }
+    if (hz >= 1e3) { return locNum(hz / 1e3, 1, "%.1f") + " kHz"; }
+    return fmt("%.0f Hz", hz);
+}
 std::string spanText(double hz) {
     if (hz >= 1e9) { return cascade::core::formatText(cascade::i18n::tr("SPAN %s"), (locNum(hz / 1e9, 3, "%.3f") + " GHz").c_str()); }
     if (hz >= 1e6) { return cascade::core::formatText(cascade::i18n::tr("SPAN %s"), (locNum(hz / 1e6, 3, "%.3f") + " MHz").c_str()); }
@@ -553,7 +570,7 @@ std::vector<StatusCardModel> statusCards(const FoxReceiverState& s, const HostEx
         StatusCardModel c;
         c.key = cascade::i18n::tr("UNDERRUNS");
         c.value = std::to_string(s.audioUnderruns);
-        if (s.audioUnderruns == 0) { c.detail = cascade::i18n::tr("no callback has starved yet"); c.lines = {c.detail}; }
+        if (s.audioUnderruns == 0) { c.detail = cascade::i18n::tr("no callback has starved"); c.lines = {c.detail}; }
         else {
             c.tone = CardTone::Err;
             c.detail = cascade::i18n::tr("starved callbacks, since start");

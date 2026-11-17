@@ -231,7 +231,7 @@ int main() {
     (void)e.applyCommand(cmd::makeInt(FOXAPI_OP_STORE_UPDATE_ALL, 1));
     std::printf("D: no catalogue: run %s, \"%s\"\n", join(A::runIds(e)).c_str(), A::installError(e).c_str());
     CHECK(A::runIds(e).empty());
-    CHECK(A::installError(e).find("no catalogue has been read yet") != std::string::npos);
+    CHECK(A::installError(e).find("no catalogue has been read") != std::string::npos);
 
     return testSummary("test_add_all_plan");
 }

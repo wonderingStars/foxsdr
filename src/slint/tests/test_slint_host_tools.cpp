@@ -175,7 +175,7 @@ void sentencesAreTheDrawers() {
         "The scope needs the receiver's position first.", "The scope will be empty. %s", "aircraft positions",
         "An ADS-B decoder is what fills this face; the plugin store is where one is fitted from.",
         "Use the middle of the %d aircraft heard  (%.2f%s %.2f%s)", "Use the middle of the traffic  (%d heard, need %d)",
-        "Use the middle of the traffic  (none heard yet)", "Use the %s map's centre  (%.2f%s %.2f%s)",
+        "Use the middle of the traffic  (none heard)", "Use the %s map's centre  (%.2f%s %.2f%s)",
         "or type it, or click SET FROM MAP CLICK on a map page:", "All serial-port settings are also under SYSTEM > Serial ports.",
         "Latitude must be -90..90 and longitude -180..180",
         "Type the receiver's position first: 0,0 is a point in the\nGulf of Guinea, not a receiver.",
@@ -191,7 +191,7 @@ void sentencesAreTheDrawers() {
         "No airport with the code \"%s\" publishes an airband frequency in FoxSDR's table.", "Waiting for the disk to open the file: %.0f s",
     };
     for (const char* k : airKeys) { CHECK(in(air, k)); }
-    const char* const markKeys[] = {"Clear all markers", "Yes, remove all %zu", "No markers yet. Right-click the waterfall and choose Drop marker here."};
+    const char* const markKeys[] = {"Clear all markers", "Yes, remove all %zu", "No markers. Right-click the waterfall and choose Drop marker here."};
     for (const char* k : markKeys) { CHECK(in(mark, k)); }
 
     // The ImGui literals the commands carry: the group separator, the scanner's masks, the airband actions - read from the sources they are in.
@@ -293,7 +293,7 @@ void scopeAndRadarReads() {
     RadarModel m = readRadar(s, r);
     CHECK(m.warning == "The scope needs the receiver's position first." && !m.offers.known && m.offers.known_text.empty());
     CHECK(m.scope_label == "Radar scope" && !m.scope_on);
-    CHECK(m.offers.heard_label == "Use the middle of the traffic  (none heard yet)" && !m.offers.heard_enabled);
+    CHECK(m.offers.heard_label == "Use the middle of the traffic  (none heard)" && !m.offers.heard_enabled);
     CHECK(m.offers.map_label.empty() && !m.offers.map_enabled);
     CHECK(m.offers.hint == "or type it, or click SET FROM MAP CLICK on a map page:");
     CHECK(m.offers.set_label == "Set RX here" && m.offers.serial_note == "All serial-port settings are also under SYSTEM > Serial ports.");
@@ -815,7 +815,7 @@ void markerReads() {
     // an empty list
     StubTable none;
     m = readMarkers(none, ReadOptions{});
-    CHECK(m.rows.empty() && m.clear_label.empty() && m.copy_label.empty() && m.clear_yes_label.empty() && m.empty_line == "No markers yet. Right-click the waterfall and choose Drop marker here." && m.error.empty());
+    CHECK(m.rows.empty() && m.clear_label.empty() && m.copy_label.empty() && m.clear_yes_label.empty() && m.empty_line == "No markers. Right-click the waterfall and choose Drop marker here." && m.error.empty());
     // the clipboard text is the core's
     const MarkersModel full = readMarkers(t, o);
     const std::string clip = markersClipboard(full);
