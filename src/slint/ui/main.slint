@@ -487,14 +487,14 @@ export component MainWindow inherits Window {
                 property <length> gap: 29px;   // 14 + the 1 px line + 14, between blocks
                 property <bool> radio-on: WorkspaceModel.radio-count > 1 && !root.compact-strip;   // STAGE S4: the radios' own block, only from 1760 px (then the strip is one row)
                 property <length> radio-w: self.radio-on ? 262px + self.gap : 0px;
-                property <length> need-one: 32px + 4 * self.gap + stopb.preferred-width + freqb.preferred-width + modeb.preferred-width + 396px + biasb.preferred-width;
+                property <length> need-one: 32px + 4 * self.gap + stopb.preferred-width + freqb.preferred-width + modeb.preferred-width + 396px + 120px;   // 120: the antenna-power block's own width (its hint elides)
                 out property <bool> two-rows: self.width < self.need-one;
                 out property <length> row2-h: self.two-rows ? max(stopb.preferred-height, biasb.preferred-height) + 8px : 0px;
                 property <length> x-stop: 16px + self.radio-w;
                 property <length> x-freq: self.two-rows ? 16px : self.x-stop + stopb.preferred-width + self.gap;
                 property <length> x-mode: self.x-freq + freqb.preferred-width + self.gap;
                 property <length> x-lanes: self.x-mode + modeb.preferred-width + self.gap;
-                property <length> x-bias: self.two-rows ? 16px + stopb.preferred-width + self.gap : self.width - 16px - biasb.preferred-width;
+                property <length> x-bias: self.two-rows ? 16px + stopb.preferred-width + self.gap : self.width - 16px - 120px;
                 property <length> lanes-w: self.two-rows ? self.width - 16px - self.x-lanes : self.x-bias - self.gap - self.x-lanes;
                 property <length> y2: Theme.strip-h;   // the top of row two
                 property <length> row2-pad: 8px;
@@ -765,7 +765,7 @@ export component MainWindow inherits Window {
                 Rectangle { // tab row + spectrum toolbar (32; 64 when the toolbar drops to a second row)
                     height: Theme.tab-h + tbr.row2-h;
                     Rectangle { y: parent.height - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
-                    if tbr.two-rows : Rectangle { y: Theme.tab-h - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line.with-alpha(0.5); }
+                    if tbr.two-rows : Rectangle { y: Theme.tab-h - Theme.hairline; height: Theme.hairline; width: parent.width; background: Theme.line; }
                     // THE ROW HOLDS ITS WIDTH (6.38.3): a layout's minimum width travels up through every parent that has no width of its own,
                     // and the tab row and the spectrum toolbar asks for more than the window when the catalogue's words are longer than the English ones (French, German).
                     // A Rectangle with a width of its own stops that climb (tests/test_slint_constraints.cpp), and clips what still does not fit.

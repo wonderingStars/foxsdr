@@ -635,11 +635,13 @@ component LaneCScanBlock inherits VerticalLayout {
             enabled: LaneC.lock-text != "";
             clicked => { LaneC.act("lock-clear", ""); }   // not-translated: the host's action id
         }
-        Text {
-            horizontal-stretch: 1; min-width: 0px; vertical-alignment: center; overflow: elide;
-            text: LaneC.lock-text;
-            color: Theme.dim; font-family: Theme.font-ui; font-size: Theme.font-small;
-        }
+        Rectangle { horizontal-stretch: 1; }   // the Clear key keeps the half of the line it had
+    }
+    // the lockout count and when the first lockout ends: its own wrapped line under the key, read whole (it was an elided half line: "2 locked out; the first en...")
+    if LaneC.lock-text != "" : Text {
+        wrap: word-wrap; min-width: 0px;
+        text: LaneC.lock-text;
+        color: Theme.dim; font-family: Theme.font-ui; font-size: Theme.font-small;
     }
     Line {
         height: 40px;
