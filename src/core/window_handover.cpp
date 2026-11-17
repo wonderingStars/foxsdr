@@ -21,7 +21,11 @@
 #endif
 #include <windows.h>
 #else
+#include <fcntl.h>
+#include <spawn.h>
 #include <unistd.h>
+
+extern char** environ;
 #endif
 
 #include "core/config_lock.hpp"
@@ -87,10 +91,17 @@ std::string lowerTrim(const std::string& s) {
 }
 
 // The three sentences, in the window the person is in NOW (the one that did not open the other).
+// The translated sentences name the Windows programs; off Windows the programs have no ".exe", and a person must be told the name of the file that is missing.
+std::string programSpelling(std::string text) {
+#if !defined(_WIN32)
+    for (std::size_t at = text.find(".exe"); at != std::string::npos; at = text.find(".exe", at)) { text.erase(at, 4); }
+#endif
+    return text;
+}
 std::string missingSentence(Window target) {
     return target == Window::Legacy
-               ? std::string(tr("The Legacy window could not be opened: its program (cascade.exe) was not found beside this one. You are still in the new window."))
-               : std::string(tr("The new window could not be opened: its program (foxsdr-slint.exe) was not found beside this one. You are still in the Legacy window."));
+               ? programSpelling(tr("The Legacy window could not be opened: its program (cascade.exe) was not found beside this one. You are still in the new window."))
+               : programSpelling(tr("The new window could not be opened: its program (foxsdr-slint.exe) was not found beside this one. You are still in the Legacy window."));
 }
 std::string failedSentence(Window target, unsigned long err) {
     return cascade::core::formatText(target == Window::Legacy ? tr("The Legacy window could not be started (Windows error %lu). You are back in the new window.")
@@ -174,9 +185,42 @@ bool startProgram(const fs::path& exe, const std::string& args, const std::strin
     return true;
 }
 #else
-bool startProgram(const fs::path&, const std::string&, const std::string&, unsigned long& error) {
-    error = 1;   // nothing starts off Windows: the other window is Windows' own
-    return false;
+// Starts `exe` with `args` (split at spaces: the arguments here are flags and numbers, never a quoted path), in its own folder and its own session, with this process's standard
+// handles passed on and its environment, and does not wait. The test seam's log file (childLog) takes the child's output and error, appended. No shell is involved.
+bool startProgram(const fs::path& exe, const std::string& args, const std::string& childLog, unsigned long& error) {
+    std::vector<std::string> words{exe.string()};
+    for (std::size_t at = 0; at < args.size();) {
+        const std::size_t end = args.find(' ', at);
+        const std::size_t stop = end == std::string::npos ? args.size() : end;
+        if (stop > at) { words.push_back(args.substr(at, stop - at)); }
+        at = stop + 1;
+    }
+    std::vector<char*> argv;
+    for (std::string& w : words) { argv.push_back(w.data()); }
+    argv.push_back(nullptr);
+    posix_spawn_file_actions_t fa;
+    ::posix_spawn_file_actions_init(&fa);
+    if (!childLog.empty()) {
+        ::posix_spawn_file_actions_addopen(&fa, 1, childLog.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0600);
+        ::posix_spawn_file_actions_adddup2(&fa, 1, 2);
+        ::posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
+    }
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 29))
+    const std::string dir = exe.parent_path().string();
+    if (!dir.empty()) { ::posix_spawn_file_actions_addchdir_np(&fa, dir.c_str()); }
+#endif
+    posix_spawnattr_t at;
+    ::posix_spawnattr_init(&at);
+    ::posix_spawnattr_setflags(&at, POSIX_SPAWN_SETSID);
+    pid_t pid = 0;
+    const int rc = ::posix_spawn(&pid, exe.c_str(), &fa, &at, argv.data(), environ);
+    ::posix_spawnattr_destroy(&at);
+    ::posix_spawn_file_actions_destroy(&fa);
+    if (rc != 0) {
+        error = static_cast<unsigned long>(rc);
+        return false;
+    }
+    return true;
 }
 #endif
 
