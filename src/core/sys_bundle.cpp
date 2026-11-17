@@ -142,7 +142,7 @@ bool localDriverName(const std::string& d) {
 }  // namespace
 
 bool localSourceKind(const std::string& kind) {
-    static const std::set<std::string> kLocal = {"siggen", "soapy", "rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "aor", "hydrasdr", "soundcard"};
+    static const std::set<std::string> kLocal = {"siggen", "soapy", "rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "aor", "hydrasdr", "soundcard", "fobos"};
     return kLocal.count(kind) != 0;
 }
 

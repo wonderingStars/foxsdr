@@ -369,6 +369,22 @@ void testLocalRadiosComeBack() {
     CHECK(told.find("203.0.113.9") == std::string::npos && told.find("y.iq") == std::string::npos);
 }
 
+// Engine merge 8 (screen lane S5c): the Fobos SDR is a USB radio through the maker's library the person installed, so a backup of one comes back. Its "lib=" option names a
+// file on this computer: it is dropped alone from the argument strings, and a saved radio that carries it is left out whole (the rule for every bad key).
+void testFobosRadioComesBack() {
+    json b;
+    b["sourceKind"] = "fobos";
+    b["nativeArgs"] = "lib=C:/vendor/fobos.dll,serial=0123456789";
+    b["radios"] = json::array({json{{"number", 2}, {"sourceKind", "fobos"}, {"args", "serial=0123456789"}},
+                               json{{"number", 3}, {"sourceKind", "fobos"}, {"args", "lib=C:/vendor/fobos.dll,serial=7"}}});
+    const ImportResult r = parseBundle(rawBundle({{"config.json", dumpS(b)}}));
+    const json c = json::parse(r.files[0].bytes);
+    CHECK(c["sourceKind"] == "fobos");
+    CHECK(c["nativeArgs"] == "serial=0123456789");
+    CHECK(c["radios"].size() == 1 && c["radios"][0]["number"] == 2 && c["radios"][0]["args"] == "serial=0123456789");
+    CHECK(r.files[0].bytes.find("vendor") == std::string::npos && r.files[0].bytes.find("fobos.dll") == std::string::npos);
+}
+
 // A local-looking entry that hides an address, a remote driver or a path is left out, one case at a time.
 void testHiddenAddressesAreLeftOut() {
     const char* const bad[] = {"driver=rtlsdr,host=203.0.113.9", "driver=rtlsdr,remote=nas7", "serial=1,remote:driver=rtlsdr", "driver=remote,remote=203.0.113.9",
@@ -649,6 +665,7 @@ int main() {
     testHostileBundleLeavesTheGuardedSettingsAlone();
     testReportingOnlyGetsMorePrivate();
     testLocalRadiosComeBack();
+    testFobosRadioComesBack();
     testHiddenAddressesAreLeftOut();
     testBackupRestoresTheProfileOnANewComputer();
     testPlanAndCommit();
