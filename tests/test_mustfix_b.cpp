@@ -213,7 +213,7 @@ int main() {
         if (!ev.empty()) {
             const std::string reason = ev[0]["body"]["reason"];
             CHECK(reason.rfind("out of range:", 0) == 0);
-            CHECK(!ev[0]["body"].contains("refused"));   // the contract has no word for a frequency
+            CHECK(ev[0]["body"]["refused"] == "frequency" && ev[0]["body"]["refusedClass"] == "range");   // issues 9 and 10 (must-fix lane E): the word now exists (was: no `refused`)
         }
         rr::forgetRadio(kRtl.key);
     }

@@ -226,6 +226,9 @@ const char* audioApiWord(AudioApi api);
 // else is the vendor's, not ours.
 RadioReason classifyRadioOpen(std::string_view driverKind, std::string_view error);
 const char* radioReasonWord(RadioReason r);
+// The class a failure REPORT carries: radioReasonWord(classifyRadioOpen(...)), except that what the health tokens file as `control` is said as `transfer` (a USB
+// bulk or isochronous transfer failed) or `tuner` (an RTL-SDR's tuner or demodulator would not initialise) where the sentence says so.
+const char* radioReportClassWord(std::string_view driverKind, std::string_view error);
 const char* soundReasonWord(SoundReason r);
 
 // THE REASON CLASS AS A WORD, for the two log lines that say a radio did not

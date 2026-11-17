@@ -782,6 +782,9 @@ int main() {
             CHECK(b["opened"] == false && b["openFailures"] == 1 && b["scans"].get<long long>() >= 2);
             CHECK(b["listed"].size() == 1 && b["listed"][0] == "Generic RTL2832U");
             CHECK(ends[0]["radioKey"] == "");
+            // must-fix lane E, issue 2: the Worker's own validator now knows the kind (it answered `unknown-kind` before), and takes this message
+            const int endsRefused = validateWithWorker(ends);
+            CHECK(endsRefused <= 0);   // 0 refused; -1 = node was not found (skipped)
         }
         // ...and a session that opened a radio does not
         resetFake();

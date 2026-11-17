@@ -518,6 +518,27 @@ RadioReason classifyRadioOpen(std::string_view driverKind, std::string_view erro
     return RadioReason::Other;
 }
 
+// THE CLASS A FAILURE REPORT SAYS (docs/radio-reports-contract.md 2.1; must-fix lane E, issues 15 and 16): the nine classes of the usage record's health
+// tokens, plus two the report adds so that the owner can tell three different things apart that the closed health vocabulary files as `control`: a USB bulk
+// or isochronous TRANSFER (or a pipe reset) that failed while the radio was being opened, and the RTL-SDR's tuner or demodulator that would not initialise
+// (PLL did not lock, I2C, register write). The health vocabulary does not change (the Worker drops a word it does not know): the token is still `control`.
+const char* radioReportClassWord(std::string_view driverKind, std::string_view error) {
+    const RadioReason r = classifyRadioOpen(driverKind, error);
+    if (r != RadioReason::Control) { return radioReasonWord(r); }
+    const std::string e = lowerCopy(error);
+    auto has = [&e](const char* s) { return e.find(s) != std::string::npos; };
+    // the same sentences classifyRadioOpen files as Control above ("a bulk read failed (Windows error N)", the WinUsb_ calls, isochronous reads)
+    if (has("a bulk read") || has("a bulk write") || has("a single bulk") || has("queueing a bulk") || has("waiting for a bulk") || has("isochronous") ||
+        has("winusb_resetpipe") || has("winusb_setpipepolicy") || has("winusb_registerisochbuffer") || has("winusb_readisochpipe")) {
+        return "transfer";
+    }
+    // the RTL-SDR's own set-up sentences (rtlsdr_source.cpp, tuner_r82xx.cpp)
+    if (has("the tuner would not") || has("the tuner's pll") || has("the demodulator would not") || has("the demodulator's i2c") || has("i2c")) {
+        return "tuner";
+    }
+    return "control";
+}
+
 std::string radioFailWhy(std::string_view driverKind, std::string_view error) {
     return radioReasonWord(classifyRadioOpen(driverKind, error));
 }

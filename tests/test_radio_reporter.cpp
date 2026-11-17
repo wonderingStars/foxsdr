@@ -1034,6 +1034,71 @@ int main(int argc, char** argv) {
         CHECK(sawOn);
     }
 
+    // --- MUST-FIX LANE E, issue 3: the test marker is an envelope member on every kind, and only on a synthetic run -------------------------------------
+    {
+        Rig plain("syn0");
+        plain.start();
+        plain.rep.fileFailure(failure("rtlsdr", "index=0", "the radio is in use by another program", "busy"), {});
+        Event env0;
+        env0.kind = "session_env";
+        env0.set("cpu", "Intel Core i7-8700K").set("audioApi", "wasapi");
+        plain.rep.event(env0);
+        for (const json& m : queued(plain.rep.dir())) { CHECK(!m.contains("synthetic")); }   // a person's install says nothing
+
+        Rig syn("syn1");
+        Reporter::Options o = syn.options();
+        o.identity.synthetic = true;
+        syn.start(o);
+        syn.rep.fileFailure(failure("rtlsdr", "index=0", "the radio is in use by another program", "busy"), {});
+        syn.rep.event(env0);
+        syn.rep.event(openStart(hf));
+        const std::vector<json> q = queued(syn.rep.dir());
+        CHECK(q.size() == 3);
+        for (const json& m : q) { CHECK(m.contains("synthetic") && m["synthetic"] == 1); }   // every kind, so the Worker drops all of it
+        keep(q);
+        // an install with Usage reporting off sends its failure anonymously, and the marker still rides
+        Rig anon("syn2");
+        Reporter::Options oa = anon.options();
+        oa.identity.installId.clear();
+        oa.identity.synthetic = true;
+        anon.start(oa);
+        anon.rep.fileFailure(failure("rtlsdr", "index=0", "the radio is in use by another program", "busy"), {});
+        const std::vector<json> qa = queued(anon.rep.dir());
+        CHECK(qa.size() == 1);
+        if (qa.size() == 1) { CHECK(qa[0].contains("messageId") && !qa[0].contains("installId") && qa[0]["synthetic"] == 1); }
+        keep(qa);
+    }
+
+    // --- MUST-FIX LANE E, issue 4: lines with no radio key that the folder's bounds drop are counted and said on the next keyless message -----------------
+    {
+        Rig r("keyless");
+        Reporter::Options o = r.options();
+        o.segmentBytes = 2048;
+        o.maxFolderBytes = 6000;
+        r.start(o);
+        for (int i = 0; i < 60; ++i) {
+            Event end;
+            end.kind = "session_end";
+            end.word = "w" + std::to_string(i % 3);
+            end.set("opened", false).set("scans", 1).set("openFailures", 0).set("listed", std::vector<std::string>{"Generic RTL2832U"}).set("sessionSec", 10 + i);
+            r.advance(1);
+            r.rep.event(end);
+        }
+        CHECK(r.rep.stats().overflowDropped > 0);   // what was dropped is counted locally, as before...
+        Event last;
+        last.kind = "session_end";
+        last.word = "last";
+        last.set("opened", false).set("scans", 1).set("openFailures", 0).set("listed", std::vector<std::string>{}).set("sessionSec", 99);
+        r.rep.event(last);
+        long long said = 0;
+        const std::vector<json> q = queued(r.rep.dir());
+        for (const json& m : q) { if (m["kind"] == "session_end" && m["body"].contains("dropped")) { said += m["body"]["dropped"].get<long long>(); CHECK(m["radioKey"] == ""); } }
+        CHECK(said > 0);                              // ...and now said, so the site learns a machine lost lines
+        keep(q);
+        // a first_session line has no `dropped` field in the contract and never gets one
+        for (const json& m : q) { if (m["kind"] == "first_session") { CHECK(!m["body"].contains("dropped")); } }
+    }
+
     // --- the Worker's own validator over everything the app made -------------------------------------------------------------------------------------
     {
         std::vector<std::string> verdicts;

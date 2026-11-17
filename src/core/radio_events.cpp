@@ -213,9 +213,7 @@ const char* controlWord(Control c) {
 
 const char* controlRefusedWord(Control c) {
     switch (c) {
-        case Control::Frequency: return "";
-        case Control::Other: return "";
-        default: return controlWord(c);
+        default: return controlWord(c);   // every control has a word now (contract 3.4: `frequency` and `other` were added)
     }
 }
 
@@ -267,6 +265,8 @@ void noteControlRefused(const void* source, const char* driverKey, Control contr
         ev.set("why", whyWord);
         const std::string refused = controlRefusedWord(control);
         if (!refused.empty()) { ev.set("refused", refused); }
+        // the radio refused it, or the value the user typed was out of range and the radio was never asked (contract 3.4 `refusedClass`)
+        ev.set("refusedClass", userRange ? "range" : "radio");
         // the control's NAME, then (for a value the user typed out of range) the class, then the driver's sentence: the site sees the control even where the contract
         // has no `refused` word for it
         std::string text = std::string(userRange ? "out of range: " : "refused: ") + controlWord(control);
@@ -339,12 +339,14 @@ void noteVendorCallFault(const void* source, const char* driverKey, const char* 
         Event ev;
         ev.kind = "radio_recovery";
         ev.radio = w.radio;
-        const char* phase = absorbed ? "ok" : "gave-up";
+        // the RTL-SDR whose tuner's PLL did not lock keeps streaming, deaf: neither recovered nor given up (contract 3.6 phase `degraded`)
+        const bool degraded = !absorbed && word == "pllunlocked";
+        const char* phase = absorbed ? "ok" : (degraded ? "degraded" : "gave-up");
         ev.word = std::string(phase) + "-" + word;
         ev.set("phase", phase).set("what", word);
-        ev.set("reasonClass", "vendor");
+        ev.set("reasonClass", degraded ? "tuner" : "vendor");
         if (!reason.empty()) { ev.text("reason", reason, 400); }
-        ev.urgent = !absorbed;
+        ev.urgent = !absorbed && !degraded;
         emitOrDefer(source, w.registered, ev);
     } catch (...) {
         ++g_lost;
@@ -352,9 +354,35 @@ void noteVendorCallFault(const void* source, const char* driverKey, const char* 
 }
 
 void noteServiceFault(const char* driverKey, const char* what, const std::string& reason, bool absorbed) {
-    // A service that is not running while NO radio of that driver is open is information (nobody's radio failed; a person without the vendor's software has the
-    // same state): with no radio to be about the call is dropped and counted, and no radio is made up.
-    noteVendorCallFault(nullptr, driverKey, what, reason, absorbed);
+    // With a radio of that driver open the fault is THAT radio's recovery. With NONE open it is a `session_fault` (contract 3.13, issue 12): no radio is made
+    // up, and the site can show "service not running" for an install whose radio never opened. This is reached only when the vendor's API is in the process (the
+    // window's trouble check), so a person who never had the vendor's software does not send it. With two radios of the driver open the call is ambiguous and is
+    // dropped and counted, as before.
+    if (whoIs(nullptr, driverKey).registered) { noteVendorCallFault(nullptr, driverKey, what, reason, absorbed); return; }
+    try {
+        const std::string driver = driverKey != nullptr ? driverKey : "";
+        const std::string driverWord = health::driverWord(driver);
+        {
+            Registry& r = registry();
+            std::lock_guard<std::mutex> lk(r.mu);
+            for (const auto& kv : r.bySource) {
+                if (kv.second.radio.driver == driverWord) { ++g_unattributed; return; }   // two radios of the driver: ambiguous
+            }
+        }
+        const std::string word = what != nullptr ? what : "service";
+        if (!admitCall("service-" + driverWord, "session-fault-" + word, 10000)) { return; }
+        Event ev;
+        ev.kind = "session_fault";
+        const char* phase = absorbed ? "ok" : "gave-up";
+        ev.word = std::string(phase) + "-" + word;
+        ev.set("service", driverWord).set("phase", phase);
+        ev.set("reasonClass", "driver");
+        if (!reason.empty()) { ev.text("reason", reason, 400); }
+        ev.urgent = !absorbed;
+        global().event(ev);
+    } catch (...) {
+        ++g_lost;
+    }
 }
 
 void fileSideRadioFailure(const char* driverKey, const std::string& args, const std::string& reason, const char* trigger) {
@@ -364,7 +392,7 @@ void fileSideRadioFailure(const char* driverKey, const std::string& args, const 
         in.driverKind = kind;
         in.args = args;
         in.reason = reason;
-        in.reasonClass = health::radioReasonWord(health::classifyRadioOpen(kind, reason));
+        in.reasonClass = health::radioReportClassWord(kind, reason);
         const std::string t = trigger != nullptr ? trigger : "other";
         in.trigger = Trigger::Other;
         for (const Trigger c : {Trigger::StartupRestore, Trigger::UserPick, Trigger::SavedRetry, Trigger::PatchRadio, Trigger::AutoReopen}) {

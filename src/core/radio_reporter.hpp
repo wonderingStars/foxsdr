@@ -81,7 +81,7 @@ using FieldValue = std::variant<std::string, long long, double, bool, std::vecto
 // One journal event: a kind of contract section 3, the radio it is about (empty for session_env), the kind's own fields. TEXT fields are
 // passed through `text()` so they are scrubbed on the way in; nothing else is free text.
 struct Event {
-    std::string kind;                  // radio_found, radio_open, radio_settings, radio_stream, radio_recovery, radio_close, session_end, session_env
+    std::string kind;                  // radio_found, radio_open, radio_settings, radio_stream, radio_recovery, radio_close, session_end, session_fault, session_env
     RadioIdentity radio;               // empty key for session_env
     std::string word;                  // the phase / cause / why word that makes the daily bound's (radio, kind, word) triple
     std::vector<std::pair<std::string, FieldValue>> fields;
@@ -107,6 +107,7 @@ struct Identity {
     std::string window;           // "new", "legacy" or ""
     bool diagOn = false;          // the Diagnostics switch
     std::uint64_t launches = 0;   // launches since install (the first-session record needs 1)
+    bool synthetic = false;       // a test, CI or the owner's own run (contract 1.3): every message carries `synthetic: 1`, and the Worker drops it
 };
 
 struct Stats {

@@ -157,7 +157,7 @@ bool anyStringForbidden(const json& j) {
 bool inList(const std::vector<std::string>& v, const std::string& s) { return std::find(v.begin(), v.end(), s) != v.end(); }
 
 const std::vector<std::string>& kindsOfJournal() {
-    static const std::vector<std::string> k = {"radio_found", "radio_open", "radio_settings", "radio_stream", "radio_recovery", "radio_close", "session_end", "session_env"};
+    static const std::vector<std::string> k = {"radio_found", "radio_open", "radio_settings", "radio_stream", "radio_recovery", "radio_close", "session_end", "session_fault", "session_env"};
     return k;
 }
 
@@ -371,6 +371,7 @@ struct Reporter::Impl {
         }
         e["t"] = std::clamp<std::int64_t>(p.t, 0, kMaxT);
         e["radioKey"] = p.key;
+        if (id.synthetic) { e["synthetic"] = 1; }   // contract 1.3: the Worker and the site drop it
         e["body"] = p.body;
         return e;
     }
@@ -436,7 +437,7 @@ struct Reporter::Impl {
     }
 
     void countDropped(const std::string& key) {
-        if (!key.empty()) { ++dropped[key]; }
+        ++dropped[key];   // the empty key counts the keyless lines (contract 3.12)
         ++st.overflowDropped;
     }
 
@@ -563,7 +564,9 @@ struct Reporter::Impl {
         const bool anonymous = isFail && id.installId.empty();
         if (!isFail && id.installId.empty()) { return; }   // no anonymous journal
         // what the bound kept off the wire is said on THIS event of the same radio
-        if (!p.key.empty()) {
+        // (the keyless kinds that may carry `dropped` - contract 3.12 - take the count kept under the empty key: lines lost to the folder's bounds)
+        const bool keylessCarries = p.key.empty() && (p.kind == "session_env" || p.kind == "session_end" || p.kind == "session_fault");
+        if (!p.key.empty() || keylessCarries) {
             auto it = dropped.find(p.key);
             if (it != dropped.end() && it->second > 0) {
                 p.body["dropped"] = std::min<long long>(it->second, 1000000);
@@ -620,7 +623,7 @@ struct Reporter::Impl {
             auto it = held.find(tripleKey);
             if (it != held.end()) {
                 // an earlier held one is replaced: it is the one not sent, and it is said
-                if (!p.key.empty()) { ++dropped[p.key]; }
+                ++dropped[p.key];   // (an empty key is the keyless lines' count, said on the next one of them)
                 ++st.boundDropped;
             } else {
                 ++st.boundHeld;
@@ -860,7 +863,7 @@ struct Reporter::Impl {
     void eventLocked(const Event& ev, std::int64_t t) {
     if (!on || id.installId.empty()) { return; }
         if (!inList(kindsOfJournal(), ev.kind)) { ++st.guardRefused; return; }
-        const bool radioKind = ev.kind != "session_env" && ev.kind != "session_end";
+        const bool radioKind = ev.kind != "session_env" && ev.kind != "session_end" && ev.kind != "session_fault";
         if (ev.kind == "session_env") {
             if (envSent) { return; }
             envSent = true;
@@ -1249,7 +1252,7 @@ void noteRecovery(const std::string& driverKind, const std::string& args, const 
     ev.word = ph;
     ev.set("phase", ph).set("what", what);
     if (!reason.empty()) {
-        ev.set("reasonClass", health::radioReasonWord(health::classifyRadioOpen(driverKind, reason)));
+        ev.set("reasonClass", health::radioReportClassWord(driverKind, reason));
         ev.text("reason", reason, 400);
     }
     if (ms >= 0) { ev.set("ms", ms); }
