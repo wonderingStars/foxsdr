@@ -138,6 +138,8 @@ const Allowed kAllowed[] = {
      "FILE_SEEK / FILE_LOOP: moves the recorded file's play position or loop marks: no frequency"},
     {"wire_a_transport.cpp", "dynamic_cast<cascade::source::IqFileSource*>(&r.pipeline_.rawSource())",
      "FILE_TRANSPORT (speed, pause, step) of a playing I/Q file: no frequency"},
+    {"app_window_recplay.cpp", "dynamic_cast<const cascade::source::IqFileSource*>(&r.pipeline_.rawSource())",
+     "radio facts (screen lane S3, engine_recplay.cpp recplayRadioFacts): reads whether the recorded file's header gave its centre (centerFromHeader) and its length to publish a fact: nothing is read as a frequency and nothing is told to a radio"},
     {"app_window.cpp", "dev->setCenterFrequencyHz(*r.preTuneRadioHz)",
      "RSP pre-Init tune on the open worker: preTuneRadioHz is radioFromAir(...) of keepCenterHz, "
      "converted on the GUI thread in launchDeviceOpen (test_converter_app_paths "
