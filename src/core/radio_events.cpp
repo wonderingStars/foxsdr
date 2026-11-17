@@ -12,6 +12,7 @@
 #include <mutex>
 #include <vector>
 
+#include "core/diag_log.hpp"
 #include "core/health_events.hpp"
 #include "core/radio_reporter.hpp"
 
@@ -51,6 +52,7 @@ Registry& registry() {
 }
 
 thread_local const char* t_why = "user";
+thread_local std::uint64_t t_refusals = 0;   // noteControlRefused calls made on this thread (RefusalWatch)
 
 std::string lower(std::string s) {
     for (char& c : s) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
@@ -235,7 +237,25 @@ Control controlFromText(const std::string& what) {
 ControlWhyScope::ControlWhyScope(const char* why) : previous_(t_why) { t_why = why != nullptr ? why : "user"; }
 ControlWhyScope::~ControlWhyScope() { t_why = previous_; }
 
+std::uint64_t refusalSequence() { return t_refusals; }
+
+RefusalWatch::RefusalWatch() : start_(t_refusals) {}
+
+void noteRefusalIfSilentSince(std::uint64_t sequenceBefore, const void* source, const char* driverKey, Control control, const std::string& text, bool userRange) {
+    if (t_refusals != sequenceBefore) { return; }   // a driver said it, at the place it noticed, on this thread: that is the one report of this refusal
+    noteControlRefused(source, driverKey, control, text, userRange);
+}
+
+void RefusalWatch::noteRefusalIf(bool refused, const void* source, const char* driverKey, Control control, const std::string& text, bool userRange) {
+    if (refused) { noteRefusalIfSilentSince(start_, source, driverKey, control, text, userRange); }
+}
+
+void RefusalWatch::noteRefusalIfSilent(const void* source, const char* driverKey, Control control, const std::string& text, bool userRange) {
+    noteRefusalIfSilentSince(start_, source, driverKey, control, text, userRange);
+}
+
 void noteControlRefused(const void* source, const char* driverKey, Control control, const std::string& reason, bool userRange, const char* why) {
+    ++t_refusals;
     try {
         const Who w = whoIs(source, driverKey);
         if (!admitCall(w.registered ? w.radio.key : pointerKey(source), std::string("refused-") + controlWord(control), 5000)) { return; }
@@ -335,6 +355,44 @@ void noteServiceFault(const char* driverKey, const char* what, const std::string
     // A service that is not running while NO radio of that driver is open is information (nobody's radio failed; a person without the vendor's software has the
     // same state): with no radio to be about the call is dropped and counted, and no radio is made up.
     noteVendorCallFault(nullptr, driverKey, what, reason, absorbed);
+}
+
+void fileSideRadioFailure(const char* driverKey, const std::string& args, const std::string& reason, const char* trigger) {
+    try {
+        const std::string kind = driverKey != nullptr ? driverKey : "other";
+        FailureInput in;
+        in.driverKind = kind;
+        in.args = args;
+        in.reason = reason;
+        in.reasonClass = health::radioReasonWord(health::classifyRadioOpen(kind, reason));
+        const std::string t = trigger != nullptr ? trigger : "other";
+        in.trigger = Trigger::Other;
+        for (const Trigger c : {Trigger::StartupRestore, Trigger::UserPick, Trigger::SavedRetry, Trigger::PatchRadio, Trigger::AutoReopen}) {
+            if (t == triggerWord(c)) { in.trigger = c; }
+        }
+        global().fileFailure(in, DiagLog::instance().ringSnapshot());
+    } catch (...) {
+        ++g_lost;
+    }
+}
+
+void noteSideRadioStopped(const char* driverKey, const std::string& args, const std::string& what, const std::string& detail) {
+    try {
+        const std::string kind = driverKey != nullptr ? driverKey : "other";
+        const std::string sentence = what + (detail.empty() ? std::string() : (": " + detail));
+        std::string cause = closeCauseFor(true, sentence);
+        if (cause.empty()) { cause = "fault"; }
+        Event ev;
+        ev.kind = "radio_close";
+        ev.radio = identify(kind, args);
+        ev.word = cause;
+        ev.set("cause", cause).set("openSec", 0);
+        ev.text("reason", sentence, 400);
+        ev.urgent = true;
+        global().event(ev);
+    } catch (...) {
+        ++g_lost;
+    }
 }
 
 std::uint64_t unattributedCount() { return g_unattributed.load(); }

@@ -109,6 +109,11 @@ std::string helperParameters(const std::string& instanceId, const std::string& r
 // The person-facing sentence for a result, already translated (tr()).
 std::string resultSentence(const Result& r);
 
+// A ONE-CLICK INSTALL THAT DID NOT WORK is a radio that cannot be opened (the radio reports, mustfix-b): Refused, NotFound, NotAdmin and Failed are filed as ONE radio_fail
+// for the RTL-SDR (the only radio this installer ever touches), sent with the Diagnostics switch on or off, the outcome word and the step's own detail as the reason
+// (a step and a Windows error code, never an instance id; the reporter scrubs it again). Installed, AlreadyWinUsb and Cancelled (the person said no) report nothing.
+void noteInstallOutcome(const Result& r);
+
 // Windows: the install itself, on the device with that instance id. Must run
 // elevated. Elsewhere: Failed, "not on this platform".
 Result installOn(const std::string& instanceId);

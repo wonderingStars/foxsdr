@@ -22,3 +22,8 @@ noteDeviceFault
 noteStreamTrouble
 noteVendorCallFault
 noteServiceFault
+noteRefusalIfSilent
+noteRefusalIfSilentSince
+fileSideRadioFailure
+noteSideRadioStopped
+noteRefusalIf

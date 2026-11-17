@@ -27,9 +27,12 @@
 #include <unistd.h>
 #endif
 
+#include "core/radio_events.hpp"
 #include "net/send_flags.hpp"
 
 namespace cascade::source {
+
+namespace rre = ::cascade::core::radioreport;
 
 namespace aa = aaronia;
 
@@ -408,7 +411,8 @@ bool AaroniaSource::control(const std::string& json, const char* what, const cha
     int status = 0;
     std::string body, err;
     if (!httpRoundTrip(host_, port_, "PUT", path, json, timeoutMs_, status, body, err)) {
-        setError(std::string(what) + ": " + err);
+        // the server did not take (or answer) a setting it was sent: a refusal of the radio's setting, said once with the transport's own sentence
+        setError(rre::noteControlRefusedText(this, "aaronia", rre::controlFromText(what), std::string(what) + ": " + err));
         return false;
     }
     if (status == 401 || status == 403) { setError(std::string(what) + ": the server wants credentials, which this build does not send"); return false; }

@@ -10,11 +10,20 @@
 #include <thread>
 #include <utility>
 
+#include <mutex>
+#include <set>
+
 #include "core/driver_policy.hpp"
+#include "core/health_events.hpp"
 #include "core/i18n.hpp"
 #include "core/leak_on_purpose.hpp"
+#include "core/radio_reporter.hpp"
 #include "core/telemetry.hpp"
 #include "core/utf8_text.hpp"
+#include "source/aor_source.hpp"
+#include "source/hydrasdr_source.hpp"
+#include "source/icr8600_source.hpp"
+#include "source/msi2500.hpp"
 #include "source/rtlsdr_source.hpp"
 
 #if defined(_WIN32)
@@ -86,6 +95,9 @@ std::string familyForDriver(const std::string& driverKey) {
     if (k == "airspy") { return kFamilyAirspy; }
     if (k == "airspyhf") { return kFamilyAirspyHf; }
     if (k == "hackrf") { return kFamilyHackRf; }
+    if (k == "hydrasdr") { return kFamilyHydra; }
+    if (k == "aor") { return kFamilyAor; }
+    if (k == "icr8600") { return kFamilyIcr8600; }
     // The Mirics-family modules and the SDRplay API are one thing to a person:
     // an RSP, reached through the API, whichever row lists it
     // (gui/device_scan_plan.hpp, soapyModulesForFamily).
@@ -166,6 +178,16 @@ const std::vector<KnownDevice>& knownDevices() {
         for (const cascade::usb::UsbId& id : cascade::source::rtlSdrUsbIds()) {
             t.push_back({id.vid, id.pid, kFamilyRtl, "RTL-SDR (RTL2832U)"});
         }
+        // THE OTHER NATIVE DRIVERS (mustfix-b, C3), each id from the driver's own match table. An id the table above already holds (the RSP ids the Mirics driver also
+        // matches) keeps the entry it has.
+        const auto add = [&t](std::uint16_t vid, std::uint16_t pid, const char* family, const char* name) {
+            for (const KnownDevice& k : t) { if (k.vid == vid && k.pid == pid) { return; } }
+            t.push_back({vid, pid, family, name});
+        };
+        for (const cascade::usb::UsbId& id : cascade::source::hydraSdrUsbIds()) { add(id.vid, id.pid, kFamilyHydra, "HydraSDR"); }
+        for (const cascade::usb::UsbId& id : cascade::source::aorUsbIds()) { add(id.vid, id.pid, kFamilyAor, "AOR I/Q interface"); }
+        for (const cascade::usb::UsbId& id : cascade::source::icr8600UsbIds()) { add(id.vid, id.pid, kFamilyIcr8600, "Icom IC-R8600"); }
+        for (const cascade::source::msi2500::DeviceModel& m : cascade::source::msi2500::deviceModels()) { add(m.vid, m.pid, kFamilyMirics, m.label); }
         return t;
     }()));
     return *table;
@@ -277,7 +299,8 @@ Finding wrongDriver(const KnownDevice& d, const Bound& b) {
         install = tr("Install the WinUSB driver with Zadig: tick Options -> List All Devices, "
                      "select \"Bulk-In, Interface (Interface 0)\", choose WinUSB and click "
                      "Replace Driver, then press CHECK AGAIN.");
-    } else if (family == kFamilyHackRf) {
+    } else if (family == kFamilyHackRf || family == kFamilyHydra || family == kFamilyAor ||
+               family == kFamilyIcr8600 || family == kFamilyMirics) {
         install = formatText(tr("Install the WinUSB driver with Zadig: tick Options -> List All "
                                 "Devices, select %s, choose WinUSB and click Replace Driver, then "
                                 "press CHECK AGAIN."),
@@ -324,6 +347,10 @@ Finding judge(const KnownDevice& d, const std::vector<const UsbNode*>& nodes,
                                   "Close any other program that uses it."),
                                kZadigUrl);
         }
+    } else if (family == kFamilyHydra || family == kFamilyAor || family == kFamilyIcr8600 || family == kFamilyMirics) {
+        // The native drivers that take the radio over WinUSB and need nothing else (no vendor service, no library): on WinUSB, or wrong driver. (Whether the
+        // application's own scan lists them is not judged here: the probe runs no enumeration for these families.)
+        if (!b.winusb) { return wrongDriver(d, b); }
     } else if (family == kFamilySdrPlay) {
         // An RSP is driven by the SDRplay API service, which holds the USB
         // handle; without sdrplay_api.dll and a running service it cannot even
@@ -905,5 +932,30 @@ const DriverGuidance* guidanceForDriver(const std::string& driverKey) {
     return nullptr;
 }
 // wire-b end
+
+// --- what a check found, said to the owner (mustfix-b, C3) -----------------------------------------------------------------------------------------------
+
+void noteFindings(const Findings& f) {
+    try {
+        static std::mutex mu;
+        static std::set<std::string>* const said = new std::set<std::string>();   // never destroyed: the probe's worker can outlive main (see knownDevices)
+        for (const Finding& x : f.items) {
+            // the anonymous count (a fixed word for the kind, one for the family), once a session each in the ledger
+            cascade::core::health::noteSetupFinding(kindName(x.kind), x.family);
+            if (x.kind == Kind::Usable || (x.vid == 0 && x.pid == 0)) { continue; }   // a usable radio is the scan's to report; NoDevice and NotChecked name no radio
+            char usb[16];
+            std::snprintf(usb, sizeof(usb), "%04x:%04x", static_cast<unsigned>(x.vid), static_cast<unsigned>(x.pid));
+            const std::string once = std::string(usb) + "|" + kindName(x.kind);
+            {
+                std::lock_guard<std::mutex> lk(mu);
+                if (!said->insert(once).second) { continue; }
+            }
+            // the family names the driver key (rtlsdr, airspy, airspyhf, hackrf, sdrplay, hydrasdr, aor, mirisdr; usrp, lime and icr8600 have no word of their own: other)
+            cascade::core::radioreport::noteFound(x.family, std::string(), x.deviceName, kindName(x.kind), "first-run-check", usb);
+        }
+    } catch (...) {
+        // a report must never take the check down
+    }
+}
 
 }  // namespace cascade::core::radiosetup

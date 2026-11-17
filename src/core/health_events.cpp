@@ -441,19 +441,41 @@ RadioReason classifyRadioOpen(std::string_view driverKind, std::string_view erro
         return RadioReason::Driver;
     }
     if (has("timed out") || has("timeout") || has("did not answer") || has("not answering") ||
-        has("no answer") || has("did not respond") || has("never answered")) {
+        has("no answer") || has("did not respond") || has("never answered") ||
+        // the RTL-SDR tuner's own I2C sentence (tuner_r82xx.cpp: "the tuner stopped answering on
+        // the I2C bus"); "stopped answering WHILE ..." is the transports' control-transfer
+        // sentence and is a control failure below
+        has("stopped answering on") ||
+        // Windows' ERROR_SEM_TIMEOUT (121, winerror.h): a transfer the device never completed
+        has("(windows error 121)")) {
         return RadioReason::Timeout;
     }
     // Held by somebody else: the transports' shared sentence (usb_device.hpp
     // kInUseError), the RSPduo's, libusb's "claim interface", the sound APIs'.
     if (has("in use") || has("busy") || has("claim") || has("another program") ||
-        has("another application") || has("sharing violation") || has("exclusive")) {
+        has("another application") || has("sharing violation") || has("exclusive") ||
+        // Windows' ERROR_SHARING_VIOLATION (32): "opening the radio failed (Windows error 32)"
+        has("(windows error 32)")) {
         return RadioReason::Busy;
+    }
+    // A USB TRANSFER THAT FAILED while the radio was being opened (winusb_device.cpp
+    // lastErrorText: "a bulk read failed (Windows error N)", "WinUsb_ResetPipe failed ...",
+    // "queueing a bulk read ...", an isochronous read). The names of the WinUsb_ calls hold
+    // "winusb", which the bind test below would take for "not bound to WinUSB": these
+    // are a radio that answered the driver and then stopped, so they are filed with the
+    // control transfers (nearest class: the contract has no word for a stream transfer,
+    // CONTRACT ISSUE 15 of docs/multi-radio-records/mustfix-b.md).
+    if (has("a bulk read") || has("a bulk write") || has("a single bulk") || has("queueing a bulk") ||
+        has("waiting for a bulk") || has("isochronous") || has("winusb_resetpipe") ||
+        has("winusb_setpipepolicy") || has("winusb_registerisochbuffer") || has("winusb_readisochpipe")) {
+        return RadioReason::Control;
     }
     // Present but not reachable: not bound to WinUSB (Zadig), no permission on
     // the device node (udev).
     if (has("winusb") || has("usbfs") || has("permission") || has("access denied") ||
-        has("zadig") || has("udev") || has("not authorized")) {
+        has("zadig") || has("udev") || has("not authorized") ||
+        // Windows' ERROR_ACCESS_DENIED (5): "opening the radio failed (Windows error 5)"
+        has("(windows error 5)")) {
         return RadioReason::Bind;
     }
     if (has("sample rate") || has("samplerate")) { return RadioReason::Rate; }
@@ -469,8 +491,23 @@ RadioReason classifyRadioOpen(std::string_view driverKind, std::string_view erro
     if (has("not connected") || has("not present") || has("no longer present") ||
         has("is present") || has("there is no") || has("no sdrplay device") ||
         has("nothing at") || has("no match") || has("not found") || has("no such") ||
-        has("not in the list") || has("was not found") || has("not plugged")) {
+        has("not in the list") || has("was not found") || has("not plugged") ||
+        // the drivers' own "no <radio> with serial <n> is connected" (airspy, airspyhf, hackrf, mirisdr, rx888, aor: said "other" until now)
+        (has("no ") && has(" with serial ")) ||
+        // Windows' ERROR_DEVICE_NOT_CONNECTED (1167) and ERROR_NO_SUCH_DEVICE (433)
+        has("(windows error 1167)") || has("(windows error 433)")) {
         return RadioReason::Absent;
+    }
+    // THE RTL-SDR'S OWN SET-UP SENTENCES (rtlsdr_source.cpp, tuner_r82xx.cpp): the demodulator
+    // or the tuner would not take a register write or a setting during the open (what the 35
+    // installs filed as "other" on 2026-11-15 said), and a Windows error that means the
+    // device itself failed (ERROR_GEN_FAILURE 31, ERROR_IO_DEVICE 1117, winerror.h): the
+    // radio refused set-up, which is what `control` says.
+    if (has("the tuner would not") || has("the tuner's pll") || has("the demodulator would not") ||
+        has("the demodulator's i2c") || has("i2c") || has("the radio's bulk endpoint would not") ||
+        has("would not reset its endpoint") || has("(windows error 31)") ||
+        has("(windows error 1117)")) {
+        return RadioReason::Control;
     }
     // What a vendor stack said that nothing above recognised: SoapySDR's own
     // exceptions, the SDRplay API's error codes, libusb's.

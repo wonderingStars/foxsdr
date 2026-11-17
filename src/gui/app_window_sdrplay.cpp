@@ -33,6 +33,7 @@
 #include "core/diag_log.hpp"
 #include "core/hang_watchdog.hpp"
 #include "core/i18n.hpp"
+#include "core/radio_events.hpp"
 #include "core/utf8_text.hpp"
 #include "gui/theme.hpp"
 #include "gui/ui_census.hpp"
@@ -77,6 +78,7 @@ void AppWindow::finishSdrPlayServiceRestart(const cascade::source::SdrPlayRestar
     }
     if (o.phase == SdrPlayRestartPhase::NotStarted) {
         cascade::core::diagWarnf("source: SDRplay API Service restart not started - error %lu", o.win32Error);
+        cascade::core::radioreport::noteServiceFault("sdrplay", "servicerestart", cascade::core::formatText("Windows would not run the service restart (error %lu)", o.win32Error), false);
         sdrPlayRestartNote_ = cascade::core::formatText(tr("Windows would not run the restart (error %lu)."), o.win32Error);
         return;
     }

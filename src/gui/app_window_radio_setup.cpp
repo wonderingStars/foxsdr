@@ -72,11 +72,8 @@ namespace {
 // because nothing was ever opened. The ledger keeps one a session for each, so a
 // "Check again" that finds the same thing counts nothing and one that finds the
 // radio usable after a fix counts that.
-void noteSetupFindings(const rs::Findings& f) {
-    for (const rs::Finding& x : f.items) {
-        cascade::core::health::noteSetupFinding(rs::kindName(x.kind), x.family);
-    }
-}
+// (mustfix-b: the count AND the radio_found event for a radio present with no usable driver are one core call, rs::noteFindings, which the Slint window makes too.)
+void noteSetupFindings(const rs::Findings& f) { rs::noteFindings(f); }
 }  // namespace
 
 void AppWindow::radioSetupStartProbe() {
@@ -303,6 +300,7 @@ void AppWindow::radioSetupPollDriverInstall() {
     driverInstallStatus_ = wu::resultSentence(r);
     cascade::core::diagLogf("radio setup: driver install %s - %s", wu::outcomeName(r.outcome),
                             r.detail.c_str());
+    wu::noteInstallOutcome(r);   // a one-click install that did not work is a radio that cannot be opened: one radio_fail
     if (r.outcome == wu::Outcome::Installed || r.outcome == wu::Outcome::AlreadyWinUsb) {
         radioSetupCheckAgain();
     }
