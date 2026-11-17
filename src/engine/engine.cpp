@@ -1466,9 +1466,11 @@ void Engine::scanSoapy() {
     soapyScanAbsent_ = std::make_shared<std::vector<std::string>>();
     soapyScanUhdNoImages_ = std::make_shared<bool>(false);
     soapyScanUsrpOnUsb_ = std::make_shared<bool>(false);
+    soapyScanHelperMissing_ = std::make_shared<std::string>();
     const std::shared_ptr<std::vector<std::string>> absentOut = soapyScanAbsent_;
     const std::shared_ptr<bool> uhdNoImagesOut = soapyScanUhdNoImages_;
     const std::shared_ptr<bool> usrpOnUsbOut = soapyScanUsrpOnUsb_;
+    const std::shared_ptr<std::string> helperMissingOut = soapyScanHelperMissing_;
     // enumerateIsolated() never throws and is simply empty on a machine with no
     // vendor modules; this is also the hot-plug refresh path. Called directly
     // rather than through SoapySource::enumerate() because that signature
@@ -1476,7 +1478,7 @@ void Engine::scanSoapy() {
     // uhdImagesMissing answer for the hint under the Source list.
     const auto scanHook = testHooks_.soapyScan;  // null in every build of the application
     soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs, lookForNetworkUsrps,
-                                                       absentOut, uhdNoImagesOut, usrpOnUsbOut, scanHook] {
+                                                       absentOut, uhdNoImagesOut, usrpOnUsbOut, helperMissingOut, scanHook] {
         // THE HEARTBEAT (core/thread_beats.hpp, 6.27): the scan is the thread's life; pumpWorkers collects it, and a scan that
         // never comes back is named here after the Open kind's budget.
         cascade::core::beats::Registration beat(cascade::core::beats::kThreadDeviceScan);
@@ -1497,6 +1499,7 @@ void Engine::scanSoapy() {
         options.absentDrivers = absent;
         cascade::source::EnumResult r = cascade::source::enumerateIsolated(options);
         *uhdNoImagesOut = r.uhdImagesMissing;
+        if (r.helperMissing) { *helperMissingOut = cascade::source::helperMissingSentence(cascade::source::enumerateHelperPath()); }
         return std::move(r.devices);
     });
 }
@@ -1539,6 +1542,10 @@ void Engine::pollSourceAsync() {
         soapyUsrpOnUsb_ = soapyScanUsrpOnUsb_ && *soapyScanUsrpOnUsb_;
         soapyScanUhdNoImages_.reset();
         soapyScanUsrpOnUsb_.reset();
+        // THE HELPER IS NOT THERE: said plainly on the error line (when nothing else is on it) and as a fact, instead of a scan that quietly listed nothing or walked the bus in this process
+        soapySearchProblem_ = soapyScanHelperMissing_ ? *soapyScanHelperMissing_ : std::string();
+        soapyScanHelperMissing_.reset();
+        if (!soapySearchProblem_.empty() && rx().sourceError_.empty()) { rx().sourceError_ = soapySearchProblem_; }
         // THE DIAGNOSTICS THE SOURCE SECTION SAYS A LANDED SCAN WITH, taken here, once, and not asked of the
         // runtime by every frame that draws them (API 0.3 8.10). Only a WHOLE scan that found nothing is
         // evidence of "no radio hardware"; a scan beside an open radio left drivers out on purpose.

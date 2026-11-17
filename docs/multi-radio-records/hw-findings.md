@@ -149,3 +149,31 @@ tuner R828D and 29 from the same server and 0/0 when never told); `test_rtlsdr_r
 `test_engine_api_s4b_rtltcp` (40, 0 failed). Break-it: the accept path using the config's numbers again -> 2 failed; restored.
 Real dongle (the window on the hidden desktop serving the real RTL-SDR at 127.0.0.1:18461, a python client): header `RTL0`, tuner 5, gain count 29, then 16.4 MB in 4 s
 (2.05 MS/s of 8-bit I/Q). Before the fix: 0 and 0 (the check). Both devices on the bus afterwards.
+
+## Item 6: the crash at start with the B200 present (libusb-1.0.dll+0x10490, signature 28F76B50279E4BB6) - NOT REPRODUCED; one real hole closed; the open path stays exposed
+
+1. Was the helper beside the window in the check's copy? YES. The helper is `cascade.exe` beside the running executable (`enumerateHelperPath`, src/source/soapy_enum_proc.cpp);
+   `D:/foxsdr-build/hw2-scratch/app/slint/` held `cascade.exe` and so did `app/engine/`. The check's crash file was overwritten by its own repeat run (the scratch
+   folder is recreated per tag), so WHERE it died cannot be read back. What can be shown from the code and logs: a start with a saved B200 spawns NO helper at all. In all 41
+   saved-B200 starts below the log has zero "enumeration child" lines and no `cascade-probe` lines (also with Usage reporting on, which is the check's setting): the radio is opened
+   in the window's own process by `SoapySDR::Device::make` (src/source/soapy_source.cpp, a `guardedVendorCall` that the header of soapy_enum_proc.hpp itself says cannot catch a fault on a
+   thread UHD spawned), and that call runs UHD's device discovery. The helper only ever serves the Source list's scan (`FOXAPP_OP_SCAN_DEVICES*`). So a crash "during device discovery,
+   before any radio was open, uptime 0 s" in a saved-B200 start was, by construction, in the WINDOW's own process, not in the helper. UNPROVEN but the only reading the code allows.
+2. Reproduction, complete copy (helper beside), real B200 attached, receive only, hidden desktop, scratch config each time, both devices on the bus after:
+   * 40 window starts with the B200 as the saved source (`soak01..soak40`, ~15 s each): 40 exit 0, 0 crash files, 0 helper lines.
+   * 8 pairs (an RTL-SDR window start, then at once a B200 window start: the order of the check's crash): 8 and 8 exit 0, 0 crash files.
+   * 1 more with Usage reporting on (the journal's radio_found path): exit 0.
+   * 40 runs of the helper program itself (`cascade.exe --enumerate-json`, which probes every Soapy driver including uhd with the B200 present): 40 exit 0.
+   Total 49 B200 window starts and 40 helper runs, 0 crashes. The check saw 1 in about 10. NOT reproduced; no claim that it cannot happen (the header of soapy_enum_proc.hpp measures this
+   machine at about one kill per twenty enumerations, and the check saw one in ten starts).
+3. Release-risk statement (OPEN ROWS): the in-process `Device::make` discovery at every B200 start and every B200 open is not routed through the helper and cannot be without opening the radio in a
+   separate process (a new design, not a small change); if the owner's mouse drive sees this crash in the window it is a release blocker with no fix in this lane. The crash-capture and the
+   restart-after-crash behaviour of the window are the only containment today.
+4. FIXED (the part the brief names): an INCOMPLETE install no longer walks the bus in the window. `enumerateIsolated` used to answer a missing helper (`SpawnFailed`) with the in-process walk
+   ("not crash-isolated"; `allowInProcessFallback` defaulted to true); now a helper path that names no file sets `EnumResult::helperMissing`, runs nothing in this process, logs the reason and
+   `noteRecovered(ScanLimit)`, and the engine says it plainly on the Source error line (when nothing else is there) and as fact `source.searchProblem`: "FoxSDR's radio search program (cascade.exe) is missing
+   from this install, so no radio search was made. Reinstall FoxSDR." (file name only, never a path). A helper that exists but is refused by Windows keeps the old fallback (unchanged).
+   Test (no hardware): `test_soapy_enum_proc` (ctest, 563 checks, 0 failed; run through ctest because the fault-fixture cases need the fixture directories ctest passes): default options with a
+   missing helper -> `helperMissing`, no fall-back, no devices, sentence names the file and not the path; an existing helper is not "missing". Break-it: the missing-helper branch disabled -> 3 failed; restored.
+   Real engine, incomplete copy (no `cascade.exe` beside `foxsdr-engine.exe`), scan requested through the web control: the status line carried that sentence and the log said the walk was not run in
+   the process; the complete copy under the same request: empty error line, scan started normally.
