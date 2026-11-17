@@ -3264,6 +3264,9 @@ void SdrPlaySource::lowIfFallBack(const std::string& why) {
         rate = lowIfOutputRateHz_;
     }
     core::diagWarnf("source: SDRplay low-IF fell back to zero-IF: %s", why.c_str());
+    // A SETTING THE RADIO DID NOT DELIVER is a report (the owner's rule: every handled fault of a radio): the person switched low-IF on and the radio's first stream did not carry the
+    // planned rate, so the radio is back on zero-IF. Said through the one helper for a setting the radio refuses, after the driver's own lock is released (the sentence is scrubbed there).
+    rre::noteControlRefused(this, "sdrplay", rre::Control::Other, std::string("low-IF fell back to zero-IF: ") + why);
     lowIfWanted_.store(false, std::memory_order_relaxed);
     setSampleRateHz(rate);   // the zero-IF plan, written to the radio (the output rate where zero-IF has it, else the nearest)
 }

@@ -10,10 +10,12 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
 #include <atomic>
+#include <complex>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -21,12 +23,15 @@
 #include <nlohmann/json.hpp>
 
 #include "core/diag_log.hpp"
+#include "core/patch_radio.hpp"
 #include "core/radio_events.hpp"
 #include "core/radio_report.hpp"
 #include "core/radio_reporter.hpp"
 #include "core/radio_setup.hpp"
 #include "core/telemetry.hpp"
+#include "core/rate_follow_status.hpp"
 #include "core/winusb_install.hpp"
+#include "source/iq_source.hpp"
 #include "test_check.hpp"
 
 using namespace cascade::core;
@@ -35,6 +40,26 @@ namespace fs = std::filesystem;
 using nlohmann::json;
 
 namespace {
+
+// A radio that refuses a rate, a frequency and a correction with a sentence that quotes everything a driver could (error-path third reading: the refusals the engine's watch and
+// the patch page's radio now say, core/rate_follow_status.hpp and core/patch_radio.cpp).
+class HostileRadio : public cascade::source::IqSource {
+public:
+    std::string said;
+    bool start() override { return true; }
+    void stop() override {}
+    bool running() const override { return false; }
+    bool selfPaced() const override { return true; }
+    double sampleRateHz() const override { return 2.4e6; }
+    bool setSampleRateHz(double) override { return false; }
+    double centerFrequencyHz() const override { return 433.92e6; }
+    bool setCenterFrequencyHz(double) override { return false; }
+    bool hasFrequencyCorrection() const override { return true; }
+    bool setFrequencyCorrectionPpm(double) override { return false; }
+    std::size_t read(std::complex<float>*, std::size_t) override { return 0; }
+    const char* name() const override { return "hostile"; }
+    const char* lastError() const override { return said.c_str(); }
+};
 
 // THE THINGS THAT MUST NEVER LEAVE, each with the forms it takes in a real log.
 struct Secret {
@@ -270,6 +295,18 @@ int main() {
         rr::RefusalWatch watch;
         watch.noteRefusalIfSilent(&src, "airspyhf", rr::Control::Frequency, hostile);
         rr::noteVendorCallFault(&src, "airspyhf", "vendorcall", hostile, false);
+        {   // the refusals the engine's watch (a rate, wherever applySourceRate asks) and the patch page's radio (a frequency, a correction) say when the driver did not: the same hostile sentence
+            const rr::RadioIdentity ident = rr::identify("rtlsdr", "serial=SN9900AA", "RTL-SDR (serial SN9900AA)");
+            auto owned = std::make_unique<HostileRadio>();
+            HostileRadio* radio = owned.get();
+            radio->said = hostile;
+            rr::registerSource(radio, ident);
+            cascade::gui::applySourceRate(*radio, 3.2e6, std::string());
+            cascade::core::patch::PatchRadio patchRadio(3, std::move(owned), "hostile");
+            patchRadio.setCentreHz(433.92e6);
+            patchRadio.setRadioPpm(7.0);
+            rr::forgetRadio(ident.key);
+        }
         radiosetup::Inventory inv;
         inv.probed = true;
         inv.usbListed = true;
@@ -291,6 +328,9 @@ int main() {
         sentCopy = sent;
     }
     CHECK(!sentCopy.empty());   // the stand-in got the messages: the search below is not of an empty wire
+    // ...and the new refusals are among them (a rate from the engine's watch, a correction from the patch page's radio): the search below covers them
+    CHECK(sentCopy.find("refused: rate") != std::string::npos);
+    CHECK(sentCopy.find("refused: ppm") != std::string::npos);
 
     // THE SERIAL IS ALLOWED IN TWO PLACES - its own field and the radio key - and nowhere else: those two are taken out before it is searched for.
     auto withoutOwnSerial = [](std::string text) {

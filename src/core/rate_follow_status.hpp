@@ -122,9 +122,14 @@ inline RateSetOutcome applySourceRate(cascade::source::IqSource& src, double req
     const std::string errBefore = src.lastError();
     const std::uint64_t refusalsBefore = cascade::core::radioreport::refusalSequence();
     RateSetOutcome out;
+    // A RATE THE RADIO REFUSES IS A REPORT, whoever asked and whenever (open, saved radio, plugin preset, the API, a patch page's radio): the driver says it itself at the
+    // place it notices where it is wired, and this watch says it here, once, where it did not (core/radio_events.hpp RefusalWatch). A rate the driver coerced on a call that
+    // succeeded is not a refusal and is not said.
+    cascade::core::radioreport::RefusalWatch watch;
     out.ok = explicitRequest ? src.setSampleRateHzExplicit(requestedHz)
                              : src.setSampleRateHz(requestedHz);
     const std::string errAfter = src.lastError();
+    if (!out.ok) { watch.noteRefusalIfSilent(&src, nullptr, cascade::core::radioreport::Control::Rate, errAfter); }
     out.landedHz = src.sampleRateHz();
     if (out.ok && rateLandedElsewhere(requestedHz, out.landedHz)) {
         if (const cascade::source::DeviceSource* dev = dynamic_cast<const cascade::source::DeviceSource*>(&src)) {

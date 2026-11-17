@@ -263,6 +263,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         // CfgSave is the engine service's (engine/engine_service.cpp), which keeps the settings saved for BOTH programs and counts a failed write once, as the window did.
         {"Audio", "src/engine/engine.cpp", 1},      {"Reopen", "src/engine/engine.cpp", 1},
         {"PatchLoad", "src/gui/app_window.cpp", 1},
+        {"PatchLoad", "src/slint/patch_publish.cpp", 1},   // error-path third reading: the new window's page counts the saved patch that lost connections too (PatchConfig::patchLostConnections)
         {"CfgSave", "src/engine/engine_service.cpp", 1},
         {"CfgSave", "src/core/config.cpp", 1},   // engine lane E1: the protected store refused a secret, which then stays in the settings file (core/secret_vault.hpp)
         {"SdrEnum", "src/engine/engine.cpp", 1},     {"SdrLost", "src/engine/engine.cpp", 1},

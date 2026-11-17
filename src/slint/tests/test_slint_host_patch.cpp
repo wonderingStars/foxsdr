@@ -113,6 +113,8 @@ public:
     std::vector<cc::PatchPreset> presetList;
     std::string previousText;
     int patchSaves = 0, presetSaves = 0;
+    int lostConnections = 0, lostCalls = 0;   // what patchLostConnections was told
+    void patchLostConnections(int dropped) override { lostConnections += dropped; ++lostCalls; }
     std::string patch() const override { return patchText; }
     std::vector<cc::PatchPreset> presets() const override { return presetList; }
     std::string previous() const override { return previousText; }
@@ -1287,6 +1289,44 @@ void theSavedPatchIsRestored() {
     // the restore is tried once: ticking again does not send the document again
     f.tickBump();
     EQ(f.sub.sent.size(), std::size_t{1});
+}
+
+// A SAVED PATCH THAT LOST CONNECTIONS ON LOADING is told to the config (which counts it, as the classic window does: the patchload word); a clean one, an empty one and the retry of a
+// document the session would not take say nothing, and the restore is said once however often the page ticks (error-path third reading).
+void aSavedPatchThatLostConnectionsIsCounted() {
+    const Chain c = chain(true);
+    {
+        Fx f(pc::Graph{}, true);
+        f.cfg.patchText = documentOf(c.g, pg::View{}) + "node garbage\n";
+        CHECK(pc::parse(f.cfg.patchText).dropped == 1);   // the fixture really has a line to drop
+        f.tick();
+        EQ(f.cfg.lostCalls, 1);
+        EQ(f.cfg.lostConnections, 1);
+        f.tickBump();
+        f.tickBump();
+        EQ(f.cfg.lostCalls, 1);   // said once
+    }
+    {
+        Fx f(pc::Graph{}, true);
+        f.cfg.patchText = documentOf(c.g, pg::View{});   // nothing dropped
+        f.tick();
+        EQ(f.cfg.lostCalls, 0);
+    }
+    {
+        Fx f(pc::Graph{}, true);   // no saved patch at all
+        f.tick();
+        EQ(f.cfg.lostCalls, 0);
+    }
+    {
+        Fx f(pc::Graph{}, true);   // the session refuses the document: nothing is said until it is taken, then once
+        f.cfg.patchText = documentOf(c.g, pg::View{}) + "node garbage\n";
+        f.sub.refuse = true;
+        f.tick();
+        EQ(f.cfg.lostCalls, 0);
+        f.sub.refuse = false;
+        f.tickBump();
+        EQ(f.cfg.lostCalls, 1);
+    }
 }
 
 void theRestoreIsRetriedUntilTaken() {
@@ -4219,6 +4259,7 @@ int main() {
     RUN(theSeedWaitsForTheRadioToOpen);
     RUN(theSeedCopiesNoCentreItWasNotTold);
     RUN(theSavedPatchIsRestored);
+    RUN(aSavedPatchThatLostConnectionsIsCounted);
     RUN(theRestoreIsRetriedUntilTaken);
     RUN(aSavedPatchThatIsNotOneIsSeededOver);
     RUN(aRestoredPatchThatLostWiresIsStillLoaded);

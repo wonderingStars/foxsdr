@@ -32,6 +32,17 @@ public:
     void feed(const cascade::core::access::ToneParams& params);
     const std::string& lastError() const;
 
+    // WHAT THE LAST FAILURE WAS, for the owner's count of refused sound outputs (core/health_events.hpp noteSoundFail takes the host API and one of five reasons, never the OS's text). Set at
+    // the same places lastError() is: the output would not open, would not take 22.05 kHz stereo, or died while it played. The window maps it to its health word where it sees the
+    // failure (lanek_publish.cpp); this unit stays free of the health ledger so that its Linux test builds without it.
+    enum class Api { Mme, Alsa };
+    enum class Reason { NoDevice, Busy, Format, Host, Other };
+    struct Failure {
+        Api api = Api::Mme;
+        Reason reason = Reason::Other;
+    };
+    const Failure& lastFailure() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> p_;

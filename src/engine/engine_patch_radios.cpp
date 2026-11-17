@@ -638,10 +638,12 @@ void Engine::patchReconcile() {
             double told = centre.value_or(0.0);
             if (ppm != 0.0) {
                 if (dev->hasFrequencyCorrection()) {
+                    cascade::core::radioreport::RefusalWatch ppmWatch;   // said here when the driver did not say it (held until the radio is registered)
                     if (dev->setFrequencyCorrectionPpm(ppm)) {
                         r.radioPpm = ppm;
-                    } else if (r.error.empty()) {
-                        r.error = "the radio refused the frequency correction";
+                    } else {
+                        ppmWatch.noteRefusalIfSilent(dev.get(), driver.c_str(), cascade::core::radioreport::Control::Ppm, dev->lastError());
+                        if (r.error.empty()) { r.error = "the radio refused the frequency correction"; }
                     }
                 } else {
                     r.softwarePpm = ppm;

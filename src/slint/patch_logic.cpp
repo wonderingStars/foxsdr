@@ -899,7 +899,10 @@ void PatchPage::restoreAndSeed(Submitter& sub, const FoxReceiverState& state, bo
                 canvas_.ui.view.pan = pg::Vec2{pr.panX, pr.panY};
                 canvas_.ui.view.zoom = pr.zoom;
                 seeded_ = !pr.graph.nodes().empty();
-                if (pr.dropped > 0) { cc::diagLogf("patch: the saved patch lost %d connection(s) on loading", pr.dropped); }
+                if (pr.dropped > 0) {
+                    cc::diagLogf("patch: the saved patch lost %d connection(s) on loading", pr.dropped);
+                    if (config_ != nullptr) { config_->patchLostConnections(pr.dropped); }   // counted by the window's config (patch_publish.cpp)
+                }
                 restored_ = true;
                 canvas_.reconcile(draft_);
             }
