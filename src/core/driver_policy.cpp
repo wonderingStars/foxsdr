@@ -42,6 +42,20 @@ const std::vector<PolicyRow>& policyTable() {
         {rs::kFamilyLime, Action::NotAllowed, false,
          "limesdr: no Windows driver page opened",
          "no vendor Windows driver description was read for LimeSDR"},
+        // The four families the first-run check names since must-fix lane B (each from its own driver's USB id table, core/radio_setup.cpp): the check tells the
+        // person which driver step is missing and files what it found; no vendor Windows driver page was opened for any of them, so the installer never touches them.
+        {rs::kFamilyHydra, Action::NotAllowed, false,
+         "hydrasdr: ids from the driver's own table (core/radio_setup.cpp); no Windows driver page opened",
+         "no vendor Windows driver description was read for HydraSDR; this installer never touches it"},
+        {rs::kFamilyAor, Action::NotAllowed, false,
+         "aor: ids from the driver's own table (core/radio_setup.cpp); no Windows driver page opened",
+         "no vendor Windows driver description was read for AOR receivers; this installer never touches them"},
+        {rs::kFamilyIcr8600, Action::NotAllowed, false,
+         "icr8600: ids from the driver's own table (core/radio_setup.cpp); no Windows driver page opened",
+         "no vendor Windows driver description was read for the Icom IC-R8600; this installer never touches it"},
+        {rs::kFamilyMirics, Action::NotAllowed, false,
+         "mirisdr: ids from the driver's own table (core/radio_setup.cpp); no Windows driver page opened",
+         "no vendor Windows driver description was read for the Mirics family; this installer never touches it"},
     };
     return table;
 }
