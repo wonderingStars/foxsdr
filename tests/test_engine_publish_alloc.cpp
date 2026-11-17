@@ -868,7 +868,7 @@ int main() {
                 t_counting = false;
                 std::printf("F3: %-44s moved the fingerprint; the rebuild: %ld heap allocations, then %d settled passes: %ld\n",
                             what, rebuild, kPublishes, t_news);
-                CHECK(rebuild > 0 && rebuild < 2550);  // counted, and bounded: some strings and vectors, not a flood. 2000 before engine lane E1 (2004 after its 22 web and scan facts); 2200 in E1 and in screen lane S4 (2158 with its 25 outputs and alerts facts); MEASURED on the merged tree of engine merge 7 (E1, S1 to S5, the companions shelf): 2162 to 2165 for these rebuilds, so the bound was 2400 (about ten percent above); MEASURED AGAIN on the tree of engine merge 8 (second merge: screen lane S3, lane X, the S5b/S5c radios follow-on; security fixes): 2309 to 2318 (max 2318; the settled passes are still 0), so the bound is 2550 = 2318 x 1.10 rounded up to the next 50
+                CHECK(rebuild > 0 && rebuild < 2800);  // counted, and bounded: some strings and vectors, not a flood. 2000 before engine lane E1 (2004 after its 22 web and scan facts); 2200 in E1 and in screen lane S4 (2158 with its 25 outputs and alerts facts); MEASURED on the merged tree of engine merge 7 (E1, S1 to S5, the companions shelf): 2162 to 2165 for these rebuilds, so the bound was 2400 (about ten percent above); MEASURED AGAIN on the tree of engine merge 8 (second merge: screen lane S3, lane X, the S5b/S5c radios follow-on; security fixes): 2309 to 2318 (max 2318; the settled passes are still 0), so the bound is 2550 = 2318 x 1.10 rounded up to the next 50; MEASURED AGAIN on the tree of engine merge 9 (screen lane S4b and its security fixes merged): 2526 to 2535 (max 2535; the settled passes are still 0; the S4b lane alone had measured 2363 to 2366 on its older base), so the bound is 2800 = 2535 x 1.10 rounded up to the next 50. This bound replaces both the 2550 of merge 8 and the 2500 the S4b lane set on its own base
                 CHECK(t_news == 0);
             };
             movedBy("another text at the same level", [&] {
@@ -2199,7 +2199,7 @@ int main() {
                 std::printf("F12: %-44s %s the fingerprint; the rebuild: %ld heap allocations, then %d settled passes: %ld\n", what,
                             moves ? "moved" : "left", rebuild, kPublishes, t_news);
                 CHECK(t_news == 0);
-                if (moves) { CHECK(rebuild > 0 && rebuild < 2200); }
+                if (moves) { CHECK(rebuild > 0 && rebuild < 2400); }   // MEASURED on the tree of engine merge 9: 2163 to 2164 (1946 to 1947 at merge 8; the growth is lane S4b's facts of the servers, rotator, listing and listening log and the security lane's two allow-list settings); 2400 = 2164 x 1.10 rounded up to the next 50, set once (replaces 2200 and the 2010 the security lane set on its own base)
             };
             movedBy("the web port", [&] {
                 cascade::engine::ServerConfigRequest r2;
