@@ -206,6 +206,25 @@ int main(int argc, char** argv) {
         const std::string dirText = ((fx != nullptr && *fx != '\0') ? fs::path(fx) : fs::path(FOXSDR_DRIVE_FIXTURES_DIR)).generic_string();
         const std::string token = "{fixtures}";
         for (std::size_t at = script.find(token); at != std::string::npos; at = script.find(token, at + dirText.size())) { script.replace(at, token.size(), dirText); }
+        // A recording a STEP or the header names (a typed path, FOXSDR_FILE_PICK, FOXSDR_FILE_CLIPBOARD) is made by its generator, make_<stem>.py beside it, when it is not there: the WAVs are not
+        // committed, and a script that only names one used to pass only after some other test had made it (a fresh checkout, or a run in another order, found it missing).
+        const std::string prefix = dirText + "/";
+        for (std::size_t at = script.find(prefix); at != std::string::npos; at = script.find(prefix, at + prefix.size())) {
+            const std::size_t from = at + prefix.size();
+            const std::size_t dot = script.find(".wav", from);
+            if (dot == std::string::npos) { break; }
+            const std::string stem = script.substr(from, dot - from);
+            bool plain = !stem.empty();
+            for (const char c : stem) { plain = plain && (std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '-' || c == '_'); }
+            if (!plain) { continue; }
+            const fs::path wav = fs::path(dirText) / (stem + ".wav");
+            const fs::path gen = fs::path(dirText) / ("make_" + stem + ".py");
+            if (!fs::exists(wav) && fs::exists(gen)) {
+                std::printf("  making the fixture %s with %s\n", wav.generic_string().c_str(), gen.filename().string().c_str());
+                const Run g = run("\"" FOXSDR_DRIVE_PYTHON "\" -I \"" + gen.string() + "\" 2>&1");
+                if (g.exitCode != 0) { std::printf("  the generator failed (%d):\n%s\n", g.exitCode, g.out.c_str()); }
+            }
+        }
     }
 #if !defined(_WIN32)
     // A "C:/..." path of a script (the lane L and M scripts type paths that do not exist, to see the engine refuse or fail them in its own words) is not a full path off Windows, and the engine rightly
