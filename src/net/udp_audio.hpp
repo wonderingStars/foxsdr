@@ -5,6 +5,11 @@
 // tools (aplay, multimon-ng, DSD, per forum posts the facts report found) read. Only mono is built. The datagram is exactly `packetFrames`
 // samples (480 = 10 ms, 960 = 20 ms; 960 bytes or 1920 bytes of payload), so a receiver that counts bytes can count time.
 //
+// WHAT IS SENT, AND TO WHOM: the finished audio of the ONE radio the person chose (nothing else: no frequency, no name, no setting), as the datagrams above, to the ONE address the
+// person typed (127.0.0.1 = this computer, the default). Nothing is ever read from the network. The address is never widened by the program: an emptied one resets to 127.0.0.1, and
+// a broadcast address, a multicast address or 0.x.x.x is refused (start() says so). A destination beyond this computer is shown in the Outputs page with the warning that the
+// audio is not encrypted.
+//
 // SAFETY: OFF BY DEFAULT; the default destination is the loopback address 127.0.0.1 port 7355 (a destination on another machine is a
 // deliberate setting); the socket only sends, nothing is ever read from the network; the worker never touches the DSP thread or the pass
 // (it reads the engine's audio ring like any other reader, which is lock-free for the DSP side); a send that would block or fails

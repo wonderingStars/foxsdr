@@ -1379,6 +1379,7 @@ struct AppConfig {
     bool tciEnabled = false;
     bool tciBindAll = false;
     int tciPort = 50001;
+    std::string tciAllow;                     // tciBindAll only: the client addresses that may connect (net/peer_allow.hpp); a bind beyond this computer without a list does not start
     bool udpAudioEnabled = false;
     std::string udpAudioHost = "127.0.0.1";   // an emptied value resets to this, never to something wider
     int udpAudioPort = 7355;

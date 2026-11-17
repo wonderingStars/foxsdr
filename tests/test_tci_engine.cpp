@@ -605,6 +605,57 @@ void testConfiguration() {
     CHECK(r.is("fact.tci.listening", "1") && r.fact("fact.tci.refusal").empty());
 }
 
+// S4bS-tci-udp: the TCI interface beyond this computer needs a list of client addresses (the protocol has no password), and audio over UDP goes to one computer, never to a
+// broadcast or multicast address. None of this binds a wide address: with no usable list the engine does not make a socket at all.
+void testBeyondThisComputer() {
+    Rig r;
+    const int port = freePort();
+    // bindAll with no list: not started, and the person is told what to do
+    const FoxCommandResult a = r.config("{\"tci\":{\"enabled\":true,\"bindAll\":true,\"port\":" + std::to_string(port) + "}}");
+    CHECK(a.status == FOXAPI_OK);
+    (void)r.e.servers().waitIdle(std::chrono::seconds(10));
+    CHECK(!r.e.servers().tciServer().running());
+    CHECK(r.is("fact.tci.listening", "0") && r.has("fact.tci.refusal", "list the computers that may"));
+    // a list the program cannot read is refused when typed, with the list's own sentence, and changes nothing
+    for (const char* bad : {"not-an-address", "0.0.0.0/0", "224.0.0.5", "255.255.255.255", "10.0.0.0/4", "1.2.3.4/99", "10.0.0.1/"}) {
+        const FoxCommandResult x = r.config(std::string("{\"tci\":{\"allow\":\"") + bad + "\"}}");
+        CHECK(x.status < 0);
+        CHECK(std::string(x.message).find("allow:") != std::string::npos);
+        if (x.status >= 0) { std::printf("      list \"%s\" was accepted\n", bad); }
+    }
+    CHECK(r.fact("fact.tci.allow").empty());
+    // a list that reads is kept and shown, and clearing it is possible (empty text is a clear, not "every address")
+    const FoxCommandResult g = r.config("{\"tci\":{\"allow\":\"192.168.1.20, 192.168.1.0/24\"}}");
+    CHECK(g.status == FOXAPI_OK);
+    CHECK(r.is("fact.tci.allow", "192.168.1.20, 192.168.1.0/24"));
+    CHECK(r.has("fact.tci.scope", "reachable only from the computers you listed"));
+    // the list is saved and comes back, and a damaged one (too long) is dropped, which leaves the server not starting
+    cascade::core::AppConfig c;
+    c.tciBindAll = true;
+    c.tciAllow = "192.168.1.20";
+    cascade::core::AppConfig back;
+    std::string why;
+    CHECK(cascade::core::ConfigStore::parse(cascade::core::ConfigStore::serialize(c), "test", back, why));
+    CHECK(back.tciAllow == "192.168.1.20" && back.tciBindAll);
+    cascade::core::AppConfig longList;
+    CHECK(cascade::core::ConfigStore::parse("{\"tciBindAll\":true,\"tciAllow\":\"" + std::string(500, '1') + "\"}", "test", longList, why));
+    CHECK(longList.tciAllow.empty());
+    // audio over UDP: one computer. A broadcast, a multicast and a 0.x.x.x destination are refused with the engine's sentence and nothing is sent.
+    for (const char* host : {"255.255.255.255", "224.0.0.5", "239.255.255.250", "0.0.0.0"}) {
+        const FoxCommandResult u = r.config(std::string("{\"udp\":{\"enabled\":true,\"host\":\"") + host + "\",\"port\":7355,\"radio\":1,\"packetFrames\":480}}");
+        CHECK(u.status == FOXAPI_OK);
+        (void)r.e.servers().waitIdle(std::chrono::seconds(10));
+        CHECK(r.has("fact.udp.refusal", "one computer"));
+        CHECK(r.is("fact.udp.sending", "0"));
+        CHECK(!r.e.servers().udpSender().running());
+        if (r.fact("fact.udp.sending") != "0") { std::printf("      %s: sending\n", host); }
+    }
+    // and a normal destination still works
+    const FoxCommandResult ok = r.config("{\"udp\":{\"enabled\":true,\"host\":\"127.0.0.1\",\"port\":7355,\"radio\":1,\"packetFrames\":480}}");
+    CHECK(ok.status == FOXAPI_OK);
+    CHECK(r.is("fact.udp.sending", "1") && r.is("fact.udp.refusal", ""));
+}
+
 void testSettingsFile() {
     // the file round trip, and what a hostile file is made into
     cascade::core::AppConfig c;
@@ -675,6 +726,7 @@ int main() {
     testAudioStream();
     testUdp();
     testConfiguration();
+    testBeyondThisComputer();
     testSettingsFile();
     testTeardown();
     return testSummary("test_tci_engine");

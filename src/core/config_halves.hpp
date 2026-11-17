@@ -223,7 +223,7 @@ struct ConfigFieldInfo {
     X(catBindAll,              Engine,    false) \
     X(catPort,                 Engine,    false) \
     X(tciEnabled,              Engine,    false) \
-    X(tciBindAll,              Engine,    false) \
+    X(tciBindAll,              Engine,    false)     X(tciAllow,                Engine,    false) \
     X(tciPort,                 Engine,    false) \
     X(udpAudioEnabled,         Engine,    false) \
     X(udpAudioHost,            Engine,    false) \

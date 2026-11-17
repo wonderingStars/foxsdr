@@ -42,6 +42,7 @@
 #endif
 #include <httplib.h>
 #include "core/font_blobs.hpp"
+#include "net/web_conn_guard.hpp"
 
 namespace cascade::net {
 namespace {
@@ -3806,6 +3807,7 @@ void WebServer::Impl::installRoutes(httplib::Server& svr) {
     // cache entry and a cached /api/status is a stale readout.
     // wire-c begin: an allowed cross-origin PREFLIGHT is answered before routing (204 + the model's headers); nothing else is stopped here
     svr.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
+        GuardedServer::headComplete();   // R4: the head of this request is complete: the connection is no longer counted as pending
         // R1: the Host and Origin of EVERY request are checked before any route runs (DNS rebinding and cross-site posts).
         {
             GuardRequest g;
@@ -4750,7 +4752,8 @@ bool WebServer::Impl::start(const WebServerConfig& cfg, std::string& error) {
         }
     }
 
-    svr_ = std::make_unique<httplib::Server>();
+    // R4 (security review 2): a plain httplib::Server with a total time for reading one request and a per-address cap on connections that have shown no request head (net/web_conn_guard.hpp).
+    svr_ = std::make_unique<GuardedServer>();
     if (cfg.listenersEnabled) {
         // Every listener may hold an audio stream and a live-update stream, each parking a worker: size the pool for them.
         const std::size_t cap = static_cast<std::size_t>(std::max(cfg.maxListeners, 1));

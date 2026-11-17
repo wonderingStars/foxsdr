@@ -242,6 +242,7 @@ void testHostileBundleLeavesTheGuardedSettingsAlone() {
     hostile["webBindAddress"] = "0.0.0.0";
     hostile["catBindAll"] = true;
     hostile["tciBindAll"] = true;
+    hostile["tciAllow"] = "203.0.113.9";   // the list of computers that may reach TCI beyond this one: a bundle may not widen it either
     hostile["udpAudioHost"] = "203.0.113.9";
     hostile["sourceKind"] = "rtltcp";
     hostile["soapyArgs"] = "driver=remote,remote=203.0.113.9";
@@ -256,7 +257,7 @@ void testHostileBundleLeavesTheGuardedSettingsAlone() {
     CHECK(r.error == BundleError::None);
     const json c = json::parse(r.files[0].bytes);
     for (const std::string& k : importLeftOutKeys()) { CHECK(!c.contains(k)); }
-    CHECK(importLeftOutKeys().size() == 9);
+    CHECK(importLeftOutKeys().size() == 10);
     CHECK(!c.contains("sourceKind") && !c.contains("soapyArgs") && !c.contains("nativeArgs"));   // a network source and what hangs on it
     CHECK(c.contains("radios") && c["radios"].is_array() && c["radios"].empty());
     CHECK(c["webPort"] == 8080 && c["centerHz"] == 7100000.0);
@@ -383,6 +384,58 @@ void testFobosRadioComesBack() {
     CHECK(c["nativeArgs"] == "serial=0123456789");
     CHECK(c["radios"].size() == 1 && c["radios"][0]["number"] == 2 && c["radios"][0]["args"] == "serial=0123456789");
     CHECK(r.files[0].bytes.find("vendor") == std::string::npos && r.files[0].bytes.find("fobos.dll") == std::string::npos);
+}
+
+// M8-import-usb-kinds: the five USB radios of the wire-b table (IC-R8600, FUNcube, G39DDC, G33DDC, SDR-IQ) were left out of an import because their kinds were not on the local list, and
+// a saved radio of theirs was left out again because the option they save with their device ("timeout=1500") was not one the guard knew. The args are what each source's own default
+// is (engine/wire_b_sources.cpp kTable). A backup of the radio, as the radio's own kind and as a saved radio 2, comes back; the path of a vendor library does not.
+void checkUsbKindComesBack(const char* kind, const std::string& args) {
+    json b;
+    b["sourceKind"] = kind;
+    b["nativeArgs"] = args;
+    b["radios"] = json::array({json{{"number", 2}, {"sourceKind", kind}, {"args", args}}});
+    const ImportResult r = parseBundle(rawBundle({{"config.json", dumpS(b)}}));
+    CHECK(r.error == BundleError::None);
+    const json c = json::parse(r.files[0].bytes);
+    if (!(c.contains("sourceKind") && c["sourceKind"] == kind)) { std::printf("      %s: the source kind was left out\n", kind); }
+    CHECK(c.contains("sourceKind") && c["sourceKind"] == kind);
+    CHECK(c.contains("nativeArgs") && c["nativeArgs"] == args);
+    if (!(c["radios"].size() == 1 && c["radios"][0]["sourceKind"] == kind)) { std::printf("      %s: the saved radio was left out\n", kind); }
+    CHECK(c["radios"].size() == 1 && c["radios"][0]["sourceKind"] == kind && c["radios"][0]["args"] == args);
+    CHECK(localSourceKind(kind));
+    std::string told;
+    for (const std::string& n : r.notes) { told += n + "\n"; }
+    CHECK(told.find("another computer") == std::string::npos);   // nothing said to be left out
+}
+void testWireBUsbRadiosComeBackIcr8600() { checkUsbKindComesBack("icr8600", "timeout=1500"); }
+void testWireBUsbRadiosComeBackFuncube() { checkUsbKindComesBack("funcube", "index=0"); }
+void testWireBUsbRadiosComeBackG39ddc() { checkUsbKindComesBack("g39ddc", "timeout=5000"); }
+void testWireBUsbRadiosComeBackG33ddc() { checkUsbKindComesBack("g33ddc", "timeout=5000"); }
+void testWireBUsbRadiosComeBackSdriq() { checkUsbKindComesBack("sdriq", "timeout=3000"); }
+void testWireBUsbRadiosComeBackFobos() { checkUsbKindComesBack("fobos", "timeout=5000,rate=2000000,count=floats,direct=off,clock=internal"); }
+
+// The library or firmware path of such a radio never comes back (it names a file; the rest of the arguments do), and a network or file kind is still left out whole.
+void testWireBPathsAndNetworkKindsStayOut() {
+    json b;
+    b["sourceKind"] = "g39ddc";
+    b["nativeArgs"] = "lib=C:/vendor/g39.dll,timeout=5000,serial=12";
+    b["radios"] = json::array({json{{"number", 2}, {"sourceKind", "icr8600"}, {"args", "firmware=C:/x/fw.bin,timeout=1500"}},
+                               json{{"number", 3}, {"sourceKind", "g39ddc"}, {"args", "timeout=abc"}}});
+    const ImportResult r = parseBundle(rawBundle({{"config.json", dumpS(b)}}));
+    const json c = json::parse(r.files[0].bytes);
+    CHECK(c["sourceKind"] == "g39ddc" && c["nativeArgs"] == "timeout=5000,serial=12");
+    CHECK(c["radios"].empty());   // a path in the arguments, or a number that is not one: that saved radio is left out whole
+    CHECK(r.files[0].bytes.find("vendor") == std::string::npos && r.files[0].bytes.find("fw.bin") == std::string::npos);
+    for (const char* kind : {"rfspace", "hpsdr1", "hpsdr2", "aaronia", "spyserver", "soapyremote", "sdrconnect", "rtltcp", "pluto", "kiwisdr", "rawiq", "file"}) {
+        CHECK(!localSourceKind(kind));
+        json n;
+        n["sourceKind"] = kind;
+        n["radios"] = json::array({json{{"number", 2}, {"sourceKind", kind}, {"args", "timeout=1500"}}});
+        const ImportResult q = parseBundle(rawBundle({{"config.json", dumpS(n)}}));
+        const json cn = json::parse(q.files[0].bytes);
+        if (cn.contains("sourceKind") || !cn["radios"].empty()) { std::printf("      %s was imported\n", kind); }
+        CHECK(!cn.contains("sourceKind") && cn["radios"].empty());
+    }
 }
 
 // Engine merge 9 (screen lane S4b and its security fixes): every switch of the servers other programs connect to (the audio and rtl_tcp servers and their client lists, the
@@ -689,6 +742,13 @@ int main() {
     testReportingOnlyGetsMorePrivate();
     testLocalRadiosComeBack();
     testFobosRadioComesBack();
+    testWireBUsbRadiosComeBackIcr8600();
+    testWireBUsbRadiosComeBackFuncube();
+    testWireBUsbRadiosComeBackG39ddc();
+    testWireBUsbRadiosComeBackG33ddc();
+    testWireBUsbRadiosComeBackSdriq();
+    testWireBUsbRadiosComeBackFobos();
+    testWireBPathsAndNetworkKindsStayOut();
     testServerSettingsNeverArrive();
     testHiddenAddressesAreLeftOut();
     testBackupRestoresTheProfileOnANewComputer();

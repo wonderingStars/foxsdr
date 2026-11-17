@@ -47,6 +47,7 @@ std::string oneMember(const char* section, const char* member, nlohmann::json va
 
 std::string tciBool(const char* member, bool value) { return oneMember("tci", member, value); }
 std::string tciPort(int port) { return oneMember("tci", "port", port); }
+std::string tciText(const char* member, const std::string& value) { return oneMember("tci", member, value); }
 std::string udpBool(const char* member, bool value) { return oneMember("udp", member, value); }
 std::string udpInt(const char* member, int value) { return oneMember("udp", member, value); }
 std::string udpText(const char* member, const std::string& value) { return oneMember("udp", member, value); }

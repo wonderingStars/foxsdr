@@ -113,7 +113,7 @@ const char* bundleErrorName(BundleError e) {
 bool allowedBundleFileName(const std::string& name) { return name == "config.json" || name == "bookmarks.json" || name == "markers.json"; }
 
 const std::vector<std::string>& importLeftOutKeys() {
-    static const std::vector<std::string> k = {"pluginCatalogueUrl", "pluginSites", "webBindAddress", "catBindAll", "tciBindAll", "udpAudioHost",
+    static const std::vector<std::string> k = {"pluginCatalogueUrl", "pluginSites", "webBindAddress", "catBindAll", "tciBindAll", "tciAllow", "udpAudioHost",
                                                "plutoUri", "rtlTcpAddr", "iqFilePath"};
     return k;
 }
@@ -142,7 +142,10 @@ bool localDriverName(const std::string& d) {
 }  // namespace
 
 bool localSourceKind(const std::string& kind) {
-    static const std::set<std::string> kLocal = {"siggen", "soapy", "rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "aor", "hydrasdr", "soundcard", "fobos"};
+    static const std::set<std::string> kLocal = {"siggen", "soapy", "rtlsdr", "hackrf", "airspy", "airspyhf", "sdrplay", "mirisdr", "rx888", "aor", "hydrasdr", "soundcard", "fobos",
+                                                       // the USB radios of the wire-b source table (engine/wire_b_sources.cpp, the rows whose `needsAddress` is false: they name a USB device or a vendor
+                                                       // library, never a host). tests/test_wire_b_saved_kinds.cpp holds this list equal to that table in both directions.
+                                                       "icr8600", "funcube", "g39ddc", "g33ddc", "sdriq"};
     return kLocal.count(kind) != 0;
 }
 
@@ -163,11 +166,17 @@ bool classifyDeviceArgs(const std::string& args, std::string& cleaned, bool& dro
         if (eq == std::string::npos || eq == 0 || ++fields > 16) { return false; }   // not key=value: cannot be classified
         const std::string key = lowerOf(field.substr(0, eq));
         const std::string val = field.substr(eq + 1);
-        const bool keyOk = key == "driver" || key == "serial" || key == "index" || key == "channel" || key == "deviceid" || key == "device_id";
+        // The options the USB radios of the wire-b table save with their device (a radio opened by "open-icr8600:" comes back with "timeout=1500", a Fobos with "timeout=5000"):
+        // whole numbers (timeout, rate, silence), the SDR-IQ's serial, and the words of the Fobos' three switches. A library or firmware PATH (lib, firmware) is still not one.
+        const bool numberKey = key == "timeout" || key == "rate" || key == "silence";
+        const bool wordKey = (key == "count" && (val == "floats" || val == "pairs")) || (key == "direct" && (val == "on" || val == "off")) ||
+                             (key == "clock" && (val == "internal" || val == "external"));
+        const bool keyOk = key == "driver" || key == "serial" || key == "index" || key == "channel" || key == "deviceid" || key == "device_id" || key == "sdriq" || numberKey || wordKey;
         bool valOk = keyOk && plainValue(val);
+        if (valOk && numberKey) { for (const char c : val) { if (c < '0' || c > '9') { valOk = false; } } }
         if (valOk && key == "driver") { if (!localDriverName(val)) { return false; } }   // a remote driver: the whole string is another computer's
         if (valOk && (key == "index" || key == "channel")) { for (const char c : val) { if (c < '0' || c > '9') { valOk = false; } } }
-        if (valOk && key == "serial" && val.find(':') != std::string::npos) { valOk = false; }
+        if (valOk && (key == "serial" || key == "sdriq") && val.find(':') != std::string::npos) { valOk = false; }
         if (valOk) { cleaned += (cleaned.empty() ? "" : ",") + key + "=" + val; } else { dropped = true; }
         if (end == args.size()) { break; }
         pos = end + 1;

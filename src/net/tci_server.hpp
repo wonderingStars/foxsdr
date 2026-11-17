@@ -33,6 +33,7 @@
 #include <thread>
 #include <vector>
 
+#include "net/peer_allow.hpp"
 #include "net/tci_protocol.hpp"
 
 namespace cascade::net {
@@ -61,7 +62,12 @@ public:
 
     // Binds and starts. False with a sentence in `error` (the sentence is shown to the operator verbatim): the port already in use, or not
     // allowed. Port 0 asks the OS for a free port (boundPort()).
-    bool start(std::uint16_t port, bool bindAll, std::string& error);
+    //
+    // BEYOND THIS COMPUTER (bindAll) THE SERVER NEEDS A LIST. The TCI protocol has no place for a credential, so a bind to every interface is
+    // accepted only with a non-empty `allow` (net/peer_allow.hpp): a connection from any other address is closed before a byte is read or
+    // sent. bindAll with an empty list is refused here, whatever the caller did before (the engine says the sentence to the person).
+    // With bindAll off (loopback) `allow` is not used: only programs on this computer can reach the port at all.
+    bool start(std::uint16_t port, bool bindAll, std::string& error, const PeerAllow& allow = PeerAllow());
     // A hard stop: when it returns no thread of this server is running and every connection is closed.
     void stop();
     bool running() const { return running_.load(std::memory_order_relaxed); }
@@ -74,6 +80,8 @@ public:
     std::uint64_t slowDropped() const { return slowDropped_.load(std::memory_order_relaxed); }
     std::uint64_t protocolDropped() const { return protocolDropped_.load(std::memory_order_relaxed); }
     std::uint64_t refusedOverCap() const { return refusedOverCap_.load(std::memory_order_relaxed); }
+    // Connections closed at once because the client's address is not on the list (bindAll only).
+    std::uint64_t refusedPeer() const { return refusedPeer_.load(std::memory_order_relaxed); }
 
 private:
     void acceptLoop();
@@ -91,6 +99,9 @@ private:
     std::atomic<std::uint64_t> slowDropped_{0};
     std::atomic<std::uint64_t> protocolDropped_{0};
     std::atomic<std::uint64_t> refusedOverCap_{0};
+    std::atomic<std::uint64_t> refusedPeer_{0};
+    PeerAllow allow_;
+    bool listed_ = false;   // true when the list is in force (bindAll)
     std::atomic<std::uint16_t> boundPort_{0};
     std::intptr_t listener_ = -1;
     std::mutex clientsMu_;

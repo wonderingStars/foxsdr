@@ -130,10 +130,15 @@ TciServer::~TciServer() { stop(); }
 void TciServer::setBackendOpener(TciBackendOpener fn) { opener_ = std::move(fn); }
 void TciServer::setUsageCallback(std::function<void()> fn) { usageCallback_ = std::move(fn); }
 
-bool TciServer::start(std::uint16_t port, bool bindAll, std::string& error) {
+bool TciServer::start(std::uint16_t port, bool bindAll, std::string& error, const PeerAllow& allow) {
     error.clear();
     if (running_.load(std::memory_order_relaxed)) {
         error = "the TCI server is already running";
+        return false;
+    }
+    if (bindAll && allow.empty()) {
+        // The protocol has no password: beyond this computer only to computers the person listed, never to every address.
+        error = "to let other computers connect to the TCI interface, list the computers that may: type the address of each one";
         return false;
     }
     if (!opener_) {
@@ -198,6 +203,8 @@ bool TciServer::start(std::uint16_t port, bool bindAll, std::string& error) {
     SockLen blen = sizeof(bound);
     if (::getsockname(raw(s), reinterpret_cast<sockaddr*>(&bound), &blen) == 0) { actual = ::ntohs(bound.sin_port); }
     listener_ = s;
+    allow_ = bindAll ? allow : PeerAllow();
+    listed_ = bindAll;
     boundPort_.store(actual, std::memory_order_relaxed);
     stopping_.store(false, std::memory_order_relaxed);
     running_.store(true, std::memory_order_relaxed);
@@ -238,6 +245,12 @@ void TciServer::acceptLoop() {
         beat.beat("accepted");
         if (c == kInvalid) {
             if (stopping_.load(std::memory_order_relaxed)) { break; }
+            continue;
+        }
+        if (listed_ && !allow_.allows(::ntohl(peer.sin_addr.s_addr))) {
+            // Not a listed computer: closed before a byte is read or sent (and before it can take one of the few places).
+            refusedPeer_.fetch_add(1, std::memory_order_relaxed);
+            closeSock(c);
             continue;
         }
         if (clients_.load(std::memory_order_relaxed) >= kMaxTciClients) {

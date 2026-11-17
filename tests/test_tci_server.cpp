@@ -157,10 +157,10 @@ struct Rig {
     std::string error;
     int port = 0;
     std::atomic<int> accepted{0};
-    bool up(bool bindAll = false, int p = 0) {
+    bool up(bool bindAll = false, int p = 0, const PeerAllow& allow = PeerAllow()) {
         srv.setBackendOpener(opener(w));
         srv.setUsageCallback([this] { ++accepted; });
-        if (!srv.start(static_cast<std::uint16_t>(p), bindAll, error)) { return false; }
+        if (!srv.start(static_cast<std::uint16_t>(p), bindAll, error, allow)) { return false; }
         port = srv.boundPort();
         return true;
     }
@@ -652,13 +652,72 @@ void testLoopbackByDefault() {
         closeSock(s);
     }
     {
+        // bindAll reaches the other address (the client's own address is on the list here, as the list must name it)
         Rig r;
-        CHECK(r.up(true));
+        PeerAllow allow;
+        std::string why;
+        CHECK(PeerAllow::parse(other + "/32, 127.0.0.0/8", allow, why));
+        CHECK(r.up(true, 0, allow));
         const SockT s = connectTo(other.c_str(), r.port);
-        CHECK(s != INVALID_SOCKET);   // bindAll reaches it
+        CHECK(s != INVALID_SOCKET);
         closeSock(s);
     }
     std::printf("bind scope checked against %s\n", other.c_str());
+}
+
+// S4bS-tci-udp: beyond this computer (bindAll) the server needs a list of client addresses; without one it does not start, and a connection from an address that is not
+// listed is closed before a byte is read or sent. The wide bind is the same one testLoopbackByDefault already makes (the program has its firewall rule); the client
+// addresses are this computer's two: 127.0.0.1 and its other address.
+void testBeyondThisComputerNeedsAList() {
+    {   // no list = no start, and no socket
+        Rig r;
+        CHECK(!r.up(true));
+        CHECK(r.error.find("list the computers") != std::string::npos);
+        CHECK(!r.srv.running() && r.srv.boundPort() == 0);
+    }
+    {   // a list is not applied on loopback (only this computer's programs can reach it)
+        Rig r;
+        PeerAllow allow;
+        std::string why;
+        CHECK(PeerAllow::parse("10.9.8.7", allow, why));
+        CHECK(r.up(false, 0, allow));
+        RawClient c;
+        CHECK(c.open(r.port) && c.handshake());
+    }
+    const std::string other = otherAddress();
+    if (other.empty()) {
+        std::printf("SKIP: this machine has no non-loopback IPv4 address; the list test over the wire cannot say anything here\n");
+        ++g_checksSkipped;
+        return;
+    }
+    {   // only the other address listed: a loopback client is closed at once with no byte, the listed one gets its session
+        Rig r;
+        PeerAllow allow;
+        std::string why;
+        CHECK(PeerAllow::parse(other + "/32", allow, why));
+        CHECK(r.up(true, 0, allow));
+        RawClient bad;
+        CHECK(bad.open(r.port));
+        sendAll(bad.s, "GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n");
+        CHECK(waitUntil(3000, [&] { return r.srv.refusedPeer() >= 1; }));
+        const auto end = Clock::now() + std::chrono::seconds(2);
+        while (Clock::now() < end) { if (!bad.fill()) { break; } }
+        CHECK(bad.buf.empty());          // not one byte came back: no 101, no 403
+        CHECK(r.w.opened.load() == 0);   // no session was ever made for it
+        RawClient good;
+        CHECK(good.open(r.port, other.c_str()) && good.handshake() && good.waitText("READY;"));
+        CHECK(r.w.opened.load() == 1);
+    }
+    {   // a network on the list covers its members
+        Rig r;
+        PeerAllow allow;
+        std::string why;
+        CHECK(PeerAllow::parse("127.0.0.0/8", allow, why));
+        CHECK(r.up(true, 0, allow));
+        RawClient c;
+        CHECK(c.open(r.port) && c.handshake() && c.waitText("READY;"));
+        CHECK(r.srv.refusedPeer() == 0);
+    }
 }
 
 }  // namespace
@@ -685,5 +744,7 @@ int main() {
     testFuzz();
     std::printf("-- testLoopbackByDefault\n");
     testLoopbackByDefault();
+    std::printf("-- testBeyondThisComputerNeedsAList\n");
+    testBeyondThisComputerNeedsAList();
     return testSummary("test_tci_server");
 }
