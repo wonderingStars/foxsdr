@@ -760,6 +760,9 @@ components:
         reachableOffMachine:
           type: boolean
           description: "The server is bound to an address other machines can reach."
+        readOnly:
+          type: boolean
+          description: "No web password is set, so this page can look and listen but not change anything (control and bookmark changes answer 403)."
         role:
           type: string
           enum: [owner, listener, none]
