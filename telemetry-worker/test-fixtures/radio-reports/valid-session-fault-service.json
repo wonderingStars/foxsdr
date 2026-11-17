@@ -1,0 +1,22 @@
+{
+  "name": "valid-session-fault-service",
+  "about": "issue 12: the SDRplay API service is not running and no radio is open to carry it; no radio key",
+  "expect": "accept",
+  "status": 204,
+  "request": {
+    "schema": 2,
+    "kind": "session_fault",
+    "installId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "sessionId": "0123456789abcdef",
+    "seq": 22,
+    "t": 9,
+    "radioKey": "",
+    "body": {
+      "v": "0.99.109",
+      "service": "sdrplay",
+      "phase": "gave-up",
+      "reasonClass": "driver",
+      "reason": "the SDRplay API service is not running"
+    }
+  }
+}

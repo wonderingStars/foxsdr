@@ -1,0 +1,27 @@
+{
+  "name": "valid-radio-settings-refused-range",
+  "about": "issue 10: a value the user typed out of range, which says nothing about the radio",
+  "expect": "accept",
+  "status": 204,
+  "request": {
+    "schema": 2,
+    "kind": "radio_settings",
+    "installId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "sessionId": "0123456789abcdef",
+    "seq": 9,
+    "t": 8,
+    "radioKey": "airspy-hf:HF0001A2",
+    "body": {
+      "driver": "airspyhf",
+      "model": "Airspy HF+",
+      "serial": "HF0001A2",
+      "firmware": "3.1.0",
+      "library": "libairspyhf 1.6.8",
+      "v": "0.99.109",
+      "why": "user",
+      "refused": "gain",
+      "refusedClass": "range",
+      "reason": "out of range: gain"
+    }
+  }
+}

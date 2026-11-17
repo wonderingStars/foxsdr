@@ -437,6 +437,11 @@ async function handleRadioFamily(text, body, env) {
   if (!v.ok) { return refused(v.code, 400); }
   const m = v.canonical;
 
+  // A message from a test, CI or the owner's own run (`synthetic: 1`, contract 1.3) was checked above so that an application bug
+  // is still seen, and is then DROPPED: not forwarded, not written to any dataset, not counted. The app is told 204 (it is not
+  // to retry a message that was never wrong).
+  if (v.synthetic) { return new Response(null, { status: 204 }); }
+
   if (m.kind === 'first_session') {
     // 503, not 204: an unconfigured Worker must not tell the app its record was taken.
     if (!env.FIRSTSESSION) { return new Response('first-session dataset not configured', { status: 503 }); }
@@ -523,6 +528,13 @@ export default {
     const id = clamp(body.id, 32);
     if (!ID_RE.test(id)) {
       return new Response('bad id', { status: 400 });
+    }
+
+    // A usage record or a beat from a test, CI or the owner's own run carries `synthetic: 1` (the application sets it from
+    // FOXSDR_SYNTHETIC, CI or GITHUB_ACTIONS). It is never a person: it is dropped here, before any dataset is written, so
+    // it adds no launch, no install and no beat to any figure. 204, so the sender is not told it was wrong.
+    if (body.synthetic === 1) {
+      return new Response(null, { status: 204 });
     }
 
     // A heartbeat: "this install is running right now". Counted in its OWN

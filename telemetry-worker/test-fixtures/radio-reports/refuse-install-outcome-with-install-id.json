@@ -1,0 +1,19 @@
+{
+  "name": "refuse-install-outcome-with-install-id",
+  "about": "the installer has no install id; a message that carries one is refused",
+  "expect": "refuse",
+  "code": "bad-field",
+  "status": 400,
+  "request": {
+    "schema": 2,
+    "kind": "install_outcome",
+    "messageId": "0123456789abcdef",
+    "t": 0,
+    "body": {
+      "outcome": "failed",
+      "appVersion": "0.99.109",
+      "windows": "10.0.22631"
+    },
+    "installId": "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+  }
+}

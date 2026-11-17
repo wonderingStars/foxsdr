@@ -1,0 +1,30 @@
+{
+  "name": "drop-synthetic-radio-fail",
+  "about": "issue 3: a failure report from a test, CI or the owner's own run (`synthetic: 1`) is checked, answered 204 and then dropped: not forwarded, not counted",
+  "expect": "drop",
+  "status": 204,
+  "request": {
+    "schema": 2,
+    "kind": "radio_fail",
+    "installId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "sessionId": "0123456789abcdef",
+    "seq": 3,
+    "t": 412,
+    "radioKey": "rtl-sdr:-",
+    "body": {
+      "driver": "rtlsdr",
+      "model": "RTL-SDR",
+      "serial": "",
+      "reason": "the radio is in use by another program",
+      "reasonClass": "busy",
+      "trigger": "user-pick",
+      "attempt": 1,
+      "diagOn": true,
+      "logLines": [],
+      "v": "0.99.109",
+      "os": "Windows 10.0.22631",
+      "arch": "x64"
+    },
+    "synthetic": 1
+  }
+}

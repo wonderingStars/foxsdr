@@ -1,0 +1,32 @@
+{
+  "name": "refuse-ring-line-with-level-word",
+  "about": "issue 1: a raw ring line still carries its level word (`info`, `warn`); the sender removes it and the contract's pattern has none",
+  "expect": "refuse",
+  "code": "bad-field",
+  "status": 400,
+  "request": {
+    "schema": 2,
+    "kind": "radio_fail",
+    "installId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "sessionId": "0123456789abcdef",
+    "seq": 3,
+    "t": 412,
+    "radioKey": "rtl-sdr:-",
+    "body": {
+      "driver": "rtlsdr",
+      "model": "RTL-SDR",
+      "serial": "",
+      "reason": "the radio is in use by another program",
+      "reasonClass": "busy",
+      "trigger": "user-pick",
+      "attempt": 1,
+      "diagOn": true,
+      "logLines": [
+        "12:01:07.331 info soapy: airspyhf open failed"
+      ],
+      "v": "0.99.109",
+      "os": "Windows 10.0.22631",
+      "arch": "x64"
+    }
+  }
+}

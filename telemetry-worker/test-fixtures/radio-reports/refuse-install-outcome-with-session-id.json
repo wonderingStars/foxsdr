@@ -1,0 +1,19 @@
+{
+  "name": "refuse-install-outcome-with-session-id",
+  "about": "nor a session id",
+  "expect": "refuse",
+  "code": "bad-field",
+  "status": 400,
+  "request": {
+    "schema": 2,
+    "kind": "install_outcome",
+    "messageId": "0123456789abcdef",
+    "t": 0,
+    "body": {
+      "outcome": "failed",
+      "appVersion": "0.99.109",
+      "windows": "10.0.22631"
+    },
+    "sessionId": "0123456789abcdef"
+  }
+}

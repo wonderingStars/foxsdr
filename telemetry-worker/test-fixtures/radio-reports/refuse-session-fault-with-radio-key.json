@@ -1,0 +1,21 @@
+{
+  "name": "refuse-session-fault-with-radio-key",
+  "about": "a session_fault names a radio (a fault of one radio is a radio_recovery)",
+  "expect": "refuse",
+  "code": "bad-field",
+  "status": 400,
+  "request": {
+    "schema": 2,
+    "kind": "session_fault",
+    "installId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "sessionId": "0123456789abcdef",
+    "seq": 22,
+    "t": 9,
+    "radioKey": "airspy-hf:HF0001A2",
+    "body": {
+      "v": "0.99.109",
+      "service": "sdrplay",
+      "phase": "gave-up"
+    }
+  }
+}

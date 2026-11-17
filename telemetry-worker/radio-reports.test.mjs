@@ -73,6 +73,13 @@ async function fixtureFailures(mod) {
     const r = await send(mod, requestText(fx));
     const where = fx.file;
     if (r.status !== fx.status) { bad.push(`${where}: status ${r.status}, want ${fx.status}`); continue; }
+    if (fx.expect === 'drop') {
+      // checked, answered 204 and then dropped (a test, CI or owner run: `synthetic: 1`): nothing written, nothing forwarded
+      if (r.usage.length || r.first.length || r.counts.length || r.forwarded.length || r.beats.length) {
+        bad.push(`${where}: a synthetic message wrote or forwarded something`);
+      }
+      continue;
+    }
     if (fx.expect === 'refuse') {
       if (r.text !== `refused: ${fx.code}`) { bad.push(`${where}: body "${r.text}", want refused: ${fx.code}`); }
       if (r.usage.length || r.first.length || r.counts.length || r.forwarded.length || r.beats.length) {
@@ -139,7 +146,11 @@ test('the contract names the same drivers and reason classes as the failure voca
   const vocab = JSON.parse(text.slice(text.indexOf('[', begin), text.lastIndexOf(']', end) + 1));
   const rf = vocab.find((e) => e.name === 'radio_fail');
   assert.deepEqual(rr.DRIVERS, rf.qualifiers[0]);
-  assert.deepEqual(rr.REASON_CLASSES, rf.qualifiers[1]);
+  // Must-fix lane E (contract issues 15 and 16): a failure REPORT has two classes the usage record's health tokens do not
+  // (`transfer`, `tuner`: the application files them as `control` there, so its closed token vocabulary does not change).
+  // The vocabulary's nine are the report's first nine, in the same order, and the two extras come after them.
+  assert.deepEqual(rr.REASON_CLASSES.slice(0, rf.qualifiers[1].length), rf.qualifiers[1]);
+  assert.deepEqual(rr.REASON_CLASSES.slice(rf.qualifiers[1].length), ['transfer', 'tuner']);
 });
 
 // ---- one usage row is one launch ----------------------------------------------------------------------------------------
@@ -555,7 +566,7 @@ test('every kind of the family, sent to the Worker deployed today, is answered 4
     assert.equal(r.usage.length + r.beats.length, 0);
     seen.add(fx.request.kind);
   }
-  assert.deepEqual([...seen].sort(), ['first_session', 'radio_close', 'radio_fail', 'radio_found', 'radio_open', 'radio_recovery', 'radio_settings', 'radio_stream', 'session_env']);
+  assert.deepEqual([...seen].sort(), ['first_session', 'install_outcome', 'radio_close', 'radio_fail', 'radio_found', 'radio_open', 'radio_recovery', 'radio_settings', 'radio_stream', 'session_end', 'session_env', 'session_fault']);
 });
 
 test('the window word (site lane 2, view f): `new` or `legacy` becomes blob16 of a usage record; anything else, or nothing, leaves the 15 blobs as they were', async () => {
@@ -571,6 +582,96 @@ test('the window word (site lane 2, view f): `new` or `legacy` becomes blob16 of
   fs.body.window = 'new';
   const r = await send(worker, JSON.stringify(fs));
   assert.equal(r.first[0].blobs.length, 17, 'a first-session record never carries the window word: its columns are as the contract says');
+});
+
+// ---- must-fix lane E: the test marker, the new kinds ---------------------------------------------------------------------------
+
+test('a message marked `synthetic: 1` is checked, answered 204 and dropped everywhere: no forward, no row, no counter, no beat', async () => {
+  const drops = loadFixtures().filter((f) => f.expect === 'drop');
+  assert.ok(drops.length >= 5, `${drops.length} drop fixtures`);
+  for (const fx of drops) {
+    const r = await send(worker, requestText(fx));
+    assert.equal(r.status, 204, fx.file);
+    assert.equal(r.usage.length + r.beats.length + r.first.length + r.counts.length + r.forwarded.length, 0, fx.file);
+    // the same message without the marker is NOT dropped: the marker is the only difference
+    const real = JSON.parse(requestText(fx));
+    delete real.synthetic;
+    const r2 = await send(worker, JSON.stringify(real));
+    assert.equal(r2.usage.length + r2.beats.length + r2.first.length + r2.forwarded.length > 0, true, `${fx.file} without the marker`);
+  }
+});
+
+test('a synthetic message that is malformed is still refused (an application bug is seen), and the marker must be exactly 1', async () => {
+  const fx = loadFixtures().find((f) => f.file === 'drop-synthetic-radio-fail.json');
+  const bad = JSON.parse(JSON.stringify(fx.request));
+  bad.body.reasonClass = 'weird';
+  assert.equal((await send(worker, JSON.stringify(bad))).status, 400);
+  for (const marker of [0, 2, true, '1', null, [1]]) {
+    const m = JSON.parse(JSON.stringify(fx.request));
+    m.synthetic = marker;
+    const r = await send(worker, JSON.stringify(m));
+    assert.equal(r.status, 400, JSON.stringify(marker));
+    assert.equal(r.text, 'refused: bad-field', JSON.stringify(marker));
+  }
+});
+
+test('a usage record or a beat with `synthetic` that is not exactly 1 is NOT dropped (only the marker the application sends counts)', async () => {
+  const base = { id: 'a'.repeat(32), v: '0.99.109', os: 'w', arch: 'x64', launches: 1, sessionSec: 5 };
+  for (const marker of [0, 2, true, '1', null]) {
+    assert.equal((await send(worker, JSON.stringify({ ...base, synthetic: marker }))).usage.length, 1, JSON.stringify(marker));
+    assert.equal((await send(worker, JSON.stringify({ id: base.id, v: '1', beat: 1, synthetic: marker }))).beats.length, 1, JSON.stringify(marker));
+  }
+});
+
+test('the new kinds: session_end and session_fault are accepted from their fixtures, take no radio key, and are forwarded once', async () => {
+  for (const name of ['valid-session-end-no-radio', 'valid-session-end-with-dropped', 'valid-session-fault-service', 'valid-session-env-with-dropped']) {
+    const fx = loadFixtures().find((f) => f.file === `${name}.json`);
+    assert.ok(fx, name);
+    const r = await send(worker, requestText(fx));
+    assert.equal(r.status, 204, name);
+    assert.equal(r.forwarded.length, 1, name);
+    assert.equal(JSON.parse(r.forwarded[0].init.body).radioKey, '', name);
+  }
+});
+
+test('the failure classes the application now sends (transfer, tuner) and the recovery phase degraded are in the lists the validator reads', () => {
+  assert.ok(rr.REASON_CLASSES.includes('transfer') && rr.REASON_CLASSES.includes('tuner'));
+  assert.ok(rr.JOURNAL_KINDS.includes('session_end') && rr.JOURNAL_KINDS.includes('session_fault'));
+});
+
+test('BREAK-IT: if the synthetic marker is not honoured by the radio-report family, the drop fixtures go red', async () => {
+  const broken = await brokenCopy((w, r) => ({ w: mustChange(w, 'if (v.synthetic) { return new Response(null, { status: 204 }); }', ''), r }));
+  const bad = await fixtureFailures(broken);
+  assert.ok(bad.some((b) => b.startsWith('drop-synthetic-radio-fail.json')), bad.join('\n'));
+  assert.ok(bad.some((b) => b.startsWith('drop-synthetic-first-session.json')), bad.join('\n'));
+});
+
+test('BREAK-IT: if the usage record and the beat ignore the marker, the drop fixtures go red', async () => {
+  const broken = await brokenCopy((w, r) => ({ w: mustChange(w, 'if (body.synthetic === 1) {', 'if (false) {'), r }));
+  const bad = await fixtureFailures(broken);
+  assert.ok(bad.some((b) => b.startsWith('drop-synthetic-usage-record.json')), bad.join('\n'));
+  assert.ok(bad.some((b) => b.startsWith('drop-synthetic-beat.json')), bad.join('\n'));
+});
+
+test('the installer report: a failed install is forwarded as the anonymous form, no install id is ever added, and the Worker writes no dataset row', async () => {
+  const fx = loadFixtures().find((f) => f.file === 'valid-install-outcome-failed.json');
+  const r = await send(worker, requestText(fx));
+  assert.equal(r.status, 204);
+  assert.equal(r.forwarded.length, 1);
+  assert.deepEqual(JSON.parse(r.forwarded[0].init.body), fx.request);
+  assert.equal(r.usage.length + r.beats.length + r.first.length + r.counts.length, 0);
+});
+
+test('BREAK-IT: if the installer report may carry an install id, its linking fixtures go red', async () => {
+  const broken = await brokenCopy((w, r) => ({ w, r: mustChange(r, "for (const f of ['installId', 'sessionId', 'seq', 'radioKey', 'age']) {", "for (const f of []) {") }));
+  const bad = await fixtureFailures(broken);
+  assert.ok(bad.some((b) => b.startsWith('refuse-install-outcome-with-install-id.json')), bad.join('\n'));
+});
+
+test('BREAK-IT: if session_end is not a known kind (the state before this lane), its fixtures go red as unknown-kind', async () => {
+  const broken = await brokenCopy((w, r) => ({ w, r: mustChange(r, "'install_outcome', ...JOURNAL_KINDS];", "'install_outcome', ...JOURNAL_KINDS.filter((k) => k !== 'session_end')];") }));
+  const bad = await fixtureFailures(broken);
+  assert.ok(bad.some((b) => b.startsWith('valid-session-end-no-radio.json')), bad.join('\n'));
 });
 
 test('BREAK-IT: if the anonymous failure may carry a session id, the linking fixtures go red', async () => {

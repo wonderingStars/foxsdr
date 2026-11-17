@@ -1,0 +1,17 @@
+{
+  "name": "valid-install-outcome-blocked",
+  "about": "Setup stopped before copying anything",
+  "expect": "accept",
+  "status": 204,
+  "request": {
+    "schema": 2,
+    "kind": "install_outcome",
+    "messageId": "0123456789abcdef",
+    "t": 0,
+    "body": {
+      "outcome": "blocked",
+      "appVersion": "0.99.109",
+      "windows": "6.1.7601"
+    }
+  }
+}

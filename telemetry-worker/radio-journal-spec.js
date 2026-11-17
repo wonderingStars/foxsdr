@@ -16,7 +16,7 @@
 
 export const LISTS = {
   drivers: ['rtlsdr', 'hackrf', 'airspy', 'airspyhf', 'sdrplay', 'mirisdr', 'rx888', 'pluto', 'aor', 'hydrasdr', 'rtltcp', 'soapy', 'soundcard', 'other'],
-  reasonClasses: ['busy', 'driver', 'bind', 'absent', 'timeout', 'vendor', 'rate', 'control', 'other'],
+  reasonClasses: ['busy', 'driver', 'bind', 'absent', 'timeout', 'vendor', 'rate', 'control', 'other', 'transfer', 'tuner'],
   triggers: ['startup-restore', 'user-pick', 'saved-retry', 'patch-radio', 'auto-reopen', 'other'],
   channels: ['store', 'installer', 'appimage', 'tarball', 'android', ''],
   updateChannels: ['stable', 'beta', ''],
@@ -74,7 +74,8 @@ export const KIND_SPECS = {
       { name: 'directSampling', type: 'enum', values: ['off', 'i', 'q'] },
       { name: 'decimation', type: 'int', lo: 1, hi: 65536 },
       { name: 'band', type: 'enum', list: 'bands' },
-      { name: 'refused', type: 'enum', values: ['rate', 'bandwidth', 'gain', 'ppm', 'bias', 'antenna', 'direct', 'decimation'] },
+      { name: 'refused', type: 'enum', values: ['rate', 'bandwidth', 'gain', 'ppm', 'bias', 'antenna', 'direct', 'decimation', 'frequency', 'other'] },
+      { name: 'refusedClass', type: 'enum', values: ['radio', 'range'] },
       { name: 'reason', type: 'text', lo: 1, hi: 200 },
     ],
   },
@@ -99,7 +100,7 @@ export const KIND_SPECS = {
   // A recovery: a reopen, a restart of the stream, a vendor-call retry... (`what` is the application's own recovered word).
   radio_recovery: {
     maxBytes: 4096, radio: true, fields: [...COMMON,
-      { name: 'phase', type: 'enum', values: ['start', 'ok', 'gave-up'], req: true },
+      { name: 'phase', type: 'enum', values: ['start', 'ok', 'gave-up', 'degraded'], req: true },
       { name: 'what', type: 'str', lo: 3, hi: 24, re: '^[a-z0-9]{3,24}$', req: true },
       { name: 'attempt', type: 'int', lo: 1, hi: 10000, req: true },
       { name: 'reasonClass', type: 'enum', list: 'reasonClasses' },
@@ -136,6 +137,32 @@ export const KIND_SPECS = {
       { name: 'displayCount', type: 'int', lo: 0, hi: 16 },
       { name: 'displayScalePct', type: 'arr', max: 8, item: { type: 'int', lo: 25, hi: 1000 } },
       { name: 'diagOn', type: 'bool', req: true },
+      { name: 'dropped', type: 'int', lo: 0, hi: 1000000 },
+    ],
+  },
+  // Once a session, at quit, when no radio was ever opened (L1): what the scan listed (models only), how many scans landed, how many opens failed.
+  // No radio key.
+  session_end: {
+    maxBytes: 4096, radio: false, fields: [
+      { name: 'v', type: 'str', lo: 1, hi: 48, req: true },
+      { name: 'opened', type: 'bool', req: true },
+      { name: 'scans', type: 'int', lo: 0, hi: 1000000, req: true },
+      { name: 'openFailures', type: 'int', lo: 0, hi: 1000000, req: true },
+      { name: 'listed', type: 'arr', max: 8, item: { type: 'model', lo: 1, hi: 32 } },
+      { name: 'sessionSec', type: 'int', lo: 0, hi: 2592000, req: true },
+      { name: 'dropped', type: 'int', lo: 0, hi: 1000000 },
+    ],
+  },
+  // A fault of something the radios depend on that is not one radio (the SDRplay API service not running), with no radio open to carry it.
+  // No radio key.
+  session_fault: {
+    maxBytes: 4096, radio: false, fields: [
+      { name: 'v', type: 'str', lo: 1, hi: 48, req: true },
+      { name: 'service', type: 'str', lo: 3, hi: 24, re: '^[a-z0-9]{3,24}$', req: true },
+      { name: 'phase', type: 'enum', values: ['start', 'ok', 'gave-up', 'degraded'], req: true },
+      { name: 'reasonClass', type: 'enum', list: 'reasonClasses' },
+      { name: 'reason', type: 'text', lo: 1, hi: 400 },
+      { name: 'dropped', type: 'int', lo: 0, hi: 1000000 },
     ],
   },
 };

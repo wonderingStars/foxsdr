@@ -24,7 +24,7 @@ export const FIRST_SESSION_TRIGGERS = ['after-minute', 'on-failure'];
 // Named for a later schema (a batched envelope, contract section 3.9) and refused until it is defined.
 export const RESERVED_KINDS = ['radio_batch'];
 export const JOURNAL_KINDS = Object.keys(KIND_SPECS);
-export const KINDS = ['radio_fail', 'first_session', 'radio_beat', ...JOURNAL_KINDS];
+export const KINDS = ['radio_fail', 'first_session', 'radio_beat', 'install_outcome', ...JOURNAL_KINDS];
 
 // The radio lines of the log ring: the first word (after an optional time stamp) of a line.
 const RADIO_LINE_RE = /^(?:[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} )?(?:source|soapy|vendor|radio|rtltcp|aor|rx888|pluto|mirisdr|hackrf|airspy|airspyhf|rtlsdr|sdrplay|hydrasdr|usb|patch): /;
@@ -171,13 +171,24 @@ function valueOk(f, v, ctx) {
 // `msg` is the parsed JSON. `opts.scrubModel` is worker.js's scrubModel. Returns { ok: true, kind, canonical }
 // or { ok: false, code }. The caller has already enforced the size limit and parsed the JSON.
 export function validateRadioMessage(msg, opts) {
+  const v = validateRadioMessageInner(msg, opts);
+  if (v.ok && msg.synthetic === 1) { v.synthetic = true; }
+  return v;
+}
+
+function validateRadioMessageInner(msg, opts) {
   if (msg === null || typeof msg !== 'object' || Array.isArray(msg)) { return refuse('bad-json'); }
   if (typeof msg.kind !== 'string') { return refuse('unknown-kind'); }
   if (RESERVED_KINDS.includes(msg.kind)) { return refuse('reserved-kind'); }
   if (!KINDS.includes(msg.kind)) { return refuse('unknown-kind'); }
   if (msg.schema !== SCHEMA) { return refuse('bad-schema'); }
   if (hasForbiddenKey(msg)) { return refuse('forbidden-field'); }
+  // THE TEST MARKER (contract 1.3): an envelope member `synthetic` that is exactly the number 1 marks a message from a test, CI or the
+  // owner's own run. It is checked like any field and then the caller DROPS the message (`synthetic: true` in the answer): it is
+  // never forwarded, stored or counted. Any other value is a malformed field.
+  if (msg.synthetic !== undefined && msg.synthetic !== 1) { return refuse('bad-field'); }
   if (msg.kind === 'radio_beat') { return validateBeat(msg); }
+  if (msg.kind === 'install_outcome') { return validateInstallOutcome(msg); }
 
   // THE INSTALL ID. Every kind carries one except a radio_fail from an install with Usage reporting off: that one has
   // no install id, no session id and no sequence number (nothing that links two of its reports), and a random
@@ -338,4 +349,34 @@ function validateFirstSession(msg, body) {
     if (body[f] !== undefined) { out[f] = body[f]; }
   }
   return { ok: true, kind: 'first_session', anonymous: false, canonical: { ...envelopeOf(msg, false, ''), body: out } };
+}
+
+// The installer's report (contract section 13): the anonymous envelope with only a random message id, and a body of exactly three
+// words. It is the one kind that REFUSES an unknown body key: it must carry nothing but these three.
+const OUTCOMES = ['failed', 'cancelled', 'blocked'];
+const APP_VERSION_RE = /^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}$/;
+const WINDOWS_RE = /^[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,6}$/;
+
+function validateInstallOutcome(msg) {
+  for (const f of ['messageId', 't', 'body']) {
+    if (msg[f] === undefined) { return refuse('missing-field'); }
+  }
+  for (const f of ['installId', 'sessionId', 'seq', 'radioKey', 'age']) {
+    if (msg[f] !== undefined) { return refuse('bad-field'); }
+  }
+  if (typeof msg.messageId !== 'string' || !SESSION_RE.test(msg.messageId)) { return refuse('bad-field'); }
+  if (msg.t !== 0) { return refuse('bad-field'); }
+  const body = msg.body;
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) { return refuse('bad-field'); }
+  for (const f of ['outcome', 'appVersion', 'windows']) {
+    if (body[f] === undefined) { return refuse('missing-field'); }
+  }
+  if (Object.keys(body).some((k) => !['outcome', 'appVersion', 'windows'].includes(k))) { return refuse('bad-field'); }
+  if (typeof body.outcome !== 'string' || !OUTCOMES.includes(body.outcome)) { return refuse('bad-field'); }
+  if (typeof body.appVersion !== 'string' || !APP_VERSION_RE.test(body.appVersion)) { return refuse('bad-field'); }
+  if (typeof body.windows !== 'string' || !WINDOWS_RE.test(body.windows)) { return refuse('bad-field'); }
+  return {
+    ok: true, kind: 'install_outcome', anonymous: true,
+    canonical: { schema: SCHEMA, kind: 'install_outcome', messageId: msg.messageId, t: 0, body: { outcome: body.outcome, appVersion: body.appVersion, windows: body.windows } },
+  };
 }

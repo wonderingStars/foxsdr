@@ -156,7 +156,87 @@ refuse('refuse-beat-with-a-frequency', 'a beat whose radio is a frequency, not a
   { id: INSTALL, v: '0.99.109', beat: 1, radios: ['98600000'] });
 refuse('refuse-beat-radios-not-a-list', 'a beat whose radios is not a list', 'bad-field', { id: INSTALL, v: '0.99.109', beat: 1, radios: KEY });
 
+// ---- must-fix lane E: the words the application sends that the contract had no place for (CONTRACT ISSUES 1 to 4, 9 to 12, 15 to 17) ----
+const failCanon = (over) => ({ schema: 2, kind: 'radio_fail', installId: INSTALL, sessionId: SESSION, seq: 3, t: 412, radioKey: FAILKEY, body: { ...failCanonicalBody, ...over } });
+const failMsg = (over) => ({ schema: 2, kind: 'radio_fail', installId: INSTALL, sessionId: SESSION, seq: 3, t: 412, radioKey: FAILKEY, body: { ...failBody, ...over } });
+valid('valid-radio-fail-class-transfer', 'issue 15: a USB transfer that failed while the radio was being opened has its own class (it was sent as `control`)',
+  failMsg({ reason: 'the radio stopped answering while it was being opened: a bulk read failed (Windows error 31)', reasonClass: 'transfer' }),
+  { canonical: failCanon({ reason: 'the radio stopped answering while it was being opened: a bulk read failed (Windows error 31)', reasonClass: 'transfer' }) });
+valid('valid-radio-fail-class-tuner', 'issue 16: the tuner or demodulator inside an RTL-SDR would not initialise (it was sent as `control`)',
+  failMsg({ reason: 'the tuner would not initialise: its PLL did not lock', reasonClass: 'tuner' }),
+  { canonical: failCanon({ reason: 'the tuner would not initialise: its PLL did not lock', reasonClass: 'tuner' }) });
+valid('valid-session-end-no-radio', 'issue 2: the session ended with no radio opened (L1); what the scan listed (models only), how many scans, how many opens failed; no radio key',
+  env('session_end', 20, 1800, { v: '0.99.109', opened: false, scans: 3, openFailures: 1, listed: ['Generic RTL2832U'], sessionSec: 1800 }, { radioKey: '' }));
+valid('valid-session-end-with-dropped', 'issue 4: a message with no radio key may say how many journal lines the folder\'s bounds dropped (the daily bound counts per radio key, this counts the rest)',
+  env('session_end', 21, 40, { v: '0.99.109', opened: false, scans: 0, openFailures: 0, listed: [], sessionSec: 40, dropped: 7 }, { radioKey: '' }));
+valid('valid-session-env-with-dropped', 'issue 4: the environment record may carry the same count',
+  env('session_env', 2, 1, { v: '0.99.109', os: 'Windows 10.0.22631', arch: 'x64', launches: 2, cpu: 'AMD Ryzen 5 3600', audioApi: 'mme', diagOn: false, dropped: 12 }, { radioKey: '' }));
+valid('valid-session-fault-service', 'issue 12: the SDRplay API service is not running and no radio is open to carry it; no radio key',
+  env('session_fault', 22, 9, { v: '0.99.109', service: 'sdrplay', phase: 'gave-up', reasonClass: 'driver', reason: 'the SDRplay API service is not running' }, { radioKey: '' }));
+valid('valid-radio-settings-refused-frequency', 'issue 9: the radio refused a retune (the frequency itself is never sent: only the word)',
+  env('radio_settings', 9, 8, { ...base, why: 'user', refused: 'frequency', refusedClass: 'radio', reason: 'refused: frequency: the tuner would not lock' }));
+valid('valid-radio-settings-refused-other', 'issue 9: a control with no word of its own',
+  env('radio_settings', 9, 8, { ...base, why: 'auto', refused: 'other', refusedClass: 'radio', reason: 'refused: other: the radio refused a setting' }));
+valid('valid-radio-settings-refused-range', 'issue 10: a value the user typed out of range, which says nothing about the radio',
+  env('radio_settings', 9, 8, { ...base, why: 'user', refused: 'gain', refusedClass: 'range', reason: 'out of range: gain' }));
+valid('valid-radio-recovery-degraded', 'issue 11: the radio keeps streaming but is deaf (the tuner\'s PLL did not lock): degraded, not gave-up',
+  env('radio_recovery', 13, 140, { ...base, phase: 'degraded', what: 'pllunlocked', attempt: 1, reasonClass: 'tuner', reason: 'the tuner\'s PLL did not lock' }));
+valid('valid-radio-recovery-service-words', 'issue 11: the words the application sends for `what` besides reopen, usbstuck and streamrestart',
+  env('radio_recovery', 14, 141, { ...base, phase: 'ok', what: 'servicestate', attempt: 2 }));
+valid('valid-radio-close-without-open', 'issue 17: a radio that stopped under the HackRF sweeper has a close and never had an open (the sweeper journals none)',
+  env('radio_close', 16, 200, { driver: 'hackrf', model: 'HackRF One', serial: '0000000000000000a06', v: '0.99.109', cause: 'died', openSec: 0, reason: 'the sweep stopped: the radio stopped answering' }, { radioKey: 'hackrf-one:0000000000000000A06' }));
+const dropFx = (name, about, request) => write(name, { about, expect: 'drop', status: 204, request });
+dropFx('drop-synthetic-radio-fail', 'issue 3: a failure report from a test, CI or the owner\'s own run (`synthetic: 1`) is checked, answered 204 and then dropped: not forwarded, not counted',
+  { ...failMsg({}), synthetic: 1 });
+dropFx('drop-synthetic-journal-event', 'issue 3: the same for a journal event',
+  { ...open(), synthetic: 1 });
+dropFx('drop-synthetic-first-session', 'issue 3: and for the first-session record (it must not reach foxsdr_firstsession)',
+  env('first_session', 5, 60, { v: '0.99.109', os: 'Windows 10.0.22631', arch: 'x64', launches: 1, trigger: 'after-minute' }, { radioKey: '', synthetic: 1 }));
+dropFx('drop-synthetic-usage-record', 'issue 3: a usage record carries the marker too (it has no kind, so it is not a radio-report message)',
+  { id: INSTALL, v: '0.99.109', os: 'Windows 10.0.22631', arch: 'x64', launches: 3, crashes: 0, sessionSec: 100, synthetic: 1 });
+dropFx('drop-synthetic-beat', 'issue 3: and a beat',
+  { id: INSTALL, v: '0.99.109', beat: 1, radios: [KEY], synthetic: 1 });
+refuse('refuse-synthetic-is-not-one', 'the marker is exactly the number 1: anything else is a malformed field', 'bad-field', { ...failMsg({}), synthetic: 'yes' });
+refuse('refuse-ring-line-with-level-word', 'issue 1: a raw ring line still carries its level word (`info`, `warn`); the sender removes it and the contract\'s pattern has none', 'bad-field',
+  failMsg({ logLines: ['12:01:07.331 info soapy: airspyhf open failed'] }));
+refuse('refuse-ring-line-two-word-prefix', 'issue 1: a two-word prefix (`radio setup:`) is not a radio line; the sender leaves such lines out', 'bad-field',
+  failMsg({ logLines: ['12:01:07.331 radio setup: the first-run check found 1 radio'] }));
+refuse('refuse-session-end-with-radio-key', 'a session_end names a radio', 'bad-field',
+  { ...env('session_end', 20, 1800, { v: '0.99.109', opened: false, scans: 3, openFailures: 1, listed: [], sessionSec: 1800 }), radioKey: KEY });
+refuse('refuse-session-end-opened-is-not-a-bool', 'a session_end whose `opened` is not true or false', 'bad-field',
+  env('session_end', 20, 1800, { v: '0.99.109', opened: 'no', scans: 3, openFailures: 1, listed: [], sessionSec: 1800 }, { radioKey: '' }));
+refuse('refuse-session-end-nine-listed', 'a session_end listing nine models (the most is eight)', 'bad-field',
+  env('session_end', 20, 1800, { v: '0.99.109', opened: false, scans: 3, openFailures: 1, listed: Array.from({ length: 9 }, (_, i) => `Model ${i}`), sessionSec: 1800 }, { radioKey: '' }));
+refuse('refuse-session-end-address-in-listed', 'a session_end whose listed model is an address', 'bad-field',
+  env('session_end', 20, 1800, { v: '0.99.109', opened: false, scans: 3, openFailures: 1, listed: ['10.1.2.3'], sessionSec: 1800 }, { radioKey: '' }));
+refuse('refuse-session-fault-with-radio-key', 'a session_fault names a radio (a fault of one radio is a radio_recovery)', 'bad-field',
+  { ...env('session_fault', 22, 9, { v: '0.99.109', service: 'sdrplay', phase: 'gave-up' }), radioKey: KEY });
+refuse('refuse-session-fault-path-in-reason', 'a path in a service fault\'s reason', 'path-in-text',
+  env('session_fault', 22, 9, { v: '0.99.109', service: 'sdrplay', phase: 'start', reason: 'could not start C:\\Program Files\\SDRplay\\API\\service.exe' }, { radioKey: '' }));
+refuse('refuse-settings-refused-class-unknown', 'a refusedClass that is not radio or range', 'bad-field',
+  env('radio_settings', 9, 8, { ...base, why: 'user', refused: 'gain', refusedClass: 'maybe' }));
+refuse('refuse-recovery-phase-unknown', 'a recovery phase that is not one of the four', 'bad-field',
+  env('radio_recovery', 13, 140, { ...base, phase: 'limping', what: 'reopen', attempt: 1 }));
+
 // ---- the manifest, and the JSON copy of the field tables ---------------------------------------------------------------------
+// ---- the installer's report (contract section 13) ----------------------------------------------------------------------------
+const inst = (body, over = {}) => ({ schema: 2, kind: 'install_outcome', messageId: '0123456789abcdef', t: 0, body: { outcome: 'failed', appVersion: '0.99.109', windows: '10.0.22631', ...body }, ...over });
+valid('valid-install-outcome-failed', 'the installer began copying and did not finish: no install id (the program never ran), a random message id, three words', inst({}));
+valid('valid-install-outcome-cancelled', 'the person cancelled Setup', inst({ outcome: 'cancelled' }));
+valid('valid-install-outcome-blocked', 'Setup stopped before copying anything', inst({ outcome: 'blocked', windows: '6.1.7601' }));
+refuse('refuse-install-outcome-succeeded', 'a successful install is never reported (the first run\'s usage report is its trace)', 'bad-field', inst({ outcome: 'succeeded' }));
+refuse('refuse-install-outcome-with-install-id', 'the installer has no install id; a message that carries one is refused', 'bad-field', inst({}, { installId: INSTALL }));
+refuse('refuse-install-outcome-with-session-id', 'nor a session id', 'bad-field', inst({}, { sessionId: SESSION }));
+refuse('refuse-install-outcome-with-radio-key', 'nor a radio key', 'bad-field', inst({}, { radioKey: KEY }));
+refuse('refuse-install-outcome-extra-body-key', 'this kind carries nothing but its three words: an unknown body key is refused, not dropped', 'bad-field', inst({ machine: 'x' }));
+refuse('refuse-install-outcome-bad-version', 'an app version that is not three dotted numbers', 'bad-field', inst({ appVersion: '0.99.109-beta' }));
+refuse('refuse-install-outcome-bad-windows', 'a Windows version that is not three dotted numbers', 'bad-field', inst({ windows: 'Windows 11' }));
+refuse('refuse-install-outcome-nonzero-time', 'the installer has no session: t is exactly 0', 'bad-field', inst({}, { t: 5 }));
+refuse('refuse-install-outcome-without-message-id', 'a random message id is required (a retry whose answer was lost counts once)', 'missing-field',
+  (() => { const m = inst({}); delete m.messageId; return m; })());
+refuse('refuse-install-outcome-bad-message-id', 'a message id that is not 16 lower-case hex characters', 'bad-field', inst({}, { messageId: 'NOT-HEX-AT-ALL!!' }));
+dropFx('drop-synthetic-install-outcome', 'the marker drops the installer\'s report too (a CI run of the installer is not a person)', inst({}, { synthetic: 1 }));
+
 const names = readdirSync(DIR).filter((n) => n.endsWith('.json')).sort();
 const lines = names.map((n) => {
   const text = readFileSync(join(DIR, n), 'utf8').replace(/\r\n/g, '\n');
