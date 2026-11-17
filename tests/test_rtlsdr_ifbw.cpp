@@ -150,7 +150,10 @@ int main() {
         const rr::RadioIdentity id2 = rr::identify("rtlsdr", "serial=00000002");   // the reporter folds a repeat of one control on one radio for seconds: the second case is another radio
         {
             rrrig::Rig t;
-            RtlSdrSource r;
+            // The source is on the HEAP on purpose: the reporter holds what a driver says while its radio is still opening by the source's ADDRESS and says it when a source is registered at that
+            // address. The earlier blocks of this test left such held events for sources that never registered; a stack object here can take a dead one's address (GCC reuses the slot, MSVC did not).
+            const auto rHeap = std::make_unique<RtlSdrSource>();
+            RtlSdrSource& r = *rHeap;
             auto fk = std::make_unique<FakeUsbDevice>();
             dressAsR820T(*fk);
             CHECK(r.openWithTransport(std::move(fk), "fake R820T dongle"));
@@ -167,7 +170,8 @@ int main() {
         }
         {
             rrrig::Rig t;
-            RtlSdrSource r;
+            const auto rHeap = std::make_unique<RtlSdrSource>();
+            RtlSdrSource& r = *rHeap;
             auto fk = std::make_unique<FakeUsbDevice>();
             dressAsR820T(*fk);
             FakeUsbDevice* fp = fk.get();
