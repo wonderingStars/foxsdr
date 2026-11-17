@@ -145,6 +145,10 @@ struct RadioView {
     Signatures paneSigs;                        // the same for this radio's row in the workspace's model (workspace_publish.cpp): a second cache, so the two targets never share one
     PlotSize plot;
     PaneFigures fig;
+    // The ticks down the waterfall as the window shows them: `fig` is rebuilt empty on every tick and filled only on a tick that has a NEW spectrum frame,
+    // and the window keeps the last published ticks between frames, so the drive read-back (wf.ticks, wf.tick1) reads this copy, not a `fig` that a tick
+    // without a new frame has just emptied (the look-stamps drive failed 3 runs in 30 on exactly that read, engine merge 10).
+    std::vector<Tick> shownAgeTicks;
     // LANE B (docs/multi-radio-records/screen-b.md): what the extras keep per radio
     foxsdr::slintextras::RowPacer pacer;                       // S10: the waterfall's line rate and the strongest-of-the-frames line
     double lastRowUtcS = 0;                                    // S8: the system clock when the newest waterfall line was made

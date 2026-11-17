@@ -47,6 +47,7 @@
 #include "core/app_commands.hpp"
 #include "core/patch_devices.hpp"
 #include "core/patch_graph.hpp"
+#include "core/record_finish.hpp"
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "engine/receiver.hpp"
@@ -865,6 +866,10 @@ void testPerRadioRecorders() {
     CHECK_EQ(r1iq, 1);
     CHECK_EQ(r2iq, 1);
     CHECK_EQ(r2audio, 1);
+    // A stop hands the file to the record finisher's own worker (core/record_finish.hpp): the tail of the take is written, the header patched and the file closed THERE, not
+    // in the pass that stopped it, and until it has landed the file on disk is the 44-byte header the opener flushed (the stdio buffer holds the samples). This check used
+    // to look after a fixed 200 ms and failed one run in fifty when the worker had not run yet; wait for every finish to land, as the quit does (engine merge 10).
+    CHECK(cascade::core::RecordFinisher::drain(std::chrono::steady_clock::now() + std::chrono::seconds(20)));
     for (const std::string& f : files) {
         if (f.rfind("radio", 0) == 0) { CHECK(fs::file_size(dir / f) > 44u); }
     }

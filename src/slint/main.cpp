@@ -2738,6 +2738,7 @@ int main(int argc, char** argv) {
                 if (stampMode == 2) { std::time_t tt = std::time(nullptr); std::tm lt{}; localtime_r(&tt, &lt); offsetS = static_cast<double>(lt.tm_gmtoff); }
 #endif
                 fig.ageTicks = stampMode == 0 || rv.lastRowUtcS <= 0.0 ? ageTicks(history, px.wfH) : foxsdr::slintextras::clockTicks(rv.lastRowUtcS, rv.secondsPerRow, px.wfH, 48.0, stampMode, offsetS);
+                rv.shownAgeTicks = fig.ageTicks;
             }
             // the peak inside the passband
             const double lo = fracOf(st.tunedHz - st.bandwidthHz / 2.0, info.centreHz, info.spanHz), hi = fracOf(st.tunedHz + st.bandwidthHz / 2.0, info.centreHz, info.spanHz);
@@ -3679,9 +3680,9 @@ int main(int argc, char** argv) {
             else if (what == "lines") { out = std::to_string(rv.pacer.lines()); }
             else if (what == "rowspacing") { out = fmt("%.4f", rv.secondsPerRow); }
             else if (what == "keycustom") { out = ui->global<WaterfallLook>().get_custom() ? "1" : "0"; }
-            else if (what == "ticks") { out = std::to_string(rv.fig.ageTicks.size()); }
-            else if (what == "tick1") { out = rv.fig.ageTicks.size() > 1 ? rv.fig.ageTicks[1].label : std::string("-"); }
-            else if (what == "tick1frac") { out = rv.fig.ageTicks.size() > 1 ? fmt("%.4f", rv.fig.ageTicks[1].frac) : std::string("-"); }
+            else if (what == "ticks") { out = std::to_string(rv.shownAgeTicks.size()); }
+            else if (what == "tick1") { out = rv.shownAgeTicks.size() > 1 ? rv.shownAgeTicks[1].label : std::string("-"); }
+            else if (what == "tick1frac") { out = rv.shownAgeTicks.size() > 1 ? fmt("%.4f", rv.shownAgeTicks[1].frac) : std::string("-"); }
             else if (what == "foot") { out = rv.fig.footLeft; }
             // window gaps lane 4: the gap break, the key's coverage, the range rail and what the Airband monitor puts on the plots
             else if (what == "gap") { out = fmt("%.3f", static_cast<double>(rv.fig.wfChrome.gapPos)); }
