@@ -1334,6 +1334,12 @@ void testReasonsFromTheDriversOwnSentences() {
         // a vendor stack's own words
         {"sdrplay", "SDRplay SelectDevice failed: sdrplay_api_Fail", RadioReason::Vendor},
         {"soapy", "SoapySDR threw: something unforeseen (args: driver=lime)", RadioReason::Vendor},
+        // THE RAW I/Q STREAM'S TWO SENTENCES (raw_iq_net_source.cpp), reworded by the look-fixes lane (the "source thread:" prefix and the lower-case developer wording went; the
+        // sentence now goes through tr()): the new wording must be sorted into the class the old one was, English window or not
+        {"rawiq", "the I/Q stream stopped: no samples arrived for 3.0 s", RadioReason::Other},
+        {"rawiq", "No samples arrived for 3 seconds: the sender may have stopped, or its address or port may be wrong", RadioReason::Other},
+        {"rawiq", "the I/Q stream connection failed: connection refused", RadioReason::Vendor},
+        {"rawiq", "The connection to the I/Q stream failed: connection refused", RadioReason::Vendor},
         // nothing recognised: other, which is the denominator staying right
         {"hackrf", "something unforeseen", RadioReason::Other},
         {"rtlsdr", "", RadioReason::Other},
