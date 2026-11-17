@@ -551,6 +551,7 @@ void Engine::pumpWireC() {
     // THE SERVERS OTHER PROGRAMS CONNECT TO (screen lane S4b; engine/s4b_servers.hpp): every one is off by default, on this computer only unless its own key says otherwise.
     {
         namespace s4b = cascade::engine::s4b;
+        const bool serversFirstPass = !s.serversHooked;   // the very first pass of this engine says nothing new (see the three places below): what it publishes is built from the same settings, as the outputs block's first configure does
         if (!s.serversHooked) {
             s.serversHooked = true;
             s4b::Hooks h;
@@ -617,11 +618,12 @@ void Engine::pumpWireC() {
                 return (r.status == FOXAPI_OK || r.status == FOXAPI_NO_CHANGE) ? std::string() : std::string(r.message);
             };
             s.servers.setHooks(std::move(h));
+            s.serversSig = s.servers.signature();   // the signature of the servers before any setting is applied: only a first pass that CHANGES it (a saved switch that starts a server) is news
         }
         if (s.serversSettingsVersion != s.settings().version()) {
             s.serversSettingsVersion = s.settings().version();
             s.servers.configure(s4b::configFrom(s.settings()));
-            ++wireCVersion_;
+            if (!serversFirstPass) { ++wireCVersion_; }
         }
         s.servers.pass();
         if (s.listingVersion != s.settings().version()) {
@@ -650,7 +652,7 @@ void Engine::pumpWireC() {
                 s.listingPreview = cascade::net::listingJson(l);
                 s.listingProblem.clear();
             }
-            ++wireCVersion_;
+            if (!serversFirstPass || !s.listingPreview.empty() || !s.listingProblem.empty()) { ++wireCVersion_; }   // a first pass with the listing off builds nothing: not a change
         }
         {
             const bool live = !s.listingPreview.empty() && servers_.webServer().running();
