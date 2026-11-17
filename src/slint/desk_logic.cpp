@@ -210,6 +210,8 @@ std::string findOnPath(const std::string& name, const std::string& pathList) {
         const std::string dir = pathList.substr(at, end - at);
         at = end + 1;
         if (dir.empty()) { continue; }   // an empty entry means "here" in a shell; never run from the working directory
+        // L9: a RELATIVE entry ("." , "bin", "./tools") is the working directory in disguise: a helper called xdg-open, xclip or wl-copy found there would be run in place of the system's. Only absolute directories.
+        if (!fs::path(dir).is_absolute()) { continue; }
         const fs::path p = fs::path(dir) / name;
         if (isExecutableFile(p)) { return p.string(); }
     }

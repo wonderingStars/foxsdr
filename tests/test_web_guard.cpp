@@ -103,6 +103,21 @@ void testOwnersList() {
     CHECK(checkHostOrigin(p, req("anything.example")) == GuardVerdict::ForeignHost);   // a wildcard is not a host name
 }
 
+// M9-api-host-rule: the program interface takes the names the PAGE takes; guardHostNames is that set, built from the same two places, and the page's own check agrees with it.
+void testHostNamesAreThePages() {
+    const std::vector<std::string> listed = {"https://Dash.example", "http://192.168.1.50:8080", "*", "not an origin", "http://[::1]:9", "https://ddns.example.net:8443"};
+    const std::vector<std::string> names = guardHostNames("Studio-PC", listed);
+    const std::vector<std::string> want = {"studio-pc", "studio-pc.local", "dash.example", "ddns.example.net"};
+    CHECK(names == want);   // no IP literal, no wildcard, nothing that did not parse
+    HostOriginPolicy p;
+    p.machineNames = guardMachineNames("Studio-PC");
+    guardSetOrigins(p, listed);
+    for (const std::string& n : names) { CHECK(checkHostOrigin(p, req(n)) == GuardVerdict::Allowed); }   // the page answers each of them
+    CHECK(checkHostOrigin(p, req("other.example")) == GuardVerdict::ForeignHost);
+    CHECK(guardHostNames("", {}).empty());                                                                  // no name, no list: nothing
+    CHECK(guardMachineNames("").empty());
+}
+
 void testSplit() {
     std::string h, port;
     CHECK(splitHostHeader("Example.COM:8073", h, port) && h == "example.com" && port == "8073");
@@ -148,6 +163,7 @@ int main() {
     testHost();
     testOrigin();
     testOwnersList();
+    testHostNamesAreThePages();
     testSplit();
     testFuzz();
     return testSummary("test_web_guard");

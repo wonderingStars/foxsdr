@@ -181,6 +181,12 @@ void ApiServer::authLoop() {
     }
 }
 
+void ApiServer::setHostNames(std::vector<std::string> names) {
+    for (std::string& n : names) { n = lower(n); }
+    std::lock_guard<std::mutex> lk(hostM_);
+    hostNames_ = std::move(names);
+}
+
 bool ApiServer::hostAllowed(const std::string& hostHeader) const {
     if (hostHeader.empty()) { return true; }   // no Host: not a browser (a browser always sends one)
     std::string name = lower(hostHeader);
@@ -196,7 +202,12 @@ bool ApiServer::hostAllowed(const std::string& hostHeader) const {
     }
     if (name == "localhost") { return true; }
     std::uint32_t ip = 0;
-    if (!sock::parseIpv4(name, ip)) { return false; }   // a name other than localhost is somebody else's (a rebound page names its own site)
+    if (!sock::parseIpv4(name, ip)) {
+        // a name other than localhost is somebody else's (a rebound page names its own site) unless it is one the owner or the computer gave this page (setHostNames)
+        while (!name.empty() && name.back() == '.') { name.pop_back(); }
+        std::lock_guard<std::mutex> lk(hostM_);
+        return std::find(hostNames_.begin(), hostNames_.end(), name) != hostNames_.end();
+    }
     return (ip >> 24) == 127 || ip == bindIp_;
 }
 

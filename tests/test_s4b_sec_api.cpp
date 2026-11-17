@@ -110,6 +110,34 @@ void testHost() {
     o.stop();
 }
 
+// M9-api-host-rule: the interface takes the same DNS NAMES as the web page's Host rule (the computer's name, name.local, the hosts of "Allowed web origins"), given by setHostNames; it is not
+// loosened for any other name, for an IP literal that is not its own, or for a request that carries an Origin. Without names set it behaves as it always did.
+void testHostNamesOfThePage() {
+    ControlHub hub;
+    std::string err;
+    ApiServer s(cfg0(), hub, nullptr);
+    CHECK(s.start(err));
+    const std::uint16_t port = static_cast<std::uint16_t>(s.port());
+    const std::string p = ":" + std::to_string(port);
+    for (const std::string& h : {std::string("mypc"), std::string("mypc.local"), std::string("sdr.example.com") + p}) { CHECK(statusOf(ask(port, get("/status", h))) == 403); }   // before: refused
+    s.setHostNames({"mypc", "mypc.local", "SDR.Example.com"});
+    for (const std::string& h : {std::string("mypc"), std::string("MYPC.local") + p, std::string("sdr.example.com"), std::string("sdr.example.com.") + p}) {
+        if (statusOf(ask(port, get("/status", h))) != 200) { std::printf("      %s was refused\n", h.c_str()); }
+        CHECK(statusOf(ask(port, get("/status", h))) == 200);
+    }
+    // never loosened: any other name, a literal that is not its own, a name that merely contains a listed one, a page's Origin
+    for (const std::string& h : {std::string("evil.example"), std::string("mypc.local.evil.example"), std::string("xmypc"), std::string("sdr.example.com.evil.example"), std::string("192.168.1.20"),
+                                 std::string("[2001:db8::1]"), std::string("10.0.0.1:80"), std::string("localhost.evil.example")}) {
+        if (statusOf(ask(port, get("/status", h))) != 403) { std::printf("      %s was served\n", h.c_str()); }
+        CHECK(statusOf(ask(port, get("/status", h))) == 403);
+    }
+    CHECK(statusOf(ask(port, get("/status", "mypc", "Origin: http://mypc\r\n"))) == 403);
+    CHECK(statusOf(ask(port, get("/status", "127.0.0.1"))) == 200);   // the old names still work
+    s.setHostNames({});                                               // taking the names away takes the permission away
+    CHECK(statusOf(ask(port, get("/status", "mypc"))) == 403);
+    s.stop();
+}
+
 // A sign-in callback that is slow for the credential "slow" and can be held shut by a test.
 struct SlowAuth {
     std::atomic<int> calls{0};
@@ -264,6 +292,7 @@ void testCloseAllClients() {
 
 int main() {
     testHost();
+    testHostNamesOfThePage();
     testAuthIsOffTheIoThread();
     testAuthFloodAndStop();
     testPerAddressHeadCap();

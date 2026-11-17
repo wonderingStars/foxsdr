@@ -90,6 +90,8 @@ struct Hooks {
     // The web page's account (user name and the password's stored record: never the password). Empty record = no password is set.
     struct WebAccount { std::string user, record; };
     std::function<WebAccount()> webAccount;
+    // The DNS names the web page's own Host rule accepts (this computer's name, name.local, the hosts of "Allowed web origins"): the interface answers a request that names one of them (M9-api-host-rule).
+    std::function<std::vector<std::string>()> hostNames;
 };
 
 // The sentence that says who can reach a server: "this computer only" or the warning for every address.
@@ -105,6 +107,9 @@ public:
     ServerSet& operator=(const ServerSet&) = delete;
 
     void setHooks(Hooks h);
+    // TESTS ONLY (never a setting): every Config applied from now on binds the program interface to this address ("" = as configured), so a test that ticks "every address" through the REAL engine
+    // can be proved on 127.0.0.1 without a firewall prompt. Set before the first configure.
+    void setApiBindForTest(const std::string& address);
     // Applies the settings; a server whose own settings changed is restarted, one that is off is stopped. Cheap when nothing changed.
     void configure(const Config& c);
     // Whether any server is switched on (the pass may skip the rest while this is false).
@@ -173,6 +178,8 @@ private:
     std::atomic<bool> apiNeedsAccount_{false};   // the API listens beyond this computer: no account means nobody is let in
     std::string apiAccountPrint_;                // the account the running API was last seen with (pass thread)
     std::int64_t lastAccountCheckMs_ = -1000000;
+    std::int64_t lastHostNamesMs_ = -1000000;
+    std::string apiBindForTest_;
 };
 
 }  // namespace cascade::engine::s4b

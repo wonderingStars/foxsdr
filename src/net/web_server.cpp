@@ -42,6 +42,7 @@
 #endif
 #include <httplib.h>
 #include "core/font_blobs.hpp"
+#include "net/net_sock.hpp"
 #include "net/web_conn_guard.hpp"
 
 namespace cascade::net {
@@ -3396,13 +3397,8 @@ class WebServer::Impl {
 public:
     Impl() : clock_([]() { return static_cast<std::int64_t>(std::time(nullptr)); }) {
         // R1: the names a Host header may carry besides literals and "localhost": this computer's own name.
-        char name[256] = {};
-        if (::gethostname(name, sizeof(name) - 1) == 0 && name[0] != '\0') {
-            std::string n;
-            for (const char* c = name; *c != '\0'; ++c) { n.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(*c)))); }
-            guard_.machineNames.push_back(n);
-            guard_.machineNames.push_back(n + ".local");
-        }
+        // (the same names the program interface accepts: net/web_guard.hpp guardHostNames)
+        guard_.machineNames = guardMachineNames(sock::computerName());
     }
 
     ~Impl() { stop(); }
