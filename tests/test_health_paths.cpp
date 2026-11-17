@@ -287,7 +287,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         {"StreamRestart", "src/source/airspy_source.cpp", 1},
         {"TunerRetry", "src/source/rtl2832u.cpp", 1},
         {"LateCall", "src/source/soapy_source.cpp", 1},    {"LateCall", "src/source/sdrplay_source.cpp", 1},
-        {"ScanLimit", "src/source/soapy_enum_proc.cpp", 4},
+        {"ScanLimit", "src/source/soapy_enum_proc.cpp", 5},   // was 4: the missing-helper answer (hw-findings item 6) is counted as the in-process fallback always was
         {"UsbStuck", "src/usb/usbfs_device.cpp", 2},
         {"RatesDefault", "src/source/airspy_source.cpp", 1}, {"RatesDefault", "src/source/airspyhf_source.cpp", 1},
         // THE 0.99.100 MERGE: master counted these in AppWindow; on this branch the window holds none of them (the radio's gain, the correction, the

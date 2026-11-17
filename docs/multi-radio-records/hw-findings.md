@@ -177,3 +177,43 @@ Real dongle (the window on the hidden desktop serving the real RTL-SDR at 127.0.
    missing helper -> `helperMissing`, no fall-back, no devices, sentence names the file and not the path; an existing helper is not "missing". Break-it: the missing-helper branch disabled -> 3 failed; restored.
    Real engine, incomplete copy (no `cascade.exe` beside `foxsdr-engine.exe`), scan requested through the web control: the status line carried that sentence and the log said the walk was not run in
    the process; the complete copy under the same request: empty error line, scan started normally.
+
+## Expectations changed (both values)
+| Test | Was | Now | Why |
+|---|---|---|---|
+| `src/slint/tests/test_slint_s5_host.cpp` line 151 | `r.find(v, "m.start") != nullptr` | `== nullptr` | the automatic ppm panel is not drawn (item 2) |
+| `src/slint/tests/drive/s5-sources.txt` | clicked "Measure the crystal error" and read the note | no click; reads that the engine's correction stays off | same |
+| `tests/test_health_paths.cpp` ScanLimit call sites in `soapy_enum_proc.cpp` | 4 | 5 | the missing-helper answer counts like the fallback (item 6) |
+| `tests/errpath_allow.tsv` | two lines keyed by the old text of the two `applySourceRate` call sites | the same verdicts under the new keys; one new ALLOW (`pollSourceAsync`, the display of the missing-helper failure) | items 3 and 6; the pin is unchanged |
+| `src/slint/tests/test_slint_s5b_host.cpp` IF-bandwidth rows block | drove the row (set, auto, refusals) | asserts none of its rows exist | item 1 |
+Error-path pin (`kPendingPin`): 410 before, 410 after (nothing added to or taken from the pending sites).
+
+## Tests run (all Release, `D:/foxsdr-build/en-tuning`)
+`test_slint_s5b_host` 84, `test_slint_s5_host` 105, `test_engine_api_s5` 70, `test_rtlsdr_ifbw` 50, `test_rate_coercion` 45, `test_rtlsdr_rate_report` 23, `test_slint_host_logic` 205,
+`test_source_fallback` 55, `test_health_events` 114876, `test_radio_reports_engine` 147, `test_radio_report` 215, `test_soapy_model_report` 11, `test_radio_reports_fields` 48, `..._never_sent` 7,
+`test_telemetry` 292, `test_rtl_tcp_server` 67, `test_engine_api_s4b_rtltcp` 40, `test_soapy_enum_proc` 563 (ctest), `test_health_paths`, `test_i18n`, `test_error_paths` 35, plus the ctest subset
+`test_slint_s5|test_slint_host|test_engine_api_s5|test_engine_api_s4b|test_rtl|test_rate_|test_radio_report|test_health|test_source_fallback|test_soapy|test_telemetry|test_i18n|test_error_paths`
+(91 tests; after rebuilding the stale binaries every one passed, `test_health_paths` after its one expectation above) and, on the hidden desktop, `gui_desktop_guard`, `test_health_app`,
+`test_health_app_stepped` and `slint_drive_s5-sources`: 5 of 5 passed.
+NOT RUN: the full headless gate, the full GUI gate, the Slint drive scripts other than `s5-sources`, the stamp tests, the other `slint_drive_*` scripts (a hidden S5b row is not driven by any), a Linux build.
+New strings: none (the chip uses the existing key GENERATOR; the engine's own sentences are not translated).
+
+## OPEN ROWS
+| Row | Kind of lane |
+|---|---|
+| Item 6: the in-process `SoapySDR::Device::make` discovery at every B200 start and open is not routed through the helper and the crash was not reproduced (49 starts, 0 crashes): a decision on opening Soapy radios out of process, or on accepting the risk; watch for it in the mouse drive | design + engine lane; owner decision |
+| Item 1: a true IF-bandwidth control needs the tuner's channel-filter extension off and a per-tuner (R820T, R828D, Blog V4) calibrated (register, IF) table measured like `hw-findings.md` item 1 | driver lane with real radios |
+| Item 2: a sound automatic ppm needs a frequency standard or a multi-station method with its spread shown (item 2 text) | design lane |
+| Item 5: a hand-written Soapy row with no `product` is named "uhd" in its first radio_open until a scan or the open says the model | small engine lane |
+| Item 5: the other SoapySDR-opened kinds were checked with stand-in argument forms only, not with hardware | hardware lane |
+| Item 7: the gain count for tuners other than R820T/R828D and for a Soapy-opened RTL-SDR is "unknown" (0, 0) | small driver lane |
+| Item 4: the receiver chip shows GENERATOR with the engine's sentence; whether the owner wants a different word is his to say at the mouse drive | owner |
+| `ControlWhyScope` is never set by the engine, so the `why` of a refusal raised at open is "user" except where this lane passes it (rate) | small engine lane |
+| Item 3: a saved rate coerced by a driver other than the RTL-SDR is now reported by the same call but was not driven on hardware | hardware lane |
+| Items 3, 4, 5, 7 were confirmed on the real radios; items 1 and 2 are hidden, not fixed | |
+
+## UNVERIFIED
+* ITU-R BS.450's pilot tolerance (the code states +-2 Hz and cites nothing; not checked against the document: no outside request in this lane).
+* Where the check's crash happened (its file was overwritten); my reading from the code (the window's own open) is not proved.
+* A second dongle model, an R828D or a Blog V4, with the rtl_tcp header or the IF filter.
+* The Worker's validator against a queued `library` field on a real radio_fail (the contract allows it; the engine suite's validator saw 56 messages, 0 refused, before item 5; a SoapySDR fail was not in that set).
