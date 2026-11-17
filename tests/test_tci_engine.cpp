@@ -685,6 +685,31 @@ void testCatBeyondThisComputer() {
     CHECK(longList.catAllow.empty());
 }
 
+// ENGINE MERGE 11: the window hides the CAT "reachable from other computers" tick (core/cat_scope.hpp), but a settings file written by an older
+// build can still say catBindAll true. What the engine does with that SAVED value, through the real settings path (parse, then applyConfig):
+// with no catAllow list it makes no socket at all (not loopback either: the interface is refused and says why), so nothing listens on any
+// interface; with a list it would listen for those computers only (that half is proved with a loopback bind in test_cat_server).
+void testSavedCatReachableNeedsTheList() {
+    cascade::core::AppConfig saved;
+    std::string why;
+    const int port = freePort();
+    CHECK(cascade::core::ConfigStore::parse("{\"catEnabled\":true,\"catBindAll\":true,\"catPort\":" + std::to_string(port) + "}", "test", saved, why));
+    CHECK(saved.catEnabled && saved.catBindAll && saved.catAllow.empty());
+    Rig r;
+    r.e.applyConfig(saved);
+    CHECK(r.e.servers().waitIdle(std::chrono::seconds(30)));
+    CHECK(!r.e.servers().catServer().running());
+    CHECK(!r.e.servers().cat().running);
+    CHECK(r.e.servers().cat().refusal.find("list the computers that may") != std::string::npos);
+    // an unreadable saved list is the same as none
+    cascade::core::AppConfig bad;
+    CHECK(cascade::core::ConfigStore::parse("{\"catEnabled\":true,\"catBindAll\":true,\"catAllow\":\"0.0.0.0/0\",\"catPort\":" + std::to_string(port) + "}", "test", bad, why));
+    Rig r2;
+    r2.e.applyConfig(bad);
+    CHECK(r2.e.servers().waitIdle(std::chrono::seconds(30)));
+    CHECK(!r2.e.servers().catServer().running());
+}
+
 void testSettingsFile() {
     // the file round trip, and what a hostile file is made into
     cascade::core::AppConfig c;
@@ -757,6 +782,7 @@ int main() {
     testConfiguration();
     testBeyondThisComputer();
     testCatBeyondThisComputer();
+    testSavedCatReachableNeedsTheList();
     testSettingsFile();
     testTeardown();
     return testSummary("test_tci_engine");
