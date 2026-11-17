@@ -18,7 +18,7 @@
 228	ASSERTED	gaps1-markers.txt	click "Copy markers to clipboard"; state clip contains the list (the bounded run's clipboard stand-in)
 239	ASSERTED	gaps1-markers.txt	state markers.shown == 1 after the Markers key, == 0 after the sheet's Close
 240	ASSERTED	gaps1-markers-damaged.txt	state markers.error contains "is not a JSON object" for a damaged markers.json
-241	ASSERTED	gaps1-markers-damaged.txt	state markers.empty contains "No markers yet."
+241	ASSERTED	gaps1-markers-damaged.txt	state markers.empty contains "No markers."
 242	ASSERTED	gaps1-markers.txt	state markers.rows == 3 then 2 then 0 as markers are removed
 243	ASSERTED	gaps1-markers.txt	state markers.row.1 starts with "M1"
 244	ASSERTED	gaps1-markers.txt	state markers.row.1 contains the frequency

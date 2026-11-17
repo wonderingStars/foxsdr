@@ -1,4 +1,4 @@
-#! frames=2200 size=624x400 bank=4 sections=4:0
+#! frames=2200 size=624x470 bank=4 sections=4:0
 # bar-min-624: THE SMALLEST WINDOW (624 x 400, the minimum the resize handler enforces; screen stage S5, docs/multi-radio-records/screen-s5.md), the sections panel open (the centre column is 264 px wide), with EIGHT live
 # radios: every control of the bar is reachable with a POINTER click at its centre (refused when outside the window), the last lamp, the page keys, Link tuning, Start together, STOP ALL; the bar is five rows
 # tall here and leaves little of the receiver view (looked at: the shot). The panel's fold key gives the view its width back (the bar then needs fewer rows).

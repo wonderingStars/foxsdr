@@ -1,4 +1,4 @@
-#! frames=900 size=1500x900 plugins=adsb-decoder open=module:adsb-decoder-1.9.1-abi3-win-x64.dll iqfile=adsb-decoder.wav centre=1090000000 mode=RAW bandwidth=2400000 patchdoc=patch-faces-map.patch
+#! frames=900 size=1500x932 plugins=adsb-decoder open=module:adsb-decoder-1.9.1-abi3-win-x64.dll iqfile=adsb-decoder.wav centre=1090000000 mode=RAW bandwidth=2400000 patchdoc=patch-faces-map.patch
 # patch-faces-map (docs/multi-radio-records/patch-faces.md; ledger rows 1925 and 1940): the Map part's chart on the PATCH page. The ADS-B decoder plugin decodes the fixture recording (one aircraft, ICAO
 # 4D2025, callsign FOXSDR1, near 51.5 N 0.1 W: the same target tests/drive/fixture-adsb-decoder.txt reads back); the seeded patch holds the ADS-B part wired into a Map part, so the aircraft are
 # the targets of the part. Every figure is read from the part's view and its projected targets (`state patchface.m<k>.<what>`) and the window is captured.
