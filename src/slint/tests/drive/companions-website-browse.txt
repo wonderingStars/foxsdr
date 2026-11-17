@@ -1,4 +1,4 @@
-#! frames=500 size=1400x2200 bank=1 FOXSDR_SLINT_STORE_LOCAL=fixtures/companions-index.json
+#! frames=500 size=1400x2200 bank=1 FOXSDR_SLINT_STORE_LOCAL=fixtures/companions-index.json platform=windows
 # companions-website-browse (companions-shelf lane, step 1): the WEBSITE copy's store. The Browse grid has a "COMPANION APPLICATIONS" shelf from the catalogue's companions
 # category (a LOCAL stand-in catalogue: nothing is fetched). The shelf has its one-sentence note, every card says what its separate program is under (the licence as the row
 # states it) and what this copy can do about the program, read from the window's own card model. A row whose program is not published says so in plain words and its key is

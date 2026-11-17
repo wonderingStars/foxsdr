@@ -92,6 +92,12 @@ std::string program(const std::string& tag = "") {
 
 // a "program" of another machine's kind
 std::string foreignProgram() {
+    if (PluginRepo::hostOs() != "windows") {   // an ELF of the OTHER machine kind: the Windows bytes below are "not a Linux program" here, a different refusal
+        std::string e(64, '\0');
+        e[0] = 0x7F; e[1] = 'E'; e[2] = 'L'; e[3] = 'F'; e[4] = 2;
+        e[18] = static_cast<char>(std::string(PluginRepo::hostArch()) == "arm64" ? 62 : 183);
+        return e;
+    }
     std::string b(512, '\0');
     b[0] = 'M';
     b[1] = 'Z';

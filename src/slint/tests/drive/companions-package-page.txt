@@ -1,4 +1,4 @@
-#! frames=560 size=1400x1800 bank=1 store=companion-multimon FOXSDR_FAKE_PACKAGE=FoxSDR.Test_1.0.0.0_x64__test FOXSDR_FAKE_PACKAGE_COMPANIONS=fixtures/companions-package FOXSDR_SLINT_STORE_LOCAL=fixtures/companions-index.json
+#! frames=560 size=1400x1800 bank=1 store=companion-multimon FOXSDR_FAKE_PACKAGE=FoxSDR.Test_1.0.0.0_x64__test FOXSDR_FAKE_PACKAGE_COMPANIONS=fixtures/companions-package FOXSDR_SLINT_STORE_LOCAL=fixtures/companions-index.json platform=windows
 # companions-package-page (companions-shelf lane, step 3): the MICROSOFT STORE copy (FOXSDR_FAKE_PACKAGE; its package's companions folder is the fixture folder). The catalogue
 # gives this companion an address and a hash, yet the page says the program is INCLUDED in this copy and that nothing is downloaded: a packaged copy never downloads a program.
 10 state running == 1
