@@ -25,6 +25,7 @@
 #define CASCADE_CORE_REPORT_SEND_GUARD_HPP
 
 #include <string>
+#include <vector>
 
 namespace cascade::core::radioreport {
 
@@ -34,6 +35,10 @@ bool isLoopbackUrl(const std::string& url);
 // "" when a message may be sent to `url` by a run whose queue lives in `profileDir` (the `radio-reports` folder or the folder above it); otherwise the
 // short reason word above. Reads the environment on every call (a test changes it).
 std::string outsideSendRefusal(const std::string& url, const std::string& profileDir);
+
+// The decision itself, with the folders the operating system names for this user's profile passed in (the tests give it each situation). Only usable (absolute) names count; with none the
+// answer is "allowed": the guard exists to stop tests and drives and must never silence a real user whose system call failed or answered something odd.
+std::string outsideSendRefusalWithRoots(const std::string& url, const std::string& profileDir, const std::vector<std::string>& osRoots);
 
 // The same for the run's default profile (the folder ConfigStore::defaultPath() names): for the usage heartbeat, which has no queue of its own.
 std::string outsideSendRefusal(const std::string& url);

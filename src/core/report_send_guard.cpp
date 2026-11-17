@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
+#include <vector>
 
 #include "core/config.hpp"
 #include "core/package_identity.hpp"
@@ -19,6 +20,7 @@
 #include <shlobj.h>
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "advapi32.lib")
 #else
 #include <pwd.h>
 #include <unistd.h>
@@ -40,11 +42,49 @@ std::string lower(std::string s) {
     return s;
 }
 
+#if defined(_WIN32)
+// The path as Windows itself spells it (a mapped drive letter becomes the \\server\share it stands for, a junction its target), for the longest part of it that exists;
+// what does not exist yet is appended as written. Two spellings of one folder (APPDATA as a mapped drive, the known folder as the share) then compare equal.
+fs::path finalPathOf(const fs::path& in) {
+    fs::path p = in;
+    fs::path tail;
+    for (int guard = 0; guard < 64 && !p.empty(); ++guard) {
+        std::error_code ec;
+        if (fs::exists(p, ec)) {
+            HANDLE h = ::CreateFileW(p.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+            if (h != INVALID_HANDLE_VALUE) {
+                std::vector<wchar_t> buf(2048);
+                const DWORD n = ::GetFinalPathNameByHandleW(h, buf.data(), static_cast<DWORD>(buf.size()), VOLUME_NAME_DOS);
+                ::CloseHandle(h);
+                if (n > 0 && n < buf.size()) {
+                    std::wstring w(buf.data(), n);
+                    if (w.rfind(L"\\\\?\\UNC\\", 0) == 0) { w = L"\\\\" + w.substr(8); }
+                    else if (w.rfind(L"\\\\?\\", 0) == 0) { w = w.substr(4); }
+                    return tail.empty() ? fs::path(w) : fs::path(w) / tail;
+                }
+            }
+            break;
+        }
+        const fs::path parent = p.parent_path();
+        if (parent == p) { break; }
+        tail = p.filename() / tail;
+        p = parent;
+    }
+    return in;
+}
+#endif
+
 // A path as a comparable string: absolute where it can be, forward slashes, no trailing slash, lower case on Windows.
 std::string norm(const fs::path& p) {
     std::error_code ec;
+#if defined(_WIN32)
+    fs::path a = finalPathOf(p);
+    a = fs::weakly_canonical(a, ec);
+    if (ec) { a = finalPathOf(p).lexically_normal(); }
+#else
     fs::path a = fs::weakly_canonical(p, ec);
     if (ec) { a = p.lexically_normal(); }
+#endif
     std::string s = a.generic_string();
     while (s.size() > 1 && s.back() == '/') { s.pop_back(); }
 #if defined(_WIN32)
@@ -60,21 +100,33 @@ bool isUnder(const fs::path& dir, const fs::path& base) {
     return d == b || (d.size() > b.size() && d.compare(0, b.size(), b) == 0 && d[b.size()] == '/');
 }
 
-// The folder the operating system names as this user's profile root, whatever the environment says. Empty when it cannot be found.
-fs::path realProfileRoot() {
+// Every folder the operating system (and the user's own persistent settings) names as this user's profile, whatever this process's environment says. Anything that is
+// not a usable absolute path (a failed call, an empty or odd answer) is left out; an empty list means "cannot tell", and cannot tell never silences anybody.
+std::vector<std::string> osProfileRoots() {
+    std::vector<std::string> out;
 #if defined(_WIN32)
-    PWSTR w = nullptr;
-    fs::path out;
-    if (SUCCEEDED(::SHGetKnownFolderPath(FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, nullptr, &w)) && w != nullptr) { out = fs::path(w); }
-    if (w != nullptr) { ::CoTaskMemFree(w); }
-    return out;
+    // (only the roaming application-data folder: the whole profile folder would also hold a test's scratch under %TEMP%)
+    for (const KNOWNFOLDERID* id : {&FOLDERID_RoamingAppData}) {
+        PWSTR w = nullptr;
+        if (SUCCEEDED(::SHGetKnownFolderPath(*id, KF_FLAG_DEFAULT, nullptr, &w)) && w != nullptr) { out.push_back(fs::path(w).string()); }
+        if (w != nullptr) { ::CoTaskMemFree(w); }
+    }
+    // the user's own APPDATA kept in their persistent environment (HKCU\Environment): a profile deliberately moved to another drive
+    wchar_t v[1024] = {};
+    DWORD cb = sizeof(v) - sizeof(wchar_t);
+    DWORD type = 0;
+    if (::RegGetValueW(HKEY_CURRENT_USER, L"Environment", L"APPDATA", RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, &type, v, &cb) == ERROR_SUCCESS && v[0] != L'\0') {
+        wchar_t ex[1024] = {};
+        const DWORD n = ::ExpandEnvironmentStringsW(v, ex, 1024);
+        if (n > 0 && n <= 1024) { out.push_back(fs::path(ex).string()); }
+    }
 #else
     struct passwd pw {};
     struct passwd* res = nullptr;
     char buf[4096];
-    if (::getpwuid_r(::getuid(), &pw, buf, sizeof(buf), &res) == 0 && res != nullptr && pw.pw_dir != nullptr) { return fs::path(pw.pw_dir); }
-    return fs::path();
+    if (::getpwuid_r(::getuid(), &pw, buf, sizeof(buf), &res) == 0 && res != nullptr && pw.pw_dir != nullptr) { out.push_back(pw.pw_dir); }
 #endif
+    return out;
 }
 
 // A real user's profile that is legitimately not the system's: a portable copy (marker beside the program) or the Store package.
@@ -107,21 +159,32 @@ bool isLoopbackUrl(const std::string& url) {
     return host == "127.0.0.1" || host == "localhost" || host == "::1";
 }
 
-std::string outsideSendRefusal(const std::string& url, const std::string& profileDir) {
+std::string outsideSendRefusalWithRoots(const std::string& url, const std::string& profileDir, const std::vector<std::string>& osRoots) {
     if (isLoopbackUrl(url)) { return std::string(); }
     if (envSet("FOXSDR_NO_OUTSIDE_REPORTS")) { return "env"; }
     if (syntheticRun()) { return "synthetic"; }
     if (envSet("FOXSDR_DIAG_DIR")) { return "diag-dir"; }
     if (legitimatelyElsewhere()) { return std::string(); }
-    const fs::path real = realProfileRoot();
-    if (real.empty() || profileDir.empty()) { return "redirected"; }   // cannot prove it is the user's own: nothing leaves
+    if (profileDir.empty()) { return "redirected"; }   // no folder for the queue at all: nothing leaves
+    // THE LAST RULE ONLY EVER STOPS A TEST THAT FORGOT EVERY MARKER, NEVER A REAL USER. It refuses only when the operating system has named at least one usable profile folder and this
+    // run's folder is under none of them. If the system call failed or answered nothing usable the guard cannot tell and the report is sent; a profile the system itself names (folder
+    // redirection by policy, a share, a mapped drive, a persistent APPDATA on another drive) is under one of the names and is sent.
+    bool anyUsable = false;
+    for (const std::string& r : osRoots) {
+        if (r.empty() || !fs::path(r).is_absolute()) { continue; }
+        anyUsable = true;
+        if (isUnder(fs::path(profileDir), fs::path(r))) { return std::string(); }
+    }
+    return anyUsable ? std::string("redirected") : std::string();
+}
+
+std::string outsideSendRefusal(const std::string& url, const std::string& profileDir) {
 #if defined(_WIN32)
-    return isUnder(fs::path(profileDir), real) ? std::string() : std::string("redirected");
+    return outsideSendRefusalWithRoots(url, profileDir, osProfileRoots());
 #else
     // HOME is the real home (a drive or hermetic test points it elsewhere); XDG_CONFIG_HOME, if set, is the user's own choice and is not read.
     const char* home = std::getenv("HOME");
-    if (home == nullptr || *home == '\0') { return "redirected"; }
-    return norm(fs::path(home)) == norm(real) ? std::string() : std::string("redirected");
+    return outsideSendRefusalWithRoots(url, home != nullptr ? std::string(home) : std::string(), osProfileRoots());
 #endif
 }
 

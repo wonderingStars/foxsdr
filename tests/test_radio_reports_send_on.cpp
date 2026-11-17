@@ -205,6 +205,54 @@ int main() {
               !rr::isLoopbackUrl("https://localhost@evil.example/") && !rr::isLoopbackUrl("") && !rr::isLoopbackUrl("not a url"));
         CHECK(rr::outsideSendRefusal("http://127.0.0.1:9/", "X:/nowhere").empty());   // a stand-in on this computer is always reachable
     }
+#if defined(_WIN32)   // (the situations are Windows paths and the Windows system call; the POSIX half is the HOME rule below)
+    // THE GUARD MUST NEVER SILENCE A REAL USER (engine merge 11). The decision takes the folders the operating system names as the user's profile, so each situation a real
+    // user can be in is given to it exactly; every one must be SENT (empty refusal), and a profile the system does not name must still be refused.
+    {
+        const std::string kReal = "https://telemetry.foxsdr.com";
+        const std::string profile = "C:/Users/pat/AppData/Roaming/foxsdr";
+        // 1. the system's profile-folder call FAILED (no names at all): the guard cannot tell, so the real user's report goes out
+        CHECK(rr::outsideSendRefusalWithRoots(kReal, profile, {}).empty());
+        // 2. the call answered something ODD: empty strings, a relative path, blanks: nothing usable, so the same
+        CHECK(rr::outsideSendRefusalWithRoots(kReal, profile, {"", "AppData/Roaming", ".", "   "}).empty());
+        //    an odd name beside a good one does not hide the good one, and a profile under none of the usable names is still refused
+        CHECK(rr::outsideSendRefusalWithRoots(kReal, profile, {"", "C:/Users/pat/AppData/Roaming"}).empty());
+        CHECK(rr::outsideSendRefusalWithRoots(kReal, "D:/scratch/profile/foxsdr", {"", "C:/Users/pat/AppData/Roaming"}) == "redirected");
+        // 3. APPDATA redirected by the user's own policy (folder redirection to a share, roaming profile): the system names the share, APPDATA is the same share
+        const std::vector<std::string> policy = {"//fileserver/homes/pat/AppData/Roaming", "//fileserver/homes/pat"};
+        CHECK(rr::outsideSendRefusalWithRoots(kReal, "//fileserver/homes/pat/AppData/Roaming/foxsdr/radio-reports", policy).empty());
+        CHECK(rr::outsideSendRefusalWithRoots(kReal, "//FILESERVER/Homes/Pat/AppData/Roaming/foxsdr", policy).empty());   // another spelling of the same share (case)
+        CHECK(rr::outsideSendRefusalWithRoots(kReal, "//fileserver/homes/pat/AppData/Roaming/foxsdr/", policy).empty());   // a trailing slash
+        // 4. the profile on ANOTHER DRIVE: the user's own persistent APPDATA (the system's list carries it) or the profile folder moved there
+        const std::vector<std::string> otherDrive = {"C:/Users/pat/AppData/Roaming", "D:/Profiles/pat/AppData/Roaming"};
+        CHECK(rr::outsideSendRefusalWithRoots(kReal, "D:/Profiles/pat/AppData/Roaming/foxsdr", otherDrive).empty());
+        CHECK(rr::outsideSendRefusalWithRoots(kReal, "d:/profiles/PAT/appdata/roaming/foxsdr/radio-reports", otherDrive).empty());
+        // and what the guard is for: a test or drive that redirected its profile to a scratch folder and forgot every marker is stopped, and a folder that only
+        // STARTS with a real name (a sibling, not a child) is not under it
+        CHECK(rr::outsideSendRefusalWithRoots(kReal, "D:/foxsdr-build/drive-x/appdata/foxsdr", otherDrive) == "redirected");
+        CHECK(rr::outsideSendRefusalWithRoots(kReal, "C:/Users/pat/AppData/Roaming-evil/foxsdr", otherDrive) == "redirected");
+        // an empty queue folder is still nothing to send from
+        CHECK(rr::outsideSendRefusalWithRoots(kReal, "", otherDrive) == "redirected");
+        // the markers still refuse whatever the roots say
+        for (const char* var : {"FOXSDR_NO_OUTSIDE_REPORTS", "FOXSDR_DIAG_DIR"}) {
+#if defined(_WIN32)
+            ::_putenv_s(var, "1");
+#else
+            ::setenv(var, "1", 1);
+#endif
+            CHECK(!rr::outsideSendRefusalWithRoots(kReal, profile, otherDrive).empty());
+#if defined(_WIN32)
+            ::_putenv_s(var, "");
+#else
+            ::unsetenv(var);
+#endif
+        }
+        // and the real call on THIS machine, with the real system names: the real profile folder is sent from, a scratch folder is not (the system call answered here)
+        if (!realProfile.empty()) {
+            CHECK(rr::outsideSendRefusal(kReal, (fs::path(realProfile) / "foxsdr").string()).empty());
+        }
+    }
+#endif
     {
         Temp t("guard");
         const std::string redirected = (t.p / "radio-reports").string();   // a profile that is not the user's own
