@@ -7203,7 +7203,7 @@ void testPatchPlanList() {
     // A radio that would not open is a problem and DOES: an I/Q file that is not there, opened by START in the pass.
     {
         pc::Graph g = graphOf(s);
-        if (pc::Node* n = g.mutableNode(p.radio)) { n->device = pc::makeIqFileKey("Z:/no/such/recording.wav"); }
+        if (pc::Node* n = g.mutableNode(p.radio)) { n->device = pc::makeIqFileKey((std::filesystem::temp_directory_path() / "foxsdr-no-such-folder-for-an-iq-file" / "recording.wav").generic_string()); }   // engine merge 8: was "Z:/no/such/recording.wav". On this PC Z: is a remembered network drive that is not connected, and opening a path on it can wait out Windows' own 21 s network timeout (measured: Test-Path on it took 0.0 s three times and 21.0 s on the fourth), which made this case fail ONCE in 30 runs alone (96.6 s) on the 60 s wait below; a folder that does not exist on the local temp volume is "a file that is not there" without any network
         CHECK_EQ(pumpedText(d.eng, s, setGraph(0, static_cast<long long>(versionOf(s))), pc::graphCommandText(g)).result.status, FOXAPI_OK);
         CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_PATCH_RUN, 0, 1)).status(), FOXAPI_OK);
         // (The recording's header is read on the open worker since stub campaign B19, so the failure lands on a later pass: wait for it by time, not by a count of

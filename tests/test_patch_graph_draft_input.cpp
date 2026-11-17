@@ -1590,7 +1590,7 @@ int main() {
         // THE TWO RADIOS ON ONE DEVICE (the generator may be shared; a recording may not): the first of them fails to open
         // (the file is not there) and says why in its own words; the second is refused by the plan, and its face says that.
         {
-            const std::string missing = pc::makeIqFileKey("Z:/no/such/recording.wav");
+            const std::string missing = pc::makeIqFileKey((std::filesystem::temp_directory_path() / "foxsdr-no-such-folder-for-an-iq-file" / "recording.wav").generic_string());   // engine merge 8: not "Z:/...", a remembered network drive on some PCs (a 21 s wait)
             const pc::NodeId first = radioNode(A::mutableDraft(*a), "First", 330.0f, missing, 330.0f);
             const pc::NodeId second = radioNode(A::mutableDraft(*a), "Second", 330.0f, missing, 620.0f);
             A::flush(*a);
