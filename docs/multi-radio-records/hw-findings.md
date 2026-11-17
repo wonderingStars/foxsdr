@@ -46,3 +46,27 @@ rate, and would have to be calibrated on R820T, R828D and the Blog V4 separately
 Break-it: `ifBandwidthControlOffered()` set to `true` -> `test_slint_s5b_host` 84 checks, 9 failed; restored, 0 failed.
 What a true version needs: the filter extension and the width nibble characterised per tuner by a spectrum sweep like the one above,
 then a table of (register set, IF) pairs verified to give a passband of the stated width centred on the tuned frequency.
+
+## Item 2: automatic ppm - HIDDEN
+
+How it measures (src/core/ppm_auto.hpp, src/engine/engine_mpx.cpp): the FM stereo pilot PLL's residual frequency is read every 100 ms while
+the pilot is locked and its level is at least 0.5; ppm = -mean(df) / 19 kHz x 1e6. The pilot is therefore taken as exactly 19 kHz.
+Tolerance: the header says "the standard allows the pilot +-2 Hz (105 ppm)" and cites NO standard by name; the figure matches ITU-R
+BS.450 as remembered, but that is not checked here (no outside request is allowed in this lane): UNVERIFIED against the document. The
+reported uncertainty is the statistical one only (scatter of the readings), which cannot see a station whose pilot is off.
+Real measurements (hardware check, `D:/foxsdr-build/hw2-scratch/RESULTS.md` section 3, 30 s, 256 readings): station A, dongle +18.91 +-0.81,
++17.06 +-0.78, +15.97 +-0.84 ppm in three runs (spread 2.9 ppm, three times the stated uncertainty); the B200 on the same station +17.08 +-0.15;
+station B, dongle -3.91 +-6.5 and B200 -2.39 +-0.66. The two radios agree with each other on each station (and carriers compared directly
+the day before agreed within 0.8 ppm) but the number changes by about 20 ppm from station to station: it follows the station's pilot,
+not the radio. Nothing in the code or the measurements shows it is right as an absolute correction, so applying it ("Use this
+correction") would mis-tune the user.
+Done: the Automatic ppm panel is not drawn (`foxsdr::slints5::ppmAutoControlOffered()` is `false`, src/slint/s5_logic.hpp; `S5Rows::build`
+skips `buildPpm`). The manual ppm setting is untouched. The engine command `FOXAPP_OP_PPM_MEASURE`, its facts and `test_engine_api_ppmauto`
+stay. Tests: `test_slint_s5_host` new block (no `m.*` row, no "Automatic ppm" / "Measure the crystal error" / "Use this correction" label
+whatever the engine's facts say, a stale press sends nothing); the old row-logic block is kept and now runs with the seam
+`S5Rows::setPpmAutoOffered(true)`; `tests/test_engine_api_s5.cpp` testC sets the same seam; drive script
+`src/slint/tests/drive/s5-sources.txt` no longer clicks the key. Break-it: rule set `true` -> `test_slint_s5_host` 105 checks, 5 failed; restored, 0 failed.
+What a sound method needs: a reference that is not a broadcast station - a frequency standard (GPS-disciplined source, or a carrier whose
+tolerance is known to be a fraction of a ppm), or an average over many stations with a stated rejection of outliers and a result that
+carries the SPREAD between stations rather than only the PLL's scatter; the test must include two stations with different pilot errors.
+EXPECTATION CHANGED (listed in the final report): `src/slint/tests/test_slint_s5_host.cpp` line 151 `r.find(v, "m.start") != nullptr` is now `== nullptr` (the panel is not drawn).

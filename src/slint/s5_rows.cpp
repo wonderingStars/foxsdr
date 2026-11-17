@@ -121,7 +121,7 @@ std::vector<Row> S5Rows::build() {
         tr("A raw I/Q stream over the network, automatic ppm, tuner pooling and the RTL-SDR's direct-sampling choice."));
     if (more) {
         buildRawIq(v);
-        buildPpm(v);
+        if (ppmAutoOffered_) { buildPpm(v); }
         buildPool(v);
         buildDirect(v);
         buildS5b(v);
