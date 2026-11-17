@@ -3,6 +3,7 @@
 #include "lanek_publish.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/health_events.hpp"
 #include "desk_logic.hpp"
 
 #include <algorithm>
@@ -54,6 +55,23 @@ using cascade::i18n::tr;
 using cc::formatText;
 
 slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+
+// A SOUND OUTPUT THAT WOULD NOT OPEN, OR DIED WHILE THE TONE PLAYED, is counted as every refused output is (core/health_events.hpp noteSoundFail: the host API and one of five
+// reasons, never what the system said). The person is told in the section; the owner by this count.
+void countToneFailure(const ToneOut& tone) {
+    namespace health = cascade::core::health;
+    const ToneOut::Failure& f = tone.lastFailure();
+    const health::AudioApi api = f.api == ToneOut::Api::Alsa ? health::AudioApi::Alsa : health::AudioApi::Mme;
+    health::SoundReason why = health::SoundReason::Other;
+    switch (f.reason) {
+        case ToneOut::Reason::NoDevice: why = health::SoundReason::NoDevice; break;
+        case ToneOut::Reason::Busy: why = health::SoundReason::Busy; break;
+        case ToneOut::Reason::Format: why = health::SoundReason::Format; break;
+        case ToneOut::Reason::Host: why = health::SoundReason::Host; break;
+        case ToneOut::Reason::Other: break;
+    }
+    health::noteSoundFail(api, why);
+}
 
 fs::path pathOf(const std::string& u8) { return fs::path(std::u8string(u8.begin(), u8.end())); }
 
@@ -915,7 +933,7 @@ void LaneKPublisher::Impl::act(const std::string& id, const std::string& text) {
     } else if (id == "tone-on") {
         toneOn = text == "1";
         toneNote.clear();
-        if (toneOn && !env.bounded) { if (!tone.start()) { toneNote = tone.lastError(); toneOn = false; } }
+        if (toneOn && !env.bounded) { if (!tone.start()) { toneNote = tone.lastError(); toneOn = false; countToneFailure(tone); } }
         if (!toneOn) { tone.stop(); sonifier.reset(); }
         lastAction = toneOn ? "tone-on" : "tone-off";
     } else if (id.rfind("tone-", 0) == 0) {
@@ -1227,7 +1245,7 @@ void LaneKPublisher::tick(const FoxReceiverState& state, long tickNo) {
         I.toneParams = I.sonifier.update(static_cast<float>(state.signalDb), (state.flags & FOXAPI_RX_SQUELCH_OPEN) != 0 || state.squelchDb < -190.0, offset, static_cast<float>(dt));
         if (!I.env.bounded) {
             I.tone.feed(I.toneParams);
-            if (!I.tone.running()) { I.toneNote = I.tone.lastError(); I.toneOn = false; I.sonifier.reset(); }   // the sound output failed while the tone played (ALSA): the person is told in the section, the tone is off
+            if (!I.tone.running()) { I.toneNote = I.tone.lastError(); I.toneOn = false; I.sonifier.reset(); countToneFailure(I.tone); }   // the sound output failed while the tone played (ALSA): the person is told in the section, the tone is off, and the owner by the count
         }
     }
     if (tickNo % 15 == 7) { I.publishSr(); }

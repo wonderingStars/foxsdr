@@ -123,6 +123,9 @@ void noDevice() {
     CHECK(!t.start());
     CHECK(!t.running());
     CHECK(t.lastError().find("no sound output could be opened") != std::string::npos);
+    // what the window counts (lanek_publish.cpp countToneFailure -> noteSoundFail): the host API and a reason, never the text
+    CHECK(t.lastFailure().api == ToneOut::Api::Alsa);
+    CHECK(t.lastFailure().reason == ToneOut::Reason::NoDevice);
     acc::ToneParams p;
     p.audible = true;
     p.freqHz = 500.0f;
@@ -144,6 +147,8 @@ void writeFails() {
     for (int i = 0; i < 40 && t.running(); ++i) { t.feed(p); }
     CHECK(!t.running());
     CHECK(t.lastError().find("the sound output failed") != std::string::npos);
+    CHECK(t.lastFailure().api == ToneOut::Api::Alsa);
+    CHECK(t.lastFailure().reason == ToneOut::Reason::Host);   // a stream that died while it played
     t.feed(p);                  // after the failure: nothing open, no effect
     CHECK(!t.running());
 }

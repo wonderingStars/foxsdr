@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "lanek_audio.hpp"
 
-#include "core/health_events.hpp"
-
 #include <array>
 #include <cerrno>
 #include <cstdlib>
@@ -32,7 +30,6 @@
 namespace foxsdr::slintlanek {
 
 namespace acc = cascade::core::access;
-namespace health = cascade::core::health;
 
 #if defined(_WIN32)
 struct ToneOut::Impl {
@@ -45,6 +42,7 @@ struct ToneOut::Impl {
     acc::ToneRenderer renderer{static_cast<float>(kRate)};
     std::vector<float> scratch;
     std::string error;
+    Failure failure;
     bool open = false;
 };
 
@@ -64,11 +62,9 @@ bool ToneOut::start() {
     if (const MMRESULT opened = waveOutOpen(&I.dev, WAVE_MAPPER, &f, 0, 0, CALLBACK_NULL); opened != MMSYSERR_NOERROR) {
         I.error = "no sound output could be opened";
         I.dev = nullptr;
-        // A SOUND OUTPUT THAT WOULD NOT OPEN is counted as every other one is (core/health_events.hpp noteSoundFail: the host API and one of five reasons, nothing the OS said);
-        // the person is told on the page, and the owner by this count.
-        health::noteSoundFail(health::AudioApi::Mme, opened == MMSYSERR_ALLOCATED ? health::SoundReason::Busy
-                                                      : (opened == WAVERR_BADFORMAT ? health::SoundReason::Format
-                                                         : (opened == MMSYSERR_NODRIVER || opened == MMSYSERR_BADDEVICEID ? health::SoundReason::NoDevice : health::SoundReason::Other)));
+        I.failure = Failure{Api::Mme, opened == MMSYSERR_ALLOCATED ? Reason::Busy
+                                      : (opened == WAVERR_BADFORMAT ? Reason::Format
+                                         : (opened == MMSYSERR_NODRIVER || opened == MMSYSERR_BADDEVICEID ? Reason::NoDevice : Reason::Other))};
         return false;
     }
     I.scratch.assign(static_cast<std::size_t>(Impl::kBlockFrames) * 2, 0.0f);
@@ -97,6 +93,7 @@ void ToneOut::stop() {
 
 bool ToneOut::running() const { return p_->open; }
 const std::string& ToneOut::lastError() const { return p_->error; }
+const ToneOut::Failure& ToneOut::lastFailure() const { return p_->failure; }
 
 void ToneOut::feed(const acc::ToneParams& params) {
     Impl& I = *p_;
@@ -163,6 +160,7 @@ struct ToneOut::Impl {
     std::vector<float> scratch;
     std::vector<short> pcmOut;
     std::string error;
+    Failure failure;
     bool open = false;
 };
 
@@ -178,15 +176,13 @@ bool ToneOut::start() {
     if (rc < 0) {
         I.error = std::string("no sound output could be opened: ") + snd_strerror(rc);
         I.pcm = nullptr;
-        // counted as every refused sound output is (see the Windows branch): busy, no such device, or another reason; never the text
-        health::noteSoundFail(health::AudioApi::Alsa, rc == -EBUSY ? health::SoundReason::Busy
-                                                      : ((rc == -ENOENT || rc == -ENODEV) ? health::SoundReason::NoDevice : health::SoundReason::Other));
+        I.failure = Failure{Api::Alsa, rc == -EBUSY ? Reason::Busy : ((rc == -ENOENT || rc == -ENODEV) ? Reason::NoDevice : Reason::Other)};
         return false;
     }
     rc = snd_pcm_set_params(I.pcm, SND_PCM_FORMAT_S16_LE, SND_PCM_ACCESS_RW_INTERLEAVED, 2, Impl::kRate, 1 /* let ALSA resample */, 200000 /* us of buffer */);
     if (rc < 0) {
         I.error = std::string("the sound output refused 22.05 kHz stereo: ") + snd_strerror(rc);
-        health::noteSoundFail(health::AudioApi::Alsa, health::SoundReason::Format);
+        I.failure = Failure{Api::Alsa, Reason::Format};
         snd_pcm_close(I.pcm);
         I.pcm = nullptr;
         return false;
@@ -208,6 +204,7 @@ void ToneOut::stop() {
 
 bool ToneOut::running() const { return p_->open; }
 const std::string& ToneOut::lastError() const { return p_->error; }
+const ToneOut::Failure& ToneOut::lastFailure() const { return p_->failure; }
 
 void ToneOut::feed(const acc::ToneParams& params) {
     Impl& I = *p_;
@@ -226,7 +223,7 @@ void ToneOut::feed(const acc::ToneParams& params) {
         if (wrote == -EPIPE || wrote == -ESTRPIPE) { snd_pcm_prepare(I.pcm); }
         else if (wrote < 0) {
             I.error = std::string("the sound output failed: ") + snd_strerror(static_cast<int>(wrote));
-            health::noteSoundFail(health::AudioApi::Alsa, health::SoundReason::Host);   // a stream that died while it played
+            I.failure = Failure{Api::Alsa, Reason::Host};   // a stream that died while it played
             stop();   // the device is closed, so running() is false and the window tells the person (lanek_publish.cpp tick)
             return;
         }
@@ -235,7 +232,7 @@ void ToneOut::feed(const acc::ToneParams& params) {
 
 std::unique_ptr<acc::Speaker> makeDeviceSpeaker() { return nullptr; }   // no speech engine is part of this build; the tone above is the sound path
 #else
-struct ToneOut::Impl { std::string error = "no sound output on this platform"; };
+struct ToneOut::Impl { std::string error = "no sound output on this platform"; Failure failure; };
 ToneOut::ToneOut() : p_(std::make_unique<Impl>()) {}
 ToneOut::~ToneOut() = default;
 bool ToneOut::start() { return false; }
@@ -243,6 +240,7 @@ void ToneOut::stop() {}
 bool ToneOut::running() const { return false; }
 void ToneOut::feed(const acc::ToneParams&) {}
 const std::string& ToneOut::lastError() const { return p_->error; }
+const ToneOut::Failure& ToneOut::lastFailure() const { return p_->failure; }
 std::unique_ptr<acc::Speaker> makeDeviceSpeaker() { return nullptr; }
 #endif
 
