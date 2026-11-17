@@ -167,13 +167,28 @@ void theNeededLibrariesTextIsForPeople() {
     CHECK(files == 3);
 }
 
-// LOOK REVIEW B1: the smallest window the drag edges allow is the one where the strip, the spectrum toolbar and the rail all fit (measured: 1480 x 560).
+// WINDOW STRIP LANE (look review B1): the receiver strip and the spectrum toolbar FOLD to a second row instead of being cut off, so the smallest window the drag edges allow
+// is 1024 x 640. OLD expectation: kMinWindowW = 1480.0f, kMinWindowH = 560.0f (a window cannot be dragged smaller than a screen it does not fit). NEW: 1024.0f and 640.0f.
 void theSmallestWindowIsTheMeasuredOne() {
     const std::string h = slurp(repoRoot() / "src" / "slint" / "host_logic.hpp");
-    CHECK(has(h, "constexpr float kMinWindowW = 1480.0f;") && has(h, "constexpr float kMinWindowH = 560.0f;"));
+    CHECK(has(h, "constexpr float kMinWindowW = 1024.0f;") && has(h, "constexpr float kMinWindowH = 640.0f;"));
+    CHECK(!has(h, "kMinWindowW = 1480.0f"));
     const std::string m = slurp(repoRoot() / "src" / "slint" / "main.cpp");
     CHECK(has(m, "std::max(kMinWindowW * scale()") && has(m, "std::max(kMinWindowH * scale()"));
     CHECK(!has(m, "std::max(624.0f * scale()"));
+    // the folding is in the window's own file: the strip's second row and the toolbar's groups (a revert of either to one fixed row would bring the cut-off back)
+    const std::string w = slurp(repoRoot() / "src" / "slint" / "ui" / "main.slint");
+    CHECK(has(w, "out property <bool> two-rows: self.width < self.need-one;") && has(w, "out property <length> row2-h: self.two-rows"));
+    CHECK(has(w, "height: Theme.strip-h + sb.row2-h;") && has(w, "height: Theme.tab-h + tbr.row2-h;"));
+    CHECK(has(w, "g5b := VerticalLayout"));
+    // the drives that hold it: nothing cut at 1024, 1280, 1366, 1440, 1480 and 1920 wide (768 and 800 high at 1366 and 1280) and at the minimum itself
+    for (const char* d : {"window-min-strip", "window-strip-1024", "window-strip-1280", "window-strip-1366", "window-strip-1440", "window-strip-1480", "window-strip-1920"}) {
+        const std::string t = slurp(repoRoot() / "src" / "slint" / "tests" / "drive" / (std::string(d) + ".txt"));
+        CHECK(!t.empty() && has(t, "\"Full span\" right <=") && has(t, "\"Bias tee off - asks before switching on\" right <="));
+    }
+    CHECK(has(slurp(repoRoot() / "src" / "slint" / "tests" / "drive" / "window-min-strip.txt"), "size=1024x640"));
+    CHECK(has(slurp(repoRoot() / "src" / "slint" / "tests" / "drive" / "window-strip-1366.txt"), "size=1366x768"));
+    CHECK(has(slurp(repoRoot() / "src" / "slint" / "tests" / "drive" / "window-strip-1280.txt"), "size=1280x800"));
 }
 
 // OA-75 follow-up: the Community row of the SYSTEM list is not drawn (it keeps its logical place so the rows after it keep their numbers).
