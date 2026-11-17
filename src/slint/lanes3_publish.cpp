@@ -219,7 +219,7 @@ struct LaneS3Publisher::Impl {
     void setting(Sec s, const std::string& what, const std::string& k, const std::string& value, const std::vector<std::string>& drops = {}) {
         send(s, what, cmd(FOXAPP_OP_WIREC_SETTING, 0, k + "" + value), drops);
     }
-    void endNote(std::vector<Row>& v, Sec s) { if (!noteText[s].empty()) { v.push_back(rNote(noteText[s], noteTone[s])); } }
+    void endNote(std::vector<Row>& v, Sec s) { if (!noteText[s].empty()) { placeNote(v, noteText[s], noteTone[s]); } }
     bool confirmTwice(Sec s, const std::string& id, const std::string& what) {
         if (armed != id) { armed = id; setNote(s, what + ": " + tr("press the key again to confirm. This cannot be undone."), kWarn); return false; }
         armed.clear();

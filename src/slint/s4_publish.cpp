@@ -176,7 +176,7 @@ struct S4Publisher::Impl {
         v.push_back(rChoice(id, label, opts, pick, true, tip));
         handlers[id] = [fn](const std::string& t) { fn(std::atoi(t.c_str())); };
     }
-    void endNote(std::vector<Row>& v, Sec s) { if (!noteText[s].empty()) { v.push_back(rNote(noteText[s], noteTone[s])); } }
+    void endNote(std::vector<Row>& v, Sec s) { if (!noteText[s].empty()) { placeNote(v, noteText[s], noteTone[s]); } }
     // a switch of the wirec registry: shows the engine's value, sends the person's
     void wircTick(std::vector<Row>& v, Sec s, const std::string& id, const std::string& label, const std::string& key, const std::string& tip = std::string()) {
         tick(v, id, label, fact("wirec." + key) == "1", [this, s, label, key](bool on) { setting(s, label, key, on ? "1" : "0"); }, tip);

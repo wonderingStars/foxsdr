@@ -206,7 +206,7 @@ struct LaneLPublisher::Impl {
     void factLines(std::vector<Row>& v, const std::string& factText, std::size_t maxLines) {
         for (const auto& kv : flattenJson(factText, maxLines)) { const auto p = plainFactLine(kv.first, kv.second); v.push_back(rReadout(p.first, p.second)); }
     }
-    void endNote(std::vector<Row>& v, Sec s) { if (!noteText[s].empty()) { v.push_back(rNote(noteText[s], noteTone[s])); } }
+    void endNote(std::vector<Row>& v, Sec s) { if (!noteText[s].empty()) { placeNote(v, noteText[s], noteTone[s]); } }
     // wire-c's settings: key "<key>\x1F<value>", read back as fact.wirec.<key>
     void setting(Sec s, const std::string& what, const std::string& k, const std::string& value, const std::string& draftToDrop = std::string()) { send(s, what, cmd(FOXAPP_OP_WIREC_SETTING, 0, k + "\x1F" + value), 0, draftToDrop); }
     std::string wirec(const std::string& k) { return fact("wirec." + k); }
@@ -475,7 +475,7 @@ struct LaneLPublisher::Impl {
 
         v.push_back(rHeading(tr("Analyser job")));
         const std::string js = fact("job.state");
-        v.push_back(rReadout(tr("Job"), js.empty() ? tr("none") : js + (fact("job.name").empty() ? std::string() : ": " + fact("job.name"))));
+        v.push_back(rReadout(tr("Job"), js.empty() ? tr("none") : jobStateWords(js) + (fact("job.name").empty() ? std::string() : ": " + fact("job.name"))));
         if (js == "running") { v.push_back(rBar(tr("Progress"), static_cast<float>(std::atof(fact("job.progress").c_str())), fact("job.progress"))); }
         const std::string jm = fact("job.message");
         if (!jm.empty()) { v.push_back(rNote(jm, js == "failed" ? kErr : kDim)); }

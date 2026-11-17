@@ -766,11 +766,11 @@ AirbandModel readAirbandFrom(TableReader& t, const BookmarkStore& store, const F
     m.squelch_from_engine = !o.squelch_held;
     m.squelch_db = sq;
     m.squelch_norm = static_cast<float>(std::clamp((sq - kSquelchMinDb) / (kSquelchMaxDb - kSquelchMinDb), 0.0, 1.0));
-    m.squelch_text = cc::formatText(tr("squelch %.0f dB"), sq);
+    m.squelch_text = cc::formatText("%ld dB", std::lround(sq));   // the figure and its unit only: the row has the name, and the readout box is 62 px wide
     m.above_noise_label = T("Above the noise");
     m.above_noise_enabled = facts.listening;
     m.hold_s = o.hold_held ? o.hold_edit : facts.holdS;
-    m.hold_text = cc::formatText(tr("hold %.1f s"), m.hold_s);
+    m.hold_text = cc::formatText("%.1f", m.hold_s);   // the figure only: the unit "s" is drawn beside the box
     m.listen_label = (!facts.listening && !facts.pending) ? T("LISTEN") : T("STOP");
     if ((facts.listening || facts.pending) && facts.blocks > 1) { m.next_label = T("Next block"); }
     return m;

@@ -33,6 +33,20 @@ const std::vector<const char*>& wizardStrings() {
 
 // ============================================================ rows ============================================================
 Row rHeading(const std::string& label) { Row r; r.kind = kHeading; r.label = label; return r; }
+void placeNote(std::vector<Row>& rows, const std::string& text, int tone) {
+    if (tone == kErr) {
+        std::size_t best = rows.size(), bestLen = 0;
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            const Row& r = rows[i];
+            if (r.kind != kKey && r.kind != kTick && r.kind != kChoice && r.kind != kField && r.kind != kMasked && r.kind != kSlider) { continue; }
+            const std::string head = r.label + ": ";
+            if (!r.label.empty() && r.label.size() >= bestLen && text.compare(0, head.size(), head) == 0) { best = i; bestLen = r.label.size(); }
+        }
+        if (best < rows.size()) { rows.insert(rows.begin() + static_cast<std::ptrdiff_t>(best) + 1, rNote(text, tone)); return; }
+    }
+    rows.push_back(rNote(text, tone));
+}
+
 Row rNote(const std::string& text, int tone) { Row r; r.kind = kNote; r.label = text; r.tone = tone; return r; }
 Row rUnproven() { return rNote(cascade::i18n::tr("Not yet proved on a real radio."), kWarn); }
 Row rKey(const std::string& id, const std::string& label, bool enabled, const std::string& tip, bool on) { Row r; r.kind = kKey; r.id = id; r.label = label; r.enabled = enabled; r.note = tip; r.on = on; return r; }

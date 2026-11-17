@@ -14,6 +14,7 @@
 #include "core/i18n.hpp"
 #include "core/raw_file_id.hpp"
 #include "core/rec_naming.hpp"
+#include "core/utf8_text.hpp"
 #include "core/schedule.hpp"
 
 namespace foxsdr::slintlanes3 {
@@ -203,9 +204,7 @@ std::string replayHeldText(const std::string& fact) {
     }
     if (seconds < 0.0 || bytes < 0.0) { return std::string(); }
     if (!(seconds > 0.0)) { return tr("nothing held"); }
-    char b[160];
-    std::snprintf(b, sizeof(b), tr("%s s of audio held (%.1f MB)").c_str(), numberText(seconds).c_str(), bytes / 1e6);
-    return b;
+    return cascade::core::formatText(tr("%s s of audio held (%.1f MB)").c_str(), numberText(seconds).c_str(), bytes / 1e6);
 }
 
 Built replayJson(const std::string& secondsText, double maxSeconds) {

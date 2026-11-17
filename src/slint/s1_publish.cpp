@@ -167,7 +167,7 @@ struct S1Publisher::Impl {
 
     // ---------------------------------------------------------------- row helpers (each registers the row's handler)
     // The section's last row is always a note (empty until something was sent), so a first answer never changes the list's shape and a slider being dragged is not rebuilt under the pointer.
-    void endNote(std::vector<Row>& v, Sec s) { v.push_back(rNote(noteText[s], noteTone[s])); }
+    void endNote(std::vector<Row>& v, Sec s) { placeNote(v, noteText[s], noteTone[s]); }
 
     // The key that folds a group away: lit while the group is open. Returns whether it is.
     bool fold(std::vector<Row>& v, const std::string& id, const std::string& label, const std::string& tip) {

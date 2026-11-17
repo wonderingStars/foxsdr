@@ -97,6 +97,8 @@ struct NeededRow {
 std::vector<NeededRow> parseNeeded(const std::string& neededLibsJson);
 // What the state is called on the screen. A header-only "working" is "Found (not test-loaded)", NEVER "Working"; only depth "loaded" is "Found and working".
 std::string neededStateWords(const NeededRow& r);
+// The engine's analyser-job state word (idle, running, done, cancelled, failed) in the user's words; a word it does not know comes back as it is.
+std::string jobStateWords(const std::string& state);
 // The tone of that line (lanek RowTone): good only for a loaded, working library.
 int neededStateTone(const NeededRow& r);
 // The rows of the panel for one library (name, what needs it, state, where to get it, the steps, the licence line). `draftPath` is what the person typed for a copy-in library.

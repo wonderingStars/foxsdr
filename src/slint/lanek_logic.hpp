@@ -45,6 +45,9 @@ struct Row {
 
 Row rHeading(const std::string& label);
 Row rNote(const std::string& text, int tone = kDim);
+// A section's one status line. A refusal ("<name of the key or field>: <why>", tone kErr) is put directly under the row it names, so it is read beside the box that
+// was wrong and not at the end of a section hundreds of pixels away (look review item 10); a line that names no row, or any other tone, goes at the end as before.
+void placeNote(std::vector<Row>& rows, const std::string& text, int tone);
 // DECISION 61 (must-fix lane A, owner decision 61): the ONE label on every radio family and setting that was proved only against stand-ins, never on a real radio. One component, one sentence.
 Row rUnproven();
 Row rKey(const std::string& id, const std::string& label, bool enabled = true, const std::string& tip = "", bool on = false);

@@ -7,11 +7,14 @@
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <thread>
 
+#include "core/i18n.hpp"
 #include "core/radio_events.hpp"
+#include "core/utf8_text.hpp"
 
 namespace cascade::source {
 namespace rre = ::cascade::core::radioreport;
@@ -220,13 +223,13 @@ struct RawIqNetSource::Reader {
                 if (!link.run.load(std::memory_order_relaxed)) { return false; }   // we are closing
                 if (timedOut(t->lastError())) {
                     if (link.streaming.load(std::memory_order_relaxed) && ++silentTicks >= silentLimit) {
-                        link.fault("the I/Q stream stopped", "no samples arrived for " + std::to_string(silentLimit * kPollMs / 1000.0).substr(0, 4) + " s");
+                        link.fault(cascade::core::formatText(cascade::i18n::tr("No samples arrived for %g seconds"), silentLimit * kPollMs / 1000.0), cascade::i18n::tr("the sender may have stopped, or its address or port may be wrong"));
                         return false;
                     }
                     if (!link.streaming.load(std::memory_order_relaxed)) { silentTicks = 0; }
                     return true;
                 }
-                link.fault("the I/Q stream connection failed", t->lastError());
+                link.fault(cascade::i18n::tr("The connection to the I/Q stream failed"), t->lastError());
                 return false;
             }
             silentTicks = 0;

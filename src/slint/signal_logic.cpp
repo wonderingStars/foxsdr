@@ -110,6 +110,11 @@ std::string sourceChipText(const std::string& deviceName) {
     std::string chip = tr(deviceName.c_str());
     const std::size_t colon = chip.rfind(": ");
     if (colon != std::string::npos) { chip = chip.substr(colon + 2); }
+    // A network address is shown whole (host and port) or not at all: cut at ten characters it read "127.0.0.1:" with no port.
+    if (chip.size() > 10 && chip.find(' ') == std::string::npos) {
+        const std::size_t c2 = chip.rfind(':');
+        if (c2 != std::string::npos && c2 + 1 < chip.size() && chip.find_first_not_of("0123456789", c2 + 1) == std::string::npos) { return std::string(); }
+    }
     const char* end = chip.c_str();
     for (int i = 0; i < 10 && *end != '\0'; ++i) { end = cc::utf8Next(end); }
     chip.resize(static_cast<std::size_t>(end - chip.c_str()));
@@ -667,7 +672,7 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
         });
         // The row that is current is the one NEAREST the state's rate: a radio that coerces a rate is on the row it landed on.
         if (rateIndex >= 0) { m.rate_text = m.rates[static_cast<std::size_t>(rateIndex)].label; }
-        m.actual_rate = cc::formatText(tr("actual %.4g MS/s"), st.sampleRateHz / 1.0e6);
+        m.actual_rate = cc::formatText(tr("%.4g MS/s"), st.sampleRateHz / 1.0e6);
 
         std::string antenna;
         eachItem(t, FOXAPI_LIST_ANTENNAS, [&](int, const FoxListItem& it) {
@@ -899,7 +904,13 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
     m.mismatch_note = factOf(t, "fact.status.tuneMismatchNote");
     if (faulted) {
         // THE WHOLE SENTENCE (fact.status.deviceFault), never the state's faultMessage, which is cut at 127 bytes.
-        const std::string fault = factOf(t, "fact.status.deviceFault");
+        std::string fault = factOf(t, "fact.status.deviceFault");
+        // The pipeline names the thread that found the fault ("source thread: ..."): a word for the developer, not for the person reading the card.
+        static const char kThreadPrefix[] = "source thread: ";
+        if (fault.rfind(kThreadPrefix, 0) == 0) {
+            fault.erase(0, sizeof(kThreadPrefix) - 1);
+            if (!fault.empty() && fault[0] >= 'a' && fault[0] <= 'z') { fault[0] = static_cast<char>(fault[0] - 'a' + 'A'); }
+        }
         m.stopped_line = cc::formatText(tr("Device stopped: %s"), fault.c_str());
         // Not under a driver that has already said what to do (the SDRplay lost-session sentences end "then restart FoxSDR").
         if (fault.find("restart FoxSDR") == std::string::npos) {
