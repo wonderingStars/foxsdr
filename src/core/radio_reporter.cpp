@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/radio_reporter.hpp"
+#include "core/report_send_guard.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -197,9 +198,12 @@ Event& Event::text(const std::string& name, const std::string& raw, std::size_t 
     return *this;
 }
 
-Transport makeRealTransport(const std::shared_ptr<UploadCancel>& cancel) {
-    return [cancel](const std::string& url, const std::string& body) {
+Transport makeRealTransport(const std::shared_ptr<UploadCancel>& cancel, const std::string& profileDir) {
+    return [cancel, profileDir](const std::string& url, const std::string& body) {
         PostResult out;
+        // THE ONE GATE (report_send_guard.hpp): a test, a drive or a CI run never sends a report off this computer. Refused here means nothing was
+        // attempted, so the sender keeps the message and backs off, exactly as for a machine with no network.
+        if (!outsideSendRefusal(url, profileDir).empty()) { return out; }
         const RawPostResult r = postBounded(url, body, cancel, /*captureBody=*/true);
         out.attempted = r.attempted;
         out.status = r.status;
@@ -761,7 +765,7 @@ struct Reporter::Impl {
             if (t < backoffUntil) { return 0; }
             items = collect(t, o.maxBatch);
         }
-        const Transport transport = o.transport ? o.transport : makeRealTransport(cancel);
+        const Transport transport = o.transport ? o.transport : makeRealTransport(cancel, o.dir);
         for (Item& it : items) {
             if (cancel->cancelled()) { break; }
             std::int64_t sendNow = 0;

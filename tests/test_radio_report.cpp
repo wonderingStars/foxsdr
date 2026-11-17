@@ -279,7 +279,7 @@ int main() {
         CHECK(cpuWithoutClock("Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz") == "Intel(R) Core(TM) i7-8700K CPU");
         CHECK(textCode(cpuWithoutClock("Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz"), "").empty());
         CHECK(versionText("libairspyhf 1.6.8 (x)") == "libairspyhf 1.6.8 x");
-        CHECK(!kRadioReportsLiveSend);   // THE ONE SWITCH IS OFF in this build
+        CHECK(kRadioReportsLiveSend);   // THE ONE SWITCH IS ON in this build (0.99.109 sends; was: pinned false)
     }
 
     return testSummary("test_radio_report");

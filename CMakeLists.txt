@@ -495,6 +495,7 @@ if(CASCADE_BUILD_INTERFACE)
 # pipeline ... are not reachable from a src/gui translation unit: naming one is a compile error that says why. What the interface
 # asks of the engine it asks through the engine API's table (and the plugin UI port, core/plugin_ui_port.hpp: the one extension) - nothing else.
 include(cmake/interface_fence.cmake)
+include(cmake/NoOutsideReports.cmake)
 
 add_library(cascade_interface STATIC ${CASCADE_GUI})
 cascade_apply_interface_fence(cascade_interface)

@@ -359,6 +359,7 @@ int main(int argc, char** argv) {
     setEnv("FOXSDR_DIAG_DIR", (dir / "diag").string());
     setEnv("USERPROFILE", (dir / "home").string());
     setEnv("HOME", (dir / "home").string());
+    setEnv("FOXSDR_NO_OUTSIDE_REPORTS", "1");   // no report leaves this computer from a test or a drive (core/report_send_guard.hpp)
     for (const char* url : {"FOXSDR_TELEMETRY_URL", "FOXSDR_CRASH_URL", "FOXSDR_UPDATE_URL", "FOXSDR_REPORTS_URL", "FOXSDR_FEATURE_URL", "FOXSDR_PROBLEM_URL"}) {
         setEnv(url, "http://127.0.0.1:9/");
     }

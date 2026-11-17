@@ -11,13 +11,18 @@ has trusted yet would only make the numbers harder to believe later.
 > by it: **a radio that does not open is reported every time it happens, with
 > Diagnostics on or off** (and with Usage reporting on or off), as its own message
 > to the usage service, written to the `radio-reports` folder beside `config.json`
-> before it is sent. It carries the radio's driver, model and serial number, the
+> before it is sent (0.99.109 sends: a message that cannot be sent is kept and tried again for up to 14 days, then deleted). It carries the radio's driver, model and serial number, the
 > driver's reason with serial numbers, names, addresses, frequencies and paths
 > taken out, up to 40 scrubbed radio lines of the log ring, and a flag saying
 > whether Diagnostics was on. See `PRIVACY.md`, **Radio failure reports and the
 > radio journal**, and `docs/radio-reports-contract.md` for the exact fields. The
 > sentence "uploads nothing" below describes phase 1 of the crash capture, which
 > is unchanged.
+>
+> **Deployment order (radio reports).** The Worker and the site's intake are deployed and proved with real messages BEFORE any build with sending on
+> (`radioreport::kRadioReportsLiveSend`, true from 0.99.109) is given to anyone; the application tolerates the Worker of today (`400 bad id`: kept and tried
+> again) and a site that is not up (502/503: kept, backed off 1 minute, 5 minutes, 1 hour, 6 hours). A test, a drive or a CI run never sends a report off its
+> own computer (`src/core/report_send_guard.hpp`).
 
 ## Why a crash handler was not enough on its own
 

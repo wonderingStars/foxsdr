@@ -44,6 +44,7 @@ inline void hermetic(const char* tag) {
                           "XDG_DATA_HOME", "XDG_CACHE_HOME"}) {
         setEnv(v, tmp);
     }
+    setEnv("FOXSDR_NO_OUTSIDE_REPORTS", "1");   // no report leaves this computer from a test or a drive (core/report_send_guard.hpp)
     setEnv("FOXSDR_TELEMETRY_URL", "http://127.0.0.1:9");
     // THE SCHEDULER IS THE MACHINE'S, NOT THE TEST'S (0.99.84 merge, docs/engine-merge-0.99.84.md section 10). Master's 0.99.73 makes
     // every pipeline's DSP and source threads real-time wherever the operating system grants it (Linux as root: the ThreadSanitizer

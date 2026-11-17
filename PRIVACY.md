@@ -324,9 +324,10 @@ kind of failure of each radio is always sent, the newest later one is kept and
 sent at the day's end, and the number not sent is stated in it.
 
 **Where the data goes:** `https://telemetry.foxsdr.com` (the Worker in
-`telemetry-worker/`), which forwards these messages to the FoxSDR site. Until
-that service is live this build only keeps the messages on your computer, in the
-`radio-reports` folder beside `config.json`, and sends none of them.
+`telemetry-worker/`), which forwards these messages to the FoxSDR site. Each
+message is first written to the `radio-reports` folder beside `config.json` and
+then sent; one that cannot be sent is kept there and tried again for up to 14
+days, then deleted.
 
 ## What is sent when usage reporting is enabled
 

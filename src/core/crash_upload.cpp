@@ -20,6 +20,8 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <mutex>
 
 #include <nlohmann/json.hpp>
 
@@ -971,9 +973,29 @@ std::uint64_t parseRetryAfterSeconds(const std::string& v) {
 // them, never by this number.
 constexpr std::size_t kMaxCapturedBodyBytes = 16 * 1024;
 
+namespace {
+std::mutex& postObserverMutex() { static std::mutex m; return m; }
+std::function<bool(const std::string&)>& postObserver() { static std::function<bool(const std::string&)> f; return f; }
+}  // namespace
+
+void setPostObserverForTest(std::function<bool(const std::string& url)> observer) {
+    std::lock_guard<std::mutex> lk(postObserverMutex());
+    postObserver() = std::move(observer);
+}
+
+bool postObserverVetoes(const std::string& url) {
+    std::function<bool(const std::string&)> obs;
+    {
+        std::lock_guard<std::mutex> lk(postObserverMutex());
+        obs = postObserver();
+    }
+    return obs && obs(url);
+}
+
 RawPostResult postBounded(const std::string& url, const std::string& json,
                           const std::shared_ptr<UploadCancel>& cancel, bool captureBody) {
     RawPostResult res;
+    if (postObserverVetoes(url)) { return res; }
 #if defined(_WIN32)
     if (url.empty() || json.empty() || !cancel) { return res; }
 

@@ -617,12 +617,14 @@ int main(int argc, char** argv) {
         CHECK(r.server->count() == 0 && filesIn(r.rep.dir(), "fail-").empty() && r.rep.stats().expired == 1);
     }
 
-    // --- THE SWITCH: a build with live send OFF sends none of the new kinds and still queues them ---------------------------------------------------
+    // --- THE SWITCH: the shipped build's switch is ON (0.99.109; was: off). A run that does not arm the send (a bounded or hermetic run: the engine passes
+    //     liveSend = false until an interactive window arms it) sends none of the new kinds and still queues them ---------------------------------------------
     {
-        static_assert(!kRadioReportsLiveSend, "THE ONE SWITCH is off in this build");
+        static_assert(kRadioReportsLiveSend, "THE ONE SWITCH is on in this build");
+        CHECK(Reporter::Options{}.liveSend);   // what an interactive run gets by default
         Rig r("switch");
         Reporter::Options o = r.options();
-        o.liveSend = kRadioReportsLiveSend;   // exactly what the shipped build passes
+        o.liveSend = false;   // exactly what a bounded run passes (Engine::radioReportsStart), until setLiveSend arms it
         r.start(o);
         r.rep.fileFailure(failure("rtlsdr", "index=0", "in use", "busy"), {});
         r.rep.event(openStart(rtl));

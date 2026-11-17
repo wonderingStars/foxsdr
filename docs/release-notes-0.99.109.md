@@ -53,6 +53,20 @@ item (the section is named in brackets).
 - The manual now has a **contents list**, a warning for every network feature that exists in this build, and the radio-count
   wording corrected: eight radios in the main window, five Radio nodes on the patch canvas.
 
+### What this version sends about radios (MERGED; sending is on in this build)
+
+- **Radio failure reports.** This version sends a report when a radio does not open, and, while Usage reporting is on, a journal of what happens to each
+  radio (found, opened, settings applied, how its stream is doing, a recovery, how and why it closed or stopped). A failure report holds the radio's driver,
+  model and **serial number** (the serial number is collected, by the owner's decision), the driver's own sentence with serial numbers, account and computer
+  names, addresses and frequencies taken out and every path replaced, a class word for the reason, up to 40 scrubbed radio lines of the log, the FoxSDR
+  version, install channel and update channel, the operating system and processor, and whether Diagnostics was on. It never holds a tuned frequency (only
+  the name of a band), a bookmark, the name of a file or recording, a path, anything decoded, a position, an IP address, or a user or computer name. The
+  approved privacy text says: "When a radio does not open, FoxSDR sends ONE report about that failure, every time it happens - whether or not Diagnostics
+  is on, and whether or not Usage reporting is on." With Usage reporting off the report carries no install identifier, no session identifier and no
+  sequence number, and the journal, the machine description, the first-session record and the still-running beat are not sent. "Each message is first
+  written to the `radio-reports` folder beside `config.json` and then sent; one that cannot be sent is kept there and tried again for up to 14 days, then
+  deleted." [PRIVACY.md, Radio failure reports and the radio journal]
+
 ### PENDING MERGE: libraries you add yourself (branches oss-userlibs, oss-voice, oss-libs, oss-radios)
 
 - Libraries FoxSDR does not ship and you add yourself: mbelib (half-rate voice, for the DMR and D-STAR Monitor), Codec 2 (FreeDV

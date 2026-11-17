@@ -2026,3 +2026,6 @@ if(WIN32)
     endif()
 endif()
 # lane S5c end -----------------------------------------------------------------------------------------------------------------------------------
+
+# NO TEST SENDS A REPORT OFF THIS COMPUTER (send-on lane): see cmake/NoOutsideReports.cmake.
+cascade_forbid_outside_reports()

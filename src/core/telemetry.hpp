@@ -524,9 +524,9 @@ public:
     // THE BEAT WITH THE RADIOS OPEN RIGHT NOW (wave 8, contract 3.10): `radios` is the radio keys (model slug and serial) of at most eight radios, left out
     // when none is open or when the list is empty. `synthetic` adds the test marker. The two-argument form above is this with neither.
     static std::string beatJson(const std::string& id, const std::string& v, const std::vector<std::string>& radios, bool synthetic = false);
-    // The keys the next beat names. Sent only while radioreport::kRadioReportsLiveSend is true: the Worker that reads the field is not deployed.
+    // The keys the next beat names. Sent only while radioreport::kBeatCarriesRadios is true, which it is NOT in 0.99.109: the approved privacy text says the beat is the install identifier and the version and nothing else.
     void setRadios(const std::vector<std::string>& keys);
-    // What the NEXT beat will carry, exactly: the beat with the radios only while radioreport::kRadioReportsLiveSend is true, and the test marker when this is a
+    // What the NEXT beat will carry, exactly: the beat with the radios only while radioreport::kBeatCarriesRadios (and the live send) is true, and the test marker when this is a
     // test run. poll() posts this and nothing else.
     std::string nextBeatJson() const;
 

@@ -18,7 +18,9 @@
 // deployed today) is "not ready": keep and retry, never delete. 400 `refused: <text-rule code>` is resent ONCE with the text withheld; any other
 // refusal drops the message and counts it.
 //
-// THE SWITCH. kRadioReportsLiveSend (radio_report.hpp) is false in this build: the queue is written, nothing is posted.
+// THE SWITCH. kRadioReportsLiveSend (radio_report.hpp) is true in this build: the queue is written, then sent. The Worker is deployed BEFORE any build with
+// sending on is given to anyone; this app tolerates the Worker of today (`bad id`: kept, retried) and a site that is not up (502/503: kept, backed off).
+// A test, a drive or a CI run sends nothing off this computer (core/report_send_guard.hpp).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #ifndef CASCADE_CORE_RADIO_REPORTER_HPP
@@ -53,8 +55,9 @@ struct PostResult {
 };
 using Transport = std::function<PostResult(const std::string& url, const std::string& json)>;
 
-// The real transport: core::postBounded to the endpoint, abortable through `cancel`.
-Transport makeRealTransport(const std::shared_ptr<UploadCancel>& cancel);
+// The real transport: core::postBounded to the endpoint, abortable through `cancel`. It refuses (attempted = false, no socket) any destination off this
+// computer unless this is a real user's run (core/report_send_guard.hpp); `profileDir` is the queue's folder.
+Transport makeRealTransport(const std::shared_ptr<UploadCancel>& cancel, const std::string& profileDir = std::string());
 
 enum class Trigger { StartupRestore, UserPick, SavedRetry, PatchRadio, AutoReopen, Other };
 const char* triggerWord(Trigger t);
@@ -122,7 +125,7 @@ struct Stats {
     std::uint64_t boundHeld = 0;          // held by the daily bound (sent later, counted in `dropped`)
     std::uint64_t boundDropped = 0;       // not sent because a later one replaced them (counted in `dropped`)
     std::uint64_t guardRefused = 0;       // refused locally: a forbidden field or text that would not pass
-    std::uint64_t suppressedByBuild = 0;  // batches that did nothing because kRadioReportsLiveSend is false
+    std::uint64_t suppressedByBuild = 0;  // batches that did nothing because the live send is not armed (a bounded run, or kRadioReportsLiveSend false)
     std::size_t failFilesOnDisk = 0, journalLinesPending = 0;
 };
 

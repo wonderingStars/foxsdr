@@ -131,12 +131,12 @@ int main() {
         o.identity.arch = "x64";
         o.identity.launches = 1;
     };
-    // THE SHIPPED BUILD: the send is OFF, so what is searched is the queue as the files were written.
+    // THE QUEUE AS WRITTEN (the send is not armed here, whatever the switch says): what is searched is the files as they were written.
     rr::Reporter rep;
     rr::Reporter::Options o;
     o.dir = (base / "radio-reports").string();
     o.endpoint = "http://127.0.0.1:9/";
-    o.liveSend = rr::kRadioReportsLiveSend;
+    o.liveSend = false;   // the switch is ON in this build (was: off, and this line passed it): this reporter is the QUEUE AS WRITTEN, rep2 below is the wire
     o.nowEpoch = [&clock]() { return clock.load(); };
     identityOf(o);
     rep.configure(o);

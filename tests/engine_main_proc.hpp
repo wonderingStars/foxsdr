@@ -121,6 +121,7 @@ inline void isolate(const fs::path& home) {
     }
     // No vendor driver is loaded from the real machine by a child that lists them.
     setEnv("SOAPY_SDR_PLUGIN_PATH", (home / "no-soapy-modules").string());
+    setEnv("FOXSDR_NO_OUTSIDE_REPORTS", "1");   // no report leaves this computer from a test or a drive (core/report_send_guard.hpp)
     setEnv("FOXSDR_TELEMETRY_URL", "http://127.0.0.1:9");
 #if !defined(_WIN32)
     // The engine initialises PortAudio, whose ALSA backend loads the PulseAudio plug-in (libasound2-plugins, which CI installs) when it

@@ -12015,7 +12015,7 @@ ConfigReadback Engine::configReadback() {
 void Engine::configureHeartbeat() {
     telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(), telemetryInstallId_, cascade::versionString());
     // AN INTERACTIVE RUN ARMS THE RADIO REPORTS' SEND beside the heartbeat (a bounded run never does). Whether anything is actually posted is
-    // radioreport::kRadioReportsLiveSend, which is false in this build.
+    // radioreport::kRadioReportsLiveSend, which is true in this build (a test or a drive still sends nothing off this computer: core/report_send_guard.hpp).
     cascade::core::radioreport::global().setLiveSend(true);
 }
 

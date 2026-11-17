@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 #include "core/telemetry.hpp"
+#include "core/crash_upload.hpp"
+#include "core/report_send_guard.hpp"
 
 #include "core/package_identity.hpp"
 #include "core/radio_report.hpp"
@@ -470,7 +472,9 @@ void TelemetryReporter::send(const std::string& url, const std::string& json, Se
     // ONE body for every platform: the Windows (WinHTTP) and POSIX (httplib)
     // transports each define postJson above, and nothing about the thread or
     // the completion differs between them.
-    sendVia([](const std::string& u, const std::string& j) { return postJson(u, j); }, url, json,
+    // THE SAME GATE AS THE RADIO REPORTS' (core/report_send_guard.hpp): the beat names the radios now, so a test, a drive or a CI run never sends it off
+    // this computer either.
+    sendVia([](const std::string& u, const std::string& j) { return radioreport::outsideSendRefusal(u).empty() && !postObserverVetoes(u) && postJson(u, j); }, url, json,
             std::move(done));
 }
 
@@ -542,7 +546,7 @@ std::string HeartbeatSender::beatJson(const std::string& id, const std::string& 
 }
 
 std::string HeartbeatSender::nextBeatJson() const {
-    return beatJson(id_, v_, radioreport::kRadioReportsLiveSend ? radios_ : std::vector<std::string>(), syntheticRun());
+    return beatJson(id_, v_, radioreport::kRadioReportsLiveSend && radioreport::kBeatCarriesRadios ? radios_ : std::vector<std::string>(), syntheticRun());
 }
 
 void HeartbeatSender::setRadios(const std::vector<std::string>& keys) {
