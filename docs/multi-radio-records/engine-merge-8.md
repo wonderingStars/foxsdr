@@ -80,7 +80,7 @@ Not changed, though other lanes pin them: `test_health_events` token count.
 
 ## 6. Final state, stamp tests, config hash
 
-(See section 8, filled in after the final rebuild and full headless gate at the commit that carries this record.)
+After the fixes, a full rebuild at `ca11ba34` (the commit that carries sections 1 to 5 and 7; exit 0), then the FULL gates again at that commit through the launcher on `FoxSDRMerge8M`: headless `ctest -L "headless|slint" -I 1,1700 -j3` in one run: `100% tests passed out of 1218` (2 skipped by their own rule: `test_plugin_abi3_compat`, `test_rtlsdr_live`), `Total Test time 1968.94 s`; this run contains the stamp tests (`test_diagnostics`, `test_diagnostics_free`, built at that commit: Passed). GUI `ctest -L gui`: `100% tests passed out of 418`, `Total Test time 3291.18 s`, `slint_drive_look-stamps`, `slint_drive_lanel-libs` and the two companions-website drives among them. Counting the first gates, every red of this merge is therefore classified: 7 real (all fixed), 2 intermittent (one cause found and fixed, `look-stamps` cause unproven; it passed in this final run). The commit that adds this paragraph is documentation only: a stamp test run on a build made before it reads the older commit. The real `%APPDATA%/foxsdr/config.json` sha256 after the last test run: `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (unchanged). Nothing is running: every build and test was run to its end in the foreground.
 
 ## 7. Open rows
 
