@@ -12,6 +12,7 @@
 
 #include "foxsdr_api.h"
 #include "lanek_logic.hpp"
+#include "s5_logic.hpp"
 
 namespace foxsdr::slints5 {
 
@@ -39,6 +40,8 @@ public:
     // The engine's answer to a command this object sent (others are ignored).
     void onAnswer(const FoxCommandResult& r);
 
+    // TEST SEAM: whether the automatic ppm panel is drawn (default ppmAutoControlOffered(), which is false in this release).
+    void setPpmAutoOffered(bool on) { ppmAutoOffered_ = on; }
     bool dirty() const { return dirty_; }
     void clearDirty() { dirty_ = false; }
     long sent() const { return sent_; }
@@ -86,6 +89,7 @@ private:
     std::map<std::uint64_t, Pending> pending_;    // ticket -> what it was
     std::string note_;
     int noteTone_ = 0;
+    bool ppmAutoOffered_ = foxsdr::slints5::ppmAutoControlOffered();
     std::string armed_;                           // the id of a key pressed once that asks for a second press
     long sent_ = 0, refused_ = 0, answered_ = 0;
     bool dirty_ = true;

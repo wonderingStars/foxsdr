@@ -492,6 +492,8 @@ RadioReason classifyRadioOpen(std::string_view driverKind, std::string_view erro
         has("is present") || has("there is no") || has("no sdrplay device") ||
         has("nothing at") || has("no match") || has("not found") || has("no such") ||
         has("not in the list") || has("was not found") || has("not plugged") ||
+        // a saved radio kind whose settings name no device (engine.cpp restore: "the saved settings name this kind of radio but not which one"): no radio to open, nearest class absent
+        has("but not which one") ||
         // the drivers' own "no <radio> with serial <n> is connected" (airspy, airspyhf, hackrf, mirisdr, rx888, aor: said "other" until now)
         (has("no ") && has(" with serial ")) ||
         // Windows' ERROR_DEVICE_NOT_CONNECTED (1167) and ERROR_NO_SUCH_DEVICE (433)

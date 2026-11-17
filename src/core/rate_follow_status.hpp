@@ -17,9 +17,13 @@
 #pragma once
 
 #include <cmath>
+#include <cstdint>
+#include <memory>
 #include <cstdio>
 #include <string>
 
+#include "core/radio_events.hpp"
+#include "source/device_source.hpp"
 #include "source/iq_source.hpp"
 
 namespace cascade::gui {
@@ -84,8 +88,10 @@ inline std::string sourceErrorAfterRateSet(const std::string& current, double re
     }
     if (!errAfter.empty() && errAfter != errBefore) { return kRateCoercedPrefix + errAfter; }
     char buf[160];
-    std::snprintf(buf, sizeof(buf), "%sthe radio runs at %.6g MS/s, not the %.6g MS/s asked",
-                  kRateCoercedPrefix, landedHz / 1e6, requestedHz / 1e6);
+    // ONE PLAIN SENTENCE, which rate is in use and why (hardware check 2026-11-17: a saved 5 MS/s on an RTL-SDR became 3.2 MS/s and the line only said
+    // "not the 5 MS/s asked"): the radio cannot run at the rate asked, so it runs at the nearest one it can.
+    std::snprintf(buf, sizeof(buf), "%sthis radio cannot run at %.6g MS/s, so it runs at %.6g MS/s",
+                  kRateCoercedPrefix, requestedHz / 1e6, landedHz / 1e6);
     return buf;
 }
 
@@ -105,15 +111,29 @@ struct RateSetOutcome {
 // remembered setting being restored. It reaches IqSource::setSampleRateHzExplicit
 // instead of the plain setSampleRateHz; every source but AirspySource treats
 // the two identically (see iq_source.hpp).
+//
+// A RATE THE RADIO CANNOT DO IS REPORTED (hardware check 2026-11-17): a call that succeeded but landed on another rate is a setting the radio did not take, so it
+// is queued as the same refused-setting event a typed out-of-range value is (control `rate`, refusedClass `range`), unless the driver already said so itself on this
+// thread. `why` is the contract's word for what was being applied ("open", "restore", "user", "auto"); null leaves the thread's own scope (default "user"). The text
+// carries no number: the rate is not part of what is reported.
 inline RateSetOutcome applySourceRate(cascade::source::IqSource& src, double requestedHz,
                                       const std::string& currentError,
-                                      bool explicitRequest = false) {
+                                      bool explicitRequest = false, const char* why = nullptr) {
     const std::string errBefore = src.lastError();
+    const std::uint64_t refusalsBefore = cascade::core::radioreport::refusalSequence();
     RateSetOutcome out;
     out.ok = explicitRequest ? src.setSampleRateHzExplicit(requestedHz)
                              : src.setSampleRateHz(requestedHz);
     const std::string errAfter = src.lastError();
     out.landedHz = src.sampleRateHz();
+    if (out.ok && rateLandedElsewhere(requestedHz, out.landedHz)) {
+        if (const cascade::source::DeviceSource* dev = dynamic_cast<const cascade::source::DeviceSource*>(&src)) {
+            std::unique_ptr<cascade::core::radioreport::ControlWhyScope> scope;
+            if (why != nullptr) { scope = std::make_unique<cascade::core::radioreport::ControlWhyScope>(why); }
+            cascade::core::radioreport::noteRefusalIfSilentSince(refusalsBefore, &src, dev->driverKey(), cascade::core::radioreport::Control::Rate,
+                                                                 "the radio cannot run at the sample rate asked; it runs at the nearest rate it can", /*userRange=*/true);
+        }
+    }
     out.sourceError = out.ok ? sourceErrorAfterRateSet(currentError, requestedHz, out.landedHz,
                                                        errBefore, errAfter)
                              : errAfter;

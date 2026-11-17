@@ -21,6 +21,9 @@ bool parseIfBandwidthKHz(const std::string& text, long long& hz, std::string& er
 // The engine's fact ("radio.N.ifBandwidth", Hz) in words: "Automatic (from the sample rate)" or "400 kHz"; "" for anything that is not a number.
 std::string ifBandwidthWords(const std::string& fact);
 
+// WHETHER THE WINDOW DRAWS THE ANALOGUE IF BANDWIDTH CONTROL. It does not: on a real R820T dongle every typed width from 300 kHz to 1 MHz gave the same passband when the IF was held equal (the tuner's low-pass nibble has no measurable effect behind the channel-filter extension the driver switches on), and the passband that results is about 2 MHz wide and one-sided, not the width typed. 'Automatic' is unchanged and is the only behaviour offered. The engine's if_bandwidth option and the driver's setter stay for automation and for the tests that prove the register writes; a window control comes back only with a measurement that shows the width is true.
+constexpr bool ifBandwidthControlOffered() { return false; }
+
 }  // namespace foxsdr::slints5b
 
 

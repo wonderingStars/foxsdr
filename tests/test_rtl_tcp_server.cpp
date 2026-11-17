@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "net_test_support.hpp"
+#include "source/rtl_tcp_source.hpp"
 #include "test_check.hpp"
 
 using namespace cascade::net;
@@ -132,6 +133,53 @@ void testHeaderAndStream() {
     s.stop();
     CHECK(msSince(t0) < 2000);
     CHECK(c.waitEof(3000));
+}
+
+// THE HEADER SAYS WHAT THE RADIO BEING SERVED IS (hardware check 2026-11-17, item 7: a real rtl_tcp reports its tuner type and gain count, the server said 0 and 0).
+// Read here from a stand-in client byte by byte AND by the tree's own rtl_tcp client (RtlTcpSource), which decides what it may set from the same two numbers.
+void testHeaderCarriesTheTuner() {
+    std::string err;
+    Seen seen;
+    {   // never told: the documented "unknown", 0 and 0
+        RtlTcpServer s(cfg0());
+        CHECK(s.start(seen.fn(), err));
+        Client c;
+        CHECK(c.connect(static_cast<std::uint16_t>(s.port())));
+        CHECK(c.waitBytes(kRtlTcpHeaderBytes, 3000));
+        CHECK(c.got.size() >= kRtlTcpHeaderBytes && std::memcmp(c.got.data(), "RTL0", 4) == 0);
+        bool zeroes = c.got.size() >= kRtlTcpHeaderBytes;
+        for (std::size_t k = 4; k < kRtlTcpHeaderBytes && k < c.got.size(); ++k) { zeroes = zeroes && c.got[k] == 0; }
+        CHECK(zeroes);
+    }
+    {   // told after start (as the engine's pass does): the next client gets the real numbers, big-endian at bytes 4 and 8
+        RtlTcpServer s(cfg0());
+        CHECK(s.start(seen.fn(), err));
+        s.setTunerInfo(5, 29);
+        Client c;
+        CHECK(c.connect(static_cast<std::uint16_t>(s.port())));
+        CHECK(c.waitBytes(kRtlTcpHeaderBytes, 3000));
+        CHECK(c.got.size() >= kRtlTcpHeaderBytes && std::memcmp(c.got.data(), "RTL0", 4) == 0);
+        CHECK(c.got.size() >= kRtlTcpHeaderBytes && c.got[4] == 0 && c.got[5] == 0 && c.got[6] == 0 && c.got[7] == 5 && c.got[8] == 0 && c.got[9] == 0 && c.got[10] == 0 && c.got[11] == 29);
+    }
+    {   // the tree's own client reads the same two numbers: a tuner it names and a gain count it sizes its control by
+        RtlTcpServer s(cfg0());
+        CHECK(s.start(seen.fn(), err));
+        s.setTunerInfo(6, 29);
+        cascade::source::RtlTcpSource src;
+        CHECK(src.open("rtltcp=127.0.0.1:" + std::to_string(s.port())));
+        CHECK(src.tunerType() == 6 && src.tunerName() == "R828D" && src.tunerGainCount() == 29);
+        src.closeDevice();
+        s.stop();
+    }
+    {   // and unknown stays unknown to that client
+        RtlTcpServer s(cfg0());
+        CHECK(s.start(seen.fn(), err));
+        cascade::source::RtlTcpSource src;
+        CHECK(src.open("rtltcp=127.0.0.1:" + std::to_string(s.port())));
+        CHECK(src.tunerType() == 0 && src.tunerGainCount() == 0);
+        src.closeDevice();
+        s.stop();
+    }
 }
 
 void testCommands() {
@@ -263,6 +311,7 @@ void testHostileClients() {
 int main() {
     testRefusals();
     testHeaderAndStream();
+    testHeaderCarriesTheTuner();
     testCommands();
     testHostileClients();
     return testSummary("test_rtl_tcp_server");

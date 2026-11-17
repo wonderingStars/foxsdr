@@ -1320,6 +1320,9 @@ void testReasonsFromTheDriversOwnSentences() {
          RadioReason::Timeout},
         {"soapy", "SoapySDR::Device::make() no match for args: driver=uhd", RadioReason::Absent},
         {"soundcard", "the card is not connected", RadioReason::Absent},
+        // a saved radio kind whose settings name no device (hw-findings item 4: the window ran on the generator, reported as "other")
+        {"rtlsdr", "the saved settings name this kind of radio but not which one", RadioReason::Absent},
+        {"soapy", "the saved settings name this kind of radio but not which one", RadioReason::Absent},
         // a control transfer the radio refused while being set up (the Airspy HF+ report)
         {"airspyhf",
          "the radio stopped answering while restoring the crystal trim: a control transfer "

@@ -261,6 +261,7 @@ void testC() {
     Rig r;
     r.pump(10);
     Panel p(r);
+    p.rows.setPpmAutoOffered(true);   // the window does not draw this panel in this release (hw-findings item 2); the engine behaviour behind it is still proved here
     p.open();
     std::vector<slk::Row> v = p.build();
     CHECK(!p.find(v, "m.use")->enabled && !p.find(v, "m.cancel")->enabled && p.find(v, "m.start")->enabled);

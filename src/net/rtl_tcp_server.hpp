@@ -2,7 +2,8 @@
 //
 // THE PROTOCOL (as the programs that speak it use it; UNVERIFIED against a real client in this lane: every test here is a stand-in client built from this description).
 //   * On connect the server sends a 12-byte header: the four ASCII bytes "RTL0", then two 32-bit big-endian numbers: the tuner type and the number of gain steps. This server
-//     says 0 and 0 (a tuner it does not name, no gain list): it is not an RTL-SDR and does not pretend to be one.
+//     says what the radio being served is where the engine knows it (setTunerInfo: 5 for an R820T, 6 for an R828D, and the number of gain steps of that tuner) and 0 and 0 ("unknown": a tuner it
+//     does not name, no gain list) otherwise. A client uses the two numbers to decide what it may set (the gain command it sends, the size of its gain control).
 //   * Then it streams the samples: interleaved I, Q, I, Q ... as UNSIGNED 8-bit values (zero is 128; net/iq_out.hpp's U8 conversion), at the sample rate of the radio the
 //     person chose. The rate is the radio's own: a client's request to change it is counted and NOT applied.
 //   * The client sends 5-byte commands: one byte for the command, then a 32-bit big-endian parameter. 0x01 is "set the centre frequency" (Hz); 0x02 sample rate, 0x03 gain mode,
@@ -76,7 +77,7 @@ public:
     // Called on the IO thread for every command with a known number; it must be quick and must not block.
     using CommandFn = std::function<void(std::uint8_t command, std::uint32_t parameter)>;
 
-    explicit RtlTcpServer(const RtlTcpConfig& cfg) : cfg_(cfg), ring_(cfg.ringBytes < 4096 ? 4096 : cfg.ringBytes) {}
+    explicit RtlTcpServer(const RtlTcpConfig& cfg) : cfg_(cfg), ring_(cfg.ringBytes < 4096 ? 4096 : cfg.ringBytes), tunerType_(cfg.tunerType), gainCount_(cfg.gainCount) {}
     ~RtlTcpServer();
     RtlTcpServer(const RtlTcpServer&) = delete;
     RtlTcpServer& operator=(const RtlTcpServer&) = delete;
@@ -92,6 +93,11 @@ public:
 
     RtlTcpStats stats() const;
 
+    // What the radio being served is, for the header the NEXT client gets (a client already connected has had its header). 0 and 0 = unknown. Any thread.
+    void setTunerInfo(std::uint32_t tunerType, std::uint32_t gainCount) noexcept {
+        tunerType_.store(tunerType, std::memory_order_relaxed);
+        gainCount_.store(gainCount, std::memory_order_relaxed);
+    }
     // The 12-byte header for these two numbers (the tests read it back).
     static void header(std::uint32_t tunerType, std::uint32_t gainCount, std::uint8_t out[kRtlTcpHeaderBytes]) noexcept;
 
@@ -105,6 +111,7 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> stopFlag_{false};
     std::atomic<int> port_{0};
+    std::atomic<std::uint32_t> tunerType_{0}, gainCount_{0};   // the header's two numbers (RtlTcpConfig's at start; setTunerInfo after)
     std::atomic<int> clients_{0};
     sock::Handle listener_ = sock::kInvalid;
     std::uint32_t bindIp_ = 0;

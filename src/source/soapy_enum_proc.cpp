@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -1324,12 +1325,36 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
     }
 }
 
+std::string helperMissingSentence(const std::string& helperPath) {
+    std::string name = helperPath;
+    const std::size_t slash = name.find_last_of("/\\");
+    if (slash != std::string::npos) { name = name.substr(slash + 1); }
+    if (name.empty()) { name = "cascade"; }
+    return "FoxSDR's radio search program (" + name + ") is missing from this install, so no radio search was made. Reinstall FoxSDR.";
+}
+
 EnumResult enumerateIsolated(const EnumOptions& options) {
     const auto t0 = std::chrono::steady_clock::now();
     EnumResult result;
 
     const std::string helper =
         options.helperPath.empty() ? enumerateHelperPath() : options.helperPath;
+    // AN INCOMPLETE INSTALL SAYS SO (hw-findings item 6). The helper's file is checked before anything is spawned: a path that names no file is a missing program, not a spawn
+    // that Windows refused, and it is the one case that must NOT be answered by walking the bus in this process.
+    bool helperMissing = helper.empty();
+    if (!helperMissing) {
+        std::error_code existsError;
+        helperMissing = !std::filesystem::exists(std::filesystem::path(helper), existsError) && !existsError;
+    }
+    if (helperMissing) {
+        result.outcome = EnumOutcome::SpawnFailed;
+        result.helperMissing = true;
+        core::health::noteRecovered(core::health::Recovered::ScanLimit);
+        core::diagWarnf("soapy: %s (looked for '%s'); the walk was not run in this process instead, because that is not crash-isolated",
+                        helperMissingSentence(helper).c_str(), helper.c_str());
+        result.elapsedMs = 0;
+        return result;
+    }
 
     // THE DRIVERS NO WALK ASKS, SAID ONCE A SCAN (2026-10-04), in the voice of
     // the uhd line below: whichever walk runs - the whole bus, the sweep after

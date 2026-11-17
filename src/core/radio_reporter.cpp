@@ -839,6 +839,7 @@ struct Reporter::Impl {
         b["driver"] = rid.driver;
         b["model"] = rid.model;
         b["serial"] = rid.serial;
+        if (!rid.library.empty()) { b["library"] = rid.library; }   // a SoapySDR radio: the vendor driver key ("SoapySDR uhd"), kept out of the model
         b["reason"] = scrubReason(in.reason, rid.serial, 400);
         b["reasonClass"] = p.cls;
         b["trigger"] = triggerWord(in.trigger);
@@ -878,6 +879,7 @@ struct Reporter::Impl {
             b["driver"] = ev.radio.driver;
             b["model"] = ev.radio.model;
             b["serial"] = ev.radio.serial;
+            if (!ev.radio.library.empty()) { b["library"] = ev.radio.library; }   // the vendor driver key of a SoapySDR radio (an event's own `library` field below replaces it)
         }
         b["v"] = clipUtf8(id.version.empty() ? std::string("unknown") : id.version, 48);
         if (ev.kind == "session_env") {

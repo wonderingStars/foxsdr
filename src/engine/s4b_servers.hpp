@@ -77,6 +77,8 @@ struct Hooks {
     std::function<std::string(int radio, cascade::core::Pipeline::IqSink* sink)> attachIq;
     // Names the radio's present receiver (0 = the radio is not open): a radio that was closed and opened again has a new one and the tap is given to it again.
     std::function<std::uintptr_t(int radio)> radioIdentity;
+    // What the radio is, for the rtl_tcp header: its rtl_tcp tuner code (5 R820T, 6 R828D ...) and its number of tuner gain steps. False = the engine does not know (the header says 0 and 0).
+    std::function<bool(int radio, std::uint32_t& tunerType, std::uint32_t& gainCount)> tunerInfo;
     // Retunes a radio through the engine's own tuning command (every check it makes applies). "" = done, else the engine's sentence.
     std::function<std::string(int radio, double hz)> tune;
     // Sets a radio's demodulator mode through the engine's own mode command (name: one of the eight). "" = done, else the engine's sentence.
@@ -153,6 +155,7 @@ private:
     int rtlRadio_ = 0;                       // the radio the tap is on (1-based), 0 = none
     std::uintptr_t rtlIdentity_ = 0;         // the receiver it was given to
     std::string rtlProblem_;
+    std::int64_t rtlInfoMs_ = 0;             // when the header's tuner numbers were last refreshed (the pass, at most twice a second, while no client is connected)
     std::atomic<std::uint64_t> rtlTuneWord_{0};   // a pending retune: bit 63 set, the Hz below (written by the server's IO thread, taken by the pass)
     std::atomic<std::uint64_t> rtlTunes_{0}, rtlTuneRefused_{0}, rtlIgnored_{0};
 

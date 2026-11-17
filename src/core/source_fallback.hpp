@@ -78,13 +78,27 @@ inline RememberedSource rememberAfterFailedSwitch(const RememberedSource& alread
 // apart from a trailing full stop. What is remembered for the next start is
 // NOT repeated here: the Source section already says it, in its own
 // translated note, whenever a radio is being remembered.
+//
+// THE TAIL IS HOW THE REST OF THE PROGRAM KNOWS A RADIO FAILED TO OPEN (hardware check 2026-11-17, docs/multi-radio-records/hw-findings.md item 4): the receiver runs
+// on the signal generator in the radio's place and nothing else said so on the status bar. standInSentence() is true for exactly the sentences this function builds, and
+// the engine's `source.standin` fact is that test applied to the receiver's error line while the generator is the live source.
+inline constexpr const char kStandInTail[] = ". The receiver is running on the signal generator.";
 inline std::string radioNotOpenedSentence(const std::string& wanted, const std::string& why) {
     std::string reason = why;
     while (!reason.empty() && (reason.back() == '.' || reason.back() == ' ')) { reason.pop_back(); }
     std::string s = wanted + " did not open";
     if (!reason.empty()) { s += ": " + reason; }
-    s += ". The receiver is running on the signal generator.";
+    s += kStandInTail;
     return s;
+}
+// True when `sentence` says a radio did not open and the generator stands in (what radioNotOpenedSentence builds).
+inline bool standInSentence(const std::string& sentence) {
+    const std::string tail = kStandInTail;
+    return sentence.size() > tail.size() && sentence.compare(sentence.size() - tail.size(), tail.size(), tail) == 0 && sentence.find(" did not open") != std::string::npos;
+}
+// The engine's `source.standin` fact: "1" when the generator is the live source and the error line is such a sentence.
+inline bool generatorStandsIn(const std::string& sourceKind, const std::string& sourceError) {
+    return sourceKind == "siggen" && standInSentence(sourceError);
 }
 
 // --- 3b. picking the row of a radio that has died ------------------------------

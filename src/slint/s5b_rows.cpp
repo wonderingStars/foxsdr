@@ -26,7 +26,8 @@ std::string tr(const char* s) { return cascade::i18n::tr(s); }
 
 void S5Rows::buildS5b(std::vector<Row>& v) {
     // ---------------------------------------------------------------- G1-14 analogue IF bandwidth
-    {
+    // HIDDEN (hardware check 2026-11-17, docs/multi-radio-records/hw-findings.md item 1): a measured RTL-SDR does not narrow its passband to the width typed; see foxsdr::slints5b::ifBandwidthControlOffered().
+    if (foxsdr::slints5b::ifBandwidthControlOffered()) {
         const std::string cur = fact("radio." + rn() + ".ifBandwidth");
         v.push_back(rHeading(tr("Analogue IF bandwidth")));
         const std::string words = foxsdr::slints5b::ifBandwidthWords(cur);

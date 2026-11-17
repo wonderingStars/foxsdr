@@ -223,6 +223,9 @@ ChildEnd classifyChildEnd(unsigned long exitCode, bool parentGaveUp) noexcept;
 // talking to nobody.
 bool writeToParent(std::FILE* out, const char* data, std::size_t size);
 
+// The sentence for an incomplete install, naming the program that is missing (its file name only: never a path).
+std::string helperMissingSentence(const std::string& helperPath);
+
 struct EnumResult {
     std::vector<SoapyDeviceInfo> devices;
     EnumOutcome outcome = EnumOutcome::SpawnFailed;
@@ -259,6 +262,11 @@ struct EnumResult {
     // The child died or could not be started, and the walk was run in this
     // process instead. Only ever set for SpawnFailed - see below.
     bool fellBackInProcess = false;
+
+    // THE HELPER PROGRAM IS NOT THERE (hardware check 2026-11-17, hw-findings item 6): the file the walk would start does not exist, which is an incomplete install (the window was
+    // copied without cascade.exe beside it). The walk is NOT run in this process in its place - that is the one walk this file exists to keep out of the window, and a window that
+    // quietly takes it on is exposed to the libusb fault - so the answer is an empty list with this flag, and helperMissingSentence() is what the person is told.
+    bool helperMissing = false;
 
     // How many children were started. 2 means the first one died and the
     // retry is what produced this answer.

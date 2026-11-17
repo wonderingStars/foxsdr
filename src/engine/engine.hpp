@@ -1357,6 +1357,10 @@ private:
     // fact.source.usrpOnUsb) and the radio-setup page's images finding.
     std::shared_ptr<bool> soapyScanUhdNoImages_;
     std::shared_ptr<bool> soapyScanUsrpOnUsb_;
+    // AN INCOMPLETE INSTALL (hw-findings item 6): the scan's helper program is not beside the executable. The scan's thread writes the sentence (source::helperMissingSentence) before its future is ready; pollSourceAsync
+    // copies it into soapySearchProblem_ (fact `source.searchProblem`) and, when nothing else is on the error line, onto it. "" = the helper was there.
+    std::shared_ptr<std::string> soapyScanHelperMissing_;
+    std::string soapySearchProblem_;
     bool soapyUhdNoImages_ = false;
     bool soapyUsrpOnUsb_ = false;
     // API 0.3 8.10, what the Source section says when a SoapySDR scan has landed (the section used to ask the

@@ -21,9 +21,7 @@ state s5.sent == 0
 +60 state s5.fact.radio.1.source == rawiq
 # G1-11: the generator and the stream have no direct-sampling mode: no fact, and the page says why instead of drawing a control that does nothing
 state s5.fact.radio.1.directSampling == ""
-# G1-17: not in WFM (or no pilot): the measurement is the engine's to refuse or to run; it applies nothing
-+1 click "Measure the crystal error"
-+8 state s5.note.source contains "Measure the crystal error"
+# G1-17: the automatic ppm panel is not drawn (hardware check 2026-11-17): the engine's correction stays off and no key of the panel exists
 state s5.fact.ppm.on != 1
 # G1-18: tuner pooling with a second test radio
 +1 radio add 2 60000

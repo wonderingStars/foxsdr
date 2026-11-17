@@ -52,6 +52,8 @@ struct PpmInForce { bool on = false; double ppm = 0.0; };
 bool replacesTypedPpm(const PpmInForce& now, double measured);
 // The reference the measurement used, in words.
 std::string ppmReference();
+// WHETHER THE WINDOW DRAWS THE AUTOMATIC PPM PANEL. It does not (hardware check 2026-11-17, docs/multi-radio-records/hw-findings.md item 2): the number follows the STATION's 19 kHz pilot, not the radio's crystal. On one station the dongle read +18.9, +17.1 and +16.0 ppm in three runs (three times its own stated uncertainty) while the B200 read +17.1 on the same station; on another station both read about -3. The stated uncertainty is statistical only, the broadcast standard lets a pilot drift by +-2 Hz (105 ppm), and applying the number would mis-tune the user. The manual ppm setting is unaffected. The engine command and its tests stay.
+constexpr bool ppmAutoControlOffered() { return false; }
 
 // ============================================================ tuner pooling (G1-18) ============================================================
 // The mode choice of a claim: "Leave as it is" then the modes in the engine's order; index 0 is 0 ("leave it"), index k is FOXAPI_DEMOD_* k.

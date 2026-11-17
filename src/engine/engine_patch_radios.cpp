@@ -624,7 +624,7 @@ void Engine::patchReconcile() {
             // on a call that succeeded (an RX888 in VHF mode, a Pluto above
             // its maximum), which through 0.99.34 was never read.
             const cascade::gui::RateSetOutcome set =
-                cascade::gui::applySourceRate(*dev, rate, std::string());
+                cascade::gui::applySourceRate(*dev, rate, std::string(), /*explicitRequest=*/false, "open");
             if (!set.ok) {
                 r.error = "the radio refused " + std::to_string(rate / 1e6).substr(0, 5) +
                           " MS/s and runs at its own rate";

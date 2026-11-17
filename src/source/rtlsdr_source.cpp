@@ -1062,6 +1062,25 @@ bool RtlSdrSource::setIfBandwidthHz(int hz) {
     return true;
 }
 
+std::uint32_t RtlSdrSource::rtlTcpTunerCode() const {
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
+    if (!lk.owns_lock() || !link_->tuner) { return 0; }
+    switch (link_->tuner->chip()) {
+        case TunerR82xx::Chip::R820T: return 5;
+        case TunerR82xx::Chip::R828D: return 6;
+    }
+    return 0;
+}
+
+std::uint32_t RtlSdrSource::tunerGainSteps() const {
+    std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
+    if (!lk.owns_lock() || !link_->tuner) { return 0; }
+    // THE NUMBER AN rtl_tcp SERVER REPORTS FOR AN R820T OR R828D: 29 (the vendor library's gain table for these tuners; `rtl_test -t` on the real R820T of the 2026-11-17 check
+    // listed 29 values, 0.0 to 49.6 dB). The driver's own aggregate ladder (TunerR82xx::aggregateLadderTenthDb) has 30 rungs because it also counts its own starting point, so it is not what a
+    // client that sizes a gain list by this number expects.
+    return 29;
+}
+
 bool RtlSdrSource::directSamplingSupported() const {
     std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     return lk.owns_lock() && link_->tuner && !link_->tuner->blogV4();

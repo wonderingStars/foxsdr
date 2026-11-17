@@ -1457,6 +1457,28 @@ int main(int argc, char** argv) {
         CHECK(!r.fellBackInProcess);
     }
 
+    // --- AN INCOMPLETE INSTALL SAYS SO AND DOES NOT WALK THE BUS IN THIS PROCESS (hardware check 2026-11-17, hw-findings item 6) ----
+    // The window of the check was copied without cascade.exe beside it; the default (fallback allowed) used to run the walk in the window, the one walk this file keeps out of it.
+    {
+        EnumOptions o;   // the DEFAULT options: allowInProcessFallback is true
+        o.helperPath = "X:\nowhere\definitely-not-here.exe";
+        const EnumResult r = enumerateIsolated(o);
+        CHECK(r.outcome == EnumOutcome::SpawnFailed);
+        CHECK(r.helperMissing);
+        CHECK(!r.fellBackInProcess);             // not run in this process
+        CHECK(r.devices.empty() && r.attempts == 0);
+        const std::string said = cascade::source::helperMissingSentence(o.helperPath);
+        CHECK(said.find("definitely-not-here.exe") != std::string::npos && said.find("missing from this install") != std::string::npos);
+        CHECK(said.find("nowhere") == std::string::npos);   // the file name only, never a path
+        CHECK(cascade::source::helperMissingSentence(std::string()).find("(cascade)") != std::string::npos);
+        // a helper that is there is not "missing", whatever it answers
+        EnumOptions there;
+        there.helperPath = self;
+        there.allowInProcessFallback = false;
+        setMode("ok");
+        CHECK(!enumerateIsolated(there).helperMissing);
+    }
+
     // --- THE USAGE RECORD (0.99.65): a child that died and was CONTAINED is a recovery ----
     // `recovered.enumchild`, counted where the death is recorded, once a session. The real
     // trigger: this test's own helper dying, through the same enumerateIsolated the window calls.

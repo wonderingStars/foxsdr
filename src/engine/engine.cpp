@@ -1466,9 +1466,11 @@ void Engine::scanSoapy() {
     soapyScanAbsent_ = std::make_shared<std::vector<std::string>>();
     soapyScanUhdNoImages_ = std::make_shared<bool>(false);
     soapyScanUsrpOnUsb_ = std::make_shared<bool>(false);
+    soapyScanHelperMissing_ = std::make_shared<std::string>();
     const std::shared_ptr<std::vector<std::string>> absentOut = soapyScanAbsent_;
     const std::shared_ptr<bool> uhdNoImagesOut = soapyScanUhdNoImages_;
     const std::shared_ptr<bool> usrpOnUsbOut = soapyScanUsrpOnUsb_;
+    const std::shared_ptr<std::string> helperMissingOut = soapyScanHelperMissing_;
     // enumerateIsolated() never throws and is simply empty on a machine with no
     // vendor modules; this is also the hot-plug refresh path. Called directly
     // rather than through SoapySource::enumerate() because that signature
@@ -1476,7 +1478,7 @@ void Engine::scanSoapy() {
     // uhdImagesMissing answer for the hint under the Source list.
     const auto scanHook = testHooks_.soapyScan;  // null in every build of the application
     soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs, lookForNetworkUsrps,
-                                                       absentOut, uhdNoImagesOut, usrpOnUsbOut, scanHook] {
+                                                       absentOut, uhdNoImagesOut, usrpOnUsbOut, helperMissingOut, scanHook] {
         // THE HEARTBEAT (core/thread_beats.hpp, 6.27): the scan is the thread's life; pumpWorkers collects it, and a scan that
         // never comes back is named here after the Open kind's budget.
         cascade::core::beats::Registration beat(cascade::core::beats::kThreadDeviceScan);
@@ -1497,6 +1499,7 @@ void Engine::scanSoapy() {
         options.absentDrivers = absent;
         cascade::source::EnumResult r = cascade::source::enumerateIsolated(options);
         *uhdNoImagesOut = r.uhdImagesMissing;
+        if (r.helperMissing) { *helperMissingOut = cascade::source::helperMissingSentence(cascade::source::enumerateHelperPath()); }
         return std::move(r.devices);
     });
 }
@@ -1539,6 +1542,10 @@ void Engine::pollSourceAsync() {
         soapyUsrpOnUsb_ = soapyScanUsrpOnUsb_ && *soapyScanUsrpOnUsb_;
         soapyScanUhdNoImages_.reset();
         soapyScanUsrpOnUsb_.reset();
+        // THE HELPER IS NOT THERE: said plainly on the error line (when nothing else is on it) and as a fact, instead of a scan that quietly listed nothing or walked the bus in this process
+        soapySearchProblem_ = soapyScanHelperMissing_ ? *soapyScanHelperMissing_ : std::string();
+        soapyScanHelperMissing_.reset();
+        if (!soapySearchProblem_.empty() && rx().sourceError_.empty()) { rx().sourceError_ = soapySearchProblem_; }
         // THE DIAGNOSTICS THE SOURCE SECTION SAYS A LANDED SCAN WITH, taken here, once, and not asked of the
         // runtime by every frame that draws them (API 0.3 8.10). Only a WHOLE scan that found nothing is
         // evidence of "no radio hardware"; a scan beside an open radio left drivers out on purpose.
@@ -2109,7 +2116,7 @@ void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) 
         // A rate refusal is not fatal (the panel shows the actual readback
         // either way) but is surfaced - and so is a rate the driver coerced
         // on a call that succeeded.
-        r.error = cascade::gui::applySourceRate(*dev, r.requestRateHz, r.error).sourceError;
+        r.error = cascade::gui::applySourceRate(*dev, r.requestRateHz, r.error, /*explicitRequest=*/false, "open").sourceError;
         // AN RSP IS TUNED BEFORE ITS STREAM STARTS (0.99.36). The carry-across
         // tune below in finishDeviceOpen runs after setSource has started the
         // radio, so on an RSP it was a live sdrplay_api_Update milliseconds
@@ -3110,6 +3117,12 @@ void Engine::adoptDeviceMirrors(cascade::source::DeviceSource& dev, const std::s
     // the radio by now: both open paths put it there straight after open()
     // and before the rate, because it decides which rates the request is
     // matched against. See DeviceOpenResult::airspyAtOpen.)
+    // THE MODEL OF A RADIO OPENED THROUGH SOAPYSDR IS THE DEVICE'S OWN HARDWARE KEY ("B200"), remembered for the radio reports (hw-findings item 5): name() is "SoapySDR: <hardware key>".
+    if (kind == "soapy") {
+        const std::string nm = dev.name();
+        const std::string pre = "SoapySDR: ";
+        if (nm.rfind(pre, 0) == 0) { cascade::core::radioreport::rememberSoapyModel(args, nm.substr(pre.size())); }
+    }
     rx().deviceRatesHz_ = dev.supportedSampleRatesHz();
     rx().deviceRateLabels_.clear();
     const bool airspyRates = cascade::gui::asAirspy(&dev) != nullptr;
@@ -3308,7 +3321,7 @@ std::unique_ptr<cascade::source::DeviceSource> Engine::openDeviceSync(
     // A rate refusal is not fatal (the panel shows the actual readback
     // either way) but is surfaced - and so is a rate the driver coerced on a
     // call that succeeded.
-    rx().sourceError_ = cascade::gui::applySourceRate(*dev, requestRateHz, rx().sourceError_).sourceError;
+    rx().sourceError_ = cascade::gui::applySourceRate(*dev, requestRateHz, rx().sourceError_, /*explicitRequest=*/false, "restore").sourceError;
     adoptDeviceMirrors(*dev, kind, args, requestRateHz);
     return dev;
 }

@@ -100,6 +100,41 @@ int main() {
         CHECK(scrubModel(f.model) == f.model);
     }
 
+    // --- A SOAPYSDR RADIO IS NAMED BY ITS OWN MODEL, THE VENDOR DRIVER KEY IS ITS OWN FIELD (hardware check 2026-11-17, hw-findings item 5) -----------------------------------
+    {
+        // the real B200's enumerated row (hardware key and product "B200"): model B200, not the driver key "uhd"
+        const RadioIdentity a = identify("soapy", "driver=uhd, label=B200 EDR04ZDB2, name=, product=B200, serial=EDR04ZDB2, type=b200");
+        CHECK(a.model == "B200" && a.serial == "EDR04ZDB2" && a.driver == "soapy" && a.library == "SoapySDR uhd");
+        CHECK(a.key == "b200:EDR04ZDB2");
+        // a hand-written or older saved row that names only driver and serial: the driver key until a scan or an open says the model, then the model
+        const std::string minimal = "driver=uhd,serial=EDR04ZDB2";
+        const RadioIdentity b = identify("soapy", minimal);
+        CHECK(b.model == "uhd" && b.library == "SoapySDR uhd");
+        rememberSoapyModel(minimal, "B200");   // what an open reports (the hardware key) or a scanned row says
+        const RadioIdentity b2 = identify("soapy", minimal);
+        CHECK(b2.model == "B200" && b2.key == a.key && b2.serial == "EDR04ZDB2");
+        rememberSoapyModel("driver=uhd", "Wrong");   // no serial: two radios of a driver would share it, so nothing is remembered
+        CHECK(identify("soapy", "driver=uhd").model == "uhd");
+        // the other SoapySDR-opened kinds, from the forms their modules enumerate
+        const RadioIdentity rtl = identify("soapy", "driver=rtlsdr, label=Generic RTL2832U OEM :: 00000001, manufacturer=Realtek, product=RTL2838UHIDIR, serial=00000001, tuner=Rafael Micro R820T");
+        CHECK(rtl.model == "RTL2838UHIDIR" && rtl.library == "SoapySDR rtlsdr" && rtl.serial == "00000001");
+        const RadioIdentity rtlLabel = identify("soapy", "driver=rtlsdr, label=Generic RTL2832U OEM :: 00000001, serial=00000001");
+        CHECK(rtlLabel.model == "Generic RTL2832U OEM");
+        const RadioIdentity hack = identify("soapy", "driver=hackrf, label=HackRF One #0 0000000000000000a06063c8234e4d5f, serial=0000000000000000a06063c8234e4d5f");
+        CHECK(hack.model == "HackRF One" && hack.library == "SoapySDR hackrf");
+        const RadioIdentity lime = identify("soapy", "driver=lime, label=LimeSDR Mini [USB 3.0] 1D4F2A9B3C, serial=1D4F2A9B3C");
+        CHECK(lime.model == "LimeSDR Mini");
+        const RadioIdentity pluto = identify("soapy", "driver=plutosdr, label=PlutoSDR (ip:192.168.2.1), uri=ip:192.168.2.1");
+        CHECK(pluto.model.find("192.168") == std::string::npos && pluto.model.find("ip:") == std::string::npos && pluto.serial.empty());
+        // whatever the arguments say, the model and the library are text the contract accepts
+        for (const RadioIdentity& x : {a, b, b2, rtl, rtlLabel, hack, lime, pluto}) {
+            CHECK(!x.model.empty() && x.model.size() <= 32 && scrubModel(x.model) == x.model);
+            CHECK(x.library.size() <= 48 && x.library.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._+ -") == std::string::npos);
+        }
+        CHECK(soapyDeviceModel("driver=uhd, label=B200 EDR04ZDB2, serial=EDR04ZDB2") == "B200");
+        CHECK(soapyDeviceModel("driver=uhd, serial=EDR04ZDB2").empty());
+    }
+
     // --- the scrub: the real D3 sentence, and every kind of thing the text rules refuse ------------------------------------------------------------
     {
         const std::string d3 = "the radio stopped answering while restoring the crystal trim: a control transfer failed (Windows error 31, serial airspyhf_sn:HF0001A2)";

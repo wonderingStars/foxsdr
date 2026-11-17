@@ -335,6 +335,7 @@ void Engine::radioReportsScanLanded(bool native, bool soapy) {
     }
     for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {
         if (!soapy) { break; }
+        rr::rememberSoapyModel(d.args, rr::soapyDeviceModel(d.args));   // so a radio opened later by saved arguments with no `product` is named by its own model
         rr::Event ev;
         ev.kind = "radio_found";
         ev.radio = rr::identify("soapy", d.args);

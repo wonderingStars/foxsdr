@@ -148,7 +148,7 @@ int main() {
         CHECK(r.sent.empty());                                         // and nothing sent
         r.rows.act("s.more", "");
         v = r.build();
-        CHECK(v.size() > 20 && r.find(v, "r.open") != nullptr && r.find(v, "m.start") != nullptr && r.find(v, "t.claim") != nullptr);
+        CHECK(v.size() > 20 && r.find(v, "r.open") != nullptr && r.find(v, "m.start") == nullptr && r.find(v, "t.claim") != nullptr);
         CHECK(r.sent.empty());                                         // opening the panel sends nothing
         r.rows.act("s.more", "");
         CHECK(r.build().size() == 1);                                  // and it folds again
@@ -187,9 +187,21 @@ int main() {
         CHECK(x.rows.refused() == 1 && x.rows.note().find("Busy") != std::string::npos);
     }
 
-    // ---------------------------------------------------------------- the rows: automatic ppm
+    // ---------------------------------------------------------------- the automatic ppm panel is NOT drawn (hardware check 2026-11-17, item 2)
     {
+        CHECK(!ppmAutoControlOffered());                                            // the rule: the measurement follows the station's pilot, not the radio
         Rig r; r.open();
+        r.facts["fact.radio.1.ppmauto.state"] = "done"; r.facts["fact.radio.1.ppmauto.readings"] = "40"; r.facts["fact.radio.1.ppmauto.ppm"] = "17.1";
+        const std::vector<slk::Row> v = r.build();
+        CHECK(r.find(v, "m.start") == nullptr && r.find(v, "m.use") == nullptr && r.find(v, "m.cancel") == nullptr && r.find(v, "m.secs") == nullptr);
+        CHECK(!r.has(v, "Automatic ppm") && !r.has(v, "Measure the crystal error") && !r.has(v, "Use this correction"));
+        r.rows.act("m.use", "");                                                   // even a stale press of the old key sends nothing
+        CHECK(r.sent.empty());
+    }
+
+    // ---------------------------------------------------------------- the rows: automatic ppm (the logic of the panel, proved with the seam on: the window does not draw it in this release, see the next block)
+    {
+        Rig r; r.open(); r.rows.setPpmAutoOffered(true);
         r.selected = 2;
         std::vector<slk::Row> v = r.build();
         CHECK(r.find(v, "m.use") != nullptr && !r.find(v, "m.use")->enabled);       // nothing measured: nothing to use
@@ -211,14 +223,14 @@ int main() {
         v = r.build();
         CHECK(!r.find(v, "m.use")->enabled);
         // done, nothing in force: one press applies the measured number and switches the correction on
-        Rig d1; d1.open();
+        Rig d1; d1.open(); d1.rows.setPpmAutoOffered(true);
         d1.facts["fact.radio.1.ppmauto.state"] = "done"; d1.facts["fact.radio.1.ppmauto.readings"] = "40"; d1.facts["fact.radio.1.ppmauto.ppm"] = "2.50"; d1.facts["fact.radio.1.ppmauto.uncertainty"] = "0.10";
         v = d1.build();
         CHECK(d1.find(v, "m.use")->enabled && d1.has(v, "+2.50 ppm, plus or minus 0.10 (40 readings)"));
         d1.rows.act("m.use", "");
         CHECK(d1.sent.size() == 1 && d1.sent[0].op == FOXAPP_OP_SET_PPM && d1.sent[0].i0 == 1 && d1.sent[0].n0 == 2.5);
         // a correction the person set (5 ppm, on) is NOT replaced by one press: the key asks, and only the second press sends
-        Rig d2; d2.open();
+        Rig d2; d2.open(); d2.rows.setPpmAutoOffered(true);
         d2.facts["fact.radio.1.ppmauto.state"] = "done"; d2.facts["fact.radio.1.ppmauto.readings"] = "40"; d2.facts["fact.radio.1.ppmauto.ppm"] = "2.50";
         d2.facts["fact.ppm.on"] = "1"; d2.facts["fact.ppm.value"] = "5";
         d2.build();
@@ -229,12 +241,12 @@ int main() {
         d2.rows.act("m.use", "");
         CHECK(d2.sent.size() == 1 && d2.sent[0].op == FOXAPP_OP_SET_PPM && d2.sent[0].n0 == 2.5);
         // any other action in between disarms it
-        Rig d3; d3.open();
+        Rig d3; d3.open(); d3.rows.setPpmAutoOffered(true);
         d3.facts = d2.facts;
         d3.build(); d3.rows.act("m.use", ""); d3.rows.act("m.secs", "30"); d3.build(); d3.rows.act("m.use", "");
         CHECK(d3.sent.empty());
         // the same number already in force: no second press needed
-        Rig d4; d4.open();
+        Rig d4; d4.open(); d4.rows.setPpmAutoOffered(true);
         d4.facts = d2.facts; d4.facts["fact.ppm.value"] = "2.5";
         d4.build(); d4.rows.act("m.use", "");
         CHECK(d4.sent.size() == 1);

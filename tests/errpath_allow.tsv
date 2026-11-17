@@ -1036,12 +1036,12 @@ src/engine/engine.cpp::Engine::followInputRate::errassign::cascade gui sourceerr
 src/engine/engine.cpp::Engine::followTransmitFrequency::errassign::transmitter_ lasterror	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::holdAudioLockForTest::log::test the audio lock could not be taken	ALLOW	engine result text shown to the user	seed
 src/engine/engine.cpp::Engine::launchDeviceOpen::errassign::	ALLOW	result text of an engine operation shown to the user	seed
-src/engine/engine.cpp::Engine::launchDeviceOpen::errassign::cascade gui applysourcerate dev r requestratehz r error sour	ALLOW	result text of an engine operation shown to the user	seed
+src/engine/engine.cpp::Engine::launchDeviceOpen::errassign::open	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::launchDeviceOpen::errassign::dev lasterror	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::loadBandPlan::errassign::err	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::loadBookmarks::errassign::bmerr	ALLOW	result text of an engine operation shown to the user	seed
 src/engine/engine.cpp::Engine::loadBookmarks::errassign::mkerr	ALLOW	result text of an engine operation shown to the user	seed
-src/engine/engine.cpp::Engine::openDeviceSync::errassign::cascade gui applysourcerate dev requestratehz rx sourceerror	PENDING:reports-not-in-function	survey: REPORTS (sourceError_ at the open result (noteRadioFail count; D4 upgrade)) but no reporting call encloses the site	seed
+src/engine/engine.cpp::Engine::openDeviceSync::errassign::restore	PENDING:reports-not-in-function	survey: REPORTS (sourceError_ at the open result (noteRadioFail count; D4 upgrade)) but no reporting call encloses the site	seed
 src/engine/engine.cpp::Engine::openDeviceSync::errassign::dev lasterror	ALLOW	open-path reason: openDeviceSync returns nullptr and its callers (the restore branch of Engine::applyConfig, engine_radio_saved.cpp) file the radio_fail through reportFailedOpen with this sourceError_ text	mustfix-b
 src/engine/engine.cpp::Engine::openDeviceSync::errassign::saved source kind	ALLOW	saved-radio restore refusals: the caller counts noteRadioFail(kind, sourceError_) at engine.cpp:10171 (and engine_radio_saved.cpp:212 for radios 2-8)	sweep-a
 src/engine/engine.cpp::Engine::openDeviceSync::errassign::saved source was a sound card driveraudio not a radio ignore	ALLOW	saved-radio restore refusals: the caller counts noteRadioFail(kind, sourceError_) at engine.cpp:10171 (and engine_radio_saved.cpp:212 for radios 2-8)	sweep-a
@@ -3225,3 +3225,4 @@ src/engine/process_boot.cpp::parseFlags::stderr::foxsdrengine catbindall needs c
 src/engine/server_host.cpp::parseServerConfigRequest::errassign::allow#2	ALLOW	validation: a typed list of client addresses the program cannot read is refused with the list's own sentence in the request's answer; nothing was running	sec2
 src/engine/server_host.cpp::ServerHost::reconcileCat::errassign::to let other computers connect to the cat interface list the	ALLOW	validation: the refusal sentence is shown by the CAT page (the listener's refusal) and logged by the diagWarnf just below; it is the person's own setting, not a failed output	sec2
 src/net/cat_server.cpp::CatServer::start::errassign::to let other computers connect to the cat interface list the	ALLOW	validation: the server refuses to start beyond this computer without a list; the sentence goes to the caller (reconcileCat), which shows and logs it	sec2
+src/engine/engine.cpp::Engine::pollSourceAsync::errassign::soapysearchproblem_	ALLOW	display of the missing-helper failure, which enumerateIsolated already reports at the place it finds it (noteRecovered ScanLimit and a log warning)	hw-findings
