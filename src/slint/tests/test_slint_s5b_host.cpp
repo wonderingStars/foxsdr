@@ -80,39 +80,22 @@ int main() {
         CHECK(b::ifBandwidthWords("").empty() && b::ifBandwidthWords("x").empty() && b::ifBandwidthWords("-1").empty());
     }
 
-    // ---------------------------------------------------------------- the rows: analogue IF bandwidth
+    // ---------------------------------------------------------------- the rows: analogue IF bandwidth is NOT drawn (hardware check 2026-11-17, item 1)
     {
+        CHECK(!b::ifBandwidthControlOffered());                                      // the rule: measured on a real dongle, the typed width is not what the passband does
         Rig r; r.open();
-        std::vector<slk::Row> v = r.build();
-        CHECK(r.find(v, "b.ifbw.set") == nullptr);                                   // a radio with no such filter shows no control, only the reason
-        bool said = false; for (const auto& x : v) { if (x.label.find("no adjustable analogue filter") != std::string::npos) { said = true; } }
-        CHECK(said);
-        r.facts["fact.radio.1.ifBandwidth"] = "0";                                   // the engine's value at start-up: automatic
-        v = r.build();
-        CHECK(r.has(v, "Automatic (from the sample rate)") && r.find(v, "b.ifbw.set") != nullptr);
-        CHECK(r.find(v, "b.ifbw.auto") != nullptr && !r.find(v, "b.ifbw.auto")->enabled);   // already automatic: nothing to switch back
-        r.rows.act("b.ifbw", "500");
-        r.rows.act("b.ifbw.set", "");
-        CHECK(r.sent.size() == 1 && r.sent[0].op == FOXAPI_OP_SET_DEVICE_OPTION && r.sent[0].text == "if_bandwidth" && r.sent[0].i0 == 500000);
-        r.answer(101, FOXAPI_FAILED, "the radio is busy; try again");               // a refusal is shown in the radio's words
-        CHECK(r.rows.note().find("the radio is busy") != std::string::npos);
-        r.facts["fact.radio.1.ifBandwidth"] = "500000";                              // read back after a change (or one made elsewhere)
-        v = r.build();
-        CHECK(r.has(v, "500 kHz") && r.find(v, "b.ifbw.auto")->enabled);
-        r.rows.act("b.ifbw.auto", "");
-        CHECK(r.sent.size() == 2 && r.sent[1].i0 == 0 && r.sent[1].text == "if_bandwidth");
-        // a bad number is refused here and never sent
-        r.rows.act("b.ifbw", "12");
-        r.rows.act("b.ifbw.set", "");
-        CHECK(r.sent.size() == 2 && r.rows.note().find("300") != std::string::npos);
-        // the radio selected decides which fact is read
-        r.selected = 2;
-        r.facts["fact.radio.2.ifBandwidth"] = "1536000";
-        v = r.build();
-        CHECK(r.has(v, "1536 kHz"));
-        r.rows.act("b.ifbw", "");
-        r.rows.act("b.ifbw.set", "");
-        CHECK(r.sent.size() == 3 && r.sent[2].i0 == 0);                              // empty = automatic
+        for (const char* fv : {"", "0", "500000", "1536000"}) {                      // whatever the engine says the filter is, nothing to set is drawn
+            r.facts["fact.radio.1.ifBandwidth"] = fv;
+            const std::vector<slk::Row> v = r.build();
+            CHECK(r.find(v, "b.ifbw") == nullptr && r.find(v, "b.ifbw.set") == nullptr && r.find(v, "b.ifbw.auto") == nullptr);
+            CHECK(!r.has(v, "Analogue IF bandwidth") && !r.has(v, "Set the analogue bandwidth") && !r.has(v, "Automatic (from the sample rate)"));
+        }
+        // with a SoapySDR radio's own bandwidth row present, the only row of this panel that offers a bandwidth is the driver's
+        r.facts["fact.radio.1.ifBandwidth"] = "0";
+        r.facts["fact.radio.1.soapy.bandwidth"] = "1000000"; r.facts["fact.radio.1.soapy.bandwidthLo"] = "200000"; r.facts["fact.radio.1.soapy.bandwidthHi"] = "8000000";
+        const std::vector<slk::Row> v = r.build();
+        int n = 0; for (const auto& x : v) { if (x.id.rfind("b.ifbw", 0) == 0) { ++n; } }
+        CHECK(n == 0 && r.find(v, "b.sp.bw.set") != nullptr);
     }
 
     // ---------------------------------------------------------------- G1-15a/b: the SoapySDR driver's bandwidth and settings, built from what the driver reported
