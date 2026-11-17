@@ -685,7 +685,7 @@ int main(int argc, char** argv) {
             CHECK(q[1]["kind"] == "radio_open" && q[1]["seq"] == 1 && q[1]["t"] == 3 && q[1]["body"]["phase"] == "start" && q[1]["body"]["attempt"] == 1);
             CHECK(q[2]["body"]["phase"] == "ok" && q[2]["body"]["attempt"] == 1);
             CHECK(q[3]["kind"] == "radio_stream" && q[3]["t"] == 65 && q[3]["body"]["samplesPerSec"] == 767940);
-            CHECK(q[0]["body"]["cpu"] == "Intel Core i7-8700K" && q[0]["body"]["launches"] == 7 && q[0]["body"]["window"].is_null());
+            CHECK(q[0]["body"]["cpu"] == "Intel Core i7-8700K" && q[0]["body"]["launches"] == 7 && q[0]["body"].value("window", json()).is_null());   // absent or null: operator[] on a const json with a missing key is undefined, and GCC's is not a null
         }
         keep(q);
         // the segment has a header and the cursor moves only after a 2xx
