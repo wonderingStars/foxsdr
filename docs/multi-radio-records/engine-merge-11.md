@@ -139,3 +139,51 @@ Expectations changed (both values) in this phase: `test_slint_host_extend` and `
 
 ## 2a.11 Config hash, UNVERIFIED
 `%APPDATA%/foxsdr/config.json` sha256 `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (checked at the end). UNVERIFIED: the full GUI gate and the stamp tests at the final build; a packet-level proof of "no outside connection" for a whole gate; the guard on a real roaming-profile or folder-redirected machine (the cases are tested as inputs); the Linux half of the guard (the `HOME` rule; no Linux build here); the new help sentence's translations by a speaker; the cause of the wobbles.
+
+---
+
+# PHASE 2b and the final part (same day): look-fixes, window-strip, the version, the gates
+
+Start tip `20428e92`. Nothing pushed; no outside connection; real `config.json` sha256 `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (checked at the end). Because the stamp tests compare the binary's commit with HEAD, THIS RECORD IS THE LAST COMMIT BEFORE THE FINAL REBUILD: the results of the runs at the final build (stamp tests, the repeat runs of the fixed tests, the validator, the allocation bounds, the pin) are in the hand-back message and in `D:/foxsdr-build/m11-scratch/` (`s*.log`), not here.
+
+## 2b.1 Merges and conflicts
+
+| Commit | Branch | Conflicts | Settled |
+|---|---|---|---|
+| `6f323336` | `feat/look-fixes` `2d663570` | `src/core/lang_assets.hpp` only (generated; the 33 catalogues merged without a marker) | regenerated with `tools/embed-lang.py`: 4888 keys in each of the 33 (4807 + 81), 0 empty, 0 missing, 0 stale; the help sentence of phase 2a is in all 33 |
+| `7474da2d` | `feat/window-strip` `650512f3` | none | |
+
+The look-fixes expectations, re-read against the merged window: airband `squelch_text` "squelch -55 dB" to "-55 dB", `hold_text` "hold 2.0 s" to "2.0" (and -80 dB / 7.5), `actual_rate` "actual 2.4 MS/s" to "2.4 MS/s": all passed in the merged tree (`test_slint_host_tools`, `test_slint_host_signal` in both headless slices). The two Legacy-only keys the Slint tools test dropped (`"squelch %.0f dB"`, `"hold %.1f s"`) are still used by `src/gui/app_window_airband.cpp` and are still in all 33 catalogues (checked in `de.json`; `i18n_keys.py` 0 stale). The window-strip expectations: `test_slint_host_mustfixa` 1480 / 560 to 1024 / 640 passed; `test_slint_main_screen` (1440 x 900 sheet: splitter row 608, ribbon rows 204..212, narrow-1100 page-key box y 288..326) passed on the merged tree, so each of the re-measured values holds (the box is not displaced by the look-fixes lane's taller slider rows: they are in the SIGNAL/TOOLS panels, not in that box).
+
+## 2b.2 The sentence-class check (look-fixes reworded the raw I/Q link faults)
+`src/source/raw_iq_net_source.cpp`: "the I/Q stream stopped: no samples arrived for 3.0 s" became "No samples arrived for 3 seconds: the sender may have stopped, or its address or port may be wrong", and "the I/Q stream connection failed: <err>" became "The connection to the I/Q stream failed: <err>" (the engine's own fact keeps its "source thread: " prefix; only the card strips it). No matcher in `src` or `tests` read the old words except `test_raw_iq_net_source` (found red, fixed, below). The failure-class sorter (`health::classifyRadioOpen`) reads the joined "headline: detail": old and new silence sentences sort as `other`, old and new connection sentences as `vendor` (the "failed:" rule); `test_health_events` now holds all four (commit `6a4c170e`). The developer-words rule (`test_slint_host_mustfixa`) scans `src/slint` and passed over the 81 new sentences; a scan of the 81 new catalogue keys and of the string literals added in `src` for yet, unverified, lane, todo, stub, not built, phase, coming, registry, placeholder, later, soon, beta, "source thread", snake_case found none (the one "source thread: " literal is the prefix the card strips).
+
+## 2b.3 The version (`32ce8fe9`), one commit
+Changed to 0.99.109: `CMakeLists.txt` line 22; `README.md` line 11; `docs/api/openapi.yaml` line 4; `docs/silent-install-switches.md` lines 54 and 59; `installer/generated-version.iss` (CMake writes it at configure from the project version; it is tracked and `tools/release.ps1` preflight checks it). Left alone, each history or fixture: `docs/feature-records/manual.md`, `packaging.md`; `docs/release-notes-0.99.109.md` line 22; `installer/cascade.iss` line 303; `src/slint/cjk_fonts.hpp`; `tests/CMakeLists.txt` line 1151; `tools/make-package-manifests.ps1`; fixture strings in `test_slint_host_export`, `test_slint_host_system`, `test_slint_lanek_host`, `test_linux_update`, `test_update_old_prompt` (they pass the number in and read it back; none compares it with the program's own version). No test pinned the old version, so no expectation changed.
+
+## 2b.4 The release notes' shape (`0c1986a8`)
+The `[WINDOW-SIZE]` line reads exactly "The smallest window is now 1024 x 640 pixels." `tools/release.ps1` preflight accepts two shapes only: a title ending in an em dash and "Windows" with ONE hash block (installer; Linux skipped), or a plain title with five (installer, two AppImages, two tarballs). The release is the installer plus ONE Linux x86-64 tarball, which matches neither; the notes use the Windows shape: title `# FoxSDR 0.99.109 <em dash> Windows`, one block for `foxsdr-setup-0.99.109.exe` (`TBD`), and a plain sentence under it naming `foxsdr-0.99.109-linux-x64.tar.gz` (NOT a `SHA-256 of` block: that would fail the names check); its checksum is written by hand next to it on the release page. Row `REL-hash-shape`.
+
+## 2b.5 Layout pins, measured once on the merged window, both values
+| Where | Was | Now | Measure |
+|---|---|---|---|
+| `layout-section-overlap-624`, "Stop bypassing the selection" bottom <= | 828 | **902** | +74: the look-fixes lane shows lane-panel slider names whole (they wrap), one line taller each, at this width only |
+| same, "Source"#1 top >= (the Patch note's bottom) | 855 | **937** | +82; the Source header reads 949 = 937 + 12 |
+| same, "Read the pitch now" bottom <= and "Sinks"#1 top >= | 2279 | **2361** | +82; the Sinks header reads 2549 = 2361 + 188 |
+| `layout-section-overlap-1600` | 828 / 855 / 2279 | unchanged | measured 820 / 855 / 2279 and the headers 867 / 2467: the wider panel does not wrap |
+| `test_slint_main_screen` 1440 sheet | splitter 608, ribbon 204..212, box 288..326 | unchanged | re-measured: holds |
+| `test_slint_tools` (radar page) | lat and lon: two 124 px fields side by side (x0a and x0a+130); Set RX here at fy + 30 | one field per row after a 64 px label and 6 px: box24(x0a+70, fy, kBodyW-70) and box24(x0a+70, fy+30, kBodyW-70); Set RX here at fy + 60; known rows +30 (Set T4+50 to T4+80, scope key T4+82 to T4+112); the ground probe at x0a+74 | look-fixes labelled and split the two fields; its record did not list this test |
+| drive `patch-faces-map` | size 1500 x 900 | 1500 x 932 | the toolbar folds to a second row at 1500 (+32): the Map node's own keys fell below the window |
+| drive `export-wf` | 1280 x 720 | 1280 x 800 | the strip folds to two rows at 1280 |
+| drive `bar-min-624` | 624 x 400 | 624 x 470 | two strip rows at 624 |
+| drive `gaps1-markers-damaged` (and its `coverage-gaps1.tsv` line) | contains "No markers yet." | contains "No markers." | window-followups reworded the sentence; the full GUI gate is the first run since |
+| `test_raw_iq_net_source` line 327 | headline contains "I/Q stream" | contains "No samples arrived for" | look-fixes reworded the headline |
+
+## 2b.6 Tests the merge turned red, each fixed at its cause (its own commit)
+`test_slint_tools` (23 checks), `test_raw_iq_net_source`, `test_cjk_wrap` (two new look-fixes sentences, "aaronia=host[:port]" and "soapyremote=host[:port]", could end a line on the bracket in ja, zh-CN and zh-TW; the test stops reporting at the first failing language, so it took two commits; the three catalogues now write host:port and say :port may be left out), and four drives (2b.5). Nothing weakened: each expectation follows a changed layout or sentence and says so.
+
+## 2b.7 Gates (build of `07497f83`/`976228fb`, then the final build)
+**Full headless gate** (1243 tests, slices 625 and 623): slice 1 red: `test_cjk_wrap`, `test_slint_tools` (both REAL, above). Slice 2 red: `test_raw_iq_net_source` (REAL), `test_diagnostics_free` (STAMP: binary older than HEAD); 2 skipped by their own rule. **Full GUI gate** (`ctest -L gui`, 428 tests, slices 216 and 213 slots, `-j3`, hidden desktop): slice 2 213 of 213; slice 1 four reds, each REAL and fixed (the four drives). The results after the fixes (the fixed tests alone, the stamp tests at the final build, the validator, the allocation bounds, the pin) are in the hand-back message.
+
+## 2b.8 Open rows
+`open-rows-2026-11-17.md` refreshed in place (engine merge 11): **339 open, 58 closed, 397 in all** (screen 63 / 17, engine 133 / 34, plugins 16 / 0, Worker/site 20 / 6, owner decision 57 / 0, mouse drive 50 / 1), with the strip lane's rows (GAIN and SQUELCH captions gone at 1024, the title-bar model line under the search box, English words left in a translated strip, the snap below the minimum, row two at 1366), the look-fixes and window-followups rows, the security, hardware, send-on, errpath-third and linux rows, and the release-notes shape. Closed with evidence: `SF2-cat-ui`, `SF2-cat-bindall`, `SF2-api-multi-host`, `M10-help-usage`.
