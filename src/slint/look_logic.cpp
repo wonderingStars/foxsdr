@@ -75,6 +75,51 @@ std::pair<std::uint32_t, std::uint32_t> sizeForScale(std::uint32_t width, std::u
     return {scaled(width), scaled(height)};
 }
 
+WindowFit fitWindowToScreen(std::uint32_t w, std::uint32_t h, float scale, float minW, float minH, int screenW, int screenH) {
+    const auto up = [](float v) { return static_cast<std::uint32_t>(std::max(1.0, std::ceil(static_cast<double>(v)))); };
+    WindowFit f;
+    f.w = std::max(w, up(minW * scale));
+    f.h = std::max(h, up(minH * scale));
+    if (screenW > 0) { f.w = std::min(f.w, static_cast<std::uint32_t>(screenW)); }
+    if (screenH > 0) { f.h = std::min(f.h, static_cast<std::uint32_t>(screenH)); }
+    return f;
+}
+
+void SizeMirror::asked(std::uint32_t w, std::uint32_t h) {
+    want_ = true; wantW_ = w; wantH_ = h; waited_ = 0;
+    guard_ = false;
+}
+
+SizeMirror::Step SizeMirror::tick(std::uint32_t w, std::uint32_t h, float scale, float os) {
+    Step s;
+    if (w == 0 || h == 0) { return s; }
+    const float sf = std::max(0.5f, scale);
+    if (want_) {   // a size was asked for: nothing is written until it is there (or the system has plainly refused it: a maximised window). A number written from the size the window had would be
+        // carried to the system and could land after the ask and undo it.
+        if (w == wantW_ && h == wantH_) { want_ = false; }
+        else if (++waited_ > 10) { want_ = false; }
+        else { return s; }
+    }
+    if (std::fabs(scale - os) <= kSame) {   // the system's own scale: a written number comes back as the size it came from
+        guard_ = false;
+        s.write = true; s.winW = static_cast<float>(w) / sf; s.winH = static_cast<float>(h) / sf;
+        wrote_ = true; lastW_ = s.winW; lastH_ = s.winH;
+        return s;
+    }
+    if (guard_) {   // the last write was a change: if it moved the window, the window goes back
+        if (w == guardW_ && h == guardH_) { guard_ = false; }
+        else if (guardLeft_-- > 0) { s.repair = true; s.repairW = guardW_; s.repairH = guardH_; return s; }
+        else { guard_ = false; }
+    }
+    const float nw = static_cast<float>(w) / sf, nh = static_cast<float>(h) / sf;
+    if (!wrote_ || std::fabs(nw - lastW_) > 0.01f || std::fabs(nh - lastH_) > 0.01f) {
+        s.write = true; s.winW = nw; s.winH = nh;
+        wrote_ = true; lastW_ = nw; lastH_ = nh;
+        guard_ = true; guardW_ = w; guardH_ = h; guardLeft_ = 3;
+    }
+    return s;
+}
+
 std::pair<std::uint32_t, std::uint32_t> ScaleFollower::sizeAfter(std::uint32_t w, std::uint32_t h, float from, float to) {
     if (grown_ && to < from && w <= askedW_ && h <= askedH_) {   // going back down: from what the window was before the grow, not from what the system left of it
         const auto back = sizeForScale(growW_, growH_, growFrom_, to);

@@ -1191,6 +1191,7 @@ int main(int argc, char** argv) {
     // window's scale. Read from the interface half once a tick (a pick in SYSTEM > Display is saved there at once) and at the first tick: what changed since the
     // last look is applied, nothing else - so a counter face picked from the menu stays until the saved style moves.
     foxsdr::slintlook::ScaleFollower scaleFollower;
+    foxsdr::slintlook::SizeMirror sizeMirror;   // the real window size into win-w / win-h, without the shrink a pinned interface size caused (look_logic.hpp)
     std::string lookTheme, lookStyle;
     bool lookHc = false, winHc = false;   // slint-gaps.md item 11: the high-contrast skin in force, and Windows' own setting (polled once a second; FOXSDR_SLINT_WINDOWS_HC=1 stands in for it in a bounded run)
     std::string skinNow = "workbench";
@@ -1221,9 +1222,13 @@ int main(int argc, char** argv) {
         if (plan.change) {
             const auto sz = ui->window().size();
             ui->window().dispatch_scale_factor_change_event(plan.want);
-            if (!ui->window().is_maximized()) {   // the logical size stays: the window grows with the scale
+            if (!ui->window().is_maximized()) {   // the logical size stays: the window grows with the scale, never past the screen and never below the smallest window at the new scale
                 const auto ns = scaleFollower.sizeAfter(sz.width, sz.height, cur, plan.want);
-                ui->window().set_size(slint::PhysicalSize({ns.first, ns.second}));
+                int screenW = 0, screenH = 0;
+                if (!foxsdr::slintgaps::windowWorkArea(screenW, screenH)) { screenW = screenH = 0; }
+                const foxsdr::slintlook::WindowFit fit = foxsdr::slintlook::fitWindowToScreen(ns.first, ns.second, plan.want, kMinWindowW, kMinWindowH, screenW, screenH);
+                ui->window().set_size(slint::PhysicalSize({fit.w, fit.h}));
+                sizeMirror.asked(fit.w, fit.h);
             }
             scaleFollower.applied(plan.want);
             std::fprintf(stderr, "foxsdr-slint: look: interface size '%s' = scale %.2f (the system's %.2f)\n", half.interfaceScale.c_str(), static_cast<double>(plan.want), static_cast<double>(plan.os));
@@ -2592,8 +2597,7 @@ int main(int argc, char** argv) {
         const auto w = static_cast<std::uint32_t>(std::max(kMinWindowW * scale(), sz.width + (edge != 2 ? dx * scale() : 0.f)));
         const auto h = static_cast<std::uint32_t>(std::max(kMinWindowH * scale(), sz.height + (edge != 1 ? dy * scale() : 0.f)));
         ui->window().set_size(slint::PhysicalSize({w, h}));
-        ui->set_win_w(static_cast<float>(w) / scale());
-        ui->set_win_h(static_cast<float>(h) / scale());
+        sizeMirror.asked(w, h);   // the mirror (the tick) puts the new size into win-w / win-h once the window has it
     });
 
     // ---- the pictures: one pane's work per visible pane, then its figures into the window ----
@@ -3029,7 +3033,10 @@ int main(int argc, char** argv) {
         {   // the screen follows the real window size (maximise, restore, a DPI change)
             const auto sz = ui->window().size();
             const float sf = std::max(0.5f, ui->window().scale_factor());
-            if (sz.width > 0 && sz.height > 0) { ui->set_win_w(static_cast<float>(sz.width) / sf); ui->set_win_h(static_cast<float>(sz.height) / sf); }
+            const foxsdr::slintlook::SizeMirror::Step mirror = sizeMirror.tick(sz.width, sz.height, ui->window().scale_factor(), scaleFollower.os());
+            if (mirror.write) { ui->set_win_w(mirror.winW); ui->set_win_h(mirror.winH); }
+            if (mirror.repair) { ui->window().set_size(slint::PhysicalSize({mirror.repairW, mirror.repairH})); }
+            (void)sf;
         }
         ui->set_tuned_text(ss(fmtMHz(state.tunedHz)));
         const auto d = digitsOf(state.tunedHz);
@@ -3845,10 +3852,13 @@ int main(int argc, char** argv) {
             if (what == "scale") { out = fmt("%.2f", static_cast<double>(ui->window().scale_factor())); return std::string(); }
             if (what == "width") { out = fmt("%.0f", static_cast<double>(ui->get_win_w())); return std::string(); }
             if (what == "height") { out = fmt("%.0f", static_cast<double>(ui->get_win_h())); return std::string(); }
+            if (what == "physw") { out = std::to_string(ui->window().size().width); return std::string(); }   // the window's real size in physical pixels (drive fixes 1)
+            if (what == "physh") { out = std::to_string(ui->window().size().height); return std::string(); }
+            if (what == "maximised") { out = ui->window().is_maximized() ? "1" : "0"; return std::string(); }
             if (what == "bg") { out = hex(ui->global<Theme>().get_bg()); return std::string(); }
             if (what == "accent") { out = hex(ui->global<Theme>().get_accent()); return std::string(); }
             if (what == "face") { out = face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain"; return std::string(); }
-            return "look.scale|width|height|bg|accent|face, not " + name;
+            return "look.scale|width|height|physw|physh|maximised|bg|accent|face, not " + name;
         }
         if (name == "tunedHz") { out = fmt("%.6f", state.tunedHz); return std::string(); }
         if (name == "centreHz") { out = fmt("%.6f", state.centreHz); return std::string(); }

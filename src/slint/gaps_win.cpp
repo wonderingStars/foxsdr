@@ -114,6 +114,17 @@ void* findMainWindow() {
     return c.found;
 }
 
+bool windowWorkArea(int& width, int& height) {
+    HWND h = static_cast<HWND>(findMainWindow());
+    const HMONITOR m = h != nullptr ? ::MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST) : ::MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (m == nullptr || !::GetMonitorInfoW(m, &mi)) { return false; }
+    width = static_cast<int>(mi.rcWork.right - mi.rcWork.left);
+    height = static_cast<int>(mi.rcWork.bottom - mi.rcWork.top);
+    return width > 0 && height > 0;
+}
+
 bool installFileDrop(void* window, std::function<void(const std::string&)> onDrop) {
     HWND h = static_cast<HWND>(window);
     if (h == nullptr || !::IsWindow(h)) { return false; }
@@ -166,6 +177,7 @@ std::string clipboardText() {
 // Off Windows the same duties go to the desktop's own programs (desk_logic.cpp: xdg-open and the clipboard tools, started without a shell). The file drop is the window's own DropArea (main.slint), not a hook here.
 bool openUrl(const std::string& url) { return foxsdr::slintdesk::openAddress(url); }
 void* findMainWindow() { return nullptr; }
+bool windowWorkArea(int&, int&) { return false; }
 bool installFileDrop(void*, std::function<void(const std::string&)>) { return false; }
 bool setClipboardText(const std::string& utf8) { return foxsdr::slintdesk::copyText(utf8); }
 std::string clipboardText() { return foxsdr::slintdesk::pasteText(); }
