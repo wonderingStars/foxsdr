@@ -563,6 +563,9 @@ std::string refusalText(int status, const std::string& engineMessage) {
 // ============================================================ needed libraries ============================================================
 namespace {
 std::string str(const json& j, const char* k) { return j.contains(k) && j[k].is_string() ? j[k].get<std::string>() : std::string(); }
+// The table's words are English literals marked FOX_TR_NOOP in the source layer (source/needed_library.cpp): the window says them in its own language
+// here; a sentence built at run time (it names a folder) is in no catalogue and comes back unchanged.
+std::string trs(const std::string& s) { return s.empty() ? s : std::string(tr(s.c_str())); }
 std::vector<std::string> strs(const json& j, const char* k) {
     std::vector<std::string> v;
     if (j.contains(k) && j[k].is_array()) { for (const auto& e : j[k]) { if (e.is_string()) { v.push_back(e.get<std::string>()); } } }
@@ -579,26 +582,27 @@ std::vector<NeededRow> parseNeeded(const std::string& text) {
         NeededRow r;
         r.id = str(e, "library_id");
         r.sourceKind = str(e, "source_kind");
-        r.name = str(e, "name");
+        r.name = trs(str(e, "name"));
         r.kind = str(e, "kind");
-        r.why = str(e, "why");
+        r.why = trs(str(e, "why"));
         r.publisher = str(e, "publisher");
         r.officialPage = str(e, "official_page");
         r.pageStatus = str(e, "page_status");
         r.installKind = str(e, "install_kind");
-        r.folderNote = str(e, "folder_note");
-        r.licence = str(e, "licence");
-        r.notSupplied = str(e, "not_supplied");
+        r.folderNote = trs(str(e, "folder_note"));
+        r.licence = trs(str(e, "licence"));
+        r.notSupplied = trs(str(e, "not_supplied"));
         r.fetchAllowed = str(e, "fetch_allowed");
         r.minVersionNote = str(e, "min_version_note");
         r.fileNames = strs(e, "file_names");
         r.steps = strs(e, "steps");
+        for (std::string& st : r.steps) { st = trs(st); }
         r.bits64 = !e.contains("bits64") || !e["bits64"].is_boolean() || e["bits64"].get<bool>();
         if (e.contains("check") && e["check"].is_object()) {
             const json& c = e["check"];
             r.checked = true;
             r.state = str(c, "state");
-            r.sentence = str(c, "sentence");
+            r.sentence = trs(str(c, "sentence"));
             r.depth = str(c, "depth");
             r.version = str(c, "version");
             r.foundIn = str(c, "found_in");
@@ -620,6 +624,15 @@ std::string neededStateWords(const NeededRow& r) {
     if (r.state == "not-a-library") { return tr("Found, but it is not a library"); }
     if (r.state == "cannot-check") { return tr("Cannot be checked from here"); }
     return tr("Not checked");
+}
+
+std::string jobStateWords(const std::string& state) {
+    if (state == "idle") { return tr("nothing running"); }
+    if (state == "running") { return tr("running"); }
+    if (state == "done") { return tr("finished"); }
+    if (state == "cancelled") { return tr("cancelled"); }
+    if (state == "failed") { return tr("failed"); }
+    return state;
 }
 
 int neededStateTone(const NeededRow& r) {

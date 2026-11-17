@@ -50,6 +50,9 @@ int main() {
     { ClipFields g; CHECK(clipFieldsFrom("{\"enabled\":true,\"preRollS\":4,\"tailS\":5,\"minS\":2,\"maxClipS\":90}", g) && g.enabled && g.preRollS == "4" && g.maxClipS == "90"); CHECK(!clipFieldsFrom("nope", g)); }
     CHECK(replayCost(10, 48000) == "10 s = 1.0 MB");
     CHECK(replayCost(0, 48000) == "off");
+    CHECK(replayHeldText("seconds=5;bytes=480000;max=11520000") == "5 s of audio held (0.5 MB)");
+    CHECK(replayHeldText("seconds=0;bytes=0;max=11520000") == "nothing held");
+    CHECK(replayHeldText("").empty() && replayHeldText("garbage").empty());
     CHECK(parseReplaySeconds("30", 60, d, e) && d == 30);
     CHECK(!parseReplaySeconds("61", 60, d, e) && !parseReplaySeconds("-1", 60, d, e));
     CHECK(replayJson("30", 60).ok && !replayJson("90", 60).ok);

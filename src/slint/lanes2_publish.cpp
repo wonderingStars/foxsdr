@@ -232,7 +232,7 @@ struct LaneS2Publisher::Impl {
         v.push_back(rChoice(id, label, opts, pick, true, tip));
         handlers[id] = [this, fn](const std::string& t) { fn(std::atoi(t.c_str())); dirty = true; };
     }
-    void endNote(std::vector<Row>& v, Sec s) { if (!noteText[s].empty()) { v.push_back(rNote(noteText[s], noteTone[s])); } }
+    void endNote(std::vector<Row>& v, Sec s) { if (!noteText[s].empty()) { placeNote(v, noteText[s], noteTone[s]); } }
 
     // ================================================================ Spectrum tools: the FFT size, window and frame rate (G2-01, G2-02, G2-03)
     SpectrumSetting current() const {

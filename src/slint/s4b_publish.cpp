@@ -156,7 +156,7 @@ struct S4bPublisher::Impl {
         v.push_back(rChoice(id, label, opts, pick, true, tip));
         handlers[id] = [fn](const std::string& t) { fn(std::atoi(t.c_str())); };
     }
-    void endNote(std::vector<Row>& v, Sec s) { if (!noteText[s].empty()) { v.push_back(rNote(noteText[s], noteTone[s])); } }
+    void endNote(std::vector<Row>& v, Sec s) { if (!noteText[s].empty()) { placeNote(v, noteText[s], noteTone[s]); } }
 
     // ================================================================ TOOLS > Scanner: the locked-out frequencies (G2-43)
     void buildScan(std::vector<Row>& v) {

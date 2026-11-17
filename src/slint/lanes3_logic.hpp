@@ -63,6 +63,8 @@ bool clipFieldsFrom(const std::string& fact, ClipFields& out);
 // bound is `maxSeconds` (and 'maxBytes' in the fact); this says it in seconds and megabytes: "10 s = 0.9 MB".
 bool parseReplaySeconds(const std::string& text, double maxSeconds, double& s, std::string& err);
 std::string replayCost(double seconds, double audioRateHz);
+// The engine's "seconds=5;bytes=480000;max=..." fact as a sentence with units: "5 s of audio held (0.5 MB)"; empty when the fact is not understood.
+std::string replayHeldText(const std::string& fact);
 // The text of RECORD_REPLAY: {"seconds":s}.
 Built replayJson(const std::string& secondsText, double maxSeconds);
 

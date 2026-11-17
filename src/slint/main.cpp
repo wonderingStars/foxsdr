@@ -3113,7 +3113,7 @@ int main(int argc, char** argv) {
             ui->set_gain_hint(ss(lists.gainStage + " stage \xC2\xB7 " + state.deviceName));
             ui->set_gain_tooltip(ss("Gain - the radio's first stage; drag the slider, or scroll over it (" + lists.gainStage + ")"));
         } else {
-            ui->set_gain_norm(0.f); ui->set_gain_hint(ss("no gain stage"));
+            ui->set_gain_norm(0.f); ui->set_gain_hint(ss(std::string(cascade::i18n::tr("no gain stage"))));
             std::string keep, srcError;   // WHY IT IS DEAD: no radio is open; when a saved radio did not open, the source error is the whole sentence (the Source section's own words)
             world.fact("fact.source.keep", keep);
             world.fact("fact.status.sourceError", srcError);
@@ -3134,7 +3134,7 @@ int main(int argc, char** argv) {
             } else {
                 ui->set_squelch_norm(static_cast<float>(squelchNorm(state.squelchDb)));
                 ui->set_squelch_text(ss(sqAuto ? std::string("open") : wholeDbText(state.squelchDb)));
-                ui->set_squelch_hint(ss(sqAuto ? "Automatic: follows the noise floor" : "Manual threshold"));
+                ui->set_squelch_hint(ss(std::string(sqAuto ? cascade::i18n::tr("Automatic: follows the noise floor") : cascade::i18n::tr("Manual threshold"))));
             }
         }
         ui->set_squelch_auto_tooltip(ss(sqAuto ? "Automatic squelch - sits 8 dB above the measured noise floor" : "Automatic squelch - follows the noise floor so weak carriers open it and noise does not"));

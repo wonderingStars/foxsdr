@@ -326,9 +326,9 @@ struct AirbandModel {
     std::vector<AirbandMark> marks;        // the channels of the block on the air (the live list's on-air rows): the spectrum's marks
     std::vector<AirbandRow> rows;
     float squelch_norm = 0.5f;             // (dB + 110) / 110
-    std::string squelch_text;              // "squelch -55 dB"
+    std::string squelch_text;              // "-55 dB"
     std::string above_noise_label;         // "Above the noise"
-    std::string hold_text;                 // "hold 2.0 s"
+    std::string hold_text;                 // "2.0" (the unit is drawn beside the box)
     std::string listen_label;              // "LISTEN" / "STOP"
     bool listening = false;
     std::string next_label;                // "Next block" while the plan has more than one block, else ""

@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "source/sdriq_d2xx.hpp"
 
+#include "core/i18n.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -271,7 +273,7 @@ std::unique_ptr<SdriqLink> openD2xxSdriq(const std::string& libraryWhere, const 
         }
         if (st != ft::kOk || count == 0) {
             return refuse(error, info, "no-device",
-                          "No SDR-IQ was found: FTDI's D2XX driver lists no FTDI USB device. Plug the SDR-IQ in and try again.");
+                          FOX_TR_NOOP("No SDR-IQ was found: FTDI's D2XX driver lists no FTDI USB device. Plug the SDR-IQ in and try again."));
         }
         if (count > kMaxDevices) { count = kMaxDevices; }
         if (info != nullptr) { info->devicesSeen = static_cast<int>(count); }
@@ -343,11 +345,11 @@ const needed::Info& ftd2xxNeededInfo() {
         i.sourceKind = "sdriq";
         i.kind = needed::Kind::LibraryFile;
         i.check = &checkFtd2xxRow;
-        i.name = "FTDI D2XX driver";
+        i.name = FOX_TR_NOOP("FTDI D2XX driver");
         i.fileNames = {"ftd2xx.dll", "ftd2xx64.dll"};
         i.minVersion = "";  // none is known: the classic calls FoxSDR uses are the oldest ones; "too old" here means one of the eight is missing
         i.needs64Bit = true;
-        i.why = "FoxSDR talks to the RFspace SDR-IQ through this driver; once it is installed the SDR-IQ can be chosen as a radio.";
+        i.why = FOX_TR_NOOP("FoxSDR talks to the RFspace SDR-IQ through this driver; once it is installed the SDR-IQ can be chosen as a radio.");
         i.publisher = "FTDI";
         // The only address read in the publisher's own documentation (the D2XX Programmer's Guide names "our web site www.ftdichip.com"). The page of the
         // D2XX downloads on it was NOT read (FTDI's site refused the tool), so no deeper address is given: (unverified).
@@ -356,13 +358,13 @@ const needed::Info& ftd2xxNeededInfo() {
         i.installKind = "installer";
         i.copyInFolder = "";
         i.steps = {
-            "Open FTDI's web site with the button below and find the D2XX driver for Windows (the one for 64-bit Windows).",
-            "Download it and run FTDI's installer (Windows may ask for your permission: that is FTDI's installer, not FoxSDR).",
-            "Unplug the SDR-IQ and plug it in again.",
-            "Come back here and press \"Check again\"; FoxSDR does not need to be restarted.",
+            FOX_TR_NOOP("Open FTDI's web site with the button below and find the D2XX driver for Windows (the one for 64-bit Windows)."),
+            FOX_TR_NOOP("Download it and run FTDI's installer (Windows may ask for your permission: that is FTDI's installer, not FoxSDR)."),
+            FOX_TR_NOOP("Unplug the SDR-IQ and plug it in again."),
+            FOX_TR_NOOP("Come back here and press \"Check again\"; FoxSDR does not need to be restarted."),
         };
-        i.licence = "FTDI's driver is under FTDI's own licence.";
-        i.notSuppliedLine = "FoxSDR does not include or supply this driver.";
+        i.licence = FOX_TR_NOOP("FTDI's driver is under FTDI's own licence.");
+        i.notSuppliedLine = FOX_TR_NOOP("FoxSDR does not include or supply this driver.");
         i.fetchAllowed = false;
         return i;
     }();

@@ -722,7 +722,7 @@ component SliderRow inherits Rectangle {
     height: max(Theme.field-h, slider-row-layout.preferred-height);   // a label that wraps (docs 6.62) makes the row taller by its second line
     slider-row-layout := HorizontalLayout {
         spacing: 0px;
-        RowLabel { width: root.label-w; text: root.label; ink: root.enabled ? Theme.fg-soft : Theme.disabled; }
+        if root.label-w > 0px : RowLabel { width: root.label-w; text: root.label; ink: root.enabled ? Theme.fg-soft : Theme.disabled; }
         VerticalLayout {
             alignment: center;
             padding-left: 8px;
@@ -941,7 +941,11 @@ export component KPanel inherits VerticalLayout {
             WrapLabel { text: r.label; width: 120px; }
             WrapValue { horizontal-stretch: 1; text: r.value; accessible-role: text; accessible-label: r.label; accessible-description: r.value; }
         }
-        if r.kind == 7 : SliderRow { label: r.label; readout: r.value; value: r.level; enabled: r.enabled; tooltip: r.note; changed(v) => { root.act(r.id, "\{v}"); } }
+        if r.kind == 7 : VerticalLayout {
+            spacing: 0px;
+            Line { WrapLabel { text: r.label; color: r.enabled ? Theme.fg-soft : Theme.disabled; } }   // the name whole above its slider (look review: four cut names, two alike)
+            SliderRow { label: r.label; label-w: 0px; readout: r.value; value: r.level; enabled: r.enabled; tooltip: r.note; changed(v) => { root.act(r.id, "\{v}"); } }
+        }
         if r.kind == 8 : Line {
             RowLabel { text: r.label; width: 84px; }
             Rectangle {

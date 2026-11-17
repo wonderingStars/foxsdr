@@ -178,7 +178,7 @@ int main() {
         CHECK(m.refresh_enabled && !m.look_for_usrps && m.setup_key_label == "RADIO SETUP");
         CHECK(m.chip == "NESDR SMAr" && m.chip_tone == Tone::Good && m.lamp_lit && m.lamp_tone == Tone::Good);
         CHECK(m.rates.size() == 3 && m.rate_text == "2.400 MS/s" && at(m.rates, 1).label == "2.400 MS/s" && at(m.rates, 1).id == "2400000");
-        CHECK(m.actual_rate == "actual 2.4 MS/s");
+        CHECK(m.actual_rate == "2.4 MS/s");
         CHECK(m.antennas.size() == 1 && m.single_port && m.antenna_text == "Antenna: RX");
         CHECK(m.auto_gain_shown && !m.auto_gain && m.agc_note.empty());
         CHECK(m.stages.size() == 1 && at(m.stages, 0).name == "TUNER" && at(m.stages, 0).text == "32.8 dB" && at(m.stages, 0).unit == "dB" && at(m.stages, 0).enabled);
@@ -548,6 +548,8 @@ int main() {
         CHECK(m.lamp_lit && m.lamp_tone == Tone::Err);
         r.t.facts["fact.status.deviceFault"] = "The SDRplay session was lost, then restart FoxSDR.";
         CHECK(readSource(r.t, r.s, r.o).stopped_line == "Device stopped: The SDRplay session was lost, then restart FoxSDR.");   // the driver has said what to do
+        r.t.facts["fact.status.deviceFault"] = "source thread: no samples arrived for 3 seconds: the sender may have stopped";   // the thread's name is the developer's word
+        CHECK(readSource(r.t, r.s, r.o).stopped_line.rfind("Device stopped: No samples arrived for 3 seconds: the sender may have stopped\nReconnect it", 0) == 0);
         Rig ok = rtlOpen();
         CHECK(readSource(ok.t, ok.s, ok.o).stopped_line.empty());
     }
@@ -555,6 +557,7 @@ int main() {
     // ---- the chip and the variant helpers ----
     {
         CHECK(sourceChipText("Signal generator") == "Signal gen" && sourceChipText("SoapySDR: B200") == "B200" && sourceChipText("IQ file") == "IQ file");
+        CHECK(sourceChipText("Raw I/Q stream: 127.0.0.1:47195").empty() && sourceChipText("Raw I/Q stream: 1.1.1.1:80") == "1.1.1.1:80");   // an address that does not fit is not shown cut ("127.0.0.1:")
         CHECK(sourceChipText("") .empty() && sourceChipText("RTL-SDR Blog V4 Dongle") == "RTL-SDR Bl");
         CHECK(sourceChipText("\xC3\x9C" "n\xC3\xAF" "c\xC3\xB6" "d\xC3\xA9 R\xC3\xA4" "dio XYZ") == "\xC3\x9C" "n\xC3\xAF" "c\xC3\xB6" "d\xC3\xA9 R\xC3\xA4");   // ten characters, never a half letter
         CHECK(sourceChip("Signal generator", {}) == "Signal gen" && sourceChip("Signal generator", {"A"}) == "ON PATCH");

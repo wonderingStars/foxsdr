@@ -57,6 +57,17 @@ KeeperDirs freshDirs(const std::string& tag) {
 void rows() {
     CHECK(rHeading("H").kind == kHeading);
     CHECK(rNote("n", kWarn).tone == kWarn);
+    {   // a refusal is put directly under the row it names; anything else goes last
+        std::vector<Row> v{rHeading("H"), rField("a", "Port", "1"), rField("b", "Other", "2"), rKey("k", "Open the stream"), rNote("tail")};
+        placeNote(v, "Port: type a whole number", kErr);
+        CHECK(v.size() == 6 && v[2].kind == kNote && v[2].label == "Port: type a whole number" && v[2].tone == kErr && v[1].id == "a" && v[3].id == "b");
+        placeNote(v, "Open the stream: bad", kErr);
+        CHECK(v.size() == 7 && v[5].label == "Open the stream: bad" && v[4].id == "k");
+        placeNote(v, "nobody: bad", kErr);
+        CHECK(v.size() == 8 && v.back().label == "nobody: bad");
+        placeNote(v, "Port: sent", kDim);
+        CHECK(v.size() == 9 && v.back().label == "Port: sent" && v[2].label == "Port: type a whole number");
+    }
     const Row k = rKey("id", "Label", false, "tip", true);
     CHECK(k.kind == kKey && k.id == "id" && !k.enabled && k.on && k.note == "tip");
     const Row c = rChoice("c", "L", {"a", "b", "c"}, 2);

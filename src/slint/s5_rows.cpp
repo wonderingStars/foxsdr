@@ -126,7 +126,7 @@ std::vector<Row> S5Rows::build() {
         buildDirect(v);
         buildS5b(v);
     }
-    if (!note_.empty()) { v.push_back(rNote(note_, noteTone_)); }
+    if (!note_.empty()) { slk::placeNote(v, note_, noteTone_); }
     return v;
 }
 

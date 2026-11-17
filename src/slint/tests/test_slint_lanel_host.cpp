@@ -276,6 +276,8 @@ int main() {
         const std::vector<NeededRow> rows = parseNeeded(kNeeded);
         CHECK(rows.size() == 4);
         CHECK(rows[0].id == "winradio-g39ddc" && rows[0].checked && rows[0].depth == "headers" && rows[0].fileNames.size() == 1 && rows[0].steps.size() == 2);
+        CHECK(jobStateWords("idle") == "nothing running" && jobStateWords("running") == "running" && jobStateWords("done") == "finished");
+        CHECK(jobStateWords("cancelled") == "cancelled" && jobStateWords("failed") == "failed" && jobStateWords("odd") == "odd" && jobStateWords("idle").find("idle") == std::string::npos);
         CHECK(neededStateWords(rows[0]) == "Found (not test-loaded)");               // a header-only "working" is NEVER "Working"
         CHECK(neededStateWords(rows[0]).find("working") == std::string::npos && neededStateWords(rows[0]).find("Working") == std::string::npos);
         CHECK(neededStateWords(rows[1]) == "Found and working");                     // only the loaded FTDI check may say so

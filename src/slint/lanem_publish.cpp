@@ -190,7 +190,7 @@ struct LaneMPublisher::Impl {
     void tickD(std::vector<Row>& v, const std::string& id, const std::string& label, bool def, const std::string& tip = std::string()) {
         tick(v, id, label, bv(id, def), [this, id](bool on) { draft[id] = on ? "1" : "0"; }, tip);
     }
-    void endNote(std::vector<Row>& v, Sec s) { if (!noteText[s].empty()) { v.push_back(rNote(noteText[s], noteTone[s])); } }
+    void endNote(std::vector<Row>& v, Sec s) { if (!noteText[s].empty()) { placeNote(v, noteText[s], noteTone[s]); } }
     // a destructive key asks for a second press
     bool confirmTwice(Sec s, const std::string& id, const std::string& what) {
         if (armed != id) { armed = id; setNote(s, what + ": " + tr("press the key again to confirm. This cannot be undone."), kWarn); return false; }

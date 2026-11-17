@@ -186,7 +186,7 @@ void sentencesAreTheDrawers() {
     for (const char* k : appKeys) { CHECK(in(app, k)); }
     const char* const airKeys[] = {
         "Look up", "Nearest airports", "Hide", "Add", "Open the folder", "Export CSV", "Remove preset", "Every ticked AM or NFM frequency", "%zu ticked of %zu", "Tick all", "Untick all",
-        "Hearing: %s", "Handing the radio back from the patch view...", "Level %.0f dB (squelch %.0f dB)", "squelch %.0f dB", "Above the noise", "hold %.1f s", "LISTEN", "STOP",
+        "Hearing: %s", "Handing the radio back from the patch view...", "Level %.0f dB (squelch %.0f dB)", "Above the noise", "LISTEN", "STOP",
         "Next block", "could not read frequency \"%s\"", "\"%s\" names %zu airports - pick one:",
         "No airport with the code \"%s\" publishes an airband frequency in FoxSDR's table.", "Waiting for the disk to open the file: %.0f s",
     };
@@ -641,7 +641,7 @@ void airbandReads() {
     CHECK(m.rows.size() == 4 && !m.rows[0].heard && !m.rows[0].on_air && m.rows[0].tooltip.empty());
     CHECK(m.rows.size() == 4 && m.rows[0].text == "118.1000  Tower" && m.rows[0].heard_time == "1m 40s" && m.rows[1].heard_time == "1h 01m" && m.rows[2].heard_time == "45s" && m.rows[3].heard_time == "-");
     CHECK(m.lookup_label == "Look up" && m.nearest_label == "Nearest airports" && m.add_label == "Add" && m.import_label == "Import" && m.export_label == "Export CSV" && m.remove_preset_label == "Remove preset");
-    CHECK(m.above_noise_label == "Above the noise" && m.squelch_text == "squelch -55 dB" && m.hold_text == "hold 2.0 s" && m.fact_note.empty());
+    CHECK(m.above_noise_label == "Above the noise" && m.squelch_text == "-55 dB" && m.hold_text == "2.0" && m.fact_note.empty());
     CHECK_NEAR(m.squelch_norm, 0.5, 1e-6);
     CHECK(m.groups.size() == 4 && m.groups[0].label == "Every ticked AM or NFM frequency" && m.groups[0].id.empty() && m.groups[1].id == "KORD" && m.groups[2].id == "Lugano" && m.groups[3].id == "Marine" && m.group_index == 0);
     CHECK(m.presets.size() == 3 && m.presets[0].id == "KORD" && m.preset == "Manual" && m.preset_index == -1 && m.preset_rows == 0);
@@ -735,7 +735,7 @@ void airbandReads() {
     h.hold_held = true;
     h.hold_edit = 7.5;
     m = readAirband(idle, s, h);
-    CHECK(m.squelch_text == "squelch -80 dB" && !m.squelch_from_engine && m.hold_text == "hold 7.5 s" && m.hold_s == 7.5);
+    CHECK(m.squelch_text == "-80 dB" && !m.squelch_from_engine && m.hold_text == "7.5" && m.hold_s == 7.5);
     CHECK_NEAR(m.squelch_norm, 30.0 / 110.0, 1e-6);
     idle.facts["fact.airband.squelchDb"] = "-110";
     CHECK_NEAR(readAirband(idle, s, ReadOptions{}).squelch_norm, 0.0, 1e-9);
