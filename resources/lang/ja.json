@@ -4268,6 +4268,7 @@
   "What would you like FoxSDR to do?": "FoxSDR にどんなことをしてほしいですか？",
   "What's new": "新機能",
   "When a keyword alert is raised a notice appears in the notification area of Windows. Alerts are off until you turn them on above.": "キーワードアラートが発生すると、Windows の通知領域に通知が表示されます。アラートは、上でオンにするまでオフです。",
+  "When a radio does not open, FoxSDR sends one report about that failure, every time it happens, whether or not Diagnostics is on and whether or not Usage reporting is on.": "ラジオが開けないとき、FoxSDR は、「診断」がオンかどうか、「利用状況レポート」がオンかどうかにかかわらず、その障害について発生するたびに 1 件のレポートを送信します。",
   "Where FoxSDR looked": "FoxSDR が探した場所",
   "Where aircraft were heard from your receiver position, hottest where most often, fading over days.": "受信位置から航空機を受信した場所。頻度が高いほど濃く、日数とともに薄れます。",
   "Where in the recording": "録音内の位置",

@@ -4268,6 +4268,7 @@
   "What would you like FoxSDR to do?": "Wat zou je willen dat FoxSDR doet?",
   "What's new": "Wat is er nieuw",
   "When a keyword alert is raised a notice appears in the notification area of Windows. Alerts are off until you turn them on above.": "Wanneer een trefwoordmelding wordt geactiveerd, verschijnt er een bericht in het systeemvak van Windows. Meldingen staan uit totdat u ze hierboven inschakelt.",
+  "When a radio does not open, FoxSDR sends one report about that failure, every time it happens, whether or not Diagnostics is on and whether or not Usage reporting is on.": "Als een radio niet opent, stuurt FoxSDR elke keer één rapport over die storing, ongeacht of «Diagnose» aan staat en of «Gebruiksrapportage» aan staat.",
   "Where FoxSDR looked": "Waar FoxSDR heeft gezocht",
   "Where aircraft were heard from your receiver position, hottest where most often, fading over days.": "Waar vliegtuigen gehoord zijn vanaf de ontvangerpositie, het heetst waar het vaakst, vervagend over dagen.",
   "Where in the recording": "Waar in de opname",

@@ -4268,6 +4268,7 @@
   "What would you like FoxSDR to do?": "Cosa vorresti che facesse FoxSDR?",
   "What's new": "Novità",
   "When a keyword alert is raised a notice appears in the notification area of Windows. Alerts are off until you turn them on above.": "Quando scatta un avviso per parola chiave, compare una notifica nell'area di notifica di Windows. Gli avvisi restano disattivati finché non li attivi qui sopra.",
+  "When a radio does not open, FoxSDR sends one report about that failure, every time it happens, whether or not Diagnostics is on and whether or not Usage reporting is on.": "Quando una radio non si apre, FoxSDR invia un rapporto su quel guasto ogni volta che accade, indipendentemente dal fatto che «Diagnostica» sia attiva e che «Rapporti di utilizzo» siano attivi.",
   "Where FoxSDR looked": "Dove ha cercato FoxSDR",
   "Where aircraft were heard from your receiver position, hottest where most often, fading over days.": "Dove sono stati ricevuti aerei dalla posizione del ricevitore, più caldo dove più spesso, sbiadendo nell'arco dei giorni.",
   "Where in the recording": "Punto nella registrazione",

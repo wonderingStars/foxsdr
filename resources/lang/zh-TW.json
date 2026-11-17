@@ -4268,6 +4268,7 @@
   "What would you like FoxSDR to do?": "您希望 FoxSDR 能做什麼？",
   "What's new": "新增內容",
   "When a keyword alert is raised a notice appears in the notification area of Windows. Alerts are off until you turn them on above.": "觸發關鍵字警示時，Windows 通知區域會出現一則通知。在您於上方開啟之前，警示處於關閉狀態。",
+  "When a radio does not open, FoxSDR sends one report about that failure, every time it happens, whether or not Diagnostics is on and whether or not Usage reporting is on.": "當無線電無法開啟時，FoxSDR 每次都會傳送一份關於該故障的報告，無論「診斷」是否開啟，也無論「使用情況報告」是否開啟。",
   "Where FoxSDR looked": "FoxSDR 搜尋過的位置",
   "Where aircraft were heard from your receiver position, hottest where most often, fading over days.": "從接收位置聽到飛機的地方，越常聽到越熱，數日內逐漸褪去。",
   "Where in the recording": "錄製中的位置",

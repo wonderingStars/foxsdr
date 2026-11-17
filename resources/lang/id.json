@@ -4268,6 +4268,7 @@
   "What would you like FoxSDR to do?": "Apa yang Anda ingin FoxSDR lakukan?",
   "What's new": "Yang baru",
   "When a keyword alert is raised a notice appears in the notification area of Windows. Alerts are off until you turn them on above.": "Saat peringatan kata kunci muncul, sebuah pemberitahuan tampil di area notifikasi Windows. Peringatan mati sampai Anda mengaktifkannya di atas.",
+  "When a radio does not open, FoxSDR sends one report about that failure, every time it happens, whether or not Diagnostics is on and whether or not Usage reporting is on.": "Saat sebuah radio tidak terbuka, FoxSDR mengirim satu laporan tentang kegagalan itu setiap kali terjadi, baik «Diagnostik» aktif maupun tidak, dan baik «Laporan penggunaan» aktif maupun tidak.",
   "Where FoxSDR looked": "Tempat FoxSDR mencari",
   "Where aircraft were heard from your receiver position, hottest where most often, fading over days.": "Di mana pesawat terdengar dari posisi penerima, terpanas di tempat paling sering, memudar selama beberapa hari.",
   "Where in the recording": "Posisi dalam rekaman",

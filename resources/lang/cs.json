@@ -4268,6 +4268,7 @@
   "What would you like FoxSDR to do?": "Co byste chtěli, aby FoxSDR uměl?",
   "What's new": "Co je nového",
   "When a keyword alert is raised a notice appears in the notification area of Windows. Alerts are off until you turn them on above.": "Při vyvolání upozornění na klíčové slovo se v oznamovací oblasti Windows objeví oznámení. Upozornění jsou vypnutá, dokud je výše nezapnete.",
+  "When a radio does not open, FoxSDR sends one report about that failure, every time it happens, whether or not Diagnostics is on and whether or not Usage reporting is on.": "Když se rádio neotevře, FoxSDR pošle o této chybě jedno hlášení při každém výskytu, bez ohledu na to, zda je zapnuto „Diagnostika“ a zda je zapnuto „Hlášení o používání“.",
   "Where FoxSDR looked": "Kde FoxSDR hledal",
   "Where aircraft were heard from your receiver position, hottest where most often, fading over days.": "Kde byla letadla slyšet z polohy přijímače, nejteplejší tam, kde nejčastěji, během dnů bledne.",
   "Where in the recording": "Kde v nahrávce",

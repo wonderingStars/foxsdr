@@ -4268,6 +4268,7 @@
   "What would you like FoxSDR to do?": "Τι θα θέλατε να κάνει το FoxSDR;",
   "What's new": "Τι νέο υπάρχει",
   "When a keyword alert is raised a notice appears in the notification area of Windows. Alerts are off until you turn them on above.": "Όταν ενεργοποιείται μια ειδοποίηση λέξης-κλειδιού, εμφανίζεται μια ειδοποίηση στην περιοχή ειδοποιήσεων των Windows. Οι ειδοποιήσεις είναι ανενεργές μέχρι να τις ενεργοποιήσετε παραπάνω.",
+  "When a radio does not open, FoxSDR sends one report about that failure, every time it happens, whether or not Diagnostics is on and whether or not Usage reporting is on.": "Όταν ένα ραδιόφωνο δεν ανοίγει, το FoxSDR στέλνει μία αναφορά για αυτή την αποτυχία κάθε φορά που συμβαίνει, είτε είναι ενεργό το «Διαγνωστικά» είτε όχι, και είτε είναι ενεργές οι «Αναφορές χρήσης» είτε όχι.",
   "Where FoxSDR looked": "Πού έψαξε το FoxSDR",
   "Where aircraft were heard from your receiver position, hottest where most often, fading over days.": "Πού ακούστηκαν αεροσκάφη από τη θέση του δέκτη, πιο θερμό όπου συμβαίνει συχνότερα, με σβήσιμο μέσα σε μέρες.",
   "Where in the recording": "Πού στην ηχογράφηση",
