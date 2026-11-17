@@ -74,6 +74,8 @@ list(APPEND foxsdr_slint_sources lanex_help.cpp lanex_bench.cpp lanex_publish.cp
 list(APPEND foxsdr_slint_sources s4b_logic.cpp s4b_publish.cpp s4b_macro_rec.cpp)
 # WINDOW GAPS LANE 1 (docs/multi-radio-records/window-gaps-1.md): the start-up questions and fault cards (gaps1_logic: pure; gaps1_publish: the Gaps1 global; ui/gaps1.slint)
 list(APPEND foxsdr_slint_sources gaps1_logic.cpp gaps1_publish.cpp sysmenu_win.cpp)
+# THE WINDOW GUARD (docs/multi-radio-records/outside-resize.md): a size asked of the window from outside is kept under the graphics limit
+list(APPEND foxsdr_slint_sources window_guard_win.cpp)
 # WINDOW GAPS LANE 4 (docs/multi-radio-records/window-gaps-4.md): the waterfall's row log (gap break, key coverage, range rail) and the Airband monitor's marks on the spectrum
 list(APPEND foxsdr_slint_sources wfrows_logic.cpp airmarks_logic.cpp mapicons_logic.cpp)
 if(WIN32)
@@ -92,7 +94,7 @@ target_link_libraries(foxsdr-slint PRIVATE Slint::Slint cascade_engine cascade_i
 # TrackInfoCache owns a TrackPhotoCache (the target photos, 0.99.98), whose default texture hooks are OpenGL calls: this window never asks the
 # plugin for a photo, so none runs, but the class links them.
 if(WIN32)
-    target_link_libraries(foxsdr-slint PRIVATE opengl32 ole32 shell32 uuid)
+    target_link_libraries(foxsdr-slint PRIVATE opengl32 ole32 shell32 uuid comctl32)
 else()
     find_package(OpenGL QUIET)
     if(OpenGL_FOUND)

@@ -116,6 +116,7 @@
 #include "lanex_help.hpp"
 #include "lanex_publish.hpp"   // lane X (docs/multi-radio-records/lane-x.md): the in-window help and the speed test
 #include "sysmenu_win.hpp"   // window gaps lane 1: the title rail's own system menu (ledger row 14)
+#include "window_guard.hpp"   // the outside-resize guard: a size asked from outside never exceeds the graphics limit
 #include "sysmenu_win.hpp"   // window gaps lane 1: the title rail's own system menu (ledger row 14)
 #include "gaps1_publish.hpp"   // window gaps lane 1: the start-up questions (did not close normally, Link this FoxSDR?) and the plugin fault cards
 #include "core/sys_first_run.hpp"
@@ -3049,6 +3050,7 @@ int main(int argc, char** argv) {
             ui->set_digit_dots(wsMemory.saved().dotStyle);
             if (lk.refusals() != lockSeen) { lockSeen = lk.refusals(); noteTick = tickNo; noteText = cascade::i18n::tr("Frequency locked"); }
             if (noteTick > 0 && tickNo - noteTick < 90) { ui->set_converter_text(ss(noteText)); ui->set_converter_warn(true); }
+            if (tickNo <= 3 || tickNo % 15 == 0) { foxsdr::slintguard::installWindowGuards(); }   // outside-resize.md: every top-level window of this thread, again and again (new windows join)
             if (!dropInstalled && tickNo >= 20 && tickNo % 15 == 0) {   // the OS file drop: once the window exists, our drop target takes the place of the backend's
                 if (void* hw = foxsdr::slintgaps::findMainWindow()) { dropInstalled = foxsdr::slintgaps::installFileDrop(hw, [&](const std::string& p) { if (handleDrop) { handleDrop(p); } }); }
             }
@@ -3933,6 +3935,7 @@ int main(int argc, char** argv) {
             return "markers.shown|rows|error|empty|row.<n>, not " + name;
         }
         if (name.rfind("mute.", 0) == 0) { return publisher.muteState(name.substr(5), out); }
+        if (name == "window.guard.clamps") { out = std::to_string(foxsdr::slintguard::guardClampCount()); return std::string(); }
         if (name.rfind("sysmenu.", 0) == 0) { return sysMenuState ? sysMenuState(name.substr(8), out) : std::string("no system menu"); }
         if (name.rfind("gaps1.", 0) == 0) { return gaps1 ? gaps1->readState(name.substr(6), out) : std::string("no window gaps 1"); }
         if (name.rfind("s2.", 0) == 0) { return laneS2p ? laneS2p->readState(name.substr(3), out) : std::string("no lane S2"); }
