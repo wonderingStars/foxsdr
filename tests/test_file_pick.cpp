@@ -536,6 +536,42 @@ void testLinuxHelper() {
         CHECK(path.empty());
     }
 
+    // A RELATIVE (or empty) PATH ENTRY IS NOT LOOKED IN (security review 1, L9): a helper left in the
+    // current folder by a downloaded archive must not be found, and so must not be run.
+    {
+        const fs::path rel = root / "relbin";
+        fs::create_directories(rel, ec);
+        const std::string relBody = "#!/bin/sh\n" "printf '%s\\n' /relative/helper/ran\n" "exit 0\n";   // would print a path if it ever ran
+        writeScript(rel / "zenity", relBody);
+        writeScript(rel / "kdialog", relBody);
+        const fs::path was = fs::current_path(ec);
+        fs::current_path(root, ec);
+        for (const char* entry : {"relbin", "./relbin", ":relbin", "relbin:", ""}) {
+            ::setenv("PATH", entry, 1);
+            CHECK(!cascade::core::filePickAvailable());
+            ::setenv("FAKE_CHOICE", "/should/not/run", 1);
+            std::string path = "stale";
+            CHECK(!cascade::core::pickFile(rq, path));
+            CHECK(path.empty());
+        }
+        ::unsetenv("FAKE_CHOICE");
+        // an absolute entry after a relative one is still found, and it is the one that runs
+        writeScript(bin / "zenity", body);
+        ::setenv("PATH", (std::string("relbin:") + bin.string()).c_str(), 1);
+        ::setenv("FAKE_CHOICE", "/absolute/helper/ran", 1);
+        CHECK(cascade::core::filePickAvailable());
+        {
+            std::string path;
+            CHECK(cascade::core::pickFile(rq, path));
+            CHECK(path == "/absolute/helper/ran");
+        }
+        ::unsetenv("FAKE_CHOICE");
+        fs::remove(bin / "zenity", ec);
+        fs::current_path(was, ec);
+        fs::remove_all(rel, ec);
+        ::setenv("PATH", bin.string().c_str(), 1);
+    }
+
     // ZENITY: found, run with the argv of [D] and no shell, its output read as the path.
     writeScript(bin / "zenity", body);
     CHECK(cascade::core::filePickAvailable());
