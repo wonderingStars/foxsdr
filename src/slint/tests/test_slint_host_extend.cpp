@@ -445,6 +445,12 @@ void catReads() {
     t.facts["fact.cat.bindAll"] = "1";
     t.facts["fact.cat.enabled"] = "1";
     t.facts["fact.cat.port"] = "4600";
+    // ENGINE MERGE 11 (row SF2-cat-ui): while the tick is not offered a saved "reachable" with NO typed list is this computer only: no warning, the loopback address, no fault
+    m = catModel(t);
+    CHECK(m.accept && !m.reachable && m.port == "4600" && m.warning.empty() && !m.fault);
+    CHECK(m.status == "Listening on 127.0.0.1:4600 \xe2\x80\x94 1 client(s), 12 command(s)");
+    // with a list that was typed on purpose (the interface, or the headless --cat-allow) the listener is beyond this computer, for those computers
+    t.facts["fact.cat.allow"] = "192.168.1.20";
     m = catModel(t);
     CHECK(m.accept && m.reachable && m.port == "4600" && m.warning == "This protocol has no password. Anything that can reach the port can retune the receiver.");
     CHECK(m.status == "Listening on 0.0.0.0:4600 \xe2\x80\x94 1 client(s), 12 command(s)");
@@ -454,6 +460,7 @@ void catReads() {
     m = catModel(t);
     CHECK(!m.reachable_offered && m.scope_note == "CAT is available on this computer only.");   // the same sentence with nothing saved
     t.facts["fact.cat.bindAll"] = "1";
+    t.facts["fact.cat.allow"] = "";
     // FAILED: the refusal is the line, the lamp is rust
     fillServers(t, kFault, 8073, 0, 0, 0, kFault, 0, 0, "", "the port 4600 is already in use");
     m = catModel(t);

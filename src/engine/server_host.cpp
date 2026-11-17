@@ -12,6 +12,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/cat_scope.hpp"
 #include "core/config.hpp"
 #include "core/diag_log.hpp"
 #include "core/secret_vault.hpp"
@@ -487,6 +488,8 @@ void ServerHost::reconcileWeb(bool retry) {
 
 void ServerHost::reconcileCat(bool retry) {
     const ServerConfig::Cat want = config().cat;
+    // a saved "reachable" with no typed list is this computer only while no window offers the tick (core/cat_scope.hpp)
+    const bool wide = cascade::core::catReachesOtherComputers(want.bindAll, want.allow);
     if (!want.enabled) {
         if (catServer_.running()) { catServer_.stop(); }
         catRunCfg_.reset();
@@ -503,10 +506,10 @@ void ServerHost::reconcileCat(bool retry) {
     // BEYOND THIS COMPUTER ONLY TO LISTED COMPUTERS (the CAT protocol has no password): the list is read first; a missing or unusable one is the refusal, and no socket is made.
     cascade::net::PeerAllow peers;
     bool ok = false;
-    if (want.bindAll && !cascade::net::PeerAllow::parse(want.allow, peers, error)) {
+    if (wide && !cascade::net::PeerAllow::parse(want.allow, peers, error)) {
         error = "to let other computers connect to the CAT interface, list the computers that may: " + error;
     } else {
-        ok = catServer_.start(static_cast<std::uint16_t>(want.port), want.bindAll, error, peers);
+        ok = catServer_.start(static_cast<std::uint16_t>(want.port), wide, error, peers);
     }
     catAttempt_ = want;
     Listener l;
@@ -516,7 +519,7 @@ void ServerHost::reconcileCat(bool retry) {
         l.boundPort = static_cast<int>(catServer_.boundPort());
         // The 120 s freeze that started this whole feature was a CAT client being shut down. Whether one was connected at all is the first
         // question a hang report from that path has to answer.
-        cascade::core::diagLogf("cat: listening on port %d (%s)", want.port, want.bindAll ? "the listed computers" : "loopback");
+        cascade::core::diagLogf("cat: listening on port %d (%s)", want.port, wide ? "the listed computers" : "loopback");
     } else {
         // Left enabled in the config on purpose: the usual cause is a port held by something else (a real rigctld), which the user fixes
         // and retries. Silently turning the setting off would hide that.

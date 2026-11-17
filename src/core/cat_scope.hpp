@@ -7,9 +7,18 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <string>
+
 namespace cascade::core {
 
 // Whether a window offers the CAT "reachable from other machines" tick. A rule a test holds in both windows.
 inline constexpr bool kCatReachableOffered = false;
+
+// Whether the CAT server really listens beyond this computer, given the saved "reachable" value and the typed list of computers. WHILE THE TICK IS NOT OFFERED a saved true with no list
+// means nothing the user can act on (no window can type the list), so it is read as "this computer only": CAT starts on the loopback address and no fault is shown (engine merge 11, row
+// SF2-cat-ui). A list that was typed on purpose (SERVER_CONFIG, or the headless --cat-allow) keeps the listener beyond this computer, for those computers only.
+inline bool catReachesOtherComputers(bool savedBindAll, const std::string& allowList) {
+    return savedBindAll && (kCatReachableOffered || !allowList.empty());
+}
 
 }  // namespace cascade::core

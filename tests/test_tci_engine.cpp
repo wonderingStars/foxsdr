@@ -50,6 +50,7 @@ constexpr SockT INVALID_SOCKET = -1;
 #endif
 
 #include "core/app_commands.hpp"
+#include "core/cat_scope.hpp"
 #include "core/config.hpp"
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
@@ -663,15 +664,18 @@ void testCatBeyondThisComputer() {
     const FoxCommandResult a = r.config("{\"cat\":{\"enabled\":true,\"bindAll\":true,\"port\":" + std::to_string(port) + "}}");
     CHECK(a.status == FOXAPI_OK);
     (void)r.e.servers().waitIdle(std::chrono::seconds(10));
-    CHECK(!r.e.servers().catServer().running());
-    CHECK(r.e.servers().cat().refusal.find("list the computers that may") != std::string::npos);
+    // ENGINE MERGE 11 (row SF2-cat-ui): no window offers the "reachable" tick (core/cat_scope.hpp), so "reachable" with no typed list is read as this computer only: CAT starts on loopback and
+    // shows no fault (it used to refuse, a refusal nobody could act on). Beyond this computer still needs the list (the cases below, and test_cat_server).
+    CHECK(r.e.servers().catServer().running());
+    CHECK(r.e.servers().cat().refusal.empty());
+    CHECK(!cascade::core::catReachesOtherComputers(true, ""));
     for (const char* bad : {"not-an-address", "0.0.0.0/0", "224.0.0.5", "255.255.255.255", "10.0.0.0/4", "1.2.3.4/99"}) {
         const FoxCommandResult x = r.config(std::string("{\"cat\":{\"allow\":\"") + bad + "\"}}");
         CHECK(x.status < 0);
         CHECK(std::string(x.message).find("allow:") != std::string::npos);
     }
     CHECK(r.fact("fact.cat.allow").empty());
-    CHECK(r.config("{\"cat\":{\"allow\":\"192.168.1.20, 192.168.1.0/24\"}}").status == FOXAPI_OK);
+    CHECK(r.config("{\"cat\":{\"bindAll\":false,\"allow\":\"192.168.1.20, 192.168.1.0/24\"}}").status == FOXAPI_OK);   // (bindAll off: this test never makes a wide bind)
     CHECK(r.is("fact.cat.allow", "192.168.1.20, 192.168.1.0/24"));
     cascade::core::AppConfig c;
     c.catBindAll = true;
@@ -687,7 +691,7 @@ void testCatBeyondThisComputer() {
 
 // ENGINE MERGE 11: the window hides the CAT "reachable from other computers" tick (core/cat_scope.hpp), but a settings file written by an older
 // build can still say catBindAll true. What the engine does with that SAVED value, through the real settings path (parse, then applyConfig):
-// with no catAllow list it makes no socket at all (not loopback either: the interface is refused and says why), so nothing listens on any
+// with no catAllow list the tick is hidden so the value is read as this computer only (CAT on loopback, no fault); nothing listens on any
 // interface; with a list it would listen for those computers only (that half is proved with a loopback bind in test_cat_server).
 void testSavedCatReachableNeedsTheList() {
     cascade::core::AppConfig saved;
@@ -698,10 +702,13 @@ void testSavedCatReachableNeedsTheList() {
     Rig r;
     r.e.applyConfig(saved);
     CHECK(r.e.servers().waitIdle(std::chrono::seconds(30)));
-    CHECK(!r.e.servers().catServer().running());
-    CHECK(!r.e.servers().cat().running);
-    CHECK(r.e.servers().cat().refusal.find("list the computers that may") != std::string::npos);
-    // an unreadable saved list is the same as none
+    // (merge 11, row SF2-cat-ui) the tick is hidden, so the saved "reachable" with no list is "this computer only": CAT runs on loopback, no fault, nothing beyond this computer
+    CHECK(r.e.servers().catServer().running());
+    CHECK(r.e.servers().cat().running);
+    CHECK(r.e.servers().cat().refusal.empty());
+    CHECK(!cascade::core::catReachesOtherComputers(saved.catBindAll, saved.catAllow));
+    CHECK(cascade::core::catReachesOtherComputers(true, "192.168.1.20"));   // a list that was typed keeps the listener beyond this computer, for those computers only
+    // an unreadable saved list is a list that was typed: it is refused and nothing is bound (no socket, not even loopback)
     cascade::core::AppConfig bad;
     CHECK(cascade::core::ConfigStore::parse("{\"catEnabled\":true,\"catBindAll\":true,\"catAllow\":\"0.0.0.0/0\",\"catPort\":" + std::to_string(port) + "}", "test", bad, why));
     Rig r2;

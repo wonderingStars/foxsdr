@@ -269,7 +269,8 @@ CatModel readCat(TableReader& t, const ReadOptions& o) {
     CatModel m;
     const ServerEntry sv = readServer(t, 1u);
     const bool factEnabled = flagOf(t, "fact.cat.enabled");
-    const bool factBindAll = flagOf(t, "fact.cat.bindAll");
+    // what the engine really does with the saved value (core/cat_scope.hpp): beyond this computer only with a typed list while the tick is not offered
+    const bool factBindAll = cc::catReachesOtherComputers(flagOf(t, "fact.cat.bindAll"), factOf(t, "fact.cat.allow"));
     const int factPort = numberOf(t, "fact.cat.port");
     const bool useDraft = o.cat.have && o.server_asks_pending > 0;
     CatDraft d;
