@@ -338,6 +338,19 @@ int main() {
         CHECK(card(cards, "RECEIVER").value == "RUNNING" && card(cards, "RECEIVER").tone == CardTone::Good && card(cards, "RECEIVER").lampLit);
         CHECK(card(cards, "RECEIVER").detail == "Signal generator \xC2\xB7 ANT RX \xC2\xB7 GAIN 32 dB \xC2\xB7 PPM 0.0 \xC2\xB7 2.400 MS/s");
         CHECK(card(cards, "RECEIVER").lines.size() == 5);
+        // THE GENERATOR STANDING IN FOR A RADIO THAT DID NOT OPEN (hardware check 2026-11-17, item 4): running, yet shown as the window's own fault state with the engine's sentence
+        {
+            HostExtras st = x;
+            st.standInSentence = "rtlsdr did not open: the saved settings name this kind of radio but not which one. The receiver is running on the signal generator.";
+            const auto standCards = statusCards(s, st);
+            const StatusCardModel& rc = card(standCards, "RECEIVER");
+            CHECK(rc.value == "GENERATOR" && rc.tone == CardTone::Err && rc.lampLit && rc.lampRed);
+            CHECK(rc.detail == st.standInSentence);
+            CHECK(rc.lines.back() == st.standInSentence);
+            CHECK(card(cards, "RECEIVER").value == "RUNNING" && card(cards, "RECEIVER").tone == CardTone::Good && !card(cards, "RECEIVER").lampRed);   // no stand-in: unchanged
+            FoxReceiverState stopped = s; stopped.flags = 0;
+            CHECK(card(statusCards(stopped, st), "RECEIVER").value == "STOPPED");   // a stopped receiver is stopped, whatever stands in
+        }
         // THE HARDWARE'S AUTOMATIC GAIN reads "GAIN AUTO" (it used to read "GAIN AUTO - AGC ON"): AGC now means the audio AGC alone on this screen
         {
             const auto has = [&](const StatusCardModel& c, const char* line) { return std::find(c.lines.begin(), c.lines.end(), std::string(line)) != c.lines.end(); };

@@ -898,6 +898,7 @@ int main() {
         if (!fails.empty()) {
             CHECK(fails[0]["body"]["trigger"] == "startup-restore");
             CHECK(std::string(fails[0]["body"]["reason"]).find("not which one") != std::string::npos);
+            CHECK(fails[0]["body"]["reasonClass"] == "absent");   // a real class, not "other" (hw-findings item 4)
         }
         keep(fails);
     }

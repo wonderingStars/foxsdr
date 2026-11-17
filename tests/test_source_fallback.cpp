@@ -111,6 +111,14 @@ void testTheSentenceSaysWhichRadioWhyAndWhereTheReceiverIs() {
     // No reason given still says something whole.
     const std::string u = radioNotOpenedSentence("HackRF One", "");
     CHECK(u.find("HackRF One did not open. The receiver") == 0);
+
+    // THE STAND-IN TEST (hw-findings item 4): exactly the sentences above say the generator stands in for a radio that did not open
+    using cascade::gui::generatorStandsIn;
+    using cascade::gui::standInSentence;
+    CHECK(standInSentence(s) && standInSentence(t) && standInSentence(u));
+    CHECK(!standInSentence("") && !standInSentence("Sample rate coerced: this radio cannot run at 5 MS/s, so it runs at 3.2 MS/s"));
+    CHECK(!standInSentence("The receiver is running on the signal generator.") && !standInSentence("saved source kind \"x\" is not one this build can open"));
+    CHECK(generatorStandsIn("siggen", u) && !generatorStandsIn("rtlsdr", u) && !generatorStandsIn("siggen", ""));
 }
 
 // --- 3b. picking a dead radio's row opens it again ----------------------------

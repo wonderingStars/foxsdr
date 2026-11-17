@@ -88,3 +88,25 @@ Real dongle (scratch engine, saved 5 MS/s, usage reporting on in the scratch con
 "Sample rate coerced: this radio cannot run at 5 MS/s, so it runs at 3.2 MS/s"; queue: one `radio_settings` refused `rate`, `refusedClass` `range`,
 `why` `restore`, no band, no frequency, no path. Before the fix: no such event (the check's result).
 NOTE (not changed): `ControlWhyScope` is never set by the engine; `why` was always "user" for a refusal raised at open. Only this path passes it.
+
+## Item 4: the generator standing in for a radio that did not open - FIXED
+
+Cause: a saved radio kind that names no device (engine.cpp restore) set the error line and filed a failure, but the receiver then ran on the
+generator and the window showed RUNNING, FAIL lamp dark; and that failure's class was `other` (the sentence "the saved settings name this kind of
+radio but not which one" matched no rule).
+Fix, smallest edit, no `.slint` change:
+* `core/source_fallback.hpp`: `kStandInTail`, `standInSentence()`, `generatorStandsIn(kind, error)` - true for exactly the sentences
+  `radioNotOpenedSentence` builds (every failed open that leaves the generator running uses it: engine.cpp x3, engine_radio_saved.cpp x2).
+* engine fact `source.standin` ("1"/"0", engine_api_lists.cpp) = generator live AND that sentence on the error line.
+* the window (`slint/main.cpp`, read four times a second): the existing FAIL lamp lights (`set_failed(faulted || stand-in)`), and the RECEIVER chip
+  (`host_logic.cpp statusCards`) reads GENERATOR (existing catalogue key, no new string) with the error tone and a red lamp, its one-line detail and
+  its expanded lines carrying the engine's own sentence ("rtlsdr did not open: ... The receiver is running on the signal generator.").
+* `core/health_events.cpp`: "but not which one" is class `absent` (nearest the contract has; there is no "not configured" word).
+Tests: `test_slint_host_logic` (205 checks, 0 failed: GENERATOR, error tone, red lamp, sentence in detail and lines, unchanged without stand-in,
+stopped stays STOPPED); `test_source_fallback` (55, 0 failed: the stand-in test accepts exactly the built sentences); `test_health_events`
+(114876, 0 failed: the sentence is `absent` for rtlsdr and soapy); `test_radio_reports_engine` (147, 0 failed: the queued failure's
+`reasonClass` is `absent`).
+Real window (hidden desktop, scratch config, `sourceKind rtlsdr` with empty arguments, real dongle present): `state fact.source.standin == 1` ok;
+the accessible chip is "RECEIVER GENERATOR, rtlsdr did not open: the saved settings name this kind of radio but not which one. The receiver is
+running on the signal generator."; the screenshot shows the FAIL lamp red and the chip with a red lamp; the queued `radio_fail` has
+`reasonClass` `absent` (it was `other`). NOT break-it checked: the chip row (the unchanged-without-stand-in check is the guard).

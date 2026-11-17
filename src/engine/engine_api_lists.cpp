@@ -23,6 +23,7 @@
 #include "core/patch_draft.hpp"
 #include "core/patch_levels.hpp"
 #include "core/patch_plan.hpp"
+#include "core/source_fallback.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_settings_ui.hpp"
 #include "core/serial_port.hpp"
@@ -1779,6 +1780,7 @@ void Engine::buildApiListsSource(ApiListBlock& b) {
     // The combo's own row, the kind of radio kept for the config, the radio being opened.
     fact("source.row", std::to_string(sourceSel_));
     fact("source.keep", rx().restoreKeep_.kind);
+    fact("source.standin", cascade::gui::generatorStandsIn(rx().sourceKind_, rx().sourceError_) ? "1" : "0");   // the generator stands in for a radio that did not open (hw-findings item 4)
     fact("source.opening", rx().deviceOpenPending_ ? rx().deviceBusyLabel_ : std::string());
     // The scan beside an open radio: the name the two deferral sentences quote, and the drivers a scan leaves out
     // ("" with the whole SoapySDR scan deferred, and with nothing gating it).

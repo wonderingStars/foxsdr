@@ -155,6 +155,7 @@ struct HostExtras {
     bool outputMeasured = false;
     std::string recorderValue;                             // "IQ + AUDIO", "FULL", "STALLED"; "" = derive from the flags
     std::string recorderDetail;
+    std::string standInSentence;                           // "" none; else the sentence saying the signal generator stands in for a radio that did not open (hw-findings item 4)
 };
 std::vector<StatusCardModel> statusCards(const FoxReceiverState& state, const HostExtras& extras);
 

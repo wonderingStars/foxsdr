@@ -463,12 +463,14 @@ std::vector<StatusCardModel> statusCards(const FoxReceiverState& s, const HostEx
         c.key = cascade::i18n::tr("RECEIVER");
         c.lampShown = true;
         if (faulted) { c.value = cascade::i18n::tr("FAULT"); c.tone = CardTone::Err; c.lampLit = true; c.lampRed = true; }
+        else if (running && !x.standInSentence.empty()) { c.value = cascade::i18n::tr("GENERATOR"); c.tone = CardTone::Err; c.lampLit = true; c.lampRed = true; }   // a radio did not open: the generator runs in its place (hw-findings item 4)
         else if (running) { c.value = cascade::i18n::tr("RUNNING"); c.tone = CardTone::Good; c.lampLit = true; }
         else { c.value = cascade::i18n::tr("STOPPED"); }
         const std::string ant = x.antenna.empty() ? std::string() : cascade::core::formatText(cascade::i18n::tr("ANT %s"), x.antenna.c_str());
         const std::string gain = x.gainText.empty() ? std::string() : cascade::core::formatText(cascade::i18n::tr("GAIN %s"), x.gainText.c_str());
         const std::string ppm = x.havePpm ? "PPM " + locNum(x.ppm, 1, "%.1f") : std::string();
         c.detail = joinDot({s.deviceName, ant, gain, ppm, fmtRate(s.sampleRateHz)});
+        if (!faulted && running && !x.standInSentence.empty()) { c.detail = x.standInSentence; }   // the one line beside the chip says why (which radio did not open, and that the generator runs)
         c.lines = {s.deviceName};
         if (!x.antenna.empty()) { c.lines.push_back(cascade::core::formatText(cascade::i18n::tr("ANTENNA %s"), x.antenna.c_str())); }
         // x.gainText is compared with the English "AUTO" (and main.cpp compares gainText() with "N/A"): those two words stay English upstream
@@ -476,6 +478,7 @@ std::vector<StatusCardModel> statusCards(const FoxReceiverState& s, const HostEx
         if (x.havePpm) { c.lines.push_back(ppm); }
         c.lines.push_back(fmtRate(s.sampleRateHz));
         if (faulted && s.faultMessage[0] != '\0') { c.lines.push_back(s.faultMessage); }
+        if (!faulted && !x.standInSentence.empty()) { c.lines.push_back(x.standInSentence); }   // the engine's own sentence: which radio, why, and that the generator is running
         cards.push_back(c);
     }
     {   // DECODERS

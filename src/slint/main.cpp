@@ -589,6 +589,7 @@ int main(int argc, char** argv) {
     MenuKind menuKind = MenuKind::None;
     double menuHz = 0; int menuMarkerNear = -1;
     OutputRate outputRate;
+    std::string standInSentence;   // the receiver's error line while the signal generator stands in for a radio that did not open ("" otherwise): hw-findings item 4; read a few times a second
     double hoverX = -1, hoverY = -1;
     std::vector<PaletteAction> paletteActions;
     std::string statusLineBand;
@@ -3018,7 +3019,12 @@ int main(int argc, char** argv) {
         ui->set_running(running);
         ui->set_decoding((state.flags & FOXAPI_RX_DECODER_ACTIVE) != 0);
         ui->set_muted((state.flags & FOXAPI_RX_MUTED) != 0 || state.audioMutedBy[0] != '\0');
-        ui->set_failed((state.flags & FOXAPI_RX_FAULTED) != 0);
+        if (tickNo % 8 == 1) {   // the generator standing in for a radio that did not open is shown as the window's own fault state: the FAIL lamp and the receiver chip (host_logic.cpp statusCards)
+            std::string standIn, line;
+            standInSentence.clear();
+            if (world.fact("fact.source.standin", standIn) && standIn == "1" && world.fact("fact.status.sourceError", line)) { standInSentence = line; }
+        }
+        ui->set_failed((state.flags & FOXAPI_RX_FAULTED) != 0 || !standInSentence.empty());
         ui->set_maximised(ui->window().is_maximized());
         {   // the screen follows the real window size (maximise, restore, a DPI change)
             const auto sz = ui->window().size();
@@ -3253,6 +3259,7 @@ int main(int argc, char** argv) {
         outputRate.add(state.decoderLinesTotal, nowMs());
         x.outputMeasured = outputRate.measured(); x.outputRate = outputRate.perSecond(); x.outputMeanS = outputRate.meanSeconds();
         x.recorderValue = lists.recorderValue; x.recorderDetail = lists.recorderDetail;
+        x.standInSentence = standInSentence;
         std::vector<StatusCard> cards;
         std::string cardSig;
         // STAGE S4: with several radios the bar starts with one chip per open radio (a click selects it); today's chips follow
