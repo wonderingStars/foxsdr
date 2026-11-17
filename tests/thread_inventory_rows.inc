@@ -180,4 +180,7 @@ const Row kRows[] = {
      "lane X (the merged knob layer): the helper that makes a MIDI port's close bounded; no window opens a MIDI port (MIDI is an OPEN ROW of lane X), so nothing runs it in the product; NOT COVERED by this batch."},
     {"src/slint/lanex_bench.cpp", 1, 0, 0, 0, "",
      "lane X (the speed test): one worker that times the DSP blocks one item at a time, only after the person presses Run, ended by the last item, by Cancel (between items) or by the window closing (the destructor cancels and joins); it is a finite job of about ten seconds, not a loop that can stall."},
+    {"src/engine/cat_link.cpp", 1, 0, 0, 0, "",
+     "radios follow-on (screen lane S5b, the CAT link): one worker per link, started only when the person chooses follow, emulate or OmniRig and gives a port, ended by stop() (the stop flag, then join) or by the engine closing; its loops check the stop flag on every pass and read the serial port 50 ms at a time (sleeps are 10 ms slices), and it publishes its state as text, so a stalled port only leaves the link saying so - NOT COVERED by a heartbeat (nothing the engine waits on: the engine's own passes never wait for it)"},
+    {"src/source/fobos_source.cpp", 1, 0, 0, 0, "", R_DRIVER},
 };
