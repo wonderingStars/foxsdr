@@ -29,7 +29,7 @@ void testArguments() {
     std::printf("W1: the argument text\n");
     std::size_t n = 0;
     const wb::SourceKind* rows = wb::sourceKinds(n);
-    CHECK_EQ(n, static_cast<std::size_t>(12));   // engine merge 3: the eleventh row of wire-b plus the radio-bridges row "sdriq"
+    CHECK_EQ(n, static_cast<std::size_t>(13));   // engine merge 3: the eleventh row of wire-b plus the radio-bridges row "sdriq"; engine merge 8: the thirteenth, "fobos" (screen lane S5c)
     std::set<std::string> keys;
     for (std::size_t i = 0; i < n; ++i) {
         CHECK(keys.insert(rows[i].key).second);   // every key once

@@ -518,7 +518,7 @@ void testNeededLibrary() {
     // the one table (engine fixes 4): the seventh state; this row is the table's ninth, a library file that serves the "sdriq" source, and its check is checkFtd2xx
     CHECK(std::string(needed::stateWord(needed::State::CannotCheck)) == "cannot-check");
     CHECK(info.kind == needed::Kind::LibraryFile && info.sourceKind == "sdriq" && info.check != nullptr && info.pageStatus == "verified");
-    CHECK(needed::neededTable().size() == 9 && needed::neededTable().back().libraryId == "ftdi-d2xx" && needed::findNeeded("ftdi-d2xx") != nullptr);
+    CHECK(needed::neededTable().size() == 10 && needed::neededTable().back().libraryId == "libfobos" && needed::findNeeded("ftdi-d2xx") != nullptr);   // engine merge 8: screen lane S5c added the tenth row, libfobos, after this one
     CHECK(needed::findNeeded("no-such-id") == nullptr);
     {
         PathGuard pg(L"");   // nothing on the PATH: the real machine's FTDI driver is not looked at
