@@ -181,7 +181,7 @@ std::int32_t swlOp(SwlBook& book, const std::string& text, const RadioFigures& r
         json rest = j;
         rest.erase("action");
         if (!rf.valid) { why = "the radio is not open: there is nothing to log"; return FOXAPI_FAILED; }
-        if (!book.add(rest.dump(), nowUnix, rf.hz, rf.mode, rf.peakDbfs, rf.radio, why)) { return why == "the log is full" ? FOXAPI_LIMIT : FOXAPI_BAD_ARGUMENT; }
+        if (!book.add(rest.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), nowUnix, rf.hz, rf.mode, rf.peakDbfs, rf.radio, why)) { return why == "the log is full" ? FOXAPI_LIMIT : FOXAPI_BAD_ARGUMENT; }
         return FOXAPI_OK;
     }
     if (action == "remove") {

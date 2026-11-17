@@ -190,7 +190,7 @@ std::string MacroRecorder::saveJson(const std::string& name) const {
         st["delayMs"] = static_cast<long long>(std::llround(delay));
         steps.push_back(std::move(st));
     }
-    return nlohmann::json({{"action", "save"}, {"name", name}, {"steps", std::move(steps)}}).dump();
+    return nlohmann::json({{"action", "save"}, {"name", name}, {"steps", std::move(steps)}}).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 MacroRecorder& macroRecorder() {

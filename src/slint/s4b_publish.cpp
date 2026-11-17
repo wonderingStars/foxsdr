@@ -268,7 +268,7 @@ struct S4bPublisher::Impl {
             if (swlNote.empty()) { j.erase("notes"); }
             Cmd c;
             c.op = FOXAPP_OP_SWL;
-            c.text = j.dump();
+            c.text = j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             send(S, tr("Log what I am hearing now"), c);
             swlClearArmed = false;
         }, true, tr("Adds the time, the frequency, the mode and the signal level of the radio you are listening to."));
@@ -280,7 +280,7 @@ struct S4bPublisher::Impl {
             if (swlPath.empty() || swlPath.size() > 500) { refuseHere(S, tr("Export the listening log"), tr("Type the full path of the file first.")); return; }
             Cmd c;
             c.op = FOXAPP_OP_SWL;
-            c.text = nlohmann::json({{"action", "export"}, {"path", swlPath}}).dump();
+            c.text = nlohmann::json({{"action", "export"}, {"path", swlPath}}).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             send(S, tr("Export the listening log"), c);
             swlClearArmed = false;
         });
@@ -361,7 +361,7 @@ struct S4bPublisher::Impl {
             key(v, "macro.del." + id, tr("Delete macro") + ": " + name, [this, S, name] {
                 Cmd c;
                 c.op = FOXAPP_OP_MACRO_EDIT;
-                c.text = nlohmann::json({{"action", "delete"}, {"name", name}}).dump();
+                c.text = nlohmann::json({{"action", "delete"}, {"name", name}}).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                 send(S, tr("Delete macro"), c);
             }, running.empty());
         }
