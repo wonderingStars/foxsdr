@@ -1,9 +1,9 @@
-# FoxSDR 0.99.109
+# FoxSDR 0.99.109 — Windows
 
 This text was checked sentence by sentence against the program's code and build records.
 Where a statement could only be tested with test signals or a stand-in program, and not with real equipment, the sentence says so.
 
-[WINDOW-SIZE: to be filled by the release lane]
+The smallest window is now 1024 x 640 pixels.
 
 ---
 
@@ -392,14 +392,4 @@ There is no AppImage in this release.
 **SHA-256 of `foxsdr-setup-0.99.109.exe`:**
 `TBD`
 
-**SHA-256 of `FoxSDR-0.99.109-x86_64.AppImage`:**
-`TBD`
-
-**SHA-256 of `foxsdr-0.99.109-linux-x64.tar.gz`:**
-`TBD`
-
-**SHA-256 of `FoxSDR-0.99.109-aarch64.AppImage`:**
-`TBD`
-
-**SHA-256 of `foxsdr-0.99.109-linux-arm64.tar.gz`:**
-`TBD`
+The Linux x86-64 download, `foxsdr-0.99.109-linux-x64.tar.gz`, is attached by hand beside the installer; its SHA-256 is written next to it on the release page when it is attached.
