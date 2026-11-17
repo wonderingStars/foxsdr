@@ -687,6 +687,7 @@ src/core/power_log.hpp::sendUdp::errassign::send failed	PENDING:O-outputs	output
 src/core/power_log.hpp::targetOk::errassign::control characters in the target	ALLOW	configuration / request validation text (no failure of a device or output)	seed
 src/core/power_log.hpp::targetOk::errassign::disabled	ALLOW	configuration / request validation text (no failure of a device or output)	seed
 src/core/power_log.hpp::targetOk::errassign::no host or port	ALLOW	configuration / request validation text (no failure of a device or output)	seed
+src/core/radio_setup.cpp::noteFindings::swallow::catch	ALLOW	reporter-itself	mustfix-b
 src/core/radioinfo_udp.hpp::parseRadioInfoInner::errassign::a flag is not true or false	ALLOW	configuration / request validation text (no failure of a device or output)	seed
 src/core/radioinfo_udp.hpp::parseRadioInfoInner::errassign::a frequency is not a number of # hz units within range	ALLOW	configuration / request validation text (no failure of a device or output)	seed
 src/core/radioinfo_udp.hpp::parseRadioInfoInner::errassign::a tag is not closed	ALLOW	configuration / request validation text (no failure of a device or output)	seed
@@ -3214,4 +3215,3 @@ src/usb/winusb_device.cpp::openWinUsb::errassign::opening the radio	ALLOW	USB tr
 src/usb/winusb_device.cpp::openWinUsb::errassign::openwinusb needs a device interface path	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
 src/usb/winusb_device.cpp::openWinUsb::errassign::the radio is no longer present	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
 src/usb/winusb_device.cpp::openWinUsb::errassign::winusbinitialize is the device bound to winusb	ALLOW	USB transport detail: the driver that owns the radio turns it into its own error and is classified at its own site (G1/G2/G3/G0)	seed
-src/core/radio_setup.cpp::noteFindings::swallow::catch	ALLOW	reporter-itself	mustfix-b

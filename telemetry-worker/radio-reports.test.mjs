@@ -109,7 +109,7 @@ async function fixtureFailures(mod) {
 // ---- the shared fixtures ------------------------------------------------------------------------------------------------
 
 test('the fixture directory matches its manifest, so the site\'s copy can be checked against it', () => {
-  const manifest = readFileSync(join(FIX, 'MANIFEST.sha256'), 'utf8').trim().split('\n');
+  const manifest = readFileSync(join(FIX, 'MANIFEST.sha256'), 'utf8').trim().split(/\r?\n/);
   const names = readdirSync(FIX).filter((n) => n.endsWith('.json')).sort();
   assert.equal(manifest.length, names.length);
   for (const line of manifest) {
