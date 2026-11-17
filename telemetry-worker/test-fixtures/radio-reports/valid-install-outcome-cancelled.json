@@ -1,0 +1,17 @@
+{
+  "name": "valid-install-outcome-cancelled",
+  "about": "the person cancelled Setup",
+  "expect": "accept",
+  "status": 204,
+  "request": {
+    "schema": 2,
+    "kind": "install_outcome",
+    "messageId": "0123456789abcde1",
+    "t": 0,
+    "body": {
+      "outcome": "cancelled",
+      "appVersion": "0.99.109",
+      "windows": "10.0.22631"
+    }
+  }
+}

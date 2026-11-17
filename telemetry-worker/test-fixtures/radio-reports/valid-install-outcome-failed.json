@@ -1,0 +1,17 @@
+{
+  "name": "valid-install-outcome-failed",
+  "about": "the installer began copying and did not finish: no install id (the program never ran), a random message id, three words",
+  "expect": "accept",
+  "status": 204,
+  "request": {
+    "schema": 2,
+    "kind": "install_outcome",
+    "messageId": "0123456789abcdef",
+    "t": 0,
+    "body": {
+      "outcome": "failed",
+      "appVersion": "0.99.109",
+      "windows": "10.0.22631"
+    }
+  }
+}

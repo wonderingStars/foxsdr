@@ -29,6 +29,7 @@
 
 #include "core/driver_policy.hpp"
 #include "core/i18n.hpp"
+#include "core/radio_events.hpp"
 #include "core/radio_setup.hpp"
 #include "usb/usb_device.hpp"
 
@@ -228,6 +229,13 @@ std::string resultSentence(const Result& r) {
     }
     return tr("Windows would not install the driver. Install it with Zadig instead, as described "
               "above.");
+}
+
+void noteInstallOutcome(const Result& r) {
+    if (r.outcome == Outcome::Installed || r.outcome == Outcome::AlreadyWinUsb || r.outcome == Outcome::Cancelled) { return; }
+    std::string reason = std::string("the one-click driver install did not finish (") + outcomeName(r.outcome) + ")";
+    if (!r.detail.empty()) { reason += ": " + r.detail; }
+    cascade::core::radioreport::fileSideRadioFailure("rtlsdr", std::string(), reason, "other");
 }
 
 #if defined(_WIN32)

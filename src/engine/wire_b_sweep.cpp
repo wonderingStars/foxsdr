@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/radio_events.hpp"
 #include "source/serial_port_win.hpp"
 
 namespace cascade::engine::wireb {
@@ -176,16 +177,30 @@ void SweepHost::loopRfe() {
     sw.hold();
 }
 
+namespace {
+// The device arguments the sweep thread was started with (the radio's identity for a report); only that thread reads or writes it.
+std::string& sweepArgs() {
+    static thread_local std::string a;
+    return a;
+}
+}  // namespace
+
 bool SweepHost::startHackRf(const HackRfFactory& factory, const std::string& args, const cascade::source::hackrf_sweep::SweepConfig& cfg, std::string& why) {
     stop();
-    if (!factory) { why = "no way to open a HackRF on this build"; return false; }
+    // A HackRF that would not start for a sweep is a radio that did not open: ONE radio_fail, filed the way the receiver's own open failures are (the reason text is the
+    // sweeper's own sentence, scrubbed by the reporter; the serial, when the arguments carry one, is its own field).
+    const auto failed = [&args, &why]() {
+        cascade::core::radioreport::fileSideRadioFailure("hackrf", args, why);
+        return false;
+    };
+    if (!factory) { why = "no way to open a HackRF on this build"; return failed(); }
     std::unique_ptr<cascade::source::hackrf_sweep::HackRfSweeper> sw = factory(args, why);
     if (sw == nullptr) {
         if (why.empty()) { why = "the HackRF could not be opened"; }
-        return false;
+        return failed();
     }
-    if (!sw->configure(cfg)) { why = sw->lastError().empty() ? std::string("the HackRF refused the sweep settings") : sw->lastError(); return false; }
-    if (!sw->start()) { why = sw->lastError().empty() ? std::string("the HackRF would not start sweeping") : sw->lastError(); return false; }
+    if (!sw->configure(cfg)) { why = sw->lastError().empty() ? std::string("the HackRF refused the sweep settings") : sw->lastError(); return failed(); }
+    if (!sw->start()) { why = sw->lastError().empty() ? std::string("the HackRF would not start sweeping") : sw->lastError(); return failed(); }
     const double a = static_cast<double>(cfg.plan.rangesMHz.front().first) * 1e6, b = static_cast<double>(cfg.plan.rangesMHz.front().second) * 1e6;
     {
         std::lock_guard<std::mutex> lk(m_);
@@ -208,7 +223,7 @@ bool SweepHost::startHackRf(const HackRfFactory& factory, const std::string& arg
     }
     stopFlag_.store(false);
     running_.store(true);
-    th_ = std::thread([this] { loopHackRf(); });
+    th_ = std::thread([this, args] { sweepArgs() = args; loopHackRf(); });
     return true;
 }
 
@@ -229,6 +244,8 @@ void SweepHost::loopHackRf() {
         }
         if (!ok) {
             lastError_ = "the HackRF stopped sending";
+            // The radio stopped under the sweep: ONE radio_close with its cause (unplugged / fault, from the sweeper's own sentence), said once at the place it is seen.
+            cascade::core::radioreport::noteSideRadioStopped("hackrf", sweepArgs(), "the sweep stream stopped", hackrf_->lastError());
             running_.store(false);
             return;
         }

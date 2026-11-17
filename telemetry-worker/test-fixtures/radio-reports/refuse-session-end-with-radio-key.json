@@ -1,0 +1,24 @@
+{
+  "name": "refuse-session-end-with-radio-key",
+  "about": "a session_end names a radio",
+  "expect": "refuse",
+  "code": "bad-field",
+  "status": 400,
+  "request": {
+    "schema": 2,
+    "kind": "session_end",
+    "installId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "sessionId": "0123456789abcdef",
+    "seq": 20,
+    "t": 1800,
+    "radioKey": "airspy-hf:HF0001A2",
+    "body": {
+      "v": "0.99.109",
+      "opened": false,
+      "scans": 3,
+      "openFailures": 1,
+      "listed": [],
+      "sessionSec": 1800
+    }
+  }
+}

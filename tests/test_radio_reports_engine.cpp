@@ -27,6 +27,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/app_commands.hpp"
 #include "core/config.hpp"
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
@@ -65,6 +66,9 @@ std::atomic<bool> g_silent{false};     // the opened radio gives no samples at a
 std::atomic<int> g_opens{0};
 std::atomic<bool> g_unplug{false};     // the next read says the radio was unplugged, through the driver helper
 void* g_lastFake = nullptr;           // the radio the engine opened last
+std::atomic<bool> g_driverSaysRefusals{false};   // the fake radio reports its own refusals at the place it notices (as the wired drivers do)
+std::atomic<bool> g_refuseTune{false};           // the fake radio refuses a tune
+std::atomic<bool> g_netFault{false};             // the fake radio latches a fault the way a network source's reader does (faulted + deviceDead, no driver helper)
 
 class FakeRadio final : public cascade::source::DeviceSource {
 public:
@@ -75,7 +79,15 @@ public:
     double sampleRateHz() const override { return rate_; }
     bool setSampleRateHz(double hz) override { rate_ = hz; return true; }
     double centerFrequencyHz() const override { return centre_; }
-    bool setCenterFrequencyHz(double hz) override { centre_ = hz; return true; }
+    bool setCenterFrequencyHz(double hz) override {
+        if (g_refuseTune.load()) {
+            if (g_driverSaysRefusals.load()) { rr::noteControlRefused(this, "rtlsdr", rr::Control::Frequency, "the tuner would not lock"); }
+            error_ = "the tuner would not lock";
+            return false;
+        }
+        centre_ = hz;
+        return true;
+    }
     std::size_t read(std::complex<float>* dst, std::size_t n) override {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
         if (g_unplug.exchange(false)) { rr::noteDeviceFault(this, "rtlsdr", "reading samples", "the device was unplugged"); }
@@ -107,12 +119,17 @@ public:
     bool setAutoGain(bool) override { return false; }
     bool autoGain() const override { return false; }
     std::vector<std::string> antennas() const override { return {}; }
-    bool setAntenna(const std::string&) override { return false; }
+    bool setAntenna(const std::string&) override {
+        if (g_driverSaysRefusals.load()) { rr::noteControlRefused(this, "rtlsdr", rr::Control::Antenna, "no such antenna"); }
+        error_ = "no such antenna";
+        return false;
+    }
     std::string antenna() const override { return {}; }
     std::vector<double> supportedSampleRatesHz() const override { return {2.4e6}; }
     bool frequencyRangeHz(double& lo, double& hi) const override { lo = 24.0e6; hi = 1766.0e6; return true; }
-    bool deviceDead() const override { return false; }
-    std::string faultedWhile() const override { return {}; }
+    bool deviceDead() const override { return g_netFault.load(); }
+    bool faulted() const override { return g_netFault.load(); }
+    std::string faultedWhile() const override { return g_netFault.load() ? std::string("the network radio's connection failed") : std::string(); }
 
 private:
     std::atomic<bool> abort_{true};
@@ -122,7 +139,46 @@ private:
     std::string error_;
 };
 
+// SoapySDR's side of the E4000 route: the same fake, under the soapy key, never failing (the native one is what fails)
+class FakeSoapy final : public cascade::source::DeviceSource {
+public:
+    FakeSoapy() : inner_() {}
+    bool start() override { return inner_.start(); }
+    void stop() override { inner_.stop(); }
+    bool running() const override { return inner_.running(); }
+    bool selfPaced() const override { return true; }
+    double sampleRateHz() const override { return inner_.sampleRateHz(); }
+    bool setSampleRateHz(double hz) override { return inner_.setSampleRateHz(hz); }
+    double centerFrequencyHz() const override { return inner_.centerFrequencyHz(); }
+    bool setCenterFrequencyHz(double hz) override { return inner_.setCenterFrequencyHz(hz); }
+    std::size_t read(std::complex<float>* dst, std::size_t n) override { return inner_.read(dst, n); }
+    const char* name() const override { return "Fake soapy radio"; }
+    const char* lastError() const override { return ""; }
+    const char* driverKey() const override { return "soapy"; }
+    bool open(const std::string&) override { open_ = true; return true; }
+    void closeDevice() override { open_ = false; }
+    bool isOpen() const override { return open_; }
+    std::vector<cascade::source::GainInfo> gains() const override { return {}; }
+    bool setGainDb(const std::string&, double) override { return false; }
+    double gainDb(const std::string&) const override { return 0.0; }
+    bool autoGainSupported() const override { return false; }
+    bool setAutoGain(bool) override { return false; }
+    bool autoGain() const override { return false; }
+    std::vector<std::string> antennas() const override { return {}; }
+    bool setAntenna(const std::string&) override { return false; }
+    std::string antenna() const override { return {}; }
+    std::vector<double> supportedSampleRatesHz() const override { return {2.4e6}; }
+    bool frequencyRangeHz(double& lo, double& hi) const override { lo = 24.0e6; hi = 1766.0e6; return true; }
+    bool deviceDead() const override { return false; }
+    std::string faultedWhile() const override { return {}; }
+
+private:
+    FakeRadio inner_;
+    bool open_ = false;
+};
+
 std::unique_ptr<cascade::source::DeviceSource> makeFake(const std::string& kind) {
+    if (kind == "soapy") { return std::make_unique<FakeSoapy>(); }
     if (kind != "rtlsdr") { return nullptr; }
     return std::make_unique<FakeRadio>();
 }
@@ -137,7 +193,8 @@ void setNative(std::vector<cascade::source::NativeDeviceInfo> v) {
     std::lock_guard<std::mutex> lk(g_scanMutex);
     g_native = std::move(v);
 }
-std::vector<cascade::source::SoapyDeviceInfo> fakeSoapy() { return {}; }
+std::vector<cascade::source::SoapyDeviceInfo> g_soapyList;
+std::vector<cascade::source::SoapyDeviceInfo> fakeSoapy() { return g_soapyList; }
 
 void setEnv(const char* name, const std::string& value) {
 #if defined(_WIN32)
@@ -186,6 +243,7 @@ struct AppWindowTestAccess {
     }
     static bool deviceOpen(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).device_ != nullptr; }); }
     static void selectGenerator(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).selectSource(0); }); }
+    static void selectSoapy(AppWindow& a, int i) { passseam::on(th::engine(a), [&] { th::engine(a).selectSource(th::engine(a).soapyRowBase() + i); }); }
     static void selectNative(AppWindow& a, int i) { passseam::on(th::engine(a), [&] { th::engine(a).selectSource(cascade::engine::kNativeRowBase + i); }); }
     static void staleTheOpen(AppWindow& a) { passseam::on(th::engine(a), [&] { ++th::engine(a).rx().sourceGen_; }); }
     static void scanNative(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).scanNative(); }); }
@@ -218,6 +276,11 @@ struct AppWindowTestAccess {
             th::engine(a).radioJournal_[0].lastMinuteS -= seconds;
         });
     }
+    static void command(AppWindow& a, std::uint32_t op, const std::string& text) {
+        const auto q = cascade::core::cmd::makeText(op, text);
+        passseam::on(th::engine(a), [&] { (void)th::engine(a).applyCommand(q.c, q.longText); });
+    }
+    static void retune(AppWindow& a, double hz) { passseam::on(th::engine(a), [&] { th::engine(a).applyRetuneNow(hz); }); }
     static void startReceiver(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).startReceiver(); }); }
     static void minute(AppWindow& a, std::uint64_t read, std::uint64_t dropped) { passseam::on(th::engine(a), [&] { th::engine(a).journalStreamMinute(read, dropped, 100); }); }
 };
@@ -301,6 +364,12 @@ std::string wholeQueue(const std::string& dir) {
 }
 
 int validateWithWorker(const std::vector<json>& msgs) {
+    // FOXSDR_DUMP_APP_MESSAGES=<file>: every message handed to the Worker's validator is also appended to that file, one JSON message a line. The website's
+    // repository keeps the result as testdata/app-messages.jsonl and holds its own validators to it (must-fix lane E: what the application sends is what the site takes).
+    if (const char* dump = std::getenv("FOXSDR_DUMP_APP_MESSAGES"); dump != nullptr && *dump != '\0') {
+        std::ofstream df(dump, std::ios::binary | std::ios::app);
+        for (const json& m : msgs) { df << m.dump(-1, ' ', false, json::error_handler_t::replace) << "\n"; }
+    }
     const std::string node = CASCADE_NODE_PATH;
     if (node.empty()) { return -1; }
     Rig t("validate");
@@ -341,6 +410,9 @@ void resetFake() {
     g_silent = false;
     g_opens = 0;
     g_unplug = false;
+    g_driverSaysRefusals = false;
+    g_refuseTune = false;
+    g_netFault = false;
     cascade::core::DiagLog::instance().resetForTest();
     setNative({{"rtlsdr", "Generic RTL2832U", kArgs}});
 }
@@ -716,6 +788,9 @@ int main() {
             CHECK(b["opened"] == false && b["openFailures"] == 1 && b["scans"].get<long long>() >= 2);
             CHECK(b["listed"].size() == 1 && b["listed"][0] == "Generic RTL2832U");
             CHECK(ends[0]["radioKey"] == "");
+            // must-fix lane E, issue 2: the Worker's own validator now knows the kind (it answered `unknown-kind` before), and takes this message
+            const int endsRefused = validateWithWorker(ends);
+            CHECK(endsRefused <= 0);   // 0 refused; -1 = node was not found (skipped)
         }
         // ...and a session that opened a radio does not
         resetFake();
@@ -824,6 +899,90 @@ int main() {
             CHECK(fails[0]["body"]["trigger"] == "startup-restore");
             CHECK(std::string(fails[0]["body"]["reason"]).find("not which one") != std::string::npos);
         }
+        keep(fails);
+    }
+
+    // --- MUSTFIX-B: a refusal the driver did not say is said by the engine, once; one the driver said is not said again; a network-style fault is one close -----------
+    for (const bool driverSays : {false, true}) {
+        std::printf("  a refused antenna and a refused tune are said once whether the driver said them (%s) or not\n", driverSays ? "driver says" : "driver silent");
+        resetFake();
+        g_driverSaysRefusals = driverSays;
+        if (driverSays) { std::this_thread::sleep_for(std::chrono::milliseconds(5500)); }   // the helper folds a repeated refusal of one radio and control for five seconds
+        th::TestWindow app;
+        Rig rig("refusals");
+        rig.start();
+        Access::restore(app, savedRadio());
+        CHECK(Access::deviceOpen(app));
+        Access::command(app, FOXAPI_OP_SET_ANTENNA, "Z");
+        g_refuseTune = true;
+        Access::retune(app, 5.0e6);   // below the radio's published range: a refusal that is a fact about the radio (an in-range one is a busy driver and is not filed)
+        g_refuseTune = false;
+        Access::quit(app);
+        const std::vector<json> q = queued(rig.qdir());
+        int antenna = 0, freq = 0;
+        for (const json& m : ofKind(q, "radio_settings")) {
+            if (m["body"].value("refused", std::string()) == "antenna") { ++antenna; }
+            const std::string reason = m["body"].value("reason", std::string());
+            if (reason.find("frequency") != std::string::npos) { ++freq; }
+        }
+        CHECK(antenna == 1);
+        CHECK(freq == 1);
+        const std::string whole = wholeQueue(rig.qdir());
+        CHECK(whole.find("5000000") == std::string::npos);   // the tuned frequency is in no event
+        keep(q);
+    }
+    {
+        std::printf("  a network-style fault (the pipeline's latch, no driver helper) is one radio_close with a cause\n");
+        resetFake();
+        th::TestWindow app;
+        Rig rig("netfault");
+        rig.start();
+        Access::restore(app, savedRadio());
+        CHECK(Access::deviceOpen(app));
+        Access::startReceiver(app);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        g_netFault = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(400));
+        Access::pass(app);
+        Access::pass(app);
+        g_netFault = false;
+        Access::quit(app);
+        const std::vector<json> closes = ofKind(queued(rig.qdir()), "radio_close");
+        CHECK(closes.size() == 1);
+        if (!closes.empty()) { CHECK(closes[0]["body"]["cause"] == "fault"); }
+    }
+
+    // --- MUSTFIX-B, the route fallback: the NATIVE failure, with its sentence, is filed as a radio_fail even though SoapySDR then opened the radio -----------------
+    for (const bool saved : {true, false}) {
+        std::printf("  the native open that failed and was served by SoapySDR is a radio_fail of its own (%s)\n", saved ? "saved radio at start-up" : "the user's pick");
+        resetFake();
+        g_failures = 1;
+        g_failText = "this dongle's tuner is not one this driver supports yet";
+        th::TestWindow app;
+        Rig rig("fallback");
+        rig.start(/*usageOn=*/false);   // the failure report needs no install id: the fallback's own failure reaches the owner with Usage reporting off too
+        cascade::core::AppConfig cfg;
+        cfg.sourceKind = "soapy";
+        cfg.soapyArgs = "driver=rtlsdr, serial=00000001";
+        cfg.sampleRateHz = 2.4e6;
+        cfg.centerHz = 100.0e6;
+        if (saved) {
+            Access::restore(app, cfg);
+            CHECK(Access::deviceOpen(app));
+        } else {
+            // the user picks the SoapySDR row of a dongle the application drives natively: the open prefers native, the native driver refuses its tuner, SoapySDR serves it
+            g_soapyList = {{"RTL-SDR", "driver=rtlsdr, serial=00000001"}};
+            CHECK(Access::scanBoth(app));
+            g_failures = 1;
+            Access::selectSoapy(app, 0);
+            CHECK(Access::settle(app));
+            g_soapyList.clear();
+        }
+        const std::vector<json> q = queued(rig.qdir());
+        const std::vector<json> fails = ofKind(q, "radio_fail");
+        int tuner = 0;
+        for (const json& m : fails) { if (std::string(m["body"].value("reason", std::string())).find("tuner is not one this driver supports") != std::string::npos && m["body"]["driver"] == "rtlsdr") { ++tuner; } }
+        CHECK(tuner == 1);
         keep(fails);
     }
 

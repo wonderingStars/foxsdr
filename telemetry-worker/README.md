@@ -460,3 +460,16 @@ launch is ever counted.
 * Nothing in the Worker knows about the Diagnostics switch.
 * Regenerate the shared fixtures with `node make-radio-fixtures.mjs` (it also rewrites the manifest and `radio-journal-spec.json`).
 
+## The test marker, the installer's report and the new journal kinds (must-fix lane E, 2026-11-17)
+
+- **`synthetic: 1` is dropped.** A usage record, a beat or any radio-report message that carries `synthetic: 1` (the application sets it from
+  `FOXSDR_SYNTHETIC`, `CI` or `GITHUB_ACTIONS`: a test, a CI job or one of the owner's own machines) is checked and answered `204`, and nothing is
+  written, forwarded or counted. A radio-report message with another value of `synthetic` is `refused: bad-field`. Contract section 1.3; the
+  `drop-` fixtures and `radio-reports.test.mjs`.
+- **`install_outcome`** (the installer's report, contract section 13): validated here and forwarded to the site, which counts it by day. It is
+  accepted only in its anonymous form (a message id, no install id) and carries exactly three words. The installer's send is switched off in
+  `installer/cascade.iss` until the release lane removes one semicolon (and the approved privacy wording covers it).
+- **`session_end` and `session_fault`** (no radio key) and the words `transfer`, `tuner`, `frequency`, `other`, `refusedClass`, `degraded` are in
+  `radio-journal-spec.js`, which the site embeds a copy of (`test-fixtures/radio-journal-spec.json`).
+- **Deploy order is unchanged**: this Worker first (after `wrangler secret put RELAY_TOKEN`), then the site, then the application; the application's
+  `kRadioReportsLiveSend` and `kCompanionFaultReportsOn` are switched on only after both are live.

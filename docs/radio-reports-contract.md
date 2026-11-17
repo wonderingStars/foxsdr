@@ -1,6 +1,6 @@
 # Radio reports: the contract (schema 2)
 
-Status: DRAFT 2, written 2026-11-16 on `feat/radio-reports`. Schema 1 (draft 1) was never deployed, so schema 2 replaces it: a
+Status: DRAFT 3 (must-fix lane E, 2026-11-17: the 17 issues the application lanes found are settled, section 14; every change is ADDITIVE, so the schema number stays 2 and every message the earlier drafts allowed is still valid), DRAFT 2 written 2026-11-16 on `feat/radio-reports`. Schema 1 (draft 1) was never deployed, so schema 2 replaces it: a
 message of schema 1 is refused (`bad-schema`). Nothing in this file is deployed. The app, the Worker (`telemetry-worker/worker.js`,
 `radio-reports.js`, `radio-journal-spec.js`) and the site (`foxsdr-site`, `radiofail.go`, `radiojournal.go`) are all held to THIS file
 and to the fixture files in `telemetry-worker/test-fixtures/radio-reports/`, which each side's tests load. If a rule here and a
@@ -23,8 +23,8 @@ Every message is `POST`ed as `application/json` to the usage endpoint the app al
 field. A usage record has no `kind`; a beat has `beat: 1`; neither changes shape (the beat gains one optional field, section 3.10).
 
 Kinds: `radio_fail` (section 2), the journal kinds `radio_found`, `radio_open`, `radio_settings`, `radio_stream`, `radio_recovery`,
-`radio_close` and `session_env` (section 3), `first_session` (section 7) and `radio_beat` (section 3.10, which the Worker builds from a
-beat and the site accepts). `radio_batch` is RESERVED for a batched envelope (section 3.9) and refused as `reserved-kind`, which is
+`radio_close`, `session_env`, `session_end` and `session_fault` (section 3), `first_session` (section 7), `radio_beat` (section 3.10, which the Worker builds from a
+beat and the site accepts) and `install_outcome` (section 13, sent by the installer, never by the program). `radio_batch` is RESERVED for a batched envelope (section 3.9) and refused as `reserved-kind`, which is
 different from `unknown-kind` so that an app one release ahead is told apart from a hostile one.
 
 The ENVELOPE (every kind except `radio_beat`):
@@ -41,6 +41,7 @@ The ENVELOPE (every kind except `radio_beat`):
 | `age` | integer | 0 to 2,592,000 | no (default 0) | whole seconds the message waited in the on-disk queue before THIS send attempt; the site reads the event's time as its arrival minus `age`, so a queue flushed at the next start does not look like new activity. Recomputed at every attempt |
 | `radioKey` | string | see 1.1 | yes for the radio kinds, `""` or absent for `session_env` and `first_session` | the physical radio the message is about |
 | `body` | object | per kind | yes | the kind's own fields |
+| `synthetic` | integer | exactly `1` | no | the TEST MARKER (1.3): present only on a message from a test, a CI run or the owner's own run |
 
 ### 1.1 The radio key
 
@@ -56,6 +57,15 @@ Example: model `uhd b200`, serial `EDR04ZDB2` gives `uhd-b200:EDR04ZDB2`. A radi
 deliberately not derived from the driver word, because the same dongle can be opened by two drivers. A radio with no readable serial
 is keyed `<model>:-`, so the site shows one row per model for those, and says on the row that its serial is unknown; two such dongles
 of one model, on one or on two installs, are therefore ONE row (the site cannot tell them apart and says so; it never invents a serial).
+
+### 1.3 The test marker `synthetic`
+
+The usage record and the beat already carry `synthetic: 1` from a test, a CI run or one of the owner's own machines (the application sets it from the
+environment variables `FOXSDR_SYNTHETIC`, `CI` and `GITHUB_ACTIONS`); the radio-report family carries it as an optional member of the ENVELOPE, with the
+same meaning and the same value. The Worker DROPS such a message after checking it (a malformed one is still refused, so an application bug is seen): the
+answer is `204`, and nothing is forwarded to the site, written to any dataset or counted, so a test or CI install is never in a figure about people. A
+`synthetic` that is present and is not exactly the number `1` is `bad-field`. The site, when a message reaches it directly, does the same (answers 204,
+stores nothing). The marker is never stored, so it never appears in the canonical form. Fixtures: the `drop-` files (section 9).
 
 ### 1.2 A radio failure from an install with Usage reporting OFF
 
@@ -92,10 +102,10 @@ and that is counted.
 | `driver` | string | one of the 14 driver words (`rtlsdr hackrf airspy airspyhf sdrplay mirisdr rx888 pluto aor hydrasdr rtltcp soapy soundcard other`) | yes | `airspyhf` | `health::driverWord(kind)` |
 | `model` | string | 1 to 32 chars, unchanged by `scrubModel` (no token holding `=` `:` `/` `\` `@`, no dotted quad) | yes | `Airspy HF+` | the model as the usage report sends it (`sanitiseDevice` / `nativeFamilyModel`, then `scrubModel`) |
 | `serial` | string | `""` or `^[A-Za-z0-9._-]{1,40}$` | yes (may be empty) | `HF0001A2` | the radio's hardware serial, AS ITS OWN FIELD: the owner decided it is stored (D5 correction 2026-11-15). Empty when the driver cannot read one (rtl_tcp, Pluto by address, sound card, a driver that fails before it can). NEVER an address or a device argument string |
-| `firmware` | string | `""` or `^[A-Za-z0-9._+ -]{1,48}$` | no | `3.1.0` | radio firmware version where known |
+| `firmware` | string | `""` or `^[A-Za-z0-9._+ -]{1,48}$` | no | `3.1.0` | radio firmware version where known. The application sends it for the Airspy HF+ only; every other driver's `firmware` and every `library` stay empty today (no accessor, nothing probed): a reader must not expect them |
 | `library` | string | same | no | `libairspyhf 1.6.8` | driver or library version where known |
-| `reason` | string | 1 to 400 chars, section 5 | yes | `the radio stopped answering while restoring the crystal trim: a control transfer failed (Windows error 31, serial <stripped>)` | the FULL reason sentence the driver gave, put through `scrubUploadLine` first (serials, user names in paths, hosts, quoted names and frequencies removed from the TEXT), and THEN every path (a drive path, a `\\host\share`, anything under `\Users\`, `/Users/` or `/home/`) replaced by `<path>`: `scrubUploadLine` keeps the rest of a path, the Worker and the site refuse any path (section 5), so a path must not reach them |
-| `reasonClass` | string | `busy driver bind absent timeout vendor rate control other` | yes | `other` | `health::radioReasonWord(classifyRadioOpen(kind, reason))`, computed on the unscrubbed text |
+| `reason` | string | 1 to 400 chars, section 5 | yes | `the radio stopped answering while restoring the crystal trim: a control transfer failed (Windows error 31, serial <stripped>)` | the FULL reason sentence the driver gave, put through `scrubUploadLine` first (serials, user names in paths, hosts, quoted names and frequencies removed from the TEXT), and THEN every path (a drive path, a `\\host\share`, anything under `\Users\`, `/Users/` or `/home/`) replaced by `<path>`. A known quirk, accepted (issue 6): `scrubUploadLine` reads the word after `serial` as the serial's value, so "serial port COM3" becomes "serial <stripped> COM3" and the report loses the word `port`; the validators accept both forms (fixture `valid-radio-fail-serial-port-word`): `scrubUploadLine` keeps the rest of a path, the Worker and the site refuse any path (section 5), so a path must not reach them |
+| `reasonClass` | string | `busy driver bind absent timeout vendor rate control other transfer tuner` | yes | `other` | `health::radioReportClassWord(kind, reason)`, computed on the unscrubbed text: the nine classes of the usage record's health tokens (`control` is a USB control transfer or a device error the radio refused) plus two the REPORT adds, `transfer` (a USB bulk or isochronous transfer, or a pipe reset, failed while the radio was being opened) and `tuner` (the tuner or demodulator inside an RTL-SDR would not initialise: its PLL did not lock, an I2C repeater or register write failed). The usage record's health vocabulary is closed and does not gain them: there both are counted as `control` |
 | `trigger` | string | `startup-restore user-pick saved-retry patch-radio auto-reopen other` | yes | `startup-restore` | which call site |
 | `attempt` | integer | 1 to 10,000 | yes | `1` | ordinal of the failed attempts of THIS radio key in THIS session (1 for the first) |
 | `openMs` | integer | 0 to 3,600,000 | no | `5230` | how long the open took before it failed |
@@ -103,7 +113,7 @@ and that is counted.
 | `superseded` | boolean | | no | `false` | true when the user had already moved on to another source when the result arrived (the engine returns early for these; the report is still filed) |
 | `dropped` | integer | 0 to 1,000,000 | no | `0` | section 3.9: failures of this radio key since the previous SENT report of this key that were not sent because of the daily bound |
 | `diagOn` | boolean | | yes | `false` | whether the Diagnostics switch was on. It does not change what is sent; it tells the owner which kind of install this was |
-| `logLines` | array of strings | at most 40 lines, each 1 to 240 chars, section 5 | yes (may be empty) | `["12:01:07.331 soapy: airspyhf open failed ..."]` | the radio lines of the log ring, newest last, each put through `scrubUploadLine`. A radio line is one whose first word (after an optional `HH:MM:SS.mmm ` stamp) is `source:` `soapy:` `vendor:` `radio:` `rtltcp:` `aor:` `rx888:` `pluto:` `mirisdr:` `hackrf:` `airspy:` `airspyhf:` `rtlsdr:` `sdrplay:` `hydrasdr:` `usb:` or `patch:`; any other line is refused (`bad-field`). The app lane confirms this list against the log's real prefixes |
+| `logLines` | array of strings | at most 40 lines, each 1 to 240 chars, section 5 | yes (may be empty) | `["12:01:07.331 soapy: airspyhf open failed ..."]` | the radio lines of the log ring, newest last, each put through `scrubUploadLine`. A radio line is one whose first word (after an optional `HH:MM:SS.mmm ` stamp) is `source:` `soapy:` `vendor:` `radio:` `rtltcp:` `aor:` `rx888:` `pluto:` `mirisdr:` `hackrf:` `airspy:` `airspyhf:` `rtlsdr:` `sdrplay:` `hydrasdr:` `usb:` or `patch:`; any other line is refused (`bad-field`). The application's log writes `HH:MM:SS.mmm info <text>` and `... warn <text>`: the sender REMOVES the level word before it sends (`12:01:07.331 soapy: ...`), and a line that still has one is refused (fixture `refuse-ring-line-with-level-word`). A prefix of two words (`radio setup:`, 16 lines in the code) is not a radio line and is left out by the sender (fixture `refuse-ring-line-two-word-prefix`). The prefix list was confirmed against the code's real prefixes (107 `source`, 35 `patch`, 20 `soapy`, 12 `aor`, 6 `radio`, 5 `rx888`, 4 `pluto`, 4 `airspyhf`, 3 `rtltcp`, 2 `mirisdr`) |
 | `v` | string | 1 to 48 chars | yes | `0.99.109` | app version |
 | `ch` | string | `store installer appimage tarball android` or `""` | no | `installer` | install channel |
 | `uch` | string | `stable beta` or `""` | no | `stable` | update channel setting |
@@ -168,7 +178,7 @@ rules (section 5) and the forbidden-field rule (section 4). The tables below are
 | `v` | string | 1 to 48 chars | yes | `0.99.109` | FoxSDR version. It is what makes the radio's VERSION HISTORY: the site records the first time each version is seen with each radio and each install |
 | `firmware` | string | `""` or `^[A-Za-z0-9._+ -]{1,48}$` | no | `3.1.0` | |
 | `library` | string | same | no | `libairspyhf 1.6.8` | |
-| `dropped` | integer | 0 to 1,000,000 | no | `0` | events of THIS radio key that the daily bound (3.9) kept off the wire since the previous event of this key that was sent |
+| `dropped` | integer | 0 to 1,000,000 | no | `0` | events of THIS radio key that were NOT SENT since the previous event of this key that was: held off by the daily bound (3.9), folded into an earlier one (a refusal repeated within five seconds, a vendor fault within ten), or dropped by the queue folder's bounds. "Not sent" is true of all three; "kept off by the daily bound" is not. The keyless kinds (`session_env`, `session_end`, `session_fault`) carry the same count for the lines of THEIRS that the folder's bounds dropped (3.12) |
 
 Where a kind below says "sent when", it names the app's event point. A kind is sent once per event; nothing is folded except by the
 daily bound.
@@ -200,7 +210,7 @@ that hangs or crashes the process leaves a start with no result) and when it suc
 | `attempt` | integer | 1 to 10,000 | yes | `1` | ordinal of the opens of this radio key in this session |
 | `openMs` | integer | 0 to 3,600,000 | no | `910` | how long the open took (with `ok`) |
 | `sampleRateSps` | integer | 0 to 1,000,000,000 | no | `768000` | the rate asked for |
-| `band` | string | a NAME from `lf mf hf vhf-low fm-broadcast air-band vhf-high uhf l-band shf other` | no | `fm-broadcast` | the band the radio was tuned within. NEVER a frequency: a number is refused (`bad-field`) |
+| `band` | string | a NAME from `lf mf hf vhf-low fm-broadcast air-band vhf-high uhf l-band shf other` | no | `fm-broadcast` | the band the radio was tuned within. NEVER a frequency: a number is refused (`bad-field`). THE EDGES are the application's (`radioreport::bandName()`), and a site that says "FM broadcast" says the same: `lf` below 300 kHz, `mf` to 3 MHz, `hf` to 30 MHz, `vhf-low` to 87.5 MHz, `fm-broadcast` to 108 MHz, `air-band` to 137 MHz, `vhf-high` to 300 MHz, `uhf` to 1 GHz, `l-band` to 2 GHz, `shf` above that; `other` for a frequency that is not positive |
 
 ### 3.4 `radio_settings`: the settings applied
 
@@ -221,7 +231,8 @@ Sent after an open applies the radio's settings, and whenever the user or the au
 | `directSampling` | string | `off i q` | no | `off` | |
 | `decimation` | integer | 1 to 65,536 | no | `4` | |
 | `band` | string | the names of 3.3 | no | `fm-broadcast` | |
-| `refused` | string | `rate bandwidth gain ppm bias antenna direct decimation` | no | `ppm` | the setting the radio refused |
+| `refused` | string | `rate bandwidth gain ppm bias antenna direct decimation frequency other` | no | `ppm` | the setting the radio refused. `frequency` is a refused retune (the frequency itself is never sent, only the word) and `other` a control with no word of its own (HDR, notches, dither, the antenna pair swap, the bandwidth of a mode) |
+| `refusedClass` | string | `radio range` | no | `radio` | `radio`: the radio refused it; `range`: the value the user typed was out of range and the radio was never asked (it says nothing about the radio) |
 | `reason` | string | 1 to 200 chars, section 5 | no | `the radio refused the frequency correction` | why it was refused, scrubbed |
 
 ### 3.5 `radio_stream`: stream health, and what is attached
@@ -254,8 +265,8 @@ Sent when the app starts a recovery of a radio (`start`, written before the atte
 | Field | Type | Limit | Required | Example | Meaning |
 |---|---|---|---|---|---|
 | (3.1) | | | | | |
-| `phase` | string | `start ok gave-up` | yes | `start` | |
-| `what` | string | `^[a-z0-9]{3,24}$` | yes | `usbstuck` | the application's own recovered word (`reopen`, `usbstuck`, `streamrestart`, `vendorcall`, ...). The site shows the word; it need not know it |
+| `phase` | string | `start ok gave-up degraded` | yes | `start` | `degraded`: the radio keeps streaming but is deaf or impaired (the RTL-SDR tuner's PLL did not lock), so neither `ok` nor `gave-up` says it. The site shows it amber and does not alert on it as a failure |
+| `what` | string | `^[a-z0-9]{3,24}$` | yes | `usbstuck` | the application's own recovered word. The words the application sends today: `reopen`, `usbstuck`, `streamrestart`, `routefallback`, `vendorcall`, `pllunlocked`, `release`, `uninit`, `servicestate`, `moduleunload`, `nonfinite`. The site shows the word as it is and need not know it |
 | `attempt` | integer | 1 to 10,000 | yes | `1` | ordinal of this recovery of this radio in the session |
 | `reasonClass` | string | the classes of 2.1 | no | `timeout` | |
 | `reason` | string | 1 to 400 chars, section 5 | no | `the stream stopped for 5 s` | scrubbed as 2.1 |
@@ -269,6 +280,8 @@ Sent when the app starts a recovery of a radio (`start`, written before the atte
 | `cause` | string | `user switch-radio quit died unplugged fault error other` | yes | `died` | `user`, `switch-radio` and `quit` are clean; the rest are the radio ending, which the site shows red and alerts on |
 | `openSec` | integer | 0 to 2,592,000 | yes | `144` | how long the radio was open |
 | `reason` | string | 1 to 400 chars, section 5 | no | | scrubbed as 2.1 |
+
+A `radio_close` may arrive for a radio that never had a `radio_open` in the session: a radio that stopped under the HackRF sweeper (the sweeper is not the receiver and journals no open) sends the close with `openSec` 0. The Worker and the site accept it (fixture `valid-radio-close-without-open`), and the site shows the close as an event of that radio and does not invent an open.
 
 ### 3.8 `session_env`: the machine, once a session
 
@@ -294,6 +307,7 @@ Sent once per session, at the start (queued with the first events; a retry is th
 | `displayCount` | integer | 0 to 16 | no | `2` | |
 | `displayScalePct` | array | at most 8 integers, 25 to 1,000 | no | `[100,150]` | each display's scaling |
 | `diagOn` | boolean | | yes | `true` | whether the Diagnostics switch was on |
+| `dropped` | integer | 0 to 1,000,000 | no | `0` | the keyless lines (this kind, `session_end`, `session_fault`) the queue folder's bounds dropped since the previous keyless message was sent (3.12) |
 
 ### 3.9 Sending: the on-disk queue, the batches, the daily bound
 
@@ -312,7 +326,9 @@ Sent once per session, at the start (queued with the first events; a retry is th
   defined: the Worker and the site cope with one message per request at the volumes in the record; the decision is the owner's if the
   request count becomes a cost.
 * ORDER AND REPEATS. The site's idempotence is `(installId, sessionId, seq)` (or `messageId`): a message sent twice because an answer
-  was lost is stored once.
+  was lost is stored once. `seq` is taken when a message is ADMITTED to the queue, not when the event happened, so a message held by the daily bound
+  and released at the day's end has a later `seq` than events whose `t` is later than its own: a page orders by the event's time (`t`, and the
+  message's arrival minus `age`), never by `seq`.
 * THE DAILY BOUND (C8). Per install per UTC day: 100 `radio_fail` (2.3) and 3,000 journal events (everything else except `session_env`,
   which is once per session and never bounded). `radio_stream` is made small first: at most one per radio per minute, and after a radio
   has sent 500 of them in a day the window widens to 5 minutes (`windowSec` 300), which loses nothing because each event states the span
@@ -347,6 +363,35 @@ Site lane 2's view (f) asked that the usage record say which window the session 
 `window`: `new` or `legacy`; left out when the app cannot say. The Worker stores it as `blob16` of `foxsdr_usage`, ONLY when it is one of
 those two words, and appends nothing otherwise, so a record without it keeps its 15 blobs. A reader asks for `blob16 = 'new'` or `'legacy'`
 and treats every other row as "did not say". `first_session` records do not carry it (their columns are section 7's); `session_env` does.
+
+### 3.12 `session_end`: the session ended and no radio was ever opened (L1)
+
+Sent once, at quit, only when no radio opened in the session (the first run of someone whose radio never worked is the case the owner wants to see). No radio key.
+
+| Field | Type | Limit | Required | Example | Meaning |
+|---|---|---|---|---|---|
+| `v` | string | 1 to 48 | yes | `0.99.109` | |
+| `opened` | boolean | | yes | `false` | always `false` today; the word exists so a later kind of end can say true |
+| `scans` | integer | 0 to 1,000,000 | yes | `3` | how many radio scans landed |
+| `openFailures` | integer | 0 to 1,000,000 | yes | `1` | how many opens failed (each also filed its own `radio_fail`) |
+| `listed` | array | at most 8 models, each 1 to 32 chars and unchanged by `scrubModel`, section 5 | no | `["Generic RTL2832U"]` | the models the scan listed, never a serial |
+| `sessionSec` | integer | 0 to 2,592,000 | yes | `1800` | how long the session lasted |
+| `dropped` | integer | 0 to 1,000,000 | no | `0` | the keyless lines the queue folder's bounds dropped (below) |
+
+`dropped` on a keyless kind (this one, `session_env`, `session_fault`): the daily bound counts per radio key, so a keyless line lost to the folder's bounds (200 files, 4 MiB, 14 days) used to be counted only on the machine (issue 4). The sender now counts them under the empty key and says the number on the NEXT keyless message it sends, which is how the site learns that a machine that was offline for days lost lines.
+
+### 3.13 `session_fault`: something the radios depend on failed and no radio is open to carry it (issue 12)
+
+With an SDRplay radio open, a failure of the SDRplay API service is that radio's `radio_recovery`. With none open it used to be said nowhere. No radio key.
+
+| Field | Type | Limit | Required | Example | Meaning |
+|---|---|---|---|---|---|
+| `v` | string | 1 to 48 | yes | `0.99.109` | |
+| `service` | string | `^[a-z0-9]{3,24}$` | yes | `sdrplay` | the application's own word for the service |
+| `phase` | string | `start ok gave-up degraded` | yes | `gave-up` | as 3.6 |
+| `reasonClass` | string | the classes of 2.1 | no | `driver` | |
+| `reason` | string | 1 to 400 chars, section 5 | no | `the SDRplay API service is not running` | scrubbed as 2.1 |
+| `dropped` | integer | 0 to 1,000,000 | no | `0` | as 3.12 |
 
 ## 4. Forbidden fields
 
@@ -474,8 +519,8 @@ accepted case's `canonical` and `row` is written there by hand from this file, n
 }
 ```
 
-Names starting `valid-` must be accepted, names starting `refuse-` must be refused with exactly `code`. `MANIFEST.sha256`
-beside them lists each file's SHA-256 (of the file with CRLF turned into LF, so an autocrlf checkout agrees); the site keeps a copy of the
+Names starting `valid-` must be accepted, names starting `refuse-` must be refused with exactly `code`, and names starting `drop-` (`"expect": "drop"`) must be CHECKED, answered 204 and then DROPPED: not forwarded, not stored, not counted (1.3). `MANIFEST.sha256`
+beside them lists each file's SHA-256 (of the file with CRLF turned into LF, so an autocrlf checkout agrees; a reader of the manifest itself splits it on `\r\n` as well as `\n`, because an autocrlf checkout gives the manifest CRLF too); the site keeps a copy of the
 directory (and of `radio-text-rules.json` and `radio-journal-spec.json`) and its test fails when the copy and the manifest differ.
 
 ## 10. What an install with Usage reporting OFF still sends
@@ -506,6 +551,8 @@ that sends these. The Worker deployed today (test-fixtures `worker-0.99.95.js` s
 | a usage record with `window` | `204` | the usage row as ever; the field is ignored |
 | a `radio_fail` without `installId` | `400 bad id` | nothing |
 
+The text `bad id` and status 400 are the literal answer of the Worker's own source (`telemetry-worker/worker.js`, `return new Response('bad id', { status: 400 })`, and the kept copy `test-fixtures/worker-0.99.95.js`); `radio-reports.test.mjs` pins that every valid message sent to that copy is answered exactly that (issue 8: the sender's literal was checked against the Worker's source, not against the deployed Worker, which was not read).
+
 So an app released BEFORE the Worker loses every radio report with a visible 400 that the sender keeps and retries on a 5xx but deletes on a
 400: the sender must treat `bad id` (the old Worker's literal text, not `refused: ...`) as "the Worker is not ready": keep and retry with
 the back-off of 2.2, never delete. Once the new Worker is live and the site is not, the Worker answers 502 and the app keeps and retries.
@@ -513,3 +560,48 @@ the back-off of 2.2, never delete. Once the new Worker is live and the site is n
 ## 12. What the app lane builds from this
 
 See `docs/multi-radio-records/radio-reports-2.md`, "APP HAND-OFF" (and `radio-reports-1.md` section 5 for the failure call sites).
+
+## 13. `install_outcome`: the installer says an install did not finish
+
+Sent by the installer (never by the program), only when `installer/cascade.iss` has `#define ReportInstallOutcome` (it is a commented line: the report is OFF until the release lane removes one semicolon, and the approved privacy wording must say so first). The installer runs before the program has ever run, so it has no install id, no session id and no sequence number; its message is the anonymous form's envelope with only a random message id:
+
+```
+POST https://telemetry.foxsdr.com/        Content-Type: application/json
+{"schema":2,"kind":"install_outcome","messageId":"<16 lower-case hex>","t":0,
+ "body":{"outcome":"failed"|"cancelled"|"blocked","appVersion":"0.99.109","windows":"10.0.22631"}}
+```
+
+| Rule | Value |
+|---|---|
+| envelope | `schema` 2, `messageId` `^[0-9a-f]{16}$` required, `t` exactly `0`; NO `installId`, `sessionId`, `seq`, `radioKey` or `age` (a message with any of them is `bad-field`) |
+| `body.outcome` | exactly `failed`, `cancelled` or `blocked` (a successful install is never reported: the first run's usage report is its trace) |
+| `body.appVersion` | `^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}$`, the version being installed |
+| `body.windows` | `^[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,6}$`, major.minor.build |
+| any other body key | refused (`bad-field`): this kind does NOT drop unknown keys, because it must carry nothing but these three |
+| size | 4,096 bytes |
+
+The Worker validates it, forwards the canonical form to the site (a `synthetic` marker drops it, 1.3), writes nothing to Analytics Engine. The site keeps a COUNT per UTC day and (outcome, appVersion, windows) and the last 100,000 message ids (so a retry whose answer was lost counts once), nothing else, and shows the counts on `/admin/installs`. The site's per-address limit for the anonymous `radio_fail` applies. What cannot be reported at all: an installer Windows blocks before it runs (SmartScreen, an antivirus, a policy, a download that never finished) runs none of the installer's code.
+
+## 14. The 17 issues of the application lanes, and the one answer to each
+
+Written by must-fix lane E (2026-11-17). "App" means the application changed in the same commit.
+
+| # | Issue | Answer |
+|---|---|---|
+| 1 | ring lines carry a level word the pattern cannot match; two-word prefixes | the contract is right, the app already conforms: the sender removes the level word and leaves two-word prefixes out. Stated in 2.1; two refusal fixtures |
+| 2 | no kind for a session that ended with no radio | `session_end` added (3.12, the table, the Worker, the site); fixtures |
+| 3 | the test marker | `synthetic: 1` is an optional envelope member and the Worker (and the site) DROP it (1.3); the usage record and the beat the same; app: every kind carries it from a synthetic run |
+| 4 | `dropped` cannot be said without a radio key | allowed on `session_env`, `session_end`, `session_fault` (3.12); app: keyless drops are counted and said on the next keyless message |
+| 5 | `seq` order is not time order | a page orders by `t` and `age`, never `seq` (3.9); the site's views were read and sort by time |
+| 6 | `scrubUploadLine` turns "serial port" into "serial <stripped>" | accepted as harmless, stated (2.1); both forms are valid fixtures |
+| 7 | the band edges are the application's | the edges are in 3.3 |
+| 8 | `bad id` was read from the contract, not from the Worker | read from the Worker's own source and the kept 0.99.95 copy, pinned by a test (11) |
+| 9 | `refused` has no `frequency`, nothing for other controls | `frequency` and `other` added to `refused`; app: sends `refused` for every control |
+| 10 | a refusal of the radio versus a typed out-of-range value | `refusedClass` (`radio`, `range`) added (3.4); app: always sends it |
+| 11 | `what` words; `pllunlocked` is sent with `gave-up` | the words are listed (3.6); phase `degraded` added and the app sends it for `pllunlocked` |
+| 12 | a service state with no radio has nowhere to go | `session_fault` added (3.13); app: sends it when no radio is open |
+| 13 | `dropped` also counts folded repeats | the wording is "not sent" (3.1); the site's text says the same |
+| 14 | `firmware` for the Airspy HF+ only | stated in 2.1; nothing changes |
+| 15 | no class for a USB transfer failure | `transfer` added to the classes (2.1, 3.6); app: stops sending it as `control` |
+| 16 | no class for an RTL-SDR tuner or demodulator fault | `tuner` added; app: stops sending it as `control` |
+| 17 | a close with no open (the sweeper) | the Worker and the site accept it and show it (3.7); fixture |

@@ -17,6 +17,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/health_events.hpp"
 #include "core/radio_events.hpp"
 #include "core/radio_report.hpp"
 #include "core/radio_reporter.hpp"
@@ -94,6 +95,12 @@ std::vector<json> ofKind(const std::vector<json>& all, const char* kind) {
 }
 
 int validateWithWorker(const std::vector<json>& msgs) {
+    // FOXSDR_DUMP_APP_MESSAGES=<file>: every message handed to the Worker's validator is also appended to that file, one JSON message a line. The website's
+    // repository keeps the result as testdata/app-messages.jsonl and holds its own validators to it (must-fix lane E: what the application sends is what the site takes).
+    if (const char* dump = std::getenv("FOXSDR_DUMP_APP_MESSAGES"); dump != nullptr && *dump != '\0') {
+        std::ofstream df(dump, std::ios::binary | std::ios::app);
+        for (const json& m : msgs) { df << m.dump(-1, ' ', false, json::error_handler_t::replace) << "\n"; }
+    }
     const std::string node = CASCADE_NODE_PATH;
     if (node.empty() || msgs.empty()) { return -1; }
     const fs::path d = fs::temp_directory_path() / ("rre-validate-" + randomHex(8));
@@ -137,9 +144,20 @@ int main() {
     CHECK(std::string(controlWord(Control::Frequency)) == "frequency");
     CHECK(std::string(controlWord(Control::AutoGain)) == "gain");
     CHECK(std::string(controlWord(Control::BiasTee)) == "bias");
-    CHECK(std::string(controlRefusedWord(Control::Frequency)).empty());     // the contract has no `refused` word for it
-    CHECK(std::string(controlRefusedWord(Control::Other)).empty());
+    CHECK(std::string(controlRefusedWord(Control::Frequency)) == "frequency");   // must-fix lane E, issue 9: the contract now has `frequency` and `other` (was: empty)
+    CHECK(std::string(controlRefusedWord(Control::Other)) == "other");
     CHECK(std::string(controlRefusedWord(Control::Antenna)) == "antenna");
+    // must-fix lane E, issues 15 and 16: the report's class says a USB transfer and an RTL-SDR tuner fault apart; the health token's class does not change
+    namespace hl = cascade::core::health;
+    CHECK(std::string(hl::radioReportClassWord("rtlsdr", "the radio stopped answering while it was being opened: a bulk read failed (Windows error 31)")) == "transfer");
+    CHECK(std::string(hl::radioReportClassWord("rtlsdr", "WinUsb_ResetPipe failed (Windows error 31)")) == "transfer");
+    CHECK(std::string(hl::radioReportClassWord("rtlsdr", "the tuner would not initialise: its PLL did not lock")) == "tuner");
+    CHECK(std::string(hl::radioReportClassWord("rtlsdr", "the demodulator's I2C repeater would not open")) == "tuner");
+    CHECK(std::string(hl::radioReportClassWord("airspyhf", "the radio stopped answering while restoring the crystal trim: a control transfer failed (Windows error 31)")) == "control");
+    CHECK(std::string(hl::radioReportClassWord("rtlsdr", "the radio is in use by another program")) == "busy");   // every other class is the health class
+    CHECK(std::string(hl::radioReportClassWord("rtlsdr", "nothing at that address")) == hl::radioReasonWord(hl::classifyRadioOpen("rtlsdr", "nothing at that address")));
+    CHECK(hl::classifyRadioOpen("rtlsdr", "a bulk read failed (Windows error 31)") == hl::RadioReason::Control);   // the usage record's token is still `control`
+    CHECK(hl::classifyRadioOpen("rtlsdr", "the tuner would not initialise") == hl::RadioReason::Control);
     CHECK(closeCauseFor(false, "the radio was unplugged") == "unplugged");
     CHECK(closeCauseFor(true, "Device removed while reading samples") == "unplugged");
     CHECK(closeCauseFor(true, "a control transfer failed (Windows error 31)") == "fault");
@@ -171,7 +189,9 @@ int main() {
             const std::string reason0 = msgs[0]["body"]["reason"];
             CHECK(reason0.rfind("refused: gain", 0) == 0);
             CHECK(reason0.find("145") == std::string::npos);                  // a frequency in the driver's sentence never leaves
-            CHECK(!msgs[1]["body"].contains("refused"));                      // the frequency: no contract word, said in the reason only
+            CHECK(msgs[1]["body"]["refused"] == "frequency");                  // the frequency has a contract word now (issue 9; it was absent)
+            CHECK(msgs[1]["body"]["refusedClass"] == "radio" && msgs[0]["body"]["refusedClass"] == "radio");   // issue 10: the radio refused it
+            CHECK(msgs[2]["body"]["refusedClass"] == "range");                    // ...and a value typed out of range is told apart by a field, not only a prefix
             CHECK(std::string(msgs[1]["body"]["reason"]).rfind("refused: frequency", 0) == 0);
             CHECK(msgs[2]["body"]["refused"] == "ppm");
             CHECK(std::string(msgs[2]["body"]["reason"]).rfind("out of range: ppm", 0) == 0);   // told apart from a fault of the radio
@@ -262,9 +282,38 @@ int main() {
         }
         for (const json& m : msgs) { everything.push_back(m); }
         forgetRadio(kRtl.key);
-        // no radio of that driver open: a service state is information, not a radio's fault (and no phantom radio is made up)
+        // no radio of that driver open: no phantom radio is made up, and the state is a session_fault with NO radio key (issue 12; it used to be dropped)
         noteServiceFault("rtlsdr", "servicestate", "the service is not running", false);
-        CHECK(ofKind(t.flush(), "radio_recovery").size() == 0);
+        const std::vector<json> flushed = t.flush();
+        CHECK(ofKind(flushed, "radio_recovery").empty());   // no phantom radio is made up for the service
+        const std::vector<json> sf = ofKind(flushed, "session_fault");
+        CHECK(sf.size() == 1);
+        if (sf.size() == 1) {
+            CHECK(sf[0]["radioKey"] == "");
+            CHECK(sf[0]["body"]["service"] == "rtlsdr" && sf[0]["body"]["phase"] == "gave-up");
+            CHECK(sf[0]["body"]["reasonClass"] == "driver");
+            CHECK(!sf[0]["body"].contains("serial") && !sf[0]["body"].contains("model"));
+        }
+        for (const json& m : sf) { everything.push_back(m); }
+        // a repeat inside ten seconds is folded, not sent twice
+        noteServiceFault("rtlsdr", "servicestate", "the service is not running", false);
+        CHECK(ofKind(t.flush(), "session_fault").empty());
+    }
+    // ---- the RTL-SDR's PLL that did not lock: degraded, said as the tuner's, and not urgent -----------------------------------------------------------------
+    {
+        Rig t("pll");
+        t.start();
+        registerSource(&g_source1, kRtl);
+        noteVendorCallFault(&g_source1, "rtlsdr", "pllunlocked", "the tuner's PLL did not lock at the requested frequency", /*absorbed=*/false);
+        const std::vector<json> msgs = ofKind(t.flush(), "radio_recovery");
+        CHECK(msgs.size() == 1);
+        if (msgs.size() == 1) {
+            CHECK(msgs[0]["body"]["phase"] == "degraded");   // issue 11: it was sent as gave-up although the radio keeps streaming
+            CHECK(msgs[0]["body"]["what"] == "pllunlocked");
+            CHECK(msgs[0]["body"]["reasonClass"] == "tuner");
+        }
+        for (const json& m : msgs) { everything.push_back(m); }
+        forgetRadio(kRtl.key);
     }
 
     // ---- a radio that is still OPENING: what its driver says is held and said about the right radio once the engine announces it ------------------------

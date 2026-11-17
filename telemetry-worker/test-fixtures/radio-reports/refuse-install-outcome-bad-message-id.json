@@ -1,0 +1,18 @@
+{
+  "name": "refuse-install-outcome-bad-message-id",
+  "about": "a message id that is not 16 lower-case hex characters",
+  "expect": "refuse",
+  "code": "bad-field",
+  "status": 400,
+  "request": {
+    "schema": 2,
+    "kind": "install_outcome",
+    "messageId": "NOT-HEX-AT-ALL!!",
+    "t": 0,
+    "body": {
+      "outcome": "failed",
+      "appVersion": "0.99.109",
+      "windows": "10.0.22631"
+    }
+  }
+}

@@ -535,7 +535,7 @@ void testReports() {
         if (msgs.size() == 3) {
             CHECK(msgs[0]["body"]["driver"] == id.driver);
             CHECK(msgs[0]["body"]["refused"] == "rate");
-            CHECK(!msgs[1]["body"].contains("refused"));   // the frequency has no contract word: it is said in the reason
+            CHECK(msgs[1]["body"]["refused"] == "frequency");   // issue 9 (must-fix lane E): the frequency has a contract word now (it was absent)
             CHECK(std::string(msgs[1]["body"]["reason"]).rfind("refused: frequency", 0) == 0);
             CHECK(msgs[2]["body"]["refused"] == "gain");
         }

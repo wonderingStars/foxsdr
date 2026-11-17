@@ -26,7 +26,9 @@
    "vendor",
    "rate",
    "control",
-   "other"
+   "other",
+   "transfer",
+   "tuner"
   ],
   "triggers": [
    "startup-restore",
@@ -398,7 +400,17 @@
       "bias",
       "antenna",
       "direct",
-      "decimation"
+      "decimation",
+      "frequency",
+      "other"
+     ]
+    },
+    {
+     "name": "refusedClass",
+     "type": "enum",
+     "values": [
+      "radio",
+      "range"
      ]
     },
     {
@@ -607,7 +619,8 @@
      "values": [
       "start",
       "ok",
-      "gave-up"
+      "gave-up",
+      "degraded"
      ],
      "req": true
     },
@@ -842,6 +855,116 @@
      "name": "diagOn",
      "type": "bool",
      "req": true
+    },
+    {
+     "name": "dropped",
+     "type": "int",
+     "lo": 0,
+     "hi": 1000000
+    }
+   ]
+  },
+  "session_end": {
+   "maxBytes": 4096,
+   "radio": false,
+   "fields": [
+    {
+     "name": "v",
+     "type": "str",
+     "lo": 1,
+     "hi": 48,
+     "req": true
+    },
+    {
+     "name": "opened",
+     "type": "bool",
+     "req": true
+    },
+    {
+     "name": "scans",
+     "type": "int",
+     "lo": 0,
+     "hi": 1000000,
+     "req": true
+    },
+    {
+     "name": "openFailures",
+     "type": "int",
+     "lo": 0,
+     "hi": 1000000,
+     "req": true
+    },
+    {
+     "name": "listed",
+     "type": "arr",
+     "max": 8,
+     "item": {
+      "type": "model",
+      "lo": 1,
+      "hi": 32
+     }
+    },
+    {
+     "name": "sessionSec",
+     "type": "int",
+     "lo": 0,
+     "hi": 2592000,
+     "req": true
+    },
+    {
+     "name": "dropped",
+     "type": "int",
+     "lo": 0,
+     "hi": 1000000
+    }
+   ]
+  },
+  "session_fault": {
+   "maxBytes": 4096,
+   "radio": false,
+   "fields": [
+    {
+     "name": "v",
+     "type": "str",
+     "lo": 1,
+     "hi": 48,
+     "req": true
+    },
+    {
+     "name": "service",
+     "type": "str",
+     "lo": 3,
+     "hi": 24,
+     "re": "^[a-z0-9]{3,24}$",
+     "req": true
+    },
+    {
+     "name": "phase",
+     "type": "enum",
+     "values": [
+      "start",
+      "ok",
+      "gave-up",
+      "degraded"
+     ],
+     "req": true
+    },
+    {
+     "name": "reasonClass",
+     "type": "enum",
+     "list": "reasonClasses"
+    },
+    {
+     "name": "reason",
+     "type": "text",
+     "lo": 1,
+     "hi": 400
+    },
+    {
+     "name": "dropped",
+     "type": "int",
+     "lo": 0,
+     "hi": 1000000
     }
    ]
   }

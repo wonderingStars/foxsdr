@@ -70,6 +70,13 @@ inline constexpr const char* kFamilyHackRf = "hackrf";
 inline constexpr const char* kFamilySdrPlay = "sdrplay";
 inline constexpr const char* kFamilyUsrp = "usrp";
 inline constexpr const char* kFamilyLime = "lime";
+// THE FAMILIES OF THE OTHER NATIVE DRIVERS (mustfix-b, C3): each one's USB ids are read from the driver's own match table (hydraSdrUsbIds, aorUsbIds,
+// icr8600UsbIds, msi2500::usbIds), never from memory, so a radio the application can drive and Windows cannot give a usable driver is seen too. The RX888 is NOT here: its
+// two ids (04b4:00f1, 04b4:00f3) are Cypress FX3's own, which every FX3 board shares, so an id alone cannot say "RX888" (tests/test_radio_setup.cpp holds that decision).
+inline constexpr const char* kFamilyHydra = "hydrasdr";
+inline constexpr const char* kFamilyAor = "aor";
+inline constexpr const char* kFamilyIcr8600 = "icr8600";
+inline constexpr const char* kFamilyMirics = "mirisdr";
 
 // The family a driver key belongs to, or "" when it is none of the above. Takes
 // the native driver keys and the SoapySDR "driver=" values alike ("uhd" is the
@@ -211,6 +218,13 @@ struct Findings {
 // THE DECISION. Pure. One finding per physical radio found on the bus, or one
 // NoDevice finding when there is none.
 Findings assess(const Inventory& inv);
+
+// WHAT A CHECK FOUND, SAID TO THE OWNER (mustfix-b, C3). Counts each finding anonymously (the setup.<kind>.<family> token, once a session each, as the Classic window
+// always did) and files every radio that is PRESENT WITH NO USABLE DRIVER (wrong driver, vendor software missing, not listed by the application) as a radio_found event
+// with source first-run-check: the model from the USB identifier's product name, the identifier itself (vvvv:pppp), the binding word, and NO serial (the bus walk does not
+// read one, and a made-up one would split a radio from the one the scan reports). A radio that is usable, and a finding about no radio, are not filed (the scan reports
+// the usable ones with their own identity). Each distinct (identifier, binding) goes once per session. Safe to call every frame; never throws.
+void noteFindings(const Findings& f);
 
 // THE LINES FOR THE DIAGNOSTICS LOG, each a whole fact and each short enough
 // for the log's 191-byte line (a longer one is cut where it stands, and the

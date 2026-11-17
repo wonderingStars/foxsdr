@@ -1,0 +1,56 @@
+{
+  "name": "valid-radio-fail-class-tuner",
+  "about": "issue 16: the tuner or demodulator inside an RTL-SDR would not initialise (it was sent as `control`)",
+  "expect": "accept",
+  "status": 204,
+  "request": {
+    "schema": 2,
+    "kind": "radio_fail",
+    "installId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "sessionId": "0123456789abcdef",
+    "seq": 3,
+    "t": 412,
+    "radioKey": "rtl-sdr:-",
+    "body": {
+      "driver": "rtlsdr",
+      "model": "RTL-SDR",
+      "serial": "",
+      "reason": "the tuner would not initialise: its PLL did not lock",
+      "reasonClass": "tuner",
+      "trigger": "user-pick",
+      "attempt": 1,
+      "diagOn": true,
+      "logLines": [],
+      "v": "0.99.109",
+      "os": "Windows 10.0.22631",
+      "arch": "x64"
+    }
+  },
+  "canonical": {
+    "schema": 2,
+    "kind": "radio_fail",
+    "installId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "sessionId": "0123456789abcdef",
+    "seq": 3,
+    "t": 412,
+    "radioKey": "rtl-sdr:-",
+    "body": {
+      "driver": "rtlsdr",
+      "model": "RTL-SDR",
+      "serial": "",
+      "firmware": "",
+      "library": "",
+      "reason": "the tuner would not initialise: its PLL did not lock",
+      "reasonClass": "tuner",
+      "trigger": "user-pick",
+      "attempt": 1,
+      "diagOn": true,
+      "logLines": [],
+      "v": "0.99.109",
+      "ch": "",
+      "uch": "",
+      "os": "Windows 10.0.22631",
+      "arch": "x64"
+    }
+  }
+}

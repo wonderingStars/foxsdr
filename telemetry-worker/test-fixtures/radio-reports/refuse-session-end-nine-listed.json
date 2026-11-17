@@ -1,0 +1,34 @@
+{
+  "name": "refuse-session-end-nine-listed",
+  "about": "a session_end listing nine models (the most is eight)",
+  "expect": "refuse",
+  "code": "bad-field",
+  "status": 400,
+  "request": {
+    "schema": 2,
+    "kind": "session_end",
+    "installId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "sessionId": "0123456789abcdef",
+    "seq": 20,
+    "t": 1800,
+    "radioKey": "",
+    "body": {
+      "v": "0.99.109",
+      "opened": false,
+      "scans": 3,
+      "openFailures": 1,
+      "listed": [
+        "Model 0",
+        "Model 1",
+        "Model 2",
+        "Model 3",
+        "Model 4",
+        "Model 5",
+        "Model 6",
+        "Model 7",
+        "Model 8"
+      ],
+      "sessionSec": 1800
+    }
+  }
+}

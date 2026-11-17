@@ -21,9 +21,12 @@
 #include <nlohmann/json.hpp>
 
 #include "core/diag_log.hpp"
+#include "core/radio_events.hpp"
 #include "core/radio_report.hpp"
 #include "core/radio_reporter.hpp"
+#include "core/radio_setup.hpp"
 #include "core/telemetry.hpp"
+#include "core/winusb_install.hpp"
 #include "test_check.hpp"
 
 using namespace cascade::core;
@@ -241,7 +244,47 @@ int main() {
     clock -= 120 + 61;   // (the clock is the session's; play() moved it on)
     play(rep2);
     rep2.flushAtQuit(500);   // sends what was queued (to the stand-in)
-    const std::string queueAfter = everythingIn(rep2.dir());
+    // THE DRIVER-LEVEL EVENTS (mustfix-b), each handed the hostile text a real sentence could quote, into the process-wide reporter the helpers use: a radio that would not
+    // start for a sweep, a sweep that stopped, a one-click install that failed, a setting the engine's watch reports, a first-run check that found a radio with no driver
+    // (its instance id carries a planted serial, which the bus walk's finding must not carry), and the vendor-fault helper.
+    fs::path base3 = fs::temp_directory_path() / ("rrns3-" + rr::randomHex(8));
+    fs::create_directories(base3);
+    {
+        rr::Reporter::Options o3;
+        o3.dir = (base3 / "radio-reports").string();
+        o3.endpoint = "http://127.0.0.1:9/";
+        o3.liveSend = true;
+        o3.nowEpoch = [&clock]() { return clock.load(); };
+        o3.transport = o2.transport;
+        identityOf(o3);
+        rr::global().configure(o3);
+        const std::string hostile = "refused 433.920 MHz at C:\\Users\\alice\\Documents\\SecretFolder\\zz_secret_capture.iq (serial SN9900AA) via 192.168.7.77 and host studio-nas7 (00:1A:2B:3C:4D:5E), dongle 7F3A9C21B0, tuned to 14200";
+        rr::fileSideRadioFailure("hackrf", "serial=SN9900AA", hostile);
+        rr::noteSideRadioStopped("hackrf", "serial=SN9900AA", "the sweep at 433.920 MHz stopped", hostile);
+        cascade::core::winusb::Result wr;
+        wr.outcome = cascade::core::winusb::Outcome::Failed;
+        wr.detail = hostile;
+        cascade::core::winusb::noteInstallOutcome(wr);
+        static int src = 0;
+        rr::registerSource(&src, rr::identify("airspyhf", "serial=SN9900AA", "Airspy HF+ (serial SN9900AA)"));
+        rr::RefusalWatch watch;
+        watch.noteRefusalIfSilent(&src, "airspyhf", rr::Control::Frequency, hostile);
+        rr::noteVendorCallFault(&src, "airspyhf", "vendorcall", hostile, false);
+        radiosetup::Inventory inv;
+        inv.probed = true;
+        inv.usbListed = true;
+        radiosetup::UsbNode n;
+        n.vid = 0x38af;
+        n.pid = 0x0001;
+        n.deviceId = n.instanceId = "USB\\VID_38AF&PID_0001\\SN9900AA";
+        n.isDeviceNode = true;
+        n.problemCode = 28;
+        inv.usb.push_back(n);
+        radiosetup::noteFindings(radiosetup::assess(inv));
+        rr::forgetRadio(rr::identify("airspyhf", "serial=SN9900AA", "Airspy HF+ (serial SN9900AA)").key);
+        rr::global().flushAtQuit(500);
+    }
+    const std::string queueAfter = everythingIn(rep2.dir()) + everythingIn(rr::global().dir());
     std::string sentCopy;
     {
         std::lock_guard<std::mutex> lk(sentMutex);
@@ -277,6 +320,7 @@ int main() {
     std::vector<std::string> allBodies;
     for (const std::string& file : rr::readQueueFiles(rep.dir())) { allBodies.push_back(file); }
     for (const std::string& file : rr::readQueueFiles(rep2.dir())) { allBodies.push_back(file); }
+    for (const std::string& file : rr::readQueueFiles(rr::global().dir())) { allBodies.push_back(file); }
     allBodies.push_back(sentCopy);   // and every request the sender made: one message a line
     for (const std::string& file : allBodies) {
         // a failure file is one JSON object; a journal segment is lines of them
@@ -326,7 +370,9 @@ int main() {
 
     rep.shutdown();
     rep2.shutdown();
+    rr::global().shutdown();
     std::error_code ec;
+    fs::remove_all(base3, ec);
     fs::remove_all(base, ec);
     fs::remove_all(base2, ec);
     return testSummary("test_radio_reports_never_sent");

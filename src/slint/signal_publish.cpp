@@ -27,6 +27,7 @@
 #include "core/freq_import.hpp"
 #include "core/i18n.hpp"
 #include "core/iq_file_box.hpp"
+#include "core/radio_events.hpp"
 #include "core/radio_setup.hpp"
 #include "core/thread_beats.hpp"
 #include "core/utf8_text.hpp"
@@ -242,6 +243,7 @@ void SignalPublisher::pollSetup() {
         const wu::Result r = s.install->launchResult;
         s.installStatus = wu::resultSentence(r);
         cascade::core::diagLogf("radio setup: driver install %s - %s", wu::outcomeName(r.outcome), r.detail.c_str());
+        wu::noteInstallOutcome(r);   // a one-click install that did not work is a radio that cannot be opened: one radio_fail
         if (r.outcome == wu::Outcome::Installed || r.outcome == wu::Outcome::AlreadyWinUsb) {
             if (s.fake.empty()) { send(opSetupCheckAgain()); }
             startProbe();
@@ -289,6 +291,7 @@ void SignalPublisher::pollSetup() {
         inv = cascade::gui::radioSetupInventoryFrom(std::move(inv), lists);
     }
     const rs::Findings f = rs::assess(inv);
+    if (s.fake.empty()) { rs::noteFindings(f); }   // the setup.* count and the radio_found event for a radio present with no usable driver (once a session each; a synthetic machine says nothing)
     opts_.setup_show_page = f.showPage;
     for (const rs::Finding& x : f.items) {
         SetupFinding o;
@@ -960,6 +963,7 @@ void SignalPublisher::pollSdrPlay() {
             s.note = tr("Restart cancelled.");
         } else if (o.phase == SdrPlayRestartPhase::NotStarted) {
             cascade::core::diagWarnf("source: SDRplay API Service restart not started - error %lu", o.win32Error);
+            cascade::core::radioreport::noteServiceFault("sdrplay", "servicerestart", cascade::core::formatText("Windows would not run the service restart (error %lu)", o.win32Error), false);
             s.note = cascade::core::formatText(tr("Windows would not run the restart (error %lu)."), o.win32Error);
         } else {
             s.service = o.after;

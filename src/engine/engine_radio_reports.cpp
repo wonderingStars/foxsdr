@@ -50,6 +50,7 @@ rr::Identity Engine::radioReportIdentity() const {
     }
     id.window = telemetryWindow_;
     id.launches = telemetryLaunches_;
+    id.synthetic = cascade::core::syntheticRun();   // a test, CI or the owner's own run: the Worker drops every message of it (contract 1.3)
     return id;
 }
 
@@ -122,7 +123,7 @@ void Engine::reportFailedOpen(const std::string& kind, const std::string& args, 
     in.soundCard = kind == "soundcard";
     if (kind != "soapy" && !in.soundCard) { in.nativeLabel = nativeLabelFor(kind, args); }
     in.reason = reason;
-    in.reasonClass = health::radioReasonWord(health::classifyRadioOpen(kind, reason));
+    in.reasonClass = health::radioReportClassWord(kind, reason);
     in.trigger = trigger;
     in.superseded = superseded;
     in.openMs = openMs;

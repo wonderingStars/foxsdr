@@ -1,0 +1,17 @@
+{
+  "name": "refuse-install-outcome-without-message-id",
+  "about": "a random message id is required (a retry whose answer was lost counts once)",
+  "expect": "refuse",
+  "code": "missing-field",
+  "status": 400,
+  "request": {
+    "schema": 2,
+    "kind": "install_outcome",
+    "t": 0,
+    "body": {
+      "outcome": "failed",
+      "appVersion": "0.99.109",
+      "windows": "10.0.22631"
+    }
+  }
+}

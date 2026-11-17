@@ -69,6 +69,26 @@ void noteControlRefused(const void* source, const char* driverKey, Control contr
 // it already says the refusal. Safe to nest in any expression; it never throws.
 std::string noteControlRefusedText(const void* source, const char* driverKey, Control control, std::string text, bool userRange = false, const char* why = nullptr);
 
+// THE ENGINE'S SIDE OF A REFUSAL (mustfix-b, G3). The engine applies a setting through a driver and learns from its return value that the radio refused it; the
+// driver may already have said so itself (every wired driver does, at the place it notices). A report from both would be two events for one refusal, a report from
+// neither would leave a refusal nobody was told about (a driver that never learned to say it, or a branch of one that sets its error text and returns). The watch
+// settles it with one rule: it counts the refusals RAISED ON THIS THREAD since it was made (the driver call is synchronous, so a driver's own report is on the same
+// thread), and `noteRefusalIfSilent` reports only when there were none.
+std::uint64_t refusalSequence();   // calls of noteControlRefused made on the calling thread so far (admitted or folded)
+// The same rule for a caller that cannot hold a watch across two functions: the sequence number taken before the driver call, and the report if it has not moved.
+void noteRefusalIfSilentSince(std::uint64_t sequenceBefore, const void* source, const char* driverKey, Control control, const std::string& text, bool userRange = false);
+class RefusalWatch {
+public:
+    RefusalWatch();
+    // The setting came back refused with this sentence. Files it as a refusal unless a driver already did, on this thread, since the watch was made. Safe to call
+    // when it does nothing; never throws.
+    void noteRefusalIfSilent(const void* source, const char* driverKey, Control control, const std::string& text, bool userRange = false);
+    // The same, for a call site that has the outcome as a flag and wants no branch of its own: reports only when `refused` is true.
+    void noteRefusalIf(bool refused, const void* source, const char* driverKey, Control control, const std::string& text, bool userRange = false);
+private:
+    std::uint64_t start_;
+};
+
 // ---------------------------------------------------------------------------
 // A radio that failed after it opened (G1)
 // ---------------------------------------------------------------------------
@@ -100,6 +120,16 @@ void noteVendorCallFault(const void* source, const char* driverKey, const char* 
 
 // A service the radios depend on (the SDRplay API service): not tied to one source object; the open radio of that driver, when there is one.
 void noteServiceFault(const char* driverKey, const char* what, const std::string& reason, bool absorbed);
+
+// ---------------------------------------------------------------------------
+// A radio that is not one of the engine's registered sources (mustfix-b)
+// ---------------------------------------------------------------------------
+// The HackRF sweeper, the one-click driver installer: code that uses or prepares a physical radio without the engine having opened it as the receiver. The radio is
+// the one `driverKey` and `args` name (the engine's own reading: the model from the driver, a serial only where the arguments carry one). A radio that did not
+// start for such a use is a radio_fail like any other, sent with the Diagnostics switch on or off; a radio that stopped is a radio_close. `trigger` is a word of the
+// contract (2.1); anything else is filed as "other".
+void fileSideRadioFailure(const char* driverKey, const std::string& args, const std::string& reason, const char* trigger = "other");
+void noteSideRadioStopped(const char* driverKey, const std::string& args, const std::string& what, const std::string& detail);
 
 // How many driver events had no open radio to be about (dropped: an open that fails is a radio_fail, a service state with no radio open is information), and how many
 // calls threw inside the helper (counted and swallowed: a report must never take a driver's fault path down). For the tests and the record.

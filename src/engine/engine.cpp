@@ -20,6 +20,7 @@
 #include "core/patch_plan.hpp"
 #include "engine/radio_scope.hpp"
 #include "core/radio_reporter.hpp"
+#include "core/radio_events.hpp"
 #include <algorithm>
 #include <charconv>
 #include <cctype>
@@ -88,6 +89,22 @@
 
 
 namespace cascade::engine {
+
+namespace rre = cascade::core::radioreport;   // mustfix-b: a refusal the driver did not say is said here (RefusalWatch)
+namespace { thread_local std::uint64_t g_tuneRefusalMark = 0; }   // refusalSequence() just before applyRetuneNow's tune call, read by noteTuneRefused on the same thread
+// THE NATIVE OPEN THAT FAILED AND WAS THEN SERVED BY SOAPYSDR (mustfix-b, the route fallback). The worker that opened the radio knows the native driver's failure and its sentence;
+// the engine's labels (the model the owner's reports name the radio by) are the GUI thread's. So the worker leaves what failed here and finishDeviceOpen, on the GUI thread, files
+// it as the radio_fail it is: the owner's rule is every radio failure, not only the recovery that followed it.
+namespace {
+struct FellBackNative {
+    std::string kind, args, error;
+    double requestRateHz = 0.0;
+    bool recovery = false, savedRetry = false;
+    long long openMs = -1;
+};
+std::mutex g_fellBackMutex;
+std::vector<FellBackNative> g_fellBack;
+}  // namespace
 
 // The helpers moved out of src/gui keep their namespace (cascade::gui), so
 // the code that moved with them reads exactly as it did.
@@ -1676,6 +1693,20 @@ void Engine::reapPendingSoapyScan() {
 }
 
 void Engine::finishDeviceOpen(DeviceOpenResult r) {
+    // A NATIVE OPEN THAT FAILED AND WAS SERVED BY SOAPYSDR instead (the E4000 / FC0012/13 route): the native failure is a radio that did not open, filed with its own sentence.
+    {
+        std::vector<FellBackNative> fell;
+        {
+            std::lock_guard<std::mutex> lk(g_fellBackMutex);
+            fell.swap(g_fellBack);
+        }
+        for (const FellBackNative& f : fell) {
+            reportFailedOpen(f.kind, f.args, f.error.empty() ? std::string("device open failed") : f.error,
+                             f.recovery ? cascade::core::radioreport::Trigger::AutoReopen
+                                        : (f.savedRetry ? cascade::core::radioreport::Trigger::SavedRetry : cascade::core::radioreport::Trigger::UserPick),
+                             /*superseded=*/false, f.requestRateHz, f.openMs);
+        }
+    }
     // THE USER MAY HAVE MOVED ON. Opening a device takes seconds and the GUI
     // stays live throughout, so by the time this runs they may have selected
     // the generator, opened an IQ file, or done either from the web UI. Before
@@ -2048,6 +2079,11 @@ void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) 
                     // converter follows it onto the Soapy one.
                     r.fellBackFromKey = cascade::core::converterRadioKey(r.kind, r.args);
                     cascade::core::radioreport::noteRecovery("soapy", r.fallbackSoapyArgs, "ok", "routefallback");
+                    {
+                        // the native driver's own failure, with its sentence, for the GUI thread to file (finishDeviceOpen)
+                        std::lock_guard<std::mutex> lk(g_fellBackMutex);
+                        if (g_fellBack.size() < 16) { g_fellBack.push_back(FellBackNative{r.kind, r.args, r.error, r.requestRateHz, r.recovery, r.savedRadioRetry, r.openMs}); }
+                    }
                     r.kind = "soapy";
                     r.args = r.fallbackSoapyArgs;
                     r.error.clear();
@@ -6868,6 +6904,7 @@ void Engine::applyRetuneNow(double centerHz, bool isPluginPreset) {
     // tune can move the rate too (below).
     const double rateBeforeHz = src.sampleRateHz();
     const std::string errBefore = src.lastError();
+    g_tuneRefusalMark = rre::refusalSequence();   // noteTuneRefused (below) reads it: a refusal the driver did not say is said there
     const bool applied = src.setCenterFrequencyHz(centerHz);
     // Out-of-band applies (a device open's carry-across) pace the next burst
     // off this moment too, so the coalescer's clock never lags an apply.
@@ -6957,6 +6994,12 @@ void Engine::noteTuneRefused(double requestHz, bool isPluginPreset) {
                         : radioHz < rangeLoHz   ? "below its range"
                         : radioHz > rangeHiHz   ? "above its range"
                                                 : "inside its range";
+    // THE RADIO REFUSED A TUNE it was asked for: said to the owner as a refusal of the frequency (the BAND is the only thing a refusal carries, never the number) unless the
+    // driver already said it at the place it noticed. A request outside the range the radio publishes is the user's own value, with its own class.
+    // (a source that is not a radio, the generator or a file, has no device_ and nothing to say: the all-ones mark reads as "already said")
+    const bool outsideRange = hasRange && (radioHz < rangeLoHz || radioHz > rangeHiHz);
+    rre::noteRefusalIfSilentSince(rx().device_ != nullptr ? g_tuneRefusalMark : ~std::uint64_t{0}, rx().device_, rx().sourceKind_.c_str(), rre::Control::Frequency,
+                                  outsideRange ? "outside the range this radio can do" : "the radio refused the tune", outsideRange);
     // A sound card is not named (its name() carries the card's own name).
     cascade::core::diagLogf("source: the %s refused a tune %s",
                             rx().sourceKind_ == "soundcard" ? "sound card" : rx().pipeline_.activeSource().name(),
@@ -8384,9 +8427,11 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if (rx().device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
             // The refusal's reason, or a coercion's, lands on the line; the
             // Rate combo follows the READBACK.
+            rre::RefusalWatch rateWatch;
             const cascade::gui::RateSetOutcome set =
                 cascade::gui::applySourceRate(*rx().device_, c.num[0], rx().sourceError_);
             rx().sourceError_ = set.sourceError;
+            rateWatch.noteRefusalIf(!set.ok, rx().device_, rx().sourceKind_.c_str(), rre::Control::Rate, set.sourceError);   // a refusal the driver did not say itself
             if (!set.ok) { return refuse(FOXAPI_FAILED, "the radio refused the rate"); }
             rx().deviceRateIndex_ =
                 nearestIndex(rx().deviceRatesHz_, rx().pipeline_.activeSource().sampleRateHz());
@@ -8412,8 +8457,10 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 std::find(rx().deviceGainNames_.begin(), rx().deviceGainNames_.end(), text) == rx().deviceGainNames_.end()) {
                 return refuse(FOXAPI_NOT_FOUND, "no gain stage by that name");
             }
+            rre::RefusalWatch refusalWatch;
             if (!rx().device_->setGainDb(text, c.num[0])) {
                 rx().sourceError_ = rx().device_->lastError();
+                refusalWatch.noteRefusalIfSilent(rx().device_, rx().sourceKind_.c_str(), rre::Control::Gain, rx().sourceError_);
                 return refuse(FOXAPI_FAILED, "the radio refused the gain");
             }
             // THE READBACK, not the request: every one of these radios
@@ -8443,8 +8490,10 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             for (std::size_t i = 0; i < rx().deviceGainNames_.size() && i < rx().deviceGainsDb_.size(); ++i) {
                 if (rx().deviceGainNames_[i] != text) { continue; }
                 rx().deviceGainsDb_[i] = static_cast<float>(c.num[0]);
+                rre::RefusalWatch refusalWatch;
                 if (!rx().device_->setGainDb(text, static_cast<double>(rx().deviceGainsDb_[i]))) {
                     rx().sourceError_ = rx().device_->lastError();
+                    refusalWatch.noteRefusalIfSilent(rx().device_, rx().sourceKind_.c_str(), rre::Control::Gain, rx().sourceError_);
                 } else {
                     airspyRememberOpen();  // a no-op for any radio but an Airspy
                 }
@@ -8466,9 +8515,13 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             return res;
         case FOXAPI_OP_SET_ANTENNA:
             if (rx().device_ == nullptr) { return refuse(FOXAPI_NO_DEVICE, "no radio is open"); }
-            if (!rx().device_->setAntenna(text)) {
-                rx().sourceError_ = rx().device_->lastError();
-                return refuse(FOXAPI_FAILED, "the radio refused the antenna");
+            {
+                rre::RefusalWatch antennaWatch;
+                if (!rx().device_->setAntenna(text)) {
+                    rx().sourceError_ = rx().device_->lastError();
+                    antennaWatch.noteRefusalIfSilent(rx().device_, rx().sourceKind_.c_str(), rre::Control::Antenna, rx().sourceError_);
+                    return refuse(FOXAPI_FAILED, "the radio refused the antenna");
+                }
             }
             rx().deviceAntenna_ = rx().device_->antenna();  // readback, not the request
             return res;
@@ -8493,14 +8546,16 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if (text == "rf_notch" && rx().deviceRfNotchPresent_) {
                 rx().deviceRfNotch_ = on;
                 withRfNotch(rx().device_, [this](auto& d) {
-                    if (!d.setRfNotch(rx().deviceRfNotch_)) { rx().sourceError_ = d.lastError(); }
+                    rre::RefusalWatch watch;
+                    if (!d.setRfNotch(rx().deviceRfNotch_)) { rx().sourceError_ = d.lastError(); watch.noteRefusalIfSilent(rx().device_, rx().sourceKind_.c_str(), rre::Control::Other, rx().sourceError_); }
                     rx().deviceRfNotch_ = d.rfNotch();
                     return true;
                 });
             } else if (text == "dab_notch" && rx().deviceDabNotchPresent_) {
                 rx().deviceDabNotch_ = on;
                 withDabNotch(rx().device_, [this](auto& d) {
-                    if (!d.setDabNotch(rx().deviceDabNotch_)) { rx().sourceError_ = d.lastError(); }
+                    rre::RefusalWatch watch;
+                    if (!d.setDabNotch(rx().deviceDabNotch_)) { rx().sourceError_ = d.lastError(); watch.noteRefusalIfSilent(rx().device_, rx().sourceKind_.c_str(), rre::Control::Other, rx().sourceError_); }
                     rx().deviceDabNotch_ = d.dabNotch();
                     return true;
                 });
@@ -8509,8 +8564,9 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 if (c.ival[0] < 0 || c.ival[0] > 3) { return refuse(FOXAPI_OUT_OF_RANGE, "direct sampling is 0 automatic, 1 never, 2 the I branch or 3 the Q branch"); }
                 bool took = false;
                 withDirectSampling(rx().device_, [this, &c, &took](auto& d) {
+                    rre::RefusalWatch watch;
                     took = d.setDirectSamplingChoice(static_cast<int>(c.ival[0]));
-                    if (!took) { rx().sourceError_ = d.lastError(); }
+                    if (!took) { rx().sourceError_ = d.lastError(); watch.noteRefusalIfSilent(rx().device_, rx().sourceKind_.c_str(), rre::Control::DirectSampling, rx().sourceError_); }
                     rx().deviceDirectChoice_ = d.directSamplingChoice();
                     return true;
                 });
@@ -8521,8 +8577,9 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 if (c.ival[0] < 0 || c.ival[0] > 100000000) { return refuse(FOXAPI_OUT_OF_RANGE, "the analogue IF bandwidth is 0 (automatic) or 300 kHz to 8 MHz"); }
                 bool took = false;
                 withIfBandwidth(rx().device_, [this, &c, &took](auto& d) {
+                    rre::RefusalWatch watch;
                     took = d.setIfBandwidthHz(static_cast<int>(c.ival[0]));
-                    if (!took) { rx().sourceError_ = d.lastError(); }
+                    if (!took) { rx().sourceError_ = d.lastError(); watch.noteRefusalIfSilent(rx().device_, rx().sourceKind_.c_str(), rre::Control::Bandwidth, rx().sourceError_); }
                     rx().deviceIfBw_ = d.ifBandwidthHz();
                     return true;
                 });
@@ -8531,28 +8588,32 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             } else if (text == "offset_tuning" && rx().deviceOffsetTuningPresent_) {
                 rx().deviceOffsetTuning_ = on;
                 withOffsetTuning(rx().device_, [this](auto& d) {
-                    if (!d.setOffsetTuning(rx().deviceOffsetTuning_)) { rx().sourceError_ = d.lastError(); }
+                    rre::RefusalWatch watch;
+                    if (!d.setOffsetTuning(rx().deviceOffsetTuning_)) { rx().sourceError_ = d.lastError(); watch.noteRefusalIfSilent(rx().device_, rx().sourceKind_.c_str(), rre::Control::Other, rx().sourceError_); }
                     rx().deviceOffsetTuning_ = d.offsetTuning();
                     return true;
                 });
             } else if (text == "hdr" && rx().deviceHdrPresent_) {
                 rx().deviceHdr_ = on;
                 withHdrMode(rx().device_, [this](auto& d) {
-                    if (!d.setHdrMode(rx().deviceHdr_)) { rx().sourceError_ = d.lastError(); }
+                    rre::RefusalWatch watch;
+                    if (!d.setHdrMode(rx().deviceHdr_)) { rx().sourceError_ = d.lastError(); watch.noteRefusalIfSilent(rx().device_, rx().sourceKind_.c_str(), rre::Control::Other, rx().sourceError_); }
                     rx().deviceHdr_ = d.hdrMode();
                     return true;
                 });
             } else if (text == "dither" && rx().deviceAdcSwitchesPresent_) {
                 rx().deviceDither_ = on;
                 withAdcSwitches(rx().device_, [this](auto& d) {
-                    if (!d.setDither(rx().deviceDither_)) { rx().sourceError_ = d.lastError(); }
+                    rre::RefusalWatch watch;
+                    if (!d.setDither(rx().deviceDither_)) { rx().sourceError_ = d.lastError(); watch.noteRefusalIfSilent(rx().device_, rx().sourceKind_.c_str(), rre::Control::Other, rx().sourceError_); }
                     rx().deviceDither_ = d.dither();
                     return true;
                 });
             } else if (text == "sdrplay_lowif" && dynamic_cast<cascade::source::SdrPlaySource*>(rx().device_) != nullptr) {
                 // The SDRplay's low-IF choice (G1-13, screen lane S5b): ival[0] 1 on, 0 off. OFF by default and never saved; unproven on a real radio. The first stream is checked and falls back to zero-IF (fact radio.N.sdrplay.lowIfNote).
                 auto* sp = dynamic_cast<cascade::source::SdrPlaySource*>(rx().device_);
-                if (!sp->setLowIf(c.ival[0] != 0)) { rx().sourceError_ = sp->lastError(); return refuse(FOXAPI_FAILED, rx().sourceError_.c_str()); }
+                rre::RefusalWatch watch;
+                if (!sp->setLowIf(c.ival[0] != 0)) { rx().sourceError_ = sp->lastError(); watch.noteRefusalIfSilent(rx().device_, rx().sourceKind_.c_str(), rre::Control::Other, rx().sourceError_); return refuse(FOXAPI_FAILED, rx().sourceError_.c_str()); }
                 res.applied[0] = sp->lowIfChosen() ? 1.0 : 0.0;
             } else if (text == "soapy_bandwidth" && rx().deviceSoapyPresent_) {
                 // The driver's own bandwidth in Hz (num[0]); the driver's range judges it and its readback is what comes back (G1-15a)
@@ -8560,8 +8621,9 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 bool took = false;
                 double applied = 0.0;
                 withSoapyDriver(rx().device_, [this, &c, &took, &applied](auto& d) {
+                    rre::RefusalWatch watch;
                     took = d.setBandwidthHz(c.num[0], &applied);
-                    if (!took) { rx().sourceError_ = d.lastError(); }
+                    if (!took) { rx().sourceError_ = d.lastError(); watch.noteRefusalIfSilent(rx().device_, rx().sourceKind_.c_str(), rre::Control::Bandwidth, rx().sourceError_); }
                     soapyFacts(d, rx().deviceSoapyFacts_);
                     return true;
                 });
@@ -8575,8 +8637,9 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 bool took = false;
                 std::string readback;
                 withSoapyDriver(rx().device_, [this, &body, eq, &took, &readback](auto& d) {
+                    rre::RefusalWatch watch;
                     took = d.writeSetting(body.substr(0, eq), body.substr(eq + 1), &readback);
-                    if (!took) { rx().sourceError_ = d.lastError(); }
+                    if (!took) { rx().sourceError_ = d.lastError(); watch.noteRefusalIfSilent(rx().device_, rx().sourceKind_.c_str(), rre::Control::Other, rx().sourceError_); }
                     soapyFacts(d, rx().deviceSoapyFacts_);
                     return true;
                 });
@@ -8585,7 +8648,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             } else if (text == "randomiser" && rx().deviceAdcSwitchesPresent_) {
                 rx().deviceRandomiser_ = on;
                 withAdcSwitches(rx().device_, [this](auto& d) {
-                    if (!d.setRandomiser(rx().deviceRandomiser_)) { rx().sourceError_ = d.lastError(); }
+                    rre::RefusalWatch watch;
+                    if (!d.setRandomiser(rx().deviceRandomiser_)) { rx().sourceError_ = d.lastError(); watch.noteRefusalIfSilent(rx().device_, rx().sourceKind_.c_str(), rre::Control::Other, rx().sourceError_); }
                     rx().deviceRandomiser_ = d.randomiser();
                     return true;
                 });
@@ -10307,6 +10371,8 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
                 kind.c_str(), rx().sourceError_.c_str());
             // THE ROUTE THAT WAS TAKEN, in the journal (radio reports, G6): the native driver refused and SoapySDR is tried.
             cascade::core::radioreport::noteRecovery(kind, args, "start", "routefallback", rx().sourceError_);
+            // and the native driver's own failure, as the radio_fail it is (the route taken afterwards is the recovery above)
+            reportFailedOpen(kind, args, rx().sourceError_, cascade::core::radioreport::Trigger::StartupRestore, /*superseded=*/false, cfg.sampleRateHz, restoreOpenMs);
             const std::string nativeKey = cascade::core::converterRadioKey(kind, args);
             kind = "soapy";
             args = fallbackSoapyArgs;
