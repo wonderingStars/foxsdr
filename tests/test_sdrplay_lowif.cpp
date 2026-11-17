@@ -13,10 +13,16 @@
 #include <chrono>
 #include <complex>
 #include <cstdio>
+#include <filesystem>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
+#include "core/radio_events.hpp"
+#include "core/radio_reporter.hpp"
 #include "sdrplay_fake_api.hpp"
 #include "source/sdrplay_if_mode.hpp"
 #include "source/sdrplay_source.hpp"
@@ -26,8 +32,56 @@ using cascade::source::SdrPlaySource;
 using fakesdrplay::FakeSdrPlayApi;
 namespace abi = cascade::source::sdrplay_abi;
 namespace src_ns = cascade::source;
+namespace rr = cascade::core::radioreport;
+namespace fs = std::filesystem;
 
 namespace {
+
+// The radio reporter over a stand-in transport and a temporary folder (error-path third reading): the fall-back below is a radio's setting that did not take, and is said to the owner.
+struct ReportRig {
+    fs::path dir;
+    std::mutex mu;
+    std::vector<std::string> bodies;
+    ReportRig() {
+        dir = fs::temp_directory_path() / ("lowif-" + rr::randomHex(8));
+        fs::create_directories(dir);
+        rr::Reporter::Options o;
+        o.dir = (dir / "radio-reports").string();
+        o.endpoint = "http://127.0.0.1:9/";
+        o.liveSend = true;
+        o.transport = [this](const std::string&, const std::string& body) {
+            std::lock_guard<std::mutex> lk(mu);
+            bodies.push_back(body);
+            return rr::PostResult{true, 204, 0, ""};
+        };
+        o.identity.installId = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+        o.identity.version = "0.99.109";
+        o.identity.os = "Windows 10.0.22631";
+        o.identity.arch = "x64";
+        o.identity.launches = 3;
+        rr::global().configure(o);
+    }
+    ~ReportRig() {
+        rr::global().shutdown();
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+    // how many radio_settings messages the reporter sends now whose reason says the low-IF mode fell back
+    int fallBackReports() {
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            bodies.clear();
+        }
+        rr::global().runBatchNow();
+        std::lock_guard<std::mutex> lk(mu);
+        int n = 0;
+        for (const std::string& b : bodies) {
+            const nlohmann::json m = nlohmann::json::parse(b);
+            if (m.value("kind", std::string()) == "radio_settings" && m["body"].value("reason", std::string()).find("low-IF fell back to zero-IF") != std::string::npos) { ++n; }
+        }
+        return n;
+    }
+};
 
 bool openOn(SdrPlaySource& src, FakeSdrPlayApi& fake) {
     src.setApiForTest(&fake.table);
@@ -212,6 +266,42 @@ int main() {
             CHECK(src.supportedSampleRatesHz() == src_ns::sdrPlaySupportedRatesHz());
             src.stop();
             src.closeDevice();
+        }
+        // C2b: the same fall-back is a REPORT: the person switched low-IF on and the radio did not deliver it. Said once, once the stream has been checked, and not at all when low-IF holds.
+        {
+            ReportRig rig;
+            FakeSdrPlayApi fake;
+            fake.addDevice("1811003EFB", abi::kRsp1A);
+            SdrPlaySource src;
+            src.setLowIfCheckSecondsForTest(0.6);
+            CHECK(openOn(src, fake));
+            rr::registerSource(&src, rr::identify("sdrplay", "serial=1811003EFB"));
+            CHECK(src.setLowIf(true));
+            CHECK(src.setSampleRateHz(rate));
+            CHECK(src.start());
+            deliver(fake, src, rate, 1.4);   // low-IF holds: nothing said (the check measures the stream's own pace, so a machine too loaded to deliver it is a fall-back and IS said: the invariant is one report exactly when it fell back)
+            CHECK(rig.fallBackReports() == (src.lowIfChosen() ? 0 : 1));
+            src.stop();
+            src.closeDevice();
+            rr::forgetRadio(rr::identify("sdrplay", "serial=1811003EFB").key);
+        }
+        {
+            ReportRig rig;
+            FakeSdrPlayApi fake;
+            fake.addDevice("1811003EFB", abi::kRsp1A);
+            SdrPlaySource src;
+            src.setLowIfCheckSecondsForTest(0.6);
+            CHECK(openOn(src, fake));
+            rr::registerSource(&src, rr::identify("sdrplay", "serial=1811003EFC"));
+            CHECK(src.setLowIf(true));
+            CHECK(src.setSampleRateHz(rate));
+            CHECK(src.start());
+            deliver(fake, src, plan.fsHz, 1.4);   // the ADC rate arrives: back to zero-IF
+            CHECK(!src.lowIfChosen());
+            CHECK(rig.fallBackReports() == 1);
+            src.stop();
+            src.closeDevice();
+            rr::forgetRadio(rr::identify("sdrplay", "serial=1811003EFC").key);
         }
         // C3: some other rate also falls back
         {
