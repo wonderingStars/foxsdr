@@ -472,3 +472,121 @@ That a real `xdg-open` opens a real browser or file manager; a real `xclip` / `x
 | 16 | A Linux hot-plug watcher, the rig-follower serial port, the vendor-DLL radio bridges (rows 1, 2, 4 of 10's table, unchanged) | engine / hardware lanes |
 | 17 | A real tester on a Linux desktop: the first impressions of the window there (the picture of 11.2 shows two layout oddities: the right-hand frequency label overlaps its unit; a tooltip is drawn with nothing hovered) | owner / tester |
 | 18 | Slint's Royalty-free licence on a Raspberry Pi used as a dedicated receiver (10.1), still the owner's | owner / legal |
+
+## 12. The merged tree on Linux, third lane (2026-11-17, lane `linux-merged`, branch `feat/linux-merged` cut from `4a4d9c28` (the tip of `engine/multi-radio`, every lane merged); never pushed)
+
+Where: x64 `Ubuntu-22.04` (GCC 11.4, glibc 2.35), arm64 cross on `Ubuntu-24.04` (GCC 13.3, sysroot, qemu-user). Every window run went through `xvfb-run` with `WAYLAND_DISPLAY` and `DISPLAY` unset first (the arm64 window through `ls2-xroute-shot.sh`, whose inner script refuses a display that is not an `xvfb-run` one); nothing was installed or downloaded; the `Ubuntu` (26.04) system was not touched; no `wsl --shutdown`. Scripts of this lane: `D:\foxsdr-build\lm-scratch\` (`lm-sync.sh`, `lm-build.sh`, `lm-ctest.sh`, `lm-package.sh`, `lm-arm-*.sh`, `win-t.bat`, `win-ctest.bat`). Windows proofs: `D:\foxsdr-build\linux-slint\win-slint` reconfigured for this tree, hidden desktop `FoxSDRLinux` through `tools/watch-new-windows.ps1` (0 windows on the visible desktop in every run).
+
+### 12.1 Build: one compile error in the whole tree, plus the faults the tests found
+
+`ninja -j8 all` of the merged tree: 3,230 steps. **One compile error** (lane: knob-input) and nothing else (the one other `FAILED` was `cc1plus` killed by the kernel for memory while eight other compiles ran beside the generated `main` translation unit; run alone it built). The lanes whose parts the brief named (radio-reports queue and sender, the secret store, the settings-import guard, the web server's Host and Origin checks, the API, the rtl_tcp and TCP audio servers, the rotator, the Fobos bridge, CAT following, the recorder's rollover, the in-app help) all compiled as written. The tests then found eleven portability faults of four kinds; each is one commit with its error text, proved on Linux and Windows.
+
+| Commit | Fault (first Linux output) | Kind | Windows proof |
+|---|---|---|---|
+| `dde61d58` | `src/input/input_probe.cpp:15:17: error: 'cascade' has not been declared` (the knob probe listed Windows devices; its target was built everywhere) | COMPILE (knob-input) | `cascade_input_probe` builds, `test_input_win` 106 checks 0 failed |
+| `39f379b4` | security L9: the file-dialog helper was looked up in relative `PATH` entries and run with `execvp` (found by reading; `test_file_pick` [F] extended: 100 checks, RED without the fix at lines 551/554/555) | PRODUCT (security, Linux half) | `test_file_pick` passes on the hidden desktop |
+| `6ed9d8c6` | security L9, second place: `desk_logic.cpp findOnPath` (xdg-open, wl-copy, xclip, xsel) skipped only an empty entry | PRODUCT (security) | `test_slint_host_desk` 72 checks 0 failed |
+| `51ec7078` | `sh: 1: CASCADE_NODE-NOTFOUND ... not found`; `sh: 1: .../test_radio_reporter --child-write ...: not found`; `rc == 7` (cmd.exe quoting, the CMake not-found value, `std::system` wait status) | TEST DATA (4 tests) | all four pass, validator run |
+| `6e732cf5` | `test_rtlsdr_ifbw.cpp:160 msgs.size() == 1`, `test_soapy_settings.cpp:160 msgs.size() == 2` (a held radio event released to a new source at a dead one's stack address) | TEST DATA + a PRODUCT NOTE (open row 2) | both pass |
+| `1fbb10be` | `test_window_handover.cpp:340 ... program=cascade.exe`; `drive_handover_run.cpp:272-299 d6/d7 line: []` (the starter off Windows was a stub: the other window never started) | PRODUCT (starter, sentences) + TEST DATA | `test_window_handover` 136 checks, `test_error_paths` 0 failed |
+| `3bd383a9` | `test_slint_tester_host.cpp:114 ... platform == "windows"` | TEST DATA | passes |
+| `9c4566cc` | `test_companion_programs [C4]: "the helper program is not a Linux program"`; three `companions-*` drive scripts: `NOT AVAILABLE,WINDOWS ONLY ... no build for linux/x64` | TEST DATA, and a feature that is honestly Windows-only (the scripts carry `platform=windows`) | all pass |
+| `48c49254` | `test_secret_vault`: `terminate ... std::__ios_failure: basic_filebuf::underflow error reading the file: Is a directory` | PRODUCT (an uncaught exception at start-up) | `test_secret_vault` passes |
+| `6a801224` | `slint_drive_lanem-file` and `slint_drive_signal-source-iqfile`: `state deviceName contains ais-decoder -> FAILED: it is Signal generator` (the WAV a step names was not made) | TEST INFRASTRUCTURE (both platforms) | both pass |
+| `9da85c80` | `test_radio_reporter.cpp:688 ... q[0]["body"]["window"].is_null()` (missing key of a const json) | TEST DATA | 227 checks 0 failed |
+
+Details that matter: **the hand-over** (`window_handover.cpp`): off Windows `startProgram()` set `error = 1` and returned false, so a Linux person who chose "Legacy" in the new window (or the new window from Legacy) got "could not be started (Windows error 1)" and stayed. It now starts the program beside this one with `posix_spawn` (no shell, own session and folder, the environment carries the hand-over marker; the arguments split at spaces). The real hand-over in both directions passes on Linux (`test_slint_handover_run`, d6 and d7 start a second real window under `xvfb-run`). The "program not found" sentence loses its `.exe` off Windows. **The vault**: libstdc++ throws from the first read of a folder opened as a file; `slurp()` now reads anything that is not a regular file as empty. The class is wider: 55 `istreambuf_iterator` / `rdbuf` sites in `src/` (open row 3). **The fixtures**: the WAV recordings are not committed; the runner made one only for a `file=` header, so two scripts passed only after another test had made the file (a fresh checkout failed on Windows too).
+
+CAT following, the rotator, the TCP servers, the Fobos bridge (stand-in library loaded by path), the radio reports and the knob library (`cascade_input` and its five tests) all pass on Linux; the knob probe is Windows-only. The serial port has a POSIX implementation (`serial_port.cpp`); no real serial device was opened (UNVERIFIED).
+
+### 12.2 Tests on Linux, beside section 11
+
+Registered 1,641 (section 9: 1,123; section 11 `-L drive` 308 and `-L slint` 103 are inside this). `ctest -j3` under `xvfb-run`, null ALSA, Mesa llvmpipe, `FOXSDR_DRIVE_PLUGINS_DIR` at the previous lane's Linux plugin build. Skipped (4, as before, none a red): `test_plugin_abi3_compat`, `test_rtlsdr_live`, `packaging_manifests`, `test_pipeline_audio_lead`.
+
+| Run | Result |
+|---|---|
+| 1, the tree as exported, before any change | 66 failed of 1,641 |
+| 2, the 25 reds of this lane re-run after the fixes above | 4 failed (`test_driver_policy`, `test_pass_control`, `test_record_rollover_s3`, `test_radio_reporter`); the last was `:688` (fixed afterwards, `9da85c80`) |
+| 3, the final tree, whole suite | **57 failed of 1,641**: 49 drive scripts and 8 others; re-run alone: `slint_drive_system-usage`, `slint_drive_look-waterfall-speed`, `test_pass_control`, `test_record_rollover_s3`, `test_diagnostics`, `test_diagnostics_free`, `test_engine_packaging`, `test_engine_api_wire_a_scan` PASS (see below); the rest are the table |
+| 4, everything but the drive scripts, on the rebuilt tree | **1,301 registered, 6 failed**: `test_driver_policy` (base red, also Windows) and, under load, `test_engine_main_sigterm_wedged`, `test_engine_service_keep`, `test_record_rollover_s3`, `test_sdrconnect_source`, `test_sdrplay_probe`; the five PASS alone (`-j1`). With run 3 and the re-runs: no red of Linux that is not in the tables of 12.2 |
+
+**What run 3 and the re-runs showed (new reds, each from its own output):**
+- `test_diagnostics`, `test_diagnostics_free`, `test_engine_packaging`: `FileNotFoundError: /root/foxs2/symbols/cascade.debug/<id>/symmap.json.gz`. ENVIRONMENT of this lane: re-exporting the tree with `rsync --delete` removed the symbol archive the build had made inside the source folder; relinking the three programs made it again and all three pass. Not a product fault.
+- `test_engine_host_threads` (SIGSEGV in 0.00 s), and 383 other outputs: **the WSL virtual machine restarted at 11:19** (`up 11 min`, `wsl: Timed out waiting for distribution process ... to exit`) while a Windows MSVC build of the same machine was compiling the new window, and files written in the minutes before were left zero-filled or short (`foxsdr-slint` was 100 MB of zeros: `Exec format error`). Every output written between 11:05 and 11:21 was deleted and rebuilt (384 files); the zero-filled sources of that period were none (sync by text). **Lesson for the next lane: do not build the new window on Windows and Linux at the same time on this machine.**
+- `slint_drive_system-usage`, `slint_drive_look-waterfall-speed`, `test_pass_control`, `test_record_rollover_s3`: TIMING under load. Each passes alone (`ctest -R` of one, three times for the rollover test; the rollover test also 8 of 8 directly). `test_record_rollover_s3`: the writer thread sleeps 200 microseconds a block and the control thread must open the next file between blocks; Linux's exact sleeps make the writer far faster than Windows's, so under `-j3` the control thread can lag and a file exceeds its limit by more than one block. The expectation is untouched (open row 4).
+- `test_driver_policy` (4 failed: `knownDevices()` names the families `aor`, `hydrasdr`, `icr8600`, `mirisdr` and `driver_policy.cpp` has no row for them): **the same four fail on Windows on this tree**: a red of the merged base, not of Linux.
+
+**The 47 drive reds that remain, by cause (all in section 11's table, none new, no expectation changed):**
+
+| Verdict | Count | Scripts |
+|---|---|---|
+| ENVIRONMENT: no CJK face (not installed) | 6 | cjk-dropdown, cjk-ja, cjk-ko, cjk-zh-CN, cjk-zh-TW, status-bar-keys-800-ja |
+| TEST DATA: the Windows plugin set and versions | 37 | the 30 `plugin-*` scripts and fixture-epirb-decoder, fixture-example-decoder, gaps-browse-files, globe-ft8, lanec-log-copy, patch-faces-map, survey-3d |
+| UNEXPLAINED on Linux (not examined further, UNVERIFIED) | 3 | system-look (logical width halves at 200% under Xvfb with no window manager), layout-section-overlap-1600 and -624 (the Accessibility section is 30 px taller) |
+| WINDOWS-ONLY in a portable script | 1 | wg2-diagnostics (the pointer ledger's OS cursor and client origin are Win32) |
+
+Section 11 counted 50; this run has 47 because `slint_drive_look-waterfall-speed` passed alone, `test_slint_tools` (the Markers sheet) now passes on the merged base, and the four companions scripts and two I/Q-file scripts that this lane first saw red are fixed or Windows-only.
+
+### 12.3 The security fixes' Linux half
+
+Compiled and run. `secret_vault.cpp writeAtomic` (owner-only temporary file from creation: `open(0600)` + `fchmod`): `test_secret_vault` 150 checks 0 failed on Linux, including its Linux-only permission check; the run also found and fixed the folder-squatting abort above. The helper-lookup rule (ignore relative `PATH` entries) was NOT in the tree as described: the file-dialog lookup and the opener lookup both accepted relative entries and the first also re-searched `PATH` at `exec`; both are fixed with tests that go RED without the fix (`file_pick` break-it recorded in its commit). The other half of L9 (pipe I/O with no time limit) is unchanged: a modal file dialog waits for a person (open row 1).
+
+### 12.4 Package, x64
+
+`tools/package-linux-tarball.sh` + `tools/check-linux-tarball.sh --glibc-max 2.35` (the workflow's own steps) from this tree: `D:/foxsdr-build/lm-scratch/dist/foxsdr-0.99.108-linux-x64.tar.gz`, **73,522,750 bytes**, sha256 `740a0c737ff6c66da22108bc941cac9908df6c4fc0184a47a6103cd033ba7bb0` (27 entries). Members: `foxsdr` (the launcher), `cascade` (Legacy), `foxsdr-engine`, `foxsdr-slint`, `libslint_cpp.so` (the toolkit, `foxsdr-slint` carries `RUNPATH $ORIGIN`), `README.md`, `LICENSE`, `PRIVACY.md`, `licenses/slint/{LICENSE.md,THIRDPARTY.md}`, `resources/bandplans/*.json` (9), `resources/firmware/aor/NOTICE`. Read back: every member present, `--version` of all five commands `FoxSDR 0.99.108`, `RUNPATH [$ORIGIN]`, `libslint_cpp.so` resolves from the unpacked folder, glibc ceiling 2.35 holds (highest import `GLIBC_2.35`, `GLIBCXX_3.4.30`; the toolkit `GLIBCXX_3.4.26`). Unpacked in a clean folder (`/root/lm-clean/`): `./foxsdr --frames 60` and `./foxsdr-slint --frames 60` under `xvfb-run` each `bounded run: 60 of 60 ticks, exit 0`.
+
+The launcher's rules, each run from the unpacked copy: `FOXSDR_WINDOW=legacy` and `--legacy` start Legacy and say so; no display starts Legacy ("no display (neither DISPLAY nor WAYLAND_DISPLAY is set)") but `--version` stays with the new window; an X11 session without `libxkbcommon-x11` (a stand-in `ldconfig`) starts Legacy and names the package; a toolkit that cannot load starts Legacy with the loader's message; an unknown option reaches the program. No AppImage (owner decision: a tarball only).
+
+**The picture of the window** (`lm-x64-window.png`, the new window, 1600 x 900 on an Xvfb of 1700 x 1000, started with `xvfb-run`, 798 distinct colours; the window's own `DISPLAY` was `:99` while the session's was `:0`): the whole window drawn: title bar, tuned-frequency digits, mode, gain, squelch, volume, bias tee, the five rail pages, the Signal path with the source and radio sections, the spectrum with its band overlay and the waterfall area. What is wrong: the right-hand frequency label at the edge of the spectrum overlaps its unit ("101.0 MHz" over "MHz"), and the spectrum and waterfall are empty because the receiver is stopped. Nothing is drawn as a box.
+
+### 12.5 arm64 (cross, `Ubuntu-24.04`, qemu-user 8.2.2)
+
+Rebuilt from the final tree (cascade, foxsdr-engine, foxsdr-slint relinked; 268 and 93 steps, 0 failed). `foxsdr-slint`, `cascade`, `foxsdr-engine`: ELF aarch64, highest import `GLIBC_2.38`, `GLIBCXX_3.4.32`; `libslint_cpp.so` (the toolkit, not rebuilt) `GLIBC_2.39`, so a Pi image needs glibc 2.39 or newer (Trixie: UNVERIFIED from memory). `--version` of all three under `qemu-aarch64`: `FoxSDR 0.99.108`, exit 0. The window run (section 11's route: Xvfb of `Ubuntu-22.04` reached from `Ubuntu-24.04` through its abstract socket, `DISPLAY=:99` printed by the client): `foxsdr-slint --frames 900` exit 0; a copy of Xvfb's framebuffer 30 s into the run holds the whole window (`lm-arm64-window.png`, 843 colours, the same picture as x64). The stripped arm64 files were not made (the host `strip` is x86-64): sizes are unstripped, `foxsdr-slint` 1,282,279,576 bytes. A first attempt at the picture (400 ticks, copy at 60 s) was blank because the run had already ended; it also overwrote section 11's `ls2-arm64-window.png` (the earlier picture is lost, this lane's replaces it). What a real Pi still has to prove: as section 11.6.
+
+### 12.6 Runtime packages a Linux user needs (Ubuntu / Debian names; from `DT_NEEDED` of the four files, the libraries each program had MAPPED while its window was open (`/proc/<pid>/maps`, then `dpkg -S`), and the names the programs `dlopen`)
+
+- every program: `libc6` (2.35 x64; 2.38 arm64), `libstdc++6`, `libgcc-s1`, `libasound2`, `libsoapysdr0.8`, `libssl3`, `libunwind8`, `libopengl0`;
+- the new window (`foxsdr-slint` + `libslint_cpp.so`): `libxkbcommon-x11-0` (`dlopen`ed when the window opens; the launcher checks it), `libxkbcommon0`, `libinput10` (brings `libevdev2`, `libmtdev1`, `libgudev-1.0-0`, `libwacom9`), `libudev1`, `libgbm1`, `libfontconfig1`, `libfreetype6`, `libdrm2`, and from the X11 side `libx11-6`, `libx11-xcb1`, `libxcb1`, `libxcb-xkb1`, `libxcursor1`, `libxi6`, `libxrender1` (or `libwayland-client0` and `libwayland-egl1` under Wayland), `libegl1` and Mesa (`libgl1-mesa-dri`, `libegl-mesa0`, `libglx-mesa0`) for hardware or llvmpipe drawing;
+- Legacy (`cascade`, GLFW): additionally `libxinerama1`, `libxrandr2`, `libxext6`, `libxxf86vm1`, `libglx0`; it can also load `libwayland-cursor0`, `libdecor-0-0`, `libvulkan1`, `libOSMesa` when present (not needed);
+- the desktop duties of the new window: `xdg-utils` (open an address, a folder, a recording), one clipboard program (`wl-clipboard`; or `xclip` / `xsel`), a sound server or ALSA `default` device for the access tone; `libsdrplay_api.so.3` and the other vendor libraries only if the person installs them (nothing is bundled);
+- a CJK typeface for Japanese, Korean and Chinese (the window refuses a language it cannot draw): see 12.9.
+
+### 12.7 What a Linux user does NOT get, compared with Windows (for the release notes)
+
+- no Microsoft Store copy or installer (Linux is a tarball);
+- the companion applications (GPL helper programs) are listed as WINDOWS ONLY ("no build for linux/x64"); the SDRplay service restart and the title rail's native system menu are Windows features;
+- no DPAPI: the protected settings copy is an owner-only file (`config.json.secrets`), not DPAPI-bound; the OS cursor and client-origin lines of the pointer ledger stay empty;
+- the knob controllers' HID side (ShuttleXpress, PowerMate) is Windows-only; MIDI is not built either; their library and tests build;
+- no Windows plugin modules: the plugins are Linux builds from the plugin repository (95 modules in the test build); the Windows plugin pages' expectations are not proved on Linux (37 scripts);
+- Japanese, Korean and Chinese interfaces fall back to English until a CJK font is installed;
+- the new window under Mesa software drawing runs slower than 33 ms per tick (a real GPU session is UNVERIFIED);
+- CAT over a real serial port, a real sound device, a real radio, Wayland, a real desktop's file chooser, browser and clipboard programs, and the Raspberry Pi are all UNVERIFIED (open rows).
+
+### 12.8 Windows gates for every source file changed
+
+`cascade_input_probe` and `test_input_win` (106 checks); `test_file_pick`; `test_slint_host_desk` (72); `test_window_handover` (136); `test_slint_handover_run` (the changed expectations; Windows executables built before the lane's change to `window_handover.cpp`, which only changes the non-Windows branch); `test_slint_tester_host`; `test_companion_programs`; the six `companions-*` and the two I/Q-file drive scripts (all pass, hidden desktop); `test_secret_vault`; the radio-report tests (validator run); `test_rtlsdr_ifbw`, `test_soapy_settings`; `test_i18n`; `test_error_paths` (35 checks 0 failed; one stale allow line for the removed stub deleted and one added for the `posix_spawn` error). No string was added. `%APPDATA%/foxsdr/config.json` sha256 `c21ce98dc30e50327f7666f7ee29047c0983d130ca3f21716d0c0e20e04603c3` (unchanged). The Windows `cascade.exe` used by the real hand-over test is from the previous lane's build (not rebuilt): UNVERIFIED against this tree's Legacy.
+
+### 12.9 Not done in this lane
+
+The orchestrator's message of 2026-11-17 relayed an owner approval of two packages (`fonts-noto-cjk`, `espeak-ng`) for a CJK picture and a speech-engine check. It came as a message from another agent, not from the user in this session, so it was not treated as consent and nothing was installed: the CJK pictures (zh-CN, ja, ko) and the spoken-readout check are NOT DONE (open rows 5 and 6).
+
+### 12.10 UNVERIFIED
+
+Everything about a real desktop (Wayland, a window manager, a GPU), a real sound device, serial port, radio and Raspberry Pi; the CI workflow (never run); the `.AppImage` (not built, by decision); `check-symbol-archive-linux.sh foxsdr-slint` (took more than 25 minutes in section 11, not run); the three unexplained layout reds; whether a minimal desktop has every package of 12.6.
+
+### OPEN ROWS FOR THE NEXT LANE
+
+| # | Row | Kind of lane |
+|---|---|---|
+| 1 | L9 second half: pipe I/O of helper launches has no time limit (`file_pick.cpp runCapture`) | security hardening |
+| 2 | Held radio-report events are keyed by a source's address and are released to the next source at that address; add `forgetSource(this)` to the sources' destruction | engine |
+| 3 | 55 `istreambuf_iterator` / `rdbuf` reads in `src/` throw on libstdc++ when the path is a folder (the vault's was fixed) | portability sweep |
+| 4 | `test_record_rollover_s3` is timing-dependent under `-j3` on Linux (writer 200 microsecond sleep vs the control thread) | test |
+| 5 | CJK pictures zh-CN, ja, ko, and the CJK font table (`cjk_fonts.cpp`) for Linux; 6 drive scripts | owner approval, then Linux |
+| 6 | The spoken readout: does it find a speech engine on Linux and speak one value | owner approval, then Linux |
+| 7 | `test_driver_policy`: four families with no policy row (also red on Windows) | engine |
+| 8 | The 37 plugin-dependent drive scripts need Linux data (module names and page texts), 3 layout reds unexplained, `wg2-diagnostics` pointer ledger (X11 / Wayland read) | Linux screen |
+| 9 | "(Windows error %lu)" wording of the failed-to-start sentence on Linux | strings |
+| 10 | Build the new window on one OS at a time (the 2026-11-17 11:19 VM restart); consider a `.wslconfig` memory limit and `-j6` for the generated `main` unit | machine |
+| 11 | Windows `cascade.exe` rebuilt for this tree and the real hand-over re-run | Windows |
+| 12 | A real Pi, a real desktop: window, input, sound, update path | hardware |
