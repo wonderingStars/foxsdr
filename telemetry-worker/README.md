@@ -471,5 +471,7 @@ launch is ever counted.
   `installer/cascade.iss` until the release lane removes one semicolon (and the approved privacy wording covers it).
 - **`session_end` and `session_fault`** (no radio key) and the words `transfer`, `tuner`, `frequency`, `other`, `refusedClass`, `degraded` are in
   `radio-journal-spec.js`, which the site embeds a copy of (`test-fixtures/radio-journal-spec.json`).
-- **Deploy order is unchanged**: this Worker first (after `wrangler secret put RELAY_TOKEN`), then the site, then the application; the application's
-  `kRadioReportsLiveSend` and `kCompanionFaultReportsOn` are switched on only after both are live.
+- **Deploy order (changed at engine merge 11; the application now SENDS radio reports: `kRadioReportsLiveSend` is true)**: this Worker FIRST, after
+  `wrangler secret put RELAY_TOKEN`, deployed for the tester period WITHOUT a site address (`SITE_INTAKE_URL` unset): it validates every message and answers 503, so every copy of
+  the application keeps its messages and retries (1 min, 5 min, 1 h, then every 6 h, for 14 days). On release day: the site; then this Worker again WITH the
+  site address; then one real message proved end to end; then the public release. `kCompanionFaultReportsOn` stays off until its own lane.
