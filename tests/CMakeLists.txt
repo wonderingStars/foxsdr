@@ -1401,9 +1401,15 @@ endif()
 
 # THE RADIO REPORTS, APP SIDE (docs/multi-radio-records/radio-reports-app.md): these tests read the Worker's fixtures and, where node is found, hand
 # every message the app made to the Worker's own validator.
+# A node that is not found is the CMake value "CASCADE_NODE-NOTFOUND", which the tests would take for a program: it reaches them as an empty path (their SKIP line).
+if(CASCADE_NODE)
+    set(_cascade_node_path "${CASCADE_NODE}")
+else()
+    set(_cascade_node_path "")
+endif()
 foreach(_t IN ITEMS test_radio_report test_radio_reporter test_radio_reports_never_sent test_radio_reports_engine test_radio_events test_mustfix_b)
     if(TARGET ${_t})
-        target_compile_definitions(${_t} PRIVATE CASCADE_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" CASCADE_NODE_PATH="${CASCADE_NODE}")
+        target_compile_definitions(${_t} PRIVATE CASCADE_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" CASCADE_NODE_PATH="${_cascade_node_path}")
     endif()
 endforeach()
 # LANE X, G5-17: the browser page under touch input in a HEADLESS browser (tests/web_touch_drive.mjs through the DevTools protocol); a GUI-labelled test: it runs through the hidden-desktop launcher.

@@ -363,6 +363,16 @@ std::string wholeQueue(const std::string& dir) {
     return all;
 }
 
+// cmd.exe (std::system on Windows) strips ONE outer pair of quotes from a line that starts with a quote; sh reads that pair as a single word and finds no
+// such program. So the outer pair is Windows's alone.
+static std::string systemLine(const std::string& inner) {
+#if defined(_WIN32)
+    return "\"" + inner + "\"";
+#else
+    return inner;
+#endif
+}
+
 int validateWithWorker(const std::vector<json>& msgs) {
     // FOXSDR_DUMP_APP_MESSAGES=<file>: every message handed to the Worker's validator is also appended to that file, one JSON message a line. The website's
     // repository keeps the result as testdata/app-messages.jsonl and holds its own validators to it (must-fix lane E: what the application sends is what the site takes).
@@ -380,7 +390,7 @@ int validateWithWorker(const std::vector<json>& msgs) {
         for (const json& m : msgs) { f << m.dump(-1, ' ', false, json::error_handler_t::replace) << "\n"; }
     }
     const std::string script = std::string(CASCADE_SOURCE_ROOT) + "/tests/radio_reports_validate.mjs";
-    const std::string cmd = "\"\"" + node + "\" \"" + script + "\" \"" + in.string() + "\" > \"" + out.string() + "\"\"";
+    const std::string cmd = systemLine("\"" + node + "\" \"" + script + "\" \"" + in.string() + "\" > \"" + out.string() + "\"");
     const int rc = std::system(cmd.c_str());
     std::ifstream r(out);
     std::string line;
