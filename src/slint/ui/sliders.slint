@@ -31,6 +31,7 @@ export component Slider inherits Rectangle {
     in property <bool> enabled: true;
     in property <string> tooltip;
     in property <float> wheel-step: 0.05;       // one notch, one key press: 5 % of the range
+    in property <string> probe;                 // drive fixes 6: what FocusProbe.place says when the slider gets the focus ("" = nothing); the drive reads where Tab went
     in property <length> wheel-notch: 60px;     // the scroll delta that counts as one notch
     out property <bool> dragging: touch.pressed;
     callback changed(float);
@@ -128,6 +129,7 @@ export component Slider inherits Rectangle {
             return reject;
         }
         changed has-focus => {
+            if (self.has-focus && root.probe != "") { FocusProbe.place = root.probe; }
             // gained by Tab (no press) -> keyboard focus; gained by a press -> pointer focus; lost -> neither
             root.keyboard = self.has-focus && !root.pointer-focus;
             if (!self.has-focus) { root.pointer-focus = false; }
@@ -259,6 +261,7 @@ export component SliderGroup inherits Rectangle {
         width: root.width;
         value: root.value;                      // the host's number flows in; the slider keeps the user's position itself
         enabled: root.enabled;
+        probe: "slider:" + root.caption;   // not-translated: the drive probe's own word
         tooltip: root.caption-elided ? root.caption.to-uppercase() + (root.tooltip != "" ? "  -  " + root.tooltip : "") : root.tooltip;
         accessible-label: root.caption;
         changed(v) => { root.changed(v); }

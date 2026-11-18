@@ -24,7 +24,7 @@
 //
 // Slint has no property inheritance, so SegGroup.small only sets the height of the group itself; give each SegKey
 // the same `small`. Slint has no dashed border either: a disabled key border is drawn at half alpha instead.
-import { Theme } from "theme.slint";
+import { Theme, FocusProbe } from "theme.slint";
 import { TipTimer } from "tooltip.slint";
 import { LampState } from "chips.slint";
 
@@ -33,6 +33,8 @@ import { LampState } from "chips.slint";
 // Theme.focus with 1 px clear of the key.
 component KeyScope inherits FocusScope {
     callback pressed();
+    in property <string> probe;   // drive fixes 6: the word FocusProbe.place takes when this key gets the focus ("" = say nothing); the drive reads where Tab went. Nothing reads it in a release.
+    changed has-focus => { if (self.has-focus && root.probe != "") { FocusProbe.place = root.probe; } }
     focus-on-click: false;
     focus-on-tab-navigation: true;
     key-pressed(event) => {
@@ -215,7 +217,7 @@ export component Key inherits Rectangle {
     // the focus ring shows only while the key holds the keyboard focus
     if fs.has-focus : FocusRing { key-w: root.width; key-h: root.height; key-radius: Theme.radius; }
 
-    fs := KeyScope { enabled: root.enabled; pressed => { root.clicked(); } }
+    fs := KeyScope { enabled: root.enabled; probe: "key:" + (root.label != "" ? root.label : root.tooltip); pressed => { root.clicked(); } }   // not-translated: the drive probe's own word
     area := TouchArea {
         mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
         clicked => { if (root.enabled) { root.clicked(); } }
@@ -431,7 +433,7 @@ export component StopKey inherits Rectangle {
         }
     }
     if fs.has-focus : FocusRing { key-w: root.width; key-h: root.height; key-radius: Theme.radius-dome; }
-    fs := KeyScope { enabled: root.enabled; pressed => { root.clicked(); } }
+    fs := KeyScope { enabled: root.enabled; probe: "stop"; pressed => { root.clicked(); } }
     area := TouchArea {
         mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
         clicked => { if (root.enabled) { root.clicked(); } }

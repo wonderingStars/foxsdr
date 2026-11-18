@@ -1,0 +1,32 @@
+#! frames=900 size=1920x1080 bank=2 sections=2:2
+# drive6-tab-chain-1920 (drive fixes 6, item 1; window 1920 wide): the owner's real-keyboard path. A field in a bank has the keyboard, the search box is pressed (the sheet opens), Escape closes it, and Tab goes on FROM THE SEARCH BOX: past the window keys to STOP, the lock, the frequency figures, the mode, the squelch slider and its AUTO key, VOLUME (GAIN and BIAS TEE are disabled on the signal generator: not in the ring, by design), then on into the page. Before the fix the keyboard went back to the bank's field and Tab walked the side panel instead. state focus.place names where Tab went (ui/theme.slint FocusProbe).
+10 state running == 1
++1 press "Bookmark name"
++3 press "Find a setting, plugin, frequency or bookmark… (Ctrl K)"
++5 key escape
++5 key tab
++2 state focus.place == "key:Layouts"
++2 key tab
++2 key tab
++2 key tab
++2 key tab
++2 key tab
++2 state focus.place == stop
++2 key tab
++2 state focus.place == "key:Lock the frequency"
++2 key tab
++2 state focus.place == counter
++2 key tab
++2 key tab
++2 key tab
++2 key tab
++2 key tab
++2 key tab
++2 key tab
++2 key tab
++2 key tab
++2 state focus.place == "slider:Squelch"
++2 key tab
++2 state focus.place == "auto:Squelch"
++2 key tab
++2 state focus.place == "slider:VOLUME"
