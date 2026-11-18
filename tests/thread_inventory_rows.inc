@@ -193,4 +193,6 @@ const Row kRows[] = {
     {"src/engine/cat_link.cpp", 1, 0, 0, 0, "",
      "radios follow-on (screen lane S5b, the CAT link): one worker per link, started only when the person chooses follow, emulate or OmniRig and gives a port, ended by stop() (the stop flag, then join) or by the engine closing; its loops check the stop flag on every pass and read the serial port 50 ms at a time (sleeps are 10 ms slices), and it publishes its state as text, so a stalled port only leaves the link saying so - NOT COVERED by a heartbeat (nothing the engine waits on: the engine's own passes never wait for it)"},
     {"src/source/fobos_source.cpp", 1, 0, 0, 0, "", R_DRIVER},
+    {"src/slint/tests/test_slint_window_guard.cpp", 1, 0, 0, 0, "",
+     "engine merge 12 (the window guard test): one short-lived thread that stands for another program calling SetWindowPos on the test window; the test pumps messages until it is done (10 s at most) and joins it before returning, so it is a finite test helper, not a loop that can stall"},
 };

@@ -418,8 +418,13 @@ int main() {
         // the group keys
         e = hit(x0b + 40, Tb + 250);
         CHECKV(e.name == "bookmark-export", "Export for SDR#: '%s'", e.name.c_str());
+        // Removing a group asks first (fix/drive-3, item 4): the first press changes the key's words and sends nothing, the second sends the removal
         e = hit(x0b + 150, Tb + 250);
-        CHECKV(e.name == "bookmark-remove-group", "Remove this group: '%s'", e.name.c_str());
+        CHECKV(e.name.empty(), "Remove this group, first press, asks and sends nothing: '%s'", e.name.c_str());
+        // the longer words ("Yes, delete this group and its N bookmark(s)") take a line of their own, so the key moves down to Tb + 273 (measured from a shot of the asked state: Export 250,
+        // the asked key 273, Rename 298, the first row 23 px lower); the second press lands there, and the key is back in its first place afterwards
+        e = hit(x0b + 150, Tb + 273);
+        CHECKV(e.name == "bookmark-remove-group", "Remove this group, second press: '%s'", e.name.c_str());
         // ---- the rows ----
         e = hit(x0b + 28, rt + kPitch + 12);
         CHECKV(e.name == "bookmark-favourite" && e.args == "12 1", "a dot asks for a star: '%s' '%s'", e.name.c_str(), e.args.c_str());

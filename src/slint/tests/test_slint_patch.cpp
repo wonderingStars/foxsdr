@@ -812,7 +812,10 @@ int main() {
         // the centre box: field ground, mono, right-aligned, " MHz" after the figure; Enter or the focus leaving commits
         const int bx = fx, by = fy + 24 + 3;
         CHECK(f.near(bx + 4, by + 12, field, 3));
-        CHECK(f.countNear(bx + 100, by + 3, bx + 177, by + 21, fg, 40) > 30);                                           // the figure and its suffix
+        // The box still holds the focus from the Delete check above (a click on the empty canvas does not move it), and a number field selects all when it takes the focus (fix/drive-3,
+        // item 12), so the figure is drawn in the selection's ink (accent-ink on accent) and only the suffix keeps the plain ink. Before that change the whole region was plain ink (> 30).
+        CHECK(f.countNear(bx + 100, by + 3, bx + 177, by + 21, accentInk, 40) > 10);                                    // the selected figure
+        CHECK(f.countNear(bx + 100, by + 3, bx + 177, by + 21, accentInk, 40) + f.countNear(bx + 100, by + 3, bx + 177, by + 21, fg, 40) > 30);   // the figure and its suffix
         typeInto(bx + 60, by + 12, "145.5", true);
         CHECKV(isOnly(quiet(evs), "face-centre 1 145.5"), "%s", join(quiet(evs)).c_str());
         typeInto(bx + 60, by + 12, "88.8", false);
