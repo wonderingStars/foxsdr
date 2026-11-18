@@ -2585,6 +2585,24 @@ void theVerdictAndThePlan() {
     f.t.lists[FOXAPI_LIST_PATCH_PROBLEMS].clear();
     f.tickBump();
     CHECK(f.page.infoModel().runnable);
+    // DRIVE FIXES 4, ITEM 3 (RETEST-a): a plugin that STARTED and prints its own error sentence is not "refused" and the engine's fact says runnable; the node shows the error, so the verdict does too
+    f.t.add(FOXAPI_LIST_PATCH_LIVE, c.decoder, "", "ADSB error: sample rate 0.048 MS/s is below the 2 MS/s minimum", 0, 1, 0, 4);
+    f.tickBump();
+    m = f.page.infoModel();
+    CHECK(!m.runnable);
+    EQ(m.verdict, std::string("This patch cannot run."));
+    // an ordinary decoded line that merely contains the word is not an error line, and the verdict follows the newest line
+    std::snprintf(f.t.lists[FOXAPI_LIST_PATCH_LIVE].back().detail, sizeof(f.t.lists[FOXAPI_LIST_PATCH_LIVE].back().detail), "%s", "Terror: alert for flight 12");
+    f.tickBump();
+    CHECK(f.page.infoModel().runnable);
+    f.t.lists[FOXAPI_LIST_PATCH_LIVE].clear();
+    // a radio's own error note, and a speaker's error line, are shown on their nodes and read as errors too
+    f.t.add(FOXAPI_LIST_PATCH_RADIOS, c.radio, "Airspy", "the device refused that frequency", 0, 0, 0, 0);
+    f.tickBump();
+    CHECK(!f.page.infoModel().runnable);
+    f.t.lists[FOXAPI_LIST_PATCH_RADIOS].clear();
+    f.tickBump();
+    CHECK(f.page.infoModel().runnable);
     // the first channel's decimation, however many there are
     f.t.add(FOXAPI_LIST_PATCH_PLAN, 99, "", "channel", 0, 0, 12000, 7, 1);
     f.tickBump();

@@ -529,6 +529,10 @@ public:
     // What the NEXT beat will carry, exactly: the beat with the radios only while radioreport::kBeatCarriesRadios (and the live send) is true, and the test marker when this is a
     // test run. poll() posts this and nothing else.
     std::string nextBeatJson() const;
+    // A TEST'S TRANSPORT: when set, poll() hands the beat to it instead of the network, so the schedule and the body can be held to the approved text with a mock
+    // clock and nothing sent. The real transport (postJson) is https-only, like the update check: a beat to a plain http address is dropped before any connection.
+    using Transport = std::function<bool(const std::string& url, const std::string& json)>;
+    void setTransportForTest(Transport t) { transport_ = std::move(t); }
 
 private:
     std::string url_;
@@ -536,6 +540,7 @@ private:
     std::string v_;
     std::uint64_t interval_ = 300;
     std::vector<std::string> radios_;
+    Transport transport_;
     bool configured_ = false;
     bool firstSent_ = false;
     double nextAt_ = 0.0;

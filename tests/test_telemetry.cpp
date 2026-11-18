@@ -17,10 +17,12 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -491,6 +493,77 @@ void testBeatScheduleFiresImmediatelyThenAtInterval() {
     CHECK(h.due(1301.0));
 }
 
+// DRIVE FIXES 4, item 1: a real user's copy (usage reporting on, a valid id, an https address) sends its "still running" beat on the FIRST poll after
+// it is armed and then every five minutes by the clock, and the body is exactly the three approved fields. Mock clock, mock transport: nothing is sent.
+// WHY THIS EXISTS: the end-to-end test pointed the application at a plain http loopback Worker and saw no beat in six minutes; the real transport
+// (postJson) refuses every non-https address before any connection, so that run could not have shown one. The schedule itself was never broken.
+void testBeatSendsOnTheApprovedScheduleWithAMockClock() {
+    std::vector<std::pair<double, std::string>> sent;
+    std::atomic<double> clock{0.0};
+    auto waitForSend = [&](std::size_t n) {
+        for (int i = 0; i < 400 && sent.size() < n; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+    };
+    std::mutex m;
+    const std::string id = newInstallId();
+    HeartbeatSender h;
+    h.setTransportForTest([&](const std::string& url, const std::string& json) {
+        std::lock_guard<std::mutex> lk(m);
+        sent.emplace_back(clock, url + " " + json);
+        return true;
+    });
+    h.configure("https://telemetry.example.invalid/", id, "0.99.109");   // the DEFAULT interval, as the engine arms it
+    h.poll(0.0);                                                         // the first pass after start-up
+    waitForSend(1);
+    { std::lock_guard<std::mutex> lk(m); CHECK(sent.size() == 1); }
+    // Between the beats nothing is sent (poll every "frame" for 299 s).
+    for (double t = 1.0; t < 300.0; t += 1.0) { clock = t; h.poll(t); }
+    { std::lock_guard<std::mutex> lk(m); CHECK(sent.size() == 1); }
+    clock = 300.0;
+    h.poll(300.0);                                                       // five minutes: the second beat
+    waitForSend(2);
+    { std::lock_guard<std::mutex> lk(m); CHECK(sent.size() == 2); }
+    clock = 599.0; h.poll(599.0);
+    clock = 600.0; h.poll(600.0);                                        // ten minutes: the third
+    waitForSend(3);
+    std::lock_guard<std::mutex> lk(m);
+    CHECK(sent.size() == 3);
+    for (const auto& s : sent) {
+        const std::size_t sp = s.second.find(' ');
+        CHECK(s.second.substr(0, sp) == "https://telemetry.example.invalid/");
+        const nlohmann::json j = nlohmann::json::parse(s.second.substr(sp + 1));
+        std::set<std::string> keys;
+        for (auto it = j.begin(); it != j.end(); ++it) { keys.insert(it.key()); }
+        CHECK((keys == std::set<std::string>{"id", "v", "beat"} || keys == std::set<std::string>{"id", "v", "beat", "synthetic"}));
+        CHECK(j["id"] == id);
+        CHECK(j["beat"] == 1);
+    }
+    // The first beat falls at the first pass (second 0) and the next at second 300, not later.
+    CHECK(sent[0].first == 0.0);
+    CHECK(sent[1].first == 300.0);
+    CHECK(sent[2].first == 600.0);
+}
+
+// The same arming with usage reporting OFF (an empty id, what the opt-out leaves) sends nothing for an hour of passes.
+void testBeatSendsNothingWhenReportingIsOff() {
+    std::atomic<int> sent{0};
+    HeartbeatSender h;
+    h.setTransportForTest([&](const std::string&, const std::string&) { ++sent; return true; });
+    h.configure("https://telemetry.example.invalid/", "", "0.99.109");
+    for (double t = 0.0; t < 3600.0; t += 1.0) { h.poll(t); }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    CHECK(sent.load() == 0);
+}
+
+// The real transport drops a beat to a plain http address (the end-to-end run's address) and to nothing else: this is the line that made that run
+// show no beat. A beat is never sent in clear.
+void testBeatToPlainHttpIsDroppedByTheRealTransport() {
+    HeartbeatSender h;
+    h.configure("http://127.0.0.1:9/", newInstallId(), "0.99.109");
+    CHECK(h.due(0.0));
+    h.poll(0.0);   // posts through postJson: refused before any connection (nothing listens at port 9 either)
+    CHECK(!h.due(1.0));   // the schedule still advanced, as the header says
+}
+
 void testBeatRefusesToArmWithoutARealId() {
     // Opt-out clears the install id; configure() refusing anything that is
     // not exactly newInstallId()'s shape is what makes "off means off" hold
@@ -904,6 +977,9 @@ int main() {
     testBeatPayloadContainsOnlyTheAgreedFields();
     testBeatScheduleFiresImmediatelyThenAtInterval();
     testBeatRefusesToArmWithoutARealId();
+    testBeatSendsOnTheApprovedScheduleWithAMockClock();
+    testBeatSendsNothingWhenReportingIsOff();
+    testBeatToPlainHttpIsDroppedByTheRealTransport();
     testReportIsSentOncePerReport();
     testConcurrentClaimsLetExactlyOneSend();
     testClaimFailsOpen();

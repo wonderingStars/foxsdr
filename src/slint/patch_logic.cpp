@@ -1072,13 +1072,35 @@ PatchModel PatchPage::bandModel() const {
     return m;
 }
 
+namespace {
+// DRIVE FIXES 4, item 3: a plugin that STARTS and then says it cannot work (ADS-B on a 48 kHz Channel prints "ADSB error: sample rate ... is below the 2 MS/s minimum") is not
+// refused by the engine - create() succeeded - so the only place the error is shown is the node's own face line. A line reads as an error when the word "error" followed by a colon
+// stands at its start or after a space, in any case; every plugin's own error sentence follows that shape ("ADSB error: ...", "Error: ...").
+bool lineSaysError(const std::string& text) {
+    std::string low;
+    low.reserve(text.size());
+    for (const char ch : text) { low.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch)))); }
+    for (std::size_t at = low.find("error:"); at != std::string::npos; at = low.find("error:", at + 1)) {
+        if (at == 0 || low[at - 1] == ' ') { return true; }
+    }
+    return false;
+}
+}  // namespace
+
 InfoModel PatchPage::infoModel() const {
     InfoModel m;
     // A PLUGIN THAT REFUSED TO START IS A PATCH THAT CANNOT RUN (drive fixes 3, item 2): the plan's own verdict (fact.patch.runnable, API 0.3 8.12) cannot know a
     // plugin's own limits (ADS-B wants 2 MS/s and refuses a 48 kHz Channel), so it still says "runnable" beside a refused plugin; this sentence must not.
     bool refusedPlugin = !lists_.refused.empty();
     for (const pc::NodeProblem& p : lists_.plan.problems) { if (p.problem == pc::Problem::PluginRefused) { refusedPlugin = true; } }
-    m.runnable = lists_.plan.runnable && !refusedPlugin;
+    // EVERY NODE ERROR THE PAGE ITSELF SHOWS (drive fixes 4, item 3): a radio's rust note or fault, a speaker's error line, and a decoder whose newest line is its own error sentence.
+    bool shownError = false;
+    for (const auto& [id, row] : lists_.radios) { (void)id; if (row.fault || !row.note.empty()) { shownError = true; } }
+    for (const LiveRow& r : live_) {
+        if (r.kind == 5 && !r.detail.empty()) { shownError = true; }
+        if (r.kind == 4 && lineSaysError(r.detail)) { shownError = true; }
+    }
+    m.runnable = lists_.plan.runnable && !refusedPlugin && !shownError;
     // WHAT THE PATCH AS A WHOLE IS DOING, first, because it is the question someone opening this page is actually asking.
     m.verdict = m.runnable ? tr("This patch can run.") : tr("This patch cannot run.");
     const pc::Node* sel = selectedNode();

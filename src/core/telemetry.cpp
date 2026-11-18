@@ -580,9 +580,10 @@ void HeartbeatSender::poll(double now) {
     const std::string url = url_;
     const std::string json = nextBeatJson();
     std::atomic<bool>* done = &done_;
-    thread_ = std::thread([url, json, done]() {
+    const Transport transport = transport_;
+    thread_ = std::thread([url, json, done, transport]() {
         try {
-            postJson(url, json);
+            if (transport) { (void)transport(url, json); } else { (void)postJson(url, json); }
         } catch (...) {
             // Silent by design, same as the reporter.
         }
@@ -593,9 +594,10 @@ void HeartbeatSender::poll(double now) {
     const std::string url = url_;
     const std::string json = nextBeatJson();
     std::atomic<bool>* done = &done_;
-    thread_ = std::thread([url, json, done]() {
+    const Transport transport = transport_;
+    thread_ = std::thread([url, json, done, transport]() {
         try {
-            postJson(url, json);
+            if (transport) { (void)transport(url, json); } else { (void)postJson(url, json); }
         } catch (...) {
             // Silent by design, same as the reporter.
         }
