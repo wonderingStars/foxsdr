@@ -136,6 +136,25 @@ void theWindowSaysNothingOfWhatIsNotThere() {
             y = l.find("yet", y + 1);
         }
     }
+    // DRIVE FIXES 5, ITEM 7: "later" is refused where it PROMISES something that is not there; the ordinary uses (a choice that can be made at any time, a later end than start)
+    // are listed whole, so a new one has to be looked at.
+    {
+        const std::vector<std::string> ordinary = {
+            "a few quick questions to set foxsdr up for your radio. you can skip them and change everything later.",
+            "record the frequency, mode, bandwidth, squelch, volume and mute you set, save them as a macro, and play it back later. nothing else is recorded.",
+            "the box needs a later end than start and a higher top than bottom"};
+        for (const auto& [rel, w] : words) {
+            const std::string l = lower(w);
+            std::size_t y = l.find("later");
+            while (y != std::string::npos) {
+                const bool word = (y == 0 || !std::isalnum(static_cast<unsigned char>(l[y - 1]))) && (y + 5 >= l.size() || !std::isalnum(static_cast<unsigned char>(l[y + 5])));
+                bool ok = false;
+                for (const auto& o : ordinary) { if (l == o) { ok = true; } }
+                if (word && !ok) { std::printf("  \"later\" in %s: %s\n", rel.c_str(), w.c_str()); CHECK(false); }
+                y = l.find("later", y + 1);
+            }
+        }
+    }
     // the placeholder components of phase 1 are gone: nothing draws a "phase 3" plate
     CHECK(!fs::exists(repoRoot() / "src" / "slint" / "ui" / "stubs.slint"));
     // the one place that may say "yet" about a radio is the decision 61 label, once

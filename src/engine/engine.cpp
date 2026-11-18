@@ -4873,6 +4873,11 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
         tuneAbsoluteHz(ps.frequencyHz, /*isPluginPreset=*/true);
     }
 
+    // AN I/Q FILE THAT THE PRESET DID NOT LAND ON (drive fixes 5, item 9): said, in the note and where the tune notes are shown.
+    const bool fileMissed = cascade::gui::fileTuneMissed(
+        rx().sourceKind_ == "file",
+        (ps.flags & CASCADE_PRESET_DEVICE_CENTRE) != 0u ? rx().pipeline_.activeSource().centerFrequencyHz() : currentAbsoluteHz(), ps.frequencyHz, ps.bandwidthHz);
+
     // Rebuild the decoders against the receiver they are now pointed at: the
     // rate and centre are passed to create() and cannot be changed on a live
     // instance, so without this the plugin the user just clicked would still
@@ -4899,8 +4904,13 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     api_->presetApplied(cascade::core::pluginKey(p), ps.flags);
 
     std::string note;
-    cascade::core::formatUtf8(note, tr("Tuned to %.4f MHz for %s"), ps.frequencyHz / 1.0e6,
+    if (fileMissed) {
+        cascade::core::formatUtf8(note, tr("This is an I/Q file: it cannot be retuned to %.4f MHz for %s. Open a recording made there."), ps.frequencyHz / 1.0e6, p.name.c_str());
+        rx().tuneMismatchNote_ = note;
+    } else {
+        cascade::core::formatUtf8(note, tr("Tuned to %.4f MHz for %s"), ps.frequencyHz / 1.0e6,
                   p.name.c_str());
+    }
     presetNote_ = note;
 }
 

@@ -127,6 +127,17 @@ inline std::string tuneMismatchMessage(double requestHz, double answeredHz, bool
 // those are transient, in range, and would make this sentence a lie. With no
 // published range nothing is said: "outside its range" is not something this
 // can know about a radio that never told it one.
+// --- A preset pressed while the source is an I/Q file (drive fixes 5, item 9; parts 20 and 21) -------------------------------------------------------
+//
+// A recording was made at one frequency. A plugin preset that needs another (the 406.037 MHz beacon channel, GOES LRIT at 1691 MHz, a radiosonde channel outside the file's span) left the
+// counter where it was and the key unlit, and the note under it said "Tuned to ..." or nothing. `gotHz` is where the source or the dial stands AFTER the preset's tune (the device centre for
+// a device-centre preset, the tuned frequency otherwise); the preset did not land when that is farther from `wantedHz` than the larger of 1 kHz and half its bandwidth, the key's own rule.
+inline bool fileTuneMissed(bool sourceIsFile, double gotHz, double wantedHz, double bandwidthHz) {
+    if (!sourceIsFile || !(wantedHz > 0.0)) { return false; }
+    const double tol = bandwidthHz > 2000.0 ? 0.5 * bandwidthHz : 1000.0;
+    return !(std::fabs(gotHz - wantedHz) <= tol);
+}
+
 inline std::string tuneRefusedMessage(double requestHz, bool hasRange, double rangeLoHz,
                                       double rangeHiHz, bool isPluginPreset) {
     if (!hasRange || !(rangeHiHz > rangeLoHz)) { return {}; }

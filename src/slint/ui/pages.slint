@@ -575,9 +575,27 @@ export component PageBody inherits Rectangle {
 
         // 1 Decoder output: the per-decoder preset bars, then the log
         if root.page.kind == 1 : VerticalLayout { spacing: 0px; vertical-stretch: 1;
-            for b[bi] in root.page.bars : HorizontalLayout { spacing: 6px; padding-left: 10px; padding-right: 10px; padding-top: 4px; padding-bottom: 4px;
-                Text { text: b.name; font-size: Theme.font-small; color: Theme.dim; vertical-alignment: center; }
-                PresetBar { presets: b.presets; save-label: @tr("+ Save"); pressed(i) => { root.bar-preset-pressed(root.index, bi, i); } save-clicked => { root.bar-save-clicked(root.index, bi); } }
+            // DRIVE FIXES 5, ITEM 7 (part 22): one bar per fitted decoder that has presets - sixty of them filled the whole page and the log below them had no room, so the tab showed
+            // only chips. The bars take at most 132 px (four bars) and scroll (the wheel) inside it; the log always has the rest.
+            if root.page.bars.length > 0 : bars-fl := Flickable {
+                height: min(bars-col.preferred-height, 132px);
+                content-width: self.width;
+                content-height: bars-col.preferred-height;
+                interactive: false;
+                TouchArea {
+                    x: 0px; y: 0px; width: bars-fl.content-width; height: bars-fl.content-height;
+                    scroll-event(e) => {
+                        if (e.delta-y == 0px || bars-col.preferred-height <= bars-fl.height) { return EventResult.reject; }
+                        bars-fl.content-y = max(-(bars-col.preferred-height - bars-fl.height), min(0px, bars-fl.content-y + e.delta-y));
+                        return EventResult.accept;
+                    }
+                }
+                bars-col := VerticalLayout { width: bars-fl.content-width;
+                    for b[bi] in root.page.bars : HorizontalLayout { spacing: 6px; padding-left: 10px; padding-right: 10px; padding-top: 4px; padding-bottom: 4px;
+                        Text { text: b.name; font-size: Theme.font-small; color: Theme.dim; vertical-alignment: center; }
+                        PresetBar { presets: b.presets; save-label: @tr("+ Save"); pressed(i) => { root.bar-preset-pressed(root.index, bi, i); } save-clicked => { root.bar-save-clicked(root.index, bi); } }
+                    }
+                }
             }
             LogView { vertical-stretch: 1; lines: root.page.lines; follow: root.page.follow; count-text: root.page.count-text; empty-text: @tr("Listening...");
                 clear-clicked => { root.log-clear(root.index); } copy-clicked => { root.log-copy(root.index); } follow-toggled(v) => { root.log-follow(root.index, v); } }

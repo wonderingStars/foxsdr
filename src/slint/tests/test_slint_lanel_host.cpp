@@ -242,6 +242,13 @@ int main() {
             CHECK(p("range_s", "1").first == "Range (seconds)" && p("a_b_km", "1").first == "A b (km)");
             CHECK(p("tracks[1].alt_m", "9").first.find('_') == std::string::npos);     // a nested key too
             CHECK(p("", "plain text") == std::make_pair(std::string(), std::string("plain text")));   // text that is not JSON is left alone
+            // DRIVE FIXES 5, ITEM 7 (part 15): the signal measurements' own short names were shown as "Result Xdb", "Result xdb[1] Db", "Result Obw high".
+            for (const char* k : {"result.xdb", "result.xdb[1].db", "result.xdb[2].width_hz", "result.obw_low_hz", "result.obw_high_hz", "result.obw_hz", "result.snr_db", "result.sfdr_dbc", "result.thdn_percent", "result.signal_power_dbfs"}) {
+                const std::string label = p(k, "1").first;
+                CHECK(label.find("xdb") == std::string::npos && label.find("obw") == std::string::npos && label.find("snr") == std::string::npos && label.find("sfdr") == std::string::npos &&
+                      label.find("thdn") == std::string::npos && label.find('[') == std::string::npos && label.find('_') == std::string::npos);
+            }
+            CHECK(p("obw_high_hz", "1").first == "Occupied bandwidth high (Hz)" && p("snr_db", "1").first == "SNR (dB)" && p("xdb[1].db", "3").first == "Bandwidth at X dB 1 Level (dB)");
             for (const char* k : {"added", "enabled", "evicted", "refused", "replaced", "retention_s", "too_old", "tracks", "bad_input", "cells", "future", "max_range_km", "stale", "too_far"}) {
                 CHECK(p(k, "1").first != k && p(k, "1").first.find('_') == std::string::npos);
             }

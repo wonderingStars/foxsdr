@@ -567,5 +567,29 @@ int main() {
         CHECK(t3.countNear(cx(0.67) - 14, kYA - 16, cx(0.67) + 14, kYA + 22, kFocus, 20) == 0);     // and left A
     }
 
+    // ===== DRIVE FIXES 5, ITEM 7 (part 15): a wheel over a slider is the PAGE's unless the slider has the keyboard or the pointer has rested on it ==========
+    // "Highest pitch" went from 1760 to 200 Hz while a page was being scrolled under the pointer. Slider C has never been pressed (no keyboard), so: a notch the instant the
+    // pointer arrives changes nothing; after the pointer has rested (600 ms) and the declined notch's scroll has gone quiet (450 ms) a notch is one step; leaving and coming back
+    // starts the rest again.
+    {
+        moveTo(w, 600, 20);
+        settle(std::chrono::milliseconds(60));
+        const int n = ui->get_changes();
+        moveTo(w, kX + 100, kYC + 3);
+        scroll(w, kX + 100, kYC + 3, 0, 60);
+        scroll(w, kX + 100, kYC + 3, 0, 60);
+        CHECK(ui->get_changes() == n);                          // declined: the pointer has not rested
+        moveTo(w, kX + 101, kYC + 3);
+        settle(std::chrono::milliseconds(1100));
+        scroll(w, kX + 100, kYC + 3, 0, 60);
+        CHECK(ui->get_changes() == n + 1);                      // rested, and no scroll in progress: one step
+        CHECK_NEAR(ui->get_last_value(), 0.05, 0.01);
+        moveTo(w, 600, 20);
+        settle(std::chrono::milliseconds(60));
+        moveTo(w, kX + 100, kYC + 3);
+        scroll(w, kX + 100, kYC + 3, 0, 60);
+        CHECK(ui->get_changes() == n + 1);                      // the rest began again at the new arrival
+    }
+
     return testSummary("test_slint_sliders");
 }

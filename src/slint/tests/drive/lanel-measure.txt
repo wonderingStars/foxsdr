@@ -41,5 +41,7 @@ state ll.fact.radio.1.sigmeas.bandwidth contains "valid"
 +12 state ll.note.measure contains "Read the frame log"
 # B10: the alarm cannot be enabled with no mask loaded: the engine's refusal is shown
 +1 click "Alarm on"
+# drive fixes 5, item 7: the sentence comes at once, before Apply
++3 state ll.note.measure contains "Load a mask first."
 +1 click "Apply the alarm settings"
 +12 state ll.note.measure contains "Limit alarm: Refused"

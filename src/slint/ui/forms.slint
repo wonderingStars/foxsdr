@@ -638,7 +638,7 @@ export component RunKeys inherits Rectangle {
     in property <string> start-text: @tr("START");
     in property <string> mute-text: @tr("Mute audio while running");
     in property <string> stop-tooltip: @tr("Stop this decoder. It stays fitted and keeps its presets; nothing else is touched. Start it again with this key or with one of its presets.");
-    in property <string> idle-tooltip: @tr("This decoder is idle: nothing is using it, so it is not running. It starts by itself when you open its window or the Decoder output window. START keeps it running all the time.");
+    in property <string> idle-tooltip: @tr("This decoder is idle: nothing is using it, so it is not running. It starts by itself when you open its window. START keeps it running all the time.");
     in property <string> start-tooltip: @tr("Start this decoder again. It begins decoding as soon as the receiver is on a frequency it can use.");
     in property <string> mute-tooltip: @tr("Silence the speakers and the web audio stream while this plugin is actually decoding and the receiver is on one of its presets. A stopped or idle plugin silences nothing. The volume setting is not touched.");
     out property <string> key-tooltip: root.offers-stop ? root.stop-tooltip : root.idle ? root.idle-tooltip : root.start-tooltip;

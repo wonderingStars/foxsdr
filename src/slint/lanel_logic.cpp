@@ -472,6 +472,26 @@ std::vector<std::pair<std::string, std::string>> flattenJson(const std::string& 
 }
 
 namespace {
+// One short name of the engine's measurement results in plain words; a token it does not know comes back unchanged. Acronyms are kept as written (they are the same in every language).
+std::string spokenToken(const std::string& t) {
+    if (t == "obw") { return tr("occupied bandwidth"); }
+    if (t == "xdb") { return tr("bandwidth at X dB"); }
+    if (t == "db") { return "dB"; }   // not-translated: unit
+    if (t == "snr") { return "SNR"; }
+    if (t == "sinad") { return "SINAD"; }
+    if (t == "thd") { return "THD"; }
+    if (t == "thdn") { return "THD+N"; }
+    if (t == "sfdr") { return "SFDR"; }
+    if (t == "enob") { return "ENOB"; }
+    if (t == "fm") { return "FM"; }
+    if (t == "am") { return "AM"; }
+    if (t == "crc") { return "CRC"; }
+    if (t == "ccdf") { return "CCDF"; }
+    if (t == "rms") { return "RMS"; }
+    if (t == "dbfs") { return "dBFS"; }
+    if (t == "dbc") { return "dBc"; }
+    return t;
+}
 std::string humaniseKey(std::string k) {
     static const struct { const char* suffix; const char* unit; } units[] = {{"_s", "seconds"}, {"_km", "km"}, {"_hz", "Hz"}, {"_m", "m"}, {"_deg", "degrees"}, {"_db", "dB"}, {"_dbfs", "dBFS"}, {"_ms", "ms"}};
     std::string unit;
@@ -479,7 +499,28 @@ std::string humaniseKey(std::string k) {
         const std::size_t n = std::strlen(u.suffix);
         if (k.size() > n && k.compare(k.size() - n, n, u.suffix) == 0) { k.erase(k.size() - n); unit = u.unit; break; }
     }
-    for (char& c : k) { if (c == '_') { c = ' '; } }
+    // THE ENGINE'S SHORT NAMES, IN WORDS (drive part 15: "Result Xdb", "Result xdb[1] Db", "Result Obw high"): a token the table knows is its plain words, an index in square
+    // brackets is the number, and a token it does not know is left as it is (so "something_new" still reads "Something new").
+    std::string spoken;
+    std::size_t at = 0;
+    while (at <= k.size()) {
+        std::size_t end = k.find_first_of("_.", at);
+        if (end == std::string::npos) { end = k.size(); }
+        std::string tok = k.substr(at, end - at);
+        at = end + 1;
+        std::string index;
+        const std::size_t br = tok.find('[');
+        if (br != std::string::npos) {
+            const std::size_t close = tok.find(']', br);
+            index = tok.substr(br + 1, close == std::string::npos ? std::string::npos : close - br - 1);
+            tok.erase(br);
+        }
+        const std::string word = spokenToken(tok);
+        if (!spoken.empty()) { spoken += ' '; }
+        spoken += word;
+        if (!index.empty()) { spoken += ' '; spoken += index; }
+    }
+    k = spoken;
     if (!k.empty()) { k[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(k[0]))); }
     return unit.empty() ? k : k + " (" + unit + ")";
 }
@@ -510,6 +551,7 @@ std::string knownLabel(const std::string& k) {
     if (k == "samples_in") { return tr("Samples received"); }
     if (k == "samples_dropped") { return tr("Samples dropped"); }
     if (k == "port") { return tr("Port"); }
+    if (k == "db") { return tr("Level (dB)"); }
     return std::string();
 }
 }  // namespace

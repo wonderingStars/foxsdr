@@ -305,20 +305,6 @@ component LineInput inherits Rectangle {
     changed value => {
         input.text = root.value;
         root.dirty = false;
-        // DRIVE FIXES 5, ITEM 5: a number field selects all on a REAL click. The press that gives a TextInput its focus puts the caret under the pointer, and every
-        // pointer move while the button is down moves it again (the anchor stays where select-all put it), so a hand's one-pixel drift collapsed the selection and the
-        // first key was inserted (the Gateway port read 97728772). While the field does not have the keyboard, this layer takes the whole click and selects all on the
-        // RELEASE; once it has the keyboard the layer is off and the TextInput takes the pointer, so a second click places the caret.
-        ov := TouchArea {
-            enabled: root.enabled && root.mono && !input.has-focus;
-            mouse-cursor: MouseCursor.text;
-            pointer-event(e) => {
-                if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) {
-                    input.focus();
-                    input.select-all();
-                }
-            }
-        }
     }
 
     area := TouchArea {
@@ -376,6 +362,20 @@ component LineInput inherits Rectangle {
                 if (!self.has-focus && root.dirty) {
                     root.dirty = false;
                     root.committed(self.text);
+                }
+            }
+        }
+        // DRIVE FIXES 5, ITEM 5: a number field selects all on a REAL click. The press that gives a TextInput its focus puts the caret under the pointer, and every
+        // pointer move while the button is down moves it again (the anchor stays where select-all put it), so a hand's one-pixel drift collapsed the selection and the
+        // first key was inserted (the Gateway port read 97728772). While the field does not have the keyboard, this layer takes the whole click and selects all on the
+        // RELEASE; once it has the keyboard the layer is off and the TextInput takes the pointer, so a second click places the caret.
+        ov := TouchArea {
+            enabled: root.enabled && root.mono && !input.has-focus;
+            mouse-cursor: MouseCursor.text;
+            pointer-event(e) => {
+                if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) {
+                    input.focus();
+                    input.select-all();
                 }
             }
         }

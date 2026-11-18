@@ -480,7 +480,7 @@ int main() {
     {
         CHECK(sval(ui->get_k1_key_tooltip()) == "Stop this decoder. It stays fitted and keeps its presets; nothing else is touched. Start it again with this key or with one of its presets.");
         CHECK(sval(ui->get_k2_key_tooltip()) == "Start this decoder again. It begins decoding as soon as the receiver is on a frequency it can use.");
-        CHECK(sval(ui->get_k3_key_tooltip()) == "This decoder is idle: nothing is using it, so it is not running. It starts by itself when you open its window or the Decoder output window. START keeps it running all the time.");
+        CHECK(sval(ui->get_k3_key_tooltip()) == "This decoder is idle: nothing is using it, so it is not running. It starts by itself when you open its window. START keeps it running all the time.");
         CHECK(sval(ui->get_k1_mute_tooltip()) == "Silence the speakers and the web audio stream while this plugin is actually decoding and the receiver is on one of its presets. A stopped or idle plugin silences nothing. The volume setting is not touched.");
     }
 

@@ -1958,5 +1958,16 @@ int main() {
         }
     }
 
+    // DRIVE FIXES 5, ITEM 9: a preset that cannot land on an I/Q file is said, not silently ignored.
+    {
+        using cascade::gui::fileTuneMissed;
+        CHECK(fileTuneMissed(true, 406.025e6, 406.037e6, 0.0));        // the beacon channel 12 kHz from where the file was recorded
+        CHECK(fileTuneMissed(true, 99.9e6, 1691.0e6, 0.0));             // GOES LRIT against a VHF recording
+        CHECK(!fileTuneMissed(true, 406.0365e6, 406.037e6, 0.0));       // inside 1 kHz: it landed
+        CHECK(!fileTuneMissed(true, 406.025e6, 406.037e6, 40000.0));    // a 40 kHz preset is lit within half its width
+        CHECK(!fileTuneMissed(false, 99.9e6, 1691.0e6, 0.0));           // a radio is the radio's own refusal's business
+        CHECK(!fileTuneMissed(true, 99.9e6, 0.0, 0.0));                 // a preset with no frequency asks for nothing
+    }
+
     return testSummary("test_tune_control");
 }

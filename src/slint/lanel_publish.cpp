@@ -633,7 +633,19 @@ struct LaneLPublisher::Impl {
         key(v, "m.fl-drop", tr("Drop frames with CRC errors"), [this] { frameLogConfig(0); });
         key(v, "m.fl-read", tr("Read the frame log"), [this] { Cmd c = cmd(FOXAPP_OP_FRAMELOG_READ, 1); send(kMeasure, tr("Read the frame log"), c); });
         const std::string fl = fact("framelog");
-        if (!fl.empty()) { v.push_back(rReadout(tr("Frame log"), fl.size() > 160 ? fl.substr(0, 160) + "..." : fl)); }
+        if (!fl.empty()) {
+            // The frame log is said in words, never as the engine's JSON (drive part 15): how many frames it holds, how many of those had CRC errors, and what it has seen.
+            if (jsonNumber(fl, "held", -1.0) >= 0.0) {
+                const auto n = [&](const char* k) { char b[32]; std::snprintf(b, sizeof(b), "%.0f", jsonNumber(fl, k, 0.0)); return std::string(b); };
+                v.push_back(rReadout(tr("Frames held"), n("held")));
+                v.push_back(rReadout(tr("Held with CRC errors"), n("held_bad")));
+                v.push_back(rReadout(tr("Good frames seen"), n("good_total")));
+                v.push_back(rReadout(tr("Frames with CRC errors seen"), n("bad_total")));
+                v.push_back(rReadout(tr("Keeps frames with CRC errors"), jsonBool(fl, "keep_bad", false) ? tr("Yes") : tr("No")));
+            } else {
+                v.push_back(rReadout(tr("Frame log"), fl.size() > 160 ? fl.substr(0, 160) + "..." : fl));
+            }
+        }
 
         v.push_back(rHeading(tr("GPU spectrum")));
         const std::string gm = fact("gpu_fft.mode");
@@ -655,7 +667,11 @@ struct LaneLPublisher::Impl {
         }, !trim(dv("m.mask-path")).empty());
         key(v, "m.mask-remove", tr("Remove the alarm's mask"), [this] { send(kMeasure, tr("Remove the alarm's mask"), cmd(FOXAPP_OP_MASK_LOAD, 0, "")); });
         const std::string mk = selFact("mask");
-        tickD(v, "m.mask-on", tr("Alarm on"), jsonBool(mk, "enabled", false));
+        // DRIVE FIXES 5, ITEM 7 (part 15): switching the alarm on with no mask loaded said nothing until Apply was pressed. It says so at once, in the section's note.
+        tick(v, "m.mask-on", tr("Alarm on"), bv("m.mask-on", jsonBool(mk, "enabled", false)), [this](bool on) {
+            draft["m.mask-on"] = on ? "1" : "0";
+            if (on && selFact("mask").empty()) { setNote(kMeasure, tr("Alarm on") + ": " + tr("Load a mask first."), kWarn); dirty = true; }
+        });
         field(v, "m.mask-raise", tr("Raise after (frames)"), "3", tr("1 to 100"));
         field(v, "m.mask-clear", tr("Clear after (frames)"), "5", tr("1 to 100"));
         tickD(v, "m.mask-capture", tr("Record I/Q on a breach"), false, tr("Starts the radio's I/Q recording when the alarm is raised. Off by default."));

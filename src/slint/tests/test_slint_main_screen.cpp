@@ -336,6 +336,28 @@ int main() {
             CHECKV(keyInk > 1500, "the page's keys are not inside the frame (%d px of key ground): the page ran past the window", keyInk);
             CHECK(n.width == 1100 && n.height == 800);
         }
+        // DRIVE FIXES 5, ITEM 7 (part 22): the Decoder output page with sixty-one fitted decoders that have presets. One bar each used to fill the whole page, the log under
+        // them had no room and the tab showed only chips. The bars now take at most a third of the page and scroll; the log (its ground, Theme.field) keeps the rest.
+        {
+            PageTab t = page(false);
+            t.id = ss("output"); t.kind = 1; t.title = ss("Decoder output");
+            std::vector<DecoderBar> bars;
+            for (int i = 0; i < 61; ++i) {
+                DecoderBar b{};
+                b.name = ss(("Decoder " + std::to_string(i)).c_str()); b.file = ss(("d" + std::to_string(i) + ".dll").c_str());
+                std::vector<PresetKeyModel> ps(2);
+                ps[0].label = ss("154.2 MHz"); ps[1].label = ss("453.1 MHz");
+                b.presets = model(ps);
+                bars.push_back(b);
+            }
+            t.bars = model(bars);
+            ui->set_pages(model(std::vector<PageTab>{t}));
+            ui->set_view_index(3);
+            Frame o = renderAt(W, H);
+            o.savePng(shotDir() + "main-screen-output-61-bars.png");
+            const int logGround = o.countNear(400, 520, 1500, 760, rgb(0x0f1114), 10);
+            CHECKV(logGround > 20000, "the log has room under sixty-one preset bars: %d px of its ground in the lower page", logGround);
+        }
         ui->set_pages(model(std::vector<PageTab>{page(true)}));
         Frame p2 = renderAt(W, H);
         p2.savePng(shotDir() + "main-screen-torn-page.png");

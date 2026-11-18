@@ -41,6 +41,11 @@ export component Slider inherits Rectangle {
     property <float> shown: Math.max(0.0, Math.min(1.0, root.moved ? root.local : root.value));
     property <bool> keyboard;                   // the focus ring shows only for keyboard use, not after a click
     property <bool> pointer-focus;
+    // DRIVE FIXES 5, ITEM 7 (part 15: "Highest pitch" went from 1760 to 200 Hz while the page was being scrolled): the wheel moves a slider only when it has the keyboard, or when the
+    // pointer has RESTED on it (600 ms) and no scroll is going on (450 ms since the last notch the slider declined, so the page's own scrolling is never taken over by a slider
+    // that slides under the pointer). Anything else is the page's. The Legacy window's sliders take no wheel at all.
+    property <bool> rested;
+    property <bool> scrolling;
 
     height: Theme.slider-track-h;
     border-radius: self.height / 2;
@@ -141,12 +146,28 @@ export component Slider inherits Rectangle {
             moved => {
                 if (root.enabled && self.pressed) { root.set-to(root.from-x(self.mouse-x)); }
             }
+            changed has-hover => { if (!self.has-hover) { root.rested = false; } }
             scroll-event(e) => {
                 if (!root.enabled || e.delta-y == 0px) { return reject; }
+                if (!(fs.has-focus || (root.rested && !root.scrolling))) {
+                    root.scrolling = true;
+                    if (calm.running) { calm.restart(); }
+                    return reject;
+                }
                 root.set-to(root.shown + e.delta-y / root.wheel-notch * root.wheel-step);
                 return accept;
             }
         }
+    }
+    rest := Timer {
+        interval: 600ms;
+        running: touch.has-hover && !root.rested && root.enabled;
+        triggered => { root.rested = true; }
+    }
+    calm := Timer {
+        interval: 450ms;
+        running: root.scrolling;
+        triggered => { root.scrolling = false; }
     }
     TipTimer {
         hovered: touch.has-hover;

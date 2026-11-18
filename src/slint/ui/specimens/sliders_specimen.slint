@@ -67,7 +67,7 @@ export component SlidersSpecimen inherits Window {
     Label { x: 40px; y: 70px; width: 200px; text: "B  0.29 enabled, driven by the test"; }
     Slider { x: 40px; y: 94px; width: 200px; value: 0.29; accessible-label: "Specimen B"; changed(v) => { root.moved(v); } }
     Label { x: 40px; y: 120px; width: 200px; text: "C  0.00"; }
-    Slider { x: 40px; y: 144px; width: 200px; value: 0; accessible-label: "Specimen C"; }
+    Slider { x: 40px; y: 144px; width: 200px; value: 0; accessible-label: "Specimen C"; changed(v) => { root.moved(v); } }   // (drive fixes 5: the wheel-rest check drives it)
     Label { x: 40px; y: 170px; width: 200px; text: "D  1.00"; }
     Slider { x: 40px; y: 194px; width: 200px; value: 1; accessible-label: "Specimen D"; }
     Label { x: 40px; y: 220px; width: 200px; text: "E  0.62 disabled"; }

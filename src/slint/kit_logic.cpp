@@ -378,7 +378,7 @@ std::string fittedStateSentence(const PluginRow& m, bool receiverRunning) {
         case FittedState::Fed: return cascade::i18n::tr("Fitted and being fed. The receiver is running and this module has a decoder matched to the rate it is producing.");
         case FittedState::Idle:
             return cascade::i18n::tr("Fitted, and idle. Nothing is using this module, so it is not running and costs nothing. It starts by itself when you open its "
-                   "window, its map or the output it writes to, and goes quiet again 30 seconds after you finish with it. Tick KEEP RUNNING to have "
+                   "window or its map, and goes quiet again 30 seconds after you finish with it. Tick KEEP RUNNING to have "
                    "it run all the time.");
         case FittedState::NotFed: break;
     }
