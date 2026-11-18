@@ -305,6 +305,7 @@ These were tested with stand-ins or test signals only:
 - **The first-run check** runs on its own once when the new window starts. It has not been tried against a real USB bus. It names HydraSDR, AOR, Icom IC-R8600 and Mirics radios that Windows can see but has no driver for, and says what to install.
 - **RTL-SDR:** direct sampling (automatic, never, I branch, Q branch).
 - **Raw I/Q over UDP and TCP** as a source, with the rate and centre frequency you type.
+- **The search for network radios happens only when "Look for network USRPs" is ticked.** So Windows does not ask about network access unless you asked for network radios.
 - **Tuner pooling:** claim a second radio's tuner for a frequency, mode and bandwidth, and release it.
 - **Radios and servers that need a library you install yourself** say what to install and from where. FoxSDR downloads nothing for them. SoapySDR modules, including SoapyELAD, are listed and opened when installed.
 - **Rig following (read only).** FoxSDR can follow the frequency and mode of a rig over a serial or virtual COM port, emulate a rig for a logging program, or read OmniRig.
@@ -351,6 +352,7 @@ Every output is off by default. When you switch one on, it listens or sends on t
 - **Legacy is a choice inside the new window** (Layouts menu, "Legacy"). The Legacy window has "Switch to the new window" in the SYSTEM bank.
   Windows are switched cleanly: settings are released first, and if a recording or a patch is running you are asked first.
   The main Start-menu entry opens the window you last chose. "FoxSDR (Legacy)" always opens Legacy.
+- **Removing a bookmark group now asks first.**
 - **The SYSTEM page's Usage reporting** shows your install identifier and the serial number of each radio, and says how to ask for your records to be erased.
 
 ---
