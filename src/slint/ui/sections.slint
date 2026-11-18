@@ -213,7 +213,7 @@ export component SelectKey inherits Rectangle {
         enabled: root.enabled;
         focus-on-click: false;
         focus-on-tab-navigation: true;
-        changed has-focus => { if (self.has-focus) { FocusProbe.place = "select:" + (root.label != "" ? root.label : root.value); } }
+        changed has-focus => { if (self.has-focus) { FocusProbe.place = "select:" + (root.label != "" ? root.label : root.value); } }   // not-translated: the drive probe's own word
         key-pressed(e) => {
             if (e.text == Key.Return || e.text == " " || e.text == Key.DownArrow) { root.clicked(); return accept; }
             return reject;

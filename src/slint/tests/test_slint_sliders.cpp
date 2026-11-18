@@ -211,11 +211,11 @@ int main() {
         CHECK(f.countInk(left - 5, 378, left, 394, kStrip) == 0);                     // with 6px of air before the key
         CHECK(f.countInk(274, 378, 340, 394, kStrip) > 20);                           // the caption is still there
     }
-    // The narrowest lanes: the main screen gives three of 120 px at its minimum width and 106 px each in a 1440 px window
-    // (specimen: 120 and 106 at y 48, 130 at y 128, 120 at y 208). In the real faces the 12px mono readout is 7.2px a figure and
-    // the AUTO key 48px, so a 120px lane leaves its caption 24px: the caption gives way (it elides to its first letters) and
-    // where there is no room for even a letter and the ellipsis it is left out - and caption, readout and key stay on the one
-    // 20px row, the caption never touches the readout, the readout keeps 6px of air before the key, nothing leaves the lane.
+    // The narrowest lanes: the main screen gives three of 120 px at its minimum width (specimen: 120 and 106 at y 48, 130 at y 128, 120 at y 208).
+    // In the real faces the 12px mono readout is 7.2px a figure and the AUTO key 48px, so a lane of 120 px cannot hold caption, readout and key on
+    // one row. A lane WITHOUT a key keeps the old rule (the caption elides, or is left out where not even a letter and the ellipsis fit, the readout
+    // keeps 6px of air); a lane WITH a key keeps its caption whole beside the key and puts the readout at the right end of the hint row
+    // (drive fixes 2, item 8). Nothing leaves the lane.
     {
         struct Lane { int x, y, w; bool hasAuto; Rgb keyLine; int figures; };         // figures: the characters of the readout
         const Lane lanes[] = {{524, 48, 120, true, kKeyLine, 5}, {660, 48, 106, true, kAccent, 6}, {524, 128, 130, true, kAccent, 6},
@@ -232,16 +232,28 @@ int main() {
                 CHECK(f.near(right, l.y + 10, kStrip) && f.near(keyL - 1, l.y + 10, kStrip));
                 CHECK(f.countInk(keyL - 5, rowTop, keyL, rowBot, kStrip) == 0);       // 6px of air before the key (the last figure's own bearing aside)
             }
-            CHECK(f.countInk(boxL, rowTop, boxR, rowBot, kStrip) > 40);                // the readout is where the key puts it ...
-            CHECK(f.countInk(boxR - 3, rowTop, boxR + 1, rowBot, kStrip) > 4);         // ... and reaches the end of its box
-            // the caption: when it has the room for a letter and the ellipsis (two cap-sized letters, 20px) some of it is drawn; when it
-            // has not, nothing is - no stray ellipsis - and either way it stops 6px short of the readout's box
-            if (room >= 20) {
-                CHECK(f.countInk(l.x, rowTop, boxL - 5, rowBot, kStrip) > 3);
+            if (!l.hasAuto) {
+                CHECK(f.countInk(boxL, rowTop, boxR, rowBot, kStrip) > 40);            // the readout is where the key puts it ...
+                CHECK(f.countInk(boxR - 3, rowTop, boxR + 1, rowBot, kStrip) > 4);     // ... and reaches the end of its box
+                // the caption: when it has the room for a letter and the ellipsis (two cap-sized letters, 20px) some of it is drawn; when it
+                // has not, nothing is - no stray ellipsis - and either way it stops 6px short of the readout's box
+                if (room >= 20) {
+                    CHECK(f.countInk(l.x, rowTop, boxL - 5, rowBot, kStrip) > 3);
+                } else {
+                    CHECK(f.countInk(l.x, rowTop, boxL, rowBot, kStrip) == 0);
+                }
+                CHECK(f.countInk(boxL - 5, rowTop, boxL, rowBot, kStrip) == 0);
             } else {
-                CHECK(f.countInk(l.x, rowTop, boxL, rowBot, kStrip) == 0);
+                // DRIVE FIXES 2, item 8 (was: the caption elided to its first letters or was left out, the readout beside it on the one row): where caption, readout and
+                // key do not fit side by side the CAPTION keeps its whole word on the first row with the key, and the READOUT goes to the right end of the hint row
+                // (16 px high, from y + 40), with 6px of air before it; the first row holds nothing between the caption and the key but air.
+                const int hintTop = l.y + 42, hintBot = l.y + 54;
+                const int lowL = right - static_cast<int>(std::ceil(7.2 * l.figures - 1e-6));   // the readout's box at the right end of the hint row
+                CHECK(f.countInk(l.x, rowTop, keyL - 5, rowBot, kStrip) > 30);          // the caption is on the first row beside the key, not nothing
+                CHECK(f.countInk(lowL, hintTop, right, hintBot, kStrip) > 30);          // the readout is at the right end of the hint row ...
+                CHECK(f.countInk(right - 3, hintTop, right + 1, hintBot, kStrip) > 4);  // ... and reaches the lane's edge
+                CHECK(f.countInk(lowL - 5, hintTop, lowL, hintBot, kStrip) == 0);      // 6px of air before it
             }
-            CHECK(f.countInk(boxL - 5, rowTop, boxL, rowBot, kStrip) == 0);
             // one row: nothing of the caption or the readout above the row or in the 7px gap under it (the knob reaches 8px above the track)
             const int capH = l.hasAuto ? 20 : 16;                                    // the caption row: as high as the key, else the readout's line
             CHECK(f.countInk(l.x, l.y, keyL, rowTop, kStrip) == 0 && f.countInk(l.x, l.y + capH, keyL, l.y + capH + 2, kStrip) == 0);

@@ -2726,3 +2726,5 @@ windows' and stay with them, below).
 **The plugin windows** (a plugin's own panel, drawn by the plugin's code
 through the plugin ABI) are not an interface's to draw and get no API: they
 stay in the HOST PROCESS (engine-stage4.md 6.4).
+
+* (drive fixes 2, 2026-11-18) New fact `fact.radio.<n>.source.row`: the Source list's selected row of radio n (`fact.source.row` is the first radio's; another radio keeps its own, so a window whose controls follow radio 3 reads this one). It follows every radio's row in the list fingerprint, so a pick for radio 3 moves the fact at once.

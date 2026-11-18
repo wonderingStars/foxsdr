@@ -296,7 +296,7 @@ export component SliderGroup inherits Rectangle {
             enabled: root.has-auto && root.auto-enabled;
             focus-on-click: false;
             focus-on-tab-navigation: true;
-            changed has-focus => { if (self.has-focus) { FocusProbe.place = "auto:" + root.caption; } }
+            changed has-focus => { if (self.has-focus) { FocusProbe.place = "auto:" + root.caption; } }   // not-translated: the drive probe's own word
             key-pressed(e) => {
                 if (e.text == Key.Return || e.text == " ") { root.auto-clicked(); return accept; }
                 return reject;

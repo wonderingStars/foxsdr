@@ -299,7 +299,7 @@ export component FrequencyCounter inherits Rectangle {
         enabled: root.enabled && !root.editing;
         focus-on-click: false;
         focus-on-tab-navigation: true;
-        changed has-focus => { if (self.has-focus) { FocusProbe.place = "counter"; } }
+        changed has-focus => { if (self.has-focus) { FocusProbe.place = "counter"; } }   // not-translated: the drive probe's own word
         key-pressed(e) => {
             if (e.text == Key.Return || e.text == " ") { root.edit-requested(); return accept; }
             return reject;
