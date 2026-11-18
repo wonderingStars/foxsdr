@@ -187,6 +187,7 @@ struct AppWindowTestAccess {
     static void reportPluginUse(AppWindow& a) { a.reportPluginUse(); }
     static const std::string& useSent(AppWindow& a) { return a.pluginUseSent_; }
     static bool& decoderWindowOpen(AppWindow& a) { return a.decoderWindowOpen_; }
+    static cascade::core::PluginWindows& pluginWindows(AppWindow& a) { return a.pluginWindows_; }
     static std::size_t engineReports(AppWindow& a, const std::string& file) {
         return passseam::read<std::size_t>(th::engine(a), [&] {
             const auto it = th::engine(a).pluginUseReported_.find(cascade::core::pluginRunId(file));
@@ -317,14 +318,17 @@ void testNewestWins(AppWindow& app) {
 
 void testEdgesAreRecordedWhenTaken(AppWindow& app) {
     std::printf("  B: a state sent once on an edge is recorded as sent only when the session took it\n");
-    // B1. THE PLUGIN-USE TABLE: the Decoder output window is open, and the stage-one text decoder is wanted by it ("<file> TAB 8").
+    // B1. THE PLUGIN-USE TABLE: the stage-one plugin's own window is open, so the plugin is wanted by it ("<file> TAB 1"). (Until drive fixes 6 this used the open Decoder output window
+    // ("<file> TAB 8"); that window is no longer a use, so it no longer wakes decoders, and the test follows the use that still exists: the plugin's own window.)
     const std::string file = std::filesystem::path(FIXTURE_STAGE1_PLUGIN).filename().string();
     A::frame(app);
     A::frame(app);
     bool fitted = false;
-    for (const cascade::gui::PluginRow& r : A::pluginRows(app)) { fitted = fitted || (r.file == file && r.loaded); }
+    std::string pluginName;
+    for (const cascade::gui::PluginRow& r : A::pluginRows(app)) { if (r.file == file && r.loaded) { fitted = true; pluginName = r.name; } }
     CHECK(fitted);
-    A::decoderWindowOpen(app) = true;
+    const std::string windowId = pluginName + " panel###panel_" + pluginName;
+    A::pluginWindows(app).show(windowId);
     A::drain(app);
     CHECK_EQ(A::fill(app), static_cast<int>(FOXAPI_MAX_PENDING));
     A::reportPluginUse(app);                                     // refused: the session is full
@@ -332,10 +336,10 @@ void testEdgesAreRecordedWhenTaken(AppWindow& app) {
     CHECK_EQ(A::engineReports(app, file), 0u);
     A::drain(app);                                               // room
     A::frame(app);                                               // the next frame offers it again
-    CHECK_EQ(A::useSent(app), file + "\t8\n");
+    CHECK_EQ(A::useSent(app), file + "\t1\n");
     A::frame(app);
-    CHECK_EQ(A::engineReports(app, file), 8u);                   // the engine has it: the plugin is wanted, and wakes
-    A::decoderWindowOpen(app) = false;
+    CHECK_EQ(A::engineReports(app, file), 1u);                   // the engine has it: the plugin is wanted, and wakes
+    A::pluginWindows(app).hide(windowId);
     A::frame(app);
     A::frame(app);
 
