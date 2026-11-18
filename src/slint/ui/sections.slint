@@ -12,7 +12,7 @@
 // Measurements are the sheets' CSS (Workbench.dc.html: .sec, .chev, the open Radio body; Workbench-PluginKit.dc.html:
 // .sec.s, .dn .sec.s, .ld, .rw). The row's 1 px top rule sits INSIDE the row height (the kit's border-box), the way
 // PluginKit measures it.
-import { Theme } from "theme.slint";
+import { Theme, FocusProbe } from "theme.slint";
 import { Chip, ChipTone, LampDot, LampState } from "chips.slint";
 import { TipTimer } from "tooltip.slint";
 
@@ -207,6 +207,21 @@ export component SelectKey inherits Rectangle {
         image-fit: contain;
         source: @image-url("icons/chevron-down.svg");
         colorize: root.enabled ? Theme.key-fg : Theme.key-disabled-fg;
+    }
+    // the keyboard's way in (drive fixes 2, item 9): Tab reaches the picker, Enter, Space or Down open it; a click never takes the focus
+    pick-focus := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        focus-on-tab-navigation: true;
+        changed has-focus => { if (self.has-focus) { FocusProbe.place = "select:" + (root.label != "" ? root.label : root.value); } }   // not-translated: the drive probe's own word
+        key-pressed(e) => {
+            if (e.text == Key.Return || e.text == " " || e.text == Key.DownArrow) { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    if pick-focus.has-focus : Rectangle {
+        x: -3px; y: -3px; width: root.width + 6px; height: root.height + 6px;
+        border-width: 2px; border-color: Theme.focus; border-radius: Theme.radius + 3px;
     }
     area := TouchArea {
         mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;

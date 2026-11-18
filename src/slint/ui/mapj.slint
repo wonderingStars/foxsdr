@@ -211,6 +211,6 @@ export component AntennaPage inherits VerticalLayout {
         Field { horizontal-stretch: 1; label: @tr("Yagi elements"); kind: FieldKind.number; value: root.model.yagi; max-length: 3; committed(t) => { MapJEvents.act(root.index, "ant-yagi", t); } }   // not-translated: the host's operation name
     }
     if root.model.error != "" : Text { text: root.model.error; font-size: Theme.font-small; color: Theme.danger-fg; overflow: elide; }
-    Table { vertical-stretch: 1; columns: root.model.columns; rows: root.model.rows; column-widths: root.model.widths; empty-text: @tr("Enter a frequency between 0.01 and 300000 MHz."); }
+    Table { vertical-stretch: 1; columns: root.model.columns; rows: root.model.rows; column-widths: root.model.widths; empty-text: root.model.error != "" ? root.model.error : @tr("Enter a frequency between 0.01 and 300000 MHz."); }
     Text { text: root.model.note; font-size: Theme.font-hint; color: Theme.dim; overflow: elide; }
 }

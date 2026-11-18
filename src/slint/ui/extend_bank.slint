@@ -843,11 +843,11 @@ export component CatBody inherits VerticalLayout {
     Tick {
         label: @tr("Accept CAT connections");
         on: root.model.accept;
-        toggled(v) => { root.cat-accept(v); }
+        toggled(v) => { cat-port-field.flush(); root.cat-accept(v); }   // a port typed and not yet committed reaches the host before the switch (drive fixes 2, item 1)
     }
     Line {
         RowLabel { horizontal-stretch: 1; text: @tr("Port"); }
-        LineInput {
+        cat-port-field := LineInput {
             width: 80px;
             mono: true;
             right: true;

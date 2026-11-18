@@ -519,10 +519,12 @@ export component WaterfallView inherits Rectangle {
                 }
             }
             scroll-event(e) => {
-                if (e.delta-y == 0px) { return EventResult.reject; }
+                // Shift + wheel arrives from some mouse drivers as a SIDEWAYS wheel (delta-x): with Shift held it counts, turned the way the vertical one is
+                let sideways = e.modifiers.shift && e.delta-y == 0px && e.delta-x != 0px;
+                if (e.delta-y == 0px && !sideways) { return EventResult.reject; }
                 // the Shift slide is not for a hand that is panning (a plain wheel is)
                 if (e.modifiers.shift && root.panning) { return EventResult.accept; }
-                root.wheel(root.xfrac(self.mouse-x), root.notches-of(e.delta-y), e.modifiers.shift);
+                root.wheel(root.xfrac(self.mouse-x), root.notches-of(sideways ? -e.delta-x : e.delta-y), e.modifiers.shift);
                 return EventResult.accept;
             }
             changed has-hover => { if (!self.has-hover) { root.hover(-1, -1); } }

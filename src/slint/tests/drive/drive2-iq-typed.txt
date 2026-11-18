@@ -1,0 +1,13 @@
+#! frames=900 bank=0 sections=0:1 FOXSDR_FILE_PICK={fixtures}/aprs-decoder.wav
+# drive2-iq-typed (drive fixes 2, items 1 and 4): a path typed into the I/Q file box and followed by a press on Open - no Enter, as a person types - is what Open acts on, and Browse and Open stay usable while the box has the keyboard.
+10 state running == 1
++1 choose "Source"#2 "IQ file"
++5 expect "Open" enabled equals "true"
++1 press "I/Q file path"
++2 expect "Browse..." enabled equals "true"
++1 expect "Open" enabled equals "true"
++1 type "I/Q file path" "{fixtures}/ais-decoder.wav"
++2 expect "Open" enabled equals "true"
++1 expect "Browse..." enabled equals "true"
++1 click "Open"
++40 state deviceName contains ais-decoder

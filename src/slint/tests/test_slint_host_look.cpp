@@ -9,8 +9,11 @@
 #include "look_logic.hpp"
 #include "test_check.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <string>
+#include <utility>
 
 using namespace foxsdr::slintlook;
 
@@ -176,9 +179,135 @@ void follower() {
     CHECK(near(p.os, 2.0f) && near(p.want, 2.0f) && p.change);
 }
 
+// THE WINDOW'S SIZE AT EVERY INTERFACE SIZE (drive fixes 1, rows L135 / L145 / L153): Ctrl+=, Ctrl+Shift+= and "125 %" made a 1921 x 1081 window 150 x 90, 6 x 6 or 505 x 285 pixels and Ctrl+0
+// did not bring it back. The machine below is the window as the drive measured it: the host mirrors the window's size into win-w / win-h (win-w = physical / scale), and a CHANGED win-w is
+// carried to the system as a logical size that the system converts with ITS scale, one step later (physical = win-w * os, whatever scale this window is drawn at); a size the host asks for
+// (set_size) arrives one step later too. "naive" is the mirror as it was (write every tick); the other is SizeMirror.
+struct Machine {
+    std::uint32_t w, h;                 // the window's real physical size
+    float os;                           // the system's scale
+    float scale;                        // the scale the window is drawn at
+    float winW = 0.0f, winH = 0.0f;     // what the host last wrote
+    bool pushPending = false;
+    float pushW = 0.0f, pushH = 0.0f;
+    bool setPending = false;
+    std::uint32_t setW = 0, setH = 0;
+    bool pushFirst = true;              // the order the two requests reach the system in: both are tried
+    bool naive = false;
+    SizeMirror mirror;
+    void ask(std::uint32_t nw, std::uint32_t nh) { setPending = true; setW = nw; setH = nh; if (!naive) { mirror.asked(nw, nh); } }
+    void host() {                       // one 33 ms tick of the host's mirror
+        if (naive) {
+            const float nw = static_cast<float>(w) / scale, nh = static_cast<float>(h) / scale;
+            if (std::fabs(nw - winW) > 0.001f || std::fabs(nh - winH) > 0.001f) { pushPending = true; pushW = nw; pushH = nh; }
+            winW = nw; winH = nh;
+            return;
+        }
+        const SizeMirror::Step s = mirror.tick(w, h, scale, os);
+        if (s.write) {
+            if (std::fabs(s.winW - winW) > 0.001f || std::fabs(s.winH - winH) > 0.001f) { pushPending = true; pushW = s.winW; pushH = s.winH; }
+            winW = s.winW; winH = s.winH;
+        }
+        if (s.repair) { setPending = true; setW = s.repairW; setH = s.repairH; }
+    }
+    void system() {                     // the event loop's pass between two ticks
+        const auto doPush = [&] { if (pushPending) { w = static_cast<std::uint32_t>(std::max(1.0f, std::floor(pushW * os + 0.5f))); h = static_cast<std::uint32_t>(std::max(1.0f, std::floor(pushH * os + 0.5f))); pushPending = false; } };
+        const auto doSet = [&] { if (setPending) { w = setW; h = setH; setPending = false; } };
+        if (pushFirst) { doPush(); doSet(); } else { doSet(); doPush(); }
+    }
+    void run(int ticks) { for (int i = 0; i < ticks; ++i) { host(); system(); } }
+};
+
+void windowSizeAtEverySize() {
+    const float kMinW = 1024.0f, kMinH = 640.0f;
+    const int screenW = 1920, screenH = 1040;   // a 1920 x 1080 screen less its task bar
+    const float steps[] = {1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f};
+    for (const float os : {1.0f, 1.5f}) {
+        for (const bool pushFirst : {true, false}) {
+            for (const auto& start : {std::pair<std::uint32_t, std::uint32_t>{1300, 780}, {1921, 1081}, {1024, 640}, {1600, 900}}) {
+                Machine m;
+                m.os = os; m.scale = os; m.pushFirst = pushFirst;
+                m.w = static_cast<std::uint32_t>(std::lround(start.first * os)); m.h = static_cast<std::uint32_t>(std::lround(start.second * os));
+                const std::uint32_t w0 = m.w, h0 = m.h;
+                m.run(6);
+                CHECK(m.w == w0 && m.h == h0);   // at the system's own scale nothing moves
+                ScaleFollower f;
+                (void)f.plan("auto", os);
+                f.applied(os);
+                const auto go = [&](float to) {   // the follower's grow: dispatch the scale, ask for the size
+                    const float from = m.scale;
+                    m.scale = to;
+                    const auto ns = f.sizeAfter(m.w, m.h, from, to);
+                    const WindowFit fit = fitWindowToScreen(ns.first, ns.second, to, kMinW, kMinH, screenW, screenH);
+                    m.ask(fit.w, fit.h);
+                    f.applied(to);
+                    m.run(16);
+                    if (std::getenv("DBGLOOK") != nullptr) { std::printf("   go os %.2f pf %d to %.2f start %ux%u ns %ux%u fit %ux%u -> %ux%u\n", static_cast<double>(os), pushFirst ? 1 : 0, static_cast<double>(to), w0, h0, ns.first, ns.second, fit.w, fit.h, m.w, m.h); }
+                    // what the user sees: at least the smallest window, unless the screen is smaller; never larger than the screen; never collapsed
+                    const std::uint32_t needW = std::min(static_cast<std::uint32_t>(std::ceil(kMinW * to)), static_cast<std::uint32_t>(screenW));
+                    const std::uint32_t needH = std::min(static_cast<std::uint32_t>(std::ceil(kMinH * to)), static_cast<std::uint32_t>(screenH));
+                    CHECK(m.w >= needW && m.h >= needH);
+                    CHECK(m.w <= static_cast<std::uint32_t>(screenW) && m.h <= static_cast<std::uint32_t>(screenH));
+                    const std::uint32_t wSeen = m.w, hSeen = m.h;
+                    m.run(12);
+                    CHECK(m.w == wSeen && m.h == hSeen);   // and it stays put: nothing moves it a tick later
+                };
+                for (const float s : steps) { if (s > os + 0.001f) { go(s); } }                                   // every size up
+                for (int i = 5; i >= 0; --i) { if (steps[i] > os + 0.001f && steps[i] < 2.5f) { go(steps[i]); } }   // and every size down
+                go(os);                                                                                          // Ctrl+0: Auto
+                const std::uint32_t needW = std::min(static_cast<std::uint32_t>(std::ceil(kMinW * os)), static_cast<std::uint32_t>(screenW));
+                CHECK(m.w >= needW);
+                if (w0 <= static_cast<std::uint32_t>(screenW) && h0 <= static_cast<std::uint32_t>(screenH) && w0 >= needW) { if (!(m.w == w0 && m.h == h0)) { std::printf("  back at auto: os %.2f pushFirst %d start %ux%u now %ux%u\n", static_cast<double>(os), pushFirst ? 1 : 0, w0, h0, m.w, m.h); } CHECK(m.w == w0 && m.h == h0); }   // Ctrl+0 returns to the automatic size
+            }
+        }
+    }
+    // the fault itself: the mirror as it was shrinks a 1300 x 780 window to a few pixels at 150 % with the system at 100 % (what the drive saw: 1921 x 1081 became 150 x 90)
+    {
+        Machine m;
+        m.naive = true; m.os = 1.0f; m.scale = 1.0f; m.w = 1300; m.h = 780;
+        m.run(4);
+        m.scale = 1.5f;
+        m.ask(1950, 1170);
+        m.run(40);
+        CHECK(m.w < 100 && m.h < 100);
+    }
+    // the same step with the mirror: the window is where it was asked to be
+    {
+        Machine m;
+        m.os = 1.0f; m.scale = 1.0f; m.w = 1300; m.h = 780;
+        m.run(4);
+        m.scale = 1.5f;
+        m.ask(1950, 1170);
+        m.run(40);
+        CHECK(m.w == 1950 && m.h == 1170);
+    }
+    // a size the system never gives (a maximised window ignores the ask): the mirror waits ten ticks and then carries on, and does not hold the screen at a stale size for ever
+    {
+        SizeMirror mirror;
+        mirror.asked(2400, 1350);
+        int silent = 0;
+        for (int i = 0; i < 30; ++i) { if (mirror.tick(1600, 900, 1.5f, 1.0f).write) { break; } ++silent; }
+        CHECK(silent == 10);   // ten ticks of waiting, then the first write
+    }
+    // the work-area fit: the screen wins over the minimum; the minimum wins over a small grow
+    {
+        WindowFit f = fitWindowToScreen(800, 500, 1.0f, 1024.0f, 640.0f, 1920, 1040);
+        CHECK(f.w == 1024 && f.h == 640);
+        f = fitWindowToScreen(2401, 1351, 1.25f, 1024.0f, 640.0f, 1920, 1040);
+        CHECK(f.w == 1920 && f.h == 1040);
+        f = fitWindowToScreen(1000, 600, 2.5f, 1024.0f, 640.0f, 1920, 1040);
+        CHECK(f.w == 1920 && f.h == 1040);   // 2560 x 1600 would not fit the screen
+        f = fitWindowToScreen(1000, 600, 2.5f, 1024.0f, 640.0f, 0, 0);
+        CHECK(f.w == 2560 && f.h == 1600);   // no screen known: the minimum alone
+        f = fitWindowToScreen(1300, 780, 1.0f, 1024.0f, 640.0f, 1920, 1040);
+        CHECK(f.w == 1300 && f.h == 780);    // a window already inside both is left alone
+    }
+}
+
 }  // namespace
 
 int main() {
+    windowSizeAtEverySize();
     skins();
     steps();
     counterFit();

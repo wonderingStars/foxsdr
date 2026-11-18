@@ -1,0 +1,58 @@
+#! frames=900 size=1100x680 bank=4 sections=4:0
+# drive1-size-steps (drive fixes 1, rows L135 / L145 / L153): a window that is NOT maximised keeps its size and its screen when the interface size changes. The drive found Ctrl+= making a 1921 x 1081
+# window 150 x 90 (and Ctrl+0 not bringing it back): the mirror of the window's size into win-w, written every tick, was carried to the system as a logical size and converted with the system's scale
+# (look_logic.hpp SizeMirror), so the window shrank by scale / system scale every tick. Read from the window itself: look.physw / look.physh are its real pixels, look.width / look.height the
+# logical size the screen lays out in (the logical size stays while the window grows with the scale).
+10 state running == 1
+state look.scale == 1.00
+state look.physw == 1100
+state look.physh == 680
+state look.maximised == 0
+
+# Ctrl+= twice: 125 % and 150 %, the window grows with the scale and stays there
++2 key ctrl+=
++20 state look.scale == 1.25
+state look.physw == 1375
+state look.physh == 850
+state look.width == 1100
+state look.height == 680
++30 state look.physw == 1375
+state look.width == 1100
++2 key ctrl+=
++20 state look.scale == 1.50
+state look.physw == 1650
+state look.physh == 1020
+state look.width == 1100
++30 state look.physw == 1650
+state look.physh == 1020
+
+# Ctrl+Shift+= is the same step up (it gets no further than 150 % here: the window may not pass the screen)
++2 key ctrl+-
++20 state look.scale == 1.25
+state look.physw == 1375
++30 state look.physw == 1375
+
+# Ctrl+0: back to Auto and to the size the window had
++2 key ctrl+0
++20 state cfg.interfaceScale == auto
+state look.scale == 1.00
+state look.physw == 1100
+state look.physh == 680
+state look.width == 1100
++30 state look.physw == 1100
+
+# the Interface size list
++2 choose "Interface size" "125%"
++20 state look.scale == 1.25
+state look.physw == 1375
+state look.physh == 850
++30 state look.physw == 1375
++2 choose "Interface size" "150%"
++20 state look.scale == 1.50
+state look.physw == 1650
++30 state look.physw == 1650
++2 choose "Interface size" "Auto (follows Windows, 100% here)"
++20 state look.scale == 1.00
+state look.physw == 1100
+state look.physh == 680
++30 state look.physw == 1100

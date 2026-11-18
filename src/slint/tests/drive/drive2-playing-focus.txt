@@ -1,0 +1,22 @@
+#! frames=1500 size=1600x3000 bank=0 sections=0:1 FOXSDR_SLINT_FRAME_LOG=1
+# drive2-playing-focus (drive fixes 2, item 2): while an I/Q file PLAYS, a text field keeps the keyboard and keeps what is typed into it (parts 04 and 05 of the real-mouse drive: "text fields lose focus and typing fails while it plays, works when paused"). The frame meter line at the end of the log is the cost of a tick while it plays.
+10 state running == 1
++1 choose "Source"#2 "IQ file"
++5 type "I/Q file path" "{fixtures}/ais-decoder.wav"
++1 key enter
++2 click "Open"
++40 state deviceName contains ais-decoder
++10 state lm.fact.playback.1.speed == 1
+# the path box: pointer focus, a second of playing, then keys typed one after another
++1 press "I/Q file path"
++1 key end
++30 key x
++30 key y
++30 key z
++3 expect "I/Q file path" value contains "xyz"
+# the speed box (the transport panel is part of the playing state)
++1 press "Playback speed"
++1 key end
++30 key 5
++30 key 6
++3 expect "Playback speed" value contains "56"

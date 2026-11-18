@@ -1,0 +1,13 @@
+#! frames=400 size=1600x900
+# drive2-palette (drive fixes 2, item 6): typed text in Quick find finds the SECTIONS of every bank (TOOLS' Export among them: "Export" used to find nothing) and the controls the help describes ("digit grouping"), and picking one opens its section. The rows are read back through state palette.titles.
+10 state running == 1
++1 key ctrl+k
++5 key e
++1 key x
++1 key p
++1 key o
++1 key r
++1 key t
++3 state palette.titles contains "Export"
++1 key enter
++5 state bank == 2

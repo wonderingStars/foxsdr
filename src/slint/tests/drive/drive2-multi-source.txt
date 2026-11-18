@@ -1,0 +1,19 @@
+#! frames=1200 size=1600x1200 bank=0 sections=0:1 FOXSDR_FILE_PICK={fixtures}/aprs-decoder.wav
+# drive2-multi-source (drive fixes 2, item 3): with several radios open, a source chosen in the SIGNAL bank's Source list acts on the SELECTED radio (the drive saw four choices do nothing with six radios open; with one radio it worked). Here radio 3 is selected: the I/Q file row shows its card, a file opened there plays on radio 3 and radio 1 stays on the generator; the engine refuses the sound card for any radio but the first (Engine SELECT_SOURCE), by design.
+10 state running == 1
++1 radio add 2
++1 radio add 3
++1 radio add 4
++30 state workspace.radios == 4
++1 click "2 x 2"
++15 state workspace.selected == 1
++1 click "Controls follow Radio 3"
++15 state workspace.selected == 3
++1 choose "Source"#2 "IQ file"
++20 expect "Browse..." enabled equals "true"
++1 type "I/Q file path" "{fixtures}/ais-decoder.wav"
++1 key enter
++2 click "Open"
++40 state workspace.r.3.device contains "IQ file"
+state workspace.r.1.device == "Signal generator"
+state workspace.r.2.device == "Signal generator"

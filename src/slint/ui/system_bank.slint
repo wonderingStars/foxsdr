@@ -912,25 +912,36 @@ export component KPanel inherits VerticalLayout {
     callback act(string, string);
     spacing: 6px;
     alignment: start;
+    // WHAT WAS TYPED AND NOT YET COMMITTED (drive fixes 1, S41): a key, a tick or a pick does not take the keyboard from a field (the keys' rule), so a number typed into "Clarifier offset (Hz)" and
+    // followed by a press on "Set the clarifier" reached the host only on Enter or on the field losing focus - and the key acted on the OLD text (it set 0 with no refusal). Every action of the
+    // panel hands over the field's text first.
+    property <string> typed-id;
+    property <string> typed-text;
+    function flush() {
+        if (root.typed-id != "") {
+            root.act(root.typed-id, root.typed-text);
+            root.typed-id = "";
+        }
+    }
     for r[i] in root.rows : VerticalLayout {
         spacing: 3px;
         if r.kind == 0 : Text { text: r.label; font-family: Theme.font-ui; font-size: Theme.font-small; font-weight: Theme.weight-semibold; color: Theme.fg; wrap: word-wrap; accessible-role: text; }
         if r.kind == 1 : Note { height: self.preferred-height; text: r.label; tone: r.tone == 1 ? ChipTone.warn : r.tone == 2 ? ChipTone.err : r.tone == 3 ? ChipTone.good : ChipTone.neutral; }
         if r.kind == 2 : Line {
-            Mid { Key { label: r.label; enabled: r.enabled; on: r.on; tooltip: r.note; xs: true; shrinkable: true; clicked => { root.act(r.id, ""); } } }
+            Mid { Key { label: r.label; enabled: r.enabled; on: r.on; tooltip: r.note; xs: true; shrinkable: true; clicked => { root.flush(); root.act(r.id, ""); } } }
             Rectangle { horizontal-stretch: 1; }
         }
         if (r.kind == 2 || r.kind == 3) && !r.enabled && r.value != "" : Note { height: self.preferred-height; text: r.value; }   // the one-line reason a dimmed key or tick gives (look review M4)
-        if r.kind == 3 : Line { Tick { horizontal-stretch: 1; label: r.label; on: r.on; enabled: r.enabled; tooltip: r.note; toggled(v) => { root.act(r.id, v ? "1" : "0"); } } }
+        if r.kind == 3 : Line { Tick { horizontal-stretch: 1; label: r.label; on: r.on; enabled: r.enabled; tooltip: r.note; toggled(v) => { root.flush(); root.act(r.id, v ? "1" : "0"); } } }
         if r.kind == 4 : VerticalLayout {
             spacing: 2px;
             Line { RowLabel { text: r.label; } }
-            for o[j] in r.options : RadioChoice { label: o; on: j == r.pick; enabled: r.enabled; tooltip: r.note != "" ? r.note : o; chosen => { root.act(r.id, "\{j}"); } }
+            for o[j] in r.options : RadioChoice { label: o; on: j == r.pick; enabled: r.enabled; tooltip: r.note != "" ? r.note : o; chosen => { root.flush(); root.act(r.id, "\{j}"); } }
         }
         if r.kind == 5 : VerticalLayout {
             spacing: 2px;
             Line { WrapLabel { text: r.label; } }
-            LineInput { value: r.value; enabled: r.enabled; name: r.label; tooltip: r.note; mono: true; committed(t) => { root.act(r.id, t); } }
+            LineInput { value: r.value; enabled: r.enabled; name: r.label; tooltip: r.note; mono: true; edited(t) => { root.typed-id = r.id; root.typed-text = t; } committed(t) => { root.typed-id = ""; root.act(r.id, t); } }
         }
         if r.kind == 9 : VerticalLayout {
             spacing: 2px;

@@ -76,6 +76,23 @@ std::string signatureOf(const std::vector<Row>& rows) {
     return s;
 }
 
+bool sameRowShape(const std::vector<Row>& last, const std::vector<Row>& now, std::vector<std::size_t>& changed) {
+    changed.clear();
+    if (last.size() != now.size()) { return false; }
+    for (std::size_t i = 0; i < now.size(); ++i) {
+        if (last[i].kind != now[i].kind || last[i].id != now[i].id) { return false; }
+    }
+    for (std::size_t i = 0; i < now.size(); ++i) {
+        const Row& a = last[i];
+        const Row& b = now[i];
+        if (a.label != b.label || a.value != b.value || a.note != b.note || a.on != b.on || a.enabled != b.enabled || a.pick != b.pick || a.tone != b.tone ||
+            std::lround(a.level * 1000.0f) != std::lround(b.level * 1000.0f) || a.options != b.options) {
+            changed.push_back(i);
+        }
+    }
+    return true;
+}
+
 // ============================================================ the record ============================================================
 namespace {
 constexpr std::size_t kMaxRecordBytes = 256 * 1024;

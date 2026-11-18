@@ -41,7 +41,8 @@ struct MapJShared {
     std::string tileCacheRoot;                                       // "" = no cache folder known: the line says there is none
     AntennaInput antenna;
     std::array<std::string, 5> antennaText{"14.2", "100", "0.25", "0.66", "3"};
-    std::string antennaError;
+    std::string antennaError;                                        // the first field that is wrong: its sentence (an English key), "" when every typed field is good
+    std::array<std::string, 5> antennaSlotError{};                   // each field's own, so a good entry in one does not clear another's
     bool testFeedsDone = false;
     std::string cacheLine;                                           // the tile cache's words, read every few seconds, not every tick
     bool cacheHas = false;

@@ -27,6 +27,8 @@ std::string dottedFrequencyText(double hz, int style);
 bool parseTypedFrequencyHz(const std::string& text, double& hz);
 // The same; `ambiguousComma` is set when the text was refused as "14,200" (one comma, three digits after it) on a computer whose decimal sign is a dot.
 bool parseTypedFrequencyHz(const std::string& text, double& hz, bool* ambiguousComma);
+// The counter menu's "Paste frequency" is offered while the clipboard holds a frequency the box would take (drive fixes 2, item 5: it was offered only while the clipboard was EMPTY).
+bool pasteFrequencyOffered(const std::string& clipboardText);
 
 // ---- item 3: the lock ----
 // True for the commands that move a radio's frequency: SET_CENTRE, SET_FREQUENCY, SET_VFO_OFFSET, STEP_TUNE, BOOKMARK_TUNE, PLUGIN_PRESET and a SCANNER_RUN that starts (ival[0] != 0). Everything else

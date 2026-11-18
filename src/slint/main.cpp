@@ -1082,7 +1082,7 @@ int main(int argc, char** argv) {
                 e.push_back(entry(MenuItemKind::Checked, 104, "Enlarge every reading", "", duties.interfaceHalf().readingsScale > 1.0f));
                 e.push_back(entry(MenuItemKind::Separator, 0, ""));
                 e.push_back(entry(MenuItemKind::Item, 105, "Copy frequency", fmt("%.6f MHz", state.tunedHz / 1e6).c_str()));
-                e.push_back(entry(MenuItemKind::Item, 106, "Paste frequency", "", false, !!clipGet().empty()));
+                e.push_back(entry(MenuItemKind::Item, 106, "Paste frequency", "", false, foxsdr::slintgaps::pasteFrequencyOffered(clipGet())));   // (drive fixes 2, item 5: it was `!!clipGet().empty()`, offered only while the clipboard was empty)
                 e.push_back(entry(MenuItemKind::Separator, 0, ""));
                 e.push_back(entry(MenuItemKind::Checked, 107, "Lock the tuning step", "", laneC.stepLocked()));
                 e.push_back(entry(MenuItemKind::Checked, 108, "Delta lock", "", laneC.deltaOn(workspace.selectedRadio())));
@@ -1191,6 +1191,7 @@ int main(int argc, char** argv) {
     // window's scale. Read from the interface half once a tick (a pick in SYSTEM > Display is saved there at once) and at the first tick: what changed since the
     // last look is applied, nothing else - so a counter face picked from the menu stays until the saved style moves.
     foxsdr::slintlook::ScaleFollower scaleFollower;
+    foxsdr::slintlook::SizeMirror sizeMirror;   // the real window size into win-w / win-h, without the shrink a pinned interface size caused (look_logic.hpp)
     std::string lookTheme, lookStyle;
     bool lookHc = false, winHc = false;   // slint-gaps.md item 11: the high-contrast skin in force, and Windows' own setting (polled once a second; FOXSDR_SLINT_WINDOWS_HC=1 stands in for it in a bounded run)
     std::string skinNow = "workbench";
@@ -1221,9 +1222,13 @@ int main(int argc, char** argv) {
         if (plan.change) {
             const auto sz = ui->window().size();
             ui->window().dispatch_scale_factor_change_event(plan.want);
-            if (!ui->window().is_maximized()) {   // the logical size stays: the window grows with the scale
+            if (!ui->window().is_maximized()) {   // the logical size stays: the window grows with the scale, never past the screen and never below the smallest window at the new scale
                 const auto ns = scaleFollower.sizeAfter(sz.width, sz.height, cur, plan.want);
-                ui->window().set_size(slint::PhysicalSize({ns.first, ns.second}));
+                int screenW = 0, screenH = 0;
+                if (!foxsdr::slintgaps::windowWorkArea(screenW, screenH)) { screenW = screenH = 0; }
+                const foxsdr::slintlook::WindowFit fit = foxsdr::slintlook::fitWindowToScreen(ns.first, ns.second, plan.want, kMinWindowW, kMinWindowH, screenW, screenH);
+                ui->window().set_size(slint::PhysicalSize({fit.w, fit.h}));
+                sizeMirror.asked(fit.w, fit.h);
             }
             scaleFollower.applied(plan.want);
             std::fprintf(stderr, "foxsdr-slint: look: interface size '%s' = scale %.2f (the system's %.2f)\n", half.interfaceScale.c_str(), static_cast<double>(plan.want), static_cast<double>(plan.os));
@@ -1476,6 +1481,17 @@ int main(int argc, char** argv) {
         em.set_format_index(exportFormatIdx);
     };
 
+    // THE SUBMENU OF A RIGHT-CLICK MENU (drive fixes 1, L229): the waterfall menu's "Clear all markers" row asks for its panel on a click or a hover (ui/menus.slint submenu-requested); the one row in it is the
+    // second press ("Yes, remove all N"), as the Markers sheet asks it. The row used to ask and nobody answered, so the submenu never opened.
+    ui->on_menu_submenu_requested([&](int id, float x, float y) {
+        if (id != 405 || lists.markers.empty()) { return; }
+        std::vector<MenuEntry> e;
+        e.push_back(entry(MenuItemKind::Item, 406, cascade::core::formatText(cascade::i18n::tr("Yes, remove all %zu"), lists.markers.size()).c_str()));
+        ui->set_sub_entries(std::make_shared<slint::VectorModel<MenuEntry>>(std::move(e)));
+        ui->set_menu_open_sub(id);
+        ui->invoke_open_submenu(x, y);
+    });
+    ui->on_menu_item_hovered([&](int) { ui->set_menu_open_sub(-1); });
     ui->on_menu_activated([&](int id) {
         switch (id) {
             case 101: case 102: case 104: {   // the same three settings the Display body saves (counterScale, readingsScale); this window does not draw the figures larger yet (the record, item 6)
@@ -2458,6 +2474,50 @@ int main(int argc, char** argv) {
         // the contract's logical rows of bank 4, in the order of `settings`: Display 0, Key bindings 5, Updates 3, Language 1, Diagnostics 6, Usage reporting 7, Serial ports 4
         static const int kRowOf[7] = {0, 5, 3, 1, 6, 7, 4};
         for (int i = 0; i < 7; ++i) { const int row = kRowOf[i]; add("SETTING", settings[i], "System bank", [=, &bankIndex, &openSections, &systemBank] { bankIndex = 4; ui->set_bank_index(4); openSections[4].insert(row); systemBank.sectionOpened(row); }); }
+        // EVERY SECTION OF EVERY BANK, and the controls the help describes (drive fixes 2, item 6): typed text found only the five banks, seven SYSTEM sections, modes, bookmarks and plugins - no TOOLS section
+        // ("Export" found nothing) and no control. A section is found by its name in the language in force or in English, a control by the help topic that names it (title, sentences, key words), and either opens
+        // its bank and unfolds its section as a click on the rail would.
+        {
+            struct PalSection { int bank; int row; const char* name; };
+            static const PalSection kSections[] = {
+                {0, 0, FOX_TR_NOOP("Patch")}, {0, 1, FOX_TR_NOOP("Source")}, {0, 2, FOX_TR_NOOP("Radio")}, {0, 3, FOX_TR_NOOP("Audio filters")}, {0, 4, FOX_TR_NOOP("Sinks")}, {0, 6, FOX_TR_NOOP("Recorder")}, {0, 7, FOX_TR_NOOP("Frequency correction")},
+                {1, 0, FOX_TR_NOOP("Plugin store")}, {1, 1, FOX_TR_NOOP("Fitted modules")}, {1, 2, FOX_TR_NOOP("Decoders")}, {1, 3, FOX_TR_NOOP("Target details")}, {1, 4, FOX_TR_NOOP("Maps")}, {1, 5, FOX_TR_NOOP("Decoder output")},
+                {2, 0, FOX_TR_NOOP("Demod scope")}, {2, 1, FOX_TR_NOOP("Radar")}, {2, 2, FOX_TR_NOOP("Bookmarks")}, {2, 3, FOX_TR_NOOP("Scanner")}, {2, 4, FOX_TR_NOOP("Airband")}, {2, 5, FOX_TR_NOOP("Export")},
+                {3, 0, FOX_TR_NOOP("Web access")}, {3, 1, FOX_TR_NOOP("CAT")},
+                {4, 2, FOX_TR_NOOP("Frequency correction")}, {4, 8, FOX_TR_NOOP("Beta tester")}, {4, 9, FOX_TR_NOOP("About")},
+                {4, 10, FOX_TR_NOOP("Settings and backup")}, {4, 11, FOX_TR_NOOP("Performance")}, {4, 12, FOX_TR_NOOP("Accessibility")}, {4, 14, FOX_TR_NOOP("Spectrum tools")},
+                {4, 15, FOX_TR_NOOP("Tuning and memories")}, {4, 16, FOX_TR_NOOP("Scanning")}, {4, 17, FOX_TR_NOOP("Recording and files")}, {4, 18, FOX_TR_NOOP("Measurement")}, {4, 19, FOX_TR_NOOP("Sweep")},
+                {4, 20, FOX_TR_NOOP("Network radios")}, {4, 21, FOX_TR_NOOP("Outputs and tracks")}, {4, 22, FOX_TR_NOOP("Needed libraries")}, {4, 23, FOX_TR_NOOP("System")}, {4, 24, FOX_TR_NOOP("Web")}, {4, 25, FOX_TR_NOOP("Ham tools")}};
+            static const char* const kBankWords[5] = {FOX_TR_NOOP("SIGNAL"), FOX_TR_NOOP("DECODE"), FOX_TR_NOOP("TOOLS"), FOX_TR_NOOP("EXTEND"), FOX_TR_NOOP("SYSTEM")};   // not-translated: the rail's own bank names
+            const auto openSection = [&](int bank, int row) {
+                bankIndex = bank; ui->set_bank_index(bank);
+                if (bank == 4 && row == 9) { ui->set_about_open(true); return; }
+                if (bank == 2 && row == 0) { ui->global<ToolsEvents>().invoke_scope_clicked(); return; }
+                openSections[bank].insert(row);
+                helpLastRow[static_cast<std::size_t>(bank)] = row;
+                if (bank == 4) { systemBank.sectionOpened(row); }
+                if (bank == 2 && row == 1) { systemBank.sectionOpened(4); }
+            };
+            std::set<std::pair<int, int>> listed;
+            for (const PalSection& s : kSections) {
+                if (s.bank == 4 && s.row == 8 && !systemBank.testerShown()) { continue; }
+                const std::string shown = cascade::i18n::tr(s.name);
+                if (!matches(shown) && !matches(s.name)) { continue; }
+                listed.insert({s.bank, s.row});
+                const int b = s.bank, r = s.row;
+                paletteActions.push_back({"SECTION", shown, std::string(kBankWords[b]) + " bank", [=] { openSection(b, r); }});
+            }
+            if (!q.empty()) {
+                const auto& topics = foxsdr::slintlanex::helpTopics();
+                for (const int ti : foxsdr::slintlanex::searchTopics(query)) {
+                    const foxsdr::slintlanex::HelpTopic& t = topics[static_cast<std::size_t>(ti)];
+                    if (t.bank < 0 || t.row < 0 || listed.count({t.bank, t.row}) > 0) { continue; }
+                    listed.insert({t.bank, t.row});
+                    const int b = t.bank, r = t.row;
+                    paletteActions.push_back({"CONTROL", foxsdr::slintlanex::titleOf(t), std::string(kBankWords[b]) + " bank", [=] { openSection(b, r); }});
+                }
+            }
+        }
         add("PAGE", "Request a feature", "send a request to the FoxSDR team", [&] { systemBank.openReport(0); });
         add("PAGE", "Report a bug / dislike", "send a report to the FoxSDR team", [&] { systemBank.openReport(1); });
         add("ABOUT", "About FoxSDR", "version, licences", [&] { ui->set_about_open(true); });
@@ -2592,8 +2652,7 @@ int main(int argc, char** argv) {
         const auto w = static_cast<std::uint32_t>(std::max(kMinWindowW * scale(), sz.width + (edge != 2 ? dx * scale() : 0.f)));
         const auto h = static_cast<std::uint32_t>(std::max(kMinWindowH * scale(), sz.height + (edge != 1 ? dy * scale() : 0.f)));
         ui->window().set_size(slint::PhysicalSize({w, h}));
-        ui->set_win_w(static_cast<float>(w) / scale());
-        ui->set_win_h(static_cast<float>(h) / scale());
+        sizeMirror.asked(w, h);   // the mirror (the tick) puts the new size into win-w / win-h once the window has it
     });
 
     // ---- the pictures: one pane's work per visible pane, then its figures into the window ----
@@ -3029,7 +3088,10 @@ int main(int argc, char** argv) {
         {   // the screen follows the real window size (maximise, restore, a DPI change)
             const auto sz = ui->window().size();
             const float sf = std::max(0.5f, ui->window().scale_factor());
-            if (sz.width > 0 && sz.height > 0) { ui->set_win_w(static_cast<float>(sz.width) / sf); ui->set_win_h(static_cast<float>(sz.height) / sf); }
+            const foxsdr::slintlook::SizeMirror::Step mirror = sizeMirror.tick(sz.width, sz.height, ui->window().scale_factor(), scaleFollower.os());
+            if (mirror.write) { ui->set_win_w(mirror.winW); ui->set_win_h(mirror.winH); }
+            if (mirror.repair) { ui->window().set_size(slint::PhysicalSize({mirror.repairW, mirror.repairH})); }
+            (void)sf;
         }
         ui->set_tuned_text(ss(fmtMHz(state.tunedHz)));
         const auto d = digitsOf(state.tunedHz);
@@ -3409,6 +3471,7 @@ int main(int argc, char** argv) {
         publisher.setRadios(workspace.mask());
         publisher.setMapLook(foxsdr::slintmap::mapLookOf(duties.interfaceHalf().aircraftIconPx, duties.interfaceHalf().mapTrailWidthPx, duties.interfaceHalf().mapTrailStyle));
         publisher.publish(state);
+        signalBank.setSelectedRadio(workspace.selectedRadio());
         signalBank.publish(state);
         systemBank.publish(state);
         scopeBank.publish(state, static_cast<double>(nowMs()) / 1000.0);
@@ -3835,6 +3898,13 @@ int main(int argc, char** argv) {
             if (what == "about") { out = ui->get_about_open() ? "1" : "0"; return std::string(); }
             return "shown.import|storePlugin|about, not " + name;
         }
+        if (name == "focus.place") { out = std::string(ui->global<FocusProbe>().get_place()); return std::string(); }   // which of the strip's and title bar's keyboard scopes took the focus last (drive fixes 2, item 9)
+        if (name == "palette.count") { out = std::to_string(paletteActions.size()); return std::string(); }   // the command palette's rows for the query last typed (drive fixes 2, item 6)
+        if (name == "palette.titles") {
+            out.clear();
+            for (const PaletteAction& pa : paletteActions) { out += (out.empty() ? "" : " | ") + pa.title; }
+            return std::string();
+        }
         if (name.rfind("look.", 0) == 0) {
             const std::string what = name.substr(5);
             const auto hex = [](const slint::Color& c) {
@@ -3845,10 +3915,13 @@ int main(int argc, char** argv) {
             if (what == "scale") { out = fmt("%.2f", static_cast<double>(ui->window().scale_factor())); return std::string(); }
             if (what == "width") { out = fmt("%.0f", static_cast<double>(ui->get_win_w())); return std::string(); }
             if (what == "height") { out = fmt("%.0f", static_cast<double>(ui->get_win_h())); return std::string(); }
+            if (what == "physw") { out = std::to_string(ui->window().size().width); return std::string(); }   // the window's real size in physical pixels (drive fixes 1)
+            if (what == "physh") { out = std::to_string(ui->window().size().height); return std::string(); }
+            if (what == "maximised") { out = ui->window().is_maximized() ? "1" : "0"; return std::string(); }
             if (what == "bg") { out = hex(ui->global<Theme>().get_bg()); return std::string(); }
             if (what == "accent") { out = hex(ui->global<Theme>().get_accent()); return std::string(); }
             if (what == "face") { out = face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain"; return std::string(); }
-            return "look.scale|width|height|bg|accent|face, not " + name;
+            return "look.scale|width|height|physw|physh|maximised|bg|accent|face, not " + name;
         }
         if (name == "tunedHz") { out = fmt("%.6f", state.tunedHz); return std::string(); }
         if (name == "centreHz") { out = fmt("%.6f", state.centreHz); return std::string(); }

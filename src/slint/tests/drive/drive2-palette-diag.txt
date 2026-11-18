@@ -1,0 +1,14 @@
+#! frames=300 size=1600x900
+# drive2-palette-diag (drive fixes 2, item 6): "diagnos" finds the Diagnostics section of the SYSTEM bank, and picking it opens that bank.
+10 state running == 1
++1 key ctrl+k
++5 key d
++1 key i
++1 key a
++1 key g
++1 key n
++1 key o
++1 key s
++3 state palette.titles contains "Diagnostics"
++1 key enter
++5 state bank == 4

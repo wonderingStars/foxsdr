@@ -605,7 +605,7 @@ NOT DRIVABLE by reason: readout 827, other 263, needs a signal (no fixture) 120,
 |---|---|---|---|---|---|
 | 239 | Window | dialog | DRIVEN+ASSERTED | gaps1-markers.txt | state markers.shown == 1 after the Markers key, == 0 after the sheet's Close; click Markers opens the sheet (its Copy key appears), click its Close; an expect cannot assert that a control is gone, so the closing is not read back |
 | 240 | Error line | readout | DRIVEN+ASSERTED | gaps1-markers-damaged.txt | state markers.error contains "is not a JSON object" for a damaged markers.json |
-| 241 | Empty message | readout | DRIVEN+ASSERTED | gaps1-markers-damaged.txt | state markers.empty contains "No markers yet." |
+| 241 | Empty message | readout | DRIVEN+ASSERTED | gaps1-markers-damaged.txt | state markers.empty contains "No markers." |
 | 242 | Marker table | table | DRIVEN+ASSERTED | gaps1-markers.txt | state markers.rows == 3 then 2 then 0 as markers are removed |
 | 243 | M<n> cell | readout | DRIVEN+ASSERTED | gaps1-markers.txt | state markers.row.1 starts with "M1" |
 | 244 | Frequency cell | readout | DRIVEN+ASSERTED | gaps1-markers.txt | state markers.row.1 contains the frequency |

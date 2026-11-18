@@ -21,5 +21,33 @@
 +5 state mapj.antennaRows >= 14
 +1 type "Yagi elements" "1"
 +1 key enter
-+5 state mapj.antennaError contains "not a number"
++5 state mapj.antennaError contains "A Yagi has 2 to 20 elements."
++1 state mapj.antennaRows == 0
 +1 shot "mapj-antenna.png"
+# drive fixes 1 (S9): a number the field does not take says the field's own rule, not "not a number", and no table of an old value stays under it; the first wrong field speaks
++1 type "Distance (km)" "0"
++1 key enter
++5 state mapj.antennaError contains "The distance must be above 0 km."
++1 type "Coax (wavelengths)" "500"
++1 key enter
++5 state mapj.antennaError contains "The distance must be above 0 km."
++1 type "Distance (km)" "100"
++1 key enter
++5 state mapj.antennaError contains "The coax length must be above 0 and at most 100 wavelengths."
++1 type "Coax (wavelengths)" "0.25"
++1 key enter
++5 state mapj.antennaError contains "A Yagi has 2 to 20 elements."
++1 type "Velocity factor" "2"
++1 key enter
++5 state mapj.antennaError contains "The velocity factor must be above 0 and at most 1."
++1 type "Velocity factor" "0.66"
++1 key enter
++1 type "Frequency (MHz)" "0.001"
++1 key enter
++5 state mapj.antennaError contains "The frequency must be between 0.01 and 300000 MHz."
++1 type "Frequency (MHz)" "7.1"
++1 key enter
++1 type "Yagi elements" "9"
++1 key enter
++5 state mapj.antennaError == ""
++1 state mapj.antennaRows >= 14
