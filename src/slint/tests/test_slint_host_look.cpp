@@ -185,6 +185,7 @@ void follower() {
 // (set_size) arrives one step later too. "naive" is the mirror as it was (write every tick); the other is SizeMirror.
 struct Machine {
     std::uint32_t w, h;                 // the window's real physical size
+    int x = 0, y = 0;                   // where its top-left is (drive fixes 6, item 2)
     float os;                           // the system's scale
     float scale;                        // the scale the window is drawn at
     float winW = 0.0f, winH = 0.0f;     // what the host last wrote
@@ -218,9 +219,9 @@ struct Machine {
     void run(int ticks) { for (int i = 0; i < ticks; ++i) { host(); system(); } }
 };
 
-void windowSizeAtEverySize() {
+void windowSizeAtEverySize(int screenW, int screenH) {   // the work area of the screen: width and height in physical pixels, its top-left the screen's (drive fixes 6: run for four screens)
     const float kMinW = 1024.0f, kMinH = 640.0f;
-    const int screenW = 1920, screenH = 1040;   // a 1920 x 1080 screen less its task bar
+    const WorkRect work{0, 0, screenW, screenH};
     const float steps[] = {1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f};
     for (const float os : {1.0f, 1.5f}) {
         for (const bool pushFirst : {true, false}) {
@@ -228,6 +229,7 @@ void windowSizeAtEverySize() {
                 Machine m;
                 m.os = os; m.scale = os; m.pushFirst = pushFirst;
                 m.w = static_cast<std::uint32_t>(std::lround(start.first * os)); m.h = static_cast<std::uint32_t>(std::lround(start.second * os));
+                m.x = std::max(0, (screenW - static_cast<int>(m.w)) / 2); m.y = std::max(0, (screenH - static_cast<int>(m.h)) / 2);   // the system centres a new window
                 const std::uint32_t w0 = m.w, h0 = m.h;
                 m.run(6);
                 CHECK(m.w == w0 && m.h == h0);   // at the system's own scale nothing moves
@@ -240,6 +242,8 @@ void windowSizeAtEverySize() {
                     const auto ns = f.sizeAfter(m.w, m.h, from, to);
                     const WindowFit fit = fitWindowToScreen(ns.first, ns.second, to, kMinW, kMinH, screenW, screenH);
                     m.ask(fit.w, fit.h);
+                    const WindowPlace at = placeInWorkArea(m.x, m.y, fit.w, fit.h, work);   // main.cpp moves the window inside the work area after it grows
+                    m.x = at.x; m.y = at.y;
                     f.applied(to);
                     m.run(16);
                     if (std::getenv("DBGLOOK") != nullptr) { std::printf("   go os %.2f pf %d to %.2f start %ux%u ns %ux%u fit %ux%u -> %ux%u\n", static_cast<double>(os), pushFirst ? 1 : 0, static_cast<double>(to), w0, h0, ns.first, ns.second, fit.w, fit.h, m.w, m.h); }
@@ -248,6 +252,9 @@ void windowSizeAtEverySize() {
                     const std::uint32_t needH = std::min(static_cast<std::uint32_t>(std::ceil(kMinH * to)), static_cast<std::uint32_t>(screenH));
                     CHECK(m.w >= needW && m.h >= needH);
                     CHECK(m.w <= static_cast<std::uint32_t>(screenW) && m.h <= static_cast<std::uint32_t>(screenH));
+                    // and the whole window is on the screen: its right and bottom edges are inside the work area, not only its size (the drive saw the bottom 74 px below a 1440 px screen at 150 %)
+                    if (m.x < 0 || m.y < 0 || m.x + static_cast<int>(m.w) > screenW || m.y + static_cast<int>(m.h) > screenH) { std::printf("  off the screen: %dx%d screen, os %.2f scale %.2f window %ux%u at %d,%d\n", screenW, screenH, static_cast<double>(os), static_cast<double>(to), m.w, m.h, m.x, m.y); }
+                    CHECK(m.x >= 0 && m.y >= 0 && m.x + static_cast<int>(m.w) <= screenW && m.y + static_cast<int>(m.h) <= screenH);
                     const std::uint32_t wSeen = m.w, hSeen = m.h;
                     m.run(12);
                     CHECK(m.w == wSeen && m.h == hSeen);   // and it stays put: nothing moves it a tick later
@@ -289,6 +296,25 @@ void windowSizeAtEverySize() {
         for (int i = 0; i < 30; ++i) { if (mirror.tick(1600, 900, 1.5f, 1.0f).write) { break; } ++silent; }
         CHECK(silent == 10);   // ten ticks of waiting, then the first write
     }
+    // where the window sits: the least move that brings it inside the work area; a window as big as the area sits at its corner
+    {
+        const WorkRect r{0, 0, 5120, 1392};
+        WindowPlace p = placeInWorkArea(1360, 270, 2400, 1350, r);
+        CHECK(p.x == 1360 && p.y == 42);   // 1600 x 900 centred on 5120 x 1440, grown to 150 %: its bottom was 270 + 1350 = 1620; now 1392
+        p = placeInWorkArea(4000, 100, 2400, 1350, r);
+        CHECK(p.x == 2720 && p.y == 42);
+        p = placeInWorkArea(-300, -50, 800, 600, r);
+        CHECK(p.x == 0 && p.y == 0);
+        p = placeInWorkArea(500, 300, 800, 600, r);
+        CHECK(p.x == 500 && p.y == 300);   // a window already inside is left alone
+        p = placeInWorkArea(80, 90, 5120, 1392, r);
+        CHECK(p.x == 0 && p.y == 0);
+        const WorkRect second{1920, 0, 3840, 1040};   // a second monitor: the area's own origin
+        p = placeInWorkArea(1000, 500, 1000, 800, second);
+        CHECK(p.x == 1920 && p.y == 240);
+        p = placeInWorkArea(100, 200, 500, 500, WorkRect{});
+        CHECK(p.x == 100 && p.y == 200);   // no area known: where it is
+    }
     // the work-area fit: the screen wins over the minimum; the minimum wins over a small grow
     {
         WindowFit f = fitWindowToScreen(800, 500, 1.0f, 1024.0f, 640.0f, 1920, 1040);
@@ -307,7 +333,11 @@ void windowSizeAtEverySize() {
 }  // namespace
 
 int main() {
-    windowSizeAtEverySize();
+    windowSizeAtEverySize(1920, 1040);   // a 1920 x 1080 screen less its task bar
+    windowSizeAtEverySize(5120, 1440);   // drive fixes 6: the owner's screen, and the same less a 48 px task bar
+    windowSizeAtEverySize(5120, 1392);
+    windowSizeAtEverySize(1366, 768);    // the test machine, and the same less a 40 px task bar
+    windowSizeAtEverySize(1366, 728);
     skins();
     steps();
     counterFit();

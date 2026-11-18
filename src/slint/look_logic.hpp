@@ -55,6 +55,13 @@ std::pair<std::uint32_t, std::uint32_t> sizeForScale(std::uint32_t width, std::u
 struct WindowFit { std::uint32_t w = 0, h = 0; };
 WindowFit fitWindowToScreen(std::uint32_t w, std::uint32_t h, float scale, float minW, float minH, int screenW, int screenH);
 
+// WHERE THE WINDOW SITS AFTER IT GROWS (drive fixes 6, item 2). The fit above bounds the SIZE by the work area; a window that is the right size but still has its top-left where it was
+// (a 1600 x 900 window centred on a 5120 x 1440 screen has its top at 270) ends past the bottom edge once it is 1350 high: the drive found its bottom 74 pixels below a 1440 pixel screen at
+// 150 %. The place is the window's own x, y moved the least that puts the whole window inside the work area `r` (a window larger than the area sits at its top-left corner).
+struct WorkRect { int left = 0, top = 0, right = 0, bottom = 0; };   // physical pixels; right and bottom are exclusive
+struct WindowPlace { int x = 0, y = 0; };
+WindowPlace placeInWorkArea(int x, int y, std::uint32_t w, std::uint32_t h, const WorkRect& r);
+
 // THE MIRROR OF THE REAL WINDOW SIZE INTO THE SCREEN'S SIZE PROPERTIES (ui/main.slint win-w / win-h, bound to the window's width and height). When the scale this window is drawn at is not
 // the one the operating system gave it (an interface size of 125 % to 250 %: the follower above dispatches it), a CHANGED win-w is carried to the system as a LOGICAL size and converted
 // with the system's scale, not ours: the window is resized to win-w x os instead of win-w x scale, one step later, and the next tick's mirror writes the smaller number again - the

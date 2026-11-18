@@ -114,15 +114,23 @@ void* findMainWindow() {
     return c.found;
 }
 
-bool windowWorkArea(int& width, int& height) {
+bool windowWorkRect(int& left, int& top, int& right, int& bottom) {
     HWND h = static_cast<HWND>(findMainWindow());
     const HMONITOR m = h != nullptr ? ::MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST) : ::MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
     MONITORINFO mi{};
     mi.cbSize = sizeof(mi);
     if (m == nullptr || !::GetMonitorInfoW(m, &mi)) { return false; }
-    width = static_cast<int>(mi.rcWork.right - mi.rcWork.left);
-    height = static_cast<int>(mi.rcWork.bottom - mi.rcWork.top);
-    return width > 0 && height > 0;
+    left = static_cast<int>(mi.rcWork.left); top = static_cast<int>(mi.rcWork.top);
+    right = static_cast<int>(mi.rcWork.right); bottom = static_cast<int>(mi.rcWork.bottom);
+    return right > left && bottom > top;
+}
+
+bool windowWorkArea(int& width, int& height) {
+    int l = 0, t = 0, r = 0, b = 0;
+    if (!windowWorkRect(l, t, r, b)) { return false; }
+    width = r - l;
+    height = b - t;
+    return true;
 }
 
 bool installFileDrop(void* window, std::function<void(const std::string&)> onDrop) {
@@ -178,6 +186,7 @@ std::string clipboardText() {
 bool openUrl(const std::string& url) { return foxsdr::slintdesk::openAddress(url); }
 void* findMainWindow() { return nullptr; }
 bool windowWorkArea(int&, int&) { return false; }
+bool windowWorkRect(int&, int&, int&, int&) { return false; }
 bool installFileDrop(void*, std::function<void(const std::string&)>) { return false; }
 bool setClipboardText(const std::string& utf8) { return foxsdr::slintdesk::copyText(utf8); }
 std::string clipboardText() { return foxsdr::slintdesk::pasteText(); }
