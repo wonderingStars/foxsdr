@@ -4468,7 +4468,7 @@ void Engine::refreshPluginRunner(bool allRadios) {
             const std::shared_ptr<cascade::core::ReceiverSnapshot> snap = snapshotOf(radio);
             return (snap != nullptr && snap->read(ps)) ? ps.rx.sampleRateHz : 0.0;
         }
-        return rx().pipeline_.inputRateHz();
+        return rx().pipeline_.rawBandRateHz();   // what a plugin's raw I/Q really is (the source's own rate when the chain refused to follow it)
     };
     svc.unixTimeMs = [] {
         return static_cast<std::int64_t>(

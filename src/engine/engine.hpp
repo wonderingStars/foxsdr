@@ -1258,6 +1258,9 @@ private:
     // A pipeline refusal — fractional channel rate — keeps the old chain and
     // surfaces the reason in sourceError_.
     void followInputRate();
+    // A newly installed source whose span is narrower than the VFO's reach (a 48 kS/s recording after the generator's 2 MS/s with the VFO 300 kHz out)
+    // would leave the VFO outside what it delivers. Puts it back inside (the centre of the span when it cannot stay), after the rate is followed.
+    void keepVfoInsideSpan();
 
     cascade::core::Pipeline& pipeline_ = receivers_[0]->pipeline_;
 

@@ -28,6 +28,7 @@
 // - a plugin picture saved as a BMP, the screenshot's files - is src/gui/app_window_disk_work.cpp.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include "core/soundcard_panel.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -168,6 +169,16 @@ void Engine::pollIqOpen() {
     installOpenedIqFile(std::move(r.file), r.path);
 }
 
+void Engine::keepVfoInsideSpan() {
+    if (radioIsKiwi()) { return; }
+    const double off = rx().pipeline_.vfoOffsetHz();
+    const double inside = cascade::gui::vfoOffsetInsideSpan(off, rx().pipeline_.inputRateHz(), rx().vfoBandwidthHz_);
+    if (inside == off) { return; }
+    // Out of the span: the dial goes back to the centre, so the dial and the source's centre agree and a plugin that reads the band sees the tuned frequency in it.
+    rx().pipeline_.setVfoOffsetHz(0.0);
+    rx().vfoOffsetKhz_ = 0.0f;
+}
+
 void Engine::installOpenedIqFile(std::unique_ptr<cascade::source::IqFileSource> file, const std::string& path) {
     // Carry the displayed frequency over: a file's center is nominal anyway, and a readout that jumps to 0 on source switch would read as a
     // tuning bug. The AIR frequency carries over; the file is told it through its own converter, which is off unless the user set one for I/Q
@@ -190,6 +201,7 @@ void Engine::installOpenedIqFile(std::unique_ptr<cascade::source::IqFileSource> 
     rx().restoreKeep_ = cascade::gui::RememberedSource{};
     rx().restoreKeepLabel_.clear();
     followInputRate();  // DSP chain + frequency axis track the file's rate
+    keepVfoInsideSpan();   // an offset kept from the previous source is not allowed to leave the new file's span (drive fixes 5, item 3)
     // The RATE, never the path: a file name is the user's own data and a report is a support artefact, not a listening record.
     cc::diagLogf("source: opened an I/Q file at %.0f S/s", rx().pipeline_.activeSource().sampleRateHz());
 }

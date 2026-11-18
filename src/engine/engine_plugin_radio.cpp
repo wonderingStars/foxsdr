@@ -60,7 +60,7 @@ void Engine::rebuildRunnerOf(std::size_t slot) {
         // THE PATCH HAS THE DECODERS (0.99.18; see refreshPluginRunner): none on any receiver while it runs.
         r.clear();
     } else {
-        r.rebuild(pluginsOnRadio(slot), cc::Pipeline::kAudioRateHz, pipe.inputRateHz(), pipe.activeSource().centerFrequencyHz());
+        r.rebuild(pluginsOnRadio(slot), cc::Pipeline::kAudioRateHz, pipe.rawBandRateHz(), pipe.activeSource().centerFrequencyHz());
         pipe.setPluginRunner(&r);
     }
 }

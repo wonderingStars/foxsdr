@@ -878,6 +878,13 @@ public:
     // until the first successful setInputRateHz).
     double inputRateHz() const;
 
+    // The rate of the RAW band the decoder plugins and the patch are handed (processIq runs on the source's own blocks, before the chain): the
+    // chain's input rate while it follows the source, and the SOURCE'S OWN rate when the chain refused to follow it (a recording at
+    // 1083333 S/s has no integer channel, so the chain stays at its old rate). Telling a RAW plugin the chain's rate then was a lie about
+    // samples that were never resampled: GSM Broadcast, which needs 1083333 Hz, was told 2000000 and showed nothing (drive part 23). A
+    // readback a hair off the integer the chain snapped it to is still the chain's rate.
+    double rawBandRateHz();
+
     // The audio-side channel rate (the Vfo's output rate = input rate /
     // decimation) — the rate the Demodulator runs at and the resampler
     // converts to 48 kHz. Exposed for the GUI's bandwidth limits and for

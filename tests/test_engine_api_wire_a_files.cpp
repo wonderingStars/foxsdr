@@ -408,6 +408,26 @@ void testWavCentre() {
     CHECK(std::fabs(std::strtod(r.fact("tuned.1.centreHz").c_str(), nullptr) - 137.912e6) > 1.0e6);   // a zero centre is "unknown"
 }
 
+// DRIVE FIXES 5, ITEM 3: a tuning offset kept from the previous source. The generator's 2 MS/s span allows a VFO 300 kHz off its centre; a 48 kS/s recording opened
+// next does not, and the old offset used to ride along (parts 22 and 24: the typed frequency then put the SOURCE centre at "dial minus 300 kHz", Loran-C was refused
+// as outside the radio's band, and the station labels read "0 in view"). Opening a file puts the VFO inside the new file's span; an offset already inside is kept.
+void testFileOffsetInsideSpan() {
+    std::printf("F5b: the VFO is inside a newly opened file's span\n");
+    const fs::path narrow = g_dir / "narrow.wav";
+    writeIqWav(narrow, -1.0);   // 48 kS/s: reach +-24 kHz before the filter's own half width
+    Rig r;
+    CHECK_EQ(r.send(testing::cmd(FOXAPI_OP_SET_FREQUENCY, 98.0e6, 0)).status(), FOXAPI_OK);
+    CHECK_EQ(r.send(testing::cmd(FOXAPP_OP_SET_VFO_OFFSET_FREE, 300.0e3, 0)).status(), FOXAPI_OK);
+    const auto offset = [&] { return std::strtod(r.fact("tuned.1.hz").c_str(), nullptr) - std::strtod(r.fact("tuned.1.centreHz").c_str(), nullptr); };
+    CHECK(std::fabs(offset() - 300.0e3) < 1.0);
+    const std::string t = "file:" + narrow.generic_string();
+    FoxCommand c = testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0.0, 0, nullptr);
+    std::snprintf(c.text, sizeof c.text, "%s", t.c_str());
+    CHECK_EQ(r.send(c).status(), FOXAPI_OK);
+    CHECK(r.until([&] { return std::fabs(offset()) <= 24000.0; }, 8000));
+    CHECK(std::fabs(offset()) <= 24000.0);
+}
+
 void testOverlayGradient() {
     std::printf("F6: station overlay and gradient\n");
     const fs::path csv = g_dir / "stations.csv";
@@ -570,6 +590,7 @@ int main() {
     testFavourites();
     testPacks();
     testWavCentre();
+    testFileOffsetInsideSpan();
     testOverlayGradient();
     testBookmarkFields();
     fs::remove_all(g_dir, ec);

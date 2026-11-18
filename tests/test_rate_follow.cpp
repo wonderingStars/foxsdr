@@ -444,6 +444,27 @@ int main() {
         p.stop();
     }
 
+    // --- 8b. DRIVE FIXES 5, ITEM 2: a recording at a rate the chain cannot follow. The chain refuses 1083333 S/s (3 x 361111: no integer channel in
+    //         150..300 kHz) and stays at its old rate, but the RAW band the plugins are handed is the source's own blocks, so what a RAW plugin is TOLD
+    //         must be the source's rate (GSM Broadcast needs 1083333 Hz and was told 2000000: part 23). A followed rate, and a readback a hair
+    //         off the integer the chain snapped it to, are still the chain's.
+    {
+        Pipeline::Config c8 = cfg;
+        c8.sampleRateHz = 2000000.0;
+        Pipeline q(c8);
+        CHECK(q.rawBandRateHz() == 2000000.0);   // generator: chain and source agree
+        q.setSource(std::make_unique<cascade::source::SigGenSource>(1083333.0));
+        CHECK(q.setInputRateHz(1083333.0) == false);
+        CHECK(q.inputRateHz() == 2000000.0);     // the refusal keeps the chain where it was
+        CHECK(q.rawBandRateHz() == 1083333.0);   // ...and the raw band says what it really is
+        q.setSource(std::make_unique<cascade::source::SigGenSource>(2560000.0));
+        CHECK(q.setInputRateHz(2560000.0));
+        CHECK(q.rawBandRateHz() == 2560000.0);
+        q.setSource(std::make_unique<cascade::source::SigGenSource>(2399999.99252));
+        CHECK(q.setInputRateHz(2399999.99252));   // snapped to 2400000
+        CHECK(q.rawBandRateHz() == q.inputRateHz());
+    }
+
     // --- 9. The device panel's red line (core/rate_follow_status.hpp). A
     //        refusal is shown; the next ACCEPTED rate clears it, so going back
     //        to a working rate does not leave "refused" on screen under a

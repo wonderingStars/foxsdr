@@ -526,7 +526,7 @@ bool windowBelongsTo(const std::string& key, const std::string& plugin) {
 }
 
 std::string pluginUseText(const std::vector<PluginRow>& rows, const OpenWindows& open) {
-    constexpr std::uint32_t kWindow = 1u, kMapPage = 2u, kRadarScope = 4u, kDecoderOutput = 8u;   // FOXAPP_PLUGIN_USE_*
+    constexpr std::uint32_t kWindow = 1u, kMapPage = 2u, kRadarScope = 4u;   // FOXAPP_PLUGIN_USE_* (bit 8, the Decoder output page, is never sent: see below)
     std::string text;
     for (const PluginRow& r : rows) {
         if (!r.loaded || r.file.empty()) { continue; }
@@ -534,7 +534,9 @@ std::string pluginUseText(const std::vector<PluginRow>& rows, const OpenWindows&
         for (const std::string& k : open.windows) { if (windowBelongsTo(k, r.name)) { bits |= kWindow; break; } }
         if ((r.caps & CASCADE_CAP_TRACK_SOURCE) != 0u && open.mapPages.count(r.name) > 0) { bits |= kMapPage; }
         if ((r.caps & CASCADE_CAP_TRACK_SOURCE) != 0u && open.radarScope) { bits |= kRadarScope; }   // while the scope shows, every track source is in use (app_window_plugin_use.cpp 68)
-        if (open.decoderOutput && (r.caps & (CASCADE_CAP_DECODER | CASCADE_CAP_IQ_DECODER)) != 0u) { bits |= kDecoderOutput; }
+        // DRIVE FIXES 5, ITEM 1: open.decoderOutput is NOT a use. The Decoder output page shows the lines of whatever is running; reporting bit 8 for every
+        // text decoder woke all 61 to 66 fitted decoders when the page opened (Show decoder output, "+ Window", START on one text plugin), and STOP ALL then
+        // could not hold them down. A plugin runs because the user started it, ticked Keep running, or opened its own window or preset.
         if (bits == 0u) { continue; }
         text += r.file;
         text += '\t';

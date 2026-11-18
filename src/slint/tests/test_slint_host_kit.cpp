@@ -253,7 +253,16 @@ int main() {
         open.windows.insert(windowKey("instrument", "POCSAG", "POCSAG pager"));
         open.decoderOutput = true;
         const std::string text = pluginUseText(k.rows, open);
-        CHECK(text == "aprs-decoder-1.0.2-abi3-win-x64.dll\t8\npocsag-decoder-1.0.5-abi3-win-x64.dll\t9\n");
+        // DRIVE FIXES 5, ITEM 1: the Decoder output page is a place to READ what is running; it asks for nothing. It used to report bit 8 for
+        // every text decoder (aprs "8", pocsag "9"), which woke all 61 to 66 fitted decoders. Only the plugin whose own window is open is in use.
+        CHECK(text == "pocsag-decoder-1.0.5-abi3-win-x64.dll\t1\n");
+        {
+            // Every route to the Decoder output page (Show decoder output, "+ Window", START on one text plugin, a preset) ends in open.decoderOutput:
+            // none of them reports a plugin as used.
+            OpenWindows outputOnly;
+            outputOnly.decoderOutput = true;
+            CHECK(pluginUseText(k.rows, outputOnly).empty());
+        }
         OpenWindows map; map.mapPages.insert("APRS / AX.25 Packet Decoder");   // not a track source: no bit
         CHECK(pluginUseText(k.rows, map).empty());
         // THE RADAR SCOPE'S BIT (docs 6.57; FOXAPP_PLUGIN_USE_RADAR_SCOPE = 4): while the scope shows, EVERY track source is in use - an AUTO ADS-B plugin sleeps without it and the scope stays empty -

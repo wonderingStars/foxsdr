@@ -2125,6 +2125,13 @@ double Pipeline::inputRateHz() const {
     return mirrorInputRateHz_.load(std::memory_order_relaxed);
 }
 
+double Pipeline::rawBandRateHz() {
+    const double chain = inputRateHz();
+    const double src = activeSource().sampleRateHz();
+    if (!(src > 0.0)) { return chain; }
+    return std::fabs(src - chain) <= std::max(1.0, chain * 1e-6) ? chain : src;
+}
+
 double Pipeline::channelRateHz() const {
     return mirrorChannelRateHz_.load(std::memory_order_relaxed);
 }
