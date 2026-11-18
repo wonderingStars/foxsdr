@@ -88,7 +88,13 @@ export component TipTimer {
     Timer {
         interval: 150ms;
         running: root.shown;
-        triggered => { TipState.beat += 1; }
+        triggered => {
+            // A TIP THAT HAS BEEN LEFT BEHIND: the item moved (a note appeared above it, a page jumped) and a pointer that has not moved keeps `hovered` true, so the tip would
+            // stay where the item was, over whatever is there now ("Receiver latitude" over the Longitude field, drive fixes 3, item 7). The tip closes; if the pointer really is still
+            // on the item the 600 ms timer opens it again under the item's new place.
+            if (Math.abs(TipState.x - (root.absolute-position.x + root.anchor-x)) > 1px || Math.abs(TipState.y - (root.absolute-position.y + root.anchor-h + 6px)) > 1px) { TipState.shown = false; }
+            else { TipState.beat += 1; }
+        }
     }
     changed hovered => {
         if (!self.hovered && root.shown) { TipState.shown = false; }

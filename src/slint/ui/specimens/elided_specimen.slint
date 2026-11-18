@@ -10,6 +10,7 @@
 //   10,  110, 64,   64   RailKey, caption "INSTRUMENTS" in a 64 px rail, tooltip "Tools" (hover 42, 142)
 //   200, 110, 120,  24   SelectKey, a value far too long for 120 px, no tooltip       (hover 240, 122)
 //   10,  190, 150,  32   Section, a name far too long for 150 px, tooltip "Does things" (hover 40, 206)
+//   330, mover-y, 60, 30  Key "Moves", tooltip "Moving tip"; test_slint_elided.cpp moves it away under a resting pointer (hover 360, 215)
 import { Theme } from "../theme.slint";
 import { TipState, ElidedHint } from "../tooltip.slint";
 import { Key, RailKey } from "../keys.slint";
@@ -28,5 +29,8 @@ export component ElidedSpecimen inherits Window {
     Key { x: 200px; y: 70px; width: self.preferred-width; label: "Fits"; tooltip: "Own tip"; }
     RailKey { x: 10px; y: 110px; width: 64px; height: 64px; caption: "INSTRUMENTS"; tooltip: "Tools"; }
     SelectKey { x: 200px; y: 110px; width: 120px; value: "A value far too long for the key"; }
+    // a Key that can be moved under a pointer that has not moved (drive fixes 3, item 7): its tip must not stay where the Key was ("Receiver latitude" over the Longitude field)
+    in-out property <length> mover-y: 200px;
+    Key { x: 330px; y: root.mover-y; width: 60px; label: "Moves"; tooltip: "Moving tip"; }
     Section { x: 10px; y: 190px; width: 150px; name: "A section name far too long to fit"; tooltip: "Does things"; }
 }

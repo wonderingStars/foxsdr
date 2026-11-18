@@ -51,7 +51,7 @@ export struct BookmarkRow {
 export struct BookmarksModel {
     name-draft: string, add-label: string, group-draft: string, groups: [SelectItem], import-path: string, import-label: string,
     import-note: string, disk-wait: string, search: string, filter-groups: [SelectItem], filter-index: int, favourites-only: bool,
-    on-spectrum: bool, stack-names: bool, stack-enabled: bool, count-line: string, export-label: string, remove-group-label: string,
+    on-spectrum: bool, stack-names: bool, stack-enabled: bool, count-line: string, export-label: string, remove-group-label: string, group-count: int,
     rename-group-label: string, rename-draft: string, rows: [BookmarkRow], menu-row: int, error: string,
     import-busy: bool, export-busy: bool,              // ADDED: Import / Export for SDR# are disabled while one runs (aw 29274, 29360)
 }
@@ -357,6 +357,8 @@ component LineInput inherits Rectangle {
                 root.accepted(self.text);
             }
             changed has-focus => {
+                // a number field takes the first key as a REPLACEMENT (the Legacy window's fields select all on focus): "0.000000" + "100.6" must not become "100.60.000000" (drive fixes 3, item 12)
+                if (self.has-focus && root.mono) { self.select-all(); }
                 if (!self.has-focus && root.dirty) {
                     root.dirty = false;
                     root.committed(self.text);
@@ -1342,7 +1344,10 @@ export component BookmarksBody inherits VerticalLayout {
     callback bookmark-move(int, string);
     bookmark-move(a, b) => { ToolsEvents.bookmark-move(a, b); }
 
+    in-out property <bool> removing;                    // "Remove this group" has been pressed once: the key now says how many bookmarks go, and the next press does it (drive fixes 3, item 4)
     in-out property <bool> renaming;                    // the rename field is open (a press on "Rename this group"); the body's own state, no host round trip
+    property <int> removing-group: root.model.filter-index;   // the group the key would remove: choosing another one cancels a first press
+    changed removing-group => { root.removing = false; }
 
     spacing: 6px;
     alignment: start;
@@ -1462,12 +1467,14 @@ export component BookmarksBody inherits VerticalLayout {
         xs: true;
         gap: 4px;
         k1: { label: root.model.export-label, on: false, enabled: !root.model.export-busy };
-        k2: { label: root.model.remove-group-label, on: false, enabled: true };
+        k2: { label: root.removing ? @tr("Yes, delete this group and its {} bookmark(s)", root.model.group-count) : root.model.remove-group-label, on: false, enabled: true };
         k3: { label: root.model.rename-group-label, on: root.renaming, enabled: true };
         clicked(i) => {
             if (i == 1) { root.bookmark-export(); }
-            else if (i == 2) { root.bookmark-remove-group(); }
-            else { root.renaming = !root.renaming; root.bookmark-rename-open(root.renaming); }
+            else if (i == 2) {
+                if (root.removing) { root.removing = false; root.bookmark-remove-group(); } else { root.removing = true; }
+            }
+            else { root.removing = false; root.renaming = !root.renaming; root.bookmark-rename-open(root.renaming); }
         }
     }
     if root.renaming && root.model.rename-group-label != "" : Line {
@@ -1478,6 +1485,7 @@ export component BookmarksBody inherits VerticalLayout {
             name: @tr("new group name");
             committed(t) => { root.bookmark-rename-draft(t); }
             accepted(t) => {
+                root.bookmark-rename-draft(t);   // the typed text first (drive fixes 3, item 5: Enter did nothing because the host still held the old draft); the key does the same through flush()
                 root.bookmark-rename();
                 root.renaming = false;
             }

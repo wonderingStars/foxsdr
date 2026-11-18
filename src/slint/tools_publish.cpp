@@ -825,6 +825,7 @@ void ToolsPublisher::exec(const Effect& e, const char* what) {
     o.count_line = ss(m.count_line);
     o.export_label = ss(m.export_label);
     o.remove_group_label = ss(m.remove_group_label);
+    o.group_count = m.group_count;
     o.rename_group_label = ss(m.rename_group_label);
     o.rename_draft = ss(m.rename_draft);
     std::vector<::BookmarkRow> rows;

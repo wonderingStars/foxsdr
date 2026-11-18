@@ -458,6 +458,8 @@ component LineInput inherits Rectangle {
                 root.committed(self.text);
             }
             changed has-focus => {
+                // a number field takes the first key as a REPLACEMENT (the Legacy window's fields select all on focus): "0.000000" + "100.6" must not become "100.60.000000" (drive fixes 3, item 12)
+                if (self.has-focus && root.mono) { self.select-all(); }
                 if (!self.has-focus && root.dirty) {
                     root.dirty = false;
                     root.committed(self.text);

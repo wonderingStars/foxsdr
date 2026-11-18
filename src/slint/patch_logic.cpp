@@ -1074,7 +1074,11 @@ PatchModel PatchPage::bandModel() const {
 
 InfoModel PatchPage::infoModel() const {
     InfoModel m;
-    m.runnable = lists_.plan.runnable;
+    // A PLUGIN THAT REFUSED TO START IS A PATCH THAT CANNOT RUN (drive fixes 3, item 2): the plan's own verdict (fact.patch.runnable, API 0.3 8.12) cannot know a
+    // plugin's own limits (ADS-B wants 2 MS/s and refuses a 48 kHz Channel), so it still says "runnable" beside a refused plugin; this sentence must not.
+    bool refusedPlugin = !lists_.refused.empty();
+    for (const pc::NodeProblem& p : lists_.plan.problems) { if (p.problem == pc::Problem::PluginRefused) { refusedPlugin = true; } }
+    m.runnable = lists_.plan.runnable && !refusedPlugin;
     // WHAT THE PATCH AS A WHOLE IS DOING, first, because it is the question someone opening this page is actually asking.
     m.verdict = m.runnable ? tr("This patch can run.") : tr("This patch cannot run.");
     const pc::Node* sel = selectedNode();

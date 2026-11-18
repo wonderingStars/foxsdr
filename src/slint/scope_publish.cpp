@@ -15,6 +15,7 @@
 #include "core/app_commands.hpp"
 #include "core/config.hpp"
 #include "core/i18n.hpp"
+#include "model_reuse.hpp"
 #include "radar_compositor.hpp"
 #include "scope_compositor.hpp"
 #include "scope_analysis.hpp"
@@ -413,18 +414,19 @@ void ScopePublisher::radarPublish(const FoxReceiverState& state, double nowS) {
     m.home_sub = ss(f.homeSub);
     std::vector<::RadarContactItem> cs;
     for (const RadarContact& c : f.contacts) { cs.push_back(::RadarContactItem{ss(c.id), ss(c.name), ss(c.alt), ss(c.detail), colorOf(c.rgba), c.alert}); }
-    m.contacts = std::make_shared<slint::VectorModel<::RadarContactItem>>(std::move(cs));
+    const ::RadarScopeModel held = ui_.get_radar_scope_model();   // the lists are kept and updated in place: a press on a row must survive the next publish (model_reuse.hpp)
+    m.contacts = foxsdr::slinthost::reuseModel<::RadarContactItem>(held.contacts, std::move(cs));
     m.home_empty_title = ss(f.homeEmptyTitle);
     m.home_empty_body = ss(f.homeEmptyBody);
     std::vector<::RadarLineItem> ls;
     for (const RadarLine& l : f.flight) { ls.push_back(::RadarLineItem{ss(l.label), ss(l.value), l.dim, l.alert}); }
-    m.flight = std::make_shared<slint::VectorModel<::RadarLineItem>>(std::move(ls));
+    m.flight = foxsdr::slinthost::reuseModel<::RadarLineItem>(held.flight, std::move(ls));
     m.flight_title = ss(f.flightTitle);
     m.flight_body = ss(f.flightBody);
     m.flight_foot = ss(f.flightFoot);
     std::vector<::RadarOptionItem> os;
     for (const RadarOption& o : f.options) { os.push_back(::RadarOptionItem{ss(o.name), ss(o.value)}); }
-    m.options = std::make_shared<slint::VectorModel<::RadarOptionItem>>(std::move(os));
+    m.options = foxsdr::slinthost::reuseModel<::RadarOptionItem>(held.options, std::move(os));
     m.sys_range = ss(f.sysRange);
     m.sys_antenna = ss(f.sysAntenna);
     m.sys_help = ss(f.sysHelp);

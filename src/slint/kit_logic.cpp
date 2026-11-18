@@ -409,6 +409,10 @@ std::string abiText(std::uint32_t abi, std::uint32_t thisBuild) {
     return cascade::core::formatText(cascade::i18n::tr("%u, this build needs %u"), static_cast<unsigned>(abi), static_cast<unsigned>(thisBuild));
 }
 
+std::string moduleAbiText(std::uint32_t recorded, bool loaded, std::uint32_t thisBuild) {
+    return abiText(recorded != 0u ? recorded : (loaded ? thisBuild : 0u), thisBuild);
+}
+
 std::string fittedDateText(std::int64_t unixSeconds) {
     if (unixSeconds <= 0) { return std::string(); }
     const std::time_t tt = static_cast<std::time_t>(unixSeconds);

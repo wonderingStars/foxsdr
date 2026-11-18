@@ -46,7 +46,7 @@ export global KitEvents {
     callback decode-row-clicked(int);
     callback decode-row-key(int);
     callback decode-row-key2(int);
-    callback decode-url-committed(string);
+    callback decode-url-committed(string) -> bool;      // false: the address was refused, the old one goes back in the field (drive fixes 3, item 8)
     callback decode-output-clicked();
     callback decode-stop-all();
     callback decode-entry-preset(int, int);
@@ -695,8 +695,8 @@ export component DecodeBank inherits VerticalLayout {
     row-key(a) => { KitEvents.decode-row-key(a); }
     callback row-key2(int);                    // a retired row's Remove / Confirm delete
     row-key2(a) => { KitEvents.decode-row-key2(a); }
-    callback url-committed(string);
-    url-committed(a) => { KitEvents.decode-url-committed(a); }
+    callback url-committed(string) -> bool;
+    url-committed(a) => { return KitEvents.decode-url-committed(a); }
     callback output-clicked();
     output-clicked() => { KitEvents.decode-output-clicked(); }
     callback stop-all();
@@ -735,7 +735,7 @@ export component DecodeBank inherits VerticalLayout {
     for r[i] in root.rows : VerticalLayout { spacing: 0px;
         if r.kind == 1 : VerticalLayout { padding-left: 12px; padding-right: 12px; padding-top: 6px; padding-bottom: 6px;
             Field { label: @tr("Catalogue"); kind: FieldKind.text; value: root.url; placeholder: @tr("catalogue index.json URL"); tooltip: @tr("Where the catalogue is read from: an https URL or a local index.json path. It replaces the FoxSDR catalogue.");
-                committed(t) => { root.url-committed(t); } }
+                committed(t) => { if (!root.url-committed(t)) { self.value = root.url; } } }
         }
         if r.kind == 2 : VerticalLayout { padding-left: 12px; padding-right: 12px; padding-top: 4px; padding-bottom: 6px;
             Card { title: @tr("Disabled"); critical: true; lines: [r.note]; primary-label: r.key-label; secondary-label: r.key2-label; note: r.key-label == "" ? @tr("Open the plugin store with the key above to fetch the update.") : "";

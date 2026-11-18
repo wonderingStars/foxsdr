@@ -498,7 +498,16 @@ struct EnumOptions {
     // probe was the one that died in the field report, on a machine whose
     // only radio was an SDRplay, and it had nothing to find there.
     std::vector<std::string> absentDrivers;
+
+    // DRIVERS THAT MUST LOOK ON THE USB BUS ONLY (drive fixes 3, item 1): today {"uhd"} when no network USRP was asked for. UHD's find with
+    // no hint also broadcasts on the network, which makes Windows raise the firewall prompt for the helper; with a USB device type in the
+    // hint it does not. Carried to the helper (and the in-process fallback) in the environment variable kUsbOnlyEnv, read by
+    // SoapySource::findHintFor. Restored when the scan ends.
+    std::vector<std::string> usbOnlyDrivers;
 };
+
+// The environment variable that carries EnumOptions::usbOnlyDrivers to the helper child: comma-separated lower-case driver names.
+inline constexpr const char* kUsbOnlyEnv = "FOXSDR_SOAPY_USB_ONLY";
 
 // Enumerates in a child process. Never throws.
 //

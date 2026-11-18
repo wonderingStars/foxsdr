@@ -8,6 +8,8 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -15,10 +17,12 @@
 
 #include "core/file_pick.hpp"
 #include "core/i18n.hpp"
+#include "core/plugin_repo_data.hpp"
 #include "core/plugin_ui_data.hpp"
 #include "core/utf8_text.hpp"
 #include "gui/track_metrics.hpp"
 #include "mapj_logic.hpp"
+#include "model_reuse.hpp"
 #include "mapicons_logic.hpp"
 #include "gui/aircraft_icon_pixels.hpp"   // the silhouettes' pictures: included from this one unit (the header says so)
 
@@ -887,7 +891,9 @@ void KitPublisher::fillModule(const Page& p, PageTab& t, const FoxReceiverState&
     m.notice = ss(r->loaded ? r->notice : "");
     m.notice_err = r->noticeLevel >= CASCADE_LOG_ERROR;
     m.file_path = ss(r->path.empty() ? std::string(cascade::i18n::tr("not recorded")) : r->path);
-    m.abi_text = ss(abiText(r->abiVersion, static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION)));
+    // A LOADED MODULE HAS THE BUILD'S ABI: the host refuses a descriptor of any other version (plugin_host.cpp, AbiVersionMismatch), so a module that is running and has no install record
+    // is not "not recorded" (drive fixes 3, item 11: ACARS read "not recorded" here and "3, matches this build" on its store page).
+    m.abi_text = ss(moduleAbiText(r->abiVersion, r->loaded, static_cast<std::uint32_t>(CASCADE_PLUGIN_ABI_VERSION)));
     m.fitted_text = ss(fittedDateText(r->fittedAtUnix));
     {
         // the catalogue body: what the EXTEND publisher built for this module's catalogue key; a module the catalogue does not list shows none
@@ -1163,6 +1169,27 @@ PageTab KitPublisher::pageModel(const Page& p, const FoxReceiverState& state, st
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
+namespace {
+// The lists of a page the window already holds are updated in place (model_reuse.hpp), so the rows under a pressed mouse button survive a publish.
+void keepPageModels(const PageTab& old, PageTab& t) {
+    using foxsdr::slinthost::reuseModelFrom;
+    t.presets = reuseModelFrom(old.presets, t.presets);
+    t.fields = reuseModelFrom(old.fields, t.fields);
+    t.lines = reuseModelFrom(old.lines, t.lines);
+    t.bars = reuseModelFrom(old.bars, t.bars);
+    t.columns = reuseModelFrom(old.columns, t.columns);
+    t.rows = reuseModelFrom(old.rows, t.rows);
+    t.widths = reuseModelFrom(old.widths, t.widths);
+    t.map.targets = reuseModelFrom(old.map.targets, t.map.targets);
+    t.map.legend = reuseModelFrom(old.map.legend, t.map.legend);
+    t.map.list_columns = reuseModelFrom(old.map.list_columns, t.map.list_columns);
+    t.map.list_rows = reuseModelFrom(old.map.list_rows, t.map.list_rows);
+    t.map.list_widths = reuseModelFrom(old.map.list_widths, t.map.list_widths);
+    t.map.j.layers = reuseModelFrom(old.map.j.layers, t.map.j.layers);
+    t.map.j.grid_labels = reuseModelFrom(old.map.j.grid_labels, t.map.j.grid_labels);
+}
+}  // namespace
+
 void KitPublisher::publishPages(const FoxReceiverState& state) {
     feedMapSurfaces(state);   // lane J: the replay's clock, the recorder and the coverage model, for every open map page
     std::string setSig;
@@ -1183,7 +1210,11 @@ void KitPublisher::publishPages(const FoxReceiverState& state) {
         if (!p.torn && static_cast<int>(i) != current) { continue; }
         std::string sig;
         PageTab t = pageModel(p, state, sig);
-        if (sigs_.changed("page:" + p.id, sig)) { pagesModel_->set_row_data(i, std::move(t)); }
+        if (sigs_.changed("page:" + p.id, sig)) {
+            // a list handed over as a new model rebuilds its rows, and a press made on a row a moment before is lost (a real hand: 50 to 150 ms; the drive's Layers switches and list rows)
+            if (const auto old = pagesModel_->row_data(i)) { keepPageModels(*old, t); }
+            pagesModel_->set_row_data(i, std::move(t));
+        }
     }
 }
 
@@ -1211,6 +1242,7 @@ void KitPublisher::publishDecodeBank(const FoxReceiverState& state) {
             cascade::i18n::tr("Opens the plugin store: the catalogue, what each module reaches for,\nwhat it costs to fit, and the updates the catalogue offers.\nThe first time you open it in a session it reads the catalogue;\nnothing is fetched at startup."));
     }
     add(1, "url", "", "", ChipTone::Neutral, LampState::Off, false, false, true, "");
+    if (!catalogueRefusal_.empty()) { add(10, "urlrefused", "", "", ChipTone::Neutral, LampState::Off, false, false, true, "", catalogueRefusal_, ChipTone::Err); }
     if (!k.enforceError.empty()) { add(10, "enforce", "", "", ChipTone::Neutral, LampState::Off, false, false, true, "", k.enforceError, ChipTone::Err); }
     for (const BlockedRow& b : k.blocked) {
         const bool armed = armedRemove_ == "blocked:" + b.file && nowMs_ - armedAtMs_ < 5000;
@@ -1287,7 +1319,7 @@ void KitPublisher::publishDecodeBank(const FoxReceiverState& state) {
         e.presets = presetModel(r, state, true, esig);
         e.save_label = ss(presetSaveLabel(state.tunedHz));
         e.save_shown = r.decoder;
-        e.note = ss(presetNote_);
+        e.note = ss(r.file == presetNoteFile_ ? presetNote_ : std::string());
         e.decoder = r.decoder;
         e.offers_stop = !r.stopped && !r.asleep;
         e.idle = r.asleep && !r.stopped;
@@ -1314,7 +1346,7 @@ void KitPublisher::publishDecodeBank(const FoxReceiverState& state) {
         esig += r.file + std::string(e.group) + (e.show_group ? "G" : "") + (e.offers_stop ? "S" : "") + (e.idle ? "I" : "") + (e.mutes ? "M" : "") + (e.settings_open ? "o" : "") + ";";
         entries.push_back(std::move(e));
     }
-    esig += presetNote_ + fmt("%.0f", state.tunedHz);
+    esig += presetNoteFile_ + "|" + presetNote_ + fmt("%.0f", state.tunedHz);
     if (sigs_.changed("entries", esig)) { ui_.set_plugin_entries(model(std::move(entries))); }
     // the notes and keys of the drawer
     std::size_t runningNow = 0;
@@ -1497,6 +1529,25 @@ void KitPublisher::publish(const FoxReceiverState& state) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
+namespace {
+// The Catalogue field's text without the spaces and tabs round it.
+std::string trimmedAddress(const std::string& t) {
+    const std::size_t a = t.find_first_not_of(" \t");
+    if (a == std::string::npos) { return std::string(); }
+    return t.substr(a, t.find_last_not_of(" \t") - a + 1);
+}
+
+// What the Catalogue field takes (drive fixes 3, item 8): nothing (the default address comes back), an https address, or a local file that is there and can be opened.
+bool catalogueAddressAcceptable(const std::string& t) {
+    if (t.empty() || cascade::core::pluginIsHttpsUrl(t)) { return true; }
+    std::error_code ec;
+    const std::filesystem::path p(std::filesystem::u8path(t));
+    if (!std::filesystem::is_regular_file(p, ec) || ec) { return false; }
+    std::ifstream in(p, std::ios::binary);
+    return static_cast<bool>(in);
+}
+}  // namespace
+
 void KitPublisher::wire() {
     globe_->wire(ui_, [this](int i) { return i >= 0 && i < static_cast<int>(pages_.size()) ? pages_[static_cast<std::size_t>(i)].plugin : std::string(); });
     // ---- the DECODE bank ----
@@ -1550,7 +1601,18 @@ void KitPublisher::wire() {
         if (armedRemove_ == key && nowMs_ - armedAtMs_ < 5000) { kit_.removeBlocked(std::string(r.id)); armedRemove_.clear(); }
         else { armedRemove_ = key; armedAtMs_ = nowMs_; }
     });
-    ui_.global<::KitEvents>().on_decode_url_committed([this](slint::SharedString url) { kit_.setCatalogueUrl(std::string(url)); });
+    // THE CATALOGUE ADDRESS (drive fixes 3, item 8): an https address or a readable local file, or empty (the default). Anything else is refused with a sentence under the field and the old
+    // value stays (the answer false puts the old text back in the field).
+    ui_.global<::KitEvents>().on_decode_url_committed([this](slint::SharedString url) -> bool {
+        const std::string t = trimmedAddress(std::string(url));
+        if (!catalogueAddressAcceptable(t)) {
+            catalogueRefusal_ = cascade::i18n::tr("That is neither an https address nor a file that can be read. The catalogue address stays as it was.");
+            return false;
+        }
+        catalogueRefusal_.clear();
+        kit_.setCatalogueUrl(t);
+        return true;
+    });
     ui_.global<::KitEvents>().on_decode_output_clicked([this] { if (findPage("output") != nullptr) { closePage("output"); } else { openPage("output", 1, "", "", cascade::i18n::tr("Decoder output")); showPage("output"); } });
     ui_.global<::KitEvents>().on_decode_stop_all([this] {
         std::vector<std::string> keys;
@@ -1571,6 +1633,15 @@ void KitPublisher::wire() {
     ui_.global<::KitEvents>().on_decode_entry_forgot([this, entryRow](int e, int i) {
         const PluginRow* r = entryRow(e);
         if (r == nullptr || i < 0 || i >= static_cast<int>(r->presets.size())) { return; }
+        // A PRESET IS THE USER'S OWN: forgetting it takes two presses (drive fixes 3, item 4), as REMOVE on the Fitted modules page does
+        const std::string key = "preset:" + r->file + ":" + std::to_string(i);
+        presetNoteFile_ = r->file;
+        if (armedRemove_ != key || nowMs_ - armedAtMs_ >= 5000) {
+            armedRemove_ = key; armedAtMs_ = nowMs_;
+            presetNote_ = cascade::core::formatText(cascade::i18n::tr("Press again to forget this preset for %s"), r->name.c_str());
+            return;
+        }
+        armedRemove_.clear();
         kit_.forgetPreset(r->file, r->presets[static_cast<std::size_t>(i)]);
         presetNote_ = cascade::core::formatText(cascade::i18n::tr("Forgot a preset for %s"), r->name.c_str());
     });
@@ -1578,6 +1649,7 @@ void KitPublisher::wire() {
         const PluginRow* r = entryRow(e);
         if (r == nullptr) { return; }
         kit_.savePreset(r->file);
+        presetNoteFile_ = r->file;
         presetNote_ = cascade::core::formatText(cascade::i18n::tr("Saved %.4f MHz as a preset for %s"), state_.tunedHz / 1e6, r->name.c_str());
     });
     ui_.global<::KitEvents>().on_decode_entry_run([this, entryRow](int e) { const PluginRow* r = entryRow(e); if (r != nullptr) { kit_.startStop(r->file, !r->stopped && !r->asleep); } });
@@ -1666,7 +1738,16 @@ void KitPublisher::wire() {
     });
     ui_.global<::KitEvents>().on_page_preset_forgot([this, page](int i, int k) {
         Page* p = page(i); const PluginRow* r = p != nullptr ? rowOf(*p) : nullptr;
-        if (r != nullptr && k >= 0 && k < static_cast<int>(r->presets.size())) { kit_.forgetPreset(r->file, r->presets[static_cast<std::size_t>(k)]); }
+        if (r == nullptr || k < 0 || k >= static_cast<int>(r->presets.size())) { return; }
+        const std::string key = "preset:" + r->file + ":" + std::to_string(k);
+        if (armedRemove_ != key || nowMs_ - armedAtMs_ >= 5000) {   // two presses, as in the drawer (drive fixes 3, item 4); the page's note says so
+            armedRemove_ = key; armedAtMs_ = nowMs_;
+            p->saveNote = cascade::core::formatText(cascade::i18n::tr("Press again to forget this preset for %s"), r->name.c_str());
+            return;
+        }
+        armedRemove_.clear();
+        p->saveNote.clear();
+        kit_.forgetPreset(r->file, r->presets[static_cast<std::size_t>(k)]);
     });
     ui_.global<::KitEvents>().on_page_save_clicked([this, page](int i) { Page* p = page(i); const PluginRow* r = p != nullptr ? rowOf(*p) : nullptr; if (r != nullptr) { kit_.savePreset(r->file); } });
     ui_.global<::KitEvents>().on_page_settings_toggled([page](int i) { if (Page* p = page(i)) { p->settingsOpen = !p->settingsOpen; } });

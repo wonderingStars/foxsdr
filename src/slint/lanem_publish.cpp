@@ -400,6 +400,24 @@ struct LaneMPublisher::Impl {
         v.push_back(rHeading(tr("Audio filter")));
         field(v, "a.hp", tr("High-pass (Hz, 0 = off)"), "0", tr("20 to 3000"));
         field(v, "a.lp", tr("Low-pass (Hz, 0 = off)"), "0", tr("300 to 20000, above the high-pass"));
+        // THE REFUSAL IS SAID BESIDE THE FIELDS, as it is typed (drive fixes 3, item 3): the sentence used to appear only after "Set this channel's settings", a key that sat below
+        // the fold of the panel. The model (core/airband_channel.hpp) is still the judge: the same rule (validate's BadFilter), the same sentence.
+        {
+            const auto hz = [this](const char* id, int& out) {
+                const std::string t = trim(dv(id));
+                if (t.empty()) { out = 0; return true; }
+                char* end = nullptr;
+                const long n = std::strtol(t.c_str(), &end, 10);
+                if (end == t.c_str() || *end != '\0') { return false; }   // not a number: the key's own sentence says so
+                out = static_cast<int>(n);
+                return true;
+            };
+            int hp = 0, lp = 0;
+            if (hz("a.hp", hp) && hz("a.lp", lp) &&
+                ((hp != 0 && (hp < 20 || hp > 3000)) || (lp != 0 && (lp < 300 || lp > 20000)) || (hp != 0 && lp != 0 && hp >= lp))) {
+                v.push_back(rNote(tr("The high-pass must be below the low-pass, each within its range."), kErr));
+            }
+        }
         choiceD(v, "a.order", tr("Filter order"), {"2", "4"}, 1);
         field(v, "a.notch", tr("Notches"), "", tr("Up to three, separated by semicolons: Hz, a slash and Q (for example 1000/30; 2000)"));
         v.push_back(rHeading(tr("Output")));

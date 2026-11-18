@@ -492,6 +492,7 @@ BookmarksModel readBookmarksFrom(TableReader& t, BookmarkStore& store, const Rea
     if (!view.empty()) { m.export_label = T("Export for SDR#"); }
     if (!chosen.empty()) {
         m.remove_group_label = T("Remove this group");
+        for (const gui::BookmarkRow& b : list) { if (b.group == chosen) { ++m.group_count; } }
         m.rename_group_label = T("Rename this group");
     }
     m.rename_open = o.rename_open && !chosen.empty();

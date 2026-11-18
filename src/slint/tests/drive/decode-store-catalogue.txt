@@ -8,3 +8,12 @@ state fact.store.url contains foxsdr-plugins
 +1 key enter
 +20 state fact.store.url == "https://example.invalid/foxsdr/index.json"
 +1 expect "Catalogue" value equals "https://example.invalid/foxsdr/index.json"
+# drive fixes 3 (item 8): an address that is neither https nor a file that can be read is refused; the old address stays, in the engine and in the field
++1 type "Catalogue" "not an address"
++1 key enter
++20 state fact.store.url == "https://example.invalid/foxsdr/index.json"
++5 expect "Catalogue" value equals "https://example.invalid/foxsdr/index.json"
++1 type "Catalogue" "D:/no/such/folder/index.json"
++1 key enter
++20 state fact.store.url == "https://example.invalid/foxsdr/index.json"
++5 expect "Catalogue" value equals "https://example.invalid/foxsdr/index.json"

@@ -62,6 +62,27 @@ int main() {
     CHECK(t.shown);
     CHECK(t.text == "Own tip");
 
+    // THE TIP OF AN ITEM THAT MOVED AWAY (drive fixes 3, item 7): a pointer that rests keeps `hovered` true when a layout moves the item from under it (a note appears above it); the tip
+    // must not stay where the item was, over whatever is there now.
+    {
+        slint::Window& win = ui->window();
+        moveTo(win, 396, 256);
+        settle(std::chrono::milliseconds(50));
+        moveTo(win, 360, 215);
+        settle(std::chrono::milliseconds(750));
+        std::printf("  mover tip shown=%d text=%s\n", int(ui->global<TipState>().get_shown()), std::string(ui->global<TipState>().get_text()).c_str());
+        CHECK(ui->global<TipState>().get_shown());
+        CHECK(std::string(ui->global<TipState>().get_text()) == "Moves  -  Moving tip");
+        ui->set_mover_y(120.0f);   // the Key moves up; the pointer has not moved
+        settle(std::chrono::milliseconds(300));
+        const bool stuck = ui->global<TipState>().get_shown() && std::string(ui->global<TipState>().get_text()).find("Moving tip") != std::string::npos;
+        std::printf("  tip of an item that moved away: %s\n", stuck ? "STAYS" : "closed");
+        CHECK(!stuck);
+        ui->set_mover_y(200.0f);
+        moveTo(win, 396, 256);
+        settle(std::chrono::milliseconds(100));
+    }
+
     // a RailKey caption that does not fit the rail: the caption before the tooltip
     t = hover(ui, 42, 142);
     CHECK(t.shown);

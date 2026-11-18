@@ -7,6 +7,7 @@
 #include "test_check.hpp"
 
 #include "scope_modes_specimen.h"
+#include "../model_reuse.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -252,6 +253,37 @@ void radarFamily() {
         for (std::size_t i = b; i < r.option.size(); ++i) { if (opts.empty() || opts.back() != r.option[i]) { opts.push_back(r.option[i]); } }
     }
     CHECK((opts == std::vector<int>{0, 1, 2, 3}));
+
+    // ---- a real hand: press on a row, the host publishes again while the button is down, release (docs drive-fixes-3, THE THEME) ----
+    // The host publishes every 33 ms and a real click lasts longer. A list handed over as a NEW model rebuilds its rows and the press is lost;
+    // reuseModel keeps the model object and the rows.
+    {
+        float rowY = -1.0f;
+        for (int y = 90; y < 400 && rowY < 0.0f; y += 2) {
+            const std::size_t b = r.option.size();
+            click(win, 900.0f, static_cast<float>(y));
+            if (r.option.size() > b && r.option.back() == 1) { rowY = static_cast<float>(y); }
+        }
+        CHECK(rowY > 0.0f);
+        const std::vector<RadarOptionItem> same{{"PHOSPHOR", "ON"}, {"SWEEP", "ON"}, {"TRAILS", "LINE"}, {"FILTER", "ALL"}};
+        for (int variant = 0; variant < 2; ++variant) {
+            r.option.clear();
+            moveTo(win, 900.0f, rowY);
+            press(win, 900.0f, rowY);
+            if (variant == 0) { m.options = foxsdr::slinthost::reuseModel<RadarOptionItem>(m.options, same); }
+            else { m.options = std::make_shared<slint::VectorModel<RadarOptionItem>>(same); }
+            ui->set_radar(m);
+            render(ui, 1240, 700);
+            release(win, 900.0f, rowY);
+            std::printf("  press, publish (%s), release: %zu clicks\n", variant == 0 ? "reused list" : "fresh list", r.option.size());
+            if (variant == 0) { CHECK((r.option == std::vector<int>{1})); }
+        }
+        // the rows' text changes in place
+        auto kept = m.options;
+        m.options = foxsdr::slinthost::reuseModel<RadarOptionItem>(m.options, std::vector<RadarOptionItem>{{"PHOSPHOR", "OFF"}, {"SWEEP", "ON"}, {"TRAILS", "LINE"}, {"FILTER", "ALL"}});
+        CHECK(m.options == kept);
+        CHECK((std::string(m.options->row_data(0)->value) == "OFF"));
+    }
 
     // ---- the deck: the knob turns on the wheel and answers nothing when dead; POWER is a key ----
     r.knob.clear();

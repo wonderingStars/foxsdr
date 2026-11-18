@@ -1488,7 +1488,9 @@ void Engine::scanSoapy() {
         const bool listed = cascade::usb::presentUsbIds(present);
         std::vector<cascade::gui::UsbVidPid> ids;
         for (const cascade::usb::UsbId& id : present) { ids.push_back({id.vid, id.pid}); }
-        const std::vector<std::string> absent = cascade::gui::soapyDriversWithNoHardware(
+        // THE NETWORK DRIVERS TOO (drive fixes 3, item 1): a probe that opens a socket makes Windows ask the user about the helper, so none runs
+        // unless network radios were asked for; and UHD, when it is asked, looks on the USB bus only.
+        const std::vector<std::string> absent = cascade::gui::soapyDriversToLeaveOut(
             ids, listed, namedSoapyArgs, lookForNetworkUsrps);
         // Handed back for the hints under the Source list; the future being
         // ready is what makes them safe to read there.
@@ -1497,6 +1499,7 @@ void Engine::scanSoapy() {
         cascade::source::EnumOptions options;
         options.skipDrivers = skip;
         options.absentDrivers = absent;
+        if (cascade::gui::soapyUhdUsbOnly(absent, namedSoapyArgs, lookForNetworkUsrps)) { options.usbOnlyDrivers = {"uhd"}; }
         cascade::source::EnumResult r = cascade::source::enumerateIsolated(options);
         *uhdNoImagesOut = r.uhdImagesMissing;
         if (r.helperMissing) { *helperMissingOut = cascade::source::helperMissingSentence(cascade::source::enumerateHelperPath()); }
