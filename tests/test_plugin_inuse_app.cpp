@@ -20,8 +20,8 @@
  *              ITS decoder within a few frames of the press (and not the text decoder's), and the
  *              log says `plugin: Image Probe woke - window open`; the control run that stops
  *              before the press creates nothing;
- *   output     the Decoder output window opened by the capture seam wakes the TEXT decoder, and
- *              only it (`woke - decoder output window open`);
+ *   output     the Decoder output window opened by the capture seam wakes NOTHING (drive fixes 6:
+ *              it is not a use; it used to wake the TEXT decoder);
  *   close      the window closed again lets the plugin go dormant after the interval (shortened
  *              by FOXSDR_DORMANT_AFTER_MS, which the run states in full), the log says
  *              `dormant after 30 s without a use`, and opening the window AGAIN creates a second
@@ -566,7 +566,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    // --- THE DECODER OUTPUT WINDOW wakes the TEXT decoder, and only it -----------------------------
+    // --- THE DECODER OUTPUT WINDOW wakes NOTHING (drive fixes 6, item 3) ----------------------------
+    // It used to wake the TEXT decoder ("decoder output window open", create 1). The window shows the lines of whatever is running; it is not a use. The expectation is turned round, not
+    // loosened: the same run now requires that neither plugin is created and that no wake line of any kind names the window.
     {
         installPlugins(kTextFile, kImageFile);
         RunOptions o;
@@ -575,9 +577,10 @@ int main(int argc, char** argv) {
         const Result r = once("output", o);
         CHECK(r.ok);
         if (r.ok) {
-            CHECK(r.count("a", "create") == 1);
+            CHECK(r.count("a", "create") == 0);
             CHECK(r.count("image", "create") == 0);
-            CHECK(r.logHas("plugin: Rescan Probe a woke - decoder output window open"));
+            CHECK(!r.logHas("plugin: Rescan Probe a woke"));
+            CHECK(!r.logHas("decoder output window open"));
             CHECK(!r.logHas("plugin: Image Probe woke"));
         }
     }
