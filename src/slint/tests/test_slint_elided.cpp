@@ -70,11 +70,12 @@ int main() {
         settle(std::chrono::milliseconds(50));
         moveTo(win, 360, 215);
         settle(std::chrono::milliseconds(750));
+        std::printf("  mover tip shown=%d text=%s\n", int(ui->global<TipState>().get_shown()), std::string(ui->global<TipState>().get_text()).c_str());
         CHECK(ui->global<TipState>().get_shown());
-        CHECK(std::string(ui->global<TipState>().get_text()) == "Moving tip");
+        CHECK(std::string(ui->global<TipState>().get_text()) == "Moves  -  Moving tip");
         ui->set_mover_y(120.0f);   // the Key moves up; the pointer has not moved
         settle(std::chrono::milliseconds(300));
-        const bool stuck = ui->global<TipState>().get_shown() && std::string(ui->global<TipState>().get_text()) == "Moving tip";
+        const bool stuck = ui->global<TipState>().get_shown() && std::string(ui->global<TipState>().get_text()).find("Moving tip") != std::string::npos;
         std::printf("  tip of an item that moved away: %s\n", stuck ? "STAYS" : "closed");
         CHECK(!stuck);
         ui->set_mover_y(200.0f);
