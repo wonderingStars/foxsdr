@@ -2576,6 +2576,15 @@ void theVerdictAndThePlan() {
     CHECK(m.runnable);
     EQ(m.verdict, std::string("This patch can run."));
     EQ(m.plan_line, std::string("1 channel(s), decimate by 42"));
+    // A PLUGIN THAT REFUSED TO START (an ADS-B decoder on a 48 kHz channel): the engine's fact stays "runnable", the sentence does not (drive fixes 3, item 2)
+    f.t.add(FOXAPI_LIST_PATCH_PROBLEMS, c.decoder != 0 ? c.decoder : c.channel, "10", "", 0, 0, 0, 0, 0);
+    f.tickBump();
+    m = f.page.infoModel();
+    CHECK(!m.runnable);
+    EQ(m.verdict, std::string("This patch cannot run."));
+    f.t.lists[FOXAPI_LIST_PATCH_PROBLEMS].clear();
+    f.tickBump();
+    CHECK(f.page.infoModel().runnable);
     // the first channel's decimation, however many there are
     f.t.add(FOXAPI_LIST_PATCH_PLAN, 99, "", "channel", 0, 0, 12000, 7, 1);
     f.tickBump();

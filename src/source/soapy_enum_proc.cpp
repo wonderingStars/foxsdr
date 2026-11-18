@@ -1333,7 +1333,44 @@ std::string helperMissingSentence(const std::string& helperPath) {
     return "FoxSDR's radio search program (" + name + ") is missing from this install, so no radio search was made. Reinstall FoxSDR.";
 }
 
+namespace {
+// Sets kUsbOnlyEnv for the length of one scan and puts back what was there (children and the in-process walk inherit this process's environment).
+struct UsbOnlyEnvScope {
+    bool set = false;
+    std::string before;
+    bool hadBefore = false;
+    explicit UsbOnlyEnvScope(const std::vector<std::string>& names) {
+        std::string csv;
+        for (const std::string& n : names) {
+            if (n.empty()) { continue; }
+            csv += (csv.empty() ? "" : ",") + lowerAscii(n);
+        }
+#ifdef _WIN32
+        char* old = nullptr;
+        std::size_t len = 0;
+        if (_dupenv_s(&old, &len, kUsbOnlyEnv) == 0 && old != nullptr) { before = old; hadBefore = true; std::free(old); }
+#else
+        if (const char* old = std::getenv(kUsbOnlyEnv)) { before = old; hadBefore = true; }
+#endif
+        if (!csv.empty() || hadBefore) { put(csv); set = true; }
+    }
+    ~UsbOnlyEnvScope() {
+        if (set) { put(hadBefore ? before : std::string()); }
+    }
+    static void put(const std::string& v) {
+#ifdef _WIN32
+        _putenv_s(kUsbOnlyEnv, v.c_str());
+#else
+        setenv(kUsbOnlyEnv, v.c_str(), 1);
+#endif
+    }
+    UsbOnlyEnvScope(const UsbOnlyEnvScope&) = delete;
+    UsbOnlyEnvScope& operator=(const UsbOnlyEnvScope&) = delete;
+};
+}  // namespace
+
 EnumResult enumerateIsolated(const EnumOptions& options) {
+    const UsbOnlyEnvScope usbOnlyEnv(options.usbOnlyDrivers);
     const auto t0 = std::chrono::steady_clock::now();
     EnumResult result;
 

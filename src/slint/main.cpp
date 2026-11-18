@@ -3977,7 +3977,7 @@ int main(int argc, char** argv) {
                 return std::string();
             }
             if (w == "ledger") { out = systemBank.ledgerOn() ? "1" : "0"; return std::string(); }   // window-gaps-2: the pointer ledger's tick
-            if (w == "ledgerline") { out = systemBank.ledgerLine(); return std::string(); }
+            if (w == "ledgerline") { out = std::string(ui->global<PointerLedger>().get_line()); return std::string(); }   // what the strip SHOWS (drive fixes 3, item 6: the host-side copy was cleared and the strip kept its line)
             if (w == "probestarts") { out = std::to_string(systemBank.sdrPlayDiag().startsCalled()); return std::string(); }   // the SDRplay diagnostic's stand-in child was started this many times
             if (w == "probebias") { out = systemBank.sdrPlayDiag().lastStartedWithBias() ? "1" : "0"; return std::string(); }
             if (w == "proberunning") { out = systemBank.sdrPlayDiag().running() ? "1" : "0"; return std::string(); }

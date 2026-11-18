@@ -272,6 +272,49 @@ inline std::vector<std::string> soapyDriversWithNoHardware(
     return {"uhd"};
 }
 
+// THE SOAPYSDR DRIVERS WHOSE PROBE TALKS TO THE NETWORK (drive fixes 3, item 1). Their find functions open a UDP or TCP socket to look for
+// radios on other machines; on Windows the first such socket of a program raises the firewall's "allow this app" prompt for the helper
+// (cascade.exe), which covers the whole desktop. They are asked only when the user has asked for network radios
+// (the SIGNAL bank's "Look for network USRPs" tick, FOXAPP_OP_SET_NETWORK_USRP_SCAN) or has one named (a saved source, the open one, a patch
+// radio) - the rule the "uhd" line above already follows.
+inline const std::vector<std::string>& soapyNetworkDrivers() {
+    static const std::vector<std::string> kNames = {"remote", "netsdr", "redpitaya"};
+    return kNames;
+}
+
+// The drivers to leave out of this scan so that it cannot make a socket the firewall asks about: soapyNetworkDrivers() unless the switch is on
+// or one of them is named; plus the answer of soapyDriversWithNoHardware (the "uhd" rule). A failed USB listing changes nothing for the network
+// drivers: a probe that can raise a prompt is not made on a guess.
+inline std::vector<std::string> soapyDriversToLeaveOut(
+    const std::vector<UsbVidPid>& presentUsb, bool usbListed,
+    const std::vector<std::string>& namedSoapyArgs, bool lookForNetworkUsrps) {
+    std::vector<std::string> out = soapyDriversWithNoHardware(presentUsb, usbListed, namedSoapyArgs, lookForNetworkUsrps);
+    if (lookForNetworkUsrps) { return out; }
+    for (const std::string& d : soapyNetworkDrivers()) {
+        bool named = false;
+        for (const std::string& args : namedSoapyArgs) {
+            if (detail::driverOf(args) == d) { named = true; }
+        }
+        if (!named) { out.push_back(d); }
+    }
+    return out;
+}
+
+// UHD is asked, and the network switch is off and no UHD source is named: UHD must look on the USB bus only (a USB USRP is a B2xx, whose UHD
+// device type is "b200"; UHD's network find functions return nothing when the hint names another type, which is the broadcast that raises
+// the prompt). True when that restriction applies. Dormant when UHD is left out (absent) or the switch is on.
+inline bool soapyUhdUsbOnly(const std::vector<std::string>& absentDrivers, const std::vector<std::string>& namedSoapyArgs,
+                            bool lookForNetworkUsrps) {
+    if (lookForNetworkUsrps) { return false; }
+    for (const std::string& d : absentDrivers) {
+        if (detail::lowerAscii(d) == "uhd") { return false; }
+    }
+    for (const std::string& args : namedSoapyArgs) {
+        if (detail::driverOf(args) == "uhd") { return false; }
+    }
+    return true;
+}
+
 // THE ONE LINE UNDER THE SOURCE LIST when the last scan left UHD out (review
 // of 5e7b968): a user whose USRP is on the network, and who has never opened
 // it here, would otherwise lose it from the list with nothing on screen to

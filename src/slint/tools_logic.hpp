@@ -230,6 +230,7 @@ struct BookmarksModel {
     bool stack_enabled = true;             // the box is disabled while "On the spectrum" is off
     std::string count_line;                // "5 shown of 7"
     std::string export_label;              // "Export for SDR#" ("" for an empty view)
+    int group_count = 0;                   // how many bookmarks the chosen group holds (what "Remove this group" deletes)
     std::string remove_group_label;        // "Remove this group" ("" with no group chosen)
     std::string rename_group_label;        // "Rename this group" ("" with no group chosen)
     std::string rename_draft;

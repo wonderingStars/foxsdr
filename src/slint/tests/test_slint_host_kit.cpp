@@ -203,6 +203,9 @@ int main() {
         CHECK(fittedVerdictLine(true, "C:\\plugins").find("Read from C:\\plugins.") != std::string::npos);
         CHECK(fittedVerdictLine(false, "").find("No directory has been scanned.") != std::string::npos);
         CHECK(abiText(0, 4) == "not recorded" && abiText(4, 4) == "4, matches this build" && abiText(5, 4) == "5, this build needs 4");
+        // drive fixes 3, item 11: a LOADED module with no install record has the build's ABI (the host refuses any other); one that is not loaded and has no record is not recorded
+        CHECK(moduleAbiText(0, true, 4) == "4, matches this build" && moduleAbiText(0, false, 4) == "not recorded");
+        CHECK(moduleAbiText(3, true, 4) == "3, this build needs 4" && moduleAbiText(4, true, 4) == "4, matches this build");
         CHECK(fittedDateText(0).empty() && fittedDateText(1762128000).compare(0, 7, "fitted ") == 0);
         const auto reach = reachRows(aprs.caps);
         CHECK(reach.size() == 4 && reach[0].key == "TEXT DECODER" && reach[2].key == "PRESETS" && reach[1].outward);

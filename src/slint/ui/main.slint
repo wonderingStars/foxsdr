@@ -605,8 +605,6 @@ export component MainWindow inherits Window {
             }
         }
 
-        // the sound-muted banner (a slim bar under the strip, Workbench IA 7)
-        if root.muted-by != "" : Banner { text: @tr("Sound muted by {}", root.muted-by); key-label: @tr("Stop plugin"); tone: CardTone.warn; key-clicked => { root.stop-muting-plugin(); } }
 
         // ===================== BODY =====================
         HorizontalLayout {
@@ -1140,5 +1138,11 @@ export component MainWindow inherits Window {
     // THE POINTER LEDGER (window-gaps-2, row 1457): one line across the top of the window while its tick is on; it takes no clicks
     PointerLedgerStrip { x: 0px; y: 0px; width: root.width; }
     // ===================== the tip layer: LAST, so a tooltip draws over the pages, the torn-off windows and the sheets =====================
+    // the sound-muted banner (Workbench IA 7): a slim bar over the bottom of the page area, ABOVE the status bar. It used to sit in the layout under the strip, so the whole page jumped by its
+    // height every time a plugin muted or let go, and a click aimed at the old place landed on the wrong control (drive fixes 3, item 10). It takes no room now: nothing moves.
+    if root.muted-by != "" : Banner {
+        x: Theme.rail-w; y: max(0px, root.height - Theme.status-h - 28px); width: max(0px, root.width - Theme.rail-w);
+        text: @tr("Sound muted by {}", root.muted-by); key-label: @tr("Stop plugin"); tone: CardTone.warn; key-clicked => { root.stop-muting-plugin(); }
+    }
     TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

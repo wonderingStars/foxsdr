@@ -977,7 +977,7 @@ void SystemPublisher::wire() {
     ev.on_diag_open_reports([this] { execute(applyDiagOpenReports(opts_.reports_path), "diag-open-reports"); });
     // The UI's three extras have no host effect: the pointer ledger, Copy diagnostics and the SDRplay diagnostic are window-bound in the ImGui window (the input
     // ledger, the clipboard, a child process). A line says so; nothing else happens.
-    ev.on_diag_ledger([this](bool on) { ledgerOn_ = on; if (!on) { ledgerLine_.clear(); } forceRead_ = true; });
+    ev.on_diag_ledger([this](bool on) { ledgerOn_ = on; if (!on) { ledgerLine_.clear(); ui_.global<PointerLedger>().set_line(ss(std::string())); } forceRead_ = true; });   // the strip's own line goes too (drive fixes 3, item 6)
     ev.on_diag_copy([this] { copyDiagnostics(); });
     ev.on_diag_sdrplay([this] { sdrDiag_->openDialog(); forceRead_ = true; });
     ui_.global<MeterPanel>().on_style_picked([this](int which, int style) {   // a meter's own right-click menu: saved per meter (meterStyleRate / meterStyleVolume)

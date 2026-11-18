@@ -138,6 +138,8 @@ bool fittedOffersStart(const PluginRow& r);                         // stopped o
 int fittedStateIndex(FittedState s);                                // the chip order: FED, IDLE, NOT DECODING, TAKES NO SIGNAL, STOPPED, REFUSED
 std::string fittedVerdictLine(bool receiverRunning, const std::string& directory);
 std::string abiText(std::uint32_t abiVersion, std::uint32_t thisBuild);
+// The module page's PLUGIN ABI line: the install record's number, or - for a module that is loaded and has no record - the build's own (the host refuses any other version).
+std::string moduleAbiText(std::uint32_t recorded, bool loaded, std::uint32_t thisBuild);
 std::string fittedDateText(std::int64_t unixSeconds);                // "fitted 2026-11-03", "" none
 struct ReachRow { std::string key, detail; bool outward = false; };
 std::vector<ReachRow> reachRows(std::uint32_t caps);                // one row per declared capability, in the ABI's order

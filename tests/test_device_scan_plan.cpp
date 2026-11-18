@@ -11,6 +11,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/device_scan_plan.hpp"
 
+#include <algorithm>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -249,6 +252,55 @@ void testUhdIsAskedOnlyWhenAUsrpCouldBeHere() {
     CHECK(soapyDriversWithNoHardware({}, false, Names({}), false).empty());
 }
 
+// --- DRIVE FIXES 3, ITEM 1: NO PROBE THAT CAN RAISE THE FIREWALL'S PROMPT UNLESS NETWORK RADIOS WERE ASKED FOR ---
+// A real-mouse drive opened a Radio node's Device list in the Patch inspector; the helper's probe made a socket and Windows put its "allow this app"
+// prompt over the whole desktop. Every scan - the Source list opening, Refresh, the Patch inspector's Device list - ends in Engine::scanSoapy, which
+// takes its list of drivers to leave out from soapyDriversToLeaveOut: so the Patch inspector's probe passes the same switches as the SIGNAL bank's.
+void testNetworkProbesNeedTheSwitch() {
+    using cascade::gui::soapyDriversToLeaveOut;
+    using cascade::gui::soapyUhdUsbOnly;
+    using cascade::gui::UsbVidPid;
+    const std::vector<UsbVidPid> b200{{0x2500, 0x0020}};
+    const std::vector<UsbVidPid> none{{0x046D, 0xC52B}};
+    const auto has = [](const Names& v, const char* n) { return std::find(v.begin(), v.end(), std::string(n)) != v.end(); };
+
+    // switch off, a USRP on the USB bus (the drive's machine): the network drivers are out, UHD is asked - on the USB bus only
+    const Names off = soapyDriversToLeaveOut(b200, true, Names({}), false);
+    CHECK(has(off, "remote") && has(off, "netsdr") && has(off, "redpitaya"));
+    CHECK(!has(off, "uhd"));
+    CHECK(soapyUhdUsbOnly(off, Names({}), false));
+    // switch off, no USRP: UHD out as before, the network drivers out, nothing to restrict
+    const Names noUsrp = soapyDriversToLeaveOut(none, true, Names({}), false);
+    CHECK(has(noUsrp, "uhd") && has(noUsrp, "remote"));
+    CHECK(!soapyUhdUsbOnly(noUsrp, Names({}), false));
+    // a failed USB listing is not a reason to probe the network
+    const Names unlisted = soapyDriversToLeaveOut({}, false, Names({}), false);
+    CHECK(has(unlisted, "remote") && has(unlisted, "netsdr") && has(unlisted, "redpitaya") && !has(unlisted, "uhd"));
+    // the switch on: nothing is left out, UHD is not restricted
+    CHECK(soapyDriversToLeaveOut(b200, true, Names({}), true).empty());
+    CHECK(soapyDriversToLeaveOut(none, true, Names({}), true).empty());
+    CHECK(!soapyUhdUsbOnly({}, Names({}), true));
+    // a saved or open source of one of them keeps that driver asked (the user has one) - and a named UHD source is not restricted
+    const Names namedRemote = soapyDriversToLeaveOut(none, true, Names({"driver=remote,remote=tcp://10.0.0.5"}), false);
+    CHECK(!has(namedRemote, "remote") && has(namedRemote, "netsdr"));
+    CHECK(!soapyUhdUsbOnly({}, Names({"driver=uhd,addr=192.168.10.2"}), false));
+    // the old rule is untouched underneath
+    CHECK(has(soapyDriversWithNoHardware(none, true, Names({}), false), "uhd"));
+}
+
+// The one choke point: nothing but Engine::scanSoapy starts the isolated enumeration, and it takes its list from the function above.
+void testEveryScanGoesThroughOnePlace(const std::string& engineSource) {
+    std::size_t calls = 0;
+    for (std::size_t at = engineSource.find("enumerateIsolated("); at != std::string::npos; at = engineSource.find("enumerateIsolated(", at + 1)) {
+        const std::size_t lineStart = engineSource.rfind('\n', at);
+        const std::string line = engineSource.substr(lineStart + 1, at - lineStart);
+        if (line.find("//") == std::string::npos) { ++calls; }
+    }
+    CHECK(calls == 1);
+    CHECK(engineSource.find("soapyDriversToLeaveOut(") != std::string::npos);
+    CHECK(engineSource.find("soapyUhdUsbOnly(") != std::string::npos);
+}
+
 // THE HINT UNDER THE SOURCE LIST (review of 5e7b968): shown exactly when the
 // scan left UHD out, and never otherwise - driven from the same answer the
 // scan used, end to end through the rule above.
@@ -313,6 +365,12 @@ void testTheUhdImagesMissingHint() {
 }  // namespace
 
 int main() {
+    {
+        std::ifstream in(std::string(CASCADE_SOURCE_DIR) + "/src/engine/engine.cpp", std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        CHECK(!text.empty());
+        testEveryScanGoesThroughOnePlace(text);
+    }
     testNothingOpenIsAFullScan();
     testAnOpenRtlSdrLeavesOutOnlyTheRtlDriver();
     testAnOpenSoapyRadioLeavesOutItsOwnDriver();
@@ -322,6 +380,7 @@ int main() {
     testWhatAScanInFlightMayProbe();
     testRowsWithoutADriverAreNotKeptBlindly();
     testUhdIsAskedOnlyWhenAUsrpCouldBeHere();
+    testNetworkProbesNeedTheSwitch();
     testTheNetworkUsrpHintOnlyWhenUhdWasSkipped();
     testTheUhdImagesMissingHint();
     return testSummary("test_device_scan_plan");

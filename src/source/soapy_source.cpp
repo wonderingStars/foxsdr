@@ -879,6 +879,17 @@ std::vector<std::string> SoapySource::unloadModulesRegistering(
     return job->unloaded;
 }
 
+// THE HINT A FIND FUNCTION IS ASKED WITH (drive fixes 3, item 1). Empty, except for a driver named in kUsbOnlyEnv: UHD then looks for USB devices only
+// (type "b200", the device type of every USB USRP), so its network broadcast - which makes Windows raise a firewall prompt - is not made.
+static SoapySDR::Kwargs findHintFor(const std::string& driver) {
+    SoapySDR::Kwargs hint;
+    const char* env = std::getenv(kUsbOnlyEnv);
+    if (env == nullptr || *env == '\0') { return hint; }
+    const std::string list = "," + lowerCopy(env) + ",";
+    if (list.find("," + lowerCopy(driver) + ",") != std::string::npos && lowerCopy(driver) == "uhd") { hint["type"] = "b200"; }
+    return hint;
+}
+
 std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcessEach(
     const std::vector<std::string>& skip,
     const std::function<void(bool begin, const std::string& driver)>& onProbe) {
@@ -935,7 +946,7 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcessEach(
                                     if (*cb) { (*cb)(false, *name); }
                                 }
                             } end{onProbe, &name};
-                            return find(SoapySDR::Kwargs());
+                            return find(findHintFor(name));
                         }));
                 }
                 for (auto& probe : probes) {
@@ -1062,7 +1073,7 @@ std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcess(const std::string& 
                 // whichever walk asked it.
                 for (const auto& entry : SoapySDR::Registry::listFindFunctions()) {
                     if (entry.first != *w->driver) { continue; }
-                    for (SoapySDR::Kwargs kw : entry.second(SoapySDR::Kwargs())) {
+                    for (SoapySDR::Kwargs kw : entry.second(findHintFor(entry.first))) {
                         kw["driver"] = entry.first;
                         w->out->push_back(rowFromKwargs(kw));
                     }

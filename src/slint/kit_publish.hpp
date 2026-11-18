@@ -231,6 +231,8 @@ private:
     std::int64_t armedAtMs_ = 0;
     std::string detailsId_;                           // the target the details show
     std::string presetNote_;                          // the rail's preset result note
+    std::string catalogueRefusal_;                    // the sentence under the Catalogue field when the last address typed was refused (drive fixes 3, item 8)
+    std::string presetNoteFile_;                      // the module file the note is about: the drawer shows it under that plugin only (drive fixes 3, item 9)
     std::vector<std::string> muteNames_, muteKeys_;   // the "Sound is muted" question's subject
     bool muteQuestionOpen_ = false;
     bool muteForced_ = false;                         // a bounded run's seam (forceMuteQuestion): the question stays up though no plugin really mutes
