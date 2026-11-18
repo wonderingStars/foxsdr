@@ -114,6 +114,15 @@ void* findMainWindow() {
     return c.found;
 }
 
+bool systemPointer(int& x, int& y, bool& primaryDown) {
+    POINT p{};
+    if (!::GetCursorPos(&p)) { return false; }
+    x = static_cast<int>(p.x); y = static_cast<int>(p.y);
+    const int key = ::GetSystemMetrics(SM_SWAPBUTTON) != 0 ? VK_RBUTTON : VK_LBUTTON;   // the primary button is the right one for a left-handed mouse
+    primaryDown = (::GetAsyncKeyState(key) & 0x8000) != 0;
+    return true;
+}
+
 bool windowWorkRect(int& left, int& top, int& right, int& bottom) {
     HWND h = static_cast<HWND>(findMainWindow());
     const HMONITOR m = h != nullptr ? ::MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST) : ::MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
@@ -186,6 +195,7 @@ std::string clipboardText() {
 bool openUrl(const std::string& url) { return foxsdr::slintdesk::openAddress(url); }
 void* findMainWindow() { return nullptr; }
 bool windowWorkArea(int&, int&) { return false; }
+bool systemPointer(int&, int&, bool&) { return false; }
 bool windowWorkRect(int&, int&, int&, int&) { return false; }
 bool installFileDrop(void*, std::function<void(const std::string&)>) { return false; }
 bool setClipboardText(const std::string& utf8) { return foxsdr::slintdesk::copyText(utf8); }

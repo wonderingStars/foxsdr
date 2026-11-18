@@ -358,6 +358,7 @@ Every output is off by default. When you switch one on, it listens or sends on t
   The main Start-menu entry opens the window you last chose. "FoxSDR (Legacy)" always opens Legacy.
 - **Removing a bookmark group now asks first.**
 - **A mouse-wheel scroll over a slider changes it only once the pointer has rested there.**
+- **Dragging a window edge follows the pointer.** With a fast mouse the new window's size could jump about while an edge was dragged, and end at a size nobody asked for. An edge now follows the pointer, also when the pointer runs ahead of it.
 - **The Tab key walks the receiver strip from the search box.** From the search box it goes on to the window keys, STOP, the frequency figures, the mode, squelch and volume.
 - **The SYSTEM page's Usage reporting** shows your install identifier and the serial number of each radio, and says how to ask for your records to be erased.
 

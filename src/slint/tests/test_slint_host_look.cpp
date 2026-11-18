@@ -330,9 +330,62 @@ void windowSizeAtEverySize(int screenW, int screenH) {   // the work area of the
     }
 }
 
+// DRIVE FIXES 7: the drag of a window edge. The fault was a size that depended on the size the window had when a move arrived (see look_logic.hpp EdgeDrag): the same pointer
+// position, reported again before the window had resized, grew the window again. So the first thing held here is that it cannot: any number of moves at one pointer position ask for
+// one size, whatever the window's size is by then.
+void edgeDrag() {
+    // the rule it replaces, kept here so the test shows the fault it guards against: "the size now plus the distance" with a window that is one answer late
+    {
+        std::uint32_t late = 1107;                    // the size the window reports: always the one asked for a move ago
+        std::uint32_t asked = 1107;
+        for (int i = 0; i < 6; ++i) { const std::uint32_t next = late + 20; late = asked; asked = next; }   // the pointer stands 20 px right of the press, six moves arrive
+        CHECK(asked != 1127);                         // the old rule did not stay at press + 20: this is the runaway
+    }
+    EdgeDrag d;
+    CHECK(!d.active());
+    d.begin(1, 1104.0f, 300.0f, 1107, 673);           // the right edge of a 1107 x 673 window, pressed 3 px inside it
+    CHECK(d.active() && d.edge() == 1);
+    for (int i = 0; i < 1000; ++i) {                  // a thousand moves at one place: one size, every time
+        const WindowFit f = d.at(1124.0f, 300.0f, 1.0f, 1024.0f, 640.0f, 16384, 16384);
+        CHECK(f.w == 1127 && f.h == 673);
+    }
+    WindowFit f = d.at(1404.0f, 900.0f, 1.0f, 1024.0f, 640.0f, 16384, 16384);
+    CHECK(f.w == 1407 && f.h == 673);                 // the right edge follows the pointer across and ignores it down
+    f = d.at(1104.0f, 300.0f, 1.0f, 1024.0f, 640.0f, 16384, 16384);
+    CHECK(f.w == 1107 && f.h == 673);                 // back at the press: the size it had
+    f = d.at(200.0f, 300.0f, 1.0f, 1024.0f, 640.0f, 16384, 16384);
+    CHECK(f.w == 1024 && f.h == 673);                 // never narrower than the smallest window
+    f = d.at(90000.0f, 300.0f, 1.0f, 1024.0f, 640.0f, 16384, 16384);
+    CHECK(f.w == 16384);                              // never wider than the limit
+    d.end();
+    CHECK(!d.active());
+    d.begin(2, 500.0f, 670.0f, 1107, 673);            // the bottom edge
+    f = d.at(900.0f, 770.0f, 1.0f, 1024.0f, 640.0f, 16384, 16384);
+    CHECK(f.w == 1107 && f.h == 773);                 // follows down, ignores across
+    f = d.at(500.0f, 10.0f, 1.0f, 1024.0f, 640.0f, 16384, 16384);
+    CHECK(f.h == 640);
+    d.begin(3, 1102.0f, 668.0f, 1107, 673);           // the corner: both
+    f = d.at(1202.0f, 718.0f, 1.0f, 1024.0f, 640.0f, 16384, 16384);
+    CHECK(f.w == 1207 && f.h == 723);
+    // a scale that is not 1: the pointer is in logical pixels, the size in physical ones; the smallest window grows with the scale
+    d.begin(3, 1000.0f, 600.0f, 1600, 1000);
+    f = d.at(1100.0f, 640.0f, 1.5f, 1024.0f, 640.0f, 16384, 16384);
+    CHECK(f.w == 1750 && f.h == 1060);
+    f = d.at(0.0f, 0.0f, 1.5f, 1024.0f, 640.0f, 16384, 16384);
+    CHECK(f.w == 1536 && f.h == 960);
+    // a pointer position that is not a number changes nothing
+    f = d.at(std::nanf(""), 640.0f, 1.5f, 1024.0f, 640.0f, 16384, 16384);
+    CHECK(f.w == 1600 && f.h == 1060);
+    // a limit below the smallest window is not a limit
+    d.begin(1, 10.0f, 10.0f, 1024, 640);
+    f = d.at(10.0f, 10.0f, 1.0f, 1024.0f, 640.0f, 800, 800);
+    CHECK(f.w == 1024 && f.h == 640);
+}
+
 }  // namespace
 
 int main() {
+    edgeDrag();
     windowSizeAtEverySize(1920, 1040);   // a 1920 x 1080 screen less its task bar
     windowSizeAtEverySize(5120, 1440);   // drive fixes 6: the owner's screen, and the same less a 48 px task bar
     windowSizeAtEverySize(5120, 1392);

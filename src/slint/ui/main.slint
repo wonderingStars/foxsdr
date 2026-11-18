@@ -396,7 +396,9 @@ export component MainWindow inherits Window {
     callback maximise-clicked;
     callback close-clicked;
     callback brand-clicked;                          // the app menu: About FoxSDR, Key bindings, Quit
-    callback resize-drag(int, length, length);       // edge code (1 right, 2 bottom, 3 corner), dx, dy
+    callback resize-drag(int, length, length);       // edge code (1 right, 2 bottom, 3 corner), then where the pointer is IN THE WINDOW (x, y from its top-left): the host works the size out from the press, never from the size the window has now (look_logic.hpp EdgeDrag)
+    callback resize-drag-began(int);                 // an edge was pressed (the edge code): where the system can be asked for the pointer, the host follows THAT from here on, so the edge keeps following a pointer that has left the window
+    callback resize-drag-ended;                      // the edge was let go, or the press was taken away (the pointer left the window)
 
     // the strip's blocks need about 1750 px at the sheet's sizes (counter 386, eight mode keys 434, three lanes of 120):
     // below that the mode segment folds into one picker key, as the deck scales down in the ImGui window
@@ -962,9 +964,9 @@ export component MainWindow inherits Window {
     }
 
     // ===================== frameless window: the resize edges =====================
-    Rectangle { x: parent.width - 6px; y: 0; width: 6px; height: parent.height - 12px; TouchArea { mouse-cursor: ew-resize; moved => { if (self.pressed) { root.resize-drag(1, self.mouse-x - self.pressed-x, 0); } } } }
-    Rectangle { x: 0; y: parent.height - 6px; width: parent.width - 12px; height: 6px; TouchArea { mouse-cursor: ns-resize; moved => { if (self.pressed) { root.resize-drag(2, 0, self.mouse-y - self.pressed-y); } } } }
-    Rectangle { x: parent.width - 12px; y: parent.height - 12px; width: 12px; height: 12px; TouchArea { mouse-cursor: nwse-resize; moved => { if (self.pressed) { root.resize-drag(3, self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y); } } } }
+    Rectangle { x: parent.width - 6px; y: 0; width: 6px; height: parent.height - 12px; TouchArea { mouse-cursor: ew-resize; moved => { if (self.pressed) { root.resize-drag(1, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); } } pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.resize-drag-began(1); } else if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.resize-drag-ended(); } } } }
+    Rectangle { x: 0; y: parent.height - 6px; width: parent.width - 12px; height: 6px; TouchArea { mouse-cursor: ns-resize; moved => { if (self.pressed) { root.resize-drag(2, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); } } pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.resize-drag-began(2); } else if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.resize-drag-ended(); } } } }
+    Rectangle { x: parent.width - 12px; y: parent.height - 12px; width: 12px; height: 12px; TouchArea { mouse-cursor: nwse-resize; moved => { if (self.pressed) { root.resize-drag(3, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); } } pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.resize-drag-began(3); } else if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.resize-drag-ended(); } } } }
 
     // ===================== the torn-off pages: in-window TornWindows over the screen (an OS-level window is a later step) =====================
     for p[i] in root.pages : Rectangle { x: 0; y: 0; width: 0px; height: 0px;

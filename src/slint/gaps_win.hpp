@@ -14,6 +14,7 @@ void* findMainWindow();                                        // the process's 
 bool installFileDrop(void* window, std::function<void(const std::string&)> onDrop);
 bool setClipboardText(const std::string& utf8);                // items 6 and 9
 std::string clipboardText();
+bool systemPointer(int& x, int& y, bool& primaryDown);         // drive fixes 7: where the pointer is on the screen (physical pixels) and whether its primary button is held, asked of the system; false where this build cannot ask
 bool windowWorkRect(int& left, int& top, int& right, int& bottom);       // drive fixes 6: the same work area as a rectangle in physical screen coordinates (the window is moved inside it after it grows)
 bool windowWorkArea(int& width, int& height);                 // drive fixes 1: the work area (the screen less the task bar) of the monitor the main window is on, in physical pixels; false when it is not known (off Windows)
 bool windowsHighContrast();                                    // item 11: Windows' own high-contrast setting is on                                   // "" when there is no text on the clipboard
