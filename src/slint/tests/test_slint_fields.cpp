@@ -777,5 +777,43 @@ int main() {
         CHECKV(sval(ui->get_last_value()) == "7", "a real click into a number field, then 7: the field reads '%s' (wanted '7': the click's focus selected the whole text)", sval(ui->get_last_value()).c_str());
     }
 
+    // =========================================================================================================
+    // DRIVE FIXES 5, ITEM 5: the same click with the pointer MOVING while the button is down (a hand is never still; the drive's
+    // pointer tool moves a pixel or two between the press and the release; the Gateway port read 97728772, the Scanner's "Every s"
+    // 130). The focus change's select-all ran after the press, but every pointer move while the button stays down re-places the
+    // caret under the pointer (the anchor stays at 0), so the selection collapsed to nothing and the first key was INSERTED. The
+    // click must select all on its RELEASE, wherever the pointer went. Three clicks: a nudge to the right, a nudge to the left, and
+    // one that starts in the empty padding left of the right-aligned text. Then, with the field focused, a SECOND click places the
+    // caret (no select-all): the text keeps what the key adds to.
+    // =========================================================================================================
+    for (int variant = 0; variant < 3; ++variant) {
+        reset();
+        park();
+        const int py = kTextY + kInputDy + kIn / 2;
+        const int px = variant == 2 ? kRightX + 12 : kRightX + 60;
+        const int px2 = variant == 0 ? px + 3 : (variant == 1 ? px - 3 : px + 2);
+        clk(kLeftX + 60, py);   // the keyboard goes to the plain text field on the left first: the number field must be REACHED by the click, not already hold the focus
+        settle(milliseconds(40));
+        park();
+        mv(px, py);
+        press(win, static_cast<float>(px), static_cast<float>(py));
+        settle(milliseconds(40));
+        moveTo(win, static_cast<float>(px2), static_cast<float>(py));
+        settle(milliseconds(40));
+        release(win, static_cast<float>(px2), static_cast<float>(py));
+        settle(milliseconds(60));
+        tap(u8"7");
+        settle(milliseconds(30));
+        CHECKV(sval(ui->get_last_value()) == "7", "variant %d: a click with the pointer moving, then 7: the field reads '%s' (wanted '7')", variant, sval(ui->get_last_value()).c_str());
+        // a second click on the focused field places the caret and selects nothing: 7 then 8 reads "78", not "8"
+        press(win, static_cast<float>(px2 + 20), static_cast<float>(py));
+        settle(milliseconds(30));
+        release(win, static_cast<float>(px2 + 20), static_cast<float>(py));
+        settle(milliseconds(30));
+        tap(u8"8");
+        settle(milliseconds(30));
+        CHECKV(sval(ui->get_last_value()).find('7') != std::string::npos && sval(ui->get_last_value()).find('8') != std::string::npos, "variant %d: a second click places the caret: the field reads '%s' (wanted 7 and 8 both kept)", variant, sval(ui->get_last_value()).c_str());
+    }
+
     return testSummary("test_slint_fields");
 }
