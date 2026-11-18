@@ -225,6 +225,9 @@ void testRtl() {
         CHECK(seen.count() == 0);
         c.pump(300);
         CHECK(c.eof);
+        // the server closes the socket and THEN counts the client out: the client can see the end of the stream a moment before the count drops (engine merge 13: this failed alone in a repeat run).
+        // The expectation is unchanged (no client is left); it is waited for, up to two seconds.
+        for (int i = 0; i < 100 && s.stats().clients != 0; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
         CHECK(s.stats().clients == 0);
         // and the next, honest client is served at once
         Client d;
