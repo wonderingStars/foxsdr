@@ -2857,6 +2857,8 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
         for (std::size_t i = 0; i < m; ++i) {
             preAgcBuf_[i] = 0.5f * (leftBuf_[i] + rightBuf_[i]);
         }
+        // AM only, on the tap's copy: the DC blocker leads 30 Hz by 3.8 degrees and a VOR bearing is that phase (dsp/demod.hpp AmPhaseTrim).
+        if (mode == cascade::dsp::DemodMode::AM) { amPhaseTrim_.process(preAgcBuf_.data(), m, channelRateHz()); } else { amPhaseTrim_.reset(); }
         const std::size_t dcap = resamplerD_.maxOut(m);
         decoderFeed_.resize(dcap);
         const std::size_t dk =

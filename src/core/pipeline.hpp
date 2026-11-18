@@ -1377,6 +1377,7 @@ private:
     // state machine — interleaving two signals through one corrupts both.
     cascade::dsp::RationalResampler resamplerD_;
     std::vector<float> preAgcBuf_;
+    cascade::dsp::AmPhaseTrim amPhaseTrim_;   // the decoder tap's copy of AM audio, with the DC blocker's 30 Hz phase lead taken out (drive fixes 5, item 4)
     // Audio post-processing, per channel, all at kAudioRateHz (so a
     // rate-follow never rebuilds them). Held by unique_ptr because
     // NoiseReduction and AutoNotch own an FFT plan and are not assignable.

@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <cmath>
 #include <complex>
 #include <cstddef>
 #include <string>
@@ -67,6 +68,34 @@ bool modeFromName(const std::string& name, DemodMode& out);
 //   CW   USB with the input pre-shifted so a carrier on the VFO beats at
 //        700 Hz.
 //   RAW  Re{x} passthrough, for diagnostics.
+// The AM detector's DC blocker corner (Hz). Public because AmPhaseTrim below undoes exactly its phase lead.
+inline constexpr double kAmDcCutoffHz = 2.0;
+
+// DRIVE FIXES 5, ITEM 4: THE 30 Hz PHASE THE AM DC BLOCKER SPOILS, GIVEN BACK TO WHAT A DECODER MEASURES. The blocker above is a first-order
+// high-pass at 2 Hz: it leads by atan(2/30) = 3.8 degrees at 30 Hz, so the VOR plugin read radial 090 as 086 (the plugins lane measured exactly
+// 4 degrees; its decoder is right). The listener hears nothing of it, and the blocker is needed for them (a lower corner leaves a carrier step
+// ringing into the AGC for seconds), so it stays. This trims a COPY: a leaky integrator with the blocker's own corner, y' = y + wc * s,
+// s[n] = rho * s[n-1] + y[n] / fs, which is the exact inverse of the blocker above its corner (|error| 0.03 degrees at 30 Hz, +0.4 percent in
+// magnitude at 30 Hz, 0.01 percent at 1 kHz). It is applied only to the audio tap the decoder plugins are fed (core/pipeline.cpp), never to the
+// path to the speakers.
+class AmPhaseTrim {
+public:
+    void reset() { s_ = 0.0; }
+    void process(float* x, std::size_t n, double rateHz) {
+        if (!(rateHz > 0.0)) { return; }
+        const double rho = std::exp(-6.283185307179586 * kAmDcCutoffHz / rateHz);
+        const double g = 6.283185307179586 * kAmDcCutoffHz / rateHz;
+        double s = s_;
+        for (std::size_t i = 0; i < n; ++i) {
+            s = rho * s + static_cast<double>(x[i]);
+            x[i] += static_cast<float>(g * s);
+        }
+        s_ = s;
+    }
+private:
+    double s_ = 0.0;
+};
+
 class Demodulator {
 public:
     Demodulator(double channelRateHz);

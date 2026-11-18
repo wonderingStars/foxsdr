@@ -26,6 +26,7 @@ constexpr double kFs = 48000.0;   // channel rate for every test
 constexpr std::size_t kN = 4800;  // analysis window: 10 Hz bins, so 1 kHz,
                                   // 1.5 kHz, 700 Hz all land on integer bins
 
+using cascade::dsp::AmPhaseTrim;
 using cascade::dsp::Demodulator;
 using cascade::dsp::DemodMode;
 using cascade::dsp::kDemodModeCount;
@@ -437,6 +438,64 @@ int main() {
         const double errDeg = err * 180.0 / kPi;
         std::printf("  AM 30 Hz modulation: phase error %.2f degrees (the DC blocker's lead)\n", errDeg);
         CHECK(std::fabs(errDeg) < 4.0);
+    }
+
+    // --- AM: the DECODER TAP's copy keeps the 30 Hz phase to a fraction of a degree (drive fixes 5, item 4) ------------------------------------
+    // The VOR plugin read radial 090 as 086: the 2 Hz DC blocker leads 30 Hz by 3.8 degrees (held above to < 4). What a decoder is fed (and not the speakers: the
+    // demodulator's own output, checked above, is untouched) goes through AmPhaseTrim, the blocker's inverse above its corner. Radials 0, 45, 90, 180, 270 and 345,
+    // each a 30 Hz AM variable of a different phase, and a 1 kHz tone to show nothing audible moves.
+    {
+        const double carrierAmp = 0.7;
+        const std::size_t warm = 96000;   // two seconds: the trim's own 80 ms memory is long gone
+        auto phaseErrDeg = [&](double radialDeg, double fm, bool trim) {
+            Demodulator d(kFs);
+            d.setMode(DemodMode::AM);
+            AmPhaseTrim trimmer;
+            std::vector<std::complex<float>> x(warm + kN);
+            const double th = radialDeg * kPi / 180.0;
+            for (std::size_t i = 0; i < x.size(); ++i) {
+                const double t = static_cast<double>(i) / kFs;
+                const double env = carrierAmp * (1.0 + 0.3 * std::cos(kTwoPi * fm * t + th));
+                const double ph = kTwoPi * 500.0 * t;
+                x[i] = {static_cast<float>(env * std::cos(ph)), static_cast<float>(env * std::sin(ph))};
+            }
+            std::vector<float> y(x.size());
+            d.process(x.data(), x.size(), y.data());
+            if (trim) { trimmer.process(y.data(), y.size(), kFs); }
+            const std::size_t bin = static_cast<std::size_t>(fm * static_cast<double>(kN) / kFs + 0.5);
+            std::complex<double> acc{0.0, 0.0};
+            for (std::size_t n = 0; n < kN; ++n) {
+                const double w = kTwoPi * static_cast<double>(bin) * static_cast<double>(n) / static_cast<double>(kN);
+                const double v = static_cast<double>(y[warm + n]);
+                acc += std::complex<double>(v * std::cos(w), -v * std::sin(w));
+            }
+            double err = std::arg(acc) - std::fmod(kTwoPi * fm * static_cast<double>(warm) / kFs + th, kTwoPi);
+            while (err > kPi) { err -= kTwoPi; }
+            while (err < -kPi) { err += kTwoPi; }
+            return err * 180.0 / kPi;
+        };
+        for (const double radial : {0.0, 45.0, 90.0, 180.0, 270.0, 345.0}) {
+            const double raw = phaseErrDeg(radial, 30.0, false);
+            const double trimmed = phaseErrDeg(radial, 30.0, true);
+            std::printf("  AM 30 Hz radial %3.0f: raw %.2f degrees, trimmed %.2f degrees\n", radial, raw, trimmed);
+            CHECK(std::fabs(raw) > 3.0);        // the blocker's lead is really there to be removed
+            CHECK(std::fabs(trimmed) < 0.3);
+        }
+        // Nothing a listener hears moves: the trim leaves 1 kHz within 0.1 percent (and it is only ever applied to the decoder tap's copy).
+        Demodulator d(kFs);
+        d.setMode(DemodMode::AM);
+        std::vector<std::complex<float>> x(warm + kN);
+        for (std::size_t i = 0; i < x.size(); ++i) {
+            const double t = static_cast<double>(i) / kFs;
+            const double env = carrierAmp * (1.0 + 0.8 * std::cos(kTwoPi * 1000.0 * t));
+            x[i] = {static_cast<float>(env), 0.0f};
+        }
+        std::vector<float> y(x.size());
+        d.process(x.data(), x.size(), y.data());
+        std::vector<float> z = y;
+        AmPhaseTrim().process(z.data(), z.size(), kFs);
+        const double a0 = binAmp(y.data() + warm, kN, 100), a1 = binAmp(z.data() + warm, kN, 100);
+        CHECK(std::fabs(a1 / a0 - 1.0) < 0.001);
     }
 
     // --- USB: +1.5 kHz passes to 1.5 kHz audio, -1.5 kHz suppressed ---------

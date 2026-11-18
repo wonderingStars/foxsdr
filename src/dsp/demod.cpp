@@ -127,7 +127,7 @@ constexpr double kCwToneHz = 700.0;   // (the default pitch: Demodulator::cwTone
 // 3.8 degrees (within a VOR receiver's allowance) and the blocker settles in
 // ~80 ms (tests/test_demod.cpp warms it for half a second). Program audio is
 // unchanged: nothing of AM broadcast lives below 2 Hz either.
-constexpr double kAmDcCutoffHz = 2.0;
+// (kAmDcCutoffHz = 2.0 is in demod.hpp: AmPhaseTrim undoes this blocker's phase lead for the decoder tap.)
 
 // Sideband-select low-pass for the Weaver chain. Hamming window: its first
 // stopband lobe is ~-53 dB, 13 dB beyond the 40 dB opposite-sideband-rejection
