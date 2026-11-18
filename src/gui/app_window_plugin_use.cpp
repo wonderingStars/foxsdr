@@ -67,9 +67,9 @@ void AppWindow::reportPluginUse() {
             }
             if (scopeMode_) { bits |= FOXAPP_PLUGIN_USE_RADAR_SCOPE; }
         }
-        if (decoderWindowOpen_ && (r.caps & (CASCADE_CAP_DECODER | CASCADE_CAP_IQ_DECODER)) != 0u) {
-            bits |= FOXAPP_PLUGIN_USE_DECODER_OUTPUT;
-        }
+        // DRIVE FIXES 6, ITEM 3 (the Slint window's rule since drive fixes 5, item 1): the open Decoder output window is NOT a use. It shows the lines of whatever is running;
+        // reporting bit 8 for every text decoder woke all of the fitted decoders when the window opened. A plugin runs because the user started it, ticked Keep running, or opened
+        // its own window, map page or preset. (FOXAPP_PLUGIN_USE_DECODER_OUTPUT stays in the command's vocabulary; the window no longer sends it.)
         if (bits == 0u) { continue; }
         pluginUseText_ += r.file;
         pluginUseText_ += '\t';

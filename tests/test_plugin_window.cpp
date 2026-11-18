@@ -621,19 +621,19 @@ void testUseReport(AppWindow& a) {
     Access::pollPlugins(a);
     CHECK(Access::useSent(a) == row(g13, FOXAPP_PLUGIN_USE_WINDOW) + row(g14, FOXAPP_PLUGIN_USE_WINDOW));
 
-    // The Decoder output window: only a TEXT decoder is wanted by it (the stage-one decoder; not the picture decoder, not the tracks).
+    // The Decoder output window is NOT a use of any decoder (drive fixes 6, item 3; it was "wanted by every text decoder", which woke them all): the table does not change when it opens.
     Access::decoderWindowOpen(a) = true;
     Access::pollPlugins(a);
-    CHECK(Access::useSent(a) ==
-          row(g13, FOXAPP_PLUGIN_USE_WINDOW) + row(g14, FOXAPP_PLUGIN_USE_WINDOW) + row(s1, FOXAPP_PLUGIN_USE_DECODER_OUTPUT));
+    CHECK(Access::useSent(a) == row(g13, FOXAPP_PLUGIN_USE_WINDOW) + row(g14, FOXAPP_PLUGIN_USE_WINDOW));
+    CHECK(Access::useSent(a).find(s1) == std::string::npos);   // the stage-one text decoder is not named
+    CHECK_EQ(Access::engineReports(a, s1), std::size_t(0));
 
     // The map page, and the radar scope: a TRACK SOURCE's.
     Access::ensurePage(a, kTracks).open = true;
     Access::scopeMode(a) = true;
     Access::pollPlugins(a);
     CHECK(Access::useSent(a) == row(g13, FOXAPP_PLUGIN_USE_WINDOW) +
-                                    row(g14, FOXAPP_PLUGIN_USE_WINDOW | FOXAPP_PLUGIN_USE_MAP_PAGE | FOXAPP_PLUGIN_USE_RADAR_SCOPE) +
-                                    row(s1, FOXAPP_PLUGIN_USE_DECODER_OUTPUT));
+                                    row(g14, FOXAPP_PLUGIN_USE_WINDOW | FOXAPP_PLUGIN_USE_MAP_PAGE | FOXAPP_PLUGIN_USE_RADAR_SCOPE));
 
     // Everything closed: the empty table is sent (the engine's table is cleared), once.
     {

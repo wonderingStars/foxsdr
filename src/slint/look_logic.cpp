@@ -85,6 +85,19 @@ WindowFit fitWindowToScreen(std::uint32_t w, std::uint32_t h, float scale, float
     return f;
 }
 
+WindowPlace placeInWorkArea(int x, int y, std::uint32_t w, std::uint32_t h, const WorkRect& r) {
+    WindowPlace p{x, y};
+    if (r.right <= r.left || r.bottom <= r.top) { return p; }   // no work area known: the window stays where it is
+    const auto fit = [](int pos, std::uint32_t size, int lo, int hi) {
+        const long long room = static_cast<long long>(hi) - lo;
+        if (static_cast<long long>(size) >= room) { return lo; }
+        return static_cast<int>(std::max<long long>(lo, std::min<long long>(pos, hi - static_cast<long long>(size))));
+    };
+    p.x = fit(x, w, r.left, r.right);
+    p.y = fit(y, h, r.top, r.bottom);
+    return p;
+}
+
 void SizeMirror::asked(std::uint32_t w, std::uint32_t h) {
     want_ = true; wantW_ = w; wantH_ = h; waited_ = 0;
     guard_ = false;

@@ -93,6 +93,10 @@ export component CommandField inherits Rectangle {
     area := TouchArea {
         enabled: root.enabled;
         clicked => {
+            // drive fixes 6, item 1: the search box takes the keyboard BEFORE the sheet opens, so the sheet gives it back here when it closes (a popup
+            // returns the focus to what held it) and the next Tab goes on from the search box to the figures. Without this the keyboard went back to
+            // whatever control had it before (a field in a bank, the spectrum) and Tab walked on from there.
+            field-focus.focus();
             root.clicked();
         }
     }

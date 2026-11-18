@@ -1232,6 +1232,13 @@ int main(int argc, char** argv) {
                 const foxsdr::slintlook::WindowFit fit = foxsdr::slintlook::fitWindowToScreen(ns.first, ns.second, plan.want, kMinWindowW, kMinWindowH, screenW, screenH);
                 ui->window().set_size(slint::PhysicalSize({fit.w, fit.h}));
                 sizeMirror.asked(fit.w, fit.h);
+                // drive fixes 6, item 2: a window that grew keeps its top-left, so a right-sized window could still end past the bottom or right edge (150 % on a 1440 high screen: 74 px). Moved inside the work area.
+                foxsdr::slintlook::WorkRect work;
+                if (foxsdr::slintgaps::windowWorkRect(work.left, work.top, work.right, work.bottom)) {
+                    const auto pos = ui->window().position();
+                    const foxsdr::slintlook::WindowPlace at = foxsdr::slintlook::placeInWorkArea(pos.x, pos.y, fit.w, fit.h, work);
+                    if (at.x != pos.x || at.y != pos.y) { ui->window().set_position(slint::PhysicalPosition({at.x, at.y})); }
+                }
             }
             scaleFollower.applied(plan.want);
             std::fprintf(stderr, "foxsdr-slint: look: interface size '%s' = scale %.2f (the system's %.2f)\n", half.interfaceScale.c_str(), static_cast<double>(plan.want), static_cast<double>(plan.os));
