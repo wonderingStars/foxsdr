@@ -433,7 +433,7 @@ export component StopKey inherits Rectangle {
         }
     }
     if fs.has-focus : FocusRing { key-w: root.width; key-h: root.height; key-radius: Theme.radius-dome; }
-    fs := KeyScope { enabled: root.enabled; probe: "stop"; pressed => { root.clicked(); } }
+    fs := KeyScope { enabled: root.enabled; probe: "stop"; pressed => { root.clicked(); } }   // not-translated: the drive probe's own word
     area := TouchArea {
         mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
         clicked => { if (root.enabled) { root.clicked(); } }
