@@ -98,6 +98,25 @@ WindowPlace placeInWorkArea(int x, int y, std::uint32_t w, std::uint32_t h, cons
     return p;
 }
 
+void EdgeDrag::begin(int edge, float px, float py, std::uint32_t w, std::uint32_t h) {
+    active_ = true; edge_ = edge; px_ = px; py_ = py; w_ = w; h_ = h;
+}
+
+WindowFit EdgeDrag::at(float px, float py, float scale, float minW, float minH, std::uint32_t maxW, std::uint32_t maxH) const {
+    const double sf = static_cast<double>(std::max(kMinScale, scale));
+    const auto axis = [sf](std::uint32_t start, float from, float to, bool moves, float minLogical, std::uint32_t maxPhysical) {
+        double v = static_cast<double>(start);
+        if (moves && std::isfinite(from) && std::isfinite(to)) { v += (static_cast<double>(to) - static_cast<double>(from)) * sf; }
+        const double lo = static_cast<double>(std::llround(static_cast<double>(minLogical) * sf));
+        const double hi = std::max(lo, static_cast<double>(maxPhysical));   // a limit below the smallest window is not a limit
+        return static_cast<std::uint32_t>(std::llround(std::min(hi, std::max(lo, v))));
+    };
+    WindowFit f;
+    f.w = axis(w_, px_, px, edge_ != 2, minW, maxW);   // the bottom edge leaves the width alone
+    f.h = axis(h_, py_, py, edge_ != 1, minH, maxH);   // the right edge leaves the height alone
+    return f;
+}
+
 void SizeMirror::asked(std::uint32_t w, std::uint32_t h) {
     want_ = true; wantW_ = w; wantH_ = h; waited_ = 0;
     guard_ = false;

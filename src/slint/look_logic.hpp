@@ -62,6 +62,30 @@ struct WorkRect { int left = 0, top = 0, right = 0, bottom = 0; };   // physical
 struct WindowPlace { int x = 0, y = 0; };
 WindowPlace placeInWorkArea(int x, int y, std::uint32_t w, std::uint32_t h, const WorkRect& r);
 
+// THE DRAG OF A WINDOW EDGE (the frameless window's three resize edges, ui/main.slint). Until drive fixes 7 an edge reported how far the pointer was from where it was pressed, measured
+// from the EDGE ITSELF, and the host asked for "the size the window has now plus that distance". That is right only if the window has already taken the last size asked for when the
+// next pointer move arrives. It has not: the size is applied a frame or more later, so every move that arrived in between added the same distance again, the window overshot, the
+// distance turned negative and it undershot. With a real mouse (hundreds of moves a second) the width swung between the smallest window and the 16384 pixel limit while the owner
+// dragged (2026-11-18); a scripted pointer at about 50 moves a second showed it too (101 pixels over, then 176 and 303 pixels under the pointer). So the size is now a function of the
+// PRESS and of where the pointer is IN THE WINDOW (whose top-left corner a right or bottom edge never moves), never of the size the window has at that moment: any number of moves at
+// one pointer position ask for one and the same size.
+class EdgeDrag {
+public:
+    // The first move of a drag: the edge (1 right, 2 bottom, 3 corner), the pointer in the window (logical pixels from its top-left) and the window's physical size now.
+    void begin(int edge, float px, float py, std::uint32_t w, std::uint32_t h);
+    // The pointer is at (px, py): the physical size to ask for. Never below minW x minH (logical) at `scale`, never above maxW x maxH (physical).
+    WindowFit at(float px, float py, float scale, float minW, float minH, std::uint32_t maxW, std::uint32_t maxH) const;
+    void end() { active_ = false; }
+    bool active() const { return active_; }
+    int edge() const { return edge_; }
+
+private:
+    bool active_ = false;
+    int edge_ = 0;
+    float px_ = 0.0f, py_ = 0.0f;
+    std::uint32_t w_ = 0, h_ = 0;
+};
+
 // THE MIRROR OF THE REAL WINDOW SIZE INTO THE SCREEN'S SIZE PROPERTIES (ui/main.slint win-w / win-h, bound to the window's width and height). When the scale this window is drawn at is not
 // the one the operating system gave it (an interface size of 125 % to 250 %: the follower above dispatches it), a CHANGED win-w is carried to the system as a LOGICAL size and converted
 // with the system's scale, not ours: the window is resized to win-w x os instead of win-w x scale, one step later, and the next tick's mirror writes the smaller number again - the

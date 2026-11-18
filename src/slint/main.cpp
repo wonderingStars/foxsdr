@@ -1195,6 +1195,8 @@ int main(int argc, char** argv) {
     // last look is applied, nothing else - so a counter face picked from the menu stays until the saved style moves.
     foxsdr::slintlook::ScaleFollower scaleFollower;
     foxsdr::slintlook::SizeMirror sizeMirror;   // the real window size into win-w / win-h, without the shrink a pinned interface size caused (look_logic.hpp)
+    foxsdr::slintlook::EdgeDrag edgeDrag;       // the drag of a window edge: the size from the press and the pointer's place (drive fixes 7; look_logic.hpp)
+    bool edgeDragBySystem = false;              // this drag follows the system's pointer (gaps_win.hpp systemPointer), not the edge's own moves
     std::string lookTheme, lookStyle;
     bool lookHc = false, winHc = false;   // slint-gaps.md item 11: the high-contrast skin in force, and Windows' own setting (polled once a second; FOXSDR_SLINT_WINDOWS_HC=1 stands in for it in a bounded run)
     std::string skinNow = "workbench";
@@ -2657,13 +2659,41 @@ int main(int argc, char** argv) {
     ui->on_minimise_clicked([&] { ui->window().set_minimized(true); });
     ui->on_maximise_clicked([&] { ui->window().set_maximized(!ui->window().is_maximized()); });
     ui->on_close_clicked([&] { slint::quit_event_loop(); });
-    ui->on_resize_drag([&](int edge, float dx, float dy) {
+    // DRIVE FIXES 7. An edge that is dragged quickly is soon BEHIND the pointer, the pointer is then outside the window, and the edge's own press is taken away there (it hears no more
+    // moves): the drag stopped short. So where the system can be asked (Windows) the drag follows the system's pointer and button from the press on: on every move the edge still hears
+    // and on every tick, until the button is let go. A bounded run (the tests: their pointer is not the system's) and a system that cannot be asked keep to the edge's own moves.
+    const auto askEdgeSize = [&](float px, float py) {   // (px, py): the pointer, in logical pixels of whichever frame this drag began in
         const auto sz = ui->window().size();
-        const auto w = static_cast<std::uint32_t>(std::max(kMinWindowW * scale(), sz.width + (edge != 2 ? dx * scale() : 0.f)));
-        const auto h = static_cast<std::uint32_t>(std::max(kMinWindowH * scale(), sz.height + (edge != 1 ? dy * scale() : 0.f)));
-        ui->window().set_size(slint::PhysicalSize({w, h}));
-        sizeMirror.asked(w, h);   // the mirror (the tick) puts the new size into win-w / win-h once the window has it
+        const std::uint32_t limit = static_cast<std::uint32_t>(foxsdr::slintguard::kMaxWindowExtent);
+        const foxsdr::slintlook::WindowFit fit = edgeDrag.at(px, py, scale(), kMinWindowW, kMinWindowH, limit, limit);
+        if (fit.w == sz.width && fit.h == sz.height) { return; }
+        ui->window().set_size(slint::PhysicalSize({fit.w, fit.h}));
+        sizeMirror.asked(fit.w, fit.h);   // the mirror (the tick) puts the new size into win-w / win-h once the window has it
+    };
+    const auto edgeDragFollow = [&] {
+        if (!edgeDrag.active() || !edgeDragBySystem) { return; }
+        int cx = 0, cy = 0;
+        bool down = false;
+        if (!foxsdr::slintgaps::systemPointer(cx, cy, down) || !down) { edgeDrag.end(); edgeDragBySystem = false; return; }   // let go: the last size asked for stands
+        const float sf = std::max(0.5f, scale());
+        askEdgeSize(static_cast<float>(cx) / sf, static_cast<float>(cy) / sf);
+    };
+    ui->on_resize_drag_began([&](int edge) {
+        int cx = 0, cy = 0;
+        bool down = false;
+        if (bounded.bounded() || !foxsdr::slintgaps::systemPointer(cx, cy, down)) { return; }
+        const float sf = std::max(0.5f, scale());
+        const auto sz = ui->window().size();
+        edgeDrag.begin(edge, static_cast<float>(cx) / sf, static_cast<float>(cy) / sf, sz.width, sz.height);
+        edgeDragBySystem = true;
     });
+    ui->on_resize_drag([&](int edge, float px, float py) {   // (px, py) is where the pointer is in the window; the size never depends on the size the window has now
+        if (edgeDragBySystem) { edgeDragFollow(); return; }
+        const auto sz = ui->window().size();
+        if (!edgeDrag.active() || edgeDrag.edge() != edge) { edgeDrag.begin(edge, px, py, sz.width, sz.height); }
+        askEdgeSize(px, py);
+    });
+    ui->on_resize_drag_ended([&] { if (!edgeDragBySystem) { edgeDrag.end(); } });   // with the system's pointer the button ends the drag (edgeDragFollow), not the pointer leaving the window
 
     // ---- the pictures: one pane's work per visible pane, then its figures into the window ----
     // The plot of layout One: the pixels the spectrum and waterfall boxes of ui/main.slint lay their axes over. A pane's plot is its own size, passed the same way.
@@ -3095,6 +3125,7 @@ int main(int argc, char** argv) {
         }
         ui->set_failed((state.flags & FOXAPI_RX_FAULTED) != 0 || !standInSentence.empty());
         ui->set_maximised(ui->window().is_maximized());
+        edgeDragFollow();   // drive fixes 7: an edge being dragged follows the system's pointer on every tick, wherever the pointer is
         {   // the screen follows the real window size (maximise, restore, a DPI change)
             const auto sz = ui->window().size();
             const float sf = std::max(0.5f, ui->window().scale_factor());
