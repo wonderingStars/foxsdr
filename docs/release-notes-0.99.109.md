@@ -341,6 +341,7 @@ Every output is off by default. When you switch one on, it listens or sends on t
 - **Start-up notices:** a plugin that failed ("Started without a plugin", with a RE-ENABLE key), a team-message card with a Seen key, a "FoxSDR did not close normally last time" sheet, and a "Link this FoxSDR to tester ...?" question.
 - **The PATCH page's Spectrum and Map parts now draw** (the trace and waterfall, and the map with its targets). A running patch is named on the SIGNAL page.
 - **Opening the Decoder output page no longer starts every decoder.** A decoder runs when you start it or tick Keep running.
+- **The Legacy window's decoder output no longer starts every decoder either.** A decoder runs when you start it, tick Keep running or open its own window.
 - **VOR bearings were up to 4 degrees low and are corrected.**
 
 ### The web page
@@ -357,6 +358,7 @@ Every output is off by default. When you switch one on, it listens or sends on t
   The main Start-menu entry opens the window you last chose. "FoxSDR (Legacy)" always opens Legacy.
 - **Removing a bookmark group now asks first.**
 - **A mouse-wheel scroll over a slider changes it only once the pointer has rested there.**
+- **The Tab key walks the receiver strip from the search box.** From the search box it goes on to the window keys, STOP, the frequency figures, the mode, squelch and volume.
 - **The SYSTEM page's Usage reporting** shows your install identifier and the serial number of each radio, and says how to ask for your records to be erased.
 
 ---
