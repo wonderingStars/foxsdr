@@ -308,6 +308,7 @@ These were tested with stand-ins or test signals only:
 - **The search for network radios happens only when "Look for network USRPs" is ticked.** So Windows does not ask about network access unless you asked for network radios.
 - **Tuner pooling:** claim a second radio's tuner for a frequency, mode and bandwidth, and release it.
 - **Radios and servers that need a library you install yourself** say what to install and from where. FoxSDR downloads nothing for them. SoapySDR modules, including SoapyELAD, are listed and opened when installed.
+- **AOR owners:** put the firmware file in the folder the message names, which is in your own settings area. It is no longer looked for under Program Files.
 - **Rig following (read only).** FoxSDR can follow the frequency and mode of a rig over a serial or virtual COM port, emulate a rig for a logging program, or read OmniRig.
   It only asks the rig for its frequency and mode. It never sends a frequency or mode to the rig. A logging program's transmit commands are refused.
   All three are off until you switch them on.
@@ -339,6 +340,8 @@ Every output is off by default. When you switch one on, it listens or sends on t
   The Fitted modules page can **clean up old versions**. It asks first.
 - **Start-up notices:** a plugin that failed ("Started without a plugin", with a RE-ENABLE key), a team-message card with a Seen key, a "FoxSDR did not close normally last time" sheet, and a "Link this FoxSDR to tester ...?" question.
 - **The PATCH page's Spectrum and Map parts now draw** (the trace and waterfall, and the map with its targets). A running patch is named on the SIGNAL page.
+- **Opening the Decoder output page no longer starts every decoder.** A decoder runs when you start it or tick Keep running.
+- **VOR bearings were up to 4 degrees low and are corrected.**
 
 ### The web page
 
@@ -353,6 +356,7 @@ Every output is off by default. When you switch one on, it listens or sends on t
   Windows are switched cleanly: settings are released first, and if a recording or a patch is running you are asked first.
   The main Start-menu entry opens the window you last chose. "FoxSDR (Legacy)" always opens Legacy.
 - **Removing a bookmark group now asks first.**
+- **A mouse-wheel scroll over a slider changes it only once the pointer has rested there.**
 - **The SYSTEM page's Usage reporting** shows your install identifier and the serial number of each radio, and says how to ask for your records to be erased.
 
 ---
