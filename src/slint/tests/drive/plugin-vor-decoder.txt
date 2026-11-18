@@ -18,7 +18,8 @@ expect "STOP" label equals "STOP"
 state decodersRunning >= 1
 +1 click "< FITTED"
 +5 state pages contains "Fitted modules"
-+1 click "VOR course indicator"#1
+# DRIVE FIXES 5 (merge 13): START already opens the module's own instrument page, so the rail row (#1) would close it; the page's tab is #2.
++1 click "VOR course indicator"#2
 +10 state pages contains "VOR course indicator"
 +20 state kit.instruments >= 1
 +1 click "VOR band  108.000 MHz AM (band start)"

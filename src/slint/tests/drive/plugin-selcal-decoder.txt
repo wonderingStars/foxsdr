@@ -21,6 +21,8 @@ state decodersRunning >= 1
 +5 state pages contains "Fitted modules"
 +1 click "Decoder output"
 +10 state pages contains "Decoder output"
+# DRIVE FIXES 5 (merge 13): the Decoder output page keeps its preset bars in a 132 px scrolling box, in the order of the fitted decoders; SELCAL's bar is 960 px down, so the box is wheeled to it before its keys are pressed.
++2 scroll "Presets"#1 960
 +1 click "SELCAL NAT-A 8906 kHz USB"
 +10 state tunedHz == 8906000
 +1 click "SELCAL NAT-B 5616 kHz USB"

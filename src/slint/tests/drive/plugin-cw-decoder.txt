@@ -19,6 +19,8 @@ state pages contains "Morse (CW)"
 +3 state pages contains "Fitted modules"
 +1 click "+ Window"
 +3 state pages contains "Decoder output"
+# DRIVE FIXES 5 (merge 13): the Decoder output page keeps its preset bars in a 132 px scrolling box, in the order of the fitted decoders; CW's bar is 120 px down, so the box is wheeled to it before its keys are pressed.
++2 scroll "Presets"#1 120
 +1 click "CW  14.060 MHz (20 m)"
 +10 state tunedHz == 14060000
 +1 click "CW  7.030 MHz (40 m)"

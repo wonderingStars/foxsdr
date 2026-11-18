@@ -18,6 +18,8 @@ state pages contains "DMR Monitor"
 +3 state pages contains "Fitted modules"
 +1 click "+ Window"
 +3 state pages contains "Decoder output"
+# DRIVE FIXES 5 (merge 13): the Decoder output page keeps its preset bars in a 132 px scrolling box, in the order of the fitted decoders; DMR's bar is 195 px down, so the box is wheeled to it before its keys are pressed.
++2 scroll "Presets"#1 195
 +1 click "DMR  446.000 MHz NFM (tune your repeater)"
 +10 state tunedHz == 446000000
 +1 state mode == NFM

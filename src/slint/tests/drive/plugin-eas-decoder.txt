@@ -18,6 +18,8 @@ state pages contains "EAS / SAME"
 +3 state pages contains "Fitted modules"
 +1 click "+ Window"
 +3 state pages contains "Decoder output"
+# DRIVE FIXES 5 (merge 13): the Decoder output page keeps its preset bars in a 132 px scrolling box, in the order of the fitted decoders; EAS's bar is 240 px down, so the box is wheeled to it before its keys are pressed.
++2 scroll "Presets"#1 240
 +1 click "NOAA Weather Radio  162.400 MHz"
 +10 state tunedHz == 162400000
 +1 click "NOAA Weather Radio  162.425 MHz"

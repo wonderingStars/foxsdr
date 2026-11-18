@@ -11,4 +11,5 @@ state list.decoderLines.details contains "VOR radial"
 # DC blocker (src/dsp/demod.cpp kAmDcCutoffHz) was a 30 Hz high-pass, a 45 degree phase LEAD on the 30 Hz variable (AM) signal, so every
 # bearing from a real radio read 45 degrees low. The corner is 2 Hz now (a 3.8 degree lead, tests/test_demod.cpp pins it under 4): the
 # radial reads 086..090.
-state list.decoderLines.details contains "VOR radial 08"
+# DRIVE FIXES 5, ITEM 4 (merge 13): the decoder tap's AM audio keeps the 30 Hz phase (dsp::AmPhaseTrim), so the radial reads 090 where it read 086..090 (this line was "VOR radial 08")
+state list.decoderLines.details contains "VOR radial 090"
