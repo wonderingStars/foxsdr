@@ -757,5 +757,25 @@ int main() {
         CHECKV(dd == 0, "the Workbench filling comes back: %d pixels differ", dd);
     }
 
+    // =========================================================================================================
+    // DRIVE FIXES 4, ITEM 6: a number field takes the first key as a REPLACEMENT when it is reached with a REAL pointer click.
+    // The press that gives a TextInput its focus also puts the caret under the pointer and drops any selection, so selecting all
+    // on the focus change alone is undone by the same press (the Scanner's "Every s" read 130 after typing 1 over 30). The
+    // click is a press, a pause of a hand, a release; then a key. The text "3.5" must become "7", not "37.5" or "3.57".
+    // =========================================================================================================
+    {
+        reset();
+        park();
+        const int px = kRightX + 60, py = kTextY + kInputDy + kIn / 2;
+        mv(px, py);
+        press(win, static_cast<float>(px), static_cast<float>(py));
+        settle(milliseconds(60));
+        release(win, static_cast<float>(px), static_cast<float>(py));
+        settle(milliseconds(60));
+        tap(u8"7");
+        settle(milliseconds(30));
+        CHECKV(sval(ui->get_last_value()) == "7", "a real click into a number field, then 7: the field reads '%s' (wanted '7': the click's focus selected the whole text)", sval(ui->get_last_value()).c_str());
+    }
+
     return testSummary("test_slint_fields");
 }

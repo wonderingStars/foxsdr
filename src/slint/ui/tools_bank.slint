@@ -706,7 +706,7 @@ component LaneCMemoryBlock inherits VerticalLayout {
         LabelledField { horizontal-stretch: 1; label: @tr("Offset kHz"); value: LaneC.mem-offset; enabled: LaneC.mem-enabled; committed(t) => { LaneC.act("mem-offset", t); } }   // not-translated: the host's action id
         LabelledField { horizontal-stretch: 1; label: @tr("Tone Hz"); value: LaneC.mem-tone; enabled: LaneC.mem-enabled; committed(t) => { LaneC.act("mem-tone", t); } }   // not-translated: the host's action id
     }
-    if LaneC.mem-tx != "" : Note { wrap-w: root.width; text: LaneC.mem-tx; }
+    Note { wrap-w: root.width; text: LaneC.mem-tx != "" ? LaneC.mem-tx : " "; }   // the line is kept when there is nothing to say (drive fixes 4): what is under it does not move as the receiver tunes on and off a bookmark
     if LaneC.comma-note != "" : Note { wrap-w: root.width; text: LaneC.comma-note; tone: ChipTone.warn; }
     Rectangle { height: Theme.hairline; background: Theme.line; }
     Line {
@@ -1467,7 +1467,7 @@ export component BookmarksBody inherits VerticalLayout {
         xs: true;
         gap: 4px;
         k1: { label: root.model.export-label, on: false, enabled: !root.model.export-busy };
-        k2: { label: root.removing ? @tr("Yes, delete this group and its {} bookmark(s)", root.model.group-count) : root.model.remove-group-label, on: false, enabled: true };
+        k2: { label: root.model.remove-group-label, on: root.removing, enabled: true };   // the key keeps its words and lights while it is asked: the question is the line under the keys (drive fixes 4: a longer label wrapped the key down 23 px under the pointer)
         k3: { label: root.model.rename-group-label, on: root.renaming, enabled: true };
         clicked(i) => {
             if (i == 1) { root.bookmark-export(); }
@@ -1477,6 +1477,7 @@ export component BookmarksBody inherits VerticalLayout {
             else { root.removing = false; root.renaming = !root.renaming; root.bookmark-rename-open(root.renaming); }
         }
     }
+    if root.removing : Note { wrap-w: root.width; text: @tr("Yes, delete this group and its {} bookmark(s)", root.model.group-count); tone: ChipTone.warn; }
     if root.renaming && root.model.rename-group-label != "" : Line {
         rn := LineInput {
             horizontal-stretch: 1;

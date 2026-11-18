@@ -80,6 +80,9 @@ std::vector<NativeDeviceInfo> aorDevicesFrom(const std::vector<cascade::usb::Usb
 // beside the executable. AOR's copyright; not in this repository until AOR
 // supplies it with its redistribution notice (resources/firmware/aor/NOTICE).
 std::string aorFirmwarePath();
+// Where the same file is looked for in the user's own program-data folder (%LOCALAPPDATA%/foxsdr/firmware/aor/fx2fw.hex on Windows): used when the file is not beside the executable, and the path the
+// "not installed" sentence names then. Empty when the environment names no such folder.
+std::string aorUserFirmwarePath();
 
 // The Source section's sentence for an AOR I/Q interface that is present but
 // not bound to WinUSB (typically because AOR's own AorAlpha.sys has it), in

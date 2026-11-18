@@ -39,5 +39,5 @@
 +1 click "Remove this group"
 +8 state count.bookmarkGroups == 1
 +1 state count.bookmarks == 1
-+1 click "Yes, delete this group and its 1 bookmark(s)"
++1 click "Remove this group"
 +25 state count.bookmarkGroups == 0

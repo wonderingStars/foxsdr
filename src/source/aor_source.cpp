@@ -96,10 +96,34 @@ std::vector<NativeDeviceInfo> enumerateAor() {
     return aorDevicesFrom(cascade::usb::enumerateWinUsb(aorUsbIds()));
 }
 
+std::string aorUserFirmwarePath() {
+    // The user's own program-data folder, the one plugins use (LOCALAPPDATA, not APPDATA: the file is a binary for one machine): a person can write there, which the program folder of an installed copy
+    // (under Program Files) does not allow them to.
+    namespace fs = std::filesystem;
+#if defined(_WIN32)
+    const char* base = std::getenv("LOCALAPPDATA");
+    if (base == nullptr || *base == '\0') { base = std::getenv("APPDATA"); }
+    if (base == nullptr || *base == '\0') { return {}; }
+    return (fs::path(base) / "foxsdr" / "firmware" / "aor" / "fx2fw.hex").string();
+#else
+    const char* xdg = std::getenv("XDG_DATA_HOME");
+    if (xdg != nullptr && *xdg != '\0') { return (fs::path(xdg) / "foxsdr" / "firmware" / "aor" / "fx2fw.hex").string(); }
+    const char* home = std::getenv("HOME");
+    if (home == nullptr || *home == '\0') { return {}; }
+    return (fs::path(home) / ".local" / "share" / "foxsdr" / "firmware" / "aor" / "fx2fw.hex").string();
+#endif
+}
+
 std::string aorFirmwarePath() {
     const std::string dir = exeDirectory();
     const std::filesystem::path base = dir.empty() ? std::filesystem::path() : std::filesystem::path(dir);
-    return (base / "resources" / "firmware" / "aor" / "fx2fw.hex").string();
+    const std::string beside = (base / "resources" / "firmware" / "aor" / "fx2fw.hex").string();
+    std::error_code ec;
+    if (std::filesystem::exists(beside, ec)) { return beside; }
+    // DRIVE FIXES 4, item 9: the file beside the program wins when it is there; otherwise the user's own folder, which is also the place the "was not found" sentence names, so a person who has to supply
+    // AOR's file is told a folder they can write to.
+    const std::string user = aorUserFirmwarePath();
+    return user.empty() ? beside : user;
 }
 
 std::string aorUnboundAdvice(const std::string& what) {

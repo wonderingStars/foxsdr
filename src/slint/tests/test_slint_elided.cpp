@@ -83,6 +83,23 @@ int main() {
         settle(std::chrono::milliseconds(100));
     }
 
+    // A TIP THAT DOES NOT FIT BELOW ITS ITEM OPENS ABOVE IT (drive fixes 4, item 7): the status bar's DECODERS chip showed "of 81 fitted" over its own words, because the tip was
+    // clamped into the window's bottom edge, on top of the chip it described. The Key "Edge" sits at the bottom (y 230 to 254 of 260); its tip is drawn above it.
+    {
+        const slint::Color mc = ui->global<Theme>().get_menu();
+        const Rgb menu{mc.red(), mc.green(), mc.blue()};
+        moveTo(ui->window(), 360.0f, 242.0f);
+        settle(std::chrono::milliseconds(700));
+        const Frame f = render(ui, 400, 260);
+        const int over = f.countNear(331, 233, 389, 252, menu, 6);     // the tip's ground over the key's own face
+        const int above = f.countNear(300, 190, 399, 227, menu, 6);    // the tip's ground above the key
+        std::printf("  bottom-edge tip: menu-coloured pixels over the key %d, above it %d\n", over, above);
+        CHECK(ui->global<TipState>().get_shown());
+        CHECK(over == 0);
+        CHECK(above > 200);
+        moveTo(ui->window(), 5.0f, 5.0f);
+        settle(std::chrono::milliseconds(500));
+    }
     // a RailKey caption that does not fit the rail: the caption before the tooltip
     t = hover(ui, 42, 142);
     CHECK(t.shown);

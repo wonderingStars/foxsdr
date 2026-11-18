@@ -1,0 +1,12 @@
+#! frames=1500 size=1600x900
+# pane-notice-whole (drive fixes 4, item 7): a pane's notice is the engine's sentence WHOLE. An rtl_tcp server nobody is running (a dead local port) is added as radio 2; its pane says why in the engine's words, and the
+# sentence is longer than 63 characters (the host read it into a 64-byte buffer and cut it at "...could not reach the").
+10 state workspace.radios == 1
++1 click "Add a radio"
++5 state workspace.open == 1
++1 type "rtl_tcp" "127.0.0.1:9"
++2 click "Add rtl_tcp"
++60 state workspace.radios == 2
++60 state workspace.r.2.notice contains "is rtl_tcp running there?"
+state workspace.r.2.notice contains "127.0.0.1:9"
++1 shot "pane-notice-whole.png"

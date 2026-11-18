@@ -1,0 +1,19 @@
+// The 3D globe views' body as a specimen (drive fixes 4, item 4; tests/test_slint_globe_body.cpp): the page body of ui/globe_views.slint filling a 1000 x 620 sheet, its model handed in from a
+// property of the root, so a test can press a control of the column, publish the model again, and release - what a real hand and the host's 33 ms publish do together.
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { GlobeModel, GlobeControl, GlobeChipModel, GlobeEvents, GlobeBody } from "../globe_views.slint";
+import { Scene3DLabel } from "../scene3d.slint";
+export { Theme, Skin, Workbench, GlobeModel, GlobeControl, GlobeChipModel, GlobeEvents, Scene3DLabel }
+
+export component GlobeBodySpecimen inherits Window {
+    width: 1000px;
+    height: 620px;
+    background: Theme.bg;
+    in-out property <GlobeModel> globe;
+    GlobeBody {
+        x: 0px; y: 0px;
+        width: parent.width; height: parent.height;
+        model: root.globe;
+        index: 0;
+    }
+}

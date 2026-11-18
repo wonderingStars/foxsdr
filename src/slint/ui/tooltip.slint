@@ -47,7 +47,7 @@ export component TooltipFace inherits Rectangle {
 export global TipState {
     in-out property <bool> shown;
     in-out property <length> x;
-    in-out property <length> y;
+    in-out property <length> y; in-out property <length> anchor-y;   // anchor-y: the top of the item the tip is for (drive fixes 4: a tip that does not fit below it opens ABOVE it, not over it)
     in-out property <string> text;
     in-out property <int> owner;          // the id of the TipTimer that opened the tip (0 = none)
     in-out property <int> next-id;        // the counter each TipTimer takes its id from when it is created
@@ -77,7 +77,7 @@ export component TipTimer {
         triggered => {
             TipState.text = root.text;
             TipState.x = root.absolute-position.x + root.anchor-x;
-            TipState.y = root.absolute-position.y + root.anchor-h + 6px;
+            TipState.y = root.absolute-position.y + root.anchor-h + 6px; TipState.anchor-y = root.absolute-position.y;
             TipState.owner = root.my-id;
             TipState.beat += 1;
             TipState.shown = true;
@@ -151,7 +151,7 @@ export component TipLayer {
     if TipState.shown : TooltipFace {
         text: TipState.text;
         x: max(0px, min(TipState.x, root.win-w - self.width));
-        y: max(0px, min(TipState.y, root.win-h - self.height));
+        y: TipState.y + self.height > root.win-h ? max(0px, TipState.anchor-y - 6px - self.height) : max(0px, TipState.y);   // below the item when it fits, else above it (the status bar's chips sit on the window's bottom edge)
     }
     Timer {
         interval: 400ms;

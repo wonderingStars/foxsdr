@@ -1,0 +1,23 @@
+#! frames=700 size=1600x900 bank=2 sections=2:2
+# lanec-memory-reserve (drive fixes 4, item 7): the memory block under the Bookmarks list does not move what is under it when the receiver tunes onto a bookmark and away again. Nothing is moved by the "Transmit ..." line of a
+# repeater entry (it takes its line's place whether it has words or not), so "Store into a memory" stays on the row it was on. The two readings are the same number: first with no bookmark tuned, then on a bookmark that has an
+# offset (the note has words), then tuned away. A pin that is wrong prints the value it found.
+10 state running == 1
+state tunedHz == 100300000
++1 type "Bookmark name" "Probe"
++1 click "Add current"
++25 state count.bookmarks == 1
++10 state lanec.memenabled == 1
++1 type "Offset kHz" "-600"
++1 key enter
++5 state lanec.memoffset == -600
++1 state lanec.memtx contains 99.7
++1 shot "lanec-memory-reserve-note.png"
++1 expect "Store into a memory" top == "699"
++1 click "1 MHz digit"
++3 type "Frequency in MHz" "101.1"
++1 key enter
++12 state tunedHz == 101100000
++5 state lanec.memenabled == 0
++1 shot "lanec-memory-reserve-away.png"
++1 expect "Store into a memory" top == "699"

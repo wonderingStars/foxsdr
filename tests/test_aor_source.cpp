@@ -319,6 +319,41 @@ int main() {
         CHECK(cascade::source::firmwareDecision(q) == FirmwareStep::LoadFirmware);
     }
 
+    // --- where the firmware file is looked for (drive fixes 4, item 9) ---------------------------------
+    // Beside the executable first (nothing is there in a test); otherwise the user's own program-data folder, which is the path the "not installed" sentence names, so an owner whose program folder is
+    // under Program Files is told a folder they can write to. A file put in that folder is the one the driver then reads.
+    {
+        namespace fs = std::filesystem;
+        const fs::path root = fs::temp_directory_path() / "foxsdr-aor-fw-test";
+#if defined(_WIN32)
+        const char* const savedEnv = std::getenv("LOCALAPPDATA");
+#else
+        const char* const savedEnv = std::getenv("XDG_DATA_HOME");
+#endif
+        const std::string saved = savedEnv != nullptr ? savedEnv : std::string();
+        std::error_code ec;
+        fs::remove_all(root, ec);
+        fs::create_directories(root, ec);
+#if defined(_WIN32)
+        _putenv_s("LOCALAPPDATA", root.string().c_str());
+        const fs::path want = root / "foxsdr" / "firmware" / "aor" / "fx2fw.hex";
+#else
+        setenv("XDG_DATA_HOME", root.string().c_str(), 1);
+        const fs::path want = root / "foxsdr" / "firmware" / "aor" / "fx2fw.hex";
+#endif
+        CHECK(fs::path(cascade::source::aorUserFirmwarePath()) == want);
+        CHECK(fs::path(cascade::source::aorFirmwarePath()) == want);   // the file is nowhere, and the sentence names the folder a person can write to
+        fs::create_directories(want.parent_path(), ec);
+        { std::ofstream(want.string()) << ":00000001FF" << std::endl; }
+        CHECK(fs::path(cascade::source::aorFirmwarePath()) == want);   // and the file there is the one used
+        fs::remove_all(root, ec);
+#if defined(_WIN32)
+        _putenv_s("LOCALAPPDATA", saved.c_str());
+#else
+        setenv("XDG_DATA_HOME", saved.c_str(), 1);
+#endif
+    }
+
     // --- enumeration, and the things there are only one of -------------------------
     {
         std::vector<UsbDeviceInfo> devs = {iqDevice("a"), iqDevice("b")};
@@ -331,7 +366,7 @@ int main() {
         CHECK(rows.size() == 2 && rows[0].driver == "aor" && rows[0].args == "serial=A104RHPT");
         CHECK(rows.size() == 2 && rows[1].args == "index=1");
         CHECK(cascade::source::aorUsbIds().size() == 1);
-        CHECK(contains(cascade::source::aorFirmwarePath(), "resources"));
+        CHECK(contains(cascade::source::aorFirmwarePath(), "firmware"));   // was "resources": beside the executable it is resources/firmware/aor, in the user's folder foxsdr/firmware/aor (drive fixes 4, item 9)
         CHECK(contains(cascade::source::aorFirmwarePath(), "fx2fw.hex"));
         AorSource src;
         CHECK(src.supportedSampleRatesHz() == std::vector<double>{1125000.0});

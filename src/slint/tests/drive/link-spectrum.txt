@@ -1,0 +1,30 @@
+#! frames=1500 size=1600x900 FOXSDR_SLINT_TUNE_STEP=12500
+# link-spectrum (drive fixes 4, item 5, S29): LINK TUNING answers a REAL POINTER click on a pane's spectrum, not only the keyboard step of link-follow. Radios 1 (VFO band at 100.300 MHz, picture centre 100.000 MHz),
+# 2 and 3 (generator radios, 100.000 MHz). The key is pressed with a pointer click at its centre (not the default action) and says it is on; a pointer click at the centre of radio 1's spectrum retunes radio 1 to
+# the picture's centre, about 300 kHz down, and with Link on radios 2 and 3 move down by the same amount; with Link off a click moves only the pane's own radio.
+10 state workspace.radios == 1
++1 radio add 2 60000
++1 radio add 3 90000
++30 state workspace.radios == 3
++1 click "2 x 2"
++15 state workspace.shown == 2
+state workspace.link == 0
+state workspace.r.1.tuned == 100300000
+state workspace.r.2.tuned == 100000000
+state workspace.r.3.tuned == 100000000
+expect "Link tuning" checked equals "false"
+# Link on, by a pointer click: the key says so, every open radio joins
++1 press "Link tuning"
++8 state workspace.link == 1
+expect "Link tuning" checked equals "true"
+state workspace.linked == "1,2,3"
+expect "Link Radio 3" checked equals "true"
+# a pointer click on radio 1's spectrum retunes radio 1 from its VFO band (100.300 MHz) to the picture's centre (100.000 MHz); radios 2 and 3 follow it down by the same amount, so the gaps are kept
++1 press "Radio 1 spectrum"
++30 state workspace.r.1.tuned < 100200000
+state workspace.r.2.tuned < 99800000
+state workspace.r.3.tuned < 99800000
+state workspace.r.2.tuned > 99400000
+state workspace.r.3.tuned > 99400000
+state workspace.selected == 1
++1 shot "link-spectrum-on.png"

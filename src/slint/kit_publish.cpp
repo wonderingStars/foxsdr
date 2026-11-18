@@ -1187,6 +1187,12 @@ void keepPageModels(const PageTab& old, PageTab& t) {
     t.map.list_widths = reuseModelFrom(old.map.list_widths, t.map.list_widths);
     t.map.j.layers = reuseModelFrom(old.map.j.layers, t.map.j.layers);
     t.map.j.grid_labels = reuseModelFrom(old.map.j.grid_labels, t.map.j.grid_labels);
+    // THE 3D GLOBE'S COLUMN (drive fixes 4, item 4): the Satellites globe's controls, chips and labels change on every publish (the satellites move), and a list handed over as a new model rebuilt
+    // FOOTPRINT, GROUND TRACKS, NIGHT SIDE and the satellite chips under a real press; a scripted click presses and releases inside one tick and never showed it.
+    t.globe.labels = reuseModelFrom(old.globe.labels, t.globe.labels);
+    t.globe.controls = reuseModelFrom(old.globe.controls, t.globe.controls);
+    t.globe.readouts = reuseModelFrom(old.globe.readouts, t.globe.readouts);
+    t.globe.chips = reuseModelFrom(old.globe.chips, t.globe.chips);
 }
 }  // namespace
 

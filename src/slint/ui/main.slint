@@ -415,7 +415,8 @@ export component MainWindow inherits Window {
     callback key-answer(string, bool, bool, bool, bool) -> string;   // key name, Ctrl, Shift, Alt, the glyph was typed with Shift
     property <int> focus-released: KeyFocus.released;
     changed focus-released => { keys.focus(); }   // a control that held the keyboard for a moment (a listening key cap) gave it back
-    keys := FocusScope {
+    keys := FocusScope {   // AN ANCESTOR OF THE WINDOW'S CONTENT (drive fixes 4, item 8): a key a focused field does not use bubbles up to here, so Shift+F1 and Ctrl+Up work with a text field focused
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
         key-pressed(e) => {
             let id = root.key-answer(KeyNames.name(e.text), e.modifiers.control, e.modifiers.shift || e.text == Key.Backtab, e.modifiers.alt, KeyNames.glyph-shifted(e.text));
             if (id == "") { return reject; }
@@ -423,7 +424,6 @@ export component MainWindow inherits Window {
             root.shortcut(id);
             return accept;
         }
-    }
 
     VerticalLayout {
         spacing: 0px;
@@ -958,6 +958,7 @@ export component MainWindow inherits Window {
                 }
             }
         }
+    }
     }
 
     // ===================== frameless window: the resize edges =====================

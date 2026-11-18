@@ -12,10 +12,10 @@
 //   10,  190, 150,  32   Section, a name far too long for 150 px, tooltip "Does things" (hover 40, 206)
 //   330, mover-y, 60, 30  Key "Moves", tooltip "Moving tip"; test_slint_elided.cpp moves it away under a resting pointer (hover 360, 215)
 import { Theme } from "../theme.slint";
-import { TipState, ElidedHint } from "../tooltip.slint";
+import { TipState, TipLayer, ElidedHint } from "../tooltip.slint";
 import { Key, RailKey } from "../keys.slint";
 import { Section, SelectKey } from "../sections.slint";
-export { TipState }
+export { Theme, TipState }
 
 export component ElidedSpecimen inherits Window {
     width: 400px;
@@ -33,4 +33,7 @@ export component ElidedSpecimen inherits Window {
     in-out property <length> mover-y: 200px;
     Key { x: 330px; y: root.mover-y; width: 60px; label: "Moves"; tooltip: "Moving tip"; }
     Section { x: 10px; y: 190px; width: 150px; name: "A section name far too long to fit"; tooltip: "Does things"; }
+    // a Key on the window's bottom edge (the status bar's chips): its tip does not fit below it and must open ABOVE it, never over it (drive fixes 4, item 7; the TipLayer is the last element, as in every window)
+    Key { x: 330px; y: 230px; width: 60px; label: "Edge"; tooltip: "A tip for the bottom edge"; }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
 }

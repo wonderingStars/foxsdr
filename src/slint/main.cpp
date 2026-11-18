@@ -801,10 +801,12 @@ int main(int argc, char** argv) {
                 for (int r = 1; r <= seam->count(); ++r) { if (n == "fact.radio." + std::to_string(r) + ".state") { out = "running"; return static_cast<int>(out.size()); } }
                 return -1;
             }
-            char buf[64] = {};
+            // DRIVE FIXES 4, item 7: the buffer was 64 bytes, so an engine sentence longer than 63 characters was cut ("rtl_tcp server at 127.0.0.1:9 did not open: could not reach the" on a pane's notice).
+            // The engine's text slot is FOXAPI_TEXT_CHARS (256); the sentence is read whole, and the call reports the full length as it always did.
+            char buf[FOXAPI_TEXT_CHARS * 2] = {};
             const int32_t n = api->get_setting(session, name, buf, sizeof(buf));
             if (n < 0) { return n; }
-            out.assign(buf, static_cast<std::size_t>(std::max<int32_t>(0, std::min<int32_t>(n, 63))));
+            out.assign(buf, static_cast<std::size_t>(std::max<int32_t>(0, std::min<int32_t>(n, static_cast<int32_t>(sizeof(buf)) - 1))));
             return n;
         },
         [&](std::uint32_t radio) -> int32_t {

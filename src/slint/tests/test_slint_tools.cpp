@@ -418,12 +418,12 @@ int main() {
         // the group keys
         e = hit(x0b + 40, Tb + 250);
         CHECKV(e.name == "bookmark-export", "Export for SDR#: '%s'", e.name.c_str());
-        // Removing a group asks first (fix/drive-3, item 4): the first press changes the key's words and sends nothing, the second sends the removal
+        // Removing a group asks first (fix/drive-3, item 4): the first press lights the key, asks the question under the keys and sends nothing; the second sends the removal
         e = hit(x0b + 150, Tb + 250);
         CHECKV(e.name.empty(), "Remove this group, first press, asks and sends nothing: '%s'", e.name.c_str());
-        // the longer words ("Yes, delete this group and its N bookmark(s)") take a line of their own, so the key moves down to Tb + 273 (measured from a shot of the asked state: Export 250,
-        // the asked key 273, Rename 298, the first row 23 px lower); the second press lands there, and the key is back in its first place afterwards
-        e = hit(x0b + 150, Tb + 273);
+        // DRIVE FIXES 4, ITEM 7: the question is the line under the keys now and the key keeps its place (it was 273 while asked: the longer words wrapped it 23 px down, under a pointer that
+        // was on it); the second press lands where the first did
+        e = hit(x0b + 150, Tb + 250);
         CHECKV(e.name == "bookmark-remove-group", "Remove this group, second press: '%s'", e.name.c_str());
         // ---- the rows ----
         e = hit(x0b + 28, rt + kPitch + 12);
@@ -656,6 +656,20 @@ int main() {
             const int x = static_cast<std::size_t>(t.i) < r2.size() ? r2[static_cast<std::size_t>(t.i)].first : x0c + t.i * 60;   // a missing box is a failure above, not an out-of-bounds read here
             typeInto(x + 20, f2 + 12, "77", true);
             CHECKV(!evs.empty() && evs.back().name == t.name && evs.back().args == "77", "Enter in %s: %s", t.name, names(evs).c_str());
+        }
+        // DRIVE FIXES 4, ITEM 6: a number field reached by a REAL click (a press, a hand's pause, a release) takes the first key as a replacement. The Scanner's "Every s" read 130 after typing 1 over
+        // 30: the press that gives the field its focus also puts the caret under the pointer and drops the selection the focus change made. No End / Backspace here: the field's text is what is there.
+        for (const auto& t : timing) {
+            const int x = static_cast<std::size_t>(t.i) < r2.size() ? r2[static_cast<std::size_t>(t.i)].first : x0c + t.i * 60;
+            evs.clear();
+            mv(x + 20, f2 + 12);
+            press(win, static_cast<float>(x + 20), static_cast<float>(f2 + 12));
+            settle(milliseconds(60));
+            release(win, static_cast<float>(x + 20), static_cast<float>(f2 + 12));
+            settle(milliseconds(60));
+            tap(u8"5");
+            tap(slint::platform::key_codes::Return);
+            CHECKV(!evs.empty() && evs.back().name == t.name && evs.back().args == "5", "a real click into %s then 5, Enter: %s (wanted '5': the whole text selected by the click)", t.name, names(evs).c_str());
         }
         Ev e = hit(x0c + 60, Tc1 + 12);
         CHECKV(e.name == "scanner-ticked" && e.args == "1", "Ticked frequencies asks for on: '%s' '%s'", e.name.c_str(), e.args.c_str());

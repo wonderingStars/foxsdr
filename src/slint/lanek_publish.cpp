@@ -33,6 +33,7 @@
 #include "core/sys_resource_meter.hpp"
 #include "core/utf8_text.hpp"
 #include "host_logic.hpp"
+#include "model_reuse.hpp"
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -1180,8 +1181,8 @@ void LaneKPublisher::tick(const FoxReceiverState& state, long tickNo) {
         const std::string sig = std::to_string(tiles.size()) + [&] { std::string s; for (const auto& t : tiles) { s += std::string(t.freq) + std::string(t.mode) + std::string(t.level_text) + std::string(t.state) + (t.heard ? "H" : "-") + num("%.2f", t.level); } return s; }();
         if (sig != I.sigTiles) {
             I.sigTiles = sig;
-            while (I.mTiles->row_count() > 0) { I.mTiles->erase(0); }
-            for (auto& t : tiles) { I.mTiles->push_back(t); }
+            // the rows are changed in place (model_reuse.hpp): a tile that is emptied and refilled on every change of a level figure loses the first click of a double-click (drive fixes 4, item 8)
+            (void)foxsdr::slinthost::reuseModel<KTile>(I.mTiles, std::move(tiles));
         }
         m.set_note(ss(tiles.size() < 2 ? std::string(tr("Open a second radio to compare receivers here.")) : std::string(tr("Point at a radio to hear it. Click to keep it; click again to let it go. Double-click selects it."))));
         const cc::HoverDecision d = I.hover.update(I.hoverId, mutedMask, I.lastNowS);
