@@ -593,3 +593,8 @@ export global SrText {
     in property <[string]> pane-spectrum;
     in property <[string]> pane-waterfall;
 }
+
+// WHERE THE KEYBOARD IS (drive fixes 2, item 9): the receiver strip's and the title bar's own focus scopes say here which of them took the focus, so a drive that presses Tab can read where it went (state focus.place). Nothing reads it in a release.
+export global FocusProbe {
+    in-out property <string> place;
+}

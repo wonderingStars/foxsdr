@@ -40,6 +40,8 @@ public:
     void wire();
     // Reads the models and sets the ones whose content changed (after kit.tick()).
     void publish(const FoxReceiverState& state);
+    // The radio the window's controls follow (1 to 8): the Source list's selected row is read from that radio's own facts (drive fixes 2, item 3).
+    void setSelectedRadio(int radio);
 
     // The chip a SIGNAL PATH row of bank 0 shows, from the host's models (rows 1 Source, 3 Audio filters, 4 Sinks, 5 Transmit, 6 Recorder, 7 Frequency
     // correction); `valid` is false for the other rows and before the first publish.

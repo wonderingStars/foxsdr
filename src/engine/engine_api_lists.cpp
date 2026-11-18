@@ -693,6 +693,9 @@ std::uint64_t Engine::apiListsFingerprint() {
     // allocates (the sound card list and the unbound dongles are small, and are hashed by what they carry).
     //  - the combo's own row, and what the section says about the radio being kept / being opened
     f.value(sourceSel_);
+    for (std::size_t slot = 1; slot < kMaxReceivers; ++slot) {   // each further radio's own row (fact.radio.<n>.source.row; drive fixes 2, item 3): a pick for radio 3 must move the fingerprint or the fact stays as it was
+        if (receivers_[slot] && !receivers_[slot]->removing_) { f.value(receivers_[slot]->sourceSel_wide_); }
+    }
     f.text(rx().restoreKeep_.kind);
     f.value(rx().deviceOpenPending_);
     f.text(rx().deviceBusyLabel_);
@@ -1522,6 +1525,9 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             fact(pre + "label", radioLabel());
             // WHAT KIND OF SOURCE THIS RADIO IS ON (stage 7): "siggen", "file", "pluto", "rtltcp", "soapy" or a native driver's key; the generator while a source is still opening.
             fact(pre + "source", rx().sourceKind_);
+            // THE SOURCE LIST'S SELECTED ROW OF THIS RADIO (drive fixes 2, item 3): "source.row" (buildApiListsSource) is the first radio's, the engine-wide mirror; another radio keeps its own in sourceSel_wide_.
+            // A window whose controls follow radio 3 reads this one: reading radio 1's, a source picked for radio 3 looked as if it had been dropped.
+            fact(pre + "source.row", std::to_string(n == 1u ? sourceSel_ : receivers_[n - 1u]->sourceSel_wide_));
             // A KIWISDR RADIO (engine wiring lane 1): what the receiver is doing, in the client's words, never its address. state is one of idle, connecting, playing, busy, password,
             // down, redirect, failed, dropped, malformed, closed; mode is the receiver's mode word; rssi (dBm, only once the receiver has sent a level) and dropped (audio samples
             // the engine could not take in time).

@@ -86,6 +86,26 @@ void rows() {
     b = a; b.push_back(rNote("more"));
     CHECK(signatureOf(a) != signatureOf(b));
     CHECK(!wizardStrings().empty());
+    // WHAT A REPUBLISH MAY KEEP (drive fixes 2, item 2): the same rows with other figures change only the rows that differ; any change of shape publishes whole
+    {
+        std::vector<Row> last = {rField("f", "Speed", "1"), rReadout("Position", "10 s"), rKey("k", "Set")};
+        std::vector<Row> now = last;
+        std::vector<std::size_t> changed;
+        CHECK(sameRowShape(last, now, changed) && changed.empty());                         // nothing moved
+        now[1].value = "11 s";
+        CHECK(sameRowShape(last, now, changed) && changed.size() == 1 && changed[0] == 1);   // one figure moved: only that row is new data (the field keeps its keyboard)
+        now[0].value = "5";
+        CHECK(sameRowShape(last, now, changed) && changed.size() == 2 && changed[0] == 0 && changed[1] == 1);
+        now = last; now.push_back(rNote("more"));
+        CHECK(!sameRowShape(last, now, changed));                                           // a row more: the panel is published whole
+        now = last; now[2].id = "other";
+        CHECK(!sameRowShape(last, now, changed));                                           // another control in the same place
+        now = last; now[0].kind = kReadout;
+        CHECK(!sameRowShape(last, now, changed));
+        now = last; now[0].options = {"a"};
+        CHECK(sameRowShape(last, now, changed) && changed.size() == 1);
+        CHECK(!sameRowShape({}, last, changed));                                             // nothing published yet
+    }
 }
 
 void record() {

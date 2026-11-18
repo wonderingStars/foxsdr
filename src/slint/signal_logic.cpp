@@ -76,6 +76,19 @@ bool parseNumber(const std::string& text, double& out) {
     return true;
 }
 
+bool parseWholeNumber(const std::string& text, double& out) {
+    std::size_t b = 0, e = text.size();
+    while (b < e && std::isspace(static_cast<unsigned char>(text[b])) != 0) { ++b; }
+    while (e > b && std::isspace(static_cast<unsigned char>(text[e - 1])) != 0) { --e; }
+    if (b == e) { return false; }
+    const std::string t = text.substr(b, e - b);
+    char* end = nullptr;
+    const double v = std::strtod(t.c_str(), &end);
+    if (end == t.c_str() || *end != '\0' || !std::isfinite(v)) { return false; }
+    out = v;
+    return true;
+}
+
 std::string joinLines(const std::vector<std::string>& v) {
     std::string out;
     for (const std::string& s : v) {
@@ -581,7 +594,9 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
         }
         rows.push_back(std::move(r));
     });
-    const std::string rowFact = factOf(t, "fact.source.row");
+    // THE ROW OF THE RADIO THE CONTROLS FOLLOW (drive fixes 2, item 3): "fact.source.row" is the first radio's; a later radio's is "fact.radio.<n>.source.row".
+    std::string rowFact = o.selected_radio > 1 ? factOf(t, "fact.radio." + std::to_string(o.selected_radio) + ".source.row") : std::string();
+    if (rowFact.empty()) { rowFact = factOf(t, "fact.source.row"); }
     const int row = rowFact.empty() ? -1 : static_cast<int>(std::strtod(rowFact.c_str(), nullptr));
     const std::string keepKind = factOf(t, "fact.source.keep");
     const std::string opening = factOf(t, "fact.source.opening");
@@ -1095,6 +1110,7 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
         }
         m.card_receives = soundCardReceivesLine(spanLo, spanHi);
         m.card_warning = factOf(t, "fact.status.soundCardMissing");
+        if (!o.card_centre_refusal.empty()) { m.card_warning = m.card_warning.empty() ? o.card_centre_refusal : o.card_centre_refusal + "\n" + m.card_warning; }
     }
     return m;
 }
@@ -1547,8 +1563,10 @@ Command opCardFormat(int index) { return make(cardField(FOXAPP_SOUND_CARD_FIELD_
 Command opCardChannel(int index) { return make(cardField(FOXAPP_SOUND_CARD_FIELD_CHANNEL, index == 1 ? 2 : 0, kPlainCardRateHz, 0.0)); }
 Command opCardSwap(bool on) { return make(cardField(FOXAPP_SOUND_CARD_FIELD_SWAP_IQ, on ? 4 : 0, kPlainCardRateHz, 0.0)); }
 std::vector<Command> opCardCentre(const std::string& mhzText) {
+    // THE WHOLE TEXT IS A NUMBER OR NOTHING IS SENT (drive fixes 2, item 1: "Centre typed 7.1 became 0.700000"): strtod stops at the first character it cannot use, so "0.7.1000000" - a figure typed INTO the
+    // box's old text instead of over it - was read as 0.7 and the rest was dropped without a word.
     double mhz = 0.0;
-    if (!parseNumber(mhzText, mhz)) { return {}; }
+    if (!parseWholeNumber(mhzText, mhz)) { return {}; }
     const double hz = mhz * 1.0e6;
     if (!std::isfinite(hz)) { return {}; }
     // THE FORM ALWAYS TAKES IT (the record of where the external receiver is tuned, kept for the next Open); a card already running in I/Q mode also takes it at once

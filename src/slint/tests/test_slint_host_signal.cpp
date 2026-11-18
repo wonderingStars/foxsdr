@@ -1116,6 +1116,9 @@ int main() {
         CHECK(two.size() == 2 && at(two, 0).q.c.op == FOXAPP_OP_SOUND_CARD_FORM && at(two, 0).q.c.ival[1] == FOXAPP_SOUND_CARD_FIELD_CENTRE && at(two, 0).q.c.num[1] == 7.05e6 && at(two, 0).q.c.num[0] == 48000.0);
         CHECK(two.size() == 2 && at(two, 1).q.c.op == FOXAPP_OP_SOUNDCARD_IQ_CENTRE && at(two, 1).q.c.num[0] == 7.05e6);
         CHECK(opCardCentre("abc").empty() && opCardCentre("").empty() && opCardCentre("inf").empty());
+        // drive fixes 2, item 1: a figure typed INTO the box's old text ("0.7.1000000", "7.1" typed after "0.") is not read as its first part (0.7, the 0.700000 of the drive); nothing is sent for it
+        CHECK(opCardCentre("0.7.1000000").empty() && opCardCentre("7.1x").empty() && opCardCentre("7.1 7.2").empty() && opCardCentre("0.000000 7.1").empty());
+        CHECK(opCardCentre("  7.1 ").size() == 2 && at(opCardCentre("  7.1 "), 0).q.c.num[1] == 7.1e6);   // the blanks round a number are not part of it
         c = opCardRate(cm, 0);
         CHECK(c.valid && c.q.c.op == FOXAPP_OP_SOUND_CARD_FORM && c.q.c.ival[1] == FOXAPP_SOUND_CARD_FIELD_RATE && c.q.c.num[0] == 44100);
         CHECK(!opCardRate(cm, 5).valid && opCardRate(cm, 1).valid && opCardRate(cm, 1).q.c.num[0] == 192000);   // the rate in use sends too, as its Selectable does

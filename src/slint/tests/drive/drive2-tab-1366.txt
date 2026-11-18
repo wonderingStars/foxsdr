@@ -1,0 +1,25 @@
+#! frames=500 size=1366x768
+# drive2-tab-1366 (drive fixes 2, item 9): at 1366 wide Tab reaches the search box, the frequency figures, the mode picker and the squelch AUTO key, in reading order (title bar, then the strip left to right); Enter or Space press them. state focus.place names the strip's and title bar's keyboard scopes that took the focus last (ui/theme.slint FocusProbe).
+# BY DESIGN not reached: a DISABLED control is not in the Tab ring (ui/keys.slint KeyScope enabled: root.enabled, and sliders.slint auto-focus enabled): on the signal generator the GAIN slider and its AUTO key (no gain stage) and BIAS TEE (no bias tee on this radio) are disabled.
+10 state running == 1
++2 key tab
+state focus.place == search
++2 key tab
++2 key tab
++2 key tab
++2 key tab
++2 key tab
++2 key tab
++2 key tab
++2 key tab
+state focus.place == counter
++2 key tab
+state focus.place contains "select:"
+state focus.place contains "WFM"
++2 key tab
++2 key tab
+state focus.place == "auto:Squelch"
++2 key space
++6 state squelchDb == -200
++2 key space
++6 state squelchDb == -85

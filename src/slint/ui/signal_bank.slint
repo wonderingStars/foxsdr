@@ -315,12 +315,22 @@ component LineInput inherits Rectangle {
     in property <string> name;                          // the accessible label
     in property <bool> files-paste;                     // docs 6.63: Ctrl+V asks the host first whether a FILE is on the clipboard (the I/Q file box); false = never
     callback committed(string);
+    callback edited(string);                            // every keystroke (a panel that cannot name this box from another scope keeps the text itself: the sound card's Centre)
     callback paste-files() -> bool;                     // true = the host took the clipboard's file (and published its path as `value`)
     out property <bool> has-focus: input.has-focus;
     out property <string> text: input.text;
 
     property <length> pad: 8px + Theme.hairline;
     property <bool> dirty;                              // edited since the last commit
+
+    // WHAT WAS TYPED AND NOT YET COMMITTED (drive fixes 2, item 1): a key does not take the keyboard from a field (the keys' rule), so a path typed and followed by a press on Open - no Enter, as a person types - reached
+    // the host only when the box lost the focus, and the key acted on the OLD text (Open over an empty box raised the file dialog). A key that acts on a field calls flush() first.
+    public function flush() {
+        if (root.dirty) {
+            root.dirty = false;
+            root.committed(input.text);
+        }
+    }
 
     height: Theme.field-h;
     min-width: 0px;
@@ -376,7 +386,7 @@ component LineInput inherits Rectangle {
             selection-background-color: Theme.accent;
             selection-foreground-color: Theme.accent-ink;
             accessible-label: root.name;
-            edited => { root.dirty = true; }
+            edited => { root.dirty = true; root.edited(self.text); }
             accepted => {
                 root.dirty = false;
                 root.committed(self.text);
@@ -762,6 +772,9 @@ export component SourceBody inherits VerticalLayout {
     // a radio the host holds open (variants 0, 5, 6, 7) has the Rate / Antenna / gain rows; a file, a Pluto, an rtl_tcp and a sound card do not
     property <bool> radio: root.model.variant == 0 || root.model.variant >= 5;
     property <bool> show-converter: root.model.converter-shown || root.model.variant == 7;
+    // the sound card's Centre (MHz) box lives in a conditional row, so the Open key beside the card's rate cannot name it: what was typed and not yet committed is kept here (drive fixes 2, item 1)
+    property <string> centre-typed;
+    property <bool> centre-dirty;
     property <[SelectItem]> formats: [
         { label: @tr("Real (mono)"), id: "", enabled: true, note: "" },
         { label: @tr("I/Q (stereo)"), id: "", enabled: true, note: "" },
@@ -837,9 +850,9 @@ export component SourceBody inherits VerticalLayout {
     if root.model.variant == 1 : VariantCard {
         tag: @tr("I/Q file");
         Line {
-            LineInput { horizontal-stretch: 1; value: root.model.iq-path; name: @tr("I/Q file path"); files-paste: true; committed(t) => { root.iq-path-committed(t); } paste-files() => { return root.iq-paste(); } }
-            if root.model.iq-browse : Mid { Key { label: @tr("Browse..."); xs: true; enabled: !root.model.iq-opening; clicked => { root.iq-browse(); } } }
-            Mid { Key { label: @tr("Open"); xs: true; enabled: !root.model.iq-opening; clicked => { root.iq-open(); } } }
+            iqf := LineInput { horizontal-stretch: 1; value: root.model.iq-path; name: @tr("I/Q file path"); files-paste: true; committed(t) => { root.iq-path-committed(t); } paste-files() => { return root.iq-paste(); } }
+            if root.model.iq-browse : Mid { Key { label: @tr("Browse..."); xs: true; enabled: !root.model.iq-opening; clicked => { iqf.flush(); root.iq-browse(); } } }
+            Mid { Key { label: @tr("Open"); xs: true; enabled: !root.model.iq-opening; clicked => { iqf.flush(); root.iq-open(); } } }
         }
         if root.model.iq-note != "" : Note { text: root.model.iq-note; }
     }
@@ -847,8 +860,8 @@ export component SourceBody inherits VerticalLayout {
     if root.model.variant == 2 : VariantCard {
         tag: "ADALM-Pluto";   // not-translated: a product name
         Line {
-            LineInput { horizontal-stretch: 1; value: root.model.pluto-address; name: @tr("Pluto address"); committed(t) => { root.pluto-address-committed(t); } }
-            Mid { Key { label: @tr("Open"); xs: true; clicked => { root.pluto-open(); } } }
+            plf := LineInput { horizontal-stretch: 1; value: root.model.pluto-address; name: @tr("Pluto address"); committed(t) => { root.pluto-address-committed(t); } }
+            Mid { Key { label: @tr("Open"); xs: true; clicked => { plf.flush(); root.pluto-open(); } } }
         }
         if root.model.pluto-help != "" : Note { text: root.model.pluto-help; }
     }
@@ -856,8 +869,8 @@ export component SourceBody inherits VerticalLayout {
     if root.model.variant == 3 : VariantCard {
         tag: "rtl_tcp";   // not-translated: a program name
         Line {
-            LineInput { horizontal-stretch: 1; value: root.model.rtltcp-address; name: @tr("rtl_tcp host and port"); committed(t) => { root.rtltcp-address-committed(t); } }
-            Mid { Key { label: @tr("Open"); xs: true; clicked => { root.rtltcp-open(); } } }
+            rtf := LineInput { horizontal-stretch: 1; value: root.model.rtltcp-address; name: @tr("rtl_tcp host and port"); committed(t) => { root.rtltcp-address-committed(t); } }
+            Mid { Key { label: @tr("Open"); xs: true; clicked => { rtf.flush(); root.rtltcp-open(); } } }
         }
         if root.model.rtltcp-help != "" : Note { text: root.model.rtltcp-help; }
     }
@@ -902,7 +915,9 @@ export component SourceBody inherits VerticalLayout {
         }
         if root.model.card-format-index == 1 : Line {
             RowLabel { text: @tr("Centre (MHz)"); horizontal-stretch: 1; }
-            LineInput { width: 82px; mono: true; right: true; value: root.model.card-centre-mhz; name: @tr("Centre (MHz)"); committed(t) => { root.card-centre-committed(t); } }
+            LineInput { width: 82px; mono: true; right: true; value: root.model.card-centre-mhz; name: @tr("Centre (MHz)");
+                edited(t) => { root.centre-typed = t; root.centre-dirty = true; }
+                committed(t) => { root.centre-dirty = false; root.card-centre-committed(t); } }
         }
         Line {
             RowLabel { text: @tr("Sample rate"); horizontal-stretch: 1; }
@@ -914,7 +929,7 @@ export component SourceBody inherits VerticalLayout {
                 label: @tr("Sample rate");
                 picked(i) => { root.card-rate-selected(i); }
             }
-            Mid { Key { label: @tr("Open"); xs: true; enabled: root.model.card-can-open; clicked => { root.card-open(); } } }
+            Mid { Key { label: @tr("Open"); xs: true; enabled: root.model.card-can-open; clicked => { if (root.centre-dirty) { root.centre-dirty = false; root.card-centre-committed(root.centre-typed); } root.card-open(); } } }
         }
         if root.model.card-receives != "" : Note { text: root.model.card-receives; }
         if root.model.card-warning != "" : Note { text: root.model.card-warning; tone: ChipTone.warn; }
@@ -1574,8 +1589,8 @@ export component ImportDialog inherits Rectangle {
             }
         }
         Line {
-            LineInput { horizontal-stretch: 1; value: root.model.path; placeholder: @tr("Path to a .xml or .csv file"); name: @tr("Import path"); committed(t) => { root.import-path-committed(t); } }
-            Mid { Key { label: @tr("Browse..."); small: true; min-w: 0px; clicked => { root.import-open(); } } }
+            imf := LineInput { horizontal-stretch: 1; value: root.model.path; placeholder: @tr("Path to a .xml or .csv file"); name: @tr("Import path"); committed(t) => { root.import-path-committed(t); } }
+            Mid { Key { label: @tr("Browse..."); small: true; min-w: 0px; clicked => { imf.flush(); root.import-open(); } } }
         }
         HorizontalLayout {
             alignment: end;

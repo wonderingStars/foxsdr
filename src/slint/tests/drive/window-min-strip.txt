@@ -20,6 +20,10 @@
 +1 expect "VOLUME" left >= "0"
 +1 expect "VOLUME" right <= "1024"
 +1 expect "VOLUME" bottom <= "640"
+# the lane captions are whole words (drive fixes 2, item 8)
++1 expect "GAIN" width >= "27"
++1 expect "SQUELCH" width >= "52"
++1 expect "VOLUME" width >= "46"
 +1 expect "Bias tee off - asks before switching on" left >= "0"
 +1 expect "Bias tee off - asks before switching on" right <= "1024"
 +1 expect "Bias tee off - asks before switching on" bottom <= "640"

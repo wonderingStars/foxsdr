@@ -31,6 +31,11 @@ void dotted() {
 
 void parse() {
     double hz = 0;
+    // "Paste frequency" is offered for what Copy frequency leaves on the clipboard (drive fixes 2, item 5), never for an empty or a non-frequency clipboard
+    CHECK(pasteFrequencyOffered(dottedFrequencyText(103300000.0, 0)));
+    CHECK(pasteFrequencyOffered("103.300 MHz"));
+    CHECK(!pasteFrequencyOffered(""));
+    CHECK(!pasteFrequencyOffered("hello"));
     CHECK(parseTypedFrequencyHz("1090.000.000", hz) && hz == 1090000000.0);
     CHECK(parseTypedFrequencyHz("1.090.000.000", hz) && hz == 1090000000.0);
     CHECK(parseTypedFrequencyHz("100.300.000", hz) && hz == 100300000.0);

@@ -20,6 +20,10 @@
 +1 expect "VOLUME" left >= "0"
 +1 expect "VOLUME" right <= "1366"
 +1 expect "VOLUME" bottom <= "768"
+# the lane captions are whole words at every width (drive fixes 2, item 8): a caption cut to "SQ..." or left out is not laid out at its whole width
++1 expect "GAIN" width >= "27"
++1 expect "SQUELCH" width >= "52"
++1 expect "VOLUME" width >= "46"
 +1 expect "Bias tee off - asks before switching on" left >= "0"
 +1 expect "Bias tee off - asks before switching on" right <= "1366"
 +1 expect "Bias tee off - asks before switching on" bottom <= "768"

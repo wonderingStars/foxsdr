@@ -203,6 +203,8 @@ std::string SignalPublisher::fact(const std::string& key) {
     return out;
 }
 
+void SignalPublisher::setSelectedRadio(int radio) { opts_.selected_radio = radio < 1 ? 1 : radio; }
+
 void SignalPublisher::send(const Command& c) {
     forceRead_ = true;
     if (!c.valid) { return; }
@@ -1147,7 +1149,12 @@ void SignalPublisher::wire() {
     ev.on_card_format([this](int i) { send(opCardFormat(i)); });
     ev.on_card_channel([this](int i) { send(opCardChannel(i)); });
     ev.on_card_swap([this](bool on) { send(opCardSwap(on)); });
-    ev.on_card_centre_committed([this](slint::SharedString t) { sendAll(opCardCentre(std::string(t))); });   // two commands, in order
+    ev.on_card_centre_committed([this](slint::SharedString t) {
+        const std::vector<Command> two = opCardCentre(std::string(t));
+        opts_.card_centre_refusal = two.empty() ? tr("That is not a number this field accepts.") : std::string();   // nothing is sent for text that is not a number; the box says so
+        forceRead_ = true;
+        sendAll(two);
+    });   // two commands, in order
     ev.on_card_rate_selected([this](int i) { send(opCardRate(last_.source, i)); });
     ev.on_card_open([this] { send(opCardOpen(last_.source)); });
     ev.on_airspy_decimation([this](int i) { send(opAirspyDecimation(last_.source, i)); });

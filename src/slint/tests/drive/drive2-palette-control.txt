@@ -1,0 +1,17 @@
+#! frames=300 size=1600x900
+# drive2-palette-control (drive fixes 2, item 6): a control named in the help is found by its words ("digit grouping" is a Display control of the SYSTEM bank).
+10 state running == 1
++1 key ctrl+k
++5 key d
++1 key i
++1 key g
++1 key i
++1 key t
++1 key space
++1 key g
++1 key r
++1 key o
++1 key u
++1 key p
++3 state palette.count > 0
++1 state palette.titles contains "Display"

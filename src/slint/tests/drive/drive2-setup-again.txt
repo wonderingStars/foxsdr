@@ -1,0 +1,12 @@
+#! frames=500 bank=0 sections=0:1 FOXSDR_FAKE_RADIO_SETUP=rtl-dvbt
+# drive2-setup-again (drive fixes 2, item 7): the Radio setup page stays open after its CHECK AGAIN key and shows the new result (the drive saw it close itself).
+10 state running == 1
++1 click "RADIO SETUP"
++40 expect "Don't show this again" checked equals "false"
++1 dump
++1 click "CHECK AGAIN"
++3 expect "Don't show this again" checked equals "false"
++40 expect "Don't show this again" checked equals "false"
++1 click "CHECK AGAIN"
++60 expect "Don't show this again" checked equals "false"
++1 state running == 1

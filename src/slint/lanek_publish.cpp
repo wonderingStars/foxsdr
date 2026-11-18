@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <optional>
 
 #include "core/access_palette.hpp"
@@ -126,6 +127,7 @@ struct LaneKPublisher::Impl {
     std::shared_ptr<slint::VectorModel<KRow>> mBackup, mPerf, mAccess, mCommunity, mSpectrum, mDisplay, mSheet;
     std::shared_ptr<slint::VectorModel<KTile>> mTiles;
     std::string sigBackup, sigPerf, sigAccess, sigCommunity, sigSpectrum, sigDisplay, sigSheet, sigTiles;
+    std::map<const std::string*, std::vector<Row>> lastRows;   // what each model holds (keyed by its signature's address): a republish of the same shape changes only the rows that differ (drive fixes 2, item 2)
 
     // settings and backup
     std::string status;               // the sentence the last action left under the section's keys
@@ -1205,6 +1207,14 @@ void LaneKPublisher::tick(const FoxReceiverState& state, long tickNo) {
         const std::string s = signatureOf(rows);
         if (s == sig) { return; }
         sig = s;
+        std::vector<Row>& last = I.lastRows[&sig];
+        std::vector<std::size_t> changed;
+        if (model->row_count() > 0 && sameRowShape(last, rows, changed)) {   // the same rows with other figures: the controls stay (a field being typed in keeps the keyboard and its text)
+            for (const std::size_t i : changed) { model->set_row_data(i, toK(rows[i])); }
+            last = rows;
+            return;
+        }
+        last = rows;
         std::vector<KRow> v;
         for (const auto& r : rows) { v.push_back(toK(r)); }
         while (model->row_count() > 0) { model->erase(0); }

@@ -66,6 +66,12 @@ Row rBar(const std::string& label, float level, const std::string& value);
 // A short signature of a list of rows, to publish only what changed.
 std::string signatureOf(const std::vector<Row>& rows);
 
+// WHAT A REPUBLISH MAY KEEP (drive fixes 2, item 2): a panel whose rows were put in a NEW model every time one figure moved (the position of a playing file, twice a second) had every control of the panel
+// destroyed and made again - the field a person was typing in lost the keyboard and its text, and a press that landed meanwhile went to a control that was gone. When `now` has the shape of `last` (the
+// same number of rows, the same kind and id of each) only the rows that differ need new data: `changed` is filled with their indexes and the function answers true. Anything else answers false and the
+// panel is published whole, as before.
+bool sameRowShape(const std::vector<Row>& last, const std::vector<Row>& now, std::vector<std::size_t>& changed);
+
 // ============================================================ the record ============================================================
 class Record {
 public:

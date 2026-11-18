@@ -12,7 +12,7 @@
 // highlight (and wrap), Enter activates it, Esc dismisses; a click on a row activates it, a click outside the sheet closes
 // it (Slint gives a popup no "closed" callback, so that close is silent: only Esc says `dismissed`). The sheet opens at
 // (at-x, at-y) in the coordinates of the CommandPalette element, which therefore sits at the top-left of the area it opens over.
-import { Theme } from "theme.slint";
+import { Theme, FocusProbe } from "theme.slint";
 import { Chip } from "chips.slint";
 import { PopupTipTimer } from "tooltip.slint";
 
@@ -74,6 +74,21 @@ export component CommandField inherits Rectangle {
             font-family: Theme.font-mono;
             font-size: Theme.font-cap;
         }
+    }
+    // the keyboard's way in (drive fixes 2, item 9): Tab reaches the field, Enter or Space open the palette (as Ctrl K does); a click never takes the focus
+    field-focus := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        focus-on-tab-navigation: true;
+        changed has-focus => { if (self.has-focus) { FocusProbe.place = "search"; } }
+        key-pressed(e) => {
+            if (e.text == Key.Return || e.text == " ") { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    if field-focus.has-focus : Rectangle {
+        x: -3px; y: -3px; width: root.width + 6px; height: root.height + 6px;
+        border-width: 2px; border-color: Theme.focus; border-radius: Theme.radius + 3px;
     }
     area := TouchArea {
         enabled: root.enabled;

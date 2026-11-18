@@ -1082,7 +1082,7 @@ int main(int argc, char** argv) {
                 e.push_back(entry(MenuItemKind::Checked, 104, "Enlarge every reading", "", duties.interfaceHalf().readingsScale > 1.0f));
                 e.push_back(entry(MenuItemKind::Separator, 0, ""));
                 e.push_back(entry(MenuItemKind::Item, 105, "Copy frequency", fmt("%.6f MHz", state.tunedHz / 1e6).c_str()));
-                e.push_back(entry(MenuItemKind::Item, 106, "Paste frequency", "", false, !!clipGet().empty()));
+                e.push_back(entry(MenuItemKind::Item, 106, "Paste frequency", "", false, foxsdr::slintgaps::pasteFrequencyOffered(clipGet())));   // (drive fixes 2, item 5: it was `!!clipGet().empty()`, offered only while the clipboard was empty)
                 e.push_back(entry(MenuItemKind::Separator, 0, ""));
                 e.push_back(entry(MenuItemKind::Checked, 107, "Lock the tuning step", "", laneC.stepLocked()));
                 e.push_back(entry(MenuItemKind::Checked, 108, "Delta lock", "", laneC.deltaOn(workspace.selectedRadio())));
@@ -2474,6 +2474,50 @@ int main(int argc, char** argv) {
         // the contract's logical rows of bank 4, in the order of `settings`: Display 0, Key bindings 5, Updates 3, Language 1, Diagnostics 6, Usage reporting 7, Serial ports 4
         static const int kRowOf[7] = {0, 5, 3, 1, 6, 7, 4};
         for (int i = 0; i < 7; ++i) { const int row = kRowOf[i]; add("SETTING", settings[i], "System bank", [=, &bankIndex, &openSections, &systemBank] { bankIndex = 4; ui->set_bank_index(4); openSections[4].insert(row); systemBank.sectionOpened(row); }); }
+        // EVERY SECTION OF EVERY BANK, and the controls the help describes (drive fixes 2, item 6): typed text found only the five banks, seven SYSTEM sections, modes, bookmarks and plugins - no TOOLS section
+        // ("Export" found nothing) and no control. A section is found by its name in the language in force or in English, a control by the help topic that names it (title, sentences, key words), and either opens
+        // its bank and unfolds its section as a click on the rail would.
+        {
+            struct PalSection { int bank; int row; const char* name; };
+            static const PalSection kSections[] = {
+                {0, 0, FOX_TR_NOOP("Patch")}, {0, 1, FOX_TR_NOOP("Source")}, {0, 2, FOX_TR_NOOP("Radio")}, {0, 3, FOX_TR_NOOP("Audio filters")}, {0, 4, FOX_TR_NOOP("Sinks")}, {0, 6, FOX_TR_NOOP("Recorder")}, {0, 7, FOX_TR_NOOP("Frequency correction")},
+                {1, 0, FOX_TR_NOOP("Plugin store")}, {1, 1, FOX_TR_NOOP("Fitted modules")}, {1, 2, FOX_TR_NOOP("Decoders")}, {1, 3, FOX_TR_NOOP("Target details")}, {1, 4, FOX_TR_NOOP("Maps")}, {1, 5, FOX_TR_NOOP("Decoder output")},
+                {2, 0, FOX_TR_NOOP("Demod scope")}, {2, 1, FOX_TR_NOOP("Radar")}, {2, 2, FOX_TR_NOOP("Bookmarks")}, {2, 3, FOX_TR_NOOP("Scanner")}, {2, 4, FOX_TR_NOOP("Airband")}, {2, 5, FOX_TR_NOOP("Export")},
+                {3, 0, FOX_TR_NOOP("Web access")}, {3, 1, FOX_TR_NOOP("CAT")},
+                {4, 2, FOX_TR_NOOP("Frequency correction")}, {4, 8, FOX_TR_NOOP("Beta tester")}, {4, 9, FOX_TR_NOOP("About")},
+                {4, 10, FOX_TR_NOOP("Settings and backup")}, {4, 11, FOX_TR_NOOP("Performance")}, {4, 12, FOX_TR_NOOP("Accessibility")}, {4, 14, FOX_TR_NOOP("Spectrum tools")},
+                {4, 15, FOX_TR_NOOP("Tuning and memories")}, {4, 16, FOX_TR_NOOP("Scanning")}, {4, 17, FOX_TR_NOOP("Recording and files")}, {4, 18, FOX_TR_NOOP("Measurement")}, {4, 19, FOX_TR_NOOP("Sweep")},
+                {4, 20, FOX_TR_NOOP("Network radios")}, {4, 21, FOX_TR_NOOP("Outputs and tracks")}, {4, 22, FOX_TR_NOOP("Needed libraries")}, {4, 23, FOX_TR_NOOP("System")}, {4, 24, FOX_TR_NOOP("Web")}, {4, 25, FOX_TR_NOOP("Ham tools")}};
+            static const char* const kBankWords[5] = {FOX_TR_NOOP("SIGNAL"), FOX_TR_NOOP("DECODE"), FOX_TR_NOOP("TOOLS"), FOX_TR_NOOP("EXTEND"), FOX_TR_NOOP("SYSTEM")};   // not-translated: the rail's own bank names
+            const auto openSection = [&](int bank, int row) {
+                bankIndex = bank; ui->set_bank_index(bank);
+                if (bank == 4 && row == 9) { ui->set_about_open(true); return; }
+                if (bank == 2 && row == 0) { ui->global<ToolsEvents>().invoke_scope_clicked(); return; }
+                openSections[bank].insert(row);
+                helpLastRow[static_cast<std::size_t>(bank)] = row;
+                if (bank == 4) { systemBank.sectionOpened(row); }
+                if (bank == 2 && row == 1) { systemBank.sectionOpened(4); }
+            };
+            std::set<std::pair<int, int>> listed;
+            for (const PalSection& s : kSections) {
+                if (s.bank == 4 && s.row == 8 && !systemBank.testerShown()) { continue; }
+                const std::string shown = cascade::i18n::tr(s.name);
+                if (!matches(shown) && !matches(s.name)) { continue; }
+                listed.insert({s.bank, s.row});
+                const int b = s.bank, r = s.row;
+                paletteActions.push_back({"SECTION", shown, std::string(kBankWords[b]) + " bank", [=] { openSection(b, r); }});
+            }
+            if (!q.empty()) {
+                const auto& topics = foxsdr::slintlanex::helpTopics();
+                for (const int ti : foxsdr::slintlanex::searchTopics(query)) {
+                    const foxsdr::slintlanex::HelpTopic& t = topics[static_cast<std::size_t>(ti)];
+                    if (t.bank < 0 || t.row < 0 || listed.count({t.bank, t.row}) > 0) { continue; }
+                    listed.insert({t.bank, t.row});
+                    const int b = t.bank, r = t.row;
+                    paletteActions.push_back({"CONTROL", foxsdr::slintlanex::titleOf(t), std::string(kBankWords[b]) + " bank", [=] { openSection(b, r); }});
+                }
+            }
+        }
         add("PAGE", "Request a feature", "send a request to the FoxSDR team", [&] { systemBank.openReport(0); });
         add("PAGE", "Report a bug / dislike", "send a report to the FoxSDR team", [&] { systemBank.openReport(1); });
         add("ABOUT", "About FoxSDR", "version, licences", [&] { ui->set_about_open(true); });
@@ -3427,6 +3471,7 @@ int main(int argc, char** argv) {
         publisher.setRadios(workspace.mask());
         publisher.setMapLook(foxsdr::slintmap::mapLookOf(duties.interfaceHalf().aircraftIconPx, duties.interfaceHalf().mapTrailWidthPx, duties.interfaceHalf().mapTrailStyle));
         publisher.publish(state);
+        signalBank.setSelectedRadio(workspace.selectedRadio());
         signalBank.publish(state);
         systemBank.publish(state);
         scopeBank.publish(state, static_cast<double>(nowMs()) / 1000.0);
@@ -3852,6 +3897,13 @@ int main(int argc, char** argv) {
             if (what == "storePlugin") { out = extendBank.models().store.plugin.shown ? "1" : "0"; return std::string(); }
             if (what == "about") { out = ui->get_about_open() ? "1" : "0"; return std::string(); }
             return "shown.import|storePlugin|about, not " + name;
+        }
+        if (name == "focus.place") { out = std::string(ui->global<FocusProbe>().get_place()); return std::string(); }   // which of the strip's and title bar's keyboard scopes took the focus last (drive fixes 2, item 9)
+        if (name == "palette.count") { out = std::to_string(paletteActions.size()); return std::string(); }   // the command palette's rows for the query last typed (drive fixes 2, item 6)
+        if (name == "palette.titles") {
+            out.clear();
+            for (const PaletteAction& pa : paletteActions) { out += (out.empty() ? "" : " | ") + pa.title; }
+            return std::string();
         }
         if (name.rfind("look.", 0) == 0) {
             const std::string what = name.substr(5);

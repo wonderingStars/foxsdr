@@ -31,6 +31,10 @@ std::string dottedFrequencyText(double hz, int style) {
 }
 
 bool parseTypedFrequencyHz(const std::string& text, double& hz) { return parseTypedFrequencyHz(text, hz, nullptr); }
+bool pasteFrequencyOffered(const std::string& clipboardText) {
+    double hz = 0;
+    return !clipboardText.empty() && parseTypedFrequencyHz(clipboardText, hz);
+}
 
 bool parseTypedFrequencyHz(const std::string& text, double& hz, bool* ambiguousComma) {
     const auto dots = std::count(text.begin(), text.end(), '.');

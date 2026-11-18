@@ -58,6 +58,7 @@ import { LaneX, XHelpSheet } from "lane_x.slint";   // lane X (docs/multi-radio-
 
 export { SdrPlayDialogState, SdrPlayDialogModel, PointerLedger } from "diag_overlays.slint";
 export { MeterPanel } from "meters_panel.slint";
+export { FocusProbe } from "theme.slint";
 export { Theme, Skin, Workbench, NightWatch, GlassCockpit, DaylightLab, FieldRadio, HighContrast, DigitFace, MeterStyle, SrText, ChipTone, LampState, MenuItemKind, MenuEntry, CardTone,
          AxisTick, DbTick, BandSegment, BookmarkMark, PluginMark, MarkTab, UserMarker, AirbandChannel, MapExtras, MapIcons, TraceMode, SpectrumEvents, WaterfallLook, AgeTick, PaletteResult, LayoutRow, LayoutsModel, ExportModel, Handover,
          KitEvents, DecodeRow, PluginEntry, RunsOnKey, DecoderBar, PageTab, MapModel, FittedModel, ModuleModel, DetailsModel,
@@ -441,6 +442,7 @@ export component MainWindow inherits Window {
                 padding-left: 12px; padding-right: 8px; spacing: 12px;
                 Rectangle { // brand: the app menu opens from it (About FoxSDR carries the Slint attribution the licence requires)
                     min-width: 220px;
+                    brand-box := Rectangle { }
                     brand := HorizontalLayout {
                         spacing: 8px; alignment: start;
                         Image { source: @image-url("icons/fox.svg"); width: 18px; height: 18px; y: (parent.height - 18px) / 2; }
@@ -449,7 +451,7 @@ export component MainWindow inherits Window {
                         if root.preview : VerticalLayout { alignment: center;
                             Chip { label: @tr("SLINT PREVIEW"); tone: ChipTone.warn; tooltip: @tr("A preview of the Slint window: it works on a copy of your settings and never writes the real ones."); }
                         }
-                        Text { text: "Fox & Schirmyver · Type 71 Mk II"; font-size: Theme.font-micro; letter-spacing: 1px; color: Theme.faint; font-weight: Theme.weight-semibold; vertical-alignment: center; }   // not-translated: the maker's engraved legend (a brand line), not a sentence
+                        Text { visible: brand-box.width + 0.5px >= brand.preferred-width; text: "Fox & Schirmyver · Type 71 Mk II"; font-size: Theme.font-micro; letter-spacing: 1px; color: Theme.faint; font-weight: Theme.weight-semibold; vertical-alignment: center; }   // not-translated: the maker's engraved legend (a brand line), not a sentence
                     }
                     TouchArea { x: 0; width: min(brand.preferred-width, parent.width); clicked => { root.brand-clicked(); } }
                 }
@@ -568,17 +570,17 @@ export component MainWindow inherits Window {
                     HorizontalLayout { // gain / squelch / volume lanes: the strip's slack is theirs
                         x: sb.x-lanes; y: 0px; width: sb.lanes-w; height: Theme.strip-h;
                         spacing: 18px; alignment: stretch;   // three lanes of 120 at least (the strip folds before they get less); from about 1500 px the captions no longer elide
-                        VerticalLayout { alignment: center; horizontal-stretch: 1;
+                        VerticalLayout { alignment: center; horizontal-stretch: 1; min-width: 120px; preferred-width: 132px;   // three lanes of the same width (drive fixes 2, item 8): the volume lane's meter row used to take the slack and leave the others 97 px
                             SliderGroup { caption: @tr("Gain"); readout: root.gain-text; hint: root.gain-hint; value: root.gain-norm; enabled: root.gain-enabled;
                                 has-auto: true; auto-on: root.gain-auto; auto-enabled: root.gain-auto-enabled; auto-tooltip: root.gain-auto-tooltip; tooltip: root.gain-tooltip;
                                 changed(v) => { root.gain-changed(v); } auto-clicked => { root.gain-auto-clicked(); } }
                         }
-                        VerticalLayout { alignment: center; horizontal-stretch: 1;
+                        VerticalLayout { alignment: center; horizontal-stretch: 1; min-width: 120px; preferred-width: 132px;
                             SliderGroup { caption: @tr("Squelch"); readout: root.squelch-text; hint: root.squelch-hint; value: root.squelch-norm;
                                 has-auto: true; auto-on: root.squelch-auto; auto-enabled: true; auto-tooltip: root.squelch-auto-tooltip; tooltip: @tr("Squelch - drag the slider, or scroll over it") + (root.airband-on ? "\n" + @tr("Airband is listening: this sets the Airband squelch") : "");
                                 changed(v) => { root.squelch-changed(v); } auto-clicked => { root.squelch-auto-clicked(); } }
                         }
-                        VerticalLayout { alignment: center; horizontal-stretch: 1; spacing: 7px;
+                        VerticalLayout { alignment: center; horizontal-stretch: 1; spacing: 7px; min-width: 120px; preferred-width: 132px;
                             SliderGroup { caption: @tr("VOLUME"); readout: root.volume-text; hint: ""; value: root.volume-norm; has-auto: false; tooltip: @tr("Volume - drag the slider, or scroll over it");
                                 changed(v) => { root.volume-changed(v); } }
                             HorizontalLayout { spacing: 6px;   // the VOLUME meter, relocated under the volume slider (Workbench IA 2)

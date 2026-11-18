@@ -29,7 +29,7 @@
 // GEOMETRY of the plate (the sheet's CSS, content-box): 1 px border + 8 px padding + ten 34 px columns + three dot
 // cells + the same again = 397 x 58. A 22 px mono dot advances 0.6 em = 13.2 px; the dot cell is rounded to 13 px so
 // every column lands on a whole pixel.
-import { Theme, DigitFace } from "theme.slint";
+import { Theme, DigitFace, FocusProbe } from "theme.slint";
 import { TipTimer, ElidedHint } from "tooltip.slint";
 
 export component Digit inherits Rectangle {
@@ -291,6 +291,23 @@ export component FrequencyCounter inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
         accessible-role: none;
+    }
+
+    // ---- the keyboard's way in (drive fixes 2, item 9): Tab reaches the figures, Enter or Space opens the typed editor (the click's own action). A click never takes the focus (the keys' rule). ----
+    count-focus := FocusScope {
+        x: 0px; y: 0px; width: root.plate-w; height: root.plate-h;
+        enabled: root.enabled && !root.editing;
+        focus-on-click: false;
+        focus-on-tab-navigation: true;
+        changed has-focus => { if (self.has-focus) { FocusProbe.place = "counter"; } }
+        key-pressed(e) => {
+            if (e.text == Key.Return || e.text == " ") { root.edit-requested(); return accept; }
+            return reject;
+        }
+    }
+    if count-focus.has-focus : Rectangle {
+        x: -3px; y: -3px; width: root.plate-w + 6px; height: root.plate-h + 6px;
+        border-width: 2px; border-color: Theme.focus; border-radius: Theme.radius-panel + 3px;
     }
 
     // ---- right-click anywhere on the plate and the engraved rows (the Digits forward theirs) ----

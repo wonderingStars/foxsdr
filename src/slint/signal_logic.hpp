@@ -355,6 +355,8 @@ struct SignalModels {
 
 // What the publisher owns and hands in each time (the drafts, the clocks, the pages' open flags, the probe's answer).
 struct ReadOptions {
+    std::string card_centre_refusal;             // the sentence of a Centre (MHz) box whose text is not a number ("" none)
+    int selected_radio = 1;                      // the radio the controls follow (the source row is read from its own facts)
     std::string iq_path;                         // the I/Q path box
     std::string iq_box_note;                     // the box's own line ("Type or paste the path of a WAV recording, then press Open."), "" none
     bool iq_browse_offered = false;              // a file dialog exists on this machine (core::filePickAvailable, or the bounded run's seam)

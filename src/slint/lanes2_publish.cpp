@@ -101,6 +101,7 @@ struct LaneS2Publisher::Impl {
     std::array<std::string, kSecCount> noteText;
     std::array<int, kSecCount> noteTone{};
     std::array<std::string, kSecCount> sig;
+    std::array<std::vector<Row>, kSecCount> lastRows;   // what each section's model holds now (a republish of the same shape changes the rows that differ and keeps the controls: drive fixes 2, item 2)
     std::array<std::string, kSecCount> lastCount;
     std::array<std::shared_ptr<slint::VectorModel<KRow>>, kSecCount> models;
     long sent = 0, refused = 0, answered = 0;
@@ -474,6 +475,13 @@ struct LaneS2Publisher::Impl {
         const std::string g = slk::signatureOf(rows);
         if (g == sig[s] && models[s]) { return; }
         sig[s] = g;
+        std::vector<std::size_t> changed;
+        if (models[s] && slk::sameRowShape(lastRows[s], rows, changed)) {   // the same rows with other figures: the controls stay, so a field being typed in keeps the keyboard and its text
+            for (const std::size_t i : changed) { models[s]->set_row_data(i, toK(rows[i])); }
+            lastRows[s] = rows;
+            return;
+        }
+        lastRows[s] = rows;
         lastCount[s] = std::to_string(rows.size());
         std::vector<KRow> ks;
         ks.reserve(rows.size());
