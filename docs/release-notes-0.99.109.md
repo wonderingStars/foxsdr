@@ -400,6 +400,6 @@ There is no AppImage in this release.
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.109.exe`:**
-`TBD`
+`b1149b4d8034d5d6b1e29aa22fd5a8e0bd29b15097e39b51cd71b846a67997f2`
 
 The Linux x86-64 download, `foxsdr-0.99.109-linux-x64.tar.gz`, is attached by hand beside the installer; its SHA-256 is written next to it on the release page when it is attached.
