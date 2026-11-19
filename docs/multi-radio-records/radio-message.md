@@ -88,7 +88,6 @@ See the commit message for the run (the probe sources are not kept in the tree: 
 - The hash is a lock, not a secret (above).
 - Radios with a stock or empty serial (`00000001`, all zeros, none) cannot be addressed one by one; the site refuses them.
 
-## Where I stopped (checkpoint, 2026-11-19)
+## Results (final, 2026-11-19)
 
-Done and run: `test_radio_message` 67 checks 0 failed; `test_slint_duties` 447 checks 0 failed; the real 0.99.109 reader run on a new-site answer (same fields with and without the list); the catalogues (i18n_keys: 0 missing, 0 stale, `lang_assets.hpp` regenerated). Site: vet clean, the new tests pass; full `go test ./...` was still running.
-Left: the build of `test_slint_main_screen`, `test_slint_house_rules`, `test_i18n`, `foxsdr-slint` was still compiling (main.slint is slow); then run those three tests (the main-screen queue test is new and has never run), then the other headless tests that touch the updater and the config (`test_updater`, `test_config`, `test_wire_c_updater`, `test_radio_report*`), a break-it check on the C++ side (drop the hash match, confirm RED), and the full site suite result.
+All built with MSBUILDDISABLENODEREUSE=1, Release, in D:/foxsdr-build/radio-message; foxsdr-slint.exe links (exit 0). Run: test_radio_message 67/0 failed (break-it: hash match forced true gives 10 failed); test_slint_duties 447/0; test_slint_main_screen 84/0; test_slint_house_rules 376/0 (0 untranslated literals); test_i18n 486259/0; test_updater 384/0; test_wire_c_updater 30/0; test_config 3945/0; test_radio_report 215/0; test_update_old_prompt 72/0. Site: go vet clean; go test -timeout 40m -count=1 ./... ok (1147 s). The whole ctest suite was not run, nor any gui-labelled test on the hidden desktop (the main-screen test renders headless in the harness).
