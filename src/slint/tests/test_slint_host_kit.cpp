@@ -103,6 +103,15 @@ const PluginRow& rowNamed(const KitLists& k, const char* name) {
 }  // namespace
 
 int main() {
+    // ---- FIELD FIXES B, FAULT 1: which ground a map page draws. The imagery plugin's Mercator tiles go under every map page EXCEPT a satellites page,
+    // which stays on the equirectangular coastline (the classic window's rule); with no imagery plugin running nothing ever draws tiles ----
+    {
+        CHECK(mapDrawsTiles(true, false));                 // an aircraft / ship / station page with the plugin running: tiles
+        CHECK(!mapDrawsTiles(true, true));                 // a satellites page: the coastline, whatever the plugin does
+        CHECK(!mapDrawsTiles(false, false) && !mapDrawsTiles(false, true));   // no plugin running: never (nothing is fetched without it)
+        CHECK(mapImageryUnused(true, true));               // the plugin runs and this page does not use it: the page says so
+        CHECK(!mapImageryUnused(true, false) && !mapImageryUnused(false, true) && !mapImageryUnused(false, false));
+    }
     // ---- the NEW lamp holds four seconds from the first sight of an event (the old window's kInstrumentNewHoldSec), the teleprinter prints the last named column (window gaps 3) ----
     {
         NewHold h;

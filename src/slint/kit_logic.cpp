@@ -692,6 +692,8 @@ bool fitView(const std::vector<cascade::core::HostTrack>& tracks, double& centre
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 std::string imageTitle(const std::string& plugin) { return cascade::core::formatText(cascade::i18n::tr("%s image"), plugin.c_str()); }
+bool mapDrawsTiles(bool basemapActive, bool satellitePage) { return basemapActive && !satellitePage; }
+bool mapImageryUnused(bool basemapActive, bool satellitePage) { return basemapActive && satellitePage; }
 std::string mapTitle(const std::string& plugin) { return cascade::core::formatText(cascade::i18n::tr("%s map"), plugin.c_str()); }
 
 std::string countText(std::size_t shown, std::size_t total, std::size_t unplaced) {

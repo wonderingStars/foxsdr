@@ -220,6 +220,14 @@ void mapFollowAnswer(MapPage& pg, bool stop);
 // The view that holds every placed track (the Fit key): false when none has a position.
 bool fitView(const std::vector<cascade::core::HostTrack>& tracks, double& centreLat, double& centreLon, double& spanDeg, double aspect);
 
+// ---- which ground a map page draws (field fixes B, fault 1) ----
+// The basemap plugin's tiles are Web Mercator; a satellites page is equirectangular on purpose (the poles are on screen and a ground track
+// reads as the sinusoid it is), so it NEVER draws tiles and keeps the compiled-in Natural Earth coastline - the classic window's rule
+// (MapProjection::Equirectangular) kept. Every other map page draws the tiles while a basemap plugin is installed and running.
+bool mapDrawsTiles(bool basemapActive, bool satellitePage);
+// A map imagery plugin is running but this page does not use it (a satellites page): the page says so instead of leaving the user to wonder.
+bool mapImageryUnused(bool basemapActive, bool satellitePage);
+
 // ---- the page titles and the rows' tooltips ----
 std::string imageTitle(const std::string& plugin);          // "<plugin> image"
 std::string mapTitle(const std::string& plugin);            // "<plugin> map"

@@ -520,7 +520,7 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
     }
     // the compositor: the basemap when attached (Mercator), else the coastline (equirectangular); satellites always the coastline
     BasemapClient& bm = kit_.basemap();
-    const bool tiles = bm.active() && !(pg != nullptr && pg->satellite);
+    const bool tiles = mapDrawsTiles(bm.active(), pg != nullptr && pg->satellite);
     if (tiles != s.sourceSet || (tiles && bm.attribution() != s.sourceAttribution)) {
         s.sourceSet = tiles;
         s.sourceAttribution = tiles ? bm.attribution() : std::string();
@@ -724,6 +724,7 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
             if (s.trailsOn && anyPath) { keys.push_back(ss(anyDashed ? T("DASHED LINE - PREDICTED TRACK") : T("LINE - GROUND TRACK"))); }
             chart.push_back(ss(T("EQUIRECTANGULAR - WGS 84")));   // a satellites window draws the compiled-in coastline, never tiles (the compositor choice above)
             chart.push_back(ss(T("NATURAL EARTH 1:110m COASTLINE")));
+            if (mapImageryUnused(bm.active(), true)) { chart.push_back(ss(T("MAP IMAGERY: NOT USED HERE - ITS TILES ARE MERCATOR, THIS MAP IS NOT"))); }   // field fixes B: the imagery plugin runs; the other map pages use it
             sig += "SAT" + std::to_string(notes.size()) + std::to_string(keys.size()) + std::string(m.rx_text);
         }
         m.sat_notes = model(std::move(notes));
