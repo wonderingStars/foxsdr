@@ -5,8 +5,10 @@
 #include <atomic>
 #include <string_view>
 
+#ifdef _WIN32
 #include <windows.h>
 #include <commctrl.h>
+#endif
 
 namespace foxsdr::slintguard {
 
@@ -19,6 +21,7 @@ int clampExtent(int requested, bool* clamped) {
     return requested;
 }
 
+#ifdef _WIN32
 namespace {
 constexpr UINT_PTR kSubclassId = 0x464F5857;   // "FOXW"
 std::atomic<long> g_clamps{0};
@@ -79,5 +82,12 @@ int installWindowGuards() {
 }
 
 long guardClampCount() { return g_clamps.load(); }
+
+#else
+// Not Windows: nothing subclasses a window here (a window manager is not asked from outside the way SetWindowPos is), so the guard is a stand-in.
+int installWindowGuards() { return 0; }
+bool installWindowGuard(void*) { return false; }
+long guardClampCount() { return 0; }
+#endif
 
 }  // namespace foxsdr::slintguard

@@ -5,13 +5,16 @@
 #include <atomic>
 #include <thread>
 
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 #include "test_check.hpp"
 #include "window_guard.hpp"
 
 using namespace foxsdr::slintguard;
 
+#ifdef _WIN32
 namespace {
 // what the toolkit would be told: the largest size this window's own procedure (below the guard) was ever handed, by WM_WINDOWPOSCHANGED and by WM_SIZE
 long g_seenMaxW = 0, g_seenMaxH = 0;
@@ -57,6 +60,7 @@ bool foreignSetPos(HWND h, int x, int y, int w, int hh, UINT flags) {
     return ok;
 }
 }  // namespace
+#endif
 
 int main() {
     // ---------------------------------------------------------------- the pure rule
@@ -68,6 +72,7 @@ int main() {
     CHECK(clampExtent(0, &c) == 0 && !c);                                  // empty and negative requests are the window system's business
     CHECK(clampExtent(-5, &c) == -5 && !c);
 
+#ifdef _WIN32
     // ---------------------------------------------------------------- a real window
     HWND h = makeWindow();
     CHECK(h != nullptr);
@@ -113,5 +118,11 @@ int main() {
     CHECK(mm.ptMaxTrackSize.x <= kMaxWindowExtent && mm.ptMaxTrackSize.y <= kMaxWindowExtent);
 
     ::DestroyWindow(h);
+#else
+    // Not Windows: no window is subclassed; the stand-ins say so (window_guard_win.cpp)
+    CHECK(installWindowGuards() == 0);
+    CHECK(!installWindowGuard(nullptr));
+    CHECK(guardClampCount() == 0);
+#endif
     return testSummary("window guard");
 }
