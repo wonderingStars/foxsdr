@@ -956,8 +956,16 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(400));
         Access::pass(app);
         Access::pass(app);
+        // A2 (field data 2026-11-19: 38 radio_stream events after a radio's close, one install): a radio that faulted is over, and its minutes stop. The
+        // slot stays open until the pass sees the radio leave (or the quit), but the windows that follow a fault say nothing about a radio that is gone.
+        Access::ageOpenRadio(app, 60.0);
+        Access::minute(app, 0, 0);
+        Access::ageOpenRadio(app, 60.0);
+        Access::minute(app, 0, 0);
+        Access::pass(app);
         g_netFault = false;
         Access::quit(app);
+        CHECK(ofKind(queued(rig.qdir()), "radio_stream").empty());
         const std::vector<json> closes = ofKind(queued(rig.qdir()), "radio_close");
         CHECK(closes.size() == 1);
         if (!closes.empty()) { CHECK(closes[0]["body"]["cause"] == "fault"); }
