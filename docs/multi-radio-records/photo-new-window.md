@@ -10,3 +10,15 @@ Card: TargetDetails (output.slint) gained photo / credit; MapModel.card at the f
 -> openPhoto(): photoLinkIsSafe then the link UNCHANGED to the system browser. Close key on the card clears the selection.
 New words: "Fetching photo...", "Open this photo's page in your browser".
 Next: build, tests (src/slint/tests), picture, then item 2 (SHOW key on Fitted modules).
+
+## Item 2: SHOW key on Fitted modules
+fitted.slint: FittedRowModel.has-page; a SHOW key between the chip and START/STOP (greyed with "This module has no window of its own." when the module has no panel / picture / instrument /
+map page); callback show-clicked -> pages.slint fitted-show -> KitEvents.page-fitted-show -> KitPublisher::showModule: openWindowsFor (an open tab stays one tab, a closed one comes back), then the first
+of the module's panel, instrument, picture, map pages is brought to the front (several pages: that main one, not the page last closed: that is not remembered). A torn page is un-rolled, NOT raised above other
+torn windows. A STOPPED module: SHOW starts it (kit_.startStop) and shows the pages in the publish tick in which the row stops being stopped (showPending_). Words: "SHOW", the two tooltips.
+Existing pixel tests of test_slint_fitted shifted by one key (indices and element counts updated: 629/629 green).
+
+## Item 3: serial-port chooser
+Cause: ui/system_bank.slint DropKey (and its twin in tools_bank.slint, the Radar fold) opened only when items.length > 0, and the host read the ports only when the SYSTEM bank's Serial section was first
+opened (system_publish.cpp sectionOpened, serialAsked_ once) - on a map page the list stayed empty and the click did nothing. Fix: DropKey `opening` callback on every click (GpsRowView -> SystemEvents.serial-refresh,
+the Radar fold the same), `empty-text` "No serial port was found." as one line in the popup.

@@ -260,18 +260,18 @@ int main() {
     // =========================================================================================================
     struct Expect { const char* what; Rgb dot; bool dotOn; Rgb chipGround, chipEdge, chipInk; int keys; bool lastKeyDanger; };
     const Expect ex[12] = {
-        {"FED ADS-B", lampGreen, true, goodBg, goodLine, goodFg, 2, false},
-        {"IDLE NOAA", lampOff, false, chipBg, chipLine, chipFg, 2, false},
-        {"STOPPED POCSAG", lampOff, false, chipBg, chipLine, chipFg, 2, false},
+        {"FED ADS-B", lampGreen, true, goodBg, goodLine, goodFg, 3, false},
+        {"IDLE NOAA", lampOff, false, chipBg, chipLine, chipFg, 3, false},
+        {"STOPPED POCSAG", lampOff, false, chipBg, chipLine, chipFg, 3, false},
         {"REFUSED FT8", lampRed, true, errBg, errLine, errFg, 1, false},
-        {"TAKES NO SIGNAL maps", lampOff, false, chipBg, chipLine, chipFg, 2, false},
-        {"NOT DECODING frame log", lampAmber, true, warnBg, warnLine, warnFg, 2, true},
-        {"TAKES NO SIGNAL tracker", lampOff, false, chipBg, chipLine, chipFg, 2, false},
-        {"FED long name", lampGreen, true, goodBg, goodLine, goodFg, 2, false},
-        {"FED RDS", lampGreen, true, goodBg, goodLine, goodFg, 2, false},
-        {"FED blanker", lampGreen, true, goodBg, goodLine, goodFg, 2, false},
-        {"IDLE equaliser", lampOff, false, chipBg, chipLine, chipFg, 2, false},
-        {"STOPPED vocoder", lampOff, false, chipBg, chipLine, chipFg, 2, false},
+        {"TAKES NO SIGNAL maps", lampOff, false, chipBg, chipLine, chipFg, 3, false},
+        {"NOT DECODING frame log", lampAmber, true, warnBg, warnLine, warnFg, 3, true},
+        {"TAKES NO SIGNAL tracker", lampOff, false, chipBg, chipLine, chipFg, 3, false},
+        {"FED long name", lampGreen, true, goodBg, goodLine, goodFg, 3, false},
+        {"FED RDS", lampGreen, true, goodBg, goodLine, goodFg, 3, false},
+        {"FED blanker", lampGreen, true, goodBg, goodLine, goodFg, 3, false},
+        {"IDLE equaliser", lampOff, false, chipBg, chipLine, chipFg, 3, false},
+        {"STOPPED vocoder", lampOff, false, chipBg, chipLine, chipFg, 3, false},
     };
     // One row of FM1 as drawn in frame `f` with the body scrolled by `scrolled` px; the row must lie wholly inside the body.
     const auto checkRow = [&](const Frame& f, int i, int scrolled) {
@@ -324,10 +324,10 @@ int main() {
         // the words of the keys: STOP for a module being fed, START for a stopped or idle one: START is wider than STOP by a letter
         const std::vector<Span> fedRow = clusterOnRow(f0, rowMid(0), kF1x + 600, kF1x + kF1w - 9, panelAlt);
         const std::vector<Span> idleRow = clusterOnRow(f0, rowMid(1), kF1x + 600, kF1x + kF1w - 9, panelAlt);
-        CHECKV(spanAt(idleRow, 1).w() > spanAt(fedRow, 1).w(), "START key %d px, STOP key %d px", spanAt(idleRow, 1).w(), spanAt(fedRow, 1).w());
+        CHECKV(spanAt(idleRow, 2).w() > spanAt(fedRow, 2).w(), "START key %d px, STOP key %d px", spanAt(idleRow, 2).w(), spanAt(fedRow, 2).w());
         // REMOVE FILE (a refused module) is wider than REMOVE
         const std::vector<Span> refusedRow = clusterOnRow(f0, rowMid(3), kF1x + 600, kF1x + kF1w - 9, panelAlt);
-        CHECKV(spanAt(refusedRow, 1).w() > spanAt(fedRow, 2).w() + 20, "REMOVE FILE key %d px, REMOVE key %d px", spanAt(refusedRow, 1).w(), spanAt(fedRow, 2).w());
+        CHECKV(spanAt(refusedRow, 1).w() > spanAt(fedRow, 3).w() + 20, "REMOVE FILE key %d px, REMOVE key %d px", spanAt(refusedRow, 1).w(), spanAt(fedRow, 3).w());
         // the version, muted, 8 px after the name
         const Ink first = inkBox(f0, kF1x + 23, rowTop(0) + 3, kF1x + 500, rowTop(0) + 22, panelAlt);
         CHECKV(first.x1 > kF1x + 150 && first.x1 < kF1x + 260, "ADS-B name and version end at %d", first.x1 - kF1x);
@@ -468,7 +468,7 @@ int main() {
         CHECK(f0.rowNear(bt + kRowH, kF2x + 2, kF2x + kF2w - 12, line) && f0.rowNear(bt + 2 * kRowH, kF2x + 2, kF2x + kF2w - 12, line));
         // row 1 has its REMOVE armed: the last key is CONFIRM, red; row 2's name is empty so the file name stands in; row 3's long note is cut
         const std::vector<Span> armed = clusterOnRow(f0, bt + kRowH + 13, kF2x + 300, kF2x + kF2w - 9, panelAlt);
-        CHECKV(armed.size() == 3 && f0.near(spanAt(armed, 2).l + 3, bt + kRowH + 13, dangerBg) && f0.near(spanAt(armed, 2).l, bt + kRowH + 13, dangerLine), "armed row: %zu elements, the last ground %s", armed.size(), hex(f0.at(spanAt(armed, 2).l + 3, bt + kRowH + 13)).c_str());
+        CHECKV(armed.size() == 4 && f0.near(spanAt(armed, 3).l + 3, bt + kRowH + 13, dangerBg) && f0.near(spanAt(armed, 3).l, bt + kRowH + 13, dangerLine), "armed row: %zu elements, the last ground %s", armed.size(), hex(f0.at(spanAt(armed, 3).l + 3, bt + kRowH + 13)).c_str());
         const Ink fileName = inkBox(f0, kF2x + 20, bt + 2 * kRowH + 3, kF2x + 400, bt + 2 * kRowH + 23, panelAlt);
         CHECKV(fileName.n > 40 && fileName.x0 >= kF2x + 23, "the file name stands in for the empty name: ink n=%d", fileName.n);
         CHECK(f0.countNear(kF2x + 23, bt + 2 * kRowH + 3, kF2x + 400, bt + 2 * kRowH + 23, fg, 40) >= 15);
@@ -539,40 +539,40 @@ int main() {
         const std::vector<Span> c1 = clusterOnRow(f0, rowMid(1), kF1x + 600, kF1x + kF1w - 9, panelAlt);
         const std::vector<Span> c3 = clusterOnRow(f0, rowMid(3), kF1x + 600, kF1x + kF1w - 9, panelAlt);
         const std::vector<Span> c5 = clusterOnRow(f0, rowMid(5), kF1x + 600, kF1x + kF1w - 9, panelAlt);
-        clk(spanAt(c0, 1).mid(), rowMid(0));
-        CHECKV(ui->get_runs() == 1 && ui->get_last_run() == 0 && ui->get_removes() == 0 && ui->get_row_clicks() == 0, "STOP: %d runs (row %d), %d removes, %d row clicks", ui->get_runs(), ui->get_last_run(), ui->get_removes(), ui->get_row_clicks());
         clk(spanAt(c0, 2).mid(), rowMid(0));
+        CHECKV(ui->get_runs() == 1 && ui->get_last_run() == 0 && ui->get_removes() == 0 && ui->get_row_clicks() == 0, "STOP: %d runs (row %d), %d removes, %d row clicks", ui->get_runs(), ui->get_last_run(), ui->get_removes(), ui->get_row_clicks());
+        clk(spanAt(c0, 3).mid(), rowMid(0));
         CHECKV(ui->get_removes() == 1 && ui->get_last_remove() == 0 && ui->get_runs() == 1 && ui->get_row_clicks() == 0, "REMOVE: %d removes (row %d)", ui->get_removes(), ui->get_last_remove());
-        clk(spanAt(c1, 1).mid(), rowMid(1));
+        clk(spanAt(c1, 2).mid(), rowMid(1));
         CHECK(ui->get_runs() == 2 && ui->get_last_run() == 1);                                            // START is the same callback
         clk(spanAt(c3, 1).mid(), rowMid(3));
         CHECKV(ui->get_removes() == 2 && ui->get_last_remove() == 3, "REMOVE FILE: row %d", ui->get_last_remove());
         clk(spanAt(c3, 0).mid(), rowMid(3));                                                              // the state chip is only a word: no key
         CHECK(ui->get_runs() == 2 && ui->get_removes() == 2 && ui->get_row_clicks() == 0);
-        clk(spanAt(c5, 2).mid(), rowMid(5));                                                              // CONFIRM of row 5 (armed) is the remove callback too
+        clk(spanAt(c5, 3).mid(), rowMid(5));                                                              // CONFIRM of row 5 (armed) is the remove callback too
         CHECKV(ui->get_removes() == 3 && ui->get_last_remove() == 5, "CONFIRM: row %d", ui->get_last_remove());
         park();
         // the host arms row 0: its REMOVE reads CONFIRM and goes red; the key is as wide as the word needs
         std::vector<FittedRowModel> rows;
         const auto base = ui->get_rows_fm1();
         for (std::size_t i = 0; i < base->row_count(); ++i) { rows.push_back(*base->row_data(i)); }
-        const int plainRemove = spanAt(c0, 2).w();
+        const int plainRemove = spanAt(c0, 3).w();
         rows[0].armed = true;
         ui->set_rows_fm1(std::make_shared<slint::VectorModel<FittedRowModel>>(rows));
         const Frame armed = shot();
         const std::vector<Span> ca = clusterOnRow(armed, rowMid(0), kF1x + 600, kF1x + kF1w - 9, panelAlt);
-        CHECKV(ca.size() == 3 && armed.near(spanAt(ca, 2).l + 3, rowMid(0), dangerBg) && armed.near(spanAt(ca, 2).l, rowMid(0), dangerLine) && armed.countNear(spanAt(ca, 2).l + 2, rowTop(0) + 6, spanAt(ca, 2).r - 2, rowTop(0) + 20, dangerFg, 40) >= 8, "armed REMOVE: %zu elements, ground %s", ca.size(), hex(armed.at(spanAt(ca, 2).l + 3, rowMid(0))).c_str());
-        CHECKV(spanAt(ca, 2).w() >= plainRemove + 3, "CONFIRM is %d wide, REMOVE was %d: the word changed with the state", spanAt(ca, 2).w(), plainRemove);
+        CHECKV(ca.size() == 4 && armed.near(spanAt(ca, 3).l + 3, rowMid(0), dangerBg) && armed.near(spanAt(ca, 3).l, rowMid(0), dangerLine) && armed.countNear(spanAt(ca, 3).l + 2, rowTop(0) + 6, spanAt(ca, 3).r - 2, rowTop(0) + 20, dangerFg, 40) >= 8, "armed REMOVE: %zu elements, ground %s", ca.size(), hex(armed.at(spanAt(ca, 3).l + 3, rowMid(0))).c_str());
+        CHECKV(spanAt(ca, 3).w() >= plainRemove + 3, "CONFIRM is %d wide, REMOVE was %d: the word changed with the state", spanAt(ca, 3).w(), plainRemove);
         rows[0].armed = false;
         ui->set_rows_fm1(std::make_shared<slint::VectorModel<FittedRowModel>>(rows));
         // a key with a tooltip: REMOVE explains what it keeps (the ImGui sentence), 6 px under the 20 px key
         reset();
-        mv(spanAt(c0, 2).mid(), rowMid(0));
+        mv(spanAt(c0, 3).mid(), rowMid(0));
         settle(milliseconds(750));
         const Frame tip = shot();
         const int keyBot = rowTop(0) + 3 + 20;
         // (the key is at the right edge of the page: the popup is moved left so that it stays inside the window, and still covers the key's x)
-        CHECKV(tip.near(spanAt(c0, 2).l + 12, keyBot + 6, knobRing, 3) && tip.near(spanAt(c0, 2).l - 200, keyBot + 6, knobRing, 3) && tip.near(spanAt(c0, 2).l + 8, keyBot + 6 + 8, menu), "REMOVE tooltip border: %s / ground %s", hex(tip.at(spanAt(c0, 2).l + 12, keyBot + 6)).c_str(), hex(tip.at(spanAt(c0, 2).l + 8, keyBot + 6 + 8)).c_str());
+        CHECKV(tip.near(spanAt(c0, 3).l + 12, keyBot + 6, knobRing, 3) && tip.near(spanAt(c0, 3).l - 200, keyBot + 6, knobRing, 3) && tip.near(spanAt(c0, 3).l + 8, keyBot + 6 + 8, menu), "REMOVE tooltip border: %s / ground %s", hex(tip.at(spanAt(c0, 3).l + 12, keyBot + 6)).c_str(), hex(tip.at(spanAt(c0, 3).l + 8, keyBot + 6 + 8)).c_str());
 
         park();
     }
@@ -652,8 +652,8 @@ int main() {
         const int t11 = bodyTop1 + kBodyH1 - 64 - kRowH;
         const Frame sc = shot();
         const std::vector<Span> c11 = clusterOnRow(sc, t11 + 13, kF1x + 600, kF1x + kF1w - 9, panelAlt);
-        CHECKV(c11.size() == 3, "row 11 at the bottom: %zu elements", c11.size());
-        clk(spanAt(c11, 1).mid(), t11 + 13);
+        CHECKV(c11.size() == 4, "row 11 at the bottom: %zu elements", c11.size());
+        clk(spanAt(c11, 2).mid(), t11 + 13);
         CHECKV(ui->get_runs() == 1 && ui->get_last_run() == 11, "scrolled: START of row %d", ui->get_last_run());
         wheel(600, 250, 2000.0f);
         park();
@@ -686,7 +686,7 @@ int main() {
         clk(kF2x + 60, bt + 13);
         CHECK(ui->get_row_clicks() == 1 && ui->get_last_row() == 0 && sval(ui->get_last_source()) == "FM2");
         const std::vector<Span> c1 = clusterOnRow(f0, bt + kRowH + 13, kF2x + 300, kF2x + kF2w - 9, panelAlt);
-        clk(spanAt(c1, 2).mid(), bt + kRowH + 13);                                                          // CONFIRM of FM2's second row
+        clk(spanAt(c1, 3).mid(), bt + kRowH + 13);                                                          // CONFIRM of FM2's second row
         CHECK(ui->get_removes() == 1 && ui->get_last_remove() == 1 && sval(ui->get_last_source()) == "FM2");
         park();
     }
@@ -712,8 +712,8 @@ int main() {
         CHECK(fr.near(kF1x + 600, rowTop(0) + 2, focus, 14) && fr.near(kF1x + 600, rowTop(0) + 3, focus, 14));      // the ring's top edge runs under the rule
         tap(slint::platform::key_codes::Return);
         CHECKV(ui->get_row_clicks() == 1 && ui->get_last_row() == 0 && sval(ui->get_last_source()) == "FM1" && ui->get_row_doubles() == 0, "Enter on the first row: %d clicks, row %d", ui->get_row_clicks(), ui->get_last_row());
-        // the row's own keys come next (STOP, REMOVE), then the next row
-        for (int k = 0; k < 3; ++k) { tap(slint::platform::key_codes::Tab); }
+        // the row's own keys come next (SHOW, STOP, REMOVE), then the next row
+        for (int k = 0; k < 4; ++k) { tap(slint::platform::key_codes::Tab); }
         fr = shot();
         CHECK(rowRinged(fr, 1) && !rowRinged(fr, 0));
         tap(u8" ");

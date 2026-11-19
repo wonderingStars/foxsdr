@@ -66,6 +66,7 @@ int main() {
     CHECKV(refreshes == 1, "A: %d port reads asked, wanted 1", refreshes);
     CHECKV(count("No serial port was found.") >= 1, "A: an empty chooser shows nothing (dead click)");
 
+    click(win, 550, 280); settle(milliseconds(30)); render(ui, 600, 300);   // a click outside closes the list
     // B: ports exist now
     g.ports = std::make_shared<slint::VectorModel<SelectItem>>(std::vector<SelectItem>{item("COM3"), item("COM7")});
     ui->set_gps(g);
