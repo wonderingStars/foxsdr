@@ -59,6 +59,15 @@ constexpr std::chrono::milliseconds kReadPollBudget{20};
 // and were refused as "busy" on a radio that was working.
 constexpr std::chrono::milliseconds kReaderStandAside{1};
 
+// A FAILED BULK READ IS TRIED AGAIN before the radio is condemned (field fix A, 2026-11-19). The bench dongle's own measurement
+// (usb/winusb_device.cpp, beginBulkStream: a halted endpoint fails ONE read with Windows error 31 and the next delivers 16384 bytes) says one failed
+// read on a live dongle is an event, not a death; the reader used to latch a permanent fault on the first, and the 42958e install's journal shows a
+// dongle that streamed at full rate and then "stopped delivering samples" five times in an afternoon, each needing the user to pick it again. A dead
+// or unplugged dongle fails every read, so this many failures IN A ROW still end in the fault - a few tens of milliseconds later. The failed reads
+// are counted as USB errors in the stream health either way.
+constexpr int kReadFailuresBeforeFault = 4;
+constexpr std::chrono::milliseconds kReadFailureBackoff{10};
+
 // ---------------------------------------------------------------------------
 
 // The bulk ring. 16 KB is 32 maximum-size packets, which at 2.4 MS/s is a
@@ -253,6 +262,7 @@ std::unique_lock<std::timed_mutex> controlLock(RtlSdrSource::Link& link) {
 void readerLoop(std::shared_ptr<RtlSdrSource::Link> link) {
     std::vector<std::uint8_t> raw(kBulkBufferBytes);
     std::vector<std::complex<float>> conv(kBulkBufferBytes / 2);
+    int failedInARow = 0;
     while (link->readerRun.load(std::memory_order_relaxed)) {
         if (link->controlWaiters.load(std::memory_order_relaxed) > 0) {
             // A retune, a gain change, a stop: let it in. The transport's own
@@ -280,14 +290,27 @@ void readerLoop(std::shared_ptr<RtlSdrSource::Link> link) {
         if (!link->readerRun.load(std::memory_order_relaxed)) { break; }
         noteRead(*link, got, got > 0 ? static_cast<std::size_t>(got) / 2u : 0u);
         if (got < 0) {
-            // The device is gone, or the pipe has failed. faulted() is what
-            // the pipeline's source loop polls; setting it and leaving is the
-            // whole of the recovery, because there is none.
-            noteFault(*link, "the radio stopped delivering samples (it may have been "
-                             "unplugged)",
+            // A read that failed once is tried again (kReadFailuresBeforeFault, above): the transport re-queues the slot that failed, so the next
+            // call is a fresh read. Only a run of failures is the device being gone or the pipe being dead. faulted() is what the pipeline's source
+            // loop polls; setting it and leaving is the whole of the recovery, because there is none.
+            if (++failedInARow < kReadFailuresBeforeFault) {
+                std::this_thread::sleep_for(kReadFailureBackoff);
+                continue;
+            }
+            std::string detail;
+            {
+                std::unique_lock<std::timed_mutex> lk(link->mutex, kDeviceLockWait);
+                // the transport's own words (the Windows error number is the only evidence of WHY a dongle stopped): read under the device lock
+                // when it can be had, and skipped rather than waited for when a control call has the device
+                if (lk.owns_lock() && link->transport) { detail = link->transport->lastError(); }
+            }
+            noteFault(*link,
+                      "the radio stopped delivering samples (it may have been unplugged)" +
+                          (detail.empty() ? std::string() : " [" + detail + "]"),
                       "reading samples");
             break;
         }
+        failedInARow = 0;
         if (got == 0) { continue; }
 
         // 8-bit unsigned interleaved I/Q, one lookup per component. An odd
@@ -381,6 +404,10 @@ RtlSdrSource::~RtlSdrSource() { closeDevice(); }
 
 void RtlSdrSource::setError(std::string msg) {
     std::lock_guard<std::mutex> lk(link_->errorMutex);
+    // A LATCHED FAULT KEEPS ITS OWN WORDS. Every later call on a dead radio is refused with "this radio has faulted; reopen it", and that refusal
+    // used to replace what the fault said: the journal's close event for a radio read "this radio has faulted; reopen it" and nothing of why it
+    // faulted (field fix A). clearError() lifts the latch when the radio is opened again.
+    if (link_->faulted) { return; }
     link_->lastError = std::move(msg);
 }
 

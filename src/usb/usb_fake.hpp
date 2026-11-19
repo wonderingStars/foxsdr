@@ -148,6 +148,12 @@ public:
     int failBulkAfter = -1;
     int bulkReads = 0;
 
+    // A TRANSIENT BULK FAILURE: reads number failBulkTransientFrom+1 .. failBulkTransientFrom+failBulkTransientCount fail (-1, the text of a
+    // Windows error 31 as the real transport words it) and the read after them is served normally - the bench dongle's measured single stall
+    // (winusb_device.cpp, beginBulkStream). -1 disables. failBulkAfter, when set, still wins (a device that is really gone).
+    int failBulkTransientFrom = -1;
+    int failBulkTransientCount = 0;
+
     // Fails every control transfer from this call number on; -1 disables.
     int failControlAfter = -1;
     int controlCalls = 0;
@@ -329,6 +335,10 @@ public:
     int readBulk(std::uint8_t* dst, std::size_t cap, unsigned timeoutMs) override {
         if (!streaming_) { return -1; }
         ++bulkReads;
+        if (failBulkTransientFrom >= 0 && bulkReads > failBulkTransientFrom && bulkReads <= failBulkTransientFrom + failBulkTransientCount) {
+            lastError_ = "a bulk read failed (Windows error 31)";
+            return -1;
+        }
         if (failBulkAfter >= 0 && bulkReads > failBulkAfter) {
             lastError_ = "fake: the device is gone";
             return -1;
