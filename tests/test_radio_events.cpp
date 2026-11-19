@@ -211,6 +211,28 @@ int main() {
         forgetRadio(kHf.key);
     }
 
+    // ---- A3: a rate the radio took, changed live, is a radio_settings event with the landed rate and no refusal ------------------------------------------
+    {
+        Rig t("rateapplied");
+        t.start();
+        registerSource(&g_source1, kHf);
+        noteRateApplied(&g_source1, "airspyhf", 384000.0);
+        {
+            ControlWhyScope why("auto");
+            noteRateApplied(&g_source1, "airspyhf", 768000.0);
+        }
+        noteRateApplied(&g_source1, "airspyhf", 0.0);   // nothing to say
+        const std::vector<json> msgs = ofKind(t.flush(), "radio_settings");
+        CHECK(msgs.size() == 2);
+        if (msgs.size() == 2) {
+            CHECK(msgs[0]["body"]["why"] == "user" && msgs[0]["body"]["sampleRateSps"] == 384000);
+            CHECK(msgs[1]["body"]["why"] == "auto" && msgs[1]["body"]["sampleRateSps"] == 768000);
+            for (const json& m : msgs) { CHECK(!m["body"].contains("refused") && m["radioKey"] == kHf.key); }
+        }
+        for (const json& m : msgs) { everything.push_back(m); }
+        forgetRadio(kHf.key);
+    }
+
     // ---- a radio that went away -------------------------------------------------------------------------------------------------------------------
     {
         Rig t("dead");

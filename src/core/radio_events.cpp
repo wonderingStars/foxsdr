@@ -278,6 +278,22 @@ void noteControlRefused(const void* source, const char* driverKey, Control contr
     }
 }
 
+void noteRateApplied(const void* source, const char* driverKey, double landedHz) {
+    try {
+        if (!(landedHz > 0.0 && landedHz <= 1.0e9)) { return; }
+        const Who w = whoIs(source, driverKey);
+        Event ev;
+        ev.kind = "radio_settings";
+        ev.radio = w.radio;
+        ev.word = "rate-" + std::to_string(static_cast<long long>(landedHz + 0.5));   // the reporter's daily bound is per (radio, kind, word): one event per distinct rate
+        ev.set("why", t_why != nullptr ? t_why : "user");
+        ev.set("sampleRateSps", static_cast<long long>(landedHz + 0.5));
+        emitOrDefer(source, w.registered, ev);
+    } catch (...) {
+        ++g_lost;
+    }
+}
+
 std::string noteControlRefusedText(const void* source, const char* driverKey, Control control, std::string text, bool userRange, const char* why) {
     noteControlRefused(source, driverKey, control, text, userRange, why);
     return text;
