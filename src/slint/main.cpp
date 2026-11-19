@@ -2249,7 +2249,7 @@ int main(int argc, char** argv) {
     // ten ticks after the last move.
     ui->on_band_dragged([&](float dx) {
         FoxCommand c = op(FOXAPI_OP_SET_VFO_OFFSET);
-        c.num[0] = state.tunedHz + dx * currentView().spanHz - state.centreHz;
+        c.num[0] = bandDragTargetHz(selected(), dx, tickNo) - state.centreHz;   // drive fixes 8: the whole drag so far, not "the state plus this move" (the state is a tick old)
         submit(c);
         selected().lastBandDragTick = tickNo;
     });

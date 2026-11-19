@@ -80,6 +80,14 @@ constexpr double kZoomStepPerNotch = 1.3;
 
 // A gesture in a pane is the receiver view's gesture over THAT radio's picture: the pane's own zoom and state, the command aimed at the pane's radio (FoxCommand.target = its number, radio_view.hpp
 // aimAt) and the selection untouched. Selecting is the workspace's. `submit` takes the command and the radio's number (1-based).
+// THE DRAG OF THE TUNED BAND (drive fixes 8). Each pointer move over the band reports how far the pointer went since the last move, as a fraction of the picture, and the host asks the
+// engine for a VFO offset. Until this fix the frequency asked for was "the tuned frequency in the state plus this move". The state is read back from the engine once a tick (33 ms), so
+// every move of a tick started from the same number and only the LAST move of each tick counted: at about 50 moves a second the band went 57 percent of the pointer's way (found by the
+// fast-pointer pass, 2026-11-19), and less with a real mouse. So the drag is added up here: the tuned frequency when the drag began plus everything the pointer has moved since. A move
+// more than kBandDragGapTicks after the last one is a new drag and starts from the tuned frequency the engine reports then (by which time it has answered).
+inline constexpr int kBandDragGapTicks = 3;
+double bandDragTargetHz(RadioView& rv, float dxFrac, int tick);   // the tuned frequency to ask for after this move; remembers the drag in `rv`
+
 class PaneGestures {
 public:
     using Submit = std::function<void(const FoxCommand&, std::uint32_t radio)>;
