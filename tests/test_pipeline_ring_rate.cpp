@@ -113,6 +113,45 @@ cascade::core::Pipeline::Config appConfig() {
     return cfg;
 }
 
+// A free-running source whose rate can be changed live, as a vendor radio's can
+// (SDRplay, Soapy): setSampleRateHz() moves what sampleRateHz() reports. It
+// parks in read() until stop(), like OneChunkWideSource, so no samples flow.
+class RetunableRateSource final : public cascade::source::IqSource {
+public:
+    explicit RetunableRateSource(double rateHz) : rateHz_(rateHz) {}
+    bool start() override {
+        std::lock_guard<std::mutex> lk(m_);
+        released_ = false;
+        return true;
+    }
+    void stop() override {
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            released_ = true;
+        }
+        cv_.notify_all();
+    }
+    bool running() const override { return true; }
+    bool selfPaced() const override { return false; }
+    double sampleRateHz() const override { return rateHz_.load(std::memory_order_relaxed); }
+    bool setSampleRateHz(double hz) override { rateHz_.store(hz, std::memory_order_relaxed); return true; }
+    double centerFrequencyHz() const override { return 100.0e6; }
+    bool setCenterFrequencyHz(double) override { return true; }
+    const char* name() const override { return "Retunable-rate test source"; }
+    const char* lastError() const override { return ""; }
+    std::size_t read(std::complex<float>*, std::size_t) override {
+        std::unique_lock<std::mutex> lk(m_);
+        cv_.wait(lk, [&] { return released_; });
+        return 0;
+    }
+
+private:
+    std::atomic<double> rateHz_;
+    std::mutex m_;
+    std::condition_variable cv_;
+    bool released_ = false;
+};
+
 }  // namespace
 
 int main() {
@@ -235,6 +274,73 @@ int main() {
         CHECK(p.ringCapacity() == 1048576u);
         p.stop();
         CHECK(!p.faulted());
+    }
+
+    // [R6] A LIVE RATE CHANGE GIVES THE DEPTH A START AT THAT RATE GETS (field
+    // report 5A76C1C8, 0.99.109: an RSPduo opened at 2 MS/s and moved to 10 and
+    // then 6 MS/s dropped 189472 samples, the ring still 524288 - 87 ms at 6
+    // MS/s - because only start() and setSource() sized it). The source's rate
+    // moves first, then the pipeline's, the order the application uses.
+    {
+        auto depthOfFreshStart = [](double rateHz) {
+            cascade::core::Pipeline f(appConfig());
+            f.setSource(std::make_unique<RetunableRateSource>(rateHz));
+            f.start();
+            const std::size_t depth = f.ringCapacity();
+            f.stop();
+            return depth;
+        };
+        const std::size_t at6 = depthOfFreshStart(6.0e6);
+        const std::size_t at2 = depthOfFreshStart(2.0e6);
+        CHECK(at6 == 2097152u);
+        CHECK(at2 == 524288u);
+
+        cascade::core::Pipeline p(appConfig());
+        auto src = std::make_unique<RetunableRateSource>(2.0e6);
+        RetunableRateSource* raw = src.get();
+        p.setSource(std::move(src));
+        p.start();
+        CHECK(p.ringCapacity() == at2);
+        cascade::core::SpectrumFrame f;
+
+        CHECK(raw->setSampleRateHz(6.0e6));
+        CHECK(p.setInputRateHz(6.0e6));
+        std::printf("[R6] live 2 -> 6 MS/s: ring %zu (a fresh start gets %zu)\n", p.ringCapacity(), at6);
+        CHECK(p.ringCapacity() == at6);
+        CHECK(p.running());
+
+        // And back down: the depth returns to what a start at 2 MS/s gets.
+        CHECK(raw->setSampleRateHz(2.0e6));
+        CHECK(p.setInputRateHz(2.0e6));
+        std::printf("[R6] live 6 -> 2 MS/s: ring %zu (a fresh start gets %zu)\n", p.ringCapacity(), at2);
+        CHECK(p.ringCapacity() == at2);
+
+        // 2 -> 10 -> 6, the sequence in the report.
+        CHECK(raw->setSampleRateHz(10.0e6));
+        CHECK(p.setInputRateHz(10.0e6));
+        CHECK(p.ringCapacity() == depthOfFreshStart(10.0e6));
+        CHECK(raw->setSampleRateHz(6.0e6));
+        CHECK(p.setInputRateHz(6.0e6));
+        CHECK(p.ringCapacity() == at6);
+        CHECK(p.running());
+        p.stop();
+        CHECK(!p.faulted());
+
+        // The reverse, from a start at 6 MS/s: down to what a start at 2 gets.
+        cascade::core::Pipeline q(appConfig());
+        auto srcQ = std::make_unique<RetunableRateSource>(6.0e6);
+        RetunableRateSource* rawQ = srcQ.get();
+        CHECK(q.setInputRateHz(6.0e6));   // the chain follows the radio, as the application does
+        q.setSource(std::move(srcQ));
+        q.start();
+        CHECK(q.ringCapacity() == at6);
+        CHECK(rawQ->setSampleRateHz(2.0e6));
+        CHECK(q.setInputRateHz(2.0e6));
+        std::printf("[R6] start at 6, live to 2 MS/s: ring %zu (a fresh start gets %zu)\n", q.ringCapacity(), at2);
+        CHECK(q.ringCapacity() == at2);
+        CHECK(q.running());
+        q.stop();
+        CHECK(!q.faulted());
     }
 
     return testSummary("test_pipeline_ring_rate");

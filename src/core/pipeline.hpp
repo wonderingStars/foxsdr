@@ -861,13 +861,17 @@ public:
     // new rate regime). What does not: the spectrum estimator (fftSize is
     // unchanged and the estimator is rate-agnostic — the displayed span
     // simply reinterprets, which is the caller's frequency-axis job), the
-    // ring (sized for the SOURCE's rate when its thread was spawned, by
-    // start() or setSource(); this call leaves the source thread running, so
-    // it cannot replace the ring under it. A device whose rate is changed
-    // live keeps both the ring and its read size from that spawn, so each
-    // read still fits and only the headroom in milliseconds shrinks; any
-    // overflow is counted in ringDroppedSamples()), seq numbering, and the
+    // ring in its CONTENT (it is resized when the source's rate needs a
+    // different depth, below), seq numbering, and the
     // audio tap/counters.
+    //
+    // THE RING DEPTH FOLLOWS A LIVE CHANGE (field report 5A76C1C8, 0.99.109): when
+    // the active source's rate now calls for a different ring than the one in
+    // place (the same depth a start() at that rate gets), the source thread is
+    // quiesced like stop()'s, the source started again, the ring replaced and
+    // the thread respawned. Samples in the old ring are dropped with it - the
+    // chain was just rebuilt, a rate change is a stream discontinuity. The
+    // application moves the SOURCE's rate first and then calls this.
     //
     // Calling with the CURRENT rate is a cheap no-op returning true. Safe to
     // call stopped (no threads to quiesce — the chain is rebuilt for the next

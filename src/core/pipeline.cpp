@@ -2083,8 +2083,8 @@ bool Pipeline::setInputRateHz(double rateHz) {
     // Commit the new rate only after the rebuild cannot fail anymore, so a
     // refused/aborted call really did change nothing. The spectrum estimator
     // and the ring are deliberately untouched (the estimator is
-    // rate-agnostic, and the ring follows the SOURCE's rate at its thread's
-    // spawn; see header).
+    // rate-agnostic; the ring follows the SOURCE's rate, resized at the end of
+    // a live change below; see header).
     cfg_.sampleRateHz = rateHz;
     // ...and the lock-free mirror inputRateHz() reads, in the same breath as
     // the field it mirrors, so the two can never disagree.
@@ -2111,6 +2111,37 @@ bool Pipeline::setInputRateHz(double rateHz) {
                             rateBeforeHz, rateHz, chanRate, decim);
 
     if (live) {
+        // THE RING FOLLOWS A LIVE RATE CHANGE (field report 5A76C1C8, 0.99.109:
+        // an RSPduo opened at 2 MS/s and moved to 10 and then 6 MS/s kept its
+        // 524288-sample ring - 87 ms at 6 MS/s, not the designed quarter of a
+        // second - and dropped 189472 samples in the rebuild's minute). start()
+        // and setSource() size the ring for the source they spawn a thread for;
+        // this is the third place a source thread's chunk size changes, so it
+        // gets the same depth a start at the new rate gets. The source's own
+        // rate is what ringCapacityForActiveSourceLocked reads, and the
+        // application moves it before it calls this. A ring that must change
+        // needs BOTH workers stopped (resizeRingLocked): the DSP thread is
+        // already joined above, and the source thread - the producer - goes
+        // through the same bounded quiesce stop() and setSource() use, then is
+        // started and respawned as setSource's swap does, so the new thread also
+        // sizes its 10 ms chunk from the new rate. The old ring's contents are
+        // dropped with it: the DSP chain was just rebuilt, a rate change is a
+        // stream discontinuity. A rate whose depth is unchanged touches nothing.
+        if (ring_->capacity() != ringCapacityForActiveSourceLocked()) {
+            const int abandonedBefore = srcThreadsAbandoned_.load(std::memory_order_relaxed);
+            quiesceSourceThreadLocked();
+            if (srcThreadsAbandoned_.load(std::memory_order_relaxed) != abandonedBefore) {
+                // The driver would not let go of its read, so the thread cannot be
+                // respawned beside it: stop here as a fault, not a second thread
+                // in a vendor stack (the setSource policy).
+                noteThreadFault("source thread", "did not stop for the ring to follow the new sample rate");
+                return true;
+            }
+            active_->start();
+            resizeRingLocked(ringCapacityForActiveSourceLocked());
+            srcRun_.store(true, std::memory_order_relaxed);
+            spawnSourceThread(cfg_.sampleRateHz);
+        }
         dspRun_.store(true, std::memory_order_relaxed);
         dspThread_ = std::thread(&Pipeline::dspThreadMain, this);
     }
