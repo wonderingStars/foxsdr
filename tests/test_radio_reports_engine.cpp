@@ -3,6 +3,7 @@
 // validator (node, where it is found). No radio, no network, no window on the desk (a hermetic engine behind a test window; run it on the hidden desktop).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <complex>
@@ -456,7 +457,10 @@ int main() {
         }
         const std::vector<json> q = queued(rig.qdir());
         const std::vector<json> fails = ofKind(q, "radio_fail");
-        CHECK(fails.size() == 3);   // the restore and two busy-again retries: three failures, three reports (the anonymous count skips the retries)
+        // FIELD FIX A3 (2026-11-19): three failures, ONE report. A busy-again retry in the middle of a series is the same incident as the start-up
+        // restore's report (the 42958e install sent five reports in thirty seconds for one held dongle); the series' LAST failure is reported (below)
+        // and so is a different reason. The retries are still in the journal (radio_open start) and still counted in `attempt`.
+        CHECK(fails.size() == 1);
         std::set<std::string> triggers;
         long long maxAttempt = 0;
         for (const json& f : fails) {
@@ -472,8 +476,8 @@ int main() {
             CHECK(f["body"]["superseded"] == false);
             CHECK(f["installId"] == kInstallId);
         }
-        CHECK(triggers == (std::set<std::string>{"startup-restore", "saved-retry"}));
-        CHECK(maxAttempt == 3);
+        CHECK(triggers == (std::set<std::string>{"startup-restore"}));
+        CHECK(maxAttempt == 1);
         // the serial is its own field and nowhere in the sentence
         for (const json& f : fails) { CHECK(f["body"]["reason"].get<std::string>().find("00000001") == std::string::npos); }
         // the journal: an open that began (on disk before the call), and nothing "ok" yet
@@ -498,8 +502,69 @@ int main() {
         const std::vector<json> settings = ofKind(after, "radio_settings");
         CHECK(settings.size() >= 1);
         if (!settings.empty()) { CHECK(settings[0]["body"]["why"] == "open" && settings[0]["body"]["sampleRateSps"] == 2400000); }
-        CHECK(rr::global().stats().failuresQueued == 3);
+        CHECK(rr::global().stats().failuresQueued == 1);   // (field fix A3: the two busy-again retries are counted in `attempt`, not queued)
         keep(after);
+    }
+
+    // --- FIELD FIX A3: a series of busy retries that ends in giving up reports its first failure and its last, and the last one's attempt is the real ordinal ---
+    {
+        std::printf("  a busy series that never ends well: the restore and the final try are reported, the tries between are not\n");
+        resetFake();
+        g_failures = 100;
+        g_failText = cascade::usb::kInUseError;
+        th::TestWindow app;
+        Rig rig("busyfull");
+        rig.start();
+        Access::clock(app, 0.0);
+        Access::restore(app, savedRadio());
+        double t = 0.0;
+        for (const double delay : {2.0, 4.0, 8.0, 16.0}) {
+            t += delay;
+            Access::clock(app, t);
+            Access::poll(app);
+            CHECK(Access::settle(app));
+        }
+        // the series is over: a fifth poll must not try again
+        t += 64.0;
+        Access::clock(app, t);
+        Access::poll(app);
+        CHECK(Access::settle(app));
+        const std::vector<json> q = queued(rig.qdir());
+        std::vector<json> fails = ofKind(q, "radio_fail");
+        if (fails.size() == 2 && fails[0]["body"]["attempt"].get<long long>() > fails[1]["body"]["attempt"].get<long long>()) { fails[0].swap(fails[1]); }   // the queue is a directory: no order
+        CHECK(fails.size() == 2);
+        if (fails.size() == 2) {
+            CHECK(fails[0]["body"]["trigger"] == "startup-restore" && fails[0]["body"]["attempt"] == 1);
+            CHECK(fails[1]["body"]["trigger"] == "saved-retry" && fails[1]["body"]["attempt"] == 5);   // the ordinal counts the tries not sent
+            CHECK(fails[1]["body"]["reasonClass"] == "busy");
+        }
+        std::size_t starts = 0;
+        for (const json& o : ofKind(q, "radio_open")) { if (o["body"]["phase"] == "start") { ++starts; } }
+        CHECK(starts == 5);   // the journal still shows every try
+        keep(q);
+    }
+
+    // --- FIELD FIX A3: a retry that fails for a DIFFERENT reason is reported at once, whatever its place in the series ---
+    {
+        std::printf("  a busy restore whose first retry fails another way: that failure is reported\n");
+        resetFake();
+        g_failures = 1;
+        g_failText = cascade::usb::kInUseError;
+        th::TestWindow app;
+        Rig rig("busythenother");
+        rig.start();
+        Access::clock(app, 0.0);
+        Access::restore(app, savedRadio());
+        g_failures = 5;
+        g_failText = "the radio is no longer present";
+        Access::clock(app, 2.0);
+        Access::poll(app);
+        CHECK(Access::settle(app));
+        std::vector<json> fails = ofKind(queued(rig.qdir()), "radio_fail");
+        if (fails.size() == 2 && fails[0]["body"]["attempt"].get<long long>() > fails[1]["body"]["attempt"].get<long long>()) { fails[0].swap(fails[1]); }   // the queue is a directory: no order
+        CHECK(fails.size() == 2);
+        if (fails.size() == 2) { std::printf("    second: %s / %s / %s\n", fails[1]["body"]["trigger"].get<std::string>().c_str(), fails[1]["body"]["reasonClass"].get<std::string>().c_str(), fails[1]["body"]["reason"].get<std::string>().c_str()); }
+        CHECK(fails.size() != 2 || (fails[1]["body"]["trigger"] == "saved-retry" && fails[1]["body"]["reasonClass"] != "busy"));
     }
 
     // --- the D3 sentence through the real engine -------------------------------------------------------------------------------------------------

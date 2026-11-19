@@ -2110,7 +2110,7 @@ private:
     void radioReportsQuit();                      // the first step of the teardown: closes, the session's end, the last bounded send
     void radioReportsScanLanded(bool native, bool soapy);   // a scan landed: radio_found for each radio the scan listed, and what it listed
     void reportFailedOpen(const std::string& kind, const std::string& args, const std::string& reason, cascade::core::radioreport::Trigger trigger,
-                          bool superseded, double requestRateHz, long long openMs);
+                          bool superseded, double requestRateHz, long long openMs, bool seriesRetry = false);
     void journalOpenStart(const std::string& kind, const std::string& args, cascade::core::radioreport::Trigger trigger, double requestRateHz);
     void journalOpenOk(const std::string& kind, const std::string& args, cascade::core::radioreport::Trigger trigger, double requestRateHz, long long openMs);
     void journalSettingsAtOpen(const std::string& kind, const std::string& args);

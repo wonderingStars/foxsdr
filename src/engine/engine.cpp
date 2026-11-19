@@ -1777,12 +1777,15 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
         // classes read off what the driver said - and nothing of what it said.
         // Not for a result the user had already moved on from (returned above).
         if (!retryBusyAgain) { cascade::core::health::noteRadioFail(r.kind, why); }
-        // THE RADIO THAT WOULD NOT OPEN, AS ITS OWN REPORT (radio reports, D4): every time, a busy-again retry included (the anonymous count above skips
-        // it, the report does not), whatever the Diagnostics switch says.
+        // THE RADIO THAT WOULD NOT OPEN, AS ITS OWN REPORT (radio reports, D4): every failed open, whatever the Diagnostics switch says - EXCEPT a busy-again
+        // try in the middle of the saved radio's retry series (FIELD FIX A3, 2026-11-19: one held dongle sent five reports in thirty seconds, from each of four
+        // copies). The series' first failure was reported by the start-up restore, its last (the fourth retry, "giving up") is reported here, and a retry that
+        // fails for another reason is a new fact and is reported at once; the tries between are counted in `attempt` and shown by the journal, not sent.
+        const bool midSeries = retryBusyAgain && rx().savedRadioRetryAttempts_ < 4;
         reportFailedOpen(r.kind, r.args, why,
                          r.recovery ? cascade::core::radioreport::Trigger::AutoReopen
                                     : (r.savedRadioRetry ? cascade::core::radioreport::Trigger::SavedRetry : cascade::core::radioreport::Trigger::UserPick),
-                         /*superseded=*/false, r.requestRateHz, r.openMs);
+                         /*superseded=*/false, r.requestRateHz, r.openMs, midSeries);
         if (r.recovery) { journalRecovery(r.kind, r.args, "gave-up", "reopen", why, r.openMs); }
         if (r.recovery) {
             // THE ONE AUTOMATIC REOPEN DID NOT TAKE. The dead radio was

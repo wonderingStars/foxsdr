@@ -92,7 +92,10 @@ WITHOUT `installId`, and then, and only then:
 ONE message per failed open, every time: the start-up restore, a radio the user picked, the saved-radio retry, a patch page radio,
 the automatic reopen after a driver fault, the sound-card input. Sent whether or not the Diagnostics switch is on (owner answer
 2026-11-15, "Send them always") AND whether or not Usage reporting is on (decision 12, section 1.2). Repeats are NOT folded by the
-sender: a busy-again retry is a new message with a higher `attempt`. The only thing that ever stops a message is the daily bound (2.3),
+sender. ONE EXCEPTION, in the app and not in the sender (field fix A3, 2026-11-19; no field and no value changes): a busy-again try in the MIDDLE of the
+saved radio's retry series (2, 4, 8 and 16 s after the start-up restore) is not sent. The restore's own failure is sent (`attempt` 1), the series' last
+failure is sent (`attempt` 5, the fourth retry, "giving up"), a retry that fails for another reason is sent at once, and `attempt` still counts the tries
+not sent (the journal's `radio_open` `start` events show each of them). Apart from that the only thing that ever stops a message is the daily bound (2.3),
 and that is counted.
 
 ### 2.1 Body fields
