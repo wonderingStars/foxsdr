@@ -22,3 +22,10 @@ Existing pixel tests of test_slint_fitted shifted by one key (indices and elemen
 Cause: ui/system_bank.slint DropKey (and its twin in tools_bank.slint, the Radar fold) opened only when items.length > 0, and the host read the ports only when the SYSTEM bank's Serial section was first
 opened (system_publish.cpp sectionOpened, serialAsked_ once) - on a map page the list stayed empty and the click did nothing. Fix: DropKey `opening` callback on every click (GpsRowView -> SystemEvents.serial-refresh,
 the Radar fold the same), `empty-text` "No serial port was found." as one line in the popup.
+
+## Proof (all on D:/foxsdr-build/mr-dsp, Release)
+test_slint_photo_store 15/15, test_slint_photo_card 25/25 (break-it: picture key inert -> 10 fail), test_slint_fitted_show 4/4, test_slint_gps_chooser 5/5 (break-it: empty-text "" = the old dead click -> A fails),
+test_slint_fitted 629/629, test_slint_map_page 72/72, main_screen 84/84, tabs 299/299, host_kit 155/155, host_map 754/754, house_rules 392/392, core test_track_photo_cache 191/191, test_track_info_cache 2094/2094.
+Picture: D:/foxsdr-build/stage-photo/shots/card-selected.png (map page, aircraft selected: card at the foot of the list column, details, photo, credit, Go to / Follow / Close).
+Not done: Escape key for the card (Close key only); no test of the chooser inside the folded Map options; torn page not raised; no Fitted modules picture; the publisher-level behaviour (an open tab is not duplicated, a stopped module is
+started then shown) is existing/untested code paths driven only by reading; no real mouse; photo seen only from the plugin's FOXSDR_SYNTHETIC stand-in, never from the real service.
