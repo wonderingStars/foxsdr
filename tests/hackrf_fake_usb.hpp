@@ -132,6 +132,8 @@ public:
     };
     std::atomic<Exhausted> onExhausted{Exhausted::Timeout};
     std::atomic<bool> releaseBlock{false};
+    // The next N bulk reads FAIL (negative, Windows error 31) and then the pipe works again: a stalled endpoint that recovers, not a device that left.
+    std::atomic<int> failNextReads{0};
 
     // --- THE FIRMWARE'S BULK ENDPOINT -----------------------------------
     //
@@ -377,6 +379,10 @@ public:
         } clear{&inFlight_};
 
         if (!streaming_.load()) { return 0; }
+        if (failNextReads.load() > 0) {
+            failNextReads.fetch_sub(1);
+            return haltedRead();
+        }
         if (hostHalted_.load()) { return haltedRead(); }
         if (!rxMode_.load()) {
             // Transceiver off: the firmware primes nothing, so the read waits

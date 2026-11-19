@@ -221,6 +221,8 @@ public:
     static constexpr std::chrono::milliseconds kStreamHealthWindow{60000};
     std::string streamHealthLine();
     void setStreamHealthWindowForTest(std::chrono::milliseconds w);
+    // Tests only: how long of silence re-arms the stream, and how long a reader stuck inside a USB call is tolerated by read() (the product's 3 s and 20 s).
+    void setStallBoundsForTest(int silenceRearmAfterMs, int readerStuckAfterMs);
 
     // THE LINK. See the file header for why this is a separate object.
     // Public only because the reader thread's body is a free function in the
@@ -246,6 +248,13 @@ public:
         // Control calls waiting for `mutex`; while non-zero the reader stays
         // out of it (see controlLock in rtlsdr_source.cpp).
         std::atomic<int> controlWaiters{0};
+        // THE READER'S HEARTBEAT (steady_clock nanoseconds since its epoch): set at the top of every pass of the
+        // reader loop, and 0 while no reader runs. read() - on the pipeline's own thread - compares it with the clock,
+        // so a reader that is stuck INSIDE a USB call for good is a fault the pipeline hears (field fault 3, 2026-11-19).
+        std::atomic<std::int64_t> readerBeatNs{0};
+        // How long of nothing re-arms the stream, and how long a stuck reader is tolerated: the product's numbers, settable so a test need not wait them out.
+        std::atomic<int> silenceRearmAfterMs{3000};
+        std::atomic<int> readerStuckAfterMs{20000};
 
         // Written and read ONLY under `mutex` - except by a reader thread
         // that has been abandoned, which is exactly the point after which

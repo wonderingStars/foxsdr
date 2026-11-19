@@ -68,6 +68,22 @@ constexpr std::chrono::milliseconds kReaderStandAside{1};
 constexpr std::size_t kBulkBufferBytes = 16384;
 constexpr std::size_t kBulkBufferCount = 16;
 
+// A FAILED OR SILENT STREAM IS RE-ARMED BEFORE THE RADIO IS CALLED DEAD (field faults 2 and 3, 0.99.109, 2026-11-19). Plain integers, not
+// std::chrono constants: none of these is a wait on the shutdown path, and tests/test_shutdown_budget.cpp discovers chrono constants.
+//
+// A bulk read that FAILS is a stalled endpoint, not yet an unplugged dongle: winusb_device.cpp says in so many words that with the pipe halted
+// the first read returns Windows error 31 and the SECOND delivers, and the bench saw a tuner write refused the same way under full CPU load. One
+// failed read used to fault the radio for good ("it may have been unplugged"), and a real RTL-SDR that the scan listed again two seconds later
+// was closed five times that way in one afternoon. So the stream is taken down and brought back up (kMaxStreamRearms times) and only a stream
+// that fails again after that - or an error that says the device is gone - is a fault.
+constexpr int kMaxStreamRearms = 3;
+// A stream that delivers NOTHING for this long while the reader is alive (every bulk read timing out) is re-armed the same way. The chip
+// delivers a buffer every few milliseconds, so three seconds of nothing is not a quiet band (Link::silenceRearmAfterMs, 3000).
+// The re-arm budget is forgiven once samples have flowed for this long since the last re-arm.
+constexpr int kRearmForgiveAfterMs = 60000;
+// A reader that has not come round its loop for this long is stuck inside a USB call; read() says so as a fault (a reader parked in the
+// kernel cannot report anything itself). Far beyond every bound the loop is built on (a 50 ms read, a 750 ms lock wait). (Link::readerStuckAfterMs, 20000.)
+
 // The sample ring between the reader thread and read(). 2^19 samples is
 // ~164 ms at the highest rate the chip supports: long enough to absorb a
 // stalled consumer, short enough that latency stays under what a listener
@@ -248,12 +264,56 @@ std::unique_lock<std::timed_mutex> controlLock(RtlSdrSource::Link& link) {
     return lk;
 }
 
+std::int64_t steadyNowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// DOES THIS TRANSPORT ERROR SAY THE DEVICE IS GONE? Windows' own words for a device that left the bus (ERROR_DEVICE_NOT_CONNECTED 1167,
+// ERROR_NO_SUCH_DEVICE 433) and the transport's ("no longer present"). Anything else - error 31, a timeout, a cancelled transfer - is a
+// stalled stream, and is not called "unplugged".
+bool transportSaysGone(const std::string& text) {
+    static const char* const kGone[] = {"Windows error 1167", "Windows error 433", "no longer present", "gone", "removed", "not connected"};
+    for (const char* g : kGone) {
+        if (text.find(g) != std::string::npos) { return true; }
+    }
+    return false;
+}
+
+// THE STREAM TAKEN DOWN AND BROUGHT BACK, on the reader's own thread under the device lock (the lock every control call takes; the reader is the
+// only caller of readBulk, so nothing is inside the ring endBulkStream frees). The order is startStreamLocked's: the endpoint FIFO reset, then the
+// pipe (which resets the pipe itself first). False with `why` when the device would not take it - which is how a dongle that really left says so.
+bool rearmStream(RtlSdrSource::Link& link, std::string& why) {
+    std::unique_lock<std::timed_mutex> lk(link.mutex, kDeviceLockWait);
+    if (!lk.owns_lock()) {
+        why = "the radio was busy with a control call";
+        return false;
+    }
+    if (!link.transport || !link.rtl) {
+        why = "no radio open";
+        return false;
+    }
+    link.transport->endBulkStream();
+    if (!link.rtl->resetBuffer()) {
+        why = "the radio would not reset its endpoint";
+        return false;
+    }
+    if (!link.transport->beginBulkStream(kBulkEndpoint, kBulkBufferBytes, kBulkBufferCount)) {
+        why = link.transport->lastError();
+        return false;
+    }
+    return true;
+}
+
 // THE READER THREAD. A free function taking the link by shared pointer, so an
 // abandoned thread reads memory that is still alive - see the header.
 void readerLoop(std::shared_ptr<RtlSdrSource::Link> link) {
     std::vector<std::uint8_t> raw(kBulkBufferBytes);
     std::vector<std::complex<float>> conv(kBulkBufferBytes / 2);
+    int rearms = 0;
+    auto lastSamplesAt = std::chrono::steady_clock::now();
+    auto lastRearmAt = lastSamplesAt;
     while (link->readerRun.load(std::memory_order_relaxed)) {
+        link->readerBeatNs.store(steadyNowNs(), std::memory_order_relaxed);
         if (link->controlWaiters.load(std::memory_order_relaxed) > 0) {
             // A retune, a gain change, a stop: let it in. The transport's own
             // queue of bulk transfers keeps filling meanwhile.
@@ -262,6 +322,7 @@ void readerLoop(std::shared_ptr<RtlSdrSource::Link> link) {
         }
         int got = 0;
         std::uint64_t epoch = 0;
+        std::string readError;
         {
             std::unique_lock<std::timed_mutex> lk(link->mutex, kDeviceLockWait);
             if (!lk.owns_lock()) {
@@ -276,17 +337,47 @@ void readerLoop(std::shared_ptr<RtlSdrSource::Link> link) {
             epoch = link->rateEpoch.load(std::memory_order_relaxed);
             got = link->transport->readBulk(raw.data(), raw.size(),
                                             static_cast<unsigned>(kBulkReadTimeout.count()));
+            if (got < 0) { readError = link->transport->lastError(); }
         }
         if (!link->readerRun.load(std::memory_order_relaxed)) { break; }
         noteRead(*link, got, got > 0 ? static_cast<std::size_t>(got) / 2u : 0u);
-        if (got < 0) {
-            // The device is gone, or the pipe has failed. faulted() is what
-            // the pipeline's source loop polls; setting it and leaving is the
-            // whole of the recovery, because there is none.
-            noteFault(*link, "the radio stopped delivering samples (it may have been "
-                             "unplugged)",
-                      "reading samples");
-            break;
+        const auto nowT = std::chrono::steady_clock::now();
+        if (got > 0) {
+            lastSamplesAt = nowT;
+            if (rearms > 0 && nowT - lastRearmAt >= std::chrono::milliseconds(kRearmForgiveAfterMs)) { rearms = 0; }
+        }
+        const bool silent = got == 0 && nowT - lastSamplesAt >= std::chrono::milliseconds(link->silenceRearmAfterMs.load(std::memory_order_relaxed));
+        if (got < 0 || silent) {
+            // A FAILED READ IS A STALLED STREAM, and so is a stream that has said nothing for seconds; neither is yet a dead radio. Only an error that
+            // says the device left the bus is fatal at once. Everything else re-arms the stream (kMaxStreamRearms times) and the loop goes on; a stream
+            // that fails again afterwards is the fault, worded for what it is, with the transport's own text so the next report says WHICH error.
+            if (got < 0 && transportSaysGone(readError)) {
+                noteFault(*link, "the radio stopped delivering samples (it may have been unplugged): " + readError, "reading samples");
+                break;
+            }
+            if (rearms >= kMaxStreamRearms) {
+                char tail[64];
+                std::snprintf(tail, sizeof(tail), " after %d restarts of the stream", kMaxStreamRearms);
+                noteFault(*link,
+                          got < 0 ? "the radio stopped delivering samples" + std::string(tail) + (readError.empty() ? std::string() : ": " + readError)
+                                  : "the radio delivered nothing for " + std::to_string(link->silenceRearmAfterMs.load(std::memory_order_relaxed)) + " ms at a time" + std::string(tail),
+                          "reading samples");
+                break;
+            }
+            ++rearms;
+            core::health::raiseRecovered(core::health::Recovered::StreamRestart);
+            core::diagWarnf("source: the RTL-SDR %s%s%s; restarting the stream (attempt %d of %d)", got < 0 ? "read failed" : "delivered nothing",
+                            readError.empty() ? "" : ": ", readError.c_str(), rearms, kMaxStreamRearms);
+            std::string why;
+            const bool back = rearmStream(*link, why);
+            lastRearmAt = std::chrono::steady_clock::now();
+            lastSamplesAt = lastRearmAt;
+            if (!link->readerRun.load(std::memory_order_relaxed)) { break; }
+            if (!back) {
+                noteFault(*link, "the radio stopped delivering samples and the stream would not restart: " + why, "reading samples");
+                break;
+            }
+            continue;
         }
         if (got == 0) { continue; }
 
@@ -745,6 +836,7 @@ bool RtlSdrSource::start() {
         link_->health = Link::Health{};
         link_->healthEverWritten = false;
     }
+    link_->readerBeatNs.store(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);   // a stale beat from an earlier stream is not a stuck reader
     link_->readerRun.store(true, std::memory_order_relaxed);
     running_.store(true, std::memory_order_relaxed);
     // The promise the thread satisfies as its last act is what gives stop() a
@@ -813,6 +905,14 @@ void RtlSdrSource::stop() {
 
 std::size_t RtlSdrSource::read(std::complex<float>* dst, std::size_t n) {
     if (!link_->ring || n == 0) { return 0; }
+    // A READER THAT IS PARKED INSIDE A USB CALL FOR GOOD cannot say so; the pipeline's thread, which still comes here every few milliseconds, can.
+    // Without this the ring simply ran dry and the radio looked open and fine while it delivered nothing.
+    if (running_.load(std::memory_order_relaxed)) {
+        const std::int64_t beat = link_->readerBeatNs.load(std::memory_order_relaxed);
+        if (beat != 0 && steadyNowNs() - beat >= static_cast<std::int64_t>(link_->readerStuckAfterMs.load(std::memory_order_relaxed)) * 1000000 && !faulted()) {
+            noteFault(*link_, "the radio's USB transfer did not return for " + std::to_string(link_->readerStuckAfterMs.load(std::memory_order_relaxed)) + " ms", "reading samples");
+        }
+    }
     // A short bounded poll rather than an immediate zero: the ring is filled
     // by our own thread at the device's rate, so on a healthy radio the first
     // attempt almost always succeeds, and on an idle one the caller gets the
@@ -1328,6 +1428,11 @@ bool RtlSdrSource::setFrequencyCorrectionPpm(double ppm) {
 std::string RtlSdrSource::streamHealthLine() {
     std::lock_guard<std::mutex> lk(link_->healthMutex);
     return healthLineLocked(*link_);
+}
+
+void RtlSdrSource::setStallBoundsForTest(int silenceRearmAfterMs, int readerStuckAfterMs) {
+    link_->silenceRearmAfterMs.store(silenceRearmAfterMs, std::memory_order_relaxed);
+    link_->readerStuckAfterMs.store(readerStuckAfterMs, std::memory_order_relaxed);
 }
 
 void RtlSdrSource::setStreamHealthWindowForTest(std::chrono::milliseconds w) {

@@ -316,6 +316,8 @@ public:
     // Tests only: shorten the window so the reader's own reporting can be
     // seen without waiting a minute for it.
     void setStreamHealthWindowForTest(std::chrono::milliseconds w);
+    // Tests only: how long of silence re-arms the stream, and how long a reader stuck inside a USB call is tolerated by read() (the product's 3 s and 20 s).
+    void setStallBoundsForTest(int silenceRearmAfterMs, int readerStuckAfterMs);
 
     // Transfers the reader has had to drop because the ring was full - the
     // host fell behind, not the radio. Counted rather than merely logged
@@ -382,6 +384,13 @@ private:
         bool healthEverWritten = false;
         std::chrono::milliseconds healthWindow = kStreamHealthWindow;
         std::atomic<std::uint64_t> dropped{0};
+
+        // THE READER'S HEARTBEAT (steady_clock nanoseconds): set at the top of every pass of the reader loop, 0 while no reader runs. read() compares it with the
+        // clock, so a reader stuck INSIDE a USB call for good is a fault the pipeline hears (field fault 3, 2026-11-19: a HackRF whose reader said nothing
+        // for 449 s and 440 s while the radio looked open). Beside it, the product's silence and stuck bounds, settable so a test need not wait them out.
+        std::atomic<std::int64_t> readerBeatNs{0};
+        std::atomic<int> silenceRearmAfterMs{3000};
+        std::atomic<int> readerStuckAfterMs{20000};
     };
 
     // NEVER REASSIGNED, hence const: an abandoned reader holds its own copy of
@@ -430,6 +439,8 @@ private:
     // introduced to prevent, and making these static is what stops the
     // compiler from letting one be written by accident.
     static void readerThreadBody(std::shared_ptr<ReaderLink> link);
+    // The stream taken down and brought back (transceiver off, pipe cleared, transceiver on, ring queued), on the reader's own thread. See the .cpp.
+    static bool rearmStreamOn(ReaderLink& link, std::string& why);
     static void noteRead(ReaderLink& link, int ret, std::size_t samples, bool dropped);
     static std::string healthLineLocked(ReaderLink& link);  // link.healthMutex held
 
