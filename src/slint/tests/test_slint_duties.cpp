@@ -1771,6 +1771,86 @@ int main() {
         CHECK(e.interfaceHalf().messagesSeen == std::vector<std::string>{"AAAAAAAA"});   // GONE0000 was withdrawn: forgotten, and saved
     }
 
+    // ---- THE POPUP FOR A MESSAGE TO ONE RADIO (0.99.110, core/radio_message.hpp) ----
+    {
+        core::radiomessage::resetForTest();
+        const std::string salt = "0123456789abcdef";
+        const std::string key = "nesdr-smart-v5:00A1B2C3";
+        core::RadioMessage rm;
+        rm.id = "rmaaaa1111";
+        rm.date = "2026-11-19";
+        rm.text = "Check the antenna";
+        rm.salt = salt;
+        rm.hash = core::radioMessageHash(salt, key);
+        const core::KnownRadio mine{key, "NESDR Smart v5", "00A1B2C3"};
+
+        // the pure rule: the sentence names the model and the LAST FOUR characters of the serial, never the whole serial
+        RadioMessageModel pm = radioMessageFor(true, false, {rm}, {mine}, {});
+        CHECK(pm.shown && pm.id == "rmaaaa1111" && pm.text == "Check the antenna" && pm.date == "2026-11-19");
+        CHECK(pm.radio.find("NESDR Smart v5") != std::string::npos && pm.radio.find("B2C3") != std::string::npos && pm.radio.find("00A1") == std::string::npos);
+        CHECK(!radioMessageFor(true, false, {rm}, {}, {}).shown);                 // no radio found
+        CHECK(!radioMessageFor(false, false, {rm}, {mine}, {}).shown);            // the Updates tick is off
+        CHECK(!radioMessageFor(true, true, {rm}, {mine}, {}).shown);              // a Store copy
+        CHECK(!radioMessageFor(true, false, {rm}, {mine}, {"rmaaaa1111"}).shown);  // Seen
+
+        // the Seen list after a check keeps the radio message ids the answer still names, in order, and forgets the ones it does not
+        core::TeamMessage tm;
+        tm.id = "team0001";
+        tm.lines = {"x"};
+        CHECK(seenAfterCheck({"team0001", "rmaaaa1111", "gone"}, {tm}, {rm}) == (std::vector<std::string>{"team0001", "rmaaaa1111"}));
+        CHECK(seenAfterCheck({"rmaaaa1111"}, {}, {}).empty());
+
+        // through the duties: the answer arrives BEFORE the radio is found (nothing shown), the radio is plugged in later (shown), Seen saves at once and clears it
+        FakeWorld w;
+        w.seam = true;
+        w.facts["fact.config.interface"] = interfaceDoc(true, true);
+        HostDuties d(w, [] {});
+        d.start(bounded(30));
+        w.checkReady = true;
+        w.checkOutcome.ok = true;
+        w.checkOutcome.info = newerInfo();
+        w.checkOutcome.info.newer = false;
+        w.checkOutcome.info.radioMessages = {rm};
+        d.poll({});
+        CHECK(!d.radioMessage().shown);
+        core::radiomessage::noteRadio("airspy-hf-discovery:3B52A5E9", "Airspy HF+ Discovery", "3B52A5E9");   // another radio: not this message's
+        d.poll({});
+        CHECK(!d.radioMessage().shown);
+        core::radiomessage::noteRadio(key, "NESDR Smart v5", "00A1B2C3");                                  // the addressed radio, plugged in afterwards
+        d.poll({});
+        CHECK(d.takeRadioMessageChange() && d.radioMessage().shown && d.radioMessage().id == "rmaaaa1111");
+        CHECK(!d.takeRadioMessageChange());                                                                 // unchanged: no second notice
+        const std::size_t sent = w.submitted.size();
+        d.radioMessageSeen();
+        CHECK(w.submitted.size() == sent + 1 && w.submitted.back().find("rmaaaa1111") != std::string::npos);   // saved at once
+        CHECK(d.takeRadioMessageChange() && !d.radioMessage().shown);
+        d.radioMessageSeen();                                                                               // nothing shown: nothing saved
+        CHECK(w.submitted.size() == sent + 1);
+        // a start that has already seen it: not shown again
+        core::AppConfig seenCfg;
+        seenCfg.updateCheckEnabled = true;
+        seenCfg.messagesSeen = {"rmaaaa1111"};
+        FakeWorld v;
+        v.seam = true;
+        v.facts["fact.config.interface"] = core::serializeInterfaceHalf(seenCfg);
+        HostDuties e(v, [] {});
+        e.start(bounded(30));
+        v.checkReady = true;
+        v.checkOutcome.ok = true;
+        v.checkOutcome.info = newerInfo();
+        v.checkOutcome.info.radioMessages = {rm};
+        e.poll({});
+        CHECK(!e.radioMessage().shown);
+        CHECK(e.interfaceHalf().messagesSeen == std::vector<std::string>{"rmaaaa1111"});   // still named by the answer: kept
+        // switched off: the answer is dropped and nothing is shown
+        core::AppConfig off = d.interfaceHalf();
+        off.updateCheckEnabled = false;
+        (void)d.saveInterfaceHalf(off);
+        d.updateSettingChanged();
+        CHECK(!d.radioMessage().shown);
+        core::radiomessage::resetForTest();
+    }
+
     std::error_code cleanup;
     fs::remove_all(scratchDir(), cleanup);
     return testSummary("test_slint_duties");

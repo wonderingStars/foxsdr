@@ -74,6 +74,10 @@ std::string noteControlRefusedText(const void* source, const char* driverKey, Co
 // neither would leave a refusal nobody was told about (a driver that never learned to say it, or a branch of one that sets its error text and returns). The watch
 // settles it with one rule: it counts the refusals RAISED ON THIS THREAD since it was made (the driver call is synchronous, so a driver's own report is on the same
 // thread), and `noteRefusalIfSilent` reports only when there were none.
+// A SAMPLE RATE THE RADIO TOOK, changed live (contract 3.4: "whenever the user or the automatic control changes one"): a radio_settings event with
+// the rate it LANDED at and the thread's `why` ("user" unless a scope says otherwise), so the site's expected rate does not lag by a stream window.
+void noteRateApplied(const void* source, const char* driverKey, double landedHz);
+
 std::uint64_t refusalSequence();   // calls of noteControlRefused made on the calling thread so far (admitted or folded)
 // The same rule for a caller that cannot hold a watch across two functions: the sequence number taken before the driver call, and the report if it has not moved.
 void noteRefusalIfSilentSince(std::uint64_t sequenceBefore, const void* source, const char* driverKey, Control control, const std::string& text, bool userRange = false);

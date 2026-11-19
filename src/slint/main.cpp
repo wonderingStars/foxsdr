@@ -124,6 +124,7 @@
 #include "workspace_testseam.hpp"
 #include "plugin_kit.hpp"
 #include "handover_host.hpp"   // engine fixes 7: Legacy as a choice in the Layouts menu
+#include "radio_move_host.hpp"   // field fix A2: a radio held by another FoxSDR window - move it here, or leave it
 #include "core/window_handover.hpp"
 #include "core/sentinel.hpp"
 #include "signal_publish.hpp"
@@ -251,6 +252,7 @@ int main(int argc, char** argv) {
     }
 
     // THE RESTORE (the plugin scan, the settings file's load, the receiver's half applied...), then CASCADE_CONFIG_TEST's read-back line.
+    if (!bounded.bounded()) { service.engine().startHandoffServer("slint"); }   // field fix A2: before the saved radio is opened, so a radio held by another FoxSDR window can be offered to this one
     const EngineService::Restored restored = service.restore();
     // SCREEN LANE K: a NEW profile (no settings file was loaded and no first-run marker): the setup opens at the first tick. Decided here, before the engine's start writes the settings file.
     const bool laneKFirstRun = boot.frames < 0 && !configPath.empty() && !restored.loaded && cascade::core::sys::firstRunNeeded(std::filesystem::path(configPath).parent_path());
@@ -422,6 +424,16 @@ int main(int argc, char** argv) {
         ui->set_team_message_date(ss(t.date));
         ui->set_team_message_important(t.important);
         ui->set_team_message_lines(std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(lines)));
+    };
+
+    // THE POPUP FOR A MESSAGE TO ONE RADIO (0.99.110): the matched, unseen message, oldest first; the sheet itself waits behind any other sheet (ui/main.slint modal-busy)
+    const auto applyRadioMessage = [&] {
+        if (!duties.takeRadioMessageChange()) { return; }
+        const foxsdr::slinthost::RadioMessageModel& r = duties.radioMessage();
+        ui->set_radio_message_shown(r.shown);
+        ui->set_radio_message_date(ss(r.date));
+        ui->set_radio_message_text(ss(r.text));
+        ui->set_radio_message_radio(ss(r.radio));
     };
 
     // ---- host state ----
@@ -1329,8 +1341,16 @@ int main(int argc, char** argv) {
          [&] { ui->global<Handover>().set_open(false); },
          [](const char* s) { return std::string(cascade::i18n::tr(s)); }},
         handoverExit, configPath, boot.safePlugins);
-    ui->global<Handover>().on_go([&] { handoverHost.confirm(); });
-    ui->global<Handover>().on_stay([&] { handoverHost.cancel(); });
+    // FIELD FIX A2 (src/slint/radio_move_host.hpp): the same sheet asks whether to move a radio here from another FoxSDR window, and says when this window's radio was moved away.
+    foxsdr::slinthost::RadioMoveHost radioMoveHost(
+        {[&](const cascade::core::handoff::Sheet& s) {
+             auto& g = ui->global<Handover>();
+             g.set_title(ss(s.title)); g.set_text(ss(s.text)); g.set_go_label(ss(s.goLabel)); g.set_stay_label(ss(s.stayLabel)); g.set_open(true);
+         },
+         [&] { ui->global<Handover>().set_open(false); },
+         [&](bool move) { FoxCommand c = op(FOXAPP_OP_RADIO_HANDOFF); c.ival[0] = move ? 1 : 0; submit(c); }});
+    ui->global<Handover>().on_go([&] { if (radioMoveHost.open()) { radioMoveHost.confirm(); } else { handoverHost.confirm(); } });
+    ui->global<Handover>().on_stay([&] { if (radioMoveHost.open()) { radioMoveHost.cancel(); } else { handoverHost.cancel(); } });
     int handoverAt = 0;   // FOXSDR_HANDOVER_AT=<tick>: a drive script chooses Legacy at that tick (window_handover.hpp, test seams)
     if (const char* e = std::getenv(cascade::core::handover::kAtEnv); e != nullptr) { handoverAt = std::atoi(e); }
     handoverHost.showNote(cascade::core::handover::noteSentence(boot.handover, cascade::core::handover::Window::New));   // started by a hand-over that could not open the other window
@@ -2213,6 +2233,7 @@ int main(int argc, char** argv) {
     // remote); the fact follows on the next publish, so the box is set here as well for the tick in between.
     ui->on_follow_band_plan_toggled([&](bool v) { followBandPlan = v; FoxCommand c = op(FOXAPI_OP_SET_BAND_FOLLOW); c.ival[0] = v ? 1 : 0; submit(c); });
     ui->on_team_message_seen([&] { duties.teamMessageSeen(); applyTeamCard(); });
+    ui->on_radio_message_seen([&] { duties.radioMessageSeen(); applyRadioMessage(); });
     ui->on_update_primary_clicked([&] { duties.updatePrimaryClicked(); applyUpdateCard(); });
     ui->on_update_dismissed([&] { duties.updateDismissed(); applyUpdateCard(); });
 
@@ -3100,6 +3121,7 @@ int main(int argc, char** argv) {
         }
         ++tickNo;
         if (handoverAt > 0 && tickNo == handoverAt) { ui->invoke_menu_activated(1993); }   // engine fixes 7 (test seam)
+        if (tickNo % 4 == 1) { std::string hq, hm; world.fact("fact.radio.handoff", hq); world.fact("fact.radio.handoffMoved", hm); radioMoveHost.poll(hq, hm); }   // field fix A2
         if (addSheetCapture) { addSheetCapture(tickNo); }
         if (tickNo % 8 == 3) {   // lane B: the band zoom's list follows the baseband and the bands (the first publish may precede the first frame)
             std::string zsig;
@@ -4344,6 +4366,7 @@ int main(int argc, char** argv) {
         duties.poll(in);
         applyUpdateCard();
         applyTeamCard();
+        applyRadioMessage();
         if (frameMeter) {
             frameMeter->tickEnd(meterBegan);
             if (frameMeter->wantsSnapshots() && bounded.ticks() % 5 == 0) {

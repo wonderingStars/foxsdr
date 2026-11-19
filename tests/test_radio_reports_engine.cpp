@@ -3,6 +3,7 @@
 // validator (node, where it is found). No radio, no network, no window on the desk (a hermetic engine behind a test window; run it on the hidden desktop).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <complex>
@@ -33,6 +34,7 @@
 #include "core/health_events.hpp"
 #include "core/radio_events.hpp"
 #include "core/radio_report.hpp"
+#include "core/radio_handoff.hpp"
 #include "core/radio_reporter.hpp"
 #include "engine/engine.hpp"
 #include "gui/app_window.hpp"
@@ -281,6 +283,24 @@ struct AppWindowTestAccess {
         passseam::on(th::engine(a), [&] { (void)th::engine(a).applyCommand(q.c, q.longText); });
     }
     static void retune(AppWindow& a, double hz) { passseam::on(th::engine(a), [&] { th::engine(a).applyRetuneNow(hz); }); }
+    // FIELD FIX A2: the radio hand-off between two FoxSDR windows (engine_handoff.cpp)
+    static void startHandoff(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).startHandoffServer("slint"); }); }
+    static void pumpHandoff(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).pumpHandoff(); }); }
+    static std::string handoffFact(AppWindow& a, const char* name) {
+        return passseam::read<std::string>(th::engine(a), [&] {
+            std::string v;
+            th::engine(a).handoffFacts([&](const std::string& n, const std::string& val) { if (n == name) { v = val; } });
+            return v;
+        });
+    }
+    static bool retryArmed(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).savedRadioRetryBusy_; }); }
+    static void answer(AppWindow& a, bool move) {
+        auto q = cascade::core::cmd::make(FOXAPP_OP_RADIO_HANDOFF);
+        q.ival[0] = move ? 1 : 0;
+        passseam::on(th::engine(a), [&] { (void)th::engine(a).applyCommand(q, std::string()); });
+    }
+    static void takeQueued(AppWindow& a, bool on) { passseam::on(th::engine(a), [&] { th::engine(a).rx().iqStartQueued_ = on; }); }
+    static std::string sourceError(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).rx().sourceError_; }); }
     static void startReceiver(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).startReceiver(); }); }
     static void minute(AppWindow& a, std::uint64_t read, std::uint64_t dropped) { passseam::on(th::engine(a), [&] { th::engine(a).journalStreamMinute(read, dropped, 100); }); }
 };
@@ -429,8 +449,287 @@ void resetFake() {
 
 }  // namespace
 
-int main() {
+// FIELD FIX A2: "the other FoxSDR window", a child process of this very program (`--holder <mode>`): it holds the radio "rtlsdr|00000001" on the hand-off pipe under the test's own prefix and
+// answers a release request as the mode says (release, refuse, hang).
+int holderMain(const std::string& mode) {
+    cascade::core::handoff::Hooks hooks;
+    hooks.holds = [](const std::string& key) { return key == "rtlsdr|00000001"; };
+    hooks.release = [mode](const std::string&) {
+        cascade::core::handoff::ReleaseResult r;
+        if (mode == "hang") { std::this_thread::sleep_for(std::chrono::seconds(9)); }
+        if (mode == "refuse") { r.result = cascade::core::handoff::Release::Refused; r.code = "recording"; return r; }
+        r.result = cascade::core::handoff::Release::Released;
+        return r;
+    };
+    cascade::core::handoff::Server server;
+    if (!server.start(cascade::core::handoff::defaultPrefix(), "slint", hooks)) { return 3; }
+    std::this_thread::sleep_for(std::chrono::seconds(60));   // the parent ends this process
+    return 0;
+}
+
+struct Holder {
+    PROCESS_INFORMATION pi{};
+    bool started = false;
+    explicit Holder(const char* mode) {
+        char exe[MAX_PATH] = {0};
+        GetModuleFileNameA(nullptr, exe, MAX_PATH);
+        std::string cl = std::string("\"") + exe + "\" --holder " + mode;
+        STARTUPINFOA si{};
+        si.cb = sizeof(si);
+        started = CreateProcessA(nullptr, cl.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi) != FALSE;
+        cascade::core::handoff::Holder h;
+        const auto t0 = std::chrono::steady_clock::now();
+        while (started && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(10) &&
+               !cascade::core::handoff::findHolder(cascade::core::handoff::defaultPrefix(), "rtlsdr|00000001", 500, h)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    }
+    ~Holder() {
+        if (started) {
+            TerminateProcess(pi.hProcess, 0);
+            WaitForSingleObject(pi.hProcess, 2000);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        }
+    }
+};
+
+// pump the hand-off until the fact has "<seq><TAB><state><TAB>" (or the time is up)
+bool waitHandoffState(cascade::gui::AppWindow& app, const char* state, int ms) {
+    const auto t0 = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(ms)) {
+        Access::pumpHandoff(app);
+        if (Access::handoffFact(app, "radio.handoff").find(std::string("\t") + state + "\t") != std::string::npos) { return true; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    std::printf("    gave up waiting for %s; the fact is: %s\n", state, Access::handoffFact(app, "radio.handoff").c_str());
+    return false;
+}
+
+// FIELD FIX A2 scenarios, out of main so its stack frame stays small
+void handoffScenarios(std::vector<json>& everything) {
+    auto keep = [&everything](const std::vector<json>& m) { everything.insert(everything.end(), m.begin(), m.end()); };
+    // --- FIELD FIX A2: THE RADIO IS HELD BY ANOTHER FOXSDR WINDOW (core/radio_handoff.hpp, engine/engine_handoff.cpp) ------------------------------------------------------------------
+    {
+        std::printf("  busy, and the holder is another FoxSDR window: ONE question, one report, no retry loop; Move it here opens the radio and files nothing more\n");
+        resetFake();
+        g_failures = 1;
+        g_failText = cascade::usb::kInUseError;
+        Holder other("release");
+        CHECK(other.started);
+        th::TestWindow app;
+        Rig rig("handoffmove");
+        rig.start();
+        Access::startHandoff(app);
+        Access::clock(app, 0.0);
+        Access::restore(app, savedRadio());
+        CHECK(waitHandoffState(app, "ask", 8000));
+        const std::string ask = Access::handoffFact(app, "radio.handoff");
+        std::printf("    fact: %s\n", ask.c_str());
+        CHECK(ask.rfind("1\task\tGeneric RTL2832U\t0001\t", 0) == 0);   // sequence 1, the model, the last four of the serial and nothing more of it
+        CHECK(ask.find("00000001") == std::string::npos);
+        CHECK(!Access::retryArmed(app));   // no retry loop behind the question
+        double t = 0.0;
+        for (int i = 0; i < 5; ++i) {   // time passes, the retries that would have run do not, and the question is not asked again
+            t += 20.0;
+            Access::clock(app, t);
+            Access::poll(app);
+            Access::pumpHandoff(app);
+        }
+        CHECK(g_opens == 1);
+        CHECK(Access::handoffFact(app, "radio.handoff") == ask);
+        CHECK(ofKind(queued(rig.qdir()), "radio_fail").size() == 1);
+        Access::answer(app, true);
+        const auto t0 = std::chrono::steady_clock::now();
+        while (!Access::deviceOpen(app) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(10)) {
+            Access::pumpHandoff(app);
+            Access::settle(app);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(Access::deviceOpen(app));
+        CHECK(Access::handoffFact(app, "radio.handoff").empty());
+        const std::vector<json> q = queued(rig.qdir());
+        CHECK(ofKind(q, "radio_fail").size() == 1);   // the move is not a failure
+        std::size_t oks = 0;
+        for (const json& o : ofKind(q, "radio_open")) { if (o["body"]["phase"] == "ok") { ++oks; } }
+        CHECK(oks == 1);
+        keep(q);
+    }
+    {
+        std::printf("  busy, and no FoxSDR window holds it: the plain sentence, once, no move; the retries go on as before\n");
+        resetFake();
+        g_failures = 1;
+        g_failText = cascade::usb::kInUseError;
+        th::TestWindow app;
+        Rig rig("handoffother");
+        rig.start();
+        Access::startHandoff(app);
+        Access::clock(app, 0.0);
+        Access::restore(app, savedRadio());
+        CHECK(waitHandoffState(app, "other", 8000));
+        CHECK(Access::retryArmed(app));
+        Access::answer(app, true);   // a move was never offered: an answer to "move" changes nothing about the radio
+        CHECK(Access::handoffFact(app, "radio.handoff").empty());
+        CHECK(!Access::deviceOpen(app));
+        Access::answer(app, false);   // nothing is open any more
+        keep(queued(rig.qdir()));
+    }
+    for (const char* mode : {"refuse", "hang"}) {
+        std::printf("  Move it here, and the other window %s: said, nothing changed, no failure report\n", std::string(mode) == "refuse" ? "refuses (a recording)" : "does not answer in time");
+        resetFake();
+        g_failures = 1;
+        g_failText = cascade::usb::kInUseError;
+        Holder other(mode);
+        CHECK(other.started);
+        th::TestWindow app;
+        Rig rig("handoffno");
+        rig.start();
+        Access::startHandoff(app);
+        Access::restore(app, savedRadio());
+        CHECK(waitHandoffState(app, "ask", 8000));
+        Access::answer(app, true);
+        const bool refuse = std::string(mode) == "refuse";
+        CHECK(waitHandoffState(app, refuse ? "refused" : "timeout", 12000));
+        const std::string f = Access::handoffFact(app, "radio.handoff");
+        if (refuse) { CHECK(f.find("recording") != std::string::npos); }
+        CHECK(!Access::deviceOpen(app));
+        CHECK(ofKind(queued(rig.qdir()), "radio_fail").size() == 1);
+        Access::answer(app, false);
+        CHECK(Access::handoffFact(app, "radio.handoff").empty());
+    }
+    {
+        std::printf("  the HOLDER side: asked to let its radio go, it goes to the generator and leaves the notice; refused while a take is queued\n");
+        resetFake();
+        th::TestWindow app;
+        Rig rig("handoffholder");
+        rig.start();
+        Access::startHandoff(app);
+        Access::restore(app, savedRadio());
+        CHECK(Access::deviceOpen(app));
+        cascade::core::handoff::Holder self;
+        self.pipe = "FoxSDR-handoff-" + std::string(std::getenv("FOXSDR_INSTANCE_SCOPE")) + "-" + std::to_string(static_cast<unsigned long>(GetCurrentProcessId()));
+        auto ask = [&](cascade::core::handoff::ReleaseResult& out) {
+            std::thread asker([&] { out = cascade::core::handoff::requestRelease(self, "rtlsdr|00000001", 8000); });
+            const auto t1 = std::chrono::steady_clock::now();
+            while (out.result == cascade::core::handoff::Release::NoAnswer && std::chrono::steady_clock::now() - t1 < std::chrono::seconds(6)) {
+                Access::pumpHandoff(app);
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                if (std::chrono::steady_clock::now() - t1 > std::chrono::milliseconds(500) && out.result != cascade::core::handoff::Release::NoAnswer) { break; }
+            }
+            asker.join();
+        };
+        Access::takeQueued(app, true);
+        cascade::core::handoff::ReleaseResult r1;
+        ask(r1);
+        CHECK(r1.result == cascade::core::handoff::Release::Refused && r1.code == "recording");
+        CHECK(Access::deviceOpen(app));   // the radio is still here
+        Access::takeQueued(app, false);
+        cascade::core::handoff::ReleaseResult r2;
+        ask(r2);
+        CHECK(r2.result == cascade::core::handoff::Release::Released);
+        CHECK(!Access::deviceOpen(app));
+        CHECK(Access::sourceError(app).find("moved to another FoxSDR window") != std::string::npos);
+        CHECK(Access::handoffFact(app, "radio.handoffMoved").rfind("1\tmoved\tGeneric RTL2832U\t0001", 0) == 0);
+        cascade::core::handoff::ReleaseResult r3;   // and a second request finds nothing held
+        ask(r3);
+        if (r3.result != cascade::core::handoff::Release::NotHeld) { std::printf("    third request answered %d (code %s)\n", static_cast<int>(r3.result), r3.code.c_str()); }
+        CHECK(r3.result == cascade::core::handoff::Release::NotHeld);
+    }
+
+}
+
+// FIELD FIX A3 scenarios
+void seriesScenarios(std::vector<json>& everything) {
+    auto keep = [&everything](const std::vector<json>& m) { everything.insert(everything.end(), m.begin(), m.end()); };
+    // --- FIELD FIX A3: a series of busy retries that ends in giving up reports its first failure and its last, and the last one's attempt is the real ordinal ---
+    {
+        std::printf("  a busy series that never ends well: the restore and the final try are reported, the tries between are not\n");
+        resetFake();
+        g_failures = 100;
+        g_failText = cascade::usb::kInUseError;
+        th::TestWindow app;
+        Rig rig("busyfull");
+        rig.start();
+        Access::clock(app, 0.0);
+        Access::restore(app, savedRadio());
+        double t = 0.0;
+        for (const double delay : {2.0, 4.0, 8.0, 16.0}) {
+            t += delay;
+            Access::clock(app, t);
+            Access::poll(app);
+            CHECK(Access::settle(app));
+        }
+        // the series is over: a fifth poll must not try again
+        t += 64.0;
+        Access::clock(app, t);
+        Access::poll(app);
+        CHECK(Access::settle(app));
+        const std::vector<json> q = queued(rig.qdir());
+        std::vector<json> fails = ofKind(q, "radio_fail");
+        if (fails.size() == 2 && fails[0]["body"]["attempt"].get<long long>() > fails[1]["body"]["attempt"].get<long long>()) { fails[0].swap(fails[1]); }   // the queue is a directory: no order
+        CHECK(fails.size() == 2);
+        if (fails.size() == 2) {
+            CHECK(fails[0]["body"]["trigger"] == "startup-restore" && fails[0]["body"]["attempt"] == 1);
+            CHECK(fails[1]["body"]["trigger"] == "saved-retry" && fails[1]["body"]["attempt"] == 5);   // the ordinal counts the tries not sent
+            CHECK(fails[1]["body"]["reasonClass"] == "busy");
+        }
+        std::size_t starts = 0;
+        for (const json& o : ofKind(q, "radio_open")) { if (o["body"]["phase"] == "start") { ++starts; } }
+        CHECK(starts == 5);   // the journal still shows every try
+        keep(q);
+    }
+
+    // --- FIELD FIX A3: a retry that fails for a DIFFERENT reason is reported at once, whatever its place in the series ---
+    {
+        std::printf("  a busy restore whose first retry fails another way: that failure is reported\n");
+        resetFake();
+        g_failures = 1;
+        g_failText = cascade::usb::kInUseError;
+        th::TestWindow app;
+        Rig rig("busythenother");
+        rig.start();
+        Access::clock(app, 0.0);
+        Access::restore(app, savedRadio());
+        g_failures = 5;
+        g_failText = "the radio is no longer present";
+        Access::clock(app, 2.0);
+        Access::poll(app);
+        CHECK(Access::settle(app));
+        std::vector<json> fails = ofKind(queued(rig.qdir()), "radio_fail");
+        if (fails.size() == 2 && fails[0]["body"]["attempt"].get<long long>() > fails[1]["body"]["attempt"].get<long long>()) { fails[0].swap(fails[1]); }   // the queue is a directory: no order
+        CHECK(fails.size() == 2);
+        if (fails.size() == 2) { std::printf("    second: %s / %s / %s\n", fails[1]["body"]["trigger"].get<std::string>().c_str(), fails[1]["body"]["reasonClass"].get<std::string>().c_str(), fails[1]["body"]["reason"].get<std::string>().c_str()); }
+        CHECK(fails.size() != 2 || (fails[1]["body"]["trigger"] == "saved-retry" && fails[1]["body"]["reasonClass"] != "busy"));
+    }
+
+}
+
+// W2 (field data 2026-11-19): a radio SoapySDR lists that a native driver already listed (the same serial) is one radio_found, not a phantom row. (A function of
+// its own: main's frame is already near the stack limit and one more block of locals overflowed it.)
+static __declspec(noinline) void phantomFoundTest() {
+    std::printf("  a radio listed by the native driver and again by SoapySDR is said once per scan\n");
+    resetFake();
+    g_soapyList = {{"RTL-SDR", "driver=rtlsdr, serial=00000001"}, {"Other Radio", "driver=other, serial=ZZ12345678"}};
+    th::TestWindow app;
+    Rig rig("phantom");
+    rig.start();
+    Access::scanBoth(app);
+    g_soapyList.clear();
+    int stock = 0, other = 0;
+    for (const json& f : ofKind(queued(rig.qdir()), "radio_found")) {
+        if (f["body"]["serial"] == "00000001") { ++stock; }
+        if (f["body"]["serial"] == "ZZ12345678") { ++other; }
+    }
+    std::printf("stock=%d other=%d\n", stock, other);
+    CHECK(stock == 1);   // the native row only: the soapy twin of it is the same radio
+    CHECK(other == 1);   // a radio only SoapySDR lists is still said
+}
+
+int main(int argc, char** argv) {
+    if (argc >= 3 && std::string(argv[1]) == "--holder") { return holderMain(argv[2]); }
     std::printf("test_radio_reports_engine\n");
+    setEnv("CASCADE_CONFIG_TEST", "1");
+    setEnv("FOXSDR_INSTANCE_SCOPE", "rre" + std::to_string(static_cast<unsigned long>(GetCurrentProcessId())));
     isolate();
     Access::installHooks();
     std::vector<json> everything;
@@ -456,7 +755,10 @@ int main() {
         }
         const std::vector<json> q = queued(rig.qdir());
         const std::vector<json> fails = ofKind(q, "radio_fail");
-        CHECK(fails.size() == 3);   // the restore and two busy-again retries: three failures, three reports (the anonymous count skips the retries)
+        // FIELD FIX A3 (2026-11-19): three failures, ONE report. A busy-again retry in the middle of a series is the same incident as the start-up
+        // restore's report (the 42958e install sent five reports in thirty seconds for one held dongle); the series' LAST failure is reported (below)
+        // and so is a different reason. The retries are still in the journal (radio_open start) and still counted in `attempt`.
+        CHECK(fails.size() == 1);
         std::set<std::string> triggers;
         long long maxAttempt = 0;
         for (const json& f : fails) {
@@ -472,8 +774,8 @@ int main() {
             CHECK(f["body"]["superseded"] == false);
             CHECK(f["installId"] == kInstallId);
         }
-        CHECK(triggers == (std::set<std::string>{"startup-restore", "saved-retry"}));
-        CHECK(maxAttempt == 3);
+        CHECK(triggers == (std::set<std::string>{"startup-restore"}));
+        CHECK(maxAttempt == 1);
         // the serial is its own field and nowhere in the sentence
         for (const json& f : fails) { CHECK(f["body"]["reason"].get<std::string>().find("00000001") == std::string::npos); }
         // the journal: an open that began (on disk before the call), and nothing "ok" yet
@@ -498,9 +800,12 @@ int main() {
         const std::vector<json> settings = ofKind(after, "radio_settings");
         CHECK(settings.size() >= 1);
         if (!settings.empty()) { CHECK(settings[0]["body"]["why"] == "open" && settings[0]["body"]["sampleRateSps"] == 2400000); }
-        CHECK(rr::global().stats().failuresQueued == 3);
+        CHECK(rr::global().stats().failuresQueued == 1);   // (field fix A3: the two busy-again retries are counted in `attempt`, not queued)
         keep(after);
     }
+
+    handoffScenarios(everything);   // (a function of its own: main's frame was at the stack's limit)
+    seriesScenarios(everything);
 
     // --- the D3 sentence through the real engine -------------------------------------------------------------------------------------------------
     {
@@ -686,6 +991,8 @@ int main() {
         // ...and each sits beside the anonymous count it must never replace
         CHECK(count(engine, "noteRadioFail(") >= 2 && count(text("engine_soundcard.cpp"), "noteRadioFail(") == 1);
     }
+
+    phantomFoundTest();
 
     // --- THE JOURNAL OF A RADIO THAT OPENS: found, open, settings, stream, close ---------------------------------------------------------------------
     {
@@ -956,8 +1263,16 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(400));
         Access::pass(app);
         Access::pass(app);
+        // A2 (field data 2026-11-19: 38 radio_stream events after a radio's close, one install): a radio that faulted is over, and its minutes stop. The
+        // slot stays open until the pass sees the radio leave (or the quit), but the windows that follow a fault say nothing about a radio that is gone.
+        Access::ageOpenRadio(app, 60.0);
+        Access::minute(app, 0, 0);
+        Access::ageOpenRadio(app, 60.0);
+        Access::minute(app, 0, 0);
+        Access::pass(app);
         g_netFault = false;
         Access::quit(app);
+        CHECK(ofKind(queued(rig.qdir()), "radio_stream").empty());
         const std::vector<json> closes = ofKind(queued(rig.qdir()), "radio_close");
         CHECK(closes.size() == 1);
         if (!closes.empty()) { CHECK(closes[0]["body"]["cause"] == "fault"); }

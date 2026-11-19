@@ -166,6 +166,16 @@ int main() {
         // every path becomes <path>
         CHECK(pathsToToken("opened C:\\Users\\<user>\\x\\y.log, then /home/<user>/z") == "opened <path>, then <path>");
         CHECK(pathsToToken("tcp://host:1 is not a path") == "tcp://host:1 is not a path");
+        // A PATH WITH A SPACE IN A FOLDER NAME IS TAKEN WHOLE (field data 2026-11-19: 16 of 20 reports kept the tail of the SDRplay API path after
+        // "<path>" because the path ended at the space of "C:/Program Files"; a folder with a name in it would have leaked the name the same way).
+        CHECK(pathsToToken("SDRplay API - C:\\Program Files\\SDRplay\\API\\x64\\sdrplay_api.dll was not found") == "SDRplay API - <path> was not found");
+        CHECK(pathsToToken("SDRplay API - C:\\Program Files\\SDRplay\\API\\x64\\<file>") == "SDRplay API - <path>");
+        CHECK(pathsToToken("loaded C:\\Program Files (x86)\\Foo Bar\\x64\\a.dll, next") == "loaded <path>, next");
+        CHECK(pathsToToken("cannot open C:\\Users\\John Smith\\AppData\\Local\\FoxSDR\\x.log;") == "cannot open <path>;");
+        CHECK(pathsToToken("cannot open C:\\Users\\<user>\\AppData\\Local\\FoxSDR\\x.log;") == "cannot open <path>;");
+        // ...but a plain word after a finished file name is not swallowed
+        CHECK(pathsToToken("opened C:\\a\\b.log then C:\\c\\d.log") == "opened <path> then <path>");
+        CHECK(pathsToToken("opened C:\\a\\b then it failed") == "opened <path> then it failed");
         CHECK(pathsToToken("no paths here") == "no paths here");
         // empty reason is still a reason; long text is cut on a character boundary
         CHECK(!scrubReason("", "").empty());

@@ -230,6 +230,7 @@ std::uint64_t Engine::apiListsFingerprint() {
         f.value(static_cast<long long>(std::lround(pr.pipeline_.amDetectorOffsetHz() / 10.0)));
     }
     f.value(hotplugVersion_);   // the hot-plug counts (engine_hotplug.cpp)
+    f.value(handoffVersion_);   // the radio hand-off question (engine_handoff.cpp)
     f.value(wireCVersion());   // wire-c: the settings of wiring lane C (engine_wire_c.cpp)
     f.text(markerError_);
     // The DSP chain's input rate (API 0.3 8.5, fact.input.rateHz): the source's rate
@@ -1434,6 +1435,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     fact("smeter.cal.message", smeterMessage_, true);
     fact("smeter.cal.devices", std::to_string(smeterCal_.size()), true);
     // HOT-PLUG (engine serial lane A, R10): whether the device-change notice is running and what it has counted (counts only).
+    handoffFacts([&fact](const std::string& name, const std::string& value) { fact(name, value, true); });   // field fix A2 (LOCAL: a radio's serial ending is the operator's)
     fact("hotplug.on", hotplugWatch_ ? "1" : "0");
     fact("hotplug.bursts", std::to_string(hotplugBursts_));
     fact("hotplug.arrivals", std::to_string(hotplugArrivalsTotal_));

@@ -402,7 +402,22 @@ std::string pathsToToken(const std::string& s) {
                                    (startsWithNoCase(s, i + 1, "home") && i + 5 < s.size() && isSlash(s[i + 5])))) { path = true; }
         if (!path) { out.push_back(s[i]); ++i; continue; }
         std::size_t j = i + 1;
-        while (j < s.size() && !pathStop(s[j])) { ++j; }
+        const bool drivePath = isAlpha(s[i]);
+        for (;;) {
+            while (j < s.size() && !pathStop(s[j])) { ++j; }
+            // A WINDOWS PATH CAN HAVE A SPACE IN A FOLDER NAME ("C:\Program Files\...", a profile folder "John Smith"): when the path stopped at a space,
+            // and the folder being read has no dot (so it is not a file name that ended the path), and the next folder - words made of the characters
+            // a folder name has - is followed by a separator, the path goes on. Field data 2026-11-19: 16 reports kept the tail after "C:\Program".
+            if (!drivePath || j >= s.size() || s[j] != ' ') { break; }
+            std::size_t segStart = j;
+            while (segStart > i && s[segStart - 1] != '\\' && s[segStart - 1] != '/') { --segStart; }
+            if (s.find('.', segStart) < j) { break; }
+            std::size_t k = j + 1;
+            while (k < s.size() && k - j <= 48 && s[k] != '\\' && s[k] != '/' &&
+                   (isWordChar(s[k]) || s[k] == ' ' || s[k] == '.' || s[k] == '-' || s[k] == '(' || s[k] == ')' || s[k] == '&' || s[k] == '+')) { ++k; }
+            if (k >= s.size() || (s[k] != '\\' && s[k] != '/') || k == j + 1) { break; }
+            j = k + 1;
+        }
         out += "<path>";
         i = j;
     }

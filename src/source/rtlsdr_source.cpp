@@ -472,6 +472,10 @@ RtlSdrSource::~RtlSdrSource() { closeDevice(); }
 
 void RtlSdrSource::setError(std::string msg) {
     std::lock_guard<std::mutex> lk(link_->errorMutex);
+    // A LATCHED FAULT KEEPS ITS OWN WORDS. Every later call on a dead radio is refused with "this radio has faulted; reopen it", and that refusal
+    // used to replace what the fault said: the journal's close event for a radio read "this radio has faulted; reopen it" and nothing of why it
+    // faulted (field fix A). clearError() lifts the latch when the radio is opened again.
+    if (link_->faulted) { return; }
     link_->lastError = std::move(msg);
 }
 

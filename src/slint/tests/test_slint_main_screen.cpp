@@ -425,6 +425,46 @@ int main() {
         renderAt(W, H);
     }
 
+    // ---- A MESSAGE FOR ONE RADIO (0.99.110): over the window only while no other sheet is up; it waits behind one and comes when the last closes ----
+    {
+        const Frame none = renderAt(W, H);
+        const std::string cornerBefore = hex(none.at(8, 120));
+        const std::string centreBefore = hex(none.at(static_cast<int>(W) / 2, static_cast<int>(H) / 2));
+        CHECK(!ui->get_modal_busy() && !ui->get_radio_message_visible());
+        ui->set_radio_message_radio(ss("For your radio: NESDR Smart v5, serial ending B2C3"));
+        ui->set_radio_message_date(ss("2026-11-19"));
+        ui->set_radio_message_text(ss("<b>Plain</b> text only: https://example.test is not a link"));
+        ui->set_radio_message_shown(true);
+        const Frame shown = renderAt(W, H);
+        CHECK(ui->get_radio_message_visible());
+        CHECK(hex(shown.at(8, 120)) != cornerBefore);   // the dimmed backdrop is over the window
+        shown.savePng(shotDir() + "main-screen-radio-message.png");
+        // every other sheet queues it: shown requested, not visible; the last one closing lets it through
+        ui->set_about_open(true);
+        renderAt(W, H);
+        CHECK(ui->get_modal_busy() && !ui->get_radio_message_visible());
+        ui->set_mute_question_open(true);
+        ui->set_about_open(false);
+        renderAt(W, H);
+        CHECK(ui->get_modal_busy() && !ui->get_radio_message_visible());   // the second one still holds it back
+        ui->set_bias_question_open(true);
+        ui->set_mute_question_open(false);
+        renderAt(W, H);
+        CHECK(ui->get_modal_busy() && !ui->get_radio_message_visible());
+        ui->set_bias_question_open(false);
+        renderAt(W, H);
+        CHECK(!ui->get_modal_busy() && ui->get_radio_message_visible());
+        // Seen is the host's: the window raises it
+        int seenCalls = 0;
+        ui->on_radio_message_seen([&] { ++seenCalls; });
+        ui->invoke_radio_message_seen();
+        CHECK(seenCalls == 1);
+        ui->set_radio_message_shown(false);
+        const Frame gone = renderAt(W, H);
+        CHECK(!ui->get_radio_message_visible());
+        CHECK(hex(gone.at(8, 120)) == cornerBefore && hex(gone.at(static_cast<int>(W) / 2, static_cast<int>(H) / 2)) == centreBefore);
+    }
+
     // ---- a status chip expands to its detail lines (a popup: it takes the clicks after it, so it is tested last) ----
     click(ui->window(), 20, 886);                       // the RECEIVER status chip
     CHECK(statusClicks == 0);

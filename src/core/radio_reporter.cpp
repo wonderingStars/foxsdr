@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/radio_reporter.hpp"
+
+#include "core/radio_message.hpp"
 #include "core/report_send_guard.hpp"
 
 #include <algorithm>
@@ -272,8 +274,9 @@ struct Reporter::Impl {
     int failStreak = 0;
     bool urgent = false;
     bool configuredOnce = false;
-    struct PreFail { FailureInput in; std::vector<std::string> ring; std::int64_t at; };
-    struct PreEvent { Event ev; std::int64_t at; };
+    struct PreFail { FailureInput in; std::vector<std::string> ring; std::int64_t at; std::uint64_t order = 0; };
+    struct PreEvent { Event ev; std::int64_t at; std::uint64_t order = 0; };
+    std::uint64_t preOrder = 0;   // arrival order across both lists: they are filed in it, so a failure never gets a lower seq than the open start before it
     std::vector<PreFail> preFails;
     std::vector<PreEvent> preEvents;
 
@@ -832,6 +835,7 @@ struct Reporter::Impl {
     void fileFailureLocked(const FailureInput& in, const std::vector<std::string>& logRing, std::int64_t t) {
     if (!on) { return; }
         const RadioIdentity rid = in.soundCard ? soundCardIdentity() : identify(in.driverKind, in.args, in.nativeLabel);
+        if (in.countOnly) { ++failAttempt[rid.key]; return; }   // a retry inside a series: the ordinal moves, nothing is queued
             Impl::Pending p;
         p.kind = "radio_fail";
         p.key = rid.key;
@@ -1042,8 +1046,12 @@ void Reporter::configure(const Options& options) {
         pf.swap(s.preFails);
         std::vector<Impl::PreEvent> pe;
         pe.swap(s.preEvents);
-        for (const Impl::PreFail& f : pf) { s.fileFailureLocked(f.in, f.ring, f.at); }
-        for (const Impl::PreEvent& e : pe) { s.eventLocked(e.ev, e.at); }
+        // in the order they happened (field data 2026-11-19: every start-up failure had a lower seq than its own open start, 6 of 6)
+        std::size_t fi = 0, ei = 0;
+        while (fi < pf.size() || ei < pe.size()) {
+            if (ei >= pe.size() || (fi < pf.size() && pf[fi].order < pe[ei].order)) { s.fileFailureLocked(pf[fi].in, pf[fi].ring, pf[fi].at); ++fi; }
+            else { s.eventLocked(pe[ei].ev, pe[ei].at); ++ei; }
+        }
     }
 }
 
@@ -1099,7 +1107,7 @@ void Reporter::fileFailure(const FailureInput& in, const std::vector<std::string
     std::lock_guard<std::mutex> lk(p_->mu);
     Impl& s = *p_;
     if (!s.configuredOnce) {   // before the queue is opened (the start-up restore runs first): kept in memory and filed at configure
-        if (s.preFails.size() < 32) { s.preFails.push_back(Impl::PreFail{in, logRing, s.now()}); }
+        if (s.preFails.size() < 32) { s.preFails.push_back(Impl::PreFail{in, logRing, s.now(), s.preOrder++}); }
         return;
     }
     s.fileFailureLocked(in, logRing, s.now());
@@ -1114,10 +1122,15 @@ void Reporter::countDropped(const std::string& radioKey, long long n) {
 }
 
 void Reporter::event(const Event& ev) {
+    // A radio this copy has found or opened is remembered for the one thing that reads it: the window's message for one radio (core/radio_message.hpp), which
+    // matches it against a keyed hash on this PC. Before the gate below, so a radio found before the reporter was configured counts. Nothing leaves the PC.
+    if ((ev.kind == "radio_found" || ev.kind == "radio_open") && !ev.radio.key.empty()) {
+        radiomessage::noteRadio(ev.radio.key, ev.radio.model, ev.radio.serial);
+    }
     std::lock_guard<std::mutex> lk(p_->mu);
     Impl& s = *p_;
     if (!s.configuredOnce) {
-        if (s.preEvents.size() < 64) { s.preEvents.push_back(Impl::PreEvent{ev, s.now()}); }
+        if (s.preEvents.size() < 64) { s.preEvents.push_back(Impl::PreEvent{ev, s.now(), s.preOrder++}); }
         return;
     }
     s.eventLocked(ev, s.now());
