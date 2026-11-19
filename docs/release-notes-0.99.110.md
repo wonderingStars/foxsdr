@@ -43,7 +43,7 @@ Where a statement could only be tested with test signals or a stand-in program, 
 
 ## What this version sends: the two changes
 
-**Crash reports can carry the program's last words.** If FoxSDR ends in a way it cannot report itself, and Diagnostics is switched on, the crash report now also carries the last lines (at most 40) that FoxSDR or a library inside it printed to its error output. Account names, network addresses, serial numbers and quoted names are masked. This is typically a library's own error message and can name files or components, but never signal content. The lines are kept in a file in FoxSDR's log folder for up to 72 hours; the file itself is never sent. With Diagnostics off nothing of this is kept or sent.
+**Crash reports can carry the program's last words.** If FoxSDR ends in a way it cannot report itself, and Diagnostics is switched on, the crash report now also carries the last lines (at most 40) that FoxSDR or a library inside it printed to its error output. Account names, network addresses, serial numbers and quoted names are masked, and every file path is replaced by the word `<path>`. This is typically a library's own error message and can name components, but never signal content. The lines are kept in a file in FoxSDR's log folder for up to 72 hours; the file itself is never sent. With Diagnostics off nothing of this is kept or sent.
 
 **A successful change of sample rate while running** is now recorded in the radio's report as a settings change, with the rate that was reached. It uses the fields 0.99.109 already had.
 
@@ -65,8 +65,9 @@ The website's privacy page says both.
 ## Things to know
 
 - The installer is not code-signed, so Windows shows its "Windows protected your PC" warning. Check the download: the SHA-256 below must match what `Get-FileHash <file>` prints in PowerShell.
-- This release is for Windows. The Linux download stays at 0.99.109.
-- When these notes were written, the new sheets (move the radio, the message from the FoxSDR team), the OBS knob click and the tile-cache line had been tested by the program's own tests only. A check with a real mouse and a real RTL-SDR was still to be done; what it found is on the release page.
+- This release is for Windows. The newest Linux build is the 0.99.109 tarball on GitHub's release page; the website still offers 0.99.103 for Linux.
+- Tried with a real mouse before release: moving a real RTL-SDR between two FoxSDR windows (both answers), the message sheet (with a stand-in file for the website's answer, not the live website), the tile line with **Clear tile cache**, and a click on the OBS knob.
+- Seen in that check and not fixed: after a radio has been moved to a window, that window can keep showing the red line "did not open: the radio is already in use by another program" although it is receiving on that radio. The OBS knob is the small circle in the middle of the compass rose; a click on the outer rose does nothing.
 
 ---
 

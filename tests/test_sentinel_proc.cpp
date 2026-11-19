@@ -791,9 +791,13 @@ int main(int argc, char** argv) {
             CHECK(contains(tailText, "RECOGNISABLE-PANIC-LINE-7Q"));
             CHECK(!contains(tailText, "ZebulonTestUser"));
             CHECK(!contains(tailText, "192.168.77.201"));
-            CHECK(contains(tailText, "<user>"));
+            // A FILE PATH NEVER LEAVES IN THE TAIL (owner's rule: reports carry no file names and no paths; the privacy page says a crash report has
+            // "no file path"): the whole path is one token, so neither the account name inside it nor the file's name is there.
+            CHECK(contains(tailText, "<path>"));
             CHECK(contains(tailText, "<host>"));
-            CHECK(contains(tailText, "lib.rs"));
+            CHECK(!contains(tailText, "lib.rs"));
+            CHECK(!contains(tailText, ".cargo"));
+            CHECK(!contains(tailText, "Users"));
             // and what is uploaded carries it too, inside the site's own body limit (64 KiB)
             const std::string body = uploadJson(d.parsed, "0123456789abcdef0123456789abcdef");
             CHECK(contains(body, "RECOGNISABLE-PANIC-LINE-7Q"));

@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/diag_log.hpp"
+#include "core/radio_report.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -1567,7 +1568,10 @@ std::vector<std::string> readStderrTailForReport(const std::string& logDir, unsi
         // THE WHOLE LINE is scrubbed before it is cut into pieces, so that a name or an address
         // is never split across two of them; the pieces are short enough that the upload
         // scrub does not take one for a line cut at the ring's width.
-        const std::string clean = scrubUploadLine(scrubVendorLine(line.substr(b, e - b)));
+        // ... and every file path in it becomes the one token "<path>" (radioreport::pathsToToken, the rule the radio reports use): a library's last
+        // words often name a file (a file it could not open, a panic's source location), and a report carries no file names and no paths. The words
+        // around the path, which say WHAT failed, stay.
+        const std::string clean = radioreport::pathsToToken(scrubUploadLine(scrubVendorLine(line.substr(b, e - b))));
         for (std::size_t at = 0; at < clean.size(); at += kStderrTailLineChars) {
             out.push_back("stderr: " + clean.substr(at, kStderrTailLineChars));
         }

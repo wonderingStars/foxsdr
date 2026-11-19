@@ -263,7 +263,10 @@ int main(int argc, char** argv) {
         }
         CHECK(all.find("Zebulon") == std::string::npos);
         CHECK(all.find("10.20.30.40") == std::string::npos);
-        CHECK(all.find("<user>") != std::string::npos);
+        // the whole path is one token: no account name, no folder, no file name (reports carry no file paths)
+        CHECK(all.find("<path>") != std::string::npos);
+        CHECK(all.find("x.rs") == std::string::npos);
+        CHECK(all.find("Users") == std::string::npos);
         CHECK(all.find("<host>") != std::string::npos);
         CHECK(all.find('\x07') == std::string::npos);
         CHECK(all.find('\xE9') == std::string::npos);
