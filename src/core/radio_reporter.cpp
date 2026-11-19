@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/radio_reporter.hpp"
+
+#include "core/radio_message.hpp"
 #include "core/report_send_guard.hpp"
 
 #include <algorithm>
@@ -1120,6 +1122,11 @@ void Reporter::countDropped(const std::string& radioKey, long long n) {
 }
 
 void Reporter::event(const Event& ev) {
+    // A radio this copy has found or opened is remembered for the one thing that reads it: the window's message for one radio (core/radio_message.hpp), which
+    // matches it against a keyed hash on this PC. Before the gate below, so a radio found before the reporter was configured counts. Nothing leaves the PC.
+    if ((ev.kind == "radio_found" || ev.kind == "radio_open") && !ev.radio.key.empty()) {
+        radiomessage::noteRadio(ev.radio.key, ev.radio.model, ev.radio.serial);
+    }
     std::lock_guard<std::mutex> lk(p_->mu);
     Impl& s = *p_;
     if (!s.configuredOnce) {

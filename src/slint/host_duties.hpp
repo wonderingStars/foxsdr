@@ -185,6 +185,22 @@ struct TeamMessageModel {
     bool operator==(const TeamMessageModel&) const = default;
 };
 TeamMessageModel teamMessageFor(bool enabled, bool packaged, const std::vector<cascade::core::TeamMessage>& messages, const std::vector<std::string>& seen);
+// THE POPUP FOR A MESSAGE TO ONE RADIO (0.99.110, core/radio_message.hpp): the first matched, unseen message, oldest first, as plain data for ui/main.slint's modal. `radio`
+// is the sentence naming the radio (its model and the LAST 4 characters of its serial only). The window shows it only while no other sheet is up (the queue is the
+// window's: ui/main.slint `modal-busy`), and "Seen" remembers the id in the same list as the team messages' ids.
+struct RadioMessageModel {
+    bool shown = false;
+    std::string id;
+    std::string date;
+    std::string text;
+    std::string radio;
+    bool operator==(const RadioMessageModel&) const = default;
+};
+RadioMessageModel radioMessageFor(bool enabled, bool packaged, const std::vector<cascade::core::RadioMessage>& messages, const std::vector<cascade::core::KnownRadio>& radios,
+                                  const std::vector<std::string>& seen);
+// The same list after a successful check, keeping the ids of the radio messages the answer still carries as well.
+std::vector<std::string> seenAfterCheck(const std::vector<std::string>& seen, const std::vector<cascade::core::TeamMessage>& messages,
+                                        const std::vector<cascade::core::RadioMessage>& radioMessages);
 // The Seen list after a SUCCESSFUL check: only the ids the answer still names stay, so the list cannot grow for ever and a message the owner withdraws and sends again is
 // shown again (a failed check leaves the list alone: not hearing from the service is not the service withdrawing anything).
 std::vector<std::string> seenAfterCheck(const std::vector<std::string>& seen, const std::vector<cascade::core::TeamMessage>& messages);
@@ -324,6 +340,10 @@ public:
     bool takeTeamChange();
     const TeamMessageModel& teamMessage() const { return team_; }
     void teamMessageSeen();
+    // THE POPUP FOR A MESSAGE TO ONE RADIO: true once after it changed (the answer came, or a radio was found); the host applies radioMessage() to the window.
+    bool takeRadioMessageChange();
+    const RadioMessageModel& radioMessage() const { return radioMsg_; }
+    void radioMessageSeen();
 
     // Call when the event loop has returned, before the host stops the service.
     void finish();
@@ -399,6 +419,9 @@ private:
     bool cardChanged_ = false;
     TeamMessageModel team_;
     bool teamChanged_ = false;
+    RadioMessageModel radioMsg_;
+    bool radioMsgChanged_ = false;
+    std::uint64_t radioGen_ = ~0ull;   // core::radiomessage::generation() the popup was last worked out against
     cascade::core::StoreUpdateCheck store_;               // the Store's last answer (ok, updates, mandatory)
     bool storeInstallPending_ = false;
     bool storeInstallDone_ = false;

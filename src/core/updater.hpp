@@ -36,6 +36,8 @@
 #include <utility>
 #include <vector>
 
+#include "core/radio_message.hpp"
+
 namespace cascade::core {
 
 // One release's worth of "what changed", as the server published it.
@@ -84,6 +86,9 @@ struct UpdateInfo {
     // Messages from the team, newest first. Present whether or not `newer`: that is the
     // point of them (0.99.79).
     std::vector<TeamMessage> messages;
+    // MESSAGES FOR ONE RADIO (0.99.110, core/radio_message.hpp): each names its radio only by a keyed hash, which the window matches against the radios this copy
+    // has found. A key 0.99.109 and older never read.
+    std::vector<RadioMessage> radioMessages;
 
     // THE KILL SWITCH (field-early-warning). The service can WITHDRAW a release: it stops offering
     // it, lists it here, and says when the version asking is one of them.

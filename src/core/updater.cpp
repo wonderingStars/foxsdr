@@ -372,6 +372,33 @@ bool parseUpdateManifest(const std::string& text, const std::string& currentVers
         }
     }
 
+    // MESSAGES FOR ONE RADIO (0.99.110, core/radio_message.hpp): kept or dropped ON ITS OWN like the team messages. An id that fails wellFormedMessageId, a salt
+    // or hash that is not lower-case hex of the right length, or text with nothing printable left is dropped; the text is sanitised and clamped HERE, on receipt;
+    // the first kMaxRadioMessages usable entries are kept. Nothing about a radio is read from the entry: it is only a hash this copy tries its own radios against.
+    if (j.contains("radioMessages") && j["radioMessages"].is_array()) {
+        auto lowerHex = [](const std::string& s, std::size_t lo, std::size_t hi) {
+            if (s.size() < lo || s.size() > hi) { return false; }
+            for (const char c : s) {
+                if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) { return false; }
+            }
+            return true;
+        };
+        for (const json& m : j["radioMessages"]) {
+            if (out.radioMessages.size() >= cascade::core::kMaxRadioMessages) { break; }
+            if (!m.is_object()) { continue; }
+            cascade::core::RadioMessage rm;
+            rm.id = stringField(m, "id");
+            if (!wellFormedMessageId(rm.id)) { continue; }
+            rm.salt = stringField(m, "salt");
+            rm.hash = stringField(m, "hash");
+            if (!lowerHex(rm.salt, cascade::core::kMinRadioMessageSaltChars, cascade::core::kMaxRadioMessageSaltChars) || !lowerHex(rm.hash, 64, 64)) { continue; }
+            rm.date = clipUtf8(stringField(m, "date"), kMaxTeamMessageDateBytes);
+            rm.text = cascade::core::sanitiseRadioMessageText(stringField(m, "text"));
+            if (rm.text.empty()) { continue; }
+            out.radioMessages.push_back(std::move(rm));
+        }
+    }
+
     // Also recomputed, for the same reason.
     out.critical = false;
     if (out.newer) {
