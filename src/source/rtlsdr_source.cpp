@@ -1330,6 +1330,11 @@ std::string RtlSdrSource::streamHealthLine() {
     return healthLineLocked(*link_);
 }
 
+void RtlSdrSource::setStallBoundsForTest(int silenceRearmAfterMs, int readerStuckAfterMs) {
+    link_->silenceRearmAfterMs.store(silenceRearmAfterMs, std::memory_order_relaxed);
+    link_->readerStuckAfterMs.store(readerStuckAfterMs, std::memory_order_relaxed);
+}
+
 void RtlSdrSource::setStreamHealthWindowForTest(std::chrono::milliseconds w) {
     std::lock_guard<std::mutex> lk(link_->healthMutex);
     link_->healthWindow = w;

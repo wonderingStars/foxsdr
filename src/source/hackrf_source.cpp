@@ -837,6 +837,11 @@ std::string HackRfSource::streamHealthLine() {
     return healthLineLocked(*link_);
 }
 
+void HackRfSource::setStallBoundsForTest(int silenceRearmAfterMs, int readerStuckAfterMs) {
+    link_->silenceRearmAfterMs.store(silenceRearmAfterMs, std::memory_order_relaxed);
+    link_->readerStuckAfterMs.store(readerStuckAfterMs, std::memory_order_relaxed);
+}
+
 void HackRfSource::setStreamHealthWindowForTest(std::chrono::milliseconds w) {
     std::lock_guard<std::mutex> lk(link_->healthMutex);
     link_->healthWindow = w;
