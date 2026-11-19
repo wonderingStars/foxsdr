@@ -589,6 +589,7 @@ bool HackRfSource::startStreamingLocked() {
         std::lock_guard<std::mutex> lk(link_->waitMutex);
         link_->exited = false;
     }
+    link_->readerBeatNs.store(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);   // a stale beat from an earlier stream is not a stuck reader
     link_->run.store(true, std::memory_order_relaxed);
     reader_ = std::thread(&HackRfSource::readerThreadBody, link_);
     running_.store(true, std::memory_order_relaxed);
@@ -693,25 +694,111 @@ void HackRfSource::stop() {
 
 // --- the reader thread ----------------------------------------------------
 
+namespace {
+std::int64_t steadyNowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// A failed or silent stream is re-armed this many times before the radio is called dead (field fault 3 and the RTL-SDR's fault 2, 0.99.109, 2026-11-19).
+// A plain integer, not a chrono constant: nothing here is a wait on the shutdown path.
+constexpr int kMaxStreamRearms = 3;
+// The budget is forgiven once samples have flowed this long since the last re-arm.
+constexpr int kRearmForgiveAfterMs = 60000;
+
+// DOES THIS TRANSPORT ERROR SAY THE DEVICE LEFT THE BUS? Windows error 1167 / 433, the transport's "no longer present", the fake's words.
+bool transportSaysGone(const std::string& text) {
+    static const char* const kGone[] = {"Windows error 1167", "Windows error 433", "no longer present", "gone", "removed", "not connected"};
+    for (const char* g : kGone) {
+        if (text.find(g) != std::string::npos) { return true; }
+    }
+    return false;
+}
+}  // namespace
+
+// THE STREAM TAKEN DOWN AND BROUGHT BACK, on the reader's own thread with raw transport calls (the *Locked helpers want devMutex_, which the GUI thread may
+// hold while it waits for this thread): the ring down, the transceiver OFF, the pipe cleared, the transceiver RECEIVE, the ring queued - libhackrf's start
+// order (see startStreamingLocked). False with `why` when the device would not take it, which is how a radio that really left says so. stop() joins this
+// thread before it touches the ring or the transceiver, so a stop that arrives meanwhile is cleaned up after us.
+bool HackRfSource::rearmStreamOn(ReaderLink& link, std::string& why) {
+    cascade::usb::UsbDevice* dev = link.dev;
+    const auto mode = [dev](hackrf::TransceiverMode m) {
+        return dev->controlOut(cascade::usb::kRequestTypeVendorOut, hackrf::requestByte(hackrf::VendorRequest::SetTransceiverMode),
+                               static_cast<std::uint16_t>(m), 0, nullptr, 0, hackrf::kControlTimeoutMs) == 0;
+    };
+    dev->endBulkStream();
+    if (!link.run.load(std::memory_order_relaxed)) { return true; }
+    if (!mode(hackrf::TransceiverMode::Off)) {
+        why = "receiver off: " + dev->lastError();
+        return false;
+    }
+    dev->resetPipe(hackrf::kRxEndpoint);
+    if (!link.run.load(std::memory_order_relaxed)) { return true; }
+    if (!mode(hackrf::TransceiverMode::Receive)) {
+        why = "receiver on: " + dev->lastError();
+        return false;
+    }
+    if (!dev->beginBulkStream(hackrf::kRxEndpoint, hackrf::kTransferBufferBytes, hackrf::kTransferCount)) {
+        why = "queueing the sample transfers: " + dev->lastError();
+        mode(hackrf::TransceiverMode::Off);
+        return false;
+    }
+    return true;
+}
+
 void HackRfSource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
     const hackrf::SampleTable& lut = hackrf::sampleTable();
     std::vector<std::uint8_t> raw(hackrf::kTransferBufferBytes);
     std::vector<std::complex<float>> conv(hackrf::kSamplesPerTransfer);
     const unsigned timeoutMs = static_cast<unsigned>(kBulkReadWait.count());
+    int rearms = 0;
+    auto lastSamplesAt = std::chrono::steady_clock::now();
+    auto lastRearmAt = lastSamplesAt;
 
     while (link->run.load(std::memory_order_relaxed)) {
+        link->readerBeatNs.store(steadyNowNs(), std::memory_order_relaxed);
         const int got = link->dev->readBulk(raw.data(), raw.size(), timeoutMs);
         if (!link->run.load(std::memory_order_relaxed)) { break; }
+        const auto nowT = std::chrono::steady_clock::now();
+        if (got > 0) {
+            lastSamplesAt = nowT;
+            if (rearms > 0 && nowT - lastRearmAt >= std::chrono::milliseconds(kRearmForgiveAfterMs)) { rearms = 0; }
+        }
+        const bool silent = got == 0 && nowT - lastSamplesAt >= std::chrono::milliseconds(link->silenceRearmAfterMs.load(std::memory_order_relaxed));
 
-        if (got < 0) {
-            // A NEGATIVE READ IS THE DEVICE GOING. There is nothing to retry:
-            // the pipe has failed, and every further read would fail the same
-            // way while the source loop waited for samples that cannot come.
-            // Fault, and leave - the loop polls faulted() and stops with this
-            // message.
+        if (got < 0 || silent) {
+            // A FAILED READ IS A STALLED PIPE, and so is a stream that has said nothing for seconds (field fault 3: a HackRF that delivered about 3 percent
+            // of its data for 15 minutes with nothing reported); neither is yet a dead radio. Only an error that says the device left the bus is fatal at
+            // once. Everything else re-arms the stream (kMaxStreamRearms times); a stream that fails or stays silent after that is the fault, with the
+            // transport's own text so the next report says WHICH error.
             noteRead(*link, got, 0, false);
-            noteTransportFaultOn(*link, "reading samples", link->dev->lastError());
-            break;
+            const std::string detail = got < 0 ? link->dev->lastError() : std::string();
+            if (got < 0 && transportSaysGone(detail)) {
+                noteTransportFaultOn(*link, "reading samples", detail);
+                break;
+            }
+            if (rearms >= kMaxStreamRearms) {
+                char tail[96];
+                std::snprintf(tail, sizeof(tail), "after %d restarts of the stream", kMaxStreamRearms);
+                noteTransportFaultOn(*link, "reading samples",
+                                     got < 0 ? (detail.empty() ? std::string() : detail + ", ") + tail
+                                             : "the radio delivered nothing for " +
+                                                   std::to_string(link->silenceRearmAfterMs.load(std::memory_order_relaxed)) + " ms at a time, " + tail);
+                break;
+            }
+            ++rearms;
+            core::health::raiseRecovered(core::health::Recovered::StreamRestart);
+            core::diagWarnf("hackrf: %s%s%s; restarting the stream (attempt %d of %d)", got < 0 ? "read failed" : "delivered nothing", detail.empty() ? "" : ": ",
+                            detail.c_str(), rearms, kMaxStreamRearms);
+            std::string why;
+            const bool back = rearmStreamOn(*link, why);
+            lastRearmAt = std::chrono::steady_clock::now();
+            lastSamplesAt = lastRearmAt;
+            if (!link->run.load(std::memory_order_relaxed)) { break; }
+            if (!back) {
+                noteTransportFaultOn(*link, "reading samples", "the stream would not restart: " + why);
+                break;
+            }
+            continue;
         }
         const std::size_t samples = static_cast<std::size_t>(got) / hackrf::kBytesPerSample;
         bool dropped = false;
@@ -864,6 +951,15 @@ bool HackRfSource::linkHoldsDeviceForTest() const {
 
 std::size_t HackRfSource::read(std::complex<float>* dst, std::size_t n) {
     if (dst == nullptr || n == 0) { return 0; }
+    // A READER PARKED INSIDE A USB CALL FOR GOOD cannot say so; the pipeline's thread, which still comes here every few milliseconds, can. Without this the
+    // ring simply ran dry for 449 s at a time (field fault 3) and the radio looked open and fine.
+    if (running_.load(std::memory_order_relaxed) && !faulted()) {
+        const std::int64_t beat = link_->readerBeatNs.load(std::memory_order_relaxed);
+        const int stuckMs = link_->readerStuckAfterMs.load(std::memory_order_relaxed);
+        if (beat != 0 && steadyNowNs() - beat >= static_cast<std::int64_t>(stuckMs) * 1000000) {
+            noteTransportFaultOn(*link_, "reading samples", "the radio's USB transfer did not return for " + std::to_string(stuckMs) + " ms");
+        }
+    }
     std::size_t got = link_->ring.read(dst, n);
     if (got > 0) { return got; }
     if (faulted()) { return 0; }
