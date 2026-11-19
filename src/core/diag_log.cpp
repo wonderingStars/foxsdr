@@ -12,6 +12,7 @@
 #include <ctime>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <system_error>
 #include <thread>
@@ -1515,6 +1516,68 @@ std::string scrubVendorLine(const std::string& line) {
     return out;
 }
 
+std::string stderrFileName(unsigned long processId) {
+    return "stderr-" + std::to_string(processId) + ".txt";
+}
+
+std::vector<std::string> readStderrTailForReport(const std::string& logDir, unsigned long processId,
+                                                 std::size_t maxLines) {
+    std::vector<std::string> out;
+    if (logDir.empty() || maxLines == 0) { return out; }
+    std::string bytes;
+    bool partialFirst = false;
+    {
+        std::ifstream in(std::filesystem::path(logDir) / stderrFileName(processId), std::ios::binary);
+        if (!in) { return out; }
+        in.seekg(0, std::ios::end);
+        const std::streamoff size = in.tellg();
+        if (size <= 0) { return out; }
+        const std::streamoff want = static_cast<std::streamoff>(kStderrTailReadBytes);
+        const std::streamoff start = size > want ? size - want : 0;
+        partialFirst = start > 0;
+        in.seekg(start, std::ios::beg);
+        bytes.resize(static_cast<std::size_t>(size - start));
+        in.read(&bytes[0], static_cast<std::streamsize>(bytes.size()));
+        bytes.resize(static_cast<std::size_t>(in.gcount()));
+    }
+    // Lines, on LF or CR; the first is dropped when the read began part-way through the file.
+    std::vector<std::string> lines;
+    std::string cur;
+    for (const char c : bytes) {
+        if (c == '\n' || c == '\r') {
+            lines.push_back(cur);
+            cur.clear();
+        } else {
+            cur.push_back(c);
+        }
+    }
+    lines.push_back(cur);
+    if (partialFirst && !lines.empty()) { lines.erase(lines.begin()); }
+    for (std::string& line : lines) {
+        // Printable ASCII only: a control character or a byte of an unknown encoding is '?'.
+        for (char& c : line) {
+            const unsigned char u = static_cast<unsigned char>(c);
+            if (u < 0x20 || u >= 0x7F) { c = (u == '\t') ? ' ' : '?'; }
+        }
+        std::size_t b = 0;
+        std::size_t e = line.size();
+        while (b < e && line[b] == ' ') { ++b; }
+        while (e > b && line[e - 1] == ' ') { --e; }
+        if (b == e) { continue; }
+        // THE WHOLE LINE is scrubbed before it is cut into pieces, so that a name or an address
+        // is never split across two of them; the pieces are short enough that the upload
+        // scrub does not take one for a line cut at the ring's width.
+        const std::string clean = scrubUploadLine(scrubVendorLine(line.substr(b, e - b)));
+        for (std::size_t at = 0; at < clean.size(); at += kStderrTailLineChars) {
+            out.push_back("stderr: " + clean.substr(at, kStderrTailLineChars));
+        }
+    }
+    if (out.size() > maxLines) {
+        out.erase(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(out.size() - maxLines));
+    }
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // stderr capture
 // ---------------------------------------------------------------------------
@@ -1537,6 +1600,30 @@ void emitVendorLine(LineRateLimiter& limiter, const std::string& raw) {
     }
 }
 
+// What the reader does with each run of bytes, pipe or file: whole lines become vendor: lines.
+void pumpStderrBytes(LineRateLimiter& limiter, std::string& pending, const char* buf, DWORD n) {
+    pending.append(buf, n);
+    std::size_t at = 0;
+    for (;;) {
+        const std::size_t nl = pending.find('\n', at);
+        if (nl == std::string::npos) { break; }
+        std::string line = pending.substr(at, nl - at);
+        at = nl + 1;
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
+            line.pop_back();
+        }
+        if (!line.empty()) { emitVendorLine(limiter, line); }
+    }
+    pending.erase(0, at);
+    // A driver that never sends a newline (UHD's "O" and "D" indicators
+    // are single characters) must not be able to hold a line back for
+    // ever, nor grow it without bound.
+    if (pending.size() >= 512) {
+        emitVendorLine(limiter, pending);
+        pending.clear();
+    }
+}
+
 // The reader. Blocks in ReadFile for the life of the process; the write end
 // is fd 2 and is never closed, so this thread ends when the process does.
 void stderrReaderMain(HANDLE rd) {
@@ -1546,28 +1633,84 @@ void stderrReaderMain(HANDLE rd) {
     for (;;) {
         DWORD n = 0;
         if (::ReadFile(rd, buf, sizeof(buf), &n, nullptr) == 0 || n == 0) { break; }
-        pending.append(buf, n);
-        std::size_t at = 0;
-        for (;;) {
-            const std::size_t nl = pending.find('\n', at);
-            if (nl == std::string::npos) { break; }
-            std::string line = pending.substr(at, nl - at);
-            at = nl + 1;
-            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
-                line.pop_back();
-            }
-            if (!line.empty()) { emitVendorLine(limiter, line); }
-        }
-        pending.erase(0, at);
-        // A driver that never sends a newline (UHD's "O" and "D" indicators
-        // are single characters) must not be able to hold a line back for
-        // ever, nor grow it without bound.
-        if (pending.size() >= 512) {
-            emitVendorLine(limiter, pending);
-            pending.clear();
-        }
+        pumpStderrBytes(limiter, pending, buf, n);
     }
     ::CloseHandle(rd);
+}
+
+// THE LAST-WORDS FILE (see stderrFileName in diag_log.hpp): fd 2 itself, opened append-only
+// and write-through in the log folder, so that what a dying process prints is already in the
+// file system when it dies. Replaced at each start (the name carries the process id, and a
+// reused id's old file is deleted first); files of other processes left more than three days
+// are cleared. INVALID_HANDLE_VALUE when diagnostics are off or the folder is not there - the
+// capture then uses its pipe, as it always did.
+HANDLE openStderrFile(std::wstring& pathOut) {
+    DiagLog& log = DiagLog::instance();
+    if (!log.fileEnabled()) { return INVALID_HANDLE_VALUE; }
+    std::error_code ec;
+    const std::filesystem::path dir = std::filesystem::path(log.filePath()).parent_path();
+    if (dir.empty() || !std::filesystem::is_directory(dir, ec)) { return INVALID_HANDLE_VALUE; }
+    {
+        int examined = 0;
+        const auto now = std::filesystem::file_time_type::clock::now();
+        for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end && examined < 400;
+             it.increment(ec), ++examined) {
+            const std::string name = it->path().filename().string();
+            if (name.rfind("stderr-", 0) != 0 || name.size() < 12 ||
+                name.compare(name.size() - 4, 4, ".txt") != 0) {
+                continue;
+            }
+            std::error_code te;
+            const auto when = std::filesystem::last_write_time(it->path(), te);
+            if (!te && now - when > std::chrono::hours(72)) {
+                std::error_code re;
+                std::filesystem::remove(it->path(), re);
+            }
+        }
+    }
+    const std::filesystem::path path = dir / stderrFileName(::GetCurrentProcessId());
+    ::DeleteFileW(path.c_str());
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;   // the enumeration child is handed it, as it was handed the pipe
+    const HANDLE h = ::CreateFileW(path.c_str(), FILE_APPEND_DATA,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &sa,
+                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH,
+                                   nullptr);
+    if (h == INVALID_HANDLE_VALUE) { return INVALID_HANDLE_VALUE; }
+    pathOut = path.wstring();
+    return h;
+}
+
+// The reader of that file: the same lines to the log as the pipe's reader gave, polled (a
+// file cannot be waited on for data) every 20 ms, and the file emptied when it has been read
+// to its end past kStderrFileMaxBytes - the writer only ever appends, so emptying is safe.
+void stderrFileReaderMain(std::wstring path) {
+    const HANDLE h = ::CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) { return; }
+    LineRateLimiter limiter;
+    std::string pending;
+    char buf[1024];
+    for (;;) {
+        DWORD n = 0;
+        if (::ReadFile(h, buf, sizeof(buf), &n, nullptr) == 0) { break; }
+        if (n != 0) {
+            pumpStderrBytes(limiter, pending, buf, n);
+            continue;
+        }
+        LARGE_INTEGER pos{};
+        LARGE_INTEGER size{};
+        LARGE_INTEGER zero{};
+        if (::SetFilePointerEx(h, zero, &pos, FILE_CURRENT) != 0 && ::GetFileSizeEx(h, &size) != 0 &&
+            size.QuadPart >= static_cast<LONGLONG>(kStderrFileMaxBytes) && pos.QuadPart == size.QuadPart) {
+            ::SetFilePointerEx(h, zero, nullptr, FILE_BEGIN);
+            ::SetEndOfFile(h);
+        }
+        ::Sleep(20);
+    }
+    ::CloseHandle(h);
 }
 
 }  // namespace
@@ -1609,10 +1752,22 @@ bool installStderrCapture(bool evenIfConsole) {
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
+    // THE WRITE END IS A FILE when diagnostics are on (see stderrFileName), a pipe otherwise.
     HANDLE rd = nullptr;
     HANDLE wr = nullptr;
-    if (::CreatePipe(&rd, &wr, &sa, 0) == 0) { return false; }
-    ::SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+    std::wstring filePath;
+    bool toFile = false;
+    {
+        const HANDLE f = openStderrFile(filePath);
+        if (f != INVALID_HANDLE_VALUE) {
+            wr = f;
+            toFile = true;
+        }
+    }
+    if (!toFile) {
+        if (::CreatePipe(&rd, &wr, &sa, 0) == 0) { return false; }
+        ::SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+    }
 
     // A PRIVATE duplicate of the old stderr, taken before the CRT's fd 2 is
     // replaced: _dup2 closes whatever fd 2 held, and the CRT's copy is the
@@ -1633,14 +1788,14 @@ bool installStderrCapture(bool evenIfConsole) {
     // vendor modules with their own CRT.
     const int wfd = ::_open_osfhandle(reinterpret_cast<intptr_t>(wr), _O_WRONLY | _O_BINARY);
     if (wfd < 0) {
-        ::CloseHandle(rd);
+        if (rd != nullptr) { ::CloseHandle(rd); }
         ::CloseHandle(wr);
         if (origDup != nullptr) { ::CloseHandle(origDup); }
         return false;
     }
     if (::_dup2(wfd, 2) != 0) {
         ::_close(wfd);
-        ::CloseHandle(rd);
+        if (rd != nullptr) { ::CloseHandle(rd); }
         if (origDup != nullptr) { ::CloseHandle(origDup); }
         return false;
     }
@@ -1654,9 +1809,17 @@ bool installStderrCapture(bool evenIfConsole) {
     std::setvbuf(stderr, nullptr, _IONBF, 0);
 
     g_origStderr = origDup;
-    std::thread(stderrReaderMain, rd).detach();
+    if (toFile) {
+        std::thread(stderrFileReaderMain, filePath).detach();
+    } else {
+        std::thread(stderrReaderMain, rd).detach();
+    }
     g_captureActive = true;
     diagLogf("diag: stderr capture on - driver and library lines are recorded as vendor:");
+    if (toFile) {
+        diagLogf("diag: stderr is also kept in a file in the log folder for the sentinel (stderr-%lu.txt)",
+                 static_cast<unsigned long>(::GetCurrentProcessId()));
+    }
     return true;
 #else
     (void)evenIfConsole;
