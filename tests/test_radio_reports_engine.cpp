@@ -632,6 +632,7 @@ void handoffScenarios(std::vector<json>& everything) {
         CHECK(Access::handoffFact(app, "radio.handoffMoved").rfind("1\tmoved\tGeneric RTL2832U\t0001", 0) == 0);
         cascade::core::handoff::ReleaseResult r3;   // and a second request finds nothing held
         ask(r3);
+        if (r3.result != cascade::core::handoff::Release::NotHeld) { std::printf("    third request answered %d (code %s)\n", static_cast<int>(r3.result), r3.code.c_str()); }
         CHECK(r3.result == cascade::core::handoff::Release::NotHeld);
     }
 

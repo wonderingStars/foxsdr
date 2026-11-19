@@ -2685,6 +2685,9 @@ void scheduleOps(AppWindow& a) {
 // wire-b end
 
 void macroOps(AppWindow& a) {
+    covering(FOXAPP_OP_RADIO_HANDOFF);   // field fix A2: no question is open on a fresh window, so an answer is NO_CHANGE (the question itself is tests/test_radio_reports_engine.cpp's)
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_RADIO_HANDOFF, 1)), FOXAPI_NO_CHANGE));
+    CHECK(refused(A::apply(a, ints(FOXAPP_OP_RADIO_HANDOFF, 0)), FOXAPI_NO_CHANGE));
     covering(FOXAPP_OP_MACRO_RELOAD);
     CHECK(ok(A::apply(a, text(FOXAPP_OP_MACRO_RELOAD, ""))));
     covering(FOXAPP_OP_MACRO_RUN);

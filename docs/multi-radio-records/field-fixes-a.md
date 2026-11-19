@@ -1,6 +1,6 @@
 # Field fixes A (2026-11-19) - the 42958e install's journal
 
-Branch fix/field-a from 03ac57b7. Local commits only. STATE AT THE CHECKPOINT (weekly-usage stop) is at the end of this file.
+Branch fix/field-a from 03ac57b7. Local commits only. Final state: all three faults done; "what is not proved" is at the end.
 
 ## Evidence (radio journal 2026-11, install 42958e, two NESDR SMArt v5: serials SDR_CONTROL and SDR_VOICE)
 Event times in the journal are flush times; the real time of an event is `at` minus `age`. Real timeline: 03:53 first copy restores SDR_CONTROL; 04:02:43 its read stops
@@ -33,9 +33,19 @@ Tests so far: tests/test_radio_handoff.cpp (26/0: keys, holder detection over re
 scenarios (a child process plays the other window): move (one question, one report, no retry loop, radio opens, no second report), other program (plain sentence, retries continue), refusal, no answer in time, and the holder side (refused while a take is queued, then released with the notice).
 Note: one run of the refusal/timeout scenario failed twice before a rebuild and passed after (177/0); rerun several times before trusting it.
 
-## WHERE I STOPPED (checkpoint) AND WHAT IS LEFT
-Done and green: faults 1 and 3; core pipe module; engine side and its scenarios.
-NOT yet done: (1) src/slint/main.cpp (RadioMoveHost wiring, startHandoffServer before restore) is written but NOT COMPILED; the foxsdr-slint target has not been built. (2) tests for RadioMoveHost (shown once per sequence, keys send 1/0) and for core::handoff::sheetFor words.
-(3) tests/test_apply_command.cpp needs a `covering(FOXAPP_OP_RADIO_HANDOFF)` case (its coverage check fails without it) and test_engine_api_05a's profile test needs a look. (4) the docs entry for the op (docs/api-0.3-additions.md style). (5) full runs of the touched test targets
-and the headless label. (6) Legacy window: the holder side is NOT started in cascade.exe (it would need the same one call in src/main.cpp and an on-screen notice); as asker it has no popup. Say so in the report; the popup says "another FoxSDR window" only when the holder answered the pipe, which only a window that started the server can do.
-(7) real two-window run on the hidden desktop with the real dongle: NOT done.
+## WHAT A USER SEES (word for word; the title is the sheet's heading, the keys in brackets)
+* The radio is held by another FoxSDR window (answered on the pipe): [Radio in use by another FoxSDR window] "NESDR SMArt v5 (serial ending 0001) is in use by another FoxSDR window on this PC. Move it here? The other window will stop using it and show a notice." [Move it here] [Leave it there].
+* Move it here, the other window lets go: the radio opens here (the ordinary open); the other window shows [Radio moved] "NESDR SMArt v5 (serial ending 0001) was moved to another FoxSDR window. This window is on the signal generator now." [OK] (and the same sentence under its source control).
+* The other window is recording: [Radio not moved] "NESDR SMArt v5 (serial ending 0001) is recording in the other FoxSDR window. Stop the recording there first, then try again." [OK]. Nothing changes.
+* The other window does not answer in 5 s: [Radio not moved] "The other FoxSDR window did not answer in time, so NESDR SMArt v5 (serial ending 0001) was not moved. Nothing was changed: it is still in use there." [OK].
+* Another program holds it (or the radio has no serial, so no holder can be named): [Radio in use] "NESDR SMArt v5 (serial ending 0001) is in use by another program. Close that program, then pick the radio again." [OK]; no move key; the 2, 4, 8, 16 s retries go on as before (the updater's old copy letting go is what they are for).
+* A radio that stops delivering samples (fault 1): unchanged sentence "Device stopped: the radio stopped delivering samples (it may have been unplugged) [<Windows text>]. Reconnect it and pick the source again, or switch to the signal generator." - but four failed reads in a row are now needed first.
+All strings go through cascade::i18n::tr; the sheet is the existing Handover sheet. Serial: only its last four characters are shown (the pipe carries the whole key, locally, to this user's processes only).
+
+## WHAT IS NOT PROVED / NOT DONE
+* NOT built for the Legacy window (cascade.exe): the holder side is not started there (it would need `startHandoffServer("legacy")` in src/main.cpp and an on-screen notice there), and Legacy as the asker has no popup. A Legacy holder is not found, so the new window says "another program" for it, which is the old, honest answer.
+* NOT run: a real two-window session on the hidden desktop with the real dongle (the foxsdr-slint target builds; the host wiring is exercised only through RadioMoveHost's test and the engine scenarios).
+* A radio with no serial in its arguments ("index=0") cannot be matched to a holder: the "another program" sentence.
+* The pipe server's first version served one client at a time and, rarely (about 1 run in 8 of the refusal scenario), a second asker found it between instances and got no answer; fixed by making the next instance before serving the current one. 10 runs of the engine test passed after.
+* Proof that the first copy's death at 04:51:14 was or was not caused by the extra copies: not obtained.
+* The Legacy window and the web/CAT/TCI profiles do not carry the op.

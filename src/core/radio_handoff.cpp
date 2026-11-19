@@ -204,6 +204,7 @@ struct Server::Impl {
     HANDLE pipe = INVALID_HANDLE_VALUE;
     PSECURITY_DESCRIPTOR sd = nullptr;
     SECURITY_ATTRIBUTES sa{};
+    bool pipeClosedByThread = false;
 };
 
 Server::Server() = default;
@@ -224,7 +225,7 @@ bool Server::start(const std::string& prefix, const std::string& windowWord, Hoo
     I.stopEvent = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
     I.pipe = ::CreateNamedPipeW(pipePath(prefix, ::GetCurrentProcessId()).c_str(),
                                 PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
-                                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 512, 512, 0, &I.sa);
+                                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 4, 512, 512, 0, &I.sa);
     if (I.pipe == INVALID_HANDLE_VALUE || I.stopEvent == nullptr) {
         diagLogf("handoff: the pipe could not be created (error %lu); this window cannot be asked to let a radio go", static_cast<unsigned long>(::GetLastError()));
         if (I.stopEvent != nullptr) { ::CloseHandle(I.stopEvent); }
@@ -237,10 +238,12 @@ bool Server::start(const std::string& prefix, const std::string& windowWord, Hoo
         Impl& I2 = *impl_;
         OVERLAPPED ov{};
         ov.hEvent = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        while (running_.load()) {
+        const std::wstring path = pipePath(I2.prefix, ::GetCurrentProcessId());
+        HANDLE cur = I2.pipe;
+        while (running_.load() && cur != INVALID_HANDLE_VALUE) {
             ::ResetEvent(ov.hEvent);
             bool connected = false;
-            if (::ConnectNamedPipe(I2.pipe, &ov)) {
+            if (::ConnectNamedPipe(cur, &ov)) {
                 connected = true;
             } else {
                 const DWORD e = ::GetLastError();
@@ -248,35 +251,45 @@ bool Server::start(const std::string& prefix, const std::string& windowWord, Hoo
                     connected = true;
                 } else if (e == ERROR_IO_PENDING) {
                     DWORD moved = 0;
-                    connected = overlappedWait(I2.pipe, ov, INFINITE, moved, I2.stopEvent);
+                    connected = overlappedWait(cur, ov, INFINITE, moved, I2.stopEvent);
                 }
             }
             if (!running_.load()) { break; }
-            if (connected) {
-                std::string req;
-                if (readLine(I2.pipe, ov, 2000, req)) {
-                    std::string answer = "NO";
-                    const std::size_t sp = req.find(' ');
-                    const std::string verb = req.substr(0, sp);
-                    const std::string key = sp == std::string::npos ? std::string() : req.substr(sp + 1);
-                    if (verb == "HOLDS") {
-                        answer = (!key.empty() && I2.hooks.holds && I2.hooks.holds(key)) ? "YES " + I2.window : "NO";
-                    } else if (verb == "RELEASE") {
-                        ReleaseResult r;
-                        if (!key.empty() && I2.hooks.release) { r = I2.hooks.release(key); }
-                        switch (r.result) {
-                            case Release::Released: answer = "RELEASED"; break;
-                            case Release::Refused: answer = "REFUSED " + (r.code.empty() ? std::string("other") : r.code); break;
-                            case Release::NotHeld: answer = "NOTHELD"; break;
-                            default: answer = "REFUSED busy"; break;
-                        }
-                    }
-                    writeLine(I2.pipe, ov, answer, 2000);
-                    served_.fetch_add(1);
-                }
+            if (!connected) {
+                ::DisconnectNamedPipe(cur);
+                continue;
             }
-            ::DisconnectNamedPipe(I2.pipe);
+            // A LISTENING INSTANCE IS MADE BEFORE THIS CLIENT IS SERVED, so a second asker never finds the pipe between instances (a pipe with no instance is "not found", not "busy").
+            HANDLE next = ::CreateNamedPipeW(path.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                                             PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 4, 512, 512, 0, &I2.sa);
+            std::string req;
+            if (readLine(cur, ov, 2000, req)) {
+                std::string answer = "NO";
+                const std::size_t sp = req.find(' ');
+                const std::string verb = req.substr(0, sp);
+                const std::string key = sp == std::string::npos ? std::string() : req.substr(sp + 1);
+                if (verb == "HOLDS") {
+                    answer = (!key.empty() && I2.hooks.holds && I2.hooks.holds(key)) ? "YES " + I2.window : "NO";
+                } else if (verb == "RELEASE") {
+                    ReleaseResult r;
+                    if (!key.empty() && I2.hooks.release) { r = I2.hooks.release(key); }
+                    switch (r.result) {
+                        case Release::Released: answer = "RELEASED"; break;
+                        case Release::Refused: answer = "REFUSED " + (r.code.empty() ? std::string("other") : r.code); break;
+                        case Release::NotHeld: answer = "NOTHELD"; break;
+                        default: answer = "REFUSED busy"; break;
+                    }
+                }
+                writeLine(cur, ov, answer, 2000);
+                served_.fetch_add(1);
+            }
+            ::FlushFileBuffers(cur);
+            ::DisconnectNamedPipe(cur);
+            ::CloseHandle(cur);
+            if (cur == I2.pipe) { I2.pipeClosedByThread = true; }
+            cur = next;
         }
+        if (cur != INVALID_HANDLE_VALUE && cur != I2.pipe) { ::CloseHandle(cur); }
         ::CloseHandle(ov.hEvent);
     });
     return true;
@@ -287,7 +300,7 @@ void Server::stop() {
     running_.store(false);
     if (impl_->stopEvent != nullptr) { ::SetEvent(impl_->stopEvent); }
     if (thread_.joinable()) { thread_.join(); }
-    if (impl_->pipe != INVALID_HANDLE_VALUE) { ::CloseHandle(impl_->pipe); }
+    if (impl_->pipe != INVALID_HANDLE_VALUE && !impl_->pipeClosedByThread) { ::CloseHandle(impl_->pipe); }
     if (impl_->stopEvent != nullptr) { ::CloseHandle(impl_->stopEvent); }
     if (impl_->sd != nullptr) { ::LocalFree(impl_->sd); }
     impl_.reset();
