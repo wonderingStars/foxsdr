@@ -8,6 +8,7 @@
 #include "host_logic.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 
 namespace foxsdr::slinthost {
@@ -97,10 +98,20 @@ void PaneGestures::click(int radio, float xFrac, bool shift) {
     c.ival[0] = shift ? 0 : 1;
     submit_(c, static_cast<std::uint32_t>(radio));
 }
+double bandDragTargetHz(RadioView& rv, float dxFrac, int tick) {
+    if (tick - rv.bandDragTick > kBandDragGapTicks || tick < rv.bandDragTick) {   // a new drag: from where the engine says the band is
+        rv.bandDragStartHz = rv.state.tunedHz;
+        rv.bandDragSumFrac = 0.0;
+    }
+    if (std::isfinite(dxFrac)) { rv.bandDragSumFrac += static_cast<double>(dxFrac); }
+    rv.bandDragTick = tick;
+    return rv.bandDragStartHz + rv.bandDragSumFrac * rv.currentView().spanHz;
+}
+
 void PaneGestures::bandDrag(int radio, float dxFrac, int tick) {
     RadioView& rv = view(radio);
     FoxCommand c = opOf(FOXAPI_OP_SET_VFO_OFFSET);
-    c.num[0] = rv.state.tunedHz + static_cast<double>(dxFrac) * rv.currentView().spanHz - rv.state.centreHz;
+    c.num[0] = bandDragTargetHz(rv, dxFrac, tick) - rv.state.centreHz;
     submit_(c, static_cast<std::uint32_t>(radio));
     rv.lastBandDragTick = tick;
 }

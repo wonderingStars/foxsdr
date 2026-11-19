@@ -350,6 +350,45 @@ int main() {
         CHECK(set.selected == 0);
     }
 
+    // ---- THE DRAG OF THE BAND ADDS UP THE POINTER'S MOVES (drive fixes 8) ----
+    // The state is read back from the engine once a tick, so it does NOT change between the moves of one tick. "The state plus this move" kept only the last move of each tick.
+    {
+        RadioSet set;
+        std::vector<std::pair<FoxCommand, std::uint32_t>> sent;
+        PaneGestures g(set, [&](const FoxCommand& c, std::uint32_t radio) { sent.push_back({c, radio}); });
+        RadioView& r1 = set.at(0);
+        RadioView& r2 = set.at(1);
+        r1.state = tunedState(145.0e6, 145.0e6, 2.0e6, true);
+        r2.state = tunedState(98.0e6, 98.0e6, 2.0e6, true);
+        // ten moves of one hundredth of the picture inside ONE tick, the state never refreshed: the tenth asks for ten hundredths, not one
+        for (int i = 0; i < 10; ++i) { g.bandDrag(2, 0.01f, 50); }
+        CHECK(sent.size() == 10);
+        CHECK(std::fabs(sent[0].first.num[0] - 0.01 * 2.0e6) < 1.0);
+        CHECK(std::fabs(sent[9].first.num[0] - 0.10 * 2.0e6) < 1.0);
+        // the drag goes on over the next ticks while the state is still the old one (the engine has not answered yet), and back again
+        g.bandDrag(2, 0.05f, 51);
+        g.bandDrag(2, 0.05f, 52);
+        CHECK(std::fabs(sent.back().first.num[0] - 0.20 * 2.0e6) < 1.0);
+        g.bandDrag(2, -0.20f, 53);
+        CHECK(std::fabs(sent.back().first.num[0]) < 1.0);
+        // the other radio's drag is its own
+        g.bandDrag(1, 0.02f, 53);
+        CHECK(std::fabs(sent.back().first.num[0] - 0.02 * 2.0e6) < 1.0 && sent.back().second == 1u);
+        // a pause longer than the gap is a NEW drag: it starts from where the engine now says the band is (here: it answered 98.3 MHz)
+        r2.state = tunedState(98.0e6, 98.3e6, 2.0e6, true);
+        g.bandDrag(2, 0.01f, 53 + kBandDragGapTicks + 1);
+        CHECK(std::fabs(sent.back().first.num[0] - (0.3e6 + 0.01 * 2.0e6)) < 1.0);
+        // a pause of exactly the gap is still the same drag
+        g.bandDrag(2, 0.01f, 53 + 2 * kBandDragGapTicks + 1);
+        CHECK(std::fabs(sent.back().first.num[0] - (0.3e6 + 0.02 * 2.0e6)) < 1.0);
+        // a move that is not a number adds nothing
+        g.bandDrag(2, std::nanf(""), 53 + 2 * kBandDragGapTicks + 2);
+        CHECK(std::fabs(sent.back().first.num[0] - (0.3e6 + 0.02 * 2.0e6)) < 1.0);
+        // the function on its own: a tick that runs backwards (a new session's counter) starts a new drag
+        r1.state = tunedState(145.0e6, 145.1e6, 2.0e6, true);
+        CHECK(std::fabs(bandDragTargetHz(r1, 0.5f, 3) - (145.1e6 + 1.0e6)) < 1.0);
+    }
+
     // ---- THE TEST SEAM: made-up radios, each with its own tone ----
     {
         CHECK(testRadiosFromEnv("4", true) == 4 && testRadiosFromEnv("4", false) == 0);   // only a bounded run

@@ -141,6 +141,11 @@ struct RadioView {
     // and the tick of the last drag of the band, so the picture is never moved under the hand.
     double lastTunedHz = std::numeric_limits<double>::quiet_NaN();
     int lastBandDragTick = -1000;
+    // THE DRAG OF THE BAND IS KEPT BY THE HAND, NOT BY THE ENGINE'S ANSWER (drive fixes 8; workspace_logic.hpp bandDragTargetHz): the tuned frequency when this drag began, how far the
+    // pointer has gone since (a fraction of the picture) and the tick of its last move.
+    double bandDragStartHz = 0.0;
+    double bandDragSumFrac = 0.0;
+    int bandDragTick = -1000;
     Signatures sigs;                            // the signatures of this radio's published figures (layout One: the main window's properties)
     Signatures paneSigs;                        // the same for this radio's row in the workspace's model (workspace_publish.cpp): a second cache, so the two targets never share one
     PlotSize plot;
