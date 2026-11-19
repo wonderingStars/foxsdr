@@ -33,6 +33,7 @@ import { SurveyPanelPage, SondeViewBar, SondeWell, View3D } from "scene3d_views.
 import { GlobeModel, GlobeViewBar, GlobeBody } from "globe_views.slint";
 import { GpsRow, GpsRowView, SystemEvents } from "system_bank.slint";   // window gaps lane 4: the GPS row on the map pages
 import { Slider } from "sliders.slint";
+import { TipTimer } from "tooltip.slint";
 import { MapJModel, MapJBar, SkyModel, SkyPage, AntennaModel, AntennaPage } from "mapj.slint";   // screen lane J: the map's layers, replay and filter, the Sky and Antenna pages
 
 export { PresetKeyModel, SettingKind, SettingField, StaleGrant, StateChipModel, LineTone, LogLine, DetailLine, FittedRowModel, ReachRowModel,
@@ -370,9 +371,11 @@ export global MapExtras {
 
 // A map page's toolbar: the rows of the ImGui window's top bar (Fit, the RX position, the count, On screen only, Coverage, Trails,
 // Altitude colours, Reset coverage, the coverage status, Stop following) as keys and checkboxes in two lines.
-component MapToolbar inherits VerticalLayout {
+component MapToolbar inherits Rectangle {
     in property <MapModel> map;
     in property <int> index;
+    // MAP FOCUS (docs/multi-radio-records/map-focus.md): the rarely used rows (coverage, trails, the GPS port) sit behind the "Map options" key, closed until the user opens it.
+    in-out property <bool> opts-open: false;
     callback fit(int);
     callback world(int);
     callback set-rx(int);
@@ -386,6 +389,9 @@ component MapToolbar inherits VerticalLayout {
     callback keep-following(int);
     callback sort-clicked(int);
     callback sort-dir(int);
+    // exactly as tall as its rows: a layout left to itself shares the page's spare height with the map (the empty band under the toolbar), as the GPS row's stretch is added to the toolbar's
+    height: bar.preferred-height;
+    bar := VerticalLayout {
     spacing: 4px;
     padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 6px;
     HorizontalLayout { spacing: 8px; alignment: start;
@@ -394,10 +400,13 @@ component MapToolbar inherits VerticalLayout {
         Key { label: root.map.pick-armed ? @tr("CLICK THE") + " " + @tr("MAP NOW") : @tr("Set RX here"); small: true; min-w: 0px; on: root.map.pick-armed; tooltip: @tr("The next click on the map sets the receiver position"); clicked => { root.set-rx(root.index); } }
         Text { text: root.map.rx-text; font-size: Theme.font-small; color: root.map.rx-known ? Theme.fg-soft : Theme.dim; vertical-alignment: center; overflow: elide; }
         Rectangle { horizontal-stretch: 1; }
+        if root.map.following != "" : Text { text: root.map.following; font-size: Theme.font-small; color: Theme.accent-soft; vertical-alignment: center; }
+        if root.map.following != "" : Key { label: @tr("Stop following"); small: true; min-w: 0px; clicked => { root.stop-following(root.index); } }
         Text { text: root.map.count-text; font-size: Theme.font-small; color: Theme.muted; vertical-alignment: center; }
         Checkbox { label: @tr("On screen only"); checked: root.map.on-screen-only; tooltip: @tr("Lists only the targets inside the map you are looking at."); toggled(v) => { root.on-screen(root.index, v); } }
+        Key { label: @tr("Map options"); small: true; min-w: 0px; on: root.opts-open; tooltip: @tr("Coverage, trails and the GPS receiver"); clicked => { root.opts-open = !root.opts-open; } }
     }
-    HorizontalLayout { spacing: 10px; alignment: start;
+    if root.opts-open : HorizontalLayout { spacing: 10px; alignment: start;
         Checkbox { label: @tr("Coverage"); checked: root.map.coverage-on; tooltip: @tr("Furthest any target has been plotted, per 5 degrees of bearing, from the receiver position, this session only."); toggled(v) => { root.coverage(root.index, v); } }
         Checkbox { label: @tr("Trails"); checked: root.map.trails-on; tooltip: @tr("Draw the lines plugins publish: flight trails, predicted ground tracks and footprints."); toggled(v) => { root.trails(root.index, v); } }
         Checkbox { label: @tr("Altitude colours"); checked: root.map.alt-colours; enabled: root.map.trails-on; tooltip: root.map.trails-on ? @tr("Colour each part of a trail by the altitude observed there.") : @tr("Turn Trails on to colour them by altitude."); toggled(v) => { root.alt-colours(root.index, v); } }
@@ -408,14 +417,13 @@ component MapToolbar inherits VerticalLayout {
                 if root.map.satellite : SegKey { small: true; label: @tr("Off"); on: !root.map.trails-on; tooltip: @tr("Draw targets only: no trails, ground tracks or footprints."); clicked => { root.trails(root.index, false); } }   // the deck's third trail style, the same flag the Trails tick throws
             }
         }
+    }
+    if root.opts-open : HorizontalLayout { spacing: 10px; alignment: start;
         Text { text: @tr("Width"); font-size: Theme.font-small; color: Theme.muted; vertical-alignment: center; }
         Slider { width: 90px; accessible-label: @tr("Trail width"); value: MapExtras.trail-px; enabled: root.map.trails-on; tooltip: MapExtras.trail-tooltip; changed(v) => { SystemEvents.display-trail-px(v); } }   // the same setting as the Display body's Trail width
         Text { text: MapExtras.trail-text; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; }
         Key { label: @tr("Reset coverage"); small: true; min-w: 0px; enabled: !root.map.coverage-empty; clicked => { root.reset-coverage(root.index); } }
         Text { text: root.map.coverage-status; font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; overflow: elide; }
-        Rectangle { horizontal-stretch: 1; }
-        if root.map.following != "" : Text { text: root.map.following; font-size: Theme.font-small; color: Theme.accent-soft; vertical-alignment: center; }
-        if root.map.following != "" : Key { label: @tr("Stop following"); small: true; min-w: 0px; clicked => { root.stop-following(root.index); } }
     }
     // THE FOLLOW-INTERRUPT ASK (the classic's "Stop following?"): a drag on the map while a target is followed does not pan; it asks, and the answer changes what the next drag does
     if root.map.follow-ask : HorizontalLayout { spacing: 8px; alignment: start;
@@ -430,10 +438,11 @@ component MapToolbar inherits VerticalLayout {
             Text { text: n.text; font-size: Theme.font-hint; color: Theme.dim; wrap: word-wrap; }
         }
     }
-    // THE GPS ROW, under the typed entry it is the alternative to (the classic's third row): the same row the Radar section draws
-    if MapExtras.gps-shown : VerticalLayout { spacing: 4px;
+    // THE GPS ROW, under the typed entry it is the alternative to (the classic's third row): the same row the Radar section draws; behind the options key
+    if root.opts-open && MapExtras.gps-shown : VerticalLayout { spacing: 4px;
         if MapExtras.gps-hint != "" : Text { text: MapExtras.gps-hint; font-size: Theme.font-hint; color: Theme.dim; wrap: word-wrap; }
         GpsRowView { gps: MapExtras.gps; }
+    }
     }
 }
 
@@ -563,6 +572,12 @@ export component PageBody inherits Rectangle {
     callback details-close(int);
     details-close(a) => { KitEvents.page-details-close(a); }
 
+    // MAP FOCUS: what the map pages remember while the window is open (not between starts): the target list's width and the Map options fold
+    in-out property <length> map-list-w: 260px;
+    in-out property <bool> map-opts: false;
+    property <length> map-div-w;
+    property <length> map-div-x;
+
     VerticalLayout { spacing: 0px;
         if root.page.kind >= 1 && root.page.kind <= 5 : PagePrelude { page: root.page; index: root.index;
             preset-pressed(p, i) => { root.preset-pressed(p, i); } preset-forgot(p, i) => { root.preset-forgot(p, i); } save-clicked(p) => { root.save-clicked(p); }
@@ -629,14 +644,14 @@ export component PageBody inherits Rectangle {
         // 5 map: the toolbar, then the list at the left and the pane at the right
         if root.page.kind == 5 && !root.page.globe.active : VerticalLayout { spacing: 0px; vertical-stretch: 1;
             if root.page.view3d == 2 : SondeViewBar { }
-            MapToolbar { map: root.page.map; index: root.index;
+            MapToolbar { map: root.page.map; index: root.index; opts-open <=> root.map-opts;
                 fit(p) => { root.map-fit(p); } world(p) => { root.map-world(p); } set-rx(p) => { root.map-set-rx(p); } on-screen(p, v) => { root.map-on-screen(p, v); } coverage(p, v) => { root.map-coverage(p, v); }
                 trails(p, v) => { root.map-trails(p, v); } alt-colours(p, v) => { root.map-alt-colours(p, v); } trail-style(p, v) => { root.map-trail-style(p, v); } reset-coverage(p) => { root.map-reset-coverage(p); }
                 stop-following(p) => { root.map-stop-following(p); } keep-following(p) => { root.map-keep-following(p); } sort-clicked(p) => { root.map-sort-clicked(p); } sort-dir(p) => { root.map-sort-dir(p); } }
             MapJBar { m: root.page.map.j; index: root.index; }
             if root.page.view3d == 2 && View3D.sonde-on : SondeWell { vertical-stretch: 1; }
-            if !(root.page.view3d == 2 && View3D.sonde-on) : HorizontalLayout { spacing: 0px; vertical-stretch: 1;
-                VerticalLayout { width: 260px; spacing: 4px;
+            if !(root.page.view3d == 2 && View3D.sonde-on) : map-row := HorizontalLayout { spacing: 0px; vertical-stretch: 1;
+                VerticalLayout { width: min(root.map-list-w, map-row.width / 2); spacing: 4px;
                     HorizontalLayout { spacing: 6px; padding-left: 8px; padding-right: 8px;
                         Text { text: @tr("Sort"); font-size: Theme.font-hint; color: Theme.dim; vertical-alignment: center; }
                         Key { label: root.page.map.sort-label; small: true; min-w: 0px; tooltip: @tr("Order the list. Distance and bearing are measured from the RX position."); clicked => { root.map-sort-clicked(root.index); } }
@@ -646,7 +661,23 @@ export component PageBody inherits Rectangle {
                         clicked(r) => { root.map-list-clicked(root.index, r); } row-pressed(r) => { root.map-list-double-clicked(root.index, r); } }
                     if root.page.map.list-footnote != "" : Text { text: root.page.map.list-footnote; font-size: Theme.font-hint; color: Theme.dim; wrap: word-wrap; horizontal-stretch: 1; }
                 }
-                MapPane { horizontal-stretch: 1; base: root.page.map.base; targets: root.page.map.targets; legend: root.page.map.legend; chart-lines: root.page.map.chart-lines; key-lines: root.page.map.key-lines; grid-labels: root.page.map.j.grid-labels; scale-text: root.page.map.scale-text;
+                // THE DIVIDER (MAP FOCUS): 6 px between the list and the map. The list's width follows the pointer from the press (absolute pointer x, not "current width plus this move", which compounds when
+                // the divider moves under the pointer): 0 hides the list, half the row is the most; a double-click puts it back at 260 px.
+                Rectangle { width: 6px; background: Theme.panel; accessible-role: slider; accessible-label: @tr("Resize target list");
+                    accessible-action-increment => { root.map-list-w = min(map-row.width / 2, root.map-list-w + 20px); }
+                    accessible-action-decrement => { root.map-list-w = max(0px, root.map-list-w - 20px); }
+                    Rectangle { x: 0px; width: Theme.hairline; height: parent.height; background: Theme.line; }
+                    Rectangle { x: parent.width - Theme.hairline; width: Theme.hairline; height: parent.height; background: Theme.line; }
+                    Rectangle { x: (parent.width - 2px) / 2; y: (parent.height - 48px) / 2; width: 2px; height: 48px; border-radius: 1px; background: div-area.has-hover || div-area.pressed ? Theme.accent : Theme.knob-ring; }
+                    div-area := TouchArea {
+                        mouse-cursor: MouseCursor.ew-resize;
+                        pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.map-div-w = min(root.map-list-w, map-row.width / 2); root.map-div-x = self.absolute-position.x + self.pressed-x; } }
+                        moved => { if (self.pressed) { root.map-list-w = max(0px, min(map-row.width / 2, root.map-div-w + (self.absolute-position.x + self.mouse-x - root.map-div-x))); } }
+                        double-clicked => { root.map-list-w = 260px; }
+                    }
+                    TipTimer { x: 0px; y: 0px; hovered: div-area.has-hover; text: @tr("Drag to resize the list. Double-click puts it back."); anchor-h: parent.height; }
+                }
+                map-pane := MapPane { horizontal-stretch: 1; base: root.page.map.base; targets: root.page.map.targets; legend: root.page.map.legend; chart-lines: root.page.map.chart-lines; key-lines: root.page.map.key-lines; grid-labels: root.page.map.j.grid-labels; scale-text: root.page.map.scale-text;
                     scale-frac: root.page.map.scale-frac; attribution: root.page.map.attribution; zoom-in-enabled: root.page.map.zoom-in; zoom-out-enabled: root.page.map.zoom-out;
                     pick-armed: root.page.map.pick-armed; hover-text: root.page.map.hover-text;
                     target-clicked(i) => { root.map-target-clicked(root.index, i); } target-double-clicked(i) => { root.map-target-double-clicked(root.index, i); }

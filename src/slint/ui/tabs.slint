@@ -323,6 +323,27 @@ export component TornWindow inherits Rectangle {
             mouse-cursor: root.enabled ? MouseCursor.nwse-resize : MouseCursor.default;
             dragged(dx, dy) => { root.resize(dx, dy); }
         }
+        // MAP FOCUS: the right and the bottom edge resize too (6 px strips clear of the corner grip), as any window's edges do
+        DragArea {
+            x: parent.width - 6px;
+            y: Theme.win-title-h;
+            width: 6px;
+            height: max(0px, parent.height - Theme.win-title-h - 16px);
+            visible: !root.rolled-up && !root.maximised;
+            active: root.enabled;
+            mouse-cursor: root.enabled ? MouseCursor.ew-resize : MouseCursor.default;
+            dragged(dx, dy) => { root.resize(dx, 0px); }
+        }
+        DragArea {
+            x: 0px;
+            y: parent.height - 6px;
+            width: max(0px, parent.width - 16px);
+            height: 6px;
+            visible: !root.rolled-up && !root.maximised;
+            active: root.enabled;
+            mouse-cursor: root.enabled ? MouseCursor.ns-resize : MouseCursor.default;
+            dragged(dx, dy) => { root.resize(0px, dy); }
+        }
         // border: 1px solid knob-ring, over the chrome and the content
         Rectangle {
             x: 0px;

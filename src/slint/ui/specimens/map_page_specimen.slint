@@ -1,0 +1,38 @@
+// The map page's specimen (MAP FOCUS, docs/multi-radio-records/map-focus.md): one PageBody - the body every plugin page of kind 5 (ADS-B, AIS, APRS, radiosondes, satellites ...) gets in
+// the new window - sized by view-w / view-h (a Window's own size does not follow the platform's), fed a made-up PageTab by tests/test_slint_map_page.cpp, which measures where the map
+// pane, the target list, the divider, the toolbar and the Layers row land at the page sizes of 1600 x 1600, 1600 x 900 and 1024 x 640 windows.
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { PageTab, PageBody, MapModel, MapExtras } from "../pages.slint";
+import { MapTarget, LegendRow } from "../map.slint";
+import { TableRow } from "../table.slint";
+import { PresetKeyModel } from "../presets.slint";
+import { SettingField } from "../forms.slint";
+import { MapJModel } from "../mapj.slint";
+import { GpsRow } from "../system_bank.slint";
+import { TipLayer } from "../tooltip.slint";
+import { TornWindow } from "../tabs.slint";
+export { Theme, Skin, Workbench }
+export { KitEvents } from "../pages.slint";
+export { PageTab, MapModel, MapExtras, MapTarget, LegendRow, TableRow, PresetKeyModel, SettingField, MapJModel, GpsRow }
+
+export component MapPageSpecimen inherits Window {
+    width: 1600px;
+    height: 1600px;
+    background: Theme.bg;
+    in property <length> view-w: 1240px;
+    in property <length> view-h: 1360px;
+    in property <PageTab> page;
+
+    // torn-mode: the page in a TornWindow at (torn-x, torn-y) the size of torn-w x torn-h, which the window's own edges and grip resize as the host does (the sum of the offsets, 240 x 140 at least)
+    in-out property <bool> torn-mode: false;
+    in-out property <length> torn-w: 700px;
+    in-out property <length> torn-h: 500px;
+    in property <length> torn-x: 40px;
+    in property <length> torn-y: 40px;
+    if !root.torn-mode : PageBody { x: 0px; y: 0px; width: root.view-w; height: root.view-h; page: root.page; index: 0; }
+    if root.torn-mode : TornWindow { x: root.torn-x; y: root.torn-y; width: root.torn-w; height: root.torn-h; title: root.page.title;
+        resize(dx, dy) => { root.torn-w = max(240px, root.torn-w + dx); root.torn-h = max(140px, root.torn-h + dy); }
+        PageBody { page: root.page; index: 0; }
+    }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
+}
