@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <atomic>
 #include <chrono>
 #include <deque>
 #include <functional>
@@ -150,6 +151,10 @@ public:
     // READ NUMBERS (1-based, counted in bulkReads) that fail ONCE with the text in failBulkText, leaving the queued payloads and every other read
     // alone: a stalled endpoint that recovers, as winusb_device.cpp documents (the first read answers Windows error 31, the next one delivers).
     std::set<int> failBulkReadsAt;
+    // While true every readBulk() parks (a reader stuck inside the kernel); clear it to let the parked reader go.
+    std::atomic<bool> blockReads{false};
+    // The text failBulkAfter's failures carry.
+    std::string failBulkAfterText = "fake: the device is gone";
     std::string failBulkText = "fake: a bulk read failed (Windows error 31)";
     int bulkReads = 0;
 
@@ -333,13 +338,14 @@ public:
 
     int readBulk(std::uint8_t* dst, std::size_t cap, unsigned timeoutMs) override {
         if (!streaming_) { return -1; }
+        while (blockReads.load()) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
         ++bulkReads;
         if (failBulkReadsAt.count(bulkReads) != 0) {
             lastError_ = failBulkText;
             return -1;
         }
         if (failBulkAfter >= 0 && bulkReads > failBulkAfter) {
-            lastError_ = "fake: the device is gone";
+            lastError_ = failBulkAfterText;
             return -1;
         }
         // A REAL EMPTY READ COSTS TIME, and a fake that returns 0 instantly

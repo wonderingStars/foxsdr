@@ -39,16 +39,6 @@ void dressAsR820T(FakeUsbDevice& fake) {
     fake.answerIn(0, 0x00a0, 0x0600, {0x00});
 }
 
-// A transport whose bulk read never comes back until released: a reader parked inside the kernel.
-class StuckFake : public FakeUsbDevice {
-public:
-    std::atomic<bool> release{false};
-    int readBulk(std::uint8_t* dst, std::size_t cap, unsigned timeoutMs) override {
-        while (!release.load()) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
-        return FakeUsbDevice::readBulk(dst, cap, timeoutMs);
-    }
-};
-
 std::vector<std::uint8_t> payload(std::size_t bytes) { return std::vector<std::uint8_t>(bytes, 0x80); }
 
 bool waitFor(const std::function<bool()>& pred, int ms) {
@@ -101,7 +91,7 @@ int main() {
         FakeUsbDevice* live = fk.get();
         CHECK(src.openWithTransport(std::move(fk), "fake R820T dongle"));
         live->failBulkAfter = 0;
-        live->failBulkText = "a bulk read failed (Windows error 31)";
+        live->failBulkAfterText = "a bulk read failed (Windows error 31)";
         const int startsBefore = live->streamStarts;
         CHECK(src.start());
         CHECK(waitFor([&] { return src.faulted(); }, 5000));
@@ -128,8 +118,7 @@ int main() {
         FakeUsbDevice* live = fk.get();
         CHECK(src.openWithTransport(std::move(fk), "fake R820T dongle"));
         live->failBulkAfter = 0;
-        live->failBulkText = "a bulk read failed (Windows error 1167)";   // ERROR_DEVICE_NOT_CONNECTED
-        live->failBulkReadsAt = {1};
+        live->failBulkAfterText = "a bulk read failed (Windows error 1167)";   // ERROR_DEVICE_NOT_CONNECTED
         const int startsBefore = live->streamStarts;
         CHECK(src.start());
         CHECK(waitFor([&] { return src.faulted(); }, 3000));
@@ -184,11 +173,12 @@ int main() {
     // E: a reader stuck inside the transport for good is heard by the pipeline's read().
     {
         RtlSdrSource src;
-        auto fk = std::make_unique<StuckFake>();
+        auto fk = std::make_unique<FakeUsbDevice>();
         dressAsR820T(*fk);
-        StuckFake* live = fk.get();
+        FakeUsbDevice* live = fk.get();
         CHECK(src.openWithTransport(std::move(fk), "fake R820T dongle"));
         src.setStallBoundsForTest(3000, 300);
+        live->blockReads.store(true);                                 // the reader parks inside the transport
         CHECK(src.start());
         std::vector<std::complex<float>> buf(1024);
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -197,10 +187,9 @@ int main() {
         std::printf("  stuck reader: %s\n", said.c_str());
         CHECK(src.faulted());
         CHECK(said.find("did not return") != std::string::npos);
-        live->release.store(true);                                    // let the parked reader go so stop() can join it
+        live->blockReads.store(false);                                    // let the parked reader go so stop() can join it
         src.stop();
     }
 
-    std::printf("%s\n", cascade_test_failures() == 0 ? "ALL PASSED" : "FAILURES");
-    return cascade_test_failures() == 0 ? 0 : 1;
+    return testSummary("test_rtlsdr_stream_recovery");
 }
