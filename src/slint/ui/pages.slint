@@ -64,6 +64,8 @@ export global KitEvents {
     callback decode-details-go();
     callback decode-details-follow();
     callback decode-details-close();
+    callback details-photo-clicked();
+    callback map-card-close(int);
     // the tab row and the torn windows
     callback page-tab-selected(int);
     callback page-tab-closed(int);
@@ -187,6 +189,8 @@ export struct DecoderBar { name: string, file: string, presets: [PresetKeyModel]
 export struct SatNote { title: string, text: string }
 
 export struct MapModel {
+    card-shown: bool,      // a target is selected here: its details (and photo) show at the foot of the list column
+    card: DetailsModel,
     base: image,
     targets: [MapTarget],
     legend: [LegendRow],
@@ -280,6 +284,10 @@ export struct DetailsModel {
     empty-hint: string,
     can-go: bool,
     following: bool,
+    photo: image,
+    photo-ready: bool,
+    photo-fetching: bool,
+    photo-credit: string,
 }
 
 export struct PageTab {
@@ -661,6 +669,10 @@ export component PageBody inherits Rectangle {
                     }
                     Table { vertical-stretch: 1; columns: root.page.map.list-columns; rows: root.page.map.list-rows; column-widths: root.page.map.list-widths; empty-text: @tr("No targets. Decoded aircraft, ships and stations appear here.");
                         clicked(r) => { root.map-list-clicked(root.index, r); } row-pressed(r) => { root.map-list-double-clicked(root.index, r); } }
+                    if root.page.map.card-shown : TargetDetails { heading: root.page.map.card.heading; chip: root.page.map.card.chip; lamp: root.page.map.card.lamp; lines: root.page.map.card.lines; gone: root.page.map.card.gone;
+                        can-go: root.page.map.card.can-go; following: root.page.map.card.following; show-close: true;
+                        photo: root.page.map.card.photo; photo-ready: root.page.map.card.photo-ready; photo-fetching: root.page.map.card.photo-fetching; photo-credit: root.page.map.card.photo-credit;
+                        go-clicked => { KitEvents.decode-details-go(); } follow-clicked => { KitEvents.decode-details-follow(); } close-clicked => { KitEvents.map-card-close(root.index); } photo-clicked => { KitEvents.details-photo-clicked(); } }
                     if root.page.map.list-footnote != "" : Text { text: root.page.map.list-footnote; font-size: Theme.font-hint; color: Theme.dim; wrap: word-wrap; horizontal-stretch: 1; }
                 }
                 // THE DIVIDER (MAP FOCUS): 6 px between the list and the map. The list's width follows the pointer from the press (absolute pointer x, not "current width plus this move", which compounds when
@@ -719,7 +731,7 @@ export component PageBody inherits Rectangle {
         // 8 Target details
         if root.page.kind == 8 : VerticalLayout { padding: 10px; alignment: start;
             TargetDetails { heading: root.page.details.heading; chip: root.page.details.chip; lamp: root.page.details.lamp; lines: root.page.details.lines; gone: root.page.details.gone;
-                empty-hint: root.page.details.empty-hint; can-go: root.page.details.can-go; following: root.page.details.following; show-close: true;
+                empty-hint: root.page.details.empty-hint; can-go: root.page.details.can-go; following: root.page.details.following; show-close: true; photo: root.page.details.photo; photo-ready: root.page.details.photo-ready; photo-fetching: root.page.details.photo-fetching; photo-credit: root.page.details.photo-credit; photo-clicked => { KitEvents.details-photo-clicked(); }
                 go-clicked => { root.details-go(root.index); } follow-clicked => { root.details-follow(root.index); } close-clicked => { root.details-close(root.index); } }
         }
     }
@@ -780,6 +792,8 @@ export component DecodeBank inherits VerticalLayout {
     details-follow() => { KitEvents.decode-details-follow(); }
     callback details-close();
     details-close() => { KitEvents.decode-details-close(); }
+    callback details-photo();
+    details-photo() => { KitEvents.details-photo-clicked(); }
     spacing: 0px;
     alignment: start;
 
@@ -826,7 +840,7 @@ export component DecodeBank inherits VerticalLayout {
             }
             // the "Target details" drawer
             if r.kind == 5 : TargetDetails { heading: root.details.heading; chip: root.details.chip; lamp: root.details.lamp; lines: root.details.lines; gone: root.details.gone;
-                empty-hint: root.details.empty-hint; can-go: root.details.can-go; following: root.details.following; show-close: false;
+                empty-hint: root.details.empty-hint; can-go: root.details.can-go; following: root.details.following; show-close: false; photo: root.details.photo; photo-ready: root.details.photo-ready; photo-fetching: root.details.photo-fetching; photo-credit: root.details.photo-credit; photo-clicked => { root.details-photo(); }
                 go-clicked => { root.details-go(); } follow-clicked => { root.details-follow(); } close-clicked => { root.details-close(); } }
         }
     }

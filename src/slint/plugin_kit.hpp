@@ -27,6 +27,7 @@
 #include "core/app_commands.hpp"
 #include "core/plugin_fault.hpp"
 #include "core/plugin_ui_port.hpp"
+#include <unordered_map>
 #include "gui/track_info_cache.hpp"
 #include "gui/track_metrics.hpp"
 #include "kit_logic.hpp"
@@ -126,6 +127,11 @@ public:
     std::vector<MapPage>& mapPages() { return pages_; }
     BasemapClient& basemap() { return basemap_; }
     cascade::gui::TrackInfoCache& trackInfo() { return trackInfo_; }
+    // The target photos' pixels, MEMORY ONLY: the photo cache's "texture" here is an id into this store (its upload / release hooks, set in the constructor), so a photo is
+    // held exactly while the cache holds it (while a surface asks for it every tick), and nothing is written to disk. An id the cache released is gone from here.
+    struct PhotoPixels { std::vector<std::uint8_t> rgb; std::uint32_t w = 0u; std::uint32_t h = 0u; };
+    const PhotoPixels* photoPixels(unsigned int id) const { const auto it = photoStore_.find(id); return it == photoStore_.end() ? nullptr : &it->second; }
+    std::size_t photosHeld() const { return photoStore_.size(); }
     cascade::gui::CoverageMap& coverage() { return coverage_; }
     OpenWindows& open() { return open_; }
     SettingsEdits& edits() { return edits_; }
@@ -183,6 +189,8 @@ private:
     bool attached_ = false;
     BasemapClient basemap_;
     cascade::gui::TrackInfoCache trackInfo_;
+    std::unordered_map<unsigned int, PhotoPixels> photoStore_;
+    unsigned int photoNextId_ = 1u;
     cascade::gui::CoverageMap coverage_;
     std::vector<cascade::core::HostImage> images_;
     KitLists lists_;

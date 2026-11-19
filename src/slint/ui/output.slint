@@ -512,6 +512,10 @@ export component TargetDetails inherits Rectangle {
     in property <bool> following;                        // the key says Stop following
     in property <bool> show-close: false;                // the window form: a Close key under the others
     in property <bool> framed: true;                     // the sheet's panel; false: drawn on the window's own ground
+    in property <image> photo;                           // the plugin's photo of the target (pixels in memory, shown only while this is drawn)
+    in property <bool> photo-ready: false;
+    in property <bool> photo-fetching: false;
+    in property <string> photo-credit;                   // "Photo: <name> / Planespotters.net": drawn in text right under the picture
     in property <bool> mono-lines: false;                // the lines in the mono face (the padded labels of the host's lines line up)
     in property <length> side-min-w: 330px;              // from this width the keys are a 120 px column at the right of the lines; narrower, a row under them
     // ---- the words it draws itself ----
@@ -527,6 +531,7 @@ export component TargetDetails inherits Rectangle {
     callback go-clicked();
     callback follow-clicked();
     callback close-clicked();
+    callback photo-clicked();
 
     property <[DetailLine]> shown: root.gone ? [] : root.lines;       // a gone target shows no lines whatever the host still holds
     property <bool> has-target: !root.gone && (root.lines.length > 0 || root.heading != "");
@@ -644,6 +649,31 @@ export component TargetDetails inherits Rectangle {
                         font-size: Theme.font-small;
                         vertical-alignment: center;
                         overflow: elide;
+                    }
+                }
+                if root.photo-fetching : Text {
+                    text: @tr("Fetching photo...");
+                    color: Theme.dim;
+                    font-family: Theme.font-ui;
+                    font-size: Theme.font-small;
+                }
+                // THE PHOTO: the whole picture is ONE key that opens the photo's page (the service's terms), the credit is text directly under it
+                if root.photo-ready : VerticalLayout {
+                    spacing: 2px;
+                    pic := Rectangle {
+                        height: min(150px, self.width * root.photo.height / max(root.photo.width, 1));
+                        accessible-role: button;
+                        accessible-label: @tr("Open this photo's page in your browser");
+                        Image { x: 0px; y: 0px; width: parent.width; height: parent.height; source: root.photo; image-fit: fill; }
+                        pic-touch := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.photo-clicked(); } }
+                        TipTimer { x: 0px; y: 0px; hovered: pic-touch.has-hover; text: @tr("Open this photo's page in your browser"); anchor-h: parent.height; }
+                    }
+                    Text {
+                        text: root.photo-credit;
+                        color: Theme.dim;
+                        font-family: Theme.font-ui;
+                        font-size: Theme.font-small;
+                        wrap: word-wrap;
                     }
                 }
                 if root.show-hint : Rectangle {

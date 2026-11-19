@@ -21,6 +21,8 @@
 #include "core/plugin_ui_data.hpp"
 #include "core/utf8_text.hpp"
 #include "gui/track_metrics.hpp"
+#include "gui/track_photo_cache.hpp"
+#include "desk_logic.hpp"
 #include "mapj_logic.hpp"
 #include "model_reuse.hpp"
 #include "mapicons_logic.hpp"
@@ -731,6 +733,13 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
         m.chart_lines = model(std::move(chart));
         m.key_lines = model(std::move(keys));
     }
+    // THE CARD: the selected target's details (and photo) at the foot of the list column, on the page the user is looking at
+    m.card_shown = false;
+    if (pg != nullptr && !detailsId_.empty() && pg->selectedId == detailsId_) {
+        bool mineSel = false;
+        for (const cascade::core::HostTrack& tr : kit_.tracks()) { if (tr.plugin == p.plugin && tr.t.id == detailsId_ && cascade::core::trackPresentation(tr.t).visible) { mineSel = true; break; } }
+        if (mineSel) { std::string csig; m.card = detailsModel(state, csig, true); m.card_shown = true; sig += "CARD" + csig; }
+    }
     m.following = ss(pg != nullptr && !pg->followedId.empty() ? cascade::core::formatText(cascade::i18n::tr("following %s"), pg->followedId.c_str()) : std::string());
     m.follow_ask = pg != nullptr && mapFollowAskShown(*pg);
     m.follow_ask_text = ss(m.follow_ask ? cascade::core::formatText(cascade::i18n::tr("The map is following %s."), pg->followedId.c_str()) : std::string());
@@ -905,7 +914,51 @@ void KitPublisher::fillModule(const Page& p, PageTab& t, const FoxReceiverState&
     t.module = m;
 }
 
-DetailsModel KitPublisher::detailsModel(const FoxReceiverState& state, std::string& sig) {
+// THE PHOTO of a target (0.99.111 fix): asking is what keeps it (track_photo_cache.hpp), so this is called only by a surface that is drawing the details now. The picture
+// is made from the cache's in-memory pixels (the kit's store); nothing is written anywhere, and the link is the plugin's, unchanged.
+KitPublisher::PhotoNow KitPublisher::photoNow(const cascade::core::HostTrack& t) {
+    PhotoNow n;
+    cascade::gui::TrackInfoCache& ti = kit_.trackInfo();
+    if (!ti.active() || !ti.photos().active()) { return n; }
+    const cascade::gui::TrackPhotoCache::Photo* p = nullptr;
+    const cascade::gui::TrackPhotoCache::State st = ti.photos().request(t.t.id, t.t.kind, &p);
+    if (st == cascade::gui::TrackPhotoCache::State::Pending) { n.state = 1; return n; }
+    if (st != cascade::gui::TrackPhotoCache::State::Ready || p == nullptr) { return n; }
+    n.state = 2; n.credit = p->credit; n.link = p->link; n.texture = p->texture;
+    return n;
+}
+
+void KitPublisher::fillPhoto(DetailsModel& d, const cascade::core::HostTrack& t, std::string& sig) {
+    const PhotoNow n = photoNow(t);
+    d.photo_ready = false; d.photo_fetching = n.state == 1; d.photo_credit = ss("");
+    if (n.state == 2) {
+        const PluginKit::PhotoPixels* px = kit_.photoPixels(n.texture);
+        if (px != nullptr && px->w > 0u && px->h > 0u) {
+            if (photoImageTex_ != n.texture) {
+                slint::SharedPixelBuffer<slint::Rgba8Pixel> buf(px->w, px->h);
+                slint::Rgba8Pixel* o = buf.begin();
+                for (std::size_t i = 0, cnt = static_cast<std::size_t>(px->w) * px->h; i < cnt; ++i) { o[i] = {px->rgb[3 * i], px->rgb[3 * i + 1], px->rgb[3 * i + 2], 255}; }
+                photoImage_ = slint::Image(buf);
+                photoImageTex_ = n.texture;
+            }
+            d.photo = photoImage_; d.photo_ready = true; d.photo_credit = ss(n.credit);
+            photoLink_ = n.link;
+            sig += "PH" + std::to_string(n.texture) + n.credit;
+        }
+    }
+    if (!d.photo_ready) { photoImage_ = slint::Image(); photoImageTex_ = 0u; photoLink_.clear(); }
+    if (d.photo_fetching) { sig += "PF"; }
+}
+
+void KitPublisher::openPhoto() {
+    if (photoLink_.empty() || !cascade::gui::photoLinkIsSafe(photoLink_.c_str(), photoLink_.size() + 1u)) { return; }
+    const std::string link = photoLink_;
+    if (linkOpener_) { linkOpener_(link); return; }
+    std::string why;
+    if (!foxsdr::slintdesk::openAddress(link, &why)) { cascade::core::diagLogf("photo link: %s", why.c_str()); }
+}
+
+DetailsModel KitPublisher::detailsModel(const FoxReceiverState& state, std::string& sig, bool wantPhoto) {
     DetailsModel d{};
     d.chip = ss(detailsId_.empty() ? std::string(cascade::i18n::tr("NONE")) : detailsId_.substr(0, 10));
     d.lamp = LampState::Off;
@@ -965,6 +1018,7 @@ DetailsModel KitPublisher::detailsModel(const FoxReceiverState& state, std::stri
             d.can_go = in.hasPosition;
             MapPage* pg = findMapPage(kit_.mapPages(), found->plugin);
             d.following = pg != nullptr && pg->followedId == detailsId_;
+            if (wantPhoto) { fillPhoto(d, *found, sig); }
             sig += (d.following ? "F" : "") + std::string(d.heading);
         }
     }
@@ -972,7 +1026,7 @@ DetailsModel KitPublisher::detailsModel(const FoxReceiverState& state, std::stri
     return d;
 }
 
-void KitPublisher::fillDetails(PageTab& t, const FoxReceiverState& state, std::string& sig) { t.details = detailsModel(state, sig); }
+void KitPublisher::fillDetails(PageTab& t, const FoxReceiverState& state, std::string& sig) { t.details = detailsModel(state, sig, true); }
 
 // The Plugin store page (kind 9): the model the EXTEND publisher handed over, whole. Its signature is the hand-over's revision (the publisher sets a model only when it
 // differs from the one before).
@@ -1389,7 +1443,7 @@ void KitPublisher::publishDecodeBank(const FoxReceiverState& state) {
     if (sigs_.changed("stale", ssig)) { ui_.set_stale(model(std::move(stale))); }
     // the Target details drawer
     std::string dsig;
-    DetailsModel d = detailsModel(state, dsig);
+    DetailsModel d = detailsModel(state, dsig, decodeOpen_["details"]);
     if (sigs_.changed("details", dsig)) { ui_.set_details(d); }
     if (catalogueUrl_ != k.catalogueUrl) { catalogueUrl_ = k.catalogueUrl; ui_.set_catalogue_url(ss(catalogueUrl_)); }
 }
@@ -1533,6 +1587,8 @@ void KitPublisher::publish(const FoxReceiverState& state) {
     globe_->tick(state);
     publishPages(state);
     publishMuteQuestion();
+    kit_.trackInfo().photos().endFrame();   // a photo nobody asked for this tick is let go (pixels freed, the plugin told to forget it)
+    if (kit_.photosHeld() == 0u) { photoImage_ = slint::Image(); photoImageTex_ = 0u; photoLink_.clear(); }   // and the picture made from it
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -1710,6 +1766,7 @@ void KitPublisher::wire() {
     ui_.global<::KitEvents>().on_decode_details_go(detailsGo);
     ui_.global<::KitEvents>().on_decode_details_follow(detailsFollow);
     ui_.global<::KitEvents>().on_decode_details_close([this] { detailsId_.clear(); });
+    ui_.global<::KitEvents>().on_details_photo_clicked([this] { openPhoto(); });
 
     // ---- the tab row and the torn windows ----
     ui_.global<::KitEvents>().on_page_tab_selected([this](int i) { if (i >= 0 && i < static_cast<int>(pages_.size())) { ui_.set_view_index(3 + i); } });
@@ -1843,6 +1900,7 @@ void KitPublisher::wire() {
         pg->selectedId = s->targetIds[static_cast<std::size_t>(t)];
         detailsId_ = pg->selectedId;
     });
+    ui_.global<::KitEvents>().on_map_card_close([mapPage](int i) { if (MapPage* pg = mapPage(i)) { pg->selectedId.clear(); } });
     ui_.global<::KitEvents>().on_page_map_target_double_clicked([surface, mapPage](int i, int t) {
         MapSurface* s = surface(i); MapPage* pg = mapPage(i);
         if (s == nullptr || pg == nullptr || t < 0 || t >= static_cast<int>(s->targetIds.size())) { return; }

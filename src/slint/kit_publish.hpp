@@ -60,6 +60,10 @@ public:
     void forceMuteQuestion(const std::string& name, const std::string& key);
     std::string muteState(const std::string& what, std::string& out) const;
     void setClipboardSink(std::function<void(const std::string&)> sink) { clipboardSink_ = std::move(sink); }
+    // The photo card's link opener (default: the system's browser); a test replaces it. It is handed the plugin's link UNCHANGED, only after photoLinkIsSafe.
+    void setLinkOpener(std::function<void(const std::string&)> f) { linkOpener_ = std::move(f); }
+    void photoClickedForTest() { openPhoto(); }
+    std::size_t photoHeldForTest() const { return kit_.photosHeld(); }
     int copyCount() const { return copies_; }
     const std::string& lastCopy() const { return lastCopy_; }
     std::string lastSaveNote() const;
@@ -193,7 +197,7 @@ private:
     void fillStore(PageTab& t, std::string& sig);
     void fillPatchPresets(PageTab& t, std::string& sig);
     void fillTransmit(PageTab& t, std::string& sig);
-    DetailsModel detailsModel(const FoxReceiverState& state, std::string& sig);
+    DetailsModel detailsModel(const FoxReceiverState& state, std::string& sig, bool wantPhoto = false);   // wantPhoto: this surface draws the photo now, so it asks for it
     void publishDecodeBank(const FoxReceiverState& state);
     void publishPages(const FoxReceiverState& state);
     void publishMuteQuestion();
@@ -233,6 +237,15 @@ private:
     std::string armedRemove_;                         // the Fitted row whose REMOVE was pressed once
     std::int64_t armedAtMs_ = 0;
     std::string detailsId_;                           // the target the details show
+    // the photo of the target the details show (TRACK_PHOTO), asked once a tick by whoever draws it (photoFor), let go by publish() when nobody did
+    struct PhotoNow { int state = 0; std::string credit, link; unsigned int texture = 0u; };   // state: 0 none offered, 1 fetching, 2 ready
+    PhotoNow photoNow(const cascade::core::HostTrack& t);
+    void fillPhoto(DetailsModel& d, const cascade::core::HostTrack& t, std::string& sig);
+    void openPhoto();
+    std::function<void(const std::string&)> linkOpener_;
+    std::string photoLink_;                           // the link of the photo drawn this tick, "" when none (the shown picture's own link, unchanged)
+    unsigned int photoImageTex_ = 0u;
+    slint::Image photoImage_;
     std::string presetNote_;                          // the rail's preset result note
     std::string catalogueRefusal_;                    // the sentence under the Catalogue field when the last address typed was refused (drive fixes 3, item 8)
     std::string presetNoteFile_;                      // the module file the note is about: the drawer shows it under that plugin only (drive fixes 3, item 9)
