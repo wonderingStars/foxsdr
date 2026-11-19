@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: FoxSDR web remote
-  version: 0.99.111
+  version: 0.99.112
   description: "The HTTP interface of FoxSDR's built-in web server (src/net/web_server.cpp), read from that file's routes at engine/multi-radio d3630d78. It is the page the receiver serves to a browser plus the JSON and streaming routes the page uses. The server is OFF until the user turns it on. It has no TLS. A bind to anything but the loopback address is refused unless a password is set (src/net/web_policy.hpp). Where this file and the source disagree, the source is right; tests/packaging/test_openapi_routes.py fails when a route in the source is missing here."
   license:
     name: PolyForm Noncommercial 1.0.0
