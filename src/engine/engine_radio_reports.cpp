@@ -260,7 +260,8 @@ void Engine::journalRecovery(const std::string& kind, const std::string& args, c
 // has passed, and said with that window.
 void Engine::journalStreamMinute(std::uint64_t samplesRead, std::uint64_t samplesDropped, std::size_t ringHighWaterSamples) {
     RadioJournalSlot& j = radioJournal_[scopedSlot()];
-    if (!j.open) { return; }
+    // A FAULTED RADIO IS OVER (field data 2026-11-19: 38 windows after a close): its slot stays open until the pass sees it leave, but no window is said for it
+    if (!j.open || j.faulted) { return; }
     const double now = clockS();
     const double dt = std::max(1.0, now - j.lastMinuteS);
     j.lastMinuteS = now;
