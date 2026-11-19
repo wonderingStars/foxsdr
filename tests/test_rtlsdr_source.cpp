@@ -1545,5 +1545,81 @@ int main() {
         src.closeDevice();
     }
 
+    // =======================================================================
+    // 23. FIELD FIX A (2026-11-19, the 42958e install's journal): ONE FAILED READ MUST NOT CONDEMN A RADIO FOR GOOD, AND A FAULT'S OWN WORDS MUST
+    // SURVIVE.
+    //
+    // The journal showed an RTL-SDR streaming perfectly (full rate, no drops) and then "reading samples: the radio stopped delivering samples", five
+    // times in one afternoon on one dongle, each needing the user to pick the radio again. The reader thread turned the FIRST negative read into a
+    // permanent fault; the transport's own measurement (winusb_device.cpp, beginBulkStream: Windows error 31 on one read, the next one delivers
+    // 16384 bytes) says a single failed read on a live dongle happens. A read that fails is tried again a few times; a radio that goes on failing
+    // is faulted exactly as before, and the fault says what the transport said (the Windows error number was thrown away) and keeps saying it when
+    // a later control call on the dead radio is refused (that refusal overwrote it with "this radio has faulted; reopen it" in the field).
+    // =======================================================================
+    {
+        // (a) two failed reads in a row, then data: the stream goes on
+        RtlSdrSource src;
+        auto fake = std::make_unique<FakeUsbDevice>();
+        dressAsR820T(*fake);
+        FakeUsbDevice* live = fake.get();
+        CHECK(src.openWithTransport(std::move(fake), "fake R820T dongle"));
+        for (int i = 0; i < 40; ++i) { live->bulkQueue.push_back(std::vector<std::uint8_t>(1024, 0x80)); }
+        live->failBulkTransientFrom = 3;
+        live->failBulkTransientCount = 2;
+        CHECK(src.start());
+        std::vector<std::complex<float>> got(512);
+        std::size_t total = 0;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (total < 512 * 10 && std::chrono::steady_clock::now() < until) {
+            const std::size_t n = src.read(got.data(), got.size());
+            total += n;
+            if (n == 0) { std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
+        }
+        std::printf("two failed reads in a row: %zu samples delivered, faulted %d, reads %d\n", total, src.faulted() ? 1 : 0, live->bulkReads);
+        CHECK(!src.faulted());
+        CHECK(!src.deviceDead());
+        CHECK(total >= 512 * 10);
+        src.stop();
+        src.closeDevice();
+    }
+    {
+        // (b) a radio that goes on failing is faulted, after a bounded number of tries, with the transport's words
+        RtlSdrSource src;
+        auto fake = std::make_unique<FakeUsbDevice>();
+        dressAsR820T(*fake);
+        FakeUsbDevice* live = fake.get();
+        CHECK(src.openWithTransport(std::move(fake), "fake R820T dongle"));
+        live->failBulkAfter = 0;
+        // MERGE OF FIELD FIXES A AND F: the two lanes repaired this reader two ways and the merge keeps lane F's (the stream is re-armed, at most three
+        // times; an error that says the device is GONE is fatal at once, tests/test_rtlsdr_stream_recovery.cpp case C). The fake's default words for
+        // failBulkAfter say "gone", so this case names the stall the field saw instead: a radio that goes on failing with Windows error 31.
+        live->failBulkAfterText = "a bulk read failed (Windows error 31)";
+        CHECK(src.start());
+        const auto t0 = std::chrono::steady_clock::now();
+        while (!src.faulted() && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(3)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        CHECK(src.faulted());
+        CHECK(src.deviceDead());
+        CHECK(src.faultedWhile() == "reading samples");
+        const int readsAtFault = live->bulkReads;
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        std::printf("a radio that keeps failing: %d reads before the fault, %d 200 ms later: %s\n", readsAtFault, live->bulkReads, src.lastError());
+        CHECK(readsAtFault >= 2);   // it was tried again, not condemned on the first failure
+        CHECK(readsAtFault <= 8);   // ... but not for ever
+        CHECK(live->bulkReads == readsAtFault);
+        // the transport's own words are in the fault (the Windows error number is the only evidence of WHY)
+        CHECK(std::string(src.lastError()).find("Windows error 31") != std::string::npos);
+        CHECK(std::string(src.lastError()).find("stopped delivering samples") != std::string::npos);
+        // a later control call on the dead radio is refused WITHOUT replacing what the fault said
+        const std::string said = src.lastError();
+        src.stop();
+        CHECK(!src.start());
+        CHECK(!src.setSampleRateHz(1024000.0));
+        CHECK(std::string(src.lastError()) == said);
+        src.stop();
+        src.closeDevice();
+    }
+
     return testSummary("test_rtlsdr_source");
 }

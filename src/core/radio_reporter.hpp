@@ -77,6 +77,9 @@ struct FailureInput {
     long long openMs = -1;     // how long the open took before it failed; -1 unknown
     long long sampleRateSps = -1;   // the rate asked for, in samples per second; -1 unknown
     bool soundCard = false;    // the sound-card input: model "sound card", no serial
+    // A BUSY-AGAIN TRY IN THE MIDDLE OF A SAVED-RADIO RETRY SERIES (field fix A3): counted in the radio's `attempt` ordinal and not sent. The series' first failure and
+    // its last are sent, as is any failure of another reason; the journal's radio_open events still show every try.
+    bool countOnly = false;
 };
 
 using FieldValue = std::variant<std::string, long long, double, bool, std::vector<std::string>, std::vector<long long>>;

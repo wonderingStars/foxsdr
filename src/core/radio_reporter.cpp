@@ -832,6 +832,7 @@ struct Reporter::Impl {
     void fileFailureLocked(const FailureInput& in, const std::vector<std::string>& logRing, std::int64_t t) {
     if (!on) { return; }
         const RadioIdentity rid = in.soundCard ? soundCardIdentity() : identify(in.driverKind, in.args, in.nativeLabel);
+        if (in.countOnly) { ++failAttempt[rid.key]; return; }   // a retry inside a series: the ordinal moves, nothing is queued
             Impl::Pending p;
         p.kind = "radio_fail";
         p.key = rid.key;

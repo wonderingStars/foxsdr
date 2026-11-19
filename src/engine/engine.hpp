@@ -2110,7 +2110,7 @@ private:
     void radioReportsQuit();                      // the first step of the teardown: closes, the session's end, the last bounded send
     void radioReportsScanLanded(bool native, bool soapy);   // a scan landed: radio_found for each radio the scan listed, and what it listed
     void reportFailedOpen(const std::string& kind, const std::string& args, const std::string& reason, cascade::core::radioreport::Trigger trigger,
-                          bool superseded, double requestRateHz, long long openMs);
+                          bool superseded, double requestRateHz, long long openMs, bool seriesRetry = false);
     void journalOpenStart(const std::string& kind, const std::string& args, cascade::core::radioreport::Trigger trigger, double requestRateHz);
     void journalOpenOk(const std::string& kind, const std::string& args, cascade::core::radioreport::Trigger trigger, double requestRateHz, long long openMs);
     void journalSettingsAtOpen(const std::string& kind, const std::string& args);
@@ -3267,6 +3267,14 @@ private:
     int hotplugRemovalsTotal_ = 0;
     std::uint64_t hotplugVersion_ = 1;
     std::unique_ptr<cascade::core::sys::DeviceArrivalWatcher> hotplugWatch_;   // (declared last of these: destroyed first, its thread joined before the atomics go)
+    // RADIO HAND-OFF (field fix A2; engine_handoff.cpp): the state is behind a shared pointer so the pipe's thread and the workers never outlive what they touch.
+    struct HandoffImpl;
+    std::shared_ptr<HandoffImpl> handoff_;
+    std::uint64_t handoffVersion_ = 1;
+    void offerHandoff(const std::string& kind, const std::string& args, double requestRateHz, int row);   // a radio failed to open BUSY (once per failed open, never per retry)
+    bool handoffAnswer(bool move);               // FOXAPP_OP_RADIO_HANDOFF: false when no question is open
+    void pumpHandoff();                          // the control pass
+    void handoffFacts(const std::function<void(const std::string&, const std::string&)>& fact) const;
     // TUNER POOLING (engine serial lane A, row R19; engine_pool.cpp, core/tuner_pool.hpp): the claim and the release; the fingerprint counter of fact.radio.<n>.claimed.
     FoxCommandResult claimChannel(const FoxCommand& c);
     FoxCommandResult releaseChannel(const FoxCommand& c);
@@ -3564,6 +3572,11 @@ public:
     cascade::core::Pipeline::ZoomFrameInfo zoomFrame(std::uint32_t radio, float* out, std::size_t cap);
     void startHotplugWatch(bool registerWithOs, cascade::core::sys::ArrivalConfig cfg = {});
     void stopHotplugWatch();
+    // ONE RADIO, TWO FOXSDR WINDOWS (field fix A2; engine_handoff.cpp, core/radio_handoff.hpp): the window process starts this before it restores its radio, so a saved radio found held by another
+    // FoxSDR window can be offered to this one, and so this window can be asked to let a radio go. Not started (and so nothing is offered or answered) by a service, a bounded run or a test that does not ask.
+    void startHandoffServer(const std::string& windowWord);
+    void stopHandoffServer();
+    bool handoffActive() const;
     void loadBookmarks();
     // Reads the previous session out of the config, counts a crash if it
     // never finished, and sends its report. Start-up only, after applyConfig (the crash count and the pending report are read

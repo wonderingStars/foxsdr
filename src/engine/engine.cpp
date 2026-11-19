@@ -268,6 +268,7 @@ void Engine::frameKick() {
 // specific needs doing, and detaching is the only safe choice. Proven with
 // tests/test_engine_fallback_teardown.cpp (a throwing constructor seam).
 Engine::~Engine() {
+    stopHandoffServer();   // field fix A2: the pipe's thread is joined before anything it could ask about goes
     wireBShutdown();   // wire-b: every network I/Q output ends while the pipelines still exist
     cascade::core::beats::Registry::clearKeyedProbe(this);
     if (!tornDown_) {
@@ -1777,12 +1778,17 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
         // classes read off what the driver said - and nothing of what it said.
         // Not for a result the user had already moved on from (returned above).
         if (!retryBusyAgain) { cascade::core::health::noteRadioFail(r.kind, why); }
-        // THE RADIO THAT WOULD NOT OPEN, AS ITS OWN REPORT (radio reports, D4): every time, a busy-again retry included (the anonymous count above skips
-        // it, the report does not), whatever the Diagnostics switch says.
+        // THE RADIO THAT WOULD NOT OPEN, AS ITS OWN REPORT (radio reports, D4): every failed open, whatever the Diagnostics switch says - EXCEPT a busy-again
+        // try in the middle of the saved radio's retry series (FIELD FIX A3, 2026-11-19: one held dongle sent five reports in thirty seconds, from each of four
+        // copies). The series' first failure was reported by the start-up restore, its last (the fourth retry, "giving up") is reported here, and a retry that
+        // fails for another reason is a new fact and is reported at once; the tries between are counted in `attempt` and shown by the journal, not sent.
+        const bool midSeries = retryBusyAgain && rx().savedRadioRetryAttempts_ < 4;
         reportFailedOpen(r.kind, r.args, why,
                          r.recovery ? cascade::core::radioreport::Trigger::AutoReopen
                                     : (r.savedRadioRetry ? cascade::core::radioreport::Trigger::SavedRetry : cascade::core::radioreport::Trigger::UserPick),
-                         /*superseded=*/false, r.requestRateHz, r.openMs);
+                         /*superseded=*/false, r.requestRateHz, r.openMs, midSeries);
+        // FIELD FIX A2: a radio the USER picked (not a try of the retry series, not the automatic reopen) that is busy: is the holder another FoxSDR window? (once per failed open)
+        if (whyReason == cascade::core::health::RadioReason::Busy && !r.savedRadioRetry && !r.recovery) { offerHandoff(r.kind, r.args, r.requestRateHz, r.row); }
         if (r.recovery) { journalRecovery(r.kind, r.args, "gave-up", "reopen", why, r.openMs); }
         if (r.recovery) {
             // THE ONE AUTOMATIC REOPEN DID NOT TAKE. The dead radio was
@@ -8030,6 +8036,9 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
         }
         case FOXAPP_OP_CHANNEL_CLAIM: return claimChannel(c);
         case FOXAPP_OP_CHANNEL_RELEASE: return releaseChannel(c);
+        case FOXAPP_OP_RADIO_HANDOFF:
+            if (!handoffAnswer(c.ival[0] != 0)) { return refuse(FOXAPI_NO_CHANGE, "no radio question is open"); }
+            return res;
         case FOXAPP_OP_SET_IF_ZOOM: {
             Receiver& rxs = rx();
             const std::int64_t size = c.ival[0];
@@ -10537,6 +10546,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
                 cascade::core::diagLogf(
                     "source: the saved radio is in use by another program - trying it again in "
                     "2, 4, 8 and 16 s");
+                offerHandoff(kind, args, cfg.sampleRateHz, -1);   // FIELD FIX A2: is the holder another FoxSDR window? (the answer cancels these retries)
             }
             // Which radio, why, and where the receiver is - the driver's own
             // reason is kept verbatim inside the sentence (0.99.36).
@@ -11391,6 +11401,7 @@ void Engine::pumpWorkers() {
     // every pass with nothing armed.
     pollSavedRadioRetry();
     pumpHotplug();   // R10: a settled burst of device arrivals / removals
+    pumpHandoff();   // field fix A2: another window asked for a radio, or the question about one came back
     pumpPpmAuto();   // R18
     // Release a wheel-burst retune the coalescer held back (~50 ms pacing).
     pollPendingRetune();

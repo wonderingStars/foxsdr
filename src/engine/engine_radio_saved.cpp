@@ -230,6 +230,7 @@ void Engine::restoreExtraRadioDevice(const std::string& kind, const std::string&
         rx().savedRadioRetryBusy_ = true;
         rx().savedRadioRetryAttempts_ = 0;
         rx().savedRadioRetryLastFailSec_ = retryClockS();
+        offerHandoff(kind, args, rateHz, -1);   // FIELD FIX A2: is the holder another FoxSDR window? (once per failed restore)
     }
     rx().sourceError_ = cascade::gui::radioNotOpenedSentence(label, rx().sourceError_);
     rx().refusal_ = rx().sourceError_;

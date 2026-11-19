@@ -115,7 +115,7 @@ cascade::core::TelemetryReport Engine::telemetrySnapshot() {
 // ---------------------------------------------------------------------------
 
 void Engine::reportFailedOpen(const std::string& kind, const std::string& args, const std::string& reason, rr::Trigger trigger, bool superseded,
-                              double requestRateHz, long long openMs) {
+                              double requestRateHz, long long openMs, bool seriesRetry) {
     if (!physicalKind(kind)) { return; }   // the generator and a recording are not radios that failed to open
     rr::FailureInput in;
     in.driverKind = kind;
@@ -128,6 +128,7 @@ void Engine::reportFailedOpen(const std::string& kind, const std::string& args, 
     in.superseded = superseded;
     in.openMs = openMs;
     in.sampleRateSps = rateSps(requestRateHz);
+    in.countOnly = seriesRetry;
     ++radioOpenFailures_;
     rr::Reporter& g = rr::global();
     {
