@@ -424,6 +424,16 @@ int main(int argc, char** argv) {
         ui->set_team_message_lines(std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(lines)));
     };
 
+    // THE POPUP FOR A MESSAGE TO ONE RADIO (0.99.110): the matched, unseen message, oldest first; the sheet itself waits behind any other sheet (ui/main.slint modal-busy)
+    const auto applyRadioMessage = [&] {
+        if (!duties.takeRadioMessageChange()) { return; }
+        const foxsdr::slinthost::RadioMessageModel& r = duties.radioMessage();
+        ui->set_radio_message_shown(r.shown);
+        ui->set_radio_message_date(ss(r.date));
+        ui->set_radio_message_text(ss(r.text));
+        ui->set_radio_message_radio(ss(r.radio));
+    };
+
     // ---- host state ----
     FoxReceiverState state{}; state.structSize = sizeof(state);
     ListsSnapshot lists;
@@ -2213,6 +2223,7 @@ int main(int argc, char** argv) {
     // remote); the fact follows on the next publish, so the box is set here as well for the tick in between.
     ui->on_follow_band_plan_toggled([&](bool v) { followBandPlan = v; FoxCommand c = op(FOXAPI_OP_SET_BAND_FOLLOW); c.ival[0] = v ? 1 : 0; submit(c); });
     ui->on_team_message_seen([&] { duties.teamMessageSeen(); applyTeamCard(); });
+    ui->on_radio_message_seen([&] { duties.radioMessageSeen(); applyRadioMessage(); });
     ui->on_update_primary_clicked([&] { duties.updatePrimaryClicked(); applyUpdateCard(); });
     ui->on_update_dismissed([&] { duties.updateDismissed(); applyUpdateCard(); });
 
@@ -4344,6 +4355,7 @@ int main(int argc, char** argv) {
         duties.poll(in);
         applyUpdateCard();
         applyTeamCard();
+        applyRadioMessage();
         if (frameMeter) {
             frameMeter->tickEnd(meterBegan);
             if (frameMeter->wantsSnapshots() && bounded.ticks() % 5 == 0) {

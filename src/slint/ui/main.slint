@@ -205,6 +205,15 @@ export component MainWindow inherits Window {
     in property <string> tune-step-text: "12.5 kHz";   // not-translated: sample data (a value with its unit) the host replaces
     in-out property <bool> follow-band-plan: true;
     in property <bool> team-message-shown; in property <string> team-message-date; in property <[string]> team-message-lines; in property <bool> team-message-important;
+    // THE POPUP FOR A MESSAGE TO ONE RADIO (0.99.110, docs/multi-radio-records/radio-message.md): the host sets the four; the sheet below draws it only while no other sheet is up
+    in property <bool> radio-message-shown; in property <string> radio-message-date; in property <string> radio-message-text; in property <string> radio-message-radio;
+    // Is another sheet (a modal question, a dialog, a recording or radio-setup sheet) up? The radio message waits behind it and appears when the last one closes. The host reads it
+    // to prove the queue. Every `if ... : Sheet` and dialog below is named here.
+    out property <bool> modal-busy: root.mute-question-open || Handover.open || Gaps1.diag-open || Gaps1.link-open || LayoutsModel.open
+        || (WorkspaceModel.add-open && WorkspaceModel.can-add) || WorkspaceModel.remove-confirm > 0 || root.radio-setup.shown || root.import-dialog.shown
+        || SdrPlayDialogState.model.shown || root.report-page.shown || root.markers-model.shown || root.bias-question-open || root.about-open
+        || LaneC.shortcuts-open || LaneC.recordings-open || LaneK.sheet-open || LaneKMatrix.open || LaneX.help-open;
+    out property <bool> radio-message-visible: root.radio-message-shown && !root.modal-busy;
     in property <bool> update-shown; in property <string> update-headline; in property <bool> update-critical; in property <[string]> update-notes;
     in property <bool> update-withdrawn;     // docs 6.63: the running version was withdrawn (the kill switch): the card is amber and says so
     in property <string> update-primary: @tr("Download update"); in property <float> update-progress: -1; in property <string> update-note; in property <string> update-error;
@@ -354,6 +363,7 @@ export component MainWindow inherits Window {
     callback tune-step-clicked(length, length);
     callback follow-band-plan-toggled(bool);
     callback team-message-seen;
+    callback radio-message-seen;
     callback update-primary-clicked;
     callback update-dismissed;
     callback view-selected(int);
@@ -1138,6 +1148,14 @@ export component MainWindow inherits Window {
             }
         }
         HorizontalLayout { alignment: end; Key { label: @tr("Close"); clicked => { LaneKMatrix.open = false; LaneKMatrix.act("leave", "0"); } } }   // not-translated: the host's action id
+    }
+    // A MESSAGE FROM THE TEAM FOR ONE RADIO (0.99.110): last of the sheets, so it is over every other one; shown only while none of them is up (modal-busy). Plain text throughout:
+    // Text draws a string and interprets nothing. Only "Seen" closes it (a click outside does not), as the team message card is closed.
+    if root.radio-message-visible : Sheet { title: @tr("A message from the FoxSDR team"); sheet-w: 480px; dismissed => { }
+        Text { text: root.radio-message-radio; wrap: word-wrap; color: Theme.fg; font-size: Theme.font-small; font-weight: Theme.weight-semibold; }
+        Text { text: root.radio-message-date; color: Theme.dim; font-size: Theme.font-small; }
+        Text { text: root.radio-message-text; wrap: word-wrap; color: Theme.fg-soft; font-size: Theme.font-small; }
+        HorizontalLayout { alignment: end; Key { label: @tr("Seen"); on: true; clicked => { root.radio-message-seen(); } } }
     }
     // A FILE DROPPED FROM THE DESKTOP: the whole window is the target (the host accepts a drag only when it carries file paths); it takes no clicks, only drags
     DropArea {

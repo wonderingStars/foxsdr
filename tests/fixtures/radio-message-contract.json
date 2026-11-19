@@ -1,0 +1,38 @@
+{
+ "_what": "The keyed hash of the radio-message contract (core/radio_message.hpp; site radiomessage.go). hash = lower-case hex SHA-256 over the ASCII salt followed by the UTF-8 radio key. The SAME file is in both repositories (tests/fixtures here, testdata/ in the site); both sides' tests recompute every vector.",
+ "vectors": [
+  {
+   "salt": "0123456789abcdef",
+   "radioKey": "nesdr-smart-v5:00A1B2C3",
+   "hash": "1c3da526ac0029c44d2b9e2c47c5cb89c7eb2eb64a047e101ec69bf382ebeef2"
+  },
+  {
+   "salt": "a1b2c3d4e5f60718a1b2c3d4e5f60718",
+   "radioKey": "airspy-hf-discovery:3B52A5E9",
+   "hash": "95bd313ddd6c174df59c46c2e9ffc2339c9eda75ccc7fb182d2e9a4bc0a96a55"
+  },
+  {
+   "salt": "00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff",
+   "radioKey": "b200:EDR04ZDB2",
+   "hash": "507edb47f2340ff978348b958882320664a62b523b4cb9d1ed253a7a57c30a27"
+  },
+  {
+   "salt": "fedcba9876543210",
+   "radioKey": "sdrplay-rsp1a:2205000001",
+   "hash": "53ae761418484ea9c88545c1070b0c45f0dcde66602352a4dddaa5e9c54eecca"
+  }
+ ],
+ "message": {
+  "id": "rmcontract1",
+  "date": "2026-11-19",
+  "text": "Your radio needs a firmware update. Details: https://example.test/<b>x</b>",
+  "salt": "0123456789abcdef",
+  "hash": "1c3da526ac0029c44d2b9e2c47c5cb89c7eb2eb64a047e101ec69bf382ebeef2"
+ },
+ "message_is_for": "nesdr-smart-v5:00A1B2C3",
+ "message_is_not_for": [
+  "nesdr-smart-v5:00A1B2C4",
+  "nesdr-smart-v5:00a1b2c3",
+  "rtl-sdr:00A1B2C3"
+ ]
+}

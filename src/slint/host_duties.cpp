@@ -19,6 +19,7 @@
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
 #include "core/i18n.hpp"
+#include "core/radio_message.hpp"
 #include "core/utf8_text.hpp"
 #include "core/package_identity.hpp"
 #include "core/sentinel.hpp"
@@ -276,6 +277,37 @@ std::vector<std::string> seenAfterCheck(const std::vector<std::string>& seen, co
     return kept;
 }
 
+RadioMessageModel radioMessageFor(bool enabled, bool packaged, const std::vector<core::RadioMessage>& messages, const std::vector<core::KnownRadio>& radios,
+                                  const std::vector<std::string>& seen) {
+    RadioMessageModel m;
+    const core::RadioMessagePopup p = core::radioMessagePopupFor(enabled, packaged, messages, radios, seen);
+    if (!p.shown) { return m; }
+    m.shown = true;
+    m.id = p.id;
+    m.date = p.date;
+    m.text = p.text;
+    // "For your radio: NESDR Smart v5, serial ending 1B2C" - the model and the last four characters, nothing else about it
+    m.radio = core::formatText(cascade::i18n::tr("For your radio: %s, serial ending %s"), p.model.c_str(), p.serialTail.c_str());
+    return m;
+}
+
+std::vector<std::string> seenAfterCheck(const std::vector<std::string>& seen, const std::vector<core::TeamMessage>& messages,
+                                        const std::vector<core::RadioMessage>& radioMessages) {
+    std::vector<std::string> kept = seenAfterCheck(seen, messages);
+    for (const std::string& id : seen) {
+        if (std::find(kept.begin(), kept.end(), id) != kept.end()) { continue; }
+        for (const core::RadioMessage& m : radioMessages) {
+            if (m.id == id) { kept.push_back(id); break; }
+        }
+    }
+    // keep the order the list had (oldest first)
+    std::vector<std::string> ordered;
+    for (const std::string& id : seen) {
+        if (std::find(kept.begin(), kept.end(), id) != kept.end() && std::find(ordered.begin(), ordered.end(), id) == ordered.end()) { ordered.push_back(id); }
+    }
+    return ordered;
+}
+
 std::vector<std::string> seenWith(std::vector<std::string> seen, const std::string& id) {
     if (std::find(seen.begin(), seen.end(), id) == seen.end()) { seen.push_back(id); }
     while (seen.size() > core::AppConfig::kMaxMessagesSeen) { seen.erase(seen.begin()); }
@@ -436,6 +468,8 @@ void HostDuties::poll(const TickInput& in) {
 
     if (sweepArmed_ && !sweepRunning_) { trySweepStart(); }
     pollUpdate();
+    // A radio found since the popup was last worked out (plugged in after the start-up scan) may be the one a message is for.
+    if (core::radiomessage::generation() != radioGen_) { refreshCard(); }
     // A saved half the coalescing gap held back goes now that the gap has passed (saveInterfaceHalf).
     if (halfHeld_ && ticks_ - halfSentTick_ >= kInterfaceSendGapTicks) { (void)sendHeldHalf(); }
 }
@@ -525,7 +559,7 @@ void HostDuties::pollUpdate() {
                 update_ = checked.info;
                 {
                     // THE SEEN LIST FORGETS WHAT THE SERVICE NO LONGER CARRIES (0.99.79); saved at once.
-                    const std::vector<std::string> kept = seenAfterCheck(iface_.messagesSeen, update_.messages);
+                    const std::vector<std::string> kept = seenAfterCheck(iface_.messagesSeen, update_.messages, update_.radioMessages);
                     if (kept.size() != iface_.messagesSeen.size()) {
                         core::AppConfig half = iface_;
                         half.messagesSeen = kept;
@@ -651,6 +685,27 @@ void HostDuties::refreshCard() {
         team_ = std::move(team);
         teamChanged_ = true;
     }
+    radioGen_ = core::radiomessage::generation();
+    RadioMessageModel rm = radioMessageFor(iface_.updateCheckEnabled, v.packaged, update_.radioMessages, core::radiomessage::knownRadios(), iface_.messagesSeen);
+    if (!(rm == radioMsg_)) {
+        radioMsg_ = std::move(rm);
+        radioMsgChanged_ = true;
+    }
+}
+
+bool HostDuties::takeRadioMessageChange() {
+    const bool changed = radioMsgChanged_;
+    radioMsgChanged_ = false;
+    return changed;
+}
+
+void HostDuties::radioMessageSeen() {
+    if (!radioMsg_.shown) { return; }
+    // REMEMBERED, AND SAVED AT ONCE, as the team message's Seen is.
+    core::AppConfig half = iface_;
+    half.messagesSeen = seenWith(iface_.messagesSeen, radioMsg_.id);
+    (void)saveInterfaceHalf(half);
+    refreshCard();
 }
 
 bool HostDuties::takeTeamChange() {
