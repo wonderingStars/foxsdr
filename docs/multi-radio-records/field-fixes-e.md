@@ -2,13 +2,12 @@
 
 Source: D:/foxsdr-build/prep/FIELD-CRASHES-2026-11-19.md. Build folder D:/foxsdr-build/field-e.
 
-## STATUS AT CHECKPOINT (orchestrator request, weekly usage 90%)
+## STATUS: DONE (all three faults committed; final)
 
-- Fault 1 (ring follows a live rate change): committed 6a6f2e01. Pipeline/rate/source-swap/error-path suite 34/34 passed.
-- Fault 3 (audio re-open discount): committed 9b26c02d. 16 audio + pipeline_audio + error_paths targets passed.
-- Fault 2 (stderr last-words file + sentinel tail): code and test written; test_sentinel_proc is RED before (5 failed, no tail) and GREEN after (278 checks, 0 failed). Committed as a checkpoint.
-  NOT YET RUN for fault 2: the wider diag/sentinel suites (test_sentinel*, test_diag*, test_vendor_lines, test_process_boot_order, test_crash_upload, test_upload_scrub, test_error_paths) and a unit test of readStderrTailForReport (bounds: 40 lines, wrapping at 170 chars, 16 KiB read, scrub) in tests/test_vendor_lines.cpp.
-- Still to do: run those suites, add the unit test, final totals, finish this record's PROOF section.
+- Fault 1 committed 6a6f2e01. 34/34 pipeline, rate, source-swap and error-path targets passed.
+- Fault 3 committed b4be570b. 16 audio, pipeline-audio and error-path targets passed.
+- Fault 2 committed 40bd3599 (code and sentinel test) plus the unit test of the tail reader (tests/test_vendor_lines.cpp) in the following commit. Diag/sentinel suites: 18 headless targets passed (test_sentinel, _proc 278/0, _beat_source, engine_main_sentinel, diag_*, vendor_lines, process_boot_order, upload_scrub, error_paths) and 5 gui targets on the hidden desktop passed (gui_desktop_guard, crash_upload, diag_hang, diagnostics, sentinel_app).
+- Not proved: a real Slint panic in the field; Diagnostics off (pipe path, no tail); diagnostics switched on mid-session (no file, so no tail); a real device re-open starving one callback; real RSPduo rate change. Slint's trigger itself is still unknown; this only captures the next message.
 
 ## Fault 1: cause and change
 setInputRateHz left the ring alone; only start()/setSource() sized it. After 2 -> 6 MS/s the ring stayed 524288. Now a live change on a running pipeline gives the depth ringCapacityForActiveSourceLocked() gives a start at that rate: quiesce the source thread (the stop()/setSource bounded quiesce), start the source, resize, respawn (pipeline.cpp, end of setInputRateHz). A thread the driver will not release becomes a pipeline fault, never a second thread in the driver. Test: tests/test_pipeline_ring_rate.cpp [R6] (red: 3 checks failed; green: 49/0).

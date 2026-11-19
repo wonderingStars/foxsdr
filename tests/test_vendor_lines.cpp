@@ -236,6 +236,45 @@ int main(int argc, char** argv) {
     CHECK(!cascade::core::stderrCaptureActive());
 #endif
 
+    // --- The last-words tail the sentinel carries (readStderrTailForReport) ---
+    {
+        const fs::path dir = scratchDir();
+        const unsigned long pid = 424242;
+        const fs::path file = dir / cascade::core::stderrFileName(pid);
+        CHECK(cascade::core::stderrFileName(pid) == "stderr-424242.txt");
+        // Missing file: nothing.
+        CHECK(cascade::core::readStderrTailForReport(dir.string(), pid).empty());
+        {
+            std::ofstream out(file, std::ios::binary);
+            // 200 numbered lines, then a path with an account name, an address, a control byte,
+            // a non-ASCII byte and one very long line.
+            for (int i = 0; i < 200; ++i) { out << "filler line " << i << "\n"; }
+            out << "panicked at C:\\Users\\Zebulon\\src\\x.rs via 10.20.30.40\r\n";
+            out << "bell\x07 and caf\xE9\n";
+            out << std::string(500, 'q') << "\n";
+        }
+        const std::vector<std::string> tail = cascade::core::readStderrTailForReport(dir.string(), pid);
+        CHECK(tail.size() == cascade::core::kStderrTailMaxLines);
+        std::string all;
+        for (const std::string& l : tail) {
+            CHECK(l.rfind("stderr: ", 0) == 0);
+            CHECK(l.size() <= 8 + cascade::core::kStderrTailLineChars);
+            all += l + "\n";
+        }
+        CHECK(all.find("Zebulon") == std::string::npos);
+        CHECK(all.find("10.20.30.40") == std::string::npos);
+        CHECK(all.find("<user>") != std::string::npos);
+        CHECK(all.find("<host>") != std::string::npos);
+        CHECK(all.find('\x07') == std::string::npos);
+        CHECK(all.find('\xE9') == std::string::npos);
+        // The long line is wrapped, not dropped: the last line is its final piece.
+        CHECK(tail.back() == "stderr: " + std::string(500 - 2 * cascade::core::kStderrTailLineChars, 'q'));
+        // A smaller request returns the newest lines only.
+        CHECK(cascade::core::readStderrTailForReport(dir.string(), pid, 3).size() == 3);
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+
     // stdout, not stderr, on purpose: stderr is the pipe now.
     return testSummary("test_vendor_lines");
 }
