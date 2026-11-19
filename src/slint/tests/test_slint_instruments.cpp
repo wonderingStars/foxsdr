@@ -862,6 +862,36 @@ void checkObs(InstrumentsSpecimen& ui, slint::Window& w) {
     release(w, kKnobX + 14.0f, kKnobY, slint::PointerEventButton::Left);
     CHECK(ui.get_obs_last() == 90);
     ui.set_obs(90);
+    // FIELD FIXES B, FAULT 2 (drive row L596: one click on the OBS knob left the course at 090): a click that does not drag takes the course
+    // to the bearing of the pointer from the knob's middle (0 up, clockwise); a click in the middle (no bearing) and a drag do not.
+    {
+        const int e0 = ui.get_obs_events();
+        click(w, kKnobX + 14.0f, kKnobY);                                           // three o'clock: 090 (already there: no event)
+        CHECK(ui.get_obs_events() == e0 && ui.get_obs() == 90);
+        click(w, kKnobX, kKnobY + 14.0f);                                           // six o'clock: 180
+        CHECK(ui.get_obs_events() == e0 + 1 && ui.get_obs_last() == 180);
+        ui.set_obs(180);
+        click(w, kKnobX - 14.0f, kKnobY);                                           // nine o'clock: 270
+        CHECK(ui.get_obs_last() == 270);
+        ui.set_obs(270);
+        click(w, kKnobX, kKnobY - 14.0f);                                           // twelve o'clock: 000
+        CHECK(ui.get_obs_last() == 0);
+        ui.set_obs(0);
+        click(w, kKnobX + 10.0f, kKnobY + 10.0f);                                   // half past four: 135
+        CHECK(ui.get_obs_last() == 135);
+        ui.set_obs(135);
+        const int e1 = ui.get_obs_events();
+        click(w, kKnobX, kKnobY);                                                   // the middle has no bearing: nothing moves
+        click(w, kKnobX + 2.0f, kKnobY + 2.0f);
+        CHECK(ui.get_obs_events() == e1 && ui.get_obs() == 135);
+        // a press-drag that ends where it started is a drag, not a click: no jump on release
+        press(w, kKnobX + 14.0f, kKnobY, slint::PointerEventButton::Left);
+        moveTo(w, kKnobX + 10.0f, kKnobY + 10.0f);
+        moveTo(w, kKnobX + 14.0f, kKnobY);
+        release(w, kKnobX + 14.0f, kKnobY, slint::PointerEventButton::Left);
+        CHECK(ui.get_obs_last() != 90 || ui.get_obs_events() > e1);                 // the twist's own events only (net zero turn: it ends where it began)
+        ui.set_obs(90);
+    }
     // the keyboard: Tab brings the focus to the knob (a ring shows where it is), Right and Left turn it a degree each
     const Frame unfocused = shot(ui);
     const R ringArea = F(kVorL, 52, 48, 66, 66);

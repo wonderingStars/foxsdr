@@ -511,6 +511,9 @@ export component ObsKnob inherits Rectangle {
     property <float> acc;
     property <float> last-angle;
     property <float> wheel-acc;
+    property <length> press-x;
+    property <length> press-y;
+    property <bool> dragged;          // the press moved more than 3 px: a drag, not a click
     out property <int> shown: root.moved ? root.local : Math.mod(Math.round(Math.mod(root.course, 360)), 360);   // any number the host holds is a course in [0, 360)
     width: 40px;
     height: 40px;
@@ -584,10 +587,23 @@ export component ObsKnob inherits Rectangle {
                 if (root.enabled && e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
                     root.last-angle = root.angle-of(self.mouse-x, self.mouse-y);
                     root.acc = root.shown;
+                    root.press-x = self.mouse-x;
+                    root.press-y = self.mouse-y;
+                    root.dragged = false;
+                }
+                // FIELD FIXES B, FAULT 2 (drive row L596): a click that did not drag takes the course to the pointer's bearing from the knob's middle;
+                // the middle itself has no bearing, so a click within 6 px of it does nothing. A drag stays relative (it never jumps to where the hand took it).
+                if (root.enabled && e.button == PointerEventButton.left && e.kind == PointerEventKind.up && !root.dragged) {
+                    let dx = (self.mouse-x - 20px) / 1px;
+                    let dy = (self.mouse-y - 20px) / 1px;
+                    if (dx * dx + dy * dy >= 36) { root.set-to(root.angle-of(self.mouse-x, self.mouse-y)); }
                 }
             }
             moved => {
                 if (root.enabled && self.pressed) {
+                    let mx = (self.mouse-x - root.press-x) / 1px;
+                    let my = (self.mouse-y - root.press-y) / 1px;
+                    if (mx * mx + my * my > 9) { root.dragged = true; }
                     let a = root.angle-of(self.mouse-x, self.mouse-y);
                     root.acc += Fmt.w180(a - root.last-angle);
                     root.last-angle = a;
