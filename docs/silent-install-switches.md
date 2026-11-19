@@ -51,12 +51,12 @@ Examples (PowerShell; give each argument as its own array item so a folder with 
 
 ```powershell
 # for the current user, no elevation, into a folder of your choice
-$p = Start-Process -FilePath .\foxsdr-setup-0.99.110.exe -Wait -PassThru -ArgumentList @(
+$p = Start-Process -FilePath .\foxsdr-setup-0.99.111.exe -Wait -PassThru -ArgumentList @(
     '/CURRENTUSER', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/DIR="D:\Apps\FoxSDR"', '/LOG="D:\Apps\foxsdr-install.log"')
 $p.ExitCode   # 0 is success (RUN); other codes are Inno's (see the Inno help)
 
 # for every user (an elevation prompt appears unless the shell is already elevated)
-Start-Process -FilePath .\foxsdr-setup-0.99.110.exe -Wait -Verb RunAs -ArgumentList @(
+Start-Process -FilePath .\foxsdr-setup-0.99.111.exe -Wait -Verb RunAs -ArgumentList @(
     '/ALLUSERS', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
 ```
 
