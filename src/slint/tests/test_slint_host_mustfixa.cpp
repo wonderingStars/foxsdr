@@ -193,7 +193,11 @@ void theSmallestWindowIsTheMeasuredOne() {
     CHECK(has(h, "constexpr float kMinWindowW = 1024.0f;") && has(h, "constexpr float kMinWindowH = 640.0f;"));
     CHECK(!has(h, "kMinWindowW = 1480.0f"));
     const std::string m = slurp(repoRoot() / "src" / "slint" / "main.cpp");
-    CHECK(has(m, "std::max(kMinWindowW * scale()") && has(m, "std::max(kMinWindowH * scale()"));
+    // Drive fixes 7: the edge drag's size is EdgeDrag::at (look_logic.cpp), which main.cpp hands the same two minimums at the scale in force; the clamp that used to be written in main.cpp
+    // as std::max(kMinWindowW * scale() ...) is the `lo` of EdgeDrag::at's axis (the minimum, at the scale, rounded). Same rule, in its new place; the two sides are still checked.
+    CHECK(has(m, "edgeDrag.at(px, py, scale(), kMinWindowW, kMinWindowH"));
+    const std::string ll = slurp(repoRoot() / "src" / "slint" / "look_logic.cpp");
+    CHECK(has(ll, "std::llround(static_cast<double>(minLogical) * sf)") && has(ll, "std::max(lo, v)"));
     CHECK(!has(m, "std::max(624.0f * scale()"));
     // the folding is in the window's own file: the strip's second row and the toolbar's groups (a revert of either to one fixed row would bring the cut-off back)
     const std::string w = slurp(repoRoot() / "src" / "slint" / "ui" / "main.slint");
