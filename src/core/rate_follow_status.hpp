@@ -131,6 +131,13 @@ inline RateSetOutcome applySourceRate(cascade::source::IqSource& src, double req
     const std::string errAfter = src.lastError();
     if (!out.ok) { watch.noteRefusalIfSilent(&src, nullptr, cascade::core::radioreport::Control::Rate, errAfter); }
     out.landedHz = src.sampleRateHz();
+    // A LIVE CHANGE THAT WORKED IS JOURNALLED (field data 2026-11-19: ten rate changes on one install were visible only through the next stream window). The open and
+    // the restore are said by the open's own settings event (`why` given), so only a caller with no `why` - a person or a plugin preset - says it here.
+    if (out.ok && why == nullptr) {
+        if (const cascade::source::DeviceSource* dev = dynamic_cast<const cascade::source::DeviceSource*>(&src)) {
+            cascade::core::radioreport::noteRateApplied(&src, dev->driverKey(), out.landedHz);
+        }
+    }
     if (out.ok && rateLandedElsewhere(requestedHz, out.landedHz)) {
         if (const cascade::source::DeviceSource* dev = dynamic_cast<const cascade::source::DeviceSource*>(&src)) {
             std::unique_ptr<cascade::core::radioreport::ControlWhyScope> scope;

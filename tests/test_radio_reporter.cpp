@@ -1059,6 +1059,24 @@ int main(int argc, char** argv) {
         CHECK(sawOn);
     }
 
+    // --- A4 (field data 2026-11-19): a start-up failure that happened AFTER its open start gets the higher seq, whatever the list it waited in ---------------
+    {
+        Rig r("prestartorder");
+        r.rep.setNowSource([&r]() { return r.clock.load(); });
+        r.rep.event(openStart(hf));                                       // the start is written before the call
+        r.rep.fileFailure(failure("airspyhf", "serial=HF0001A2", kD3, "control"), ringWith("source: the saved radio did not reopen"));   // the same second
+        Reporter::Options o = r.options();
+        o.liveSend = false;
+        r.start(o);
+        const std::vector<json> q = queued(r.rep.dir());
+        CHECK(q.size() == 2);
+        if (q.size() == 2) {
+            const json& fail = q[0]["kind"] == "radio_fail" ? q[0] : q[1];
+            const json& open = q[0]["kind"] == "radio_open" ? q[0] : q[1];
+            CHECK(open["seq"].get<long long>() < fail["seq"].get<long long>());
+        }
+    }
+
     // --- MUST-FIX LANE E, issue 3: the test marker is an envelope member on every kind, and only on a synthetic run -------------------------------------
     {
         Rig plain("syn0");

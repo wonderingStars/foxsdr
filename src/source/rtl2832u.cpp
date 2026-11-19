@@ -335,8 +335,11 @@ std::vector<double> Rtl2832u::supportedRatesHz() {
     // list, not a slider, and these are the ones every RTL-SDR application
     // agrees on. Anything else inside the windows above is still accepted by
     // setSampleRate(); this is the menu, not the limit.
+    // 2.0 MS/s IS ON THE MENU (field data 2026-11-19): it is the application's default rate and every RTL-SDR open asked for it, was snapped to
+    // 2.048 and journalled as an out-of-range setting (12 of 12 opens). The chip makes it: setSampleRate() programs a ratio that gives
+    // 2000000.03 S/s, inside rateLandedElsewhere's tolerance (2 Hz, 1 ppm of 2 MS/s).
     return {250000.0,  1024000.0, 1200000.0, 1400000.0, 1800000.0,
-            1920000.0, 2048000.0, 2160000.0, 2400000.0, 2560000.0,
+            1920000.0, 2000000.0, 2048000.0, 2160000.0, 2400000.0, 2560000.0,
             2880000.0, 3200000.0};
 }
 

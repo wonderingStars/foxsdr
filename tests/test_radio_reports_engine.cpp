@@ -704,6 +704,27 @@ void seriesScenarios(std::vector<json>& everything) {
 
 }
 
+// W2 (field data 2026-11-19): a radio SoapySDR lists that a native driver already listed (the same serial) is one radio_found, not a phantom row. (A function of
+// its own: main's frame is already near the stack limit and one more block of locals overflowed it.)
+static __declspec(noinline) void phantomFoundTest() {
+    std::printf("  a radio listed by the native driver and again by SoapySDR is said once per scan\n");
+    resetFake();
+    g_soapyList = {{"RTL-SDR", "driver=rtlsdr, serial=00000001"}, {"Other Radio", "driver=other, serial=ZZ12345678"}};
+    th::TestWindow app;
+    Rig rig("phantom");
+    rig.start();
+    Access::scanBoth(app);
+    g_soapyList.clear();
+    int stock = 0, other = 0;
+    for (const json& f : ofKind(queued(rig.qdir()), "radio_found")) {
+        if (f["body"]["serial"] == "00000001") { ++stock; }
+        if (f["body"]["serial"] == "ZZ12345678") { ++other; }
+    }
+    std::printf("stock=%d other=%d\n", stock, other);
+    CHECK(stock == 1);   // the native row only: the soapy twin of it is the same radio
+    CHECK(other == 1);   // a radio only SoapySDR lists is still said
+}
+
 int main(int argc, char** argv) {
     if (argc >= 3 && std::string(argv[1]) == "--holder") { return holderMain(argv[2]); }
     std::printf("test_radio_reports_engine\n");
@@ -970,6 +991,8 @@ int main(int argc, char** argv) {
         // ...and each sits beside the anonymous count it must never replace
         CHECK(count(engine, "noteRadioFail(") >= 2 && count(text("engine_soundcard.cpp"), "noteRadioFail(") == 1);
     }
+
+    phantomFoundTest();
 
     // --- THE JOURNAL OF A RADIO THAT OPENS: found, open, settings, stream, close ---------------------------------------------------------------------
     {
@@ -1240,8 +1263,16 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::milliseconds(400));
         Access::pass(app);
         Access::pass(app);
+        // A2 (field data 2026-11-19: 38 radio_stream events after a radio's close, one install): a radio that faulted is over, and its minutes stop. The
+        // slot stays open until the pass sees the radio leave (or the quit), but the windows that follow a fault say nothing about a radio that is gone.
+        Access::ageOpenRadio(app, 60.0);
+        Access::minute(app, 0, 0);
+        Access::ageOpenRadio(app, 60.0);
+        Access::minute(app, 0, 0);
+        Access::pass(app);
         g_netFault = false;
         Access::quit(app);
+        CHECK(ofKind(queued(rig.qdir()), "radio_stream").empty());
         const std::vector<json> closes = ofKind(queued(rig.qdir()), "radio_close");
         CHECK(closes.size() == 1);
         if (!closes.empty()) { CHECK(closes[0]["body"]["cause"] == "fault"); }

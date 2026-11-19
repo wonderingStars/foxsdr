@@ -710,9 +710,12 @@ int main() {
         CHECK(live->streamStops == stopsBefore + 1);
         CHECK(live->streamStarts == startsBefore + 1);
 
-        // A rate nobody supports is COERCED to the nearest one, not refused:
-        // a preset asking for 2 MS/s should get 2.048.
+        // 2 MS/s IS ON THE MENU (field data 2026-11-19: every RTL-SDR open asked for the 2 MS/s default, was snapped to 2.048 and journalled
+        // "out of range" - 12 of 12 opens - though the chip makes 2 MS/s: its resampler ratio gives 2000000.03 S/s). It lands where asked.
         CHECK(src.setSampleRateHz(2000000.0));
+        CHECK_NEAR(src.sampleRateHz(), 2000000.0, 2.0);
+        // A rate that is not on the menu is COERCED to the nearest one, not refused: 2.1 MS/s is nearer 2.048 than 2.16.
+        CHECK(src.setSampleRateHz(2100000.0));
         CHECK_NEAR(src.sampleRateHz(), 2048000.0, 20.0);
         src.stop();
         CHECK(!src.running());
