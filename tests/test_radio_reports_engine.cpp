@@ -429,6 +429,27 @@ void resetFake() {
 
 }  // namespace
 
+// W2 (field data 2026-11-19): a radio SoapySDR lists that a native driver already listed (the same serial) is one radio_found, not a phantom row. (A function of
+// its own: main's frame is already near the stack limit and one more block of locals overflowed it.)
+static __declspec(noinline) void phantomFoundTest() {
+    std::printf("  a radio listed by the native driver and again by SoapySDR is said once per scan\n");
+    resetFake();
+    g_soapyList = {{"RTL-SDR", "driver=rtlsdr, serial=00000001"}, {"Other Radio", "driver=other, serial=ZZ12345678"}};
+    th::TestWindow app;
+    Rig rig("phantom");
+    rig.start();
+    Access::scanBoth(app);
+    g_soapyList.clear();
+    int stock = 0, other = 0;
+    for (const json& f : ofKind(queued(rig.qdir()), "radio_found")) {
+        if (f["body"]["serial"] == "00000001") { ++stock; }
+        if (f["body"]["serial"] == "ZZ12345678") { ++other; }
+    }
+    std::printf("stock=%d other=%d\n", stock, other);
+    CHECK(stock == 1);   // the native row only: the soapy twin of it is the same radio
+    CHECK(other == 1);   // a radio only SoapySDR lists is still said
+}
+
 int main() {
     std::printf("test_radio_reports_engine\n");
     isolate();
@@ -686,6 +707,8 @@ int main() {
         // ...and each sits beside the anonymous count it must never replace
         CHECK(count(engine, "noteRadioFail(") >= 2 && count(text("engine_soundcard.cpp"), "noteRadioFail(") == 1);
     }
+
+    phantomFoundTest();
 
     // --- THE JOURNAL OF A RADIO THAT OPENS: found, open, settings, stream, close ---------------------------------------------------------------------
     {

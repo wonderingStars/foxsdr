@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <string>
 
 #include "core/diag_log.hpp"
@@ -301,12 +302,23 @@ void Engine::radioReportsScanLanded(bool native, bool soapy) {
         if (!m.empty() && models.size() < 8 && std::find(models.begin(), models.end(), m) == models.end()) { models.push_back(m); }
     };
     rr::Reporter& g = rr::global();
+    // ONE PHYSICAL RADIO IS ONE radio_found PER SCAN (field data 2026-11-19: two RSPduos seen through SoapySDR became eight phantom rows "Dev0".."Dev7", and an RSP1
+    // also arrived under the mirisdr driver): a finding whose serial a driver already listed in this scan is the same radio seen by another driver, and is not said again.
+    std::map<std::string, std::string> serialSeenBy;
+    auto repeated = [&serialSeenBy](const rr::RadioIdentity& rid, const char* route) {
+        if (rid.serial.empty()) { return false; }
+        const auto it = serialSeenBy.find(rid.serial);
+        const std::string who = std::string(route) + "/" + rid.driver;   // the route (native or SoapySDR) and the driver word
+        if (it == serialSeenBy.end()) { serialSeenBy[rid.serial] = who; return false; }
+        return it->second != who;
+    };
     for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
         if (!native) { break; }
         if (d.driver == cascade::gui::kPlutoDriverKey || d.driver == cascade::gui::kRtlTcpDriverKey) { continue; }   // an address row is not a radio that was found
         rr::Event ev;
         ev.kind = "radio_found";
         ev.radio = rr::identify(d.driver, d.args, d.label);
+        if (repeated(ev.radio, "native")) { continue; }
         ev.word = "usable";
         ev.set("binding", "usable").set("source", "scan");
         note(ev.radio.model);
@@ -334,12 +346,20 @@ void Engine::radioReportsScanLanded(bool native, bool soapy) {
         note(rid.model);
         g.event(ev);
     }
+    if (soapy && !native) {
+        // the two scans land separately: the native list of the scan before is what a SoapySDR finding is compared with
+        for (const cascade::source::NativeDeviceInfo& d : nativeDevices_) {
+            if (d.driver == cascade::gui::kPlutoDriverKey || d.driver == cascade::gui::kRtlTcpDriverKey) { continue; }
+            repeated(rr::identify(d.driver, d.args, d.label), "native");
+        }
+    }
     for (const cascade::source::SoapyDeviceInfo& d : soapyDevices_) {
         if (!soapy) { break; }
         rr::rememberSoapyModel(d.args, rr::soapyDeviceModel(d.args));   // so a radio opened later by saved arguments with no `product` is named by its own model
         rr::Event ev;
         ev.kind = "radio_found";
         ev.radio = rr::identify("soapy", d.args);
+        if (repeated(ev.radio, "soapy")) { continue; }
         ev.word = "usable";
         ev.set("binding", "usable").set("source", "scan");
         note(ev.radio.model);
