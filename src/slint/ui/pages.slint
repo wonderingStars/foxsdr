@@ -122,6 +122,7 @@ export global KitEvents {
     callback page-fitted-row-clicked(int, int);
     callback page-fitted-row-double-clicked(int, int);
     callback page-fitted-run(int, int);
+    callback page-fitted-show(int, int);
     callback page-fitted-remove(int, int);
     callback page-fitted-chip(int, int);
     callback page-fitted-search(int, string);
@@ -551,6 +552,8 @@ export component PageBody inherits Rectangle {
     callback fitted-row-double-clicked(int, int);
     fitted-row-double-clicked(a, b) => { KitEvents.page-fitted-row-double-clicked(a, b); }
     callback fitted-run(int, int);
+    callback fitted-show(int, int);
+    fitted-show(a, b) => { KitEvents.page-fitted-show(a, b); }
     fitted-run(a, b) => { KitEvents.page-fitted-run(a, b); }
     callback fitted-remove(int, int);
     fitted-remove(a, b) => { KitEvents.page-fitted-remove(a, b); }
@@ -704,7 +707,7 @@ export component PageBody inherits Rectangle {
         if root.page.kind == 6 : FittedModules { vertical-stretch: 1; rows: root.page.fitted.rows; chips: root.page.fitted.chips; search: root.page.fitted.search; verdict: root.page.fitted.verdict;
             directory: root.page.fitted.directory; report: root.page.fitted.report; error: root.page.fitted.error; empty-text: root.page.fitted.empty-text; cleanup-label: root.page.fitted.cleanup-label; cleanup-note: root.page.fitted.cleanup-note; cleanup-report: root.page.fitted.cleanup-report;
             cleanup-open: root.page.fitted.cleanup-open; cleanup-lines: root.page.fitted.cleanup-lines; cleanup-yes: root.page.fitted.cleanup-yes;
-            row-clicked(i) => { root.fitted-row-clicked(root.index, i); } row-double-clicked(i) => { root.fitted-row-double-clicked(root.index, i); } run-clicked(i) => { root.fitted-run(root.index, i); }
+            row-clicked(i) => { root.fitted-row-clicked(root.index, i); } row-double-clicked(i) => { root.fitted-row-double-clicked(root.index, i); } run-clicked(i) => { root.fitted-run(root.index, i); } show-clicked(i) => { root.fitted-show(root.index, i); }
             remove-clicked(i) => { root.fitted-remove(root.index, i); } chip-toggled(i) => { root.fitted-chip(root.index, i); } search-changed(t) => { root.fitted-search(root.index, t); }
             scan-clicked => { root.fitted-scan(root.index); } reset-windows-clicked => { root.fitted-reset-windows(root.index); } cleanup-clicked => { root.fitted-cleanup(root.index); ExtendEvents.store-cleanup(); } cleanup-answered(yes) => { ExtendEvents.store-cleanup-confirm(yes); } }
         // 7 a module's page

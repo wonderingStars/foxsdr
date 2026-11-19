@@ -29,7 +29,7 @@ import { PluginBody, PluginBodyModel } from "plugin_body.slint";
 // category ("" none), `state` the chip's word with its `tone` and `dot` lamp, `note` the line under the name in `note-tone`. `can-stop`
 // draws the STOP / START key (START when `offers-start`), `can-remove` the REMOVE key with `remove-label` (REMOVE or REMOVE FILE); `armed`
 // is the first press of REMOVE waiting for its confirmation (the key reads CONFIRM and is red).
-export struct FittedRowModel { file: string, name: string, version: string, group: string, state: string, tone: ChipTone, dot: LampState, note: string, note-tone: ChipTone, can-stop: bool, offers-start: bool, can-remove: bool, remove-label: string, armed: bool }
+export struct FittedRowModel { file: string, name: string, version: string, group: string, state: string, tone: ChipTone, dot: LampState, note: string, note-tone: ChipTone, can-stop: bool, offers-start: bool, can-remove: bool, remove-label: string, armed: bool, has-page: bool }
 
 // One line of "WHAT THIS MODULE REACHES": the capability's name, the sentence under it, and whether it reaches outward (a gold dot) or
 // only publishes to the host (a hollow one).
@@ -175,7 +175,11 @@ component FittedRowLine inherits Rectangle {
     in property <string> stop-text: @tr("STOP");
     in property <string> start-text: @tr("START");
     in property <string> confirm-text: @tr("CONFIRM");
+    in property <string> show-text: @tr("SHOW");
+    in property <string> show-tooltip: @tr("Opens this module's window and brings it to the front. A module that is stopped is started first.");
+    in property <string> no-page-tooltip: @tr("This module has no window of its own.");
     in property <string> remove-tooltip;
+    callback show-clicked();
     callback clicked();
     callback double-clicked();
     callback run-clicked();
@@ -310,6 +314,13 @@ component FittedRowLine inherits Rectangle {
             Chip { label: root.m.state; tone: root.m.tone; }
             if root.m.can-stop : Key {
                 xs: true;
+                label: root.show-text;
+                enabled: root.enabled && root.m.has-page;
+                tooltip: root.m.has-page ? root.show-tooltip : root.no-page-tooltip;
+                clicked => { root.show-clicked(); }
+            }
+            if root.m.can-stop : Key {
+                xs: true;
                 label: root.m.offers-start ? root.start-text : root.stop-text;
                 enabled: root.enabled;
                 clicked => { root.run-clicked(); }
@@ -357,6 +368,7 @@ export component FittedModules inherits Rectangle {
     callback row-clicked(int);
     callback row-double-clicked(int);
     callback run-clicked(int);
+    callback show-clicked(int);
     callback remove-clicked(int);
     callback chip-toggled(int);
     callback search-changed(string);
@@ -485,6 +497,7 @@ export component FittedModules inherits Rectangle {
                 clicked => { root.row-clicked(i); }
                 double-clicked => { root.row-double-clicked(i); }
                 run-clicked => { root.run-clicked(i); }
+                show-clicked => { root.show-clicked(i); }
                 remove-clicked => { root.remove-clicked(i); }
             }
             if root.rows.length == 0 && root.empty-text != "" : Rectangle {

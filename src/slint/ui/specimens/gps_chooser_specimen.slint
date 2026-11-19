@@ -1,0 +1,15 @@
+// The GPS row's port chooser (docs/multi-radio-records/photo-new-window.md, item 3): GpsRowView, as the map pages' "Map options" fold and the SYSTEM bank draw it,
+// fed by tests/test_slint_gps_chooser.cpp.
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { SelectItem } from "../signal_bank.slint";
+import { GpsRow, GpsRowView, SystemEvents } from "../system_bank.slint";
+import { ChipTone } from "../chips.slint";
+export { Theme, Skin, Workbench, SelectItem, GpsRow, SystemEvents, ChipTone }
+
+export component GpsChooserSpecimen inherits Window {
+    width: 600px;
+    height: 300px;
+    background: Theme.bg;
+    in property <GpsRow> gps;
+    GpsRowView { x: 0px; y: 0px; width: 400px; gps: root.gps; }
+}

@@ -1,0 +1,18 @@
+// The Fitted modules page's SHOW key (docs/multi-radio-records/photo-new-window.md, item 2): FittedModules fed made-up rows by tests/test_slint_fitted_show.cpp.
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { ChipTone, LampState } from "../chips.slint";
+import { FittedRowModel, FittedModules } from "../fitted.slint";
+export { Theme, Skin, Workbench, ChipTone, LampState, FittedRowModel }
+
+export component FittedShowSpecimen inherits Window {
+    width: 1200px;
+    height: 400px;
+    background: Theme.bg;
+    in property <[FittedRowModel]> rows;
+    in-out property <int> shows;
+    in-out property <int> last-show: -1;
+    in-out property <int> runs;
+    FittedModules { x: 0px; y: 0px; width: 1200px; height: 400px; rows: root.rows;
+        show-clicked(i) => { root.shows += 1; root.last-show = i; }
+        run-clicked(i) => { root.runs += 1; } }
+}

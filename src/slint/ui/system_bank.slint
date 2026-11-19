@@ -634,14 +634,16 @@ component DropKey inherits Rectangle {
     in property <bool> filter;
     in property <string> filter-value;
     in property <string> filter-placeholder;
+    in property <string> empty-text;                    // an empty list still opens, and shows this one line (never a dead click)
     callback picked(int);
     callback filter-edited(string);
+    callback opening();                                 // every click that opens it: the host reads the list again (the ports that exist NOW)
 
     property <int> grab-n;                              // bumped on each open: the popup's filter field takes the keyboard when it sees the change
     property <length> pad: 4px + Theme.hairline;
     property <length> head-h: root.filter ? Theme.field-h + 6px : 0px;
     property <length> popup-w: max(root.width, root.popup-min-w);
-    property <length> list-h: min(root.items.length * Theme.menu-item-h, 330px);
+    property <length> list-h: min(max(root.items.length, (root.items.length == 0 && root.empty-text != "") ? 1 : 0) * Theme.menu-item-h, 330px);
     property <length> popup-h: root.list-h + root.head-h + 2 * root.pad;
 
     height: Theme.key-sm-h;
@@ -656,7 +658,7 @@ component DropKey inherits Rectangle {
         label: root.label;
         enabled: root.enabled;
         tooltip: root.tooltip;
-        clicked => { if (root.items.length > 0 || root.filter) { popup.show(); root.grab-n += 1; } }   // the token is bumped AFTER the popup exists: its filter field takes the keyboard on the change (no timer, MG6-popup-timer)
+        clicked => { root.opening(); if (root.items.length > 0 || root.filter || root.empty-text != "") { popup.show(); root.grab-n += 1; } }   // the token is bumped AFTER the popup exists: its filter field takes the keyboard on the change (no timer, MG6-popup-timer)
     }
     popup := PopupWindow {
         x: 0px;
@@ -701,6 +703,18 @@ component DropKey inherits Rectangle {
                         popup.close();
                     }
                 }
+            }
+            if root.items.length == 0 && root.empty-text != "" : Text {
+                x: root.pad + 8px;
+                y: root.pad + root.head-h;
+                width: root.popup-w - 2 * root.pad - 16px;
+                height: Theme.menu-item-h;
+                text: root.empty-text;
+                color: Theme.dim;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                overflow: elide;
             }
             if root.items.length * Theme.menu-item-h > root.list-h : Flickable {
                 x: root.pad;
@@ -1386,6 +1400,8 @@ export component GpsRowView inherits VerticalLayout {
     gps-baud(a) => { SystemEvents.gps-baud(a); }
     callback gps-toggle();
     gps-toggle() => { SystemEvents.gps-toggle(); }
+    callback gps-refresh();
+    gps-refresh() => { SystemEvents.serial-refresh(); }
 
     spacing: 6px;
     alignment: start;
@@ -1399,6 +1415,8 @@ export component GpsRowView inherits VerticalLayout {
             selected: root.gps.port-index;
             label: @tr("GPS serial port");
             popup-min-w: 120px;
+            empty-text: @tr("No serial port was found.");
+            opening => { root.gps-refresh(); }
             picked(i) => { root.gps-port(i); }
         }
         DropKey {

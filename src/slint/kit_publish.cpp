@@ -220,6 +220,24 @@ void KitPublisher::syncOpenSet() {
 
 // A preset applied, or a window row pressed: the windows the module DECLARES (app_window.cpp openPluginWindowsFor), and the Decoder output
 // for a text decoder when `withOutput`.
+// THE SHOW KEY of a Fitted modules row: opens the module's own page(s) again (a tab that is open stays one tab, a closed one comes back) and brings ONE to the front: the first of
+// the module's panel, instrument, picture and map pages (a module with several pages gets its main one, not the page last closed: that is not kept). A torn-off page is unrolled
+// (not moved in front of other torn windows). A STOPPED module cannot have pages (openWindowsFor refuses it), so SHOW starts it first and shows the pages when the engine says it runs.
+void KitPublisher::showModule(const PluginRow& r) {
+    if (!r.loaded || (r.caps & (CASCADE_CAP_PANEL | CASCADE_CAP_IMAGE_DECODER | CASCADE_CAP_INSTRUMENT | CASCADE_CAP_TRACK_SOURCE)) == 0u) { return; }
+    if (r.stopped) { kit_.startStop(r.file, true); showPending_.insert(r.file); return; }
+    openWindowsFor(r, false);
+    const std::string ids[] = {"panel:" + r.name, "instrument:" + r.name + "|", "image:" + r.name, "map:" + r.name};
+    for (const std::string& id : ids) {
+        for (Page& p : pages_) {
+            if (p.id == id || (id.back() == '|' && p.id.rfind(id, 0) == 0)) {
+                if (p.torn) { p.rolled = false; } else { showPage(p.id); }
+                return;
+            }
+        }
+    }
+}
+
 void KitPublisher::openWindowsFor(const PluginRow& r, bool withOutput) {
     if (!r.loaded || r.stopped) { return; }
     if ((r.caps & CASCADE_CAP_TRACK_SOURCE) != 0u) { openPage("map:" + r.name, 5, r.name, r.file, mapTitle(r.name)); }
@@ -805,6 +823,8 @@ void KitPublisher::fillFitted(PageTab& t, const FoxReceiverState& state, std::st
         m.can_stop = r.loaded;
         m.offers_start = fittedOffersStart(r);
         m.can_remove = true;
+        m.has_page = r.loaded && (r.caps & (CASCADE_CAP_PANEL | CASCADE_CAP_IMAGE_DECODER | CASCADE_CAP_INSTRUMENT | CASCADE_CAP_TRACK_SOURCE)) != 0u;
+        sig += m.has_page ? "W" : "w";
         const bool armed = armedRemove_ == r.file && nowMs_ - armedAtMs_ < 5000;
         m.armed = armed;
         m.remove_label = ss(armed ? cascade::i18n::tr("CONFIRM") : r.originWord == "orphan" ? cascade::i18n::tr("REMOVE FILE") : cascade::i18n::tr("REMOVE"));
@@ -1588,6 +1608,12 @@ void KitPublisher::publish(const FoxReceiverState& state) {
     globe_->tick(state);
     publishPages(state);
     publishMuteQuestion();
+    for (auto it = showPending_.begin(); it != showPending_.end();) {   // a SHOW pressed on a stopped module: show once it runs
+        const PluginRow* r = rowByFile(kit_.lists().rows, *it);
+        if (r == nullptr) { it = showPending_.erase(it); }
+        else if (!r->stopped) { const PluginRow row = *r; it = showPending_.erase(it); showModule(row); }
+        else { ++it; }
+    }
     kit_.trackInfo().photos().endFrame();   // a photo nobody asked for this tick is let go (pixels freed, the plugin told to forget it)
     if (kit_.photosHeld() == 0u) { photoImage_ = slint::Image(); photoImageTex_ = 0u; photoLink_.clear(); }   // and the picture made from it
 }
@@ -2032,6 +2058,10 @@ void KitPublisher::wire() {
         }
     });
     ui_.global<::KitEvents>().on_page_fitted_run([this, fittedRow](int i, int row) { const PluginRow* r = fittedRow(i, row); if (r != nullptr && r->loaded) { kit_.startStop(r->file, !fittedOffersStart(*r)); } });
+    ui_.global<::KitEvents>().on_page_fitted_show([this, fittedRow](int i, int row) {
+        const PluginRow* r = fittedRow(i, row);
+        if (r != nullptr) { showModule(*r); }
+    });
     ui_.global<::KitEvents>().on_page_fitted_remove([this, fittedRow](int i, int row) {
         const PluginRow* r = fittedRow(i, row);
         if (r == nullptr) { return; }

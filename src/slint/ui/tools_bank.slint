@@ -453,10 +453,12 @@ component DropKey inherits Rectangle {
     in property <bool> enabled: true;
     in property <string> tooltip;
     in property <length> popup-min-w: 150px;
+    in property <string> empty-text;                    // an empty list still opens, and shows this one line (never a dead click)
     callback picked(int);
+    callback opening();                                 // every click that opens it: the host reads the list again
 
     property <length> popup-w: max(root.width, root.popup-min-w);
-    property <length> popup-h: min(root.items.length * Theme.menu-item-h + 2 * (4px + Theme.hairline), 330px);
+    property <length> popup-h: min(max(root.items.length, (root.items.length == 0 && root.empty-text != "") ? 1 : 0) * Theme.menu-item-h + 2 * (4px + Theme.hairline), 330px);
 
     height: Theme.key-sm-h;
     min-width: 0px;
@@ -470,7 +472,7 @@ component DropKey inherits Rectangle {
         label: root.label;
         enabled: root.enabled;
         tooltip: root.tooltip;
-        clicked => { if (root.items.length > 0) { popup.show(); } }
+        clicked => { root.opening(); if (root.items.length > 0 || root.empty-text != "") { popup.show(); } }
     }
     popup := PopupWindow {
         x: 0px;
@@ -486,6 +488,18 @@ component DropKey inherits Rectangle {
             drop-shadow-blur: Theme.shadows ? 28px : 0px;
             drop-shadow-offset-y: Theme.shadows ? 10px : 0px;
             drop-shadow-color: Theme.shadows ? Theme.well-deep.with-alpha(0.7) : transparent;
+            if root.items.length == 0 && root.empty-text != "" : Text {
+                x: 4px + Theme.hairline + 8px;
+                y: 4px + Theme.hairline;
+                width: root.popup-w - 2 * (4px + Theme.hairline) - 16px;
+                height: Theme.menu-item-h;
+                text: root.empty-text;
+                color: Theme.dim;
+                font-family: Theme.font-ui;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                overflow: elide;
+            }
             // a short list is plain rows (a Flickable holds a press back for a moment: the click of a quick pick would be late), a long one scrolls
             if root.items.length * Theme.menu-item-h <= root.popup-h : Rectangle {
                 x: 4px + Theme.hairline;
@@ -993,6 +1007,8 @@ export component PositionOffersView inherits VerticalLayout {
             selected: root.offers.gps.port-index;
             label: @tr("GPS serial port");
             popup-min-w: 120px;
+            empty-text: @tr("No serial port was found.");
+            opening => { SystemEvents.serial-refresh(); }
             picked(i) => { root.gps-port(i); }
         }
         DropKey {

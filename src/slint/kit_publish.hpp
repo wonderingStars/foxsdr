@@ -180,6 +180,8 @@ private:
     void closePage(const std::string& id);
     void showPage(const std::string& id);
     void openWindowsFor(const PluginRow& r, bool withOutput);
+    void showModule(const PluginRow& r);               // the Fitted modules SHOW key
+    std::set<std::string> showPending_;                // SHOW pressed on a stopped module, by file
     void syncOpenSet();
     int currentPage() const;
 
