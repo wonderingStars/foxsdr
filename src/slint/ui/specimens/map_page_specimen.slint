@@ -25,13 +25,16 @@ export component MapPageSpecimen inherits Window {
 
     // torn-mode: the page in a TornWindow at (torn-x, torn-y) the size of torn-w x torn-h, which the window's own edges and grip resize as the host does (the sum of the offsets, 240 x 140 at least)
     in-out property <bool> torn-mode: false;
+    property <length> sw;
+    property <length> sh;
     in-out property <length> torn-w: 700px;
     in-out property <length> torn-h: 500px;
     in property <length> torn-x: 40px;
     in property <length> torn-y: 40px;
     if !root.torn-mode : PageBody { x: 0px; y: 0px; width: root.view-w; height: root.view-h; page: root.page; index: 0; }
     if root.torn-mode : TornWindow { x: root.torn-x; y: root.torn-y; width: root.torn-w; height: root.torn-h; title: root.page.title;
-        resize(dx, dy) => { root.torn-w = max(240px, root.torn-w + dx); root.torn-h = max(140px, root.torn-h + dy); }
+        resize-began(e) => { root.sw = root.torn-w; root.sh = root.torn-h; }
+        resize-total(e, dx, dy) => { root.torn-w = max(240px, root.sw + (e == 2 ? 0px : dx)); root.torn-h = max(140px, root.sh + (e == 1 ? 0px : dy)); }
         PageBody { page: root.page; index: 0; }
     }
     TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }

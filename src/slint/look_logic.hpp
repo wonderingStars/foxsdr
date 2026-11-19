@@ -86,6 +86,13 @@ private:
     std::uint32_t w_ = 0, h_ = 0;
 };
 
+// THE TORN-OFF PAGE WINDOWS (MAP FOCUS): a frame drawn inside the main window, moved and resized by the host. They follow the SAME rule as the main window's edges: the size is
+// EdgeDrag::at(press, pointer), never the size the frame has now. The pointer is given as its total offset from the press (press = 0, 0), in logical pixels at scale 1.
+constexpr float kTornMinW = 240.0f, kTornMinH = 140.0f;
+WindowFit tornResizeAt(const EdgeDrag& drag, float dx, float dy);              // drag was begun(edge, 0, 0, w, h) at the press
+struct TornPlace { float x = 0.0f, y = 0.0f; };
+TornPlace tornMoveAt(float baseX, float baseY, float dx, float dy);            // never above or left of the main window's origin
+
 // THE MIRROR OF THE REAL WINDOW SIZE INTO THE SCREEN'S SIZE PROPERTIES (ui/main.slint win-w / win-h, bound to the window's width and height). When the scale this window is drawn at is not
 // the one the operating system gave it (an interface size of 125 % to 250 %: the follower above dispatches it), a CHANGED win-w is carried to the system as a LOGICAL size and converted
 // with the system's scale, not ours: the window is resized to win-w x os instead of win-w x scale, one step later, and the next tick's mirror writes the smaller number again - the

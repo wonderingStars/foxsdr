@@ -71,8 +71,10 @@ export global KitEvents {
     callback page-chrome-close(int);
     callback page-chrome-rollup(int);
     callback page-chrome-dock(int);
-    callback page-chrome-drag(int, length, length);
-    callback page-chrome-resize(int, length, length);
+    callback page-chrome-move-began(int);                    // the torn-off window's press-anchored drag (MAP FOCUS): began, then the pointer's total offset from the press
+    callback page-chrome-move-total(int, length, length);
+    callback page-chrome-resize-began(int, int);             // page, edge (1 right, 2 bottom, 3 corner)
+    callback page-chrome-resize-total(int, int, length, length);
     // the page bodies
     callback page-preset-pressed(int, int);
     callback page-preset-forgot(int, int);

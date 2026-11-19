@@ -26,15 +26,32 @@ import { TipTimer } from "tooltip.slint";
 component DragArea inherits TouchArea {
     in property <bool> active: true;                 // false: the drag reports nothing
     callback dragged(length, length);
+    // THE PRESS-ANCHORED OFFSET (torn-off windows, docs/multi-radio-records/map-focus.md): `dragged` reports the offset in THIS area's coordinates, and an area that sits on a window that
+    // follows the pointer moves under it, so a host that adds each report to the size it has now overshoots whenever it has not caught up (the main window's drive-fixes-7 fault).
+    // abs-dx / abs-dy are the pointer's offset from the PRESS measured in the window's own coordinates, whatever this area has done since: a function of two pointer positions only.
+    callback began();
+    out property <length> abs-dx;
+    out property <length> abs-dy;
+    property <length> press-ax;
+    property <length> press-ay;
     out property <length> travel;                    // the sum of |offset| over this press's moves: 0 for a click that stayed put
     pointer-event(e) => {
-        if (e.kind == PointerEventKind.down) { self.travel = 0px; }
+        if (e.kind == PointerEventKind.down) {
+            self.travel = 0px;
+            self.press-ax = self.absolute-position.x + self.pressed-x;
+            self.press-ay = self.absolute-position.y + self.pressed-y;
+            self.abs-dx = 0px;
+            self.abs-dy = 0px;
+            if (e.button == PointerEventButton.left && root.active) { root.began(); }
+        }
     }
     moved => {
         if (self.pressed && root.active) {
             let dx = self.mouse-x - self.pressed-x;
             let dy = self.mouse-y - self.pressed-y;
             self.travel += abs(dx) + abs(dy);
+            self.abs-dx = self.absolute-position.x + self.mouse-x - self.press-ax;
+            self.abs-dy = self.absolute-position.y + self.mouse-y - self.press-ay;
             root.dragged(dx, dy);
         }
     }
@@ -162,6 +179,8 @@ export component WindowChrome inherits Rectangle {
     callback maximise-clicked();
     callback close-clicked();
     callback drag(length, length);                   // the pointer's offset from the press, on every move while pressed
+    callback drag-began();                           // the press of a drag (the press-anchored pair below is measured from it)
+    callback drag-total(length, length);             // the pointer's offset from the press in window coordinates: a function of the press and the pointer only
     callback double-clicked();
 
     // padding 0 4 0 12, 4 px between the 26 x 22 keys
@@ -186,7 +205,8 @@ export component WindowChrome inherits Rectangle {
     }
     strip := DragArea {
         active: root.enabled;
-        dragged(dx, dy) => { root.drag(dx, dy); }
+        began => { root.drag-began(); }
+        dragged(dx, dy) => { root.drag(dx, dy); root.drag-total(self.abs-dx, self.abs-dy); }
         // a press that has travelled more than 3 px is a drag, not the second half of a double click
         double-clicked => { if (root.enabled && self.travel <= 3px) { root.double-clicked(); } }
     }
@@ -253,6 +273,11 @@ export component TornWindow inherits Rectangle {
     callback drag(length, length);
     callback double-clicked();
     callback resize(length, length);                 // the grip: the pointer's offset from the press, on every move while pressed
+    // the host's rule (MAP FOCUS): the window's place and size are a function of the press and the pointer, not of the place and size it has now
+    callback move-began();
+    callback move-total(length, length);
+    callback resize-began(int);                      // 1 right edge, 2 bottom edge, 3 corner grip
+    callback resize-total(int, length, length);
 
     out property <length> frame-height: frame.height;
 
@@ -288,6 +313,8 @@ export component TornWindow inherits Rectangle {
             maximise-clicked => { root.maximise-clicked(); }
             close-clicked => { root.close-clicked(); }
             drag(dx, dy) => { root.drag(dx, dy); }
+            drag-began => { root.move-began(); }
+            drag-total(dx, dy) => { root.move-total(dx, dy); }
             double-clicked => { root.double-clicked(); }
         }
         // .win is a flex column: the caller's blocks stack under the chrome inside the border
@@ -321,7 +348,8 @@ export component TornWindow inherits Rectangle {
             visible: !root.rolled-up && !root.maximised;
             active: root.enabled;
             mouse-cursor: root.enabled ? MouseCursor.nwse-resize : MouseCursor.default;
-            dragged(dx, dy) => { root.resize(dx, dy); }
+            began => { root.resize-began(3); }
+            dragged(dx, dy) => { root.resize(dx, dy); root.resize-total(3, self.abs-dx, self.abs-dy); }
         }
         // MAP FOCUS: the right and the bottom edge resize too (6 px strips clear of the corner grip), as any window's edges do
         DragArea {
@@ -332,7 +360,8 @@ export component TornWindow inherits Rectangle {
             visible: !root.rolled-up && !root.maximised;
             active: root.enabled;
             mouse-cursor: root.enabled ? MouseCursor.ew-resize : MouseCursor.default;
-            dragged(dx, dy) => { root.resize(dx, 0px); }
+            began => { root.resize-began(1); }
+            dragged(dx, dy) => { root.resize(dx, 0px); root.resize-total(1, self.abs-dx, self.abs-dy); }
         }
         DragArea {
             x: 0px;
@@ -342,7 +371,8 @@ export component TornWindow inherits Rectangle {
             visible: !root.rolled-up && !root.maximised;
             active: root.enabled;
             mouse-cursor: root.enabled ? MouseCursor.ns-resize : MouseCursor.default;
-            dragged(dx, dy) => { root.resize(0px, dy); }
+            began => { root.resize-began(2); }
+            dragged(dx, dy) => { root.resize(0px, dy); root.resize-total(2, self.abs-dx, self.abs-dy); }
         }
         // border: 1px solid knob-ring, over the chrome and the content
         Rectangle {

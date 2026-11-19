@@ -982,7 +982,9 @@ export component MainWindow inherits Window {
     for p[i] in root.pages : Rectangle { x: 0; y: 0; width: 0px; height: 0px;
         if p.torn : TornWindow { x: p.tx; y: p.ty; width: p.tw; height: p.th; title: p.title; rolled-up: p.rolled; tooltip: @tr("Drag to move; double-click to dock the page back as a tab");
             roll-up-clicked => { KitEvents.page-chrome-rollup(i); } maximise-clicked => { KitEvents.page-chrome-dock(i); } close-clicked => { KitEvents.page-chrome-close(i); }
-            drag(dx, dy) => { KitEvents.page-chrome-drag(i, dx, dy); } double-clicked => { KitEvents.page-chrome-dock(i); } resize(dx, dy) => { KitEvents.page-chrome-resize(i, dx, dy); }
+            double-clicked => { KitEvents.page-chrome-dock(i); }   // moving and resizing: the press-anchored pairs below (the old per-move drag / resize reports are no longer wired)
+            move-began => { KitEvents.page-chrome-move-began(i); } move-total(dx, dy) => { KitEvents.page-chrome-move-total(i, dx, dy); }
+            resize-began(e) => { KitEvents.page-chrome-resize-began(i, e); } resize-total(e, dx, dy) => { KitEvents.page-chrome-resize-total(i, e, dx, dy); }
             PageBody { page: p; index: i; }
         }
     }

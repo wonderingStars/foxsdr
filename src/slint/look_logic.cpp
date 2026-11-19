@@ -117,6 +117,17 @@ WindowFit EdgeDrag::at(float px, float py, float scale, float minW, float minH, 
     return f;
 }
 
+WindowFit tornResizeAt(const EdgeDrag& drag, float dx, float dy) {
+    return drag.at(dx, dy, 1.0f, kTornMinW, kTornMinH, 16384u, 16384u);
+}
+
+TornPlace tornMoveAt(float baseX, float baseY, float dx, float dy) {
+    TornPlace p;
+    p.x = std::max(0.0f, baseX + (std::isfinite(dx) ? dx : 0.0f));
+    p.y = std::max(0.0f, baseY + (std::isfinite(dy) ? dy : 0.0f));
+    return p;
+}
+
 void SizeMirror::asked(std::uint32_t w, std::uint32_t h) {
     want_ = true; wantW_ = w; wantH_ = h; waited_ = 0;
     guard_ = false;

@@ -24,6 +24,7 @@
 
 #include "main.h"
 #include "globe_publish.hpp"
+#include "look_logic.hpp"
 #include "map_compositor.hpp"
 #include "mapj_state.hpp"
 #include "plugin_kit.hpp"
@@ -140,6 +141,8 @@ private:
         bool torn = false;
         float tx = 80.f, ty = 60.f, tw = 720.f, th = 520.f;
         bool rolled = false;
+        foxsdr::slintlook::EdgeDrag edgeDrag;   // the torn-off window's resize (the main window's rule: size from the press and the pointer)
+        float moveBaseX = 0.f, moveBaseY = 0.f;   // where the window was at the press of a move
         bool settingsOpen = false;
         bool follow = true;
         std::string saveNote;

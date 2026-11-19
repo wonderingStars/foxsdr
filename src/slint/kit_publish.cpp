@@ -1724,17 +1724,30 @@ void KitPublisher::wire() {
     ui_.global<::KitEvents>().on_page_chrome_close([this](int i) { if (i >= 0 && i < static_cast<int>(pages_.size())) { closePage(pages_[static_cast<std::size_t>(i)].id); } });
     ui_.global<::KitEvents>().on_page_chrome_rollup([this](int i) { if (i >= 0 && i < static_cast<int>(pages_.size())) { pages_[static_cast<std::size_t>(i)].rolled = !pages_[static_cast<std::size_t>(i)].rolled; } });
     ui_.global<::KitEvents>().on_page_chrome_dock([this](int i) { if (i >= 0 && i < static_cast<int>(pages_.size())) { pages_[static_cast<std::size_t>(i)].torn = false; ui_.set_view_index(3 + i); } });
-    ui_.global<::KitEvents>().on_page_chrome_drag([this](int i, float dx, float dy) {
+
+    // MAP FOCUS: the torn-off window is moved and resized by the press and the pointer (look_logic EdgeDrag / tornMoveAt), not by adding each report to the place and size it has now
+    ui_.global<::KitEvents>().on_page_chrome_move_began([this](int i) {
         if (i < 0 || i >= static_cast<int>(pages_.size())) { return; }
         Page& p = pages_[static_cast<std::size_t>(i)];
-        p.tx = std::max(0.f, p.tx + dx);
-        p.ty = std::max(0.f, p.ty + dy);
+        p.moveBaseX = p.tx; p.moveBaseY = p.ty;
     });
-    ui_.global<::KitEvents>().on_page_chrome_resize([this](int i, float dx, float dy) {
+    ui_.global<::KitEvents>().on_page_chrome_move_total([this](int i, float dx, float dy) {
         if (i < 0 || i >= static_cast<int>(pages_.size())) { return; }
         Page& p = pages_[static_cast<std::size_t>(i)];
-        p.tw = std::max(240.f, p.tw + dx);
-        p.th = std::max(140.f, p.th + dy);
+        const foxsdr::slintlook::TornPlace to = foxsdr::slintlook::tornMoveAt(p.moveBaseX, p.moveBaseY, dx, dy);
+        p.tx = to.x; p.ty = to.y;
+    });
+    ui_.global<::KitEvents>().on_page_chrome_resize_began([this](int i, int edge) {
+        if (i < 0 || i >= static_cast<int>(pages_.size())) { return; }
+        Page& p = pages_[static_cast<std::size_t>(i)];
+        p.edgeDrag.begin(edge, 0.f, 0.f, static_cast<std::uint32_t>(std::max(0.f, p.tw)), static_cast<std::uint32_t>(std::max(0.f, p.th)));
+    });
+    ui_.global<::KitEvents>().on_page_chrome_resize_total([this](int i, int edge, float dx, float dy) {
+        if (i < 0 || i >= static_cast<int>(pages_.size())) { return; }
+        Page& p = pages_[static_cast<std::size_t>(i)];
+        if (!p.edgeDrag.active() || p.edgeDrag.edge() != edge) { return; }
+        const foxsdr::slintlook::WindowFit f = foxsdr::slintlook::tornResizeAt(p.edgeDrag, dx, dy);
+        p.tw = static_cast<float>(f.w); p.th = static_cast<float>(f.h);
     });
 
     // ---- the pages' bodies ----

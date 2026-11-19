@@ -330,6 +330,43 @@ void windowSizeAtEverySize(int screenW, int screenH) {   // the work area of the
     }
 }
 
+// MAP FOCUS: the torn-off page windows follow the main window's rule (look_logic.hpp tornResizeAt / tornMoveAt): the size and the place are a function of the press and of the pointer's
+// total offset from it, never of the size the frame has now. The rule they had (kit_publish.cpp, now removed) added every report to the current size, so a frame one answer late ran away.
+void tornWindow() {
+    {   // the old rule, as the test of the main window keeps its own: "size now plus this report", one answer late
+        float late = 700.f, asked = 700.f;
+        for (int i = 0; i < 6; ++i) { const float next = late + 20.f; late = asked; asked = next; }   // the pointer stands 20 px right of the press; six reports arrive
+        CHECK(asked != 720.f);
+    }
+    EdgeDrag d;
+    d.begin(1, 0.f, 0.f, 700, 500);                   // the right edge of a 700 x 500 frame
+    for (int i = 0; i < 1000; ++i) {                  // a thousand reports of one offset: one size
+        const WindowFit f = tornResizeAt(d, 20.f, 300.f);
+        CHECK(f.w == 720 && f.h == 500);
+    }
+    WindowFit f = tornResizeAt(d, -1000.f, 0.f);
+    CHECK(f.w == 240 && f.h == 500);                  // never narrower than 240
+    f = tornResizeAt(d, 0.f, 0.f);
+    CHECK(f.w == 700);                                // back at the press: the size it had
+    d.begin(2, 0.f, 0.f, 700, 500);                   // the bottom edge ignores across and stops at 140
+    f = tornResizeAt(d, 300.f, 80.f);
+    CHECK(f.w == 700 && f.h == 580);
+    f = tornResizeAt(d, 0.f, -1000.f);
+    CHECK(f.h == 140);
+    d.begin(3, 0.f, 0.f, 700, 500);                   // the corner: both
+    f = tornResizeAt(d, 100.f, 80.f);
+    CHECK(f.w == 800 && f.h == 580);
+    f = tornResizeAt(d, 90000.f, 90000.f);
+    CHECK(f.w == 16384 && f.h == 16384);              // the limit
+    // moving: from where the window was at the press
+    TornPlace p = tornMoveAt(80.f, 60.f, 25.f, -10.f);
+    CHECK(p.x == 105.f && p.y == 50.f);
+    p = tornMoveAt(80.f, 60.f, -500.f, -500.f);
+    CHECK(p.x == 0.f && p.y == 0.f);                  // never above or left of the main window
+    for (int i = 0; i < 1000; ++i) { p = tornMoveAt(80.f, 60.f, 25.f, -10.f); }
+    CHECK(p.x == 105.f && p.y == 50.f);               // the same offset, the same place
+}
+
 // DRIVE FIXES 7: the drag of a window edge. The fault was a size that depended on the size the window had when a move arrived (see look_logic.hpp EdgeDrag): the same pointer
 // position, reported again before the window had resized, grew the window again. So the first thing held here is that it cannot: any number of moves at one pointer position ask for
 // one size, whatever the window's size is by then.
@@ -396,6 +433,7 @@ int main() {
     counterFit();
     faces();
     wanted();
+    tornWindow();
     resizing();
     clampedGrowRoundTrip();
     follower();
