@@ -200,6 +200,10 @@
 //   Engine::zoomFrame(radio, ...): the engine C API still serves ONE spectrum frame per radio, so the zoom frame is not on the wire yet. fact.radio.<n>.zoom is off, or "<bins> bins of <binHz> Hz over <span> Hz".
 //   Not saved with the radio: it is a view, set again by the screen that wants it. OUT_OF_RANGE for a size or width that is not allowed, NO_CHANGE when it is so already.
 #define FOXAPP_OP_SET_IF_ZOOM            0x8625u /* ival[0]: FFT size or 0 off; num[0]: span Hz. Addresses one radio (target) */
+//   RADIO_HANDOFF (field fix A2, 2026-11-19; engine/engine_handoff.cpp, core/radio_handoff.hpp): the answer to the question a window asks when the radio it tried to open is held by another FoxSDR window on this PC
+//   (fact.radio.handoff says "ask"). ival[0] 1 = "Move it here": the other window is asked to let the radio go and, when it has, it is opened here; 0 = "Leave it there" (or OK on a notice): the question is put away and
+//   nothing else happens. NO_CHANGE when no question is open. Not radio-scoped and in no web, CAT or TCI profile: it is the operator's, at this window.
+#define FOXAPP_OP_RADIO_HANDOFF          0x8626u /* ival[0]: 1 move the radio here / 0 leave it (and dismiss) */
 #define FOXAPP_OP_SET_STEREO_SYSTEM      0x8619u /* ival[0]: 0 automatic / 1 pilot tone / 2 OIRT. Addresses one radio (target) */
 //   SET_PASSBAND (SETTINGS; screen lane S1, wave 8, rows G1-35 and G1-34): the edges of the channel filter set apart and the whole band shifted (IF shift) on the selected radio (target), in USB, LSB, CW and AM (dsp/passband.hpp's
 //   maths over dsp/if_filter.hpp's band-pass; Pipeline::setPassband). ival[0] 1 puts the band-pass in the chain, 0 takes it out (the mode's own filter again); ival[1] = 1: the figures follow - num[0] the low cut, num[1] the high cut,
