@@ -1,6 +1,6 @@
 # Photo and details card in the new window (branch feat/photo-new-window from release/0.99.111 287d78b2)
 
-Local only. STATUS: code written (not yet built/tested at this commit).
+Local only. STATUS: built; tests green (photo_store 15/15, photo_card 25/25); break-it (picture key made inert): photo_card 10 of 25 fail.
 
 Before: a click on a target on a plugin's map set the kit's detailsId_ and the DECODE bank's "Target details" section showed the built-in lines plus TRACK_INFO fields (TrackInfoCache is attached
 in PluginKit::directiveAfter). Nothing asked for TRACK_PHOTO: attach() was called without d.trackPhoto, so photos().active() was false; no photo code in src/slint.

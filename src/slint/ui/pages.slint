@@ -188,6 +188,21 @@ export struct DecoderBar { name: string, file: string, presets: [PresetKeyModel]
 
 export struct SatNote { title: string, text: string }
 
+export struct DetailsModel {
+    heading: string,
+    chip: string,
+    lamp: LampState,
+    lines: [DetailLine],
+    gone: bool,
+    empty-hint: string,
+    can-go: bool,
+    following: bool,
+    photo: image,
+    photo-ready: bool,
+    photo-fetching: bool,
+    photo-credit: string,
+}
+
 export struct MapModel {
     card-shown: bool,      // a target is selected here: its details (and photo) show at the foot of the list column
     card: DetailsModel,
@@ -275,20 +290,6 @@ export struct ModuleModel {
     body: PluginBodyModel,         // the catalogue body of the module (window gaps 3); shown = false for a module the catalogue does not list
 }
 
-export struct DetailsModel {
-    heading: string,
-    chip: string,
-    lamp: LampState,
-    lines: [DetailLine],
-    gone: bool,
-    empty-hint: string,
-    can-go: bool,
-    following: bool,
-    photo: image,
-    photo-ready: bool,
-    photo-fetching: bool,
-    photo-credit: string,
-}
 
 export struct PageTab {
     id: string,

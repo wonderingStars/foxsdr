@@ -126,16 +126,7 @@ bool LiveTable::fact(const std::string& key, std::string& out) {
 // ---------------------------------------------------------------------------------------------------------------------------------
 PluginKit::PluginKit(const Env& env) : env_(env), table_(env.api, env.session), port_(cascade::core::makeNullPluginUiPort()) {
     state_.structSize = sizeof(state_);
-    trackInfo_.photos().setTextureHooks(
-        [this](const std::uint8_t* rgb, std::uint32_t w, std::uint32_t h) -> unsigned int {
-            PhotoPixels p;
-            p.rgb.assign(rgb, rgb + static_cast<std::size_t>(w) * h * 3u);
-            p.w = w; p.h = h;
-            const unsigned int id = photoNextId_++;
-            photoStore_[id] = std::move(p);
-            return id;
-        },
-        [this](unsigned int id) { photoStore_.erase(id); });
+    photoStore_.install(trackInfo_.photos());
 }
 
 PluginKit::~PluginKit() {

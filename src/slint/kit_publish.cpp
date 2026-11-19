@@ -22,6 +22,7 @@
 #include "core/utf8_text.hpp"
 #include "gui/track_metrics.hpp"
 #include "gui/track_photo_cache.hpp"
+#include "core/diag_log.hpp"
 #include "desk_logic.hpp"
 #include "mapj_logic.hpp"
 #include "model_reuse.hpp"

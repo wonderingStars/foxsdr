@@ -1,0 +1,24 @@
+// The map page's details card with the plugin's photo (docs/multi-radio-records/photo-new-window.md): one PageBody (a kind-5 page) fed a made-up PageTab by
+// tests/test_slint_photo_card.cpp, which checks the card's fields, the picture, its credit and what a click on the picture asks for.
+import { Theme, Skin, Workbench } from "../theme.slint";
+import { PageTab, PageBody, MapModel, MapExtras, DetailsModel } from "../pages.slint";
+import { MapTarget, LegendRow } from "../map.slint";
+import { TableRow } from "../table.slint";
+import { PresetKeyModel } from "../presets.slint";
+import { SettingField } from "../forms.slint";
+import { MapJModel } from "../mapj.slint";
+import { DetailLine } from "../output.slint";
+import { GpsRow } from "../system_bank.slint";
+import { TipLayer } from "../tooltip.slint";
+export { Theme, Skin, Workbench }
+export { KitEvents } from "../pages.slint";
+export { PageTab, MapModel, MapExtras, MapTarget, LegendRow, TableRow, PresetKeyModel, SettingField, MapJModel, GpsRow, DetailsModel, DetailLine }
+
+export component PhotoCardSpecimen inherits Window {
+    width: 1240px;
+    height: 900px;
+    background: Theme.bg;
+    in property <PageTab> page;
+    PageBody { x: 0px; y: 0px; width: 1240px; height: 900px; page: root.page; index: 0; }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
+}
