@@ -717,6 +717,25 @@ SentinelOutcome finishSentinelWatch(const SentinelEnd& e) {
     const SessionLogTail tail = readNewestSessionLogTail(e.logDir, DiagLog::kRingLines);
     info.logLines = tail.lines;
     info.logTotalLines = tail.sessionLines;
+    // THE LAST WORDS (field report 6CCFD0C0E58FC30C): what the application printed to stderr, from
+    // the write-through file it kept (diag_log.hpp, stderrFileName), scrubbed by the same rules every
+    // log line gets before it is uploaded, at most kStderrTailMaxLines lines, as the END of the log
+    // section - where the upload keeps its last lines. The section never grows past what the
+    // report reader and the site take: the oldest ordinary log lines make room.
+    {
+        std::vector<std::string> words = readStderrTailForReport(e.logDir, e.appPid, kStderrTailMaxLines);
+        if (!words.empty()) {
+            const std::size_t room = static_cast<std::size_t>(DiagLog::kRingLines);
+            if (words.size() > room) { words.erase(words.begin(), words.end() - static_cast<std::ptrdiff_t>(room)); }
+            if (info.logLines.size() + words.size() > room) {
+                info.logLines.erase(info.logLines.begin(),
+                                    info.logLines.begin() +
+                                        static_cast<std::ptrdiff_t>(info.logLines.size() + words.size() - room));
+            }
+            info.logTotalLines += words.size();
+            info.logLines.insert(info.logLines.end(), words.begin(), words.end());
+        }
+    }
     // The other software's DLLs, from the application's own start line and arrival lines
     // anywhere in the session (not only the tail above, which a long session has moved
     // past them) - the one record of it that outlives the process.

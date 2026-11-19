@@ -382,6 +382,32 @@ std::string maskAccountNames(const std::string& text);
 // attribution line - writes to originalStderrHandle() while the capture is
 // on, so it reaches whatever stderr was before, not the log.
 bool installStderrCapture(bool evenIfConsole = false);
+
+// THE LAST WORDS (field report 6CCFD0C0E58FC30C, 0.99.109). A Rust panic inside the Slint
+// library prints its message to stderr and then fast-fails the process (abort): the pipe
+// above is drained by a thread inside the dying process, and the message never reached the
+// log. With Diagnostics on, the capture therefore makes stderr a WRITE-THROUGH FILE in the log
+// folder instead of a pipe - `stderr-<process id>.txt`, opened for append only, replaced at
+// each start, kept to kStderrFileMaxBytes (the thread that reads it for the log also empties it
+// once it has been read to the end past that size) - and the same thread turns it into
+// `vendor:` lines exactly as the pipe's reader did. A file survives the process that wrote it,
+// so the sentinel (core/sentinel.hpp), a second process, can read what the dying one printed.
+// With Diagnostics off, or when the file cannot be made, the pipe is used as before.
+inline constexpr std::size_t kStderrFileMaxBytes = 256u * 1024u;
+// What the sentinel carries into its report: the last kStderrTailMaxLines lines (of at most
+// kStderrTailLineChars characters each; a longer one is wrapped), read from at most the last
+// kStderrTailReadBytes of the file.
+inline constexpr std::size_t kStderrTailMaxLines = 40;
+inline constexpr std::size_t kStderrTailLineChars = 170;
+inline constexpr std::size_t kStderrTailReadBytes = 16u * 1024u;
+std::string stderrFileName(unsigned long processId);   // "stderr-<id>.txt"
+// The scrubbed tail of that file for the process `processId`, oldest line first, each as a
+// report log line starting "stderr: ". EVERY line goes through scrubVendorLine and then
+// scrubUploadLine - the rules a driver's line and a log line already get - and control and
+// non-ASCII characters become '?'. Empty when the file is missing or empty. Platform-neutral
+// (it only reads).
+std::vector<std::string> readStderrTailForReport(const std::string& logDir, unsigned long processId,
+                                                 std::size_t maxLines = kStderrTailMaxLines);
 bool stderrCaptureActive();
 // The stderr HANDLE the process had before the capture replaced it, or
 // nullptr when the capture is not active. Windows only.

@@ -1325,6 +1325,7 @@ private:
     std::uint64_t& audioRescansAtLogStart_ = receivers_[0]->audioRescansAtLogStart_;
     std::uint64_t& receiverStops_ = receivers_[0]->receiverStops_;
     std::uint64_t& audioStopsAtLogStart_ = receivers_[0]->audioStopsAtLogStart_;
+    std::uint64_t& audioOpensAtLogStart_ = receivers_[0]->audioOpensAtLogStart_;
     double& lastDspLogSec_ = receivers_[0]->lastDspLogSec_;
     std::uint64_t& dspDroppedAtMinute_ = receivers_[0]->dspDroppedAtMinute_;
     std::uint64_t& dspReadAtMinute_ = receivers_[0]->dspReadAtMinute_;

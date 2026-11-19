@@ -849,7 +849,15 @@ void Engine::closeAudioMinute(std::size_t ringFramesNow) {
     const std::uint64_t stopsThisMinute =
         rx().receiverStops_ >= rx().audioStopsAtLogStart_ ? rx().receiverStops_ - rx().audioStopsAtLogStart_ : 0;
     rx().audioStopsAtLogStart_ = rx().receiverStops_;
-    const std::uint64_t starvedBeyondStops = starved > stopsThisMinute ? starved - stopsThisMinute : 0;
+    // ...AND NEITHER IS A RE-OPENED OUTPUT (field report 25B7DE2F, 0.99.109): one more discounted callback per successful open of the sink in
+    // the minute (a device switch, the watchdog's reopen, a layout fallback), added to the stops and, like them, never taking the count below
+    // zero. A sink replaced under the engine can show a smaller count than the mark: that reads as no opens.
+    const std::uint64_t opensNow = out.opens();
+    const std::uint64_t opensThisMinute =
+        opensNow >= rx().audioOpensAtLogStart_ ? opensNow - rx().audioOpensAtLogStart_ : 0;
+    rx().audioOpensAtLogStart_ = opensNow;
+    const std::uint64_t discounted = stopsThisMinute + opensThisMinute;
+    const std::uint64_t starvedBeyondStops = starved > discounted ? starved - discounted : 0;
 
     // THE BUFFER THAT DEEPENS ITSELF (0.99.73) AND EASES BACK (0.99.83). The
     // 12CF report - 110 to 126 starved callbacks every minute at a fixed 120 ms
@@ -885,11 +893,19 @@ void Engine::closeAudioMinute(std::size_t ringFramesNow) {
             starved >= static_cast<std::uint64_t>(cascade::sink::kAudioLeadStarvedPerMinute)) {
             // The discount is why nothing steps; say so, or the digest above
             // reads as a raise the code forgot.
-            cascade::core::diagLogf(
-                "audio: buffer kept at %d ms - %llu of the %llu starved callbacks came with "
-                "receiver stops",
-                leadMs, static_cast<unsigned long long>(starved - starvedBeyondStops),
-                static_cast<unsigned long long>(starved));
+            if (opensThisMinute == 0) {
+                cascade::core::diagLogf(
+                    "audio: buffer kept at %d ms - %llu of the %llu starved callbacks came with "
+                    "receiver stops",
+                    leadMs, static_cast<unsigned long long>(starved - starvedBeyondStops),
+                    static_cast<unsigned long long>(starved));
+            } else {
+                cascade::core::diagLogf(
+                    "audio: buffer kept at %d ms - %llu of the %llu starved callbacks came with "
+                    "receiver stops or output opens",
+                    leadMs, static_cast<unsigned long long>(starved - starvedBeyondStops),
+                    static_cast<unsigned long long>(starved));
+            }
         }
         if (nextMs > leadMs) {
             out.setLeadFrames(cascade::sink::audioLeadFrames(nextMs));
@@ -10875,6 +10891,8 @@ void Engine::initialise() {
     // would otherwise discount the session's whole first minute - whose starvation, with priming already excluded at the sink, is the
     // machine's own doing (master 0.99.102, 8c0a4f41: the constructor's rescanPlugins() and the mark taken right after it).
     rx().audioRescansAtLogStart_ = pluginScans_;
+    // Likewise the open that built the session's sink: not a re-open, not discounted from the first minute.
+    rx().audioOpensAtLogStart_ = rx().pipeline_.audio().opens();
     // THE FIRST SCAN IS DONE: the copies a session before this one could not delete (a module was mapped) are deleted now if this scan still
     // finds them superseded, and the store opens with the catalogue the last good read kept - no request is made (stub campaign B3; both run
     // before the first pass, like the scan beside them).

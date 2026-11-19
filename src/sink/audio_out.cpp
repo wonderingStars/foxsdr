@@ -128,6 +128,7 @@ bool AudioOut::open(int deviceIndex, double sampleRateHz, int channels) {
         // waiting for a driver.
         std::lock_guard<std::mutex> lk(apiMutex_);
         ok = openLocked(deviceIndex, sampleRateHz, channels, note);
+        if (ok) { opens_.fetch_add(1, std::memory_order_relaxed); }
     }
     // SAID AFTER THE LOCK IS RELEASED (see OpenNote). One line per attempt that
     // has something new to say, success or refusal. Until this existed NO line

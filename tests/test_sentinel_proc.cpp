@@ -328,6 +328,22 @@ int standIn(int argc, char** argv) {
     if (scenario == "failfast") {
         dieAfterRunning([] { __fastfail(7); });  // FAST_FAIL_FATAL_APP_EXIT: what abort() ends in
     }
+    if (scenario == "failfast-stderr") {
+        // WHAT THE SLINT LIBRARY DOES WHEN A RUST PANIC CANNOT UNWIND (field report
+        // 6CCFD0C0E58FC30C, 0.99.109): print the panic to stderr and fast-fail in the same
+        // breath. The real stderr capture is on, as main() turns it on, and the death
+        // follows the print with no pause - the reader thread of the old pipe never got
+        // the line. The second line holds what a report must never carry: an account name in
+        // a path and a network address.
+        installStderrCapture(true);
+        toRunning(40);
+        diagLogf("stand-in: about to die (%s)", scenario.c_str());
+        say("READY %lu\n", 0);
+        sleepMs(50);
+        std::fprintf(stderr, "thread 'main' panicked at RECOGNISABLE-PANIC-LINE-7Q: called Option::unwrap() on None\n");
+        std::fprintf(stderr, "  at C:\\Users\\ZebulonTestUser\\.cargo\\registry\\src\\slint-1.18.1\\lib.rs:10:5 via 192.168.77.201\n");
+        __fastfail(7);
+    }
     if (scenario == "failfast-wer") {
         // The same death, with Windows Error Reporting left to write its record of it.
         dieAfterRunning([] { __fastfail(7); });
@@ -738,6 +754,52 @@ int main(int argc, char** argv) {
             CHECK(contains(d.text, std::string("stand-in: about to die (") + r.scenario + ")"));
             // UPLOAD-ELIGIBLE: the sweep ATTEMPTS it (and, with nothing listening, fails).
             CHECK(sweepStatus(dir, d.reports[0]) == "failed");
+        }
+        std::error_code ec;
+        if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
+    }
+
+    // =======================================================================
+    // THE LAST WORDS (field report 6CCFD0C0E58FC30C): a process that prints a panic to
+    // stderr and fast-fails leaves that text in the sentinel's report - scrubbed - because
+    // stderr is also a write-through file the dying process cannot take with it.
+    // =======================================================================
+    {
+        const fs::path dir = scratch("failfast-stderr");
+        const Death d = liveAndDie(dir, "failfast-stderr", 0);
+        CHECK(d.appExit == 0xC0000409ul);
+        CHECK(d.sentinelGone);
+        CHECK(d.reports.size() == 1);
+        if (d.reports.size() == 1) {
+            CHECK(d.parsedOk);
+            CHECK(d.parsed.reason.rfind(kSentinelReasonCrash, 0) == 0);
+            CHECK(contains(d.text, "RECOGNISABLE-PANIC-LINE-7Q"));
+            // THE TAIL ITSELF, the lines that begin "stderr: " (the ordinary log lines above it are the
+            // application's own vendor: lines, which the upload scrubs and the report on disk does not):
+            // scrubbed - the account name and the address are gone, the rest of the line stays.
+            std::string tailText;
+            std::size_t tailLines = 0;
+            std::size_t pos = 0;
+            while ((pos = d.text.find("\nstderr: ", pos)) != std::string::npos) {
+                const std::size_t eol = d.text.find('\n', pos + 1);
+                tailText += d.text.substr(pos, eol == std::string::npos ? std::string::npos : eol - pos);
+                ++tailLines;
+                ++pos;
+            }
+            std::printf("failfast-stderr: %zu stderr line(s) in the report\n", tailLines);
+            CHECK(tailLines >= 2 && tailLines <= 40);
+            CHECK(contains(tailText, "RECOGNISABLE-PANIC-LINE-7Q"));
+            CHECK(!contains(tailText, "ZebulonTestUser"));
+            CHECK(!contains(tailText, "192.168.77.201"));
+            CHECK(contains(tailText, "<user>"));
+            CHECK(contains(tailText, "<host>"));
+            CHECK(contains(tailText, "lib.rs"));
+            // and what is uploaded carries it too, inside the site's own body limit (64 KiB)
+            const std::string body = uploadJson(d.parsed, "0123456789abcdef0123456789abcdef");
+            CHECK(contains(body, "RECOGNISABLE-PANIC-LINE-7Q"));
+            CHECK(!contains(body, "ZebulonTestUser"));
+            CHECK(!contains(body, "192.168.77.201"));
+            CHECK(body.size() < 64u * 1024u);
         }
         std::error_code ec;
         if (g_checksFailed == 0) { fs::remove_all(dir, ec); }
