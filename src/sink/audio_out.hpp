@@ -213,6 +213,20 @@ public:
         return primingCallbacks_.load(std::memory_order_relaxed);
     }
 
+    // Cumulative count of SUCCESSFUL opens of the output stream (open() that
+    // returned true), monotonic over the object's lifetime: the first open, a
+    // device change, the watchdog's reopen, a layout fallback. Each one hands
+    // the new stream's first callbacks a ring with nothing in it, so a
+    // re-open is a starved callback that is the user's own action and not the
+    // computer falling behind; the engine's minute poll discounts one per
+    // open the way it discounts one per stop (field report 25B7DE2F, 0.99.109).
+    std::uint64_t opens() const {
+        return opens_.load(std::memory_order_relaxed);
+    }
+    // TEST SEAM, like pullBlock(): counts an open without opening a device,
+    // for a test that drives callbacks by hand on a closed sink.
+    void noteOpenForTest() { opens_.fetch_add(1, std::memory_order_relaxed); }
+
     // How many frames the ring currently holds / can hold, in FRAMES (a
     // stereo frame is one L+R pair). For the status card and the remote
     // JSON, which both want "ring X of Y ms" rather than a raw sample count
@@ -354,6 +368,7 @@ private:
     // leadFrames_ or more in the ring, exactly as a fresh stream should be.
     std::atomic<bool> primed_{false};
     std::atomic<std::uint64_t> primingCallbacks_{0};
+    std::atomic<std::uint64_t> opens_{0};
     // PaStream*, stored as void* so this public header does not force
     // portaudio.h onto every includer; audio_out.cpp casts at the API line.
     void* stream_ = nullptr;

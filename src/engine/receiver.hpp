@@ -518,6 +518,12 @@ struct Receiver {
     // callbacks before judging a raise - one callback per stop, never below zero. The pass thread's, like closeAudioMinute.
     std::uint64_t receiverStops_ = 0;
     std::uint64_t audioStopsAtLogStart_ = 0;
+    // NOR IS A RE-OPENED SOUND OUTPUT (field report 25B7DE2F, 0.99.109: eight "audio: output opened" lines in 40 s while a user switched between
+    // MME, WASAPI and several devices, then "4 starved callbacks"): each successful open of the sink (AudioOut::opens()) starts a stream whose first
+    // callbacks find nothing in the ring, and the stop discount above covers only receiver stops. closeAudioMinute discounts one starved callback
+    // per open in the minute, together with the stops and never below zero; the mark is where the sink's count stood when the minute opened (taken
+    // at the end of Engine::initialise, so the open that built the session is not discounted from its first minute).
+    std::uint64_t audioOpensAtLogStart_ = 0;
     // The pipeline ring's minute (pollDspMinute / closeDspMinute): its own clock, and the monotonic pipeline counters as they stood when
     // it last closed (the drop and read counts, and - master 0.99.101 - the writes that were cut).
     double lastDspLogSec_ = 0.0;

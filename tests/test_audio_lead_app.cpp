@@ -666,6 +666,47 @@ int main() {
         CHECK(countOf(ledger->counts(), "recovered.audiolead") == 1);
     }
 
+    // --- 9e. A RE-OPENED OUTPUT IS NOT THE MACHINE FALLING BEHIND (field report 25B7DE2F, 0.99.109) ----------------
+    // The 09:01 report: eight "audio: output opened" lines in 40 s (a user switching between MME, WASAPI and several devices), then "4 starved
+    // callbacks in the last minute" and a raise. Each successful open of the sink starts a stream whose first callbacks find an empty ring; the stop
+    // discount covers receiver stops only. One starved callback per open is discounted the same way: never below zero, so starvation beyond the opens
+    // counts in full, and a minute with no opens is judged exactly as before.
+    {
+        th::TestWindow reopened;
+        cascade::sink::AudioOut& out = Access::audio(reopened);
+        out.close();   // no device thread may read the ring while the test makes callbacks
+        CHECK(Access::leadNow(reopened) == 120);
+        // Four opens, four starved callbacks: not a raise, and the line says why.
+        const int raisedBefore = logLinesWith("audio: buffer raised to");
+        for (int o = 0; o < 4; ++o) { out.noteOpenForTest(); }
+        starve(out, 4);
+        Access::closeMinute(reopened);
+        CHECK(Access::leadNow(reopened) == 120);
+        CHECK(logLinesWith("audio: buffer raised to") == raisedBefore);
+        CHECK(logLinesWith("audio: buffer kept at 120 ms - 4 of the 4 starved callbacks "
+                           "came with receiver stops or output opens") == 1);
+        // The discount is spent with its minute: the next minute's four starved callbacks, with no open in it, are the machine's own.
+        starve(out, 4);
+        Access::closeMinute(reopened);
+        CHECK(Access::leadNow(reopened) == 240);
+        CHECK(logLinesWith("audio: buffer raised to") == raisedBefore + 1);
+    }
+    {
+        // Starvation BEYOND the opens counts in full: two opens, five starved is three of the machine's own. (One window at a time.)
+        th::TestWindow beyond;
+        cascade::sink::AudioOut& out2 = Access::audio(beyond);
+        out2.close();
+        for (int o = 0; o < 2; ++o) { out2.noteOpenForTest(); }
+        starve(out2, 5);
+        Access::closeMinute(beyond);
+        CHECK(Access::leadNow(beyond) == 240);
+        // CODE, NOT A PROMISE: a successful open() is what counts, and the mark is taken at the end of initialise.
+        std::string audioSrc = stripComments(
+            readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "sink" / "audio_out.cpp"));
+        audioSrc.erase(std::remove(audioSrc.begin(), audioSrc.end(), ''), audioSrc.end());
+        CHECK(audioSrc.find("if (ok) { opens_.fetch_add(1, std::memory_order_relaxed); }") != std::string::npos);
+    }
+
     // --- 10. THE SAVED SETTING comes back: a fixed one is applied at start-up -----------------------
     // (A second window, after the first is gone: one at a time, as the application has it.)
     {
