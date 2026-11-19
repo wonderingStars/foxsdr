@@ -61,11 +61,15 @@ the toolbar's height pin is removed with the fold open).
 * Fold and list width are not saved between starts.
 * Other languages: the new words are English only; the catalogues have no entry for them yet.
 
-## STATUS AT CHECKPOINT (WIP commit)
+## FINAL STATUS (map work)
 
-Done and green: test_slint_map_page (72 checks, 0 failed, built from this tree); red before (15 of 31 failed) and a break-it run (4 failed with the toolbar height pin removed, fold open).
-Re-run green on the same tree: test_slint_host_map, host_mapicons, host_mapj, host_kit, host_layouts, house_rules, po, instruments, sliders, tabs, map, constraints (12 of 12 passed
-in the run that also showed the map_page binary stale from the break-it build; it was then rebuilt).
-Left: (1) foxsdr-slint is being rebuilt (its 4.6 GB vc143.pdb hit the 4 GB limit, error C1090; the PDB and objects of that target were deleted and it is compiling from scratch);
-(2) run test_slint_main_screen and the rest after it; (3) the pictures from a staged copy in D:/foxsdr-build/stage-mapfocus (launch.ps1 and scripts are ready, nothing run yet);
-(4) a second commit for the scan-on-start fix (see the hand-back), not started in code.
+Tests (Release, this tree, ctest -C Release): test_slint_map_page 72 checks 0 failed; test_slint_host_map, host_mapicons, host_mapj, host_kit, host_layouts, house_rules, po, instruments,
+sliders, tabs, map, constraints, main_screen: all passed. The application target foxsdr-slint was rebuilt from scratch (its vc143.pdb had reached 4 GB, error C1090, so that target's
+objects and PDB were deleted; this is a build-folder matter, not a source one).
+
+Numbers (test_slint_map_page, page area of a 1600 x 1600 / 1600 x 900 / 1024 x 640 window, options folded): map 974 x 1246 / 974 x 546 / 398 x 283 px (was 980 x 392 / 980 x 159 / 404 x 46);
+list 260 px; Fit row to Layers row 6 px, Layers row to map 6 px.
+
+Pictures (staged copy, hidden desktop, generated ADS-B file only, no tile plugin): D:/foxsdr-build/stage-mapfocus/shots/adsb-map-main.png (1600 x 900), adsb-map-main-options-open.png,
+adsb-map-1024x640.png. At 1024 x 640 the page itself is only about 660 x 410 after the left bank (360 px) and the window's own header, and the map is what is left of it (about 400 x 170
+with the 260 px list; drag the divider to hide the list for more). The torn-off picture was NOT obtained: the input script's `drag` on the tab did not tear the page off.
