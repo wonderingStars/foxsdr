@@ -72,4 +72,4 @@ The website's privacy page says both.
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.110.exe`:**
-`TBD`
+`0cf7f002db772e4a89c8ee9ffcd81484a1e00711664a3c7c1f64ceb27e0d3521`
