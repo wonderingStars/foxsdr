@@ -1032,6 +1032,11 @@ int main() {
         CHECK(c.valid && c.q.c.op == FOXAPI_OP_SCAN_DEVICES && c.q.c.op == 0x0301u);
         c = opScanOnOpen();
         CHECK(c.valid && c.q.c.op == FOXAPP_OP_SCAN_DEVICES_ON_OPEN);
+        // the window's own first search (map-focus.md section 2): once, 1.5 s after the first publish, and not in a bounded run unless it opted in
+        CHECK(!scanOnStartDue(false, false, false, 0) && !scanOnStartDue(false, false, false, 1499));   // not at once: a saved radio gets its start first
+        CHECK(scanOnStartDue(false, false, false, 1500) && scanOnStartDue(false, false, false, 60000));
+        CHECK(!scanOnStartDue(true, false, false, 60000));                                            // exactly once
+        CHECK(!scanOnStartDue(false, true, false, 60000) && scanOnStartDue(false, true, true, 60000)); // a bounded run: only when it asked for it
         c = opUsrps(true);
         CHECK(c.valid && c.q.c.op == FOXAPP_OP_SET_NETWORK_USRP_SCAN && c.q.c.ival[0] == 1 && opUsrps(false).q.c.ival[0] == 0);
         c = opRateSelected(m, 2);

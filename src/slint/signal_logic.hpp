@@ -488,6 +488,10 @@ std::string textOfCommand(const Command& c);
 Command opDeviceSelected(TableReader& table, const SourceModel& m, int index);
 Command opRefresh();
 Command opScanOnOpen();
+// THE WINDOW'S OWN FIRST SEARCH FOR RADIOS (docs/multi-radio-records/map-focus.md, section 2): the Source list of this window has no "opened" event, so without it a clean install lists only the
+// generator, the I/Q file and the sound card until the user presses Refresh. Due once, `msSinceStart` after the first publish (the saved radio, if any, has had its start), and never in a
+// bounded (scripted) run unless it opted in (FOXSDR_SCAN_ON_START=1): those stay free of device probing.
+bool scanOnStartDue(bool alreadyAsked, bool bounded, bool optedIn, std::int64_t msSinceStart);
 Command opUsrps(bool on);
 Command opRateSelected(const SourceModel& m, int index);
 Command opAntennaSelected(const SourceModel& m, int index);

@@ -1484,6 +1484,9 @@ Command opDeviceSelected(TableReader& t, const SourceModel& m, int index) {
 }
 Command opRefresh() { return make(cmd::make(FOXAPI_OP_SCAN_DEVICES)); }
 Command opScanOnOpen() { return make(cmd::make(FOXAPP_OP_SCAN_DEVICES_ON_OPEN)); }
+bool scanOnStartDue(bool alreadyAsked, bool bounded, bool optedIn, std::int64_t msSinceStart) {
+    return !alreadyAsked && (!bounded || optedIn) && msSinceStart >= 1500;
+}
 Command opUsrps(bool on) { return make(cmd::makeInt(FOXAPP_OP_SET_NETWORK_USRP_SCAN, on ? 1 : 0)); }
 Command opRateSelected(const SourceModel& m, int index) {
     if (!inRange(index, m.rates.size())) { return {}; }

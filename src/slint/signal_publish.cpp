@@ -1035,6 +1035,13 @@ void SignalPublisher::publish(const FoxReceiverState& state) {
     const std::int64_t nowMs = static_cast<std::int64_t>(nowS() * 1000.0);
     pollSetup();
     pollImport();
+    // THE WINDOW SEARCHES FOR RADIOS ONCE BY ITSELF: FOXAPP_OP_SCAN_DEVICES_ON_OPEN, not Refresh's FOXAPI_OP_SCAN_DEVICES. The engine's handler lists the native radios (opens nothing) and runs the
+    // SoapySDR scan only if it never ran, behind its own gate that defers while a radio is open - so a running or restored radio is not disturbed, which Refresh's unconditional scan would risk.
+    if (firstPublishMs_ < 0) { firstPublishMs_ = nowMs; }
+    {
+        const char* opt = std::getenv("FOXSDR_SCAN_ON_START");
+        if (scanOnStartDue(scanAsked_, bounded_, opt != nullptr && opt[0] == '1', nowMs - firstPublishMs_)) { scanAsked_ = true; send(opScanOnOpen()); }
+    }
     // The lists and facts are read at 10 Hz (and at once after a gesture): the ImGui window reads them every frame, this one does not need a thirtieth of a second.
     if (!forceRead_ && haveModels_ && nowMs - lastReadMs_ < 100) { return; }
     forceRead_ = false;

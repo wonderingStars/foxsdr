@@ -146,6 +146,8 @@ private:
     bool forceRead_ = true;
     bool txPageOpen_ = false;
     bool bounded_ = false;
+    bool scanAsked_ = false;               // the window's one search for radios after start (scanOnStartDue)
+    std::int64_t firstPublishMs_ = -1;
     std::optional<std::string> filePickSeam_, fileClipboardSeam_;   // the bounded run's seams (setBounded)
     bool plutoDraftSet_ = false, rtltcpDraftSet_ = false;
     std::string plutoDraft_, rtltcpDraft_;

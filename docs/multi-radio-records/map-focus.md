@@ -73,3 +73,37 @@ list 260 px; Fit row to Layers row 6 px, Layers row to map 6 px.
 Pictures (staged copy, hidden desktop, generated ADS-B file only, no tile plugin): D:/foxsdr-build/stage-mapfocus/shots/adsb-map-main.png (1600 x 900), adsb-map-main-options-open.png,
 adsb-map-1024x640.png. At 1024 x 640 the page itself is only about 660 x 410 after the left bank (360 px) and the window's own header, and the map is what is left of it (about 400 x 170
 with the 260 px list; drag the divider to hide the list for more). The torn-off picture was NOT obtained: the input script's `drag` on the tab did not tear the page off.
+
+## 2. The window searches for radios by itself once (separate commit)
+
+FAULT: nothing in the new window sent the radio search; the Source list on a clean start offered only Signal generator, IQ file and Sound card until Refresh was pressed
+(`opScanOnOpen` existed and was tested but had no caller; the contract has no "list opened" callback).
+CHANGE: `SignalPublisher::publish` sends `opScanOnOpen()` (FOXAPP_OP_SCAN_DEVICES_ON_OPEN 0x8401) once, 1.5 s after its first publish (`scanOnStartDue`, signal_logic.cpp). The op chosen
+is the ON_OPEN one, not Refresh's FOXAPI_OP_SCAN_DEVICES: in engine.cpp (~8316-8330) both run `scanNative()` (lists native radios, opens nothing), but ON_OPEN runs the SoapySDR scan only
+if it never ran (or a partial one is owed and its gate allows it), whereas Refresh always asks `scanSoapy()`; the gate defers while a radio is open, so a running or restored radio is not
+disturbed either way, but ON_OPEN never repeats a probe the engine already did. Refresh keeps working unchanged. Bounded (scripted) runs stay free of device probing unless they set
+FOXSDR_SCAN_ON_START=1 (needed here to prove it in a scripted run); no existing test sets it.
+TEST: test_slint_host_signal, 4 new checks on `scanOnStartDue` (not before 1500 ms, due after, only once, bounded only when opted in). RED with the function body forced to `return false`
+(2 of 432 failed: lines 1037 and 1039), GREEN with the real body (432 checks, 0 failed). The wiring itself (the call in publish) is proved by the real run below, not by a unit test:
+SignalPublisher cannot be built without the engine, and it has no test seam.
+REAL RUN (hidden desktop, staged copy, fresh scratch profile with no saved radio, no key pressed, no SYNTHETIC flag, receive-only search, no radio opened): Source list before
+(scan not opted in): 3 rows (devices=3): Signal generator, IQ file, Sound card. After (FOXSDR_SCAN_ON_START=1, list read about 12 s into the run through the input script's dump):
+6 rows: Signal generator, IQ file, Sound card, "RTL2838UHIDIR (serial 00000001) (native)", "ADALM-Pluto (network)", "rtl_tcp server (network)". The RTL-SDR row appeared without a key press;
+the receiver stayed STOPPED on the generator. The B200 did not appear in this list (UNVERIFIED why: the SoapySDR/UHD probe may not have found it, or may have been the "Pluto" / network
+rows' neighbour; not investigated). Not run: a non-bounded launch (the bounded path differs only by the opt-in test).
+
+## 3. Torn-off page windows: the main window's drag rule (separate commit)
+
+FOUND: a torn-off page is not an operating-system window but a frame (TornWindow, tabs.slint) drawn inside the main window; its place and size are the host's (kit_publish.cpp Page::tx/ty/tw/th).
+Both its title drag and its resize grip reported "the pointer's offset from the press in the area's own coordinates", and the host added every report to the place or size it had now
+(`p.tw = max(240, p.tw + dx)`): the area sits on the frame that follows the pointer, so a host one republish late adds the same offset again - exactly the main window's drive-fixes-7 fault.
+CHANGE: DragArea (tabs.slint) now also reports `began()` and the pointer's offset from the press in window coordinates (abs-dx / abs-dy); TornWindow passes `move-began / move-total` and
+`resize-began(edge) / resize-total(edge, dx, dy)` up (edges 1 right, 2 bottom, 3 corner); the host (kit_publish.cpp) remembers the place at the press and a look_logic `EdgeDrag` begun at the
+frame's size, and asks `tornResizeAt` / `tornMoveAt` (look_logic.cpp) - the same `EdgeDrag::at` the main window uses, so one rule; the old per-move handlers were removed.
+No system-pointer follow is needed or used: the frame lives inside the window, so the pointer never leaves the window the way it did at the main window's edge.
+TESTS: test_slint_host_look `tornWindow` (a thousand reports of one offset give one size, minimum 240 x 140, limit, the three edges, move clamped at 0; GREEN, 5500+ checks, 0 failed);
+RED on the old path is not reachable (the old rule was an inline lambda in the publisher), so the old rule is reproduced in the test the way the main window's test does it. test_slint_map_page
+(torn section) was moved to the anchored callbacks and stays green; test_slint_tabs and main_screen pass.
+NOT PROVED: no real pointer on the hidden desktop. The owner's screen is needed: open the ADS-B map page, tear it off (drag its tab downward), then (1) drag its bottom-right corner
+grip and its right and bottom edges quickly (about 0.3 s from one side of the screen to the other) and watch for the frame jumping or overshooting the pointer; (2) drag its title bar quickly
+the same way. Expected: the frame edge stays under the pointer and does not jitter.
