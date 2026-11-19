@@ -253,4 +253,20 @@ std::string antennaError(const AntennaInput& in);                              /
 std::string tileCacheText(std::size_t tiles, std::uint64_t bytes, std::uint64_t maxBytes, const cascade::core::tilecache::Stats& stats,
                           const std::function<std::string(const std::string&)>& tr);
 
+// THE TILES THE MAP IMAGERY PLUGIN KEEPS (field fixes B, part 3). The plugin fetches its own tiles and keeps them in its OWN folder, as <root>/.../<y>.img, exactly as fetched
+// (foxsdr-plugins src/openmaptiles/openmaptiles_plugin.cpp, cacheRoot). The page's line read only the host's cache (core/tile_cache.hpp), which nothing fills from the screen, so
+// it said "No map tiles are kept on disk." while the plugin kept them, and the Clear key stayed dark. The line now counts both, and the key clears both.
+// imageryTileRoot: the plugin's rule, held equal by the test: LOCALAPPDATA/foxsdr/tiles on Windows; XDG_CACHE_HOME/foxsdr/tiles or HOME/.cache/foxsdr/tiles elsewhere; "" = unknown.
+std::string imageryTileRoot(const char* localAppData, const char* xdgCacheHome, const char* home, bool windows);
+struct ImageryTiles {
+    std::size_t tiles = 0;
+    std::uint64_t bytes = 0;
+};
+ImageryTiles imageryTilesOnDisk(const std::string& root);   // *.img below the folder; a folder that is not there has none
+std::size_t imageryTilesClear(const std::string& root);     // deletes *.img below the folder and NOTHING else (not *.part, not a folder); returns how many
+std::string imageryTilesText(std::size_t tiles, std::uint64_t bytes, const std::function<std::string(const std::string&)>& tr);
+// the page's whole line: the host's cache (when its folder exists and holds tiles), the plugin's tiles (when there are any), or that nothing is kept
+std::string tileCacheLine(bool hostCache, std::size_t hostTiles, std::uint64_t hostBytes, std::uint64_t hostMaxBytes, const cascade::core::tilecache::Stats& hostStats,
+                          std::size_t imageryTiles, std::uint64_t imageryBytes, const std::function<std::string(const std::string&)>& tr);
+
 }  // namespace foxsdr::slintmapj

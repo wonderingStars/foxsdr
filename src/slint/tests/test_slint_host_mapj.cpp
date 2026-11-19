@@ -19,6 +19,8 @@
 #include <cstdio>
 #include <cmath>
 #include <cstdint>
+#include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <sstream>
@@ -718,6 +720,54 @@ void sectionAntenna() {
     cascade::core::tilecache::Stats st;
     st.hits = 3; st.staleHits = 2; st.misses = 9;
     CHECK(tileCacheText(12, 3u << 19, 256ull << 20, st, kTr) == "12 tiles, 1.5 of 256 MB; 5 hits, 9 misses");
+
+    // ---- THE TILES THE MAP IMAGERY PLUGIN KEEPS (field fixes B, part 3) ----
+    // The plugin keeps its own tiles as <root>/.../<y>.img. The page said "No map tiles are kept on disk." while 15 of them were there (tile check, 2026-11-19).
+    // where the folder is: the plugin's own rule (openmaptiles_plugin.cpp cacheRoot), held equal here
+    namespace fs = std::filesystem;
+    CHECK(fs::path(imageryTileRoot("C:/Users/x/AppData/Local", nullptr, nullptr, true)) == fs::path("C:/Users/x/AppData/Local") / "foxsdr" / "tiles");
+    CHECK(imageryTileRoot(nullptr, "/c", "/h", true).empty());                       // Windows: no LOCALAPPDATA, no folder (never a guess)
+    CHECK(imageryTileRoot("", "/c", "/h", true).empty());
+    CHECK(fs::path(imageryTileRoot("C:/l", "/c", "/h", false)) == fs::path("/c") / "foxsdr" / "tiles");
+    CHECK(fs::path(imageryTileRoot("C:/l", "", "/h", false)) == fs::path("/h") / ".cache" / "foxsdr" / "tiles");
+    CHECK(imageryTileRoot("C:/l", nullptr, nullptr, false).empty());
+    // counting and clearing: only *.img below the folder; nothing else is counted and nothing else is ever deleted
+    const fs::path scratch = fs::temp_directory_path() / ("foxsdr-imagery-tiles-" + std::to_string(static_cast<long long>(std::time(nullptr))));
+    const fs::path troot = scratch / "foxsdr" / "tiles";
+    std::error_code ec;
+    fs::create_directories(troot / "13" / "4091", ec);
+    fs::create_directories(troot / "named" / "5" / "1", ec);
+    const auto put = [](const fs::path& p, std::size_t n) { std::ofstream f(p, std::ios::binary); f << std::string(n, 'x'); };
+    put(troot / "13" / "4091" / "2723.img", 1000);
+    put(troot / "13" / "4091" / "2724.img", 500);
+    put(troot / "named" / "5" / "1" / "2.img", 48576);
+    put(troot / "13" / "4091" / "2725.part", 77);                                   // a tile being written: not a tile yet, and not ours to delete
+    put(troot / "notes.txt", 9);                                                       // somebody else's file
+    put(scratch / "outside.img", 5);                                                   // above the folder
+    CHECK(imageryTilesOnDisk(std::string()).tiles == 0u);
+    CHECK(imageryTilesOnDisk((scratch / "absent").string()).tiles == 0u);
+    const ImageryTiles have = imageryTilesOnDisk(troot.string());
+    CHECK(have.tiles == 3u);
+    CHECK(have.bytes == 1000u + 500u + 48576u);
+    CHECK(imageryTilesText(3, 1000u + 500u + 48576u, kTr) == "3 map tiles are kept on disk by the Map Imagery plugin (0.05 MB).");
+    CHECK(imageryTilesClear(std::string()) == 0u);
+    CHECK(imageryTilesClear(troot.string()) == 3u);
+    CHECK(imageryTilesOnDisk(troot.string()).tiles == 0u);
+    CHECK(fs::exists(troot / "13" / "4091" / "2725.part"));
+    CHECK(fs::exists(troot / "notes.txt"));
+    CHECK(fs::exists(scratch / "outside.img"));
+    // the page's line and whether the Clear key is lit: the host's own cache and the plugin's together
+    CHECK(tileCacheLine(false, 0, 0, 256ull << 20, st, 0, 0, kTr) == "No map tiles are kept on disk.");
+    CHECK(tileCacheLine(false, 0, 0, 256ull << 20, st, 15, 585941, kTr) == "15 map tiles are kept on disk by the Map Imagery plugin (0.56 MB).");
+    CHECK(tileCacheLine(true, 12, 3u << 19, 256ull << 20, st, 0, 0, kTr) == "12 tiles, 1.5 of 256 MB; 5 hits, 9 misses");
+    CHECK(tileCacheLine(true, 12, 3u << 19, 256ull << 20, st, 15, 585941, kTr)
+          == "12 tiles, 1.5 of 256 MB; 5 hits, 9 misses | 15 map tiles are kept on disk by the Map Imagery plugin (0.56 MB).");
+    CHECK(tileCacheLine(true, 0, 0, 256ull << 20, st, 15, 585941, kTr) == "15 map tiles are kept on disk by the Map Imagery plugin (0.56 MB).");
+    // explicit paths only: the three files this test made, then its own empty folders
+    fs::remove(troot / "13" / "4091" / "2725.part", ec);
+    fs::remove(troot / "notes.txt", ec);
+    fs::remove(scratch / "outside.img", ec);
+    for (const fs::path& d : {troot / "13" / "4091", troot / "13", troot / "named" / "5" / "1", troot / "named" / "5", troot / "named", troot, scratch / "foxsdr", scratch}) { fs::remove(d, ec); }
 }
 
 // What each layer costs a composed frame (1024 x 768, a view of the south of England at zoom 5 degrees): the median of 15 composes with the layer off and on. Printed for the record;

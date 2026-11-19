@@ -53,6 +53,14 @@ bool envOn(const char* name) {
     const char* v = std::getenv(name);
     return v != nullptr && v[0] != '\0' && v[0] != '0';
 }
+// where the Map Imagery plugin keeps its tiles on this machine (mapj_logic.hpp imageryTileRoot holds the rule); "" = not known
+std::string imageryTileFolder() {
+#if defined(_WIN32)
+    return mj::imageryTileRoot(std::getenv("LOCALAPPDATA"), nullptr, nullptr, true);
+#else
+    return mj::imageryTileRoot(nullptr, std::getenv("XDG_CACHE_HOME"), std::getenv("HOME"), false);
+#endif
+}
 
 // the body names: keys of the string tables (the sky model's own names are English)
 [[maybe_unused]] const char* const kBodyKeys[] = {FOX_TR_NOOP("Sun"), FOX_TR_NOOP("Moon"), FOX_TR_NOOP("Cassiopeia A"), FOX_TR_NOOP("Cygnus A"), FOX_TR_NOOP("Taurus A (Crab)"),
@@ -327,14 +335,22 @@ void KitPublisher::fillMapJModel(MapSurface& s, MapPage* pg, const std::string& 
     // the tile cache's line, read every five seconds and never made if there is no folder
     if (now - mj_.cacheReadSec > 5.0) {
         mj_.cacheReadSec = now;
-        mj_.cacheHas = false;
-        mj_.cacheLine = tr("No map tiles are kept on disk.");
+        // the tiles the Map Imagery plugin keeps in its own folder are tiles kept on disk too (field fixes B, part 3): the line counts them and the key clears them
+        const mj::ImageryTiles imagery = mj::imageryTilesOnDisk(imageryTileFolder());
+        bool hostCache = false;
+        std::size_t hostTiles = 0;
+        std::uint64_t hostBytes = 0;
+        cascade::core::tilecache::Stats hostStats;
         std::error_code ec;
         if (!mj_.tileCacheRoot.empty() && std::filesystem::exists(mj_.tileCacheRoot, ec)) {
             cascade::core::tilecache::TileCache cache(mj_.tileCacheRoot);
-            mj_.cacheHas = cache.tileCount() > 0;
-            mj_.cacheLine = mj::tileCacheText(cache.tileCount(), cache.totalBytes(), cascade::core::tilecache::Config{}.maxBytes, cache.stats(), trFn());
+            hostCache = true;
+            hostTiles = cache.tileCount();
+            hostBytes = cache.totalBytes();
+            hostStats = cache.stats();
         }
+        mj_.cacheHas = hostTiles > 0 || imagery.tiles > 0;
+        mj_.cacheLine = mj::tileCacheLine(hostCache, hostTiles, hostBytes, cascade::core::tilecache::Config{}.maxBytes, hostStats, imagery.tiles, imagery.bytes, trFn());
     }
     jm.cache_text = ss(mj_.cacheLine);
     jm.cache_has = mj_.cacheHas;
@@ -436,6 +452,7 @@ void KitPublisher::mapJAct(int pageIndex, const std::string& op, const std::stri
             cascade::core::tilecache::TileCache cache(mj_.tileCacheRoot);
             cache.clear();
         }
+        mj::imageryTilesClear(imageryTileFolder());   // the Map Imagery plugin's kept tiles: *.img in its folder, nothing else (it fetches a tile again when a map next asks)
         mj_.cacheReadSec = -100.0;
     }
     else if (op == "replay-bar") {

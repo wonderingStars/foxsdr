@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <filesystem>
 #include <limits>
 
 #include "core/antenna_calc.hpp"
@@ -684,6 +685,66 @@ std::string tileCacheText(std::size_t tiles, std::uint64_t bytes, std::uint64_t 
     const std::string f = tr ? tr("%zu tiles, %.1f of %.0f MB; %llu hits, %llu misses") : std::string("%zu tiles, %.1f of %.0f MB; %llu hits, %llu misses");
     return cascade::core::formatText(f.c_str(), tiles, static_cast<double>(bytes) / 1048576.0, static_cast<double>(maxBytes) / 1048576.0,
                                      static_cast<unsigned long long>(stats.hits + stats.staleHits), static_cast<unsigned long long>(stats.misses));
+}
+
+std::string imageryTileRoot(const char* localAppData, const char* xdgCacheHome, const char* home, bool windows) {
+    namespace fs = std::filesystem;
+    if (windows) {
+        if (localAppData == nullptr || *localAppData == '\0') { return std::string(); }
+        return (fs::path(localAppData) / "foxsdr" / "tiles").string();
+    }
+    if (xdgCacheHome != nullptr && *xdgCacheHome != '\0') { return (fs::path(xdgCacheHome) / "foxsdr" / "tiles").string(); }
+    if (home == nullptr || *home == '\0') { return std::string(); }
+    return (fs::path(home) / ".cache" / "foxsdr" / "tiles").string();
+}
+
+namespace {
+// every *.img below `root` (the plugin's tiles and nothing else), handed to `each`
+void eachImageryTile(const std::string& root, const std::function<void(const std::filesystem::path&, std::uint64_t)>& each) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (root.empty() || !fs::is_directory(root, ec)) { return; }
+    for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code e2;
+        if (!it->is_regular_file(e2) || e2) { continue; }
+        if (it->path().extension().string() != ".img") { continue; }
+        const std::uint64_t size = static_cast<std::uint64_t>(it->file_size(e2));
+        if (e2) { continue; }
+        each(it->path(), size);
+    }
+}
+}  // namespace
+
+ImageryTiles imageryTilesOnDisk(const std::string& root) {
+    ImageryTiles t;
+    eachImageryTile(root, [&](const std::filesystem::path&, std::uint64_t size) { ++t.tiles; t.bytes += size; });
+    return t;
+}
+
+std::size_t imageryTilesClear(const std::string& root) {
+    std::vector<std::filesystem::path> files;   // listed first: nothing is deleted while the folder is being walked
+    eachImageryTile(root, [&](const std::filesystem::path& p, std::uint64_t) { files.push_back(p); });
+    std::size_t removed = 0;
+    for (const std::filesystem::path& p : files) {
+        std::error_code ec;
+        if (std::filesystem::remove(p, ec) && !ec) { ++removed; }
+    }
+    return removed;
+}
+
+std::string imageryTilesText(std::size_t tiles, std::uint64_t bytes, const std::function<std::string(const std::string&)>& tr) {
+    const std::string f = tr ? tr("%zu map tiles are kept on disk by the Map Imagery plugin (%.2f MB).") : std::string("%zu map tiles are kept on disk by the Map Imagery plugin (%.2f MB).");
+    return cascade::core::formatText(f.c_str(), tiles, static_cast<double>(bytes) / 1048576.0);
+}
+
+std::string tileCacheLine(bool hostCache, std::size_t hostTiles, std::uint64_t hostBytes, std::uint64_t hostMaxBytes, const cascade::core::tilecache::Stats& hostStats,
+                          std::size_t imageryTiles, std::uint64_t imageryBytes, const std::function<std::string(const std::string&)>& tr) {
+    const bool host = hostCache && hostTiles > 0;
+    if (!host && imageryTiles == 0) { return tr ? tr("No map tiles are kept on disk.") : std::string("No map tiles are kept on disk."); }
+    std::string line;
+    if (host) { line = tileCacheText(hostTiles, hostBytes, hostMaxBytes, hostStats, tr); }
+    if (imageryTiles > 0) { line += (line.empty() ? "" : " | ") + imageryTilesText(imageryTiles, imageryBytes, tr); }
+    return line;
 }
 
 }  // namespace foxsdr::slintmapj

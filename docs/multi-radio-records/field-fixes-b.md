@@ -71,3 +71,29 @@ owner's: whether the Satellites page, or the first run of the imagery plugin, sh
 `ctest -C Release -R "test_slint_(house_rules|host_kit|host_map|host_mapj|instruments|sliders|extend|po)$"`: 8 of 8 passed (test_slint_host_kit 155 checks,
 test_slint_instruments 1725, test_slint_sliders 254). `foxsdr-slint` rebuilt and linked with the change. The GUI drive scripts (`slint_drive_*`) were not run
 (they need the hidden desktop and the guard test refuses the real one); the application was not started.
+
+## Part 3 (orchestrator, 2026-11-19): the map page said "No map tiles are kept on disk." while the plugin kept them
+
+PROVED FIRST (tile check, released 0.99.109 build, hidden desktop, real network, generated ADS-B file only; evidence in
+D:/foxsdr-build/tile-check/run): the aircraft map DOES draw OpenStreetMap tiles under the released build. 0 tiles on disk before
+the page opened, 15 tiles (585,941 bytes, PNG) after, four connections to the tile host, and the saved picture shows the streets
+of central London under the generated aircraft. So the "not proved" paragraph above is closed for the aircraft page. Not run:
+the ship and station pages, and the Satellites page in the same run.
+
+FAULT FOUND IN THAT RUN. The page's own line under the map read "No map tiles are kept on disk." with 15 tiles on disk, and the
+"Clear tile cache" key was dark. CAUSE: the line read only the host's cache (core/tile_cache.hpp, `MapJShared::tileCacheRoot`),
+which nothing sets and nothing fills from the screen; the Map Imagery plugin keeps its tiles in its OWN folder
+(LOCALAPPDATA/foxsdr/tiles/.../<y>.img; plugins repository src/openmaptiles/openmaptiles_plugin.cpp, cacheRoot). A statement about
+what is kept on disk that is false is a must-fix.
+
+CHANGE. mapj_logic: `imageryTileRoot` (the plugin's folder rule, held equal by the test), `imageryTilesOnDisk` (counts *.img
+below it), `imageryTilesClear` (deletes *.img below it and nothing else: not *.part, not a folder), `imageryTilesText` and
+`tileCacheLine` (the whole line: host cache, plugin tiles, or that nothing is kept). kit_publish_mapj.cpp uses them every five
+seconds for the line and for whether the key is lit; the key now clears both. New sentence (English only until translated):
+"%zu map tiles are kept on disk by the Map Imagery plugin (%.2f MB)."
+
+PROOF. test_slint_host_mapj: the new block did not compile before the functions existed (RED: C3861 'imageryTileRoot':
+identifier not found); after: 748 checks, 0 failed. The eight tests named under "Checks run" pass again (8 of 8).
+
+NOT PROVED. The new line and the lit key were not looked at in a rendered window. Clearing while the plugin is writing a tile
+was not tried (a *.part is never touched; the plugin fetches a deleted tile again when a map next asks).
