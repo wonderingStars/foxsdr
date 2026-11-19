@@ -3,7 +3,7 @@
 **0.99.110 repairs the faults that the first hours of 0.99.109 showed on users' computers, and adds one feature: the FoxSDR team can send a short message to the owner of one particular radio.**
 Everything in the notes for 0.99.109 still applies.
 
-**Still not fixed.** On a computer that cannot keep up with the chosen sample rate, samples can be dropped for a long time and the window does not warn you: if the sound or a decoder breaks up, lower the sample rate or stop plugins you are not using. The Airspy HF+ fault with a crystal trim that will not apply is still open. Six plugins still do not set their mode on START (weather report, ALE, SITOR telex, AM stereo, FMS status, caller ID): set the mode yourself.
+**Still not fixed.** On a computer that cannot keep up with the chosen sample rate, samples can be dropped for a long time and the window does not warn you: if the sound or a decoder breaks up, lower the sample rate or stop plugins you are not using. The Airspy HF+ opening fault (the crystal trim) was fixed in 0.99.109; it has still not been confirmed on a real HF+. Six plugins still do not set their mode on START (weather report, ALE, SITOR telex, AM stereo, FMS status, caller ID): set the mode yourself.
 
 Where a statement could only be tested with test signals or a stand-in program, and not with real equipment, the sentence says so.
 
