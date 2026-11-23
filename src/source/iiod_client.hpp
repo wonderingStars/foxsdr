@@ -164,13 +164,16 @@ struct PeerWording {
 // The sentence connectTcp reports when `cancel` was raised during the connect.
 constexpr const char* kOpenCancelledText = "the open was cancelled";
 
+// `overallEnd`, when given, is a deadline for the whole call across every resolved address (each address still has `connectWait`, cut short
+// by it): the start-up restore's shared budget for its network radios.
 // `cancel`, when given, is looked at every ~50 ms of the connect wait: raised, the attempt is abandoned at once (socket closed) and
 // `error` is kOpenCancelledText. (A host-name lookup in progress cannot be interrupted; it is checked when it returns.)
 std::unique_ptr<Transport> connectTcp(const std::string& host, std::uint16_t port,
                                       std::chrono::milliseconds connectWait,
                                       std::chrono::milliseconds ioWait, std::string& error,
                                       const PeerWording& peer = PeerWording(),
-                                      const std::atomic<bool>* cancel = nullptr);
+                                      const std::atomic<bool>* cancel = nullptr,
+                                      const std::chrono::steady_clock::time_point* overallEnd = nullptr);
 
 // --- the context ----------------------------------------------------------
 //

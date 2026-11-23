@@ -57,6 +57,18 @@ int main() {
         CHECK(!gui::savedRadioFailureWorthRetry(false, false));  // an unplugged dongle, a missing driver, a refused rate
     }
 
+    // --- savedNetworkServerNotThere: the network half of that decision (2026-11-23 review) ---
+    {
+        std::printf("  savedNetworkServerNotThere: an rtl_tcp server not there is retried; a wrong service, a cancelled open and other drivers are not\n");
+        CHECK(gui::savedNetworkServerNotThere("rtltcp", true, "could not reach the rtl_tcp server at H:1234 - connect failed (network error 10061)"));
+        CHECK(gui::savedNetworkServerNotThere("rtltcp", true, "connected to H:1234, but nothing came back within 12 s (timed out)"));
+        CHECK(!gui::savedNetworkServerNotThere("rtltcp", true, "nothing at H:1234 speaks rtl_tcp (it answered, but not with an rtl_tcp header)"));
+        CHECK(!gui::savedNetworkServerNotThere("rtltcp", true, "nothing at H:1234 speaks rtl_tcp (it sent 5 of the 12 bytes of an rtl_tcp header and then sent nothing more)"));
+        CHECK(!gui::savedNetworkServerNotThere("rtltcp", true, "the open was cancelled"));
+        CHECK(!gui::savedNetworkServerNotThere("rtltcp", false, "connected to H:1234, but nothing came back"));
+        CHECK(!gui::savedNetworkServerNotThere("rtlsdr", true, "nothing at that address"));
+    }
+
     // --- the schedule --------------------------------------------------------
     {
         std::printf("  four tries, 2, 4, 8 and 16 s after the last failure\n");

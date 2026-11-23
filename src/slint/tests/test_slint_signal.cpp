@@ -768,6 +768,18 @@ int main() {
         const int T8 = yOf(ui->get_d8_y()) + kSecRow + kBodyPad, fy8 = T8 + 2 * kPitch + 1 + 6 + 13 + 4;
         e = press(xd + kBodyW - 9 - 20, fy8 + 12);
         CHECKV(e.name == "rtltcp-open", "rtl_tcp Open: '%s'", e.name.c_str());
+        // WHILE AN OPEN IS PENDING THE KEY IS GREYED (the classic window's is too): a second press must not reach the host
+        {
+            auto mt = ui->get_m_tcp();
+            mt.rtltcp_opening = true;
+            ui->set_m_tcp(mt);
+            e = press(xd + kBodyW - 9 - 20, fy8 + 12);
+            CHECKV(e.name != "rtltcp-open", "rtl_tcp Open while an open is pending is greyed: '%s'", e.name.c_str());
+            mt.rtltcp_opening = false;
+            ui->set_m_tcp(mt);
+            e = press(xd + kBodyW - 9 - 20, fy8 + 12);
+            CHECKV(e.name == "rtltcp-open", "rtl_tcp Open answers again once the open is over: '%s'", e.name.c_str());
+        }
         evs.clear();
         clk(xd + 9 + 60, fy8 + 12);
         tap(slint::platform::key_codes::End);

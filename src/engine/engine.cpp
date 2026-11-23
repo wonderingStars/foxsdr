@@ -1613,6 +1613,7 @@ void Engine::pollSourceAsync() {
 
 void Engine::pollDeviceOpen() {
     constexpr auto kNoWait = std::chrono::seconds(0);
+    reapRetiredOpens();   // opens the user walked away from: drained when ready, never waited for
     if (rx().deviceOpenPending_ && rx().deviceOpenFuture_.valid() &&
         rx().deviceOpenFuture_.wait_for(kNoWait) == std::future_status::ready) {
         // THE MODULE TABLE, REBUILT BECAUSE THE OPEN LOADED CODE.
@@ -1651,7 +1652,42 @@ bool Engine::cancelPendingNetworkOpen() {
     return true;
 }
 
+void Engine::retirePendingOpen() {
+    if (!rx().deviceOpenFuture_.valid()) {
+        rx().deviceOpenPending_ = false;
+        return;
+    }
+    // The worker returns within ~50 ms of its next look at the flag (a name lookup in progress cannot be interrupted); nobody waits for it here.
+    if (rx().openCancel_) { rx().openCancel_->store(true); }
+    rx().retiredOpens_.push_back(std::move(rx().deviceOpenFuture_));
+    rx().deviceOpenPending_ = false;
+    rx().deviceBusyLabel_.clear();
+    cascade::core::diagLogf("source: the pending open was set aside for a new one");
+}
+
+void Engine::reapRetiredOpens() {
+    constexpr auto kNoWait = std::chrono::seconds(0);
+    std::vector<std::future<DeviceOpenResult>>& v = rx().retiredOpens_;
+    for (std::size_t i = 0; i < v.size();) {
+        if (!v[i].valid()) {
+            v.erase(v.begin() + static_cast<std::ptrdiff_t>(i));
+        } else if (v[i].wait_for(kNoWait) == std::future_status::ready) {
+            drainDeviceOpen(v[i]);   // destroys the result: a device the retired open managed to open is closed
+            v.erase(v.begin() + static_cast<std::ptrdiff_t>(i));
+        } else {
+            ++i;
+        }
+    }
+}
+
 void Engine::reapPendingDeviceOpen() {
+    // THE OPENS SET ASIDE (retirePendingOpen) go first, whatever is pending now: each one that is finished is drained here, each one that is not goes
+    // to a detached reaper like the pending open below - no wait for any of them, so quitting adds nothing to the shutdown budget.
+    reapRetiredOpens();
+    for (std::future<DeviceOpenResult>& f : rx().retiredOpens_) {
+        std::thread([g = std::move(f)]() mutable { drainDeviceOpen(g); }).detach();
+    }
+    rx().retiredOpens_.clear();
     if (!rx().deviceOpenPending_ || !rx().deviceOpenFuture_.valid()) { return; }
 
     // WHY THIS EXISTS. std::future's destructor for a std::async(launch::async)
@@ -1750,10 +1786,18 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
                              /*superseded=*/false, f.requestRateHz, f.openMs);
         }
     }
-    // AN OPEN THE USER (or quitting) CANCELLED, rtl_tcp's connect or header wait: not a radio that failed, so nothing is reported, counted
-    // or remembered; the generator that stood in for the radio is what is running.
+    // AN OPEN THE USER (or quitting) CANCELLED, rtl_tcp's connect or header wait: not a radio that failed, so nothing is reported or counted; the
+    // generator that stood in for the radio is what is running. THE RADIO IT CLOSED IS STILL REMEMBERED (as a failed open remembers it, below): a
+    // cancelled open that forgot it let the exit save write the generator over a radio that worked.
     if (r.cancelled && !r.dev) {
         cascade::core::diagLogf("source: the open of the rtl_tcp server was cancelled");
+        if (rx().device_ == nullptr && rx().sourceKind_ == "siggen") {
+            if (!rx().restoreKeep_.valid()) {
+                rx().restoreKeep_ = cascade::gui::rememberAfterFailedSwitch(rx().restoreKeep_, r.closedRadio);
+                if (rx().restoreKeep_.valid()) { rx().restoreKeepLabel_ = r.closedLabel; }
+            }
+            if (sourceSel_ != 1 && sourceSel_ != kSoundCardRow) { sourceSel_ = rx().restoreKeep_.valid() ? -1 : 0; }
+        }
         return;
     }
     // THE USER MAY HAVE MOVED ON. Opening a device takes seconds and the GUI
@@ -2064,6 +2108,18 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
 }
 
 void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) {
+    // A SECOND OPEN WHILE ONE IS STILL ON ITS WORKER (the user pressed Open twice: a wrong port, a correction) NEVER WAITS FOR THE FIRST. Assigning a new
+    // std::async future over a pending one blocks until the first worker returns - up to the whole patient wait, on the control thread, past the 5 s
+    // watchdog. So the first is cancelled and set aside (retirePendingOpen), and the radio it had closed stays the one to remember if this one fails too.
+    if (rx().deviceOpenFuture_.valid()) {
+        if (!r.closedRadio.valid()) {
+            r.closedRadio = rx().pendingClosedRadio_;
+            r.closedLabel = rx().pendingClosedLabel_;
+        }
+        retirePendingOpen();
+    }
+    rx().pendingClosedRadio_ = r.closedRadio;
+    rx().pendingClosedLabel_ = r.closedLabel;
     // THE OPEN BEGINS (the journal): written to disk BEFORE the driver is called, so an open that hangs or takes the process down leaves a start and no
     // result. An automatic reopen after a driver fault is a recovery that starts, not a new open.
     if (r.recovery) {
@@ -2122,10 +2178,13 @@ void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) 
             r.error = "\"" + r.kind + "\" is not a source kind this build can open";
             return std::move(r);
         }
-        // AN rtl_tcp SERVER: the user's own pick is PATIENT (long header wait, a refusal retried: the real server needs ~3.6 s between
-        // clients); a try of the saved-radio series or an automatic reopen is short (the series is the patience). Cancellable either way.
+        // AN rtl_tcp SERVER, on this worker, is PATIENT whoever asked: the long header wait (a real server was measured sending its header 3.6 s after
+        // accept, and each abandoned try makes the next one slower). Only the user's own pick also retries a REFUSAL (the real server refuses for a few
+        // seconds while it lets go of its previous client); a try of the saved-radio series or an automatic reopen does not - the series is that
+        // patience. Cancellable either way. (The start-up restore, on the window's thread, is the short one: openDeviceSync.)
         if (auto* tcp = dynamic_cast<cascade::source::RtlTcpSource*>(dev.get())) {
-            tcp->setPatient(!r.savedRadioRetry && !r.recovery);
+            tcp->setPatient(true);
+            tcp->setRefusalRetry(!r.savedRadioRetry && !r.recovery);
             tcp->setCancelFlag(r.openCancel);
         }
         if (!dev->open(r.args)) {
@@ -2430,6 +2489,8 @@ void Engine::openRtlTcpAt(const std::string& args) {
     // The Pluto's recipe, step for step (see openPlutoAt): the args name the address typed, the air frequency is read before the close, and
     // the open runs on the worker so a server that is not there spends its connect bound off the thread that must not wait.
     const std::string addr = (args.rfind("rtltcp=", 0) == 0) ? args.substr(7) : args;
+    // PRESSING OPEN AGAIN WHILE AN OPEN IS PENDING (a wrong port, then the correction) is the natural thing to do, and it must not stop the engine's
+    // control thread: launchDeviceOpen below cancels the first open and sets it aside without waiting for its worker (retirePendingOpen).
     cascade::core::formatUtf8(rtlTcpAddr_, sizeof(rtlTcpAddr_), "%s", addr.c_str());
     const std::optional<double> keepCenterHz = carriedAirCentre();
     DeviceOpenResult req;
@@ -3388,6 +3449,19 @@ std::unique_ptr<cascade::source::DeviceSource> Engine::openDeviceSync(
     if (!dev) {
         rx().sourceError_ = "saved source kind \"" + kind + "\" is not one this build can open";
         return nullptr;
+    }
+    // A SAVED rtl_tcp SERVER IN THE START-UP RESTORE spends from the restore's one shared budget (kRestoreNetworkBudget, across every address of every
+    // saved network radio). What is not open when it runs out is not waited for: the failure below arms the background series, which is patient.
+    if (auto* tcp = dynamic_cast<cascade::source::RtlTcpSource*>(dev.get())) {
+        if (restoreNetBudgetOn_) {
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(restoreNetBudgetEnd_ - std::chrono::steady_clock::now());
+            if (left.count() <= 0) {
+                rx().sourceError_ = "the rtl_tcp server did not answer within the time start-up allows for network radios (other saved network radios used it); "
+                                    "it is tried again in the background";
+                return nullptr;
+            }
+            tcp->setOpenBudget(left);
+        }
     }
     if (!dev->open(args)) {
         rx().sourceError_ = dev->lastError();
@@ -10059,6 +10133,15 @@ void Engine::exitCauseFinish(const cascade::core::ExitVerdict& v) {
 // the window keeps its view state (docs/engine-stage3.md). `cfg` is the
 // start-up state (core::startupState), not the file as saved.
 void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
+    // ONE BUDGET FOR EVERY SAVED NETWORK RADIO this restore opens (openDeviceSync reads it), over from here until the function is left.
+    struct RestoreBudget {
+        Engine& e;
+        explicit RestoreBudget(Engine& en) : e(en) {
+            e.restoreNetBudgetEnd_ = std::chrono::steady_clock::now() + kRestoreNetworkBudget;
+            e.restoreNetBudgetOn_ = true;
+        }
+        ~RestoreBudget() { e.restoreNetBudgetOn_ = false; }
+    } restoreBudget(*this);
     // the S-meter calibration of every device (the loader checked each text; a text that does not parse here is dropped like a bad one)
     smeterCal_.clear();
     for (const auto& [key, text] : cfg.smeterCal) {

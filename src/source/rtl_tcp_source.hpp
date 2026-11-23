@@ -151,16 +151,29 @@ public:
     // it writes one "source: stream health ..." line.
     static constexpr std::chrono::milliseconds kStreamHealthWindow{60000};
 
-    // HOW LONG THE OPEN WAITS FOR THE SERVER'S 12-BYTE HEADER (default 12 s; the socket's own receive bound, 2 s, still applies
-    // to each receive and the receive is repeated until this is spent) and HOW LONG A REFUSED CONNECT IS RETRIED (default 6 s).
+    // HOW LONG THE OPEN WAITS FOR THE SERVER'S 12-BYTE HEADER (default 12 s; a select() for readability in 50 ms slices until it is
+    // spent or the cancel flag is raised - the socket's own 2 s receive bound is not what is waited on) and HOW LONG A REFUSED CONNECT IS RETRIED (default 6 s).
     // Both are for a real rtl_tcp, which serves one client at a time and needs ~3.6 s after a client leaves before it accepts
     // the next (measured, tests/test_rtl_tcp_realpeer.cpp); see rtl_tcp_source.cpp handshakeLocked. The setter is for tests.
     // PATIENCE. A source is SHORT-WINDED unless told otherwise: header wait kShortHeaderWait (4 s, the measured cold start is 1.5 s) and
     // no retry of a refusal. That is what the start-up restore gets - it runs on the thread that shows the window, and a saved server
-    // that is switched off must not hold the window up for seconds - and what each try of the background retry series gets (the series
-    // itself is the patience). A user's own pick runs on the open worker and asks for setPatient(true): the long waits below.
+    // that is switched off must not hold the window up for seconds. Anything that runs on the open worker asks for setPatient(true), the
+    // long header wait below: a user's own pick, and each try of the background retry series (a real server was measured sending its
+    // header 3.6 s after accept, so 4 s is too tight for a try that follows another). The two halves are separate: the REFUSAL retry is
+    // the user's pick only (setRefusalRetry), because the series itself is the patience for a refusal. setPatient(p) sets both.
     static constexpr std::chrono::milliseconds kShortHeaderWait{4000};
-    void setPatient(bool patient) { patient_.store(patient, std::memory_order_relaxed); }
+    void setPatient(bool patient) {
+        patient_.store(patient, std::memory_order_relaxed);
+        refusalRetry_.store(patient, std::memory_order_relaxed);
+    }
+    void setRefusalRetry(bool retry) { refusalRetry_.store(retry, std::memory_order_relaxed); }
+    // A SHARED BUDGET FOR THE START-UP RESTORE (set before open()): the open - every connect and the header wait together - ends at
+    // now + `left`, whatever the other waits say. The restore of the saved network radios runs on the thread that shows the window and
+    // spends one budget across all of them; what does not fit is handed to the background series.
+    void setOpenBudget(std::chrono::milliseconds left) {
+        budgetEnd_ = std::chrono::steady_clock::now() + left;
+        hasBudget_ = true;
+    }
     // The flag the engine raises to abandon an open in progress (a pick of another source, quitting): looked at about every 50 ms of the
     // connect and the header wait. Set before open(); a flag already raised makes open() fail at once.
     void setCancelFlag(std::shared_ptr<std::atomic<bool>> cancel) { cancel_ = std::move(cancel); }
@@ -169,6 +182,8 @@ public:
     static std::chrono::milliseconds headerWait();
     static std::chrono::milliseconds refusedRetryWait();
     static void setWaitsForTest(std::chrono::milliseconds header, std::chrono::milliseconds refusedRetry);
+    // The pause between a refused connect and the next try (default 300 ms), in 50 ms slices that look at the cancel flag. For tests.
+    static void setRefusalPauseForTest(std::chrono::milliseconds pause);
 
     RtlTcpSource() = default;
     ~RtlTcpSource() override;
@@ -412,7 +427,8 @@ private:
     static std::string healthLineLocked(ReaderLink& link);
 
     static void setErrorOn(ReaderLink& link, std::string msg);
-    static void noteFaultOn(ReaderLink& link, const char* what, const std::string& detail);
+    // `silent`: the socket is up and the server sent nothing for a receive bound - said as that, not as a lost connection.
+    static void noteFaultOn(ReaderLink& link, const char* what, const std::string& detail, bool silent = false);
     void setError(std::string msg);
     void clearError();
     void noteFault(const char* what, const std::string& detail);
@@ -421,6 +437,9 @@ private:
     mutable std::mutex devMutex_;
 
     std::atomic<bool> patient_{false};
+    std::atomic<bool> refusalRetry_{false};
+    std::chrono::steady_clock::time_point budgetEnd_{};   // setOpenBudget (read on the thread that opens, written before)
+    bool hasBudget_ = false;
     std::shared_ptr<std::atomic<bool>> cancel_;
     bool cancelled() const { return cancel_ != nullptr && cancel_->load(std::memory_order_relaxed); }
     std::chrono::milliseconds effectiveHeaderWait() const;

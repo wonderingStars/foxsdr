@@ -25,6 +25,10 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/select.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #endif
 
@@ -271,6 +275,25 @@ struct AppWindowTestAccess {
         }
     }
     static void openTcp(AppWindow& a, const std::string& addr) { passseam::on(th::engine(a), [&] { th::engine(a).openRtlTcpAt("rtltcp=" + addr); }); }
+    // THE TIME THE ENGINE'S CONTROL THREAD IS HELD by one Open press, measured on that thread around the call (milliseconds)
+    static long long openTcpBlockedMs(AppWindow& a, const std::string& addr) {
+        return passseam::read<long long>(th::engine(a), [&] {
+            const auto t0 = std::chrono::steady_clock::now();
+            th::engine(a).openRtlTcpAt("rtltcp=" + addr);
+            return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
+        });
+    }
+    static std::size_t retiredOpens(AppWindow& a) { return passseam::read<std::size_t>(th::engine(a), [&] { return th::engine(a).rx().retiredOpens_.size(); }); }
+    static void pollOpen(AppWindow& a) { passseam::custom(th::engine(a), [&] { th::engine(a).pollSourceAsync(); }); }
+    static void cancelPending(AppWindow& a) { passseam::on(th::engine(a), [&] { (void)th::engine(a).cancelPendingNetworkOpen(); }); }
+    static void reapPending(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).reapPendingDeviceOpen(); }); }
+    // THE CONFIG THE ENGINE WOULD SAVE NOW (the exit save publishes it the same way: publishConfig, then the snapshot)
+    static cascade::core::AppConfig savedConfig(AppWindow& a) {
+        return passseam::read<cascade::core::AppConfig>(th::engine(a), [&] {
+            th::engine(a).publishConfig();
+            return th::engine(a).configSnapshot();
+        });
+    }
     static void selectSoapy(AppWindow& a, int i) { passseam::on(th::engine(a), [&] { th::engine(a).selectSource(th::engine(a).soapyRowBase() + i); }); }
     static void selectNative(AppWindow& a, int i) { passseam::on(th::engine(a), [&] { th::engine(a).selectSource(cascade::engine::kNativeRowBase + i); }); }
     static void staleTheOpen(AppWindow& a) { passseam::on(th::engine(a), [&] { ++th::engine(a).rx().sourceGen_; }); }
@@ -742,21 +765,46 @@ void seriesScenarios(std::vector<json>& everything) {
 
 
 // A LISTENER THAT ACCEPTS AND SAYS NOTHING, on 127.0.0.1 (a saved rtl_tcp server that is up but never sends its header), or no listener at all.
+//
+// PORTABLE (BSD sockets; WinSock only behind the _WIN32 guard): a descriptor type, a close and a start-up call per platform, nothing else differs.
+// It also says when it sends a header (a real rtl_tcp does, after a delay of its own) and sees when a client leaves, so a test can prove that a
+// cancelled open really closed its connection.
+#if defined(_WIN32)
+using NetSock = SOCKET;
+constexpr NetSock kNoSock = INVALID_SOCKET;
+void closeNetSock(NetSock s) { closesocket(s); }
+void startNet() { WSADATA d{}; WSAStartup(MAKEWORD(2, 2), &d); }
+#else
+using NetSock = int;
+constexpr NetSock kNoSock = -1;
+void closeNetSock(NetSock s) { ::close(s); }
+void startNet() {}
+#endif
+
 struct SilentServer {
-    SOCKET listener = INVALID_SOCKET;
+    struct Conn {
+        NetSock sock = kNoSock;
+        std::chrono::steady_clock::time_point at;
+        bool sentHeader = false;
+        bool open = true;
+    };
+    NetSock listener = kNoSock;
     std::atomic<bool> run{true};
     std::thread th;
-    std::vector<SOCKET> held;
+    std::vector<Conn> held;
     int port = 0;
+    std::atomic<int> headerAfterMs{-1};   // -1: never (silent); otherwise the 12-byte header goes out this long after the accept
+    std::atomic<int> silentFirst{0};      // the first N connections stay silent whatever headerAfterMs says
+    std::atomic<int> accepted{0};
+    std::atomic<int> closedByClient{0};
     SilentServer() {
-        WSADATA d{};
-        WSAStartup(MAKEWORD(2, 2), &d);
+        startNet();
         listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         sockaddr_in a{};
         a.sin_family = AF_INET;
         a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         bind(listener, reinterpret_cast<sockaddr*>(&a), sizeof(a));
-        int len = sizeof(a);
+        socklen_t len = sizeof(a);
         getsockname(listener, reinterpret_cast<sockaddr*>(&a), &len);
         port = ntohs(a.sin_port);
         listen(listener, 8);
@@ -765,10 +813,47 @@ struct SilentServer {
                 fd_set r;
                 FD_ZERO(&r);
                 FD_SET(listener, &r);
-                timeval tv{0, 50000};
-                if (select(0, &r, nullptr, nullptr, &tv) > 0) {
-                    const SOCKET c = accept(listener, nullptr, nullptr);
-                    if (c != INVALID_SOCKET) { held.push_back(c); }
+                int maxFd = static_cast<int>(listener);
+                for (const Conn& c : held) {
+                    if (c.open) {
+                        FD_SET(c.sock, &r);
+                        maxFd = std::max(maxFd, static_cast<int>(c.sock));
+                    }
+                }
+                timeval tv{0, 20000};
+#if defined(_WIN32)
+                const int nfds = 0;
+                (void)maxFd;
+#else
+                const int nfds = maxFd + 1;
+#endif
+                if (select(nfds, &r, nullptr, nullptr, &tv) > 0 && FD_ISSET(listener, &r)) {
+                    const NetSock c = accept(listener, nullptr, nullptr);
+                    if (c != kNoSock) {
+                        held.push_back(Conn{c, std::chrono::steady_clock::now(), false, true});
+                        ++accepted;
+                    }
+                }
+                for (std::size_t i = 0; i < held.size(); ++i) {
+                    Conn& c = held[i];
+                    if (!c.open) { continue; }
+                    if (FD_ISSET(c.sock, &r)) {   // the client sent a command, or went away
+                        char buf[256];
+                        const int n = static_cast<int>(recv(c.sock, buf, sizeof(buf), 0));
+                        if (n <= 0) {
+                            c.open = false;
+                            ++closedByClient;
+                            closeNetSock(c.sock);
+                            continue;
+                        }
+                    }
+                    const int after = headerAfterMs.load();
+                    if (!c.sentHeader && after >= 0 && static_cast<int>(i) >= silentFirst.load() &&
+                        std::chrono::steady_clock::now() - c.at >= std::chrono::milliseconds(after)) {
+                        const unsigned char hdr[12] = {'R', 'T', 'L', '0', 0, 0, 0, 5, 0, 0, 0, 29};   // an R820T, 29 gains
+                        send(c.sock, reinterpret_cast<const char*>(hdr), sizeof(hdr), 0);
+                        c.sentHeader = true;
+                    }
                 }
             }
         });
@@ -776,8 +861,8 @@ struct SilentServer {
     ~SilentServer() {
         run = false;
         th.join();
-        for (SOCKET c : held) { closesocket(c); }
-        closesocket(listener);
+        for (const Conn& c : held) { if (c.open) { closeNetSock(c.sock); } }
+        closeNetSock(listener);
     }
 };
 
@@ -929,6 +1014,194 @@ void rtlTcpScenarios() {
         CHECK(refusedMs < 4000);
         g_realTcp = false;
     }
+}
+
+std::string firstWords(const std::vector<json>& fails) {
+    std::string all;
+    for (const json& f : fails) { all += f["body"]["reason"].get<std::string>() + "\n"; }
+    return all;
+}
+
+// THE SECOND PRESS OF OPEN (review of 5a6caf27, finding A): while an rtl_tcp open is pending, pressing Open again (a wrong port, then the correction)
+// must return to the control thread at once. Before, launchDeviceOpen assigned a new std::async future over the pending one, which blocks until the first
+// worker returns: the whole patient wait (12 s of silence), or the refusal retries (about 8 s) - past the 5 s hang watchdog.
+void doublePressScenarios() {
+    {
+        std::printf("  Open pressed twice against a server that stays silent the first time: the second press returns at once, the first connection is closed, ONE radio opens\n");
+        resetFake();
+        g_realTcp = true;
+        SilentServer srv;
+        srv.silentFirst = 1;
+        srv.headerAfterMs = 0;   // from the second connection on, the header comes at once
+        th::TestWindow app;
+        Rig rig("tcpdouble1");
+        rig.start();
+        const std::string addr = "127.0.0.1:" + std::to_string(srv.port);
+        Access::openTcp(app, addr);
+        CHECK(Access::pending(app));
+        std::this_thread::sleep_for(std::chrono::milliseconds(400));   // the first worker is inside its (12 s) header wait
+        CHECK(Access::pending(app));
+        const long long blockedMs = Access::openTcpBlockedMs(app, addr);
+        std::printf("    the second press held the control thread for %lld ms\n", blockedMs);
+        CHECK(blockedMs < 500);
+        CHECK(Access::settle(app));
+        CHECK(Access::deviceOpen(app));   // exactly one radio is open
+        CHECK(Access::sourceError(app).empty());
+        const auto t0 = std::chrono::steady_clock::now();
+        while (srv.closedByClient.load() < 1 && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(3)) { std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+        CHECK(srv.closedByClient.load() >= 1);   // the first open's connection was cancelled and closed, not left waiting
+        const auto t1 = std::chrono::steady_clock::now();
+        while (Access::retiredOpens(app) != 0 && std::chrono::steady_clock::now() - t1 < std::chrono::seconds(3)) {
+            Access::pollOpen(app);
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        CHECK(Access::retiredOpens(app) == 0);   // the retired open was reaped without anyone waiting for it
+        CHECK(ofKind(queued(rig.qdir()), "radio_fail").empty());
+        g_realTcp = false;
+    }
+    {
+        std::printf("  Open pressed twice against a port that refuses: the second press returns at once, ONE fault is shown and ONE report filed\n");
+        resetFake();
+        g_realTcp = true;
+        const int dead = freePortThatRefuses();
+        th::TestWindow app;
+        Rig rig("tcpdouble2");
+        rig.start();
+        const std::string addr = "127.0.0.1:" + std::to_string(dead);
+        Access::openTcp(app, addr);
+        CHECK(Access::pending(app));
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        const long long blockedMs = Access::openTcpBlockedMs(app, addr);
+        std::printf("    the second press held the control thread for %lld ms\n", blockedMs);
+        CHECK(blockedMs < 500);
+        CHECK(Access::settle(app));   // the second open's own refusal retries (about 8 s)
+        CHECK(!Access::deviceOpen(app));
+        CHECK(!Access::sourceError(app).empty());   // one fault, shown
+        const auto t1 = std::chrono::steady_clock::now();
+        while (Access::retiredOpens(app) != 0 && std::chrono::steady_clock::now() - t1 < std::chrono::seconds(5)) {
+            Access::pollOpen(app);
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        CHECK(Access::retiredOpens(app) == 0);
+        CHECK(ofKind(queued(rig.qdir()), "radio_fail").size() == 1);   // the first, abandoned open filed nothing
+        g_realTcp = false;
+    }
+}
+
+// A CANCELLED OPEN KEEPS THE RADIO IT CLOSED (finding C): the exit save reads the remembered radio, and a cancel that forgot it wrote the generator over a
+// radio that worked. Read off the config the engine would save.
+void cancelKeepsRadioScenario() {
+    std::printf("  a cancelled rtl_tcp open: the radio that was closed for it is still the one the config saves\n");
+    resetFake();
+    g_realTcp = true;
+    SilentServer srv;
+    th::TestWindow app;
+    Rig rig("tcpkeep");
+    rig.start();
+    Access::restore(app, savedRadio());
+    CHECK(Access::deviceOpen(app));
+    Access::openTcp(app, "127.0.0.1:" + std::to_string(srv.port));
+    CHECK(Access::pending(app));
+    CHECK(!Access::deviceOpen(app));   // the radio was closed first
+    Access::cancelPending(app);
+    CHECK(!Access::pending(app));
+    const cascade::core::AppConfig saved = Access::savedConfig(app);
+    std::printf("    the config would save kind \"%s\", native args \"%s\"\n", saved.sourceKind.c_str(), saved.nativeArgs.c_str());
+    CHECK(saved.sourceKind == "rtlsdr" && saved.nativeArgs == kArgs);
+    CHECK(ofKind(queued(rig.qdir()), "radio_fail").empty());
+    g_realTcp = false;
+}
+
+// QUITTING RAISES THE CANCEL FLAG (engine.cpp reapPendingDeviceOpen): a worker inside the 12 s header wait lets go within ~50 ms instead of holding the
+// connection until the wait ends. The server sees the connection close.
+void quitRaisesCancelScenario() {
+    std::printf("  quitting during a pending rtl_tcp open: the worker lets go of its connection at once\n");
+    resetFake();
+    g_realTcp = true;
+    SilentServer srv;
+    th::TestWindow app;
+    Rig rig("tcpquit");
+    rig.start();
+    Access::openTcp(app, "127.0.0.1:" + std::to_string(srv.port));
+    CHECK(Access::pending(app));
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    CHECK(srv.accepted.load() == 1);
+    Access::reapPending(app);
+    CHECK(!Access::pending(app));
+    const auto t0 = std::chrono::steady_clock::now();
+    while (srv.closedByClient.load() < 1 && std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(1500)) { std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+    CHECK(srv.closedByClient.load() == 1);
+    g_realTcp = false;
+}
+
+// WHO IS PATIENT (finding B, G): a server that sends its header 5 s after the accept (a real one was measured at 3.6 s) opens for the user's own pick AND for
+// a try of the saved-radio series - both run on the worker - while the start-up restore, on the window's thread, gives up after its short wait.
+void patientTriesScenario() {
+    {
+        std::printf("  a server whose header takes 5 s: the user's pick opens it\n");
+        resetFake();
+        g_realTcp = true;
+        SilentServer srv;
+        srv.headerAfterMs = 5000;
+        th::TestWindow app;
+        Rig rig("tcppatient1");
+        rig.start();
+        Access::openTcp(app, "127.0.0.1:" + std::to_string(srv.port));
+        CHECK(Access::settle(app));
+        CHECK(Access::deviceOpen(app));
+        g_realTcp = false;
+    }
+    {
+        std::printf("  a server whose header takes 5 s: the start-up restore gives up on it, a try of the series opens it\n");
+        resetFake();
+        g_realTcp = true;
+        SilentServer srv;
+        srv.headerAfterMs = 5000;
+        th::TestWindow app;
+        Rig rig("tcppatient2");
+        rig.start();
+        Access::clock(app, 0.0);
+        Access::restore(app, savedTcp("127.0.0.1:" + std::to_string(srv.port)));
+        CHECK(!Access::deviceOpen(app));
+        CHECK(Access::retryArmed(app));
+        Access::clock(app, 2.0);
+        Access::poll(app);
+        CHECK(Access::settle(app));
+        CHECK(Access::deviceOpen(app));
+        g_realTcp = false;
+    }
+}
+
+// THE START-UP RESTORE'S ONE BUDGET (decision F): radio 1 and radio 2 are both saved network radios on servers that accept and stay silent. Each, alone, would
+// cost its 4 s short wait (8 s together, past the 5 s freeze watchdog); with one shared budget the restore ends after about 4 s and radio 2 is handed to the
+// background series without a wait.
+void restoreBudgetScenario() {
+    std::printf("  two saved network radios on silent servers: the start-up restore spends ONE budget of 4 s, the second is left to the background series\n");
+    resetFake();
+    g_realTcp = true;
+    SilentServer one;
+    SilentServer two;
+    th::TestWindow app;
+    Rig rig("tcpbudget");
+    rig.start();
+    Access::clock(app, 0.0);
+    cascade::core::AppConfig cfg = savedTcp("127.0.0.1:" + std::to_string(one.port));
+    cascade::core::SavedRadio second;
+    second.number = 2;
+    second.sourceKind = "rtltcp";
+    second.args = "rtltcp=127.0.0.1:" + std::to_string(two.port);
+    second.sampleRateHz = 2.4e6;
+    cfg.radios.push_back(second);
+    const auto t0 = std::chrono::steady_clock::now();
+    Access::restore(app, cfg);
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("    the restore of two silent saved network radios returned after %lld ms\n", static_cast<long long>(ms));
+    CHECK(ms >= 3500 && ms < 5500);
+    CHECK(one.accepted.load() == 1);
+    CHECK(two.accepted.load() == 0);   // the second server was not even dialled: the budget was spent
+    const std::string reasons = firstWords(ofKind(queued(rig.qdir()), "radio_fail"));
+    CHECK(reasons.find("time start-up allows for network radios") != std::string::npos);
+    g_realTcp = false;
 }
 
 // W2 (field data 2026-11-19): a radio SoapySDR lists that a native driver already listed (the same serial) is one radio_found, not a phantom row. (A function of
@@ -1157,6 +1430,11 @@ int main(int argc, char** argv) {
     handoffScenarios(everything);   // (a function of its own: main's frame was at the stack's limit)
     seriesScenarios(everything);
     rtlTcpScenarios();
+    doublePressScenarios();
+    cancelKeepsRadioScenario();
+    quitRaisesCancelScenario();
+    patientTriesScenario();
+    restoreBudgetScenario();
 
     // --- the D3 sentence through the real engine -------------------------------------------------------------------------------------------------
     {

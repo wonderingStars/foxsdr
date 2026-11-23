@@ -425,6 +425,21 @@ const KnownWait kKnownWaits[] = {
      "the Engine's future reaps (reapPendingDeviceOpen, reapPendingSoapyScan - moved verbatim "
      "from app_window.cpp in engine stage 3a), called from ~AppWindow: runs after "
      "watchdog_.stop(), outside the budgeted stretch"},
+    {"src/engine/engine.hpp", "kRestoreNetworkBudget", 0,
+     "the start-up restore's ONE shared wait for every saved rtl_tcp server (applyConfig, on the thread that shows the window, before the window exists); "
+     "nothing on the shutdown path restores a config"},
+    {"src/source/rtl_tcp_source.hpp", "kShortHeaderWait", 0,
+     "the start-up restore's cap on the rtl_tcp header wait (4 s, inside the restore's shared budget): spent before the window exists, never on the shutdown path"},
+    {"src/source/rtl_tcp_source.hpp", "kHeaderWaitDefault", 0,
+     "how long an rtl_tcp open waits for the server's 12-byte header: spent on the open worker (or by the start-up restore, cut to 4 s and to its budget); "
+     "quitting raises the open's cancel flag (a select in 50 ms slices hears it) and the reaper never waits for the worker (reapPendingDeviceOpen)"},
+    {"src/source/rtl_tcp_source.hpp", "kRefusedRetryDefault", 0,
+     "how long a user's rtl_tcp pick retries a refused connect, in 50 ms slices that look at the cancel flag: spent on the open worker only, never on the shutdown path"},
+    {"src/engine/engine.cpp", "kCancelOpenWait", 0,
+     "Engine::cancelPendingNetworkOpen() - the control thread's wait for a cancelled rtl_tcp open's worker when the user PICKS another source; the "
+     "worker looks at its flag every ~50 ms, so it is a fraction of this. Never on the shutdown path: quitting raises the same flag in "
+     "reapPendingDeviceOpen and waits kQuitGrace (zero here, after watchdog_.stop()), and a second Open press (retirePendingOpen) waits for nothing. "
+     "A wait of the branch fix/rtltcp that this test found unnamed"},
     {"src/gui/app_window_updates.cpp", "kNoWait", 0,
      "zero by construction - a ready-poll on a std::future (pollUpdateAsync's update download), not a wait; moved verbatim from app_window.cpp by stub batch B14"},
     {"src/engine/engine.cpp", "kNoWait", 0,

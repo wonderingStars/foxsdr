@@ -378,7 +378,8 @@ std::string unescape(const std::string& in) {
 std::unique_ptr<Transport> connectTcp(const std::string& host, std::uint16_t port,
                                       std::chrono::milliseconds connectWait,
                                       std::chrono::milliseconds ioWait, std::string& error,
-                                      const PeerWording& peer, const std::atomic<bool>* cancel) {
+                                      const PeerWording& peer, const std::atomic<bool>* cancel,
+                                      const std::chrono::steady_clock::time_point* overallEnd) {
     error.clear();
     const auto cancelled = [cancel] { return cancel != nullptr && cancel->load(std::memory_order_relaxed); };
     if (!ensureWinsock()) {
@@ -413,6 +414,11 @@ std::unique_ptr<Transport> connectTcp(const std::string& host, std::uint16_t por
             ::freeaddrinfo(results);
             error = kOpenCancelledText;
             return nullptr;
+        }
+        // THE CALLER'S OVERALL BUDGET (the start-up restore's): spent, no further address is tried.
+        if (overallEnd != nullptr && std::chrono::steady_clock::now() >= *overallEnd) {
+            lastFailure = std::string(peer.name) + " did not answer in time (is it at this address?)";
+            break;
         }
         const std::intptr_t s =
             static_cast<std::intptr_t>(::socket(a->ai_family, a->ai_socktype, a->ai_protocol));
@@ -450,7 +456,8 @@ std::unique_ptr<Transport> connectTcp(const std::string& host, std::uint16_t por
             // THE WAIT IS BOUNDED BY ONE DEADLINE, and a select that a signal
             // interrupts (EINTR, POSIX) is run again against what is left of
             // it: before this it was reported as "did not answer".
-            const auto deadline = std::chrono::steady_clock::now() + connectWait;
+            auto deadline = std::chrono::steady_clock::now() + connectWait;
+            if (overallEnd != nullptr && *overallEnd < deadline) { deadline = *overallEnd; }
             int sel = 0;
             for (;;) {
                 fd_set wfds;

@@ -212,14 +212,17 @@ const char* rtlTcpTunerName(std::uint32_t tunerType) {
 namespace {
 std::atomic<long long> g_headerWaitMs{RtlTcpSource::kHeaderWaitDefault.count()};
 std::atomic<long long> g_refusedRetryMs{RtlTcpSource::kRefusedRetryDefault.count()};
+std::atomic<long long> g_refusalPauseMs{300};   // the pause between a refusal and the next try, in 50 ms slices that look at the cancel flag
 }  // namespace
+
+void RtlTcpSource::setRefusalPauseForTest(std::chrono::milliseconds pause) { g_refusalPauseMs.store(pause.count()); }
 
 std::chrono::milliseconds RtlTcpSource::effectiveHeaderWait() const {
     const auto h = headerWait();
     return patient_.load(std::memory_order_relaxed) ? h : std::min(h, kShortHeaderWait);
 }
 std::chrono::milliseconds RtlTcpSource::effectiveRefusedRetryWait() const {
-    return patient_.load(std::memory_order_relaxed) ? refusedRetryWait() : std::chrono::milliseconds(0);
+    return refusalRetry_.load(std::memory_order_relaxed) ? refusedRetryWait() : std::chrono::milliseconds(0);
 }
 std::chrono::milliseconds RtlTcpSource::headerWait() { return std::chrono::milliseconds(g_headerWaitMs.load()); }
 std::chrono::milliseconds RtlTcpSource::refusedRetryWait() { return std::chrono::milliseconds(g_refusedRetryMs.load()); }
@@ -247,15 +250,21 @@ void RtlTcpSource::clearError() {
     link_->faulted = false;
 }
 
-void RtlTcpSource::noteFaultOn(ReaderLink& link, const char* what, const std::string& detail) {
+void RtlTcpSource::noteFaultOn(ReaderLink& link, const char* what, const std::string& detail, bool silent) {
     {
         std::lock_guard<std::mutex> lk(link.errorMutex);
         // THE FIRST CAUSE IS KEPT. Once a connection has gone every later
         // command on it fails too, and the last message is the least
         // informative one there is.
         if (!link.deviceDead) {
-            link.lastError = std::string("the connection to the rtl_tcp server was lost while ") +
-                             what + (detail.empty() ? std::string() : (" (" + detail + ")"));
+            if (silent) {
+                // CONNECTED BUT SILENT is not a lost connection: the socket is up and the server has sent nothing for a receive bound.
+                link.lastError = "the rtl_tcp server is connected but sent no samples - is its dongle still plugged in, and is the network link up?" +
+                                 (detail.empty() ? std::string() : (" (" + detail + ")"));
+            } else {
+                link.lastError = std::string("the connection to the rtl_tcp server was lost while ") +
+                                 what + (detail.empty() ? std::string() : (" (" + detail + ")"));
+            }
             link.deadWhat = what;
         }
         link.faulted = true;
@@ -405,14 +414,23 @@ bool RtlTcpSource::handshakeLocked(std::unique_ptr<iiod::Transport> t, std::stri
     // server serves ONE client and, after a client goes, takes about 3.6 s before it accepts the next one and sends its header
     // (and refuses connections outright for part of that time); a cold start takes about 1.5 s to its first connection. A wait of
     // 2 s failed every re-open made within seconds of a close with the very text the field reports ("receive timed out" at
-    // ~2.0 s). The socket's own bound still applies to each receive; the receive is repeated until kHeaderWait is spent.
+    // ~2.0 s). The wait is NOT the socket's own 2 s receive bound: it is a select() for readability until the header wait is spent.
     // THE WAIT IS A select() FOR READABILITY, NEVER A RECEIVE TIMEOUT: Microsoft documents a Windows socket whose receive timed out as in
     // an indeterminate state (SO_RCVTIMEO), and a header byte lost there would give "not an rtl_tcp header" or swap I and Q for the whole
     // session. The wait is cut into 50 ms slices so a cancel (cancel_) is heard at once.
     {
+        const auto began = std::chrono::steady_clock::now();
         const auto wait = effectiveHeaderWait();
-        const auto deadline = std::chrono::steady_clock::now() + wait;
+        auto deadline = began + wait;
+        // A SHARED START-UP BUDGET cuts the wait short (setOpenBudget); the sentence then says the seconds that were actually allowed.
+        if (hasBudget_ && budgetEnd_ < deadline) { deadline = budgetEnd_; }
         std::size_t got = 0;
+        // A SERVICE THAT SENDS PART OF A HEADER AND THEN GOES QUIET OR CLOSES IS NOT AN rtl_tcp SERVER: the sentence says "speaks rtl_tcp", which
+        // the saved-radio series does not retry (a real server sends its twelve bytes at once).
+        auto partialHeader = [&](const char* then) {
+            return "nothing at " + hostPortText(host_, port_) + " speaks rtl_tcp (it sent " + std::to_string(got) +
+                   " of the 12 bytes of an rtl_tcp header and then " + then + ")";
+        };
         while (got < sizeof(header)) {
             if (cancelled()) {
                 error = iiod::kOpenCancelledText;
@@ -420,8 +438,13 @@ bool RtlTcpSource::handshakeLocked(std::unique_ptr<iiod::Transport> t, std::stri
             }
             const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
             if (left.count() <= 0) {
+                if (got > 0) {
+                    error = partialHeader("sent nothing more");
+                    return false;
+                }
+                const auto allowedMs = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - began).count();
                 error = "connected to " + hostPortText(host_, port_) + ", but nothing came back within " +
-                        std::to_string(std::chrono::duration_cast<std::chrono::seconds>(wait).count()) +
+                        std::to_string(std::max<long long>(1, (allowedMs + 500) / 1000)) +
                         " s (timed out): either this is not an rtl_tcp server, or it is busy with another program (rtl_tcp serves one at a time) "
                         "or still starting its dongle";
                 return false;
@@ -430,6 +453,10 @@ bool RtlTcpSource::handshakeLocked(std::unique_ptr<iiod::Transport> t, std::stri
             if (ready == 0) { continue; }
             std::size_t part = 0;
             if (ready < 0 || !t->recvSome(header + got, sizeof(header) - got, part)) {
+                if (got > 0) {
+                    error = partialHeader("closed the connection");
+                    return false;
+                }
                 error = "nothing at " + hostPortText(host_, port_) + " answered as an rtl_tcp server (" + t->lastError() + ")";
                 return false;
             }
@@ -489,14 +516,16 @@ std::unique_ptr<iiod::Transport> RtlTcpSource::dialLocked(std::string& error) {
     const auto began = std::chrono::steady_clock::now();
     const auto retryFor = effectiveRefusedRetryWait();
     for (;;) {
-        auto t = iiod::connectTcp(host_, port_, iiod::kConnectWait, iiod::kReplyWait, error, peer, cancel_.get());
+        auto t = iiod::connectTcp(host_, port_, iiod::kConnectWait, iiod::kReplyWait, error, peer, cancel_.get(),
+                                    hasBudget_ ? &budgetEnd_ : nullptr);
         if (t != nullptr) { return t; }
         // BY THE CONNECT'S OWN WORDS, not by any digits in the text (the sentence also quotes the host and the port):
         // "connect failed (network error 10061)" is Windows' refusal, 111 is ECONNREFUSED.
         const bool refused = error.find("connect failed (network error 10061)") != std::string::npos ||
                              error.find("connect failed (network error 111)") != std::string::npos;
         if (!refused || retryFor.count() <= 0 || std::chrono::steady_clock::now() - began >= retryFor) { return nullptr; }
-        for (int i = 0; i < 6 && !cancelled(); ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
+        const long long pauseSlices = std::max<long long>(1, g_refusalPauseMs.load() / 50);
+        for (long long i = 0; i < pauseSlices && !cancelled(); ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
         if (cancelled()) {
             error = iiod::kOpenCancelledText;
             return nullptr;
@@ -733,12 +762,8 @@ void RtlTcpSource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
             // retry, and a stream cannot be resynchronised. Fault and leave;
             // the pipeline's source loop polls faulted().
             noteRead(*link, false, 0, false);
-            // CONNECTED BUT SILENT is not "connection lost": the socket is up and the server has sent nothing for a receive bound.
-            std::string why = link->transport->lastError();
-            if (why.find("timed out") != std::string::npos) {
-                why = "the server is connected but sent no samples - is its dongle still plugged in, and is the network link up? (" + why + ")";
-            }
-            noteFaultOn(*link, "reading samples", why);
+            const std::string why = link->transport->lastError();
+            noteFaultOn(*link, "reading samples", why, why.find("timed out") != std::string::npos);
             break;
         }
         const std::size_t total = carry + got;
