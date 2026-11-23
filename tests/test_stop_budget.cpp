@@ -237,6 +237,13 @@ int main() {
             CHECK(body.find("PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop)") != std::string::npos);
             CHECK(body.find("controlWatchdog_.heartbeat()") != std::string::npos);
         }
+        // S1 (final review of fix/freezes): patchStopAll's one-at-a-time destruction must run in the order patchRadios_.clear() did, DESCENDING key order, so it erases from the back; erase(begin())
+        // would destroy the radios in the reverse order.
+        {
+            const std::string body = bodyOf(strip(readFile(root / "src/engine/engine_patch_radios.cpp")), "void Engine::patchStopAll(");
+            CHECK(body.find("patchRadios_.erase(std::prev(patchRadios_.end()))") != std::string::npos);
+            CHECK(body.find("patchRadios_.erase(patchRadios_.begin())") == std::string::npos);
+        }
         checkTheWiringCheckerItself();
         // THE PATCH RADIO'S WORST BETWEEN TWO BEATS, from the constants READ OUT OF THE SOURCES in A: the source's stop (lock wait + vendor call + the restart give-back) + the reader's join
         // (PatchRadio::kStopWaitMs, read from patch_radio.hpp) + the close in the destructor (lock wait + give-back + vendor call), as the radio's removal does; it must fit under the Stop threshold.

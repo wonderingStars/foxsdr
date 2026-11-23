@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <iterator>
 #include <set>
 #include <thread>
 #include "core/diag_log.hpp"
@@ -846,7 +847,8 @@ void Engine::patchStopAll(bool restoreMain) {
         {
             cascade::source::SoundCardSource::CloseBatch closes;
             while (!patchRadios_.empty()) {   // (one at a time, so each device's close is followed by a beat: patchRadios_.clear() did the same destructions in one go)
-                patchRadios_.erase(patchRadios_.begin());
+                // FROM THE BACK: on this compiler clear() destroys the map's nodes in DESCENDING key order (xtree: right subtree, node, left), and the radios keep that order (review S1)
+                patchRadios_.erase(std::prev(patchRadios_.end()));
                 controlWatchdog_.heartbeat();
             }
         }
