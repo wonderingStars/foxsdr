@@ -104,8 +104,9 @@ inline void vectorGroup(const std::complex<float>* work, std::size_t newest0, st
         const __m128d h = _mm_loadu_pd(tapsDup + 2 * j);
         const std::complex<float>* q = base - j;
         for (int g = 0; g < G; ++g) {
-            // two floats (re, im) = 8 bytes: load them into the low half, widen to two doubles
-            const __m128 s = _mm_castpd_ps(_mm_load_sd(reinterpret_cast<const double*>(q + static_cast<std::size_t>(g) * step)));
+            // two floats (re, im) = 8 bytes: load them into the low half (movq; the intrinsic's operand type is may_alias on GCC and clang, so there is no
+            // double read of float storage), widen to two doubles
+            const __m128 s = _mm_castsi128_ps(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(q + static_cast<std::size_t>(g) * step)));
             acc[g] = _mm_add_pd(acc[g], _mm_mul_pd(h, _mm_cvtps_pd(s)));
         }
     }
