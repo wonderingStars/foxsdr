@@ -51,6 +51,7 @@
 #include "core/event_trail.hpp"
 #include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
+#include "core/machine_state.hpp"
 #include "core/issue_report.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
@@ -1002,6 +1003,15 @@ void Engine::closeAudioMinute(std::size_t ringFramesNow) {
     }
 }
 
+cascade::core::MinuteEventCounts Engine::minuteEventCounts() {
+    cascade::core::MinuteEventCounts c;
+    c.rate = rx().pipeline_.rateChanges();
+    c.source = rx().pipeline_.sourceSwitches();
+    c.plugins = pluginScans_ + pluginLifeEvents_;
+    c.audio = rx().pipeline_.audio().opens();
+    return c;
+}
+
 void Engine::pollDspMinute() {
     // The bundle's copy of the counters (core::setRingCounters) and of the ring itself (core::setRingFigures): every pass, two loads and two
     // stores for the counters - drop count first - and the figures beside them.
@@ -1014,11 +1024,72 @@ void Engine::pollDspMinute() {
             publishRingFigures();
         }
     }
+    // EVERY ABSENT DISCARD IS SAID, whether or not the minute clock has armed (review of 70d16f00, finding 1).
+    reportAbsentDiscards();
     const double now = clockS();
+    if (!rx().dspMinuteArmed_) {
+        // THE FIRST MINUTE STARTS WITH THE STREAM: nothing is judged before the DSP thread has read the ring (or ten seconds after the receiver
+        // was started, whichever is first), and the marks are taken HERE. What follows is a full minute, judged like any other: there is no
+        // grace that excuses loss.
+        if (!digestClockStarted(now)) { return; }
+        rx().dspMinuteArmed_ = true;
+        rx().dspMinuteBeganS_ = now;
+        rx().lastDspLogSec_ = now;
+        rx().dspDroppedAtMinute_ = rx().pipeline_.ringDroppedSamples();
+        rx().dspReadAtMinute_ = rx().pipeline_.sourceSamplesRead();
+        rx().dspCutAtMinute_ = rx().pipeline_.ringCutWrites();
+        rx().dspAbsentAtMinute_ = rx().pipeline_.ringDroppedAbsent();
+        rx().dspBusyAtMinute_ = rx().pipeline_.dspBusyNs();
+        rx().dspCpuAtMinute_ = rx().pipeline_.dspCpuNs();
+        rx().dspBlocksAtMinute_ = rx().pipeline_.dspBlocks();
+        rx().genResyncsAtMinute_ = rx().pipeline_.genResyncs();
+        rx().genSkippedAtMinute_ = rx().pipeline_.genSkippedNs();
+        (void)rx().pipeline_.takeDspGapLongest(nullptr);
+        (void)rx().pipeline_.takeSrcGapLongestNs();
+        rx().dspEventMark_ = minuteEventCounts();
+        // (the minute's two maxima are taken into the session's, so the bundle keeps what the set-up window held)
+        rx().dspRingHighWaterSession_ = std::max(rx().dspRingHighWaterSession_, rx().pipeline_.takeRingHighWaterSamples());
+        rx().dspBlockLongestNsSession_ = std::max(rx().dspBlockLongestNsSession_, rx().pipeline_.takeDspBlockLongestNs());
+        return;
+    }
     if (now - rx().lastDspLogSec_ >= 60.0) {
         rx().lastDspLogSec_ = now;
         closeDspMinute();
     }
+}
+
+bool Engine::digestClockStarted(double now) {
+    if (rx().firstDrainSeenS_ >= 0.0) { return true; }
+    const bool drained = rx().pipeline_.dspHasDrained();
+    // THE DIGESTS ALWAYS ARM (review of 70d16f00, finding 1): a DSP thread that never reaches its loop used to keep both digests silent for ever.
+    const bool timedOut = !drained && rx().pipeline_.running() &&
+                          rx().pipeline_.msSinceStart() >= static_cast<std::uint64_t>(kDigestStartTimeoutS * 1000.0);
+    if (!drained && !timedOut) { return false; }
+    rx().firstDrainSeenS_ = now;
+    const std::string radioTag = receiverCount() > 1u ? " [radio " + std::to_string(scopedSlot() + 1u) + "]" : std::string();
+    if (drained) {
+        // ONCE: how long the program had been running when the stream first reached the DSP thread (no radio, no frequency, no path).
+        cascade::core::diagLogf("dsp: first drain %llu ms after the program started; digest minutes start now%s",
+                                static_cast<unsigned long long>(rx().pipeline_.processMsAtFirstDrain()), radioTag.c_str());
+    } else {
+        cascade::core::diagLogf("dsp: the DSP thread had not read the ring %.0f s after the receiver started; digest minutes start now%s",
+                                kDigestStartTimeoutS, radioTag.c_str());
+    }
+    // AND THE MACHINE, ONCE AT START (core/machine_state.hpp): power, throttling, timer, window and display, thread priorities.
+    cascade::core::logMachineStateIfChanged(rx().pipeline_.dspThreadPriority(), rx().pipeline_.sourceThreadPriority(), true);
+    return true;
+}
+
+void Engine::reportAbsentDiscards() {
+    const std::uint64_t total = rx().pipeline_.ringDroppedAbsent();
+    if (total <= rx().dspAbsentLogged_) { return; }
+    if (rx().pipeline_.dspAbsentActive()) { return; }   // the episode is still running (at most Pipeline::kDspAbsentMaxMs): said when it ends
+    const std::uint64_t count = total - rx().dspAbsentLogged_;
+    rx().dspAbsentLogged_ = total;
+    const std::string radioTag = receiverCount() > 1u ? " [radio " + std::to_string(scopedSlot() + 1u) + "]" : std::string();
+    cascade::core::diagLogf("dsp: %llu samples discarded while the DSP thread was absent (began with: %s; excused for at most %d ms)%s",
+                            static_cast<unsigned long long>(count), rx().pipeline_.dspAbsentCauseWord(), cascade::core::Pipeline::kDspAbsentMaxMs,
+                            radioTag.c_str());
 }
 
 // THE RING ITSELF, FOR THE BUNDLE'S dsp-ring LINE (GitHub issue 6, the 0.99.90 report; master 0.99.101, d776bc58, where the window read these
@@ -1059,40 +1130,109 @@ void Engine::closeDspMinute() {
     rx().dspRingHighWaterSession_ = std::max(rx().dspRingHighWaterSession_, highWater);
     rx().dspBlockLongestNsSession_ = std::max(rx().dspBlockLongestNsSession_, blockNs);
     publishRingFigures();
+    // THE SAMPLES DISCARDED WHILE THE DSP THREAD WAS ABSENT (a live rate change joins and respawns it; a thread start has a delay; a ring-resizing
+    // source switch) - at most Pipeline::kDspAbsentMaxMs of each absence - are counted apart (Pipeline::ringDroppedAbsent) and are not in `dropped`:
+    // the application's own pause is not a consumer that fell behind. They are SAID, in the log the moment each episode ends
+    // (reportAbsentDiscards), in the minute's own line below, and in the radio journal's window.
+    const std::uint64_t absentNow = rx().pipeline_.ringDroppedAbsent();
+    const std::uint64_t absent = absentNow >= rx().dspAbsentAtMinute_ ? absentNow - rx().dspAbsentAtMinute_ : 0;
+    rx().dspAbsentAtMinute_ = absentNow;
     // THE JOURNAL'S STREAM EVENT for this radio's minute (radio reports): the figures just taken, before the quiet-unless-lost return below.
-    journalStreamMinute(read, dropped, highWater);
-    // QUIET UNLESS SOMETHING WAS LOST, like the audio digest beside it. 94
-    // characters at the widest a uint64 can make it - inside the log's line
-    // (DiagLog::kLineBytes), which a cut line would be masked whole by the scrub.
-    if (dropped == 0) { return; }
+    // Its window shares the figures' origin: the minute began where the marks were taken (arming, or the previous close).
+    const double nowS = clockS();
+    const double beganS = rx().dspMinuteBeganS_;
+    journalStreamMinute(read, dropped, absent, highWater, beganS, readNow);
+    rx().dspMinuteBeganS_ = nowS;
+    // THE MINUTE'S APPLICATION EVENTS ARE NAMED, NEVER AN EXCUSE (review of 70d16f00, finding 3; core/minute_events.hpp): events= is context for
+    // whoever reads the line. A minute that dropped a hearable share is filed whether or not it held a rate change, a source switch, a plugin wake
+    // or an output open - the deliberate pause itself is already out of `dropped` (the absent count), and nothing else is deliberate.
+    const unsigned events = cascade::core::minuteEventsSince(minuteEventCounts(), rx().dspEventMark_);
+    const bool lossMinute = dropped > 0 && cascade::core::ringDropWorthAReport(dropped, read);
+    // THE DSP THREAD'S OWN ACCOUNTING FOR THE MINUTE (2026-11-23, docs/DIAGNOSTICS.md "The DSP minute"): the sum of its blocks' wall time, its
+    // own processor time, how many blocks, the longest gap between two ring reads and the phase it was in; the source thread's longest gap
+    // between writes and (for the free-running generator) the "resync after a long stall" events. All taken every minute, whether or not
+    // anything was lost, so a bad minute's figures are its own. Busy near the minute's length with CPU far below it is a thread that was
+    // descheduled or waited on a lock; busy and CPU both near the minute's length is a chain too heavy for the machine; busy far below it beside
+    // drops is a thread that was absent or asleep between blocks.
+    const std::uint64_t busyNow = rx().pipeline_.dspBusyNs();
+    const std::uint64_t cpuNow = rx().pipeline_.dspCpuNs();
+    const std::uint64_t blocksNow = rx().pipeline_.dspBlocks();
+    const std::uint64_t resyncsNow = rx().pipeline_.genResyncs();
+    const std::uint64_t skippedNow = rx().pipeline_.genSkippedNs();
+    const std::uint64_t busyNs = busyNow >= rx().dspBusyAtMinute_ ? busyNow - rx().dspBusyAtMinute_ : 0;
+    const std::uint64_t cpuNs = cpuNow >= rx().dspCpuAtMinute_ ? cpuNow - rx().dspCpuAtMinute_ : 0;
+    const std::uint64_t blocks = blocksNow >= rx().dspBlocksAtMinute_ ? blocksNow - rx().dspBlocksAtMinute_ : 0;
+    const std::uint64_t resyncs = resyncsNow >= rx().genResyncsAtMinute_ ? resyncsNow - rx().genResyncsAtMinute_ : 0;
+    const std::uint64_t skippedNs = skippedNow >= rx().genSkippedAtMinute_ ? skippedNow - rx().genSkippedAtMinute_ : 0;
+    rx().dspBusyAtMinute_ = busyNow;
+    rx().dspCpuAtMinute_ = cpuNow;
+    rx().dspBlocksAtMinute_ = blocksNow;
+    rx().genResyncsAtMinute_ = resyncsNow;
+    rx().genSkippedAtMinute_ = skippedNow;
+    const char* gapPhase = "ring";
+    const std::uint64_t gapNs = rx().pipeline_.takeDspGapLongest(&gapPhase);
+    const std::uint64_t srcGapNs = rx().pipeline_.takeSrcGapLongestNs();
+    // QUIET UNLESS SOMETHING WAS LOST, like the audio digest beside it - and now also when the audio minute beside it starved a raise's worth
+    // of callbacks (that digest closes after this one, so its numbers are read as they stand): the lines below are what an audiolead report
+    // needs to carry. The text of every line fits the log's line with its 18-character stamp and level in front (DiagLog::kLineBytes: a cut
+    // line is masked whole by the scrub); tests/test_ringdrop_measure.cpp section 6 holds each at its widest.
+    cascade::sink::AudioOut& audioOut = rx().pipeline_.audio();
+    const std::uint64_t underrunsNow = audioOut.underruns();
+    const std::uint64_t audioStarved = underrunsNow >= rx().audioUnderrunsAtLogStart_ ? underrunsNow - rx().audioUnderrunsAtLogStart_ : 0;
+    if (dropped == 0 && absent == 0 && audioStarved < static_cast<std::uint64_t>(cascade::sink::kAudioLeadStarvedPerMinute)) { return; }
+    char eventWords[48] = {};
+    cascade::core::minuteEventsText(events, eventWords, sizeof(eventWords));
     const std::string share = cascade::core::droppedShareText(dropped, read);
     // WHICH RADIO, once there are several (the design: every receiver reports its own ring drops); the line of a lone radio is as it always was.
     const std::string radioTag = receiverCount() > 1u ? " [radio " + std::to_string(scopedSlot() + 1u) + "]" : std::string();
-    cascade::core::diagLogf("dsp: %llu samples dropped between the source and the DSP in the last minute (%s)%s",
-                            static_cast<unsigned long long>(dropped),
-                            share.empty() ? "share unknown" : share.c_str(), radioTag.c_str());
-    // THE FEED ROW, behind the severity floor (core/diag_report.hpp,
-    // ringDropWorthAReport): a minute that lost a hearable share files the
-    // `ringdrop` issue report, once a session; a start-of-stream blip does
-    // not. The ledger still counts every drop (RecoveryWatch) - a count is
-    // not a row. (Master 0.99.102, bde914f6: AppWindow::closeDspMinute there; the
-    // pass thread here, a healthy thread, so the report may lock.)
-    if (cascade::core::ringDropWorthAReport(dropped, read)) {
-        cascade::core::issue::fileIssueReport(cascade::core::health::Recovered::RingDrop);
+    const auto cap = [](std::uint64_t v) { return static_cast<unsigned long long>(std::min<std::uint64_t>(v, 9999999999ULL)); };
+    if (dropped > 0) {
+        cascade::core::diagLogf("dsp: %llu samples dropped between the source and the DSP in the last minute (%s)%s",
+                                static_cast<unsigned long long>(dropped),
+                                share.empty() ? "share unknown" : share.c_str(), radioTag.c_str());
     }
+    // THE MINUTE'S THREE LINES, in a fixed key=value form (the words are the keys docs/DIAGNOSTICS.md names). len_ms is the minute's real
+    // length, so busy_ms and cpu_ms can be read against it.
+    const std::size_t capacity = rx().pipeline_.ringCapacity();
+    const std::size_t pct = capacity == 0 ? 0 : std::min<std::size_t>(100, highWater * 100 / capacity);
+    char dropPct[16] = "unknown";
+    if (read > 0) { std::snprintf(dropPct, sizeof(dropPct), "%.2f", 100.0 * static_cast<double>(std::min(dropped, read)) / static_cast<double>(read)); }
+    char cpuText[16] = "unknown";
+    if (rx().pipeline_.dspCpuKnown()) { std::snprintf(cpuText, sizeof(cpuText), "%llu", cap(cpuNs / 1000000u)); }
+    const std::uint64_t lenMs = nowS > beganS ? static_cast<std::uint64_t>((nowS - beganS) * 1000.0) : 0u;
+    cascade::core::diagLogf("dsp minute: dropped=%llu pct=%s len_ms=%llu ring_high_pct=%llu events=%s%s", cap(dropped), dropPct, cap(lenMs),
+                            static_cast<unsigned long long>(pct), eventWords, radioTag.c_str());
+    cascade::core::diagLogf("dsp minute: busy_ms=%llu cpu_ms=%s blocks=%llu longest_gap_ms=%llu gap_phase=%s%s", cap(busyNs / 1000000u), cpuText,
+                            cap(blocks), cap(gapNs / 1000000u), gapPhase, radioTag.c_str());
+    cascade::core::diagLogf("dsp minute: src_longest_gap_ms=%llu gen_resyncs=%llu gen_skipped_ms=%llu absent_discards=%llu%s", cap(srcGapNs / 1000000u),
+                            cap(resyncs), cap(skippedNs / 1000000u), cap(absent), radioTag.c_str());
+    // THE MACHINE, AGAIN WHEN IT CHANGED since the last time it was said (power source, throttling, window, display, priorities).
+    cascade::core::logMachineStateIfChanged(rx().pipeline_.dspThreadPriority(), rx().pipeline_.sourceThreadPriority(), false);
+    if (dropped == 0) { return; }   // (only the application's own pause cost samples, or the audio minute beside this one is bad: said, never filed)
     // AND WHAT THE LOSS LOOKED LIKE (GitHub issue 6, the 0.99.90 report): in how
     // many writes, how full the ring got, and the longest one block took on the
     // DSP thread. A long block is a stall on the DSP side; a short one beside
     // drops is a run of samples arriving late from the source and all at once.
     // The high water is 100% in any minute that lost something - its value is in
     // the bundle, for the minutes that did not. 112 characters at the widest.
-    const std::size_t capacity = rx().pipeline_.ringCapacity();
-    const std::size_t pct = capacity == 0 ? 0 : std::min<std::size_t>(100, highWater * 100 / capacity);
     cascade::core::diagLogf("dsp: ring high water %llu%% of %llu samples, %llu writes cut, longest DSP block %llu ms%s",
                             static_cast<unsigned long long>(pct),
                             static_cast<unsigned long long>(capacity),
                             static_cast<unsigned long long>(cut),
                             static_cast<unsigned long long>(blockNs / 1000000u), radioTag.c_str());
+    // THE FEED ROW, behind the severity floor (core/diag_report.hpp,
+    // ringDropWorthAReport): a minute that lost a hearable share files the
+    // `ringdrop` issue report, once a session; a start-of-stream blip does
+    // not. The ledger still counts every drop (RecoveryWatch) - a count is
+    // not a row. (Master 0.99.102, bde914f6: AppWindow::closeDspMinute there; the
+    // pass thread here, a healthy thread, so the report may lock.)
+    // FILED LAST (2026-11-23, the ringdrop diagnosis): the report keeps the log's tail as it is at the moment it is written, and
+    // it used to be written BEFORE the lines above, so 259 of 262 field reports lacked the very lines that describe their own
+    // minute (high water, cut writes, longest block). Everything this minute has to say is logged first.
+    // NOTHING ELSE DECIDES IT: no event, no run of minutes, no start-up grace (review of 70d16f00).
+    if (lossMinute) {
+        cascade::core::issue::fileIssueReport(cascade::core::health::Recovered::RingDrop);
+    }
 }
 
 void Engine::setAudioBufferMs(int ms) {
@@ -1165,7 +1305,20 @@ void Engine::pollAudioHealth() {
     // posture as the recorder's own status lines, and the only way a number
     // nobody watches (this goes to the log, not the screen) stays worth
     // reading when it does fire.
-    if (now - rx().lastAudioLogSec_ >= 60.0) {
+    // THE FIRST MINUTE STARTS WITH THE STREAM (2026-11-23, see pollDspMinute): no minute closes before the DSP thread has read the ring (or ten
+    // seconds after the receiver was started), and the marks are taken then; the first judged minute is a full minute, judged like any other.
+    if (!rx().audioMinuteArmed_) {
+        if (digestClockStarted(now)) {
+            rx().audioMinuteArmed_ = true;
+            rx().lastAudioLogSec_ = now;
+            rx().audioUnderrunsAtLogStart_ = out.underruns();
+            rx().audioPrimingAtLogStart_ = out.primingCallbacks();
+            rx().audioRingLowWaterFrames_ = ringFrames;
+            rx().audioRescansAtLogStart_ = pluginScans_;
+            rx().audioStopsAtLogStart_ = rx().receiverStops_;
+            rx().audioOpensAtLogStart_ = out.opens();
+        }
+    } else if (now - rx().lastAudioLogSec_ >= 60.0) {
         rx().lastAudioLogSec_ = now;
         closeAudioMinute(ringFrames);
     }
@@ -11056,6 +11209,9 @@ void Engine::initialise() {
     rx().audioRescansAtLogStart_ = pluginScans_;
     // Likewise the open that built the session's sink: not a re-open, not discounted from the first minute.
     rx().audioOpensAtLogStart_ = rx().pipeline_.audio().opens();
+    // ...and the DSP minute's event mark starts here, so what set the session up (the first scan, the source installed, the open
+    // above) is not named as an event of the first minute.
+    rx().dspEventMark_ = minuteEventCounts();
     // THE FIRST SCAN IS DONE: the copies a session before this one could not delete (a module was mapped) are deleted now if this scan still
     // finds them superseded, and the store opens with the catalogue the last good read kept - no request is made (stub campaign B3; both run
     // before the first pass, like the scan beside them).
@@ -11606,10 +11762,12 @@ void Engine::pumpAudio() {
     // The diagnostics context a crash or a hang report prints, and the diagnostics bundle carries (window port group 14).
     pumpDiagContext();
     pollAudioOpen();
-    pollAudioHealth();
-    // ...and the samples the pipeline's own ring could not hold, once a minute
-    // (0.99.86) - after the sink, but not gated on it.
+    // THE DSP MINUTE BEFORE THE AUDIO MINUTE (2026-11-23): both close in the same pass, and a cause they share (a thread that did
+    // not get the processor) is then described once, by the lines that name it, BEFORE the audiolead report is filed - which
+    // keeps the log's tail as it is at that moment. The samples the pipeline's own ring could not hold, once a minute (0.99.86),
+    // are not gated on the sink.
     pollDspMinute();
+    pollAudioHealth();
     // The usage record's counts that need a look once a pass (the output's first play, a radio's first samples, the recoveries
     // nothing else may count), and the evidence of how the previous session ended.
     healthPoll();

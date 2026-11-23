@@ -250,6 +250,24 @@ struct AppWindowTestAccess {
     // they have not, in a test).
     static void pollDspMinute(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).pollDspMinute(); }); }
     static std::string bundle(AppWindow& a) { return a.currentDiagnosticsBundle(); }
+    // A deliberate event for the digests' mask (the engine's own plugin-rescan counter, bumped as test_audio_lead_app does).
+    static void noteRescan(AppWindow& a) { passseam::on(th::engine(a), [&] { ++th::engine(a).pluginScans_; }); }
+    // The engine's clock moved FORWARD by `seconds` (as test_radio_reports_engine.cpp ages a session), and the digest clock put back to "the stream
+    // has not yet been seen to start".
+    static void ageSession(AppWindow& a, double seconds) {
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).clockOrigin_ -= std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(seconds));
+        });
+    }
+    static void unarm(AppWindow& a) {
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).rx().dspMinuteArmed_ = false;
+            th::engine(a).rx().firstDrainSeenS_ = -1.0;
+        });
+    }
+    static bool armed(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).rx().dspMinuteArmed_; }); }
+    // An output opened (the sink's own count, as test_audio_lead_app bumps it): the "audio" event the DSP minute names.
+    static void noteAudioOpen(AppWindow& a) { th::engine(a).pipeline_.audio().noteOpenForTest(); }
 };
 
 }  // namespace cascade::gui
@@ -338,6 +356,18 @@ int main() {
             if (readFile(e.path()).find("reason: issue: ringdrop - ") != std::string::npos) { ++n; }
         }
         return n;
+    };
+
+    // The text of the (first) ringdrop report on disk, or empty.
+    auto ringdropReportText = [&] {
+        std::error_code ec;
+        for (const auto& e : fs::directory_iterator(reports, ec)) {
+            const std::string name = e.path().filename().string();
+            if (name.rfind("issue-", 0) != 0 || name.size() < 4 || name.compare(name.size() - 4, 4, ".txt") != 0) { continue; }
+            std::string text = readFile(e.path());
+            if (text.find("reason: issue: ringdrop - ") != std::string::npos) { return text; }
+        }
+        return std::string();
     };
 
     th::TestWindow app;
@@ -444,11 +474,56 @@ int main() {
             CHECK(blockMs <= 10000);
             CHECK(line.size() < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
         }
+        // THE MINUTE'S ACCOUNTING LINES (2026-11-23), in a fixed key=value form: what the DSP thread did with the minute. The thread sat in
+        // the held mutex for 3 s, so its busy wall time and its longest gap between ring reads are that hold, and the phase is the step
+        // that waits for the mutex; its own processor time is not. The lines fit the log's line and survive the upload scrub intact.
+        {
+            std::string lineA;
+            std::string lineB;
+            std::string lineC;
+            for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+                if (l.find("dsp minute: dropped=") != std::string::npos) { lineA = l; }
+                if (l.find("dsp minute: busy_ms=") != std::string::npos) { lineB = l; }
+                if (l.find("dsp minute: src_longest_gap_ms=") != std::string::npos) { lineC = l; }
+            }
+            std::printf("minute line A: %s\nminute line B: %s\nminute line C: %s\n", lineA.c_str(), lineB.c_str(), lineC.c_str());
+            CHECK(!lineA.empty() && !lineB.empty() && !lineC.empty());
+            CHECK(numberAfter(lineA, "dropped=") == static_cast<long long>(stalledDropped));
+            CHECK(lineA.find(" pct=") != std::string::npos);
+            CHECK(numberAfter(lineA, " ring_high_pct=") == 100);
+            CHECK(lineA.find(" events=none") != std::string::npos);
+            // THE MINUTE'S REAL LENGTH (review of 70d16f00, finding 6): len_ms is there, so busy_ms can be read against it.
+            CHECK(numberAfter(lineA, " len_ms=") >= 3000);
+            CHECK(numberAfter(lineB, " busy_ms=") >= 2500);
+            CHECK(numberAfter(lineB, " longest_gap_ms=") >= 2500);
+            CHECK(lineB.find(" gap_phase=audio-lock") != std::string::npos);
+            CHECK(numberAfter(lineB, " blocks=") >= 1);
+            CHECK(lineB.find(" cpu_ms=") != std::string::npos);
+            if (lineB.find(" cpu_ms=unknown") == std::string::npos) { CHECK(numberAfter(lineB, " cpu_ms=") < 1500); }   // not the 3 s it waited
+            CHECK(numberAfter(lineC, " absent_discards=") == 0);
+            CHECK(lineC.find(" gen_resyncs=") != std::string::npos && lineC.find(" gen_skipped_ms=") != std::string::npos);
+            // (the log's own line is held at 191 characters INCLUDING its 18-character stamp; the lines here are read back as the log holds them)
+            for (const std::string* l : {&lineA, &lineB, &lineC}) {
+                CHECK(l->size() < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
+                CHECK(cascade::core::scrubUploadLine(*l) == *l);
+            }
+            // ...and they are in the filed report: the row is written after them.
+            const std::string filedNow = ringdropReportText();
+            CHECK(filedNow.find("dsp minute: dropped=") != std::string::npos);
+            CHECK(filedNow.find("dsp minute: busy_ms=") != std::string::npos);
+            CHECK(filedNow.find("dsp minute: src_longest_gap_ms=") != std::string::npos);
+        }
         // THE FEED ROW (0.99.102): a minute that lost two rings of three is far over
         // the 0.05% floor, so the `ringdrop` issue report is filed - by this minute
         // close, not by the health poll, which now only counts.
         CHECK(cascade::core::ringDropWorthAReport(stalledDropped, read));
         CHECK(ringdropReports() == 1);
+        // THE REPORT CARRIES ITS OWN MINUTE (2026-11-23): the filed report keeps the log tail as it was when it was written, and it
+        // used to be written before the lines above, so 259 of 262 field reports lacked the high-water line that describes them.
+        const std::string filed = ringdropReportText();
+        CHECK(filed.find("dsp: " + std::to_string(stalledDropped) + " " + kNeedle) != std::string::npos);
+        CHECK(filed.find(kRingNeedle) != std::string::npos);
+        CHECK(filed.find("longest DSP block ") != std::string::npos);
     }
 
     // --- 3. THE NEXT CLEAN MINUTE IS SILENT AGAIN ---------------------------------------
@@ -470,6 +545,141 @@ int main() {
         Access::closeDspMinute(app);
         CHECK(dropLines().size() == linesAtStart + 1);
         CHECK(ringdropReports() == 1);                   // once a session, and no new row
+    }
+
+    // --- 3b. NO EVENT EXCUSES A LOSS MINUTE (review of 70d16f00, finding 3) --------------------------------------------------------------
+    // The first version of this branch judged minutes through a mask of the application's own events: a minute that held a plugin wake, a rate
+    // change, a source switch or an output open was "logged, not filed" (and filed only when it was the third loss minute in a row). That hid
+    // real loss - a genuine drop is a drop whatever else happened in the minute, and the deliberate pause is already out of the count. The
+    // events are NAMED in the minute's line (events=) and decide nothing: a loss minute is filed with or without them. (Deliberate decision of
+    // the review: the two cases this section used to assert - "logged, not filed" and "the third in a row is filed" - are gone.)
+    {
+        auto stallMinute = [&](bool close = true) {
+            CHECK(drained(p));
+            const std::uint64_t readBefore = p.sourceSamplesRead();
+            std::atomic<bool> acquired{false};
+            std::thread holder([&] { p.holdLockForTest(cascade::core::Pipeline::LockForTest::Audio, 1200, &acquired); });
+            CHECK(waitFor([&] { return acquired.load(std::memory_order_acquire); }));
+            const std::uint64_t grant = 3 * static_cast<std::uint64_t>(ring);
+            src->grant(grant);
+            CHECK(waitFor([&] { return p.sourceSamplesRead() - readBefore >= grant; }));
+            holder.join();
+            CHECK(waitFor([&] { return p.dspBlockLongestNs() >= 1000000000ULL; }));
+            if (close) { Access::closeDspMinute(app); }
+        };
+        auto countLines = [&](const char* needle) {
+            std::size_t n = 0;
+            for (const std::string& line : cascade::core::DiagLog::instance().ringSnapshot()) {
+                if (line.find(needle) != std::string::npos) { ++n; }
+            }
+            return n;
+        };
+        const std::size_t notFiledBefore = countLines("logged, not filed as a fault");
+
+        // (a) a minute that held a plugin event IS filed, and the event is named.
+        cascade::core::issue::resetIssueReportsForTest();
+        const std::size_t base = ringdropReports();
+        Access::noteRescan(app);
+        stallMinute();
+        CHECK(ringdropReports() == base + 1);
+        CHECK(countLines("events=plugins") >= 1);
+        CHECK(countLines("logged, not filed as a fault") == notFiledBefore);   // the sentence is gone from the program
+        // (b) ...and so is one that held an output open (the other kind a test can make on its own).
+        cascade::core::issue::resetIssueReportsForTest();
+        const std::size_t base2 = ringdropReports();
+        Access::noteAudioOpen(app);
+        stallMinute();
+        CHECK(ringdropReports() == base2 + 1);
+        CHECK(countLines("events=audio") >= 1);
+        // (c) ...and a loss minute with every kind at once.
+        cascade::core::issue::resetIssueReportsForTest();
+        const std::size_t base3 = ringdropReports();
+        Access::noteRescan(app);
+        Access::noteAudioOpen(app);
+        stallMinute();
+        CHECK(ringdropReports() == base3 + 1);
+        CHECK(countLines("events=plugins|audio") >= 1);
+        CHECK(drained(p));
+        Access::closeDspMinute(app);
+
+        // --- 3c. THE DIGEST CLOCK ARMS AT THE FIRST DRAIN; THE FIRST JUDGED MINUTE IS A FULL ONE; NOTHING AFTER ARMING IS EXCUSED --------------
+        // The engine's minute clock used to start at its construction, so the first minute held the plugin scan, the saved radio's open and the
+        // window's creation (117 of the field's ringdrop reports and 72 of its audiolead reports are a session's first minute). It now arms when the
+        // DSP thread has read the ring - and from then on the minute is judged like any other: there is NO grace that excuses loss (review of
+        // 70d16f00; the earlier ten-second grace is gone). The engine's clock is aged here instead of waited for.
+        cascade::core::issue::resetIssueReportsForTest();
+        Access::unarm(app);
+        const std::size_t rep0 = ringdropReports();
+        const std::size_t drops0 = dropLines().size();
+        const std::size_t drains0 = countLines("dsp: first drain ");
+        const std::size_t machine0 = countLines("machine: power=");
+        Access::ageSession(app, 100.0);                     // an old engine: the old rule would close the first minute at the next poll
+        stallMinute(false);                                 // start-up loss BEFORE the clock arms: nobody's minute
+        Access::pollDspMinute(app);                         // the pass sees the stream: arms, and says the time to first drain, once
+        CHECK(Access::armed(app));
+        CHECK(countLines("dsp: first drain ") == drains0 + 1);
+        CHECK(countLines("machine: power=") == machine0 + 1);   // ...with the machine's state, once, at the start
+        CHECK(dropLines().size() == drops0);
+        stallMinute(false);                                 // loss right after arming: NOT excused
+        Access::ageSession(app, 30.0);
+        Access::pollDspMinute(app);
+        CHECK(dropLines().size() == drops0);                // the first judged minute is a FULL minute: not closed at 30 s
+        Access::ageSession(app, 31.0);
+        Access::pollDspMinute(app);
+        CHECK(dropLines().size() == drops0 + 1);            // closed at 61 s
+        CHECK(ringdropReports() == rep0 + 1);               // and filed
+        CHECK(countLines("dsp: first drain ") == drains0 + 1);   // said once
+        CHECK(drained(p));
+        Access::closeDspMinute(app);
+
+        // --- 3d. THE CLOCK ALWAYS ARMS: ten seconds after the start, though the DSP thread never read the ring (finding 1) ------------------
+        {
+            cascade::core::Pipeline& pp = p;
+            Access::unarm(app);
+            pp.resetFirstDrainForTest();                    // a DSP thread that has not arrived
+            const std::size_t noDrain0 = countLines("had not read the ring");
+            pp.setStartedAgoForTest(1000);
+            Access::pollDspMinute(app);
+            CHECK(!Access::armed(app));                     // one second after the start: still waiting for it
+            pp.setStartedAgoForTest(10500);
+            Access::pollDspMinute(app);
+            CHECK(Access::armed(app));                      // ten seconds: armed anyway, and the log says why
+            CHECK(countLines("had not read the ring") == noDrain0 + 1);
+            CHECK(countLines("dsp: first drain ") == drains0 + 1);   // (not the drain line)
+            Access::closeDspMinute(app);
+        }
+
+        // --- 3e. A DSP THREAD THAT ARRIVES 5 s LATE: the first 2 s are absent, the rest are drops, and a ringdrop is filed (finding 1) ------
+        // The engine's own pipeline is restarted with the start delay seam. Samples the ring cannot hold in the first 2 s are the application's
+        // own start (said in the log, with the event that began it); after that the thread is simply not there and the loss is an ordinary
+        // drop - filed. Break-it: take the 2 s bound out of Pipeline::noteRingWrite and the drop count stays 0, so no report is filed.
+        {
+            p.stop();
+            cascade::core::Pipeline::setDspStartDelayForTest(5000);
+            cascade::core::issue::resetIssueReportsForTest();
+            Access::closeDspMinute(app);                    // a fresh mark
+            const std::uint64_t dropped0 = p.ringDroppedSamples();
+            const std::uint64_t absent0 = p.ringDroppedAbsent();
+            const std::size_t rep = ringdropReports();
+            const std::size_t absentLines0 = countLines("samples discarded while the DSP thread was absent");
+            p.start();
+            CHECK(p.running());
+            src->grant(3 * static_cast<std::uint64_t>(ring));
+            CHECK(waitFor([&] { return p.ringDroppedAbsent() > absent0 + ring; }));
+            CHECK(p.ringDroppedSamples() == dropped0);       // inside 2 s: absent, not a drop
+            CHECK(waitFor([&] { return !p.dspAbsentActive(); }, 6000));
+            src->grant(2 * static_cast<std::uint64_t>(ring));
+            CHECK(waitFor([&] { return p.ringDroppedSamples() > dropped0 + ring / 2; }));   // after 2 s: ordinary drops
+            Access::pollDspMinute(app);                      // the pass says the episode (before the DSP thread ever arrived)
+            CHECK(countLines("samples discarded while the DSP thread was absent") == absentLines0 + 1);
+            CHECK(countLines("began with: start") >= 1);
+            Access::closeDspMinute(app);
+            CHECK(ringdropReports() == rep + 1);             // a ringdrop IS filed
+            cascade::core::Pipeline::setDspStartDelayForTest(0);
+            CHECK(waitFor([&] { return p.dspHasDrained(); }, 12000));
+            CHECK(drained(p));
+            Access::closeDspMinute(app);
+        }
     }
 
     // --- 4. THE BUNDLE carries the running total and what was read ----------------------
@@ -509,7 +719,9 @@ int main() {
         const std::size_t audio = srcText.find("    pollAudioHealth();");
         const std::size_t dsp = srcText.find("    pollDspMinute();");
         CHECK(audio != std::string::npos);
-        CHECK(dsp != std::string::npos && dsp > audio && dsp - audio < 200);
+        // The DSP minute FIRST (2026-11-23): both minutes close in one pass, and a cause they share is described once, by the
+        // lines that name it, before the audiolead report keeps the log's tail.
+        CHECK(dsp != std::string::npos && audio != std::string::npos && dsp < audio && audio - dsp < 600);
         // ...and the poll closes a minute when sixty seconds have passed on its own mark.
         const std::size_t poll = srcText.find("void Engine::pollDspMinute()");
         const std::size_t end = poll == std::string::npos ? poll : srcText.find("\n}\n", poll);
@@ -540,9 +752,19 @@ int main() {
         CHECK(closeFn != std::string::npos && closeEnd != std::string::npos);
         if (closeFn != std::string::npos && closeEnd != std::string::npos) {
             const std::string body = srcText.substr(closeFn, closeEnd - closeFn);
-            const std::size_t floor = body.find("if (cascade::core::ringDropWorthAReport(dropped, read))");
+            // (the filing is behind `if (lossMinute)` and NOTHING ELSE: `lossMinute` is the floor test and no event, run of minutes or start-up
+            // grace is in the decision - review of 70d16f00, finding 3)
+            const std::size_t floor = body.find("ringDropWorthAReport(dropped, read)");
             const std::size_t file = body.find("fileIssueReport(cascade::core::health::Recovered::RingDrop)");
-            CHECK(floor != std::string::npos && file != std::string::npos && floor < file);
+            const std::size_t gate = body.find("if (lossMinute)");
+            CHECK(gate != std::string::npos && file != std::string::npos && gate < file);
+            CHECK(body.find("minuteJudged") == std::string::npos);
+            CHECK(body.find("judged") == std::string::npos);
+            CHECK(body.find("LossRun") == std::string::npos);
+            CHECK(floor != std::string::npos && floor < file);
+            // ...and AFTER the line that describes the minute (the order is also proved by section 2's read of the filed report).
+            const std::size_t described = body.find("dsp: ring high water");
+            CHECK(described != std::string::npos && described < file);
         }
         const std::string health = stripComments(
             readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "core" / "health_events.cpp"));

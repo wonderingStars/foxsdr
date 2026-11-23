@@ -213,6 +213,9 @@ struct AppWindowTestAccess {
     // the increment. (Master's pluginRescans_ is the engine's pluginScans_ here: the same
     // count, taken at the same place - the 0.99.104 merge.)
     static void noteRescan(AppWindow& a) { passseam::on(th::engine(a), [&] { ++th::engine(a).pluginScans_; }); }
+    // A plugin WOKEN or stopped (the engine's pluginLifeEvents_, bumped where startPluginInstances / stopPluginEverywhere run): the other
+    // plugin event of the digests' shared mask.
+    static void noteWake(AppWindow& a) { passseam::on(th::engine(a), [&] { ++th::engine(a).pluginLifeEvents_; }); }
     // A stop that stopped something, as stopReceiver counts it (the real stop also
     // joins the pipeline's threads, which this harness never starts), the real
     // stopReceiver for the stop-of-a-stopped-receiver case, and the count itself.
@@ -631,6 +634,25 @@ int main() {
                 const std::string body = src.substr(stopFn, stopEnd - stopFn);
                 CHECK(body.find("if (running) { ++rx().receiverStops_; }") != std::string::npos);
             }
+
+        // --- 9c2. NO NEW EXCUSES (review of 70d16f00, findings 3 and 8; deliberate decision of the review) ------------------------------------------
+        // The first version of this branch discounted three more events (a source switch, a live rate change, a plugin wake or stop) and skipped
+        // the minute that held one unless it was the third loss minute in a row. That hid real starvation, so it is gone: the audio digest judges
+        // exactly as it did at a5607a87 - a rescan minute is skipped, receiver stops and output opens are discounted one callback each, and
+        // nothing else. A plugin WAKE (the engine's own counter, as the rescan is bumped above) is therefore no excuse: five starved callbacks in
+        // a minute that held one raise the lead at once. Break-it: put the event discount back and the first CHECK below is RED.
+        {
+            Access::closeMinute(app);                                 // a clean minute
+            const int leadBefore = Access::leadNow(app);
+            const int raisedBefore = logLinesWith("audio: buffer raised to");
+            Access::noteWake(app);
+            starve(out, 5);
+            Access::closeMinute(app);
+            CHECK(Access::leadNow(app) > leadBefore);                 // judged, whatever else the minute held
+            CHECK(logLinesWith("audio: buffer raised to") == raisedBefore + 1);
+            CHECK(logLinesWith("deliberate events") == 0);            // and no sentence about an excused minute exists any more
+            Access::closeMinute(app);
+        }
         }
     }
 
@@ -893,6 +915,11 @@ int main() {
         const std::size_t minute = body.find("now - rx().lastAudioLogSec_ >= 60.0");
         const std::size_t close = body.find("closeAudioMinute(", minute);
         CHECK(minute != std::string::npos && close != std::string::npos);
+        // THE MINUTE STARTS WITH THE STREAM (2026-11-23): the poll takes the marks and starts its first minute only once the DSP thread has
+        // drained and the grace has passed (the behaviour is pinned through the DSP minute, which asks the same Engine::digestClockStarted).
+        const std::size_t gate = body.find("digestClockStarted(now)");
+        CHECK(gate != std::string::npos && gate < minute);
+        CHECK(body.find("audioMinuteArmed_ = true") != std::string::npos);
         // ...inside that block, before the next statement of the poll (the 1 Hz probe).
         CHECK(minute != std::string::npos && close < body.find("now - rx().lastAudioProbeSec_ < 1.0"));
         // The card and the rail both ask for the sentence.

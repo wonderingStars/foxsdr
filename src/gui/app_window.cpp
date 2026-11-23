@@ -57,6 +57,7 @@
 #include "gui/page_resize_id.hpp"
 #include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
+#include "core/machine_state.hpp"
 #include "source/sdrplay_service.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
@@ -1677,6 +1678,15 @@ int AppWindow::run(int frames) {
         }
         const cascade::gui::DisplayPause::Edge displayEdge =
             displayPause.update(cascade::gui::frame::displayPower(), glfwGetTime());
+        // WHAT THE MACHINE LINE SAYS ABOUT THE DISPLAY (core/machine_state.hpp, 2026-11-23): one relaxed store a frame, so a starved-thread report
+        // can say the screen was off. Unknown stays unknown.
+        {
+            const cascade::gui::DisplayPower dp = cascade::gui::frame::displayPower();
+            cascade::core::noteDisplayState(dp == cascade::gui::DisplayPower::On    ? 0
+                                            : dp == cascade::gui::DisplayPower::Off ? 1
+                                            : dp == cascade::gui::DisplayPower::Dim ? 2
+                                                                                    : -1);
+        }
         if (displayEdge == cascade::gui::DisplayPause::Edge::Paused) {
             cascade::core::diagLogf(
                 "display: off - Windows says this session's display is off; drawing paused, the "

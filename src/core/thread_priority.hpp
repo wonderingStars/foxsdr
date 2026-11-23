@@ -32,6 +32,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 namespace cascade::core {
@@ -49,6 +50,10 @@ public:
     const std::string& outcome() const { return outcome_; }
     // True when the thread was actually raised (anything but "none: ...").
     bool raised() const { return kind_ != Kind::None; }
+    // WHY THE MULTIMEDIA CLASS SCHEDULER REGISTRATION DID NOT HAPPEN, as a fixed phrase with the Windows error NUMBER ("MMCSS refused (error
+    // 1552)", "no MMCSS (avrt.dll unavailable)"), or empty when it succeeded or does not apply (not Windows). The outcome() of a thread that fell
+    // back to above-normal does not say it, so a failed registration was silent; the callers log it as one warning line (2026-11-23).
+    const std::string& mmcssFailure() const { return mmcssFailure_; }
 
     // TEST SEAM. True makes the next scopes skip the Multimedia Class Scheduler,
     // so the fallback ("above-normal") can be exercised on a machine where MMCSS
@@ -71,6 +76,7 @@ private:
     enum class Kind { None, Mmcss, AboveNormal, RoundRobin };
     Kind kind_ = Kind::None;
     std::string outcome_;
+    std::string mmcssFailure_;
     // What to put back. Windows: the MMCSS task handle, or the thread priority
     // the thread had. Linux: the scheduling policy and priority it had. Kept as
     // plain integers so no system header is needed here.
@@ -78,5 +84,11 @@ private:
     int previousA_ = 0;
     int previousB_ = 0;
 };
+
+// THE CALLING THREAD'S OWN PROCESSOR TIME (kernel plus user), in nanoseconds since the thread began; false in `*ok` where the platform
+// cannot say (then 0 is returned). Windows: GetThreadTimes. Linux and Android: CLOCK_THREAD_CPUTIME_ID. Used by the DSP thread's minute
+// accounting (Pipeline::dspCpuNs, 2026-11-23): busy wall time against CPU time is what separates "the chain is too heavy for this machine"
+// from "the thread was not scheduled". No allocation, no lock.
+std::uint64_t currentThreadCpuNs(bool* ok);
 
 }  // namespace cascade::core

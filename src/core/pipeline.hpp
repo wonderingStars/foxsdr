@@ -324,6 +324,79 @@ public:
     std::size_t takeRingHighWaterSamples();
     std::uint64_t dspBlockLongestNs() const;
     std::uint64_t takeDspBlockLongestNs();
+    // THE FIRST TIME THE DSP THREAD READ THE RING (2026-11-23): the engine starts its digest minutes from here (with a grace), not from its
+    // own construction - the first minute used to hold the plugin scan, the saved radio's open and the window's creation, which the stream
+    // never saw. processMsAtFirstDrain() is how long the program had been running then, in milliseconds from its static initialisation
+    // (the loader's own time before that is not counted); 0 until the thread has drained once. Sticky: a later stop and start do not clear it.
+    bool dspHasDrained() const { return firstDrainProcessMs_.load(std::memory_order_acquire) != 0; }
+    std::uint64_t processMsAtFirstDrain() const { return firstDrainProcessMs_.load(std::memory_order_acquire); }
+    // WHAT THE DSP THREAD DID WITH THE MINUTE (2026-11-23, the ringdrop and audiolead probe; docs/DIAGNOSTICS.md "The DSP minute"). A block is
+    // 1024 samples: 128 microseconds of an 8 MS/s stream, so "the longest block was 1 ms" says nothing about whether the thread kept up - the SUM
+    // does. Cumulative and never reset (measured by difference, like the drop count), except the two maxima, which are windows: take*() returns
+    // the mark and starts a new one. Plain integers and relaxed atomics written by the thread that owns them: nothing here allocates or locks.
+    //   dspBusyNs          wall time inside blocks (the noteDspBlock span: it includes a wait on audioMutex_, every plugin call, the audio write)
+    //   dspCpuNs           the DSP thread's OWN processor time, sampled every 256 blocks and at the thread's end; dspCpuKnown() is false where the
+    //                      platform cannot say. Busy near a minute with CPU far below it means the thread was descheduled or waited on a lock.
+    //   dspBlocks          blocks done
+    //   takeDspGapLongest  the longest time between two successive ring reads, and the phase word (the heartbeat's: ring, spectrum, audio-lock,
+    //                      taps, plugin-iq, patch, demod, plugin-audio, host-audio, plugin-chain, sink) the thread spent the most of that gap in. "ring" is the
+    //                      idle sleep: on a Windows process that has not asked for a finer timer it is up to 15.6 ms and says nothing is wrong.
+    //   takeSrcGapLongestNs  the source thread's longest time between two ring writes
+    //   genResyncs / genSkippedNs  the free-running generator's "resync after a long stall" events (it fell more than 250 ms behind its own
+    //                      pacing) and the total time they skipped
+    std::uint64_t dspBusyNs() const { return dspBusyNs_.load(std::memory_order_relaxed); }
+    std::uint64_t dspCpuNs() const { return dspCpuNs_.load(std::memory_order_relaxed); }
+    bool dspCpuKnown() const { return dspCpuKnown_.load(std::memory_order_relaxed); }
+    std::uint64_t dspBlocks() const { return dspBlocks_.load(std::memory_order_relaxed); }
+    std::uint64_t takeDspGapLongest(const char** phase);
+    std::uint64_t takeSrcGapLongestNs() { return srcGapLongestNs_.exchange(0, std::memory_order_relaxed); }
+    std::uint64_t genResyncs() const { return genResyncs_.load(std::memory_order_relaxed); }
+    std::uint64_t genSkippedNs() const { return genSkippedNs_.load(std::memory_order_relaxed); }
+    // TEST SEAM (never set by the application): the DSP thread sleeps this long after every block, which makes a loss minute on demand. Process-wide.
+    static void setDspBlockDelayForTest(int ms);
+    // TEST SEAM (never set by the application): inside every block's own span the DSP thread BURNS processor for burnMs (a busy loop) and
+    // then SLEEPS for sleepMs, so the minute's cpu_ms and busy_ms can be proved against a known load. Process-wide; (0, 0) is off.
+    static void setDspBlockLoadForTest(int burnMs, int sleepMs);
+    // TEST SEAM (never set by the application): the DSP thread sleeps this long right after the "host-audio" beat of every block, which makes a
+    // long gap in the host's own audio chain on demand. Process-wide.
+    static void setDspHostAudioDelayForTest(int ms);
+    // TEST SEAMS for the floating-point control word: while on, the DSP thread stores the MXCSR it sees after each block (x86 only; 0 elsewhere),
+    // which is how a test proves flush-to-zero and denormals-are-zero are set ON THAT THREAD; currentMxcsrForTest() reads the CALLING thread's.
+    static void probeDspMxcsrForTest(bool on);
+    static std::uint32_t dspMxcsrSeenForTest();
+    static std::uint32_t currentMxcsrForTest();
+    // SAMPLES DISCARDED WHILE THE DSP THREAD WAS DELIBERATELY ABSENT (2026-11-23, the ringdrop diagnosis): a live sample-rate change
+    // joins the DSP thread and respawns it while the source thread keeps writing ("a full ring drops overflow by design"), and
+    // every DSP (re)spawn has a start delay with the source already running. What the ring could not hold in those windows is
+    // counted HERE and not in ringDroppedSamples(): it is the application pausing its own consumer, not a consumer that fell
+    // behind. THE WINDOW IS BOUNDED (2026-11-23, review of 70d16f00): at most kDspAbsentMaxMs after the absence began; a write cut after
+    // that is an ordinary drop again, even if the DSP thread has still not read - a thread that never arrives is a ringdrop, exactly as
+    // before. The engine says every absent discard in the log the moment the episode ends (dspAbsentActive() false). Never reset.
+    std::uint64_t ringDroppedAbsent() const { return ringDroppedAbsent_.load(std::memory_order_relaxed); }
+    static constexpr int kDspAbsentMaxMs = 2000;
+    // True while an absence began less than kDspAbsentMaxMs ago and the DSP thread has not yet read the ring (the episode is still running).
+    bool dspAbsentActive() const;
+    // What began the latest absence: "start", "rate-change" or "source-switch" ("none" before any). It stays after the absence ends.
+    const char* dspAbsentCauseWord() const;
+    // How long ago the receiver was last started, in milliseconds, or 0 when it never was. The engine arms its digest minutes at the first
+    // drain or ten seconds after this, whichever comes first, so they always arm. TEST SEAMS: setStartedAgoForTest says the start was `ms` ago;
+    // resetFirstDrainForTest forgets that the DSP thread ever drained (a pipeline whose DSP thread has not arrived, for the digest clock).
+    std::uint64_t msSinceStart() const;
+    void setStartedAgoForTest(int ms);
+    void resetFirstDrainForTest() { firstDrainProcessMs_.store(0, std::memory_order_release); }
+    // The pipeline's own two deliberate quiesces, counted where it performs them (a source switch: setSource; a live sample-rate
+    // change: setInputRateHz, accepted changes only). The engine's digests read them for the minute's event mask
+    // (core/minute_events.hpp). Never reset.
+    std::uint64_t sourceSwitches() const { return sourceSwitches_.load(std::memory_order_relaxed); }
+    std::uint64_t rateChanges() const { return rateChanges_.load(std::memory_order_relaxed); }
+    // TEST SEAM (never set by the application): every DSP thread start waits this long before its first ring read, with the thread
+    // counted as absent - so the window "the source is writing and the DSP thread is not there yet" can be made on demand. Process-wide.
+    static void setDspStartDelayForTest(int ms);
+    // The DSP thread sets flush-to-zero and denormals-are-zero on ITSELF when it starts (x86 only; the control register is per thread, so no
+    // other thread is touched). It is ON because tests/test_dsp_denormal_cost.cpp measured a block of denormal-valued samples at 5.7 times the
+    // time without it. TEST SEAM: false makes the next DSP threads leave the register alone, which is how that test measures the cost.
+    // Process-wide; never set by the application.
+    static void setDspFlushDenormalsForTest(bool on);
     // True when a worker thread aborted on an exception — a USB SDR pulled
     // mid-stream being the case that motivated it. Latched until start().
     bool faulted() const;
@@ -1625,6 +1698,32 @@ private:
     std::atomic<std::uint64_t> dspBlockLongestNs_{0};
     void noteRingWrite(std::size_t got, std::size_t put);
     void noteDspBlock(std::chrono::steady_clock::duration took);
+    void publishDspCpu();   // DSP thread only: see dspCpuNs()
+    // See ringDroppedAbsent(). dspAbsent_ is set by the controlling thread BEFORE a deliberate DSP spawn or pause (start, the
+    // ring-resizing setSource, a live setInputRateHz) and cleared by the DSP thread when it begins to read; ringDroppedAbsent_ is
+    // written by the source thread in noteRingWrite. The two switch counts are the controlling thread's.
+    // 2026-11-23 (review of 70d16f00): the steady-clock nanoseconds at which the current absence began, 0 = the DSP thread is present; and what
+    // began it (0 none, 1 start, 2 rate change, 3 source switch). noteRingWrite excuses a cut write only within kDspAbsentMaxMs of it.
+    enum AbsentCause : int { kAbsentNone = 0, kAbsentStart = 1, kAbsentRate = 2, kAbsentSwitch = 3 };
+    void markDspAbsent(AbsentCause why);
+    std::atomic<std::int64_t> dspAbsentSinceNs_{0};
+    std::atomic<int> dspAbsentCause_{0};
+    std::atomic<std::int64_t> startedAtNs_{0};   // see msSinceStart()
+    // The probe's counters (see dspBusyNs): the DSP thread writes the dsp* and the gap mark (packed as (ns << 4) | phase index, so one
+    // compare-exchange keeps the two together); the source thread the src* and gen*.
+    std::atomic<std::uint64_t> dspBusyNs_{0};
+    std::atomic<std::uint64_t> dspCpuNs_{0};
+    std::atomic<bool> dspCpuKnown_{false};
+    std::atomic<std::uint64_t> dspBlocks_{0};
+    std::atomic<std::uint64_t> dspGapLongestPacked_{0};
+    std::atomic<std::uint64_t> srcGapLongestNs_{0};
+    std::atomic<std::int64_t> srcLastWriteNs_{0};   // the previous write's steady-clock ns; 0 = none yet in this generation
+    std::atomic<std::uint64_t> genResyncs_{0};
+    std::atomic<std::uint64_t> genSkippedNs_{0};
+    std::atomic<std::uint64_t> firstDrainProcessMs_{0};   // see dspHasDrained(); written once, by the DSP thread
+    std::atomic<std::uint64_t> ringDroppedAbsent_{0};
+    std::atomic<std::uint64_t> sourceSwitches_{0};
+    std::atomic<std::uint64_t> rateChanges_{0};
 
     std::shared_ptr<std::atomic<bool>> srcStopToken_;
     std::future<void> srcExitFuture_;

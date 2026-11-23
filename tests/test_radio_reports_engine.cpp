@@ -361,7 +361,26 @@ struct AppWindowTestAccess {
     static void setReadMarks(AppWindow& a, std::uint64_t readAtOpen, std::uint64_t minuteMark) {
         passseam::on(th::engine(a), [&] { th::engine(a).radioJournal_[0].readAtOpen = readAtOpen; th::engine(a).rx().dspReadAtMinute_ = minuteMark; });
     }
-    static void minute(AppWindow& a, std::uint64_t read, std::uint64_t dropped) { passseam::on(th::engine(a), [&] { th::engine(a).journalStreamMinute(read, dropped, 100); }); }
+    // The DSP minute's close, as the journal sees it: the figures, the instant the minute's marks began (here: where the radio's own window last
+    // began, which the aging helpers move), and the read counter at the close (here: the receiver's minute mark, which setReadMarks sets; the
+    // pass moves that very mark to the counter before it calls the journal).
+    static void minute(AppWindow& a, std::uint64_t read, std::uint64_t dropped) {
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).journalStreamMinute(read, dropped, 0, 100, th::engine(a).radioJournal_[0].lastMinuteS, th::engine(a).rx().dspReadAtMinute_);
+        });
+    }
+    // THE FIRST WINDOW AFTER AN OPEN (review of 70d16f00, finding 4): the radio was opened `openAgoSec` ago and the minute clock armed only
+    // `lenSec` ago (the marks, and the figures, began there). The window must be `lenSec` long, not the radio's whole age.
+    static void minuteFirstWindow(AppWindow& a, std::uint64_t read, double lenSec, double openAgoSec) {
+        passseam::on(th::engine(a), [&] {
+            const double now = th::engine(a).clockS();
+            th::engine(a).radioJournal_[0].openedAtS = now - openAgoSec;
+            th::engine(a).radioJournal_[0].lastMinuteS = now - openAgoSec;
+            th::engine(a).radioJournal_[0].accSec = 0.0;
+            th::engine(a).radioJournal_[0].accRead = 0;
+            th::engine(a).journalStreamMinute(read, 0, 0, 100, now - lenSec, ~0ull);
+        });
+    }
 };
 
 }  // namespace cascade::gui
@@ -1225,6 +1244,38 @@ static __declspec(noinline) void phantomFoundTest() {
     CHECK(other == 1);   // a radio only SoapySDR lists is still said
 }
 
+// THE FIRST STREAM WINDOW OF A RADIO HAS ONE ORIGIN FOR ITS FIGURES AND ITS LENGTH (review of 70d16f00, finding 4). The digest minute now begins at the
+// first drain, not at the radio's open, so the minute's read count covers 60 s while the radio is older than that; the window used to be measured from the
+// open and understated the rate (75 s for 60 s of samples = 80%). A radio opened 75 s ago whose minute began 60 s ago, at a known 2.4 MS/s, says 2.4 MS/s.
+// Break-it: measure the window from the open again (journalStreamMinute's `origin`) and samplesPerSec comes out 1.92 MS/s.
+#if defined(_MSC_VER)
+__declspec(noinline)
+#endif
+static void firstWindowRateTest() {
+    std::printf("  the first stream window after an open is measured from the minute's own start\n");
+    resetFake();
+    th::TestWindow app;
+    Rig rig("firstwindow");
+    rig.start();
+    Access::scanBoth(app);
+    Access::restore(app, savedRadio());
+    CHECK(Access::deviceOpen(app));
+    Access::pass(app);
+    Access::setRunningSec(app, 60.0);
+    Access::minuteFirstWindow(app, 144000000ull, 60.0, 75.0);   // 60 s of samples at 2.4 MS/s
+    Access::selectGenerator(app);
+    Access::pass(app);
+    const std::vector<json> streams = ofKind(queued(rig.qdir()), "radio_stream");
+    CHECK(streams.size() == 1);
+    if (!streams.empty()) {
+        const long long perSec = streams[0]["body"]["samplesPerSec"].get<long long>();
+        const long long window = streams[0]["body"]["windowSec"].get<long long>();
+        std::printf("    first window: %lld samples a second over %lld s\n", perSec, window);
+        CHECK(window >= 60 && window <= 62);
+        CHECK(perSec >= 2352000LL && perSec <= 2448000LL);   // within 2% of the known 2.4 MS/s
+    }
+}
+
 // (its own function: main() is at the stack limit, see the 0.99.112 review fixes)
 #if defined(_MSC_VER)
 __declspec(noinline)
@@ -1624,6 +1675,7 @@ int main(int argc, char** argv) {
     phantomFoundTest();
     journalMinuteRulesTest();
     runningSecondsResetAtBothOpensTest();
+    firstWindowRateTest();
 
     // --- THE JOURNAL OF A RADIO THAT OPENS: found, open, settings, stream, close ---------------------------------------------------------------------
     journalOfAnOpenedRadioTest(everything);

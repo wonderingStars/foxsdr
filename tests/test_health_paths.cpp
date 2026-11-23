@@ -1138,6 +1138,13 @@ void testARecordingThatCannotBeStartedIsCounted() {
 int main(int argc, char** argv) {
     if (argc > 1) { g_abiFixture = argv[1]; }
     if (argc > 2) { g_declineFixture = argv[2]; }
+    // RUN BARE, THIS PROGRAM USED TO CRASH (0xC0000005, a std::filesystem::path made from a null fixture path): it needs the two fixture plugins
+    // ctest hands it (tests/CMakeLists.txt). Say so and fail, instead of an access violation that reads like a fault in the product.
+    if (g_abiFixture == nullptr || g_declineFixture == nullptr) {
+        std::fprintf(stderr, "usage: test_health_paths <abi-mismatch-fixture-plugin> <declining-fixture-plugin>\n"
+                             "  (run it through ctest: ctest -R test_health_paths)\n");
+        return 2;
+    }
     testNothingOnTheHotPathsCounts();
     testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread();
     testASlowFrameIsCountedByTheProcessTimerOnly();

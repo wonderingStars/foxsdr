@@ -2107,7 +2107,7 @@ private:
         double openedAtS = 0.0;
         std::uint64_t readAtOpen = 0;
         // the minute's figures, summed until the stream event's window has passed
-        std::uint64_t accRead = 0, accDropped = 0;
+        std::uint64_t accRead = 0, accDropped = 0, accAbsent = 0;
         double accSec = 0.0, lastMinuteS = 0.0;
         std::size_t accHigh = 0;
     };
@@ -2139,7 +2139,10 @@ private:
     void journalSettingsAtOpen(const std::string& kind, const std::string& args);
     void journalOpenSuperseded(const std::string& kind, const std::string& args, cascade::core::radioreport::Trigger trigger, double requestRateHz, long long openMs);
     void journalCloseEvent(const RadioJournalSlot& j, const char* cause, double now);   // one radio_close for the radio a slot held
-    void journalStreamMinute(std::uint64_t samplesRead, std::uint64_t samplesDropped, std::size_t ringHighWaterSamples);
+    // The window is the minute's own: `beganS` is where the figures' marks began and `readNow` the source's read count at the close, so the
+    // window's length and its figures share one origin (a radio opened inside the minute counts from its open).
+    void journalStreamMinute(std::uint64_t samplesRead, std::uint64_t samplesDropped, std::uint64_t samplesAbsent, std::size_t ringHighWaterSamples,
+                             double beganS, std::uint64_t readNow);
     void journalRecovery(const std::string& kind, const std::string& args, const char* phase, const std::string& what, const std::string& reason, long long ms);
     cascade::core::TelemetryReport telemetrySnapshot();
     bool telemetryCleanExit_ = false;   // true only on the normal shutdown path
@@ -4083,6 +4086,21 @@ private:
     // strings, a refusal, the file's size) can only have changed across one, so it is hashed into the list
     // fingerprint as one value (API 0.3 8.8).
     std::uint64_t pluginScans_ = 0;
+    // How many times a plugin was WOKEN or STOPPED (the decoders' create() runs with the runner's lock held, so a slow wake stalls the DSP
+    // thread's next call into it for as long as it takes). With pluginScans_ it is the plugin kind of the DSP minute's NAMED events
+    // (core/minute_events.hpp: context in a log line, never a reason not to file). The pass thread's, like pluginScans_.
+    std::uint64_t pluginLifeEvents_ = 0;
+    // The monotonic event counts the DSP minute names its events from (minuteEventsSince), for the slot being worked on.
+    cascade::core::MinuteEventCounts minuteEventCounts();
+    // THE DIGESTS' CLOCK (2026-11-23, review of 70d16f00): true from the moment the DSP thread has read the ring, or kDigestStartTimeoutS
+    // after the receiver was started if it has not by then - so the digests ALWAYS arm, and a thread that never arrives is judged like any
+    // other loss. The first judged minute is the full minute after arming (no grace that excuses anything). Says once, in the log, which of
+    // the two armed it. Both digests' polls ask it.
+    static constexpr double kDigestStartTimeoutS = 10.0;
+    bool digestClockStarted(double now);
+    // EVERY SAMPLE DISCARDED WHILE THE DSP THREAD WAS ABSENT IS SAID (before or after the digests arm): one line per episode, with its count and
+    // the event that began it, written the moment the pipeline says the episode is over.
+    void reportAbsentDiscards();
     // FOXAPI_OP_SCAN_SERIAL_PORTS (API 0.3): the ports the last scan found.
     std::vector<std::string> serialPorts_;
     std::uint64_t serialPortsScans_ = 0;
