@@ -923,24 +923,11 @@ private:
     // name the same plugins the same way.
     static std::string muteNameList(const std::vector<std::string>& names);
     std::string muteSubjectText() const;
-    // Opens or closes the transmit radio. THE CONNECT IS NOT ON THE CONTROL THREAD (freeze diagnosis P2): opening a Pluto is a TCP connect bounded
-    // by iiod::kConnectWait per address plus the daemon's version and description replies, and repeated Open presses used to run back to back on the
-    // pass past its watchdog. openTransmitRadio() starts the existing PlutoTx::open on a worker and returns; pollTransmitOpen() (the pass) publishes
-    // the answer exactly as the synchronous code did (finishTransmitOpen). One open at a time: TX_OPEN while one is pending is refused as busy.
+    // Opens or closes the transmit radio. Bounded, and on the GUI thread -
+    // opening a Pluto is a TCP connect with iiod::kConnectWait on it, not a
+    // USB enumeration, so it is fast enough not to need a worker.
     void openTransmitRadio();
     void closeTransmitRadio();
-    struct TransmitOpenResult {
-        std::unique_ptr<cascade::source::IqSink> sink;   // opened and quiet, or null
-        std::string error;                               // the sink's own lastError() when it is null
-    };
-    void pollTransmitOpen();
-    void finishTransmitOpen(TransmitOpenResult r, const std::string& args);
-    // Drops a pending open: its answer will not be applied and its worker is handed to a detached reaper (never waited for). Close, exit.
-    void abandonTransmitOpen();
-    std::future<TransmitOpenResult> txOpenFuture_;
-    bool txOpenPending_ = false;
-    std::string txOpenArgs_;                              // the address the pending open was asked for
-    std::shared_ptr<std::atomic<bool>> txOpenAbandon_;    // raised when the answer is no longer wanted
     // Pushes the receiver's centre into the transmitter when SPLIT is off,
     // and nothing when it is on. Called once a frame.
     void followTransmitFrequency();
@@ -2469,8 +2456,6 @@ private:
     // product.
     std::string testFault_;
     std::unique_ptr<cascade::source::IqSink> (*txSinkForTest_)() = nullptr;
-    // TESTS ONLY: stands in for "make a PlutoTx and open it" on the open worker (a fake connect). Null in the product. Returns the sink, or null with the reason in `err`.
-    std::unique_ptr<cascade::source::IqSink> (*txOpenForTest_)(const std::string& args, std::string& err) = nullptr;
     // TESTS ONLY (test.rds, test.autoNotch, test.pilot; API 0.3 8.4): stand-ins
     // for what the DSP thread measures, which a hermetic engine on the signal
     // generator cannot produce - the RDS decoder's snapshot, the auto-notch's
