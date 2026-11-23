@@ -38,6 +38,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -259,7 +260,9 @@ public:
     // opened). A radio whose streaming pipe exists only in a non-default
     // setting (the Airspy HF+: libairspyhf selects setting 1 of interface 0 at
     // open) must have it selected BEFORE it is programmed. NOT PURE: the default
-    // refuses (false, empty lastError()).
+    // refuses (false, empty lastError(): "this transport cannot say"). THE usbfs
+    // (LINUX) IMPLEMENTATION OF THIS HAS NEVER BEEN COMPILED OR RUN: it was written
+    // on a Windows-only tree.
     virtual bool selectAlternateSetting(std::uint8_t interfaceIndex, std::uint8_t setting) {
         (void)interfaceIndex;
         (void)setting;
@@ -269,7 +272,11 @@ public:
     // If the current setting does not carry `endpoint` as a bulk or interrupt IN
     // pipe but another does, selects that one. True when a streamable setting is
     // in place afterwards; false (nothing changed) for an absent or
-    // isochronous-only endpoint, and for a transport that cannot look.
+    // isochronous-only endpoint, and for a transport that cannot look. The WinUSB
+    // transport sets its own lastError() on EVERY false answer (the layout
+    // sentence, starting with kLayoutErrorPrefix, when the radio's layout is
+    // the reason); the default here and usbfs say nothing (empty lastError()),
+    // and usbfs has never been compiled or run (see selectAlternateSetting).
     virtual bool ensureStreamingSetting(std::uint8_t endpoint) {
         (void)endpoint;
         return false;
@@ -366,6 +373,14 @@ public:
 
     virtual const std::string& path() const = 0;
     virtual const std::string& lastError() const = 0;
+
+    // Whether this device object has already filed its "altmoved" note, and marks it filed: the answer is false exactly once. A device object lives from one
+    // open of a radio to its close, so "altmoved" is filed once per radio OPEN, not once per process (review of 98aa57e2, finding E): with several
+    // radios open the second one's move is reported too, and a radio re-opened after an unplug reports its own.
+    bool takeAltMovedFiled() { return altMovedFiled_.exchange(true); }
+
+private:
+    std::atomic<bool> altMovedFiled_{false};
 };
 
 // Opens a WinUSB device by the path enumerateWinUsb() gave. Null with

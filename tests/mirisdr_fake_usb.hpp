@@ -139,8 +139,15 @@ public:
     // The device's own descriptors, as the driver asks for them at open: the
     // setting carrying bulk IN 0x81 is selected when it is required and not current.
     int ensureCalls() const { return ensureCalls_.load(); }
+    // The transport cannot stream the radio (review of 98aa57e2, finding B): ensureStreamingSetting answers false with this lastError().
+    std::string ensureError;
     bool ensureStreamingSetting(std::uint8_t) override {
         ensureCalls_.fetch_add(1);
+        if (!ensureError.empty()) {
+            std::lock_guard<std::mutex> lk(mutex_);
+            lastError_ = ensureError;
+            return false;
+        }
         if (streamAltRequired >= 0 && currentAlt() != streamAltRequired) {
             std::lock_guard<std::mutex> lk(mutex_);
             altCalls_.emplace_back(0, streamAltRequired);

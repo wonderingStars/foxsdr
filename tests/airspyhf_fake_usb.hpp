@@ -178,10 +178,20 @@ public:
     // models the cause the review of 5f085271 and libairspyhf's open sequence
     // point to, and the bench probe (tests/probe_winusb_rawio.cpp) settles it.
     int streamAltRequired = -1;
+    // A select the radio refuses (review of 98aa57e2, finding H): the call is recorded, the setting stays, and lastError() carries the Windows error.
+    bool selectFails = false;
+    std::string selectError = "WinUsb_SetCurrentAlternateSetting failed (Windows error 31)";
+    // What the open log line shows: the fake's endpoint layout, after the select has run (finding G).
+    std::string layoutText = "interface 0 alt 0: no endpoints; interface 0 alt 1: 0x81 bulk packet 512";
+    std::string endpointLayout() override { return layoutText; }
     bool selectAlternateSetting(std::uint8_t interfaceIndex, std::uint8_t setting) override {
         std::lock_guard<std::mutex> lk(mutex_);
         altCalls_.emplace_back(interfaceIndex, setting);
         if (altCalls_.size() == 1) { controlsAtFirstAlt_ = controls_.size(); }
+        if (selectFails) {
+            lastError_ = selectError;
+            return false;
+        }
         currentAlt_ = setting;
         return true;
     }

@@ -397,6 +397,19 @@ public:
         }
         rawIo_ = true;
         streamNote_.clear();
+        // THE PIPE'S TYPE IS READ FIRST, from the descriptors WinUSB already holds (nothing goes on the bus), BEFORE any pipe policy or read names it
+        // (review of 98aa57e2, finding B). An endpoint that exists only as ISOCHRONOUS (or only as an OUT pipe) cannot be streamed here whatever the
+        // pipe policy answers: Microsoft documents a policy set on a pipe type it does not apply to as having "no effect", not as failing, so waiting for
+        // RAW_IO to be refused could let the first read fail instead and be told as "stopped answering ... unplug it". A device whose table cannot be read,
+        // or whose table does not list the endpoint, goes on exactly as before: the refusal path below says what is wrong.
+        {
+            const std::vector<PipeFact> facts = walkLayout();
+            const PipeFact* hit = chooseCandidate(facts, endpoint);
+            if (hit != nullptr && !isStreamable(*hit, endpoint)) {
+                setError(std::string(kLayoutErrorPrefix) + notStreamableText(endpoint, *hit, 0) + layoutText(facts));
+                return false;
+            }
+        }
         UCHAR raw = TRUE;
         if (api_->setPipePolicy(streamHandle_, endpoint, RAW_IO, sizeof(raw), &raw) == FALSE) {
             if (!recoverStreamPipe(endpoint, ::GetLastError())) { return false; }
@@ -497,17 +510,41 @@ public:
 
     // If no setting of any interface currently carries `endpoint` as a bulk or
     // interrupt IN pipe but another setting does, select that one. True when a
-    // streamable setting is in place afterwards. Isochronous-only or absent
-    // endpoints return false and change nothing: start-up says why in words.
+    // streamable setting is in place afterwards. EVERY false answer sets its
+    // own lastError() (review of 98aa57e2, finding C): the layout sentence for
+    // an endpoint that is absent, isochronous or an OUT pipe (starts with
+    // kLayoutErrorPrefix: a fact about the radio), "could not be read" when
+    // the transport cannot look, and the Windows error of the select call that
+    // actually failed, read where it failed.
     bool ensureStreamingSetting(std::uint8_t endpoint) override {
         const std::vector<PipeFact> facts = walkLayout();
+        if (facts.empty()) {
+            setError("this radio's USB layout could not be read, so its streaming alternate setting was not checked");
+            return false;
+        }
         const PipeFact* hit = chooseCandidate(facts, endpoint);
-        if (hit == nullptr || !isStreamable(*hit, endpoint)) { return false; }
+        if (hit == nullptr) {
+            char head[160];
+            std::snprintf(head, sizeof(head), "endpoint 0x%02X does not exist on this radio; ", static_cast<unsigned>(endpoint));
+            setError(std::string(kLayoutErrorPrefix) + head + layoutText(facts));
+            return false;
+        }
+        if (!isStreamable(*hit, endpoint)) {
+            setError(std::string(kLayoutErrorPrefix) + notStreamableText(endpoint, *hit, 0) + layoutText(facts));
+            return false;
+        }
         if (hit->current) { return true; }
         const WINUSB_INTERFACE_HANDLE h = handleOf(hit->iface);
-        if (h == nullptr || api_->setCurrentAlternateSetting == nullptr ||
-            api_->setCurrentAlternateSetting(h, hit->alt) == FALSE) {
-            setError(lastErrorText("WinUsb_SetCurrentAlternateSetting", ::GetLastError()));
+        if (h == nullptr) {
+            setError("this radio has no such USB interface to select an alternate setting on");
+            return false;
+        }
+        if (api_->setCurrentAlternateSetting == nullptr) {
+            setError("selecting an alternate setting is not available on this transport");
+            return false;
+        }
+        if (api_->setCurrentAlternateSetting(h, hit->alt) == FALSE) {
+            setError(lastErrorText("WinUsb_SetCurrentAlternateSetting", ::GetLastError()));   // read at the call that failed, not later
             return false;
         }
         if (hit->iface != 0) {
@@ -998,8 +1035,29 @@ private:
     }
 
     // Windows' words for a device that left the bus or failed outright; a
-    // failure with one of these is not a fact about the layout.
-    static bool isGoneCode(DWORD e) { return e == 1167 || e == 433 || e == 22 || e == 31; }
+    // failure with one of these is not a fact about the layout. NOT 31 (ERROR_GEN_FAILURE): a device that refuses SET_INTERFACE by stalling is most
+    // likely reported as 31, and that firmware refusal is a fact about the layout ("only in alternate setting N, which could not be selected"), not a
+    // radio that left the bus (review of 98aa57e2, finding F; the first review had asked for 31, which this takes back).
+    static bool isGoneCode(DWORD e) { return e == 1167 || e == 433 || e == 22; }
+
+    // What is wrong with a pipe that exists but cannot be streamed, in words that say so: "the radio's Windows driver setting" is the setting the user can
+    // change (Zadig / the driver chosen for the radio). `err` is the Windows error of a refused call, 0 when nothing was called yet.
+    static std::string notStreamableText(UCHAR endpoint, const PipeFact& hit, DWORD err) {
+        char head[240];
+        char errText[40] = "";
+        if (err != 0) { std::snprintf(errText, sizeof(errText), " (Windows error %lu)", static_cast<unsigned long>(err)); }
+        if (hit.type == 1) {
+            std::snprintf(head, sizeof(head),
+                          "endpoint 0x%02X is isochronous: this radio's Windows driver setting offers only an isochronous stream, which FoxSDR cannot read%s; ",
+                          static_cast<unsigned>(endpoint), errText);
+        } else {
+            const bool in = (endpoint & 0x80) != 0;
+            std::snprintf(head, sizeof(head),
+                          "endpoint 0x%02X is %s%s and cannot be read as a bulk or interrupt stream%s; ",
+                          static_cast<unsigned>(endpoint), in ? "" : "an OUT endpoint, ", pipeTypeName(hit.type), errText);
+        }
+        return std::string(head);
+    }
 
     static const char* pipeTypeName(int t) {
         switch (t) {
@@ -1064,6 +1122,7 @@ private:
                 }
                 for (UCHAR p = 0; p < d.bNumEndpoints; ++p) {
                     WINUSB_PIPE_INFORMATION pi{};
+                    // WinUsb_QueryPipe's PipeIndex is a zero-based pipe index (Microsoft); its AlternateInterfaceNumber is documented only as "the alternate interface", and `idx` (an index, like WinUsb_QueryInterfaceSettings takes) is what is passed: UNVERIFIED whether WinUSB means an index or a bAlternateSetting here (review finding D).
                     if (api_->queryPipe(h, idx, p, &pi) == FALSE) { continue; }
                     PipeFact f;
                     f.iface = iface;
@@ -1132,14 +1191,8 @@ private:
                 setError(std::string(kLayoutErrorPrefix) + head + layout);
                 return false;
             }
-            const bool in = (endpoint & 0x80) != 0;
             if (!isStreamable(*hit, endpoint)) {
-                std::snprintf(head, sizeof(head),
-                              "endpoint 0x%02X is %s%s and cannot be read as a bulk or "
-                              "interrupt stream (Windows error %lu); ",
-                              static_cast<unsigned>(endpoint), in ? "" : "an OUT endpoint, ",
-                              pipeTypeName(hit->type), static_cast<unsigned long>(err));
-                setError(std::string(kLayoutErrorPrefix) + head + layout);
+                setError(std::string(kLayoutErrorPrefix) + notStreamableText(endpoint, *hit, err) + layout);
                 return false;
             }
             // The endpoint exists and is a bulk/interrupt IN pipe, but not

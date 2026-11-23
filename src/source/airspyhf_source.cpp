@@ -726,7 +726,6 @@ bool AirspyHfSource::open(const std::string& args) {
     dev_ = std::move(dev);
     link_->dev = dev_.get();
     clearError();
-    logUsbLayout(*dev_, "airspyhf");
     // THE STREAMING ALTERNATE SETTING, FIRST. libairspyhf does libusb_set_configuration(1),
     // libusb_claim_interface(0) and libusb_set_interface_alt_setting(0, 1) before any vendor
     // request (https://raw.githubusercontent.com/airspy/airspyhf/master/libairspyhf/src/airspyhf.c
@@ -735,11 +734,17 @@ bool AirspyHfSource::open(const std::string& args) {
     // all, which is why the first call naming it failed with Windows error 87 in the
     // field. A refusal is a warning, not a failed open: the transport's own recovery
     // at the first start looks for the setting that carries the pipe.
-    if (!dev_->selectAlternateSetting(0, airspyhf::kStreamingAlternateSetting)) {
+    // The layout line comes AFTER the select, so a field report shows the layout that was actually used (review of 98aa57e2, finding G), and a select
+    // that worked says so in one line; one that did not is one warning with the Windows error (finding H: the open still goes on, start retries it).
+    if (dev_->selectAlternateSetting(0, airspyhf::kStreamingAlternateSetting)) {
+        core::diagLogf("airspyhf: alternate setting %u of interface 0 is now current",
+                       static_cast<unsigned>(airspyhf::kStreamingAlternateSetting));
+    } else {
         core::diagWarnf("airspyhf: could not select alternate setting %u of interface 0: %s",
                         static_cast<unsigned>(airspyhf::kStreamingAlternateSetting),
                         dev_->lastError().c_str());
     }
+    logUsbLayout(*dev_, "airspyhf");
 
     const auto giveUp = [this]() {
         dev_.reset();

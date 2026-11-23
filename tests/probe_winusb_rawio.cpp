@@ -13,6 +13,10 @@
 // control transfer and queues no read. Close FoxSDR and any other SDR program
 // first: the handle is exclusive.
 //
+// RUN ON 2026-11-23, against an RTL-SDR on this bench (the review of 98aa57e2 marked it "not run"). It printed: SetPipePolicy(RAW_IO) on pipe 0x81
+// succeeded; on pipe 0x82 and on pipe 0x05 it failed with Windows error 87. So WinUSB answers error 87 to RAW_IO on a pipe id the interface does not
+// carry, which is the inference the HF+ fix rests on (settled for an RTL-SDR; not run against an HF+).
+//
 //   cmake --build <build dir> --config Release --target probe_winusb_rawio
 //   <build dir>\tests\Release\probe_winusb_rawio.exe
 //

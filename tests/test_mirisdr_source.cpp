@@ -45,6 +45,8 @@
 #include <vector>
 
 #include "mirisdr_fake_usb.hpp"
+#include "core/radio_events.hpp"
+#include "usb/usb_device.hpp"
 #include "source/mirisdr_source.hpp"
 #include "source/msi2500.hpp"
 #include "source/rsp_rows.hpp"
@@ -1587,6 +1589,35 @@ int main() {
             total += src.read(chunk, 512);
         }
         CHECK(total > 0);
+        src.closeDevice();
+    }
+
+    // =====================================================================
+    // A LAYOUT THE RADIO CANNOT BE STREAMED FROM (review of 98aa57e2, finding B). When the
+    // transport says 0x81 is absent or isochronous only, the OPEN fails with that fault
+    // sentence (never "unplugged", never "unplug it"): no radio is presented as open that can
+    // never start. A transport that merely could not look still lets the open go on.
+    // =====================================================================
+    {
+        MiriSdrSource src;
+        FakeMiriSdrUsb* fake = attachFake(src);
+        fake->ensureError = std::string(cascade::usb::kLayoutErrorPrefix) +
+                            "endpoint 0x81 is isochronous: this radio's Windows driver setting offers only an isochronous stream, which FoxSDR cannot read; "
+                            "interface 0 alt 0 (current): 0x81 isochronous packet 1024";
+        CHECK(!src.open(""));
+        CHECK(!src.isOpen());
+        const std::string e = src.lastError();
+        CHECK(cascade::usb::errorIsLayoutProblem(e));
+        CHECK(e.find("only an isochronous stream, which FoxSDR cannot read") != std::string::npos);
+        CHECK(e.find("unplug") == std::string::npos);
+        CHECK(cascade::core::radioreport::closeCauseFor(true, e) == "fault");   // a layout fault, not "unplugged"
+    }
+    {
+        MiriSdrSource src;
+        FakeMiriSdrUsb* fake = attachFake(src);
+        fake->ensureError = "this radio's USB layout could not be read, so its streaming alternate setting was not checked";
+        CHECK(src.open(""));   // could not look: not a verdict about the radio, so the open goes on and start decides
+        CHECK(src.isOpen());
         src.closeDevice();
     }
 

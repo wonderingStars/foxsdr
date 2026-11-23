@@ -35,13 +35,15 @@ inline void logUsbLayout(cascade::usb::UsbDevice& dev, const char* driverTag) {
 // TWO WORDS, because they mean different things. "rawiofallback": the stream is
 // running WITHOUT RAW_IO. "altmoved": RAW_IO is on and the transport had to
 // select another alternate setting / interface for the pipe; filed once per
-// process (it is set-up, not a fault, and the driver now selects the setting
-// itself at open where the radio needs it). Both are `what` words of
+// radio OPEN (it is set-up, not a fault, and the driver now selects the setting
+// itself at open where the radio needs it; an altmoved at start therefore means
+// the open-time select failed and the start-time recovery worked). Both are `what` words of
 // docs/radio-reports-contract.md 3.6 (^[a-z0-9]{3,24}$).
-inline void reportStreamNote(cascade::usb::UsbDevice& dev, const void* owner,
+// Returns true when it filed a note in the radio report, false when there was nothing to say or the "altmoved" of this radio open was filed already.
+inline bool reportStreamNote(cascade::usb::UsbDevice& dev, const void* owner,
                              const char* driverKey) {
     std::string note = dev.takeStreamNote();
-    if (note.empty()) { return; }
+    if (note.empty()) { return false; }
     const std::string fb = cascade::usb::kStreamNoteFallback;
     const std::string mv = cascade::usb::kStreamNoteMoved;
     const char* word = "rawiofallback";
@@ -54,11 +56,9 @@ inline void reportStreamNote(cascade::usb::UsbDevice& dev, const void* owner,
         note.erase(0, fb.size());
     }
     core::diagWarnf("%s: %s", driverKey, note.c_str());
-    if (once) {
-        static std::atomic<bool> filed{false};
-        if (filed.exchange(true)) { return; }
-    }
+    if (once && dev.takeAltMovedFiled()) { return false; }   // once per radio OPEN (the device object's own flag)
     core::radioreport::noteVendorCallFault(owner, driverKey, word, note, true);
+    return true;
 }
 
 // The user-facing sentence for a transfer that failed while `what`. A fault in

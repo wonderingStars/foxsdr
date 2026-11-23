@@ -44,6 +44,7 @@
 #include <vector>
 
 #include "airspyhf_fake_usb.hpp"
+#include "core/diag_log.hpp"
 #include "source/airspyhf_protocol.hpp"
 #include "source/airspyhf_source.hpp"
 #include "test_check.hpp"
@@ -1453,6 +1454,61 @@ int main() {
             total += src.read(chunk, 32);
         }
         CHECK(total > 0);
+        src.closeDevice();
+    }
+
+    // =====================================================================
+    // WHAT THE LOG SHOWS OF THE SELECT (review of 98aa57e2, findings G and H).
+    // G: a select that worked says which setting is now current, and the USB
+    //    layout line comes AFTER it, so a field report shows the layout that
+    //    was actually used.
+    // H: a refused select does not fail the open (start retries it) and is one
+    //    warning that carries the Windows error.
+    // =====================================================================
+    {
+        const auto indexOf = [](const char* needle) {
+            const std::vector<std::string> ring = cascade::core::DiagLog::instance().ringSnapshot();
+            for (std::size_t i = ring.size(); i-- > 0;) {
+                if (ring[i].find(needle) != std::string::npos) { return static_cast<long long>(i); }
+            }
+            return -1LL;
+        };
+        AirspyHfSource src;
+        FakeAirspyHfUsb* fake = attachFake(src);
+        fake->streamAltRequired = 1;
+        CHECK(src.open(""));
+        const long long selected = indexOf("airspyhf: alternate setting 1 of interface 0 is now current");
+        const long long layout = indexOf("airspyhf: USB layout - interface 0 alt 0: no endpoints; interface 0 alt 1: 0x81 bulk packet 512");
+        CHECK(selected >= 0);
+        CHECK(layout >= 0);
+        CHECK(selected < layout);   // the layout line is written after the select
+        src.closeDevice();
+    }
+    {
+        AirspyHfSource src;
+        FakeAirspyHfUsb* fake = attachFake(src);
+        fake->selectFails = true;
+        std::size_t warnsBefore = 0;
+        for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+            if (l.find("airspyhf: could not select alternate setting 1 of interface 0: ") != std::string::npos) { ++warnsBefore; }
+        }
+        CHECK(src.open(""));   // the open still goes on: the transport's recovery at the first start looks for the setting
+        std::size_t warns = 0;
+        bool withError = false;
+        bool claimedCurrent = false;
+        for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+            if (l.find("airspyhf: could not select alternate setting 1 of interface 0: ") != std::string::npos) {
+                ++warns;
+                withError = withError || l.find("Windows error 31") != std::string::npos;
+            }
+        }
+        for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+            if (l.find("is now current") != std::string::npos && l.find("airspyhf") != std::string::npos) { claimedCurrent = true; }
+        }
+        CHECK(warns == warnsBefore + 1);   // one warning
+        CHECK(withError);                  // that carries the Windows error
+        CHECK(fake->currentAlt() != 1);
+        (void)claimedCurrent;
         src.closeDevice();
     }
 

@@ -58,6 +58,7 @@ struct Fake {
     int currentAlt[4] = {0, 0, 0, 0};
     bool rawIoAlways87 = false;  // refuse RAW_IO even on a pipe that is fine
     bool readsAlways87 = false;  // refuse every read of the stream pipe
+    bool rawIoAcceptsAnyPipe = false;  // MODEL OF MICROSOFT'S "has no effect": RAW_IO answers TRUE for any pipe the current setting carries, isochronous included
     bool canLook = true;         // false: the new query entries are null
     int rawIoCalls = 0;
     int queryCalls = 0;
@@ -144,8 +145,8 @@ BOOL __stdcall fPolicy(WINUSB_INTERFACE_HANDLE h, UCHAR pipe, ULONG policy, ULON
         return FALSE;
     }
     const PipeSpec* p = findIn(ifaceOf(h), pipe);
-    const bool ok = !g.rawIoAlways87 && p != nullptr && (pipe & 0x80) != 0 &&
-                    (p->type == UsbdPipeTypeBulk || p->type == UsbdPipeTypeInterrupt);
+    const bool ok = !g.rawIoAlways87 && p != nullptr &&
+                    (g.rawIoAcceptsAnyPipe || ((pipe & 0x80) != 0 && (p->type == UsbdPipeTypeBulk || p->type == UsbdPipeTypeInterrupt)));
     if (!ok) { ::SetLastError(ERROR_INVALID_PARAMETER); }
     return ok ? TRUE : FALSE;
 }
@@ -262,14 +263,18 @@ bool has(const std::string& s, const char* part) { return s.find(part) != std::s
 
 int main() {
     // 1. THE HEALTHY PATH IS UNTOUCHED (the RTL-SDR's: 6,652 good stream minutes
-    //    on 0.99.112). RAW_IO is accepted, no layout is queried, no note is made.
+    //    on 0.99.112). RAW_IO is accepted once, the streams and policies are as before, no note
+    //    is made. CHANGED BY THE DECISION OF REVIEW FINDING B (98aa57e2): the pipe's TYPE is
+    //    read first, from the descriptors WinUSB already holds, before any pipe call names
+    //    it, so the layout is queried (host side only, nothing on the bus) where this test
+    //    used to assert zero queries.
     {
         reset();
         g.pipes = {{0, 0, 0x81, UsbdPipeTypeBulk, 512}};
         Rig r;
         CHECK(r.dev->beginBulkStream(0x81, 16384, 4));
         CHECK(g.rawIoCalls == 1);
-        CHECK(g.queryCalls == 0);
+        CHECK(g.queryCalls > 0);
         CHECK(r.dev->takeStreamNote().empty());
         std::uint8_t buf[16384];
         CHECK(r.dev->readBulk(buf, sizeof(buf), 1000) == 16384);
@@ -327,6 +332,7 @@ int main() {
         CHECK(has(e, "isochronous"));
         CHECK(has(e, "0x81 isochronous packet 1024"));
         CHECK(g.readOn.empty());
+        CHECK(g.rawIoCalls == 0);   // the type was read first: no pipe policy named the pipe (finding B)
     }
 
     // 5. AN OUT ENDPOINT asked for as a stream.
@@ -516,6 +522,119 @@ int main() {
         CHECK(r.dev->takeStreamNote().empty());
         r.dev->endBulkStream();
     }
+
+    // 18. ERROR 31 ON THE SELECT IS NOT "THE RADIO IS GONE" (review of 98aa57e2, finding F): a device that
+    //     refuses SET_INTERFACE by stalling is most likely reported as ERROR_GEN_FAILURE (31). It gets the
+    //     select-failed sentence with the layout, not the transfer-fault words and not "unplug it".
+    {
+        reset();
+        g.emptyAlts = {{0, 0}};
+        g.pipes = {{0, 1, 0x81, UsbdPipeTypeBulk, 512}};
+        g.setAltFails = ERROR_GEN_FAILURE;
+        Rig r;
+        CHECK(!r.dev->beginBulkStream(0x81, 16384, 4));
+        const std::string e = r.dev->lastError();
+        CHECK(cascade::usb::errorIsLayoutProblem(e));
+        CHECK(has(e, "alternate setting 1, which could not be selected (Windows error 31)"));
+        const std::string s = cascade::source::transportFaultSentence("queueing the sample transfers", e);
+        CHECK(!has(s, "unplug"));
+        CHECK(cascade::core::radioreport::closeCauseFor(true, s) == "fault");
+    }
+
+    // 19. AN ISOCHRONOUS-ONLY 0x81 IS RECOGNISED BEFORE ANY PIPE CALL (finding B). The fake models Microsoft's "a
+    //     policy set on a pipe type it does not apply to has no effect": RAW_IO answers TRUE even on the isochronous
+    //     pipe. The old code then queued reads and told the failure as "stopped answering ... unplug it". Now the
+    //     pipe's type is read first: no RAW_IO call, no read, a true fault sentence, and the report cause is "fault".
+    for (const bool current : {true, false}) {
+        reset();
+        g.rawIoAcceptsAnyPipe = true;
+        if (current) {
+            g.pipes = {{0, 0, 0x81, UsbdPipeTypeIsochronous, 1024}};
+        } else {
+            g.emptyAlts = {{0, 0}};
+            g.pipes = {{0, 1, 0x81, UsbdPipeTypeIsochronous, 1024}};
+        }
+        Rig r;
+        CHECK(!r.dev->beginBulkStream(0x81, 16384, 4));
+        const std::string e = r.dev->lastError();
+        CHECK(cascade::usb::errorIsLayoutProblem(e));
+        CHECK(has(e, "this radio's Windows driver setting offers only an isochronous stream, which FoxSDR cannot read"));
+        CHECK(g.rawIoCalls == 0);
+        CHECK(g.readOn.empty());
+        CHECK(!r.dev->streaming());
+        const std::string s = cascade::source::transportFaultSentence("queueing the sample transfers", e);
+        CHECK(!has(s, "unplug"));
+        CHECK(!has(s, "stopped answering"));
+        CHECK(cascade::core::radioreport::closeCauseFor(true, s) == "fault");   // never "unplugged"
+    }
+
+    // 20. ensureStreamingSetting NEVER ANSWERS FALSE WITHOUT ITS OWN REASON, and never with a stale Windows error (finding C).
+    {
+        // absent
+        reset();
+        g.pipes = {{0, 0, 0x82, UsbdPipeTypeBulk, 512}};
+        Rig a;
+        CHECK(!a.dev->ensureStreamingSetting(0x81));
+        CHECK(cascade::usb::errorIsLayoutProblem(a.dev->lastError()) && has(a.dev->lastError(), "endpoint 0x81 does not exist"));
+        // isochronous only
+        reset();
+        g.pipes = {{0, 0, 0x81, UsbdPipeTypeIsochronous, 1024}};
+        Rig b;
+        CHECK(!b.dev->ensureStreamingSetting(0x81));
+        CHECK(cascade::usb::errorIsLayoutProblem(b.dev->lastError()) && has(b.dev->lastError(), "only an isochronous stream, which FoxSDR cannot read"));
+        // the table cannot look
+        reset();
+        g.canLook = false;
+        g.pipes = {{0, 0, 0x81, UsbdPipeTypeBulk, 512}};
+        Rig c;
+        CHECK(!c.dev->ensureStreamingSetting(0x81));
+        CHECK(has(c.dev->lastError(), "could not be read"));
+        CHECK(!cascade::usb::errorIsLayoutProblem(c.dev->lastError()));   // not a verdict about the radio
+        // the select itself fails: the Windows error of THAT call, read where it failed (a decoy error is left on the thread first)
+        reset();
+        g.emptyAlts = {{0, 0}};
+        g.pipes = {{0, 1, 0x81, UsbdPipeTypeBulk, 512}};
+        g.setAltFails = ERROR_ACCESS_DENIED;
+        Rig d;
+        ::SetLastError(ERROR_FILE_NOT_FOUND);
+        CHECK(!d.dev->ensureStreamingSetting(0x81));
+        CHECK(has(d.dev->lastError(), "Windows error 5"));
+        CHECK(!has(d.dev->lastError(), "Windows error 2)"));
+        // and the healthy answer is still true
+        reset();
+        g.emptyAlts = {{0, 0}};
+        g.pipes = {{0, 1, 0x81, UsbdPipeTypeBulk, 512}};
+        Rig e;
+        CHECK(e.dev->ensureStreamingSetting(0x81));
+        CHECK(g.currentAlt[0] == 1);
+    }
+
+    // 21. "altmoved" IS FILED ONCE PER RADIO OPEN, not once per process (finding E): two radios (two device objects) that each moved report once each; a
+    //     second report from the same device is not filed.
+    {
+        const auto movedDevice = [](std::unique_ptr<UsbDevice>& dev, Rig*& rig) {
+            reset();
+            g.numIfaces = 2;
+            g.pipes = {{0, 0, 0x83, UsbdPipeTypeInterrupt, 8}, {1, 0, 0x81, UsbdPipeTypeBulk, 512}};
+            rig = new Rig();
+            CHECK(rig->dev->beginBulkStream(0x81, 16384, 4));
+            dev = std::move(rig->dev);
+        };
+        std::unique_ptr<UsbDevice> d1, d2;
+        Rig* r1 = nullptr;
+        Rig* r2 = nullptr;
+        movedDevice(d1, r1);
+        movedDevice(d2, r2);
+        CHECK(cascade::source::reportStreamNote(*d1, nullptr, "airspyhf"));    // the first radio's move is filed
+        CHECK(cascade::source::reportStreamNote(*d2, nullptr, "airspyhf"));    // and the second radio's, which a process-wide flag would have swallowed
+        CHECK(d1->takeAltMovedFiled());                                        // each device has now filed its own
+        CHECK(d2->takeAltMovedFiled());
+        d1.reset();
+        d2.reset();
+        delete r1;
+        delete r2;
+    }
+
 
     // 11. THE USER-FACING SENTENCE. A layout problem is not an unplugged radio:
     //     no "unplug it" advice, and the close classifier does not call it so.

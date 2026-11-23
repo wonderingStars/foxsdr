@@ -427,9 +427,20 @@ bool MiriSdrSource::open(const std::string& args) {
     if (dev_->ensureStreamingSetting(msi2500::kRxEndpoint)) {
         core::diagLogf("mirisdr: a setting with bulk IN 0x%02X is in place",
                        static_cast<unsigned>(msi2500::kRxEndpoint));
+    } else if (cascade::usb::errorIsLayoutProblem(dev_->lastError())) {
+        // THE RADIO'S OWN LAYOUT CANNOT BE STREAMED (0x81 absent, isochronous only, or an OUT pipe): a fault sentence now, with the layout, and no
+        // radio presented as open that can never start (review of 98aa57e2, finding B). It is a fact about the radio's Windows driver setting, never
+        // "unplugged", and never "unplug the radio".
+        core::diagWarnf("mirisdr: this radio cannot be streamed: %s", dev_->lastError().c_str());
+        setError(dev_->lastError());
+        dev_.reset();
+        link_->dev = nullptr;
+        return false;
     } else {
+        // The transport could not look, or a select it tried failed: the open goes on and the first start tries again, as before.
         core::diagWarnf("mirisdr: no setting with bulk IN 0x%02X could be selected: %s",
-                        static_cast<unsigned>(msi2500::kRxEndpoint), dev_->lastError().c_str());
+                        static_cast<unsigned>(msi2500::kRxEndpoint),
+                        dev_->lastError().empty() ? "this transport cannot say" : dev_->lastError().c_str());
     }
 
     const msi2500::DeviceModel* model = msi2500::modelFor(info.vid, info.pid);
