@@ -285,10 +285,13 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         {"ReaderLeak", "src/source/vendor_apartment.cpp", 1},   // (osslibs: the run-time bridges abandon their apartment thread when a library call never returns)
         {"CloseLeak", "src/source/soundcard_source.cpp", 1}, {"CloseLeak", "src/sink/pa_init.cpp", 1},
         {"LinkStranded", "src/source/sdrplay_source.cpp", 1},
-        {"StreamRestart", "src/source/airspy_source.cpp", 1},
-        {"StreamRestart", "src/source/hackrf_source.cpp", 1},      // (HackRF: a silent or stalled stream is re-armed, baa78d31)
-        {"StreamRestart", "src/source/rtlsdr_source.cpp", 1},      // (RTL-SDR: a failed bulk read re-arms the stream instead of faulting the radio, 9fddae77)
-        {"StreamRestart", "src/source/soapy_source.cpp", 1},       // (SoapySDR: the stall detector's bounded restart, fix/soapy-stall)
+        // THE NATIVE DRIVERS' RESTART AND RE-OPEN are filed by their OUTCOME (diagnosis 2026-11-23, signature 80913FA5): StreamBack when samples flowed again, StreamFail when
+        // the restarts did not bring them back; the RTL-SDR's re-open files UsbReopen and UsbReopenFail the same way. One site per word per file (a helper lambda each).
+        {"StreamBack", "src/source/airspy_source.cpp", 1},  {"StreamFail", "src/source/airspy_source.cpp", 1},
+        {"StreamBack", "src/source/hackrf_source.cpp", 1},  {"StreamFail", "src/source/hackrf_source.cpp", 1},
+        {"StreamBack", "src/source/rtlsdr_source.cpp", 1},  {"StreamFail", "src/source/rtlsdr_source.cpp", 1},
+        {"UsbReopen", "src/source/rtlsdr_source.cpp", 1},   {"UsbReopenFail", "src/source/rtlsdr_source.cpp", 1},
+        {"StreamRestart", "src/source/soapy_source.cpp", 1},       // (SoapySDR: the stall detector's bounded restart, fix/soapy-stall; still filed at the start)
         {"TunerRetry", "src/source/rtl2832u.cpp", 1},
         {"LateCall", "src/source/soapy_source.cpp", 1},    {"LateCall", "src/source/sdrplay_source.cpp", 1},
         {"ScanLimit", "src/source/soapy_enum_proc.cpp", 5},   // was 4: the missing-helper answer (hw-findings item 6) is counted as the in-process fallback always was
