@@ -541,7 +541,7 @@ int main() {
         if (closeFn != std::string::npos && closeEnd != std::string::npos) {
             const std::string body = srcText.substr(closeFn, closeEnd - closeFn);
             const std::size_t floor = body.find("if (cascade::core::ringDropWorthAReport(dropped, read))");
-            const std::size_t file = body.find("fileIssueReport(cascade::core::health::Recovered::RingDrop)");
+            const std::size_t file = body.find("fileIssueReportOffThread(cascade::core::health::Recovered::RingDrop)");   // (the write is a worker's since freeze FA0B39E3)
             CHECK(floor != std::string::npos && file != std::string::npos && floor < file);
         }
         const std::string health = stripComments(

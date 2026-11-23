@@ -67,6 +67,8 @@ std::string readFile(const fs::path& p) {
 }
 
 std::vector<fs::path> issueFiles(const fs::path& dir) {
+    // THE REPORT IS WRITTEN BY A WORKER (issue::fileIssueReportOffThread; freeze FA0B39E3): let the writes land before the folder is read.
+    (void)issue::waitForWritesForTest(3000);
     std::vector<fs::path> out;
     std::error_code ec;
     for (const auto& e : fs::directory_iterator(dir, ec)) {

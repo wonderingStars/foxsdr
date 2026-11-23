@@ -80,6 +80,7 @@
 #include "core/plugin_reload_phases.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_repo.hpp"
+#include "core/companion_state_cache.hpp"   // the shelf's companion states, read off the pass
 #include "core/plugin_runner.hpp"
 #include "core/plugin_run.hpp"
 #include "core/plugin_ui.hpp"
@@ -2941,6 +2942,9 @@ private:
     void removeBlockedPlugin(const std::string& fileName);
     std::string pluginCatalogueUrl_;  // committed value (persisted)
     std::vector<cascade::core::PluginCatalogEntry> catalog_;
+    // THE COMPANION SHELF'S STATES, computed on a worker and read here from memory (core/companion_state_cache.hpp; freeze B058596B: stateForEntry's file reads
+    // were on the pass, twice per companion row per list rebuild). Ticked once a pass by publishApiLists; its generation is in the list fingerprint.
+    cascade::core::companion::StateCache companionStates_;
     // How many times catalog_ has been replaced, cleared or pushed to (a fetch starting, a fetch landing or
     // failing, the test hook's entry): the list fingerprint hashes this one value for everything a catalogue entry
     // carries (API 0.3 8.9: author, licence, platforms, floor, size, the long texts), where hashing each entry's

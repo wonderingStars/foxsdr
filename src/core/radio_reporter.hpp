@@ -197,8 +197,13 @@ public:
     // Seconds the stream sampler should cover for this radio's next radio_stream event: 60, or 300 after 500 events in a day (contract 3.9).
     int streamWindowSec(const std::string& radioKey) const;
 
-    // Called often (the engine's frame): starts a batch when one is due; reaps a finished one. Never blocks.
+    // Called often (the engine's frame): starts a batch when one is due; reaps a finished one. Never blocks, and TOUCHES NO DISK: "is anything queued" is
+    // an in-memory bit (set by every admitted message, cleared by the batch thread when its own listing finds the folder empty), and every folder listing
+    // runs on that thread (field freeze A488498B: the pass sat in the reports folder's directory listing).
     void poll();
+    // TEST SEAM: called by every listing of the reports folder, on whichever thread lists, immediately before the file-system call (a test binds one that
+    // sleeps: a slow disk as far as the caller can tell). Empty (the default) in the product.
+    static void setDiskHookForTest(std::function<void()> hook);
     // Releases what the daily bound held and tries one last bounded send; returns after `maxMs` at the latest. Quit is never delayed by a stuck send.
     void flushAtQuit(int maxMs);
     // Runs one batch on the calling thread (tests, and flushAtQuit). Returns the number of requests accepted.

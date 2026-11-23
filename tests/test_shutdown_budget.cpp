@@ -1272,6 +1272,11 @@ const KnownWait kKnownWaits[] = {
      "zero by construction - poll()'s once-a-frame ready-check on a std::future, not a wait. The "
      "frame loop has ended before beginShutdown() raises the threshold, so poll() is not even "
      "called on the teardown path"},
+    // THE COMPANION SHELF'S STATE CACHE (core/companion_state_cache.hpp, freeze B058596B): two ages, compared against a clock by the pass's tick(); nothing waits on either.
+    {"src/core/companion_state_cache.hpp", "kMaxAge", 0,
+     "not a wait: how old the cached states may get before the pass's tick() starts a refresh on a DiskJob worker. Compared against a clock; the shutdown path never calls tick()"},
+    {"src/core/companion_state_cache.hpp", "kIdle", 0,
+     "not a wait: how long after the last lookup the cache keeps itself fresh. Compared against a clock; nothing blocks for it"},
     {"src/core/disk_job.hpp", "kQuitGrace", 0,
      "DiskJob::reap()'s grace before a job still blocked in the filesystem is abandoned: called "
      "from ~DiskJob, i.e. from ~AppWindow after watchdog_.stop(), outside the budgeted stretch, "

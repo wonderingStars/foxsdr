@@ -37,6 +37,7 @@
 #ifndef CASCADE_CORE_ISSUE_REPORT_HPP
 #define CASCADE_CORE_ISSUE_REPORT_HPP
 
+#include <functional>
 #include <string>
 
 #include "core/health_events.hpp"
@@ -64,6 +65,18 @@ std::string renderIssueReport(health::Recovered word);
 // the path written, or empty: capture is off (no directory, or Diagnostics off), this word
 // was already filed this session, or the file could not be written. Never throws.
 std::string fileIssueReport(health::Recovered word);
+
+// THE SAME, WITH THE FILE WRITE ON A WORKER, for a caller that must not wait on a disk (the engine's control pass: freeze FA0B39E3 sat in this function's
+// ofstream). The gates and the once-a-session bit are the same and are decided on the caller; the text is rendered on the caller (memory only: the log ring);
+// only the open, write and flush are the worker's. Returns the path the worker will write, or empty when refused (capture off, already filed). The worker logs
+// "issue report written", counts it for takeNewlyFiled(), and when the file could not be written gives the once-a-session bit back, exactly as the synchronous
+// call does. No shutdown wait: a report queued in the last milliseconds of a session is not guaranteed to land (the worker is abandoned at exit).
+std::string fileIssueReportOffThread(health::Recovered word);
+
+// TEST SEAMS. The hook is called on the worker immediately before its file call (a test binds one that sleeps: a slow disk). waitForWritesForTest returns true
+// when every queued write has finished within `ms`.
+void setDiskHookForTest(std::function<void()> hook);
+bool waitForWritesForTest(unsigned ms);
 
 // Files the reports of the words met BEFORE capture was armed - at start-up, before the
 // settings are read (a watcher that did not start, a display notification refused). Called

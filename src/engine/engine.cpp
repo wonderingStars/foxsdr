@@ -1078,7 +1078,7 @@ void Engine::closeDspMinute() {
     // not a row. (Master 0.99.102, bde914f6: AppWindow::closeDspMinute there; the
     // pass thread here, a healthy thread, so the report may lock.)
     if (cascade::core::ringDropWorthAReport(dropped, read)) {
-        cascade::core::issue::fileIssueReport(cascade::core::health::Recovered::RingDrop);
+        cascade::core::issue::fileIssueReportOffThread(cascade::core::health::Recovered::RingDrop);   // (the write is a worker's: freeze FA0B39E3)
     }
     // AND WHAT THE LOSS LOOKED LIKE (GitHub issue 6, the 0.99.90 report): in how
     // many writes, how full the ring got, and the longest one block took on the
@@ -4213,8 +4213,11 @@ std::string Engine::pluginInstallBlockedReason(int idx, bool acknowledged) const
     if (catalogEntryInstalled(e)) { return FOX_TR_NOOP("already installed"); }
     // companion applications shelf: a companion whose program this copy cannot obtain has nothing to fit (the website copy: the catalogue publishes no program; the Store
     // copy: the package holds none). Said before the notice gate, so nobody ticks a notice for something that cannot be fitted. No promise of when.
-    if (e.companion.present && e.source.empty() &&
-        cascade::core::companion::stateForEntry(e, pluginDir_) == cascade::core::companion::State::NotAvailable) {
+    // (From the cache, memory only: this runs on the pass, and the file reads moved to the worker - core/companion_state_cache.hpp. A row the worker has not
+    // computed yet does not block; the install path checks the program again before anything is fetched.)
+    cascade::core::companion::State companionState = cascade::core::companion::State::InPackage;
+    if (e.companion.present && e.source.empty() && companionStates_.lookup(e.id, companionState) &&
+        companionState == cascade::core::companion::State::NotAvailable) {
         return FOX_TR_NOOP("the program for this companion is not available in this copy of FoxSDR");
     }
     // THE ACKNOWLEDGEMENT GATE, last so it is the final thing standing between

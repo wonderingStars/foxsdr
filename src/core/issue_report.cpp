@@ -9,6 +9,9 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <mutex>
+#include <thread>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -25,6 +28,7 @@
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/thread_beats.hpp"
 
 namespace cascade::core::issue {
 
@@ -239,7 +243,51 @@ std::string renderIssueReport(Recovered word) {
     return out;
 }
 
-std::string fileIssueReport(Recovered word) {
+// THE OFF-THREAD WRITER'S STATE. Writes still out (the test seam waits on it) and the test's slow-disk hook.
+static std::atomic<unsigned> g_writesOut{0};
+static std::mutex g_hookMu;
+static std::function<void()> g_diskHook;
+static void callDiskHook() {
+    std::function<void()> h;
+    { std::lock_guard<std::mutex> lk(g_hookMu); h = g_diskHook; }
+    if (h) { h(); }
+}
+
+// The write itself: open, write, flush, and the half-written file removed. True when the report is on disk.
+static bool writeReportFile(const std::string& path, const std::string& text) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) { return false; }
+    out.write(text.data(), static_cast<std::streamsize>(text.size()));
+    out.flush();
+    if (!out) {
+        out.close();
+        std::error_code ec;
+        std::filesystem::remove(path, ec);   // (a half-written report is not a report)
+        return false;
+    }
+    return true;
+}
+
+static std::string fileImpl(Recovered word, bool offThread);
+
+std::string fileIssueReport(Recovered word) { return fileImpl(word, false); }
+std::string fileIssueReportOffThread(Recovered word) { return fileImpl(word, true); }
+
+void setDiskHookForTest(std::function<void()> hook) {
+    std::lock_guard<std::mutex> lk(g_hookMu);
+    g_diskHook = std::move(hook);
+}
+
+bool waitForWritesForTest(unsigned ms) {
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    while (g_writesOut.load(std::memory_order_acquire) != 0u) {
+        if (std::chrono::steady_clock::now() >= until) { return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return true;
+}
+
+static std::string fileImpl(Recovered word, bool offThread) {
     const std::size_t i = static_cast<std::size_t>(word);
     if (i >= health::kRecoveredCount) { return std::string(); }
     // Consent and a directory, both, or nothing is written - the crash handler's own
@@ -261,17 +309,31 @@ std::string fileIssueReport(Recovered word) {
     const std::string path = dir + "/issue-" + stamp() + "-" + std::to_string(processId()) + "-" +
                              std::to_string(g_seq.fetch_add(1u) + 1u) + ".txt";
     const std::string text = renderIssueReport(word);
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out) {
-        giveBack();
-        return std::string();
+    if (offThread) {
+        // THE FILE CALLS ARE A WORKER'S (freeze FA0B39E3: the control pass sat in the ofstream below). The gates, the path and the text are the caller's and
+        // cost no disk; the worker opens, writes, logs and counts, or gives the once-a-session bit back, as the synchronous branch does.
+        g_writesOut.fetch_add(1u, std::memory_order_acq_rel);
+        try {
+            std::thread([path, text, word, bit]() {
+                cascade::core::beats::Registration beat(cascade::core::beats::kThreadDiskJob);
+                beat.beat("disk");
+                callDiskHook();
+                if (writeReportFile(path, text)) {
+                    diagLogf("issue report written - %s (recovered.%s)", path.c_str(), health::recoveredWord(word));
+                    g_newlyFiled.fetch_add(1u, std::memory_order_acq_rel);
+                } else {
+                    g_filed.fetch_and(~bit, std::memory_order_acq_rel);
+                }
+                g_writesOut.fetch_sub(1u, std::memory_order_acq_rel);
+            }).detach();
+        } catch (...) {
+            g_writesOut.fetch_sub(1u, std::memory_order_acq_rel);
+            giveBack();
+            return std::string();
+        }
+        return path;
     }
-    out.write(text.data(), static_cast<std::streamsize>(text.size()));
-    out.flush();
-    if (!out) {
-        out.close();
-        std::error_code ec;
-        std::filesystem::remove(path, ec);   // (a half-written report is not a report)
+    if (!writeReportFile(path, text)) {
         giveBack();
         return std::string();
     }

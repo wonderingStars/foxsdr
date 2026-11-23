@@ -57,6 +57,7 @@ const Row kRows[] = {
      "the power logger's one writer worker (the only thread that does file I/O or the Influx / webhook sends, each send bounded by its own timeout, stop() joins it): the pass thread only queues - NOT COVERED by this batch (feat/signal-blocks-2; the engine does not start it yet)"},
     {"src/core/if_recorder.hpp", 1, 0, 0, 0, "",
      "the IF (channel I/Q) recorder's worker (AsyncIfRecorder: drains the wait-free queue, checkpoints the header every 2 s, stop() joins it) - NOT COVERED by this batch (a known gap): nothing starts it from the engine yet; the wiring that does gives it a ThreadSpec heartbeat"},
+    {"src/core/issue_report.cpp", 1, 0, 1, 1, "kThreadDiskJob", ""},   // fileIssueReportOffThread: one detached writer per report (freeze FA0B39E3)
     {"src/core/radio_handoff.cpp", 1, 0, 0, 0, "",
      "the hand-off listener: waits on its named pipe (overlapped, with a stop event) for another FoxSDR window asking this one to let a busy radio go, and ends when stop() signals; it waits for a person's second window, not for work, so a heartbeat would be wrong"},
     {"src/core/radio_reporter.cpp", 1, 0, 0, 0, "",

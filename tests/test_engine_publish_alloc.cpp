@@ -419,6 +419,20 @@ constexpr int kPublishes = 40;
 // The heap allocations `kPublishes` publishes make on this thread (the RDS
 // decoder's snapshot, when one is given, is the one the pass was handed: its
 // own copy is made by publishReceiverState, once, and is not this function's).
+// THE COMPANION SHELF'S STATES ARRIVE FROM A WORKER (core/companion_state_cache.hpp), so on an engine whose catalogue holds companion rows the fingerprint moves ONCE,
+// a few milliseconds after the first pass, when the first refresh lands. A test that compares a fingerprint across a stretch of passes lets that settle first:
+// pass until the fingerprint has stood still for 150 ms (and never longer than 5 s).
+void settleCompanionStates(cascade::engine::Engine& e) {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    auto still = std::chrono::steady_clock::now();
+    std::uint64_t last = Access::publishLists(e);
+    while (std::chrono::steady_clock::now() < end && std::chrono::steady_clock::now() - still < std::chrono::milliseconds(150)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        const std::uint64_t now = Access::publishLists(e);
+        if (now != last) { last = now; still = std::chrono::steady_clock::now(); }
+    }
+}
+
 long allocationsOfPublishes(cascade::engine::Engine& e, const cascade::core::RdsSnapshot* heard = nullptr) {
     cascade::core::PublishedState ps;
     Access::publish(e, ps, heard);  // warm-up: scratch the first call sizes
@@ -972,6 +986,7 @@ int main() {
         Access::addAllRun(e4).next = 2;
         Access::addAllRun(e4).currentName = "Plugin number 1";
 
+        settleCompanionStates(e4);
         const std::uint64_t settled = Access::fingerprint(e4);  // (warm-up: the cached keys, the scratch lists)
         (void)Access::publishLists(e4);                         // the block is built here, once, and may allocate
         t_news = 0;
@@ -1150,6 +1165,7 @@ int main() {
         Access::readTime(e13) = 1760001234;
         Access::regionalState(e13) = "ok";
 
+        settleCompanionStates(e13);
         const std::uint64_t settled = Access::fingerprint(e13);  // (warm-up)
         (void)Access::publishLists(e13);                         // the block is built here, once, and may allocate
         t_news = 0;

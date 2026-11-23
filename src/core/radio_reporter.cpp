@@ -46,6 +46,14 @@ constexpr std::size_t kMaxFirstSessionBytes = 8192;
 constexpr std::size_t kMaxJournalBytes = 4096;
 constexpr std::int64_t kMaxT = 2592000;
 
+std::mutex g_hookMu;
+std::function<void()> g_diskHook;   // TEST SEAM (Reporter::setDiskHookForTest)
+void diskHook() {
+    std::function<void()> h;
+    { std::lock_guard<std::mutex> lk(g_hookMu); h = g_diskHook; }
+    if (h) { h(); }
+}
+
 fs::path pathOf(const std::string& utf8) { return fs::path(std::u8string(utf8.begin(), utf8.end())); }
 std::string utf8Of(const fs::path& p) {
     const std::u8string u = p.u8string();
@@ -269,6 +277,9 @@ struct Reporter::Impl {
     // sender
     std::thread worker;
     std::atomic<bool> running{false};
+    // "Something may be queued", IN MEMORY, so that poll() on the engine's pass needs no directory listing. True at start (the folder may hold what an earlier
+    // session left), set by admit(), cleared by the batch thread under `mu` when its own listing finds nothing.
+    std::atomic<bool> maybeQueued{true};
     std::int64_t nextBatchAt = 0;
     std::int64_t backoffUntil = 0;
     int failStreak = 0;
@@ -396,6 +407,7 @@ struct Reporter::Impl {
     static fs::path posPathOf(const fs::path& seg) { fs::path p = seg; p.replace_extension(".pos"); return p; }
 
     std::vector<Seg> listSegments() {
+        diskHook();
         std::vector<Seg> out;
         std::error_code ec;
         for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
@@ -433,6 +445,7 @@ struct Reporter::Impl {
     }
 
     std::vector<fs::path> listFailFiles() {
+        diskHook();
         std::vector<fs::path> out;
         std::error_code ec;
         for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
@@ -568,6 +581,7 @@ struct Reporter::Impl {
 
     // Takes a prepared message into the queue (the daily bound has already said yes).
     void admit(Pending p, bool isFail) {
+        maybeQueued.store(true, std::memory_order_release);
         const bool anonymous = isFail && id.installId.empty();
         if (!isFail && id.installId.empty()) { return; }   // no anonymous journal
         // what the bound kept off the wire is said on THIS event of the same radio
@@ -977,6 +991,12 @@ struct Reporter::Impl {
         running.store(true);
         worker = std::thread([self]() {
             self->runBatch();
+            {
+                // THE ONLY LISTING OF THE FOLDER FOR "IS ANYTHING LEFT" (was poll()'s, on the engine's pass), on this thread and not under `mu`. The bit is cleared
+                // BEFORE the listing and set again when the listing finds something, so an admit() that lands in between keeps its bit.
+                self->maybeQueued.store(false, std::memory_order_release);
+                if (!self->queueEmpty()) { self->maybeQueued.store(true, std::memory_order_release); }
+            }
             self->running.store(false);
         });
     }
@@ -1181,15 +1201,23 @@ int Reporter::streamWindowSec(const std::string& radioKey) const {
     return (it != p_->streamToday.end() && it->second >= p_->o.streamWidenAfter) ? 300 : 60;
 }
 
+void Reporter::setDiskHookForTest(std::function<void()> hook) {
+    std::lock_guard<std::mutex> lk(g_hookMu);
+    g_diskHook = std::move(hook);
+}
+
 void Reporter::poll() {
     Impl& s = *p_;
-    std::lock_guard<std::mutex> lk(s.mu);
+    // TRY, NEVER WAIT: the batch thread holds `mu` while it collects (directory listings, file reads), and a pass that waited behind a slow disk is the
+    // freeze this exists to end (A488498B). A poll that finds the lock taken is the next pass's.
+    std::unique_lock<std::mutex> lk(s.mu, std::try_to_lock);
+    if (!lk.owns_lock()) { return; }
     if (!s.on) { return; }
     s.reapWorker();
     const std::int64_t t = s.now();
     if (s.running.load() || s.worker.joinable()) { return; }
     if (t < s.nextBatchAt && !s.urgent) { return; }
-    if (s.queueEmpty()) { s.nextBatchAt = t + s.o.batchEverySec; s.urgent = false; return; }
+    if (!s.maybeQueued.load(std::memory_order_acquire)) { s.nextBatchAt = t + s.o.batchEverySec; s.urgent = false; return; }   // memory only: no listing here
     s.nextBatchAt = t + s.o.batchEverySec;
     s.urgent = false;
     if (!s.o.liveSend) { ++s.st.suppressedByBuild; return; }

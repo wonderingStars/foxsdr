@@ -52,7 +52,7 @@ std::size_t file(const std::array<std::uint64_t, 4>& sums) {
             if (auto g = health::globalLedger()) {
                 g->note(health::tokenRecovered(word), static_cast<std::uint32_t>(std::min<std::uint64_t>(n, health::kMaxCount)));
             }
-            issue::fileIssueReport(word);
+            issue::fileIssueReportOffThread(word);
             ++filed;
         }
         return filed;
