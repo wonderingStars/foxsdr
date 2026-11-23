@@ -2609,12 +2609,114 @@ input no radio delivers; exact silence (a closed squelch) measured 1.1 to 1.2 ti
 the cause of the bulk of the reports. `tests/test_dsp_denormal_cost.cpp` asserts the bits (read on the DSP thread
 through a seam) and prints the timing, which it never asserts; on ARM64 it passes trivially.
 
+**Where the time goes (2026-11-23).** The three lines above say how long the DSP thread was busy; they did not say IN WHAT.
+A thread at half speed has no long gap and no phase to name. Every phase of the DSP loop (the heartbeat's words: `ring`,
+`spectrum`, `audio-lock`, `taps`, `plugin-iq`, `patch`, `demod`, `plugin-audio`, `host-audio`, `plugin-chain`, `sink`) now
+adds the time it took to a per-phase total, from the two timestamps `dspBeat` already holds (no extra clock read; one relaxed
+load and store per beat; nothing allocates or locks, `tests/test_engine_publish_alloc.cpp` is green). `ring` is the ring read
+and the idle sleep, so it is not work and is never listed. A loss minute writes ONE more line beside the other three:
+
+    dsp minute: phase_ms=demod:2987
+
+only the phases over 1% of the minute's work, largest first, as many as fit the log's line. A fifth line, in the same loss
+minutes, says how the PROCESS fared in memory (a machine that is paging shows thousands of faults and a high load):
+
+    dsp minute: page_faults=1204 working_set_mb=212 mem_load=47
+
+`page_faults` is the process's page-fault count in that minute (a difference; `GetProcessMemoryInfo`, reached as
+`K32GetProcessMemoryInfo` from kernel32), `working_set_mb` its working set, `mem_load` the system's memory load in percent
+(`GlobalMemoryStatusEx`); each reads `unknown` when the query fails.
+
+**The baseline: how much margin this machine has, in every session.** Once, 15 s after the first drain, and again 15 s after
+the input rate changes, with or without any loss:
+
+    dsp baseline: rate=2000000 block=1024 budget_us=512 cost_us=276.0 headroom=1.9 top=demod:97,spectrum:2
+
+`block` is the samples in one block (the FFT size), `budget_us` how long a block lasts at that rate, `cost_us` the mean time a
+block kept the DSP thread busy over the last 5 s (the marks are taken at 10 s and the line said at 15 s), `headroom` the
+budget over the cost to one decimal - BELOW 1 THE THREAD CANNOT KEEP UP, and the line is written all the same - and `top` the
+two largest phases as a percentage of the work. The line is said again, once per session, in the first loss minute whose cost
+per block is more than double the first baseline's (from that minute's own figures), so a machine that degrades during a
+session shows it. `rate=` carries no letters of a frequency unit, so the upload scrub leaves it alone.
+
+**Shedding display work before dropping radio samples.** While the source ring holds MORE than half its capacity at the start
+of a block (one ring-fill read per block) the DSP thread is behind, and the work whose only consumer is the screen is cut
+back; it goes back to full work when the ring holds LESS than a quarter (two thresholds, so it does not flap: between a
+quarter and a half nothing changes; `core/dsp_shed.hpp`). Shed:
+
+- the spectrum / waterfall estimate (`Pipeline::dspThreadBody`: `specBlock_->process`, or the legacy estimator and its frame
+  copy) - for seven blocks in eight; one block in eight still computes it, so everything that reads a frame (the window, the
+  scanner, the stitcher, tune-to-peak, the health watch) keeps getting fresh ones, fewer of them, and never one that is stale
+  for as long as the machine is behind;
+- the zoom FFT of the passband (`processAudioBlock`, `zoom_->push`), every block.
+
+NEVER shed: the I/Q correction, the recorders (I/Q, IF, multiplex, audio, replay), the network I/Q sink, every plugin's I/Q tap
+and audio tap, the patch graph, the VFO, AFC, passband, the S-meter (squelch reads it), the demodulator, RDS and every
+decoder, the whole audio chain and the sink. The scope taps (`scopeIq_`, `scopeMpx_`, `scopeAudio_`) are display-only too
+but are lock-free copies that cost a few microseconds; they are left alone.
+
+Shedding is not a fault and files nothing. A minute with any shedding says so, loss or not:
+
+    dsp: display work skipped for 4152 of 5792 blocks to keep up (ring up to 53% full)
+
+and the first line of a loss minute gains `shed_blocks=N`. Samples that are STILL dropped are counted and filed exactly as
+before: shedding cannot save a chain whose demodulator or plugins cost more than the block lasts, and then the loss minute
+carries both `shed_blocks=` and the `phase_ms=` line that says where the time went.
+
+**"This computer is not keeping up."** After two consecutive minutes that lost more than 1% of the samples although display work
+was being shed, the engine sets one note, once per session: "This computer is not keeping up with the radio at this sample
+rate: samples are being lost. Choose a lower sample rate, or switch off decoders you are not using." It is shown in the audio
+health row (`fact.status.audioHealth`, `Engine::audioHealthLine`), which both windows already draw under the Sinks section's
+device combo, whenever the audio watchdog has no note of its own; a minute that loses nothing clears it, and it is not raised
+a second time in the session. One log line goes with it: `dsp: over 1% of the samples lost two minutes running although
+display work was skipped: the computer is not keeping up; the window says so`. No new drawing code and no new element.
+
+**The machine line gains the clock and the memory.** `clock=NOW/MAX` is the processor's clock now (the highest of any logical
+processor) and at its maximum, in MHz, as Windows reports them (`CallNtPowerInformation(ProcessorInformation)` from
+powrprof.dll, resolved at run time, read-only; `unknown` where it fails): a core held at its lowest clock shows as NOW far below
+MAX. `mem_load=` is the system memory load in percent, `mem_avail_mb=` the available physical memory, `commit_mb=USED/LIMIT` the
+commit charge against the commit limit (`GlobalMemoryStatusEx`); each `unknown` on a failed query. (The key is `clock=`, not
+`mhz=`: the upload scrub reads "hz" as a frequency and masks every number on the line.) These words do not fit the line the
+steady words already fill, so they are the `machine: clock=... mem_load=... mem_avail_mb=... commit_mb=...` line that follows it
+(inline when they fit). The steady words decide whether the line is "changed"; every LOSS minute now says the machine again,
+because the clock and the memory are the figures it wants:
+
+    machine: clock=3200/3200 mem_load=47 mem_avail_mb=17080 commit_mb=40911/55199
+
+**The audio watchdog's re-open no longer holds the pass (item 7 of the diagnosis).** A dead output's re-open used
+`AudioOpen::request`, which waits up to 1.5 s for the worker; a device whose open always outlasted that held the engine's pass
+thread (commands, publishes, the digests) for 1.5 s in every cycle. It uses `AudioOpen::requestNoWait` now - the worker starts,
+the call returns, `poll()` takes the answer on a later pass - and the retry backs off: 1, 2, 4 ... 30 s between attempts while
+the output stays dead, back to 1 s once it lives. (`tests/test_audio_open.cpp`: the call returns in well under the 700 ms the
+open takes; a second request is queued, never raced.)
+
+**What the baseline measured on the bench PC (2026-11-23; i9-14900K, 32 logical processors, the real programs on the generator at
+2 MS/s, volume 0, hidden desktop).** Cost per 1024-sample block, budget 512 microseconds:
+
+| run | cost_us | headroom | split |
+|---|---|---|---|
+| Legacy window, default spectrum | 75.3 | 6.8 | demod 89%, spectrum 8% |
+| Slint window, default spectrum | 74.6 | 6.9 | demod 89%, spectrum 8% |
+| Legacy window, 131072-point FFT at 120 Hz | 169.7 | 3.0 | spectrum 50%, demod 48% |
+| Slint window, 131072-point FFT at 120 Hz | 126.6 | 4.0 | demod 52%, spectrum 47% |
+
+So the largest FFT at the fastest refresh adds 50 to 95 microseconds a block - the spectrum is a stage a slow PC pays for, and the one
+shedding cuts first. The idle generator's chain (the pipeline alone, `tests/test_dsp_shed.cpp` section g): 71.6 microseconds a block
+at 2 MS/s (budget 512, headroom 7.2), 101.9 at 1 MS/s (budget 1024, headroom 10.0), 219.3 at 500 kS/s (budget 2048, headroom 9.3):
+the work per block grows as the block lasts longer (probably the audio stages, which run per output frame; not separated here), so halving the generator's rate buys
+about 1.4 times the headroom, not 2.
+
+**Test seams.** `Pipeline::setDspPhaseLoadForTest(phase, microseconds)` burns that much processor in one named phase of every
+block (the spectrum's only in a block that computes it); `Pipeline::setDspShedEnabledForTest(false)` switches shedding off. For a
+bounded run (`--frames`) `FOXSDR_TEST_DSP_PHASE_LOAD=<phase>=<microseconds>` arms the first (`windowServiceOptions`); a real
+session never reads it.
+
 **Tests:** `tests/test_ringdrop_measure.cpp` (the events' names, absent samples and the 2 s bound, the machine line,
 the DSP accounting under a held mutex, `cpu_ms` both ways, the host-audio word, the source gap, the generator resync,
 the widest lines WITH the log's stamp through the upload scrub), `tests/test_dsp_drop_minute_app.cpp` (the order, an
 event minute IS filed, arming, the ten-second arm, a 5 s late DSP thread files a ringdrop),
 `tests/test_audio_lead_app.cpp` (no new excuses on the audio minute), `tests/test_radio_reports_engine.cpp` (the
-first stream window's rate), `tests/test_dsp_denormal_cost.cpp`.
+first stream window's rate), `tests/test_dsp_denormal_cost.cpp`, `tests/test_dsp_shed.cpp` (the shed rule and its hysteresis, shedding against a real-time source, the per-phase time, bit-identical spectrum frames with headroom), `tests/test_dsp_shed_app.cpp` (the engine's lines, the note, the baseline, the machine line, the widest forms), `tests/test_audio_open.cpp` (the no-wait re-open).
 
 ### What a "no audio" report carries (0.99.61)
 
