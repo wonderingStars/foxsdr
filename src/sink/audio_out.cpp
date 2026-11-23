@@ -225,6 +225,10 @@ bool AudioOut::openLocked(int deviceIndex, double sampleRateHz, int channels, Op
     // during open()).
     float scratch[256];
     while (ring_.read(scratch, sizeof(scratch) / sizeof(scratch[0])) != 0) {}
+    // A RE-OPENED OUTPUT STARTS UNPRIMED (2026-11-23, the audiolead diagnosis): the ring was just emptied, so a sink still marked primed would
+    // meet its first callback with nothing to play and count a STARVED callback - one per open, which the engine had to discount. A first
+    // open starts unprimed; so does every later one, and the silence while the lead rebuilds is a priming callback, not a starved one.
+    primed_.store(false, std::memory_order_relaxed);
 
     PaStreamParameters out{};
     out.device = dev;
