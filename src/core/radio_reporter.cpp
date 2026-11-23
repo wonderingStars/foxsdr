@@ -549,6 +549,7 @@ struct Reporter::Impl {
 
     // ------------------------------------------------------------------ writing
     bool writeFailFile(const json& env, std::int64_t atEpoch) {
+        diskHook();   // (the test seam: the durable append of a failure, as slow as a disk can make it)
         json w;
         w["q"] = atEpoch;
         w["deg"] = 0;
@@ -582,7 +583,6 @@ struct Reporter::Impl {
 
     // Takes a prepared message into the queue (the daily bound has already said yes).
     void admit(Pending p, bool isFail) {
-        maybeQueued.store(true, std::memory_order_release);
         const bool anonymous = isFail && id.installId.empty();
         if (!isFail && id.installId.empty()) { return; }   // no anonymous journal
         // what the bound kept off the wire is said on THIS event of the same radio
@@ -606,6 +606,11 @@ struct Reporter::Impl {
             if (ok) { ++st.journalQueued; }
         }
         (void)text;
+        // "SOMETHING MAY BE QUEUED" IS SET AFTER THE FILE IS WRITTEN (review of fix/freezes, finding 4). It was set before: the batch thread clears the bit and then lists the
+        // folder, and a listing that ran between this store and the write found nothing and left the bit false with a failure report on disk - the next batch five minutes
+        // out, nothing sent until another event came. With the store after the write, every interleaving ends with the bit true or a listing that sees the file: the batch
+        // thread's clear is always BEFORE its listing, and this store is always AFTER the file exists.
+        if (ok) { maybeQueued.store(true, std::memory_order_release); }
         if (!ok) { ++st.guardRefused; }
         if (++appendsSinceSweep >= 64 || isFail) { appendsSinceSweep = 0; sweepBounds(); }
     }
@@ -781,18 +786,23 @@ struct Reporter::Impl {
             std::lock_guard<stall::TaggedMutex> lk(mu);
             t = now();
             if (t < backoffUntil) { return 0; }
-            items = collect(t, o.maxBatch);
         }
+        // THE FOLDER IS LISTED AND READ WITHOUT `mu` (review of fix/freezes, finding 4): this is the batch thread, and Reporter::event() on the calling thread (the engine's
+        // pass, once a minute per open radio) waited for `mu` behind its directory listing and file reads - a pass stopped behind a slow disk. Safe without the lock: the
+        // directory and options are fixed once configure() has run (it joins this thread first), a failure file appears whole (written to .tmp and renamed), a journal line
+        // is counted only when its newline is there, and advance() below touches only files.
+        items = collect(t, o.maxBatch);
         const Transport transport = o.transport ? o.transport : makeRealTransport(cancel, o.dir);
         for (Item& it : items) {
             if (cancel->cancelled()) { break; }
             std::int64_t sendNow = 0;
+            bool expired = false;
             {
                 std::lock_guard<stall::TaggedMutex> lk(mu);
                 sendNow = now();
-                if (!it.env.is_object()) { advance(it); continue; }
-                if (sendNow - it.eventEpoch > o.maxAgeSec) { ++st.expired; advance(it); continue; }
+                if (it.env.is_object() && sendNow - it.eventEpoch > o.maxAgeSec) { ++st.expired; expired = true; }
             }
+            if (!it.env.is_object() || expired) { advance(it); continue; }   // (a file call: not under `mu`)
             bool resent = false;
             for (;;) {
                 json env = it.env;
@@ -800,7 +810,7 @@ struct Reporter::Impl {
                 env["age"] = std::clamp<std::int64_t>(sendNow - it.eventEpoch, 0, kMaxT);
                 const std::string text = fitSize(env);
                 const PostResult res = transport(o.endpoint, text);
-                std::lock_guard<stall::TaggedMutex> lk(mu);
+                std::unique_lock<stall::TaggedMutex> lk(mu);
                 ++st.posts;
                 const std::int64_t after = now();
                 if (!res.attempted || res.status == 0 || res.status >= 500) { backoff(after); return accepted; }
@@ -808,6 +818,7 @@ struct Reporter::Impl {
                     ++st.sent;
                     ++accepted;
                     failStreak = 0;
+                    lk.unlock();
                     advance(it);
                     break;
                 }
@@ -828,6 +839,7 @@ struct Reporter::Impl {
                         it.degraded = true;
                         resent = true;
                         ++st.degradedResends;
+                        lk.unlock();
                         if (it.isFail) {
                             json w = json::parse(readAll(it.file), nullptr, false);
                             if (w.is_object()) { w["deg"] = 1; writeAtomic(it.file, dumpJson(w)); }
@@ -836,6 +848,7 @@ struct Reporter::Impl {
                     }
                     ++st.refused;
                     ++refusedTotal;
+                    lk.unlock();
                     advance(it);
                     break;
                 }
@@ -1209,8 +1222,8 @@ void Reporter::setDiskHookForTest(std::function<void()> hook) {
 
 void Reporter::poll() {
     Impl& s = *p_;
-    // TRY, NEVER WAIT: the batch thread holds `mu` while it collects (directory listings, file reads), and a pass that waited behind a slow disk is the
-    // freeze this exists to end (A488498B). A poll that finds the lock taken is the next pass's.
+    // TRY, NEVER WAIT: a pass that waited for the reporter is the freeze this exists to end (A488498B). (The batch thread no longer holds `mu` across a listing or a file
+    // call, review of fix/freezes finding 4; the durable append of an event on another thread still does, and a poll that finds the lock taken is the next pass's.)
     std::unique_lock<stall::TaggedMutex> lk(s.mu, std::try_to_lock);
     if (!lk.owns_lock()) { return; }
     if (!s.on) { return; }
