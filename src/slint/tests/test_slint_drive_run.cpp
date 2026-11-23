@@ -13,6 +13,7 @@
 // hidden desktop under the gui label (it opens a window).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <array>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -85,6 +86,17 @@ std::string readFile(const fs::path& p) {
     std::stringstream ss;
     ss << in.rdbuf();
     return ss.str();
+}
+
+// The module files a script names that the plugin folder holds at another version, as the run found them: "<id>-<old version>-abi3-win-x64.dll" -> the folder's file, and "<id>-<old version>" -> "<id>-<new version>".
+// The text fixtures a run reads (the patch document, a settings seed, a seeded file) name modules the same way and are given the same renames.
+std::vector<std::pair<std::string, std::string>> g_moduleRenames;
+
+std::string applyModuleRenames(std::string text) {
+    for (const auto& [from, to] : g_moduleRenames) {
+        for (std::size_t at = text.find(from); at != std::string::npos; at = text.find(from, at + to.size())) { text.replace(at, from.size(), to); }
+    }
+    return text;
 }
 
 // The "#!" header lines of a script: key=value tokens. Known keys name the run; an upper-case key is an environment variable.
@@ -262,48 +274,94 @@ int main(int argc, char** argv) {
         const std::string driveRoot = (fs::temp_directory_path() / "foxsdr-drive-c").generic_string() + "/";
         for (std::size_t at = script.find("C:/"); at != std::string::npos; at = script.find("C:/", at + driveRoot.size())) { script.replace(at, 3, driveRoot); }
     }
-    // THE PLUGIN MODULES OFF WINDOWS (docs/multi-radio-records/linux-local.md section 11). The scripts were written against the Windows modules, "<id>-<version>-abi3-win-x64.dll", in the user's own plugin folder. A
-    // Linux build has "<id>-<version>-abi3-linux-<arch>.so", at the version its own plugin build made, in a folder FOXSDR_DRIVE_PLUGINS_DIR names. Each Windows module name of the script, header and steps alike, is
-    // replaced by the module of that id in the folder (the expectation is unchanged: the same plugin is fitted, opened and read back). A script that drives plugin modules with no such folder is a SKIP that says so,
-    // never a red for a file no checkout holds (the plugin binaries are built from a separate repository). The scripts that say pluginsdir=fixture take their module from the folder the build itself made
-    // (tests/CMakeLists.txt wg3_plugins, named for this platform there), and are mapped to it the same way.
+#endif
+    // THE PLUGIN MODULES, ON EVERY PLATFORM (docs/multi-radio-records/linux-local.md section 11; Windows too since 2026-11-23). The scripts were written on 2026-11-09 against the modules of the owner's folder as they
+    // were then, "<id>-<version>-abi3-win-x64.dll": 82 of the 83 scripts that failed on 2026-11-23 named a version the folder no longer holds (the owner's plugins moved on: acars-decoder 1.0.0 to 1.1.2, adsb-decoder
+    // 1.9.1 to 1.13.0, ...), so `open=module:<file>` named a module page that cannot open and the page's START / STOP keys never existed. A plugin's version is the plugin's, not the window's, so each module name of the
+    // script, header and steps alike, is replaced by the module of that id in the folder when the named file is not there (the highest version if the folder holds more than one): the same plugin is fitted, opened and read
+    // back. A Linux build has "<id>-<version>-abi3-linux-<arch>.so" in the folder FOXSDR_DRIVE_PLUGINS_DIR names. A script that drives plugin modules with no plugin folder, or that names a module of an id the folder does
+    // not hold at all (a plugin the catalogue no longer carries, or one that is not installed), is a SKIP that says which, never a red for a file the machine does not have (the plugin binaries are built from a separate
+    // repository). The scripts that say pluginsdir=fixture take their module from the folder the build itself made (tests/CMakeLists.txt wg3_plugins, named for this platform there), and are mapped to it the same way.
     if (script.find("-abi3-win-x64.dll") != std::string::npos || script.find("plugins=all") != std::string::npos) {
         const bool fixtureScript = script.find("pluginsdir=fixture") != std::string::npos;
-        std::string pdText;
-#ifdef FOXSDR_DRIVE_FIXTURE_PLUGINS_DIR
-        if (fixtureScript) { pdText = FOXSDR_DRIVE_FIXTURE_PLUGINS_DIR; }
-#endif
-        if (!fixtureScript) { const char* env = std::getenv("FOXSDR_DRIVE_PLUGINS_DIR"); if (env != nullptr) { pdText = env; } }
-        const char* pd = pdText.c_str();
-        if (pdText.empty() || !fs::is_directory(pdText)) {
+        const fs::path pdFolder = pluginsSourceFolder(fixtureScript);
+        std::error_code pdEc;
+        if (pdFolder.empty() || !fs::is_directory(pdFolder, pdEc)) {
             ++g_checksSkipped;
-            std::printf("SKIP (linux): %s drives plugin modules; set FOXSDR_DRIVE_PLUGINS_DIR to a folder of this platform's plugin modules (<id>-<version>-abi3-linux-<arch>.so)\n", tag.c_str());
+            std::printf("SKIP (plugin folder): %s drives plugin modules and this machine has no plugin folder%s (set FOXSDR_DRIVE_PLUGINS_DIR to a folder of this platform's plugin modules)\n", tag.c_str(),
+                        pdFolder.empty() ? "" : (" at " + pdFolder.string()).c_str());
             return testSummary("test_slint_drive_run");
         }
-#if defined(__aarch64__)
+#if defined(_WIN32)
+        const std::string suffix = "-abi3-win-x64.dll";
+#elif defined(__aarch64__)
         const std::string suffix = "-abi3-linux-arm64.so";
 #else
         const std::string suffix = "-abi3-linux-x64.so";
 #endif
         const std::regex winName("([A-Za-z0-9][A-Za-z0-9_-]*?)-[0-9]+\\.[0-9]+\\.[0-9]+-abi3-win-x64\\.dll");
+        // the version of "<id>-<a>.<b>.<c><suffix>" as three numbers, for the highest-version choice
+        const auto versionOf = [&suffix](const std::string& n, std::size_t idLen) {
+            std::array<long, 3> v{0, 0, 0};
+            std::string digits = n.substr(idLen + 1, n.size() - suffix.size() - idLen - 1);
+            int part = 0;
+            for (const char c : digits) {
+                if (c == '.') { if (++part > 2) { break; } continue; }
+                if (std::isdigit(static_cast<unsigned char>(c)) != 0) { v[static_cast<std::size_t>(part)] = v[static_cast<std::size_t>(part)] * 10 + (c - '0'); }
+            }
+            return v;
+        };
         std::string mapped;
+        std::vector<std::string> absentIds;
+        std::vector<std::pair<std::string, std::string>> stemMap;   // "<id>-<old version>" -> "<id>-<new version>"
         std::sregex_iterator it(script.begin(), script.end(), winName), end;
         std::size_t last = 0;
         for (; it != end; ++it) {
             const std::string id = (*it)[1].str();
             std::string found;
-            for (const auto& e : fs::directory_iterator(pd)) {
-                const std::string n = e.path().filename().string();
-                if (n.size() > id.size() + 1 + suffix.size() && n.compare(0, id.size() + 1, id + "-") == 0 && std::isdigit(static_cast<unsigned char>(n[id.size() + 1])) != 0 && n.compare(n.size() - suffix.size(), suffix.size(), suffix) == 0) { found = n; break; }
+            std::array<long, 3> best{-1, 0, 0};
+            const std::string named = it->str();
+#if defined(_WIN32)
+            const bool exact = fs::exists(pdFolder / named, pdEc);   // the very file the script names is there: nothing to map
+#else
+            const bool exact = false;
+#endif
+            if (exact) { found = named; }
+            else {
+                for (const auto& e : fs::directory_iterator(pdFolder, pdEc)) {
+                    const std::string n = e.path().filename().string();
+                    if (n.size() > id.size() + 1 + suffix.size() && n.compare(0, id.size() + 1, id + "-") == 0 && std::isdigit(static_cast<unsigned char>(n[id.size() + 1])) != 0 && n.compare(n.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                        const std::array<long, 3> v = versionOf(n, id.size());
+                        if (found.empty() || v > best) { found = n; best = v; }
+                    }
+                }
             }
+            if (found.empty()) { if (std::find(absentIds.begin(), absentIds.end(), id) == absentIds.end()) { absentIds.push_back(id); } }
             mapped.append(script, last, static_cast<std::size_t>(it->position()) - last);
-            mapped += found.empty() ? it->str() : found;   // none in the folder: the name stays, and the script's own step reports the module missing
+            mapped += found.empty() ? named : found;
+            if (!found.empty() && found != named) {
+                // the module's version also appears without the platform tail ("dab-0.5.0" read back from a list): "<id>-<old version>" becomes "<id>-<new version>"
+                const std::string oldStem = named.substr(0, named.size() - std::string("-abi3-win-x64.dll").size());
+                const std::string newStem = found.substr(0, found.size() - suffix.size());
+                if (std::find_if(stemMap.begin(), stemMap.end(), [&](const auto& p) { return p.first == oldStem; }) == stemMap.end()) { stemMap.emplace_back(oldStem, newStem); }
+                if (std::find_if(g_moduleRenames.begin(), g_moduleRenames.end(), [&](const auto& p) { return p.first == named; }) == g_moduleRenames.end()) { g_moduleRenames.emplace_back(named, found); }
+            }
             last = static_cast<std::size_t>(it->position() + it->length());
         }
         mapped.append(script, last, std::string::npos);
+        for (const auto& [oldStem, newStem] : stemMap) {
+            g_moduleRenames.emplace_back(oldStem, newStem);
+            for (std::size_t at = mapped.find(oldStem); at != std::string::npos; at = mapped.find(oldStem, at + newStem.size())) { mapped.replace(at, oldStem.size(), newStem); }
+        }
+        if (!absentIds.empty()) {
+            std::string ids;
+            for (const std::string& a : absentIds) { ids += (ids.empty() ? "" : ", ") + a; }
+            ++g_checksSkipped;
+            std::printf("SKIP (module absent): %s drives the plugin module(s) %s, which the plugin folder %s does not hold\n", tag.c_str(), ids.c_str(), pdFolder.string().c_str());
+            return testSummary("test_slint_drive_run");
+        }
         script = mapped;
     }
-#endif
     // THE MODULE COUNT, ON EVERY PLATFORM (one code path). plugins=all fits EVERY module of the folder, and the scripts count them ("state kit.plugins == 43": the 43 modules of the owner's
     // folder when they were written). The folder now holds more (89 on the owner's machine on 2026-11-23, which made every plugins=all script fail on the count and none of the 86 really run), and a
     // Linux folder holds as many as its own plugin build made. So the count in the script is the folder's: the expectation is the same - every module that was fitted is loaded - and the number is
@@ -319,7 +377,21 @@ int main(int argc, char** argv) {
             std::printf("  plugins=all: no module found in '%s' (the script's count of 43 is left as written)\n", folder.string().c_str());
         }
     }
-    const Header h = parseHeader(script);
+    Header h = parseHeader(script);
+    // THE WINDOW'S HEIGHT FOLLOWS THE KIT. The scripts' size= was chosen on 2026-11-09 so that every row of the DECODE bank's plugin list was inside the window with the 43 modules of that day; the list
+    // grows with the folder (89 modules on 2026-11-23), and a row below the window's bottom edge has no control to find ("no control labelled Survey Engine": the list's tail, from Satellites to Workbench).
+    // A plugins=all run therefore gets its height scaled by modules / 43 (at most 8192, the window's own limit); the width and every other part of the script are as written.
+    if (h.plugins == "all") {
+        const auto sizeIt = h.env.find("FOXSDR_SLINT_SIZE");
+        const fs::path folder = pluginsSourceFolder(h.fixturePlugins);
+        const int modules = folder.empty() ? 0 : countPluginModules(folder);
+        unsigned sw = 0, sh = 0;
+        if (sizeIt != h.env.end() && modules > 43 && std::sscanf(sizeIt->second.c_str(), "%ux%u", &sw, &sh) == 2 && sw > 0 && sh > 0) {
+            const unsigned scaled = std::min<unsigned>(8192u, static_cast<unsigned>((static_cast<unsigned long long>(sh) * static_cast<unsigned>(modules) + 42u) / 43u));
+            sizeIt->second = std::to_string(sw) + "x" + std::to_string(scaled);
+            std::printf("  plugins=all with %d modules: the window's height is scaled from %u to %u (the plugin list is taller than it was with 43)\n", modules, sh, scaled);
+        }
+    }
 #if !defined(_WIN32)
     if (h.windowsOnly) {
         ++g_checksSkipped;
@@ -418,7 +490,7 @@ int main(int argc, char** argv) {
             const char* fx = std::getenv("FOXSDR_DRIVE_FIXTURES_DIR");
             from = (fx != nullptr && *fx != '\0') ? fs::path(fx) / from : fs::path(FOXSDR_DRIVE_FIXTURES_DIR) / from;
         }
-        const std::string text = readFile(from);
+        const std::string text = applyModuleRenames(readFile(from));
         if (text.empty()) { std::printf("  the seed fixture %s is missing or empty\n", from.string().c_str()); }
         CHECK(!text.empty());
         fs::create_directories(into, ec);
@@ -436,7 +508,7 @@ int main(int argc, char** argv) {
             const char* fx = std::getenv("FOXSDR_DRIVE_FIXTURES_DIR");
             seed = (fx != nullptr && *fx != '\0') ? fs::path(fx) / seed : fs::path(FOXSDR_DRIVE_FIXTURES_DIR) / seed;
         }
-        const std::string text = readFile(seed);
+        const std::string text = applyModuleRenames(readFile(seed));
         if (text.empty()) { std::printf("  the config seed %s is missing or empty\n", seed.string().c_str()); }
         CHECK(!text.empty());
         std::ofstream f(cfg, std::ios::binary | std::ios::trunc);
@@ -496,6 +568,17 @@ int main(int argc, char** argv) {
         }
         if (!h.patchdoc.empty() && !fs::exists(d)) { std::printf("  the patch document %s does not exist\n", d.string().c_str()); }
         CHECK(h.patchdoc.empty() || fs::exists(d));
+        if (!h.patchdoc.empty() && fs::exists(d) && !g_moduleRenames.empty()) {
+            // the document names the modules by file, as the script does: a copy in the scratch folder with the folder's versions
+            const std::string before = readFile(d);
+            const std::string after = applyModuleRenames(before);
+            if (after != before) {
+                const fs::path mapped = dir / ("patchdoc-" + d.filename().string());
+                std::ofstream pf(mapped, std::ios::binary | std::ios::trunc);
+                pf << after;
+                d = mapped;
+            }
+        }
         setEnv("FOXSDR_SLINT_PATCH_DOC", h.patchdoc.empty() ? std::string() : d.string());
     }
     for (const auto& [k, v] : h.env) { setEnv(k.c_str(), v); }

@@ -273,7 +273,8 @@ file(GLOB _foxsdr_slint_drive_scripts CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_
 foreach(_script ${_foxsdr_slint_drive_scripts})
     get_filename_component(_drive_name "${_script}" NAME_WE)
     add_test(NAME slint_drive_${_drive_name} COMMAND test_slint_drive_run "${_script}")
-    set_tests_properties(slint_drive_${_drive_name} PROPERTIES LABELS "gui;drive" FIXTURES_REQUIRED gui_desktop TIMEOUT 600)
+    # a script that names a plugin module the machine's plugin folder does not hold is a SKIP the runner prints (test_slint_drive_run.cpp), shown by ctest as Skipped, never as a pass
+    set_tests_properties(slint_drive_${_drive_name} PROPERTIES LABELS "gui;drive" FIXTURES_REQUIRED gui_desktop TIMEOUT 600 SKIP_REGULAR_EXPRESSION "SKIP \\((linux|plugin folder|module absent)\\)")
 endforeach()
 
 # THE COVERAGE LEDGER (tools/slint_drive_ledger.py, docs 6.47): every row of docs/slint-port-tick.md classified from tests/drive/coverage.tsv
